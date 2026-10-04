@@ -712,8 +712,20 @@ jobs:
           # ⭐ POSITIVE check: it must RUN and print a version, not merely exist on disk.
           "$PROTOC_EXE" --version
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      # ⛔⛔ RESTORE AND SAVE SEPARATELY, AND SAVE ON FAILURE TOO. `actions/cache` saves in a POST
+      # step, and a post step is SKIPPED when the job fails — so a 2-hour CUDA build that dies in a
+      # LATER step saves nothing and the next attempt rebuilds from scratch.
+      #
+      # 📏 That is exactly what happened: five #631 runs at ~2 h each, every one of them starting
+      # from "Cache not found for input keys: cargo-reg-Windows-6300caa…", because every one of them
+      # failed after the build — on protoc, on a DLL, on an encoding. The caching added earlier was
+      # real but could never take effect while the job kept failing.
+      #
+      # ⇒ `cache/restore` + an explicit `cache/save` with `if: always()` makes an expensive build
+      # survive a cheap failure downstream, which is the whole point of caching it.
+      - name: Restore the cargo registry
+        id: cache-reg
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -721,8 +733,9 @@ jobs:
           key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
           restore-keys: cargo-reg-${{ runner.os }}-
 
-      - name: Cache the CUDA build tree
-        uses: actions/cache@v4
+      - name: Restore the CUDA build tree
+        id: cache-target
+        uses: actions/cache/restore@v4
         with:
           path: prover/target
           key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
@@ -877,6 +890,28 @@ jobs:
                 | /usr/bin/grep -vE "thiserror|ToolFamilyMacroNotFound" | head -40
           fi
           exit "$rc"
+
+      # ⭐ SAVE HERE, DIRECTLY AFTER THE EXPENSIVE PART, not in a post step that a later failure
+      # cancels. ⚠ `if: always()` so a build that fails PARTWAY still banks what it compiled; the
+      # next run resumes instead of restarting. ⚠ A save onto an existing exact key is a no-op that
+      # warns, which is why the `continue-on-error` is here and nowhere else.
+      - name: Bank the CUDA build tree even if a later step fails
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: prover/target
+          key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
+
+      - name: Bank the cargo registry even if a later step fails
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
 
       - name: Ship the CUDA runtime beside the exe (when one was built)
         if: always()
