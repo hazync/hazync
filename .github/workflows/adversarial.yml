@@ -1755,6 +1755,125 @@ jobs:
       - name: The verifier the public actually loads still checks the proof the site actually serves
         run: ./scripts/check-deployed-verifier.sh
 
+  # ── Does the prover still compile for CUDA on LINUX — the configuration the FLEET runs? ─────────
+  #
+  # ⛔⛔ WHY THIS JOB EXISTS. hazync#631 vendored three more crates to get a native Windows CUDA
+  # build, and `[patch.crates-io]` applies on EVERY platform — so sppark, risc0-groth16-sys and
+  # risc0-circuit-keccak-sys now resolve to vendor/ for the Linux fleet too. Two of those edits are
+  # NOT gated on MSVC:
+  #
+  #     sppark/ff/mont_t.cuh    `size_t n=n` -> `size_t n=mont_t::n`          (4 chars, x4 sites)
+  #     groth16_prover.cuh      uniform_int_distribution<uint8_t> -> <unsigned short>
+  #
+  # Both are argued to be semantically identical, and the argument looks right. ⛔ But NOTHING in CI
+  # built `--features cuda` on Linux — the only such build in the whole repo was windows-prove.yml.
+  # So every green check on #644 was a build WITHOUT cuda, while mont_t.cuh is consumed by
+  # risc0-circuit-rv32im-sys and keccak-sys and IS compiled into the fleet's prover.
+  #
+  # ⚠ "It is four characters and the reasoning is sound" is the kind of claim this project has been
+  # burned by. The fleet's build path should be exercised, not reasoned about.
+  #
+  # ⚠ NO GPU IS NEEDED and none is present: nvcc compiles kernels without one. This job answers
+  # "does it BUILD", never "does it PROVE".
+  linux-cuda-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install CUDA nvcc + cudart + cccl, each verified by sha256
+        run: |
+          set -euo pipefail
+          # ⚠ Hashes come from NVIDIA's own redistrib_12.9.1.json, and that field was CHECKED
+          # against a real download before being pasted here — it is the sha256 of the archive, as
+          # assumed. Same 12.9.1 release windows-prove.yml pins, so both platforms build against one
+          # toolkit rather than drifting apart.
+          B=https://developer.download.nvidia.com/compute/cuda/redist
+          ROOT="$RUNNER_TEMP/cuda"
+          mkdir -p "$ROOT"
+          while read -r path want; do
+            [ -n "$path" ] || continue
+            f="$RUNNER_TEMP/$(basename "$path")"
+            curl -sSL --retry 3 -o "$f" "$B/$path"
+            # ⛔ sha256sum on STDIN: it escapes its output with a backslash when a name contains one.
+            got=$(sha256sum < "$f" | cut -d' ' -f1)
+            [ "$got" = "$want" ] || { echo "sha256 MISMATCH for $path: got $got want $want" >&2; exit 1; }
+            echo "  verified $(basename "$path")"
+            tar -xJf "$f" -C "$RUNNER_TEMP"
+            cp -a "$RUNNER_TEMP/$(basename "$path" .tar.xz)"/. "$ROOT"/
+          done <<'COMPONENTS'
+          cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-12.9.86-archive.tar.xz 7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35
+          cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.9.79-archive.tar.xz 1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99
+          cuda_cccl/linux-x86_64/cuda_cccl-linux-x86_64-12.9.27-archive.tar.xz 8b1a5095669e94f2f9afd7715533314d418179e9452be61e2fde4c82a3e542aa
+          cuda_profiler_api/linux-x86_64/cuda_profiler_api-linux-x86_64-12.9.79-archive.tar.xz 8c50636bfb97e9420905aa795b9fa6e3ad0b30ec6a6c8b0b8db519beb9241ce6
+          COMPONENTS
+          echo "CUDA_PATH=$ROOT" >> "$GITHUB_ENV"
+          echo "$ROOT/bin" >> "$GITHUB_PATH"
+          # ⭐ POSITIVE check: nvcc must RUN and print a version, not merely exist on disk.
+          "$ROOT/bin/nvcc" --version
+
+      - name: Restore the Linux CUDA build tree
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            prover/target
+          key: linux-cuda-${{ hashFiles('prover/Cargo.lock') }}
+          restore-keys: linux-cuda-
+
+      - name: ⭐ Build the host for Linux WITH CUDA — the fleet's configuration (#631)
+        working-directory: prover
+        env:
+          CARGO_TERM_COLOR: always
+          CARGO_INCREMENTAL: 0
+        run: |
+          set -o pipefail
+          # ⛔⛔ NVCC_APPEND_FLAGS MUST BE SET, and not for the flags themselves. Its mere PRESENCE
+          # makes the vendored builder skip `-arch=native`, which shells out to query a GPU this
+          # runner does not have. Same reason windows-prove.yml exports it.
+          export NVCC_APPEND_FLAGS="-gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 -Wno-deprecated-gpu-targets"
+          set +e
+          cargo build --release -p host --features cuda 2>&1 | tee cuda-linux.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "build exit: $rc  ($(wc -l < cuda-linux.log) lines captured)"
+          if [ "$rc" -ne 0 ]; then
+              # ⛔ STRIP ANSI BEFORE MATCHING, and grep the WHOLE FILE. cargo writes a COLOURED
+              # `error`, so an anchored `^error: ` matches nothing — that mistake once made a step
+              # announce a kill over an ordinary compile error. And cargo flushes build-script
+              # WARNINGS after the error, so the tail of a failed log is warnings, not the cause.
+              # ⚠ Exclude `thiserror`, which a bare `error` pattern matches.
+              sed -E 's/\x1b\[[0-9;]*m//g' cuda-linux.log > cuda-linux.plain
+              echo "=== error lines, whole lines ==="
+              /usr/bin/grep -anE "^error(\[|:)|could not compile|failed to run custom build" cuda-linux.plain \
+                | /usr/bin/grep -av "thiserror" | head -30
+              exit "$rc"
+          fi
+          ls -la target/release/host
+          echo "✅ the Linux CUDA build the FLEET runs still compiles with the #631 vendoring."
+          echo "⚠ This runner has no GPU, so nothing here shows that it PROVES."
+
+      - name: Bank the Linux CUDA build tree even if a later step fails
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            prover/target
+          key: linux-cuda-${{ hashFiles('prover/Cargo.lock') }}
+
+      - name: Upload the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-cuda-build-log
+          path: prover/cuda-linux.log
+          if-no-files-found: ignore
+
   dependency-audit:
     # Nothing was scanning dependencies for known advisories until now. This job fails on any NEW one.
     #
