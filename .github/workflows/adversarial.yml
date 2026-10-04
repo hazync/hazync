@@ -1871,6 +1871,88 @@ jobs:
           # ⭐ POSITIVE check: it must RUN and print a version, not merely exist on disk.
           "$RUNNER_TEMP/protoc/bin/protoc" --version
 
+      # ── the guest, because the host has to embed one ─────────────────────────────────────────────
+      #
+      # ⛔⛔ THE FIRST VERSION OF THIS JOB HAD NO GUEST, and that cost a 116-minute run. protoc was
+      # fixed and every CUDA kernel compiled, then:
+      #
+      #     error: failed to run custom build command for `methods v0.1.0`
+      #       Building guest package: methods.method
+      #
+      # With HAZYNC_GUEST_ELF unset, prover/methods/build.rs builds the guest FROM SOURCE, which
+      # needs the risc0 RISC-V toolchain this runner does not have. ⚠ My own dropped step: I wrote
+      # one noting a guest was needed and removed it while rewriting.
+      #
+      # ⭐ AND EMBEDDING A PREBUILT GUEST VERIFIES METHOD_ID. build.rs reads reproduce/METHOD_ID and
+      # checks the id computed from these bytes — which risc0-binfmt CAN do on Linux, and cannot
+      # under MSVC's link.exe. So this job asserts the very thing windows-prove.yml has to leave
+      # unverified, and that is worth more than the build alone.
+      #
+      # ⚠ Same cache key as windows-prove.yml's guest job, so this restores the ELF that job already
+      # built rather than duplicating a container build. A cache hit is safe: the guest is
+      # deterministic (69,980,208 bytes, sha256 35e3f55e…, identical across builds, #620) and the
+      # sha is asserted below on BOTH paths regardless.
+      - name: Restore the guest ELF if this exact guest was built before
+        id: elfcache
+        uses: actions/cache/restore@v4
+        with:
+          path: hazync-guest.elf
+          key: guest-elf-${{ hashFiles('prover/methods/guest/**', 'reproduce/METHOD_ID', 'reproduce/GUEST_ELF_SHA256') }}
+
+      - name: Free disk, because the container build needs ~15 GB
+        if: steps.elfcache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
+          sudo docker image prune -af || true
+          df -h / | tail -1
+
+      - name: Build the guest in the pinned container
+        if: steps.elfcache.outputs.cache-hit != 'true'
+        run: CARGO_BUILD_JOBS=4 ./prover/build-release.sh cpu 2>&1 | tail -25
+
+      - name: Stage the guest ELF, and check it against the recorded sha whether built or cached
+        # ⛔ THE CACHE-HIT FLAG COMES THROUGH env:, NOT SPLICED INTO THE SCRIPT. GitHub substitutes
+        # ${{ }} before bash parses the block, so a value carrying shell metacharacters would
+        # execute as code. check-workflow-injection.sh gates this categorically, and it has caught
+        # me twice in this repo. This particular value is actions/cache's own output and not
+        # attacker-controlled; the rule is absolute anyway, because the next one might be.
+        env:
+          CACHE_HIT: ${{ steps.elfcache.outputs.cache-hit }}
+        run: |
+          set -o pipefail
+          if [ "$CACHE_HIT" = "true" ]; then
+              echo "cache hit — no container build ran"
+          else
+              ELF=prover/target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin
+              [ -s "$ELF" ] || { echo "no guest ELF at $ELF"; exit 1; }
+              cp "$ELF" hazync-guest.elf
+          fi
+          # ⛔ ONE CHECK ON BOTH PATHS. A cached artefact nobody verifies is one nobody can trust.
+          GOT=$(sha256sum < hazync-guest.elf | cut -d' ' -f1)
+          # ⛔⛔ PARSE IT THE WAY build.rs DOES: the FIRST non-empty, non-comment line. A greedy
+          # `grep -oE '[0-9a-f]{64}' | head -1` returns 37987b85… — the METHOD_ID, which appears in
+          # that file's PROSE explaining why the two pins differ — and would demand the image id as
+          # the file's sha256, failing every correct build.
+          WANT=$(grep -vE '^\s*#|^\s*$' reproduce/GUEST_ELF_SHA256 | head -1 | tr -d '[:space:]')
+          echo "guest ELF: $(stat -c%s hazync-guest.elf) bytes  sha256 $GOT"
+          [ -n "$WANT" ] || { echo "⛔ no sha in reproduce/GUEST_ELF_SHA256"; exit 1; }
+          [ "$GOT" = "$WANT" ] || { echo "⛔ guest ELF sha MISMATCH; want $WANT"; exit 1; }
+          echo "✅ matches reproduce/GUEST_ELF_SHA256"
+          # ⛔ prover/methods is the CRATE dir, and a build script's cwd is its own package root —
+          # which is why HAZYNC_GUEST_ELF can be a bare filename.
+          cp hazync-guest.elf prover/methods/hazync-guest.elf
+          ls -la prover/methods/hazync-guest.elf
+
+      - name: Bank the guest ELF
+        # ⚠ ONLY on a miss, and the EXACT key is right here. The guest is deterministic and keyed by
+        # its own inputs, so re-saving an identical artefact buys nothing and `cache/save` refuses
+        # an existing key anyway — which is the warning that revealed the build-tree flaw.
+        if: steps.elfcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: hazync-guest.elf
+          key: guest-elf-${{ hashFiles('prover/methods/guest/**', 'reproduce/METHOD_ID', 'reproduce/GUEST_ELF_SHA256') }}
       - name: Restore the Linux CUDA build tree
         uses: actions/cache/restore@v4
         with:
@@ -1884,6 +1966,10 @@ jobs:
       - name: ⭐ Build the host for Linux WITH CUDA — the fleet's configuration (#631)
         working-directory: prover
         env:
+          # ⛔ Set, so build.rs embeds the PREBUILT guest instead of trying to build one with a
+          # RISC-V toolchain this runner lacks — and so it verifies the id against
+          # reproduce/METHOD_ID, which is the check MSVC cannot perform.
+          HAZYNC_GUEST_ELF: hazync-guest.elf
           CARGO_TERM_COLOR: always
           CARGO_INCREMENTAL: 0
         run: |
