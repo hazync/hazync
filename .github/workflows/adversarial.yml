@@ -1789,9 +1789,23 @@ jobs:
           # against a real download before being pasted here — it is the sha256 of the archive, as
           # assumed. Same 12.9.1 release windows-prove.yml pins, so both platforms build against one
           # toolkit rather than drifting apart.
+          #
+          # ⛔⛔ INSTALL AT /usr/local/cuda, AND CREATE lib64. The first attempt unpacked into
+          # $RUNNER_TEMP/cuda and exported CUDA_PATH, and the build died twice in two minutes:
+          #
+          #   find_cuda_helper-0.2.0: panicked "Could not find a cuda installation"   (cust_raw)
+          #   /usr/bin/ld: cannot find -lcudadevrt / -lcudart_static                  (sppark)
+          #
+          # Two symptoms, ONE cause: the redist ships `lib/`, and both consumers want `lib64/`.
+          # ⚠ CUDA_PATH could never have fixed it — find_cuda_helper's read_env() reads
+          # CUDA_LIBRARY_PATH, not CUDA_PATH, and its candidate bases are /opt/cuda,
+          # /usr/local/cuda and /usr/local/cuda-*, each probed for `<base>/lib64`. And nvcc derives
+          # its own toolkit root from its location, searching `../lib64`.
+          # ⇒ A default path plus a lib64 symlink satisfies both, and is what a real install looks
+          # like — which is the configuration this job exists to reproduce.
           B=https://developer.download.nvidia.com/compute/cuda/redist
-          ROOT="$RUNNER_TEMP/cuda"
-          mkdir -p "$ROOT"
+          ROOT=/usr/local/cuda
+          sudo mkdir -p "$ROOT"
           while read -r path want; do
             [ -n "$path" ] || continue
             f="$RUNNER_TEMP/$(basename "$path")"
@@ -1801,18 +1815,31 @@ jobs:
             [ "$got" = "$want" ] || { echo "sha256 MISMATCH for $path: got $got want $want" >&2; exit 1; }
             echo "  verified $(basename "$path")"
             tar -xJf "$f" -C "$RUNNER_TEMP"
-            cp -a "$RUNNER_TEMP/$(basename "$path" .tar.xz)"/. "$ROOT"/
+            sudo cp -a "$RUNNER_TEMP/$(basename "$path" .tar.xz)"/. "$ROOT"/
           done <<'COMPONENTS'
           cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-12.9.86-archive.tar.xz 7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35
           cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.9.79-archive.tar.xz 1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99
           cuda_cccl/linux-x86_64/cuda_cccl-linux-x86_64-12.9.27-archive.tar.xz 8b1a5095669e94f2f9afd7715533314d418179e9452be61e2fde4c82a3e542aa
           cuda_profiler_api/linux-x86_64/cuda_profiler_api-linux-x86_64-12.9.79-archive.tar.xz 8c50636bfb97e9420905aa795b9fa6e3ad0b30ec6a6c8b0b8db519beb9241ce6
           COMPONENTS
+          [ -e "$ROOT/lib64" ] || sudo ln -s lib "$ROOT/lib64"
           echo "CUDA_PATH=$ROOT" >> "$GITHUB_ENV"
           echo "$ROOT/bin" >> "$GITHUB_PATH"
+
+          # ⭐⭐ ASSERT EVERY PRECONDITION THE BUILD NEEDS, BY NAME, HERE. Each of these was a
+          # separate two-minute failure discovered one cargo run at a time; naming them makes a
+          # layout problem fail in SECONDS with a message that says which file is missing, instead
+          # of surfacing as a panic from a dependency five crates away.
+          fail=0
+          check() { if [ -e "$2" ]; then echo "  ok   $1"; else echo "  MISSING  $1  ($2)"; fail=$((fail+1)); fi; }
+          check "include/cuda.h — find_cuda_helper's is_cuda_root_path" "$ROOT/include/cuda.h"
+          check "lib64 — find_cuda_helper requires it, the redist ships lib" "$ROOT/lib64"
+          check "lib64/stubs/libcuda.so — the DRIVER stub, how -lcuda links with no GPU" "$ROOT/lib64/stubs/libcuda.so"
+          check "libcudadevrt.a — sppark's linker asked for -lcudadevrt" "$ROOT/lib64/libcudadevrt.a"
+          check "libcudart_static.a — sppark's linker asked for -lcudart_static" "$ROOT/lib64/libcudart_static.a"
+          [ "$fail" -eq 0 ] || { echo "⛔ $fail CUDA precondition(s) missing — the build would fail later and less clearly" >&2; exit 1; }
           # ⭐ POSITIVE check: nvcc must RUN and print a version, not merely exist on disk.
           "$ROOT/bin/nvcc" --version
-
       - name: Restore the Linux CUDA build tree
         uses: actions/cache/restore@v4
         with:
