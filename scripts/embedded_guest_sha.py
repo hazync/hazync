@@ -56,7 +56,7 @@ def read_pin(root="."):
     ⛔ NOT a greedy 64-hex grep over the file. The prose in that file quotes METHOD_ID, so a greedy
     match returns the WRONG hash and compares the guest against an image id.
     """
-    for line in Path(root, PIN_FILE).read_text().splitlines():
+    for line in Path(root, PIN_FILE).read_text(encoding="utf-8").splitlines():
         s = line.strip()
         if s and not s.startswith("#"):
             return s
@@ -123,7 +123,22 @@ def find_guest(data, size):
                 return i, h
 
 
+def _utf8_stdout():
+    """⛔ WINDOWS AGAIN: printing ⛔/✅/⚠ to a cp1252 pipe raises UnicodeEncodeError.
+
+    A console gets UTF-8 on modern Python, but a REDIRECTED stream takes the locale encoding, and
+    this script is run from a workflow that pipes it. Reconfigure rather than strip the glyphs:
+    the markers are how the output is read at a glance.
+    """
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv):
+    _utf8_stdout()
     if "--control" in argv:
         return control()
     if len(argv) < 2:
@@ -200,7 +215,7 @@ def control():
         fails += 1
 
     # ⛔ naive 3: a greedy 64-hex grep of the pin file returns METHOD_ID from the prose
-    raw = Path(PIN_FILE).read_text()
+    raw = Path(PIN_FILE).read_text(encoding="utf-8")
     greedy = re.findall(r"\b[0-9a-f]{64}\b", raw)
     print(f"  {'ok  ' if greedy and greedy[0] != pin else 'FAIL'} ⛔ control: a greedy 64-hex grep returns "
           f"{greedy[0][:12] if greedy else '<none>'}…, NOT the pin {pin[:12]}…")
