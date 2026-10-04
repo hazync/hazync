@@ -1777,6 +1777,10 @@ jobs:
   # "does it BUILD", never "does it PROVE".
   linux-cuda-build:
     runs-on: ubuntu-latest
+    # ⚠ No job in this workflow set a cap, so GitHub's 360-minute default applied and a hung build
+    # would burn six hours of runner time before anyone heard. The real builds measured 150 min
+    # cold (Windows: 110-137), so 240 leaves generous headroom while still failing in bounded time.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
 
@@ -1840,6 +1844,33 @@ jobs:
           [ "$fail" -eq 0 ] || { echo "⛔ $fail CUDA precondition(s) missing — the build would fail later and less clearly" >&2; exit 1; }
           # ⭐ POSITIVE check: nvcc must RUN and print a version, not merely exist on disk.
           "$ROOT/bin/nvcc" --version
+      - name: Install protoc, pinned and sha256-verified (#631)
+        run: |
+          set -euo pipefail
+          # ⛔⛔ THE SAME CRATE THAT KILLED TWO WINDOWS RUNS, AND IT KILLED THIS ONE TOO — after 150
+          # MINUTES of CUDA kernel compilation that all succeeded:
+          #
+          #     error: failed to run custom build command for `circom-witnesscalc v0.2.1`
+          #       Error: Could not find `protoc` ... apt-get install protobuf-compiler
+          #
+          # circom-witnesscalc runs a prost-build script that shells out to protoc, and
+          # ubuntu-latest has none either. ⚠ Nothing to do with CUDA or with the vendoring.
+          #
+          # ⚠ Pinned to the SAME 36.2 windows-prove.yml uses, by sha256, rather than apt's older
+          # build — so the two platforms cannot disagree about the protobuf compiler.
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-linux-x86_64.zip"
+          SHA="121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278"
+          curl -sSL --retry 3 -o protoc.zip "$URL"
+          # ⛔ sha256sum on STDIN so no filename can appear in (and mangle) the output.
+          got=$(sha256sum < protoc.zip | cut -d' ' -f1)
+          [ "$got" = "$SHA" ] || { echo "protoc sha256 MISMATCH: got $got want $SHA" >&2; exit 1; }
+          mkdir -p "$RUNNER_TEMP/protoc"
+          unzip -q -o protoc.zip -d "$RUNNER_TEMP/protoc"
+          echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+          # ⭐ POSITIVE check: it must RUN and print a version, not merely exist on disk.
+          "$RUNNER_TEMP/protoc/bin/protoc" --version
+
       - name: Restore the Linux CUDA build tree
         uses: actions/cache/restore@v4
         with:
@@ -1882,6 +1913,15 @@ jobs:
           echo "✅ the Linux CUDA build the FLEET runs still compiles with the #631 vendoring."
           echo "⚠ This runner has no GPU, so nothing here shows that it PROVES."
 
+      # ⛔⛔ THE SAVE KEY MUST BE UNIQUE PER RUN, and my first version was not. `cache/save`
+      # REFUSES to overwrite an existing exact key:
+      #
+      #     Failed to save: Unable to reserve cache with key linux-cuda-881ed31d…,
+      #     another job may be creating this cache
+      #
+      # So the run that died after 2 minutes banked its near-empty tree first, and the 150-minute
+      # build that followed could not replace it. The cache "worked" and preserved the useless one.
+      # ⇒ Append the run id and let `restore-keys` prefix-match the newest.
       - name: Bank the Linux CUDA build tree even if a later step fails
         if: always()
         continue-on-error: true
@@ -1891,7 +1931,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             prover/target
-          key: linux-cuda-${{ hashFiles('prover/Cargo.lock') }}
+          key: linux-cuda-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Upload the build log
         if: always()

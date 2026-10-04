@@ -901,7 +901,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: prover/target
-          key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
+          key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Bank the cargo registry even if a later step fails
         if: always()
@@ -911,7 +911,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
+          key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Ship the CUDA runtime beside the exe (when one was built)
         if: always()
