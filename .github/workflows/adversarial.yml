@@ -1910,6 +1910,27 @@ jobs:
         if: steps.elfcache.outputs.cache-hit != 'true'
         run: CARGO_BUILD_JOBS=4 ./prover/build-release.sh cpu 2>&1 | tail -25
 
+      - name: Give prover/target back to the runner after the container touched it
+        if: steps.elfcache.outputs.cache-hit != 'true'
+        run: |
+          # ⛔⛔ THE CONTAINER BUILD RUNS AS ROOT AND LEAVES prover/target ROOT-OWNED, so the host
+          # build that follows cannot even take its lock:
+          #
+          #     error: failed to open: prover/target/release/.cargo-build-lock
+          #       Permission denied (os error 13)
+          #
+          # ⚠ It failed after 8 captured lines, which reads like a broken cargo invocation and is
+          # not: the guest build had already succeeded and its sha verified. Only a job that does
+          # BOTH hits this — windows-prove.yml never did, because its guest and host are separate
+          # jobs on separate runners.
+          echo "before: $(stat -c '%U:%G' prover/target 2>/dev/null || echo 'absent')"
+          sudo chown -R "$(id -u):$(id -g)" prover/target 2>/dev/null || true
+          echo "after : $(stat -c '%U:%G' prover/target 2>/dev/null || echo 'absent')"
+          # ⭐ POSITIVE check: the runner must actually be able to WRITE there, which is the thing
+          # that failed. Proving it here beats discovering it 20 minutes into a build.
+          t=prover/target/.write-probe
+          touch "$t" && rm -f "$t" && echo "✅ the runner can write prover/target"
+
       - name: Stage the guest ELF, and check it against the recorded sha whether built or cached
         # ⛔ THE CACHE-HIT FLAG COMES THROUGH env:, NOT SPLICED INTO THE SCRIPT. GitHub substitutes
         # ${{ }} before bash parses the block, so a value carrying shell metacharacters would
@@ -1920,6 +1941,11 @@ jobs:
           CACHE_HIT: ${{ steps.elfcache.outputs.cache-hit }}
         run: |
           set -o pipefail
+          # ⚠ Say which path ran. This run MISSED the guest cache even though windows-prove.yml had
+          # banked a 65 MB entry, and a silent miss costs ~10 minutes of container build without
+          # ever saying so. GitHub scopes caches by branch, and the key is a hashFiles() of the
+          # guest sources plus both pins, so either can explain it — print it and stop guessing.
+          echo "guest cache hit: ${CACHE_HIT:-<empty>}"
           if [ "$CACHE_HIT" = "true" ]; then
               echo "cache hit — no container build ran"
           else
