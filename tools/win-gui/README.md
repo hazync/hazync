@@ -37,13 +37,47 @@ the binary embeds natively). Open: the build used CUDA 12.9.1 against a driver r
 binary is canonical, managing identity, supervising workers, surfacing errors. The CUDA path is an
 open question, and that is said here rather than discovered by a user.
 
+## What is in the window
+
+**Dashboard** — the headline numbers, live from `/api/state`: proven, folded, **anchored**
+(`spine_hi`), share of the chain, contributors. Plus the next block the coordinator would give you
+(`/api/pick`) and how many folds are waiting (`/api/foldable`).
+
+**Block map** — every block in order, one square per range, coloured by its *least advanced* state.
+Click a square for its range. Deliberately pessimistic: a 6,736-block square containing one open
+block reads **open**, because a square that showed its best state would paint a mostly-unproved
+chain as proved and hide exactly the gaps a prover is looking for.
+
+**Prove** — let the coordinator choose (recommended), a specific range, or fold instead of prove.
+Worker count, `HAZYNC_SEG_PO2`, start/stop, and a log that colours only the lines you must not miss.
+
+**Settings** — paths, your identity, coordinator URL, and the checks.
+
+⛔ **There is no "pick any open block" button, on purpose.** The coordinator owns allocation: it
+hands out work and tracks claims, and `/api/blockstatus` deliberately excludes claims because "they
+change by the second". Letting someone choose an arbitrary open block would hand out work another
+prover already holds. `/api/pick` is the coordinator's own answer and the Dashboard shows it.
+
+## Where the colours and logo come from
+
+Both are read off what hazync.org actually serves, not eyeballed:
+
+- the palette from `/assets/site.css` — its own `--ink/--fog/--mist/--haze/--slate/--lamp/--good/--bad`,
+  in light **and** dark
+- the logo from `/favicon.svg` — three rectangles in a 32×32 viewBox, so `brand.py` reproduces it
+  **exactly** on a Canvas with no image file, no Pillow and no SVG renderer, sharp at any size.
+  `brand.py`'s self-test asserts the drawn geometry still matches the real favicon byte for byte.
+
 ## How it is put together
 
 - **`supervisor.py`** — all the logic, headless and importable. Run it on its own:
   `python supervisor.py <host-binary> <hazync-worker>` prints the same preflight the GUI shows.
 - **`hazync_gui.py`** — the window. Layout, threads, text on screen. No decisions.
 - **`winshim/fcntl.py`** — a Windows stand-in for POSIX `fcntl`.
-- **`test_supervisor.py`** — the tests, plus `--control`.
+- **`hazync_api.py`** — the coordinator's endpoints and the map's geometry, pure and testable.
+- **`brand.py`** — the real palette and logo. `python brand.py` self-tests.
+- **`test_supervisor.py`**, **`test_api.py`** — the tests, each with `--control`;
+  `test_api.py --live` additionally checks the real API still has the shape the fixtures assume.
 
 A supervisor whose only entry point is a window cannot be tested on a build box, which is why the
 split exists. The logic is tested against the **real** Windows `host.exe` (via WSL interop) and the
@@ -92,6 +126,18 @@ working.
   guaranteed rejection, looking busy throughout.
 - **Retry `EX_CONFIG` (78).** That means retrying cannot help. The supervisor stops and says why.
 - **Treat `EX_TEMPFAIL` (75) as a fault.** That is a busy board, not an error.
+
+## Two bugs worth recording, both found by running it
+
+**`ttk.Button["state"]` returns a `Tcl_Obj`**, not a `str`, so `== "normal"` is always False. It
+*prints* as `normal`. A condition comparing it silently never fired and Start never came back after
+workers finished. `tk.Button` returns a plain `str`, which is why the mistake is invisible in a
+quick test.
+
+**Tk is main-thread only — including `self.after()`.** Reading a `StringVar` from a worker thread
+raises `RuntimeError: main thread is not in main loop`, intermittently, depending on timing.
+Scheduling with `after()` from a thread is the same class of bug. Worker threads now snapshot every
+variable before they start and post results back through a queue drained on the main thread.
 
 ## Not done yet
 

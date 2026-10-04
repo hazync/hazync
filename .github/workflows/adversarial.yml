@@ -269,6 +269,19 @@ jobs:
         # ⛔ Each control is a mistake that already cost this project: proving into guaranteed
         # rejection on a non-canonical binary, and retrying EX_CONFIG for ever.
         run: cd tools/win-gui && python3 test_supervisor.py --control
+      - name: The coordinator API layer and the block map's geometry
+        # ⚠ Offline, on fixtures recorded from the live API. A shape change then shows up as a
+        # failing test rather than a quietly empty dashboard.
+        run: cd tools/win-gui && python3 test_api.py
+      - name: block-map POSITIVE CONTROL (unclipped gaps, best-state buckets, newest-first — must fail)
+        # ⛔ The unclipped-gap one is a real bug this caught: it reported 826,567 open blocks below a
+        # frontier of 142,140, which is impossible on its face.
+        run: cd tools/win-gui && python3 test_api.py --control
+      - name: the GUI's colours and logo still match hazync.org
+        # ⚠ brand.py reproduces /favicon.svg as Canvas primitives; this asserts the geometry has not
+        # drifted from the real asset.
+        run: cd tools/win-gui && python3 brand.py
+
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
         # serialisation quietly stopped happening.
