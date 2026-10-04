@@ -261,6 +261,17 @@ jobs:
         # reproduce/GUEST_ELF_SHA256 returns METHOD_ID out of the prose, not the pin.
         run: python3 scripts/embedded_guest_sha.py --control
 
+      - name: "#550's tail-vs-bandwidth comparison is actually REACHED by the CLI"
+        # ⛔⛔ THE BUG: tail_ranking, tail_cut and cut_agreement shipped with ZERO callers — not in
+        # the run, not in report(), nowhere but their own test. A funded fleet run would have
+        # produced data for #567 and #598 and NOTHING for #550, money spent before anyone noticed.
+        # ⚠ tip_banks records the same failure one round earlier: cohort_effect and MIN_FLEET were
+        # unused, and the fix for that added these three, also unwired. Hence a test whose first
+        # assertion is that the wiring exists.
+        run: cd coordinator && python3 test_cut_comparison.py
+      - name: cut-comparison POSITIVE CONTROL (rank the aggregate, zero-fill an unmeasured p90, compare unequal cuts — must fail)
+        run: cd coordinator && python3 test_cut_comparison.py --control
+
       - name: A tail-based worker cut is ranked and reported, never cutting the aggregate (#550)
         run: cd coordinator && python3 test_tail_cut.py
       - name: tail-cut POSITIVE CONTROL (naive ranking incl. the aggregate — must fail)

@@ -84,6 +84,7 @@ Under-sampled cards are named and excluded, never quietly merged.
     python3 tip_banks.py --banks 2 <log>...
     python3 tip_banks.py --banks 2 --control <log>...   # bank by NAME — must fail to separate it
 """
+import json
 import math
 import os
 import sys
@@ -265,6 +266,69 @@ def cut_agreement(bw_drop, tail_drop):
     return sorted(a & c), sorted(a - c), sorted(c - a)
 
 
+def cut_comparison(probe, samples, min_samples=MIN_SAMPLES):
+    """Print what a TAIL-based cut would have dropped, against what the run's BANDWIDTH cut did.
+
+    ⛔⛔ WHY THIS FUNCTION EXISTS AT ALL. `tail_ranking`, `tail_cut` and `cut_agreement` were
+    written for #550 and had ZERO callers — not in the run, not in `report()`, not anywhere but
+    their own test. A funded run would have produced data for #567 and #598 and nothing for #550.
+    That is the second time this issue has hit the same wall: tip_banks' own comment records that
+    `cohort_effect` and `MIN_FLEET` were unused, and the fix for THAT added these three, unwired.
+
+    ⚠ IT RUNS OFFLINE, ON ARTEFACTS THE RUN ALREADY WRITES, and deliberately not inside the run.
+    The live path does not parse joins (`join_levels` is not even imported by tip_smoke), so wiring
+    it there would mean adding log-parsing to a run that costs money per minute. ⇒ `probe.json`
+    gives the elected aggregate and the bandwidth cut; the log gives the join samples. Both exist
+    after any run, so the comparison costs nothing and cannot break a run.
+
+    ⛔ `need` IS DERIVED, NOT GUESSED: the fleet size the bandwidth cut trimmed TO, i.e. candidates
+    minus dropped. Both criteria must trim to the SAME size or the two drop-lists are not comparable
+    and `cut_agreement` would be measuring the cut's depth rather than its choice.
+
+    ⚠ This decides nothing. #550 asks whether the two criteria disagree, and lever 2 is the standing
+    reminder of what happens when a plausible ordering is acted on before it is measured.
+    """
+    cands = probe.get("candidates") or {}
+    elected = probe.get("elected")
+    bw_drop = sorted(probe.get("dropped") or [])
+    if not elected or not cands:
+        print("probe.json has no elected aggregate or no candidates — nothing to compare")
+        return
+    # ⛔ The aggregate LEADS the order: tail_ranking never ranks order[0], because the aggregate is
+    # not droppable and does not appear in the join samples as a peer of itself.
+    order = [elected] + sorted(c for c in cands if c != elected)
+    need = len(order) - len(bw_drop)
+    print()
+    print("── #550: would a TAIL-based cut have chosen differently? ──")
+    print(f"  fleet {len(order)} card(s), aggregate {elected}, trimming to {need}")
+
+    ranked, thin = tail_ranking(order, samples, min_samples=min_samples)
+    measured = [(c, v) for c, v in ranked if v is not None]
+    if not measured:
+        print(f"  ⚠ NO card has {min_samples}+ labelled joins, so the tail is UNMEASURED here and")
+        print("    no comparison is possible. A log from before #570 carries no labelled joins.")
+        return
+    shown = ", ".join(f"{c} {v:.0f}ms" for c, v in measured[:6])
+    print(f"  worst tail first: {shown}" + ("" if len(measured) <= 6 else f", +{len(measured)-6} more"))
+    if thin:
+        print(f"  ⚠ UNMEASURED (fewer than {min_samples} joins), never treated as fast: "
+              f"{' '.join(sorted(thin))}")
+
+    tail_drop = sorted(tail_cut(order, samples, need=need, min_samples=min_samples))
+    both, bw_only, tail_only = cut_agreement(bw_drop, tail_drop)
+    print(f"  bandwidth cut dropped: {' '.join(bw_drop) or '(none)'}")
+    print(f"  a tail cut would drop: {' '.join(tail_drop) or '(none)'}")
+    print(f"  agree on {len(both)}; bandwidth-only {len(bw_only)}; tail-only {len(tail_only)}")
+    if not bw_only and not tail_only:
+        print("  ⇒ THE TWO CRITERIA AGREE here. Banking by tail buys nothing this run, which is a")
+        print("    real answer to #550 and not a failed measurement.")
+    else:
+        print(f"  ⇒ THEY DISAGREE: bandwidth-only {' '.join(bw_only) or '-'} | "
+              f"tail-only {' '.join(tail_only) or '-'}")
+        print("    ⚠ Which was RIGHT needs the block times, not this list. Disagreement is the")
+        print("      precondition for #550 mattering, not evidence that it does.")
+
+
 def report(samples, n_banks, by_name=False, batches=None):
     ranked, thin, unlabelled = rank_cards(samples)
     if not ranked:
@@ -350,6 +414,14 @@ def main():
     by_name = "--control" in argv
     argv = [a for a in argv if a != "--control"]
     n = 2
+    # ⚠ probe.json is written by every run (tip_stage.write_probe_record) and carries the elected
+    # aggregate plus the cards the BANDWIDTH cut dropped — the half of #550's comparison that a log
+    # alone cannot supply.
+    probe_path = None
+    if "--probe" in argv:
+        i = argv.index("--probe")
+        probe_path = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
     if "--banks" in argv:
         i = argv.index("--banks")
         n = int(argv[i + 1])
@@ -369,7 +441,20 @@ def main():
             return 2
         lines.extend(own)
         batches.extend(join_levels.cohorts(own))
-    return report(join_levels.parse(lines), n, by_name=by_name, batches=batches)
+    samples = join_levels.parse(lines)
+    rc = report(samples, n, by_name=by_name, batches=batches)
+    # ⚠ AFTER the banking report, and only when a probe record is given. Without --probe there is no
+    # record of which cards the run's bandwidth cut dropped, and inventing one would make the
+    # comparison fiction.
+    if probe_path:
+        try:
+            with open(probe_path) as fh:
+                probe = json.load(fh)
+        except (OSError, ValueError) as e:
+            print(f"cannot read probe record {probe_path}: {e}")
+            return 2
+        cut_comparison(probe, samples)
+    return rc
 
 
 if __name__ == "__main__":
