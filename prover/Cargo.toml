@@ -41,3 +41,35 @@ risc0-circuit-keccak = { path = "../vendor/risc0-circuit-keccak" }
 # ⛔ Prover-side only: METHOD_ID, the circuit and the verifier are unchanged. Drop once upstream
 # builds for MSVC.
 risc0-build-kernel = { path = "../vendor/risc0-build-kernel" }
+# hazync#631: risc0-groth16-sys 0.1.0 with ONE gate, in kernels/cuda/groth16_coeffs.cuh (search
+# HAZYNC_631_WIN_NO_MMAP). It includes <sys/mman.h>, <unistd.h> and <fcntl.h> to mmap a coefficient
+# blob, and Windows has none of them:
+#     groth16_coeffs.cuh(4): fatal error C1083: Cannot open include file: 'sys/mman.h'
+# ⚠ WE NEVER EXECUTE IT. The crate exports risc0_groth16_cuda_prove/_setup — SNARK WRAPPING. Hazync
+# proves STARK receipts (`host prove-block`), and the wrap is a separate step; but risc0-zkvm's
+# `cuda` feature pulls this crate in unconditionally, so it must COMPILE. Same shape as the vendored
+# keccak circuit and the cfg(unix) IPC prover.
+# ⛔ GATED, NOT PORTED. A Windows mmap port means CreateFileMapping/MapViewOfFile and is upstream's
+# design call. On MSVC the two file paths throw a clear error naming why, so SNARK wrapping on
+# native Windows fails loudly rather than silently. Non-MSVC targets are byte-identical.
+risc0-groth16-sys = { path = "../vendor/risc0-groth16-sys" }
+# hazync#631: sppark 0.1.15 with FOUR CHARACTERS changed, in sppark/ff/mont_t.cuh (search
+# HAZYNC_631_QUALIFY_N). MSVC/EDG rejects `size_t n=n` as a default argument —
+#     mont_t.cuh(49): error: a parameter is not allowed
+# because it resolves the unqualified `n` to the parameter being declared. The intent is the class
+# member `static const size_t n = (N+31)/32;` above it, which is what GCC's lookup finds, so
+# `mont_t::n` names the same value explicitly and is identical on every compiler.
+# ⚠ #632's own comment predicted this crate would be next: "sppark comes through DEP_SPPARK_ROOT
+# below and its Windows support is also untested."
+# ⛔ Prover-side only: METHOD_ID, the circuit and the verifier are unchanged.
+sppark = { path = "../vendor/sppark" }
+# hazync#631: risc0-circuit-keccak-sys 4.0.3 with its flag block branched, in build.rs (search
+# HAZYNC_631_MSVC_FLAGS). It carries its OWN `-Xcompiler -Wno-unused-function,...`, so neither
+# #632's fix in risc0-circuit-rv32im-sys nor the one in the SHARED risc0-build-kernel reached it:
+#     cl : Command line error D8021 : invalid numeric argument '/Wno-unused-function'
+# ⚠ 43 MB, of which 38 MB is kernels/cxx — nothing trimmable, and the cheaper route was checked
+# first: dropping `risc0-circuit-keccak-sys/cuda` from the vendored circuit's `cuda` feature would
+# have avoided this entirely, but src/prove/hal/cuda.rs imports keccak-sys under that same feature,
+# so it trades a compile error for a LINK error.
+# ⛔ The non-MSVC arm is byte-identical. Prover-side only; the circuit and METHOD_ID are unchanged.
+risc0-circuit-keccak-sys = { path = "../vendor/risc0-circuit-keccak-sys" }

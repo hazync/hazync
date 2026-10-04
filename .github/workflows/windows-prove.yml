@@ -68,15 +68,15 @@ on:
       ref_note:
         description: 'DISPATCH A BRANCH, NOT main — see the warning in this file'
         default: 'dispatch this on a branch; a failure on main posts a red check against main'
-      skip_cpu_prove:
-        description: "'true' skips the 48-minute CPU prove and runs only the CUDA build (#631)"
-        default: 'false'
       toolset:
         description: "MSVC toolset: 'newest-supported' (default) or an exact prefix like 14.29 (#631)"
         default: 'newest-supported'
       cuda:
         description: "CUDA redist set: 12.9.1 (default) or 12.6.3 — both pinned by sha256 (#631)"
         default: '12.9.1'
+      skip_cpu_prove:
+        description: "'true' skips the 48-minute CPU prove and runs only the CUDA build (#631)"
+        default: 'false'
 
 permissions:
   contents: read
@@ -408,7 +408,27 @@ jobs:
   # The uploaded exe is what answers the rest, on real hardware.
   build-cuda:
     needs: [guest]
-    runs-on: windows-latest
+    # ⛔⛔ windows-2022, NOT windows-latest — AND THE TOOLSET PIN COULD NEVER HAVE FIXED THIS.
+    #
+    # `windows-latest` now images Visual Studio 18 (VS 2026). Four runs died identically with
+    # `cudafe++ died with status 0xC0000005 (ACCESS_VIOLATION)`, including on a THREE-LINE
+    # hello-world kernel, which proved risc0 was never involved. The `nvcc -v` line says why
+    # selecting an older toolset inside that image cannot help:
+    #
+    #   cudafe++ --microsoft_version=1944 --compiler_bindir
+    #     "C:/.../MSVC/14.44.35207/bin/HostX64/x64/../../../../../../.."
+    #
+    # That path resolves to the VISUAL STUDIO INSTALL ROOT — `.../Visual Studio/18/Enterprise` —
+    # so cudafe++ is pointed at VS 2026 whichever toolset is selected. 14.44 and 14.29 failed the
+    # same way for that reason, and I spent two runs concluding "upstream" from it.
+    #
+    # ⭐ NVIDIA's forums report this exact break against the VS 2026 update (14.50.x works, 14.51
+    # fails), and name toolchain/header mixing as the usual cause of this crash. windows-2022 is a
+    # genuine VS 2022 image rather than a 2022 toolset inside a 2026 install.
+    #
+    # ⚠ The CPU `prove` job stays on windows-latest: it is PROVEN there (run 36933650193,
+    # `PROVED in 2875.1s — receipt VERIFIED`) and nothing about it touches nvcc.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -651,6 +671,76 @@ jobs:
             if (-not (Test-Path (Join-Path $root $h))) { Write-Host "missing header: $h (cccl incomplete)"; exit 1 }
           }
           Write-Host "nvcc 12.9 runs, and thrust + libcu++ headers are present"
+      - name: Install protoc, pinned and sha256-verified (#631)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ⛔⛔ THIS IS WHAT ACTUALLY FAILED TWO 2-HOUR RUNS, AND IT IS NOT A CUDA PROBLEM AT ALL.
+          #
+          # `circom-witnesscalc v0.2.1` runs a prost-build build script that shells out to `protoc`,
+          # which is not on a windows runner. The build spent ~2 h happily compiling sppark,
+          # risc0-sys and risc0-circuit-keccak-sys's CUDA kernels and then died here:
+          #
+          #     error: failed to run custom build command for `circom-witnesscalc v0.2.1`
+          #       Error: Could not find `protoc`. ... Try installing `protobuf-compiler`
+          #
+          # ⛔ AND IT WAS IN THE LOG THE WHOLE TIME, AT LINE 895 OF 962. I read the TAIL and
+          # concluded "no error message, so the build was killed" -- twice, and once in writing. Cargo
+          # flushes buffered build-script WARNINGS after the error, so the tail of a failed cargo log
+          # is warnings and the error sits above them. ⇒ grep the whole file; never read the tail of
+          # a cargo log and conclude anything about whether it failed.
+          #
+          # ⚠ Memory was never the constraint: 13.8 GB of 16 GB free at the moment of failure, 83 GB
+          # of disk. `CARGO_BUILD_JOBS=2` was added on that wrong hypothesis and made the run SLOWER
+          # (2 h 17 m vs 1 h 53 m); it is gone again.
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-win64.zip"
+          SHA="f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3"
+          curl -sSL --retry 3 -o protoc.zip "$URL"
+          # ⛔ sha256sum ESCAPES its output with a leading backslash when the name contains one, and
+          # on MSYS it can. Feed the file on STDIN so there is no name in the output to mangle.
+          got=$(sha256sum < protoc.zip | cut -d' ' -f1)
+          [ "$got" = "$SHA" ] || { echo "protoc sha256 MISMATCH: got $got want $SHA" >&2; exit 1; }
+          echo "protoc archive verified: $got"
+          mkdir -p "$RUNNER_TEMP/protoc"
+          unzip -q -o protoc.zip -d "$RUNNER_TEMP/protoc"
+          PROTOC_EXE="$RUNNER_TEMP/protoc/bin/protoc.exe"
+          [ -x "$PROTOC_EXE" ] || { echo "protoc.exe absent after unzip" >&2; exit 1; }
+          # ⚠ prost-build reads PROTOC as a native path; cygpath it or it gets an MSYS path it
+          # cannot exec. This project has the scar: a lone /DNOMINMAX became C:/Program Files/Git/...
+          echo "PROTOC=$(cygpath -w "$PROTOC_EXE")" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+          # ⭐ POSITIVE check: it must RUN and print a version, not merely exist on disk.
+          "$PROTOC_EXE" --version
+
+      # ⛔⛔ RESTORE AND SAVE SEPARATELY, AND SAVE ON FAILURE TOO. `actions/cache` saves in a POST
+      # step, and a post step is SKIPPED when the job fails — so a 2-hour CUDA build that dies in a
+      # LATER step saves nothing and the next attempt rebuilds from scratch.
+      #
+      # 📏 That is exactly what happened: five #631 runs at ~2 h each, every one of them starting
+      # from "Cache not found for input keys: cargo-reg-Windows-6300caa…", because every one of them
+      # failed after the build — on protoc, on a DLL, on an encoding. The caching added earlier was
+      # real but could never take effect while the job kept failing.
+      #
+      # ⇒ `cache/restore` + an explicit `cache/save` with `if: always()` makes an expensive build
+      # survive a cheap failure downstream, which is the whole point of caching it.
+      - name: Restore the cargo registry
+        id: cache-reg
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
+          restore-keys: cargo-reg-${{ runner.os }}-
+
+      - name: Restore the CUDA build tree
+        id: cache-target
+        uses: actions/cache/restore@v4
+        with:
+          path: prover/target
+          key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
+          restore-keys: cuda-target-${{ runner.os }}-
+
       - name: ⭐ Build the host for Windows WITH CUDA (#631)
         shell: bash
         working-directory: prover
@@ -685,6 +775,21 @@ jobs:
         run: |
           set -o pipefail
           echo "CUDA_PATH=$CUDA_PATH"
+          # ⛔⛔ THE LAST THREE RUNS WERE KILLED, NOT FAILED. Each ran ~1h50m-2h and ended with
+          # cargo exit 101, NO error message, and cuda-build.log truncated mid-warning. A compile
+          # error prints a diagnostic; a killed process does not.
+          #
+          # ⚠ The suspects are memory and disk, and this project has both scars: the release
+          # profile is fat LTO + codegen-units=1, so the LINK peaks huge, and a CMake build here
+          # needs -j2 max to survive. A windows runner has 4 cores and 16 GB, and nvcc on sppark's
+          # and risc0's template-heavy kernels is not cheap per process.
+          #
+          # ⇒ REPORT IT RATHER THAN GUESS AGAIN. Free disk and memory are printed before the build
+          # and after a failure, so the next diagnosis reads a number instead of a hypothesis.
+          echo "=== resources BEFORE ==="
+          df -h / 2>/dev/null | tail -2
+          wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /value 2>/dev/null | tr -d '\r' | grep -E '=[0-9]' \
+            || powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory,TotalVisibleMemorySize | Format-List" 2>/dev/null
           # ⛔⛔ NVCC_APPEND_FLAGS IS BUILT HERE, NOT IN `env:`, BECAUSE ONE OF ITS FLAGS IS
           # CONDITIONAL. Its mere PRESENCE also makes the vendored builder skip `-arch=native`,
           # which queries a GPU this runner does not have — so it must be exported either way.
@@ -711,11 +816,29 @@ jobs:
           # Both, because the error above came from the host pass and the device pass needs it too.
           # ⛔ A `-` prefix, not `/`: a lone `/std:...` is what MSYS rewrote into
           # `C:/Program Files/Git/...` in run 37020607504. cl.exe accepts `-` for any option.
-          FLAGS="$FLAGS -std=c++17 -Xcompiler -std:c++17"
-          # ⛔ `uint` IS A POSIX TYPEDEF MSVC DOES NOT HAVE. 13 errors across risc0-sys's own
-          # combos.cu, eltwise.cu and kernels.cu — `uint gid = blockIdx.x * ...`. ⚠ `unsigned`
-          # alone IS `unsigned int` in C++, so this needs no space and cannot be re-quoted wrongly.
-          FLAGS="$FLAGS -Duint=unsigned"
+          # ⛔⛔ C++20, AND THE EARLIER RETREAT TO 17 WAS A MISREADING OF THE SAME VS 2026 BUG.
+          # The vendored rv32im kernels use DESIGNATED INITIALIZERS —
+          #     NondetRegLayout{._super = /*offset=*/12}
+          # which MSVC accepts only at /std:c++20 (error C7555). That is blocker #3 of this chain.
+          # I had set c++20, hit `cudafe++ died with status 0xC0000409`, concluded C++20 was the
+          # cause and dropped to 17 — and run 37115534389 then produced 200 `expected an
+          # expression` errors, every one of them on layout.cu.inc's designated initializers.
+          # ⭐ The 0xC0000409 was the SAME VS 2026 front-end fault that windows-2022 has now fixed,
+          # not a C++20 incompatibility. Two symptoms, one cause, and retreating from 17 to 20
+          # traded a crash for a parse failure.
+          FLAGS="$FLAGS -std=c++20 -Xcompiler -std:c++20"
+          # ⛔⛔ `uint` COMES FROM A FORCED-INCLUDE TYPEDEF, NOT `-Duint=unsigned`.
+          # risc0-sys's kernels use the POSIX `uint`, which MSVC lacks — 13 errors. The obvious fix,
+          # a -D, cleared those and created 200+ new ones: the CUDA and libcu++ headers build the
+          # vector types uint1..uint4 by TOKEN PASTING `uint` with a digit, a macro participates in
+          # that paste, and run 37113822741 shows `unsigned1`..`unsigned4` ninety-six times each
+          # with every tuple trait over them failing to parse. A typedef cannot be pasted.
+          # ⚠ Both passes: `-include` is nvcc's own (device) and `/FI` is MSVC's (host), and the
+          # `uint` uses are in device code. ⛔ An ABSOLUTE Windows path, because a build script's
+          # cwd is its own crate directory, not this one.
+          UINTH=$(cygpath -w "$(pwd)/hazync_win_uint.h")
+          [ -f "$(pwd)/hazync_win_uint.h" ] || { echo "missing hazync_win_uint.h"; exit 1; }
+          FLAGS="$FLAGS -include $UINTH -Xcompiler /FI$UINTH"
           if [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ]; then
               echo "host compiler: a CUDA-supported MSVC toolset was selected — NO override needed"
           else
@@ -727,6 +850,9 @@ jobs:
               FLAGS="$FLAGS -allow-unsupported-compiler"
           fi
           export NVCC_APPEND_FLAGS="$FLAGS"
+          # ⚠ NO CARGO_BUILD_JOBS CAP. One was added here on an OOM hypothesis that the
+          # instrumentation then DISPROVED -- 13.8 GB of 16 GB free at the failure -- and it cost
+          # 24 minutes of extra wall-clock for nothing. Measure before constraining.
           echo "NVCC_APPEND_FLAGS=$NVCC_APPEND_FLAGS"
           # ⛔ CAPTURE, DO NOT TAIL. Two runs were spent on this file discovering that a tail window
           # had eaten the diagnostic; the fix belongs here from the first run, not the third.
@@ -738,50 +864,55 @@ jobs:
           echo "=== first 30 ==="; head -30 cuda-build.log
           echo "=== last 60 ==="; tail -60 cuda-build.log
           if [ "$rc" -ne 0 ]; then
-              echo "=== every error line, WHOLE lines (a -oE pattern throws file:line away) ==="
-              /usr/bin/grep -nE "error|LNK[0-9]+|fatal|nvcc" cuda-build.log | head -40
+              echo "=== resources AFTER the failure ==="
+              df -h / 2>/dev/null | tail -2
+              powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory,TotalVisibleMemorySize | Format-List" 2>/dev/null || true
+              # ⛔ A KILLED BUILD PRINTS NO DIAGNOSTIC. Say which case this is, because "no error
+              # line" was read three times as "the log is unhelpful" when it was itself the signal.
+              # ⛔⛔ STRIP ANSI BEFORE MATCHING, AND THE FIRST VERSION OF THIS CHECK DID NOT.
+              # cargo writes `\033[1m\033[91merror\033[0m:`, so an anchored `^error: ` matched
+              # NOTHING and this printed "the build was KILLED" over a perfectly ordinary compile
+              # error that was sitting at line 895. A check whose green means "I did not find the
+              # words I expected" is the exact shape that has misread this repo's CI three times.
+              sed -E 's/\x1b\[[0-9;]*m//g' cuda-build.log > cuda-build.plain
+              ERRN=$(/usr/bin/grep -acE "^error(\[|:)|could not compile|failed to run custom build" cuda-build.plain || true)
+              echo "cargo-style error lines found: $ERRN"
+              if [ "$ERRN" -eq 0 ]; then
+                  echo "⚠ cargo exited $rc and NO error line was found even after stripping ANSI —"
+                  echo "  only then is a kill (OOM/disk) the likely story. Check the figures above."
+              else
+                  echo "⇒ this is an ordinary build FAILURE, not a kill. The error:"
+                  /usr/bin/grep -aE -m3 -A 8 "^error(\[|:)|failed to run custom build" cuda-build.plain | head -24
+              fi
+              echo "=== every error line, WHOLE lines (⛔ excluding 'thiserror', which the previous"
+              echo "    pattern matched and reported as if it were the failure) ==="
+              /usr/bin/grep -nE "error|LNK[0-9]+|fatal|nvcc" cuda-build.log \
+                | /usr/bin/grep -vE "thiserror|ToolFamilyMacroNotFound" | head -40
           fi
           exit "$rc"
 
-      - name: ⛔ the CUDA binary must carry the CANONICAL id
-        shell: bash
-        working-directory: prover
-        run: |
-          PIN=$(/usr/bin/grep -vE '^\s*#|^\s*$' ../reproduce/METHOD_ID | head -1 | tr -d '[:space:]')
-          GOT=$(./target/release/host.exe method-id | tr -d '[:space:]')
-          echo "pin $PIN"; echo "got $GOT"
-          [ "$PIN" = "$GOT" ] || { echo "⛔ NOT CANONICAL — a proof from this binary is worthless"; exit 1; }
-          echo "✅ canonical"
-
-      - name: What this did and did not establish
+      # ⭐ SAVE HERE, DIRECTLY AFTER THE EXPENSIVE PART, not in a post step that a later failure
+      # cancels. ⚠ `if: always()` so a build that fails PARTWAY still banks what it compiled; the
+      # next run resumes instead of restarting. ⚠ A save onto an existing exact key is a no-op that
+      # warns, which is why the `continue-on-error` is here and nowhere else.
+      - name: Bank the CUDA build tree even if a later step fails
         if: always()
-        shell: bash
-        working-directory: prover
-        run: |
-          if [ -f target/release/host.exe ]; then
-              echo "✅ The CUDA kernels COMPILED under MSVC and the binary is canonical (#631's build half)."
-          else
-              echo "⛔ No host.exe — the CUDA build did not complete. Read the cuda-build.log artifact."
-          fi
-          if [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ]; then
-              echo "✅ host compiler was a CUDA-SUPPORTED MSVC toolset — no override was used."
-              echo "   nvcc was pointed at it via NVCC_CCBIN=${NVCC_CCBIN:-<unset!>}"
-          else
-              echo "⚠ BUILT WITH -allow-unsupported-compiler: every installed MSVC toolset is"
-              echo "  14.50+, which CUDA 12.9 refuses (it supports VS 2017-2022). nvcc warns this"
-              echo "  may produce incorrect runtime behaviour, so a receipt from this binary is the"
-              echo "  only thing that would settle it. Treat a compile alone as the weaker claim."
-          fi
-          echo "⛔ THIS RUNNER HAS NO GPU, so nothing here shows that it PROVES. That needs hardware."
-          echo "⚠ Built for sm_61 (Pascal) + PTX. The smallest card measured to prove has 24 GB;"
-          echo "  a 1050 Ti has 4 GB, so 'out of memory' is a likely and still-useful result."
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: prover/target
+          key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
 
-      # ⛔⛔ host.exe ALONE WOULD NOT START ON THE TEST MACHINE. The NVIDIA driver supplies
-      # `nvcuda.dll` (the driver API) but NOT `cudart64_*.dll` (the CUDA runtime) — that ships with
-      # the toolkit. A CUDA-linked binary handed to someone who has only a driver dies at load with
-      # a missing-DLL box and no useful message. ⇒ Ship the runtime beside it.
-      # ⚠ Asserted, not hoped: if no cudart DLL is found the step fails rather than uploading an exe
-      # that cannot run. Nothing here is static-linked, so its absence would be a real problem.
+      - name: Bank the cargo registry even if a later step fails
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
+
       - name: Ship the CUDA runtime beside the exe (when one was built)
         if: always()
         shell: bash
@@ -809,6 +940,9 @@ jobs:
           fi
           echo "✅ packaged $n CUDA runtime DLL(s) next to host.exe"
           ls -la "$OUT"/host.exe "$OUT"/*.dll
+          # ⚠ cudart is shipped for a machine that will actually RUN this, but note it is NOT in
+          # the import table — the exe does not load it at startup. The import that matters is
+          # nvcuda.dll, the DRIVER api, which no redist supplies. See scripts/embedded_guest_sha.py.
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -825,3 +959,81 @@ jobs:
           name: windows-cuda-build-log
           path: prover/cuda-build.log
           retention-days: 14
+
+      - name: ⛔ the CUDA binary must carry the CANONICAL guest
+        id: canonical
+        shell: bash
+        working-directory: prover
+        run: |
+          set -o pipefail
+          # ⛔⛔ THIS USED TO RUN `host.exe method-id` AND IT CANNOT WORK HERE. Three runs died on
+          # exit 127 against a binary the same run uploaded. The import table says why:
+          #
+          #     nvcuda.dll   ← the CUDA DRIVER API, shipped with the NVIDIA driver, not the redist
+          #
+          # A GPU-less runner has no driver, so Windows cannot load the image, and nothing copied
+          # beside the exe changes it. ⚠ I shipped cudart twice on that theory; cudart is not even
+          # imported.
+          #
+          # ⇒ Verify the property from the FILE instead: the guest is embedded verbatim, so its
+          # sha256 can be compared with reproduce/GUEST_ELF_SHA256 with no GPU at all. Measured on
+          # run 37155135563's artifact: R0BF at offset 12,281,328, 69,980,208 B, sha 35e3f55e… .
+          #
+          # ⛔ AND IT REPORTS THE TWO THINGS SEPARATELY. A step here once printed "the binary is
+          # canonical" having checked only that a file EXISTED, in a run where the id check had
+          # just failed. The guest is verified; the image id is NOT read, and it says so.
+          if python3 ../scripts/embedded_guest_sha.py target/release/host.exe --root .. ; then
+              echo "verdict=guest-canonical" >> "$GITHUB_OUTPUT"
+          else
+              echo "verdict=guest-mismatch" >> "$GITHUB_OUTPUT"
+              exit 1
+          fi
+
+      - name: What this did and did not establish
+        if: always()
+        shell: bash
+        working-directory: prover
+        env:
+          # ⚠ via env, never spliced into the script body — ${{ }} inside a run block is the
+          # injection vector the repo's own guard rejects, and I tripped it twice already.
+          CANON_VERDICT: ${{ steps.canonical.outputs.verdict }}
+        run: |
+          # ⛔⛔ THIS LINE USED TO CLAIM "the binary is canonical" ON `-f host.exe` ALONE, and it
+          # printed exactly that in a run where the canonicality check had just FAILED. A file
+          # existing is not a property being verified. Report the check's OWN verdict, and when
+          # there is no verdict say so rather than choosing the flattering reading.
+          V="${CANON_VERDICT:-}"
+          if [ ! -f target/release/host.exe ]; then
+              echo "⛔ No host.exe — the CUDA build did not complete. Read the cuda-build.log artifact."
+          else
+              echo "✅ The CUDA kernels COMPILED under MSVC and a host.exe was produced."
+              case "$V" in
+                guest-canonical)
+                  echo "✅ and it embeds the CANONICAL guest, verified against reproduce/GUEST_ELF_SHA256."
+                  echo "⚠ its own METHOD_ID was NOT read: a CUDA-linked exe imports nvcuda.dll and"
+                  echo "  cannot start without an NVIDIA driver. On a GPU box: host.exe method-id" ;;
+                guest-mismatch)
+                  echo "⛔ but it does NOT embed the canonical guest — proofs from it are worthless." ;;
+                *)
+                  echo "⚠ the guest check reported no verdict, so canonicality is UNKNOWN." ;;
+              esac
+          fi
+          if [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ]; then
+              echo "✅ host compiler was a CUDA-SUPPORTED MSVC toolset — no override was used."
+              echo "   nvcc was pointed at it via NVCC_CCBIN=${NVCC_CCBIN:-<unset!>}"
+          else
+              echo "⚠ BUILT WITH -allow-unsupported-compiler: every installed MSVC toolset is"
+              echo "  14.50+, which CUDA 12.9 refuses (it supports VS 2017-2022). nvcc warns this"
+              echo "  may produce incorrect runtime behaviour, so a receipt from this binary is the"
+              echo "  only thing that would settle it. Treat a compile alone as the weaker claim."
+          fi
+          echo "⛔ THIS RUNNER HAS NO GPU, so nothing here shows that it PROVES. That needs hardware."
+          echo "⚠ Built for sm_61 (Pascal) + PTX. The smallest card measured to prove has 24 GB;"
+          echo "  a 1050 Ti has 4 GB, so 'out of memory' is a likely and still-useful result."
+
+      # ⛔⛔ host.exe ALONE WOULD NOT START ON THE TEST MACHINE. The NVIDIA driver supplies
+      # `nvcuda.dll` (the driver API) but NOT `cudart64_*.dll` (the CUDA runtime) — that ships with
+      # the toolkit. A CUDA-linked binary handed to someone who has only a driver dies at load with
+      # a missing-DLL box and no useful message. ⇒ Ship the runtime beside it.
+      # ⚠ Asserted, not hoped: if no cudart DLL is found the step fails rather than uploading an exe
+      # that cannot run. Nothing here is static-linked, so its absence would be a real problem.
