@@ -261,6 +261,19 @@ jobs:
         # reproduce/GUEST_ELF_SHA256 returns METHOD_ID out of the prose, not the pin.
         run: python3 scripts/embedded_guest_sha.py --control
 
+      - name: The Windows GUI's supervisor logic (headless — no display, no GPU, no Windows)
+        # ⚠ The LOGIC is tested, not the window. A supervisor whose only entry point is a GUI
+        # cannot be tested on a build box, which is why tools/win-gui is split in two.
+        run: cd tools/win-gui && python3 test_supervisor.py
+      - name: win-gui POSITIVE CONTROL (accept any 64-hex id, retry EX_CONFIG, unconditional shim — must fail)
+        # ⛔ Each control is a mistake that already cost this project: proving into guaranteed
+        # rejection on a non-canonical binary, and retrying EX_CONFIG for ever.
+        run: cd tools/win-gui && python3 test_supervisor.py --control
+      - name: the Windows fcntl shim states its own contract
+        # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
+        # serialisation quietly stopped happening.
+        run: cd tools/win-gui/winshim && python3 fcntl.py
+
       - name: "#550's tail-vs-bandwidth comparison is actually REACHED by the CLI"
         # ⛔⛔ THE BUG: tail_ranking, tail_cut and cut_agreement shipped with ZERO callers — not in
         # the run, not in report(), nowhere but their own test. A funded fleet run would have
