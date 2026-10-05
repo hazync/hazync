@@ -274,9 +274,24 @@ for u in $UNITS; do
     # --- 2. effective settings the repo cannot account for --------------------------------------
     # Union, not precedence: we are asking "could the repo have produced this value at all", which
     # is the question that matters and needs no simulation of systemd's override order.
+    # ⛔⛔ THE SURROUNDING QUOTES MUST COME OFF, OR EVERY QUOTED Environment= READS AS DRIFT.
+    # `Environment="K=v with spaces"` is the correct way to write a value containing whitespace --
+    # unquoted, systemd splits it and silently drops everything after the first space, which is the
+    # bug hazync-check-disk.service already carries a warning about. But the probe above reads the
+    # effective value through `xargs -n1`, and xargs HONOURS and REMOVES the quotes. So the box
+    # reports  K=v with spaces  while this side held  "K=v with spaces"  -- never equal, and the key
+    # gets reported as appearing NOWHERE in the repo.
+    #
+    # ⚠ Measured 2026-10-05: deploying hazync-check-breakers.service, whose only quoted key is
+    # HAZYNC_BREAKER_PATHS, made this check fail on its first run with
+    #   "HAZYNC_BREAKER_PATHS is set on the box and appears NOWHERE in the repo"
+    # against a repo that declared exactly that path. HAZYNC_DISK_PATHS had been in
+    # unit-drift-allow.txt since 09-20 for the same reason -- an allow-list entry standing in for a
+    # parse bug, which quietly exempted a real key from the comparison. It is removed in this commit.
     declared=$( { cat "coordinator/deploy/$u.service" 2>/dev/null
                   declared_dropin_bodies "$u"; } \
-                | grep -E '^Environment=' | sed 's/^Environment=//' | sort -u )
+                | grep -E '^Environment=' | sed -e 's/^Environment=//' -e 's/^"\(.*\)"$/\1/' \
+                | sort -u )
     while read -r _ kv; do
         [ -n "${kv:-}" ] || continue
         k="${kv%%=*}"
