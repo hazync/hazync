@@ -43,6 +43,11 @@ jobs:
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
     runs-on: ubuntu-latest
+    # ⚠ A JOB WITH NO CEILING CANNOT REPORT A HANG — it can only disappear. There was no
+    # timeout-minutes anywhere in this workflow, so the default was 360 minutes, and a stuck step
+    # showed up as a cancelled job with no steps and no log. Measured at ~3 minutes before
+    # 2026-10-05; 30 leaves room for a slow runner while still turning a stall into a verdict.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -324,9 +329,14 @@ jobs:
         # ⚠ xvfb IS INSTALLED, NOT ASSUMED, and the run is not bare: theme.py SKIPS without a
         # display, and a skipped test is green — which would make this step prove nothing on the
         # one machine it runs on.
+        # ⛔ BOUNDED, BOTH HALVES. This job was cancelled 15 minutes in with NO failed step and no
+        # log retained, and working out which step it was cost more than the step is worth. apt and
+        # an X server are the two things here that can sit waiting on something outside this repo,
+        # so both get a clock and name themselves when it runs out.
+        timeout-minutes: 6
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
-          cd tools/win-gui && xvfb-run -a python3 theme.py
+          timeout 180 sudo apt-get install -y -qq xvfb || { echo "xvfb install failed or timed out"; exit 1; }
+          cd tools/win-gui && timeout 120 xvfb-run -a python3 theme.py
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
