@@ -432,6 +432,96 @@ def interesting_line(line):
     return None
 
 
+# ── translating the failures we already know about ───────────────────────────────────────────────
+#
+# ⛔ WHY THIS IS NOT COSMETIC. Every one of these cost real time to diagnose, and a newcomer hitting
+# the same string has none of that context. "fatal runtime error: Rust cannot catch foreign
+# exceptions" tells a person nothing; "the GPU reported an error and the old build threw it away"
+# tells them what to do next.
+#
+# ⚠ Each entry is a string that was actually OBSERVED, not one that seemed likely.
+_EXPLANATIONS = [
+    ("rust cannot catch foreign exceptions",
+     "The GPU reported an error and this build discarded it. sppark throws a C++ exception, which "
+     "on Windows aborts before any Rust handler runs. A build from 2026-10-04 or later prints a "
+     "CUDA ERROR line just above this one — if there is none, you are on an older binary."),
+    ("cuda error:",
+     "This is the real GPU error, printed just before the abort. Read the text after the colon: "
+     "'out of memory' means lower HAZYNC_SEG_PO2; anything else is the cause itself."),
+    ("out of memory",
+     "The GPU ran out of memory. Lower HAZYNC_SEG_PO2 on the Prove tab — each step down roughly "
+     "halves it. One prove at 21 peaked near 22 GB on a 46 GB card, so a small card needs 18 or "
+     "less, and may not manage at all."),
+    ("no kernel image is available",
+     "The binary has no code for this GPU. It is built for sm_61 plus forward PTX, so this usually "
+     "means the driver is too old to compile the PTX rather than the card being wrong."),
+    ("no module named 'fcntl'",
+     "The worker could not start: fcntl is POSIX-only and the Windows stand-in was not on its "
+     "path. That is a bug in this program, not in your setup — please report it."),
+    ("could not find `protoc`",
+     "A build-time dependency is missing. This should never appear in a released binary; it means "
+     "the prover was built without protoc."),
+    ("method_id", "The prover's guest id does not match the coordinator's, so every proof it makes "
+                  "would be rejected. Download the prover again."),
+    ("0xc000007b",
+     "Windows could not load the executable — usually a missing DLL. A CUDA build needs the NVIDIA "
+     "driver and cudart64_*.dll beside it."),
+    ("claimed block",
+     "A block is now yours for 60 minutes. If this machine cannot finish it, stop rather than "
+     "retrying: abandoned claims hold up everyone else."),
+]
+
+
+def explain(text):
+    """Plain language for a known failure, or None. Matches the FIRST thing recognised."""
+    low = (text or "").lower()
+    for needle, said in _EXPLANATIONS:
+        if needle in low:
+            return said
+    return None
+
+
+# ── the diagnostics a person would otherwise type by hand ────────────────────────────────────────
+DIAGNOSTICS = [
+    ("method-id", "Is this prover genuine?",
+     "Prints the guest id. Must be the canonical one or every proof is rejected.", 120),
+    ("regress", "Does consensus work here?",
+     "Replays block 170 through the full consensus path. Seconds, no GPU.", 300),
+    ("prove-block", "Can it actually prove?",
+     "Builds block 170's witness in-process and produces a real STARK receipt. This is the long "
+     "one — 2875 s on four CPU cores; a GPU should be far quicker.", 10800),
+]
+
+
+def diagnostic_command(host, name):
+    return [str(host), name]
+
+
+def diagnostic_verdict(name, rc, out):
+    """(ok, sentence) for a finished diagnostic. Reads the OUTPUT, not just the exit code."""
+    low = (out or "").lower()
+    why = explain(out)
+    if name == "method-id":
+        m = HEX64.search(out or "")
+        if m and m.group(0) == CANONICAL_METHOD_ID:
+            return True, f"canonical: {m.group(0)[:16]}…"
+        if m:
+            return False, f"NOT canonical: {m.group(0)[:16]}… — proofs would be rejected"
+        return False, (why or f"no id printed (exit {rc})")
+    if name == "regress":
+        # ⛔ Look for the PASS line, not for exit 0. A check that passes on silence is not a check.
+        if "regression pass" in low:
+            return True, "consensus regression passed"
+        return False, (why or f"did not print a pass (exit {rc})")
+    if name == "prove-block":
+        if "proved" in low and ("verified" in low or "receipt" in low):
+            import re as _re
+            t = _re.search(r"PROVED in ([0-9.]+)s", out or "")
+            return True, (f"proved and verified in {t.group(1)}s" if t else "proved and verified")
+        return False, (why or f"did not produce a receipt (exit {rc})")
+    return rc == 0, (why or f"exit {rc}")
+
+
 def preflight(host_path, worker_path, identity_dir=None, python_exe=None):
     """Every check, in the order a person should read them. Fatal ones block starting."""
     checks = [

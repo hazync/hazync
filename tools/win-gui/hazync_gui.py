@@ -67,6 +67,7 @@ class App(tk.Tk):
         self.workers = []
         self.runs, self.meta, self.prog = [], {}, {}
         self._cells = []                 # (item_id, lo, hi, state) for the map
+        self._explained = set()          # each known failure explained once, not every line
         self._build()
         self.after(POLL_MS, self._drain)
         self.after(400, self.refresh)
@@ -457,6 +458,26 @@ class App(tk.Tk):
         self.stop_btn = ttk.Button(row, text="Stop", command=self._stop, state="disabled")
         self.stop_btn.pack(side="left")
 
+        diag = self._card(t, "TEST THIS MACHINE  (no claims are made, nothing is submitted)")
+        diag.pack(fill="x", padx=10, pady=4)
+        tk.Label(diag, bg=p["mist"], fg=p["slate"], font=("Segoe UI", 8), justify="left",
+                 wraplength=920,
+                 text=("Run these before proving for real. They use only the block-170 fixtures "
+                       "built into the prover — no network, no coordinator, and no block is "
+                       "claimed, so nothing here can hold anyone else up.")
+                 ).pack(anchor="w", padx=12, pady=(2, 6))
+        drow = tk.Frame(diag, bg=p["mist"])
+        drow.pack(anchor="w", padx=12, pady=(0, 10))
+        self.diag_btns = {}
+        for name, title, note, _timeout in supervisor.DIAGNOSTICS:
+            btn = ttk.Button(drow, text=title, command=lambda n=name: self._diagnose(n))
+            btn.pack(side="left", padx=(0, 8))
+            self.diag_btns[name] = btn
+        self.v_diag = tk.StringVar(value="")
+        tk.Label(diag, textvariable=self.v_diag, bg=p["mist"], fg=p["ink"],
+                 font=("Segoe UI", 9), justify="left", wraplength=920
+                 ).pack(anchor="w", padx=12, pady=(0, 10))
+
         logf = self._card(t, "WHAT THE WORKERS ARE DOING")
         logf.pack(fill="both", expand=True, padx=10, pady=8)
         self.log = tk.Text(logf, wrap="word", bg=p["fog"], fg=p["ink"],
@@ -469,6 +490,48 @@ class App(tk.Tk):
                          ("proved", "good"), ("accepted", "good"), ("claimed", "lamp_text"),
                          ("sys", "slate")):
             self.log.tag_configure(tag, foreground=p[key])
+
+    # ── diagnostics ─────────────────────────────────────────────────────────────────────────────
+    def _diagnose(self, name):
+        host = self.host_var.get().strip()
+        po2 = self.po2.get().strip()
+        if not host:
+            messagebox.showinfo("No prover", "Set the prover on the Setup tab first.")
+            return
+        title = next((t for n, t, _, _ in supervisor.DIAGNOSTICS if n == name), name)
+        timeout = next((to for n, _, _, to in supervisor.DIAGNOSTICS if n == name), 600)
+        for b_ in self.diag_btns.values():
+            b_.configure(state="disabled")
+        self.v_diag.set(f"{title}  — running…")
+        self._say(f"[test] {name}: started", "sys")
+
+        def go():
+            env = dict(os.environ)
+            if po2:
+                env["HAZYNC_SEG_PO2"] = po2
+            # ⚠ The prover forces RISC0_PROVER=local when unset; leave it alone rather than
+            # second-guessing which backend it should pick.
+            rc, out = supervisor._run(supervisor.diagnostic_command(host, name),
+                                      env=env, timeout=timeout)
+            self.results.put((self._after_diag, (name, title, rc, out)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _after_diag(self, args):
+        name, title, rc, out = args
+        ok, verdict = supervisor.diagnostic_verdict(name, rc, out)
+        self.v_diag.set(f"{title}  —  {'PASSED' if ok else 'FAILED'}: {verdict}")
+        self._say(f"[test] {name}: {'passed' if ok else 'FAILED'} — {verdict}",
+                  "proved" if ok else "cuda-error")
+        # ⭐ Show the last few real lines, because a verdict without its evidence is just an
+        # assertion — and this project's own rule is to read the log, not the colour.
+        for line in [l for l in (out or "").splitlines() if l.strip()][-6:]:
+            self._say(f"    {line.rstrip()[:160]}", supervisor.interesting_line(line) or "sys")
+        if not ok:
+            why = supervisor.explain(out)
+            if why:
+                self._say(f"  ⇒ {why}", "oom")
+        for b_ in self.diag_btns.values():
+            b_.configure(state="normal")
 
     # ── tab: settings ───────────────────────────────────────────────────────────────────────────
     def _tab_settings(self):
@@ -714,6 +777,13 @@ class App(tk.Tk):
                     kind = supervisor.interesting_line(line)
                     if kind:
                         self.q.put((kind, f"[{w.job} {w.index}] {line.rstrip()}"))
+                        # ⭐ A known failure gets its plain-language meaning right underneath,
+                        # once — every one of these cost real time to diagnose the first time.
+                        if kind in ("cuda-error", "abort", "oom") and kind not in self._explained:
+                            why = supervisor.explain(line)
+                            if why:
+                                self._explained.add(kind)
+                                self.q.put(("sys", f"  ⇒ {why}"))
         except Exception as e:
             self.q.put(("sys", f"[{w.job} {w.index}] stopped reading output: {e}"))
 

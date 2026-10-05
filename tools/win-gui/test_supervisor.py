@@ -127,7 +127,40 @@ def main():
     if supervisor.IS_WINDOWS:
         check("/T" in cmd, "on Windows it uses taskkill /T so a prove is not orphaned")
 
-    print("── 7. the verdict line ──")
+    print("── 7. known failures are translated, not echoed ──")
+    # ⛔ Every one of these is a string this project actually hit. A newcomer meeting the same text
+    # has none of the context that made it diagnosable.
+    for text, must in [
+        ("fatal runtime error: Rust cannot catch foreign exceptions, aborting", "discarded"),
+        ('CUDA ERROR: cudaMalloc@ntt.cuh:12 failed: "out of memory"', "real GPU error"),
+        ("thread panicked: out of memory", "HAZYNC_SEG_PO2"),
+        ("No module named 'fcntl'", "bug in this program"),
+    ]:
+        got = supervisor.explain(text)
+        check(bool(got) and must in got, f"{text[:44]:46} -> mentions {must!r}")
+    check(supervisor.explain("   Compiling serde v1.0") is None,
+          "and ordinary output gets no invented explanation")
+
+    print("── 8. a diagnostic verdict reads the OUTPUT, not the exit code ──")
+    cases = [
+        ("method-id", 0, "METHOD_ID " + supervisor.CANONICAL_METHOD_ID, True),
+        ("method-id", 0, "METHOD_ID " + "de" * 32, False),
+        ("method-id", 0, "", False),
+        ("regress", 0, ">>> REGRESSION PASS ✓", True),
+        # ⛔ THE ONE THAT MATTERS: exit 0 with no pass line must FAIL. A check that passes on
+        # silence is not a check, and this project has been bitten by exactly that shape.
+        ("regress", 0, "started, then nothing", False),
+        ("prove-block", 0, "PROVED in 2875.1s — receipt VERIFIED against METHOD_ID", True),
+        ("prove-block", 134, "fatal runtime error: Rust cannot catch foreign exceptions", False),
+    ]
+    for name, rc, out, want in cases:
+        ok, msg = supervisor.diagnostic_verdict(name, rc, out)
+        check(ok == want, f"{name:12} rc={rc:<4} -> {'pass' if ok else 'FAIL'}  ({msg[:44]})")
+    _, msg = supervisor.diagnostic_verdict("prove-block", 0,
+                                           "PROVED in 2875.1s — receipt VERIFIED")
+    check("2875.1" in msg, f"and a successful prove reports its TIME ({msg})")
+
+    print("── 9. the verdict line ──")
     check(supervisor.summarise([r]) == "ready", "all-ok reads 'ready'")
     check("cannot start" in supervisor.summarise([rb]), "a fatal check blocks starting")
     warn = supervisor.CheckResult("GPU", False, "no nvidia-smi", fatal=False)
@@ -213,11 +246,20 @@ def control():
           f"({len(naive_hits)} hits); the marker match finds {len(real_hits)}")
     broke += 1 if ok else 0
 
+    # ⛔ naive 5: judge a diagnostic by its exit code
+    out = "started, then nothing"
+    naive = (0 == 0)                       # "exit 0, so it passed"
+    real, _ = supervisor.diagnostic_verdict("regress", 0, out)
+    ok = naive and not real
+    print(f"  {'ok  ' if ok else 'FAIL'} ⛔ control: 'exit 0 means it passed' calls a regress that "
+          f"printed NO pass line a success — a check that passes on silence is not a check")
+    broke += 1 if ok else 0
+
     print()
-    if broke < 5:
-        print(f"⛔ CONTROL BROKEN: only {broke} of 5 naive versions failed as expected")
+    if broke < 6:
+        print(f"⛔ CONTROL BROKEN: only {broke} of 6 naive versions failed as expected")
         return 1
-    print("CONTROL OK: all five naive versions break where the real logic holds")
+    print("CONTROL OK: all six naive versions break where the real logic holds")
     return 0
 
 

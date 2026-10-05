@@ -74,6 +74,27 @@ hands out work and tracks claims, and `/api/blockstatus` deliberately excludes c
 change by the second". Letting someone choose an arbitrary open block would hand out work another
 prover already holds. `/api/pick` is the coordinator's own answer and the Dashboard shows it.
 
+## Testing this machine
+
+The **Prove** tab has three buttons that run what you would otherwise type:
+
+| | |
+|---|---|
+| Is this prover genuine? | `method-id` — must print the canonical id or proofs are rejected |
+| Does consensus work here? | `regress` — block 170 through the full consensus path, seconds |
+| Can it actually prove? | `prove-block` — a real STARK receipt from built-in fixtures |
+
+⭐ **No block is claimed and nothing is submitted.** They use only the block-170 fixtures compiled
+into the prover, so a machine that cannot prove learns that without holding up the board.
+
+Each verdict reads the **output**, not the exit code — `regress` exiting 0 while printing no pass
+line is reported as a failure, because a check that passes on silence is not a check. The last few
+real lines are shown underneath, so the verdict always comes with its evidence.
+
+Known failures are translated. `fatal runtime error: Rust cannot catch foreign exceptions` becomes
+*"the GPU reported an error and this build discarded it — a build from 2026-10-04 or later prints a
+CUDA ERROR line just above"*.
+
 ## Where the colours and logo come from
 
 Both are read off what hazync.org actually serves, not eyeballed:
