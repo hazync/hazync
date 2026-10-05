@@ -613,19 +613,43 @@ class App(tk.Tk):
         from nvidia-smi in under a second — and every one of them was previously learned by hitting
         it as a failure.
         """
-        rec = supervisor.recommend()
+        # ⛔ IT DOES THE LOOKING TOO. Driven headlessly 2026-10-05, this ran before the background
+        # scan had finished and answered "choose the CPU build above and it will be used" — a
+        # button called "Work it out for me" telling someone to work it out themselves. Reading
+        # nvidia-smi and scanning for binaries are both I/O, so both happen off the main thread.
+        self.v_build.set("looking at this machine\u2026")
+        cfg = self._snapshot()
+
+        def go():
+            rec = supervisor.recommend()
+            found = {}
+            try:
+                found = firstrun.adopt_hosts(cfg)
+            except Exception as e:      # noqa: BLE001 - a failed scan must not lose the advice
+                found = {"_error": str(e)}
+            self.results.put((self._after_recommend, (rec, found)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _after_recommend(self, args):
+        rec, found = args
         want = rec["build"]
-        have = (self.host_cpu_var if want == "cpu" else self.host_cuda_var).get().strip()
+        for key, var in (("host_cpu", self.host_cpu_var), ("host_cuda", self.host_cuda_var)):
+            if found.get(key) and not var.get().strip():
+                var.set(found[key])
         self._say(f"[setup] recommended: the {want.upper()} build — {rec['why']}", "sys")
         if rec.get("seg_po2"):
             self.po2.set(str(rec["seg_po2"]))
+        have = (self.host_cpu_var if want == "cpu" else self.host_cuda_var).get().strip()
         if have:
             self.build_kind.set(want)
             self._use_build()
             self.v_build.set(rec["why"])
         else:
-            self.v_build.set(rec["why"] + f"  \u2014 choose the {want.upper()} build above and it "
-                                          f"will be used.")
+            # ⚠ Only now is "I could not find one" true, and it says what to get rather than just
+            # which box to fill in.
+            which = "hazync-host-windows-x86_64-" + ("cpu" if want == "cpu" else "cuda")
+            self.v_build.set(rec["why"] + f"  \u2014 no {want.upper()} build found on this machine. "
+                                          f"Download the `{which}` artifact and press Browse.")
 
     def _pick_build(self, kind):
         """Choose a prover for one slot, and CHECK it is the build that slot is for.
