@@ -23,7 +23,17 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import winconsole as _wc  # noqa: E402
 _wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
 
-from tkinter import ttk  # noqa: E402
+# ⛔⛔ GUARDED AT MODULE LEVEL, BECAUSE THAT IS WHERE IT FAILS. The first CI run died here with a
+# bare `ModuleNotFoundError: No module named 'tkinter'` — the runner had an X server installed but
+# no Tk. A friendlier message inside self_test() could never have fired: this import runs first.
+try:
+    from tkinter import ttk  # noqa: E402
+except ImportError as _e:     # pragma: no cover - an environment gap, not a code path
+    raise ImportError(
+        f"{_e}. Hazync is a Tk window, so a Python without tkinter cannot run it at all. "
+        f"On Debian/Ubuntu: apt-get install python3-tk. On Windows, tkinter ships with the "
+        f"python.org installer — a Microsoft Store Python may not have it."
+    ) from _e
 
 import brand  # noqa: E402
 
@@ -125,16 +135,9 @@ def apply(root, dark=False):
 
 def self_test():
     """Check the theme applies and that dark really differs from light, without showing a window."""
-    # ⛔ A MISSING tkinter IS A REAL FAILURE, NOT A SKIP — this whole program is a Tk window, so a
-    # Python without it cannot run Hazync at all. But say WHICH thing is missing: the first CI run
-    # died on a bare `ModuleNotFoundError: No module named 'tkinter'` after installing only an X
-    # server, which reads as a code fault rather than a one-package environment gap.
-    try:
-        import tkinter as tk
-    except ImportError as e:
-        print(f"  FAIL tkinter is not installed in this Python ({e}). Hazync is a Tk window, so "
-              f"this is fatal, not skippable. On Debian/Ubuntu: apt-get install python3-tk")
-        return 1
+    # ⚠ No tkinter guard here: the module-level import above has already failed by this point if
+    # it was going to. A second check would be unreachable code pretending to be a safety net.
+    import tkinter as tk
     bad = 0
     try:
         root = tk.Tk()
