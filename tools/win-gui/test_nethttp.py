@@ -218,6 +218,37 @@ if pem:
         check(False, "cryptography is needed to verify the shipped certificates")
 
 
+print("── 9. ⛔⛔ the shipped file is TRACKED BY GIT, not just present on this disk ──")
+# ⛔⛔ THIS EXACT BUG. extra-chain.pem matched `*.pem` in .gitignore -- a rule that is there for
+# KEYS. `git add -A` skips an ignored path WITHOUT A WORD, so the commit looked complete, every
+# test below passed against the copy sitting on the author's disk, the branch was pushed, and the
+# person it was written for pulled 2 files and still could not download anything.
+#
+# ⚠ "the tests pass" and "the fix shipped" are different claims, and nothing here distinguished
+# them. Every other assertion in this file reads the working tree, so every one of them was blind
+# to a file that exists locally and nowhere else.
+import shutil as _shutil
+import subprocess as _sp
+
+if _shutil.which("git") is None:
+    print("       (git not available — skipped, and this is the one check that cannot be faked)")
+else:
+    inrepo = _sp.run(["git", "rev-parse", "--is-inside-work-tree"],
+                     capture_output=True, text=True, cwd=_os.path.dirname(nethttp.EXTRA_CHAIN))
+    if inrepo.returncode != 0 or inrepo.stdout.strip() != "true":
+        print("       (not inside a git work tree — skipped)")
+    else:
+        r = _sp.run(["git", "ls-files", "--error-unmatch", _os.path.basename(nethttp.EXTRA_CHAIN)],
+                    capture_output=True, text=True, cwd=_os.path.dirname(nethttp.EXTRA_CHAIN))
+        check(r.returncode == 0,
+              "extra-chain.pem is tracked by git, so it reaches the people who clone this")
+        ig = _sp.run(["git", "check-ignore", _os.path.basename(nethttp.EXTRA_CHAIN)],
+                     capture_output=True, text=True, cwd=_os.path.dirname(nethttp.EXTRA_CHAIN))
+        # ⚠ check-ignore exits 0 when a pattern matches INCLUDING a negation, so its exit code
+        # alone says nothing. Tracked-ness above is the claim that matters; this only reports.
+        print(f"       (git check-ignore says: {ig.stdout.strip() or 'no pattern matched'})")
+
+
 EXPECTED_CONTROL_FAILURES = {
     "it is recognised as a certificate failure anyway",
 }
