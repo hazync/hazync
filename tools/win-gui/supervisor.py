@@ -288,7 +288,7 @@ def check_gpu():
     `regress` fine and then aborted on the first GPU proving call. VRAM and the driver's CUDA version
     are the two numbers that make that diagnosable, so they are surfaced rather than hidden.
     """
-    rc, out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
+    rc, out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version,compute_cap",
                     "--format=csv,noheader"], timeout=30)
     if rc != 0:
         rc2, out2 = _run(["nvidia-smi"], timeout=30)
@@ -299,6 +299,31 @@ def check_gpu():
         return CheckResult("GPU", True, out2.strip().splitlines()[0][:120])
     line = out.strip().splitlines()[0] if out.strip() else ""
     note = ""
+
+    # ⛔⛔ COMPUTE CAPABILITY IS A HARD FLOOR, AND IT IS THE ANSWER TO hazync#631.
+    #
+    # 📏 Measured 2026-10-05 on a GTX 1050 Ti, with the build that finally prints the GPU's own
+    # error: `cudaErrorNoDevice@sppark/util/all_gpus.cpp:43 — "no CUDA-capable device is detected"`,
+    # on a machine where nvidia-smi lists the card and the driver is current.
+    #
+    # It is not a failing CUDA call. all_gpus.cpp enumerates devices and KEEPS ONLY THOSE WITH
+    # `prop.major >= PROP_MAJOR_MIN`, and sppark sets that to 7 — "Volta and forward". A 1050 Ti is
+    # Pascal, compute capability 6.1, so it is filtered out, the list comes back EMPTY, and
+    # select_gpu raises a synthetic cudaErrorNoDevice. The card is fine; it is below sppark's floor.
+    #
+    # ⭐⭐ WHICH MEANS THIS WAS NEVER A WINDOWS BUG. The same card on Linux fails the same way. What
+    # Windows added was only that the error was destroyed on its way out (#631's foreign-exception
+    # abort), so a card-support question looked like a platform question for weeks.
+    cc = re.search(r"(\d+)\.(\d+)\s*$", line)
+    if cc and int(cc.group(1)) < 7:
+        return CheckResult(
+            "GPU", False,
+            line + f"  ⛔ compute capability {cc.group(1)}.{cc.group(2)} — sppark keeps only "
+                   "cards with major >= 7 (Volta or newer), so this one is filtered out and CUDA "
+                   "proving fails with 'no CUDA-capable device is detected' however much VRAM it "
+                   "has. Use the CPU build on this machine.",
+            fatal=False)
+
     mb = re.search(r"(\d+)\s*MiB", line)
     if mb and int(mb.group(1)) < 8000:
         # ⚠ Not presented as a failure: it has never been measured either way below 24 GB.
@@ -485,6 +510,11 @@ _EXPLANATIONS = [
      "The GPU ran out of memory. Lower HAZYNC_SEG_PO2 on the Prove tab — each step down roughly "
      "halves it. One prove at 21 peaked near 22 GB on a 46 GB card, so a small card needs 18 or "
      "less, and may not manage at all."),
+    ("no cuda-capable device is detected",
+     "sppark keeps only GPUs with compute capability 7.0 or newer (Volta and forward), so an older "
+     "card is filtered out and the device list comes back empty — this error is raised by sppark "
+     "itself, not by the driver. nvidia-smi will still list the card. Use the CPU build. "
+     "(hazync#631: a GTX 1050 Ti, compute 6.1, measured 2026-10-05.)"),
     ("no kernel image is available",
      "The binary has no code for this GPU. It is built for sm_61 plus forward PTX, so this usually "
      "means the driver is too old to compile the PTX rather than the card being wrong."),
@@ -533,6 +563,13 @@ def explain(text):
             advice = ("The GPU ran out of memory. Lower HAZYNC_SEG_PO2 on the Prove tab — each step "
                       "down roughly halves it. A prove at 21 peaked near 22 GB, so a 4 GB card "
                       "needs far less and may not manage at all.")
+        elif "no cuda-capable device" in low_err:
+            # ⛔ The card is present and the driver is fine; sppark filtered it out. Saying "no
+            # device" without that is how this looked like a broken driver for weeks.
+            advice = ("sppark keeps only cards with compute capability 7.0 or newer (Volta and "
+                      "forward) — all_gpus.cpp — so an older GPU is filtered out and the device "
+                      "list comes back EMPTY. nvidia-smi will still list your card and the driver "
+                      "is not at fault. Use the CPU build on this machine. (hazync#631)")
         elif "no kernel image" in low_err:
             advice = ("The binary has no code this GPU can run. Built for sm_61 plus forward PTX, "
                       "so this usually means the driver cannot compile the PTX.")

@@ -264,6 +264,21 @@ def main():
     check("older binary" in (supervisor.explain(old_only) or ""),
           "the old build is still told it is the old build")
 
+    print("── ⛔⛔ hazync#631: an unsupported GPU is not a broken driver ──")
+    # 📏 Measured 2026-10-05, GTX 1050 Ti, with the build that finally prints the GPU's own error:
+    #   cudaErrorNoDevice@sppark/util/all_gpus.cpp:43 — "no CUDA-capable device is detected"
+    # on a machine where nvidia-smi lists the card. all_gpus.cpp keeps only prop.major >= 7, sppark
+    # sets that to "Volta and forward", and a 1050 Ti is 6.1 — filtered out, list empty, synthetic
+    # error. ⭐ The same card fails identically on Linux: this was never a Windows bug.
+    nodev = ('CUDA ERROR: cudaErrorNoDevice@sppark/util/all_gpus.cpp:43 failed: '
+             '"no CUDA-capable device is detected"')
+    why = supervisor.explain(nodev) or ""
+    check("compute capability" in why, "explain() names compute capability, not a driver fault")
+    check("7.0" in why or "7" in why, "and the floor that applies")
+    check("CPU build" in why, "and what to do instead")
+    check("out of memory" not in why.lower(),
+          "⛔ and does NOT send someone to lower HAZYNC_SEG_PO2 — VRAM is irrelevant here")
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")
