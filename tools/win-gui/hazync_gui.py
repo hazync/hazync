@@ -18,8 +18,11 @@ a window cannot be tested on a build box.
 `run-workers.sh` — a supervisor loop. This replaces the THIRD. The host and the worker are used
 exactly as they ship.
 
-⛔⛔ READ tools/win-gui/README.md FIRST. Native Windows CUDA proving has never completed, and this
-window has never run on Windows. Both are stated there rather than left for a user to discover.
+⛔ READ tools/win-gui/README.md FIRST for what is proven and what is not. In short, as of
+2026-10-05: this window runs on Windows and has driven a complete prove through it (block 170,
+2,220.7 s, receipt VERIFIED). Native Windows CUDA proving has still never completed — but that is a
+CARD-SUPPORT question, not a Windows one: sppark keeps only GPUs at compute capability 7.0 or newer,
+and the card it was tested on is 6.1.
 """
 
 import os as _os, sys as _sys
@@ -230,8 +233,31 @@ class App(tk.Tk):
         threading.Thread(target=self._rescan_thread, args=(cfg,), daemon=True).start()
 
     def _rescan_thread(self, cfg):
+        # ⭐ FIND THE BINARIES BEFORE JUDGING THE SETUP. Pointing a program at a file it could have
+        # found itself is the setup step that makes someone give up before they start — and
+        # classify_host can tell a CPU build from a CUDA one by its import table, so both slots can
+        # be filled without asking. ⚠ Only ever fills what is EMPTY; a deliberate choice stands.
+        if not (cfg.get("host") and cfg.get("host_cpu") and cfg.get("host_cuda")):
+            try:
+                adopted = firstrun.adopt_hosts(cfg)
+                if adopted != cfg:
+                    cfg = adopted
+                    self.results.put((self._apply_adopted, adopted))
+            except Exception as e:      # noqa: BLE001 - discovery must never stop the window
+                self.results.put((self._say, f"[setup] could not scan for a prover: {e}"))
         steps = firstrun.setup_steps(cfg)
         self.results.put((self._apply_steps, steps))
+
+    def _apply_adopted(self, cfg):
+        """Put discovered paths into the fields, on the main thread."""
+        for key, var in (("host", self.host_var), ("host_cpu", self.host_cpu_var),
+                         ("host_cuda", self.host_cuda_var)):
+            if cfg.get(key) and not var.get().strip():
+                var.set(cfg[key])
+                self._say(f"[setup] found a prover: {cfg[key]}", "sys")
+        if cfg.get("build_kind") and not self.build_kind.get():
+            self.build_kind.set(cfg["build_kind"])
+        self._persist()
 
     def _apply_steps(self, steps):
         self._render_steps(steps)

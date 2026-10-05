@@ -33,15 +33,52 @@ itself.
 | `host.exe method-id` prints the canonical `37987b85…` on real hardware | ✅ measured 2026-10-04, GTX 1050 Ti |
 | `host.exe regress` — full consensus path | ✅ measured, same machine |
 | **CPU** build proves a block on Windows | ✅ measured |
-| **CUDA** build proves a block on Windows | ⛔ **never completed** |
-| This GUI opens and works on Windows | ✅ **tested on Windows Python 3.14.2** |
-| This GUI drives a real worker end to end on Windows | ⛔ not yet — the window works, a full prove has not been driven through it |
+| This GUI opens and works on Windows | ✅ **tested on Windows Python 3.13** |
+| This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`** |
+| **CUDA** build proves a block on Windows | ⛔ **never completed — and now we know why** |
 
-Native Windows **CUDA** proving aborts on the first GPU call:
+### Why CUDA proving fails, and what it is not
+
+⛔⛔ **It is a CARD-SUPPORT question, not a Windows one.** Measured 2026-10-05 on a GTX 1050 Ti with
+a build that prints the GPU's own error before discarding it:
 
 ```
-execution time: 1.4686725s        ← guest executed, 54 segments
-preflight: Segment { po2: 17 }    ← witness generation fine
+CUDA ERROR: cudaErrorNoDevice@sppark/util/all_gpus.cpp:43
+            failed: "no CUDA-capable device is detected"
+```
+
+on a machine where `nvidia-smi` lists the card and the driver is current. That line is
+`CUDA_OK(cudaErrorNoDevice)` — a **synthetic** error raised when sppark's device list is **empty**.
+The enumerator above it keeps only `prop.major >= PROP_MAJOR_MIN`, and sppark sets that to 7,
+"Volta and forward". Pascal is compute 6.1, so the card is filtered out.
+
+⭐ **The same card fails identically on Linux.** Windows only *destroyed* the error on its way out
+(the foreign-exception abort below), which made a card-support question look like a platform
+question for weeks. Two theories — out of memory, and a PTX/arch mismatch — were both wrong, because
+both assumed the GPU had been accepted at all.
+
+⇒ **Native Windows CUDA proving is UNTESTED, not broken.** It has never run on a card sppark
+accepts. Testing it needs **compute capability 7.0 or newer**.
+
+With `HAZYNC_SPPARK_MIN_MAJOR=6` (a build from 2026-10-05 or later) the 1050 Ti IS accepted —
+`cooperativeLaunch=1`, so that second condition was never the obstacle — and then fails further in,
+in the NTT:
+
+```
+GPU SCAN: 1 device(s), need major >= 6 and cooperativeLaunch
+  [0] NVIDIA GeForce GTX 1050 Ti  compute 6.1  cooperativeLaunch=1  -> USED
+CUDA ERROR: cudaGetLastError()@sppark/ntt/ntt.cuh:97 failed: "operation not supported"
+panicked at risc0-zkp-3.0.5/src/hal/cuda.rs:708: Failure during zk_shift
+```
+
+⚠ Whether *that* is a Pascal limit or a Windows one is **not yet known** — `cudaGetLastError()` can
+report an error raised by an earlier asynchronous call, so the line number may not be the culprit.
+A run with `CUDA_LAUNCH_BLOCKING=1` is what settles it. See hazync#631.
+
+The original abort, for reference — this is what you get on a build older than 2026-10-04, where the
+real error was thrown away:
+
+```
 prove_segment_core                ← dies here
 fatal runtime error: Rust cannot catch foreign exceptions, aborting
 ```

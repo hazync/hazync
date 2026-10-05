@@ -84,8 +84,18 @@ def candidate_dirs():
     # gh run download puts an artifact in a folder named after it
     for base in list(out):
         for sub in ("hazync-host-windows-x86_64-cuda", "hazync-host-windows-x86_64-cpu",
-                    "cuda126", "cpu"):
+                    "cuda126", "cpu", "cuda", "gpu", "pascal", "hazync", "prover"):
             out.append(base / sub)
+    # ⚠ ONE LEVEL DEEPER UNDER HOME AND Downloads, because that is where the artifacts actually
+    # land. Measured on a real machine 2026-10-05: three host.exe files in ~/, ~/cpu/ and
+    # ~/pascal/ -- and only the first was in this list, which is why the person had to Browse.
+    for base in (Path.home(), Path.home() / "Downloads"):
+        try:
+            for child in sorted(base.iterdir())[:60]:   # bounded: a home directory can be huge
+                if child.is_dir() and not child.name.startswith("."):
+                    out.append(child)
+        except OSError:
+            pass
     return out
 
 
@@ -112,8 +122,38 @@ def find_hosts():
             info = supervisor.classify_host(p)
             info["path"] = str(p)
             found.append(info)
-    found.sort(key=lambda i: (not i.get("startable"), i["kind"] != "cuda"))
+    # ⛔ "STARTABLE" IS NOT "USABLE", AND SORTING CUDA FIRST WAS WRONG BECAUSE OF IT. A CUDA build
+    # starts fine on a machine with an NVIDIA driver and then fails at the first GPU call if the
+    # card is below sppark's compute floor — measured on a GTX 1050 Ti, 2026-10-05. So the order
+    # follows what this machine should ACTUALLY use, not what sounds faster.
+    want = supervisor.recommend().get("build", "cpu")
+    found.sort(key=lambda i: (not i.get("startable"), i["kind"] != want))
     return found
+
+
+def adopt_hosts(cfg=None):
+    """Fill in the per-build paths from whatever is already on this disk. (cfg-shaped dict)
+
+    ⭐ THE "OUT OF THE BOX" PART. Pointing a program at a file it could have found itself is the
+    kind of setup step that makes someone give up before they start, and classify_host can tell a
+    CPU build from a CUDA one by its import table — so the two slots can be filled without asking.
+    ⚠ It never overwrites a path somebody chose deliberately.
+    """
+    out = dict(cfg or {})
+    for info in find_hosts():
+        kind = info.get("kind")
+        if kind not in ("cpu", "cuda"):
+            continue
+        key = f"host_{kind}"
+        if not out.get(key):
+            out[key] = info["path"]
+    if not out.get("host"):
+        want = supervisor.recommend().get("build", "cpu")
+        out["host"] = out.get(f"host_{want}") or out.get("host_cpu") or out.get("host_cuda") or ""
+        if out["host"]:
+            out["build_kind"] = want if out.get(f"host_{want}") else (
+                "cpu" if out.get("host_cpu") else "cuda")
+    return out
 
 
 # ── fetching the worker, which IS public ─────────────────────────────────────────────────────────
