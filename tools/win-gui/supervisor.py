@@ -81,8 +81,13 @@ class CheckResult:
 def _run(cmd, env=None, timeout=60):
     """(rc, combined output). Never raises — a missing binary is a result, not a crash."""
     try:
+        # ⛔ encoding= MUST match what the child is told to emit. worker_env sets
+        # PYTHONIOENCODING=utf-8; `text=True` alone decodes with the LOCALE encoding, which on
+        # Windows is cp1252 -- so the pair would turn every non-ASCII character into mojibake and
+        # make the fix look like a different bug. errors="replace" stays: a diagnostic must never
+        # fail while reporting a failure.
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           env=env, errors="replace")
+                           env=env, encoding="utf-8", errors="replace")
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except FileNotFoundError:
         return 127, f"not found: {cmd[0]}"
@@ -333,9 +338,14 @@ def check_worker(worker_path, python_exe=None):
     low = (out or "").lower()
     named = [c for c in ("run", "fold", "prove", "submit", "id") if c in low]
     if rc != 0 or len(named) < 3:
+        # ⛔⛔ THE LAST LINES, NOT THE FIRST. A Python traceback puts the EXCEPTION at the END;
+        # its first 160 characters are "Traceback (most recent call last)" and a file path. That is
+        # exactly what was shown on Windows 2026-10-05 -- a person saw the header of the error and
+        # not the error, and the one line that named the cause was cut off.
+        tail = "\n".join((out or "").strip().splitlines()[-6:])
         return CheckResult("worker", False,
                            f"`--help` exited {rc} and did not print the worker's commands "
-                           f"(recognised {named}). Output: {out.strip()[:160]}", fatal=True)
+                           f"(recognised {named}). How it ended:\n{tail}", fatal=True)
     return CheckResult("worker", True, f"{w.name} starts and its CLI lists {len(named)} commands")
 
 
@@ -388,6 +398,21 @@ def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
         env["COORD_URL"] = coord_url
     if seg_po2:
         env["HAZYNC_SEG_PO2"] = str(seg_po2)
+    # ⛔⛔ THE WORKER CANNOT PRINT ITS OWN HELP ON WINDOWS WITHOUT THIS. Its docstring contains `⛔`
+    # (U+26D4), Windows stdio defaults to cp1252, and cp1252 CANNOT ENCODE IT. So `hazync-worker
+    # --help` dies with
+    #
+    #     UnicodeEncodeError: 'charmap' codec can't encode character '\u26d4' ... position 1295
+    #
+    # before doing anything. Measured on Windows 2026-10-05: the client downloaded correctly and was
+    # then rejected as "it does not run", because the first thing check_worker asks it to do is
+    # print that help. Reproduced on Linux with PYTHONIOENCODING=cp1252 -- rc=1 -- and fixed by this
+    # line -- rc=0.
+    #
+    # ⚠ The worker is a RELEASE ASSET and is used exactly as it ships, so this has to be fixed from
+    # the outside. It is set on every platform: on Linux the value is already utf-8, so it changes
+    # nothing there and cannot drift into a Windows-only code path nobody exercises.
+    env["PYTHONIOENCODING"] = "utf-8"
     # ⚠ Always set, because the worker's default is /tmp and Windows has no /tmp.
     env["HAZYNC_GPU_LOCK"] = gpu_lock_path()
     # Unbuffered, or the GUI's log pane shows nothing until a worker exits.

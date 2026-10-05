@@ -182,6 +182,40 @@ def main():
     warn = supervisor.CheckResult("GPU", False, "no nvidia-smi", fatal=False)
     check("warning" in supervisor.summarise([r, warn]), "a non-fatal failure is a warning, not a block")
 
+    print("── the worker must be able to PRINT ITS OWN HELP on a cp1252 machine ──")
+    # ⛔⛔ MEASURED ON WINDOWS 2026-10-05. The client downloaded correctly and was then rejected as "it
+    # does not run", because the first thing check_worker asks it to do is print its help -- and the
+    # worker's docstring contains ⛔ (U+26D4), which cp1252 cannot encode. It died with
+    # UnicodeEncodeError before doing anything. The worker is a release asset used exactly as it ships,
+    # so the only place to fix it is the environment we hand it.
+    env = supervisor.worker_env(host_path=None, worker_path=None, identity_dir=None, bundle_dir=None)
+    check(env.get("PYTHONIOENCODING") == "utf-8",
+          f"worker_env sets PYTHONIOENCODING=utf-8 (got {env.get('PYTHONIOENCODING')!r})")
+
+    # ⭐ PROVE THE PREMISE rather than assert it: cp1252 really cannot encode that character, and utf-8
+    # really can. If a future Windows defaults to utf-8, this stops being load-bearing and should say so.
+    try:
+        "\u26d4".encode("cp1252")
+        check(False, "cp1252 unexpectedly encoded U+26D4 — this assertion is no longer load-bearing")
+    except UnicodeEncodeError:
+        check(True, "cp1252 genuinely cannot encode U+26D4, which is why the variable is needed")
+    check("\u26d4".encode("utf-8") == b"\xe2\x9b\x94", "and utf-8 can")
+
+    # and the decode side must match, or the fix turns into mojibake
+    import inspect
+    rsrc = inspect.getsource(supervisor._run)
+    check('encoding="utf-8"' in rsrc,
+          "_run decodes as utf-8 too — text=True alone uses the LOCALE encoding, i.e. cp1252 on Windows")
+
+    print("── a failing --help must report the END of the traceback ──")
+    # ⛔ A Python traceback puts the EXCEPTION last; its first 160 characters are the word "Traceback"
+    # and a file path. Showing the head is showing everything except the answer.
+    csrc = inspect.getsource(supervisor.check_worker)
+    check("[-6:]" in csrc or "splitlines()[-" in csrc,
+          "check_worker reports the LAST lines of the output, not the first")
+    check("[:160]" not in csrc,
+          "and no longer truncates to the first 160 characters, which hid the real error")
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")
