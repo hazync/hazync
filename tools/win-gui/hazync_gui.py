@@ -70,6 +70,9 @@ class App(tk.Tk):
         # thread. Calling self.after() from a thread is itself a Tk call — the same class of
         # bug as reading a StringVar there, and it is why the first version loaded no data.
         self.results = queue.Queue()
+        # The last failure per setup step, so a card can say why its own button did nothing. Without
+        # it the reason goes only to the log pane, which _tab_run builds on a DIFFERENT TAB.
+        self.fix_errors = {}
         self.workers = []
         self.runs, self.meta, self.prog = [], {}, {}
         self._cells = []                 # (item_id, lo, hi, state) for the map
@@ -191,6 +194,20 @@ class App(tk.Tk):
                 tk.Label(left, text=s.manual, bg=p["mist"], fg=p["lamp_text"],
                          font=("Segoe UI", 8), justify="left",
                          wraplength=760).pack(anchor="w", pady=(2, 0))
+            # ⛔⛔ THE REASON A FIX FAILED MUST APPEAR ON THIS CARD. It used to go only to _say(),
+            # which writes to the log pane built in _tab_run -- a DIFFERENT TAB. So pressing
+            # "Download it" and having it fail reset this row to "not downloaded yet" with the
+            # explanation written somewhere the person was not looking. Reported from a real machine
+            # as "it wont download the client", with no error visible anywhere on the screen.
+            #
+            # ⚠ Every fetch_worker failure path already returns a precise, different sentence --
+            # "could not download <url>" vs "saved to <path> but it does not run" -- and all of that
+            # care was wasted by showing none of it here.
+            err = self.fix_errors.get(s.key)
+            if err and not s.done:
+                tk.Label(left, text=f"⛔  {err}", bg=p["mist"], fg=p["bad"],
+                         font=("Segoe UI", 8), justify="left",
+                         wraplength=760).pack(anchor="w", pady=(4, 0))
             if not s.done and s.fix:
                 ttk.Button(card, text=s.fix_label or "Fix",
                            command=lambda st=s: self._run_fix(st)).pack(side="right", padx=12)
@@ -238,6 +255,13 @@ class App(tk.Tk):
         key, ok, detail = args
         self._say(f"[setup] {key}: {'done' if ok else 'failed'} — {detail}",
                   "proved" if ok else "cuda-error")
+        # ⛔ KEEP IT. rescan() rebuilds every card from firstrun.setup_steps(), whose detail for a
+        # missing worker is the generic "not downloaded yet" -- so without this the reason the fix
+        # just failed is overwritten a few milliseconds after it is produced.
+        if ok:
+            self.fix_errors.pop(key, None)
+        else:
+            self.fix_errors[key] = detail
         if ok and key == "worker":
             self.worker_var.set(detail)
         self._persist()
