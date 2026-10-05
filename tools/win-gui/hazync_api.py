@@ -32,6 +32,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import nethttp
+
 DEFAULT_COORD = "https://api.hazync.org"
 
 # server.py: "[[lo, hi, status], ...] with 3 proven, 4 folded and 5 anchored". OPEN is ours: it is
@@ -49,10 +51,15 @@ class ApiError(Exception):
 def fetch(path, coord=DEFAULT_COORD, timeout=20):
     """GET a JSON endpoint. Raises ApiError with something a person can act on."""
     url = coord.rstrip("/") + path
-    req = urllib.request.Request(url, headers={"User-Agent": "hazync-win-gui"})
+    # ⛔ DEFAULT_COORD is https, so this is the SAME failure class that stopped the client
+    # downloading on Windows 2026-10-05: the system trust store could not supply an issuer and
+    # urllib simply refused. The dashboard and the block map both come through here, so without
+    # this they would have gone blank on that machine for a reason reported nowhere. nethttp tries
+    # the system store, then certifi, then curl -- all of them verifying.
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8", "replace"))
+        return nethttp.get_json(url, timeout=timeout)
+    except nethttp.NetError as e:
+        raise ApiError(f"could not reach {url}: {e}") from e
     except urllib.error.HTTPError as e:
         raise ApiError(f"{url} returned HTTP {e.code}") from e
     except urllib.error.URLError as e:

@@ -31,6 +31,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nethttp
 import supervisor  # noqa: E402
 
 REPO = "hazync/hazync"
@@ -115,11 +116,11 @@ def find_hosts():
 
 # ── fetching the worker, which IS public ─────────────────────────────────────────────────────────
 def latest_release_tag(timeout=20):
-    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
-                                 headers={"User-Agent": "hazync-win-gui",
-                                          "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", "replace")).get("tag_name") or ""
+    # ⛔ Through nethttp, not urllib directly: on a stock Windows box the system trust store can
+    # fail to supply an issuer and this is one of the three calls that then dies. See nethttp.py.
+    d = nethttp.get_json(f"https://api.github.com/repos/{REPO}/releases/latest",
+                         timeout=timeout, headers={"Accept": "application/vnd.github+json"})
+    return d.get("tag_name") or ""
 
 
 def fetch_worker(dest_dir=None, tag=None, timeout=120):
@@ -130,7 +131,8 @@ def fetch_worker(dest_dir=None, tag=None, timeout=120):
     dest_dir = Path(dest_dir or hazync_home())
     try:
         tag = tag or latest_release_tag()
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError) as e:
+    except (nethttp.NetError, urllib.error.URLError, urllib.error.HTTPError,
+            ValueError, TimeoutError) as e:
         return False, f"could not ask GitHub for the latest release: {e}"
     if not tag:
         return False, "GitHub did not name a latest release"
@@ -138,10 +140,8 @@ def fetch_worker(dest_dir=None, tag=None, timeout=120):
     dest = dest_dir / WORKER_ASSET
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
-        req = urllib.request.Request(url, headers={"User-Agent": "hazync-win-gui"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = r.read()
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+        data = nethttp.get(url, timeout=timeout)
+    except (nethttp.NetError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
         return False, f"could not download {url}: {e}"
     if not data.startswith(b"#!") or b"def main" not in data:
         return False, (f"what came back from {url} is not the worker "
