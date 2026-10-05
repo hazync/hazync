@@ -594,9 +594,11 @@ class App(tk.Tk):
         timeout = next((d[3] for d in supervisor.DIAGNOSTICS if d[0] == name), 600)
         for b_ in self.diag_btns.values():
             b_.configure(state="disabled")
+        self._diag_running = (name, time.time())
         self.diag_vars[name].set("running…")
         self.v_diag.set(f"{title}  — running…")
         self._say(f"[test] {name}: started", "sys")
+        self._tick_diag()
 
         def go():
             env = dict(os.environ)
@@ -604,22 +606,45 @@ class App(tk.Tk):
                 env["HAZYNC_SEG_PO2"] = po2
             # ⚠ The prover forces RISC0_PROVER=local when unset; leave it alone rather than
             # second-guessing which backend it should pick.
-            rc, out = supervisor._run(supervisor.diagnostic_command(host, name),
-                                      env=env, timeout=timeout)
+            # ⛔ STREAMED. _run hands everything back only when the process EXITS, which for a
+            # 2,875 s prove is forty minutes of a window saying "running…" and nothing else —
+            # reported from a real machine as "there isn't any form of progress being shown".
+            rc, out = supervisor.run_stream(
+                supervisor.diagnostic_command(host, name), env=env, timeout=timeout,
+                on_line=lambda l: self.results.put((self._diag_line, l)))
             self.results.put((self._after_diag, (name, title, rc, out, then)))
         threading.Thread(target=go, daemon=True).start()
 
+    def _diag_line(self, line):
+        """One line of live output from a running check."""
+        self._say(f"    {line[:200]}", supervisor.interesting_line(line) or "sys")
+
+    def _tick_diag(self):
+        """Keep an elapsed count on the running row.
+
+        ⚠ A long job that prints nothing for minutes is indistinguishable from a hung one, and the
+        honest reading of a frozen window is "it broke". The clock moving is the cheapest possible
+        proof that it has not.
+        """
+        if not getattr(self, "_diag_running", None):
+            return
+        name, t0 = self._diag_running
+        secs = int(time.time() - t0)
+        self.diag_vars[name].set(f"running… {secs // 60}m {secs % 60:02d}s")
+        self.after(1000, self._tick_diag)
+
     def _after_diag(self, args):
         name, title, rc, out, then = args
+        elapsed = int(time.time() - self._diag_running[1]) if getattr(self, "_diag_running", None) else 0
+        self._diag_running = None
         ok, verdict = supervisor.diagnostic_verdict(name, rc, out)
+        verdict = f"{verdict}  ({elapsed // 60}m {elapsed % 60:02d}s)" if elapsed else verdict
         self.diag_vars[name].set(f"{'PASSED' if ok else 'FAILED'}: {verdict}")
         self.v_diag.set(f"{title}  —  {'PASSED' if ok else 'FAILED'}: {verdict}")
         self._say(f"[test] {name}: {'passed' if ok else 'FAILED'} — {verdict}",
                   "proved" if ok else "cuda-error")
-        # ⭐ Show the last few real lines, because a verdict without its evidence is just an
-        # assertion — and this project's own rule is to read the log, not the colour.
-        for line in [l for l in (out or "").splitlines() if l.strip()][-6:]:
-            self._say(f"    {line.rstrip()[:160]}", supervisor.interesting_line(line) or "sys")
+        # ⚠ The output was already streamed into the log line by line, so repeating the tail here
+        # would print everything twice. Only the explanation is added below.
         if not ok:
             why = supervisor.explain(out)
             if why:

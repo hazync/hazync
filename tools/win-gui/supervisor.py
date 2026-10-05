@@ -42,6 +42,8 @@ import os
 import re
 import struct
 import subprocess
+import time
+import threading
 import sys
 import tempfile
 from pathlib import Path
@@ -76,6 +78,61 @@ class CheckResult:
 
     def __repr__(self):
         return f"<{'ok' if self.ok else 'FAIL'} {self.name}: {self.detail}>"
+
+
+def run_stream(cmd, env=None, timeout=60, on_line=None):
+    """Run a command, delivering each output line to `on_line` AS IT ARRIVES. (rc, full output)
+
+    ⛔⛔ WHY THIS EXISTS. _run uses subprocess.run(capture_output=True), which hands back everything
+    only when the process EXITS. For a 2,875 s prove that means forty minutes of a window saying
+    "running…" and nothing else — reported from a real machine as "there isn't any form of progress
+    being shown". The prover is not silent at all; it prints
+
+        execution 10.1 s   3 segments, 0.9 MB (streamed)
+          0/2 segments  10s elapsed, ~0s left
+          1/2 segments  16s elapsed, ~16s left
+
+    and every line of that was being buffered away. A long job that shows nothing is
+    indistinguishable from a hung one, and the honest reading of a frozen window is "it broke".
+
+    ⚠ THE TIMEOUT IS A WATCHDOG THREAD, NOT A CHECK IN THE LOOP. Checking the clock as each line
+    arrives cannot fire when the process goes SILENT, which is exactly the case a timeout is for.
+    """
+    buf = []
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, encoding="utf-8", errors="replace", env=env, bufsize=1)
+    except FileNotFoundError:
+        return 127, f"not found: {cmd[0]}"
+    except OSError as e:
+        return -1, f"could not run {cmd[0]}: {e}"
+
+    killer = threading.Timer(timeout, p.kill)
+    killer.daemon = True
+    killer.start()
+    try:
+        for raw in p.stdout:
+            buf.append(raw)
+            if on_line:
+                # ⚠ A progress line may be rewritten in place with \r rather than ended with \n,
+                # so one read can carry several updates. Split them out instead of showing one
+                # very long line that only ever grows.
+                for part in raw.replace("\r\n", "\n").rstrip("\n").split("\r"):
+                    if part.strip():
+                        on_line(part.rstrip())
+    except Exception as e:          # noqa: BLE001 - reporting a run must not raise
+        buf.append(f"\n(reading output failed: {e})\n")
+    finally:
+        killer.cancel()
+        try:
+            p.stdout.close()
+        except Exception:           # noqa: BLE001
+            pass
+    rc = p.wait()
+    out = "".join(buf)
+    if rc != 0 and not out.strip():
+        out = f"(no output; exited {rc})"
+    return rc, out
 
 
 def _run(cmd, env=None, timeout=60):

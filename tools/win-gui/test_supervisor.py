@@ -279,6 +279,37 @@ def main():
     check("out of memory" not in why.lower(),
           "⛔ and does NOT send someone to lower HAZYNC_SEG_PO2 — VRAM is irrelevant here")
 
+    print("── a long check must show progress while it runs ──")
+    # ⛔⛔ Reported from a real machine: "trying to prove via cpu but there isn't any form of
+    # progress being shown". _run returns everything only when the process EXITS, so a 2,875 s
+    # prove showed nothing for forty minutes — and the prover is not silent, it prints
+    # "0/2 segments  10s elapsed, ~0s left" as it goes. A long job that shows nothing is
+    # indistinguishable from a hung one.
+    import time as _t
+    seen = []
+    t0 = _t.time()
+    rc, out = supervisor.run_stream(
+        [sys.executable, "-u", "-c",
+         "import time,sys\nfor i in range(3):\n print(f'  {i}/3 segments', flush=True)\n"
+         " time.sleep(0.3)"],
+        timeout=30, on_line=lambda l: seen.append((_t.time() - t0, l)))
+    check(rc == 0, f"run_stream returns the exit code (rc={rc})")
+    check(len(seen) == 3, f"every line is delivered ({len(seen)})")
+    check(all(l in out for _, l in seen), "and the full output is still returned for the verdict")
+    # ⭐ The point is WHEN they arrive, not that they arrive. Buffered output would land together.
+    spread = (seen[-1][0] - seen[0][0]) if len(seen) > 1 else 0
+    check(spread > 0.3,
+          f"lines arrive as the process runs, not in one lump at the end ({spread:.1f}s apart)")
+
+    # ⚠ The timeout must fire on a SILENT process — the case a timeout exists for. A check in the
+    # read loop cannot, because the loop is blocked waiting for a line that never comes.
+    t1 = _t.time()
+    rc2, _ = supervisor.run_stream([sys.executable, "-u", "-c", "import time; time.sleep(30)"],
+                                   timeout=2)
+    took = _t.time() - t1
+    check(took < 10, f"a silent process is killed by the watchdog ({took:.1f}s, not 30s)")
+    check(rc2 != 0, f"and that is reported as a failure (rc={rc2})")
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")
