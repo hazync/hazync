@@ -475,6 +475,9 @@ _EXPLANATIONS = [
      "The GPU reported an error and this build discarded it. sppark throws a C++ exception, which "
      "on Windows aborts before any Rust handler runs. A build from 2026-10-04 or later prints a "
      "CUDA ERROR line just above this one — if there is none, you are on an older binary."),
+    # ⚠ FALLBACK ONLY. explain() parses the CUDA line directly and quotes it, so this is reached
+    # only if the line is formatted in a way _CUDA_ERROR_RE does not match. Kept so an unexpected
+    # format still says something useful rather than falling through to the abort message.
     ("cuda error:",
      "This is the real GPU error, printed just before the abort. Read the text after the colon: "
      "'out of memory' means lower HAZYNC_SEG_PO2; anything else is the cause itself."),
@@ -502,8 +505,41 @@ _EXPLANATIONS = [
 ]
 
 
+# ⛔⛔ A REAL `CUDA ERROR:` LINE OUTRANKS EVERYTHING ELSE IN THE OUTPUT.
+# The 2026-10-04 build prints the GPU's own error AND THEN still aborts, so both strings are present
+# in the same output. First-match ordering explained the abort -- "if there is none, you are on an
+# older binary" -- which is exactly backwards when the line IS there: it would have told the one
+# person running the new build that they were running the old one, and thrown away the only
+# evidence #631 has ever produced. Caught minutes before that run.
+_CUDA_ERROR_RE = re.compile(r"^\s*CUDA ERROR:\s*(.+?)\s*$", re.M | re.I)
+
+
+def cuda_error_text(text):
+    """The GPU's own error message, if this build printed one. (hazync#631)"""
+    m = _CUDA_ERROR_RE.search(text or "")
+    return m.group(1).strip() if m else None
+
+
 def explain(text):
-    """Plain language for a known failure, or None. Matches the FIRST thing recognised."""
+    """Plain language for a known failure, or None.
+
+    ⚠ The CUDA line is checked FIRST and QUOTED, because it is the cause and everything after it is
+    a consequence. Everything else matches in order and takes the first hit.
+    """
+    err = cuda_error_text(text)
+    if err:
+        low_err = err.lower()
+        if "out of memory" in low_err:
+            advice = ("The GPU ran out of memory. Lower HAZYNC_SEG_PO2 on the Prove tab — each step "
+                      "down roughly halves it. A prove at 21 peaked near 22 GB, so a 4 GB card "
+                      "needs far less and may not manage at all.")
+        elif "no kernel image" in low_err:
+            advice = ("The binary has no code this GPU can run. Built for sm_61 plus forward PTX, "
+                      "so this usually means the driver cannot compile the PTX.")
+        else:
+            advice = ("That is the cause. Everything printed after it is the abort that follows, "
+                      "not a separate problem.")
+        return f"the GPU reported: {err}\n  {advice}"
     low = (text or "").lower()
     for needle, said in _EXPLANATIONS:
         if needle in low:

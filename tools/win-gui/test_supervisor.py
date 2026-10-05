@@ -148,7 +148,10 @@ def main():
     # has none of the context that made it diagnosable.
     for text, must in [
         ("fatal runtime error: Rust cannot catch foreign exceptions, aborting", "discarded"),
-        ('CUDA ERROR: cudaMalloc@ntt.cuh:12 failed: "out of memory"', "real GPU error"),
+        # ⚠ Was pinned to the phrase "real GPU error". explain() now QUOTES the GPU's own text
+        # instead of describing it, which is more useful and is what this should assert: the
+        # verbatim error, including where in the kernel it came from.
+        ('CUDA ERROR: cudaMalloc@ntt.cuh:12 failed: "out of memory"', "cudaMalloc@ntt.cuh:12"),
         ("thread panicked: out of memory", "HAZYNC_SEG_PO2"),
         ("No module named 'fcntl'", "bug in this program"),
     ]:
@@ -232,6 +235,34 @@ def main():
     check(not slow, f"nothing automatic has a timeout over 10 minutes{f' — {slow}' if slow else ''}")
     check(all(len(d) == 5 for d in supervisor.DIAGNOSTICS),
           "every diagnostic declares (name, title, note, timeout, auto)")
+
+    print("── ⛔⛔ a real CUDA ERROR line must outrank the abort that follows it ──")
+    # The 2026-10-04 build prints the GPU's own error AND THEN still aborts, so BOTH strings appear
+    # in one output. First-match ordering explained the abort — "if there is none, you are on an
+    # older binary" — which is exactly backwards when the line IS there. It would have told the one
+    # person running the new build that they were on the old one, and discarded the only evidence
+    # hazync#631 has ever produced.
+    both = ("=== PROVING block 170 chain_step (real STARK receipt) ===\n"
+            "CUDA ERROR: out of memory\n"
+            "fatal runtime error: Rust cannot catch foreign exceptions, aborting")
+    check(supervisor.cuda_error_text(both) == "out of memory",
+          f"the GPU's own message is extracted ({supervisor.cuda_error_text(both)!r})")
+    why = supervisor.explain(both) or ""
+    check("out of memory" in why, "explain() quotes the real error")
+    check("older binary" not in why,
+          "⛔ and does NOT claim they are on an older binary when the line is present")
+    check("HAZYNC_SEG_PO2" in why, "and names the knob for this particular error")
+
+    # an unknown CUDA error must still be reported verbatim rather than guessed at
+    odd = "CUDA ERROR: unspecified launch failure\nfatal runtime error: Rust cannot catch foreign exceptions"
+    why2 = supervisor.explain(odd) or ""
+    check("unspecified launch failure" in why2, "an unfamiliar GPU error is quoted, not swallowed")
+
+    # ⚠ and the OLD build, which prints no such line, must keep its original explanation
+    old_only = "fatal runtime error: Rust cannot catch foreign exceptions, aborting"
+    check(supervisor.cuda_error_text(old_only) is None, "no CUDA line in old output")
+    check("older binary" in (supervisor.explain(old_only) or ""),
+          "the old build is still told it is the old build")
 
     print()
     if fails:
