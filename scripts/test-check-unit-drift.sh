@@ -75,6 +75,69 @@ has 'OTHER=sep' "$sep" && ok "svcother sees its own drop-in" || bad "svcother lo
 has 'OTHER=sep' "$short" && bad "svc absorbed svcother's drop-in" || ok "svc does not absorb svcother"
 has 'OWN=short' "$sep"   && bad "svcother absorbed svc's drop-in" || ok "svcother does not absorb svc"
 
+# 5. ⛔⛔ A QUOTED `Environment=` MUST COMPARE EQUAL TO THE EFFECTIVE VALUE.
+#    `Environment="K=v with spaces"` is the only correct way to write a value containing whitespace;
+#    unquoted, systemd splits it and drops everything after the first space. But the probe reads the
+#    effective value through `xargs -n1`, which HONOURS and REMOVES the quotes. So the repo side held
+#    `"K=v with spaces"` while the box reported `K=v with spaces`, they never matched, and every
+#    quoted key was reported as "appears NOWHERE in the repo".
+#
+#    Measured 2026-10-05: deploying hazync-check-breakers.service failed this check on its first run
+#    over a path the repo declared exactly. HAZYNC_DISK_PATHS had been in unit-drift-allow.txt since
+#    09-20 for the same reason -- an allow-list entry standing in for a parse bug, which silently
+#    exempted a real key from comparison.
+#
+# ⚠ The expression is pulled OUT OF THE SCRIPT and run, rather than reimplemented here, so this
+#   tests the shipped code and not a copy of it that could agree while the script is wrong.
+sedargs=$(grep -oE "sed (-e '[^']*' *)+" scripts/check-unit-drift.sh | grep -F 's/^Environment=//' | head -1)
+if [ "$CONTROL" = yes ]; then
+    sedargs="sed -e 's/^Environment=//'"      # the pre-fix expression: no quote stripping
+fi
+if ! printf '%s\n' "$sedargs" | grep -qF 'Environment'; then
+    bad "could not extract the Environment= normalisation from scripts/check-unit-drift.sh"
+else
+    norm() { eval "printf '%s\n' \"\$1\" | $sedargs"; }
+    # a quoted value with a space -- the case that has to work
+    got=$(norm 'Environment="HAZYNC_DISK_PATHS=/srv/bulk /"')
+    if [ "$got" = "HAZYNC_DISK_PATHS=/srv/bulk /" ]; then
+        if [ "$CONTROL" = yes ]; then bad "control did NOT reproduce the quote bug -- it is testing nothing"
+        else ok "a quoted Environment= normalises to what xargs reports"; fi
+    else
+        if [ "$CONTROL" = yes ]; then ok "control reproduces it: quoted value stays quoted ($got)"
+        else bad "quoted Environment= did not normalise: got '$got'"; fi
+    fi
+    # an UNQUOTED value must be left exactly as it is, in both modes
+    got=$(norm 'Environment=HAZYNC_DISK_FLOOR_GB=500')
+    [ "$got" = "HAZYNC_DISK_FLOOR_GB=500" ] \
+        && ok "an unquoted Environment= is left alone" \
+        || bad "an unquoted Environment= was mangled: got '$got'"
+    # ⚠ an inner quote must NOT be eaten -- only a matching surrounding pair comes off
+    got=$(norm 'Environment=MSG=say"hi')
+    [ "$got" = 'MSG=say"hi' ] \
+        && ok "an inner quote survives" \
+        || bad "an inner quote was eaten: got '$got'"
+fi
+
+# 6. ⛔ NO QUOTED KEY MAY BE PAPERED OVER BY THE ALLOW LIST. An allow-list entry means "this really
+#    does differ per box"; using one to silence the quoting bug stops the key being checked at all.
+ALLOWF=coordinator/deploy/unit-drift-allow.txt
+if [ ! -f "$ALLOWF" ]; then
+    bad "$ALLOWF is missing, so this assertion would pass vacuously"
+else
+    papered=""
+    for f in coordinator/deploy/*.service; do
+        while IFS= read -r line; do
+            case "$line" in
+                'Environment="'*) k=${line#Environment=\"}; k=${k%%=*}
+                    grep -qxF "$k" "$ALLOWF" && papered="$papered $k($(basename "$f"))" ;;
+            esac
+        done < "$f"
+    done
+    [ -z "$papered" ] \
+        && ok "no quoted Environment= key is exempted by the allow list" \
+        || bad "quoted key(s) exempted by the allow list instead of parsed:$papered"
+fi
+
 echo
 if [ "$fails" = 0 ]; then echo "PASS ($([ "$CONTROL" = yes ] && echo control || echo real))"; exit 0; fi
 echo "FAIL: $fails assertion(s)"; exit 1

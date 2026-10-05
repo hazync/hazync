@@ -15,13 +15,19 @@
 #   HAZYNC_CKPT_ARCHIVE      the tip-bridge box has no block device, so this is on the root filesystem
 #   HAZYNC_BRIDGE_OUT        /srv/bulk on the coordinator, /var/lib on the bridge box
 #   TIP_FILE                 follows the datadir
-#   HAZYNC_DISK_PATHS        which filesystems exist differs per box
+#
+# ⛔ HAZYNC_DISK_PATHS WAS LISTED HERE AND IS NOT ANY MORE (2026-10-05). It was never a per-box
+# setting: both boxes run the repo's own `/srv/bulk /`. It was listed because check-unit-drift
+# compared the repo's `Environment="K=v with spaces"` against the effective value read through
+# `xargs -n1`, which removes the quotes -- so every QUOTED key looked like drift and got exempted
+# here instead of parsed properly. The comparison now strips the quotes, so the key is genuinely
+# compared again. ⚠ An allow-list entry that is really a parse bug silently stops checking a key;
+# before adding one, confirm the two values actually differ per box.
 BUNDLE_SYNC_DEST
 HAZYNC_BITCOIN_DATADIR
 HAZYNC_CKPT_ARCHIVE
 HAZYNC_BRIDGE_OUT
 TIP_FILE
-HAZYNC_DISK_PATHS
 # SPACING: how often a bridge checkpoint is archived. The coordinator has a block device
 # and the tip-bridge box does not, so how much history each can afford to keep differs.
 SPACING
