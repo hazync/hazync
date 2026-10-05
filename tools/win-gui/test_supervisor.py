@@ -17,6 +17,12 @@
   * reading a CUDA failure out of a log without looking for `CUDA ERROR:` — the line only exists
     because of #631, and without it every Windows CUDA failure looks identical.
 """
+
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 import os
 import stat
 import sys
@@ -37,9 +43,19 @@ def check(ok, what):
 
 
 def fake_host(dirpath, name, printed):
-    """A stand-in for `host method-id` — a shell script, so no compiler is needed."""
+    """A stand-in for `host method-id`. ⚠ A .bat on Windows, a shell script on POSIX.
+
+    ⛔ The first version wrote `#!/bin/sh` everywhere, which Windows cannot execute — so five
+    checks "failed" on Windows against code that was perfectly fine. A fixture that only works on
+    one platform turns a portability test into noise.
+    """
+    if os.name == "nt":
+        p = Path(dirpath) / (name + ".bat")
+        body = "@echo off\r\n" + "".join(f"echo {ln}\r\n" for ln in printed.splitlines())
+        p.write_text(body, encoding="utf-8")
+        return p
     p = Path(dirpath) / name
-    p.write_text(f'#!/bin/sh\necho "{printed}"\n', encoding="utf-8")
+    p.write_text(f'#!/bin/sh\ncat <<\'EOF\'\n{printed}\nEOF\n', encoding="utf-8")
     p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return p
 

@@ -34,7 +34,8 @@ itself.
 | `host.exe regress` — full consensus path | ✅ measured, same machine |
 | **CPU** build proves a block on Windows | ✅ measured |
 | **CUDA** build proves a block on Windows | ⛔ **never completed** |
-| This GUI drives a real worker end to end on Windows | ⛔ **not yet run on Windows** |
+| This GUI opens and works on Windows | ✅ **tested on Windows Python 3.14.2** |
+| This GUI drives a real worker end to end on Windows | ⛔ not yet — the window works, a full prove has not been driven through it |
 
 Native Windows **CUDA** proving aborts on the first GPU call:
 
@@ -163,6 +164,23 @@ working.
   guaranteed rejection, looking busy throughout.
 - **Retry `EX_CONFIG` (78).** That means retrying cannot help. The supervisor stops and says why.
 - **Treat `EX_TEMPFAIL` (75) as a fault.** That is a busy board, not an error.
+
+## What running it on real Windows found
+
+Tested under Windows Python 3.14.2 through WSL interop. Three things only that could show:
+
+**A `✅` crashes the Windows console.** It is cp1252, and every marker this project prints is
+outside it — `UnicodeEncodeError: 'charmap' codec can't encode character '\u2705'`. Not a garbled
+character: an exception, mid-sentence, so the diagnostics would have died before reporting
+anything. `winconsole.fix()` now runs before anything prints.
+
+**The shim's own self-test was wrong, not the shim.** It claimed exclusion failed, because it took
+two handles in ONE process — which `msvcrt` deliberately allows, unlike POSIX `flock`. What
+`gpu_lock` actually needs is exclusion across worker PROCESSES, and that works: measured, the
+parent holds it, a child is refused, and the child acquires it after release.
+
+**A `#!/bin/sh` fixture cannot run on Windows**, so five checks "failed" against code that was
+fine. The fixture now writes a `.bat` there.
 
 ## Two bugs worth recording, both found by running it
 

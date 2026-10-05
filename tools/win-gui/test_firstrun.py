@@ -13,6 +13,12 @@
   * calling `ghost:a1b2c3` a name, so work is credited publicly to a machine-generated label
   * losing settings on restart, which makes a four-path setup a four-path setup every single time
 """
+
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 import json
 import os
 import stat

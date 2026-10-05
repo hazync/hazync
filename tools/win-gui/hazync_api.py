@@ -22,6 +22,11 @@ exists here with a test rather than inline in a widget.
 shows what is PROVED, never what someone is currently working on. A "pick a block" button that
 assumed otherwise would hand out work already in progress.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 import json
 import urllib.error
 import urllib.parse

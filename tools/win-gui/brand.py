@@ -18,6 +18,11 @@ stays sharp at any size. The source SVG, in full:
 ⚠ The site ships light AND dark values for each name. Both are kept, because a GUI that hardcoded
 one would look wrong on half of people's machines, and the names are the site's own.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 
 # The site's CSS custom properties, light mode then dark mode.
 LIGHT = {

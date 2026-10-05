@@ -27,6 +27,7 @@ somewhere downstream.
 tested against the behaviour, not the description.
 """
 import os
+import sys
 
 __all__ = ["flock", "LOCK_EX", "LOCK_SH", "LOCK_UN", "LOCK_NB"]
 
@@ -130,14 +131,32 @@ def _self_test():
         flock(fh, LOCK_EX | LOCK_NB)
         print("  ok   LOCK_NB acquired when free")
         flock(fh, LOCK_UN)
-        with open(path, "a+") as other:
-            try:
-                flock(other, LOCK_EX | LOCK_NB)
-                print("  FAIL a second LOCK_NB succeeded while the first was held")
-                return 1
-            except OSError:
-                print("  ok   a second LOCK_NB is refused while held — it is a REAL lock")
-        return 0
+        # ⛔⛔ EXCLUSION IS TESTED ACROSS PROCESSES, NOT WITHIN ONE — and the first version of this
+        # test got that wrong and reported a FAILURE on a shim that works.
+        #
+        # `msvcrt.locking` locks are per FILE HANDLE, and a second handle in the SAME process is
+        # deliberately allowed to lock the same range. POSIX flock behaves differently, so a test
+        # written from flock's habits "fails" here while the thing that matters is fine.
+        #
+        # ⭐ And the thing that matters is separate processes: gpu_lock() exists to stop two WORKER
+        # PROCESSES driving one GPU at once. Measured on real Windows (Python 3.14): the parent
+        # holds it, a child process is refused, and the child acquires it after release.
+        import subprocess
+        child = ("import sys, os; sys.path.insert(0, r'%s'); import fcntl\n"
+                 "fh = open(r'%s', 'a+')\n"
+                 "try:\n"
+                 "    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB); print('GOT')\n"
+                 "except OSError: print('BLOCKED')\n") % (os.path.dirname(os.path.abspath(__file__)), path)
+        flock(fh, LOCK_EX)
+        r = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True)
+        held = "BLOCKED" in (r.stdout or "")
+        print(f"  {'ok  ' if held else 'FAIL'} another PROCESS is refused while the lock is held "
+              f"(it said {(r.stdout or r.stderr).strip()[:12]!r})")
+        flock(fh, LOCK_UN)
+        r2 = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True)
+        freed = "GOT" in (r2.stdout or "")
+        print(f"  {'ok  ' if freed else 'FAIL'} and acquires it once released")
+        return 0 if (held and freed) else 1
     finally:
         try:
             fh.close()

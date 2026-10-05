@@ -9,6 +9,12 @@
 2026-10-04, recorded here so the tests keep working when the coordinator is unreachable and so a
 shape change shows up as a failing test rather than a quietly empty dashboard.
 """
+
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0] if "/" in __file__ else ".")

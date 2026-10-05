@@ -21,6 +21,12 @@ exactly as they ship.
 ⛔⛔ READ tools/win-gui/README.md FIRST. Native Windows CUDA proving has never completed, and this
 window has never run on Windows. Both are stated there rather than left for a user to discover.
 """
+
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 import os
 import queue
 import subprocess

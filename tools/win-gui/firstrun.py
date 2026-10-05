@@ -17,6 +17,11 @@ stays manual, and `publish_host_asset.sh` beside this file is the one command th
 host binary is checked by reading the canonical guest out of it, which works even for a build that
 cannot start on this machine.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 import json
 import os
 import subprocess

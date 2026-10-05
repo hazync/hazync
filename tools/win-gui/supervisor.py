@@ -31,6 +31,11 @@ rather than refuse to work", and N workers would then share one GPU with no seri
 a 4 GB card that converts "slow" into "out of memory". ⇒ Default 1, and only raise it once a run has
 shown the lock working.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import winconsole as _wc  # noqa: E402
+_wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
+
 import hashlib
 import json
 import os
