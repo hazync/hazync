@@ -310,6 +310,33 @@ def main():
     check(took < 10, f"a silent process is killed by the watchdog ({took:.1f}s, not 30s)")
     check(rc2 != 0, f"and that is reported as a failure (rc={rc2})")
 
+    print("── the GPU check must honour a lowered sppark floor ──")
+    # ⚠ Seen on a real machine: after pointing at a build that CAN lower the floor, the check still
+    # said "use the CPU build". Telling someone to undo the thing they just did is how a check
+    # stops being read.
+    _real_run, _real_env = supervisor._run, dict(os.environ)
+    try:
+        supervisor._run = lambda *a, **k: (0, "NVIDIA GeForce GTX 1050 Ti, 4096 MiB, 566.14, 6.1")
+        os.environ.pop("HAZYNC_SPPARK_MIN_MAJOR", None)
+        r = supervisor.check_gpu()
+        check(not r.ok and "compute capability 6.1" in r.detail,
+              "a 6.1 card fails by default, naming the capability")
+        check("HAZYNC_SPPARK_MIN_MAJOR" in r.detail, "and says what could change that")
+
+        os.environ["HAZYNC_SPPARK_MIN_MAJOR"] = "6"
+        r2 = supervisor.check_gpu()
+        check(r2.ok, "with the floor lowered it is accepted")
+        check("unverified" in r2.detail,
+              "⛔ but says the result is UNVERIFIED — accepted by the filter is not known-correct")
+
+        os.environ["HAZYNC_SPPARK_MIN_MAJOR"] = "7"
+        check(not supervisor.check_gpu().ok, "an override that does not help still fails")
+        os.environ["HAZYNC_SPPARK_MIN_MAJOR"] = "nonsense"
+        check(not supervisor.check_gpu().ok, "and a nonsense value is ignored, not trusted")
+    finally:
+        supervisor._run = _real_run
+        os.environ.clear(); os.environ.update(_real_env)
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")

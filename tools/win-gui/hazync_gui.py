@@ -569,6 +569,11 @@ class App(tk.Tk):
         if not path:
             self.v_build.set(f"no {kind.upper()} build chosen yet — press Browse")
             return
+        # ⚠ REFRESH THE LINE, DO NOT LEAVE THE LAST ONE. Selecting a slot before filling it set
+        # "no CUDA build chosen yet" and nothing ever cleared it, so a correctly configured row sat
+        # under a message saying it was not configured — seen on a real machine.
+        info = supervisor.classify_host(path)
+        self.v_build.set(supervisor.host_kind_sentence(info))
         self.host_var.set(path)
         # ⚠ Changing the prover invalidates every check that was about the PREVIOUS binary, so they
         # are run again rather than left on screen describing a file that is no longer in use.

@@ -371,14 +371,31 @@ def check_gpu():
     # ⭐⭐ WHICH MEANS THIS WAS NEVER A WINDOWS BUG. The same card on Linux fails the same way. What
     # Windows added was only that the error was destroyed on its way out (#631's foreign-exception
     # abort), so a card-support question looked like a platform question for weeks.
+    # ⚠ THE FLOOR CAN BE LOWERED, so this must not keep declaring failure once someone has done it.
+    # A build from 2026-10-05 or later honours HAZYNC_SPPARK_MIN_MAJOR; reporting "use the CPU
+    # build" to a person who has already overridden it would be telling them to undo the thing they
+    # just did, which is how a check gets ignored.
+    floor = 7
+    override = os.environ.get("HAZYNC_SPPARK_MIN_MAJOR", "").strip()
+    if override.isdigit() and 1 <= int(override) <= 99:
+        floor = int(override)
+
     cc = re.search(r"(\d+)\.(\d+)\s*$", line)
+    if cc and int(cc.group(1)) >= floor and floor < 7:
+        return CheckResult(
+            "GPU", True,
+            line + f"  ⚠ accepted only because HAZYNC_SPPARK_MIN_MAJOR={floor} lowers sppark's "
+                   "floor from 7. The kernels are built for sm_61, but whether Pascal computes "
+                   "these proofs CORRECTLY is unverified — the receipt is checked before anything "
+                   "is submitted, so a wrong result fails rather than reaching the board.")
     if cc and int(cc.group(1)) < 7:
         return CheckResult(
             "GPU", False,
             line + f"  ⛔ compute capability {cc.group(1)}.{cc.group(2)} — sppark keeps only "
                    "cards with major >= 7 (Volta or newer), so this one is filtered out and CUDA "
                    "proving fails with 'no CUDA-capable device is detected' however much VRAM it "
-                   "has. Use the CPU build on this machine.",
+                   "has. Use the CPU build on this machine — or try a build from 2026-10-05 or "
+                   "later with HAZYNC_SPPARK_MIN_MAJOR=6, which lowers sppark's floor (hazync#631).",
             fatal=False)
 
     mb = re.search(r"(\d+)\s*MiB", line)
