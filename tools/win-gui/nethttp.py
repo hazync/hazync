@@ -37,12 +37,13 @@ same box minutes earlier. pip vendors its own CA bundle and never asks Windows. 
 fixes this is sitting inside pip already, importable as `pip._vendor.certifi`, with nothing to
 install and no network needed to obtain it.
 
-FOUR ATTEMPTS, CHEAPEST FIRST:
+FIVE ATTEMPTS, CHEAPEST FIRST:
 
-    1. the default context          — correct on most machines, costs nothing to try
-    2. certifi, or pip's vendored copy of it — the bundle that actually has the missing roots
-    3. pip install certifi, then retry      — pip's own HTTPS works, so this can succeed
-    4. curl                                 — last, because on the measured machine it failed too
+    1. the default context                  — correct on most machines, costs nothing to try
+    2. the default store + extra-chain.pem   — completes a chain truncated in transit
+    3. certifi, or pip's vendored copy, + extra-chain.pem
+    4. pip install certifi, then retry       — pip's own HTTPS works, so this can succeed
+    5. curl                                  — last; on the measured machine it failed too
 
 ⛔ WHAT THIS DELIBERATELY DOES NOT DO: disable verification. An `ssl._create_unverified_context()`
 would have "fixed" this in one line and quietly made every download in this program spoofable --
@@ -56,6 +57,7 @@ import winconsole as _wc  # noqa: E402
 _wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
 
 import json
+import re
 import shutil
 import ssl
 import subprocess
@@ -105,13 +107,50 @@ def certifi_where():
         return None
 
 
+EXTRA_CHAIN = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "extra-chain.pem")
+
+
+def _extra_chain_pem():
+    """The intermediates we ship, or None. See extra-chain.pem for why they exist.
+
+    ⚠ ONLY THE CERTIFICATE BLOCKS. `load_verify_locations(cadata=...)` requires ASCII, and the file
+    carries a header explaining its provenance that contains non-ASCII characters. Passing the file
+    whole raises `TypeError: cadata should be an ASCII string` -- so the blocks are extracted rather
+    than the comments being flattened, which would have deleted the explanation to satisfy an API.
+    """
+    try:
+        with open(EXTRA_CHAIN, encoding="utf-8") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    blocks = re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", data, re.S)
+    return "\n".join(blocks) + "\n" if blocks else None
+
+
+def _with_extra(ctx):
+    """Add the shipped intermediates to a context, so a truncated chain can still be completed.
+
+    ⚠ These are NOT new trust anchors -- every one of them chains to a root the store already has.
+    Loading them only supplies a link the server should have sent. A context that cannot load them
+    is returned unchanged rather than discarded: a missing extra file must not break the common
+    case, which already works.
+    """
+    pem = _extra_chain_pem()
+    if ctx is not None and pem:
+        try:
+            ctx.load_verify_locations(cadata=pem)
+        except (ssl.SSLError, OSError):
+            pass
+    return ctx
+
+
 def _certifi_context():
     """An SSL context using a real CA bundle, or None if none can be found."""
     where = certifi_where()
     if not where:
         return None
     try:
-        return ssl.create_default_context(cafile=where)
+        return _with_extra(ssl.create_default_context(cafile=where))
     except OSError:
         return None
 
@@ -175,7 +214,15 @@ def get(url, timeout=60, headers=None):
             raise NetError(f"could not reach {url}: {e}") from e
         attempts.append(f"system trust store: {e}")
 
-    # 2 — a real CA bundle: certifi, or the copy vendored inside pip
+    # 2 — the system store, PLUS the intermediates we ship. This is the one that fixes a chain
+    #     truncated in transit: the anchor (ISRG Root X1) is already trusted here, only the link
+    #     was missing, so nothing new is being trusted.
+    try:
+        return _try(_with_extra(ssl.create_default_context()), "system+extra")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+        attempts.append(f"system store + shipped intermediates: {e}")
+
+    # 3 — a real CA bundle: certifi, or the copy vendored inside pip
     ctx = _certifi_context()
     if ctx is not None:
         try:
@@ -185,7 +232,7 @@ def get(url, timeout=60, headers=None):
     else:
         attempts.append("CA bundle: neither certifi nor pip's vendored copy could be imported")
 
-    # 3 — ask pip to fetch certifi, then retry. pip's HTTPS works even here.
+    # 4 — ask pip to fetch certifi, then retry. pip's HTTPS works even here.
     ctx = _pip_install_certifi()
     if ctx is not None:
         try:
@@ -195,7 +242,7 @@ def get(url, timeout=60, headers=None):
     else:
         attempts.append("pip install certifi: did not help")
 
-    # 4 — curl, verifying through the OS
+    # 5 — curl, verifying through the OS
     data = _curl(url, timeout)
     if data is not None:
         return data

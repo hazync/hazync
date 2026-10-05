@@ -102,7 +102,7 @@ for e, want, label in (
 print("── 3. the fallback chain is in the right order and complete ──")
 src = open(nethttp.__file__).read()
 order = [m.group(1) for m in re.finditer(r"^\s*#\s*(\d) —", src, re.M)]
-check(order == ["1", "2", "3", "4"], f"four attempts, numbered in order (found {order})")
+check(order == ["1", "2", "3", "4", "5"], f"five attempts, numbered in order (found {order})")
 check(src.index("_certifi_context()") < src.index("_curl(url"),
       "a CA bundle is tried BEFORE shelling out to curl — cheapest first, and curl FAILED on the "
       "measured machine so it is the weakest link, not the strongest")
@@ -156,6 +156,67 @@ try:
     check("certifi bundle" in names and "curl" in names, f"names the fallbacks: {names}")
 except Exception as e:  # noqa: BLE001
     check(False, f"diagnose() raised {type(e).__name__}: {e} — a diagnostic must never crash")
+
+print("── 8. ⛔⛔ the SHIPPED intermediates are verified, not trusted on sight ──")
+# A certificate committed to a repository is a thing a reader will not read. If this file were ever
+# swapped for someone else's certificate, every HTTPS check in the program would start accepting it.
+# So its SIGNATURE is re-checked here against an anchor taken from certifi -- not from the network
+# and not from the file itself -- which makes tampering a failing test rather than a silent widening.
+pem = nethttp._extra_chain_pem()
+check(pem is not None, "extra-chain.pem is present and contains certificates")
+if pem:
+    try:
+        import re as _re
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+        import certifi as _certifi
+
+        anchors = {}
+        for b in _re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+                             open(_certifi.where()).read(), _re.S):
+            try:
+                c = x509.load_pem_x509_certificate(b.encode())
+            except Exception:       # noqa: BLE001 - a bundle may carry one we cannot parse
+                continue
+            anchors[c.subject.rfc4514_string()] = c
+
+        shipped = [x509.load_pem_x509_certificate(b.encode())
+                   for b in _re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+                                        pem, _re.S)]
+        check(bool(shipped), f"{len(shipped)} shipped certificate(s)")
+        for c in shipped:
+            name = c.subject.rfc4514_string()
+            issuer = c.issuer.rfc4514_string()
+            parent = anchors.get(issuer)
+            check(parent is not None,
+                  f"{name} chains to an anchor certifi ALREADY has ({issuer})")
+            if parent is None:
+                continue
+            pub = parent.public_key()
+            try:
+                if isinstance(pub, rsa.RSAPublicKey):
+                    pub.verify(c.signature, c.tbs_certificate_bytes,
+                               padding.PKCS1v15(), c.signature_hash_algorithm)
+                else:
+                    pub.verify(c.signature, c.tbs_certificate_bytes,
+                               ec.ECDSA(c.signature_hash_algorithm))
+                check(True, f"{name}: signature verifies against {issuer}")
+            except Exception as e:      # noqa: BLE001
+                check(False, f"{name}: SIGNATURE DOES NOT VERIFY ({type(e).__name__}) — "
+                             f"this file has been tampered with or replaced")
+            # ⚠ An expired intermediate completes no chain, and would fail at the worst moment.
+            import datetime
+            now = datetime.datetime.now(datetime.timezone.utc)
+            check(c.not_valid_before_utc <= now <= c.not_valid_after_utc,
+                  f"{name} is in date (until {c.not_valid_after_utc:%Y-%m-%d})")
+            # the fingerprint the header claims must be the fingerprint of what is actually here
+            fp = c.fingerprint(hashes.SHA256()).hex()
+            check(fp in open(nethttp.EXTRA_CHAIN, encoding="utf-8").read(),
+                  f"{name}: the sha256 in the header matches the certificate ({fp[:16]}…)")
+    except ImportError:
+        check(False, "cryptography is needed to verify the shipped certificates")
+
 
 EXPECTED_CONTROL_FAILURES = {
     "it is recognised as a certificate failure anyway",
