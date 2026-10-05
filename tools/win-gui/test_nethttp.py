@@ -206,10 +206,22 @@ if pem:
                 check(False, f"{name}: SIGNATURE DOES NOT VERIFY ({type(e).__name__}) — "
                              f"this file has been tampered with or replaced")
             # ⚠ An expired intermediate completes no chain, and would fail at the worst moment.
+            #
+            # ⛔⛔ AND THE ACCESSOR DIFFERS BY LIBRARY VERSION, WHICH IS HOW THIS FIRST FAILED IN CI
+            # WHILE PASSING LOCALLY. `not_valid_before_utc` arrived in cryptography 42; before that
+            # it is `not_valid_before`. They are not just different names: the old pair is NAIVE
+            # UTC and the new pair is TIMEZONE-AWARE, so picking the wrong `now` raises TypeError
+            # rather than comparing wrongly. A test that pins a library version it never declared
+            # is a test that only runs on the machine that wrote it.
             import datetime
-            now = datetime.datetime.now(datetime.timezone.utc)
-            check(c.not_valid_before_utc <= now <= c.not_valid_after_utc,
-                  f"{name} is in date (until {c.not_valid_after_utc:%Y-%m-%d})")
+            nb = getattr(c, "not_valid_before_utc", None)
+            na = getattr(c, "not_valid_after_utc", None)
+            if nb is None or na is None:
+                nb, na = c.not_valid_before, c.not_valid_after            # naive UTC, cryptography < 42
+                now = datetime.datetime.utcnow()
+            else:
+                now = datetime.datetime.now(datetime.timezone.utc)        # aware, cryptography >= 42
+            check(nb <= now <= na, f"{name} is in date (until {na:%Y-%m-%d})")
             # the fingerprint the header claims must be the fingerprint of what is actually here
             fp = c.fingerprint(hashes.SHA256()).hex()
             check(fp in open(nethttp.EXTRA_CHAIN, encoding="utf-8").read(),
