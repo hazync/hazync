@@ -331,13 +331,17 @@ public:
         if (cudaGetDevice(&current_id) != cudaSuccess) {
             gpu.select();
 
-            (void)cudaFreeAsync(partial_twiddles, gpu[2]);
+            // HAZYNC_631_NOPOOL — these were allocated by Dmalloc and freed by a RAW
+            // cudaFreeAsync. That was safe only while Dmalloc always meant cudaMallocAsync; with a
+            // synchronous fallback for drivers without memory pools it would mix the pair, which
+            // is undefined. Dfree is Dmalloc's counterpart and asks the same cached question.
+            gpu[2].Dfree(partial_twiddles);
 #if !defined(FEATURE_BABY_BEAR) && !defined(FEATURE_GOLDILOCKS)
-            (void)cudaFreeAsync(stageX_twiddles, gpu[1]);
+            gpu[1].Dfree(stageX_twiddles);
 #else
-            (void)cudaFreeAsync(plus_one_twiddles, gpu[1]);
+            gpu[1].Dfree(plus_one_twiddles);
 #endif
-            (void)cudaFreeAsync(inner_twiddles, gpu[0]);
+            gpu[0].Dfree(inner_twiddles);
 
             (void)cudaSetDevice(current_id);
         }

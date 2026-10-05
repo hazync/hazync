@@ -68,13 +68,69 @@ public:
     inline int sm_count() const
     {   return gpu_props(gpu_id).multiProcessorCount;   }
 
+    // HAZYNC_631_NOPOOL — hazync#631.
+    //
+    // ⛔⛔ cudaMallocAsync IS CALLED HERE UNCONDITIONALLY, AND IT IS NOT UNIVERSALLY SUPPORTED.
+    // The stream-ordered allocator needs the driver to offer MEMORY POOLS, and when it does not,
+    // cudaMallocAsync returns exactly `cudaErrorNotSupported` — "operation not supported". sppark
+    // never asks whether pools exist; it just calls it.
+    //
+    // 📏 Measured on Windows 2026-10-05, GTX 1050 Ti, once the compute-capability floor was
+    // lowered: the device was accepted, and proving then died with
+    //
+    //     CUDA ERROR: cudaGetLastError()@sppark/ntt/ntt.cuh:97 failed: "operation not supported"
+    //
+    // ⚠ ntt.cuh:97 is a check AFTER an innocent kernel launch. cudaGetLastError reports the first
+    // error since the last check, so a failed allocation earlier in the same stream surfaces
+    // there — which is why the line number pointed at a kernel with nothing wrong with it.
+    //
+    // ⭐ IF THAT IS THE CAUSE, IT IS A PLATFORM LIMITATION AND NOT A PASCAL ONE: any card on a
+    // driver without pool support fails the same way. This makes that answerable and survivable.
+    //
+    // ⛔ THE PAIRING MUST NOT BE MIXED. A pointer from cudaMallocAsync must be freed by
+    // cudaFreeAsync and a pointer from cudaMalloc by cudaFree, so the decision is made ONCE per
+    // device and cached — not re-tested per call, where a flapping answer would free a pointer
+    // with the wrong allocator.
+    //
+    // ⚠ The synchronous path SYNCHRONISES FIRST. cudaMalloc/cudaFree are not stream-ordered, so
+    // issuing one while earlier work is still queued on this stream would free memory the GPU is
+    // still reading. The async allocator exists precisely to avoid that stall; where it is
+    // unavailable, correctness beats the stall.
+    static bool hazync_pools_supported(int gpu_id)
+    {
+        static int cached = -1;
+        if (cached < 0) {
+            int v = 0;
+            if (cudaDeviceGetAttribute(&v, cudaDevAttrMemoryPoolsSupported, gpu_id) != cudaSuccess)
+                v = 0;
+            if (const char* s = std::getenv("HAZYNC_NO_MEMPOOL"))
+                if (s[0] && s[0] != '0') v = 0;      // force the fallback, to test it anywhere
+            cached = v ? 1 : 0;
+            if (!cached)
+                std::fprintf(stderr, "\nGPU SCAN: memory pools NOT supported — using synchronous "
+                                     "cudaMalloc/cudaFree (hazync#631)\n");
+        }
+        return cached == 1;
+    }
+
     inline void* Dmalloc(size_t sz) const
     {   void *d_ptr;
-        CUDA_OK(cudaMallocAsync(&d_ptr, sz, stream));
+        if (hazync_pools_supported(gpu_id)) {
+            CUDA_OK(cudaMallocAsync(&d_ptr, sz, stream));
+        } else {
+            CUDA_OK(cudaStreamSynchronize(stream));
+            CUDA_OK(cudaMalloc(&d_ptr, sz));
+        }
         return d_ptr;
     }
     inline void Dfree(void* d_ptr) const
-    {   CUDA_OK(cudaFreeAsync(d_ptr, stream));   }
+    {   if (hazync_pools_supported(gpu_id)) {
+            CUDA_OK(cudaFreeAsync(d_ptr, stream));
+        } else {
+            CUDA_OK(cudaStreamSynchronize(stream));
+            CUDA_OK(cudaFree(d_ptr));
+        }
+    }
 
     template<typename T>
     inline void bzero(T* dst, size_t nelems) const
@@ -323,6 +379,13 @@ template<typename T> class dev_ptr_t {
     T* d_ptr;
     size_t d_len_owned;
     cudaStream_t stream;
+    // ⛔⛔ WHICH ALLOCATOR MADE THIS POINTER. The destructor below used to choose by `stream`
+    // alone, which was safe only while every streamed allocation came from cudaMallocAsync. With
+    // a synchronous fallback for drivers without memory pools (hazync#631), choosing by `stream`
+    // would free a cudaMalloc pointer with cudaFreeAsync — mixing the pair, which is undefined.
+    // ⚠ Per OBJECT, not a global: a multi-GPU box can have pools on one device and not another,
+    // and this fleet runs many cards.
+    bool d_pooled = false;
 public:
     dev_ptr_t(size_t nelems) : d_ptr(nullptr), d_len_owned(0), stream(nullptr)
     {
@@ -336,7 +399,17 @@ public:
     {
         if (nelems) {
             size_t n = (nelems+WARP_SZ-1) & ((size_t)0-WARP_SZ);
-            CUDA_OK(cudaMallocAsync(&d_ptr, n * sizeof(T), s));
+            // HAZYNC_631_NOPOOL — the SECOND unconditional cudaMallocAsync in this file. Fixing
+            // only stream_t::Dmalloc would have left this one failing identically, on a driver
+            // without memory pools. ⚠ `stream` is recorded here and the destructor frees by it, so
+            // the two must agree about which allocator was used: both ask the same cached answer.
+            d_pooled = stream_t::hazync_pools_supported((int)s);
+            if (d_pooled) {
+                CUDA_OK(cudaMallocAsync(&d_ptr, n * sizeof(T), s));
+            } else {
+                CUDA_OK(cudaStreamSynchronize(s));
+                CUDA_OK(cudaMalloc(&d_ptr, n * sizeof(T)));
+            }
             d_len_owned = (nelems << 1) | 1;
         }
     }
@@ -348,8 +421,12 @@ public:
     ~dev_ptr_t()
     {
         if (d_ptr != nullptr && (d_len_owned&1)) {
-            if (stream) (void)cudaFreeAsync((void*)d_ptr, stream);
-            else        (void)cudaFree((void*)d_ptr);
+            // ⛔ PAIRED WITH WHAT ALLOCATED IT, not with whether a stream exists.
+            if (stream && d_pooled) (void)cudaFreeAsync((void*)d_ptr, stream);
+            else {
+                if (stream) (void)cudaStreamSynchronize(stream);
+                (void)cudaFree((void*)d_ptr);
+            }
         }
     }
 
