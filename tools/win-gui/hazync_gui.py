@@ -42,6 +42,7 @@ import brand  # noqa: E402
 import firstrun  # noqa: E402
 import hazync_api as api  # noqa: E402
 import supervisor  # noqa: E402
+import theme  # noqa: E402
 
 POLL_MS = 150
 REFRESH_S = 60          # the website refreshes the map every minute; match it rather than hammer
@@ -86,7 +87,10 @@ class App(tk.Tk):
 
     # ── chrome ──────────────────────────────────────────────────────────────────────────────────
     def _build(self):
-        p = self.p
+        # ⛔ THEME ttk FIRST, BEFORE ANY WIDGET EXISTS. 24 ttk widgets here render in the OS theme
+        # unless styled, which is why dark mode looked like grey Windows chrome on a near-black
+        # page: brand.palette() only ever reached the hand-coloured tk widgets.
+        p = self.p = theme.apply(self, self.dark.get())
         self.configure(bg=p["fog"])
 
         head = tk.Frame(self, bg=p["fog"])
@@ -116,10 +120,9 @@ class App(tk.Tk):
     def _retheme(self):
         # ⚠ A full re-theme of a live widget tree is fiddly and easy to get half-right. Rebuilding
         # is honest and instant at this size; a half-themed window looks broken.
-        self.p = brand.palette(self.dark.get())
         for w in self.winfo_children():
             w.destroy()
-        self._build()
+        self._build()          # re-themes ttk as well as rebuilding the tk widgets
         self.refresh()
 
     def _card(self, parent, title):
@@ -491,7 +494,7 @@ class App(tk.Tk):
         ttk.Entry(row, textvariable=self.po2, width=6).pack(side="left")
         tk.Label(row, text="blank = default; lower uses less VRAM", bg=p["mist"], fg=p["slate"],
                  font=("Segoe UI", 8)).pack(side="left", padx=6)
-        self.start_btn = ttk.Button(row, text="Start", command=self._start)
+        self.start_btn = ttk.Button(row, text="Start", command=self._start, style="Accent.TButton")
         self.start_btn.pack(side="left", padx=(20, 6))
         self.stop_btn = ttk.Button(row, text="Stop", command=self._stop, state="disabled")
         self.stop_btn.pack(side="left")
@@ -537,6 +540,66 @@ class App(tk.Tk):
                          ("proved", "good"), ("accepted", "good"), ("claimed", "lamp_text"),
                          ("sys", "slate")):
             self.log.tag_configure(tag, foreground=p[key])
+
+    def _import_key(self):
+        """Bring an existing signing key onto this machine."""
+        path = filedialog.askopenfilename(
+            title="Select key.hex from the machine that already has your identity",
+            filetypes=[("Signing key", "*.hex"), ("All files", "*.*")])
+        if not path:
+            return
+        ok, msg = firstrun.import_identity(path, self.ident_var.get() or None)
+        self.v_key.set(("\u2713 " if ok else "\u26d4 ") + msg)
+        self._say(f"[identity] {'imported' if ok else 'refused'} — {msg}",
+                  "proved" if ok else "cuda-error")
+        if ok:
+            self.rescan()
+
+    def _backup_key(self):
+        """⚠ Copy the signing key somewhere safe. Losing it means losing every block's credit."""
+        path = filedialog.asksaveasfilename(
+            title="Save a copy of your signing key", initialfile="hazync-key.hex",
+            defaultextension=".hex", filetypes=[("Signing key", "*.hex")])
+        if not path:
+            return
+        ok, msg = firstrun.backup_identity(path, self.ident_var.get() or None)
+        self.v_key.set(("\u2713 " if ok else "\u26d4 ") + msg)
+
+    def _update_app(self):
+        """Pull the newest version of this program, from inside it."""
+        self.v_update.set("checking\u2026")
+
+        def go():
+            ok, msg = firstrun.app_update()
+            self.results.put((self._after_update, (ok, msg)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _after_update(self, args):
+        ok, msg = args
+        self.v_update.set(("\u2713 " if ok else "\u26d4 ") + msg)
+        self._say(f"[update] {msg}", "proved" if ok else "cuda-error")
+
+    def _apply_recommended(self):
+        """Set this machine up from what the card actually is.
+
+        ⛔ THE POINT IS THAT NOBODY SHOULD HAVE TO KNOW ANY OF THIS. Which of two host binaries,
+        whether this GPU is eligible at all, and what segment size fits its VRAM are answerable
+        from nvidia-smi in under a second — and every one of them was previously learned by hitting
+        it as a failure.
+        """
+        rec = supervisor.recommend()
+        want = rec["build"]
+        have = (self.host_cpu_var if want == "cpu" else self.host_cuda_var).get().strip()
+        self._say(f"[setup] recommended: the {want.upper()} build — {rec['why']}", "sys")
+        if rec.get("seg_po2"):
+            self.po2.set(str(rec["seg_po2"]))
+        if have:
+            self.build_kind.set(want)
+            self._use_build()
+            self.v_build.set(rec["why"])
+        else:
+            self.v_build.set(rec["why"] + f"  \u2014 choose the {want.upper()} build above and it "
+                                          f"will be used.")
 
     def _pick_build(self, kind):
         """Choose a prover for one slot, and CHECK it is the build that slot is for.
@@ -738,6 +801,8 @@ class App(tk.Tk):
             ttk.Button(bi, text="Browse\u2026",
                        command=lambda k=kind: self._pick_build(k)).grid(row=r, column=2)
         bi.columnconfigure(1, weight=1)
+        ttk.Button(build, text="Work it out for me", style="Accent.TButton",
+                   command=self._apply_recommended).pack(anchor="w", padx=12, pady=(6, 2))
         self.v_build = tk.StringVar(value="")
         tk.Label(build, textvariable=self.v_build, bg=p["mist"], fg=p["slate"],
                  font=("Segoe UI", 9), justify="left", wraplength=920
@@ -754,10 +819,34 @@ class App(tk.Tk):
                  ).pack(anchor="w", padx=12, pady=(4, 6))
         idrow = tk.Frame(ident, bg=p["mist"])
         idrow.pack(anchor="w", padx=12, pady=(0, 10))
-        ttk.Button(idrow, text="Show my identity", command=self._show_identity).pack(side="left")
+        ttk.Button(idrow, text="Show my identity", style="Quiet.TButton",
+                   command=self._show_identity).pack(side="left")
+        ttk.Button(idrow, text="Import a key\u2026", style="Quiet.TButton",
+                   command=self._import_key).pack(side="left", padx=(8, 0))
+        ttk.Button(idrow, text="Back it up\u2026", style="Quiet.TButton",
+                   command=self._backup_key).pack(side="left", padx=(8, 0))
+        self.v_key = tk.StringVar(value="")
+        tk.Label(ident, textvariable=self.v_key, bg=p["mist"], fg=p["slate"],
+                 font=("Segoe UI", 9), justify="left", wraplength=900
+                 ).pack(anchor="w", padx=12, pady=(0, 6))
         self.v_ident = tk.StringVar(value="not checked")
         tk.Label(idrow, textvariable=self.v_ident, bg=p["mist"], fg=p["lamp_text"],
                  font=("Consolas", 9)).pack(side="left", padx=10)
+
+        upd = self._card(t, "THIS PROGRAM")
+        upd.pack(fill="x", padx=10, pady=4)
+        urow = tk.Frame(upd, bg=p["mist"])
+        urow.pack(anchor="w", padx=12, pady=(4, 2))
+        ttk.Button(urow, text="Update Hazync", style="Quiet.TButton",
+                   command=self._update_app).pack(side="left", padx=(0, 10))
+        self.v_update = tk.StringVar(value="")
+        tk.Label(urow, textvariable=self.v_update, bg=p["mist"], fg=p["slate"],
+                 font=("Segoe UI", 9), justify="left", wraplength=780).pack(side="left")
+        tk.Label(upd, bg=p["mist"], fg=p["slate"], font=("Segoe UI", 9), justify="left",
+                 wraplength=900,
+                 text=("Pulls the newest version from GitHub. Close and reopen afterwards \u2014 a "
+                       "running program keeps the code it started with.")
+                 ).pack(anchor="w", padx=12, pady=(0, 8))
 
         chk = self._card(t, "CHECKS")
         chk.pack(fill="both", expand=True, padx=10, pady=8)

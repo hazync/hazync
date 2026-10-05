@@ -338,6 +338,69 @@ def check_host_binary(host_path):
                        f"canonical METHOD_ID {got[:16]}… — {host_kind_sentence(info)}")
 
 
+def gpu_facts():
+    """What card is this, in numbers. (name, vram_mb, driver, cc_major, cc_minor) or None.
+
+    ⭐ SEPARATED FROM check_gpu BECAUSE A DECISION NEEDS THE NUMBERS, NOT A SENTENCE. Choosing a
+    prover and a segment size from a human-readable string means parsing prose, and that is how a
+    setting ends up wrong on the one machine nobody tested.
+    """
+    rc, out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version,compute_cap",
+                    "--format=csv,noheader"], timeout=30)
+    if rc != 0 or not out.strip():
+        return None
+    parts = [x.strip() for x in out.strip().splitlines()[0].split(",")]
+    if len(parts) < 4:
+        return None
+    mb = re.search(r"(\d+)", parts[1])
+    cc = re.match(r"(\d+)\.(\d+)", parts[3])
+    if not (mb and cc):
+        return None
+    return {"name": parts[0], "vram_mb": int(mb.group(1)), "driver": parts[2],
+            "cc_major": int(cc.group(1)), "cc_minor": int(cc.group(2))}
+
+
+# ⛔⛔ EVERY NUMBER HERE WAS MEASURED, NOT CHOSEN. The segment size decides peak VRAM, and the only
+# hard data this project has is: one prove at HAZYNC_SEG_PO2=21 peaked near 22 GB. Each step down
+# roughly halves the working set, so the table below is that one measurement walked down — which is
+# honest extrapolation, and is labelled as such rather than presented as a measurement.
+#
+# ⚠ A CARD BELOW 8 GB HAS NEVER PROVED ANYTHING ON THIS PROJECT. The smallest that has is 24 GB.
+# So for small cards this returns a STARTING POINT and says so; it does not promise it will work.
+_SEG_PO2_FOR_VRAM = [(40000, 21), (20000, 20), (10000, 19), (6000, 18), (0, 17)]
+
+
+def recommend(gpu=None):
+    """What this machine should actually be set to. (dict) — the whole point of the Setup tab.
+
+    ⛔ THE POINT IS THAT NOBODY SHOULD HAVE TO KNOW ANY OF THIS. Before this, a person had to learn
+    that sppark rejects cards below compute 7.0, that there are two host binaries, that one of them
+    cannot start without an NVIDIA driver, and that a segment size exists at all — by hitting each
+    one as a failure. All four are answerable from `nvidia-smi` in under a second.
+    """
+    g = gpu if gpu is not None else gpu_facts()
+    if not g:
+        return {"build": "cpu", "seg_po2": None, "gpu": None,
+                "why": "No NVIDIA driver was found, so a CUDA build could not even start. "
+                       "The CPU build works anywhere."}
+    seg = next(po2 for floor, po2 in _SEG_PO2_FOR_VRAM if g["vram_mb"] >= floor)
+    if g["cc_major"] < 7:
+        return {"build": "cpu", "seg_po2": None, "gpu": g,
+                "why": f"{g['name']} is compute {g['cc_major']}.{g['cc_minor']}, and sppark keeps "
+                       f"only cards at 7.0 or newer, so CUDA proving fails with \"no CUDA-capable "
+                       f"device is detected\". The CPU build is the one that works here. "
+                       f"(HAZYNC_SPPARK_MIN_MAJOR={g['cc_major']} lifts that floor on a build from "
+                       f"2026-10-05 or later — unproven, see hazync#631.)"}
+    note = ""
+    if g["vram_mb"] < 8000:
+        note = (f" ⚠ {g['vram_mb']:,} MiB is below anything this project has proved with — the "
+                f"smallest measured is 24 GB — so {seg} is a starting point, not a promise.")
+    return {"build": "cuda", "seg_po2": seg, "gpu": g,
+            "why": f"{g['name']}, compute {g['cc_major']}.{g['cc_minor']}, {g['vram_mb']:,} MiB. "
+                   f"Suggested HAZYNC_SEG_PO2={seg}, extrapolated from one measured prove that "
+                   f"peaked near 22 GB at 21.{note}"}
+
+
 def check_gpu():
     """GPU name, VRAM and the DRIVER's CUDA version — all three matter, and not just for display.
 

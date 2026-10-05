@@ -23,6 +23,8 @@ import winconsole as _wc  # noqa: E402
 _wc.fix()   # ⛔ BEFORE anything prints: a ✅ on a cp1252 console raises, not degrades
 
 import json
+import time
+import shutil
 import os
 import subprocess
 import sys
@@ -155,6 +157,130 @@ def fetch_worker(dest_dir=None, tag=None, timeout=120):
     if not chk.ok:
         return False, f"saved to {dest} but it does not run: {chk.detail}"
     return True, str(dest)
+
+
+# ── your identity: importing one, and never losing one ───────────────────────────────────────────
+KEY_NAME = "key.hex"
+
+
+def identity_public(identity_dir=None):
+    """The PUBLIC key of the identity in this folder, or None. (never the secret)"""
+    f = Path(identity_dir or hazync_home()) / KEY_NAME
+    try:
+        raw = f.read_text().strip()
+    except OSError:
+        return None
+    return _public_of(raw)
+
+
+def _public_of(hex_secret):
+    """The public key for a hex secret, or None if it is not a usable ed25519 key.
+
+    ⛔ THE SECRET IS NEVER RETURNED, LOGGED OR SHOWN. A signing key that reaches a log reaches a
+    screenshot, and every block this machine has ever proved is credited to it.
+    """
+    s = (hex_secret or "").strip()
+    if len(s) != 64:
+        return None
+    try:
+        bytes.fromhex(s)
+    except ValueError:
+        return None
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(s))
+        return sk.public_key().public_bytes(serialization.Encoding.Raw,
+                                            serialization.PublicFormat.Raw).hex()
+    except Exception:          # noqa: BLE001 - an unusable key is a result, not a crash
+        return None
+
+
+def import_identity(src, identity_dir=None):
+    """Bring an existing signing key onto this machine. (ok, message)
+
+    ⛔⛔ IT BACKS UP FIRST, ALWAYS. The window's own text says losing this file means losing the
+    credit for everything you have proved — so an import that overwrote one silently would be the
+    single most destructive button in the program. The existing key is copied to
+    key.hex.replaced-<timestamp> before anything is written, and the message says where it went.
+
+    ⚠ IT VALIDATES BEFORE IT TOUCHES ANYTHING. A truncated paste or the wrong file would otherwise
+    leave a machine that cannot sign, discovered at the end of the first prove rather than now.
+    """
+    dest_dir = Path(identity_dir or hazync_home())
+    src = Path(src)
+    try:
+        text = src.read_text(errors="replace").strip()
+    except OSError as e:
+        return False, f"could not read {src}: {e}"
+    # ⚠ Accept the file the worker writes (bare hex) and a key pasted with surrounding whitespace
+    # or a trailing newline, which is what happens when someone copies it out of a terminal.
+    candidate = "".join(text.split())
+    pub = _public_of(candidate)
+    if not pub:
+        return False, (f"{src.name} is not an ed25519 signing key — expected 64 hex characters "
+                       f"(32 bytes), got {len(candidate)} character(s). Nothing was changed.")
+    existing = dest_dir / KEY_NAME
+    moved = ""
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if existing.exists():
+            if "".join(existing.read_text(errors="replace").split()) == candidate:
+                return True, f"that key is already the one in use here (public {pub[:16]}…)"
+            backup = existing.with_suffix(f".hex.replaced-{time.strftime('%Y%m%d-%H%M%S')}")
+            shutil.copy2(existing, backup)
+            moved = f" The key it replaced was kept as {backup.name}."
+        tmp = existing.with_suffix(".hex.tmp")
+        tmp.write_text(candidate)
+        tmp.replace(existing)          # ⚠ atomic: a half-written key is an unusable machine
+        try:
+            _os.chmod(existing, 0o600)
+        except OSError:
+            pass                        # Windows ACLs, not POSIX modes — not a failure
+    except OSError as e:
+        return False, f"could not write {existing}: {e}"
+    return True, f"imported — this machine now signs as public key {pub[:16]}….{moved}"
+
+
+def backup_identity(dest, identity_dir=None):
+    """Copy the signing key somewhere safe. (ok, message)"""
+    src = Path(identity_dir or hazync_home()) / KEY_NAME
+    if not src.is_file():
+        return False, f"there is no {KEY_NAME} in {src.parent} yet — run the client once first"
+    try:
+        shutil.copy2(src, dest)
+    except OSError as e:
+        return False, f"could not write {dest}: {e}"
+    return True, (f"saved to {dest}. ⚠ Anyone holding this file can claim your blocks — keep it "
+                  f"like a password, not like a document.")
+
+
+# ── updating this program ────────────────────────────────────────────────────────────────────────
+def app_update(repo_dir=None):
+    """Pull the newest version of this program. (ok, message)
+
+    ⭐ It is a git checkout, so updating it is a fetch and a fast-forward — no installer, no
+    download, and the person does not have to find a terminal. --ff-only deliberately: a merge
+    conflict in a tool someone is only trying to RUN is not a thing to hand them.
+    """
+    d = Path(repo_dir or Path(__file__).resolve().parent)
+    rc, out = supervisor._run(["git", "-C", str(d), "rev-parse", "--is-inside-work-tree"],
+                              timeout=30)
+    if rc != 0 or "true" not in out:
+        return False, (f"{d} is not a git checkout, so there is nothing to pull. Download it again "
+                       f"from GitHub to update.")
+    rc, before = supervisor._run(["git", "-C", str(d), "rev-parse", "--short", "HEAD"], timeout=30)
+    rc, out = supervisor._run(["git", "-C", str(d), "pull", "--ff-only"], timeout=180)
+    if rc != 0:
+        return False, (f"could not update: {out.strip()[-300:]}\n"
+                       f"If this says the branch has diverged, the checkout has local changes.")
+    rc, after = supervisor._run(["git", "-C", str(d), "rev-parse", "--short", "HEAD"], timeout=30)
+    if before.strip() == after.strip():
+        return True, f"already up to date ({after.strip()})"
+    # ⛔ A RUNNING PYTHON PROGRAM DOES NOT PICK UP ITS OWN NEW SOURCE. Saying "updated" and leaving
+    # the old code running is how someone reports a bug that was fixed an hour ago.
+    return True, (f"updated {before.strip()} → {after.strip()}. ⚠ Close and reopen Hazync for the "
+                  f"new version to take effect — a running program keeps the code it started with.")
 
 
 # ── the signing library ──────────────────────────────────────────────────────────────────────────
