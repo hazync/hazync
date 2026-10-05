@@ -216,6 +216,23 @@ def main():
     check("[:160]" not in csrc,
           "and no longer truncates to the first 160 characters, which hid the real error")
 
+    print("── which checks may run themselves ──")
+    # ⭐ Asked directly: "all of these checks should be automatic surely on startup?" -- and for two
+    # of the three the answer is yes. The distinction is COST, so it is asserted rather than left to
+    # whoever edits the list next.
+    auto = supervisor.AUTO_DIAGNOSTICS
+    check("method-id" in auto and "regress" in auto,
+          f"the two cheap checks run automatically ({auto})")
+    check("prove-block" not in auto,
+          "⛔ the 2,875 s prove does NOT — starting it uninvited pins the machine for ~an hour")
+    # ⚠ A timeout is the honest measure of what a check costs. Anything allowed to run at startup
+    # must be bounded by something a person would not notice; this catches a future check being
+    # flagged auto= with an hour-long budget.
+    slow = [d[0] for d in supervisor.DIAGNOSTICS if d[4] and d[3] > 600]
+    check(not slow, f"nothing automatic has a timeout over 10 minutes{f' — {slow}' if slow else ''}")
+    check(all(len(d) == 5 for d in supervisor.DIAGNOSTICS),
+          "every diagnostic declares (name, title, note, timeout, auto)")
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")

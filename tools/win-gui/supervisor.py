@@ -512,15 +512,27 @@ def explain(text):
 
 
 # ── the diagnostics a person would otherwise type by hand ────────────────────────────────────────
+# (name, title, note, timeout, run_automatically)
+#
+# ⭐ THE LAST FIELD IS A COST DECISION, NOT A PREFERENCE. The first two answer in seconds and touch
+# nothing outside this machine, so making a person find and press them is pure friction -- they ran
+# them, in order, every time. The third takes 2,875 s on four CPU cores. Running that at startup
+# would mean the window pins a machine for the better part of an hour before anyone asked it to,
+# which is how a tool gets uninstalled.
+#
+# ⚠ So "should this be automatic" is answered per check, by what it costs, and the window says which
+# is which rather than leaving someone to guess which button is safe to press.
 DIAGNOSTICS = [
     ("method-id", "Is this prover genuine?",
-     "Prints the guest id. Must be the canonical one or every proof is rejected.", 120),
+     "Prints the guest id. Must be the canonical one or every proof is rejected.", 120, True),
     ("regress", "Does consensus work here?",
-     "Replays block 170 through the full consensus path. Seconds, no GPU.", 300),
+     "Replays block 170 through the full consensus path. Seconds, no GPU.", 300, True),
     ("prove-block", "Can it actually prove?",
      "Builds block 170's witness in-process and produces a real STARK receipt. This is the long "
-     "one — 2875 s on four CPU cores; a GPU should be far quicker.", 10800),
+     "one — 2875 s on four CPU cores; a GPU should be far quicker.", 10800, False),
 ]
+
+AUTO_DIAGNOSTICS = [d[0] for d in DIAGNOSTICS if d[4]]
 
 
 def diagnostic_command(host, name):

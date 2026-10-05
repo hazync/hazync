@@ -77,6 +77,7 @@ class App(tk.Tk):
         self.runs, self.meta, self.prog = [], {}, {}
         self._cells = []                 # (item_id, lo, hi, state) for the map
         self._explained = set()          # each known failure explained once, not every line
+        self._auto_diag_done = False     # the cheap checks run once per launch, not on every rescan
         self._build()
         self.after(POLL_MS, self._drain)
         self.after(400, self.refresh)
@@ -239,6 +240,10 @@ class App(tk.Tk):
         self.start_btn.configure(state="normal" if ok else "disabled")
         if not ok:
             self.nb.select(0)
+        # ⚠ Only once setup is READY. Running them against a half-configured machine produces
+        # failures that are about the setup, not the machine, and that is the Setup tab's job to say.
+        if ok:
+            self._auto_diagnostics()
 
     def _run_fix(self, step):
         self.v_setup.set(f"{step.fix_label or 'fixing'}…")
@@ -496,17 +501,26 @@ class App(tk.Tk):
                        "built into the prover — no network, no coordinator, and no block is "
                        "claimed, so nothing here can hold anyone else up.")
                  ).pack(anchor="w", padx=12, pady=(2, 6))
-        drow = tk.Frame(diag, bg=p["mist"])
-        drow.pack(anchor="w", padx=12, pady=(0, 10))
-        self.diag_btns = {}
-        for name, title, note, _timeout in supervisor.DIAGNOSTICS:
-            btn = ttk.Button(drow, text=title, command=lambda n=name: self._diagnose(n))
-            btn.pack(side="left", padx=(0, 8))
+        # ⭐ ONE ROW PER CHECK, EACH WITH ITS OWN RESULT. A single shared status line showed only
+        # whichever check ran last, so three results collapsed into one and the earlier two looked
+        # as though they had never been run.
+        self.diag_btns, self.diag_vars = {}, {}
+        for name, title, note, _timeout, auto in supervisor.DIAGNOSTICS:
+            drow = tk.Frame(diag, bg=p["mist"])
+            drow.pack(fill="x", anchor="w", padx=12, pady=(0, 4))
+            btn = ttk.Button(drow, text=title, width=24,
+                             command=lambda n=name: self._diagnose(n))
+            btn.pack(side="left", padx=(0, 10))
             self.diag_btns[name] = btn
+            var = tk.StringVar(value="runs automatically" if auto else "not run — press when ready")
+            self.diag_vars[name] = var
+            tk.Label(drow, textvariable=var, bg=p["mist"], fg=p["slate"],
+                     font=("Segoe UI", 9), justify="left", wraplength=700, anchor="w"
+                     ).pack(side="left", fill="x", expand=True)
         self.v_diag = tk.StringVar(value="")
         tk.Label(diag, textvariable=self.v_diag, bg=p["mist"], fg=p["ink"],
                  font=("Segoe UI", 9), justify="left", wraplength=920
-                 ).pack(anchor="w", padx=12, pady=(0, 10))
+                 ).pack(anchor="w", padx=12, pady=(4, 10))
 
         logf = self._card(t, "WHAT THE WORKERS ARE DOING")
         logf.pack(fill="both", expand=True, padx=10, pady=8)
@@ -522,16 +536,21 @@ class App(tk.Tk):
             self.log.tag_configure(tag, foreground=p[key])
 
     # ── diagnostics ─────────────────────────────────────────────────────────────────────────────
-    def _diagnose(self, name):
+    def _diagnose(self, name, auto=False, then=None):
+        """Run one diagnostic. `auto` = started by the program, so never interrupt with a dialog."""
         host = self.host_var.get().strip()
         po2 = self.po2.get().strip()
         if not host:
-            messagebox.showinfo("No prover", "Set the prover on the Setup tab first.")
+            # ⛔ A messagebox from the startup path would be a modal nobody asked for, on a window
+            # that has only just opened, about a step the Setup tab is already reporting.
+            if not auto:
+                messagebox.showinfo("No prover", "Set the prover on the Setup tab first.")
             return
-        title = next((t for n, t, _, _ in supervisor.DIAGNOSTICS if n == name), name)
-        timeout = next((to for n, _, _, to in supervisor.DIAGNOSTICS if n == name), 600)
+        title = next((t for n, t, *_ in supervisor.DIAGNOSTICS if n == name), name)
+        timeout = next((d[3] for d in supervisor.DIAGNOSTICS if d[0] == name), 600)
         for b_ in self.diag_btns.values():
             b_.configure(state="disabled")
+        self.diag_vars[name].set("running…")
         self.v_diag.set(f"{title}  — running…")
         self._say(f"[test] {name}: started", "sys")
 
@@ -543,12 +562,13 @@ class App(tk.Tk):
             # second-guessing which backend it should pick.
             rc, out = supervisor._run(supervisor.diagnostic_command(host, name),
                                       env=env, timeout=timeout)
-            self.results.put((self._after_diag, (name, title, rc, out)))
+            self.results.put((self._after_diag, (name, title, rc, out, then)))
         threading.Thread(target=go, daemon=True).start()
 
     def _after_diag(self, args):
-        name, title, rc, out = args
+        name, title, rc, out, then = args
         ok, verdict = supervisor.diagnostic_verdict(name, rc, out)
+        self.diag_vars[name].set(f"{'PASSED' if ok else 'FAILED'}: {verdict}")
         self.v_diag.set(f"{title}  —  {'PASSED' if ok else 'FAILED'}: {verdict}")
         self._say(f"[test] {name}: {'passed' if ok else 'FAILED'} — {verdict}",
                   "proved" if ok else "cuda-error")
@@ -562,6 +582,30 @@ class App(tk.Tk):
                 self._say(f"  ⇒ {why}", "oom")
         for b_ in self.diag_btns.values():
             b_.configure(state="normal")
+        # ⚠ The chain is advanced from HERE, on the main thread, not from the worker thread that ran
+        # the check — self.after() and every widget call are Tk calls, and Tk is main-thread only.
+        if then:
+            then()
+
+    # ⭐ THE CHEAP CHECKS RUN THEMSELVES. Pressing two buttons in a fixed order before every session
+    # is work the program can do, and a person who does not press them gets no answer at all rather
+    # than a wrong one. Only the ones flagged auto= in supervisor.DIAGNOSTICS run here: the third
+    # takes 2,875 s on four CPU cores, and starting that uninvited would pin the machine for the
+    # better part of an hour.
+    def _auto_diagnostics(self):
+        if self._auto_diag_done or not self.host_var.get().strip():
+            return
+        self._auto_diag_done = True
+        queue_ = list(supervisor.AUTO_DIAGNOSTICS)
+
+        def step():
+            if not queue_:
+                return
+            nxt = queue_.pop(0)
+            # ⚠ Sequential, not parallel: both drive the same binary and the same GPU, and two at
+            # once would make a timing-sensitive check answer about a machine under load.
+            self._diagnose(nxt, auto=True, then=step)
+        step()
 
     # ── tab: settings ───────────────────────────────────────────────────────────────────────────
     def _tab_settings(self):
