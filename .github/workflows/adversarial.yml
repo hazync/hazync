@@ -732,6 +732,19 @@ jobs:
         run: |
           cd coordinator
           python3 test_check_disk.py --control
+      - name: A service latched off by its own breaker is noticed, and OnFailure= can actually fire
+        # Two alerting holes measured on hazync-proof 2026-10-05, both invisible to check-unit-drift.
+        # hazync-sponsor-bot latched its breaker on 10-03 and sat idle for TWO DAYS in silence: a
+        # skipped unit reports Result=success, so OnFailure= never runs and nothing is sent. And
+        # hazync-bridge-backfill.service carried OnFailure= inside [Service], where systemd ignores
+        # it outright -- `systemctl show -p OnFailure` was EMPTY, so that unit could never alert at
+        # all. check-unit-drift compares Environment= and ExecStart, not OnFailure= and not which
+        # section a key sits in, so it reported "no drift" over both. This test is the only guard.
+        run: cd coordinator && python3 test_check_breakers.py
+      - name: Breaker check POSITIVE CONTROL (latch test removed — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_check_breakers.py --control
       - name: Tip bundles that never arrive are noticed (hazync-admin#2)
         run: cd coordinator && python3 test_bundle_gap.py
       - name: Bundle gap POSITIVE CONTROL (gap arithmetic removed — must FAIL)

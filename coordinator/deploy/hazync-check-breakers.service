@@ -1,0 +1,28 @@
+# A self-latching breaker file is holding a service off, and nothing else would say so (hazync#1002).
+#
+# hazync-sponsor-bot latched itself off on 2026-10-03 after four HTTP 503s and stayed off for two
+# days in total silence: a skipped unit reports success, so OnFailure= never fires. See
+# hazync-check-breakers.sh for the measurement.
+[Unit]
+Description=Hazync: no service is latched off by its own breaker file
+Wants=network-online.target
+After=network-online.target
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+# ⛔ QUOTED, BECAUSE systemd SPLITS `Environment=` ON WHITESPACE. The same mistake silently halved
+# hazync-check-disk's coverage (see its unit): unquoted, a second path is parsed as a bare word and
+# discarded, and the check still reports success over the one path it kept. Quote it even while
+# there is only one breaker, so adding the second cannot reintroduce that.
+Environment="HAZYNC_BREAKER_PATHS=/var/lib/hazync/sponsor-bot/.failed"
+# ⚠ ONE RUN IS ENOUGH TO BE SURE, unlike df or a network probe. A breaker is a file that is either
+# there or not; there is no flake to ride out, and a second opinion only delays the alert. The
+# re-send throttle in hazync-run-check still keeps it to one notification an hour while it lasts.
+Environment=CHECK_FAILS_BEFORE_ALERT=1
+StateDirectory=hazync-checks
+ExecStart=/usr/local/sbin/hazync-run-check check-breakers /usr/local/sbin/hazync-check-breakers
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=60

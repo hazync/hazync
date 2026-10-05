@@ -1,0 +1,16 @@
+# Every 15 minutes. A latched breaker costs nothing per minute -- the bot it guards is simply idle --
+# but it is a stopped clock, so the cost is however long nobody looks. Two days, measured, the first
+# time. Quarter-hourly makes that two days into fifteen minutes; alert re-sends are throttled to one
+# an hour by hazync-run-check regardless, so this cannot become a pager storm.
+#
+# :06,:21,:36,:51 keeps it clear of the offsite timers at :11 and :41 and check-disk at :49.
+[Unit]
+Description=Check every 15 minutes that no service is latched off by its own breaker
+
+[Timer]
+OnCalendar=*-*-* *:06,21,36,51:00 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
