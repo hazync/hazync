@@ -125,7 +125,16 @@ def apply(root, dark=False):
 
 def self_test():
     """Check the theme applies and that dark really differs from light, without showing a window."""
-    import tkinter as tk
+    # ⛔ A MISSING tkinter IS A REAL FAILURE, NOT A SKIP — this whole program is a Tk window, so a
+    # Python without it cannot run Hazync at all. But say WHICH thing is missing: the first CI run
+    # died on a bare `ModuleNotFoundError: No module named 'tkinter'` after installing only an X
+    # server, which reads as a code fault rather than a one-package environment gap.
+    try:
+        import tkinter as tk
+    except ImportError as e:
+        print(f"  FAIL tkinter is not installed in this Python ({e}). Hazync is a Tk window, so "
+              f"this is fatal, not skippable. On Debian/Ubuntu: apt-get install python3-tk")
+        return 1
     bad = 0
     try:
         root = tk.Tk()

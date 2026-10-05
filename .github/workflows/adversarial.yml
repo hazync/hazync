@@ -335,7 +335,11 @@ jobs:
         # so both get a clock and name themselves when it runs out.
         timeout-minutes: 6
         run: |
-          timeout 180 sudo apt-get install -y -qq xvfb || { echo "xvfb install failed or timed out"; exit 1; }
+          # ⚠ python3-tk AS WELL AS xvfb. The runner's Python has no tkinter at all, so the first
+          # attempt died on `from tkinter import ttk` having installed only an X server — a
+          # display with nothing able to draw on it.
+          timeout 240 sudo apt-get install -y -qq xvfb python3-tk || { echo "install of xvfb/python3-tk failed or timed out"; exit 1; }
+          python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
           cd tools/win-gui && timeout 120 xvfb-run -a python3 theme.py
 
       - name: the Windows fcntl shim states its own contract
