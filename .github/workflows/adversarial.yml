@@ -291,6 +291,43 @@ jobs:
         # drifted from the real asset.
         run: cd tools/win-gui && python3 brand.py
 
+      - name: Hazync.bat launches something that exists
+        # ⛔ It shipped running `py -3 -w`, and there is no -w on the launcher OR on python, so
+        # python printed its usage and exited: a console that flashed and vanished, on the FIRST
+        # branch, which `where py` satisfies on every python.org install. It failed for everybody.
+        # A .bat cannot run on Linux, which is exactly how that shipped — so this reads it as text.
+        run: cd tools/win-gui && python3 test_launcher.py
+      - name: Launcher POSITIVE CONTROL (`py -3 -w` restored — must FAIL)
+        run: cd tools/win-gui && python3 test_launcher.py --control
+
+      - name: HTTPS still works where a chain arrives incomplete
+        # ⛔ Measured on Windows: "unable to get local issuer certificate" because the CROSS-SIGNED
+        # intermediate was missing, not a root. Case 4 fails if verification is ever disabled; case
+        # 8 re-verifies the shipped certificate's SIGNATURE against a certifi anchor; case 9 asserts
+        # that file is TRACKED BY GIT — .gitignore's `*.pem` silently swallowed it once and the fix
+        # reached nobody while every test passed.
+        run: cd tools/win-gui && python3 test_nethttp.py
+      - name: HTTPS POSITIVE CONTROL (naive isinstance cert check — must miss the real shape)
+        run: cd tools/win-gui && python3 test_nethttp.py --control
+
+      - name: a machine is set up from what it IS, and a key is never destroyed
+        # ⛔ A GTX 1050 Ti is compute 6.1 and sppark keeps only >= 7.0, so "it has a GPU, use the
+        # GPU build" sends it to the binary measured to fail on it. And an identity import backs the
+        # existing key up FIRST: losing that file loses the credit for every block proved.
+        run: cd tools/win-gui && python3 test_setup_auto.py
+      - name: Auto-setup POSITIVE CONTROL (capability floor ignored — must send 6.1 to CUDA)
+        run: cd tools/win-gui && python3 test_setup_auto.py --control
+
+      - name: dark mode is actually dark
+        # ⛔ 24 ttk widgets rendered in the OS theme because ttk.Style was never used, so dark mode
+        # was grey Windows chrome on a near-black page. This asserts the two palettes DIFFER.
+        # ⚠ xvfb IS INSTALLED, NOT ASSUMED, and the run is not bare: theme.py SKIPS without a
+        # display, and a skipped test is green — which would make this step prove nothing on the
+        # one machine it runs on.
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+          cd tools/win-gui && xvfb-run -a python3 theme.py
+
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
         # serialisation quietly stopped happening.
