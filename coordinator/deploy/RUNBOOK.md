@@ -345,6 +345,7 @@ the phone once when a check starts failing, at most hourly while it lasts, and o
 | `check-proofs.py` | coordinator | nightly 04:17 UTC | a stored proof no longer hashes to the receipt that was accepted, no longer verifies, or verifies to a different range than its record |
 | `check-unit-drift.sh` | coordinator | nightly 06:10 UTC | a live `*.conf` drop-in, or an `Environment=` key the units actually run with, appears in no repo file and is not listed in `unit-drift-allow.txt` |
 | `hazync-check-disk.sh` | coordinator | hourly :49 UTC | free space on `/srv/bulk` or `/` falls below `HAZYNC_DISK_FLOOR_GB` (500 GB) — ~55 days of warning at the ~9 GB/day a tip-following bridge writes |
+| `hazync-check-breakers.sh` | coordinator | every 15 min :06,:21,:36,:51 UTC | a self-latching breaker file in `HAZYNC_BREAKER_PATHS` exists, meaning the service it guards is off and will stay off until a human deletes it. ⛔ Nothing else reports this: a unit skipped by `ConditionPathExists=` returns `Result=success`, so `OnFailure=` never fires. `hazync-sponsor-bot` latched on 2026-10-03 after four HTTP 503s and sat idle for two days having sent **zero** alerts |
 
 Measured before switching them on (2026-09-15): the genesis proof verifies in 50 ms and its tip hash and chainwork
 matched our node at block 41,539; the continuity walk took 0.24 s over 41,539 blocks with no gaps; one stored proof
@@ -380,6 +381,19 @@ install -m 644 coordinator/deploy/hazync-check-disk.{service,timer} /etc/systemd
 systemctl daemon-reload
 systemctl start hazync-check-disk.service          # first run: read it in the journal
 systemctl enable --now hazync-check-disk.timer
+
+# latched breakers (hazync#1002). ⛔ A SKIPPED UNIT IS NOT A FAILED UNIT, so none of the alerting
+# above can see this. hazync-sponsor-bot latched its own breaker on 2026-10-03 after four HTTP 503s
+# fetching SHA256SUMS.txt -- correct behaviour, it spent nothing -- and then sat idle for two days
+# having sent ZERO alerts, because `ConditionPathExists=` makes the job report success. Both release
+# assets were serving HTTP 200 again long before anyone noticed; the only thing still holding the bot
+# down was the file. This check reports the file and deliberately never clears it: clearing the
+# sponsor bot's breaker resumes real spending, which is a human's call.
+install -m 755 coordinator/deploy/hazync-check-breakers.sh /usr/local/sbin/hazync-check-breakers
+install -m 644 coordinator/deploy/hazync-check-breakers.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl start hazync-check-breakers.service      # first run: read it in the journal
+systemctl enable --now hazync-check-breakers.timer
 
 # bundle pruning (hazync#347). ⛔ INSTALL THE OFFSITE MIRROR FIRST: the caller refuses unless BOTH R2
 # and B2 can be listed, by design -- prune_bundles deletes the files the board serves and the legacy

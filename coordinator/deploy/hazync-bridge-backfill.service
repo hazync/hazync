@@ -31,12 +31,27 @@ Description=Hazync: one-time backfill walk to create checkpoint rungs inside the
 Documentation=https://github.com/hazync/hazync/issues/347
 After=network-online.target bitcoind.service
 Wants=network-online.target
+# ⛔⛔ OnFailure= IS A [Unit] DIRECTIVE. It sat in [Service] here until 2026-10-05, where systemd
+# SILENTLY IGNORES IT: `systemctl show -p OnFailure --value hazync-bridge-backfill` returned EMPTY,
+# so this unit could never alert on its own failure. It was 1 of 23 units in this repo to get it
+# wrong, so there was nothing to compare against locally and notice.
+#
+# ⚠ AND IT PAGED SOMEBODY ANYWAY, BY A ROUTE NOBODY WOULD PREDICT. systemd logs
+# `Unknown key 'OnFailure' in section [Service], ignoring` on EVERY load of a unit -- ~15 a day here.
+# This unit's walk finished 2026-09-20, so those warnings were the only thing it still emitted. After
+# 203 of them they filled the last 200 journal entries that hazync-archive-checkpoint reads looking
+# for `checkpoint @ N`, the height went unfound, and the check exited 2 and alerted hourly. A key in
+# the wrong section became a false alarm on a different unit, sixteen days later.
+#
+# ⛔ check-unit-drift CANNOT SEE THIS. It compares Environment=, ExecStart and the guards -- not
+# OnFailure=, and not which section a key is in. test_check_breakers.py is what holds the line.
+#
+# A oneshot DOES reach `failed`, so the hook itself is right here -- same as every other bundle-side
+# oneshot (check-bundle-gap, prune-bundles). It simply has to be in the section systemd reads.
+OnFailure=hazync-alert@%n.service
 
 [Service]
 Type=oneshot
-# A oneshot DOES reach `failed`, so OnFailure= is the right hook here -- same as every other
-# bundle-side oneshot (check-bundle-gap, prune-bundles).
-OnFailure=hazync-alert@%n.service
 User=hazync
 Group=hazync
 
