@@ -33,6 +33,7 @@ from tkinter import filedialog, messagebox, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import brand  # noqa: E402
+import firstrun  # noqa: E402
 import hazync_api as api  # noqa: E402
 import supervisor  # noqa: E402
 
@@ -53,8 +54,11 @@ class App(tk.Tk):
         self.title("Hazync")
         self.geometry("1040x740")
         self.minsize(900, 620)
-        self.dark = tk.BooleanVar(value=False)
-        self.p = brand.palette(False)
+        # ⛔ SETTINGS MUST SURVIVE A RESTART. Re-typing four paths every launch is its own reason to
+        # give up, and the first version of this window saved nothing at all.
+        self.cfg = firstrun.load_config()
+        self.dark = tk.BooleanVar(value=bool(self.cfg.get("dark")))
+        self.p = brand.palette(self.dark.get())
         self.q = queue.Queue()
         # ⛔ Results from worker threads come back HERE and are applied by _drain on the main
         # thread. Calling self.after() from a thread is itself a Tk call — the same class of
@@ -66,6 +70,7 @@ class App(tk.Tk):
         self._build()
         self.after(POLL_MS, self._drain)
         self.after(400, self.refresh)
+        self.after(700, self.rescan)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── chrome ──────────────────────────────────────────────────────────────────────────────────
@@ -88,6 +93,7 @@ class App(tk.Tk):
 
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="both", expand=True, padx=12, pady=6)
+        self._tab_setup()
         self._tab_dash()
         self._tab_map()
         self._tab_run()
@@ -115,6 +121,168 @@ class App(tk.Tk):
     def _big(self, parent, var):
         return tk.Label(parent, textvariable=var, bg=self.p["mist"], fg=self.p["ink"],
                         font=("Segoe UI", 22, "bold"))
+
+    # ── tab: setup ──────────────────────────────────────────────────────────────────────────────
+    def _tab_setup(self):
+        p = self.p
+        t = tk.Frame(self.nb, bg=p["fog"])
+        self.nb.add(t, text="  Setup  ")
+
+        tk.Label(t, text="Four things, then you can prove.", bg=p["fog"], fg=p["ink"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
+        tk.Label(t, bg=p["fog"], fg=p["slate"], font=("Segoe UI", 9), justify="left",
+                 wraplength=940,
+                 text=("Anything with a button, this program will do for you. The prover binary is "
+                       "the one download it cannot fetch yet — it is not published as a release "
+                       "asset, and GitHub will not serve a build artefact without a login.")
+                 ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        self.steps_frame = tk.Frame(t, bg=p["fog"])
+        self.steps_frame.pack(fill="x", padx=10)
+
+        row = tk.Frame(t, bg=p["fog"])
+        row.pack(fill="x", padx=14, pady=10)
+        ttk.Button(row, text="Check again", command=self.rescan).pack(side="left")
+        self.v_setup = tk.StringVar(value="checking…")
+        tk.Label(row, textvariable=self.v_setup, bg=p["fog"], fg=p["lamp_text"],
+                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=12)
+
+        namef = self._card(t, "WHAT SHOULD THE BOARD CALL YOU?")
+        namef.pack(fill="x", padx=10, pady=8)
+        tk.Label(namef, bg=p["mist"], fg=p["ink"], font=("Segoe UI", 9), justify="left",
+                 wraplength=920,
+                 text=("Every block you prove is credited to this name, publicly and permanently. "
+                       "Without one, the credit goes to a machine-generated label like "
+                       "ghost:a1b2c3. The key that signs it lives in your identity folder — back "
+                       "that file up, because losing it means losing the credit.")
+                 ).pack(anchor="w", padx=12, pady=(2, 6))
+        nrow = tk.Frame(namef, bg=p["mist"])
+        nrow.pack(anchor="w", padx=12, pady=(0, 10))
+        self.handle_var = tk.StringVar(value="")
+        ttk.Entry(nrow, textvariable=self.handle_var, width=26).pack(side="left")
+        ttk.Button(nrow, text="Use this name", command=self._set_handle).pack(side="left", padx=8)
+        self.v_handle = tk.StringVar(value="")
+        tk.Label(nrow, textvariable=self.v_handle, bg=p["mist"], fg=p["slate"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=8)
+
+    def _render_steps(self, steps):
+        p = self.p
+        for w in self.steps_frame.winfo_children():
+            w.destroy()
+        for s in steps:
+            card = tk.Frame(self.steps_frame, bg=p["mist"], highlightbackground=p["haze"],
+                            highlightthickness=1)
+            card.pack(fill="x", pady=3)
+            left = tk.Frame(card, bg=p["mist"])
+            left.pack(side="left", fill="x", expand=True, padx=12, pady=8)
+            tk.Label(left, text=("✓  " if s.done else "•  ") + s.title, bg=p["mist"],
+                     fg=p["good"] if s.done else p["ink"],
+                     font=("Segoe UI", 10, "bold")).pack(anchor="w")
+            tk.Label(left, text=s.detail, bg=p["mist"], fg=p["slate"], font=("Segoe UI", 9),
+                     justify="left", wraplength=760).pack(anchor="w")
+            if s.manual:
+                tk.Label(left, text=s.manual, bg=p["mist"], fg=p["lamp_text"],
+                         font=("Segoe UI", 8), justify="left",
+                         wraplength=760).pack(anchor="w", pady=(2, 0))
+            if not s.done and s.fix:
+                ttk.Button(card, text=s.fix_label or "Fix",
+                           command=lambda st=s: self._run_fix(st)).pack(side="right", padx=12)
+            if s.key == "host" and not s.done:
+                ttk.Button(card, text="Choose host.exe…",
+                           command=self._choose_host).pack(side="right", padx=4)
+                found = firstrun.find_hosts()
+                if found:
+                    ttk.Button(card, text=f"Use the one in {Path(found[0]['path']).parent.name}",
+                               command=lambda pth=found[0]["path"]: self._use_host(pth)
+                               ).pack(side="right", padx=4)
+
+    def rescan(self):
+        self.v_setup.set("checking…")
+        cfg = self._snapshot()
+        threading.Thread(target=self._rescan_thread, args=(cfg,), daemon=True).start()
+
+    def _rescan_thread(self, cfg):
+        steps = firstrun.setup_steps(cfg)
+        self.results.put((self._apply_steps, steps))
+
+    def _apply_steps(self, steps):
+        self._render_steps(steps)
+        self.v_setup.set(firstrun.summarise(steps))
+        for s in steps:
+            if s.key == "identity":
+                self.v_handle.set(s.detail[:48])
+        ok = firstrun.ready(steps)
+        self.start_btn.configure(state="normal" if ok else "disabled")
+        if not ok:
+            self.nb.select(0)
+
+    def _run_fix(self, step):
+        self.v_setup.set(f"{step.fix_label or 'fixing'}…")
+
+        def go():
+            try:
+                ok, detail = step.fix()
+            except Exception as e:
+                ok, detail = False, f"{type(e).__name__}: {e}"
+            self.results.put((self._after_fix, (step.key, ok, detail)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _after_fix(self, args):
+        key, ok, detail = args
+        self._say(f"[setup] {key}: {'done' if ok else 'failed'} — {detail}",
+                  "proved" if ok else "cuda-error")
+        if ok and key == "worker":
+            self.worker_var.set(detail)
+        self._persist()
+        self.rescan()
+
+    def _choose_host(self):
+        p = filedialog.askopenfilename(title="Select host.exe",
+                                       filetypes=[("Windows executable", "*.exe"), ("All", "*.*")])
+        if p:
+            self._use_host(p)
+
+    def _use_host(self, path):
+        self.host_var.set(path)
+        info = supervisor.classify_host(path)
+        self._say(f"[setup] host: {supervisor.host_kind_sentence(info)}",
+                  "proved" if info.get("startable") else "oom")
+        self._persist()
+        self.rescan()
+
+    def _set_handle(self):
+        name = self.handle_var.get().strip()
+        if not name:
+            messagebox.showinfo("A name", "Type the name you want the board to credit.")
+            return
+        cfg = self._snapshot()
+        self.v_handle.set("setting…")
+
+        def go():
+            ok, detail = firstrun.set_handle(cfg["worker"], name, cfg["host"], cfg["identity"],
+                                            cfg["coord"])
+            self.results.put((self._after_handle, (ok, detail)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _after_handle(self, args):
+        ok, detail = args
+        self.v_handle.set(detail[:60])
+        self._say(f"[setup] name: {detail}", "proved" if ok else "cuda-error")
+        self.rescan()
+
+    # ── config ──────────────────────────────────────────────────────────────────────────────────
+    def _snapshot(self):
+        """Every setting, read on the MAIN thread — Tk variables may not be touched elsewhere."""
+        return {"host": self.host_var.get().strip(), "worker": self.worker_var.get().strip(),
+                "identity": self.ident_var.get().strip(), "coord": self.coord_var.get().strip(),
+                "workers": int(self.nworkers.get()), "seg_po2": self.po2.get().strip(),
+                "dark": bool(self.dark.get()), "mode": self.mode.get()}
+
+    def _persist(self):
+        self.cfg = self._snapshot()
+        ok, detail = firstrun.save_config(self.cfg)
+        if not ok:
+            self._say(f"[setup] {detail}", "oom")
 
     # ── tab: dashboard ──────────────────────────────────────────────────────────────────────────
     def _tab_dash(self):
@@ -248,7 +416,7 @@ class App(tk.Tk):
 
         box = self._card(t, "WHAT TO WORK ON")
         box.pack(fill="x", padx=10, pady=10)
-        self.mode = tk.StringVar(value="auto")
+        self.mode = tk.StringVar(value=self.cfg.get("mode") or "auto")
         # ⛔ NO "pick any open block" OPTION, DELIBERATELY. The coordinator owns allocation: it hands
         # out work and tracks claims, and /api/blockstatus deliberately excludes claims because
         # "they change by the second". Letting a user choose an arbitrary open block would hand out
@@ -277,10 +445,10 @@ class App(tk.Tk):
         row = tk.Frame(ctrl, bg=p["mist"])
         row.pack(anchor="w", padx=14, pady=10)
         tk.Label(row, text="workers", bg=p["mist"], fg=p["ink"]).pack(side="left")
-        self.nworkers = tk.IntVar(value=1)
+        self.nworkers = tk.IntVar(value=int(self.cfg.get("workers") or 1))
         ttk.Spinbox(row, from_=1, to=8, width=4, textvariable=self.nworkers).pack(side="left", padx=6)
         tk.Label(row, text="HAZYNC_SEG_PO2", bg=p["mist"], fg=p["ink"]).pack(side="left", padx=(16, 4))
-        self.po2 = tk.StringVar(value="")
+        self.po2 = tk.StringVar(value=self.cfg.get("seg_po2") or "")
         ttk.Entry(row, textvariable=self.po2, width=6).pack(side="left")
         tk.Label(row, text="blank = default; lower uses less VRAM", bg=p["mist"], fg=p["slate"],
                  font=("Segoe UI", 8)).pack(side="left", padx=6)
@@ -310,10 +478,12 @@ class App(tk.Tk):
 
         paths = self._card(t, "WHERE THINGS ARE")
         paths.pack(fill="x", padx=10, pady=10)
-        self.host_var = tk.StringVar(value=self._guess("host.exe"))
-        self.worker_var = tk.StringVar(value=self._guess("hazync-worker"))
-        self.ident_var = tk.StringVar(value=str(Path.home() / ".hazync"))
-        self.coord_var = tk.StringVar(value=api.DEFAULT_COORD)
+        # ⚠ Saved values first, then a guess — so a path chosen once is never asked for again.
+        c = self.cfg
+        self.host_var = tk.StringVar(value=c.get("host") or self._guess("host.exe"))
+        self.worker_var = tk.StringVar(value=c.get("worker") or self._guess("hazync-worker"))
+        self.ident_var = tk.StringVar(value=c.get("identity") or str(firstrun.hazync_home()))
+        self.coord_var = tk.StringVar(value=c.get("coord") or api.DEFAULT_COORD)
         inner = tk.Frame(paths, bg=p["mist"])
         inner.pack(fill="x", padx=12, pady=8)
         for r, (label, var, kind) in enumerate([
@@ -495,7 +665,7 @@ class App(tk.Tk):
             messagebox.showerror("Cannot start", fatal[0].detail)
             self._show_checks([f"{'ok  ' if c.ok else 'FAIL'}  {c.name}: {c.detail}" for c in checks],
                               supervisor.summarise(checks), True)
-            self.nb.select(3)
+            self.nb.select(4)
             return
         mode = self.mode.get()
         extra = ()
@@ -584,6 +754,7 @@ class App(tk.Tk):
         if self.workers and not messagebox.askokcancel(
                 "Quit", f"{len(self.workers)} worker(s) are still running. Stop them and quit?"):
             return
+        self._persist()
         self._stop()
         self.destroy()
 

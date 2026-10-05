@@ -9,6 +9,22 @@ python hazync_gui.py
 Needs Python 3.8+ with `tkinter` (bundled with the python.org installer) and `cryptography`
 (`pip install cryptography` — the worker signs every claim and cannot run without it).
 
+## Getting it onto a Windows machine
+
+```
+git clone --depth 1 --filter=blob:none --sparse -b feat/windows-gui https://github.com/hazync/hazync
+cd hazync
+git sparse-checkout set tools/win-gui
+cd tools/win-gui
+```
+
+Then **double-click `Hazync.bat`**. It finds Python, says what to install if there is none, and opens
+the window with no console behind it.
+
+The **Setup** tab does the rest: it installs the signing library, downloads the client, finds or
+accepts a prover binary, and asks what the board should call you. Everything with a button, it does
+itself.
+
 ## ⛔ Read this first: what is proven and what is not
 
 | | state |
@@ -138,6 +154,30 @@ quick test.
 raises `RuntimeError: main thread is not in main loop`, intermittently, depending on timing.
 Scheduling with `after()` from a thread is the same class of bug. Worker threads now snapshot every
 variable before they start and post results back through a queue drained on the main thread.
+
+## The one thing it cannot fetch for you
+
+`hazync-worker` is a public release asset and downloads with no login (measured: HTTP 200
+unauthenticated), so the Setup tab just gets it. The Windows **prover** is not a release asset — it
+exists only as a CI artifact, and GitHub refuses to serve build artifacts anonymously even for a
+public repository. So that one download stays manual.
+
+`./publish_host_asset.sh` fixes that permanently: it finds the newest successful `windows-prove`
+run, **verifies the embedded guest before publishing anything**, and attaches the binary to a
+clearly-marked prerelease. It is a dry run unless you pass `--publish`, because publishing is
+outward-facing and this project does not cut releases without going through their contents.
+
+## Packaging
+
+`Hazync.bat` removes the terminal. `hazync-gui.spec` removes Python:
+
+```
+pip install pyinstaller
+pyinstaller --clean --noconfirm hazync-gui.spec
+```
+
+⚠ `winshim` ships as a **data file**, not a bundled module — the GUI puts its *directory* on
+`PYTHONPATH` for the worker's separate interpreter, so there has to be a real directory on disk.
 
 ## Not done yet
 

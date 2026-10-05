@@ -269,6 +269,15 @@ jobs:
         # ⛔ Each control is a mistake that already cost this project: proving into guaranteed
         # rejection on a non-canonical binary, and retrying EX_CONFIG for ever.
         run: cd tools/win-gui && python3 test_supervisor.py --control
+      - name: The Windows out-of-the-box setup logic
+        # ⚠ No network: the worker download is only exercised with --live. These are the checks that
+        # keep a setup wizard from lying — a verified download, a startable binary, a real name.
+        run: cd tools/win-gui && python3 test_firstrun.py
+      - name: setup POSITIVE CONTROL (trust a download by size, pick by size, any handle, raw json — must fail)
+        # ⛔ The first one is a bug this caught for real: check_worker accepted a 14 KB HTML error
+        # page, because running HTML as Python exits 1 and that was read as "it ran".
+        run: cd tools/win-gui && python3 test_firstrun.py --control
+
       - name: The coordinator API layer and the block map's geometry
         # ⚠ Offline, on fixtures recorded from the live API. A shape change then shows up as a
         # failing test rather than a quietly empty dashboard.

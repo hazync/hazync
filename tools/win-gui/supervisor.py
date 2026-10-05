@@ -31,9 +31,11 @@ rather than refuse to work", and N workers would then share one GPU with no seri
 a 4 GB card that converts "slow" into "out of memory". ⇒ Default 1, and only raise it once a run has
 shown the lock working.
 """
+import hashlib
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -44,6 +46,16 @@ IS_WINDOWS = os.name == "nt"
 # The canonical guest image id. A binary printing anything else produces proofs the coordinator
 # rejects with EX_CONFIG, so this is the first thing checked and the only one that is fatal.
 CANONICAL_METHOD_ID = "37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd"
+
+# ⭐ The guest is embedded VERBATIM in the host binary, so "is this canonical" can be answered from
+# the FILE — which matters because a CUDA build on a machine with no NVIDIA driver cannot start at
+# all, and "it would not run" says nothing about whether it is genuine.
+# ⛔ THE GUEST IS NOT AN ELF. It is risc0's R0BF container, despite being named *.elf everywhere.
+# Searching for \x7fELF finds 51 coincidental hits in this binary and none of them is the guest.
+# ⛔ And it is not the FIRST R0BF hit either — measured, it was the second.
+GUEST_MAGIC = b"R0BF"
+GUEST_SIZE = 69_980_208
+GUEST_SHA256 = "35e3f55ed873de27f3e06b4452fb9ac80940e02f845b671a0e019cf83735c02f"
 
 EX_CONFIG = 78      # the worker established it can never land anything — STOP, do not retry
 EX_TEMPFAIL = 75    # nothing to claim right now — a busy board, not a fault
@@ -75,6 +87,143 @@ def _run(cmd, env=None, timeout=60):
         return -1, f"could not run {cmd[0]}: {e}"
 
 
+# ── what KIND of host binary is this? ────────────────────────────────────────────────────────────
+#
+# ⛔⛔ WHY THIS MATTERS MORE THAN IT LOOKS. A CUDA-linked host imports `nvcuda.dll`, the CUDA DRIVER
+# api, which ships with the NVIDIA driver and NOT with the CUDA redist. On a machine with no NVIDIA
+# driver, Windows cannot LOAD the image at all — so the exe does not run, and the failure says
+# "command not found" or raises a module error, which reads as a missing or corrupt download.
+#
+# 📏 Measured 2026-10-04: the Windows CUDA host imports exactly 21 DLLs and `nvcuda.dll` is the only
+# CUDA one — `cudart` is statically linked and does not appear. So the import table is the reliable
+# way to tell the builds apart, and it can be read WITHOUT running anything.
+#
+# ⇒ Telling someone "this is the CUDA build and this machine has no NVIDIA driver" is a different
+# and far more useful message than "the binary did not start".
+
+
+def imported_dlls(path):
+    """The DLLs a PE64 imports, read from the file. [] if it is not a PE64 or cannot be parsed."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return []
+    if data[:2] != b"MZ":
+        return []
+    try:
+        pe = struct.unpack_from("<I", data, 0x3C)[0]
+        if data[pe:pe + 4] != b"PE\0\0":
+            return []
+        coff = pe + 4
+        nsec, = struct.unpack_from("<H", data, coff + 2)
+        opt_size, = struct.unpack_from("<H", data, coff + 16)
+        opt = coff + 20
+        if struct.unpack_from("<H", data, opt)[0] != 0x20B:      # PE32+ only
+            return []
+        imp_rva = struct.unpack_from("<I", data, opt + 112 + 8)[0]
+        secs = []
+        st = opt + opt_size
+        for i in range(nsec):
+            o = st + i * 40
+            vsize, vaddr, rawsize, rawptr = struct.unpack_from("<IIII", data, o + 8)
+            secs.append((vaddr, vsize, rawptr, rawsize))
+
+        def off(rva):
+            for vaddr, vsize, rawptr, rawsize in secs:
+                if vaddr <= rva < vaddr + max(vsize, rawsize):
+                    return rawptr + (rva - vaddr)
+            return None
+
+        base, out, i = off(imp_rva), [], 0
+        if base is None:
+            return []
+        while True:
+            f = struct.unpack_from("<IIIII", data, base + i * 20)
+            if not any(f):
+                break
+            no = off(f[3])
+            if no is None:
+                break
+            out.append(data[no:data.index(b"\0", no)].decode("latin1"))
+            i += 1
+        return out
+    except (struct.error, ValueError, IndexError):
+        return []
+
+
+def classify_host(path):
+    """What kind of prover is this, and can it start here? A dict, never an exception.
+
+    Keys: kind ("cuda"/"cpu"/"unknown"), needs_driver, driver_present, dlls, size, startable.
+    """
+    dlls = [d.lower() for d in imported_dlls(path)]
+    cuda = "nvcuda.dll" in dlls
+    driver = driver_present()
+    try:
+        size = Path(path).stat().st_size
+    except OSError:
+        size = 0
+    return {
+        "kind": "cuda" if cuda else ("cpu" if dlls else "unknown"),
+        "needs_driver": cuda,
+        "driver_present": driver,
+        "dlls": dlls,
+        "size": size,
+        # ⚠ "startable" is about LOADING the image, not about proving. A CPU build is startable
+        # everywhere; a CUDA build needs the driver's nvcuda.dll present.
+        "startable": (driver or not cuda) if dlls else None,
+    }
+
+
+def driver_present():
+    """Is an NVIDIA driver installed? ⚠ Not 'is there a GPU' — nvcuda.dll is what loading needs."""
+    if IS_WINDOWS:
+        root = os.environ.get("SystemRoot", r"C:\Windows")
+        if (Path(root) / "System32" / "nvcuda.dll").is_file():
+            return True
+    rc, _ = _run(["nvidia-smi", "-L"], timeout=20)
+    return rc == 0
+
+
+def host_kind_sentence(info):
+    """One sentence a person can act on, from classify_host()."""
+    if info["kind"] == "unknown":
+        return "not a Windows executable this can read — is it the right file?"
+    if info["kind"] == "cpu":
+        return f"the CPU build ({info['size'] / 1e6:.0f} MB) — runs anywhere, slower, no GPU needed"
+    if info["driver_present"]:
+        return f"the CUDA build ({info['size'] / 1e6:.0f} MB) and an NVIDIA driver is present"
+    return (f"the CUDA build ({info['size'] / 1e6:.0f} MB), but NO NVIDIA driver was found. It "
+            f"imports nvcuda.dll, so Windows cannot even load it on this machine — that is not a "
+            f"bad download. Use the CPU build here, or install the NVIDIA driver.")
+
+
+def verify_embedded_guest(path):
+    """(ok, detail) — is the canonical guest embedded in this binary? Reads the file, runs nothing.
+
+    ⚠ This establishes the GUEST, not the image id. The id is computed from the guest, and no
+    MSVC-linked build can recompute it (risc0-zkvm-platform's sys_alloc_aligned is an unresolved
+    external under link.exe), which is exactly why the project carries a second pin for the guest's
+    own sha256.
+    """
+    try:
+        data = Path(path).read_bytes()
+    except OSError as e:
+        return False, f"cannot read it: {e}"
+    start = 0
+    hits = 0
+    while True:
+        i = data.find(GUEST_MAGIC, start)
+        if i < 0:
+            break
+        start, hits = i + 1, hits + 1
+        if i + GUEST_SIZE <= len(data):
+            if hashlib.sha256(data[i:i + GUEST_SIZE]).hexdigest() == GUEST_SHA256:
+                return True, f"canonical guest embedded at offset {i:,} ({GUEST_SIZE:,} bytes)"
+    return False, (f"no embedded {GUEST_SIZE:,}-byte guest matched the pin "
+                   f"({hits} R0BF marker(s) checked)")
+
+
 def check_host_binary(host_path):
     """⛔ THE CHECK THAT MATTERS: does this binary carry the canonical METHOD_ID?
 
@@ -87,16 +236,26 @@ def check_host_binary(host_path):
     host = Path(host_path)
     if not host.is_file():
         return CheckResult("host binary", False, f"no such file: {host}", fatal=True)
+    info = classify_host(host)
     rc, out = _run([str(host), "method-id"], timeout=120)
     if rc != 0:
-        # ⛔ On Windows a CUDA-linked exe that cannot load its driver DLL fails HERE, and the message
-        # is about a missing module rather than anything to do with the guest. Say which it is.
-        hint = ""
-        if rc == 127 or "not found" in out.lower() or "0xc" in out.lower():
-            hint = ("  — this looks like Windows failing to LOAD the exe rather than the exe "
-                    "failing. A CUDA build needs the NVIDIA driver (nvcuda.dll) and "
-                    "cudart64_*.dll beside it.")
-        return CheckResult("host binary", False, f"`method-id` exited {rc}: {out.strip()[:200]}{hint}",
+        # ⛔⛔ A BINARY THAT WILL NOT START IS NOT THE SAME AS A BAD BINARY, and conflating them sent
+        # a real user looking for a corrupt download. A CUDA build imports nvcuda.dll from the
+        # NVIDIA driver; with no driver, Windows cannot load the image at all.
+        # ⇒ Fall back to reading the guest out of the FILE, and report the two facts separately.
+        ok, detail = verify_embedded_guest(host)
+        if info["kind"] == "cuda" and not info["driver_present"]:
+            msg = ("this is the CUDA build and no NVIDIA driver was found, so Windows cannot load "
+                   "it here. " + ("The file itself is genuine — " + detail + ". Use the CPU build "
+                                  "on this machine, or install the NVIDIA driver."
+                                  if ok else "And " + detail + "."))
+            return CheckResult("host binary", False, msg, fatal=True)
+        if ok:
+            return CheckResult("host binary", False,
+                               f"`method-id` exited {rc} so the id could not be read, but the file "
+                               f"is genuine ({detail}). Output: {out.strip()[:120]}", fatal=True)
+        return CheckResult("host binary", False,
+                           f"`method-id` exited {rc} and {detail}. Output: {out.strip()[:140]}",
                            fatal=True)
     m = HEX64.search(out)
     if not m:
@@ -108,7 +267,8 @@ def check_host_binary(host_path):
                            f"METHOD_ID is {got}, NOT the canonical {CANONICAL_METHOD_ID}. "
                            f"Proofs from this binary would be rejected (exit {EX_CONFIG}).",
                            fatal=True)
-    return CheckResult("host binary", True, f"canonical METHOD_ID {got[:16]}…")
+    return CheckResult("host binary", True,
+                       f"canonical METHOD_ID {got[:16]}… — {host_kind_sentence(info)}")
 
 
 def check_gpu():
@@ -143,6 +303,19 @@ def check_worker(worker_path, python_exe=None):
     if not w.is_file():
         return CheckResult("worker", False, f"no such file: {w}", fatal=True)
     py = python_exe or sys.executable
+    # ⛔⛔ CHECK THE CONTENT FIRST. `rc in (0, 1)` was treated as "it ran", and a 14 KB HTML error
+    # page run as Python exits 1 — so a failed download PASSED this check. A GitHub error page is a
+    # perfectly valid file; only its contents say otherwise. Caught by a test that fed one in.
+    try:
+        head = w.read_bytes()[:4096]
+    except OSError as e:
+        return CheckResult("worker", False, f"cannot read {w}: {e}", fatal=True)
+    if not head.startswith(b"#!") or b"import" not in head:
+        return CheckResult("worker", False,
+                           f"{w.name} is not the worker — it does not begin like a Python program "
+                           f"({len(head)} bytes read, starts {head[:28]!r}). A failed download "
+                           f"often leaves an HTML error page with a perfectly ordinary size.",
+                           fatal=True)
     env = worker_env(host_path=None, worker_path=w, identity_dir=None, bundle_dir=None)
     rc, out = _run([py, str(w), "--help"], env=env, timeout=60)
     if rc != 0 and "No module named 'fcntl'" in out:
@@ -150,9 +323,15 @@ def check_worker(worker_path, python_exe=None):
                            "the worker cannot import `fcntl` — the Windows shim is not on "
                            "PYTHONPATH. That is a module-level import, so the worker dies at "
                            "startup rather than degrading.", fatal=True)
-    if rc not in (0, 1):      # `--help` exits 0; a bare invocation exits 1 and both mean "it ran"
-        return CheckResult("worker", False, f"`--help` exited {rc}: {out.strip()[:200]}", fatal=True)
-    return CheckResult("worker", True, f"{w.name} starts and its CLI answers")
+    # ⚠ `--help` exits 0 and must PRINT its own commands. Checking the exit code alone is what let
+    # the error page through; the output has to look like the worker's help.
+    low = (out or "").lower()
+    named = [c for c in ("run", "fold", "prove", "submit", "id") if c in low]
+    if rc != 0 or len(named) < 3:
+        return CheckResult("worker", False,
+                           f"`--help` exited {rc} and did not print the worker's commands "
+                           f"(recognised {named}). Output: {out.strip()[:160]}", fatal=True)
+    return CheckResult("worker", True, f"{w.name} starts and its CLI lists {len(named)} commands")
 
 
 def check_signing_library(python_exe=None):
