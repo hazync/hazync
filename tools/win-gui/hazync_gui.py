@@ -312,7 +312,10 @@ class App(tk.Tk):
         return {"host": self.host_var.get().strip(), "worker": self.worker_var.get().strip(),
                 "identity": self.ident_var.get().strip(), "coord": self.coord_var.get().strip(),
                 "workers": int(self.nworkers.get()), "seg_po2": self.po2.get().strip(),
-                "dark": bool(self.dark.get()), "mode": self.mode.get()}
+                "dark": bool(self.dark.get()), "mode": self.mode.get(),
+                "host_cpu": self.host_cpu_var.get().strip(),
+                "host_cuda": self.host_cuda_var.get().strip(),
+                "build_kind": self.build_kind.get()}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -535,6 +538,47 @@ class App(tk.Tk):
                          ("sys", "slate")):
             self.log.tag_configure(tag, foreground=p[key])
 
+    def _pick_build(self, kind):
+        """Choose a prover for one slot, and CHECK it is the build that slot is for.
+
+        ⛔ The two binaries are both called host.exe and both ~251 MB on this project, so a person
+        cannot tell them apart in a file dialog — measured: two sat side by side differing by 1,024
+        bytes. classify_host reads the import table, so it can say which is which; silently
+        accepting a CUDA build as "the CPU one" would send someone back to the abort they were
+        trying to escape.
+        """
+        path = filedialog.askopenfilename(title=f"Select the {kind.upper()} host.exe",
+                                          filetypes=[("host.exe", "host*.exe"), ("All", "*.*")])
+        if not path:
+            return
+        info = supervisor.classify_host(path)
+        got = info.get("kind", "unknown")
+        (self.host_cpu_var if kind == "cpu" else self.host_cuda_var).set(path)
+        if got != kind and got != "unknown":
+            self.v_build.set(f"⚠ that looks like the {got.upper()} build, not {kind.upper()} — "
+                             f"{supervisor.host_kind_sentence(info)}")
+        else:
+            self.v_build.set(supervisor.host_kind_sentence(info))
+        self.build_kind.set(kind)
+        self._use_build()
+
+    def _use_build(self):
+        """Make the selected slot the active prover."""
+        kind = self.build_kind.get()
+        path = (self.host_cpu_var if kind == "cpu" else self.host_cuda_var).get().strip()
+        if not path:
+            self.v_build.set(f"no {kind.upper()} build chosen yet — press Browse")
+            return
+        self.host_var.set(path)
+        # ⚠ Changing the prover invalidates every check that was about the PREVIOUS binary, so they
+        # are run again rather than left on screen describing a file that is no longer in use.
+        self._auto_diag_done = False
+        for k, var in getattr(self, "diag_vars", {}).items():
+            var.set("not run for this prover yet")
+        self._say(f"[setup] prover: using the {kind.upper()} build — {path}", "sys")
+        self._persist()
+        self.rescan()
+
     # ── diagnostics ─────────────────────────────────────────────────────────────────────────────
     def _diagnose(self, name, auto=False, then=None):
         """Run one diagnostic. `auto` = started by the program, so never interrupt with a dialog."""
@@ -618,6 +662,12 @@ class App(tk.Tk):
         # ⚠ Saved values first, then a guess — so a path chosen once is never asked for again.
         c = self.cfg
         self.host_var = tk.StringVar(value=c.get("host") or self._guess("host.exe"))
+        # ⭐ TWO PROVERS, REMEMBERED SEPARATELY. A machine that can run CUDA at all still needs the
+        # CPU build when the GPU is below sppark's floor (hazync#631), so switching between them is
+        # a normal thing to do — not a reason to go and find a path again. Re-typing one is how a
+        # person ends up proving with whichever binary happened to be in the box.
+        self.host_cpu_var = tk.StringVar(value=c.get("host_cpu") or "")
+        self.host_cuda_var = tk.StringVar(value=c.get("host_cuda") or "")
         self.worker_var = tk.StringVar(value=c.get("worker") or self._guess("hazync-worker"))
         self.ident_var = tk.StringVar(value=c.get("identity") or str(firstrun.hazync_home()))
         self.coord_var = tk.StringVar(value=c.get("coord") or api.DEFAULT_COORD)
@@ -636,6 +686,32 @@ class App(tk.Tk):
                            command=lambda v=var, d=(kind == "dir"): self._browse(v, d)
                            ).grid(row=r, column=2, padx=6)
         inner.columnconfigure(1, weight=1)
+
+        build = self._card(t, "WHICH PROVER TO USE")
+        build.pack(fill="x", padx=10, pady=4)
+        tk.Label(build, justify="left", wraplength=920, bg=p["mist"], fg=p["ink"],
+                 font=("Segoe UI", 9),
+                 text=("Keep both and switch. The GPU build only works on a card sppark will "
+                       "accept — compute capability 7.0 or newer; an older card is rejected with "
+                       "\u201cno CUDA-capable device is detected\u201d however much VRAM it has. "
+                       "The CPU build works anywhere and is slow.")
+                 ).pack(anchor="w", padx=12, pady=(2, 6))
+        bi = tk.Frame(build, bg=p["mist"])
+        bi.pack(fill="x", padx=12, pady=(0, 10))
+        self.build_kind = tk.StringVar(value=c.get("build_kind") or "")
+        for r, (kind, label, var) in enumerate([
+                ("cpu", "CPU build  (always works)", self.host_cpu_var),
+                ("cuda", "GPU build  (CUDA)", self.host_cuda_var)]):
+            ttk.Radiobutton(bi, text=label, value=kind, variable=self.build_kind,
+                            command=self._use_build).grid(row=r, column=0, sticky="w", pady=3)
+            ttk.Entry(bi, textvariable=var, width=62).grid(row=r, column=1, sticky="we", padx=8)
+            ttk.Button(bi, text="Browse\u2026",
+                       command=lambda k=kind: self._pick_build(k)).grid(row=r, column=2)
+        bi.columnconfigure(1, weight=1)
+        self.v_build = tk.StringVar(value="")
+        tk.Label(build, textvariable=self.v_build, bg=p["mist"], fg=p["slate"],
+                 font=("Segoe UI", 9), justify="left", wraplength=920
+                 ).pack(anchor="w", padx=12, pady=(0, 8))
 
         ident = self._card(t, "YOUR IDENTITY")
         ident.pack(fill="x", padx=10, pady=4)
