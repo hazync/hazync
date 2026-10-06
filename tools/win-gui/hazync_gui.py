@@ -494,6 +494,11 @@ class App(tk.Tk):
              "asks for the next block that needs proving, claims it, proves it, submits it"),
             ("range", "A specific range",
              "only if you were asked to — the coordinator still has to agree you may claim it"),
+            ("spine", "Help the spine (absorb)",
+             "⭐ the ONE serial job, and nothing else can do it. Only the leftmost range can be "
+             "anchored, so this is what turns proven work into chain anchored back to genesis — "
+             "and it is CHEAP: it folds two receipts and checks a seam, it does not re-prove. "
+             "Whoever runs it is a liveness single point of failure, never a soundness one."),
             ("fold", "Fold instead of prove",
              "combines adjacent proofs into ranges; this is what builds the spine"),
         ]:
@@ -1054,6 +1059,12 @@ class App(tk.Tk):
         job = "run"
         if mode == "fold":
             job = "fold"
+        elif mode == "spine":
+            # ⛔⛔ THE JOB THE BOARD WAS MISSING. Measured 2026-10-06: the spine had not advanced
+            # for 20.4 h with proof 136,432 waiting and 7,746 blocks of proven work above it,
+            # because nobody was running this — the window offered prove, a range and fold, and
+            # not the one serial job that anchors any of it.
+            job = "spine"
         elif mode == "range":
             rng = self.range_var.get().strip()
             if not rng:
