@@ -21,8 +21,8 @@
 #
 # EXIT CODES, matching the other integrity checks so hazync-run-check can alert on it:
 #   0  the bridge advanced within the window
-#   1  it did NOT advance -- a stall
-#   2  could not check (not running, no journal, no checkpoint lines yet)
+#   1  it did NOT advance -- a stall, or a start WEDGED in `activating` (which can never fail)
+#   2  could not check (stopped, no journal, no checkpoint lines yet, still legitimately starting)
 set -uo pipefail
 
 UNIT="${HAZYNC_BRIDGE_UNIT:-hazync-bridge}"
@@ -40,11 +40,50 @@ STALL_S="${HAZYNC_BRIDGE_STALL_S:-4200}"        # 70 min ~= 3 checkpoint interva
 
 say() { echo "$*"; }
 
-if ! systemctl is-active --quiet "$UNIT"; then
-    # ⛔ NOT RUNNING IS NOT "STALLED", AND IT IS NOT "FINE" EITHER. A deliberate stop is a human
-    # decision the alerter should not second-guess; a crash is already covered by alert.conf. Either
-    # way this check cannot answer its own question, and saying so is the honest outcome.
-    say "cannot check: $UNIT is not active ($(systemctl is-active "$UNIT" 2>/dev/null))"
+# ⛔⛔ "NOT ACTIVE" HIDES TWO VERY DIFFERENT THINGS AND ONE OF THEM IS A SILENT OUTAGE. A deliberate
+# stop is a human decision the alerter should not second-guess, and a crash is already covered by
+# alert.conf. A unit WEDGED IN `activating` is neither. hazync-bridge has TimeoutStartUSec=infinity
+# and an ExecStartPre that loops `until bitcoin-cli getblockcount`, so while the node is down the
+# bridge waits FOR EVER: it never becomes `failed`, so OnFailure= cannot fire, and it is not
+# `active`, so this check used to stand down with exit 2 -- which hazync-run-check turns into 0.
+# Measured 2026-10-06: the node came back from a reboot DISABLED, the bridge sat in start-pre, bundle
+# production was stopped, and every signal in the system still said success.
+ACTIVATING_S="${HAZYNC_BRIDGE_ACTIVATING_S:-1800}"   # 30 min; a healthy start is seconds to minutes
+
+act="$(systemctl is-active "$UNIT" 2>/dev/null)"
+
+if [ "$act" = "activating" ]; then
+    # ⚠ MONOTONIC, NOT WALL CLOCK. A box wedged in start-pre has usually just rebooted, which is
+    # exactly when the clock is most likely to step, and a backwards step must not make a start that
+    # has hung for an hour look fresh.
+    since_us="$(systemctl show "$UNIT" -p InactiveExitTimestampMonotonic --value 2>/dev/null)"
+    now_us="$(awk '{printf "%d", $1 * 1000000}' /proc/uptime 2>/dev/null)"
+    # ⛔ VALIDATE, DO NOT STRIP. `tr -dc '0-9'` turns "-6500000000" into 6500000000 -- a silent sign
+    # flip that INVENTS an age out of a value that made no sense. Reject a non-numeric answer and
+    # fall through to "cannot check" instead.
+    case "$since_us" in ''|*[!0-9]*) since_us="" ;; esac
+    case "$now_us"   in ''|*[!0-9]*) now_us=""   ;; esac
+    if [ -n "$since_us" ] && [ -n "$now_us" ] && [ "$since_us" -gt 0 ] && [ "$now_us" -ge "$since_us" ]; then
+        act_age=$(( (now_us - since_us) / 1000000 ))
+        # ⚠ HAZYNC_BRIDGE_NO_ACTIVATING_GUARD exists ONLY for test-bridge-progress.sh --control.
+        if [ "${HAZYNC_BRIDGE_NO_ACTIVATING_GUARD:-0}" != "1" ] && [ "$act_age" -gt "$ACTIVATING_S" ]; then
+            say "WEDGED: $UNIT has been 'activating' for $((act_age / 60)) min (limit $((ACTIVATING_S / 60)) min).
+It is NOT running, it emits nothing, and it will never fail by itself — so nothing else will page.
+Its ExecStartPre is almost always waiting on something that is down; check the node FIRST:
+  systemctl is-active bitcoind; systemctl is-enabled bitcoind
+  systemctl show $UNIT -p ExecStartPre --value
+  journalctl -u $UNIT -n 20 --no-pager"
+            exit 1
+        fi
+        say "cannot check: $UNIT is still starting (${act_age}s so far, wedged at $((ACTIVATING_S / 60))m)"
+        exit 2
+    fi
+    say "cannot check: $UNIT is $act and its start timestamp could not be read"
+    exit 2
+fi
+
+if [ "$act" != "active" ]; then
+    say "cannot check: $UNIT is not active ($act)"
     exit 2
 fi
 
