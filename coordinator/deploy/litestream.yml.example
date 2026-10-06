@@ -4,6 +4,20 @@
 # Restore (into a scratch path; never over the live database while the coordinator runs):
 #   runuser -u hazync -- litestream restore -config /etc/litestream.yml -o /var/lib/hazync/restore-test/coordinator.db /var/lib/hazync/coordinator.db
 #   sqlite3 /var/lib/hazync/restore-test/coordinator.db 'PRAGMA integrity_check'
+# ⛔⛔ TOP LEVEL, AND IT IS SILENTLY IGNORED ANYWHERE ELSE. Litestream 0.5.x checks L0 retention
+# every 15 s by default, which on R2 earned HTTP 429 "reduce your concurrent request rate" 18 times
+# in 24 h against 3,473 enforcements (measured 2026-10-06). Each failure left the ledger copy
+# looking ~20 min stale, so the on-call phone was woken by RATE LIMITING, not by a backup problem.
+#
+# ⚠ PUT IT UNDER `dbs: - path:` AND NOTHING HAPPENS. The config still parses, litestream still
+# starts, and the monitor goes on using 15 s — measured, that is exactly what the first attempt did.
+# The ONLY honest confirmation is litestream's own startup line:
+#
+#     msg="starting L0 retention monitor" system=store interval=15m0s retention=5m0s
+#
+# ⚠ This changes how OFTEN retention is enforced, not WHAT is kept: `retention` is untouched.
+l0-retention-check-interval: 15m
+
 logging:
   level: info
 snapshot:

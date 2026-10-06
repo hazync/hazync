@@ -1,0 +1,13 @@
+# Every 20 minutes. The alert threshold is 2 h, so this only decides how precisely the idle period
+# is measured, not how fast it pages. :03,:23,:43 keeps clear of the offsite timers (:11, :41),
+# check-disk (:49) and the breaker check (:06,:21,:36,:51).
+[Unit]
+Description=Check every 20 minutes that work is still landing on the board
+
+[Timer]
+OnCalendar=*-*-* *:03,23,43:00 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

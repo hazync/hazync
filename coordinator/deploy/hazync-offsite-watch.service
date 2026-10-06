@@ -10,6 +10,13 @@ ExecStart=/usr/local/sbin/hazync-offsite-watch watch
 # Root reads the root-only Litestream config and the journal. State (last alert times, journal cursor)
 # lives in /var/lib/hazync-offsite.
 StateDirectory=hazync-offsite
+# ⚠ 30 min, not the 15 min default. Measured 2026-10-06: litestream was being rate-limited by
+# R2 (18x HTTP 429 in 24 h on ListObjectsV2), and each failure left the ledger copy looking
+# ~20 min stale — so the phone was woken by RATE LIMITING, not by a backup problem. The
+# cause is treated separately (l0-retention-check-interval 15s -> 15m); this stops a single
+# throttled cycle paging anyone. ⛔ It must stay well under the hourly mirror, or a genuinely
+# stuck Litestream would go unnoticed between runs.
+Environment=OFFSITE_LAG_ALERT_SECS=1800
 Environment=HOME=/var/lib/hazync-offsite
 TimeoutStartSec=5min
 Nice=10

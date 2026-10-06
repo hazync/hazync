@@ -1,0 +1,26 @@
+# Nobody is proving, while there is work to prove (hazync#1003).
+#
+# ⛔⛔ On 2026-10-06 the board sat idle for EIGHT HOURS and nothing said so. Every other check was
+# green and correctly so: the coordinator was healthy, the API served, the stored proofs verified,
+# the genesis proof was intact. None of them asks whether any work is actually LANDING.
+[Unit]
+Description=Hazync: work is still landing on the board
+Wants=network-online.target
+After=network-online.target hazync-coordinator.service
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+Environment=COORD_URL=http://127.0.0.1:8899
+# ⚠ 2 h, not 20 minutes. Contributors are volunteers on rented cards and a quiet patch is normal;
+# a check that pages on every gap gets muted, and a muted check is worse than none. Eight hours is
+# the gap this was written for, so two is early without being noisy.
+Environment=BOARD_IDLE_ALERT_SECS=7200
+# One run is not enough: a single slow /api/state should not page anyone.
+Environment=CHECK_FAILS_BEFORE_ALERT=2
+StateDirectory=hazync-checks
+ExecStart=/usr/local/sbin/hazync-run-check check-board-progress /usr/local/sbin/hazync-check-board-progress
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=90

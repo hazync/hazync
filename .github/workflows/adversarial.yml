@@ -818,6 +818,15 @@ jobs:
         run: |
           cd coordinator
           python3 test_check_disk.py --control
+      - name: an idle board is noticed, and a finished one is not
+        # ⛔⛔ On 2026-10-06 the board sat idle for EIGHT HOURS and nothing said so — it was noticed
+        # by a person looking at a chart. Every other check was green and correctly so; none of them
+        # asks whether work is LANDING. The control stamps the idle clock on every run, which is the
+        # obvious way to write this and makes the check unable to ever fire.
+        run: cd coordinator && python3 test_board_progress.py
+      - name: Board liveness POSITIVE CONTROL (clock reset every run — must never fire)
+        run: cd coordinator && python3 test_board_progress.py --control
+
       - name: A service latched off by its own breaker is noticed, and OnFailure= can actually fire
         # Two alerting holes measured on hazync-proof 2026-10-05, both invisible to check-unit-drift.
         # hazync-sponsor-bot latched its breaker on 10-03 and sat idle for TWO DAYS in silence: a
