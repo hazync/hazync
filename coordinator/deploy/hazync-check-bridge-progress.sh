@@ -56,8 +56,13 @@ if [ "$act" = "activating" ]; then
     # ⚠ MONOTONIC, NOT WALL CLOCK. A box wedged in start-pre has usually just rebooted, which is
     # exactly when the clock is most likely to step, and a backwards step must not make a start that
     # has hung for an hour look fresh.
-    since_us="$(systemctl show "$UNIT" -p InactiveExitTimestampMonotonic --value 2>/dev/null | tr -dc '0-9')"
-    now_us="$(awk '{printf "%d", $1 * 1000000}' /proc/uptime 2>/dev/null | tr -dc '0-9')"
+    since_us="$(systemctl show "$UNIT" -p InactiveExitTimestampMonotonic --value 2>/dev/null)"
+    now_us="$(awk '{printf "%d", $1 * 1000000}' /proc/uptime 2>/dev/null)"
+    # ⛔ VALIDATE, DO NOT STRIP. `tr -dc '0-9'` turns "-6500000000" into 6500000000 -- a silent sign
+    # flip that INVENTS an age out of a value that made no sense. Reject a non-numeric answer and
+    # fall through to "cannot check" instead.
+    case "$since_us" in ''|*[!0-9]*) since_us="" ;; esac
+    case "$now_us"   in ''|*[!0-9]*) now_us=""   ;; esac
     if [ -n "$since_us" ] && [ -n "$now_us" ] && [ "$since_us" -gt 0 ] && [ "$now_us" -ge "$since_us" ]; then
         act_age=$(( (now_us - since_us) / 1000000 ))
         # ⚠ HAZYNC_BRIDGE_NO_ACTIVATING_GUARD exists ONLY for test-bridge-progress.sh --control.

@@ -19,11 +19,20 @@ STUB="$(mktemp -d)"; trap 'rm -rf "$STUB"' EXIT
 mkstub() {  # $1=unit-active (yes|no|activating:AGE_S) $2=checkpoint-age-seconds ("none" for no line)
   # ⚠ `activating:AGE` answers InactiveExitTimestampMonotonic derived from the REAL /proc/uptime, so
   # the wedge test drives the check's own monotonic arithmetic instead of a parallel copy of it.
-  _state=active; _mono=0
+  #
+  # ⛔⛔ AND THAT MAKES THE RUNNER'S UPTIME A HARD LIMIT ON WHAT THIS CAN EXPRESS. A fresh CI runner
+  # has been up for minutes, so `uptime - 7200` is NEGATIVE; the check's own sanity guard rejects it
+  # and the case fails for a reason with nothing to do with the code under test. It passed on a
+  # workstation up for 393 hours and failed on the first runner. ⇒ Keep the AGES SMALL and move the
+  # THRESHOLD (HAZYNC_BRIDGE_ACTIVATING_S) instead -- and if even that will not fit, say so in those
+  # words rather than reporting a mysterious wrong exit code.
+  _state=active; _mono=0; _uptime_ok=1
   case "$1" in
       no)           _state=inactive ;;
       activating:*) _state=activating
-                    _mono="$(awk -v a="${1#activating:}" '{printf "%d", ($1 - a) * 1000000}' /proc/uptime)" ;;
+                    _age="${1#activating:}"
+                    _uptime_ok="$(awk -v a="$_age" '{print ($1 > a + 5) ? 1 : 0}' /proc/uptime)"
+                    _mono="$(awk -v a="$_age" '{printf "%d", ($1 - a) * 1000000}' /proc/uptime)" ;;
   esac
   cat > "$STUB/systemctl" <<SH
 #!/usr/bin/env bash
@@ -44,7 +53,7 @@ SH
 
 # A node that reports `tip`, so the positional test can be reached.
 mknode() { printf '#!/usr/bin/env bash\necho %s\n' "$1" > "$STUB/bitcoin-cli"; chmod +x "$STUB/bitcoin-cli"; }
-run() { PATH="$STUB:$PATH" bash "$CHK" >/dev/null 2>&1; echo $?; }
+run() { PATH="$STUB:$PATH" HAZYNC_BRIDGE_ACTIVATING_S="${ACT_S:-1800}" bash "$CHK" >/dev/null 2>&1; echo $?; }
 
 # 1. healthy: checkpointed 5 minutes ago
 mkstub yes 300
@@ -120,22 +129,29 @@ fi
 # looping on a node that was down = `activating` for ever. Never `failed`, so OnFailure= cannot fire;
 # never `active`, so this check stood down. Nothing in the system was unhappy.
 
-# 10. ⛔ wedged in `activating` for 2 hours — AND with a FRESH checkpoint, to prove the wedge is
-#     judged before the stall test and recent progress cannot mask a unit that is not running.
-mkstub activating:7200 300
-rc=$(run)
-if [ "$CONTROL" = 1 ]; then
-    [ "$rc" = 1 ] && bad "CONTROL DID NOT FAIL: a 2-hour wedge was still detected" \
-                  || ok "control: with the guard removed a wedged start is missed (exit $rc)"
+# 10. ⛔ wedged in `activating` past the limit — AND with a FRESH checkpoint, to prove the wedge is
+#     judged before the stall test so recent progress cannot mask a unit that is not running.
+ACT_S=2; mkstub activating:10 300
+if [ "$_uptime_ok" != 1 ]; then
+    bad "cannot express the wedge case: this machine has only been up $(awk '{printf "%d", $1}' /proc/uptime)s"
 else
-    [ "$rc" = 1 ] && ok "a 2-hour wedged start exits 1, despite a 5-minute-old checkpoint" \
-                  || bad "wedged start exited $rc, expected 1"
+    rc=$(run)
+    if [ "$CONTROL" = 1 ]; then
+        [ "$rc" = 1 ] && bad "CONTROL DID NOT FAIL: a wedged start was still detected" \
+                      || ok "control: with the guard removed a wedged start is missed (exit $rc)"
+    else
+        [ "$rc" = 1 ] && ok "a start wedged past the limit exits 1, despite a 5-minute-old checkpoint" \
+                      || bad "wedged start exited $rc, expected 1"
+    fi
 fi
 
 # 11. ⚠ AND IT MUST NOT CRY WOLF ON AN HONEST START. Resuming from a 21 GB state file legitimately
-#     spends minutes in `activating`; only a start that has outlived the limit is a wedge.
-mkstub activating:60 300
-rc=$(run); [ "$rc" = 2 ] && ok "a 60-second-old start exits 2, not 1" || bad "fresh start exited $rc, expected 2"
+#     spends minutes in `activating`; only a start that has outlived the limit is a wedge. Same stub
+#     as case 10 — only the THRESHOLD moves, which is the entire difference between the two.
+ACT_S=3600; mkstub activating:10 300
+rc=$(run); [ "$rc" = 2 ] && ok "a start well inside the limit exits 2, not 1" \
+                         || bad "a start inside the limit exited $rc, expected 2"
+ACT_S=1800
 
 [ "$fails" = 0 ] && { echo; echo "bridge-progress check behaves on every path"; exit 0; }
 echo; echo "$fails case(s) wrong"; exit 1
