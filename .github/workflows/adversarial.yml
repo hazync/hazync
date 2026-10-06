@@ -43,6 +43,11 @@ jobs:
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
     runs-on: ubuntu-latest
+    # ⚠ A JOB WITH NO CEILING CANNOT REPORT A HANG — it can only disappear. There was no
+    # timeout-minutes anywhere in this workflow, so the default was 360 minutes, and a stuck step
+    # showed up as a cancelled job with no steps and no log. Measured at ~3 minutes before
+    # 2026-10-05; 30 leaves room for a slow runner while still turning a stall into a verdict.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -260,6 +265,87 @@ jobs:
         # would have been fooled. ⛔ Note the fourth one — a greedy 64-hex grep of
         # reproduce/GUEST_ELF_SHA256 returns METHOD_ID out of the prose, not the pin.
         run: python3 scripts/embedded_guest_sha.py --control
+
+      - name: The Windows GUI's supervisor logic (headless — no display, no GPU, no Windows)
+        # ⚠ The LOGIC is tested, not the window. A supervisor whose only entry point is a GUI
+        # cannot be tested on a build box, which is why tools/win-gui is split in two.
+        run: cd tools/win-gui && python3 test_supervisor.py
+      - name: win-gui POSITIVE CONTROL (accept any 64-hex id, retry EX_CONFIG, unconditional shim — must fail)
+        # ⛔ Each control is a mistake that already cost this project: proving into guaranteed
+        # rejection on a non-canonical binary, and retrying EX_CONFIG for ever.
+        run: cd tools/win-gui && python3 test_supervisor.py --control
+      - name: The Windows out-of-the-box setup logic
+        # ⚠ No network: the worker download is only exercised with --live. These are the checks that
+        # keep a setup wizard from lying — a verified download, a startable binary, a real name.
+        run: cd tools/win-gui && python3 test_firstrun.py
+      - name: setup POSITIVE CONTROL (trust a download by size, pick by size, any handle, raw json — must fail)
+        # ⛔ The first one is a bug this caught for real: check_worker accepted a 14 KB HTML error
+        # page, because running HTML as Python exits 1 and that was read as "it ran".
+        run: cd tools/win-gui && python3 test_firstrun.py --control
+
+      - name: The coordinator API layer and the block map's geometry
+        # ⚠ Offline, on fixtures recorded from the live API. A shape change then shows up as a
+        # failing test rather than a quietly empty dashboard.
+        run: cd tools/win-gui && python3 test_api.py
+      - name: block-map POSITIVE CONTROL (unclipped gaps, best-state buckets, newest-first — must fail)
+        # ⛔ The unclipped-gap one is a real bug this caught: it reported 826,567 open blocks below a
+        # frontier of 142,140, which is impossible on its face.
+        run: cd tools/win-gui && python3 test_api.py --control
+      - name: the GUI's colours and logo still match hazync.org
+        # ⚠ brand.py reproduces /favicon.svg as Canvas primitives; this asserts the geometry has not
+        # drifted from the real asset.
+        run: cd tools/win-gui && python3 brand.py
+
+      - name: Hazync.bat launches something that exists
+        # ⛔ It shipped running `py -3 -w`, and there is no -w on the launcher OR on python, so
+        # python printed its usage and exited: a console that flashed and vanished, on the FIRST
+        # branch, which `where py` satisfies on every python.org install. It failed for everybody.
+        # A .bat cannot run on Linux, which is exactly how that shipped — so this reads it as text.
+        run: cd tools/win-gui && python3 test_launcher.py
+      - name: Launcher POSITIVE CONTROL (`py -3 -w` restored — must FAIL)
+        run: cd tools/win-gui && python3 test_launcher.py --control
+
+      - name: HTTPS still works where a chain arrives incomplete
+        # ⛔ Measured on Windows: "unable to get local issuer certificate" because the CROSS-SIGNED
+        # intermediate was missing, not a root. Case 4 fails if verification is ever disabled; case
+        # 8 re-verifies the shipped certificate's SIGNATURE against a certifi anchor; case 9 asserts
+        # that file is TRACKED BY GIT — .gitignore's `*.pem` silently swallowed it once and the fix
+        # reached nobody while every test passed.
+        run: cd tools/win-gui && python3 test_nethttp.py
+      - name: HTTPS POSITIVE CONTROL (naive isinstance cert check — must miss the real shape)
+        run: cd tools/win-gui && python3 test_nethttp.py --control
+
+      - name: a machine is set up from what it IS, and a key is never destroyed
+        # ⛔ A GTX 1050 Ti is compute 6.1 and sppark keeps only >= 7.0, so "it has a GPU, use the
+        # GPU build" sends it to the binary measured to fail on it. And an identity import backs the
+        # existing key up FIRST: losing that file loses the credit for every block proved.
+        run: cd tools/win-gui && python3 test_setup_auto.py
+      - name: Auto-setup POSITIVE CONTROL (capability floor ignored — must send 6.1 to CUDA)
+        run: cd tools/win-gui && python3 test_setup_auto.py --control
+
+      - name: dark mode is actually dark
+        # ⛔ 24 ttk widgets rendered in the OS theme because ttk.Style was never used, so dark mode
+        # was grey Windows chrome on a near-black page. This asserts the two palettes DIFFER.
+        # ⚠ xvfb IS INSTALLED, NOT ASSUMED, and the run is not bare: theme.py SKIPS without a
+        # display, and a skipped test is green — which would make this step prove nothing on the
+        # one machine it runs on.
+        # ⛔ BOUNDED, BOTH HALVES. This job was cancelled 15 minutes in with NO failed step and no
+        # log retained, and working out which step it was cost more than the step is worth. apt and
+        # an X server are the two things here that can sit waiting on something outside this repo,
+        # so both get a clock and name themselves when it runs out.
+        timeout-minutes: 6
+        run: |
+          # ⚠ python3-tk AS WELL AS xvfb. The runner's Python has no tkinter at all, so the first
+          # attempt died on `from tkinter import ttk` having installed only an X server — a
+          # display with nothing able to draw on it.
+          timeout 240 sudo apt-get install -y -qq xvfb python3-tk || { echo "install of xvfb/python3-tk failed or timed out"; exit 1; }
+          python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
+          cd tools/win-gui && timeout 120 xvfb-run -a python3 theme.py
+
+      - name: the Windows fcntl shim states its own contract
+        # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
+        # serialisation quietly stopped happening.
+        run: cd tools/win-gui/winshim && python3 fcntl.py
 
       - name: "#550's tail-vs-bandwidth comparison is actually REACHED by the CLI"
         # ⛔⛔ THE BUG: tail_ranking, tail_cut and cut_agreement shipped with ZERO callers — not in

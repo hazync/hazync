@@ -55,6 +55,12 @@ fuzz-native/build-asan/
 # once and is burned for ever.
 *.key
 *.pem
+# ⛔ EXCEPT the CA intermediates the Windows GUI ships. `*.pem` is here for KEYS, and it silently
+# swallowed tools/win-gui/extra-chain.pem: `git add -A` skips an ignored path without a word, the
+# commit looked complete, local tests passed against the copy on disk, and the fix reached nobody.
+# This file is a PUBLIC certificate -- no private key -- and test_nethttp.py verifies its signature
+# and asserts it is tracked by git, so it cannot silently vanish again.
+!tools/win-gui/extra-chain.pem
 id_ed25519
 id_ed25519.pub
 id_rsa
