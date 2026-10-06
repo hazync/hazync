@@ -383,6 +383,32 @@ systemctl daemon-reload
 systemctl start hazync-check-disk.service          # first run: read it in the journal
 systemctl enable --now hazync-check-disk.timer
 
+# is anybody proving? (hazync#650). ⛔ EVERY OTHER CHECK ASKS WHETHER A SERVICE IS UP, NOT WHETHER
+# WORK IS LANDING. On 2026-10-06 the board sat idle for eight hours with all of the above green.
+# ⚠ Deliberately silent when nothing is claimable: an idle board with no work is finished, not broken.
+install -m 755 coordinator/deploy/hazync-check-board-progress.sh /usr/local/sbin/hazync-check-board-progress
+install -m 644 coordinator/deploy/hazync-check-board-progress.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl start hazync-check-board-progress.service   # first run: read it in the journal
+systemctl enable --now hazync-check-board-progress.timer
+
+# ⛔⛔ AND REMEMBER THAT hazync-check-unit-drift CANNOT TELL YOU THIS STEP IS OUTSTANDING. It asks
+# whether the box runs config missing from the repo -- the opposite direction. Repo config that has
+# been merged but NOT YET INSTALLED is invisible to it: on 2026-10-06 it reported "no drift: 33
+# unit(s) checked, all declared in this repo" on a box whose hazync-offsite-watch.service was still
+# missing an Environment= line that main had been carrying since the merge.
+#
+# ⚠ DO NOT answer this by comparing every unit to the repo. Boxes legitimately differ -- the same
+# sweep flags 13 units on the tip-bridge box, all of them deliberate -- and a check that cries wolf
+# gets muted. Ask the narrow question instead: did the units THIS MERGE TOUCHED actually land?
+#   OLD=<the sha the box was on before you moved it>
+#   for f in $(git diff --name-only "$OLD"..HEAD -- coordinator/deploy/ | grep -E '\.(service|timer)$'); do
+#       l=/etc/systemd/system/$(basename "$f"); [ -e "$l" ] || { echo "ABSENT: $(basename "$f")"; continue; }
+#       cmp -s "$f" "$l" || echo "NOT DEPLOYED: $(basename "$f")"
+#   done
+# ⭐ Then ask systemd rather than the file -- `systemctl show <unit> -p Environment --value` -- because
+# a daemon-reload you forgot makes the file right and the running config wrong.
+
 # latched breakers (hazync#1002). ⛔ A SKIPPED UNIT IS NOT A FAILED UNIT, so none of the alerting
 # above can see this. hazync-sponsor-bot latched its own breaker on 2026-10-03 after four HTTP 503s
 # fetching SHA256SUMS.txt -- correct behaviour, it spent nothing -- and then sat idle for two days
