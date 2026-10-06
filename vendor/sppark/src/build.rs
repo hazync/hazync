@@ -51,6 +51,27 @@ pub fn ccmd() -> cc::Build {
                     nvcc.flag("-gencode")
                         .flag("arch=compute_75,code=sm_75");
                 }
+                // ⛔⛔ WITHOUT THIS A PASCAL CARD HAS NO KERNEL IMAGE AT ALL, AND EVERY LAUNCH FAILS.
+                // The lowest architecture above is sm_70. The embedded PTX is compute_80, and PTX
+                // JIT only ever compiles FORWARD -- it cannot be lowered to an older architecture.
+                // So on sm_61 the cubins do not match and the PTX cannot be used, and the first
+                // kernel launch reports through sppark's next cudaGetLastError():
+                //
+                //   Failure during zk_shift: cudaGetLastError()@sppark/ntt/ntt.cuh:97
+                //       failed: "operation not supported"
+                //
+                // ⚠ MEASURED 2026-10-06 on a real GTX 1050 Ti (sm_61), and it is why lowering the
+                // DEVICE FILTER was necessary but not sufficient: HAZYNC_SPPARK_MIN_MAJOR=6 lets
+                // sppark SELECT the card, and then there is nothing compiled for it to run. Two
+                // earlier theories died here -- the device floor (hazync#631) and memory pools
+                // (the nopool build reproduces this error byte for byte).
+                //
+                // ⚠ GUARDED, because CUDA 13 DROPPED Pascal: on a toolkit without sm_61 the flag
+                // is simply not added, exactly as the sm_100/sm_120 probes above behave.
+                if is_cuda_flag_supported(&nvcc, "-arch=sm_61") {
+                    nvcc.flag("-gencode")
+                        .flag("arch=compute_61,code=sm_61");
+                }
                 if is_cuda_flag_supported(&nvcc, "-arch=sm_100") {
                     nvcc.flag("-gencode")
                         .flag("arch=compute_100,code=compute_100");

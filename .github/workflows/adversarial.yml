@@ -223,6 +223,17 @@ jobs:
       - name: nvcc-flags POSITIVE CONTROL (the unconditional GCC flags — must read as not MSVC-aware)
         run: cd coordinator && python3 test_nvcc_flags.py --control
 
+      - name: sppark compiles kernels for Pascal, or a Pascal card has nothing to run (#631)
+        # ⛔⛔ MEASURED 2026-10-06 on a real GTX 1050 Ti. sppark's lowest architecture was sm_70 and
+        # the embedded PTX is compute_80 -- PTX JIT only compiles FORWARD, so nothing in the binary
+        # could execute on sm_61. The build was green, the binary ran, sppark SELECTED the card, and
+        # the first launch said only `zk_shift ... "operation not supported"`.
+        # ⚠ Source-level guard, like test_nvcc_flags above: CI has no GPU and compiles no kernel.
+        # The risk it actually covers is a vendor re-sync silently dropping the flag again.
+        run: cd coordinator && python3 test_sppark_arch.py
+      - name: sppark-arch POSITIVE CONTROL (sm_61 removed — the test MUST notice)
+        run: cd coordinator && python3 test_sppark_arch.py --control
+
       - name: The SHARED kernel builder's host flags are MSVC-aware, Linux UNCHANGED (#631)
         # ⛔⛔ THE LAYER THE PER-CRATE FIX MISSED. risc0_build_kernel::compile_cuda() is the one
         # function FIVE crates build their CUDA kernels through, and it appended
