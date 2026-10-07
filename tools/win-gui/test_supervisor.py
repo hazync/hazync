@@ -337,6 +337,34 @@ def main():
         supervisor._run = _real_run
         os.environ.clear(); os.environ.update(_real_env)
 
+    print("── a GPU problem must NEVER stop someone starting ──")
+    # ⛔⛔ THE WHOLE POINT OF THE APP IS THAT NOBODY IS TURNED AWAY FOR THEIR HARDWARE. The CPU build
+    # works everywhere, so no GPU finding -- missing, too old, undriveable, nvidia-smi absent -- may
+    # ever be fatal. Nothing asserted this, and one `fatal=True` added to a GPU check would lock out
+    # every CPU-only contributor silently: Start simply stays greyed out with a GPU complaint beside
+    # it, which reads as "your machine is not good enough".
+    import inspect as _inspect
+    _src = _inspect.getsource(supervisor)
+    _gpu_calls = [b for b in _src.split("CheckResult(")[1:] if b.startswith('"GPU"')]
+    check(len(_gpu_calls) >= 3, f"found the GPU checks to inspect ({len(_gpu_calls)})")
+    check(all("fatal=True" not in b.split("\n\n")[0] for b in _gpu_calls),
+          "⛔ no GPU CheckResult is fatal — a card problem never blocks Start")
+
+    # ⚠ And behaviourally, not just structurally: a machine with NO GPU at all must still be allowed
+    # to start, provided the things that genuinely matter are present.
+    _gf, _run_real = supervisor.gpu_facts, supervisor._run
+    try:
+        supervisor.gpu_facts = lambda: None
+        supervisor._run = lambda cmd, **kw: (1, "nvidia-smi: not found")
+        host = fake_host(d, "pf", f"METHOD_ID {CANON}\n  u32x8   [1]")
+        checks, fatal = supervisor.preflight(host, fake_worker(d, "pfw"), identity_dir=d)
+        gpu_bad = [c for c in checks if c.name == "GPU" and not c.ok]
+        check(bool(gpu_bad), "with no GPU the GPU check does report a problem")
+        check(not any(c.name == "GPU" for c in fatal),
+              "⛔ but it is NOT among the fatal ones, so Start stays available")
+    finally:
+        supervisor.gpu_facts, supervisor._run = _gf, _run_real
+
     print("── several GPUs: judge by the best card, not by enumeration order ──")
     # ⛔ AN ORDINARY UPGRADE PATH BREAKS THIS. Someone who adds an RTX 3080 beside an old GTX 1060
     # has both listed, and nvidia-smi's order is not theirs to control. Reading line one could send
