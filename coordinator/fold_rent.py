@@ -148,6 +148,11 @@ def cmd_selftest(a):
     # 3. the margin genuinely reserves time for teardown
     check(seconds_for_budget(10, 1.0) < 10 * 3600,
           "the cap is strictly under the budget, leaving room to terminate")
+    # ⛔ THE CLOCK CAP MUST WIN WHEN IT IS SHORTER. $10 at $0.40/hr is 21 hours; a 45-minute test
+    # must not become an overnight rental because the budget happened to be generous.
+    cheap = seconds_for_budget(10, 0.40)
+    check(cheap > 45 * 60, f"a cheap card would otherwise run {cheap // 3600}h on $10")
+    check(min(cheap, 45 * 60) == 45 * 60, "⛔ the wall-clock cap wins when it is the shorter of the two")
     # 4. the script checks the deadline BEFORE folding, not after
     s = fold_script("tag", 600)
     check("while [ \"$(date +%s)\" -lt \"$end\" ]" in s,
@@ -180,6 +185,11 @@ def main(argv=None):
                            help="identity TAG under $SPONSOR_BOT_HOME/identities to fold as")
             p.add_argument("--budget-usd", type=float, default=0.0,
                            help="hard cap; converted to wall clock from the pod's own price")
+            # ⛔⛔ A BUDGET IS NOT A CLOCK. $10 on a $0.40/hr card is TWENTY-ONE HOURS, so a budget
+            # alone would leave a pod folding overnight on what was meant to be a short measurement.
+            # The run takes the SHORTER of the two, always.
+            p.add_argument("--minutes", type=int, default=45,
+                           help="wall-clock cap; the run uses whichever of this and --budget-usd is shorter")
         if name == "run":
             p.add_argument("--live", action="store_true", help="actually rent a GPU")
     a = ap.parse_args(argv)
@@ -214,6 +224,10 @@ def main(argv=None):
             return 0
         rate = pod.cost_per_hr
         budget_s = seconds_for_budget(a.budget_usd, rate)
+        capped_s = min(budget_s, a.minutes * 60) if budget_s else 0
+        if budget_s and capped_s < budget_s:
+            print(f"  ⚠ ${a.budget_usd:.2f} would buy {budget_s // 60} min; capped to {a.minutes} min")
+        budget_s = capped_s
         print(f"pod {pod.name} at ${rate}/hr -> {budget_s // 60} min within ${a.budget_usd:.2f}")
         if budget_s <= 0:
             raise SystemExit("fold_rent: the pod did not report a price; refusing to run unbounded")
