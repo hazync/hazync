@@ -24,10 +24,6 @@ on:
       run_id:
         description: 'windows-prove run whose hazync-host-windows-x86_64-cuda artifact to audit'
         default: '37379111741'
-  # ⛔ Dispatch is only indexed from the default branch, so this is how the audit runs before merge.
-  push:
-    branches: [tools/cuda-probe]
-    paths: ['.github/workflows/cuda-arch-audit.yml']
 
 permissions:
   contents: read
