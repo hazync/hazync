@@ -68,10 +68,17 @@ jobs:
           if ($got -ne $sha) { Write-Host "sha256 $got != $sha"; exit 1 }
           $ex = Join-Path $env:RUNNER_TEMP 'nvcc'
           Expand-Archive -Path $zip -DestinationPath $ex -Force
-          $dir = (Get-ChildItem $ex | Where-Object { $_.PSIsContainer })[0].FullName
-          $bin = Join-Path $dir 'bin'
-          if (-not (Test-Path (Join-Path $bin 'cuobjdump.exe'))) { Write-Host "no cuobjdump"; exit 1 }
-          $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          # ⛔ FIND IT, DO NOT ASSUME THE LAYOUT. Guessing `<topdir>/bin` failed on the first run,
+          # and "no cuobjdump" said nothing about where it actually was -- so on failure this now
+          # prints the tree rather than making the next person guess too.
+          $exe = Get-ChildItem $ex -Recurse -Filter 'cuobjdump.exe' | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "cuobjdump.exe is not in this archive. What IS here:"
+            Get-ChildItem $ex -Recurse -Filter '*.exe' | ForEach-Object { Write-Host "  $($_.FullName)" }
+            exit 1
+          }
+          Write-Host "found: $($exe.FullName)"
+          $exe.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: What architectures are in there?
         shell: bash
