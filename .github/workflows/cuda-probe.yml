@@ -24,6 +24,16 @@ on:
       cuda:
         description: "CUDA redist set: 12.9.1 (default). 12.x only -- 13 dropped Pascal."
         default: '12.9.1'
+  # ⛔ workflow_dispatch CANNOT BE TRIGGERED UNTIL THIS FILE IS ON THE DEFAULT BRANCH -- GitHub
+  # indexes dispatchable workflows from main only, so `gh workflow run` on a feature branch answers
+  # "could not find any workflows named cuda-probe.yml". This push trigger is how the probe gets
+  # built and tested BEFORE it is merged, which is the whole point of a diagnostic that is supposed
+  # to be faster than the thing it is diagnosing.
+  push:
+    branches: [tools/cuda-probe]
+    paths:
+      - 'tools/cuda-probe/**'
+      - '.github/workflows/cuda-probe.yml'
 
 permissions:
   contents: read
