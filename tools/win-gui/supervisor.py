@@ -414,7 +414,8 @@ def recommend(gpu=None):
                     "why": "nvidia-smi could not be found, so this could not check whether you "
                            "have a usable GPU — that is NOT the same as not having one. If you do "
                            "have an NVIDIA card, add nvidia-smi to PATH (it is usually in "
-                           "C:\\Windows\\System32) and press Refresh. The CPU build works meanwhile."}
+                           "C:\\Windows\\System32) and press Refresh. The CPU build works anywhere "
+                           "in the meantime, so you can start contributing now either way."}
         return {"build": "cpu", "seg_po2": None, "gpu": None,
                 "why": "nvidia-smi ran but reported no usable NVIDIA GPU, so a CUDA build could "
                        "not even start. The CPU build works anywhere."}
