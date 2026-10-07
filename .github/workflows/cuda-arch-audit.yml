@@ -55,18 +55,23 @@ jobs:
           [ "$n" -gt 50000000 ] || { echo "implausibly small"; exit 1; }
           echo "HOST_EXE=$f" >> "$GITHUB_ENV"
 
-      - name: Install cuobjdump (cuda_nvcc only), pinned and sha256-verified
+      - name: Install cuobjdump, pinned and sha256-verified
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Same pinned archive as windows-prove.yml and cuda-probe.yml. cuobjdump ships in nvcc.
-          $url = 'https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.9.86-archive.zip'
-          $sha = '227b109663b5e57d2718bcabb24a4ba0d9d4e52d958e327dc476f7c28691be85'
-          $zip = Join-Path $env:RUNNER_TEMP 'nvcc.zip'
+          # ⛔ cuobjdump DOES NOT SHIP IN cuda_nvcc. The first attempt assumed it did; that package
+          # holds nvcc, ptxas, nvlink, fatbinary, cudafe++, bin2c and cicc, and nothing else. It is
+          # its own redist package, and this audit needs nothing but it -- no compiler at all.
+          # ⚠ Unlike the 12.6.3 entries in windows-prove.yml, this archive WAS downloaded and hashed
+          # before being committed: 6,219,088 bytes, sha256 below, matching NVIDIA's manifest for
+          # 12.9.1. Saying which hashes were earned and which were copied is the point of pinning.
+          $url = 'https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/windows-x86_64/cuda_cuobjdump-windows-x86_64-12.9.82-archive.zip'
+          $sha = '1eda43a76a2eac25fce5bdb4b68673b5bda737d54cca5513148c36362ab7c811'
+          $zip = Join-Path $env:RUNNER_TEMP 'cuobjdump.zip'
           Invoke-WebRequest -Uri $url -OutFile $zip
           $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           if ($got -ne $sha) { Write-Host "sha256 $got != $sha"; exit 1 }
-          $ex = Join-Path $env:RUNNER_TEMP 'nvcc'
+          $ex = Join-Path $env:RUNNER_TEMP 'cuobjdump'
           Expand-Archive -Path $zip -DestinationPath $ex -Force
           # ⛔ FIND IT, DO NOT ASSUME THE LAYOUT. Guessing `<topdir>/bin` failed on the first run,
           # and "no cuobjdump" said nothing about where it actually was -- so on failure this now
