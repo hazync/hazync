@@ -380,6 +380,16 @@ def main():
     check("hazync_seg_po2" in said2.lower(),
           "⚠ a REAL out-of-memory error still gets the SEG_PO2 advice")
 
+    # ⭐ AND IT MUST BE ACTIONABLE, NOT MERELY TRUE. "that is the cause" is correct and leaves a
+    # newcomer with nothing to do. The point of this app is that people can contribute from the
+    # machine they own, so a card that cannot drive CUDA must be told what DOES work and what it
+    # costs them -- 13x slower is a decision someone can make; silence is not.
+    said3 = supervisor.explain(
+        'CUDA ERROR: cudaStreamCreateWithFlags@gpu_t.cuh:62 failed: "operation not supported"') or ""
+    check("cpu build" in said3.lower(), "a card the prover cannot drive is pointed at the CPU build")
+    check("13x" in said3.lower(), "⭐ and told what that costs, from the measured figure")
+    check("631" in said3, "and the issue is named, so it is findable")
+
     check(supervisor.is_worker_hint("   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)"),
           "the hint line is recognised as the worker's own boilerplate")
     check(not supervisor.is_worker_hint('CUDA ERROR: x failed: "out of memory"'),

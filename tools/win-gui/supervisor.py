@@ -731,7 +731,21 @@ def explain(text):
             advice = ("sppark keeps only cards with compute capability 7.0 or newer (Volta and "
                       "forward) — all_gpus.cpp — so an older GPU is filtered out and the device "
                       "list comes back EMPTY. nvidia-smi will still list your card and the driver "
-                      "is not at fault. Use the CPU build on this machine. (hazync#631)")
+                      "is not at fault. Use the CPU build on the Setup tab — measured 2026-10-07, "
+                      "folding on CPU runs about 13x slower than a modern GPU, which is slower but "
+                      "still a real contribution. (hazync#631)")
+        elif "operation not supported" in low_err:
+            # ⛔ THE ERROR A PASCAL CARD ACTUALLY GETS ONCE THE FLOOR IS LOWERED, and the one that
+            # used to fall through to "that is the cause" -- true, and useless to act on.
+            # Measured 2026-10-07 on a GTX 1050 Ti: the card passes sppark's filter, and every
+            # capability it needs tests FINE in isolation (plain and cooperative launches, grid
+            # sync, memory pools, 1024-thread blocks, this very stream call) -- yet the prover
+            # cannot drive it. Unresolved; tracked as hazync#631.
+            advice = ("Your card was accepted but the prover could not drive it — hazync#631, seen "
+                      "on Pascal (compute 6.x). This is not your setup and not your driver: the "
+                      "same card passes every capability test on its own. Switch to the CPU build "
+                      "on the Setup tab; it works, and folding measures about 13x slower than a "
+                      "modern GPU — which still contributes.")
         elif "no kernel image" in low_err:
             advice = ("The binary has no code this GPU can run. Built for sm_61 plus forward PTX, "
                       "so this usually means the driver cannot compile the PTX.")
