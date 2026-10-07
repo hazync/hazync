@@ -395,6 +395,42 @@ def main():
     check(not supervisor.is_worker_hint('CUDA ERROR: x failed: "out of memory"'),
           "and a real error line is not mistaken for it")
 
+    print("── every card a newcomer might actually own gets a sane answer ──")
+    # ⭐ THE APP'S PURPOSE IS THAT PEOPLE CAN PROVE ON THE MACHINE THEY HAVE, so "what does it say
+    # to THIS card" has to hold across the whole range, not just the one laptop that was handy.
+    # (name, cc_major, cc_minor, vram_mb, expected build)
+    CARDS = [
+        ("GTX 980",        5, 2,  4096, "cpu"),    # Maxwell
+        ("GTX 1050 Ti",    6, 1,  4096, "cpu"),    # the measured one
+        ("GTX 1080 Ti",    6, 1, 11264, "cpu"),    # ⚠ plenty of VRAM, still below the floor
+        ("Tesla P100",     6, 0, 16384, "cpu"),    # ⛔ 16 GB and a datacentre card — compute still decides
+        ("GTX 1660 Super", 7, 5,  6144, "cuda"),   # Turing, the cheapest card that clears the floor
+        ("RTX 2060",       7, 5,  6144, "cuda"),
+        ("RTX 3060",       8, 6, 12288, "cuda"),
+        ("RTX 3090",       8, 6, 24576, "cuda"),
+        ("RTX 4090",       8, 9, 24576, "cuda"),
+        ("A40",            8, 6, 46080, "cuda"),
+    ]
+    for name, maj, minr, vram, want in CARDS:
+        r = supervisor.recommend({"name": name, "cc_major": maj, "cc_minor": minr, "vram_mb": vram})
+        ok = r["build"] == want and name in r["why"] and f"{maj}.{minr}" in r["why"]
+        check(ok, f"{name:<14} compute {maj}.{minr}, {vram:>5} MiB -> {r['build']}")
+        if want == "cuda":
+            # ⚠ A CUDA recommendation without a segment size is not a recommendation; the user is
+            # left to discover HAZYNC_SEG_PO2 by running out of memory.
+            check(r["seg_po2"] is not None, f"  and {name} is given a HAZYNC_SEG_PO2 ({r['seg_po2']})")
+
+    # ⛔ VRAM MUST NOT RESCUE A CARD BELOW THE FLOOR. A 16 GB P100 and a 4 GB 1050 Ti are both CPU,
+    # and if that ever flips, somebody with a big old card is sent down a path that cannot work.
+    big_old = supervisor.recommend({"name": "Tesla P100", "cc_major": 6, "cc_minor": 0, "vram_mb": 16384})
+    check(big_old["build"] == "cpu", "⛔ 16 GB of VRAM does not lift a compute-6.0 card over the floor")
+    # ⚠ And a small modern card is still CUDA, with the honest caveat rather than a refusal.
+    small_new = supervisor.recommend({"name": "RTX 2060", "cc_major": 7, "cc_minor": 5, "vram_mb": 6144})
+    check(small_new["build"] == "cuda" and "not a promise" in small_new["why"],
+          "⚠ a 6 GB modern card is CUDA, and told the segment size is a starting point")
+    check(supervisor.recommend(None if supervisor.gpu_facts() else {})["build"] in ("cpu", "cuda"),
+          "a machine with no readable GPU still gets a decision, not an exception")
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")
