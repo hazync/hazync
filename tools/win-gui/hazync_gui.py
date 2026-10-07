@@ -1105,6 +1105,12 @@ class App(tk.Tk):
                     fh.write(line)
                     fh.flush()
                     kind = supervisor.interesting_line(line)
+                    # ⚠ Remembered on the WORKER, not globally: with several workers running, one
+                    # card's hard failure must not make another worker's ordinary exit look like a
+                    # GPU fault. _explained below is deliberately global (say it once), but this
+                    # decides whether to invite a retry, so it has to be per worker.
+                    if kind == "cuda-error":
+                        w.saw_cuda_error = True
                     if kind:
                         self.q.put((kind, f"[{w.job} {w.index}] {line.rstrip()}"))
                         # ⭐ A known failure gets its plain-language meaning right underneath,
@@ -1126,10 +1132,15 @@ class App(tk.Tk):
             if w.stopping:
                 self._say(f"[{w.job} {w.index}] stopped")
                 continue
-            kind, msg = supervisor.classify_exit(rc)
-            tag = {"config": "cuda-error", "idle": "sys", "done": "proved"}.get(kind, "oom")
+            kind, msg = supervisor.classify_exit(rc, saw_cuda_error=getattr(w, "saw_cuda_error", False))
+            # ⛔ THE DEFAULT WAS "oom", so any exit this code did not recognise was presented as the
+            # GPU running out of memory — a specific, actionable and usually wrong claim, the same
+            # mistake as the log matcher that read the worker's own advice as evidence. When the
+            # window does not know what happened it must not invent a cause.
+            tag = {"config": "cuda-error", "gpu": "cuda-error",
+                   "idle": "sys", "done": "proved"}.get(kind, "sys")
             self._say(f"[{w.job} {w.index}] {msg}", tag)
-            if kind == "config":
+            if kind in ("config", "gpu"):
                 self._say("⛔ not restarting — and do not just press Start again: a box that cannot "
                           "prove claims blocks and abandons them, which holds up everyone else.",
                           "cuda-error")

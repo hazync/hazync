@@ -337,6 +337,176 @@ def main():
         supervisor._run = _real_run
         os.environ.clear(); os.environ.update(_real_env)
 
+    print("── several GPUs: judge by the best card, not by enumeration order ──")
+    # ⛔ AN ORDINARY UPGRADE PATH BREAKS THIS. Someone who adds an RTX 3080 beside an old GTX 1060
+    # has both listed, and nvidia-smi's order is not theirs to control. Reading line one could send
+    # that machine to the CPU build while sppark -- which keeps every card over its floor -- would
+    # have used the 3080 quite happily.
+    _real = supervisor._run
+    try:
+        def two_cards(cmd, **kw):
+            return 0, ("NVIDIA GeForce GTX 1060, 6144 MiB, 566.14, 6.1\n"
+                       "NVIDIA GeForce RTX 3080, 10240 MiB, 566.14, 8.6\n")
+        supervisor._run = two_cards
+        g = supervisor.gpu_facts()
+        check(g and g["name"].endswith("3080"), f"the 3080 is chosen over the 1060 listed first ({g and g['name']})")
+        check(g.get("gpu_count") == 2, "and both cards are counted")
+        r = supervisor.recommend(g)
+        check(r["build"] == "cuda", "⛔ so the machine is NOT sent to the CPU build")
+        check("2 GPUs found" in r["why"], "⚠ and the advice says which card it is talking about")
+
+        # ⚠ COMPUTE BEATS MEMORY. A big old card must not outrank a usable newer one, or the
+        # ordering fix just moves the same failure somewhere less obvious.
+        def big_old_first(cmd, **kw):
+            return 0, ("NVIDIA TITAN Xp, 12288 MiB, 566.14, 6.1\n"
+                       "NVIDIA GeForce RTX 2060, 6144 MiB, 566.14, 7.5\n")
+        supervisor._run = big_old_first
+        g2 = supervisor.gpu_facts()
+        check(g2 and g2["name"].endswith("2060"),
+              f"⛔ a 6 GB compute-7.5 card beats a 12 GB compute-6.1 one ({g2 and g2['name']})")
+
+        def one_card(cmd, **kw):
+            return 0, "NVIDIA GeForce RTX 4090, 24576 MiB, 566.14, 8.9\n"
+        supervisor._run = one_card
+        g3 = supervisor.gpu_facts()
+        check(g3.get("gpu_count") == 1 and "GPUs found" not in supervisor.recommend(g3)["why"],
+              "a single card is unchanged, and says nothing about multiples")
+    finally:
+        supervisor._run = _real
+
+    print("── \"nvidia-smi is not on PATH\" is not \"you have no GPU\" ──")
+    # ⛔ THE FAILURE THIS PREVENTS IS SILENT AND EXPENSIVE. nvidia-smi normally lives in System32,
+    # but older and some OEM driver installs leave it only under Program Files\NVIDIA
+    # Corporation\NVSMI, which is not on PATH. The window then said "No NVIDIA driver was found"
+    # and sent a perfectly good card to the CPU build -- a measured ~13x slowdown the owner would
+    # never understand. Nothing errors, nothing looks wrong; they just quietly get the slow path.
+    _which, _isfile = supervisor.shutil.which, supervisor.os.path.isfile
+    try:
+        supervisor.shutil.which = lambda _n: None          # not on PATH
+        supervisor.os.path.isfile = lambda _p: False       # and not in any known location
+        r = supervisor.recommend(None)
+        check(r["build"] == "cpu", "with no way to ask, it still recommends something that works")
+        check("could not be found" in r["why"],
+              "⛔ and says nvidia-smi could not be FOUND, not that there is no GPU")
+        check("not the same as not having one" in r["why"].lower(),
+              "⭐ explicitly: this is not a verdict on their hardware")
+        check("path" in r["why"].lower(), "and tells them how to fix it")
+
+        supervisor.os.path.isfile = lambda p: "System32" in p   # present, just not on PATH
+        check(supervisor.nvidia_smi().endswith("nvidia-smi.exe"),
+              "⚠ a card whose nvidia-smi is off PATH is found via the known locations")
+        r2 = supervisor.recommend(None)
+        check("could not be found" not in r2["why"],
+              "and that machine is no longer told the tool is missing")
+    finally:
+        supervisor.shutil.which, supervisor.os.path.isfile = _which, _isfile
+
+    print("── a hard GPU error must not be sold as worth retrying ──")
+    k, msg = supervisor.classify_exit(1, saw_cuda_error=True)
+    check(k == "gpu", f"exit 1 after a CUDA error is 'gpu', not 'transient' (got {k})")
+    check("same wall" in msg.lower(), "⛔ and says a retry changes nothing")
+    check("cpu build" in msg.lower(), "⭐ and names what to do instead")
+    k2, msg2 = supervisor.classify_exit(1, saw_cuda_error=False)
+    check(k2 == "transient", "⚠ the same exit WITHOUT a GPU error is still transient")
+    check("retried" not in msg2, "and no longer claims it was retried, because nothing retries")
+    check(supervisor.classify_exit(0)[0] == "done", "a clean exit is unaffected")
+    check(supervisor.classify_exit(supervisor.EX_CONFIG)[0] == "config",
+          "and EX_CONFIG still stops, GPU error or not")
+
+    print("── the worker's own advice must never be read as evidence (hazync#631) ──")
+    # ⛔ THIS IS THE ACTUAL OUTPUT FROM A REAL GTX 1050 Ti, 2026-10-07. The worker prints that hint
+    # on EVERY CUDA failure, and it contains the words "out of memory", so a substring match told a
+    # card failing with cudaErrorNotSupported that it had run out of VRAM. That answer is confident
+    # and actionable and WRONG: a newcomer lowers HAZYNC_SEG_PO2, fails identically, and gives up.
+    REAL = (
+        'CUDA ERROR: cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking)'
+        '@sppark\\sppark\\util\\gpu_t.cuh:62 failed: "operation not supported"\n'
+        "  (the abort that follows is this error crossing C++ -> Rust on MSVC;\n"
+        "   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)\n"
+        "fatal runtime error: Rust cannot catch foreign exceptions, aborting\n"
+    )
+    said = supervisor.explain(REAL) or ""
+    check("ran out of memory" not in said.lower(),
+          "⛔ a cudaErrorNotSupported failure is NOT reported as out of memory")
+    check("operation not supported" in said.lower(),
+          "and the real GPU error is quoted back instead")
+
+    # ⛔⛔ AND THE LINE ON ITS OWN, WHICH IS HOW THE WINDOW ACTUALLY SEES IT. The GUI streams worker
+    # output and explains it LINE BY LINE, so the hint arrives with no CUDA ERROR beside it and the
+    # early return in explain() never fires. My first version of this test passed the whole block,
+    # took that early return, and therefore PASSED AGAINST THE BUG -- it proved nothing.
+    HINT = "   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)"
+    alone = supervisor.explain(HINT)
+    check(not (alone and "ran out of memory" in alone.lower()),
+          "⛔⛔ the hint line ALONE does not produce out-of-memory advice (the real bug)")
+    check(supervisor.interesting_line(HINT) != "oom",
+          "⛔ nor is it flagged as an OOM event in the log pane")
+    # ⚠ NOT a `CUDA ERROR:` line here — interesting_line classifies those as "cuda-error" first,
+    # which is right: that is the more prominent category. The OOM branch is for the plainer forms.
+    check(supervisor.interesting_line("memory allocation failed: out of memory") == "oom",
+          "⚠ while a plain out-of-memory line still is")
+    check(supervisor.interesting_line('CUDA ERROR: x failed: "out of memory"') == "cuda-error",
+          "and a CUDA ERROR line is flagged as that, not demoted to oom")
+
+    # ⚠ AND THE FIX MUST NOT BREAK THE TRUE CASE. A genuine OOM still has to say so, or this trade
+    # has only moved the wrong answer somewhere else.
+    TRUE_OOM = ('CUDA ERROR: cudaMalloc@x.cuh:1 failed: "out of memory"\n'
+                "   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)\n")
+    said2 = supervisor.explain(TRUE_OOM) or ""
+    check("hazync_seg_po2" in said2.lower(),
+          "⚠ a REAL out-of-memory error still gets the SEG_PO2 advice")
+
+    # ⭐ AND IT MUST BE ACTIONABLE, NOT MERELY TRUE. "that is the cause" is correct and leaves a
+    # newcomer with nothing to do. The point of this app is that people can contribute from the
+    # machine they own, so a card that cannot drive CUDA must be told what DOES work and what it
+    # costs them -- 13x slower is a decision someone can make; silence is not.
+    said3 = supervisor.explain(
+        'CUDA ERROR: cudaStreamCreateWithFlags@gpu_t.cuh:62 failed: "operation not supported"') or ""
+    check("cpu build" in said3.lower(), "a card the prover cannot drive is pointed at the CPU build")
+    check("13x" in said3.lower(), "⭐ and told what that costs, from the measured figure")
+    check("631" in said3, "and the issue is named, so it is findable")
+
+    check(supervisor.is_worker_hint("   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)"),
+          "the hint line is recognised as the worker's own boilerplate")
+    check(not supervisor.is_worker_hint('CUDA ERROR: x failed: "out of memory"'),
+          "and a real error line is not mistaken for it")
+
+    print("── every card a newcomer might actually own gets a sane answer ──")
+    # ⭐ THE APP'S PURPOSE IS THAT PEOPLE CAN PROVE ON THE MACHINE THEY HAVE, so "what does it say
+    # to THIS card" has to hold across the whole range, not just the one laptop that was handy.
+    # (name, cc_major, cc_minor, vram_mb, expected build)
+    CARDS = [
+        ("GTX 980",        5, 2,  4096, "cpu"),    # Maxwell
+        ("GTX 1050 Ti",    6, 1,  4096, "cpu"),    # the measured one
+        ("GTX 1080 Ti",    6, 1, 11264, "cpu"),    # ⚠ plenty of VRAM, still below the floor
+        ("Tesla P100",     6, 0, 16384, "cpu"),    # ⛔ 16 GB and a datacentre card — compute still decides
+        ("GTX 1660 Super", 7, 5,  6144, "cuda"),   # Turing, the cheapest card that clears the floor
+        ("RTX 2060",       7, 5,  6144, "cuda"),
+        ("RTX 3060",       8, 6, 12288, "cuda"),
+        ("RTX 3090",       8, 6, 24576, "cuda"),
+        ("RTX 4090",       8, 9, 24576, "cuda"),
+        ("A40",            8, 6, 46080, "cuda"),
+    ]
+    for name, maj, minr, vram, want in CARDS:
+        r = supervisor.recommend({"name": name, "cc_major": maj, "cc_minor": minr, "vram_mb": vram})
+        ok = r["build"] == want and name in r["why"] and f"{maj}.{minr}" in r["why"]
+        check(ok, f"{name:<14} compute {maj}.{minr}, {vram:>5} MiB -> {r['build']}")
+        if want == "cuda":
+            # ⚠ A CUDA recommendation without a segment size is not a recommendation; the user is
+            # left to discover HAZYNC_SEG_PO2 by running out of memory.
+            check(r["seg_po2"] is not None, f"  and {name} is given a HAZYNC_SEG_PO2 ({r['seg_po2']})")
+
+    # ⛔ VRAM MUST NOT RESCUE A CARD BELOW THE FLOOR. A 16 GB P100 and a 4 GB 1050 Ti are both CPU,
+    # and if that ever flips, somebody with a big old card is sent down a path that cannot work.
+    big_old = supervisor.recommend({"name": "Tesla P100", "cc_major": 6, "cc_minor": 0, "vram_mb": 16384})
+    check(big_old["build"] == "cpu", "⛔ 16 GB of VRAM does not lift a compute-6.0 card over the floor")
+    # ⚠ And a small modern card is still CUDA, with the honest caveat rather than a refusal.
+    small_new = supervisor.recommend({"name": "RTX 2060", "cc_major": 7, "cc_minor": 5, "vram_mb": 6144})
+    check(small_new["build"] == "cuda" and "not a promise" in small_new["why"],
+          "⚠ a 6 GB modern card is CUDA, and told the segment size is a starting point")
+    check(supervisor.recommend(None if supervisor.gpu_facts() else {})["build"] in ("cpu", "cuda"),
+          "a machine with no readable GPU still gets a decision, not an exception")
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")

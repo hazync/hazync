@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import time
@@ -338,6 +339,30 @@ def check_host_binary(host_path):
                        f"canonical METHOD_ID {got[:16]}… — {host_kind_sentence(info)}")
 
 
+# ⛔⛔ nvidia-smi IS NOT ALWAYS ON PATH, AND "NOT ON PATH" IS NOT "NO GPU". The driver normally
+# drops it in System32, but older and some OEM installs leave it only under
+# C:\Program Files\NVIDIA Corporation\NVSMI, which is not on PATH. Before this, that machine was
+# told "No NVIDIA driver was found" and sent to the CPU build -- so somebody with a perfectly good
+# card would quietly take the ~13x slowdown measured on 2026-10-07, and never know why.
+# ⚠ The fallbacks are tried only after PATH, so a normal install is unaffected.
+_NVSMI_FALLBACKS = (
+    r"C:\Windows\System32\nvidia-smi.exe",
+    r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+)
+
+
+def nvidia_smi():
+    """Where nvidia-smi is, or "nvidia-smi" to let PATH try. Never None: the caller still runs it."""
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    for cand in _NVSMI_FALLBACKS:
+        expanded = os.path.expandvars(cand)
+        if os.path.isfile(expanded):
+            return expanded
+    return "nvidia-smi"
+
+
 def gpu_facts():
     """What card is this, in numbers. (name, vram_mb, driver, cc_major, cc_minor) or None.
 
@@ -345,19 +370,33 @@ def gpu_facts():
     prover and a segment size from a human-readable string means parsing prose, and that is how a
     setting ends up wrong on the one machine nobody tested.
     """
-    rc, out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version,compute_cap",
+    rc, out = _run([nvidia_smi(), "--query-gpu=name,memory.total,driver_version,compute_cap",
                     "--format=csv,noheader"], timeout=30)
     if rc != 0 or not out.strip():
         return None
-    parts = [x.strip() for x in out.strip().splitlines()[0].split(",")]
-    if len(parts) < 4:
+    # ⛔⛔ THE FIRST CARD nvidia-smi LISTS IS NOT NECESSARILY THE ONE THAT WILL PROVE. sppark keeps
+    # every card that clears its floor and uses those, so on a machine with an old card and a new
+    # one -- a GTX 1060 beside an RTX 3080, which is an ordinary upgrade path -- judging by line one
+    # could recommend the CPU build while the prover would have happily used the 3080. Reading one
+    # line meant the advice depended on enumeration order, which nobody controls.
+    cards = []
+    for line in out.strip().splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) < 4:
+            continue
+        mb = re.search(r"(\d+)", parts[1])
+        cc = re.match(r"(\d+)\.(\d+)", parts[3])
+        if not (mb and cc):
+            continue
+        cards.append({"name": parts[0], "vram_mb": int(mb.group(1)), "driver": parts[2],
+                      "cc_major": int(cc.group(1)), "cc_minor": int(cc.group(2))})
+    if not cards:
         return None
-    mb = re.search(r"(\d+)", parts[1])
-    cc = re.match(r"(\d+)\.(\d+)", parts[3])
-    if not (mb and cc):
-        return None
-    return {"name": parts[0], "vram_mb": int(mb.group(1)), "driver": parts[2],
-            "cc_major": int(cc.group(1)), "cc_minor": int(cc.group(2))}
+    # ⚠ Compute capability first, THEN memory: a card below the floor cannot prove at all, however
+    # much VRAM it has, so more memory must never outrank being usable.
+    best = max(cards, key=lambda c: (c["cc_major"], c["cc_minor"], c["vram_mb"]))
+    best["gpu_count"] = len(cards)
+    return best
 
 
 # ⛔⛔ EVERY NUMBER HERE WAS MEASURED, NOT CHOSEN. The segment size decides peak VRAM, and the only
@@ -380,9 +419,20 @@ def recommend(gpu=None):
     """
     g = gpu if gpu is not None else gpu_facts()
     if not g:
+        # ⚠ TWO DIFFERENT FACTS, AND ONLY ONE OF THEM IS "YOU HAVE NO GPU". If nvidia-smi cannot
+        # be found at all, the honest statement is that we could not ASK -- and a person with a
+        # working card can act on that, whereas "no driver was found" tells them to give up.
+        if not (shutil.which("nvidia-smi") or any(os.path.isfile(os.path.expandvars(c))
+                                                  for c in _NVSMI_FALLBACKS)):
+            return {"build": "cpu", "seg_po2": None, "gpu": None,
+                    "why": "nvidia-smi could not be found, so this could not check whether you "
+                           "have a usable GPU — that is NOT the same as not having one. If you do "
+                           "have an NVIDIA card, add nvidia-smi to PATH (it is usually in "
+                           "C:\\Windows\\System32) and press Refresh. The CPU build works anywhere "
+                           "in the meantime, so you can start contributing now either way."}
         return {"build": "cpu", "seg_po2": None, "gpu": None,
-                "why": "No NVIDIA driver was found, so a CUDA build could not even start. "
-                       "The CPU build works anywhere."}
+                "why": "nvidia-smi ran but reported no usable NVIDIA GPU, so a CUDA build could "
+                       "not even start. The CPU build works anywhere."}
     seg = next(po2 for floor, po2 in _SEG_PO2_FOR_VRAM if g["vram_mb"] >= floor)
     if g["cc_major"] < 7:
         return {"build": "cpu", "seg_po2": None, "gpu": g,
@@ -395,8 +445,12 @@ def recommend(gpu=None):
     if g["vram_mb"] < 8000:
         note = (f" ⚠ {g['vram_mb']:,} MiB is below anything this project has proved with — the "
                 f"smallest measured is 24 GB — so {seg} is a starting point, not a promise.")
+    several = ""
+    if g.get("gpu_count", 1) > 1:
+        several = (f" ⚠ {g['gpu_count']} GPUs found; this advice is for the most capable one, "
+                   f"which is the one the prover will use.")
     return {"build": "cuda", "seg_po2": seg, "gpu": g,
-            "why": f"{g['name']}, compute {g['cc_major']}.{g['cc_minor']}, {g['vram_mb']:,} MiB. "
+            "why": f"{g['name']}, compute {g['cc_major']}.{g['cc_minor']}, {g['vram_mb']:,} MiB.{several} "
                    f"Suggested HAZYNC_SEG_PO2={seg}, extrapolated from one measured prove that "
                    f"peaked near 22 GB at 21.{note}"}
 
@@ -408,7 +462,7 @@ def check_gpu():
     `regress` fine and then aborted on the first GPU proving call. VRAM and the driver's CUDA version
     are the two numbers that make that diagnosable, so they are surfaced rather than hidden.
     """
-    rc, out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version,compute_cap",
+    rc, out = _run([nvidia_smi(), "--query-gpu=name,memory.total,driver_version,compute_cap",
                     "--format=csv,noheader"], timeout=30)
     if rc != 0:
         rc2, out2 = _run(["nvidia-smi"], timeout=30)
@@ -582,8 +636,8 @@ def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
     return env
 
 
-def classify_exit(rc):
-    """(kind, human sentence) for a worker exit. The three cases are NOT interchangeable.
+def classify_exit(rc, saw_cuda_error=False):
+    """(kind, human sentence) for a worker exit. The cases are NOT interchangeable.
 
     ⛔ `run-workers.sh` learned this the hard way: retrying EX_CONFIG meant three GPUs proving for a
     day into guaranteed rejection, looking busy the whole time. A supervisor that treats every
@@ -597,7 +651,17 @@ def classify_exit(rc):
                           "The supervisor stops rather than burning the GPU.")
     if rc == EX_TEMPFAIL:
         return "idle", "nothing to claim right now — a busy board, not a fault. Waiting."
-    return "transient", f"exited {rc} — treated as transient and retried"
+    if saw_cuda_error:
+        # ⛔ A HARD GPU ERROR IS NOT TRANSIENT, AND SAYING SO INVITES THE ONE USELESS ACTION.
+        # Measured 2026-10-07: a GTX 1050 Ti printed `CUDA ERROR: ... "operation not supported"`
+        # and exited 1, which fell through to "transient" -- so the window invited a retry into a
+        # wall the card will hit every single time. The output is right there; if it contained a
+        # CUDA error, say that pressing Start again changes nothing.
+        return "gpu", (f"exited {rc} after the GPU reported an error — pressing Start again will "
+                       f"hit the same wall. Switch to the CPU build on the Setup tab.")
+    # ⚠ "retried" was never true: nothing here retries. The worker exits and Start comes back, so
+    # the honest sentence is what actually happened.
+    return "transient", f"exited {rc} — no GPU error was printed, so this may be worth one retry"
 
 
 def interesting_line(line):
@@ -613,7 +677,7 @@ def interesting_line(line):
         return "cuda-error"
     if "fatal runtime error" in low and "foreign exception" in low:
         return "abort"
-    if "out of memory" in low:
+    if "out of memory" in low and not is_worker_hint(s):
         return "oom"
     if "proved" in low and "verified" in low:
         return "proved"
@@ -681,6 +745,31 @@ _EXPLANATIONS = [
 _CUDA_ERROR_RE = re.compile(r"^\s*CUDA ERROR:\s*(.+?)\s*$", re.M | re.I)
 
 
+# ⛔⛔ THE WORKER'S OWN ADVICE CONTAINS THE WORDS WE MATCH ON. Every CUDA failure prints
+#
+#     (the abort that follows is this error crossing C++ -> Rust on MSVC;
+#      if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)
+#
+# so a plain substring search for "out of memory" fires on EVERY failure, whatever caused it.
+# ⚠ MEASURED 2026-10-07 on a real GTX 1050 Ti: a card failing with cudaErrorNotSupported was told
+# "The GPU ran out of memory", and that sent an afternoon after VRAM on a 4 GB card when the error
+# had nothing to do with memory. A newcomer would lower HAZYNC_SEG_PO2, fail again identically, and
+# conclude the app is broken -- which is the single most expensive wrong answer this program can
+# give, because it is confident and it is actionable.
+_WORKER_HINT_MARKERS = ("if it mentions", "retry with a lower")
+
+
+def is_worker_hint(line):
+    """True for the worker's own boilerplate advice, which must never be read as EVIDENCE."""
+    low = (line or "").lower()
+    return all(m in low for m in _WORKER_HINT_MARKERS)
+
+
+def without_worker_hints(text):
+    """The output with the worker's advisory lines removed, for matching against."""
+    return "\n".join(l for l in (text or "").splitlines() if not is_worker_hint(l))
+
+
 def cuda_error_text(text):
     """The GPU's own error message, if this build printed one. (hazync#631)"""
     m = _CUDA_ERROR_RE.search(text or "")
@@ -706,7 +795,21 @@ def explain(text):
             advice = ("sppark keeps only cards with compute capability 7.0 or newer (Volta and "
                       "forward) — all_gpus.cpp — so an older GPU is filtered out and the device "
                       "list comes back EMPTY. nvidia-smi will still list your card and the driver "
-                      "is not at fault. Use the CPU build on this machine. (hazync#631)")
+                      "is not at fault. Use the CPU build on the Setup tab — measured 2026-10-07, "
+                      "folding on CPU runs about 13x slower than a modern GPU, which is slower but "
+                      "still a real contribution. (hazync#631)")
+        elif "operation not supported" in low_err:
+            # ⛔ THE ERROR A PASCAL CARD ACTUALLY GETS ONCE THE FLOOR IS LOWERED, and the one that
+            # used to fall through to "that is the cause" -- true, and useless to act on.
+            # Measured 2026-10-07 on a GTX 1050 Ti: the card passes sppark's filter, and every
+            # capability it needs tests FINE in isolation (plain and cooperative launches, grid
+            # sync, memory pools, 1024-thread blocks, this very stream call) -- yet the prover
+            # cannot drive it. Unresolved; tracked as hazync#631.
+            advice = ("Your card was accepted but the prover could not drive it — hazync#631, seen "
+                      "on Pascal (compute 6.x). This is not your setup and not your driver: the "
+                      "same card passes every capability test on its own. Switch to the CPU build "
+                      "on the Setup tab; it works, and folding measures about 13x slower than a "
+                      "modern GPU — which still contributes.")
         elif "no kernel image" in low_err:
             advice = ("The binary has no code this GPU can run. Built for sm_61 plus forward PTX, "
                       "so this usually means the driver cannot compile the PTX.")
@@ -714,7 +817,8 @@ def explain(text):
             advice = ("That is the cause. Everything printed after it is the abort that follows, "
                       "not a separate problem.")
         return f"the GPU reported: {err}\n  {advice}"
-    low = (text or "").lower()
+    # ⚠ Stripped FIRST: the worker's hint would otherwise match "out of memory" on every failure.
+    low = without_worker_hints(text).lower()
     for needle, said in _EXPLANATIONS:
         if needle in low:
             return said
