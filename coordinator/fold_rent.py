@@ -56,6 +56,51 @@ def seconds_for_budget(budget_usd, cost_per_hr):
     return int((budget_usd / cost_per_hr) * 3600 * BUDGET_MARGIN)
 
 
+# ⛔ THE CPU BINARY IS NOT ON THE POD. sponsor_bot's boot fetches only the CUDA host, because that
+# is all a sponsorship needs. A CPU-vs-GPU comparison has to fetch the other one itself -- and
+# VERIFY it, because an unverified prover produces proofs the coordinator will reject and we would
+# be measuring the speed of being wrong.
+CPU_FETCH = """
+if [ ! -s hazync-host-cpu ]; then
+  curl -fsSL -o SHA256SUMS.txt https://github.com/hazync/hazync/releases/download/{rel}/SHA256SUMS.txt
+  curl -fsSL -o hazync-host-x86_64-linux-gnu https://github.com/hazync/hazync/releases/download/{rel}/hazync-host-x86_64-linux-gnu
+  grep ' hazync-host-x86_64-linux-gnu$' SHA256SUMS.txt | sha256sum -c - || {{ echo CPU_SHA_BAD; exit 1; }}
+  chmod +x hazync-host-x86_64-linux-gnu && ln -sf hazync-host-x86_64-linux-gnu hazync-host-cpu
+  echo CPU_SHA_OK
+fi
+"""
+
+
+def fold_phase(identity_tag, seconds, host, label):
+    """One timed folding phase against one prover binary."""
+    return "\n".join([
+        f'echo "PHASE {label} start $(date -u +%FT%TZ)"',
+        f"end=$(( $(date +%s) + {int(seconds)} ))",
+        "n=0",
+        'while [ "$(date +%s)" -lt "$end" ]; do',
+        "  n=$((n+1))",
+        f"  HAZYNC_HOME=/root/.hazync-ids/{identity_tag} BUNDLE_DIR=/workspace/bundles "
+        f"WITNESS_DIR=/workspace/witnesses HAZYNC_HOST=/workspace/{host} "
+        "./hazync-worker fold; rc=$?",
+        f'  echo "FOLD {label} $n rc=$rc $(date -u +%FT%TZ)"',
+        '  [ "$rc" -ne 0 ] && sleep 10',
+        "done",
+        f'echo "PHASE {label} end $(date -u +%FT%TZ)"',
+    ])
+
+
+def compare_script(identity_tag, seconds_each, release):
+    """⭐ BOTH PROVERS, SAME MACHINE, SAME QUEUE, BACK TO BACK. Comparing a GPU on a rented pod with
+    a CPU on someone's laptop would measure the two machines, not the two code paths."""
+    return "\n".join([
+        "#!/bin/bash", "cd /workspace",
+        CPU_FETCH.format(rel=release),
+        fold_phase(identity_tag, seconds_each, "hazync-host-cuda", "CUDA"),
+        fold_phase(identity_tag, seconds_each, "hazync-host-cpu", "CPU"),
+        "echo ALLDONE",
+    ]) + "\n"
+
+
 def fold_script(identity_tag, max_seconds):
     """The bash the pod runs: fold until the clock runs out, one line per attempt.
 
@@ -82,7 +127,7 @@ def fold_script(identity_tag, max_seconds):
     ]) + "\n"
 
 
-def start_fold(runner, pod, identity_tag, max_seconds):
+def start_fold(runner, pod, identity_tag, max_seconds, script_text=None):
     """Copy ONE identity, push the fold loop, launch it detached. Modelled on SshRunner.start.
 
     ⛔ IT IS NOT SshRunner.start. That one assigns blocks from a sponsorship and runs them once each;
@@ -100,7 +145,7 @@ def start_fold(runner, pod, identity_tag, max_seconds):
         raise SystemExit(f"fold_rent: could not copy identity {identity_tag} to {pod.name}")
     script = os.path.join(runner.dir, f"fold-{pod.id}.sh")
     with open(script, "w") as f:
-        f.write(fold_script(identity_tag, max_seconds))
+        f.write(script_text or fold_script(identity_tag, max_seconds))
     if runner._scp(pod, [script], "/workspace/sponsor-run.sh").returncode != 0:
         raise SystemExit(f"fold_rent: could not copy the fold loop to {pod.name}")
     r = runner._ssh(pod, sb.launch_command())
@@ -108,9 +153,14 @@ def start_fold(runner, pod, identity_tag, max_seconds):
         raise SystemExit(f"fold_rent: could not start folding on {pod.name}: {r.stderr.strip()[:200]}")
 
 
-def summarise(log_text):
-    """folds attempted, folds that succeeded — from the log the pod actually wrote."""
-    attempts = [l for l in log_text.splitlines() if l.startswith("FOLD ")]
+def summarise(log_text, label=None):
+    """folds attempted, folds that succeeded — from the log the pod actually wrote.
+
+    ⚠ `label` selects one phase of a comparison run. Without it, a CUDA phase and a CPU phase would
+    be averaged into a single meaningless rate.
+    """
+    pre = f"FOLD {label} " if label else "FOLD "
+    attempts = [l for l in log_text.splitlines() if l.startswith(pre)]
     ok = [l for l in attempts if " rc=0 " in l]
     return len(attempts), len(ok)
 
@@ -166,6 +216,16 @@ def cmd_selftest(a):
     n, ok = summarise("ALLDONE")
     check((n, ok) == (0, 0), "⚠ a run that folded nothing reports zero, not success")
 
+    # 6. the comparison runs BOTH provers, verifies the one it fetches, and keeps the phases apart
+    cs = compare_script("tag", 300, "v0.22.1")
+    check("hazync-host-cuda" in cs and "hazync-host-cpu" in cs, "the comparison runs both provers")
+    check("sha256sum -c -" in cs, "⛔ the CPU binary it fetches is sha256-verified before use")
+    check(cs.index("PHASE CUDA start") < cs.index("PHASE CPU start"), "CUDA phase runs first, then CPU")
+    log = "FOLD CUDA 1 rc=0 a\nFOLD CUDA 2 rc=0 b\nFOLD CPU 1 rc=0 c\nALLDONE"
+    check(summarise(log, "CUDA") == (2, 2), "the CUDA phase is counted alone")
+    check(summarise(log, "CPU") == (1, 1), "⚠ and the CPU phase separately, never averaged together")
+    check(summarise(log) == (3, 3), "unlabelled still totals both")
+
     print()
     if fails:
         print(f"FAIL {len(fails)}")
@@ -188,6 +248,8 @@ def main(argv=None):
             # ⛔⛔ A BUDGET IS NOT A CLOCK. $10 on a $0.40/hr card is TWENTY-ONE HOURS, so a budget
             # alone would leave a pod folding overnight on what was meant to be a short measurement.
             # The run takes the SHORTER of the two, always.
+            p.add_argument("--compare", action="store_true",
+                           help="run CUDA then CPU on the SAME pod, and report both rates")
             p.add_argument("--minutes", type=int, default=45,
                            help="wall-clock cap; the run uses whichever of this and --budget-usd is shorter")
         if name == "run":
@@ -256,7 +318,14 @@ def main(argv=None):
         ok, detail = runner.boot(pod)
         if not ok:
             raise SystemExit(f"fold_rent: boot failed: {detail}")
-        start_fold(runner, pod, a.identity, budget_s)
+        if a.compare:
+            # ⚠ The clock is split between the two phases, so --minutes still bounds the whole run.
+            each = budget_s // 2
+            print(f"  comparing: {each // 60} min CUDA then {each // 60} min CPU on this one pod")
+            start_fold(runner, pod, a.identity, budget_s,
+                       compare_script(a.identity, each, runner.release or "v0.22.1"))
+        else:
+            start_fold(runner, pod, a.identity, budget_s)
         started = time.time()
         while time.time() - started < budget_s + POLL_S:
             if runner.status(pod) == "finished":
@@ -284,6 +353,21 @@ def main(argv=None):
                 # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
                 print(f"  ⛔⛔ TERMINATE FAILED for {pod_id}: {e} — TERMINATE IT BY HAND")
 
+    if a.compare:
+        print()
+        rates = {}
+        for label in ("CUDA", "CPU"):
+            n, ok = summarise(log, label)
+            rates[label] = ok
+            print(f"  {label:<5} folds attempted {n}, succeeded {ok}")
+        if rates["CPU"] and rates["CUDA"]:
+            print(f"  ⇒ CUDA is {rates['CUDA'] / rates['CPU']:.1f}x the CPU fold rate on this machine")
+        else:
+            # ⛔ A ZERO IN EITHER PHASE IS NOT A RATIO. Dividing by it, or quietly reporting the
+            # other phase alone, would turn a failed experiment into a confident number.
+            print("  ⚠ one phase folded nothing — no ratio; read the log before concluding anything")
+        if "CPU_SHA_BAD" in log:
+            print("  ⛔ the CPU binary failed its sha256 — that phase measured nothing trustworthy")
     attempts, ok_n = summarise(log)
     elapsed = (time.time() - started) if started else 0.0
     spent = elapsed * (rate or 0) / 3600.0
