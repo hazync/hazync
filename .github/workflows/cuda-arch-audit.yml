@@ -102,6 +102,22 @@ jobs:
           # halfway is worse than one that says "none", because it looks like a tooling failure.
           grep -oE 'compute_[0-9]+' ptx.txt | sort | uniq -c | sort -rn | sed 's/^/  /' || echo "  (none)" 
           echo
+          # ⛔⛔ A KERNEL CAN COMPILE FOR sm_61 AND STILL REFUSE TO LOAD. Pascal allows 48 KB of
+          # STATIC shared memory per block; Volta and later allow far more, and a kernel sized for
+          # them fails at MODULE LOAD, not at compile. That is exactly where CUDA_MODULE_LOADING=EAGER
+          # put the failure on a real 1050 Ti -- at the first context-using call rather than in the
+          # NTT. This is the measurement that tells us whether that is what is happening.
+          echo "=== resource usage per kernel (shared memory is the Pascal limit: 48 KB) ==="
+          cuobjdump --dump-resource-usage "$HOST_EXE" > res.txt 2>&1 || true
+          echo "  kernels described: $(grep -c 'Function ' res.txt || true)"
+          echo "  --- the hungriest by shared memory ---"
+          awk '/Function /{fn=$NF} /smem/{print $0"  <- "fn}' res.txt \
+            | grep -oE '[0-9]+ bytes smem.*' | sort -rn | head -10 | sed 's/^/    /' || true
+          echo "  --- anything ABOVE Pascal's 48 KB static limit ---"
+          over=$(awk '/smem/{for(i=1;i<=NF;i++) if($i=="smem"){v=$(i-2)+0; if(v>49152) print v}}' res.txt | wc -l)
+          echo "    kernels over 49152 bytes: ${over:-0}"
+          [ "${over:-0}" != "0" ] && echo "    ⇒ ⛔ THOSE CANNOT LOAD ON PASCAL — that is the blocker"
+
           echo "=== VERDICT ==="
           # ⛔ A COUNT, NOT A GREP -q. "sm_61 appears somewhere" is not the claim; the claim is how
           # much of the binary the card can actually run, against the modules that need it.
@@ -125,4 +141,5 @@ jobs:
           path: |
             elf.txt
             ptx.txt
+            res.txt
           retention-days: 14
