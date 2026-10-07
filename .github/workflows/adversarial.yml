@@ -341,6 +341,13 @@ jobs:
           timeout 240 sudo apt-get install -y -qq xvfb python3-tk || { echo "install of xvfb/python3-tk failed or timed out"; exit 1; }
           python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
           cd tools/win-gui && timeout 120 xvfb-run -a python3 theme.py
+          # ⛔⛔ AND THE WINDOW ITSELF, which nothing tested. hazync_gui.py is ~1,200 lines of widget
+          # construction, and a typo in _build or a widget added to the wrong parent was caught only
+          # when somebody launched it -- on Windows, the one platform CI cannot run the real thing
+          # on. Every Windows-only bug this project has hit was invisible on Linux until then.
+          # ⚠ The xvfb and python3-tk installed above are exactly what this needs too, so it rides
+          # along here rather than paying for them twice.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_gui_builds.py
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
