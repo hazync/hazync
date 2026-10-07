@@ -337,6 +337,54 @@ def main():
         supervisor._run = _real_run
         os.environ.clear(); os.environ.update(_real_env)
 
+    print("── the worker's own advice must never be read as evidence (hazync#631) ──")
+    # ⛔ THIS IS THE ACTUAL OUTPUT FROM A REAL GTX 1050 Ti, 2026-10-07. The worker prints that hint
+    # on EVERY CUDA failure, and it contains the words "out of memory", so a substring match told a
+    # card failing with cudaErrorNotSupported that it had run out of VRAM. That answer is confident
+    # and actionable and WRONG: a newcomer lowers HAZYNC_SEG_PO2, fails identically, and gives up.
+    REAL = (
+        'CUDA ERROR: cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking)'
+        '@sppark\\sppark\\util\\gpu_t.cuh:62 failed: "operation not supported"\n'
+        "  (the abort that follows is this error crossing C++ -> Rust on MSVC;\n"
+        "   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)\n"
+        "fatal runtime error: Rust cannot catch foreign exceptions, aborting\n"
+    )
+    said = supervisor.explain(REAL) or ""
+    check("ran out of memory" not in said.lower(),
+          "⛔ a cudaErrorNotSupported failure is NOT reported as out of memory")
+    check("operation not supported" in said.lower(),
+          "and the real GPU error is quoted back instead")
+
+    # ⛔⛔ AND THE LINE ON ITS OWN, WHICH IS HOW THE WINDOW ACTUALLY SEES IT. The GUI streams worker
+    # output and explains it LINE BY LINE, so the hint arrives with no CUDA ERROR beside it and the
+    # early return in explain() never fires. My first version of this test passed the whole block,
+    # took that early return, and therefore PASSED AGAINST THE BUG -- it proved nothing.
+    HINT = "   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)"
+    alone = supervisor.explain(HINT)
+    check(not (alone and "ran out of memory" in alone.lower()),
+          "⛔⛔ the hint line ALONE does not produce out-of-memory advice (the real bug)")
+    check(supervisor.interesting_line(HINT) != "oom",
+          "⛔ nor is it flagged as an OOM event in the log pane")
+    # ⚠ NOT a `CUDA ERROR:` line here — interesting_line classifies those as "cuda-error" first,
+    # which is right: that is the more prominent category. The OOM branch is for the plainer forms.
+    check(supervisor.interesting_line("memory allocation failed: out of memory") == "oom",
+          "⚠ while a plain out-of-memory line still is")
+    check(supervisor.interesting_line('CUDA ERROR: x failed: "out of memory"') == "cuda-error",
+          "and a CUDA ERROR line is flagged as that, not demoted to oom")
+
+    # ⚠ AND THE FIX MUST NOT BREAK THE TRUE CASE. A genuine OOM still has to say so, or this trade
+    # has only moved the wrong answer somewhere else.
+    TRUE_OOM = ('CUDA ERROR: cudaMalloc@x.cuh:1 failed: "out of memory"\n'
+                "   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)\n")
+    said2 = supervisor.explain(TRUE_OOM) or ""
+    check("hazync_seg_po2" in said2.lower(),
+          "⚠ a REAL out-of-memory error still gets the SEG_PO2 advice")
+
+    check(supervisor.is_worker_hint("   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)"),
+          "the hint line is recognised as the worker's own boilerplate")
+    check(not supervisor.is_worker_hint('CUDA ERROR: x failed: "out of memory"'),
+          "and a real error line is not mistaken for it")
+
     print()
     if fails:
         print(f"FAIL: {fails} check(s)")
