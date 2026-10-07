@@ -111,6 +111,29 @@ int main()
             cudaLaunchCooperativeKernel((const void*)touch_grid_sync, dim3(blocks), dim3(32), args, 0, 0));
         say("  then synchronize", cudaDeviceSynchronize());
 
+        // 4. ⭐⭐ STREAM-ORDERED ALLOCATION. sppark calls cudaMallocAsync UNCONDITIONALLY
+        //    (gpu_t.cuh:73 and :339) and never asks whether this device has memory pools. On a
+        //    device where it does not, cudaMallocAsync returns cudaErrorNotSupported -- whose
+        //    message is the bare words "operation not supported", which is what the prover reports.
+        //    ⚠ And cudaGetLastError() is STICKY: a failure here would surface at the NEXT check,
+        //    which in the NTT path is ntt.cuh:97 -- a line that has nothing to do with allocation.
+        int pools = -1;
+        say("query cudaDevAttrMemoryPoolsSupported",
+            cudaDeviceGetAttribute(&pools, cudaDevAttrMemoryPoolsSupported, id));
+        std::printf("  memoryPoolsSupported             %d\n", pools);
+        int* da = nullptr;
+        say("cudaMallocAsync (stream 0)", cudaMallocAsync(&da, sizeof(int), 0));
+        say("cudaFreeAsync", cudaFreeAsync(da, 0));
+        say("  then synchronize", cudaDeviceSynchronize());
+
+        // 5. THE LAUNCH SHAPE THE NTT ACTUALLY USES: ntt.cuh:94 is
+        //    `LDE_distribute_powers<<<stream.sm_count(), 1024, 0, stream>>>`. 1024 threads is the
+        //    Pascal maximum, and a block that large can be refused for resources where 32 is fine.
+        //    My first probe used 32 and therefore could not have caught this.
+        touch<<<p.multiProcessorCount, 1024>>>(d);
+        say("plain launch <<<SMs,1024>>>", cudaGetLastError());
+        say("  then synchronize", cudaDeviceSynchronize());
+
         cudaFree(d);
         std::printf("\n");
     }
