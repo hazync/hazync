@@ -291,15 +291,32 @@ def main():
     rc, out = supervisor.run_stream(
         [sys.executable, "-u", "-c",
          "import time,sys\nfor i in range(3):\n print(f'  {i}/3 segments', flush=True)\n"
-         " time.sleep(0.3)"],
+         " time.sleep(0.1)"],
         timeout=30, on_line=lambda l: seen.append((_t.time() - t0, l)))
     check(rc == 0, f"run_stream returns the exit code (rc={rc})")
     check(len(seen) == 3, f"every line is delivered ({len(seen)})")
     check(all(l in out for _, l in seen), "and the full output is still returned for the verdict")
-    # ⭐ The point is WHEN they arrive, not that they arrive. Buffered output would land together.
-    spread = (seen[-1][0] - seen[0][0]) if len(seen) > 1 else 0
-    check(spread > 0.3,
-          f"lines arrive as the process runs, not in one lump at the end ({spread:.1f}s apart)")
+
+    # ⭐ The point is WHEN a line arrives, not that it arrives -- buffered output lands only at exit.
+    # ⛔⛔ BUT THE OLD VERSION MEASURED THE SPREAD BETWEEN LINES 0.3 s APART, AND THAT IS THE
+    # PARENT'S READ TIMING, NOT THE CHILD'S WRITE TIMING. If the reader is descheduled for a moment
+    # -- an ordinary thing on a loaded box -- all three lines are already in the pipe and arrive in
+    # one burst, collapsing the spread and failing a correct implementation. It flaked roughly one
+    # run in six here, and I twice blamed something else for it.
+    # ⇒ One line, then a LONG silence before exit. Streaming delivers it almost immediately;
+    # buffering could not deliver it until the process ended. The margin is the whole tail sleep,
+    # so scheduling noise cannot close it.
+    first = []
+    t1 = _t.time()
+    rc2, _ = supervisor.run_stream(
+        [sys.executable, "-u", "-c",
+         "import time\nprint('  0/1 segments', flush=True)\ntime.sleep(2.0)"],
+        timeout=30, on_line=lambda l: first.append(_t.time() - t1))
+    total = _t.time() - t1
+    check(rc2 == 0 and len(first) == 1, f"the long-running process delivered its line (rc={rc2})")
+    check(total > 1.5, f"and really did run for its full {total:.1f}s")
+    check(first and first[0] < total / 2,
+          f"⭐ the line arrived at {first[0]:.2f}s of a {total:.1f}s run — streamed, not buffered")
 
     # ⚠ The timeout must fire on a SILENT process — the case a timeout exists for. A check in the
     # read loop cannot, because the loop is blocked waiting for a line that never comes.
@@ -421,10 +438,16 @@ def main():
     # Corporation\NVSMI, which is not on PATH. The window then said "No NVIDIA driver was found"
     # and sent a perfectly good card to the CPU build -- a measured ~13x slowdown the owner would
     # never understand. Nothing errors, nothing looks wrong; they just quietly get the slow path.
-    _which, _isfile = supervisor.shutil.which, supervisor.os.path.isfile
+    # ⛔⛔ PATCH DATA, NOT os.path. My first version did
+    #     supervisor.os.path.isfile = lambda p: "System32" in p
+    # and `supervisor.os` IS the os module, so that replaced os.path.isfile PROCESS-WIDE while
+    # recommend() -> gpu_facts() -> subprocess ran underneath it. The suite then failed
+    # intermittently and I blamed a file-copy race. Pointing the FALLBACK LIST at a real temp file
+    # tests the same logic without mutating anything global.
+    _which, _fallbacks = supervisor.shutil.which, supervisor._NVSMI_FALLBACKS
     try:
-        supervisor.shutil.which = lambda _n: None          # not on PATH
-        supervisor.os.path.isfile = lambda _p: False       # and not in any known location
+        supervisor.shutil.which = lambda _n: None               # never on PATH, for both cases
+        supervisor._NVSMI_FALLBACKS = (os.path.join(d, "definitely-not-here.exe"),)
         r = supervisor.recommend(None)
         check(r["build"] == "cpu", "with no way to ask, it still recommends something that works")
         check("could not be found" in r["why"],
@@ -432,15 +455,17 @@ def main():
         check("not the same as not having one" in r["why"].lower(),
               "⭐ explicitly: this is not a verdict on their hardware")
         check("path" in r["why"].lower(), "and tells them how to fix it")
+        check("works anywhere" in r["why"], "⚠ and still says the CPU build works anywhere")
 
-        supervisor.os.path.isfile = lambda p: "System32" in p   # present, just not on PATH
-        check(supervisor.nvidia_smi().endswith("nvidia-smi.exe"),
+        planted = os.path.join(d, "nvidia-smi.exe")             # present, just not on PATH
+        open(planted, "w").close()
+        supervisor._NVSMI_FALLBACKS = (planted,)
+        check(supervisor.nvidia_smi() == planted,
               "⚠ a card whose nvidia-smi is off PATH is found via the known locations")
-        r2 = supervisor.recommend(None)
-        check("could not be found" not in r2["why"],
+        check("could not be found" not in supervisor.recommend(None)["why"],
               "and that machine is no longer told the tool is missing")
     finally:
-        supervisor.shutil.which, supervisor.os.path.isfile = _which, _isfile
+        supervisor.shutil.which, supervisor._NVSMI_FALLBACKS = _which, _fallbacks
 
     print("── a hard GPU error must not be sold as worth retrying ──")
     k, msg = supervisor.classify_exit(1, saw_cuda_error=True)
