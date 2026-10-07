@@ -134,6 +134,23 @@ int main()
         say("plain launch <<<SMs,1024>>>", cudaGetLastError());
         say("  then synchronize", cudaDeviceSynchronize());
 
+        // 6. ⭐⭐ THE CALL THE PROVER ACTUALLY DIES ON: gpu_t.cuh:62 constructs four streams
+        //    (stream_t zero + stream_t flipflop[3], all member initialisers, so they run BEFORE the
+        //    gpu_t body) with exactly these flags, and reports "operation not supported".
+        //    ⚠ stream_t never calls cudaSetDevice, so it builds on whatever device is current.
+        cudaStream_t s1 = nullptr;
+        say("cudaStreamCreateWithFlags(NonBlocking)",
+            cudaStreamCreateWithFlags(&s1, cudaStreamNonBlocking));
+        cudaStream_t s4[4] = { nullptr, nullptr, nullptr, nullptr };
+        cudaError_t worst = cudaSuccess;
+        for (int k = 0; k < 4; k++) {
+            cudaError_t ek = cudaStreamCreateWithFlags(&s4[k], cudaStreamNonBlocking);
+            if (ek != cudaSuccess && worst == cudaSuccess) worst = ek;
+        }
+        say("  x4, as gpu_t builds them", worst);
+        for (int k = 0; k < 4; k++) if (s4[k]) cudaStreamDestroy(s4[k]);
+        if (s1) cudaStreamDestroy(s1);
+
         cudaFree(d);
         std::printf("\n");
     }
