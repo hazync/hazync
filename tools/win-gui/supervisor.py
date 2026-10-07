@@ -582,8 +582,8 @@ def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
     return env
 
 
-def classify_exit(rc):
-    """(kind, human sentence) for a worker exit. The three cases are NOT interchangeable.
+def classify_exit(rc, saw_cuda_error=False):
+    """(kind, human sentence) for a worker exit. The cases are NOT interchangeable.
 
     ⛔ `run-workers.sh` learned this the hard way: retrying EX_CONFIG meant three GPUs proving for a
     day into guaranteed rejection, looking busy the whole time. A supervisor that treats every
@@ -597,7 +597,17 @@ def classify_exit(rc):
                           "The supervisor stops rather than burning the GPU.")
     if rc == EX_TEMPFAIL:
         return "idle", "nothing to claim right now — a busy board, not a fault. Waiting."
-    return "transient", f"exited {rc} — treated as transient and retried"
+    if saw_cuda_error:
+        # ⛔ A HARD GPU ERROR IS NOT TRANSIENT, AND SAYING SO INVITES THE ONE USELESS ACTION.
+        # Measured 2026-10-07: a GTX 1050 Ti printed `CUDA ERROR: ... "operation not supported"`
+        # and exited 1, which fell through to "transient" -- so the window invited a retry into a
+        # wall the card will hit every single time. The output is right there; if it contained a
+        # CUDA error, say that pressing Start again changes nothing.
+        return "gpu", (f"exited {rc} after the GPU reported an error — pressing Start again will "
+                       f"hit the same wall. Switch to the CPU build on the Setup tab.")
+    # ⚠ "retried" was never true: nothing here retries. The worker exits and Start comes back, so
+    # the honest sentence is what actually happened.
+    return "transient", f"exited {rc} — no GPU error was printed, so this may be worth one retry"
 
 
 def interesting_line(line):
