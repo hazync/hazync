@@ -337,6 +337,19 @@ def main():
         supervisor._run = _real_run
         os.environ.clear(); os.environ.update(_real_env)
 
+    print("── the floor override is opt-in, and absent unless asked for ──")
+    base = {"PATH": "/usr/bin"}
+    e_off = supervisor.worker_env("h", "w", None, d, base_env=dict(base))
+    check("HAZYNC_SPPARK_MIN_MAJOR" not in e_off,
+          "⛔ the override is ABSENT by default — sppark's floor stands unless someone asks")
+    e_on = supervisor.worker_env("h", "w", None, d, base_env=dict(base), spark_min_major=6)
+    check(e_on.get("HAZYNC_SPPARK_MIN_MAJOR") == "6", "and set when it is asked for")
+    # ⚠ It must reach the worker as a STRING; an int in the environment raises on Popen.
+    check(isinstance(e_on.get("HAZYNC_SPPARK_MIN_MAJOR"), str), "as a string, which os.environ requires")
+    e_zero = supervisor.worker_env("h", "w", None, d, base_env=dict(base), spark_min_major=0)
+    check("HAZYNC_SPPARK_MIN_MAJOR" not in e_zero,
+          "⚠ and a falsy value does not set an empty override, which sppark would ignore anyway")
+
     print("── a GPU problem must NEVER stop someone starting ──")
     # ⛔⛔ THE WHOLE POINT OF THE APP IS THAT NOBODY IS TURNED AWAY FOR THEIR HARDWARE. The CPU build
     # works everywhere, so no GPU finding -- missing, too old, undriveable, nvidia-smi absent -- may
