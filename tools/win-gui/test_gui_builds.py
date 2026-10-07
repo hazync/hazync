@@ -114,6 +114,7 @@ def main():
             ("Fold instead of prove", "folding, the job that parallelises"),
             ("CPU build", "the build that works on every machine"),
             ("GPU build", "the CUDA build"),
+            ("below the supported floor", "the opt-in for an unsupported card"),
         ]:
             check(any(want in t for t in label), f"{why} is present ({want!r})")
 

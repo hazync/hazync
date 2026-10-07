@@ -587,7 +587,7 @@ def shim_dir():
 
 
 def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
-               seg_po2=None, base_env=None, force_shim=None):
+               seg_po2=None, base_env=None, force_shim=None, spark_min_major=None):
     """The environment one worker runs with.
 
     ⚠ THE SHIM GOES ON PYTHONPATH ON WINDOWS ONLY — as cheap defence, not because shadowing is
@@ -604,6 +604,14 @@ def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
     if use_shim:
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = shim_dir() + (os.pathsep + existing if existing else "")
+    # ⚠ OPT-IN ONLY, AND NEVER GUESSED. sppark keeps cards at compute 7.0 and newer, so everything
+    # older is refused before proving is attempted. We have exactly ONE measurement of what happens
+    # when that floor is lowered -- a GTX 1050 Ti (6.1), which gets accepted and then cannot be
+    # driven (hazync#631) -- and NOTHING about any other older card. Left alone, nobody can ever
+    # find out whether theirs would work, because the env var is invisible to anyone who has not
+    # read sppark's source.
+    if spark_min_major:
+        env["HAZYNC_SPPARK_MIN_MAJOR"] = str(spark_min_major)
     if host_path:
         env["HAZYNC_HOST"] = str(host_path)
     if identity_dir:

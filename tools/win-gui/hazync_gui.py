@@ -344,7 +344,8 @@ class App(tk.Tk):
                 "dark": bool(self.dark.get()), "mode": self.mode.get(),
                 "host_cpu": self.host_cpu_var.get().strip(),
                 "host_cuda": self.host_cuda_var.get().strip(),
-                "build_kind": self.build_kind.get()}
+                "build_kind": self.build_kind.get(),
+                "force_gpu": bool(self.force_gpu.get())}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -855,6 +856,18 @@ class App(tk.Tk):
             ttk.Entry(bi, textvariable=var, width=62).grid(row=r, column=1, sticky="we", padx=8)
             ttk.Button(bi, text="Browse\u2026",
                        command=lambda k=kind: self._pick_build(k)).grid(row=r, column=2)
+        # ⚠ OPT-IN, AND HONEST ABOUT WHAT IT IS. sppark refuses cards below compute 7.0 outright,
+        # so an older card never gets as far as trying. We have ONE measurement of lowering that
+        # floor -- a GTX 1050 Ti, which is then accepted and still cannot be driven (hazync#631) --
+        # and nothing at all about other older cards. Without this nobody can find out whether
+        # theirs works, because the env var is invisible to anyone who has not read sppark.
+        # ⛔ Not automatic: for a Pascal card this REPLACES a clean "too old, use the CPU build"
+        # with a deeper and more confusing failure, so it has to be a choice someone makes.
+        self.force_gpu = tk.BooleanVar(value=bool(c.get("force_gpu")))
+        ttk.Checkbutton(bi, variable=self.force_gpu,
+                        text="Try my GPU even if it is below the supported floor "
+                             "\u2014 unproven, and known to fail on Pascal (hazync#631)"
+                        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
         bi.columnconfigure(1, weight=1)
         ttk.Button(build, text="Work it out for me", style="Accent.TButton",
                    command=self._apply_recommended).pack(anchor="w", padx=12, pady=(6, 2))
@@ -1083,10 +1096,21 @@ class App(tk.Tk):
         bundle = base / f"bundles_{i}"
         bundle.mkdir(parents=True, exist_ok=True)
         log_path = base / f"worker_{i}.log"
+        # ⚠ Only when the box is ticked AND the card is actually below the floor: setting it on a
+        # modern card would change nothing and make the log claim something untrue about the run.
+        floor = None
+        if self.force_gpu.get():
+            g = supervisor.gpu_facts()
+            if g and g["cc_major"] < 7:
+                floor = g["cc_major"]
+                self._say(f"[setup] trying your {g['name']} anyway — HAZYNC_SPPARK_MIN_MAJOR="
+                          f"{floor} lowers sppark's floor. This is unproven; if it fails, the CPU "
+                          f"build works.", "sys")
         env = supervisor.worker_env(self.host_var.get(), self.worker_var.get(),
                                     self.ident_var.get() or None, bundle,
                                     coord_url=self.coord_var.get().strip() or None,
-                                    seg_po2=(self.po2.get().strip() or None))
+                                    seg_po2=(self.po2.get().strip() or None),
+                                    spark_min_major=floor)
         cmd = supervisor.worker_command(sys.executable, self.worker_var.get(), job, extra)
         kwargs = {}
         if supervisor.IS_WINDOWS:
