@@ -613,7 +613,7 @@ def interesting_line(line):
         return "cuda-error"
     if "fatal runtime error" in low and "foreign exception" in low:
         return "abort"
-    if "out of memory" in low:
+    if "out of memory" in low and not is_worker_hint(s):
         return "oom"
     if "proved" in low and "verified" in low:
         return "proved"
@@ -681,6 +681,31 @@ _EXPLANATIONS = [
 _CUDA_ERROR_RE = re.compile(r"^\s*CUDA ERROR:\s*(.+?)\s*$", re.M | re.I)
 
 
+# ⛔⛔ THE WORKER'S OWN ADVICE CONTAINS THE WORDS WE MATCH ON. Every CUDA failure prints
+#
+#     (the abort that follows is this error crossing C++ -> Rust on MSVC;
+#      if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)
+#
+# so a plain substring search for "out of memory" fires on EVERY failure, whatever caused it.
+# ⚠ MEASURED 2026-10-07 on a real GTX 1050 Ti: a card failing with cudaErrorNotSupported was told
+# "The GPU ran out of memory", and that sent an afternoon after VRAM on a 4 GB card when the error
+# had nothing to do with memory. A newcomer would lower HAZYNC_SEG_PO2, fail again identically, and
+# conclude the app is broken -- which is the single most expensive wrong answer this program can
+# give, because it is confident and it is actionable.
+_WORKER_HINT_MARKERS = ("if it mentions", "retry with a lower")
+
+
+def is_worker_hint(line):
+    """True for the worker's own boilerplate advice, which must never be read as EVIDENCE."""
+    low = (line or "").lower()
+    return all(m in low for m in _WORKER_HINT_MARKERS)
+
+
+def without_worker_hints(text):
+    """The output with the worker's advisory lines removed, for matching against."""
+    return "\n".join(l for l in (text or "").splitlines() if not is_worker_hint(l))
+
+
 def cuda_error_text(text):
     """The GPU's own error message, if this build printed one. (hazync#631)"""
     m = _CUDA_ERROR_RE.search(text or "")
@@ -714,7 +739,8 @@ def explain(text):
             advice = ("That is the cause. Everything printed after it is the abort that follows, "
                       "not a separate problem.")
         return f"the GPU reported: {err}\n  {advice}"
-    low = (text or "").lower()
+    # ⚠ Stripped FIRST: the worker's hint would otherwise match "out of memory" on every failure.
+    low = without_worker_hints(text).lower()
     for needle, said in _EXPLANATIONS:
         if needle in low:
             return said
