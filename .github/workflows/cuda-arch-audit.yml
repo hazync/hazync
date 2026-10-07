@@ -93,11 +93,14 @@ jobs:
           cuobjdump --list-elf "$HOST_EXE" > elf.txt 2>&1 || true
           wc -l elf.txt
           # ⭐ THE WHOLE QUESTION, IN ONE TABLE: how many cubins per architecture.
-          grep -oE 'sm_[0-9]+' elf.txt | sort | uniq -c | sort -rn | sed 's/^/  /'
+          grep -oE 'sm_[0-9]+' elf.txt | sort | uniq -c | sort -rn | sed 's/^/  /' || true
           echo
           echo "=== and the PTX (which only ever JITs FORWARD) ==="
           cuobjdump --list-ptx "$HOST_EXE" > ptx.txt 2>&1 || true
-          grep -oE 'compute_[0-9]+' ptx.txt | sort | uniq -c | sort -rn | sed 's/^/  /'
+          # ⛔ `|| true`: a grep that matches nothing exits 1, and under `set -e` that killed this
+          # step AFTER it had printed the ELF table but BEFORE the verdict — a report that dies
+          # halfway is worse than one that says "none", because it looks like a tooling failure.
+          grep -oE 'compute_[0-9]+' ptx.txt | sort | uniq -c | sort -rn | sed 's/^/  /' || echo "  (none)" 
           echo
           echo "=== VERDICT ==="
           # ⛔ A COUNT, NOT A GREP -q. "sm_61 appears somewhere" is not the claim; the claim is how
