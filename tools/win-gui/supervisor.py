@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import time
@@ -338,6 +339,30 @@ def check_host_binary(host_path):
                        f"canonical METHOD_ID {got[:16]}… — {host_kind_sentence(info)}")
 
 
+# ⛔⛔ nvidia-smi IS NOT ALWAYS ON PATH, AND "NOT ON PATH" IS NOT "NO GPU". The driver normally
+# drops it in System32, but older and some OEM installs leave it only under
+# C:\Program Files\NVIDIA Corporation\NVSMI, which is not on PATH. Before this, that machine was
+# told "No NVIDIA driver was found" and sent to the CPU build -- so somebody with a perfectly good
+# card would quietly take the ~13x slowdown measured on 2026-10-07, and never know why.
+# ⚠ The fallbacks are tried only after PATH, so a normal install is unaffected.
+_NVSMI_FALLBACKS = (
+    r"C:\Windows\System32\nvidia-smi.exe",
+    r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+)
+
+
+def nvidia_smi():
+    """Where nvidia-smi is, or "nvidia-smi" to let PATH try. Never None: the caller still runs it."""
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    for cand in _NVSMI_FALLBACKS:
+        expanded = os.path.expandvars(cand)
+        if os.path.isfile(expanded):
+            return expanded
+    return "nvidia-smi"
+
+
 def gpu_facts():
     """What card is this, in numbers. (name, vram_mb, driver, cc_major, cc_minor) or None.
 
@@ -345,7 +370,7 @@ def gpu_facts():
     prover and a segment size from a human-readable string means parsing prose, and that is how a
     setting ends up wrong on the one machine nobody tested.
     """
-    rc, out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version,compute_cap",
+    rc, out = _run([nvidia_smi(), "--query-gpu=name,memory.total,driver_version,compute_cap",
                     "--format=csv,noheader"], timeout=30)
     if rc != 0 or not out.strip():
         return None
@@ -380,9 +405,19 @@ def recommend(gpu=None):
     """
     g = gpu if gpu is not None else gpu_facts()
     if not g:
+        # ⚠ TWO DIFFERENT FACTS, AND ONLY ONE OF THEM IS "YOU HAVE NO GPU". If nvidia-smi cannot
+        # be found at all, the honest statement is that we could not ASK -- and a person with a
+        # working card can act on that, whereas "no driver was found" tells them to give up.
+        if not (shutil.which("nvidia-smi") or any(os.path.isfile(os.path.expandvars(c))
+                                                  for c in _NVSMI_FALLBACKS)):
+            return {"build": "cpu", "seg_po2": None, "gpu": None,
+                    "why": "nvidia-smi could not be found, so this could not check whether you "
+                           "have a usable GPU — that is NOT the same as not having one. If you do "
+                           "have an NVIDIA card, add nvidia-smi to PATH (it is usually in "
+                           "C:\\Windows\\System32) and press Refresh. The CPU build works meanwhile."}
         return {"build": "cpu", "seg_po2": None, "gpu": None,
-                "why": "No NVIDIA driver was found, so a CUDA build could not even start. "
-                       "The CPU build works anywhere."}
+                "why": "nvidia-smi ran but reported no usable NVIDIA GPU, so a CUDA build could "
+                       "not even start. The CPU build works anywhere."}
     seg = next(po2 for floor, po2 in _SEG_PO2_FOR_VRAM if g["vram_mb"] >= floor)
     if g["cc_major"] < 7:
         return {"build": "cpu", "seg_po2": None, "gpu": g,
@@ -408,7 +443,7 @@ def check_gpu():
     `regress` fine and then aborted on the first GPU proving call. VRAM and the driver's CUDA version
     are the two numbers that make that diagnosable, so they are surfaced rather than hidden.
     """
-    rc, out = _run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version,compute_cap",
+    rc, out = _run([nvidia_smi(), "--query-gpu=name,memory.total,driver_version,compute_cap",
                     "--format=csv,noheader"], timeout=30)
     if rc != 0:
         rc2, out2 = _run(["nvidia-smi"], timeout=30)

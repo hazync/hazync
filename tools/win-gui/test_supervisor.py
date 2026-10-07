@@ -337,6 +337,33 @@ def main():
         supervisor._run = _real_run
         os.environ.clear(); os.environ.update(_real_env)
 
+    print("── \"nvidia-smi is not on PATH\" is not \"you have no GPU\" ──")
+    # ⛔ THE FAILURE THIS PREVENTS IS SILENT AND EXPENSIVE. nvidia-smi normally lives in System32,
+    # but older and some OEM driver installs leave it only under Program Files\NVIDIA
+    # Corporation\NVSMI, which is not on PATH. The window then said "No NVIDIA driver was found"
+    # and sent a perfectly good card to the CPU build -- a measured ~13x slowdown the owner would
+    # never understand. Nothing errors, nothing looks wrong; they just quietly get the slow path.
+    _which, _isfile = supervisor.shutil.which, supervisor.os.path.isfile
+    try:
+        supervisor.shutil.which = lambda _n: None          # not on PATH
+        supervisor.os.path.isfile = lambda _p: False       # and not in any known location
+        r = supervisor.recommend(None)
+        check(r["build"] == "cpu", "with no way to ask, it still recommends something that works")
+        check("could not be found" in r["why"],
+              "⛔ and says nvidia-smi could not be FOUND, not that there is no GPU")
+        check("not the same as not having one" in r["why"].lower(),
+              "⭐ explicitly: this is not a verdict on their hardware")
+        check("path" in r["why"].lower(), "and tells them how to fix it")
+
+        supervisor.os.path.isfile = lambda p: "System32" in p   # present, just not on PATH
+        check(supervisor.nvidia_smi().endswith("nvidia-smi.exe"),
+              "⚠ a card whose nvidia-smi is off PATH is found via the known locations")
+        r2 = supervisor.recommend(None)
+        check("could not be found" not in r2["why"],
+              "and that machine is no longer told the tool is missing")
+    finally:
+        supervisor.shutil.which, supervisor.os.path.isfile = _which, _isfile
+
     print("── a hard GPU error must not be sold as worth retrying ──")
     k, msg = supervisor.classify_exit(1, saw_cuda_error=True)
     check(k == "gpu", f"exit 1 after a CUDA error is 'gpu', not 'transient' (got {k})")
