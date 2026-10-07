@@ -337,6 +337,18 @@ def main():
         supervisor._run = _real_run
         os.environ.clear(); os.environ.update(_real_env)
 
+    print("── a hard GPU error must not be sold as worth retrying ──")
+    k, msg = supervisor.classify_exit(1, saw_cuda_error=True)
+    check(k == "gpu", f"exit 1 after a CUDA error is 'gpu', not 'transient' (got {k})")
+    check("same wall" in msg.lower(), "⛔ and says a retry changes nothing")
+    check("cpu build" in msg.lower(), "⭐ and names what to do instead")
+    k2, msg2 = supervisor.classify_exit(1, saw_cuda_error=False)
+    check(k2 == "transient", "⚠ the same exit WITHOUT a GPU error is still transient")
+    check("retried" not in msg2, "and no longer claims it was retried, because nothing retries")
+    check(supervisor.classify_exit(0)[0] == "done", "a clean exit is unaffected")
+    check(supervisor.classify_exit(supervisor.EX_CONFIG)[0] == "config",
+          "and EX_CONFIG still stops, GPU error or not")
+
     print("── the worker's own advice must never be read as evidence (hazync#631) ──")
     # ⛔ THIS IS THE ACTUAL OUTPUT FROM A REAL GTX 1050 Ti, 2026-10-07. The worker prints that hint
     # on EVERY CUDA failure, and it contains the words "out of memory", so a substring match told a
