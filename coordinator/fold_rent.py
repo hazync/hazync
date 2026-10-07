@@ -211,26 +211,48 @@ def main(argv=None):
     api = sb.RunPod.from_env()
     runner = sb.SshRunner.from_env()
     runner.prepare()
+
+    # ⛔⛔ THE ID IS CAPTURED THE INSTANT THE POD EXISTS, AND TEARDOWN USES ONLY THIS. My first
+    # attempt terminated via the pod OBJECT, so when a later line raised (deploy returns a DICT, not
+    # a Pod) the finally clause raised too and left a rented GPU billing at $0.74/hr. A teardown that
+    # depends on anything built after the rental is not a teardown.
+    pod_id = None
     pod = None
     started = None
     rate = 0.0
     log = ""
     try:
-        # ⛔ deploy() RETURNS None WHEN NO GPU TYPE HAD CAPACITY. That is not an error and not a pod;
-        # treating it as one would call .id on None inside the teardown path.
-        pod = api.deploy(f"hazync-fold-{int(time.time())}", runner.ssh_pubkey)
-        if pod is None:
+        info = api.deploy(f"hazync-fold-{int(time.time())}", runner.ssh_pubkey)
+        if info is None:
             print("fold_rent: no GPU capacity in any configured type — nothing rented, nothing spent")
             return 0
+        pod_id = info["id"]
+        pod = sb.Pod(info, time.time())
         rate = pod.cost_per_hr
         budget_s = seconds_for_budget(a.budget_usd, rate)
         capped_s = min(budget_s, a.minutes * 60) if budget_s else 0
         if budget_s and capped_s < budget_s:
             print(f"  ⚠ ${a.budget_usd:.2f} would buy {budget_s // 60} min; capped to {a.minutes} min")
         budget_s = capped_s
-        print(f"pod {pod.name} at ${rate}/hr -> {budget_s // 60} min within ${a.budget_usd:.2f}")
+        print(f"pod {pod.name} ({pod.gpu_type}) at ${rate}/hr -> folding for {budget_s // 60} min")
         if budget_s <= 0:
             raise SystemExit("fold_rent: the pod did not report a price; refusing to run unbounded")
+
+        # ⚠ SSH DOES NOT EXIST YET. deploy() returns before the container has a public port, and
+        # pod.ssh starts as None — _ssh unpacks it, so calling boot() too early is a TypeError on a
+        # pod that is already costing money.
+        deadline = time.time() + 300
+        while pod.ssh is None and time.time() < deadline:
+            for row in api.pods():
+                if row.get("id") == pod_id and row.get("ssh"):
+                    pod.ssh = row["ssh"]
+                    break
+            if pod.ssh is None:
+                time.sleep(10)
+        if pod.ssh is None:
+            raise SystemExit("fold_rent: the pod never offered an ssh port within 5 minutes")
+        print(f"  ssh up after {int(time.time() - pod.created)}s")
+
         ok, detail = runner.boot(pod)
         if not ok:
             raise SystemExit(f"fold_rent: boot failed: {detail}")
@@ -241,21 +263,26 @@ def main(argv=None):
                 break
             time.sleep(POLL_S)
     finally:
-        # ⛔⛔ HARVEST BEFORE TEARDOWN. A released pod takes its log with it.
-        if pod is not None:
+        if pod is not None and pod.ssh is not None:
+            # ⛔ HARVEST BEFORE TEARDOWN. A released pod takes its log with it.
             try:
                 log = runner._ssh(pod, "cat /workspace/sponsor-run.log", 60).stdout or ""
             except Exception as e:                                  # noqa: BLE001
                 log = f"(could not fetch the log: {e})"
-            out = os.path.join(os.environ.get("SPONSOR_BOT_HOME", "."), f"fold-{pod.id}.log")
+            out = os.path.join(os.environ.get("SPONSOR_BOT_HOME", "."), f"fold-{pod_id}.log")
             try:
                 with open(out, "w") as f:
                     f.write(log)
                 print(f"log saved: {out}")
             except OSError as e:
                 print(f"could not save the log: {e}")
-            print("terminating…")
-            print("  ", sb.terminate_confirmed(api, pod.id))
+        if pod_id:
+            print("terminating…", pod_id)
+            try:
+                print("  ", sb.terminate_confirmed(api, pod_id))
+            except Exception as e:                                  # noqa: BLE001
+                # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
+                print(f"  ⛔⛔ TERMINATE FAILED for {pod_id}: {e} — TERMINATE IT BY HAND")
 
     attempts, ok_n = summarise(log)
     elapsed = (time.time() - started) if started else 0.0
