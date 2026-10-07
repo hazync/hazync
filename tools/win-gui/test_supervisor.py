@@ -337,6 +337,43 @@ def main():
         supervisor._run = _real_run
         os.environ.clear(); os.environ.update(_real_env)
 
+    print("── several GPUs: judge by the best card, not by enumeration order ──")
+    # ⛔ AN ORDINARY UPGRADE PATH BREAKS THIS. Someone who adds an RTX 3080 beside an old GTX 1060
+    # has both listed, and nvidia-smi's order is not theirs to control. Reading line one could send
+    # that machine to the CPU build while sppark -- which keeps every card over its floor -- would
+    # have used the 3080 quite happily.
+    _real = supervisor._run
+    try:
+        def two_cards(cmd, **kw):
+            return 0, ("NVIDIA GeForce GTX 1060, 6144 MiB, 566.14, 6.1\n"
+                       "NVIDIA GeForce RTX 3080, 10240 MiB, 566.14, 8.6\n")
+        supervisor._run = two_cards
+        g = supervisor.gpu_facts()
+        check(g and g["name"].endswith("3080"), f"the 3080 is chosen over the 1060 listed first ({g and g['name']})")
+        check(g.get("gpu_count") == 2, "and both cards are counted")
+        r = supervisor.recommend(g)
+        check(r["build"] == "cuda", "⛔ so the machine is NOT sent to the CPU build")
+        check("2 GPUs found" in r["why"], "⚠ and the advice says which card it is talking about")
+
+        # ⚠ COMPUTE BEATS MEMORY. A big old card must not outrank a usable newer one, or the
+        # ordering fix just moves the same failure somewhere less obvious.
+        def big_old_first(cmd, **kw):
+            return 0, ("NVIDIA TITAN Xp, 12288 MiB, 566.14, 6.1\n"
+                       "NVIDIA GeForce RTX 2060, 6144 MiB, 566.14, 7.5\n")
+        supervisor._run = big_old_first
+        g2 = supervisor.gpu_facts()
+        check(g2 and g2["name"].endswith("2060"),
+              f"⛔ a 6 GB compute-7.5 card beats a 12 GB compute-6.1 one ({g2 and g2['name']})")
+
+        def one_card(cmd, **kw):
+            return 0, "NVIDIA GeForce RTX 4090, 24576 MiB, 566.14, 8.9\n"
+        supervisor._run = one_card
+        g3 = supervisor.gpu_facts()
+        check(g3.get("gpu_count") == 1 and "GPUs found" not in supervisor.recommend(g3)["why"],
+              "a single card is unchanged, and says nothing about multiples")
+    finally:
+        supervisor._run = _real
+
     print("── \"nvidia-smi is not on PATH\" is not \"you have no GPU\" ──")
     # ⛔ THE FAILURE THIS PREVENTS IS SILENT AND EXPENSIVE. nvidia-smi normally lives in System32,
     # but older and some OEM driver installs leave it only under Program Files\NVIDIA

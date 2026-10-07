@@ -374,15 +374,29 @@ def gpu_facts():
                     "--format=csv,noheader"], timeout=30)
     if rc != 0 or not out.strip():
         return None
-    parts = [x.strip() for x in out.strip().splitlines()[0].split(",")]
-    if len(parts) < 4:
+    # ⛔⛔ THE FIRST CARD nvidia-smi LISTS IS NOT NECESSARILY THE ONE THAT WILL PROVE. sppark keeps
+    # every card that clears its floor and uses those, so on a machine with an old card and a new
+    # one -- a GTX 1060 beside an RTX 3080, which is an ordinary upgrade path -- judging by line one
+    # could recommend the CPU build while the prover would have happily used the 3080. Reading one
+    # line meant the advice depended on enumeration order, which nobody controls.
+    cards = []
+    for line in out.strip().splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) < 4:
+            continue
+        mb = re.search(r"(\d+)", parts[1])
+        cc = re.match(r"(\d+)\.(\d+)", parts[3])
+        if not (mb and cc):
+            continue
+        cards.append({"name": parts[0], "vram_mb": int(mb.group(1)), "driver": parts[2],
+                      "cc_major": int(cc.group(1)), "cc_minor": int(cc.group(2))})
+    if not cards:
         return None
-    mb = re.search(r"(\d+)", parts[1])
-    cc = re.match(r"(\d+)\.(\d+)", parts[3])
-    if not (mb and cc):
-        return None
-    return {"name": parts[0], "vram_mb": int(mb.group(1)), "driver": parts[2],
-            "cc_major": int(cc.group(1)), "cc_minor": int(cc.group(2))}
+    # ⚠ Compute capability first, THEN memory: a card below the floor cannot prove at all, however
+    # much VRAM it has, so more memory must never outrank being usable.
+    best = max(cards, key=lambda c: (c["cc_major"], c["cc_minor"], c["vram_mb"]))
+    best["gpu_count"] = len(cards)
+    return best
 
 
 # ⛔⛔ EVERY NUMBER HERE WAS MEASURED, NOT CHOSEN. The segment size decides peak VRAM, and the only
@@ -431,8 +445,12 @@ def recommend(gpu=None):
     if g["vram_mb"] < 8000:
         note = (f" ⚠ {g['vram_mb']:,} MiB is below anything this project has proved with — the "
                 f"smallest measured is 24 GB — so {seg} is a starting point, not a promise.")
+    several = ""
+    if g.get("gpu_count", 1) > 1:
+        several = (f" ⚠ {g['gpu_count']} GPUs found; this advice is for the most capable one, "
+                   f"which is the one the prover will use.")
     return {"build": "cuda", "seg_po2": seg, "gpu": g,
-            "why": f"{g['name']}, compute {g['cc_major']}.{g['cc_minor']}, {g['vram_mb']:,} MiB. "
+            "why": f"{g['name']}, compute {g['cc_major']}.{g['cc_minor']}, {g['vram_mb']:,} MiB.{several} "
                    f"Suggested HAZYNC_SEG_PO2={seg}, extrapolated from one measured prove that "
                    f"peaked near 22 GB at 21.{note}"}
 
