@@ -38,9 +38,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.run_id || '37379111741' }}
+          # ⛔ VIA env:, NEVER INLINE IN run:. check-workflow-injection.sh refuses a ${{ }}
+          # expression inside a run: block, and it is right to: the expression is substituted into
+          # the script TEXT before bash sees it, so anything attacker-influenced becomes code.
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh run download "$RUN_ID" -R "${{ github.repository }}" \
+          gh run download "$RUN_ID" -R "$REPO" \
              -n hazync-host-windows-x86_64-cuda -D hostbin
           ls -la hostbin
           # ⚠ A truncated or missing download would make every finding below meaningless.
