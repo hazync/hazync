@@ -88,6 +88,31 @@ def main():
     layered = api.worst_state([(1, 100, 3), (1, 100, 5)], 1, 100)
     check(layered == api.PROVEN, "and a layered bucket reads the LEAST advanced state present")
 
+    print("── 5b. where someone is working ──")
+    # The shape /api/state really returned on 2026-10-09, plus the two things that must be ignored.
+    state = {"progress": {}, "claims": [
+        {"lo": 144441, "hi": 144441, "handle": "a", "elapsed": 504, "stale": False},
+        {"lo": 500000, "hi": 500000, "handle": "b", "elapsed": 90000, "stale": True},
+        {"lo": "x", "hi": 3}, None, {"lo": 0, "hi": 0}]}
+    claims = api.live_claims(state)
+    check(claims == [(144441, 144441)],
+          f"⛔ only LIVE, well-formed claims are kept — a stale one is a machine that left ({claims})")
+    check(api.live_claims({}) == [] and api.live_claims(None) == [],
+          "no claims, or no reply at all, is an empty list rather than a crash")
+    plain, _ = api.map_rows(RUNS, TIP, per_row=100, rows_max=20)
+    rows, per_cell = api.map_rows(RUNS, TIP, per_row=100, rows_max=20, claims=claims)
+    flat, flat0 = [c for r in rows for c in r], [c for r in plain for c in r]
+    marked = [c for c in flat if c[0] == api.CLAIMED]
+    check(len(marked) == 1 and marked[0][1] <= 144441 <= marked[0][2],
+          f"exactly the one square holding the claim is marked ({len(marked)} marked)")
+    check(sum(a != b for a, b in zip(flat, flat0)) == 1,
+          "and nothing else on the map changes because of it")
+    rows, _ = api.map_rows(RUNS, TIP, per_row=100, rows_max=20, claims=[(5, 5)])
+    check(not any(c[0] == api.CLAIMED for r in rows for c in r),
+          "⛔ a claim on a block that is already proven never repaints a finished square")
+    check(api.CLAIMED not in (api.OPEN, api.PROVEN, api.FOLDED, api.ANCHORED)
+          and api.OPEN < api.CLAIMED < api.PROVEN, "claimed sits between open and proven, as on the site")
+
     print("── 6. errors a person can act on ──")
     try:
         api.fetch("/api/state", coord="http://127.0.0.1:1", timeout=2)

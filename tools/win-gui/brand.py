@@ -66,8 +66,7 @@ def palette(dark=False):
 # ⚠ The site validated this set with a data-viz palette checker (worst pair OKLab dE 9.7 under
 # simulated red-green colour blindness). Changing one here un-validates it; change the site first.
 MAP_SURFACE = "#000000"      # the ground: the lines between squares and the space after the tip
-MAP_CLAIMED = "#00b0ff"      # cyan — the site's "claimed". The app's map data carries no claims
-                             # (/api/blockstatus leaves them out), so nothing is painted this yet.
+MAP_CLAIMED = "#00b0ff"      # cyan — a prover has reserved it and is working on it
 MAP_PROVEN = "#f038c0"       # magenta
 MAP_FOLDED = "#e8ff00"       # hi-viz yellow
 MAP_ANCHORED = "#ff8a1f"     # orange
@@ -80,6 +79,7 @@ def state_colours(dark=False):
     """
     return {
         0: palette(dark)["haze"],   # open
+        1: MAP_CLAIMED,
         3: MAP_PROVEN,
         4: MAP_FOLDED,
         5: MAP_ANCHORED,
@@ -149,20 +149,19 @@ def self_test():
     print(f"  {'ok  ' if ok else 'FAIL'} light and dark define the SAME names")
     bad += 0 if ok else 1
     sc = state_colours()
-    ok = set(sc) == {0, 3, 4, 5}
-    print(f"  {'ok  ' if ok else 'FAIL'} the map has a colour for open/proven/folded/anchored")
+    ok = set(sc) == {0, 1, 3, 4, 5}
+    print(f"  {'ok  ' if ok else 'FAIL'} the map has a colour for open/claimed/proven/folded/anchored")
     bad += 0 if ok else 1
-    want = {3: "#f038c0", 4: "#e8ff00", 5: "#ff8a1f"}
-    ok = all(sc[k] == v for k, v in want.items()) and MAP_SURFACE == "#000000" \
-        and MAP_CLAIMED == "#00b0ff"
-    print(f"  {'ok  ' if ok else 'FAIL'} the map uses the SITE's map colours: magenta proven, yellow "
-          f"folded, orange anchored, on black")
+    want = {1: "#00b0ff", 3: "#f038c0", 4: "#e8ff00", 5: "#ff8a1f"}
+    ok = all(sc[k] == v for k, v in want.items()) and MAP_SURFACE == "#000000"
+    print(f"  {'ok  ' if ok else 'FAIL'} the map uses the SITE's map colours: cyan claimed, magenta "
+          f"proven, yellow folded, orange anchored, on black")
     bad += 0 if ok else 1
     ok = state_colours(False)[0] == LIGHT["haze"] and state_colours(True)[0] == DARK["haze"]
     print(f"  {'ok  ' if ok else 'FAIL'} open blocks are the theme's grey, as on the site")
     bad += 0 if ok else 1
-    ok = len({sc[0], sc[3], sc[4], sc[5]}) == 4
-    print(f"  {'ok  ' if ok else 'FAIL'} all four map colours are DISTINCT, or the map says nothing")
+    ok = len(set(sc.values())) == len(sc) == 5
+    print(f"  {'ok  ' if ok else 'FAIL'} all five map colours are DISTINCT, or the map says nothing")
     bad += 0 if ok else 1
     # the logo's rectangles must match the real favicon's numbers
     svg = logo_svg()

@@ -18,9 +18,11 @@ worse than one that displays nothing.
 one derived fact the dashboard needs and the API does not state directly, and it is why `open_ranges`
 exists here with a test rather than inline in a widget.
 
-⚠ Claims are deliberately absent from /api/blockstatus ("they change by the second"), so the map
-shows what is PROVED, never what someone is currently working on. A "pick a block" button that
-assumed otherwise would hand out work already in progress.
+⚠ Claims are deliberately absent from /api/blockstatus ("they change by the second"). They ARE in
+/api/state, which this already fetches for the headline numbers, so the map can show where someone
+is working at no extra cost — see `board` and the `claims` argument of `map_rows`. ⛔ That is for
+SHOWING only: a "pick a block" button must still ask the coordinator, which owns allocation, or it
+hands out work already in progress.
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -40,8 +42,12 @@ DEFAULT_COORD = "https://api.hazync.org"
 # the absence of a run, not a code the API emits.
 PROVEN, FOLDED, ANCHORED = 3, 4, 5
 OPEN = 0
+# Ours too, and numbered as the website numbers it (open 0, claimed 1, ... spined 5), so the two
+# maps order the states identically. It comes from /api/state's `claims`, never from a run.
+CLAIMED = 1
 
-STATE_NAMES = {OPEN: "open", PROVEN: "proven", FOLDED: "folded", ANCHORED: "anchored"}
+STATE_NAMES = {OPEN: "open", CLAIMED: "claimed", PROVEN: "proven", FOLDED: "folded",
+               ANCHORED: "anchored"}
 
 
 class ApiError(Exception):
@@ -79,6 +85,38 @@ def progress(coord=DEFAULT_COORD, timeout=20):
     if not isinstance(p, dict):
         raise ApiError("/api/state has no `progress` object — the API shape changed")
     return p
+
+
+def live_claims(state):
+    """[(lo, hi), ...] for the claims a prover is actually holding, from an /api/state reply.
+
+    ⛔ STALE CLAIMS ARE LEFT OUT. The coordinator marks a claim `stale` once its holder has stopped
+    sending heartbeats for a full cycle; painting those would show work going on where a machine
+    went away hours ago, which is the exact thing a map of claims exists to tell apart.
+
+    ⚠ A malformed entry is skipped, not fatal: this decorates a map, and one bad row must not blank
+    the whole board.
+    """
+    out = []
+    for c in (state or {}).get("claims") or []:
+        try:
+            if c.get("stale"):
+                continue
+            lo, hi = int(c["lo"]), int(c["hi"])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+        if 1 <= lo <= hi:
+            out.append((lo, hi))
+    return out
+
+
+def board(coord=DEFAULT_COORD, timeout=20):
+    """(progress, claims) from ONE call to /api/state — the headline numbers and who is working."""
+    d = fetch("/api/state", coord, timeout)
+    p = d.get("progress")
+    if not isinstance(p, dict):
+        raise ApiError("/api/state has no `progress` object — the API shape changed")
+    return p, live_claims(d)
 
 
 def block_status(coord=DEFAULT_COORD, prover=None, timeout=30):
@@ -163,13 +201,19 @@ def first_open(runs, upto, count=1):
     return out
 
 
-def map_rows(runs, upto, per_row, rows_max=None):
+def map_rows(runs, upto, per_row, rows_max=None, claims=()):
     """Compress the chain into rows of cells for a block map, each cell a (state, lo, hi) bucket.
 
     ⚠ ONE SQUARE PER BLOCK DOES NOT FIT ON A SCREEN. The website's map is "every block mined so far,
     one square each" and the chain is ~970k blocks; a window shows thousands of cells, not a million.
     So each cell covers a RANGE, and its state is the WORST state in that range — because a cell that
     showed its best state would paint a mostly-open chain as proved, which is the opposite of useful.
+
+    ⭐ `claims` MARKS WHERE SOMEONE IS WORKING. A cell that still has open blocks AND holds a live
+    claim is CLAIMED. ⚠ At ~500 blocks to a square that means "a prover is working somewhere in
+    this square", not "every block here is taken" — claims are one block each, so at this zoom
+    there is no other way for them to be visible at all. ⛔ It never overrides a cell that is fully
+    proven: a claim on an already-proven block is a prover about to find that out, not open work.
     """
     if upto is None or upto < 1 or per_row < 1:
         return [], 1
@@ -179,7 +223,10 @@ def map_rows(runs, upto, per_row, rows_max=None):
     lo = 1
     while lo <= upto:
         hi = min(upto, lo + per_cell - 1)
-        row.append((worst_state(runs, lo, hi), lo, hi))
+        st = worst_state(runs, lo, hi)
+        if st == OPEN and any(not (b < lo or a > hi) for a, b in claims):
+            st = CLAIMED
+        row.append((st, lo, hi))
         if len(row) == per_row:
             rows.append(row)
             row = []

@@ -82,6 +82,7 @@ class App(tk.Tk):
         self.fix_errors = {}
         self.workers = []
         self.runs, self.meta, self.prog = [], {}, {}
+        self.claims = []                 # (lo, hi) a prover is holding right now, for the map
         self._cells = []                 # (item_id, lo, hi, state) for the map
         self._explained = set()          # each known failure explained once, not every line
         self._auto_diag_done = False     # the cheap checks run once per launch, not on every rescan
@@ -772,7 +773,7 @@ class App(tk.Tk):
 
         leg = tk.Frame(t, bg=p["fog"])
         leg.pack(fill="x", padx=10)
-        for st in (api.ANCHORED, api.FOLDED, api.PROVEN, api.OPEN):
+        for st in (api.ANCHORED, api.FOLDED, api.PROVEN, api.CLAIMED, api.OPEN):
             sw = tk.Frame(leg, bg=brand.state_colours(self.dark.get())[st],
                           width=14, height=14, highlightbackground=p["haze"], highlightthickness=1)
             sw.pack(side="left", padx=(10, 4))
@@ -802,7 +803,8 @@ class App(tk.Tk):
         cell, gap = 9, 2
         per_row = max(10, (w - 20) // (cell + gap))
         rows_max = max(4, (h - 20) // (cell + gap))
-        rows, per_cell = api.map_rows(self.runs, self.meta["tip"], per_row, rows_max)
+        rows, per_cell = api.map_rows(self.runs, self.meta["tip"], per_row, rows_max,
+                                      claims=self.claims)
         self.v_percell.set(f"{per_cell:,} blocks per square · {self.meta['tip']:,} blocks total")
         cols = brand.state_colours(self.dark.get())
         for r, row in enumerate(rows):
@@ -820,7 +822,8 @@ class App(tk.Tk):
             if iid == hit[0]:
                 n = hi - lo + 1
                 self.v_cell.set(f"blocks {lo:,}–{hi:,}  ({n:,} block{'s' if n > 1 else ''})  —  "
-                                f"least advanced state here: {api.STATE_NAMES[st]}")
+                                + ("a prover is working in here right now" if st == api.CLAIMED
+                                   else f"least advanced state here: {api.STATE_NAMES[st]}"))
                 return
 
     # ── tab: run ────────────────────────────────────────────────────────────────────────────────
@@ -1303,7 +1306,7 @@ class App(tk.Tk):
     def _refresh_thread(self, coord):
         out = {}
         try:
-            out["prog"] = api.progress(coord)
+            out["prog"], out["claims"] = api.board(coord)
             out["meta"], out["runs"] = api.block_status(coord)
         except api.ApiError as e:
             out["err"] = str(e)
@@ -1332,6 +1335,7 @@ class App(tk.Tk):
             self.status.configure(text=f"could not reach the coordinator — {out['err']}")
             return
         self.prog, self.meta, self.runs = out["prog"], out["meta"], out["runs"]
+        self.claims = out.get("claims") or []
         p = self.prog
         self.v_proven.set(f"{p.get('proven', 0):,}")
         self.v_folded.set(f"{p.get('folded', 0):,}")
