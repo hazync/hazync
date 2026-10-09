@@ -193,6 +193,15 @@ def control():
 
 
 def main(argv):
+    # ⛔ BEFORE ANYTHING PRINTS. A Windows runner's stdout is cp1252, which cannot encode the marks
+    # this prints. Run 37961309707 built a correct binary in three hours, listed its five modules,
+    # and then died on the line saying they were all present — failing the build on its own
+    # success message.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     if "--control" in argv:
         return control()
     args = [a for a in argv if not a.startswith("--")]

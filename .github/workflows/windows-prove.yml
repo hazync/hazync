@@ -821,8 +821,10 @@ jobs:
           # and up, and it assumes an 8-byte `long`, which MSVC does not have. ⚠ That is an
           # inference from the error and the one-image build, not something isolated by a build
           # that differed only in sm_120.
-          # ⇒ A 50-series card has NO native image in this binary. Its only route is the driver
-          # compiling the compute_61 PTX below, which every module now carries. UNTESTED.
+          # ⇒ A 50-series card has NO native image in this binary, AND NO FALLBACK EITHER. The
+          # compute_61 PTX asked for below was meant to be one; reading the binary this produced
+          # (run 37961309707) shows it in ONE module of five. Why the other four drop it is not
+          # known. So this build is for 10-, 16-, 20-, 30- and 40-series cards and not 50-series.
           #
           # ⚠ Three images roughly triples what nvcc compiles. This build was 2h16m with one.
           # ⚠ CUDA 12.9 deprecates sm_61 and sm_70 and will warn; a deprecation warning is not an error.

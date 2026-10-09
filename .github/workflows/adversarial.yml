@@ -271,7 +271,11 @@ jobs:
         # This is the reader windows-prove.yml runs on its own output; here it must catch a
         # Pascal-only build, one module missing one generation, and an image that exists only in a
         # relocatable part.
-        run: python3 scripts/gpu_code_archs.py --control
+        run: |
+          python3 scripts/gpu_code_archs.py --control
+          # ⛔ AND AS A WINDOWS RUNNER SEES IT. Its stdout is cp1252, which cannot encode the marks
+          # this prints; it failed a three-hour build on the line reporting success.
+          PYTHONIOENCODING=cp1252 python3 scripts/gpu_code_archs.py --control
 
       - name: The Windows GUI's supervisor logic (headless — no display, no GPU, no Windows)
         # ⚠ The LOGIC is tested, not the window. A supervisor whose only entry point is a GUI
