@@ -743,8 +743,8 @@ jobs:
           # changes: a tree restored from a Pascal-only build would hand back Pascal-only kernels
           # under a log that shows the new flags. ⚠ Keep this tag in step with GPU_ARCHS below and
           # with the save step's key.
-          key: cuda-target-${{ runner.os }}-a61-70-80-120-${{ hashFiles('prover/Cargo.lock') }}
-          restore-keys: cuda-target-${{ runner.os }}-a61-70-80-120-
+          key: cuda-target-${{ runner.os }}-a61-70-80-${{ hashFiles('prover/Cargo.lock') }}
+          restore-keys: cuda-target-${{ runner.os }}-a61-70-80-
 
       - name: ⭐ Build the host for Windows WITH CUDA (#631)
         shell: bash
@@ -808,11 +808,25 @@ jobs:
           #     sm_61    GTX 10-series                  (Pascal; the hazync#631 card)
           #     sm_70    GTX 16-series, RTX 20-series   (Turing is 7.5), Titan V
           #     sm_80    RTX 30-series, RTX 40-series   (Ampere is 8.6, Ada 8.9)
-          #     sm_120   RTX 50-series                  (Blackwell; needs a CUDA 12.8+ toolkit)
           #
-          # ⚠ Four images roughly quadruples what nvcc compiles. This build was 2h16m with one.
+          # ⛔⛔ sm_120 (RTX 50-series, Blackwell) IS NOT IN THE LIST, AND IT WAS TRIED. Run
+          # 37939193159 asked for it and failed after 2h56m, in both risc0 kernel crates, on
+          # NVIDIA's own header:
+          #
+          #   include\cuda/__ptx/instructions/generated/clusterlaunchcontrol.h(78): error: asm
+          #   operand type size(4) does not match type/size implied by constraint 'l'
+          #
+          # Cluster launch control is a Blackwell instruction, and the same toolkit built sm_61
+          # alone without touching that header, so the reading is: it is compiled only for sm_100
+          # and up, and it assumes an 8-byte `long`, which MSVC does not have. ⚠ That is an
+          # inference from the error and the one-image build, not something isolated by a build
+          # that differed only in sm_120.
+          # ⇒ A 50-series card has NO native image in this binary. Its only route is the driver
+          # compiling the compute_61 PTX below, which every module now carries. UNTESTED.
+          #
+          # ⚠ Three images roughly triples what nvcc compiles. This build was 2h16m with one.
           # ⚠ CUDA 12.9 deprecates sm_61 and sm_70 and will warn; a deprecation warning is not an error.
-          GPU_ARCHS="61 70 80 120"
+          GPU_ARCHS="61 70 80"
           # ⚠ `--list-gpu-code`, NOT `--list-gpu-arch`. The second prints `compute_61`, the first
           # `sm_61`; matching `sm_` against the wrong one found nothing and stopped the first run
           # of this in 38 seconds, which is the check doing its job on its own author.
@@ -941,7 +955,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: prover/target
-          key: cuda-target-${{ runner.os }}-a61-70-80-120-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
+          key: cuda-target-${{ runner.os }}-a61-70-80-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Bank the cargo registry even if a later step fails
         if: always()
