@@ -1,0 +1,145 @@
+# Which GPU architectures are ACTUALLY inside the prover binary? (hazync#631)
+#
+# ⛔⛔ WHY THIS EXISTS. #631 has been argued from build flags for three days, and the argument keeps
+# being wrong because a flag is not evidence about a binary. windows-prove.yml exports
+# NVCC_APPEND_FLAGS with compute_61, which is true -- and I used it to declare the
+# missing-kernel-image theory dead. But that flag only governs what THIS repo compiles. risc0-zkp is
+# a REGISTRY crate, not vendored, and the panic that started all this is at
+# risc0-zkp-3.0.5/src/hal/cuda.rs:708 during zk_shift.
+#
+# ⭐ Measured 2026-10-07 on a real GTX 1050 Ti: with CUDA_MODULE_LOADING=EAGER the failure moves from
+# ntt.cuh:97 to the FIRST context-using call, and with lazy loading (the default) it moves back. That
+# is the signature of a module with no image for the device -- lazy loading defers the fault to first
+# use, eager loading raises it at context creation. A probe proved the card itself can do every
+# operation involved, so capability is not the question. CONTENT is.
+#
+# `cuobjdump --list-elf` answers it in seconds, against an artifact that already exists -- no 2h16m
+# rebuild. If sm_61 is absent from any module the prover needs, that is the answer; if it is present
+# everywhere, the theory is dead for good and we stop revisiting it.
+name: cuda-arch-audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'windows-prove run whose hazync-host-windows-x86_64-cuda artifact to audit'
+        default: '37379111741'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: windows-2022
+    steps:
+      - name: Fetch the prover binary that actually fails
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id || '37379111741' }}
+          # ⛔ VIA env:, NEVER INLINE IN run:. check-workflow-injection.sh refuses a ${{ }}
+          # expression inside a run: block, and it is right to: the expression is substituted into
+          # the script TEXT before bash sees it, so anything attacker-influenced becomes code.
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" -R "$REPO" \
+             -n hazync-host-windows-x86_64-cuda -D hostbin
+          ls -la hostbin
+          # ⚠ A truncated or missing download would make every finding below meaningless.
+          f=$(find hostbin -name 'host*.exe' | head -1)
+          [ -n "$f" ] || { echo "no host exe in the artifact"; exit 1; }
+          n=$(wc -c < "$f")
+          echo "host exe: $f ($n bytes)"
+          [ "$n" -gt 50000000 ] || { echo "implausibly small"; exit 1; }
+          echo "HOST_EXE=$f" >> "$GITHUB_ENV"
+
+      - name: Install cuobjdump, pinned and sha256-verified
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # ⛔ cuobjdump DOES NOT SHIP IN cuda_nvcc. The first attempt assumed it did; that package
+          # holds nvcc, ptxas, nvlink, fatbinary, cudafe++, bin2c and cicc, and nothing else. It is
+          # its own redist package, and this audit needs nothing but it -- no compiler at all.
+          # ⚠ Unlike the 12.6.3 entries in windows-prove.yml, this archive WAS downloaded and hashed
+          # before being committed: 6,219,088 bytes, sha256 below, matching NVIDIA's manifest for
+          # 12.9.1. Saying which hashes were earned and which were copied is the point of pinning.
+          $url = 'https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/windows-x86_64/cuda_cuobjdump-windows-x86_64-12.9.82-archive.zip'
+          $sha = '1eda43a76a2eac25fce5bdb4b68673b5bda737d54cca5513148c36362ab7c811'
+          $zip = Join-Path $env:RUNNER_TEMP 'cuobjdump.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha) { Write-Host "sha256 $got != $sha"; exit 1 }
+          $ex = Join-Path $env:RUNNER_TEMP 'cuobjdump'
+          Expand-Archive -Path $zip -DestinationPath $ex -Force
+          # ⛔ FIND IT, DO NOT ASSUME THE LAYOUT. Guessing `<topdir>/bin` failed on the first run,
+          # and "no cuobjdump" said nothing about where it actually was -- so on failure this now
+          # prints the tree rather than making the next person guess too.
+          $exe = Get-ChildItem $ex -Recurse -Filter 'cuobjdump.exe' | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "cuobjdump.exe is not in this archive. What IS here:"
+            Get-ChildItem $ex -Recurse -Filter '*.exe' | ForEach-Object { Write-Host "  $($_.FullName)" }
+            exit 1
+          }
+          Write-Host "found: $($exe.FullName)"
+          $exe.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: What architectures are in there?
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "=== every embedded ELF, by arch ==="
+          cuobjdump --list-elf "$HOST_EXE" > elf.txt 2>&1 || true
+          wc -l elf.txt
+          # ⭐ THE WHOLE QUESTION, IN ONE TABLE: how many cubins per architecture.
+          grep -oE 'sm_[0-9]+' elf.txt | sort | uniq -c | sort -rn | sed 's/^/  /' || true
+          echo
+          echo "=== and the PTX (which only ever JITs FORWARD) ==="
+          cuobjdump --list-ptx "$HOST_EXE" > ptx.txt 2>&1 || true
+          # ⛔ `|| true`: a grep that matches nothing exits 1, and under `set -e` that killed this
+          # step AFTER it had printed the ELF table but BEFORE the verdict — a report that dies
+          # halfway is worse than one that says "none", because it looks like a tooling failure.
+          grep -oE 'compute_[0-9]+' ptx.txt | sort | uniq -c | sort -rn | sed 's/^/  /' || echo "  (none)" 
+          echo
+          # ⛔⛔ A KERNEL CAN COMPILE FOR sm_61 AND STILL REFUSE TO LOAD. Pascal allows 48 KB of
+          # STATIC shared memory per block; Volta and later allow far more, and a kernel sized for
+          # them fails at MODULE LOAD, not at compile. That is exactly where CUDA_MODULE_LOADING=EAGER
+          # put the failure on a real 1050 Ti -- at the first context-using call rather than in the
+          # NTT. This is the measurement that tells us whether that is what is happening.
+          echo "=== resource usage per kernel (shared memory is the Pascal limit: 48 KB) ==="
+          cuobjdump --dump-resource-usage "$HOST_EXE" > res.txt 2>&1 || true
+          echo "  kernels described: $(grep -c 'Function ' res.txt || true)"
+          echo "  --- the hungriest by shared memory ---"
+          awk '/Function /{fn=$NF} /smem/{print $0"  <- "fn}' res.txt \
+            | grep -oE '[0-9]+ bytes smem.*' | sort -rn | head -10 | sed 's/^/    /' || true
+          echo "  --- anything ABOVE Pascal's 48 KB static limit ---"
+          over=$(awk '/smem/{for(i=1;i<=NF;i++) if($i=="smem"){v=$(i-2)+0; if(v>49152) print v}}' res.txt | wc -l)
+          echo "    kernels over 49152 bytes: ${over:-0}"
+          [ "${over:-0}" != "0" ] && echo "    ⇒ ⛔ THOSE CANNOT LOAD ON PASCAL — that is the blocker"
+
+          echo "=== VERDICT ==="
+          # ⛔ A COUNT, NOT A GREP -q. "sm_61 appears somewhere" is not the claim; the claim is how
+          # much of the binary the card can actually run, against the modules that need it.
+          n61=$(grep -c 'sm_61' elf.txt || true)
+          tot=$(grep -c 'sm_' elf.txt || true)
+          echo "  sm_61 cubins: $n61 of $tot"
+          if [ "${n61:-0}" = "0" ]; then
+            echo "  ⇒ NO Pascal code at all — the missing-image theory is CONFIRMED"
+          elif [ "${n61:-0}" -lt "${tot:-1}" ]; then
+            echo "  ⇒ PARTIAL — some modules have sm_61 and some do not; the gap is the bug"
+            echo "  --- modules WITHOUT sm_61 ---"
+            awk '/\.sm_/{print}' elf.txt | grep -v 'sm_61' | sed 's/^/    /' | head -40
+          else
+            echo "  ⇒ every module has sm_61; the theory is dead and the fault is elsewhere"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cuda-arch-audit
+          path: |
+            elf.txt
+            ptx.txt
+            res.txt
+          retention-days: 14

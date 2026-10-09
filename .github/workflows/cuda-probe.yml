@@ -1,0 +1,122 @@
+# Ask the CARD what it can do, in seconds rather than in a 2h16m prover build (hazync#631).
+#
+# ⛔⛔ WHY THIS WORKFLOW EXISTS. #631 has produced FOUR "root causes" in three days -- OOM, the
+# device floor, memory pools, missing sm_61 kernels -- and three were refuted by something already
+# written in this repo. Each round cost a full windows-prove run (2h16m) and learned one bit, because
+# the prover fails identically for a dozen different reasons and its error names neither the
+# architecture nor the kernel:
+#
+#     Failure during zk_shift: cudaGetLastError()@sppark/ntt/ntt.cuh:97 failed: "operation not supported"
+#
+# tools/cuda-probe/probe.cu asks the questions directly and prints cudaError NAMES, which is the
+# distinction every wrong theory died on: a missing kernel image is cudaErrorNoKernelImageForDevice,
+# a refused cooperative launch is cudaErrorNotSupported -- and ONLY the second one's message is the
+# bare words "operation not supported".
+#
+# ⚠ CI HAS NO GPU, so this workflow only BUILDS. The answer comes from running the exe on the card.
+# That is the whole design: a ~1 MB download instead of 177 MB, and seconds of compile instead of
+# two hours.
+name: cuda-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      cuda:
+        description: "CUDA redist set: 12.9.1 (default). 12.x only -- 13 dropped Pascal."
+        default: '12.9.1'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    # ⛔ windows-2022, NOT windows-latest. Measured in #631: windows-latest carries Visual Studio 18
+    # (MSVC 14.5x) and CUDA 12.9 refuses it outright -- "Only the versions between 2017 and 2022
+    # (inclusive) are supported". windows-2022 is the lever that made the kernels compile at all.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA (nvcc + cudart + cccl), pinned and sha256-verified
+        shell: pwsh
+        env:
+          CUDA_SET: ${{ inputs.cuda }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # ⛔ PINNED BY SHA, NOT RESOLVED FROM NVIDIA'S MANIFEST AT RUN TIME -- same trust property
+          # as windows-prove.yml: this file is the anchor, not a document fetched during the build.
+          # ⚠ Only three archives, because the probe needs a compiler, a runtime and the headers
+          # cooperative_groups.h pulls in. windows-prove.yml needs a fourth (profiler_api); copying
+          # its full list here would be four things to keep in step instead of three.
+          $base = 'https://developer.download.nvidia.com/compute/cuda/redist'
+          $sets = @{
+            '12.9.1' = @(
+              @{ n='cuda_nvcc';   p='cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.9.86-archive.zip';     s='227b109663b5e57d2718bcabb24a4ba0d9d4e52d958e327dc476f7c28691be85' },
+              @{ n='cuda_cudart'; p='cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.9.79-archive.zip'; s='179e9c43b0735ffe67207b3da556eb5a0c50f3047961882b7657d3b822d34ef8' },
+              @{ n='cuda_cccl';   p='cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.9.27-archive.zip';     s='17aaa7c6b8f94a417d8f3261780b7e34b9cbdfab7513bce86768623b06aa28b5' }
+            )
+          }
+          $cudaVer = if ($env:CUDA_SET) { $env:CUDA_SET } else { '12.9.1' }
+          if (-not $sets.ContainsKey($cudaVer)) { Write-Host "no pinned set for $cudaVer"; exit 1 }
+          $root = Join-Path $env:RUNNER_TEMP 'cuda'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          foreach ($a in $sets[$cudaVer]) {
+            $zip = Join-Path $env:RUNNER_TEMP "$($a.n).zip"
+            Invoke-WebRequest -Uri "$base/$($a.p)" -OutFile $zip
+            $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $a.s) { Write-Host "$($a.n): sha256 $got != $($a.s)"; exit 1 }
+            $ex = Join-Path $env:RUNNER_TEMP "x_$($a.n)"
+            Expand-Archive -Path $zip -DestinationPath $ex -Force
+            $kids = Get-ChildItem $ex
+            $dirs = @($kids | Where-Object { $_.PSIsContainer })
+            $srcDir = if ($dirs.Count -eq 1) { $dirs[0].FullName } else { $ex }
+            Copy-Item -Path (Join-Path $srcDir '*') -Destination $root -Recurse -Force
+          }
+          "CUDA_PATH=$root" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          (Join-Path $root 'bin') | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          # ⛔ POSITIVE CONTROL: nvcc must RUN and report the version asked for. "the files are
+          # there" is not the claim being made.
+          $nvcc = Join-Path $root 'bin\nvcc.exe'
+          if (-not (Test-Path $nvcc)) { Write-Host "no nvcc.exe at $nvcc"; exit 1 }
+          $ver = & $nvcc --version 2>&1 | Out-String
+          Write-Host $ver
+          $mm = ($cudaVer.Split('.')[0..1]) -join '.'
+          if ($ver -notmatch [regex]::Escape("release $mm")) { Write-Host "nvcc is not release $mm"; exit 1 }
+          if ($mm -notmatch '^12\.') { Write-Host "CUDA $mm is not 12.x -- Pascal needs 12.x"; exit 1 }
+          if (-not (Test-Path (Join-Path $root 'include\cooperative_groups.h'))) {
+            Write-Host "missing cooperative_groups.h -- the probe cannot test the thing it exists for"; exit 1
+          }
+
+      - name: Compile the probe
+        shell: cmd
+        run: |
+          @echo on
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSPATH=%%i
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          REM sm_61 is Pascal, the card this is for. compute_61 PTX lets the same exe JIT forward
+          REM onto anything newer, and sm_75 is a native cubin for a common modern card -- so one
+          REM binary answers for the 1050 Ti AND for whatever we test against next.
+          REM (CUDA 12.9 deprecates sm_61 and WILL warn. A deprecation warning is not an error.)
+          nvcc -O2 ^
+            -gencode=arch=compute_61,code=sm_61 ^
+            -gencode=arch=compute_61,code=compute_61 ^
+            -gencode=arch=compute_75,code=sm_75 ^
+            -o probe.exe tools\cuda-probe\probe.cu || exit /b 1
+          dir probe.exe
+
+      - name: The exe must exist and be a real binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ⚠ A zero-byte or missing exe would upload happily and fail on the user's machine, which
+          # is the slowest possible place to discover it.
+          n=$(wc -c < probe.exe)
+          echo "probe.exe: $n bytes"
+          [ "$n" -gt 100000 ] || { echo "implausibly small ($n bytes)"; exit 1; }
+          head -c 2 probe.exe | grep -q 'MZ' || { echo "not a PE executable"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hazync-cuda-probe
+          path: probe.exe
+          retention-days: 14
