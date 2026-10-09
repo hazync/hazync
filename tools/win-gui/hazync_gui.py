@@ -779,7 +779,8 @@ class App(tk.Tk):
             tk.Label(leg, text=api.STATE_NAMES[st], bg=p["fog"], fg=p["slate"],
                      font=("Segoe UI", 8)).pack(side="left")
 
-        self.map_canvas = tk.Canvas(t, bg=p["fog"], highlightthickness=0)
+        # ⚠ BLACK, in both themes — the site's map ground. The colours were chosen against it.
+        self.map_canvas = tk.Canvas(t, bg=brand.MAP_SURFACE, highlightthickness=0)
         self.map_canvas.pack(fill="both", expand=True, padx=10, pady=8)
         self.map_canvas.bind("<Button-1>", self._map_click)
         self.map_canvas.bind("<Configure>", lambda e: self._draw_map())
@@ -794,7 +795,7 @@ class App(tk.Tk):
         self._cells = []
         if not self.runs or not self.meta.get("tip"):
             c.create_text(14, 14, anchor="nw", text="Loading the board…",
-                          fill=self.p["slate"], font=("Segoe UI", 10))
+                          fill="#93a0aa", font=("Segoe UI", 10))
             return
         w = max(c.winfo_width(), 200)
         h = max(c.winfo_height(), 120)
@@ -808,8 +809,7 @@ class App(tk.Tk):
             for i, (st, lo, hi) in enumerate(row):
                 x = 10 + i * (cell + gap)
                 y = 10 + r * (cell + gap)
-                iid = c.create_rectangle(x, y, x + cell, y + cell, fill=cols[st],
-                                         outline=self.p["haze"] if st == api.OPEN else "")
+                iid = c.create_rectangle(x, y, x + cell, y + cell, fill=cols[st], outline="")
                 self._cells.append((iid, lo, hi, st))
 
     def _map_click(self, ev):

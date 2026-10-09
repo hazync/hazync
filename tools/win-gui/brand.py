@@ -57,17 +57,35 @@ def palette(dark=False):
 # The block map's four states. ⭐ The ramp is deliberate: open is the page itself (absence reads as
 # absence), then slate -> lamp -> ink as a block gets further along, so a glance shows how much of
 # the chain is actually anchored rather than merely touched.
+# ⛔ THE MAP'S OWN COLOURS, READ OFF THE SITE — NOT DERIVED FROM THE PALETTE ABOVE. The website's
+# block map does not use the page palette: it is cyan, magenta, hi-viz yellow and orange on a BLACK
+# ground, the same in both themes (hazync.org/assets/explorer.css, `.bmap { --map-* }`). This file
+# used to paint the map from ink/lamp/slate instead, so the app's map and the site's map showed the
+# same blocks in different colours and a person moving between them had to relearn the key.
+#
+# ⚠ The site validated this set with a data-viz palette checker (worst pair OKLab dE 9.7 under
+# simulated red-green colour blindness). Changing one here un-validates it; change the site first.
+MAP_SURFACE = "#000000"      # the ground: the lines between squares and the space after the tip
+MAP_CLAIMED = "#00b0ff"      # cyan — the site's "claimed". The app's map data carries no claims
+                             # (/api/blockstatus leaves them out), so nothing is painted this yet.
+MAP_PROVEN = "#f038c0"       # magenta
+MAP_FOLDED = "#e8ff00"       # hi-viz yellow
+MAP_ANCHORED = "#ff8a1f"     # orange
+
+
 def state_colours(dark=False):
-    p = palette(dark)
+    """Colour per block state, keyed by the coordinator's own codes — the site's map colours.
+
+    Only `open` follows the theme: the site uses the page's `haze` grey for it, so do we.
+    """
     return {
-        0: p["mist"],      # open — the background, not a colour
-        3: p["slate"],     # proven
-        4: p["lamp"],      # folded
-        5: p["ink"],       # anchored to genesis
+        0: palette(dark)["haze"],   # open
+        3: MAP_PROVEN,
+        4: MAP_FOLDED,
+        5: MAP_ANCHORED,
     }
 
 
-# The favicon's three rectangles, as fractions of its 32x32 viewBox, so they scale to any size.
 _RECTS = (
     # (x, y, w, h, palette key, rounded)
     (0 / 32, 0 / 32, 32 / 32, 32 / 32, "fog", True),
@@ -133,6 +151,15 @@ def self_test():
     sc = state_colours()
     ok = set(sc) == {0, 3, 4, 5}
     print(f"  {'ok  ' if ok else 'FAIL'} the map has a colour for open/proven/folded/anchored")
+    bad += 0 if ok else 1
+    want = {3: "#f038c0", 4: "#e8ff00", 5: "#ff8a1f"}
+    ok = all(sc[k] == v for k, v in want.items()) and MAP_SURFACE == "#000000" \
+        and MAP_CLAIMED == "#00b0ff"
+    print(f"  {'ok  ' if ok else 'FAIL'} the map uses the SITE's map colours: magenta proven, yellow "
+          f"folded, orange anchored, on black")
+    bad += 0 if ok else 1
+    ok = state_colours(False)[0] == LIGHT["haze"] and state_colours(True)[0] == DARK["haze"]
+    print(f"  {'ok  ' if ok else 'FAIL'} open blocks are the theme's grey, as on the site")
     bad += 0 if ok else 1
     ok = len({sc[0], sc[3], sc[4], sc[5]}) == 4
     print(f"  {'ok  ' if ok else 'FAIL'} all four map colours are DISTINCT, or the map says nothing")
