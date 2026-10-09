@@ -49,6 +49,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import cards  # noqa: E402
+
 IS_WINDOWS = os.name == "nt"
 
 # The canonical guest image id. A binary printing anything else produces proofs the coordinator
@@ -363,6 +365,17 @@ def nvidia_smi():
     return "nvidia-smi"
 
 
+def gpu_cards():
+    """Every NVIDIA card in this machine, as numbers: see cards.parse. [] when it cannot ask.
+
+    ⚠ A SEPARATE QUESTION FROM gpu_facts, which answers "which ONE card is this advice about".
+    This one is for giving each card its own worker, so it needs the card's index as well.
+    """
+    rc, out = _run([nvidia_smi(), f"--query-gpu={cards.QUERY}", "--format=csv,noheader"],
+                   timeout=30)
+    return cards.parse(out) if rc == 0 else []
+
+
 def gpu_facts():
     """What card is this, in numbers. (name, vram_mb, driver, cc_major, cc_minor) or None.
 
@@ -447,8 +460,8 @@ def recommend(gpu=None):
                 f"smallest measured is 24 GB — so {seg} is a starting point, not a promise.")
     several = ""
     if g.get("gpu_count", 1) > 1:
-        several = (f" ⚠ {g['gpu_count']} GPUs found; this advice is for the most capable one, "
-                   f"which is the one the prover will use.")
+        several = (f" ⚠ {g['gpu_count']} GPUs found; this advice is for the most capable one. "
+                   f"Each card that can prove gets a worker of its own.")
     return {"build": "cuda", "seg_po2": seg, "gpu": g,
             "why": f"{g['name']}, compute {g['cc_major']}.{g['cc_minor']}, {g['vram_mb']:,} MiB.{several} "
                    f"Suggested HAZYNC_SEG_PO2={seg}, extrapolated from one measured prove that "
@@ -577,9 +590,13 @@ def check_signing_library(python_exe=None):
     return CheckResult("signing library", True, f"cryptography {out.strip()}")
 
 
-def gpu_lock_path():
-    """Where the cross-worker GPU lock lives. ⚠ The worker's default is a POSIX /tmp path."""
-    return str(Path(tempfile.gettempdir()) / "hazync-gpu.lock")
+def gpu_lock_path(card=None):
+    """Where the cross-worker GPU lock lives. ⚠ The worker's default is a POSIX /tmp path.
+
+    ⚠ ONE LOCK PER CARD when a worker is pinned to one (see cards.py): two cards must not wait on
+    each other, and two workers on the same card still must.
+    """
+    return str(Path(tempfile.gettempdir()) / cards.lock_name(card))
 
 
 def shim_dir():
@@ -587,7 +604,7 @@ def shim_dir():
 
 
 def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
-               seg_po2=None, base_env=None, force_shim=None, spark_min_major=None):
+               seg_po2=None, base_env=None, force_shim=None, spark_min_major=None, card=None):
     """The environment one worker runs with.
 
     ⚠ THE SHIM GOES ON PYTHONPATH ON WINDOWS ONLY — as cheap defence, not because shadowing is
@@ -638,7 +655,11 @@ def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
     # nothing there and cannot drift into a Windows-only code path nobody exercises.
     env["PYTHONIOENCODING"] = "utf-8"
     # ⚠ Always set, because the worker's default is /tmp and Windows has no /tmp.
-    env["HAZYNC_GPU_LOCK"] = gpu_lock_path()
+    env["HAZYNC_GPU_LOCK"] = gpu_lock_path(card)
+    # ⭐ One card for this worker, on a machine with several. Nothing is set when `card` is None,
+    # so a one-card machine runs exactly as it did before. ⚠ Whatever the person's own environment
+    # says about CUDA_VISIBLE_DEVICES is left alone in that case too.
+    env.update(cards.pin_env(card))
     # Unbuffered, or the GUI's log pane shows nothing until a worker exits.
     env["PYTHONUNBUFFERED"] = "1"
     return env

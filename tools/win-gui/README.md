@@ -204,6 +204,29 @@ workers are safe. But if the shim is ever absent, the worker's own fallback is t
 N workers would then share one GPU unserialised. Default 1; raise it once a run has shown the lock
 working.
 
+## More than one graphics card
+
+A machine with two or more cards that can prove gets **one worker on each**, started seeing only its
+own card (`CUDA_VISIBLE_DEVICES`, with `CUDA_DEVICE_ORDER=PCI_BUS_ID` so CUDA numbers the cards the
+way `nvidia-smi` does) and taking a lock that belongs to that card alone. Before this every worker
+shared one lock and none was told which card to use, so a second card sat idle. `cards.py` decides;
+`test_cards.py` and `test_cards_flow.py` test it.
+
+- The worker count can only grow: one worker asked for on three cards starts three; four asked for
+  on two cards starts four, two to a card, taking turns.
+- A card below the prover's floor (compute capability 7.0) gets no worker.
+- A smaller card beside a bigger one gets its own, smaller segment size.
+- Anchoring is never multiplied — it is one step after another, and a second worker only races the first.
+- A machine with one usable card is untouched: nothing is pinned and the lock is the one it always was.
+- Advanced → Options lists the cards with a tick box each, all ticked to begin with. An unticked
+  card is left alone; the choice is remembered by the card's UUID, so it follows the card if the
+  cards are moved between slots. The last card cannot be unticked.
+
+⛔ **Not yet run on a real two-card machine.** What is tested: the decision; that each real child
+process receives its own card and lock; and (2026-10-09, one A40 on Linux) that the real prover
+proves when pinned to the card it has and refuses when pinned to one it does not. Two cards proving
+at once under this window has not been watched by anyone.
+
 ## Things the GUI will not do
 
 - **Start past a fatal check.** A binary whose `METHOD_ID` is not canonical produces proofs the

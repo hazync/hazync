@@ -331,6 +331,14 @@ jobs:
       - name: Home-page reader POSITIVE CONTROL (counts unaccepted blocks, invents a percentage — must fail)
         run: cd tools/win-gui && python3 test_activity.py --control
 
+      - name: one worker per graphics card
+        # ⛔ Every worker shared one lock and none was told which card to use, so a machine with two
+        # cards proved on one and the other sat idle. This is the decision: who gets which card,
+        # which cards get none, and that a one-card machine is left exactly as it was.
+        run: cd tools/win-gui && python3 test_cards.py
+      - name: per-card POSITIVE CONTROL (one shared lock, no card chosen — must fail)
+        run: cd tools/win-gui && python3 test_cards.py --control
+
       - name: dark mode is actually dark
         # ⛔ 24 ttk widgets rendered in the OS theme because ttk.Style was never used, so dark mode
         # was grey Windows chrome on a near-black page. This asserts the two palettes DIFFER.
@@ -360,6 +368,10 @@ jobs:
           # printing the worker's real lines: this is the only check that a line crossing the pipe,
           # the reader thread and the queue actually reaches the headline, the bar and the feed.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_home_flow.py
+          # ⭐ AND PRESS START ON TWO CARDS. Each child process writes down the environment it was
+          # really given: a card chosen but never handed to the process would pass every check on
+          # the decision while both workers piled onto one card.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_cards_flow.py
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU

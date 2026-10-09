@@ -43,6 +43,7 @@ from tkinter import filedialog, messagebox, ttk
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import activity  # noqa: E402
 import brand  # noqa: E402
+import cards  # noqa: E402
 import firstrun  # noqa: E402
 import hazync_api as api  # noqa: E402
 import supervisor  # noqa: E402
@@ -53,8 +54,11 @@ REFRESH_S = 60          # the website refreshes the map every minute; match it r
 
 
 class Worker:
-    def __init__(self, index, popen, log_path, job):
+    def __init__(self, index, popen, log_path, job, card=None, label=""):
         self.index, self.popen, self.log_path, self.job = index, popen, log_path, job
+        # The graphics card this worker was given, and what to call it on screen. Both empty on a
+        # machine with one card, where nothing is pinned and nothing needs telling apart.
+        self.card, self.label = card, label
         self.started = time.time()
         self.stopping = False
         self.activity = activity.Activity(job)
@@ -367,9 +371,31 @@ class App(tk.Tk):
             lead = self.workers[0]
             a = lead.activity
             stopping = any(w.stopping for w in self.workers)
-            self.v_head.set("Stopping…" if stopping else a.headline)
-            self.v_sub.set("Letting the prover finish cleanly." if stopping else a.detail)
-            self._set_bar(a.fraction, busy=not a.waiting)
+            named = [w for w in self.workers if w.label]
+            if stopping:
+                self.v_head.set("Stopping…")
+                self.v_sub.set("Letting the prover finish cleanly.")
+                self._set_bar(a.fraction, busy=not a.waiting)
+            elif len({w.label for w in named}) > 1:
+                # ⭐ SEVERAL CARDS, SO ONE LINE EACH. Showing only the first worker would leave a
+                # person watching one card and wondering whether the other was doing anything —
+                # which is the question this page exists to answer.
+                n = len({w.label for w in named})
+                verb = {"run": "Proving", "fold": "Folding", "spine": "Anchoring"}[a.job]
+                self.v_head.set(f"{verb} on {n} graphics cards")
+                self.v_sub.set("\n".join(
+                    f"{w.label}:  {w.activity.headline}"
+                    + (f"  ·  {w.activity.detail}" if w.activity.detail else "")
+                    for w in self.workers))
+                # ⚠ The bar is the cards' real positions averaged, and stays a moving bar when
+                # none of them has a measurable one. It is never a number made up to fill it.
+                fr = [w.activity.fraction for w in self.workers if w.activity.fraction is not None]
+                self._set_bar(sum(fr) / len(fr) if fr else None,
+                              busy=not all(w.activity.waiting for w in self.workers))
+            else:
+                self.v_head.set(a.headline)
+                self.v_sub.set(a.detail)
+                self._set_bar(a.fraction, busy=not a.waiting)
             bits = [f"Running for {activity.clock(now - min(w.started for w in self.workers))}",
                     f"last heard from the prover {activity.clock(now - max(w.heard for w in self.workers))} ago"]
             if len(self.workers) > 1:
@@ -702,7 +728,8 @@ class App(tk.Tk):
                 "host_cpu": self.host_cpu_var.get().strip(),
                 "host_cuda": self.host_cuda_var.get().strip(),
                 "build_kind": self.build_kind.get(),
-                "force_gpu": bool(self.force_gpu.get())}
+                "force_gpu": bool(self.force_gpu.get()),
+                "cards_off": sorted(self.cards_off)}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -872,6 +899,13 @@ class App(tk.Tk):
         ttk.Entry(row, textvariable=self.po2, width=6).pack(side="left")
         tk.Label(row, text="blank = default; lower uses less graphics memory", bg=p["mist"],
                  fg=p["slate"], font=("Segoe UI", 8)).pack(side="left", padx=6)
+        # ⭐ WHICH CARDS TO USE, one tick box each; see _show_cards. Empty, and so invisible, on a
+        # machine with fewer than two cards that can prove.
+        self.cards_off = set(self.cfg.get("cards_off") or [])
+        self._card_vars = {}
+        self.cards_box = tk.Frame(ctrl, bg=p["mist"])
+        self.cards_box.pack(anchor="w", fill="x", padx=14, pady=(0, 6))
+        self._load_cards()
         tk.Label(ctrl, text="Start and Stop are on the Home page.", bg=p["mist"], fg=p["slate"],
                  font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 8))
 
@@ -1214,7 +1248,10 @@ class App(tk.Tk):
         # ⛔ Not automatic: for a Pascal card this REPLACES a clean "too old, use the CPU build"
         # with a deeper and more confusing failure, so it has to be a choice someone makes.
         self.force_gpu = tk.BooleanVar(value=bool(c.get("force_gpu")))
+        # ⚠ Ticking this changes which cards can be chosen, so the list under Options is redrawn:
+        # an old card that is about to be given a worker must be one a person can untick.
         ttk.Checkbutton(bi, variable=self.force_gpu,
+                        command=lambda: self._show_cards(getattr(self, "_found_cards", [])),
                         text="Try my GPU even if it is below the supported floor "
                              "\u2014 unproven, and known to fail on Pascal (hazync#631)"
                         ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
@@ -1449,15 +1486,107 @@ class App(tk.Tk):
             extra = (rng,)
         base = Path(self.ident_var.get() or Path.home() / ".hazync") / "gui-workers"
         base.mkdir(parents=True, exist_ok=True)
-        for i in range(1, max(1, int(self.nworkers.get())) + 1):
-            self._spawn(i, base, job, extra)
+        # ⭐ ONE WORKER PER CARD on a machine with several; see cards.py. On a machine with one
+        # usable card every entry is None and this is exactly the loop it always was.
+        info = supervisor.classify_host(self.host_var.get())
+        # ⚠ "not known to be the CPU build", so a prover this cannot classify is still given cards.
+        cuda = info.get("kind") != "cpu"
+        found = supervisor.gpu_cards() if cuda else []
+        floor = self._card_floor(found)
+        plan = cards.plan(found, job, self.nworkers.get(), cuda_build=cuda,
+                          skip=self.cards_off, floor=floor)
+        names = cards.labels(cards.usable(found, floor))
+        for i, card in enumerate(plan, 1):
+            self._spawn(i, base, job, extra, card=card,
+                        label=names.get(card["index"], "") if card else "")
+        on = sorted({w.label for w in self.workers if w.label})
         self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
-                   + (f", {len(self.workers)} at once" if len(self.workers) > 1 else ""))
+                   + (f" on {len(on)} graphics cards: {', '.join(on)}" if len(on) > 1 else
+                      f", {len(self.workers)} at once" if len(self.workers) > 1 else ""))
+        if any(plan):
+            every = cards.labels(found)
+            idle = [c for c in found if c["cc_major"] < floor]
+            off = [c for c in cards.usable(found, floor)
+                   if c["index"] not in {x["index"] for x in plan if x}]
+            if idle:
+                self._feed("Not used: " + ", ".join(every[c["index"]] for c in idle)
+                           + " — too old for the prover")
+            if off and job != "spine":
+                self._feed("Left alone, as you chose: " + ", ".join(every[c["index"]] for c in off))
         self._sync_buttons()
         self._home_refresh()
         self.status.configure(text=f"{len(self.workers)} worker(s) running — {job}")
 
-    def _spawn(self, i, base, job, extra):
+    def _card_floor(self, found):
+        """The oldest card generation that gets a worker. ⚠ ONE answer, used by BOTH the list of
+        tick boxes and Start — when they disagreed, "try my old card anyway" gave an old card a
+        worker while its box stayed greyed out, so it could be started but not switched off."""
+        if self.force_gpu.get() and found:
+            return min(cards.FLOOR, min(c["cc_major"] for c in found))
+        return cards.FLOOR
+
+    def _load_cards(self):
+        """Ask which cards this machine has, off the main thread, and list them under Options."""
+        def go():
+            try:
+                found = supervisor.gpu_cards()
+            except Exception:      # noqa: BLE001 - not being able to ask must not stop the window
+                found = []
+            self.results.put((self._show_cards, found))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _show_cards(self, found):
+        """One tick box per graphics card, so a person chooses which ones this may use.
+
+        ⚠ ALL TICKED UNLESS SOMEBODY UNTICKS ONE. A card left idle by default is the thing nobody
+        would choose; a card kept free for a game is, and this is where they say so.
+        ⚠ Nothing is shown on a machine with fewer than two cards that can prove: there is no
+        choice to make, and a tick box that changes nothing is a question with no answer.
+        """
+        box, p = self.cards_box, self.p
+        for child in box.winfo_children():
+            child.destroy()
+        self._card_vars = {}
+        self._found_cards = list(found or [])
+        floor = self._card_floor(found)
+        ok = cards.usable(found, floor)
+        if len(ok) < 2:
+            return
+        names = cards.labels(found)
+        tk.Label(box, text="graphics cards to use — each one ticked gets a worker of its own",
+                 bg=p["mist"], fg=p["ink"]).pack(anchor="w")
+        # ⚠ A saved choice that would switch off EVERY card is not honoured (see cards.chosen), so
+        # the boxes must not show it either: the page would say "none" while Start used them all.
+        live = {cards.key(c) for c in cards.chosen(found, self.cards_off, floor)}
+        for c in found:
+            k = cards.key(c)
+            text = f"{names[c['index']]}  ·  {c['vram_mb'] / 1024:.0f} GB"
+            if c in ok and c["cc_major"] < cards.FLOOR:
+                text += "  —  older than the prover supports; being tried because you asked"
+            if c not in ok:
+                ttk.Checkbutton(box, text=text + "  —  too old for the prover", state="disabled"
+                                ).pack(anchor="w", padx=14)
+                continue
+            var = tk.BooleanVar(value=k in live)
+            self._card_vars[k] = var
+            ttk.Checkbutton(box, text=text, variable=var,
+                            command=lambda k=k: self._toggle_card(k)).pack(anchor="w", padx=14)
+        self.v_cards_note = tk.StringVar(value="")
+        tk.Label(box, textvariable=self.v_cards_note, bg=p["mist"], fg=p["slate"],
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=14)
+
+    def _toggle_card(self, k):
+        # ⛔ THE LAST CARD CANNOT BE UNTICKED. No cards chosen would leave Start with nothing to
+        # start, and it would say so only after being pressed.
+        if not any(v.get() for v in self._card_vars.values()):
+            self._card_vars[k].set(True)
+            self.v_cards_note.set("At least one card has to stay ticked.")
+            return
+        self.v_cards_note.set("Takes effect the next time you press Start." if self.workers else "")
+        self.cards_off = {key for key, v in self._card_vars.items() if not v.get()}
+        self._persist()
+
+    def _spawn(self, i, base, job, extra, card=None, label=""):
         bundle = base / f"bundles_{i}"
         bundle.mkdir(parents=True, exist_ok=True)
         log_path = base / f"worker_{i}.log"
@@ -1465,7 +1594,9 @@ class App(tk.Tk):
         # modern card would change nothing and make the log claim something untrue about the run.
         floor = None
         if self.force_gpu.get():
-            g = supervisor.gpu_facts()
+            # ⚠ The card THIS worker was given when it was given one: the floor is lowered for the
+            # card that needs it, not for a modern card that happens to sit beside an old one.
+            g = card or supervisor.gpu_facts()
             if g and g["cc_major"] < 7:
                 floor = g["cc_major"]
                 self._say(f"[setup] trying your {g['name']} anyway — HAZYNC_SPPARK_MIN_MAJOR="
@@ -1474,17 +1605,20 @@ class App(tk.Tk):
         env = supervisor.worker_env(self.host_var.get(), self.worker_var.get(),
                                     self.ident_var.get() or None, bundle,
                                     coord_url=self.coord_var.get().strip() or None,
-                                    seg_po2=(self.po2.get().strip() or None),
-                                    spark_min_major=floor)
+                                    seg_po2=cards.seg_po2_for(card, self.po2.get(),
+                                                              supervisor._SEG_PO2_FOR_VRAM),
+                                    spark_min_major=floor, card=card)
         cmd = supervisor.worker_command(sys.executable, self.worker_var.get(), job, extra)
         kwargs = {}
         if supervisor.IS_WINDOWS:
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, bufsize=1, errors="replace", **kwargs)
-        w = Worker(i, p, log_path, job)
+        w = Worker(i, p, log_path, job, card=card, label=label)
         self.workers.append(w)
-        self._say(f"[{job} {i}] started (pid {p.pid}) — log {log_path}")
+        self._say(f"[{job} {i}] started (pid {p.pid}) — log {log_path}"
+                  + (f" — on {label} (card {card['index']}, segment size "
+                     f"{env.get('HAZYNC_SEG_PO2', 'default')})" if card else ""))
         threading.Thread(target=self._pump, args=(w,), daemon=True).start()
 
     def _pump(self, w):
@@ -1525,7 +1659,10 @@ class App(tk.Tk):
         if landed > 0:
             self._landed[w.activity.job] += landed
         if event:
-            self._feed(event, "good" if landed > 0 else "sys")
+            # ⚠ Named only when there is more than one card to tell apart.
+            several = len({x.label for x in self.workers if x.label}) > 1
+            self._feed(f"{w.label}: {event}" if (w.label and several) else event,
+                       "good" if landed > 0 else "sys")
         kind = supervisor.interesting_line(line)
         if kind in ("cuda-error", "abort", "oom"):
             # ⭐ The plain-language meaning, not the raw line: "Rust cannot catch foreign
