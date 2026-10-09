@@ -813,7 +813,10 @@ jobs:
           # ⚠ Four images roughly quadruples what nvcc compiles. This build was 2h16m with one.
           # ⚠ CUDA 12.9 deprecates sm_61 and sm_70 and will warn; a deprecation warning is not an error.
           GPU_ARCHS="61 70 80 120"
-          KNOWN=$(nvcc --list-gpu-arch 2>&1 | tr -d '\r' || true)
+          # ⚠ `--list-gpu-code`, NOT `--list-gpu-arch`. The second prints `compute_61`, the first
+          # `sm_61`; matching `sm_` against the wrong one found nothing and stopped the first run
+          # of this in 38 seconds, which is the check doing its job on its own author.
+          KNOWN=$(nvcc --list-gpu-code 2>&1 | tr -d '\r' || true)
           echo "this nvcc can target: $(echo "$KNOWN" | tr '\n' ' ')"
           FLAGS=""
           BUILT=""
