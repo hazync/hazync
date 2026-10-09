@@ -78,6 +78,16 @@ def apply(root, dark=False):
                        ("disabled", p["haze"])],
            foreground=[("disabled", p["slate"])])
 
+    # ⭐ THE ONE BUTTON ON THE HOME SCREEN. Same accent, larger: it is the only thing a newcomer has
+    # to find, so it is the biggest control in the window and nothing else is styled like it.
+    st.configure("Hero.TButton", background=p["lamp"], foreground="#ffffff",
+                 bordercolor=p["lamp"], relief="flat", padding=(34, 14),
+                 font=("Segoe UI", 13, "bold"))
+    st.map("Hero.TButton",
+           background=[("pressed", p["lamp_text"]), ("active", p["lamp_text"]),
+                       ("disabled", p["haze"])],
+           foreground=[("disabled", p["slate"])])
+
     # Quiet button for secondary actions, so a row of five does not shout five times.
     st.configure("Quiet.TButton", background=p["fog"], foreground=p["slate"],
                  bordercolor=p["haze"], relief="flat", padding=(PAD_X - 2, PAD_Y - 1),
@@ -114,8 +124,10 @@ def apply(root, dark=False):
     st.configure("TScrollbar", background=p["mist"], troughcolor=p["fog"],
                  bordercolor=p["fog"], arrowcolor=p["slate"], relief="flat")
     st.map("TScrollbar", background=[("active", p["haze"])])
-    st.configure("TProgressbar", background=p["lamp"], troughcolor=p["mist"],
-                 bordercolor=p["haze"], lightcolor=p["lamp"], darkcolor=p["lamp"])
+    # ⚠ The trough is `fog`, not `mist`: the bar sits ON a mist card, and a mist trough on a mist
+    # card is an invisible bar until it has something in it.
+    st.configure("TProgressbar", background=p["lamp"], troughcolor=p["fog"],
+                 bordercolor=p["haze"], lightcolor=p["lamp"], darkcolor=p["lamp"], thickness=14)
     st.configure("TSeparator", background=p["haze"])
     st.configure("TFrame", background=p["fog"])
     st.configure("TLabel", background=p["fog"], foreground=p["ink"], font=FONT)

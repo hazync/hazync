@@ -323,6 +323,14 @@ jobs:
       - name: Auto-setup POSITIVE CONTROL (capability floor ignored — must send 6.1 to CUDA)
         run: cd tools/win-gui && python3 test_setup_auto.py --control
 
+      - name: the Home page reads the worker's real output
+        # ⛔ A prove runs for minutes to most of an hour, and a window that only says "running"
+        # reads as broken. This is the reader that turns the worker's own lines into which block,
+        # which piece of how many, and how long is left — tested on lines copied from real cards.
+        run: cd tools/win-gui && python3 test_activity.py
+      - name: Home-page reader POSITIVE CONTROL (counts unaccepted blocks, invents a percentage — must fail)
+        run: cd tools/win-gui && python3 test_activity.py --control
+
       - name: dark mode is actually dark
         # ⛔ 24 ttk widgets rendered in the OS theme because ttk.Style was never used, so dark mode
         # was grey Windows chrome on a near-black page. This asserts the two palettes DIFFER.
@@ -348,6 +356,10 @@ jobs:
           # ⚠ The xvfb and python3-tk installed above are exactly what this needs too, so it rides
           # along here rather than paying for them twice.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_gui_builds.py
+          # ⭐ AND PRESS START. A real child process, started through the window's own _spawn,
+          # printing the worker's real lines: this is the only check that a line crossing the pipe,
+          # the reader thread and the queue actually reaches the headline, the bar and the feed.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_home_flow.py
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
