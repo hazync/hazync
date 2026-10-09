@@ -218,7 +218,9 @@ shared one lock and none was told which card to use, so a second card sat idle. 
 - A smaller card beside a bigger one gets its own, smaller segment size.
 - Anchoring is never multiplied — it is one step after another, and a second worker only races the first.
 - A machine with one usable card is untouched: nothing is pinned and the lock is the one it always was.
-- "Use every graphics card" under Advanced → Options turns it off.
+- Advanced → Options lists the cards with a tick box each, all ticked to begin with. An unticked
+  card is left alone; the choice is remembered by the card's UUID, so it follows the card if the
+  cards are moved between slots. The last card cannot be unticked.
 
 ⛔ **Not yet run on a real two-card machine.** What is tested: the decision; that each real child
 process receives its own card and lock; and (2026-10-09, one A40 on Linux) that the real prover

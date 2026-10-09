@@ -84,8 +84,29 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
               f"{name}: nothing pinned, the same lock, the same count")
     check(plan(cards.parse(TWINS), "run", 1, cuda_build=False) == [None],
           "the CPU build is never pinned to a card")
-    check(plan(cards.parse(TWINS), "run", 1, per_card=False) == [None],
-          "and with the setting off, nothing changes at all")
+
+    print("── 4b. ⛔ a person chooses which cards ──")
+    three = cards.parse(BIG_SMALL + "2, GPU-third, NVIDIA GeForce RTX 2070, 8192 MiB, 566.14, 7.5\n")
+    p = plan(three, "run", 1, skip={"GPU-sml"})
+    check(ix(p) == [0, 2], f"three cards, one switched off: workers on the other two ({ix(p)})")
+    p = plan(three, "run", 1, skip={"GPU-big", "GPU-third"})
+    check(ix(p) == [1] and pin_env(p[0]).get("CUDA_VISIBLE_DEVICES") == "1",
+          "⛔ ONE card left on: the worker is PINNED to it — unpinned, the prover would pick for "
+          "itself and could take the card that was meant to be left alone")
+    p = plan(three, "run", 3, skip={"GPU-sml"})
+    check(ix(p) == [0, 2, 0], "more workers than chosen cards: they share the chosen ones only")
+    p = plan(three, "run", 1, skip={"GPU-big", "GPU-sml", "GPU-third"})
+    check(ix(p) == [0, 1, 2], "⛔ every card switched off is read as none switched off — Start "
+                              "must always have something to start")
+    p = plan(three, "spine", 1, skip={"GPU-big"})
+    check(ix(p) == [1], "anchoring goes on the best card that is still switched on")
+    moved = cards.parse("0, GPU-third, NVIDIA GeForce RTX 2070, 8192 MiB, 566.14, 7.5\n"
+                        "1, GPU-sml, NVIDIA GeForce RTX 3060 Ti, 8192 MiB, 566.14, 8.6\n"
+                        "2, GPU-big, NVIDIA GeForce RTX 4090, 24564 MiB, 566.14, 8.9\n")
+    p = plan(moved, "run", 1, skip={"GPU-sml"})
+    check([c and c["uuid"] for c in p] == ["GPU-third", "GPU-big"],
+          "⛔ the choice follows the CARD, not its slot: after the cards are moved round, the "
+          "same one is still the one left alone")
 
     print("── 5. cards that cannot prove get no worker ──")
     p = plan(cards.parse(THREE), "run", 1)
@@ -131,7 +152,7 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
 
 
 # ── the plan as it was ───────────────────────────────────────────────────────────────────────────
-def naive_plan(found, job, n_workers, cuda_build=True, per_card=True, floor=cards.FLOOR):
+def naive_plan(found, job, n_workers, cuda_build=True, skip=(), floor=cards.FLOOR):
     """What the window did: N workers, none of them told which card."""
     return [None] * max(1, int(n_workers))
 

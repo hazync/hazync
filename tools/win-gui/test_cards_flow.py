@@ -175,13 +175,37 @@ def main():
               f"the Home page reads as it always did: {app.v_head.get()!r}")
         stop_all(app)
 
-        print("── the setting off: two cards, but left alone ──")
+        print("── one card unticked: it is left alone ──")
         machine["cards"] = TWO
-        app.per_card.set(False)
+        check(not app._card_vars, "a one-card machine is offered no choice of cards")
+        app._show_cards(TWO)
+        check(sorted(app._card_vars) == ["GPU-big", "GPU-sml"]
+              and all(v.get() for v in app._card_vars.values()),
+              "two cards: a tick box for each, both ticked to begin with")
+        try:
+            os.remove(os.path.join(base, "bundles_1", "env.json"))
+        except OSError:
+            pass
+        app._card_vars["GPU-big"].set(False)
+        app._toggle_card("GPU-big")
+        check(app.cards_off == {"GPU-big"}, "unticking the 4090 is remembered")
+        import firstrun
+        check(firstrun.load_config().get("cards_off") == ["GPU-big"], "and saved, so it survives a restart")
         app._start()
-        check(len(app.workers) == 1 and app.workers[0].card is None,
-              "with 'use every graphics card' unticked, one unpinned worker, as before")
+        check(len(app.workers) == 1 and app.workers[0].label == "RTX 3060 Ti",
+              f"Start launches one worker, on the card still ticked ({[w.label for w in app.workers]})")
+        spin(app, 15, lambda: given(1))
+        e1 = given(1) or {}
+        check(e1.get("CUDA_VISIBLE_DEVICES") == "1" and e1.get("HAZYNC_SEG_PO2") == "18",
+              f"⛔ the CHILD PROCESS sees only the 3060 Ti: {e1.get('CUDA_VISIBLE_DEVICES')!r}")
+        check("Left alone, as you chose: RTX 4090" in app.feed.get("1.0", "end"),
+              "and the feed says which card was left alone")
         stop_all(app)
+        app._card_vars["GPU-sml"].set(False)
+        app._toggle_card("GPU-sml")
+        check(app._card_vars["GPU-sml"].get() and app.cards_off == {"GPU-big"}
+              and "At least one" in app.v_cards_note.get(),
+              "⛔ the last card cannot be unticked, and the page says why")
     finally:
         for w in list(app.workers):
             try:

@@ -729,7 +729,7 @@ class App(tk.Tk):
                 "host_cuda": self.host_cuda_var.get().strip(),
                 "build_kind": self.build_kind.get(),
                 "force_gpu": bool(self.force_gpu.get()),
-                "per_card": bool(self.per_card.get())}
+                "cards_off": sorted(self.cards_off)}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -899,12 +899,13 @@ class App(tk.Tk):
         ttk.Entry(row, textvariable=self.po2, width=6).pack(side="left")
         tk.Label(row, text="blank = default; lower uses less graphics memory", bg=p["mist"],
                  fg=p["slate"], font=("Segoe UI", 8)).pack(side="left", padx=6)
-        # ⚠ On by default: a second card sitting idle is the thing nobody would choose, and a person
-        # who wants it left alone (for a game, say) can say so here.
-        self.per_card = tk.BooleanVar(value=self.cfg.get("per_card", True) is not False)
-        ttk.Checkbutton(ctrl, variable=self.per_card,
-                        text="Use every graphics card — one worker on each, so none sits idle"
-                        ).pack(anchor="w", padx=14, pady=(0, 6))
+        # ⭐ WHICH CARDS TO USE, one tick box each; see _show_cards. Empty, and so invisible, on a
+        # machine with fewer than two cards that can prove.
+        self.cards_off = set(self.cfg.get("cards_off") or [])
+        self._card_vars = {}
+        self.cards_box = tk.Frame(ctrl, bg=p["mist"])
+        self.cards_box.pack(anchor="w", fill="x", padx=14, pady=(0, 6))
+        self._load_cards()
         tk.Label(ctrl, text="Start and Stop are on the Home page.", bg=p["mist"], fg=p["slate"],
                  font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 8))
 
@@ -1492,7 +1493,7 @@ class App(tk.Tk):
         if self.force_gpu.get() and found:
             floor = min(cards.FLOOR, min(c["cc_major"] for c in found))
         plan = cards.plan(found, job, self.nworkers.get(), cuda_build=cuda,
-                          per_card=bool(self.per_card.get()), floor=floor)
+                          skip=self.cards_off, floor=floor)
         names = cards.labels(cards.usable(found, floor))
         for i, card in enumerate(plan, 1):
             self._spawn(i, base, job, extra, card=card,
@@ -1501,13 +1502,76 @@ class App(tk.Tk):
         self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
                    + (f" on {len(on)} graphics cards: {', '.join(on)}" if len(on) > 1 else
                       f", {len(self.workers)} at once" if len(self.workers) > 1 else ""))
-        idle = [c for c in found if c["cc_major"] < floor]
-        if len(on) > 1 and idle:
-            self._feed("Not used: " + ", ".join(cards.labels(found)[c["index"]] for c in idle)
-                       + " — too old for the prover")
+        if any(plan):
+            every = cards.labels(found)
+            idle = [c for c in found if c["cc_major"] < floor]
+            off = [c for c in cards.usable(found, floor)
+                   if c["index"] not in {x["index"] for x in plan if x}]
+            if idle:
+                self._feed("Not used: " + ", ".join(every[c["index"]] for c in idle)
+                           + " — too old for the prover")
+            if off and job != "spine":
+                self._feed("Left alone, as you chose: " + ", ".join(every[c["index"]] for c in off))
         self._sync_buttons()
         self._home_refresh()
         self.status.configure(text=f"{len(self.workers)} worker(s) running — {job}")
+
+    def _load_cards(self):
+        """Ask which cards this machine has, off the main thread, and list them under Options."""
+        def go():
+            try:
+                found = supervisor.gpu_cards()
+            except Exception:      # noqa: BLE001 - not being able to ask must not stop the window
+                found = []
+            self.results.put((self._show_cards, found))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _show_cards(self, found):
+        """One tick box per graphics card, so a person chooses which ones this may use.
+
+        ⚠ ALL TICKED UNLESS SOMEBODY UNTICKS ONE. A card left idle by default is the thing nobody
+        would choose; a card kept free for a game is, and this is where they say so.
+        ⚠ Nothing is shown on a machine with fewer than two cards that can prove: there is no
+        choice to make, and a tick box that changes nothing is a question with no answer.
+        """
+        box, p = self.cards_box, self.p
+        for child in box.winfo_children():
+            child.destroy()
+        self._card_vars = {}
+        ok = cards.usable(found)
+        if len(ok) < 2:
+            return
+        names = cards.labels(found)
+        tk.Label(box, text="graphics cards to use — each one ticked gets a worker of its own",
+                 bg=p["mist"], fg=p["ink"]).pack(anchor="w")
+        # ⚠ A saved choice that would switch off EVERY card is not honoured (see cards.chosen), so
+        # the boxes must not show it either: the page would say "none" while Start used them all.
+        live = {cards.key(c) for c in cards.chosen(found, self.cards_off)}
+        for c in found:
+            k = cards.key(c)
+            text = f"{names[c['index']]}  ·  {c['vram_mb'] / 1024:.0f} GB"
+            if c not in ok:
+                ttk.Checkbutton(box, text=text + "  —  too old for the prover", state="disabled"
+                                ).pack(anchor="w", padx=14)
+                continue
+            var = tk.BooleanVar(value=k in live)
+            self._card_vars[k] = var
+            ttk.Checkbutton(box, text=text, variable=var,
+                            command=lambda k=k: self._toggle_card(k)).pack(anchor="w", padx=14)
+        self.v_cards_note = tk.StringVar(value="")
+        tk.Label(box, textvariable=self.v_cards_note, bg=p["mist"], fg=p["slate"],
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=14)
+
+    def _toggle_card(self, k):
+        # ⛔ THE LAST CARD CANNOT BE UNTICKED. No cards chosen would leave Start with nothing to
+        # start, and it would say so only after being pressed.
+        if not any(v.get() for v in self._card_vars.values()):
+            self._card_vars[k].set(True)
+            self.v_cards_note.set("At least one card has to stay ticked.")
+            return
+        self.v_cards_note.set("Takes effect the next time you press Start." if self.workers else "")
+        self.cards_off = {key for key, v in self._card_vars.items() if not v.get()}
+        self._persist()
 
     def _spawn(self, i, base, job, extra, card=None, label=""):
         bundle = base / f"bundles_{i}"

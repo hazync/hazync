@@ -81,10 +81,30 @@ def labels(cards):
     return out
 
 
-def plan(cards, job, n_workers, cuda_build=True, per_card=True, floor=FLOOR):
+def key(card):
+    """What a card is remembered by between runs: its UUID, which does not change when a card is
+    added or moved to another slot. ⚠ The index does, so a choice saved by index would silently
+    come to mean a different card."""
+    return card.get("uuid") or f"index-{card['index']}"
+
+
+def chosen(cards, skip=(), floor=FLOOR):
+    """The usable cards a person has NOT switched off.
+
+    ⛔ NEVER NONE AT ALL. Every card switched off would leave Start with nothing to start, on a
+    machine whose cards all work — so a list that excludes everything is read as excluding
+    nothing. (The window also refuses to untick the last card; this is the second fence.)
+    """
+    ok = usable(cards or [], floor)
+    skip = set(skip or ())
+    return [c for c in ok if key(c) not in skip] or ok
+
+
+def plan(cards, job, n_workers, cuda_build=True, skip=(), floor=FLOOR):
     """Which card each worker gets: a list, one entry per worker to start, each a card or None.
 
     None means "do not pin this worker" — it runs exactly as every worker did before this existed.
+    `skip` is the cards a person switched off, by `key`.
 
     ⚠ THE COUNT CAN GROW, NEVER SHRINK. Asked for one worker on a machine with three usable cards,
     this returns three, because the point is that no card sits idle. Asked for four on two cards it
@@ -96,8 +116,11 @@ def plan(cards, job, n_workers, cuda_build=True, per_card=True, floor=FLOOR):
     """
     n = max(1, int(n_workers))
     ok = usable(cards or [], floor)
-    if not cuda_build or not per_card or len(ok) < 2:
+    if not cuda_build or len(ok) < 2:
         return [None] * n
+    # ⚠ PINNED EVEN WHEN ONE CARD IS LEFT. Somebody who switched a card off wants it left alone,
+    # and an unpinned worker makes no such promise: the prover would choose for itself.
+    ok = chosen(cards, skip, floor)
     if job == "spine":
         best = max(ok, key=lambda c: (c["cc_major"], c["cc_minor"], c["vram_mb"]))
         return [best] * n
