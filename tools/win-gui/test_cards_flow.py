@@ -206,6 +206,29 @@ def main():
         check(app._card_vars["GPU-sml"].get() and app.cards_off == {"GPU-big"}
               and "At least one" in app.v_cards_note.get(),
               "⛔ the last card cannot be unticked, and the page says why")
+
+        print("── 'try my old card anyway': the old card can be switched off too ──")
+        old = {"index": 2, "uuid": "GPU-old", "name": "NVIDIA GeForce GTX 1060", "vram_mb": 6144,
+               "driver": "566.14", "cc_major": 6, "cc_minor": 1}
+        machine["cards"] = TWO + [old]
+        app.cards_off = set()
+        app.force_gpu.set(False)
+        app._show_cards(machine["cards"])
+        check("GPU-old" not in app._card_vars, "not forced: the old card has no live tick box, and gets no worker")
+        app.force_gpu.set(True)
+        app._show_cards(machine["cards"])
+        check("GPU-old" in app._card_vars and app._card_vars["GPU-old"].get(),
+              "⛔ forced: the old card is in the list with a LIVE box — it is about to get a worker")
+        app._start()
+        check(sorted(w.label for w in app.workers) == ["GTX 1060", "RTX 3060 Ti", "RTX 4090"],
+              f"and Start agrees with the list: {sorted(w.label for w in app.workers)}")
+        stop_all(app)
+        app._card_vars["GPU-old"].set(False)
+        app._toggle_card("GPU-old")
+        app._start()
+        check(sorted(w.label for w in app.workers) == ["RTX 3060 Ti", "RTX 4090"],
+              f"⛔ unticked, it gets no worker even while forced: {sorted(w.label for w in app.workers)}")
+        stop_all(app)
     finally:
         for w in list(app.workers):
             try:

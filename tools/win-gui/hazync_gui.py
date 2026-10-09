@@ -1248,7 +1248,10 @@ class App(tk.Tk):
         # ⛔ Not automatic: for a Pascal card this REPLACES a clean "too old, use the CPU build"
         # with a deeper and more confusing failure, so it has to be a choice someone makes.
         self.force_gpu = tk.BooleanVar(value=bool(c.get("force_gpu")))
+        # ⚠ Ticking this changes which cards can be chosen, so the list under Options is redrawn:
+        # an old card that is about to be given a worker must be one a person can untick.
         ttk.Checkbutton(bi, variable=self.force_gpu,
+                        command=lambda: self._show_cards(getattr(self, "_found_cards", [])),
                         text="Try my GPU even if it is below the supported floor "
                              "\u2014 unproven, and known to fail on Pascal (hazync#631)"
                         ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
@@ -1489,9 +1492,7 @@ class App(tk.Tk):
         # ⚠ "not known to be the CPU build", so a prover this cannot classify is still given cards.
         cuda = info.get("kind") != "cpu"
         found = supervisor.gpu_cards() if cuda else []
-        floor = cards.FLOOR
-        if self.force_gpu.get() and found:
-            floor = min(cards.FLOOR, min(c["cc_major"] for c in found))
+        floor = self._card_floor(found)
         plan = cards.plan(found, job, self.nworkers.get(), cuda_build=cuda,
                           skip=self.cards_off, floor=floor)
         names = cards.labels(cards.usable(found, floor))
@@ -1516,6 +1517,14 @@ class App(tk.Tk):
         self._home_refresh()
         self.status.configure(text=f"{len(self.workers)} worker(s) running — {job}")
 
+    def _card_floor(self, found):
+        """The oldest card generation that gets a worker. ⚠ ONE answer, used by BOTH the list of
+        tick boxes and Start — when they disagreed, "try my old card anyway" gave an old card a
+        worker while its box stayed greyed out, so it could be started but not switched off."""
+        if self.force_gpu.get() and found:
+            return min(cards.FLOOR, min(c["cc_major"] for c in found))
+        return cards.FLOOR
+
     def _load_cards(self):
         """Ask which cards this machine has, off the main thread, and list them under Options."""
         def go():
@@ -1538,7 +1547,9 @@ class App(tk.Tk):
         for child in box.winfo_children():
             child.destroy()
         self._card_vars = {}
-        ok = cards.usable(found)
+        self._found_cards = list(found or [])
+        floor = self._card_floor(found)
+        ok = cards.usable(found, floor)
         if len(ok) < 2:
             return
         names = cards.labels(found)
@@ -1546,10 +1557,12 @@ class App(tk.Tk):
                  bg=p["mist"], fg=p["ink"]).pack(anchor="w")
         # ⚠ A saved choice that would switch off EVERY card is not honoured (see cards.chosen), so
         # the boxes must not show it either: the page would say "none" while Start used them all.
-        live = {cards.key(c) for c in cards.chosen(found, self.cards_off)}
+        live = {cards.key(c) for c in cards.chosen(found, self.cards_off, floor)}
         for c in found:
             k = cards.key(c)
             text = f"{names[c['index']]}  ·  {c['vram_mb'] / 1024:.0f} GB"
+            if c in ok and c["cc_major"] < cards.FLOOR:
+                text += "  —  older than the prover supports; being tried because you asked"
             if c not in ok:
                 ttk.Checkbutton(box, text=text + "  —  too old for the prover", state="disabled"
                                 ).pack(anchor="w", padx=14)
