@@ -738,8 +738,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: prover/target
-          key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
-          restore-keys: cuda-target-${{ runner.os }}-
+          # ⛔ THE GENERATION LIST IS IN THE KEY, AND IN THE PREFIX. sppark's build script does not
+          # declare NVCC_APPEND_FLAGS as an input, so cargo will NOT rebuild it when the flag
+          # changes: a tree restored from a Pascal-only build would hand back Pascal-only kernels
+          # under a log that shows the new flags. ⚠ Keep this tag in step with GPU_ARCHS below and
+          # with the save step's key.
+          key: cuda-target-${{ runner.os }}-a61-70-80-120-${{ hashFiles('prover/Cargo.lock') }}
+          restore-keys: cuda-target-${{ runner.os }}-a61-70-80-120-
 
       - name: ⭐ Build the host for Windows WITH CUDA (#631)
         shell: bash
@@ -768,10 +773,7 @@ jobs:
           # makes the vendored build.rs skip `-arch=native`, which would query a GPU this runner
           # does not have. Both halves are required; dropping it fails the build on a GPU-less box.
           #
-          # sm_61 = Pascal, the GTX 1050 Ti this will be tested on. The second -gencode embeds PTX
-          # for compute_61, so the same exe JITs forward onto any newer card -- which matters
-          # because the fleet is 4090/L40S/PRO 6000 and this binary should not be Pascal-only.
-          # ⚠ CUDA 12.9 deprecates sm_61 and WILL warn. A deprecation warning is not an error here.
+          # Which card generations it is told to build for is decided in the script below.
         run: |
           set -o pipefail
           echo "CUDA_PATH=$CUDA_PATH"
@@ -794,11 +796,46 @@ jobs:
           # CONDITIONAL. Its mere PRESENCE also makes the vendored builder skip `-arch=native`,
           # which queries a GPU this runner does not have — so it must be exported either way.
           #
-          # sm_61 = Pascal, the GTX 1050 Ti this is built to be tested on. The second -gencode
-          # embeds PTX for compute_61 so the same exe JITs forward onto newer cards, because the
-          # fleet is 4090/L40S/PRO 6000 and this binary should not be Pascal-only.
-          # ⚠ CUDA 12.9 deprecates sm_61 and will warn; a deprecation warning is not an error.
-          FLAGS="-gencode=arch=compute_61,code=sm_61"
+          # ⛔⛔ ONE COMPILED IMAGE PER CARD GENERATION, BECAUSE AN IMAGE RUNS ONLY ON ITS OWN.
+          # This used to be sm_61 alone, for the one card being debugged, with a comment saying the
+          # compute_61 PTX "JITs forward onto newer cards". Nobody had checked. Reading the binary
+          # (2026-10-09) showed five modules, every one sm_61 only, and four of the five with no
+          # PTX at all -- so an RTX card had no native code in it.
+          #
+          # A compiled image is binary-compatible only WITHIN a major revision, upwards: sm_70 runs
+          # on 7.0 and 7.5, sm_80 on 8.0/8.6/8.9. So one image per major covers every card in it:
+          #
+          #     sm_61    GTX 10-series                  (Pascal; the hazync#631 card)
+          #     sm_70    GTX 16-series, RTX 20-series   (Turing is 7.5), Titan V
+          #     sm_80    RTX 30-series, RTX 40-series   (Ampere is 8.6, Ada 8.9)
+          #     sm_120   RTX 50-series                  (Blackwell; needs a CUDA 12.8+ toolkit)
+          #
+          # ⚠ Four images roughly quadruples what nvcc compiles. This build was 2h16m with one.
+          # ⚠ CUDA 12.9 deprecates sm_61 and sm_70 and will warn; a deprecation warning is not an error.
+          GPU_ARCHS="61 70 80 120"
+          KNOWN=$(nvcc --list-gpu-arch 2>&1 | tr -d '\r' || true)
+          echo "this nvcc can target: $(echo "$KNOWN" | tr '\n' ' ')"
+          FLAGS=""
+          BUILT=""
+          for a in $GPU_ARCHS; do
+              # ⚠ Whole-line match: `sm_12` must not be satisfied by `sm_120`.
+              if echo "$KNOWN" | /usr/bin/grep -qx "sm_$a"; then
+                  FLAGS="$FLAGS -gencode=arch=compute_$a,code=sm_$a"
+                  BUILT="$BUILT $a"
+              else
+                  echo "⚠ this toolkit cannot target sm_$a — that generation is LEFT OUT of this build"
+              fi
+          done
+          BUILT=$(echo $BUILT | tr ' ' ',')
+          # ⛔ The three generations nearly every contributor's card belongs to are not optional. A
+          # toolkit that cannot build one of them must fail here, in seconds, not after two hours.
+          for must in 61 70 80; do
+              case ",$BUILT," in *",$must,"*) ;; *) echo "⛔ sm_$must cannot be built with this toolkit"; exit 1;; esac
+          done
+          echo "building GPU code for: $BUILT"
+          # The verification step below reads this, so it checks what was ASKED for, not a copy.
+          echo "GPU_ARCHS_BUILT=$BUILT" >> "$GITHUB_ENV"
+          # PTX too, as a last resort for a generation none of the images cover.
           FLAGS="$FLAGS -gencode=arch=compute_61,code=compute_61"
           FLAGS="$FLAGS -Wno-deprecated-gpu-targets"
           # ⛔⛔ C++17, AND BOTH PASSES NEED IT. Run 37021158229, after /std:c++20 came off:
@@ -901,7 +938,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: prover/target
-          key: cuda-target-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
+          key: cuda-target-${{ runner.os }}-a61-70-80-120-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Bank the cargo registry even if a later step fails
         if: always()
@@ -988,6 +1025,18 @@ jobs:
               echo "verdict=guest-mismatch" >> "$GITHUB_OUTPUT"
               exit 1
           fi
+
+      - name: ⛔ the CUDA binary must hold code for every card generation it was built for
+        shell: bash
+        working-directory: prover
+        run: |
+          set -o pipefail
+          # ⛔⛔ READ THE BINARY, NOT THE FLAGS. The flags were right in the log of a build whose
+          # exe held Pascal code only -- a cached library is not rebuilt when a flag changes. This
+          # reads the fat binaries inside host.exe and fails unless EVERY finished GPU module
+          # carries an image for each generation the build step said it was building.
+          [ -n "${GPU_ARCHS_BUILT:-}" ] || { echo "⛔ the build step recorded no generation list"; exit 1; }
+          python3 ../scripts/gpu_code_archs.py target/release/host.exe --require "$GPU_ARCHS_BUILT"
 
       - name: What this did and did not establish
         if: always()

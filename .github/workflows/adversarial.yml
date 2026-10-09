@@ -265,6 +265,13 @@ jobs:
         # would have been fooled. ⛔ Note the fourth one — a greedy 64-hex grep of
         # reproduce/GUEST_ELF_SHA256 returns METHOD_ID out of the prose, not the pin.
         run: python3 scripts/embedded_guest_sha.py --control
+      - name: a prover binary is checked for the card generations it holds code for
+        # ⛔ The Windows prover shipped Pascal-only GPU code and nothing said so: a compiled image
+        # runs only on its own card generation, and a build FLAG is not evidence about a binary.
+        # This is the reader windows-prove.yml runs on its own output; here it must catch a
+        # Pascal-only build, one module missing one generation, and an image that exists only in a
+        # relocatable part.
+        run: python3 scripts/gpu_code_archs.py --control
 
       - name: The Windows GUI's supervisor logic (headless — no display, no GPU, no Windows)
         # ⚠ The LOGIC is tested, not the window. A supervisor whose only entry point is a GUI
