@@ -102,16 +102,45 @@ def main():
         # ⚠ Substring, not equality: the tab labels carry padding spaces ("  Setup  ") for the
         # look of them, and an exact match reported all five missing on a window that plainly has
         # them. A test that fails on cosmetics teaches people to ignore it.
-        for want in ("Setup", "Dashboard", "Block map", "Prove", "Settings"):
-            check(any(want in t for t in tabs), f"the {want} tab exists")
+        # ⭐ THREE PLACES, and the developer pages are INSIDE the third. If Setup or Settings ever
+        # climbs back to the top level, the window is a developer tool again.
+        top = [app.nb.tab(i, "text") for i in range(len(app.nb.tabs()))]
+        check(len(top) == 3, f"three top-level places, not five (got {[t.strip() for t in top]})")
+        for want in ("Home", "The board", "Advanced"):
+            check(any(want in t for t in top), f"the {want} page exists")
+        check("Home" in top[0], "Home is the page the window opens on")
+        for want in ("Setup", "Options and log", "Settings"):
+            check(any(want in t for t in tabs) and not any(want in t for t in top),
+                  f"{want} is under Advanced, not at the top")
+
+        # ⭐ HOME IS ONE CHOICE AND ONE BUTTON. Everything on it is read off the Home frame alone,
+        # so a control that only exists on another page cannot satisfy these.
+        home = texts(walk(app._home))
+        hblob = " | ".join(home)
+        for want in ("Prove", "Fold", "Anchor"):
+            check(want in home, f"Home offers {want} as a choice")
+        check(any(t.startswith("Start") for t in home) and "Stop" in home,
+              "Home has Start and Stop")
+        starts = [x for x in widgets if x.winfo_class() == "TButton"
+                  and str(x.cget("text")).startswith("Start")]
+        check(len(starts) == 1,
+              "⛔ there is exactly ONE Start button in the whole window")
+        check(hasattr(app, "bar") and hasattr(app, "feed"),
+              "Home has a progress bar and a feed of what has happened")
+        # ⛔ NO JARGON ON HOME. Each of these is a word a newcomer cannot be expected to know, and
+        # each used to sit on a first-run screen.
+        for word in ("METHOD_ID", "SEG_PO2", "sppark", "CUDA", "spine", "absorb", "coordinator",
+                     "/api/", "hazync-worker"):
+            check(word.lower() not in hblob.lower(), f"Home does not say {word!r}")
 
         # ⭐ THE CONTROLS A CONTRIBUTOR MUST BE ABLE TO FIND. If any of these silently stops being
         # built, the app still opens and simply cannot be used for that job.
         for want, why in [
             ("Start", "Start"),
             ("Stop", "Stop"),
-            ("Help the spine (absorb)", "the one serial job nothing else can do"),
-            ("Fold instead of prove", "folding, the job that parallelises"),
+            ("Anchor", "the one serial job nothing else can do"),
+            ("Fold", "folding, the job that parallelises"),
+            ("Prove a specific range", "a named range, for someone who was asked to"),
             ("CPU build", "the build that works on every machine"),
             ("GPU build", "the CUDA build"),
             ("below the supported floor", "the opt-in for an unsupported card"),

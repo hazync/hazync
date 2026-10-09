@@ -41,6 +41,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import activity  # noqa: E402
 import brand  # noqa: E402
 import firstrun  # noqa: E402
 import hazync_api as api  # noqa: E402
@@ -56,6 +57,8 @@ class Worker:
         self.index, self.popen, self.log_path, self.job = index, popen, log_path, job
         self.started = time.time()
         self.stopping = False
+        self.activity = activity.Activity(job)
+        self.heard = time.time()         # when the prover last printed anything at all
 
 
 class App(tk.Tk):
@@ -82,7 +85,15 @@ class App(tk.Tk):
         self._cells = []                 # (item_id, lo, hi, state) for the map
         self._explained = set()          # each known failure explained once, not every line
         self._auto_diag_done = False     # the cheap checks run once per launch, not on every rescan
+        self._auto_fix_done = False      # ...and so does fetching what setup can fetch by itself
+        self._setup_ok = False           # until the first scan says otherwise
+        self._steps = []
+        self._problem = ""               # the last thing that stopped work, in plain words
+        self._events = []                # (clock time, sentence, tag) for the Home feed
+        self._landed = {j: 0 for j in activity.JOBS}     # what has landed since the window opened
+        self._diag_running = None
         self._build()
+        self.after(1000, self._home_tick)
         self.after(POLL_MS, self._drain)
         self.after(400, self.refresh)
         self.after(700, self.rescan)
@@ -97,7 +108,7 @@ class App(tk.Tk):
         self.configure(bg=p["fog"])
 
         head = tk.Frame(self, bg=p["fog"])
-        head.pack(fill="x", padx=16, pady=(14, 6))
+        head.pack(fill="x", padx=20, pady=(16, 6))
         logo = tk.Canvas(head, width=44, height=44, bg=p["fog"], highlightthickness=0)
         logo.pack(side="left")
         brand.draw_logo(logo, 2, 2, 40, dark=self.dark.get())
@@ -107,25 +118,52 @@ class App(tk.Tk):
                  bg=p["fog"], fg=p["slate"], font=("Segoe UI", 10)).pack(side="left", padx=10)
         ttk.Checkbutton(head, text="dark", variable=self.dark,
                         command=self._retheme).pack(side="right")
-        ttk.Button(head, text="Refresh", command=self.refresh).pack(side="right", padx=8)
+        # Who the board credits, where a person can always see it: work under the wrong name is
+        # public and permanent, and it has already happened once on a real run.
+        self.v_who = tk.StringVar(value=getattr(self, "_who", ""))
+        tk.Label(head, textvariable=self.v_who, bg=p["fog"], fg=p["slate"],
+                 font=("Segoe UI", 10)).pack(side="right", padx=14)
 
+        # ⚠ THE STATUS LINE IS PACKED BEFORE THE NOTEBOOK. Packed after it, the notebook's
+        # expand=True took every pixel and the line was squeezed off the bottom of the window.
+        self.status = tk.Label(self, text="starting…", anchor="w", bg=p["mist"], fg=p["slate"],
+                               padx=12, pady=3)
+        self.status.pack(fill="x", side="bottom")
+
+        # Shared by Home and the Advanced pages, so it has to exist before either is built.
+        self.mode = tk.StringVar(value=self.cfg.get("mode") or "auto")
+
+        # ⭐ THREE PLACES, NOT FIVE. Home is the whole program for most people: one choice, one
+        # button, and what is happening. The board is for looking. Everything a newcomer should
+        # never need — paths, builds, segment sizes, the raw log — is behind Advanced.
         self.nb = ttk.Notebook(self)
-        self.nb.pack(fill="both", expand=True, padx=12, pady=6)
+        self.nb.pack(fill="both", expand=True, padx=14, pady=6)
+        self._tab_home()
+        self._tab_board()
+        advf = tk.Frame(self.nb, bg=p["fog"])
+        self.nb.add(advf, text="  Advanced  ")
+        self.adv = ttk.Notebook(advf)
+        self.adv.pack(fill="both", expand=True, padx=6, pady=(8, 6))
         self._tab_setup()
-        self._tab_dash()
-        self._tab_map()
         self._tab_run()
         self._tab_settings()
-
-        self.status = tk.Label(self, text="starting…", anchor="w", bg=p["mist"], fg=p["slate"])
-        self.status.pack(fill="x", side="bottom")
+        self.mode.trace_add("write", lambda *_: self._paint_tiles())
+        self._paint_tiles()
+        self._sync_buttons()
+        self._home_refresh()
 
     def _retheme(self):
         # ⚠ A full re-theme of a live widget tree is fiddly and easy to get half-right. Rebuilding
         # is honest and instant at this size; a half-themed window looks broken.
+        # ⚠ Keep what was chosen: _build re-creates every Tk variable from self.cfg.
+        try:
+            self.cfg = self._snapshot()
+        except Exception:      # noqa: BLE001 - mid-build, there is nothing to keep yet
+            pass
         for w in self.winfo_children():
             w.destroy()
         self._build()          # re-themes ttk as well as rebuilding the tk widgets
+        self._render_home_setup()
         self.refresh()
 
     def _card(self, parent, title):
@@ -139,11 +177,303 @@ class App(tk.Tk):
         return tk.Label(parent, textvariable=var, bg=self.p["mist"], fg=self.p["ink"],
                         font=("Segoe UI", 22, "bold"))
 
-    # ── tab: setup ──────────────────────────────────────────────────────────────────────────────
-    def _tab_setup(self):
+    # ── home ────────────────────────────────────────────────────────────────────────────────────
+    # ⭐ THE WHOLE PROGRAM, FOR MOST PEOPLE. One choice (what to do), one button (Start), and a
+    # plain account of what is happening. Nothing on this page names a file, a flag or a build.
+    #
+    # ⛔ AND IT IS NEVER SILENT. A prove runs for minutes on a GPU and most of an hour on a CPU; a
+    # window that only says "running" for that long reads as broken, and was reported as exactly
+    # that from a real machine. So this page always shows which block, which piece of how many,
+    # how long it has been running, and how long since the prover last said anything at all.
+    PLAIN_STEPS = {
+        "crypto": ("Signing tools", "Installing the signing tools…"),
+        "worker": ("The Hazync client", "Downloading the Hazync client…"),
+        "host": ("The prover program", ""),
+        "identity": ("Your name on the board", ""),
+    }
+    START_TEXT = {"auto": "Start proving", "range": "Start proving",
+                  "fold": "Start folding", "spine": "Start anchoring"}
+    MODE_JOB = {"auto": "run", "range": "run", "fold": "fold", "spine": "spine"}
+
+    def _tab_home(self):
         p = self.p
         t = tk.Frame(self.nb, bg=p["fog"])
-        self.nb.add(t, text="  Setup  ")
+        self.nb.add(t, text="  Home  ")
+        self._home = t
+
+        hero = tk.Frame(t, bg=p["mist"], highlightbackground=p["haze"], highlightthickness=1)
+        hero.pack(fill="x", padx=10, pady=(12, 8))
+        self._hero = hero
+        self.v_head = tk.StringVar(value="Getting ready…")
+        self.v_sub = tk.StringVar(value="Looking at this machine.")
+        self.v_meta = tk.StringVar(value="")
+        tk.Label(hero, textvariable=self.v_head, bg=p["mist"], fg=p["ink"], anchor="w",
+                 justify="left", wraplength=940, font=("Segoe UI", 20, "bold")
+                 ).pack(fill="x", padx=24, pady=(20, 2))
+        tk.Label(hero, textvariable=self.v_sub, bg=p["mist"], fg=p["slate"], anchor="w",
+                 justify="left", wraplength=940, font=("Segoe UI", 11)
+                 ).pack(fill="x", padx=24)
+        self.bar = ttk.Progressbar(hero, mode="determinate", maximum=1000)
+        self.bar.pack(fill="x", padx=24, pady=(16, 6))
+        self._bar_busy = False
+        tk.Label(hero, textvariable=self.v_meta, bg=p["mist"], fg=p["slate"], anchor="w",
+                 font=("Segoe UI", 9)).pack(fill="x", padx=24)
+        row = tk.Frame(hero, bg=p["mist"])
+        row.pack(anchor="w", padx=24, pady=(14, 20))
+        self.start_btn = ttk.Button(row, text="Start proving", style="Hero.TButton",
+                                    command=self._start, state="disabled")
+        self.start_btn.pack(side="left")
+        # ⭐ ONE BUTTON AT A TIME. Stop takes Start's place while work runs, so the page never shows
+        # a greyed-out button next to a live one and leaves a person to work out which is which.
+        self.stop_btn = ttk.Button(row, text="Stop", style="Hero.TButton", command=self._stop,
+                                   state="disabled")
+
+        # Only on screen while something is still needed; see _render_home_setup.
+        self.home_setup = tk.Frame(t, bg=p["fog"])
+
+        pick = tk.Frame(t, bg=p["fog"])
+        pick.pack(fill="x", padx=4, pady=(4, 0))
+        self._pick = pick
+        tk.Label(pick, text="WHAT WOULD YOU LIKE TO DO?", bg=p["fog"], fg=p["slate"],
+                 font=("Segoe UI", 9)).grid(row=0, column=0, columnspan=3, sticky="w", padx=8,
+                                            pady=(4, 4))
+        self._tiles = {}
+        for col, val in enumerate(("auto", "fold", "spine")):
+            job = self.MODE_JOB[val]
+            f = tk.Frame(pick, bg=p["mist"], highlightbackground=p["haze"], highlightthickness=1,
+                         cursor="hand2")
+            f.grid(row=1, column=col, sticky="nsew", padx=6, pady=2)
+            pick.columnconfigure(col, weight=1, uniform="tiles")
+            title = tk.Label(f, text=activity.JOB_NAMES[job], bg=p["mist"], fg=p["ink"],
+                             anchor="w", font=("Segoe UI", 13, "bold"), cursor="hand2")
+            title.pack(fill="x", padx=14, pady=(12, 2))
+            blurb = tk.Label(f, text=activity.JOB_BLURBS[job], bg=p["mist"], fg=p["slate"],
+                             anchor="w", justify="left", wraplength=280, font=("Segoe UI", 9),
+                             cursor="hand2")
+            blurb.pack(fill="x", padx=14, pady=(0, 12))
+            for w in (f, title, blurb):
+                w.bind("<Button-1>", lambda _e, v=val: self._choose(v))
+            self._tiles[val] = (f, title)
+        self.v_pick_note = tk.StringVar(value="")
+        tk.Label(pick, textvariable=self.v_pick_note, bg=p["fog"], fg=p["slate"],
+                 font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=3, sticky="w", padx=8)
+
+        feedf = self._card(t, "WHAT HAS HAPPENED")
+        feedf.pack(fill="both", expand=True, padx=10, pady=(8, 10))
+        ttk.Button(feedf, text="Show the technical log", style="Quiet.TButton",
+                   command=lambda: self._open_advanced(1)).place(relx=1.0, x=-10, y=6, anchor="ne")
+        self.feed = tk.Text(feedf, wrap="word", height=6, bg=p["mist"], fg=p["ink"],
+                            relief="flat", font=("Segoe UI", 10), padx=4, pady=2,
+                            highlightthickness=0, cursor="arrow")
+        self.feed.pack(fill="both", expand=True, padx=10, pady=(8, 10))
+        self.feed.tag_configure("when", foreground=p["slate"])
+        self.feed.tag_configure("good", foreground=p["good"])
+        self.feed.tag_configure("bad", foreground=p["bad"])
+        self.feed.tag_configure("sys", foreground=p["ink"])
+        self.feed.configure(state="disabled")
+        self._render_feed()
+
+    def _open_advanced(self, index):
+        self.nb.select(2)
+        self.adv.select(index)
+
+    def _choose(self, val):
+        # ⚠ Not while work is running: the choice on screen would then describe a job that is not
+        # the one in progress.
+        if self.workers:
+            self.v_pick_note.set("Stop first to switch to something else.")
+            return
+        self.mode.set(val)
+        self._persist()
+
+    def _paint_tiles(self):
+        if not getattr(self, "_tiles", None):
+            return
+        p, mode = self.p, self.mode.get()
+        for val, (frame, title) in self._tiles.items():
+            on = val == mode
+            frame.configure(highlightbackground=p["lamp"] if on else p["haze"],
+                            highlightthickness=2 if on else 1)
+            title.configure(fg=p["lamp_text"] if on else p["ink"])
+        self.v_pick_note.set("A specific range is chosen under Advanced." if mode == "range" else "")
+        self._sync_buttons()
+
+    def _sync_buttons(self):
+        """Start and Stop say what they will do, and only one of them is ever live."""
+        if not hasattr(self, "start_btn"):
+            return
+        running = bool(self.workers)
+        self.start_btn.configure(text=self.START_TEXT.get(self.mode.get(), "Start"),
+                                 state="normal" if (self._setup_ok and not running) else "disabled")
+        self.stop_btn.configure(state="normal" if running else "disabled")
+        if running and not self.stop_btn.winfo_manager():
+            self.start_btn.pack_forget()
+            self.stop_btn.pack(side="left")
+        elif not running and not self.start_btn.winfo_manager():
+            self.stop_btn.pack_forget()
+            self.start_btn.pack(side="left")
+
+    def _feed(self, text, tag="sys"):
+        """One plain sentence about something that HAPPENED, newest first."""
+        self._events.append((time.strftime("%H:%M"), text, tag))
+        del self._events[:-200]
+        self._render_feed()
+
+    def _render_feed(self):
+        if not hasattr(self, "feed"):
+            return
+        f = self.feed
+        f.configure(state="normal")
+        f.delete("1.0", "end")
+        if not self._events:
+            f.insert("end", "Nothing yet. What this machine does will be listed here as it happens.",
+                     "when")
+        for when, text, tag in reversed(self._events[-60:]):
+            f.insert("end", f"{when}   ", "when")
+            f.insert("end", text + "\n", tag)
+        f.configure(state="disabled")
+
+    def _set_bar(self, fraction, busy):
+        """A real fraction fills the bar; work with no measurable length gets a moving one."""
+        if fraction is not None:
+            if self._bar_busy:
+                self.bar.stop()
+                self._bar_busy = False
+            self.bar.configure(mode="determinate")
+            self.bar["value"] = int(max(0.0, min(1.0, fraction)) * 1000)
+        elif busy:
+            if not self._bar_busy:
+                self.bar.configure(mode="indeterminate")
+                self.bar.start(40)
+                self._bar_busy = True
+        else:
+            if self._bar_busy:
+                self.bar.stop()
+                self._bar_busy = False
+            self.bar.configure(mode="determinate")
+            self.bar["value"] = 0
+
+    def _session_line(self):
+        parts = [activity.tally(j, n) for j, n in self._landed.items() if n]
+        return " · ".join(parts)
+
+    def _home_refresh(self):
+        """Say what is true right now. Called on every worker line and once a second."""
+        if not hasattr(self, "v_head"):
+            return
+        now = time.time()
+        if self.workers:
+            lead = self.workers[0]
+            a = lead.activity
+            stopping = any(w.stopping for w in self.workers)
+            self.v_head.set("Stopping…" if stopping else a.headline)
+            self.v_sub.set("Letting the prover finish cleanly." if stopping else a.detail)
+            self._set_bar(a.fraction, busy=not a.waiting)
+            bits = [f"Running for {activity.clock(now - min(w.started for w in self.workers))}",
+                    f"last heard from the prover {activity.clock(now - max(w.heard for w in self.workers))} ago"]
+            if len(self.workers) > 1:
+                bits.append(f"{len(self.workers)} at once")
+            if self._session_line():
+                bits.append(self._session_line() + " this session")
+            self.v_meta.set(" · ".join(bits))
+            return
+        self.v_meta.set((self._session_line() + " this session") if self._session_line() else "")
+        if self._diag_running:
+            name, t0 = self._diag_running
+            title = next((t for n, t, *_ in supervisor.DIAGNOSTICS if n == name), name)
+            self.v_head.set("Checking this machine…")
+            self.v_sub.set(f"{title}  ·  {activity.clock(now - t0)}")
+            self._set_bar(None, busy=True)
+        elif getattr(self, "_fixing", None):
+            self.v_head.set("Getting ready…")
+            self.v_sub.set(self._fixing)
+            self._set_bar(None, busy=True)
+        elif self._problem:
+            self.v_head.set("Stopped — this needs a look")
+            self.v_sub.set(self._problem)
+            self._set_bar(None, busy=False)
+        elif not self._steps:
+            self.v_head.set("Getting ready…")
+            self.v_sub.set("Looking at this machine.")
+            self._set_bar(None, busy=True)
+        elif not self._setup_ok:
+            left = [s for s in self._steps if not s.done]
+            self.v_head.set("Almost ready")
+            self.v_sub.set(f"{len(left)} thing{'' if len(left) == 1 else 's'} left before you can "
+                           f"start — see below.")
+            self._set_bar(None, busy=False)
+        else:
+            job = self.MODE_JOB.get(self.mode.get(), "run")
+            self.v_head.set("Ready when you are")
+            self.v_sub.set(activity.JOB_BLURBS[job])
+            self._set_bar(None, busy=False)
+
+    def _home_tick(self):
+        self._home_refresh()
+        self.after(1000, self._home_tick)
+
+    def _render_home_setup(self):
+        """What is still needed before Start can work, with the button that deals with each."""
+        if not hasattr(self, "home_setup"):
+            return
+        p, box = self.p, self.home_setup
+        for w in box.winfo_children():
+            w.destroy()
+        todo = [s for s in self._steps if not s.done]
+        if self._setup_ok or not todo:
+            box.pack_forget()
+            return
+        box.pack(fill="x", padx=10, pady=(0, 6), after=self._hero)
+        card = tk.Frame(box, bg=p["mist"], highlightbackground=p["lamp"], highlightthickness=1)
+        card.pack(fill="x")
+        done = [self.PLAIN_STEPS.get(s.key, (s.title,))[0] for s in self._steps if s.done]
+        tk.Label(card, text="BEFORE YOU CAN START" + (f"      ✓ {' · ✓ '.join(done)}" if done else ""),
+                 bg=p["mist"], fg=p["slate"], font=("Segoe UI", 9)
+                 ).pack(anchor="w", padx=14, pady=(10, 4))
+        worker_ok = any(s.key == "worker" and s.done for s in self._steps)
+        for s in todo:
+            name = self.PLAIN_STEPS.get(s.key, (s.title, ""))[0]
+            row = tk.Frame(card, bg=p["mist"])
+            row.pack(fill="x", padx=14, pady=(2, 8))
+            left = tk.Frame(row, bg=p["mist"])
+            left.pack(side="left", fill="x", expand=True)
+            tk.Label(left, text=name, bg=p["mist"], fg=p["ink"], anchor="w",
+                     font=("Segoe UI", 11, "bold")).pack(anchor="w")
+            err = self.fix_errors.get(s.key)
+            if s.key == "host":
+                say = ("This is the program that does the proving. It is not included yet, so it "
+                       "has to be picked by hand: choose the host.exe you downloaded.")
+            elif s.key == "identity":
+                say = ("Every block you prove is credited to this name, publicly and permanently."
+                       if worker_ok else "This can be set once the Hazync client has arrived.")
+            else:
+                say = "Fetching this for you." if not err else "This could not be fetched."
+            tk.Label(left, text=say, bg=p["mist"], fg=p["slate"], anchor="w", justify="left",
+                     wraplength=620, font=("Segoe UI", 9)).pack(anchor="w")
+            if err:
+                tk.Label(left, text=err, bg=p["mist"], fg=p["bad"], anchor="w", justify="left",
+                         wraplength=620, font=("Segoe UI", 9)).pack(anchor="w")
+            if s.key == "host":
+                ttk.Button(row, text="Choose it…", style="Accent.TButton",
+                           command=self._choose_host).pack(side="right")
+                found = firstrun.find_hosts()
+                if found:
+                    ttk.Button(row, text=f"Use the one in {Path(found[0]['path']).parent.name}",
+                               command=lambda pth=found[0]["path"]: self._use_host(pth)
+                               ).pack(side="right", padx=8)
+            elif s.key == "identity" and worker_ok:
+                ttk.Button(row, text="Use this name", style="Accent.TButton",
+                           command=self._set_handle).pack(side="right")
+                ttk.Entry(row, textvariable=self.handle_var, width=22).pack(side="right", padx=8)
+            elif s.fix and err:
+                ttk.Button(row, text="Try again",
+                           command=lambda st=s: self._run_fix(st)).pack(side="right")
+
+    # ── advanced: setup ─────────────────────────────────────────────────────────────────────────
+    def _tab_setup(self):
+        p = self.p
+        t = tk.Frame(self.adv, bg=p["fog"])
+        self.adv.add(t, text="  Setup  ")
 
         tk.Label(t, text="Four things, then you can prove.", bg=p["fog"], fg=p["ink"],
                  font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
@@ -266,9 +596,23 @@ class App(tk.Tk):
             if s.key == "identity":
                 self.v_handle.set(s.detail[:48])
         ok = firstrun.ready(steps)
-        self.start_btn.configure(state="normal" if ok else "disabled")
+        self._steps, self._setup_ok = steps, ok
+        for s in steps:
+            if s.key == "identity" and s.done:
+                self._who = "proving as " + s.detail.split("  (key")[0]
+                self.v_who.set(self._who)
+        self._render_home_setup()
+        self._sync_buttons()
+        self._home_refresh()
+        # ⭐ WHAT THE PROGRAM CAN FETCH, IT FETCHES. One at a time, each tried once per launch: a
+        # download that fails says so on its own row with a "Try again", and is not retried in a
+        # loop behind the person's back.
         if not ok:
-            self.nb.select(0)
+            tried = self.__dict__.setdefault("_auto_fix_tried", set())
+            nxt = next((s for s in steps if not s.done and s.fix and s.key not in tried), None)
+            if nxt and not getattr(self, "_fixing", None):
+                tried.add(nxt.key)
+                self._run_fix(nxt)
         # ⚠ Only once setup is READY. Running them against a half-configured machine produces
         # failures that are about the setup, not the machine, and that is the Setup tab's job to say.
         if ok:
@@ -276,6 +620,9 @@ class App(tk.Tk):
 
     def _run_fix(self, step):
         self.v_setup.set(f"{step.fix_label or 'fixing'}…")
+        self._fixing = self.PLAIN_STEPS.get(step.key, ("", ""))[1] or f"{step.fix_label or 'Fixing'}…"
+        self._feed(self._fixing)
+        self._home_refresh()
 
         def go():
             try:
@@ -287,6 +634,10 @@ class App(tk.Tk):
 
     def _after_fix(self, args):
         key, ok, detail = args
+        self._fixing = None
+        name = self.PLAIN_STEPS.get(key, (key,))[0]
+        self._feed(f"{name}: ready" if ok else f"{name}: could not be fetched — {detail}",
+                   "good" if ok else "bad")
         self._say(f"[setup] {key}: {'done' if ok else 'failed'} — {detail}",
                   "proved" if ok else "cuda-error")
         # ⛔ KEEP IT. rescan() rebuilds every card from firstrun.setup_steps(), whose detail for a
@@ -332,6 +683,11 @@ class App(tk.Tk):
     def _after_handle(self, args):
         ok, detail = args
         self.v_handle.set(detail[:60])
+        if ok:
+            self.fix_errors.pop("identity", None)
+            self._feed(f"Your name on the board is set: {self.handle_var.get().strip()}", "good")
+        else:
+            self.fix_errors["identity"] = detail
         self._say(f"[setup] name: {detail}", "proved" if ok else "cuda-error")
         self.rescan()
 
@@ -354,10 +710,16 @@ class App(tk.Tk):
             self._say(f"[setup] {detail}", "oom")
 
     # ── tab: dashboard ──────────────────────────────────────────────────────────────────────────
-    def _tab_dash(self):
+    def _tab_board(self):
+        """How far the whole project has got: the numbers, and the map of every block."""
         p = self.p
         t = tk.Frame(self.nb, bg=p["fog"])
-        self.nb.add(t, text="  Dashboard  ")
+        self.nb.add(t, text="  The board  ")
+        self._tab_dash(t)
+        self._tab_map(t)
+
+    def _tab_dash(self, t):
+        p = self.p
 
         self.v_proven = tk.StringVar(value="—")
         self.v_folded = tk.StringVar(value="—")
@@ -384,9 +746,9 @@ class App(tk.Tk):
         self.v_folds = tk.StringVar(value="—")
         self.v_contrib = tk.StringVar(value="—")
         for col, (title, var, note) in enumerate([
-                ("NEXT BLOCK FOR YOU", self.v_next, "chosen by the coordinator (/api/pick)"),
-                ("FOLDS WAITING", self.v_folds, "adjacent pairs with no fold yet"),
-                ("CONTRIBUTORS", self.v_contrib, "provers on the board")]):
+                ("NEXT BLOCK TO PROVE", self.v_next, "the next one waiting for a prover"),
+                ("WAITING TO BE COMBINED", self.v_folds, "pairs of finished proofs"),
+                ("PEOPLE PROVING", self.v_contrib, "everyone who has landed a block")]):
             c = self._card(mid, title)
             c.grid(row=0, column=col, sticky="nsew", padx=6)
             tk.Label(c, textvariable=var, bg=p["mist"], fg=p["lamp_text"],
@@ -395,29 +757,13 @@ class App(tk.Tk):
                      font=("Segoe UI", 8)).pack(anchor="w", padx=12, pady=(0, 10))
             mid.columnconfigure(col, weight=1)
 
-        # ⛔ The honest note goes on the first screen, not buried in a README nobody opens.
-        warn = tk.Frame(t, bg=p["mist"], highlightbackground=p["haze"], highlightthickness=1)
-        warn.pack(fill="x", padx=10, pady=12)
-        tk.Label(warn, text="Before you start", bg=p["mist"], fg=p["slate"],
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
-        tk.Label(warn, justify="left", wraplength=940, bg=p["mist"], fg=p["ink"],
-                 font=("Segoe UI", 9),
-                 text=("Run the checks on the Settings tab first. A prover whose METHOD_ID is not "
-                       "canonical produces proofs the coordinator rejects, and a box that cannot "
-                       "prove will claim blocks and abandon them — one machine once claimed and "
-                       "abandoned 14 blocks in 15 minutes, which holds up everyone else.\n"
-                       "Native Windows CUDA proving has not completed yet; the CPU build works and "
-                       "is slow. See tools/win-gui/README.md.")
-                 ).pack(anchor="w", padx=12, pady=(0, 10))
-
     # ── tab: block map ──────────────────────────────────────────────────────────────────────────
-    def _tab_map(self):
+    def _tab_map(self, t):
         p = self.p
-        t = tk.Frame(self.nb, bg=p["fog"])
-        self.nb.add(t, text="  Block map  ")
-
         bar = tk.Frame(t, bg=p["fog"])
         bar.pack(fill="x", padx=10, pady=(10, 4))
+        ttk.Button(bar, text="Refresh", style="Quiet.TButton",
+                   command=self.refresh).pack(side="right")
         tk.Label(bar, text="Every block, in order — each square is a range.",
                  bg=p["fog"], fg=p["slate"], font=("Segoe UI", 9)).pack(side="left")
         self.v_percell = tk.StringVar(value="")
@@ -447,7 +793,7 @@ class App(tk.Tk):
         c.delete("all")
         self._cells = []
         if not self.runs or not self.meta.get("tip"):
-            c.create_text(14, 14, anchor="nw", text="no data yet — press Refresh",
+            c.create_text(14, 14, anchor="nw", text="Loading the board…",
                           fill=self.p["slate"], font=("Segoe UI", 10))
             return
         w = max(c.winfo_width(), 200)
@@ -480,28 +826,24 @@ class App(tk.Tk):
     # ── tab: run ────────────────────────────────────────────────────────────────────────────────
     def _tab_run(self):
         p = self.p
-        t = tk.Frame(self.nb, bg=p["fog"])
-        self.nb.add(t, text="  Prove  ")
+        t = tk.Frame(self.adv, bg=p["fog"])
+        self.adv.add(t, text="  Options and log  ")
 
         box = self._card(t, "WHAT TO WORK ON")
         box.pack(fill="x", padx=10, pady=10)
-        self.mode = tk.StringVar(value=self.cfg.get("mode") or "auto")
         # ⛔ NO "pick any open block" OPTION, DELIBERATELY. The coordinator owns allocation: it hands
         # out work and tracks claims, and /api/blockstatus deliberately excludes claims because
         # "they change by the second". Letting a user choose an arbitrary open block would hand out
         # work someone else already holds.
         for val, label, note in [
-            ("auto", "Let the coordinator choose  (recommended)",
-             "asks for the next block that needs proving, claims it, proves it, submits it"),
-            ("range", "A specific range",
-             "only if you were asked to — the coordinator still has to agree you may claim it"),
-            ("spine", "Help the spine (absorb)",
-             "⭐ the ONE serial job, and nothing else can do it. Only the leftmost range can be "
-             "anchored, so this is what turns proven work into chain anchored back to genesis — "
-             "and it is CHEAP: it folds two receipts and checks a seam, it does not re-prove. "
-             "Whoever runs it is a liveness single point of failure, never a soundness one."),
-            ("fold", "Fold instead of prove",
-             "combines adjacent proofs into ranges; this is what builds the spine"),
+            ("auto", "Prove — the coordinator chooses the block  (recommended)",
+             "asks for the next block that needs proving, proves it, and sends the proof in"),
+            ("range", "Prove a specific range",
+             "only if you were asked to — the coordinator still has to agree you may take it"),
+            ("spine", "Anchor — join finished proofs onto the chain",
+             "the one job that must be done in order, one step at a time; light work"),
+            ("fold", "Fold — combine finished proofs",
+             "two adjacent proofs become one; this is what anchoring is fed by"),
         ]:
             ttk.Radiobutton(box, text=label, value=val, variable=self.mode).pack(anchor="w", padx=14)
             tk.Label(box, text=note, bg=p["mist"], fg=p["slate"],
@@ -521,15 +863,14 @@ class App(tk.Tk):
         tk.Label(row, text="workers", bg=p["mist"], fg=p["ink"]).pack(side="left")
         self.nworkers = tk.IntVar(value=int(self.cfg.get("workers") or 1))
         ttk.Spinbox(row, from_=1, to=8, width=4, textvariable=self.nworkers).pack(side="left", padx=6)
-        tk.Label(row, text="HAZYNC_SEG_PO2", bg=p["mist"], fg=p["ink"]).pack(side="left", padx=(16, 4))
+        tk.Label(row, text="segment size (HAZYNC_SEG_PO2)", bg=p["mist"], fg=p["ink"]
+                 ).pack(side="left", padx=(16, 4))
         self.po2 = tk.StringVar(value=self.cfg.get("seg_po2") or "")
         ttk.Entry(row, textvariable=self.po2, width=6).pack(side="left")
-        tk.Label(row, text="blank = default; lower uses less VRAM", bg=p["mist"], fg=p["slate"],
-                 font=("Segoe UI", 8)).pack(side="left", padx=6)
-        self.start_btn = ttk.Button(row, text="Start", command=self._start, style="Accent.TButton")
-        self.start_btn.pack(side="left", padx=(20, 6))
-        self.stop_btn = ttk.Button(row, text="Stop", command=self._stop, state="disabled")
-        self.stop_btn.pack(side="left")
+        tk.Label(row, text="blank = default; lower uses less graphics memory", bg=p["mist"],
+                 fg=p["slate"], font=("Segoe UI", 8)).pack(side="left", padx=6)
+        tk.Label(ctrl, text="Start and Stop are on the Home page.", bg=p["mist"], fg=p["slate"],
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 8))
 
         diag = self._card(t, "TEST THIS MACHINE  (no claims are made, nothing is submitted)")
         diag.pack(fill="x", padx=10, pady=4)
@@ -560,7 +901,7 @@ class App(tk.Tk):
                  font=("Segoe UI", 9), justify="left", wraplength=920
                  ).pack(anchor="w", padx=12, pady=(4, 10))
 
-        logf = self._card(t, "WHAT THE WORKERS ARE DOING")
+        logf = self._card(t, "THE TECHNICAL LOG")
         logf.pack(fill="both", expand=True, padx=10, pady=8)
         self.log = tk.Text(logf, wrap="word", bg=p["fog"], fg=p["ink"],
                            insertbackground=p["ink"], relief="flat")
@@ -712,7 +1053,7 @@ class App(tk.Tk):
             # ⛔ A messagebox from the startup path would be a modal nobody asked for, on a window
             # that has only just opened, about a step the Setup tab is already reporting.
             if not auto:
-                messagebox.showinfo("No prover", "Set the prover on the Setup tab first.")
+                messagebox.showinfo("No prover", "Choose the prover program on the Home page first.")
             return
         title = next((t for n, t, *_ in supervisor.DIAGNOSTICS if n == name), name)
         timeout = next((d[3] for d in supervisor.DIAGNOSTICS if d[0] == name), 600)
@@ -722,6 +1063,7 @@ class App(tk.Tk):
         self.diag_vars[name].set("running…")
         self.v_diag.set(f"{title}  — running…")
         self._say(f"[test] {name}: started", "sys")
+        self._home_refresh()
         self._tick_diag()
 
         def go():
@@ -767,6 +1109,11 @@ class App(tk.Tk):
         self.v_diag.set(f"{title}  —  {'PASSED' if ok else 'FAILED'}: {verdict}")
         self._say(f"[test] {name}: {'passed' if ok else 'FAILED'} — {verdict}",
                   "proved" if ok else "cuda-error")
+        self._feed(f"Check {'passed' if ok else 'FAILED'}: {title}"
+                   + ("" if ok else f" — {verdict}"), "good" if ok else "bad")
+        if not ok:
+            self._problem = supervisor.explain(out) or f"{title} — {verdict}"
+        self._home_refresh()
         # ⚠ The output was already streamed into the log line by line, so repeating the tail here
         # would print everything twice. Only the explanation is added below.
         if not ok:
@@ -803,8 +1150,8 @@ class App(tk.Tk):
     # ── tab: settings ───────────────────────────────────────────────────────────────────────────
     def _tab_settings(self):
         p = self.p
-        t = tk.Frame(self.nb, bg=p["fog"])
-        self.nb.add(t, text="  Settings  ")
+        t = tk.Frame(self.adv, bg=p["fog"])
+        self.adv.add(t, text="  Settings  ")
 
         paths = self._card(t, "WHERE THINGS ARE")
         paths.pack(fill="x", padx=10, pady=10)
@@ -962,17 +1309,25 @@ class App(tk.Tk):
             out["err"] = str(e)
         except Exception as e:            # ⚠ anything else, or the thread dies with no trace at all
             out["err"] = f"{type(e).__name__}: {e}"
-        try:
-            out["pick"] = api.fetch("/api/pick", coord)
-        except api.ApiError:
-            out["pick"] = None
-        try:
-            out["fold"] = api.fetch("/api/foldable?limit=1", coord)
-        except api.ApiError:
-            out["fold"] = None
+        # ⛔ THE BOARD IS SHOWN NOW, NOT AFTER THE EXTRAS. The two calls below are decoration — one
+        # number each — and /api/pick was measured at 0.4 to 7.1 s on the coordinator itself
+        # (2026-10-09). Waiting for them held the totals and the whole block map, which had arrived
+        # in half a second, behind "refreshing…" for as long as the slowest took.
         self.results.put((self._apply, out))
+        if "err" in out:
+            return
+        extra = {}
+        for key, path in (("pick", "/api/pick"), ("fold", "/api/foldable?limit=1")):
+            try:
+                extra[key] = api.fetch(path, coord)
+            except Exception:             # noqa: BLE001 - a missing extra is a dash, not an error
+                extra[key] = None
+        self.results.put((self._apply_extras, extra))
 
     def _apply(self, out):
+        # ⚠ Scheduled FIRST, on both paths. It used to sit after the early return, so one failed
+        # refresh — a laptop waking from sleep is enough — meant the board never refreshed again.
+        self.after(REFRESH_S * 1000, self.refresh)
         if "err" in out:
             self.status.configure(text=f"could not reach the coordinator — {out['err']}")
             return
@@ -983,13 +1338,14 @@ class App(tk.Tk):
         self.v_anchored.set(f"{p.get('spine_hi', 0):,}")
         self.v_pct.set(f"{p.get('pct', 0)}%")
         self.v_contrib.set(str(p.get("contributors", "—")))
-        pick = out.get("pick") or {}
-        self.v_next.set(f"{pick.get('range', '—')}" if pick else "—")
-        fold = out.get("fold") or {}
-        self.v_folds.set(f"{fold.get('count', '—')}+" if fold else "—")
         self._draw_map()
         self.status.configure(text=api.summarise_progress(p))
-        self.after(REFRESH_S * 1000, self.refresh)
+
+    def _apply_extras(self, extra):
+        pick = extra.get("pick") or {}
+        self.v_next.set(activity.pretty(pick.get("range", "—")) if pick else "—")
+        fold = extra.get("fold") or {}
+        self.v_folds.set(f"{fold.get('count', '—')}+" if fold else "—")
 
     def _show_identity(self):
         # ⚠ Same rule: snapshot the Tk variables on this thread first.
@@ -1026,7 +1382,9 @@ class App(tk.Tk):
         self.checks_box.insert("end", "\n".join(lines))
         self.checks_box.configure(state="disabled")
         self.verdict.configure(text=verdict, fg=self.p["bad"] if fatal else self.p["good"])
-        self.start_btn.configure(state="disabled" if fatal else "normal")
+        self._sync_buttons()
+        if fatal:
+            self.start_btn.configure(state="disabled")
 
     # ── output ──────────────────────────────────────────────────────────────────────────────────
     def _say(self, text, tag="sys"):
@@ -1065,8 +1423,9 @@ class App(tk.Tk):
             messagebox.showerror("Cannot start", fatal[0].detail)
             self._show_checks([f"{'ok  ' if c.ok else 'FAIL'}  {c.name}: {c.detail}" for c in checks],
                               supervisor.summarise(checks), True)
-            self.nb.select(4)
+            self._open_advanced(2)
             return
+        self._problem = ""
         mode = self.mode.get()
         extra = ()
         job = "run"
@@ -1088,8 +1447,10 @@ class App(tk.Tk):
         base.mkdir(parents=True, exist_ok=True)
         for i in range(1, max(1, int(self.nworkers.get())) + 1):
             self._spawn(i, base, job, extra)
-        self.start_btn.configure(state="disabled")
-        self.stop_btn.configure(state="normal")
+        self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
+                   + (f", {len(self.workers)} at once" if len(self.workers) > 1 else ""))
+        self._sync_buttons()
+        self._home_refresh()
         self.status.configure(text=f"{len(self.workers)} worker(s) running — {job}")
 
     def _spawn(self, i, base, job, extra):
@@ -1128,6 +1489,9 @@ class App(tk.Tk):
                 for line in w.popen.stdout:
                     fh.write(line)
                     fh.flush()
+                    # ⚠ Handed to the main thread: reading it updates the Home page, and every
+                    # widget call is a Tk call.
+                    self.results.put((self._on_worker_line, (w, line)))
                     kind = supervisor.interesting_line(line)
                     # ⚠ Remembered on the WORKER, not globally: with several workers running, one
                     # card's hard failure must not make another worker's ordinary exit look like a
@@ -1147,6 +1511,27 @@ class App(tk.Tk):
         except Exception as e:
             self.q.put(("sys", f"[{w.job} {w.index}] stopped reading output: {e}"))
 
+    def _on_worker_line(self, arg):
+        """One line from a prover, on the main thread: keep the Home page current."""
+        w, line = arg
+        w.heard = time.time()
+        before = w.activity.done
+        event = w.activity.feed(line)
+        landed = w.activity.done - before
+        if landed > 0:
+            self._landed[w.activity.job] += landed
+        if event:
+            self._feed(event, "good" if landed > 0 else "sys")
+        kind = supervisor.interesting_line(line)
+        if kind in ("cuda-error", "abort", "oom"):
+            # ⭐ The plain-language meaning, not the raw line: "Rust cannot catch foreign
+            # exceptions" tells a newcomer nothing, and each of these cost real time to learn.
+            why = supervisor.explain(line) or line.strip()[:240]
+            if why != self._problem:
+                self._problem = why
+                self._feed(why, "bad")
+        self._home_refresh()
+
     def _reap(self):
         for w in list(self.workers):
             rc = w.popen.poll()
@@ -1155,6 +1540,7 @@ class App(tk.Tk):
             self.workers.remove(w)
             if w.stopping:
                 self._say(f"[{w.job} {w.index}] stopped")
+                self._feed("Stopped")
                 continue
             kind, msg = supervisor.classify_exit(rc, saw_cuda_error=getattr(w, "saw_cuda_error", False))
             # ⛔ THE DEFAULT WAS "oom", so any exit this code did not recognise was presented as the
@@ -1164,6 +1550,9 @@ class App(tk.Tk):
             tag = {"config": "cuda-error", "gpu": "cuda-error",
                    "idle": "sys", "done": "proved"}.get(kind, "sys")
             self._say(f"[{w.job} {w.index}] {msg}", tag)
+            self._feed(msg, {"cuda-error": "bad", "proved": "good"}.get(tag, "sys"))
+            if kind in ("config", "gpu") and not self._problem:
+                self._problem = msg
             if kind in ("config", "gpu"):
                 self._say("⛔ not restarting — and do not just press Start again: a box that cannot "
                           "prove claims blocks and abandons them, which holds up everyone else.",
@@ -1172,8 +1561,8 @@ class App(tk.Tk):
         # this condition silently never fires and Start never comes back. tk returns a plain str,
         # which is why the mistake is invisible in a quick test.
         if not self.workers and str(self.stop_btn["state"]) == "normal":
-            self.stop_btn.configure(state="disabled")
-            self.start_btn.configure(state="normal")
+            self._sync_buttons()
+            self._home_refresh()
             self.status.configure(text=api.summarise_progress(self.prog) if self.prog else "idle")
 
     def _stop(self):
@@ -1183,6 +1572,9 @@ class App(tk.Tk):
                 subprocess.run(supervisor.stop_command(w.popen.pid), capture_output=True, timeout=30)
             except Exception as e:
                 self._say(f"[{w.job} {w.index}] could not stop cleanly: {e}")
+        if self.workers:
+            self._feed("Stopping — letting the prover finish cleanly")
+            self._home_refresh()
         self.status.configure(text="stopping…")
 
     def _on_close(self):

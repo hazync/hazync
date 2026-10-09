@@ -21,9 +21,19 @@ cd tools/win-gui
 Then **double-click `Hazync.bat`**. It finds Python, says what to install if there is none, and opens
 the window with no console behind it.
 
-The **Setup** tab does the rest: it installs the signing library, downloads the client, finds or
-accepts a prover binary, and asks what the board should call you. Everything with a button, it does
-itself.
+The window opens on **Home**, which is the whole program for most people:
+
+- **one choice** — Prove, Fold or Anchor, each with a sentence saying what it is;
+- **one button** — Start, which becomes Stop while work runs;
+- **what is happening** — which block, which piece of how many, how long is left, how long it has
+  been running, how long since the prover last said anything, and a plain list of what has landed.
+
+On first launch Home fetches what it can by itself (the signing tools and the client) and shows the
+one or two things it needs from you: the prover program, and the name the board should credit.
+
+**The board** shows the project's totals and the map of every block. **Advanced** holds everything a
+newcomer should never need: the setup checklist, a specific range, worker count and segment size,
+the machine tests, the technical log, paths, the CPU/GPU choice and your key.
 
 ## ⛔ Read this first: what is proven and what is not
 
