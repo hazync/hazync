@@ -6,6 +6,8 @@
 #define __SPPARK_NTT_NTT_CUH__
 
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 
 #include <util/exception.cuh>
@@ -84,6 +86,20 @@ private:
         const auto gen_powers =
             NTTParameters::all(innt)[stream].partial_group_gen_powers;
 
+        // HAZYNC #631 TRACE (HAZYNC_CUDA_TRACE=1). The check below reads the runtime's STICKY
+        // last error, so it blames this launch for anything an earlier, unchecked call left
+        // behind. Reading it here first tells the two apart -- and, because reading clears it,
+        // lets the run continue past a leftover error to show whether anything else is wrong.
+        const bool hz_trace = std::getenv("HAZYNC_CUDA_TRACE") != nullptr;
+        if (hz_trace) {
+            cudaError_t stale = cudaGetLastError();
+            std::fprintf(stderr, "HAZYNC TRACE LDE_powers: before launch, leftover error = %d (%s); "
+                                 "lg_dsz=%u domain=%zu warp=%u innt=%d bitrev=%d gen_powers=%p inout=%p\n",
+                         (int)stale, cudaGetErrorString(stale), lg_dsz, domain_size, warpSize,
+                         (int)innt, (int)bitrev, (const void*)gen_powers, (const void*)inout);
+            std::fflush(stderr);
+        }
+
         if (domain_size < warpSize)
             LDE_distribute_powers<<<1, domain_size, 0, stream>>>
                                  (inout, lg_dsz, lg_blowup, bitrev, gen_powers);
@@ -93,6 +109,16 @@ private:
         else
             LDE_distribute_powers<<<stream.sm_count(), 1024, 0, stream>>>
                                  (inout, lg_dsz, lg_blowup, bitrev, gen_powers);
+
+        if (hz_trace) {
+            cudaError_t launched = cudaPeekAtLastError();
+            cudaError_t synced = cudaStreamSynchronize(stream);
+            std::fprintf(stderr, "HAZYNC TRACE LDE_powers: the launch itself = %d (%s); "
+                                 "stream sync after it = %d (%s)\n",
+                         (int)launched, cudaGetErrorString(launched),
+                         (int)synced, cudaGetErrorString(synced));
+            std::fflush(stderr);
+        }
 
         CUDA_OK(cudaGetLastError());
     }
