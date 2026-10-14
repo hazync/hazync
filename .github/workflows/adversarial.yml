@@ -1908,9 +1908,9 @@ jobs:
   dependency-audit:
     # Nothing was scanning dependencies for known advisories until now. This job fails on any NEW one.
     #
-    # The three below are explicitly accepted rather than left to make the build permanently red — a
+    # The four below are explicitly accepted rather than left to make the build permanently red — a
     # scanner that is always failing gets ignored, which is worse than no scanner. Each is re-checked
-    # here every push, so if one becomes fixable (or a fourth appears) it surfaces immediately.
+    # here every push, so if one becomes fixable (or a fifth appears) it surfaces immediately.
     #
     #   RUSTSEC-2025-0055  tracing-subscriber 0.2.25, ANSI escapes in logged user input. Reached only
     #                      via ark-relations -> risc0-groth16. The host's OWN subscriber is 0.3.23,
@@ -1920,6 +1920,11 @@ jobs:
     #   RUSTSEC-2023-0071  rsa 0.9.10 Marvin timing sidechannel, via rzup (the toolchain installer).
     #                      Hazync performs no RSA private-key operations. NO upstream fix exists.
     #   RUSTSEC-2024-0388  derivative 2.2.0 unmaintained (not a vulnerability), same ark path.
+    #   RUSTSEC-2026-0344  ruzstd 0.7.3 decompression bomb. Reached only via risc0-zkvm's profiler
+    #                      (addr2line -> object 0.36, which accepts ruzstd 0.7.x only), which runs only
+    #                      when RISC0_PPROF_OUT is set and parses the prover's OWN embedded guest ELF,
+    #                      never outside input. The fix (ruzstd 0.9) needs object 0.37, i.e. a risc0
+    #                      bump, which is ruled out for the reason above.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1927,7 +1932,7 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Audit every lockfile
         run: |
-          IGNORE="--ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0388"
+          IGNORE="--ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2026-0344"
           rc=0
           # The verifier lockfiles were NOT audited, and they are the SHIPPED artifacts — the
           # standalone verifier, the C ABI ghostd links, and the browser build. All three pull
