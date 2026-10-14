@@ -3,7 +3,7 @@ name = "hazync-verify-ffi"
 version = "0.1.0"
 edition = "2021"
 description = "C ABI over the Hazync proof verifier, for linking into ghostd"
-license = "Apache-2.0"
+license = "MIT"
 
 # staticlib so a C++ consumer links one .a with no runtime dependency on Rust.
 [lib]

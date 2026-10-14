@@ -3,7 +3,7 @@ name = "hazync-verify-wasm"
 version = "0.1.0"
 edition = "2021"
 description = "The Hazync verifier compiled to WebAssembly — verify a chain proof in a browser, locally"
-license = "Apache-2.0"
+license = "MIT"
 
 # Like `verifier/`, deliberately NOT a member of the prover workspace and deliberately not depending on
 # `methods` — that crate builds the RISC0 guest, which is the bulk of the host binary. This needs the

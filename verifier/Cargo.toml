@@ -3,7 +3,7 @@ name = "hazync-verify"
 version = "0.1.0"
 edition = "2021"
 description = "Minimal standalone verifier for a Hazync genesis-anchored SNARK range proof"
-license = "Apache-2.0"
+license = "MIT"
 
 # DELIBERATELY not a member of the prover workspace, and deliberately NOT depending on the `methods`
 # crate. `methods` builds the RISC0 guest, which is the bulk of the 69 MB (CPU) / 312 MB (CUDA) host

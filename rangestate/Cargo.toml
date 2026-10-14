@@ -3,7 +3,7 @@ name = "hazync-rangestate"
 version = "0.1.0"
 edition = "2021"
 description = "The RangeState journal type and chain constants, shared by every consumer of a Hazync proof"
-license = "Apache-2.0"
+license = "MIT"
 
 # DELIBERATELY dependency-light: serde only. Anything that verifies or consumes a Hazync proof must be
 # able to depend on this without pulling in a prover, a guest build, or a node.
