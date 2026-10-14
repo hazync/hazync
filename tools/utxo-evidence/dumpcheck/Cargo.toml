@@ -1,0 +1,14 @@
+[package]
+name = "dumpcheck"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Links verifier-ffi UNCHANGED and calls its two C-ABI entry points, so the check is exactly the code
+# ghostd links: hazync_verify_proof, then hazync_check_utxo_dump. Build it from the tag being checked.
+[dependencies]
+hazync-verify-ffi = { path = "../../../verifier-ffi" }
+
+[profile.release]
+opt-level = 3

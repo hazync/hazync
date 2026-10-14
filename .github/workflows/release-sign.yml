@@ -35,6 +35,13 @@ jobs:
     # Its staleness is also invisible to the obvious check: swapping one 64-hex literal for another is
     # LENGTH-PRESERVING, so a stale binary is byte-identical in size to a correct one. The assertion
     # below greps the embedded id out of the raw bytes, which is the only thing that actually catches it.
+    #
+    # ⛔ ONLY FOR VERSION TAGS. `sign` refuses anything but vMAJOR.MINOR.PATCH, but this job ran first
+    # and had no such check: a data-only release (evidence-136432, the UTXO evidence of #662) would get
+    # a verifier binary attached it never asked for, and then a red run when `sign` refused the tag.
+    # Skipping here skips `sign` too (it `needs:` this job). A manual run is still allowed, and `sign`
+    # still validates the tag it is given.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     steps:
       # PIN TO THE TAG BEING SIGNED, not the default branch (hazync#90).
