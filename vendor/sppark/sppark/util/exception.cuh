@@ -44,7 +44,25 @@ using cuda_error = sppark_error;
 # define HAZYNC_631_REPORT_CUDA_ERROR(s) ((void)0)
 #endif
 
+// HAZYNC_631_PENDING_TRACE (HAZYNC_CUDA_TRACE=1) — hazync#631. The GTX 1050 Ti trace showed an
+// "operation not supported" (801) ALREADY PENDING before the first NTT launch: some earlier call
+// failed and nobody checked it. Reading the pending error before every CUDA_OK brackets the culprit
+// between this check and the previous one, by file and line. Prints only when something is pending.
+#include <cstdlib>
+static inline void hazync_631_pending(const char* what, const char* file, int line)
+{
+    static const bool on = std::getenv("HAZYNC_CUDA_TRACE") != nullptr;
+    if (!on) return;
+    cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess) {
+        std::fprintf(stderr, "HAZYNC TRACE pending error %d (%s) found BEFORE %s @ %s:%d\n",
+                     (int)e, cudaGetErrorString(e), what, file, line);
+        std::fflush(stderr);
+    }
+}
+
 #define CUDA_OK(expr) do {                                  \
+    hazync_631_pending(#expr, __FILE__, __LINE__);          \
     cudaError_t code = expr;                                \
     if (code != cudaSuccess) {                              \
         auto file = std::strstr(__FILE__, "sppark");        \

@@ -38,6 +38,8 @@
 #include <string.h>
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
+#include <cstdlib>
+#include <cub/util_device.cuh>
 
 namespace risc0::circuit::rv32im_v2::cuda {
 
@@ -494,6 +496,30 @@ const char* risc0_circuit_rv32im_cuda_accum(AccumBuffers* buffers,
 
     {
       nvtx3::scoped_range range("phase2");
+      // HAZYNC #631 TRACE (HAZYNC_CUDA_TRACE=1). On the GTX 1050 Ti the inclusive_scan below fails
+      // with "invalid device ordinal" while sizing its temp storage, which makes no launch at all.
+      // Thrust reports one string for several runtime calls; ask each of them here, separately, so
+      // the one that refuses names itself.
+      if (std::getenv("HAZYNC_CUDA_TRACE")) {
+        cudaError_t pending = cudaPeekAtLastError();
+        int dev = -1, ndev = -1, sms = -1, ptx = -1, smv = -1;
+        cudaError_t eDev = cudaGetDevice(&dev);
+        cudaError_t eCnt = cudaGetDeviceCount(&ndev);
+        cudaError_t eSms = cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
+        cudaFuncAttributes fa{};
+        cudaError_t eFn = cudaFuncGetAttributes(&fa, cub::EmptyKernel<void>);
+        cudaError_t ePtx = cub::PtxVersion(ptx);
+        cudaError_t eSmv = cub::SmVersion(smv, dev);
+        std::fprintf(stderr,
+                     "HAZYNC TRACE scan: pending=%d(%s) getDevice=%d(%s)->%d deviceCount=%d(%s)->%d "
+                     "smCount=%d(%s)->%d EmptyKernel attrs=%d(%s) ptxVersion(fa)=%d "
+                     "cub::PtxVersion=%d(%s)->%d cub::SmVersion=%d(%s)->%d\n",
+                     (int)pending, cudaGetErrorString(pending), (int)eDev, cudaGetErrorString(eDev), dev,
+                     (int)eCnt, cudaGetErrorString(eCnt), ndev, (int)eSms, cudaGetErrorString(eSms), sms,
+                     (int)eFn, cudaGetErrorString(eFn), fa.ptxVersion, (int)ePtx,
+                     cudaGetErrorString(ePtx), ptx, (int)eSmv, cudaGetErrorString(eSmv), smv);
+        std::fflush(stderr);
+      }
       size_t rows = buffers->accum.rows;
       for (size_t j = 0; j < 4; j++) {
         size_t col = buffers->accum.cols - 4 + j;
