@@ -1908,7 +1908,7 @@ jobs:
   dependency-audit:
     # Nothing was scanning dependencies for known advisories until now. This job fails on any NEW one.
     #
-    # The four below are explicitly accepted rather than left to make the build permanently red — a
+    # The ones below are explicitly accepted rather than left to make the build permanently red — a
     # scanner that is always failing gets ignored, which is worse than no scanner. Each is re-checked
     # here every push, so if one becomes fixable (or a fifth appears) it surfaces immediately.
     #
@@ -1925,6 +1925,12 @@ jobs:
     #                      when RISC0_PPROF_OUT is set and parses the prover's OWN embedded guest ELF,
     #                      never outside input. The fix (ruzstd 0.9) needs object 0.37, i.e. a risc0
     #                      bump, which is ruled out for the reason above.
+    #   RUSTSEC-2026-0367  zip 2.4.2: SUID/SGID bits kept, symlinks escaping the destination, and Unix
+    #   RUSTSEC-2026-0368  permissions applied through symlinks. All three are in ZipArchive::extract(),
+    #   RUSTSEC-2026-0369  which writes an archive's entries to disk. zip is reached only via
+    #                      risc0-circuit-recursion, which opens the recursion programs compiled into the
+    #                      binary (include_bytes!) and reads entries into memory: no extract(), no outside
+    #                      archive. The fix (zip 9) needs a risc0 bump, ruled out above.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1932,7 +1938,7 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Audit every lockfile
         run: |
-          IGNORE="--ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2026-0344"
+          IGNORE="--ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2026-0344 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369"
           rc=0
           # The verifier lockfiles were NOT audited, and they are the SHIPPED artifacts — the
           # standalone verifier, the C ABI ghostd links, and the browser build. All three pull
