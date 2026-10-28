@@ -48,6 +48,9 @@ mod liftx_hint;
 mod batch_ecdsa;
 #[cfg(feature = "swiftsync")]
 mod swiftsync;
+// libzync: chunks commit per-transaction facts so the aggregate never parses a transaction.
+#[cfg(feature = "agg-lite")]
+mod agg_lite;
 // Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
 #[cfg(feature = "msm")]
 mod msm;
@@ -1695,6 +1698,14 @@ fn chunk_prove() {
         }
         batch_ecdsa::install(collect == 1, flat);
     }
+    // libzync agg-lite: the block's median-time-past and timestamp, committed so the aggregate can
+    // require they equal its own (created-output leaves and lock checks depend on them).
+    #[cfg(feature = "agg-lite")]
+    let mut lite = {
+        let lite_mtp: u32 = env::read();
+        let lite_time: u32 = env::read();
+        agg_lite::ChunkCtx::new(height, flags, lite_mtp, lite_time)
+    };
 
     let mut binds: Vec<[u8; 32]> = Vec::new();
     let mut tx_wtxids: Vec<(u32, [u8; 32], u32)> = Vec::new();
@@ -1774,6 +1785,14 @@ fn chunk_prove() {
             )
         };
         if structural != 1 { all_valid = false; }
+        #[cfg(feature = "agg-lite")]
+        {
+            let _ = (&mut binds, &mut tx_wtxids, &mut leaves_out, &mut seqs_out, &mut vers_out);
+            if !lite.record(&raw_tx, &prevouts, &idx, &ch, &cb, &mtp, &results, &leaves, &seqbuf, verbuf, &wt, hw) {
+                all_valid = false;
+            }
+            continue;
+        }
         // ONE digest for the transaction, reused by every input it owns. The payload was already
         // grouped by transaction (#137); this removes the last place the whole transaction was still
         // being hashed per input.
@@ -1838,6 +1857,11 @@ fn chunk_prove() {
     }
     #[cfg(feature = "tx-cycles")]
     risc0_zkvm::guest::env::log(&alloc::format!("TXFIN {}", env::cycle_count() - tc_fin));
+    #[cfg(feature = "agg-lite")]
+    {
+        lite.commit(all_valid, &block_hash);
+        return;
+    }
     #[cfg(not(feature = "fast-commit"))]
     env::commit(&ChunkOut { kind: KIND_CHUNK, all_valid, binds, tx_wtxids, leaves_out, seqs_out, vers_out });
     // libzync fast-commit: the SAME words risc0's serde would emit for ChunkOut, built directly and
@@ -1892,6 +1916,8 @@ fn aggregate() {
         v.truncate(len as usize);
         v
     }
+    #[cfg(feature = "agg-lite")]
+    let mut lite_journals: Vec<Vec<u32>> = Vec::with_capacity(k as usize);
     for _ in 0..k {
         #[cfg(feature = "agg-readslice")]
         let cj: Vec<u8> = { let n: u32 = env::read(); read_bytes_agg(n) };
@@ -1899,6 +1925,10 @@ fn aggregate() {
         let cj: Vec<u8> = env::read();
         env::verify(self_id, &cj).expect("chunk proof invalid");
         let words: Vec<u32> = cj.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        // agg-lite: raw words, decoded by agg_lite::validate_block_lite (it checks the domain tag).
+        #[cfg(feature = "agg-lite")]
+        { lite_journals.push(words); continue; }
+        #[allow(unreachable_code)]
         let out: ChunkOut = risc0_zkvm::serde::from_slice(&words).expect("decode chunk");
         assert!(out.kind == KIND_CHUNK, "aggregate: assumption is not a ChunkOut (domain tag)"); // H8
         if !out.all_valid { chunks_ok = false; }
@@ -1947,6 +1977,10 @@ fn aggregate() {
     let anchor_id = if is_base == 1 { dsha256(&prev_journal) } else { prev.anchor_id };
     let prev_mtp = median_time_past(&prev.recent_times);
 
+    #[cfg(feature = "agg-lite")]
+    let r = { let _ = (&all_binds, chunks_ok, &chunk_wtxids, &chunk_leaves, &chunk_seqs, &chunk_vers);
+              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals) };
+    #[cfg(not(feature = "agg-lite"))]
     let r = validate_block_wtx(&w, prev_mtp, Some((&all_binds, chunks_ok)), &chunk_wtxids,
                                &chunk_leaves, &chunk_seqs, &chunk_vers);
     let block_valid = r.all_ok && r.root_matches && r.pow_ok && r.merkle_ok && r.subsidy_ok && r.weight_ok && r.sigops_ok && r.witness_ok && r.bip34_ok && r.bip30_ok;

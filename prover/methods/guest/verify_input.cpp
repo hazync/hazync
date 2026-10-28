@@ -867,11 +867,17 @@ extern "C" int verify_inputs_batch_once(const uint8_t* tx_bytes, unsigned tx_len
                                         uint8_t* out_leaves,
                                         uint32_t* out_seqs, int32_t* out_version,
                                         uint8_t* out_wtxid, uint32_t* out_has_witness) {
+#ifdef HAZYNC_AGG_LITE
+    // agg-lite: the chunk then calls tx_out_leaves / check_tx / tx_full_sigops / ... on the same
+    // bytes, and each of those goes through cached_tx. Parse into the cache once, here.
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
 
     // tx_wtxid_info's outputs.
     const uint256 w = tx.GetWitnessHash();

@@ -33,6 +33,11 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 const KIND_CHAIN: u32 = 0xC4A1_0002;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
+/// libzync agg-lite chunk journal (guest src/agg_lite.rs).
+const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
+/// libzync agg-lite: the block's median-time-past, set by `build_full` for `write_chunk_inputs`.
+static HZ_BLOCK_MTP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+fn agg_lite() -> bool { std::env::var("HAZYNC_AGG_LITE").as_deref() == Ok("1") }
 
 // A 32-byte hash, and a vector of them, carried over risc0 serde's PACKED byte path rather than the
 // default one-word-per-byte. MEASURED on block 962,000 (docs/WITNESS_WIRE_PROFILE_2026-08-28.md):
@@ -755,6 +760,7 @@ fn build_full() -> (ChainState, BlockWitness) {
     // time so `time_ok` fails. Applied to recent_times so cmtp stays consistent host↔guest. NEVER in prod.
     if std::env::var("HAZYNC_COV1_BADTIME").is_ok() { recent_times = vec![time; 11]; }
     let cmtp = median_u32(&recent_times);
+    let _ = HZ_BLOCK_MTP.set(cmtp);
     // This block's created output leaves (coinbase + every tx, unspendable skipped) — the guest's in-block
     // set, keyed by LEAF (height-bearing, so a colliding old coinbase's leaf differs and stays external).
     let mut created: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
@@ -2572,7 +2578,7 @@ fn exec_chunk_cycles(w: &BlockWitness, lo: usize, hi: usize) -> u64 {
     // The guest tags this journal KIND_CHUNK and the aggregate asserts it (H8). The host printed the
     // tag and never checked it, so a payload-format change would have shown up as a plausible-looking
     // cycle count rather than an error. Check it here too: this is the other end of the same contract.
-    assert_eq!(w(0), KIND_CHUNK, "chunk journal is not a ChunkOut (domain tag {:#x})", w(0));
+    assert!(w(0) == KIND_CHUNK || w(0) == KIND_CHUNK_LITE, "chunk journal is not a ChunkOut (domain tag {:#x})", w(0));
     println!("        journal sha256 {}  kind={:#x} all_valid={} binds={}", hex(&d), w(0), w(4), w(8));
     s.cycles()
 }
@@ -2736,6 +2742,14 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
                 eprintln!("  batch: COLLECT for inputs {}..{} (no {path})", lo, hi);
             }
         }
+    }
+    // libzync agg-lite: the block's MTP and timestamp (the guest commits both; the aggregate checks them).
+    // ⛔ HAZYNC_AGG_LITE must match between build and run, like the hint blocks above.
+    if agg_lite() {
+        // Negative control (test-only): HAZYNC_LITE_BAD_MTP feeds chunks a wrong MTP; the aggregate must reject.
+        let bump = std::env::var("HAZYNC_LITE_BAD_MTP").is_ok() as u32;
+        b.write(&(HZ_BLOCK_MTP.get().expect("agg-lite: build_full has not set the block MTP") + bump)).unwrap();
+        b.write(&u32::from_le_bytes(w.header[68..72].try_into().unwrap())).unwrap();
     }
 
     for (tx_idx, gs, ge) in groups {
@@ -2980,6 +2994,19 @@ fn agg_exec_fake() {
             inp.proof_i.siblings = PackedHashes(Vec::new());
             inp.proof_last.siblings = PackedHashes(Vec::new());
         }
+    }
+    // libzync agg-lite: the aggregate takes every transaction fact from the chunk journals, so it is
+    // sent no transactions, prevouts, inputs or txids at all.
+    if agg_lite() {
+        // Negative control (test-only): HAZYNC_LITE_DROP_CHUNK=i omits chunk i; coverage must fail.
+        if let Some(i) = std::env::var("HAZYNC_LITE_DROP_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()) {
+            receipts.remove(i);
+            println!("  agg-lite NEGATIVE CONTROL: chunk {i} dropped");
+        }
+        w.txs.clear();
+        w.tx_prevouts.clear();
+        w.inputs.clear();
+        w.txids = PackedHashes(Vec::new());
     }
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);

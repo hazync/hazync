@@ -343,6 +343,9 @@ fn main() {
         println!("cargo:rerun-if-env-changed={d}");
         define_if(&mut b, d, std::env::var(d).as_deref() == Ok("1"));
     }
+    // libzync agg-lite: verify_inputs_batch_once parses through cached_tx (see src/agg_lite.rs).
+    println!("cargo:rerun-if-env-changed=HAZYNC_AGG_LITE");
+    define_if(&mut b, "HAZYNC_AGG_LITE", std::env::var("HAZYNC_AGG_LITE").as_deref() == Ok("1"));
     // libzync sweep-1 cost measurement: skip scripts/signatures in verify_inputs_batch_once.
     println!("cargo:rerun-if-env-changed=HAZYNC_NO_SCRIPTS");
     define_if(&mut b, "HAZYNC_NO_SCRIPTS", std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1"));

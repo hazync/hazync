@@ -150,6 +150,10 @@ fn main() {
     if std::env::var("HAZYNC_TX_ONCE").as_deref() == Ok("1") {
         features.push("tx-once".to_string());
     }
+    println!("cargo:rerun-if-env-changed=HAZYNC_AGG_LITE");
+    if std::env::var("HAZYNC_AGG_LITE").as_deref() == Ok("1") {
+        features.push("agg-lite".to_string());
+    }
     println!("cargo:rerun-if-env-changed=HAZYNC_TX_CYCLES");
     if std::env::var("HAZYNC_TX_CYCLES").as_deref() == Ok("1") {
         features.push("tx-cycles".to_string());
