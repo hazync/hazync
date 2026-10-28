@@ -339,7 +339,7 @@ fn main() {
     // sighash from preserialised bytes + a walking midstate (interpreter.cpp only). Round 7's three change
     // class layouts (HashWriter, CTransaction), so they must be defined on EVERY Core TU -- this
     // cc::Build compiles all of them, verify_input.cpp included.
-    for d in ["HAZYNC_HASHWRITER_BUF", "HAZYNC_LAZY_TXID", "HAZYNC_H160_MEMO", "HAZYNC_LEGACY_SIGHASH", "HAZYNC_D64_STREAM"] {
+    for d in ["HAZYNC_HASHWRITER_BUF", "HAZYNC_LAZY_TXID", "HAZYNC_H160_MEMO", "HAZYNC_LEGACY_SIGHASH", "HAZYNC_D64_STREAM", "HAZYNC_RAW_TXID", "HAZYNC_PUBKEY_MEMO", "HAZYNC_LEAF_ONEBUF"] {
         println!("cargo:rerun-if-env-changed={d}");
         define_if(&mut b, d, std::env::var(d).as_deref() == Ok("1"));
     }

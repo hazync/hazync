@@ -3,7 +3,8 @@
 Usage: python3 -I make_batch_hints.py <collect.log> <out dir>
 
 For each chunk ("batch: COLLECT for inputs LO..HI" in the host log), every following
-"BATCHREC<kind> <hex u1 u2 qx qy r>" (kind 0 ECDSA, 1 Schnorr) line becomes one 68-byte hint, in call order:
+"BATCHREC<kind> <hex u1 u2 qx qy r>" (kind 0 ECDSA, 1 Schnorr, 3 / 4 BIP341 tweak check with an even /
+odd output key) line becomes one 68-byte hint, in call order:
     u32 LE valid flag | R.x (32 B BE) | R.y (32 B BE),   R = u1*G + u2*Q
 valid = R is not infinity and R.x mod n == r, i.e. exactly libsecp's verdict. Invalid calls (e.g.
 CHECKMULTISIG trying a signature against the wrong key) get flag 0 and are verified by libsecp.
@@ -74,7 +75,7 @@ def main(log, out):
             cur = (m.group(1), m.group(2), [])
             chunks.append(cur)
             continue
-        m = re.search(r"BATCHREC([01]) ([0-9a-f]{320})", line)
+        m = re.search(r"BATCHREC([0134]) ([0-9a-f]{320})", line)
         if m:
             assert cur is not None, "BATCHREC before any COLLECT header"
             cur[2].append((int(m.group(1)), bytes.fromhex(m.group(2))))
@@ -86,8 +87,10 @@ def main(log, out):
             R = affine(jadd(mul(u1, G), mul(u2, (qx, qy))))
             if kind == 0:   # ECDSA: x(R) mod n == r
                 ok = R is not None and R[0] % N == r
-            else:           # BIP340: x(R) == r_x and y(R) even
+            elif kind == 1: # BIP340: x(R) == r_x and y(R) even
                 ok = R is not None and R[0] == r and R[1] % 2 == 0
+            else:           # BIP341 tweak: R == output key (x == r, parity == kind - 3)
+                ok = R is not None and R[0] == r and R[1] % 2 == kind - 3
             valid += ok
             blob += (1 if ok else 0).to_bytes(4, "little")
             blob += (R[0] if R else 0).to_bytes(32, "big") + (R[1] if R else 0).to_bytes(32, "big")

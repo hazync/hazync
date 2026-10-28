@@ -73,7 +73,8 @@ fn limbs_to_be_hex(l: &[u32; 8]) -> alloc::string::String {
 }
 
 /// kind 0 = ECDSA (`r` is the signature's r, a scalar), kind 1 = BIP340 Schnorr (`r` is r_x, a field
-/// element). u1, u2, qx, qy, r are 8-limb little-endian arrays straight from libsecp.
+/// element), kind 3 / 4 = BIP341 tweak check (u1 = the tweak, u2 = 1, Q = the internal key, `r` = the
+/// output key's x, y(R) even / odd). u1, u2, qx, qy, r are 8-limb little-endian arrays from libsecp.
 ///
 /// # Safety
 /// All pointers valid for 8 u32. Called only from the hooks apply_batch_hook.py installs.
@@ -119,12 +120,14 @@ pub unsafe extern "C" fn hazync_batch_defer(
         return 0;
     }
     // The scheme's own acceptance test on R.
-    let accept = if kind == 0 {
+    let accept = match kind {
         // ECDSA: x(R) mod n == r.
-        Fr::reduce_from_bigint(BigInt(rx)) == Fr::reduce_from_bigint(BigInt(r))
-    } else {
+        0 => Fr::reduce_from_bigint(BigInt(rx)) == Fr::reduce_from_bigint(BigInt(r)),
         // BIP340: x(R) == r_x exactly, and y(R) even.
-        rx == r && ry[0] & 1 == 0
+        1 => rx == r && ry[0] & 1 == 0,
+        // BIP341 tweak: R IS the output key, so x(R) == its x and y(R) has the committed parity.
+        3 | 4 => rx == r && (ry[0] & 1) as i32 == kind - 3,
+        _ => false,
     };
     if !accept {
         FALLBACK += 1;

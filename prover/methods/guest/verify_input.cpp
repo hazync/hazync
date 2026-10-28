@@ -56,6 +56,29 @@ static void le(unsigned char* b, uint64_t v, int n) { for (int i = 0; i < n; i++
 // makes it a property of the construction instead.
 static const unsigned char TAG_LEAF = 0x00;
 
+#ifdef HAZYNC_LEAF_ONEBUF
+// libzync round 12: the leaf preimage assembled in one buffer and hashed with ONE CSHA256::Write,
+// instead of nine small writes. Byte-identical preimage; false (caller uses the field-by-field path)
+// only for a scriptPubKey too long for the stack buffer.
+static bool hz_leaf(uint8_t* out, const unsigned char* txid, uint32_t vout, uint64_t value,
+                    const unsigned char* spk, size_t spk_len, uint32_t height, uint32_t cb, uint32_t mtp) {
+    unsigned char b[384];
+    if (spk_len > sizeof(b) - 58) return false;
+    b[0] = TAG_LEAF;
+    std::memcpy(b + 1, txid, 32);
+    le(b + 33, vout, 4);
+    le(b + 37, value, 8);
+    le(b + 45, spk_len, 4);
+    std::memcpy(b + 49, spk, spk_len);
+    unsigned char* t = b + 49 + spk_len;
+    le(t, height, 4);
+    t[4] = (unsigned char)(cb ? 1 : 0);
+    le(t + 5, mtp, 4);
+    CSHA256().Write(b, 58 + spk_len).Finalize(out);
+    return true;
+}
+#endif
+
 // Canonical Hazync UTXO-leaf commitment for the coin spent by input `input_idx`:
 //   SHA256( TAG_LEAF || txid || vout || value || scriptPubKey || coin_height || is_coinbase || coin_mtp ).
 // Height, coinbase flag, and creation median-time-past are committed so maturity + BIP68 (height AND
@@ -76,6 +99,11 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
     if (input_idx >= spent.size() || input_idx >= tx.vin.size()) return false;
     const COutPoint& op = tx.vin[input_idx].prevout;
     const CTxOut& coin = spent[input_idx];
+#ifdef HAZYNC_LEAF_ONEBUF
+    if (hz_leaf(out_leaf, reinterpret_cast<const unsigned char*>(op.hash.begin()), op.n, (uint64_t)coin.nValue,
+                reinterpret_cast<const unsigned char*>(coin.scriptPubKey.data()), coin.scriptPubKey.size(),
+                coin_height, coin_is_coinbase, coin_mtp)) return true;
+#endif
     CSHA256 h;
     unsigned char b8[8];
     h.Write(&TAG_LEAF, 1);
@@ -149,6 +177,34 @@ static bool hz_same_bytes(const unsigned char* head, const unsigned char* tail, 
 // buffer, and an entry must never outlive the transaction it was made for. hz_tx_generation lets
 // caches in other TUs (the legacy sighash cache in interpreter.cpp) follow the same rule.
 extern "C" { unsigned hz_tx_generation = 0; }
+#ifdef HAZYNC_RAW_TXID
+static void hz_dsha_parts(uint256& out, const unsigned char* a, size_t na, const unsigned char* b, size_t nb,
+                          const unsigned char* c, size_t nc) {
+    unsigned char t[32];
+    CSHA256 h;
+    h.Write(a, na);
+    if (nb) h.Write(b, nb);
+    if (nc) h.Write(c, nc);
+    h.Finalize(t);
+    CSHA256().Write(t, 32).Finalize(out.begin());
+}
+// txid and wtxid from the raw bytes. A witness serialisation is
+//   version(4) | 0x00 0x01 | inputs..outputs (M) | witnesses | locktime(4)
+// and the txid's (no-witness) serialisation is version | inputs..outputs | locktime, so M = its size - 8.
+static void hz_seed_hashes(const CTransaction& tx, const uint8_t* raw, unsigned len) {
+    uint256 txid, wtxid;
+    if (!tx.HasWitness()) {
+        hz_dsha_parts(txid, raw, len, nullptr, 0, nullptr, 0);
+        tx.HzSetHashes(txid, txid);
+        return;
+    }
+    const size_t nowit = ::GetSerializeSize(TX_NO_WITNESS(tx));
+    if (len < 10 || raw[4] != 0x00 || raw[5] != 0x01 || nowit < 8 || 6 + (nowit - 8) + 4 > len) return;
+    hz_dsha_parts(txid, raw, 4, raw + 6, nowit - 8, raw + len - 4, 4);
+    hz_dsha_parts(wtxid, raw, len, nullptr, 0, nullptr, 0);
+    tx.HzSetHashes(txid, wtxid);
+}
+#endif
 static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx>& hz_tx_cache() {
     static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx> c;
     return c;
@@ -162,6 +218,13 @@ static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
     r >> TX_WITH_WITNESS(mtx);
     hz_remember(e.head, e.tail, tx_bytes, tx_len);
     e.tx = std::make_unique<const CTransaction>(mtx);
+#ifdef HAZYNC_RAW_TXID
+    // Only when the parse consumed EVERY byte: Core's deserialiser rejects non-canonical compact sizes
+    // and superfluous witness records, so a fully consumed buffer IS the canonical serialisation, and
+    // hashing it equals re-serialising the parsed transaction. Any mistake changes the txid / wtxid,
+    // which the merkle root and the BIP141 commitment then reject.
+    if (r.p == r.e) hz_seed_hashes(*e.tx, tx_bytes, tx_len);
+#endif
     return *e.tx;
 }
 #ifdef HAZYNC_AGG_LITE
@@ -284,6 +347,11 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
     for (uint32_t v = 0; v < tx.vout.size(); v++) {
         const CTxOut& o = tx.vout[v];
         if (o.scriptPubKey.IsUnspendable()) continue; // not part of the UTXO set (H3)
+#ifdef HAZYNC_LEAF_ONEBUF
+        if (hz_leaf(out + (size_t)n * 32, reinterpret_cast<const unsigned char*>(txid.begin()), v, (uint64_t)o.nValue,
+                    reinterpret_cast<const unsigned char*>(o.scriptPubKey.data()), o.scriptPubKey.size(),
+                    height, is_coinbase, block_time)) { n++; continue; }
+#endif
         CSHA256 h;
         h.Write(&TAG_LEAF, 1);
         h.Write(reinterpret_cast<const unsigned char*>(txid.begin()), 32);
