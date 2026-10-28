@@ -73,3 +73,11 @@ sppark = { path = "../vendor/sppark" }
 # so it trades a compile error for a LINK error.
 # ⛔ The non-MSVC arm is byte-identical. Prover-side only; the circuit and METHOD_ID are unchanged.
 risc0-circuit-keccak-sys = { path = "../vendor/risc0-circuit-keccak-sys" }
+
+# libzync experiment: laptop builds of the host for execute-mode profiling. The guest is built by
+# risc0-build in its own workspace with its own [profile.release], so this cannot change guest cycles.
+[profile.fasthost]
+inherits = "release"
+lto = false
+debug = 0
+codegen-units = 16

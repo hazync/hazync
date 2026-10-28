@@ -133,6 +133,11 @@ fn main() {
         features.push("scalar-inv-accel".to_string());
     }
 
+    // libzync experiment: batch ECDSA verification. Host side is runtime-gated on the same variable.
+    println!("cargo:rerun-if-env-changed=HAZYNC_BATCH_ECDSA");
+    if std::env::var("HAZYNC_BATCH_ECDSA").as_deref() == Ok("1") {
+        features.push("batch-ecdsa".to_string());
+    }
     if !features.is_empty() {
         use std::collections::HashMap;
         // GuestOptions is #[non_exhaustive], so it cannot be built with a struct expression from

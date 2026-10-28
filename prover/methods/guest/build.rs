@@ -285,6 +285,11 @@ fn main() {
     // hard compile error rather than a wrong measurement. That is deliberate.
     define_if(&mut secp_build, "HAZYNC_FIELD_BIGINT2", field_bigint2);
     define_if(&mut secp_build, "HAZYNC_LIFTX_HINT", liftx_hint);
+    // libzync experiment: the hook experimental/libzync-bench/hook/apply_batch_hook.py inserts into
+    // ecdsa_impl.h. The Rust half is src/batch_ecdsa.rs behind the `batch-ecdsa` feature.
+    println!("cargo:rerun-if-env-changed=HAZYNC_BATCH_ECDSA");
+    let batch = std::env::var("HAZYNC_BATCH_ECDSA").as_deref() == Ok("1");
+    define_if(&mut secp_build, "HAZYNC_BATCH_ECDSA", batch);
     secp_build.compile("secp256k1");
 
     // 2) REAL Bitcoin Core consensus C++ (interpreter + sighash + deps) + our wrapper.

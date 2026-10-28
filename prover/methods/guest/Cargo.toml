@@ -30,6 +30,8 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 # hazync#139 middle-path experiment ONLY. Optional so a default build neither compiles it nor
 # changes METHOD_ID. Enable with --features bigint2-ecdsa; see src/bigint2_ecmult.rs.
 risc0-crypto = { version = "0.1.0-rc.1", optional = true }
+# libzync experiment only (batch-ecdsa): direct coprocessor calls for the batch MSM.
+risc0-bigint2 = { version = "=1.4.14", optional = true }
 
 [build-dependencies]
 cc = "1"
@@ -69,3 +71,7 @@ liftx-hint = []
 # the scalar inverse WITHOUT G1 failed to link with `undefined symbol: hazync_scalar_inverse`.
 # They are independent patches (0008 vs 0007) and now have independent features.
 scalar-inv-accel = []
+# libzync EXPERIMENT: defer every libsecp ECDSA verify that a host hint marks valid into ONE batch
+# check per chunk (hinted R, Fiat-Shamir weights, one MSM). Not reviewed; moves METHOD_ID.
+# See src/batch_ecdsa.rs and experimental/libzync-bench/README.md.
+batch-ecdsa = ["dep:risc0-crypto", "dep:risc0-bigint2"]

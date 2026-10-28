@@ -791,6 +791,7 @@ name = "method"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "risc0-bigint2",
  "risc0-crypto",
  "risc0-zkvm",
  "serde",

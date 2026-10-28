@@ -44,6 +44,8 @@ mod liftx_accel;
 // liftx_accel above, which substitutes the sqrt outright.
 #[cfg(feature = "liftx-hint")]
 mod liftx_hint;
+#[cfg(feature = "batch-ecdsa")]
+mod batch_ecdsa;
 // Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
 #[cfg(feature = "msm")]
 mod msm;
@@ -1658,6 +1660,17 @@ fn chunk_prove() {
         }
         liftx_hint::install(pairs);
     }
+    // libzync: per-verify hints (valid bit + R), or collect mode when the host has none yet.
+    #[cfg(feature = "batch-ecdsa")]
+    {
+        let collect: u32 = env::read();
+        let n: u32 = env::read();
+        let mut flat = vec![0u8; n as usize * batch_ecdsa::HINT_BYTES];
+        if n > 0 {
+            env::read_slice(&mut flat);
+        }
+        batch_ecdsa::install(collect == 1, flat);
+    }
 
     let mut binds: Vec<[u8; 32]> = Vec::new();
     let mut tx_wtxids: Vec<(u32, [u8; 32], u32)> = Vec::new();
@@ -1764,6 +1777,12 @@ fn chunk_prove() {
     {
         let (hits, misses) = liftx_hint::stats();
         risc0_zkvm::guest::env::log(&alloc::format!("liftx: hits={} misses={}", hits, misses));
+    }
+    #[cfg(feature = "batch-ecdsa")]
+    {
+        if !batch_ecdsa::finish() {
+            all_valid = false;
+        }
     }
     env::commit(&ChunkOut { kind: KIND_CHUNK, all_valid, binds, tx_wtxids, leaves_out, seqs_out, vers_out });
 }

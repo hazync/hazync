@@ -2592,6 +2592,28 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
         eprintln!("  liftx: {} pubkey hints for inputs {}..{}", hints.len(), lo, hi);
     }
 
+    // libzync experiment: batch-ECDSA hints from $HAZYNC_BATCH_HINTS_DIR/batch_<lo>_<hi>.bin
+    // (68-byte records). No file => collect mode: the guest logs every verify for the host to hint.
+    // ⛔ Same discipline as above: HAZYNC_BATCH_ECDSA must match between build and run.
+    if std::env::var("HAZYNC_BATCH_ECDSA").as_deref() == Ok("1") {
+        let dir = std::env::var("HAZYNC_BATCH_HINTS_DIR").unwrap_or_else(|_| ".".into());
+        let path = format!("{dir}/batch_{lo}_{hi}.bin");
+        match std::fs::read(&path) {
+            Ok(flat) => {
+                assert!(flat.len() % 68 == 0, "{path}: not a whole number of 68-byte hints");
+                b.write(&0u32).unwrap();
+                b.write(&((flat.len() / 68) as u32)).unwrap();
+                b.write_slice(&flat);
+                eprintln!("  batch: {} hints for inputs {}..{} from {path}", flat.len() / 68, lo, hi);
+            }
+            Err(_) => {
+                b.write(&1u32).unwrap();
+                b.write(&0u32).unwrap();
+                eprintln!("  batch: COLLECT for inputs {}..{} (no {path})", lo, hi);
+            }
+        }
+    }
+
     for (tx_idx, gs, ge) in groups {
         let tx = &w.txs[tx_idx as usize].0;
         let prevouts = &w.tx_prevouts[tx_idx as usize].0;
