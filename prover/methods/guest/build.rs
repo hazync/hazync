@@ -379,6 +379,12 @@ fn main() {
     for tu in ["secp256k1.c", "precomputed_ecmult.c", "precomputed_ecmult_gen.c"] {
         println!("cargo:rerun-if-changed={secp}/src/{tu}");
     }
+    // libzync: the TUs above are not enough. secp256k1.c #includes its modules' *_impl.h, and Core's
+    // TUs include patched headers (transaction.h, hash.h). An edit to a header ONLY, with the same env,
+    // reused the cached guest: round 13's tweak hook (modules/extrakeys/main_impl.h) was silently
+    // absent from the measured build. A directory makes cargo scan every file under it.
+    println!("cargo:rerun-if-changed={secp}/src");
+    println!("cargo:rerun-if-changed={core}");
 
     b.compile("bitcoinconsensus");
 
