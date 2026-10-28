@@ -1722,6 +1722,9 @@ fn chunk_prove() {
         v
     }
     for _ in 0..n_txs {
+        // libzync tx-cycles: per-transaction cycle trace, the ground truth the host packer is fitted to.
+        #[cfg(feature = "tx-cycles")]
+        let tc0 = env::cycle_count();
         let tx_len: u32 = env::read();
         let prevouts_len: u32 = env::read();
         let n_owned: u32 = env::read();
@@ -1807,7 +1810,12 @@ fn chunk_prove() {
             seqs_out.push(seqbuf[j]);
             vers_out.push(verbuf);
         }
+        #[cfg(feature = "tx-cycles")]
+        risc0_zkvm::guest::env::log(&alloc::format!(
+            "TXCYC {} {} {}", tx_len, n_owned, env::cycle_count() - tc0));
     }
+    #[cfg(feature = "tx-cycles")]
+    let tc_fin = env::cycle_count();
     // A memo that never hits would silently reinstate the full decompression cost while every gate
     // still passed, so report it: 0 hits is a FAILED experiment, not a null result.
     #[cfg(feature = "liftx-accel")]
@@ -1828,6 +1836,8 @@ fn chunk_prove() {
             all_valid = false;
         }
     }
+    #[cfg(feature = "tx-cycles")]
+    risc0_zkvm::guest::env::log(&alloc::format!("TXFIN {}", env::cycle_count() - tc_fin));
     #[cfg(not(feature = "fast-commit"))]
     env::commit(&ChunkOut { kind: KIND_CHUNK, all_valid, binds, tx_wtxids, leaves_out, seqs_out, vers_out });
     // libzync fast-commit: the SAME words risc0's serde would emit for ChunkOut, built directly and

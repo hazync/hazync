@@ -2157,6 +2157,9 @@ fn repeat_savings(w: &BlockWitness) -> Vec<u64> {
 }
 
 fn input_costs(w: &BlockWitness) -> Vec<u64> {
+    if std::env::var("HAZYNC_COST_MODEL").as_deref() == Ok("fit") {
+        return fitted_costs(w);
+    }
     w.inputs
         .iter()
         .map(|inp| {
@@ -2187,6 +2190,104 @@ fn legacy_sighash_bytes(raw_tx: &[u8], input_idx: u32) -> u64 {
         Some(i) if i.witness.is_empty() && !tx.is_coinbase() => raw_tx.len() as u64,
         _ => 0,
     }
+}
+
+/// libzync round 8: a cost model FITTED to per-transaction guest cycles (`HAZYNC_TX_CYCLES=1` logs
+/// them; `HAZYNC_DUMP_INPUT_FEATURES` writes these features), selected by `HAZYNC_COST_MODEL=fit`.
+///
+/// The hand-set model above prices every input with the whole transaction's bytes and knows nothing
+/// of multisig or witness size; after tx-once a transaction is parsed and hashed ONCE per chunk, so
+/// that over-charges big many-input transactions and under-charges the inputs that really are slow.
+/// Features per input, in FIT_NAMES order:
+/// - one: fixed per input;  ecdsa / schnorr: predicted verifies;
+/// - wit / ss: this input's witness bytes and scriptSig bytes;
+/// - legacy: bytes a round-8 legacy sighash hashes for this input, 41*(n-k) + outputs (0 for witness);
+/// - msx: CHECKMULTISIG keys beyond the threshold (each mismatch falls back to a full libsecp verify);
+/// - txb / tx1: the transaction's bytes and a fixed per-transaction cost, split evenly across its inputs;
+/// - tapscript: a taproot SCRIPT-path spend, whose tweak check (Q = P + t*G) libsecp runs unbatched.
+const FIT_NAMES: [&str; 10] = ["ONE", "ECDSA", "SCHNORR", "WIT", "SS", "LEGACY", "MSX", "TXB", "TX1", "TAPSCRIPT"];
+/// GHOST + round 8 fit on block 962,000 (cycles per unit; see BLOCK_962000.md round 8): 6,303
+/// transactions, median error 0.8%. ECDSA / SCHNORR include the end-of-chunk batch check (9,350 per
+/// verify). Each is overridable as HAZYNC_FIT_<NAME>.
+///
+/// ⚠ Pair with HAZYNC_PACK_KEYS=1, HAZYNC_COST_EC_OP=14537, HAZYNC_COST_EC_OP_REPEAT=0 and add 14,537
+/// to ECDSA / SCHNORR: a key costs ~14.5k cycles in EVERY chunk it appears in (lift + MSM point), which
+/// a one-chunk fit cannot see because there each key is paid for once. Fitted from the 16-chunk
+/// residuals; without it the early, key-diverse chunks ran 25-30% over prediction.
+const FIT_DEFAULT: [f64; 10] = [3147.0, 9350.0, 48266.0, 136.0, 128.0, 2.0, 58402.0, 34.0, 6486.0, 185656.0];
+
+fn input_features(w: &BlockWitness) -> Vec<[f64; 10]> {
+    w.inputs.iter().map(|inp| {
+        let raw = &w.txs[inp.tx_idx as usize].0;
+        let pv = &w.tx_prevouts[inp.tx_idx as usize].0;
+        let ops = predicted_sig_ops(raw, inp.input_idx, pv);
+        let mut f = [0f64; 10];
+        f[0] = 1.0;
+        f[1] = ops.ecdsa as f64;
+        f[2] = ops.schnorr as f64;
+        let Ok(tx) = deserialize::<Transaction>(raw) else { return f };
+        let k = inp.input_idx as usize;
+        let n = tx.input.len().max(1) as f64;
+        f[7] = (raw.len() + pv.len()) as f64 / n;
+        f[8] = 1.0 / n;
+        let Some(txin) = tx.input.get(k) else { return f };
+        f[3] = txin.witness.iter().map(|e| e.len() + 1).sum::<usize>() as f64;
+        f[4] = txin.script_sig.len() as f64;
+        if txin.witness.is_empty() && ops.total() > 0 {
+            let outs: usize = tx.output.iter().map(|o| o.script_pubkey.len() + 9).sum();
+            f[5] = (41 * (tx.input.len() - k) + outs) as f64;
+        }
+        // The multisig script: P2WSH's witness script, P2SH's redeem script, or a bare output.
+        let prevs = deserialize::<Vec<TxOut>>(pv).unwrap_or_default();
+        if prevs.get(k).is_some_and(|o| o.script_pubkey.is_p2tr()) {
+            let mut n = txin.witness.len();
+            if n >= 2 && txin.witness.last().is_some_and(|e| e.first() == Some(&0x50)) { n -= 1; }
+            if n >= 2 { f[9] = 1.0; }
+        }
+        let script: Vec<u8> = if let Some(ws) = txin.witness.last().filter(|_| txin.witness.len() > 1) {
+            ws.to_vec()
+        } else if let Some(Ok(ins)) = txin.script_sig.instructions().last() {
+            ins.push_bytes().map(|b| b.as_bytes().to_vec()).unwrap_or_default()
+        } else {
+            prevs.get(k).map(|o| o.script_pubkey.to_bytes()).unwrap_or_default()
+        };
+        f[6] = multisig_extra(&script).or_else(|| {
+            prevs.get(k).and_then(|o| multisig_extra(o.script_pubkey.as_bytes()))
+        }).unwrap_or(0) as f64;
+        f
+    }).collect()
+}
+
+/// `n - m` for an `OP_m <keys> OP_n OP_CHECKMULTISIG[VERIFY]` script, else None.
+fn multisig_extra(s: &[u8]) -> Option<u64> {
+    let (&first, rest) = s.split_first()?;
+    let (&last, rest) = rest.split_last()?;
+    let (&nop, _) = rest.split_last()?;
+    if last != 0xae && last != 0xaf { return None }
+    let small = |op: u8| (0x51..=0x60).contains(&op).then(|| (op - 0x50) as u64);
+    let (m, n) = (small(first)?, small(nop)?);
+    Some(n.saturating_sub(m))
+}
+
+fn fitted_costs(w: &BlockWitness) -> Vec<u64> {
+    let coef: Vec<f64> = FIT_NAMES.iter().zip(FIT_DEFAULT).map(|(n, d)| {
+        std::env::var(format!("HAZYNC_FIT_{n}")).ok().and_then(|s| s.parse().ok()).unwrap_or(d)
+    }).collect();
+    input_features(w).iter()
+        .map(|f| f.iter().zip(&coef).map(|(x, c)| x * c).sum::<f64>().max(1.0) as u64)
+        .collect()
+}
+
+fn dump_input_features(w: &BlockWitness, path: &str) {
+    use std::fmt::Write as _;
+    let mut s = format!("tx_idx,input_idx,tx_len,{}\n", FIT_NAMES.join(","));
+    for (inp, f) in w.inputs.iter().zip(input_features(w)) {
+        let _ = write!(s, "{},{},{}", inp.tx_idx, inp.input_idx, w.txs[inp.tx_idx as usize].0.len());
+        for x in f { let _ = write!(s, ",{x}"); }
+        s.push('\n');
+    }
+    std::fs::write(path, s).expect("write HAZYNC_DUMP_INPUT_FEATURES");
+    eprintln!("input features → {path}");
 }
 
 /// Runs needed to cover `costs` when no run may exceed `cap`. `cap` is always >= max(costs), so every
@@ -2349,6 +2450,7 @@ fn chunk_profile() {
     let costs = input_costs(&w);
     let keys = input_keys(&w);   // for the per-chunk repeat count reported below
     let exec = std::env::var("HAZYNC_PROFILE_EXEC").is_ok();
+    if let Ok(p) = std::env::var("HAZYNC_DUMP_INPUT_FEATURES") { dump_input_features(&w, &p); }
 
     println!("=== CHUNK PROFILE block {}: {} inputs → {} chunks ===", w.height, n, nchunks);
     let total_ec: u64 = w.inputs.iter().map(|inp| predicted_ec_ops(

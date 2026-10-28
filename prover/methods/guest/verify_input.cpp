@@ -890,6 +890,18 @@ extern "C" int verify_inputs_batch_once(const uint8_t* tx_bytes, unsigned tx_len
     pr >> spent;
     if (spent.size() != tx.vin.size()) return -60;
 
+#ifdef HAZYNC_NO_SCRIPTS
+    // libzync "sweep 1" COST MEASUREMENT ONLY: everything but scripts and signatures (parse, wtxid,
+    // coin leaves for the SwiftSync total). Every input is reported valid. Never a real build.
+    for (unsigned k = 0; k < n; k++) {
+        const unsigned i = input_idx[k];
+        if (i >= spent.size()) { out_results[k] = -60; continue; }
+        if (out_leaves) coin_leaf(tx, spent, i, coin_height[k], coin_is_coinbase[k], coin_mtp[k],
+                                  out_leaves + 32 * k);
+        out_results[k] = 1;
+    }
+    return 1;
+#endif
     PrecomputedTransactionData txdata;
 #ifdef HAZYNC_TXDATA_LAZY
     // Core's own validation calls Init with force=false: compute the BIP143 / BIP341 precomputed

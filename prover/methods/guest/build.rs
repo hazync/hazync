@@ -335,13 +335,17 @@ fn main() {
     // PrecomputedTransactionData computed lazily as Core's own validation does (force=false).
     println!("cargo:rerun-if-env-changed=HAZYNC_SHA_STREAM");
     define_if(&mut b, "HAZYNC_SHA_STREAM", std::env::var("HAZYNC_SHA_STREAM").as_deref() == Ok("1"));
-    // libzync round 7: HashWriter staging buffer, lazy txid/wtxid, OP_HASH160 key memo. These change
+    // libzync round 7: HashWriter staging buffer, lazy txid/wtxid, OP_HASH160 key memo; round 8: legacy
+    // sighash from preserialised bytes + a walking midstate (interpreter.cpp only). Round 7's three change
     // class layouts (HashWriter, CTransaction), so they must be defined on EVERY Core TU -- this
     // cc::Build compiles all of them, verify_input.cpp included.
-    for d in ["HAZYNC_HASHWRITER_BUF", "HAZYNC_LAZY_TXID", "HAZYNC_H160_MEMO"] {
+    for d in ["HAZYNC_HASHWRITER_BUF", "HAZYNC_LAZY_TXID", "HAZYNC_H160_MEMO", "HAZYNC_LEGACY_SIGHASH"] {
         println!("cargo:rerun-if-env-changed={d}");
         define_if(&mut b, d, std::env::var(d).as_deref() == Ok("1"));
     }
+    // libzync sweep-1 cost measurement: skip scripts/signatures in verify_inputs_batch_once.
+    println!("cargo:rerun-if-env-changed=HAZYNC_NO_SCRIPTS");
+    define_if(&mut b, "HAZYNC_NO_SCRIPTS", std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1"));
     println!("cargo:rerun-if-env-changed=HAZYNC_TXDATA_LAZY");
     define_if(&mut b, "HAZYNC_TXDATA_LAZY", std::env::var("HAZYNC_TXDATA_LAZY").as_deref() == Ok("1"));
     for tu in core_tus { b.file(format!("{core}/{tu}")); }
