@@ -1828,7 +1828,32 @@ fn chunk_prove() {
             all_valid = false;
         }
     }
+    #[cfg(not(feature = "fast-commit"))]
     env::commit(&ChunkOut { kind: KIND_CHUNK, all_valid, binds, tx_wtxids, leaves_out, seqs_out, vers_out });
+    // libzync fast-commit: the SAME words risc0's serde would emit for ChunkOut, built directly and
+    // committed in one call. serde walks them one word at a time through the journal writer, which
+    // measured 49 M cycles on block 962,000. Rules: u32/i32/bool = one word; [u8; 32] = 32 words,
+    // one per byte, no length (it is a tuple); Vec = a length word, then its elements; tuples and
+    // structs = their fields in order. The journal digest is the check: it must not change.
+    #[cfg(feature = "fast-commit")]
+    {
+        let mut v: Vec<u32> = Vec::with_capacity(
+            8 + binds.len() * 32 + tx_wtxids.len() * 34 + leaves_out.len() * 32 + seqs_out.len() + vers_out.len());
+        let h = |v: &mut Vec<u32>, x: &[u8; 32]| v.extend(x.iter().map(|b| *b as u32));
+        v.push(KIND_CHUNK);
+        v.push(all_valid as u32);
+        v.push(binds.len() as u32);
+        for b in &binds { h(&mut v, b); }
+        v.push(tx_wtxids.len() as u32);
+        for (a, w, c) in &tx_wtxids { v.push(*a); h(&mut v, w); v.push(*c); }
+        v.push(leaves_out.len() as u32);
+        for l in &leaves_out { h(&mut v, l); }
+        v.push(seqs_out.len() as u32);
+        v.extend_from_slice(&seqs_out);
+        v.push(vers_out.len() as u32);
+        v.extend(vers_out.iter().map(|x| *x as u32));
+        env::commit_slice(&v);
+    }
 }
 
 // Mode 5: aggregate K chunk proofs into a block/chain proof. env::verify each chunk (composition),

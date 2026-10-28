@@ -331,6 +331,12 @@ fn main() {
     // libzync: verify_inputs_batch_once in verify_input.cpp (one deserialise + hash per transaction).
     println!("cargo:rerun-if-env-changed=HAZYNC_TX_ONCE");
     define_if(&mut b, "HAZYNC_TX_ONCE", std::env::var("HAZYNC_TX_ONCE").as_deref() == Ok("1"));
+    // libzync: CSHA256 kept in accelerator layout (hook/apply_sha_stream.py patches sha256.cpp), and
+    // PrecomputedTransactionData computed lazily as Core's own validation does (force=false).
+    println!("cargo:rerun-if-env-changed=HAZYNC_SHA_STREAM");
+    define_if(&mut b, "HAZYNC_SHA_STREAM", std::env::var("HAZYNC_SHA_STREAM").as_deref() == Ok("1"));
+    println!("cargo:rerun-if-env-changed=HAZYNC_TXDATA_LAZY");
+    define_if(&mut b, "HAZYNC_TXDATA_LAZY", std::env::var("HAZYNC_TXDATA_LAZY").as_deref() == Ok("1"));
     for tu in core_tus { b.file(format!("{core}/{tu}")); }
     b.file("verify_input.cpp");
 

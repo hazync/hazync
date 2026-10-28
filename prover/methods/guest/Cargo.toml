@@ -81,3 +81,5 @@ tx-once = []
 # libzync EXPERIMENT: SwiftSync-style ECMH coin accounting in the aggregate instead of Utreexo
 # inclusion proofs. Cost measurement only (no handover check); see src/swiftsync.rs.
 swiftsync = ["batch-ecdsa"]
+# libzync EXPERIMENT: commit the chunk journal as prebuilt serde words (identical bytes).
+fast-commit = []

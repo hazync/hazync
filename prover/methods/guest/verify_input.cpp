@@ -891,7 +891,14 @@ extern "C" int verify_inputs_batch_once(const uint8_t* tx_bytes, unsigned tx_len
     if (spent.size() != tx.vin.size()) return -60;
 
     PrecomputedTransactionData txdata;
+#ifdef HAZYNC_TXDATA_LAZY
+    // Core's own validation calls Init with force=false: compute the BIP143 / BIP341 precomputed
+    // hashes only if some input actually spends a witness program. force=true computed both for
+    // every transaction, legacy ones included.
+    txdata.Init(tx, std::vector<CTxOut>(spent), false);
+#else
     txdata.Init(tx, std::vector<CTxOut>(spent), true);
+#endif
 
     for (unsigned k = 0; k < n; k++) {
         const unsigned i = input_idx[k];
