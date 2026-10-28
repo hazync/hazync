@@ -138,6 +138,10 @@ fn main() {
     if std::env::var("HAZYNC_BATCH_ECDSA").as_deref() == Ok("1") {
         features.push("batch-ecdsa".to_string());
     }
+    println!("cargo:rerun-if-env-changed=HAZYNC_SWIFTSYNC");
+    if std::env::var("HAZYNC_SWIFTSYNC").as_deref() == Ok("1") {
+        features.push("swiftsync".to_string());
+    }
     println!("cargo:rerun-if-env-changed=HAZYNC_TX_ONCE");
     if std::env::var("HAZYNC_TX_ONCE").as_deref() == Ok("1") {
         features.push("tx-once".to_string());

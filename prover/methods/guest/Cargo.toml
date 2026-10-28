@@ -78,3 +78,6 @@ batch-ecdsa = ["dep:risc0-crypto", "dep:risc0-bigint2"]
 # libzync EXPERIMENT: one deserialise + one txid/wtxid hash per transaction per chunk instead of
 # three and two. Same outputs; Core's code untouched; moves METHOD_ID. Pair with HAZYNC_TX_ONCE.
 tx-once = []
+# libzync EXPERIMENT: SwiftSync-style ECMH coin accounting in the aggregate instead of Utreexo
+# inclusion proofs. Cost measurement only (no handover check); see src/swiftsync.rs.
+swiftsync = ["batch-ecdsa"]

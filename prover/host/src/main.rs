@@ -2855,7 +2855,7 @@ fn read_chunk_receipts(nchunks: usize) -> Vec<risc0_zkvm::Receipt> {
 /// chunk executions exactly as in chunk-profile.
 fn agg_exec_fake() {
     use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
-    let (anchor, w) = build_full();
+    let (anchor, mut w) = build_full();
     let bounds = chunk_bounds(&w, nchunks_env());
     let mut receipts = Vec::with_capacity(bounds.len());
     for (i, &(lo, hi)) in bounds.iter().enumerate() {
@@ -2870,8 +2870,34 @@ fn agg_exec_fake() {
         println!("  chunk {i:>3} [{lo}..{hi}) executed: {} cycles", s.cycles());
         receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
     }
+    // libzync SwiftSync: the aggregate takes no inclusion proofs, so they are not sent. ECMH hints
+    // follow the stream from $HAZYNC_ECMH_HINTS; no file => the guest collects (logs ECMHREC lines).
+    let swiftsync = std::env::var("HAZYNC_SWIFTSYNC").as_deref() == Ok("1");
+    if swiftsync {
+        for inp in w.inputs.iter_mut() {
+            inp.proof_i.siblings = PackedHashes(Vec::new());
+            inp.proof_last.siblings = PackedHashes(Vec::new());
+        }
+    }
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
+    if swiftsync {
+        match std::env::var("HAZYNC_ECMH_HINTS").ok().and_then(|p| std::fs::read(p).ok()) {
+            Some(flat) => {
+                let mut padded = flat.clone();
+                padded.resize(flat.len().div_ceil(4) * 4, 0);
+                b.write(&0u32).unwrap();
+                b.write(&(flat.len() as u32)).unwrap();
+                b.write_slice(&padded);
+                println!("  swiftsync: {} bytes of ECMH hints", flat.len());
+            }
+            None => {
+                b.write(&1u32).unwrap();
+                b.write(&0u32).unwrap();
+                println!("  swiftsync: COLLECT (no HAZYNC_ECMH_HINTS file)");
+            }
+        }
+    }
     report_agg_execute_only(b);
 }
 

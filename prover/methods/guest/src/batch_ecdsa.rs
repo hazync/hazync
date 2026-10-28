@@ -17,19 +17,32 @@
 //! COLLECT mode (no hints yet): every call is logged as `BATCHREC <hex u1 u2 qx qy r>` and falls
 //! through to libsecp; the host turns the log into hints for the measured run.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use risc0_crypto::curves::secp256k1::{Affine, Fq, Fr};
+use risc0_crypto::BigInt;
 use risc0_zkvm::guest::env;
 use sha2::{Digest, Sha256};
 
 /// Bytes per hint: u32 valid flag (LE), then R.x and R.y big-endian.
 pub const HINT_BYTES: usize = 68;
 
+/// One deferred check: u1·G + u2·Q == R, all as little-endian 8x32 limbs (libsecp's own layout).
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Deferred {
+    u1: [u32; 8],
+    u2: [u32; 8],
+    q: Pt,
+    r: Pt,
+}
+
 static mut COLLECT: bool = false;
 static mut HINTS: Vec<u8> = Vec::new();
 static mut NEXT: usize = 0;
 static mut FALLBACK: u32 = 0;
-static mut DEFERRED: Vec<([u8; 32], [u8; 32], Pt, Pt)> = Vec::new();
+static mut SCHNORR_N: u32 = 0;
+static mut DEFERRED: Vec<Deferred> = Vec::new();
 
 pub fn install(collect: bool, hints: Vec<u8>) {
     unsafe {
@@ -37,6 +50,7 @@ pub fn install(collect: bool, hints: Vec<u8>) {
         HINTS = hints;
         NEXT = 0;
         FALLBACK = 0;
+        SCHNORR_N = 0;
         DEFERRED = Vec::new();
     }
 }
@@ -49,24 +63,28 @@ fn be_to_limbs(b: &[u8]) -> [u32; 8] {
     l
 }
 
-fn hex(b: &[u8]) -> alloc::string::String {
-    b.iter().map(|x| alloc::format!("{x:02x}")).collect()
+fn limbs_to_be_hex(l: &[u32; 8]) -> alloc::string::String {
+    let mut s = alloc::string::String::with_capacity(64);
+    for k in (0..8).rev() {
+        s.push_str(&alloc::format!("{:08x}", l[k]));
+    }
+    s
 }
 
+/// kind 0 = ECDSA (`r` is the signature's r, a scalar), kind 1 = BIP340 Schnorr (`r` is r_x, a field
+/// element). u1, u2, qx, qy, r are 8-limb little-endian arrays straight from libsecp.
+///
 /// # Safety
-/// All pointers valid for 32 bytes. Called only from the hook in ecdsa_impl.h.
+/// All pointers valid for 8 u32. Called only from the hooks apply_batch_hook.py installs.
 #[no_mangle]
-pub unsafe extern "C" fn hazync_batch_ecdsa(
-    u1: *const u8, u2: *const u8, qx: *const u8, qy: *const u8, r: *const u8,
+pub unsafe extern "C" fn hazync_batch_defer(
+    kind: i32, u1: *const u32, u2: *const u32, qx: *const u32, qy: *const u32, r: *const u32,
 ) -> i32 {
-    let s = |p: *const u8| -> [u8; 32] { core::slice::from_raw_parts(p, 32).try_into().unwrap() };
-    let (u1, u2, qx, qy, r) = (s(u1), s(u2), s(qx), s(qy), s(r));
+    let rd = |p: *const u32| -> [u32; 8] { core::slice::from_raw_parts(p, 8).try_into().unwrap() };
+    let (u1, u2, qx, qy, r) = (rd(u1), rd(u2), rd(qx), rd(qy), rd(r));
     if COLLECT {
-        let mut rec = Vec::with_capacity(160);
-        for v in [&u1, &u2, &qx, &qy, &r] {
-            rec.extend_from_slice(v);
-        }
-        env::log(&alloc::format!("BATCHREC {}", hex(&rec)));
+        env::log(&alloc::format!("BATCHREC{} {}{}{}{}{}", kind, limbs_to_be_hex(&u1), limbs_to_be_hex(&u2),
+                                 limbs_to_be_hex(&qx), limbs_to_be_hex(&qy), limbs_to_be_hex(&r)));
         return 0;
     }
     let i = NEXT;
@@ -77,66 +95,97 @@ pub unsafe extern "C" fn hazync_batch_ecdsa(
         return 0;
     }
     let rec = &h[i * HINT_BYTES + 4..(i + 1) * HINT_BYTES];
-    let (rx, ry) = (&rec[..32], &rec[32..]);
-    // R must be a real curve point with canonical coordinates...
-    let (Some(x), Some(y)) = (Fq::from_bigint(risc0_crypto::BigInt(be_to_limbs(rx))),
-                              Fq::from_bigint(risc0_crypto::BigInt(be_to_limbs(ry)))) else {
+    let (rx, ry) = (be_to_limbs(&rec[..32]), be_to_limbs(&rec[32..]));
+    // R must be a canonical curve point: y^2 == x^3 + 7.
+    let (Some(x), Some(y)) = (Fq::from_bigint(BigInt(rx)), Fq::from_bigint(BigInt(ry))) else {
         FALLBACK += 1;
         return 0;
     };
-    if Affine::new(x, y).is_none() {
+    if &y * &y != &(&(&x * &x) * &x) + &Fq::from_u32(7) {
         FALLBACK += 1;
         return 0;
     }
-    // ...whose x, reduced mod n, is the signature's r. This is ECDSA's acceptance test.
-    if Fr::from_be_bytes_mod_order(rx) != Fr::from_be_bytes_mod_order(&r) {
+    // The scheme's own acceptance test on R.
+    let accept = if kind == 0 {
+        // ECDSA: x(R) mod n == r.
+        Fr::reduce_from_bigint(BigInt(rx)) == Fr::reduce_from_bigint(BigInt(r))
+    } else {
+        // BIP340: x(R) == r_x exactly, and y(R) even.
+        rx == r && ry[0] & 1 == 0
+    };
+    if !accept {
         FALLBACK += 1;
         return 0;
+    }
+    if kind == 1 {
+        SCHNORR_N += 1;
     }
     let mut q: Pt = [0; 16];
-    q[..8].copy_from_slice(&be_to_limbs(&qx));
-    q[8..].copy_from_slice(&be_to_limbs(&qy));
+    q[..8].copy_from_slice(&qx);
+    q[8..].copy_from_slice(&qy);
     let mut rp: Pt = [0; 16];
-    rp[..8].copy_from_slice(&be_to_limbs(rx));
-    rp[8..].copy_from_slice(&be_to_limbs(ry));
-    (*core::ptr::addr_of_mut!(DEFERRED)).push((u1, u2, q, rp));
+    rp[..8].copy_from_slice(&rx);
+    rp[8..].copy_from_slice(&ry);
+    (*core::ptr::addr_of_mut!(DEFERRED)).push(Deferred { u1, u2, q, r: rp });
     1
 }
 
 /// Check every deferred signature at once. Returns false if the batch does not vanish.
+///
+///   Σ z_i·u2_i·Q_i − Σ z_i·R_i + (Σ z_i·u1_i)·G == O
+///
+/// - z_i are 128-bit weights from a hash over EVERY deferred tuple (u1, u2, Q, R), hashed as one
+///   contiguous buffer. One SHA-256 output yields two weights.
+/// - Signatures sharing a public key Q are MERGED: their z_i·u2_i add into one scalar on one point.
+///   That is the same sum regrouped, so it changes the cost and not the equation.
 pub fn finish() -> bool {
     let t0 = env::cycle_count();
-    let (collect, fallback, deferred) = unsafe {
-        (COLLECT, FALLBACK, core::mem::take(&mut *core::ptr::addr_of_mut!(DEFERRED)))
+    let (collect, fallback, schnorr, deferred) = unsafe {
+        (COLLECT, FALLBACK, SCHNORR_N, core::mem::take(&mut *core::ptr::addr_of_mut!(DEFERRED)))
     };
     if collect {
         env::log("batch: collect mode, every verify ran in libsecp");
         return true;
     }
     let n = deferred.len();
-    let mut tr = Sha256::new();
-    tr.update(b"libzync/batch-ecdsa/v0");
-    for (u1, u2, q, r) in &deferred {
-        tr.update(u1);
-        tr.update(u2);
-        for w in q.iter().chain(r.iter()) {
-            tr.update(w.to_le_bytes());
-        }
-    }
-    let seed: [u8; 32] = tr.finalize().into();
-    let mut pts: Vec<Pt> = Vec::with_capacity(2 * n + 1);
-    let mut scs: Vec<Fr> = Vec::with_capacity(2 * n + 1);
+    let seed: [u8; 32] = {
+        // Deferred is repr(C) and made only of u32 arrays, so its bytes are exactly its limbs.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(deferred.as_ptr() as *const u8, n * core::mem::size_of::<Deferred>())
+        };
+        let mut h = Sha256::new();
+        h.update(b"libzync/batch-sig/v1");
+        h.update(bytes);
+        h.finalize().into()
+    };
+    let t1 = env::cycle_count();
+    let mut by_key: BTreeMap<Pt, Fr> = BTreeMap::new();
+    let mut pts: Vec<Pt> = Vec::with_capacity(n + n / 2 + 1);
+    let mut scs: Vec<Fr> = Vec::with_capacity(n + n / 2 + 1);
     let mut g = Fr::ZERO;
-    for (i, (u1, u2, q, r)) in deferred.iter().enumerate() {
-        let zh: [u8; 32] = Sha256::digest([&seed[..], &(i as u32).to_le_bytes()].concat()).into();
-        let mut zb = [0u8; 32];
-        zb[16..].copy_from_slice(&zh[..16]);
-        let z = Fr::from_be_bytes_mod_order(&zb);
-        g = &g + &(&z * &Fr::from_be_bytes_mod_order(u1));
-        pts.push(*q);
-        scs.push(&z * &Fr::from_be_bytes_mod_order(u2));
-        pts.push(neg_pt(r));
+    let mut zh = [0u8; 32];
+    for (i, d) in deferred.iter().enumerate() {
+        if i % 2 == 0 {
+            zh = Sha256::digest([&seed[..], &((i / 2) as u32).to_le_bytes()].concat()).into();
+        }
+        let half = if i % 2 == 0 { &zh[..16] } else { &zh[16..] };
+        let mut zl = [0u32; 8];
+        for k in 0..4 {
+            zl[k] = u32::from_le_bytes(half[4 * k..4 * k + 4].try_into().unwrap());
+        }
+        let z = Fr::from_bigint(BigInt(zl)).unwrap();
+        let u1 = Fr::reduce_from_bigint(BigInt(d.u1));
+        let u2 = Fr::reduce_from_bigint(BigInt(d.u2));
+        g = &g + &(&z * &u1);
+        let zu2 = &z * &u2;
+        by_key.entry(d.q).and_modify(|s| *s = &*s + &zu2).or_insert(zu2);
+        pts.push(neg_pt(&d.r));
         scs.push(z);
+    }
+    let distinct = by_key.len();
+    for (q, s) in by_key {
+        pts.push(q);
+        scs.push(s);
     }
     let mut gp: Pt = [0; 16];
     {
@@ -146,11 +195,14 @@ pub fn finish() -> bool {
     }
     pts.push(gp);
     scs.push(g);
-    let window = match n { 0..=600 => 8, 601..=3000 => 10, 3001..=10000 => 11, 10001..=30000 => 12, _ => 13 };
+    let t2 = env::cycle_count();
+    let m = pts.len();
+    let window = match m { 0..=1200 => 8, 1201..=6000 => 10, 6001..=20000 => 11, 20001..=60000 => 12, _ => 13 };
     let ok = n == 0 || msm_raw(&pts, &scs, window).get().is_none();
     env::log(&alloc::format!(
-        "batch: deferred={n} fallback={fallback} window={window} ok={ok} finish_cycles={}",
-        env::cycle_count() - t0));
+        "batch: deferred={n} (schnorr={schnorr}) distinct_keys={distinct} fallback={fallback} window={window} ok={ok} \
+         transcript={} prep={} msm={} finish_cycles={}",
+        t1 - t0, t2 - t1, env::cycle_count() - t2, env::cycle_count() - t0));
     ok
 }
 

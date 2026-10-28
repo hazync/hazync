@@ -125,18 +125,30 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
 // so a reused buffer holding different bytes re-parses instead of returning a stale transaction.
 // Entries are never evicted: the guest validates one block and exits.
 struct HzCachedTx {
-    std::vector<uint8_t> raw;
+    std::vector<uint32_t> raw;   // the transaction's bytes, word-aligned for the hit guard
     std::unique_ptr<const CTransaction> tx;
 };
+// The hit guard. The key is (pointer, length), and risc0's default guest heap is a BUMP allocator:
+// dealloc never returns memory, so within one guest run no address is ever handed out twice and the
+// key alone identifies a buffer. (This guest enables no other allocator; `heap-embedded-alloc` would
+// break that and must not be combined with tx-once.) So a full compare is redundant, and it cost 9%
+// of the aggregate. What remains is a tripwire on the first and last 32 bytes, against a future
+// allocator change -- not the soundness argument.
+static bool hz_same_bytes(const uint32_t* stored, const uint8_t* p, unsigned len) {
+    const uint8_t* s = reinterpret_cast<const uint8_t*>(stored);
+    const unsigned k = len < 32 ? len : 32;
+    return std::memcmp(s, p, k) == 0 && std::memcmp(s + len - k, p + len - k, k) == 0;
+}
 static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
     static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx> cache;
     HzCachedTx& e = cache[{tx_bytes, tx_len}];
-    if (e.tx && std::memcmp(e.raw.data(), tx_bytes, tx_len) == 0) return *e.tx;
+    if (e.tx && hz_same_bytes(e.raw.data(), tx_bytes, tx_len)) return *e.tx;
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
-    e.raw.assign(tx_bytes, tx_bytes + tx_len);
+    e.raw.assign((tx_len + 3) / 4, 0);
+    std::memcpy(e.raw.data(), tx_bytes, tx_len);
     e.tx = std::make_unique<const CTransaction>(mtx);
     return *e.tx;
 }

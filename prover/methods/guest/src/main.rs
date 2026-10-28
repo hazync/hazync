@@ -46,6 +46,8 @@ mod liftx_accel;
 mod liftx_hint;
 #[cfg(feature = "batch-ecdsa")]
 mod batch_ecdsa;
+#[cfg(feature = "swiftsync")]
+mod swiftsync;
 // Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
 #[cfg(feature = "msm")]
 mod msm;
@@ -953,6 +955,9 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
             if creator >= cur_tx { all_ok = false; }
             if !spent_in_block.insert(leaf) { all_ok = false; }
         } else {
+            // libzync SwiftSync: one ECMH subtraction instead of an inclusion proof + delete.
+            #[cfg(feature = "swiftsync")]
+            { swiftsync::sub(&leaf); continue; }
             // EXTERNAL spend: the coin exists in the accumulator — verify inclusion + delete it.
             if inp.proof_i.leaf.0 != leaf {
                 all_ok = false;
@@ -1007,10 +1012,18 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // cancelled), in canonical order (coinbase then each tx, vout order). NOT host-supplied new_outputs.
     for leaf in &output_leaves {
         if !spent_in_block.contains(leaf) {
+            #[cfg(feature = "swiftsync")]
+            swiftsync::add(leaf);
+            #[cfg(not(feature = "swiftsync"))]
             stump.add(*leaf);
         }
     }
 
+    // libzync SwiftSync: no per-block root to compare. The running total is only checked at a
+    // handover height, which this experiment does not implement (see swiftsync.rs).
+    #[cfg(feature = "swiftsync")]
+    let root_matches = { swiftsync::report(); true };
+    #[cfg(not(feature = "swiftsync"))]
     let root_matches =
         stump.normalized() == normalize(w.root_next.roots.clone()) && stump.num_leaves == w.root_next.num_leaves;
 
@@ -1869,6 +1882,17 @@ fn aggregate() {
     let prev_journal: Vec<u8> = env::read();
     let w: BlockWitness = env::read();
     let is_base: u32 = env::read();
+    // libzync: ECMH hash-to-curve hints for the SwiftSync accounting, or collect mode.
+    #[cfg(feature = "swiftsync")]
+    {
+        let collect: u32 = env::read();
+        let n: u32 = env::read();
+        let mut flat = vec![0u8; n as usize];
+        if n > 0 {
+            env::read_slice(&mut flat);
+        }
+        swiftsync::install(collect == 1, flat);
+    }
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev");
