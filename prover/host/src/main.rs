@@ -2359,6 +2359,10 @@ fn chunk_profile() {
             }
         }),
     ] {
+        // libzync: HAZYNC_PROFILE_LAYOUT=cost runs only the cost-packed layout (the one proving uses).
+        if std::env::var("HAZYNC_PROFILE_LAYOUT").as_deref() == Ok("cost") && label.starts_with("count") {
+            continue;
+        }
         println!("\n--- {label}: {} chunks ---", bounds.len());
         let mut predicted: Vec<u64> = Vec::new();
         let mut measured: Vec<u64> = Vec::new();
@@ -2822,6 +2826,35 @@ fn read_chunk_receipts(nchunks: usize) -> Vec<risc0_zkvm::Receipt> {
         receipts.push(r);
     }
     receipts
+}
+
+/// libzync: `agg-exec-fake` — the mode-5 aggregate in EXECUTE mode on a laptop, with no chunk proving.
+///
+/// Each chunk is executed (not proved) and its claim wrapped in a FakeReceipt. In execute mode
+/// `env::verify` only matches the assumption's claim; it never checks a seal, so this measures
+/// exactly the block-validation work `HAZYNC_AGG_EXECUTE` measures from real receipts. With
+/// RISC0_PPROF_OUT set, the LAST profile written is the aggregate's. Batch-ECDSA hints apply to the
+/// chunk executions exactly as in chunk-profile.
+fn agg_exec_fake() {
+    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
+    let (anchor, w) = build_full();
+    let bounds = chunk_bounds(&w, nchunks_env());
+    let mut receipts = Vec::with_capacity(bounds.len());
+    for (i, &(lo, hi)) in bounds.iter().enumerate() {
+        let mut b = ExecutorEnv::builder();
+        b.segment_limit_po2(seg_po2());
+        b.write(&4u32).unwrap();
+        b.write(&w.height).unwrap();
+        b.write(&header_hash(&w.header)).unwrap();
+        write_chunk_inputs(&mut b, &w, lo, hi);
+        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("exec chunk");
+        let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
+        println!("  chunk {i:>3} [{lo}..{hi}) executed: {} cycles", s.cycles());
+        receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
+    }
+    let mut b = ExecutorEnv::builder();
+    write_aggregate_env(&mut b, &receipts, &anchor, &w);
+    report_agg_execute_only(b);
 }
 
 fn agg_chunks() {
@@ -4521,6 +4554,10 @@ fn main() {
     if args.iter().any(|a| a == "adversarial") { adversarial(); return; }
     if args.iter().any(|a| a == "check-bip30") { check_bip30(); return; }
     if args.iter().any(|a| a == "regress") { regress(); return; }
+    if args.iter().any(|a| a == "agg-exec-fake") {
+        agg_exec_fake();
+        return;
+    }
     if let Some(p) = args.iter().position(|a| a == "prove-chunk") {
         let idx: usize = args.get(p + 1).and_then(|s| s.parse().ok()).expect("prove-chunk <index>");
         prove_chunk(idx);

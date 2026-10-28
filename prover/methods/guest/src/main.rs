@@ -123,6 +123,17 @@ extern "C" {
         coin_is_coinbase: *const u32, coin_mtp: *const u32,
         out_results: *mut i32, out_leaves: *mut u8,
     ) -> i32;
+    #[cfg(feature = "tx-once")]
+    fn verify_inputs_batch_once(
+        tx: *const u8, tx_len: u32,
+        prevouts: *const u8, prevouts_len: u32,
+        flags: u32, n: u32,
+        input_idx: *const u32, coin_height: *const u32,
+        coin_is_coinbase: *const u32, coin_mtp: *const u32,
+        out_results: *mut i32, out_leaves: *mut u8,
+        out_seqs: *mut u32, out_version: *mut i32,
+        out_wtxid: *mut u8, out_has_witness: *mut u32,
+    ) -> i32;
     // Absolute locktime finality (real Core IsFinalTx). 1 = final.
     fn is_final_tx(tx: *const u8, tx_len: u32, height: i64, block_time: i64) -> i32;
     // Coinbase maturity + BIP68 relative locktime (height AND time based) for one input.
@@ -1716,6 +1727,27 @@ fn chunk_prove() {
 
         let mut results = vec![0i32; k];
         let mut leaves = vec![0u8; 32 * k];
+        let mut seqbuf = vec![0u32; k];
+        let mut verbuf = 0i32;
+        let mut wt = [0u8; 32];
+        // libzync tx-once: one deserialise + one CTransaction for all three results.
+        #[cfg(feature = "tx-once")]
+        let (structural, hw) = {
+            let mut hw = 0u32;
+            let s = unsafe {
+                verify_inputs_batch_once(
+                    raw_tx.as_ptr(), raw_tx.len() as u32,
+                    prevouts.as_ptr(), prevouts.len() as u32,
+                    flags, n_owned,
+                    idx.as_ptr(), ch.as_ptr(), cb.as_ptr(), mtp.as_ptr(),
+                    results.as_mut_ptr(), leaves.as_mut_ptr(),
+                    seqbuf.as_mut_ptr(), &mut verbuf as *mut i32,
+                    wt.as_mut_ptr(), &mut hw as *mut u32,
+                )
+            };
+            (s, hw)
+        };
+        #[cfg(not(feature = "tx-once"))]
         let structural = unsafe {
             verify_inputs_batch(
                 raw_tx.as_ptr(), raw_tx.len() as u32,
@@ -1741,14 +1773,13 @@ fn chunk_prove() {
         // separately. A disagreement there is a silent consensus divergence. Handing back the two raw
         // fields lets the aggregate keep doing the arithmetic with its OWN mtp, in Rust, with no
         // deserialise — the cost being removed — and no new coupling.
-        let mut seqbuf = vec![0u32; k];
-        let mut verbuf = 0i32;
+        #[cfg(not(feature = "tx-once"))]
         unsafe {
             tx_seqs_batch(raw_tx.as_ptr(), raw_tx.len() as u32, n_owned,
                           idx.as_ptr(), seqbuf.as_mut_ptr(), &mut verbuf as *mut i32);
         }
         let first_local = binds.len() as u32;
-        let mut wt = [0u8; 32];
+        #[cfg(not(feature = "tx-once"))]
         let hw = unsafe { tx_wtxid_info(raw_tx.as_ptr(), raw_tx.len() as u32, wt.as_mut_ptr()) };
         tx_wtxids.push((first_local, wt, hw as u32));
         for j in 0..k {

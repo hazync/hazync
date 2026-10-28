@@ -742,6 +742,64 @@ extern "C" int verify_inputs_batch(const uint8_t* tx_bytes, unsigned tx_len,
     return 1;
 }
 
+#ifdef HAZYNC_TX_ONCE
+// libzync EXPERIMENT: verify_inputs_batch + tx_seqs_batch + tx_wtxid_info from ONE deserialise and
+// ONE CTransaction. The chunk used to call all three per transaction, so every transaction was
+// deserialised three times and its txid and wtxid hashed twice. Outputs are filled BEFORE the -60
+// early return so they are defined on every path, exactly as the three separate calls defined them.
+extern "C" int verify_inputs_batch_once(const uint8_t* tx_bytes, unsigned tx_len,
+                                        const uint8_t* prevouts, unsigned prevouts_len,
+                                        unsigned flags, unsigned n,
+                                        const uint32_t* input_idx,
+                                        const uint32_t* coin_height,
+                                        const uint32_t* coin_is_coinbase,
+                                        const uint32_t* coin_mtp,
+                                        int32_t* out_results,
+                                        uint8_t* out_leaves,
+                                        uint32_t* out_seqs, int32_t* out_version,
+                                        uint8_t* out_wtxid, uint32_t* out_has_witness) {
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
+                 reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    CTransaction tx{mtx};
+
+    // tx_wtxid_info's outputs.
+    const uint256 w = tx.GetWitnessHash();
+    std::memcpy(out_wtxid, w.begin(), 32);
+    *out_has_witness = tx.HasWitness() ? 1u : 0u;
+    // tx_seqs_batch's outputs.
+    *out_version = tx.version;
+    for (unsigned k = 0; k < n; k++) {
+        const unsigned i = input_idx[k];
+        out_seqs[k] = (i < tx.vin.size()) ? tx.vin[i].nSequence : 0xFFFFFFFFu;
+    }
+
+    MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
+                  reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
+    std::vector<CTxOut> spent;
+    pr >> spent;
+    if (spent.size() != tx.vin.size()) return -60;
+
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, std::vector<CTxOut>(spent), true);
+
+    for (unsigned k = 0; k < n; k++) {
+        const unsigned i = input_idx[k];
+        if (i >= spent.size()) { out_results[k] = -60; continue; }
+        if (out_leaves) coin_leaf(tx, spent, i, coin_height[k], coin_is_coinbase[k], coin_mtp[k],
+                                  out_leaves + 32 * k);
+        const CTxIn& in = tx.vin[i];
+        TransactionSignatureChecker checker(&tx, i, spent[i].nValue, txdata, MissingDataBehavior::FAIL);
+        ScriptError err = SCRIPT_ERR_OK;
+        bool ok = VerifyScript(in.scriptSig, spent[i].scriptPubKey, &in.scriptWitness, flags,
+                               checker, &err);
+        out_results[k] = ok ? 1 : -(int)err - 1;
+    }
+    return 1;
+}
+#endif
+
 extern "C" int verify_input(const uint8_t* tx_bytes, unsigned tx_len,
                             unsigned input_idx,
                             const uint8_t* prevouts, unsigned prevouts_len,

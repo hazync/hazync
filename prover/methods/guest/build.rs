@@ -328,6 +328,9 @@ fn main() {
     // both SHA levers on for every arm after the first that applied them.
     define_if(&mut b, "HAZYNC_SHA_FASTPATH", sha_fast);
     define_if(&mut b, "HAZYNC_SHA_D64_ACCEL", sha_d64);
+    // libzync: verify_inputs_batch_once in verify_input.cpp (one deserialise + hash per transaction).
+    println!("cargo:rerun-if-env-changed=HAZYNC_TX_ONCE");
+    define_if(&mut b, "HAZYNC_TX_ONCE", std::env::var("HAZYNC_TX_ONCE").as_deref() == Ok("1"));
     for tu in core_tus { b.file(format!("{core}/{tu}")); }
     b.file("verify_input.cpp");
 
