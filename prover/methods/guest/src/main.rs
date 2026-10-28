@@ -1736,6 +1736,8 @@ fn chunk_prove() {
         // libzync tx-cycles: per-transaction cycle trace, the ground truth the host packer is fitted to.
         #[cfg(feature = "tx-cycles")]
         let tc0 = env::cycle_count();
+        #[cfg(feature = "agg-lite")]
+        agg_lite::begin_tx();
         let tx_len: u32 = env::read();
         let prevouts_len: u32 = env::read();
         let n_owned: u32 = env::read();

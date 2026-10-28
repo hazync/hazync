@@ -125,7 +125,7 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
 // so a reused buffer holding different bytes re-parses instead of returning a stale transaction.
 // Entries are never evicted: the guest validates one block and exits.
 struct HzCachedTx {
-    std::vector<uint32_t> raw;   // the transaction's bytes, word-aligned for the hit guard
+    unsigned char head[32], tail[32];   // the hit guard: first / last 32 bytes (see hz_same_bytes)
     std::unique_ptr<const CTransaction> tx;
 };
 // The hit guard. The key is (pointer, length), and risc0's default guest heap is a BUMP allocator:
@@ -134,23 +134,62 @@ struct HzCachedTx {
 // break that and must not be combined with tx-once.) So a full compare is redundant, and it cost 9%
 // of the aggregate. What remains is a tripwire on the first and last 32 bytes, against a future
 // allocator change -- not the soundness argument.
-static bool hz_same_bytes(const uint32_t* stored, const uint8_t* p, unsigned len) {
-    const uint8_t* s = reinterpret_cast<const uint8_t*>(stored);
+static void hz_remember(unsigned char* head, unsigned char* tail, const uint8_t* p, unsigned len) {
     const unsigned k = len < 32 ? len : 32;
-    return std::memcmp(s, p, k) == 0 && std::memcmp(s + len - k, p + len - k, k) == 0;
+    std::memcpy(head, p, k);
+    std::memcpy(tail, p + len - k, k);
+}
+static bool hz_same_bytes(const unsigned char* head, const unsigned char* tail, const uint8_t* p, unsigned len) {
+    const unsigned k = len < 32 ? len : 32;
+    return std::memcmp(head, p, k) == 0 && std::memcmp(tail, p + len - k, k) == 0;
+}
+// libzync round 11: the caches live at file scope so hz_cache_reset can empty them. Under agg-lite the
+// chunk calls hz_cache_reset before EVERY transaction, which is what makes a freeing allocator
+// (HAZYNC_TLSF) safe here: once addresses can be reused, (pointer, length) alone no longer identifies a
+// buffer, and an entry must never outlive the transaction it was made for. hz_tx_generation lets
+// caches in other TUs (the legacy sighash cache in interpreter.cpp) follow the same rule.
+extern "C" { unsigned hz_tx_generation = 0; }
+static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx>& hz_tx_cache() {
+    static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx> c;
+    return c;
 }
 static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
-    static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx> cache;
-    HzCachedTx& e = cache[{tx_bytes, tx_len}];
-    if (e.tx && hz_same_bytes(e.raw.data(), tx_bytes, tx_len)) return *e.tx;
+    HzCachedTx& e = hz_tx_cache()[{tx_bytes, tx_len}];
+    if (e.tx && hz_same_bytes(e.head, e.tail, tx_bytes, tx_len)) return *e.tx;
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
-    e.raw.assign((tx_len + 3) / 4, 0);
-    std::memcpy(e.raw.data(), tx_bytes, tx_len);
+    hz_remember(e.head, e.tail, tx_bytes, tx_len);
     e.tx = std::make_unique<const CTransaction>(mtx);
     return *e.tx;
+}
+#ifdef HAZYNC_AGG_LITE
+// The spent-coin vector, parsed ONCE per transaction: verify_inputs_batch_once, check_tx and
+// tx_full_sigops each parsed the same prevouts blob.
+struct HzCachedSpent { unsigned char head[32], tail[32]; bool ok = false; std::vector<CTxOut> v; };
+static std::map<std::pair<const uint8_t*, unsigned>, HzCachedSpent>& hz_spent_cache() {
+    static std::map<std::pair<const uint8_t*, unsigned>, HzCachedSpent> c;
+    return c;
+}
+static const std::vector<CTxOut>& cached_spent(const uint8_t* prevouts, unsigned len) {
+    HzCachedSpent& e = hz_spent_cache()[{prevouts, len}];
+    if (e.ok && hz_same_bytes(e.head, e.tail, prevouts, len)) return e.v;
+    MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
+                  reinterpret_cast<const std::byte*>(prevouts) + len};
+    e.v.clear();
+    pr >> e.v;
+    hz_remember(e.head, e.tail, prevouts, len);
+    e.ok = true;
+    return e.v;
+}
+#endif
+extern "C" void hz_cache_reset() {
+    hz_tx_cache().clear();
+#ifdef HAZYNC_AGG_LITE
+    hz_spent_cache().clear();
+#endif
+    ++hz_tx_generation;
 }
 #endif
 
@@ -447,10 +486,14 @@ extern "C" int check_tx(const uint8_t* tx_bytes, unsigned tx_len,
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
 #endif
+    #ifdef HAZYNC_AGG_LITE
+    const std::vector<CTxOut>& spent = cached_spent(prevouts, prevouts_len);
+#else
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent;
     pr >> spent;
+#endif
     if (!tx.IsCoinBase() && spent.size() != tx.vin.size()) return -24; // SEC-3: prevouts must match inputs
 
     TxValidationState state;
@@ -695,10 +738,14 @@ extern "C" int64_t tx_full_sigops(const uint8_t* tx_bytes, unsigned tx_len,
     int64_t cost = legacy * WITNESS_SCALE_FACTOR;
     if (tx.IsCoinBase() || prevouts_len == 0) return cost;
 
+    #ifdef HAZYNC_AGG_LITE
+    const std::vector<CTxOut>& spent = cached_spent(prevouts, prevouts_len);
+#else
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent;
     pr >> spent;
+#endif
     // N3: a non-coinbase tx with fewer spent coins than inputs is malformed. Fail CLOSED with a poison
     // sigop cost (>> MAX_BLOCK_SIGOPS_COST, but small enough that summing across a block can't overflow
     // i64) so sigops_ok becomes false — instead of silently returning the legacy-only cost and leaning on
@@ -890,10 +937,14 @@ extern "C" int verify_inputs_batch_once(const uint8_t* tx_bytes, unsigned tx_len
         out_seqs[k] = (i < tx.vin.size()) ? tx.vin[i].nSequence : 0xFFFFFFFFu;
     }
 
+    #ifdef HAZYNC_AGG_LITE
+    const std::vector<CTxOut>& spent = cached_spent(prevouts, prevouts_len);
+#else
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent;
     pr >> spent;
+#endif
     if (spent.size() != tx.vin.size()) return -60;
 
 #ifdef HAZYNC_NO_SCRIPTS

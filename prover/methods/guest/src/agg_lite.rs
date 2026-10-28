@@ -32,6 +32,14 @@ use super::*;
 
 pub const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 
+extern "C" {
+    /// Empty verify_input.cpp's per-transaction caches and bump hz_tx_generation (round 11).
+    fn hz_cache_reset();
+}
+/// Called before every transaction a chunk processes. Required once the allocator can reuse
+/// addresses (HAZYNC_TLSF); harmless, and cheap, under the bump allocator.
+pub fn begin_tx() { unsafe { hz_cache_reset() } }
+
 /// A 32-byte hash as four u64 words: ordered and compared word by word instead of a byte-wise
 /// memcmp. Only used for equality and for a consistent sort order, never as a value.
 fn key(h: &[u8; 32]) -> [u64; 4] {
@@ -55,11 +63,14 @@ pub struct ChunkCtx {
     pub block_time: u32,
     pub words: Vec<u32>,
     pub n_records: u32,
+    /// Output-leaf scratch, reused: a fresh zeroed `vec!` per transaction was 4x the transaction's
+    /// size in memset AND (bump allocator) in never-returned pages.
+    out: Vec<u8>,
 }
 
 impl ChunkCtx {
     pub fn new(height: u32, flags: u32, mtp: u32, block_time: u32) -> Self {
-        Self { height, flags, mtp, block_time, words: Vec::new(), n_records: 0 }
+        Self { height, flags, mtp, block_time, words: Vec::new(), n_records: 0, out: Vec::new() }
     }
 
     /// Record one transaction run. Returns false if a per-transaction rule failed.
@@ -72,9 +83,10 @@ impl ChunkCtx {
         let k = idx.len();
         let (tp, tl) = (raw_tx.as_ptr(), raw_tx.len() as u32);
         // txid (and the output leaves, used only when this run owns input 0).
-        let mut out = vec![0u8; (raw_tx.len() / 8 + 1) * 32];
+        let need = (raw_tx.len() / 8 + 1) * 32;
+        if self.out.len() < need { self.out.resize(need, 0); }
         let mut txid = [0u8; 32];
-        let n_out = unsafe { tx_out_leaves(tp, tl, self.height, 0, self.mtp, out.as_mut_ptr(), txid.as_mut_ptr()) };
+        let n_out = unsafe { tx_out_leaves(tp, tl, self.height, 0, self.mtp, self.out.as_mut_ptr(), txid.as_mut_ptr()) };
         let ph: [u8; 32] = Sha256::digest(prevouts).into();
         let start = idx.first().copied().unwrap_or(0);
         for (j, i) in idx.iter().enumerate() {
@@ -102,7 +114,7 @@ impl ChunkCtx {
             push_i64(&mut self.words, weight);
             push_i64(&mut self.words, sigops);
             self.words.push(n_out);
-            for l in 0..n_out as usize { push_hash(&mut self.words, &out[32 * l..32 * l + 32]); }
+            for l in 0..n_out as usize { push_hash(&mut self.words, &self.out[32 * l..32 * l + 32]); }
         }
         // BIP68 / coinbase maturity, transcribed from `check_input_locks` (as the aggregate's own
         // from-chunk path already does), with this chunk's committed median-time-past.

@@ -83,6 +83,9 @@ tx-once = []
 # libzync: chunks commit per-transaction facts; the aggregate never parses a transaction (src/agg_lite.rs).
 # SwiftSync only. Needs HAZYNC_TX_ONCE (the chunk's helpers share one parse through cached_tx).
 agg-lite = ["swiftsync", "tx-once"]
+# libzync round 11: risc0's TLSF allocator (frees and reuses) instead of the bump allocator. Only safe
+# with agg-lite's per-transaction cache reset (pointer-keyed caches).
+tlsf = ["agg-lite", "risc0-zkvm/heap-embedded-alloc"]
 # libzync EXPERIMENT: SwiftSync-style ECMH coin accounting in the aggregate instead of Utreexo
 # inclusion proofs. Cost measurement only (no handover check); see src/swiftsync.rs.
 swiftsync = ["batch-ecdsa"]
