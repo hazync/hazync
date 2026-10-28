@@ -46,6 +46,17 @@ use alloc::vec::Vec;
 /// Sorted by `x`, ascending, big-endian — the order `secp256k1_fe_get_b32` produces.
 /// Guest execution is single-threaded, so a plain static is sufficient.
 static mut TABLE: Vec<([u8; 32], [u8; 32])> = Vec::new();
+/// libzync: the same keys as big-endian u32 words. Lexicographic order on these words is the same
+/// as on the bytes, and comparing 8 words inline is cheaper than a byte memcmp per probe.
+static mut KEYS: Vec<[u32; 8]> = Vec::new();
+
+fn key_words(x: &[u8; 32]) -> [u32; 8] {
+    let mut w = [0u32; 8];
+    for k in 0..8 {
+        w[k] = u32::from_be_bytes([x[4 * k], x[4 * k + 1], x[4 * k + 2], x[4 * k + 3]]);
+    }
+    w
+}
 
 /// Hint-hit accounting. A silently-empty table would simply reinstate the sqrt cost while every
 /// gate still passed, so the host prints these and a run with 0 hits is a FAILED experiment rather
@@ -57,6 +68,7 @@ static mut MISSES: u32 = 0;
 pub fn install(mut pairs: Vec<([u8; 32], [u8; 32])>) {
     pairs.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     unsafe {
+        KEYS = pairs.iter().map(|p| key_words(&p.0)).collect();
         TABLE = pairs;
         HITS = 0;
         MISSES = 0;
@@ -82,7 +94,8 @@ pub unsafe extern "C" fn hazync_lift_x_hint(xb: *const u8, yb: *mut u8) -> i32 {
     core::ptr::copy_nonoverlapping(xb, x.as_mut_ptr(), 32);
 
     let t = &*core::ptr::addr_of!(TABLE);
-    match t.binary_search_by(|probe| probe.0.cmp(&x)) {
+    let kx = key_words(&x);
+    match (*core::ptr::addr_of!(KEYS)).binary_search(&kx) {
         Ok(i) => {
             core::ptr::copy_nonoverlapping(t[i].1.as_ptr(), yb, 32);
             HITS += 1;

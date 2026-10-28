@@ -46,12 +46,13 @@ static mut DEFERRED: Vec<Deferred> = Vec::new();
 
 pub fn install(collect: bool, hints: Vec<u8>) {
     unsafe {
+        // One Deferred per hint at most: reserve once instead of growing (and copying) as it fills.
+        DEFERRED = Vec::with_capacity(hints.len() / HINT_BYTES);
         COLLECT = collect;
         HINTS = hints;
         NEXT = 0;
         FALLBACK = 0;
         SCHNORR_N = 0;
-        DEFERRED = Vec::new();
     }
 }
 
@@ -81,7 +82,19 @@ pub unsafe extern "C" fn hazync_batch_defer(
     kind: i32, u1: *const u32, u2: *const u32, qx: *const u32, qy: *const u32, r: *const u32,
 ) -> i32 {
     let rd = |p: *const u32| -> [u32; 8] { core::slice::from_raw_parts(p, 8).try_into().unwrap() };
-    let (u1, u2, qx, qy, r) = (rd(u1), rd(u2), rd(qx), rd(qy), rd(r));
+    let (mut u1, mut u2, qx, qy, r) = (rd(u1), rd(u2), rd(qx), rd(qy), rd(r));
+    let mut kind = kind;
+    if kind == 2 {
+        // ECDSA handed over BEFORE libsecp's scalar arithmetic: (u1, u2) arrive as (e, s). Compute
+        // w = 1/s, u1 = e*w, u2 = r*w on the coprocessor. libsecp has already rejected r or s == 0,
+        // and its scalars are reduced mod n, so from_bigint cannot fail.
+        let e = Fr::from_bigint(BigInt(u1)).unwrap();
+        let w = Fr::from_bigint(BigInt(u2)).unwrap().inverse();
+        let rr = Fr::from_bigint(BigInt(r)).unwrap();
+        u1 = (&e * &w).to_bigint().0;
+        u2 = (&rr * &w).to_bigint().0;
+        kind = 0;
+    }
     if COLLECT {
         env::log(&alloc::format!("BATCHREC{} {}{}{}{}{}", kind, limbs_to_be_hex(&u1), limbs_to_be_hex(&u2),
                                  limbs_to_be_hex(&qx), limbs_to_be_hex(&qy), limbs_to_be_hex(&r)));
