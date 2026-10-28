@@ -111,6 +111,37 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
 // On any failure the leaf is ZEROED rather than left as whatever was in the caller's buffer — a
 // deterministic function must not return uninitialised memory, and zero is a value no real coin
 // hashes to, so it fails the accumulator delete rather than passing silently.
+#ifdef HAZYNC_TX_ONCE
+#include <map>
+// libzync EXPERIMENT: parse each transaction ONCE per guest run.
+//
+// The aggregate called ~6 of the functions below per transaction, and every one deserialised the
+// bytes again and most rebuilt a CTransaction -- which hashes the txid AND the wtxid in its
+// constructor. Measured on block 962,000: the CTransaction constructor alone was 36.8% of the
+// aggregate. This keeps one CTransaction per distinct transaction and hands every caller the same
+// object. The SAME Core types and functions consume it; only the number of parses changes.
+//
+// Keyed by (pointer, length), and a hit is CONFIRMED by comparing the stored bytes with the caller's,
+// so a reused buffer holding different bytes re-parses instead of returning a stale transaction.
+// Entries are never evicted: the guest validates one block and exits.
+struct HzCachedTx {
+    std::vector<uint8_t> raw;
+    std::unique_ptr<const CTransaction> tx;
+};
+static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
+    static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx> cache;
+    HzCachedTx& e = cache[{tx_bytes, tx_len}];
+    if (e.tx && std::memcmp(e.raw.data(), tx_bytes, tx_len) == 0) return *e.tx;
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
+                 reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    e.raw.assign(tx_bytes, tx_bytes + tx_len);
+    e.tx = std::make_unique<const CTransaction>(mtx);
+    return *e.tx;
+}
+#endif
+
 extern "C" int coin_leaves_batch(const uint8_t* tx_bytes, unsigned tx_len,
                                  const uint8_t* prevouts, unsigned prevouts_len,
                                  unsigned n,
@@ -123,9 +154,13 @@ extern "C" int coin_leaves_batch(const uint8_t* tx_bytes, unsigned tx_len,
 
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
 
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
@@ -153,7 +188,13 @@ extern "C" void coin_leaf_only(const uint8_t* tx_bytes, unsigned tx_len, unsigne
                                uint8_t* out_leaf) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent; pr >> spent;
@@ -178,7 +219,13 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
                                   uint8_t* out, uint8_t* out_txid) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+
     const uint256 txid = tx.GetHash();
     std::memcpy(out_txid, txid.begin(), 32);
     uint32_t n = 0;
@@ -226,7 +273,13 @@ extern "C" uint32_t tx_out_leaves_from(const uint8_t* tx_bytes, unsigned tx_len,
 extern "C" uint32_t tx_wtxid_info(const uint8_t* tx_bytes, unsigned tx_len, uint8_t* out_wtxid) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+
     const uint256 w = tx.GetWitnessHash();
     std::memcpy(out_wtxid, w.begin(), 32);
     return tx.HasWitness() ? 1u : 0u;
@@ -236,8 +289,12 @@ extern "C" uint32_t tx_wtxid_info(const uint8_t* tx_bytes, unsigned tx_len, uint
 extern "C" int is_final_tx(const uint8_t* tx_bytes, unsigned tx_len, int64_t height, int64_t block_time) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     if (mtx.nLockTime == 0) return 1;
     const int64_t LOCKTIME_THRESHOLD = 500000000;
     int64_t thr = ((int64_t)mtx.nLockTime < LOCKTIME_THRESHOLD) ? height : block_time;
@@ -273,8 +330,12 @@ extern "C" int tx_seqs_batch(const uint8_t* tx_bytes, unsigned tx_len, unsigned 
                              const uint32_t* input_idx, uint32_t* out_seqs, int32_t* out_version) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     *out_version = mtx.version;
     for (unsigned k = 0; k < n; k++) {
         const unsigned i = input_idx[k];
@@ -295,8 +356,12 @@ extern "C" int check_input_locks_batch(const uint8_t* tx_bytes, unsigned tx_len,
                                        int32_t* out_results) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
 
     const uint32_t DISABLE = 1u << 31, TYPE = 1u << 22, MASK = 0x0000ffff, GRANULARITY = 9;
     for (unsigned k = 0; k < n; k++) {
@@ -324,8 +389,12 @@ extern "C" int check_input_locks(const uint8_t* tx_bytes, unsigned tx_len, unsig
                                  uint32_t spend_height, uint32_t spend_mtp) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     // Fail closed on an out-of-range input index (mirrors verify_input's -60 guard) — otherwise a
     // malicious witness triggers an OOB std::vector access below rather than a clean rejection.
     if (input_idx >= mtx.vin.size()) return -43;
@@ -359,9 +428,13 @@ extern "C" int check_tx(const uint8_t* tx_bytes, unsigned tx_len,
                         int64_t* out_fee) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent;
@@ -482,8 +555,12 @@ extern "C" void merkle_root(const uint8_t* txids, uint32_t n, uint8_t* out_root,
 extern "C" int64_t coinbase_value(const uint8_t* tx_bytes, unsigned tx_len) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     // Detect the overflow instead of risking it (audit #5, N-2). Signed overflow is UB in C++, and
     // while Core's CheckTransaction independently rejects any tx whose output total leaves MoneyRange —
     // so no overflowed value has ever reached a decision — "unreachable" there is a property of another
@@ -515,9 +592,13 @@ extern "C" int64_t coinbase_value(const uint8_t* tx_bytes, unsigned tx_len) {
 extern "C" int is_coinbase_tx(const uint8_t* tx_bytes, unsigned tx_len) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
     return tx.IsCoinBase() ? 1 : 0;
 }
 
@@ -527,8 +608,12 @@ extern "C" int is_coinbase_tx(const uint8_t* tx_bytes, unsigned tx_len) {
 extern "C" uint32_t tx_vin_count(const uint8_t* tx_bytes, unsigned tx_len) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     return (uint32_t)mtx.vin.size();
 }
 
@@ -546,8 +631,12 @@ extern "C" int tx_input_prevout_txid(const uint8_t* tx_bytes, unsigned tx_len,
                                      uint32_t input_idx, uint8_t* out_txid) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     if (input_idx >= mtx.vin.size()) return 0;
     const uint256 h = mtx.vin[input_idx].prevout.hash;
     std::memcpy(out_txid, h.begin(), 32);
@@ -559,9 +648,13 @@ extern "C" int tx_input_prevout_txid(const uint8_t* tx_bytes, unsigned tx_len,
 extern "C" void tx_wu_sigops(const uint8_t* tx_bytes, unsigned tx_len, int64_t* out_weight, int64_t* out_sigops) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
     int64_t base = (int64_t)::GetSerializeSize(TX_NO_WITNESS(tx));
     int64_t total = (int64_t)::GetSerializeSize(TX_WITH_WITNESS(tx));
     *out_weight = base * (WITNESS_SCALE_FACTOR - 1) + total;
@@ -577,9 +670,13 @@ extern "C" int64_t tx_full_sigops(const uint8_t* tx_bytes, unsigned tx_len,
                                   const uint8_t* prevouts, unsigned prevouts_len, unsigned flags) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
     int64_t legacy = 0;
     for (const auto& in : tx.vin) legacy += in.scriptSig.GetSigOpCount(false);
     for (const auto& o : tx.vout) legacy += o.scriptPubKey.GetSigOpCount(false);

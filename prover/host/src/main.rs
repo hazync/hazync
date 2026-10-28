@@ -2167,8 +2167,26 @@ fn input_costs(w: &BlockWitness) -> Vec<u64> {
             cost_const("HAZYNC_COST_INPUT_BASE", COST_INPUT_BASE)
                 + ops.cost()
                 + cost_const("HAZYNC_COST_INPUT_BYTE", COST_PER_INPUT_BYTE) * bytes
+                + cost_const("HAZYNC_COST_LEGACY_BYTE", COST_PER_LEGACY_BYTE) * legacy_sighash_bytes(tx, inp.input_idx)
         })
         .collect()
+}
+
+/// libzync: once signatures are batched, the dominant per-input cost the packer could not see is
+/// LEGACY sighash -- a non-witness input's signature hash serialises and hashes the WHOLE transaction,
+/// so a 400-input legacy transaction hashes ~400x its own size. Measured on block 962,000 (GHOST +
+/// batch + tx-once, 16 chunks): ~4.1 cycles per byte so hashed, and one such 59 KB transaction made
+/// a chunk 3x the median. Default 0 keeps every existing build's packing unchanged.
+const COST_PER_LEGACY_BYTE: u64 = 0;
+
+/// The transaction size this input's legacy sighash hashes, or 0 for a witness spend.
+fn legacy_sighash_bytes(raw_tx: &[u8], input_idx: u32) -> u64 {
+    // Scheduling hint only: an unparseable transaction is simply not charged.
+    let Ok(tx) = deserialize::<Transaction>(raw_tx) else { return 0 };
+    match tx.input.get(input_idx as usize) {
+        Some(i) if i.witness.is_empty() && !tx.is_coinbase() => raw_tx.len() as u64,
+        _ => 0,
+    }
 }
 
 /// Runs needed to cover `costs` when no run may exceed `cap`. `cap` is always >= max(costs), so every
