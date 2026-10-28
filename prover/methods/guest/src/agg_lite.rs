@@ -32,6 +32,13 @@ use super::*;
 
 pub const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 
+/// A 32-byte hash as four u64 words: ordered and compared word by word instead of a byte-wise
+/// memcmp. Only used for equality and for a consistent sort order, never as a value.
+fn key(h: &[u8; 32]) -> [u64; 4] {
+    let w = |i: usize| u64::from_le_bytes(h[i..i + 8].try_into().unwrap());
+    [w(0), w(8), w(16), w(24)]
+}
+
 fn push_hash(v: &mut Vec<u32>, h: &[u8]) {
     for c in h.chunks_exact(4) { v.push(u32::from_le_bytes([c[0], c[1], c[2], c[3]])); }
 }
@@ -169,9 +176,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
     // The grandfathered BIP30 overwrite needs a utreexo delete this path does not carry.
     if block_hash == BIP30_OVERWRITE_A || block_hash == BIP30_OVERWRITE_B || w.bip30.is_some() { all_ok = false; }
 
+    // Capacity up front: the bump allocator never frees, so every Vec regrowth copies AND leaks.
+    let words: usize = journals.iter().map(|j| j.len()).sum();
     // Coinbase: the only transaction the aggregate parses.
-    let mut output_leaves: Vec<[u8; 32]> = Vec::new();
-    let mut created_at: BTreeMap<[u8; 32], u32> = BTreeMap::new();
+    let mut output_leaves: Vec<[u8; 32]> = Vec::with_capacity(words / 9);
+    let mut out_pos: Vec<u32> = Vec::with_capacity(words / 9);   // creating tx position, parallel
     let mut cb_txid = [0u8; 32];
     let cb_outputs = {
         let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
@@ -181,18 +190,20 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
             let mut h = [0u8; 32];
             h.copy_from_slice(&buf[32 * l..32 * l + 32]);
             output_leaves.push(h);
-            created_at.entry(h).or_insert(0);
+            out_pos.push(0);
         }
         n
     };
-    let mut txids: Vec<[u8; 32]> = vec![cb_txid];
+    let mut txids: Vec<[u8; 32]> = Vec::with_capacity(words / 30 + 1);
+    txids.push(cb_txid);
     let mut cb_wt = [0u8; 32];
     let mut has_witness = unsafe { tx_wtxid_info(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, cb_wt.as_mut_ptr()) } == 1;
-    let mut wtxids: Vec<[u8; 32]> = vec![[0u8; 32]];
+    let mut wtxids: Vec<[u8; 32]> = Vec::with_capacity(words / 30 + 1);
+    wtxids.push([0u8; 32]);
     let mut total_fee: i64 = 0;
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
-    let mut spends: Vec<([u8; 32], u32)> = Vec::new();   // (leaf, spending tx position), block order
+    let mut spends: Vec<([u8; 32], u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position), block order
     let mut cb_spends: Vec<[u8; 32]> = Vec::new();
 
     // Walk every chunk's records in order. `cur` = (txid, prevouts hash, n_vin, next input expected).
@@ -230,7 +241,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
                 for _ in 0..n_out {
                     let l = r.h();
                     output_leaves.push(l);
-                    created_at.entry(l).or_insert(tx_pos);
+                    out_pos.push(tx_pos);
                 }
                 cur = Some((txid, ph, n_vin, 0));
             } else {
@@ -256,17 +267,27 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
     if !all_ok { env::log(&format!("agg-lite: REJECT after the record walk (transactions={}, last covered={covered})", tx_pos)); }
 
     // Spends then adds, in the same order as the full path (so the same ECMH hints apply).
-    let mut spent_in_block: BTreeSet<[u8; 32]> = BTreeSet::new();
+    // `created` = every created leaf with its creating tx position, sorted by word key; a duplicate
+    // leaf keeps its FIRST (lowest) position, as the full path's `entry().or_insert` does.
+    let mut created: Vec<([u64; 4], u32)> =
+        output_leaves.iter().zip(&out_pos).map(|(l, p)| (key(l), *p)).collect();
+    created.sort_unstable();
+    created.dedup_by_key(|e| e.0);
+    let mut spent = vec![false; created.len()];
+    let find = |k: &[u64; 4]| created.binary_search_by(|e| e.0.cmp(k));
     for (leaf, txp) in &spends {
-        if let Some(&creator) = created_at.get(leaf) {
-            if creator >= *txp { all_ok = false; }
-            if !spent_in_block.insert(*leaf) { all_ok = false; }
-        } else {
-            swiftsync::sub(leaf);
+        match find(&key(leaf)) {
+            Ok(i) => {
+                // In-block spend: created by a strictly earlier tx, spent at most once.
+                if created[i].1 >= *txp { all_ok = false; }
+                if spent[i] { all_ok = false; }
+                spent[i] = true;
+            }
+            Err(_) => swiftsync::sub(leaf),
         }
     }
     for leaf in &output_leaves {
-        if !spent_in_block.contains(leaf) { swiftsync::add(leaf); }
+        if let Ok(i) = find(&key(leaf)) { if !spent[i] { swiftsync::add(leaf); } }
     }
     swiftsync::report();
 
@@ -286,7 +307,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
     let bip34_ok = unsafe { check_bip34(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height) } == 1;
 
     let ids_distinct = {
-        let mut ids = txids.clone();
+        let mut ids: Vec<[u64; 4]> = txids.iter().map(key).collect();
         ids.sort_unstable();
         ids.windows(2).all(|p| p[0] != p[1])
     };

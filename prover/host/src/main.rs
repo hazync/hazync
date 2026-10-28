@@ -2210,8 +2210,9 @@ fn legacy_sighash_bytes(raw_tx: &[u8], input_idx: u32) -> u64 {
 /// - legacy: bytes a round-8 legacy sighash hashes for this input, 41*(n-k) + outputs (0 for witness);
 /// - msx: CHECKMULTISIG keys beyond the threshold (each mismatch falls back to a full libsecp verify);
 /// - txb / tx1: the transaction's bytes and a fixed per-transaction cost, split evenly across its inputs;
-/// - tapscript: a taproot SCRIPT-path spend, whose tweak check (Q = P + t*G) libsecp runs unbatched.
-const FIT_NAMES: [&str; 10] = ["ONE", "ECDSA", "SCHNORR", "WIT", "SS", "LEGACY", "MSX", "TXB", "TX1", "TAPSCRIPT"];
+/// - tapscript: a taproot SCRIPT-path spend, whose tweak check (Q = P + t*G) libsecp runs unbatched;
+/// - outs: the transaction's outputs, split evenly across its inputs (agg-lite chunks hash a leaf per output).
+const FIT_NAMES: [&str; 11] = ["ONE", "ECDSA", "SCHNORR", "WIT", "SS", "LEGACY", "MSX", "TXB", "TX1", "TAPSCRIPT", "OUTS"];
 /// GHOST + round 8 fit on block 962,000 (cycles per unit; see BLOCK_962000.md round 8): 6,303
 /// transactions, median error 0.8%. ECDSA / SCHNORR include the end-of-chunk batch check (9,350 per
 /// verify). Each is overridable as HAZYNC_FIT_<NAME>.
@@ -2220,14 +2221,14 @@ const FIT_NAMES: [&str; 10] = ["ONE", "ECDSA", "SCHNORR", "WIT", "SS", "LEGACY",
 /// to ECDSA / SCHNORR: a key costs ~14.5k cycles in EVERY chunk it appears in (lift + MSM point), which
 /// a one-chunk fit cannot see because there each key is paid for once. Fitted from the 16-chunk
 /// residuals; without it the early, key-diverse chunks ran 25-30% over prediction.
-const FIT_DEFAULT: [f64; 10] = [3147.0, 9350.0, 48266.0, 136.0, 128.0, 2.0, 58402.0, 34.0, 6486.0, 185656.0];
+const FIT_DEFAULT: [f64; 11] = [3147.0, 9350.0, 48266.0, 136.0, 128.0, 2.0, 58402.0, 34.0, 6486.0, 185656.0, 0.0];
 
-fn input_features(w: &BlockWitness) -> Vec<[f64; 10]> {
+fn input_features(w: &BlockWitness) -> Vec<[f64; 11]> {
     w.inputs.iter().map(|inp| {
         let raw = &w.txs[inp.tx_idx as usize].0;
         let pv = &w.tx_prevouts[inp.tx_idx as usize].0;
         let ops = predicted_sig_ops(raw, inp.input_idx, pv);
-        let mut f = [0f64; 10];
+        let mut f = [0f64; 11];
         f[0] = 1.0;
         f[1] = ops.ecdsa as f64;
         f[2] = ops.schnorr as f64;
@@ -2236,6 +2237,7 @@ fn input_features(w: &BlockWitness) -> Vec<[f64; 10]> {
         let n = tx.input.len().max(1) as f64;
         f[7] = (raw.len() + pv.len()) as f64 / n;
         f[8] = 1.0 / n;
+        f[10] = tx.output.len() as f64 / n;
         let Some(txin) = tx.input.get(k) else { return f };
         f[3] = txin.witness.iter().map(|e| e.len() + 1).sum::<usize>() as f64;
         f[4] = txin.script_sig.len() as f64;

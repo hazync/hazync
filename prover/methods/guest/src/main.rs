@@ -1791,6 +1791,9 @@ fn chunk_prove() {
             if !lite.record(&raw_tx, &prevouts, &idx, &ch, &cb, &mtp, &results, &leaves, &seqbuf, verbuf, &wt, hw) {
                 all_valid = false;
             }
+            #[cfg(feature = "tx-cycles")]
+            risc0_zkvm::guest::env::log(&alloc::format!(
+                "TXCYC {} {} {}", tx_len, n_owned, env::cycle_count() - tc0));
             continue;
         }
         // ONE digest for the transaction, reused by every input it owns. The payload was already
