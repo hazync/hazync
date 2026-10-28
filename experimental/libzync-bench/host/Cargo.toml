@@ -1,0 +1,11 @@
+[package]
+name = "zbench-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+methods = { path = "../methods" }
+risc0-zkvm = { version = "=3.0.5" }
+k256 = { version = "0.13", features = ["arithmetic", "expose-field"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }

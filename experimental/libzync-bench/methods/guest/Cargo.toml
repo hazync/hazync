@@ -1,0 +1,20 @@
+[package]
+name = "zbench"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[dependencies]
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std", "unstable"] }
+risc0-crypto = "=0.1.0-rc.1"
+risc0-bigint2 = "=1.4.14"
+sha2 = { version = "0.10", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+
+[patch.crates-io]
+sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.10.8-risczero.0" }
