@@ -424,7 +424,9 @@
 #
 # Superseded the earlier id 3867611d…
 
-37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd
+# libzync-gpu BRANCH ONLY: the experimental round-13 libzync guest (NOT canonical). See
+# experimental/libzync-bench/gpu/GPU_TEST_PLAN.md. Canonical stays 37987b85… on main.
+5e460bf309a5d1ac243ded6817473baec43654953d487c834d56b9cf69cae4b8
 
 # ── THE OTHER BINARY: the tip bridge's guest ──────────────────────────────────────────────────────
 #

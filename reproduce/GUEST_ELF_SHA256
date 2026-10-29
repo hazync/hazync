@@ -33,4 +33,5 @@
 # the answer is to re-observe the hash, not to delete the check.
 #
 # Corresponds to METHOD_ID 37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd.
-35e3f55ed873de27f3e06b4452fb9ac80940e02f845b671a0e019cf83735c02f
+# libzync-gpu BRANCH ONLY: sha256 of the round-13 libzync method.bin (NOT canonical).
+d90d1225003b2818ffd6fa156497fa736fb204d4790cbc78190c06eaaec50734
