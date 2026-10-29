@@ -2046,6 +2046,7 @@ dependencies = [
  "hazync-coinbase-smt",
  "hazync-utreexo",
  "methods",
+ "num-bigint 0.4.8",
  "risc0-zkvm",
  "serde",
  "serde_json",
