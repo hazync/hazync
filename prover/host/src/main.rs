@@ -7610,14 +7610,17 @@ fn seg_serve_cmd() {
                  seg_po2());
         write_range_env(&mut b, &bd);
     } else {
-        let (anchor, w) = build_full();
+        let (anchor, mut w) = build_full();
         height = w.height;
         if agg {
             let nchunks = chunk_bounds(&w, nchunks_env()).len();
             let receipts = read_chunk_receipts(nchunks);
             println!("=== segment coordinator (push): AGGREGATE of {} chunk receipts, block {} po2 {} ===",
                      receipts.len(), w.height, seg_po2());
+            // libzync: the same aggregate stream as agg-chunks, or the guest desyncs.
+            libzync_agg_prep(&mut w);
             write_aggregate_env(&mut b, &receipts, &anchor, &w);
+            libzync_agg_tail(&mut b);
         } else {
             let bounds = chunk_bounds(&w, nchunks_env());
             let (lo, hi) = *bounds.get(idx).expect("chunk index");
