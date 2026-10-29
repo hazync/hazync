@@ -1,0 +1,5 @@
+export PATH=/usr/local/cuda-12.8/bin:$HOME/.cargo/bin:$PATH CUDA_PATH=/usr/local/cuda-12.8 LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64
+B=/workspace/libzync-bundle
+export HAZYNC_BLOCK=$B/block_962000.json HAZYNC_LIFTX_HINT=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_BATCH_ECDSA=1 HAZYNC_SWIFTSYNC=1 HAZYNC_AGG_READSLICE=1 HAZYNC_AGG_LITE=1 HAZYNC_ECMH_HINTS=$B/ecmh_g.bin
+export $(sed 's/^FIT=//' $B/fit_env.txt)
+export HAZYNC_COST_MODEL=fit HAZYNC_PACK_KEYS=1 HAZYNC_COST_EC_OP=14537 HAZYNC_COST_EC_OP_REPEAT=0

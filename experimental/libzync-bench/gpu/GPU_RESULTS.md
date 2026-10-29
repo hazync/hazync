@@ -140,6 +140,42 @@ Ranked by expected payoff per unit of work.
     - Measure an H100 or B200 on one chunk and the aggregate before buying time on them. Their per-dollar speed is
       unmeasured on this guest.
 
+
+## Phase 1 follow-up, same day: the live-tip pipeline (rehearsal on 969,122)
+
+**What was built.** All host-side changes; METHOD_ID is unchanged.
+
+| piece | what it does | evidence |
+|---|---|---|
+| `host libzync-hints <dir>` | All hint files for a block in one pass: chunks execute in parallel, R is computed with libsecp, ECMH natively, and the aggregate collect reuses the chunk executions | 969,122 hints **byte-identical** to the collect-log path (16/16 batch files + ecmh.bin). **58 s on 4 laptop threads, 26.5 s on the pod**, against ~450 s before |
+| seg-serve `HAZYNC_AGG_EARLY=1` | The aggregate starts from chunk claims that A executes itself (14.4 s); real receipts are awaited only at resolve and matched to the session's assumption order **by claim digest** | The first try failed: **the session lists assumptions in REVERSE chunk order** (15→0). Matching by digest fixed it; the receipt verified |
+| work-stealing lanes | Chunks are claimed on A with an atomic `mkdir`; receipts go pod→A directly (`.tmp` + rename) | lanes ended within **8 s** of each other (136–145 s), against a 40 s straggler with fixed lanes |
+| `fleet/live/tiplive.sh` | Tip follower: the bridge node builds the block file (`mkblock.py`, 3.0 s on a tip block) and pushes it straight to A; A computes hints and copies them to the peers; lanes and the early aggregate run; done on a verified receipt. `REPLAY=h` runs it as a rehearsal | below |
+
+**Measured end to end:** block 969,122, 4× RTX PRO 6000, from "block detected" to a verified block receipt.
+
+| stage | time since detection |
+|---|---|
+| block file on A (built on the bridge node, pushed directly) | 6.5 s |
+| all hints computed | +26.5 s |
+| hints on all peers | 41.3 s |
+| chunks (work-stealing) + early aggregate → **verified block receipt** | **191.0 s** |
+
+- **Proving portion: 150 s,** against 197 s before (162.6 chunks + 34.0 aggregate).
+- **The aggregate now costs ~3.5 s after the last chunk** instead of 33–38 s. Its 31 segments were proved in the first 28.6 s, sharing the GPUs with chunks. The price: each pod's first chunk ran 35–44 s instead of ~31 s.
+- **Hints are no longer the blocker** (26.5 s, against ~450 s).
+- **Not done: a live tip window.** The credit ran out: bring-up, two rehearsals and a rebuild used it. The pipeline is ready for one with `./tiplive.sh <seconds>`.
+
+**Costs, for planning the next run.** 4× PRO 6000 is $9.96/hr. This session's bring-up took ~12 min (setup + bundle + build) before any proving. A 30-minute live window therefore needs about **$8–9 including bring-up**.
+
+### Updated next steps (live pipeline)
+1. **A live tip window** (~$9): the pipeline is built and rehearsed.
+2. **Hints in parallel with distribution:**
+   - start the lanes on A while hints copy to the peers;
+   - send `libzync-hints`' chunk claims to seg-serve, so A does not execute the chunks a second time (14.4 s of CPU at the start of every block).
+3. **Cut the serial head:** detection → hints on peers is 41 s. The block file and hints could stream to all pods at once, or every pod could compute its own hints: each has 128 cores and they are deterministic.
+4. **Item 3 of the plan above (a global segment pool)** is now the main speed lever. The block is ≈ chunk phase + 3.5 s, and the chunk phase is per-chunk process overhead plus proving.
+
 ## Files
 
 - **Logs and receipts (laptop):** `~/libzync-gpu/`.
@@ -147,6 +183,7 @@ Ranked by expected payoff per unit of work.
   - CORE baseline: `outC.tgz`.
   - Fleet runs: `run/r4`, `run/t969122`, `run/t969118`.
   - Tip-block files and hints: `run/block_96911{8,22}.json`, `run/th12{2,18}.tgz`.
+- **Live pipeline:** `fleet/live/` (`tiplive.sh`, `blockA.sh`, `lanew.sh`). Rehearsal harvest: `~/libzync-gpu/live/harvest/`.
 - **Scripts:**
   - In this directory: `gpu-libzync.sh` (one card), `gpu-libzync-multi.sh` (one box, N GPUs; unused: no multi-GPU box was
     available).
