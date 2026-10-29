@@ -2988,61 +2988,73 @@ fn agg_exec_fake() {
         println!("  chunk {i:>3} [{lo}..{hi}) executed: {} cycles", s.cycles());
         receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
     }
-    // libzync SwiftSync: the aggregate takes no inclusion proofs, so they are not sent. ECMH hints
-    // follow the stream from $HAZYNC_ECMH_HINTS; no file => the guest collects (logs ECMHREC lines).
-    let swiftsync = std::env::var("HAZYNC_SWIFTSYNC").as_deref() == Ok("1");
-    if swiftsync {
+    // Negative control (test-only): HAZYNC_LITE_DROP_CHUNK=i omits chunk i; coverage must fail.
+    if agg_lite() {
+        if let Some(i) = std::env::var("HAZYNC_LITE_DROP_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()) {
+            receipts.remove(i);
+            println!("  agg-lite NEGATIVE CONTROL: chunk {i} dropped");
+        }
+    }
+    libzync_agg_prep(&mut w);
+    let mut b = ExecutorEnv::builder();
+    write_aggregate_env(&mut b, &receipts, &anchor, &w);
+    libzync_agg_tail(&mut b);
+    report_agg_execute_only(b);
+}
+
+/// libzync: what the aggregate is NOT sent. SwiftSync takes no inclusion proofs; agg-lite takes every
+/// transaction fact from the chunk journals, so no transactions, prevouts, inputs or txids at all.
+/// Shared by `agg-exec-fake` and `agg-chunks` (the real-receipt aggregate) so both send one stream.
+fn libzync_agg_prep(w: &mut BlockWitness) {
+    if std::env::var("HAZYNC_SWIFTSYNC").as_deref() == Ok("1") {
         for inp in w.inputs.iter_mut() {
             inp.proof_i.siblings = PackedHashes(Vec::new());
             inp.proof_last.siblings = PackedHashes(Vec::new());
         }
     }
-    // libzync agg-lite: the aggregate takes every transaction fact from the chunk journals, so it is
-    // sent no transactions, prevouts, inputs or txids at all.
     if agg_lite() {
-        // Negative control (test-only): HAZYNC_LITE_DROP_CHUNK=i omits chunk i; coverage must fail.
-        if let Some(i) = std::env::var("HAZYNC_LITE_DROP_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()) {
-            receipts.remove(i);
-            println!("  agg-lite NEGATIVE CONTROL: chunk {i} dropped");
-        }
         w.txs.clear();
         w.tx_prevouts.clear();
         w.inputs.clear();
         w.txids = PackedHashes(Vec::new());
     }
-    let mut b = ExecutorEnv::builder();
-    write_aggregate_env(&mut b, &receipts, &anchor, &w);
-    if swiftsync {
-        match std::env::var("HAZYNC_ECMH_HINTS").ok().and_then(|p| std::fs::read(p).ok()) {
-            Some(flat) => {
-                let mut padded = flat.clone();
-                padded.resize(flat.len().div_ceil(4) * 4, 0);
-                b.write(&0u32).unwrap();
-                b.write(&(flat.len() as u32)).unwrap();
-                b.write_slice(&padded);
-                println!("  swiftsync: {} bytes of ECMH hints", flat.len());
-            }
-            None => {
-                b.write(&1u32).unwrap();
-                b.write(&0u32).unwrap();
-                println!("  swiftsync: COLLECT (no HAZYNC_ECMH_HINTS file)");
-            }
+}
+
+/// libzync: the SwiftSync ECMH hints, after the witness. From $HAZYNC_ECMH_HINTS; no file => the guest
+/// collects (logs ECMHREC lines). ⛔ HAZYNC_SWIFTSYNC must match the guest build, like every hint block.
+fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder) {
+    if std::env::var("HAZYNC_SWIFTSYNC").as_deref() != Ok("1") { return; }
+    match std::env::var("HAZYNC_ECMH_HINTS").ok().and_then(|p| std::fs::read(p).ok()) {
+        Some(flat) => {
+            let mut padded = flat.clone();
+            padded.resize(flat.len().div_ceil(4) * 4, 0);
+            b.write(&0u32).unwrap();
+            b.write(&(flat.len() as u32)).unwrap();
+            b.write_slice(&padded);
+            println!("  swiftsync: {} bytes of ECMH hints", flat.len());
+        }
+        None => {
+            b.write(&1u32).unwrap();
+            b.write(&0u32).unwrap();
+            println!("  swiftsync: COLLECT (no HAZYNC_ECMH_HINTS file)");
         }
     }
-    report_agg_execute_only(b);
 }
 
 fn agg_chunks() {
     use std::time::Instant;
-    let (anchor, w) = build_full();
+    let (anchor, mut w) = build_full();
     // The partition decides how many chunk files exist — an uneven pack can yield fewer runs than
     // HAZYNC_CHUNKS asked for, and reading a fixed count would look for a file that was never written.
     let nchunks = chunk_bounds(&w, nchunks_env()).len();
     let receipts = read_chunk_receipts(nchunks);
     println!("=== AGGREGATING {} chunk receipts for block {} ===", receipts.len(), w.height);
     let t = Instant::now();
+    // libzync: same stream as agg-exec-fake (chunk_bounds above needed the full witness first).
+    libzync_agg_prep(&mut w);
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
+    libzync_agg_tail(&mut b);
     // Execute-only mode returns before proving; see report_agg_execute_only.
     if std::env::var("HAZYNC_AGG_EXECUTE").is_ok() { report_agg_execute_only(b); return; }
 
