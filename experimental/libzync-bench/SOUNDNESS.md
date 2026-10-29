@@ -127,11 +127,27 @@ Aggregate execution: 485.8 M cycles over the 200 blocks.
 
 The forest roots then commit to exactly the UTXO set at H, ready for the tip phase.
 
+**Longer sweep: blocks 1–500.** Same build. **BALANCED**, forest = **503 leaves = the 503 coins unspent at 500**,
+hint hash == the host's. 1.22 B aggregate cycles.
+
+**Checkable from the file alone (hint hash v2, round 16, METHOD_ID `038a6a31…`).**
+- `ss_hints` now chains SHA-256 over (height, count, unspent indices): exactly what a hintsfile stores per height.
+- `host swiftsync-file-hash <file>` computes the value from the `.hints` file and nothing else.
+- Blocks 1–200 are BALANCED, and the proof's `ss_hints` = **`e33c66b3…` = `swiftsync-file-hash h200.hints`**.
+- On the published mainnet file (`utxohints.store`, stop height 970,000): **`e215fe7e73298dd9dcd509de6c772f47704068485f187dc3fed158d793b1171d`**.
+  That is the value a mainnet proof at 970,000 must commit for that file to be proven correct.
+
+**For Ruben.** Given a Hazync proof at H, a client checks three things:
+1. `ss_set == 0`;
+2. `height == H`;
+3. `ss_hints == swiftsync-file-hash(their .hints file)`.
+
+If all three hold, the hints file is proven correct: no trust in whoever served it. The UTXO set at H is then the proof's
+forest roots.
+
 ### Next for design B
-- **Make `ss_hints` computable from the file alone.** It currently hashes the bit vector, whose length needs the blocks.
-  Hashing each height's index list (or the raw Elias–Fano bytes) instead would let Ruben, or anyone, check a proof
-  against a hints file with nothing else.
-- **A longer sweep.** A 500-block sweep is running. Then one real epoch on GPUs, which needs credit.
+- ✅ ~~Make `ss_hints` computable from the file alone~~: done (v2).
+- **One real epoch on GPUs,** which needs credit. For example to 970,000, against the published file.
 - **Laptop sweeps are slow,** ~14 s per block. Each aggregate execution loads the large guest image (ECMULT window 21
   tables). That costs nothing on a prover, but a fast execute path for sweeps would help testing.
 

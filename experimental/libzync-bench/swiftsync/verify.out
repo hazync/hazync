@@ -1,0 +1,6 @@
+swiftsync-file-hash: stop height 200 -> ss_hints e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  ss_hints e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd == host's hash of the hints file
+SWEEP_OK
+swiftsync-file-hash: stop height 970000 -> ss_hints e215fe7e73298dd9dcd509de6c772f47704068485f187dc3fed158d793b1171d
+R16_DONE
