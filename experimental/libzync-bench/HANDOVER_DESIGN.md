@@ -1,6 +1,6 @@
 # libzync: making the SwiftSync path sound (handover design, for decision)
 
-**Status:** proposal, 2026-10-29. Nothing below is built yet.
+**Status:** B was chosen and **built** on 2026-10-29. Results are in `SOUNDNESS.md` §5: balanced on blocks 1–200, and a wrong bit in either direction is rejected.
 
 ## The gap today
 

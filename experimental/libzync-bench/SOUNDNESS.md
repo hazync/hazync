@@ -7,7 +7,7 @@ All of this ran on the laptop in execute mode, with no GPU spend. Status of each
 | Negative tests: batch signature verification | ✅ done, all 6 behave as designed |
 | BIP30 grandfathered blocks (91,842 / 91,880) on agg-lite | ✅ fixed and checked leaf for leaf |
 | Coinbase-only blocks on agg-lite | ✅ **bug found and fixed** |
-| SwiftSync handover check | 📝 design ready for decision: `HANDOVER_DESIGN.md` |
+| SwiftSync handover check | ✅ **design B built and verified on blocks 1–200** (section 5) |
 
 ## 1. Batch verification: negative tests
 
@@ -73,11 +73,70 @@ that HAS transactions still fails there.
 
 **Covered by:** 91,842 above.
 
+## 5. SwiftSync design B, built and checked end to end
+
+**Decision:** B, per the user, 2026-10-29. Design in `HANDOVER_DESIGN.md`.
+
+**Hints format.** The published one, not a new one: **hintsfile v0**.
+- Defined by the `hintsfile` crate 0.2.0 from 2140-dev/swiftsync, Robert Netzke's Rust SwiftSync node.
+- Served at `utxohints.store`. The mainnet file there is 122.5 MB with stop height **970,000**.
+- Layout:
+  - magic `UTXO`, version 0, stop height (u32 LE);
+  - then, per height 1..=H, an Elias–Fano list of the indices of outputs still unspent at H.
+- Index rules:
+  - outputs are counted per block, in tx/vout order, skipping OP_RETURN and scripts over 10,000 bytes;
+  - the coinbase coins of 91,722 / 91,812 (BIP30) are skipped.
+- That index order is exactly the guest's `output_leaves` order, so the files are consumed as published, unmodified.
+  The host decodes them with the crate itself.
+
+**Built:**
+- **Guest, agg-lite:** each indexed output's hint bit routes it.
+  - Bit 0 (spent by H) → ECMH total.
+  - Bit 1 (unspent at H) → an **append-only Utreexo forest**, carried in `utxo_roots`.
+  - A bit-1 coin spent in its own block → reject.
+  - The bit count must equal the block's indexed outputs.
+  - BIP30 now follows the file's convention: skip the old coinbases. The round-14 subtraction is gone.
+- **Guest, `ChainState`:** carries `ss_set`/`ss_acc` (the ECMH total; it starts each block from the previous one,
+  which the aggregate verifies recursively) and `ss_hints`, a running SHA-256 over (height, nbits, bits).
+- **Host:**
+  - `HAZYNC_SS_HINTS=<file>`;
+  - `swiftsync-make-hints <H> <dir> <out>` writes a hintsfile v0 with the crate's own builder;
+  - `swiftsync-sweep <H> <dir>` runs blocks 1..H in execute mode, feeding each aggregate the previous block's
+    committed `ChainState`;
+  - `HAZYNC_SS_FLIP=h:k` flips one bit (a test-only negative hook).
+
+**Index alignment against the REAL published file.** Our file at H = 500 vs `utxohints.store`'s mainnet file at 970,000
+(`swiftsync/efcheck.py`):
+- every one of the 475 coins the published file marks unspent sits **at the same index** in ours (SUBSET_OK);
+- the 28 differences are all coins unspent at 500 and spent later (e.g. block 170's change output).
+
+**End to end, blocks 1–200, real chain-state carry.** METHOD_ID `76b98544…`.
+
+| run | at H = 200 | forest | verdict |
+|---|---|---|---|
+| correct hints | **ss_set = 0: BALANCED** | **204 leaves = the 204 coins unspent at H** | ✅ SWEEP_OK; guest hint hash == host's |
+| bit flipped: Satoshi's block-1 coin marked "spent" | ss_set = 1 | 203 | ❌ NOT BALANCED |
+| bit flipped: block 9's coin (spent at 170) marked "unspent" | ss_set = 1 | 205 | ❌ NOT BALANCED |
+
+Aggregate execution: 485.8 M cycles over the 200 blocks.
+
+**What a verifier checks on the proof at H:**
+- `height == H`;
+- `ss_set == 0`;
+- `ss_hints ==` the hash of the published file.
+
+The forest roots then commit to exactly the UTXO set at H, ready for the tip phase.
+
+### Next for design B
+- **Make `ss_hints` computable from the file alone.** It currently hashes the bit vector, whose length needs the blocks.
+  Hashing each height's index list (or the raw Elias–Fano bytes) instead would let Ruben, or anyone, check a proof
+  against a hints file with nothing else.
+- **A longer sweep.** A 500-block sweep is running. Then one real epoch on GPUs, which needs credit.
+- **Laptop sweeps are slow,** ~14 s per block. Each aggregate execution loads the large guest image (ECMULT window 21
+  tables). That costs nothing on a prover, but a fast execute path for sweeps would help testing.
+
 ## 4. Still open
 
-- **The SwiftSync handover check:** without it the SwiftSync path proves nothing about which coins exist. The design is
-  in `HANDOVER_DESIGN.md`, recommending SwiftSync proper plus an append-only Utreexo of the survivors. It needs a
-  decision on the approach and on the hints-file format.
 - **Batch verification review, beyond these tests:**
   - an independent read of the transcript construction;
   - the sizing of the 128-bit weights;
