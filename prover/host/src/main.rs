@@ -3306,12 +3306,8 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
         if let Some((nbits, words)) = HZ_SS_BITS.lock().unwrap().as_ref() {
             use sha2::{Digest, Sha256};
             let mut d = Sha256::new();
-            d.update(b"libzync/swiftsync-hints/v1");
-            d.update(expect_hash);
-            d.update(h.to_le_bytes());
-            d.update(nbits.to_le_bytes());
-            for x in words { d.update(x.to_le_bytes()); }
-            expect_hash = d.finalize().into();
+            let _ = (nbits, words);
+            expect_hash = ss_hints_step(&expect_hash, h, &bits_to_indices(words));
         }
         let run = |ecmh: &str| -> (Result<risc0_zkvm::SessionInfo, String>, Vec<u8>) {
             std::env::set_var("HAZYNC_ECMH_HINTS", ecmh);
@@ -3356,6 +3352,35 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
     println!("  ss_hints {} {}", hex(&prev.ss_hints), if hash_ok { "== host's hash of the hints file" } else { "!= host's hash" });
     println!("  forest: {} leaves (= coins unspent at H), roots {}", prev.utxo_leaves, prev.utxo_roots.iter().filter(|r| r.is_some()).count());
     println!("{}", if balanced && hash_ok { "SWEEP_OK" } else { "SWEEP_FAIL" });
+}
+
+fn bits_to_indices(words: &[u32]) -> Vec<u32> {
+    (0..words.len() * 32).filter(|k| (words[k / 32] >> (k % 32)) & 1 == 1).map(|k| k as u32).collect()
+}
+
+/// One step of the proof's hint-hash chain (v2), as the guest computes it: over the height and its list of
+/// unspent indices, i.e. exactly what a hintsfile stores for that height.
+fn ss_hints_step(prev: &[u8; 32], height: u32, indices: &[u32]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut d = Sha256::new();
+    d.update(b"libzync/swiftsync-hints/v2");
+    d.update(prev);
+    d.update(height.to_le_bytes());
+    d.update((indices.len() as u32).to_le_bytes());
+    for k in indices { d.update(k.to_le_bytes()); }
+    d.finalize().into()
+}
+
+/// `swiftsync-file-hash <file>`: the value a proof at the file's stop height must commit as `ss_hints`,
+/// computed from the hints file ALONE -- what Ruben, or anyone, checks a proof against.
+fn ss_file_hash_cmd(path: &str) {
+    let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap_or_else(|e| panic!("{path}: {e}")));
+    let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let mut h = [0u8; 32];
+    for height in 1..=file.stop_height() {
+        h = ss_hints_step(&h, height, &file.indices_at_height(height).expect("height"));
+    }
+    println!("swiftsync-file-hash: stop height {} -> ss_hints {}", file.stop_height(), hex(&h));
 }
 
 /// Big-endian a - b for 32-byte values with a >= b.
@@ -5142,6 +5167,10 @@ fn main() {
     if let Some(p) = args.iter().position(|a| a == "swiftsync-make-hints") {
         let h: u32 = args.get(p + 1).and_then(|s| s.parse().ok()).expect("swiftsync-make-hints <H> <json dir> <out>");
         ss_make_hints_cmd(h, &args[p + 2], &args[p + 3]);
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "swiftsync-file-hash") {
+        ss_file_hash_cmd(args.get(p + 1).expect("swiftsync-file-hash <file>"));
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "swiftsync-sweep") {

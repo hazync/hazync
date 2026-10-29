@@ -337,11 +337,21 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let ss_hints = if ss_mode == 1 {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
-        h.update(b"libzync/swiftsync-hints/v1");
+        // v2: over the height and its list of unspent INDICES -- exactly what the hints file stores per
+        // height -- so a verifier recomputes it from the published file alone, no blocks needed.
+        h.update(b"libzync/swiftsync-hints/v2");
         h.update(prev_hints);
         h.update(w.height.to_le_bytes());
-        h.update(ss_nbits.to_le_bytes());
-        for x in ss_words.iter() { h.update(x.to_le_bytes()); }
+        let ones: u32 = ss_words.iter().map(|x| x.count_ones()).sum();
+        h.update(ones.to_le_bytes());
+        for (wi, x) in ss_words.iter().enumerate() {
+            let mut v = *x;
+            while v != 0 {
+                let b = v.trailing_zeros();
+                h.update(((wi as u32) * 32 + b).to_le_bytes());
+                v &= v - 1;
+            }
+        }
         let d: [u8; 32] = h.finalize().into();
         d
     } else { prev_hints };
