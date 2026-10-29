@@ -18,6 +18,7 @@ serde = { version = "1.0", features = ["derive"] }
 bitcoin = "0.32"
 bincode = "1"
 num-bigint = "0.4"
+hintsfile = "0.2.0"
 hazync-utreexo = { path = "../../accumulator" }
 hazync-coinbase-smt = { path = "../../coinbase-smt", features = ["std", "serde"] }
 

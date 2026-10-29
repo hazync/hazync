@@ -104,6 +104,22 @@ pub fn sub(leaf: &[u8; 32]) {
     unsafe { SUBS += 1 };
 }
 
+/// Design B (HANDOVER_DESIGN.md): this block's total starts from the previous chain state's, which the
+/// aggregate verified recursively. Call once, after `install`. `set == 0` means the identity.
+pub fn start(set: u32, p: &Pt) {
+    if set != 0 {
+        unsafe { (*core::ptr::addr_of_mut!(ACC)).add(p) };
+    }
+}
+
+/// The running total to commit: (0, zeros) for the identity, else (1, point).
+pub fn total() -> (u32, Pt) {
+    match unsafe { (*core::ptr::addr_of!(ACC)).get() } {
+        Some(p) => (1, *p),
+        None => (0, [0; 16]),
+    }
+}
+
 pub fn report() {
     let (adds, subs, collect) = unsafe { (ADDS, SUBS, COLLECT) };
     let acc = unsafe { &*core::ptr::addr_of!(ACC) };

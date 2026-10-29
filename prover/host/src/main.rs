@@ -36,7 +36,11 @@ const KIND_CHUNK: u32 = 0xC4A1_0004;
 /// libzync agg-lite chunk journal (guest src/agg_lite.rs).
 const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 /// libzync agg-lite: the block's median-time-past, set by `build_full` for `write_chunk_inputs`.
-static HZ_BLOCK_MTP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+// Per block, not per process: `swiftsync-sweep` runs many blocks in one process.
+static HZ_BLOCK_MTP: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+/// libzync design B: this block's SwiftSync hint bits (nbits, packed LE words), from $HAZYNC_SS_HINTS.
+static HZ_SS_BITS: std::sync::Mutex<Option<(u32, Vec<u32>)>> = std::sync::Mutex::new(None);
+static HZ_SS_FILE: std::sync::OnceLock<hintsfile::Hintsfile> = std::sync::OnceLock::new();
 fn agg_lite() -> bool { std::env::var("HAZYNC_AGG_LITE").as_deref() == Ok("1") }
 
 // A 32-byte hash, and a vector of them, carried over risc0 serde's PACKED byte path rather than the
@@ -183,6 +187,9 @@ struct ChainState {
     prev_nbits: u32, prev_time: u32, epoch_start: u32, recent_times: Vec<u32>,
     anchor_id: [u8; 32], // S5: dsha256 of the base anchor; verifier pins == dsha256(genesis_anchor)
     self_id: [u32; 8],  // S1: image id recursed against; verifier asserts == METHOD_ID
+    // libzync SwiftSync design B (HANDOVER_DESIGN.md): the guest's ECMH running total (ss_set 0 = identity)
+    // and running hint-bit hash. Mirrors the guest's ChainState field for field.
+    ss_set: u32, ss_acc: [u32; 16], ss_hints: [u8; 32],
 }
 #[derive(Serialize, Deserialize)]
 struct SpendCheck { raw_tx: Vec<u8>, prevouts: Vec<u8>, block_height: u32 }
@@ -464,6 +471,42 @@ fn boundary_digest(height: u32, tip: &[u8; 32], roots: &[Option<[u8; 32]>], leav
 // outputs never enter the UTXO set, so the accumulator (host + guest) must skip them (H3).
 fn out_spendable(spk: &[u8]) -> bool { !((!spk.is_empty() && spk[0] == 0x6a) || spk.len() > 10_000) }
 
+/// libzync design B: the outputs a SwiftSync hints file indexes, per block -- the hintsfile crate's
+/// convention (2140-dev/swiftsync): coinbase first, then each tx, in vout order, unspendable outputs
+/// (OP_RETURN / > 10,000 bytes) skipped, and NO coinbase outputs at the two BIP30-unspendable blocks.
+/// That is exactly the order of the guest's `output_leaves`.
+fn ss_indexed_outputs<'a>(height: u32, coinbase: &Transaction, txs: impl Iterator<Item = &'a Transaction>) -> u32 {
+    let n = |t: &Transaction| t.output.iter().filter(|o| out_spendable(o.script_pubkey.as_bytes())).count() as u32;
+    let cb = if height == 91_722 || height == 91_812 { 0 } else { n(coinbase) };
+    cb + txs.map(n).sum::<u32>()
+}
+
+/// This block's hint bits from the file at $HAZYNC_SS_HINTS (None if unset): bit k = indexed output k is
+/// still unspent at the file's stop height.
+fn ss_bits_for<'a>(height: u32, coinbase: &Transaction, txs: impl Iterator<Item = &'a Transaction>) -> Option<(u32, Vec<u32>)> {
+    let path = std::env::var("HAZYNC_SS_HINTS").ok()?;
+    let file = HZ_SS_FILE.get_or_init(|| {
+        let mut f = std::io::BufReader::new(std::fs::File::open(&path).unwrap_or_else(|e| panic!("{path}: {e}")));
+        hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{path}: {e}"))
+    });
+    assert!(height <= file.stop_height(), "block {height} is past the hints file's stop height {}", file.stop_height());
+    let nbits = ss_indexed_outputs(height, coinbase, txs);
+    let mut words = vec![0u32; (nbits as usize).div_ceil(32)];
+    for k in file.indices_at_height(height).expect("hints file has no entry for this height") {
+        assert!(k < nbits, "hints file index {k} at height {height} is past the block's {nbits} indexed outputs");
+        words[k as usize / 32] |= 1 << (k % 32);
+    }
+    // Negative-test hook (test-only, inert unless set): HAZYNC_SS_FLIP=<height>:<index> flips one hint bit.
+    if let Some((fh, fk)) = std::env::var("HAZYNC_SS_FLIP").ok().and_then(|v| {
+        let (a, b) = v.split_once(':')?; Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)) }) {
+        if fh == height && fk < nbits {
+            words[fk as usize / 32] ^= 1 << (fk % 32);
+            println!("  ss: NEGATIVE CONTROL: hint bit {fk} at height {height} flipped");
+        }
+    }
+    Some((nbits, words))
+}
+
 fn out_leaf_of(tx: &Transaction, txid: &[u8; 32], vout: usize, height: u32, is_coinbase: bool, mtp: u32) -> Hash {
     let o = &tx.output[vout];
     coin_leaf(txid, vout as u32, o.value.to_sat(), o.script_pubkey.as_bytes(), height, is_coinbase, mtp)
@@ -583,7 +626,7 @@ fn seed_and_anchor() -> (Forest, ChainState) {
         cum_work: [0u8; 32], height: 169,
         prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, epoch_start: 1_231_006_505,
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID,
+        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
     };
     (forest, anchor)
 }
@@ -760,7 +803,8 @@ fn build_full() -> (ChainState, BlockWitness) {
     // time so `time_ok` fails. Applied to recent_times so cmtp stays consistent host↔guest. NEVER in prod.
     if std::env::var("HAZYNC_COV1_BADTIME").is_ok() { recent_times = vec![time; 11]; }
     let cmtp = median_u32(&recent_times);
-    let _ = HZ_BLOCK_MTP.set(cmtp);
+    *HZ_BLOCK_MTP.lock().unwrap() = Some(cmtp);
+    *HZ_SS_BITS.lock().unwrap() = ss_bits_for(height, &coinbase, ptxs.iter().map(|p| &p.tx));
     // This block's created output leaves (coinbase + every tx, unspendable skipped) — the guest's in-block
     // set, keyed by LEAF (height-bearing, so a colliding old coinbase's leaf differs and stays external).
     let mut created: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
@@ -807,7 +851,7 @@ fn build_full() -> (ChainState, BlockWitness) {
         // window) when the fetcher/bridge supplies them; else the benign placeholder for pre-S2 vectors
         // (130000/140000) that carry no `recent_times` — computed above (with the COV-1 hook applied).
         recent_times: recent_times.clone(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID,
+        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
     };
 
     // Build the witness: per tx a shared full-prevouts blob; per input a BlockInput (tx_first on input 0).
@@ -1150,7 +1194,7 @@ fn genesis_anchor() -> ChainState {
         tip_hash: arr(rev(hx(GENESIS_HASH))), utxo_roots: Forest::new().roots(), utxo_leaves: 0,
         cum_work: arr_u128(GENESIS_WORK), height: 0,
         prev_nbits: GENESIS_BITS, prev_time: GENESIS_TIME, epoch_start: GENESIS_TIME,
-        recent_times: vec![GENESIS_TIME], anchor_id: [0u8; 32], self_id: METHOD_ID,
+        recent_times: vec![GENESIS_TIME], anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
     }
 }
 
@@ -2750,7 +2794,7 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
     if agg_lite() {
         // Negative control (test-only): HAZYNC_LITE_BAD_MTP feeds chunks a wrong MTP; the aggregate must reject.
         let bump = std::env::var("HAZYNC_LITE_BAD_MTP").is_ok() as u32;
-        b.write(&(HZ_BLOCK_MTP.get().expect("agg-lite: build_full has not set the block MTP") + bump)).unwrap();
+        b.write(&(HZ_BLOCK_MTP.lock().unwrap().expect("agg-lite: build_full has not set the block MTP") + bump)).unwrap();
         b.write(&u32::from_le_bytes(w.header[68..72].try_into().unwrap())).unwrap();
     }
 
@@ -3041,6 +3085,18 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder) {
             println!("  swiftsync: COLLECT (no HAZYNC_ECMH_HINTS file)");
         }
     }
+    // Design B: the hint bits (mode 1), or mode 0 = no hints file. Read by the guest straight after the
+    // ECMH hints, and only in agg-lite builds -- so only written for agg-lite.
+    if agg_lite() {
+        match HZ_SS_BITS.lock().unwrap().as_ref() {
+            Some((nbits, words)) => {
+                b.write(&1u32).unwrap();
+                b.write(nbits).unwrap();
+                if !words.is_empty() { b.write_slice(words); }
+            }
+            None => { b.write(&0u32).unwrap(); b.write(&0u32).unwrap(); }
+        }
+    }
 }
 
 /// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
@@ -3182,6 +3238,124 @@ fn libzync_hints_cmd(out: &str) {
     println!("  ecmh: {} operations, {} bytes", leaves.len(), blob.len());
     println!("  time: chunks {t_chunks:.1} s, batch hints {:.1} s, aggregate + ecmh {:.1} s, total {:.1} s",
              t_batch - t_chunks, t0.elapsed().as_secs_f64() - t_batch, t0.elapsed().as_secs_f64());
+}
+
+/// libzync design B test tool: a SwiftSync hints file for stop height H, in the published hintsfile v0
+/// format (via the hintsfile crate), from block_<h>.json for h = 1..=H. Replays every block: indexed
+/// outputs enter a live set, every input removes its prevout; what survives at H is the file.
+fn ss_make_hints_cmd(h_stop: u32, dir: &str, out: &str) {
+    use hintsfile::{EliasFano, HintsfileBuilder};
+    let mut live: std::collections::HashMap<([u8; 32], u32), (u32, u32)> = std::collections::HashMap::new();
+    for h in 1..=h_stop {
+        let j = read_block_json(dir, h);
+        let cb: Transaction = deserialize(&hx(j["coinbase_hex"].as_str().unwrap())).unwrap();
+        let txs: Vec<Transaction> = j["txs"].as_array().unwrap().iter()
+            .map(|t| deserialize(&hx(t["raw"].as_str().unwrap())).unwrap()).collect();
+        let mut idx = 0u32;
+        for (ti, t) in std::iter::once(&cb).chain(txs.iter()).enumerate() {
+            if ti > 0 {
+                for i in &t.input {
+                    let k = (i.previous_output.txid.to_byte_array(), i.previous_output.vout);
+                    assert!(live.remove(&k).is_some(), "block {h} spends a coin the replay does not hold");
+                }
+            }
+            if ti == 0 && (h == 91_722 || h == 91_812) { continue; }
+            let txid = t.compute_txid().to_byte_array();
+            for (v, o) in t.output.iter().enumerate() {
+                if !out_spendable(o.script_pubkey.as_bytes()) { continue; }
+                live.insert((txid, v as u32), (h, idx));
+                idx += 1;
+            }
+        }
+    }
+    let mut per_h: Vec<Vec<u32>> = vec![Vec::new(); h_stop as usize + 1];
+    for (_, (h, k)) in &live { per_h[*h as usize].push(*k); }
+    let f = std::io::BufWriter::new(std::fs::File::create(out).expect("create hints file"));
+    let mut bld = HintsfileBuilder::new(f).initialize(h_stop).expect("hints header");
+    for h in 1..=h_stop as usize {
+        per_h[h].sort_unstable();
+        bld.append(EliasFano::compress(&per_h[h])).expect("append");
+    }
+    bld.finish().expect("finish");
+    println!("swiftsync-make-hints: H={h_stop}, {} coins unspent at H -> {out}", live.len());
+}
+
+/// libzync design B end-to-end check (execute mode): blocks 1..=H from block_<h>.json, each block's
+/// aggregate fed the PREVIOUS block's committed ChainState -- the real carry, not a synthetic anchor.
+/// Hints from $HAZYNC_SS_HINTS. Per block the aggregate runs twice: collect (to learn its ECMH leaves,
+/// which depend on the hint bits), then hinted. At H the SwiftSync total must be the identity.
+fn ss_sweep_cmd(h_stop: u32, dir: &str) {
+    use risc0_zkvm::Receipt;
+    use std::time::Instant;
+    let t0 = Instant::now();
+    let tmp = format!("{dir}/.sweep");
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::env::set_var("HAZYNC_BATCH_HINTS_DIR", format!("{tmp}/no-batch-hints"));
+    let mut prev = genesis_anchor();
+    let mut expect_hash = [0u8; 32];
+    let mut cycles = 0u64;
+    for h in 1..=h_stop {
+        std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
+        let (_, mut w) = build_full();
+        assert_eq!(w.height, h, "block_{h}.json holds height {}", w.height);
+        w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
+        let bounds = chunk_bounds(&w, nchunks_env());
+        let receipts: Vec<Receipt> = execute_chunks_parallel(&w, &bounds, hint_threads()).into_iter().map(|(r, _)| r).collect();
+        libzync_agg_prep(&mut w);
+        // The host's own copy of the hint-hash chain, from the bits it sends (checked against the guest at H).
+        if let Some((nbits, words)) = HZ_SS_BITS.lock().unwrap().as_ref() {
+            use sha2::{Digest, Sha256};
+            let mut d = Sha256::new();
+            d.update(b"libzync/swiftsync-hints/v1");
+            d.update(expect_hash);
+            d.update(h.to_le_bytes());
+            d.update(nbits.to_le_bytes());
+            for x in words { d.update(x.to_le_bytes()); }
+            expect_hash = d.finalize().into();
+        }
+        let run = |ecmh: &str| -> (Result<risc0_zkvm::SessionInfo, String>, Vec<u8>) {
+            std::env::set_var("HAZYNC_ECMH_HINTS", ecmh);
+            let mut log = Vec::new();
+            let r = {
+                let mut b = ExecutorEnv::builder();
+                b.stdout(&mut log);
+                write_aggregate_env(&mut b, &receipts, &prev, &w);
+                libzync_agg_tail(&mut b);
+                default_executor().execute(b.build().unwrap(), METHOD_ELF).map_err(|e| e.to_string())
+            };
+            (r, log)
+        };
+        let (_, clog) = run(&format!("{tmp}/none"));
+        let leaves: Vec<Vec<u8>> = String::from_utf8_lossy(&clog).lines()
+            .filter_map(|l| l.find("ECMHREC ").map(|at| hx(l[at + 8..].trim()))).collect();
+        let hints: Vec<u8> = leaves.iter().flat_map(|l| ecmh_hint(l)).collect();
+        let hp = format!("{tmp}/ecmh.bin");
+        std::fs::write(&hp, &hints).unwrap();
+        let (res, log) = run(&hp);
+        let s = match res {
+            Ok(s) => s,
+            Err(e) => {
+                for l in String::from_utf8_lossy(&log).lines().filter(|l| l.contains("agg-lite") || l.contains("swiftsync")) {
+                    println!("  {l}");
+                }
+                println!("swiftsync-sweep: block {h} REJECTED: {e}");
+                std::process::exit(1);
+            }
+        };
+        cycles += s.cycles();
+        prev = s.journal.decode::<ChainState>().expect("decode ChainState");
+        assert_eq!(prev.height, h);
+        if h % 50 == 0 || h == h_stop {
+            println!("  block {h}: forest leaves {}  ss_set {}  ({:.0} s)", prev.utxo_leaves, prev.ss_set, t0.elapsed().as_secs_f64());
+        }
+    }
+    let balanced = prev.ss_set == 0;
+    let hash_ok = prev.ss_hints == expect_hash;
+    println!("swiftsync-sweep: H={h_stop} aggregate cycles {cycles}");
+    println!("  ss_set={} -> {}", prev.ss_set, if balanced { "BALANCED (SwiftSync total is the identity)" } else { "NOT BALANCED" });
+    println!("  ss_hints {} {}", hex(&prev.ss_hints), if hash_ok { "== host's hash of the hints file" } else { "!= host's hash" });
+    println!("  forest: {} leaves (= coins unspent at H), roots {}", prev.utxo_leaves, prev.utxo_roots.iter().filter(|r| r.is_some()).count());
+    println!("{}", if balanced && hash_ok { "SWEEP_OK" } else { "SWEEP_FAIL" });
 }
 
 /// Big-endian a - b for 32-byte values with a >= b.
@@ -4965,6 +5139,16 @@ fn main() {
                  word(0), word(1), hex(&sha2::Sha256::digest(j)));
         return;
     }
+    if let Some(p) = args.iter().position(|a| a == "swiftsync-make-hints") {
+        let h: u32 = args.get(p + 1).and_then(|s| s.parse().ok()).expect("swiftsync-make-hints <H> <json dir> <out>");
+        ss_make_hints_cmd(h, &args[p + 2], &args[p + 3]);
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "swiftsync-sweep") {
+        let h: u32 = args.get(p + 1).and_then(|s| s.parse().ok()).expect("swiftsync-sweep <H> <json dir>");
+        ss_sweep_cmd(h, &args[p + 2]);
+        return;
+    }
     if let Some(p) = args.iter().position(|a| a == "libzync-hints") {
         libzync_hints_cmd(args.get(p + 1).expect("libzync-hints <out dir>"));
         return;
@@ -5231,7 +5415,7 @@ fn main() {
         epoch_start: 1_231_006_505, // epoch 0's first block = genesis timestamp
         // last 11 block timestamps up to 169 (approx; MTP unused pre-BIP113 at heights 170-172).
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID,
+        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
     };
 
     // Fold each real block. (170 has the P2PK spend; 171/172 are coinbase-only.)

@@ -269,10 +269,22 @@ const BIP34_HEIGHT: u32 = 227_931;
 
 const BIP30_OVERWRITE_A: [u8; 32] = [0xec, 0xca, 0xe0, 0x00, 0xe3, 0xc8, 0xe4, 0xe0, 0x93, 0x93, 0x63, 0x60, 0x43, 0x1f, 0x3b, 0x76, 0x03, 0xc5, 0x63, 0xc1, 0xff, 0x61, 0x81, 0x39, 0x0a, 0x4d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]; // block 91842
 const BIP30_OVERWRITE_B: [u8; 32] = [0x21, 0xd7, 0x7c, 0xcb, 0x4c, 0x08, 0x38, 0x6a, 0x04, 0xac, 0x01, 0x96, 0xae, 0x10, 0xf6, 0xa1, 0xd2, 0xc2, 0xa3, 0x77, 0x55, 0x8c, 0xa1, 0x90, 0xf1, 0x43, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00]; // block 91880
-/// libzync agg-lite: (height, creation MTP) of the coinbase each grandfathered block duplicates — 91812's
-/// for 91842, 91722's for 91880. MTP = GetMedianTimePast of the block before (91811 / 91721), from a node.
-const BIP30_OLD_A: (u32, u32) = (91_812, 1_289_756_038);
-const BIP30_OLD_B: (u32, u32) = (91_722, 1_289_721_830);
+/// A block hash as displayed (big-endian hex) -> internal byte order, at compile time.
+const fn hash_le(s: &str) -> [u8; 32] {
+    const fn nib(c: u8) -> u8 {
+        match c { b'0'..=b'9' => c - b'0', b'a'..=b'f' => c - b'a' + 10, _ => panic!("hash_le: not lowercase hex") }
+    }
+    let b = s.as_bytes();
+    assert!(b.len() == 64, "hash_le: need 64 hex digits");
+    let mut o = [0u8; 32];
+    let mut i = 0;
+    while i < 32 { o[31 - i] = (nib(b[2 * i]) << 4) | nib(b[2 * i + 1]); i += 1; }
+    o
+}
+// libzync agg-lite (hints-file convention): blocks whose coinbase coins are never accounted because a later
+// block duplicates them — 91,812 (by 91,842) and 91,722 (by 91,880). Internal byte order, like the above.
+const BIP30_UNSPENDABLE_A: [u8; 32] = hash_le("00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f"); // 91812
+const BIP30_UNSPENDABLE_B: [u8; 32] = hash_le("00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e"); // 91722
 
 // --- libc glue for bare-metal C/C++ in the zkVM guest: malloc family + abort, backed by the
 // guest's Rust global allocator (size stored in a 16-byte header before each block). ---
@@ -489,6 +501,7 @@ struct BlockResult {
     block_time: u32,
     root_next_roots: Vec<Option<[u8; 32]>>,
     root_next_leaves: u64,
+    ss_hints: [u8; 32],       // libzync design B: the running hint-bit hash after this block
 }
 
 fn dsha256(data: &[u8]) -> [u8; 32] {
@@ -1267,6 +1280,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         block_time: u32::from_le_bytes(w.header[68..72].try_into().unwrap()),
         root_next_roots: stump.normalized(),
         root_next_leaves: stump.num_leaves,
+        ss_hints: [0u8; 32], // design B lives on the agg-lite path only
     }
 }
 
@@ -1313,6 +1327,13 @@ struct ChainState {
     // is journal-indistinguishable from a genesis-anchored one.
     anchor_id: [u8; 32],
     self_id: [u32; 8],  // S1: the guest image id this proof recursed against (verifier asserts ==METHOD_ID)
+    // libzync SwiftSync, design B (experimental/libzync-bench/HANDOVER_DESIGN.md). The ECMH running total
+    // over every coin created and marked SPENT-BY-H in the hints file, minus every coin spent (ss_set 0 =
+    // the identity), and a running hash of the hint bits. At H the verifier requires ss_set == 0 and
+    // ss_hints == the hash of the published hints file. Identity / zero, carried unchanged, elsewhere.
+    ss_set: u32,
+    ss_acc: [u32; 16],
+    ss_hints: [u8; 32],
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state
@@ -1467,6 +1488,7 @@ fn chain_step() {
         recent_times,
         anchor_id,
         self_id,
+        ss_set: prev.ss_set, ss_acc: prev.ss_acc, ss_hints: prev.ss_hints,
     });
 }
 
@@ -1967,6 +1989,16 @@ fn aggregate() {
         }
         swiftsync::install(collect == 1, flat);
     }
+    // libzync design B: this block's SwiftSync hint bits, one per indexed output (the hints file's index
+    // order). mode 0 = no hints file: every created coin goes to the ECMH total, as before.
+    #[cfg(all(feature = "swiftsync", feature = "agg-lite"))]
+    let ss_bits: (u32, u32, Vec<u32>) = {
+        let mode: u32 = env::read();
+        let nbits: u32 = env::read();
+        let mut v = vec![0u32; (nbits as usize).div_ceil(32)];
+        if !v.is_empty() { env::read_slice(&mut v); }
+        (mode, nbits, v)
+    };
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev");
@@ -1986,9 +2018,15 @@ fn aggregate() {
     let anchor_id = if is_base == 1 { dsha256(&prev_journal) } else { prev.anchor_id };
     let prev_mtp = median_time_past(&prev.recent_times);
 
+    #[cfg(all(feature = "swiftsync", feature = "agg-lite"))]
+    swiftsync::start(prev.ss_set, &prev.ss_acc);
     #[cfg(feature = "agg-lite")]
     let r = { let _ = (&all_binds, chunks_ok, &chunk_wtxids, &chunk_leaves, &chunk_seqs, &chunk_vers);
-              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals) };
+              #[cfg(feature = "swiftsync")]
+              let ss = (&ss_bits, prev.ss_hints);
+              #[cfg(not(feature = "swiftsync"))]
+              let ss = (&(0u32, 0u32, Vec::<u32>::new()), prev.ss_hints);
+              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals, ss) };
     #[cfg(not(feature = "agg-lite"))]
     let r = validate_block_wtx(&w, prev_mtp, Some((&all_binds, chunks_ok)), &chunk_wtxids,
                                &chunk_leaves, &chunk_seqs, &chunk_vers);
@@ -2007,10 +2045,15 @@ fn aggregate() {
     let mut recent_times = prev.recent_times.clone();
     recent_times.push(r.block_time);
     if recent_times.len() > 11 { let e = recent_times.len() - 11; recent_times.drain(0..e); }
+    #[cfg(all(feature = "swiftsync", feature = "agg-lite"))]
+    let ((ss_set, ss_acc), ss_hints) = (swiftsync::total(), r.ss_hints);
+    #[cfg(not(all(feature = "swiftsync", feature = "agg-lite")))]
+    let (ss_set, ss_acc, ss_hints) = (prev.ss_set, prev.ss_acc, prev.ss_hints);
     env::commit(&ChainState {
         kind: KIND_CHAIN,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
+        ss_set, ss_acc, ss_hints,
     });
 }
 

@@ -32,7 +32,7 @@ for t in b["tx"][1:]:
     txs.append({"raw": t["hex"], "prevouts": pv})
 
 recent = []
-for k in range(h - 1, h - 12, -1):
+for k in range(h - 1, max(h - 12, -1), -1):   # clamps at genesis for h < 12
     recent.append(json.loads(cli("getblockheader", cli("getblockhash", k)))["time"])
 
 j = {"height": h, "bits": int(b["bits"], 16), "time": b["time"], "nonce": b["nonce"], "version": b["version"],

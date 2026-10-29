@@ -172,7 +172,10 @@ impl Rd<'_> {
 
 /// Aggregate side. Same checks, same order of SwiftSync operations, as `validate_block_staged`'s
 /// aggregation path, with every per-transaction fact taken from the chunk journals.
-pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) -> BlockResult {
+/// `ss` = ((mode, nbits, packed bits), previous hint hash): design B's SwiftSync hint bits for this block,
+/// one per INDEXED output (see below), and the running hash they extend. mode 0 = no hints file.
+pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
+                           ss: (&(u32, u32, Vec<u32>), [u8; 32])) -> BlockResult {
     let mut all_ok = true;
     assert!(w.header.len() == 80, "block header must be exactly 80 bytes, got {}", w.header.len());
     let block_time = u32::from_le_bytes(w.header[68..72].try_into().unwrap());
@@ -200,11 +203,16 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
         let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
         let n = unsafe { tx_out_leaves(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height, 1, mtp,
                                        buf.as_mut_ptr(), cb_txid.as_mut_ptr()) };
-        for l in 0..n as usize {
-            let mut h = [0u8; 32];
-            h.copy_from_slice(&buf[32 * l..32 * l + 32]);
-            output_leaves.push(h);
-            out_pos.push(0);
+        // BIP30, the hints-file convention (Core's IsBIP30Unspendable): the coinbase coins of 91,722 and
+        // 91,812 are never indexed or accounted. Their outpoints come back, and are accounted, when 91,880
+        // and 91,842 duplicate them. Same final set as Core's overwrite, with no subtraction needed.
+        if block_hash != BIP30_UNSPENDABLE_A && block_hash != BIP30_UNSPENDABLE_B {
+            for l in 0..n as usize {
+                let mut h = [0u8; 32];
+                h.copy_from_slice(&buf[32 * l..32 * l + 32]);
+                output_leaves.push(h);
+                out_pos.push(0);
+            }
         }
         n
     };
@@ -286,8 +294,16 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
     // Spends then adds, in the same order as the full path (so the same ECMH hints apply).
     // `created` = every created leaf with its creating tx position, sorted by word key; a duplicate
     // leaf keeps its FIRST (lowest) position, as the full path's `entry().or_insert` does.
-    let mut created: Vec<([u64; 4], u32)> =
-        output_leaves.iter().zip(&out_pos).map(|(l, p)| (key(l), *p)).collect();
+    // Design B: one hint bit per indexed output (= every entry of output_leaves, in order). 1 = still
+    // UNSPENT at the hints file's stop height H.
+    let (&(ss_mode, ss_nbits, ref ss_words), prev_hints) = (ss.0, ss.1);
+    if ss_mode == 1 && ss_nbits as usize != output_leaves.len() {
+        env::log(&format!("agg-lite: REJECT hint bits {} != indexed outputs {}", ss_nbits, output_leaves.len()));
+        all_ok = false;
+    }
+    let bit = |k: usize| ss_mode == 1 && k < ss_nbits as usize && (ss_words[k / 32] >> (k % 32)) & 1 == 1;
+    let mut created: Vec<([u64; 4], u32, u32)> =
+        output_leaves.iter().zip(&out_pos).enumerate().map(|(k, (l, p))| (key(l), *p, k as u32)).collect();
     created.sort_unstable();
     created.dedup_by_key(|e| e.0);
     let mut spent = vec![false; created.len()];
@@ -299,28 +315,36 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
                 if created[i].1 >= *txp { all_ok = false; }
                 if spent[i] { all_ok = false; }
                 spent[i] = true;
+                // A coin spent in its own block cannot be unspent at H: the hint lies.
+                if bit(created[i].2 as usize) {
+                    env::log("agg-lite: REJECT a hint marks a coin unspent-at-H that this block spends");
+                    all_ok = false;
+                }
             }
             Err(_) => swiftsync::sub(leaf),
         }
     }
-    // BIP30, the two grandfathered blocks: Core OVERWRITES the still-unspent coin of the coinbase this
-    // block duplicates, so that coin leaves the UTXO set. SwiftSync mirrors it with one subtraction per
-    // superseded output. The old coin's leaf is this same coinbase at the ORIGINAL height and creation
-    // MTP, both pinned below rather than supplied, so a prover has no choice to make: a wrong leaf would
-    // leave the running total off and fail the handover check.
-    if is_bip30_block {
-        let (old_height, old_mtp) = if block_hash == BIP30_OVERWRITE_A { BIP30_OLD_A } else { BIP30_OLD_B };
-        let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
-        let mut _t = [0u8; 32];
-        let n = unsafe { tx_out_leaves(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, old_height, 1, old_mtp,
-                                       buf.as_mut_ptr(), _t.as_mut_ptr()) } as usize;
-        if n == 0 { all_ok = false; }
-        for i in 0..n { swiftsync::sub(buf[i * 32..i * 32 + 32].try_into().unwrap()); }
-    }
-    for leaf in &output_leaves {
-        if let Ok(i) = find(&key(leaf)) { if !spent[i] { swiftsync::add(leaf); } }
+    // Design B: survivors (bit 1) go into an append-only utreexo forest -- at H it holds exactly the UTXO
+    // set, in creation order; everything else into the ECMH total, which must be the identity at H.
+    let mut stump = utreexo::Stump::new(w.root_prev.roots.clone(), w.root_prev.num_leaves);
+    for (k, leaf) in output_leaves.iter().enumerate() {
+        if let Ok(i) = find(&key(leaf)) {
+            if spent[i] { continue; }
+            if bit(k) { stump.add(*leaf); } else { swiftsync::add(leaf); }
+        }
     }
     swiftsync::report();
+    let ss_hints = if ss_mode == 1 {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"libzync/swiftsync-hints/v1");
+        h.update(prev_hints);
+        h.update(w.height.to_le_bytes());
+        h.update(ss_nbits.to_le_bytes());
+        for x in ss_words.iter() { h.update(x.to_le_bytes()); }
+        let d: [u8; 32] = h.finalize().into();
+        d
+    } else { prev_hints };
 
     let pow_ok = unsafe { check_pow(w.header.as_ptr()) } == 1;
     let mut mroot = [0u8; 32];
@@ -408,8 +432,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
         tip_hash: block_hash,
         nbits: u32::from_le_bytes(w.header[72..76].try_into().unwrap()),
         block_time,
-        root_next_roots: normalize(w.root_prev.roots.clone()),
-        root_next_leaves: w.root_prev.num_leaves,
+        root_next_roots: normalize(stump.roots.clone()),
+        root_next_leaves: stump.num_leaves,
+        ss_hints,
         ..Default::default()
     }
 }
