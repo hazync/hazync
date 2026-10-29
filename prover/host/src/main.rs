@@ -8589,7 +8589,17 @@ come back by itself. Start one against this coordinator, or re-run.");
         }
         println!("    AGG_EARLY: all {agg_nchunks} chunk receipts present after {:.1} s of waiting",
                  t_wait.elapsed().as_secs_f64());
-        read_chunk_receipts(agg_nchunks).into_iter().map(|r| match r.inner {
+        // Resolve order is the SESSION's assumption order, which need not be chunk order: match each
+        // session assumption to the real receipt with the same claim digest. A miss is a loud failure.
+        use risc0_zkvm::sha::Digestible;
+        let real = read_chunk_receipts(agg_nchunks);
+        let digests: Vec<_> = real.iter().map(|r| r.claim().expect("chunk receipt claim").digest()).collect();
+        let order: Vec<usize> = session.assumptions.iter().map(|(a, _)| {
+            digests.iter().position(|d| *d == a.claim)
+                .unwrap_or_else(|| panic!("no chunk receipt has the claim of aggregate assumption {}", a.claim))
+        }).collect();
+        println!("    AGG_EARLY: resolve order (chunk index per session assumption) {order:?}");
+        order.into_iter().map(|k| match real[k].inner.clone() {
             risc0_zkvm::InnerReceipt::Succinct(sr) => sr.into_unknown(),
             risc0_zkvm::InnerReceipt::Composite(c) =>
                 server.composite_to_succinct(&c).expect("composite -> succinct").into_unknown(),
