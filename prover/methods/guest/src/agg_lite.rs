@@ -21,8 +21,8 @@
 //! - CONTEXT: each chunk commits the height, block hash, median-time-past and block time it used; the
 //!   aggregate requires them equal to its own.
 //!
-//! ⚠ SwiftSync only: there is no per-input utreexo proof here. The two BIP30-grandfathered blocks are
-//! rejected (they need a utreexo overwrite). Journal layout, all u32 LE words:
+//! ⚠ SwiftSync only: there is no per-input utreexo proof here. At the two BIP30-grandfathered blocks
+//! the superseded coinbase coins are SUBTRACTED from the SwiftSync total (pinned old height + MTP). Journal layout, all u32 LE words:
 //!   header: KIND_CHUNK_LITE, all_valid, height, block_hash[8], mtp, block_time, n_records
 //!   record: txid[8] prevouts_hash[8] start count first
 //!     if first: wtxid[8] has_witness n_vin fee[2] weight[2] sigops[2] n_out out_leaf[8]*n_out
@@ -185,8 +185,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
         || (version < 4 && w.height >= 388_381) {
         all_ok = false;
     }
-    // The grandfathered BIP30 overwrite needs a utreexo delete this path does not carry.
-    if block_hash == BIP30_OVERWRITE_A || block_hash == BIP30_OVERWRITE_B || w.bip30.is_some() { all_ok = false; }
+    // The two grandfathered BIP30 blocks are handled below with SwiftSync subtractions instead of the
+    // full path's utreexo delete, so no overwrite witness is ever accepted here.
+    let is_bip30_block = block_hash == BIP30_OVERWRITE_A || block_hash == BIP30_OVERWRITE_B;
+    if w.bip30.is_some() { all_ok = false; }
 
     // Capacity up front: the bump allocator never frees, so every Vec regrowth copies AND leaks.
     let words: usize = journals.iter().map(|j| j.len()).sum();
@@ -274,7 +276,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
         }
         if r.bad || r.i != j.len() { all_ok = false; }
     }
-    let covered = match cur { Some((_, _, n, next)) => next == n, None => false };
+    // No records at all = a coinbase-only block (common before ~2011): coverage holds trivially. Safe
+    // because the merkle check below binds the full txid list, so dropping every record of a block that
+    // HAS other transactions still fails there.
+    let covered = match cur { Some((_, _, n, next)) => next == n, None => true };
     if !covered { all_ok = false; }
     if !all_ok { env::log(&format!("agg-lite: REJECT after the record walk (transactions={}, last covered={covered})", tx_pos)); }
 
@@ -297,6 +302,20 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
             }
             Err(_) => swiftsync::sub(leaf),
         }
+    }
+    // BIP30, the two grandfathered blocks: Core OVERWRITES the still-unspent coin of the coinbase this
+    // block duplicates, so that coin leaves the UTXO set. SwiftSync mirrors it with one subtraction per
+    // superseded output. The old coin's leaf is this same coinbase at the ORIGINAL height and creation
+    // MTP, both pinned below rather than supplied, so a prover has no choice to make: a wrong leaf would
+    // leave the running total off and fail the handover check.
+    if is_bip30_block {
+        let (old_height, old_mtp) = if block_hash == BIP30_OVERWRITE_A { BIP30_OLD_A } else { BIP30_OLD_B };
+        let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
+        let mut _t = [0u8; 32];
+        let n = unsafe { tx_out_leaves(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, old_height, 1, old_mtp,
+                                       buf.as_mut_ptr(), _t.as_mut_ptr()) } as usize;
+        if n == 0 { all_ok = false; }
+        for i in 0..n { swiftsync::sub(buf[i * 32..i * 32 + 32].try_into().unwrap()); }
     }
     for leaf in &output_leaves {
         if let Ok(i) = find(&key(leaf)) { if !spent[i] { swiftsync::add(leaf); } }
@@ -327,7 +346,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>]) ->
         && w.smt.coinbase_outputs == cb_outputs
         && w.smt.spends.len() == cb_spends.len()
         && w.smt.spends.iter().zip(cb_spends.iter()).all(|(s, d)| &s.coinbase_txid == d);
-    let overwrite_ok = w.smt.smt_overwrite.is_none();
+    // Same rule as the full path: an SMT overwrite exactly at the two grandfathered blocks.
+    let overwrite_ok = w.smt.smt_overwrite.is_some() == is_bip30_block;
     let (bip30_ok, out_smt_root) = if !ids_distinct || !spends_ok || !overwrite_ok {
         (false, w.in_smt_root)
     } else {

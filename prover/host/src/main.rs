@@ -866,7 +866,7 @@ fn build_full() -> (ChainState, BlockWitness) {
     for v in 0..coinbase.output.len() { if !out_spendable(coinbase.output[v].script_pubkey.as_bytes()) { continue; } let l = out_leaf_of(&coinbase, &cb_txid, v, height, true, cmtp); if spent_in_block.contains(&l) { continue; } forest.add(l); new_outputs.push(l); }
     for p in &ptxs { for v in 0..p.tx.output.len() { if !out_spendable(p.tx.output[v].script_pubkey.as_bytes()) { continue; } let l = out_leaf_of(&p.tx, &p.txid, v, height, false, cmtp); if spent_in_block.contains(&l) { continue; } forest.add(l); new_outputs.push(l); } }
     let root_next = wire_stump(&forest);
-    let (in_smt_root, smt) = smt_witness_standalone(cb_txid, cb_spendable_outputs(&coinbase),
+    let (in_smt_root, smt) = smt_witness_standalone_at(height, cb_txid, cb_spendable_outputs(&coinbase),
         &cb_spends_from(&inputs, &txs));
     let mut w = BlockWitness { header, height, coinbase_tx: hx(cb_hex), txids: PackedHashes(txids), root_prev, txs, tx_prevouts, inputs, root_next, bip30: None, in_smt_root, smt };
     // --- reject-path negative-test hooks (test-only, inert unless the env var is set; NEVER in production) ---
@@ -3707,6 +3707,29 @@ fn smt_witness_standalone(
     }
     let root_in = t.root();
     let w = smt_advance(&mut t, coinbase_txid, coinbase_outputs, coinbase_spends, false).0;
+    (root_in, w)
+}
+
+/// `smt_witness_standalone`, but aware of the two BIP30-grandfathered heights (91,842 / 91,880): there the
+/// duplicated coinbase is still UNSPENT, so the tree is seeded holding it and the witness carries the
+/// overwrite claim instead of an absence proof. The guest gates this on the block HASH, not the height.
+fn smt_witness_standalone_at(
+    height: u32,
+    coinbase_txid: [u8; 32],
+    coinbase_outputs: u32,
+    coinbase_spends: &[[u8; 32]],
+) -> ([u8; 32], SmtBlockWitness) {
+    if height != 91_842 && height != 91_880 {
+        return smt_witness_standalone(coinbase_txid, coinbase_outputs, coinbase_spends);
+    }
+    let mut t = Smt::new();
+    for s in coinbase_spends {
+        let c = t.get(s).unwrap_or(0);
+        t.insert(*s, c + 1);
+    }
+    t.insert(coinbase_txid, coinbase_outputs.max(1));
+    let root_in = t.root();
+    let w = smt_advance(&mut t, coinbase_txid, coinbase_outputs, coinbase_spends, true).0;
     (root_in, w)
 }
 

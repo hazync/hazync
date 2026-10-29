@@ -1,0 +1,8 @@
+base: fallback=2 ok=true  all_valid=1 journal sha256 e11c15952126188b REAL_EXIT=0
+t1_bitflip: fallback=3 ok=true  all_valid=1 journal sha256 e11c15952126188b REAL_EXIT=0
+t2_negR: fallback=2 ok=false  all_valid=0 journal sha256 6c312145301765b4 REAL_EXIT=0
+t3_forge: fallback=397 ok=false  all_valid=0 journal sha256 6c312145301765b4 REAL_EXIT=0
+t4_truncate: fallback=12 ok=true  all_valid=1 journal sha256 e11c15952126188b REAL_EXIT=0
+t5_allzero: fallback=405 ok=true  all_valid=1 journal sha256 e11c15952126188b REAL_EXIT=0
+t6_schnorr_negR: fallback=3 ok=true  all_valid=1 journal sha256 e11c15952126188b REAL_EXIT=0
+NEG_DONE
