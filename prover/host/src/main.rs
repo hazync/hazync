@@ -4928,6 +4928,20 @@ fn main() {
         agg_exec_fake();
         return;
     }
+    if let Some(p) = args.iter().position(|a| a == "exec-chunk") {
+        // libzync negative tests: execute ONE chunk with the current hint env and report its verdict.
+        let idx: usize = args.get(p + 1).and_then(|s| s.parse().ok()).expect("exec-chunk <index>");
+        let (_, w) = build_full();
+        let bounds = chunk_bounds(&w, nchunks_env());
+        let (r, log) = execute_chunks_parallel(&w, &bounds[idx..idx + 1], 1).pop().expect("one chunk");
+        for l in String::from_utf8_lossy(&log).lines().filter(|l| l.contains("batch:")) { println!("  {l}"); }
+        let j = &r.journal.bytes;
+        let word = |k: usize| u32::from_le_bytes(j[4 * k..4 * k + 4].try_into().unwrap());
+        use sha2::Digest;
+        println!("exec-chunk {idx} [{}..{}): kind={:#x} all_valid={} journal sha256 {}", bounds[idx].0, bounds[idx].1,
+                 word(0), word(1), hex(&sha2::Sha256::digest(j)));
+        return;
+    }
     if let Some(p) = args.iter().position(|a| a == "libzync-hints") {
         libzync_hints_cmd(args.get(p + 1).expect("libzync-hints <out dir>"));
         return;
