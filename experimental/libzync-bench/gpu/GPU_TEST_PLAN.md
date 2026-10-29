@@ -35,11 +35,13 @@ time.
 The guest is NOT rebuilt on the GPU box. `methods/build.rs` already supports `HAZYNC_GUEST_ELF`:
 - The host embeds a prebuilt guest and REFUSES it unless its sha256 and image id equal
   `reproduce/GUEST_ELF_SHA256` and `reproduce/METHOD_ID`.
-- Branch **`libzync-gpu`** = `libzync` with those two pins set to the round-13 guest.
+- Branch **`libzync-gpu`** (pushed, commit 54091e4) = `libzync` with those two pins set to the round-13 guest:
+  METHOD_ID `5e460bf3…`, guest sha256 `d90d1225…`.
+- Checked on the laptop: the pinned guest builds, and a guest with one extra byte is REFUSED on its sha256.
 - Result: the box needs no Core / secp trees and no riscv toolchain, and its cycle counts must equal
   the laptop's exactly.
 
-Bundle (`libzync-bundle.tgz`, ~80 MB, scp from the laptop or via B2):
+Bundle: **`~/libzync-gpu/libzync-bundle.tgz` on the laptop** (70.6 MB, its sha256 is next to it); scp it to the pod or move it via B2:
 
 | file | what |
 |---|---|
