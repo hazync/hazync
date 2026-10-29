@@ -2810,7 +2810,9 @@ fn prove_chunk(idx: usize) {
     let receipt = prove_session_resilient(&server, &ctx, &session);
     receipt.verify(METHOD_ID).unwrap();
     let out = std::env::var("HAZYNC_OUT").unwrap_or_else(|_| format!("chunk_{idx}.hzk"));
-    std::fs::write(&out, bincode::serialize(&receipt).unwrap()).unwrap();
+    // Write then rename: seg-serve's HAZYNC_AGG_EARLY polls for this file and must never read half of it.
+    std::fs::write(format!("{out}.tmp"), bincode::serialize(&receipt).unwrap()).unwrap();
+    std::fs::rename(format!("{out}.tmp"), &out).unwrap();
     println!("chunk {idx} ({} inputs) proved in {:.0}s -> {out}", hi - lo, t.elapsed().as_secs_f64());
 }
 
@@ -3041,6 +3043,45 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder) {
     }
 }
 
+/// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
+/// cores). Returns per chunk a FakeReceipt carrying its claim and journal, plus the guest's captured
+/// stdout (BATCHREC lines in collect mode). Used by `libzync-hints` and by seg-serve's HAZYNC_AGG_EARLY.
+fn execute_chunks_parallel(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
+    -> Vec<(risc0_zkvm::Receipt, Vec<u8>)> {
+    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<Option<(Receipt, Vec<u8>)>>> =
+        std::sync::Mutex::new((0..bounds.len()).map(|_| None).collect());
+    std::thread::scope(|s| {
+        for _ in 0..threads.min(bounds.len()).max(1) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(&(lo, hi)) = bounds.get(i) else { break };
+                let mut log = Vec::new();
+                let session = {
+                    let mut b = ExecutorEnv::builder();
+                    b.segment_limit_po2(seg_po2());
+                    b.stdout(&mut log);
+                    b.write(&4u32).unwrap();
+                    b.write(&w.height).unwrap();
+                    b.write(&header_hash(&w.header)).unwrap();
+                    write_chunk_inputs(&mut b, w, lo, hi);
+                    default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("execute chunk")
+                };
+                let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
+                let r = Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone());
+                done.lock().unwrap()[i] = Some((r, log));
+            });
+        }
+    });
+    done.into_inner().unwrap().into_iter().map(|x| x.expect("chunk")).collect()
+}
+
+fn hint_threads() -> usize {
+    std::env::var("HAZYNC_HINT_THREADS").ok().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)).max(1)
+}
+
 /// libzync: `libzync-hints <dir>` — every hint file a block needs, in ONE pass (GPU_RESULTS.md next step 6).
 ///
 /// Writes `<dir>/hg/batch_<lo>_<hi>.bin` (batch-verify hints) and `<dir>/ecmh.bin` (SwiftSync hints), byte for
@@ -3054,7 +3095,7 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder) {
 /// chunk fail, never make a bad signature pass. Needs the same HAZYNC_* env as proving (chunk bounds!).
 fn libzync_hints_cmd(out: &str) {
     use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey};
-    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
+    use risc0_zkvm::Receipt;
     use std::time::Instant;
     let t0 = Instant::now();
     let (anchor, mut w) = build_full();
@@ -3066,36 +3107,8 @@ fn libzync_hints_cmd(out: &str) {
     // Collect mode for both hint kinds: no batch file in an empty dir, no ECMH file at all.
     std::env::set_var("HAZYNC_BATCH_HINTS_DIR", &empty);
     std::env::set_var("HAZYNC_ECMH_HINTS", format!("{empty}/none"));
-    let threads: usize = std::env::var("HAZYNC_HINT_THREADS").ok().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)).max(1);
-
-    // Each chunk's collect execution: (claim receipt, journal, captured guest stdout).
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let done: std::sync::Mutex<Vec<Option<(Receipt, Vec<u8>)>>> =
-        std::sync::Mutex::new((0..bounds.len()).map(|_| None).collect());
-    std::thread::scope(|s| {
-        for _ in 0..threads.min(bounds.len()) {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some(&(lo, hi)) = bounds.get(i) else { break };
-                let mut log = Vec::new();
-                let session = {
-                    let mut b = ExecutorEnv::builder();
-                    b.segment_limit_po2(seg_po2());
-                    b.stdout(&mut log);
-                    b.write(&4u32).unwrap();
-                    b.write(&w.height).unwrap();
-                    b.write(&header_hash(&w.header)).unwrap();
-                    write_chunk_inputs(&mut b, &w, lo, hi);
-                    default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("collect chunk")
-                };
-                let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
-                let r = Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone());
-                done.lock().unwrap()[i] = Some((r, log));
-            });
-        }
-    });
-    let done: Vec<(Receipt, Vec<u8>)> = done.into_inner().unwrap().into_iter().map(|x| x.expect("chunk")).collect();
+    let threads = hint_threads();
+    let done = execute_chunks_parallel(&w, &bounds, threads);
     let t_chunks = t0.elapsed().as_secs_f64();
 
     // Batch hints: 68 bytes per logged verify, in call order: u32 LE valid | R.x BE | R.y BE.
@@ -7772,6 +7785,12 @@ fn seg_serve_cmd() {
     // guest reads a fixed order, so a divergence desynchronises its stream rather than failing loudly.
     let agg = std::env::var("HAZYNC_AGG").is_ok();
     let range_n: Option<u32> = std::env::var("HAZYNC_RANGE").ok().and_then(|s| s.parse().ok());
+    // libzync HAZYNC_AGG_EARLY=1: start the aggregate BEFORE the chunk receipts exist. Its execution only
+    // needs each chunk's claim (journal + image id), which this box gets by executing the chunks itself, in
+    // parallel, in seconds. The receipts are needed only by the resolves at the very end, so they are read
+    // there -- meanwhile the aggregate's segments are proved alongside the chunks (GPU_RESULTS.md step 1).
+    let agg_early = agg && std::env::var("HAZYNC_AGG_EARLY").as_deref() == Ok("1");
+    let mut agg_nchunks = 0usize;
     let mut b = ExecutorEnv::builder();
     // The only witness field the rest of this function needs. A bundle carries it too, so mode 6 never
     // builds a BlockWitness — there is no HAZYNC_BLOCK fixture for a board block, which is the whole
@@ -7787,8 +7806,15 @@ fn seg_serve_cmd() {
         let (anchor, mut w) = build_full();
         height = w.height;
         if agg {
-            let nchunks = chunk_bounds(&w, nchunks_env()).len();
-            let receipts = read_chunk_receipts(nchunks);
+            let bounds = chunk_bounds(&w, nchunks_env());
+            agg_nchunks = bounds.len();
+            let receipts: Vec<risc0_zkvm::Receipt> = if agg_early {
+                let t = std::time::Instant::now();
+                let r: Vec<_> = execute_chunks_parallel(&w, &bounds, hint_threads()).into_iter().map(|(r, _)| r).collect();
+                println!("  AGG_EARLY: {} chunk claims from local execution in {:.1} s; receipts are awaited at resolve",
+                         r.len(), t.elapsed().as_secs_f64());
+                r
+            } else { read_chunk_receipts(bounds.len()) };
             println!("=== segment coordinator (push): AGGREGATE of {} chunk receipts, block {} po2 {} ===",
                      receipts.len(), w.height, seg_po2());
             // libzync: the same aggregate stream as agg-chunks, or the guest desyncs.
@@ -8552,7 +8578,26 @@ come back by itself. Start one against this coordinator, or re-run.");
     // coordinator, which is the whole point when the segment coordinator is the machine everything else is
     // waiting on. Honest about the size of the prize: sixteen sequential steps, not log2(16).
     let mut conditional = level.pop().expect("one left");
-    let assumptions = server.session_assumptions_succinct(&session).expect("session assumptions");
+    let assumptions = if agg_early {
+        // The session holds placeholder (fake) assumptions; resolve with the REAL chunk receipts, in the
+        // same order the guest verified them (chunk order). Wait for the files: the chunk fleet may still
+        // be finishing. Each one is verified against METHOD_ID on the way in (read_chunk_receipts).
+        let dir = std::env::var("HAZYNC_RECEIPTS").unwrap_or_else(|_| ".".into());
+        let t_wait = Instant::now();
+        while (0..agg_nchunks).any(|i| !std::path::Path::new(&format!("{dir}/chunk_{i}.hzk")).exists()) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        println!("    AGG_EARLY: all {agg_nchunks} chunk receipts present after {:.1} s of waiting",
+                 t_wait.elapsed().as_secs_f64());
+        read_chunk_receipts(agg_nchunks).into_iter().map(|r| match r.inner {
+            risc0_zkvm::InnerReceipt::Succinct(sr) => sr.into_unknown(),
+            risc0_zkvm::InnerReceipt::Composite(c) =>
+                server.composite_to_succinct(&c).expect("composite -> succinct").into_unknown(),
+            _ => panic!("chunk receipt is neither succinct nor composite"),
+        }).collect::<Vec<_>>()
+    } else {
+        server.session_assumptions_succinct(&session).expect("session assumptions")
+    };
     let nres = assumptions.len();
     // hazync#252 lever 1: HAZYNC_RESOLVE_LOCAL=1 runs the chain HERE instead. Distributing it bought
     // nothing but moving work off this box -- it is a chain, one step outstanding at a time -- and
