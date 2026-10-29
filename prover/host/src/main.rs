@@ -3041,6 +3041,176 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder) {
     }
 }
 
+/// libzync: `libzync-hints <dir>` — every hint file a block needs, in ONE pass (GPU_RESULTS.md next step 6).
+///
+/// Writes `<dir>/hg/batch_<lo>_<hi>.bin` (batch-verify hints) and `<dir>/ecmh.bin` (SwiftSync hints), byte for
+/// byte what make_batch_hints.py / make_ecmh_hints.py write from a collect log.
+/// - All chunks execute in COLLECT mode at once, one thread each; the guest's BATCHREC lines are captured
+///   from each session's stdout instead of a log file.
+/// - R = u1·G + u2·Q is computed with libsecp, not pure Python.
+/// - The aggregate's ECMH collect reuses those chunk executions: a collect-mode chunk commits the same
+///   journal as a hinted one, so no second pass over the chunks.
+/// ⛔ The hints are untrusted input to the guest (it re-checks every one), so a bug here can only make a
+/// chunk fail, never make a bad signature pass. Needs the same HAZYNC_* env as proving (chunk bounds!).
+fn libzync_hints_cmd(out: &str) {
+    use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey};
+    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
+    use std::time::Instant;
+    let t0 = Instant::now();
+    let (anchor, mut w) = build_full();
+    let bounds = chunk_bounds(&w, nchunks_env());
+    let hg = format!("{out}/hg");
+    let empty = format!("{out}/.collect");
+    std::fs::create_dir_all(&hg).expect("hint dir");
+    std::fs::create_dir_all(&empty).expect("collect dir");
+    // Collect mode for both hint kinds: no batch file in an empty dir, no ECMH file at all.
+    std::env::set_var("HAZYNC_BATCH_HINTS_DIR", &empty);
+    std::env::set_var("HAZYNC_ECMH_HINTS", format!("{empty}/none"));
+    let threads: usize = std::env::var("HAZYNC_HINT_THREADS").ok().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)).max(1);
+
+    // Each chunk's collect execution: (claim receipt, journal, captured guest stdout).
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<Option<(Receipt, Vec<u8>)>>> =
+        std::sync::Mutex::new((0..bounds.len()).map(|_| None).collect());
+    std::thread::scope(|s| {
+        for _ in 0..threads.min(bounds.len()) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(&(lo, hi)) = bounds.get(i) else { break };
+                let mut log = Vec::new();
+                let session = {
+                    let mut b = ExecutorEnv::builder();
+                    b.segment_limit_po2(seg_po2());
+                    b.stdout(&mut log);
+                    b.write(&4u32).unwrap();
+                    b.write(&w.height).unwrap();
+                    b.write(&header_hash(&w.header)).unwrap();
+                    write_chunk_inputs(&mut b, &w, lo, hi);
+                    default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("collect chunk")
+                };
+                let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
+                let r = Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone());
+                done.lock().unwrap()[i] = Some((r, log));
+            });
+        }
+    });
+    let done: Vec<(Receipt, Vec<u8>)> = done.into_inner().unwrap().into_iter().map(|x| x.expect("chunk")).collect();
+    let t_chunks = t0.elapsed().as_secs_f64();
+
+    // Batch hints: 68 bytes per logged verify, in call order: u32 LE valid | R.x BE | R.y BE.
+    let secp = Secp256k1::new();
+    let (mut nrec, mut nvalid) = (0usize, 0usize);
+    for (i, &(lo, hi)) in bounds.iter().enumerate() {
+        let mut blob = Vec::new();
+        for line in String::from_utf8_lossy(&done[i].1).lines() {
+            let Some(at) = line.find("BATCHREC") else { continue };
+            let rest = &line[at + 8..];
+            let kind = rest.as_bytes()[0] - b'0';
+            let rec = hx(rest[2..].trim());
+            assert!(rec.len() == 160 && matches!(kind, 0 | 1 | 3 | 4), "bad BATCHREC line: {line}");
+            let f = |k: usize| -> [u8; 32] { rec[32 * k..32 * k + 32].try_into().unwrap() };
+            let (u1, u2, r) = (f(0), f(1), f(4));
+            let mut q = [4u8; 65];
+            q[1..33].copy_from_slice(&f(2));
+            q[33..].copy_from_slice(&f(3));
+            // u·P with u = 0 is the point at infinity: None, and so is a sum that cancels.
+            let a = SecretKey::from_slice(&u1).ok().map(|k| PublicKey::from_secret_key(&secp, &k));
+            let b = PublicKey::from_slice(&q).ok().and_then(|q| {
+                Scalar::from_be_bytes(u2).ok().and_then(|t| q.mul_tweak(&secp, &t).ok())
+            });
+            let rp = match (a, b) {
+                (Some(a), Some(b)) => a.combine(&b).ok(),
+                (x, None) | (None, x) => x,
+            };
+            let xy = rp.map(|p| p.serialize_uncompressed());
+            let ok = match &xy {
+                None => false,
+                Some(p) => {
+                    let (x, yodd) = (&p[1..33], p[64] & 1);
+                    match kind {
+                        // ECDSA: x(R) mod n == r. x < p and p - n < 2^129, so x mod n is x or x - n.
+                        0 => x == r.as_slice() || {
+                            let n = hx("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+                            x >= n.as_slice() && sub_be(x, &n) == r
+                        },
+                        1 => x == r.as_slice() && yodd == 0,
+                        _ => x == r.as_slice() && yodd == kind - 3,
+                    }
+                }
+            };
+            nrec += 1;
+            nvalid += ok as usize;
+            blob.extend_from_slice(&(ok as u32).to_le_bytes());
+            match &xy { Some(p) => blob.extend_from_slice(&p[1..65]), None => blob.extend_from_slice(&[0u8; 64]) }
+        }
+        std::fs::write(format!("{hg}/batch_{lo}_{hi}.bin"), &blob).expect("write batch hints");
+    }
+    let t_batch = t0.elapsed().as_secs_f64();
+
+    // ECMH: run the aggregate in collect mode from the chunk claims; its log lists every leaf in order.
+    libzync_agg_prep(&mut w);
+    let receipts: Vec<Receipt> = done.into_iter().map(|(r, _)| r).collect();
+    let mut log = Vec::new();
+    {
+        let mut b = ExecutorEnv::builder();
+        b.stdout(&mut log);
+        write_aggregate_env(&mut b, &receipts, &anchor, &w);
+        libzync_agg_tail(&mut b);
+        default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("collect aggregate");
+    }
+    let leaves: Vec<Vec<u8>> = String::from_utf8_lossy(&log).lines()
+        .filter_map(|l| l.find("ECMHREC ").map(|at| hx(l[at + 8..].trim()))).collect();
+    let mut blob = Vec::new();
+    for leaf in &leaves { blob.extend_from_slice(&ecmh_hint(leaf)); }
+    std::fs::write(format!("{out}/ecmh.bin"), &blob).expect("write ecmh hints");
+    println!("libzync-hints: block {} {} chunks on {} threads", w.height, bounds.len(), threads);
+    println!("  batch: {nrec} verifies, {nvalid} valid, {} left to libsecp", nrec - nvalid);
+    println!("  ecmh: {} operations, {} bytes", leaves.len(), blob.len());
+    println!("  time: chunks {t_chunks:.1} s, batch hints {:.1} s, aggregate + ecmh {:.1} s, total {:.1} s",
+             t_batch - t_chunks, t0.elapsed().as_secs_f64() - t_batch, t0.elapsed().as_secs_f64());
+}
+
+/// Big-endian a - b for 32-byte values with a >= b.
+fn sub_be(a: &[u8], b: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut borrow = 0i16;
+    for k in (0..32).rev() {
+        let d = a[k] as i16 - b[k] as i16 - borrow;
+        borrow = (d < 0) as i16;
+        out[k] = (d + 256 * borrow) as u8;
+    }
+    out
+}
+
+/// One ECMH hint, as make_ecmh_hints.py writes it: u32 LE ctr | y (32 B BE) | one w (32 B BE) per skipped ctr.
+/// x = SHA-256(leaf || ctr_le32), first ctr with x^3 + 7 square; y = rhs^((p+1)/4); w^2 = -(x^3 + 7) for skips.
+fn ecmh_hint(leaf: &[u8]) -> Vec<u8> {
+    use num_bigint::BigUint;
+    use sha2::{Digest, Sha256};
+    let p = BigUint::parse_bytes(b"fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f", 16).unwrap();
+    let e = (&p + 1u32) >> 2;
+    let sqrt = |a: &BigUint| { let r = a.modpow(&e, &p); (&r * &r % &p == *a).then_some(r) };
+    let be32 = |v: &BigUint| { let b = v.to_bytes_be(); let mut o = [0u8; 32]; o[32 - b.len()..].copy_from_slice(&b); o };
+    let mut skipped = Vec::new();
+    for ctr in 0u32.. {
+        let mut h = Sha256::new();
+        h.update(leaf);
+        h.update(ctr.to_le_bytes());
+        let x = BigUint::from_bytes_be(&h.finalize());
+        assert!(x < p, "ECMH: hash >= p");
+        let rhs = (&x * &x * &x + 7u32) % &p;
+        if let Some(y) = sqrt(&rhs) {
+            let mut out = ctr.to_le_bytes().to_vec();
+            out.extend_from_slice(&be32(&y));
+            for w in &skipped { out.extend_from_slice(&be32(w)); }
+            return out;
+        }
+        skipped.push(sqrt(&((&p - &rhs) % &p)).expect("p = 3 mod 4: -rhs must be a square"));
+    }
+    unreachable!()
+}
+
 fn agg_chunks() {
     use std::time::Instant;
     let (anchor, mut w) = build_full();
@@ -4743,6 +4913,10 @@ fn main() {
     if args.iter().any(|a| a == "regress") { regress(); return; }
     if args.iter().any(|a| a == "agg-exec-fake") {
         agg_exec_fake();
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-hints") {
+        libzync_hints_cmd(args.get(p + 1).expect("libzync-hints <out dir>"));
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "prove-chunk") {
