@@ -5,6 +5,7 @@
 //!   zbench-host msm <n> <variant: 0 unsigned | 1 signed | 2 raw> <w1,w2,...>
 //!   zbench-host batch <nsigs> <window> <single:0|1> <corrupt:0|1|2>
 //!   zbench-host sethash <n>
+//!   zbench-host utreexo <n> <leaf preimage lengths, comma separated>
 //!
 //! corrupt=1 flips a bit of one s and keeps the honest R hint  -> the MSM must not vanish.
 //! corrupt=2 flips a bit of one s and re-derives R from it     -> x(R) == r must fail.
@@ -16,7 +17,7 @@ use k256::{FieldElement, ProjectivePoint, Scalar, U256};
 use methods::{ZBENCH_ELF as GUEST_ELF, ZBENCH_ID as GUEST_ID};
 use risc0_zkvm::{default_executor, ExecutorEnv};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512_256};
 use std::time::Instant;
 
 #[derive(Serialize, Clone)]
@@ -170,7 +171,38 @@ fn main() {
                 .build().unwrap();
             run(env);
         }
-        _ => eprintln!("usage: zbench-host ops|msm|batch|sethash ..."),
+        Some("utreexo") => {
+            let n: u32 = arg(2, "2000").parse().unwrap();
+            let lens: Vec<u32> = arg(3, "167,179").split(',').map(|x| x.parse().unwrap()).collect();
+            let env = ExecutorEnv::builder().write(&5u32).unwrap().write(&n).unwrap().write(&lens).unwrap()
+                .build().unwrap();
+            let out = run(env);
+            // Native recomputation of every chain: the guest's hashes must be the real ones.
+            let f8 = |h: &[u8]| u64::from_le_bytes(h[..8].try_into().unwrap());
+            let mut h = [0u8; 32];
+            for _ in 0..n {
+                h = Sha256::digest([&[0x01u8][..], &h, &h].concat()).into();
+            }
+            assert_eq!(get(&out, "ours_parent_chk"), f8(&h), "ours_parent mismatch");
+            let mut h = [0u8; 32];
+            for _ in 0..n {
+                h = Sha512_256::digest([h, h].concat()).into();
+            }
+            assert_eq!(get(&out, "std_parent_chk"), f8(&h), "std_parent mismatch");
+            for len in &lens {
+                let mut m = vec![0u8; *len as usize];
+                let mut h = [0u8; 32];
+                for _ in 0..n {
+                    m[64..96].copy_from_slice(&h);
+                    h = Sha512_256::digest(&m).into();
+                }
+                assert_eq!(get(&out, &format!("std_leaf_{len}_chk")), f8(&h), "std_leaf_{len} mismatch");
+            }
+            println!("# all chains match native sha2");
+            println!("# std parent / ours parent = {:.1}x",
+                get(&out, "std_parent") as f64 / get(&out, "ours_parent") as f64);
+        }
+        _ => eprintln!("usage: zbench-host ops|msm|batch|sethash|utreexo ..."),
     }
 }
 

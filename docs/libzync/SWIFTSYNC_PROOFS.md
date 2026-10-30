@@ -182,6 +182,12 @@ fails for this demonstration proof, because it starts at 2,500 and not at genesi
      standalone spec is still to be written.
    - An existing Utreexo node cannot use these roots as they are. The leaves commit each coin's creation-time MTP, and the forest is in creation order, so such a
    snapshot must carry both. A plain `dumptxoutset` does not.
+   - **Compatibility is not a format change.** Utreexo roots depend on the add/delete history (a deletion
+     moves the sibling up), so utreexod's roots at H are a function of every spend since genesis. Ours are
+     an append-only forest of the coins that survive to H. Matching utreexod means proving every
+     spend's deletion. Measured: a SHA-512/256 parent costs 14,530 cycles in the guest against 929 for
+     ours; ESTIMATED total ~6× a current block's cycles
+     (`experimental/libzync-bench/README.md` §7).
 3. **Assumevalid flavour.** An assumevalid image skips script checks (about 3× cheaper to produce, §9). Its proof
    says exactly what SwiftSync's assumevalid mode assumes, so it is enough for verified hints, but it is not a full
    validation proof.

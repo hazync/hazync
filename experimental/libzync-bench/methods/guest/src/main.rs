@@ -12,7 +12,7 @@
 use risc0_crypto::curves::secp256k1::{Affine, Fq, Fr};
 use risc0_crypto::ecdsa::Signature;
 use risc0_zkvm::guest::env;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512_256};
 
 mod msm;
 
@@ -54,6 +54,7 @@ fn main() {
         2 => msm_mode(&mut out),
         3 => batch_mode(&mut out),
         4 => sethash_mode(&mut out),
+        5 => utreexo_mode(&mut out),
         _ => panic!("unknown mode {mode}"),
     }
     env::commit(&out.0);
@@ -384,4 +385,52 @@ fn sethash_mode(out: &mut Out) {
     }
     out.put("sha_only_per_elem", (env::cycle_count() - t) / n as u64);
     out.put("guard", acc[0] as u64 + pacc.is_identity() as u64 + macc[0] as u64 + h[0] as u64);
+}
+
+/// Mode 5: Utreexo hashing, ours vs the standard (rustreexo / utreexod) format.
+/// Ours: parent = SHA-256(0x01 || l || r), the accelerated SHA-256. Standard: parent =
+/// SHA-512/256(l || r) and leaf = SHA-512/256(tag || tag || leaf data), software SHA-512 (risc0 has no
+/// SHA-512 accelerator). Each section chains its output into the next input so nothing is dead, and
+/// the first 8 bytes of every chain are committed for the host to recompute natively.
+fn utreexo_mode(out: &mut Out) {
+    let n: u32 = env::read();
+    let leaf_lens: Vec<u32> = env::read();
+    let first8 = |h: &[u8]| u64::from_le_bytes(h[..8].try_into().unwrap());
+
+    let mut h = [0u8; 32];
+    let t = env::cycle_count();
+    for _ in 0..n {
+        let mut s = Sha256::new();
+        s.update([0x01u8]);
+        s.update(h);
+        s.update(h);
+        h = s.finalize().into();
+    }
+    out.put("ours_parent", (env::cycle_count() - t) / n as u64);
+    out.put("ours_parent_chk", first8(&h));
+
+    let mut h = [0u8; 32];
+    let t = env::cycle_count();
+    for _ in 0..n {
+        let mut m = [0u8; 64];
+        m[..32].copy_from_slice(&h);
+        m[32..].copy_from_slice(&h);
+        h = Sha512_256::digest(m).into();
+    }
+    out.put("std_parent", (env::cycle_count() - t) / n as u64);
+    out.put("std_parent_chk", first8(&h));
+
+    // Leaf data sizes: tag||tag (64) + blockhash 32 + outpoint 36 + header code 4 + amount 8 + script
+    // (compact size + bytes). The host passes the total preimage lengths.
+    for len in &leaf_lens {
+        let mut m = vec![0u8; *len as usize];
+        let mut h = [0u8; 32];
+        let t = env::cycle_count();
+        for _ in 0..n {
+            m[64..96].copy_from_slice(&h);
+            h = Sha512_256::digest(&m).into();
+        }
+        out.put(&format!("std_leaf_{len}"), (env::cycle_count() - t) / n as u64);
+        out.put(&format!("std_leaf_{len}_chk"), first8(&h));
+    }
 }

@@ -145,3 +145,30 @@ proving seconds per signature on the same GPU would settle it.
 **What this changes here:** the batch protocol above is plain guest code, so it carries to any of
 these VMs. A fair comparison needs one rented 5090 for about an hour, proving the same 7,015
 signatures single and batched on each VM. That cannot be done on this laptop: 8 GB RAM and no GPU.
+
+## 7 · Utreexo hashing: ours vs the utreexod/Floresta format (measured 2026-10-30)
+
+`zbench-host utreexo 2000 167,179,200,300`, laptop executor. Every chain is recomputed natively on
+the host and must match (it did).
+
+| hash | input | cycles |
+|---|---|---|
+| **ours** parent: SHA-256(0x01 ‖ L ‖ R), accelerated | 65 B | **929** |
+| **standard** parent: SHA-512/256(L ‖ R), software | 64 B (1 block) | **14,530** |
+| standard leaf: SHA-512/256(tag ‖ tag ‖ leaf data) | 167 / 179 / 200 B (2 blocks) | 29,302 / 29,298 / 29,294 |
+| standard leaf | 300 B (3 blocks) | 43,016 |
+
+**One SHA-512 compression costs ~14.5 k cycles, 15.6× an accelerated SHA-256 parent.** risc0 has no
+SHA-512 accelerator; the hash is 64-bit arithmetic emulated on rv32.
+
+**The hash is the smaller problem.** A Utreexo forest's roots depend on its add/delete HISTORY
+(a deletion moves the sibling up), not only on the set it holds. utreexod's roots at H are the
+result of every spend since genesis. Our design-B forest appends the coins that survive to H, in
+creation order, and never deletes. So the two cannot agree even with the same hash and leaf format.
+Matching utreexod means proving each spend's deletion against the full forest: an inclusion proof
+plus the new roots, ~2 × (27 − log2 inputs) parent hashes per spent coin at ~170 M leaves.
+
+ESTIMATE, not measured, for an illustrative block of 5,000 inputs and 6,000 outputs:
+- each input: leaf 29.3 k + ~30 parents × 14.5 k ≈ 465 k cycles → ~2.3 B;
+- each output: leaf 29.3 k + ~1 parent 14.5 k ≈ 44 k cycles → ~0.26 B;
+- **~2.6 B cycles of Utreexo work, about 6× a whole current libzync block (~415–500 M).**
