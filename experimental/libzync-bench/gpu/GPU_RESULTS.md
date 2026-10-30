@@ -176,6 +176,39 @@ Ranked by expected payoff per unit of work.
 3. **Cut the serial head:** detection → hints on peers is 41 s. The block file and hints could stream to all pods at once, or every pod could compute its own hints: each has 128 cores and they are deterministic.
 4. **Item 3 of the plan above (a global segment pool)** is now the main speed lever. The block is ≈ chunk phase + 3.5 s, and the chunk phase is per-chunk process overhead plus proving.
 
+
+## Live tip run: 1 hour, 2026-10-29/30 (4× RTX PRO 6000, after a top-up)
+
+**What ran:** the rehearsed pipeline (`fleet/live/tiplive.sh`), following mainnet from 973,751 for 3,600 s. It was
+unattended: `live_hour.sh` harvested and terminated the pods, and `watchdog.sh` was armed to kill every pod on a
+balance under $3 or after 85 min. The chain produced **4 blocks** in the hour, then went quiet for 27 minutes.
+**All 4 were proved and verified.**
+
+| block | inputs | block file on A | hints | on all peers | **verified (from pickup)** | aggregate wait for last receipt |
+|---|---|---|---|---|---|---|
+| 973,752 | 8,863 | 10.9 s | 29.9 s | 50.9 s | **265.9 s** | 3.2 s |
+| 973,753 | 9,435 | 11.1 s | 30.3 s | 51.6 s | **291.8 s** | 6.6 s |
+| 973,754 | 7,887 | 10.6 s | 29.4 s | 49.5 s | **270.7 s** | 4.2 s |
+| 973,755 | 11,858 | 23.7 s | 31.4 s | 66.6 s | **332.2 s** | 7.8 s |
+
+**Latency:**
+- Every block was verified **within ~8 min of its header time**, inside the 10-minute interval.
+- 973,753 arrived while 973,752 was still proving, waited its turn, and finished 491 s after its header.
+- Header times are loose miner clocks; two came out negative, so these are indicative only.
+
+**Compared with 09-29** (5 blocks in an hour on 38 cards, $15.83 per block): the same job on **4 cards, ~$2.50 per
+block of fleet time, ~$10 for the hour**.
+
+**Slower than the rehearsal** (191 s on 969,122):
+- **Bigger blocks** (7.9–11.9 k inputs).
+- **Two of the four pods shared one host.** RunPod's PRO 6000 stock was all in one network at the time, and three of the
+  first four pods could not reach each other at all (hairpin blocked).
+- **Fix that worked:** pick the coordinator in a network every peer can reach, and admit a pod only after it reaches A
+  (`fleet/live/grab2.sh`). Ten consecutive deploys landed in the blocked network before this.
+
+**Lost:** pod A's own archive (its ssh went quiet at harvest). The per-block times and verification lines above had
+already been copied to the laptop by the driver.
+
 ## Files
 
 - **Logs and receipts (laptop):** `~/libzync-gpu/`.
