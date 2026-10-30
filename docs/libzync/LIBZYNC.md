@@ -101,7 +101,30 @@ block ──► host: split inputs into chunks (cost-packed) ──► hint bund
 
 ### Execution (block 962,000)
 
-PENDING: profile split by owner (`cost/core_share.py`).
+**Method:**
+- Execute-mode `RISC0_PPROF_OUT` profiles of the fixed guest (`09a02eed…`), 4 chunks plus the aggregate.
+- Each cycle is charged to the **innermost frame that is not runtime**, so memcpy, paging and the SHA
+  accelerator count for the code that asked for them.
+- Tool: `experimental/libzync-bench/cost/core_share.py`.
+- Totals include paging, so they exceed the executor's user cycles.
+
+| | chunks (406.6 M cycles) | aggregate (74.7 M) |
+|---|---|---|
+| **Bitcoin Core C++** (interpreter, sighash, CSHA256, transaction parsing, CheckTransaction, merkle, pow) | **46.7%** | 0.8% |
+| **libsecp256k1** (incl. GHOST coprocessor field/lift-x shims) | 6.7% | 0.0% |
+| **Hazync/libzync own code** | 46.7% | **99.2%** |
+| ↳ of which the batch-verification MSM (guest-logged `finish_cycles`) | 78.5 M (19% of chunks) | — |
+
+**How to read it:**
+- **Chunks: roughly half the cycles run Core's own code.** That half is all the script work, sighash, hashing and
+  parsing.
+- **The other half is libzync's machinery:** the batch MSM, caches, leaf hashing and per-transaction records.
+  libsecp's share is small because the expensive part of each signature, the group equation, now happens in the
+  batch.
+- **The aggregate is almost entirely Hazync's own code.** That is by design: agg-lite replaced Core's block-level
+  orchestration with checks on chunk-committed facts. The Core code it still calls (`ComputeMerkleRoot`, PoW,
+  retarget, chainparams) is a small part of its cycles.
+- **Attribution limit:** inlined Rust in the guest crate shows up as an unnamed frame and is charged to libzync.
 
 ### What Core still decides, and what Hazync decides instead
 
@@ -174,7 +197,17 @@ equivalence, one on the Core patches. Findings and status:
 | 11 | hint-block padding not required to be zero | hygiene | **fixed** |
 | 12 | `hz_copy` reads up to 3 bytes past a buffer (UB at -O3); the `CMutableTransaction` sighash fast path is unsafe if ever used for signing | hygiene | open, documented |
 
-Retest after the fixes: PENDING (`~/libzync-gpu/r18/test_fixed.out`).
+**Retest after the fixes** (guest `09a02eed…`; output in `experimental/libzync-bench/swiftsync/r18_fixed_tests.out`):
+
+| check | result |
+|---|---|
+| block 962,000, valid | ✅ valid. Chunks 342.6 M cycles (+0.9%), aggregate 64.3 M (+11%: wtxid per record, the duplicate-spend sort, range checks) |
+| ECMH hint with the odd root | ✅ refused: `ECMH: hinted y must be the even root` |
+| a spend whose coin claims a creation height after the block | ✅ chunk `all_valid = 0` |
+| design B sweep 1..200 | ✅ BALANCED; forest 204 = the coins unspent at 200; `ss_hints` `e33c66b3…` = the file's hash (unchanged) |
+| one hint bit flipped, either way | ✅ NOT BALANCED (both) |
+| `swiftsync-diff-hints` on the exact file / one toggled entry, both directions | ✅ EXACT / names exactly that height, index and outpoint, and for a spent coin the height that spent it |
+| sweep 1..200 wall time | 40 s (382 s before the cached guest image) |
 
 **Verdicts that held:** batch ECDSA, Schnorr and taproot-tweak deferral match libsecp's acceptance exactly. The
 Fiat–Shamir weights are sound to about 2^-128. The signed-digit Pippenger is correct. Every Core lever computes the

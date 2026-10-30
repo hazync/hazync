@@ -1,17 +1,19 @@
 """core_share.py <profile.pb> [...] — how much of a guest run executes Bitcoin Core's own code.
 
 Reads risc0 execute-mode profiles (RISC0_PPROF_OUT: gzipped pprof protobuf) with a hand-written
-decoder (no protobuf package needed) and attributes every cycle to its LEAF function (self time),
-then to an owner by symbol:
+decoder (no protobuf package needed) and attributes every cycle to the INNERMOST NON-RUNTIME frame of
+its stack (so memcpy, paging and the SHA accelerator count for the code that called them), then to an
+owner by symbol:
 
-  core      Bitcoin Core C++ (script interpreter, sighash, serialisation, CTransaction, hashing, pow,
-            merkle, chainparams): every C++ symbol not ours
-  libsecp   libsecp256k1 C (secp256k1_*), including the GHOST coprocessor backends that live in it
-  libzync   code written for libzync: the batch MSM, ECMH, agg-lite, wire decode (method::batch_ecdsa,
-            ::swiftsync, ::agg_lite, ::lz_wire, ::ss_hints, ::msm) and the guest C++ helpers in
-            verify_input.cpp that are ours (hz_*, cached_tx, verify_inputs_batch_once, tx_out_leaves ...)
-  hazync    the rest of the guest's own Rust (method::*) and the coinbase SMT / utreexo
-  risc0     zkVM runtime, syscalls, serde, Rust std/alloc/core, memcpy/memset, paging ("PageIn" etc.)
+  core      Bitcoin Core C++ (interpreter, sighash, serialisation, CTransaction, CSHA256, pow, merkle,
+            chainparams): every C++ symbol that is not our wrapper
+  libsecp   libsecp256k1 C (secp256k1_*)
+  accel     the coprocessor shims libsecp calls (hazync_fq_*, lift_x hint, scalar inverse): GHOST levers
+  libzync   written for libzync: batch MSM/finish, ECMH, agg-lite, wire decode (Rust), and the C++
+            helpers cached_tx / hz_* / verify_inputs_batch_once / tx_out_leaves
+  hazync    the rest of the guest crate (Rust) and verify_input.cpp's other wrappers
+  runtime   paging, syscalls (sys_sha_compress = the SHA accelerator), memcpy/memset/memcmp, malloc,
+            serde, Rust core/alloc. SELF time: memcpy called by Core is charged here, not to Core.
 
 Prints a table per profile and the totals. Classification is by name, so it is approximate at the
 edges (inlined code is charged to the function it was inlined into); the leaf set is printed with -v.
@@ -91,35 +93,69 @@ def load(path):
     for ids, vals in samples:
         if not ids or not vals:
             continue
-        fn = locs.get(ids[0]) or [None]
-        name = strings[funcs.get(fn[0], 0)] if fn[0] is not None else "?"
+        # Walk from the leaf outwards and charge the sample to the first frame that is not runtime, so
+        # memcpy, paging and the SHA accelerator are charged to the code that asked for them. Frames of
+        # one location (inlining) are innermost first.
+        name = "?"
+        for lid in ids:
+            for fid in (locs.get(lid) or []):
+                cand = strings[funcs.get(fid, 0)]
+                if owner(cand) != "runtime":
+                    name = cand
+                    break
+            else:
+                continue
+            break
+        if name == "?":
+            fn = locs.get(ids[0]) or [None]
+            name = strings[funcs.get(fn[0], 0)] if fn[0] is not None else "?"
         self_[name] += vals[0]
     return self_
 
 
-OURS_CPP = ("hz_", "cached_tx", "verify_inputs_batch", "tx_out_leaves", "tx_wtxid_info", "tx_full_sigops",
-            "tx_wu_sigops", "tx_vin_count", "tx_input_prevout_txid", "check_tx", "is_final_tx", "coin_leaf",
-            "MiniReader", "hazync_", "check_witness_commitment", "check_bip34", "check_pow", "merkle_root",
-            "calc_next_bits", "add_work", "block_subsidy", "coinbase_value", "is_coinbase_tx", "core_")
-LIBZYNC_RS = ("batch_ecdsa", "swiftsync", "agg_lite", "lz_wire", "ss_hints", "msm", "liftx_hint")
-RISC0 = ("risc0", "serde", "core::", "alloc::", "std::", "memcpy", "memset", "memmove", "PageIn", "PageOut",
-         "sys_", "__", "compiler_builtins", "<core", "<alloc", "<std", "hashbrown", "bytemuck")
+# Our C++ wrapper (prover/methods/guest/verify_input.cpp). Mangled C++ names contain the plain identifier.
+LIBZYNC_CPP = ("cached_tx", "cached_spent", "hz_", "verify_inputs_batch_once", "tx_out_leaves", "hazync_batch")
+HAZYNC_CPP = ("verify_input", "verify_inputs_batch", "check_tx", "is_final_tx", "tx_full_sigops", "tx_wu_sigops",
+              "tx_vin_count", "tx_input_prevout_txid", "tx_wtxid_info", "tx_seqs_batch", "check_witness_commitment",
+              "check_bip34", "check_pow", "merkle_root", "calc_next_bits", "add_work", "block_subsidy",
+              "coinbase_value", "is_coinbase_tx", "coin_leaf")
+# NOT "MiniReader": Core's Unserialize templates instantiated with our stream are Core's code.
+LIBZYNC_RS = ("batch_ecdsa", "swiftsync", "agg_lite", "lz_wire", "ss_hints", "msm")
+RUNTIME = ("[PageIn]", "[PageOut]", "memcpy", "memset", "memmove", "memcmp", "malloc", "free", "calloc", "realloc",
+           "_Znwj", "_Znaj", "_ZdlPv", "_ZdaPv", "sys_", "__", "risc0", "serde", "core::", "alloc::", "std::",
+           "<core", "<alloc", "<std", "compiler_builtins", "hashbrown", "bytemuck", "abort", "strlen")
 
 
 def owner(name):
+    """core | libsecp | accel | libzync | hazync | runtime. See the module docstring."""
     n = name or "?"
-    if n.startswith("secp256k1_") or n.startswith("rustsecp"):
+    if n.startswith(RUNTIME) or n.startswith("<risc0") or n in ("?",):
+        return "runtime"
+    if n.startswith("secp256k1_"):
         return "libsecp"
-    if any(n.startswith(p) or f"::{p}" in n for p in ("method::" + x for x in LIBZYNC_RS)) or any(
-            f"method::{x}::" in n for x in LIBZYNC_RS):
+    # Coprocessor shims libsecp calls (GHOST: field backend, lift_x hint, scalar inverse): Rust, used BY libsecp.
+    if n.startswith("hazync_") and not n.startswith("hazync_batch"):
+        return "accel"
+    if n.startswith("_Z"):  # C++
+        if any(k in n for k in LIBZYNC_CPP):
+            return "libzync"
+        if any(k in n for k in HAZYNC_CPP):
+            return "hazync"
+        return "core"
+    if n.startswith(LIBZYNC_CPP) or n.startswith("hazync_batch"):
         return "libzync"
-    if n.startswith(OURS_CPP):
-        return "libzync" if n.startswith(("hz_", "cached_tx", "verify_inputs_batch", "hazync_")) else "hazync"
-    if n.startswith("method::") or "utreexo" in n or "smt" in n or "bip30" in n:
+    if n.startswith(HAZYNC_CPP):
         return "hazync"
-    if any(n.startswith(p) or p in n[:40] for p in RISC0):
-        return "risc0"
-    return "core"  # remaining C++ (Core's classes and free functions)
+    if "method[" in n:  # the guest crate (Rust)
+        # A bare `method[..]` frame is code inlined into the crate root. In a libzync chunk its total
+        # matches the batch finish the guest itself logs (chunk 1: 13.9 M + Acc 5.7 M vs finish 20.4 M),
+        # so it is charged to libzync.
+        if n.rstrip("]").endswith(n.split("[")[1].split("]")[0]) or n.endswith("]"):
+            return "libzync"
+        return "libzync" if any(f"::{m}" in n for m in LIBZYNC_RS) else "hazync"
+    if n.startswith("sha2[") or "risc0_crypto" in n or "risc0_bigint2" in n:
+        return "hazync"
+    return "runtime"
 
 
 def main():

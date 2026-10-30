@@ -1,0 +1,41 @@
+/home/defenwycke/libzync-gpu/r18/profile/chunk0.pb: 102,024,598 cycles
+  libzync       49,663,821   48.7%
+  core          40,643,004   39.8%
+  libsecp        5,342,648    5.2%
+  accel          4,126,185    4.0%
+  hazync         2,226,324    2.2%
+  runtime           22,616    0.0%
+/home/defenwycke/libzync-gpu/r18/profile/chunk1.pb: 117,264,331 cycles
+  core          53,912,510   46.0%
+  libzync       49,666,177   42.4%
+  libsecp        5,390,346    4.6%
+  accel          4,553,951    3.9%
+  hazync         3,718,731    3.2%
+  runtime           22,616    0.0%
+/home/defenwycke/libzync-gpu/r18/profile/chunk2.pb: 93,736,586 cycles
+  core          47,541,792   50.7%
+  libzync       38,880,754   41.5%
+  libsecp        3,820,771    4.1%
+  hazync         3,456,282    3.7%
+  runtime           20,164    0.0%
+  accel             16,823    0.0%
+/home/defenwycke/libzync-gpu/r18/profile/chunk3.pb: 93,611,029 cycles
+  core          47,614,650   50.9%
+  libzync       38,665,838   41.3%
+  libsecp        3,837,127    4.1%
+  hazync         3,442,811    3.7%
+  accel             29,613    0.0%
+  runtime           20,990    0.0%
+/home/defenwycke/libzync-gpu/r18/profile/agg.pb: 74,737,357 cycles
+  libzync       66,655,549   89.2%
+  hazync         7,471,430   10.0%
+  core             578,049    0.8%
+  runtime           16,307    0.0%
+  libsecp           16,022    0.0%
+ALL: 481,373,901 cycles
+  libzync      243,532,139   50.6%
+  core         190,290,005   39.5%
+  hazync        20,315,578    4.2%
+  libsecp       18,406,914    3.8%
+  accel          8,726,572    1.8%
+  runtime          102,693    0.0%
