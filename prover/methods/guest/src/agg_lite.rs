@@ -26,7 +26,7 @@
 //!   header: KIND_CHUNK_LITE, all_valid, height, block_hash[8], mtp, block_time, n_records
 //!   record: txid[8] wtxid[8] prevouts_hash[8] start count first
 //!     if first: has_witness n_vin fee[2] weight[2] sigops[2] n_out out_leaf[8]*n_out
-//!     per owned input: leaf[8] is_coinbase [coinbase_txid[8] if is_coinbase]
+//!     per owned input: leaf[8] flags (bit0 coinbase coin, bit1 coin height == this block) [coinbase_txid[8] if bit0]
 
 use super::*;
 
@@ -133,6 +133,9 @@ impl ChunkCtx {
             // creation at a LATER h2 (review 2026-10-30). Equal height = an in-block spend, which the
             // aggregate matches against this block's created set.
             if ch[j] > self.height { ok = false; }
+            // The coinbase flag is committed in the leaf as cb != 0, but maturity tested cb == 1: a flag of 2
+            // spent an immature coinbase output with the real coin's leaf (review 2). Exactly 0 or 1.
+            if cb[j] > 1 { ok = false; }
             let (h, chj) = (self.height as u64, ch[j] as u64);
             if cb[j] == 1 && h < chj + 100 { ok = false; }
             let seq = seqs[j];
@@ -145,7 +148,10 @@ impl ChunkCtx {
                 } else if h < chj + (seq & MASK) as u64 { ok = false; }
             }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
-            self.words.push(cb[j]);
+            // bit 0: coinbase coin; bit 1: the coin claims THIS block's height, so the aggregate must find it
+            // in this block's created set (an external coin of the current height cannot exist; without this
+            // it would only fail at H).
+            self.words.push(cb[j] | (((ch[j] == self.height) as u32) << 1));
             if cb[j] == 1 {
                 let mut t = [0u8; 32];
                 if unsafe { tx_input_prevout_txid(tp, tl, idx[j], t.as_mut_ptr()) } != 1 { ok = false; }
@@ -240,7 +246,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut total_fee: i64 = 0;
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
-    let mut spends: Vec<([u8; 32], u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position), block order
+    let mut spends: Vec<([u8; 32], u32, bool)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height), block order
     let mut cb_spends: Vec<[u8; 32]> = Vec::new();
 
     // Walk every chunk's records in order. `cur` = (txid, wtxid, prevouts hash, n_vin, next input expected).
@@ -291,8 +297,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             c.4 = c.4.saturating_add(count);
             for _ in 0..count {
                 let leaf = r.h();
-                spends.push((leaf, tx_pos));
-                if r.u() == 1 { cb_spends.push(r.h()); }
+                let f = r.u();
+                if f > 3 { all_ok = false; }
+                spends.push((leaf, tx_pos, f & 2 != 0));
+                if f & 1 == 1 { cb_spends.push(r.h()); }
             }
             if r.bad { break; }
         }
@@ -326,14 +334,14 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // (bad-txns-inputs-missingorspent). The ECMH total would also catch it at H, but only with a correct
     // map; rejecting here costs one sort and pins the failure to this block (review 2026-10-30).
     {
-        let mut ext: Vec<[u64; 4]> = spends.iter().map(|(l, _)| key(l)).filter(|k| find(k).is_err()).collect();
+        let mut ext: Vec<[u64; 4]> = spends.iter().map(|(l, _, _)| key(l)).filter(|k| find(k).is_err()).collect();
         ext.sort_unstable();
         if ext.windows(2).any(|p| p[0] == p[1]) {
             env::log("agg-lite: REJECT the same external coin is spent twice in this block");
             all_ok = false;
         }
     }
-    for (leaf, txp) in &spends {
+    for (leaf, txp, same_height) in &spends {
         match find(&key(leaf)) {
             Ok(i) => {
                 // In-block spend: created by a strictly earlier tx, spent at most once.
@@ -346,7 +354,13 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     all_ok = false;
                 }
             }
-            Err(_) => swiftsync::sub(leaf),
+            Err(_) => {
+                if *same_height {
+                    env::log("agg-lite: REJECT a spend claims a coin of this height that this block does not create");
+                    all_ok = false;
+                }
+                swiftsync::sub(leaf)
+            }
         }
     }
     // Design B: survivors (bit 1) go into an append-only utreexo forest -- at H it holds exactly the UTXO

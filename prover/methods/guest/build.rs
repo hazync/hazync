@@ -371,6 +371,8 @@ fn main() {
     // HAZYNC_NETWORK=signet: Core's SigNet chainparams + CheckSignetBlockSolution (signet.cpp below).
     println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
     let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    assert_eq!(std::env::var("CARGO_FEATURE_SIGNET").is_ok(), signet,
+        "the guest's `signet` feature and HAZYNC_NETWORK disagree: build through methods/build.rs");
     define_if(&mut b, "HAZYNC_SIGNET", signet);
     println!("cargo:rerun-if-env-changed=HAZYNC_TXDATA_LAZY");
     define_if(&mut b, "HAZYNC_TXDATA_LAZY", lever("HAZYNC_TXDATA_LAZY"));

@@ -206,6 +206,9 @@ struct ChainState {
     // libzync SwiftSync design B (HANDOVER_DESIGN.md): the guest's ECMH running total (ss_set 0 = identity)
     // and running hint-bit hash. Mirrors the guest's ChainState field for field.
     ss_set: u32, ss_acc: [u32; 16], ss_hints: [u8; 32],
+    // libzync (review 2): the coinbase-txid SMT root after this block, carried so each block's BIP30 check
+    // runs against the chain's own tree (genesis: empty). Mirrors the guest.
+    smt_root: [u8; 32],
 }
 #[derive(Serialize, Deserialize)]
 struct SpendCheck { raw_tx: Vec<u8>, prevouts: Vec<u8>, block_height: u32 }
@@ -510,6 +513,7 @@ fn ss_bits_for<'a>(height: u32, bip30_skip: bool, coinbase: &Transaction, txs: i
     assert!(height <= file.stop_height(), "block {height} is past the hints file's stop height {}", file.stop_height());
     let nbits = ss_indexed_outputs(bip30_skip, coinbase, txs);
     let idx = file.indices_at_height(height).expect("hints file has no entry for this height");
+    assert!(idx.windows(2).all(|p| p[0] < p[1]), "hints file: height {height}'s index list is not strictly ascending");
     let mut words = libzync::ss_hints::bits_from_indices(nbits, &idx).unwrap_or_else(|| panic!(
         "hints file lists an index at height {height} past the block's {nbits} indexed outputs"));
     // Negative-test hook (test-only, inert unless set): HAZYNC_SS_FLIP=<height>:<index> flips one hint bit.
@@ -642,7 +646,7 @@ fn seed_and_anchor() -> (Forest, ChainState) {
         cum_work: [0u8; 32], height: 169,
         prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, epoch_start: 1_231_006_505,
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
+        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
     };
     (forest, anchor)
 }
@@ -868,7 +872,7 @@ fn build_full() -> (ChainState, BlockWitness) {
         // window) when the fetcher/bridge supplies them; else the benign placeholder for pre-S2 vectors
         // (130000/140000) that carry no `recent_times` — computed above (with the COV-1 hook applied).
         recent_times: recent_times.clone(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
+        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
     };
 
     // Build the witness: per tx a shared full-prevouts blob; per input a BlockInput (tx_first on input 0).
@@ -930,6 +934,8 @@ fn build_full() -> (ChainState, BlockWitness) {
     let (in_smt_root, smt) = smt_witness_standalone_at(height, cb_txid, cb_spendable_outputs(&coinbase),
         &cb_spends_from(&inputs, &txs));
     let mut w = BlockWitness { header, height, coinbase_tx: hx(cb_hex), txids: PackedHashes(txids), root_prev, txs, tx_prevouts, inputs, root_next, bip30: None, in_smt_root, smt };
+    // A single-block run is a base step on this anchor, so the anchor carries the tree the witness was cut from.
+    anchor.smt_root = w.in_smt_root;
     // --- reject-path negative-test hooks (test-only, inert unless the env var is set; NEVER in production) ---
     // Each corrupts exactly one consensus input so check-full drives the matching guest flag false, closing
     // the retarget / block-weight / sigop-cost coverage gap so those reject-paths are continuously CI-enforced.
@@ -1221,7 +1227,7 @@ fn genesis_anchor() -> ChainState {
         tip_hash: arr(rev(hx(g_hash))), utxo_roots: Forest::new().roots(), utxo_leaves: 0,
         cum_work: arr_u128(g_work), height: 0,
         prev_nbits: g_bits, prev_time: g_time, epoch_start: g_time,
-        recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
+        recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
     }
 }
 
@@ -1912,8 +1918,16 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
         if !ok { fails += 1; }
     };
+    // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in the verifier's environment (review 2), so
+    // refuse both: a dev-mode receipt is never a proof, whatever this shell has exported.
+    let fake = matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_));
+    let dev = std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0" && v != "false").unwrap_or(false);
+    check(!fake, "receipt is a real proof (not a dev-mode FakeReceipt)");
+    check(!dev, "RISC0_DEV_MODE is not set in this verifier's environment");
     let v = r.verify(METHOD_ID);
-    check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {})", hex_id(&METHOD_ID), if methods::LIBZYNC { "libzync" } else { "canonical" }, methods::NETWORK));
+    check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {}, {})", hex_id(&METHOD_ID),
+        if methods::LIBZYNC { "libzync" } else { "canonical" }, methods::NETWORK,
+        if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
     let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => { println!("  [FAIL] journal is not a ChainState: {e}"); std::process::exit(1) } };
     check(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "journal is a ChainState committed by this image (kind, self_id)");
     let (want_anchor, what) = match anchor {
@@ -1929,13 +1943,21 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{hints}: {e}"));
     check(cs.height == file.stop_height(), &format!("height {} == the file's stop height {}", cs.height, file.stop_height()));
     check(cs.ss_set == 0, "SwiftSync total is the identity (ss_set == 0)");
-    let fh = libzync::host::file_hash(&file);
+    let fh = match libzync::host::file_hash(&file) {
+        Ok(h) => h,
+        Err(e) => { check(false, &format!("{hints} is well formed: {e}")); [0u8; 32] }
+    };
     check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints}", hex(&fh)));
     println!("  chain: tip {} (display order {}), cum_work {:#x}", hex(&cs.tip_hash),
              hex(&rev(cs.tip_hash.to_vec())), work_u128(&cs.cum_work));
     println!("  UTXO set at H: {} coins, Utreexo roots {:?}", cs.utxo_leaves,
              cs.utxo_roots.iter().map(|x| x.map(|h| hex(&h[..8]))).collect::<Vec<_>>());
-    if fails == 0 {
+    if fails == 0 && anchor.is_some() {
+        // Never the OK line: the base state was the prover's (or a sweep's) assertion, not genesis, so the
+        // proof says nothing about history before it (review 2).
+        println!("LIBZYNC_VERIFY_DEMO: consistent with {hints} at height {} FROM THE GIVEN ANCHOR ONLY -- not a proof of the file", cs.height);
+        std::process::exit(2);
+    } else if fails == 0 {
         println!("LIBZYNC_VERIFY_OK: {hints} is proven correct for this chain at height {}", cs.height);
     } else {
         println!("LIBZYNC_VERIFY_FAIL: {fails} check(s) failed");
@@ -2878,10 +2900,13 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
         b.write(&((ge - gs) as u32)).unwrap();
         b.write_slice(&padded(tx));
         b.write_slice(&padded(prevouts));
+        // Negative-test hook (test-only, inert unless set): send a coinbase coin's flag as 2, which the leaf
+        // reads as "coinbase" and the old maturity test (== 1) did not (review 2).
+        let cb2 = std::env::var("HAZYNC_TEST_CBFLAG2").is_ok();
         for inp in &w.inputs[gs..ge] {
             b.write(&inp.input_idx).unwrap();
             b.write(&inp.coin_height).unwrap();
-            b.write(&inp.coin_is_coinbase).unwrap();
+            b.write(&(if cb2 && inp.coin_is_coinbase == 1 { 2 } else { inp.coin_is_coinbase })).unwrap();
             b.write(&inp.coin_mtp).unwrap();
         }
     }
@@ -3310,6 +3335,27 @@ fn libzync_hints_cmd(out: &str) {
 /// libzync design B test tool: a SwiftSync hints file for stop height H, in the published hintsfile v0
 /// format (via the hintsfile crate), from block_<h>.json for h = 1..=H. Replays every block: indexed
 /// outputs enter a live set, every input removes its prevout; what survives at H is the file.
+/// libzync (review 2): re-cut a block's BIP30 witness against a RUNNING coinbase SMT, so a chain of blocks
+/// is checked against one tree (the guest requires in_smt_root == prev.smt_root). `build_full` cuts each
+/// block against a throwaway tree holding only what that block touches; this replaces it.
+fn lz_smt_rebind(w: &mut BlockWitness, smt: &mut Smt) {
+    let spends: Vec<[u8; 32]> = w.smt.spends.iter().map(|s| s.coinbase_txid).collect();
+    let grandfathered = w.smt.smt_overwrite.is_some();
+    w.in_smt_root = smt.root();
+    w.smt = smt_advance(smt, w.smt.coinbase_txid, w.smt.coinbase_outputs, &spends, grandfathered).0;
+}
+
+/// The coinbase SMT after blocks 1..=upto, rebuilt from block_<h>.json (the same advance the guest checks).
+fn lz_smt_replay(dir: &str, upto: u32) -> Smt {
+    let mut smt = Smt::new();
+    for h in 1..=upto {
+        std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
+        let (_, mut w) = build_full();
+        lz_smt_rebind(&mut w, &mut smt);
+    }
+    smt
+}
+
 /// Replay blocks 1..=H from block_<h>.json: indexed outputs (the hints file's numbering) enter a live set,
 /// every input removes its prevout. Returns, per height, the sorted unspent indices at H, and for every
 /// indexed output (height, index) -> (txid display hex, vout, height it was spent at, if it was).
@@ -3385,10 +3431,19 @@ fn ss_diff_hints_cmd(path: &str, dir: &str, h_arg: Option<u32>) {
     let (truth, all) = ss_replay(h_stop, dir);
     let (mut bad_heights, mut wrong) = (0u32, 0usize);
     for h in 1..=h_stop {
-        let mut got = file.indices_at_height(h).expect("height");
-        got.sort_unstable();
+        let raw = file.indices_at_height(h).expect("height");
+        let ascending = raw.windows(2).all(|p| p[0] < p[1]);
         let want = &truth[h as usize];
-        if &got == want { continue; }
+        if ascending && &raw == want { continue; }
+        if !ascending {
+            // A list that is not strictly ascending is malformed whatever its contents (duplicates collapse in
+            // a set, so they are reported here rather than as differences).
+            bad_heights += 1;
+            wrong += 1;
+            println!("  height {h}: the file's index list is not strictly ascending: {raw:?}");
+            continue;
+        }
+        let got = raw;
         bad_heights += 1;
         let gs: std::collections::BTreeSet<u32> = got.iter().copied().collect();
         let ws: std::collections::BTreeSet<u32> = want.iter().copied().collect();
@@ -3422,6 +3477,7 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
     std::fs::create_dir_all(&tmp).unwrap();
     std::env::remove_var("HAZYNC_LZ_HINTS");
     let mut prev = genesis_anchor();
+    let mut smt = Smt::new();
     let mut expect_hash = [0u8; 32];
     let mut cycles = 0u64;
     for h in 1..=h_stop {
@@ -3429,6 +3485,7 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
         let (_, mut w) = build_full();
         assert_eq!(w.height, h, "block_{h}.json holds height {}", w.height);
         w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
+        lz_smt_rebind(&mut w, &mut smt);
         let bounds = chunk_bounds(&w, nchunks_env());
         std::env::remove_var("HAZYNC_LZ_HINTS"); // chunks collect; the bundle below is this block's aggregate's
         let receipts: Vec<Receipt> = execute_chunks_parallel(&w, &bounds, hint_threads()).into_iter().map(|(r, _)| r).collect();
@@ -3507,6 +3564,33 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     std::fs::create_dir_all(out).unwrap();
     let mut prev: ChainState = serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap();
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
+    // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
+    // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
+    // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
+    // written to anchor_effective.json, which is what libzync-verify must be given.
+    let mut smt = if (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists()) {
+        let t = lz_smt_replay(dir, lo - 1);
+        assert_eq!(t.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
+        t
+    } else {
+        let mut t = Smt::new();
+        let mut counts: std::collections::BTreeMap<[u8; 32], u32> = std::collections::BTreeMap::new();
+        for h in lo..=hi {
+            let j = read_block_json(dir, h);
+            for tx in j["txs"].as_array().unwrap() {
+                let t2: Transaction = deserialize(&hx(tx["raw"].as_str().unwrap())).unwrap();
+                for (i, p) in tx["prevouts"].as_array().unwrap().iter().enumerate() {
+                    if p["coin_is_coinbase"].as_u64() == Some(1) && p["coin_height"].as_u64().unwrap_or(0) < lo as u64 {
+                        *counts.entry(t2.input[i].previous_output.txid.to_byte_array()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        for (k, c) in counts { t.insert(k, c); }
+        prev.smt_root = t.root();
+        t
+    };
+    std::fs::write(format!("{out}/anchor_effective.json"), serde_json::to_string(&prev).unwrap()).unwrap();
     let mut prev_rcpt: Option<Receipt> = None;
     let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
     let opts = ProverOpts::succinct();
@@ -3518,6 +3602,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         let (_, mut w) = build_full();
         assert_eq!(w.height, h);
         w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
+        lz_smt_rebind(&mut w, &mut smt);
         let bounds = chunk_bounds(&w, nchunks_env());
         // Signature hints first: every chunk executes once in collect mode (in parallel), and R for each
         // logged verify comes from libsecp -- the same bundle `libzync-hints` writes. Without this every chunk
@@ -3600,7 +3685,8 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
 fn ss_file_hash_cmd(path: &str) {
     let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap_or_else(|e| panic!("{path}: {e}")));
     let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{path}: {e}"));
-    println!("swiftsync-file-hash: stop height {} -> ss_hints {}", file.stop_height(), hex(&libzync::host::file_hash(&file)));
+    let h = libzync::host::file_hash(&file).unwrap_or_else(|e| panic!("{path}: {e}"));
+    println!("swiftsync-file-hash: stop height {} -> ss_hints {}", file.stop_height(), hex(&h));
 }
 
 fn agg_chunks() {
@@ -5350,9 +5436,15 @@ fn main() {
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-anchor-json") {
-        // libzync-anchor-json <out>: the chain state BEFORE $HAZYNC_BLOCK as build_full derives it from the block
-        // file (tip, difficulty and time context, an empty forest, a zero SwiftSync total). A demonstration
-        // anchor for libzync-prove-range mid-chain; a proof built on it says so (libzync-verify, check 3).
+        // libzync-anchor-json <out> | --genesis <out>: the network's genesis state (what a real proof starts
+        // from), or the state BEFORE $HAZYNC_BLOCK as build_full derives it from the block file: tip, difficulty
+        // and time context, a forest holding filler and that block's spent coins, zero work, a zero SwiftSync
+        // total. The latter is a DEMONSTRATION anchor; libzync-verify reports proofs on it as DEMO, never OK.
+        if args.get(p + 1).map(|s| s.as_str()) == Some("--genesis") {
+            std::fs::write(&args[p + 2], serde_json::to_string(&genesis_anchor()).unwrap()).unwrap();
+            println!("genesis anchor ({}) -> {}", methods::NETWORK, args[p + 2]);
+            return;
+        }
         let (mut anchor, w) = build_full();
         // Block files list the prior 11 times NEWEST first (mkblock.py); a ChainState window is OLDEST first,
         // because each step appends the new time and drops element 0. A single block only uses the median, so
@@ -5689,7 +5781,7 @@ fn main() {
         epoch_start: 1_231_006_505, // epoch 0's first block = genesis timestamp
         // last 11 block timestamps up to 169 (approx; MTP unused pre-BIP113 at heights 170-172).
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
+        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
     };
 
     // Fold each real block. (170 has the P2PK spend; 171/172 are coinbase-only.)

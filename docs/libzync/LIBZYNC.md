@@ -209,6 +209,29 @@ equivalence, one on the Core patches. Findings and status:
 | `swiftsync-diff-hints` on the exact file / one toggled entry, both directions | ✅ EXACT / names exactly that height, index and outpoint, and for a spent coin the height that spent it |
 | sweep 1..200 wall time | 40 s (382 s before the cached guest image) |
 
+### Second review round (same day, after the fixes)
+
+Three new reviewers:
+- one re-checked every fix above;
+- one made a fresh adversarial pass over the guest, without the earlier findings;
+- one reviewed the verifier and the host tooling.
+
+**All 11 fixes were confirmed correct and complete.** New findings:
+
+| # | finding | severity | status |
+|---|---|---|---|
+| 13 | a coinbase flag of **2**: the leaf reads it as coinbase, maturity tested `== 1`, so an immature coinbase output could be spent | soundness, critical | **fixed**: flag must be 0 or 1 |
+| 14 | the BIP30 coinbase-SMT root was never carried between blocks, so each block's starting tree was the prover's choice | soundness (exploitable only by re-mining pre-BIP34 history) | **fixed**: `ChainState.smt_root`, checked every block; the host keeps one real tree across sweeps and chains |
+| 15 | an external spend claiming the current block's height was only caught at H | completeness | **fixed**: flagged by the chunk, rejected in that block |
+| 16 | `libzync-verify` accepted a dev-mode FakeReceipt when `RISC0_DEV_MODE` was set | verifier soundness | **fixed**: fake receipts and the dev-mode variable are refused |
+| 17 | with a supplied anchor, `libzync-verify` printed the same OK line as a genesis proof | verifier soundness for anyone automating on it | **fixed**: `LIBZYNC_VERIFY_DEMO`, exit code 2 |
+| 18 | a hints list that is not strictly ascending was sorted, then accepted | verifier soundness against the spec | **fixed**: rejected |
+| 19 | a scripts-off image (assumevalid, or a bare `HAZYNC_NO_SCRIPTS=1`) was not labelled as such | misleading output | **fixed**: recorded in the profile and printed by the verifier |
+| 20 | a prebuilt guest's network/profile labels came from the shell, not the pinned bytes | hygiene | **fixed**: the pin directory carries a `PROFILE` file, which must match |
+| 21 | `swiftsync-diff-hints` could call a file with duplicate indices EXACT | misleading output | **fixed** |
+| 22 | no tool wrote a genesis anchor | completeness | **fixed**: `libzync-anchor-json --genesis` |
+| 23 | the claim "every Core rule" includes `time-too-new` (MAX_FUTURE_BLOCK_TIME), which needs a clock and cannot be proven | documentation | **stated** in the proposal §2 and §5 |
+
 **Verdicts that held:** batch ECDSA, Schnorr and taproot-tweak deferral match libsecp's acceptance exactly. The
 Fiat–Shamir weights are sound to about 2^-128. The signed-digit Pippenger is correct. Every Core lever computes the
 same bytes as Core in the shipped (bump-allocator) build. The record walk enforces coverage. Design B's argument

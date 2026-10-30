@@ -30,6 +30,12 @@ statement holds if the checks in §5 pass:
 > 2. **The UTXO set at H** is exactly the leaves of the Utreexo forest `(J.utxo_roots, J.utxo_leaves)`, in creation
 >    order.
 
+**Two rules are not, and cannot be, proven:**
+- **`time-too-new`.** A block timestamp more than 2 hours ahead of the node's clock depends on the clock, so a node using
+  the proof must apply this rule to the headers itself. It matters, because a far-future timestamp at an epoch's
+  last block lowers the next difficulty.
+- **Best chain.** The proof says this chain is valid, not that it has the most work. See §5, step 7.
+
 ## 3. Objects
 
 ### The hints file: hintsfile v0, unchanged
@@ -120,8 +126,14 @@ Given a receipt R, the hints file F and the network:
 6. `J.ss_hints == ss_hints(F)` (§3).
 7. `J.tip_hash` is a block on the chain you follow (most work). The proof says that chain is valid, not that it is
    the best one.
+8. The receipt is a real proof: refuse a dev-mode `FakeReceipt`, and never verify with `RISC0_DEV_MODE` set.
+9. Note whether M is a scripts-on or an assumevalid image. `libzync-verify` prints which one.
 
-`host libzync-verify <receipt> <file.hints>` does steps 1–6 and prints `tip_hash` and `cum_work` for step 7.
+`host libzync-verify <receipt> <file.hints>` does steps 1–6, 8 and 9, and prints `tip_hash` and `cum_work` for
+step 7. It ends in one of three verdicts:
+- `LIBZYNC_VERIFY_OK` (exit 0): a genesis-anchored proof;
+- `LIBZYNC_VERIFY_DEMO` (exit 2): a proof checked against a supplied anchor, which is never a proof of the file;
+- `LIBZYNC_VERIFY_FAIL` (exit 1).
 
 **Example output.** This is the real run of §10, re-verified on a laptop from the 226 KB receipt:
 
@@ -148,7 +160,8 @@ fails for this demonstration proof, because it starts at 2,500 and not at genesi
    sync will not fail at H.
 2. **No IBD at all (assumeutxo, proven).** Fetch the UTXO set at H from anyone, check its Utreexo roots against
    `J.utxo_roots`, check §5 against the tip you see, then validate from H onwards. A Utreexo node needs only the
-   roots.
+   roots. The leaves commit each coin's creation-time MTP, and the forest is in creation order, so such a
+   snapshot must carry both. A plain `dumptxoutset` does not.
 3. **Assumevalid flavour.** An assumevalid image skips script checks (about 3× cheaper to produce, §9). Its proof
    says exactly what SwiftSync's assumevalid mode assumes, so it is enough for verified hints, but it is not a full
    validation proof.

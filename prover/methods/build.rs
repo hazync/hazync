@@ -98,6 +98,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
     println!("cargo:rerun-if-changed=../../libzync/src/profile.rs");
     let (libzync, assumevalid) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
+    // The guest skips scripts under the profile's assumevalid OR a bare HAZYNC_NO_SCRIPTS=1 (guest/build.rs):
+    // the recorded profile must say so in both cases, or a scripts-off image reads as a full one (review 2).
+    println!("cargo:rerun-if-env-changed=HAZYNC_NO_SCRIPTS");
+    let assumevalid = assumevalid || std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1");
     let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
     assert!(!signet || libzync, "HAZYNC_NETWORK=signet needs HAZYNC_LIBZYNC (the signet check lives in the libzync aggregate)");
     println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_PIN_DIR");
@@ -109,6 +113,15 @@ fn main() {
         let pins = std::env::var("HAZYNC_GUEST_PIN_DIR").ok();
         assert!(!(libzync || signet) || pins.is_some(),
                 "HAZYNC_GUEST_ELF with HAZYNC_LIBZYNC/HAZYNC_NETWORK needs HAZYNC_GUEST_PIN_DIR (the libzync image's pins)");
+        // The pin directory names the image's profile too, so the labels the host trusts (LIBZYNC, NETWORK,
+        // ASSUMEVALID) are tied to the pinned bytes instead of to this shell's variables (review 2).
+        if let Some(d) = pins.as_deref() {
+            let want = format!("libzync={} assumevalid={} network={}", libzync as u8, assumevalid as u8,
+                               if signet { "signet" } else { "mainnet" });
+            let got = std::fs::read_to_string(Path::new(d).join("PROFILE"))
+                .unwrap_or_else(|e| panic!("{d}/PROFILE: {e} (the pin directory must name the image's profile)"));
+            assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS");
+        }
         write_profile(libzync, assumevalid, signet);
         embed_prebuilt_guest(&elf_path, pins.as_deref());
         return;

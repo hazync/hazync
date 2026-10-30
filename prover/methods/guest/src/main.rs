@@ -1350,6 +1350,10 @@ struct ChainState {
     ss_set: u32,
     ss_acc: [u32; 16],
     ss_hints: [u8; 32],
+    // libzync (review 2, 2026-10-30): the coinbase-txid SMT root after this block. BIP30 is checked against
+    // the block's in_smt_root, which was pure witness: carried here, each aggregate requires its block's
+    // in_smt_root == prev.smt_root, so the tree is the chain's own from genesis (empty) onwards.
+    smt_root: [u8; 32],
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state
@@ -1505,6 +1509,7 @@ fn chain_step() {
         anchor_id,
         self_id,
         ss_set: prev.ss_set, ss_acc: prev.ss_acc, ss_hints: prev.ss_hints,
+        smt_root: r.out_smt_root, // canonical chain_step (unreachable in a libzync image)
     });
 }
 
@@ -2035,8 +2040,15 @@ fn aggregate() {
     let expected_nbits = if height % RETARGET_INTERVAL != 0 { prev.prev_nbits } else { unsafe { calc_next_bits(prev.prev_nbits, prev.epoch_start as i64, prev.prev_time as i64) } };
     let retarget_ok = r.nbits == expected_nbits;
     let time_ok = r.block_time > prev_mtp; // time-too-old (Core ContextualCheckBlockHeader)
-    assert!(block_valid && prevhash_ok && carry_ok && retarget_ok && time_ok,
-        "aggregate: bv={} ph={} carry={} rt={} time={}", block_valid, prevhash_ok, carry_ok, retarget_ok, time_ok);
+    // libzync (review 2): the BIP30 tree this block was checked against must be the chain's own, carried in
+    // the verified previous state (genesis: the empty tree), not a root the prover picked.
+    #[cfg(feature = "libzync")]
+    let smt_ok = w.in_smt_root == prev.smt_root;
+    #[cfg(not(feature = "libzync"))]
+    let smt_ok = true;
+    assert!(block_valid && prevhash_ok && carry_ok && retarget_ok && time_ok && smt_ok,
+        "aggregate: bv={} ph={} carry={} rt={} time={} smt={}", block_valid, prevhash_ok, carry_ok, retarget_ok, time_ok, smt_ok);
+    let smt_root = r.out_smt_root;
     let mut cum = prev.cum_work;
     unsafe { add_work(cum.as_mut_ptr(), r.nbits) };
     let epoch_start = if height % RETARGET_INTERVAL == 0 { r.block_time } else { prev.epoch_start };
@@ -2059,7 +2071,7 @@ fn aggregate() {
         kind: KIND_CHAIN,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
-        ss_set, ss_acc, ss_hints,
+        ss_set, ss_acc, ss_hints, smt_root,
     });
 }
 

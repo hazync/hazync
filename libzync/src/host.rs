@@ -193,7 +193,8 @@ impl BlockBundle {
         let height = u(&mut take)?;
         let block_hash: [u8; 32] = take(32)?.try_into().unwrap();
         let n = u(&mut take)?;
-        let mut chunks = Vec::with_capacity(n as usize);
+        // No capacity from the untrusted count: a huge n would abort on allocation instead of failing cleanly.
+        let mut chunks = Vec::new();
         for _ in 0..n {
             let (lo, hi, len) = (u(&mut take)?, u(&mut take)?, u(&mut take)?);
             if len as usize % SIG_HINT_BYTES != 0 { return Err("hint bundle: sig hints not whole records".into()); }
@@ -221,12 +222,17 @@ impl BlockBundle {
 }
 
 /// The hint hash a proof at a hints file's stop height must commit, from the file ALONE.
-pub fn file_hash(file: &hintsfile::Hintsfile) -> [u8; 32] {
+/// Err if a height's list is not STRICTLY ascending: the Elias-Fano decoder does not enforce order, and a
+/// client walking the list as sorted would mark the wrong outputs (review 2). Sorting it here instead would
+/// let a proof vouch for a file that is not what it says.
+pub fn file_hash(file: &hintsfile::Hintsfile) -> Result<[u8; 32], String> {
     let mut h = [0u8; 32];
     for height in 1..=file.stop_height() {
-        let mut idx = file.indices_at_height(height).expect("hints file height");
-        idx.sort_unstable();
+        let idx = file.indices_at_height(height).ok_or_else(|| format!("height {height}: missing"))?;
+        if !idx.windows(2).all(|p| p[0] < p[1]) {
+            return Err(format!("height {height}: index list is not strictly ascending"));
+        }
         h = crate::ss_hints::step(&h, height, &idx);
     }
-    h
+    Ok(h)
 }
