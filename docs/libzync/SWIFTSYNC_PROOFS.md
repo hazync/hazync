@@ -123,7 +123,24 @@ Given a receipt R, the hints file F and the network:
 
 `host libzync-verify <receipt> <file.hints>` does steps 1–6 and prints `tip_hash` and `cum_work` for step 7.
 
-**Example output** (signet): PENDING (§10).
+**Example output.** This is the real run of §10, re-verified on a laptop from the 226 KB receipt:
+
+```
+$ host libzync-verify block_2600.rcpt signet2600.hints anchor_state_2500.json
+  [ok] receipt verifies against METHOD_ID cf7f75ff85f51f5845d4e37f8b7fe6e55f70632dd503eb2f25d7d0fb4979f405 (libzync guest, signet)
+  [ok] journal is a ChainState committed by this image (kind, self_id)
+  [ok] anchor_id is the GIVEN anchor at height 2500 (anchor_state_2500.json) -- NOT genesis
+  [ok] height 2600 == the file's stop height 2600
+  [ok] SwiftSync total is the identity (ss_set == 0)
+  [ok] ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b == hash of signet2600.hints
+  chain: tip ... (display order 00000127dfa07c0fd2f2fe1e22a0fea15c34cabd6204b1faac15a04ba28be6f3), cum_work 0x432982f4d
+  UTXO set at H: 293 coins, Utreexo roots [...]
+LIBZYNC_VERIFY_OK: signet2600.hints is proven correct for this chain at height 2600
+```
+
+The same tool **fails** a proof that stops early: a dev-mode receipt at 2,530 against the same file gives
+`[FAIL] height 2530 == the file's stop height 2600` and `[FAIL] ss_hints …`. Without the anchor argument, check 3
+fails for this demonstration proof, because it starts at 2,500 and not at genesis (§10).
 
 ## 6. What a SwiftSync node can do with it
 
@@ -184,8 +201,37 @@ Multi-block batching (one proof session per block range) is not built. It is wor
 
 ## 10. What exists today (signet)
 
-PENDING: the signet sweep, the alignment with the published signet file, and the GPU proof with its `libzync-verify`
-transcript.
+All measured 2026-10-30. Signet guest METHOD_ID `cf7f75ff…`.
+
+| step | where | result |
+|---|---|---|
+| BIP325 check in isolation (Core's `CheckSignetBlockSolution`) | laptop | real block → valid; one txid changed → invalid |
+| our numbering vs the **published** signet hints file (stop 320,000) | laptop | every one of the 606 coins it marks unspent among blocks 1..3,000 sits at the same index in ours |
+| design B, blocks 1..3,000, from genesis | laptop, execute | **BALANCED**; forest = the 695 coins unspent at 3,000; 687 s |
+| design B, blocks 1..2,600, from genesis | laptop, execute | **BALANCED**; forest = 293 coins; state saved at 2,500 |
+| **proof of blocks 2,501..2,600** | **1× RTX PRO 6000, RunPod** | **verified, 100 recursive steps, 1,464 s, $1.39** including the 380 s build |
+
+**The GPU proof:**
+- **Anchor:** block 2,501 is a base step on the committed state at 2,500 from the laptop sweep. Every later block's
+  aggregate verifies the previous block's receipt inside the proof.
+- **Final receipt:** `experimental/libzync-bench/signet/gpu/block_2600.rcpt` (226 KB), re-verified on a laptop.
+- **Matches the node:** its tip is signet block 2,600 as the node reports it (`00000127dfa0…e6f3`).
+- **Matches the laptop:** its whole committed state equals the laptop sweep's at 2,600, apart from `anchor_id`
+  (the sweep started at genesis).
+- **Per block:**
+  - coinbase-only blocks: **8.7 s** (91 blocks, 8.5–8.9 s);
+  - blocks with transactions: **15–16 s**;
+  - block 2,523: **549 s**. It spends 374 coinbase outputs, and 97% of its aggregate is Hazync's BIP30 coinbase SMT
+    (~1.5 M cycles per coinbase spend). That is a known, separable cost (`LIBZYNC.md` §8).
+
+**What this demonstrates, and what it does not:**
+- **It does:** the whole pipeline on a real network, from the published hints format to a verified recursive proof
+  that a hints file is exactly right at its stop height, with the UTXO set as Utreexo roots.
+- **It does not:** prove history from genesis on the GPU. Blocks 1..2,500 were checked in execute mode on the laptop,
+  not proven, so this receipt trusts the 2,500 anchor. Proving from genesis is the same command with the genesis
+  anchor:
+  - about 2,500 × 8.7 s ≈ 6 card-hours ≈ $15 for signet 1..2,600;
+  - for all of signet against the published file, see §9.
 
 ## 11. Code
 

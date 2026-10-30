@@ -216,7 +216,45 @@ holds once the map is single-valued.
 
 ## 8. Signet
 
-PENDING.
+**Build:** `HAZYNC_NETWORK=signet`, guest `cf7f75ff…`. What changes:
+- Core's own `CChainParams::SigNet` (default challenge) replaces `Main()`;
+- Core's `signet.cpp` is compiled in;
+- the aggregate calls Core's unmodified `CheckSignetBlockSolution`;
+- every network constant the guest uses (`libzync/src/net.rs`) is asserted against Core's compiled chainparams at
+  run time: genesis, powLimit, and buried heights all at 1.
+
+The aggregate holds only txids, not the block's other transactions. So the check is given placeholder transactions
+whose txid is seeded with the merkle-bound value. Core's code reads nothing else from them (third reviewer: exactly
+equivalent).
+
+**Measured on the laptop** (execute mode, signet blocks from a local `bitcoind -signet`):
+
+| check | result |
+|---|---|
+| BIP325 alone (mode 16), block 2,148 (400 inputs) and block 100 (coinbase-only) | real block → 1; one txid changed → 0 (both) |
+| our hints file at 3,000 vs the **published** signet file (stop 320,000) | **SUBSET_OK**: all 606 coins the published file marks unspent sit at the same index in ours |
+| `swiftsync-diff-hints` on our 3,000 file | EXACT for 1..=3,000 |
+| design B sweep 1..3,000 | **BALANCED** in 687 s; forest = **695 coins** = the UTXO set at 3,000; `ss_hints` `5979d283…` = the file's hash |
+| design B sweep 1..2,600 (the GPU demo's handover height) | **BALANCED**; forest = 293 coins; `ss_hints` `f097b8f2…` |
+| `libzync-prove-range 2501 2530` in dev mode (fake receipts) | base step on the 2,500 state, then 29 recursive steps, including 9 transaction blocks |
+
+**GPU** (proposal §10):
+- signet 2,501..2,600 proved as one recursive chain on 1× RTX PRO 6000 in 1,464 s ($1.39), and verified;
+- `libzync-verify` against the 2,600 hints file: all checks pass, and the state equals the laptop sweep's;
+- 8.7 s per coinbase-only block, 15–16 s per small transaction block.
+
+**Found on the GPU run: the BIP30 coinbase-txid SMT dominates blocks that spend many coinbases.**
+- Signet block 2,523 spends 374 coinbase outputs. Its aggregate executes **565 M cycles**, of which **557 M (97%)** is
+  `coinbase-smt` (SHA-256 path updates) at about **1.5 M cycles per coinbase spend**. Every other part of the block
+  costs 18 M.
+- The SMT is existing Hazync machinery (#54), not libzync. It closes BIP30 permanently, which is stricter than Core:
+  `ConnectBlock` skips the BIP30 check between BIP34 activation and height 1,983,702.
+- A cheaper rule there (or batched SMT updates) would remove this cost wherever coinbases are spent in bulk. That
+  happens in mining-pool payout blocks on mainnet, and in faucet sweeps on signet.
+- **Open lever, not changed.**
+
+**Signet's first 2,147 blocks are coinbase-only.** Transactions start at 2,148. A full signet run (to 320,000,
+against the published file) is the cost-table item in the proposal, §9.
 
 ## 9. Changes Core could take
 
