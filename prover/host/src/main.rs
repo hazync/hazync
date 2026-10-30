@@ -3519,6 +3519,22 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         assert_eq!(w.height, h);
         w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
         let bounds = chunk_bounds(&w, nchunks_env());
+        // Signature hints first: every chunk executes once in collect mode (in parallel), and R for each
+        // logged verify comes from libsecp -- the same bundle `libzync-hints` writes. Without this every chunk
+        // would be PROVED with libsecp verifying each signature itself: valid, but the unbatched cost.
+        let bp = format!("{out}/bundle_{h}.lzb");
+        let mut bd = libzync::host::BlockBundle { height: h, block_hash: header_hash(&w.header), ..Default::default() };
+        if !bounds.is_empty() {
+            let done = execute_chunks_parallel(&w, &bounds, hint_threads());
+            for (i, &(clo, chi)) in bounds.iter().enumerate() {
+                let blob: Vec<u8> = libzync::host::sig_records(&String::from_utf8_lossy(&done[i].1))
+                    .iter().flat_map(|r| libzync::host::sig_hint(r)).collect();
+                bd.chunks.push((clo as u32, chi as u32, blob));
+            }
+            bd.write(&bp).unwrap();
+            std::env::set_var("HAZYNC_LZ_HINTS", &bp);
+        }
+        let t_sig = t0.elapsed().as_secs_f64();
         let mut chunks: Vec<Receipt> = Vec::with_capacity(bounds.len());
         for &(clo, chi) in &bounds {
             let mut b = ExecutorEnv::builder();
@@ -3532,6 +3548,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             chunks.push(r);
         }
         let t_chunks = t0.elapsed().as_secs_f64();
+        std::env::remove_var("HAZYNC_LZ_HINTS"); // the aggregate's collect pass below runs without ECMH hints
         libzync_agg_prep(&mut w);
         let is_base = prev_rcpt.is_none();
         let env_for = |b: &mut risc0_zkvm::ExecutorEnvBuilder| {
@@ -3550,11 +3567,9 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
                 assert!(e.contains("collect run commits no chain state"), "block {h}: collect aggregate failed: {e}");
             }
         }
-        let mut bd = libzync::host::BlockBundle { height: h, block_hash: header_hash(&w.header), ..Default::default() };
         for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log)) {
             bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
         }
-        let bp = format!("{out}/bundle_{h}.lzb");
         bd.write(&bp).unwrap();
         std::env::set_var("HAZYNC_LZ_HINTS", &bp);
         let t_hints = t0.elapsed().as_secs_f64();
@@ -3568,8 +3583,10 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         std::fs::write(format!("{out}/block_{h}.rcpt"), bincode::serialize(&r).unwrap()).unwrap();
         std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
         let dt = t0.elapsed().as_secs_f64();
-        writeln!(times, "{h}\t{}\t{}\t{t_chunks:.1}\t{:.1}\t{dt:.1}\t{}", bounds.len(), w.coinbase_tx.len(),
-                 t_hints - t_chunks, if is_base { "base" } else { "recursive" }).unwrap();
+        // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
+        let rbytes = std::fs::metadata(format!("{out}/block_{h}.rcpt")).map(|m| m.len()).unwrap_or(0);
+        writeln!(times, "{h}\t{}\t{t_sig:.1}\t{:.1}\t{:.1}\t{dt:.1}\t{}\t{rbytes}", bounds.len(),
+                 t_chunks - t_sig, t_hints - t_chunks, if is_base { "base" } else { "recursive" }).unwrap();
         println!("  block {h}: {} chunks, proved in {dt:.1} s ({}), forest {} ss_set {}  [{:.0} s total]",
                  bounds.len(), if is_base { "base on anchor" } else { "verifies prev" }, st.utxo_leaves, st.ss_set, t_all.elapsed().as_secs_f64());
         prev = st;
@@ -5336,7 +5353,12 @@ fn main() {
         // libzync-anchor-json <out>: the chain state BEFORE $HAZYNC_BLOCK as build_full derives it from the block
         // file (tip, difficulty and time context, an empty forest, a zero SwiftSync total). A demonstration
         // anchor for libzync-prove-range mid-chain; a proof built on it says so (libzync-verify, check 3).
-        let (anchor, w) = build_full();
+        let (mut anchor, w) = build_full();
+        // Block files list the prior 11 times NEWEST first (mkblock.py); a ChainState window is OLDEST first,
+        // because each step appends the new time and drops element 0. A single block only uses the median, so
+        // the order never mattered before; a chain of proofs on this anchor would drop the wrong time and every
+        // later block's MTP would differ from its chunks' (found by the pre-H dry run, 969,997).
+        anchor.recent_times.reverse();
         std::fs::write(&args[p + 1], serde_json::to_string(&anchor).unwrap()).unwrap();
         println!("anchor for block {} (state at {}) -> {}", w.height, anchor.height, args[p + 1]);
         return;
