@@ -262,7 +262,7 @@ Guests: mainnet `ddcaf1d0…`, signet `c3501ac9…`.
 
 ## 8. Signet
 
-**Build:** `HAZYNC_NETWORK=signet`, guest `cf7f75ff…`. What changes:
+**Build:** `HAZYNC_NETWORK=signet`, guest `c3501ac9…` (round 4; first built as `cf7f75ff…`). What changes:
 - Core's own `CChainParams::SigNet` (default challenge) replaces `Main()`;
 - Core's `signet.cpp` is compiled in;
 - the aggregate calls Core's unmodified `CheckSignetBlockSolution`;
@@ -285,12 +285,13 @@ equivalent).
 | `libzync-prove-range 2501 2530` in dev mode (fake receipts) | base step on the 2,500 state, then 29 recursive steps, including 9 transaction blocks |
 
 **GPU** (proposal §10):
-- signet 2,501..2,600 proved as one recursive chain on 1× RTX PRO 6000 in 1,464 s ($1.39), and verified;
-- `libzync-verify` against the 2,600 hints file: all checks pass, and the state equals the laptop sweep's;
-- 8.7 s per coinbase-only block, 15–16 s per small transaction block.
+- first run (pre-audit `cf7f75ff`): signet 2,501..2,600 in 1,464 s ($1.39), verified;
+- **re-proved on the round-4 image `c3501ac9`:** 1,452 s of proving on 1× RTX PRO 6000, ~$1.52, verified (DEMO
+  verdict: anchored at 2,500); receipts 225–227 KB; evidence in `experimental/libzync-bench/signet/gpu_r4/`;
+- 8.7–9.2 s per coinbase-only block, 14.7–16.7 s per small transaction block, 514 s for block 2,523.
 
 **Found on the GPU run: the BIP30 coinbase-txid SMT dominates blocks that spend many coinbases.**
-- Signet block 2,523 spends 374 coinbase outputs. Its aggregate executes **565 M cycles**, of which **557 M (97%)** is
+- Signet block 2,523 spends 374 coinbase outputs (514–549 s on the GPU). Its aggregate executes **565 M cycles**, of which **557 M (97%)** is
   `coinbase-smt` (SHA-256 path updates) at about **1.5 M cycles per coinbase spend**. Every other part of the block
   costs 18 M.
 - The SMT is existing Hazync machinery (#54), not libzync. It closes BIP30 permanently, which is stricter than Core:
