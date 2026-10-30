@@ -255,11 +255,22 @@ static CURVE: [u32; 24] = [
 
 pub type Pt = [u32; 16];
 
+/// Both coordinates below p. The coprocessor circuit constrains its result only modulo p, so a prover
+/// can return x + p or y + p for a small true coordinate (risc0-bigint2's own add/double assert this
+/// for the same reason). Acc::add decides P+P and P-P by limb EQUALITY, which is only meaningful on
+/// canonical values (review 2026-10-30). ~16 compares against ~270 cycles for the operation.
+#[inline(always)]
+fn canonical(p: &Pt) -> bool {
+    const P: [u32; 8] = [0xFFFFFC2F, 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF];
+    let lt = |v: &[u32]| { for k in (0..8).rev() { if v[k] != P[k] { return v[k] < P[k]; } } false };
+    lt(&p[..8]) && lt(&p[8..])
+}
 #[inline(always)]
 fn raw_add(a: &Pt, b: &Pt, out: *mut Pt) {
     unsafe {
         ADDS += 1;
         risc0_bigint2::ffi::sys_bigint2_4(ADD_BLOB.0.as_ptr(), a.as_ptr(), b.as_ptr(), CURVE.as_ptr(), out.cast());
+        assert!(canonical(&*out), "bigint2 EC add returned a non-canonical point");
     }
 }
 #[inline(always)]
@@ -267,6 +278,7 @@ fn raw_dbl(a: &Pt, out: *mut Pt) {
     unsafe {
         DBLS += 1;
         risc0_bigint2::ffi::sys_bigint2_3(DBL_BLOB.0.as_ptr(), a.as_ptr(), CURVE.as_ptr(), out.cast());
+        assert!(canonical(&*out), "bigint2 EC double returned a non-canonical point");
     }
 }
 

@@ -41,7 +41,23 @@ static HZ_BLOCK_MTP: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None)
 /// libzync design B: this block's SwiftSync hint bits (nbits, packed LE words), from $HAZYNC_SS_HINTS.
 static HZ_SS_BITS: std::sync::Mutex<Option<(u32, Vec<u32>)>> = std::sync::Mutex::new(None);
 static HZ_SS_FILE: std::sync::OnceLock<hintsfile::Hintsfile> = std::sync::OnceLock::new();
-fn agg_lite() -> bool { std::env::var("HAZYNC_AGG_LITE").as_deref() == Ok("1") }
+/// The embedded guest is a libzync guest (methods/build.rs records what it was built for), so the host
+/// writes libzync hint blocks. Replaces six run-time env vars that had to match the build exactly.
+fn agg_lite() -> bool { methods::LIBZYNC }
+/// The network the embedded guest validates (HAZYNC_NETWORK at build time).
+fn net() -> &'static libzync::net::Net {
+    libzync::net::by_name(methods::NETWORK).expect("methods::NETWORK names a known network")
+}
+/// libzync: the per-block hint bundle at $HAZYNC_LZ_HINTS, if there is one for THIS block. None means
+/// collect mode (the guest logs what it needs). A bundle for another block is refused, not applied.
+fn lz_bundle(height: u32, block_hash: &[u8; 32]) -> Option<libzync::host::BlockBundle> {
+    let path = std::env::var("HAZYNC_LZ_HINTS").ok()?;
+    if !std::path::Path::new(&path).exists() { return None; }
+    let b = libzync::host::BlockBundle::read(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert!(b.height == height && &b.block_hash == block_hash,
+            "{path} is the hint bundle of block {} ({}), not of block {height}", b.height, hex(&b.block_hash));
+    Some(b)
+}
 
 // A 32-byte hash, and a vector of them, carried over risc0 serde's PACKED byte path rather than the
 // default one-word-per-byte. MEASURED on block 962,000 (docs/WITNESS_WIRE_PROFILE_2026-08-28.md):
@@ -419,6 +435,8 @@ fn verify_receipt_ex(r: &risc0_zkvm::Receipt, claimed_id: Option<[u32; 8]>) {
     }
 }
 fn rev(mut v: Vec<u8>) -> Vec<u8> { v.reverse(); v }
+/// An image id as `method-id` prints it (the LE bytes of the words).
+fn hex_id(id: &[u32; 8]) -> String { hex(&id.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()) }
 fn arr(v: Vec<u8>) -> [u8; 32] { v.try_into().unwrap() }
 
 fn wire_proof(p: &hazync_utreexo::Proof) -> WireProof {
@@ -475,27 +493,25 @@ fn out_spendable(spk: &[u8]) -> bool { !((!spk.is_empty() && spk[0] == 0x6a) || 
 /// convention (2140-dev/swiftsync): coinbase first, then each tx, in vout order, unspendable outputs
 /// (OP_RETURN / > 10,000 bytes) skipped, and NO coinbase outputs at the two BIP30-unspendable blocks.
 /// That is exactly the order of the guest's `output_leaves`.
-fn ss_indexed_outputs<'a>(height: u32, coinbase: &Transaction, txs: impl Iterator<Item = &'a Transaction>) -> u32 {
+fn ss_indexed_outputs<'a>(bip30_skip: bool, coinbase: &Transaction, txs: impl Iterator<Item = &'a Transaction>) -> u32 {
     let n = |t: &Transaction| t.output.iter().filter(|o| out_spendable(o.script_pubkey.as_bytes())).count() as u32;
-    let cb = if height == 91_722 || height == 91_812 { 0 } else { n(coinbase) };
+    let cb = if bip30_skip { 0 } else { n(coinbase) };
     cb + txs.map(n).sum::<u32>()
 }
 
 /// This block's hint bits from the file at $HAZYNC_SS_HINTS (None if unset): bit k = indexed output k is
 /// still unspent at the file's stop height.
-fn ss_bits_for<'a>(height: u32, coinbase: &Transaction, txs: impl Iterator<Item = &'a Transaction>) -> Option<(u32, Vec<u32>)> {
+fn ss_bits_for<'a>(height: u32, bip30_skip: bool, coinbase: &Transaction, txs: impl Iterator<Item = &'a Transaction>) -> Option<(u32, Vec<u32>)> {
     let path = std::env::var("HAZYNC_SS_HINTS").ok()?;
     let file = HZ_SS_FILE.get_or_init(|| {
         let mut f = std::io::BufReader::new(std::fs::File::open(&path).unwrap_or_else(|e| panic!("{path}: {e}")));
         hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{path}: {e}"))
     });
     assert!(height <= file.stop_height(), "block {height} is past the hints file's stop height {}", file.stop_height());
-    let nbits = ss_indexed_outputs(height, coinbase, txs);
-    let mut words = vec![0u32; (nbits as usize).div_ceil(32)];
-    for k in file.indices_at_height(height).expect("hints file has no entry for this height") {
-        assert!(k < nbits, "hints file index {k} at height {height} is past the block's {nbits} indexed outputs");
-        words[k as usize / 32] |= 1 << (k % 32);
-    }
+    let nbits = ss_indexed_outputs(bip30_skip, coinbase, txs);
+    let idx = file.indices_at_height(height).expect("hints file has no entry for this height");
+    let mut words = libzync::ss_hints::bits_from_indices(nbits, &idx).unwrap_or_else(|| panic!(
+        "hints file lists an index at height {height} past the block's {nbits} indexed outputs"));
     // Negative-test hook (test-only, inert unless set): HAZYNC_SS_FLIP=<height>:<index> flips one hint bit.
     if let Some((fh, fk)) = std::env::var("HAZYNC_SS_FLIP").ok().and_then(|v| {
         let (a, b) = v.split_once(':')?; Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)) }) {
@@ -804,7 +820,8 @@ fn build_full() -> (ChainState, BlockWitness) {
     if std::env::var("HAZYNC_COV1_BADTIME").is_ok() { recent_times = vec![time; 11]; }
     let cmtp = median_u32(&recent_times);
     *HZ_BLOCK_MTP.lock().unwrap() = Some(cmtp);
-    *HZ_SS_BITS.lock().unwrap() = ss_bits_for(height, &coinbase, ptxs.iter().map(|p| &p.tx));
+    let bip30_skip = net().is_bip30_unspendable(height, &header_hash(&header));
+    *HZ_SS_BITS.lock().unwrap() = ss_bits_for(height, bip30_skip, &coinbase, ptxs.iter().map(|p| &p.tx));
     // This block's created output leaves (coinbase + every tx, unspendable skipped) — the guest's in-block
     // set, keyed by LEAF (height-bearing, so a colliding old coinbase's leaf differs and stays external).
     let mut created: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
@@ -1188,13 +1205,23 @@ fn arr_u128(x: u128) -> [u8; 32] { let mut a = [0u8; 32]; a[..16].copy_from_slic
 
 // State just after genesis (height 0), before block 1. UTXO set empty: the genesis coinbase is
 // unspendable and (per Core) never enters the UTXO set, so the accumulator starts empty.
+/// (genesis hash, time, bits, GetBlockProof(bits)) of the embedded guest's network.
+fn genesis_params() -> (&'static str, u32, u32, u128) {
+    match methods::NETWORK {
+        // Core's CSigNetParams genesis: time 1598918400, nBits 0x1e0377ae.
+        "signet" => (libzync::net::SIGNET.genesis_hex, 1_598_918_400, 0x1e03_77ae, 4_838_420),
+        _ => (GENESIS_HASH, GENESIS_TIME, GENESIS_BITS, GENESIS_WORK),
+    }
+}
+
 fn genesis_anchor() -> ChainState {
+    let (g_hash, g_time, g_bits, g_work) = genesis_params();
     ChainState {
         kind: KIND_CHAIN,
-        tip_hash: arr(rev(hx(GENESIS_HASH))), utxo_roots: Forest::new().roots(), utxo_leaves: 0,
-        cum_work: arr_u128(GENESIS_WORK), height: 0,
-        prev_nbits: GENESIS_BITS, prev_time: GENESIS_TIME, epoch_start: GENESIS_TIME,
-        recent_times: vec![GENESIS_TIME], anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
+        tip_hash: arr(rev(hx(g_hash))), utxo_roots: Forest::new().roots(), utxo_leaves: 0,
+        cum_work: arr_u128(g_work), height: 0,
+        prev_nbits: g_bits, prev_time: g_time, epoch_start: g_time,
+        recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32],
     }
 }
 
@@ -1857,6 +1884,63 @@ fn verify_chain_cmd(bin: &str) {
     assert_eq!(cs.anchor_id, expected_anchor, "chain NOT anchored at genesis (S5): anchor_id mismatch");
     println!(">>> CHAIN PROOF [genesis..{}] VERIFIED — genesis-anchored, self-authenticating.", cs.height);
     println!("  tip_hash {}  cum_work {}  UTXO leaves {}", hex(&cs.tip_hash), work_u128(&cs.cum_work), cs.utxo_leaves);
+}
+
+/// `libzync-verify <receipt> <file.hints> [anchor.json]`: everything a SwiftSync user checks before trusting
+/// a hints file because of a Hazync proof. Exit 0 only if every check passes.
+///
+///  1. the receipt verifies against THIS host's METHOD_ID (the libzync image for the network), and the
+///     journal is a ChainState whose self_id is that id (so every recursion step ran the same guest);
+///  2. anchor_id is the digest of the network's GENESIS anchor -- otherwise the chain started from a
+///     state the prover asserted, and nothing below means anything (the base step is not verified);
+///  3. height == the file's stop height H;
+///  4. ss_set == 0: the SwiftSync total is the identity, so every coin the file calls spent was created
+///     and spent exactly once, and nothing else was spent;
+///  5. ss_hints == the hash of the file's per-height index lists, computed from the file ALONE.
+///
+/// It prints tip_hash and cum_work too: the proof is about THAT chain, and a client must check it is the
+/// chain it follows (most work). If 1-5 hold, the file is correct for that chain at H, and the forest
+/// (utxo_roots, utxo_leaves) is exactly the UTXO set at H, as a Utreexo accumulator.
+///
+/// With [anchor.json] (a ChainState written by a trusted run), check 2 is against that state instead:
+/// for demonstration proofs that start mid-chain. The output says so.
+fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
+    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt}: {e}")))
+        .unwrap_or_else(|e| panic!("{receipt}: not a receipt: {e}"));
+    let mut fails = 0;
+    let mut check = |ok: bool, what: &str| {
+        println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
+        if !ok { fails += 1; }
+    };
+    let v = r.verify(METHOD_ID);
+    check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {})", hex_id(&METHOD_ID), if methods::LIBZYNC { "libzync" } else { "canonical" }, methods::NETWORK));
+    let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => { println!("  [FAIL] journal is not a ChainState: {e}"); std::process::exit(1) } };
+    check(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "journal is a ChainState committed by this image (kind, self_id)");
+    let (want_anchor, what) = match anchor {
+        None => (state_journal_bytes(&genesis_anchor()), "genesis".to_string()),
+        Some(p) => {
+            let a: ChainState = serde_json::from_str(&std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
+            (state_journal_bytes(&a), format!("the GIVEN anchor at height {} ({p}) -- NOT genesis", a.height))
+        }
+    };
+    let want_anchor = bitcoin::hashes::sha256d::Hash::hash(&want_anchor).to_byte_array();
+    check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
+    let mut f = std::io::BufReader::new(std::fs::File::open(hints).unwrap_or_else(|e| panic!("{hints}: {e}")));
+    let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{hints}: {e}"));
+    check(cs.height == file.stop_height(), &format!("height {} == the file's stop height {}", cs.height, file.stop_height()));
+    check(cs.ss_set == 0, "SwiftSync total is the identity (ss_set == 0)");
+    let fh = libzync::host::file_hash(&file);
+    check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints}", hex(&fh)));
+    println!("  chain: tip {} (display order {}), cum_work {:#x}", hex(&cs.tip_hash),
+             hex(&rev(cs.tip_hash.to_vec())), work_u128(&cs.cum_work));
+    println!("  UTXO set at H: {} coins, Utreexo roots {:?}", cs.utxo_leaves,
+             cs.utxo_roots.iter().map(|x| x.map(|h| hex(&h[..8]))).collect::<Vec<_>>());
+    if fails == 0 {
+        println!("LIBZYNC_VERIFY_OK: {hints} is proven correct for this chain at height {}", cs.height);
+    } else {
+        println!("LIBZYNC_VERIFY_FAIL: {fails} check(s) failed");
+        std::process::exit(1);
+    }
 }
 
 // SEGMENTED proof: split the block's inputs into chunks, prove each chunk's scripts (mode 4), then
@@ -2750,13 +2834,31 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
 
     b.write(&(groups.len() as u32)).unwrap();
 
-    // hazync#205 pubkey-Y hints, written BEFORE the groups because the guest verifies scripts as it
-    // reads them -- the table must be installed before the first VerifyScript call.
-    //
-    // ⛔ HAZYNC_LIFTX_HINT must hold the SAME value at BUILD time and at RUN time. The guest only
-    // reads this block when built with the `liftx-hint` feature, so a mismatch desynchronises the
-    // stream rather than merely losing the optimisation. Same discipline as HAZYNC_BIGINT2_ECDSA.
-    if std::env::var("HAZYNC_LIFTX_HINT").as_deref() == Ok("1") {
+    // libzync guest: ONE hint block (libzync/src/wire.rs) -- pubkey-Y hints, batch-signature hints from
+    // the block's bundle ($HAZYNC_LZ_HINTS, or collect mode without one), and the block's MTP and time.
+    if methods::LIBZYNC {
+        let liftx: Vec<u8> = liftx_hints(w, lo, hi).iter().flat_map(|(x, y)| x.iter().chain(y.iter()).copied()).collect();
+        let bundle = lz_bundle(w.height, &header_hash(&w.header));
+        let sig = bundle.as_ref().and_then(|b| b.chunk_sig(lo as u32, hi as u32));
+        // Negative control (test-only): HAZYNC_LITE_BAD_MTP feeds chunks a wrong MTP; the aggregate must reject.
+        let bump = std::env::var("HAZYNC_LITE_BAD_MTP").is_ok() as u32;
+        let words = libzync::wire::ChunkHints {
+            mtp: HZ_BLOCK_MTP.lock().unwrap().expect("libzync: build_full has not set the block MTP") + bump,
+            block_time: u32::from_le_bytes(w.header[68..72].try_into().unwrap()),
+            liftx: &liftx,
+            sig_collect: sig.is_none(),
+            sig: sig.unwrap_or(&[]),
+        }.encode();
+        b.write(&(words.len() as u32)).unwrap();
+        b.write_slice(&words);
+        match sig {
+            Some(s) => eprintln!("  libzync: inputs {lo}..{hi}: {} pubkey hints, {} signature hints",
+                                 liftx.len() / 64, s.len() / libzync::wire::SIG_HINT_BYTES),
+            None => eprintln!("  libzync: inputs {lo}..{hi}: {} pubkey hints, signatures COLLECT (no bundle entry)", liftx.len() / 64),
+        }
+    } else if std::env::var("HAZYNC_LIFTX_HINT").as_deref() == Ok("1") {
+        // hazync#205 pubkey-Y hints for the canonical guest, written BEFORE the groups because the guest
+        // verifies scripts as it reads them. ⛔ Must match the guest build (canonical: on).
         let hints = liftx_hints(w, lo, hi);
         b.write(&(hints.len() as u32)).unwrap();
         let mut flat = Vec::with_capacity(hints.len() * 64);
@@ -2766,36 +2868,6 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
         }
         b.write_slice(&flat);
         eprintln!("  liftx: {} pubkey hints for inputs {}..{}", hints.len(), lo, hi);
-    }
-
-    // libzync experiment: batch-ECDSA hints from $HAZYNC_BATCH_HINTS_DIR/batch_<lo>_<hi>.bin
-    // (68-byte records). No file => collect mode: the guest logs every verify for the host to hint.
-    // ⛔ Same discipline as above: HAZYNC_BATCH_ECDSA must match between build and run.
-    if std::env::var("HAZYNC_BATCH_ECDSA").as_deref() == Ok("1") {
-        let dir = std::env::var("HAZYNC_BATCH_HINTS_DIR").unwrap_or_else(|_| ".".into());
-        let path = format!("{dir}/batch_{lo}_{hi}.bin");
-        match std::fs::read(&path) {
-            Ok(flat) => {
-                assert!(flat.len() % 68 == 0, "{path}: not a whole number of 68-byte hints");
-                b.write(&0u32).unwrap();
-                b.write(&((flat.len() / 68) as u32)).unwrap();
-                b.write_slice(&flat);
-                eprintln!("  batch: {} hints for inputs {}..{} from {path}", flat.len() / 68, lo, hi);
-            }
-            Err(_) => {
-                b.write(&1u32).unwrap();
-                b.write(&0u32).unwrap();
-                eprintln!("  batch: COLLECT for inputs {}..{} (no {path})", lo, hi);
-            }
-        }
-    }
-    // libzync agg-lite: the block's MTP and timestamp (the guest commits both; the aggregate checks them).
-    // ⛔ HAZYNC_AGG_LITE must match between build and run, like the hint blocks above.
-    if agg_lite() {
-        // Negative control (test-only): HAZYNC_LITE_BAD_MTP feeds chunks a wrong MTP; the aggregate must reject.
-        let bump = std::env::var("HAZYNC_LITE_BAD_MTP").is_ok() as u32;
-        b.write(&(HZ_BLOCK_MTP.lock().unwrap().expect("agg-lite: build_full has not set the block MTP") + bump)).unwrap();
-        b.write(&u32::from_le_bytes(w.header[68..72].try_into().unwrap())).unwrap();
     }
 
     for (tx_idx, gs, ge) in groups {
@@ -2891,6 +2963,10 @@ fn report_agg_execute_only(mut b: risc0_zkvm::ExecutorEnvBuilder) {
     let cycles = session.cycles();
     println!("=== AGGREGATE, EXECUTE ONLY (no proving) ===");
     println!("  block validation cycles  {cycles}");
+    {
+        use sha2::Digest;
+        println!("  journal sha256           {}", hex(&sha2::Sha256::digest(&session.journal.bytes)));
+    }
     println!("  segments at po2 {}        ~{}", seg_po2(), cycles.div_ceil(1u64 << seg_po2()));
     println!("  executed in              {:.1}s", t_x.elapsed().as_secs_f64());
     println!();
@@ -2948,6 +3024,18 @@ fn write_aggregate_env(
     anchor: &ChainState,
     w: &BlockWitness,
 ) {
+    write_aggregate_env_ex(b, receipts, anchor, w, true);
+}
+
+/// `is_base == false`: `anchor` is the PREVIOUS block's committed chain state, whose receipt the caller
+/// has added as an assumption -- the guest verifies it recursively instead of trusting it.
+fn write_aggregate_env_ex(
+    b: &mut risc0_zkvm::ExecutorEnvBuilder<'_>,
+    receipts: &[risc0_zkvm::Receipt],
+    anchor: &ChainState,
+    w: &BlockWitness,
+    is_base: bool,
+) {
     b.segment_limit_po2(seg_po2());
     for r in receipts { b.add_assumption(r.clone()); }
     b.write(&5u32).unwrap();
@@ -2958,7 +3046,7 @@ fn write_aggregate_env(
     // ⛔ HAZYNC_AGG_READSLICE must hold the SAME value at BUILD and RUN time -- the guest only reads
     // this shape when compiled for it, so a mismatch desynchronises the stream rather than merely
     // losing the optimisation. Same discipline as HAZYNC_BIGINT2_ECDSA.
-    if std::env::var("HAZYNC_AGG_READSLICE").as_deref() == Ok("1") {
+    if methods::LIBZYNC || std::env::var("HAZYNC_AGG_READSLICE").as_deref() == Ok("1") {
         fn padded(v: &[u8]) -> Vec<u8> {
             let mut p = v.to_vec();
             p.resize(v.len().div_ceil(4) * 4, 0);
@@ -2976,7 +3064,7 @@ fn write_aggregate_env(
         b.write(&state_journal_bytes(anchor)).unwrap();
     }
     b.write(w).unwrap();
-    b.write(&1u32).unwrap();
+    b.write(&(is_base as u32)).unwrap();
 }
 
 /// Read and verify the chunk receipts an aggregate consumes (hazync#153).
@@ -3044,7 +3132,7 @@ fn agg_exec_fake() {
     libzync_agg_prep(&mut w);
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
-    libzync_agg_tail(&mut b);
+    libzync_agg_tail(&mut b, &w);
     report_agg_execute_only(b);
 }
 
@@ -3052,7 +3140,7 @@ fn agg_exec_fake() {
 /// transaction fact from the chunk journals, so no transactions, prevouts, inputs or txids at all.
 /// Shared by `agg-exec-fake` and `agg-chunks` (the real-receipt aggregate) so both send one stream.
 fn libzync_agg_prep(w: &mut BlockWitness) {
-    if std::env::var("HAZYNC_SWIFTSYNC").as_deref() == Ok("1") {
+    if methods::LIBZYNC {
         for inp in w.inputs.iter_mut() {
             inp.proof_i.siblings = PackedHashes(Vec::new());
             inp.proof_last.siblings = PackedHashes(Vec::new());
@@ -3066,37 +3154,57 @@ fn libzync_agg_prep(w: &mut BlockWitness) {
     }
 }
 
-/// libzync: the SwiftSync ECMH hints, after the witness. From $HAZYNC_ECMH_HINTS; no file => the guest
-/// collects (logs ECMHREC lines). ⛔ HAZYNC_SWIFTSYNC must match the guest build, like every hint block.
-fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder) {
-    if std::env::var("HAZYNC_SWIFTSYNC").as_deref() != Ok("1") { return; }
-    match std::env::var("HAZYNC_ECMH_HINTS").ok().and_then(|p| std::fs::read(p).ok()) {
-        Some(flat) => {
-            let mut padded = flat.clone();
-            padded.resize(flat.len().div_ceil(4) * 4, 0);
-            b.write(&0u32).unwrap();
-            b.write(&(flat.len() as u32)).unwrap();
-            b.write_slice(&padded);
-            println!("  swiftsync: {} bytes of ECMH hints", flat.len());
-        }
-        None => {
-            b.write(&1u32).unwrap();
-            b.write(&0u32).unwrap();
-            println!("  swiftsync: COLLECT (no HAZYNC_ECMH_HINTS file)");
-        }
+/// libzync: the aggregate's ONE hint block, after the witness: ECMH hints from the block's bundle
+/// ($HAZYNC_LZ_HINTS; none = the guest collects, logging ECMHREC lines) and the SwiftSync hint bits.
+fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
+    if !methods::LIBZYNC { return; }
+    let bundle = lz_bundle(w.height, &header_hash(&w.header));
+    let bits = HZ_SS_BITS.lock().unwrap().clone();
+    let words = libzync::wire::AggHints {
+        ecmh_collect: bundle.is_none(),
+        ecmh: bundle.as_ref().map(|b| b.ecmh.as_slice()).unwrap_or(&[]),
+        ss: bits.as_ref().map(|(n, v)| (*n, v.as_slice())),
+    }.encode();
+    b.write(&(words.len() as u32)).unwrap();
+    b.write_slice(&words);
+    match &bundle {
+        Some(bd) => println!("  libzync: {} bytes of ECMH hints, {}", bd.ecmh.len(),
+                             if bits.is_some() { "SwiftSync hint bits" } else { "no hints file" }),
+        None => println!("  libzync: ECMH COLLECT (no bundle)"),
     }
-    // Design B: the hint bits (mode 1), or mode 0 = no hints file. Read by the guest straight after the
-    // ECMH hints, and only in agg-lite builds -- so only written for agg-lite.
-    if agg_lite() {
-        match HZ_SS_BITS.lock().unwrap().as_ref() {
-            Some((nbits, words)) => {
-                b.write(&1u32).unwrap();
-                b.write(nbits).unwrap();
-                if !words.is_empty() { b.write_slice(words); }
-            }
-            None => { b.write(&0u32).unwrap(); b.write(&0u32).unwrap(); }
-        }
+}
+
+/// libzync: the guest's memory image, built ONCE per process. `default_executor().execute` goes through
+/// ExecutorImpl::from_elf, which decodes the ELF and builds the image again on every call; the laptop
+/// tools (hints, sweeps) execute the guest thousands of times. Same ExecutorImpl, same image, same
+/// session -- only the rebuild is skipped. A profiled run (RISC0_PPROF_OUT) takes the normal path,
+/// because the profiler is attached in from_elf.
+static LZ_IMAGE: std::sync::OnceLock<risc0_binfmt::MemoryImage> = std::sync::OnceLock::new();
+
+/// What the libzync tools read from an execution (risc0's SessionInfo is #[non_exhaustive]).
+struct Exec {
+    cycles: u64,
+    journal: risc0_zkvm::Journal,
+    receipt_claim: Option<risc0_zkvm::ReceiptClaim>,
+}
+impl Exec {
+    fn cycles(&self) -> u64 { self.cycles }
+}
+
+fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
+    if std::env::var("RISC0_PPROF_OUT").is_ok() {
+        let s = default_executor().execute(env, METHOD_ELF).map_err(|e| e.to_string())?;
+        return Ok(Exec { cycles: s.cycles(), journal: s.journal, receipt_claim: s.receipt_claim });
     }
+    let image = LZ_IMAGE.get_or_init(|| {
+        risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image")
+    }).clone();
+    let session = risc0_zkvm::ExecutorImpl::new(env, image).map_err(|e| e.to_string())?
+        .run_with_callback(|_| Ok(Box::new(risc0_zkvm::NullSegmentRef)))
+        .map_err(|e| e.to_string())?;
+    let claim = session.claim().map_err(|e| e.to_string())?;
+    // Session::user_cycles is the same sum SessionInfo::cycles() takes over the segments.
+    Ok(Exec { cycles: session.user_cycles, journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim) })
 }
 
 /// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
@@ -3122,7 +3230,7 @@ fn execute_chunks_parallel(w: &BlockWitness, bounds: &[(usize, usize)], threads:
                     b.write(&w.height).unwrap();
                     b.write(&header_hash(&w.header)).unwrap();
                     write_chunk_inputs(&mut b, w, lo, hi);
-                    default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("execute chunk")
+                    lz_execute(b.build().unwrap()).expect("execute chunk")
                 };
                 let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
                 let r = Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone());
@@ -3138,82 +3246,39 @@ fn hint_threads() -> usize {
         .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)).max(1)
 }
 
-/// libzync: `libzync-hints <dir>` — every hint file a block needs, in ONE pass (GPU_RESULTS.md next step 6).
+/// libzync: `libzync-hints <out>` — the block's hint bundle (libzync::host::BlockBundle), in ONE pass.
 ///
-/// Writes `<dir>/hg/batch_<lo>_<hi>.bin` (batch-verify hints) and `<dir>/ecmh.bin` (SwiftSync hints), byte for
-/// byte what make_batch_hints.py / make_ecmh_hints.py write from a collect log.
-/// - All chunks execute in COLLECT mode at once, one thread each; the guest's BATCHREC lines are captured
-///   from each session's stdout instead of a log file.
-/// - R = u1·G + u2·Q is computed with libsecp, not pure Python.
+/// - Every chunk executes in COLLECT mode at once, one thread each; the guest's BATCHREC lines come back
+///   from each session's stdout, and R = u1·G + u2·Q is computed with libsecp (libzync::host::sig_hint).
 /// - The aggregate's ECMH collect reuses those chunk executions: a collect-mode chunk commits the same
 ///   journal as a hinted one, so no second pass over the chunks.
 /// ⛔ The hints are untrusted input to the guest (it re-checks every one), so a bug here can only make a
-/// chunk fail, never make a bad signature pass. Needs the same HAZYNC_* env as proving (chunk bounds!).
+/// chunk fail, never make a bad signature pass. Uses the same chunk layout as proving (HAZYNC_CHUNKS,
+/// HAZYNC_PROFILE_LAYOUT), and records it: a bundle applied under another layout is ignored per chunk.
 fn libzync_hints_cmd(out: &str) {
-    use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey};
     use risc0_zkvm::Receipt;
     use std::time::Instant;
+    assert!(methods::LIBZYNC, "libzync-hints needs a libzync guest (build with HAZYNC_LIBZYNC=1)");
     let t0 = Instant::now();
+    // Collect mode for every hint kind: no bundle.
+    std::env::remove_var("HAZYNC_LZ_HINTS");
     let (anchor, mut w) = build_full();
     let bounds = chunk_bounds(&w, nchunks_env());
-    let hg = format!("{out}/hg");
-    let empty = format!("{out}/.collect");
-    std::fs::create_dir_all(&hg).expect("hint dir");
-    std::fs::create_dir_all(&empty).expect("collect dir");
-    // Collect mode for both hint kinds: no batch file in an empty dir, no ECMH file at all.
-    std::env::set_var("HAZYNC_BATCH_HINTS_DIR", &empty);
-    std::env::set_var("HAZYNC_ECMH_HINTS", format!("{empty}/none"));
     let threads = hint_threads();
     let done = execute_chunks_parallel(&w, &bounds, threads);
     let t_chunks = t0.elapsed().as_secs_f64();
 
-    // Batch hints: 68 bytes per logged verify, in call order: u32 LE valid | R.x BE | R.y BE.
-    let secp = Secp256k1::new();
+    let mut bundle = libzync::host::BlockBundle { height: w.height, block_hash: header_hash(&w.header), ..Default::default() };
     let (mut nrec, mut nvalid) = (0usize, 0usize);
     for (i, &(lo, hi)) in bounds.iter().enumerate() {
         let mut blob = Vec::new();
-        for line in String::from_utf8_lossy(&done[i].1).lines() {
-            let Some(at) = line.find("BATCHREC") else { continue };
-            let rest = &line[at + 8..];
-            let kind = rest.as_bytes()[0] - b'0';
-            let rec = hx(rest[2..].trim());
-            assert!(rec.len() == 160 && matches!(kind, 0 | 1 | 3 | 4), "bad BATCHREC line: {line}");
-            let f = |k: usize| -> [u8; 32] { rec[32 * k..32 * k + 32].try_into().unwrap() };
-            let (u1, u2, r) = (f(0), f(1), f(4));
-            let mut q = [4u8; 65];
-            q[1..33].copy_from_slice(&f(2));
-            q[33..].copy_from_slice(&f(3));
-            // u·P with u = 0 is the point at infinity: None, and so is a sum that cancels.
-            let a = SecretKey::from_slice(&u1).ok().map(|k| PublicKey::from_secret_key(&secp, &k));
-            let b = PublicKey::from_slice(&q).ok().and_then(|q| {
-                Scalar::from_be_bytes(u2).ok().and_then(|t| q.mul_tweak(&secp, &t).ok())
-            });
-            let rp = match (a, b) {
-                (Some(a), Some(b)) => a.combine(&b).ok(),
-                (x, None) | (None, x) => x,
-            };
-            let xy = rp.map(|p| p.serialize_uncompressed());
-            let ok = match &xy {
-                None => false,
-                Some(p) => {
-                    let (x, yodd) = (&p[1..33], p[64] & 1);
-                    match kind {
-                        // ECDSA: x(R) mod n == r. x < p and p - n < 2^129, so x mod n is x or x - n.
-                        0 => x == r.as_slice() || {
-                            let n = hx("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
-                            x >= n.as_slice() && sub_be(x, &n) == r
-                        },
-                        1 => x == r.as_slice() && yodd == 0,
-                        _ => x == r.as_slice() && yodd == kind - 3,
-                    }
-                }
-            };
+        for rec in libzync::host::sig_records(&String::from_utf8_lossy(&done[i].1)) {
+            let h = libzync::host::sig_hint(&rec);
             nrec += 1;
-            nvalid += ok as usize;
-            blob.extend_from_slice(&(ok as u32).to_le_bytes());
-            match &xy { Some(p) => blob.extend_from_slice(&p[1..65]), None => blob.extend_from_slice(&[0u8; 64]) }
+            nvalid += (h[0] == 1) as usize;
+            blob.extend_from_slice(&h);
         }
-        std::fs::write(format!("{hg}/batch_{lo}_{hi}.bin"), &blob).expect("write batch hints");
+        bundle.chunks.push((lo as u32, hi as u32, blob));
     }
     let t_batch = t0.elapsed().as_secs_f64();
 
@@ -3225,17 +3290,19 @@ fn libzync_hints_cmd(out: &str) {
         let mut b = ExecutorEnv::builder();
         b.stdout(&mut log);
         write_aggregate_env(&mut b, &receipts, &anchor, &w);
-        libzync_agg_tail(&mut b);
-        default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("collect aggregate");
+        libzync_agg_tail(&mut b, &w);
+        // A collect aggregate checks the whole block, logs every leaf, then STOPS before committing
+        // (a collect run must never yield a chain state). Any other failure is a real one.
+        if let Err(e) = lz_execute(b.build().unwrap()) {
+            assert!(e.contains("collect run commits no chain state"), "collect aggregate failed: {e}");
+        }
     }
-    let leaves: Vec<Vec<u8>> = String::from_utf8_lossy(&log).lines()
-        .filter_map(|l| l.find("ECMHREC ").map(|at| hx(l[at + 8..].trim()))).collect();
-    let mut blob = Vec::new();
-    for leaf in &leaves { blob.extend_from_slice(&ecmh_hint(leaf)); }
-    std::fs::write(format!("{out}/ecmh.bin"), &blob).expect("write ecmh hints");
-    println!("libzync-hints: block {} {} chunks on {} threads", w.height, bounds.len(), threads);
+    let leaves = libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log));
+    for leaf in &leaves { bundle.ecmh.extend_from_slice(&libzync::host::ecmh_hint(leaf)); }
+    bundle.write(out).unwrap_or_else(|e| panic!("{out}: {e}"));
+    println!("libzync-hints: block {} {} chunks on {} threads -> {out}", w.height, bounds.len(), threads);
     println!("  batch: {nrec} verifies, {nvalid} valid, {} left to libsecp", nrec - nvalid);
-    println!("  ecmh: {} operations, {} bytes", leaves.len(), blob.len());
+    println!("  ecmh: {} operations, {} bytes", leaves.len(), bundle.ecmh.len());
     println!("  time: chunks {t_chunks:.1} s, batch hints {:.1} s, aggregate + ecmh {:.1} s, total {:.1} s",
              t_batch - t_chunks, t0.elapsed().as_secs_f64() - t_batch, t0.elapsed().as_secs_f64());
 }
@@ -3243,41 +3310,104 @@ fn libzync_hints_cmd(out: &str) {
 /// libzync design B test tool: a SwiftSync hints file for stop height H, in the published hintsfile v0
 /// format (via the hintsfile crate), from block_<h>.json for h = 1..=H. Replays every block: indexed
 /// outputs enter a live set, every input removes its prevout; what survives at H is the file.
-fn ss_make_hints_cmd(h_stop: u32, dir: &str, out: &str) {
-    use hintsfile::{EliasFano, HintsfileBuilder};
+/// Replay blocks 1..=H from block_<h>.json: indexed outputs (the hints file's numbering) enter a live set,
+/// every input removes its prevout. Returns, per height, the sorted unspent indices at H, and for every
+/// indexed output (height, index) -> (txid display hex, vout, height it was spent at, if it was).
+fn ss_replay(h_stop: u32, dir: &str)
+    -> (Vec<Vec<u32>>, std::collections::HashMap<(u32, u32), (String, u32, Option<u32>)>) {
     let mut live: std::collections::HashMap<([u8; 32], u32), (u32, u32)> = std::collections::HashMap::new();
+    let mut all: std::collections::HashMap<(u32, u32), (String, u32, Option<u32>)> = std::collections::HashMap::new();
     for h in 1..=h_stop {
         let j = read_block_json(dir, h);
         let cb: Transaction = deserialize(&hx(j["coinbase_hex"].as_str().unwrap())).unwrap();
         let txs: Vec<Transaction> = j["txs"].as_array().unwrap().iter()
             .map(|t| deserialize(&hx(t["raw"].as_str().unwrap())).unwrap()).collect();
+        let hdr = build_header_v(j["version"].as_i64().unwrap() as i32, j["prev"].as_str().unwrap(),
+                                 &arr(rev(hx(j["merkle"].as_str().unwrap()))), j["time"].as_u64().unwrap() as u32,
+                                 j["bits"].as_u64().unwrap() as u32, j["nonce"].as_u64().unwrap() as u32);
+        let bip30_skip = net().is_bip30_unspendable(h, &header_hash(&hdr));
         let mut idx = 0u32;
         for (ti, t) in std::iter::once(&cb).chain(txs.iter()).enumerate() {
             if ti > 0 {
                 for i in &t.input {
                     let k = (i.previous_output.txid.to_byte_array(), i.previous_output.vout);
-                    assert!(live.remove(&k).is_some(), "block {h} spends a coin the replay does not hold");
+                    let at = live.remove(&k).unwrap_or_else(|| panic!("block {h} spends a coin the replay does not hold"));
+                    if let Some(e) = all.get_mut(&at) { e.2 = Some(h); }
                 }
             }
-            if ti == 0 && (h == 91_722 || h == 91_812) { continue; }
-            let txid = t.compute_txid().to_byte_array();
+            if ti == 0 && bip30_skip { continue; }
+            let txid = t.compute_txid();
             for (v, o) in t.output.iter().enumerate() {
                 if !out_spendable(o.script_pubkey.as_bytes()) { continue; }
-                live.insert((txid, v as u32), (h, idx));
+                live.insert((txid.to_byte_array(), v as u32), (h, idx));
+                all.insert((h, idx), (txid.to_string(), v as u32, None));
                 idx += 1;
             }
         }
     }
     let mut per_h: Vec<Vec<u32>> = vec![Vec::new(); h_stop as usize + 1];
     for (_, (h, k)) in &live { per_h[*h as usize].push(*k); }
+    for v in per_h.iter_mut() { v.sort_unstable(); }
+    (per_h, all)
+}
+
+/// libzync design B test tool: a SwiftSync hints file for stop height H, in the published hintsfile v0
+/// format (via the hintsfile crate), from block_<h>.json for h = 1..=H.
+fn ss_make_hints_cmd(h_stop: u32, dir: &str, out: &str) {
+    use hintsfile::{EliasFano, HintsfileBuilder};
+    let (mut per_h, _) = ss_replay(h_stop, dir);
+    // Negative-test hook (inert unless set): HAZYNC_SS_CORRUPT=<h>:<k> toggles index k at height h, to
+    // check that swiftsync-diff-hints names exactly that entry.
+    if let Some((ch, ck)) = std::env::var("HAZYNC_SS_CORRUPT").ok().and_then(|v| {
+        let (a, b) = v.split_once(':')?; Some((a.parse::<usize>().ok()?, b.parse::<u32>().ok()?)) }) {
+        let v = &mut per_h[ch];
+        match v.binary_search(&ck) { Ok(i) => { v.remove(i); } Err(i) => v.insert(i, ck) }
+        println!("  NEGATIVE CONTROL: index {ck} at height {ch} toggled");
+    }
     let f = std::io::BufWriter::new(std::fs::File::create(out).expect("create hints file"));
     let mut bld = HintsfileBuilder::new(f).initialize(h_stop).expect("hints header");
     for h in 1..=h_stop as usize {
-        per_h[h].sort_unstable();
         bld.append(EliasFano::compress(&per_h[h])).expect("append");
     }
     bld.finish().expect("finish");
-    println!("swiftsync-make-hints: H={h_stop}, {} coins unspent at H -> {out}", live.len());
+    println!("swiftsync-make-hints: H={h_stop}, {} coins unspent at H -> {out}", per_h.iter().map(|v| v.len()).sum::<usize>());
+}
+
+/// `swiftsync-diff-hints <file> <json dir> [H]`: WHERE a hints file is wrong. A proof only says "not
+/// balanced at H" (one running total over 1..H); the host has the blocks, so it replays them and names
+/// every height and output the file gets wrong, with the outpoint and, for a coin the file calls unspent,
+/// the height that actually spent it. H defaults to the file's stop height.
+fn ss_diff_hints_cmd(path: &str, dir: &str, h_arg: Option<u32>) {
+    let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap_or_else(|e| panic!("{path}: {e}")));
+    let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let h_stop = h_arg.unwrap_or(file.stop_height());
+    assert!(h_stop == file.stop_height(), "the file stops at {}, not {h_stop}: compare at its own stop height", file.stop_height());
+    let (truth, all) = ss_replay(h_stop, dir);
+    let (mut bad_heights, mut wrong) = (0u32, 0usize);
+    for h in 1..=h_stop {
+        let mut got = file.indices_at_height(h).expect("height");
+        got.sort_unstable();
+        let want = &truth[h as usize];
+        if &got == want { continue; }
+        bad_heights += 1;
+        let gs: std::collections::BTreeSet<u32> = got.iter().copied().collect();
+        let ws: std::collections::BTreeSet<u32> = want.iter().copied().collect();
+        for k in gs.difference(&ws) {
+            wrong += 1;
+            match all.get(&(h, *k)) {
+                Some((t, v, Some(sh))) => println!("  height {h} index {k}: file says UNSPENT, {t}:{v} was spent at {sh}"),
+                Some((t, v, None)) => println!("  height {h} index {k}: file says UNSPENT, {t}:{v} (?)"),
+                None => println!("  height {h} index {k}: file names an index the block does not have"),
+            }
+        }
+        for k in ws.difference(&gs) {
+            wrong += 1;
+            let (t, v, _) = &all[&(h, *k)];
+            println!("  height {h} index {k}: file says SPENT, {t}:{v} is unspent at {h_stop}");
+        }
+    }
+    if wrong == 0 { println!("swiftsync-diff-hints: {path} is EXACT for 1..={h_stop}"); }
+    else { println!("swiftsync-diff-hints: {wrong} wrong entries at {bad_heights} heights"); }
 }
 
 /// libzync design B end-to-end check (execute mode): blocks 1..=H from block_<h>.json, each block's
@@ -3290,7 +3420,7 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
     let t0 = Instant::now();
     let tmp = format!("{dir}/.sweep");
     std::fs::create_dir_all(&tmp).unwrap();
-    std::env::set_var("HAZYNC_BATCH_HINTS_DIR", format!("{tmp}/no-batch-hints"));
+    std::env::remove_var("HAZYNC_LZ_HINTS");
     let mut prev = genesis_anchor();
     let mut expect_hash = [0u8; 32];
     let mut cycles = 0u64;
@@ -3300,34 +3430,34 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
         assert_eq!(w.height, h, "block_{h}.json holds height {}", w.height);
         w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
         let bounds = chunk_bounds(&w, nchunks_env());
+        std::env::remove_var("HAZYNC_LZ_HINTS"); // chunks collect; the bundle below is this block's aggregate's
         let receipts: Vec<Receipt> = execute_chunks_parallel(&w, &bounds, hint_threads()).into_iter().map(|(r, _)| r).collect();
         libzync_agg_prep(&mut w);
         // The host's own copy of the hint-hash chain, from the bits it sends (checked against the guest at H).
-        if let Some((nbits, words)) = HZ_SS_BITS.lock().unwrap().as_ref() {
-            use sha2::{Digest, Sha256};
-            let mut d = Sha256::new();
-            let _ = (nbits, words);
-            expect_hash = ss_hints_step(&expect_hash, h, &bits_to_indices(words));
+        if let Some((_, words)) = HZ_SS_BITS.lock().unwrap().as_ref() {
+            expect_hash = libzync::ss_hints::step(&expect_hash, h, &libzync::ss_hints::indices(words));
         }
-        let run = |ecmh: &str| -> (Result<risc0_zkvm::SessionInfo, String>, Vec<u8>) {
-            std::env::set_var("HAZYNC_ECMH_HINTS", ecmh);
+        let block_hash = header_hash(&w.header);
+        let run = |bundle: Option<&str>| -> (Result<Exec, String>, Vec<u8>) {
+            match bundle { Some(p) => std::env::set_var("HAZYNC_LZ_HINTS", p), None => std::env::remove_var("HAZYNC_LZ_HINTS") }
             let mut log = Vec::new();
             let r = {
                 let mut b = ExecutorEnv::builder();
                 b.stdout(&mut log);
                 write_aggregate_env(&mut b, &receipts, &prev, &w);
-                libzync_agg_tail(&mut b);
-                default_executor().execute(b.build().unwrap(), METHOD_ELF).map_err(|e| e.to_string())
+                libzync_agg_tail(&mut b, &w);
+                lz_execute(b.build().unwrap())
             };
             (r, log)
         };
-        let (_, clog) = run(&format!("{tmp}/none"));
-        let leaves: Vec<Vec<u8>> = String::from_utf8_lossy(&clog).lines()
-            .filter_map(|l| l.find("ECMHREC ").map(|at| hx(l[at + 8..].trim()))).collect();
-        let hints: Vec<u8> = leaves.iter().flat_map(|l| ecmh_hint(l)).collect();
-        let hp = format!("{tmp}/ecmh.bin");
-        std::fs::write(&hp, &hints).unwrap();
-        let (res, log) = run(&hp);
+        let (_, clog) = run(None);
+        let mut bd = libzync::host::BlockBundle { height: h, block_hash, ..Default::default() };
+        for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&clog)) {
+            bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
+        }
+        let hp = format!("{tmp}/bundle.lzb");
+        bd.write(&hp).unwrap();
+        let (res, log) = run(Some(&hp));
         let s = match res {
             Ok(s) => s,
             Err(e) => {
@@ -3341,6 +3471,14 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
         cycles += s.cycles();
         prev = s.journal.decode::<ChainState>().expect("decode ChainState");
         assert_eq!(prev.height, h);
+        // HAZYNC_SWEEP_SAVE=<dir>: the committed state every 100 blocks and at H, as JSON -- the anchor a
+        // demonstration proof of a later range starts from (libzync-prove-range, libzync-verify).
+        if let Ok(d) = std::env::var("HAZYNC_SWEEP_SAVE") {
+            if h % 100 == 0 || h == h_stop {
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(format!("{d}/state_{h}.json"), serde_json::to_string(&prev).unwrap()).unwrap();
+            }
+        }
         if h % 50 == 0 || h == h_stop {
             println!("  block {h}: forest leaves {}  ss_set {}  ({:.0} s)", prev.utxo_leaves, prev.ss_set, t0.elapsed().as_secs_f64());
         }
@@ -3354,21 +3492,90 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
     println!("{}", if balanced && hash_ok { "SWEEP_OK" } else { "SWEEP_FAIL" });
 }
 
-fn bits_to_indices(words: &[u32]) -> Vec<u32> {
-    (0..words.len() * 32).filter(|k| (words[k / 32] >> (k % 32)) & 1 == 1).map(|k| k as u32).collect()
-}
-
-/// One step of the proof's hint-hash chain (v2), as the guest computes it: over the height and its list of
-/// unspent indices, i.e. exactly what a hintsfile stores for that height.
-fn ss_hints_step(prev: &[u8; 32], height: u32, indices: &[u32]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut d = Sha256::new();
-    d.update(b"libzync/swiftsync-hints/v2");
-    d.update(prev);
-    d.update(height.to_le_bytes());
-    d.update((indices.len() as u32).to_le_bytes());
-    for k in indices { d.update(k.to_le_bytes()); }
-    d.finalize().into()
+/// `libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>`: PROVE blocks lo..=hi as one
+/// recursive chain on this machine's prover (GPU with the cuda feature). Block lo is a base step on the
+/// given anchor (the committed state at lo-1, e.g. from `swiftsync-sweep` with HAZYNC_SWEEP_SAVE); every
+/// later block's aggregate VERIFIES the previous block's receipt (is_base = 0). Writes block_<h>.rcpt
+/// (bincode Receipt) and state_<h>.json per block, and times.tsv. Hints come from $HAZYNC_SS_HINTS.
+/// Per block: chunks proved (succinct), the aggregate's ECMH hints learned by one collect execution,
+/// then the aggregate proved (succinct, so the next block can resolve it cheaply).
+fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str) {
+    use risc0_zkvm::Receipt;
+    use std::io::Write as _;
+    use std::time::Instant;
+    assert!(methods::LIBZYNC, "libzync-prove-range needs a libzync guest");
+    std::fs::create_dir_all(out).unwrap();
+    let mut prev: ChainState = serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap();
+    assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
+    let mut prev_rcpt: Option<Receipt> = None;
+    let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
+    let opts = ProverOpts::succinct();
+    let t_all = Instant::now();
+    for h in lo..=hi {
+        let t0 = Instant::now();
+        std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
+        std::env::remove_var("HAZYNC_LZ_HINTS");
+        let (_, mut w) = build_full();
+        assert_eq!(w.height, h);
+        w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
+        let bounds = chunk_bounds(&w, nchunks_env());
+        let mut chunks: Vec<Receipt> = Vec::with_capacity(bounds.len());
+        for &(clo, chi) in &bounds {
+            let mut b = ExecutorEnv::builder();
+            b.segment_limit_po2(seg_po2());
+            b.write(&4u32).unwrap();
+            b.write(&w.height).unwrap();
+            b.write(&header_hash(&w.header)).unwrap();
+            write_chunk_inputs(&mut b, &w, clo, chi);
+            let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts).expect("prove chunk").receipt;
+            r.verify(METHOD_ID).expect("chunk receipt verifies");
+            chunks.push(r);
+        }
+        let t_chunks = t0.elapsed().as_secs_f64();
+        libzync_agg_prep(&mut w);
+        let is_base = prev_rcpt.is_none();
+        let env_for = |b: &mut risc0_zkvm::ExecutorEnvBuilder| {
+            b.segment_limit_po2(seg_po2());
+            if let Some(p) = &prev_rcpt { b.add_assumption(p.clone()); }
+            write_aggregate_env_ex(b, &chunks, &prev, &w, is_base);
+            libzync_agg_tail(b, &w);
+        };
+        // collect pass: the leaves the ECMH hints are for
+        let mut log = Vec::new();
+        {
+            let mut b = ExecutorEnv::builder();
+            b.stdout(&mut log);
+            env_for(&mut b);
+            if let Err(e) = lz_execute(b.build().unwrap()) {
+                assert!(e.contains("collect run commits no chain state"), "block {h}: collect aggregate failed: {e}");
+            }
+        }
+        let mut bd = libzync::host::BlockBundle { height: h, block_hash: header_hash(&w.header), ..Default::default() };
+        for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log)) {
+            bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
+        }
+        let bp = format!("{out}/bundle_{h}.lzb");
+        bd.write(&bp).unwrap();
+        std::env::set_var("HAZYNC_LZ_HINTS", &bp);
+        let t_hints = t0.elapsed().as_secs_f64();
+        let mut b = ExecutorEnv::builder();
+        env_for(&mut b);
+        let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts)
+            .unwrap_or_else(|e| panic!("block {h}: aggregate proof failed: {e}")).receipt;
+        r.verify(METHOD_ID).expect("aggregate receipt verifies");
+        let st: ChainState = r.journal.decode().expect("ChainState");
+        assert_eq!(st.height, h);
+        std::fs::write(format!("{out}/block_{h}.rcpt"), bincode::serialize(&r).unwrap()).unwrap();
+        std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
+        let dt = t0.elapsed().as_secs_f64();
+        writeln!(times, "{h}\t{}\t{}\t{t_chunks:.1}\t{:.1}\t{dt:.1}\t{}", bounds.len(), w.coinbase_tx.len(),
+                 t_hints - t_chunks, if is_base { "base" } else { "recursive" }).unwrap();
+        println!("  block {h}: {} chunks, proved in {dt:.1} s ({}), forest {} ss_set {}  [{:.0} s total]",
+                 bounds.len(), if is_base { "base on anchor" } else { "verifies prev" }, st.utxo_leaves, st.ss_set, t_all.elapsed().as_secs_f64());
+        prev = st;
+        prev_rcpt = Some(r);
+    }
+    println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final receipt {out}/block_{hi}.rcpt", t_all.elapsed().as_secs_f64());
 }
 
 /// `swiftsync-file-hash <file>`: the value a proof at the file's stop height must commit as `ss_hints`,
@@ -3376,51 +3583,7 @@ fn ss_hints_step(prev: &[u8; 32], height: u32, indices: &[u32]) -> [u8; 32] {
 fn ss_file_hash_cmd(path: &str) {
     let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap_or_else(|e| panic!("{path}: {e}")));
     let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let mut h = [0u8; 32];
-    for height in 1..=file.stop_height() {
-        h = ss_hints_step(&h, height, &file.indices_at_height(height).expect("height"));
-    }
-    println!("swiftsync-file-hash: stop height {} -> ss_hints {}", file.stop_height(), hex(&h));
-}
-
-/// Big-endian a - b for 32-byte values with a >= b.
-fn sub_be(a: &[u8], b: &[u8]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    let mut borrow = 0i16;
-    for k in (0..32).rev() {
-        let d = a[k] as i16 - b[k] as i16 - borrow;
-        borrow = (d < 0) as i16;
-        out[k] = (d + 256 * borrow) as u8;
-    }
-    out
-}
-
-/// One ECMH hint, as make_ecmh_hints.py writes it: u32 LE ctr | y (32 B BE) | one w (32 B BE) per skipped ctr.
-/// x = SHA-256(leaf || ctr_le32), first ctr with x^3 + 7 square; y = rhs^((p+1)/4); w^2 = -(x^3 + 7) for skips.
-fn ecmh_hint(leaf: &[u8]) -> Vec<u8> {
-    use num_bigint::BigUint;
-    use sha2::{Digest, Sha256};
-    let p = BigUint::parse_bytes(b"fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f", 16).unwrap();
-    let e = (&p + 1u32) >> 2;
-    let sqrt = |a: &BigUint| { let r = a.modpow(&e, &p); (&r * &r % &p == *a).then_some(r) };
-    let be32 = |v: &BigUint| { let b = v.to_bytes_be(); let mut o = [0u8; 32]; o[32 - b.len()..].copy_from_slice(&b); o };
-    let mut skipped = Vec::new();
-    for ctr in 0u32.. {
-        let mut h = Sha256::new();
-        h.update(leaf);
-        h.update(ctr.to_le_bytes());
-        let x = BigUint::from_bytes_be(&h.finalize());
-        assert!(x < p, "ECMH: hash >= p");
-        let rhs = (&x * &x * &x + 7u32) % &p;
-        if let Some(y) = sqrt(&rhs) {
-            let mut out = ctr.to_le_bytes().to_vec();
-            out.extend_from_slice(&be32(&y));
-            for w in &skipped { out.extend_from_slice(&be32(w)); }
-            return out;
-        }
-        skipped.push(sqrt(&((&p - &rhs) % &p)).expect("p = 3 mod 4: -rhs must be a square"));
-    }
-    unreachable!()
+    println!("swiftsync-file-hash: stop height {} -> ss_hints {}", file.stop_height(), hex(&libzync::host::file_hash(&file)));
 }
 
 fn agg_chunks() {
@@ -3436,7 +3599,7 @@ fn agg_chunks() {
     libzync_agg_prep(&mut w);
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
-    libzync_agg_tail(&mut b);
+    libzync_agg_tail(&mut b, &w);
     // Execute-only mode returns before proving; see report_agg_execute_only.
     if std::env::var("HAZYNC_AGG_EXECUTE").is_ok() { report_agg_execute_only(b); return; }
 
@@ -5167,6 +5330,57 @@ fn main() {
     if let Some(p) = args.iter().position(|a| a == "swiftsync-make-hints") {
         let h: u32 = args.get(p + 1).and_then(|s| s.parse().ok()).expect("swiftsync-make-hints <H> <json dir> <out>");
         ss_make_hints_cmd(h, &args[p + 2], &args[p + 3]);
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-prove-range") {
+        let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect("libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>") };
+        lz_prove_range_cmd(n(1), n(2), &args[p + 3], &args[p + 4], &args[p + 5]);
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "signet-check-test") {
+        // signet-check-test <block json>: the BIP325 check on the real block (must pass), then with ONE
+        // other txid changed (the signed commitment then covers a different merkle root: must fail).
+        assert!(methods::NETWORK == "signet", "signet-check-test needs a signet guest");
+        std::env::set_var("HAZYNC_BLOCK", &args[p + 1]);
+        let (_, w) = build_full();
+        let mut txids: Vec<u8> = Vec::new();
+        let j = read_block_json(std::path::Path::new(&args[p + 1]).parent().unwrap().to_str().unwrap(), w.height);
+        for t in j["txs"].as_array().unwrap() {
+            let tx: Transaction = deserialize(&hx(t["raw"].as_str().unwrap())).unwrap();
+            txids.extend_from_slice(&tx.compute_txid().to_byte_array());
+        }
+        let run = |ids: &[u8]| -> u32 {
+            let mut b = ExecutorEnv::builder();
+            b.write(&16u32).unwrap();
+            b.write(&w.header).unwrap();
+            b.write(&w.coinbase_tx).unwrap();
+            b.write(&ids.to_vec()).unwrap();
+            lz_execute(b.build().unwrap()).expect("mode 16").journal.decode::<u32>().unwrap()
+        };
+        let good = run(&txids);
+        println!("signet-check-test block {}: real block -> {good}", w.height);
+        let bad = if txids.is_empty() {
+            // coinbase-only: add a phantom transaction instead
+            run(&[7u8; 32])
+        } else {
+            let mut t = txids.clone();
+            t[0] ^= 1;
+            run(&t)
+        };
+        println!("signet-check-test block {}: one txid changed -> {bad}", w.height);
+        println!("{}", if good == 1 && bad == 0 { "SIGNET_CHECK_OK" } else { "SIGNET_CHECK_FAIL" });
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-verify") {
+        libzync_verify_cmd(args.get(p + 1).expect("libzync-verify <receipt> <file.hints> [anchor.json]"),
+                           args.get(p + 2).expect("libzync-verify <receipt> <file.hints> [anchor.json]"),
+                           args.get(p + 3).map(|s| s.as_str()));
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "swiftsync-diff-hints") {
+        ss_diff_hints_cmd(args.get(p + 1).expect("swiftsync-diff-hints <file> <json dir> [H]"),
+                          args.get(p + 2).expect("swiftsync-diff-hints <file> <json dir> [H]"),
+                          args.get(p + 3).and_then(|s| s.parse().ok()));
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "swiftsync-file-hash") {
@@ -8070,7 +8284,7 @@ fn seg_serve_cmd() {
             // libzync: the same aggregate stream as agg-chunks, or the guest desyncs.
             libzync_agg_prep(&mut w);
             write_aggregate_env(&mut b, &receipts, &anchor, &w);
-            libzync_agg_tail(&mut b);
+            libzync_agg_tail(&mut b, &w);
         } else {
             let bounds = chunk_bounds(&w, nchunks_env());
             let (lo, hi) = *bounds.get(idx).expect("chunk index");

@@ -4,6 +4,15 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+// libzync: what HAZYNC_LIBZYNC means -- the SAME list methods/build.rs turns into cargo features.
+include!("../../../libzync/src/profile.rs");
+
+/// A lever is on if its env var is "1", or if the libzync profile includes it.
+fn lever(name: &str) -> bool {
+    let (lz, _) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
+    std::env::var(name).as_deref() == Ok("1") || (lz && LIBZYNC_LEVERS.contains(&name))
+}
+
 fn find_riscv_bin() -> String {
     if let Ok(b) = std::env::var("HAZYNC_RISCV_BIN") {
         return b;
@@ -156,30 +165,30 @@ fn main() {
     // the same re-baselining.
     // hazync#139 middle path. See prover/methods/guest/src/bigint2_ecmult.rs and patches/0005.
     println!("cargo:rerun-if-env-changed=HAZYNC_BIGINT2_ECDSA");
-    let bigint2 = std::env::var("HAZYNC_BIGINT2_ECDSA").as_deref() == Ok("1");
+    let bigint2 = lever("HAZYNC_BIGINT2_ECDSA");
     // hazync#205 / GHOST_GAINS G1. Same two-part shape as the middle path above, and the same trap:
     // patch 0007 ADDS the #ifdef to group_impl.h, this define is what turns it on. Either alone
     // compiles the stock sqrt and says nothing.
     println!("cargo:rerun-if-env-changed=HAZYNC_LIFTX_ACCEL");
-    let liftx_accel = std::env::var("HAZYNC_LIFTX_ACCEL").as_deref() == Ok("1");
+    let liftx_accel = lever("HAZYNC_LIFTX_ACCEL");
     // hazync#205 / G3 — Schnorr through the same accelerator. Needs bigint2 too: it reuses
     // hazync_ecmult_verify, which only the bigint2-ecdsa feature exports.
     println!("cargo:rerun-if-env-changed=HAZYNC_BIGINT2_SCHNORR");
-    let schnorr_accel = std::env::var("HAZYNC_BIGINT2_SCHNORR").as_deref() == Ok("1");
+    let schnorr_accel = lever("HAZYNC_BIGINT2_SCHNORR");
     // The ECDSA scalar inverse, which patch 0005 left as literal libsecp. 7.0% of the current stack.
     println!("cargo:rerun-if-env-changed=HAZYNC_SCALAR_INV_ACCEL");
-    let scalar_inv = std::env::var("HAZYNC_SCALAR_INV_ACCEL").as_deref() == Ok("1");
+    let scalar_inv = lever("HAZYNC_SCALAR_INV_ACCEL");
     // SHA Transform fast path: inline byte swap, and no staging copy when already aligned.
     println!("cargo:rerun-if-env-changed=HAZYNC_SHA_FASTPATH");
-    let sha_fast = std::env::var("HAZYNC_SHA_FASTPATH").as_deref() == Ok("1");
+    let sha_fast = lever("HAZYNC_SHA_FASTPATH");
     // Merkle-node double-SHA through the accelerated Transform. Different function from Transform;
     // patches/0002 never touched it. See patches/0010.
     println!("cargo:rerun-if-env-changed=HAZYNC_SHA_D64_ACCEL");
-    let sha_d64 = std::env::var("HAZYNC_SHA_D64_ACCEL").as_deref() == Ok("1");
+    let sha_d64 = lever("HAZYNC_SHA_D64_ACCEL");
     // Field-op benchmark shim. Patches secp256k1.c, so this define goes on the SECP build below --
     // NOT the Core build. Getting that backwards is what left patches 0009/0010 inert for four arms.
     println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BENCH");
-    let field_bench = std::env::var("HAZYNC_FIELD_BENCH").as_deref() == Ok("1");
+    let field_bench = lever("HAZYNC_FIELD_BENCH");
     // field_bigint2 backend: canonical 8x32 limbs backed by the coprocessor. The two headers are
     // copied into the secp tree and selected by patches/0012, which edits field.h's backend switch.
     println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BIGINT2");
@@ -187,10 +196,10 @@ fn main() {
     // hazync_lift_x_hint under the `liftx-hint` cargo feature; THIS is what makes the C half call it.
     // Wiring only the cargo feature builds a guest that exports the symbol and never references it.
     println!("cargo:rerun-if-env-changed=HAZYNC_LIFTX_HINT");
-    let liftx_hint = std::env::var("HAZYNC_LIFTX_HINT").as_deref() == Ok("1");
+    let liftx_hint = lever("HAZYNC_LIFTX_HINT");
     println!("cargo:rerun-if-changed=field_bigint2.h");
     println!("cargo:rerun-if-changed=field_bigint2_impl.h");
-    let field_bigint2 = std::env::var("HAZYNC_FIELD_BIGINT2").as_deref() == Ok("1");
+    let field_bigint2 = lever("HAZYNC_FIELD_BIGINT2");
     for f in ["field_bigint2.h", "field_bigint2_impl.h"] {
         let dst = format!("{secp}/src/{f}");
         if field_bigint2 {
@@ -288,7 +297,10 @@ fn main() {
     // libzync experiment: the hook experimental/libzync-bench/hook/apply_batch_hook.py inserts into
     // ecdsa_impl.h. The Rust half is src/batch_ecdsa.rs behind the `batch-ecdsa` feature.
     println!("cargo:rerun-if-env-changed=HAZYNC_BATCH_ECDSA");
-    let batch = std::env::var("HAZYNC_BATCH_ECDSA").as_deref() == Ok("1");
+    let batch = lever("HAZYNC_BATCH_ECDSA");
+    // The hooks hand libsecp's field LIMBS to the batch as 8x32 canonical values, which only the
+    // field_bigint2 backend (patches/0012) stores. On the default 10x26 backend they would be garbage.
+    assert!(!batch || field_bigint2, "HAZYNC_BATCH_ECDSA needs HAZYNC_FIELD_BIGINT2 (the hooks pass 8x32 field limbs)");
     define_if(&mut secp_build, "HAZYNC_BATCH_ECDSA", batch);
     secp_build.compile("secp256k1");
 
@@ -330,28 +342,40 @@ fn main() {
     define_if(&mut b, "HAZYNC_SHA_D64_ACCEL", sha_d64);
     // libzync: verify_inputs_batch_once in verify_input.cpp (one deserialise + hash per transaction).
     println!("cargo:rerun-if-env-changed=HAZYNC_TX_ONCE");
-    define_if(&mut b, "HAZYNC_TX_ONCE", std::env::var("HAZYNC_TX_ONCE").as_deref() == Ok("1"));
+    define_if(&mut b, "HAZYNC_TX_ONCE", lever("HAZYNC_TX_ONCE"));
     // libzync: CSHA256 kept in accelerator layout (hook/apply_sha_stream.py patches sha256.cpp), and
     // PrecomputedTransactionData computed lazily as Core's own validation does (force=false).
     println!("cargo:rerun-if-env-changed=HAZYNC_SHA_STREAM");
-    define_if(&mut b, "HAZYNC_SHA_STREAM", std::env::var("HAZYNC_SHA_STREAM").as_deref() == Ok("1"));
+    define_if(&mut b, "HAZYNC_SHA_STREAM", lever("HAZYNC_SHA_STREAM"));
     // libzync round 7: HashWriter staging buffer, lazy txid/wtxid, OP_HASH160 key memo; round 8: legacy
     // sighash from preserialised bytes + a walking midstate (interpreter.cpp only). Round 7's three change
     // class layouts (HashWriter, CTransaction), so they must be defined on EVERY Core TU -- this
     // cc::Build compiles all of them, verify_input.cpp included.
     for d in ["HAZYNC_HASHWRITER_BUF", "HAZYNC_LAZY_TXID", "HAZYNC_H160_MEMO", "HAZYNC_LEGACY_SIGHASH", "HAZYNC_D64_STREAM", "HAZYNC_RAW_TXID", "HAZYNC_PUBKEY_MEMO", "HAZYNC_LEAF_ONEBUF"] {
         println!("cargo:rerun-if-env-changed={d}");
-        define_if(&mut b, d, std::env::var(d).as_deref() == Ok("1"));
+        define_if(&mut b, d, lever(d));
     }
     // libzync agg-lite: verify_inputs_batch_once parses through cached_tx (see src/agg_lite.rs).
     println!("cargo:rerun-if-env-changed=HAZYNC_AGG_LITE");
-    define_if(&mut b, "HAZYNC_AGG_LITE", std::env::var("HAZYNC_AGG_LITE").as_deref() == Ok("1"));
+    define_if(&mut b, "HAZYNC_AGG_LITE", lever("HAZYNC_AGG_LITE"));
     // libzync sweep-1 cost measurement: skip scripts/signatures in verify_inputs_batch_once.
     println!("cargo:rerun-if-env-changed=HAZYNC_NO_SCRIPTS");
-    define_if(&mut b, "HAZYNC_NO_SCRIPTS", std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1"));
+    println!("cargo:rerun-if-env-changed=HAZYNC_LIBZYNC");
+    let (lz_env, assumevalid) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
+    // The C half follows HAZYNC_LIBZYNC, the Rust half follows cargo features. They must agree, or the
+    // guest links a Rust agg-lite against C++ compiled without its caches (review 2026-10-30).
+    let lz_feat = std::env::var("CARGO_FEATURE_LIBZYNC").is_ok();
+    assert_eq!(lz_feat, lz_env, "the guest's `libzync` feature and HAZYNC_LIBZYNC disagree: build through \
+        methods/build.rs with HAZYNC_LIBZYNC set, not with --features");
+    define_if(&mut b, "HAZYNC_NO_SCRIPTS", assumevalid || std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1"));
+    // HAZYNC_NETWORK=signet: Core's SigNet chainparams + CheckSignetBlockSolution (signet.cpp below).
+    println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
+    let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    define_if(&mut b, "HAZYNC_SIGNET", signet);
     println!("cargo:rerun-if-env-changed=HAZYNC_TXDATA_LAZY");
-    define_if(&mut b, "HAZYNC_TXDATA_LAZY", std::env::var("HAZYNC_TXDATA_LAZY").as_deref() == Ok("1"));
+    define_if(&mut b, "HAZYNC_TXDATA_LAZY", lever("HAZYNC_TXDATA_LAZY"));
     for tu in core_tus { b.file(format!("{core}/{tu}")); }
+    if signet { b.file(format!("{core}/signet.cpp")); }
     b.file("verify_input.cpp");
 
     // Tell cargo what this build actually depends on. Without these the C++ dependency is INVISIBLE:

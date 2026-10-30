@@ -91,3 +91,12 @@ tlsf = ["agg-lite", "risc0-zkvm/heap-embedded-alloc"]
 swiftsync = ["batch-ecdsa"]
 # libzync EXPERIMENT: commit the chunk journal as prebuilt serde words (identical bytes).
 fast-commit = []
+# ⭐ The libzync guest, as ONE feature (HAZYNC_LIBZYNC=1; libzync/src/profile.rs lists the C half).
+# It also switches the chunk and aggregate input streams to ONE hint block each (libzync/src/wire.rs).
+# batch-ecdsa, swiftsync and agg-lite read their hints only through that block, so they refuse to
+# build without it -- there is one way to build a libzync guest.
+libzync = ["bigint2-ecdsa", "liftx-hint", "field-bigint2", "scalar-inv-accel", "agg-readslice",
+           "batch-ecdsa", "tx-once", "swiftsync", "agg-lite", "fast-commit"]
+# Default signet instead of mainnet (HAZYNC_NETWORK=signet): Core's SigNet chainparams and the BIP325
+# block-solution check in the aggregate. libzync only.
+signet = ["libzync"]

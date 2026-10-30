@@ -33,6 +33,23 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod utreexo;
 mod script_flags;
+// libzync: the hint wire format, the SwiftSync hint hash and the network parameters -- the SAME files
+// the host compiles (libzync crate), included by path for the reason coinbase-smt is (hazync#88).
+#[path = "../../../../libzync/src/ss_hints.rs"]
+mod ss_hints;
+#[path = "../../../../libzync/src/wire.rs"]
+mod lz_wire;
+#[path = "../../../../libzync/src/net.rs"]
+mod net;
+/// The network this guest validates. Fixed at build time (HAZYNC_NETWORK), so a signet proof and a
+/// mainnet proof can never share an image id.
+#[cfg(not(feature = "signet"))]
+pub const NET: &net::Net = &net::MAINNET;
+#[cfg(feature = "signet")]
+pub const NET: &net::Net = &net::SIGNET;
+// One way to build a libzync guest: these read their hints only through the libzync hint block.
+#[cfg(all(any(feature = "batch-ecdsa", feature = "swiftsync", feature = "agg-lite"), not(feature = "libzync")))]
+compile_error!("batch-ecdsa / swiftsync / agg-lite are parts of the libzync guest: build with HAZYNC_LIBZYNC=1");
 // hazync#139 middle-path experiment. Off by default; see the module docs and patches/0005.
 #[cfg(feature = "bigint2-ecdsa")]
 mod bigint2_ecmult;
@@ -190,6 +207,13 @@ extern "C" {
     fn core_csv_height() -> u32;
     fn core_segwit_height() -> u32;
     fn core_bip34_height() -> u32;
+    // libzync/src/net.rs pins: powLimit (compact) and the genesis hash (internal order) of the network
+    // Core's chainparams were built for.
+    fn core_pow_limit_bits() -> u32;
+    fn core_genesis_hash(out: *mut u8);
+    // BIP325: Core's CheckSignetBlockSolution on (header, coinbase, the block's other txids).
+    #[cfg(feature = "signet")]
+    fn hz_check_signet(header: *const u8, cb: *const u8, cb_len: u32, txids: *const u8, n_txids: u32) -> i32;
     fn core_retarget_interval() -> u32;
     fn core_max_block_weight() -> i64;
     fn core_max_block_sigops_cost() -> i64;
@@ -238,6 +262,13 @@ fn assert_core_constants() {
         assert_eq!(MAX_BLOCK_WEIGHT, core_max_block_weight(), "MAX_BLOCK_WEIGHT != Core");
         assert_eq!(MAX_BLOCK_SIGOPS_COST, core_max_block_sigops_cost(), "MAX_BLOCK_SIGOPS_COST != Core");
         assert_eq!(BIP34_HEIGHT, core_bip34_height(), "BIP34Height != Core");
+        // libzync/src/net.rs, pinned to Core's own chainparams for the network this guest was built for.
+        assert_eq!(NET.pow_limit_bits, core_pow_limit_bits(), "powLimit != Core ({})", NET.name);
+        assert_eq!(net::hash_le(NET.genesis_hex), {
+            let mut g = [0u8; 32];
+            core_genesis_hash(g.as_mut_ptr());
+            g
+        }, "genesis != Core ({})", NET.name);
         assert_eq!(sf::BIP66_HEIGHT, core_bip66_height(), "BIP66Height != Core");
         assert_eq!(sf::BIP65_HEIGHT, core_bip65_height(), "BIP65Height != Core");
         assert_eq!(sf::CSV_HEIGHT, core_csv_height(), "CSVHeight != Core");
@@ -265,26 +296,11 @@ fn assert_core_constants() {
 /// Core mainnet `consensus.BIP34Height`. Runtime-pinned to Core's compiled value by
 /// `assert_core_constants`, like BIP66/BIP65/CSV/Segwit — audit #3's phase-2 sweep found this was the
 /// one buried height still hand-typed, in two places, with nothing checking it.
-const BIP34_HEIGHT: u32 = 227_931;
+const BIP34_HEIGHT: u32 = NET.bip34_height;
 
 const BIP30_OVERWRITE_A: [u8; 32] = [0xec, 0xca, 0xe0, 0x00, 0xe3, 0xc8, 0xe4, 0xe0, 0x93, 0x93, 0x63, 0x60, 0x43, 0x1f, 0x3b, 0x76, 0x03, 0xc5, 0x63, 0xc1, 0xff, 0x61, 0x81, 0x39, 0x0a, 0x4d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]; // block 91842
 const BIP30_OVERWRITE_B: [u8; 32] = [0x21, 0xd7, 0x7c, 0xcb, 0x4c, 0x08, 0x38, 0x6a, 0x04, 0xac, 0x01, 0x96, 0xae, 0x10, 0xf6, 0xa1, 0xd2, 0xc2, 0xa3, 0x77, 0x55, 0x8c, 0xa1, 0x90, 0xf1, 0x43, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00]; // block 91880
-/// A block hash as displayed (big-endian hex) -> internal byte order, at compile time.
-const fn hash_le(s: &str) -> [u8; 32] {
-    const fn nib(c: u8) -> u8 {
-        match c { b'0'..=b'9' => c - b'0', b'a'..=b'f' => c - b'a' + 10, _ => panic!("hash_le: not lowercase hex") }
-    }
-    let b = s.as_bytes();
-    assert!(b.len() == 64, "hash_le: need 64 hex digits");
-    let mut o = [0u8; 32];
-    let mut i = 0;
-    while i < 32 { o[31 - i] = (nib(b[2 * i]) << 4) | nib(b[2 * i + 1]); i += 1; }
-    o
-}
-// libzync agg-lite (hints-file convention): blocks whose coinbase coins are never accounted because a later
-// block duplicates them — 91,812 (by 91,842) and 91,722 (by 91,880). Internal byte order, like the above.
-const BIP30_UNSPENDABLE_A: [u8; 32] = hash_le("00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f"); // 91812
-const BIP30_UNSPENDABLE_B: [u8; 32] = hash_le("00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e"); // 91722
+
 
 // --- libc glue for bare-metal C/C++ in the zkVM guest: malloc family + abort, backed by the
 // guest's Rust global allocator (size stored in a 16-byte header before each block). ---
@@ -609,7 +625,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // Consensus script flags (Core GetBlockScriptFlags: always-on base + buried deployments + exceptions).
     let flags = block_script_flags(w.height, &block_hash);
     // BIP113: from CSV activation (419328), locktime uses median-time-past instead of block time.
-    let lock_time = if w.height >= 419_328 { mtp } else { block_time };
+    let lock_time = if w.height >= NET.csv_height { mtp } else { block_time };
 
     // nVersion soft-fork rejection (Core ContextualCheckBlockHeader): once a version's soft fork is
     // buried, a block below that version is invalid regardless of its scripts. Heights: BIP34 (v>=2 @
@@ -617,8 +633,8 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // enforce the RULES; this rejects the stale header itself as Core does, closing an accept-invalid gap.
     let version = i32::from_le_bytes(w.header[0..4].try_into().unwrap());
     if (version < 2 && w.height >= BIP34_HEIGHT)
-        || (version < 3 && w.height >= 363_725)
-        || (version < 4 && w.height >= 388_381) {
+        || (version < 3 && w.height >= NET.bip66_height)
+        || (version < 4 && w.height >= NET.bip65_height) {
         all_ok = false;
     }
 
@@ -772,7 +788,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
             const MASK: u32 = 0x0000_ffff; const GRAN: u32 = 9;
             let seq = chunk_seqs[gi];
             let got_lock = if inp.coin_is_coinbase == 1 && w.height < inp.coin_height + 100 { -40 }
-                else if w.height >= 419_328 && chunk_vers[gi] >= 2 && (seq & DISABLE) == 0 {
+                else if w.height >= NET.csv_height && (chunk_vers[gi] as u32) >= 2 && (seq & DISABLE) == 0 {
                     if seq & TYPE != 0 {
                         let req = inp.coin_mtp as u64 + (((seq & MASK) as u64) << GRAN);
                         if (mtp as u64) < req { -42 } else { 1 }
@@ -805,7 +821,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         pre_locks = w.inputs.iter().enumerate().map(|(gi, inp)| {
             if inp.coin_is_coinbase == 1 && w.height < inp.coin_height + 100 { return -40; }
             let seq = chunk_seqs[gi];
-            if w.height >= 419_328 && chunk_vers[gi] >= 2 && (seq & DISABLE) == 0 {
+            if w.height >= NET.csv_height && (chunk_vers[gi] as u32) >= 2 && (seq & DISABLE) == 0 {
                 if seq & TYPE != 0 {
                     let required = inp.coin_mtp as u64 + (((seq & MASK) as u64) << GRAN);
                     if (mtp as u64) < required { return -42; }
@@ -1100,7 +1116,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // commitment output (its own has_witness gate). Running the commitment check at ALL heights (the previous
     // behaviour) rejected the canonical pre-activation blocks that already carried an early commitment output
     // yet have a witness-free coinbase — a reject-valid liveness bug in the 433k–481823 range.
-    let witness_ok = if w.height >= 481_824 {
+    let witness_ok = if w.height >= NET.segwit_height {
         let rc = unsafe {
             check_witness_commitment(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32,
                 flat_wtx.as_ptr(), rec_wtxids.len() as u32, has_witness as u32)
@@ -1697,7 +1713,20 @@ fn chunk_prove() {
     // hazync#205 — install the pubkey-Y hint table BEFORE any script runs, since verification
     // happens inside the read loop below. Host writes this block at the same point, gated on the
     // same HAZYNC_LIFTX_HINT; the two must agree or the stream desynchronises.
-    #[cfg(feature = "liftx-hint")]
+    // libzync: ONE hint block for the chunk (libzync/src/wire.rs): pubkey-Y hints, batch-signature
+    // hints (or collect), and the block's MTP and time. Read BEFORE any script runs.
+    #[cfg(feature = "libzync")]
+    let mut lite = {
+        let n: u32 = env::read();
+        let mut words = vec![0u32; n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        let h = lz_wire::ChunkHints::decode(&words).expect("libzync chunk hints malformed");
+        liftx_hint::install(h.liftx.chunks_exact(lz_wire::LIFTX_PAIR_BYTES)
+            .map(|c| (c[..32].try_into().unwrap(), c[32..].try_into().unwrap())).collect());
+        batch_ecdsa::install(h.sig_collect, h.sig.to_vec());
+        agg_lite::ChunkCtx::new(height, flags, h.mtp, h.block_time)
+    };
+    #[cfg(all(feature = "liftx-hint", not(feature = "libzync")))]
     {
         let n_hints: u32 = env::read();
         let mut flat = vec![0u8; n_hints as usize * 64];
@@ -1713,25 +1742,6 @@ fn chunk_prove() {
         }
         liftx_hint::install(pairs);
     }
-    // libzync: per-verify hints (valid bit + R), or collect mode when the host has none yet.
-    #[cfg(feature = "batch-ecdsa")]
-    {
-        let collect: u32 = env::read();
-        let n: u32 = env::read();
-        let mut flat = vec![0u8; n as usize * batch_ecdsa::HINT_BYTES];
-        if n > 0 {
-            env::read_slice(&mut flat);
-        }
-        batch_ecdsa::install(collect == 1, flat);
-    }
-    // libzync agg-lite: the block's median-time-past and timestamp, committed so the aggregate can
-    // require they equal its own (created-output leaves and lock checks depend on them).
-    #[cfg(feature = "agg-lite")]
-    let mut lite = {
-        let lite_mtp: u32 = env::read();
-        let lite_time: u32 = env::read();
-        agg_lite::ChunkCtx::new(height, flags, lite_mtp, lite_time)
-    };
 
     let mut binds: Vec<[u8; 32]> = Vec::new();
     let mut tx_wtxids: Vec<(u32, [u8; 32], u32)> = Vec::new();
@@ -1978,26 +1988,17 @@ fn aggregate() {
     let prev_journal: Vec<u8> = env::read();
     let w: BlockWitness = env::read();
     let is_base: u32 = env::read();
-    // libzync: ECMH hash-to-curve hints for the SwiftSync accounting, or collect mode.
-    #[cfg(feature = "swiftsync")]
-    {
-        let collect: u32 = env::read();
-        let n: u32 = env::read();
-        let mut flat = vec![0u8; n as usize];
-        if n > 0 {
-            env::read_slice(&mut flat);
-        }
-        swiftsync::install(collect == 1, flat);
-    }
-    // libzync design B: this block's SwiftSync hint bits, one per indexed output (the hints file's index
-    // order). mode 0 = no hints file: every created coin goes to the ECMH total, as before.
-    #[cfg(all(feature = "swiftsync", feature = "agg-lite"))]
+    // libzync: ONE hint block for the aggregate (libzync/src/wire.rs): ECMH hints (or collect) and
+    // design B's SwiftSync hint bits, one per indexed output (none = no hints file: every created coin
+    // goes to the ECMH total). The decoder refuses hint bits set past the block's outputs.
+    #[cfg(feature = "libzync")]
     let ss_bits: (u32, u32, Vec<u32>) = {
-        let mode: u32 = env::read();
-        let nbits: u32 = env::read();
-        let mut v = vec![0u32; (nbits as usize).div_ceil(32)];
-        if !v.is_empty() { env::read_slice(&mut v); }
-        (mode, nbits, v)
+        let n: u32 = env::read();
+        let mut words = vec![0u32; n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        let h = lz_wire::AggHints::decode(&words).expect("libzync aggregate hints malformed");
+        swiftsync::install(h.ecmh_collect, h.ecmh.to_vec());
+        match h.ss { Some((nbits, w)) => (1, nbits, w.to_vec()), None => (0, 0, Vec::new()) }
     };
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
@@ -2018,14 +2019,11 @@ fn aggregate() {
     let anchor_id = if is_base == 1 { dsha256(&prev_journal) } else { prev.anchor_id };
     let prev_mtp = median_time_past(&prev.recent_times);
 
-    #[cfg(all(feature = "swiftsync", feature = "agg-lite"))]
+    #[cfg(feature = "libzync")]
     swiftsync::start(prev.ss_set, &prev.ss_acc);
     #[cfg(feature = "agg-lite")]
     let r = { let _ = (&all_binds, chunks_ok, &chunk_wtxids, &chunk_leaves, &chunk_seqs, &chunk_vers);
-              #[cfg(feature = "swiftsync")]
               let ss = (&ss_bits, prev.ss_hints);
-              #[cfg(not(feature = "swiftsync"))]
-              let ss = (&(0u32, 0u32, Vec::<u32>::new()), prev.ss_hints);
               agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals, ss) };
     #[cfg(not(feature = "agg-lite"))]
     let r = validate_block_wtx(&w, prev_mtp, Some((&all_binds, chunks_ok)), &chunk_wtxids,
@@ -2045,9 +2043,17 @@ fn aggregate() {
     let mut recent_times = prev.recent_times.clone();
     recent_times.push(r.block_time);
     if recent_times.len() > 11 { let e = recent_times.len() - 11; recent_times.drain(0..e); }
-    #[cfg(all(feature = "swiftsync", feature = "agg-lite"))]
+    #[cfg(feature = "libzync")]
     let ((ss_set, ss_acc), ss_hints) = (swiftsync::total(), r.ss_hints);
-    #[cfg(not(all(feature = "swiftsync", feature = "agg-lite")))]
+    // A COLLECT-mode aggregate skipped every ECMH add and subtract (it only logged the leaves for the
+    // host), so its total means nothing. It must not produce a chain state: stop here, after the whole
+    // block was checked and every leaf logged. Before this, the hint flag alone switched the coin
+    // accounting off for a proof (review 2026-10-30, two reviewers independently).
+    #[cfg(feature = "libzync")]
+    if swiftsync::collecting() {
+        panic!("libzync: ECMH collect run finished (leaves logged); a collect run commits no chain state");
+    }
+    #[cfg(not(feature = "libzync"))]
     let (ss_set, ss_acc, ss_hints) = (prev.ss_set, prev.ss_acc, prev.ss_hints);
     env::commit(&ChainState {
         kind: KIND_CHAIN,
@@ -2063,6 +2069,13 @@ fn main() {
     // Pin every Rust-side consensus literal to Core's own compiled value before doing any work.
     assert_core_constants();
     let mode: u32 = env::read();
+    // A libzync image proves blocks ONLY as chunks + aggregate. The older block modes (1 block_proof,
+    // 2 chain_step, 3 multi_check, 6 prove_range, 7 fold_range, 12 stages) neither run the SwiftSync
+    // accounting nor the signet check, and their per-input caches assume the bump allocator; a receipt
+    // from them under this image id would attest something the libzync design never checked
+    // (review 2026-10-30). 8/9 are self-tests that commit nothing a chain proof consumes.
+    #[cfg(feature = "libzync")]
+    assert!(matches!(mode, 4 | 5 | 8 | 9 | 13 | 15 | 16), "libzync image: mode {mode} is not available (chunks + aggregate only)");
     match mode {
         1 => block_proof(),
         2 => chain_step(),
@@ -2074,6 +2087,16 @@ fn main() {
         8 => test_locks(),
         9 => test_merkle(),
         12 => validate_block_stages(),
+        // Mode 16 (signet): Core's CheckSignetBlockSolution on (header, coinbase, other txids) ALONE, with no
+        // merkle or PoW check in front of it, so a test can show the signature check itself rejects.
+        #[cfg(feature = "signet")]
+        16 => {
+            let header: Vec<u8> = env::read();
+            let cb: Vec<u8> = env::read();
+            let txids: Vec<u8> = env::read();
+            let ok = unsafe { hz_check_signet(header.as_ptr(), cb.as_ptr(), cb.len() as u32, txids.as_ptr(), (txids.len() / 32) as u32) };
+            env::commit(&ok);
+        }
         // Mode 13: MSM self-test. Reports the positive comparison AND a negative control, because a
         // check that can only ever pass is not a check.
         // Mode 15: field-op benchmark. libsecp's software field_10x26 against the bigint2

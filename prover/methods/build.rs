@@ -20,6 +20,29 @@
 
 use std::path::{Path, PathBuf};
 
+// libzync: what HAZYNC_LIBZYNC means, shared with the guest's own build.rs (one list).
+include!("../../libzync/src/profile.rs");
+
+/// A lever is on if its env var is "1", or if the libzync profile includes it.
+fn lever(name: &str) -> bool {
+    let (lz, _) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
+    std::env::var(name).as_deref() == Ok("1") || (lz && LIBZYNC_LEVERS.contains(&name))
+}
+
+/// `profile.rs` in OUT_DIR: what the embedded guest was built for, so the HOST writes the stream that
+/// guest reads instead of trusting a matching set of run-time env vars.
+fn write_profile(libzync: bool, assumevalid: bool, signet: bool) {
+    let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
+    std::fs::write(&out, format!(
+        "/// The embedded guest reads libzync hint blocks (libzync/src/wire.rs).\n\
+         pub const LIBZYNC: bool = {libzync};\n\
+         /// Script and signature checks skipped (HAZYNC_LIBZYNC=assumevalid).\n\
+         pub const LIBZYNC_ASSUMEVALID: bool = {assumevalid};\n\
+         /// \"mainnet\" or \"signet\".\n\
+         pub const NETWORK: &str = {:?};\n",
+        if signet { "signet" } else { "mainnet" })).expect("write profile.rs");
+}
+
 /// Every file the guest pulls in via `#[path]`, resolved the way rustc resolves them: relative to the
 /// directory of the file carrying the attribute.
 fn path_includes(main_rs: &Path) -> Vec<PathBuf> {
@@ -71,8 +94,23 @@ fn main() {
     // supplied ELF equals reproduce/METHOD_ID. That is strictly stronger than the default path,
     // where a native build silently produces a different id and only CI notices, on one platform.
     println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_ELF");
+    println!("cargo:rerun-if-env-changed=HAZYNC_LIBZYNC");
+    println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
+    println!("cargo:rerun-if-changed=../../libzync/src/profile.rs");
+    let (libzync, assumevalid) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
+    let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    assert!(!signet || libzync, "HAZYNC_NETWORK=signet needs HAZYNC_LIBZYNC (the signet check lives in the libzync aggregate)");
+    println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_PIN_DIR");
     if let Ok(elf_path) = std::env::var("HAZYNC_GUEST_ELF") {
-        embed_prebuilt_guest(&elf_path);
+        // The prebuilt path embeds the pinned canonical guest (reproduce/). A libzync image is embedded
+        // the same way -- sha256 and image id checked, never trusted -- but against pins that name THAT
+        // image: HAZYNC_GUEST_PIN_DIR holds its METHOD_ID and GUEST_ELF_SHA256, and HAZYNC_LIBZYNC /
+        // HAZYNC_NETWORK must say what it is, so the host writes the stream it reads.
+        let pins = std::env::var("HAZYNC_GUEST_PIN_DIR").ok();
+        assert!(!(libzync || signet) || pins.is_some(),
+                "HAZYNC_GUEST_ELF with HAZYNC_LIBZYNC/HAZYNC_NETWORK needs HAZYNC_GUEST_PIN_DIR (the libzync image's pins)");
+        write_profile(libzync, assumevalid, signet);
+        embed_prebuilt_guest(&elf_path, pins.as_deref());
         return;
     }
 
@@ -98,70 +136,77 @@ fn main() {
     // already cost a measurement day: merging #139 without patch 0005 builds stock libsecp and says
     // nothing, and #190 without its constant edit repacks nothing and says nothing.
     let mut features: Vec<String> = Vec::new();
-    if std::env::var("HAZYNC_BIGINT2_ECDSA").as_deref() == Ok("1") {
+    if lever("HAZYNC_BIGINT2_ECDSA") {
         features.push("bigint2-ecdsa".to_string());
     }
-    if std::env::var("HAZYNC_LIFTX_ACCEL").as_deref() == Ok("1") {
+    if lever("HAZYNC_LIFTX_ACCEL") {
         features.push("liftx-accel".to_string());
     }
     // #136's read_slice fix for the aggregate. Host side is runtime-gated on the SAME variable.
     println!("cargo:rerun-if-env-changed=HAZYNC_AGG_READSLICE");
-    if std::env::var("HAZYNC_AGG_READSLICE").as_deref() == Ok("1") {
+    if lever("HAZYNC_AGG_READSLICE") {
         features.push("agg-readslice".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_MSM");
-    if std::env::var("HAZYNC_MSM").as_deref() == Ok("1") {
+    if lever("HAZYNC_MSM") {
         features.push("msm".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BENCH");
-    if std::env::var("HAZYNC_FIELD_BENCH").as_deref() == Ok("1") {
+    if lever("HAZYNC_FIELD_BENCH") {
         features.push("field-bench".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_LIFTX_HINT");
     println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BIGINT2");
-    if std::env::var("HAZYNC_FIELD_BIGINT2").as_deref() == Ok("1") {
+    if lever("HAZYNC_FIELD_BIGINT2") {
         features.push("field-bigint2".to_string());
     }
     // ⚠ HAZYNC_LIFTX_HINT must hold the SAME value at build time and at run time. The guest only
     // reads the hint block when built with the feature, so a mismatch desynchronises the input
     // stream rather than merely losing the optimisation.
-    if std::env::var("HAZYNC_LIFTX_HINT").as_deref() == Ok("1") {
+    if lever("HAZYNC_LIFTX_HINT") {
         features.push("liftx-hint".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_SCALAR_INV_ACCEL");
-    if std::env::var("HAZYNC_SCALAR_INV_ACCEL").as_deref() == Ok("1") {
+    if lever("HAZYNC_SCALAR_INV_ACCEL") {
         features.push("scalar-inv-accel".to_string());
     }
 
     // libzync experiment: batch ECDSA verification. Host side is runtime-gated on the same variable.
     println!("cargo:rerun-if-env-changed=HAZYNC_BATCH_ECDSA");
-    if std::env::var("HAZYNC_BATCH_ECDSA").as_deref() == Ok("1") {
+    if lever("HAZYNC_BATCH_ECDSA") {
         features.push("batch-ecdsa".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_FAST_COMMIT");
-    if std::env::var("HAZYNC_FAST_COMMIT").as_deref() == Ok("1") {
+    if lever("HAZYNC_FAST_COMMIT") {
         features.push("fast-commit".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_SWIFTSYNC");
-    if std::env::var("HAZYNC_SWIFTSYNC").as_deref() == Ok("1") {
+    if lever("HAZYNC_SWIFTSYNC") {
         features.push("swiftsync".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_TX_ONCE");
-    if std::env::var("HAZYNC_TX_ONCE").as_deref() == Ok("1") {
+    if lever("HAZYNC_TX_ONCE") {
         features.push("tx-once".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_TLSF");
-    if std::env::var("HAZYNC_TLSF").as_deref() == Ok("1") {
+    if lever("HAZYNC_TLSF") {
         features.push("tlsf".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_AGG_LITE");
-    if std::env::var("HAZYNC_AGG_LITE").as_deref() == Ok("1") {
+    if lever("HAZYNC_AGG_LITE") {
         features.push("agg-lite".to_string());
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_TX_CYCLES");
-    if std::env::var("HAZYNC_TX_CYCLES").as_deref() == Ok("1") {
+    if lever("HAZYNC_TX_CYCLES") {
         features.push("tx-cycles".to_string());
     }
+    if libzync {
+        features.push(LIBZYNC_FEATURE.to_string());
+    }
+    if signet {
+        features.push("signet".to_string());
+    }
+    write_profile(libzync, assumevalid, signet);
     if !features.is_empty() {
         use std::collections::HashMap;
         // GuestOptions is #[non_exhaustive], so it cannot be built with a struct expression from
@@ -178,7 +223,7 @@ fn main() {
 }
 
 /// Emit `methods.rs` from an ELF built elsewhere, refusing anything but the canonical guest.
-fn embed_prebuilt_guest(elf_path: &str) {
+fn embed_prebuilt_guest(elf_path: &str, pin_dir: Option<&str>) {
     use std::path::Path;
 
     println!("cargo:rerun-if-changed={elf_path}");
@@ -189,7 +234,11 @@ fn embed_prebuilt_guest(elf_path: &str) {
     }
     // ⚠ The pin lives at the repo root, two levels above this crate. Read it rather than hardcoding
     // the id here: one place to change, and it is the same file CI asserts against.
-    let pin_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reproduce/METHOD_ID");
+    let pin_root = match pin_dir {
+        Some(d) => Path::new(d).to_path_buf(),
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reproduce"),
+    };
+    let pin_path = pin_root.join("METHOD_ID");
     println!("cargo:rerun-if-changed={}", pin_path.display());
     let pin_src = std::fs::read_to_string(&pin_path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", pin_path.display()));
@@ -211,7 +260,7 @@ fn embed_prebuilt_guest(elf_path: &str) {
     // A sha256 is a STRICTER pin than an image id, not a weaker one: an id is computed over the
     // loaded image, so two ELFs differing in debug info could share one, while only one byte
     // sequence has a given sha256.
-    let sha_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reproduce/GUEST_ELF_SHA256");
+    let sha_path = pin_root.join("GUEST_ELF_SHA256");
     println!("cargo:rerun-if-changed={}", sha_path.display());
     let sha_src = std::fs::read_to_string(&sha_path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", sha_path.display()));

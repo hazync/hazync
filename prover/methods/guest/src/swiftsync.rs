@@ -9,9 +9,13 @@
 //! are read or checked; the host strips them from the witness.
 //!
 //! ECMH point for a 32-byte coin leaf: try-and-increment, x = SHA-256(leaf || ctr). The host hints
-//! the first ctr whose x is on the curve, its y, and for every smaller ctr a witness w with
+//! the first ctr whose x is on the curve, its EVEN y, and for every smaller ctr a witness w with
 //! w^2 == -(x^3 + 7). Because p = 3 mod 4, -1 is a non-residue, so that witness proves the skipped
-//! x was NOT on the curve. The map therefore has one output per leaf, and the guest checks all of it.
+//! x was NOT on the curve. x is fixed by the hash and y by its parity, so the map has exactly one
+//! output per leaf, and the guest checks all of it.
+//!
+//! COLLECT mode adds nothing to the total, so a collect-mode aggregate must never commit a chain
+//! state: `main.rs::aggregate` stops before its commit (review 2026-10-30).
 //!
 //! COLLECT mode (no hints yet): every leaf is logged as `ECMHREC <hex>`, in operation order.
 
@@ -81,6 +85,10 @@ fn point(leaf: &[u8; 32]) -> Option<Pt> {
         CUR = c;
         let x = x_for(leaf, ctr);
         assert!(&y * &y == &(&(&x * &x) * &x) + &seven, "ECMH: hinted y is not on the curve");
+        // ONE point per leaf: the root with even y. Both y and p - y satisfy the curve equation, so
+        // without this a prover picks +P or -P per operation and can cancel a fake or repeated spend
+        // (review 2026-10-30, found independently by two reviewers).
+        assert!(y.as_bigint().0[0] & 1 == 0, "ECMH: hinted y must be the even root");
         let mut p: Pt = [0; 16];
         p[..8].copy_from_slice(&x.as_bigint().0);
         p[8..].copy_from_slice(&y.as_bigint().0);
@@ -118,6 +126,11 @@ pub fn total() -> (u32, Pt) {
         Some(p) => (1, *p),
         None => (0, [0; 16]),
     }
+}
+
+/// True in collect mode (no ECMH hints): the total is NOT maintained.
+pub fn collecting() -> bool {
+    unsafe { COLLECT }
 }
 
 pub fn report() {

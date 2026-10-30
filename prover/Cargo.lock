@@ -2052,8 +2052,10 @@ dependencies = [
  "hazync-coinbase-smt",
  "hazync-utreexo",
  "hintsfile",
+ "libzync",
  "methods",
  "num-bigint 0.4.8",
+ "risc0-binfmt",
  "risc0-zkvm",
  "serde",
  "serde_json",
@@ -2537,6 +2539,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "libzync"
+version = "0.1.0"
+dependencies = [
+ "hintsfile",
+ "num-bigint 0.4.8",
+ "secp256k1",
+ "sha2",
 ]
 
 [[package]]

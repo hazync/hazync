@@ -23,10 +23,24 @@ pub const WITNESS: u32 = 1 << 11;
 pub const TAPROOT: u32 = 1 << 17;
 
 // Buried-deployment activation heights (Core mainnet chainparams.cpp).
+#[cfg(not(feature = "signet"))]
 pub const BIP66_HEIGHT: u32 = 363_725; // DERSIG
+#[cfg(not(feature = "signet"))]
 pub const BIP65_HEIGHT: u32 = 388_381; // CHECKLOCKTIMEVERIFY
+#[cfg(not(feature = "signet"))]
 pub const CSV_HEIGHT: u32 = 419_328; // CHECKSEQUENCEVERIFY
+#[cfg(not(feature = "signet"))]
 pub const SEGWIT_HEIGHT: u32 = 481_824; // segwit + BIP147 NULLDUMMY
+// libzync signet guest (HAZYNC_NETWORK=signet): Core's SigNetParams buries every one at height 1.
+// Pinned to Core's compiled chainparams by assert_core_constants, like the mainnet values.
+#[cfg(feature = "signet")]
+pub const BIP66_HEIGHT: u32 = 1;
+#[cfg(feature = "signet")]
+pub const BIP65_HEIGHT: u32 = 1;
+#[cfg(feature = "signet")]
+pub const CSV_HEIGHT: u32 = 1;
+#[cfg(feature = "signet")]
+pub const SEGWIT_HEIGHT: u32 = 1;
 
 // Consensus script flags for a block. The base P2SH|WITNESS|TAPROOT is ALWAYS on (retroactive to
 // genesis) except for the two exception blocks above (which override the base), then DERSIG/CLTV/CSV/

@@ -1,0 +1,545 @@
+libzync: Bitcoin Core v28.x (110183746) levers, applied ON TOP of patches 0001, 0002, 0009, 0010.
+
+Every hunk is behind its own #ifdef; a build without the define compiles Core as before. The guest
+build defines all of them when HAZYNC_LIBZYNC is set (libzync/src/profile.rs is the one list).
+None changes what is checked: each is a cheaper way to compute the same bytes, and every txid, wtxid,
+sighash and merkle root depends on them, so a mistake fails a block rather than passing a bad one.
+
+  HAZYNC_SHA_STREAM      crypto/sha256.cpp   CSHA256 state kept in the accelerator's layout; word copies
+  HAZYNC_D64_STREAM      crypto/sha256.cpp   merkle-node SHA256D64 as 3 accelerator calls, no byte swaps
+  HAZYNC_HASHWRITER_BUF  hash.h              HashWriter stages small writes in a 512-byte inline buffer
+  HAZYNC_LAZY_TXID       primitives/transaction.{h,cpp}  txid/wtxid computed on first use
+  HAZYNC_RAW_TXID        primitives/transaction.h        seed txid/wtxid from the raw bytes just parsed
+  HAZYNC_PUBKEY_MEMO     pubkey.cpp          memo of parsed public keys (keyed by the full serialised key)
+  HAZYNC_H160_MEMO       script/interpreter.cpp  memo of HASH160 over 33-byte keys (full key compared)
+  HAZYNC_LEGACY_SIGHASH  script/interpreter.cpp  legacy SIGHASH_ALL from preserialised slices + midstate
+  HAZYNC_AGG_LITE        script/interpreter.cpp  the legacy-sighash cache also keys on the tx generation
+
+Measured motivation for each (block 962,000) is in experimental/libzync-bench/hook/apply_round*.py,
+which produced these edits and are kept only as history. Regenerate with scripts/libzync-base.sh.
+
+diff -ruN a/src/crypto/sha256.cpp b/src/crypto/sha256.cpp
+--- a/src/crypto/sha256.cpp
++++ b/src/crypto/sha256.cpp
+@@ -446,7 +446,48 @@
+ }
+ 
+ TransformType Transform = sha256::Transform;
+-#ifdef HAZYNC_SHA_D64_ACCEL
++#if defined(HAZYNC_D64_STREAM)
++extern "C" void sys_sha_compress(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*);
++namespace {
++inline uint32_t hz_d64_bswap(uint32_t x)
++{
++    return (x >> 24) | ((x >> 8) & 0x0000FF00u) | ((x << 8) & 0x00FF0000u) | (x << 24);
++}
++/* Double-SHA256 of one 64-byte block, state in accelerator layout throughout. */
++void hz_d64(unsigned char* out, const unsigned char* in)
++{
++    static uint32_t iv[8];
++    static bool iv_ready = false;
++    if (!iv_ready) {
++        sha256::Initialize(iv);
++        for (int i = 0; i < 8; ++i) iv[i] = hz_d64_bswap(iv[i]);
++        iv_ready = true;
++    }
++    /* Padding block for a 64-byte message: 0x80, zeros, then the bit length 512 big-endian. */
++    alignas(4) static const unsigned char pad64b[64] = {
++        0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++        0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++        0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++        0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0};
++    const uint32_t* pad64 = reinterpret_cast<const uint32_t*>(pad64b);
++    uint32_t blk[16];
++    uint32_t s[8];
++    __builtin_memcpy(blk, in, 64);
++    sys_sha_compress(s, iv, blk, blk + 8);
++    sys_sha_compress(s, s, pad64, pad64 + 8);
++    /* Second hash: the 32-byte digest (accelerator layout = digest byte order), 0x80, zeros, then
++     * the bit length 256 big-endian. */
++    uint32_t b2[16] = {0};
++    __builtin_memcpy(b2, s, 32);
++    reinterpret_cast<unsigned char*>(b2)[32] = 0x80;
++    reinterpret_cast<unsigned char*>(b2)[62] = 0x01;
++    reinterpret_cast<unsigned char*>(b2)[63] = 0x00;
++    sys_sha_compress(s, iv, b2, b2 + 8);
++    __builtin_memcpy(out, s, 32);
++}
++} // namespace
++TransformD64Type TransformD64 = hz_d64;
++#elif defined(HAZYNC_SHA_D64_ACCEL)
+ /* Route the merkle-node double-SHA through the ACCELERATED Transform, using Core's own generic
+  * construction. This is exactly what Core does on any platform with a fast Transform -- see the
+  * SHA-NI, SSE4 and ARM branches below, all of which set TransformD64Wrapper<that Transform>.
+@@ -668,6 +709,113 @@
+ 
+ ////// SHA-256
+ 
++#ifdef HAZYNC_SHA_STREAM
++extern "C" void sys_sha_compress(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*);
++namespace {
++inline uint32_t hz_bswap(uint32_t x)
++{
++    return (x >> 24) | ((x >> 8) & 0x0000FF00u) | ((x << 8) & 0x00FF0000u) | (x << 24);
++}
++/* s is in the accelerator's layout throughout, so a block is ONE syscall and no swaps. */
++inline void hz_compress(uint32_t* s, const unsigned char* chunk, size_t blocks)
++{
++    uint32_t blk[16];
++    while (blocks--) {
++        if ((((uintptr_t)chunk) & 3u) == 0u) {
++            const uint32_t* w = (const uint32_t*)(const void*)chunk;
++            sys_sha_compress(s, s, w, w + 8);
++        } else {
++            __builtin_memcpy(blk, chunk, 64);
++            sys_sha_compress(s, s, blk, blk + 8);
++        }
++        chunk += 64;
++    }
++}
++inline void hz_copy(unsigned char* d, const unsigned char* s, size_t n)
++{
++    if (n >= 12) {
++        while (((uintptr_t)d) & 3u) { *d++ = *s++; --n; }
++        uint32_t* dw = (uint32_t*)(void*)d;
++        const size_t words = n / 4;
++        const unsigned k = (unsigned)(((uintptr_t)s) & 3u);
++        if (k == 0) {
++            const uint32_t* sw = (const uint32_t*)(const void*)s;
++            for (size_t i = 0; i < words; ++i) dw[i] = sw[i];
++        } else {
++            const uint32_t* sw = (const uint32_t*)(const void*)(s - k);
++            const unsigned lo = 8u * k, hi = 32u - lo;
++            uint32_t a = sw[0];
++            for (size_t i = 0; i < words; ++i) {
++                const uint32_t b = sw[i + 1];
++                dw[i] = (a >> lo) | (b << hi);
++                a = b;
++            }
++        }
++        d += 4 * words; s += 4 * words; n -= 4 * words;
++    }
++    while (n--) *d++ = *s++;
++}
++inline void hz_init(uint32_t* s)
++{
++    sha256::Initialize(s);
++    for (int i = 0; i < 8; ++i) s[i] = hz_bswap(s[i]);
++}
++} // namespace
++
++CSHA256::CSHA256()
++{
++    hz_init(s);
++}
++
++CSHA256& CSHA256::Write(const unsigned char* data, size_t len)
++{
++    size_t bufsize = bytes % 64;
++    if (bufsize + len < 64) {
++        /* The common case: a serialisation field that fits in the buffer. */
++        hz_copy(buf + bufsize, data, len);
++        bytes += len;
++        return *this;
++    }
++    const unsigned char* end = data + len;
++    if (bufsize) {
++        const size_t take = 64 - bufsize;
++        hz_copy(buf + bufsize, data, take);
++        bytes += take;
++        data += take;
++        hz_compress(s, buf, 1);
++    }
++    if (end - data >= 64) {
++        const size_t blocks = (end - data) / 64;
++        hz_compress(s, data, blocks);
++        data += 64 * blocks;
++        bytes += 64 * blocks;
++    }
++    if (end > data) {
++        const size_t r = end - data;
++        hz_copy(buf, data, r);
++        bytes += r;
++    }
++    return *this;
++}
++
++void CSHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
++{
++    static const unsigned char pad[64] = {0x80};
++    unsigned char sizedesc[8];
++    WriteBE64(sizedesc, bytes << 3);
++    Write(pad, 1 + ((119 - (bytes % 64)) % 64));
++    Write(sizedesc, 8);
++    /* Accelerator layout IS the digest's byte order. */
++    __builtin_memcpy(hash, s, 32);
++}
++
++CSHA256& CSHA256::Reset()
++{
++    bytes = 0;
++    hz_init(s);
++    return *this;
++}
++#else
+ CSHA256::CSHA256()
+ {
+     sha256::Initialize(s);
+@@ -722,6 +870,7 @@
+     sha256::Initialize(s);
+     return *this;
+ }
++#endif /* HAZYNC_SHA_STREAM */
+ 
+ void SHA256D64(unsigned char* out, const unsigned char* in, size_t blocks)
+ {
+diff -ruN a/src/hash.h b/src/hash.h
+--- a/src/hash.h
++++ b/src/hash.h
+@@ -101,11 +101,36 @@
+ {
+ private:
+     CSHA256 ctx;
++#ifdef HAZYNC_HASHWRITER_BUF
++    unsigned char m_hzbuf[512];
++    size_t m_hzlen{0};
++    void hz_flush()
++    {
++        if (m_hzlen) {
++            ctx.Write(m_hzbuf, m_hzlen);
++            m_hzlen = 0;
++        }
++    }
++#endif
+ 
+ public:
+     void write(Span<const std::byte> src)
+     {
++#ifdef HAZYNC_HASHWRITER_BUF
++        const unsigned char* p = UCharCast(src.data());
++        const size_t n = src.size();
++        if (n > sizeof(m_hzbuf) - m_hzlen) {
++            hz_flush();
++            if (n >= sizeof(m_hzbuf)) {
++                ctx.Write(p, n);
++                return;
++            }
++        }
++        for (size_t i = 0; i < n; ++i) m_hzbuf[m_hzlen + i] = p[i];
++        m_hzlen += n;
++#else
+         ctx.Write(UCharCast(src.data()), src.size());
++#endif
+     }
+ 
+     /** Compute the double-SHA256 hash of all data written to this object.
+@@ -114,6 +139,9 @@
+      */
+     uint256 GetHash() {
+         uint256 result;
++#ifdef HAZYNC_HASHWRITER_BUF
++        hz_flush();
++#endif
+         ctx.Finalize(result.begin());
+         ctx.Reset().Write(result.begin(), CSHA256::OUTPUT_SIZE).Finalize(result.begin());
+         return result;
+@@ -125,6 +153,9 @@
+      */
+     uint256 GetSHA256() {
+         uint256 result;
++#ifdef HAZYNC_HASHWRITER_BUF
++        hz_flush();
++#endif
+         ctx.Finalize(result.begin());
+         return result;
+     }
+diff -ruN a/src/primitives/transaction.cpp b/src/primitives/transaction.cpp
+--- a/src/primitives/transaction.cpp
++++ b/src/primitives/transaction.cpp
+@@ -86,14 +86,19 @@
+ Wtxid CTransaction::ComputeWitnessHash() const
+ {
+     if (!HasWitness()) {
+-        return Wtxid::FromUint256(hash.ToUint256());
++        return Wtxid::FromUint256(GetHash().ToUint256());
+     }
+ 
+     return Wtxid::FromUint256((HashWriter{} << TX_WITH_WITNESS(*this)).GetHash());
+ }
+ 
++#ifdef HAZYNC_LAZY_TXID
++CTransaction::CTransaction(const CMutableTransaction& tx) : vin(tx.vin), vout(tx.vout), version{tx.version}, nLockTime{tx.nLockTime}, m_has_witness{ComputeHasWitness()} {}
++CTransaction::CTransaction(CMutableTransaction&& tx) : vin(std::move(tx.vin)), vout(std::move(tx.vout)), version{tx.version}, nLockTime{tx.nLockTime}, m_has_witness{ComputeHasWitness()} {}
++#else
+ CTransaction::CTransaction(const CMutableTransaction& tx) : vin(tx.vin), vout(tx.vout), version{tx.version}, nLockTime{tx.nLockTime}, m_has_witness{ComputeHasWitness()}, hash{ComputeHash()}, m_witness_hash{ComputeWitnessHash()} {}
+ CTransaction::CTransaction(CMutableTransaction&& tx) : vin(std::move(tx.vin)), vout(std::move(tx.vout)), version{tx.version}, nLockTime{tx.nLockTime}, m_has_witness{ComputeHasWitness()}, hash{ComputeHash()}, m_witness_hash{ComputeWitnessHash()} {}
++#endif
+ 
+ CAmount CTransaction::GetValueOut() const
+ {
+diff -ruN a/src/primitives/transaction.h b/src/primitives/transaction.h
+--- a/src/primitives/transaction.h
++++ b/src/primitives/transaction.h
+@@ -311,8 +311,15 @@
+ private:
+     /** Memory only. */
+     const bool m_has_witness;
++#ifdef HAZYNC_LAZY_TXID
++    mutable Txid hash;
++    mutable Wtxid m_witness_hash;
++    mutable bool m_hash_done{false};
++    mutable bool m_whash_done{false};
++#else
+     const Txid hash;
+     const Wtxid m_witness_hash;
++#endif
+ 
+     Txid ComputeHash() const;
+     Wtxid ComputeWitnessHash() const;
+@@ -340,8 +347,29 @@
+         return vin.empty() && vout.empty();
+     }
+ 
++#ifdef HAZYNC_LAZY_TXID
++    const Txid& GetHash() const LIFETIMEBOUND
++    {
++        if (!m_hash_done) { hash = ComputeHash(); m_hash_done = true; }
++        return hash;
++    }
++    const Wtxid& GetWitnessHash() const LIFETIMEBOUND
++    {
++        if (!m_whash_done) { m_witness_hash = ComputeWitnessHash(); m_whash_done = true; }
++        return m_witness_hash;
++    }
++#ifdef HAZYNC_RAW_TXID
++    /** Seed both lazy hashes with values the caller computed from this transaction's exact bytes. */
++    void HzSetHashes(const uint256& txid, const uint256& wtxid) const
++    {
++        hash = Txid::FromUint256(txid); m_hash_done = true;
++        m_witness_hash = Wtxid::FromUint256(wtxid); m_whash_done = true;
++    }
++#endif
++#else
+     const Txid& GetHash() const LIFETIMEBOUND { return hash; }
+     const Wtxid& GetWitnessHash() const LIFETIMEBOUND { return m_witness_hash; };
++#endif
+ 
+     // Return sum of txouts.
+     CAmount GetValueOut() const;
+@@ -360,12 +388,12 @@
+ 
+     friend bool operator==(const CTransaction& a, const CTransaction& b)
+     {
+-        return a.hash == b.hash;
++        return a.GetHash() == b.GetHash();
+     }
+ 
+     friend bool operator!=(const CTransaction& a, const CTransaction& b)
+     {
+-        return a.hash != b.hash;
++        return a.GetHash() != b.GetHash();
+     }
+ 
+     std::string ToString() const;
+diff -ruN a/src/pubkey.cpp b/src/pubkey.cpp
+--- a/src/pubkey.cpp
++++ b/src/pubkey.cpp
+@@ -4,6 +4,9 @@
+ // file COPYING or http://www.opensource.org/licenses/mit-license.php.
+ 
+ #include <pubkey.h>
++#ifdef HAZYNC_PUBKEY_MEMO
++#include <cstring>
++#endif
+ 
+ #include <hash.h>
+ #include <secp256k1.h>
+@@ -281,9 +284,31 @@
+         return false;
+     secp256k1_pubkey pubkey;
+     secp256k1_ecdsa_signature sig;
++#ifdef HAZYNC_PUBKEY_MEMO
++    {
++        struct HzKeySlot { unsigned char len; unsigned char key[65]; secp256k1_pubkey pk; };
++        static HzKeySlot hz_keys[4096];
++        const unsigned n = size();
++        uint32_t i = (uint32_t(vch[1]) | uint32_t(vch[2]) << 8 | uint32_t(vch[3]) << 16) & 4095u;
++        bool hit = false;
++        HzKeySlot* empty = nullptr;
++        for (int probe = 0; probe < 32; ++probe, i = (i + 1) & 4095u) {
++            HzKeySlot& sl = hz_keys[i];
++            if (sl.len == 0) { empty = &sl; break; }
++            if (sl.len == n && std::memcmp(sl.key, vch, n) == 0) { pubkey = sl.pk; hit = true; break; }
++        }
++        if (!hit) {
++            if (!secp256k1_ec_pubkey_parse(secp256k1_context_static, &pubkey, vch, n)) {
++                return false;
++            }
++            if (empty) { empty->len = (unsigned char)n; std::memcpy(empty->key, vch, n); empty->pk = pubkey; }
++        }
++    }
++#else
+     if (!secp256k1_ec_pubkey_parse(secp256k1_context_static, &pubkey, vch, size())) {
+         return false;
+     }
++#endif
+     if (!ecdsa_signature_parse_der_lax(&sig, vchSig.data(), vchSig.size())) {
+         return false;
+     }
+diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
+--- a/src/script/interpreter.cpp
++++ b/src/script/interpreter.cpp
+@@ -1035,8 +1035,37 @@
+                         CSHA1().Write(vch.data(), vch.size()).Finalize(vchHash.data());
+                     else if (opcode == OP_SHA256)
+                         CSHA256().Write(vch.data(), vch.size()).Finalize(vchHash.data());
+-                    else if (opcode == OP_HASH160)
++                    else if (opcode == OP_HASH160) {
++#ifdef HAZYNC_H160_MEMO
++                        /* Memo for 33-byte compressed public keys; 4096 slots, linear probing.
++                         * Each slot keeps the full key and is compared byte for byte. */
++                        struct HzSlot { bool used; unsigned char key[33]; unsigned char h[20]; };
++                        static HzSlot hz_table[4096];
++                        bool done = false;
++                        if (vch.size() == 33) {
++                            uint32_t i = (uint32_t(vch[1]) | uint32_t(vch[2]) << 8 | uint32_t(vch[3]) << 16) & 4095u;
++                            for (int probe = 0; probe < 32; ++probe, i = (i + 1) & 4095u) {
++                                HzSlot& sl = hz_table[i];
++                                if (!sl.used) {
++                                    CHash160().Write(vch).Finalize(vchHash);
++                                    sl.used = true;
++                                    std::memcpy(sl.key, vch.data(), 33);
++                                    std::memcpy(sl.h, vchHash.data(), 20);
++                                    done = true;
++                                    break;
++                                }
++                                if (std::memcmp(sl.key, vch.data(), 33) == 0) {
++                                    std::memcpy(vchHash.data(), sl.h, 20);
++                                    done = true;
++                                    break;
++                                }
++                            }
++                        }
++                        if (!done) CHash160().Write(vch).Finalize(vchHash);
++#else
+                         CHash160().Write(vch).Finalize(vchHash);
++#endif
++                    }
+                     else if (opcode == OP_HASH256)
+                         CHash256().Write(vch).Finalize(vchHash);
+                     popstack(stack);
+@@ -1338,6 +1367,101 @@
+     }
+ };
+ 
++#ifdef HAZYNC_LEGACY_SIGHASH
++/** Stream adaptors: one feeds a CSHA256, one appends to a byte vector. */
++struct HzShaSink {
++    CSHA256& h;
++    void write(Span<const std::byte> src) { h.Write(UCharCast(src.data()), src.size()); }
++    template <typename T> HzShaSink& operator<<(const T& obj) { ::Serialize(*this, obj); return *this; }
++};
++struct HzVecSink {
++    std::vector<unsigned char>& v;
++    void write(Span<const std::byte> src) { v.insert(v.end(), UCharCast(src.data()), UCharCast(src.data()) + src.size()); }
++    template <typename T> HzVecSink& operator<<(const T& obj) { ::Serialize(*this, obj); return *this; }
++};
++
++struct HzLegacyCache {
++    const void* vin_data{nullptr};
++    const void* vout_data{nullptr};
++    size_t n_in{0}, n_out{0};
++    uint32_t version{0}, locktime{0};
++    std::vector<unsigned char> blank; //!< 41 bytes per input: prevout | 0x00 | nSequence
++    std::vector<unsigned char> tail;  //!< compactsize(n_out) | outputs | locktime
++    CSHA256 mid;                      //!< state after version | n | blank[0 .. 41*mid_k)
++    size_t mid_k{0};
++    unsigned gen{~0u};                //!< hz_tx_generation when filled (HAZYNC_AGG_LITE)
++};
++#ifdef HAZYNC_AGG_LITE
++extern "C" unsigned hz_tx_generation;
++#endif
++
++/** SIGHASH_ALL legacy sighash from preserialised bytes; same digest as Core's serialiser. */
++template <class T>
++uint256 HzLegacySighashAll(const CScript& scriptCode, const T& txTo, unsigned int nIn, int nHashType)
++{
++    static HzLegacyCache c;
++    const size_t n = txTo.vin.size();
++    if (c.vin_data != (const void*)txTo.vin.data() || c.vout_data != (const void*)txTo.vout.data() ||
++        c.n_in != n || c.n_out != txTo.vout.size() || c.version != uint32_t(txTo.version) ||
++        c.locktime != uint32_t(txTo.nLockTime)
++#ifdef HAZYNC_AGG_LITE
++        || c.gen != hz_tx_generation
++#endif
++        ) {
++#ifdef HAZYNC_AGG_LITE
++        c.gen = hz_tx_generation;
++#endif
++        c.vin_data = txTo.vin.data();
++        c.vout_data = txTo.vout.data();
++        c.n_in = n;
++        c.n_out = txTo.vout.size();
++        c.version = uint32_t(txTo.version);
++        c.locktime = uint32_t(txTo.nLockTime);
++        c.blank.clear();
++        c.blank.reserve(41 * n);
++        HzVecSink bs{c.blank};
++        for (const auto& in : txTo.vin) {
++            bs << in.prevout;
++            bs << CScript();
++            bs << in.nSequence;
++        }
++        assert(c.blank.size() == 41 * n);
++        c.tail.clear();
++        HzVecSink ts{c.tail};
++        ::WriteCompactSize(ts, txTo.vout.size());
++        for (const auto& out : txTo.vout) ts << out;
++        ts << txTo.nLockTime;
++        c.mid_k = n + 1; // force a rewind below
++    }
++    if (c.mid_k > nIn) {
++        c.mid.Reset();
++        HzShaSink ms{c.mid};
++        ms << txTo.version;
++        ::WriteCompactSize(ms, n);
++        c.mid_k = 0;
++    }
++    if (c.mid_k < nIn) {
++        c.mid.Write(c.blank.data() + 41 * c.mid_k, 41 * (nIn - c.mid_k));
++        c.mid_k = nIn;
++    }
++    CSHA256 h = c.mid;
++    HzShaSink hs{h};
++    const unsigned char* own = c.blank.data() + 41 * nIn;
++    h.Write(own, 36); // prevout
++    CTransactionSignatureSerializer<T>(txTo, scriptCode, nIn, nHashType).SerializeScriptCode(hs);
++    h.Write(own + 37, 4); // nSequence
++    h.Write(own + 41, 41 * (n - nIn - 1));
++    h.Write(c.tail.data(), c.tail.size());
++    unsigned char ht[4];
++    WriteLE32(ht, uint32_t(nHashType));
++    h.Write(ht, 4);
++    uint256 result;
++    h.Finalize(result.begin());
++    CSHA256().Write(result.begin(), CSHA256::OUTPUT_SIZE).Finalize(result.begin());
++    return result;
++}
++#endif /* HAZYNC_LEGACY_SIGHASH */
++
+ /** Compute the (single) SHA256 of the concatenation of all prevouts of a tx. */
+ template <class T>
+ uint256 GetPrevoutsSHA256(const T& txTo)
+@@ -1623,6 +1747,12 @@
+         }
+     }
+ 
++#ifdef HAZYNC_LEGACY_SIGHASH
++    if (!(nHashType & SIGHASH_ANYONECANPAY) && (nHashType & 0x1f) != SIGHASH_SINGLE &&
++        (nHashType & 0x1f) != SIGHASH_NONE) {
++        return HzLegacySighashAll(scriptCode, txTo, nIn, nHashType);
++    }
++#endif
+     // Wrapper to serialize only the necessary parts of the transaction being signed
+     CTransactionSignatureSerializer<T> txTmp(txTo, scriptCode, nIn, nHashType);
+ 

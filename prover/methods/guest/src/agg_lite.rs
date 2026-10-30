@@ -24,8 +24,8 @@
 //! ⚠ SwiftSync only: there is no per-input utreexo proof here. At the two BIP30-grandfathered blocks
 //! the superseded coinbase coins are SUBTRACTED from the SwiftSync total (pinned old height + MTP). Journal layout, all u32 LE words:
 //!   header: KIND_CHUNK_LITE, all_valid, height, block_hash[8], mtp, block_time, n_records
-//!   record: txid[8] prevouts_hash[8] start count first
-//!     if first: wtxid[8] has_witness n_vin fee[2] weight[2] sigops[2] n_out out_leaf[8]*n_out
+//!   record: txid[8] wtxid[8] prevouts_hash[8] start count first
+//!     if first: has_witness n_vin fee[2] weight[2] sigops[2] n_out out_leaf[8]*n_out
 //!     per owned input: leaf[8] is_coinbase [coinbase_txid[8] if is_coinbase]
 
 use super::*;
@@ -93,7 +93,14 @@ impl ChunkCtx {
             if *i != start + j as u32 { ok = false; }
         }
         let first = start == 0;
+        // Only the block's first transaction may be a coinbase (Core CheckBlock bad-cb-multiple). A
+        // coinbase-shaped transaction here would have fee 0 and outputs from nothing (review 2026-10-30).
+        if unsafe { is_coinbase_tx(tp, tl) } != 0 { ok = false; }
         push_hash(&mut self.words, &txid);
+        // EVERY run commits the wtxid, not only the input-0 run: the txid omits the witness, so a later
+        // run of the same transaction could verify its inputs against DIFFERENT witness bytes than the
+        // ones the coinbase's witness commitment covers. The aggregate requires all runs to agree.
+        push_hash(&mut self.words, wtxid);
         push_hash(&mut self.words, &ph);
         self.words.push(start);
         self.words.push(k as u32);
@@ -101,13 +108,12 @@ impl ChunkCtx {
         if first {
             let mut fee: i64 = 0;
             if unsafe { check_tx(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, &mut fee) } != 1 { ok = false; }
-            let lock_time = if self.height >= 419_328 { self.mtp } else { self.block_time };
+            let lock_time = if self.height >= NET.csv_height { self.mtp } else { self.block_time };
             if unsafe { is_final_tx(tp, tl, self.height as i64, lock_time as i64) } != 1 { ok = false; }
             let (mut weight, mut _legacy) = (0i64, 0i64);
             unsafe { tx_wu_sigops(tp, tl, &mut weight, &mut _legacy) };
             let sigops = unsafe { tx_full_sigops(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, self.flags) };
             let n_vin = unsafe { tx_vin_count(tp, tl) };
-            push_hash(&mut self.words, wtxid);
             self.words.push(has_witness);
             self.words.push(n_vin);
             push_i64(&mut self.words, fee);
@@ -122,12 +128,21 @@ impl ChunkCtx {
         const MASK: u32 = 0x0000_ffff; const GRAN: u32 = 9;
         for j in 0..k {
             if results[j] != 1 { ok = false; }
-            if cb[j] == 1 && self.height < ch[j] + 100 { ok = false; }
+            // A coin cannot be spent before the block that creates it. The leaf commits the coin's height,
+            // and ECMH sums do not care about order, so without this a spend at h1 could be balanced by a
+            // creation at a LATER h2 (review 2026-10-30). Equal height = an in-block spend, which the
+            // aggregate matches against this block's created set.
+            if ch[j] > self.height { ok = false; }
+            let (h, chj) = (self.height as u64, ch[j] as u64);
+            if cb[j] == 1 && h < chj + 100 { ok = false; }
             let seq = seqs[j];
-            if self.height >= 419_328 && version >= 2 && (seq & DISABLE) == 0 {
+            // Core v28's CTransaction::version is a uint32_t and the BIP68 gate is `version >= 2`
+            // UNSIGNED: version 0xFFFFFFFF enforces it. Compared as i32 it read -1 and skipped the lock
+            // (review 2026-10-30).
+            if self.height >= NET.csv_height && (version as u32) >= 2 && (seq & DISABLE) == 0 {
                 if seq & TYPE != 0 {
                     if (self.mtp as u64) < cmtp[j] as u64 + (((seq & MASK) as u64) << GRAN) { ok = false; }
-                } else if self.height < ch[j] + (seq & MASK) { ok = false; }
+                } else if h < chj + (seq & MASK) as u64 { ok = false; }
             }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
             self.words.push(cb[j]);
@@ -181,11 +196,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let block_time = u32::from_le_bytes(w.header[68..72].try_into().unwrap());
     let block_hash = dsha256(&w.header);
     let flags = block_script_flags(w.height, &block_hash);
-    let lock_time = if w.height >= 419_328 { mtp } else { block_time };
+    let lock_time = if w.height >= NET.csv_height { mtp } else { block_time };
     let version = i32::from_le_bytes(w.header[0..4].try_into().unwrap());
     if (version < 2 && w.height >= BIP34_HEIGHT)
-        || (version < 3 && w.height >= 363_725)
-        || (version < 4 && w.height >= 388_381) {
+        || (version < 3 && w.height >= NET.bip66_height)
+        || (version < 4 && w.height >= NET.bip65_height) {
         all_ok = false;
     }
     // The two grandfathered BIP30 blocks are handled below with SwiftSync subtractions instead of the
@@ -206,7 +221,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         // BIP30, the hints-file convention (Core's IsBIP30Unspendable): the coinbase coins of 91,722 and
         // 91,812 are never indexed or accounted. Their outpoints come back, and are accounted, when 91,880
         // and 91,842 duplicate them. Same final set as Core's overwrite, with no subtraction needed.
-        if block_hash != BIP30_UNSPENDABLE_A && block_hash != BIP30_UNSPENDABLE_B {
+        if !NET.is_bip30_unspendable(w.height, &block_hash) {
             for l in 0..n as usize {
                 let mut h = [0u8; 32];
                 h.copy_from_slice(&buf[32 * l..32 * l + 32]);
@@ -228,8 +243,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut spends: Vec<([u8; 32], u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position), block order
     let mut cb_spends: Vec<[u8; 32]> = Vec::new();
 
-    // Walk every chunk's records in order. `cur` = (txid, prevouts hash, n_vin, next input expected).
-    let mut cur: Option<([u8; 32], [u8; 32], u32, u32)> = None;
+    // Walk every chunk's records in order. `cur` = (txid, wtxid, prevouts hash, n_vin, next input expected).
+    let mut cur: Option<([u8; 32], [u8; 32], [u8; 32], u32, u32)> = None;
     let mut tx_pos: u32 = 0;
     for j in journals {
         let mut r = Rd { w: j, i: 0, bad: false };
@@ -244,12 +259,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         }
         let n_rec = r.u();
         for _ in 0..n_rec {
-            let (txid, ph, start, count, first) = (r.h(), r.h(), r.u(), r.u(), r.u());
+            let (txid, wt, ph, start, count, first) = (r.h(), r.h(), r.h(), r.u(), r.u(), r.u());
             if first == 1 {
                 if start != 0 { all_ok = false; }
-                if let Some((_, _, n, next)) = cur { if next != n { all_ok = false; } }
+                if let Some((_, _, _, n, next)) = cur { if next != n { all_ok = false; } }
                 tx_pos += 1;
-                let wt = r.h();
                 let hw = r.u();
                 let n_vin = r.u();
                 let (fee, weight, sigops) = (r.i64(), r.i64(), r.i64());
@@ -265,16 +279,16 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     output_leaves.push(l);
                     out_pos.push(tx_pos);
                 }
-                cur = Some((txid, ph, n_vin, 0));
+                cur = Some((txid, wt, ph, n_vin, 0));
             } else {
                 match cur {
-                    Some((t, p, _, next)) if t == txid && p == ph && start == next => {}
+                    Some((t, w2, p, _, next)) if t == txid && w2 == wt && p == ph && start == next => {}
                     _ => all_ok = false,
                 }
             }
             let Some(c) = cur.as_mut() else { all_ok = false; break; };
-            if count == 0 || c.3 + count > c.2 { all_ok = false; }
-            c.3 += count;
+            if count == 0 || c.4 as u64 + count as u64 > c.3 as u64 { all_ok = false; }
+            c.4 = c.4.saturating_add(count);
             for _ in 0..count {
                 let leaf = r.h();
                 spends.push((leaf, tx_pos));
@@ -287,7 +301,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // No records at all = a coinbase-only block (common before ~2011): coverage holds trivially. Safe
     // because the merkle check below binds the full txid list, so dropping every record of a block that
     // HAS other transactions still fails there.
-    let covered = match cur { Some((_, _, n, next)) => next == n, None => true };
+    let covered = match cur { Some((_, _, _, n, next)) => next == n, None => true };
     if !covered { all_ok = false; }
     if !all_ok { env::log(&format!("agg-lite: REJECT after the record walk (transactions={}, last covered={covered})", tx_pos)); }
 
@@ -308,6 +322,17 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     created.dedup_by_key(|e| e.0);
     let mut spent = vec![false; created.len()];
     let find = |k: &[u64; 4]| created.binary_search_by(|e| e.0.cmp(k));
+    // The same external coin spent twice in one block: Core rejects it at the second spend
+    // (bad-txns-inputs-missingorspent). The ECMH total would also catch it at H, but only with a correct
+    // map; rejecting here costs one sort and pins the failure to this block (review 2026-10-30).
+    {
+        let mut ext: Vec<[u64; 4]> = spends.iter().map(|(l, _)| key(l)).filter(|k| find(k).is_err()).collect();
+        ext.sort_unstable();
+        if ext.windows(2).any(|p| p[0] == p[1]) {
+            env::log("agg-lite: REJECT the same external coin is spent twice in this block");
+            all_ok = false;
+        }
+    }
     for (leaf, txp) in &spends {
         match find(&key(leaf)) {
             Ok(i) => {
@@ -334,27 +359,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         }
     }
     swiftsync::report();
-    let ss_hints = if ss_mode == 1 {
-        use sha2::{Digest, Sha256};
-        let mut h = Sha256::new();
-        // v2: over the height and its list of unspent INDICES -- exactly what the hints file stores per
-        // height -- so a verifier recomputes it from the published file alone, no blocks needed.
-        h.update(b"libzync/swiftsync-hints/v2");
-        h.update(prev_hints);
-        h.update(w.height.to_le_bytes());
-        let ones: u32 = ss_words.iter().map(|x| x.count_ones()).sum();
-        h.update(ones.to_le_bytes());
-        for (wi, x) in ss_words.iter().enumerate() {
-            let mut v = *x;
-            while v != 0 {
-                let b = v.trailing_zeros();
-                h.update(((wi as u32) * 32 + b).to_le_bytes());
-                v &= v - 1;
-            }
-        }
-        let d: [u8; 32] = h.finalize().into();
-        d
-    } else { prev_hints };
+    // v2 over the height and its list of unspent INDICES -- exactly what the hints file stores per
+    // height -- so a verifier recomputes it from the published file alone (libzync/src/ss_hints.rs).
+    let ss_hints = if ss_mode == 1 { ss_hints::step_bits(&prev_hints, w.height, ss_words) } else { prev_hints };
 
     let pow_ok = unsafe { check_pow(w.header.as_ptr()) } == 1;
     let mut mroot = [0u8; 32];
@@ -363,12 +370,23 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let merkle_ok = mroot[..] == w.header[36..68] && mutated == 0;
 
     let flat_wtx: &[u8] = unsafe { core::slice::from_raw_parts(wtxids.as_ptr() as *const u8, wtxids.len() * 32) };
-    let witness_ok = if w.height >= 481_824 {
+    let witness_ok = if w.height >= NET.segwit_height {
         (unsafe { check_witness_commitment(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32,
                                            flat_wtx.as_ptr(), wtxids.len() as u32, has_witness as u32) }) == 1
     } else {
         !has_witness
     };
+    // BIP325: on signet the block solution in the coinbase witness commitment must satisfy the challenge.
+    // Core's own CheckSignetBlockSolution, given the coinbase and the txids the merkle check just bound.
+    #[cfg(feature = "signet")]
+    {
+        let rest: &[u8] = unsafe { core::slice::from_raw_parts(txids[1..].as_ptr() as *const u8, (txids.len() - 1) * 32) };
+        if unsafe { hz_check_signet(w.header.as_ptr(), w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32,
+                                    rest.as_ptr(), (txids.len() - 1) as u32) } != 1 {
+            env::log("agg-lite: REJECT signet block solution");
+            all_ok = false;
+        }
+    }
     let bip34_ok = unsafe { check_bip34(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height) } == 1;
 
     let ids_distinct = {

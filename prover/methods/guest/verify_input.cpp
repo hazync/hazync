@@ -23,8 +23,14 @@
 #include <consensus/params.h>   // Consensus::Params (mainnet PoW parameters)
 #include <consensus/consensus.h> // MAX_BLOCK_WEIGHT / MAX_BLOCK_SIGOPS_COST / WITNESS_SCALE_FACTOR
 #include <kernel/chainparams.h> // real mainnet CChainParams::Main() (authoritative consensus constants)
+#ifdef HAZYNC_SIGNET
+#include <signet.h>             // CheckSignetBlockSolution (BIP325)
+#include <primitives/block.h>
+#endif
 #include <memory>
 #include <string>
+
+static const Consensus::Params& net_params();
 
 // Minimal byte reader satisfying the Stream interface Core's Unserialize needs (no streams.h).
 struct MiniReader {
@@ -489,7 +495,7 @@ extern "C" int check_input_locks_batch(const uint8_t* tx_bytes, unsigned tx_len,
         if (coin_is_coinbase[k] && spend_height < coin_height[k] + 100) { out_results[k] = -40; continue; }
         uint32_t seq = mtx.vin[i].nSequence;
         int32_t res = 1;
-        if (spend_height >= 419328 && mtx.version >= 2 && !(seq & DISABLE)) {
+        if (spend_height >= (uint32_t)net_params().CSVHeight && mtx.version >= 2 && !(seq & DISABLE)) {
             if (seq & TYPE) {
                 uint64_t required = (uint64_t)coin_mtp[k] + (((uint64_t)(seq & MASK)) << GRANULARITY);
                 if ((uint64_t)spend_mtp < required) res = -42;
@@ -525,7 +531,7 @@ extern "C" int check_input_locks(const uint8_t* tx_bytes, unsigned tx_len, unsig
     // rejects pre-CSV v2 txs with unmet relative locks that Core accepts.
     uint32_t seq = mtx.vin[input_idx].nSequence;
     const uint32_t DISABLE = 1u << 31, TYPE = 1u << 22, MASK = 0x0000ffff, GRANULARITY = 9;
-    if (spend_height >= 419328 && mtx.version >= 2 && !(seq & DISABLE)) {
+    if (spend_height >= (uint32_t)net_params().CSVHeight && mtx.version >= 2 && !(seq & DISABLE)) {
         if (seq & TYPE) {
             // Time-based: coin's creation MTP + (value << 9) seconds must have elapsed by this block's MTP.
             uint64_t required = (uint64_t)coin_mtp + (((uint64_t)(seq & MASK)) << GRANULARITY);
@@ -597,7 +603,12 @@ extern "C" int check_pow(const uint8_t* header) {
     bool neg, over, n2, o2;
     arith_uint256 target, powLimit;
     target.SetCompact(nBits, &neg, &over);
+#ifdef HAZYNC_SIGNET
+    (void)n2; (void)o2;
+    powLimit = UintToArith256(net_params().powLimit); // signet: Core's CheckProofOfWorkImpl bound exactly
+#else
     powLimit.SetCompact(0x1d00ffff, &n2, &o2); // mainnet consensus powLimit
+#endif
     if (neg || over || target == 0 || target > powLimit) return -30;
     if (UintToArith256(hash) > target) return -31;
     return 1;
@@ -646,11 +657,11 @@ extern "C" int check_witness_commitment(const uint8_t* cb, unsigned cb_len,
 // Compared against Core's own `CScript() << height` serialization (minimal push). 1 valid.
 // Defined further down (it builds CChainParams once); declared here so the BIP34 gate can read the
 // buried height out of Core rather than repeating it as a literal.
-static const Consensus::Params& mainnet_params();
+static const Consensus::Params& net_params();
 
 extern "C" int check_bip34(const uint8_t* cb, unsigned cb_len, uint32_t height) {
     // Read from Core's own compiled Consensus::Params rather than typed here — see core_bip34_height.
-    if (height < (uint32_t)mainnet_params().BIP34Height) return 1;
+    if (height < (uint32_t)net_params().BIP34Height) return 1;
     MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
@@ -848,10 +859,53 @@ std::string FormatISO8601Date(int64_t) { return std::string(); }
 // nPowTargetTimespan/Spacing, the buried soft-fork heights, the halving interval — and asserts the
 // genesis hash. Constructed once (function-static) and reused; every consensus constant below comes
 // from here rather than a hand-typed literal, so there is nothing to mis-transcribe.
-static const Consensus::Params& mainnet_params() {
+//
+// libzync HAZYNC_SIGNET: the same, for default signet -- CChainParams::SigNet with no options builds
+// Core's CSigNetParams with its built-in challenge (and asserts that genesis hash too).
+static const Consensus::Params& net_params() {
+#ifdef HAZYNC_SIGNET
+    static const std::unique_ptr<const CChainParams> params = CChainParams::SigNet(CChainParams::SigNetOptions{});
+#else
     static const std::unique_ptr<const CChainParams> params = CChainParams::Main();
+#endif
     return params->GetConsensus();
 }
+
+// libzync/src/net.rs pins (assert_core_constants): powLimit as compact bits and the genesis hash.
+extern "C" uint32_t core_pow_limit_bits() { return UintToArith256(net_params().powLimit).GetCompact(); }
+extern "C" void core_genesis_hash(uint8_t* out) { std::memcpy(out, net_params().hashGenesisBlock.begin(), 32); }
+
+#ifdef HAZYNC_SIGNET
+// BIP325 through Core's own, unmodified CheckSignetBlockSolution (signet.cpp is compiled in).
+//
+// It reads, of the block: the header, vtx[0] in full (the commitment it strips the solution from) and
+// GetHash() of every other transaction (the modified merkle root). The libzync aggregate never holds
+// those transactions -- only their txids, which the block's merkle check has just bound to the header.
+// So vtx[1..] are empty placeholders whose lazily computed txid is SEEDED with the bound value
+// (HAZYNC_RAW_TXID's HzSetHashes): GetHash() returns exactly what the real transaction's would.
+extern "C" int hz_check_signet(const uint8_t* header, const uint8_t* cb, uint32_t cb_len,
+                               const uint8_t* txids, uint32_t n_txids) {
+    CBlock block;
+    {
+        MiniReader r{reinterpret_cast<const std::byte*>(header), reinterpret_cast<const std::byte*>(header) + 80};
+        r >> static_cast<CBlockHeader&>(block);
+    }
+    {
+        MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
+        CMutableTransaction mcb;
+        r >> TX_WITH_WITNESS(mcb);
+        block.vtx.push_back(MakeTransactionRef(std::move(mcb)));
+    }
+    for (uint32_t i = 0; i < n_txids; i++) {
+        uint256 t;
+        std::memcpy(t.begin(), txids + 32 * i, 32);
+        CTransactionRef p = MakeTransactionRef(CMutableTransaction{});
+        p->HzSetHashes(t, t);
+        block.vtx.push_back(std::move(p));
+    }
+    return CheckSignetBlockSolution(block, net_params()) ? 1 : 0;
+}
+#endif
 
 // Difficulty retarget: the expected nBits for the block after `prev_bits`, given the epoch's first
 // block time and the last block's time. This drives Bitcoin Core's REAL, unmodified
@@ -863,7 +917,7 @@ extern "C" uint32_t calc_next_bits(uint32_t prev_bits, int64_t first_time, int64
     pindexLast.nTime   = (uint32_t)last_time;
     pindexLast.nHeight = 0;  // unused on the mainnet retarget path (only the BIP94/min-difficulty
                              // branches read it, and both are disabled for mainnet params)
-    return CalculateNextWorkRequired(&pindexLast, first_time, mainnet_params());
+    return CalculateNextWorkRequired(&pindexLast, first_time, net_params());
 }
 
 // Cumulative chainwork: cum += GetBlockProof(nBits) (real Core formula, chain.cpp), 256-bit.
@@ -883,9 +937,9 @@ extern "C" void add_work(uint8_t* cum, uint32_t nBits) {
 
 // Block subsidy — Core's GetBlockSubsidy formula (the 6-line body lives in validation.cpp, which is
 // un-carvable; this is that body verbatim). The one consensus constant, the halving interval, is read
-// from Core's chainparams (mainnet_params().nSubsidyHalvingInterval) rather than hard-typed.
+// from Core's chainparams (net_params().nSubsidyHalvingInterval) rather than hard-typed.
 extern "C" int64_t block_subsidy(uint32_t height) {
-    int halvings = height / mainnet_params().nSubsidyHalvingInterval;
+    int halvings = height / net_params().nSubsidyHalvingInterval;
     if (halvings >= 64) return 0;
     int64_t subsidy = 50LL * 100000000LL; // 50 * COIN
     subsidy >>= halvings;
@@ -894,19 +948,19 @@ extern "C" int64_t block_subsidy(uint32_t height) {
 
 // Consensus constants sourced from Core's own compiled source, exposed to the Rust guest so it can pin
 // every hard-coded literal to Core's value at runtime (a mismatch aborts the proof). Heights + retarget
-// interval come from chainparams (mainnet_params()); the weight/sigop limits from consensus/consensus.h;
+// interval come from chainparams (net_params()); the weight/sigop limits from consensus/consensus.h;
 // the SCRIPT_VERIFY_* bit positions from script/interpreter.h — so nothing consensus-relevant is a
 // magic number we could have typed wrong.
-extern "C" uint32_t core_bip66_height()            { return (uint32_t)mainnet_params().BIP66Height; }
-extern "C" uint32_t core_bip65_height()            { return (uint32_t)mainnet_params().BIP65Height; }
-extern "C" uint32_t core_csv_height()              { return (uint32_t)mainnet_params().CSVHeight; }
-extern "C" uint32_t core_segwit_height()           { return (uint32_t)mainnet_params().SegwitHeight; }
+extern "C" uint32_t core_bip66_height()            { return (uint32_t)net_params().BIP66Height; }
+extern "C" uint32_t core_bip65_height()            { return (uint32_t)net_params().BIP65Height; }
+extern "C" uint32_t core_csv_height()              { return (uint32_t)net_params().CSVHeight; }
+extern "C" uint32_t core_segwit_height()           { return (uint32_t)net_params().SegwitHeight; }
 // BIP34Height was the ONE buried height still hand-typed (audit #3 phase-2 sweep). Its four siblings
 // were already read from Core; this one was a literal in two places, so the claim that nothing
 // consensus-relevant is a hand-typed magic number did not hold for it.
-extern "C" uint32_t core_bip34_height()            { return (uint32_t)mainnet_params().BIP34Height; }
-extern "C" uint32_t core_retarget_interval()       { return (uint32_t)mainnet_params().DifficultyAdjustmentInterval(); }
-extern "C" uint32_t core_subsidy_halving_interval(){ return (uint32_t)mainnet_params().nSubsidyHalvingInterval; }
+extern "C" uint32_t core_bip34_height()            { return (uint32_t)net_params().BIP34Height; }
+extern "C" uint32_t core_retarget_interval()       { return (uint32_t)net_params().DifficultyAdjustmentInterval(); }
+extern "C" uint32_t core_subsidy_halving_interval(){ return (uint32_t)net_params().nSubsidyHalvingInterval; }
 extern "C" int64_t  core_max_block_weight()        { return (int64_t)MAX_BLOCK_WEIGHT; }
 extern "C" int64_t  core_max_block_sigops_cost()   { return (int64_t)MAX_BLOCK_SIGOPS_COST; }
 extern "C" int64_t  core_witness_scale_factor()    { return (int64_t)WITNESS_SCALE_FACTOR; }

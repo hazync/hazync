@@ -1,0 +1,31 @@
+# libzync: every format and rule the host and the guest must agree on, in ONE place.
+#
+# Before this crate the same facts lived in up to four copies -- the guest reader, the host writer, a
+# Python generator and a comment -- and a desync failed as a garbled input stream, not as an error:
+#   - the hint streams (liftx pairs, batch-signature hints, ECMH hints, SwiftSync hint bits);
+#   - the SwiftSync hint hash (guest agg_lite.rs and host ss_hints_step, computed two different ways);
+#   - the ~22 build levers a libzync guest needs, each a separate env var on both sides;
+#   - the collect-mode log lines (BATCHREC / ECMHREC) the guest prints and the host parses.
+#
+# The GUEST includes `wire.rs`, `swiftsync.rs` and `net.rs` by #[path], never as a dependency: a Cargo
+# path dependency bakes its absolute path into the ELF and moves the image id (hazync#88, the same
+# reason coinbase-smt is #[path]-included). The build scripts include `profile.rs` the same way.
+[package]
+name = "libzync"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["std"]
+# Host side: the hint PRODUCERS (libsecp for R, num-bigint for ECMH) and the per-block bundle file.
+std = ["dep:secp256k1", "dep:num-bigint", "dep:hintsfile"]
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+# The version bitcoin 0.32 re-exports, so the host links one libsecp, not two.
+secp256k1 = { version = "0.29", optional = true, features = ["global-context"] }
+num-bigint = { version = "0.4", optional = true }
+hintsfile = { version = "0.2.0", optional = true }
+
+[workspace]
