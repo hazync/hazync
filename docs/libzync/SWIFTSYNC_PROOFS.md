@@ -153,6 +153,36 @@ fails for this demonstration proof, because it starts at 2,500 and not at genesi
    says exactly what SwiftSync's assumevalid mode assumes, so it is enough for verified hints, but it is not a full
    validation proof.
 
+## 6a. Tip proofs vs proofs up to H
+
+- **Before H:** a hints file exists for these blocks. Every output gets its bit: spent-by-H coins go through ECMH,
+  survivors are appended to the forest. At H the total must be the identity, and the proof is SwiftSync-complete.
+- **Past H, at the tip:** no hint bits exist yet. Our live tip runs (mainnet 973,752–755, past the published file's
+  970,000) put every output into the ECMH total. That total is carried in the proof but **not yet checkable**, so a
+  tip proof is a full block-validity proof (scripts, signatures, PoW, merkle, all via Core's code) whose coin
+  accounting completes only when a later epoch closes (§7). Those runs also proved each block on its own, from a state
+  the host supplied, rather than as a chain.
+- **The cost mix differs.** Ruben's point: by a week old, most outputs are spent. Under design B that means more ECMH
+  (~3k cycles per output, added and removed once each) and fewer forest appends. On block 962,000 the ECMH is ~3% of
+  the work, so the shift is small next to script and signature work. Measurements for the last blocks before
+  H = 970,000, with the published file's real bits: §10a.
+
+## 6b. Where the cost is (block 962,000, mainnet)
+
+| | original Hazync guest | libzync |
+|---|---|---|
+| total guest cycles | 3.36 G | ~0.40 G (**~8.5× fewer**) |
+| signature validation | libsecp ECDSA ≈ **75%** of cycles | batched, one equation per chunk: **~19%** of chunk cycles |
+| hashing, sighash, transaction parsing (Core's own code) | secondary | now the **largest** item: ~47% of chunk cycles run Core's C++ |
+| ECMH (SwiftSync accounting) | — | **~3%** |
+| block bookkeeping (aggregate) | 2,364 s of proving on an A40 | 64 M cycles |
+
+Remaining levers:
+- per-proof fixed cost and recursion (about 8.7 s per empty block on one RTX PRO 6000);
+- multi-block batching (not built);
+- the BIP30 coinbase SMT (~1.5 M cycles per coinbase spend);
+- mid-history transaction shapes (2–6× the cycles per transaction of today's blocks).
+
 ## 7. Epochs: moving H and localising failures (design; not built)
 
 **Today:** one hints file, one running total from 1 to H.

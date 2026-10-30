@@ -1,0 +1,11 @@
+969996	hints	chunks=415271805	agg=90105925	swiftsync: adds=1886 subs=6643
+969996	nohints	chunks=415271805	agg=95009321	swiftsync: adds=8005 subs=6643
+969997	hints	chunks=397882533	agg=72285065	swiftsync: adds=800 subs=5167
+969997	nohints	chunks=397882533	agg=74591066	swiftsync: adds=3757 subs=5167
+969998	hints	chunks=418432364	agg=71062446	swiftsync: adds=830 subs=5025
+969998	nohints	chunks=418432364	agg=73676696	swiftsync: adds=4042 subs=5025
+969999	hints	chunks=440521662	agg=83590116	swiftsync: adds=65 subs=6083
+969999	nohints	chunks=440521662	agg=88775215	swiftsync: adds=6439 subs=6083
+970000	hints	chunks=360518071	agg=52672468	swiftsync: adds=0 subs=2133
+970000	nohints	chunks=360518071	agg=53263813	swiftsync: adds=787 subs=2133
+MEASURE_DONE

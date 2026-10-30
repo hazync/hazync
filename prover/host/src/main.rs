@@ -5332,6 +5332,15 @@ fn main() {
         ss_make_hints_cmd(h, &args[p + 2], &args[p + 3]);
         return;
     }
+    if let Some(p) = args.iter().position(|a| a == "libzync-anchor-json") {
+        // libzync-anchor-json <out>: the chain state BEFORE $HAZYNC_BLOCK as build_full derives it from the block
+        // file (tip, difficulty and time context, an empty forest, a zero SwiftSync total). A demonstration
+        // anchor for libzync-prove-range mid-chain; a proof built on it says so (libzync-verify, check 3).
+        let (anchor, w) = build_full();
+        std::fs::write(&args[p + 1], serde_json::to_string(&anchor).unwrap()).unwrap();
+        println!("anchor for block {} (state at {}) -> {}", w.height, anchor.height, args[p + 1]);
+        return;
+    }
     if let Some(p) = args.iter().position(|a| a == "libzync-prove-range") {
         let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect("libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>") };
         lz_prove_range_cmd(n(1), n(2), &args[p + 3], &args[p + 4], &args[p + 5]);
