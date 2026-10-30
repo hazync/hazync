@@ -230,7 +230,7 @@ Three new reviewers:
 | 20 | a prebuilt guest's network/profile labels came from the shell, not the pinned bytes | hygiene | **fixed**: the pin directory carries a `PROFILE` file, which must match |
 | 21 | `swiftsync-diff-hints` could call a file with duplicate indices EXACT | misleading output | **fixed** |
 | 22 | no tool wrote a genesis anchor | completeness | **fixed**: `libzync-anchor-json --genesis` |
-| 23 | the claim "every Core rule" includes `time-too-new` (MAX_FUTURE_BLOCK_TIME), which needs a clock and cannot be proven | documentation | **stated** in the proposal §2 and §5 |
+| 23 | the claim "every Core rule" includes `time-too-new` (MAX_FUTURE_BLOCK_TIME), which needs a clock | documentation | **closed in round 4**: the proof commits `max_time` and the verifier applies the rule |
 
 ### Third round: adversarial audit (same day)
 
@@ -242,12 +242,23 @@ Two fresh auditors: one on the guest, one on the verifier and spec.
 | 25 | the proof covers the hints file as `hintsfile` 0.2.1 decodes it; that decoder accepts non-canonical encodings and trailing bytes | verifier vs spec | **fixed**: `libzync-verify` and `swiftsync-file-hash` require canonical bytes |
 | 26 | BIP30 is enforced for coinbases only; a non-coinbase descendant of a duplicated coinbase could recreate an unspent outpoint on a fabricated pre-BIP34 chain | soundness-theoretical (not on mainnet history) | documented (proposal §2) |
 | 27 | spec: "Utreexo nodes need only the roots" (it is Hazync's own variant); §5 missing the time-too-new step; the evidence predated the audit images; epoch hash chaining unspecified | spec | **fixed** in the proposal |
-| 28 | the assumevalid label is build metadata, not carried in the receipt | interface | documented; needs reproducible libzync builds |
+| 28 | the assumevalid label is build metadata, not carried in the receipt | interface | **closed in round 4**: `ChainState.profile`; reproducible builds still needed to trust M itself |
 
 **Verdicts that held:** batch ECDSA, Schnorr and taproot-tweak deferral match libsecp's acceptance exactly. The
 Fiat–Shamir weights are sound to about 2^-128. The signed-digit Pippenger is correct. Every Core lever computes the
 same bytes as Core in the shipped (bump-allocator) build. The record walk enforces coverage. Design B's argument
 holds once the map is single-valued.
+
+### Round 4: closing the open items (2026-10-30)
+
+| item | change |
+|---|---|
+| `time-too-new` | `ChainState.max_time` = the largest block timestamp so far. `libzync-verify` requires `max_time <= now + 7200` on its own clock, as Core does for every block during IBD. OpenTimestamps was considered and does not help: it bounds a time by Bitcoin block times, which are miner-set within the same 2 hours |
+| scripts-on vs assumevalid in the proof | `ChainState.profile`: bit 0 libzync, bit 1 scripts SKIPPED, bit 2 signet. Bit 1 comes from `hz_no_scripts()` in `verify_input.cpp`, the file that does or skips the checks, so the label cannot disagree with the code. A recursive step requires the previous profile to equal its own; the verifier requires the profile it was built for |
+| Utreexo format | standalone spec [`UTREEXO_FORMAT.md`](UTREEXO_FORMAT.md) with a test vector, and an independent implementation `scripts/libzync/utreexo_ref.py` that checks the guest's committed forest from the block files alone |
+| Utreexo compatibility | measured (bench §7): a SHA-512/256 parent costs 14,530 cycles against 929. The blocker is that utreexod's roots depend on deletion history, so compatibility means proving every deletion |
+
+Guests: mainnet `ddcaf1d0…`, signet `c3501ac9…`.
 
 ## 8. Signet
 

@@ -209,7 +209,22 @@ struct ChainState {
     // libzync (review 2): the coinbase-txid SMT root after this block, carried so each block's BIP30 check
     // runs against the chain's own tree (genesis: empty). Mirrors the guest.
     smt_root: [u8; 32],
+    // libzync: the largest block timestamp so far (the verifier applies time-too-new to it) and the image's
+    // profile word (bit 0 libzync, bit 1 scripts SKIPPED, bit 2 signet). Mirrors the guest. Default 0 so an
+    // anchor JSON written before these fields still loads; prove-range fills max_time from its timestamps.
+    #[serde(default)]
+    max_time: u32,
+    #[serde(default)]
+    profile: u32,
 }
+
+/// The profile word this host's image commits (guest `chain_profile`).
+fn expected_profile() -> u32 {
+    methods::LIBZYNC as u32 | (methods::LIBZYNC_ASSUMEVALID as u32) << 1 | ((methods::NETWORK == "signet") as u32) << 2
+}
+
+/// MAX_FUTURE_BLOCK_TIME (Core validation.h): 2 hours.
+const MAX_FUTURE_BLOCK_TIME: u64 = 2 * 60 * 60;
 #[derive(Serialize, Deserialize)]
 struct SpendCheck { raw_tx: Vec<u8>, prevouts: Vec<u8>, block_height: u32 }
 #[derive(Serialize, Deserialize)]
@@ -647,6 +662,7 @@ fn seed_and_anchor() -> (Forest, ChainState) {
         prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, epoch_start: 1_231_006_505,
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
         anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        max_time: 1_231_730_523, profile: 0,
     };
     (forest, anchor)
 }
@@ -873,6 +889,7 @@ fn build_full() -> (ChainState, BlockWitness) {
         // (130000/140000) that carry no `recent_times` — computed above (with the COV-1 hook applied).
         recent_times: recent_times.clone(),
         anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        max_time: recent_times.iter().copied().max().unwrap_or(0), profile: 0,
     };
 
     // Build the witness: per tx a shared full-prevouts blob; per input a BlockInput (tx_first on input 0).
@@ -1228,6 +1245,7 @@ fn genesis_anchor() -> ChainState {
         cum_work: arr_u128(g_work), height: 0,
         prev_nbits: g_bits, prev_time: g_time, epoch_start: g_time,
         recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        max_time: g_time, profile: 0,
     }
 }
 
@@ -1930,6 +1948,19 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
     let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => { println!("  [FAIL] journal is not a ChainState: {e}"); std::process::exit(1) } };
     check(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "journal is a ChainState committed by this image (kind, self_id)");
+    // The profile is committed by the image itself (bits from the compiled code, never from input), so the
+    // proof states what was checked; it must also be what this verifier was built to accept.
+    check(cs.profile == expected_profile(), &format!("profile in the proof 0x{:x} == this verifier's 0x{:x} ({}{}{})",
+        cs.profile, expected_profile(), if cs.profile & 1 != 0 { "libzync" } else { "canonical" },
+        if cs.profile & 2 != 0 { ", ASSUMEVALID: scripts and signatures NOT checked" } else { ", scripts checked" },
+        if cs.profile & 4 != 0 { ", signet" } else { ", mainnet" }));
+    // time-too-new (Core ContextualCheckBlockHeader): no block more than 2 h past THIS node's clock. The proof
+    // has no clock; it commits the largest timestamp and the rule is applied here, as Core applies it to
+    // every block during IBD. HAZYNC_VERIFY_NOW overrides the clock (tests only).
+    let now: u64 = std::env::var("HAZYNC_VERIFY_NOW").ok().and_then(|v| v.parse().ok()).unwrap_or_else(||
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    check(cs.max_time as u64 <= now + MAX_FUTURE_BLOCK_TIME, &format!(
+        "time-too-new: largest block time {} <= this clock {} + {} s", cs.max_time, now, MAX_FUTURE_BLOCK_TIME));
     let (want_anchor, what) = match anchor {
         None => (state_journal_bytes(&genesis_anchor()), "genesis".to_string()),
         Some(p) => {
@@ -3600,6 +3631,11 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         prev.smt_root = t.root();
         t
     };
+    // An anchor written before ChainState carried max_time loads it as 0: fill it from the anchor's own
+    // timestamps (it is bound into anchor_id with the rest of the state).
+    if prev.max_time == 0 {
+        prev.max_time = prev.recent_times.iter().copied().chain([prev.prev_time]).max().unwrap_or(0);
+    }
     std::fs::write(format!("{out}/anchor_effective.json"), serde_json::to_string(&prev).unwrap()).unwrap();
     let mut prev_rcpt: Option<Receipt> = None;
     let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
@@ -5795,6 +5831,7 @@ fn main() {
         // last 11 block timestamps up to 169 (approx; MTP unused pre-BIP113 at heights 170-172).
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
         anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        max_time: 1_231_730_523, profile: 0,
     };
 
     // Fold each real block. (170 has the P2PK spend; 171/172 are coinbase-only.)

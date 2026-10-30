@@ -874,6 +874,15 @@ static const Consensus::Params& net_params() {
 // libzync/src/net.rs pins (assert_core_constants): powLimit as compact bits and the genesis hash.
 extern "C" uint32_t core_pow_limit_bits() { return UintToArith256(net_params().powLimit).GetCompact(); }
 extern "C" void core_genesis_hash(uint8_t* out) { std::memcpy(out, net_params().hashGenesisBlock.begin(), 32); }
+// The proof's profile word (ChainState.profile) reads "scripts skipped" from HERE, the translation unit
+// whose verify_inputs_batch_once actually skips them, so the label cannot disagree with what was checked.
+extern "C" uint32_t hz_no_scripts() {
+#ifdef HAZYNC_NO_SCRIPTS
+    return 1;
+#else
+    return 0;
+#endif
+}
 
 #ifdef HAZYNC_SIGNET
 // BIP325 through Core's own, unmodified CheckSignetBlockSolution (signet.cpp is compiled in).

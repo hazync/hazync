@@ -35,10 +35,11 @@ rule also covers a non-coinbase transaction recreating a still-unspent outpoint.
 descendant of a duplicated coinbase, and needs pre-BIP34 rules, so mainnet history (whose only duplicates are the
 two grandfathered coinbases) is unaffected. A fabricated low-work chain could still exploit it.
 
-**Two rules are not, and cannot be, proven:**
-- **`time-too-new`.** A block timestamp more than 2 hours ahead of the node's clock depends on the clock, so a node using
-  the proof must apply this rule to the headers itself. It matters, because a far-future timestamp at an epoch's
-  last block lowers the next difficulty.
+**Two rules depend on the node, not the chain:**
+- **`time-too-new`.** A block timestamp more than 2 hours ahead of the node's clock. A proof has no clock, so it
+  commits the largest block timestamp in the chain (`max_time`) and the verifier applies the rule to that one number
+  (§5, step 11). This is what Core does for every block during IBD. It matters because a far-future timestamp at an
+  epoch's last block lowers the next difficulty.
 - **Best chain.** The proof says this chain is valid, not that it has the most work. See §5, step 7.
 
 ## 3. Objects
@@ -88,6 +89,8 @@ Here `i_1 < … < i_n` are F's indices at height k. The value needs **only F** t
 | `ss_hints` | the running hash of §3 |
 | `anchor_id` | double-SHA-256 of the state the chain started from (genesis for a full proof) |
 | `self_id` | the image id every recursive step ran |
+| `max_time` | the largest block timestamp in the chain (for `time-too-new`, §5 step 11) |
+| `profile` | what the image checked: bit 0 libzync, bit 1 scripts and signatures **skipped** (assumevalid), bit 2 signet. Set by the image from its compiled code, never carried from input |
 
 ## 4. How the guest checks a block (design "B")
 
@@ -130,16 +133,18 @@ Given a receipt R, the hints file F and the network:
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
 7. `J.tip_hash` is the block at height `J.height` on your own most-work header chain, whose headers you have checked
-   for `time-too-new` yourself (§2). The proof says that chain is valid, not that it is the best one.
+   for `time-too-new` (§2). The proof says that chain is valid, not that it is the best one.
 8. The receipt is a real proof: refuse a dev-mode `FakeReceipt`, and never verify with `RISC0_DEV_MODE` set.
-9. Note whether M is a scripts-on or an assumevalid image. `libzync-verify` prints which one, but that label is build
-   metadata: the receipt does not carry it. The authority is a reproducible build of M from a published source
+9. Read `J.profile`: bit 1 set means scripts and signatures were **not** checked (assumevalid). The image sets the
+   bit from the C++ that does (or skips) the checks, so the proof itself states it; check it is the profile you
+   accept. M still has to be the image you trust, which needs a reproducible build of M from a published source
    commit (not yet set up for libzync images).
 10. F is **canonically encoded**: re-encoding its decoded lists gives the same bytes, with nothing after height H. The
     proof covers the decoded lists. The `hintsfile` 0.2.1 decoder does not check padding, value bounds or trailing
     bytes, so a non-canonical file could decode differently in another implementation.
+11. `J.max_time <= now + 7200`, with `now` from your own clock (Core's `MAX_FUTURE_BLOCK_TIME`).
 
-`host libzync-verify <receipt> <file.hints>` does steps 1–6, 8 and 9, and prints `tip_hash` and `cum_work` for
+`host libzync-verify <receipt> <file.hints>` does steps 1–6 and 8–11, and prints `tip_hash` and `cum_work` for
 step 7. It ends in one of three verdicts:
 - `LIBZYNC_VERIFY_OK` (exit 0): a genesis-anchored proof;
 - `LIBZYNC_VERIFY_DEMO` (exit 2): a proof checked against a supplied anchor, which is never a proof of the file;
@@ -177,9 +182,9 @@ fails for this demonstration proof, because it starts at 2,500 and not at genesi
      - leaf = SHA-256(0x00 ‖ txid ‖ vout ‖ value ‖ script ‖ height ‖ coinbase flag ‖ creation MTP);
      - parent = SHA-256(0x01 ‖ L ‖ R);
      - leaves in creation order.
-   - The exact encoding (integer widths, endianness, the script length prefix, roots normalisation) is defined by
-     `prover/methods/guest/verify_input.cpp` (`hz_leaf`) and `prover/methods/guest/src/utreexo.rs`. A precise
-     standalone spec is still to be written.
+   - The exact encoding (integer widths, endianness, which outputs, order, roots normalisation) is specified in
+     [`UTREEXO_FORMAT.md`](UTREEXO_FORMAT.md), with a test vector and an independent Python implementation
+     (`scripts/libzync/utreexo_ref.py`) that the guest's output is checked against.
    - An existing Utreexo node cannot use these roots as they are. The leaves commit each coin's creation-time MTP, and the forest is in creation order, so such a
    snapshot must carry both. A plain `dumptxoutset` does not.
    - **Compatibility is not a format change.** Utreexo roots depend on the add/delete history (a deletion

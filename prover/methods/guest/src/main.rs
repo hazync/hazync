@@ -211,6 +211,7 @@ extern "C" {
     // Core's chainparams were built for.
     fn core_pow_limit_bits() -> u32;
     fn core_genesis_hash(out: *mut u8);
+    fn hz_no_scripts() -> u32;
     // BIP325: Core's CheckSignetBlockSolution on (header, coinbase, the block's other txids).
     #[cfg(feature = "signet")]
     fn hz_check_signet(header: *const u8, cb: *const u8, cb_len: u32, txids: *const u8, n_txids: u32) -> i32;
@@ -1354,6 +1355,22 @@ struct ChainState {
     // the block's in_smt_root, which was pure witness: carried here, each aggregate requires its block's
     // in_smt_root == prev.smt_root, so the tree is the chain's own from genesis (empty) onwards.
     smt_root: [u8; 32],
+    // libzync (2026-10-30): the largest block timestamp in the chain so far. Core rejects a block more than
+    // 2 h ahead of the node's clock (time-too-new); a proof has no clock, so the verifier applies the rule
+    // to this one number (max_time <= now + 7200), as Core does for every block during IBD.
+    max_time: u32,
+    // libzync: what this image checked, set by the image and never carried from input. bit 0 libzync,
+    // bit 1 scripts and signatures SKIPPED (assumevalid), bit 2 signet. A verifier reads the profile from
+    // the proof instead of inferring it from which image id it accepted.
+    profile: u32,
+}
+
+/// This image's ChainState.profile (see the field).
+fn chain_profile() -> u32 {
+    let lz = cfg!(feature = "libzync") as u32;
+    let av = unsafe { hz_no_scripts() } & 1;
+    let sig = cfg!(feature = "signet") as u32;
+    lz | av << 1 | sig << 2
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state
@@ -1514,6 +1531,7 @@ fn chain_step() {
         self_id,
         ss_set: prev.ss_set, ss_acc: prev.ss_acc, ss_hints: prev.ss_hints,
         smt_root: r.out_smt_root, // canonical chain_step (unreachable in a libzync image)
+        max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
     });
 }
 
@@ -2022,6 +2040,7 @@ fn aggregate() {
     // recursion (chunks and chain) to the real guest.
     if is_base == 0 {
         assert!(prev.self_id == self_id, "recursion image-id mismatch");
+        assert!(prev.profile == chain_profile(), "recursion profile mismatch");
     }
     // #1: bind the block's height to the real chain height (same reason as chain_step — otherwise the
     // segmented path validates flags/subsidy at an attacker-chosen height). Also closes half of #2: the
@@ -2080,6 +2099,7 @@ fn aggregate() {
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
         ss_set, ss_acc, ss_hints, smt_root,
+        max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
     });
 }
 
