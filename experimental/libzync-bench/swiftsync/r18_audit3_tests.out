@@ -1,0 +1,16 @@
+== 1. block 962,000 valid
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  block validation cycles  64257313
+rc=0
+== 2. negative: is_base = 2 (must be refused)
+is_base must be 0 or 1, got 2
+== 3. sweep 1..200 + flip
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+SWEEP_OK
+SWEEP_FAIL
+== 4. are the published files canonically encoded?
+swiftsync-file-hash: stop height 970000 -> ss_hints e215fe7e73298dd9dcd509de6c772f47704068485f187dc3fed158d793b1171d (canonical encoding)
+swiftsync-file-hash: stop height 320000 -> ss_hints d9c88278135e495749dd04e8a635a444e99d6dc470a43d11f37ecd91f02b4947 (canonical encoding)
+swiftsync-file-hash: stop height 200 -> ss_hints e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd (canonical encoding)
+R3_TESTS_DONE

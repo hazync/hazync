@@ -1939,8 +1939,16 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     };
     let want_anchor = bitcoin::hashes::sha256d::Hash::hash(&want_anchor).to_byte_array();
     check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
-    let mut f = std::io::BufReader::new(std::fs::File::open(hints).unwrap_or_else(|e| panic!("{hints}: {e}")));
-    let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{hints}: {e}"));
+    let raw = std::fs::read(hints).unwrap_or_else(|e| panic!("{hints}: {e}"));
+    let file = hintsfile::Hintsfile::from_reader(&mut raw.as_slice()).unwrap_or_else(|e| panic!("{hints}: {e}"));
+    {
+        use sha2::Digest;
+        println!("  file: {hints}, {} bytes, sha256 {}", raw.len(), hex(&sha2::Sha256::digest(&raw)));
+    }
+    // The proof covers the DECODED lists; only a canonically encoded file is unambiguously those lists.
+    let canon = libzync::host::canonical_bytes(&file);
+    check(canon.as_deref() == Ok(raw.as_slice()),
+          "the file is canonically encoded (re-encoding its lists gives the same bytes; no trailing data)");
     check(cs.height == file.stop_height(), &format!("height {} == the file's stop height {}", cs.height, file.stop_height()));
     check(cs.ss_set == 0, "SwiftSync total is the identity (ss_set == 0)");
     let fh = match libzync::host::file_hash(&file) {
@@ -1948,8 +1956,8 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         Err(e) => { check(false, &format!("{hints} is well formed: {e}")); [0u8; 32] }
     };
     check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints}", hex(&fh)));
-    println!("  chain: tip {} (display order {}), cum_work {:#x}", hex(&cs.tip_hash),
-             hex(&rev(cs.tip_hash.to_vec())), work_u128(&cs.cum_work));
+    println!("  chain: tip {} (display order {}), cum_work 0x{}", hex(&cs.tip_hash),
+             hex(&rev(cs.tip_hash.to_vec())), hex(&rev(cs.cum_work.to_vec())));
     println!("  UTXO set at H: {} coins, Utreexo roots {:?}", cs.utxo_leaves,
              cs.utxo_roots.iter().map(|x| x.map(|h| hex(&h[..8]))).collect::<Vec<_>>());
     if fails == 0 && anchor.is_some() {
@@ -3089,7 +3097,9 @@ fn write_aggregate_env_ex(
         b.write(&state_journal_bytes(anchor)).unwrap();
     }
     b.write(w).unwrap();
-    b.write(&(is_base as u32)).unwrap();
+    // Negative-test hook (test-only, inert unless set): send is_base = 2, which the guest must refuse.
+    let raw_base = if std::env::var("HAZYNC_TEST_ISBASE2").is_ok() { 2u32 } else { is_base as u32 };
+    b.write(&raw_base).unwrap();
 }
 
 /// Read and verify the chunk receipts an aggregate consumes (hazync#153).
@@ -3686,7 +3696,10 @@ fn ss_file_hash_cmd(path: &str) {
     let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap_or_else(|e| panic!("{path}: {e}")));
     let file = hintsfile::Hintsfile::from_reader(&mut f).unwrap_or_else(|e| panic!("{path}: {e}"));
     let h = libzync::host::file_hash(&file).unwrap_or_else(|e| panic!("{path}: {e}"));
-    println!("swiftsync-file-hash: stop height {} -> ss_hints {}", file.stop_height(), hex(&h));
+    let raw = std::fs::read(path).unwrap();
+    let canonical = libzync::host::canonical_bytes(&file).map(|c| c == raw).unwrap_or(false);
+    println!("swiftsync-file-hash: stop height {} -> ss_hints {} ({})", file.stop_height(), hex(&h),
+             if canonical { "canonical encoding" } else { "NOT canonically encoded: a proof would not vouch for these bytes" });
 }
 
 fn agg_chunks() {

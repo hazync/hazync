@@ -21,8 +21,9 @@
 //! - CONTEXT: each chunk commits the height, block hash, median-time-past and block time it used; the
 //!   aggregate requires them equal to its own.
 //!
-//! ⚠ SwiftSync only: there is no per-input utreexo proof here. At the two BIP30-grandfathered blocks
-//! the superseded coinbase coins are SUBTRACTED from the SwiftSync total (pinned old height + MTP). Journal layout, all u32 LE words:
+//! ⚠ SwiftSync only: there is no per-input utreexo proof here. BIP30's two grandfathered duplicates follow
+//! the hints-file convention: the coinbases of 91,722 and 91,812 are never indexed or accounted, and the
+//! coin-txid SMT takes the overwrite at 91,842 / 91,880. Journal layout, all u32 LE words:
 //!   header: KIND_CHUNK_LITE, all_valid, height, block_hash[8], mtp, block_time, n_records
 //!   record: txid[8] wtxid[8] prevouts_hash[8] start count first
 //!     if first: has_witness n_vin fee[2] weight[2] sigops[2] n_out out_leaf[8]*n_out

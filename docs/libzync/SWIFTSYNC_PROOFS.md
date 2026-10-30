@@ -23,12 +23,17 @@ statement holds if the checks in §5 pass:
 
 > There is a chain of blocks 1..H starting from the network's genesis, ending at `J.tip_hash` with cumulative work
 > `J.cum_work`. Every block is valid under Bitcoin Core v28 consensus rules: PoW, retarget, MTP, merkle, witness
-> commitment, weight, sigops, subsidy, BIP30/34/65/66/68/112/113/141/143/147, and scripts (unless M is an assumevalid
-> image), plus BIP325 on signet. And:
+> commitment, weight, sigops, subsidy, BIP16/30/34/65/66/68/112/113/141/143/147/341/342, and scripts (unless M is an
+> assumevalid image), plus BIP325 on signet. And:
 > 1. **F is exactly right:** for every height h ≤ H, F lists precisely the indices of h's indexed outputs that are
 >    unspent at H.
 > 2. **The UTXO set at H** is exactly the leaves of the Utreexo forest `(J.utxo_roots, J.utxo_leaves)`, in creation
 >    order.
+
+**Known limitation (audit 3).** BIP30 is enforced for coinbase transactions through the coinbase-txid SMT. Core's
+rule also covers a non-coinbase transaction recreating a still-unspent outpoint. That can only happen as an exact
+descendant of a duplicated coinbase, and needs pre-BIP34 rules, so mainnet history (whose only duplicates are the
+two grandfathered coinbases) is unaffected. A fabricated low-work chain could still exploit it.
 
 **Two rules are not, and cannot be, proven:**
 - **`time-too-new`.** A block timestamp more than 2 hours ahead of the node's clock depends on the clock, so a node using
@@ -124,10 +129,15 @@ Given a receipt R, the hints file F and the network:
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
-7. `J.tip_hash` is a block on the chain you follow (most work). The proof says that chain is valid, not that it is
-   the best one.
+7. `J.tip_hash` is the block at height `J.height` on your own most-work header chain, whose headers you have checked
+   for `time-too-new` yourself (§2). The proof says that chain is valid, not that it is the best one.
 8. The receipt is a real proof: refuse a dev-mode `FakeReceipt`, and never verify with `RISC0_DEV_MODE` set.
-9. Note whether M is a scripts-on or an assumevalid image. `libzync-verify` prints which one.
+9. Note whether M is a scripts-on or an assumevalid image. `libzync-verify` prints which one, but that label is build
+   metadata: the receipt does not carry it. The authority is a reproducible build of M from a published source
+   commit (not yet set up for libzync images).
+10. F is **canonically encoded**: re-encoding its decoded lists gives the same bytes, with nothing after height H. The
+    proof covers the decoded lists. The `hintsfile` 0.2.1 decoder does not check padding, value bounds or trailing
+    bytes, so a non-canonical file could decode differently in another implementation.
 
 `host libzync-verify <receipt> <file.hints>` does steps 1–6, 8 and 9, and prints `tip_hash` and `cum_work` for
 step 7. It ends in one of three verdicts:
@@ -135,7 +145,10 @@ step 7. It ends in one of three verdicts:
 - `LIBZYNC_VERIFY_DEMO` (exit 2): a proof checked against a supplied anchor, which is never a proof of the file;
 - `LIBZYNC_VERIFY_FAIL` (exit 1).
 
-**Example output.** This is the real run of §10, re-verified on a laptop from the 226 KB receipt:
+**Example output.** This is the real run of §10, re-verified on a laptop from the 226 KB receipt.
+- ⚠ **It came from the pre-audit signet image `cf7f75ff`.** The fixed image, with a changed `ChainState`, has a new
+  id, so this receipt no longer verifies, and that image had since-fixed bugs.
+- **The verdict line would differ today:** the current tool reports an anchored proof as `LIBZYNC_VERIFY_DEMO`, exit 2.
 
 ```
 $ host libzync-verify block_2600.rcpt signet2600.hints anchor_state_2500.json
@@ -158,9 +171,16 @@ fails for this demonstration proof, because it starts at 2,500 and not at genesi
 
 1. **Verified hints.** Fetch F and R from anyone, run §5, then SwiftSync from genesis with full confidence that the
    sync will not fail at H.
-2. **No IBD at all (assumeutxo, proven).** Fetch the UTXO set at H from anyone, check its Utreexo roots against
-   `J.utxo_roots`, check §5 against the tip you see, then validate from H onwards. A Utreexo node needs only the
-   roots. The leaves commit each coin's creation-time MTP, and the forest is in creation order, so such a
+2. **No IBD at all (assumeutxo, proven).** Fetch the UTXO set at H from anyone, rebuild the accumulator, check it
+   against `J.utxo_roots`, check §5 against the tip you see, then validate from H onwards.
+   - ⚠ **This is Hazync's own Utreexo variant**, not the utreexod/Floresta format:
+     - leaf = SHA-256(0x00 ‖ txid ‖ vout ‖ value ‖ script ‖ height ‖ coinbase flag ‖ creation MTP);
+     - parent = SHA-256(0x01 ‖ L ‖ R);
+     - leaves in creation order.
+   - The exact encoding (integer widths, endianness, the script length prefix, roots normalisation) is defined by
+     `prover/methods/guest/verify_input.cpp` (`hz_leaf`) and `prover/methods/guest/src/utreexo.rs`. A precise
+     standalone spec is still to be written.
+   - An existing Utreexo node cannot use these roots as they are. The leaves commit each coin's creation-time MTP, and the forest is in creation order, so such a
    snapshot must carry both. A plain `dumptxoutset` does not.
 3. **Assumevalid flavour.** An assumevalid image skips script checks (about 3× cheaper to produce, §9). Its proof
    says exactly what SwiftSync's assumevalid mode assumes, so it is enough for verified hints, but it is not a full
@@ -211,7 +231,7 @@ Remaining levers:
 | **epoch k input** | an epoch file F_k for blocks (H_{k-1}, H_k]: one bit per output **created in the epoch**, "unspent at H_k?", plus the epoch-k start state = the proven `ChainState` at H_{k-1} |
 | **coins created before H_{k-1}** | they are in the forest from earlier epochs. Spending one in epoch k is a **Utreexo deletion with an inclusion proof** (Hazync's canonical path already does this) |
 | **coins created in epoch k** | design B as today: b = 0 → ECMH, b = 1 → appended to the forest |
-| **at H_k** | `ECMH == identity` and `ss_hints == hash(F_k)`. The total restarts at the identity for epoch k+1 |
+| **at H_k** | `ECMH == identity` and `ss_hints == hash(F_k)`. The total restarts at the identity for epoch k+1. The epoch's hint chain must start from a value that binds H_{k-1} and the start state, not from 0^32, so an epoch file cannot be replayed against another range |
 | **cost** | spends of pre-epoch coins carry inclusion proofs (the canonical Utreexo cost); everything else is the cheap SwiftSync path |
 | **what you get** | a failure is confined to one epoch; H moves forward by proving one more epoch, not the whole chain; the tip phase is simply a very short epoch |
 
@@ -243,6 +263,11 @@ Mid-history blocks (2015–2021) are the expensive part: 2–6× the cycles per 
 Multi-block batching (one proof session per block range) is not built. It is worth about 4× on small-block chains.
 
 ## 10. What exists today (signet)
+
+⚠ **The GPU proofs in §10 and §10a were made with pre-audit images** (signet `cf7f75ff`, mainnet `09a02eed`).
+- **Timing and size are representative:** the fixes add a few checks.
+- **They do not prove anything under the current images,** which fixed soundness bugs found after these runs (see
+  `LIBZYNC.md` §7). Re-proving signet 2,501–2,600 costs about $1.40.
 
 All measured 2026-10-30. Signet guest METHOD_ID `cf7f75ff…`.
 

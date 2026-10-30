@@ -1419,7 +1419,11 @@ fn median_time_past(times: &[u32]) -> u32 {
 fn chain_step() {
     let prev_journal: Vec<u8> = env::read(); // the previous chain proof's committed journal bytes
     let w: BlockWitness = env::read();
+    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor. ANY other value used to
+    // skip the verification below and copy anchor_id out of the unverified journal: a forged "genesis-
+    // anchored" state one block back, and a receipt every verifier check passed (adversarial audit, 2026-10-30).
     let is_base: u32 = env::read();
+    assert!(is_base <= 1, "is_base must be 0 or 1, got {is_base}");
     let self_id: [u32; 8] = env::read(); // this guest's own image id (host passes METHOD_ID)
     if is_base == 0 {
         // Composition: a receipt with (self_id, prev_journal) must exist — the previous chain proof.
@@ -1992,7 +1996,11 @@ fn aggregate() {
     #[cfg(not(feature = "agg-readslice"))]
     let prev_journal: Vec<u8> = env::read();
     let w: BlockWitness = env::read();
+    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor. ANY other value used to
+    // skip the verification below and copy anchor_id out of the unverified journal: a forged "genesis-
+    // anchored" state one block back, and a receipt every verifier check passed (adversarial audit, 2026-10-30).
     let is_base: u32 = env::read();
+    assert!(is_base <= 1, "is_base must be 0 or 1, got {is_base}");
     // libzync: ONE hint block for the aggregate (libzync/src/wire.rs): ECMH hints (or collect) and
     // design B's SwiftSync hint bits, one per indexed output (none = no hints file: every created coin
     // goes to the ECMH total). The decoder refuses hint bits set past the block's outputs.

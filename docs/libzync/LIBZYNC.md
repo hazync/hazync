@@ -232,6 +232,18 @@ Three new reviewers:
 | 22 | no tool wrote a genesis anchor | completeness | **fixed**: `libzync-anchor-json --genesis` |
 | 23 | the claim "every Core rule" includes `time-too-new` (MAX_FUTURE_BLOCK_TIME), which needs a clock and cannot be proven | documentation | **stated** in the proposal §2 and §5 |
 
+### Third round: adversarial audit (same day)
+
+Two fresh auditors: one on the guest, one on the verifier and spec.
+
+| # | finding | severity | status |
+|---|---|---|---|
+| 24 | **`is_base` was a free u32: any value other than 0 or 1 skipped the previous proof's verification and copied `anchor_id` from the unverified journal**, so a forged "genesis-anchored" state at H−1 plus one real block passed every verifier check | soundness, critical. ⚠ **The canonical guest on `main` has the same code** (`chain_step` and `aggregate`) | fixed on `libzync` (must be 0 or 1); **main: for your decision, urgent** |
+| 25 | the proof covers the hints file as `hintsfile` 0.2.1 decodes it; that decoder accepts non-canonical encodings and trailing bytes | verifier vs spec | **fixed**: `libzync-verify` and `swiftsync-file-hash` require canonical bytes |
+| 26 | BIP30 is enforced for coinbases only; a non-coinbase descendant of a duplicated coinbase could recreate an unspent outpoint on a fabricated pre-BIP34 chain | soundness-theoretical (not on mainnet history) | documented (proposal §2) |
+| 27 | spec: "Utreexo nodes need only the roots" (it is Hazync's own variant); §5 missing the time-too-new step; the evidence predated the audit images; epoch hash chaining unspecified | spec | **fixed** in the proposal |
+| 28 | the assumevalid label is build metadata, not carried in the receipt | interface | documented; needs reproducible libzync builds |
+
 **Verdicts that held:** batch ECDSA, Schnorr and taproot-tweak deferral match libsecp's acceptance exactly. The
 Fiat–Shamir weights are sound to about 2^-128. The signed-digit Pippenger is correct. Every Core lever computes the
 same bytes as Core in the shipped (bump-allocator) build. The record walk enforces coverage. Design B's argument

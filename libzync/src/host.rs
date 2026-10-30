@@ -236,3 +236,21 @@ pub fn file_hash(file: &hintsfile::Hintsfile) -> Result<[u8; 32], String> {
     }
     Ok(h)
 }
+
+/// The file re-encoded from what it decodes to. A hints file is CANONICAL when this equals its bytes: the
+/// hintsfile crate's Elias-Fano decoder does not check low-bit padding, values against the header's bound or
+/// trailing bytes, so two byte-different files can decode alike and another decoder may read either one
+/// differently (audit 3). A proof vouches for the decoded lists; requiring canonical bytes makes that the file.
+pub fn canonical_bytes(file: &hintsfile::Hintsfile) -> Result<Vec<u8>, String> {
+    use hintsfile::{EliasFano, HintsfileBuilder};
+    let mut out = Vec::new();
+    {
+        let mut b = HintsfileBuilder::new(&mut out).initialize(file.stop_height()).map_err(|e| format!("{e}"))?;
+        for h in 1..=file.stop_height() {
+            let idx = file.indices_at_height(h).ok_or_else(|| format!("height {h}: missing"))?;
+            b.append(EliasFano::compress(&idx)).map_err(|e| format!("{e}"))?;
+        }
+        b.finish().map_err(|e| format!("{e}"))?;
+    }
+    Ok(out)
+}
