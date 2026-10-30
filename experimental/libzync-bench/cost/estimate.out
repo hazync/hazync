@@ -1,0 +1,22 @@
+
+mainnet blocks 1..970,000, scripts ON: 257.7 T cycles over 970000 blocks
+  PRO 6000  per-block proofs (today)       90,469 card-hours  $   225,268
+  PRO 6000  batched (to build)             85,888 card-hours  $   213,862
+  A40       per-block proofs (today)      202,410 card-hours  $   119,422
+  A40       batched (to build)            193,249 card-hours  $   114,017
+  signet to 320,000, scripts ON: 3.01 T cycles
+    PRO 6000  per-block proofs (today)        2,515 card-hours  $     6,262
+    PRO 6000  batched (to build)              1,004 card-hours  $     2,499
+    A40       per-block proofs (today)        5,280 card-hours  $     3,115
+    A40       batched (to build)              2,258 card-hours  $     1,332
+
+mainnet blocks 1..970,000, scripts OFF: 82.5 T cycles over 970000 blocks
+  PRO 6000  per-block proofs (today)       32,087 card-hours  $    79,897
+  PRO 6000  batched (to build)             27,507 card-hours  $    68,491
+  A40       per-block proofs (today)       71,051 card-hours  $    41,920
+  A40       batched (to build)             61,890 card-hours  $    36,515
+  signet to 320,000, scripts OFF: 1.55 T cycles
+    PRO 6000  per-block proofs (today)        2,027 card-hours  $     5,047
+    PRO 6000  batched (to build)                516 card-hours  $     1,285
+    A40       per-block proofs (today)        4,183 card-hours  $     2,468
+    A40       batched (to build)              1,161 card-hours  $       685
