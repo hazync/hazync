@@ -263,6 +263,35 @@ All measured 2026-10-30. Signet guest METHOD_ID `cf7f75ff…`.
   - about 2,500 × 8.7 s ≈ 6 card-hours ≈ $15 for signet 1..2,600;
   - for all of signet against the published file, see §9.
 
+## 10a. The last blocks before H on mainnet (969,996–970,000)
+
+These are SwiftSync's final blocks before the published file's stop height, where the UTXO set is at its largest.
+They were run with the file's **real** hint bits and proved on **1× RTX PRO 6000** as one recursive chain, with the
+signature and ECMH hints generated per block. Measured 2026-10-30.
+
+| block | inputs | ECMH adds / subtracts | aggregate cycles, hints vs none | proving time | receipt |
+|---|---|---|---|---|---|
+| 969,996 | 8,058 | 1,886 / 6,643 | 90.1 M vs 95.0 M | 810 s (base step) | 226,258 B |
+| 969,997 | 8,854 | 800 / 5,167 | 72.3 M vs 74.6 M | 749 s | 227,282 B |
+| 969,998 | 8,303 | 830 / 5,025 | 71.1 M vs 73.7 M | 773 s | 227,034 B |
+| 969,999 | 8,034 | 65 / 6,083 | 83.6 M vs 88.8 M | 835 s | 227,290 B |
+| **970,000 (= H)** | 7,283 | **0** / 2,133 | 52.7 M vs 53.3 M | **659 s** | **227,034 B** |
+
+- **Proof size is constant, about 227 KB per block,** whatever the size of the block or the UTXO set. Each receipt also
+  proves every earlier block in the chain (recursion).
+- **Proving time on one card is about 11–14 minutes per full block.** It is dominated by the 16 chunks proved one
+  after another, ~580–720 s. Spread over 4 cards, as in the live tip runs, the same work takes 4.5–5.5 minutes.
+- **Next to H, most new outputs survive,** so they become cheap forest appends: at 970,000 there are zero ECMH adds.
+  Ruben's case (most outputs spent, so more ECMH) is the blocks far before H. Either way the hint bits change only
+  the aggregate, by 1–6% (≤ 6 M of ~500 M cycles per block), so ECMH is not a bottleneck in either regime.
+- **The proof is checked against the real chain.** Its tip is mainnet block 970,000 as the node reports it
+  (`000000000000000000014e6a9bad…5a07`).
+- **This is a measurement, not a hints proof.** The chain starts from a state taken from block 969,995's file, not
+  from genesis, so `libzync-verify` correctly reports `ss_set ≠ 0` and an `ss_hints` mismatch; it passes height and
+  image. A proof that the published file is correct needs the sweep from genesis (§9).
+- **Cost:** $3.26 including the 447 s build. An earlier attempt the same day was stopped early (~$1.34) because the
+  range command had not yet generated signature hints.
+
 ## 11. Code
 
 - **Guest:** `prover/methods/guest/src/` (`agg_lite.rs`, `swiftsync.rs`, `batch_ecdsa.rs`).
