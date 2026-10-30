@@ -1,0 +1,16 @@
+  [ok] receipt is a real proof (not a dev-mode FakeReceipt)
+  [ok] RISC0_DEV_MODE is not set in this verifier's environment
+  [ok] receipt verifies against METHOD_ID c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae (libzync guest, signet, scripts checked)
+  [ok] journal is a ChainState committed by this image (kind, self_id)
+  [ok] profile in the proof 0x5 == this verifier's 0x5 (libzync, scripts checked, signet)
+  [ok] time-too-new: largest block time 1599732600 <= this clock 1793397228 + 7200 s
+  [ok] anchor_id is the GIVEN anchor at height 2500 (anchor_effective.json) -- NOT genesis
+  file: /home/defenwycke/dev/hazync-libzync/experimental/libzync-bench/signet/signet2600.hints, 3081 bytes, sha256 ca061f2a643ef05d39fb1afdd28f3d22688cbf5e56c8cc23e162a6c8a3380d98
+  [ok] the file is canonically encoded (re-encoding its lists gives the same bytes; no trailing data)
+  [ok] height 2600 == the file's stop height 2600
+  [ok] SwiftSync total is the identity (ss_set == 0)
+  [ok] ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b == hash of /home/defenwycke/dev/hazync-libzync/experimental/libzync-bench/signet/signet2600.hints
+  chain: tip f3e68ba24ba015acfab10462bdca345ca1fea0221efef2d20f7ca0df27010000 (display order 00000127dfa07c0fd2f2fe1e22a0fea15c34cabd6204b1faac15a04ba28be6f3), cum_work 0x0000000000000000000000000000000000000000000000000000000432982f4d
+  UTXO set at H: 293 coins, Utreexo roots [Some("78d33befce43d53c"), None, Some("29c55e7dc90524ae"), None, None, Some("50a2f6cc1ba5d326"), None, None, Some("b398b03826e655dc")]
+LIBZYNC_VERIFY_DEMO: consistent with /home/defenwycke/dev/hazync-libzync/experimental/libzync-bench/signet/signet2600.hints at height 2600 FROM THE GIVEN ANCHOR ONLY -- not a proof of the file
+exit=2
