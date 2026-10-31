@@ -232,9 +232,29 @@ const MAX_FUTURE_BLOCK_TIME: u64 = 2 * 60 * 60;
 fn verifier_clock() -> (u64, Option<String>) {
     let sys = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     match std::env::var("HAZYNC_VERIFY_NOW") {
-        Ok(v) => (v.parse().unwrap_or(sys), Some(v)),
-        Err(_) => (sys, None),
+        Ok(v) if !v.is_empty() => (v.parse().unwrap_or(sys), Some(v)),
+        _ => (sys, None),
     }
+}
+
+/// RISC0_DEV_MODE as risc0 reads it: set and not empty / "0" / "false". Both verifiers refuse it (review 2, #16).
+fn dev_mode_env() -> bool {
+    std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0" && v != "false").unwrap_or(false)
+}
+
+/// Core's time-too-new (ContextualCheckBlockHeader) applied to a chain's largest timestamp on this clock.
+fn time_ok(max_time: u32, now: u64) -> bool {
+    max_time as u64 <= now + MAX_FUTURE_BLOCK_TIME
+}
+
+/// libzync-verify's outcomes are 0, 2 and 1 only: any panic (bad arguments, unreadable or malformed inputs)
+/// is a FAIL with exit 1. Writes ignore errors, since a panic inside a hook aborts (a closed stdout pipe).
+fn libzync_verify_fail_hook() {
+    std::panic::set_hook(Box::new(|i| {
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), "LIBZYNC_VERIFY_FAIL: {i}");
+        std::process::exit(1);
+    }));
 }
 #[derive(Serialize, Deserialize)]
 struct SpendCheck { raw_tx: Vec<u8>, prevouts: Vec<u8>, block_height: u32 }
@@ -1919,8 +1939,7 @@ fn verify_chain_cmd(bin: &str) {
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(bin).expect("bin")).unwrap();
     // Same refusals as libzync-verify (review 2, #16): a FakeReceipt "verifies" under RISC0_DEV_MODE.
     assert!(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "dev-mode FakeReceipt is not a proof");
-    assert!(std::env::var("RISC0_DEV_MODE").map(|v| v.is_empty() || v == "0" || v == "false").unwrap_or(true),
-            "RISC0_DEV_MODE is set in this verifier's environment");
+    assert!(!dev_mode_env(), "RISC0_DEV_MODE is set in this verifier's environment");
     let claimed = r.journal.decode::<ChainState>().ok().map(|cs| cs.self_id);
     verify_receipt_ex(&r, claimed); // real STARK verification (distinguishes build-mismatch from forgery)
     let cs: ChainState = r.journal.decode().unwrap();
@@ -1930,7 +1949,7 @@ fn verify_chain_cmd(bin: &str) {
     assert_eq!(cs.anchor_id, expected_anchor, "chain NOT anchored at genesis (S5): anchor_id mismatch");
     // time-too-new on this verifier's clock, as libzync-verify does (the proof commits the largest timestamp).
     let (now, ovr) = verifier_clock();
-    assert!(cs.max_time as u64 <= now + MAX_FUTURE_BLOCK_TIME,
+    assert!(time_ok(cs.max_time, now),
             "time-too-new: largest block time {} > this clock {now} + {MAX_FUTURE_BLOCK_TIME} s", cs.max_time);
     if let Some(v) = ovr {
         eprintln!("verify-chain: HAZYNC_VERIFY_NOW={v} is set (test only): not reporting a verdict");
@@ -1959,12 +1978,7 @@ fn verify_chain_cmd(bin: &str) {
 /// With [anchor.json] (a ChainState written by a trusted run), check 2 is against that state instead:
 /// for demonstration proofs that start mid-chain. The output says so.
 fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
-    // Unreadable or malformed inputs are a FAIL with exit 1, never a panic's 101: the documented outcomes
-    // are 0, 2 and 1 only (review 5).
-    std::panic::set_hook(Box::new(|i| {
-        println!("LIBZYNC_VERIFY_FAIL: {i}");
-        std::process::exit(1);
-    }));
+    libzync_verify_fail_hook(); // also installed by the dispatcher, before the arguments are read
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt}: {e}")))
         .unwrap_or_else(|e| panic!("{receipt}: not a receipt: {e}"));
     let mut fails = 0;
@@ -1975,7 +1989,7 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in the verifier's environment (review 2), so
     // refuse both: a dev-mode receipt is never a proof, whatever this shell has exported.
     let fake = matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_));
-    let dev = std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0" && v != "false").unwrap_or(false);
+    let dev = dev_mode_env();
     check(!fake, "receipt is a real proof (not a dev-mode FakeReceipt)");
     check(!dev, "RISC0_DEV_MODE is not set in this verifier's environment");
     let v = r.verify(METHOD_ID);
@@ -1997,7 +2011,7 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     if let Some(v) = &ovr {
         check(false, &format!("this verifier's clock is real (HAZYNC_VERIFY_NOW={v} is set: test only)"));
     }
-    check(cs.max_time as u64 <= now + MAX_FUTURE_BLOCK_TIME, &format!(
+    check(time_ok(cs.max_time, now), &format!(
         "time-too-new: largest block time {} <= this clock {} + {} s", cs.max_time, now, MAX_FUTURE_BLOCK_TIME));
     let (want_anchor, what) = match anchor {
         None => (state_journal_bytes(&genesis_anchor()), "genesis".to_string()),
@@ -3427,15 +3441,18 @@ fn lz_smt_rebind(w: &mut BlockWitness, smt: &mut Smt) {
     w.smt = smt_advance(smt, w.smt.coinbase_txid, w.smt.coinbase_outputs, &spends, grandfathered).0;
 }
 
-/// The coinbase SMT after blocks 1..=upto, rebuilt from block_<h>.json (the same advance the guest checks).
-fn lz_smt_replay(dir: &str, upto: u32) -> Smt {
+/// The coinbase SMT after blocks 1..=upto, rebuilt from block_<h>.json (the same advance the guest checks),
+/// and the largest header timestamp among those blocks (one pass over the files).
+fn lz_smt_replay(dir: &str, upto: u32) -> (Smt, u32) {
     let mut smt = Smt::new();
+    let mut max_time = 0u32;
     for h in 1..=upto {
         std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
         let (_, mut w) = build_full();
+        max_time = max_time.max(u32::from_le_bytes(w.header[68..72].try_into().unwrap()));
         lz_smt_rebind(&mut w, &mut smt);
     }
-    smt
+    (smt, max_time)
 }
 
 /// Replay blocks 1..=H from block_<h>.json: indexed outputs (the hints file's numbering) enter a live set,
@@ -3654,18 +3671,9 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
-    if prev.max_time == 0 {
-        if replay {
-            prev.max_time = (1..lo).map(|h| read_block_json(dir, h)["time"].as_u64().unwrap() as u32)
-                .chain([genesis_params().1]).max().unwrap();
-        } else {
-            prev.max_time = prev.recent_times.iter().copied().chain([prev.prev_time]).max().unwrap_or(0);
-            eprintln!("WARNING: anchor has no max_time; filled from its last {} timestamps only (demonstration anchor)",
-                      prev.recent_times.len());
-        }
-    }
     let mut smt = if replay {
-        let t = lz_smt_replay(dir, lo - 1);
+        let (t, replay_max) = lz_smt_replay(dir, lo - 1);
+        if prev.max_time == 0 { prev.max_time = replay_max.max(genesis_params().1); }
         assert_eq!(t.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
         t
     } else {
@@ -3684,6 +3692,11 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         }
         for (k, c) in counts { t.insert(k, c); }
         prev.smt_root = t.root();
+        if prev.max_time == 0 {
+            prev.max_time = prev.recent_times.iter().copied().chain([prev.prev_time]).max().unwrap_or(0);
+            eprintln!("WARNING: anchor has no max_time; filled from its last {} timestamps only (demonstration anchor)",
+                      prev.recent_times.len());
+        }
         t
     };
     std::fs::write(format!("{out}/anchor_effective.json"), serde_json::to_string(&prev).unwrap()).unwrap();
@@ -5595,6 +5608,7 @@ fn main() {
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-verify") {
+        libzync_verify_fail_hook();
         libzync_verify_cmd(args.get(p + 1).expect("libzync-verify <receipt> <file.hints> [anchor.json]"),
                            args.get(p + 2).expect("libzync-verify <receipt> <file.hints> [anchor.json]"),
                            args.get(p + 3).map(|s| s.as_str()));

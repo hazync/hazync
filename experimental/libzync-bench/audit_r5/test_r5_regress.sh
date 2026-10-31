@@ -1,5 +1,5 @@
 #!/bin/bash
-# Round 19: ChainState gains max_time + profile. Mainnet + signet checks on the laptop, execute mode.
+# Round-4 regression suite (test_r4.sh) into a fresh directory; ends R4_TESTS_DONE. Run by run_r5.sh. Mainnet + signet checks on the laptop, execute mode.
 R=~/libzync-gpu/r18; O=$R/r5/reg; rm -rf $O; mkdir -p $O/s200 $O/sig; H=$R/host_main; HS=$R/host_signet
 S=~/libzync-gpu/ssweep; B=~/dev/hazync-libzync/prover/block_962000.json; J=~/libzync-gpu/signet/json
 REF=~/dev/hazync-libzync/scripts/libzync/utreexo_ref.py
@@ -8,7 +8,7 @@ echo "== 1. block 962,000 valid"
 HAZYNC_BLOCK=$B $H libzync-hints $O/b962.lzb 2>&1 | grep -a 'batch:\|ecmh:'
 HAZYNC_BLOCK=$B HAZYNC_LZ_HINTS=$O/b962.lzb $H agg-exec-fake 2>&1 | grep -a 'validation cycles\|panicked at\|INVALID' | grep -v collect; echo "rc=${PIPESTATUS[0]}"
 echo "== 2. negative: is_base = 2 (must be refused)"
-HAZYNC_BLOCK=$B HAZYNC_LZ_HINTS=$O/b962.lzb HAZYNC_TEST_ISBASE2=1 $H agg-exec-fake 2>&1 | grep -a -o 'is_base must be 0 or 1, got 2' | head -1 || echo NOT_REFUSED
+X=$(HAZYNC_BLOCK=$B HAZYNC_LZ_HINTS=$O/b962.lzb HAZYNC_TEST_ISBASE2=1 $H agg-exec-fake 2>&1 | grep -a -o 'is_base must be 0 or 1, got 2' | head -1); echo "${X:-NOT_REFUSED}"
 echo "== 3. mainnet sweep 1..200 (saved), reference forest, max_time/profile; then a flip"
 export HAZYNC_SS_HINTS=~/libzync-gpu/r15/h200.hints
 HAZYNC_SWEEP_SAVE=$O/s200 $H swiftsync-sweep 200 $S 2>&1 | grep -a 'ss_set=\|SWEEP\|panicked'

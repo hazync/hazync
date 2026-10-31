@@ -15,13 +15,15 @@ R=$(gql "$Q"); ID=$(echo "$R" | python3 -c 'import json,sys; p=(json.load(sys.st
 echo $ID > pod_id.txt; say "pod $ID deployed ($GPU)"
 term(){ say "terminating $ID"; gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$ID\\\"}) }\"}" > /dev/null; }
 # Fetch whatever the pod has (conn.txt = "ip port", written once ssh works). Bounded, so a dead pod cannot hang it.
-harvest(){ [ -f conn.txt ] || return; set -- $(cat conn.txt); say "harvesting from $1:$2"
+# Exactly once: the deadline watcher and the main script can both get here; mkdir is atomic (review 5).
+harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; return 1; }
+  [ -f conn.txt ] || return 0; set -- $(cat conn.txt); say "harvesting from $1:$2"
   timeout 120 ssh $K -p $2 root@$1 'cd /workspace && tar czf out.tgz out prep.out build.log run.out 2>/dev/null'
-  timeout 300 scp -q $KS -P $2 root@$1:/workspace/out.tgz out.tgz && rm -rf out2 && mkdir out2 && tar xzf out.tgz -C out2 && say "fetched: $(ls out2/out | wc -l) files"; }
-rm -f conn.txt
+  timeout 300 scp -q $KS -P $2 root@$1:/workspace/out.tgz out.tgz && rm -rf out2 && mkdir out2 && tar xzf out.tgz -C out2 && say "fetched: $(ls out2/out | wc -l) files" || say "FETCH FAILED"; return 0; }
+rm -f conn.txt; rmdir harvest.lock 2>/dev/null
 ( END=$((SECONDS+75*60)); while [ -f pod_id.txt ]; do
     B=$(gql '{"query":"query { myself { clientBalance } }"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["myself"]["clientBalance"])' 2>/dev/null || echo 99)
-    if [ $SECONDS -ge $END ] || python3 -c "import sys; sys.exit(0 if float('$B') < 1 else 1)"; then say "DEADLINE (balance $B)"; rm -f pod_id.txt; harvest; term; exit; fi
+    if [ $SECONDS -ge $END ] || python3 -c "import sys; sys.exit(0 if float('$B') < 1 else 1)"; then say "DEADLINE (balance $B)"; rm -f pod_id.txt; harvest && term; exit; fi
     sleep 60; done ) &
 for i in $(seq 1 60); do
   L=$(gql '{"query":"query { myself { pods { id runtime { ports { ip isIpPublic privatePort publicPort } } } } }"}' | python3 -c '
@@ -50,6 +52,6 @@ for i in $(seq 1 480); do
   ssh $K -p $P root@$IP 'grep -q RUN_DONE /workspace/out/prove.log 2>/dev/null' && break
   [ $((i % 10)) = 0 ] && say "  $(ssh $K -p $P root@$IP 'tail -1 /workspace/out/times.tsv 2>/dev/null')"
   sleep 15; done
-rm -f pod_id.txt   # stop the watcher first, so it cannot terminate mid-fetch
-harvest; term; sleep 5
+rm -f pod_id.txt   # stop the watcher; if it already started, the lock makes it the one that harvests
+harvest && term; sleep 5
 say "GPU_RUN_DONE"

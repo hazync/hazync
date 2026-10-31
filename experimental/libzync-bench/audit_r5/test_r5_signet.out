@@ -1,7 +1,7 @@
 == A. receipt, real clock, effective anchor (expect DEMO exit 2)
 LIBZYNC_VERIFY_DEMO: consistent with /home/defenwycke/dev/hazync-libzync/experimental/libzync-bench/signet/signet2600.hints at height 2600 FROM THE GIVEN ANCHOR ONLY -- not a proof of the file
 exit=2
-== B. HAZYNC_VERIFY_NOW set to a real-ish time (expect FAIL exit 1, override named)
+== B. HAZYNC_VERIFY_NOW set to a passing time (expect FAIL exit 1, override named)
   [FAIL] this verifier's clock is real (HAZYNC_VERIFY_NOW=1793400000 is set: test only)
   [ok] time-too-new: largest block time 1599732600 <= this clock 1793400000 + 7200 s
 LIBZYNC_VERIFY_FAIL: 1 check(s) failed
@@ -11,16 +11,23 @@ exit=1
   [FAIL] time-too-new: largest block time 1599732600 <= this clock 1599700000 + 7200 s
 LIBZYNC_VERIFY_FAIL: 2 check(s) failed
 exit=1
-== D. unparsable override
+== D. unparsable override (expect FAIL exit 1)
   [FAIL] this verifier's clock is real (HAZYNC_VERIFY_NOW=1599700000s is set: test only)
 LIBZYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1
-== E. missing receipt / garbage receipt / missing hints (expect FAIL exit 1, not 101)
-/nonexistent.rcpt: No such file or directory (os error 2)
+== D2. empty override = unset (expect DEMO exit 2)
+LIBZYNC_VERIFY_DEMO: consistent with /home/defenwycke/dev/hazync-libzync/experimental/libzync-bench/signet/signet2600.hints at height 2600 FROM THE GIVEN ANCHOR ONLY -- not a proof of the file
+exit=2
+== E. missing receipt / garbage receipt / missing hints / missing argument (expect FAIL exit 1, not 101)
+LIBZYNC_VERIFY_FAIL: panicked at host/src/main.rs:1982:98:
 exit=1
-r5/junk.rcpt: not a receipt: invalid value: integer `1435654744`, expected variant index 0 <= i < 4
+LIBZYNC_VERIFY_FAIL: panicked at host/src/main.rs:1983:29:
 exit=1
-/nonexistent.hints: No such file or directory (os error 2)
+  [ok] receipt is a real proof (not a dev-mode FakeReceipt)
+exit=1
+LIBZYNC_VERIFY_FAIL: panicked at host/src/main.rs:5613:44:
+exit=1
+== E2. stdout closed early (expect no abort: exit 1 or 2, not 134)
 exit=1
 == F. verify-chain on a libzync build (expect refusal exit 1)
 verify-chain: this is a libzync build; use `libzync-verify <receipt> <file.hints>`
@@ -30,3 +37,7 @@ swiftsync-file-hash: stop height 2600 -> ss_hints f097b8f2a52a23d5e75db23b24e9a4
 exit=0
 swiftsync-file-hash: stop height 2600 -> ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b (NOT canonically encoded: a proof would not vouch for these bytes)
 exit=1
+== H. prove-range replay path, dev mode: anchor without max_time, blocks 1..2500 present -> filled exactly, effective anchor == sweep state
+LZ_PROVE_RANGE_DONE 2501..=2501 in 14 s; final receipt /home/defenwycke/libzync-gpu/r18/r5/pr/block_2501.rcpt
+filled max_time 1599659036 | effective anchor == sweep state: True
+R5_SIGNET_DONE

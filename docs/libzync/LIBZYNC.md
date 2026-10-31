@@ -273,7 +273,7 @@ host-side or documentation, so the image ids are unchanged.
 | 30 | `HAZYNC_VERIFY_NOW` (test clock) was honoured silently; an unparsable value fell back to the real clock | verifier hygiene | **fixed**: when set it is itself a failed check, so the verdict is never OK or DEMO |
 | 31 | the OK verdict line did not say ASSUMEVALID | interface (same class as #17) | **fixed** |
 | 32 | §5 step 3 (genesis `anchor_id`) could not be implemented from the spec | spec | **fixed**: field values and encoding in the proposal, an independent `scripts/libzync/genesis_anchor_id.py`, test vectors; it matches the guest on both networks (and caught that genesis `utxo_roots` is `[None]`, not empty) |
-| 33 | signet evidence: the pod's own verify **failed** on `anchor_id`; the passing verify used `anchor_effective.json`, whose BIP30 tree the prover seeded from the range's coinbase spends; the docs said "verified" and that the state equalled the sweep's apart from `anchor_id` (`smt_root` differs too) | evidence integrity | **fixed** in the docs; `pod/run.sh` annotated; the next run must ship blocks 1..2,500 so the tree is replayed against the sweep's anchor |
+| 33 | signet evidence: the pod's own verify **failed** on `anchor_id`; the passing verify used `anchor_effective.json`, whose BIP30 tree the prover seeded from the range's coinbase spends; the docs said "verified" and that the state equalled the sweep's apart from `anchor_id` (`smt_root` differs too) | evidence integrity | **fixed** in the docs; the scripts were fixed in round 6 (#40) |
 | 34 | the GPU deadline watcher terminated the pod without fetching its output | evidence loss | **fixed**: the deadline harvests first; the main loops stop when it fires |
 | 35 | an empty METHOD_ID pin passed `prep.sh` (`grep -q ""`) | pin check | **fixed**: a 64-hex id is required and matched as a word |
 | 36 | `max_time` back-fill for old anchors used only the last 11 timestamps | hygiene (demonstration anchors only) | **fixed**: exact from the block files when they are present; a warning otherwise |
@@ -285,6 +285,26 @@ host-side or documentation, so the image ids are unchanged.
 (kept as a cheap second statement of it); `chain_step` has no profile check (unreachable in a libzync image); the
 canonical image id on this branch differs from `main` (expected since audit 3); a float conversion in a fleet
 fetcher (false: it parses with `Decimal`).
+
+### Round 6: code review of round 5, and the C++ side (2026-10-31)
+
+A code review of `167789e..14a7b49`, and a fresh audit of `verify_input.cpp` and both patches (last reviewed
+independently in round 1) against unpatched Core v28 and libsecp 0.5.1. **The C++ side holds:** every lever in 0101
+and hook in 0102 accepts exactly what unpatched Core and libsecp accept for any prover input. Batch ECDSA, Schnorr and
+the taproot tweak defer only after libsecp's own parse and range checks; a hint can only route a signature to libsecp
+or make the batch fail; `finish()` runs on every path before a commit. The legacy-sighash fast path matches Core's
+preimage byte for byte. The raw-txid seeding relies on Core's canonical deserialiser.
+
+| # | finding | severity | status |
+|---|---|---|---|
+| 40 | round 5 fixed the docs but not the scripts: the bundle still shipped only 2,501..2,600, and `pod/run.sh` verified against the prover-written `anchor_effective.json`, a circular check | evidence integrity | **fixed**: the bundle ships blocks 1..2,600 (13 MB) so the tree is replayed; the pod verifies against the sweep's `anchor.json` |
+| 41 | the deadline watcher and the main script could both harvest and terminate at once; and (found testing the fix) a failed fetch skipped the terminate | evidence loss, cost leak | **fixed**: an atomic lock makes exactly one caller harvest, and it always terminates; tested with stubs |
+| 42 | the `is_base = 2` negative test could never print `NOT_REFUSED` (`head`'s exit status) | test | **fixed** |
+| 43 | `libzync-verify` with a missing argument still exited 101; a closed stdout could abort the panic hook (134) | interface | **fixed**: hook installed before the arguments are read; its write ignores errors |
+| 44 | an empty `HAZYNC_VERIFY_NOW` counted as an override | interface | **fixed**: empty = unset, as for `RISC0_DEV_MODE` |
+| 45 | dev-mode and time-too-new logic duplicated across the two verifiers; `max_time` fill parsed every block file twice | maintenance, cost | **fixed**: shared helpers; the fill comes from the replay's own pass |
+| 46 | round-5 evidence not reproducible from committed scripts | evidence | **fixed**: `audit_r5/run_r5.sh` regenerates both outputs |
+| 47 | C++: `tx_full_sigops` returns legacy-only cost when the prevouts blob is empty (safe only because the chunk already trapped on it); `uint32_t` wraparound in `check_input_locks*` (paths not in a libzync image); `hz_copy` also reads up to 3 bytes **before** the source (addendum to #12; data correct) | hygiene | **open**: each is a guest-source change that moves the image id; batch them with the next image change |
 
 ## 8. Signet
 

@@ -319,12 +319,12 @@ All measured 2026-10-30.
   replay the BIP30 coinbase tree to 2,500. It seeded the tree with the pre-2,501 coinbases this range spends, set the
   anchor's `smt_root` to that root, and proved from that anchor, written as `anchor_effective.json`. It differs from
   the sweep's state at 2,500 **only in `smt_root`**. So this receipt trusts a BIP30 tree the prover chose, as well as
-  the rest of the 2,500 state. The next run should ship blocks 1..2,500 so the tree is replayed and checked against
+  the rest of the 2,500 state. The bundle script now ships blocks 1..2,500 too (round 6), so the next run replays the tree and checks it against
   the sweep's anchor.
 - **Final receipt:** `experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt` (226 KB), verified on a laptop
   against `anchor_effective.json` (`verify_local.log`: DEMO, exit 2). The verify **on the pod** gave the sweep's
-  `anchor.json` and **failed on `anchor_id`** for the reason above (`verify_pod.log`); `pod/run.sh` was corrected
-  after that run. Negative checks in `verify_negatives.log`: a clock set before the last block fails
+  `anchor.json` and **failed on `anchor_id`** for the reason above (`verify_pod.log`). That pod check was the
+  right one and still is: `pod/run.sh` verifies against the sweep's anchor, never the prover-written file. Negative checks in `verify_negatives.log`: a clock set before the last block fails
   `time-too-new`; the mainnet verifier fails it on image and profile; the receipt at 2,530 fails on height and hash.
 - **Matches the node:** its tip is signet block 2,600 as the node reports it (`00000127dfa0…e6f3`).
 - **Matches the laptop:** its committed state equals the laptop sweep's at 2,600 apart from two fields:

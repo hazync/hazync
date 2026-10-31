@@ -21,4 +21,3 @@ REF_MATCH: guest state equals this implementation
 signet-check-test block 2523: one txid changed -> 0
 SIGNET_CHECK_OK
 R4_TESTS_DONE
-REG_DONE
