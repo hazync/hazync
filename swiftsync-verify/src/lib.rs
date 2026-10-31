@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub const IMAGES: &[Image] = &[
     Image {
         network: "mainnet",
-        method_id_hex: "6fcb65af355846a0f2ed846e2d35344934eaaf8636066ba620e1c54084e1822d",
+        method_id_hex: "9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55",
         profile: PROFILE_LIBZYNC,
         genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
         genesis_time: 1_231_006_505,
@@ -28,7 +28,7 @@ pub const IMAGES: &[Image] = &[
     },
     Image {
         network: "signet",
-        method_id_hex: "4b91b085297f1a6e13c062b7c0580d53fed275dd0f0d895d7070d668ca1f5bd2",
+        method_id_hex: "067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36",
         profile: PROFILE_LIBZYNC | PROFILE_SIGNET,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,
@@ -360,8 +360,8 @@ mod tests {
     fn genesis_anchor_vectors() {
         // SWIFTSYNC_PROOFS.md §5 step 3, round-8 images; also checked by scripts/libzync/genesis_anchor_id.py.
         let a = |n| hex(&anchor_id(&genesis_anchor(Image::by_network(n).unwrap())));
-        assert_eq!(a("mainnet"), "dc17a42542c306e4ac11f55af2341d30072de90875311fd6a2330d35448e657f");
-        assert_eq!(a("signet"), "a7c7e9a591d0b05f96719862aa571ab94230487da3e3eb20c64a7fdd1613ce35");
+        assert_eq!(a("mainnet"), "5b2020ae48fdf2d180837b612b13c2b36192208f4afb94dee350553fa7ea1d44");
+        assert_eq!(a("signet"), "636271d3f46ea120f22da161648247bdd004afba1cb92378ba3af407c9e4e2b2");
     }
 }
 

@@ -9,7 +9,7 @@ PASS  trailing_byte        exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) fa
 PASS  flipped_bit          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 PASS  noncanonical_size    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 PASS  bad_version          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  fake_receipt         exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 6 check(s) failed
+PASS  fake_receipt         exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 7 check(s) failed
 PASS  bundle_header_lies   exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 PASS  bundle_wrong_file    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 3 check(s) failed
 14/14 cases as expected

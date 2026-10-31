@@ -15,3 +15,6 @@ python3 run_vectors.py ../target/release/swiftsync-verify     # or any verifier 
 round-4 signet image (`c3501ac9…`), starting from a supplied state at 2,500 (`r4_anchor_2500.json`), so the best
 verdict any case can reach is DEMO: no genesis-anchored receipt exists yet. `fake_block_2501.rcpt` is a dev-mode
 FakeReceipt. The `bad_*` files are made from the real ones by one change each (see the manifest).
+
+`fake_block_2501.rcpt` was made under the laptop-built signet image (`4b91b085…`), so against the published image it
+fails the `self_id` check as well as the fake-receipt check (7 failed checks, 6 when it was made). The verdict is unchanged.

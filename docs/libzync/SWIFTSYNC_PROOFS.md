@@ -17,8 +17,8 @@ outside eyes.
   should I spend a sync on it?"**
 - **A Hazync proof answers that question without trusting whoever made the file.** It shows that a specific file is
   exactly right for a specific chain, and it hands over the UTXO set at H as a Utreexo accumulator. That is enough to
-  skip IBD altogether. What it does rest on: the image M is the published code (which needs a reproducible build of
-  M, not yet set up, §5 step 9), the soundness of risc0's proof system and recursion, and the assumptions of §4.
+  skip IBD altogether. What it does rest on: the image M is the published code (rebuild it with `reproduce/libzync.Dockerfile`,
+  §5 step 9), the soundness of risc0's proof system and recursion, and the assumptions of §4.
 
 ## 2. What is proven
 
@@ -188,7 +188,8 @@ This needs:
 Given a receipt R, the hints file F and the network:
 
 1. `R.verify(M)`, where M is the published libzync image id for that network (and for scripts or assumevalid). The
-   current images (round 8, scripts checked): mainnet `6fcb65af355846a0f2ed846e2d35344934eaaf8636066ba620e1c54084e1822d`, signet `4b91b085297f1a6e13c062b7c0580d53fed275dd0f0d895d7070d668ca1f5bd2`.
+   current images (round 8, scripts checked, built by `reproduce/libzync.Dockerfile`): mainnet `9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55`, signet `067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36`,
+   pinned in `reproduce/LIBZYNC_IDS`.
 2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002` and `J.self_id == M`.
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
@@ -206,8 +207,8 @@ Given a receipt R, the hints file F and the network:
      its elements, and an `Option` is a 0/1 word followed by the value when present.
    - `host libzync-verify` computes this itself. `scripts/libzync/genesis_anchor_id.py` computes it from this text
      alone, and matches what the guest commits after a base step on genesis. Test vectors:
-     mainnet `6fcb65af…` → `dc17a42542c306e4ac11f55af2341d30072de90875311fd6a2330d35448e657f`;
-     signet `4b91b085…` → `a7c7e9a591d0b05f96719862aa571ab94230487da3e3eb20c64a7fdd1613ce35` (round-8 images).
+     mainnet `9f469930…` → `5b2020ae48fdf2d180837b612b13c2b36192208f4afb94dee350553fa7ea1d44`;
+     signet `067822b9…` → `636271d3f46ea120f22da161648247bdd004afba1cb92378ba3af407c9e4e2b2` (round-8 images).
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
@@ -216,8 +217,9 @@ Given a receipt R, the hints file F and the network:
 8. The receipt is a real proof: refuse a dev-mode `FakeReceipt`, and never verify with `RISC0_DEV_MODE` set.
 9. Read `J.profile`: bit 1 set means scripts and signatures were **not** checked (assumevalid). The image sets the
    bit from the C++ that does (or skips) the checks, so the proof itself states it; check it is the profile you
-   accept. M still has to be the image you trust, which needs a reproducible build of M from a published source
-   commit (not yet set up for libzync images).
+   accept. M still has to be the image you trust: rebuild it from the published source commit with
+   `reproduce/libzync.Dockerfile` and compare with `reproduce/LIBZYNC_IDS`. The id depends on absolute build paths, so
+   only a build in that container gives the published id.
 10. F is **canonically encoded** as specified in §3: re-encoding its decoded lists gives the same bytes, with nothing
     after height H. The proof covers the decoded lists. The `hintsfile` 0.2.1 decoder does not check padding, value
     bounds or trailing bytes, so a non-canonical file could decode differently in another implementation.
@@ -359,7 +361,7 @@ Remaining levers:
 | question | answer today |
 |---|---|
 | Is there a genesis-anchored receipt that verifies OK? | Not yet (§10). Signet 1..2,600 from genesis is the next GPU run, once the image is final |
-| How do I rebuild M? | Not yet possible for libzync images; a reproducible build kit is planned (§5 step 9) |
+| How do I rebuild M? | `docker build -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .`, then `docker run --rm hazync-libzync-repro`; compare with `reproduce/LIBZYNC_IDS`. About 55 minutes on a 16-thread laptop. Three builds on one machine agree (§5 step 9); a build on a second machine has not been done |
 | What does the proof buy, if a wrong file only costs a sync? | Verified hints alone save one wasted sync. The larger product is the UTXO set at H with a proof (§6 item 2), which removes IBD |
 | Why ECMH, not MuHash3072? | §4: reuse of the guest's accelerated secp256k1; MuHash not measured |
 | Where does the proof differ from Core? | §2: BIP30 for coinbase descendants (#26), and the coinbase SMT being stricter after BIP34. A rule-by-rule table is not written yet |
@@ -389,7 +391,7 @@ Multi-block batching (one proof session per block range) is not built. It is wor
 ## 10. What exists today (signet)
 
 **The signet proof below was made on the round-4 image** (signet `c3501ac9…`, after three review rounds and the
-`max_time` / `profile` fields). The current image is round 8's (signet `4b91b085…`, mainnet `6fcb65af…`): C++
+`max_time` / `profile` fields). The current image is round 8's (signet `067822b9…`, mainnet `9f469930…`; the same source built outside the container gives other ids, `4b91b085…` and `6fcb65af…` on the development laptop, because the id depends on build paths): C++
 hygiene fixes and a compiler flag, no rule change, the same committed states on every regression test. A receipt of the current image
 needs a re-prove. ⚠ The mainnet measurements in §10a come from the image after review round 1 (`09a02eed`), before
 rounds 2–8; their timing and size are representative, but they prove nothing under the current image.

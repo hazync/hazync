@@ -163,7 +163,9 @@ block ──► host: split inputs into chunks (cost-packed) ──► hint bund
 6. **Reproducibility work to redo.** The canonical guest is reproducible through `reproduce/Dockerfile` and pinned by
    `METHOD_ID` + `GUEST_ELF_SHA256`. libzync guests are built from `scripts/libzync-base.sh` and are deterministic on one
    machine when the guest is built from a clean target (two builds gave the same id; an incremental build once reused a
-   stale guest, round 8), but they are not yet in the container.
+   stale guest, round 8), and the container now fixes those paths:
+   `reproduce/libzync.Dockerfile` builds both guests and prints the ids pinned in `reproduce/LIBZYNC_IDS`. **Only a
+   guest built in that container has the published id**, so a proof to publish must use its ELF.
 7. **One network per image.**
    - A signet proof and a mainnet proof have different image ids. That is by design, and it is safe.
    - Custom signets, with a different challenge, are not supported.
@@ -339,7 +341,8 @@ A code review of round 7 found no correctness bug in the guest changes. A scepti
 recipients would read it, found claims stronger than the code, steps that could not be implemented from the text,
 and numbers not tied to an image. Both are addressed below; the image ids move again.
 
-**Guest and build**, now **mainnet `6fcb65af…`, signet `4b91b085…`**:
+**Guest and build**, now **mainnet `6fcb65af…`, signet `4b91b085…`** as built on the development laptop; the same
+source built in the container is mainnet `9f469930…`, signet `067822b9…`, the published ids:
 
 | change | why |
 |---|---|
@@ -366,12 +369,13 @@ The full suite passes on the clean builds; genesis `anchor_id` matches the indep
 - test-vector files committed with full sha256s; `utreexo_ref.py` now derives creation MTP from header timestamps
   and checks block linkage instead of reading the host's precomputed windows.
 
-**Still open for publication:** no genesis-anchored receipt verifies OK yet; M cannot be rebuilt by a reader (the
-reproducible build kit); the rule-by-rule table.
+**Still open for publication:** no genesis-anchored receipt verifies OK yet; the rule-by-rule table. The reproducible build kit is done (`reproduce/libzync.Dockerfile`; three
+builds agree: one cached, one with no cache from a fresh clone, one with the dependency stage built from scratch on a
+newer host Rust, 1.99.1 vs 1.98.0). All three ran on one machine; a second machine is still to do.
 
 ## 8. Signet
 
-**Build:** `HAZYNC_NETWORK=signet`, guest `4b91b085…` (round 8; `c3501ac9…` in round 4, the image the GPU proof
+**Build:** `HAZYNC_NETWORK=signet`, guest `067822b9…` (round 8, container build; `4b91b085…` on the laptop; `c3501ac9…` in round 4, the image the GPU proof
 below used; first built as `cf7f75ff…`). What changes:
 - Core's own `CChainParams::SigNet` (default challenge) replaces `Main()`;
 - Core's `signet.cpp` is compiled in;
