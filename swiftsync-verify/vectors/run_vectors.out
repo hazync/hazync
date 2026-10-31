@@ -1,0 +1,15 @@
+PASS  demo_receipt         exit 2 (want 2)  SWIFTSYNC_VERIFY_DEMO: consistent with signet2600.hints FROM THE GIVEN ANCHOR ONLY -- not a proof of the file;
+PASS  demo_bundle          exit 2 (want 2)  SWIFTSYNC_VERIFY_DEMO: consistent with signet2600.hints FROM THE GIVEN ANCHOR ONLY -- not a proof of the file;
+PASS  no_anchor            exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  wrong_image          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
+PASS  wrong_network        exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  early_stop           exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
+PASS  wrong_file           exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
+PASS  trailing_byte        exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  flipped_bit          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  noncanonical_size    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  bad_version          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  fake_receipt         exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 6 check(s) failed
+PASS  bundle_header_lies   exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  bundle_wrong_file    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 3 check(s) failed
+14/14 cases as expected

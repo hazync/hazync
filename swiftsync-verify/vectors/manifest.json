@@ -1,0 +1,229 @@
+{
+ "about": "Test vectors for a libzync SwiftSync-hints verifier (docs/libzync/SWIFTSYNC_PROOFS.md \u00a75). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. No genesis-anchored receipt exists yet, so no case expects 0. The receipts are from the round-4 signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae and start from a supplied state at 2,500 (r4_anchor_2500.json).",
+ "cases": [
+  {
+   "name": "demo_receipt",
+   "description": "The real round-4 signet proof of 2,501..2,600 from a supplied 2,500 state, with its hints file: every check passes, verdict DEMO.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "signet2600.hints"
+   ],
+   "expect_exit": 2
+  },
+  {
+   "name": "demo_bundle",
+   "description": "The same proof as a bundle: header matches the verified result.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_2600.sspf",
+    "signet2600.hints"
+   ],
+   "expect_exit": 2
+  },
+  {
+   "name": "no_anchor",
+   "description": "The same proof checked against genesis: anchor_id is not genesis, FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "r4_block_2600.rcpt",
+    "signet2600.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "wrong_image",
+   "description": "The same proof against the current signet image: a different M, FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "signet2600.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "wrong_network",
+   "description": "The same proof with the mainnet parameters (and its image id given): the committed profile says signet, FAIL.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "signet2600.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "early_stop",
+   "description": "A real receipt that stops at 2,530: height and ss_hints differ from the 2,600 file, FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2530.rcpt",
+    "signet2600.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "wrong_file",
+   "description": "The 2,600 proof against a correct file for a different stop height (3,000), FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "signet3000.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "trailing_byte",
+   "description": "The right file with one byte appended: not canonical, FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "bad_trailing_byte.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "flipped_bit",
+   "description": "The right file with one bit flipped in the last list: FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "bad_flipped_bit.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "noncanonical_size",
+   "description": "The right lists with height 1's count written as a 3-byte CompactSize: decodes alike, not canonical, FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "bad_noncanonical_size.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bad_version",
+   "description": "The right file with version 1: FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt",
+    "bad_version.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "fake_receipt",
+   "description": "A dev-mode FakeReceipt (no proof): FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "fake_block_2501.rcpt",
+    "signet2600.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bundle_header_lies",
+   "description": "The real bundle with its header's stop height changed to 2,599: FAIL although the receipt is valid.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "bad_bundle_header.sspf",
+    "signet2600.hints"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bundle_wrong_file",
+   "description": "The real bundle with a different hints file: FAIL.",
+   "args": [
+    "--network",
+    "signet",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_2600.sspf",
+    "signet3000.hints"
+   ],
+   "expect_exit": 1
+  }
+ ],
+ "reference_values": {
+  "ss_hints": {
+   "signet2600.hints": "f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b",
+   "signet3000.hints": "5979d283d04530bc35fd450b5b99fb89ad2cbb9f9c640b1038c8c72f837ed779",
+   "mainnet200.hints": "e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd"
+  },
+  "genesis_anchor_id": {
+   "mainnet 6fcb65af355846a0f2ed846e2d35344934eaaf8636066ba620e1c54084e1822d": "dc17a42542c306e4ac11f55af2341d30072de90875311fd6a2330d35448e657f",
+   "signet 4b91b085297f1a6e13c062b7c0580d53fed275dd0f0d895d7070d668ca1f5bd2": "a7c7e9a591d0b05f96719862aa571ab94230487da3e3eb20c64a7fdd1613ce35",
+   "signet c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae": "91ccd466f6efd6609ca24a9b4c58406de61211a9e53226a30be6dfe13906461a"
+  },
+  "empty_smt_root": "507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32",
+  "utreexo_mainnet_200": {
+   "leaves": 204,
+   "roots": {
+    "2": "ac7ca14570ba4972538dfe1587a44d87fc1e7a6d2f24f9ffef0a113afa5c189d",
+    "3": "7ced478f2fdebea9ce3293a479b092618073fe5c89045085ec312b7854ea9a9a",
+    "6": "2f34b66ed7d65fc1ba5c22ddcfdb0d8cc1838d33e8295f64a1429e7461aec8a9",
+    "7": "339752865cc905092ec186b4dae9902e4951bd182855b61d80003867f4cbb452"
+   }
+  }
+ }
+}

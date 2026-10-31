@@ -364,3 +364,131 @@ mod tests {
         assert_eq!(a("signet"), "a7c7e9a591d0b05f96719862aa571ab94230487da3e3eb20c64a7fdd1613ce35");
     }
 }
+
+/// A proof bundle (`docs/libzync/PROOF_BUNDLE.md`): one file that travels with a hints file. Its header is a
+/// convenience for people and indexes, NEVER trusted: [`check_bundle`] requires every field to equal what the
+/// verified receipt and the actual file say.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bundle {
+    pub network: u8,
+    pub image: [u8; 32],
+    pub stop_height: u32,
+    pub tip_hash: [u8; 32],
+    pub cum_work: [u8; 32],
+    pub ss_hints: [u8; 32],
+    pub hints_sha256: [u8; 32],
+    pub receipt: Vec<u8>,
+}
+
+pub const BUNDLE_MAGIC: &[u8; 4] = b"SSPF";
+pub const BUNDLE_VERSION: u8 = 1;
+const BUNDLE_HEADER: usize = 4 + 1 + 1 + 32 + 4 + 32 + 32 + 32 + 32 + 4;
+
+pub fn network_code(name: &str) -> Option<u8> {
+    match name {
+        "mainnet" => Some(0),
+        "signet" => Some(1),
+        _ => None,
+    }
+}
+
+impl Bundle {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(BUNDLE_HEADER + self.receipt.len());
+        out.extend_from_slice(BUNDLE_MAGIC);
+        out.push(BUNDLE_VERSION);
+        out.push(self.network);
+        out.extend_from_slice(&self.image);
+        out.extend_from_slice(&self.stop_height.to_le_bytes());
+        out.extend_from_slice(&self.tip_hash);
+        out.extend_from_slice(&self.cum_work);
+        out.extend_from_slice(&self.ss_hints);
+        out.extend_from_slice(&self.hints_sha256);
+        out.extend_from_slice(&(self.receipt.len() as u32).to_le_bytes());
+        out.extend_from_slice(&self.receipt);
+        out
+    }
+
+    pub fn decode(b: &[u8]) -> Result<Bundle, String> {
+        if b.len() < BUNDLE_HEADER || &b[..4] != BUNDLE_MAGIC {
+            return Err("not a proof bundle".into());
+        }
+        if b[4] != BUNDLE_VERSION {
+            return Err(format!("unsupported bundle version {}", b[4]));
+        }
+        let a32 = |o: usize| -> [u8; 32] { b[o..o + 32].try_into().unwrap() };
+        let u32le = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let len = u32le(BUNDLE_HEADER - 4) as usize;
+        if b.len() != BUNDLE_HEADER + len {
+            return Err(format!("bundle is {} bytes, header says {}", b.len(), BUNDLE_HEADER + len));
+        }
+        Ok(Bundle {
+            network: b[5],
+            image: a32(6),
+            stop_height: u32le(38),
+            tip_hash: a32(42),
+            cum_work: a32(74),
+            ss_hints: a32(106),
+            hints_sha256: a32(138),
+            receipt: b[BUNDLE_HEADER..].to_vec(),
+        })
+    }
+
+    /// Build a bundle from a receipt and its hints file; fails unless the receipt verifies (OK or DEMO) for `img`.
+    pub fn make(receipt: &[u8], hints: &[u8], img: &'static Image, anchor: Option<ChainState>, now: u64) -> Result<Bundle, String> {
+        use sha2::{Digest as _, Sha256};
+        let rep = verify(&Inputs { receipt, hints, image: img, anchor, now });
+        if rep.verdict == Verdict::Fail {
+            return Err("the receipt does not verify; refusing to bundle it".into());
+        }
+        let cs = rep.state.expect("verified");
+        Ok(Bundle {
+            network: network_code(img.network).expect("known network"),
+            image: hex32(img.method_id_hex).expect("hex"),
+            stop_height: cs.height,
+            tip_hash: cs.tip_hash,
+            cum_work: cs.cum_work,
+            ss_hints: cs.ss_hints,
+            hints_sha256: Sha256::digest(hints).into(),
+            receipt: receipt.to_vec(),
+        })
+    }
+}
+
+/// Verify a bundle: the receipt as [`verify`] does, then every header field against the result. The image and
+/// network come from the VERIFIER (`img`), never from the bundle.
+pub fn check_bundle(bundle: &Bundle, hints: &[u8], img: &'static Image, anchor: Option<ChainState>, now: u64) -> Report {
+    use sha2::{Digest as _, Sha256};
+    let mut rep = verify(&Inputs { receipt: &bundle.receipt, hints, image: img, anchor, now });
+    rep.check(Some(bundle.network) == network_code(img.network), "bundle header: network is this verifier's");
+    rep.check(hex32(img.method_id_hex) == Some(bundle.image), format!("bundle header: image {} is this verifier's", hex(&bundle.image)));
+    let digest: [u8; 32] = Sha256::digest(hints).into();
+    rep.check(digest == bundle.hints_sha256, "bundle header: sha256 of the hints file matches");
+    if let Some(cs) = &rep.state {
+        let same = cs.height == bundle.stop_height && cs.tip_hash == bundle.tip_hash && cs.cum_work == bundle.cum_work
+            && cs.ss_hints == bundle.ss_hints;
+        rep.check(same, "bundle header: height, tip, work and ss_hints equal the verified journal's");
+    }
+    if rep.failed() {
+        rep.verdict = Verdict::Fail;
+    }
+    rep
+}
+
+#[cfg(test)]
+mod bundle_tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip() {
+        let b = Bundle { network: 1, image: [7; 32], stop_height: 2600, tip_hash: [1; 32], cum_work: [2; 32],
+                         ss_hints: [3; 32], hints_sha256: [4; 32], receipt: vec![9; 100] };
+        let e = b.encode();
+        assert_eq!(e.len(), BUNDLE_HEADER + 100);
+        assert_eq!(Bundle::decode(&e).unwrap(), b);
+        assert!(Bundle::decode(&e[..e.len() - 1]).is_err());
+        let mut v = e.clone();
+        v[4] = 2;
+        assert!(Bundle::decode(&v).is_err());
+    }
+}

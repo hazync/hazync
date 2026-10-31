@@ -26,6 +26,14 @@ swiftsync-verify/target/release/swiftsync-verify --network signet --bitcoin-cli 
 8. to 11. the profile the image commits (scripts checked or not, network), canonical encoding of the file, and
    `time-too-new` on this machine's clock.
 
+**Proof bundles.** `swiftsync-verify [--network ...] bundle <receipt> <file.hints> <out.sspf>` writes one file
+holding the receipt and a header naming network, image, height, tip, work, `ss_hints` and the hints file's
+SHA-256 (`docs/libzync/PROOF_BUNDLE.md`). A bundle is accepted wherever a receipt is; its header is checked against
+the verified result and never trusted.
+
+**Test vectors** for this or any other verifier: `vectors/` (14 cases with expected exit codes, plus reference
+values; `python3 vectors/run_vectors.py <verifier>`).
+
 **The image id is the trust root.** The built-in ids (`src/lib.rs`, `IMAGES`) are the current round-8 images. A
 reader should rebuild M from the published commit and pass it with `--image <hex>` rather than trust this file
 (a reproducible build kit is planned). `--image` is printed on the first line of the output.

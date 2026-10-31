@@ -10,12 +10,17 @@
 //! for you to compare, and the verdict line says the step was not run.
 //!
 //! `--image <hex>` replaces the built-in image id for the network: the id you rebuilt yourself (§5 step 9).
+//!
+//! `<receipt>` may also be a proof bundle (`.sspf`, docs/libzync/PROOF_BUNDLE.md); its header is then checked
+//! against the verified result. `swiftsync-verify [flags] bundle <receipt> <file.hints> <out.sspf>` writes one,
+//! and refuses a receipt that does not verify.
 
 use std::process::{exit, Command};
-use swiftsync_verify::{hex, verify, ChainState, Image, Inputs, Verdict};
+use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inputs, Verdict, BUNDLE_MAGIC};
 
 fn usage() -> ! {
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli \"<command>\"] <receipt> <file.hints>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli \"<command>\"] <receipt|bundle.sspf> <file.hints>");
+    eprintln!("       swiftsync-verify [--network ...] [--image <hex>] [--anchor state.json] bundle <receipt> <file.hints> <out.sspf>");
     exit(1);
 }
 
@@ -44,7 +49,10 @@ fn main() {
             _ => files.push(a),
         }
     }
-    let [receipt, hints] = files.as_slice() else { usage() };
+    let make_bundle = files.first().map(|f| f == "bundle").unwrap_or(false);
+    if make_bundle {
+        files.remove(0);
+    }
     let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network}")));
     if let Some(h) = &image_hex {
         image = image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h}: not 64 hex digits")));
@@ -55,8 +63,22 @@ fn main() {
         serde_json::from_slice(&read(&p)).unwrap_or_else(|e| fail(&format!("{p}: not a ChainState: {e}")))
     });
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
+    if make_bundle {
+        let [receipt, hints, out] = files.as_slice() else { usage() };
+        let b = Bundle::make(&read(receipt), &read(hints), image, anchor, now).unwrap_or_else(|e| fail(&e));
+        std::fs::write(out, b.encode()).unwrap_or_else(|e| fail(&format!("{out}: {e}")));
+        println!("SWIFTSYNC_BUNDLE_WRITTEN: {out} (height {}, image {})", b.stop_height, image.method_id_hex);
+        exit(0);
+    }
+    let [receipt, hints] = files.as_slice() else { usage() };
     let (receipt_bytes, hints_bytes) = (read(receipt), read(hints));
-    let mut rep = verify(&Inputs { receipt: &receipt_bytes, hints: &hints_bytes, image, anchor, now });
+    let mut rep = if receipt_bytes.starts_with(BUNDLE_MAGIC) {
+        let b = Bundle::decode(&receipt_bytes).unwrap_or_else(|e| fail(&format!("{receipt}: {e}")));
+        println!("  {receipt} is a proof bundle; its header is checked against the verified result");
+        check_bundle(&b, &hints_bytes, image, anchor, now)
+    } else {
+        verify(&Inputs { receipt: &receipt_bytes, hints: &hints_bytes, image, anchor, now })
+    };
 
     // Step 7, against the user's own node.
     let mut tip_checked = false;

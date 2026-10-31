@@ -1,14 +1,14 @@
 == swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 2)
 SWIFTSYNC_VERIFY_DEMO: consistent with experimental/libzync-bench/signet/signet2600.hints FROM THE GIVEN ANCHOR ONLY -- not a proof of the file; step 7 NOT run: check the tip and work above against your own node
 exit=2 PASS
-== env MODE=good swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.55okUagOo1/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 2)
+== env MODE=good swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.W1rptc1ReM/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 2)
 SWIFTSYNC_VERIFY_DEMO: consistent with experimental/libzync-bench/signet/signet2600.hints FROM THE GIVEN ANCHOR ONLY -- not a proof of the file
 exit=2 PASS
-== env MODE=fork swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.55okUagOo1/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
+== env MODE=fork swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.W1rptc1ReM/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
   [FAIL] your node's block 2600 is the proven tip 00000127dfa07c0fd2f2fe1e22a0fea15c34cabd6204b1faac15a04ba28be6f3 (node: 0000000000000000000000000000000000000000000000000000000000000abc)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== env MODE=err swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.55okUagOo1/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
+== env MODE=err swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.W1rptc1ReM/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
   [FAIL] your node's chain (<tmp>/cli getblockhash 2600: error code: -8)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
@@ -22,11 +22,11 @@ exit=1 PASS
   [FAIL] anchor_id is genesis
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt /tmp/tmp.55okUagOo1/trail.hints (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt /tmp/tmp.W1rptc1ReM/trail.hints (expect exit 1)
   [FAIL] the hints file is canonically encoded and well formed (not canonically encoded)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt /tmp/tmp.55okUagOo1/flip.hints (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt /tmp/tmp.W1rptc1ReM/flip.hints (expect exit 1)
   [FAIL] the hints file is canonically encoded and well formed (Io(Custom { kind: InvalidData, error: "inconsistent Elias-Fano high bits" }))
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
@@ -43,8 +43,8 @@ exit=1 PASS
   [FAIL] RISC0_DEV_MODE is not set in this verifier's environment
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /tmp/tmp.55okUagOo1/junk.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
-  [FAIL] the receipt file decodes (invalid value: integer `123163427`, expected variant index 0 <= i < 4)
+== swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /tmp/tmp.W1rptc1ReM/junk.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
+  [FAIL] the receipt file decodes (invalid value: integer `3788042507`, expected variant index 0 <= i < 4)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
 == swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /nonexistent.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
