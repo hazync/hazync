@@ -20,7 +20,7 @@ All integers little-endian. Hashes in internal byte order, as the proof commits 
 | 106 | 32 | `ss_hints` (proposal §3) |
 | 138 | 32 | SHA-256 of the hints file's bytes |
 | 170 | 4 | receipt length L |
-| 174 | L | the receipt: a risc0 3.0.5 `Receipt`, bincode 1 encoded (a succinct STARK, about 227 KB) |
+| 174 | L | the receipt: a risc0 3.0.5 `Receipt`, bincode 1 encoded: a succinct STARK (about 227 KB) or its Groth16 wrap (`host libzync-snark-wrap`) |
 
 The file ends at `174 + L`; anything else is an error.
 

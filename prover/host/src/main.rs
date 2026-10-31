@@ -1959,6 +1959,32 @@ fn verify_chain_cmd(bin: &str) {
     println!("  tip_hash {}  cum_work {}  UTXO leaves {}", hex(&cs.tip_hash), work_u128(&cs.cum_work), cs.utxo_leaves);
 }
 
+/// `libzync-snark-wrap <receipt> <out>`: compress a libzync chain receipt (succinct STARK, ~227 KB) to Groth16 (a
+/// few hundred bytes of seal), for shipping next to a hints file. Refuses a receipt that is not a real proof of this
+/// image's ChainState, and refuses to write a wrap whose journal is not byte-identical to the input's: a wrap that
+/// changed the statement would be a forgery vector. Needs the risc0 Groth16 prover (x86, lots of RAM): run on a
+/// proving box, not a laptop. Verify the result with `swiftsync-verify`, which accepts either receipt kind.
+fn libzync_snark_wrap_cmd(bin: &str, out: &str) {
+    use std::time::Instant;
+    assert!(methods::LIBZYNC, "libzync-snark-wrap needs a libzync build");
+    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(bin).unwrap_or_else(|e| panic!("{bin}: {e}")))
+        .unwrap_or_else(|e| panic!("{bin}: not a receipt: {e}"));
+    assert!(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "refusing to wrap a dev-mode FakeReceipt");
+    r.verify(METHOD_ID).expect("the receipt does not verify against this image");
+    let cs: ChainState = r.journal.decode().expect("the journal is not a ChainState");
+    assert!(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "not a ChainState committed by this image");
+    let before = bincode::serialize(&r).map(|v| v.len()).unwrap_or(0);
+    println!("=== libzync Groth16 wrap: height {} (STARK -> Groth16), input {before} bytes ===", cs.height);
+    let t = Instant::now();
+    let snark = default_prover().compress(&ProverOpts::groth16(), &r).expect("groth16 compress");
+    snark.verify(METHOD_ID).expect("the wrapped receipt does not verify");
+    assert_eq!(snark.journal.bytes, r.journal.bytes, "the wrapped journal differs from the input's -- refusing to write it");
+    let bytes = bincode::serialize(&snark).unwrap();
+    std::fs::write(out, &bytes).unwrap_or_else(|e| panic!("{out}: {e}"));
+    println!("LIBZYNC_SNARK_WRAPPED: {out}, {} bytes ({:.0}x smaller), {:.1} s", bytes.len(),
+             before as f64 / bytes.len().max(1) as f64, t.elapsed().as_secs_f64());
+}
+
 /// `libzync-verify <receipt> <file.hints> [anchor.json]`: everything a SwiftSync user checks before trusting
 /// a hints file because of a Hazync proof. Exit 0 only if every check passes.
 ///
@@ -5605,6 +5631,11 @@ fn main() {
         };
         println!("signet-check-test block {}: one txid changed -> {bad}", w.height);
         println!("{}", if good == 1 && bad == 0 { "SIGNET_CHECK_OK" } else { "SIGNET_CHECK_FAIL" });
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-snark-wrap") {
+        libzync_snark_wrap_cmd(args.get(p + 1).expect("libzync-snark-wrap <receipt> <out>"),
+                               args.get(p + 2).expect("libzync-snark-wrap <receipt> <out>"));
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-verify") {

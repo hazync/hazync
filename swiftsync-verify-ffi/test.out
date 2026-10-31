@@ -1,0 +1,11 @@
+built-in signet image: 4b91b085297f1a6e13c062b7c0580d53fed275dd0f0d895d7070d668ca1f5bd2
+PASS  demo_receipt         verdict 2 (want 2)  height 2600 leaves 293  verified against the given anchor only
+PASS  demo_bundle          verdict 2 (want 2)  height 2600 leaves 293  verified against the given anchor only
+PASS  no_anchor            verdict 1 (want 1)  height 2600 leaves 293  anchor_id is genesis
+PASS  wrong_image          verdict 1 (want 1)  height 2600 leaves 293  receipt verifies against image 4b91b085297f1a6e13c062b7c0580d53fed275dd0f0d895d7070d668ca1f5bd2 (signet): claim digest does not match the expected digest ca0aa75905f3630ab92f7e5fdf8ad96b0a08c38c5789cc711a557c29239fb1c8; expected 1b321cfc7fcdabdd5e6f9ee08a
+PASS  flipped_bit          verdict 1 (want 1)  height 2600 leaves 293  the hints file is canonically encoded and well formed (Io(Custom { kind: InvalidData, error: "inconsistent Elias-Fano high bits" }))
+PASS  early_stop           verdict 1 (want 1)  height 2530 leaves 223  height 2530 == the file's stop height 2600
+PASS  fake_receipt         verdict 1 (want 1)  height 2501 leaves 137  receipt is a real proof (not a dev-mode FakeReceipt)
+PASS  bundle_header_lies   verdict 1 (want 1)  height 2600 leaves 293  bundle header: height, tip, work and ss_hints equal the verified journal's
+PASS  bad_image_hex        verdict 1 (want 1)  height 0 leaves 0  image id is not 64 hex digits
+FFI_TEST_OK

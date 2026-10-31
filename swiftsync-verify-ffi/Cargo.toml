@@ -1,0 +1,24 @@
+[package]
+name = "swiftsync-verify-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI for swiftsync-verify: check a SwiftSync hints proof from C or C++ (e.g. Bitcoin Core)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "swiftsync_verify"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+swiftsync-verify = { path = "../swiftsync-verify" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
