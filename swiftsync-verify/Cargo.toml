@@ -1,0 +1,40 @@
+[package]
+name = "swiftsync-verify"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone verifier for a libzync proof that a SwiftSync hints file is correct"
+license = "MIT"
+publish = false
+
+# NOT a member of the prover workspace, and NOT depending on `methods`: a verifier needs the guest's IMAGE
+# ID, not the guest, so the ids are embedded as hex literals (src/lib.rs IMAGES) and the prover, Core and CUDA
+# stay out of this build. Same design as ../verifier (hazync-verify).
+#
+# The checks live in the library so a CLI, a C ABI and a WASM build can share ONE implementation of them.
+
+[lib]
+name = "swiftsync_verify"
+path = "src/lib.rs"
+
+[[bin]]
+name = "swiftsync-verify"
+path = "src/main.rs"
+
+[dependencies]
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+# The hint hash (§3 of the proposal) from the crate the prover uses; without default features it is sha2 only.
+libzync = { path = "../libzync", default-features = false }
+hintsfile = "=0.2.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
