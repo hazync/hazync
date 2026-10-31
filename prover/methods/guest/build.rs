@@ -270,6 +270,9 @@ fn main() {
         // is not an oversight: rust-lld cannot read GCC's LTO bytecode, and -ffat-lto-objects links
         // but performs no cross-TU optimisation. See TIER0_RESULTS_2026-08-26.md 3.
         .flag("-march=rv32im").flag("-mabi=ilp32").opt_level(3).warnings(false)
+        // No type-based alias analysis: Core and libsecp are clean, but our patches and shims hand byte
+        // buffers to the accelerator as uint32_t*, and this makes such code defined by construction (round 8).
+        .flag("-fno-strict-aliasing")
         .flag(&fpm)
         .include(&secp).include(format!("{secp}/src"))
         .define("ECMULT_WINDOW_SIZE", win.as_str()).define("ECMULT_GEN_KB", gen_kb.as_str())
@@ -324,6 +327,7 @@ fn main() {
     b.cpp(true).compiler(&gpp).archiver(&ar)
         .flag("-march=rv32im").flag("-mabi=ilp32").flag("-std=c++20")
         .flag("-fexceptions").flag("-fno-rtti").opt_level(3).warnings(false)  // TIER 0: -O3
+        .flag("-fno-strict-aliasing") // as for the C sources above (round 8)
         .flag(&fpm)
         // coreshim FIRST: its no-op sync.h/threadsafety.h override Core's pthread-backed versions so
         // the real chain.h CBlockIndex + pow.cpp compile on the single-threaded freestanding guest.
@@ -442,7 +446,7 @@ fn main() {
         (&gcc, "cshims.c", &[][..]),
     ] {
         let mut c = std::process::Command::new(compiler);
-        c.args(["-march=rv32im", "-mabi=ilp32", "-O3"]).args(lang)  // TIER 0: -O3
+        c.args(["-march=rv32im", "-mabi=ilp32", "-O3", "-fno-strict-aliasing"]).args(lang)  // TIER 0: -O3
             // Only the classes that are UB or a silent miscompile, not a style sweep — a warning set
             // this code has never been held to would fail on noise and get switched off within a week.
             .args(["-Werror=return-type", "-Wreturn-type"])

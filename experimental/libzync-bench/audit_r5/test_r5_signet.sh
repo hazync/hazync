@@ -1,8 +1,12 @@
 #!/bin/bash
 # Round-5 verifier fixes on the round-4 signet receipt (signet/gpu_r4/block_2600.rcpt). Run by run_r5.sh.
-# The receipt is from image c3501ac9, so checks A-G run a verifier built for that image: $HR (default: the current
-# host). After an image change set HR to a host of the receipt's image; its verifier code must match this commit's.
-R=~/libzync-gpu/r18; E=~/dev/hazync-libzync/experimental/libzync-bench/signet; G=$E/gpu_r4; H=$R/host_signet; HR=${HR:-$H}; O=$R/r5; mkdir -p $O
+# The receipt is from image c3501ac9, so checks A-G need a verifier built for THAT image: HR=<host of image
+# c3501ac9> (its verifier code must match this commit's; it has been unchanged since round 6). Refuses otherwise,
+# rather than recording METHOD_ID failures as evidence.
+R=~/libzync-gpu/r18; E=~/dev/hazync-libzync/experimental/libzync-bench/signet; G=$E/gpu_r4; H=$R/host_signet; O=$R/r5; mkdir -p $O
+RECEIPT_IMAGE=c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae
+HR=${HR:?set HR to a signet host built for image $RECEIPT_IMAGE}
+$HR method-id 2>/dev/null | grep -qw $RECEIPT_IMAGE || { echo "HR=$HR is not a host of image $RECEIPT_IMAGE"; exit 1; }
 echo "== A. receipt, real clock, effective anchor (expect DEMO exit 2)"; $HR libzync-verify $G/block_2600.rcpt $E/signet2600.hints $G/anchor_effective.json | tail -1; echo "exit=${PIPESTATUS[0]}"
 echo "== B. HAZYNC_VERIFY_NOW set to a passing time (expect FAIL exit 1, override named)"; HAZYNC_VERIFY_NOW=1793400000 $HR libzync-verify $G/block_2600.rcpt $E/signet2600.hints $G/anchor_effective.json | grep -a 'HAZYNC_VERIFY_NOW\|time-too-new\|VERIFY_'; echo "exit=${PIPESTATUS[0]}"
 echo "== C. HAZYNC_VERIFY_NOW before the last block (expect time-too-new FAIL)"; HAZYNC_VERIFY_NOW=1599700000 $HR libzync-verify $G/block_2600.rcpt $E/signet2600.hints $G/anchor_effective.json | grep -a 'time-too-new\|VERIFY_'; echo "exit=${PIPESTATUS[0]}"

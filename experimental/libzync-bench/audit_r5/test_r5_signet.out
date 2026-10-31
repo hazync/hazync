@@ -38,6 +38,6 @@ exit=0
 swiftsync-file-hash: stop height 2600 -> ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b (NOT canonically encoded: a proof would not vouch for these bytes)
 exit=1
 == H. prove-range replay path, dev mode: anchor without max_time, blocks 1..2500 present -> filled exactly, effective anchor == sweep state
-LZ_PROVE_RANGE_DONE 2501..=2501 in 14 s; final receipt /home/defenwycke/libzync-gpu/r18/r5/pr/block_2501.rcpt
+LZ_PROVE_RANGE_DONE 2501..=2501 in 13 s; final receipt /home/defenwycke/libzync-gpu/r18/r5/pr/block_2501.rcpt
 filled max_time 1599659036 | effective anchor == sweep state: True
 R5_SIGNET_DONE

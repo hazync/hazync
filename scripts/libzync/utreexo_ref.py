@@ -2,10 +2,11 @@
 """utreexo_ref.py <block json dir> <H> [state.json] -- an INDEPENDENT implementation of libzync's UTXO
 accumulator (docs/libzync/UTREEXO_FORMAT.md), written from the spec, not from the guest.
 
-Reads block_<h>.json for h = 1..H (the host's block files: header fields, coinbase_hex, txs[].raw,
-recent_times = the 11 prior timestamps), works out which outputs are unspent at H by following every
-spend (no hints file), builds the append-only forest of those coins in creation order, and prints
-num_leaves and the roots. With a ChainState JSON (a sweep's state_<H>.json) it compares against the
+Reads block_<h>.json for h = 1..H (the host's block files: header fields, coinbase_hex, txs[].raw), works out
+which outputs are unspent at H by following every spend (no hints file), builds the append-only forest of those
+coins in creation order, and prints num_leaves and the roots. Each block's creation MTP is computed here from the
+header timestamps of blocks 0..h-1 (genesis by its hash, from the table below; the others from the files, which
+must link by hash); the host's own `recent_times` field is only cross-checked against it, never used. With a ChainState JSON (a sweep's state_<H>.json) it compares against the
 guest's committed utxo_leaves / utxo_roots and exits 1 on any difference.
 
 Python standard library only.
@@ -17,6 +18,11 @@ MAX_SCRIPT_SIZE = 10_000
 # Core's IsBIP30Unspendable (mainnet): these two coinbases' outputs are never in the UTXO set.
 BIP30_UNSPENDABLE = {91722: "00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e",
                      91812: "00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f"}
+
+
+# Genesis block hash (display order) -> timestamp, for the networks this is used on.
+GENESIS_TIME = {"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f": 1231006505,   # mainnet
+                "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6": 1598918400}   # signet
 
 
 def sha256(b):
@@ -93,9 +99,19 @@ def main():
     created = []          # (outpoint, leaf), creation order
     meta = {}             # outpoint -> (height, coinbase, creation MTP), to check the block files' prevouts
     spent = set()
+    times = []            # header timestamps of blocks 0..h-1
+    prev_hash = None
     for h in range(1, H + 1):
         j = json.load(open(f"{d}/block_{h}.json"))
-        m = mtp(j["recent_times"])   # MTP of the parent: the creation MTP every leaf of this block commits
+        if h == 1:
+            assert j["prev"] in GENESIS_TIME, f"block 1's parent {j['prev']} is not a known genesis"
+            times.append(GENESIS_TIME[j["prev"]])
+        else:
+            assert j["prev"] == prev_hash, f"block {h} does not link to block {h - 1}"
+        prev_hash = header_hash(j)
+        m = mtp(times[-11:])         # MTP of the parent: the creation MTP every leaf of this block commits
+        assert sorted(j["recent_times"]) == sorted(times[-11:]), f"block {h}: file's recent_times differ from the headers"
+        times.append(j["time"])
         bip30 = h in BIP30_UNSPENDABLE and BIP30_UNSPENDABLE[h] == header_hash(j)
         raws = [bytes.fromhex(j["coinbase_hex"])] + [bytes.fromhex(t["raw"]) for t in j["txs"]]
         for k, raw in enumerate(raws):

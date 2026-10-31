@@ -80,7 +80,7 @@ parent(L, R) = SHA-256( 0x01 ‖ L ‖ R )                      65-byte preimage
   by k, and `utxo_leaves` is a u64.
 
 The tags 0x00 and 0x01 separate the leaf domain from the interior domain. Without them, a leaf whose script
-is 7 bytes would have a 65-byte preimage, the same length as an interior node's.
+is 7 bytes would have a 64-byte preimage (57 + 7), the same length as an interior node's (32 + 32).
 
 ## 6. Test vector and how it is checked
 
@@ -95,8 +95,10 @@ roots[7] = 339752865cc905092ec186b4dae9902e4951bd182855b61d80003867f4cbb452
 ```
 
 The two implementations check each other.
-- `utreexo_ref.py` computes the vector from the block files alone, following every spend, with no hints file.
-  It cross-checks each prevout's height, coinbase flag and creation MTP against the block files.
+- `utreexo_ref.py` computes the vector from the block files alone, following every spend, with no hints file. It
+  computes each block's creation MTP from the header timestamps (genesis's from its hash), requires every block to
+  link to the previous one by hash, and cross-checks each prevout's height, coinbase flag and creation MTP, and the
+  files' precomputed timestamp windows, against what it derived.
 - The guest's sweep (`swiftsync-sweep 200` with `HAZYNC_SWEEP_SAVE`) must commit the same state:
   `utreexo_ref.py <dir> 200 state_200.json` prints `REF_MATCH`.
 

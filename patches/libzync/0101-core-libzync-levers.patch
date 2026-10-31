@@ -71,7 +71,7 @@ diff -ruN a/src/crypto/sha256.cpp b/src/crypto/sha256.cpp
  /* Route the merkle-node double-SHA through the ACCELERATED Transform, using Core's own generic
   * construction. This is exactly what Core does on any platform with a fast Transform -- see the
   * SHA-NI, SSE4 and ARM branches below, all of which set TransformD64Wrapper<that Transform>.
-@@ -668,6 +709,96 @@
+@@ -668,6 +709,95 @@
  
  ////// SHA-256
  
@@ -97,12 +97,11 @@ diff -ruN a/src/crypto/sha256.cpp b/src/crypto/sha256.cpp
 +        chunk += 64;
 +    }
 +}
-+/* Defined behaviour only (audit 6): short copies byte by byte, longer ones through memcpy. The earlier
-+   word loop read up to 3 bytes before and after a misaligned source and accessed bytes as uint32_t. */
++/* Plain memcpy (rounds 7-8). The earlier word loop read up to 3 bytes before and after a misaligned
++   source; the destination is always the private `buf`, so the regions never overlap. */
 +inline void hz_copy(unsigned char* d, const unsigned char* s, size_t n)
 +{
-+    if (n >= 12) { __builtin_memcpy(d, s, n); return; }
-+    while (n--) *d++ = *s++;
++    __builtin_memcpy(d, s, n);
 +}
 +inline void hz_init(uint32_t* s)
 +{
@@ -168,7 +167,7 @@ diff -ruN a/src/crypto/sha256.cpp b/src/crypto/sha256.cpp
  CSHA256::CSHA256()
  {
      sha256::Initialize(s);
-@@ -722,6 +870,7 @@
+@@ -722,6 +852,7 @@
      sha256::Initialize(s);
      return *this;
  }

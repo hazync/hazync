@@ -1,6 +1,7 @@
 # libzync: what it achieves, what it costs, and what Core could take from it
 
-**Branch `libzync`, 2026-10-30.** Every number here was measured. Where something was not run, the text says so.
+**Branch `libzync`, 2026-10-30.** Every number here was measured unless it is marked ESTIMATED; each says which image
+it was measured on where that matters. Where something was not run, the text says so.
 
 ⛔ **libzync is an experiment, not a release.** It moves METHOD_ID, it is not on any shipped proving path,
 and it had its first independent review on 2026-10-30 (§7). That review found soundness bugs, now fixed and
@@ -23,8 +24,10 @@ organised**:
   spent before a handover height H go into an ECMH running total. Coins still unspent at H go into a Utreexo
   forest.
 
-The result is about 8.5× fewer cycles than the canonical guest on a modern block, mainnet tip blocks proven
-in 3–5 minutes on 4 GPUs, and a proof that a SwiftSync hints file is correct.
+The result is 8.2× fewer cycles than the canonical guest on a modern block (409.5 M against 3.36 G, block 962,000,
+round-8 image), mainnet tip blocks proven in 4.4–5.5 minutes (266–332 s) on 4 GPUs (round-13 image), and a proof
+design that a SwiftSync hints file is correct, demonstrated on signet from a trusted mid-chain state; no proof from
+genesis exists yet.
 
 ## 2. What it achieves (measured)
 
@@ -32,14 +35,15 @@ in 3–5 minutes on 4 GPUs, and a proof that a SwiftSync hints file is correct.
 
 | measure | canonical Hazync (CORE, `37987b85`) | libzync | gain |
 |---|---|---|---|
-| block 962,000 (8,006 inputs), guest cycles | 3,357.6 M (one chunk) | chunks 339.7 M + aggregate 57.7 M ≈ **397 M** | **~8.5×** |
+| block 962,000 (8,006 inputs), guest cycles | 3,357.6 M (one chunk) | round 8: chunks 345.2 M + aggregate 64.3 M = **409.5 M** (round 13, before the audits: 397 M) | **8.2×** |
 | block 962,000 proved on 1× A40, wall | 9,990 s | **1,167 s** | **8.6×** card time |
 | block 962,000, critical path on one card (max chunk + aggregate) | 2,922 s | 219 s | **13.3×** |
 | 2026-09-29 tip blocks 969,122 / 969,118 | 558 s / 368 s on **38** cards | **197 s / 220 s on 4** RTX PRO 6000 | 2–3× faster on ~1/10 the cards |
 | live mainnet tip hour (2026-10-29/30) | 5 blocks, 38 cards, $15.83 per block | **4/4 blocks verified, 266–332 s each**, ~$10 for the hour | ~1/6 the cost per block |
 
 Sources: `experimental/libzync-bench/gpu/GPU_RESULTS.md` and `BLOCK_962000.md`. The cycle figures come from
-laptop execute mode. GPU figures are RunPod wall clock, with every receipt verified.
+laptop execute mode. GPU figures are RunPod wall clock, with every receipt verified, measured on the round-13 image
+(`5e460bf3`) before the audits; the audits added about 3% to the cycles (row 1).
 
 ### A proof SwiftSync can use
 
@@ -49,7 +53,7 @@ laptop execute mode. GPU figures are RunPod wall clock, with every receipt verif
   - `ss_set = 0`: the ECMH total is the identity;
   - `ss_hints`: a hash computable **from the hints file alone**;
   - Utreexo roots that are exactly the UTXO set at H.
-- **What follows:** with the checks in §9 of the proposal (`docs/libzync/SWIFTSYNC_PROOFS.md`), the hints file is
+- **What follows:** with the checks in §5 of the proposal (`docs/libzync/SWIFTSYNC_PROOFS.md`), the hints file is
   proven correct for that chain, with no trust in whoever served it.
 - **Checked on mainnet blocks 1–500** (execute mode, real chain-state carry):
   - balanced, and the forest is exactly the 503 coins unspent at 500;
@@ -95,7 +99,7 @@ block ──► host: split inputs into chunks (cost-packed) ──► hint bund
 |---|---|---|
 | Bitcoin Core v28.0: 22 translation units (23 on signet) | 7,061 (pristine) | interpreter, sighash, transactions and serialisation, hashes, CheckTransaction, merkle, PoW and retarget, chainparams, signet solution |
 | libsecp256k1 v0.5.1 | 16,811 | every key and signature parse, every check before the group equation, and the full verify on fallback |
-| patches to Core / libsecp | canonical 4, GHOST 5, **libzync 2** (`0101`: 9 levers, +366 −5 lines; `0102`: 3 hooks, +90) | each is `#ifdef`'d; each computes the same bytes (third reviewer, §7) |
+| patches to Core / libsecp | canonical 4, GHOST 5, **libzync 2** (`0101`: 9 levers, +355 −5 lines; `0102`: 3 hooks, +58 −2; `git apply --numstat`, round 8) | each is `#ifdef`'d; each computes the same bytes (third reviewer, §7) |
 | Hazync guest code (Rust + C++ wrapper) | 5,428 | wiring, chain state, block bookkeeping |
 | of which written for libzync | ~2,000 | batch MSM, ECMH, agg-lite, the `libzync` crate |
 
@@ -158,7 +162,8 @@ block ──► host: split inputs into chunks (cost-packed) ──► hint bund
    It proves accounting, not script validity, which is SwiftSync's own assumevalid trade-off.
 6. **Reproducibility work to redo.** The canonical guest is reproducible through `reproduce/Dockerfile` and pinned by
    `METHOD_ID` + `GUEST_ELF_SHA256`. libzync guests are built from `scripts/libzync-base.sh` and are deterministic on one
-   machine (two builds gave the same id), but they are not yet in the container.
+   machine when the guest is built from a clean target (two builds gave the same id; an incremental build once reused a
+   stale guest, round 8), but they are not yet in the container.
 7. **One network per image.**
    - A signet proof and a mainnet proof have different image ids. That is by design, and it is safe.
    - Custom signets, with a different challenge, are not supported.
@@ -175,7 +180,7 @@ block ──► host: split inputs into chunks (cost-packed) ──► hint bund
 | **parse/hash once** (tx-once, lazy and raw txid, HashWriter buffer, SHA stream, D64 stream) | the same transaction was deserialised and hashed 3× | large cut in hashing and memcpy | patches inside Core's classes; reviewed equivalent (§7) |
 | **memos** (pubkey parse, HASH160) | 6,986 signatures over 2,099 distinct keys on 962,000 | each repeated key costs nothing | caches in consensus code; only safe under the bump allocator, so TLSF is not in the profile |
 | **legacy SIGHASH_ALL fast path** | quadratic hashing on one 400-input legacy transaction | halves the bytes hashed | a second implementation of the legacy sighash; reviewed byte-equal |
-| **signet** | a cheap complete demonstration | full chain in reach (~$0.7–2.5k for the whole chain) | one more build profile; BIP325 adds a Core TU |
+| **signet** | a cheap complete demonstration | full chain in reach (ESTIMATED ~$0.7–2.5k for the whole chain, scripts off) | one more build profile; BIP325 adds a Core TU |
 
 ## 7. Independent review, 2026-10-30, and the fixes
 
@@ -314,7 +319,7 @@ by `scripts/libzync-base.sh` (the build tree used until now matched them, apart 
 
 | change | where |
 |---|---|
-| `hz_copy`: byte copy under 12 bytes, `__builtin_memcpy` otherwise. No access outside the source or destination, no `uint32_t` access to byte buffers | `patches/libzync/0101` (SHA_STREAM) |
+| `hz_copy`: byte copy under 12 bytes, `__builtin_memcpy` otherwise; no access outside the source or destination. (Round 8: plain memcpy, and the remaining `uint32_t*` views of byte buffers handed to the accelerator are covered by `-fno-strict-aliasing`) | `patches/libzync/0101` (SHA_STREAM) |
 | `tx_full_sigops`: a non-coinbase tx with an empty prevouts blob returns the poison cost (fails closed by itself) | `verify_input.cpp` |
 | maturity and BIP68 height arithmetic in 64 bits in both lock checks | `verify_input.cpp` |
 | `tx_out_leaves`: parameter named `creation_mtp`, comment states the real preimage | `verify_input.cpp` |
@@ -325,11 +330,48 @@ by `scripts/libzync-base.sh` (the build tree used until now matched them, apart 
 - the flip and `is_base = 2` negatives fail as they should; BIP325 check OK; genesis `anchor_id` matches the
   independent script on both networks.
 
-Cost of the memcpy copy: chunks 342,910,547 → 344,047,105 cycles (+0.33%), aggregate 64,309,178 → 64,309,273.
+Cycles on block 962,000 for the round-7 image as a whole (the three changes are not measured separately): chunks
+342,910,547 → 344,047,105 (+0.33%), aggregate 64,309,178 → 64,309,273.
+
+### Round 8: review of round 7, and a pre-publication read of the proposal (2026-10-31)
+
+A code review of round 7 found no correctness bug in the guest changes. A sceptical read of the proposal, as its
+recipients would read it, found claims stronger than the code, steps that could not be implemented from the text,
+and numbers not tied to an image. Both are addressed below; the image ids move again.
+
+**Guest and build**, now **mainnet `6fcb65af…`, signet `4b91b085…`**:
+
+| change | why |
+|---|---|
+| `-fno-strict-aliasing` for every C and C++ unit in the guest | the patches and shims still hand byte buffers to the accelerator as `uint32_t*`; this makes that defined rather than relying on the call being opaque |
+| `hz_copy` is a plain `memcpy` | the byte-loop split had no measured benefit |
+| stale comments in `verify_input.cpp` (the leaf preimage of `coin_leaf`, the tag rationale's 57 + len) | they contradicted the code and the spec |
+| `0101`'s stale hunk header | it no longer matched a regenerated patch |
+| ⛔ **a stale guest**: the first round-8 mainnet build reported the round-7 id, because both networks share `target/riscv-guest` and switching network did not rebuild the ELF | caught by the cycle count being identical to round 7; the test hosts now always build the guest from clean. Every image id in these docs is from a clean build |
+
+Cycles on block 962,000: chunks 345,160,159, aggregate 64,309,642 (409.5 M; 8.2× fewer than the canonical guest).
+The full suite passes on the clean builds; genesis `anchor_id` matches the independent script on both networks.
+
+**Proposal** (`SWIFTSYNC_PROOFS.md`):
+- the statement of §2 now says the rules *follow* Core v28 and lists where they come from (Core's C++ or Rust) and
+  where they differ (#26, and the coinbase SMT being stricter after BIP34); a rule-by-rule table is still to write;
+- §4 gives the soundness argument with its assumptions (ECMH collision resistance, distinct leaves, how F is bound
+  to the blocks, the recursion, which chain, genesis);
+- §5 gives the full image ids, the empty-SMT root, the word order and M's encoding; §3 specifies the canonical
+  Elias–Fano encoding step 10 requires;
+- a tip proof is described for what it is: blocks checked against prover-supplied prevouts until the epoch closes;
+- every number names its image, and §9 is marked as an estimate with its method and rate;
+- the signet-from-genesis estimate is corrected to ~7.4 card-hours (~$18.5): 2,374 coinbase spends at ~1.3 s each;
+- a table of the questions we expect, with today's answers;
+- test-vector files committed with full sha256s; `utreexo_ref.py` now derives creation MTP from header timestamps
+  and checks block linkage instead of reading the host's precomputed windows.
+
+**Still open for publication:** no genesis-anchored receipt verifies OK yet; M cannot be rebuilt by a reader (the
+reproducible build kit); the rule-by-rule table.
 
 ## 8. Signet
 
-**Build:** `HAZYNC_NETWORK=signet`, guest `5e552ce9…` (round 7; `c3501ac9…` in round 4, the image the GPU proof
+**Build:** `HAZYNC_NETWORK=signet`, guest `4b91b085…` (round 8; `c3501ac9…` in round 4, the image the GPU proof
 below used; first built as `cf7f75ff…`). What changes:
 - Core's own `CChainParams::SigNet` (default challenge) replaces `Main()`;
 - Core's `signet.cpp` is compiled in;
@@ -350,10 +392,11 @@ equivalent).
 | `swiftsync-diff-hints` on our 3,000 file | EXACT for 1..=3,000 |
 | design B sweep 1..3,000 | **BALANCED** in 687 s; forest = **695 coins** = the UTXO set at 3,000; `ss_hints` `5979d283…` = the file's hash |
 | design B sweep 1..2,600 (the GPU demo's handover height) | **BALANCED**; forest = 293 coins; `ss_hints` `f097b8f2…` |
-| `libzync-prove-range 2501 2530` in dev mode (fake receipts) | base step on the 2,500 state, then 29 recursive steps, including 9 transaction blocks |
+| `libzync-prove-range 2501 2530` in dev mode (fake receipts) | base step on the 2,500 state, then 29 recursive steps, including 8 transaction blocks |
 
 **GPU** (proposal §10):
-- first run (pre-audit `cf7f75ff`): signet 2,501..2,600 in 1,464 s ($1.39), verified;
+- first run (pre-audit `cf7f75ff`): signet 2,501..2,600 in 1,464 s ($1.39). The verifier of the time printed OK; it had
+  no DEMO verdict yet, and the proof started from a supplied state at 2,500, so by today's rules it is DEMO;
 - **re-proved on the round-4 image `c3501ac9`:** 1,452 s of proving on 1× RTX PRO 6000, ~$1.52; verified on the
   laptop (DEMO verdict) against the prover-written `anchor_effective.json`, whose BIP30 tree was seeded from this
   range's coinbase spends; the pod's own verify against the sweep anchor failed on `anchor_id` (proposal §10);
@@ -362,7 +405,7 @@ equivalent).
   514 s for block 2,523.
 
 **Found on the GPU run: the BIP30 coinbase-txid SMT dominates blocks that spend many coinbases.**
-- Signet block 2,523 spends 374 coinbase outputs (514–549 s on the GPU). Its aggregate executes **565 M cycles**, of which **557 M (97%)** is
+- Signet block 2,523 spends 374 coinbase outputs (514 s on the GPU, round-4 run). Its aggregate executes **565 M cycles**, of which **557 M (97%)** is
   `coinbase-smt` (SHA-256 path updates) at about **1.5 M cycles per coinbase spend**. Every other part of the block
   costs 18 M.
 - The SMT is existing Hazync machinery (#54), not libzync. It closes BIP30 permanently, which is stricter than Core:

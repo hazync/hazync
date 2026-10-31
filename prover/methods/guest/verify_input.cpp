@@ -55,8 +55,8 @@ static void le(unsigned char* b, uint64_t v, int n) { for (int i = 0; i < n; i++
 // Domain-separation tags — MUST equal hazync-utreexo's TAG_LEAF/TAG_NODE (accumulator/src/lib.rs) and
 // the guest Rust utreexo.rs. `scripts/check-utreexo.sh` gates all three.
 //
-// A leaf preimage is 57 + scriptPubKey bytes, so a 7-byte scriptPubKey yields a 64-byte preimage — the
-// same length an interior node hashes. Without a tag the leaf and interior domains genuinely overlap,
+// A leaf preimage is 58 + scriptPubKey bytes (tag included), so an untagged one would be 57 + len and a
+// 7-byte scriptPubKey would give a 64-byte preimage — the length an untagged interior node hashes. Without a tag the leaf and interior domains genuinely overlap,
 // and the only barrier is that a leaf preimage opens with a txid. A txid is the hash of a transaction
 // an attacker can construct and grind, so that is a cost argument, not a separation. One tag byte
 // makes it a property of the construction instead.
@@ -86,7 +86,8 @@ static bool hz_leaf(uint8_t* out, const unsigned char* txid, uint32_t vout, uint
 #endif
 
 // Canonical Hazync UTXO-leaf commitment for the coin spent by input `input_idx`:
-//   SHA256( TAG_LEAF || txid || vout || value || scriptPubKey || coin_height || is_coinbase || coin_mtp ).
+//   SHA256( TAG_LEAF || txid || vout || value || len(scriptPubKey) || scriptPubKey || coin_height
+//           || is_coinbase || coin_mtp ), byte-exact in docs/libzync/UTREEXO_FORMAT.md section 2.
 // Height, coinbase flag, and creation median-time-past are committed so maturity + BIP68 (height AND
 // time) checks can't lie about the coin's age.
 // Returns false without writing `out_leaf` when the witness cannot address the input; see the guard.
