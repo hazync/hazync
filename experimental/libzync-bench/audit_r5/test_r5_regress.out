@@ -1,7 +1,7 @@
 == 1. block 962,000 valid
   batch: 7031 verifies, 7021 valid, 10 left to libsecp
   ecmh: 4324 operations, 296368 bytes
-  block validation cycles  64309178
+  block validation cycles  64309273
 rc=0
 == 2. negative: is_base = 2 (must be refused)
 is_base must be 0 or 1, got 2

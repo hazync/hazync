@@ -1,7 +1,8 @@
 # Round 5 audit: test outputs (2026-10-31)
 
-Hosts rebuilt from this commit (host-side changes only; guest image ids unchanged: mainnet `ddcaf1d0…`,
-signet `c3501ac9…`).
+Regenerated in round 7 on the round-7 images (mainnet `a50c3bac…`, signet `5e552ce9…`) with
+`HR=<round-6 signet host> run_r5.sh`: the receipt checks (A-G) need a verifier of the receipt's image `c3501ac9…`,
+and the verifier code is unchanged since round 6. Rounds 5 and 6 ran the same suite on the round-4 images.
 
 - `test_r5_signet.out`: the round-5 verifier fixes on the signet receipt `signet/gpu_r4/block_2600.rcpt`.
   DEMO with the real clock (exit 2); `HAZYNC_VERIFY_NOW` set, even to a passing time, is a failed check (exit 1);

@@ -140,8 +140,9 @@ Given a receipt R, the hints file F and the network:
      its elements, and an `Option` is a 0/1 word followed by the value when present.
    - `host libzync-verify` computes this itself. `scripts/libzync/genesis_anchor_id.py` computes it from this text
      alone, and matches what the guest commits after a base step on genesis. Test vectors:
-     mainnet `ddcaf1d0…` → `6178a96dd2b758f14d4c46ecea6a19963855a8e2feae83abbcae959636b6674a`;
-     signet `c3501ac9…` → `91ccd466f6efd6609ca24a9b4c58406de61211a9e53226a30be6dfe13906461a`.
+     mainnet `a50c3bac…` → `121f89edf6a35831081c4f713c21939ec6d4bf8308e56310b887c289842ca9cc`;
+     signet `5e552ce9…` → `67abdb318ec2c193bfee7620b3a50657921eb0cd55ebd7b2a704c5d337e9bbb9`
+     (round-7 images; the round-4 images `ddcaf1d0…` / `c3501ac9…` gave `6178a96d…` / `91ccd466…`).
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
@@ -166,7 +167,7 @@ step 7. It ends in one of three verdicts:
 An OK verdict for an assumevalid image says so on the verdict line itself. `HAZYNC_VERIFY_NOW` replaces the clock in
 step 11 for negative tests only; when it is set, that is itself a failed check, so the verdict is never OK or DEMO.
 
-**Example output.** The real run of §10 on the current signet image, re-verified on a laptop from the 226 KB receipt.
+**Example output.** The real run of §10 on the round-4 signet image, re-verified on a laptop from the 226 KB receipt.
 A demonstration anchor (§10) makes the verdict `LIBZYNC_VERIFY_DEMO`, never OK:
 
 ```
@@ -297,9 +298,11 @@ Multi-block batching (one proof session per block range) is not built. It is wor
 
 ## 10. What exists today (signet)
 
-**The signet proof below was re-made on the current image** (signet `c3501ac9…`, after all three review rounds and
-the round-4 `max_time` / `profile` fields). ⚠ The mainnet measurements in §10a still come from a pre-audit image
-(`09a02eed`); their timing and size are representative, but they prove nothing under the current image.
+**The signet proof below was made on the round-4 image** (signet `c3501ac9…`, after three review rounds and the
+`max_time` / `profile` fields). The current image is round 7's (signet `5e552ce9…`, mainnet `a50c3bac…`): three C++
+hygiene fixes, no rule change, the same committed states on every regression test. A receipt of the current image
+needs a re-prove. ⚠ The mainnet measurements in §10a come from a pre-audit image (`09a02eed`); their timing and
+size are representative, but they prove nothing under the current image.
 
 All measured 2026-10-30.
 
@@ -310,7 +313,7 @@ All measured 2026-10-30.
 | design B, blocks 1..3,000, from genesis | laptop, execute | **BALANCED**; forest = the 695 coins unspent at 3,000; 687 s |
 | design B, blocks 1..2,600, from genesis | laptop, execute | **BALANCED**; forest = 293 coins; state saved at 2,500 |
 | forest vs the independent reference (`utreexo_ref.py`) at 2,600 | laptop | **REF_MATCH**: identical roots, 293 coins |
-| **proof of blocks 2,501..2,600, current image** | **1× RTX PRO 6000, RunPod** | **proved: a base step and 99 recursive steps, 1,452 s of proving, ~$1.52** including the 391 s build. Verified on the laptop (DEMO verdict, below); the verify on the pod **failed**, see below |
+| **proof of blocks 2,501..2,600, round-4 image** | **1× RTX PRO 6000, RunPod** | **proved: a base step and 99 recursive steps, 1,452 s of proving, ~$1.52** including the 391 s build. Verified on the laptop (DEMO verdict, below); the verify on the pod **failed**, see below |
 
 **The GPU proof:**
 - **Anchor:** block 2,501 is a base step on the committed state at 2,500 from the laptop sweep. Every later block's

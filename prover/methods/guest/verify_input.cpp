@@ -332,10 +332,12 @@ extern "C" void coin_leaf_only(const uint8_t* tx_bytes, unsigned tx_len, unsigne
 // and identify in-block-created coins. Provably-unspendable outputs (Core CScript::IsUnspendable():
 // OP_RETURN, or script > MAX_SCRIPT_SIZE) never enter the UTXO set and are skipped. Each leaf uses the
 // SAME commitment as a spent coin, so a created-output leaf equals the leaf later presented to spend it:
-//   SHA256( txid || vout || value || scriptPubKey || height || is_coinbase || block_time ).
+//   SHA256( 0x00 || txid || vout || value || len(scriptPubKey) || scriptPubKey || height || is_coinbase
+//           || creation_mtp ), creation_mtp = the median-time-past of the creating block's PARENT
+//   (docs/libzync/UTREEXO_FORMAT.md section 2 is the byte-exact statement).
 // Writes n*32 leaf bytes into `out` and the tx's txid (32 bytes) into `out_txid`; returns n.
 extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
-                                  uint32_t height, uint32_t is_coinbase, uint32_t block_time,
+                                  uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
                                   uint8_t* out, uint8_t* out_txid) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
@@ -356,7 +358,7 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
 #ifdef HAZYNC_LEAF_ONEBUF
         if (hz_leaf(out + (size_t)n * 32, reinterpret_cast<const unsigned char*>(txid.begin()), v, (uint64_t)o.nValue,
                     reinterpret_cast<const unsigned char*>(o.scriptPubKey.data()), o.scriptPubKey.size(),
-                    height, is_coinbase, block_time)) { n++; continue; }
+                    height, is_coinbase, creation_mtp)) { n++; continue; }
 #endif
         CSHA256 h;
         h.Write(&TAG_LEAF, 1);
@@ -368,7 +370,7 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
         h.Write(reinterpret_cast<const unsigned char*>(o.scriptPubKey.data()), o.scriptPubKey.size());
         le(b8, height, 4); h.Write(b8, 4);
         unsigned char cb = (unsigned char)(is_coinbase ? 1 : 0); h.Write(&cb, 1);
-        le(b8, block_time, 4); h.Write(b8, 4);
+        le(b8, creation_mtp, 4); h.Write(b8, 4);
         h.Finalize(out + (size_t)n * 32);
         n++;
     }
@@ -381,14 +383,14 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
 // decoding it again in the serial aggregate. The aggregate's `gather()` cost 143 M cycles on block
 // 962,000 doing exactly this work over bytes the chunks were already holding.
 //
-// ⚠ THE LEAF COMMITS TO `block_time` (the block's median-time-past), so a caller computing these in a
+// ⚠ THE LEAF COMMITS TO `creation_mtp` (the median-time-past of the block's parent), so a caller computing these in a
 // chunk must use the SAME value the aggregate will. Unlike the lock check, getting that wrong is
 // FAIL-CLOSED: a mismatched leaf will not match `root_next`, so the block is rejected rather than
 // wrongly accepted. A systematic mismatch breaks every block loudly instead of accepting bad ones.
 extern "C" uint32_t tx_out_leaves_from(const uint8_t* tx_bytes, unsigned tx_len,
-                                       uint32_t height, uint32_t is_coinbase, uint32_t block_time,
+                                       uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
                                        uint8_t* out, uint8_t* out_txid) {
-    return tx_out_leaves(tx_bytes, tx_len, height, is_coinbase, block_time, out, out_txid);
+    return tx_out_leaves(tx_bytes, tx_len, height, is_coinbase, creation_mtp, out, out_txid);
 }
 
 
@@ -492,7 +494,7 @@ extern "C" int check_input_locks_batch(const uint8_t* tx_bytes, unsigned tx_len,
     for (unsigned k = 0; k < n; k++) {
         const unsigned i = input_idx[k];
         if (i >= mtx.vin.size()) { out_results[k] = -43; continue; }
-        if (coin_is_coinbase[k] && spend_height < coin_height[k] + 100) { out_results[k] = -40; continue; }
+        if (coin_is_coinbase[k] && (uint64_t)spend_height < (uint64_t)coin_height[k] + 100) { out_results[k] = -40; continue; }
         uint32_t seq = mtx.vin[i].nSequence;
         int32_t res = 1;
         if (spend_height >= (uint32_t)net_params().CSVHeight && mtx.version >= 2 && !(seq & DISABLE)) {
@@ -500,8 +502,8 @@ extern "C" int check_input_locks_batch(const uint8_t* tx_bytes, unsigned tx_len,
                 uint64_t required = (uint64_t)coin_mtp[k] + (((uint64_t)(seq & MASK)) << GRANULARITY);
                 if ((uint64_t)spend_mtp < required) res = -42;
             } else {
-                uint32_t required = coin_height[k] + (seq & MASK);
-                if (spend_height < required) res = -41;
+                uint64_t required = (uint64_t)coin_height[k] + (seq & MASK); // 64-bit: no wraparound (audit 6)
+                if ((uint64_t)spend_height < required) res = -41;
             }
         }
         out_results[k] = res;
@@ -524,7 +526,7 @@ extern "C" int check_input_locks(const uint8_t* tx_bytes, unsigned tx_len, unsig
     // malicious witness triggers an OOB std::vector access below rather than a clean rejection.
     if (input_idx >= mtx.vin.size()) return -43;
     // Coinbase maturity: a coinbase output is unspendable for COINBASE_MATURITY (100) blocks.
-    if (coin_is_coinbase && spend_height < coin_height + 100) return -40;
+    if (coin_is_coinbase && (uint64_t)spend_height < (uint64_t)coin_height + 100) return -40; // 64-bit (audit 6)
     // BIP68 relative locktime — only ENFORCED once CSV is active (Core sets LOCKTIME_VERIFY_SEQUENCE
     // from CSVHeight 419328; below that CalculateSequenceLocks imposes no constraint), and only for tx
     // version >= 2 with the disable bit clear. Gating on spend_height matches Core; without it the guest
@@ -537,8 +539,8 @@ extern "C" int check_input_locks(const uint8_t* tx_bytes, unsigned tx_len, unsig
             uint64_t required = (uint64_t)coin_mtp + (((uint64_t)(seq & MASK)) << GRANULARITY);
             if ((uint64_t)spend_mtp < required) return -42;
         } else {
-            uint32_t required = coin_height + (seq & MASK);
-            if (spend_height < required) return -41;
+            uint64_t required = (uint64_t)coin_height + (seq & MASK); // 64-bit: no wraparound (audit 6)
+            if ((uint64_t)spend_height < required) return -41;
         }
     }
     return 1;
@@ -815,7 +817,10 @@ extern "C" int64_t tx_full_sigops(const uint8_t* tx_bytes, unsigned tx_len,
     for (const auto& in : tx.vin) legacy += in.scriptSig.GetSigOpCount(false);
     for (const auto& o : tx.vout) legacy += o.scriptPubKey.GetSigOpCount(false);
     int64_t cost = legacy * WITNESS_SCALE_FACTOR;
-    if (tx.IsCoinBase() || prevouts_len == 0) return cost;
+    if (tx.IsCoinBase()) return cost;
+    // A non-coinbase tx with no spent coins is malformed: fail CLOSED with the N3 poison cost below, rather
+    // than return the legacy-only cost and rely on another function trapping on the same buffer (audit 6).
+    if (prevouts_len == 0) return 1LL << 40;
 
     #ifdef HAZYNC_AGG_LITE
     const std::vector<CTxOut>& spent = cached_spent(prevouts, prevouts_len);
@@ -828,7 +833,7 @@ extern "C" int64_t tx_full_sigops(const uint8_t* tx_bytes, unsigned tx_len,
     // N3: a non-coinbase tx with fewer spent coins than inputs is malformed. Fail CLOSED with a poison
     // sigop cost (>> MAX_BLOCK_SIGOPS_COST, but small enough that summing across a block can't overflow
     // i64) so sigops_ok becomes false — instead of silently returning the legacy-only cost and leaning on
-    // verify_input's independent -60 rejection. (The coinbase / prevouts_len==0 case returned above.)
+    // verify_input's independent -60 rejection. (Coinbase and prevouts_len==0 returned above.)
     if (spent.size() < tx.vin.size()) return 1LL << 40;
     for (size_t i = 0; i < tx.vin.size(); i++) {
         const CScript& spk = spent[i].scriptPubKey;

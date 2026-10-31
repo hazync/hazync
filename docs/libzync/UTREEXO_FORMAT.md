@@ -36,9 +36,7 @@ The preimage is `58 + len(scriptPubKey)` bytes.
   before the creating block, or of all of them when fewer than 11 exist. BIP68 time locks measure from it.
   Median means sort ascending and take element `n / 2`, as Core's `GetMedianTimePast` does.
 - A plain SHA-256, not double SHA-256 and not a BIP340 tagged hash.
-- In `verify_input.cpp`, `tx_out_leaves` takes this value in a parameter named `block_time`, and its comment shows
-  an older preimage without the tag or the script length. The code computes what this section states; the name
-  and comment are stale and are left unchanged because editing the guest source would move its image id.
+- In `verify_input.cpp`, `tx_out_leaves` takes this value as `creation_mtp`.
 
 ## 3. Which outputs are leaves
 

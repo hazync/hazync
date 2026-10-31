@@ -195,7 +195,7 @@ equivalence, one on the Core patches. Findings and status:
 | 9 | the documented verifier checks omitted `anchor_id` and the image id | interface, critical as documented | **fixed**: `host libzync-verify` checks all of them |
 | 10 | the same external coin spent twice in one block only failed at H | completeness of error location | **fixed**: rejected in that block |
 | 11 | hint-block padding not required to be zero | hygiene | **fixed** |
-| 12 | `hz_copy` reads up to 3 bytes past a buffer (UB at -O3); the `CMutableTransaction` sighash fast path is unsafe if ever used for signing | hygiene | open, documented |
+| 12 | `hz_copy` reads up to 3 bytes past a buffer (UB at -O3); the `CMutableTransaction` sighash fast path is unsafe if ever used for signing | hygiene | `hz_copy` **fixed in round 7**; the sighash note stands (verification only, never signing) |
 
 **Retest after the fixes** (guest `09a02eed…`; output in `experimental/libzync-bench/swiftsync/r18_fixed_tests.out`):
 
@@ -304,11 +304,33 @@ preimage byte for byte. The raw-txid seeding relies on Core's canonical deserial
 | 44 | an empty `HAZYNC_VERIFY_NOW` counted as an override | interface | **fixed**: empty = unset, as for `RISC0_DEV_MODE` |
 | 45 | dev-mode and time-too-new logic duplicated across the two verifiers; `max_time` fill parsed every block file twice | maintenance, cost | **fixed**: shared helpers; the fill comes from the replay's own pass |
 | 46 | round-5 evidence not reproducible from committed scripts | evidence | **fixed**: `audit_r5/run_r5.sh` regenerates both outputs |
-| 47 | C++: `tx_full_sigops` returns legacy-only cost when the prevouts blob is empty (safe only because the chunk already trapped on it); `uint32_t` wraparound in `check_input_locks*` (paths not in a libzync image); `hz_copy` also reads up to 3 bytes **before** the source (addendum to #12; data correct) | hygiene | **open**: each is a guest-source change that moves the image id; batch them with the next image change |
+| 47 | C++: `tx_full_sigops` returns legacy-only cost when the prevouts blob is empty (safe only because the chunk already trapped on it); `uint32_t` wraparound in `check_input_locks*` (paths not in a libzync image); `hz_copy` also reads up to 3 bytes **before** the source (addendum to #12; data correct) | hygiene | **fixed in round 7** |
+
+### Round 7: the guest hygiene items (2026-10-31)
+
+The three C++ items of #47, and #12's `hz_copy`, fixed in the guest source. This moves the image ids, accepted for
+this branch: **mainnet `a50c3bac…`, signet `5e552ce9…`**. The Core/libsecp tree is rebuilt from the repo's patches
+by `scripts/libzync-base.sh` (the build tree used until now matched them, apart from build outputs).
+
+| change | where |
+|---|---|
+| `hz_copy`: byte copy under 12 bytes, `__builtin_memcpy` otherwise. No access outside the source or destination, no `uint32_t` access to byte buffers | `patches/libzync/0101` (SHA_STREAM) |
+| `tx_full_sigops`: a non-coinbase tx with an empty prevouts blob returns the poison cost (fails closed by itself) | `verify_input.cpp` |
+| maturity and BIP68 height arithmetic in 64 bits in both lock checks | `verify_input.cpp` |
+| `tx_out_leaves`: parameter named `creation_mtp`, comment states the real preimage | `verify_input.cpp` |
+
+**Retest** (`experimental/libzync-bench/audit_r5/`, same suite):
+- block 962,000 valid;
+- every committed state identical: both sweeps BALANCED with `REF_MATCH`, `max_time` and profile as before;
+- the flip and `is_base = 2` negatives fail as they should; BIP325 check OK; genesis `anchor_id` matches the
+  independent script on both networks.
+
+Cost of the memcpy copy: chunks 342,910,547 → 344,047,105 cycles (+0.33%), aggregate 64,309,178 → 64,309,273.
 
 ## 8. Signet
 
-**Build:** `HAZYNC_NETWORK=signet`, guest `c3501ac9…` (round 4; first built as `cf7f75ff…`). What changes:
+**Build:** `HAZYNC_NETWORK=signet`, guest `5e552ce9…` (round 7; `c3501ac9…` in round 4, the image the GPU proof
+below used; first built as `cf7f75ff…`). What changes:
 - Core's own `CChainParams::SigNet` (default challenge) replaces `Main()`;
 - Core's `signet.cpp` is compiled in;
 - the aggregate calls Core's unmodified `CheckSignetBlockSolution`;
