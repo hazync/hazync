@@ -1,0 +1,24 @@
+== 1. block 962,000 valid
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  block validation cycles  64309178
+rc=0
+== 2. negative: is_base = 2 (must be refused)
+is_base must be 0 or 1, got 2
+== 3. mainnet sweep 1..200 (saved), reference forest, max_time/profile; then a flip
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  max_time 1231753120 (block files' largest time 1..200: 1231753120) -> OK; profile 0x1 -> OK
+SWEEP_FAIL
+== 4. signet sweep 1..2600 (saved): reference forest, profile = libzync|signet
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  forest: 293 leaves (= coins unspent at H), roots 4
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  profile 0x5 -> OK  max_time 1599732600
+== 5. signet BIP325 check still works
+signet-check-test block 2523: one txid changed -> 0
+SIGNET_CHECK_OK
+R4_TESTS_DONE
+REG_DONE

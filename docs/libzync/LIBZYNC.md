@@ -254,11 +254,37 @@ holds once the map is single-valued.
 | item | change |
 |---|---|
 | `time-too-new` | `ChainState.max_time` = the largest block timestamp so far. `libzync-verify` requires `max_time <= now + 7200` on its own clock, as Core does for every block during IBD. OpenTimestamps was considered and does not help: it bounds a time by Bitcoin block times, which are miner-set within the same 2 hours |
-| scripts-on vs assumevalid in the proof | `ChainState.profile`: bit 0 libzync, bit 1 scripts SKIPPED, bit 2 signet. Bit 1 comes from `hz_no_scripts()` in `verify_input.cpp`, the file that does or skips the checks, so the label cannot disagree with the code. A recursive step requires the previous profile to equal its own; the verifier requires the profile it was built for |
+| scripts-on vs assumevalid in the proof | `ChainState.profile`: bit 0 libzync, bit 1 scripts SKIPPED, bit 2 signet. Bit 1 comes from `hz_no_scripts()` in `verify_input.cpp`, the file that does or skips the checks. In a libzync image (always the tx-once path, where the `#ifdef` acts) the label is exact; a non-tx-once build with the flag would check scripts yet claim it skipped them, the safe direction. A recursive step requires the previous profile to equal its own; the verifier requires the profile it was built for |
 | Utreexo format | standalone spec [`UTREEXO_FORMAT.md`](UTREEXO_FORMAT.md) with a test vector, and an independent implementation `scripts/libzync/utreexo_ref.py` that checks the guest's committed forest from the block files alone |
 | Utreexo compatibility | measured (bench §7): a SHA-512/256 parent costs 14,530 cycles against 929. The blocker is that utreexod's roots depend on deletion history, so compatibility means proving every deletion |
 
 Guests: mainnet `ddcaf1d0…`, signet `c3501ac9…`.
+
+### Round 5: audit of round 4 and the verifier (2026-10-31)
+
+Three fresh reviews: a code review of `196086d..` (round 4), an adversarial pass over the guest, and one over the
+verifier, specs and evidence. The guest held: no way was found to make it commit a wrong state, and the round-4
+fields are bound (`max_time` through `anchor_id`, `profile` as a constant of the image). Every fix below is
+host-side or documentation, so the image ids are unchanged.
+
+| # | finding | severity | status |
+|---|---|---|---|
+| 29 | **`verify-chain` on a libzync build accepted a libzync receipt** with none of libzync-verify's checks (hints file, `ss_set == 0`, profile, time-too-new, dev-mode refusal): a chain spending a fabricated coin printed `CHAIN PROOF VERIFIED` | verifier soundness, critical for that command | **fixed**: refused on a libzync build; on a canonical build it now refuses fake/dev-mode receipts and applies time-too-new |
+| 30 | `HAZYNC_VERIFY_NOW` (test clock) was honoured silently; an unparsable value fell back to the real clock | verifier hygiene | **fixed**: when set it is itself a failed check, so the verdict is never OK or DEMO |
+| 31 | the OK verdict line did not say ASSUMEVALID | interface (same class as #17) | **fixed** |
+| 32 | §5 step 3 (genesis `anchor_id`) could not be implemented from the spec | spec | **fixed**: field values and encoding in the proposal, an independent `scripts/libzync/genesis_anchor_id.py`, test vectors; it matches the guest on both networks (and caught that genesis `utxo_roots` is `[None]`, not empty) |
+| 33 | signet evidence: the pod's own verify **failed** on `anchor_id`; the passing verify used `anchor_effective.json`, whose BIP30 tree the prover seeded from the range's coinbase spends; the docs said "verified" and that the state equalled the sweep's apart from `anchor_id` (`smt_root` differs too) | evidence integrity | **fixed** in the docs; `pod/run.sh` annotated; the next run must ship blocks 1..2,500 so the tree is replayed against the sweep's anchor |
+| 34 | the GPU deadline watcher terminated the pod without fetching its output | evidence loss | **fixed**: the deadline harvests first; the main loops stop when it fires |
+| 35 | an empty METHOD_ID pin passed `prep.sh` (`grep -q ""`) | pin check | **fixed**: a 64-hex id is required and matched as a word |
+| 36 | `max_time` back-fill for old anchors used only the last 11 timestamps | hygiene (demonstration anchors only) | **fixed**: exact from the block files when they are present; a warning otherwise |
+| 37 | unreadable inputs made `libzync-verify` exit 101 (a panic), outside the documented 0 / 2 / 1 | interface | **fixed**: `LIBZYNC_VERIFY_FAIL`, exit 1 |
+| 38 | `swiftsync-file-hash` labelled a non-canonical file but exited 0, contrary to #25's status | interface | **fixed**: exit 1 |
+| 39 | docs: per-block times counted the base step as a transaction block; the Utreexo spec's "exactly the coins unspent at H" missed the mainnet 91,722 / 91,812 window; "the label cannot disagree" overstated (exact in the tx-once path every libzync image uses); `tx_out_leaves`' parameter name and comment are stale | docs | **fixed** in the docs; the `.cpp` comment is left, since editing the guest source moves the image id |
+
+**Considered and not changed:** the aggregate's `prev.profile == chain_profile()` check is implied by `self_id`
+(kept as a cheap second statement of it); `chain_step` has no profile check (unreachable in a libzync image); the
+canonical image id on this branch differs from `main` (expected since audit 3); a float conversion in a fleet
+fetcher (false: it parses with `Decimal`).
 
 ## 8. Signet
 
@@ -286,9 +312,12 @@ equivalent).
 
 **GPU** (proposal §10):
 - first run (pre-audit `cf7f75ff`): signet 2,501..2,600 in 1,464 s ($1.39), verified;
-- **re-proved on the round-4 image `c3501ac9`:** 1,452 s of proving on 1× RTX PRO 6000, ~$1.52, verified (DEMO
-  verdict: anchored at 2,500); receipts 225–227 KB; evidence in `experimental/libzync-bench/signet/gpu_r4/`;
-- 8.7–9.2 s per coinbase-only block, 14.7–16.7 s per small transaction block, 514 s for block 2,523.
+- **re-proved on the round-4 image `c3501ac9`:** 1,452 s of proving on 1× RTX PRO 6000, ~$1.52; verified on the
+  laptop (DEMO verdict) against the prover-written `anchor_effective.json`, whose BIP30 tree was seeded from this
+  range's coinbase spends; the pod's own verify against the sweep anchor failed on `anchor_id` (proposal §10);
+  receipts 225–227 KB; evidence in `experimental/libzync-bench/signet/gpu_r4/`;
+- 8.7–9.2 s per coinbase-only recursive block, 14.7 s for the base step, 16.5–16.7 s per small transaction block,
+  514 s for block 2,523.
 
 **Found on the GPU run: the BIP30 coinbase-txid SMT dominates blocks that spend many coinbases.**
 - Signet block 2,523 spends 374 coinbase outputs (514–549 s on the GPU). Its aggregate executes **565 M cycles**, of which **557 M (97%)** is

@@ -13,5 +13,7 @@ HAZYNC_GUEST_ELF=/workspace/sb/method.bin HAZYNC_GUEST_PIN_DIR=/workspace/sb/pin
   cargo build --release --features cuda -p host > /workspace/build.log 2>&1 || { echo PREP_FAIL build; tail -n 15 /workspace/build.log; exit 1; }
 echo "built in $((SECONDS-T0)) s"
 ldd target/release/host | grep -qi cuda || { echo PREP_FAIL nocuda; exit 1; }
-target/release/host method-id | grep -q "$(cat /workspace/sb/pins/METHOD_ID | grep -v '^#' | head -1)" || { echo PREP_FAIL methodid; exit 1; }
+# An empty pin would make `grep -q ""` match anything (review 5): require a 64-hex id, then match it exactly.
+M=$(grep -v '^#' /workspace/sb/pins/METHOD_ID | head -1); echo "$M" | grep -Eq '^[0-9a-f]{64}$' || { echo PREP_FAIL pin-empty; exit 1; }
+target/release/host method-id | grep -qw "$M" || { echo PREP_FAIL methodid; exit 1; }
 echo PREP_OK

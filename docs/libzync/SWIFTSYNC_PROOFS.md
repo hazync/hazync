@@ -129,6 +129,19 @@ Given a receipt R, the hints file F and the network:
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
    nothing about history.
+   - The genesis ChainState, in field order: `kind = 0xC4A10002`; `tip_hash` = the genesis hash (internal byte
+     order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0`; `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
+     little-endian; `height = 0`; `prev_nbits` = genesis nBits; `prev_time = epoch_start` = genesis time;
+     `recent_times = [genesis time]`; `anchor_id` = 32 zero bytes; `self_id = M` (so the genesis journal, and its
+     digest, are per image); `ss_set = 0`; `ss_acc` = 16 zero words; `ss_hints` = 32 zero bytes; `smt_root` = the
+     empty coinbase-SMT root; `max_time` = genesis time; `profile = 0`.
+   - The journal is risc0's serde word encoding (risc0-zkvm 3.0.5 `serde::to_vec`, each word little-endian): every
+     integer up to 32 bits and every byte of a fixed array takes one u32 word, a u64 two, a list is its length then
+     its elements, and an `Option` is a 0/1 word followed by the value when present.
+   - `host libzync-verify` computes this itself. `scripts/libzync/genesis_anchor_id.py` computes it from this text
+     alone, and matches what the guest commits after a base step on genesis. Test vectors:
+     mainnet `ddcaf1d0…` → `6178a96dd2b758f14d4c46ecea6a19963855a8e2feae83abbcae959636b6674a`;
+     signet `c3501ac9…` → `91ccd466f6efd6609ca24a9b4c58406de61211a9e53226a30be6dfe13906461a`.
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
@@ -148,7 +161,10 @@ Given a receipt R, the hints file F and the network:
 step 7. It ends in one of three verdicts:
 - `LIBZYNC_VERIFY_OK` (exit 0): a genesis-anchored proof;
 - `LIBZYNC_VERIFY_DEMO` (exit 2): a proof checked against a supplied anchor, which is never a proof of the file;
-- `LIBZYNC_VERIFY_FAIL` (exit 1).
+- `LIBZYNC_VERIFY_FAIL` (exit 1), including an unreadable or malformed receipt, anchor or hints file.
+
+An OK verdict for an assumevalid image says so on the verdict line itself. `HAZYNC_VERIFY_NOW` replaces the clock in
+step 11 for negative tests only; when it is set, that is itself a failed check, so the verdict is never OK or DEMO.
 
 **Example output.** The real run of §10 on the current signet image, re-verified on a laptop from the 226 KB receipt.
 A demonstration anchor (§10) makes the verdict `LIBZYNC_VERIFY_DEMO`, never OK:
@@ -294,20 +310,32 @@ All measured 2026-10-30.
 | design B, blocks 1..3,000, from genesis | laptop, execute | **BALANCED**; forest = the 695 coins unspent at 3,000; 687 s |
 | design B, blocks 1..2,600, from genesis | laptop, execute | **BALANCED**; forest = 293 coins; state saved at 2,500 |
 | forest vs the independent reference (`utreexo_ref.py`) at 2,600 | laptop | **REF_MATCH**: identical roots, 293 coins |
-| **proof of blocks 2,501..2,600, current image** | **1× RTX PRO 6000, RunPod** | **verified, 100 recursive steps, 1,452 s of proving, ~$1.52** including the 391 s build |
+| **proof of blocks 2,501..2,600, current image** | **1× RTX PRO 6000, RunPod** | **proved: a base step and 99 recursive steps, 1,452 s of proving, ~$1.52** including the 391 s build. Verified on the laptop (DEMO verdict, below); the verify on the pod **failed**, see below |
 
 **The GPU proof:**
 - **Anchor:** block 2,501 is a base step on the committed state at 2,500 from the laptop sweep. Every later block's
   aggregate verifies the previous block's receipt inside the proof.
-- **Final receipt:** `experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt` (226 KB), re-verified on a laptop
-  (`verify_local.log`). Negative checks in `verify_negatives.log`: a clock set before the last block fails
+- **What the anchor contains.** The bundle carried only blocks 2,501..2,600, so `libzync-prove-range` could not
+  replay the BIP30 coinbase tree to 2,500. It seeded the tree with the pre-2,501 coinbases this range spends, set the
+  anchor's `smt_root` to that root, and proved from that anchor, written as `anchor_effective.json`. It differs from
+  the sweep's state at 2,500 **only in `smt_root`**. So this receipt trusts a BIP30 tree the prover chose, as well as
+  the rest of the 2,500 state. The next run should ship blocks 1..2,500 so the tree is replayed and checked against
+  the sweep's anchor.
+- **Final receipt:** `experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt` (226 KB), verified on a laptop
+  against `anchor_effective.json` (`verify_local.log`: DEMO, exit 2). The verify **on the pod** gave the sweep's
+  `anchor.json` and **failed on `anchor_id`** for the reason above (`verify_pod.log`); `pod/run.sh` was corrected
+  after that run. Negative checks in `verify_negatives.log`: a clock set before the last block fails
   `time-too-new`; the mainnet verifier fails it on image and profile; the receipt at 2,530 fails on height and hash.
 - **Matches the node:** its tip is signet block 2,600 as the node reports it (`00000127dfa0…e6f3`).
-- **Matches the laptop:** its whole committed state equals the laptop sweep's at 2,600, apart from `anchor_id`
-  (the sweep started at genesis).
+- **Matches the laptop:** its committed state equals the laptop sweep's at 2,600 apart from two fields:
+  - `smt_root`, because the proof's BIP30 tree was seeded from this range's coinbase spends (above), not replayed
+    from genesis;
+  - `anchor_id`: the sweep executes every block as a base step on the previous block's state, so its `anchor_id`
+    is the digest of that state; the proof's is the digest of the 2,500 anchor it started from.
 - **Per block:**
-  - coinbase-only blocks: **8.7–9.2 s** (91 blocks);
-  - blocks with transactions: **14.7–16.7 s**;
+  - the base step, block 2,501 (coinbase-only, no previous receipt to verify): **14.7 s**;
+  - coinbase-only recursive blocks: **8.7–9.2 s** (91 blocks);
+  - blocks with transactions: **16.5–16.7 s** (7 blocks, one chunk each);
   - block 2,523: **514 s**. It spends 374 coinbase outputs, and 97% of its aggregate is Hazync's BIP30 coinbase SMT
     (~1.5 M cycles per coinbase spend). That is a known, separable cost (`LIBZYNC.md` §8).
 

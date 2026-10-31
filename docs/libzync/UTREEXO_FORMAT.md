@@ -11,7 +11,9 @@ from this document is `scripts/libzync/utreexo_ref.py`; §6 says how the two are
 
 At SwiftSync stop height H a libzync chain proof commits `ChainState.utxo_roots` and `ChainState.utxo_leaves`:
 an append-only Utreexo forest whose leaves are **exactly the coins unspent at H**, one leaf per coin, in
-creation order. Nothing is ever deleted from it. Coins the hints file marks spent go to the ECMH total instead,
+creation order. One mainnet exception: for H from 91,722 to 91,879, Core's UTXO set still holds the coinbase
+outputs of 91,722 and/or 91,812 until they are overwritten; this forest never holds them (§3.2), matching the
+hints-file numbering. Nothing is ever deleted from it. Coins the hints file marks spent go to the ECMH total instead,
 which must be the identity at H (`ss_set == 0`).
 
 ## 2. Leaf
@@ -34,6 +36,9 @@ The preimage is `58 + len(scriptPubKey)` bytes.
   before the creating block, or of all of them when fewer than 11 exist. BIP68 time locks measure from it.
   Median means sort ascending and take element `n / 2`, as Core's `GetMedianTimePast` does.
 - A plain SHA-256, not double SHA-256 and not a BIP340 tagged hash.
+- In `verify_input.cpp`, `tx_out_leaves` takes this value in a parameter named `block_time`, and its comment shows
+  an older preimage without the tag or the script length. The code computes what this section states; the name
+  and comment are stale and are left unchanged because editing the guest source would move its image id.
 
 ## 3. Which outputs are leaves
 

@@ -96,7 +96,7 @@ def main():
     for h in range(1, H + 1):
         j = json.load(open(f"{d}/block_{h}.json"))
         m = mtp(j["recent_times"])   # MTP of the parent: the creation MTP every leaf of this block commits
-        bip30 = BIP30_UNSPENDABLE.get(h) == header_hash(j)
+        bip30 = h in BIP30_UNSPENDABLE and BIP30_UNSPENDABLE[h] == header_hash(j)
         raws = [bytes.fromhex(j["coinbase_hex"])] + [bytes.fromhex(t["raw"]) for t in j["txs"]]
         for k, raw in enumerate(raws):
             txid, ins, outs = parse_tx(raw)
