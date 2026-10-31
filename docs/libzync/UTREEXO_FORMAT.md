@@ -115,6 +115,12 @@ The last row is why converting is not a re-hash. Matching utreexod would mean pr
 Measured: 14,530 cycles per SHA-512/256 parent in the guest, against 929 for ours. That puts the total at an
 ESTIMATED ~6× a current block's cycles (`experimental/libzync-bench/README.md` §7).
 
-A node holding the UTXO set at H, for example from `dumptxoutset` plus each coin's creation MTP, can rebuild
-this forest and compare it with the proof. A standard `dumptxoutset` lacks `creation_mtp`, so a snapshot for
-this purpose must carry it.
+A node holding the UTXO set at H can rebuild this forest and compare it with the proof.
+`scripts/libzync/utxo_snapshot_check.py <dumptxoutset file> --bitcoin-cli "<command>" [--state state.json]` does
+it from a standard Core v28 `dumptxoutset` file: the snapshot gives the coins, and the user's own node gives what
+the snapshot lacks (each coin's creation MTP, from the parent header's `mediantime`, and its creation order, from
+the block's transaction list). `scripts/libzync/test_utxo_snapshot.py` checks it end to end without a node, by
+writing the UTXO set from the block files in Core's snapshot encoding and answering the RPC calls from the same
+files: it matches the guest's committed forest at signet 2,600 (293 coins) and mainnet 200 (204 coins, which
+exercises the uncompressed-key script compression), and a one-satoshi change to one coin is a mismatch. It has not
+yet been run on a snapshot written by Core itself.
