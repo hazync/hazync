@@ -209,6 +209,8 @@ extern "C" {
     #[cfg(feature = "libzync")]
     fn hz_weight_c(tx: *const u8, tx_len: u32) -> i64;
     #[cfg(feature = "libzync")]
+    fn hz_reject_reason(out: *mut u8, cap: u32) -> u32;
+    #[cfg(feature = "libzync")]
     fn hz_indicated_height(cb: *const u8, cb_len: u32) -> u32;
     #[cfg(feature = "libzync")]
     fn hz_block_flags_c(height: u32, block_hash: *const u8) -> u32;
@@ -297,6 +299,10 @@ fn assert_core_constants() {
         assert_eq!(BIP34_HEIGHT, core_bip34_height(), "BIP34Height != Core");
         // libzync/src/net.rs, pinned to Core's own chainparams for the network this guest was built for.
         assert_eq!(NET.pow_limit_bits, core_pow_limit_bits(), "powLimit != Core ({})", NET.name);
+        assert_eq!(NET.bip66_height, core_bip66_height(), "NET.bip66_height != Core ({})", NET.name);
+        assert_eq!(NET.bip65_height, core_bip65_height(), "NET.bip65_height != Core ({})", NET.name);
+        assert_eq!(NET.csv_height, core_csv_height(), "NET.csv_height != Core ({})", NET.name);
+        assert_eq!(NET.segwit_height, core_segwit_height(), "NET.segwit_height != Core ({})", NET.name);
         assert_eq!(net::hash_le(NET.genesis_hex), {
             let mut g = [0u8; 32];
             core_genesis_hash(g.as_mut_ptr());
@@ -1456,6 +1462,14 @@ fn decode_words<T: for<'de> Deserialize<'de>>(journal: &[u8]) -> T {
     risc0_zkvm::serde::from_slice(&words).expect("decode journal")
 }
 
+/// Log Core's reject reason for the rule that just failed. For the differential rig; the verdict never reads it.
+#[cfg(feature = "libzync")]
+pub fn log_reject() {
+    let mut b = [0u8; 64];
+    let n = unsafe { hz_reject_reason(b.as_mut_ptr(), 64) } as usize;
+    env::log(&format!("core-reject: {}", core::str::from_utf8(&b[..n]).unwrap_or("?")));
+}
+
 // libzync: Core's own CBlockIndex::GetMedianTimePast.
 #[cfg(feature = "libzync")]
 fn median_time_past(times: &[u32]) -> u32 {
@@ -2114,6 +2128,7 @@ fn aggregate() {
     #[cfg(feature = "libzync")]
     let (retarget_ok, time_ok) = {
         let ok = unsafe { hz_header_rules_c(w.header.as_ptr(), height, prev.prev_nbits, prev.prev_time, prev_mtp, prev.epoch_start) } == 1;
+        if !ok { log_reject(); }
         (ok, ok)
     };
     #[cfg(not(feature = "libzync"))]

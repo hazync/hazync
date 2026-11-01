@@ -18,7 +18,7 @@ from test_framework.blocktools import add_witness_commitment, create_block, crea
 from test_framework.messages import COIN, COutPoint, CTransaction, CTxIn, CTxInWitness, CTxOut, hash256, ser_uint256  # noqa: E402
 from test_framework.key import ECKey, compute_xonly_pubkey, generate_privkey, sign_schnorr, tweak_add_privkey  # noqa: E402
 from test_framework.script import (CScript, LegacySignatureHash, OP_0, OP_1, OP_2, OP_3, OP_CHECKMULTISIG, OP_CHECKSIG, OP_DROP,  # noqa: E402
-                                   OP_DUP, OP_ENDIF, OP_EQUAL, OP_EQUALVERIFY, OP_HASH160, OP_IF, OP_NOT, OP_RETURN, OP_TRUE, SIGHASH_ALL,
+                                   OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY, OP_DUP, OP_ENDIF, OP_EQUAL, OP_EQUALVERIFY, OP_HASH160, OP_IF, OP_NOT, OP_RETURN, OP_TRUE, SIGHASH_ALL,
                                    SIGHASH_DEFAULT, SegwitV0SignatureHash, TaprootSignatureHash, hash160, sha256, taproot_construct)
 
 BIN = os.environ.get("BITCOIND", os.path.expanduser("~/hazync-136432/core/bitcoin-31.1/bin/bitcoind"))
@@ -402,6 +402,38 @@ def c_tx_64_bytes(c):
     x = mature(c); t = spend(c, x, [(value(c, x), b"\x51\x51\x51\x51")]); assert len(t.serialize()) == 64; return c.block([t])
 
 
+# ---- rows that had no real case ----------------------------------------------------------------------------------
+def c_txns_duplicate(c):   # the merkle mutation: the last transaction twice, the root unchanged
+    x = mature(c, 2); a = spend(c, x[:1], [out(value(c, x[:1]))]); b = spend(c, x[1:], [out(value(c, x[1:]))])
+    k = c.block([a, b]); k.vtx.append(b); k.solve(); return k
+def c_prevout_null(c):
+    x = mature(c); t = spend(c, x, [out(value(c, x))]); t.vin.append(CTxIn(COutPoint(0, 0xffffffff), b"")); t.rehash(); return c.block([t])
+def c_unknown_prev(c):
+    k = c.block(); k.hashPrevBlock ^= 1; k.solve(); return k
+def c_version_1(c):
+    return c.block(version=1)
+def c_version_2(c):
+    return c.block(version=2)
+def c_cltv_future(c):
+    s0 = CScript([c.height + 100, OP_CHECKLOCKTIMEVERIFY, OP_DROP, OP_TRUE]); a, v = fund(c, s0)
+    t = spend(c, [(a.sha256, 0)], [out(v)], seq=0xfffffffe, locktime=c.height); return c.block([a, t])
+def c_cltv_met(c):
+    s0 = CScript([c.height, OP_CHECKLOCKTIMEVERIFY, OP_DROP, OP_TRUE]); a, v = fund(c, s0)
+    t = spend(c, [(a.sha256, 0)], [out(v)], seq=0xfffffffe, locktime=c.height); return c.block([a, t])
+def c_csv_op_unmet(c):
+    s0 = CScript([5, OP_CHECKSEQUENCEVERIFY, OP_DROP, OP_TRUE]); a, v = fund(c, s0)
+    t = spend(c, [(a.sha256, 0)], [out(v)], seq=4); return c.block([a, t])
+def c_csv_op_met(c):   # the coin is old enough: an in-block coin has age 0, so lock 0
+    s0 = CScript([0, OP_CHECKSEQUENCEVERIFY, OP_DROP, OP_TRUE]); a, v = fund(c, s0)
+    t = spend(c, [(a.sha256, 0)], [out(v)], seq=0); return c.block([a, t])
+def c_p2sh_redeem_fails(c):
+    red = CScript([OP_0]); a, v = fund(c, CScript([OP_HASH160, hash160(bytes(red)), OP_EQUAL]))
+    t = spend(c, [(a.sha256, 0)], [out(v)]); t.vin[0].scriptSig = CScript([bytes(red)]); t.rehash(); return c.block([a, t])
+def c_p2sh_ok(c):
+    red = CScript([OP_TRUE]); a, v = fund(c, CScript([OP_HASH160, hash160(bytes(red)), OP_EQUAL]))
+    t = spend(c, [(a.sha256, 0)], [out(v)]); t.vin[0].scriptSig = CScript([bytes(red)]); t.rehash(); return c.block([a, t])
+
+
 # ---- #26: a transaction repeated through a repeated coinbase. The base chain has staged it: coinbases at 20 and 21 indicate
 # 130 and 131, T1 and T2 spend them, both coinbases repeat at those heights, T2's outputs are then spent and T1's are not.
 def c_bip30_repeat_unspent(c):  # T1 again: its outputs are still unspent, so Core must say bad-txns-BIP30
@@ -410,6 +442,26 @@ def c_bip30_repeat_spent(c):    # T2 again: its outputs are gone, so Core must a
     return c.block([c.stage["t2"]])
 def c_bip30_child_of_repeat(c): # something new from the repeated coinbase: nothing to collide with
     o = (c.stage["c1"].sha256, 0); return c.block([spend(c, [o], [out(value(c, [o]))], version=1)])
+
+
+# Core's reason, and what the guest must say for its own code. A rule that is Core's text reports Core's string, so
+# those must match exactly; a rule of ours reports its failing check. A refusal for another reason is REASON, not AGREE.
+OURS = {"bad-cb-missing": r"C abort|REJECT|bv=false", "bad-cb-multiple": r"block INVALID|REJECT", "bad-cb-amount": "subsidy=false",
+        "bad-txnmrklroot": "merkle=false", "bad-txns-duplicate": r"REJECT|merkle=false", "bad-txns-inputs-missingorspent": "REJECT",
+        "bad-blk-sigops": "sigops=false", "bad-blk-length": r"core-reject: bad-blk-length|core-reject: bad-txns-oversize|weight",
+        "high-hash": "pow=false", "prev-blk-not-found": "ph=false", "bad-prevblk": "ph=false"}
+
+
+def reason_ok(core, t):
+    if core == "decode-failed":
+        return True
+    if core.startswith("bad-version"):
+        return "core-reject: bad-version" in t
+    if core.startswith("block-script-verify-flag-failed") or core.startswith("mandatory-script-verify-flag"):
+        return "core-reject: script" in t
+    if core in OURS:
+        return re.search(OURS[core], t) is not None
+    return f"core-reject: {core}" in t
 
 
 CASES = [(k[2:], v) for k, v in list(globals().items()) if k.startswith("c_")]
@@ -437,6 +489,9 @@ def guest(c, name, b, height):
     p = [l for l in t.splitlines() if "panicked" in l or "agg-lite: block INVALID" in l or "Guest panicked" in l or "failed" in l.lower()]
     why = " ".join(t[t.find("block INVALID"):][:160].split()) if "block INVALID" in t else (p[-1][:150] if p else "")
     in_guest = "Guest panicked" in t or "block INVALID" in t or "prove chunk" in t
+    m = re.findall(r"core-reject: \S+", t)
+    if m:
+        why = m[0] + " | " + why
     return r.returncode == 0, why, in_guest, t
 
 
@@ -500,13 +555,15 @@ def run():
         core_ok = core in ("", "null")
         if core_ok:
             cli("invalidateblock", b_hash)
-        g_ok, why, in_guest, _ = guest(c, name, b, c.height + 1)
+        g_ok, why, in_guest, g_text = guest(c, name, b, c.height + 1)
         if name in DEFERRED:
             state = "DEFERRED-OK" if (not core_ok and g_ok) else "CHECK"
         elif core_ok != g_ok:
             state = "DISAGREE"
         elif not g_ok and not in_guest and core != "decode-failed":
             state = "HOST-FAIL"
+        elif not g_ok and not reason_ok(core, g_text):
+            state = "REASON"
         else:
             state = "AGREE"
         res.append(state)

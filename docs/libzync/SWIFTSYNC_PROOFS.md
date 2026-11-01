@@ -43,9 +43,8 @@ block index (`prover/methods/guest/core_tx_rules.cpp`). `validation.cpp` is the 
 `ContextualCheckBlock`, `ContextualCheckBlockHeader`, `CheckWitnessMalleation`, `GetBlockScriptFlags`, `GetBlockSubsidy`
 and pow.cpp's `GetNextWorkRequired` are lifted out of Core's source at build time, so they are Core's text
 (`core_block_rules.cpp`). Median time past is Core's `CBlockIndex::GetMedianTimePast`. Signatures are verified by a batch equation instead of one libsecp call each, with
-the same acceptance as libsecp (`LIBZYNC.md` §7, round 6). The block-level bookkeeping (coin accounting, maturity,
-and the totals across chunks (coin accounting, fees, weight and sigop totals, BIP30) are our own code, in Rust
-(`prover/methods/guest/src/agg_lite.rs`), and are tested against Core block by block (`CONSENSUS_RULES.md`).
+the same acceptance as libsecp (`LIBZYNC.md` §7, round 6). The totals across chunks (coin accounting, fees,
+weight and sigop totals, BIP30) are our own code, in Rust (`prover/methods/guest/src/agg_lite.rs`), and are tested against Core block by block (`CONSENSUS_RULES.md`).
 [`CONSENSUS_RULES.md`](CONSENSUS_RULES.md) compares the guest with Core's reject reasons, rule by rule.
 
 **Known differences from Core:**

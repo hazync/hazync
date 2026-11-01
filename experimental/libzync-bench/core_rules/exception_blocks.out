@@ -1,0 +1,6 @@
+CHUNK_JOURNALS vs round 8: IDENTICAL 16
+b962000 rc 0 chunks 361,473,807 aggregate 64,535,363 whole 426,009,170 []
+b170060 rc 0 chunks 5,528,639 aggregate 2,972,512 whole 8,501,151 []
+b692261 rc 0 chunks 424,522,811 aggregate 76,326,304 whole 500,849,115 []
+ctl170060 hints rc 101 chunks all_valid 10
+ctl692261 hints rc 101 chunks all_valid 1011111111111111

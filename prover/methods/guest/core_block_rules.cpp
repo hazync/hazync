@@ -41,6 +41,7 @@
 #include <pow.h>
 
 const Consensus::Params& hz_net_params();
+extern std::string hz_last_reject;
 extern "C" uint32_t calc_next_bits(uint32_t prev_bits, int64_t first_time, int64_t last_time);
 
 class HzBlockIndexH {
@@ -142,7 +143,9 @@ bool hz_header_rules(const uint8_t* header, int height, uint32_t prev_bits, int6
     prev.m_first = &first;
     BlockValidationState state;
     BlockManager blockman;
-    return ContextualCheckBlockHeader(h, state, blockman, ChainstateManager{}, &prev);
+    const bool ok = ContextualCheckBlockHeader(h, state, blockman, ChainstateManager{}, &prev);
+    if (!ok) hz_last_reject = state.GetRejectReason();
+    return ok;
 }
 
 // ContextualCheckBlock: bad-txns-nonfinal for the coinbase (each other transaction's IsFinalTx runs in its chunk), bad-cb-height,
@@ -167,5 +170,7 @@ bool hz_block_rules(const uint8_t* header, const CMutableTransaction& coinbase, 
     prev.nHeight = height - 1;
     prev.m_mtp = prev_mtp;
     BlockValidationState state;
-    return ContextualCheckBlock(block, state, ChainstateManager{}, &prev);
+    const bool ok = ContextualCheckBlock(block, state, ChainstateManager{}, &prev);
+    if (!ok) hz_last_reject = state.GetRejectReason();
+    return ok;
 }

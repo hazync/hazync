@@ -1000,6 +1000,12 @@ bool hz_block_rules(const uint8_t* header, const CMutableTransaction& coinbase, 
                     bool other_has_witness, int height, int64_t prev_mtp, int64_t weight);
 const Consensus::Params& hz_net_params() { return net_params(); }
 extern "C" uint32_t hz_block_flags_c(uint32_t height, const uint8_t* block_hash) { return hz_block_flags(static_cast<int>(height), block_hash); }
+extern std::string hz_last_reject;
+extern "C" unsigned hz_reject_reason(char* out, unsigned cap) {
+    unsigned n = hz_last_reject.size() < cap ? hz_last_reject.size() : cap;
+    std::memcpy(out, hz_last_reject.data(), n);
+    return n;
+}
 extern "C" int hz_header_rules_c(const uint8_t* header, uint32_t height, uint32_t prev_bits, uint32_t prev_time,
                                  uint32_t prev_mtp, uint32_t period_first_time) {
     return hz_header_rules(header, static_cast<int>(height), prev_bits, prev_time, prev_mtp, period_first_time) ? 1 : 0;

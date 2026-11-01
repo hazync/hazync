@@ -120,12 +120,18 @@ impl ChunkCtx {
         // (core_tx_rules.cpp), on this run's inputs. The output arguments are set only when `first`.
         let lock_time = if self.height >= NET.csv_height { self.mtp } else { self.block_time };
         let (mut fee, mut weight, mut sigops) = (0i64, 0i64, 0i64);
+        // Sizes are 32-bit here and Core's weight arithmetic assumes they are not: a transaction past 2^30 bytes would wrap
+        // through CheckTransaction and GetTransactionWeight. None over MAX_BLOCK_SERIALIZED_SIZE can be in a valid block.
+        if raw_tx.len() > MAX_BLOCK_WEIGHT as usize {
+            env::log("core-reject: bad-blk-length");
+            ok = false;
+        }
         if ok && k > 0 {
             let r = unsafe { hz_tx_rules_c(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, start, k as u32,
                                            ch.as_ptr(), cb.as_ptr(), cmtp.as_ptr(), self.height, self.mtp,
                                            lock_time as i64, self.flags, (self.height >= NET.csv_height) as u32,
                                            &mut fee, &mut weight, &mut sigops) };
-            if r != 1 { ok = false; }
+            if r != 1 { ok = false; log_reject(); }
         } else {
             ok = false;
         }
@@ -140,7 +146,7 @@ impl ChunkCtx {
             for l in 0..n_out as usize { push_hash(&mut self.words, &self.out[32 * l..32 * l + 32]); }
         }
         for j in 0..k {
-            if results[j] != 1 { ok = false; }
+            if results[j] != 1 { ok = false; env::log("core-reject: script"); }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
             // bit 2: tracked. bit 0: the BIP30 tree has this coin (a coinbase or tracked one); bit 1: the coin claims THIS block's height, so the aggregate must find it
             // in this block's created set (an external coin of the current height cannot exist; without this
@@ -459,8 +465,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     total_weight += 4 * (80 + cs);
     // Core's own ContextualCheckBlock, lifted from validation.cpp (core_block_rules.cpp): the coinbase's finality, BIP34,
     // the witness rules and the weight limit.
+    if w.coinbase_tx.len() > MAX_BLOCK_WEIGHT as usize { all_ok = false; }
     let context_ok = unsafe { hz_block_rules_c(w.header.as_ptr(), w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, flat_wtx.as_ptr(),
                                                wtxids.len() as u32, has_witness as u32, w.height, mtp, total_weight) } == 1;
+    if !context_ok { log_reject(); }
     let (weight_ok, witness_ok, bip34_ok) = (context_ok, context_ok, context_ok);
     let sigops_ok = total_sigops <= MAX_BLOCK_SIGOPS_COST;
     if !(all_ok && pow_ok && merkle_ok && subsidy_ok && weight_ok && sigops_ok && witness_ok && bip34_ok && bip30_ok) {

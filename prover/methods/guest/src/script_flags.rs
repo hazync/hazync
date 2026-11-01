@@ -48,9 +48,9 @@ pub const SEGWIT_HEIGHT: u32 = 0;
 // genesis) except for the two exception blocks above (which override the base), then DERSIG/CLTV/CSV/
 // NULLDUMMY are OR'd in at their buried-deployment heights. `block_hash` is the guest-computed
 // dsha256(header) (internal order), so the exception override cannot be forged — a wrong hash fails PoW
-// (monolithic) or the H2 bind digest (segmented). Applying the base flags retroactively is deliberately
-// STRICTER than Core's height-gated activation (P2SH@173805, segwit@481824, taproot@709632): it can
-// only ever REJECT more, never accept a Core-invalid block — so a Hazync proof implies Core-validity.
+// (monolithic) or the H2 bind digest (segmented). Core v28 sets these flags the same way: they are always on
+// except at the two exception blocks. A libzync image does not use this function: it runs Core's own
+// GetBlockScriptFlags (core_block_rules.cpp) and uses only the constants here.
 // The two exception blocks are the only real chain blocks where the retroactive base would reject a
 // Core-valid block; the hash overrides restore liveness there. This monotonic-strictness property and
 // the buried-fork height-exactness are checked continuously by `host script-flags-test`.

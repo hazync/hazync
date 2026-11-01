@@ -22,7 +22,11 @@
 #include <util/check.h>
 #include <cassert>
 #include <cstdint>
+#include <string>
 #include <vector>
+
+// The reject reason of the last failed rule, Core's own string, for the log. The verdict never reads it.
+std::string hz_last_reject;
 
 #define BITCOIN_CHAIN_H
 #define BITCOIN_COINS_H
@@ -106,13 +110,13 @@ int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsign
 
     if (first) {
         TxValidationState st;
-        if (!CheckTransaction(tx, st)) return -20;
-        if (!IsFinalTx(tx, height, lock_cutoff)) return -25;
+        if (!CheckTransaction(tx, st)) { hz_last_reject = st.GetRejectReason(); return -20; }
+        if (!IsFinalTx(tx, height, lock_cutoff)) { hz_last_reject = "bad-txns-nonfinal"; return -25; }
     }
     // Core: Consensus::CheckTxInputs in ConnectBlock. Values, overflow, fee, and maturity of this run's coins.
     TxValidationState state;
     CAmount fee = 0;
-    if (!Consensus::CheckTxInputs(tx, state, view, height, fee)) return -21;
+    if (!Consensus::CheckTxInputs(tx, state, view, height, fee)) { hz_last_reject = state.GetRejectReason(); return -21; }
 
     // Core: SequenceLocks in ConnectBlock. Inputs outside this run are their own run's: in a split transaction
     // they are given SEQUENCE_FINAL here, which Core's code skips, so only this run's locks are evaluated.
@@ -128,14 +132,14 @@ int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsign
     std::vector<int> prev_heights(tx.vin.size(), 0);
     for (unsigned j = 0; j < k; j++) prev_heights[start + j] = static_cast<int>(ch[j]);
     if (k == tx.vin.size()) {
-        if (!SequenceLocks(tx, lock_flags, prev_heights, block)) return -41;
+        if (!SequenceLocks(tx, lock_flags, prev_heights, block)) { hz_last_reject = "bad-txns-nonfinal"; return -41; }
     } else {
         CMutableTransaction part;
         part.version = tx.version;
         part.vin.resize(tx.vin.size());
         for (unsigned j = 0; j < k; j++) part.vin[start + j].nSequence = tx.vin[start + j].nSequence;
         const CTransaction part_tx{part};
-        if (!SequenceLocks(part_tx, lock_flags, prev_heights, block)) return -41;
+        if (!SequenceLocks(part_tx, lock_flags, prev_heights, block)) { hz_last_reject = "bad-txns-nonfinal"; return -41; }
     }
 
     if (first) {
