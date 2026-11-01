@@ -95,8 +95,10 @@ impl ChunkCtx {
         let n_out = unsafe { tx_out_leaves(tp, tl, self.height, (tracked_tx as u32) << 1, self.mtp, self.out.as_mut_ptr(), txid.as_mut_ptr()) };
         let ph: [u8; 32] = Sha256::digest(prevouts).into();
         let start = idx.first().copied().unwrap_or(0);
+        // In 64 bits: `start` is the prover's, and a wrap here would let the run reach outside the transaction.
+        if start as u64 + idx.len() as u64 > n_vin_all as u64 { ok = false; }
         for (j, i) in idx.iter().enumerate() {
-            if *i != start + j as u32 { ok = false; }
+            if *i as u64 != start as u64 + j as u64 { ok = false; }
         }
         let first = start == 0;
         // Only the block's first transaction may be a coinbase (Core CheckBlock bad-cb-multiple). A

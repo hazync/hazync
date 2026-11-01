@@ -98,7 +98,7 @@ int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsign
                 const uint32_t* ch, const uint32_t* cb, const uint32_t* cmtp,
                 int height, int64_t mtp, int64_t lock_cutoff, uint32_t script_flags, bool csv_active,
                 int64_t* out_fee, int64_t* out_weight, int64_t* out_sigops) {
-    if (tx.IsCoinBase() || spent.size() != tx.vin.size() || static_cast<size_t>(start) + k > tx.vin.size()) return -24;
+    if (tx.IsCoinBase() || spent.size() != tx.vin.size() || uint64_t{start} + k > tx.vin.size()) return -24;
     std::vector<HzCoin> coins;
     coins.reserve(spent.size());
     for (unsigned i = 0; i < spent.size(); i++) {

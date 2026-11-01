@@ -178,7 +178,8 @@ pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
         // move — the overwrite is a no-op on the tree, which is exactly right, because the earlier
         // outputs are destroyed and replaced by identical ones.
         Some(prior) => {
-            if !is_live(prior) {
+            // The slot holds a live count here, so a claim of REPEATABLE is false, and the coinbase's leaf flag reads it.
+            if !is_live(prior) || u.coinbase_prior.is_some() {
                 return Err(Bip30Error::OverwriteFromEmpty);
             }
             apply(root, &u.coinbase_txid, Some(prior), new_val, &u.absence_proof)
@@ -532,6 +533,17 @@ mod tests {
         t.insert(k(50), REPEATABLE);
         assert!(apply_block(&t.root(), &with_tracked(&t, k(2), k(50), Some(REPEATABLE))).is_ok());
         assert!(apply_block(&t.root(), &with_tracked(&t, k(2), k(50), None)).is_err(), "a false claim of absence");
+    }
+
+    #[test]
+    fn an_overwrite_cannot_claim_a_repeat() {
+        let mut t = Smt::new();
+        t.insert(k(7), 1);
+        let mut u = update(&t, k(7), 1);
+        u.overwrite = Some(1);
+        assert!(apply_block(&t.root(), &u).is_ok());
+        u.coinbase_prior = Some(REPEATABLE);
+        assert_eq!(apply_block(&t.root(), &u).unwrap_err(), Bip30Error::OverwriteFromEmpty);
     }
 
     #[test]

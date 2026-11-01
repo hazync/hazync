@@ -4399,7 +4399,8 @@ fn smt_witness_standalone_ex(height: u32, coinbase_txid: [u8; 32], coinbase_outp
         let c = t.get(s).unwrap_or(0);
         t.insert(*s, c + 1);
     }
-    let grandfathered = height == 91_842 || height == 91_880;
+    // Mainnet's two BIP30 overwrites. On another network these are ordinary heights.
+    let grandfathered = methods::NETWORK == "mainnet" && (height == 91_842 || height == 91_880);
     if grandfathered { t.insert(coinbase_txid, coinbase_outputs.max(1)); }
     let root_in = t.root();
     (root_in, smt_advance_ex(&mut t, coinbase_txid, coinbase_outputs, coinbase_spends, grandfathered, spend_tracked, tracked_new).0)
