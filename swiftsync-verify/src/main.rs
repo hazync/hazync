@@ -19,7 +19,7 @@ use std::process::{exit, Command};
 use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inputs, Verdict, BUNDLE_MAGIC};
 
 fn usage() -> ! {
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli \"<command>\"] <receipt|bundle.sspf> <file.hints>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] <receipt|bundle.sspf> <file.hints>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] [--anchor state.json] bundle <receipt> <file.hints> <out.sspf>");
     exit(1);
 }
@@ -38,12 +38,14 @@ fn main() {
     }));
     let mut args = std::env::args().skip(1);
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
+    let mut now_arg: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
             "--anchor" => anchor = Some(args.next().unwrap_or_else(|| usage())),
             "--bitcoin-cli" => cli = Some(args.next().unwrap_or_else(|| usage())),
             "--image" => image_hex = Some(args.next().unwrap_or_else(|| usage())),
+            "--now" => now_arg = Some(args.next().unwrap_or_else(|| usage())),
             "-h" | "--help" => usage(),
             _ if a.starts_with("--") => usage(),
             _ => files.push(a),
@@ -62,7 +64,15 @@ fn main() {
     let anchor: Option<ChainState> = anchor.map(|p| {
         serde_json::from_slice(&read(&p)).unwrap_or_else(|e| fail(&format!("{p}: not a ChainState: {e}")))
     });
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
+    let mut now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
+    // For testing time-too-new. Only an earlier clock is accepted: it can make the check fail, never make it pass.
+    if let Some(v) = now_arg {
+        let t: u64 = v.parse().unwrap_or_else(|_| fail("--now takes unix seconds"));
+        if t > now {
+            fail("--now may only set the clock back");
+        }
+        now = t;
+    }
     if make_bundle {
         let [receipt, hints, out] = files.as_slice() else { usage() };
         let b = Bundle::make(&read(receipt), &read(hints), image, anchor, now).unwrap_or_else(|e| fail(&e));

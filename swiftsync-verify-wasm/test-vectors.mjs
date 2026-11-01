@@ -14,10 +14,11 @@ for (const c of m.cases) {
     const x = c.args[i];
     if (x === '--network') a.network = c.args[++i];
     else if (x === '--image') a.imageHex = c.args[++i];
+    else if (x === '--now') a.now = Number(c.args[++i]);
     else if (x === '--anchor') a.anchorJson = fs.readFileSync(path.join(dir, c.args[++i]), 'utf8');
     else a.files.push(x);
   }
-  const r = v.verify({ network: a.network, imageHex: a.imageHex, anchorJson: a.anchorJson,
+  const r = v.verify({ network: a.network, now: a.now, imageHex: a.imageHex, anchorJson: a.anchorJson,
     receipt: fs.readFileSync(path.join(dir, a.files[0])), hints: fs.readFileSync(path.join(dir, a.files[1])) });
   const ok = code[r.verdict] === c.expect_exit;
   bad += !ok;

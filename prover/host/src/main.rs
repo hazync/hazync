@@ -3681,13 +3681,19 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
 /// (bincode Receipt) and state_<h>.json per block, and times.tsv. Hints come from $HAZYNC_SS_HINTS.
 /// Per block: chunks proved (succinct), the aggregate's ECMH hints learned by one collect execution,
 /// then the aggregate proved (succinct, so the next block can resolve it cheaply).
+/// `<anchor.json>` may be the word `genesis`: the network's genesis state, built here, so lo must be 1.
+/// HAZYNC_RESUME=1: continue after the highest block_<k>.rcpt in <out dir>. The receipt is verified against this
+/// image, the BIP30 tree is replayed to k and must equal the receipt's smt_root, and block k+1 verifies that receipt
+/// in the guest, so a resumed chain is the same statement as an unbroken one. Needs block files 1..k.
 fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str) {
     use risc0_zkvm::Receipt;
     use std::io::Write as _;
     use std::time::Instant;
     assert!(methods::LIBZYNC, "libzync-prove-range needs a libzync guest");
     std::fs::create_dir_all(out).unwrap();
-    let mut prev: ChainState = serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap();
+    let mut prev: ChainState = if anchor_path == "genesis" { genesis_anchor() } else {
+        serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
+    };
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
@@ -3727,10 +3733,28 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     };
     std::fs::write(format!("{out}/anchor_effective.json"), serde_json::to_string(&prev).unwrap()).unwrap();
     let mut prev_rcpt: Option<Receipt> = None;
+    let mut first = lo;
+    if std::env::var("HAZYNC_RESUME").map(|v| v == "1").unwrap_or(false) {
+        if let Some(k) = (lo..=hi).rev().find(|k| std::path::Path::new(&format!("{out}/block_{k}.rcpt")).exists()) {
+            assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
+            let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
+            let r: Receipt = bincode::deserialize(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
+            r.verify(METHOD_ID).unwrap_or_else(|e| panic!("block_{k}.rcpt does not verify against this image: {e}"));
+            let st: ChainState = r.journal.decode().expect("ChainState");
+            assert!(st.height == k && st.kind == KIND_CHAIN && st.self_id == METHOD_ID, "block_{k}.rcpt is not this chain's state at {k}");
+            let (t, _) = lz_smt_replay(dir, k);
+            assert_eq!(t.root(), st.smt_root, "replayed BIP30 tree at {k} != the receipt's smt_root");
+            smt = t;
+            prev = st;
+            prev_rcpt = Some(r);
+            first = k + 1;
+            println!("resuming after block {k}");
+        }
+    }
     let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
     let opts = ProverOpts::succinct();
     let t_all = Instant::now();
-    for h in lo..=hi {
+    for h in first..=hi {
         let t0 = Instant::now();
         std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
         std::env::remove_var("HAZYNC_LZ_HINTS");

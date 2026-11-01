@@ -36,22 +36,26 @@ statement holds if the checks in §5 pass:
 >    order, except on mainnet for H in 91,722..91,879, where Core's set still holds the outputs of the coinbases of
 >    91,722 and/or 91,812 until they are overwritten; the forest never holds them (`UTREEXO_FORMAT.md` §1).
 
-**Where the rules come from.** Scripts, signatures, sighashes, transaction parsing and checks (`CheckTransaction`,
-`CheckTxInputs`), sigop counting, `IsFinalTx`, BIP34 and the witness commitment run Bitcoin Core's own C++ (v28.0
-with the patches in `patches/`). Signatures are verified by a batch equation instead of one libsecp call each, with
+**Where the rules come from.** Scripts, signatures, sighashes, transaction parsing and `CheckTransaction` run Bitcoin
+Core's own C++ (v28.0 with the patches in `patches/`). `validation.cpp` and `consensus/tx_verify.cpp` are not compiled
+into the guest, so `CheckTxInputs`, `IsFinalTx`, the sigop totals, BIP34 and the witness commitment are C++
+transcriptions in `verify_input.cpp`. Signatures are verified by a batch equation instead of one libsecp call each, with
 the same acceptance as libsecp (`LIBZYNC.md` §7, round 6). The block-level bookkeeping (coin accounting, maturity,
-BIP68, weight and sigop totals, subsidy, BIP30) is transcribed in Rust (`prover/methods/guest/src/agg_lite.rs`). A
-rule-by-rule table against Core's reject reasons is not written yet.
+BIP68, weight and sigop totals, subsidy, BIP30) is transcribed in Rust (`prover/methods/guest/src/agg_lite.rs`).
+[`CONSENSUS_RULES.md`](CONSENSUS_RULES.md) compares the guest with Core's reject reasons, rule by rule.
 
 **Known differences from Core:**
 - **BIP30 for non-coinbase transactions (audit 3, #26).** BIP30 is enforced for coinbase transactions through the
   coinbase-txid SMT. Core's rule also covers a non-coinbase transaction recreating a still-unspent outpoint. That can
-  only happen as an exact descendant of a duplicated coinbase, and needs pre-BIP34 rules, so mainnet history (whose
-  only duplicates are the two grandfathered coinbases) is unaffected. A fabricated low-work chain could still exploit
-  it; step 7 of §5 (the tip is on your most-work chain) is what excludes one.
-- **BIP30 for coinbases is stricter than Core.** The SMT rejects every duplicate coinbase txid. Core's `ConnectBlock`
-  skips the BIP30 check between BIP34 activation and height 1,983,702, the first height where BIP34 allows a
-  duplicate. Before that height the two agree.
+  only happen as an exact descendant of a duplicated coinbase, so mainnet history (whose only duplicates are the two
+  grandfathered coinbases) is unaffected. Below height 1,983,702 it needs a fabricated low-work chain, which step 7 of
+  §5 (the tip is on your most-work chain) excludes. From 1,983,702 step 7 does not exclude it: a pre-BIP34 coinbase
+  whose script indicates that height can legally be repeated once fully spent, and a repeat of the transaction that
+  spent it would pass here and fail Core (`bad-txns-BIP30`). Closing this needs a guest change. It does not affect any
+  proof with H below 1,983,702, about 19 years away (`CONSENSUS_RULES.md`).
+- **BIP30 for coinbases is stricter than Core.** The SMT rejects a duplicate coinbase txid that still has unspent
+  outputs at every height, and allows a fully spent one, as Core does. Core's `ConnectBlock` skips the BIP30 check
+  from BIP34 activation to height 1,983,701 on a chain through the BIP34 block. Outside that window the two agree.
 
 **Two rules depend on the node, not the chain:**
 - **`time-too-new`.** A block timestamp more than 2 hours ahead of the node's clock. A proof has no clock, so it
@@ -364,7 +368,7 @@ Remaining levers:
 | How do I rebuild M? | `docker build -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .`, then `docker run --rm hazync-libzync-repro`; compare with `reproduce/LIBZYNC_IDS`. About 55 minutes on a 16-thread laptop. Three builds on one machine agree (§5 step 9); a build on a second machine has not been done |
 | What does the proof buy, if a wrong file only costs a sync? | Verified hints alone save one wasted sync. The larger product is the UTXO set at H with a proof (§6 item 2), which removes IBD |
 | Why ECMH, not MuHash3072? | §4: reuse of the guest's accelerated secp256k1; MuHash not measured |
-| Where does the proof differ from Core? | §2: BIP30 for coinbase descendants (#26), and the coinbase SMT being stricter after BIP34. A rule-by-rule table is not written yet |
+| Where does the proof differ from Core? | §2: BIP30 for coinbase descendants (#26), and the coinbase SMT being stricter after BIP34. The rule-by-rule table is `CONSENSUS_RULES.md` |
 | Batch ECDSA: how are x(R) ≥ n and the R lift handled? | A hint supplies R; acceptance requires R canonical and on the curve, and x(R) mod n == r, matching libsecp's `xr == r || xr == r + n`. The Fiat–Shamir weights are drawn from a hash of every (u1, u2, Q, R) in the batch (`LIBZYNC.md` §7, rounds 3 and 6) |
 | Reorg near H? | F is tied to `J.tip_hash`; a reorg below H needs a new proof (§4, "Which chain") |
 | Can it follow PR #34004's indexing? | Yes, by changing which outputs are indexed (`agg_lite.rs`); files and proofs must use the same rule (§8 Q1) |

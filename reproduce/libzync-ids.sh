@@ -14,5 +14,7 @@ for net in mainnet signet; do
     cargo build --profile fasthost -p host -j"$(nproc)" >&2
   id=$(target/fasthost/host method-id | head -1 | awk '{print $NF}')
   elf=$(sha256sum target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin | cut -c1-64)
+  mkdir -p /root/libzync-elf
+  cp target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin /root/libzync-elf/$net.bin   # what a published proof must run
   echo "libzync $net METHOD_ID $id GUEST_ELF_SHA256 $elf"
 done

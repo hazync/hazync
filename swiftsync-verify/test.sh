@@ -40,5 +40,7 @@ run 1 $V $A $T/junk.rcpt $E/signet2600.hints
 run 1 $V $A /nonexistent.rcpt $E/signet2600.hints
 run 1 $V $A $G/block_2600.rcpt
 run 1 $V --network signet --image xyz $G/block_2600.rcpt $E/signet2600.hints
+run 1 $V $A --now 1599000000 $G/block_2600.rcpt $E/signet2600.hints
+run 1 $V $A --now 99999999999 $G/block_2600.rcpt $E/signet2600.hints
 echo "swiftsync-verify test.sh: $((N-BAD))/$N as expected"
 [ "$N" -gt 0 ] && [ "$BAD" = 0 ]
