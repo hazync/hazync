@@ -493,8 +493,9 @@ def run():
         b_hash = rev_hex(int.from_bytes(hash256(b.serialize()[:80]), "little"))
         try:
             core = cli("submitblock", b.serialize().hex())
-        except RuntimeError as e:
-            assert "Block decode failed" in str(e), e
+        except RuntimeError as e:   # refused at the RPC layer, before validation: both are rejections
+            m = str(e)
+            assert "Block decode failed" in m or "does not start with a coinbase" in m, e
             core = "decode-failed"
         core_ok = core in ("", "null")
         if core_ok:

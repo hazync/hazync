@@ -205,8 +205,6 @@ extern "C" {
                      script_flags: u32, csv_active: u32, out_fee: *mut i64, out_weight: *mut i64,
                      out_sigops: *mut i64) -> i32;
     #[cfg(feature = "libzync")]
-    fn hz_coinbase_is_final(tx: *const u8, tx_len: u32, height: u32, lock_cutoff: i64) -> i32;
-    #[cfg(feature = "libzync")]
     fn hz_coinbase_sigops_c(tx: *const u8, tx_len: u32, script_flags: u32) -> i64;
     #[cfg(feature = "libzync")]
     fn hz_weight_c(tx: *const u8, tx_len: u32) -> i64;
@@ -215,7 +213,12 @@ extern "C" {
     #[cfg(feature = "libzync")]
     fn hz_block_flags_c(height: u32, block_hash: *const u8) -> u32;
     #[cfg(feature = "libzync")]
-    fn hz_witness_rule_c(cb: *const u8, cb_len: u32, wtxids: *const u8, n: u32, other_has_witness: u32, height: u32) -> i32;
+    fn hz_header_rules_c(header: *const u8, height: u32, prev_bits: u32, prev_time: u32, prev_mtp: u32, period_first_time: u32) -> i32;
+    #[cfg(feature = "libzync")]
+    fn hz_block_rules_c(header: *const u8, cb: *const u8, cb_len: u32, wtxids: *const u8, n: u32, other_has_witness: u32,
+                        height: u32, prev_mtp: u32, weight: i64) -> i32;
+    #[cfg(feature = "libzync")]
+    fn hz_median_time_past(times: *const u32, n: u32) -> u32;
     // Cumulative chainwork: cum += GetBlockProof(nBits) (real Core 256-bit formula).
     fn add_work(cum: *mut u8, nbits: u32);
     // Per-tx weight + legacy sigop cost (real GetSerializeSize + GetSigOpCount).
@@ -1453,7 +1456,13 @@ fn decode_words<T: for<'de> Deserialize<'de>>(journal: &[u8]) -> T {
     risc0_zkvm::serde::from_slice(&words).expect("decode journal")
 }
 
+// libzync: Core's own CBlockIndex::GetMedianTimePast.
+#[cfg(feature = "libzync")]
+fn median_time_past(times: &[u32]) -> u32 {
+    unsafe { hz_median_time_past(times.as_ptr(), times.len() as u32) }
+}
 // Median-time-past: median of the last (≤11) block timestamps.
+#[cfg(not(feature = "libzync"))]
 fn median_time_past(times: &[u32]) -> u32 {
     let mut v = times.to_vec();
     v.sort_unstable();
@@ -2100,8 +2109,18 @@ fn aggregate() {
     let prevhash_ok = w.header[4..36] == prev.tip_hash[..];
     let carry_ok = normalize(w.root_prev.roots.clone()) == normalize(prev.utxo_roots.clone()) && w.root_prev.num_leaves == prev.utxo_leaves;
     let height = prev.height + 1;
+    // libzync: Core's own ContextualCheckBlockHeader, lifted from validation.cpp (core_block_rules.cpp): bad-diffbits,
+    // time-too-old, bad-version.
+    #[cfg(feature = "libzync")]
+    let (retarget_ok, time_ok) = {
+        let ok = unsafe { hz_header_rules_c(w.header.as_ptr(), height, prev.prev_nbits, prev.prev_time, prev_mtp, prev.epoch_start) } == 1;
+        (ok, ok)
+    };
+    #[cfg(not(feature = "libzync"))]
     let expected_nbits = if height % RETARGET_INTERVAL != 0 { prev.prev_nbits } else { unsafe { calc_next_bits(prev.prev_nbits, prev.epoch_start as i64, prev.prev_time as i64) } };
+    #[cfg(not(feature = "libzync"))]
     let retarget_ok = r.nbits == expected_nbits;
+    #[cfg(not(feature = "libzync"))]
     let time_ok = r.block_time > prev_mtp; // time-too-old (Core ContextualCheckBlockHeader)
     // libzync (review 2): the BIP30 tree this block was checked against must be the chain's own, carried in
     // the verified previous state (genesis: the empty tree), not a root the prover picked.

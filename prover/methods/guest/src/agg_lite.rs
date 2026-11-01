@@ -196,13 +196,6 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let block_time = u32::from_le_bytes(w.header[68..72].try_into().unwrap());
     let block_hash = dsha256(&w.header);
     let flags = block_script_flags(w.height, &block_hash);
-    let lock_time = if w.height >= NET.csv_height { mtp } else { block_time };
-    let version = i32::from_le_bytes(w.header[0..4].try_into().unwrap());
-    if (version < 2 && w.height >= BIP34_HEIGHT)
-        || (version < 3 && w.height >= NET.bip66_height)
-        || (version < 4 && w.height >= NET.bip65_height) {
-        all_ok = false;
-    }
     // The two grandfathered BIP30 blocks are handled below with SwiftSync subtractions instead of the
     // full path's utreexo delete, so no overwrite witness is ever accepted here.
     let is_bip30_block = block_hash == BIP30_OVERWRITE_A || block_hash == BIP30_OVERWRITE_B;
@@ -394,8 +387,6 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let merkle_ok = mroot[..] == w.header[36..68] && mutated == 0;
 
     let flat_wtx: &[u8] = unsafe { core::slice::from_raw_parts(wtxids.as_ptr() as *const u8, wtxids.len() * 32) };
-    let witness_ok = unsafe { hz_witness_rule_c(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, flat_wtx.as_ptr(),
-                                                wtxids.len() as u32, has_witness as u32, w.height) } == 1;
     // BIP325: on signet the block solution in the coinbase witness commitment must satisfy the challenge.
     // Core's own CheckSignetBlockSolution, given the coinbase and the txids the merkle check just bound.
     #[cfg(feature = "signet")]
@@ -407,7 +398,6 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             all_ok = false;
         }
     }
-    let bip34_ok = unsafe { check_bip34(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height) } == 1;
 
     let ids_distinct = {
         let mut ids: Vec<[u64; 4]> = txids.iter().map(key).collect();
@@ -467,12 +457,12 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let ntx = txids.len();
     let cs: i64 = if ntx < 0xfd { 1 } else if ntx <= 0xffff { 3 } else if ntx <= 0xffff_ffff { 5 } else { 9 };
     total_weight += 4 * (80 + cs);
-    let weight_ok = total_weight <= MAX_BLOCK_WEIGHT;
+    // Core's own ContextualCheckBlock, lifted from validation.cpp (core_block_rules.cpp): the coinbase's finality, BIP34,
+    // the witness rules and the weight limit.
+    let context_ok = unsafe { hz_block_rules_c(w.header.as_ptr(), w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, flat_wtx.as_ptr(),
+                                               wtxids.len() as u32, has_witness as u32, w.height, mtp, total_weight) } == 1;
+    let (weight_ok, witness_ok, bip34_ok) = (context_ok, context_ok, context_ok);
     let sigops_ok = total_sigops <= MAX_BLOCK_SIGOPS_COST;
-    let cb_final = unsafe {
-        hz_coinbase_is_final(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height, lock_time as i64)
-    } == 1;
-    if !cb_final { all_ok = false; }
     if !(all_ok && pow_ok && merkle_ok && subsidy_ok && weight_ok && sigops_ok && witness_ok && bip34_ok && bip30_ok) {
         env::log(&format!("agg-lite: block INVALID all_ok={all_ok} pow={pow_ok} merkle={merkle_ok} subsidy={subsidy_ok} \
             weight={weight_ok} sigops={sigops_ok} witness={witness_ok} bip34={bip34_ok} bip30={bip30_ok}"));

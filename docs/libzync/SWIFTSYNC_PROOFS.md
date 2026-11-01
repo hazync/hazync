@@ -39,10 +39,13 @@ statement holds if the checks in §5 pass:
 **Where the rules come from.** Scripts, signatures, sighashes, transaction parsing and `CheckTransaction` run Bitcoin
 Core's own C++ (v28.0 with the patches in `patches/`). So do `CheckTxInputs`, `IsFinalTx`, `SequenceLocks` and
 `GetTransactionSigOpCost`: `consensus/tx_verify.cpp` is compiled unmodified, with small stand-ins for the coin view and
-block index (`prover/methods/guest/core_tx_rules.cpp`). `validation.cpp` is not compiled into the guest, so BIP34 and
-the witness commitment are C++ transcriptions in `verify_input.cpp`. Signatures are verified by a batch equation instead of one libsecp call each, with
+block index (`prover/methods/guest/core_tx_rules.cpp`). `validation.cpp` is the whole node and is not compiled in, but
+`ContextualCheckBlock`, `ContextualCheckBlockHeader`, `CheckWitnessMalleation`, `GetBlockScriptFlags`, `GetBlockSubsidy`
+and pow.cpp's `GetNextWorkRequired` are lifted out of Core's source at build time, so they are Core's text
+(`core_block_rules.cpp`). Median time past is Core's `CBlockIndex::GetMedianTimePast`. Signatures are verified by a batch equation instead of one libsecp call each, with
 the same acceptance as libsecp (`LIBZYNC.md` §7, round 6). The block-level bookkeeping (coin accounting, maturity,
-BIP68, weight and sigop totals, subsidy, BIP30) is transcribed in Rust (`prover/methods/guest/src/agg_lite.rs`).
+and the totals across chunks (coin accounting, fees, weight and sigop totals, BIP30) are our own code, in Rust
+(`prover/methods/guest/src/agg_lite.rs`), and are tested against Core block by block (`CONSENSUS_RULES.md`).
 [`CONSENSUS_RULES.md`](CONSENSUS_RULES.md) compares the guest with Core's reject reasons, rule by rule.
 
 **Known differences from Core:**

@@ -422,7 +422,6 @@ int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsign
                 const uint32_t* ch, const uint32_t* cb, const uint32_t* cmtp,
                 int height, int64_t mtp, int64_t lock_cutoff, uint32_t script_flags, bool csv_active,
                 int64_t* out_fee, int64_t* out_weight, int64_t* out_sigops);
-bool hz_is_final(const CTransaction& tx, int height, int64_t lock_cutoff);
 int64_t hz_coinbase_sigops(const CTransaction& tx, uint32_t script_flags);
 int64_t hz_weight(const CTransaction& tx);
 
@@ -433,9 +432,6 @@ extern "C" int hz_tx_rules_c(const uint8_t* tx_bytes, unsigned tx_len, const uin
     return hz_tx_rules(cached_tx(tx_bytes, tx_len), cached_spent(prevouts, prevouts_len), start, k, ch, cb, cmtp,
                        static_cast<int>(height), mtp, lock_cutoff, script_flags, csv_active != 0,
                        out_fee, out_weight, out_sigops);
-}
-extern "C" int hz_coinbase_is_final(const uint8_t* tx_bytes, unsigned tx_len, uint32_t height, int64_t lock_cutoff) {
-    return hz_is_final(cached_tx(tx_bytes, tx_len), static_cast<int>(height), lock_cutoff) ? 1 : 0;
 }
 extern "C" int64_t hz_coinbase_sigops_c(const uint8_t* tx_bytes, unsigned tx_len, uint32_t script_flags) {
     return hz_coinbase_sigops(cached_tx(tx_bytes, tx_len), script_flags);
@@ -999,15 +995,31 @@ extern "C" void add_work(uint8_t* cum, uint32_t nBits) {
 // Core's own functions, lifted from validation.cpp by build.rs (core_block_rules.cpp).
 int64_t hz_block_subsidy(int height);
 uint32_t hz_block_flags(int height, const uint8_t* block_hash);
-bool hz_witness_rule(const CMutableTransaction& coinbase, const uint8_t* wtxids, uint32_t n, bool other_has_witness, int height);
+bool hz_header_rules(const uint8_t* header, int height, uint32_t prev_bits, int64_t prev_time, int64_t prev_mtp, int64_t period_first_time);
+bool hz_block_rules(const uint8_t* header, const CMutableTransaction& coinbase, const uint8_t* wtxids, uint32_t n,
+                    bool other_has_witness, int height, int64_t prev_mtp, int64_t weight);
 const Consensus::Params& hz_net_params() { return net_params(); }
 extern "C" uint32_t hz_block_flags_c(uint32_t height, const uint8_t* block_hash) { return hz_block_flags(static_cast<int>(height), block_hash); }
-extern "C" int hz_witness_rule_c(const uint8_t* cb, unsigned cb_len, const uint8_t* wtxids, uint32_t n,
-                                 uint32_t other_has_witness, uint32_t height) {
+extern "C" int hz_header_rules_c(const uint8_t* header, uint32_t height, uint32_t prev_bits, uint32_t prev_time,
+                                 uint32_t prev_mtp, uint32_t period_first_time) {
+    return hz_header_rules(header, static_cast<int>(height), prev_bits, prev_time, prev_mtp, period_first_time) ? 1 : 0;
+}
+extern "C" int hz_block_rules_c(const uint8_t* header, const uint8_t* cb, unsigned cb_len, const uint8_t* wtxids, uint32_t n,
+                                uint32_t other_has_witness, uint32_t height, uint32_t prev_mtp, int64_t weight) {
     MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
-    return hz_witness_rule(mtx, wtxids, n, other_has_witness != 0, static_cast<int>(height)) ? 1 : 0;
+    return hz_block_rules(header, mtx, wtxids, n, other_has_witness != 0, static_cast<int>(height), prev_mtp, weight) ? 1 : 0;
+}
+// Core's own CBlockIndex::GetMedianTimePast, on a chain of real index entries. `times` runs oldest first.
+extern "C" uint32_t hz_median_time_past(const uint32_t* times, uint32_t n) {
+    if (n == 0) return 0;
+    std::vector<CBlockIndex> v(n);
+    for (uint32_t i = 0; i < n; i++) {
+        v[i].nTime = times[i];
+        v[i].pprev = i ? &v[i - 1] : nullptr;
+    }
+    return static_cast<uint32_t>(v[n - 1].GetMedianTimePast());
 }
 #endif
 #ifdef HAZYNC_AGG_LITE

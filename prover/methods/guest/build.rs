@@ -394,15 +394,22 @@ fn main() {
         // Core's functions lifted verbatim out of validation.cpp, which cannot be compiled whole. See core_block_rules.cpp.
         let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
         let validation = std::fs::read_to_string(format!("{core}/validation.cpp")).expect("read validation.cpp");
+        let pow = std::fs::read_to_string(format!("{core}/pow.cpp")).expect("read pow.cpp");
         let mut inc = String::new();
-        for sig in ["CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)\n{",
-                    "static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_commitment, BlockValidationState& state)\n{",
-                    "static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman)\n{"] {
-            let from = validation.find(sig).unwrap_or_else(|| panic!("validation.cpp: not found: {sig}"));
-            let body = &validation[from..];
-            let end = body.find("\n}\n").unwrap_or_else(|| panic!("validation.cpp: unterminated: {sig}"));
+        let lift = |src: &str, sig: &str, inc: &mut String| {
+            let from = src.find(sig).unwrap_or_else(|| panic!("not found: {sig}"));
+            let body = &src[from..];
+            let end = body.find("\n}\n").unwrap_or_else(|| panic!("unterminated: {sig}"));
             inc.push_str(&body[..end + 3]);
             inc.push('\n');
+        };
+        lift(&pow, "unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)\n{", &mut inc);
+        for sig in ["CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)\n{",
+                    "static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_commitment, BlockValidationState& state)\n{",
+                    "static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman)\n{",
+                    "static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, BlockManager& blockman, const ChainstateManager& chainman, const CBlockIndex* pindexPrev) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)\n{",
+                    "static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& state, const ChainstateManager& chainman, const CBlockIndex* pindexPrev)\n{"] {
+            lift(&validation, sig, &mut inc);
         }
         std::fs::write(format!("{out_dir}/core_extract.inc"), inc).expect("write core_extract.inc");
         b.include(&out_dir);
@@ -424,6 +431,7 @@ fn main() {
     println!("cargo:rerun-if-changed=core_tx_rules.cpp");
     println!("cargo:rerun-if-changed=core_block_rules.cpp");
     println!("cargo:rerun-if-changed={core}/validation.cpp");
+    println!("cargo:rerun-if-changed={core}/pow.cpp");
     println!("cargo:rerun-if-changed={core}/consensus/tx_verify.cpp");
     println!("cargo:rerun-if-changed={core}/util/moneystr.cpp");
     println!("cargo:rerun-if-changed=cshims.c");

@@ -147,7 +147,6 @@ int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsign
 }
 
 // The coinbase's share of the same rules. Core's GetTransactionSigOpCost returns before reading a coin.
-bool hz_is_final(const CTransaction& tx, int height, int64_t lock_cutoff) { return IsFinalTx(tx, height, lock_cutoff); }
 int64_t hz_coinbase_sigops(const CTransaction& tx, uint32_t script_flags) {
     const std::vector<HzCoin> none;
     return GetTransactionSigOpCost(tx, HzCoinsView(tx, none), script_flags);

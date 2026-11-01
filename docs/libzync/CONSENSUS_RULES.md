@@ -51,7 +51,7 @@ that final check: value, fee, maturity, BIP68, P2SH and witness sigops, and the 
 ## Tested against Core
 
 `experimental/libzync-bench/core_rules/rig.py` runs real Bitcoin Core and the regtest guest on the same crafted blocks.
-Core 31.1 so far, not v28: no consensus rule changed between them, and v28 should replace it before publication.
+Bitcoin Core 28.0, the release the guest compiles (`rig_v28.out`).
 84 cases: 83 agree, 1 (a coin that does not exist) is deferred to H by design. The rig covers block rules, BIP68, split
 transactions, ECDSA, multisig, taproot, weight, sigops and a staged BIP30 repeat. Rows above that the rig does not reach
 are checked by reading only.
