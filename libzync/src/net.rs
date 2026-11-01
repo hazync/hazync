@@ -54,10 +54,25 @@ pub const SIGNET: Net = Net {
     signet: true,
 };
 
+/// Core's regtest, for the differential rig only. No real chain lives here.
+pub const REGTEST: Net = Net {
+    name: "regtest",
+    genesis_hex: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+    bip34_height: 1,
+    bip66_height: 1,
+    bip65_height: 1,
+    csv_height: 1,
+    segwit_height: 0,
+    pow_limit_bits: 0x207fffff,
+    bip30_unspendable: &[],
+    signet: false,
+};
+
 pub fn by_name(name: &str) -> Option<&'static Net> {
     match name {
         "mainnet" | "main" => Some(&MAINNET),
         "signet" => Some(&SIGNET),
+        "regtest" => Some(&REGTEST),
         _ => None,
     }
 }

@@ -43,7 +43,9 @@ mod lz_wire;
 mod net;
 /// The network this guest validates. Fixed at build time (HAZYNC_NETWORK), so a signet proof and a
 /// mainnet proof can never share an image id.
-#[cfg(not(feature = "signet"))]
+#[cfg(feature = "regtest")]
+pub const NET: &net::Net = &net::REGTEST;
+#[cfg(not(any(feature = "signet", feature = "regtest")))]
 pub const NET: &net::Net = &net::MAINNET;
 #[cfg(feature = "signet")]
 pub const NET: &net::Net = &net::SIGNET;
@@ -270,6 +272,9 @@ extern "C" {
 
 const MAX_BLOCK_WEIGHT: i64 = 4_000_000;
 const MAX_BLOCK_SIGOPS_COST: i64 = 80_000;
+#[cfg(feature = "regtest")]
+const RETARGET_INTERVAL: u32 = 144;
+#[cfg(not(feature = "regtest"))]
 const RETARGET_INTERVAL: u32 = 2016;
 
 // Pin every hard-coded consensus literal in the Rust guest to Bitcoin Core's OWN compiled value
@@ -1392,7 +1397,7 @@ fn chain_profile() -> u32 {
     let lz = cfg!(feature = "libzync") as u32;
     let av = unsafe { hz_no_scripts() } & 1;
     let sig = cfg!(feature = "signet") as u32;
-    lz | av << 1 | sig << 2
+    lz | av << 1 | sig << 2 | (cfg!(feature = "regtest") as u32) << 3
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state

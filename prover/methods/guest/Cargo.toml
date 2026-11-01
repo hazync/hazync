@@ -100,3 +100,5 @@ libzync = ["bigint2-ecdsa", "liftx-hint", "field-bigint2", "scalar-inv-accel", "
 # Default signet instead of mainnet (HAZYNC_NETWORK=signet): Core's SigNet chainparams and the BIP325
 # block-solution check in the aggregate. libzync only.
 signet = ["libzync"]
+# Core's regtest (HAZYNC_NETWORK=regtest), for the rig that compares verdicts with Core on crafted blocks.
+regtest = ["libzync"]

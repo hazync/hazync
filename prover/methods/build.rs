@@ -31,16 +31,16 @@ fn lever(name: &str) -> bool {
 
 /// `profile.rs` in OUT_DIR: what the embedded guest was built for, so the HOST writes the stream that
 /// guest reads instead of trusting a matching set of run-time env vars.
-fn write_profile(libzync: bool, assumevalid: bool, signet: bool) {
+fn write_profile(libzync: bool, assumevalid: bool, network: &str) {
     let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
     std::fs::write(&out, format!(
         "/// The embedded guest reads libzync hint blocks (libzync/src/wire.rs).\n\
          pub const LIBZYNC: bool = {libzync};\n\
          /// Script and signature checks skipped (HAZYNC_LIBZYNC=assumevalid).\n\
          pub const LIBZYNC_ASSUMEVALID: bool = {assumevalid};\n\
-         /// \"mainnet\" or \"signet\".\n\
+         /// \"mainnet\", \"signet\" or \"regtest\".\n\
          pub const NETWORK: &str = {:?};\n",
-        if signet { "signet" } else { "mainnet" })).expect("write profile.rs");
+        network)).expect("write profile.rs");
 }
 
 /// Every file the guest pulls in via `#[path]`, resolved the way rustc resolves them: relative to the
@@ -103,6 +103,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HAZYNC_NO_SCRIPTS");
     let assumevalid = assumevalid || std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1");
     let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    let regtest = libzync_regtest(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    assert!(!regtest || libzync, "HAZYNC_NETWORK=regtest needs HAZYNC_LIBZYNC");
+    let network = if signet { "signet" } else if regtest { "regtest" } else { "mainnet" };
     assert!(!signet || libzync, "HAZYNC_NETWORK=signet needs HAZYNC_LIBZYNC (the signet check lives in the libzync aggregate)");
     println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_PIN_DIR");
     if let Ok(elf_path) = std::env::var("HAZYNC_GUEST_ELF") {
@@ -117,12 +120,12 @@ fn main() {
         // ASSUMEVALID) are tied to the pinned bytes instead of to this shell's variables (review 2).
         if let Some(d) = pins.as_deref() {
             let want = format!("libzync={} assumevalid={} network={}", libzync as u8, assumevalid as u8,
-                               if signet { "signet" } else { "mainnet" });
+                               network);
             let got = std::fs::read_to_string(Path::new(d).join("PROFILE"))
                 .unwrap_or_else(|e| panic!("{d}/PROFILE: {e} (the pin directory must name the image's profile)"));
             assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS");
         }
-        write_profile(libzync, assumevalid, signet);
+        write_profile(libzync, assumevalid, network);
         embed_prebuilt_guest(&elf_path, pins.as_deref());
         return;
     }
@@ -219,7 +222,10 @@ fn main() {
     if signet {
         features.push("signet".to_string());
     }
-    write_profile(libzync, assumevalid, signet);
+    if regtest {
+        features.push("regtest".to_string());
+    }
+    write_profile(libzync, assumevalid, network);
     if !features.is_empty() {
         use std::collections::HashMap;
         // GuestOptions is #[non_exhaustive], so it cannot be built with a struct expression from

@@ -378,6 +378,10 @@ fn main() {
     assert_eq!(std::env::var("CARGO_FEATURE_SIGNET").is_ok(), signet,
         "the guest's `signet` feature and HAZYNC_NETWORK disagree: build through methods/build.rs");
     define_if(&mut b, "HAZYNC_SIGNET", signet);
+    let regtest = libzync_regtest(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    assert_eq!(std::env::var("CARGO_FEATURE_REGTEST").is_ok(), regtest,
+        "the guest's `regtest` feature and HAZYNC_NETWORK disagree: build through methods/build.rs");
+    define_if(&mut b, "HAZYNC_REGTEST", regtest);
     println!("cargo:rerun-if-env-changed=HAZYNC_TXDATA_LAZY");
     define_if(&mut b, "HAZYNC_TXDATA_LAZY", lever("HAZYNC_TXDATA_LAZY"));
     for tu in core_tus { b.file(format!("{core}/{tu}")); }

@@ -65,6 +65,13 @@ pub fn libzync_signet(v: Option<&str>) -> bool {
     match v {
         None | Some("") | Some("main") | Some("mainnet") => false,
         Some("signet") => true,
-        Some(x) => panic!("HAZYNC_NETWORK={x}: expected mainnet or signet"),
+        Some("regtest") => false,
+        Some(x) => panic!("HAZYNC_NETWORK={x}: expected mainnet, signet or regtest"),
     }
+}
+
+/// `HAZYNC_NETWORK` parsed: true for regtest. A test build only: the rig that compares the guest's verdict
+/// with Bitcoin Core's on crafted blocks. Its proofs mean nothing outside that rig.
+pub fn libzync_regtest(v: Option<&str>) -> bool {
+    v == Some("regtest")
 }

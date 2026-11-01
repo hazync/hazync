@@ -904,7 +904,9 @@ std::string FormatISO8601Date(int64_t) { return std::string(); }
 // libzync HAZYNC_SIGNET: the same, for default signet -- CChainParams::SigNet with no options builds
 // Core's CSigNetParams with its built-in challenge (and asserts that genesis hash too).
 static const Consensus::Params& net_params() {
-#ifdef HAZYNC_SIGNET
+#if defined(HAZYNC_REGTEST)
+    static const std::unique_ptr<const CChainParams> params = CChainParams::RegTest(CChainParams::RegTestOptions{});
+#elif defined(HAZYNC_SIGNET)
     static const std::unique_ptr<const CChainParams> params = CChainParams::SigNet(CChainParams::SigNetOptions{});
 #else
     static const std::unique_ptr<const CChainParams> params = CChainParams::Main();

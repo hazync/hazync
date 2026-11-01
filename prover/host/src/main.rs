@@ -220,7 +220,7 @@ struct ChainState {
 
 /// The profile word this host's image commits (guest `chain_profile`).
 fn expected_profile() -> u32 {
-    methods::LIBZYNC as u32 | (methods::LIBZYNC_ASSUMEVALID as u32) << 1 | ((methods::NETWORK == "signet") as u32) << 2
+    methods::LIBZYNC as u32 | (methods::LIBZYNC_ASSUMEVALID as u32) << 1 | ((methods::NETWORK == "regtest") as u32) << 3 | ((methods::NETWORK == "signet") as u32) << 2
 }
 
 /// MAX_FUTURE_BLOCK_TIME (Core validation.h): 2 hours.
@@ -1264,6 +1264,7 @@ fn genesis_params() -> (&'static str, u32, u32, u128) {
     match methods::NETWORK {
         // Core's CSigNetParams genesis: time 1598918400, nBits 0x1e0377ae.
         "signet" => (libzync::net::SIGNET.genesis_hex, 1_598_918_400, 0x1e03_77ae, 4_838_420),
+        "regtest" => (libzync::net::REGTEST.genesis_hex, 1_296_688_602, 0x207f_ffff, 2),
         _ => (GENESIS_HASH, GENESIS_TIME, GENESIS_BITS, GENESIS_WORK),
     }
 }
@@ -4424,6 +4425,12 @@ fn smt_advance(
         // ⚠ FIRST TOUCH ONLY. A block may spend two outputs of the same coinbase; the second sees
         // the first's decrement, so recording it too would restore the intermediate value.
         if !prior.iter().any(|(k, _)| k == t) { prior.push((*t, smt.get(t))); }
+        // HAZYNC_RIG: the differential rig gives the guest invalid blocks on purpose. The guest must be the one to
+        // refuse them, so emit the honest witness of a spend from nothing and let `apply_block` reject it.
+        if std::env::var("HAZYNC_RIG").is_ok() && (cur == 0 || cur == hazync_coinbase_smt::bip30::SPENT) {
+            spends.push(SmtSpend { coinbase_txid: *t, current_count: cur, proof: smt.prove(t) });
+            continue;
+        }
         assert!(cur > 0 && cur != hazync_coinbase_smt::bip30::SPENT,
             "bridge: a block spends coinbase {} which the SMT holds at zero — the tree and the UTXO \
              set have diverged, which is a bug here and not a property of the chain",
