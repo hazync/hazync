@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""utxo_snapshot_check.py <snapshot.dat> --bitcoin-cli "<command>" [--state state.json]
+"""utxo_snapshot_check.py <snapshot.dat> --bitcoin-cli "<command>" [--state state.json] [--tracked libzync-tracked.json]
 
 Rebuild libzync's UTXO accumulator (docs/libzync/UTREEXO_FORMAT.md) from a Bitcoin Core `dumptxoutset` file, and
 compare it with the roots a proof commits: "assumeutxo, proven" (SWIFTSYNC_PROOFS.md §6 item 2).
@@ -146,6 +146,10 @@ def main():
     args = sys.argv[1:]
     cli = args[args.index("--bitcoin-cli") + 1] if "--bitcoin-cli" in args else None
     state = args[args.index("--state") + 1] if "--state" in args else None
+    # Coins the BIP30 tree tracks carry bit 1 of the leaf's flag byte. A dumptxoutset file cannot say which they are.
+    tracked = set()
+    if "--tracked" in args:
+        tracked = {(t, v) for t, v, *_ in json.load(open(args[args.index("--tracked") + 1]))["outputs"]}
     path = [a for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or not args[i - 1].startswith("--"))][0]
     if not cli:
         sys.exit("--bitcoin-cli is required: creation order and MTP come from your own node")
@@ -166,7 +170,8 @@ def main():
             if txid not in pos:
                 raise SystemExit(f"UTXO_SNAPSHOT_FAIL: coin {txid[::-1].hex()}:{vout} is not in block {h} on your node")
             hh, cb, value, spk = coins[(txid, vout)]
-            ordered.append(((h, pos[txid], vout), leaf(txid, vout, value, spk, hh, cb, mtp)))
+            fl = cb | (2 if (txid[::-1].hex(), vout) in tracked else 0)
+            ordered.append(((h, pos[txid], vout), leaf(txid, vout, value, spk, hh, fl, mtp)))
     ordered.sort()
     roots = forest([l for _, l in ordered])
     print(f"forest: {len(ordered)} leaves, roots:")
