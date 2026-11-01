@@ -71,8 +71,8 @@ def main():
     w.u32(g_time)                                           # epoch_start
     w.u32(1); w.u32(g_time)                                 # recent_times = [genesis time]
     w.bytes_fixed(bytes(32))                                # anchor_id
-    for x in self_id:                                       # self_id = M
-        w.u32(x)
+    for _ in range(8):                                      # self_id: zero, so anchor_id survives a handover
+        w.u32(0)
     w.u32(0)                                                # ss_set
     for _ in range(16):                                     # ss_acc
         w.u32(0)
@@ -80,8 +80,12 @@ def main():
     w.bytes_fixed(empty_smt_root())                         # smt_root
     w.u32(g_time)                                           # max_time
     w.u32(0)                                                # profile
+    leaf = sha256(bytes([0x02]) + bytes.fromhex(g_hash)[::-1] + struct.pack("<I", 0))
+    w.u32(1); w.u32(1); w.bytes_fixed(leaf)                 # block_roots = [Some(genesis leaf)]
+    w.u64(1)                                                # block_leaves
+    w.bytes_fixed(bytes(32))                                # lineage
     aid = sha256(sha256(w.raw()))
-    print(f"{net} M={mid}: genesis anchor_id {aid.hex()}")
+    print(f"{net}: genesis anchor_id {aid.hex()} (the same for every image)")
     if len(sys.argv) > 3:
         st = json.load(open(sys.argv[3]))
         ok = bytes(st["anchor_id"]) == aid and st["self_id"] == self_id

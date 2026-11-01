@@ -1,0 +1,131 @@
+# libzync: image handover and the block forest
+
+Status: describes branch `libzync-handover`. Normative sources are `prover/methods/guest/src/handover_pin.rs` and
+`aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
+implementation written from this document.
+
+Both features change `ChainState`, so they go in before the image freeze.
+
+## 1. Why
+
+**Handover.** `self_id` pins one image for a whole chain. Without a way to continue, any new image means proving the
+chain again from genesis. A soft fork would cost a full re-proof.
+
+**Block forest.** `ChainState` says nothing about history except `tip_hash`, and its coin forest holds only coins
+unspent at H. A proof could not show that an old block, an `OP_RETURN` commitment or a spent transaction was ever in
+the chain.
+
+## 2. New fields
+
+Added to `ChainState` after `profile`, in this order:
+
+| field | meaning |
+|---|---|
+| `block_roots` | the roots of the block forest, `Vec<Option<[u8; 32]>>`, as `utxo_roots`, with trailing empties removed |
+| `block_leaves` | number of leaves; always `height + 1` |
+| `lineage` | 32 zero bytes for a chain that has been one image since genesis; otherwise the digest of §5 |
+
+## 3. Block forest
+
+An append-only Utreexo forest with one leaf per block, genesis first, so leaf `i` is the block at height `i`.
+
+```
+leaf(hash, height) = SHA-256( 0x02 ‖ block hash, internal byte order ‖ height u32 LE )     37-byte preimage
+parent(L, R)       = SHA-256( 0x01 ‖ L ‖ R )                                               as UTREEXO_FORMAT.md §5
+```
+
+- The genesis state holds one leaf, for block 0: `block_roots = [Some(leaf(genesis hash, 0))]`, `block_leaves = 1`.
+- Every aggregate requires `prev.block_leaves == prev.height + 1`, appends `leaf(this block, height)` and commits the
+  result. The block hash is the one the guest computed from the header it validated.
+- Trees run largest first: the forest of `n` leaves has a tree of height `h` for each set bit `h` of `n`, the highest
+  bit holding the earliest leaves.
+- Height is in the leaf so a path cannot be moved to another position. Tag 0x02 separates it from coin leaves (0x00),
+  interior nodes (0x01), lineage steps (0x03) and SMT nodes (0x11).
+
+**Checking a block.** Given a verified state, a height, a block hash and a path of sibling hashes, locate the leaf's
+tree, require the path length to equal that tree's height, fold the leaf up the path and compare with `block_roots[h]`.
+This is `block_in_chain` in `swiftsync-verify`. It needs no node and no proving: the path comes from anyone, since the
+root in the proof decides. From the block hash, a Merkle branch against the header reaches any transaction.
+
+**What it does not say.** A leaf proves a block is in this chain. It does not say an output is unspent, which is the coin
+forest's job. A proof at height H also says nothing after H.
+
+## 4. Handover
+
+### When it may be used
+
+| Reason for the new image | Handover? |
+|---|---|
+| A consensus rule that starts at height H, such as a soft fork | **Yes** |
+| A cheaper prover, with the same statement | **Yes** |
+| **A soundness bug in the old image** | **NO.** The old proof may attest something false, and continuing inherits that. Re-prove from before the bug could matter, normally genesis. |
+
+A handover takes the old image's claims on trust. The new image re-checks nothing before `first_height`, so it is
+only as sound as every image in its lineage.
+
+A soft fork's image must ship **before** the rule activates. An old image keeps accepting blocks under the old rules,
+so a proof from it after activation states the weaker rules.
+
+### How it works
+
+An image's source lists what it continues, in `handover_pin.rs`:
+
+```rust
+pub const LINEAGE: &[Handover] = &[Handover { image: OLD_ID, first_height: 974_000 }];
+```
+
+The list is compiled in, so the new image's id commits to it. It is source, not an environment variable or a flag, so a
+rebuild gets the same list. `first_height` is the first block the new image proves, and the last entry is the direct
+predecessor.
+
+The aggregate's `is_base` takes a third value. `2` = handover:
+
+1. `env::verify(pinned image, prev_journal)`. The id comes from the source, never from input, so `self_id` cannot widen it.
+2. `prev.self_id` must be the pinned image.
+3. `prev.profile` must equal this image's. A chain cannot gain a claim at a handover: an assumevalid predecessor cannot
+   become a scripts-checked chain, and networks cannot mix.
+4. The block's height must equal `first_height`.
+5. `prev.lineage` must be the digest of the list's earlier entries, so the list cannot misstate history.
+
+Everything else in the state is carried as in a recursive step: coins, work, SwiftSync totals, the BIP30 tree and
+`anchor_id`. The step commits this image's `self_id`, and every later step is an ordinary recursive one. An image with
+an empty list refuses `is_base = 2`.
+
+⛔ **A new image that changes `ChainState` must decode the predecessor's format at step 2.** The guest marks the line.
+
+### Genesis anchor
+
+The genesis state now has `self_id` = 32 zero bytes. It used to hold the image id, which would make `anchor_id` differ
+for each image and fail every handed-over chain at the genesis check. The base step never checks that field, and the
+final `self_id` check is unchanged, so nothing about which image proved the chain is lost. `anchor_id` is now one value
+per network for all images.
+
+## 5. Lineage digest
+
+```
+L_0     = 32 zero bytes
+L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE )     69-byte preimage
+```
+
+Each handover sets `lineage` to the digest of the image's whole pinned list. No other step changes it.
+
+A proof by an image carries one of two values: zero, because that image also proved the chain from genesis, or the
+digest of its list. The verifier refuses any other value, and prints which one it saw.
+
+## 6. What a verifier checks
+
+Added to the steps in SWIFTSYNC_PROOFS.md §5:
+
+- `block_leaves == height + 1`, and `block_roots` has a root exactly at the set bits of `block_leaves`.
+- `lineage` is zero, or the digest of the image's stated list. `swiftsync-verify --handover <image>:<height>` states an
+  entry, oldest first.
+- The image id pinned is still the **newest** one. It commits to its whole lineage, so a verifier needs nothing else to
+  accept the chain. Deciding to trust that lineage is a decision about every image in it.
+
+## 7. Limits
+
+- Proofs made before this format do not decode. The old real receipts in `swiftsync-verify/vectors` are retired until
+  a real proof exists on this format.
+- An anchored demonstration run has no real block history. The host fills placeholder roots of the right size and warns.
+  Such a proof can only ever be DEMO, and its forest does not commit to real history.
+- An image can only name a predecessor whose final id is known. Publishing an id means freezing that image's source.

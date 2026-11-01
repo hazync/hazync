@@ -216,6 +216,38 @@ struct ChainState {
     max_time: u32,
     #[serde(default)]
     profile: u32,
+    // libzync: the block forest and lineage digest (docs/libzync/HANDOVER.md). Mirrors the guest. Default empty so a
+    // block file's anchor, which has no history, still loads; `demo_block_forest` then fills a placeholder.
+    #[serde(default)]
+    block_roots: Vec<Option<[u8; 32]>>,
+    #[serde(default)]
+    block_leaves: u64,
+    #[serde(default)]
+    lineage: [u8; 32],
+}
+
+// The guest's own pin file: this host and that guest cannot disagree about the lineage.
+mod handover_pin { include!("../../methods/guest/src/handover_pin.rs"); }
+
+fn sha256_host(b: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(b).into()
+}
+
+/// The lineage digest of a list of handovers (guest `lineage_of`).
+fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
+    list.iter().fold([0u8; 32], |l, h| sha256_host(&handover_pin::lineage_preimage(&l, h)))
+}
+
+/// A mid-chain anchor from a block file has no record of the blocks before it, but the guest needs a forest of the
+/// right SIZE to append to. This fills one with placeholder roots. A proof built on it is anchored, so verifiers can
+/// only ever report DEMO, and its block forest does not commit to real history: it exists for measurement and tests.
+fn demo_block_forest(s: &mut ChainState) {
+    if s.block_leaves != 0 { return; }
+    let n = s.height as u64 + 1;
+    s.block_leaves = n;
+    s.block_roots = (0..64 - n.leading_zeros()).map(|i| ((n >> i) & 1 == 1).then(|| sha256_host(&[b"hazync demo block forest root", &[i as u8][..]].concat()))).collect();
+    eprintln!("WARNING: anchor at {} has no block forest; using PLACEHOLDER roots (demonstration only)", s.height);
 }
 
 /// The profile word this host's image commits (guest `chain_profile`).
@@ -693,7 +725,7 @@ fn seed_and_anchor() -> (Forest, ChainState) {
         prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, epoch_start: 1_231_006_505,
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
         anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
-        max_time: 1_231_730_523, profile: 0,
+        max_time: 1_231_730_523, profile: 0, block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
     };
     (forest, anchor)
 }
@@ -925,6 +957,7 @@ fn build_full() -> (ChainState, BlockWitness) {
         recent_times: recent_times.clone(),
         anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: recent_times.iter().copied().max().unwrap_or(0), profile: 0,
+        block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
     };
 
     // Build the witness: per tx a shared full-prevouts blob; per input a BlockInput (tx_first on input 0).
@@ -1040,6 +1073,7 @@ fn build_full() -> (ChainState, BlockWitness) {
         }
         w.coinbase_tx = serialize(&cb);
     }
+    if methods::LIBZYNC { demo_block_forest(&mut anchor); }
     (anchor, w)
 }
 
@@ -1284,8 +1318,11 @@ fn genesis_anchor() -> ChainState {
         tip_hash: arr(rev(hx(g_hash))), utxo_roots: Forest::new().roots(), utxo_leaves: 0,
         cum_work: arr_u128(g_work), height: 0,
         prev_nbits: g_bits, prev_time: g_time, epoch_start: g_time,
-        recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        // self_id is zero, not this image: anchor_id must stay the same across a handover (HANDOVER.md).
+        recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: [0; 8], ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: g_time, profile: 0,
+        block_roots: vec![Some(sha256_host(&handover_pin::block_leaf_preimage(&arr(rev(hx(g_hash))), 0)))],
+        block_leaves: 1, lineage: [0; 32],
     }
 }
 
@@ -2074,6 +2111,9 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         Err(e) => { check(false, &format!("{hints} is well formed: {e}")); [0u8; 32] }
     };
     check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints}", hex(&fh)));
+    check(cs.block_leaves == cs.height as u64 + 1, &format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
+    let full = lineage_of(handover_pin::LINEAGE);
+    check(cs.lineage == [0; 32] || cs.lineage == full, &format!("lineage {} is this image's ({} handover(s) pinned)", hex(&cs.lineage), handover_pin::LINEAGE.len()));
     println!("  chain: tip {} (display order {}), cum_work 0x{}", hex(&cs.tip_hash),
              hex(&rev(cs.tip_hash.to_vec())), hex(&rev(cs.cum_work.to_vec())));
     println!("  UTXO set at H: {} coins, Utreexo roots {:?}", cs.utxo_leaves,
@@ -3195,14 +3235,15 @@ fn write_aggregate_env(
     write_aggregate_env_ex(b, receipts, anchor, w, true);
 }
 
-/// `is_base == false`: `anchor` is the PREVIOUS block's committed chain state, whose receipt the caller
-/// has added as an assumption -- the guest verifies it recursively instead of trusting it.
+/// `step` is the guest's is_base. 1: a base step on `anchor`. 0: `anchor` is the PREVIOUS block's committed chain
+/// state, whose receipt the caller has added as an assumption -- the guest verifies it recursively instead of trusting
+/// it. 2: the same, with a receipt of the predecessor image (a handover).
 fn write_aggregate_env_ex(
     b: &mut risc0_zkvm::ExecutorEnvBuilder<'_>,
     receipts: &[risc0_zkvm::Receipt],
     anchor: &ChainState,
     w: &BlockWitness,
-    is_base: bool,
+    step: u32,
 ) {
     b.segment_limit_po2(seg_po2());
     for r in receipts { b.add_assumption(r.clone()); }
@@ -3233,7 +3274,7 @@ fn write_aggregate_env_ex(
     }
     b.write(w).unwrap();
     // Negative-test hook (test-only, inert unless set): send is_base = 2, which the guest must refuse.
-    let raw_base = if std::env::var("HAZYNC_TEST_ISBASE2").is_ok() { 2u32 } else { is_base as u32 };
+    let raw_base = if std::env::var("HAZYNC_TEST_ISBASE2").is_ok() { 2u32 } else { step };
     b.write(&raw_base).unwrap();
 }
 
@@ -3716,9 +3757,45 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     use std::time::Instant;
     assert!(methods::LIBZYNC, "libzync-prove-range needs a libzync guest");
     std::fs::create_dir_all(out).unwrap();
-    let mut prev: ChainState = if anchor_path == "genesis" { genesis_anchor() } else {
+    // HAZYNC_HANDOVER_RECEIPT=<receipt>: the first block is a handover step on the pinned predecessor's receipt. The
+    // anchor argument is unused (pass the word `handover`): the chain state comes from the verified receipt.
+    let handover: Option<(Receipt, ChainState)> = std::env::var("HAZYNC_HANDOVER_RECEIPT").ok().map(|p| {
+        let last = handover_pin::LINEAGE.last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
+        let r: Receipt = bincode::deserialize(&std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
+        r.verify(last.image).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
+        let st: ChainState = r.journal.decode().expect("ChainState");
+        let tamper = std::env::var("HAZYNC_TEST_HANDOVER").ok();
+        if tamper.is_some() { assert!(dev_mode_env(), "HAZYNC_TEST_HANDOVER is a dev-mode test hook"); }
+        else {
+            assert!(st.kind == KIND_CHAIN && st.self_id == last.image, "{p} is not the predecessor's chain state");
+            assert_eq!(st.height + 1, last.first_height, "{p}: the pin hands over at {}", last.first_height);
+        }
+        // Negative tests (experimental/libzync-bench/handover/): a dev-mode receipt for a state the predecessor never
+        // committed, so one guest check at a time is reached with its assumption resolved, not stopped earlier.
+        let mut st = st;
+        let mut claim_id: risc0_zkvm::sha::Digest = last.image.into();
+        match tamper.as_deref() {
+            None | Some("height") => {}
+            Some("self_id") => st.self_id[0] ^= 1,
+            Some("profile") => st.profile ^= 2,
+            Some("lineage") => st.lineage[0] ^= 1,
+            Some("forest") => st.block_leaves -= 1,
+            Some("kind") => st.kind ^= 1,
+            Some("wrong_image") => claim_id = METHOD_ID.into(),
+            Some("no_receipt") => {}
+            Some(x) => panic!("HAZYNC_TEST_HANDOVER: unknown case {x}"),
+        }
+        let r = if tamper.is_some() {
+            use risc0_zkvm::{FakeReceipt, InnerReceipt, ReceiptClaim};
+            let j = state_journal_bytes(&st);
+            Receipt::new(InnerReceipt::Fake(FakeReceipt::new(ReceiptClaim::ok(claim_id, j.clone()))), j)
+        } else { r };
+        (r, st)
+    });
+    let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };
+    demo_block_forest(&mut prev);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
@@ -3757,7 +3834,8 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         t
     };
     std::fs::write(format!("{out}/anchor_effective.json"), serde_json::to_string(&prev).unwrap()).unwrap();
-    let mut prev_rcpt: Option<Receipt> = None;
+    let mut handover_pending = handover.is_some();
+    let mut prev_rcpt: Option<Receipt> = handover.map(|(r, _)| r);
     let mut first = lo;
     if std::env::var("HAZYNC_RESUME").map(|v| v == "1").unwrap_or(false) {
         if let Some(k) = (lo..=hi).rev().find(|k| std::path::Path::new(&format!("{out}/block_{k}.rcpt")).exists()) {
@@ -3772,6 +3850,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             smt = t;
             prev = st;
             prev_rcpt = Some(r);
+            handover_pending = false; // a receipt of this image means the handover is already behind us
             first = k + 1;
             println!("resuming after block {k}");
         }
@@ -3820,10 +3899,14 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         std::env::remove_var("HAZYNC_LZ_HINTS"); // the aggregate's collect pass below runs without ECMH hints
         libzync_agg_prep(&mut w);
         let is_base = prev_rcpt.is_none();
+        let step = if handover_pending { 2 } else { is_base as u32 };
         let env_for = |b: &mut risc0_zkvm::ExecutorEnvBuilder| {
             b.segment_limit_po2(seg_po2());
-            if let Some(p) = &prev_rcpt { b.add_assumption(p.clone()); }
-            write_aggregate_env_ex(b, &chunks, &prev, &w, is_base);
+            if let Some(p) = &prev_rcpt {
+                // Negative test: a handover with the predecessor's journal and no receipt behind it.
+                if std::env::var("HAZYNC_TEST_HANDOVER").as_deref() != Ok("no_receipt") { b.add_assumption(p.clone()); }
+            }
+            write_aggregate_env_ex(b, &chunks, &prev, &w, step);
             libzync_agg_tail(b, &w);
         };
         // collect pass: the leaves the ECMH hints are for
@@ -3855,11 +3938,12 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
         let rbytes = std::fs::metadata(format!("{out}/block_{h}.rcpt")).map(|m| m.len()).unwrap_or(0);
         writeln!(times, "{h}\t{}\t{t_sig:.1}\t{:.1}\t{:.1}\t{dt:.1}\t{}\t{rbytes}", bounds.len(),
-                 t_chunks - t_sig, t_hints - t_chunks, if is_base { "base" } else { "recursive" }).unwrap();
+                 t_chunks - t_sig, t_hints - t_chunks, ["recursive", "base", "handover"][step as usize]).unwrap();
         println!("  block {h}: {} chunks, proved in {dt:.1} s ({}), forest {} ss_set {}  [{:.0} s total]",
-                 bounds.len(), if is_base { "base on anchor" } else { "verifies prev" }, st.utxo_leaves, st.ss_set, t_all.elapsed().as_secs_f64());
+                 bounds.len(), ["verifies prev", "base on anchor", "handover: verifies predecessor"][step as usize], st.utxo_leaves, st.ss_set, t_all.elapsed().as_secs_f64());
         prev = st;
         prev_rcpt = Some(r);
+        handover_pending = false;
     }
     println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final receipt {out}/block_{hi}.rcpt", t_all.elapsed().as_secs_f64());
 }
@@ -6029,7 +6113,7 @@ fn main() {
         // last 11 block timestamps up to 169 (approx; MTP unused pre-BIP113 at heights 170-172).
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
         anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
-        max_time: 1_231_730_523, profile: 0,
+        max_time: 1_231_730_523, profile: 0, block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
     };
 
     // Fold each real block. (170 has the P2PK spend; 171/172 are coinbase-only.)

@@ -25,6 +25,7 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_231_006_505,
         genesis_bits: 0x1d00_ffff,
         genesis_work: 4_295_032_833,
+        lineage: &[],
     },
     Image {
         network: "signet",
@@ -34,6 +35,7 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_598_918_400,
         genesis_bits: 0x1e03_77ae,
         genesis_work: 4_838_420,
+        lineage: &[],
     },
 ];
 
@@ -54,6 +56,9 @@ pub struct Image {
     pub genesis_bits: u32,
     /// Core's GetBlockProof(genesis_bits) = 2^256 / (target + 1); checked by the unit test.
     pub genesis_work: u128,
+    /// The handovers this image's source pins, oldest first (HANDOVER.md). A proof by this image carries either a
+    /// zero lineage (one image since genesis) or the digest of exactly this list.
+    pub lineage: &'static [Handover],
 }
 
 impl Image {
@@ -65,6 +70,10 @@ impl Image {
     pub fn with_method_id(&'static self, hex: &str) -> Option<&'static Image> {
         hex32(hex)?;
         Some(Box::leak(Box::new(Image { method_id_hex: Box::leak(hex.to_string().into_boxed_str()), ..*self })))
+    }
+    /// The same image with a stated lineage: for a reader who rebuilt an image that pins one.
+    pub fn with_lineage(&'static self, list: Vec<Handover>) -> &'static Image {
+        Box::leak(Box::new(Image { lineage: Box::leak(list.into_boxed_slice()), ..*self }))
     }
     pub fn method_id(&self) -> Digest {
         Digest::from_bytes(hex32(self.method_id_hex).expect("IMAGES holds valid hex"))
@@ -93,6 +102,108 @@ pub struct ChainState {
     pub smt_root: [u8; 32],
     pub max_time: u32,
     pub profile: u32,
+    /// One leaf per block, genesis first: see [`block_in_chain`] and docs/libzync/HANDOVER.md.
+    #[serde(default)]
+    pub block_roots: Vec<Option<[u8; 32]>>,
+    #[serde(default)]
+    pub block_leaves: u64,
+    /// Zero for a chain that has been one image since genesis; see [`lineage_of`].
+    #[serde(default)]
+    pub lineage: [u8; 32],
+}
+
+/// The guest's own definitions of a handover, a block leaf and a lineage step.
+pub mod pin {
+    include!("../../prover/methods/guest/src/handover_pin.rs");
+}
+pub use pin::Handover;
+
+fn sha256(b: &[u8]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(b).into()
+}
+
+/// The lineage digest of a list of handovers, oldest first.
+pub fn lineage_of(list: &[Handover]) -> [u8; 32] {
+    list.iter().fold([0u8; 32], |l, h| sha256(&pin::lineage_preimage(&l, h)))
+}
+
+/// A block's leaf in the block forest. `hash` is in internal byte order.
+pub fn block_leaf(hash: &[u8; 32], height: u32) -> [u8; 32] {
+    sha256(&pin::block_leaf_preimage(hash, height))
+}
+
+fn forest_parent(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
+    let mut p = [0u8; 65];
+    p[0] = 0x01;
+    p[1..33].copy_from_slice(l);
+    p[33..65].copy_from_slice(r);
+    sha256(&p)
+}
+
+/// Where leaf `pos` sits in a forest of `leaves`: (tree height, position inside that tree). Trees run largest first,
+/// the order `Stump::add` builds them in. None if there is no such leaf.
+fn locate(leaves: u64, pos: u64) -> Option<(u32, u64)> {
+    let mut offset = 0u64;
+    for h in (0..64).rev() {
+        if (leaves >> h) & 1 == 1 {
+            if pos < offset + (1 << h) {
+                return Some((h, pos - offset));
+            }
+            offset += 1 << h;
+        }
+    }
+    None
+}
+
+/// Does this proven state commit to `hash` at `height`? `path` is the sibling hashes, lowest first. A proof of the tip
+/// checks any earlier block this way, with no node and no per-block proving. `cs` must have passed [`verify`].
+pub fn block_in_chain(cs: &ChainState, height: u32, hash: &[u8; 32], path: &[[u8; 32]]) -> bool {
+    let Some((tree, mut pos)) = locate(cs.block_leaves, height as u64) else { return false };
+    if path.len() != tree as usize {
+        return false;
+    }
+    let mut node = block_leaf(hash, height);
+    for sib in path {
+        node = if pos & 1 == 0 { forest_parent(&node, sib) } else { forest_parent(sib, &node) };
+        pos >>= 1;
+    }
+    cs.block_roots.get(tree as usize).copied().flatten() == Some(node)
+}
+
+/// The block forest over `hashes` (index = height, internal byte order): the roots a proof at the last height commits.
+pub fn block_forest(hashes: &[[u8; 32]]) -> (Vec<Option<[u8; 32]>>, u64) {
+    let mut roots: Vec<Option<[u8; 32]>> = Vec::new();
+    for (i, b) in hashes.iter().enumerate() {
+        let (mut node, mut h) = (block_leaf(b, i as u32), 0);
+        while roots.get(h).copied().flatten().is_some() {
+            node = forest_parent(&roots[h].take().unwrap(), &node);
+            h += 1;
+        }
+        if h >= roots.len() {
+            roots.resize(h + 1, None);
+        }
+        roots[h] = Some(node);
+    }
+    while roots.last() == Some(&None) {
+        roots.pop();
+    }
+    (roots, hashes.len() as u64)
+}
+
+/// The path for the block at `height` in the forest over `hashes`: what a block-proof server hands out.
+pub fn block_path(hashes: &[[u8; 32]], height: u32) -> Option<Vec<[u8; 32]>> {
+    let (tree, mut pos) = locate(hashes.len() as u64, height as u64)?;
+    let start = height as u64 - pos;
+    let mut level: Vec<[u8; 32]> = hashes[start as usize..(start + (1u64 << tree)) as usize].iter().enumerate()
+        .map(|(i, b)| block_leaf(b, start as u32 + i as u32)).collect();
+    let mut path = Vec::with_capacity(tree as usize);
+    for _ in 0..tree {
+        path.push(level[(pos ^ 1) as usize]);
+        level = level.chunks_exact(2).map(|c| forest_parent(&c[0], &c[1])).collect();
+        pos >>= 1;
+    }
+    Some(path)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +289,16 @@ pub fn verify(inp: &Inputs) -> Report {
     rep.check(cs.max_time as u64 <= inp.now + MAX_FUTURE_BLOCK_TIME, format!(
         "time-too-new: largest block time {} <= this clock {} + {} s", cs.max_time, inp.now, MAX_FUTURE_BLOCK_TIME));
 
+    // The block forest: one leaf per block, in the shape that leaf count forces.
+    let shape = (0..64).all(|i| ((cs.block_leaves >> i) & 1 == 1) == cs.block_roots.get(i).copied().flatten().is_some());
+    rep.check(cs.block_leaves == cs.height as u64 + 1 && shape,
+              format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
+
+    // The lineage: an image can only ever commit zero or its own pinned list. A list the reader did not state fails.
+    let full = lineage_of(inp.image.lineage);
+    rep.check(cs.lineage == [0; 32] || cs.lineage == full, format!("lineage {} is this image's ({} handover(s) stated)",
+              hex(&cs.lineage), inp.image.lineage.len()));
+
     // Step 3: anchored at genesis (or at the supplied state, which can only ever give Demo).
     let (want, what) = match &inp.anchor {
         None => (genesis_anchor(inp.image), "genesis".to_string()),
@@ -240,13 +361,17 @@ pub fn genesis_anchor(img: &Image) -> ChainState {
         epoch_start: img.genesis_time,
         recent_times: vec![img.genesis_time],
         anchor_id: [0; 32],
-        self_id: words(&img.method_id()),
+        // Zero, not this image: anchor_id must stay the same across a handover (HANDOVER.md).
+        self_id: [0; 8],
         ss_set: 0,
         ss_acc: [0; 16],
         ss_hints: [0; 32],
         smt_root: empty_smt_root(),
         max_time: img.genesis_time,
         profile: 0,
+        block_roots: vec![Some(block_leaf(&tip, 0))],
+        block_leaves: 1,
+        lineage: [0; 32],
     }
 }
 
@@ -358,10 +483,87 @@ mod tests {
 
     #[test]
     fn genesis_anchor_vectors() {
-        // SWIFTSYNC_PROOFS.md §5 step 3, round-8 images; also checked by scripts/libzync/genesis_anchor_id.py.
+        // SWIFTSYNC_PROOFS.md §5 step 3. Independent of the image; computed by scripts/libzync/genesis_anchor_id.py.
         let a = |n| hex(&anchor_id(&genesis_anchor(Image::by_network(n).unwrap())));
-        assert_eq!(a("mainnet"), "5b2020ae48fdf2d180837b612b13c2b36192208f4afb94dee350553fa7ea1d44");
-        assert_eq!(a("signet"), "636271d3f46ea120f22da161648247bdd004afba1cb92378ba3af407c9e4e2b2");
+        assert_eq!(a("mainnet"), "1066e814035cc8a1ac2bf6760095b3addb08cad817b6f164aeb444e623337c9a");
+        assert_eq!(a("signet"), "f6a784992a04be9da9f992e89385abe4d6b2f44cb87ad6354af1e01d43dffa36");
+    }
+
+    #[test]
+    fn genesis_anchor_does_not_depend_on_the_image() {
+        // What makes a handed-over chain still genesis-anchored.
+        let img = Image::by_network("mainnet").unwrap();
+        let other = img.with_method_id(&"ab".repeat(32)).unwrap();
+        assert_eq!(anchor_id(&genesis_anchor(img)), anchor_id(&genesis_anchor(other)));
+    }
+
+    fn sample_hashes(n: u32) -> Vec<[u8; 32]> {
+        use sha2::{Digest as _, Sha256};
+        (0..n).map(|i| Sha256::digest(i.to_le_bytes()).into()).collect()
+    }
+
+    fn state_over(hashes: &[[u8; 32]]) -> ChainState {
+        let mut cs = genesis_anchor(Image::by_network("mainnet").unwrap());
+        (cs.block_roots, cs.block_leaves) = block_forest(hashes);
+        cs
+    }
+
+    #[test]
+    fn block_forest_vectors() {
+        // From scripts/libzync/block_forest_ref.py, which builds the forest from its definition and shares no code here.
+        let hs = sample_hashes(11);
+        assert_eq!(hex(&block_leaf(&hs[0], 0)), "7f3a8314778748ed848d8fc382579dd6c924c6b3dafa8621c5195de907ea3675");
+        let (r, n) = block_forest(&hs);
+        assert_eq!(n, 11);
+        let want = [Some("37636f768a40aa384978bb6f609d9b0fc2f84acf52a8296179df650a7b4f65a1"),
+                    Some("736312ae2a7a66502de4d433d0719967af9a3a29795dce8779e0ff23d10700e4"), None,
+                    Some("b14a44d1671c66a143126a4c9629faff4f7479c32f77b3e6aecd366bee86e324")];
+        assert_eq!(r.iter().map(|x| x.map(|h| hex(&h))).collect::<Vec<_>>(), want.map(|x| x.map(String::from)).to_vec());
+        let p = block_path(&hs, 5).unwrap();
+        let want = ["d7a2f3d26dde6016c12a608b53357e5bbb5af98110a7914d47178d3124752f65",
+                    "1aec36ab09c4040b6d467e7d766d43a775c0b7b1e87133ed48ff1c85e4ab0cdb",
+                    "ab2dbea869aa04c799605d1600b5b1d1f69f78c20bef0caac462f798d555f786"];
+        assert_eq!(p.iter().map(|h| hex(h)).collect::<Vec<_>>(), want);
+    }
+
+    #[test]
+    fn lineage_vectors() {
+        // scripts/libzync/block_forest_ref.py again.
+        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000 };
+        let b = Handover { image: [9; 8], first_height: 980_000 };
+        assert_eq!(lineage_of(&[]), [0; 32]);
+        let one = lineage_of(&[Handover { image: a.image, first_height: a.first_height }]);
+        assert_eq!(hex(&one), "de40f074a41c9244272b66f8ce15759e646186968f348bc0cd930898c6948458");
+        assert_eq!(hex(&lineage_of(&[a, b])), "fd23e4cf05d16147bcf677535f1c8bc64d8608369c55cc2fd07839dcd12a178c");
+    }
+
+    #[test]
+    fn every_block_checks_and_nothing_else_does() {
+        for n in 1..70u32 {
+            let hs = sample_hashes(n);
+            let cs = state_over(&hs);
+            for h in 0..n {
+                let p = block_path(&hs, h).unwrap();
+                assert!(block_in_chain(&cs, h, &hs[h as usize], &p), "n {n} height {h}");
+                // A different block, or the right block at the wrong height.
+                assert!(!block_in_chain(&cs, h, &[0xee; 32], &p));
+                assert!(!block_in_chain(&cs, (h + 1) % n, &hs[h as usize], &p) || n == 1);
+                // One flipped bit anywhere in the path.
+                for i in 0..p.len() {
+                    let mut q = p.clone();
+                    q[i][0] ^= 1;
+                    assert!(!block_in_chain(&cs, h, &hs[h as usize], &q));
+                }
+                // A short path (an interior node posing as a leaf) and a long one.
+                if !p.is_empty() {
+                    assert!(!block_in_chain(&cs, h, &hs[h as usize], &p[..p.len() - 1]));
+                }
+                let mut long = p.clone();
+                long.push([0; 32]);
+                assert!(!block_in_chain(&cs, h, &hs[h as usize], &long));
+            }
+            assert!(!block_in_chain(&cs, n, &[0; 32], &[]), "a height past the tip");
+        }
     }
 }
 
