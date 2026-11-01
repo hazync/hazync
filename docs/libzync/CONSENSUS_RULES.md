@@ -55,6 +55,8 @@ The guest compiles these Core sources (`prover/methods/guest/build.rs:311-324`, 
 `hash.cpp`, the `crypto/` hashes, `consensus/tx_check.cpp`, `consensus/merkle.cpp`, `arith_uint256.cpp`, `pow.cpp`,
 `chain.cpp`, `kernel/chainparams.cpp`.
 
+**Update:** `consensus/tx_verify.cpp` is now compiled unmodified (`core_tx_rules.cpp`), so `IsFinalTx`, `SequenceLocks`, `CheckTxInputs` and `GetTransactionSigOpCost` are Core's code, whatever the rows below say. The rows are to be re-read against it.
+
 It does **not** compile `validation.cpp`, `consensus/tx_verify.cpp` or `coins.cpp`. So `CheckBlock`, `ContextualCheckBlock`,
 `ConnectBlock`, `CheckTxInputs`, `IsFinalTx`, `SequenceLocks` and `GetTransactionSigOpCost` are transcriptions, even
 where §2 of the proposal says "Core's own C++". The tags say which is which:

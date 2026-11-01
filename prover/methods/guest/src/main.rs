@@ -190,6 +190,18 @@ extern "C" {
     // Sum of a coinbase tx's outputs, and the height's block subsidy (exact halving formula).
     fn coinbase_value(tx: *const u8, tx_len: u32) -> i64;
     fn block_subsidy(height: u32) -> i64;
+    // libzync: Core's consensus/tx_verify.cpp itself (core_tx_rules.cpp).
+    #[cfg(feature = "libzync")]
+    fn hz_tx_rules_c(tx: *const u8, tx_len: u32, prevouts: *const u8, prevouts_len: u32, start: u32, k: u32,
+                     ch: *const u32, cb: *const u32, cmtp: *const u32, height: u32, mtp: u32, lock_cutoff: i64,
+                     script_flags: u32, csv_active: u32, out_fee: *mut i64, out_weight: *mut i64,
+                     out_sigops: *mut i64) -> i32;
+    #[cfg(feature = "libzync")]
+    fn hz_coinbase_is_final(tx: *const u8, tx_len: u32, height: u32, lock_cutoff: i64) -> i32;
+    #[cfg(feature = "libzync")]
+    fn hz_coinbase_sigops_c(tx: *const u8, tx_len: u32, script_flags: u32) -> i64;
+    #[cfg(feature = "libzync")]
+    fn hz_weight_c(tx: *const u8, tx_len: u32) -> i64;
     // Cumulative chainwork: cum += GetBlockProof(nBits) (real Core 256-bit formula).
     fn add_work(cum: *mut u8, nbits: u32);
     // Per-tx weight + legacy sigop cost (real GetSerializeSize + GetSigOpCount).
@@ -1853,7 +1865,7 @@ fn chunk_prove() {
         #[cfg(feature = "agg-lite")]
         {
             let _ = (&mut binds, &mut tx_wtxids, &mut leaves_out, &mut seqs_out, &mut vers_out);
-            if !lite.record(&raw_tx, &prevouts, &idx, &ch, &cb, &mtp, &results, &leaves, &seqbuf, verbuf, &wt, hw) {
+            if !lite.record(&raw_tx, &prevouts, &idx, &ch, &cb, &mtp, &results, &leaves, &wt, hw) {
                 all_valid = false;
             }
             #[cfg(feature = "tx-cycles")]

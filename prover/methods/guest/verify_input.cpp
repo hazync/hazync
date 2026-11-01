@@ -413,6 +413,38 @@ extern "C" uint32_t tx_wtxid_info(const uint8_t* tx_bytes, unsigned tx_len, uint
     return tx.HasWitness() ? 1u : 0u;
 }
 
+#ifdef HAZYNC_AGG_LITE
+#ifndef HAZYNC_TX_ONCE
+#error "the libzync guest parses through cached_tx"
+#endif
+// Core's own consensus/tx_verify.cpp, compiled in core_tx_rules.cpp.
+int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsigned start, unsigned k,
+                const uint32_t* ch, const uint32_t* cb, const uint32_t* cmtp,
+                int height, int64_t mtp, int64_t lock_cutoff, uint32_t script_flags, bool csv_active,
+                int64_t* out_fee, int64_t* out_weight, int64_t* out_sigops);
+bool hz_is_final(const CTransaction& tx, int height, int64_t lock_cutoff);
+int64_t hz_coinbase_sigops(const CTransaction& tx, uint32_t script_flags);
+int64_t hz_weight(const CTransaction& tx);
+
+extern "C" int hz_tx_rules_c(const uint8_t* tx_bytes, unsigned tx_len, const uint8_t* prevouts, unsigned prevouts_len,
+                             unsigned start, unsigned k, const uint32_t* ch, const uint32_t* cb, const uint32_t* cmtp,
+                             uint32_t height, uint32_t mtp, int64_t lock_cutoff, uint32_t script_flags,
+                             uint32_t csv_active, int64_t* out_fee, int64_t* out_weight, int64_t* out_sigops) {
+    return hz_tx_rules(cached_tx(tx_bytes, tx_len), cached_spent(prevouts, prevouts_len), start, k, ch, cb, cmtp,
+                       static_cast<int>(height), mtp, lock_cutoff, script_flags, csv_active != 0,
+                       out_fee, out_weight, out_sigops);
+}
+extern "C" int hz_coinbase_is_final(const uint8_t* tx_bytes, unsigned tx_len, uint32_t height, int64_t lock_cutoff) {
+    return hz_is_final(cached_tx(tx_bytes, tx_len), static_cast<int>(height), lock_cutoff) ? 1 : 0;
+}
+extern "C" int64_t hz_coinbase_sigops_c(const uint8_t* tx_bytes, unsigned tx_len, uint32_t script_flags) {
+    return hz_coinbase_sigops(cached_tx(tx_bytes, tx_len), script_flags);
+}
+extern "C" int64_t hz_weight_c(const uint8_t* tx_bytes, unsigned tx_len) {
+    return hz_weight(cached_tx(tx_bytes, tx_len));
+}
+#endif
+
 // Absolute locktime finality — exact Core IsFinalTx (consensus/tx_verify.cpp).
 extern "C" int is_final_tx(const uint8_t* tx_bytes, unsigned tx_len, int64_t height, int64_t block_time) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),

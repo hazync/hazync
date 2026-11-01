@@ -37,9 +37,10 @@ statement holds if the checks in §5 pass:
 >    91,722 and/or 91,812 until they are overwritten; the forest never holds them (`UTREEXO_FORMAT.md` §1).
 
 **Where the rules come from.** Scripts, signatures, sighashes, transaction parsing and `CheckTransaction` run Bitcoin
-Core's own C++ (v28.0 with the patches in `patches/`). `validation.cpp` and `consensus/tx_verify.cpp` are not compiled
-into the guest, so `CheckTxInputs`, `IsFinalTx`, the sigop totals, BIP34 and the witness commitment are C++
-transcriptions in `verify_input.cpp`. Signatures are verified by a batch equation instead of one libsecp call each, with
+Core's own C++ (v28.0 with the patches in `patches/`). So do `CheckTxInputs`, `IsFinalTx`, `SequenceLocks` and
+`GetTransactionSigOpCost`: `consensus/tx_verify.cpp` is compiled unmodified, with small stand-ins for the coin view and
+block index (`prover/methods/guest/core_tx_rules.cpp`). `validation.cpp` is not compiled into the guest, so BIP34 and
+the witness commitment are C++ transcriptions in `verify_input.cpp`. Signatures are verified by a batch equation instead of one libsecp call each, with
 the same acceptance as libsecp (`LIBZYNC.md` §7, round 6). The block-level bookkeeping (coin accounting, maturity,
 BIP68, weight and sigop totals, subsidy, BIP30) is transcribed in Rust (`prover/methods/guest/src/agg_lite.rs`).
 [`CONSENSUS_RULES.md`](CONSENSUS_RULES.md) compares the guest with Core's reject reasons, rule by rule.

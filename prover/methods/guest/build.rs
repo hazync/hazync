@@ -383,6 +383,12 @@ fn main() {
     for tu in core_tus { b.file(format!("{core}/{tu}")); }
     if signet { b.file(format!("{core}/signet.cpp")); }
     b.file("verify_input.cpp");
+    // libzync: Core's consensus/tx_verify.cpp, unmodified, #included with stand-ins for the coin view and block
+    // index, and the rest of what its error paths link against (FormatMoney).
+    if lz_env {
+        b.file("core_tx_rules.cpp");
+        b.file(format!("{core}/util/moneystr.cpp"));
+    }
 
     // Tell cargo what this build actually depends on. Without these the C++ dependency is INVISIBLE:
     // on 2026-07-30 a change to verify_input.cpp's leaf commitment did not recompile — the guest ELF
@@ -395,6 +401,9 @@ fn main() {
     // files are covered by the default fingerprint but are listed anyway, because relying on a default
     // is what produced a three-day-old object.
     println!("cargo:rerun-if-changed=verify_input.cpp");
+    println!("cargo:rerun-if-changed=core_tx_rules.cpp");
+    println!("cargo:rerun-if-changed={core}/consensus/tx_verify.cpp");
+    println!("cargo:rerun-if-changed={core}/util/moneystr.cpp");
     println!("cargo:rerun-if-changed=cshims.c");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");

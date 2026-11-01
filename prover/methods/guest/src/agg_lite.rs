@@ -77,7 +77,7 @@ impl ChunkCtx {
     /// Record one transaction run. Returns false if a per-transaction rule failed.
     #[allow(clippy::too_many_arguments)]
     pub fn record(&mut self, raw_tx: &[u8], prevouts: &[u8], idx: &[u32], ch: &[u32], cb: &[u32],
-                  cmtp: &[u32], results: &[i32], leaves: &[u8], seqs: &[u32], version: i32,
+                  cmtp: &[u32], results: &[i32], leaves: &[u8],
                   wtxid: &[u8; 32], has_witness: u32) -> bool {
         use sha2::{Digest, Sha256};
         let mut ok = true;
@@ -106,14 +106,25 @@ impl ChunkCtx {
         self.words.push(start);
         self.words.push(k as u32);
         self.words.push(first as u32);
+        // A coin cannot be spent before the block that creates it, and its flag is exactly 0 or 1. These
+        // guard what Core's code below is given: Core reads both from its own coin database.
+        for j in 0..k {
+            if ch[j] > self.height || cb[j] > 1 { ok = false; }
+        }
+        // Core's own CheckTransaction, IsFinalTx, CheckTxInputs, SequenceLocks and GetTransactionSigOpCost
+        // (core_tx_rules.cpp), on this run's inputs. The output arguments are set only when `first`.
+        let lock_time = if self.height >= NET.csv_height { self.mtp } else { self.block_time };
+        let (mut fee, mut weight, mut sigops) = (0i64, 0i64, 0i64);
+        if ok && k > 0 {
+            let r = unsafe { hz_tx_rules_c(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, start, k as u32,
+                                           ch.as_ptr(), cb.as_ptr(), cmtp.as_ptr(), self.height, self.mtp,
+                                           lock_time as i64, self.flags, (self.height >= NET.csv_height) as u32,
+                                           &mut fee, &mut weight, &mut sigops) };
+            if r != 1 { ok = false; }
+        } else {
+            ok = false;
+        }
         if first {
-            let mut fee: i64 = 0;
-            if unsafe { check_tx(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, &mut fee) } != 1 { ok = false; }
-            let lock_time = if self.height >= NET.csv_height { self.mtp } else { self.block_time };
-            if unsafe { is_final_tx(tp, tl, self.height as i64, lock_time as i64) } != 1 { ok = false; }
-            let (mut weight, mut _legacy) = (0i64, 0i64);
-            unsafe { tx_wu_sigops(tp, tl, &mut weight, &mut _legacy) };
-            let sigops = unsafe { tx_full_sigops(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, self.flags) };
             let n_vin = unsafe { tx_vin_count(tp, tl) };
             self.words.push(has_witness);
             self.words.push(n_vin);
@@ -123,31 +134,8 @@ impl ChunkCtx {
             self.words.push(n_out);
             for l in 0..n_out as usize { push_hash(&mut self.words, &self.out[32 * l..32 * l + 32]); }
         }
-        // BIP68 / coinbase maturity, transcribed from `check_input_locks` (as the aggregate's own
-        // from-chunk path already does), with this chunk's committed median-time-past.
-        const DISABLE: u32 = 1 << 31; const TYPE: u32 = 1 << 22;
-        const MASK: u32 = 0x0000_ffff; const GRAN: u32 = 9;
         for j in 0..k {
             if results[j] != 1 { ok = false; }
-            // A coin cannot be spent before the block that creates it. The leaf commits the coin's height,
-            // and ECMH sums do not care about order, so without this a spend at h1 could be balanced by a
-            // creation at a LATER h2 (review 2026-10-30). Equal height = an in-block spend, which the
-            // aggregate matches against this block's created set.
-            if ch[j] > self.height { ok = false; }
-            // The coinbase flag is committed in the leaf as cb != 0, but maturity tested cb == 1: a flag of 2
-            // spent an immature coinbase output with the real coin's leaf (review 2). Exactly 0 or 1.
-            if cb[j] > 1 { ok = false; }
-            let (h, chj) = (self.height as u64, ch[j] as u64);
-            if cb[j] == 1 && h < chj + 100 { ok = false; }
-            let seq = seqs[j];
-            // Core v28's CTransaction::version is a uint32_t and the BIP68 gate is `version >= 2`
-            // UNSIGNED: version 0xFFFFFFFF enforces it. Compared as i32 it read -1 and skipped the lock
-            // (review 2026-10-30).
-            if self.height >= NET.csv_height && (version as u32) >= 2 && (seq & DISABLE) == 0 {
-                if seq & TYPE != 0 {
-                    if (self.mtp as u64) < cmtp[j] as u64 + (((seq & MASK) as u64) << GRAN) { ok = false; }
-                } else if h < chj + (seq & MASK) as u64 { ok = false; }
-            }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
             // bit 0: coinbase coin; bit 1: the coin claims THIS block's height, so the aggregate must find it
             // in this block's created set (an external coin of the current height cannot exist; without this
@@ -451,17 +439,15 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         && (subsidy as i128 + total_fee as i128) <= MAX_MONEY as i128;
     let subsidy_ok = money_ok && coinbase_val <= subsidy + total_fee;
 
-    let (mut cb_weight, mut _l) = (0i64, 0i64);
-    unsafe { tx_wu_sigops(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, &mut cb_weight, &mut _l) };
-    total_weight += cb_weight;
-    total_sigops += unsafe { tx_full_sigops(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, core::ptr::null(), 0, flags) };
+    total_weight += unsafe { hz_weight_c(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32) };
+    total_sigops += unsafe { hz_coinbase_sigops_c(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, flags) };
     let ntx = txids.len();
     let cs: i64 = if ntx < 0xfd { 1 } else if ntx <= 0xffff { 3 } else if ntx <= 0xffff_ffff { 5 } else { 9 };
     total_weight += 4 * (80 + cs);
     let weight_ok = total_weight <= MAX_BLOCK_WEIGHT;
     let sigops_ok = total_sigops <= MAX_BLOCK_SIGOPS_COST;
     let cb_final = unsafe {
-        is_final_tx(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height as i64, lock_time as i64)
+        hz_coinbase_is_final(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height, lock_time as i64)
     } == 1;
     if !cb_final { all_ok = false; }
     if !(all_ok && pow_ok && merkle_ok && subsidy_ok && weight_ok && sigops_ok && witness_ok && bip34_ok && bip30_ok) {
