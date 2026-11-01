@@ -13,17 +13,23 @@
 //!
 //! # The rule, precisely
 //!
-//! A block is invalid if its coinbase txid duplicates a coinbase that still has **unspent outputs**.
-//! Duplicating a **fully spent** one is legal — Core accepted exactly that in 2010 — so the check is
-//! "absent or zero", not "absent".
+//! A block is invalid if its coinbase txid duplicates ANY earlier coinbase, spent or not, except the
+//! two grandfathered blocks. Core's BIP30 forbids only duplicating a coinbase with unspent outputs.
+//! This is stricter on purpose (libzync review #26). Core checks every transaction's outputs against
+//! the coin set, and this tree holds coinbases only. A non-coinbase transaction can repeat only if its
+//! inputs repeat, which traces back to a repeated coinbase, so refusing every repeat also rules out
+//! every repeated descendant. A coinbase spent to zero therefore stays in the tree, marked `SPENT`.
+//! The cost is liveness: a chain repeating a fully spent coinbase has no proof. Mainnet history has no
+//! such block (its only duplicates are the two grandfathered ones, of unspent coinbases), and BIP34
+//! prevents one until an old coinbase's indicated height is reached (the next is 1,983,702).
 //!
 //! # The transition
 //!
 //! ```text
-//!   1. prove the new coinbase txid is absent-or-zero   <- the BIP30 check itself
+//!   1. prove the new coinbase txid is absent           <- the BIP30 check itself
 //!   2. insert it with its output count
 //!   3. for each input spending a COINBASE output, decrement that coinbase's count,
-//!      deleting it at zero
+//!      marking it SPENT at zero
 //! ```
 //!
 //! Step 3 is what keeps the danger set shrinking as history does, and is why a static exception table
@@ -49,6 +55,15 @@
 use crate::{apply, verify, Hash, Key, Proof};
 use alloc::vec::Vec;
 
+/// The value of a coinbase whose outputs are all spent. Not 0: the tree treats 0 as absent, and absent
+/// is what lets a coinbase be inserted. No block can hold this many outputs.
+pub const SPENT: u32 = u32::MAX;
+
+/// A coinbase's value after one more of its outputs is spent. `count` must be a live count.
+pub fn after_spend(count: u32) -> u32 {
+    if count == 1 { SPENT } else { count - 1 }
+}
+
 /// One coinbase-output spend: which coinbase it belonged to, and the proof of that coinbase's current
 /// count under the root as it stands when the spend is applied.
 pub struct Spend {
@@ -61,7 +76,7 @@ pub struct Spend {
 pub struct BlockUpdate {
     pub coinbase_txid: Key,
     pub coinbase_outputs: u32,
-    /// Normally a proof that `coinbase_txid` is absent-or-zero under the INCOMING root.
+    /// Normally a proof that `coinbase_txid` is absent under the INCOMING root.
     ///
     /// At a grandfathered block (`overwrite` is `Some`) it is instead a MEMBERSHIP proof of the prior
     /// count, because absence is *unprovable* there — see `overwrite`.
@@ -83,13 +98,13 @@ pub struct BlockUpdate {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Bip30Error {
-    /// The coinbase txid already has unspent outputs — the rule this exists to enforce.
+    /// The coinbase txid is already in the tree, spent or not — the rule this exists to enforce.
     DuplicateUnspentCoinbase,
     /// A proof did not verify against the root it was offered for.
     BadProof,
-    /// A spend claimed a count of zero, which cannot be spent from.
+    /// A spend claimed a count of zero or `SPENT`, which cannot be spent from.
     SpendFromEmpty,
-    /// A grandfathered overwrite claimed a prior count of zero — that is an insert, not an overwrite.
+    /// A grandfathered overwrite claimed a prior count of zero or `SPENT`.
     OverwriteFromEmpty,
 }
 
@@ -107,8 +122,7 @@ pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
     let mut cur = match u.overwrite {
         // 1. THE CHECK — against the incoming root, before this block's own updates. See the ordering
         //    note above: doing it later would let a block spend the duplicate to zero and then claim
-        //    the slot. "Absent" and "zero" are the same state, so proving absence is exactly proving
-        //    BIP30 is satisfied.
+        //    the slot. A fully spent coinbase is held as `SPENT`, so absence fails for it too.
         //
         // 2. Then insert. The SAME proof carries the update — it proved the slot's state — which is
         //    why the insert costs no extra witness bytes.
@@ -129,7 +143,7 @@ pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
         // move — the overwrite is a no-op on the tree, which is exactly right, because the earlier
         // outputs are destroyed and replaced by identical ones.
         Some(prior) => {
-            if prior == 0 {
+            if prior == 0 || prior == SPENT {
                 return Err(Bip30Error::OverwriteFromEmpty);
             }
             apply(root, &u.coinbase_txid, Some(prior), new_val, &u.absence_proof)
@@ -137,16 +151,14 @@ pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
         }
     };
 
-    // 3. Decrement each spent coinbase, deleting at zero. Sequential: every proof is against the root
+    // 3. Decrement each spent coinbase, marking it SPENT at zero. Sequential: every proof is against the root
     //    as it stands after the previous update, which is what lets a block spend two outputs of the
     //    same coinbase — the second proof sees the first's effect.
     for s in &u.spends {
-        if s.current_count == 0 {
+        if s.current_count == 0 || s.current_count == SPENT {
             return Err(Bip30Error::SpendFromEmpty);
         }
-        let next = s.current_count - 1;
-        let new_val = if next == 0 { None } else { Some(next) };
-        cur = apply(&cur, &s.coinbase_txid, Some(s.current_count), new_val, &s.proof)
+        cur = apply(&cur, &s.coinbase_txid, Some(s.current_count), Some(after_spend(s.current_count)), &s.proof)
             .ok_or(Bip30Error::BadProof)?;
     }
     Ok(cur)
@@ -197,21 +209,53 @@ mod tests {
         assert_eq!(err, Bip30Error::DuplicateUnspentCoinbase);
     }
 
-    #[test]
-    fn a_duplicate_FULLY_SPENT_coinbase_is_permitted() {
-        // BIP30 allows this and Core accepted it in 2010. If this test fails the change is
-        // reject-valid, which stalls a from-genesis prover rather than protecting anything — the exact
-        // failure a presence-bit design would have had.
-        let mut t = Smt::new();
-        t.insert(k(7), 1);
-        t.insert(k(7), 0); // fully spent -> absent
+    /// One block that spends the last output of `key`, through the real transition.
+    fn spend_last(t: &mut Smt, key: Key, block_cb: Key) -> Hash {
         let root = t.root();
-        assert!(apply_block(&root, &update(&t, k(7), 2)).is_ok(),
-                "duplicating a fully-spent coinbase was rejected — this is legal under BIP30");
+        let absence = t.prove(&block_cb);
+        t.insert(block_cb, 1);
+        let u = BlockUpdate {
+            coinbase_txid: block_cb, coinbase_outputs: 1, absence_proof: absence, overwrite: None,
+            spends: vec![Spend { coinbase_txid: key, current_count: 1, proof: t.prove(&key) }],
+        };
+        let out = apply_block(&root, &u).expect("honest block rejected");
+        t.insert(key, SPENT);
+        assert_eq!(out, t.root(), "SPENT marker diverged from the host tree");
+        out
     }
 
     #[test]
-    fn spending_coinbase_outputs_decrements_and_deletes_at_zero() {
+    fn a_duplicate_fully_spent_coinbase_is_rejected() {
+        // Review #26. Core allows this, and it is what would let a descendant repeat: C spent by T, C
+        // mined again, T mined again. This tree cannot see T, so it must stop C.
+        let mut t = Smt::new();
+        t.insert(k(7), 1);
+        let root = spend_last(&mut t, k(7), k(8));
+        assert_eq!(t.get(&k(7)), Some(SPENT), "a fully spent coinbase must stay in the tree");
+        assert_eq!(apply_block(&root, &update(&t, k(7), 2)).unwrap_err(), Bip30Error::DuplicateUnspentCoinbase);
+    }
+
+    #[test]
+    fn a_fully_spent_coinbase_cannot_be_spent_or_overwritten() {
+        let mut t = Smt::new();
+        t.insert(k(7), 1);
+        let root = spend_last(&mut t, k(7), k(8));
+        let mut u = update(&t, k(9), 1);
+        let mut mid = t.clone();
+        mid.insert(k(9), 1);
+        u.spends = vec![Spend { coinbase_txid: k(7), current_count: SPENT, proof: mid.prove(&k(7)) }];
+        assert_eq!(apply_block(&root, &u).unwrap_err(), Bip30Error::SpendFromEmpty);
+        // Claiming a live count for it does not fold to the real root.
+        let mut u = update(&t, k(9), 1);
+        u.spends = vec![Spend { coinbase_txid: k(7), current_count: 1, proof: mid.prove(&k(7)) }];
+        assert_eq!(apply_block(&root, &u).unwrap_err(), Bip30Error::BadProof);
+        let mut u = update(&t, k(7), 1);
+        u.overwrite = Some(SPENT);
+        assert_eq!(apply_block(&root, &u).unwrap_err(), Bip30Error::OverwriteFromEmpty);
+    }
+
+    #[test]
+    fn spending_coinbase_outputs_decrements() {
         let mut t = Smt::new();
         t.insert(k(1), 2);
         let root = t.root();
@@ -377,23 +421,10 @@ mod tests {
     }
 
     #[test]
-    fn duplicating_a_coinbase_that_was_SPENT_TO_ZERO_needs_no_exception() {
-        // RENAMED AND REFRAMED (audit #3 N-3). This used to be called
-        // `the_two_historical_duplicates_stop_needing_a_special_case` and was read as covering blocks
-        // 91842/91880. It does not, and the name asserting otherwise is what let F-1 through: those
-        // two coinbases duplicated earlier ones that were still UNSPENT, which is the one case this
-        // models away. `the_real_91842_shape_is_accepted` covers them; this covers the *different*,
-        // genuinely exception-free case of a coinbase spent to zero first.
+    fn an_old_style_zero_entry_is_still_an_ordinary_absence() {
+        // The tree itself still reads 0 as absent. Only `apply_block` keeps a spent coinbase, as SPENT.
         let mut t = Smt::new();
-        let earlier = k(4242);
-        t.insert(earlier, 1);
-        let root_before = t.root();
-        assert!(apply_block(&root_before, &update(&t, earlier, 1)).is_err(),
-                "while unspent, a non-grandfathered duplicate must be rejected");
-
-        t.insert(earlier, 0);                        // spent to zero -> absent
-        let root_after = t.root();
-        assert!(apply_block(&root_after, &update(&t, earlier, 1)).is_ok(),
-                "once spent, the duplicate is an ordinary insert — no exception needed");
+        t.insert(k(4242), 0);
+        assert!(apply_block(&t.root(), &update(&t, k(4242), 1)).is_ok());
     }
 }

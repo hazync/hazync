@@ -4424,12 +4424,12 @@ fn smt_advance(
         // ⚠ FIRST TOUCH ONLY. A block may spend two outputs of the same coinbase; the second sees
         // the first's decrement, so recording it too would restore the intermediate value.
         if !prior.iter().any(|(k, _)| k == t) { prior.push((*t, smt.get(t))); }
-        assert!(cur > 0,
+        assert!(cur > 0 && cur != hazync_coinbase_smt::bip30::SPENT,
             "bridge: a block spends coinbase {} which the SMT holds at zero — the tree and the UTXO \
              set have diverged, which is a bug here and not a property of the chain",
             t.iter().map(|b| format!("{b:02x}")).collect::<String>());
         spends.push(SmtSpend { coinbase_txid: *t, current_count: cur, proof: smt.prove(t) });
-        smt.insert(*t, cur - 1);
+        smt.insert(*t, hazync_coinbase_smt::bip30::after_spend(cur));
     }
     (SmtBlockWitness { coinbase_txid, coinbase_outputs, absence_proof, spends, smt_overwrite }, prior)
 }

@@ -12,10 +12,10 @@ Every reject string below came from reading the Core source, not from memory. Ev
 
 | status | rows | meaning |
 |---|---|---|
-| SAME | 58 | Both sides read: the same blocks are rejected |
+| SAME | 59 | Both sides read: the same blocks are rejected |
 | STRICTER | 3 | The guest rejects something Core accepts |
 | WEAKER | 0 | The guest enforces a looser form of the rule |
-| NOT ENFORCED | 1 | The guest does not check the rule |
+| NOT ENFORCED | 0 | The guest does not check the rule |
 | N-A | 1 | The rule does not apply on mainnet or signet |
 | NOT FOUND | 0 | No enforcing code could be located |
 
@@ -28,8 +28,8 @@ A NOT ENFORCED row is the one that matters for soundness: a proof can exist for 
 
 | row | status | what it means for a proof |
 |---|---|---|
-| `bad-txns-BIP30`, non-coinbase transactions | **NOT ENFORCED** (known, #26) | A proof can cover a chain where a non-coinbase transaction recreates a still-unspent outpoint. The transaction must descend from a duplicated coinbase. Mainnet history has none: its only duplicates are the two grandfathered coinbases, and neither was spent first. Two routes remain. (1) A fork that leaves the known chain below 227,931 is excluded by §5 step 7, because it has less work. (2) **From height 1,983,702, on the most-work chain, §5 step 7 does not help**, because BIP34 no longer rules out a duplicate coinbase. The `bad-txns-BIP30` row below has the example. The forest would then hold two leaves for one outpoint, so statement 2 of §2 would no longer describe Core's UTXO set |
-| `bad-txns-BIP30`, coinbases | **STRICTER** (known) | The SMT runs at every height. Core skips the check from 227,932 to 1,983,701 on a chain through the BIP34 block. By Core's own search of mainnet, the only coinbase that could repeat in that window is the one indicating 490,897, and its original was already spent, which the SMT also allows. No block reaches this difference. Signet: SAME |
+| `bad-txns-BIP30`, non-coinbase transactions | **SAME by construction** (fixed, #26) | No path checks these transactions directly. A non-coinbase transaction can repeat only if its inputs repeat, which traces back to a repeated coinbase, and the guest refuses every repeated coinbase except the two grandfathered ones. The older coin at each of those is never spendable here, so its descendants cannot exist. |
+| `bad-txns-BIP30`, coinbases | **STRICTER** (#26) | The tree refuses any repeat of an earlier coinbase at every height, spent or not, except at 91,842 and 91,880. Core refuses only a repeat with unspent outputs, and skips the check from 227,932 to 1,983,701 on a chain through the BIP34 block. Measured on mainnet: of all coinbases to height 230,000 plus block 490,897, exactly two txids repeat, and they are those two blocks. The next height where BIP34 allows a repeat is 1,983,702, so a proof could stall there, about 19 years away, if a miner repeats an old coinbase. |
 | Spending the coinbase coins of 91,722 and 91,812 | **STRICTER** (known) | These coins are never indexed, so a spend of one fails at H. Core allows the spend on a chain that holds the block but has not overwritten its coinbase. Mainnet never spent them. Only a fork reaches this, and no proof can be made for that fork |
 | `bad-cb-amount` | **STRICTER** (new, harmless) | The guest also requires subsidy + fees ≤ `MAX_MONEY`. Core does not check this. No chain reaches it: fees cannot exceed the coins already issued, and all subsidies together are below `MAX_MONEY` |
 | `time-timewarp-attack` | **N-A** | testnet4 and regtest only |
@@ -127,8 +127,8 @@ input 0 runs it for each non-coinbase transaction (`agg_lite.rs:111`); the aggre
 
 | reject reason | rule | where enforced in the guest | status |
 |---|---|---|---|
-| `bad-txns-BIP30` (coinbase) | A coinbase may not create an outpoint that is still unspent. Skipped at 91,842 and 91,880, and from 227,932 to 1,983,701 on a chain through the BIP34 block. On signet `BIP34Hash` is null, so it never skips. `validation.cpp:2505`, `:2563-2578` | **Rust** `agg_lite.rs:412-435`; `coinbase-smt/src/bip30.rs:102`. Tree root carried in the proof (`main.rs:2073`) | STRICTER on mainnet, SAME on signet. The SMT stores, per coinbase txid, its count of unspent spendable outputs. Non-zero is rejected at every height; zero or absent is allowed, because a fully spent duplicate is legal in Core too. So §2's "rejects every duplicate" overstates it. See the status table |
-| `bad-txns-BIP30` (non-coinbase) | A non-coinbase transaction may not create an outpoint that is still unspent. Same conditions | None. The SMT is keyed by coinbase txid; no path looks at other transactions | NOT ENFORCED (known, #26). **Example:** coinbase C at height X < 227,931 begins with a push of Y ≥ 1,983,702, and T spends all of C, with T's outputs still unspent at Y. At Y a miner repeats C byte for byte, paying its value from fees: BIP34 passes, and BIP30 passes in both Core and the SMT because C is fully spent. At Y + 100, T is mined again. Core: `bad-txns-BIP30` at `validation.cpp:2575`. Guest: accepted. Core's comment at `:2514-2527` is the source for such coinbases existing |
+| `bad-txns-BIP30` (coinbase) | A coinbase may not create an outpoint that is still unspent. Skipped at 91,842 and 91,880, and from 227,932 to 1,983,701 on a chain through the BIP34 block | **Rust** `coinbase-smt/src/bip30.rs` `apply_block`: absence proof against the incoming root; a fully spent coinbase stays in the tree as `SPENT`, so absence fails for it too | STRICTER |
+| `bad-txns-BIP30` (non-coinbase) | A non-coinbase transaction may not create an outpoint that is still unspent. Same conditions | Follows from the coinbase row: a repeat needs repeated inputs, which needs a repeated coinbase | SAME (by construction) |
 | `bad-txns-inputs-missingorspent` † | Every input spends an unspent coin. For a coin made in this block: an earlier transaction made it. `tx_verify.cpp:168` | **Rust**: unknown or already spent coin: `swiftsync::sub`, `agg_lite.rs:363`, then **Verifier** `ss_set == 0`, host `main.rs:2062`. Same coin twice in a block: `agg_lite.rs:337-344`. In-block order and single spend: `:349-350`. Coin claiming a later height: `:136`. Coin claiming this height that this block does not create: `:359-362` | SAME † |
 | `bad-txns-premature-spend-of-coinbase` † | A coinbase coin waits 100 blocks. `tx_verify.cpp:180` | **Rust** `agg_lite.rs:141`, flag exactly 0 or 1 at `:139`; height and flag bound by the leaf (`verify_input.cpp:94`) | SAME †. `h < c + 100` is Core's `h − c < 100`. Signet is also 100 |
 | `bad-txns-inputvalues-outofrange` † | Each input value and the running sum stay in `MoneyRange`. `tx_verify.cpp:187` | **Glue** `check_tx`, `verify_input.cpp:582-586` | SAME † |
