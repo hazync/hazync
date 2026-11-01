@@ -373,12 +373,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let merkle_ok = mroot[..] == w.header[36..68] && mutated == 0;
 
     let flat_wtx: &[u8] = unsafe { core::slice::from_raw_parts(wtxids.as_ptr() as *const u8, wtxids.len() * 32) };
-    let witness_ok = if w.height >= NET.segwit_height {
-        (unsafe { check_witness_commitment(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32,
-                                           flat_wtx.as_ptr(), wtxids.len() as u32, has_witness as u32) }) == 1
-    } else {
-        !has_witness
-    };
+    let witness_ok = unsafe { hz_witness_rule_c(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, flat_wtx.as_ptr(),
+                                                wtxids.len() as u32, has_witness as u32, w.height) } == 1;
     // BIP325: on signet the block solution in the coinbase witness commitment must satisfy the challenge.
     // Core's own CheckSignetBlockSolution, given the coinbase and the txids the merkle check just bound.
     #[cfg(feature = "signet")]

@@ -635,6 +635,9 @@ extern "C" int check_pow(const uint8_t* header) {
     std::memcpy(hash.begin(), h2, 32);
     uint32_t nBits = (uint32_t)header[72] | ((uint32_t)header[73] << 8) |
                      ((uint32_t)header[74] << 16) | ((uint32_t)header[75] << 24);
+#ifdef HAZYNC_AGG_LITE
+    return CheckProofOfWork(hash, nBits, net_params()) ? 1 : -31; // Core's own, from pow.cpp
+#endif
     bool neg, over, n2, o2;
     arith_uint256 target, powLimit;
     target.SetCompact(nBits, &neg, &over);
@@ -985,7 +988,25 @@ extern "C" void add_work(uint8_t* cum, uint32_t nBits) {
 // Block subsidy — Core's GetBlockSubsidy formula (the 6-line body lives in validation.cpp, which is
 // un-carvable; this is that body verbatim). The one consensus constant, the halving interval, is read
 // from Core's chainparams (net_params().nSubsidyHalvingInterval) rather than hard-typed.
+#ifdef HAZYNC_AGG_LITE
+// Core's own functions, lifted from validation.cpp by build.rs (core_block_rules.cpp).
+int64_t hz_block_subsidy(int height);
+uint32_t hz_block_flags(int height, const uint8_t* block_hash);
+bool hz_witness_rule(const CMutableTransaction& coinbase, const uint8_t* wtxids, uint32_t n, bool other_has_witness, int height);
+const Consensus::Params& hz_net_params() { return net_params(); }
+extern "C" uint32_t hz_block_flags_c(uint32_t height, const uint8_t* block_hash) { return hz_block_flags(static_cast<int>(height), block_hash); }
+extern "C" int hz_witness_rule_c(const uint8_t* cb, unsigned cb_len, const uint8_t* wtxids, uint32_t n,
+                                 uint32_t other_has_witness, uint32_t height) {
+    MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    return hz_witness_rule(mtx, wtxids, n, other_has_witness != 0, static_cast<int>(height)) ? 1 : 0;
+}
+#endif
 extern "C" int64_t block_subsidy(uint32_t height) {
+#ifdef HAZYNC_AGG_LITE
+    return hz_block_subsidy(static_cast<int>(height));
+#endif
     int halvings = height / net_params().nSubsidyHalvingInterval;
     if (halvings >= 64) return 0;
     int64_t subsidy = 50LL * 100000000LL; // 50 * COIN

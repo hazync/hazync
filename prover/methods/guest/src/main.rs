@@ -74,7 +74,13 @@ mod msm;
 // Coprocessor half of libsecp's field_bigint2 backend. See docs/FIELD_BIGINT2_BACKEND.md.
 #[cfg(feature = "field-bigint2")]
 mod field_bigint2;
+#[cfg(not(feature = "libzync"))]
 use script_flags::block_script_flags;
+// libzync: Core's own GetBlockScriptFlags, lifted from validation.cpp (core_block_rules.cpp).
+#[cfg(feature = "libzync")]
+fn block_script_flags(height: u32, block_hash: &[u8; 32]) -> u32 {
+    unsafe { hz_block_flags_c(height, block_hash.as_ptr()) }
+}
 
 // A byte blob that (de)serialises via risc0 serde's PACKED byte path (deserialize_bytes → 4 bytes/word)
 // instead of the default seq path (serialize_u8 emits one u32 word PER byte → 4x bloat). Used for the
@@ -202,6 +208,10 @@ extern "C" {
     fn hz_coinbase_sigops_c(tx: *const u8, tx_len: u32, script_flags: u32) -> i64;
     #[cfg(feature = "libzync")]
     fn hz_weight_c(tx: *const u8, tx_len: u32) -> i64;
+    #[cfg(feature = "libzync")]
+    fn hz_block_flags_c(height: u32, block_hash: *const u8) -> u32;
+    #[cfg(feature = "libzync")]
+    fn hz_witness_rule_c(cb: *const u8, cb_len: u32, wtxids: *const u8, n: u32, other_has_witness: u32, height: u32) -> i32;
     // Cumulative chainwork: cum += GetBlockProof(nBits) (real Core 256-bit formula).
     fn add_work(cum: *mut u8, nbits: u32);
     // Per-tx weight + legacy sigop cost (real GetSerializeSize + GetSigOpCount).

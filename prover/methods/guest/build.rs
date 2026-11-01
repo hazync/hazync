@@ -387,6 +387,22 @@ fn main() {
     // index, and the rest of what its error paths link against (FormatMoney).
     if lz_env {
         b.file("core_tx_rules.cpp");
+        // Core's functions lifted verbatim out of validation.cpp, which cannot be compiled whole. See core_block_rules.cpp.
+        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+        let validation = std::fs::read_to_string(format!("{core}/validation.cpp")).expect("read validation.cpp");
+        let mut inc = String::new();
+        for sig in ["CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)\n{",
+                    "static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_commitment, BlockValidationState& state)\n{",
+                    "static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman)\n{"] {
+            let from = validation.find(sig).unwrap_or_else(|| panic!("validation.cpp: not found: {sig}"));
+            let body = &validation[from..];
+            let end = body.find("\n}\n").unwrap_or_else(|| panic!("validation.cpp: unterminated: {sig}"));
+            inc.push_str(&body[..end + 3]);
+            inc.push('\n');
+        }
+        std::fs::write(format!("{out_dir}/core_extract.inc"), inc).expect("write core_extract.inc");
+        b.include(&out_dir);
+        b.file("core_block_rules.cpp");
         b.file(format!("{core}/util/moneystr.cpp"));
     }
 
@@ -402,6 +418,8 @@ fn main() {
     // is what produced a three-day-old object.
     println!("cargo:rerun-if-changed=verify_input.cpp");
     println!("cargo:rerun-if-changed=core_tx_rules.cpp");
+    println!("cargo:rerun-if-changed=core_block_rules.cpp");
+    println!("cargo:rerun-if-changed={core}/validation.cpp");
     println!("cargo:rerun-if-changed={core}/consensus/tx_verify.cpp");
     println!("cargo:rerun-if-changed={core}/util/moneystr.cpp");
     println!("cargo:rerun-if-changed=cshims.c");
