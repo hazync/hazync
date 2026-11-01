@@ -573,9 +573,9 @@ fn ss_bits_for<'a>(height: u32, bip30_skip: bool, coinbase: &Transaction, txs: i
     Some((nbits, words))
 }
 
-fn out_leaf_of(tx: &Transaction, txid: &[u8; 32], vout: usize, height: u32, is_coinbase: bool, mtp: u32) -> Hash {
+fn out_leaf_of(tx: &Transaction, txid: &[u8; 32], vout: usize, height: u32, flags: impl Into<u32>, mtp: u32) -> Hash {
     let o = &tx.output[vout];
-    coin_leaf(txid, vout as u32, o.value.to_sat(), o.script_pubkey.as_bytes(), height, is_coinbase, mtp)
+    hazync_utreexo::coin_leaf_flags(txid, vout as u32, o.value.to_sat(), o.script_pubkey.as_bytes(), height, flags.into() as u8, mtp)
 }
 fn build_header(prev_disp: &str, merkle_internal: &[u8; 32], time: u32, bits: u32, nonce: u32) -> Vec<u8> {
     build_header_v(1, prev_disp, merkle_internal, time, bits, nonce) // version-1 helper (early blocks)
@@ -834,7 +834,7 @@ fn build_full() -> (ChainState, BlockWitness) {
     // — real from the fetcher/bridge (S2), or benign fallback for JSONs lacking it (pre-S2 vectors like
     // 130000/140000). coin_mtp arrives from the archive-node bridge (-hazyncwitness hook) and closes
     // BIP68 time-based relative locks; the fetcher omits it (fallback 0 = conservative, no false reject).
-    struct Ptx { raw: Vec<u8>, tx: Transaction, prevouts: Vec<TxOut>, meta: Vec<(u32, bool, u32)>, txid: [u8; 32] }
+    struct Ptx { raw: Vec<u8>, tx: Transaction, prevouts: Vec<TxOut>, meta: Vec<(u32, u32, u32)>, txid: [u8; 32] }
     let mut ptxs: Vec<Ptx> = Vec::new();
     for tx in j["txs"].as_array().unwrap() {
         let raw = hx(tx["raw"].as_str().unwrap());
@@ -847,14 +847,18 @@ fn build_full() -> (ChainState, BlockWitness) {
                 script_pubkey: ScriptBuf::from_bytes(hx(p["spk"].as_str().unwrap())),
             });
             let h = p["coin_height"].as_u64().map(|x| x as u32).unwrap_or(ch);
-            let cb = p["coin_is_coinbase"].as_u64().map(|x| x != 0).unwrap_or(false);
+            let cb = p["coin_is_coinbase"].as_u64().map(|x| x as u32).unwrap_or(0);
             let mtp = p["coin_mtp"].as_u64().map(|x| x as u32).unwrap_or(0);
             meta.push((h, cb, mtp));
         }
         let txid = t.compute_txid().to_byte_array();
         ptxs.push(Ptx { raw, tx: t, prevouts, meta, txid });
     }
-    let leaf_of = |op: &bitcoin::OutPoint, o: &TxOut, h: u32, cb: bool, mtp: u32| coin_leaf(&op.txid.to_byte_array(), op.vout, o.value.to_sat(), o.script_pubkey.as_bytes(), h, cb, mtp);
+    let leaf_of = |op: &bitcoin::OutPoint, o: &TxOut, h: u32, cb: u32, mtp: u32| hazync_utreexo::coin_leaf_flags(&op.txid.to_byte_array(), op.vout, o.value.to_sat(), o.script_pubkey.as_bytes(), h, cb as u8, mtp);
+    // A coin's leaf flag, bit 1: tracked by the BIP30 tree. The block file carries it, as it carries the coin's height;
+    // the guest derives it again and a wrong one does not match the coin's leaf.
+    let cb_flags = j["coinbase_flags"].as_u64().unwrap_or(1) as u32;
+    let tx_flags = |p: &Ptx| -> u32 { (!p.meta.is_empty() && p.meta.iter().all(|m| m.1 & 2 != 0)) as u32 * 2 };
 
     // recent_times (prev-11) + this block's creation-MTP — needed EARLY: the guest detects in-block
     // spends (H1) by LEAF membership in this block's created-output set (main.rs `created_at`), and the
@@ -878,12 +882,12 @@ fn build_full() -> (ChainState, BlockWitness) {
     let mut created: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for v in 0..coinbase.output.len() {
         if !out_spendable(coinbase.output[v].script_pubkey.as_bytes()) { continue; }
-        created.insert(out_leaf_of(&coinbase, &cb_txid, v, height, true, cmtp));
+        created.insert(out_leaf_of(&coinbase, &cb_txid, v, height, cb_flags, cmtp));
     }
     for p in &ptxs {
         for v in 0..p.tx.output.len() {
             if !out_spendable(p.tx.output[v].script_pubkey.as_bytes()) { continue; }
-            created.insert(out_leaf_of(&p.tx, &p.txid, v, height, false, cmtp));
+            created.insert(out_leaf_of(&p.tx, &p.txid, v, height, tx_flags(p), cmtp));
         }
     }
     let mut spent_in_block: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
@@ -951,7 +955,7 @@ fn build_full() -> (ChainState, BlockWitness) {
                 spent_in_block.insert(coin);
                 inputs.push(BlockInput {
                     tx_idx: tx_i as u32, input_idx: i as u32,
-                    global_pos: 0, coin_height: ch_i, coin_is_coinbase: cb_i as u32, coin_mtp: mtp_i, tx_first: (i == 0) as u32,
+                    global_pos: 0, coin_height: ch_i, coin_is_coinbase: cb_i, coin_mtp: mtp_i, tx_first: (i == 0) as u32,
                     proof_i: WireProof { leaf: PackedHash(coin), position: 0, siblings: PackedHashes(vec![]) },
                     proof_last: WireProof { leaf: PackedHash(coin), position: 0, siblings: PackedHashes(vec![]) },
                 });
@@ -967,7 +971,7 @@ fn build_full() -> (ChainState, BlockWitness) {
             }
             inputs.push(BlockInput {
                 tx_idx: tx_i as u32, input_idx: i as u32,
-                global_pos, coin_height: ch_i, coin_is_coinbase: cb_i as u32, coin_mtp: mtp_i, tx_first: (i == 0) as u32,
+                global_pos, coin_height: ch_i, coin_is_coinbase: cb_i, coin_mtp: mtp_i, tx_first: (i == 0) as u32,
                 proof_i: wire_proof(&forest.prove(pos)), proof_last: wire_proof(&forest.prove(last)),
             });
             forest.delete(pos);
@@ -976,11 +980,15 @@ fn build_full() -> (ChainState, BlockWitness) {
     // Add the SURVIVING created outputs (cmtp computed above) — unspendable skipped AND in-block-spent
     // cancelled (leaf ∈ spent_in_block), matching the guest's surviving set exactly.
     let mut new_outputs: Vec<[u8; 32]> = Vec::new();
-    for v in 0..coinbase.output.len() { if !out_spendable(coinbase.output[v].script_pubkey.as_bytes()) { continue; } let l = out_leaf_of(&coinbase, &cb_txid, v, height, true, cmtp); if spent_in_block.contains(&l) { continue; } forest.add(l); new_outputs.push(l); }
-    for p in &ptxs { for v in 0..p.tx.output.len() { if !out_spendable(p.tx.output[v].script_pubkey.as_bytes()) { continue; } let l = out_leaf_of(&p.tx, &p.txid, v, height, false, cmtp); if spent_in_block.contains(&l) { continue; } forest.add(l); new_outputs.push(l); } }
+    for v in 0..coinbase.output.len() { if !out_spendable(coinbase.output[v].script_pubkey.as_bytes()) { continue; } let l = out_leaf_of(&coinbase, &cb_txid, v, height, cb_flags, cmtp); if spent_in_block.contains(&l) { continue; } forest.add(l); new_outputs.push(l); }
+    for p in &ptxs { for v in 0..p.tx.output.len() { if !out_spendable(p.tx.output[v].script_pubkey.as_bytes()) { continue; } let l = out_leaf_of(&p.tx, &p.txid, v, height, tx_flags(p), cmtp); if spent_in_block.contains(&l) { continue; } forest.add(l); new_outputs.push(l); } }
     let root_next = wire_stump(&forest);
-    let (in_smt_root, smt) = smt_witness_standalone_at(height, cb_txid, cb_spendable_outputs(&coinbase),
-        &cb_spends_from(&inputs, &txs));
+    let spend_tracked: Vec<bool> = inputs.iter().filter(|i| i.coin_is_coinbase != 0).map(|i| i.coin_is_coinbase & 2 != 0).collect();
+    let tracked_new: Vec<([u8; 32], u32)> = ptxs.iter().filter(|p| tx_flags(p) != 0)
+        .map(|p| (p.txid, p.tx.output.iter().filter(|o| out_spendable(o.script_pubkey.as_bytes())).count() as u32))
+        .filter(|t| t.1 > 0).collect();
+    let (in_smt_root, smt) = smt_witness_standalone_ex(height, cb_txid, cb_spendable_outputs(&coinbase),
+        &cb_spends_from(&inputs, &txs), &spend_tracked, &tracked_new);
     let mut w = BlockWitness { header, height, coinbase_tx: hx(cb_hex), txids: PackedHashes(txids), root_prev, txs, tx_prevouts, inputs, root_next, bip30: None, in_smt_root, smt };
     // A single-block run is a base step on this anchor, so the anchor carries the tree the witness was cut from.
     anchor.smt_root = w.in_smt_root;
@@ -2702,6 +2710,20 @@ fn pack_chunks(costs: &[u64], nchunks: usize, keys: Option<(&[u64], &[Option<[u8
 ///
 /// `HAZYNC_CHUNK_PACK=count` restores the old equal-input-count split, for A/B measurement.
 fn chunk_bounds(w: &BlockWitness, nchunks: usize) -> Vec<(usize, usize)> {
+    let b = chunk_bounds_raw(w, nchunks);
+    // A tracked transaction sits whole in one run (the guest's `tracked_tx`): move a boundary out of one.
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(b.len());
+    let mut from = 0;
+    for (_, end) in b {
+        let mut e = end.max(from);
+        while e > 0 && e < w.inputs.len() && w.inputs[e].tx_idx == w.inputs[e - 1].tx_idx
+            && w.inputs.iter().filter(|i| i.tx_idx == w.inputs[e].tx_idx).all(|i| i.coin_is_coinbase & 2 != 0) { e += 1; }
+        if e > from { out.push((from, e)); from = e; }
+    }
+    out
+}
+
+fn chunk_bounds_raw(w: &BlockWitness, nchunks: usize) -> Vec<(usize, usize)> {
     let n = w.inputs.len();
     if std::env::var("HAZYNC_CHUNK_PACK").as_deref() == Ok("count") {
         if n == 0 { return Vec::new() }
@@ -3021,13 +3043,13 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
         b.write(&((ge - gs) as u32)).unwrap();
         b.write_slice(&padded(tx));
         b.write_slice(&padded(prevouts));
-        // Negative-test hook (test-only, inert unless set): send a coinbase coin's flag as 2, which the leaf
+        // Negative-test hook (test-only, inert unless set): send a coinbase coin's flag as 4, which the leaf
         // reads as "coinbase" and the old maturity test (== 1) did not (review 2).
         let cb2 = std::env::var("HAZYNC_TEST_CBFLAG2").is_ok();
         for inp in &w.inputs[gs..ge] {
             b.write(&inp.input_idx).unwrap();
             b.write(&inp.coin_height).unwrap();
-            b.write(&(if cb2 && inp.coin_is_coinbase == 1 { 2 } else { inp.coin_is_coinbase })).unwrap();
+            b.write(&(if cb2 && inp.coin_is_coinbase == 1 { 4 } else { inp.coin_is_coinbase })).unwrap();
             b.write(&inp.coin_mtp).unwrap();
         }
     }
@@ -3463,9 +3485,11 @@ fn libzync_hints_cmd(out: &str) {
 /// block against a throwaway tree holding only what that block touches; this replaces it.
 fn lz_smt_rebind(w: &mut BlockWitness, smt: &mut Smt) {
     let spends: Vec<[u8; 32]> = w.smt.spends.iter().map(|s| s.coinbase_txid).collect();
+    let spend_tracked: Vec<bool> = w.smt.spends.iter().map(|s| s.tracked).collect();
+    let tracked_new: Vec<([u8; 32], u32)> = w.smt.tracked.iter().map(|t| (t.txid, t.outputs)).collect();
     let grandfathered = w.smt.smt_overwrite.is_some();
     w.in_smt_root = smt.root();
-    w.smt = smt_advance(smt, w.smt.coinbase_txid, w.smt.coinbase_outputs, &spends, grandfathered).0;
+    w.smt = smt_advance_ex(smt, w.smt.coinbase_txid, w.smt.coinbase_outputs, &spends, grandfathered, &spend_tracked, &tracked_new).0;
 }
 
 /// The coinbase SMT after blocks 1..=upto, rebuilt from block_<h>.json (the same advance the guest checks),
@@ -3717,7 +3741,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             for tx in j["txs"].as_array().unwrap() {
                 let t2: Transaction = deserialize(&hx(tx["raw"].as_str().unwrap())).unwrap();
                 for (i, p) in tx["prevouts"].as_array().unwrap().iter().enumerate() {
-                    if p["coin_is_coinbase"].as_u64() == Some(1) && p["coin_height"].as_u64().unwrap_or(0) < lo as u64 {
+                    if p["coin_is_coinbase"].as_u64().unwrap_or(0) != 0 && p["coin_height"].as_u64().unwrap_or(0) < lo as u64 {
                         *counts.entry(t2.input[i].previous_output.txid.to_byte_array()).or_insert(0) += 1;
                     }
                 }
@@ -4265,7 +4289,10 @@ fn check_bip30() {
 /// One coinbase-output spend, with the proof of that coinbase's count under the root as it stands
 /// when the spend is applied. Mirrors `hazync_coinbase_smt::bip30::Spend`.
 #[derive(Serialize, Deserialize, Clone)]
-struct SmtSpend { coinbase_txid: [u8; 32], current_count: u32, proof: SmtProof }
+struct SmtSpend { coinbase_txid: [u8; 32], current_count: u32, proof: SmtProof, tracked: bool }
+/// A tracked transaction this block creates. Mirrors `hazync_coinbase_smt::bip30::TrackedTx`.
+#[derive(Serialize, Deserialize, Clone)]
+struct SmtTracked { txid: [u8; 32], outputs: u32, prior: Option<u32>, proof: SmtProof }
 
 /// Everything the guest needs to run the BIP30 transition for one block.
 ///
@@ -4287,6 +4314,8 @@ struct SmtBlockWitness {
     /// duplicated coinbase was still UNSPENT so no absence proof can exist. LAST, because risc0's
     /// serde is positional and appending is the only change that does not renumber every field.
     smt_overwrite: Option<u32>,
+    coinbase_prior: Option<u32>,
+    tracked: Vec<SmtTracked>,
 }
 
 /// The coinbase txid of every input that spends a coinbase output, in the block's tx-then-input
@@ -4298,7 +4327,7 @@ struct SmtBlockWitness {
 fn cb_spends_from(inputs: &[BlockInput], txs: &[PackedBytes]) -> Vec<[u8; 32]> {
     let mut out = Vec::new();
     for inp in inputs {
-        if inp.coin_is_coinbase != 1 { continue; }
+        if inp.coin_is_coinbase == 0 { continue; }
         let raw = txs.get(inp.tx_idx as usize)
             .unwrap_or_else(|| panic!("cb_spends_from: tx_idx {} out of range ({} txs)", inp.tx_idx, txs.len()));
         let tx: Transaction = deserialize(&raw.0)
@@ -4362,6 +4391,20 @@ fn smt_witness_standalone_at(
     (root_in, w)
 }
 
+/// `smt_witness_standalone_at` for a block that spends or creates tracked coins (bip30.rs).
+fn smt_witness_standalone_ex(height: u32, coinbase_txid: [u8; 32], coinbase_outputs: u32, coinbase_spends: &[[u8; 32]],
+                             spend_tracked: &[bool], tracked_new: &[([u8; 32], u32)]) -> ([u8; 32], SmtBlockWitness) {
+    let mut t = Smt::new();
+    for s in coinbase_spends {
+        let c = t.get(s).unwrap_or(0);
+        t.insert(*s, c + 1);
+    }
+    let grandfathered = height == 91_842 || height == 91_880;
+    if grandfathered { t.insert(coinbase_txid, coinbase_outputs.max(1)); }
+    let root_in = t.root();
+    (root_in, smt_advance_ex(&mut t, coinbase_txid, coinbase_outputs, coinbase_spends, grandfathered, spend_tracked, tracked_new).0)
+}
+
 /// Advance the coinbase SMT by one block and emit the proofs the guest will need.
 ///
 /// PURE AND SEPARATE FROM THE BRIDGE ON PURPOSE. The order of operations here has to match
@@ -4394,6 +4437,21 @@ fn smt_advance(
     coinbase_spends: &[[u8; 32]],
     grandfathered: bool,
 ) -> (SmtBlockWitness, Vec<([u8; 32], Option<u32>)>) {
+    smt_advance_ex(smt, coinbase_txid, coinbase_outputs, coinbase_spends, grandfathered, &[], &[])
+}
+
+/// `smt_advance` with tracked coins: `spend_tracked` is parallel to `coinbase_spends`, or empty for none, and
+/// `tracked_new` lists the tracked transactions this block creates, in block order.
+fn smt_advance_ex(
+    smt: &mut Smt,
+    coinbase_txid: [u8; 32],
+    coinbase_outputs: u32,
+    coinbase_spends: &[[u8; 32]],
+    grandfathered: bool,
+    spend_tracked: &[bool],
+    tracked_new: &[([u8; 32], u32)],
+) -> (SmtBlockWitness, Vec<([u8; 32], Option<u32>)>) {
+    use hazync_coinbase_smt::bip30::{after_spend, is_live, REPEATABLE, SPENT};
     // 1. Normally: absence, against the INCOMING root, before any of this block's own updates.
     //
     //    At 91842/91880 (audit#3 F-1) the duplicated coinbase is still UNSPENT — that is why BIP30
@@ -4414,31 +4472,44 @@ fn smt_advance(
     } else {
         None
     };
+    let may_repeat = |v: Option<u32>| v.filter(|c| *c == REPEATABLE);
+    let coinbase_prior = if grandfathered { None } else { may_repeat(smt.get(&coinbase_txid)) };
     if coinbase_outputs > 0 { smt.insert(coinbase_txid, coinbase_outputs); }
     else if grandfathered { smt.remove(&coinbase_txid); }
+
+    // Tracked transactions, proved in the order `apply_block` applies them. A live entry is emitted as absent: the
+    // guest's check then fails, which is its bad-txns-BIP30.
+    let mut tracked = Vec::with_capacity(tracked_new.len());
+    for (t, n) in tracked_new {
+        if !prior.iter().any(|(k, _)| k == t) { prior.push((*t, smt.get(t))); }
+        tracked.push(SmtTracked { txid: *t, outputs: *n, prior: may_repeat(smt.get(t)), proof: smt.prove(t) });
+        smt.insert(*t, *n);
+    }
 
     // 2. Decrement each spend, proving against the root as it stands at that step. This is what lets
     //    a block spend two outputs of the same coinbase: the second proof sees the first's effect.
     let mut spends = Vec::with_capacity(coinbase_spends.len());
-    for t in coinbase_spends {
+    for (i, t) in coinbase_spends.iter().enumerate() {
+        let is_tracked = spend_tracked.get(i).copied().unwrap_or(false);
         let cur = smt.get(t).unwrap_or(0);
         // ⚠ FIRST TOUCH ONLY. A block may spend two outputs of the same coinbase; the second sees
         // the first's decrement, so recording it too would restore the intermediate value.
         if !prior.iter().any(|(k, _)| k == t) { prior.push((*t, smt.get(t))); }
         // HAZYNC_RIG: the differential rig gives the guest invalid blocks on purpose. The guest must be the one to
         // refuse them, so emit the honest witness of a spend from nothing and let `apply_block` reject it.
-        if std::env::var("HAZYNC_RIG").is_ok() && (cur == 0 || cur == hazync_coinbase_smt::bip30::SPENT) {
-            spends.push(SmtSpend { coinbase_txid: *t, current_count: cur, proof: smt.prove(t) });
+        if std::env::var("HAZYNC_RIG").is_ok() && !is_live(cur) {
+            spends.push(SmtSpend { coinbase_txid: *t, current_count: cur, proof: smt.prove(t), tracked: is_tracked });
             continue;
         }
-        assert!(cur > 0 && cur != hazync_coinbase_smt::bip30::SPENT,
+        let _ = SPENT;
+        assert!(is_live(cur),
             "bridge: a block spends coinbase {} which the SMT holds at zero — the tree and the UTXO \
              set have diverged, which is a bug here and not a property of the chain",
             t.iter().map(|b| format!("{b:02x}")).collect::<String>());
-        spends.push(SmtSpend { coinbase_txid: *t, current_count: cur, proof: smt.prove(t) });
-        smt.insert(*t, hazync_coinbase_smt::bip30::after_spend(cur));
+        spends.push(SmtSpend { coinbase_txid: *t, current_count: cur, proof: smt.prove(t), tracked: is_tracked });
+        smt.insert(*t, after_spend(cur, is_tracked));
     }
-    (SmtBlockWitness { coinbase_txid, coinbase_outputs, absence_proof, spends, smt_overwrite }, prior)
+    (SmtBlockWitness { coinbase_txid, coinbase_outputs, absence_proof, spends, smt_overwrite, coinbase_prior, tracked }, prior)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -6068,13 +6139,15 @@ mod smt_bridge {
 
     fn to_update(cb: [u8; 32], nout: u32, w: &SmtBlockWitness) -> BlockUpdate {
         BlockUpdate {
+            coinbase_prior: None,
+            tracked: Vec::new(),
             coinbase_txid: cb,
             coinbase_outputs: nout,
             absence_proof: w.absence_proof.clone(),
             overwrite: w.smt_overwrite,
             spends: w.spends.iter()
                 .map(|s| Spend { coinbase_txid: s.coinbase_txid, current_count: s.current_count,
-                                 proof: s.proof.clone() })
+                                 proof: s.proof.clone(), tracked: false })
                 .collect(),
         }
     }

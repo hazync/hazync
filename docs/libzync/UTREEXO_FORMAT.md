@@ -26,7 +26,7 @@ leaf = SHA-256( 0x00                      tag, 1 byte
               ‖ len(scriptPubKey)         u32 little-endian
               ‖ scriptPubKey              len bytes
               ‖ height                    u32 little-endian, the creating block's height
-              ‖ coinbase                  1 byte: 0x01 if created by a coinbase transaction, else 0x00
+              ‖ flags                     1 byte: bit 0 created by a coinbase, bit 1 tracked by the BIP30 tree (22 live coins on mainnet)
               ‖ creation_mtp )            u32 little-endian
 ```
 

@@ -2,82 +2,85 @@ core: /Satoshi:31.1.0/
 AGREE        valid_empty              core=accept                                 guest=accept 
 AGREE        valid_spend              core=accept                                 guest=accept 
 AGREE        valid_zero_fee           core=accept                                 guest=accept 
-AGREE        cb_missing               core=bad-cb-missing                         guest=reject block 113: collect aggregate failed: Guest panicked: C abort()
-AGREE        cb_multiple              core=bad-cb-multiple                        guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        cb_overpay               core=bad-cb-amount                          guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        cb_missing               core=bad-cb-missing                         guest=reject block 233: collect aggregate failed: Guest panicked: C abort()
+AGREE        cb_multiple              core=bad-cb-multiple                        guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        cb_overpay               core=bad-cb-amount                          guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        cb_exact                 core=accept                                 guest=accept 
-AGREE        cb_fee_too_much          core=bad-cb-amount                          guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        cb_script_short          core=bad-cb-length                          guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        cb_script_long           core=bad-cb-length                          guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        cb_wrong_height          core=bad-cb-height                          guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        bad_merkle               core=bad-txnmrklroot                        guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        merkle_mutated           core=bad-witness-merkle-match               guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        tx_dup_inputs            core=bad-txns-inputs-duplicate              guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        cb_fee_too_much          core=bad-cb-amount                          guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        cb_script_short          core=bad-cb-length                          guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        cb_script_long           core=bad-cb-length                          guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        cb_wrong_height          core=bad-cb-height                          guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        bad_merkle               core=bad-txnmrklroot                        guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        merkle_mutated           core=bad-witness-merkle-match               guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        tx_dup_inputs            core=bad-txns-inputs-duplicate              guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        tx_no_inputs             core=decode-failed                          guest=reject called `Result::unwrap()` on an `Err` value: ParseFailed("data not consumed entirely when explicitly deseriali
-AGREE        tx_no_outputs            core=bad-txns-vout-empty                    guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        tx_negative_out          core=bad-txns-vout-negative                 guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        tx_huge_out              core=bad-txns-vout-toolarge                 guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        tx_total_huge            core=bad-txns-txouttotal-toolarge           guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        tx_null_prevout          core=bad-cb-multiple                        guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        premature                core=bad-txns-premature-spend-of-coinbase   guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        tx_no_outputs            core=bad-txns-vout-empty                    guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        tx_negative_out          core=bad-txns-vout-negative                 guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        tx_huge_out              core=bad-txns-vout-toolarge                 guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        tx_total_huge            core=bad-txns-txouttotal-toolarge           guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        tx_null_prevout          core=bad-cb-multiple                        guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        premature                core=bad-txns-premature-spend-of-coinbase   guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        exactly_mature           core=accept                                 guest=accept 
-AGREE        one_short_of_mature      core=bad-txns-premature-spend-of-coinbase   guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        in_below_out             core=bad-txns-in-belowout                   guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        one_short_of_mature      core=bad-txns-premature-spend-of-coinbase   guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        in_below_out             core=bad-txns-in-belowout                   guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 DEFERRED-OK  missing_coin             core=bad-txns-inputs-missingorspent         guest=accept 
-AGREE        double_spend_in_block    core=bad-txns-inputs-missingorspent         guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        double_spend_in_block    core=bad-txns-inputs-missingorspent         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        chain_in_block           core=accept                                 guest=accept 
-AGREE        spend_later_in_block     core=bad-txns-inputs-missingorspent         guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        locktime_height_future   core=bad-txns-nonfinal                      guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        spend_later_in_block     core=bad-txns-inputs-missingorspent         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        locktime_height_future   core=bad-txns-nonfinal                      guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        locktime_height_ok       core=accept                                 guest=accept 
 AGREE        locktime_final_seq       core=accept                                 guest=accept 
-AGREE        locktime_time_mtp        core=bad-txns-nonfinal                      guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        locktime_time_mtp        core=bad-txns-nonfinal                      guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        locktime_time_past       core=accept                                 guest=accept 
-AGREE        bip68_height_unmet       core=bad-txns-nonfinal                      guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        bip68_height_unmet       core=bad-txns-nonfinal                      guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        bip68_height_met         core=accept                                 guest=accept 
 AGREE        bip68_disabled           core=accept                                 guest=accept 
 AGREE        bip68_v1_ignored         core=accept                                 guest=accept 
-AGREE        bip68_uint_version       core=bad-txns-nonfinal                      guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        bip68_uint_version       core=bad-txns-nonfinal                      guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        bip68_time_met           core=accept                                 guest=accept 
-AGREE        bip68_time_unmet         core=bad-txns-nonfinal                      guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        time_equal_mtp           core=time-too-old                           guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=true ph=true carry=true rt=true time=false 
+AGREE        bip68_time_unmet         core=bad-txns-nonfinal                      guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        time_equal_mtp           core=time-too-old                           guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=true ph=true carry=true rt=true time=false 
 AGREE        time_above_mtp           core=accept                                 guest=accept 
-AGREE        bad_version              core=bad-version(0x00000003)                guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        bad_version              core=bad-version(0x00000003)                guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        version_4                core=accept                                 guest=accept 
-AGREE        high_hash                core=high-hash                              guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        bad_bits                 core=bad-diffbits                           guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=true ph=true carry=true rt=false time=true 
-AGREE        nonce_too_big_witness    core=bad-witness-nonce-size                 guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        witness_mismatch         core=bad-witness-merkle-match               guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        high_hash                core=high-hash                              guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        bad_bits                 core=bad-diffbits                           guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=true ph=true carry=true rt=false time=true 
+AGREE        nonce_too_big_witness    core=bad-witness-nonce-size                 guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        witness_mismatch         core=bad-witness-merkle-match               guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        no_commit_no_witness     core=accept                                 guest=accept 
 AGREE        valid_p2wsh              core=accept                                 guest=accept 
-AGREE        witness_no_commit        core=unexpected-witness                     guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        script_fails             core=block-script-verify-flag-failed (OP_RETURN was encountered) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        sigops_limit             core=bad-blk-sigops                         guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        witness_no_commit        core=unexpected-witness                     guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        script_fails             core=block-script-verify-flag-failed (OP_RETURN was encountered) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sigops_limit             core=bad-blk-sigops                         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        sigops_at_limit          core=accept                                 guest=accept 
-AGREE        oversize_weight          core=bad-blk-length                         guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        oversize_weight          core=bad-blk-length                         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        split_tx                 core=accept                                 guest=accept 
-AGREE        split_tx_bad             core=bad-txns-nonfinal                      guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        split_tx_bad             core=bad-txns-nonfinal                      guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        sig_p2wpkh               core=accept                                 guest=accept 
-AGREE        sig_p2wpkh_bad           core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sig_p2wpkh_bad           core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        sig_high_s               core=accept                                 guest=accept 
-AGREE        sig_not_der              core=block-script-verify-flag-failed (Non-canonical DER signature) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        sig_zero_r               core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sig_not_der              core=block-script-verify-flag-failed (Non-canonical DER signature) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sig_zero_r               core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        sig_p2pkh                core=accept                                 guest=accept 
-AGREE        sig_p2pkh_other_key      core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sig_p2pkh_other_key      core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        multisig_ok              core=accept                                 guest=accept 
-AGREE        multisig_order           core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        multisig_dummy           core=block-script-verify-flag-failed (Dummy CHECKMULTISIG argument must be zero) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        multisig_order           core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        multisig_dummy           core=block-script-verify-flag-failed (Dummy CHECKMULTISIG argument must be zero) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        sig_must_fail            core=accept                                 guest=accept 
-AGREE        sig_must_fail_but_good   core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sig_must_fail_but_good   core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        taproot_key              core=accept                                 guest=accept 
-AGREE        taproot_key_bad          core=block-script-verify-flag-failed (Invalid Schnorr signature) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        taproot_key_bad          core=block-script-verify-flag-failed (Invalid Schnorr signature) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        weight_under             core=accept                                 guest=accept 
-HOST-FAIL    weight_over              core=bad-blk-weight                         guest=reject thread 'main' (257933) panicked at host/src/main.rs:841:48:
+AGREE        weight_over              core=bad-blk-weight                         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        taproot_script           core=accept                                 guest=accept 
-AGREE        taproot_tweak_parity     core=block-script-verify-flag-failed (Witness program hash mismatch) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
-AGREE        taproot_script_bad_sig   core=block-script-verify-flag-failed (Invalid Schnorr signature) guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        taproot_tweak_parity     core=block-script-verify-flag-failed (Witness program hash mismatch) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        taproot_script_bad_sig   core=block-script-verify-flag-failed (Invalid Schnorr signature) guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        sigops_witness_under     core=accept                                 guest=accept 
-AGREE        sigops_witness_over      core=bad-blk-sigops                         guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sigops_witness_over      core=bad-blk-sigops                         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        sigops_p2sh_under        core=accept                                 guest=accept 
-AGREE        sigops_p2sh_over         core=bad-blk-sigops                         guest=reject block 113: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        sigops_p2sh_over         core=bad-blk-sigops                         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
 AGREE        tx_64_bytes              core=accept                                 guest=accept 
-RIG 81 cases, 79 agree, 1 deferred, 1 host limit (weight_over rebuilt as two transactions: AGREE)
+AGREE        bip30_repeat_unspent     core=bad-txns-BIP30                         guest=reject block 233: collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true 
+AGREE        bip30_repeat_spent       core=accept                                 guest=accept 
+AGREE        bip30_child_of_repeat    core=accept                                 guest=accept 
+RIG 84 cases, 83 agree, 1 deferred, 0 to look at

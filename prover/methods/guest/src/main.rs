@@ -211,6 +211,8 @@ extern "C" {
     #[cfg(feature = "libzync")]
     fn hz_weight_c(tx: *const u8, tx_len: u32) -> i64;
     #[cfg(feature = "libzync")]
+    fn hz_indicated_height(cb: *const u8, cb_len: u32) -> u32;
+    #[cfg(feature = "libzync")]
     fn hz_block_flags_c(height: u32, block_hash: *const u8) -> u32;
     #[cfg(feature = "libzync")]
     fn hz_witness_rule_c(cb: *const u8, cb_len: u32, wtxids: *const u8, n: u32, other_has_witness: u32, height: u32) -> i32;
@@ -451,7 +453,9 @@ struct Bip30Overwrite { old_height: u32, old_mtp: u32, dels: Vec<Bip30Del> }
 // cannot rot rather than an input a prover controls. `current_count` and `proof` are the only things
 // genuinely supplied, and both are pinned by the root: a wrong count folds to a different root.
 #[derive(Deserialize)]
-struct SmtSpendW { coinbase_txid: [u8; 32], current_count: u32, proof: SmtProof }
+struct SmtSpendW { coinbase_txid: [u8; 32], current_count: u32, proof: SmtProof, tracked: bool }
+#[derive(Deserialize)]
+struct SmtTrackedW { txid: [u8; 32], outputs: u32, prior: Option<u32>, proof: SmtProof }
 #[derive(Deserialize)]
 struct SmtWitnessW {
     // Cross-checks, not inputs — the guest derives both and refuses the block if they disagree. See
@@ -465,6 +469,9 @@ struct SmtWitnessW {
     // two hashes, forbidden everywhere else. A prover cannot opt into it. LAST, because risc0's serde
     // is positional and appending is the only change that does not renumber every field on both sides.
     smt_overwrite: Option<u32>,
+    // libzync: the prior state of the coinbase's slot, and the tracked transactions this block creates (bip30.rs).
+    coinbase_prior: Option<u32>,
+    tracked: Vec<SmtTrackedW>,
 }
 #[derive(Deserialize)]
 // ⚠ `wtxids` and `new_outputs` USED TO BE HERE and were removed. The guest never read either: it
@@ -1232,12 +1239,14 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         (false, w.in_smt_root)
     } else {
         let u = bip30::BlockUpdate {
+            coinbase_prior: None,
+            tracked: Vec::new(),
             coinbase_txid: cb_txid,
             coinbase_outputs: cb_outputs,
             absence_proof: w.smt.absence_proof.clone(),
             overwrite: w.smt.smt_overwrite,
             spends: w.smt.spends.iter()
-                .map(|s| bip30::Spend { coinbase_txid: s.coinbase_txid,
+                .map(|s| bip30::Spend { coinbase_txid: s.coinbase_txid, tracked: false,
                                         current_count: s.current_count, proof: s.proof.clone() })
                 .collect(),
         };

@@ -58,7 +58,7 @@ pub const SIGNET: Net = Net {
 pub const REGTEST: Net = Net {
     name: "regtest",
     genesis_hex: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
-    bip34_height: 1,
+    bip34_height: 110,   // -testactivationheight=bip34@110, so the rig can stage a real repeat
     bip66_height: 1,
     bip65_height: 1,
     csv_height: 1,

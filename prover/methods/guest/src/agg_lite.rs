@@ -87,7 +87,12 @@ impl ChunkCtx {
         let need = (raw_tx.len() / 8 + 1) * 32;
         if self.out.len() < need { self.out.resize(need, 0); }
         let mut txid = [0u8; 32];
-        let n_out = unsafe { tx_out_leaves(tp, tl, self.height, 0, self.mtp, self.out.as_mut_ptr(), txid.as_mut_ptr()) };
+        // A transaction can repeat only if all its inputs can (coinbase-smt/src/bip30.rs), so its outputs are tracked
+        // exactly when every input is. A tracked transaction must sit whole in one run: the host keeps it so, and the
+        // aggregate refuses a transaction whose inputs are all tracked but that did not claim to be.
+        let n_vin_all = unsafe { tx_vin_count(tp, tl) };
+        let tracked_tx = !cb.is_empty() && cb.len() as u32 == n_vin_all && cb.iter().all(|c| c & 2 != 0);
+        let n_out = unsafe { tx_out_leaves(tp, tl, self.height, (tracked_tx as u32) << 1, self.mtp, self.out.as_mut_ptr(), txid.as_mut_ptr()) };
         let ph: [u8; 32] = Sha256::digest(prevouts).into();
         let start = idx.first().copied().unwrap_or(0);
         for (j, i) in idx.iter().enumerate() {
@@ -109,7 +114,7 @@ impl ChunkCtx {
         // A coin cannot be spent before the block that creates it, and its flag is exactly 0 or 1. These
         // guard what Core's code below is given: Core reads both from its own coin database.
         for j in 0..k {
-            if ch[j] > self.height || cb[j] > 1 { ok = false; }
+            if ch[j] > self.height || cb[j] > 3 { ok = false; }
         }
         // Core's own CheckTransaction, IsFinalTx, CheckTxInputs, SequenceLocks and GetTransactionSigOpCost
         // (core_tx_rules.cpp), on this run's inputs. The output arguments are set only when `first`.
@@ -126,7 +131,7 @@ impl ChunkCtx {
         }
         if first {
             let n_vin = unsafe { tx_vin_count(tp, tl) };
-            self.words.push(has_witness);
+            self.words.push(has_witness | (tracked_tx as u32) << 1);
             self.words.push(n_vin);
             push_i64(&mut self.words, fee);
             push_i64(&mut self.words, weight);
@@ -137,11 +142,11 @@ impl ChunkCtx {
         for j in 0..k {
             if results[j] != 1 { ok = false; }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
-            // bit 0: coinbase coin; bit 1: the coin claims THIS block's height, so the aggregate must find it
+            // bit 2: tracked. bit 0: the BIP30 tree has this coin (a coinbase or tracked one); bit 1: the coin claims THIS block's height, so the aggregate must find it
             // in this block's created set (an external coin of the current height cannot exist; without this
             // it would only fail at H).
-            self.words.push(cb[j] | (((ch[j] == self.height) as u32) << 1));
-            if cb[j] == 1 {
+            self.words.push((cb[j] != 0) as u32 | (((ch[j] == self.height) as u32) << 1) | ((cb[j] & 2) << 1));
+            if cb[j] != 0 {
                 let mut t = [0u8; 32];
                 if unsafe { tx_input_prevout_txid(tp, tl, idx[j], t.as_mut_ptr()) } != 1 { ok = false; }
                 push_hash(&mut self.words, &t);
@@ -211,7 +216,13 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut cb_txid = [0u8; 32];
     let cb_outputs = {
         let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
-        let n = unsafe { tx_out_leaves(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height, 1, mtp,
+        // Tracked: mined before BIP34 and indicating a later height, or the repeat of a tracked coinbase. A false claim
+        // of `coinbase_prior` does not verify in apply_block.
+        let indicated = unsafe { hz_indicated_height(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32) };
+        let root = w.height < BIP34_HEIGHT && indicated > w.height && indicated < bip30::REPEAT_HORIZON;
+        let repeat = w.smt.coinbase_prior == Some(bip30::REPEATABLE);
+        let flags = 1 | ((root || repeat) as u32) << 1;
+        let n = unsafe { tx_out_leaves(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height, flags, mtp,
                                        buf.as_mut_ptr(), cb_txid.as_mut_ptr()) };
         // BIP30, the hints-file convention (Core's IsBIP30Unspendable): the coinbase coins of 91,722 and
         // 91,812 are never indexed or accounted. Their outpoints come back, and are accounted, when 91,880
@@ -236,7 +247,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
     let mut spends: Vec<([u8; 32], u32, bool)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height), block order
-    let mut cb_spends: Vec<[u8; 32]> = Vec::new();
+    let mut cb_spends: Vec<([u8; 32], bool)> = Vec::new();
+    let mut tracked_new: Vec<([u8; 32], u32)> = Vec::new();
+    // The open transaction: all inputs seen so far are tracked, and whether it claimed to be.
+    let (mut tr_all, mut tr_claim) = (false, false);
 
     // Walk every chunk's records in order. `cur` = (txid, wtxid, prevouts hash, n_vin, next input expected).
     let mut cur: Option<([u8; 32], [u8; 32], [u8; 32], u32, u32)> = None;
@@ -258,14 +272,16 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             if first == 1 {
                 if start != 0 { all_ok = false; }
                 if let Some((_, _, _, n, next)) = cur { if next != n { all_ok = false; } }
+                if cur.is_some() && tr_all != tr_claim { all_ok = false; }
                 tx_pos += 1;
                 let hw = r.u();
+                (tr_all, tr_claim) = (true, hw & 2 != 0);
                 let n_vin = r.u();
                 let (fee, weight, sigops) = (r.i64(), r.i64(), r.i64());
                 let n_out = r.u();
                 txids.push(txid);
                 wtxids.push(wt);
-                has_witness |= hw == 1;
+                has_witness |= hw & 1 == 1;
                 total_fee = total_fee.saturating_add(fee);
                 total_weight = total_weight.saturating_add(weight);
                 total_sigops = total_sigops.saturating_add(sigops);
@@ -274,6 +290,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     output_leaves.push(l);
                     out_pos.push(tx_pos);
                 }
+                if tr_claim && n_out > 0 { tracked_new.push((txid, n_out)); }
                 cur = Some((txid, wt, ph, n_vin, 0));
             } else {
                 match cur {
@@ -287,9 +304,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             for _ in 0..count {
                 let leaf = r.h();
                 let f = r.u();
-                if f > 3 { all_ok = false; }
+                if f > 7 { all_ok = false; }
                 spends.push((leaf, tx_pos, f & 2 != 0));
-                if f & 1 == 1 { cb_spends.push(r.h()); }
+                tr_all &= f & 4 != 0;
+                if f & 1 == 1 { cb_spends.push((r.h(), f & 4 != 0)); }
             }
             if r.bad { break; }
         }
@@ -300,6 +318,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // HAS other transactions still fails there.
     let covered = match cur { Some((_, _, _, n, next)) => next == n, None => true };
     if !covered { all_ok = false; }
+    if cur.is_some() && tr_all != tr_claim { all_ok = false; }
+    // A tracked coinbase indicating this height or above is not in the tree, so the guest stops short of it.
+    if w.height >= bip30::REPEAT_HORIZON { all_ok = false; }
     if !all_ok { env::log(&format!("agg-lite: REJECT after the record walk (transactions={}, last covered={covered})", tx_pos)); }
 
     // Spends then adds, in the same order as the full path (so the same ECMH hints apply).
@@ -396,19 +417,25 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let spends_ok = w.smt.coinbase_txid == cb_txid
         && w.smt.coinbase_outputs == cb_outputs
         && w.smt.spends.len() == cb_spends.len()
-        && w.smt.spends.iter().zip(cb_spends.iter()).all(|(s, d)| &s.coinbase_txid == d);
+        && w.smt.spends.iter().zip(cb_spends.iter()).all(|(s, d)| s.coinbase_txid == d.0 && s.tracked == d.1)
+        && w.smt.tracked.len() == tracked_new.len()
+        && w.smt.tracked.iter().zip(tracked_new.iter()).all(|(t, d)| t.txid == d.0 && t.outputs == d.1);
     // Same rule as the full path: an SMT overwrite exactly at the two grandfathered blocks.
     let overwrite_ok = w.smt.smt_overwrite.is_some() == is_bip30_block;
     let (bip30_ok, out_smt_root) = if !ids_distinct || !spends_ok || !overwrite_ok {
         (false, w.in_smt_root)
     } else {
         let u = bip30::BlockUpdate {
+            coinbase_prior: w.smt.coinbase_prior,
+            tracked: w.smt.tracked.iter()
+                .map(|t| bip30::TrackedTx { txid: t.txid, outputs: t.outputs, prior: t.prior, proof: t.proof.clone() })
+                .collect(),
             coinbase_txid: cb_txid,
             coinbase_outputs: cb_outputs,
             absence_proof: w.smt.absence_proof.clone(),
             overwrite: w.smt.smt_overwrite,
             spends: w.smt.spends.iter()
-                .map(|s| bip30::Spend { coinbase_txid: s.coinbase_txid,
+                .map(|s| bip30::Spend { coinbase_txid: s.coinbase_txid, tracked: s.tracked,
                                         current_count: s.current_count, proof: s.proof.clone() })
                 .collect(),
         };

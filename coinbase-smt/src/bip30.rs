@@ -13,23 +13,30 @@
 //!
 //! # The rule, precisely
 //!
-//! A block is invalid if its coinbase txid duplicates ANY earlier coinbase, spent or not, except the
-//! two grandfathered blocks. Core's BIP30 forbids only duplicating a coinbase with unspent outputs.
-//! This is stricter on purpose (libzync review #26). Core checks every transaction's outputs against
-//! the coin set, and this tree holds coinbases only. A non-coinbase transaction can repeat only if its
-//! inputs repeat, which traces back to a repeated coinbase, so refusing every repeat also rules out
-//! every repeated descendant. A coinbase spent to zero therefore stays in the tree, marked `SPENT`.
-//! The cost is liveness: a chain repeating a fully spent coinbase has no proof. Mainnet history has no
-//! such block (its only duplicates are the two grandfathered ones, of unspent coinbases), and BIP34
-//! prevents one until an old coinbase's indicated height is reached (the next is 1,983,702).
+//! Core: no transaction may create an output that already exists unspent (`bad-txns-BIP30`). Core asks its coin
+//! database. This tree holds what it takes to give the same answer without one.
+//!
+//! A transaction can repeat only if every one of its inputs was re-created, so a repeat traces back to a repeated
+//! coinbase. BIP34 forbids that except for a coinbase mined before BIP34 whose script reads as a later height Y, and
+//! then only at exactly Y. So the tree tracks those coinbases (`repeatable`) and every transaction whose inputs are
+//! ALL repeatable coins: the only transactions that can ever repeat. On mainnet that is 173 transactions to height
+//! 940,000 for Y under 100,000,000, measured. Each entry counts its unspent outputs, and at zero stays as `REPEATABLE`:
+//!
+//!   absent         never seen: allowed
+//!   REPEATABLE     seen, fully spent, may repeat: allowed, and the repeat is itself tracked
+//!   a live count   has unspent outputs: refused, Core's bad-txns-BIP30
+//!   SPENT          an untracked coinbase, fully spent: refused
+//!
+//! An untracked coinbase cannot repeat under BIP34, so `SPENT` only refuses a repeat before BIP34 on a chain that is
+//! not mainnet's: real history repeats exactly two coinbases, both grandfathered, both while unspent (measured to height
+//! 230,000 and at 490,897). There the guest is stricter than Core. Everywhere else this is Core's rule.
 //!
 //! # The transition
 //!
 //! ```text
-//!   1. prove the new coinbase txid is absent           <- the BIP30 check itself
-//!   2. insert it with its output count
-//!   3. for each input spending a COINBASE output, decrement that coinbase's count,
-//!      marking it SPENT at zero
+//!   1. prove the coinbase txid is absent or REPEATABLE, then insert it with its output count
+//!   2. the same for each tracked transaction this block creates, in block order
+//!   3. for each input spending a tracked coin, decrement its count, marking it at zero
 //! ```
 //!
 //! Step 3 is what keeps the danger set shrinking as history does, and is why a static exception table
@@ -55,14 +62,28 @@
 use crate::{apply, verify, Hash, Key, Proof};
 use alloc::vec::Vec;
 
-/// The value of a coinbase whose outputs are all spent. Not 0: the tree treats 0 as absent, and absent
-/// is what lets a coinbase be inserted. No block can hold this many outputs.
+/// An untracked coinbase with no unspent outputs. Not 0: the tree treats 0 as absent. No block can hold this many outputs.
 pub const SPENT: u32 = u32::MAX;
+/// A tracked coinbase or transaction with no unspent outputs: it may repeat.
+pub const REPEATABLE: u32 = u32::MAX - 1;
 
-/// A coinbase's value after one more of its outputs is spent. `count` must be a live count.
-pub fn after_spend(count: u32) -> u32 {
-    if count == 1 { SPENT } else { count - 1 }
+/// True for a count of unspent outputs, false for absent-as-zero and the two markers.
+pub fn is_live(count: u32) -> bool {
+    count != 0 && count != SPENT && count != REPEATABLE
 }
+
+/// An entry's value after one more of its outputs is spent. `count` must be live.
+pub fn after_spend(count: u32, tracked: bool) -> u32 {
+    match (count, tracked) {
+        (1, true) => REPEATABLE,
+        (1, false) => SPENT,
+        _ => count - 1,
+    }
+}
+
+/// Coinbases that indicate this height or above are not tracked, and the guest refuses blocks at or above it. Mainnet
+/// reaches it in about 1,900 years; a later image can raise it.
+pub const REPEAT_HORIZON: u32 = 100_000_000;
 
 /// One coinbase-output spend: which coinbase it belonged to, and the proof of that coinbase's current
 /// count under the root as it stands when the spend is applied.
@@ -70,13 +91,27 @@ pub struct Spend {
     pub coinbase_txid: Key,
     pub current_count: u32,
     pub proof: Proof,
+    /// A tracked coin, read from the coin's leaf flag.
+    pub tracked: bool,
+}
+
+/// A tracked transaction this block creates: its txid and spendable output count, and the slot's prior state.
+pub struct TrackedTx {
+    pub txid: Key,
+    pub outputs: u32,
+    pub prior: Option<u32>,
+    pub proof: Proof,
 }
 
 /// Everything the transition needs for one block.
 pub struct BlockUpdate {
     pub coinbase_txid: Key,
     pub coinbase_outputs: u32,
-    /// Normally a proof that `coinbase_txid` is absent under the INCOMING root.
+    /// The prior state of the coinbase's slot: `None` (absent) or `Some(REPEATABLE)`. Bound by `absence_proof`.
+    pub coinbase_prior: Option<u32>,
+    /// Tracked transactions this block creates, in block order.
+    pub tracked: Vec<TrackedTx>,
+    /// Normally a proof of `coinbase_prior` under the INCOMING root.
     ///
     /// At a grandfathered block (`overwrite` is `Some`) it is instead a MEMBERSHIP proof of the prior
     /// count, because absence is *unprovable* there — see `overwrite`.
@@ -98,13 +133,13 @@ pub struct BlockUpdate {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Bip30Error {
-    /// The coinbase txid is already in the tree, spent or not — the rule this exists to enforce.
+    /// The txid is in the tree with unspent outputs, or is an untracked coinbase: the rule this exists to enforce.
     DuplicateUnspentCoinbase,
     /// A proof did not verify against the root it was offered for.
     BadProof,
-    /// A spend claimed a count of zero or `SPENT`, which cannot be spent from.
+    /// A spend claimed something that is not a live count.
     SpendFromEmpty,
-    /// A grandfathered overwrite claimed a prior count of zero or `SPENT`.
+    /// A grandfathered overwrite claimed a prior value that is not a live count.
     OverwriteFromEmpty,
 }
 
@@ -115,9 +150,9 @@ pub enum Bip30Error {
 /// than mutated in place regardless, so a rejected block cannot leave a half-updated state behind for
 /// a caller that ignores the error.
 pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
-    // A coinbase with no SPENDABLE outputs is stored as absent, not as zero — the tree holds no
-    // zero-valued leaves, and writing one would be a second encoding of the same state.
-    let new_val = if u.coinbase_outputs == 0 { None } else { Some(u.coinbase_outputs) };
+    // A coinbase with no SPENDABLE outputs leaves its slot as it was: the tree holds no zero-valued leaves, and
+    // nothing can spend such a coinbase, so nothing descends from it.
+    let new_val = if u.coinbase_outputs == 0 { u.coinbase_prior } else { Some(u.coinbase_outputs) };
 
     let mut cur = match u.overwrite {
         // 1. THE CHECK — against the incoming root, before this block's own updates. See the ordering
@@ -127,13 +162,13 @@ pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
         // 2. Then insert. The SAME proof carries the update — it proved the slot's state — which is
         //    why the insert costs no extra witness bytes.
         None => {
-            if !verify(root, &u.coinbase_txid, None, &u.absence_proof) {
+            if !matches!(u.coinbase_prior, None | Some(REPEATABLE)) || !verify(root, &u.coinbase_txid, u.coinbase_prior, &u.absence_proof) {
                 // Either the key is present with a nonzero count — a real BIP30 violation — or the
                 // proof is junk. Both reject; distinguishing them needs a second proof and buys
                 // nothing, since the block is invalid either way.
                 return Err(Bip30Error::DuplicateUnspentCoinbase);
             }
-            apply(root, &u.coinbase_txid, None, new_val, &u.absence_proof)
+            apply(root, &u.coinbase_txid, u.coinbase_prior, new_val, &u.absence_proof)
                 .ok_or(Bip30Error::BadProof)?
         }
         // THE GRANDFATHERED OVERWRITE (91842 / 91880). Absence is unprovable here by construction, so
@@ -143,7 +178,7 @@ pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
         // move — the overwrite is a no-op on the tree, which is exactly right, because the earlier
         // outputs are destroyed and replaced by identical ones.
         Some(prior) => {
-            if prior == 0 || prior == SPENT {
+            if !is_live(prior) {
                 return Err(Bip30Error::OverwriteFromEmpty);
             }
             apply(root, &u.coinbase_txid, Some(prior), new_val, &u.absence_proof)
@@ -151,14 +186,21 @@ pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
         }
     };
 
-    // 3. Decrement each spent coinbase, marking it SPENT at zero. Sequential: every proof is against the root
-    //    as it stands after the previous update, which is what lets a block spend two outputs of the
-    //    same coinbase — the second proof sees the first's effect.
+    // 2. Tracked transactions, checked before this block's spends as Core checks BIP30 before connecting any input.
+    for t in &u.tracked {
+        if !matches!(t.prior, None | Some(REPEATABLE)) || t.outputs == 0 || !verify(&cur, &t.txid, t.prior, &t.proof) {
+            return Err(Bip30Error::DuplicateUnspentCoinbase);
+        }
+        cur = apply(&cur, &t.txid, t.prior, Some(t.outputs), &t.proof).ok_or(Bip30Error::BadProof)?;
+    }
+
+    // 3. Decrement each spent coin. Sequential: every proof is against the root as it stands after the previous
+    //    update, which is what lets a block spend two outputs of the same transaction.
     for s in &u.spends {
-        if s.current_count == 0 || s.current_count == SPENT {
+        if !is_live(s.current_count) {
             return Err(Bip30Error::SpendFromEmpty);
         }
-        cur = apply(&cur, &s.coinbase_txid, Some(s.current_count), Some(after_spend(s.current_count)), &s.proof)
+        cur = apply(&cur, &s.coinbase_txid, Some(s.current_count), Some(after_spend(s.current_count, s.tracked)), &s.proof)
             .ok_or(Bip30Error::BadProof)?;
     }
     Ok(cur)
@@ -178,6 +220,7 @@ mod tests {
 
     fn update(t: &Smt, cb: Key, nout: u32) -> BlockUpdate {
         BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: cb,
             coinbase_outputs: nout,
             absence_proof: t.prove(&cb),
@@ -215,8 +258,9 @@ mod tests {
         let absence = t.prove(&block_cb);
         t.insert(block_cb, 1);
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: block_cb, coinbase_outputs: 1, absence_proof: absence, overwrite: None,
-            spends: vec![Spend { coinbase_txid: key, current_count: 1, proof: t.prove(&key) }],
+            spends: vec![Spend { coinbase_txid: key, current_count: 1, proof: t.prove(&key), tracked: false }],
         };
         let out = apply_block(&root, &u).expect("honest block rejected");
         t.insert(key, SPENT);
@@ -243,11 +287,11 @@ mod tests {
         let mut u = update(&t, k(9), 1);
         let mut mid = t.clone();
         mid.insert(k(9), 1);
-        u.spends = vec![Spend { coinbase_txid: k(7), current_count: SPENT, proof: mid.prove(&k(7)) }];
+        u.spends = vec![Spend { coinbase_txid: k(7), current_count: SPENT, proof: mid.prove(&k(7)), tracked: false }];
         assert_eq!(apply_block(&root, &u).unwrap_err(), Bip30Error::SpendFromEmpty);
         // Claiming a live count for it does not fold to the real root.
         let mut u = update(&t, k(9), 1);
-        u.spends = vec![Spend { coinbase_txid: k(7), current_count: 1, proof: mid.prove(&k(7)) }];
+        u.spends = vec![Spend { coinbase_txid: k(7), current_count: 1, proof: mid.prove(&k(7)), tracked: false }];
         assert_eq!(apply_block(&root, &u).unwrap_err(), Bip30Error::BadProof);
         let mut u = update(&t, k(7), 1);
         u.overwrite = Some(SPENT);
@@ -267,9 +311,10 @@ mod tests {
         let mut mid = t.clone();
         mid.insert(k(50), 1);
         let spends = vec![
-            Spend { coinbase_txid: k(1), current_count: 2, proof: mid.prove(&k(1)) },
+            Spend { coinbase_txid: k(1), current_count: 2, proof: mid.prove(&k(1)), tracked: false },
         ];
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: k(50), coinbase_outputs: 1,
             absence_proof: absence, overwrite: None, spends,
         };
@@ -294,12 +339,13 @@ mod tests {
         let p2 = mid.prove(&k(2));
 
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: k(60), coinbase_outputs: 1,
             absence_proof: t.prove(&k(60)),
             overwrite: None,
             spends: vec![
-                Spend { coinbase_txid: k(2), current_count: 2, proof: p1 },
-                Spend { coinbase_txid: k(2), current_count: 1, proof: p2 },
+                Spend { coinbase_txid: k(2), current_count: 2, proof: p1, tracked: false },
+                Spend { coinbase_txid: k(2), current_count: 1, proof: p2, tracked: false },
             ],
         };
         // NOTE: the absence proof and p1 are both against `root`, but p2 is against the post-p1 state.
@@ -318,10 +364,11 @@ mod tests {
         t.insert(k(9), 1);
         let root = t.root();
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: k(9), coinbase_outputs: 1,
             absence_proof: t.prove(&k(9)),
             overwrite: None,
-            spends: vec![Spend { coinbase_txid: k(9), current_count: 1, proof: t.prove(&k(9)) }],
+            spends: vec![Spend { coinbase_txid: k(9), current_count: 1, proof: t.prove(&k(9)), tracked: false }],
         };
         assert_eq!(apply_block(&root, &u).unwrap_err(), Bip30Error::DuplicateUnspentCoinbase,
                    "a block spent its own duplicate to free the slot");
@@ -334,6 +381,7 @@ mod tests {
         let root = t.root();
         // Offer a proof for a DIFFERENT key and claim it covers k(3).
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: k(3), coinbase_outputs: 1,
             absence_proof: t.prove(&k(4242)),
             overwrite: None,
@@ -347,10 +395,11 @@ mod tests {
         let t = Smt::new();
         let root = t.root();
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: k(70), coinbase_outputs: 1,
             absence_proof: t.prove(&k(70)),
             overwrite: None,
-            spends: vec![Spend { coinbase_txid: k(71), current_count: 0, proof: t.prove(&k(71)) }],
+            spends: vec![Spend { coinbase_txid: k(71), current_count: 0, proof: t.prove(&k(71)), tracked: false }],
         };
         assert_eq!(apply_block(&root, &u).unwrap_err(), Bip30Error::SpendFromEmpty);
     }
@@ -374,6 +423,7 @@ mod tests {
         let root = t.root();
 
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: dup,
             coinbase_outputs: 1,
             // At a grandfathered block the witness proves the PRIOR COUNT, not absence — absence is
@@ -399,6 +449,7 @@ mod tests {
         let root = t.root();
         for lie in [0u32, 2, 7] {
             let u = BlockUpdate {
+                coinbase_prior: None, tracked: Vec::new(),
                 coinbase_txid: dup, coinbase_outputs: 1,
                 absence_proof: t.prove(&dup), overwrite: Some(lie), spends: Vec::new(),
             };
@@ -413,11 +464,87 @@ mod tests {
     fn an_overwrite_of_an_absent_coinbase_is_refused() {
         let t = Smt::new();
         let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(),
             coinbase_txid: k(5), coinbase_outputs: 1,
             absence_proof: t.prove(&k(5)), overwrite: Some(1), spends: Vec::new(),
         };
         assert!(apply_block(&t.root(), &u).is_err(),
                 "an overwrite of an absent coinbase was accepted");
+    }
+
+    /// A block that spends the last output of the tracked coin `key`, then the state after it.
+    fn spend_last_tracked(t: &mut Smt, key: Key, block_cb: Key) -> Hash {
+        let root = t.root();
+        let absence = t.prove(&block_cb);
+        t.insert(block_cb, 1);
+        let u = BlockUpdate {
+            coinbase_prior: None, tracked: Vec::new(), coinbase_txid: block_cb, coinbase_outputs: 1,
+            absence_proof: absence, overwrite: None,
+            spends: vec![Spend { coinbase_txid: key, current_count: 1, proof: t.prove(&key), tracked: true }],
+        };
+        let out = apply_block(&root, &u).expect("honest block rejected");
+        t.insert(key, REPEATABLE);
+        assert_eq!(out, t.root());
+        out
+    }
+
+    #[test]
+    fn a_tracked_coinbase_may_repeat_once_fully_spent_and_not_before() {
+        let mut t = Smt::new();
+        t.insert(k(7), 1);
+        assert!(apply_block(&t.root(), &update(&t, k(7), 1)).is_err(), "repeated while unspent");
+        let root = spend_last_tracked(&mut t, k(7), k(8));
+        let mut u = update(&t, k(7), 2);
+        u.coinbase_prior = Some(REPEATABLE);
+        let out = apply_block(&root, &u).expect("Core accepts this repeat");
+        t.insert(k(7), 2);
+        assert_eq!(out, t.root(), "the repeat's outputs are live again");
+        // A prover cannot claim REPEATABLE for a live coinbase, or absent for a REPEATABLE one.
+        let mut u = update(&t, k(7), 1);
+        u.coinbase_prior = Some(REPEATABLE);
+        assert!(apply_block(&t.root(), &u).is_err());
+        let mut live = Smt::new();
+        live.insert(k(9), REPEATABLE);
+        assert!(apply_block(&live.root(), &update(&live, k(9), 1)).is_err());
+    }
+
+    fn with_tracked(t: &Smt, cb: Key, tx: Key, prior: Option<u32>) -> BlockUpdate {
+        let mut mid = t.clone();
+        mid.insert(cb, 1);
+        let mut u = update(t, cb, 1);
+        u.tracked = vec![TrackedTx { txid: tx, outputs: 2, prior, proof: mid.prove(&tx) }];
+        u
+    }
+
+    #[test]
+    fn a_tracked_transaction_is_core_s_bip30() {
+        let mut t = Smt::new();
+        let root = t.root();
+        let out = apply_block(&root, &with_tracked(&t, k(1), k(50), None)).expect("first instance");
+        t.insert(k(1), 1);
+        t.insert(k(50), 2);
+        assert_eq!(out, t.root());
+        // Repeated while it has unspent outputs: bad-txns-BIP30.
+        assert_eq!(apply_block(&t.root(), &with_tracked(&t, k(2), k(50), None)).unwrap_err(), Bip30Error::DuplicateUnspentCoinbase);
+        assert_eq!(apply_block(&t.root(), &with_tracked(&t, k(2), k(50), Some(2))).unwrap_err(), Bip30Error::DuplicateUnspentCoinbase);
+        assert_eq!(apply_block(&t.root(), &with_tracked(&t, k(2), k(50), Some(REPEATABLE))).unwrap_err(), Bip30Error::DuplicateUnspentCoinbase);
+        // Fully spent: Core accepts the repeat.
+        t.insert(k(50), REPEATABLE);
+        assert!(apply_block(&t.root(), &with_tracked(&t, k(2), k(50), Some(REPEATABLE))).is_ok());
+        assert!(apply_block(&t.root(), &with_tracked(&t, k(2), k(50), None)).is_err(), "a false claim of absence");
+    }
+
+    #[test]
+    fn a_marker_cannot_be_spent() {
+        for m in [SPENT, REPEATABLE] {
+            let mut t = Smt::new();
+            t.insert(k(7), m);
+            let mut mid = t.clone();
+            mid.insert(k(9), 1);
+            let mut u = update(&t, k(9), 1);
+            u.spends = vec![Spend { coinbase_txid: k(7), current_count: m, proof: mid.prove(&k(7)), tracked: true }];
+            assert_eq!(apply_block(&t.root(), &u).unwrap_err(), Bip30Error::SpendFromEmpty);
+        }
     }
 
     #[test]

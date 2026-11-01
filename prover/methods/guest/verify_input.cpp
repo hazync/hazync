@@ -78,7 +78,7 @@ static bool hz_leaf(uint8_t* out, const unsigned char* txid, uint32_t vout, uint
     std::memcpy(b + 49, spk, spk_len);
     unsigned char* t = b + 49 + spk_len;
     le(t, height, 4);
-    t[4] = (unsigned char)(cb ? 1 : 0);
+    t[4] = (unsigned char)cb;
     le(t + 5, mtp, 4);
     CSHA256().Write(b, 58 + spk_len).Finalize(out);
     return true;
@@ -122,7 +122,7 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
     le(b8, coin.scriptPubKey.size(), 4); h.Write(b8, 4);
     h.Write(reinterpret_cast<const unsigned char*>(coin.scriptPubKey.data()), coin.scriptPubKey.size());
     le(b8, coin_height, 4); h.Write(b8, 4);
-    unsigned char cb = (unsigned char)(coin_is_coinbase ? 1 : 0); h.Write(&cb, 1);
+    unsigned char cb = (unsigned char)coin_is_coinbase; h.Write(&cb, 1);
     le(b8, coin_mtp, 4); h.Write(b8, 4);
     h.Finalize(out_leaf);
     return true;
@@ -370,7 +370,7 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
         le(b8, o.scriptPubKey.size(), 4); h.Write(b8, 4);
         h.Write(reinterpret_cast<const unsigned char*>(o.scriptPubKey.data()), o.scriptPubKey.size());
         le(b8, height, 4); h.Write(b8, 4);
-        unsigned char cb = (unsigned char)(is_coinbase ? 1 : 0); h.Write(&cb, 1);
+        unsigned char cb = (unsigned char)is_coinbase; h.Write(&cb, 1);
         le(b8, creation_mtp, 4); h.Write(b8, 4);
         h.Finalize(out + (size_t)n * 32);
         n++;
@@ -905,7 +905,12 @@ std::string FormatISO8601Date(int64_t) { return std::string(); }
 // Core's CSigNetParams with its built-in challenge (and asserts that genesis hash too).
 static const Consensus::Params& net_params() {
 #if defined(HAZYNC_REGTEST)
-    static const std::unique_ptr<const CChainParams> params = CChainParams::RegTest(CChainParams::RegTestOptions{});
+    // BIP34 at 110, not 1, so the rig can stage a real repeat. bitcoind runs with -testactivationheight=bip34@110.
+    static const std::unique_ptr<const CChainParams> params = [] {
+        CChainParams::RegTestOptions o{};
+        o.activation_heights[Consensus::DEPLOYMENT_HEIGHTINCB] = 110;
+        return CChainParams::RegTest(o);
+    }();
 #elif defined(HAZYNC_SIGNET)
     static const std::unique_ptr<const CChainParams> params = CChainParams::SigNet(CChainParams::SigNetOptions{});
 #else
@@ -1003,6 +1008,25 @@ extern "C" int hz_witness_rule_c(const uint8_t* cb, unsigned cb_len, const uint8
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     return hz_witness_rule(mtx, wtxids, n, other_has_witness != 0, static_cast<int>(height)) ? 1 : 0;
+}
+#endif
+#ifdef HAZYNC_AGG_LITE
+// The height a coinbase's scriptSig indicates: the Y for which `CScript() << Y` is its prefix, BIP34's own test
+// (validation.cpp, bad-cb-height). 0 if it indicates none, 0xFFFFFFFF for a value no block height can be.
+extern "C" uint32_t hz_indicated_height(const uint8_t* cb, unsigned cb_len) {
+    MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    if (mtx.vin.empty() || mtx.vin[0].scriptSig.empty()) return 0;
+    const CScript& ss = mtx.vin[0].scriptSig;
+    int64_t v = 0;
+    const unsigned op = ss[0];
+    if (op >= 0x51 && op <= 0x60) v = op - 0x50;
+    else if (op >= 1 && op <= 5 && ss.size() > op) { for (unsigned i = op; i >= 1; i--) v = (v << 8) | ss[i]; }
+    else return 0;
+    const CScript expect = CScript() << v;
+    if (ss.size() < expect.size() || !std::equal(expect.begin(), expect.end(), ss.begin())) return 0;
+    return v > 0x7fffffff ? 0xFFFFFFFFu : static_cast<uint32_t>(v);
 }
 #endif
 extern "C" int64_t block_subsidy(uint32_t height) {

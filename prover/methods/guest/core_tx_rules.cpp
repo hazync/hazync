@@ -99,7 +99,7 @@ int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsign
     coins.reserve(spent.size());
     for (unsigned i = 0; i < spent.size(); i++) {
         const bool mine = i >= start && i - start < k;
-        coins.emplace_back(spent[i], mine && cb[i - start] == 1, mine ? ch[i - start] : 0);
+        coins.emplace_back(spent[i], mine && (cb[i - start] & 1) == 1, mine ? ch[i - start] : 0);
     }
     const HzCoinsView view(tx, coins);
     const bool first = start == 0;

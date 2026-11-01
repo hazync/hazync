@@ -27,7 +27,7 @@ HOST, ROOT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 ONLY = sys.argv[3:]
 DATA, BLOCKS, OUT = ROOT + "/node", ROOT + "/blocks", ROOT + "/out"
 ANYONE = CScript([OP_TRUE])
-BASE = 112   # the valid chain's height: coinbases 1..12 are mature
+BASE = 232   # the valid chain's height, long enough for a repeated coinbase to mature
 
 
 def cli(*a):
@@ -45,7 +45,9 @@ class Chain:
         self.gen_time = 1296688602
         self.tip = int(cli("getbestblockhash"), 16)
         self.height = 0
-        self.utxo = {}                      # (txid int, n) -> (value, spk, height, is_coinbase, creation mtp)
+        self.utxo = {}                      # (txid int, n) -> (value, spk, height, leaf flags, creation mtp)
+        self.tracked = set()                # txids of tracked coinbases: a repeat of one is tracked too
+        self.stage = {}                     # the staged repeat: its transactions and coinbases
 
     def mtp(self, h):
         """MTP of the block AT height h (median of h-10..h)."""
@@ -66,13 +68,28 @@ class Chain:
         b.solve()
         return b
 
+    def cb_flags(self, b, h):
+        t = b.vtx[0]; t.rehash()
+        s = bytes(t.vin[0].scriptSig) if t.vin else b""
+        if not s:
+            return 1
+        y = s[0] - 0x50 if 0x51 <= s[0] <= 0x60 else (int.from_bytes(s[1:1 + s[0]], "little") if 1 <= s[0] <= 5 else 0)
+        return 1 | (2 if (h < 110 and h < y < 100_000_000) or t.sha256 in self.tracked else 0)
+
+    def tx_flags(self, t, made=()):
+        fl = [(self.utxo.get((x.prevout.hash, x.prevout.n)) or dict(made).get((x.prevout.hash, x.prevout.n)) or (0, 0, 0, 0, 0))[3] for x in t.vin]
+        return 2 if fl and all(f & 2 for f in fl) else 0
+
     def accept(self, b):
         h = self.height + 1
         for i, t in enumerate(b.vtx):
             t.rehash()
+            fl = self.cb_flags(b, h) if i == 0 else self.tx_flags(t)
+            if i == 0 and fl & 2:
+                self.tracked.add(t.sha256)
             for n, o in enumerate(t.vout):
                 if not (o.scriptPubKey[:1] == bytes([OP_RETURN])):
-                    self.utxo[(t.sha256, n)] = (o.nValue, bytes(o.scriptPubKey), h, i == 0, self.mtp(h - 1))
+                    self.utxo[(t.sha256, n)] = (o.nValue, bytes(o.scriptPubKey), h, fl, self.mtp(h - 1))
             if i:
                 for x in t.vin:
                     self.utxo.pop((x.prevout.hash, x.prevout.n), None)
@@ -91,19 +108,21 @@ def to_json(c, b, path, h=None):
     made = {}     # coins this block creates, for a spend later in the same block
     for t in b.vtx[1:]:
         t.rehash()
+        fl = c.tx_flags(t, made)
         for n, o in enumerate(t.vout):
-            made[(t.sha256, n)] = (o.nValue, bytes(o.scriptPubKey), h, False, c.mtp(h - 1))
+            made[(t.sha256, n)] = (o.nValue, bytes(o.scriptPubKey), h, fl, c.mtp(h - 1))
     for t in b.vtx[1:]:
         pv = []
         for x in t.vin:
             u = c.utxo.get((x.prevout.hash, x.prevout.n)) or made.get((x.prevout.hash, x.prevout.n))
             if u is None:   # no such coin: the guest is given a plausible one, which is exactly the deferred case
-                u = (0, bytes(ANYONE), 1, False, 0)
+                u = (0, bytes(ANYONE), 1, 0, 0)
             pv.append({"value": u[0], "spk": u[1].hex(), "coin_height": u[2], "coin_is_coinbase": int(u[3]), "coin_mtp": u[4]})
         txs.append({"raw": t.serialize().hex(), "prevouts": pv})
     json.dump({"height": h, "bits": b.nBits, "time": b.nTime, "nonce": b.nNonce, "version": b.nVersion,
                "prev": rev_hex(b.hashPrevBlock), "merkle": rev_hex(b.hashMerkleRoot),
-               "coinbase_hex": b.vtx[0].serialize().hex(), "txs": txs, "recent_times": c.recent()}, open(path, "w"))
+               "coinbase_hex": b.vtx[0].serialize().hex(), "coinbase_flags": c.cb_flags(b, h), "txs": txs,
+               "recent_times": c.recent()}, open(path, "w"))
 
 
 def spend(c, coins, outs, seq=0xffffffff, version=2, locktime=0):
@@ -117,7 +136,7 @@ def spend(c, coins, outs, seq=0xffffffff, version=2, locktime=0):
 
 
 def mature(c, k=1):
-    r = [o for o, u in sorted(c.utxo.items(), key=lambda kv: kv[1][2]) if u[2] + 100 <= c.height + 1 and u[1] == bytes(ANYONE)]
+    r = [o for o, u in sorted(c.utxo.items(), key=lambda kv: kv[1][2]) if u[2] + 100 <= c.height + 1 and u[1] == bytes(ANYONE) and not u[3] & 2]
     return r[:k]
 
 
@@ -184,11 +203,11 @@ def c_tx_total_huge(c):
 def c_tx_null_prevout(c):
     t = CTransaction(); t.version = 2; t.vin = [CTxIn(COutPoint(0, 0xffffffff), b"")]; t.vout = [CTxOut(1, ANYONE)]; t.rehash(); return c.block([t])
 def c_premature(c):
-    young = [o for o, u in c.utxo.items() if u[3] and u[2] > c.height - 50][:1]; return c.block([spend(c, young, [out(value(c, young))])])
+    young = [o for o, u in c.utxo.items() if u[3] & 1 and u[2] > c.height - 50][:1]; return c.block([spend(c, young, [out(value(c, young))])])
 def c_exactly_mature(c):
-    o = [o for o, u in c.utxo.items() if u[3] and u[2] == c.height + 1 - 100][:1]; return c.block([spend(c, o, [out(value(c, o))])])
+    o = [o for o, u in c.utxo.items() if u[3] & 1 and u[2] == c.height + 1 - 100][:1]; return c.block([spend(c, o, [out(value(c, o))])])
 def c_one_short_of_mature(c):
-    o = [o for o, u in c.utxo.items() if u[3] and u[2] == c.height + 1 - 99][:1]; return c.block([spend(c, o, [out(value(c, o))])])
+    o = [o for o, u in c.utxo.items() if u[3] & 1 and u[2] == c.height + 1 - 99][:1]; return c.block([spend(c, o, [out(value(c, o))])])
 def c_in_below_out(c):
     x = mature(c); return c.block([spend(c, x, [out(value(c, x) + 1)])])
 def c_missing_coin(c):
@@ -383,6 +402,16 @@ def c_tx_64_bytes(c):
     x = mature(c); t = spend(c, x, [(value(c, x), b"\x51\x51\x51\x51")]); assert len(t.serialize()) == 64; return c.block([t])
 
 
+# ---- #26: a transaction repeated through a repeated coinbase. The base chain has staged it: coinbases at 20 and 21 indicate
+# 130 and 131, T1 and T2 spend them, both coinbases repeat at those heights, T2's outputs are then spent and T1's are not.
+def c_bip30_repeat_unspent(c):  # T1 again: its outputs are still unspent, so Core must say bad-txns-BIP30
+    return c.block([c.stage["t1"]])
+def c_bip30_repeat_spent(c):    # T2 again: its outputs are gone, so Core must accept
+    return c.block([c.stage["t2"]])
+def c_bip30_child_of_repeat(c): # something new from the repeated coinbase: nothing to collide with
+    o = (c.stage["c1"].sha256, 0); return c.block([spend(c, [o], [out(value(c, [o]))], version=1)])
+
+
 CASES = [(k[2:], v) for k, v in list(globals().items()) if k.startswith("c_")]
 DEFERRED = {"missing_coin"}
 TWO_CHUNKS = {"split_tx", "split_tx_bad"}
@@ -414,7 +443,7 @@ def guest(c, name, b, height):
 def main():
     shutil.rmtree(DATA, ignore_errors=True)
     os.makedirs(DATA); os.makedirs(BLOCKS + "/main", exist_ok=True); os.makedirs(OUT, exist_ok=True)
-    subprocess.Popen([BIN, "-regtest", f"-datadir={DATA}", "-rpcport=18990", "-port=18991", "-listen=0", "-txindex=0", "-fallbackfee=0.0001"], stdout=subprocess.DEVNULL)
+    subprocess.Popen([BIN, "-regtest", f"-datadir={DATA}", "-rpcport=18990", "-port=18991", "-listen=0", "-txindex=0", "-fallbackfee=0.0001", "-testactivationheight=bip34@110"], stdout=subprocess.DEVNULL)
     for _ in range(100):
         try:
             cli("getblockcount"); break
@@ -430,15 +459,29 @@ def run():
     print("core:", cli("getnetworkinfo").split('"subversion": "')[1].split('"')[0], flush=True)
     c = Chain()
     for _ in range(BASE):
-        b = c.block()
-        assert cli("submitblock", b.serialize().hex()) in ("", "null"), "base chain"
+        h = c.height + 1
+        if h in (20, 21):       # a pre-BIP34 coinbase indicating a later height: tracked, and able to repeat there
+            cb = create_coinbase(h, script_pubkey=ANYONE); cb.vin[0].scriptSig = CScript([h + 110, b"stage"]); cb.rehash()
+            b = c.block(coinbase=cb); c.stage["c1" if h == 20 else "c2"] = b.vtx[0]
+        elif h in (121, 122):   # T1, T2: each spends a staged coinbase alone, so each is tracked
+            k = "c1" if h == 121 else "c2"; o = (c.stage[k].sha256, 0)
+            t = spend(c, [o], [out(value(c, [o]))]); c.stage["t1" if h == 121 else "t2"] = t; b = c.block([t])
+        elif h in (130, 131):   # the coinbase again, byte for byte, at the height it indicates
+            cb = c.stage["c1" if h == 130 else "c2"]
+            b = create_block(c.tip, cb, c.next_time(), version=4); b.solve()
+        elif h == 200:          # T2's outputs spent, T1's left alone
+            o = (c.stage["t2"].sha256, 0); b = c.block([spend(c, [o], [out(value(c, [o]))])])
+        else:
+            b = c.block()
+        got = cli("submitblock", b.serialize().hex())
+        assert got in ("", "null"), f"base chain block {h}: {got}"
         to_json(c, b, f"{BLOCKS}/main/block_{c.height + 1}.json")
         c.accept(b)
     # The anchor: the guest's own state at BASE, from genesis. Reused while the guest image is the same.
     anchor = f"{BLOCKS}/anchor.json"
     if not os.path.exists(anchor):
         o = f"{OUT}/base"
-        env = dict(os.environ, RISC0_DEV_MODE="1", HAZYNC_PROFILE_LAYOUT="cost", HAZYNC_CHUNKS="1")
+        env = dict(os.environ, RISC0_DEV_MODE="1", HAZYNC_RIG="1", HAZYNC_PROFILE_LAYOUT="cost", HAZYNC_CHUNKS="1")
         r = subprocess.run([HOST, "libzync-prove-range", "1", str(BASE), BLOCKS + "/main", "genesis", o], env=env, capture_output=True, text=True, errors="replace")
         assert r.returncode == 0, (r.stdout + r.stderr)[-800:]
         shutil.copy(f"{o}/state_{BASE}.json", anchor)
