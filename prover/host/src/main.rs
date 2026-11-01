@@ -3699,6 +3699,15 @@ fn ss_sweep_cmd(h_stop: u32, dir: &str) {
     println!("{}", if balanced && hash_ok { "SWEEP_OK" } else { "SWEEP_FAIL" });
 }
 
+/// HAZYNC_RIG: pass the guest's verdict lines through, from a run whose stdout was captured, so the rig can compare
+/// the guest's reason for a rejection with Core's.
+fn rig_echo(log: &[u8]) {
+    if std::env::var("HAZYNC_RIG").is_err() { return; }
+    for l in String::from_utf8_lossy(log).lines().filter(|l| l.contains("core-reject:") || l.contains("agg-lite:")) {
+        println!("{l}");
+    }
+}
+
 /// `libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>`: PROVE blocks lo..=hi as one
 /// recursive chain on this machine's prover (GPU with the cuda feature). Block lo is a base step on the
 /// given anchor (the committed state at lo-1, e.g. from `swiftsync-sweep` with HAZYNC_SWEEP_SAVE); every
@@ -3796,6 +3805,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         if !bounds.is_empty() {
             let done = execute_chunks_parallel(&w, &bounds, hint_threads());
             for (i, &(clo, chi)) in bounds.iter().enumerate() {
+                rig_echo(&done[i].1);
                 let blob: Vec<u8> = libzync::host::sig_records(&String::from_utf8_lossy(&done[i].1))
                     .iter().flat_map(|r| libzync::host::sig_hint(r)).collect();
                 bd.chunks.push((clo as u32, chi as u32, blob));
@@ -3832,7 +3842,9 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             let mut b = ExecutorEnv::builder();
             b.stdout(&mut log);
             env_for(&mut b);
-            if let Err(e) = lz_execute(b.build().unwrap()) {
+            let collected = lz_execute(b.build().unwrap());
+            rig_echo(&log);
+            if let Err(e) = collected {
                 assert!(e.contains("collect run commits no chain state"), "block {h}: collect aggregate failed: {e}");
             }
         }
