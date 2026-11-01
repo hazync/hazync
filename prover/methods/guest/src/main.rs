@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod utreexo;
+mod handover_pin;
 mod script_flags;
 // libzync: the hint wire format, the SwiftSync hint hash and the network parameters -- the SAME files
 // the host compiles (libzync crate), included by path for the reason coinbase-smt is (hazync#88).
@@ -1408,6 +1409,26 @@ struct ChainState {
     // bit 1 scripts and signatures SKIPPED (assumevalid), bit 2 signet. A verifier reads the profile from
     // the proof instead of inferring it from which image id it accepted.
     profile: u32,
+    // libzync: an append-only Utreexo forest with one leaf per block, genesis first, so leaf i is the block at
+    // height i and block_leaves == height + 1. It is what lets a proof of the tip answer "was this block in the
+    // chain" for ANY height: the state above says nothing about history but tip_hash (docs/libzync/HANDOVER.md).
+    block_roots: Vec<Option<[u8; 32]>>,
+    block_leaves: u64,
+    // libzync: zero for a chain that has been one image since genesis. Each handover folds in the image it left
+    // and the height it left at, and no other step changes it (handover_pin.rs).
+    lineage: [u8; 32],
+}
+
+fn sha256_guest(b: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b).into()
+}
+
+/// The lineage digest of `list`, an initial slice of handover_pin::LINEAGE.
+fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
+    let mut l = [0u8; 32];
+    for h in list { l = sha256_guest(&handover_pin::lineage_preimage(&l, h)); }
+    l
 }
 
 /// This image's ChainState.profile (see the field).
@@ -1591,6 +1612,7 @@ fn chain_step() {
         ss_set: prev.ss_set, ss_acc: prev.ss_acc, ss_hints: prev.ss_hints,
         smt_root: r.out_smt_root, // canonical chain_step (unreachable in a libzync image)
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
+        block_roots: prev.block_roots.clone(), block_leaves: prev.block_leaves, lineage: prev.lineage,
     });
 }
 
@@ -2073,11 +2095,12 @@ fn aggregate() {
     #[cfg(not(feature = "agg-readslice"))]
     let prev_journal: Vec<u8> = env::read();
     let w: BlockWitness = env::read();
-    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor. ANY other value used to
+    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor, 2 = handover (verify the
+    // previous chain proof under the PREDECESSOR image pinned in this image's source). ANY other value used to
     // skip the verification below and copy anchor_id out of the unverified journal: a forged "genesis-
     // anchored" state one block back, and a receipt every verifier check passed (adversarial audit, 2026-10-30).
     let is_base: u32 = env::read();
-    assert!(is_base <= 1, "is_base must be 0 or 1, got {is_base}");
+    assert!(is_base <= 2, "is_base must be 0, 1 or 2, got {is_base}");
     // libzync: ONE hint block for the aggregate (libzync/src/wire.rs): ECMH hints (or collect) and
     // design B's SwiftSync hint bits, one per indexed output (none = no hints file: every created coin
     // goes to the ECMH total). The decoder refuses hint bits set past the block's outputs.
@@ -2091,7 +2114,13 @@ fn aggregate() {
         match h.ss { Some((nbits, w)) => (1, nbits, w.to_vec()), None => (0, 0, Vec::new()) }
     };
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
+    // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
+    // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
+    let pred = handover_pin::LINEAGE.last().filter(|_| is_base == 2);
+    assert!(is_base != 2 || pred.is_some(), "handover: this image has no predecessor");
+    if let Some(p) = pred { env::verify(p.image, &prev_journal).expect("predecessor chain proof invalid"); }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    // ⛔ A new image that changes ChainState must decode the PREDECESSOR's format here when is_base == 2.
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev");
     assert!(prev.kind == KIND_CHAIN, "aggregate: prev journal is not a ChainState (domain tag)"); // H8
     // S1: chunk verification above AND the prev-chain verification both used `self_id`; committing it
@@ -2100,6 +2129,15 @@ fn aggregate() {
     if is_base == 0 {
         assert!(prev.self_id == self_id, "recursion image-id mismatch");
         assert!(prev.profile == chain_profile(), "recursion profile mismatch");
+    }
+    if let Some(p) = pred {
+        assert!(prev.self_id == p.image, "handover: previous proof is not the predecessor's");
+        // The same network, and the same scripts-on or assumevalid claim: a chain cannot gain a claim at a handover.
+        assert!(prev.profile == chain_profile(), "handover: profile mismatch");
+        assert!(w.height == p.first_height, "handover: height {} != pinned {}", w.height, p.first_height);
+        // The predecessor's own lineage must be the rest of the pinned list, so the list cannot misstate history.
+        let n = handover_pin::LINEAGE.len();
+        assert!(prev.lineage == lineage_of(&handover_pin::LINEAGE[..n - 1]), "handover: predecessor lineage mismatch");
     }
     // #1: bind the block's height to the real chain height (same reason as chain_step — otherwise the
     // segmented path validates flags/subsidy at an attacker-chosen height). Also closes half of #2: the
@@ -2164,12 +2202,25 @@ fn aggregate() {
     }
     #[cfg(not(feature = "libzync"))]
     let (ss_set, ss_acc, ss_hints) = (prev.ss_set, prev.ss_acc, prev.ss_hints);
+    // The block forest. Induction from the genesis state gives one leaf per height; the check also refuses a base
+    // step on an anchor that has no forest, which would otherwise commit a forest with the wrong leaf numbering.
+    #[cfg(feature = "libzync")]
+    let (block_roots, block_leaves) = {
+        assert!(prev.block_leaves == prev.height as u64 + 1, "aggregate: block forest {} leaves at height {}", prev.block_leaves, prev.height);
+        let mut f = utreexo::Stump::new(prev.block_roots.clone(), prev.block_leaves);
+        f.add(sha256_guest(&handover_pin::block_leaf_preimage(&r.tip_hash, height)));
+        (normalize(f.roots), f.num_leaves)
+    };
+    #[cfg(not(feature = "libzync"))]
+    let (block_roots, block_leaves) = (prev.block_roots.clone(), prev.block_leaves);
+    let lineage = if pred.is_some() { lineage_of(handover_pin::LINEAGE) } else { prev.lineage };
     env::commit(&ChainState {
         kind: KIND_CHAIN,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
         ss_set, ss_acc, ss_hints, smt_root,
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
+        block_roots, block_leaves, lineage,
     });
 }
 

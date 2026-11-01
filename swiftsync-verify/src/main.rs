@@ -11,6 +11,9 @@
 //!
 //! `--image <hex>` replaces the built-in image id for the network: the id you rebuilt yourself (§5 step 9).
 //!
+//! `--handover <image hex>:<first height>` (repeat, oldest first): the lineage an image pins, for a reader who rebuilt
+//! one that pins any (docs/libzync/HANDOVER.md).
+//!
 //! `<receipt>` may also be a proof bundle (`.sspf`, docs/libzync/PROOF_BUNDLE.md); its header is then checked
 //! against the verified result. `swiftsync-verify [flags] bundle <receipt> <file.hints> <out.sspf>` writes one,
 //! and refuses a receipt that does not verify.
@@ -39,6 +42,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
     let mut now_arg: Option<String> = None;
+    let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -46,6 +50,16 @@ fn main() {
             "--bitcoin-cli" => cli = Some(args.next().unwrap_or_else(|| usage())),
             "--image" => image_hex = Some(args.next().unwrap_or_else(|| usage())),
             "--now" => now_arg = Some(args.next().unwrap_or_else(|| usage())),
+            "--handover" => {
+                let v = args.next().unwrap_or_else(|| usage());
+                let bad = || -> ! { fail(&format!("--handover {v}: want <64 hex digits>:<height>")) };
+                let (id, h) = v.split_once(':').unwrap_or_else(|| bad());
+                let id = swiftsync_verify::hex32(&id.to_lowercase()).unwrap_or_else(|| bad());
+                handovers.push(swiftsync_verify::Handover {
+                    image: swiftsync_verify::words(&risc0_zkvm::sha::Digest::from_bytes(id)),
+                    first_height: h.parse().unwrap_or_else(|_| bad()),
+                });
+            }
             "-h" | "--help" => usage(),
             _ if a.starts_with("--") => usage(),
             _ => files.push(a),
@@ -59,6 +73,9 @@ fn main() {
     if let Some(h) = &image_hex {
         image = image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h}: not 64 hex digits")));
         println!("  image id given on the command line: {}", image.method_id_hex);
+    }
+    if !handovers.is_empty() {
+        image = image.with_lineage(handovers);
     }
     let read = |p: &str| std::fs::read(p).unwrap_or_else(|e| fail(&format!("{p}: {e}")));
     let anchor: Option<ChainState> = anchor.map(|p| {
