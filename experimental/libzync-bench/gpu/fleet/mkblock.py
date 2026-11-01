@@ -14,7 +14,11 @@ def cli(*a):
     return subprocess.run(["bitcoin-cli", *map(str, a)], check=True, capture_output=True, text=True).stdout.strip()
 
 h, out = int(sys.argv[1]), sys.argv[2]
-tracked = {(t, v) for t, v, *_ in json.load(open(os.environ["HZ_TRACKED"]))["outputs"]} if os.environ.get("HZ_TRACKED") else set()
+tracked = set()
+if os.environ.get("HZ_TRACKED"):
+    lst = json.load(open(os.environ["HZ_TRACKED"]))
+    assert h <= lst["tip"], f"the tracked list stops at {lst['tip']}: run scripts/libzync/tracked_scan.py first"
+    tracked = {(t, v) for t, v, *_ in lst["outputs"]}
 bh = cli("getblockhash", h)
 b = json.loads(cli("getblock", bh, 3), parse_float=Decimal)
 mtp_cache = {}

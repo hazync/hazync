@@ -121,7 +121,7 @@ def main():
                     spent.add((pt, pv))
                     # Self-check: the block file's prevout metadata must equal what this script derived.
                     if (pt, pv) in meta:
-                        got = (p["coin_height"], p["coin_is_coinbase"] == 1, p["coin_mtp"])
+                        got = (p["coin_height"], p["coin_is_coinbase"] & 1 == 1, p["coin_mtp"])
                         assert meta[(pt, pv)] == got, f"block {h}: prevout {pt[::-1].hex()}:{pv} {meta[(pt, pv)]} != file {got}"
             if k == 0 and bip30:
                 continue
