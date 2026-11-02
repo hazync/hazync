@@ -197,6 +197,7 @@ impl Rd<'_> {
 /// aggregation path, with every per-transaction fact taken from the chunk journals.
 /// `ss` = ((mode, nbits, packed bits), previous hint hash): design B's SwiftSync hint bits for this block,
 /// one per INDEXED output (see below), and the running hash they extend. mode 0 = no hints file.
+#[inline(never)] // inlined, the aggregate ran ~1.08 M cycles dearer on 962,000 (HANDOVER.md §8)
 pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                            ss: (&(u32, u32, Vec<u32>), [u8; 32])) -> BlockResult {
     let mut all_ok = true;
