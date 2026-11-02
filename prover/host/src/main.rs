@@ -242,12 +242,12 @@ fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
 /// A mid-chain anchor from a block file has no record of the blocks before it, but the guest needs a forest of the
 /// right SIZE to append to. This fills one with placeholder roots. A proof built on it is anchored, so verifiers can
 /// only ever report DEMO, and its block forest does not commit to real history: it exists for measurement and tests.
-fn demo_block_forest(s: &mut ChainState) {
+fn demo_block_forest(s: &mut ChainState, warn: bool) {
     if s.block_leaves != 0 { return; }
     let n = s.height as u64 + 1;
     s.block_leaves = n;
     s.block_roots = (0..64 - n.leading_zeros()).map(|i| ((n >> i) & 1 == 1).then(|| sha256_host(&[b"hazync demo block forest root", &[i as u8][..]].concat()))).collect();
-    eprintln!("WARNING: anchor at {} has no block forest; using PLACEHOLDER roots (demonstration only)", s.height);
+    if warn { eprintln!("WARNING: anchor at {} has no block forest; using PLACEHOLDER roots (demonstration only)", s.height); }
 }
 
 /// The profile word this host's image commits (guest `chain_profile`).
@@ -1073,7 +1073,9 @@ fn build_full() -> (ChainState, BlockWitness) {
         }
         w.coinbase_tx = serialize(&cb);
     }
-    if methods::LIBZYNC { demo_block_forest(&mut anchor); }
+    // Silent: most callers discard this anchor (prove-range carries the real state); the ones that keep it are
+    // block-file measurements, which are anchored demonstrations anyway.
+    if methods::LIBZYNC { demo_block_forest(&mut anchor, false); }
     (anchor, w)
 }
 
@@ -3795,7 +3797,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };
-    demo_block_forest(&mut prev);
+    demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
