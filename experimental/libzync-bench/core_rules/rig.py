@@ -466,7 +466,8 @@ def reason_ok(core, t):
 
 
 CASES = [(k[2:], v) for k, v in list(globals().items()) if k.startswith("c_")]
-DEFERRED = {"missing_coin"}
+# A coin that does not exist fails at H under design B; a coin-log image (RIG_COINLOG=1) refuses it at the block.
+DEFERRED = set() if os.environ.get("RIG_COINLOG") == "1" else {"missing_coin"}
 TWO_CHUNKS = {"split_tx", "split_tx_bad"}
 
 
@@ -541,6 +542,8 @@ def run():
         r = subprocess.run([HOST, "libzync-prove-range", "1", str(BASE), BLOCKS + "/main", "genesis", o], env=env, capture_output=True, text=True, errors="replace")
         assert r.returncode == 0, (r.stdout + r.stderr)[-800:]
         shutil.copy(f"{o}/state_{BASE}.json", anchor)
+        if os.path.exists(f"{o}/state_{BASE}.coinlog"):     # a coin-log image: the log travels with its anchor
+            shutil.copy(f"{o}/state_{BASE}.coinlog", f"{BLOCKS}/anchor.coinlog")
     res = []
     for name, f in CASES:
         if ONLY and name not in ONLY:
