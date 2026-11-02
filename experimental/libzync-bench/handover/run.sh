@@ -8,7 +8,7 @@
 # Exit 0 only if every case came out as expected.
 O=$1; N=$2; B=$3; R=$4; FIRST=${FIRST:-101}; LAST=$((FIRST-1)); END=${END:-$((FIRST+9))}
 HERE=$(cd "$(dirname "$0")" && pwd); REF=$HERE/../../../scripts/libzync/block_forest_ref.py
-export RISC0_DEV_MODE=1 HAZYNC_RIG=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1
+export RISC0_DEV_MODE=1 HAZYNC_RIG=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_COINLOG_SAVE_EACH=1
 BAD=0; N_CASES=0
 mkdir -p "$R"
 pass() { N_CASES=$((N_CASES+1)); echo "PASS $1"; }

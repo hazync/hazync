@@ -4010,7 +4010,12 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         assert_eq!(st.height, h);
         std::fs::write(format!("{out}/block_{h}.rcpt"), bincode::serialize(&r).unwrap()).unwrap();
         std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
-        if methods::COINLOG { cl_commit(&cl_lists.0, &cl_lists.1, &st); }
+        if methods::COINLOG {
+            cl_commit(&cl_lists.0, &cl_lists.1, &st);
+            // HAZYNC_COINLOG_SAVE_EACH=1: the log at every height, so any receipt of the range can anchor a later run
+            // (tests; a mainnet log is ~77 GB, so not by default).
+            if h != hi && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() == Ok("1") { cl_save(&format!("{out}/state_{h}.coinlog")); }
+        }
         let dt = t0.elapsed().as_secs_f64();
         // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
         let rbytes = std::fs::metadata(format!("{out}/block_{h}.rcpt")).map(|m| m.len()).unwrap_or(0);
