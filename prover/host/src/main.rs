@@ -10325,8 +10325,12 @@ fn cl_synth(block: &str, spends: &[[u8; 32]]) -> (Vec<Option<[u8; 32]>>, u64, Ve
         if m > kk {
             let mut sib = Vec::new();
             wit(l, start, &sorted[kk..m], &mut sib, &rnd);
-            let (o, _) = libzync::coinlog::update(l, start, &sorted[kk..m], &mut sib.iter()).unwrap();
-            roots[l as usize] = Some(o);
+            use libzync::coinlog::{w_of, h_of};
+            let e: Vec<(u64, libzync::coinlog::W)> = sorted[kk..m].iter().map(|(p, h)| (*p, w_of(h))).collect();
+            let sw: Vec<libzync::coinlog::W> = sib.iter().map(w_of).collect();
+            let (mut o, mut nw) = ([0u32; 8], [0u32; 8]);
+            assert!(libzync::coinlog::update(l, start, &e, &mut sw.iter(), &mut o, &mut nw));
+            roots[l as usize] = Some(h_of(&o));
             sib_all.extend(sib);
         } else {
             roots[l as usize] = Some(rnd(b"root", l as u64));

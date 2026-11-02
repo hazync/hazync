@@ -464,7 +464,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             #[allow(static_mut_refs)]
             match coinlog::decode_witness(unsafe { &LOG_WITNESS }) {
                 Some((pos, sib)) if pos.len() == ext.len() => {
-                    let mut sp: Vec<(u64, [u8; 32])> = pos.into_iter().zip(ext.iter().copied()).collect();
+                    let mut sp: Vec<(u64, coinlog::W)> = pos.into_iter().zip(ext.iter().map(coinlog::w_of)).collect();
                     sp.sort_unstable_by_key(|x| x.0);
                     if let Err(e) = coinlog::apply(&mut roots, &mut n, &sp, &appends, &sib) {
                         env::log(&alloc::format!("agg-lite: REJECT coin log: {e:?}"));

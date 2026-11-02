@@ -88,25 +88,94 @@ pub const IV_NODE: [[u32; 8]; 64] = [
 /// IV_SPENT = SHA-256("libzync-coinlog-spent").
 pub const IV_SPENT: [u32; 8] = [0x1c7d285c, 0x279c8667, 0xd7e930f4, 0x44bb4ba1, 0x521dbd9e, 0x0cbb90e9, 0xd8393e2f, 0x468d506b];
 
-fn compress(iv: &[u32; 8], a: &H, b: &H) -> H {
-    let mut st = *iv;
-    let mut blk = [0u8; 64];
-    blk[..32].copy_from_slice(a);
-    blk[32..].copy_from_slice(b);
-    sha2::compress256(&mut st, &[blk.into()]);
+/// A hash as the eight little-endian words it occupies in memory: the form risc0's SHA accelerator reads and writes.
+/// The update works on these throughout, so nothing is converted per node.
+pub type W = [u32; 8];
+
+pub fn w_of(h: &H) -> W {
+    core::array::from_fn(|i| u32::from_le_bytes([h[4 * i], h[4 * i + 1], h[4 * i + 2], h[4 * i + 3]]))
+}
+
+pub fn h_of(w: &W) -> H {
     let mut o = [0u8; 32];
-    for (i, w) in st.iter().enumerate() {
-        o[4 * i..4 * i + 4].copy_from_slice(&w.to_be_bytes());
+    for (i, x) in w.iter().enumerate() {
+        o[4 * i..4 * i + 4].copy_from_slice(&x.to_le_bytes());
     }
     o
 }
 
+#[allow(dead_code)]
+const fn swapped<const N: usize>(t: &[[u32; 8]; N]) -> [[u32; 8]; N] {
+    let mut o = [[0u32; 8]; N];
+    let mut i = 0;
+    while i < N {
+        let mut j = 0;
+        while j < 8 {
+            o[i][j] = t[i][j].swap_bytes();
+            j += 1;
+        }
+        i += 1;
+    }
+    o
+}
+/// The IVs as the accelerator's state words (the state's big-endian bytes in memory order).
+#[cfg(target_os = "zkvm")]
+static IV_NODE_W: [[u32; 8]; 64] = swapped(&IV_NODE);
+#[cfg(target_os = "zkvm")]
+static IV_SPENT_W: [u32; 8] = swapped(&[IV_SPENT])[0];
+
+// In the zkVM: one accelerated compression on words, written straight into `out` (risc0's sys_sha_compress, exported by
+// the guest runtime). Outside the zkVM: sha2's compress256 on the same bytes. The host's roots are checked against the
+// guest's after every block, so the two cannot drift apart unnoticed.
+#[cfg(target_os = "zkvm")]
+extern "C" {
+    fn sys_sha_compress(out: *mut [u32; 8], in_state: *const [u32; 8], b1: *const [u32; 8], b2: *const [u32; 8]);
+}
+
+#[cfg(target_os = "zkvm")]
+#[inline(always)]
+fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
+    unsafe { sys_sha_compress(out, iv, a, b) };
+}
+
+#[cfg(not(target_os = "zkvm"))]
+fn compress_w(iv: &[u32; 8], a: &W, b: &W, out: &mut W) {
+    let mut st = *iv;
+    let mut blk = [0u8; 64];
+    blk[..32].copy_from_slice(&h_of(a));
+    blk[32..].copy_from_slice(&h_of(b));
+    sha2::compress256(&mut st, &[blk.into()]);
+    for (o, x) in out.iter_mut().zip(st.iter()) {
+        *o = x.swap_bytes();
+    }
+}
+
+#[inline(always)]
+fn parent_w(l: u32, a: &W, b: &W, out: &mut W) {
+    #[cfg(target_os = "zkvm")]
+    compress_w(&IV_NODE_W[l as usize], a, b, out);
+    #[cfg(not(target_os = "zkvm"))]
+    compress_w(&IV_NODE[l as usize], a, b, out);
+}
+
+#[inline(always)]
+fn spent_w(c: &W, out: &mut W) {
+    #[cfg(target_os = "zkvm")]
+    compress_w(&IV_SPENT_W, c, &[0u32; 8], out);
+    #[cfg(not(target_os = "zkvm"))]
+    compress_w(&IV_SPENT, c, &[0u32; 8], out);
+}
+
 pub fn parent(l: u32, a: &H, b: &H) -> H {
-    compress(&IV_NODE[l as usize], a, b)
+    let mut o = [0u32; 8];
+    parent_w(l, &w_of(a), &w_of(b), &mut o);
+    h_of(&o)
 }
 
 pub fn spent(c: &H) -> H {
-    compress(&IV_SPENT, c, &[0u8; 32])
+    let mut o = [0u32; 8];
+    spent_w(&w_of(c), &mut o);
+    h_of(&o)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -123,20 +192,29 @@ pub enum LogError {
     Witness,
 }
 
-/// (old, new) hash of the perfect tree of 2^l leaves starting at `start`, with the spends `e` inside it.
-pub fn update(l: u32, start: u64, e: &[(u64, H)], sib: &mut core::slice::Iter<H>) -> Result<(H, H), LogError> {
+/// The old and new hash of the perfect tree of 2^l leaves starting at `start`, with the spends `e` inside it, written
+/// into `old` / `new` (no tuples returned by value: in the guest those were memcpy calls). False: the witness ran out.
+pub fn update(l: u32, start: u64, e: &[(u64, W)], sib: &mut core::slice::Iter<W>, old: &mut W, new: &mut W) -> bool {
     if e.is_empty() {
-        let h = *sib.next().ok_or(LogError::Witness)?;
-        return Ok((h, h));
+        let Some(h) = sib.next() else { return false };
+        *old = *h;
+        *new = *h;
+        return true;
     }
     if l == 0 {
-        return Ok((e[0].1, spent(&e[0].1)));
+        *old = e[0].1;
+        spent_w(&e[0].1, new);
+        return true;
     }
     let mid = start + (1u64 << (l - 1));
     let m = e.partition_point(|x| x.0 < mid);
-    let a = update(l - 1, start, &e[..m], sib)?;
-    let b = update(l - 1, mid, &e[m..], sib)?;
-    Ok((parent(l, &a.0, &b.0), parent(l, &a.1, &b.1)))
+    let (mut a0, mut a1, mut b0, mut b1) = ([0u32; 8], [0u32; 8], [0u32; 8], [0u32; 8]);
+    if !update(l - 1, start, &e[..m], sib, &mut a0, &mut a1) || !update(l - 1, mid, &e[m..], sib, &mut b0, &mut b1) {
+        return false;
+    }
+    parent_w(l, &a0, &b0, old);
+    parent_w(l, &a1, &b1, new);
+    true
 }
 
 /// The roots have a tree exactly at each set bit of `n`.
@@ -144,9 +222,9 @@ pub fn shape_ok(roots: &[Option<H>], n: u64) -> bool {
     (0..64).all(|l| ((n >> l) & 1 == 1) == roots.get(l).copied().flatten().is_some()) && roots.len() <= 64
 }
 
-/// One block: `spends` (position, unspent leaf), strictly increasing, against `roots`; then `appends` in order.
+/// One block: `spends` (position, unspent leaf as words), strictly increasing, against `roots`; then `appends` in order.
 /// `roots` / `n` are updated only on success.
-pub fn apply(roots: &mut Vec<Option<H>>, n: &mut u64, spends: &[(u64, H)], appends: &[H], siblings: &[H]) -> Result<(), LogError> {
+pub fn apply(roots: &mut Vec<Option<H>>, n: &mut u64, spends: &[(u64, W)], appends: &[H], siblings: &[W]) -> Result<(), LogError> {
     if !shape_ok(roots, *n) {
         return Err(LogError::Shape);
     }
@@ -156,15 +234,18 @@ pub fn apply(roots: &mut Vec<Option<H>>, n: &mut u64, spends: &[(u64, H)], appen
     if spends.last().is_some_and(|x| x.0 >= *n) {
         return Err(LogError::PastEnd);
     }
-    let mut r = roots.clone();
+    let mut r: Vec<Option<W>> = roots.iter().map(|x| x.as_ref().map(w_of)).collect();
     let mut sib = siblings.iter();
     let (mut start, mut k) = (0u64, 0usize);
+    let (mut o, mut nw) = ([0u32; 8], [0u32; 8]);
     for l in (0..r.len()).rev() {
         let Some(root) = r[l] else { continue };
         let end = start + (1u64 << l);
         let m = k + spends[k..].partition_point(|x| x.0 < end);
         if m > k {
-            let (o, nw) = update(l as u32, start, &spends[k..m], &mut sib)?;
+            if !update(l as u32, start, &spends[k..m], &mut sib, &mut o, &mut nw) {
+                return Err(LogError::Witness);
+            }
             if o != root {
                 return Err(LogError::OldRoot);
             }
@@ -178,9 +259,12 @@ pub fn apply(roots: &mut Vec<Option<H>>, n: &mut u64, spends: &[(u64, H)], appen
     }
     let mut c = *n;
     for leaf in appends {
-        let (mut node, mut l) = (*leaf, 0usize);
+        let (mut node, mut l) = (w_of(leaf), 0usize);
         while l < r.len() && r[l].is_some() {
-            node = parent(l as u32 + 1, &r[l].take().unwrap(), &node);
+            let left = r[l].take().unwrap();
+            let mut up = [0u32; 8];
+            parent_w(l as u32 + 1, &left, &node, &mut up);
+            node = up;
             l += 1;
         }
         if l == r.len() {
@@ -192,7 +276,7 @@ pub fn apply(roots: &mut Vec<Option<H>>, n: &mut u64, spends: &[(u64, H)], appen
     while r.last() == Some(&None) {
         r.pop();
     }
-    *roots = r;
+    *roots = r.iter().map(|x| x.as_ref().map(h_of)).collect();
     *n = c;
     Ok(())
 }
@@ -214,20 +298,14 @@ pub fn encode_witness(positions: &[u64], siblings: &[H]) -> Vec<u32> {
     v
 }
 
-pub fn decode_witness(w: &[u32]) -> Option<(Vec<u64>, Vec<H>)> {
+pub fn decode_witness(w: &[u32]) -> Option<(Vec<u64>, Vec<W>)> {
     let k = *w.first()? as usize;
     let rest = w.get(1 + 2 * k..)?;
     if rest.len() % 8 != 0 {
         return None;
     }
     let pos = (0..k).map(|i| w[1 + 2 * i] as u64 | (w[2 + 2 * i] as u64) << 32).collect();
-    let sib = rest.chunks_exact(8).map(|c| {
-        let mut h = [0u8; 32];
-        for (i, x) in c.iter().enumerate() {
-            h[4 * i..4 * i + 4].copy_from_slice(&x.to_le_bytes());
-        }
-        h
-    }).collect();
+    let sib = rest.chunks_exact(8).map(|c| c.try_into().unwrap()).collect();
     Some((pos, sib))
 }
 
@@ -343,6 +421,13 @@ mod tests {
         assert_eq!(&w[..], &IV_SPENT[..]);
     }
 
+    fn ws(sp: &[(u64, H)]) -> Vec<(u64, W)> {
+        sp.iter().map(|(p, h)| (*p, w_of(h))).collect()
+    }
+    fn wv(v: &[H]) -> Vec<W> {
+        v.iter().map(w_of).collect()
+    }
+
     fn h(a: u64, b: u64) -> H {
         Sha256::digest([a.to_le_bytes(), b.to_le_bytes()].concat()).into()
     }
@@ -360,7 +445,7 @@ mod tests {
                 sp.sort();
                 let wit = st.witness(&sp);
                 let app: Vec<H> = (0..(h(t, b)[0] % 23) as u64).map(|i| h(t * 7 + b, i + 1_000_000)).collect();
-                apply(&mut roots, &mut n, &sp, &app, &wit).unwrap();
+                apply(&mut roots, &mut n, &ws(&sp), &app, &wv(&wit)).unwrap();
                 for (p, c) in &sp {
                     st.set(*p, spent(c));
                     live.retain(|x| x != p);
@@ -384,7 +469,7 @@ mod tests {
         let (r0, n0) = (st.roots(), st.len());
         let one = |sp: &[(u64, H)], wit: &[H]| {
             let (mut r, mut n) = (r0.clone(), n0);
-            apply(&mut r, &mut n, sp, &[], wit)
+            apply(&mut r, &mut n, &ws(sp), &[], &wv(wit))
         };
         let sp = [(5u64, st.leaf(5))];
         assert!(one(&sp, &st.witness(&sp)).is_ok());
@@ -404,16 +489,18 @@ mod tests {
         let mut st2 = st.clone();
         st2.set(5, spent(&st.leaf(5)));
         let (mut r, mut n) = (st2.roots(), st2.len());
-        assert_eq!(apply(&mut r, &mut n, &sp, &[], &st2.witness(&sp)), Err(LogError::OldRoot));
+        assert_eq!(apply(&mut r, &mut n, &ws(&sp), &[], &wv(&st2.witness(&sp))), Err(LogError::OldRoot));
         // a short or long witness
         let mut w = st.witness(&sp);
         w.pop();
         assert_eq!(one(&sp, &w), Err(LogError::Witness));
         let mut w = st.witness(&sp);
-        w.push([0; 32]);
+        w.push([0u8; 32]);
         assert_eq!(one(&sp, &w), Err(LogError::Witness));
         // the witness codec round-trips
         let enc = encode_witness(&[3, 1 << 40], &[h(1, 2), h(3, 4)]);
-        assert_eq!(decode_witness(&enc), Some((alloc::vec![3, 1 << 40], alloc::vec![h(1, 2), h(3, 4)])));
+        assert_eq!(decode_witness(&enc), Some((alloc::vec![3, 1 << 40], alloc::vec![w_of(&h(1, 2)), w_of(&h(3, 4))])));
+        // words and bytes round-trip
+        assert_eq!(h_of(&w_of(&h(5, 6))), h(5, 6));
     }
 }
