@@ -15,6 +15,7 @@ use risc0_zkvm::guest::env;
 use sha2::{Digest, Sha256, Sha512_256};
 
 mod msm;
+mod zutxo;
 
 risc0_zkvm::guest::entry!(main);
 
@@ -55,6 +56,7 @@ fn main() {
         3 => batch_mode(&mut out),
         4 => sethash_mode(&mut out),
         5 => utreexo_mode(&mut out),
+        6 => zutxo_mode(&mut out),
         _ => panic!("unknown mode {mode}"),
     }
     env::commit(&out.0);
@@ -433,4 +435,28 @@ fn utreexo_mode(out: &mut Out) {
         out.put(&format!("std_leaf_{len}"), (env::cycle_count() - t) / n as u64);
         out.put(&format!("std_leaf_{len}_chk"), first8(&h));
     }
+}
+
+/// Mode 6: one block's update of the Zutxo tree (zutxo.rs). Input: the touched coins as (outpoint, old leaf, new leaf),
+/// the witness, and the roots the host expects. Cycles are split into key hashing + sort, and the tree update.
+fn zutxo_mode(out: &mut Out) {
+    let raw: Vec<(Vec<u8>, [u8; 32], [u8; 32])> = env::read();
+    let wit: Vec<u8> = env::read();
+    let (want_old, want_new): ([u8; 32], [u8; 32]) = env::read();
+    let t = env::cycle_count();
+    let mut e: Vec<zutxo::Entry> = raw.iter().map(|(op, o, n)| zutxo::Entry { key: zutxo::key_of(op), old: *o, new: *n }).collect();
+    e.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+    let t_keys = env::cycle_count() - t;
+    let t = env::cycle_count();
+    let mut r = zutxo::Rd { b: &wit, i: 0 };
+    let (o, n) = zutxo::node(0, &e, &mut r);
+    let t_tree = env::cycle_count() - t;
+    assert!(r.i == wit.len(), "witness not consumed");
+    assert!(o.h == want_old, "old root differs from the host's");
+    assert!(n.h == want_new, "new root differs from the host's");
+    out.put("entries", e.len() as u64);
+    out.put("keys_sort_cycles", t_keys);
+    out.put("tree_cycles", t_tree);
+    out.put("node_hashes", unsafe { zutxo::HASHES });
+    out.put("witness_bytes", wit.len() as u64);
 }

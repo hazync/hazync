@@ -20,6 +20,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256, Sha512_256};
 use std::time::Instant;
 
+#[path = "../../methods/guest/src/zutxo.rs"]
+mod zutxo;
+use zutxo::{Entry, Sum, H, ZERO};
+
 #[derive(Serialize, Clone)]
 struct Sig {
     qx: [u8; 32],
@@ -202,7 +206,9 @@ fn main() {
             println!("# std parent / ours parent = {:.1}x",
                 get(&out, "std_parent") as f64 / get(&out, "ours_parent") as f64);
         }
-        _ => eprintln!("usage: zbench-host ops|msm|batch|sethash|utreexo ..."),
+        Some("zutxo-test") => zutxo_test(arg(2, "200").parse().unwrap()),
+        Some("zutxo") => zutxo_run(&arg(2, ""), arg(3, "170000000").parse().unwrap(), arg(4, "1").parse().unwrap()),
+        _ => eprintln!("usage: zbench-host ops|msm|batch|sethash|utreexo|zutxo-test <trials>|zutxo <keys file> <n coins> <seed>"),
     }
 }
 
@@ -235,4 +241,129 @@ fn bytemuck_id() -> [u8; 32] {
 }
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+// ---- Zutxo prototype (methods/guest/src/zutxo.rs) ----------------------------------------------------------------
+
+/// Deterministic pseudo-random bytes.
+fn prf(tag: &[u8], a: u64, b: u64) -> H {
+    Sha256::digest([tag, &a.to_le_bytes(), &b.to_le_bytes()].concat()).into()
+}
+
+/// Witness over an explicit untouched set `bg` (sorted by key) below depth d.
+fn wit_explicit(d: u32, e: &[Entry], bg: &[(H, H)], w: &mut Vec<u8>) {
+    if e.is_empty() {
+        let s = zutxo::mini(d, bg);
+        w.extend_from_slice(&s.h);
+        w.push(s.c);
+        return;
+    }
+    if bg.len() <= 1 {
+        w.push(0);
+        w.push(bg.len() as u8);
+        if let Some((k, l)) = bg.first() {
+            w.extend_from_slice(k);
+            w.extend_from_slice(l);
+        }
+        return;
+    }
+    w.push(1);
+    let m = e.partition_point(|x| !zutxo::bit(&x.key, d));
+    let mb = bg.partition_point(|x| !zutxo::bit(&x.0, d));
+    wit_explicit(d + 1, &e[..m], &bg[..mb], w);
+    wit_explicit(d + 1, &e[m..], &bg[mb..], w);
+}
+
+/// Witness for `n` untouched coins with random keys, modelled statistically: above depth d0 every subtree holds many
+/// coins, so one without a touched coin is an opaque summary; at d0 each touched bucket gets Poisson(n / 2^d0)
+/// coins with keys under the bucket's prefix, and the rest is explicit.
+fn wit_synth(d: u32, d0: u32, lambda: f64, seed: u64, e: &[Entry], w: &mut Vec<u8>, stats: &mut (u64, u64)) {
+    if e.is_empty() {
+        w.extend_from_slice(&prf(b"opaque", seed, (d as u64) << 56 ^ w.len() as u64));
+        w.push(2);
+        return;
+    }
+    if d == d0 {
+        let p = &e[0].key;
+        let pid = u64::from_be_bytes(p[..8].try_into().unwrap()) >> (64 - d0);
+        // Poisson(lambda) by inversion
+        let u = u64::from_le_bytes(prf(b"pois", seed, pid)[..8].try_into().unwrap()) as f64 / u64::MAX as f64;
+        let (mut k, mut pk, mut cdf) = (0u64, (-lambda).exp(), (-lambda).exp());
+        while u > cdf && k < 200 {
+            k += 1;
+            pk *= lambda / k as f64;
+            cdf += pk;
+        }
+        let mut bg: Vec<(H, H)> = (0..k).map(|i| {
+            let mut key = prf(b"bgkey", seed ^ pid, i);
+            for b in 0..d0 { // copy the bucket prefix
+                let (byte, m) = ((b / 8) as usize, 0x80u8 >> (b % 8));
+                key[byte] = (key[byte] & !m) | (p[byte] & m);
+            }
+            (key, prf(b"bgleaf", seed ^ pid, i))
+        }).collect();
+        bg.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        stats.0 += 1;
+        stats.1 += k;
+        return wit_explicit(d, e, &bg, w);
+    }
+    w.push(1);
+    let m = e.partition_point(|x| !zutxo::bit(&x.key, d));
+    wit_synth(d + 1, d0, lambda, seed, &e[..m], w, stats);
+    wit_synth(d + 1, d0, lambda, seed, &e[m..], w, stats);
+}
+
+/// The batched update must equal the from-scratch root of the old and of the new set, on explicit random sets.
+fn zutxo_test(trials: u64) {
+    for t in 0..trials {
+        let n = 1 + (prf(b"n", t, 0)[0] as u64) * 4;              // untouched coins 1..1021
+        let mut all: Vec<(H, H)> = (0..n + 40).map(|i| (prf(b"k", t, i), prf(b"l", t, i))).collect();
+        all.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        // every 7th coin is deleted, every 11th has its leaf changed, plus 10 inserts of new keys
+        let (mut bg, mut e, mut old, mut new) = (vec![], vec![], vec![], vec![]);
+        for (i, c) in all.iter().enumerate() {
+            if i % 7 == 3 { e.push(Entry { key: c.0, old: c.1, new: ZERO }); old.push(*c); }
+            else if i % 11 == 5 { let l2 = prf(b"l2", t, i as u64); e.push(Entry { key: c.0, old: c.1, new: l2 }); old.push(*c); new.push((c.0, l2)); }
+            else { bg.push(*c); old.push(*c); new.push(*c); }
+        }
+        for i in 0..10 { let k = prf(b"ins", t, i); let l = prf(b"insl", t, i); e.push(Entry { key: k, old: ZERO, new: l }); new.push((k, l)); }
+        e.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+        new.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let mut w = vec![];
+        wit_explicit(0, &e, &bg, &mut w);
+        let (o, nn) = zutxo::node(0, &e, &mut zutxo::Rd { b: &w, i: 0 });
+        assert_eq!(o, zutxo::mini(0, &old), "trial {t}: old root");
+        assert_eq!(nn, zutxo::mini(0, &new), "trial {t}: new root");
+    }
+    println!("ZUTXO_TEST_OK {trials} trials: batched update == from-scratch root, old and new");
+}
+
+/// One block's Zutxo update, measured in the guest. `keys` = file of (kind u8: 0 delete / 1 insert, outpoint 36 B).
+fn zutxo_run(keys: &str, n: u64, seed: u64) {
+    let b = std::fs::read(keys).expect("keys file");
+    assert!(b.len() % 37 == 0);
+    let mut raw: Vec<(Vec<u8>, [u8; 32], [u8; 32])> = vec![];
+    for (i, c) in b.chunks_exact(37).enumerate() {
+        let leaf = prf(b"coin", seed, i as u64);
+        raw.push((c[1..].to_vec(), if c[0] == 0 { leaf } else { ZERO }, if c[0] == 1 { leaf } else { ZERO }));
+    }
+    let mut e: Vec<Entry> = raw.iter().map(|(op, o, nw)| Entry { key: zutxo::key_of(op), old: *o, new: *nw }).collect();
+    e.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+    let d0 = (63 - n.leading_zeros()).saturating_sub(3);
+    let lambda = n as f64 / (1u64 << d0) as f64;
+    let mut w = vec![];
+    let mut st = (0u64, 0u64);
+    wit_synth(0, d0, lambda, seed, &e, &mut w, &mut st);
+    unsafe { zutxo::HASHES = 0 };
+    let (o, nw): (Sum, Sum) = zutxo::node(0, &e, &mut zutxo::Rd { b: &w, i: 0 });
+    let host_hashes = unsafe { zutxo::HASHES };
+    println!("# zutxo: {} touched ({} deletes, {} inserts), n = {n}, d0 = {d0}, lambda {lambda:.1}, {} buckets, {} explicit untouched coins, witness {} B, host node hashes {host_hashes}",
+        e.len(), b.chunks_exact(37).filter(|c| c[0] == 0).count(), b.chunks_exact(37).filter(|c| c[0] == 1).count(), st.0, st.1, w.len());
+    let env = ExecutorEnv::builder().write(&6u32).unwrap().write(&raw).unwrap().write(&w).unwrap()
+        .write(&(o.h, nw.h)).unwrap().build().unwrap();
+    let out = run(env);
+    assert_eq!(get(&out, "node_hashes"), host_hashes, "guest and host disagree on the hash count");
+    println!("# per touched coin: {:.0} cycles tree, {:.0} keys+sort; per node hash {:.0}",
+        get(&out, "tree_cycles") as f64 / e.len() as f64, get(&out, "keys_sort_cycles") as f64 / e.len() as f64,
+        get(&out, "tree_cycles") as f64 / host_hashes as f64);
 }
