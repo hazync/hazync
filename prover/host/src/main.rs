@@ -3374,33 +3374,39 @@ fn agg_exec_fake() {
     }
     libzync_agg_prep(&mut w);
     let mut anchor = anchor;
-    if methods::COINLOG {
-        // collect run for the block's spends, then a modelled log around them (cl_synth)
-        let hints = std::env::var("HAZYNC_LZ_HINTS").ok();
-        std::env::remove_var("HAZYNC_LZ_HINTS");
-        let mut log = Vec::new();
-        {
-            let mut b = ExecutorEnv::builder();
-            b.stdout(&mut log);
-            write_aggregate_env(&mut b, &receipts, &anchor, &w);
-            libzync_agg_tail(&mut b, &w);
-            let r = lz_execute(b.build().unwrap());
-            drop(b);
-            if let Err(e) = r { assert!(e.contains("collect run commits no chain state"), "coin-log collect run failed: {e}"); }
-        }
-        if let Some(h) = hints { std::env::set_var("HAZYNC_LZ_HINTS", h); }
-        let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
-        let (roots, n, wit) = cl_synth(&std::env::var("HAZYNC_BLOCK").unwrap(), &spends);
-        println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
-        anchor.utxo_roots = roots.clone();
-        anchor.utxo_leaves = n;
-        w.root_prev = WireStump { roots, num_leaves: n };
-        *CL_WIT.lock().unwrap() = wit;
-    }
+    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w); }
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
     libzync_agg_tail(&mut b, &w);
     report_agg_execute_only(b);
+}
+
+/// Coin log, single-block measurement (agg-exec-fake, agg-chunks): a collect run for the block's spends, then a
+/// modelled log around them (cl_synth) set as the anchor's coin state. A demonstration anchor: cycles, not history.
+fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w: &mut BlockWitness) {
+    // collect run for the block's spends, then a modelled log around them (cl_synth)
+    let hints = std::env::var("HAZYNC_LZ_HINTS").ok();
+    std::env::remove_var("HAZYNC_LZ_HINTS");
+    let mut log = Vec::new();
+    {
+        let mut b = ExecutorEnv::builder();
+        b.stdout(&mut log);
+        write_aggregate_env(&mut b, receipts, anchor, w);
+        libzync_agg_tail(&mut b, w);
+        let r = lz_execute(b.build().unwrap());
+        drop(b);
+        if let Err(e) = r { assert!(e.contains("collect run commits no chain state"), "coin-log collect run failed: {e}"); }
+    }
+    if let Some(h) = hints { std::env::set_var("HAZYNC_LZ_HINTS", h); }
+    let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
+    let (roots, n, wit) = cl_synth(&std::env::var("HAZYNC_BLOCK").unwrap(), &spends);
+    println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
+    anchor.utxo_roots = roots.clone();
+    anchor.utxo_leaves = n;
+    // The modelled log holds the coins this block spends, so its value must cover them (utxo_value is checked).
+    if anchor.utxo_value == 0 { anchor.utxo_value = 2_000_000_000_000_000; }
+    w.root_prev = WireStump { roots, num_leaves: n };
+    *CL_WIT.lock().unwrap() = wit;
 }
 
 /// libzync: what the aggregate is NOT sent. SwiftSync takes no inclusion proofs; agg-lite takes every
@@ -4087,6 +4093,8 @@ fn agg_chunks() {
     let t = Instant::now();
     // libzync: same stream as agg-exec-fake (chunk_bounds above needed the full witness first).
     libzync_agg_prep(&mut w);
+    let mut anchor = anchor;
+    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w); }
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
     libzync_agg_tail(&mut b, &w);
