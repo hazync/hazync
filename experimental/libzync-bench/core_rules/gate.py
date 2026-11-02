@@ -1,5 +1,7 @@
 import os,re,subprocess
-R=os.path.expanduser('~/libzync-gpu/r18'); O=R+'/r12'; H=R+'/host_r12m'
+R=os.path.expanduser('~/libzync-gpu/r18')
+# GATE_HOST / GATE_OUT: the mainnet host under test and a scratch dir (defaults: the round-12 run)
+H=os.environ.get('GATE_HOST',R+'/host_r12m'); O=os.environ.get('GATE_OUT',R+'/r12'); os.makedirs(O,exist_ok=True)
 def go(name,B,chunks,baseline=None):
     env=dict(os.environ,HAZYNC_PROFILE_LAYOUT='cost',HAZYNC_CHUNKS=str(chunks),HAZYNC_HINT_THREADS='2',HAZYNC_BLOCK=B)
     subprocess.run([H,'libzync-hints',f'{O}/{name}.lzb'],env=env,capture_output=True); e=dict(env,HAZYNC_LZ_HINTS=f'{O}/{name}.lzb')
