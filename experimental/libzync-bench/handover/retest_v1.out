@@ -1,0 +1,99 @@
+# 2026-11-02: libzync 6209780 (ChainState v1: version, utxo_value, survivors sorted by (txid, vout)) + 2d8717b inline lever. Laptop, dev/execute mode, script retest_v1.sh.
+# Images (this worktree): mainnet r17m c20cc63f..., signet r17sig 985af101..., regtest O r17reg 983e7119..., N r17regN bad37eb1... (O pinned at 101, pin not committed).
+# The first handover run was 14/15: the script had not written ho/o_id, ho/n_id (setup, not guest). Re-run below is 15/15. ECMH collect stops and R0VM lines removed.
+
+== gate (core_rules/gate.py), r17m; chunk journals now carry vout+value so DIFFER from round 8 is expected
+CHUNK_JOURNALS vs round 8: DIFFER 16
+b962000 rc 0 chunks 362,589,752 aggregate 64,135,226 whole 426,724,978 [] (r16m, lever only: 361,594,829 / 63,127,457 / 424,722,286)
+b170060 rc 0 chunks 5,546,045 aggregate 3,035,963 whole 8,582,008 []
+b692261 rc 0 chunks 425,654,925 aggregate 76,244,971 whole 501,899,896 []
+
+== build regtest O (r17reg)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 983e71196fe47595beb5c09fe4cf74d1f83caf772a8b433d539888078289481a
+
+== rig vs Core 28.0 (fresh dir)
+RIG_EXIT=0
+DEFERRED-OK  missing_coin             core=bad-txns-inputs-missingorspent         guest=accept 
+RIG 95 cases, 94 agree, 1 deferred, 0 to look at
+
+== build regtest N: O pinned at 101 (pin not committed)
+REAL_EXIT=0
+METHOD_ID METHOD_ID bad37eb1ddacc37cc3e17b4660b76dfee8fd63263ba6686a33e710114fc5b846
+pin reverted
+
+
+== build signet (r17sig)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 985af1016508e36c21507ea242256b4af3fb7b4afb7e3aa035dc9b05685242d6
+
+== SwiftSync regression (r17m + r17sig)
+== 1. block 962,000 valid
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  block validation cycles  64050222
+rc=0
+== 2. negative: is_base = 2 on an image with no predecessor pinned (must be refused, HANDOVER.md §4)
+REFUSED
+== 3. mainnet sweep 1..200 (saved), reference forest, max_time/profile; then a flip
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  max_time 1231753120 (block files' largest time 1..200: 1231753120) -> OK; profile 0x1 -> OK
+SWEEP_FAIL
+== 4. signet sweep 1..2600 (saved): reference forest, profile = libzync|signet
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  forest: 293 leaves (= coins unspent at H), roots 4
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  profile 0x5 -> OK  max_time 1599732600
+== 5. signet BIP325 check still works
+signet-check-test block 2523: one txid changed -> 0
+SIGNET_CHECK_OK
+R4_TESTS_DONE
+REG_EXIT=0
+
+== block forest of the sweep states vs block_forest_ref.py
+BLOCK_FOREST_OK
+BLOCK_FOREST_OK
+
+== utxo_value vs reference
+H=200: 204 leaves, 1000000000000 sat, roots:
+REF_MATCH: guest state equals this implementation
+H=2600: 293 leaves, 13000000000000 sat, roots:
+REF_MATCH: guest state equals this implementation
+
+== snapshot checker end to end (test_utxo_snapshot.py)
+UTXO_SNAPSHOT_MATCH: the snapshot is the UTXO set the proof commits
+one coin's value + 1: UTXO_SNAPSHOT_MISMATCH: proof has 204 leaves / 8 roots
+TEST_UTXO_SNAPSHOT_OK
+UTXO_SNAPSHOT_MATCH: the snapshot is the UTXO set the proof commits
+one coin's value + 1: UTXO_SNAPSHOT_MISMATCH: proof has 293 leaves / 9 roots
+TEST_UTXO_SNAPSHOT_OK
+RETEST_DONE
+
+== handover run.sh O -> N (re-run with the id files)
+PASS O proves 1..100 from genesis
+PASS reject self_id: not the predecessor's
+PASS reject profile: handover: profile mismatch
+PASS reject lineage: predecessor lineage mismatch
+PASS reject forest: block forest
+PASS reject kind: not a ChainState
+PASS reject height: handover: height
+PASS reject wrong_image: predecessor chain proof invalid\|no receipt found\|assumption
+PASS reject no_receipt: predecessor chain proof invalid\|no receipt found\|assumption
+PASS O refuses is_base = 2
+PASS host refuses a receipt at the wrong height
+PASS N continues 101..110 by a handover
+PASS block 101 ran as a handover step
+PASS every block after the handover ran as ordinary recursion
+PASS O's state: its own id, zero lineage
+PASS after the handover the state carries N's id
+PASS anchor_id unchanged across the handover
+PASS lineage = the reference's digest of [O at first]; unchanged by later steps
+PASS block forest at 100 == the reference over real block hashes
+PASS block 7 checks against the state at 100
+PASS block forest at 110 == the reference over real block hashes
+PASS block 7 checks against the state at 110
+PASS state checks
+handover run.sh: 15/15 as expected
