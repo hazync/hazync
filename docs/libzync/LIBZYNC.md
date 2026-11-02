@@ -85,11 +85,18 @@ block ──► host: split inputs into chunks (cost-packed) ──► hint bund
             │     - commits per-transaction FACTS: txid, wtxid, fee, weight, sigops, coin leaves
             │
             └─► aggregate (mode 5): verifies every chunk receipt + the previous block's chain proof
+                  (at a handover, the pinned predecessor image's proof: HANDOVER.md)
                   - block rules from the facts: merkle, witness commitment, PoW, retarget, MTP,
                     subsidy, weight, sigops, BIP30/34, coverage of every input exactly once
                   - SwiftSync design B: spent-before-H coins -> ECMH total; unspent-at-H -> Utreexo
-                  - commits ChainState (tip, work, forest, ECMH total, hint hash, anchor, self id)
+                  - appends the block to the block forest (one leaf per height, genesis first)
+                  - commits ChainState (tip, work, forest, ECMH total, hint hash, anchor, self id,
+                    block forest, lineage)
 ```
+
+A new image can continue a chain from a stated height without proving it again from genesis, and the block forest
+lets a proof of the tip show any earlier block was in the chain. Both are specified in [`HANDOVER.md`](HANDOVER.md),
+with when a handover may be used: a rule change, yes; a soundness fix, never.
 
 ## 4. How much of Bitcoin Core is still in the proof
 
@@ -369,7 +376,8 @@ The full suite passes on the clean builds; genesis `anchor_id` matches the indep
 - test-vector files committed with full sha256s; `utreexo_ref.py` now derives creation MTP from header timestamps
   and checks block linkage instead of reading the host's precomputed windows.
 
-**Still open for publication:** no genesis-anchored receipt verifies OK yet. The rule-by-rule table is [`CONSENSUS_RULES.md`](CONSENSUS_RULES.md). The reproducible build kit is done (`reproduce/libzync.Dockerfile`; three
+**Still open for publication:** no genesis-anchored receipt verifies OK yet. The ids in `reproduce/LIBZYNC_IDS`
+are the round-8 images, from before the handover format (HANDOVER.md); they stay stale until the image freeze. The rule-by-rule table is [`CONSENSUS_RULES.md`](CONSENSUS_RULES.md). The reproducible build kit is done (`reproduce/libzync.Dockerfile`; three
 builds agree: one cached, one with no cache from a fresh clone, one with the dependency stage built from scratch on a
 newer host Rust, 1.99.1 vs 1.98.0). All three ran on one machine; a second machine is still to do.
 
