@@ -13,7 +13,7 @@ With STATES_OUT=<file>, writes the commitment after every height 0..H, one JSON 
 """
 import hashlib, json, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from utreexo_ref import parse_tx, header_hash, mtp, spendable, leaf, BIP30_UNSPENDABLE, GENESIS_TIME
+from utreexo_ref import parse_tx, header_hash, mtp, spendable, leaf, BIP30_UNSPENDABLE, GENESIS_TIME, Tracked
 
 K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01,
      0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
@@ -120,6 +120,7 @@ def main():
         j = json.load(open(f"{d}/block_{h}.json"))
         if h == 1:
             times.append(GENESIS_TIME[j["prev"]])
+            trk = Tracked(j["prev"])
         else:
             assert j["prev"] == prev_hash, f"block {h} does not link to block {h - 1}"
         prev_hash = header_hash(j)
@@ -130,13 +131,16 @@ def main():
         created, spent_here = [], []   # (outpoint, leaf, amount) in block order; (outpoint, tx position, input index)
         for k, raw in enumerate(raws):
             txid, ins, outs = parse_tx(raw)
+            tr = trk.tx(h, k, raw, txid, ins)
             if k > 0:
                 spent_here += [(op, k, i) for i, op in enumerate(ins)]
             if k == 0 and bip30:
                 continue
             for v, (val, spk) in enumerate(outs):
+                if tr:
+                    trk.created((txid, v))
                 if spendable(spk):
-                    created.append(((txid, v), leaf(txid, v, val, spk, h, k == 0, m), val))
+                    created.append(((txid, v), leaf(txid, v, val, spk, h, k == 0, m, tr), val))
         made = {op for op, _, _ in created}
         for op, k, i in spent_here:
             if op in made:

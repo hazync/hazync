@@ -85,10 +85,64 @@ def mtp(times):
     return s[len(s) // 2]
 
 
-def leaf(txid, vout, value, spk, height, cb, coin_mtp):
+def leaf(txid, vout, value, spk, height, cb, coin_mtp, tracked=False):
     return sha256(TAG_LEAF + txid + vout.to_bytes(4, "little") + value.to_bytes(8, "little")
                   + len(spk).to_bytes(4, "little") + spk + height.to_bytes(4, "little")
-                  + bytes([1 if cb else 0]) + coin_mtp.to_bytes(4, "little"))
+                  + bytes([(1 if cb else 0) | (2 if tracked else 0)]) + coin_mtp.to_bytes(4, "little"))
+
+
+# BIP34 activation by genesis block (Core's chainparams; regtest as the rig runs it, -testactivationheight=bip34@110).
+BIP34_HEIGHT = {"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f": 227931,
+                "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6": 1,
+                "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206": 110}
+REPEAT_HORIZON = 100_000_000
+
+
+def indicated_height(raw):
+    """The height a coinbase's scriptSig reads as under BIP34's encoding (a minimal push of a number), else 0."""
+    i = 4 + (2 if raw[4] == 0 and raw[5] == 1 else 0)
+    _, i = varint(raw, i)
+    i += 36
+    sl, i = varint(raw, i)
+    ss = raw[i:i + sl]
+    if not ss:
+        return 0
+    op = ss[0]
+    if 0x51 <= op <= 0x60:
+        v, enc = op - 0x50, bytes([op])
+    elif 1 <= op <= 5 and len(ss) > op:
+        v = int.from_bytes(ss[1:1 + op], "little")
+        enc = None
+    else:
+        return 0
+    if enc is None:   # the push must be the minimal CScriptNum encoding of v (CScript() << v)
+        b = v.to_bytes((v.bit_length() + 7) // 8, "little") if v else b""
+        if b and b[-1] & 0x80:
+            b += b"\x00"
+        enc = (bytes([0x51 + v - 1]) if 1 <= v <= 16 else bytes([len(b)]) + b) if v else b"\x00"
+    return v if ss[:len(enc)] == enc else 0
+
+
+class Tracked:
+    """The BIP30 tree's tracked transactions (coinbase-smt/src/bip30.rs): a coinbase mined before BIP34 whose script
+    reads as a later height below REPEAT_HORIZON, the repeat of a tracked coinbase, and any transaction whose inputs
+    are all tracked coins. Their outputs carry leaf flag bit 1 (UTREEXO_FORMAT.md §2)."""
+    def __init__(self, genesis):
+        self.bip34 = BIP34_HEIGHT[genesis]
+        self.coins, self.txids = set(), set()
+
+    def tx(self, h, k, raw, txid, ins):
+        if k == 0:
+            ind = indicated_height(raw)
+            t = (h < self.bip34 and h < ind < REPEAT_HORIZON) or txid in self.txids
+        else:
+            t = len(ins) > 0 and all(op in self.coins for op in ins)
+        if t:
+            self.txids.add(txid)
+        return t
+
+    def created(self, op):
+        self.coins.add(op)
 
 
 def spendable(spk):
@@ -106,6 +160,7 @@ def main():
         j = json.load(open(f"{d}/block_{h}.json"))
         if h == 1:
             assert j["prev"] in GENESIS_TIME, f"block 1's parent {j['prev']} is not a known genesis"
+            trk = Tracked(j["prev"])
             times.append(GENESIS_TIME[j["prev"]])
         else:
             assert j["prev"] == prev_hash, f"block {h} does not link to block {h - 1}"
@@ -117,6 +172,7 @@ def main():
         raws = [bytes.fromhex(j["coinbase_hex"])] + [bytes.fromhex(t["raw"]) for t in j["txs"]]
         for k, raw in enumerate(raws):
             txid, ins, outs = parse_tx(raw)
+            tr = trk.tx(h, k, raw, txid, ins)
             if k > 0:
                 for (pt, pv), p in zip(ins, j["txs"][k - 1]["prevouts"]):
                     spent.add((pt, pv))
@@ -128,8 +184,10 @@ def main():
                 continue
             for v, (value, spk) in enumerate(outs):
                 meta[(txid, v)] = (h, k == 0, m)
+                if tr:
+                    trk.created((txid, v))
                 if spendable(spk):
-                    created.append(((h, txid, v), (txid, v), leaf(txid, v, value, spk, h, k == 0, m), value))
+                    created.append(((h, txid, v), (txid, v), leaf(txid, v, value, spk, h, k == 0, m, tr), value))
     # Within a block, survivors are appended sorted by (txid internal bytes, vout): Core's own UTXO key order, so
     # a Core `dumptxoutset` (which carries each coin's height) gives the order with no block data.
     live = sorted(c for c in created if c[1] not in spent)
