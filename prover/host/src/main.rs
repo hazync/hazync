@@ -3843,6 +3843,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             b.stdout(&mut log);
             env_for(&mut b);
             let collected = lz_execute(b.build().unwrap());
+            drop(b); // releases its borrow of `log`
             rig_echo(&log);
             if let Err(e) = collected {
                 assert!(e.contains("collect run commits no chain state"), "block {h}: collect aggregate failed: {e}");
