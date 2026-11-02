@@ -98,6 +98,9 @@ A new image can continue a chain from a stated height without proving it again f
 lets a proof of the tip show any earlier block was in the chain. Both are specified in [`HANDOVER.md`](HANDOVER.md),
 with when a handover may be used: a rule change, yes; a soundness fix, never.
 
+zyncAPPs, the separate guests that verify a core proof and answer one question with it (proof of ownership, proof of
+payment, supply), and how they survive handovers: [`ZYNCAPPS.md`](ZYNCAPPS.md).
+
 ## 4. How much of Bitcoin Core is still in the proof
 
 ### Source
