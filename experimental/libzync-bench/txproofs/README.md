@@ -70,13 +70,35 @@ cycles per transaction against ~100k of script work.
 - **Optimistic proofs** (assume valid, prove only if challenged): not a validity proof. The product is "the
   soundness of Core".
 
-## 5. Open questions, to measure before building
+## 5. Measured: the head start (8 blocks, 974,293..974,300, 11-02)
 
-- **Head start:** what share of a block was in the mempool, and in the node's own template, 30, 60, 120 and
-  300 s before the block (`headstart.py`, read-only on the bridge node). That is the share of the tip work that
-  moves out of the block's critical path.
-- **Waste:** transactions proved but never mined (replaced, evicted). Pre-proving only what the template would
-  mine reduces it.
+`headstart.py`, read-only on the bridge node, polling the mempool every 5 s and the node's template every 30 s.
+Share of each block's **inputs** (signature work) that had been in the mempool at least so long before the block:
+
+| block | txs | ≥ 0 s | ≥ 60 s | ≥ 120 s | ≥ 300 s | never seen (inputs) |
+|---|---|---|---|---|---|---|
+| 974,293 | 2,147 | 100% | 97.7% | 91.3% | 70.7% | 0 |
+| 974,294 | 3,291 | 100% | 98.2% | 94.4% | 75.3% | 0 |
+| 974,295 | 3,111 | 99.9% | 95.3% | 91.2% | 69.8% | 8 |
+| 974,296 | 1,350 | 99.3% | 96.0% | 87.1% | 77.9% | 70 |
+| 974,297 | 1,164 | 100% | 78.5% | 25.3% | 22.4% | 0 |
+| 974,298 | 4,780 | 98.8% | 94.9% | 81.1% | 59.3% | 70 |
+| 974,299 | 3,420 | 98.8% | 95.4% | 81.6% | 38.5% | 71 |
+| 974,300 | 3,136 | 100% | 93.4% | 85.9% | 59.4% | 0 |
+
+- **Nearly everything is seen first:** 98.8 to 100% of inputs were in the mempool before the block; at most 71 inputs
+  per block were not (miners' own transactions). Those are the block-time chunk.
+- **A minute is usually enough:** 93 to 98% of inputs had at least 60 s, except 974,297, a block found shortly after
+  the one before it, which mined mostly fresh arrivals (78.5% at 60 s, 25% at 2 min). The prover must keep up with
+  arrivals within about a minute, not prove a backlog.
+- **The template is no better a filter:** the node's own template held about the same shares, slightly lower, so
+  proving the whole mempool as it arrives is the simpler policy.
+- **Waste:** 282 of 21,828 transactions that arrived during the 68 minutes left the mempool unmined (1.3%: RBF
+  replacements and evictions together, an upper bound for RBF).
+
+## 6. Open questions, to measure before building
+
+- **Prover throughput:** proving the mempool's arrivals within a minute, in batches, on how many cards.
 - **Soft forks:** a validity batch is proved under one set of script flags. A flag change is a handover, so
   batches from before it are not reused after it.
 - **Unconfirmed parents:** a transaction spending a mempool parent is provable (the parent's outputs are known);
