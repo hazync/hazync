@@ -16,17 +16,18 @@ HANDOVER.md §2); the shared check of §4 is the code every zyncAPP must carry a
 | fact | fields | lets a zyncAPP show |
 |---|---|---|
 | which chain, how much work | `tip_hash`, `height`, `cum_work`, `recent_times`, `max_time` | the tip, its height and chainwork, time context |
-| every coin unspent at H | `utxo_roots`, `utxo_leaves` (UTREEXO_FORMAT.md) | a coin exists at H: amount, scriptPubKey, height, coinbase flag, creation MTP; by an inclusion path |
-| total amount at H | `utxo_value` | the UTXO set's total, with no walk over the coins |
-| every block in the chain | `block_roots`, `block_leaves` (HANDOVER.md §3) | a block at a height is in this chain; with a Merkle branch, any transaction, including spends and `OP_RETURN`s |
+| every coin ever created, and who spent it (coin log) | `utxo_roots`, `utxo_leaves` (COINLOG.md) | a coin is unspent now, or was spent by (height, tx, input); amount, scriptPubKey, height, coinbase flag, creation MTP; by one path |
+| every coin unspent at H (design B) | `utxo_roots`, `utxo_leaves` (UTREEXO_FORMAT.md) | a coin exists at H, by an inclusion path |
+| total amount of the live coins | `utxo_value` | the UTXO set's total, with no walk over the coins |
+| every block in the chain, and the coin state after it | `block_roots`, `block_leaves` (HANDOVER.md §3) | a block at a height is in this chain; with a Merkle branch, any transaction; with the coin log, any coin's state at that height |
 | what was checked | `profile` | network; scripts and signatures checked or skipped |
 | where it started | `anchor_id` | genesis-anchored (or not) |
 | SwiftSync closed at H | `ss_set`, `ss_hints` | the coin forest really is the UTXO set at H |
 | which images proved it | `self_id`, `lineage` | the image that made the receipt and the handovers behind it |
 
-⚠ The coin forest is the UTXO set **only** in a proof closed at H (`ss_set == 0` and `ss_hints` equal to the
-published hints file's hash). Past H, at the tip, it is not (SWIFTSYNC_PROOFS.md §6a). A zyncAPP about coins answers
-"at H", and is as fresh as the latest closed H.
+With the **coin log** (profile bit 4), coin facts hold at every block: a zyncAPP about coins answers at the tip, or at
+any earlier height through the block forest. ⚠ Under **design B** the coin forest is the UTXO set **only** in a proof
+closed at H (`ss_set == 0` and `ss_hints` equal to the published hints file's hash), so a zyncAPP answers "at H".
 
 ## 3. When a zyncAPP can ship
 
@@ -49,7 +50,7 @@ inputs:  core_id, core_journal, <the question's own inputs>
 3. check_core_statement(J, core_id):                   the same function in every zyncAPP
      J.kind == KIND_CHAIN, J.version >= needed, J.self_id == core_id
      J.profile: the network the zyncAPP is for; scripts checked (bit 1 clear) unless it states otherwise
-     J.ss_set == 0                                      closed at H (for any question about coins)
+     coin log (profile bit 4), or J.ss_set == 0          design B: closed at H (for any question about coins)
 4. answer the question from J and its own inputs only
 5. commit: core_id, J.lineage, J.anchor_id, J.ss_hints, J.height, J.tip_hash, J.max_time, the answer
 ```
@@ -79,7 +80,8 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 
 | zyncAPP | inputs | uses | answer |
 |---|---|---|---|
-| **zyncPOO** (proof of ownership) | coins with inclusion paths; a challenge; a signature by each coin's key | `utxo_roots`, closed at H | "these coins, worth X sat, are unspent at H and the holder signed the challenge". A private form commits only the total |
+| **zyncPOO** (proof of ownership) | coins with log paths; a challenge; a signature by each coin's key | `utxo_roots` | "these coins, worth X sat, are unspent at the tip (or at height h) and the holder signed the challenge". A private form commits only the total |
+| coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, its block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
 | snapshot check | a Core `dumptxoutset` | `utxo_roots`, `utxo_value` | "this snapshot is the UTXO set at H" (`utxo_snapshot_check.py` does it outside the zkVM today) |
@@ -87,6 +89,6 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 ## 7. Open
 
 - `check_core_statement` as a crate shared by the verifier and every zyncAPP.
-- Freshness: coins are "at H". Moving H forward without re-proving from genesis is SWIFTSYNC_PROOFS.md §7 (epochs),
-  not yet decided.
+- Freshness: settled by the coin log (sound at every block). Under design B coins are "at H".
+- Paths for old heights: the host keeps (or replays) the log at that height; a disk-backed store is needed on mainnet.
 - Signature checks inside a zyncAPP should reuse the core's libsecp and script code, not a new implementation.
