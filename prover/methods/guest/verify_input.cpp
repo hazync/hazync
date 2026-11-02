@@ -579,6 +579,9 @@ extern "C" int check_input_locks(const uint8_t* tx_bytes, unsigned tx_len, unsig
 // amount rules (all values in MoneyRange, and for non-coinbase Σinputs ≥ Σoutputs so fee ≥ 0).
 // `prevouts` is the full spent-outputs vector for the tx (all inputs). Returns 1 valid, else a
 // negative code; `out_fee` gets Σin−Σout (0 for coinbase, handled at block level).
+#ifdef HAZYNC_AGG_LITE
+extern std::string hz_last_reject;
+#endif
 extern "C" int check_tx(const uint8_t* tx_bytes, unsigned tx_len,
                         const uint8_t* prevouts, unsigned prevouts_len,
                         int64_t* out_fee) {
@@ -602,7 +605,12 @@ extern "C" int check_tx(const uint8_t* tx_bytes, unsigned tx_len,
     if (!tx.IsCoinBase() && spent.size() != tx.vin.size()) return -24; // SEC-3: prevouts must match inputs
 
     TxValidationState state;
-    if (!CheckTransaction(tx, state)) return -20; // structural consensus failure
+    if (!CheckTransaction(tx, state)) { // structural consensus failure
+#ifdef HAZYNC_AGG_LITE
+        hz_last_reject = state.GetRejectReason(); // for the rig: the aggregate's coinbase check logs it
+#endif
+        return -20;
+    }
 
     CAmount sum_out = 0;
     for (const auto& o : tx.vout) sum_out += o.nValue; // per-output ranges checked in CheckTransaction

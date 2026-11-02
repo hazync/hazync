@@ -356,8 +356,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         match find(&key(leaf)) {
             Ok(i) => {
                 // In-block spend: created by a strictly earlier tx, spent at most once.
-                if created[i].1 >= *txp { all_ok = false; }
-                if spent[i] { all_ok = false; }
+                // Core: bad-txns-inputs-missingorspent, the coin is not in the view yet or no longer.
+                if created[i].1 >= *txp { env::log("agg-lite: REJECT a coin is spent before the transaction that creates it"); all_ok = false; }
+                if spent[i] { env::log("agg-lite: REJECT a coin created in this block is spent twice"); all_ok = false; }
                 spent[i] = true;
                 // A coin spent in its own block cannot be unspent at H: the hint lies.
                 if bit(created[i].2 as usize) {
@@ -450,6 +451,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                  cb_empty_prevouts.as_ptr(), cb_empty_prevouts.len() as u32, &mut cb_fee as *mut i64)
     } == 1;
     let cb_is_coinbase = unsafe { is_coinbase_tx(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32) } == 1;
+    if !cb_struct_ok { log_reject(); }   // Core's CheckTransaction reason (bad-cb-length, ...)
     if !cb_struct_ok || !cb_is_coinbase { all_ok = false; }
     let coinbase_val = unsafe { coinbase_value(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32) };
     let subsidy = unsafe { block_subsidy(w.height) };

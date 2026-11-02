@@ -449,7 +449,7 @@ def c_bip30_child_of_repeat(c): # something new from the repeated coinbase: noth
 OURS = {"bad-cb-missing": r"C abort|REJECT|bv=false", "bad-cb-multiple": r"block INVALID|REJECT", "bad-cb-amount": "subsidy=false",
         "bad-txnmrklroot": "merkle=false", "bad-txns-duplicate": r"REJECT|merkle=false", "bad-txns-inputs-missingorspent": "REJECT",
         "bad-blk-sigops": "sigops=false", "bad-blk-length": r"core-reject: bad-blk-length|core-reject: bad-txns-oversize|weight",
-        "high-hash": "pow=false", "prev-blk-not-found": "ph=false", "bad-prevblk": "ph=false"}
+        "bad-txns-BIP30": "bip30=false", "high-hash": "pow=false", "prev-blk-not-found": "ph=false", "bad-prevblk": "ph=false"}
 
 
 def reason_ok(core, t):
@@ -457,7 +457,8 @@ def reason_ok(core, t):
         return True
     if core.startswith("bad-version"):
         return "core-reject: bad-version" in t
-    if core.startswith("block-script-verify-flag-failed") or core.startswith("mandatory-script-verify-flag"):
+    # Core 28.0 reports a failed script check from its check queue as block-validation-failed (validation.cpp ConnectBlock)
+    if core == "block-validation-failed" or core.startswith("block-script-verify-flag-failed") or core.startswith("mandatory-script-verify-flag"):
         return "core-reject: script" in t
     if core in OURS:
         return re.search(OURS[core], t) is not None
@@ -567,6 +568,8 @@ def run():
         else:
             state = "AGREE"
         res.append(state)
+        if os.environ.get("RIG_VERBOSE") and state != "AGREE":
+            print("\n".join(l for l in g_text.splitlines() if "core-reject" in l or "agg-lite" in l or "INVALID" in l or "panicked" in l), flush=True)
         print(f"{state:12} {name:24} core={'accept' if core_ok else core:38} guest={'accept' if g_ok else 'reject'} {'' if g_ok else why[:110]}", flush=True)
     bad = [s for s in res if s not in ("AGREE", "DEFERRED-OK")]
     print(f"RIG {len(res)} cases, {res.count('AGREE')} agree, {res.count('DEFERRED-OK')} deferred, {len(bad)} to look at")
