@@ -62,7 +62,7 @@ if [ $? != 0 ] && /usr/bin/grep -aq "the pin hands over at" "$R/n_h.log"; then p
 HAZYNC_HANDOVER_RECEIPT=$R/o/block_$LAST.rcpt "$N" libzync-prove-range "$FIRST" "$END" "$B" handover "$R/n" > "$R/n.log" 2>&1 || { tail -5 "$R/n.log"; wrong "N continues $FIRST..$END"; }
 [ -s "$R/n/state_$END.json" ] && pass "N continues $FIRST..$END by a handover"
 /usr/bin/grep -aq "handover: verifies predecessor" "$R/n.log" && pass "block $FIRST ran as a handover step" || wrong "block $FIRST was not a handover step"
-[ "$(/usr/bin/grep -ac 'verifies prev,\|verifies prev ' "$R/n.log")" -ge 1 ] && pass "later blocks ran as ordinary recursion" || wrong "no ordinary recursion after the handover"
+[ "$(/usr/bin/grep -ac '(verifies prev)' "$R/n.log")" -eq $((END-FIRST)) ] && pass "every block after the handover ran as ordinary recursion" || wrong "every block after the handover ran as ordinary recursion"
 
 python3 - "$R" "$LAST" "$FIRST" "$END" "$B" "$REF" "$(cat "$R/o_id")" "$(cat "$R/n_id")" <<'P'
 import importlib.util, json, sys, struct, hashlib
