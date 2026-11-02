@@ -157,3 +157,19 @@ pinned at 101) continues 101–110. 15/15 cases as expected:
 - At 962,000 the append merges **nothing** (962,000 leaves, an even number), so this is a forest step at its cheapest:
   one leaf hash plus the larger state to decode and commit (12 block roots after the block). A block whose append
   merges pays one parent hash per merge, one per block on average and about 20 at most. Not measured separately.
+
+**On libzync `6a339bd` (rebased, `experimental/libzync-bench/handover/merged_6a339bd.out`).** The merged guest was
+re-tested from scratch: handover suite 15/15; rig on Core 28.0 95 cases, 94 agree, 1 deferred (as libzync); gate
+16 chunk journals identical to round 8, exception blocks 170,060 and 692,261 valid; SwiftSync regression mainnet
+1..200 and signet 1..2600 BALANCED with the reference forest, flip refused, BIP325 check OK; the sweep states' block
+forests equal `block_forest_ref.py` over the real block hashes.
+
+The merged aggregate on 962,000 is 64,609,137 cycles against libzync's 63,021,004 (same build path), **+1,588,133**.
+That is **not** the forest. Profiles of the four builds (bf8e607, handover on bf8e607, libzync, merged) show it is
+rustc's inlining of agg-lite: libzync's new reject-reason logging stopped `validate_block_lite` being inlined into
+the aggregate, which happens to run ~1.08 M cheaper (plus ~0.43 M in `swiftsync`); the larger aggregate of the
+handover build tips it back to inlined. Merged against handover-on-bf8e607 differs by 110 cycles. The forest's own
+frames (state serde, `Stump`, journal write) are ~70–95 k, as measured above.
+
+⏰ **Lever, not applied:** `#[inline(never)]` on `validate_block_lite` (and the `swiftsync` step) should recover the
+~1.5 M. It is a guest change, so every result above would need re-running on the new image.
