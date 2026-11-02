@@ -395,6 +395,24 @@ extern "C" uint32_t tx_out_leaves_mv(const uint8_t* tx_bytes, unsigned tx_len,
     return n;
 }
 
+// The sum of every output's amount, spendable or not. coinlog: with the chunk's fee (inputs minus outputs) it gives the
+// amount of every coin the transaction spends, so the aggregate can keep the log's total without per-input amounts.
+// CheckTransaction bounds each output and the sum by MAX_MONEY; this runs before the block is refused for a transaction
+// that failed it, so the sum saturates rather than overflow (undefined in C++).
+extern "C" int64_t tx_total_out(const uint8_t* tx_bytes, unsigned tx_len) {
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes), reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+    int64_t s = 0;
+    for (const CTxOut& o : tx.vout) {
+        if (o.nValue < 0 || __builtin_add_overflow(s, o.nValue, &s)) return INT64_MAX;
+    }
+    return s;
+}
+
 // Batch form: txid and output leaves for a transaction, from the deserialise the chunk already did.
 //
 // Identical output to `tx_out_leaves` — it simply reuses an already-decoded transaction instead of

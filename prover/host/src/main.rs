@@ -262,6 +262,7 @@ fn demo_block_forest(s: &mut ChainState, warn: bool) {
 /// The profile word this host's image commits (guest `chain_profile`).
 fn expected_profile() -> u32 {
     methods::LIBZYNC as u32 | (methods::LIBZYNC_ASSUMEVALID as u32) << 1 | ((methods::NETWORK == "regtest") as u32) << 3 | ((methods::NETWORK == "signet") as u32) << 2
+        | (methods::COINLOG as u32) << 4
 }
 
 /// MAX_FUTURE_BLOCK_TIME (Core validation.h): 2 hours.
@@ -3354,6 +3355,30 @@ fn agg_exec_fake() {
         }
     }
     libzync_agg_prep(&mut w);
+    let mut anchor = anchor;
+    if methods::COINLOG {
+        // collect run for the block's spends, then a modelled log around them (cl_synth)
+        let hints = std::env::var("HAZYNC_LZ_HINTS").ok();
+        std::env::remove_var("HAZYNC_LZ_HINTS");
+        let mut log = Vec::new();
+        {
+            let mut b = ExecutorEnv::builder();
+            b.stdout(&mut log);
+            write_aggregate_env(&mut b, &receipts, &anchor, &w);
+            libzync_agg_tail(&mut b, &w);
+            let r = lz_execute(b.build().unwrap());
+            drop(b);
+            if let Err(e) = r { assert!(e.contains("collect run commits no chain state"), "coin-log collect run failed: {e}"); }
+        }
+        if let Some(h) = hints { std::env::set_var("HAZYNC_LZ_HINTS", h); }
+        let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
+        let (roots, n, wit) = cl_synth(&std::env::var("HAZYNC_BLOCK").unwrap(), &spends);
+        println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
+        anchor.utxo_roots = roots.clone();
+        anchor.utxo_leaves = n;
+        w.root_prev = WireStump { roots, num_leaves: n };
+        *CL_WIT.lock().unwrap() = wit;
+    }
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
     libzync_agg_tail(&mut b, &w);
@@ -3391,6 +3416,12 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
     }.encode();
     b.write(&(words.len() as u32)).unwrap();
     b.write_slice(&words);
+    // coin log: the block's witness (empty in a collect run, which logs what the witness must cover)
+    if methods::COINLOG {
+        let wit = if bundle.is_none() { Vec::new() } else { CL_WIT.lock().unwrap().clone() };
+        b.write(&(wit.len() as u32)).unwrap();
+        if !wit.is_empty() { b.write_slice(&wit); }
+    }
     match &bundle {
         Some(bd) => println!("  libzync: {} bytes of ECMH hints, {}", bd.ecmh.len(),
                              if bits.is_some() { "SwiftSync hint bits" } else { "no hints file" }),
@@ -3819,6 +3850,22 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     };
     demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
+    if methods::COINLOG {
+        assert!(std::env::var("HAZYNC_RESUME").is_err(), "HAZYNC_RESUME is not supported for a coin-log image yet");
+        match (&handover, anchor_path) {
+            (Some(_), _) => {
+                let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").unwrap();
+                let d = std::path::Path::new(&p).parent().unwrap().to_string_lossy().to_string();
+                cl_load(&format!("{d}/state_{}.coinlog", prev.height));
+            }
+            (None, "genesis") => cl_init_empty(),
+            (None, a) => cl_load(&cl_path_for(a)),
+        }
+        let g = CL.lock().unwrap();
+        let st = &g.as_ref().unwrap().store;
+        assert!(st.len() == prev.utxo_leaves && normalize_host(st.roots()) == normalize_host(prev.utxo_roots.clone()),
+                "the coin log file does not match the anchor's utxo_roots / utxo_leaves");
+    }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
     // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
@@ -3932,7 +3979,8 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             write_aggregate_env_ex(b, &chunks, &prev, &w, step);
             libzync_agg_tail(b, &w);
         };
-        // collect pass: the leaves the ECMH hints are for
+        // collect pass: the leaves the ECMH hints are for (and, for a coin-log image, the log's spends and appends)
+        CL_WIT.lock().unwrap().clear();
         let mut log = Vec::new();
         {
             let mut b = ExecutorEnv::builder();
@@ -3948,6 +3996,8 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log)) {
             bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
         }
+        let cl_lists = if methods::COINLOG { cl_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
+        if methods::COINLOG { *CL_WIT.lock().unwrap() = cl_prepare(&cl_lists.0); }
         bd.write(&bp).unwrap();
         std::env::set_var("HAZYNC_LZ_HINTS", &bp);
         let t_hints = t0.elapsed().as_secs_f64();
@@ -3960,6 +4010,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         assert_eq!(st.height, h);
         std::fs::write(format!("{out}/block_{h}.rcpt"), bincode::serialize(&r).unwrap()).unwrap();
         std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
+        if methods::COINLOG { cl_commit(&cl_lists.0, &cl_lists.1, &st); }
         let dt = t0.elapsed().as_secs_f64();
         // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
         let rbytes = std::fs::metadata(format!("{out}/block_{h}.rcpt")).map(|m| m.len()).unwrap_or(0);
@@ -3971,6 +4022,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         prev_rcpt = Some(r);
         handover_pending = false;
     }
+    if methods::COINLOG { cl_save(&format!("{out}/state_{hi}.coinlog")); }
     println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final receipt {out}/block_{hi}.rcpt", t_all.elapsed().as_secs_f64());
 }
 
@@ -10122,4 +10174,167 @@ mod join_tree_tests {
         assert!(no_peers_breached(0, 4, 61.0, 60.0), "a tightened window fires sooner");
         assert!(!no_peers_breached(0, 4, 1000.0, 3600.0), "a widened window waits longer");
     }
+}
+
+// ---- libzync coin log, host side (HAZYNC_COINLOG=1 builds; libzync/src/coinlog.rs) ----------------------------
+//
+// The host keeps the whole log (every node) to read off each block's witness. A collect execution of the aggregate
+// logs the leaves of the earlier coins the block spends ("coinlog: S") and of the coins it appends ("coinlog: A"); the
+// host names each spend's position (an unknown coin gets the end of the log, which the guest refuses), and after the
+// block is proved applies the same changes and checks its roots equal the committed state's.
+
+struct ClHost {
+    store: libzync::coinlog::Store,
+    pos: std::collections::HashMap<[u8; 32], u64>, // unspent leaf -> position
+}
+static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
+static CL_WIT: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// `state_<h>.json` -> `state_<h>.coinlog`; `anchor.json` -> `anchor.coinlog`.
+fn cl_path_for(state_json: &str) -> String {
+    match state_json.strip_suffix(".json") { Some(s) => format!("{s}.coinlog"), None => format!("{state_json}.coinlog") }
+}
+
+fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
+    let mut store = libzync::coinlog::Store::default();
+    let mut pos = std::collections::HashMap::new();
+    for (i, l) in leaves.iter().enumerate() {
+        store.push(*l);
+        pos.insert(*l, i as u64);
+    }
+    // The file stores each position's current leaf: a live coin's leaf, or spent(c). Indexing all of them is harmless:
+    // spent(c) is a different function's output and never equals a coin leaf a block could spend.
+    ClHost { store, pos }
+}
+
+fn cl_save(path: &str) {
+    let g = CL.lock().unwrap();
+    let h = g.as_ref().expect("coin log not initialised");
+    let mut b = Vec::with_capacity(8 + 32 * h.store.len() as usize);
+    b.extend_from_slice(&h.store.len().to_le_bytes());
+    for i in 0..h.store.len() { b.extend_from_slice(&h.store.leaf(i)); }
+    std::fs::write(path, b).unwrap_or_else(|e| panic!("{path}: {e}"));
+}
+
+fn cl_load(path: &str) {
+    let b = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e} (a coin-log anchor needs its .coinlog file)"));
+    let n = u64::from_le_bytes(b[..8].try_into().unwrap()) as usize;
+    assert_eq!(b.len(), 8 + 32 * n, "{path}: truncated");
+    let leaves: Vec<[u8; 32]> = b[8..].chunks_exact(32).map(|c| c.try_into().unwrap()).collect();
+    *CL.lock().unwrap() = Some(cl_from_leaves(&leaves));
+}
+
+fn cl_init_empty() { *CL.lock().unwrap() = Some(cl_from_leaves(&[])); }
+
+/// The "coinlog: S|A <hex>" lines of a collect run, in order.
+fn cl_parse(log: &str) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
+    let (mut s, mut a) = (Vec::new(), Vec::new());
+    for l in log.lines() {
+        let Some(i) = l.find("coinlog: ") else { continue };
+        let rest = &l[i + 9..];
+        let (kind, hx) = (rest.as_bytes()[0], rest[2..].trim());
+        let h: [u8; 32] = arr(hx_bytes(hx));
+        if kind == b'S' { s.push(h) } else if kind == b'A' { a.push(h) }
+    }
+    (s, a)
+}
+
+fn hx_bytes(h: &str) -> Vec<u8> { (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect() }
+
+/// The block's witness words: each spend's position in block order, and the siblings for the sorted spends.
+fn cl_prepare(spends: &[[u8; 32]]) -> Vec<u32> {
+    let g = CL.lock().unwrap();
+    let h = g.as_ref().expect("coin log not initialised");
+    let n = h.store.len();
+    let positions: Vec<u64> = spends.iter().map(|l| *h.pos.get(l).unwrap_or(&n)).collect();
+    let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().copied()).collect();
+    sorted.sort_unstable_by_key(|x| x.0);
+    let sib = h.store.witness(&sorted);
+    libzync::coinlog::encode_witness(&positions, &sib)
+}
+
+/// After the block is proved: the same flips and appends on the host's log, which must then equal the state.
+fn cl_commit(spends: &[[u8; 32]], appends: &[[u8; 32]], st: &ChainState) {
+    let mut g = CL.lock().unwrap();
+    let h = g.as_mut().expect("coin log not initialised");
+    for l in spends {
+        let p = h.pos.remove(l).expect("a proved spend of a coin the host's log does not hold");
+        h.store.set(p, libzync::coinlog::spent(l));
+    }
+    for l in appends {
+        h.pos.insert(*l, h.store.len());
+        h.store.push(*l);
+    }
+    assert_eq!(h.store.len(), st.utxo_leaves, "host coin log size != committed utxo_leaves");
+    assert!(normalize_host(h.store.roots()) == normalize_host(st.utxo_roots.clone()), "host coin log roots != committed roots");
+}
+
+/// Gate / single-block measurement (agg-exec-fake): a coin log of the modelled size around ONE real block. Each spend's
+/// position comes from its coin's real creation height (block file `coin_height`), the log size from k x cumulative
+/// transactions ($HAZYNC_COINLOG_TXCOUNTS, getchaintxstats pairs; k = $HAZYNC_COINLOG_K, default 1.64), a random rank
+/// inside the creation block. Untouched subtrees are random; the touched trees' old roots are what the witness folds
+/// to. Cycles only: such a state is not the chain's.
+fn cl_synth(block: &str, spends: &[[u8; 32]]) -> (Vec<Option<[u8; 32]>>, u64, Vec<u32>) {
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(block).unwrap()).unwrap();
+    let h = j["height"].as_u64().unwrap() as f64;
+    let mut heights: Vec<f64> = Vec::new();
+    for tx in j["txs"].as_array().unwrap() {
+        for p in tx["prevouts"].as_array().unwrap() {
+            let c = p["coin_height"].as_u64().unwrap() as f64;
+            if c < h { heights.push(c); }
+        }
+    }
+    assert_eq!(heights.len(), spends.len(), "earlier-coin spends in the block file != the aggregate's");
+    let tcp = std::env::var("HAZYNC_COINLOG_TXCOUNTS").expect("HAZYNC_COINLOG_TXCOUNTS (getchaintxstats pairs)");
+    let k: f64 = std::env::var("HAZYNC_COINLOG_K").ok().and_then(|v| v.parse().ok()).unwrap_or(1.64);
+    let tc: Vec<(f64, f64)> = std::fs::read_to_string(&tcp).unwrap().lines()
+        .map(|l| { let v: Vec<f64> = l.split_whitespace().map(|x| x.parse().unwrap()).collect(); (v[0], v[1]) }).collect();
+    let cum = |x: f64| -> f64 {
+        let i = tc.iter().position(|t| t.0 >= x).unwrap_or(tc.len() - 1).max(1);
+        let ((h0, c0), (h1, c1)) = (tc[i - 1], tc[i]);
+        k * (c0 + (c1 - c0) * (x - h0) / (h1 - h0))
+    };
+    let n = cum(h - 1.0) as u64;
+    let rnd = |tag: &[u8], i: u64| -> [u8; 32] { sha256_host(&[tag, &i.to_le_bytes()].concat()) };
+    let mut taken = std::collections::HashSet::new();
+    let positions: Vec<u64> = heights.iter().enumerate().map(|(i, &c)| {
+        let (a, b) = (cum(c - 1.0), cum(c).max(cum(c - 1.0) + 1.0));
+        let u = u64::from_le_bytes(rnd(b"rank", i as u64)[..8].try_into().unwrap()) as f64 / u64::MAX as f64;
+        let mut p = ((a + u * (b - a)) as u64).min(n - 1);
+        while !taken.insert(p) { p = (p + 1) % n; }
+        p
+    }).collect();
+    let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().copied()).collect();
+    sorted.sort_unstable_by_key(|x| x.0);
+    // siblings: every untouched subtree on the way down, random
+    fn wit(l: u32, start: u64, e: &[(u64, [u8; 32])], out: &mut Vec<[u8; 32]>, rnd: &dyn Fn(&[u8], u64) -> [u8; 32]) {
+        if e.is_empty() { out.push(rnd(b"sib", start ^ ((l as u64) << 56))); return; }
+        if l == 0 { return; }
+        let mid = start + (1u64 << (l - 1));
+        let m = e.partition_point(|x| x.0 < mid);
+        wit(l - 1, start, &e[..m], out, rnd);
+        wit(l - 1, mid, &e[m..], out, rnd);
+    }
+    let mut roots: Vec<Option<[u8; 32]>> = vec![None; 64];
+    let mut sib_all = Vec::new();
+    let (mut start, mut kk) = (0u64, 0usize);
+    for l in (0..64u32).rev() {
+        if (n >> l) & 1 == 0 { continue; }
+        let end = start + (1u64 << l);
+        let m = kk + sorted[kk..].partition_point(|x| x.0 < end);
+        if m > kk {
+            let mut sib = Vec::new();
+            wit(l, start, &sorted[kk..m], &mut sib, &rnd);
+            let (o, _) = libzync::coinlog::update(l, start, &sorted[kk..m], &mut sib.iter()).unwrap();
+            roots[l as usize] = Some(o);
+            sib_all.extend(sib);
+        } else {
+            roots[l as usize] = Some(rnd(b"root", l as u64));
+        }
+        kk = m;
+        start = end;
+    }
+    while roots.last() == Some(&None) { roots.pop(); }
+    println!("  coinlog SYNTH: log size {n} (k = {k}), {} spends, {} siblings", spends.len(), sib_all.len());
+    (roots, n, libzync::coinlog::encode_witness(&positions, &sib_all))
 }

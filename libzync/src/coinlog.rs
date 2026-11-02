@@ -124,7 +124,7 @@ pub enum LogError {
 }
 
 /// (old, new) hash of the perfect tree of 2^l leaves starting at `start`, with the spends `e` inside it.
-fn update(l: u32, start: u64, e: &[(u64, H)], sib: &mut core::slice::Iter<H>) -> Result<(H, H), LogError> {
+pub fn update(l: u32, start: u64, e: &[(u64, H)], sib: &mut core::slice::Iter<H>) -> Result<(H, H), LogError> {
     if e.is_empty() {
         let h = *sib.next().ok_or(LogError::Witness)?;
         return Ok((h, h));

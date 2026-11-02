@@ -26,12 +26,20 @@
 //! coin-txid SMT takes the overwrite at 91,842 / 91,880. Journal layout, all u32 LE words:
 //!   header: KIND_CHUNK_LITE, all_valid, height, block_hash[8], mtp, block_time, n_records
 //!   record: txid[8] wtxid[8] prevouts_hash[8] start count first
-//!     if first: has_witness n_vin fee[2] weight[2] sigops[2] n_out (out_leaf[8] vout value[2])*n_out
+//!     if first: has_witness n_vin fee[2] weight[2] sigops[2] [total_out[2] with coinlog] n_out (out_leaf[8] vout value[2])*n_out
 //!     per owned input: leaf[8] flags (bit0 coinbase coin, bit1 coin height == this block) [coinbase_txid[8] if bit0]
 
 use super::*;
 
 pub const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
+
+/// coinlog: the block's log witness, read by the aggregate before validation (libzync/src/coinlog.rs).
+#[cfg(feature = "coinlog")]
+static mut LOG_WITNESS: Vec<u32> = Vec::new();
+#[cfg(feature = "coinlog")]
+pub fn set_log_witness(w: Vec<u32>) { unsafe { LOG_WITNESS = w } }
+#[cfg(feature = "coinlog")]
+fn hex32(h: &[u8; 32]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
 
 extern "C" {
     /// Empty verify_input.cpp's per-transaction caches and bump hz_tx_generation (round 11).
@@ -148,6 +156,9 @@ impl ChunkCtx {
             push_i64(&mut self.words, fee);
             push_i64(&mut self.words, weight);
             push_i64(&mut self.words, sigops);
+            // coinlog: every output's amount, spendable or not, so the aggregate knows the transaction's inputs (fee + this).
+            #[cfg(feature = "coinlog")]
+            push_i64(&mut self.words, unsafe { tx_total_out(tp, tl) });
             self.words.push(n_out);
             for l in 0..n_out as usize {
                 push_hash(&mut self.words, &self.out[32 * l..32 * l + 32]);
@@ -260,6 +271,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut wtxids: Vec<[u8; 32]> = Vec::with_capacity(words / 30 + 1);
     wtxids.push([0u8; 32]);
     let mut total_fee: i64 = 0;
+    // coinlog: the amount of every coin the block's transactions spend (fee + every output, per transaction).
+    #[cfg(feature = "coinlog")]
+    let mut total_in: u64 = 0;
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
     let mut spends: Vec<([u8; 32], u32, bool)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height), block order
@@ -294,6 +308,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 (tr_all, tr_claim) = (true, hw & 2 != 0);
                 let n_vin = r.u();
                 let (fee, weight, sigops) = (r.i64(), r.i64(), r.i64());
+                #[cfg(feature = "coinlog")]
+                { let t_out = r.i64(); total_in = total_in.saturating_add((fee as u64).saturating_add(t_out as u64)); }
                 let n_out = r.u();
                 txids.push(txid);
                 wtxids.push(wt);
@@ -370,6 +386,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             all_ok = false;
         }
     }
+    #[cfg(feature = "coinlog")]
+    let (mut ext, mut in_block_spent): (Vec<[u8; 32]>, u64) = (Vec::new(), 0);
+    #[cfg(feature = "coinlog")]
+    if ss_mode == 1 { env::log("agg-lite: REJECT a coin-log image takes no hints file"); all_ok = false; }
     for (leaf, txp, same_height) in &spends {
         match find(&key(leaf)) {
             Ok(i) => {
@@ -378,6 +398,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 if created[i].1 >= *txp { env::log("agg-lite: REJECT a coin is spent before the transaction that creates it"); all_ok = false; }
                 if spent[i] { env::log("agg-lite: REJECT a coin created in this block is spent twice"); all_ok = false; }
                 spent[i] = true;
+                #[cfg(feature = "coinlog")]
+                { in_block_spent = in_block_spent.saturating_add(out_val[created[i].2 as usize]); }
                 // A coin spent in its own block cannot be unspent at H: the hint lies.
                 if bit(created[i].2 as usize) {
                     env::log("agg-lite: REJECT a hint marks a coin unspent-at-H that this block spends");
@@ -389,7 +411,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     env::log("agg-lite: REJECT a spend claims a coin of this height that this block does not create");
                     all_ok = false;
                 }
-                swiftsync::sub(leaf)
+                #[cfg(not(feature = "coinlog"))]
+                swiftsync::sub(leaf);
+                // coinlog: a coin from an earlier block, which must be unspent in the log at the position the prover names
+                #[cfg(feature = "coinlog")]
+                ext.push(*leaf);
             }
         }
     }
@@ -398,22 +424,58 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // Within the block, survivors are appended sorted by (txid, vout), compared as bytes in internal order: Core's own
     // coin-key order, so a Core `dumptxoutset` (it carries each coin's height) gives the forest order with no block
     // data (UTREEXO_FORMAT.md §4). The hint bits stay in block order, as the hints file has them.
-    let mut stump = utreexo::Stump::new(w.root_prev.roots.clone(), w.root_prev.num_leaves);
-    let mut live: Vec<(&[u8; 32], u32, usize)> = Vec::new();
-    for (k, leaf) in output_leaves.iter().enumerate() {
-        if let Ok(i) = find(&key(leaf)) {
-            if spent[i] { continue; }
-            if bit(k) { live.push((&txids[out_pos[k] as usize], out_vout[k], k)); } else { swiftsync::add(leaf); }
+    #[cfg(not(feature = "coinlog"))]
+    let (next_roots, next_leaves, survivor_value, spent_value) = {
+        let mut stump = utreexo::Stump::new(w.root_prev.roots.clone(), w.root_prev.num_leaves);
+        let mut live: Vec<(&[u8; 32], u32, usize)> = Vec::new();
+        for (k, leaf) in output_leaves.iter().enumerate() {
+            if let Ok(i) = find(&key(leaf)) {
+                if spent[i] { continue; }
+                if bit(k) { live.push((&txids[out_pos[k] as usize], out_vout[k], k)); } else { swiftsync::add(leaf); }
+            }
         }
-    }
-    live.sort_unstable_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
-    let mut survivor_value: u64 = 0;
-    for &(_, _, k) in &live {
-        stump.add(output_leaves[k]);
-        // On a valid chain the survivors never hold more than the coins ever issued (< MAX_MONEY), far below 2^64.
-        // Saturating, so an invalid chain (refused at H by the ECMH total) cannot wrap it to a small number.
-        survivor_value = survivor_value.saturating_add(out_val[k]);
-    }
+        live.sort_unstable_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
+        let mut survivor_value: u64 = 0;
+        for &(_, _, k) in &live {
+            stump.add(output_leaves[k]);
+            // On a valid chain the survivors never hold more than the coins ever issued (< MAX_MONEY), far below 2^64.
+            // Saturating, so an invalid chain (refused at H by the ECMH total) cannot wrap it to a small number.
+            survivor_value = survivor_value.saturating_add(out_val[k]);
+        }
+        (normalize(stump.roots.clone()), stump.num_leaves, survivor_value, 0u64)
+    };
+    // coinlog: every coin the block creates and does not spend is appended in block order; the earlier coins it spends
+    // are flipped in the log at the positions the witness names. A collect run (no witness yet) logs both lists for the
+    // host instead and commits no state.
+    #[cfg(feature = "coinlog")]
+    let (next_roots, next_leaves, survivor_value, spent_value) = {
+        let mut appends: Vec<[u8; 32]> = Vec::with_capacity(output_leaves.len());
+        let mut survivor_value: u64 = 0;
+        for (k, leaf) in output_leaves.iter().enumerate() {
+            if let Ok(i) = find(&key(leaf)) { if spent[i] { continue; } }
+            appends.push(*leaf);
+            survivor_value = survivor_value.saturating_add(out_val[k]);
+        }
+        let (mut roots, mut n) = (w.root_prev.roots.clone(), w.root_prev.num_leaves);
+        if swiftsync::collecting() {
+            for l in &ext { env::log(&alloc::format!("coinlog: S {}", hex32(l))); }
+            for l in &appends { env::log(&alloc::format!("coinlog: A {}", hex32(l))); }
+        } else {
+            #[allow(static_mut_refs)]
+            match coinlog::decode_witness(unsafe { &LOG_WITNESS }) {
+                Some((pos, sib)) if pos.len() == ext.len() => {
+                    let mut sp: Vec<(u64, [u8; 32])> = pos.into_iter().zip(ext.iter().copied()).collect();
+                    sp.sort_unstable_by_key(|x| x.0);
+                    if let Err(e) = coinlog::apply(&mut roots, &mut n, &sp, &appends, &sib) {
+                        env::log(&alloc::format!("agg-lite: REJECT coin log: {e:?}"));
+                        all_ok = false;
+                    }
+                }
+                _ => { env::log("agg-lite: REJECT coin log witness malformed or wrong length"); all_ok = false; }
+            }
+        }
+        (normalize(roots), n, survivor_value, total_in.saturating_sub(in_block_spent))
+    };
     swiftsync::report();
     // v2 over the height and its list of unspent INDICES -- exactly what the hints file stores per
     // height -- so a verifier recomputes it from the published file alone (libzync/src/ss_hints.rs).
@@ -516,10 +578,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         tip_hash: block_hash,
         nbits: u32::from_le_bytes(w.header[72..76].try_into().unwrap()),
         block_time,
-        root_next_roots: normalize(stump.roots.clone()),
-        root_next_leaves: stump.num_leaves,
+        root_next_roots: next_roots,
+        root_next_leaves: next_leaves,
         ss_hints,
         survivor_value,
+        spent_value,
         ..Default::default()
     }
 }

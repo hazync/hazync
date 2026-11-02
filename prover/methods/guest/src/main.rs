@@ -71,6 +71,10 @@ mod swiftsync;
 // libzync: chunks commit per-transaction facts so the aggregate never parses a transaction.
 #[cfg(feature = "agg-lite")]
 mod agg_lite;
+// libzync EXPERIMENT: the coin log, the same file the host compiles.
+#[cfg(feature = "coinlog")]
+#[path = "../../../../libzync/src/coinlog.rs"]
+mod coinlog;
 // Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
 #[cfg(feature = "msm")]
 mod msm;
@@ -272,6 +276,8 @@ extern "C" {
         tx: *const u8, tx_len: u32, height: u32, is_coinbase: u32, block_time: u32,
         out: *mut u8, out_txid: *mut u8,
     ) -> u32;
+    // The sum of every output's amount, spendable or not (verify_input.cpp). coinlog only.
+    fn tx_total_out(tx: *const u8, tx_len: u32) -> i64;
     // tx_out_leaves, and each leaf's output index and amount (verify_input.cpp).
     fn tx_out_leaves_mv(
         tx: *const u8, tx_len: u32, height: u32, is_coinbase: u32, block_time: u32,
@@ -572,7 +578,8 @@ struct BlockResult {
     root_next_roots: Vec<Option<[u8; 32]>>,
     root_next_leaves: u64,
     ss_hints: [u8; 32],       // libzync design B: the running hint-bit hash after this block
-    survivor_value: u64,      // libzync design B: satoshis appended to the coin forest by this block
+    survivor_value: u64,      // libzync: satoshis appended to the coin forest / log by this block
+    spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends (0 under design B)
 }
 
 fn dsha256(data: &[u8]) -> [u8; 32] {
@@ -1355,6 +1362,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         root_next_leaves: stump.num_leaves,
         ss_hints: [0u8; 32], // design B lives on the agg-lite path only
         survivor_value: 0,
+        spent_value: 0,
     }
 }
 
@@ -1451,7 +1459,7 @@ fn chain_profile() -> u32 {
     let lz = cfg!(feature = "libzync") as u32;
     let av = unsafe { hz_no_scripts() } & 1;
     let sig = cfg!(feature = "signet") as u32;
-    lz | av << 1 | sig << 2 | (cfg!(feature = "regtest") as u32) << 3
+    lz | av << 1 | sig << 2 | (cfg!(feature = "regtest") as u32) << 3 | (cfg!(feature = "coinlog") as u32) << 4
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state
@@ -2131,6 +2139,14 @@ fn aggregate() {
         swiftsync::install(h.ecmh_collect, h.ecmh.to_vec());
         match h.ss { Some((nbits, w)) => (1, nbits, w.to_vec()), None => (0, 0, Vec::new()) }
     };
+    // libzync coin log: the block's log witness (libzync/src/coinlog.rs encode_witness), after the hint block.
+    #[cfg(feature = "coinlog")]
+    {
+        let n: u32 = env::read();
+        let mut words = vec![0u32; n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        agg_lite::set_log_witness(words);
+    }
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
     // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
@@ -2236,7 +2252,7 @@ fn aggregate() {
     env::commit(&ChainState {
         kind: KIND_CHAIN, version: CHAIN_STATE_VERSION,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
-        utxo_value: prev.utxo_value.saturating_add(r.survivor_value),
+        utxo_value: prev.utxo_value.saturating_add(r.survivor_value).checked_sub(r.spent_value).expect("utxo_value: the block spends more than the log holds"),
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
         ss_set, ss_acc, ss_hints, smt_root,
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),

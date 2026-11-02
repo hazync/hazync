@@ -31,7 +31,7 @@ fn lever(name: &str) -> bool {
 
 /// `profile.rs` in OUT_DIR: what the embedded guest was built for, so the HOST writes the stream that
 /// guest reads instead of trusting a matching set of run-time env vars.
-fn write_profile(libzync: bool, assumevalid: bool, network: &str) {
+fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool) {
     let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
     std::fs::write(&out, format!(
         "/// The embedded guest reads libzync hint blocks (libzync/src/wire.rs).\n\
@@ -39,7 +39,9 @@ fn write_profile(libzync: bool, assumevalid: bool, network: &str) {
          /// Script and signature checks skipped (HAZYNC_LIBZYNC=assumevalid).\n\
          pub const LIBZYNC_ASSUMEVALID: bool = {assumevalid};\n\
          /// \"mainnet\", \"signet\" or \"regtest\".\n\
-         pub const NETWORK: &str = {:?};\n",
+         pub const NETWORK: &str = {:?};\n\
+         /// The coin log instead of design B's SwiftSync forest (HAZYNC_COINLOG=1).\n\
+         pub const COINLOG: bool = {coinlog};\n",
         network)).expect("write profile.rs");
 }
 
@@ -125,7 +127,9 @@ fn main() {
                 .unwrap_or_else(|e| panic!("{d}/PROFILE: {e} (the pin directory must name the image's profile)"));
             assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS");
         }
-        write_profile(libzync, assumevalid, network);
+        // The coin log is an experiment: a pinned prebuilt image is never a coin-log image.
+        assert!(std::env::var("HAZYNC_COINLOG").as_deref() != Ok("1"), "HAZYNC_COINLOG with a prebuilt guest is not supported");
+        write_profile(libzync, assumevalid, network, false);
         embed_prebuilt_guest(&elf_path, pins.as_deref());
         return;
     }
@@ -225,7 +229,13 @@ fn main() {
     if regtest {
         features.push("regtest".to_string());
     }
-    write_profile(libzync, assumevalid, network);
+    println!("cargo:rerun-if-env-changed=HAZYNC_COINLOG");
+    let coinlog = lever("HAZYNC_COINLOG");
+    assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
+    if coinlog {
+        features.push("coinlog".to_string());
+    }
+    write_profile(libzync, assumevalid, network, coinlog);
     if !features.is_empty() {
         use std::collections::HashMap;
         // GuestOptions is #[non_exhaustive], so it cannot be built with a struct expression from
