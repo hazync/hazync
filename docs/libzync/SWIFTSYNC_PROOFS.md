@@ -117,8 +117,6 @@ The last three files were written by `host swiftsync-make-hints`; each matches t
 
 ### The proof's public output: `ChainState`
 
-| field | meaning |
-|---|---|
 In field order (the journal encoding is in §5 step 3):
 
 | field | meaning |
@@ -129,12 +127,14 @@ In field order (the journal encoding is in §5 step 3):
 | `cum_work`, `height` | cumulative work (32 bytes LE) and height of the tip |
 | `prev_nbits`, `prev_time`, `epoch_start`, `recent_times` | difficulty and time context, so the chain can be extended |
 | `anchor_id` | double-SHA-256 of the state the chain started from (genesis for a full proof) |
-| `self_id` | the image id every recursive step ran |
+| `self_id` | the image id every step since the last handover ran (the image the receipt verifies against) |
 | `ss_set`, `ss_acc` | the ECMH running total (`ss_set = 0` means the identity) |
 | `ss_hints` | the running hash of §3 |
 | `smt_root` | root of the coinbase-txid SMT (BIP30) after the tip |
 | `max_time` | the largest block timestamp in the chain (for `time-too-new`, §5 step 11) |
 | `profile` | what the image checked: bit 0 libzync, bit 1 scripts and signatures **skipped** (assumevalid), bit 2 signet. Set by the image from its compiled code, never carried from input |
+| `block_roots`, `block_leaves` | the block forest: an append-only Utreexo forest with one leaf per block, genesis first, so leaf `i` is the block at height `i` and `block_leaves = height + 1`. It lets a proof of the tip show that any earlier block was in the chain (HANDOVER.md §3) |
+| `lineage` | 32 zero bytes for a chain proved by one image since genesis; otherwise the digest of the images it was handed over from (HANDOVER.md §5) |
 
 ## 4. How the guest checks a block (design "B")
 
@@ -194,26 +194,32 @@ Given a receipt R, the hints file F and the network:
 
 1. `R.verify(M)`, where M is the published libzync image id for that network (and for scripts or assumevalid). The
    current images (round 8, scripts checked, built by `reproduce/libzync.Dockerfile`): mainnet `9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55`, signet `067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36`,
-   pinned in `reproduce/LIBZYNC_IDS`.
-2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002` and `J.self_id == M`.
+   pinned in `reproduce/LIBZYNC_IDS`. ⚠ These round-8 images predate the handover format (steps 3, 12, 13 and
+   HANDOVER.md); their journals do not decode as today's `ChainState`. The ids move at the image freeze.
+2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002` and `J.self_id == M`. M is the **newest**
+   image: after a handover the receipt verifies against the image that continued the chain, never an earlier one.
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
    nothing about history.
    - The genesis ChainState, in field order: `kind = 0xC4A10002`; `tip_hash` = the genesis hash (internal byte
      order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0`; `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
      little-endian; `height = 0`; `prev_nbits` = genesis nBits; `prev_time = epoch_start` = genesis time;
-     `recent_times = [genesis time]`; `anchor_id` = 32 zero bytes; `self_id = M` (so the genesis journal, and its
-     digest, are per image; M's 8 words are its 32 bytes read as little-endian u32s, in order); `ss_set = 0`;
+     `recent_times = [genesis time]`; `anchor_id` = 32 zero bytes; `self_id` = 32 zero bytes (eight zero words: the
+     genesis journal, and its digest, are the same for every image, so a chain keeps its anchor across a handover);
+     `ss_set = 0`;
      `ss_acc` = 16 zero words; `ss_hints` = 32 zero bytes; `smt_root` = the empty coinbase-SMT root, `e_256` where
      `e_0` = 32 zero bytes and `e_{d+1} = SHA-256(0x11 ‖ e_d ‖ e_d)`
-     (`507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32`); `max_time` = genesis time; `profile = 0`.
+     (`507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32`); `max_time` = genesis time; `profile = 0`; `block_roots` = one entry, `Some(SHA-256(0x02 ‖ genesis hash, internal
+     byte order ‖ 0u32 LE))`; `block_leaves = 1`; `lineage` = 32 zero bytes.
    - The journal is risc0's serde word encoding (risc0-zkvm 3.0.5 `serde::to_vec`, each word little-endian): every
      integer up to 32 bits and every byte of a fixed array takes one u32 word, a u64 two (low word first), a list is its length then
      its elements, and an `Option` is a 0/1 word followed by the value when present.
    - `host libzync-verify` computes this itself. `scripts/libzync/genesis_anchor_id.py` computes it from this text
-     alone, and matches what the guest commits after a base step on genesis. Test vectors:
-     mainnet `9f469930…` → `5b2020ae48fdf2d180837b612b13c2b36192208f4afb94dee350553fa7ea1d44`;
-     signet `067822b9…` → `636271d3f46ea120f22da161648247bdd004afba1cb92378ba3af407c9e4e2b2` (round-8 images).
+     alone. Test vectors, one per network for every image: mainnet
+     `1066e814035cc8a1ac2bf6760095b3addb08cad817b6f164aeb444e623337c9a`, signet
+     `f6a784992a04be9da9f992e89385abe4d6b2f44cb87ad6354af1e01d43dffa36` (`swiftsync-verify` unit tests pin both).
+     Before the handover format, `self_id` was M and each image had its own anchor; the round-8 vectors
+     `5b2020ae…` and `636271d3…` are that old format.
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
@@ -229,8 +235,12 @@ Given a receipt R, the hints file F and the network:
     after height H. The proof covers the decoded lists. The `hintsfile` 0.2.1 decoder does not check padding, value
     bounds or trailing bytes, so a non-canonical file could decode differently in another implementation.
 11. `J.max_time <= now + 7200`, with `now` from your own clock (Core's `MAX_FUTURE_BLOCK_TIME`).
+12. `J.block_leaves == J.height + 1`, and `J.block_roots` has a root exactly at each set bit of `J.block_leaves`.
+13. `J.lineage` is 32 zero bytes (one image since genesis), or the digest (HANDOVER.md §5) of the handover list
+    compiled into M. Trusting M then means trusting every image in that list: a handover takes the old image's claims
+    on trust (HANDOVER.md §4).
 
-`host libzync-verify <receipt> <file.hints>` does steps 1–6 and 8–11, and prints `tip_hash` and `cum_work` for
+`host libzync-verify <receipt> <file.hints>` does steps 1–6 and 8–13, and prints `tip_hash` and `cum_work` for
 step 7. It ends in one of three verdicts:
 - `LIBZYNC_VERIFY_OK` (exit 0): a genesis-anchored proof;
 - `LIBZYNC_VERIFY_DEMO` (exit 2): a proof checked against a supplied anchor, which is never a proof of the file;
