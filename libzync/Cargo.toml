@@ -22,7 +22,7 @@ default = ["std"]
 std = ["dep:secp256k1", "dep:num-bigint", "dep:hintsfile"]
 
 [dependencies]
-sha2 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["compress"] }
 # The version bitcoin 0.32 re-exports, so the host links one libsecp, not two.
 secp256k1 = { version = "0.29", optional = true, features = ["global-context"] }
 num-bigint = { version = "0.4", optional = true }

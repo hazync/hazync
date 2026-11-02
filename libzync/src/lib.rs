@@ -8,6 +8,7 @@ extern crate std;
 pub mod ss_hints;
 pub mod wire;
 pub mod net;
+pub mod coinlog;
 #[cfg(feature = "std")]
 pub mod host;
 
