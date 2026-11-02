@@ -3869,7 +3869,6 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     if methods::COINLOG {
-        assert!(std::env::var("HAZYNC_RESUME").is_err(), "HAZYNC_RESUME is not supported for a coin-log image yet");
         match (&handover, anchor_path) {
             (Some(_), _) => {
                 let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").unwrap();
@@ -3925,7 +3924,10 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     let mut prev_rcpt: Option<Receipt> = handover.map(|(r, _)| r);
     let mut first = lo;
     if std::env::var("HAZYNC_RESUME").map(|v| v == "1").unwrap_or(false) {
-        if let Some(k) = (lo..=hi).rev().find(|k| std::path::Path::new(&format!("{out}/block_{k}.rcpt")).exists()) {
+        // With the coin log, only a receipt whose log file was also written (the log is saved after the receipt).
+        let done = |k: &u32| std::path::Path::new(&format!("{out}/block_{k}.rcpt")).exists()
+            && (!methods::COINLOG || std::path::Path::new(&format!("{out}/state_{k}.coinlog")).exists());
+        if let Some(k) = (lo..=hi).rev().find(done) {
             assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
             let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
             let r: Receipt = bincode::deserialize(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
@@ -3934,6 +3936,14 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             assert!(st.height == k && st.kind == KIND_CHAIN && st.self_id == METHOD_ID, "block_{k}.rcpt is not this chain's state at {k}");
             let (t, _) = lz_smt_replay(dir, k);
             assert_eq!(t.root(), st.smt_root, "replayed BIP30 tree at {k} != the receipt's smt_root");
+            // The coin log at k: the file the run left next to the receipt, checked against the receipt's own roots.
+            if methods::COINLOG {
+                cl_load(&format!("{out}/state_{k}.coinlog"));
+                let g = CL.lock().unwrap();
+                let cl = &g.as_ref().unwrap().store;
+                assert!(cl.len() == st.utxo_leaves && normalize_host(cl.roots()) == normalize_host(st.utxo_roots.clone()),
+                        "state_{k}.coinlog does not match block_{k}.rcpt's utxo_roots / utxo_leaves");
+            }
             smt = t;
             prev = st;
             prev_rcpt = Some(r);
@@ -4030,9 +4040,14 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
         if methods::COINLOG {
             cl_commit(&cl_lists.0, &cl_lists.1, &st);
-            // HAZYNC_COINLOG_SAVE_EACH=1: the log at every height, so any receipt of the range can anchor a later run
-            // (tests; a mainnet log is ~77 GB, so not by default).
-            if h != hi && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() == Ok("1") { cl_save(&format!("{out}/state_{h}.coinlog")); }
+            // The log next to each receipt, so a run can resume after it (HAZYNC_RESUME) or be anchored on it. The last
+            // two are kept (a checkpoint copier takes the second newest receipt, which may still be complete while
+            // the newest is being written); HAZYNC_COINLOG_SAVE_EACH=1 keeps every one (tests). A mainnet-sized log
+            // needs a disk-backed store instead (COINLOG.md §8).
+            cl_save(&format!("{out}/state_{h}.coinlog"));
+            if h >= first + 2 && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() != Ok("1") {
+                let _ = std::fs::remove_file(format!("{out}/state_{}.coinlog", h - 2));
+            }
         }
         let dt = t0.elapsed().as_secs_f64();
         // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
@@ -4045,7 +4060,6 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         prev_rcpt = Some(r);
         handover_pending = false;
     }
-    if methods::COINLOG { cl_save(&format!("{out}/state_{hi}.coinlog")); }
     println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final receipt {out}/block_{hi}.rcpt", t_all.elapsed().as_secs_f64());
 }
 
@@ -10236,7 +10250,10 @@ fn cl_save(path: &str) {
     let mut b = Vec::with_capacity(8 + 32 * h.store.len() as usize);
     b.extend_from_slice(&h.store.len().to_le_bytes());
     for i in 0..h.store.len() { b.extend_from_slice(&h.store.leaf(i)); }
-    std::fs::write(path, b).unwrap_or_else(|e| panic!("{path}: {e}"));
+    // Atomic: a run killed mid-write must not leave a short file that a resume would then refuse.
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, b).unwrap_or_else(|e| panic!("{tmp}: {e}"));
+    std::fs::rename(&tmp, path).unwrap_or_else(|e| panic!("{path}: {e}"));
 }
 
 fn cl_load(path: &str) {
