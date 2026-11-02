@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256, Sha512_256};
 
 mod msm;
 mod zutxo;
+mod coinlog;
 
 risc0_zkvm::guest::entry!(main);
 
@@ -57,6 +58,7 @@ fn main() {
         4 => sethash_mode(&mut out),
         5 => utreexo_mode(&mut out),
         6 => zutxo_mode(&mut out),
+        7 => coinlog_mode(&mut out),
         _ => panic!("unknown mode {mode}"),
     }
     env::commit(&out.0);
@@ -458,5 +460,26 @@ fn zutxo_mode(out: &mut Out) {
     out.put("keys_sort_cycles", t_keys);
     out.put("tree_cycles", t_tree);
     out.put("node_hashes", unsafe { zutxo::HASHES });
+    out.put("witness_bytes", wit.len() as u64);
+}
+
+/// Mode 7: one block's update of the coin log (coinlog.rs): spends flip leaves in place, then appends.
+fn coinlog_mode(out: &mut Out) {
+    let (mut roots, n): (Vec<Option<[u8; 32]>>, u64) = env::read();
+    let spends: Vec<(u64, [u8; 32])> = env::read();
+    let appends: Vec<[u8; 32]> = env::read();
+    let wit: Vec<u8> = env::read();
+    let want: Vec<Option<[u8; 32]>> = env::read();
+    let t = env::cycle_count();
+    let mut r = coinlog::Rd { b: &wit, i: 0 };
+    let n2 = coinlog::apply_block(&mut roots, n, &spends, &appends, &mut r);
+    let t_all = env::cycle_count() - t;
+    assert!(r.i == wit.len(), "witness not consumed");
+    assert!(roots == want, "new roots differ from the host's");
+    assert!(n2 == n + appends.len() as u64);
+    out.put("spends", spends.len() as u64);
+    out.put("appends", appends.len() as u64);
+    out.put("log_cycles", t_all);
+    out.put("hashes", unsafe { coinlog::HASHES });
     out.put("witness_bytes", wit.len() as u64);
 }

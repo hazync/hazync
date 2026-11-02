@@ -22,6 +22,8 @@ use std::time::Instant;
 
 #[path = "../../methods/guest/src/zutxo.rs"]
 mod zutxo;
+#[path = "../../methods/guest/src/coinlog.rs"]
+mod coinlog;
 use zutxo::{Entry, Sum, H, ZERO};
 
 #[derive(Serialize, Clone)]
@@ -206,6 +208,8 @@ fn main() {
             println!("# std parent / ours parent = {:.1}x",
                 get(&out, "std_parent") as f64 / get(&out, "ours_parent") as f64);
         }
+        Some("coinlog-test") => coinlog_test(arg(2, "200").parse().unwrap()),
+        Some("coinlog") => coinlog_run(&arg(2, ""), &arg(3, ""), arg(4, "1.64").parse().unwrap(), arg(5, "1").parse().unwrap()),
         Some("zutxo-test") => zutxo_test(arg(2, "200").parse().unwrap()),
         Some("zutxo") => zutxo_run(&arg(2, ""), arg(3, "170000000").parse().unwrap(), arg(4, "1").parse().unwrap()),
         _ => eprintln!("usage: zbench-host ops|msm|batch|sethash|utreexo|zutxo-test <trials>|zutxo <keys file> <n coins> <seed>"),
@@ -366,4 +370,122 @@ fn zutxo_run(keys: &str, n: u64, seed: u64) {
     println!("# per touched coin: {:.0} cycles tree, {:.0} keys+sort; per node hash {:.0}",
         get(&out, "tree_cycles") as f64 / e.len() as f64, get(&out, "keys_sort_cycles") as f64 / e.len() as f64,
         get(&out, "tree_cycles") as f64 / host_hashes as f64);
+}
+
+// ---- Coin log prototype (methods/guest/src/coinlog.rs) -----------------------------------------------------------
+
+fn cl_tree(l: u32, start: u64, leaves: &[H]) -> H {
+    if l == 0 { return leaves[start as usize]; }
+    let mid = start + (1u64 << (l - 1));
+    coinlog::parent(l, &cl_tree(l - 1, start, leaves), &cl_tree(l - 1, mid, leaves))
+}
+
+/// Witness for `update`: the hash of each untouched subtree, from explicit leaves or (None) as opaque random values.
+fn cl_wit(l: u32, start: u64, e: &[(u64, H)], leaves: Option<&[H]>, seed: u64, w: &mut Vec<u8>) {
+    if e.is_empty() {
+        let h = match leaves { Some(lv) => cl_tree(l, start, lv), None => prf(b"clopaque", seed, start ^ ((l as u64) << 56)) };
+        w.extend_from_slice(&h);
+        return;
+    }
+    if l == 0 { return; }
+    let mid = start + (1u64 << (l - 1));
+    let m = e.partition_point(|x| x.0 < mid);
+    cl_wit(l - 1, start, &e[..m], leaves, seed, w);
+    cl_wit(l - 1, mid, &e[m..], leaves, seed, w);
+}
+
+/// Witness for a whole block, tree by tree, as apply_block reads it; and the old roots of touched trees (opaque mode).
+fn cl_block_wit(roots: &mut Vec<Option<H>>, spends: &[(u64, H)], leaves: Option<&[H]>, seed: u64) -> Vec<u8> {
+    let mut w = vec![];
+    let (mut start, mut k) = (0u64, 0usize);
+    for l in (0..roots.len()).rev() {
+        if roots[l].is_some() {
+            let end = start + (1u64 << l);
+            let m = k + spends[k..].partition_point(|x| x.0 < end);
+            if m > k {
+                let at = w.len();
+                cl_wit(l as u32, start, &spends[k..m], leaves, seed, &mut w);
+                if leaves.is_none() { // the opaque tree's old root is whatever this witness folds to
+                    let (o, _) = coinlog::update(l as u32, start, &spends[k..m], &mut coinlog::Rd { b: &w[at..], i: 0 });
+                    roots[l] = Some(o);
+                }
+            }
+            k = m;
+            start = end;
+        }
+    }
+    w
+}
+
+/// Batched spends + appends == the log rebuilt from scratch, on explicit random logs.
+fn coinlog_test(trials: u64) {
+    for t in 0..trials {
+        let m = 1 + (u16::from_le_bytes(prf(b"m", t, 0)[..2].try_into().unwrap()) as u64) % 3000;
+        let mut leaves: Vec<H> = (0..m).map(|i| prf(b"leaf", t, i)).collect();
+        for i in (0..m).filter(|i| i % 5 == 1) { leaves[i as usize] = coinlog::spent(&leaves[i as usize]); }
+        let mut roots: Vec<Option<H>> = vec![];
+        coinlog::apply_block(&mut roots, 0, &[], &leaves, &mut coinlog::Rd { b: &[], i: 0 });
+        let spends: Vec<(u64, H)> = (0..m).filter(|i| i % 5 != 1 && prf(b"sp", t, *i)[0] < 40).map(|i| (i, leaves[i as usize])).collect();
+        let appends: Vec<H> = (0..(prf(b"na", t, 0)[0] as u64)).map(|i| prf(b"app", t, i)).collect();
+        let w = cl_block_wit(&mut roots.clone(), &spends, Some(&leaves), t);
+        let mut got = roots.clone();
+        let n2 = coinlog::apply_block(&mut got, m, &spends, &appends, &mut coinlog::Rd { b: &w, i: 0 });
+        let mut after = leaves.clone();
+        for (p, c) in &spends { after[*p as usize] = coinlog::spent(c); }
+        after.extend_from_slice(&appends);
+        let mut want: Vec<Option<H>> = vec![];
+        coinlog::apply_block(&mut want, 0, &[], &after, &mut coinlog::Rd { b: &[], i: 0 });
+        assert_eq!(got, want, "trial {t}: roots after the block");
+        assert_eq!(n2, after.len() as u64);
+        // and the forest really is the perfect trees over the leaves
+        let (mut s0, mut lv) = (0u64, (0..want.len()).rev());
+        while let Some(l) = lv.next() { if let Some(r) = want[l] { assert_eq!(r, cl_tree(l as u32, s0, &after)); s0 += 1 << l; } }
+    }
+    println!("COINLOG_TEST_OK {trials} trials: batched spends + appends == the log rebuilt from scratch");
+}
+
+/// One block on the coin log, measured in the guest. `blockfile`: line 1 height, line 2 appends, line 3 the creation
+/// heights of the coins it spends (coins from earlier blocks). Log size by height = k x cumulative transactions
+/// (`txcounts`, from getchaintxstats); a spent coin sits at a random rank inside its creation block's appends.
+fn coinlog_run(blockfile: &str, txcounts: &str, k: f64, seed: u64) {
+    let tc: Vec<(f64, f64)> = std::fs::read_to_string(txcounts).unwrap().lines()
+        .map(|l| { let v: Vec<f64> = l.split_whitespace().map(|x| x.parse().unwrap()).collect(); (v[0], v[1]) }).collect();
+    let cum = |h: f64| -> f64 {
+        let i = tc.iter().position(|x| x.0 >= h).unwrap_or(tc.len() - 1).max(1);
+        let ((h0, c0), (h1, c1)) = (tc[i - 1], tc[i]);
+        k * (c0 + (c1 - c0) * (h - h0) / (h1 - h0))
+    };
+    let f = std::fs::read_to_string(blockfile).unwrap();
+    let mut ls = f.lines();
+    let h: f64 = ls.next().unwrap().trim().parse().unwrap();
+    let n_app: u64 = ls.next().unwrap().trim().parse().unwrap();
+    let coin_h: Vec<f64> = ls.next().unwrap_or("").split_whitespace().map(|x| x.parse().unwrap()).collect();
+    let n = cum(h - 1.0) as u64;
+    let mut pos: Vec<u64> = coin_h.iter().enumerate().map(|(i, &c)| {
+        let (a, b) = (cum(c - 1.0), cum(c).max(cum(c - 1.0) + 1.0));
+        let u = u64::from_le_bytes(prf(b"rank", seed, i as u64)[..8].try_into().unwrap()) as f64 / u64::MAX as f64;
+        ((a + u * (b - a)) as u64).min(n - 1)
+    }).collect();
+    pos.sort_unstable();
+    pos.dedup();
+    let spends: Vec<(u64, H)> = pos.iter().map(|p| (*p, prf(b"coin", seed, *p))).collect();
+    let appends: Vec<H> = (0..n_app).map(|i| prf(b"new", seed, i)).collect();
+    let mut roots: Vec<Option<H>> = (0..64).map(|l| if (n >> l) & 1 == 1 { Some(prf(b"root", seed, l)) } else { None }).collect();
+    while roots.last() == Some(&None) { roots.pop(); }
+    let w = cl_block_wit(&mut roots, &spends, None, seed);
+    let mut want = roots.clone();
+    unsafe { coinlog::HASHES = 0 };
+    coinlog::apply_block(&mut want, n, &spends, &appends, &mut coinlog::Rd { b: &w, i: 0 });
+    let host_hashes = unsafe { coinlog::HASHES };
+    let ages: Vec<f64> = coin_h.iter().map(|c| h - c).collect();
+    let med = { let mut a = ages.clone(); a.sort_by(|x, y| x.partial_cmp(y).unwrap()); a.get(a.len() / 2).copied().unwrap_or(0.0) };
+    println!("# coinlog: block {h}, log size {n} (k = {k}), {} spends ({} dup positions dropped), {n_app} appends, median spend age {med}, witness {} B, host hashes {host_hashes}",
+        spends.len(), coin_h.len() - spends.len(), w.len());
+    let env = ExecutorEnv::builder().write(&7u32).unwrap().write(&(roots, n)).unwrap().write(&spends).unwrap()
+        .write(&appends).unwrap().write(&w).unwrap().write(&want).unwrap().build().unwrap();
+    let out = run(env);
+    assert_eq!(get(&out, "hashes"), host_hashes, "guest and host disagree on the hash count");
+    println!("# per spend+append: {:.0} cycles; per hash {:.0}; hashes per spend {:.1}",
+        get(&out, "log_cycles") as f64 / (spends.len() as u64 + n_app) as f64,
+        get(&out, "log_cycles") as f64 / host_hashes as f64, (host_hashes - n_app) as f64 / spends.len().max(1) as f64);
 }

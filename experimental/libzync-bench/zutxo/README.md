@@ -37,3 +37,38 @@ at H); the old Utreexo forest path ~87 M (cheap appends; roots depend on history
 **Not yet tried:** traversal overhead (~950 cycles per node is more than one accelerated compression), raw
 txid ‖ vout keys (no key hash: one-sided splits cost nothing, so a transaction's outputs need no extra nodes), input
 reading by slice instead of serde.
+
+---
+
+# Coin log prototype (2026-11-02)
+
+Code: `methods/guest/src/coinlog.rs` (shared), guest mode 7, host `zbench-host coinlog-test <trials>` and
+`zbench-host coinlog <block file> cost/txcounts.txt <k> <seed>`; `coinlog_keys.py` extracts a block's appends and the
+creation heights of the coins it spends.
+
+**Structure.** Every coin that outlives its block is APPENDED, in birth order, to a forest of perfect Merkle trees
+(utreexo-style stump, largest/oldest first). A spend flips the coin's leaf to spent(c) in place and re-hashes its path.
+Nothing moves, nothing is deleted. Leaf flip and parents are one SHA-256 compression each (per-level IVs).
+
+**Correctness:** `coinlog-test 300`: batched spends + appends == the log rebuilt from scratch, 300/300, logs of
+1..3,000 leaves with pre-spent leaves; every root also checked against the perfect tree over the leaves.
+
+**Model.** Log size at height h = 1.64 × cumulative transactions (`getchaintxstats`; 1.64 = the measured recent appends
+per transaction, 7,670 per block over ~4,670 transactions). A spent coin sits at a random rank inside its creation
+block's appends (spends of one creation block that land on the same position are dropped: 4–160 per block, so slightly
+optimistic; real coins from one transaction are adjacent, which shares more, so slightly pessimistic). Ages are real,
+from the block files' `coin_height`. Witness read excluded (0.6–2.0 MB per block).
+
+| block | log size | spends / appends | median spend age | hashes per spend | log cycles M | key tree M | block today M | log adds |
+|---|---|---|---|---|---|---|---|---|
+| 970,000 | 2.38 B | 2,129 / 787 | 109 | 21.7 | 24.7 | 98.3 | 390.6 | +6.3% |
+| 962,000 | 2.32 B | 2,533 / 1,782 | 65 | 22.8 | 31.4 | 141.6 | ~427 | +7.3% |
+| 900,000 | 1.97 B | 3,645 / 2,571 | 79 | 17.1 | 34.0 | 199.7 | 280.4 | +12.1% |
+| 850,000 | 1.71 B | 4,943 / 8,542 | 70 | 20.6 | 58.6 | 409.7 | 430.4 | +13.6% |
+| 800,000 | 1.44 B | 3,361 / 10,692 | 6 | 16.1 | 34.8 | 428.2 | 423.3 | +8.2% |
+| 750,000 | 1.24 B | 5,984 / 7,916 | 25 | 14.7 | 50.4 | 423.8 | 412.5 | +12.2% |
+| 700,000 | 1.10 B | 6,130 / 5,977 | 42 | 16.0 | 54.6 | 371.2 | 423.4 | +12.9% |
+| 650,000 | 0.94 B | 8,695 / 2,877 | 275 | 17.5 | 80.9 | 355.3 | 489.9 | +16.5% |
+
+525 cycles per hash (vs 951 in the key-tree prototype: no tags, no per-node allocation). On 962,000: coin log 31.4 M,
+old Utreexo forest path ~87 M, SwiftSync ECMH 10.0 M (sound only at H), key tree 141.6 M.
