@@ -22,7 +22,7 @@ Every reject string below came from reading the Core source, not from memory. Ev
 | N-A | 1 | The rule does not apply on mainnet or signet |
 | NOT FOUND | 0 | No enforcing code could be located |
 
-63 rows. 42 name a rig case, 21 are "read only". Counted for an image that checks scripts. Rows marked † are true only once
+63 rows. 45 name a rig case, 18 are "read only". Counted for an image that checks scripts. Rows marked † are true only once
 the proof is closed at H (below).
 
 ### Every row that is not SAME
@@ -58,7 +58,8 @@ decrement the BIP30 tree.
 
 `experimental/libzync-bench/core_rules/rig.py` runs real Bitcoin Core and the regtest guest on the same crafted blocks.
 Bitcoin Core 28.0, the release the guest compiles (`rig_v28.out`).
-84 cases: 83 agree, 1 (`missing_coin`, a coin that does not exist) is deferred to H by design.
+95 cases: 94 agree, 1 (`missing_coin`, a coin that does not exist) is deferred to H by design (regtest guest `r15reg`,
+libzync `3d9526f`, 2026-11-02). Controls with no row: `valid_empty`, `valid_spend`.
 
 The "Tested" columns name the cases that exercise a row, controls included. A case counts only if Core's answer in
 `rig_v28.out` is that row's reject reason. Four cases named for a rule do not meet that, so they are not counted for it:
@@ -72,14 +73,15 @@ The "Tested" columns name the cases that exercise a row, controls included. A ca
 
 Limits of the column:
 
-- The check is one-sided. `rig_v28.out` records Core's reason, but for the guest only that it refused (`bv=false`). A guest
-  refusal for some other reason would still print AGREE.
+- The check is two-sided. A case is AGREE only if the guest gives Core's verdict AND Core's reason: Core's own string where
+  the rule is Core's text (`core-reject: <reason>` from the guest), the guest's failing check where the rule is ours
+  (`OURS` in `rig.py`). A refusal for another reason prints REASON.
 - Regtest differs from mainnet in the branches it reaches. It never retargets, so `bad_bits` tests only the value inside an
   epoch. Its activation heights are 0 or 1 except BIP34 at 110, and every case is at height 233, so no case sits on an activation boundary.
 - Core 28.0 here reports every script failure as `block-validation-failed`, so `mandatory-script-verify-flag-failed` stays
   read only.
 - The two script-flag exception blocks, 170,060 and 692,261, are not rig cases. They were run on mainnet with a control: the
-  host fails the exception's chunk when the block hash is changed. No output file for that run is in the repo.
+  host fails the exception's chunk when the block hash is changed (`core_rules/exception_blocks.out`).
 
 ## How to read the "where enforced" column
 
@@ -139,7 +141,7 @@ and aggregate path. The older transcriptions still in `verify_input.cpp` and `ma
 | reject reason | rule | where enforced in the guest | status | Tested |
 |---|---|---|---|---|
 | `bad-txnmrklroot` | The header's merkle root equals the root over the txids. `validation.cpp:3925` | **Core** `ComputeMerkleRoot` (`consensus/merkle.cpp:45`, hash primitive patched) through glue `merkle_root`, `verify_input.cpp:711`; compared `agg_lite.rs:387`. The list is the coinbase txid, then each transaction's txid in chunk order (`agg_lite.rs:234`, `:275`) | SAME | `bad_merkle` |
-| `bad-txns-duplicate` | No mutation of the tree (CVE-2012-2459). `validation.cpp:3935` | **Core** `mutated` flag, `agg_lite.rs:387` | SAME. The guest also refuses any two equal txids (`agg_lite.rs:402-406`, `:415`). That rejects nothing new: Core refuses them as a double spend, and a transaction with no inputs fails `bad-txns-vin-empty` | read only |
+| `bad-txns-duplicate` | No mutation of the tree (CVE-2012-2459). `validation.cpp:3935` | **Core** `mutated` flag, `agg_lite.rs:387` | SAME. The guest also refuses any two equal txids (`agg_lite.rs:402-406`, `:415`). That rejects nothing new: Core refuses them as a double spend, and a transaction with no inputs fails `bad-txns-vin-empty` | read only, `txns_duplicate` |
 | `bad-blk-length` | At least one transaction; transaction count × 4 and stripped size × 4 ≤ 4,000,000. `validation.cpp:4028-4029` | No check of its own. **Core lifted** weight limit, as `bad-blk-weight`. The coinbase is always present | SAME (see above). Weight ≥ 4 × stripped size and each transaction is at least 60 bytes, so this holds whenever weight is computed without wrapping | `oversize_weight` |
 | `bad-cb-missing` | The first transaction is a coinbase. `validation.cpp:4033` | **Glue** `is_coinbase_tx` (`verify_input.cpp:760`, Core's `IsCoinBase`), `agg_lite.rs:444-445`. Its txid is the first merkle leaf (`:234`) | SAME | read only |
 | `bad-cb-multiple` | No other transaction is a coinbase. `validation.cpp:4036` | **Rust** `agg_lite.rs:104`, with glue `is_coinbase_tx`, on every run of every transaction | SAME | `cb_multiple`, `tx_null_prevout` |
@@ -167,7 +169,7 @@ through glue `check_tx` (`verify_input.cpp:582`, from `agg_lite.rs:441`).
 | `bad-txns-txouttotal-toolarge` | Output total stays in range | **Core** `tx_check.cpp:33` | SAME | `tx_total_huge` |
 | `bad-txns-inputs-duplicate` | No repeated input (CVE-2018-17144) | **Core** `tx_check.cpp:44` | SAME | `tx_dup_inputs` |
 | `bad-cb-length` | Coinbase scriptSig is 2 to 100 bytes | **Core** `tx_check.cpp:50` | SAME | `cb_script_short`, `cb_script_long` |
-| `bad-txns-prevout-null` | No null prevout outside a coinbase | **Core** `tx_check.cpp:56` | SAME | read only |
+| `bad-txns-prevout-null` | No null prevout outside a coinbase | **Core** `tx_check.cpp:56` | SAME | `prevout_null` |
 
 ## Coins and block totals: `ConnectBlock`, `CheckTxInputs`
 
@@ -233,14 +235,14 @@ libzync image. Two Rust gates remain: `BIP34_HEIGHT` (`main.rs:332`, used at `ag
 
 | rule | Core | mainnet | signet | where enforced in the guest | status | Tested |
 |---|---|---|---|---|---|---|
-| BIP16 P2SH | Flag always on, off for one block | always; none at the 170,060 exception | always | **Core lifted** `GetBlockScriptFlags` | SAME | `sigops_p2sh_over`, `sigops_p2sh_under`, through the sigop count; no case fails a redeem script. Exception: mainnet control |
+| BIP16 P2SH | Flag always on, off for one block | always; none at the 170,060 exception | always | **Core lifted** `GetBlockScriptFlags` | SAME | `sigops_p2sh_over`, `sigops_p2sh_under`, through the sigop count; `p2sh_redeem_fails` (redeem script fails), `p2sh_ok`. Exception: mainnet control |
 | BIP141/143 script rules | Flag always on, off for one block | always; none at 170,060 | always | **Core lifted** `GetBlockScriptFlags` | SAME | `valid_p2wsh`, `sig_p2wpkh`, `sig_p2wpkh_bad`. Exception: mainnet control |
 | BIP341/342 Taproot | Flag always on, off for two blocks | always; none at 170,060 and 692,261 | always | **Core lifted** `GetBlockScriptFlags` | SAME. `min_activation_height` 709,632 is not read by `GetBlockScriptFlags` | `taproot_key`, `taproot_key_bad`, `taproot_script`, `taproot_script_bad_sig`, `taproot_tweak_parity`. Exceptions: mainnet control |
 | BIP34 | `BIP34Height` | 227,931 | 1 | **Core lifted** `ContextualCheckBlock`, `ContextualCheckBlockHeader` | SAME | `cb_wrong_height` |
 | BIP66 DERSIG | `BIP66Height` | 363,725 | 1 | **Core lifted** `GetBlockScriptFlags`, `ContextualCheckBlockHeader` | SAME | `sig_not_der` |
-| BIP65 CLTV | `BIP65Height` | 388,381 | 1 | **Core lifted** `GetBlockScriptFlags`, `ContextualCheckBlockHeader` | SAME | `bad_version`, the version gate only; `OP_CHECKLOCKTIMEVERIFY` itself is read only |
-| BIP112 CSV | `CSVHeight` | 419,328 | 1 | **Core lifted** `GetBlockScriptFlags` | SAME | read only |
-| BIP68 sequence locks | `CSVHeight` | 419,328 | 1 | **Core** `SequenceLocks`; **Rust** height gate `agg_lite.rs:126` | SAME | `bip68_*`, `split_tx_bad` |
+| BIP65 CLTV | `BIP65Height` | 388,381 | 1 | **Core lifted** `GetBlockScriptFlags`, `ContextualCheckBlockHeader` | SAME | `bad_version`, the version gate only; `cltv_future` (`OP_CHECKLOCKTIMEVERIFY` unmet), `cltv_met` |
+| BIP112 CSV | `CSVHeight` | 419,328 | 1 | **Core lifted** `GetBlockScriptFlags` | SAME | `csv_op_met`. `csv_op_unmet` is refused first by BIP68 (`bad-txns-nonfinal`), so a failing `OP_CHECKSEQUENCEVERIFY` is read only |
+| BIP68 sequence locks | `CSVHeight` | 419,328 | 1 | **Core** `SequenceLocks`; **Rust** height gate `agg_lite.rs:126` | SAME | `bip68_*`, `split_tx_bad`, `csv_op_unmet` |
 | BIP113 MTP cutoff | `CSVHeight` | 419,328 | 1 | **Rust** cutoff `agg_lite.rs:121` for non-coinbase transactions; **Core lifted** `ContextualCheckBlock` for the coinbase | SAME | `locktime_time_mtp`, `locktime_time_past` |
 | BIP141 commitment | `SegwitHeight` | 481,824 | 1 | **Core lifted** `ContextualCheckBlock`, `CheckWitnessMalleation` | SAME | `witness_mismatch`, `nonce_too_big_witness`, `witness_no_commit` |
 | BIP147 NULLDUMMY | `SegwitHeight` | 481,824 | 1 | **Core lifted** `GetBlockScriptFlags` | SAME | `multisig_dummy` |
