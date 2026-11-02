@@ -1,14 +1,14 @@
 #!/bin/bash
 # Round 19: ChainState gains max_time + profile. Mainnet + signet checks on the laptop, execute mode.
-R=~/libzync-gpu/r18; O=${REG_OUT:-$R/r12/reg}; rm -rf $O; mkdir -p $O/s200 $O/sig; H=${REG_HOST:-$R/host_r12m}; HS=${REG_HOST_SIG:-$R/host_r12sig}
-S=~/libzync-gpu/ssweep; B=~/dev/hazync-libzync/prover/block_962000.json; J=~/libzync-gpu/signet/json
-REF=~/dev/hazync-libzync/scripts/libzync/utreexo_ref.py
+REPO=$(cd "$(dirname "$0")/../../.." && pwd); R=~/libzync-gpu/r18; O=${REG_OUT:-$R/r12/reg}; rm -rf $O; mkdir -p $O/s200 $O/sig; H=${REG_HOST:-$R/host_r12m}; HS=${REG_HOST_SIG:-$R/host_r12sig}
+S=~/libzync-gpu/ssweep; B=$REPO/prover/block_962000.json; J=~/libzync-gpu/signet/json
+REF=$REPO/scripts/libzync/utreexo_ref.py
 export HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=4 HAZYNC_HINT_THREADS=2
 echo "== 1. block 962,000 valid"
 HAZYNC_BLOCK=$B $H libzync-hints $O/b962.lzb 2>&1 | grep -a 'batch:\|ecmh:'
 HAZYNC_BLOCK=$B HAZYNC_LZ_HINTS=$O/b962.lzb $H agg-exec-fake 2>&1 | grep -a 'validation cycles\|panicked at\|INVALID' | grep -v collect; echo "rc=${PIPESTATUS[0]}"
-echo "== 2. negative: is_base = 2 (must be refused)"
-HAZYNC_BLOCK=$B HAZYNC_LZ_HINTS=$O/b962.lzb HAZYNC_TEST_ISBASE2=1 $H agg-exec-fake 2>&1 | grep -a -o 'is_base must be 0 or 1, got 2' | head -1 || echo NOT_REFUSED
+echo "== 2. negative: is_base = 2 on an image with no predecessor pinned (must be refused, HANDOVER.md §4)"
+HAZYNC_BLOCK=$B HAZYNC_LZ_HINTS=$O/b962.lzb HAZYNC_TEST_ISBASE2=1 $H agg-exec-fake 2>&1 | grep -aq 'handover: this image has no predecessor' && echo REFUSED || echo NOT_REFUSED
 echo "== 3. mainnet sweep 1..200 (saved), reference forest, max_time/profile; then a flip"
 export HAZYNC_SS_HINTS=~/libzync-gpu/r15/h200.hints
 HAZYNC_SWEEP_SAVE=$O/s200 $H swiftsync-sweep 200 $S 2>&1 | grep -a 'ss_set=\|SWEEP\|panicked'
@@ -22,7 +22,7 @@ PY
 HAZYNC_SS_FLIP=9:0 $H swiftsync-sweep 200 $S 2>&1 | grep -a 'SWEEP'
 unset HAZYNC_SS_HINTS
 echo "== 4. signet sweep 1..2600 (saved): reference forest, profile = libzync|signet"
-HAZYNC_SS_HINTS=~/dev/hazync-libzync/experimental/libzync-bench/signet/signet2600.hints HAZYNC_SWEEP_SAVE=$O/sig \
+HAZYNC_SS_HINTS=$REPO/experimental/libzync-bench/signet/signet2600.hints HAZYNC_SWEEP_SAVE=$O/sig \
   $HS swiftsync-sweep 2600 $J 2>&1 | grep -a 'ss_set=\|forest:\|SWEEP\|panicked'
 python3 $REF $J 2600 $O/sig/state_2600.json | tail -1
 python3 -c "import json;s=json.load(open('$O/sig/state_2600.json'));print(f\"  profile 0x{s['profile']:x} ->\", 'OK' if s['profile']==5 else 'WRONG', ' max_time', s['max_time'])"

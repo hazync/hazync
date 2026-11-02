@@ -13,6 +13,6 @@ def go(name,B,chunks,baseline=None):
     c=sum(map(int,re.findall(r'executed: (\d+) cycles',x))); a=re.search(r'block validation cycles\s+(\d+)',x)
     bad=re.findall(r'block INVALID[^\n]*|panicked[^\n]*',x)[:2]
     print(name,'rc',t.returncode,'chunks',f'{c:,}','aggregate',a and f'{int(a.group(1)):,}','whole',a and f'{c+int(a.group(1)):,}',bad,flush=True)
-go('b962000',os.path.expanduser('~/dev/hazync-libzync/prover/block_962000.json'),16,R+'/r9/main.chunks.log')
+go('b962000',os.path.join(os.path.dirname(os.path.abspath(__file__)),'../../../prover/block_962000.json'),16,R+'/r9/main.chunks.log')
 go('b170060',R+'/exc/block_170060.json',2)
 go('b692261',R+'/exc/block_692261.json',16)
