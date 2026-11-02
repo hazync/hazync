@@ -3232,7 +3232,7 @@ fn write_aggregate_env(
     anchor: &ChainState,
     w: &BlockWitness,
 ) {
-    write_aggregate_env_ex(b, receipts, anchor, w, true);
+    write_aggregate_env_ex(b, receipts, anchor, w, 1);
 }
 
 /// `step` is the guest's is_base. 1: a base step on `anchor`. 0: `anchor` is the PREVIOUS block's committed chain
