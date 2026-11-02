@@ -113,6 +113,10 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 // ChainState is expected, if its bytes happened to decode as one. Committing a distinct constant first
 // and asserting it on every decode makes cross-mode confusion impossible.
 const KIND_CHAIN: u32 = 0xC4A1_0002;
+/// ChainState layout version (docs/libzync/HANDOVER.md §2). Fields after `version` are only ever APPENDED, never
+/// reordered or removed, so a reader (a zyncAPP, a verifier) built for version n decodes the prefix it knows from any
+/// later version: risc0's serde reads fields in order and ignores trailing words.
+const CHAIN_STATE_VERSION: u32 = 1;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
 
@@ -267,6 +271,11 @@ extern "C" {
     fn tx_out_leaves(
         tx: *const u8, tx_len: u32, height: u32, is_coinbase: u32, block_time: u32,
         out: *mut u8, out_txid: *mut u8,
+    ) -> u32;
+    // tx_out_leaves, and each leaf's output index and amount (verify_input.cpp).
+    fn tx_out_leaves_mv(
+        tx: *const u8, tx_len: u32, height: u32, is_coinbase: u32, block_time: u32,
+        out: *mut u8, out_txid: *mut u8, out_vout: *mut u32, out_value: *mut u64,
     ) -> u32;
     // Recompute a tx's BIP141 wtxid (into out_wtxid) + return whether it carries witness data (SEC-1).
     fn tx_wtxid_info(tx: *const u8, tx_len: u32, out_wtxid: *mut u8) -> u32;
@@ -563,6 +572,7 @@ struct BlockResult {
     root_next_roots: Vec<Option<[u8; 32]>>,
     root_next_leaves: u64,
     ss_hints: [u8; 32],       // libzync design B: the running hint-bit hash after this block
+    survivor_value: u64,      // libzync design B: satoshis appended to the coin forest by this block
 }
 
 fn dsha256(data: &[u8]) -> [u8; 32] {
@@ -1344,6 +1354,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         root_next_roots: stump.normalized(),
         root_next_leaves: stump.num_leaves,
         ss_hints: [0u8; 32], // design B lives on the agg-lite path only
+        survivor_value: 0,
     }
 }
 
@@ -1374,9 +1385,13 @@ fn block_proof() {
 #[derive(Serialize, Deserialize, Clone)]
 struct ChainState {
     kind: u32,          // H8: == KIND_CHAIN (domain tag; asserted by every consumer)
+    version: u32,       // == CHAIN_STATE_VERSION: which fields exist (see the const)
     tip_hash: [u8; 32],
     utxo_roots: Vec<Option<[u8; 32]>>,
     utxo_leaves: u64,
+    // libzync: the satoshis held by the coin forest's leaves (design B: the coins unspent at H, so at H this is the
+    // UTXO set's total amount, Core's `gettxoutsetinfo` total_amount). Survivors' amounts only; never decreases.
+    utxo_value: u64,
     cum_work: [u8; 32], // cumulative chainwork (256-bit accumulator)
     height: u32,
     prev_nbits: u32,    // difficulty of the tip block (for the retarget rule)
@@ -1533,6 +1548,7 @@ fn chain_step() {
         .collect();
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev chain state");
     assert!(prev.kind == KIND_CHAIN, "chain step: prev journal is not a ChainState (domain tag)"); // H8
+    assert!(prev.version == CHAIN_STATE_VERSION, "chain step: ChainState version {}", prev.version);
     // S1: chain the image-id constraint down — the prev proof must have recursed against the SAME id.
     // With the verifier asserting the FINAL self_id == METHOD_ID, this forces every level to METHOD_ID.
     if is_base == 0 {
@@ -1598,9 +1614,11 @@ fn chain_step() {
 
     env::commit(&ChainState {
         kind: KIND_CHAIN,
+        version: CHAIN_STATE_VERSION,
         tip_hash: r.tip_hash,
         utxo_roots: r.root_next_roots,
         utxo_leaves: r.root_next_leaves,
+        utxo_value: prev.utxo_value.saturating_add(r.survivor_value),
         cum_work: cum,
         height,
         prev_nbits: r.nbits,
@@ -2123,6 +2141,7 @@ fn aggregate() {
     // ⛔ A new image that changes ChainState must decode the PREDECESSOR's format here when is_base == 2.
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev");
     assert!(prev.kind == KIND_CHAIN, "aggregate: prev journal is not a ChainState (domain tag)"); // H8
+    assert!(prev.version == CHAIN_STATE_VERSION, "aggregate: ChainState version {}", prev.version);
     // S1: chunk verification above AND the prev-chain verification both used `self_id`; committing it
     // + asserting prev.self_id==self_id (below) + the verifier checking final==METHOD_ID forces every
     // recursion (chunks and chain) to the real guest.
@@ -2215,8 +2234,9 @@ fn aggregate() {
     let (block_roots, block_leaves) = (prev.block_roots.clone(), prev.block_leaves);
     let lineage = if pred.is_some() { lineage_of(handover_pin::LINEAGE) } else { prev.lineage };
     env::commit(&ChainState {
-        kind: KIND_CHAIN,
+        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
+        utxo_value: prev.utxo_value.saturating_add(r.survivor_value),
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
         ss_set, ss_acc, ss_hints, smt_root,
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),

@@ -25,6 +25,19 @@ Added to `ChainState` after `profile`, in this order:
 | `block_leaves` | number of leaves; always `height + 1` |
 | `lineage` | 32 zero bytes for a chain that has been one image since genesis; otherwise the digest of §5 |
 
+### Layout version and appending fields (2026-11-02)
+
+`ChainState` also gained `version` (right after `kind`, now `1`) and `utxo_value` (after `utxo_leaves`: the
+satoshis held by the coin forest). From the image freeze on, the layout only grows at the end:
+
+- A field is never reordered, removed or changed in type. A new one is appended, and `version` goes up by one.
+- risc0's serde reads fields in order and ignores trailing words, so a reader built for version n (a verifier, a
+  zyncAPP) decodes the prefix it knows from any later journal. A zyncAPP therefore keeps working across a handover
+  that adds fields, and a handover is the window in which a zyncAPP that needs a new core fact gets it.
+- The reverse does not hold: an image of version n+1 cannot decode a version-n journal as its own struct (the new
+  fields are missing). At a handover that adds fields, step 2 below decodes the predecessor with the version-n
+  layout and fills the new fields from it explicitly.
+
 ## 3. Block forest
 
 An append-only Utreexo forest with one leaf per block, genesis first, so leaf `i` is the block at height `i`.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_utxo_snapshot.py <block json dir> <H> <state.json> -- end-to-end test of utxo_snapshot_check.py without a
 node: writes the UTXO set at H as a Core v28 `dumptxoutset` file (encoder from Core's compressor.cpp), a stub
-`bitcoin-cli` that answers getblockhash / getblockheader / getblock from the block files, runs the checker, and
+`bitcoin-cli` that answers only getblockhash / getblockheader (headers, no block data) from the block files, runs the checker, and
 expects UTXO_SNAPSHOT_MATCH against the guest's committed state. Then flips one coin's value and expects a mismatch.
 """
 import json, os, struct, subprocess, sys, tempfile
@@ -87,7 +87,7 @@ c = json.load(open("{tmp}/chain.json"))
 cmd, a = sys.argv[1], sys.argv[2]
 if cmd == "getblockhash": print(c["by_height"][a])
 elif cmd == "getblockheader": print(json.dumps({{k: v for k, v in c["blocks"][a].items() if k != "tx"}}))
-elif cmd == "getblock": print(json.dumps({{"tx": c["blocks"][a]["tx"]}}))
+else: sys.exit(f"stub node: {{cmd}} not served (the checker must need headers only)")
 """)
 os.chmod(f"{tmp}/cli", 0o755)
 

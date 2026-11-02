@@ -122,8 +122,10 @@ In field order (the journal encoding is in §5 step 3):
 | field | meaning |
 |---|---|
 | `kind` | `0xC4A10002` (domain tag) |
+| `version` | `1`, the layout. Fields are only ever appended after it, never reordered or removed, so a reader of version n decodes the prefix it knows from any later version (HANDOVER.md §2) |
 | `tip_hash` | the chain proven: its last block's hash, internal byte order |
-| `utxo_roots`, `utxo_leaves` | Utreexo forest of the coins marked unspent-at-H, in creation order |
+| `utxo_roots`, `utxo_leaves` | Utreexo forest of the coins marked unspent-at-H, by height, each block's sorted by (txid, vout) (UTREEXO_FORMAT.md §4) |
+| `utxo_value` | satoshis held by those coins: at H, the UTXO set's total amount (Core's `gettxoutsetinfo` `total_amount`) |
 | `cum_work`, `height` | cumulative work (32 bytes LE) and height of the tip |
 | `prev_nbits`, `prev_time`, `epoch_start`, `recent_times` | difficulty and time context, so the chain can be extended |
 | `anchor_id` | double-SHA-256 of the state the chain started from (genesis for a full proof) |
@@ -196,13 +198,13 @@ Given a receipt R, the hints file F and the network:
    current images (round 8, scripts checked, built by `reproduce/libzync.Dockerfile`): mainnet `9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55`, signet `067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36`,
    pinned in `reproduce/LIBZYNC_IDS`. ⚠ These round-8 images predate the handover format (steps 3, 12, 13 and
    HANDOVER.md); their journals do not decode as today's `ChainState`. The ids move at the image freeze.
-2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002` and `J.self_id == M`. M is the **newest**
+2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002`, `J.version == 1` and `J.self_id == M`. M is the **newest**
    image: after a handover the receipt verifies against the image that continued the chain, never an earlier one.
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
    nothing about history.
-   - The genesis ChainState, in field order: `kind = 0xC4A10002`; `tip_hash` = the genesis hash (internal byte
-     order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0`; `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
+   - The genesis ChainState, in field order: `kind = 0xC4A10002`; `version = 1`; `tip_hash` = the genesis hash (internal byte
+     order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0`; `utxo_value = 0` (u64); `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
      little-endian; `height = 0`; `prev_nbits` = genesis nBits; `prev_time = epoch_start` = genesis time;
      `recent_times = [genesis time]`; `anchor_id` = 32 zero bytes; `self_id` = 32 zero bytes (eight zero words: the
      genesis journal, and its digest, are the same for every image, so a chain keeps its anchor across a handover);
@@ -216,8 +218,8 @@ Given a receipt R, the hints file F and the network:
      its elements, and an `Option` is a 0/1 word followed by the value when present.
    - `host libzync-verify` computes this itself. `scripts/libzync/genesis_anchor_id.py` computes it from this text
      alone. Test vectors, one per network for every image: mainnet
-     `1066e814035cc8a1ac2bf6760095b3addb08cad817b6f164aeb444e623337c9a`, signet
-     `f6a784992a04be9da9f992e89385abe4d6b2f44cb87ad6354af1e01d43dffa36` (`swiftsync-verify` unit tests pin both).
+     `b768af638616bc97c44acaf29387a2a538425f9d726c5972f5da0a909642db03`, signet
+     `c0055bc30ceecf883406e2625fe901895575bedfeb48834bea70458e2cf0b320` (`swiftsync-verify` unit tests pin both).
      Before the handover format, `self_id` was M and each image had its own anchor; the round-8 vectors
      `5b2020ae…` and `636271d3…` are that old format.
 4. `J.height == F.stop_height`.
@@ -287,12 +289,13 @@ fails for this demonstration proof, because it starts at 2,500 and not at genesi
    - ⚠ **This is Hazync's own Utreexo variant**, not the utreexod/Floresta format:
      - leaf = SHA-256(0x00 ‖ txid ‖ vout ‖ value ‖ len(script) ‖ script ‖ height ‖ coinbase flag ‖ creation MTP);
      - parent = SHA-256(0x01 ‖ L ‖ R);
-     - leaves in creation order.
+     - leaves by height, each block's sorted by (txid, vout), Core's coin-key order.
    - The exact encoding (integer widths, endianness, which outputs, order, roots normalisation) is specified in
      [`UTREEXO_FORMAT.md`](UTREEXO_FORMAT.md), with a test vector and an independent Python implementation
      (`scripts/libzync/utreexo_ref.py`) that the guest's output is checked against.
-   - An existing Utreexo node cannot use these roots as they are. The leaves commit each coin's creation-time MTP, and the forest is in creation order, so such a
-   snapshot must carry both. A plain `dumptxoutset` does not.
+   - A plain Core `dumptxoutset` is enough to check against these roots: it carries each coin's height, which with
+   (txid, vout) gives the order. The leaves also commit each coin's creation-time MTP, which comes from headers.
+   An existing Utreexo node cannot use these roots as they are.
    - **Compatibility is not a format change.** Utreexo roots depend on the add/delete history (a deletion
      moves the sibling up), so utreexod's roots at H are a function of every spend since genesis. Ours are
      an append-only forest of the coins that survive to H. Matching utreexod means proving every
@@ -383,7 +386,7 @@ Remaining levers:
 | Batch ECDSA: how are x(R) ≥ n and the R lift handled? | A hint supplies R; acceptance requires R canonical and on the curve, and x(R) mod n == r, matching libsecp's `xr == r || xr == r + n`. The Fiat–Shamir weights are drawn from a hash of every (u1, u2, Q, R) in the batch (`LIBZYNC.md` §7, rounds 3 and 6) |
 | Reorg near H? | F is tied to `J.tip_hash`; a reorg below H needs a new proof (§4, "Which chain") |
 | Can it follow PR #34004's indexing? | Yes, by changing which outputs are indexed (`agg_lite.rs`); files and proofs must use the same rule (§8 Q1) |
-| How does utreexod or Floresta use the forest? | Not directly: different leaves and an append-only forest (§6, `UTREEXO_FORMAT.md` §7). A snapshot for it must carry creation MTP and creation order |
+| How does utreexod or Floresta use the forest? | Not directly: different leaves and an append-only forest (§6, `UTREEXO_FORMAT.md` §7). A Core snapshot plus headers rebuilds the forest; a Utreexo node's own format does not |
 | A tip proof before its epoch closes? | Checks blocks against supplied prevouts only; it does not rule out inflation until the epoch closes (§6a) |
 | Receipt type and size? | A succinct STARK, about 227 KB, constant per block. A Groth16 wrap (a few KB) exists for the canonical guest and is not yet built for libzync |
 

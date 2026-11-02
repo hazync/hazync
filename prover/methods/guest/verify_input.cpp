@@ -337,9 +337,20 @@ extern "C" void coin_leaf_only(const uint8_t* tx_bytes, unsigned tx_len, unsigne
 //           || creation_mtp ), creation_mtp = the median-time-past of the creating block's PARENT
 //   (docs/libzync/UTREEXO_FORMAT.md section 2 is the byte-exact statement).
 // Writes n*32 leaf bytes into `out` and the tx's txid (32 bytes) into `out_txid`; returns n.
+// tx_out_leaves_mv: the same, and for each leaf written also its output index (`out_vout`, u32) and amount
+// (`out_value`, u64), when those are not null. The aggregate sorts a block's survivors by (txid, vout) and sums
+// their amounts, and an unspendable output skipped here would otherwise shift every later index.
+extern "C" uint32_t tx_out_leaves_mv(const uint8_t* tx_bytes, unsigned tx_len,
+                                     uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
+                                     uint8_t* out, uint8_t* out_txid, uint32_t* out_vout, uint64_t* out_value);
 extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
                                   uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
                                   uint8_t* out, uint8_t* out_txid) {
+    return tx_out_leaves_mv(tx_bytes, tx_len, height, is_coinbase, creation_mtp, out, out_txid, nullptr, nullptr);
+}
+extern "C" uint32_t tx_out_leaves_mv(const uint8_t* tx_bytes, unsigned tx_len,
+                                     uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
+                                     uint8_t* out, uint8_t* out_txid, uint32_t* out_vout, uint64_t* out_value) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
     
@@ -359,7 +370,11 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
 #ifdef HAZYNC_LEAF_ONEBUF
         if (hz_leaf(out + (size_t)n * 32, reinterpret_cast<const unsigned char*>(txid.begin()), v, (uint64_t)o.nValue,
                     reinterpret_cast<const unsigned char*>(o.scriptPubKey.data()), o.scriptPubKey.size(),
-                    height, is_coinbase, creation_mtp)) { n++; continue; }
+                    height, is_coinbase, creation_mtp)) {
+            if (out_vout) out_vout[n] = v;
+            if (out_value) out_value[n] = (uint64_t)o.nValue;
+            n++; continue;
+        }
 #endif
         CSHA256 h;
         h.Write(&TAG_LEAF, 1);
@@ -373,6 +388,8 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
         unsigned char cb = (unsigned char)is_coinbase; h.Write(&cb, 1);
         le(b8, creation_mtp, 4); h.Write(b8, 4);
         h.Finalize(out + (size_t)n * 32);
+        if (out_vout) out_vout[n] = v;
+        if (out_value) out_value[n] = (uint64_t)o.nValue;
         n++;
     }
     return n;

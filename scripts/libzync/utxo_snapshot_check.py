@@ -4,14 +4,15 @@
 Rebuild libzync's UTXO accumulator (docs/libzync/UTREEXO_FORMAT.md) from a Bitcoin Core `dumptxoutset` file, and
 compare it with the roots a proof commits: "assumeutxo, proven" (SWIFTSYNC_PROOFS.md §6 item 2).
 
-A snapshot has each coin's outpoint, height, coinbase flag, amount and script, but not the two things the
-accumulator also needs: the coin's creation MTP and its creation order (block, transaction position, vout). Both
-come from your own node, through `--bitcoin-cli` (any command line that takes RPC names as arguments): the block's
-transaction list for the order, and the parent header's `mediantime` for the MTP. Nothing is taken from whoever
-supplied the snapshot except the coins themselves, and a wrong coin changes the roots.
+A snapshot has each coin's outpoint, height, coinbase flag, amount and script. The accumulator's order comes from
+those alone: height, then txid (internal bytes), then vout, which is Core's own coin-key order. The one thing it
+lacks is each coin's creation MTP, the parent header's `mediantime`, which comes from your own node's HEADERS through
+`--bitcoin-cli` (any command line that takes RPC names as arguments). No block data is needed, so a node that has
+only synced headers can check a snapshot. Nothing is taken from whoever supplied the snapshot except the coins
+themselves, and a wrong coin changes the roots.
 
 With `--state` (a ChainState JSON: a sweep's state_<H>.json, or one printed from a verified proof) it compares
-num_leaves and the roots and exits 1 on any difference. Python standard library only.
+num_leaves, the roots and the total value (`utxo_value`) and exits 1 on any difference. Python standard library only.
 
 Snapshot format: Core v28 `node/utxo_snapshot.h` and `rpc/blockchain.cpp` (`WriteUTXOSnapshot`): magic
 `utxo\\xff`, u16 version 2, 4-byte network magic, base block hash, u64 coin count, then per txid: the txid, a
@@ -152,29 +153,27 @@ def main():
         tracked = {(t, v) for t, v, *_ in json.load(open(args[args.index("--tracked") + 1]))["outputs"]}
     path = [a for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or not args[i - 1].startswith("--"))][0]
     if not cli:
-        sys.exit("--bitcoin-cli is required: creation order and MTP come from your own node")
+        sys.exit("--bitcoin-cli is required: each coin's creation MTP comes from your own node's headers")
     coins, base = read_snapshot(path)
     H = json.loads(rpc(cli, "getblockheader", base))["height"]
     print(f"{path}: {len(coins)} coins at height {H} (block {base})")
-    # Creation order and MTP from the node, for every height that still has coins.
+    # Creation MTP from the node's headers, for every height that still has coins. The order needs no node.
     by_height = {}
     for (txid, vout), c in coins.items():
         by_height.setdefault(c[0], []).append((txid, vout))
     ordered = []
+    utxo_value = 0
     for h in sorted(by_height):
         bh = rpc(cli, "getblockhash", h)
-        txs = json.loads(rpc(cli, "getblock", bh, 1))["tx"]
-        pos = {bytes.fromhex(t)[::-1]: i for i, t in enumerate(txs)}
         mtp = json.loads(rpc(cli, "getblockheader", json.loads(rpc(cli, "getblockheader", bh))["previousblockhash"]))["mediantime"] if h > 0 else None
         for txid, vout in by_height[h]:
-            if txid not in pos:
-                raise SystemExit(f"UTXO_SNAPSHOT_FAIL: coin {txid[::-1].hex()}:{vout} is not in block {h} on your node")
             hh, cb, value, spk = coins[(txid, vout)]
             fl = cb | (2 if (txid[::-1].hex(), vout) in tracked else 0)
-            ordered.append(((h, pos[txid], vout), leaf(txid, vout, value, spk, hh, fl, mtp)))
+            ordered.append(((h, txid, vout), leaf(txid, vout, value, spk, hh, fl, mtp)))
+            utxo_value += value
     ordered.sort()
     roots = forest([l for _, l in ordered])
-    print(f"forest: {len(ordered)} leaves, roots:")
+    print(f"forest: {len(ordered)} leaves, {utxo_value} sat, roots:")
     for k, r in enumerate(roots):
         print(f"  [{k}] {r.hex() if r else '-'}")
     if state:
@@ -182,7 +181,7 @@ def main():
         g = [bytes(x) if x is not None else None for x in st["utxo_roots"]]
         while g and g[-1] is None:
             g.pop()
-        ok = st["utxo_leaves"] == len(ordered) and g == roots
+        ok = st["utxo_leaves"] == len(ordered) and g == roots and st.get("utxo_value") == utxo_value
         print("UTXO_SNAPSHOT_MATCH: the snapshot is the UTXO set the proof commits" if ok else
               f"UTXO_SNAPSHOT_MISMATCH: proof has {st['utxo_leaves']} leaves / {len(g)} roots")
         sys.exit(0 if ok else 1)

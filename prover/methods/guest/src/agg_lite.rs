@@ -26,7 +26,7 @@
 //! coin-txid SMT takes the overwrite at 91,842 / 91,880. Journal layout, all u32 LE words:
 //!   header: KIND_CHUNK_LITE, all_valid, height, block_hash[8], mtp, block_time, n_records
 //!   record: txid[8] wtxid[8] prevouts_hash[8] start count first
-//!     if first: has_witness n_vin fee[2] weight[2] sigops[2] n_out out_leaf[8]*n_out
+//!     if first: has_witness n_vin fee[2] weight[2] sigops[2] n_out (out_leaf[8] vout value[2])*n_out
 //!     per owned input: leaf[8] flags (bit0 coinbase coin, bit1 coin height == this block) [coinbase_txid[8] if bit0]
 
 use super::*;
@@ -67,11 +67,14 @@ pub struct ChunkCtx {
     /// Output-leaf scratch, reused: a fresh zeroed `vec!` per transaction was 4x the transaction's
     /// size in memset AND (bump allocator) in never-returned pages.
     out: Vec<u8>,
+    /// Per output leaf: its index in vout, and its amount.
+    out_vout: Vec<u32>,
+    out_val: Vec<u64>,
 }
 
 impl ChunkCtx {
     pub fn new(height: u32, flags: u32, mtp: u32, block_time: u32) -> Self {
-        Self { height, flags, mtp, block_time, words: Vec::new(), n_records: 0, out: Vec::new() }
+        Self { height, flags, mtp, block_time, words: Vec::new(), n_records: 0, out: Vec::new(), out_vout: Vec::new(), out_val: Vec::new() }
     }
 
     /// Record one transaction run. Returns false if a per-transaction rule failed.
@@ -85,14 +88,15 @@ impl ChunkCtx {
         let (tp, tl) = (raw_tx.as_ptr(), raw_tx.len() as u32);
         // txid (and the output leaves, used only when this run owns input 0).
         let need = (raw_tx.len() / 8 + 1) * 32;
-        if self.out.len() < need { self.out.resize(need, 0); }
+        if self.out.len() < need { self.out.resize(need, 0); self.out_vout.resize(need / 32, 0); self.out_val.resize(need / 32, 0); }
         let mut txid = [0u8; 32];
         // A transaction can repeat only if all its inputs can (coinbase-smt/src/bip30.rs), so its outputs are tracked
         // exactly when every input is. A tracked transaction must sit whole in one run: the host keeps it so, and the
         // aggregate refuses a transaction whose inputs are all tracked but that did not claim to be.
         let n_vin_all = unsafe { tx_vin_count(tp, tl) };
         let tracked_tx = !cb.is_empty() && cb.len() as u32 == n_vin_all && cb.iter().all(|c| c & 2 != 0);
-        let n_out = unsafe { tx_out_leaves(tp, tl, self.height, (tracked_tx as u32) << 1, self.mtp, self.out.as_mut_ptr(), txid.as_mut_ptr()) };
+        let n_out = unsafe { tx_out_leaves_mv(tp, tl, self.height, (tracked_tx as u32) << 1, self.mtp, self.out.as_mut_ptr(), txid.as_mut_ptr(),
+                                              self.out_vout.as_mut_ptr(), self.out_val.as_mut_ptr()) };
         let ph: [u8; 32] = Sha256::digest(prevouts).into();
         let start = idx.first().copied().unwrap_or(0);
         // In 64 bits: `start` is the prover's, and a wrap here would let the run reach outside the transaction.
@@ -145,7 +149,11 @@ impl ChunkCtx {
             push_i64(&mut self.words, weight);
             push_i64(&mut self.words, sigops);
             self.words.push(n_out);
-            for l in 0..n_out as usize { push_hash(&mut self.words, &self.out[32 * l..32 * l + 32]); }
+            for l in 0..n_out as usize {
+                push_hash(&mut self.words, &self.out[32 * l..32 * l + 32]);
+                self.words.push(self.out_vout[l]);
+                push_i64(&mut self.words, self.out_val[l] as i64);
+            }
         }
         for j in 0..k {
             if results[j] != 1 { ok = false; env::log("core-reject: script"); }
@@ -215,17 +223,21 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // Coinbase: the only transaction the aggregate parses.
     let mut output_leaves: Vec<[u8; 32]> = Vec::with_capacity(words / 9);
     let mut out_pos: Vec<u32> = Vec::with_capacity(words / 9);   // creating tx position, parallel
+    let mut out_vout: Vec<u32> = Vec::with_capacity(words / 9);  // output index in its transaction, parallel
+    let mut out_val: Vec<u64> = Vec::with_capacity(words / 9);   // amount, parallel
     let mut cb_txid = [0u8; 32];
     let cb_outputs = {
         let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
+        let mut cb_vout = vec![0u32; w.coinbase_tx.len() / 8 + 1];
+        let mut cb_val = vec![0u64; w.coinbase_tx.len() / 8 + 1];
         // Tracked: mined before BIP34 and indicating a later height, or the repeat of a tracked coinbase. A false claim
         // of `coinbase_prior` does not verify in apply_block.
         let indicated = unsafe { hz_indicated_height(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32) };
         let root = w.height < BIP34_HEIGHT && indicated > w.height && indicated < bip30::REPEAT_HORIZON;
         let repeat = w.smt.coinbase_prior == Some(bip30::REPEATABLE);
         let flags = 1 | ((root || repeat) as u32) << 1;
-        let n = unsafe { tx_out_leaves(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height, flags, mtp,
-                                       buf.as_mut_ptr(), cb_txid.as_mut_ptr()) };
+        let n = unsafe { tx_out_leaves_mv(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32, w.height, flags, mtp,
+                                          buf.as_mut_ptr(), cb_txid.as_mut_ptr(), cb_vout.as_mut_ptr(), cb_val.as_mut_ptr()) };
         // BIP30, the hints-file convention (Core's IsBIP30Unspendable): the coinbase coins of 91,722 and
         // 91,812 are never indexed or accounted. Their outpoints come back, and are accounted, when 91,880
         // and 91,842 duplicate them. Same final set as Core's overwrite, with no subtraction needed.
@@ -235,6 +247,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 h.copy_from_slice(&buf[32 * l..32 * l + 32]);
                 output_leaves.push(h);
                 out_pos.push(0);
+                out_vout.push(cb_vout[l]);
+                out_val.push(cb_val[l]);
             }
         }
         n
@@ -289,8 +303,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 total_sigops = total_sigops.saturating_add(sigops);
                 for _ in 0..n_out {
                     let l = r.h();
+                    let (v, val) = (r.u(), r.i64() as u64);
                     output_leaves.push(l);
                     out_pos.push(tx_pos);
+                    out_vout.push(v);
+                    out_val.push(val);
                 }
                 if tr_claim && n_out > 0 { tracked_new.push((txid, n_out)); }
                 cur = Some((txid, wt, ph, n_vin, 0));
@@ -378,12 +395,24 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     }
     // Design B: survivors (bit 1) go into an append-only utreexo forest -- at H it holds exactly the UTXO
     // set, in creation order; everything else into the ECMH total, which must be the identity at H.
+    // Within the block, survivors are appended sorted by (txid, vout), compared as bytes in internal order: Core's own
+    // coin-key order, so a Core `dumptxoutset` (it carries each coin's height) gives the forest order with no block
+    // data (UTREEXO_FORMAT.md §4). The hint bits stay in block order, as the hints file has them.
     let mut stump = utreexo::Stump::new(w.root_prev.roots.clone(), w.root_prev.num_leaves);
+    let mut live: Vec<(&[u8; 32], u32, usize)> = Vec::new();
     for (k, leaf) in output_leaves.iter().enumerate() {
         if let Ok(i) = find(&key(leaf)) {
             if spent[i] { continue; }
-            if bit(k) { stump.add(*leaf); } else { swiftsync::add(leaf); }
+            if bit(k) { live.push((&txids[out_pos[k] as usize], out_vout[k], k)); } else { swiftsync::add(leaf); }
         }
+    }
+    live.sort_unstable_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
+    let mut survivor_value: u64 = 0;
+    for &(_, _, k) in &live {
+        stump.add(output_leaves[k]);
+        // On a valid chain the survivors never hold more than the coins ever issued (< MAX_MONEY), far below 2^64.
+        // Saturating, so an invalid chain (refused at H by the ECMH total) cannot wrap it to a small number.
+        survivor_value = survivor_value.saturating_add(out_val[k]);
     }
     swiftsync::report();
     // v2 over the height and its list of unspent INDICES -- exactly what the hints file stores per
@@ -490,6 +519,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         root_next_roots: normalize(stump.roots.clone()),
         root_next_leaves: stump.num_leaves,
         ss_hints,
+        survivor_value,
         ..Default::default()
     }
 }

@@ -30,6 +30,8 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 }
 
 // H8 domain tags — first committed field of each recursion-consumed journal (must match the guest).
+/// Mirrors the guest's CHAIN_STATE_VERSION.
+const CHAIN_STATE_VERSION: u32 = 1;
 const KIND_CHAIN: u32 = 0xC4A1_0002;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
@@ -198,7 +200,14 @@ struct BlockWitness {
 #[derive(Serialize, Deserialize, Clone)]
 struct ChainState {
     kind: u32, // H8: == KIND_CHAIN
+    // == CHAIN_STATE_VERSION. Default 0 for a JSON written before the field, which the guest refuses: an old anchor
+    // file cannot silently enter a chain with a zero utxo_value.
+    #[serde(default)]
+    version: u32,
     tip_hash: [u8; 32], utxo_roots: Vec<Option<[u8; 32]>>, utxo_leaves: u64,
+    // Satoshis held by the coin forest (the UTXO set's total at H). Mirrors the guest.
+    #[serde(default)]
+    utxo_value: u64,
     cum_work: [u8; 32], height: u32,
     prev_nbits: u32, prev_time: u32, epoch_start: u32, recent_times: Vec<u32>,
     anchor_id: [u8; 32], // S5: dsha256 of the base anchor; verifier pins == dsha256(genesis_anchor)
@@ -719,7 +728,7 @@ fn seed_and_anchor() -> (Forest, ChainState) {
         forest.add(hash_leaf(&[b"post".as_slice(), &i.to_le_bytes()].concat()));
     }
     let anchor = ChainState {
-        kind: KIND_CHAIN,
+        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, utxo_value: 0,
         tip_hash: arr(rev(hx(HASH169))), utxo_roots: forest.roots(), utxo_leaves: forest.leaves.len() as u64,
         cum_work: [0u8; 32], height: 169,
         prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, epoch_start: 1_231_006_505,
@@ -936,7 +945,7 @@ fn build_full() -> (ChainState, BlockWitness) {
     for i in 0..2u64 { forest.add(hash_leaf(&[b"post".as_slice(), &i.to_le_bytes()].concat())); }
 
     let mut anchor = ChainState {
-        kind: KIND_CHAIN,
+        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, utxo_value: 0,
         tip_hash: arr(rev(hx(prev))), utxo_roots: forest.roots(), utxo_leaves: forest.leaves.len() as u64,
         cum_work: [0u8; 32], height: height - 1,
         // #83: use the REAL in-boundary retarget inputs when the fixture carries them. The old values
@@ -1316,7 +1325,7 @@ fn genesis_params() -> (&'static str, u32, u32, u128) {
 fn genesis_anchor() -> ChainState {
     let (g_hash, g_time, g_bits, g_work) = genesis_params();
     ChainState {
-        kind: KIND_CHAIN,
+        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, utxo_value: 0,
         tip_hash: arr(rev(hx(g_hash))), utxo_roots: Forest::new().roots(), utxo_leaves: 0,
         cum_work: arr_u128(g_work), height: 0,
         prev_nbits: g_bits, prev_time: g_time, epoch_start: g_time,
@@ -6123,7 +6132,7 @@ fn main() {
 
     // Anchor checkpoint = the trusted state at block 169 (interim: single-signer GHAST checkpoint).
     let anchor = ChainState {
-        kind: KIND_CHAIN,
+        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, utxo_value: 0,
         tip_hash: arr(rev(hx(HASH169))), utxo_roots: forest.roots(), utxo_leaves: forest.leaves.len() as u64,
         cum_work: [0u8; 32], height: 169,
         prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, // block 169 (difficulty-1 epoch)

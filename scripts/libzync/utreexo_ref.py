@@ -4,7 +4,7 @@ accumulator (docs/libzync/UTREEXO_FORMAT.md), written from the spec, not from th
 
 Reads block_<h>.json for h = 1..H (the host's block files: header fields, coinbase_hex, txs[].raw), works out
 which outputs are unspent at H by following every spend (no hints file), builds the append-only forest of those
-coins in creation order, and prints num_leaves and the roots. Each block's creation MTP is computed here from the
+coins in height order, each block's sorted by (txid, vout), and prints num_leaves and the roots. Each block's creation MTP is computed here from the
 header timestamps of blocks 0..h-1 (genesis by its hash, from the table below; the others from the files, which
 must link by hash); the host's own `recent_times` field is only cross-checked against it, never used. With a ChainState JSON (a sweep's state_<H>.json) it compares against the
 guest's committed utxo_leaves / utxo_roots and exits 1 on any difference.
@@ -96,7 +96,7 @@ def spendable(spk):
 
 def main():
     d, H = sys.argv[1], int(sys.argv[2])
-    created = []          # (outpoint, leaf), creation order
+    created = []          # (sort key, outpoint, leaf, value); key = (height, txid internal bytes, vout)
     meta = {}             # outpoint -> (height, coinbase, creation MTP), to check the block files' prevouts
     spent = set()
     times = []            # header timestamps of blocks 0..h-1
@@ -128,8 +128,12 @@ def main():
             for v, (value, spk) in enumerate(outs):
                 meta[(txid, v)] = (h, k == 0, m)
                 if spendable(spk):
-                    created.append(((txid, v), leaf(txid, v, value, spk, h, k == 0, m)))
-    survivors = [l for op, l in created if op not in spent]
+                    created.append(((h, txid, v), (txid, v), leaf(txid, v, value, spk, h, k == 0, m), value))
+    # Within a block, survivors are appended sorted by (txid internal bytes, vout): Core's own UTXO key order, so
+    # a Core `dumptxoutset` (which carries each coin's height) gives the order with no block data.
+    live = sorted(c for c in created if c[1] not in spent)
+    survivors = [l for _, _, l, _ in live]
+    utxo_value = sum(v for _, _, _, v in live)
     roots = []            # roots[h] = root of the perfect tree of 2^h leaves, or None
     for node in survivors:
         hgt = 0
@@ -142,7 +146,7 @@ def main():
         roots[hgt] = node
     while roots and roots[-1] is None:
         roots.pop()
-    print(f"H={H}: {len(survivors)} leaves, roots:")
+    print(f"H={H}: {len(survivors)} leaves, {utxo_value} sat, roots:")
     for hgt, r in enumerate(roots):
         print(f"  [{hgt}] {r.hex() if r else '-'}")
     if len(sys.argv) > 3:
@@ -150,9 +154,9 @@ def main():
         g = [bytes(x) if x is not None else None for x in st["utxo_roots"]]
         while g and g[-1] is None:
             g.pop()
-        ok = st["utxo_leaves"] == len(survivors) and g == roots
+        ok = st["utxo_leaves"] == len(survivors) and g == roots and st.get("utxo_value") == utxo_value
         print("REF_MATCH: guest state equals this implementation" if ok else
-              f"REF_MISMATCH: guest {st['utxo_leaves']} leaves / {len(g)} roots")
+              f"REF_MISMATCH: guest {st['utxo_leaves']} leaves / {len(g)} roots / {st.get('utxo_value')} sat")
         sys.exit(0 if ok else 1)
 
 

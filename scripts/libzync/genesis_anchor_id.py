@@ -61,9 +61,11 @@ def main():
     self_id = list(struct.unpack("<8I", bytes.fromhex(mid)))
     w = Words()
     w.u32(KIND_CHAIN)                                       # kind
+    w.u32(1)                                                # version (CHAIN_STATE_VERSION)
     w.bytes_fixed(bytes.fromhex(g_hash)[::-1])              # tip_hash, internal byte order
     w.u32(1); w.u32(0)                                      # utxo_roots = [None]: one entry, empty
     w.u64(0)                                                # utxo_leaves
+    w.u64(0)                                                # utxo_value
     w.bytes_fixed(block_proof(g_bits).to_bytes(32, "little"))  # cum_work
     w.u32(0)                                                # height
     w.u32(g_bits)                                           # prev_nbits

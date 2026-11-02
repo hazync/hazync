@@ -40,6 +40,8 @@ pub const IMAGES: &[Image] = &[
 ];
 
 pub const KIND_CHAIN: u32 = 0xC4A1_0002;
+/// The ChainState layout this crate reads (the guest's CHAIN_STATE_VERSION). Later versions only append fields.
+pub const CHAIN_STATE_VERSION: u32 = 1;
 pub const PROFILE_LIBZYNC: u32 = 1;
 pub const PROFILE_ASSUMEVALID: u32 = 2;
 pub const PROFILE_SIGNET: u32 = 4;
@@ -85,9 +87,15 @@ impl Image {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChainState {
     pub kind: u32,
+    /// [`CHAIN_STATE_VERSION`]. 0 in a JSON written before the field.
+    #[serde(default)]
+    pub version: u32,
     pub tip_hash: [u8; 32],
     pub utxo_roots: Vec<Option<[u8; 32]>>,
     pub utxo_leaves: u64,
+    /// Satoshis held by the coin forest: at H, the UTXO set's total amount.
+    #[serde(default)]
+    pub utxo_value: u64,
     pub cum_work: [u8; 32],
     pub height: u32,
     pub prev_nbits: u32,
@@ -278,8 +286,8 @@ pub fn verify(inp: &Inputs) -> Report {
             return rep;
         }
     };
-    rep.check(cs.kind == KIND_CHAIN && cs.self_id == words(&m),
-              "journal is a ChainState committed by this image (kind, self_id)");
+    rep.check(cs.kind == KIND_CHAIN && cs.version == CHAIN_STATE_VERSION && cs.self_id == words(&m),
+              format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
 
     // Step 9: what the image checked.
     rep.check(cs.profile == inp.image.profile, format!("profile 0x{:x} == 0x{:x} ({})", cs.profile,
@@ -347,9 +355,11 @@ pub fn genesis_anchor(img: &Image) -> ChainState {
     tip.reverse();
     ChainState {
         kind: KIND_CHAIN,
+        version: CHAIN_STATE_VERSION,
         tip_hash: tip,
         utxo_roots: vec![None],
         utxo_leaves: 0,
+        utxo_value: 0,
         cum_work: {
             let mut w = [0u8; 32];
             w[..16].copy_from_slice(&img.genesis_work.to_le_bytes());
@@ -485,8 +495,8 @@ mod tests {
     fn genesis_anchor_vectors() {
         // SWIFTSYNC_PROOFS.md §5 step 3. Independent of the image; computed by scripts/libzync/genesis_anchor_id.py.
         let a = |n| hex(&anchor_id(&genesis_anchor(Image::by_network(n).unwrap())));
-        assert_eq!(a("mainnet"), "1066e814035cc8a1ac2bf6760095b3addb08cad817b6f164aeb444e623337c9a");
-        assert_eq!(a("signet"), "f6a784992a04be9da9f992e89385abe4d6b2f44cb87ad6354af1e01d43dffa36");
+        assert_eq!(a("mainnet"), "b768af638616bc97c44acaf29387a2a538425f9d726c5972f5da0a909642db03");
+        assert_eq!(a("signet"), "c0055bc30ceecf883406e2625fe901895575bedfeb48834bea70458e2cf0b320");
     }
 
     #[test]

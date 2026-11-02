@@ -10,8 +10,8 @@ from this document is `scripts/libzync/utreexo_ref.py`; §6 says how the two are
 ## 1. What it commits to
 
 At SwiftSync stop height H a libzync chain proof commits `ChainState.utxo_roots` and `ChainState.utxo_leaves`:
-an append-only Utreexo forest whose leaves are **exactly the coins unspent at H**, one leaf per coin, in
-creation order. One mainnet exception: for H from 91,722 to 91,879, Core's UTXO set still holds the coinbase
+an append-only Utreexo forest whose leaves are **exactly the coins unspent at H**, one leaf per coin, by
+height and, within a block, by (txid, vout) (§4). One mainnet exception: for H from 91,722 to 91,879, Core's UTXO set still holds the coinbase
 outputs of 91,722 and/or 91,812 until they are overwritten; this forest never holds them (§3.2), matching the
 hints-file numbering. Nothing is ever deleted from it. Coins the hints file marks spent go to the ECMH total instead,
 which must be the identity at H (`ss_set == 0`).
@@ -53,12 +53,16 @@ An output of a block at height h becomes a leaf if and only if all of these hold
 
 ## 4. Order
 
-Leaves are added in creation order:
-- blocks in height order;
-- within a block, transactions in block order (coinbase first);
-- within a transaction, outputs in `vout` order.
+Leaves are added block by block, in height order. Within a block, the block's surviving coins are sorted by
+**(txid, vout)**: the txid compared as 32 bytes in internal byte order (as in the outpoint), then `vout` as a number.
 
-Skipped outputs take no position.
+This is Bitcoin Core's own coin-key order (`'C' ‖ txid ‖ VARINT(vout)` in the chainstate database), the order
+`dumptxoutset` writes. A Core snapshot carries each coin's height, so it gives the forest order with no block data:
+a node that has only synced headers can check a snapshot against a proof (`utxo_snapshot_check.py`, §7).
+
+The hints file's bits stay in block order (transactions in block order, outputs in `vout` order, skipped outputs
+taking no position); only the forest is sorted. Within one block no two transactions share a txid (the guest refuses
+a block where they do), so the order is total.
 
 ## 5. Forest
 
@@ -109,7 +113,7 @@ The two implementations check each other.
 | parent hash | SHA-256(0x01 ‖ L ‖ R) | SHA-512/256(L ‖ R) |
 | leaf | §2, includes creation MTP | tagged SHA-512/256 of block hash, outpoint, header code, amount, script |
 | deletions | none: the forest holds the survivors to H | every spend deletes, so a sibling moves up |
-| roots depend on | the UTXO set at H and creation order | the whole add/delete history since genesis |
+| roots depend on | the UTXO set at H (order: height, then txid, vout) | the whole add/delete history since genesis |
 
 The last row is why converting is not a re-hash. Matching utreexod would mean proving every spend's deletion.
 Measured: 14,530 cycles per SHA-512/256 parent in the guest, against 929 for ours. That puts the total at an
@@ -117,9 +121,9 @@ ESTIMATED ~6× a current block's cycles (`experimental/libzync-bench/README.md` 
 
 A node holding the UTXO set at H can rebuild this forest and compare it with the proof.
 `scripts/libzync/utxo_snapshot_check.py <dumptxoutset file> --bitcoin-cli "<command>" [--state state.json]` does
-it from a standard Core v28 `dumptxoutset` file: the snapshot gives the coins, and the user's own node gives what
-the snapshot lacks (each coin's creation MTP, from the parent header's `mediantime`, and its creation order, from
-the block's transaction list). `scripts/libzync/test_utxo_snapshot.py` checks it end to end without a node, by
+it from a standard Core v28 `dumptxoutset` file: the snapshot gives the coins and, with their heights, the order
+(§4); the user's own node gives the one thing the snapshot lacks, each coin's creation MTP, from the parent
+header's `mediantime`. Headers are enough: no block data is read. `scripts/libzync/test_utxo_snapshot.py` checks it end to end without a node, by
 writing the UTXO set from the block files in Core's snapshot encoding and answering the RPC calls from the same
 files: it matches the guest's committed forest at signet 2,600 (293 coins) and mainnet 200 (204 coins, which
 exercises the uncompressed-key script compression), and a one-satoshi change to one coin is a mismatch. It has not
