@@ -15,9 +15,9 @@ Every reject string below came from reading the Core source, not from memory. Ev
 
 | status | rows | meaning |
 |---|---|---|
-| SAME | 56 | Both sides read: the same blocks are rejected |
+| SAME | 59 | Both sides read: the same blocks are rejected |
 | STRICTER | 3 | The guest rejects something Core accepts |
-| WEAKER | 3 | The guest enforces a looser form of the rule |
+| WEAKER | 0 | The guest enforces a looser form of the rule |
 | NOT ENFORCED | 0 | The guest does not check the rule |
 | N-A | 1 | The rule does not apply on mainnet or signet |
 | NOT FOUND | 0 | No enforcing code could be located |
@@ -32,7 +32,7 @@ A WEAKER or NOT ENFORCED row is the kind that matters for soundness: a proof cou
 
 | row | status | what it means for a proof |
 |---|---|---|
-| `bad-txns-oversize`, `bad-blk-length`, `bad-blk-weight` | **WEAKER**, unreachable today | All three reduce to sizes multiplied in 32 bits. On rv32 `size_t` is 32 bits, so `tx_check.cpp:20` wraps at a stripped size of 2^30, and Core's `GetTransactionWeight` (`consensus/validation.h:149`, `int32_t`) wraps the same way, or goes negative at 2^31 of witness. The block total is 64-bit but sums those per-transaction values. Example: a transaction of stripped size 2^30 + 96 reads as weight 384 and passes all three; Core says `bad-blk-length`. Nothing in the rules stops it. What stops it is memory: `cached_tx` holds the raw bytes, the `CMutableTransaction` and a copied `CTransaction` at once (`verify_input.cpp:225-227`), each at least that size, which is 3 × 2^30 = `GUEST_MAX_MEM` (`risc0-zkvm-platform` `memory.rs:16`) with the image still to fit, so the guest runs out of memory and no proof exists. Replacing that copy with a move would remove the margin |
+| `bad-txns-oversize`, `bad-blk-length`, `bad-blk-weight` | **SAME** (was WEAKER, fixed) | On rv32 `size_t` is 32 bits, so `tx_check.cpp:20` wraps at a stripped size of 2^30, and Core's `GetTransactionWeight` (`consensus/validation.h:149`, `int32_t`) wraps the same way. The guest now refuses any transaction over 4,000,000 raw bytes before that arithmetic runs (`agg_lite.rs:127`, coinbase `:470`). Below that bound nothing wraps. It rejects nothing Core accepts: weight ≥ raw size, so such a transaction already fails `bad-blk-weight`. |
 | `bad-txns-BIP30`, non-coinbase transactions | **SAME** † (tested, rig `bip30_repeat_*`) | The tree tracks every transaction whose inputs are all repeatable coins, the only ones that can repeat: 173 on mainnet. Refused while it has unspent outputs, allowed once it has none, as in Core. |
 | `bad-txns-BIP30`, coinbases | **STRICTER** † on a chain that is not mainnet | Coinbases indicating a future height behave as in Core. An untracked coinbase repeated before BIP34 is refused even when fully spent, which Core allows. Mainnet has no such block: exactly two txids repeat, both grandfathered. Blocks at height 100,000,000 and above are refused. |
 | Spending the coinbase coins of 91,722 and 91,812 | **STRICTER** (known) | These coins are never indexed, so a spend of one fails at H. Core allows the spend on a chain that holds the block but has not overwritten its coinbase. Mainnet never spent them. Only a fork reaches this, and no proof can be made for that fork |
@@ -140,7 +140,7 @@ and aggregate path. The older transcriptions still in `verify_input.cpp` and `ma
 |---|---|---|---|---|
 | `bad-txnmrklroot` | The header's merkle root equals the root over the txids. `validation.cpp:3925` | **Core** `ComputeMerkleRoot` (`consensus/merkle.cpp:45`, hash primitive patched) through glue `merkle_root`, `verify_input.cpp:711`; compared `agg_lite.rs:387`. The list is the coinbase txid, then each transaction's txid in chunk order (`agg_lite.rs:234`, `:275`) | SAME | `bad_merkle` |
 | `bad-txns-duplicate` | No mutation of the tree (CVE-2012-2459). `validation.cpp:3935` | **Core** `mutated` flag, `agg_lite.rs:387` | SAME. The guest also refuses any two equal txids (`agg_lite.rs:402-406`, `:415`). That rejects nothing new: Core refuses them as a double spend, and a transaction with no inputs fails `bad-txns-vin-empty` | read only |
-| `bad-blk-length` | At least one transaction; transaction count × 4 and stripped size × 4 ≤ 4,000,000. `validation.cpp:4028-4029` | No check of its own. **Core lifted** weight limit, as `bad-blk-weight`. The coinbase is always present | WEAKER, unreachable (see above). Weight ≥ 4 × stripped size and each transaction is at least 60 bytes, so this holds whenever weight is computed without wrapping | `oversize_weight` |
+| `bad-blk-length` | At least one transaction; transaction count × 4 and stripped size × 4 ≤ 4,000,000. `validation.cpp:4028-4029` | No check of its own. **Core lifted** weight limit, as `bad-blk-weight`. The coinbase is always present | SAME (see above). Weight ≥ 4 × stripped size and each transaction is at least 60 bytes, so this holds whenever weight is computed without wrapping | `oversize_weight` |
 | `bad-cb-missing` | The first transaction is a coinbase. `validation.cpp:4033` | **Glue** `is_coinbase_tx` (`verify_input.cpp:760`, Core's `IsCoinBase`), `agg_lite.rs:444-445`. Its txid is the first merkle leaf (`:234`) | SAME | read only |
 | `bad-cb-multiple` | No other transaction is a coinbase. `validation.cpp:4036` | **Rust** `agg_lite.rs:104`, with glue `is_coinbase_tx`, on every run of every transaction | SAME | `cb_multiple`, `tx_null_prevout` |
 | `bad-blk-sigops` (legacy) | Legacy sigops × 4 ≤ 80,000. `validation.cpp:4055-4056` | No check of its own. **Rust** limit `agg_lite.rs:465` on **Core** `GetTransactionSigOpCost` | SAME. The ConnectBlock total below starts from the same legacy × 4 for every transaction, so it can only be larger | `sigops_limit`, `sigops_at_limit` |
@@ -149,7 +149,7 @@ and aggregate path. The older transcriptions still in `verify_input.cpp` and `ma
 | `unexpected-witness` | No transaction has a witness unless the block carries a valid commitment. `validation.cpp:3989` | **Core lifted** `CheckWitnessMalleation`. **Glue** `core_block_rules.cpp:157-162`: one stand-in transaction with a witness says "another transaction has one". `has_witness` covers the coinbase (`agg_lite.rs:236`) and every transaction (`:277`) | SAME | `witness_no_commit`, `no_commit_no_witness` |
 | `bad-witness-nonce-size` | With a commitment, the coinbase witness is one 32-byte item. `validation.cpp:3962` | **Core lifted** `CheckWitnessMalleation`, on the real coinbase | SAME. Checked whenever a commitment output exists, even with no witness in the block, as in Core | `nonce_too_big_witness` |
 | `bad-witness-merkle-match` | The last matching output (at least 38 bytes, prefix `6a24aa21a9ed`) holds SHA256d(witness root ‖ reserved value). `validation.cpp:3975` | **Core lifted** `CheckWitnessMalleation`. **Glue** `hz_witness_root`, `core_block_rules.cpp:93`, over the chunks' wtxids (`agg_lite.rs:276`) with **Core** `ComputeMerkleRoot` | SAME. Coinbase leaf zero, as in `BlockWitnessMerkleRoot`. Every run of a transaction commits the wtxid and they must agree (`agg_lite.rs:290`) | `witness_mismatch`, `merkle_mutated` |
-| `bad-blk-weight` | Block weight ≤ 4,000,000, at every height. `validation.cpp:4271` | **Core lifted** limit in `ContextualCheckBlock`. **Glue** `GetBlockWeight` answered from the block total, `core_block_rules.cpp:101`. **Rust** total `agg_lite.rs:279`, `:455-459`, of **Core** `GetTransactionWeight`, `core_tx_rules.cpp:143`, `:154` | WEAKER, unreachable (see above). `3×stripped + total` per transaction plus `4 × (80 + CompactSize(n))` equals `GetBlockWeight`, but each transaction's term is 32-bit here | `weight_over`, `weight_under` |
+| `bad-blk-weight` | Block weight ≤ 4,000,000, at every height. `validation.cpp:4271` | **Core lifted** limit in `ContextualCheckBlock`. **Glue** `GetBlockWeight` answered from the block total, `core_block_rules.cpp:101`. **Rust** total `agg_lite.rs:279`, `:455-459`, of **Core** `GetTransactionWeight`, `core_tx_rules.cpp:143`, `:154` | SAME (see above). `3×stripped + total` per transaction plus `4 × (80 + CompactSize(n))` equals `GetBlockWeight`. Each term is 32-bit here and the size bound keeps it from wrapping | `weight_over`, `weight_under` |
 
 ## Transactions: `CheckTransaction`
 
@@ -161,7 +161,7 @@ through glue `check_tx` (`verify_input.cpp:582`, from `agg_lite.rs:441`).
 |---|---|---|---|---|
 | `bad-txns-vin-empty` | At least one input | **Core** `tx_check.cpp:15` | SAME | read only |
 | `bad-txns-vout-empty` | At least one output | **Core** `tx_check.cpp:17` | SAME | `tx_no_outputs` |
-| `bad-txns-oversize` | Stripped size × 4 ≤ 4,000,000 | **Core** `tx_check.cpp:20` | WEAKER, unreachable (see above). On rv32 this `size_t` product wraps at 2^30 bytes | read only |
+| `bad-txns-oversize` | Stripped size × 4 ≤ 4,000,000 | **Core** `tx_check.cpp:20` | SAME (see above). On rv32 this `size_t` product would wrap at 2^30 bytes; `agg_lite.rs:127` refuses first | read only |
 | `bad-txns-vout-negative` | No negative output value | **Core** `tx_check.cpp:28` | SAME | `tx_negative_out` |
 | `bad-txns-vout-toolarge` | No output above `MAX_MONEY` | **Core** `tx_check.cpp:30` | SAME | `tx_huge_out` |
 | `bad-txns-txouttotal-toolarge` | Output total stays in range | **Core** `tx_check.cpp:33` | SAME | `tx_total_huge` |
