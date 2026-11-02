@@ -276,7 +276,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut total_in: u64 = 0;
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
-    let mut spends: Vec<([u8; 32], u32, bool)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height), block order
+    let mut spends: Vec<([u8; 32], u32, bool, u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height, input index), block order
     let mut cb_spends: Vec<([u8; 32], bool)> = Vec::new();
     let mut tracked_new: Vec<([u8; 32], u32)> = Vec::new();
     // The open transaction: all inputs seen so far are tracked, and whether it claimed to be.
@@ -336,11 +336,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             let Some(c) = cur.as_mut() else { all_ok = false; break; };
             if count == 0 || c.4 as u64 + count as u64 > c.3 as u64 { all_ok = false; }
             c.4 = c.4.saturating_add(count);
-            for _ in 0..count {
+            for k in 0..count {
                 let leaf = r.h();
                 let f = r.u();
                 if f > 7 { all_ok = false; }
-                spends.push((leaf, tx_pos, f & 2 != 0));
+                spends.push((leaf, tx_pos, f & 2 != 0, start.wrapping_add(k)));
                 tr_all &= f & 4 != 0;
                 if f & 1 == 1 { cb_spends.push((r.h(), f & 4 != 0)); }
             }
@@ -379,7 +379,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // (bad-txns-inputs-missingorspent). The ECMH total would also catch it at H, but only with a correct
     // map; rejecting here costs one sort and pins the failure to this block (review 2026-10-30).
     {
-        let mut ext: Vec<[u64; 4]> = spends.iter().map(|(l, _, _)| key(l)).filter(|k| find(k).is_err()).collect();
+        let mut ext: Vec<[u64; 4]> = spends.iter().map(|(l, _, _, _)| key(l)).filter(|k| find(k).is_err()).collect();
         ext.sort_unstable();
         if ext.windows(2).any(|p| p[0] == p[1]) {
             env::log("agg-lite: REJECT the same external coin is spent twice in this block");
@@ -387,10 +387,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         }
     }
     #[cfg(feature = "coinlog")]
-    let (mut ext, mut in_block_spent): (Vec<[u8; 32]>, u64) = (Vec::new(), 0);
+    let (mut ext, mut in_block_spent): (Vec<([u8; 32], u32, u32)>, u64) = (Vec::new(), 0);   // (leaf, tx position, input index)
     #[cfg(feature = "coinlog")]
     if ss_mode == 1 { env::log("agg-lite: REJECT a coin-log image takes no hints file"); all_ok = false; }
-    for (leaf, txp, same_height) in &spends {
+    for (leaf, txp, same_height, _vin) in &spends {
         match find(&key(leaf)) {
             Ok(i) => {
                 // In-block spend: created by a strictly earlier tx, spent at most once.
@@ -415,7 +415,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 swiftsync::sub(leaf);
                 // coinlog: a coin from an earlier block, which must be unspent in the log at the position the prover names
                 #[cfg(feature = "coinlog")]
-                ext.push(*leaf);
+                ext.push((*leaf, *txp, *_vin));
             }
         }
     }
@@ -458,13 +458,14 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         }
         let (mut roots, mut n) = (w.root_prev.roots.clone(), w.root_prev.num_leaves);
         if swiftsync::collecting() {
-            for l in &ext { env::log(&alloc::format!("coinlog: S {}", hex32(l))); }
+            for (l, t, v) in &ext { env::log(&alloc::format!("coinlog: S {} {t} {v}", hex32(l))); }
             for l in &appends { env::log(&alloc::format!("coinlog: A {}", hex32(l))); }
         } else {
             #[allow(static_mut_refs)]
             match coinlog::decode_witness(unsafe { &LOG_WITNESS }) {
                 Some((pos, sib)) if pos.len() == ext.len() => {
-                    let mut sp: Vec<(u64, coinlog::W)> = pos.into_iter().zip(ext.iter().map(coinlog::w_of)).collect();
+                    let mut sp: Vec<coinlog::Spend> = pos.into_iter().zip(ext.iter())
+                        .map(|(p, (l, t, v))| (p, coinlog::w_of(l), coinlog::w_of(&coinlog::spender(w.height, *t, *v)))).collect();
                     sp.sort_unstable_by_key(|x| x.0);
                     if let Err(e) = coinlog::apply(&mut roots, &mut n, &sp, &appends, &sib) {
                         env::log(&alloc::format!("agg-lite: REJECT coin log: {e:?}"));

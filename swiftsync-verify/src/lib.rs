@@ -41,10 +41,12 @@ pub const IMAGES: &[Image] = &[
 
 pub const KIND_CHAIN: u32 = 0xC4A1_0002;
 /// The ChainState layout this crate reads (the guest's CHAIN_STATE_VERSION). Later versions only append fields.
-pub const CHAIN_STATE_VERSION: u32 = 1;
+pub const CHAIN_STATE_VERSION: u32 = 2;
 pub const PROFILE_LIBZYNC: u32 = 1;
 pub const PROFILE_ASSUMEVALID: u32 = 2;
 pub const PROFILE_SIGNET: u32 = 4;
+/// The coin log (docs/libzync/COINLOG.md): no hints file, sound at every block.
+pub const PROFILE_COINLOG: u32 = 16;
 /// Core's MAX_FUTURE_BLOCK_TIME.
 pub const MAX_FUTURE_BLOCK_TIME: u64 = 2 * 60 * 60;
 
@@ -136,9 +138,24 @@ pub fn lineage_of(list: &[Handover]) -> [u8; 32] {
     list.iter().fold([0u8; 32], |l, h| sha256(&pin::lineage_preimage(&l, h)))
 }
 
-/// A block's leaf in the block forest. `hash` is in internal byte order.
-pub fn block_leaf(hash: &[u8; 32], height: u32) -> [u8; 32] {
-    sha256(&pin::block_leaf_preimage(hash, height))
+/// A block's coin-state digest: the coin commitment (roots, leaf count, total value) after that block.
+pub fn utxo_state(leaves: u64, value: u64, roots: &[Option<[u8; 32]>]) -> [u8; 32] {
+    let mut p: Vec<u8> = Vec::new();
+    pin::utxo_state_preimage(leaves, value, roots, &mut |b: &[u8]| p.extend_from_slice(b));
+    sha256(&p)
+}
+
+/// The coin-state digest of a proven state's own tip: what its last block leaf commits.
+pub fn utxo_state_of(cs: &ChainState) -> [u8; 32] {
+    utxo_state(cs.utxo_leaves, cs.utxo_value, &cs.utxo_roots)
+}
+
+/// One block as the block forest holds it: its hash (internal byte order) and its coin-state digest ([`utxo_state`]).
+pub type BlockEntry = ([u8; 32], [u8; 32]);
+
+/// A block's leaf in the block forest.
+pub fn block_leaf(hash: &[u8; 32], height: u32, state: &[u8; 32]) -> [u8; 32] {
+    sha256(&pin::block_leaf_preimage(hash, height, state))
 }
 
 fn forest_parent(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
@@ -164,14 +181,15 @@ fn locate(leaves: u64, pos: u64) -> Option<(u32, u64)> {
     None
 }
 
-/// Does this proven state commit to `hash` at `height`? `path` is the sibling hashes, lowest first. A proof of the tip
-/// checks any earlier block this way, with no node and no per-block proving. `cs` must have passed [`verify`].
-pub fn block_in_chain(cs: &ChainState, height: u32, hash: &[u8; 32], path: &[[u8; 32]]) -> bool {
+/// Does this proven state commit to block `hash` at `height`, with coin state `state` after it? `path` is the sibling
+/// hashes, lowest first. A proof of the tip checks any earlier block, and its coin state, this way, with no node and
+/// no per-block proving. `cs` must have passed [`verify`].
+pub fn block_in_chain(cs: &ChainState, height: u32, hash: &[u8; 32], state: &[u8; 32], path: &[[u8; 32]]) -> bool {
     let Some((tree, mut pos)) = locate(cs.block_leaves, height as u64) else { return false };
     if path.len() != tree as usize {
         return false;
     }
-    let mut node = block_leaf(hash, height);
+    let mut node = block_leaf(hash, height, state);
     for sib in path {
         node = if pos & 1 == 0 { forest_parent(&node, sib) } else { forest_parent(sib, &node) };
         pos >>= 1;
@@ -179,11 +197,11 @@ pub fn block_in_chain(cs: &ChainState, height: u32, hash: &[u8; 32], path: &[[u8
     cs.block_roots.get(tree as usize).copied().flatten() == Some(node)
 }
 
-/// The block forest over `hashes` (index = height, internal byte order): the roots a proof at the last height commits.
-pub fn block_forest(hashes: &[[u8; 32]]) -> (Vec<Option<[u8; 32]>>, u64) {
+/// The block forest over `blocks` (index = height): the roots a proof at the last height commits.
+pub fn block_forest(hashes: &[BlockEntry]) -> (Vec<Option<[u8; 32]>>, u64) {
     let mut roots: Vec<Option<[u8; 32]>> = Vec::new();
     for (i, b) in hashes.iter().enumerate() {
-        let (mut node, mut h) = (block_leaf(b, i as u32), 0);
+        let (mut node, mut h) = (block_leaf(&b.0, i as u32, &b.1), 0);
         while roots.get(h).copied().flatten().is_some() {
             node = forest_parent(&roots[h].take().unwrap(), &node);
             h += 1;
@@ -200,11 +218,11 @@ pub fn block_forest(hashes: &[[u8; 32]]) -> (Vec<Option<[u8; 32]>>, u64) {
 }
 
 /// The path for the block at `height` in the forest over `hashes`: what a block-proof server hands out.
-pub fn block_path(hashes: &[[u8; 32]], height: u32) -> Option<Vec<[u8; 32]>> {
+pub fn block_path(hashes: &[BlockEntry], height: u32) -> Option<Vec<[u8; 32]>> {
     let (tree, mut pos) = locate(hashes.len() as u64, height as u64)?;
     let start = height as u64 - pos;
     let mut level: Vec<[u8; 32]> = hashes[start as usize..(start + (1u64 << tree)) as usize].iter().enumerate()
-        .map(|(i, b)| block_leaf(b, start as u32 + i as u32)).collect();
+        .map(|(i, b)| block_leaf(&b.0, start as u32 + i as u32, &b.1)).collect();
     let mut path = Vec::with_capacity(tree as usize);
     for _ in 0..tree {
         path.push(level[(pos ^ 1) as usize]);
@@ -314,7 +332,11 @@ pub fn verify(inp: &Inputs) -> Report {
     };
     rep.check(cs.anchor_id == anchor_id(&want), format!("anchor_id is {what}"));
 
-    // Step 10, then 4-6: the file.
+    // Step 10, then 4-6: the file. A coin-log image has none: its commitment is sound at every block.
+    if inp.image.profile & PROFILE_COINLOG != 0 {
+        rep.check(inp.hints.is_empty(), "a coin-log proof takes no hints file");
+        rep.check(cs.ss_set == 0 && cs.ss_hints == [0; 32], "SwiftSync fields unused (ss_set == 0, ss_hints == 0)");
+    } else {
     match hints_file(inp.hints) {
         Err(e) => {
             rep.check(false, format!("the hints file is canonically encoded and well formed ({e})"));
@@ -325,6 +347,7 @@ pub fn verify(inp: &Inputs) -> Report {
             rep.check(cs.ss_set == 0, "SwiftSync total is the identity (ss_set == 0)");
             rep.check(cs.ss_hints == fh, format!("ss_hints {} == the hash of the file", hex(&fh)));
         }
+    }
     }
     rep.verdict = if rep.failed() {
         Verdict::Fail
@@ -343,10 +366,11 @@ pub fn dev_mode_env() -> bool {
 }
 
 pub fn describe_profile(p: u32) -> String {
-    format!("{}, {}, {}",
+    format!("{}, {}, {}{}",
             if p & PROFILE_LIBZYNC != 0 { "libzync" } else { "canonical" },
             if p & PROFILE_ASSUMEVALID != 0 { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" },
-            if p & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" })
+            if p & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" },
+            if p & PROFILE_COINLOG != 0 { ", coin log" } else { "" })
 }
 
 /// The network's genesis ChainState for this image (§5 step 3).
@@ -379,7 +403,7 @@ pub fn genesis_anchor(img: &Image) -> ChainState {
         smt_root: empty_smt_root(),
         max_time: img.genesis_time,
         profile: 0,
-        block_roots: vec![Some(block_leaf(&tip, 0))],
+        block_roots: vec![Some(block_leaf(&tip, 0, &utxo_state(0, 0, &[])))],
         block_leaves: 1,
         lineage: [0; 32],
     }
@@ -495,8 +519,8 @@ mod tests {
     fn genesis_anchor_vectors() {
         // SWIFTSYNC_PROOFS.md §5 step 3. Independent of the image; computed by scripts/libzync/genesis_anchor_id.py.
         let a = |n| hex(&anchor_id(&genesis_anchor(Image::by_network(n).unwrap())));
-        assert_eq!(a("mainnet"), "b768af638616bc97c44acaf29387a2a538425f9d726c5972f5da0a909642db03");
-        assert_eq!(a("signet"), "c0055bc30ceecf883406e2625fe901895575bedfeb48834bea70458e2cf0b320");
+        assert_eq!(a("mainnet"), "5652addca32eebf2dffd4cfb6427813c2ee6c9326dd8666d2750a9a032848d46");
+        assert_eq!(a("signet"), "04d6826ab1cde38accd700fb284f6b99337715170c8afd3b819700e9de79e24a");
     }
 
     #[test]
@@ -507,12 +531,18 @@ mod tests {
         assert_eq!(anchor_id(&genesis_anchor(img)), anchor_id(&genesis_anchor(other)));
     }
 
-    fn sample_hashes(n: u32) -> Vec<[u8; 32]> {
+    /// Made-up blocks: hash b_i = SHA-256(i as u32 LE), coin state s_i = utxo_state(i, 1000·i, [None, Some(SHA-256(b_i))]
+    /// for odd i, else []): the same in scripts/libzync/block_forest_ref.py.
+    fn sample_hashes(n: u32) -> Vec<BlockEntry> {
         use sha2::{Digest as _, Sha256};
-        (0..n).map(|i| Sha256::digest(i.to_le_bytes()).into()).collect()
+        (0..n).map(|i| {
+            let b: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
+            let roots: Vec<Option<[u8; 32]>> = if i % 2 == 1 { vec![None, Some(Sha256::digest(b).into())] } else { vec![] };
+            (b, utxo_state(i as u64, 1000 * i as u64, &roots))
+        }).collect()
     }
 
-    fn state_over(hashes: &[[u8; 32]]) -> ChainState {
+    fn state_over(hashes: &[BlockEntry]) -> ChainState {
         let mut cs = genesis_anchor(Image::by_network("mainnet").unwrap());
         (cs.block_roots, cs.block_leaves) = block_forest(hashes);
         cs
@@ -522,17 +552,18 @@ mod tests {
     fn block_forest_vectors() {
         // From scripts/libzync/block_forest_ref.py, which builds the forest from its definition and shares no code here.
         let hs = sample_hashes(11);
-        assert_eq!(hex(&block_leaf(&hs[0], 0)), "7f3a8314778748ed848d8fc382579dd6c924c6b3dafa8621c5195de907ea3675");
+        assert_eq!(hex(&block_leaf(&hs[0].0, 0, &hs[0].1)), "228f6506359bf248e6ebbd79fe8ebf607a6ff3090c63c5905dcc1950dad1cc8a");
+        assert_eq!(hex(&utxo_state(0, 0, &[])), "48b9b34b851a03302c02d0519a1b741babdbf7e4dbabf93c7a7f1ea7db057e7a");
         let (r, n) = block_forest(&hs);
         assert_eq!(n, 11);
-        let want = [Some("37636f768a40aa384978bb6f609d9b0fc2f84acf52a8296179df650a7b4f65a1"),
-                    Some("736312ae2a7a66502de4d433d0719967af9a3a29795dce8779e0ff23d10700e4"), None,
-                    Some("b14a44d1671c66a143126a4c9629faff4f7479c32f77b3e6aecd366bee86e324")];
+        let want = [Some("c08e5924be0c590b0b0f283f897a72745fbcaca9f7a0ba0e42cc9fa214cbf460"),
+                    Some("875737e7f3597222d0168ffd0fbcf2ba54f9c649f78a58655b2c0a20dfe3494f"), None,
+                    Some("d93f2ed6c5919b2766eec5412eaafa771404765662b84a91f4b2d26daa5b1eba")];
         assert_eq!(r.iter().map(|x| x.map(|h| hex(&h))).collect::<Vec<_>>(), want.map(|x| x.map(String::from)).to_vec());
         let p = block_path(&hs, 5).unwrap();
-        let want = ["d7a2f3d26dde6016c12a608b53357e5bbb5af98110a7914d47178d3124752f65",
-                    "1aec36ab09c4040b6d467e7d766d43a775c0b7b1e87133ed48ff1c85e4ab0cdb",
-                    "ab2dbea869aa04c799605d1600b5b1d1f69f78c20bef0caac462f798d555f786"];
+        let want = ["5348a332bd8c07149cd91c22da7a3ced2cf7b1bf2a68c1fb82856067d779f344",
+                    "2033a6d6ca4dca8c9bd58baae86d98c8be56eb792f2b830f45656343b1f52fb2",
+                    "a913976775b5350f893699512397084fab510b5bd3c19b81e26d6ad97b16cae2"];
         assert_eq!(p.iter().map(|h| hex(h)).collect::<Vec<_>>(), want);
     }
 
@@ -554,25 +585,27 @@ mod tests {
             let cs = state_over(&hs);
             for h in 0..n {
                 let p = block_path(&hs, h).unwrap();
-                assert!(block_in_chain(&cs, h, &hs[h as usize], &p), "n {n} height {h}");
-                // A different block, or the right block at the wrong height.
-                assert!(!block_in_chain(&cs, h, &[0xee; 32], &p));
-                assert!(!block_in_chain(&cs, (h + 1) % n, &hs[h as usize], &p) || n == 1);
+                let (b, st) = &hs[h as usize];
+                assert!(block_in_chain(&cs, h, b, st, &p), "n {n} height {h}");
+                // A different block, a different coin state, or the right block at the wrong height.
+                assert!(!block_in_chain(&cs, h, &[0xee; 32], st, &p));
+                assert!(!block_in_chain(&cs, h, b, &[0xee; 32], &p));
+                assert!(!block_in_chain(&cs, (h + 1) % n, b, st, &p) || n == 1);
                 // One flipped bit anywhere in the path.
                 for i in 0..p.len() {
                     let mut q = p.clone();
                     q[i][0] ^= 1;
-                    assert!(!block_in_chain(&cs, h, &hs[h as usize], &q));
+                    assert!(!block_in_chain(&cs, h, b, st, &q));
                 }
                 // A short path (an interior node posing as a leaf) and a long one.
                 if !p.is_empty() {
-                    assert!(!block_in_chain(&cs, h, &hs[h as usize], &p[..p.len() - 1]));
+                    assert!(!block_in_chain(&cs, h, b, st, &p[..p.len() - 1]));
                 }
                 let mut long = p.clone();
                 long.push([0; 32]);
-                assert!(!block_in_chain(&cs, h, &hs[h as usize], &long));
+                assert!(!block_in_chain(&cs, h, b, st, &long));
             }
-            assert!(!block_in_chain(&cs, n, &[0; 32], &[]), "a height past the tip");
+            assert!(!block_in_chain(&cs, n, &[0; 32], &[0; 32], &[]), "a height past the tip");
         }
     }
 }

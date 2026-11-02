@@ -8,6 +8,8 @@
 # Exit 0 only if every case came out as expected.
 O=$1; N=$2; B=$3; R=$4; FIRST=${FIRST:-101}; LAST=$((FIRST-1)); END=${END:-$((FIRST+9))}
 HERE=$(cd "$(dirname "$0")" && pwd); REF=$HERE/../../../scripts/libzync/block_forest_ref.py
+# Each block leaf commits the coin state after it (HANDOVER.md §3): the per-height states come from the independent
+# coin reference, coinlog_ref.py for a coin-log image, utreexo_ref.py (survivors to END) for design B.
 export RISC0_DEV_MODE=1 HAZYNC_RIG=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_COINLOG_SAVE_EACH=1
 BAD=0; N_CASES=0
 mkdir -p "$R"
@@ -64,6 +66,11 @@ HAZYNC_HANDOVER_RECEIPT=$R/o/block_$LAST.rcpt "$N" libzync-prove-range "$FIRST" 
 /usr/bin/grep -aq "handover: verifies predecessor" "$R/n.log" && pass "block $FIRST ran as a handover step" || wrong "block $FIRST was not a handover step"
 [ "$(/usr/bin/grep -ac '(verifies prev)' "$R/n.log")" -eq $((END-FIRST)) ] && pass "every block after the handover ran as ordinary recursion" || wrong "every block after the handover ran as ordinary recursion"
 
+if python3 -c "import json,sys; sys.exit(0 if json.load(open('$R/o/state_$LAST.json'))['profile'] & 16 else 1)"; then
+    STATES_OUT=$R/states.jsonl python3 $HERE/../../../scripts/libzync/coinlog_ref.py "$B" "$END" > /dev/null
+else
+    STATES_OUT=$R/states.jsonl python3 $HERE/../../../scripts/libzync/utreexo_ref.py "$B" "$END" > /dev/null
+fi
 python3 - "$R" "$LAST" "$FIRST" "$END" "$B" "$REF" "$(cat "$R/o_id")" "$(cat "$R/n_id")" <<'P'
 import importlib.util, json, sys, struct, hashlib
 R, last, first, end, B, ref, oid, nid = sys.argv[1], *map(int, sys.argv[2:5]), *sys.argv[5:]
@@ -79,7 +86,9 @@ ok &= t(b["self_id"] == nw and c["self_id"] == nw, "after the handover the state
 ok &= t(a["anchor_id"] == b["anchor_id"] == c["anchor_id"], "anchor_id unchanged across the handover")
 want = list(m.lineage([(ow, first)]))
 ok &= t(b["lineage"] == want == c["lineage"], "lineage = the reference's digest of [O at first]; unchanged by later steps")
-hs = [bytes.fromhex(l.strip())[::-1] for l in open(f"{R}/hashes.txt")]
+sts = [json.loads(l) for l in open(f"{R}/states.jsonl")]
+hs = [(bytes.fromhex(l.strip())[::-1], m.utxo_state(x["leaves"], x["value"], [bytes.fromhex(r) if r else None for r in x["roots"]]))
+      for l, x in zip(open(f"{R}/hashes.txt"), sts)]
 for st, h in ((a, last), (c, end)):
     got = [bytes(r) if r else None for r in st["block_roots"]]
     ok &= t(got == m.roots(hs[:h + 1]) and st["block_leaves"] == h + 1, f"block forest at {h} == the reference over real block hashes")
@@ -94,5 +103,9 @@ for st, h in ((a, last), (c, end)):
 sys.exit(0 if ok else 1)
 P
 [ $? = 0 ] && pass "state checks" || wrong "state checks"
+if python3 -c "import json,sys; sys.exit(0 if json.load(open('$R/n/state_$END.json'))['profile'] & 16 else 1)"; then
+    python3 $HERE/../../../scripts/libzync/coinlog_ref.py "$B" "$END" "$R/n/state_$END.json" | tail -1 | /usr/bin/grep -q COINLOG_REF_MATCH \
+        && pass "coin log at $END == coinlog_ref.py" || wrong "coin log at $END == coinlog_ref.py"
+fi
 echo "handover run.sh: $((N_CASES-BAD))/$N_CASES as expected"
 [ "$BAD" = 0 ]

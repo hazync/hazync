@@ -3,13 +3,14 @@
 //!
 //! Every coin that outlives the block that creates it is APPENDED, in birth order, to a forest of perfect Merkle trees
 //! (one per set bit of the leaf count, largest and oldest first, as utreexo's stump). Spending a coin FLIPS its leaf to
-//! `spent(leaf)` in place and re-hashes its path. Nothing is moved or deleted, so a coin's position never changes.
+//! `spent(leaf, spender)` in place and re-hashes its path. Nothing is moved or deleted, so a coin's position never changes.
 //!
-//! - leaf: the coin leaf of docs/libzync/UTREEXO_FORMAT.md §2 while unspent; `spent(c)` once spent;
+//! - leaf: the coin leaf of docs/libzync/UTREEXO_FORMAT.md §2 while unspent; `spent(c, s)` once spent;
 //! - `parent(l, L, R)`: one SHA-256 compression of L ‖ R from `IV_NODE[l]` (a tree of 2^l leaves);
-//! - `spent(c)`: one SHA-256 compression of c ‖ 0^32 from `IV_SPENT`.
+//! - `spent(c, s)`: one SHA-256 compression of c ‖ s from `IV_SPENT`, where s = [`spender`]: the spending block's height,
+//!   the spending transaction's position in it (coinbase 0) and the input index, so the log proves who spent a coin.
 //!
-//! A block's update: the spends of coins from earlier blocks as (position, leaf), sorted and strictly increasing, then
+//! A block's update: the spends of coins from earlier blocks as (position, leaf, spender), sorted and strictly increasing, then
 //! the appends. The witness is the hash of every untouched subtree met on the way down, in the order `update` reads
 //! them; the positions alone fix the shape. An unspent leaf at the claimed position is the only way a touched tree's
 //! old root can match: a coin that does not exist, or was spent before, cannot be spent.
@@ -159,11 +160,20 @@ fn parent_w(l: u32, a: &W, b: &W, out: &mut W) {
 }
 
 #[inline(always)]
-fn spent_w(c: &W, out: &mut W) {
+fn spent_w(c: &W, s: &W, out: &mut W) {
     #[cfg(target_os = "zkvm")]
-    compress_w(&IV_SPENT_W, c, &[0u32; 8], out);
+    compress_w(&IV_SPENT_W, c, s, out);
     #[cfg(not(target_os = "zkvm"))]
-    compress_w(&IV_SPENT, c, &[0u32; 8], out);
+    compress_w(&IV_SPENT, c, s, out);
+}
+
+/// The spender record: height u32 LE ‖ transaction position in the block u32 LE ‖ input index u32 LE ‖ 20 zero bytes.
+pub fn spender(height: u32, tx: u32, vin: u32) -> H {
+    let mut s = [0u8; 32];
+    s[0..4].copy_from_slice(&height.to_le_bytes());
+    s[4..8].copy_from_slice(&tx.to_le_bytes());
+    s[8..12].copy_from_slice(&vin.to_le_bytes());
+    s
 }
 
 pub fn parent(l: u32, a: &H, b: &H) -> H {
@@ -172,11 +182,14 @@ pub fn parent(l: u32, a: &H, b: &H) -> H {
     h_of(&o)
 }
 
-pub fn spent(c: &H) -> H {
+pub fn spent(c: &H, s: &H) -> H {
     let mut o = [0u32; 8];
-    spent_w(&w_of(c), &mut o);
+    spent_w(&w_of(c), &w_of(s), &mut o);
     h_of(&o)
 }
+
+/// One spend of an earlier coin: its position in the log, its unspent leaf and its spender record, as words.
+pub type Spend = (u64, W, W);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum LogError {
@@ -194,7 +207,7 @@ pub enum LogError {
 
 /// The old and new hash of the perfect tree of 2^l leaves starting at `start`, with the spends `e` inside it, written
 /// into `old` / `new` (no tuples returned by value: in the guest those were memcpy calls). False: the witness ran out.
-pub fn update(l: u32, start: u64, e: &[(u64, W)], sib: &mut core::slice::Iter<W>, old: &mut W, new: &mut W) -> bool {
+pub fn update(l: u32, start: u64, e: &[Spend], sib: &mut core::slice::Iter<W>, old: &mut W, new: &mut W) -> bool {
     if e.is_empty() {
         let Some(h) = sib.next() else { return false };
         *old = *h;
@@ -203,7 +216,7 @@ pub fn update(l: u32, start: u64, e: &[(u64, W)], sib: &mut core::slice::Iter<W>
     }
     if l == 0 {
         *old = e[0].1;
-        spent_w(&e[0].1, new);
+        spent_w(&e[0].1, &e[0].2, new);
         return true;
     }
     let mid = start + (1u64 << (l - 1));
@@ -222,9 +235,9 @@ pub fn shape_ok(roots: &[Option<H>], n: u64) -> bool {
     (0..64).all(|l| ((n >> l) & 1 == 1) == roots.get(l).copied().flatten().is_some()) && roots.len() <= 64
 }
 
-/// One block: `spends` (position, unspent leaf as words), strictly increasing, against `roots`; then `appends` in order.
+/// One block: `spends` (position, unspent leaf, spender), positions strictly increasing, against `roots`; then `appends`.
 /// `roots` / `n` are updated only on success.
-pub fn apply(roots: &mut Vec<Option<H>>, n: &mut u64, spends: &[(u64, W)], appends: &[H], siblings: &[W]) -> Result<(), LogError> {
+pub fn apply(roots: &mut Vec<Option<H>>, n: &mut u64, spends: &[Spend], appends: &[H], siblings: &[W]) -> Result<(), LogError> {
     if !shape_ok(roots, *n) {
         return Err(LogError::Shape);
     }
@@ -421,8 +434,8 @@ mod tests {
         assert_eq!(&w[..], &IV_SPENT[..]);
     }
 
-    fn ws(sp: &[(u64, H)]) -> Vec<(u64, W)> {
-        sp.iter().map(|(p, h)| (*p, w_of(h))).collect()
+    fn ws(sp: &[(u64, H)]) -> Vec<Spend> {
+        sp.iter().map(|(p, h)| (*p, w_of(h), w_of(&spender(7, *p as u32, 1)))).collect()
     }
     fn wv(v: &[H]) -> Vec<W> {
         v.iter().map(w_of).collect()
@@ -447,7 +460,7 @@ mod tests {
                 let app: Vec<H> = (0..(h(t, b)[0] % 23) as u64).map(|i| h(t * 7 + b, i + 1_000_000)).collect();
                 apply(&mut roots, &mut n, &ws(&sp), &app, &wv(&wit)).unwrap();
                 for (p, c) in &sp {
-                    st.set(*p, spent(c));
+                    st.set(*p, spent(c, &spender(7, *p as u32, 1)));
                     live.retain(|x| x != p);
                 }
                 for a in &app {
@@ -487,7 +500,7 @@ mod tests {
         assert_eq!(one(&past, &[]), Err(LogError::PastEnd));
         // a coin already spent
         let mut st2 = st.clone();
-        st2.set(5, spent(&st.leaf(5)));
+        st2.set(5, spent(&st.leaf(5), &spender(7, 5, 1)));
         let (mut r, mut n) = (st2.roots(), st2.len());
         assert_eq!(apply(&mut r, &mut n, &ws(&sp), &[], &wv(&st2.witness(&sp))), Err(LogError::OldRoot));
         // a short or long witness
@@ -500,6 +513,20 @@ mod tests {
         // the witness codec round-trips
         let enc = encode_witness(&[3, 1 << 40], &[h(1, 2), h(3, 4)]);
         assert_eq!(decode_witness(&enc), Some((alloc::vec![3, 1 << 40], alloc::vec![w_of(&h(1, 2)), w_of(&h(3, 4))])));
+        // the spender is part of the new root: the same spend by another input gives another root
+        let (mut r1, mut n1) = (r0.clone(), n0);
+        apply(&mut r1, &mut n1, &ws(&sp), &[], &wv(&st.witness(&sp))).unwrap();
+        let (mut r2, mut n2) = (r0.clone(), n0);
+        let other = [(5u64, w_of(&st.leaf(5)), w_of(&spender(7, 5, 2)))];
+        apply(&mut r2, &mut n2, &other, &[], &wv(&st.witness(&sp))).unwrap();
+        assert_ne!(r1, r2);
+        assert_eq!(spender(0x01020304, 5, 6)[..12], [4, 3, 2, 1, 5, 0, 0, 0, 6, 0, 0, 0]);
+        // against scripts/libzync/coinlog_ref.py, which shares no code with this file
+        let x: H = Sha256::digest(b"c").into();
+        let y: H = Sha256::digest(b"d").into();
+        let hx = |h: H| h.iter().map(|b| alloc::format!("{b:02x}")).collect::<alloc::string::String>();
+        assert_eq!(hx(spent(&x, &spender(974000, 5, 1))), "cdcc3dda5f2c80be4780225cde93b2442e7d270052ab938d73be4107b388993e");
+        assert_eq!(hx(parent(3, &x, &y)), "fcd6a12230b8fc914334039dfe3be49a9796fe16193c15e05de61a536c29f14f");
         // words and bytes round-trip
         assert_eq!(h_of(&w_of(&h(5, 6))), h(5, 6));
     }

@@ -120,7 +120,9 @@ const KIND_CHAIN: u32 = 0xC4A1_0002;
 /// ChainState layout version (docs/libzync/HANDOVER.md §2). Fields after `version` are only ever APPENDED, never
 /// reordered or removed, so a reader (a zyncAPP, a verifier) built for version n decodes the prefix it knows from any
 /// later version: risc0's serde reads fields in order and ignores trailing words.
-const CHAIN_STATE_VERSION: u32 = 1;
+/// 2: same fields as 1; each block leaf also commits the coin state after that block, and a coin-log spent leaf records
+/// its spender (HANDOVER.md §3, UTREEXO_FORMAT.md §7).
+const CHAIN_STATE_VERSION: u32 = 2;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
 
@@ -2239,11 +2241,14 @@ fn aggregate() {
     let (ss_set, ss_acc, ss_hints) = (prev.ss_set, prev.ss_acc, prev.ss_hints);
     // The block forest. Induction from the genesis state gives one leaf per height; the check also refuses a base
     // step on an anchor that has no forest, which would otherwise commit a forest with the wrong leaf numbering.
+    let utxo_value = prev.utxo_value.saturating_add(r.survivor_value).checked_sub(r.spent_value).expect("utxo_value: the block spends more than the log holds");
     #[cfg(feature = "libzync")]
     let (block_roots, block_leaves) = {
         assert!(prev.block_leaves == prev.height as u64 + 1, "aggregate: block forest {} leaves at height {}", prev.block_leaves, prev.height);
         let mut f = utreexo::Stump::new(prev.block_roots.clone(), prev.block_leaves);
-        f.add(sha256_guest(&handover_pin::block_leaf_preimage(&r.tip_hash, height)));
+        let mut st: Vec<u8> = Vec::with_capacity(17 + 32 * r.root_next_roots.len());
+        handover_pin::utxo_state_preimage(r.root_next_leaves, utxo_value, &r.root_next_roots, &mut |b: &[u8]| st.extend_from_slice(b));
+        f.add(sha256_guest(&handover_pin::block_leaf_preimage(&r.tip_hash, height, &sha256_guest(&st))));
         (normalize(f.roots), f.num_leaves)
     };
     #[cfg(not(feature = "libzync"))]
@@ -2252,7 +2257,7 @@ fn aggregate() {
     env::commit(&ChainState {
         kind: KIND_CHAIN, version: CHAIN_STATE_VERSION,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
-        utxo_value: prev.utxo_value.saturating_add(r.survivor_value).checked_sub(r.spent_value).expect("utxo_value: the block spends more than the log holds"),
+        utxo_value,
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
         ss_set, ss_acc, ss_hints, smt_root,
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),

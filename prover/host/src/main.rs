@@ -31,7 +31,7 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 
 // H8 domain tags — first committed field of each recursion-consumed journal (must match the guest).
 /// Mirrors the guest's CHAIN_STATE_VERSION.
-const CHAIN_STATE_VERSION: u32 = 1;
+const CHAIN_STATE_VERSION: u32 = 2;
 const KIND_CHAIN: u32 = 0xC4A1_0002;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
@@ -1323,6 +1323,13 @@ fn genesis_params() -> (&'static str, u32, u32, u128) {
     }
 }
 
+/// The coin-state digest of the genesis state: no coins (the genesis coinbase is unspendable), value 0.
+fn empty_utxo_state() -> [u8; 32] {
+    let mut st: Vec<u8> = Vec::new();
+    handover_pin::utxo_state_preimage(0, 0, &[], &mut |b: &[u8]| st.extend_from_slice(b));
+    sha256_host(&st)
+}
+
 fn genesis_anchor() -> ChainState {
     let (g_hash, g_time, g_bits, g_work) = genesis_params();
     ChainState {
@@ -1333,7 +1340,7 @@ fn genesis_anchor() -> ChainState {
         // self_id is zero, not this image: anchor_id must stay the same across a handover (HANDOVER.md).
         recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: [0; 8], ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: g_time, profile: 0,
-        block_roots: vec![Some(sha256_host(&handover_pin::block_leaf_preimage(&arr(rev(hx(g_hash))), 0)))],
+        block_roots: vec![Some(sha256_host(&handover_pin::block_leaf_preimage(&arr(rev(hx(g_hash))), 0, &empty_utxo_state())))],
         block_leaves: 1, lineage: [0; 32],
     }
 }
@@ -2081,13 +2088,14 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         if methods::LIBZYNC { "libzync" } else { "canonical" }, methods::NETWORK,
         if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
     let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => { println!("  [FAIL] journal is not a ChainState: {e}"); std::process::exit(1) } };
-    check(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "journal is a ChainState committed by this image (kind, self_id)");
+    check(cs.kind == KIND_CHAIN && cs.version == CHAIN_STATE_VERSION && cs.self_id == METHOD_ID,
+          &format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
     // The profile is committed by the image itself (bits from the compiled code, never from input), so the
     // proof states what was checked; it must also be what this verifier was built to accept.
-    check(cs.profile == expected_profile(), &format!("profile in the proof 0x{:x} == this verifier's 0x{:x} ({}{}{})",
+    check(cs.profile == expected_profile(), &format!("profile in the proof 0x{:x} == this verifier's 0x{:x} ({}{}{}{})",
         cs.profile, expected_profile(), if cs.profile & 1 != 0 { "libzync" } else { "canonical" },
         if cs.profile & 2 != 0 { ", ASSUMEVALID: scripts and signatures NOT checked" } else { ", scripts checked" },
-        if cs.profile & 4 != 0 { ", signet" } else { ", mainnet" }));
+        if cs.profile & 4 != 0 { ", signet" } else { ", mainnet" }, if cs.profile & 16 != 0 { ", coin log" } else { "" }));
     // time-too-new (Core ContextualCheckBlockHeader): no block more than 2 h past THIS node's clock. The proof
     // has no clock; it commits the largest timestamp and the rule is applied here, as Core applies it to
     // every block during IBD. HAZYNC_VERIFY_NOW overrides the clock for tests, and is itself a failed check.
@@ -2106,7 +2114,13 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     };
     let want_anchor = bitcoin::hashes::sha256d::Hash::hash(&want_anchor).to_byte_array();
     check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
-    let raw = std::fs::read(hints).unwrap_or_else(|e| panic!("{hints}: {e}"));
+    // The coin log (COINLOG.md) is sound at every block: no hints file, nothing to close. The SwiftSync fields stay zero.
+    if methods::COINLOG {
+        check(hints == "-", "a coin-log proof takes no hints file (pass '-')");
+        check(cs.ss_set == 0 && cs.ss_hints == [0; 32], "SwiftSync fields unused (ss_set == 0, ss_hints == 0)");
+    }
+    let raw = if methods::COINLOG { Vec::new() } else { std::fs::read(hints).unwrap_or_else(|e| panic!("{hints}: {e}")) };
+    if !methods::COINLOG {
     let file = hintsfile::Hintsfile::from_reader(&mut raw.as_slice()).unwrap_or_else(|e| panic!("{hints}: {e}"));
     {
         use sha2::Digest;
@@ -2123,6 +2137,8 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         Err(e) => { check(false, &format!("{hints} is well formed: {e}")); [0u8; 32] }
     };
     check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints}", hex(&fh)));
+    }
+    let _ = raw;
     // As swiftsync-verify: a root exactly at each set bit of block_leaves (HANDOVER.md §6).
     let shape = (0..64).all(|i| ((cs.block_leaves >> i) & 1 == 1) == cs.block_roots.get(i).copied().flatten().is_some());
     check(cs.block_leaves == cs.height as u64 + 1 && shape, &format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
@@ -2130,7 +2146,7 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     check(cs.lineage == [0; 32] || cs.lineage == full, &format!("lineage {} is this image's ({} handover(s) pinned)", hex(&cs.lineage), handover_pin::LINEAGE.len()));
     println!("  chain: tip {} (display order {}), cum_work 0x{}", hex(&cs.tip_hash),
              hex(&rev(cs.tip_hash.to_vec())), hex(&rev(cs.cum_work.to_vec())));
-    println!("  UTXO set at H: {} coins, Utreexo roots {:?}", cs.utxo_leaves,
+    println!("  {}: {} coins, {} sat, roots {:?}", if methods::COINLOG { "coin log (every coin ever appended)" } else { "UTXO set at H" }, cs.utxo_leaves, cs.utxo_value,
              cs.utxo_roots.iter().map(|x| x.map(|h| hex(&h[..8]))).collect::<Vec<_>>());
     if fails == 0 && anchor.is_some() {
         // Never the OK line: the base state was the prover's (or a sweep's) assertion, not genesis, so the
@@ -2140,6 +2156,8 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     } else if fails == 0 {
         // The verdict line names an assumevalid profile, so a reader of this line alone (or a script) cannot
         // take a scripts-skipped proof for a full one (review 5).
+        if methods::COINLOG { println!("LIBZYNC_VERIFY_OK: the chain and its coin log are proven at height {}{}", cs.height,
+                 if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" }); return; }
         println!("LIBZYNC_VERIFY_OK: {hints} is proven correct for this chain at height {}{}", cs.height,
                  if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" });
     } else {
@@ -10231,15 +10249,21 @@ fn cl_load(path: &str) {
 
 fn cl_init_empty() { *CL.lock().unwrap() = Some(cl_from_leaves(&[])); }
 
-/// The "coinlog: S|A <hex>" lines of a collect run, in order.
-fn cl_parse(log: &str) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
+/// One spend of an earlier coin, as the collect run logs it: (unspent leaf, spending tx position, input index).
+type ClSpend = ([u8; 32], u32, u32);
+
+/// The "coinlog: S <leaf hex> <tx> <vin>" and "coinlog: A <leaf hex>" lines of a collect run, in order.
+fn cl_parse(log: &str) -> (Vec<ClSpend>, Vec<[u8; 32]>) {
     let (mut s, mut a) = (Vec::new(), Vec::new());
     for l in log.lines() {
         let Some(i) = l.find("coinlog: ") else { continue };
-        let rest = &l[i + 9..];
-        let (kind, hx) = (rest.as_bytes()[0], rest[2..].trim());
-        let h: [u8; 32] = arr(hx_bytes(hx));
-        if kind == b'S' { s.push(h) } else if kind == b'A' { a.push(h) }
+        let f: Vec<&str> = l[i + 9..].split_whitespace().collect();
+        let h: [u8; 32] = arr(hx_bytes(f[1]));
+        match f[0] {
+            "S" => s.push((h, f[2].parse().expect("coinlog S: tx"), f[3].parse().expect("coinlog S: vin"))),
+            "A" => a.push(h),
+            k => panic!("coinlog line kind {k}"),
+        }
     }
     (s, a)
 }
@@ -10247,24 +10271,24 @@ fn cl_parse(log: &str) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
 fn hx_bytes(h: &str) -> Vec<u8> { (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect() }
 
 /// The block's witness words: each spend's position in block order, and the siblings for the sorted spends.
-fn cl_prepare(spends: &[[u8; 32]]) -> Vec<u32> {
+fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {
     let g = CL.lock().unwrap();
     let h = g.as_ref().expect("coin log not initialised");
     let n = h.store.len();
-    let positions: Vec<u64> = spends.iter().map(|l| *h.pos.get(l).unwrap_or(&n)).collect();
-    let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().copied()).collect();
+    let positions: Vec<u64> = spends.iter().map(|s| *h.pos.get(&s.0).unwrap_or(&n)).collect();
+    let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().map(|s| s.0)).collect();
     sorted.sort_unstable_by_key(|x| x.0);
     let sib = h.store.witness(&sorted);
     libzync::coinlog::encode_witness(&positions, &sib)
 }
 
 /// After the block is proved: the same flips and appends on the host's log, which must then equal the state.
-fn cl_commit(spends: &[[u8; 32]], appends: &[[u8; 32]], st: &ChainState) {
+fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainState) {
     let mut g = CL.lock().unwrap();
     let h = g.as_mut().expect("coin log not initialised");
-    for l in spends {
+    for (l, t, v) in spends {
         let p = h.pos.remove(l).expect("a proved spend of a coin the host's log does not hold");
-        h.store.set(p, libzync::coinlog::spent(l));
+        h.store.set(p, libzync::coinlog::spent(l, &libzync::coinlog::spender(st.height, *t, *v)));
     }
     for l in appends {
         h.pos.insert(*l, h.store.len());
@@ -10279,7 +10303,8 @@ fn cl_commit(spends: &[[u8; 32]], appends: &[[u8; 32]], st: &ChainState) {
 /// transactions ($HAZYNC_COINLOG_TXCOUNTS, getchaintxstats pairs; k = $HAZYNC_COINLOG_K, default 1.64), a random rank
 /// inside the creation block. Untouched subtrees are random; the touched trees' old roots are what the witness folds
 /// to. Cycles only: such a state is not the chain's.
-fn cl_synth(block: &str, spends: &[[u8; 32]]) -> (Vec<Option<[u8; 32]>>, u64, Vec<u32>) {
+fn cl_synth(block: &str, spends: &[ClSpend]) -> (Vec<Option<[u8; 32]>>, u64, Vec<u32>) {
+    let spends: Vec<[u8; 32]> = spends.iter().map(|s| s.0).collect();
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(block).unwrap()).unwrap();
     let h = j["height"].as_u64().unwrap() as f64;
     let mut heights: Vec<f64> = Vec::new();
@@ -10331,7 +10356,8 @@ fn cl_synth(block: &str, spends: &[[u8; 32]]) -> (Vec<Option<[u8; 32]>>, u64, Ve
             let mut sib = Vec::new();
             wit(l, start, &sorted[kk..m], &mut sib, &rnd);
             use libzync::coinlog::{w_of, h_of};
-            let e: Vec<(u64, libzync::coinlog::W)> = sorted[kk..m].iter().map(|(p, h)| (*p, w_of(h))).collect();
+            // Old roots only: the spender never enters the old side, so any spender serves here.
+            let e: Vec<libzync::coinlog::Spend> = sorted[kk..m].iter().map(|(p, h)| (*p, w_of(h), [0u32; 8])).collect();
             let sw: Vec<libzync::coinlog::W> = sib.iter().map(w_of).collect();
             let (mut o, mut nw) = ([0u32; 8], [0u32; 8]);
             assert!(libzync::coinlog::update(l, start, &e, &mut sw.iter(), &mut o, &mut nw));

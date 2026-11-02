@@ -61,7 +61,7 @@ def main():
     self_id = list(struct.unpack("<8I", bytes.fromhex(mid)))
     w = Words()
     w.u32(KIND_CHAIN)                                       # kind
-    w.u32(1)                                                # version (CHAIN_STATE_VERSION)
+    w.u32(2)                                                # version (CHAIN_STATE_VERSION)
     w.bytes_fixed(bytes.fromhex(g_hash)[::-1])              # tip_hash, internal byte order
     w.u32(1); w.u32(0)                                      # utxo_roots = [None]: one entry, empty
     w.u64(0)                                                # utxo_leaves
@@ -82,7 +82,8 @@ def main():
     w.bytes_fixed(empty_smt_root())                         # smt_root
     w.u32(g_time)                                           # max_time
     w.u32(0)                                                # profile
-    leaf = sha256(bytes([0x02]) + bytes.fromhex(g_hash)[::-1] + struct.pack("<I", 0))
+    empty_state = sha256(bytes([0x04]) + struct.pack("<QQ", 0, 0))   # no coins, value 0 (HANDOVER.md §3)
+    leaf = sha256(bytes([0x02]) + bytes.fromhex(g_hash)[::-1] + struct.pack("<I", 0) + empty_state)
     w.u32(1); w.u32(1); w.bytes_fixed(leaf)                 # block_roots = [Some(genesis leaf)]
     w.u64(1)                                                # block_leaves
     w.bytes_fixed(bytes(32))                                # lineage

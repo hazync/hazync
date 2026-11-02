@@ -15,7 +15,7 @@ pub struct Handover {
 
 pub const LINEAGE: &[Handover] = &[];
 
-/// Domain tags. 0x00 coin leaf and 0x01 forest node are `utreexo.rs`; 0x11 is the coinbase SMT.
+/// Domain tags. 0x00 coin leaf and 0x01 forest node are `utreexo.rs`; 0x11 is the coinbase SMT; 0x04 below.
 pub const TAG_BLOCK_LEAF: u8 = 0x02;
 pub const TAG_LINEAGE: u8 = 0x03;
 
@@ -32,11 +32,29 @@ pub fn lineage_preimage(prev: &[u8; 32], h: &Handover) -> [u8; 69] {
     p
 }
 
-/// The preimage of a block leaf: `SHA-256(0x02 ‖ block hash, internal byte order ‖ height u32 LE)`.
-pub fn block_leaf_preimage(block_hash: &[u8; 32], height: u32) -> [u8; 37] {
-    let mut p = [0u8; 37];
+/// The preimage of a block leaf: `SHA-256(0x02 ‖ block hash, internal byte order ‖ height u32 LE ‖ utxo state)`, where
+/// `utxo state` is [`utxo_state_preimage`]'s digest of the coin commitment AFTER this block (HANDOVER.md §3). With it, a
+/// proof at the tip commits every past block's coin state: a zyncAPP opens a block leaf, then a coin path against
+/// that block's roots, to show a coin's state at any height.
+pub fn block_leaf_preimage(block_hash: &[u8; 32], height: u32, utxo_state: &[u8; 32]) -> [u8; 69] {
+    let mut p = [0u8; 69];
     p[0] = TAG_BLOCK_LEAF;
     p[1..33].copy_from_slice(block_hash);
     p[33..37].copy_from_slice(&height.to_le_bytes());
+    p[37..69].copy_from_slice(utxo_state);
     p
+}
+
+pub const TAG_UTXO_STATE: u8 = 0x04;
+
+/// The preimage of a block's coin-state digest, fed in pieces to `feed` (no allocation, so the host, the guest and
+/// the verifier share it): `0x04 ‖ utxo_leaves u64 LE ‖ utxo_value u64 LE ‖ each present root, the largest (highest
+/// level) first`. The leaf count fixes which roots are present, so absent ones need no marker.
+pub fn utxo_state_preimage(leaves: u64, value: u64, roots: &[Option<[u8; 32]>], feed: &mut impl FnMut(&[u8])) {
+    feed(&[TAG_UTXO_STATE]);
+    feed(&leaves.to_le_bytes());
+    feed(&value.to_le_bytes());
+    for r in roots.iter().rev().flatten() {
+        feed(r);
+    }
 }

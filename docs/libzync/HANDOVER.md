@@ -27,7 +27,7 @@ Added to `ChainState` after `profile`, in this order:
 
 ### Layout version and appending fields (2026-11-02)
 
-`ChainState` also gained `version` (right after `kind`, now `1`) and `utxo_value` (after `utxo_leaves`: the
+`ChainState` also gained `version` (right after `kind`; `1`, and `2` since block leaves carry the coin state) and `utxo_value` (after `utxo_leaves`: the
 satoshis held by the coin forest). From the image freeze on, the layout only grows at the end:
 
 - A field is never reordered, removed or changed in type. A new one is appended, and `version` goes up by one.
@@ -43,19 +43,29 @@ satoshis held by the coin forest). From the image freeze on, the layout only gro
 An append-only Utreexo forest with one leaf per block, genesis first, so leaf `i` is the block at height `i`.
 
 ```
-leaf(hash, height) = SHA-256( 0x02 ‖ block hash, internal byte order ‖ height u32 LE )     37-byte preimage
-parent(L, R)       = SHA-256( 0x01 ‖ L ‖ R )                                               as UTREEXO_FORMAT.md §5
+leaf(hash, height, state) = SHA-256( 0x02 ‖ block hash, internal byte order ‖ height u32 LE ‖ state )   69 bytes
+state                     = SHA-256( 0x04 ‖ utxo_leaves u64 LE ‖ utxo_value u64 LE ‖ present utxo_roots,
+                                     the highest level first )
+parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                                     as UTREEXO_FORMAT.md §5
 ```
 
-- The genesis state holds one leaf, for block 0: `block_roots = [Some(leaf(genesis hash, 0))]`, `block_leaves = 1`.
-- Every aggregate requires `prev.block_leaves == prev.height + 1`, appends `leaf(this block, height)` and commits the
-  result. The block hash is the one the guest computed from the header it validated.
+- `state` is the coin commitment **after** the block: the `utxo_roots`, `utxo_leaves` and `utxo_value` the block's
+  own proof commits. Since version 2 (2026-11-02). The leaf count fixes which roots are present.
+- The genesis state holds one leaf, for block 0: `block_roots = [Some(leaf(genesis hash, 0, SHA-256(0x04 ‖ 0 ‖ 0)))]`,
+  `block_leaves = 1`.
+- Every aggregate requires `prev.block_leaves == prev.height + 1`, appends `leaf(this block, height, state)` and
+  commits the result. The block hash is the one the guest computed from the header it validated.
+- **Why the state is in the leaf.** A proof at the tip then commits the coin state at every earlier height. With the
+  coin log (COINLOG.md), whose commitment is the full coin history at every block, a zyncAPP shows "coin C was
+  unspent (or spent, and by whom) at height h" from one tip proof: a block-forest path to h's leaf, the roots that
+  hash to its `state`, and a coin path against them. Under design B the commitment is the survivor forest, so the
+  state means something only in a proof closed at H.
 - Trees run largest first: the forest of `n` leaves has a tree of height `h` for each set bit `h` of `n`, the highest
   bit holding the earliest leaves.
 - Height is in the leaf so a path cannot be moved to another position. Tag 0x02 separates it from coin leaves (0x00),
   interior nodes (0x01), lineage steps (0x03) and SMT nodes (0x11).
 
-**Checking a block.** Given a verified state, a height, a block hash and a path of sibling hashes, locate the leaf's
+**Checking a block.** Given a verified state, a height, a block hash, its coin state and a path of sibling hashes, locate the leaf's
 tree, require the path length to equal that tree's height, fold the leaf up the path and compare with `block_roots[h]`.
 This is `block_in_chain` in `swiftsync-verify`. It needs no node and no proving: the path comes from anyone, since the
 root in the proof decides. From the block hash, a Merkle branch against the header reaches any transaction.

@@ -11,7 +11,7 @@ guest's committed utxo_leaves / utxo_roots and exits 1 on any difference.
 
 Python standard library only.
 """
-import hashlib, json, sys
+import os, hashlib, json, sys
 
 TAG_LEAF, TAG_NODE = b"\x00", b"\x01"
 MAX_SCRIPT_SIZE = 10_000
@@ -22,7 +22,8 @@ BIP30_UNSPENDABLE = {91722: "00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6c
 
 # Genesis block hash (display order) -> timestamp, for the networks this is used on.
 GENESIS_TIME = {"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f": 1231006505,   # mainnet
-                "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6": 1598918400}   # signet
+                "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6": 1598918400,   # signet
+                "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206": 1296688602}   # regtest
 
 
 def sha256(b):
@@ -146,6 +147,27 @@ def main():
         roots[hgt] = node
     while roots and roots[-1] is None:
         roots.pop()
+    if os.environ.get("STATES_OUT"):
+        # The forest after each height 0..H, for block_forest_ref.py: the survivors (to H) created up to that height.
+        st, out, val, k = [], [{"h": 0, "leaves": 0, "value": 0, "roots": []}], 0, 0
+        for h in range(1, H + 1):
+            while k < len(live) and live[k][0][0] == h:
+                node, hgt = live[k][2], 0
+                val += live[k][3]
+                while hgt < len(st) and st[hgt] is not None:
+                    node = sha256(TAG_NODE + st[hgt] + node)
+                    st[hgt] = None
+                    hgt += 1
+                if hgt == len(st):
+                    st.append(None)
+                st[hgt] = node
+                k += 1
+            r = list(st)
+            while r and r[-1] is None:
+                r.pop()
+            out.append({"h": h, "leaves": k, "value": val, "roots": [x.hex() if x else None for x in r]})
+        with open(os.environ["STATES_OUT"], "w") as f:
+            f.writelines(json.dumps(x) + "\n" for x in out)
     print(f"H={H}: {len(survivors)} leaves, {utxo_value} sat, roots:")
     for hgt, r in enumerate(roots):
         print(f"  [{hgt}] {r.hex() if r else '-'}")

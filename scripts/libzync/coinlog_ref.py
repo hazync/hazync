@@ -5,9 +5,11 @@ implemented here because hashlib does not expose it.
 
 Every coin that outlives the block creating it is appended in block order (transactions in block order, outputs in
 vout order, unspendable outputs and the two BIP30-unspendable coinbases skipped, as UTREEXO_FORMAT.md §3); a spend of a
-coin from an earlier block flips its leaf to spent(leaf). Roots: one perfect tree per set bit of the leaf count, oldest
+coin from an earlier block flips its leaf to spent(leaf, spender), spender = height u32 LE ‖ position of the spending
+transaction in its block u32 LE (coinbase 0) ‖ input index u32 LE ‖ 20 zero bytes. Roots: one perfect tree per set bit of the leaf count, oldest
 and largest first. With a state, compares utxo_roots, utxo_leaves (= every coin ever appended) and utxo_value (= the
 live coins' total). Prints COINLOG_REF_MATCH / COINLOG_REF_MISMATCH and exits 0 / 1.
+With STATES_OUT=<file>, writes the commitment after every height 0..H, one JSON line each, for block_forest_ref.py.
 """
 import hashlib, json, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -58,8 +60,8 @@ def parent(l, a, b):
     return comp(IV_NODE[l], a, b)
 
 
-def spent(c):
-    return comp(IV_SPENT, c, bytes(32))
+def spent(c, height, tx, vin):
+    return comp(IV_SPENT, c, struct.pack("<III", height, tx, vin) + bytes(20))
 
 
 def roots(leaves):
@@ -75,10 +77,45 @@ def roots(leaves):
     return [out.get(l) for l in range(top)]
 
 
+class Inc:
+    """The same forest kept incrementally (node lists per level), for the per-height states; checked against roots()."""
+    def __init__(self):
+        self.lv = [[]]
+
+    def push(self, x):
+        self.lv[0].append(x)
+        l = 0
+        while len(self.lv[l]) % 2 == 0:
+            if len(self.lv) == l + 1:
+                self.lv.append([])
+            self.lv[l + 1].append(parent(l + 1, self.lv[l][-2], self.lv[l][-1]))
+            l += 1
+
+    def set(self, p, x):
+        self.lv[0][p] = x
+        for l in range(len(self.lv) - 1):
+            j = p // 2
+            if j >= len(self.lv[l + 1]):
+                break
+            self.lv[l + 1][j] = parent(l + 1, self.lv[l][2 * j], self.lv[l][2 * j + 1])
+            p = j
+
+    def roots(self):
+        n, out, start = len(self.lv[0]), [], 0
+        for l in range(63, -1, -1):
+            if n >> l & 1:
+                out += [None] * (l + 1 - len(out))
+                out[l] = self.lv[l][start >> l]
+                start += 1 << l
+        return out
+
+
 def main():
     d, H = sys.argv[1], int(sys.argv[2])
     log, pos, value = [], {}, {}     # leaf values; outpoint -> position of an unspent coin; outpoint -> amount
     times, prev_hash = [], None
+    states = [{"h": 0, "leaves": 0, "value": 0, "roots": []}]
+    inc = Inc()
     for h in range(1, H + 1):
         j = json.load(open(f"{d}/block_{h}.json"))
         if h == 1:
@@ -90,30 +127,39 @@ def main():
         times.append(j["time"])
         bip30 = h in BIP30_UNSPENDABLE and BIP30_UNSPENDABLE[h] == header_hash(j)
         raws = [bytes.fromhex(j["coinbase_hex"])] + [bytes.fromhex(t["raw"]) for t in j["txs"]]
-        created, spent_here = [], []   # (outpoint, leaf, amount) in block order; outpoints spent by this block
+        created, spent_here = [], []   # (outpoint, leaf, amount) in block order; (outpoint, tx position, input index)
         for k, raw in enumerate(raws):
             txid, ins, outs = parse_tx(raw)
             if k > 0:
-                spent_here += ins
+                spent_here += [(op, k, i) for i, op in enumerate(ins)]
             if k == 0 and bip30:
                 continue
             for v, (val, spk) in enumerate(outs):
                 if spendable(spk):
                     created.append(((txid, v), leaf(txid, v, val, spk, h, k == 0, m), val))
         made = {op for op, _, _ in created}
-        for op in spent_here:
+        for op, k, i in spent_here:
             if op in made:
                 made.discard(op)            # created and spent in this block: never enters the log
             else:
                 p = pos.pop(op)             # a coin from an earlier block: flip it
-                log[p] = spent(log[p])
+                log[p] = spent(log[p], h, k, i)
+                inc.set(p, log[p])
                 value.pop(op)
         for op, lf, val in created:
             if op in made:
                 pos[op] = len(log)
                 log.append(lf)
+                inc.push(lf)
                 value[op] = val
+        if os.environ.get("STATES_OUT"):
+            states.append({"h": h, "leaves": len(log), "value": sum(value.values()),
+                           "roots": [x.hex() if x else None for x in inc.roots()]})
+    if os.environ.get("STATES_OUT"):
+        with open(os.environ["STATES_OUT"], "w") as f:
+            f.writelines(json.dumps(x) + "\n" for x in states)
     r = roots(log)
+    assert inc.roots() == r, "incremental forest differs from the definition"
     total = sum(value.values())
     print(f"H={H}: {len(log)} leaves appended, {len(pos)} live coins, {total} sat, {sum(x is not None for x in r)} roots")
     if len(sys.argv) > 3:

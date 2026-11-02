@@ -198,12 +198,12 @@ Given a receipt R, the hints file F and the network:
    current images (round 8, scripts checked, built by `reproduce/libzync.Dockerfile`): mainnet `9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55`, signet `067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36`,
    pinned in `reproduce/LIBZYNC_IDS`. ⚠ These round-8 images predate the handover format (steps 3, 12, 13 and
    HANDOVER.md); their journals do not decode as today's `ChainState`. The ids move at the image freeze.
-2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002`, `J.version == 1` and `J.self_id == M`. M is the **newest**
+2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002`, `J.version == 2` and `J.self_id == M`. M is the **newest**
    image: after a handover the receipt verifies against the image that continued the chain, never an earlier one.
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
    nothing about history.
-   - The genesis ChainState, in field order: `kind = 0xC4A10002`; `version = 1`; `tip_hash` = the genesis hash (internal byte
+   - The genesis ChainState, in field order: `kind = 0xC4A10002`; `version = 2`; `tip_hash` = the genesis hash (internal byte
      order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0`; `utxo_value = 0` (u64); `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
      little-endian; `height = 0`; `prev_nbits` = genesis nBits; `prev_time = epoch_start` = genesis time;
      `recent_times = [genesis time]`; `anchor_id` = 32 zero bytes; `self_id` = 32 zero bytes (eight zero words: the
@@ -212,14 +212,15 @@ Given a receipt R, the hints file F and the network:
      `ss_acc` = 16 zero words; `ss_hints` = 32 zero bytes; `smt_root` = the empty coinbase-SMT root, `e_256` where
      `e_0` = 32 zero bytes and `e_{d+1} = SHA-256(0x11 ‖ e_d ‖ e_d)`
      (`507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32`); `max_time` = genesis time; `profile = 0`; `block_roots` = one entry, `Some(SHA-256(0x02 ‖ genesis hash, internal
-     byte order ‖ 0u32 LE))`; `block_leaves = 1`; `lineage` = 32 zero bytes.
+     byte order ‖ 0u32 LE ‖ SHA-256(0x04 ‖ 0u64 LE ‖ 0u64 LE)))` (HANDOVER.md §3: the empty coin state); `block_leaves = 1`; `lineage` = 32 zero bytes.
    - The journal is risc0's serde word encoding (risc0-zkvm 3.0.5 `serde::to_vec`, each word little-endian): every
      integer up to 32 bits and every byte of a fixed array takes one u32 word, a u64 two (low word first), a list is its length then
      its elements, and an `Option` is a 0/1 word followed by the value when present.
    - `host libzync-verify` computes this itself. `scripts/libzync/genesis_anchor_id.py` computes it from this text
      alone. Test vectors, one per network for every image: mainnet
-     `b768af638616bc97c44acaf29387a2a538425f9d726c5972f5da0a909642db03`, signet
-     `c0055bc30ceecf883406e2625fe901895575bedfeb48834bea70458e2cf0b320` (`swiftsync-verify` unit tests pin both).
+     `5652addca32eebf2dffd4cfb6427813c2ee6c9326dd8666d2750a9a032848d46`, signet
+     `04d6826ab1cde38accd700fb284f6b99337715170c8afd3b819700e9de79e24a` (`swiftsync-verify` unit tests pin both).
+     Version 1 (block leaves without the coin state) had `b768af63…` and `c0055bc3…`.
      Before the handover format, `self_id` was M and each image had its own anchor; the round-8 vectors
      `5b2020ae…` and `636271d3…` are that old format.
 4. `J.height == F.stop_height`.
