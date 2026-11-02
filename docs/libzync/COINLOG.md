@@ -81,10 +81,28 @@ From one verified proof at the tip, with a path from the host's copy of the log:
 - **A coin's history in both directions:** backwards through each transaction's inputs (block forest + Merkle
   branch), forwards through the spender record.
 
-## 7. Cost (block 962,000, execute mode, `zutxo/README.md`)
+## 7. Cost
 
-Aggregate 73.1 M against design B's 64.1 M; chunks +2.6 M (each transaction's output total); whole block about
-+2.7%. The log witness replaces the hints file.
+Whole block (16 chunks + aggregate), execute mode, against design B (r17m), coin log v2 (c4m, `0a190eb`), 11-02,
+`experimental/libzync-bench/handover/retest_c4.out`. The log around each block is modelled at its real size (k = 1.64 ×
+cumulative transactions, real spend ages); both designs judge every block valid.
+
+| block | design B | coin log | change |
+|---|---|---|---|
+| 170060 | 26.6 M | 26.7 M | +0.3% |
+| 650000 | 580.9 M | 611.5 M | +5.3% |
+| 692261 | 501.9 M | 512.6 M | +2.1% |
+| 700000 | 476.1 M | 486.4 M | +2.2% |
+| 750000 | 461.0 M | 465.8 M | +1.0% |
+| 800000 | 469.4 M | 460.9 M | -1.8% |
+| 850000 | 478.3 M | 485.7 M | +1.5% |
+| 900000 | 329.8 M | 339.2 M | +2.9% |
+| 962000 | 426.7 M | 439.3 M | +2.9% |
+| 970000 | 433.3 M | 444.8 M | +2.6% |
+| **10 blocks** | **4184.1 M** | **4273.0 M** | **+2.1%** |
+
+The chunks carry each transaction's output total (+0.1 to +0.7%); the rest is the aggregate: the log update against
+design B's SwiftSync accounting. On 800,000 the coin log is cheaper. The log witness replaces the hints file.
 
 ## 8. Host
 
