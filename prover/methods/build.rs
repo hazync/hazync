@@ -110,6 +110,7 @@ fn main() {
     let network = if signet { "signet" } else if regtest { "regtest" } else { "mainnet" };
     assert!(!signet || libzync, "HAZYNC_NETWORK=signet needs HAZYNC_LIBZYNC (the signet check lives in the libzync aggregate)");
     println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_PIN_DIR");
+    println!("cargo:rerun-if-env-changed=HAZYNC_COINLOG");
     if let Ok(elf_path) = std::env::var("HAZYNC_GUEST_ELF") {
         // The prebuilt path embeds the pinned canonical guest (reproduce/). A libzync image is embedded
         // the same way -- sha256 and image id checked, never trusted -- but against pins that name THAT
@@ -120,16 +121,19 @@ fn main() {
                 "HAZYNC_GUEST_ELF with HAZYNC_LIBZYNC/HAZYNC_NETWORK needs HAZYNC_GUEST_PIN_DIR (the libzync image's pins)");
         // The pin directory names the image's profile too, so the labels the host trusts (LIBZYNC, NETWORK,
         // ASSUMEVALID) are tied to the pinned bytes instead of to this shell's variables (review 2).
+        // The coin log is part of the profile: a coin-log image's pins say `coinlog=1`, and HAZYNC_COINLOG must agree,
+        // so the host never writes a design-B stream to a coin-log guest or the reverse.
+        let coinlog = std::env::var("HAZYNC_COINLOG").as_deref() == Ok("1");
+        assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
         if let Some(d) = pins.as_deref() {
-            let want = format!("libzync={} assumevalid={} network={}", libzync as u8, assumevalid as u8,
-                               network);
+            let want = format!("libzync={} assumevalid={} network={}{}", libzync as u8, assumevalid as u8,
+                               network, if coinlog { " coinlog=1" } else { "" });
             let got = std::fs::read_to_string(Path::new(d).join("PROFILE"))
                 .unwrap_or_else(|e| panic!("{d}/PROFILE: {e} (the pin directory must name the image's profile)"));
             assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS");
         }
-        // The coin log is an experiment: a pinned prebuilt image is never a coin-log image.
-        assert!(std::env::var("HAZYNC_COINLOG").as_deref() != Ok("1"), "HAZYNC_COINLOG with a prebuilt guest is not supported");
-        write_profile(libzync, assumevalid, network, false);
+        assert!(!coinlog || pins.is_some(), "HAZYNC_COINLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
+        write_profile(libzync, assumevalid, network, coinlog);
         embed_prebuilt_guest(&elf_path, pins.as_deref());
         return;
     }

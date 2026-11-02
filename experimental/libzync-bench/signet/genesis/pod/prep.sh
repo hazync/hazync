@@ -10,6 +10,7 @@ mkdir -p /workspace/hazync && tar xzf /workspace/sb/repo.tgz -C /workspace/hazyn
 cd /workspace/hazync/prover && T0=$SECONDS
 (cargo --version; nvcc --version | tail -1) > /workspace/toolchain.txt 2>&1
 HAZYNC_GUEST_ELF=/workspace/sb/method.bin HAZYNC_GUEST_PIN_DIR=/workspace/sb/pins HAZYNC_LIBZYNC=1 HAZYNC_NETWORK=$(cat /workspace/sb/NETWORK) \
+  HAZYNC_COINLOG=$(cat /workspace/sb/COINLOG 2>/dev/null || echo 0) \
   cargo build --release --features cuda -p host > /workspace/build.log 2>&1 || { echo PREP_FAIL build; tail -n 15 /workspace/build.log; exit 1; }
 echo "built in $((SECONDS-T0)) s"
 ldd target/release/host | grep -qi cuda || { echo PREP_FAIL nocuda; exit 1; }

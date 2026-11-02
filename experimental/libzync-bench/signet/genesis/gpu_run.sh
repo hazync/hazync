@@ -45,7 +45,8 @@ ssh $K -p $P root@$IP 'cd /workspace && (setsid nohup bash prep.sh > prep.out 2>
 scp -q $KS -P $P sb/sb.tgz sb/sb.tgz.sha256 root@$IP:/workspace/ && say "bundle sent"
 ssh $K -p $P root@$IP 'mkdir -p /workspace/out'
 C=$(ls ckpt 2>/dev/null | sed -n 's/^block_\([0-9]*\)\.rcpt$/\1/p' | sort -n | tail -1)
-[ -z "$C" ] || { scp -q $KS -P $P ckpt/block_$C.rcpt root@$IP:/workspace/out/ && say "checkpoint $C sent"; }
+# A coin-log run resumes only with the log file of the same height (state_<C>.coinlog), sent with its receipt.
+[ -z "$C" ] || { scp -q $KS -P $P ckpt/block_$C.rcpt $(ls ckpt/state_$C.coinlog 2>/dev/null) root@$IP:/workspace/out/ && say "checkpoint $C sent"; }
 for i in $(seq 1 120); do
   [ -f pod_id.txt ] || exit 1   # the deadline fired (and harvested)
   S=$(ssh $K -p $P root@$IP 'grep -h "PREP_OK\|PREP_FAIL\|built in" /workspace/prep.out 2>/dev/null')
@@ -62,7 +63,10 @@ for i in $(seq 1 $((DEADLINE_MIN*4))); do
   [ $((i % 10)) = 0 ] && say "  $(ssh $K -p $P root@$IP 'tail -1 /workspace/out/times.tsv 2>/dev/null')"
   if [ $((i % 40)) = 0 ]; then   # write under a temp name: a cut-off copy must never look like a receipt
     N=$(ssh $K -p $P root@$IP 'ls /workspace/out' | sed -n 's/^block_\([0-9]*\)\.rcpt$/\1/p' | sort -n | tail -2 | head -1)
-    [ -z "$N" ] || { timeout 120 scp -q $KS -P $P root@$IP:/workspace/out/block_$N.rcpt ckpt/.tmp && mv ckpt/.tmp ckpt/block_$N.rcpt && say "  checkpoint $N"; }
+    [ -z "$N" ] || { timeout 120 scp -q $KS -P $P root@$IP:/workspace/out/block_$N.rcpt ckpt/.tmp && mv ckpt/.tmp ckpt/block_$N.rcpt && say "  checkpoint $N"
+      # coin log: the log at N (the run keeps the last two); the receipt is only a checkpoint together with it
+      if ssh $K -p $P root@$IP "test -f /workspace/out/state_$N.coinlog"; then
+        timeout 300 scp -q $KS -P $P root@$IP:/workspace/out/state_$N.coinlog ckpt/.tmpl && mv ckpt/.tmpl ckpt/state_$N.coinlog && say "  coin log $N"; fi; }
   fi
   sleep 15; done
 rm -f pod_id.txt   # stop the watcher; if it already started, the lock makes it the one that harvests
