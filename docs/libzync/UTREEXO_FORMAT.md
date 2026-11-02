@@ -88,12 +88,12 @@ is 7 bytes would have a 64-byte preimage (57 + 7), the same length as an interio
 
 ## 6. Test vector and how it is checked
 
-Mainnet, H = 200, hints file `h200.hints` (hint-hash `e33c66b3…`): 204 leaves.
+Mainnet, H = 200, hints file `h200.hints` (hint-hash `e33c66b3…`): 204 leaves, `utxo_value` 1,000,000,000,000 sat.
 
 ```
 roots[2] = ac7ca14570ba4972538dfe1587a44d87fc1e7a6d2f24f9ffef0a113afa5c189d
 roots[3] = 7ced478f2fdebea9ce3293a479b092618073fe5c89045085ec312b7854ea9a9a
-roots[6] = 2f34b66ed7d65fc1ba5c22ddcfdb0d8cc1838d33e8295f64a1429e7461aec8a9
+roots[6] = 94ed3b428abfc24c6261ac76dfab9cad07ca35bc28a39bd9109a5288a6886e51
 roots[7] = 339752865cc905092ec186b4dae9902e4951bd182855b61d80003867f4cbb452
 (roots[0], [1], [4], [5] empty)
 ```
