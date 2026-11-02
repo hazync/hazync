@@ -2113,7 +2113,9 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         Err(e) => { check(false, &format!("{hints} is well formed: {e}")); [0u8; 32] }
     };
     check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints}", hex(&fh)));
-    check(cs.block_leaves == cs.height as u64 + 1, &format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
+    // As swiftsync-verify: a root exactly at each set bit of block_leaves (HANDOVER.md §6).
+    let shape = (0..64).all(|i| ((cs.block_leaves >> i) & 1 == 1) == cs.block_roots.get(i).copied().flatten().is_some());
+    check(cs.block_leaves == cs.height as u64 + 1 && shape, &format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
     let full = lineage_of(handover_pin::LINEAGE);
     check(cs.lineage == [0; 32] || cs.lineage == full, &format!("lineage {} is this image's ({} handover(s) pinned)", hex(&cs.lineage), handover_pin::LINEAGE.len()));
     println!("  chain: tip {} (display order {}), cum_work 0x{}", hex(&cs.tip_hash),
