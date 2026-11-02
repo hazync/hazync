@@ -129,3 +129,31 @@ Added to the steps in SWIFTSYNC_PROOFS.md §5:
 - An anchored demonstration run has no real block history. The host fills placeholder roots of the right size and warns.
   Such a proof can only ever be DEMO, and its forest does not commit to real history.
 - An image can only name a predecessor whose final id is known. Publishing an id means freezing that image's source.
+
+## 8. Tested and measured (2026-11-02)
+
+**Regtest handover, `experimental/libzync-bench/handover/run.sh`, dev mode** (rules execute, nothing proved; output in
+`run_regtest.out`). Image O (`e9b6ca6e…`, empty lineage) proves blocks 1–100 from genesis; image N (`e7f2e7bc…`, O
+pinned at 101) continues 101–110. 15/15 cases as expected:
+- every tampered handover is refused by its own guest check: `self_id` ("previous proof is not the predecessor's"),
+  `profile`, `lineage`, block forest ("block forest 100 leaves at height 100"), `kind`, height ("height 100 != pinned
+  101"); a receipt claiming the wrong image, and no receipt at all, both stop at the guest's `env::verify` of O
+  ("no receipt found to resolve assumption");
+- O refuses `is_base = 2` ("this image has no predecessor"); the host refuses a receipt at the wrong height;
+- the control: block 101 is a handover step, 102–110 are ordinary recursion; `anchor_id` is unchanged across the
+  handover; `lineage` equals `block_forest_ref.py`'s digest; the block forest at 100 and at 110 equals the reference
+  over the real block hashes, and block 7 checks against both.
+
+**Cost on mainnet block 962,000** (`ab_962000.sh`, execute mode, 16 chunks, logs in `ab_962000/`). Baseline built from
+`bf8e607` and the handover branch built in the same worktree path:
+
+| | bf8e607 | handover | difference |
+|---|---|---|---|
+| chunks, sum | 361,473,807 | 361,474,446 | +639 |
+| aggregate | 64,535,363 | 64,609,027 | **+73,664 (+0.114%)** |
+| whole block | 426,009,170 | 426,083,473 | **+74,303 (+0.017%)** |
+
+- The chunk code is unchanged; its 4–135 cycles per chunk come with the different ELF.
+- At 962,000 the append merges **nothing** (962,000 leaves, an even number), so this is a forest step at its cheapest:
+  one leaf hash plus the larger state to decode and commit (12 block roots after the block). A block whose append
+  merges pays one parent hash per merge, one per block on average and about 20 at most. Not measured separately.

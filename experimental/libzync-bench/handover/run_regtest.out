@@ -1,0 +1,25 @@
+PASS O proves 1..100 from genesis
+PASS reject self_id: not the predecessor's
+PASS reject profile: handover: profile mismatch
+PASS reject lineage: predecessor lineage mismatch
+PASS reject forest: block forest
+PASS reject kind: not a ChainState
+PASS reject height: handover: height
+PASS reject wrong_image: predecessor chain proof invalid\|no receipt found\|assumption
+PASS reject no_receipt: predecessor chain proof invalid\|no receipt found\|assumption
+PASS O refuses is_base = 2
+PASS host refuses a receipt at the wrong height
+PASS N continues 101..110 by a handover
+PASS block 101 ran as a handover step
+PASS every block after the handover ran as ordinary recursion
+PASS O's state: its own id, zero lineage
+PASS after the handover the state carries N's id
+PASS anchor_id unchanged across the handover
+PASS lineage = the reference's digest of [O at first]; unchanged by later steps
+PASS block forest at 100 == the reference over real block hashes
+PASS block 7 checks against the state at 100
+PASS block forest at 110 == the reference over real block hashes
+PASS block 7 checks against the state at 110
+PASS state checks
+handover run.sh: 15/15 as expected
+RUN_EXIT=0
