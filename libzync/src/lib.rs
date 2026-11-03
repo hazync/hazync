@@ -10,6 +10,7 @@ pub mod wire;
 pub mod net;
 pub mod coinlog;
 pub mod facts;
+pub mod history;
 #[cfg(feature = "std")]
 pub mod host;
 

@@ -3995,6 +3995,8 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     };
     demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
+    // history.bin starts at height 0 only on a run from genesis (libzync::history).
+    let prev_is_genesis = handover.is_none() && anchor_path == "genesis";
     if methods::COINLOG {
         match (&handover, anchor_path) {
             (Some(_), _) => {
@@ -4176,7 +4178,11 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         std::fs::write(format!("{out}/block_{h}.rcpt"), bincode::serialize(&r).unwrap()).unwrap();
         std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
         if methods::COINLOG {
-            cl_commit(&cl_lists.0, &cl_lists.1, &st);
+            let flips = cl_commit(&cl_lists.0, &cl_lists.1, &st);
+            if h == 1 && prev_is_genesis {
+                hist_append(&out, &libzync::history::Rec { height: 0, hash: genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![] });
+            }
+            hist_append(&out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends: cl_lists.1.clone() });
             // The log next to each receipt, so a run can resume after it (HAZYNC_RESUME) or be anchored on it. The last
             // two are kept (a checkpoint copier takes the second newest receipt, which may still be complete while
             // the newest is being written); HAZYNC_COINLOG_SAVE_EACH=1 keeps every one (tests). A mainnet-sized log
@@ -10459,12 +10465,16 @@ fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {
 }
 
 /// After the block is proved: the same flips and appends on the host's log, which must then equal the state.
-fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainState) {
+/// Applies a proved block to the host's log; returns its flips (position, tx, vin) for history.bin.
+fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainState) -> Vec<(u64, u32, u32)> {
     let mut g = CL.lock().unwrap();
     let h = g.as_mut().expect("coin log not initialised");
+    let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
         let p = h.pos.remove(l).expect("a proved spend of a coin the host's log does not hold");
-        h.store.set(p, libzync::coinlog::spent(l, &libzync::coinlog::spender(st.height, *t, *v)));
+        let new = libzync::coinlog::spent(l, &libzync::coinlog::spender(st.height, *t, *v));
+        h.store.set(p, new);
+        flips.push((p, *t, *v));
     }
     for l in appends {
         h.pos.insert(*l, h.store.len());
@@ -10472,6 +10482,42 @@ fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainState) {
     }
     assert_eq!(h.store.len(), st.utxo_leaves, "host coin log size != committed utxo_leaves");
     assert!(normalize_host(h.store.roots()) == normalize_host(st.utxo_roots.clone()), "host coin log roots != committed roots");
+    flips
+}
+
+/// Records already in `<out>/history.bin` (libzync::history), counted once per run; None = the file does not run
+/// contiguously from genesis to this run's start, so this run writes none (paths need a history from genesis).
+static HIST_N: std::sync::Mutex<Option<Option<u64>>> = std::sync::Mutex::new(None);
+
+/// Appends height `rec.height` to `<out>/history.bin`. A run from genesis writes height 0 first. Records past the
+/// new height (a resumed or re-run range) are cut off first, so the file always ends at the newest proved height.
+fn hist_append(out: &str, rec: &libzync::history::Rec) {
+    use std::io::Write as _;
+    let path = format!("{out}/history.bin");
+    let mut g = HIST_N.lock().unwrap();
+    if g.is_none() {
+        let b = std::fs::read(&path).unwrap_or_default();
+        *g = Some(match libzync::history::decode_all(&b) {
+            Ok(r) => {
+                let keep = (rec.height as usize).min(r.len());
+                if keep < r.len() {
+                    let cut: Vec<u8> = r[..keep].iter().flat_map(|x| x.encode()).collect();
+                    std::fs::write(&path, cut).unwrap_or_else(|e| panic!("{path}: {e}"));
+                }
+                Some(keep as u64)
+            }
+            Err(e) => { eprintln!("  history.bin: {e}; no zyncAPP history for this run"); None }
+        });
+    }
+    let Some(Some(n)) = *g else { return };
+    if n != rec.height as u64 {
+        eprintln!("  history.bin ends at {} records, this run is at height {}: no zyncAPP history for this run", n, rec.height);
+        *g = Some(None);
+        return;
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    f.write_all(&rec.encode()).unwrap_or_else(|e| panic!("{path}: {e}"));
+    *g = Some(Some(n + 1));
 }
 
 /// Gate / single-block measurement (agg-exec-fake): a coin log of the modelled size around ONE real block. Each spend's
