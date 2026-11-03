@@ -413,3 +413,169 @@ mod disk_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// ROADMAP C1b: the host's coin-leaf -> log-position index on disk. Open addressing in one file (`index.bin`): a header
+/// `[u64 capacity][u64 used]`, then `capacity` slots of `[leaf 32][position + 1, u64 LE]` (0 = empty, u64::MAX =
+/// removed). Leaves are SHA-256 outputs, so their first 8 bytes are the hash. Grows (rebuild into twice the slots) at
+/// half full. Live coins only: a spend removes its leaf.
+pub struct DiskIndex {
+    f: std::fs::File,
+    path: std::path::PathBuf,
+    cap: u64,
+    used: u64,
+}
+
+const IX_SLOT: u64 = 40;
+const IX_HDR: u64 = 16;
+
+impl DiskIndex {
+    pub fn open(path: &std::path::Path) -> std::io::Result<DiskIndex> {
+        let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
+        let mut d = DiskIndex { f, path: path.to_path_buf(), cap: 0, used: 0 };
+        if d.f.metadata()?.len() < IX_HDR {
+            d.init(1 << 16)?;
+        } else {
+            let mut h = [0u8; 16];
+            read_at(&d.f, &mut h, 0)?;
+            d.cap = u64::from_le_bytes(h[..8].try_into().unwrap());
+            d.used = u64::from_le_bytes(h[8..].try_into().unwrap());
+        }
+        Ok(d)
+    }
+    fn init(&mut self, cap: u64) -> std::io::Result<()> {
+        self.f.set_len(0)?;
+        self.f.set_len(IX_HDR + cap * IX_SLOT)?;
+        self.cap = cap;
+        self.used = 0;
+        self.hdr()
+    }
+    fn hdr(&self) -> std::io::Result<()> {
+        let mut h = [0u8; 16];
+        h[..8].copy_from_slice(&self.cap.to_le_bytes());
+        h[8..].copy_from_slice(&self.used.to_le_bytes());
+        write_at(&self.f, &h, 0)
+    }
+    fn slot(&self, i: u64) -> ([u8; 32], u64) {
+        let mut b = [0u8; 40];
+        read_at(&self.f, &mut b, IX_HDR + i * IX_SLOT).expect("index read");
+        (b[..32].try_into().unwrap(), u64::from_le_bytes(b[32..].try_into().unwrap()))
+    }
+    fn put_slot(&self, i: u64, leaf: &[u8; 32], v: u64) {
+        let mut b = [0u8; 40];
+        b[..32].copy_from_slice(leaf);
+        b[32..].copy_from_slice(&v.to_le_bytes());
+        write_at(&self.f, &b, IX_HDR + i * IX_SLOT).expect("index write");
+    }
+    fn start(&self, leaf: &[u8; 32]) -> u64 {
+        u64::from_le_bytes(leaf[..8].try_into().unwrap()) & (self.cap - 1)
+    }
+    /// The slot holding `leaf`, or None.
+    fn find(&self, leaf: &[u8; 32]) -> Option<u64> {
+        let mut i = self.start(leaf);
+        loop {
+            let (k, v) = self.slot(i);
+            if v == 0 {
+                return None;
+            }
+            if v != u64::MAX && &k == leaf {
+                return Some(i);
+            }
+            i = (i + 1) & (self.cap - 1);
+        }
+    }
+    pub fn get(&self, leaf: &[u8; 32]) -> Option<u64> {
+        self.find(leaf).map(|i| self.slot(i).1 - 1)
+    }
+    pub fn insert(&mut self, leaf: [u8; 32], pos: u64) {
+        if let Some(i) = self.find(&leaf) {
+            self.put_slot(i, &leaf, pos + 1);
+            return;
+        }
+        if (self.used + 1) * 2 > self.cap {
+            self.grow();
+        }
+        let mut i = self.start(&leaf);
+        loop {
+            let v = self.slot(i).1;
+            if v == 0 || v == u64::MAX {
+                break;
+            }
+            i = (i + 1) & (self.cap - 1);
+        }
+        self.put_slot(i, &leaf, pos + 1);
+        self.used += 1;
+        self.hdr().expect("index header");
+    }
+    pub fn remove(&mut self, leaf: &[u8; 32]) -> Option<u64> {
+        let i = self.find(leaf)?;
+        let p = self.slot(i).1 - 1;
+        self.put_slot(i, leaf, u64::MAX);
+        // `used` counts occupied slots (tombstones included) so the load bound covers probe lengths too.
+        Some(p)
+    }
+    fn grow(&mut self) {
+        let mut live = std::vec::Vec::new();
+        for i in 0..self.cap {
+            let (k, v) = self.slot(i);
+            if v != 0 && v != u64::MAX {
+                live.push((k, v - 1));
+            }
+        }
+        let cap = (self.cap * 2).max((live.len() as u64 * 4).next_power_of_two());
+        let tmp = self.path.with_extension("grow");
+        let mut n = DiskIndex::open(&tmp).expect("index grow");
+        n.init(cap).expect("index grow");
+        for (k, p) in live {
+            n.insert(k, p);
+        }
+        drop(n);
+        std::fs::rename(&tmp, &self.path).expect("index grow rename");
+        *self = DiskIndex::open(&self.path).expect("index reopen");
+    }
+}
+
+/// The host's position index, in memory or on disk.
+pub enum AnyIndex {
+    Mem(std::collections::HashMap<[u8; 32], u64>),
+    Disk(DiskIndex),
+}
+
+impl AnyIndex {
+    pub fn insert(&mut self, leaf: [u8; 32], pos: u64) {
+        match self { AnyIndex::Mem(m) => { m.insert(leaf, pos); } AnyIndex::Disk(d) => d.insert(leaf, pos) }
+    }
+    pub fn remove(&mut self, leaf: &[u8; 32]) -> Option<u64> {
+        match self { AnyIndex::Mem(m) => m.remove(leaf), AnyIndex::Disk(d) => d.remove(leaf) }
+    }
+    pub fn get(&self, leaf: &[u8; 32]) -> Option<u64> {
+        match self { AnyIndex::Mem(m) => m.get(leaf).copied(), AnyIndex::Disk(d) => d.get(leaf) }
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    #[test]
+    fn disk_index_matches_a_hashmap() {
+        let p = std::env::temp_dir().join(std::format!("libzync-ix-{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let h = |i: u64| -> [u8; 32] { use sha2::Digest; sha2::Sha256::digest(i.to_le_bytes()).into() };
+        let mut d = DiskIndex::open(&p).unwrap();
+        let mut m = std::collections::HashMap::new();
+        for i in 0..70_000u64 {
+            d.insert(h(i), i);
+            m.insert(h(i), i);
+            if i % 3 == 0 {
+                assert_eq!(d.remove(&h(i / 2)), m.remove(&h(i / 2)));
+            }
+        }
+        for i in (0..70_000u64).step_by(97) {
+            assert_eq!(d.get(&h(i)), m.get(&h(i)).copied(), "{i}");
+        }
+        assert_eq!(d.get(&h(1 << 40)), None);
+        drop(d);
+        let d = DiskIndex::open(&p).unwrap();
+        assert_eq!(d.get(&h(69_999)), Some(69_999));
+        let _ = std::fs::remove_file(&p);
+    }
+}

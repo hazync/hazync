@@ -10410,7 +10410,7 @@ mod join_tree_tests {
 struct ClHost {
     // In memory, or on disk when HAZYNC_COINLOG_DIR is set (ROADMAP C1; libzync::host::DiskNodes).
     store: libzync::coinlog::NodeStore<libzync::host::AnyNodes>,
-    pos: std::collections::HashMap<[u8; 32], u64>, // unspent leaf -> position
+    pos: libzync::host::AnyIndex, // unspent leaf -> position; on disk (<dir>/index.bin) with HAZYNC_COINLOG_DIR (C1b)
 }
 static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
 static CL_WIT: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
@@ -10429,6 +10429,15 @@ fn cl_dir() -> Option<std::path::PathBuf> {
 /// HAZYNC_COINLOG_DIR, mutated in place, so a load can only check that the directory is still at that state).
 const CL_DISK_MAGIC: &[u8; 8] = b"LZDISK01";
 
+/// The position index: on disk in HAZYNC_COINLOG_DIR (index.bin), else in memory.
+fn cl_index() -> libzync::host::AnyIndex {
+    match cl_dir() {
+        Some(d) => libzync::host::AnyIndex::Disk(libzync::host::DiskIndex::open(&d.join("index.bin"))
+            .unwrap_or_else(|e| panic!("{}/index.bin: {e}", d.display()))),
+        None => libzync::host::AnyIndex::Mem(std::collections::HashMap::new()),
+    }
+}
+
 fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
     let nodes = match cl_dir() {
         Some(d) => {
@@ -10438,7 +10447,7 @@ fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
         None => libzync::host::AnyNodes::Mem(Vec::new()),
     };
     let mut store = libzync::coinlog::NodeStore::with_nodes(nodes);
-    let mut pos = std::collections::HashMap::new();
+    let mut pos = cl_index();
     for (i, l) in leaves.iter().enumerate() {
         store.push(*l);
         pos.insert(*l, i as u64);
@@ -10478,9 +10487,8 @@ fn cl_load(path: &str) {
         let roots: Vec<Option<[u8; 32]>> = b[16..].chunks_exact(33).map(|c| (c[32] == 1).then(|| c[..32].try_into().unwrap())).collect();
         assert!(store.len() == n && store.roots() == roots,
                 "{}: the on-disk coin log is not at the state {path} recorded (it moved on after that receipt?): rebuild it from a run from genesis", d.display());
-        // C1b: the position index is still rebuilt in memory from every leaf.
-        let mut pos = std::collections::HashMap::new();
-        for i in 0..n { pos.insert(store.leaf(i), i); }
+        // C1b: the index lives next to the nodes and was kept in step with them (written before each state file).
+        let pos = cl_index();
         *CL.lock().unwrap() = Some(ClHost { store, pos });
         return;
     }
@@ -10518,7 +10526,7 @@ fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {
     let g = CL.lock().unwrap();
     let h = g.as_ref().expect("coin log not initialised");
     let n = h.store.len();
-    let positions: Vec<u64> = spends.iter().map(|s| *h.pos.get(&s.0).unwrap_or(&n)).collect();
+    let positions: Vec<u64> = spends.iter().map(|s| h.pos.get(&s.0).unwrap_or(n)).collect();
     let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().map(|s| s.0)).collect();
     sorted.sort_unstable_by_key(|x| x.0);
     let sib = h.store.witness(&sorted);
