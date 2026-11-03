@@ -1,0 +1,96 @@
+
+== build regtest O (c7reg)
+REAL_EXIT=0
+METHOD_ID METHOD_ID f867a14d4879195b61b4cfa0202e3965522229add8a618e374d404bfb09e1bb1
+
+== rig vs Core 28.0, coin log
+RIG_EXIT=0
+RIG 95 cases, 95 agree, 0 deferred, 0 to look at
+
+== build regtest N: O pinned at 101 (pin not committed)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 6658764931a07230d490c07ae28a74c0169593a7243fb43b74903c2743284621
+pin reverted
+
+== handover O -> N
+PASS O proves 1..100 from genesis
+PASS reject self_id: not the predecessor's
+PASS reject profile: handover: profile mismatch
+PASS reject lineage: predecessor lineage mismatch
+PASS reject forest: block forest
+PASS reject kind: not a ChainState
+PASS reject height: handover: height
+PASS reject wrong_image: predecessor chain proof invalid\|no receipt found\|assumption
+PASS reject no_receipt: predecessor chain proof invalid\|no receipt found\|assumption
+PASS O refuses is_base = 2
+PASS host refuses a receipt at the wrong height
+PASS N continues 101..110 by a handover
+PASS block 101 ran as a handover step
+PASS every block after the handover ran as ordinary recursion
+PASS O's state: its own id, zero lineage
+PASS after the handover the state carries N's id
+PASS anchor_id unchanged across the handover
+PASS lineage = the reference's digest of [O at first]; unchanged by later steps
+PASS block forest at 100 == the reference over real block hashes
+PASS block 7 checks against the state at 100
+PASS block forest at 110 == the reference over real block hashes
+PASS block 7 checks against the state at 110
+PASS state checks
+PASS coin log at 110 == coinlog_ref.py
+handover run.sh: 16/16 as expected
+HO_EXIT=0
+
+== build signet (c7sig)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 4e8c7af145cfc94a3e941fb45bd7932e4bfe24dfd734cf80db0ed99b3d50fd9d
+
+== mainnet 1..200 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py, genesis anchor
+PR_EXIT=0
+LZ_PROVE_RANGE_DONE 1..=200 in 1559 s; final receipt /home/defenwycke/libzync-gpu/c7/m200/block_200.rcpt
+H=200: 209 leaves appended, 204 live coins, 1000000000000 sat, 4 roots
+COINLOG_REF_MATCH: the proof's coin log equals this implementation
+BLOCK_FOREST_OK
+mainnet: genesis anchor_id 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 (the same for every image)
+state anchor_id 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 version 2 profile 0x11
+
+== cost on real blocks: coin log (c7m) vs design B (r17m), execute mode, 16 chunks
+block_962000   r17m  chunks    362589752 aggregate    64135226 whole    426724978 ok
+block_962000   c7m   chunks    365232111 aggregate    74123203 whole    439355314 ok
+block_970000   r17m  chunks    380200561 aggregate    53103272 whole    433303833 ok
+block_970000   c7m   chunks    382486321 aggregate    62345705 whole    444832026 ok
+block_900000   r17m  chunks    291296663 aggregate    38467866 whole    329764529 ok
+block_900000   c7m   chunks    291943494 aggregate    47267913 whole    339211407 ok
+block_850000   r17m  chunks    393483951 aggregate    84858742 whole    478342693 ok
+block_850000   c7m   chunks    394819253 aggregate    90890159 whole    485709412 ok
+block_800000   r17m  chunks    375824724 aggregate    93588607 whole    469413331 ok
+block_800000   c7m   chunks    377385470 aggregate    83603779 whole    460989249 ok
+block_750000   r17m  chunks    380698857 aggregate    80319099 whole    461017956 ok
+block_750000   c7m   chunks    381753270 aggregate    84131052 whole    465884322 ok
+block_700000   r17m  chunks    406735909 aggregate    69338013 whole    476073922 ok
+block_700000   c7m   chunks    407306025 aggregate    74729167 whole    482035192 ok
+block_650000   r17m  chunks    522800039 aggregate    58103158 whole    580903197 ok
+block_650000   c7m   chunks    523265975 aggregate    88290387 whole    611556362 ok
+block_170060   r17m  chunks     23480676 aggregate     3139964 whole     26620640 ok
+block_170060   c7m   chunks     23483884 aggregate     3213286 whole     26697170 ok
+block_692261   r17m  chunks    425654925 aggregate    76244971 whole    501899896 ok
+block_692261   c7m   chunks    426755956 aggregate    85934696 whole    512690652 ok
+
+== edge blocks (round 3): BIP30 repeats, activation boundaries, first retarget, the largest legacy tx; coin log (c7m), modelled log
+edge 2016    chunks            0 aggregate     2546994 whole      2546994 ok (exit 0)
+edge 91842   chunks            0 aggregate     1876087 whole      1876087 ok (exit 0)
+edge 91880   chunks      1174681 aggregate     1912148 whole      3086829 ok (exit 0)
+edge 185956  chunks     53688621 aggregate     8287618 whole     61976239 ok (exit 0)
+edge 227931  chunks     57732960 aggregate    10576574 whole     68309534 ok (exit 0)
+edge 363725  chunks            0 aggregate     2692561 whole      2692561 ok (exit 0)
+edge 364292  chunks   1575766373 aggregate    29749463 whole   1605515836 ok (exit 0)
+edge 388381  chunks    155899898 aggregate    21658323 whole    177558221 ok (exit 0)
+edge 419328  chunks    343185400 aggregate    55553609 whole    398739009 ok (exit 0)
+edge 481824  chunks    324644943 aggregate    63896865 whole    388541808 ok (exit 0)
+
+== signet 1..2600 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py
+PR_EXIT=0
+LZ_PROVE_RANGE_DONE 1..=2600 in 18243 s; final receipt /home/defenwycke/libzync-gpu/c7/s2600/block_2600.rcpt
+H=2600: 2693 leaves appended, 293 live coins, 13000000000000 sat, 5 roots
+COINLOG_REF_MATCH: the proof's coin log equals this implementation
+BLOCK_FOREST_OK
+RETEST_DONE
