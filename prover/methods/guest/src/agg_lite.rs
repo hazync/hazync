@@ -342,7 +342,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 if f > 7 { all_ok = false; }
                 spends.push((leaf, tx_pos, f & 2 != 0, start.wrapping_add(k)));
                 tr_all &= f & 4 != 0;
-                if f & 1 == 1 { cb_spends.push((r.h(), f & 4 != 0)); }
+                // The BIP30 tree counts only TRACKED transactions' outputs (UTREEXO_FORMAT.md §2a), the only ones that can
+                // ever repeat. A repeat of an untracked coinbase is refused whatever its count says (live or SPENT), so
+                // decrementing it on a spend changed no verdict, and a double spend is the coin log's refusal (review
+                // 11-03; it was ~1.5 M cycles per spent coinbase coin). The txid is still read, to keep the record aligned.
+                if f & 1 == 1 { let t = r.h(); if f & 4 != 0 { cb_spends.push((t, true)); } }
             }
             if r.bad { break; }
         }

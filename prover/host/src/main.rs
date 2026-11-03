@@ -4777,6 +4777,8 @@ fn smt_advance_ex(
     let mut spends = Vec::with_capacity(coinbase_spends.len());
     for (i, t) in coinbase_spends.iter().enumerate() {
         let is_tracked = spend_tracked.get(i).copied().unwrap_or(false);
+        // libzync: only tracked coins are counted (agg_lite.rs: an untracked coinbase's count changes no verdict).
+        if methods::LIBZYNC && !is_tracked { continue; }
         let cur = smt.get(t).unwrap_or(0);
         // ⚠ FIRST TOUCH ONLY. A block may spend two outputs of the same coinbase; the second sees
         // the first's decrement, so recording it too would restore the intermediate value.

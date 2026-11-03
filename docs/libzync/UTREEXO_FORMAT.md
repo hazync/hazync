@@ -52,7 +52,12 @@ can ever repeat a txid (coinbase-smt/src/bip30.rs):
    (a 0x00 byte appended when the top bit is set). Any other prefix indicates nothing (Y = 0).
 3. **A non-coinbase transaction is tracked** if it has at least one input and every input spends a coin with bit 1.
 
-On mainnet that is 173 transactions to height 940,000; signet (BIP34 from height 1) has none. The guest learns bit 1
+On mainnet that is 173 transactions to height 940,000; signet (BIP34 from height 1) has none.
+
+**The BIP30 tree counts tracked outputs only** (libzync images, since 11-03). Every coinbase txid is checked and
+inserted as before, but a spend updates the tree only when the spent coin has bit 1. A repeat of an untracked coinbase
+is refused whether its slot reads live or SPENT, so its count never decided anything, and a double spend is refused
+by the coin commitment. Block 185,956 (190 coinbase coins spent): aggregate 294 M -> 8.3 M cycles. The guest learns bit 1
 from the BIP30 tree's proofs and the chunk records (agg_lite.rs); `scripts/libzync/utreexo_ref.py` (`Tracked`)
 implements this text.
 
