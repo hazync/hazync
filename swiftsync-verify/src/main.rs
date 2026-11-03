@@ -167,9 +167,9 @@ fn main() {
     if let Some(cs) = &rep.state {
         let tip = display(&cs.tip_hash);
         if let Some(e) = &expect {
-            match e.split_once(':').and_then(|(h, x)| Some((h.parse::<u32>().ok()?, x.to_lowercase()))) {
+            match swiftsync_verify::parse_expect(e) {
                 Some((h, x)) => {
-                    rep.checks.push((h == cs.height && x == tip, format!("--expect: block {h} is {x}; the proof's tip is block {} {tip}{}",
+                    rep.checks.push((swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash), format!("--expect: block {h} is {x}; the proof's tip is block {} {tip}{}",
                         cs.height, if h != cs.height { " (only the tip height can be checked from the receipt alone)" } else { "" })));
                     tip_checked = true;
                 }
@@ -185,7 +185,7 @@ fn main() {
             match out {
                 Ok(o) if o.status.success() => {
                     let got = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
-                    rep.checks.push((got == tip, format!("{url} says block {} is {got:?}; the proof's tip is {tip}", cs.height)));
+                    rep.checks.push((swiftsync_verify::identity_matches(cs.height, &got, cs.height, &cs.tip_hash), format!("{url} says block {} is {got:?}; the proof's tip is {tip}", cs.height)));
                     tip_checked = true;
                 }
                 Ok(o) => rep.checks.push((false, format!("{url}: request failed ({}): chain identity not checked", o.status))),

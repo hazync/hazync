@@ -518,9 +518,48 @@ pub fn hex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+/// `--expect <height>:<hash>`: the height and the hash, lowercased. None unless the hash is exactly 64 hex digits.
+pub fn parse_expect(e: &str) -> Option<(u32, String)> {
+    let (h, x) = e.split_once(':')?;
+    let x = x.to_lowercase();
+    (x.len() == 64 && x.bytes().all(|b| b.is_ascii_hexdigit())).then_some((h.parse().ok()?, x))
+}
+
+/// Chain identity (SWIFTSYNC_PROOFS.md step 7): `claimed` (display order, as `getblockhash` prints it) is the block at
+/// `claimed_height`, and the proof's tip is `tip` (internal order) at `height`. Only the tip can be checked.
+pub fn identity_matches(claimed_height: u32, claimed: &str, height: u32, tip: &[u8; 32]) -> bool {
+    let mut r = *tip;
+    r.reverse();
+    let shown: String = r.iter().map(|b| format!("{b:02x}")).collect();
+    claimed_height == height && claimed.len() == 64 && claimed == shown
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_identity() {
+        // mainnet genesis: display order vs internal order
+        let shown = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f";
+        let mut tip = [0u8; 32];
+        for i in 0..32 { tip[31 - i] = u8::from_str_radix(&shown[2 * i..2 * i + 2], 16).unwrap(); }
+        assert!(identity_matches(0, shown, 0, &tip));
+        let (h, x) = parse_expect(&format!("0:{}", shown.to_uppercase())).unwrap();
+        assert!(identity_matches(h, &x, 0, &tip));
+        assert!(!identity_matches(1, shown, 0, &tip), "wrong height");
+        let mut rev: Vec<u8> = shown.bytes().collect();
+        rev.reverse();
+        assert!(!identity_matches(0, &String::from_utf8(rev).unwrap(), 0, &tip), "internal order is not display order");
+        let other = format!("{}0", &shown[..63]);
+        assert!(!identity_matches(0, &other, 0, &tip), "one digit differs");
+        for bad in ["", "<html>", &shown[..63], &format!("0x{shown}")] {
+            assert!(!identity_matches(0, bad, 0, &tip), "{bad:?}");
+        }
+        for bad in [format!("{shown}"), format!("x:{shown}"), format!("0: {shown}"), format!("0:{}", &shown[..63]), format!("0:{shown}0")] {
+            assert!(parse_expect(&bad).is_none(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn genesis_work_matches_core() {
