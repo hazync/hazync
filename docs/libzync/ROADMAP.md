@@ -55,7 +55,7 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| F1 | port the `is_base` forgery fix and the BIP68 fix to `main` as a PR (merging and deploying stay the user's call) | next |
+| F1 | port the `is_base` forgery fix and the BIP68 fix to `main` | draft PR #668 (merge + deploy: user) |
 
 ## G. Docs
 
