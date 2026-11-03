@@ -2129,7 +2129,17 @@ fn mempool_block_hash(base: &str, height: u32) -> Result<(String, String), Strin
     Ok((url, String::from_utf8_lossy(&o.stdout).trim().to_lowercase()))
 }
 
-fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>, expect: Option<&str>, mempool: Option<&str>) {
+/// The block hash at `height` from the user's own node: `<cmd> getblockhash <height>` (display order).
+fn node_block_hash(cmd: &str, height: u32) -> Result<String, String> {
+    let mut parts = cmd.split_whitespace();
+    let prog = parts.next().ok_or("empty --bitcoin-cli")?;
+    let o = std::process::Command::new(prog).args(parts).args(["getblockhash", &height.to_string()]).output()
+        .map_err(|e| format!("{prog}: {e}"))?;
+    if !o.status.success() { return Err(format!("{cmd} getblockhash {height}: {}", String::from_utf8_lossy(&o.stderr).trim())); }
+    Ok(String::from_utf8_lossy(&o.stdout).trim().to_lowercase())
+}
+
+fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>, expect: Option<&str>, mempool: Option<&str>, cli: Option<&str>) {
     libzync_verify_fail_hook(); // also installed by the dispatcher, before the arguments are read
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}")))
         .unwrap_or_else(|e| panic!("{receipt:?}: not a receipt: {e}"));
@@ -2242,8 +2252,14 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>, expect: 
             Err(e) => check(false, &format!("{e}: chain identity not checked")),
         }
     }
+    if let Some(c) = cli {
+        match node_block_hash(c, cs.height) {
+            Ok(got) => { check(got == tip, &format!("your node ({c}) says block {} is {got:?}; the proof's tip is {tip}", cs.height)); identity = true; }
+            Err(e) => check(false, &format!("{e}: chain identity not checked")),
+        }
+    }
     let id_note = if identity { String::new() } else {
-        format!(" (chain identity NOT checked: compare block {} = {tip} with a source you trust, --mempool or --expect)", cs.height)
+        format!(" (chain identity NOT checked: compare block {} = {tip} with a source you trust, --bitcoin-cli, --mempool or --expect)", cs.height)
     };
     if fails == 0 && anchor.is_none() && low_work {
         println!("LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height {}, but below Core's minimum chainwork or the pinned checkpoint for {}: not shown to be the network's chain", cs.height, methods::NETWORK);
@@ -6073,20 +6089,21 @@ fn main() {
         // Positional: <receipt> <file.hints | -> [anchor.json]. Flags anywhere after: --expect <h>:<hash>, --mempool,
         // --mempool-url <base> (chain identity, as swiftsync-verify).
         let mut pos: Vec<&str> = Vec::new();
-        let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
+        let (mut expect, mut mempool, mut cli): (Option<String>, Option<String>, Option<String>) = (None, None, None);
         let mut it = args[p + 1..].iter();
         while let Some(a) = it.next() {
             match a.as_str() {
                 "--expect" => expect = Some(it.next().expect("--expect <height>:<hash>").clone()),
                 "--mempool" => mempool = Some(String::new()),
                 "--mempool-url" => mempool = Some(it.next().expect("--mempool-url <base>").clone()),
+                "--bitcoin-cli" => cli = Some(it.next().expect("--bitcoin-cli \"<command>\"").clone()),
                 x if x.starts_with("--") => panic!("libzync-verify: unknown flag {x} (a mistyped identity flag must not silently skip the check)"),
                 x => pos.push(x),
             }
         }
-        let usage = "libzync-verify <receipt> <file.hints | -> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>]";
+        let usage = "libzync-verify <receipt> <file.hints | -> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<command>\"]";
         assert!(pos.len() <= 3, "{usage}");
-        libzync_verify_cmd(pos.first().expect(usage), pos.get(1).expect(usage), pos.get(2).copied(), expect.as_deref(), mempool.as_deref());
+        libzync_verify_cmd(pos.first().expect(usage), pos.get(1).expect(usage), pos.get(2).copied(), expect.as_deref(), mempool.as_deref(), cli.as_deref());
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "swiftsync-diff-hints") {
