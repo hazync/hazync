@@ -157,7 +157,7 @@ The last block template seen before each block (polled every 15 s, read-only on 
 | 974,426 | 8,025 | 7,256 | 769 | 9.6% | 777 |
 | 974,427 | 5,232 | 5,049 | 183 | 3.5% | 1,762 |
 | 974,428 | 7,955 | 7,711 | 244 | 3.1% | 173 |
-| **8 blocks** | 61,0k | **56,386** | **4,589** | **7.5%** | |
+| **8 blocks** | 60,975 | **56,386** | **4,589** | **7.5%** | |
 
 - **Waste is small: 7.5% of the pre-proved inputs**, 2.6-21.7% per block. Phase B (context-free records) is not needed
   for this: re-proving the template's leftovers for the next height costs well under a tenth of the work.
