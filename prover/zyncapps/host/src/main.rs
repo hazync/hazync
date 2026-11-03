@@ -26,8 +26,8 @@ struct ZeroConf {
 /// network's pinned genesis anchor, the largest block time not in the future; below minimum work or the checkpoint the
 /// answer is DEMO (exit 2); `--expect h:hash` / `--mempool` compare the tip with a source the user trusts. A zyncAPP
 /// guest takes core_id as INPUT (so it survives handovers), so without this a receipt resting on any image would pass.
-struct Core<'a> { core_id: &'a [u32; 8], anchor_id: &'a [u8; 32], profile: u32, height: u32, tip_hash: &'a [u8; 32],
-                  cum_work: &'a [u8; 32], max_time: u32 }
+struct Core<'a> { core_id: &'a [u32; 8], anchor_id: &'a [u8; 32], lineage: &'a [u8; 32], profile: u32, height: u32,
+                  tip_hash: &'a [u8; 32], cum_work: &'a [u8; 32], max_time: u32 }
 
 /// Ok(true) = OK, Ok(false) = DEMO; Err = FAIL.
 fn core_policy(c: &Core, a: &[String]) -> Result<bool, String> {
@@ -40,6 +40,10 @@ fn core_policy(c: &Core, a: &[String]) -> Result<bool, String> {
     }
     if words(&img.method_id()) != *c.core_id {
         return Err(format!("rests on core image {}, not the trusted {net} core image {}", id_hex(c.core_id), img.method_id_hex));
+    }
+    // The core verifier's lineage rule: zero (one image since genesis) or exactly the image's pinned handovers.
+    if *c.lineage != [0u8; 32] && *c.lineage != swiftsync_verify::lineage_of(img.lineage) {
+        return Err(format!("lineage {} is not this core image's", hex(c.lineage)));
     }
     if hex32(img.genesis_anchor_hex) != Some(*c.anchor_id) {
         return Err(format!("anchor_id {} is not the {net} genesis anchor", hex(c.anchor_id)));
@@ -166,7 +170,7 @@ fn main() {
             id.reverse();
             println!("  rests on core image {} with anchor_id {}", id_hex(&z.core_id), hex(&z.anchor_id));
             println!("  ⚠ valid now, not final: a conflicting transaction can still confirm first");
-            let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, profile: z.profile, height: z.tip_height,
+            let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, lineage: &z.lineage, profile: z.profile, height: z.tip_height,
                            tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
             verdict(core_policy(&c, &a), format!("ZYNCAPP_ZEROCONF_OK: tx {} is valid for block {} on tip {} and spends only coins unspent there (fee {} sat)",
                      hex(&id), z.tip_height + 1, hex(&t), z.fee));
@@ -202,7 +206,7 @@ fn main() {
             t.reverse();
             let what = match z.spent_by { None => "UNSPENT".to_string(), Some((h, tx, v)) => format!("SPENT at height {h} by tx {tx} input {v}") };
             println!("  rests on core image {} with anchor_id {} and lineage {}", id_hex(&z.core_id), hex(&z.anchor_id), hex(&z.lineage));
-            let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, profile: z.profile, height: z.height,
+            let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, lineage: &z.lineage, profile: z.profile, height: z.height,
                            tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
             verdict(core_policy(&c, &a), format!("ZYNCAPP_COIN_OK: coin {} at log position {} is {what} at height {} (tip {})", hex(&z.coin), z.pos, z.height, hex(&t)));
         }

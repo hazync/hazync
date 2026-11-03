@@ -62,24 +62,34 @@ fn take<'a>(b: &mut &'a [u8], n: usize) -> Result<&'a [u8], &'static str> {
 
 /// The longest prefix of whole, contiguous records, and its length in bytes: a torn last append (a crash mid-write) is
 /// cut off here and the file truncated to it, instead of disabling history for good (review 11-03).
-pub fn decode_prefix(b: &[u8]) -> (Vec<Rec>, usize) {
+/// The third value is true when the bytes after the prefix are a TORN record (they run out mid-record): only that is
+/// safe to cut. Anything else (a wrong height) is corruption, and the caller must not delete what follows it.
+pub fn decode_prefix(b: &[u8]) -> (Vec<Rec>, usize, bool) {
     let mut out = Vec::new();
     let mut good = 0;
     while good < b.len() {
         match decode_all_one(&b[good..], out.len() as u32) {
-            Some((r, n)) => { out.push(r); good += n; }
-            None => break,
+            Ok((r, n)) => { out.push(r); good += n; }
+            Err(torn) => return (out, good, torn),
         }
     }
-    (out, good)
+    (out, good, true)
 }
 
-fn decode_all_one(b: &[u8], want: u32) -> Option<(Rec, usize)> {
+/// Err(true): the bytes ran out mid-record; Err(false): a record that is not the next height.
+fn decode_all_one(b: &[u8], want: u32) -> Result<(Rec, usize), bool> {
+    let r = decode_one_inner(b);
+    match r {
+        Some((rec, n)) if rec.height == want => Ok((rec, n)),
+        Some(_) => Err(false),
+        None if b.len() >= 4 && u32::from_le_bytes(b[..4].try_into().unwrap()) != want => Err(false),
+        None => Err(true),
+    }
+}
+
+fn decode_one_inner(b: &[u8]) -> Option<(Rec, usize)> {
     let mut c = b;
     let height = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap());
-    if height != want {
-        return None;
-    }
     let hash: H = take(&mut c, 32).ok()?.try_into().unwrap();
     let value = u64::from_le_bytes(take(&mut c, 8).ok()?.try_into().unwrap());
     let nf = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap()) as usize;
@@ -222,8 +232,12 @@ mod tests {
         assert_eq!(back, recs);
         assert!(decode_all(&bytes[..bytes.len() - 1]).is_err());
         assert!(decode_all(&bytes[recs[0].encode().len()..]).is_err(), "must start at 0");
-        let (p, n) = decode_prefix(&bytes[..bytes.len() - 3]);
-        assert_eq!((p.len(), n), (3, bytes.len() - recs[3].encode().len()), "a torn last record is cut off");
+        let (p, n, torn) = decode_prefix(&bytes[..bytes.len() - 3]);
+        assert_eq!((p.len(), n, torn), (3, bytes.len() - recs[3].encode().len(), true), "a torn last record is cut off");
+        let mut bad = bytes.clone();
+        bad[recs[0].encode().len()] ^= 1; // record 1's height
+        let (p, _, torn) = decode_prefix(&bad);
+        assert_eq!((p.len(), torn), (1, false), "a corrupt record in the middle is not a torn tail");
 
         let tip = replay(&back, 3, 3).unwrap();
         let (roots, n) = (tip.log.roots(), tip.log.len());

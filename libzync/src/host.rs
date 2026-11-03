@@ -567,6 +567,8 @@ impl DiskIndex {
         }
         let cap = (self.cap * 2).max((live.len() as u64 * 4).next_power_of_two());
         let tmp = self.path.with_extension("grow");
+        // A temp file left by a crash mid-grow may have a half-written header that open() refuses (review 11-03).
+        let _ = std::fs::remove_file(&tmp);
         let mut n = DiskIndex::open(&tmp).expect("index grow");
         n.init(cap).expect("index grow");
         for (k, p) in live {

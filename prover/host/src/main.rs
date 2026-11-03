@@ -10445,6 +10445,14 @@ fn cl_init_at_start(handover: bool, anchor_path: &str, prev: &ChainState) {
             "the coin log file does not match the anchor's utxo_roots / utxo_leaves");
 }
 
+/// fsync a directory, so a rename into it survives a power loss (unix; a no-op elsewhere).
+fn cl_sync_dir(d: &std::path::Path) {
+    #[cfg(unix)]
+    if let Ok(f) = std::fs::File::open(d) { let _ = f.sync_all(); }
+    #[cfg(not(unix))]
+    let _ = d;
+}
+
 /// HAZYNC_COINLOG_DIR: the on-disk store's directory (C1). Unset: the log lives in memory.
 fn cl_dir() -> Option<std::path::PathBuf> {
     std::env::var("HAZYNC_COINLOG_DIR").ok().filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
@@ -10530,8 +10538,10 @@ fn cl_save(path: &str) {
     }
     // Atomic: a run killed mid-write must not leave a short file that a resume would then refuse.
     let tmp = format!("{path}.tmp");
-    std::fs::write(&tmp, b).unwrap_or_else(|e| panic!("{tmp}: {e}"));
+    let f = std::fs::File::create(&tmp).and_then(|mut f| { use std::io::Write as _; f.write_all(&b)?; f.sync_data() });
+    f.unwrap_or_else(|e| panic!("{tmp}: {e}"));
     std::fs::rename(&tmp, path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    if let Some(dir) = std::path::Path::new(path).parent() { cl_sync_dir(if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir }); }
     // The state is recorded: the block's undo record is no longer needed.
     if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
         let _ = std::fs::remove_file(d.join("pending.bin"));
@@ -10540,7 +10550,9 @@ fn cl_save(path: &str) {
 
 fn cl_load(path: &str) {
     let b = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e} (a coin-log anchor needs its .coinlog file)"));
+    assert!(b.len() >= 8, "{path}: too short to be a coin log state file");
     if b.starts_with(CL_DISK_MAGIC) {
+        assert!(b.len() >= 16 && (b.len() - 16) % 33 == 0, "{path}: a disk-mode state file of the wrong size");
         let d = cl_dir().unwrap_or_else(|| panic!("{path} was written in disk mode: set HAZYNC_COINLOG_DIR"));
         let store = libzync::coinlog::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
             libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
@@ -10551,11 +10563,17 @@ fn cl_load(path: &str) {
         // A block that started changing the store after this state was saved (a crash, or a failed check): undo it.
         let pend = d.join("pending.bin");
         if let Ok(u) = std::fs::read(&pend) {
-            if store.len() != n || store.roots() != roots {
+            // Always roll back when the record is for this state, even if the nodes look untouched: the index may
+            // already have lost a spent coin (cl_commit removes it before setting the leaf; review round 2). Repeating
+            // it is harmless: the truncate does nothing and the sets and inserts rewrite the same values.
+            // A record for an older state belongs to a block that FINISHED (crash after its state file, before the
+            // record's removal): nothing to undo.
+            if u.len() >= 8 && u64::from_le_bytes(u[..8].try_into().unwrap()) == n {
                 cl_rollback(&mut store, &mut pos, &u, n);
-                eprintln!("  coin log store: rolled back one unfinished block to {n} leaves");
+                eprintln!("  coin log store: undid the unfinished block recorded in pending.bin (back to {n} leaves)");
             }
             let _ = std::fs::remove_file(&pend);
+            cl_sync_dir(&d);
         }
         assert!(store.len() == n && store.roots() == roots,
                 "{}: the on-disk coin log is not at the state {path} recorded (it moved on after that receipt?): rebuild it from a run from genesis", d.display());
@@ -10626,6 +10644,7 @@ fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainState) -> Vec<(
         let f = std::fs::File::create(&tmp).and_then(|mut f| { use std::io::Write as _; f.write_all(&b)?; f.sync_data()?; Ok(f) });
         f.unwrap_or_else(|e| panic!("{}: {e}", tmp.display()));
         std::fs::rename(&tmp, d.join("pending.bin")).unwrap_or_else(|e| panic!("pending.bin: {e}"));
+        cl_sync_dir(&d);
     }
     let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
@@ -10656,7 +10675,13 @@ fn hist_append(out: &str, rec: &libzync::history::Rec) {
     if g.is_none() {
         let b = std::fs::read(&path).unwrap_or_default();
         // The longest whole prefix (a torn last append is cut off), then cut back to this run's start height.
-        let (r, good) = libzync::history::decode_prefix(&b);
+        let (r, good, torn) = libzync::history::decode_prefix(&b);
+        if good < b.len() && !torn {
+            // Corruption inside the file, not a torn tail: keep it for inspection, write no history this run.
+            eprintln!("  history.bin: a corrupt record after {} good ones (not a torn write); no zyncAPP history for this run", r.len());
+            *g = Some(None);
+            return;
+        }
         if good < b.len() {
             eprintln!("  history.bin: {} trailing bytes are not a whole record (a torn write): cut off", b.len() - good);
         }
