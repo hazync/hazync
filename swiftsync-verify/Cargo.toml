@@ -24,6 +24,10 @@ path = "src/main.rs"
 name = "zync-path"
 path = "src/zync_path.rs"
 
+[[bin]]
+name = "zync-serve"
+path = "src/zync_serve.rs"
+
 [dependencies]
 risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
 # The hint hash (§3 of the proposal) from the crate the prover uses; without default features it is sha2 only.
