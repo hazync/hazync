@@ -58,6 +58,14 @@ impl<'a> Frame<'a> {
 
 fn run(input: &[u8]) -> Result<(Report, &'static Image), String> {
     let mut f = Frame { b: input, i: 0 };
+    let out = run_frame(&mut f)?;
+    if f.i != input.len() {
+        return Err("input frame has trailing bytes".into());
+    }
+    Ok(out)
+}
+
+fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
     let network = match f.take(1)?[0] {
         0 => "mainnet",
         1 => "signet",
@@ -68,9 +76,6 @@ fn run(input: &[u8]) -> Result<(Report, &'static Image), String> {
     let hints = f.chunk()?;
     let anchor_json = f.chunk()?;
     let image_hex = f.chunk()?;
-    if f.i != input.len() {
-        return Err("input frame has trailing bytes".into());
-    }
     let mut image = Image::by_network(network).ok_or("no built-in image")?;
     if !image_hex.is_empty() {
         let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
@@ -111,6 +116,58 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
                 "chainwork": st.map(|c| rev(&c.cum_work)),
                 "utxo_leaves": st.map(|c| c.utxo_leaves),
                 "profile": st.map(|c| swiftsync_verify::describe_profile(c.profile)),
+            }).to_string())
+        }
+    }
+}
+
+/// `verify_facts(ptr, len)`: the `verify_frame` input followed by `[u32 n][JSON {"coins": [CoinFact], "journeys":
+/// [CoinJourney]}]` (ZYNCAPPS.md §5). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
+/// against the verified state. A failed fact makes the verdict "fail", as `swiftsync-verify --coin` does.
+#[no_mangle]
+pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
+    let input = unsafe { Vec::from_raw_parts(ptr, len, len) };
+    let mut f = Frame { b: &input, i: 0 };
+    let res = run_frame(&mut f).and_then(|r| {
+        let facts = f.chunk()?;
+        if f.i != input.len() {
+            return Err("input frame has trailing bytes".to_string());
+        }
+        let v: serde_json::Value = serde_json::from_slice(facts).map_err(|e| format!("facts JSON: {e}"))?;
+        let coins: Vec<swiftsync_verify::CoinFact> = serde_json::from_value(v.get("coins").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .map_err(|e| format!("facts JSON coins: {e}"))?;
+        let journeys: Vec<swiftsync_verify::CoinJourney> = serde_json::from_value(v.get("journeys").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .map_err(|e| format!("facts JSON journeys: {e}"))?;
+        Ok((r, coins, journeys))
+    });
+    match res {
+        Err(e) => fail(e),
+        Ok(((mut rep, image), coins, journeys)) => {
+            let mut out = Vec::new();
+            if let Some(cs) = rep.state.as_ref() {
+                for c in &coins {
+                    out.push(swiftsync_verify::check_coin_fact(cs, c));
+                }
+                for j in &journeys {
+                    out.push(swiftsync_verify::check_coin_journey(cs, j));
+                }
+            } else if !coins.is_empty() || !journeys.is_empty() {
+                out.push(Err("no verified state to check facts against".to_string()));
+            }
+            if out.iter().any(|r| r.is_err()) {
+                rep.verdict = Verdict::Fail;
+            }
+            let facts: Vec<serde_json::Value> = out.into_iter().map(|r| match r {
+                Ok(w) => serde_json::json!({"ok": true, "what": w}),
+                Err(w) => serde_json::json!({"ok": false, "what": w}),
+            }).collect();
+            ret(serde_json::json!({
+                "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
+                "image": image.method_id_hex,
+                "network": image.network,
+                "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
+                "height": rep.state.as_ref().map(|c| c.height),
+                "facts": facts,
             }).to_string())
         }
     }
