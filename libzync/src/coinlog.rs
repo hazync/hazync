@@ -398,6 +398,21 @@ impl Store {
         self.wit(l - 1, start, &e[..m], out);
         self.wit(l - 1, mid, &e[m..], out);
     }
+    /// One leaf's path: the sibling at each level, bottom-up, up to its tree's root (facts::coinlog_member).
+    pub fn path(&self, p: u64) -> Vec<H> {
+        let n = self.len();
+        let (mut start, mut lvl) = (0u64, 0u32);
+        for l in (0..64u32).rev() {
+            if (n >> l) & 1 == 1 {
+                if p < start + (1u64 << l) {
+                    lvl = l;
+                    break;
+                }
+                start += 1u64 << l;
+            }
+        }
+        (0..lvl as usize).map(|j| self.nodes[j][((p >> j) ^ 1) as usize]).collect()
+    }
     /// The siblings `apply` reads for these spends (sorted by position).
     pub fn witness(&self, spends: &[(u64, H)]) -> Vec<H> {
         let n = self.len();

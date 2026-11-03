@@ -9,6 +9,7 @@ pub mod ss_hints;
 pub mod wire;
 pub mod net;
 pub mod coinlog;
+pub mod facts;
 #[cfg(feature = "std")]
 pub mod host;
 
