@@ -24,26 +24,26 @@ refuse it.
 | B1 | `libzync::facts`: coin leaf, unspent / spent-by, block in chain + state at a height, tx in block, tx parsing, `check_core_statement` | done |
 | B2 | host writes `history.bin`; `zync-path coin` / `find` produce coin facts | done |
 | B3 | coin journey: creating tx in a proven block, the coin leaf from its output, the spending tx (`zync-path journey`, `--journey`) | done |
-| B4 | `swiftsync-verify --coin / --journey` (wasm/ffi exposure: next) | done (CLI) |
-| B5 | the first zyncAPP guest: "coin C at its position is unspent/spent at the proof's tip", verifying a core receipt inside the zkVM | next |
+| B4 | `swiftsync-verify --coin / --journey`, wasm `verify_facts`, C ABI `swiftsync_verify_facts` | done |
+| B5 | zyncAPP `coin` guest (prover/zyncapps): unspent/spent at the core tip, core receipt verified in the zkVM; image 26e09637 | done |
 
 ## C. Production host
 
 | # | item | status |
 |---|---|---|
-| C1 | disk-backed coin-log store (mainnet ≈ 2.4 bn leaves; today in memory) | next |
-| C2 | path service: an HTTP endpoint serving B2's paths for a tip receipt (payment hook later) | next |
+| C1 | disk-backed coin-log store (`HAZYNC_COINLOG_DIR`, DiskNodes) + C1b on-disk position index (DiskIndex) | done (history.bin replay is still in memory) |
+| C2 | `zync-serve` path service (GET /tip, /coin, /find); payment hook not yet | done |
 
 ## D. Transaction log (txproofs/README.md)
 
 | # | item | status |
 |---|---|---|
-| D1 | Phase A: speculative chunks for the next height (txproofs/README.md §7) | building |
-| D2 | aggregate: record selection (block order as (journal, record) pairs), speculative context accepted under the height rule | next |
+| D1 | Phase A: speculative chunks (zero hash/time) accepted from CSV on when flags need no hash; host `HAZYNC_SPECULATIVE` | done (image c9tx df86c392) |
+| D2 | aggregate record selection (`HAZYNC_TXLOG_ORDER`, each record once) | done |
 | D3 | Phase B (context-free validity records) only if Phase A waste is large | after D4 measures |
-| D4 | host mempool pipeline (batch every N s; RBF/eviction waste ≈ 1.3 % measured) | experiment |
-| D5 | zero-conf zyncAPP (record in the tx log + unspent inputs in the coin log at the tip) | after D3 |
-| D6 | Ghost proof-ready blocks (pool pre-proves its template) | after D4 |
+| D4 | `fetch_template_rpc.py` (template -> speculative fixture); `template_waste.py` measuring re-prove waste | built; measuring |
+| D5 | zyncAPP `zeroconf` guest: speculative chunk record + every input unspent at the tip | building |
+| D6 | Ghost proof-ready blocks: the pool runs D4 on its own template (Ghost-side integration; Ghost infra is separate) | after D4 measures |
 
 ## E. Proof of absence
 
