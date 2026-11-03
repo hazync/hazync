@@ -279,6 +279,127 @@ impl Host {
     }
 }
 
+/// MEASUREMENT ONLY (the cost table, not a chain): a touched set, witness and old roots for one block's `removes` /
+/// `inserts` inside a modelled tree of `n` leaves, consistent by construction: between consecutive involved keys a
+/// filler live key, every needed leaf at a random position, every untouched subtree a random hash. `apply` then does
+/// exactly the work it would do on a real tree of that size.
+pub fn synth(n: u64, removes: &[Key], inserts: &[Key], seed: u64) -> (Vec<Option<W>>, Vec<Touched>, Vec<W>) {
+    let mut rng = seed | 1;
+    let mut rnd = move || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+    let bump = |k: &Key, up: bool| -> Key {
+        let mut o = *k;
+        for i in (0..64).rev() {
+            if up { let (v, c) = o[i].overflowing_add(1); o[i] = v; if !c { break; } } else { let (v, c) = o[i].overflowing_sub(1); o[i] = v; if !c { break; } }
+        }
+        o
+    };
+    let mut inv: Vec<(Key, bool)> = removes.iter().map(|k| (*k, true)).chain(inserts.iter().map(|k| (*k, false))).collect();
+    inv.sort_unstable();
+    // filler f_j just above each involved key, and f_-1 just below the first
+    let mut leaves: Vec<(Key, Key)> = Vec::new();
+    for (j, (x, is_live)) in inv.iter().enumerate() {
+        let pred = if j == 0 { bump(x, false) } else { bump(&inv[j - 1].0, true) };
+        let after = bump(x, true);
+        if *is_live {
+            leaves.push((pred, *x));
+            leaves.push((*x, after));
+        } else {
+            leaves.push((pred, after));
+        }
+    }
+    // positions: distinct, random below n
+    let mut pos: Vec<u64> = Vec::with_capacity(leaves.len());
+    let mut seen = alloc::collections::BTreeSet::new();
+    while pos.len() < leaves.len() {
+        let p = rnd() % n;
+        if seen.insert(p) { pos.push(p); }
+    }
+    let mut touched: Vec<Touched> = pos.into_iter().zip(leaves).map(|(p, (k, nx))| (p, k, nx)).collect();
+    touched.sort_unstable_by_key(|x| x.0);
+    let e: Vec<(u64, W)> = touched.iter().map(|x| (x.0, live(&x.1, &x.2))).collect();
+    fn build(l: u32, start: u64, e: &[(u64, W)], rnd: &mut dyn FnMut() -> u64, sib: &mut Vec<W>) -> W {
+        if e.is_empty() {
+            let mut h = [0u32; 8];
+            for x in h.iter_mut() { *x = rnd() as u32; }
+            sib.push(h);
+            return h;
+        }
+        if l == 0 {
+            return e[0].1;
+        }
+        let mid = start + (1u64 << (l - 1));
+        let m = e.partition_point(|x| x.0 < mid);
+        let a = build(l - 1, start, &e[..m], rnd, sib);
+        let b = build(l - 1, mid, &e[m..], rnd, sib);
+        let mut o = [0u32; 8];
+        parent_w(l, &a, &b, &mut o);
+        o
+    }
+    let mut roots: Vec<Option<W>> = (0..64).map(|_| None).collect();
+    let mut sib = Vec::new();
+    let (mut start, mut k) = (0u64, 0usize);
+    for l in (0..64u32).rev() {
+        if (n >> l) & 1 == 0 { continue; }
+        let end = start + (1u64 << l);
+        let m = k + e[k..].partition_point(|x| x.0 < end);
+        roots[l as usize] = Some(if m > k { build(l, start, &e[k..m], &mut rnd, &mut sib) } else {
+            let mut h = [0u32; 8];
+            for x in h.iter_mut() { *x = rnd() as u32; }
+            h
+        });
+        k = m;
+        start = end;
+    }
+    while roots.last() == Some(&None) { roots.pop(); }
+    (roots, touched, sib)
+}
+
+/// The tree witness block the guest reads (measurement builds): [n lo, n hi, roots count, (present flag, 8 words) per
+/// level, touched count, (pos lo, pos hi, key 16 words, next 16 words) per touched, siblings 8 words each].
+pub fn encode_bench(roots: &[Option<W>], n: u64, touched: &[Touched], sib: &[W]) -> Vec<u32> {
+    let mut v = alloc::vec![n as u32, (n >> 32) as u32, roots.len() as u32];
+    for r in roots {
+        v.push(r.is_some() as u32);
+        v.extend_from_slice(&r.unwrap_or([0; 8]));
+    }
+    v.push(touched.len() as u32);
+    for (p, k, nx) in touched {
+        v.push(*p as u32);
+        v.push((*p >> 32) as u32);
+        for c in k.chunks_exact(4).chain(nx.chunks_exact(4)) { v.push(u32::from_be_bytes(c.try_into().unwrap())); }
+    }
+    for s in sib { v.extend_from_slice(s); }
+    v
+}
+
+pub fn decode_bench(w: &[u32]) -> Option<(Vec<Option<W>>, u64, Vec<Touched>, Vec<W>)> {
+    let mut i = 0usize;
+    let mut next = |k: usize| -> Option<&[u32]> { let s = w.get(i..i.checked_add(k)?)?; i += k; Some(s) };
+    let h = next(3)?;
+    let (n, nr) = (h[0] as u64 | (h[1] as u64) << 32, h[2] as usize);
+    if nr > 64 { return None; }
+    let mut roots = Vec::with_capacity(nr);
+    for _ in 0..nr {
+        let r = next(9)?;
+        roots.push((r[0] == 1).then(|| r[1..9].try_into().unwrap()));
+    }
+    let t = next(1)?[0] as usize;
+    let mut touched = Vec::with_capacity(t.min(1 << 20));
+    for _ in 0..t {
+        let r = next(34)?;
+        let mut k = [0u8; 64];
+        let mut nx = [0u8; 64];
+        for j in 0..16 {
+            k[4 * j..4 * j + 4].copy_from_slice(&r[2 + j].to_be_bytes());
+            nx[4 * j..4 * j + 4].copy_from_slice(&r[18 + j].to_be_bytes());
+        }
+        touched.push((r[0] as u64 | (r[1] as u64) << 32, k, nx));
+    }
+    let rest = w.get(i..)?;
+    if rest.len() % 8 != 0 { return None; }
+    Some((roots, n, touched, rest.chunks_exact(8).map(|c| c.try_into().unwrap()).collect()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +433,20 @@ mod tests {
         let hr: Vec<Option<crate::coinlog::H>> = roots.iter().map(|x| x.as_ref().map(crate::coinlog::h_of)).collect();
         assert!(crate::facts::coinlog_member(&hr, n, p, &crate::coinlog::h_of(&live(&a, &b)), &path));
         assert!(h.absence(&live_keys[0]).is_none());
+    }
+
+    #[test]
+    fn synth_applies_at_mainnet_size() {
+        let removes: Vec<Key> = (0..300).map(key).collect();
+        let inserts: Vec<Key> = (1000..1500).map(key).collect();
+        let n = 180_000_000u64;
+        let (mut roots, touched, sib) = synth(n, &removes, &inserts, 7);
+        let w = encode_bench(&roots, n, &touched, &sib);
+        let (r2, n2, t2, s2) = decode_bench(&w).unwrap();
+        assert_eq!((&r2, n2, &t2, &s2), (&roots, n, &touched, &sib));
+        let mut nn = n;
+        apply(&mut roots, &mut nn, &touched, &sib, &removes, &inserts).unwrap();
+        assert_eq!(nn, n + 500);
     }
 
     #[test]
