@@ -288,6 +288,9 @@ fn read_at(f: &std::fs::File, mut buf: &mut [u8], mut off: u64) -> std::io::Resu
 fn write_at(f: &std::fs::File, mut buf: &[u8], mut off: u64) -> std::io::Result<()> {
     while !buf.is_empty() {
         let n = std::os::windows::fs::FileExt::seek_write(f, buf, off)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
         buf = &buf[n..];
         off += n as u64;
     }
@@ -322,6 +325,18 @@ impl DiskNodes {
             self.counts.push(0);
         }
         &self.files[l]
+    }
+    /// Cuts the store back to `n` leaves: every level keeps n >> l nodes (an append never changes an existing node, so
+    /// this undoes appends exactly; flipped leaves are restored by the caller with `set`).
+    pub fn truncate_to(&mut self, n: u64) -> std::io::Result<()> {
+        for l in 0..self.files.len() {
+            let c = n >> l;
+            if c < self.counts[l] {
+                self.files[l].set_len(c * 32)?;
+                self.counts[l] = c;
+            }
+        }
+        Ok(())
     }
     /// fsync every level (after a block, before its receipt is relied on).
     pub fn sync(&self) -> std::io::Result<()> {
@@ -412,6 +427,28 @@ mod disk_tests {
         assert_eq!(m.roots(), d2.roots());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn disk_store_rolls_back_one_block() {
+        let dir = std::env::temp_dir().join(std::format!("libzync-rb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let h = |i: u64| -> [u8; 32] { use sha2::Digest; sha2::Sha256::digest(i.to_le_bytes()).into() };
+        let mut d = NodeStore::with_nodes(DiskNodes::open(&dir).unwrap());
+        for i in 0..900u64 { d.push(h(i)); }
+        let before = d.roots();
+        // a block: two flips, 123 appends
+        let old = [(17u64, d.leaf(17)), (600, d.leaf(600))];
+        d.set(17, h(99_017));
+        d.set(600, h(99_600));
+        for i in 0..123u64 { d.push(h(50_000 + i)); }
+        assert_ne!(d.roots(), before);
+        // roll back: cut the appends, restore the flipped leaves
+        d.nodes.truncate_to(900).unwrap();
+        for (p, l) in old { d.set(p, l); }
+        assert_eq!(d.len(), 900);
+        assert_eq!(d.roots(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// ROADMAP C1b: the host's coin-leaf -> log-position index on disk. Open addressing in one file (`index.bin`): a header
@@ -439,6 +476,10 @@ impl DiskIndex {
             read_at(&d.f, &mut h, 0)?;
             d.cap = u64::from_le_bytes(h[..8].try_into().unwrap());
             d.used = u64::from_le_bytes(h[8..].try_into().unwrap());
+            let want = d.cap.checked_mul(IX_SLOT).and_then(|x| x.checked_add(IX_HDR));
+            if d.cap == 0 || !d.cap.is_power_of_two() || d.used > d.cap || want != Some(d.f.metadata()?.len()) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "index.bin: corrupt header or size"));
+            }
         }
         Ok(d)
     }
@@ -486,6 +527,9 @@ impl DiskIndex {
     pub fn get(&self, leaf: &[u8; 32]) -> Option<u64> {
         self.find(leaf).map(|i| self.slot(i).1 - 1)
     }
+    pub fn sync(&self) -> std::io::Result<()> {
+        self.f.sync_data()
+    }
     pub fn insert(&mut self, leaf: [u8; 32], pos: u64) {
         if let Some(i) = self.find(&leaf) {
             self.put_slot(i, &leaf, pos + 1);
@@ -528,6 +572,7 @@ impl DiskIndex {
         for (k, p) in live {
             n.insert(k, p);
         }
+        n.sync().expect("index grow sync");
         drop(n);
         std::fs::rename(&tmp, &self.path).expect("index grow rename");
         *self = DiskIndex::open(&self.path).expect("index reopen");

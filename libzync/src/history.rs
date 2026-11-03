@@ -60,6 +60,44 @@ fn take<'a>(b: &mut &'a [u8], n: usize) -> Result<&'a [u8], &'static str> {
     Ok(h)
 }
 
+/// The longest prefix of whole, contiguous records, and its length in bytes: a torn last append (a crash mid-write) is
+/// cut off here and the file truncated to it, instead of disabling history for good (review 11-03).
+pub fn decode_prefix(b: &[u8]) -> (Vec<Rec>, usize) {
+    let mut out = Vec::new();
+    let mut good = 0;
+    while good < b.len() {
+        match decode_all_one(&b[good..], out.len() as u32) {
+            Some((r, n)) => { out.push(r); good += n; }
+            None => break,
+        }
+    }
+    (out, good)
+}
+
+fn decode_all_one(b: &[u8], want: u32) -> Option<(Rec, usize)> {
+    let mut c = b;
+    let height = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap());
+    if height != want {
+        return None;
+    }
+    let hash: H = take(&mut c, 32).ok()?.try_into().unwrap();
+    let value = u64::from_le_bytes(take(&mut c, 8).ok()?.try_into().unwrap());
+    let nf = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap()) as usize;
+    let na = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap()) as usize;
+    let mut flips = Vec::with_capacity(nf.min(1 << 20));
+    for _ in 0..nf {
+        let p = u64::from_le_bytes(take(&mut c, 8).ok()?.try_into().unwrap());
+        let t = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap());
+        let v = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap());
+        flips.push((p, t, v));
+    }
+    let mut appends = Vec::with_capacity(na.min(1 << 20));
+    for _ in 0..na {
+        appends.push(take(&mut c, 32).ok()?.try_into().unwrap());
+    }
+    Some((Rec { height, hash, value, flips, appends }, b.len() - c.len()))
+}
+
 /// Every record, checked contiguous from height 0.
 pub fn decode_all(mut b: &[u8]) -> Result<Vec<Rec>, &'static str> {
     let mut out: Vec<Rec> = Vec::new();
@@ -184,6 +222,8 @@ mod tests {
         assert_eq!(back, recs);
         assert!(decode_all(&bytes[..bytes.len() - 1]).is_err());
         assert!(decode_all(&bytes[recs[0].encode().len()..]).is_err(), "must start at 0");
+        let (p, n) = decode_prefix(&bytes[..bytes.len() - 3]);
+        assert_eq!((p.len(), n), (3, bytes.len() - recs[3].encode().len()), "a torn last record is cut off");
 
         let tip = replay(&back, 3, 3).unwrap();
         let (roots, n) = (tip.log.roots(), tip.log.len());
