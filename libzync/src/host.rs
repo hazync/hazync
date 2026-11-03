@@ -254,3 +254,162 @@ pub fn canonical_bytes(file: &hintsfile::Hintsfile) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
+
+/// ROADMAP C1: the coin log's nodes on disk, one file per level (`L<l>.bin`, 32 bytes per node, node i at offset 32·i),
+/// read and written in place. The OS page cache is the cache. Mainnet's log (~2.4 bn leaves) is ~150 GB of nodes.
+/// ⚠ The position index (leaf -> position, host `ClHost::pos`) is still in memory: C1b.
+pub struct DiskNodes {
+    dir: std::path::PathBuf,
+    files: std::vec::Vec<std::fs::File>,
+    counts: std::vec::Vec<u64>,
+}
+
+#[cfg(unix)]
+fn read_at(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, off)
+}
+#[cfg(unix)]
+fn write_at(f: &std::fs::File, buf: &[u8], off: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(f, buf, off)
+}
+#[cfg(windows)]
+fn read_at(f: &std::fs::File, mut buf: &mut [u8], mut off: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let n = std::os::windows::fs::FileExt::seek_read(f, buf, off)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        buf = &mut buf[n..];
+        off += n as u64;
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn write_at(f: &std::fs::File, mut buf: &[u8], mut off: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let n = std::os::windows::fs::FileExt::seek_write(f, buf, off)?;
+        buf = &buf[n..];
+        off += n as u64;
+    }
+    Ok(())
+}
+
+impl DiskNodes {
+    /// Opens (or creates) the store in `dir`. Each level's count is its file length / 32; a torn last node (a crash
+    /// mid-write) is cut off, and the caller checks the roots against a receipt before trusting the store.
+    pub fn open(dir: &std::path::Path) -> std::io::Result<DiskNodes> {
+        std::fs::create_dir_all(dir)?;
+        let mut d = DiskNodes { dir: dir.to_path_buf(), files: std::vec::Vec::new(), counts: std::vec::Vec::new() };
+        loop {
+            let p = dir.join(std::format!("L{}.bin", d.files.len()));
+            if !p.exists() {
+                break;
+            }
+            let f = std::fs::OpenOptions::new().read(true).write(true).open(&p)?;
+            let n = f.metadata()?.len() / 32;
+            f.set_len(n * 32)?;
+            d.files.push(f);
+            d.counts.push(n);
+        }
+        Ok(d)
+    }
+    fn level_file(&mut self, l: usize) -> &std::fs::File {
+        while self.files.len() <= l {
+            let p = self.dir.join(std::format!("L{}.bin", self.files.len()));
+            let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&p)
+                .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            self.files.push(f);
+            self.counts.push(0);
+        }
+        &self.files[l]
+    }
+    /// fsync every level (after a block, before its receipt is relied on).
+    pub fn sync(&self) -> std::io::Result<()> {
+        for f in &self.files {
+            f.sync_data()?;
+        }
+        Ok(())
+    }
+}
+
+impl crate::coinlog::Nodes for DiskNodes {
+    fn levels(&self) -> usize {
+        self.files.len()
+    }
+    fn count(&self, l: usize) -> u64 {
+        self.counts.get(l).copied().unwrap_or(0)
+    }
+    fn get(&self, l: usize, i: u64) -> [u8; 32] {
+        assert!(i < self.counts[l], "coin log store: node {l}/{i} past the end");
+        let mut b = [0u8; 32];
+        read_at(&self.files[l], &mut b, 32 * i).unwrap_or_else(|e| panic!("coin log store L{l}: {e}"));
+        b
+    }
+    fn put(&mut self, l: usize, i: u64, h: [u8; 32]) {
+        assert!(i < self.counts[l], "coin log store: node {l}/{i} past the end");
+        write_at(&self.files[l], &h, 32 * i).unwrap_or_else(|e| panic!("coin log store L{l}: {e}"));
+    }
+    fn append(&mut self, l: usize, h: [u8; 32]) {
+        let n = self.count(l);
+        let f = self.level_file(l);
+        write_at(f, &h, 32 * n).unwrap_or_else(|e| panic!("coin log store L{l}: {e}"));
+        self.counts[l] = n + 1;
+    }
+}
+
+/// Either backend, chosen at run time (host: `HAZYNC_COINLOG_DIR` set = on disk).
+pub enum AnyNodes {
+    Mem(crate::coinlog::MemNodes),
+    Disk(DiskNodes),
+}
+
+impl crate::coinlog::Nodes for AnyNodes {
+    fn levels(&self) -> usize {
+        match self { AnyNodes::Mem(m) => m.levels(), AnyNodes::Disk(d) => d.levels() }
+    }
+    fn count(&self, l: usize) -> u64 {
+        match self { AnyNodes::Mem(m) => m.count(l), AnyNodes::Disk(d) => d.count(l) }
+    }
+    fn get(&self, l: usize, i: u64) -> [u8; 32] {
+        match self { AnyNodes::Mem(m) => crate::coinlog::Nodes::get(m, l, i), AnyNodes::Disk(d) => d.get(l, i) }
+    }
+    fn put(&mut self, l: usize, i: u64, h: [u8; 32]) {
+        match self { AnyNodes::Mem(m) => m.put(l, i, h), AnyNodes::Disk(d) => d.put(l, i, h) }
+    }
+    fn append(&mut self, l: usize, h: [u8; 32]) {
+        match self { AnyNodes::Mem(m) => crate::coinlog::Nodes::append(m, l, h), AnyNodes::Disk(d) => d.append(l, h) }
+    }
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::*;
+    use crate::coinlog::{NodeStore, Store};
+
+    #[test]
+    fn disk_store_equals_memory_store() {
+        let dir = std::env::temp_dir().join(std::format!("libzync-disk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut m = Store::default();
+        let mut d = NodeStore::with_nodes(DiskNodes::open(&dir).unwrap());
+        let h = |i: u64| -> [u8; 32] { use sha2::Digest; sha2::Sha256::digest(i.to_le_bytes()).into() };
+        for i in 0..1000u64 {
+            m.push(h(i));
+            d.push(h(i));
+            if i % 7 == 3 {
+                m.set(i / 2, h(i + 5000));
+                d.set(i / 2, h(i + 5000));
+            }
+        }
+        assert_eq!(m.roots(), d.roots());
+        assert_eq!(m.path(377), d.path(377));
+        let sp = [(10u64, m.leaf(10)), (600, m.leaf(600))];
+        assert_eq!(m.witness(&sp), d.witness(&sp));
+        drop(d);
+        // reopen: same state from the files alone
+        let d2 = NodeStore::with_nodes(DiskNodes::open(&dir).unwrap());
+        assert_eq!(d2.len(), 1000);
+        assert_eq!(m.roots(), d2.roots());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

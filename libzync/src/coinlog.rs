@@ -324,48 +324,83 @@ pub fn decode_witness(w: &[u32]) -> Option<(Vec<u64>, Vec<W>)> {
     Some((pos, sib))
 }
 
+/// Where a [`Store`] keeps its nodes: level l, index i covers leaves [i·2^l, (i+1)·2^l). In memory ([`MemNodes`]) or
+/// on disk (`host::DiskNodes`, ROADMAP C1); the algorithms below are the same for both.
+pub trait Nodes {
+    fn levels(&self) -> usize;
+    fn count(&self, l: usize) -> u64;
+    fn get(&self, l: usize, i: u64) -> H;
+    fn put(&mut self, l: usize, i: u64, h: H);
+    /// Appends at level l (creating the level if it is the next one).
+    fn append(&mut self, l: usize, h: H);
+}
+
+pub type MemNodes = Vec<Vec<H>>;
+
+impl Nodes for MemNodes {
+    fn levels(&self) -> usize {
+        self.len()
+    }
+    fn count(&self, l: usize) -> u64 {
+        <[Vec<H>]>::get(self, l).map(|v| v.len() as u64).unwrap_or(0)
+    }
+    fn get(&self, l: usize, i: u64) -> H {
+        self[l][i as usize]
+    }
+    fn put(&mut self, l: usize, i: u64, h: H) {
+        self[l][i as usize] = h;
+    }
+    fn append(&mut self, l: usize, h: H) {
+        if self.len() == l {
+            self.push(Vec::new());
+        }
+        self[l].push(h);
+    }
+}
+
 /// Host side: the whole log, every node kept, so any block's witness can be read off. Nodes at level l are aligned:
 /// node i covers leaves [i·2^l, (i+1)·2^l), present once that whole range exists.
 #[derive(Clone, Default)]
-pub struct Store {
-    pub nodes: Vec<Vec<H>>,
+pub struct NodeStore<N: Nodes> {
+    pub nodes: N,
 }
 
-impl Store {
+/// The in-memory log (tests, signet, short runs).
+pub type Store = NodeStore<MemNodes>;
+
+impl<N: Nodes> NodeStore<N> {
+    pub fn with_nodes(nodes: N) -> Self {
+        NodeStore { nodes }
+    }
     pub fn len(&self) -> u64 {
-        self.nodes.first().map(|v| v.len() as u64).unwrap_or(0)
+        self.nodes.count(0)
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
     pub fn leaf(&self, p: u64) -> H {
-        self.nodes[0][p as usize]
+        self.nodes.get(0, p)
     }
     pub fn push(&mut self, leaf: H) {
-        if self.nodes.is_empty() {
-            self.nodes.push(Vec::new());
-        }
-        self.nodes[0].push(leaf);
+        self.nodes.append(0, leaf);
         let mut l = 0;
-        while self.nodes[l].len() % 2 == 0 {
-            let n = self.nodes[l].len();
-            let p = parent(l as u32 + 1, &self.nodes[l][n - 2], &self.nodes[l][n - 1]);
-            if self.nodes.len() == l + 1 {
-                self.nodes.push(Vec::new());
-            }
-            self.nodes[l + 1].push(p);
+        while self.nodes.count(l) % 2 == 0 {
+            let n = self.nodes.count(l);
+            let p = parent(l as u32 + 1, &self.nodes.get(l, n - 2), &self.nodes.get(l, n - 1));
+            self.nodes.append(l + 1, p);
             l += 1;
         }
     }
     pub fn set(&mut self, p: u64, leaf: H) {
-        self.nodes[0][p as usize] = leaf;
-        let mut i = p as usize;
-        for l in 0..self.nodes.len() - 1 {
+        self.nodes.put(0, p, leaf);
+        let mut i = p;
+        for l in 0..self.nodes.levels() - 1 {
             let j = i / 2;
-            if j >= self.nodes[l + 1].len() {
+            if j >= self.nodes.count(l + 1) {
                 break;
             }
-            self.nodes[l + 1][j] = parent(l as u32 + 1, &self.nodes[l][2 * j], &self.nodes[l][2 * j + 1]);
+            let h = parent(l as u32 + 1, &self.nodes.get(l, 2 * j), &self.nodes.get(l, 2 * j + 1));
+            self.nodes.put(l + 1, j, h);
             i = j;
         }
     }
@@ -376,7 +411,7 @@ impl Store {
         let mut start = 0u64;
         for l in (0..64).rev() {
             if (n >> l) & 1 == 1 {
-                r[l] = Some(self.nodes[l][(start >> l) as usize]);
+                r[l] = Some(self.nodes.get(l, start >> l));
                 start += 1u64 << l;
             }
         }
@@ -387,7 +422,7 @@ impl Store {
     }
     fn wit(&self, l: u32, start: u64, e: &[(u64, H)], out: &mut Vec<H>) {
         if e.is_empty() {
-            out.push(self.nodes[l as usize][(start >> l) as usize]);
+            out.push(self.nodes.get(l as usize, start >> l));
             return;
         }
         if l == 0 {
@@ -411,7 +446,7 @@ impl Store {
                 start += 1u64 << l;
             }
         }
-        (0..lvl as usize).map(|j| self.nodes[j][((p >> j) ^ 1) as usize]).collect()
+        (0..lvl as usize).map(|j| self.nodes.get(j, (p >> j) ^ 1)).collect()
     }
     /// The siblings `apply` reads for these spends (sorted by position).
     pub fn witness(&self, spends: &[(u64, H)]) -> Vec<H> {
