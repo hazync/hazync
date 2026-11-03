@@ -6073,10 +6073,12 @@ fn main() {
                 "--expect" => expect = Some(it.next().expect("--expect <height>:<hash>").clone()),
                 "--mempool" => mempool = Some(String::new()),
                 "--mempool-url" => mempool = Some(it.next().expect("--mempool-url <base>").clone()),
+                x if x.starts_with("--") => panic!("libzync-verify: unknown flag {x} (a mistyped identity flag must not silently skip the check)"),
                 x => pos.push(x),
             }
         }
         let usage = "libzync-verify <receipt> <file.hints | -> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>]";
+        assert!(pos.len() <= 3, "{usage}");
         libzync_verify_cmd(pos.first().expect(usage), pos.get(1).expect(usage), pos.get(2).copied(), expect.as_deref(), mempool.as_deref());
         return;
     }

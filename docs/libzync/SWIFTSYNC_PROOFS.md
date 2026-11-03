@@ -248,7 +248,7 @@ Given a receipt R, the hints file F and the network:
 7. **Chain identity.** `J.tip_hash` is the block at height `J.height` on the network's chain. The proof says the chain
    it covers is valid from genesis; which chain it is, is its tip hash (each header commits to the previous one, so the
    tip hash identifies the whole history), and a valid fork has its own. Compare it with a source you trust:
-   your own most-work header chain (`--bitcoin-cli`), a block explorer (`--mempool`: one GET of mempool.space's
+   your own most-work header chain (`--bitcoin-cli`, swiftsync-verify only), a block explorer (`--mempool`: one GET of mempool.space's
    `/api/block-height/<J.height>`, signet `/signet/api`; `--mempool-url` for another esplora API), or a hash you
    already have (`--expect <height>:<hash>`). Both verifiers: a mismatch is FAIL; with no comparison the OK line
    says the chain identity was NOT checked and prints the hash to compare.
