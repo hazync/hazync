@@ -66,7 +66,10 @@ fn run(input: &[u8]) -> Result<(Report, &'static Image), String> {
 }
 
 fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
-    let network = match f.take(1)?[0] {
+    // Network code: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (COINLOG.md), whose proofs carry coin facts.
+    let code = f.take(1)?[0];
+    let coinlog = code & 0x10 != 0;
+    let network = match code & !0x10 {
         0 => "mainnet",
         1 => "signet",
         n => return Err(format!("unknown network code {n}")),
@@ -77,6 +80,9 @@ fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
     let anchor_json = f.chunk()?;
     let image_hex = f.chunk()?;
     let mut image = Image::by_network(network).ok_or("no built-in image")?;
+    if coinlog {
+        image = image.with_coinlog();
+    }
     if !image_hex.is_empty() {
         let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
         image = image.with_method_id(&h).ok_or("image id is not 64 hex digits")?;
@@ -121,8 +127,9 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
     }
 }
 
-/// `verify_facts(ptr, len)`: the `verify_frame` input followed by `[u32 n][JSON {"coins": [CoinFact], "journeys":
-/// [CoinJourney]}]` (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
+/// `verify_facts(ptr, len)`: the `verify_frame` input (network code | 0x10 for a coin-log image) followed by
+/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "expect": "<height>:<hash>"}]`; "expect" is the
+/// network's block at the proof's height from a source the page trusts, and without it the verdict is at most DEMO (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
 /// against the verified state. A failed fact makes the verdict "fail", as `swiftsync-verify --coin` does.
 #[no_mangle]
 pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
@@ -138,12 +145,22 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
             .map_err(|e| format!("facts JSON coins: {e}"))?;
         let journeys: Vec<swiftsync_verify::CoinJourney> = serde_json::from_value(v.get("journeys").cloned().unwrap_or_else(|| serde_json::json!([])))
             .map_err(|e| format!("facts JSON journeys: {e}"))?;
-        Ok((r, coins, journeys))
+        let expect = v.get("expect").and_then(|x| x.as_str()).map(|x| x.to_string());
+        Ok((r, coins, journeys, expect))
     });
     match res {
         Err(e) => fail(e),
-        Ok(((mut rep, image), coins, journeys)) => {
+        Ok(((mut rep, image), coins, journeys, expect)) => {
             let mut out = Vec::new();
+            // Facts need the tip compared with the network (step 7): the page passes "expect": "h:hash" from a source
+            // it trusts. Without a match the verdict is at most DEMO (adversarial review, 11-03).
+            let tip_checked = match (&expect, rep.state.as_ref()) {
+                (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {
+                    Some((h, x)) if swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash) => true,
+                    _ => { out.push(Err(format!("expect {e:?}: not the proof's tip"))); false }
+                },
+                _ => false,
+            };
             if rep.verdict == Verdict::Fail {
                 // the journal of a receipt that did not verify is the prover's word: nothing is checked against it
                 if !coins.is_empty() || !journeys.is_empty() {
@@ -162,7 +179,13 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
             if out.iter().any(|r| r.is_err()) {
                 rep.verdict = Verdict::Fail;
             }
+            if rep.verdict == Verdict::Ok && !tip_checked && !(coins.is_empty() && journeys.is_empty()) {
+                rep.verdict = Verdict::Demo;
+            }
+            // A fact is "ok" only under an OK verdict: under DEMO it holds on a chain not shown to be the network's.
+            let demo = rep.verdict != Verdict::Ok;
             let facts: Vec<serde_json::Value> = out.into_iter().map(|r| match r {
+                Ok(w) if demo => serde_json::json!({"ok": false, "what": format!("holds on this chain, but the chain is not shown to be the network's: {w}")}),
                 Ok(w) => serde_json::json!({"ok": true, "what": w}),
                 Err(w) => serde_json::json!({"ok": false, "what": w}),
             }).collect();

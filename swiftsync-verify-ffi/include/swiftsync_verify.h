@@ -37,9 +37,10 @@ int swiftsync_verify(const uint8_t* receipt, size_t receipt_len, const uint8_t* 
                      uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                      swiftsync_result* out, char* msg, size_t msg_len);
 
-/* As swiftsync_verify, plus zyncAPP facts (docs/libzync/ZYNCAPPS.md section 8). facts_json: NUL-terminated JSON
- * {"coins": [CoinFact], "journeys": [CoinJourney]}, or NULL. Any fact that does not hold is FAIL (1), with its reason
- * in msg. */
+/* As swiftsync_verify, plus zyncAPP facts (docs/libzync/ZYNCAPPS.md section 8). network: 0 mainnet, 1 signet, OR
+ * 0x10 for a coin-log image. facts_json: NUL-terminated JSON {"coins": [CoinFact], "journeys": [CoinJourney],
+ * "expect": "<height>:<hash>"}, or NULL. Any fact that does not hold is FAIL (1), with its reason in msg; facts with no
+ * matching "expect" (the network's block at the proof's height) give at most DEMO (2). */
 int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len, const uint8_t* hints, size_t hints_len,
                            uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                            const char* facts_json, swiftsync_result* out, char* msg, size_t msg_len);

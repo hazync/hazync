@@ -51,9 +51,13 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
                                                 facts_json: *const c_char,
                                                 out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
-    let Some(mut image) = Image::by_network(match network { 0 => "mainnet", 1 => "signet", _ => "" }) else {
+    // network: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (the one whose proofs carry coin facts).
+    let Some(mut image) = Image::by_network(match network & !0x10 { 0 => "mainnet", 1 => "signet", _ => "" }) else {
         return fail("unknown network");
     };
+    if network & 0x10 != 0 {
+        image = image.with_coinlog();
+    }
     if !image_hex.is_null() {
         let Ok(h) = CStr::from_ptr(image_hex).to_str() else { return fail("image id is not UTF-8") };
         let Some(i) = image.with_method_id(&h.trim().to_lowercase()) else { return fail("image id is not 64 hex digits") };
@@ -90,6 +94,16 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             Ok(j) => j,
             Err(e) => return fail(&format!("facts JSON journeys: {e}")),
         };
+        // Facts need the tip compared with the network (step 7): "expect": "h:hash" in the facts JSON. Without a
+        // match the verdict is at most DEMO (adversarial review, 11-03).
+        let tip_checked = match (v.get("expect").and_then(|x| x.as_str()), rep.state.as_ref()) {
+            (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {
+                Some((h, x)) if swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash) => true,
+                _ => { rep.checks.push((false, format!("expect {e:?}: not the proof's tip"))); false }
+            },
+            _ => false,
+        };
+        let any = !coins.is_empty() || !journeys.is_empty();
         match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
             Some(cs) => {
                 for c in &coins {
@@ -106,6 +120,9 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
         }
         if rep.checks.iter().any(|(ok, _)| !ok) {
             rep.verdict = Verdict::Fail;
+        }
+        if rep.verdict == Verdict::Ok && any && !tip_checked {
+            rep.verdict = Verdict::Demo;
         }
     }
     if let (Some(cs), false) = (&rep.state, out.is_null()) {

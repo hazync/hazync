@@ -66,6 +66,7 @@ fn main() {
     let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
     let mut coin_facts: Vec<String> = Vec::new();
     let mut journeys: Vec<String> = Vec::new();
+    let mut n_facts = 0usize;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -200,6 +201,7 @@ fn main() {
         // Facts are checked only against a state whose receipt verified: on a failed receipt the journal is the
         // prover's word, so a fact "holding" against it means nothing (review 11-03).
         let receipt_failed = rep.verdict == Verdict::Fail;
+        n_facts = coin_facts.len() + journeys.len();
         if receipt_failed {
             for p in coin_facts.iter().chain(journeys.iter()) {
                 rep.checks.push((false, format!("{}: NOT checked: the receipt did not verify", esc(p))));
@@ -239,6 +241,13 @@ fn main() {
             println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);
         }
     }
+    // Facts about a chain whose tip nobody compared with the network: a valid chain with enough work can still be a
+    // stale branch, and a transaction "in block h" of it may have been reorged out. So facts need step 7 for OK
+    // (adversarial review, 11-03).
+    let facts_unanchored = rep.verdict == Verdict::Ok && !tip_checked && n_facts > 0;
+    if facts_unanchored {
+        rep.verdict = Verdict::Demo;
+    }
     let step7 = if tip_checked { String::new() } else {
         rep.state.as_ref().map_or(String::new(), |c| format!("; chain identity NOT checked: compare block {} = {} with a source you trust (--mempool, --expect, --bitcoin-cli)",
             c.height, display(&c.tip_hash)))
@@ -248,6 +257,7 @@ fn main() {
     let avs = if av { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" };
     let what = if coinlog { "the chain and its coin log".to_string() } else { esc(hints) };
     match rep.verdict {
+        Verdict::Demo if facts_unanchored => println!("SWIFTSYNC_VERIFY_DEMO: the chain and the facts check, but facts need the tip compared with the network (--mempool, --expect or --bitcoin-cli){step7}"),
         Verdict::Ok if coinlog => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{step7}"),
         Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: {} is proven correct for the chain above at height {h}{avs}{step7}", esc(hints)),
         Verdict::Demo if rep.low_work && anchor_given => println!("SWIFTSYNC_VERIFY_DEMO: {what}: FROM THE GIVEN ANCHOR ONLY, and below Core's minimum chainwork or the pinned checkpoint{step7}"),

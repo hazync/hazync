@@ -168,12 +168,12 @@ fn merkle_climb(leaf: H, index: u32, branch: &[H]) -> Option<H> {
 /// would need a txid whose last 27 bytes are zero (the null prevout), out of reach. 64-byte transactions and
 /// coinbases are refused outright.
 pub fn tx_in_block(header: &[u8; 80], tx: &[u8], index: u32, branch: &[H], coinbase: &[u8], cb_branch: &[H]) -> Option<H> {
-    if tx.len() == 64 || coinbase.len() == 64 || cb_branch.len() != branch.len() {
+    if tx.len() == 64 || cb_branch.len() != branch.len() {
         return None;
     }
     let mut o = 0;
     let cb = parse_tx(coinbase, &mut o).filter(|_| o == coinbase.len())?;
-    if cb.inputs.len() != 1 || cb.inputs[0] != ([0u8; 32], 0xffff_ffff) {
+    if cb.stripped.len() == 64 || cb.inputs.len() != 1 || cb.inputs[0] != ([0u8; 32], 0xffff_ffff) {
         return None;
     }
     let root = &header[36..68];

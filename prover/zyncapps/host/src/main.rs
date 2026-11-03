@@ -74,16 +74,18 @@ fn core_policy(c: &Core, a: &[String]) -> Result<bool, String> {
         checked = true;
     }
     if !checked {
+        // A valid chain with enough work can still be a stale branch: an answer about it needs the tip compared with
+        // the network, so without that it is at most DEMO (adversarial review, 11-03).
         println!("  chain identity NOT checked: compare block {} = {tip} with a source you trust (--expect, --mempool)", c.height);
     }
-    Ok(work_at_least(c.cum_work, img.min_work_hex) && c.height >= img.checkpoint_height)
+    Ok(checked && work_at_least(c.cum_work, img.min_work_hex) && c.height >= img.checkpoint_height)
 }
 
 fn verdict(r: Result<bool, String>, ok_line: String) -> ! {
     match r {
         Ok(true) => { println!("{ok_line}"); std::process::exit(0) }
         Ok(false) => {
-            println!("ZYNCAPP_DEMO: {ok_line} -- but the core chain is below minimum work or the checkpoint: not shown to be the network's");
+            println!("ZYNCAPP_DEMO: {ok_line} -- but the core chain is not shown to be the network's (below minimum work or the checkpoint, or its tip not compared with the network)");
             std::process::exit(2)
         }
         Err(e) => { println!("ZYNCAPP_FAIL: {e}"); std::process::exit(1) }

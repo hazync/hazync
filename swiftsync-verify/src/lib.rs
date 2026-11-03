@@ -211,16 +211,8 @@ fn locate(leaves: u64, pos: u64) -> Option<(u32, u64)> {
 /// hashes, lowest first. A proof of the tip checks any earlier block, and its coin state, this way, with no node and
 /// no per-block proving. `cs` must have passed [`verify`].
 pub fn block_in_chain(cs: &ChainState, height: u32, hash: &[u8; 32], state: &[u8; 32], path: &[[u8; 32]]) -> bool {
-    let Some((tree, mut pos)) = locate(cs.block_leaves, height as u64) else { return false };
-    if path.len() != tree as usize {
-        return false;
-    }
-    let mut node = block_leaf(hash, height, state);
-    for sib in path {
-        node = if pos & 1 == 0 { forest_parent(&node, sib) } else { forest_parent(sib, &node) };
-        pos >>= 1;
-    }
-    cs.block_roots.get(tree as usize).copied().flatten() == Some(node)
+    // libzync's check, which also requires the roots present to match the leaf count's bits (review round 2).
+    libzync::facts::block_in_chain(&cs.block_roots, cs.block_leaves, hash, height, state, path)
 }
 
 /// The block forest over `blocks` (index = height): the roots a proof at the last height commits.
