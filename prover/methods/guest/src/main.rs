@@ -737,7 +737,9 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
             const MASK: u32 = 0x0000_ffff; const GRAN: u32 = 9;
             let seq = chunk_seqs[gi];
             let got_lock = if inp.coin_is_coinbase == 1 && w.height < inp.coin_height + 100 { -40 }
-                else if w.height >= 419_328 && chunk_vers[gi] >= 2 && (seq & DISABLE) == 0 {
+                // Core v28: CTransaction::version is uint32_t and the BIP68 gate `version >= 2` is unsigned, so
+                // version 0xFFFFFFFF enforces it; read as i32 it was -1 and skipped the lock (libzync review, 10-30).
+                else if w.height >= 419_328 && (chunk_vers[gi] as u32) >= 2 && (seq & DISABLE) == 0 {
                     if seq & TYPE != 0 {
                         let req = inp.coin_mtp as u64 + (((seq & MASK) as u64) << GRAN);
                         if (mtp as u64) < req { -42 } else { 1 }
@@ -770,7 +772,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         pre_locks = w.inputs.iter().enumerate().map(|(gi, inp)| {
             if inp.coin_is_coinbase == 1 && w.height < inp.coin_height + 100 { return -40; }
             let seq = chunk_seqs[gi];
-            if w.height >= 419_328 && chunk_vers[gi] >= 2 && (seq & DISABLE) == 0 {
+            if w.height >= 419_328 && (chunk_vers[gi] as u32) >= 2 && (seq & DISABLE) == 0 {
                 if seq & TYPE != 0 {
                     let required = inp.coin_mtp as u64 + (((seq & MASK) as u64) << GRAN);
                     if (mtp as u64) < required { return -42; }
@@ -1345,7 +1347,11 @@ fn median_time_past(times: &[u32]) -> u32 {
 fn chain_step() {
     let prev_journal: Vec<u8> = env::read(); // the previous chain proof's committed journal bytes
     let w: BlockWitness = env::read();
+    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor. ANY other value used to skip the
+    // verification below and copy anchor_id out of the unverified journal: a forged "genesis-anchored" state one block
+    // back (libzync adversarial audit 3, 2026-10-30, commit 196086d on the libzync branch).
     let is_base: u32 = env::read();
+    assert!(is_base <= 1, "is_base must be 0 or 1, got {is_base}");
     let self_id: [u32; 8] = env::read(); // this guest's own image id (host passes METHOD_ID)
     if is_base == 0 {
         // Composition: a receipt with (self_id, prev_journal) must exist — the previous chain proof.
@@ -1818,7 +1824,11 @@ fn aggregate() {
     #[cfg(not(feature = "agg-readslice"))]
     let prev_journal: Vec<u8> = env::read();
     let w: BlockWitness = env::read();
+    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor. ANY other value used to skip the
+    // verification below and copy anchor_id out of the unverified journal: a forged "genesis-anchored" state one block
+    // back (libzync adversarial audit 3, 2026-10-30, commit 196086d on the libzync branch).
     let is_base: u32 = env::read();
+    assert!(is_base <= 1, "is_base must be 0 or 1, got {is_base}");
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev");
