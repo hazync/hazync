@@ -46,3 +46,39 @@ recursive zyncAPP chain beside the core instead: each step verifies the core rec
 block h in the core's block forest (the hash binds the block's bytes), parses its transactions (no scripts: the core
 already checked them) and updates the keyed tree. The core stays at +2.1%; only users who want absence proofs pay for
 that chain. A script-keyed variant (all coins of a script, for proof of reserves) fits the same shape.
+
+## Measured: variant images on the 10-block cost table (11-03, `cost_variants.sh`)
+
+Execute mode, 16 chunks + aggregate, real blocks, each tree modelled at 180 M live keys (`HAZYNC_ITREE_N`) as the coin
+log is. Images: c10b e7514dc8 (coin log, no tree), c10o 629005ae (outpoint tree), c10s 3c948172 (script tree),
+c10os 95df867e (both). Measurement builds only: the tree state comes from the host's witness, nothing binds it across
+blocks yet.
+
+| block | base whole | base aggregate | + outpoint | + script | + both | aggregate, outpoint | aggregate, both |
+|---|---|---|---|---|---|---|---|
+| 970,000 | 445.4 M | 62.9 M | +23% | +27% | +45% | 146 M | 229 M |
+| 962,000 | 440.0 M | 74.8 M | +31% | +36% | +60% | 189 M | 303 M |
+| 900,000 | 339.4 M | 47.5 M | +50% | +54% | +100% | 206 M | 368 M |
+| 850,000 | 486.1 M | 91.3 M | +67% | +72% | +133% | 397 M | 702 M |
+| 800,000 | 461.4 M | 84.0 M | +71% | +78% | +142% | 388 M | 701 M |
+| 750,000 | 466.2 M | 84.5 M | +74% | +78% | +147% | 409 M | 733 M |
+| 700,000 | 482.3 M | 75.0 M | +64% | +68% | +127% | 367 M | 658 M |
+| 692,261 | 513.0 M | 86.3 M | +64% | +68% | +127% | 396 M | 704 M |
+| 650,000 | 611.9 M | 88.6 M | +53% | +56% | +105% | 395 M | 699 M |
+| 170,060 | 26.7 M | 3.2 M | +14% | +14% | +27% | 7 M | 10 M |
+
+**Summed over the nine modern blocks: outpoint tree +55.6%, script tree +60.2%, both +110.7%.** The 11-03 estimate
+(+40%) was low: it took 962,000, which has fewer coin updates than mid-history blocks.
+
+- **Almost all of it is the aggregate.** Chunks grow 8.4% (both trees: key hashing per input and output); the
+  aggregate grows 2-5x per tree. Cost tracks a block's tree updates (962,000: 2,542 removes + 1,782 inserts;
+  650,000-850,000: 12-20 k), not its signature work.
+- **Not all of it is hashing.** 962,000's outpoint tree adds ~114 M aggregate cycles for ~95 k siblings; the node
+  hashes at 283 cycles account for roughly half. The rest is witness decoding, 64-byte-key map operations and key
+  building: an optimisation target if a tree is kept.
+- **Whole chain, rough:** the scripts-ON whole-chain estimate (WHOLE_CHAIN_COST.md, ~$114-119k A40) scaled by these
+  ratios gives **~+$65k for one tree, ~+$130k for both** (±50%: nine samples, all from 650,000 up; early-chain blocks
+  have fewer coin updates per cycle of signature work). Per tip block (962,000) one tree is ~+$0.06, both ~+$0.12 at
+  the A40 rate.
+- **Tip latency:** the aggregate is one execution, but risc0 proves its segments in parallel; what grows serially is
+  executing it (and the join depth). Not measured in seconds here.

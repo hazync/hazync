@@ -49,7 +49,7 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| E1 | keyed tree for absence: measured 283 cycles/hash => ~+40% on 962,000; recommended as a separate recursive zyncAPP chain beside the core, not in it (absence/README.md) | design; needs your call |
+| E1 | keyed trees for absence (outpoint / script), built as guest features otree / stree and MEASURED on 10 blocks: +55.6% one tree, +110.7% both, almost all in the aggregate (absence/README.md); sharding measurement queued | measured; needs your call |
 
 ## F. main branch
 
@@ -80,3 +80,4 @@ refuse it.
 | c9m (coin log) | 0d8cac45 | ⚠ built while a zyncAPP build held part of target/riscv-guest: rebuild from clean before the test pass |
 | zyncAPP coin | 26e09637 | |
 | zyncAPP zeroconf | a61caf76 | |
+| c10b / c10o / c10s / c10os (E1 measurement) | e7514dc8 / 629005ae / 3c948172 / 95df867e | tree state from the witness; cost only |
