@@ -8,12 +8,13 @@
 //!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
 //!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
 //!   zyncapp id
+//!   zyncapp bench-shard <removes> <inserts> <tree keys N> <shards> [seed]   (E1 sharding measurement, execute only)
 //!
 //! The core receipt is an ASSUMPTION of the zyncAPP receipt (risc0 composition): the zyncAPP receipt's verification
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF};
+use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_SHARDBENCH_ELF};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -136,6 +137,39 @@ fn main() {
                 let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HASHBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
                 println!("mode {mode}: total {} cycles over 20000 hashes (user cycles; see HASHBENCH log line for the loop alone)", info.cycles());
             }
+        }
+        Some("bench-shard") if a.len() >= 5 => {
+            // E1 sharding measurement (absence/README.md): the block's tree removes / inserts as random 32-byte keys
+            // (outpoint keys are SHA-256 outputs, so random keys route the same), split by the top bits into `shards`,
+            // each shard's update executed against a modelled shard tree of N / shards keys. Prints per-shard cycles.
+            let num = |i: usize| -> u64 { a[i].parse().unwrap_or_else(|_| die(&format!("{}: not a number", a[i]))) };
+            let (nr, ni, tn, s) = (num(1) as usize, num(2) as usize, num(3), num(4));
+            if !s.is_power_of_two() || s > 256 { die("shards: a power of two up to 256"); }
+            let mut rng = a.get(5).and_then(|x| x.parse::<u64>().ok()).unwrap_or(0x5eed) | 1;
+            let mut key = || -> libzync::itree::Key {
+                let mut k = [0u8; 64];
+                for c in k[..32].chunks_exact_mut(8) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; c.copy_from_slice(&rng.to_le_bytes()); }
+                k
+            };
+            let rem: Vec<libzync::itree::Key> = (0..nr).map(|_| key()).collect();
+            let ins: Vec<libzync::itree::Key> = (0..ni).map(|_| key()).collect();
+            let bits = s.trailing_zeros();
+            let shard_of = |k: &libzync::itree::Key| if bits == 0 { 0 } else { (k[0] >> (8 - bits)) as u64 };
+            let words = |ks: &[libzync::itree::Key]| -> Vec<u32> { ks.iter().flat_map(|k| k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap()))).collect() };
+            let (mut tot, mut max) = (0u64, 0u64);
+            for sh in 0..s {
+                let r: Vec<_> = rem.iter().filter(|k| shard_of(k) == sh).copied().collect();
+                let i: Vec<_> = ins.iter().filter(|k| shard_of(k) == sh).copied().collect();
+                let (roots, touched, sib) = libzync::itree::synth(tn / s, &r, &i, 0x5eed + sh);
+                let wit = libzync::itree::encode_bench(&roots, tn / s, &touched, &sib);
+                let env = ExecutorEnv::builder().write(&wit).unwrap().write(&words(&r)).unwrap().write(&words(&i)).unwrap().build().unwrap();
+                let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_SHARDBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
+                let c = info.cycles();
+                println!("shard {sh:3}: removes {:5} inserts {:5} touched {:6} siblings {:7} cycles {c} segments {}", r.len(), i.len(), touched.len(), sib.len(), info.segments.len());
+                tot += c;
+                max = max.max(c);
+            }
+            println!("BENCH_SHARD removes {nr} inserts {ni} N {tn} shards {s} total {tot} max {max} mean {}", tot / s);
         }
         Some("prove-zeroconf") if a.len() >= 6 => {
             let load = |p: &str| -> Receipt { bincode::deserialize(&std::fs::read(p).unwrap_or_else(|e| die(&e.to_string())))
