@@ -37,6 +37,13 @@ int swiftsync_verify(const uint8_t* receipt, size_t receipt_len, const uint8_t* 
                      uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                      swiftsync_result* out, char* msg, size_t msg_len);
 
+/* As swiftsync_verify, plus zyncAPP facts (docs/libzync/ZYNCAPPS.md section 5). facts_json: NUL-terminated JSON
+ * {"coins": [CoinFact], "journeys": [CoinJourney]}, or NULL. Any fact that does not hold is FAIL (1), with its reason
+ * in msg. */
+int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len, const uint8_t* hints, size_t hints_len,
+                           uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
+                           const char* facts_json, swiftsync_result* out, char* msg, size_t msg_len);
+
 /* The built-in image id for `network`, as 64 hex digits and a NUL; NULL for an unknown network. Static storage. */
 const char* swiftsync_image_id(uint8_t network);
 

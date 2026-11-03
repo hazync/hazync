@@ -37,6 +37,19 @@ unsafe fn write_msg(msg: *mut c_char, len: usize, s: &str) {
 pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize, hints: *const u8, hints_len: usize,
                                           network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
                                           out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
+    swiftsync_verify_facts(receipt, receipt_len, hints, hints_len, network, now, image_hex, anchor_json, std::ptr::null(),
+                           out, msg, msg_len)
+}
+
+/// As `swiftsync_verify`, plus zyncAPP facts (ZYNCAPPS.md §5): `facts_json` (NUL-terminated, may be NULL) is
+/// `{"coins": [CoinFact], "journeys": [CoinJourney]}`, each checked against the verified state. Any fact that does not
+/// hold is FAIL, with its reason in `msg`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len: usize, hints: *const u8, hints_len: usize,
+                                                network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
+                                                facts_json: *const c_char,
+                                                out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
     let Some(mut image) = Image::by_network(match network { 0 => "mainnet", 1 => "signet", _ => "" }) else {
         return fail("unknown network");
@@ -63,13 +76,45 @@ pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize
     } else {
         verify(&Inputs { receipt, hints, image, anchor, now })
     };
+    let mut rep = rep;
+    if !facts_json.is_null() {
+        let v: serde_json::Value = match serde_json::from_slice(CStr::from_ptr(facts_json).to_bytes()) {
+            Ok(v) => v,
+            Err(e) => return fail(&format!("facts JSON: {e}")),
+        };
+        let coins: Vec<swiftsync_verify::CoinFact> = match serde_json::from_value(v.get("coins").cloned().unwrap_or_else(|| serde_json::json!([]))) {
+            Ok(c) => c,
+            Err(e) => return fail(&format!("facts JSON coins: {e}")),
+        };
+        let journeys: Vec<swiftsync_verify::CoinJourney> = match serde_json::from_value(v.get("journeys").cloned().unwrap_or_else(|| serde_json::json!([]))) {
+            Ok(j) => j,
+            Err(e) => return fail(&format!("facts JSON journeys: {e}")),
+        };
+        match rep.state.as_ref() {
+            Some(cs) => {
+                for c in &coins {
+                    let r = swiftsync_verify::check_coin_fact(cs, c);
+                    rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
+                }
+                for j in &journeys {
+                    let r = swiftsync_verify::check_coin_journey(cs, j);
+                    rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
+                }
+            }
+            None if !coins.is_empty() || !journeys.is_empty() => rep.checks.push((false, "no verified state to check facts against".into())),
+            None => {}
+        }
+        if rep.checks.iter().any(|(ok, _)| !ok) {
+            rep.verdict = Verdict::Fail;
+        }
+    }
     if let (Some(cs), false) = (&rep.state, out.is_null()) {
         *out = SwiftsyncResult { height: cs.height, tip_hash: cs.tip_hash, chainwork: cs.cum_work,
                                  utxo_leaves: cs.utxo_leaves, profile: cs.profile };
     }
     match rep.verdict {
         Verdict::Ok => { write_msg(msg, msg_len, ""); OK }
-        Verdict::Demo => { write_msg(msg, msg_len, "verified against the given anchor only"); DEMO }
+        Verdict::Demo => { write_msg(msg, msg_len, "a valid chain, but from a given anchor, below minimum work, or below the checkpoint height: not shown to be the network's"); DEMO }
         Verdict::Fail => fail(rep.checks.iter().find(|(ok, _)| !ok).map(|(_, w)| w.as_str()).unwrap_or("failed")),
     }
 }
