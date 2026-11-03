@@ -122,7 +122,7 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
 }
 
 /// `verify_facts(ptr, len)`: the `verify_frame` input followed by `[u32 n][JSON {"coins": [CoinFact], "journeys":
-/// [CoinJourney]}]` (ZYNCAPPS.md §5). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
+/// [CoinJourney]}]` (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
 /// against the verified state. A failed fact makes the verdict "fail", as `swiftsync-verify --coin` does.
 #[no_mangle]
 pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
@@ -144,7 +144,12 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
         Err(e) => fail(e),
         Ok(((mut rep, image), coins, journeys)) => {
             let mut out = Vec::new();
-            if let Some(cs) = rep.state.as_ref() {
+            if rep.verdict == Verdict::Fail {
+                // the journal of a receipt that did not verify is the prover's word: nothing is checked against it
+                if !coins.is_empty() || !journeys.is_empty() {
+                    out.push(Err("facts NOT checked: the receipt did not verify".to_string()));
+                }
+            } else if let Some(cs) = rep.state.as_ref() {
                 for c in &coins {
                     out.push(swiftsync_verify::check_coin_fact(cs, c));
                 }

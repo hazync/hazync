@@ -1,4 +1,4 @@
-//! `zync-path`: the path producer for zyncAPP coin facts (docs/libzync/ZYNCAPPS.md §5). Reads a proving run's
+//! `zync-path`: the path producer for zyncAPP coin facts (docs/libzync/ZYNCAPPS.md §8). Reads a proving run's
 //! `history.bin` (libzync::history) and writes a [`swiftsync_verify::CoinFact`] that `swiftsync-verify --coin` checks
 //! against the receipt at `<tip>`. It holds no secrets and proves nothing by itself: a wrong path simply fails.
 //!
@@ -72,6 +72,9 @@ fn node(cmd: &str, args: &[&str]) -> String {
 }
 
 fn unhex(s: &str) -> Vec<u8> {
+    if s.len() % 2 != 0 || !s.is_ascii() {
+        die("node returned non-hex");
+    }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap_or_else(|_| die("node returned non-hex"))).collect()
 }
 
@@ -96,6 +99,8 @@ fn tx_fact(r: &libzync::history::Replay, h: u32, header: &[u8; 80], txs: &[libzy
         tx: hex(&txs[index].stripped),
         index: index as u32,
         branch: libzync::facts::merkle_branch(&ids, index).iter().map(|x| hex(x)).collect(),
+        coinbase: hex(&txs[0].stripped),
+        coinbase_branch: libzync::facts::merkle_branch(&ids, 0).iter().map(|x| hex(x)).collect(),
     }
 }
 

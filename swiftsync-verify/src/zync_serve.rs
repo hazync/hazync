@@ -1,4 +1,4 @@
-//! `zync-serve <history.bin> <addr:port>`: the path service (ROADMAP C2, ZYNCAPPS.md §5). Serves the same CoinFact JSON
+//! `zync-serve <history.bin> <addr:port>`: the path service (ROADMAP C2, ZYNCAPPS.md §8). Serves the same CoinFact JSON
 //! as `zync-path`, over plain HTTP GET, for the tip the history ends at. It holds no secrets and proves nothing by
 //! itself: every answer is checked by the client against a verified tip receipt (`swiftsync-verify --coin`), so the
 //! server needs no trust. ⚠ No payment hook yet, one request at a time, whole history in memory (C1 for mainnet).
@@ -8,6 +8,7 @@
 //!   GET /find/<coin leaf hex>     {"position": p}
 use libzync::history::{block_path, decode_all, replay, Rec};
 use std::io::{BufRead, BufReader, Write};
+// ⚠ Single-threaded, and /coin replays the history per request: a production service caches the tip replay (C1).
 use swiftsync_verify::{hex, hex32, CoinFact};
 
 fn fact(recs: &[Rec], tip: u32, at: u32, pos: u64) -> Result<String, String> {
@@ -60,7 +61,10 @@ fn main() {
     let l = std::net::TcpListener::bind(&a[1]).unwrap_or_else(|e| panic!("{}: {e}", a[1]));
     eprintln!("zync-serve: tip {tip}, {} coins, listening on {}", coins.len(), a[1]);
     for s in l.incoming().flatten() {
-        let mut rd = BufReader::new(&s);
+        // One request line, at most 8 KiB, within 10 s: a slow or endless client cannot stall or exhaust the service.
+        let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+        let _ = s.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+        let mut rd = BufReader::new(std::io::Read::take(&s, 8192));
         let mut line = String::new();
         if rd.read_line(&mut line).is_err() {
             continue;

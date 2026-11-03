@@ -53,6 +53,10 @@ pub fn tree_of(n: u64, pos: u64) -> Option<(u32, u64)> {
 /// Climb from `leaf` at `pos` with `sib` (bottom-up) using `parent(level of the parent, left, right)`. The path must
 /// be exactly as long as the tree is high, and end at that tree's root in `roots` (index = level).
 fn member(roots: &[Option<H>], n: u64, pos: u64, leaf: &H, sib: &[H], parent: impl Fn(u32, &H, &H) -> H) -> bool {
+    // The roots present must be exactly the set bits of n (no root moved to another level; review 11-03).
+    if roots.len() > 64 || (0..64).any(|l| roots.get(l).copied().flatten().is_some() != ((n >> l) & 1 == 1)) {
+        return false;
+    }
     let Some((l, _)) = tree_of(n, pos) else { return false };
     if sib.len() != l as usize {
         return false;
@@ -130,16 +134,12 @@ pub fn header_hash(header: &[u8; 80]) -> H {
     dsha(header)
 }
 
-/// A transaction (non-witness serialization, so its hash is the txid) is at `index` of the block with this header,
-/// by its Merkle `branch` (bottom-up). ⚠ A 64-byte transaction is refused: its txid could be an inner node of the
-/// tree (the Merkle ambiguity Core's consensus also guards), so the branch would not show it is a transaction. The
-/// caller learns the txid from the bytes, never from the prover.
-pub fn tx_in_block(header: &[u8; 80], tx: &[u8], index: u32, branch: &[H]) -> Option<H> {
-    if tx.len() == 64 || branch.len() >= 32 || (index as u64) >> branch.len() != 0 {
+/// Climbs a Merkle branch from `leaf` at `index` to the root it implies.
+fn merkle_climb(leaf: H, index: u32, branch: &[H]) -> Option<H> {
+    if branch.len() >= 32 || (index as u64) >> branch.len() != 0 {
         return None;
     }
-    let txid = dsha(tx);
-    let mut node = txid;
+    let mut node = leaf;
     for (j, s) in branch.iter().enumerate() {
         let mut p = [0u8; 64];
         if (index >> j) & 1 == 0 {
@@ -156,7 +156,32 @@ pub fn tx_in_block(header: &[u8; 80], tx: &[u8], index: u32, branch: &[H]) -> Op
         }
         node = dsha(&p);
     }
-    (node[..] == header[36..68]).then_some(txid)
+    Some(node)
+}
+
+/// A transaction (non-witness serialization, so its hash is the txid) is at `index` of the block with this header,
+/// by its Merkle `branch` (bottom-up). The caller learns the txid from the bytes, never from the prover.
+///
+/// The tree's DEPTH is bound by the block's coinbase: its bytes and its branch, which must have the same length. Without
+/// that, a 64-byte transaction T mined in the block could be read as an inner node, and a fake transaction whose txid
+/// is one half of T would verify one level deeper (Lerner's attack; review 11-03). A fake coinbase one level deeper
+/// would need a txid whose last 27 bytes are zero (the null prevout), out of reach. 64-byte transactions and
+/// coinbases are refused outright.
+pub fn tx_in_block(header: &[u8; 80], tx: &[u8], index: u32, branch: &[H], coinbase: &[u8], cb_branch: &[H]) -> Option<H> {
+    if tx.len() == 64 || coinbase.len() == 64 || cb_branch.len() != branch.len() {
+        return None;
+    }
+    let mut o = 0;
+    let cb = parse_tx(coinbase, &mut o).filter(|_| o == coinbase.len())?;
+    if cb.inputs.len() != 1 || cb.inputs[0] != ([0u8; 32], 0xffff_ffff) {
+        return None;
+    }
+    let root = &header[36..68];
+    if merkle_climb(dsha(&cb.stripped), 0, cb_branch)?[..] != *root {
+        return None;
+    }
+    let txid = dsha(tx);
+    (merkle_climb(txid, index, branch)?[..] == *root).then_some(txid)
 }
 
 /// A transaction's outpoints and outputs, from its serialization (with or without witness).
@@ -296,12 +321,28 @@ pub struct CoreStatement<'a> {
 pub const KIND_CHAIN: u32 = 0xC4A1_0012;
 pub const PROFILE_ASSUMEVALID: u32 = 2;
 pub const PROFILE_SIGNET: u32 = 4;
+pub const PROFILE_REGTEST: u32 = 8;
 pub const PROFILE_COINLOG: u32 = 16;
+
+/// The network a zyncAPP answers for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Network {
+    Mainnet,
+    Signet,
+    Regtest,
+}
+
+impl Network {
+    /// The profile's network bits for this network (signet bit 2, regtest bit 3, mainnet neither).
+    pub fn bits(self) -> u32 {
+        match self { Network::Mainnet => 0, Network::Signet => PROFILE_SIGNET, Network::Regtest => PROFILE_REGTEST }
+    }
+}
 
 /// ZYNCAPPS.md §4 step 3, the same in every zyncAPP: J is a core chain state of `core_id`, at least `min_version`,
 /// on the expected network, with scripts checked unless `allow_assumevalid`, a coin log (coin facts hold at every
 /// block), and anchored at the network's pinned genesis anchor (`genesis_anchor`).
-pub fn check_core_statement(j: &CoreStatement, core_id: &[u32; 8], min_version: u32, signet: bool, allow_assumevalid: bool, genesis_anchor: &H) -> Result<(), &'static str> {
+pub fn check_core_statement(j: &CoreStatement, core_id: &[u32; 8], min_version: u32, net: Network, allow_assumevalid: bool, genesis_anchor: &H) -> Result<(), &'static str> {
     if j.kind != KIND_CHAIN {
         return Err("not a core ChainState");
     }
@@ -311,7 +352,7 @@ pub fn check_core_statement(j: &CoreStatement, core_id: &[u32; 8], min_version: 
     if j.self_id != core_id {
         return Err("self_id is not the core image id the receipt verified under");
     }
-    if (j.profile & PROFILE_SIGNET != 0) != signet {
+    if j.profile & (PROFILE_SIGNET | PROFILE_REGTEST) != net.bits() {
         return Err("wrong network");
     }
     if j.profile & PROFILE_ASSUMEVALID != 0 && !allow_assumevalid {
@@ -417,19 +458,32 @@ mod tests {
 
     #[test]
     fn merkle_branch_check() {
-        // a 3-tx block: Core duplicates the last node on an odd level
-        let txs: [&[u8]; 3] = [b"coinbase tx bytes", b"second tx bytes!", b"third transaction"];
-        let ids: Vec<H> = txs.iter().map(|t| dsha(t)).collect();
+        // a 3-tx block: Core duplicates the last node on an odd level. The coinbase binds the tree's depth.
+        let mut cbv = alloc::vec![1u8, 0, 0, 0, 1];
+        cbv.extend_from_slice(&[0u8; 32]);
+        cbv.extend_from_slice(&[0xff; 4]);
+        cbv.extend_from_slice(&[4, 1, 2, 3, 4]); // 65 bytes in all: a 64-byte coinbase is refused
+        cbv.extend_from_slice(&[0xff; 4]);
+        cbv.extend_from_slice(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0x51]); // one output: value 1, script OP_1
+        cbv.extend_from_slice(&[0; 4]);
+        let txs: [&[u8]; 3] = [&cbv, b"second tx bytes!", b"third transaction"];
+        let ids: alloc::vec::Vec<H> = txs.iter().map(|t| dsha(t)).collect();
         let cat = |a: &H, b: &H| { let mut p = [0u8; 64]; p[..32].copy_from_slice(a); p[32..].copy_from_slice(b); dsha(&p) };
         let (l0, l1) = (cat(&ids[0], &ids[1]), cat(&ids[2], &ids[2]));
         let root = cat(&l0, &l1);
         let mut header = [0u8; 80];
         header[36..68].copy_from_slice(&root);
-        assert_eq!(tx_in_block(&header, txs[1], 1, &[ids[0], l1]), Some(ids[1]));
-        assert_eq!(tx_in_block(&header, txs[2], 2, &[ids[2], l0]), Some(ids[2]));
-        assert_eq!(tx_in_block(&header, txs[1], 0, &[ids[0], l1]), None);
-        assert_eq!(tx_in_block(&header, &[0u8; 64], 0, &[]), None);
-        assert_eq!(tx_in_block(&header, txs[0], 4, &[ids[1], l1]), None, "index past the branch");
+        let cbb = [ids[1], l1];
+        assert_eq!(tx_in_block(&header, txs[1], 1, &[ids[0], l1], &cbv, &cbb), Some(ids[1]));
+        assert_eq!(tx_in_block(&header, txs[2], 2, &[ids[2], l0], &cbv, &cbb), Some(ids[2]));
+        assert_eq!(tx_in_block(&header, &cbv, 0, &cbb, &cbv, &cbb), Some(ids[0]));
+        assert_eq!(tx_in_block(&header, txs[1], 0, &[ids[0], l1], &cbv, &cbb), None);
+        assert_eq!(tx_in_block(&header, &[0u8; 64], 0, &[], &cbv, &[]), None);
+        assert_eq!(tx_in_block(&header, txs[0], 4, &[ids[1], l1], &cbv, &cbb), None, "index past the branch");
+        // a branch one level deeper than the coinbase's is refused (Lerner's 64-byte inner-node shape)
+        assert_eq!(tx_in_block(&header, txs[1], 2, &[ids[0], ids[0], l1], &cbv, &cbb), None);
+        // a non-coinbase in the coinbase slot is refused
+        assert_eq!(tx_in_block(&header, txs[1], 1, &[ids[0], l1], txs[1], &cbb), None);
     }
 
     #[test]
@@ -481,15 +535,18 @@ mod tests {
         let id = [7u32; 8];
         let anchor = h(1);
         let ok = CoreStatement { kind: KIND_CHAIN, version: 2, profile: 1 | PROFILE_COINLOG, self_id: &id, anchor_id: &anchor, ss_set: 0 };
-        assert!(check_core_statement(&ok, &id, 2, false, false, &anchor).is_ok());
-        assert!(check_core_statement(&ok, &[8; 8], 2, false, false, &anchor).is_err());
-        assert!(check_core_statement(&ok, &id, 3, false, false, &anchor).is_err());
-        assert!(check_core_statement(&ok, &id, 2, true, false, &anchor).is_err());
-        assert!(check_core_statement(&ok, &id, 2, false, false, &h(2)).is_err());
+        assert!(check_core_statement(&ok, &id, 2, Network::Mainnet, false, &anchor).is_ok());
+        assert!(check_core_statement(&ok, &[8; 8], 2, Network::Mainnet, false, &anchor).is_err());
+        assert!(check_core_statement(&ok, &id, 3, Network::Mainnet, false, &anchor).is_err());
+        assert!(check_core_statement(&ok, &id, 2, Network::Signet, false, &anchor).is_err());
+        assert!(check_core_statement(&ok, &id, 2, Network::Mainnet, false, &h(2)).is_err());
         let av = CoreStatement { profile: 1 | PROFILE_COINLOG | PROFILE_ASSUMEVALID, ..ok };
-        assert!(check_core_statement(&av, &id, 2, false, false, &anchor).is_err());
-        assert!(check_core_statement(&av, &id, 2, false, true, &anchor).is_ok());
+        assert!(check_core_statement(&av, &id, 2, Network::Mainnet, false, &anchor).is_err());
+        assert!(check_core_statement(&av, &id, 2, Network::Mainnet, true, &anchor).is_ok());
+        let rt = CoreStatement { profile: 1 | PROFILE_COINLOG | PROFILE_REGTEST, ..ok };
+        assert!(check_core_statement(&rt, &id, 2, Network::Mainnet, false, &anchor).is_err(), "a regtest image is not mainnet");
+        assert!(check_core_statement(&rt, &id, 2, Network::Regtest, false, &anchor).is_ok());
         let b = CoreStatement { profile: 1, ..av };
-        assert!(check_core_statement(&b, &id, 2, false, true, &anchor).is_err());
+        assert!(check_core_statement(&b, &id, 2, Network::Mainnet, true, &anchor).is_err());
     }
 }

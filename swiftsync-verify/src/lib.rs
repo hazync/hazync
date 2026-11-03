@@ -79,11 +79,11 @@ pub struct Image {
     /// including one that appends fields, so a later reader must not recompute it in its own layout (review 11-03).
     /// The unit test `genesis_anchors_are_pinned` checks it against [`genesis_anchor`].
     pub genesis_anchor_hex: &'static str,
-    /// The handovers this image's source pins, oldest first (HANDOVER.md). A proof by this image carries either a
-    /// zero lineage (one image since genesis) or the digest of exactly this list.
     /// The height of the checkpoint the image pins (the guest refuses any other block there). Below it a proof does not
     /// show that its chain contains the checkpoint, so the verdict is at best `Demo`, as for low work.
     pub checkpoint_height: u32,
+    /// The handovers this image's source pins, oldest first (HANDOVER.md). A proof by this image carries either a
+    /// zero lineage (one image since genesis) or the digest of exactly this list.
     pub lineage: &'static [Handover],
 }
 
@@ -546,7 +546,7 @@ pub fn identity_matches(claimed_height: u32, claimed: &str, height: u32, tip: &[
     claimed_height == height && claimed.len() == 64 && claimed == shown
 }
 
-/// A coin fact (docs/libzync/ZYNCAPPS.md §5): what `zync-path coin` writes and `swiftsync-verify --coin` checks against
+/// A coin fact (docs/libzync/ZYNCAPPS.md §8): what `zync-path coin` writes and `swiftsync-verify --coin` checks against
 /// a verified tip proof. Hashes are hex, internal byte order.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CoinFact {
@@ -612,7 +612,7 @@ pub fn check_coin_fact(cs: &ChainState, f: &CoinFact) -> Result<String, String> 
     }
 }
 
-/// A transaction in a proven block (ZYNCAPPS.md §5): the block's header and coin state, its path in the proof's block
+/// A transaction in a proven block (ZYNCAPPS.md §8): the block's header and coin state, its path in the proof's block
 /// forest, and the transaction's Merkle branch.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TxFact {
@@ -627,6 +627,9 @@ pub struct TxFact {
     /// Its position in the block (coinbase 0) and its Merkle branch, bottom-up.
     pub index: u32,
     pub branch: Vec<String>,
+    /// The block's coinbase (hex) and ITS branch: they bind the tree's depth (libzync::facts::tx_in_block).
+    pub coinbase: String,
+    pub coinbase_branch: Vec<String>,
 }
 
 fn unhex(s: &str) -> Option<Vec<u8>> {
@@ -649,7 +652,9 @@ pub fn check_tx_fact(cs: &ChainState, f: &TxFact) -> Result<([u8; 32], libzync::
     let mut o = 0;
     let view = libzync::facts::parse_tx(&raw, &mut o).filter(|_| o == raw.len()).ok_or("tx: not one transaction")?;
     let br = hexes(&f.branch).ok_or("branch: not 64-hex-digit hashes")?;
-    let txid = libzync::facts::tx_in_block(&header, &view.stripped, f.index, &br)
+    let cb = unhex(&f.coinbase).ok_or("coinbase: not hex")?;
+    let cbb = hexes(&f.coinbase_branch).ok_or("coinbase_branch: not 64-hex-digit hashes")?;
+    let txid = libzync::facts::tx_in_block(&header, &view.stripped, f.index, &br, &cb, &cbb)
         .ok_or_else(|| format!("tx is not at position {} of block {}", f.index, f.height))?;
     Ok((txid, view))
 }
@@ -817,19 +822,20 @@ mod tests {
         cs.utxo_leaves = r.log.len();
         cs.block_roots = block_path(&r.block_leaves, 0).1;
         cs.block_leaves = 3;
-        let txf = |h: u32, hdr: &[u8; 80], ids: &[[u8; 32]], raw: &[u8], index: usize| TxFact {
+        let txf = |h: u32, hdr: &[u8; 80], ids: &[[u8; 32]], raw: &[u8], index: usize, cb: &[u8]| TxFact {
             height: h, header: hex(hdr), state: hex(&r.states[h as usize]),
             block_path: block_path(&r.block_leaves, h as u64).0.iter().map(|x| hex(x)).collect(),
             tx: hex(raw), index: index as u32, branch: merkle_branch(ids, index).iter().map(|x| hex(x)).collect(),
+            coinbase: hex(cb), coinbase_branch: merkle_branch(ids, 0).iter().map(|x| hex(x)).collect(),
         };
         let j = CoinJourney {
-            origin: txf(1, &h1, &[id1], &cb1, 0), vout: 0, tracked: false, creation_mtp: mtp1,
+            origin: txf(1, &h1, &[id1], &cb1, 0, &cb1), vout: 0, tracked: false, creation_mtp: mtp1,
             fact: CoinFact {
                 at: 2, pos: 0, coin: hex(&leaf_a), spent_by: r.spenders.get(&0).copied(),
                 path: r.log.path(0).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
                 log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None,
             },
-            spend: Some(txf(2, &h2, &[id_cb2, id_sp], &sp, 1)),
+            spend: Some(txf(2, &h2, &[id_cb2, id_sp], &sp, 1, &cb2)),
         };
         let ok = check_coin_journey(&cs, &j).unwrap();
         assert!(ok.contains("(50 sat) created at height 1") && ok.contains("SPENT at height 2 by transaction 1 input 0"), "{ok}");
@@ -838,7 +844,7 @@ mod tests {
         b.creation_mtp += 1;
         assert!(check_coin_journey(&cs, &b).is_err(), "wrong mtp");
         let mut b = j.clone();
-        b.spend = Some(txf(2, &h2, &[id_cb2, id_sp], &cb2, 0));
+        b.spend = Some(txf(2, &h2, &[id_cb2, id_sp], &cb2, 0, &cb2));
         assert!(check_coin_journey(&cs, &b).is_err(), "a spend tx that is not the one the log names");
         let mut b = j.clone();
         b.spend = None;
@@ -846,6 +852,9 @@ mod tests {
         let mut b = j.clone();
         b.origin.index = 1;
         assert!(check_coin_journey(&cs, &b).is_err(), "wrong position in the block");
+        let mut b = j.clone();
+        b.spend.as_mut().unwrap().coinbase_branch.clear();
+        assert!(check_coin_journey(&cs, &b).is_err(), "a coinbase branch of another depth");
         let mut b = j.clone();
         b.origin.state = hex(&r.states[2]);
         assert!(check_coin_journey(&cs, &b).is_err(), "wrong block state");

@@ -196,7 +196,17 @@ fn main() {
                 Err(e) => rep.checks.push((false, format!("curl {url}: {e}"))),
             }
         }
-        // zyncAPP coin facts (ZYNCAPPS.md §5) against this verified state.
+        // zyncAPP coin facts (ZYNCAPPS.md §8) against this verified state.
+        // Facts are checked only against a state whose receipt verified: on a failed receipt the journal is the
+        // prover's word, so a fact "holding" against it means nothing (review 11-03).
+        let receipt_failed = rep.verdict == Verdict::Fail;
+        if receipt_failed {
+            for p in coin_facts.iter().chain(journeys.iter()) {
+                rep.checks.push((false, format!("{}: NOT checked: the receipt did not verify", esc(p))));
+            }
+            coin_facts.clear();
+            journeys.clear();
+        }
         for p in &coin_facts {
             let f: Result<swiftsync_verify::CoinFact, String> = std::fs::read(p).map_err(|e| e.to_string())
                 .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
@@ -240,8 +250,8 @@ fn main() {
     match rep.verdict {
         Verdict::Ok if coinlog => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{step7}"),
         Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: {} is proven correct for the chain above at height {h}{avs}{step7}", esc(hints)),
-        Verdict::Demo if rep.low_work && anchor_given => println!("SWIFTSYNC_VERIFY_DEMO: {what}: FROM THE GIVEN ANCHOR ONLY, and below Core's minimum chainwork{step7}"),
-        Verdict::Demo if rep.low_work => println!("SWIFTSYNC_VERIFY_DEMO: {what}: a valid chain from genesis, but below Core's minimum chainwork for {}: not shown to be the network's chain{step7}", image.network),
+        Verdict::Demo if rep.low_work && anchor_given => println!("SWIFTSYNC_VERIFY_DEMO: {what}: FROM THE GIVEN ANCHOR ONLY, and below Core's minimum chainwork or the pinned checkpoint{step7}"),
+        Verdict::Demo if rep.low_work => println!("SWIFTSYNC_VERIFY_DEMO: {what}: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for {}: not shown to be the network's chain{step7}", image.network),
         Verdict::Demo => println!("SWIFTSYNC_VERIFY_DEMO: consistent with {what} FROM THE GIVEN ANCHOR ONLY -- not a proof{step7}"),
         Verdict::Fail => println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|(ok, _)| !ok).count()),
     }

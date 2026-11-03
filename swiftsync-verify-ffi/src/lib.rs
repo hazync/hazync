@@ -41,7 +41,7 @@ pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize
                            out, msg, msg_len)
 }
 
-/// As `swiftsync_verify`, plus zyncAPP facts (ZYNCAPPS.md §5): `facts_json` (NUL-terminated, may be NULL) is
+/// As `swiftsync_verify`, plus zyncAPP facts (ZYNCAPPS.md §8): `facts_json` (NUL-terminated, may be NULL) is
 /// `{"coins": [CoinFact], "journeys": [CoinJourney]}`, each checked against the verified state. Any fact that does not
 /// hold is FAIL, with its reason in `msg`.
 #[no_mangle]
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             Ok(j) => j,
             Err(e) => return fail(&format!("facts JSON journeys: {e}")),
         };
-        match rep.state.as_ref() {
+        match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
             Some(cs) => {
                 for c in &coins {
                     let r = swiftsync_verify::check_coin_fact(cs, c);
@@ -101,7 +101,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
             }
-            None if !coins.is_empty() || !journeys.is_empty() => rep.checks.push((false, "no verified state to check facts against".into())),
+            None if !coins.is_empty() || !journeys.is_empty() => rep.checks.push((false, "facts NOT checked: the receipt did not verify".into())),
             None => {}
         }
         if rep.checks.iter().any(|(ok, _)| !ok) {

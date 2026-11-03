@@ -99,7 +99,7 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 - Paths for old heights: the host keeps (or replays) the log at that height; a disk-backed store is needed on mainnet.
 - Signature checks inside a zyncAPP should reuse the core's libsecp and script code, not a new implementation.
 
-## 5. Coin facts and journeys (built, 11-03)
+## 8. Coin facts and journeys (built, 11-03)
 
 The shared checks are `libzync/src/facts.rs` (no_std, for zyncAPP guests and native verifiers). The host writes
 `history.bin` (libzync/src/history.rs) on every run from genesis: per height the block hash, the live value, the
@@ -114,8 +114,13 @@ spends as (position, tx, vin) and the appended leaves. From it `zync-path` (swif
 Walking a journey backwards (a creating transaction's inputs) and forwards (the spender's outputs) is a chain of
 these files. Limits:
 
-- **A 64-byte transaction cannot be shown in a block** (`tx_in_block`): its txid could be an inner node of the Merkle
-  tree. Coins created or spent by one have a coin fact but no journey.
+- **A transaction in a block is bound to the tree's depth by the coinbase** (`tx_in_block` takes the coinbase and its
+  branch, which must have the same length): otherwise a mined 64-byte transaction could be read as an inner node and a
+  fake transaction shown one level deeper (Lerner; review 11-03). 64-byte transactions and coinbases are refused, so
+  coins created or spent by one have a coin fact but no journey.
+- **A coin fact is about a LEAF.** "Leaf X is unspent at position p" says nothing about which coin X is until X is
+  recomputed from the coin's fields (`coin_leaf`): a journey does that from the creating transaction; a bare coin fact
+  (or the `coin` zyncAPP's statement) must be paired with the coin's fields by whoever relies on it.
 - **Coins created and spent in the same block** never enter the log: that hop is shown by the block alone.
 - `history.bin` and `zync-path` replay everything in memory; a mainnet path service needs the disk-backed store
   (ROADMAP C1).
