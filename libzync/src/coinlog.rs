@@ -153,7 +153,7 @@ fn compress_w(iv: &[u32; 8], a: &W, b: &W, out: &mut W) {
 }
 
 #[inline(always)]
-fn parent_w(l: u32, a: &W, b: &W, out: &mut W) {
+pub fn parent_w(l: u32, a: &W, b: &W, out: &mut W) {
     #[cfg(target_os = "zkvm")]
     compress_w(&IV_NODE_W[l as usize], a, b, out);
     #[cfg(not(target_os = "zkvm"))]
