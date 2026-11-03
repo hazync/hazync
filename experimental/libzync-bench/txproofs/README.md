@@ -103,3 +103,38 @@ Share of each block's **inputs** (signature work) that had been in the mempool a
   batches from before it are not reused after it.
 - **Unconfirmed parents:** a transaction spending a mempool parent is provable (the parent's outputs are known);
   its spent leaf is finished when both are mined, in the same block or not.
+
+## 7. Build plan (11-03): two phases
+
+### Phase A — speculative chunks (small guest change)
+
+A chunk's journal is tied to its block by (height, block hash, MTP, block time). For the NEXT block H = tip + 1, three
+of those are known in advance and the fourth does not matter:
+
+- **height** H and **MTP** (the median of the tip's last 11 timestamps) are fixed once the tip is;
+- **block time** enters a chunk only as the lock time before CSV (`lock_time = mtp` from `NET.csv_height` on);
+- **block hash** enters only through `block_script_flags`, whose only hash-dependent cases are Core's two
+  script-flag exception blocks (2010-2012).
+
+So a chunk proved at arrival "for height H with MTP m" is exactly the chunk the block-time prover would make, if the
+transaction lands in block H. The change:
+
+1. A chunk may commit a **speculative context**: block hash and time zero, flag bit "speculative". Allowed only when
+   H >= `NET.csv_height` (so block time is unused) and H is not a flag-exception height.
+2. The aggregate accepts a speculative chunk when its height and MTP equal the block's (the hash and time checks are
+   skipped only for such chunks, and only under that height rule).
+3. **Record selection.** A batch holds mempool transactions in arrival order, some never mined. The host gives the
+   aggregate the block's order as (journal, record) pairs; the aggregate walks records in that order. Unselected
+   records are ignored (they change no state); the Merkle root over the walked txids still binds the exact list.
+   A record selected twice is refused.
+4. Transactions not pre-proved (miners' own, late arrivals, the coinbase) go through ordinary chunks at block time.
+
+Cost of being wrong: a transaction that misses block H is re-proved for H + 1. Waste = the backlog that survives each
+block (measure: `headstart.py` extended to count it).
+
+### Phase B — context-free validity records (bigger guest change)
+
+If Phase A's waste is large (a congested mempool re-proves its backlog every block), split the chunk: a validity
+batch proves scripts, CheckTransaction, fee, weight and sigops with no block context (records as §2), and the aggregate
+does the block-time rules itself (IsFinalTx, BIP68, maturity, the leaf suffixes) from small per-input facts. That moves
+Core's `SequenceLocks`/`IsFinalTx` logic into the aggregate, so it needs its own review round.

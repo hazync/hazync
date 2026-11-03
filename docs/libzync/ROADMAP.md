@@ -38,9 +38,9 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| D1 | validity-batch guest: script-checks a batch of mempool transactions, commits one record each | experiment |
-| D2 | log guest: appends batch records to a stump forest, rolling receipt | experiment |
-| D3 | aggregate `txlog` feature: open each block transaction's record instead of re-proving it; unseen txs in a chunk | experiment |
+| D1 | Phase A: speculative chunks for the next height (txproofs/README.md §7) | building |
+| D2 | aggregate: record selection (block order as (journal, record) pairs), speculative context accepted under the height rule | next |
+| D3 | Phase B (context-free validity records) only if Phase A waste is large | after D4 measures |
 | D4 | host mempool pipeline (batch every N s; RBF/eviction waste ≈ 1.3 % measured) | experiment |
 | D5 | zero-conf zyncAPP (record in the tx log + unspent inputs in the coin log at the tip) | after D3 |
 | D6 | Ghost proof-ready blocks (pool pre-proves its template) | after D4 |
