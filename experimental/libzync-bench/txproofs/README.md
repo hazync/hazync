@@ -142,3 +142,26 @@ If Phase A's waste is large (a congested mempool re-proves its backlog every blo
 batch proves scripts, CheckTransaction, fee, weight and sigops with no block context (records as §2), and the aggregate
 does the block-time rules itself (IsFinalTx, BIP68, maturity, the leaf suffixes) from small per-input facts. That moves
 Core's `SequenceLocks`/`IsFinalTx` logic into the aggregate, so it needs its own review round.
+
+## 8. Measured: Phase A's waste (8 blocks, 974,421..974,428, 11-03, `template_waste.py`)
+
+The last block template seen before each block (polled every 15 s, read-only on the bridge node), by input count:
+
+| block | template inputs | mined (useful) | not mined (re-proved next block) | waste | block txs not in the template |
+|---|---|---|---|---|---|
+| 974,421 | 7,670 | 7,467 | 203 | 2.6% | 183 |
+| 974,422 | 8,556 | 8,176 | 380 | 4.4% | 4 |
+| 974,423 | 7,709 | 6,894 | 815 | 10.6% | 632 |
+| 974,424 | 8,012 | 7,714 | 298 | 3.7% | 279 |
+| 974,425 | 7,816 | 6,119 | 1,697 | 21.7% | 1,614 |
+| 974,426 | 8,025 | 7,256 | 769 | 9.6% | 777 |
+| 974,427 | 5,232 | 5,049 | 183 | 3.5% | 1,762 |
+| 974,428 | 7,955 | 7,711 | 244 | 3.1% | 173 |
+| **8 blocks** | 61,0k | **56,386** | **4,589** | **7.5%** | |
+
+- **Waste is small: 7.5% of the pre-proved inputs**, 2.6-21.7% per block. Phase B (context-free records) is not needed
+  for this: re-proving the template's leftovers for the next height costs well under a tenth of the work.
+- **The block-time chunk varies a lot** (4 to 1,762 transactions not in the last template). Large values follow
+  templates that lagged the mempool (974,427 came 96 s after its parent, from a 4,678-tx template). A prover should
+  refresh its template more often than 15 s and prove arrivals continuously; the count above is transactions, not
+  inputs.

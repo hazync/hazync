@@ -40,8 +40,8 @@ refuse it.
 |---|---|---|
 | D1 | Phase A: speculative chunks (zero hash/time) accepted from CSV on when flags need no hash; host `HAZYNC_SPECULATIVE` | done (image c9tx df86c392) |
 | D2 | aggregate record selection (`HAZYNC_TXLOG_ORDER`, each record once) | done |
-| D3 | Phase B (context-free validity records) only if Phase A waste is large | after D4 measures |
-| D4 | `fetch_template_rpc.py` (template -> speculative fixture); `template_waste.py` measuring re-prove waste | built; measuring |
+| D3 | Phase B (context-free records): NOT needed — Phase A waste measured 7.5% of pre-proved inputs over 8 blocks (txproofs §8) | dropped |
+| D4 | `fetch_template_rpc.py` (template -> speculative fixture); waste measured 7.5% (txproofs §8) | done |
 | D5 | zyncAPP `zeroconf` guest: speculative chunk record + every input unspent at the tip | building |
 | D6 | Ghost proof-ready blocks: the pool runs D4 on its own template (Ghost-side integration; Ghost infra is separate) | after D4 measures |
 
