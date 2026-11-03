@@ -49,7 +49,7 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| E1 | keyed trees for absence (outpoint / script), built as guest features otree / stree and MEASURED on 10 blocks: +55.6% one tree, +110.7% both, almost all in the aggregate (absence/README.md); sharding measurement queued | measured; needs your call |
+| E1 | keyed trees for absence (outpoint / script), built as guest features otree / stree and MEASURED on 10 blocks: +55.6% one tree, +110.7% both, almost all in the aggregate (absence/README.md); key-prefix sharding measured: no saving in work, only splits serial execution — not pursued | measured; needs your call |
 
 ## F. main branch
 

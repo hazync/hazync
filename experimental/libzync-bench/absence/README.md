@@ -82,3 +82,29 @@ blocks yet.
   the A40 rate.
 - **Tip latency:** the aggregate is one execution, but risc0 proves its segments in parallel; what grows serially is
   executing it (and the join depth). Not measured in seconds here.
+
+## Measured: sharding the outpoint tree by key prefix (11-03, `shard_bench.sh`, `zyncapp bench-shard`)
+
+The design: 2^s shards by the key's top bits, chunks commit a per-shard multiset hash of their keys (SwiftSync's sum),
+one shard prover per shard applies its keys, the aggregate checks the sums and folds 2^s roots. The bench executes
+one shard prover per shard on each block's real remove / insert counts (random keys, which route like SHA-256 keys).
+The shard guest's `read` (serde `env::read` of the witness) is a bench artifact and is left out below; the core reads
+its witness by slice.
+
+| block | 1 shard: apply | 16 shards: apply total / slowest | 64 shards: apply total / slowest | multiset sums |
+|---|---|---|---|---|
+| 970,000 | 68.6 M | 66.6 M / 4.6 M | 65.5 M / 1.6 M | 3.1 M |
+| 962,000 | 94.1 M | 91.2 M / 6.3 M | 90.1 M / 2.0 M | 4.5 M |
+| 800,000 | 251.7 M | 244.5 M / 15.9 M | 240.4 M / 4.4 M | 14.9 M |
+| 650,000 | 260.7 M | 253.0 M / 16.7 M | 248.9 M / 4.5 M | 12.2 M |
+
+(all ten blocks: `~/libzync-gpu/e1/cost/*_shard*.log`)
+
+- **Calibration holds:** 1 shard's apply is ~83-85% of the outpoint tree's measured aggregate growth (962,000: 94 M of
+  114 M; 650,000: 261 M of 306 M). The rest is key building and witness handling in the aggregate.
+- **Sharding saves no work.** Total apply drops 3-5% (shallower shard trees); the multiset sums add ~5%; each shard is
+  also one more proof process (~8.5 s fixed on a PRO 6000). Net: the same dollars or slightly more.
+- **It only splits the serial execution:** the slowest of 16 shards is ~1/16 of the total. Since risc0 already proves
+  one long execution's segments in parallel, that buys executor time at the tip, not proving cost.
+
+**Verdict:** sharding does not meet the bar ("seriously saves us something"). It is not built further.
