@@ -17,6 +17,16 @@ old and new root recomputed over the touched paths; cycles per hash from the coi
 
 (`estimate_962000.out` also has 741,000.) For comparison the whole coin log costs **+2.1%** over 10 blocks.
 
+## Measured hash cost (11-03, `zyncapp bench-hash`, execute mode)
+
+| node hash | cycles per hash |
+|---|---|
+| one SHA-256 compression from a per-level IV (the coin log's `parent`) | **283** |
+| SHA-256(0x01 ‖ L ‖ R), 65 bytes via `sha2` (the block forest's) | 1,105 |
+
+With the coin-log hash, 962,000's ~616 k hashes are **~174 M cycles, about +40% of the block** (439 M), against +2.1%
+for the coin log. The coin-log hash is the one to use if this is built.
+
 ## What it would unlock
 
 - "Outpoint X does not exist / is not live" with a short proof. Most uses are already covered positively: a spent

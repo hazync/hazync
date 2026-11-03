@@ -2,13 +2,22 @@
 //!
 //!   zyncapp prove-coin <core receipt> <fact.json from zync-path coin, at = tip> <out receipt> [--signet]
 //!   zyncapp verify-coin <zyncapp receipt>
+//!   zyncapp prove-zeroconf <core tip receipt> <speculative chunk receipt> <record index> <paths.json> <out> [--signet]
+//!       paths.json: [[position, [sibling hex, ...]], ...], one per input of the transaction, from zync-path coin
+//!   zyncapp verify-zeroconf <zyncapp receipt>
 //!   zyncapp id
 //!
 //! The core receipt is an ASSUMPTION of the zyncAPP receipt (risc0 composition): the zyncAPP receipt's verification
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID};
+use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ZeroConf {
+    kind: u32, core_id: [u32; 8], lineage: [u8; 32], anchor_id: [u8; 32], tip_height: u32, tip_hash: [u8; 32],
+    cum_work: [u8; 32], txid: [u8; 32], wtxid: [u8; 32], fee: i64, weight: i64, sigops: i64,
+}
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -43,7 +52,56 @@ fn id_hex(w: &[u32; 8]) -> String { hex(&w.iter().flat_map(|x| x.to_le_bytes()).
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     match a.first().map(|s| s.as_str()) {
-        Some("id") => println!("ZYNCAPP_COIN_ID {}", id_hex(&ZYNCAPP_COIN_ID)),
+        Some("id") => {
+            println!("ZYNCAPP_COIN_ID {}", id_hex(&ZYNCAPP_COIN_ID));
+            println!("ZYNCAPP_ZEROCONF_ID {}", id_hex(&ZYNCAPP_ZEROCONF_ID));
+        }
+        Some("bench-hash") => {
+            // E1 calibration, execute mode (no proof): cycles per node hash for both hash shapes.
+            for mode in [0u32, 1] {
+                let env = ExecutorEnv::builder().write(&(mode, 20_000u32)).unwrap().build().unwrap();
+                let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HASHBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
+                println!("mode {mode}: total {} cycles over 20000 hashes (user cycles; see HASHBENCH log line for the loop alone)", info.cycles());
+            }
+        }
+        Some("prove-zeroconf") if a.len() >= 6 => {
+            let load = |p: &str| -> Receipt { bincode::deserialize(&std::fs::read(p).unwrap_or_else(|e| die(&e.to_string())))
+                .unwrap_or_else(|e| die(&format!("{p}: {e}"))) };
+            let (tip, chunk) = (load(&a[1]), load(&a[2]));
+            let cs: ChainState = tip.journal.decode().unwrap_or_else(|e| die(&format!("tip journal: {e}")));
+            let idx: u32 = a[3].parse().unwrap_or_else(|_| die("record index?"));
+            let raw: Vec<(u64, Vec<String>)> = serde_json::from_slice(&std::fs::read(&a[4]).unwrap_or_else(|e| die(&e.to_string())))
+                .unwrap_or_else(|e| die(&format!("paths.json: {e}")));
+            let paths: Vec<(u64, Vec<[u8; 32]>)> = raw.into_iter().map(|(p, v)| (p, v.iter().map(|x| h32(x)).collect())).collect();
+            let signet = a.iter().any(|x| x == "--signet");
+            let env = ExecutorEnv::builder()
+                .add_assumption(tip.clone()).add_assumption(chunk.clone())
+                .write(&cs.self_id).unwrap()
+                .write(&tip.journal.bytes).unwrap()
+                .write(&chunk.journal.bytes).unwrap()
+                .write(&signet).unwrap()
+                .write(&idx).unwrap()
+                .write(&paths).unwrap()
+                .build().unwrap();
+            let r = default_prover().prove(env, ZYNCAPP_ZEROCONF_ELF).unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
+            std::fs::write(&a[5], bincode::serialize(&r).unwrap()).unwrap_or_else(|e| die(&e.to_string()));
+            println!("zyncapp zeroconf receipt written: {}", a[5]);
+        }
+        Some("verify-zeroconf") if a.len() >= 2 => {
+            let r: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| die(&e.to_string())))
+                .unwrap_or_else(|e| die(&format!("receipt: {e}")));
+            if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { die("a dev-mode FakeReceipt is not a proof"); }
+            r.verify(ZYNCAPP_ZEROCONF_ID).unwrap_or_else(|e| die(&format!("does not verify: {e}")));
+            let z: ZeroConf = r.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
+            if z.kind != 0x5A43_0002 { die("not a zyncAPP zeroconf statement"); }
+            let (mut t, mut id) = (z.tip_hash, z.txid);
+            t.reverse();
+            id.reverse();
+            println!("ZYNCAPP_ZEROCONF_OK: tx {} is valid for block {} on tip {} and spends only coins unspent there (fee {} sat)",
+                     hex(&id), z.tip_height + 1, hex(&t), z.fee);
+            println!("  rests on core image {} with anchor_id {}", id_hex(&z.core_id), hex(&z.anchor_id));
+            println!("  ⚠ valid now, not final: a conflicting transaction can still confirm first");
+        }
         Some("prove-coin") if a.len() >= 4 => {
             let core: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| die(&e.to_string())))
                 .unwrap_or_else(|e| die(&format!("core receipt: {e}")));
