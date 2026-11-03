@@ -237,7 +237,7 @@ Three new reviewers:
 
 | # | finding | severity | status |
 |---|---|---|---|
-| 13 | a coinbase flag of **2**: the leaf reads it as coinbase, maturity tested `== 1`, so an immature coinbase output could be spent | soundness, critical | **fixed**: flag must be 0 or 1 |
+| 13 | a coinbase flag of **2**: the leaf reads it as coinbase, maturity tested `== 1`, so an immature coinbase output could be spent | soundness, critical | **fixed**: flag must be 0 or 1 (bit 1, BIP30-tracked, added later: 0-3, maturity reads bit 0) |
 | 14 | the BIP30 coinbase-SMT root was never carried between blocks, so each block's starting tree was the prover's choice | soundness (exploitable only by re-mining pre-BIP34 history) | **fixed**: `ChainState.smt_root`, checked every block; the host keeps one real tree across sweeps and chains |
 | 15 | an external spend claiming the current block's height was only caught at H | completeness | **fixed**: flagged by the chunk, rejected in that block |
 | 16 | `libzync-verify` accepted a dev-mode FakeReceipt when `RISC0_DEV_MODE` was set | verifier soundness | **fixed**: fake receipts and the dev-mode variable are refused |
@@ -427,7 +427,9 @@ equivalent).
   `ConnectBlock` skips the BIP30 check between BIP34 activation and height 1,983,702.
 - A cheaper rule there (or batched SMT updates) would remove this cost wherever coinbases are spent in bulk. That
   happens in mining-pool payout blocks on mainnet, and in faucet sweeps on signet.
-- **Open lever, not changed.**
+- **Taken 11-03 (`e3f85e0`):** libzync images update the tree only for spends of TRACKED coins (UTREEXO_FORMAT.md §2a).
+  An untracked coinbase's count never decided a verdict, and double spends are the coin commitment's. Mainnet block
+  185,956 (190 coinbase spends): aggregate 294 M -> 8.3 M cycles. What remains is one coinbase insert per block.
 
 **Signet's first 2,147 blocks are coinbase-only.** Transactions start at 2,148. A full signet run (to 320,000,
 against the published file) is the cost-table item in the proposal, §9.

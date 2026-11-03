@@ -212,6 +212,8 @@ def c_in_below_out(c):
     x = mature(c); return c.block([spend(c, x, [out(value(c, x) + 1)])])
 def c_missing_coin(c):
     return c.block([spend(c, [(0x1234, 0)], [out(0)])])
+def c_spend_spent_coinbase(c):   # a coinbase coin already spent in an earlier block (the BIP30 tree no longer counts it, 11-03)
+    return c.block([spend(c, [c.stage["spent_cb"]], [out(1000)])])
 def c_double_spend_in_block(c):
     x = mature(c); return c.block([spend(c, x, [out(1)]), spend(c, x, [out(2)])])
 def c_chain_in_block(c):
@@ -532,6 +534,8 @@ def run():
             b = create_block(c.tip, cb, c.next_time(), version=4); b.solve()
         elif h == 200:          # T2's outputs spent, T1's left alone
             o = (c.stage["t2"].sha256, 0); b = c.block([spend(c, [o], [out(value(c, [o]))])])
+        elif h == 201:          # an ordinary (untracked) coinbase coin spent, so a later block can try to spend it again
+            o = mature(c)[0]; c.stage["spent_cb"] = o; b = c.block([spend(c, [o], [out(value(c, [o]))])])
         else:
             b = c.block()
         got = cli("submitblock", b.serialize().hex())

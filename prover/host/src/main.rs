@@ -4775,6 +4775,9 @@ fn smt_advance_ex(
     // 2. Decrement each spend, proving against the root as it stands at that step. This is what lets
     //    a block spend two outputs of the same coinbase: the second proof sees the first's effect.
     let mut spends = Vec::with_capacity(coinbase_spends.len());
+    // libzync filters by the tracked bit, so it must have one per spend: an empty list would drop tracked decrements.
+    assert!(!methods::LIBZYNC || coinbase_spends.is_empty() || spend_tracked.len() == coinbase_spends.len(),
+            "smt_advance_ex: libzync needs the tracked bit of every coinbase spend ({} spends, {} bits)", coinbase_spends.len(), spend_tracked.len());
     for (i, t) in coinbase_spends.iter().enumerate() {
         let is_tracked = spend_tracked.get(i).copied().unwrap_or(false);
         // libzync: only tracked coins are counted (agg_lite.rs: an untracked coinbase's count changes no verdict).

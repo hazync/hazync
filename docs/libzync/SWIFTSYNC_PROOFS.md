@@ -52,8 +52,9 @@ weight and sigop totals, BIP30) are our own code, in Rust (`prover/methods/guest
   no such database, so it tracks the only transactions that can ever repeat: a transaction can repeat only if every
   input is re-created, which traces back to a coinbase mined before BIP34 that indicates a later height. Measured on
   mainnet to height 974,111: 173 transactions for indicated heights below 100,000,000, 22 of their outputs unspent. Each
-  entry counts its unspent outputs in the coinbase tree, so a repeat is refused while any remain and allowed once none
-  do, as in Core (rig cases `bip30_repeat_*`). Two limits: blocks at height 100,000,000 and above are refused, about
+  tracked entry counts its unspent outputs in the coinbase tree, so a repeat is refused while any remain and allowed
+  once none do, as in Core (libzync images count tracked outputs only; an untracked coinbase keeps its creation count
+  and its repeat is refused, UTREEXO_FORMAT.md §2a) (rig cases `bip30_repeat_*`). Two limits: blocks at height 100,000,000 and above are refused, about
   1,900 years away, until a later image raises it; and an untracked coinbase repeated before BIP34 is refused where Core
   would allow it when fully spent. Mainnet has no such block: of all coinbases to height 230,000 plus block 490,897,
   exactly two txids repeat, both grandfathered.
@@ -355,7 +356,7 @@ The shares in the last three rows are from a profile of a pre-audit image (`LIBZ
 Remaining levers:
 - per-proof fixed cost and recursion (about 8.7 s per empty block on one RTX PRO 6000);
 - multi-block batching (not built);
-- the BIP30 coinbase SMT (~1.5 M cycles per coinbase spend);
+- the BIP30 coinbase SMT: since 11-03 one insert per block plus one update per TRACKED coin spent (it was ~1.5 M cycles per coinbase spend);
 - mid-history transaction shapes (2–6× the cycles per transaction of today's blocks).
 
 ## 7. Epochs: moving H and localising failures (design; not built)
@@ -469,7 +470,7 @@ All measured 2026-10-30.
   - coinbase-only recursive blocks: **8.7–9.2 s** (91 blocks);
   - blocks with transactions: **16.5–16.7 s** (7 blocks, one chunk each);
   - block 2,523: **514 s**. It spends 374 coinbase outputs, and 97% of its aggregate is Hazync's BIP30 coinbase SMT
-    (~1.5 M cycles per coinbase spend). That is a known, separable cost (`LIBZYNC.md` §8).
+    (~1.5 M cycles per coinbase spend). That cost was removed 11-03: the tree now counts tracked coins only (`LIBZYNC.md` §8).
 
 **What this demonstrates, and what it does not:**
 - **It does:** the whole pipeline on a real network, from the published hints format to a verified recursive proof

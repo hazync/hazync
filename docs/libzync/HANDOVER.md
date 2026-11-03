@@ -132,7 +132,9 @@ the genesis anchor in its own layout: verifiers PIN it per network (`swiftsync-v
 host `pinned_genesis_anchor`): mainnet `852c5c7e…390167`, signet `3b67ead0…938827`.
 
 A handover sends the predecessor receipt's own journal bytes to the guest, never a re-encoding of the decoded state,
-and needs every block file before it (the BIP30 tree is replayed, never seeded).
+and needs every block file before it (the BIP30 tree is replayed, never seeded). ⚠ The host replays the tree under
+ITS OWN image's update rule. A new image that changes that rule (as 11-03's tracked-only counting did) cannot take a
+handover from an image with the old rule until the host replays each range under its own image's rule.
 
 ## 5. Lineage digest
 
