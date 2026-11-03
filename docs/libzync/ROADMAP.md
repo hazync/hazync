@@ -70,3 +70,13 @@ refuse it.
 3. **Freeze: ask the user.**
 4. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. GPU runs and a full mainnet proof are the user's trigger.
+
+## Image ids built (11-03, unit tests + compiles only)
+
+| image | id | note |
+|---|---|---|
+| c8m (checkpoint) | 9d9adb54 | superseded |
+| c9tx (coin log + txlog) | df86c392 | |
+| c9m (coin log) | 0d8cac45 | ⚠ built while a zyncAPP build held part of target/riscv-guest: rebuild from clean before the test pass |
+| zyncAPP coin | 26e09637 | |
+| zyncAPP zeroconf | a61caf76 | |
