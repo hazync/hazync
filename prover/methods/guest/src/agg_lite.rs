@@ -346,7 +346,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         for &(ji, k) in order {
             let (ji, k) = (ji as usize, k as usize);
             let next = rec_base.get(ji + 1).copied().unwrap_or(rec_at.len());
-            match rec_base.get(ji).map(|b| b + k).filter(|x| *x < next) {
+            match rec_base.get(ji).and_then(|b| b.checked_add(k)).filter(|x| *x < next) {
                 Some(x) if !used[x] => { used[x] = true; sel.push(x); }
                 _ => { env::log("agg-lite: REJECT record order names a record twice or past a journal"); all_ok = false; }
             }

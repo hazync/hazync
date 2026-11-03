@@ -127,7 +127,11 @@ transaction lands in block H. The change:
    aggregate the block's order as (journal, record) pairs; the aggregate walks records in that order. Unselected
    records are ignored (they change no state); the Merkle root over the walked txids still binds the exact list.
    A record selected twice is refused.
-4. Transactions not pre-proved (miners' own, late arrivals, the coinbase) go through ordinary chunks at block time.
+4. **One invalid transaction spoils its chunk.** A chunk with any invalid record commits `all_valid = 0`, and the
+   aggregate refuses every chunk it is given that is not all valid, selected records or not (review 11-03). The host
+   must prove a batch only of transactions it has checked (Core's mempool acceptance) and, if a batch chunk still
+   fails, drop the failing transaction and re-prove that batch before the block uses it.
+5. Transactions not pre-proved (miners' own, late arrivals, the coinbase) go through ordinary chunks at block time.
 
 Cost of being wrong: a transaction that misses block H is re-proved for H + 1. Waste = the backlog that survives each
 block (measure: `headstart.py` extended to count it).

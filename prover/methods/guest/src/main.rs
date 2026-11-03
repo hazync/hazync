@@ -2179,7 +2179,7 @@ fn aggregate() {
     #[cfg(feature = "txlog")]
     let rec_order: Vec<(u32, u32)> = {
         let n: u32 = env::read();
-        let mut words = vec![0u32; 2 * n as usize];
+        let mut words = vec![0u32; (n as usize).checked_mul(2).expect("txlog order: too many pairs")];
         if n > 0 { env::read_slice(&mut words); }
         words.chunks_exact(2).map(|c| (c[0], c[1])).collect()
     };
