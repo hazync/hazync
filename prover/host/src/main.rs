@@ -2308,7 +2308,7 @@ fn prove_seg() {
         b.segment_limit_po2(seg_po2());
         b.write(&4u32).unwrap();
         b.write(&chunk_height).unwrap();
-        b.write(&header_hash(&w.header)).unwrap(); // block hash for flag exceptions
+        b.write(&chunk_block_hash(&w.header)).unwrap(); // block hash for flag exceptions
         write_chunk_inputs(&mut b, &w, lo, hi);
         let receipt = default_prover()  // succinct: lift now, cheap aggregate later (see prove_chunk note)
             .prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct()).unwrap().receipt;
@@ -3050,7 +3050,7 @@ fn exec_chunk_cycles(w: &BlockWitness, lo: usize, hi: usize) -> u64 {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap();
+    b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
     let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("exec chunk");
     // Report what the chunk COMMITTED, not just how long it took. A payload-format change that
@@ -3164,6 +3164,17 @@ fn liftx_hints(w: &BlockWitness, lo: usize, hi: usize) -> Vec<([u8; 32], [u8; 32
     out.into_iter().collect()
 }
 
+/// txlog Phase A (txproofs/README.md §7): HAZYNC_SPECULATIVE=1 proves chunks for the block's height and MTP with zero
+/// block hash and time, as a prover would before the block exists. Only a txlog image's aggregate accepts them.
+fn speculative() -> bool {
+    std::env::var("HAZYNC_SPECULATIVE").as_deref() == Ok("1")
+}
+
+/// The block hash a chunk is told: the real one, or zero for a speculative chunk.
+fn chunk_block_hash(header: &[u8]) -> [u8; 32] {
+    if speculative() { [0; 32] } else { header_hash(header) }
+}
+
 fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, lo: usize, hi: usize) {
     fn padded(v: &[u8]) -> Vec<u8> {
         let mut p = v.to_vec();
@@ -3198,7 +3209,7 @@ fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, 
         let bump = std::env::var("HAZYNC_LITE_BAD_MTP").is_ok() as u32;
         let words = libzync::wire::ChunkHints {
             mtp: HZ_BLOCK_MTP.lock().unwrap().expect("libzync: build_full has not set the block MTP") + bump,
-            block_time: u32::from_le_bytes(w.header[68..72].try_into().unwrap()),
+            block_time: if speculative() { 0 } else { u32::from_le_bytes(w.header[68..72].try_into().unwrap()) },
             liftx: &liftx,
             sig_collect: sig.is_none(),
             sig: sig.unwrap_or(&[]),
@@ -3259,7 +3270,7 @@ fn prove_chunk(idx: usize) {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap(); // block hash for flag exceptions
+    b.write(&chunk_block_hash(&w.header)).unwrap(); // block hash for flag exceptions
     write_chunk_inputs(&mut b, &w, lo, hi);
     let t = Instant::now();
     // EXECUTE FIRST, then prove (#145). This printed nothing until it finished, so while a chunk was
@@ -3479,7 +3490,7 @@ fn agg_exec_fake() {
         b.segment_limit_po2(seg_po2());
         b.write(&4u32).unwrap();
         b.write(&w.height).unwrap();
-        b.write(&header_hash(&w.header)).unwrap();
+        b.write(&chunk_block_hash(&w.header)).unwrap();
         write_chunk_inputs(&mut b, &w, lo, hi);
         let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("exec chunk");
         let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
@@ -3567,6 +3578,17 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
         b.write(&(wit.len() as u32)).unwrap();
         if !wit.is_empty() { b.write_slice(&wit); }
     }
+    // txlog: the block's record order as (journal, record) pairs, from HAZYNC_TXLOG_ORDER (one "journal record" pair per
+    // line); none = every record in journal order.
+    if methods::TXLOG {
+        let order: Vec<u32> = std::env::var("HAZYNC_TXLOG_ORDER").ok().map(|p| {
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}")).split_whitespace()
+                .map(|x| x.parse().unwrap_or_else(|_| panic!("{p}: not a number: {x}"))).collect()
+        }).unwrap_or_default();
+        assert!(order.len() % 2 == 0, "HAZYNC_TXLOG_ORDER: pairs");
+        b.write(&((order.len() / 2) as u32)).unwrap();
+        if !order.is_empty() { b.write_slice(&order); }
+    }
     match &bundle {
         Some(bd) => println!("  libzync: {} bytes of ECMH hints, {}", bd.ecmh.len(),
                              if bits.is_some() { "SwiftSync hint bits" } else { "no hints file" }),
@@ -3628,7 +3650,7 @@ fn execute_chunks_parallel(w: &BlockWitness, bounds: &[(usize, usize)], threads:
                     b.stdout(&mut log);
                     b.write(&4u32).unwrap();
                     b.write(&w.height).unwrap();
-                    b.write(&header_hash(&w.header)).unwrap();
+                    b.write(&chunk_block_hash(&w.header)).unwrap();
                     write_chunk_inputs(&mut b, w, lo, hi);
                     lz_execute(b.build().unwrap()).expect("execute chunk")
                 };
@@ -4126,7 +4148,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             b.segment_limit_po2(seg_po2());
             b.write(&4u32).unwrap();
             b.write(&w.height).unwrap();
-            b.write(&header_hash(&w.header)).unwrap();
+            b.write(&chunk_block_hash(&w.header)).unwrap();
             write_chunk_inputs(&mut b, &w, clo, chi);
             let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts).expect("prove chunk").receipt;
             r.verify(METHOD_ID).expect("chunk receipt verifies");
@@ -6950,7 +6972,7 @@ fn segment_size_cmd() {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap();
+    b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
     let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run().unwrap();
     let n = session.segments.len();
@@ -7003,7 +7025,7 @@ fn exec_time_cmd() {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap();
+    b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
     let env = b.build().unwrap();
 
@@ -7073,7 +7095,7 @@ fn segment_mem_cmd() {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap();
+    b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
 
     let t_exec = Instant::now();
@@ -7182,7 +7204,7 @@ fn seg_distribute_cmd() {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap();
+    b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
 
     let t_exec = Instant::now();
@@ -7350,7 +7372,7 @@ fn seg_coordinate_cmd() {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap();
+    b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
 
     let t_exec = Instant::now();
@@ -7519,7 +7541,7 @@ fn seg_coordinate_tree_cmd() {
     b.segment_limit_po2(seg_po2());
     b.write(&4u32).unwrap();
     b.write(&w.height).unwrap();
-    b.write(&header_hash(&w.header)).unwrap();
+    b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
 
     let t_exec = Instant::now();
@@ -9029,7 +9051,7 @@ fn seg_serve_cmd() {
             b.segment_limit_po2(seg_po2());
             b.write(&4u32).unwrap();
             b.write(&w.height).unwrap();
-            b.write(&header_hash(&w.header)).unwrap();
+            b.write(&chunk_block_hash(&w.header)).unwrap();
             write_chunk_inputs(&mut b, &w, lo, hi);
         }
     }
@@ -10386,7 +10408,8 @@ mod join_tree_tests {
 // block is proved applies the same changes and checks its roots equal the committed state's.
 
 struct ClHost {
-    store: libzync::coinlog::Store,
+    // In memory, or on disk when HAZYNC_COINLOG_DIR is set (ROADMAP C1; libzync::host::DiskNodes).
+    store: libzync::coinlog::NodeStore<libzync::host::AnyNodes>,
     pos: std::collections::HashMap<[u8; 32], u64>, // unspent leaf -> position
 }
 static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
@@ -10397,8 +10420,24 @@ fn cl_path_for(state_json: &str) -> String {
     match state_json.strip_suffix(".json") { Some(s) => format!("{s}.coinlog"), None => format!("{state_json}.coinlog") }
 }
 
+/// HAZYNC_COINLOG_DIR: the on-disk store's directory (C1). Unset: the log lives in memory.
+fn cl_dir() -> Option<std::path::PathBuf> {
+    std::env::var("HAZYNC_COINLOG_DIR").ok().filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
+}
+
+/// A state_<h>.coinlog written in disk mode: this magic, then the leaf count and the roots it had (the leaves are in
+/// HAZYNC_COINLOG_DIR, mutated in place, so a load can only check that the directory is still at that state).
+const CL_DISK_MAGIC: &[u8; 8] = b"LZDISK01";
+
 fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
-    let mut store = libzync::coinlog::Store::default();
+    let nodes = match cl_dir() {
+        Some(d) => {
+            let _ = std::fs::remove_dir_all(&d);
+            libzync::host::AnyNodes::Disk(libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())))
+        }
+        None => libzync::host::AnyNodes::Mem(Vec::new()),
+    };
+    let mut store = libzync::coinlog::NodeStore::with_nodes(nodes);
     let mut pos = std::collections::HashMap::new();
     for (i, l) in leaves.iter().enumerate() {
         store.push(*l);
@@ -10412,9 +10451,17 @@ fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
 fn cl_save(path: &str) {
     let g = CL.lock().unwrap();
     let h = g.as_ref().expect("coin log not initialised");
-    let mut b = Vec::with_capacity(8 + 32 * h.store.len() as usize);
-    b.extend_from_slice(&h.store.len().to_le_bytes());
-    for i in 0..h.store.len() { b.extend_from_slice(&h.store.leaf(i)); }
+    let mut b = Vec::new();
+    if let libzync::host::AnyNodes::Disk(d) = &h.store.nodes {
+        d.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}"));
+        b.extend_from_slice(CL_DISK_MAGIC);
+        b.extend_from_slice(&h.store.len().to_le_bytes());
+        for r in h.store.roots() { b.extend_from_slice(&r.unwrap_or([0; 32])); b.push(r.is_some() as u8); }
+    } else {
+        b.reserve(8 + 32 * h.store.len() as usize);
+        b.extend_from_slice(&h.store.len().to_le_bytes());
+        for i in 0..h.store.len() { b.extend_from_slice(&h.store.leaf(i)); }
+    }
     // Atomic: a run killed mid-write must not leave a short file that a resume would then refuse.
     let tmp = format!("{path}.tmp");
     std::fs::write(&tmp, b).unwrap_or_else(|e| panic!("{tmp}: {e}"));
@@ -10423,6 +10470,20 @@ fn cl_save(path: &str) {
 
 fn cl_load(path: &str) {
     let b = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e} (a coin-log anchor needs its .coinlog file)"));
+    if b.starts_with(CL_DISK_MAGIC) {
+        let d = cl_dir().unwrap_or_else(|| panic!("{path} was written in disk mode: set HAZYNC_COINLOG_DIR"));
+        let store = libzync::coinlog::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
+            libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
+        let n = u64::from_le_bytes(b[8..16].try_into().unwrap());
+        let roots: Vec<Option<[u8; 32]>> = b[16..].chunks_exact(33).map(|c| (c[32] == 1).then(|| c[..32].try_into().unwrap())).collect();
+        assert!(store.len() == n && store.roots() == roots,
+                "{}: the on-disk coin log is not at the state {path} recorded (it moved on after that receipt?): rebuild it from a run from genesis", d.display());
+        // C1b: the position index is still rebuilt in memory from every leaf.
+        let mut pos = std::collections::HashMap::new();
+        for i in 0..n { pos.insert(store.leaf(i), i); }
+        *CL.lock().unwrap() = Some(ClHost { store, pos });
+        return;
+    }
     let n = u64::from_le_bytes(b[..8].try_into().unwrap()) as usize;
     assert_eq!(b.len(), 8 + 32 * n, "{path}: truncated");
     let leaves: Vec<[u8; 32]> = b[8..].chunks_exact(32).map(|c| c.try_into().unwrap()).collect();

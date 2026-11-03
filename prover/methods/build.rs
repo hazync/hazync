@@ -31,7 +31,7 @@ fn lever(name: &str) -> bool {
 
 /// `profile.rs` in OUT_DIR: what the embedded guest was built for, so the HOST writes the stream that
 /// guest reads instead of trusting a matching set of run-time env vars.
-fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool) {
+fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool, txlog: bool) {
     let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
     std::fs::write(&out, format!(
         "/// The embedded guest reads libzync hint blocks (libzync/src/wire.rs).\n\
@@ -41,7 +41,9 @@ fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool)
          /// \"mainnet\", \"signet\" or \"regtest\".\n\
          pub const NETWORK: &str = {:?};\n\
          /// The coin log instead of design B's SwiftSync forest (HAZYNC_COINLOG=1).\n\
-         pub const COINLOG: bool = {coinlog};\n",
+         pub const COINLOG: bool = {coinlog};\n\
+         /// Pre-proved transactions: speculative chunks + the block's record order (HAZYNC_TXLOG=1).\n\
+         pub const TXLOG: bool = {txlog};\n",
         network)).expect("write profile.rs");
 }
 
@@ -111,6 +113,7 @@ fn main() {
     assert!(!signet || libzync, "HAZYNC_NETWORK=signet needs HAZYNC_LIBZYNC (the signet check lives in the libzync aggregate)");
     println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_PIN_DIR");
     println!("cargo:rerun-if-env-changed=HAZYNC_COINLOG");
+    println!("cargo:rerun-if-env-changed=HAZYNC_TXLOG");
     if let Ok(elf_path) = std::env::var("HAZYNC_GUEST_ELF") {
         // The prebuilt path embeds the pinned canonical guest (reproduce/). A libzync image is embedded
         // the same way -- sha256 and image id checked, never trusted -- but against pins that name THAT
@@ -126,16 +129,19 @@ fn main() {
         // so the host never writes a design-B stream to a coin-log guest or the reverse.
         let coinlog = std::env::var("HAZYNC_COINLOG").as_deref() == Ok("1");
         assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
+        let txlog = std::env::var("HAZYNC_TXLOG").as_deref() == Ok("1");
+        assert!(!txlog || libzync, "HAZYNC_TXLOG needs HAZYNC_LIBZYNC");
         if let Some(d) = pins.as_deref() {
             println!("cargo:rerun-if-changed={d}/PROFILE");
             let want = format!("libzync={} assumevalid={} network={}{}", libzync as u8, assumevalid as u8,
-                               network, if coinlog { " coinlog=1" } else { "" });
+                               network, format!("{}{}", if coinlog { " coinlog=1" } else { "" }, if txlog { " txlog=1" } else { "" }));
             let got = std::fs::read_to_string(Path::new(d).join("PROFILE"))
                 .unwrap_or_else(|e| panic!("{d}/PROFILE: {e} (the pin directory must name the image's profile)"));
             assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS");
         }
         assert!(!coinlog || pins.is_some(), "HAZYNC_COINLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
-        write_profile(libzync, assumevalid, network, coinlog);
+        assert!(!txlog || pins.is_some(), "HAZYNC_TXLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
+        write_profile(libzync, assumevalid, network, coinlog, txlog);
         embed_prebuilt_guest(&elf_path, pins.as_deref());
         return;
     }
@@ -241,7 +247,13 @@ fn main() {
     if coinlog {
         features.push("coinlog".to_string());
     }
-    write_profile(libzync, assumevalid, network, coinlog);
+    println!("cargo:rerun-if-env-changed=HAZYNC_TXLOG");
+    let txlog = lever("HAZYNC_TXLOG");
+    assert!(!txlog || libzync, "HAZYNC_TXLOG needs HAZYNC_LIBZYNC");
+    if txlog {
+        features.push("txlog".to_string());
+    }
+    write_profile(libzync, assumevalid, network, coinlog, txlog);
     if !features.is_empty() {
         use std::collections::HashMap;
         // GuestOptions is #[non_exhaustive], so it cannot be built with a struct expression from

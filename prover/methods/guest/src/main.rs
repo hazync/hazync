@@ -2174,6 +2174,17 @@ fn aggregate() {
         if n > 0 { env::read_slice(&mut words); }
         agg_lite::set_log_witness(words);
     }
+    // txlog (txproofs/README.md §7): the block's record order as (journal, record) pairs, after the log witness. Empty =
+    // every record in journal order.
+    #[cfg(feature = "txlog")]
+    let rec_order: Vec<(u32, u32)> = {
+        let n: u32 = env::read();
+        let mut words = vec![0u32; 2 * n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        words.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+    };
+    #[cfg(not(feature = "txlog"))]
+    let rec_order: Vec<(u32, u32)> = Vec::new();
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
     // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
@@ -2215,7 +2226,7 @@ fn aggregate() {
     #[cfg(feature = "agg-lite")]
     let r = { let _ = (&all_binds, chunks_ok, &chunk_wtxids, &chunk_leaves, &chunk_seqs, &chunk_vers);
               let ss = (&ss_bits, prev.ss_hints);
-              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals, ss) };
+              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals, ss, &rec_order) };
     #[cfg(not(feature = "agg-lite"))]
     let r = validate_block_wtx(&w, prev_mtp, Some((&all_binds, chunks_ok)), &chunk_wtxids,
                                &chunk_leaves, &chunk_seqs, &chunk_vers);

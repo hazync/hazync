@@ -105,3 +105,7 @@ regtest = ["libzync"]
 # libzync EXPERIMENT (HAZYNC_COINLOG=1): the coin log (libzync/src/coinlog.rs) instead of design B's SwiftSync forest.
 # Every coin that outlives its block is appended; a spend flips its leaf in place. No hints file; sound at every block.
 coinlog = ["libzync"]
+# libzync EXPERIMENT (HAZYNC_TXLOG=1): pre-proved transactions (txproofs/README.md §7, Phase A). The aggregate accepts
+# speculative chunks (proved for this height and MTP before the block existed) and takes the block's record order from
+# the host, so a batch may hold transactions the block does not.
+txlog = ["libzync"]

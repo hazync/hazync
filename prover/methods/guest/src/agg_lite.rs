@@ -212,13 +212,33 @@ impl Rd<'_> {
     fn i64(&mut self) -> i64 { let lo = self.u() as u64; let hi = self.u() as u64; (lo | (hi << 32)) as i64 }
 }
 
+/// Advances `r` past one record (the layout `ChunkCtx::record` writes) without interpreting it.
+fn skip_record(r: &mut Rd) {
+    r.i = r.i.saturating_add(24);
+    let (_start, count, first) = (r.u(), r.u(), r.u());
+    if first == 1 {
+        let _ = (r.u(), r.u());
+        r.i = r.i.saturating_add(6);
+        #[cfg(feature = "coinlog")]
+        { r.i = r.i.saturating_add(2); }
+        let n_out = r.u() as usize;
+        r.i = r.i.saturating_add(n_out.saturating_mul(11));
+    }
+    for _ in 0..count {
+        if r.bad || r.i > r.w.len() { r.bad = true; return; }
+        r.i = r.i.saturating_add(8);
+        if r.u() & 1 == 1 { r.i = r.i.saturating_add(8); }
+    }
+    if r.i > r.w.len() { r.bad = true; }
+}
+
 /// Aggregate side. Same checks, same order of SwiftSync operations, as `validate_block_staged`'s
 /// aggregation path, with every per-transaction fact taken from the chunk journals.
 /// `ss` = ((mode, nbits, packed bits), previous hint hash): design B's SwiftSync hint bits for this block,
 /// one per INDEXED output (see below), and the running hash they extend. mode 0 = no hints file.
 #[inline(never)] // inlined, the aggregate ran ~1.08 M cycles dearer on 962,000 (HANDOVER.md §8)
 pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
-                           ss: (&(u32, u32, Vec<u32>), [u8; 32])) -> BlockResult {
+                           ss: (&(u32, u32, Vec<u32>), [u8; 32]), order: &[(u32, u32)]) -> BlockResult {
     let mut all_ok = true;
     assert!(w.header.len() == 80, "block header must be exactly 80 bytes, got {}", w.header.len());
     let block_time = u32::from_le_bytes(w.header[68..72].try_into().unwrap());
@@ -282,22 +302,60 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // The open transaction: all inputs seen so far are tracked, and whether it claimed to be.
     let (mut tr_all, mut tr_claim) = (false, false);
 
-    // Walk every chunk's records in order. `cur` = (txid, wtxid, prevouts hash, n_vin, next input expected).
+    // Walk every chunk's records in BLOCK order. `cur` = (txid, wtxid, prevouts hash, n_vin, next input expected).
     let mut cur: Option<([u8; 32], [u8; 32], [u8; 32], u32, u32)> = None;
     let mut tx_pos: u32 = 0;
-    for j in journals {
+    // Pass 1: each journal's header, and where each of its records starts. A chunk proved for this block carries its
+    // hash and time. txlog (txproofs/README.md §7, Phase A): a SPECULATIVE chunk, proved before the block existed for
+    // this height and MTP, carries zero hash and time. It is the same chunk whenever neither matters: from CSV on, the
+    // lock time is the MTP (block time unused), and the hash enters only through the script flags, so they must be
+    // the flags of this height with no hash exception.
+    let mut rec_at: Vec<(usize, usize)> = Vec::new();   // (journal, word offset), journal order
+    let mut rec_base: Vec<usize> = Vec::with_capacity(journals.len());
+    for (ji, j) in journals.iter().enumerate() {
         let mut r = Rd { w: j, i: 0, bad: false };
+        rec_base.push(rec_at.len());
         if r.u() != KIND_CHUNK_LITE { all_ok = false; continue; }
         if r.u() != 1 { all_ok = false; }                       // the chunk's all_valid
         // Read every field BEFORE comparing: a short-circuiting `||` over the cursor skipped the
         // remaining reads on the first mismatch and misaligned the rest of the journal.
         let (c_height, c_hash, c_mtp, c_time) = (r.u(), r.h(), r.u(), r.u());
-        if c_height != w.height || c_hash != block_hash || c_mtp != mtp || c_time != block_time {
+        let speculative = cfg!(feature = "txlog") && c_hash == [0u8; 32] && c_time == 0
+            && w.height >= NET.csv_height && block_script_flags(w.height, &[0u8; 32]) == flags;
+        if c_height != w.height || c_mtp != mtp || (!speculative && (c_hash != block_hash || c_time != block_time)) {
             env::log("agg-lite: REJECT chunk context (height / block hash / mtp / time) differs");
             all_ok = false;
         }
         let n_rec = r.u();
         for _ in 0..n_rec {
+            rec_at.push((ji, r.i));
+            skip_record(&mut r);
+            if r.bad { break; }
+        }
+        if r.bad || r.i != j.len() { all_ok = false; }
+    }
+    // Pass 2: the records in block order. Without txlog, every record in journal order (as before). With txlog the host
+    // names the block's order as (journal, record) pairs: a batch of pre-proved mempool transactions holds some the
+    // block does not, and those are left unread. Each record at most once; the Merkle root below binds the txids
+    // walked to the block's exact list, so a missing or extra transaction still fails there.
+    let mut sel: Vec<usize> = Vec::with_capacity(rec_at.len());
+    if order.is_empty() {
+        sel.extend(0..rec_at.len());
+    } else {
+        let mut used = vec![false; rec_at.len()];
+        for &(ji, k) in order {
+            let (ji, k) = (ji as usize, k as usize);
+            let next = rec_base.get(ji + 1).copied().unwrap_or(rec_at.len());
+            match rec_base.get(ji).map(|b| b + k).filter(|x| *x < next) {
+                Some(x) if !used[x] => { used[x] = true; sel.push(x); }
+                _ => { env::log("agg-lite: REJECT record order names a record twice or past a journal"); all_ok = false; }
+            }
+        }
+    }
+    for x in sel {
+        let (ji, off) = rec_at[x];
+        let mut r = Rd { w: &journals[ji], i: off, bad: false };
+        {
             let (txid, wt, ph, start, count, first) = (r.h(), r.h(), r.h(), r.u(), r.u(), r.u());
             if first == 1 {
                 if start != 0 { all_ok = false; }
@@ -348,9 +406,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 // 11-03; it was ~1.5 M cycles per spent coinbase coin). The txid is still read, to keep the record aligned.
                 if f & 1 == 1 { let t = r.h(); if f & 4 != 0 { cb_spends.push((t, true)); } }
             }
-            if r.bad { break; }
+            if r.bad { all_ok = false; break; }
         }
-        if r.bad || r.i != j.len() { all_ok = false; }
     }
     // No records at all = a coinbase-only block (common before ~2011): coverage holds trivially. Safe
     // because the merkle check below binds the full txid list, so dropping every record of a block that
