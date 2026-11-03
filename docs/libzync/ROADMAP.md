@@ -49,7 +49,7 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| E1 | keyed tree for absence: estimated +14% to +74% per block (absence/README.md); build behind a flag and measure late; script-keyed variant is the one proof of reserves needs | estimated |
+| E1 | keyed tree for absence: measured 283 cycles/hash => ~+40% on 962,000; recommended as a separate recursive zyncAPP chain beside the core, not in it (absence/README.md) | design; needs your call |
 
 ## F. main branch
 

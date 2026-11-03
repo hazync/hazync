@@ -38,3 +38,11 @@ for the coin log. The coin-log hash is the one to use if this is built.
 
 Build behind a guest feature after the rest of the roadmap, measure on 962,000 in execute mode, and decide with the
 measured number. Script-keyed is the variant worth measuring first if absence is wanted for proof of reserves.
+
+## Recommendation (11-03)
+
+Do **not** put the keyed tree in the core: +40% on every block for a fact few zyncAPPs need. Build it as its own
+recursive zyncAPP chain beside the core instead: each step verifies the core receipt for block h (assumption), opens
+block h in the core's block forest (the hash binds the block's bytes), parses its transactions (no scripts: the core
+already checked them) and updates the keyed tree. The core stays at +2.1%; only users who want absence proofs pay for
+that chain. A script-keyed variant (all coins of a script, for proof of reserves) fits the same shape.
