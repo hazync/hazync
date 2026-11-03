@@ -48,6 +48,7 @@ class Chain:
         self.utxo = {}                      # (txid int, n) -> (value, spk, height, leaf flags, creation mtp)
         self.tracked = set()                # txids of tracked coinbases: a repeat of one is tracked too
         self.stage = {}                     # the staged repeat: its transactions and coinbases
+        self.spent = {}                     # coins spent on the base chain, with their data (for replayed-spend cases)
 
     def mtp(self, h):
         """MTP of the block AT height h (median of h-10..h)."""
@@ -92,7 +93,9 @@ class Chain:
                     self.utxo[(t.sha256, n)] = (o.nValue, bytes(o.scriptPubKey), h, fl, self.mtp(h - 1))
             if i:
                 for x in t.vin:
-                    self.utxo.pop((x.prevout.hash, x.prevout.n), None)
+                    u = self.utxo.pop((x.prevout.hash, x.prevout.n), None)
+                    if u is not None:
+                        self.spent[(x.prevout.hash, x.prevout.n)] = u
         self.times.append(b.nTime)
         self.tip = b.sha256
         self.height = h
@@ -114,7 +117,8 @@ def to_json(c, b, path, h=None):
     for t in b.vtx[1:]:
         pv = []
         for x in t.vin:
-            u = c.utxo.get((x.prevout.hash, x.prevout.n)) or made.get((x.prevout.hash, x.prevout.n))
+            u = c.utxo.get((x.prevout.hash, x.prevout.n)) or made.get((x.prevout.hash, x.prevout.n)) \
+                or c.spent.get((x.prevout.hash, x.prevout.n))   # a coin already spent: its true data, as an attacker would replay it
             if u is None:   # no such coin: the guest is given a plausible one, which is exactly the deferred case
                 u = (0, bytes(ANYONE), 1, 0, 0)
             pv.append({"value": u[0], "spk": u[1].hex(), "coin_height": u[2], "coin_is_coinbase": int(u[3]), "coin_mtp": u[4]})
@@ -212,8 +216,8 @@ def c_in_below_out(c):
     x = mature(c); return c.block([spend(c, x, [out(value(c, x) + 1)])])
 def c_missing_coin(c):
     return c.block([spend(c, [(0x1234, 0)], [out(0)])])
-def c_spend_spent_coinbase(c):   # a coinbase coin already spent in an earlier block (the BIP30 tree no longer counts it, 11-03)
-    return c.block([spend(c, [c.stage["spent_cb"]], [out(1000)])])
+def c_spend_spent_coinbase(c):   # a coinbase coin spent in an earlier block, replayed with its TRUE data so only the coin log can refuse it
+    o = c.stage["spent_cb"]; return c.block([spend(c, [o], [out(c.spent[o][0] - 1000)])])   # not the block-201 tx: another txid
 def c_double_spend_in_block(c):
     x = mature(c); return c.block([spend(c, x, [out(1)]), spend(c, x, [out(2)])])
 def c_chain_in_block(c):
@@ -472,6 +476,11 @@ def reason_ok(core, t):
 
 
 CASES = [(k[2:], v) for k, v in list(globals().items()) if k.startswith("c_")]
+# RIG_ONLY=a,b,c: run only these cases (the base chain is still built in full).
+if os.environ.get("RIG_ONLY"):
+    _only = set(os.environ["RIG_ONLY"].split(","))
+    CASES = [(n, f) for n, f in CASES if n in _only]
+    assert len(CASES) == len(_only), f"RIG_ONLY names not found: {_only - {n for n, _ in CASES}}"
 # A coin that does not exist fails at H under design B; a coin-log image (RIG_COINLOG=1) refuses it at the block.
 DEFERRED = set() if os.environ.get("RIG_COINLOG") == "1" else {"missing_coin"}
 TWO_CHUNKS = {"split_tx", "split_tx_bad"}
