@@ -1,0 +1,87 @@
+== build mainnet (c6m)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 8a5e3622b545411fb57a56598534407ba21d9ad76bcc10c636e5880ed47d8e2c
+== build regtest O (c6reg)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 9d33f640e2678ce596787363447eb1f98d6e0adb0b034308e738fee7307839dc
+== rig vs Core 28.0, coin log
+RIG_EXIT=0
+RIG 95 cases, 95 agree, 0 deferred, 0 to look at
+== build regtest N: O pinned at 101 (pin not committed)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 64c18c1f43afcd78dfdebe704e3ce447426ce2c12cd01e133917ac00481f10ed
+pin reverted
+== handover O -> N
+PASS O proves 1..100 from genesis
+PASS reject self_id: not the predecessor's
+PASS reject profile: handover: profile mismatch
+PASS reject lineage: predecessor lineage mismatch
+PASS reject forest: block forest
+PASS reject kind: not a ChainState
+PASS reject height: handover: height
+PASS reject wrong_image: predecessor chain proof invalid\|no receipt found\|assumption
+PASS reject no_receipt: predecessor chain proof invalid\|no receipt found\|assumption
+PASS O refuses is_base = 2
+PASS host refuses a receipt at the wrong height
+PASS N continues 101..110 by a handover
+PASS block 101 ran as a handover step
+PASS every block after the handover ran as ordinary recursion
+PASS O's state: its own id, zero lineage
+PASS after the handover the state carries N's id
+PASS anchor_id unchanged across the handover
+PASS lineage = the reference's digest of [O at first]; unchanged by later steps
+PASS block forest at 100 == the reference over real block hashes
+PASS block 7 checks against the state at 100
+PASS block forest at 110 == the reference over real block hashes
+PASS block 7 checks against the state at 110
+PASS state checks
+PASS coin log at 110 == coinlog_ref.py
+handover run.sh: 16/16 as expected
+HO_EXIT=0
+== build signet (c6sig)
+REAL_EXIT=0
+METHOD_ID METHOD_ID f463f741c2dfa7883b8103c94d9b00e3a0b32e502677209c805996e45ebfae80
+== mainnet 1..200 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py, genesis anchor
+PR_EXIT=0
+LZ_PROVE_RANGE_DONE 1..=200 in 1459 s; final receipt /home/defenwycke/libzync-gpu/c6/m200/block_200.rcpt
+H=200: 209 leaves appended, 204 live coins, 1000000000000 sat, 4 roots
+COINLOG_REF_MATCH: the proof's coin log equals this implementation
+BLOCK_FOREST_OK
+mainnet: genesis anchor_id 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 (the same for every image)
+state anchor_id 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 version 2 profile 0x11
+== cost on real blocks: coin log (c6m) vs design B (r17m), execute mode, 16 chunks
+block_962000   r17m  chunks    362589752 aggregate    64135226 whole    426724978 ok
+block_962000   c6m   chunks    365232111 aggregate    74141028 whole    439373139 ok
+block_970000   r17m  chunks    380200561 aggregate    53103272 whole    433303833 ok
+block_970000   c6m   chunks    382486321 aggregate    62363254 whole    444849575 ok
+block_900000   r17m  chunks    291296663 aggregate    38467866 whole    329764529 ok
+block_900000   c6m   chunks    291943494 aggregate    47270434 whole    339213928 ok
+block_850000   r17m  chunks    393483951 aggregate    84858742 whole    478342693 ok
+block_850000   c6m   chunks    394819253 aggregate    90883181 whole    485702434 ok
+block_800000   r17m  chunks    375824724 aggregate    93588607 whole    469413331 ok
+block_800000   c6m   chunks    377385470 aggregate    83591063 whole    460976533 ok
+block_750000   r17m  chunks    380698857 aggregate    80319099 whole    461017956 ok
+block_750000   c6m   chunks    381753270 aggregate    84125371 whole    465878641 ok
+block_700000   r17m  chunks    406735909 aggregate    69338013 whole    476073922 ok
+block_700000   c6m   chunks    407306025 aggregate    79151781 whole    486457806 ok
+block_650000   r17m  chunks    522800039 aggregate    58103158 whole    580903197 ok
+block_650000   c6m   chunks    523265975 aggregate    88295864 whole    611561839 ok
+block_170060   r17m  chunks     23480676 aggregate     3139964 whole     26620640 ok
+block_170060   c6m   chunks     23483884 aggregate     3213344 whole     26697228 ok
+block_692261   r17m  chunks    425654925 aggregate    76244971 whole    501899896 ok
+block_692261   c6m   chunks    426755956 aggregate    85932226 whole    512688182 ok
+== edge blocks (round 3): BIP30 repeats, activation boundaries, first retarget, the largest legacy tx; coin log (c6m), modelled log
+edge 2016    chunks            0 aggregate     2546996 whole      2546996 ok (exit 0)
+edge 91842   chunks            0 aggregate     1876089 whole      1876089 ok (exit 0)
+edge 91880   chunks      1174681 aggregate     1912149 whole      3086830 ok (exit 0)
+edge 185956  chunks     53688621 aggregate   293999552 whole    347688173 ok (exit 0)
+edge 227931  chunks     57732960 aggregate    10575913 whole     68308873 ok (exit 0)
+edge 363725  chunks            0 aggregate     2692563 whole      2692563 ok (exit 0)
+edge 364292  chunks   1575766373 aggregate    29755170 whole   1605521543 ok (exit 0)
+edge 388381  chunks    155899898 aggregate    29053271 whole    184953169 ok (exit 0)
+edge 419328  chunks    343185400 aggregate    55552340 whole    398737740 ok (exit 0)
+edge 481824  chunks    324644943 aggregate    66846571 whole    391491514 ok (exit 0)
+== signet 1..2600 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py
+
+--- 185,956 on design B (r17m) for comparison, same harness ---
+design B 185956: chunks 53591599 aggregate 292873868 ok
