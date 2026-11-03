@@ -546,9 +546,134 @@ pub fn identity_matches(claimed_height: u32, claimed: &str, height: u32, tip: &[
     claimed_height == height && claimed.len() == 64 && claimed == shown
 }
 
+/// A coin fact (docs/libzync/ZYNCAPPS.md §5): what `zync-path coin` writes and `swiftsync-verify --coin` checks against
+/// a verified tip proof. Hashes are hex, internal byte order.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CoinFact {
+    /// The height whose coin state the fact is about: the proof's tip, or an earlier block opened through the forest.
+    pub at: u32,
+    /// The coin's position in the coin log (birth order).
+    pub pos: u64,
+    /// The coin's unspent leaf (UTREEXO_FORMAT.md §2).
+    pub coin: String,
+    /// (height, tx position, input) of the spend, if the coin was spent by `at`.
+    pub spent_by: Option<(u32, u32, u32)>,
+    /// The coin's path in the log at `at`, bottom-up.
+    pub path: Vec<String>,
+    /// The coin log after `at`: leaf count, live value, roots (index = level). Unused when `at` is the tip.
+    pub log_leaves: u64,
+    pub log_value: u64,
+    pub log_roots: Vec<Option<String>>,
+    /// When `at` is below the tip: the block at `at` (hash) and its path in the tip's block forest.
+    pub block: Option<(String, Vec<String>)>,
+}
+
+fn hexes(v: &[String]) -> Option<Vec<[u8; 32]>> {
+    v.iter().map(|x| hex32(&x.to_lowercase())).collect()
+}
+
+/// Checks a coin fact against a state that passed [`verify`] (and must be a coin-log chain). Ok: one line saying what
+/// it proves.
+pub fn check_coin_fact(cs: &ChainState, f: &CoinFact) -> Result<String, String> {
+    if cs.profile & PROFILE_COINLOG == 0 {
+        return Err("the proof is not a coin-log chain: coin facts need the coin log".into());
+    }
+    let coin = hex32(&f.coin.to_lowercase()).ok_or("coin: not 64 hex digits")?;
+    let path = hexes(&f.path).ok_or("path: not 64-hex-digit hashes")?;
+    let (roots, n, block_line) = if f.at == cs.height {
+        if f.block.is_some() {
+            return Err("a fact at the tip carries no block opening".into());
+        }
+        (cs.utxo_roots.clone(), cs.utxo_leaves, String::new())
+    } else if f.at < cs.height {
+        let roots: Vec<Option<[u8; 32]>> = f.log_roots.iter()
+            .map(|r| r.as_ref().map(|x| hex32(&x.to_lowercase()).ok_or("log_roots: not 64 hex digits")).transpose())
+            .collect::<Result<_, _>>()?;
+        let (bh, bp) = f.block.as_ref().ok_or("a fact below the tip needs the block opening")?;
+        let bh = hex32(&bh.to_lowercase()).ok_or("block hash: not 64 hex digits")?;
+        let bp = hexes(bp).ok_or("block path: not 64-hex-digit hashes")?;
+        let state = utxo_state(f.log_leaves, f.log_value, &roots);
+        if !block_in_chain(cs, f.at, &bh, &state, &bp) {
+            return Err(format!("block {} with that coin state is not in the proof's block forest", f.at));
+        }
+        let mut d = bh;
+        d.reverse();
+        (roots, f.log_leaves, format!(" (block {} {}, in the proof's chain to {})", f.at, hex(&d), cs.height))
+    } else {
+        return Err(format!("at {} is above the proof's tip {}", f.at, cs.height));
+    };
+    let roots = normalize_roots(roots);
+    match f.spent_by {
+        None if libzync::facts::coin_unspent(&roots, n, f.pos, &coin, &path) =>
+            Ok(format!("coin {} at log position {} is UNSPENT at height {}{block_line}", f.coin, f.pos, f.at)),
+        Some((h, t, v)) if h <= f.at && libzync::facts::coin_spent_by(&roots, n, f.pos, &coin, h, t, v, &path) =>
+            Ok(format!("coin {} at log position {} was SPENT at height {h} by transaction {t} input {v} (state at {}){block_line}", f.coin, f.pos, f.at)),
+        _ => Err(format!("coin {} is not at log position {} in the state it names", f.coin, f.pos)),
+    }
+}
+
+fn normalize_roots(mut r: Vec<Option<[u8; 32]>>) -> Vec<Option<[u8; 32]>> {
+    while r.last() == Some(&None) {
+        r.pop();
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coin_facts_from_history() {
+        use libzync::history::{block_path, replay, Rec};
+        let h = |i: u64| -> [u8; 32] { sha256(&i.to_le_bytes()) };
+        let recs = vec![
+            Rec { height: 0, hash: h(1000), value: 0, flips: vec![], appends: vec![] },
+            Rec { height: 1, hash: h(1001), value: 30, flips: vec![], appends: vec![h(0), h(1), h(2)] },
+            Rec { height: 2, hash: h(1002), value: 40, flips: vec![(1, 1, 0)], appends: vec![h(3), h(4)] },
+            Rec { height: 3, hash: h(1003), value: 35, flips: vec![(0, 1, 2)], appends: vec![h(5)] },
+        ];
+        let tip = replay(&recs, 3, 3).unwrap();
+        let mut cs = genesis_anchor(&IMAGES[0]);
+        let broots = block_path(&tip.block_leaves, 0).1;
+        cs.profile |= PROFILE_COINLOG;
+        cs.height = 3;
+        cs.utxo_roots = tip.log.roots();
+        cs.utxo_leaves = tip.log.len();
+        cs.block_roots = broots;
+        cs.block_leaves = 4;
+        let fact = |at: u32, pos: u64| -> CoinFact {
+            let r = replay(&recs, at, 3).unwrap();
+            CoinFact {
+                at, pos, coin: hex(&r.coins[pos as usize]), spent_by: r.spenders.get(&pos).copied(),
+                path: r.log.path(pos).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
+                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
+                block: (at < 3).then(|| (hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())),
+            }
+        };
+        assert!(check_coin_fact(&cs, &fact(3, 0)).unwrap().contains("SPENT at height 3 by transaction 1 input 2"));
+        assert!(check_coin_fact(&cs, &fact(3, 5)).unwrap().contains("UNSPENT at height 3"));
+        // coin 0 was still unspent after block 2
+        assert!(check_coin_fact(&cs, &fact(2, 0)).unwrap().contains("UNSPENT at height 2"));
+        // lies: unspent at the tip, a wrong spender, a wrong block state, above the tip
+        let mut f = fact(3, 0);
+        f.spent_by = None;
+        assert!(check_coin_fact(&cs, &f).is_err());
+        let mut f = fact(3, 0);
+        f.spent_by = Some((3, 1, 1));
+        assert!(check_coin_fact(&cs, &f).is_err());
+        let mut f = fact(2, 0);
+        f.log_value += 1;
+        assert!(check_coin_fact(&cs, &f).is_err());
+        let mut f = fact(2, 0);
+        f.at = 4;
+        assert!(check_coin_fact(&cs, &f).is_err());
+        let mut f = fact(3, 5);
+        f.block = Some((hex(&h(1003)), vec![]));
+        assert!(check_coin_fact(&cs, &f).is_err());
+        cs.profile &= !PROFILE_COINLOG;
+        assert!(check_coin_fact(&cs, &fact(3, 5)).is_err());
+    }
 
     #[test]
     fn checkpoint_heights_match_the_guest() {

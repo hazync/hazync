@@ -36,7 +36,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] <receipt|bundle.sspf> <file.hints | - with --coinlog>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--coin <fact.json>]... <receipt|bundle.sspf> <file.hints | - with --coinlog>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <file.hints> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
@@ -64,6 +64,7 @@ fn main() {
     let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
     let mut coinlog = false;
     let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
+    let mut coin_facts: Vec<String> = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -75,6 +76,7 @@ fn main() {
             "--expect" => expect = Some(args.next().unwrap_or_else(|| usage())),
             "--mempool" => mempool = Some(String::new()),
             "--mempool-url" => mempool = Some(args.next().unwrap_or_else(|| usage())),
+            "--coin" => coin_facts.push(args.next().unwrap_or_else(|| usage())),
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
                 let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>")) };
@@ -190,6 +192,15 @@ fn main() {
                 }
                 Ok(o) => rep.checks.push((false, format!("{url}: request failed ({}): chain identity not checked", o.status))),
                 Err(e) => rep.checks.push((false, format!("curl {url}: {e}"))),
+            }
+        }
+        // zyncAPP coin facts (ZYNCAPPS.md §5) against this verified state.
+        for p in &coin_facts {
+            let f: Result<swiftsync_verify::CoinFact, String> = std::fs::read(p).map_err(|e| e.to_string())
+                .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
+            match f.and_then(|f| swiftsync_verify::check_coin_fact(cs, &f)) {
+                Ok(line) => rep.checks.push((true, format!("--coin {}: {line}", esc(p)))),
+                Err(e) => rep.checks.push((false, format!("--coin {}: {e}", esc(p)))),
             }
         }
         if rep.checks.iter().any(|(ok, _)| !ok) {
