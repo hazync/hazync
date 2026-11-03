@@ -402,7 +402,8 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
 }
 #[no_mangle]
 pub unsafe extern "C" fn calloc(n: usize, sz: usize) -> *mut u8 {
-    let total = n.wrapping_mul(sz);
+    // C's calloc fails on overflow instead of returning a short block (review 11-03).
+    let Some(total) = n.checked_mul(sz) else { return core::ptr::null_mut() };
     let p = malloc(total);
     if !p.is_null() { core::ptr::write_bytes(p, 0, total); }
     p

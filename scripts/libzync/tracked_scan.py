@@ -26,16 +26,19 @@ def indicated(s):
     if 1<=op<=5 and len(s)>op:
         d=s[1:1+op]; v=int.from_bytes(d,'little')
         if d[-1]&0x80 or v==0 or (op>1 and d[-1]==0 and not d[-2]&0x80): return None
+        if op==1 and v<=16: return None   # CScript() << v is OP_v for 1..16, so a 1-byte push of it is not BIP34 (guest hz_indicated_height)
         return v
     return None
 HORIZON=100_000_000; BIP34=227931
 live={}                 # (txid,vout) -> level
+tracked_cb={}           # txid of every tracked coinbase -> level (a repeat of it is tracked)
 ALL=[]                  # every tracked output: txid (display hex), vout, created height, level, is coinbase
 stats=collections.Counter(); inputs_spent=collections.Counter(); byb=collections.Counter()
 tip=rpc('getblockcount'); t0=time.time(); start=1
 if len(sys.argv) > 1:
     old=json.load(open(sys.argv[1])); assert old['horizon']==HORIZON
     ALL=old['outputs']; start=old['tip']+1
+    tracked_cb={bytes.fromhex(a[0])[::-1]:a[3] for a in ALL if a[4]}
     live={(bytes.fromhex(t)[::-1],struct.pack('<I',v)):next(a[3] for a in ALL if a[0]==t and a[1]==v) for t,v in old['live']}
 for h in range(start,tip+1):
     b=raw(rpc('getblockhash',h)); n,o=vi(b,80)
@@ -62,14 +65,17 @@ for h in range(start,tip+1):
                     L,o=vi(b,o); o+=L
         o+=4
         lvl=None
+        pre=(b[s:s+4]+b[(s+6 if seg else s+4):ve]+b[o-4:o])
+        txid=hashlib.sha256(hashlib.sha256(pre).digest()).digest()
         if ti==0:
             if h<BIP34:
                 y=indicated(cs)
                 if y and h<y<HORIZON: lvl=y
+            # the repeat of a tracked coinbase is tracked too (guest agg_lite.rs, coinbase_prior == REPEATABLE)
+            if lvl is None and txid in tracked_cb: lvl=tracked_cb[txid]
+            if lvl is not None: tracked_cb[txid]=lvl
         elif allin and levels: lvl=max(levels)
         if lvl is not None:
-            pre=(b[s:s+4]+b[(s+6 if seg else s+4):ve]+b[o-4:o])
-            txid=hashlib.sha256(hashlib.sha256(pre).digest()).digest()
             p=vs; 
             for i in range(vout):
                 p+=8; L,p=vi(b,p); p+=L
