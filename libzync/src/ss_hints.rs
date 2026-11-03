@@ -1,3 +1,4 @@
+//! ⚠ GUEST-COMPILED CRATE — editing this file changes METHOD_ID (it is #[path]-included into the guest).
 //! SwiftSync design B: the hint bits and the hint hash a proof commits.
 //!
 //! A hints file (hintsfile v0, 2140-dev/swiftsync) lists, per height 1..=H, the indices of that

@@ -115,7 +115,7 @@ impl ChunkCtx {
         let first = start == 0;
         // Only the block's first transaction may be a coinbase (Core CheckBlock bad-cb-multiple). A
         // coinbase-shaped transaction here would have fee 0 and outputs from nothing (review 2026-10-30).
-        if unsafe { is_coinbase_tx(tp, tl) } != 0 { ok = false; }
+        if unsafe { is_coinbase_tx(tp, tl) } != 0 { ok = false; env::log("agg-lite: core-reject: bad-cb-multiple"); }
         push_hash(&mut self.words, &txid);
         // EVERY run commits the wtxid, not only the input-0 run: the txid omits the witness, so a later
         // run of the same transaction could verify its inputs against DIFFERENT witness bytes than the

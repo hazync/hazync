@@ -5,7 +5,8 @@ Rebuild libzync's UTXO accumulator (docs/libzync/UTREEXO_FORMAT.md) from a Bitco
 compare it with the roots a proof commits: "assumeutxo, proven" (SWIFTSYNC_PROOFS.md §6 item 2).
 
 A snapshot has each coin's outpoint, height, coinbase flag, amount and script. The accumulator's order comes from
-those alone: height, then txid (internal bytes), then vout, which is Core's own coin-key order. The one thing it
+those alone: height, then txid (internal bytes), then vout as a number (re-sorted here: Core's VARINT key order differs
+past vout 16,511, UTREEXO_FORMAT.md §4). The one thing it
 lacks is each coin's creation MTP, the parent header's `mediantime`, which comes from your own node's HEADERS through
 `--bitcoin-cli` (any command line that takes RPC names as arguments). No block data is needed, so a node that has
 only synced headers can check a snapshot. Nothing is taken from whoever supplied the snapshot except the coins

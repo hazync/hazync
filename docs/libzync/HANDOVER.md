@@ -1,6 +1,6 @@
 # libzync: image handover and the block forest
 
-Status: describes branch `libzync-handover`. Normative sources are `prover/methods/guest/src/handover_pin.rs` and
+Status: merged into `libzync`. Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
 `aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
 implementation written from this document.
 
@@ -91,13 +91,15 @@ so a proof from it after activation states the weaker rules.
 
 ### How it works
 
-An image's source lists what it continues, in `handover_pin.rs`:
+An image's source lists what it continues, in `prover/methods/guest/src/lineage/<variant>.rs`, one file per image
+variant (`mainnet`, `signet`, `regtest`, each also `_coinlog`; an assumevalid build shares its network's file):
 
 ```rust
-pub const LINEAGE: &[Handover] = &[Handover { image: OLD_ID, first_height: 974_000 }];
+pub const LINEAGE: &[crate::handover_pin::Handover] = &[crate::handover_pin::Handover { image: OLD_ID, first_height: 974_000 }];
 ```
 
-The list is compiled in, so the new image's id commits to it. It is source, not an environment variable or a flag, so a
+Only the variant's own file is compiled into it, so pinning one variant's predecessor does not change another
+variant's image id (review 11-03: one shared list did). The list is compiled in, so the new image's id commits to it. It is source, not an environment variable or a flag, so a
 rebuild gets the same list. `first_height` is the first block the new image proves, and the last entry is the direct
 predecessor.
 
@@ -122,6 +124,14 @@ The genesis state now has `self_id` = 32 zero bytes. It used to hold the image i
 for each image and fail every handed-over chain at the genesis check. The base step never checks that field, and the
 final `self_id` check is unchanged, so nothing about which image proved the chain is lost. `anchor_id` is now one value
 per network for all images.
+
+The genesis journal is in the layout of the network's FIRST image (ChainState version 2, kind `0xC4A1_0012`), and
+`anchor_id` is carried unchanged through every handover. A later image that appends fields must therefore not recompute
+the genesis anchor in its own layout: verifiers PIN it per network (`swiftsync-verify` `Image::genesis_anchor_hex`,
+host `pinned_genesis_anchor`): mainnet `852c5c7e…390167`, signet `3b67ead0…938827`.
+
+A handover sends the predecessor receipt's own journal bytes to the guest, never a re-encoding of the decoded state,
+and needs every block file before it (the BIP30 tree is replayed, never seeded).
 
 ## 5. Lineage digest
 

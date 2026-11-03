@@ -121,7 +121,7 @@ In field order (the journal encoding is in §5 step 3):
 
 | field | meaning |
 |---|---|
-| `kind` | `0xC4A10002` (domain tag) |
+| `kind` | `0xC4A10012` (domain tag) |
 | `version` | `1`, the layout. Fields are only ever appended after it, never reordered or removed, so a reader of version n decodes the prefix it knows from any later version (HANDOVER.md §2) |
 | `tip_hash` | the chain proven: its last block's hash, internal byte order |
 | `utxo_roots`, `utxo_leaves` | Utreexo forest of the coins marked unspent-at-H, by height, each block's sorted by (txid, vout) (UTREEXO_FORMAT.md §4) |
@@ -198,12 +198,12 @@ Given a receipt R, the hints file F and the network:
    current images (round 8, scripts checked, built by `reproduce/libzync.Dockerfile`): mainnet `9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55`, signet `067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36`,
    pinned in `reproduce/LIBZYNC_IDS`. ⚠ These round-8 images predate the handover format (steps 3, 12, 13 and
    HANDOVER.md); their journals do not decode as today's `ChainState`. The ids move at the image freeze.
-2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10002`, `J.version == 2` and `J.self_id == M`. M is the **newest**
+2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10012`, `J.version >= 2` (a later version only appends fields) and `J.self_id == M`. M is the **newest**
    image: after a handover the receipt verifies against the image that continued the chain, never an earlier one.
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
    nothing about history.
-   - The genesis ChainState, in field order: `kind = 0xC4A10002`; `version = 2`; `tip_hash` = the genesis hash (internal byte
+   - The genesis ChainState, in field order: `kind = 0xC4A10012`; `version = 2`; `tip_hash` = the genesis hash (internal byte
      order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0`; `utxo_value = 0` (u64); `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
      little-endian; `height = 0`; `prev_nbits` = genesis nBits; `prev_time = epoch_start` = genesis time;
      `recent_times = [genesis time]`; `anchor_id` = 32 zero bytes; `self_id` = 32 zero bytes (eight zero words: the
@@ -218,11 +218,17 @@ Given a receipt R, the hints file F and the network:
      its elements, and an `Option` is a 0/1 word followed by the value when present.
    - `host libzync-verify` computes this itself. `scripts/libzync/genesis_anchor_id.py` computes it from this text
      alone. Test vectors, one per network for every image: mainnet
-     `5652addca32eebf2dffd4cfb6427813c2ee6c9326dd8666d2750a9a032848d46`, signet
-     `04d6826ab1cde38accd700fb284f6b99337715170c8afd3b819700e9de79e24a` (`swiftsync-verify` unit tests pin both).
+     `852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167`, signet
+     `3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827` (`swiftsync-verify` unit tests pin both).
+     These are PINNED: a chain keeps its anchor through every handover, so a later image never recomputes them in
+     its own layout (HANDOVER.md §4). Kind `0xC4A1_0002` (before the `version` field) had `5652addc…`/`04d6826a…`.
      Version 1 (block leaves without the coin state) had `b768af63…` and `c0055bc3…`.
      Before the handover format, `self_id` was M and each image had its own anchor; the round-8 vectors
      `5b2020ae…` and `636271d3…` are that old format.
+3a. **Minimum work.** `J.cum_work` must be at least Core v28's `nMinimumChainWork` for the network (mainnet
+   `0x…88e186b70e0862c193ec44d6`, signet `0x…25dbd66e58f`). Below it the proof is a valid chain from genesis but no
+   evidence it is the network's chain (a low-work fork costs little to mine): the verdict is DEMO (exit 2), not OK.
+   Step 7 (comparing with your own node) remains the strongest check.
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).

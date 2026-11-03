@@ -1,3 +1,4 @@
+//! ⚠ GUEST-COMPILED CRATE — editing this file changes METHOD_ID (it is #[path]-included into the guest).
 //! libzync hint streams: the ONE definition of what the host writes and the guest reads.
 //!
 //! One length-prefixed block of u32 words per guest run, read with a single `read_slice`:

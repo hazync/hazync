@@ -11,7 +11,8 @@ Every coin that outlives the block that creates it is **appended**, in birth ord
 perfect Merkle trees. Spending a coin **flips** its leaf in place to a spent leaf that records who spent it. Nothing
 is moved or deleted, so a coin's position never changes.
 
-The commitment is therefore the complete coin history, and it is sound **at every block**: a spend opens the coin's
+The commitment is therefore the history of every coin that outlived its block (a coin created and spent in the same
+block never enters the log), and it is sound **at every block**: a spend opens the coin's
 unspent leaf at its position against the current roots, so a coin that does not exist, or was already spent, cannot
 be spent. There is no hints file and no closing height H. Peter Todd's TXO commitments are the same idea.
 
@@ -66,7 +67,7 @@ The aggregate reads, after its hint block: `[k, (position lo, hi) × k, sibling 
 |---|---|
 | `utxo_roots`, `utxo_leaves` | the log's roots and the number of coins **ever appended** (live and spent) |
 | `utxo_value` | the satoshis of the **live** coins: previous + this block's appends − this block's flips |
-| `ss_set`, `ss_hints` | unused (0); a hints file is refused |
+| `ss_set`, `ss_hints` | unused: carried unchanged from the anchor, so 0 on a chain from genesis (what the verifiers require); a hints file is refused |
 | `profile` bit 4 | set |
 | `block_roots` | each block's leaf commits the coin state after it (HANDOVER.md §3), so a tip proof commits the log at every height |
 
@@ -79,7 +80,16 @@ From one verified proof at the tip, with a path from the host's copy of the log:
 - **C's state at an earlier height h:** a block-forest path to h's leaf, the roots that hash to its `state`, and C's
   path against those roots (the host keeps or replays the log at h).
 - **A coin's history in both directions:** backwards through each transaction's inputs (block forest + Merkle
-  branch), forwards through the spender record.
+  branch), forwards through the spender record. A coin created and spent in the same block has no leaf: that hop
+  is shown from the block itself (its Merkle branch), not from the log.
+
+What it does **not** give: non-membership. The log is in birth order, not keyed by outpoint, so "outpoint X never
+existed" or "X is not live" has no short proof. A zyncAPP proves what a coin IS (by its position), not what is absent.
+
+**Anchors and the other design.** A chain proved from an anchor (`is_base = 1`) trusts that anchor's coin state: the
+guest checks nothing about it, and the proof commits `anchor_id` = its digest, so the verifiers report such a chain
+as DEMO unless the anchor is the network's genesis. A design-B chain cannot hand over to the coin log (the profiles
+differ, HANDOVER.md §4 step 3): a coin-log chain is proved from genesis.
 
 ## 7. Cost
 

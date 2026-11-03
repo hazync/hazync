@@ -32,7 +32,7 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 // H8 domain tags — first committed field of each recursion-consumed journal (must match the guest).
 /// Mirrors the guest's CHAIN_STATE_VERSION.
 const CHAIN_STATE_VERSION: u32 = 2;
-const KIND_CHAIN: u32 = 0xC4A1_0002;
+const KIND_CHAIN: u32 = 0xC4A1_0012;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
 /// libzync agg-lite chunk journal (guest src/agg_lite.rs).
@@ -237,6 +237,25 @@ struct ChainState {
 
 // The guest's own pin file: this host and that guest cannot disagree about the lineage.
 mod handover_pin { include!("../../methods/guest/src/handover_pin.rs"); }
+// Every variant's lineage file; `pinned_lineage` picks this host's (the guest compiles only its own).
+#[path = "../../methods/guest/src/lineage/mainnet.rs"] mod lineage_mainnet;
+#[path = "../../methods/guest/src/lineage/signet.rs"] mod lineage_signet;
+#[path = "../../methods/guest/src/lineage/regtest.rs"] mod lineage_regtest;
+#[path = "../../methods/guest/src/lineage/mainnet_coinlog.rs"] mod lineage_mainnet_coinlog;
+#[path = "../../methods/guest/src/lineage/signet_coinlog.rs"] mod lineage_signet_coinlog;
+#[path = "../../methods/guest/src/lineage/regtest_coinlog.rs"] mod lineage_regtest_coinlog;
+
+/// The handovers this host's image pins (the guest's `lineage::LINEAGE`).
+fn pinned_lineage() -> &'static [handover_pin::Handover] {
+    match (methods::NETWORK, methods::COINLOG) {
+        ("signet", false) => lineage_signet::LINEAGE,
+        ("regtest", false) => lineage_regtest::LINEAGE,
+        ("signet", true) => lineage_signet_coinlog::LINEAGE,
+        ("regtest", true) => lineage_regtest_coinlog::LINEAGE,
+        (_, true) => lineage_mainnet_coinlog::LINEAGE,
+        _ => lineage_mainnet::LINEAGE,
+    }
+}
 
 fn sha256_host(b: &[u8]) -> [u8; 32] {
     use sha2::Digest;
@@ -294,7 +313,7 @@ fn time_ok(max_time: u32, now: u64) -> bool {
 fn libzync_verify_fail_hook() {
     std::panic::set_hook(Box::new(|i| {
         use std::io::Write as _;
-        let _ = writeln!(std::io::stdout(), "LIBZYNC_VERIFY_FAIL: {i}");
+        let _ = writeln!(std::io::stdout(), "LIBZYNC_VERIFY_FAIL: {}", format!("{i}").escape_debug());
         std::process::exit(1);
     }));
 }
@@ -2068,10 +2087,35 @@ fn libzync_snark_wrap_cmd(bin: &str, out: &str) {
 ///
 /// With [anchor.json] (a ChainState written by a trusted run), check 2 is against that state instead:
 /// for demonstration proofs that start mid-chain. The output says so.
+/// The genesis anchor_id pinned per network (swiftsync-verify `Image::genesis_anchor_hex`); none for regtest.
+fn pinned_genesis_anchor() -> Option<[u8; 32]> {
+    let h = match methods::NETWORK {
+        "mainnet" => "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
+        "signet" => "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
+        _ => return None,
+    };
+    Some(arr(hx(h)))
+}
+
+/// Core v28 consensus.nMinimumChainWork for this network, little-endian like cum_work (0 on regtest).
+fn min_chain_work() -> [u8; 32] {
+    let h = match methods::NETWORK {
+        "mainnet" => "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
+        "signet" => "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        _ => return [0; 32],
+    };
+    arr(rev(hx(h)))
+}
+
+/// cum_work (little-endian) >= min (little-endian).
+fn work_at_least(w: &[u8; 32], min: [u8; 32]) -> bool {
+    (0..32).rev().map(|i| w[i].cmp(&min[i])).find(|o| o.is_ne()).map_or(true, |o| o.is_gt())
+}
+
 fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     libzync_verify_fail_hook(); // also installed by the dispatcher, before the arguments are read
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt}: {e}")))
-        .unwrap_or_else(|e| panic!("{receipt}: not a receipt: {e}"));
+    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}")))
+        .unwrap_or_else(|e| panic!("{receipt:?}: not a receipt: {e}"));
     let mut fails = 0;
     let mut check = |ok: bool, what: &str| {
         println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
@@ -2087,8 +2131,13 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {}, {})", hex_id(&METHOD_ID),
         if methods::LIBZYNC { "libzync" } else { "canonical" }, methods::NETWORK,
         if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
-    let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => { println!("  [FAIL] journal is not a ChainState: {e}"); std::process::exit(1) } };
-    check(cs.kind == KIND_CHAIN && cs.version == CHAIN_STATE_VERSION && cs.self_id == METHOD_ID,
+    let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => {
+        println!("  [FAIL] journal is not a ChainState: {}", format!("{e}").escape_debug());
+        println!("LIBZYNC_VERIFY_FAIL: 1 check(s) failed");
+        std::process::exit(1)
+    } };
+    // A later version only appends fields (HANDOVER.md §2): this reader checks the prefix it knows.
+    check(cs.kind == KIND_CHAIN && cs.version >= CHAIN_STATE_VERSION && cs.self_id == METHOD_ID,
           &format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
     // The profile is committed by the image itself (bits from the compiled code, never from input), so the
     // proof states what was checked; it must also be what this verifier was built to accept.
@@ -2108,23 +2157,33 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     let (want_anchor, what) = match anchor {
         None => (state_journal_bytes(&genesis_anchor()), "genesis".to_string()),
         Some(p) => {
-            let a: ChainState = serde_json::from_str(&std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
-            (state_journal_bytes(&a), format!("the GIVEN anchor at height {} ({p}) -- NOT genesis", a.height))
+            let a: ChainState = serde_json::from_str(&std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{p:?}: {e}"))).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+            (state_journal_bytes(&a), format!("the GIVEN anchor at height {} ({p:?}) -- NOT genesis", a.height))
         }
     };
-    let want_anchor = bitcoin::hashes::sha256d::Hash::hash(&want_anchor).to_byte_array();
+    let mut want_anchor = bitcoin::hashes::sha256d::Hash::hash(&want_anchor).to_byte_array();
+    // Genesis anchors are PINNED per network (as swiftsync-verify's Image::genesis_anchor_hex): a chain keeps its
+    // anchor_id across every handover, so a later image must not recompute it in its own layout (review 11-03).
+    if anchor.is_none() {
+        if let Some(p) = pinned_genesis_anchor() {
+            assert_eq!(want_anchor, p, "this layout's genesis anchor != the pinned one: update the pin only with a new network chain");
+            want_anchor = p;
+        }
+    }
     check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
+    // Core's nMinimumChainWork (v28): below it, a valid chain from genesis is no evidence of the network's chain.
+    let low_work = !work_at_least(&cs.cum_work, min_chain_work());
     // The coin log (COINLOG.md) is sound at every block: no hints file, nothing to close. The SwiftSync fields stay zero.
     if methods::COINLOG {
         check(hints == "-", "a coin-log proof takes no hints file (pass '-')");
         check(cs.ss_set == 0 && cs.ss_hints == [0; 32], "SwiftSync fields unused (ss_set == 0, ss_hints == 0)");
     }
-    let raw = if methods::COINLOG { Vec::new() } else { std::fs::read(hints).unwrap_or_else(|e| panic!("{hints}: {e}")) };
+    let raw = if methods::COINLOG { Vec::new() } else { std::fs::read(hints).unwrap_or_else(|e| panic!("{hints:?}: {e}")) };
     if !methods::COINLOG {
-    let file = hintsfile::Hintsfile::from_reader(&mut raw.as_slice()).unwrap_or_else(|e| panic!("{hints}: {e}"));
+    let file = hintsfile::Hintsfile::from_reader(&mut raw.as_slice()).unwrap_or_else(|e| panic!("{hints:?}: {e}"));
     {
         use sha2::Digest;
-        println!("  file: {hints}, {} bytes, sha256 {}", raw.len(), hex(&sha2::Sha256::digest(&raw)));
+        println!("  file: {hints:?}, {} bytes, sha256 {}", raw.len(), hex(&sha2::Sha256::digest(&raw)));
     }
     // The proof covers the DECODED lists; only a canonically encoded file is unambiguously those lists.
     let canon = libzync::host::canonical_bytes(&file);
@@ -2134,31 +2193,37 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     check(cs.ss_set == 0, "SwiftSync total is the identity (ss_set == 0)");
     let fh = match libzync::host::file_hash(&file) {
         Ok(h) => h,
-        Err(e) => { check(false, &format!("{hints} is well formed: {e}")); [0u8; 32] }
+        Err(e) => { check(false, &format!("{hints:?} is well formed: {e}")); [0u8; 32] }
     };
-    check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints}", hex(&fh)));
+    check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints:?}", hex(&fh)));
     }
     let _ = raw;
     // As swiftsync-verify: a root exactly at each set bit of block_leaves (HANDOVER.md §6).
     let shape = (0..64).all(|i| ((cs.block_leaves >> i) & 1 == 1) == cs.block_roots.get(i).copied().flatten().is_some());
     check(cs.block_leaves == cs.height as u64 + 1 && shape, &format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
-    let full = lineage_of(handover_pin::LINEAGE);
-    check(cs.lineage == [0; 32] || cs.lineage == full, &format!("lineage {} is this image's ({} handover(s) pinned)", hex(&cs.lineage), handover_pin::LINEAGE.len()));
+    let full = lineage_of(pinned_lineage());
+    check(cs.lineage == [0; 32] || cs.lineage == full, &format!("lineage {} is this image's ({} handover(s) pinned)", hex(&cs.lineage), pinned_lineage().len()));
     println!("  chain: tip {} (display order {}), cum_work 0x{}", hex(&cs.tip_hash),
              hex(&rev(cs.tip_hash.to_vec())), hex(&rev(cs.cum_work.to_vec())));
     println!("  {}: {} coins, {} sat, roots {:?}", if methods::COINLOG { "coin log (every coin ever appended)" } else { "UTXO set at H" }, cs.utxo_leaves, cs.utxo_value,
              cs.utxo_roots.iter().map(|x| x.map(|h| hex(&h[..8]))).collect::<Vec<_>>());
+    println!("  cum_work 0x{} {} Core's nMinimumChainWork 0x{}", hex(&rev(cs.cum_work.to_vec())), if low_work { "<" } else { ">=" },
+             hex(&rev(min_chain_work().to_vec())));
+    if fails == 0 && anchor.is_none() && low_work {
+        println!("LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height {}, but below Core's minimum chainwork for {}: not shown to be the network's chain", cs.height, methods::NETWORK);
+        std::process::exit(2);
+    }
     if fails == 0 && anchor.is_some() {
         // Never the OK line: the base state was the prover's (or a sweep's) assertion, not genesis, so the
         // proof says nothing about history before it (review 2).
-        println!("LIBZYNC_VERIFY_DEMO: consistent with {hints} at height {} FROM THE GIVEN ANCHOR ONLY -- not a proof of the file", cs.height);
+        println!("LIBZYNC_VERIFY_DEMO: consistent with {hints:?} at height {} FROM THE GIVEN ANCHOR ONLY -- not a proof of the file", cs.height);
         std::process::exit(2);
     } else if fails == 0 {
         // The verdict line names an assumevalid profile, so a reader of this line alone (or a script) cannot
         // take a scripts-skipped proof for a full one (review 5).
         if methods::COINLOG { println!("LIBZYNC_VERIFY_OK: the chain and its coin log are proven at height {}{}", cs.height,
                  if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" }); return; }
-        println!("LIBZYNC_VERIFY_OK: {hints} is proven correct for this chain at height {}{}", cs.height,
+        println!("LIBZYNC_VERIFY_OK: {hints:?} is proven correct for this chain at height {}{}", cs.height,
                  if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" });
     } else {
         println!("LIBZYNC_VERIFY_FAIL: {fails} check(s) failed");
@@ -3264,16 +3329,20 @@ fn write_aggregate_env(
     anchor: &ChainState,
     w: &BlockWitness,
 ) {
-    write_aggregate_env_ex(b, receipts, anchor, w, 1);
+    write_aggregate_env_ex(b, receipts, anchor, None, w, 1);
 }
 
 /// `step` is the guest's is_base. 1: a base step on `anchor`. 0: `anchor` is the PREVIOUS block's committed chain
 /// state, whose receipt the caller has added as an assumption -- the guest verifies it recursively instead of trusting
 /// it. 2: the same, with a receipt of the predecessor image (a handover).
+/// `prev_journal`: for steps 0 and 2, the previous receipt's journal BYTES, sent as they are. Re-encoding the decoded
+/// state through this host's struct only round-trips while the layouts match, which is exactly what can change at a
+/// handover (review 11-03), and the guest's env::verify needs the receipt's own bytes.
 fn write_aggregate_env_ex(
     b: &mut risc0_zkvm::ExecutorEnvBuilder<'_>,
     receipts: &[risc0_zkvm::Receipt],
     anchor: &ChainState,
+    prev_journal: Option<&[u8]>,
     w: &BlockWitness,
     step: u32,
 ) {
@@ -3297,12 +3366,12 @@ fn write_aggregate_env_ex(
             b.write(&(r.journal.bytes.len() as u32)).unwrap();
             b.write_slice(&padded(&r.journal.bytes));
         }
-        let sj = state_journal_bytes(anchor);
+        let sj = prev_journal.map(|j| j.to_vec()).unwrap_or_else(|| state_journal_bytes(anchor));
         b.write(&(sj.len() as u32)).unwrap();
         b.write_slice(&padded(&sj));
     } else {
         for r in receipts { b.write(&r.journal.bytes).unwrap(); }
-        b.write(&state_journal_bytes(anchor)).unwrap();
+        b.write(&prev_journal.map(|j| j.to_vec()).unwrap_or_else(|| state_journal_bytes(anchor))).unwrap();
     }
     b.write(w).unwrap();
     // Negative-test hook (test-only, inert unless set): send is_base = 2, which the guest must refuse.
@@ -3837,7 +3906,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     // HAZYNC_HANDOVER_RECEIPT=<receipt>: the first block is a handover step on the pinned predecessor's receipt. The
     // anchor argument is unused (pass the word `handover`): the chain state comes from the verified receipt.
     let handover: Option<(Receipt, ChainState)> = std::env::var("HAZYNC_HANDOVER_RECEIPT").ok().map(|p| {
-        let last = handover_pin::LINEAGE.last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
+        let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
         let r: Receipt = bincode::deserialize(&std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
         r.verify(last.image).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
         let st: ChainState = r.journal.decode().expect("ChainState");
@@ -3894,6 +3963,9 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
     // written to anchor_effective.json, which is what libzync-verify must be given.
     let replay = (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists());
+    // A handover continues a proved chain: its BIP30 tree must be replayed and equal the receipt's, never seeded (the
+    // seeding path rewrites smt_root, and the state sent would no longer be the predecessor's journal).
+    assert!(replay || handover.is_none(), "a handover needs every block file 1..{} to replay the BIP30 tree", lo - 1);
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
@@ -4010,7 +4082,7 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
                 // Negative test: a handover with the predecessor's journal and no receipt behind it.
                 if std::env::var("HAZYNC_TEST_HANDOVER").as_deref() != Ok("no_receipt") { b.add_assumption(p.clone()); }
             }
-            write_aggregate_env_ex(b, &chunks, &prev, &w, step);
+            write_aggregate_env_ex(b, &chunks, &prev, prev_rcpt.as_ref().map(|p| p.journal.bytes.as_slice()), &w, step);
             libzync_agg_tail(b, &w);
         };
         // collect pass: the leaves the ECMH hints are for (and, for a coin-log image, the log's spends and appends)

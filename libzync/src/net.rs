@@ -1,3 +1,4 @@
+//! ⚠ GUEST-COMPILED CRATE — editing this file changes METHOD_ID (it is #[path]-included into the guest).
 //! Network parameters the host and guest both need. The guest asserts every value here against the
 //! one Bitcoin Core compiles from its own chainparams.cpp (`assert_core_constants`), so a typo here
 //! stops the guest on its first run rather than proving the wrong rules.

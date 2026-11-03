@@ -1,3 +1,4 @@
+//! ⚠ GUEST-COMPILED CRATE — editing this file changes METHOD_ID (it is #[path]-included into the guest).
 //! The coin log: libzync's UTXO commitment when built with `HAZYNC_COINLOG=1` (experimental; design B's SwiftSync
 //! forest otherwise). Shared by the host (this crate) and the guest (included by path), so both run this code.
 //!
@@ -313,7 +314,8 @@ pub fn encode_witness(positions: &[u64], siblings: &[H]) -> Vec<u32> {
 
 pub fn decode_witness(w: &[u32]) -> Option<(Vec<u64>, Vec<W>)> {
     let k = *w.first()? as usize;
-    let rest = w.get(1 + 2 * k..)?;
+    // Checked: on rv32 a huge k would wrap 1 + 2k (review 11-03); a refusal, not a capacity panic.
+    let rest = w.get(k.checked_mul(2)?.checked_add(1)?..)?;
     if rest.len() % 8 != 0 {
         return None;
     }
@@ -513,6 +515,8 @@ mod tests {
         // the witness codec round-trips
         let enc = encode_witness(&[3, 1 << 40], &[h(1, 2), h(3, 4)]);
         assert_eq!(decode_witness(&enc), Some((alloc::vec![3, 1 << 40], alloc::vec![w_of(&h(1, 2)), w_of(&h(3, 4))])));
+        assert_eq!(decode_witness(&[u32::MAX]), None);
+        assert_eq!(decode_witness(&[]), None);
         // the spender is part of the new root: the same spend by another input gives another root
         let (mut r1, mut n1) = (r0.clone(), n0);
         apply(&mut r1, &mut n1, &ws(&sp), &[], &wv(&st.witness(&sp))).unwrap();

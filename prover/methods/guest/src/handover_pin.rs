@@ -1,6 +1,7 @@
-// The image lineage this guest continues, oldest first. EMPTY means this image starts its own chain at genesis.
+// The handover format: the Handover entry, the lineage digest, the block-forest leaf and the coin-state digest. The
+// lineage itself (the handovers an image pins) is in src/lineage/<variant>.rs, one file per image variant.
 //
-// This file is source on purpose, not an environment variable or a build flag: it is compiled into the guest, so
+// The lineage is source on purpose, not an environment variable or a build flag: it is compiled into the guest, so
 // an image's id commits to every image and height listed here, and anyone rebuilding the image gets the same list.
 // The host and verifier include the same text. docs/libzync/HANDOVER.md says when an entry may be added: a rule
 // change, yes; a soundness fix in the listed image, NO (that chain cannot be inherited; re-prove it).
@@ -13,9 +14,8 @@ pub struct Handover {
     pub first_height: u32,
 }
 
-pub const LINEAGE: &[Handover] = &[];
-
-/// Domain tags. 0x00 coin leaf and 0x01 forest node are `utreexo.rs`; 0x11 is the coinbase SMT; 0x04 below.
+/// Domain tags. 0x00 coin leaf and 0x01 forest node are `utreexo.rs`; 0x10 / 0x11 are the coinbase SMT's leaf / node;
+/// 0x04 below. The coin log uses its own IVs (libzync/src/coinlog.rs).
 pub const TAG_BLOCK_LEAF: u8 = 0x02;
 pub const TAG_LINEAGE: u8 = 0x03;
 

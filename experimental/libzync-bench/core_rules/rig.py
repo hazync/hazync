@@ -446,9 +446,13 @@ def c_bip30_child_of_repeat(c): # something new from the repeated coinbase: noth
 
 # Core's reason, and what the guest must say for its own code. A rule that is Core's text reports Core's string, so
 # those must match exactly; a rule of ours reports its failing check. A refusal for another reason is REASON, not AGREE.
-OURS = {"bad-cb-missing": r"C abort|REJECT|bv=false", "bad-cb-multiple": r"block INVALID|REJECT", "bad-cb-amount": "subsidy=false",
-        "bad-txnmrklroot": "merkle=false", "bad-txns-duplicate": r"REJECT|merkle=false", "bad-txns-inputs-missingorspent": "REJECT",
-        "bad-blk-sigops": "sigops=false", "bad-blk-length": r"core-reject: bad-blk-length|core-reject: bad-txns-oversize|weight",
+# Each pattern names the guest's OWN check for that rule, never a generic rejection: a loose pattern turned a reason
+# mismatch into AGREE (review 11-03: cb_multiple was refused for bad-witness-merkle-match and still read AGREE).
+# ⚠ bip30=false is the BIP30 tree's verdict, which also fails on a host-side SMT witness mismatch.
+OURS = {"bad-cb-missing": r"C abort|bv=false", "bad-cb-multiple": r"core-reject: bad-cb-multiple", "bad-cb-amount": "subsidy=false",
+        "bad-txnmrklroot": "merkle=false", "bad-txns-duplicate": "merkle=false",
+        "bad-txns-inputs-missingorspent": r"REJECT (coin log: OldRoot|a coin is spent before|a coin created in this block is spent twice|the same external coin is spent twice)",
+        "bad-blk-sigops": "sigops=false", "bad-blk-length": r"core-reject: bad-blk-length|core-reject: bad-txns-oversize|weight=false",
         "bad-txns-BIP30": "bip30=false", "high-hash": "pow=false", "prev-blk-not-found": "ph=false", "bad-prevblk": "ph=false"}
 
 

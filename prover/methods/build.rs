@@ -117,8 +117,9 @@ fn main() {
         // image: HAZYNC_GUEST_PIN_DIR holds its METHOD_ID and GUEST_ELF_SHA256, and HAZYNC_LIBZYNC /
         // HAZYNC_NETWORK must say what it is, so the host writes the stream it reads.
         let pins = std::env::var("HAZYNC_GUEST_PIN_DIR").ok();
-        assert!(!(libzync || signet) || pins.is_some(),
-                "HAZYNC_GUEST_ELF with HAZYNC_LIBZYNC/HAZYNC_NETWORK needs HAZYNC_GUEST_PIN_DIR (the libzync image's pins)");
+        assert!(!(libzync || signet || assumevalid) || pins.is_some(),
+                "HAZYNC_GUEST_ELF with HAZYNC_LIBZYNC/HAZYNC_NETWORK/HAZYNC_NO_SCRIPTS needs HAZYNC_GUEST_PIN_DIR (the image's pins, \
+                 including its PROFILE): the canonical pins describe a scripts-checked image (review 11-03)");
         // The pin directory names the image's profile too, so the labels the host trusts (LIBZYNC, NETWORK,
         // ASSUMEVALID) are tied to the pinned bytes instead of to this shell's variables (review 2).
         // The coin log is part of the profile: a coin-log image's pins say `coinlog=1`, and HAZYNC_COINLOG must agree,
@@ -126,6 +127,7 @@ fn main() {
         let coinlog = std::env::var("HAZYNC_COINLOG").as_deref() == Ok("1");
         assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
         if let Some(d) = pins.as_deref() {
+            println!("cargo:rerun-if-changed={d}/PROFILE");
             let want = format!("libzync={} assumevalid={} network={}{}", libzync as u8, assumevalid as u8,
                                network, if coinlog { " coinlog=1" } else { "" });
             let got = std::fs::read_to_string(Path::new(d).join("PROFILE"))

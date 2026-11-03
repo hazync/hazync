@@ -14,6 +14,11 @@
 //! `--handover <image hex>:<first height>` (repeat, oldest first): the lineage an image pins, for a reader who rebuilt
 //! one that pins any (docs/libzync/HANDOVER.md).
 //!
+//! `--coinlog`: the image is a coin-log build (docs/libzync/COINLOG.md, profile bit 4). It has no hints file: pass `-`.
+//!
+//! A proof whose chainwork is below Core's `nMinimumChainWork` for the network is at best DEMO (exit 2): a valid chain
+//! from genesis, but a low-work fork costs little to mine, so it is no evidence of the network's chain.
+//!
 //! `<receipt>` may also be a proof bundle (`.sspf`, docs/libzync/PROOF_BUNDLE.md); its header is then checked
 //! against the verified result. `swiftsync-verify [flags] bundle <receipt> <file.hints> <out.sspf>` writes one,
 //! and refuses a receipt that does not verify.
@@ -22,7 +27,8 @@ use std::process::{exit, Command};
 use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inputs, Verdict, BUNDLE_MAGIC};
 
 fn usage() -> ! {
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] <receipt|bundle.sspf> <file.hints>");
+    println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] <receipt|bundle.sspf> <file.hints | - with --coinlog>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] [--anchor state.json] bundle <receipt> <file.hints> <out.sspf>");
     exit(1);
 }
@@ -32,17 +38,23 @@ fn fail(msg: &str) -> ! {
     exit(1);
 }
 
+/// A path as printed: escaped, so a file name cannot carry a newline or look like a verdict line of its own.
+fn esc(p: &str) -> String {
+    format!("{p:?}")
+}
+
 fn main() {
     // Any panic is a FAIL with exit 1: the documented outcomes are 0, 2 and 1 only.
     std::panic::set_hook(Box::new(|i| {
         use std::io::Write as _;
-        let _ = writeln!(std::io::stdout(), "SWIFTSYNC_VERIFY_FAIL: {i}");
+        let _ = writeln!(std::io::stdout(), "SWIFTSYNC_VERIFY_FAIL: {}", format!("{i}").escape_debug());
         exit(1);
     }));
     let mut args = std::env::args().skip(1);
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
     let mut now_arg: Option<String> = None;
     let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
+    let mut coinlog = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -50,6 +62,7 @@ fn main() {
             "--bitcoin-cli" => cli = Some(args.next().unwrap_or_else(|| usage())),
             "--image" => image_hex = Some(args.next().unwrap_or_else(|| usage())),
             "--now" => now_arg = Some(args.next().unwrap_or_else(|| usage())),
+            "--coinlog" => coinlog = true,
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
                 let bad = || -> ! { fail(&format!("--handover {v}: want <64 hex digits>:<height>")) };
@@ -77,9 +90,20 @@ fn main() {
     if !handovers.is_empty() {
         image = image.with_lineage(handovers);
     }
-    let read = |p: &str| std::fs::read(p).unwrap_or_else(|e| fail(&format!("{p}: {e}")));
+    if coinlog {
+        image = image.with_coinlog();
+    }
+    // `-` is "no hints file", and only a coin-log image has none.
+    let read = |p: &str| -> Vec<u8> {
+        if p == "-" {
+            if !coinlog { fail("'-' (no hints file) is only for a coin-log image (--coinlog)") }
+            return Vec::new();
+        }
+        std::fs::read(p).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(p))))
+    };
+    let anchor_given = anchor.is_some();
     let anchor: Option<ChainState> = anchor.map(|p| {
-        serde_json::from_slice(&read(&p)).unwrap_or_else(|e| fail(&format!("{p}: not a ChainState: {e}")))
+        serde_json::from_slice(&read(&p)).unwrap_or_else(|e| fail(&format!("{}: not a ChainState: {e}", esc(&p))))
     });
     let mut now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
     // For testing time-too-new. Only an earlier clock is accepted: it can make the check fail, never make it pass.
@@ -93,15 +117,15 @@ fn main() {
     if make_bundle {
         let [receipt, hints, out] = files.as_slice() else { usage() };
         let b = Bundle::make(&read(receipt), &read(hints), image, anchor, now).unwrap_or_else(|e| fail(&e));
-        std::fs::write(out, b.encode()).unwrap_or_else(|e| fail(&format!("{out}: {e}")));
-        println!("SWIFTSYNC_BUNDLE_WRITTEN: {out} (height {}, image {})", b.stop_height, image.method_id_hex);
+        std::fs::write(out, b.encode()).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(out))));
+        println!("SWIFTSYNC_BUNDLE_WRITTEN: {} (height {}, image {})", esc(out), b.stop_height, image.method_id_hex);
         exit(0);
     }
     let [receipt, hints] = files.as_slice() else { usage() };
     let (receipt_bytes, hints_bytes) = (read(receipt), read(hints));
     let mut rep = if receipt_bytes.starts_with(BUNDLE_MAGIC) {
-        let b = Bundle::decode(&receipt_bytes).unwrap_or_else(|e| fail(&format!("{receipt}: {e}")));
-        println!("  {receipt} is a proof bundle; its header is checked against the verified result");
+        let b = Bundle::decode(&receipt_bytes).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(receipt))));
+        println!("  {} is a proof bundle; its header is checked against the verified result", esc(receipt));
         check_bundle(&b, &hints_bytes, image, anchor, now)
     } else {
         verify(&Inputs { receipt: &receipt_bytes, hints: &hints_bytes, image, anchor, now })
@@ -130,14 +154,23 @@ fn main() {
     }
     if let Some(cs) = &rep.state {
         println!("  chain: tip {} at height {}, cum_work 0x{}", display(&cs.tip_hash), cs.height, work_hex(&cs.cum_work));
-        println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);
+        if coinlog {
+            println!("  coin log: {} coins ever appended, {} sat live (COINLOG.md)", cs.utxo_leaves, cs.utxo_value);
+        } else {
+            println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);
+        }
     }
     let step7 = if tip_checked { "" } else { "; step 7 NOT run: check the tip and work above against your own node" };
     let av = rep.state.as_ref().map_or(false, |c| c.profile & swiftsync_verify::PROFILE_ASSUMEVALID != 0);
+    let h = rep.state.as_ref().map_or(0, |c| c.height);
+    let avs = if av { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" };
+    let what = if coinlog { "the chain and its coin log".to_string() } else { esc(hints) };
     match rep.verdict {
-        Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: {hints} is proven correct for the chain above at height {}{}{step7}",
-            rep.state.as_ref().map_or(0, |c| c.height), if av { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" }),
-        Verdict::Demo => println!("SWIFTSYNC_VERIFY_DEMO: consistent with {hints} FROM THE GIVEN ANCHOR ONLY -- not a proof of the file{step7}"),
+        Verdict::Ok if coinlog => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{step7}"),
+        Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: {} is proven correct for the chain above at height {h}{avs}{step7}", esc(hints)),
+        Verdict::Demo if rep.low_work && anchor_given => println!("SWIFTSYNC_VERIFY_DEMO: {what}: FROM THE GIVEN ANCHOR ONLY, and below Core's minimum chainwork{step7}"),
+        Verdict::Demo if rep.low_work => println!("SWIFTSYNC_VERIFY_DEMO: {what}: a valid chain from genesis, but below Core's minimum chainwork for {}: not shown to be the network's chain{step7}", image.network),
+        Verdict::Demo => println!("SWIFTSYNC_VERIFY_DEMO: consistent with {what} FROM THE GIVEN ANCHOR ONLY -- not a proof{step7}"),
         Verdict::Fail => println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|(ok, _)| !ok).count()),
     }
     exit(rep.verdict.exit_code());

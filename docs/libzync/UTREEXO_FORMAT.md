@@ -56,9 +56,12 @@ An output of a block at height h becomes a leaf if and only if all of these hold
 Leaves are added block by block, in height order. Within a block, the block's surviving coins are sorted by
 **(txid, vout)**: the txid compared as 32 bytes in internal byte order (as in the outpoint), then `vout` as a number.
 
-This is Bitcoin Core's own coin-key order (`'C' ‖ txid ‖ VARINT(vout)` in the chainstate database), the order
-`dumptxoutset` writes. A Core snapshot carries each coin's height, so it gives the forest order with no block data:
-a node that has only synced headers can check a snapshot against a proof (`utxo_snapshot_check.py`, §7).
+This is NOT quite Bitcoin Core's coin-key order: Core's chainstate key is `'C' ‖ txid ‖ VARINT(vout)`, compared as
+bytes, and its VARINT does not sort numerically past 16,511 (16,512 encodes as `808000`, before 16,511's `ff7f`).
+`dumptxoutset` writes in Core's order, so a reader must **re-sort each block's coins by (txid, vout as a number)**;
+the two orders differ only when one transaction keeps more than 16,512 unspent outputs. A Core snapshot carries
+each coin's height, so it gives the forest order with no block data: a node that has only synced headers can check a
+snapshot against a proof (`utxo_snapshot_check.py` re-sorts, §7).
 
 The hints file's bits stay in block order (transactions in block order, outputs in `vout` order, skipped outputs
 taking no position); only the forest is sorted. Within one block no two transactions share a txid (the guest refuses

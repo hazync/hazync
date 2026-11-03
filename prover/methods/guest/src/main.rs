@@ -33,6 +33,25 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod utreexo;
 mod handover_pin;
+// The lineage this image variant pins (src/lineage/): only the variant's own file is compiled in.
+#[cfg(all(not(feature = "signet"), not(feature = "regtest"), not(feature = "coinlog")))]
+#[path = "lineage/mainnet.rs"]
+mod lineage;
+#[cfg(all(feature = "signet", not(feature = "coinlog")))]
+#[path = "lineage/signet.rs"]
+mod lineage;
+#[cfg(all(feature = "regtest", not(feature = "coinlog")))]
+#[path = "lineage/regtest.rs"]
+mod lineage;
+#[cfg(all(not(feature = "signet"), not(feature = "regtest"), feature = "coinlog"))]
+#[path = "lineage/mainnet_coinlog.rs"]
+mod lineage;
+#[cfg(all(feature = "signet", feature = "coinlog"))]
+#[path = "lineage/signet_coinlog.rs"]
+mod lineage;
+#[cfg(all(feature = "regtest", feature = "coinlog"))]
+#[path = "lineage/regtest_coinlog.rs"]
+mod lineage;
 mod script_flags;
 // libzync: the hint wire format, the SwiftSync hint hash and the network parameters -- the SAME files
 // the host compiles (libzync crate), included by path for the reason coinbase-smt is (hazync#88).
@@ -116,7 +135,9 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 // aborts and commits no self_id) or a RangeState/ChunkOut could in principle be laundered in where a
 // ChainState is expected, if its bytes happened to decode as one. Committing a distinct constant first
 // and asserting it on every decode makes cross-mode confusion impossible.
-const KIND_CHAIN: u32 = 0xC4A1_0002;
+// 0xC4A1_0012 since the layout gained `version` (11-03 review): under the old 0xC4A1_0002 the word now read as
+// `version` was tip_hash[0], so an old journal could pass a version check 1 time in 256.
+const KIND_CHAIN: u32 = 0xC4A1_0012;
 /// ChainState layout version (docs/libzync/HANDOVER.md §2). Fields after `version` are only ever APPENDED, never
 /// reordered or removed, so a reader (a zyncAPP, a verifier) built for version n decodes the prefix it knows from any
 /// later version: risc0's serde reads fields in order and ignores trailing words.
@@ -1400,7 +1421,7 @@ struct ChainState {
     utxo_roots: Vec<Option<[u8; 32]>>,
     utxo_leaves: u64,
     // libzync: the satoshis held by the coin forest's leaves (design B: the coins unspent at H, so at H this is the
-    // UTXO set's total amount, Core's `gettxoutsetinfo` total_amount). Survivors' amounts only; never decreases.
+    // UTXO set's total amount, Core's `gettxoutsetinfo` total_amount). Design B: survivors' amounts only, never decreases; coin log: the live coins' total, down by each spend.
     utxo_value: u64,
     cum_work: [u8; 32], // cumulative chainwork (256-bit accumulator)
     height: u32,
@@ -1449,7 +1470,7 @@ fn sha256_guest(b: &[u8]) -> [u8; 32] {
     Sha256::digest(b).into()
 }
 
-/// The lineage digest of `list`, an initial slice of handover_pin::LINEAGE.
+/// The lineage digest of `list`, an initial slice of lineage::LINEAGE.
 fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
     let mut l = [0u8; 32];
     for h in list { l = sha256_guest(&handover_pin::lineage_preimage(&l, h)); }
@@ -2152,7 +2173,7 @@ fn aggregate() {
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
     // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
-    let pred = handover_pin::LINEAGE.last().filter(|_| is_base == 2);
+    let pred = lineage::LINEAGE.last().filter(|_| is_base == 2);
     assert!(is_base != 2 || pred.is_some(), "handover: this image has no predecessor");
     if let Some(p) = pred { env::verify(p.image, &prev_journal).expect("predecessor chain proof invalid"); }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
@@ -2173,8 +2194,8 @@ fn aggregate() {
         assert!(prev.profile == chain_profile(), "handover: profile mismatch");
         assert!(w.height == p.first_height, "handover: height {} != pinned {}", w.height, p.first_height);
         // The predecessor's own lineage must be the rest of the pinned list, so the list cannot misstate history.
-        let n = handover_pin::LINEAGE.len();
-        assert!(prev.lineage == lineage_of(&handover_pin::LINEAGE[..n - 1]), "handover: predecessor lineage mismatch");
+        let n = lineage::LINEAGE.len();
+        assert!(prev.lineage == lineage_of(&lineage::LINEAGE[..n - 1]), "handover: predecessor lineage mismatch");
     }
     // #1: bind the block's height to the real chain height (same reason as chain_step — otherwise the
     // segmented path validates flags/subsidy at an attacker-chosen height). Also closes half of #2: the
@@ -2253,7 +2274,7 @@ fn aggregate() {
     };
     #[cfg(not(feature = "libzync"))]
     let (block_roots, block_leaves) = (prev.block_roots.clone(), prev.block_leaves);
-    let lineage = if pred.is_some() { lineage_of(handover_pin::LINEAGE) } else { prev.lineage };
+    let lineage = if pred.is_some() { lineage_of(lineage::LINEAGE) } else { prev.lineage };
     env::commit(&ChainState {
         kind: KIND_CHAIN, version: CHAIN_STATE_VERSION,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,

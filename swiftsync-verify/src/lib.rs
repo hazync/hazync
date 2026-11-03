@@ -25,6 +25,9 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_231_006_505,
         genesis_bits: 0x1d00_ffff,
         genesis_work: 4_295_032_833,
+        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (mainnet).
+        min_work_hex: "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
+        genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
         lineage: &[],
     },
     Image {
@@ -35,11 +38,14 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_598_918_400,
         genesis_bits: 0x1e03_77ae,
         genesis_work: 4_838_420,
+        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (default signet).
+        min_work_hex: "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
         lineage: &[],
     },
 ];
 
-pub const KIND_CHAIN: u32 = 0xC4A1_0002;
+pub const KIND_CHAIN: u32 = 0xC4A1_0012;
 /// The ChainState layout this crate reads (the guest's CHAIN_STATE_VERSION). Later versions only append fields.
 pub const CHAIN_STATE_VERSION: u32 = 2;
 pub const PROFILE_LIBZYNC: u32 = 1;
@@ -60,6 +66,15 @@ pub struct Image {
     pub genesis_bits: u32,
     /// Core's GetBlockProof(genesis_bits) = 2^256 / (target + 1); checked by the unit test.
     pub genesis_work: u128,
+    /// Core's `nMinimumChainWork` for the network, 64 hex digits big-endian as chainparams writes it. A proof below it is
+    /// a valid chain from genesis but no evidence that it is THE chain (a low-work fork costs little to mine), so the
+    /// verdict is at best `Demo`.
+    pub min_work_hex: &'static str,
+    /// The network's genesis `anchor_id`, PINNED: dsha256 of the genesis ChainState journal in the layout of the first
+    /// image of the network's chain (version 2, kind 0xC4A1_0012). A chain keeps its anchor_id across every handover,
+    /// including one that appends fields, so a later reader must not recompute it in its own layout (review 11-03).
+    /// The unit test `genesis_anchors_are_pinned` checks it against [`genesis_anchor`].
+    pub genesis_anchor_hex: &'static str,
     /// The handovers this image's source pins, oldest first (HANDOVER.md). A proof by this image carries either a
     /// zero lineage (one image since genesis) or the digest of exactly this list.
     pub lineage: &'static [Handover],
@@ -78,6 +93,10 @@ impl Image {
     /// The same image with a stated lineage: for a reader who rebuilt an image that pins one.
     pub fn with_lineage(&'static self, list: Vec<Handover>) -> &'static Image {
         Box::leak(Box::new(Image { lineage: Box::leak(list.into_boxed_slice()), ..*self }))
+    }
+    /// The same image built as the coin log (profile bit 4, docs/libzync/COINLOG.md): no hints file.
+    pub fn with_coinlog(&'static self) -> &'static Image {
+        Box::leak(Box::new(Image { profile: self.profile | PROFILE_COINLOG, ..*self }))
     }
     pub fn method_id(&self) -> Digest {
         Digest::from_bytes(hex32(self.method_id_hex).expect("IMAGES holds valid hex"))
@@ -252,6 +271,8 @@ impl Verdict {
 
 pub struct Report {
     pub checks: Vec<(bool, String)>,
+    /// The chain's work is below the image's `min_work_hex` (the reason for a `Demo` verdict without an anchor).
+    pub low_work: bool,
     /// The decoded journal, when the receipt held one.
     pub state: Option<ChainState>,
     pub verdict: Verdict,
@@ -278,7 +299,7 @@ pub struct Inputs<'a> {
 }
 
 pub fn verify(inp: &Inputs) -> Report {
-    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail };
+    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false };
     let m = inp.image.method_id();
 
     // Steps 1 and 8: a real proof of this image.
@@ -304,7 +325,8 @@ pub fn verify(inp: &Inputs) -> Report {
             return rep;
         }
     };
-    rep.check(cs.kind == KIND_CHAIN && cs.version == CHAIN_STATE_VERSION && cs.self_id == words(&m),
+    // A later version only appends fields (HANDOVER.md §2), so this reader checks the prefix it knows.
+    rep.check(cs.kind == KIND_CHAIN && cs.version >= CHAIN_STATE_VERSION && cs.self_id == words(&m),
               format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
 
     // Step 9: what the image checked.
@@ -327,10 +349,10 @@ pub fn verify(inp: &Inputs) -> Report {
 
     // Step 3: anchored at genesis (or at the supplied state, which can only ever give Demo).
     let (want, what) = match &inp.anchor {
-        None => (genesis_anchor(inp.image), "genesis".to_string()),
-        Some(a) => (a.clone(), format!("the GIVEN anchor at height {} -- NOT genesis", a.height)),
+        None => (hex32(inp.image.genesis_anchor_hex).unwrap_or([0xff; 32]), "genesis".to_string()),
+        Some(a) => (anchor_id(a), format!("the GIVEN anchor at height {} -- NOT genesis", a.height)),
     };
-    rep.check(cs.anchor_id == anchor_id(&want), format!("anchor_id is {what}"));
+    rep.check(cs.anchor_id == want, format!("anchor_id is {what}"));
 
     // Step 10, then 4-6: the file. A coin-log image has none: its commitment is sound at every block.
     if inp.image.profile & PROFILE_COINLOG != 0 {
@@ -349,9 +371,15 @@ pub fn verify(inp: &Inputs) -> Report {
         }
     }
     }
+    // Not a failed check: the chain may be valid, it just does not carry the work that makes it the network's chain.
+    let enough_work = work_at_least(&cs.cum_work, inp.image.min_work_hex);
+    rep.checks.push((true, format!("cum_work 0x{} {} Core's nMinimumChainWork 0x{}{}", work_be_hex(&cs.cum_work),
+        if enough_work { ">=" } else { "<" }, inp.image.min_work_hex,
+        if enough_work { "" } else { " -- a valid chain, but NOT shown to be the network's: verdict at best DEMO" })));
+    rep.low_work = !enough_work;
     rep.verdict = if rep.failed() {
         Verdict::Fail
-    } else if inp.anchor.is_some() {
+    } else if inp.anchor.is_some() || !enough_work {
         Verdict::Demo
     } else {
         Verdict::Ok
@@ -371,6 +399,20 @@ pub fn describe_profile(p: u32) -> String {
             if p & PROFILE_ASSUMEVALID != 0 { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" },
             if p & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" },
             if p & PROFILE_COINLOG != 0 { ", coin log" } else { "" })
+}
+
+/// cum_work as 64 hex digits big-endian (chainwork as Core prints it).
+pub fn work_be_hex(w: &[u8; 32]) -> String {
+    let mut r = *w;
+    r.reverse();
+    hex(&r)
+}
+
+/// cum_work (32 bytes little-endian) >= a big-endian hex threshold.
+pub fn work_at_least(w: &[u8; 32], min_be_hex: &str) -> bool {
+    let Some(mut m) = hex32(min_be_hex) else { return false };
+    m.reverse();
+    (0..32).rev().map(|i| w[i].cmp(&m[i])).find(|o| o.is_ne()).map_or(true, |o| o.is_gt())
 }
 
 /// The network's genesis ChainState for this image (§5 step 3).
@@ -519,8 +561,27 @@ mod tests {
     fn genesis_anchor_vectors() {
         // SWIFTSYNC_PROOFS.md §5 step 3. Independent of the image; computed by scripts/libzync/genesis_anchor_id.py.
         let a = |n| hex(&anchor_id(&genesis_anchor(Image::by_network(n).unwrap())));
-        assert_eq!(a("mainnet"), "5652addca32eebf2dffd4cfb6427813c2ee6c9326dd8666d2750a9a032848d46");
-        assert_eq!(a("signet"), "04d6826ab1cde38accd700fb284f6b99337715170c8afd3b819700e9de79e24a");
+        assert_eq!(a("mainnet"), "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167");
+        assert_eq!(a("signet"), "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827");
+    }
+
+    #[test]
+    fn genesis_anchors_are_pinned() {
+        // The pinned constants are what this layout computes (they must never be recomputed in a later layout).
+        for img in IMAGES {
+            assert_eq!(hex(&anchor_id(&genesis_anchor(img))), img.genesis_anchor_hex, "{}", img.network);
+        }
+    }
+
+    #[test]
+    fn minimum_work() {
+        let mut w = [0u8; 32];
+        w[..8].copy_from_slice(&0x93ec44d6u64.to_le_bytes());
+        assert!(work_at_least(&w, "00000000000000000000000000000000000000000000000000000000093ec44d6"[1..].into()));
+        assert!(!work_at_least(&w, "00000000000000000000000000000000000000000000000000000000093ec44d7"[1..].into()));
+        w[20] = 1;   // a high byte outweighs every lower one
+        assert!(work_at_least(&w, IMAGES[0].min_work_hex));
+        assert!(!work_at_least(&[0u8; 32], IMAGES[1].min_work_hex));
     }
 
     #[test]
@@ -683,8 +744,11 @@ impl Bundle {
     pub fn make(receipt: &[u8], hints: &[u8], img: &'static Image, anchor: Option<ChainState>, now: u64) -> Result<Bundle, String> {
         use sha2::{Digest as _, Sha256};
         let rep = verify(&Inputs { receipt, hints, image: img, anchor, now });
-        if rep.verdict == Verdict::Fail {
-            return Err("the receipt does not verify; refusing to bundle it".into());
+        if img.profile & PROFILE_COINLOG != 0 {
+            return Err("a bundle carries a hints file; a coin-log proof has none".into());
+        }
+        if rep.verdict != Verdict::Ok {
+            return Err(format!("the receipt's verdict is {:?}, not Ok; refusing to bundle it", rep.verdict));
         }
         let cs = rep.state.expect("verified");
         Ok(Bundle {

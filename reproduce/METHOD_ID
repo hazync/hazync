@@ -15,6 +15,8 @@
 #
 #     coinbase-smt/src/roots.rs   — the roots-only half of the BIP30 coinbase SMT (hazync#54)
 #     coinbase-smt/src/bip30.rs   — the per-block BIP30 state transition
+#     libzync/src/{wire,net,ss_hints,coinlog}.rs — the libzync images only: hint wire format, network
+#                                   parameters, SwiftSync hints hash, the coin log
 #
 # These are #[path] INCLUDES, not Cargo path dependencies, and the distinction is the whole of hazync#88:
 # Cargo makes a path dependency ABSOLUTE, Rust embeds it in panic metadata, and the id then depends on

@@ -8,7 +8,7 @@ and self_id, and exits 1 on any difference. Python standard library only.
 """
 import hashlib, json, struct, sys
 
-KIND_CHAIN = 0xC4A10002
+KIND_CHAIN = 0xC4A10012
 TAG_SMT_NODE = 0x11
 SMT_DEPTH = 256
 NETS = {  # genesis hash (display order), time, nBits

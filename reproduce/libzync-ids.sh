@@ -10,6 +10,9 @@ export RUSTUP_TOOLCHAIN=$(rustup toolchain list | awk '/^stable/{print $1; exit}
 echo "host toolchain: $RUSTUP_TOOLCHAIN ($(rustc --version)); guest toolchain: $(ls /root/.risc0/toolchains 2>/dev/null | tr '\n' ' ')" >&2
 # The coin log (docs/libzync/COINLOG.md) is the frozen design; LIBZYNC_COINLOG=0 builds design B (SwiftSync hints).
 CL=${LIBZYNC_COINLOG:-1}
+# Only the variables set below may reach the build: an inherited HAZYNC_* lever would change the image while the
+# line printed still names the plain one (review 11-03).
+for v in $(compgen -e | grep '^HAZYNC_'); do unset "$v"; done
 kind=$([ "$CL" = 1 ] && echo libzync-coinlog || echo libzync)
 for net in mainnet signet; do
   rm -rf target/riscv-guest   # never reuse a guest across networks (LIBZYNC.md round 8: a stale ELF)
