@@ -14,6 +14,14 @@
 //! `--handover <image hex>:<first height>` (repeat, oldest first): the lineage an image pins, for a reader who rebuilt
 //! one that pins any (docs/libzync/HANDOVER.md).
 //!
+//! Chain identity (is the proven chain THE network's chain?). The proof shows a valid chain from genesis; which chain
+//! it is, is the tip's hash, and a verifier compares it with a source it trusts:
+//! - `--expect <height>:<hash>`: the proof's tip must be that block (display order, as `getblockhash` prints it);
+//! - `--mempool`: ask mempool.space (one GET of /api/block-height/<height>; signet: /signet/api) for the block at the
+//!   proof's height and require it to be the tip; `--mempool-url <base>` for another esplora-compatible API;
+//! - `--bitcoin-cli` (step 7 above), your own node.
+//! A failed identity check is FAIL. With none of them the verdict says the identity was NOT checked and prints the hash.
+//!
 //! `--coinlog`: the image is a coin-log build (docs/libzync/COINLOG.md, profile bit 4). It has no hints file: pass `-`.
 //!
 //! A proof whose chainwork is below Core's `nMinimumChainWork` for the network is at best DEMO (exit 2): a valid chain
@@ -55,6 +63,7 @@ fn main() {
     let mut now_arg: Option<String> = None;
     let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
     let mut coinlog = false;
+    let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -63,6 +72,9 @@ fn main() {
             "--image" => image_hex = Some(args.next().unwrap_or_else(|| usage())),
             "--now" => now_arg = Some(args.next().unwrap_or_else(|| usage())),
             "--coinlog" => coinlog = true,
+            "--expect" => expect = Some(args.next().unwrap_or_else(|| usage())),
+            "--mempool" => mempool = Some(String::new()),
+            "--mempool-url" => mempool = Some(args.next().unwrap_or_else(|| usage())),
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
                 let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>")) };
@@ -151,6 +163,40 @@ fn main() {
         }
     }
 
+    // Chain identity: the proven tip against a block the user trusts.
+    if let Some(cs) = &rep.state {
+        let tip = display(&cs.tip_hash);
+        if let Some(e) = &expect {
+            match e.split_once(':').and_then(|(h, x)| Some((h.parse::<u32>().ok()?, x.to_lowercase()))) {
+                Some((h, x)) => {
+                    rep.checks.push((h == cs.height && x == tip, format!("--expect: block {h} is {x}; the proof's tip is block {} {tip}{}",
+                        cs.height, if h != cs.height { " (only the tip height can be checked from the receipt alone)" } else { "" })));
+                    tip_checked = true;
+                }
+                None => rep.checks.push((false, format!("--expect {e:?}: want <height>:<64 hex digits>"))),
+            }
+        }
+        if let Some(base) = &mempool {
+            let base = if base.is_empty() {
+                if image.network == "signet" { "https://mempool.space/signet/api".to_string() } else { "https://mempool.space/api".to_string() }
+            } else { base.trim_end_matches('/').to_string() };
+            let url = format!("{base}/block-height/{}", cs.height);
+            let out = Command::new("curl").args(["-sf", "--max-time", "30", &url]).output();
+            match out {
+                Ok(o) if o.status.success() => {
+                    let got = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
+                    rep.checks.push((got == tip, format!("{url} says block {} is {got:?}; the proof's tip is {tip}", cs.height)));
+                    tip_checked = true;
+                }
+                Ok(o) => rep.checks.push((false, format!("{url}: request failed ({}): chain identity not checked", o.status))),
+                Err(e) => rep.checks.push((false, format!("curl {url}: {e}"))),
+            }
+        }
+        if rep.checks.iter().any(|(ok, _)| !ok) {
+            rep.verdict = Verdict::Fail;
+        }
+    }
+
     for (ok, what) in &rep.checks {
         println!("  [{}] {what}", if *ok { "ok" } else { "FAIL" });
     }
@@ -162,7 +208,10 @@ fn main() {
             println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);
         }
     }
-    let step7 = if tip_checked { "" } else { "; step 7 NOT run: check the tip and work above against your own node" };
+    let step7 = if tip_checked { String::new() } else {
+        rep.state.as_ref().map_or(String::new(), |c| format!("; chain identity NOT checked: compare block {} = {} with a source you trust (--mempool, --expect, --bitcoin-cli)",
+            c.height, display(&c.tip_hash)))
+    };
     let av = rep.state.as_ref().map_or(false, |c| c.profile & swiftsync_verify::PROFILE_ASSUMEVALID != 0);
     let h = rep.state.as_ref().map_or(0, |c| c.height);
     let avs = if av { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" };

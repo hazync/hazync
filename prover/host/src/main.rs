@@ -2112,7 +2112,18 @@ fn work_at_least(w: &[u8; 32], min: [u8; 32]) -> bool {
     (0..32).rev().map(|i| w[i].cmp(&min[i])).find(|o| o.is_ne()).map_or(true, |o| o.is_gt())
 }
 
-fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
+/// The block hash at `height` from an esplora-compatible API (mempool.space by default), display order.
+fn mempool_block_hash(base: &str, height: u32) -> Result<(String, String), String> {
+    let base = if base.is_empty() {
+        if methods::NETWORK == "signet" { "https://mempool.space/signet/api".to_string() } else { "https://mempool.space/api".to_string() }
+    } else { base.trim_end_matches('/').to_string() };
+    let url = format!("{base}/block-height/{height}");
+    let o = std::process::Command::new("curl").args(["-sf", "--max-time", "30", &url]).output().map_err(|e| format!("curl {url}: {e}"))?;
+    if !o.status.success() { return Err(format!("{url}: request failed ({})", o.status)); }
+    Ok((url, String::from_utf8_lossy(&o.stdout).trim().to_lowercase()))
+}
+
+fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>, expect: Option<&str>, mempool: Option<&str>) {
     libzync_verify_fail_hook(); // also installed by the dispatcher, before the arguments are read
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}")))
         .unwrap_or_else(|e| panic!("{receipt:?}: not a receipt: {e}"));
@@ -2208,6 +2219,25 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
              cs.utxo_roots.iter().map(|x| x.map(|h| hex(&h[..8]))).collect::<Vec<_>>());
     println!("  cum_work 0x{} {} Core's nMinimumChainWork 0x{}", hex(&rev(cs.cum_work.to_vec())), if low_work { "<" } else { ">=" },
              hex(&rev(min_chain_work().to_vec())));
+    // Chain identity: is the proven tip THE network's block at that height? The proof alone cannot say (a valid fork
+    // has its own valid tip); a source the user trusts can, in one comparison.
+    let tip = hex(&rev(cs.tip_hash.to_vec()));
+    let mut identity = false;
+    if let Some(e) = expect {
+        match e.split_once(':').and_then(|(h, x)| Some((h.parse::<u32>().ok()?, x.to_lowercase()))) {
+            Some((h, x)) => { check(h == cs.height && x == tip, &format!("--expect: block {h} is {x}; the proof's tip is block {} {tip}", cs.height)); identity = true; }
+            None => check(false, &format!("--expect {e:?}: want <height>:<64 hex digits>")),
+        }
+    }
+    if let Some(b) = mempool {
+        match mempool_block_hash(b, cs.height) {
+            Ok((url, got)) => { check(got == tip, &format!("{url} says block {} is {got:?}; the proof's tip is {tip}", cs.height)); identity = true; }
+            Err(e) => check(false, &format!("{e}: chain identity not checked")),
+        }
+    }
+    let id_note = if identity { String::new() } else {
+        format!(" (chain identity NOT checked: compare block {} = {tip} with a source you trust, --mempool or --expect)", cs.height)
+    };
     if fails == 0 && anchor.is_none() && low_work {
         println!("LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height {}, but below Core's minimum chainwork for {}: not shown to be the network's chain", cs.height, methods::NETWORK);
         std::process::exit(2);
@@ -2220,9 +2250,9 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     } else if fails == 0 {
         // The verdict line names an assumevalid profile, so a reader of this line alone (or a script) cannot
         // take a scripts-skipped proof for a full one (review 5).
-        if methods::COINLOG { println!("LIBZYNC_VERIFY_OK: the chain and its coin log are proven at height {}{}", cs.height,
+        if methods::COINLOG { println!("LIBZYNC_VERIFY_OK: the chain and its coin log are proven at height {}{}{id_note}", cs.height,
                  if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" }); return; }
-        println!("LIBZYNC_VERIFY_OK: {hints:?} is proven correct for this chain at height {}{}", cs.height,
+        println!("LIBZYNC_VERIFY_OK: {hints:?} is proven correct for this chain at height {}{}{id_note}", cs.height,
                  if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" });
     } else {
         println!("LIBZYNC_VERIFY_FAIL: {fails} check(s) failed");
@@ -6033,9 +6063,21 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-verify") {
         libzync_verify_fail_hook();
-        libzync_verify_cmd(args.get(p + 1).expect("libzync-verify <receipt> <file.hints> [anchor.json]"),
-                           args.get(p + 2).expect("libzync-verify <receipt> <file.hints> [anchor.json]"),
-                           args.get(p + 3).map(|s| s.as_str()));
+        // Positional: <receipt> <file.hints | -> [anchor.json]. Flags anywhere after: --expect <h>:<hash>, --mempool,
+        // --mempool-url <base> (chain identity, as swiftsync-verify).
+        let mut pos: Vec<&str> = Vec::new();
+        let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
+        let mut it = args[p + 1..].iter();
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--expect" => expect = Some(it.next().expect("--expect <height>:<hash>").clone()),
+                "--mempool" => mempool = Some(String::new()),
+                "--mempool-url" => mempool = Some(it.next().expect("--mempool-url <base>").clone()),
+                x => pos.push(x),
+            }
+        }
+        let usage = "libzync-verify <receipt> <file.hints | -> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>]";
+        libzync_verify_cmd(pos.first().expect(usage), pos.get(1).expect(usage), pos.get(2).copied(), expect.as_deref(), mempool.as_deref());
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "swiftsync-diff-hints") {

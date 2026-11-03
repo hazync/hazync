@@ -70,7 +70,10 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 - `cum_work` is at least Core's `nMinimumChainWork` for the network (§5 step 3a); below it the answer is about a
   valid chain, but not shown to be the network's.
 - design B only: `ss_hints` is the hash of the published hints file at `height`.
-- `max_time <= now + 7200` (time-too-new) and `tip_hash` is on the chain the verifier sees, if it has a node.
+- `max_time <= now + 7200` (time-too-new).
+- **Chain identity:** `tip_hash` is the network's block at `height`, from the verifier's node, a block explorer
+  (mempool.space) or a known hash (SWIFTSYNC_PROOFS.md §5 step 7). Without it, the answer is about a valid chain,
+  not necessarily the network's.
 
 ## 5. Publishing a zyncAPP
 

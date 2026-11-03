@@ -245,8 +245,13 @@ Given a receipt R, the hints file F and the network:
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
-7. `J.tip_hash` is the block at height `J.height` on your own most-work header chain, whose headers you have checked
-   for `time-too-new` (§2). The proof says that chain is valid, not that it is the best one.
+7. **Chain identity.** `J.tip_hash` is the block at height `J.height` on the network's chain. The proof says the chain
+   it covers is valid from genesis; which chain it is, is its tip hash (each header commits to the previous one, so the
+   tip hash identifies the whole history), and a valid fork has its own. Compare it with a source you trust:
+   your own most-work header chain (`--bitcoin-cli`), a block explorer (`--mempool`: one GET of mempool.space's
+   `/api/block-height/<J.height>`, signet `/signet/api`; `--mempool-url` for another esplora API), or a hash you
+   already have (`--expect <height>:<hash>`). Both verifiers: a mismatch is FAIL; with no comparison the OK line
+   says the chain identity was NOT checked and prints the hash to compare.
 8. The receipt is a real proof: refuse a dev-mode `FakeReceipt`, and never verify with `RISC0_DEV_MODE` set.
 9. Read `J.profile`: bit 1 set means scripts and signatures were **not** checked (assumevalid). The image sets the
    bit from the C++ that does (or skips) the checks, so the proof itself states it; check it is the profile you
