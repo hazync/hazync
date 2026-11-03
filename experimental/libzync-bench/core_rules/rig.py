@@ -451,7 +451,7 @@ def c_bip30_child_of_repeat(c): # something new from the repeated coinbase: noth
 # ⚠ bip30=false is the BIP30 tree's verdict, which also fails on a host-side SMT witness mismatch.
 OURS = {"bad-cb-missing": r"C abort|bv=false", "bad-cb-multiple": r"core-reject: bad-cb-multiple", "bad-cb-amount": "subsidy=false",
         "bad-txnmrklroot": "merkle=false", "bad-txns-duplicate": "merkle=false",
-        "bad-txns-inputs-missingorspent": r"REJECT (coin log: OldRoot|a coin is spent before|a coin created in this block is spent twice|the same external coin is spent twice)",
+        "bad-txns-inputs-missingorspent": r"REJECT (coin log: (OldRoot|PastEnd)|a coin is spent before|a coin created in this block is spent twice|the same external coin is spent twice)",
         "bad-blk-sigops": "sigops=false", "bad-blk-length": r"core-reject: bad-blk-length|core-reject: bad-txns-oversize|weight=false",
         "bad-txns-BIP30": "bip30=false", "high-hash": "pow=false", "prev-blk-not-found": "ph=false", "bad-prevblk": "ph=false"}
 
