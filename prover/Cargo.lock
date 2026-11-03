@@ -5591,3 +5591,21 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
+
+[[package]]
+name = "zyncapp-host"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "zyncapp-methods",
+]
+
+[[package]]
+name = "zyncapp-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
+]
