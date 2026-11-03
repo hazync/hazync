@@ -142,7 +142,7 @@ const KIND_CHAIN: u32 = 0xC4A1_0012;
 /// reordered or removed, so a reader (a zyncAPP, a verifier) built for version n decodes the prefix it knows from any
 /// later version: risc0's serde reads fields in order and ignores trailing words.
 /// 2: same fields as 1; each block leaf also commits the coin state after that block, and a coin-log spent leaf records
-/// its spender (HANDOVER.md §3, UTREEXO_FORMAT.md §7).
+/// its spender (HANDOVER.md §3, COINLOG.md §2).
 const CHAIN_STATE_VERSION: u32 = 2;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
@@ -1920,7 +1920,8 @@ fn chunk_prove() {
     // concatenates chunk binds and indexes them by the block's own input index, so any reordering here
     // would silently compare the wrong input.
     fn read_bytes(len: u32) -> Vec<u8> {
-        let mut v = vec![0u8; (len as usize).div_ceil(4) * 4];
+        // Checked: on rv32 a length near 2^32 would round to 0 and desync the stream (review 11-03).
+        let mut v = vec![0u8; (len as usize).checked_next_multiple_of(4).expect("input length")];
         env::read_slice(&mut v);
         v.truncate(len as usize);
         v
@@ -2109,7 +2110,7 @@ fn aggregate() {
     // changes the READ METHOD. Packing and read_slice are independent.
     #[cfg(feature = "agg-readslice")]
     fn read_bytes_agg(len: u32) -> Vec<u8> {
-        let mut v = vec![0u8; (len as usize).div_ceil(4) * 4];
+        let mut v = vec![0u8; (len as usize).checked_next_multiple_of(4).expect("journal length")];
         env::read_slice(&mut v);
         v.truncate(len as usize);
         v

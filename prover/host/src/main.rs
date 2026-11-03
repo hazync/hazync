@@ -2133,7 +2133,7 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
         if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
     let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => {
         println!("  [FAIL] journal is not a ChainState: {}", format!("{e}").escape_debug());
-        println!("LIBZYNC_VERIFY_FAIL: 1 check(s) failed");
+        println!("LIBZYNC_VERIFY_FAIL: the journal does not decode as a ChainState");
         std::process::exit(1)
     } };
     // A later version only appends fields (HANDOVER.md §2): this reader checks the prefix it knows.
@@ -2164,11 +2164,10 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>) {
     let mut want_anchor = bitcoin::hashes::sha256d::Hash::hash(&want_anchor).to_byte_array();
     // Genesis anchors are PINNED per network (as swiftsync-verify's Image::genesis_anchor_hex): a chain keeps its
     // anchor_id across every handover, so a later image must not recompute it in its own layout (review 11-03).
+    // The pin is used as it is, never re-derived here: a later layout's genesis_anchor() would differ from it by design.
+    // That this layout's anchor equals the pin is checked by swiftsync-verify's unit test and genesis_anchor_id.py.
     if anchor.is_none() {
-        if let Some(p) = pinned_genesis_anchor() {
-            assert_eq!(want_anchor, p, "this layout's genesis anchor != the pinned one: update the pin only with a new network chain");
-            want_anchor = p;
-        }
+        if let Some(p) = pinned_genesis_anchor() { want_anchor = p; }
     }
     check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
     // Core's nMinimumChainWork (v28): below it, a valid chain from genesis is no evidence of the network's chain.
@@ -3947,7 +3946,9 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
         match (&handover, anchor_path) {
             (Some(_), _) => {
                 let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").unwrap();
-                let d = std::path::Path::new(&p).parent().unwrap().to_string_lossy().to_string();
+                // A bare file name has the parent "" (review 11-03): read the log next to it, in ".".
+                let d = std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().to_string())
+                    .filter(|x| !x.is_empty()).unwrap_or_else(|| ".".to_string());
                 cl_load(&format!("{d}/state_{}.coinlog", prev.height));
             }
             (None, "genesis") => cl_init_empty(),
@@ -4012,6 +4013,11 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             r.verify(METHOD_ID).unwrap_or_else(|e| panic!("block_{k}.rcpt does not verify against this image: {e}"));
             let st: ChainState = r.journal.decode().expect("ChainState");
             assert!(st.height == k && st.kind == KIND_CHAIN && st.self_id == METHOD_ID, "block_{k}.rcpt is not this chain's state at {k}");
+            // The same chain as this run's anchor: an output directory reused with another anchor must not be resumed.
+            // From an anchor, the chain's anchor_id is the anchor's digest; after a handover, the predecessor's anchor_id.
+            let aid = if handover_pending { prev.anchor_id }
+                      else { bitcoin::hashes::sha256d::Hash::hash(&state_journal_bytes(&prev)).to_byte_array() };
+            assert!(st.anchor_id == aid, "block_{k}.rcpt was proved from another anchor (anchor_id {}, this run's {})", hex(&st.anchor_id), hex(&aid));
             let (t, _) = lz_smt_replay(dir, k);
             assert_eq!(t.root(), st.smt_root, "replayed BIP30 tree at {k} != the receipt's smt_root");
             // The coin log at k: the file the run left next to the receipt, checked against the receipt's own roots.

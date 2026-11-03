@@ -117,26 +117,38 @@ The last three files were written by `host swiftsync-make-hints`; each matches t
 
 ### The proof's public output: `ChainState`
 
-In field order (the journal encoding is in §5 step 3):
+In field order (the journal encoding is in §5 step 3). Types are exact: risc0's serde writes a u32 as one word, a u64
+as two (low first), every byte of `[u8; 32]` as its own word (32 words), `[u32; 8]` as 8 words, a `Vec` as its length
+then its elements, an `Option` as 0/1 then the value. A wrong width changes `anchor_id`.
 
-| field | meaning |
-|---|---|
-| `kind` | `0xC4A10012` (domain tag) |
-| `version` | `1`, the layout. Fields are only ever appended after it, never reordered or removed, so a reader of version n decodes the prefix it knows from any later version (HANDOVER.md §2) |
-| `tip_hash` | the chain proven: its last block's hash, internal byte order |
-| `utxo_roots`, `utxo_leaves` | Utreexo forest of the coins marked unspent-at-H, by height, each block's sorted by (txid, vout) (UTREEXO_FORMAT.md §4) |
-| `utxo_value` | satoshis held by those coins: at H, the UTXO set's total amount (Core's `gettxoutsetinfo` `total_amount`) |
-| `cum_work`, `height` | cumulative work (32 bytes LE) and height of the tip |
-| `prev_nbits`, `prev_time`, `epoch_start`, `recent_times` | difficulty and time context, so the chain can be extended |
-| `anchor_id` | double-SHA-256 of the state the chain started from (genesis for a full proof) |
-| `self_id` | the image id every step since the last handover ran (the image the receipt verifies against) |
-| `ss_set`, `ss_acc` | the ECMH running total (`ss_set = 0` means the identity) |
-| `ss_hints` | the running hash of §3 |
-| `smt_root` | root of the coinbase-txid SMT (BIP30) after the tip |
-| `max_time` | the largest block timestamp in the chain (for `time-too-new`, §5 step 11) |
-| `profile` | what the image checked: bit 0 libzync, bit 1 scripts and signatures **skipped** (assumevalid), bit 2 signet. Set by the image from its compiled code, never carried from input |
-| `block_roots`, `block_leaves` | the block forest: an append-only Utreexo forest with one leaf per block, genesis first, so leaf `i` is the block at height `i` and `block_leaves = height + 1`. It lets a proof of the tip show that any earlier block was in the chain (HANDOVER.md §3) |
-| `lineage` | 32 zero bytes for a chain proved by one image since genesis; otherwise the digest of the images it was handed over from (HANDOVER.md §5) |
+| field | type | meaning |
+|---|---|---|
+| `kind` | u32 | `0xC4A10012` (domain tag; `0xC4A10002` before the `version` field) |
+| `version` | u32 | `2`, the layout. Fields are only ever appended after it, never reordered or removed, so a reader of version n decodes the prefix it knows from any later version (HANDOVER.md §2). 2 since block leaves carry the coin state |
+| `tip_hash` | [u8; 32] | the chain proven: its last block's hash, internal byte order |
+| `utxo_roots` | Vec<Option<[u8; 32]>> | the coin commitment's roots, index = tree level, trailing empties removed (except the genesis state's `[None]`, §5 step 3). Coin log: every coin ever appended (COINLOG.md). Design B: the coins marked unspent-at-H, by height, each block's sorted by (txid, vout) (UTREEXO_FORMAT.md §4) |
+| `utxo_leaves` | u64 | leaves in that forest |
+| `utxo_value` | u64 | coin log: satoshis of the live coins. Design B: satoshis of the coins in the forest, so at H the UTXO set's total (`gettxoutsetinfo` `total_amount`) |
+| `cum_work` | [u8; 32] | cumulative work, little-endian |
+| `height` | u32 | height of the tip |
+| `prev_nbits`, `prev_time`, `epoch_start` | u32 each | difficulty and time context, so the chain can be extended |
+| `recent_times` | Vec<u32> | timestamps of the last ≤ 11 blocks |
+| `anchor_id` | [u8; 32] | double-SHA-256 of the state the chain started from (genesis for a full proof; pinned per network) |
+| `self_id` | [u32; 8] | the image id every step since the last handover ran (risc0's digest words: the 32 bytes risc0 prints in hex) |
+| `ss_set` | u32 | design B: the ECMH running total is the identity iff 0. Coin log: unused, 0 from genesis |
+| `ss_acc` | [u32; 16] | design B: the ECMH running total |
+| `ss_hints` | [u8; 32] | design B: the running hash of §3. Coin log: unused, 0 from genesis |
+| `smt_root` | [u8; 32] | root of the BIP30 tree (coinbase txids and tracked transactions) after the tip |
+| `max_time` | u32 | the largest block timestamp in the chain (for `time-too-new`, §5 step 11) |
+| `profile` | u32 | what the image checked: bit 0 libzync, bit 1 scripts and signatures **skipped** (assumevalid), bit 2 signet, bit 3 regtest, bit 4 coin log. Set by the image from its compiled code, never carried from input |
+| `block_roots` | Vec<Option<[u8; 32]>> | the block forest: one leaf per block, genesis first, each leaf committing the block hash, height and the coin state after it (HANDOVER.md §3) |
+| `block_leaves` | u64 | `height + 1` |
+| `lineage` | [u8; 32] | 32 zero bytes for a chain proved by one image since genesis; otherwise the digest of the images it was handed over from (HANDOVER.md §5) |
+
+**Verifying a coin-log proof** (profile bit 4): §5 with no hints file. Steps 4-6 are replaced by `ss_set == 0` and
+`ss_hints == 32 zero bytes`; everything else (image, kind, version, self_id, profile, anchor, minimum work, forest
+shape, lineage, time) is the same. Both verifiers do this (`swiftsync-verify --coinlog <receipt> -`,
+`host libzync-verify <receipt> -`).
 
 ## 4. How the guest checks a block (design "B")
 
@@ -204,7 +216,7 @@ Given a receipt R, the hints file F and the network:
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
    nothing about history.
    - The genesis ChainState, in field order: `kind = 0xC4A10012`; `version = 2`; `tip_hash` = the genesis hash (internal byte
-     order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0`; `utxo_value = 0` (u64); `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
+     order); `utxo_roots` = a list of **one** empty entry (`[None]`, not an empty list); `utxo_leaves = 0` (u64); `utxo_value = 0` (u64); `cum_work` = `GetBlockProof(genesis nBits)` as 32 bytes
      little-endian; `height = 0`; `prev_nbits` = genesis nBits; `prev_time = epoch_start` = genesis time;
      `recent_times = [genesis time]`; `anchor_id` = 32 zero bytes; `self_id` = 32 zero bytes (eight zero words: the
      genesis journal, and its digest, are the same for every image, so a chain keeps its anchor across a handover);
@@ -212,7 +224,7 @@ Given a receipt R, the hints file F and the network:
      `ss_acc` = 16 zero words; `ss_hints` = 32 zero bytes; `smt_root` = the empty coinbase-SMT root, `e_256` where
      `e_0` = 32 zero bytes and `e_{d+1} = SHA-256(0x11 ‖ e_d ‖ e_d)`
      (`507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32`); `max_time` = genesis time; `profile = 0`; `block_roots` = one entry, `Some(SHA-256(0x02 ‖ genesis hash, internal
-     byte order ‖ 0u32 LE ‖ SHA-256(0x04 ‖ 0u64 LE ‖ 0u64 LE)))` (HANDOVER.md §3: the empty coin state); `block_leaves = 1`; `lineage` = 32 zero bytes.
+     byte order ‖ 0u32 LE ‖ SHA-256(0x04 ‖ 0u64 LE ‖ 0u64 LE)))` (HANDOVER.md §3: the empty coin state); `block_leaves = 1` (u64); `lineage` = 32 zero bytes.
    - The journal is risc0's serde word encoding (risc0-zkvm 3.0.5 `serde::to_vec`, each word little-endian): every
      integer up to 32 bits and every byte of a fixed array takes one u32 word, a u64 two (low word first), a list is its length then
      its elements, and an `Option` is a 0/1 word followed by the value when present.

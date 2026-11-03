@@ -1,4 +1,5 @@
 #!/bin/bash
+# HISTORICAL (before e292c9d): edits handover_pin.rs, where the lineage lived then. Use retest_c5.sh.
 # Coin log v2 (spender in spent leaves, coin state in block leaves): every test, then cost vs design B (r17m).
 R=~/libzync-gpu/r18; O=~/libzync-gpu/c4; Z=~/dev/hazync-libzync; CR=$Z/experimental/libzync-bench/core_rules; S=$Z/scripts/libzync
 step() { echo; echo "== $*"; }

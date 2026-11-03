@@ -1,4 +1,5 @@
 #!/bin/bash
+# HISTORICAL (before e292c9d): edits handover_pin.rs, where the lineage lived then. Use retest_c5.sh.
 # Full re-test of libzync after the 11-02 format change (version, utxo_value, survivors sorted by (txid, vout)).
 R=~/libzync-gpu/r18; Z=~/dev/hazync-libzync; O=~/libzync-gpu/r17; CR=$Z/experimental/libzync-bench/core_rules
 step() { echo; echo "== $*"; }

@@ -1,6 +1,6 @@
 # zyncAPPs: building on the core proof
 
-Status: design. No zyncAPP is built yet. The core facts in §2 exist in `ChainState` v1 (SWIFTSYNC_PROOFS.md §3,
+Status: design. No zyncAPP is built yet. The core facts in §2 exist in `ChainState` version 2 (SWIFTSYNC_PROOFS.md §3,
 HANDOVER.md §2); the shared check of §4 is the code every zyncAPP must carry and is not written yet.
 
 ## 1. Core and zyncAPPs
@@ -11,12 +11,12 @@ HANDOVER.md §2); the shared check of §4 is the code every zyncAPP must carry a
   it: "these coins exist at H and I control them", "this payment is in the chain", "the UTXO set holds X sat".
   It has its own image id and its own receipt. A zyncAPP never changes the core.
 
-## 2. What a zyncAPP can use (ChainState v1)
+## 2. What a zyncAPP can use (ChainState version 2)
 
 | fact | fields | lets a zyncAPP show |
 |---|---|---|
 | which chain, how much work | `tip_hash`, `height`, `cum_work`, `recent_times`, `max_time` | the tip, its height and chainwork, time context |
-| every coin ever created, and who spent it (coin log) | `utxo_roots`, `utxo_leaves` (COINLOG.md) | a coin is unspent now, or was spent by (height, tx, input); amount, scriptPubKey, height, coinbase flag, creation MTP; by one path |
+| every spendable coin that outlived its block, and who spent it (coin log; not coins spent in their own block, not OP_RETURN outputs, COINLOG.md §6) | `utxo_roots`, `utxo_leaves` (COINLOG.md) | a coin is unspent now, or was spent by (height, tx, input); amount, scriptPubKey, height, coinbase flag, creation MTP; by one path |
 | every coin unspent at H (design B) | `utxo_roots`, `utxo_leaves` (UTREEXO_FORMAT.md) | a coin exists at H, by an inclusion path |
 | total amount of the live coins | `utxo_value` | the UTXO set's total, with no walk over the coins |
 | every block in the chain, and the coin state after it | `block_roots`, `block_leaves` (HANDOVER.md §3) | a block at a height is in this chain; with a Merkle branch, any transaction; with the coin log, any coin's state at that height |
@@ -52,7 +52,7 @@ inputs:  core_id, core_journal, <the question's own inputs>
      J.profile: the network the zyncAPP is for; scripts checked (bit 1 clear) unless it states otherwise
      coin log (profile bit 4), or J.ss_set == 0          design B: closed at H (for any question about coins)
 4. answer the question from J and its own inputs only
-5. commit: core_id, J.lineage, J.anchor_id, J.ss_hints, J.height, J.tip_hash, J.max_time, the answer
+5. commit: core_id, J.lineage, J.anchor_id, J.ss_hints, J.height, J.tip_hash, J.max_time, J.cum_work, the answer
 ```
 
 `check_core_statement` exists because the core image id is not enough on its own: the `is_base` bug (LIBZYNC.md §7)
@@ -65,8 +65,11 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 
 - `core_id` is a published core image, and `lineage` is that image's (§6 of HANDOVER.md). Which core images to trust
   is the verifier's decision, the same one it makes for a core proof.
-- `anchor_id` is the network's genesis anchor.
-- `ss_hints` is the hash of the published hints file at `height`.
+- the zyncAPP receipt is a real proof: not a FakeReceipt, and `RISC0_DEV_MODE` not set in the verifier.
+- `anchor_id` is the network's PINNED genesis anchor (SWIFTSYNC_PROOFS.md §5 step 3).
+- `cum_work` is at least Core's `nMinimumChainWork` for the network (§5 step 3a); below it the answer is about a
+  valid chain, but not shown to be the network's.
+- design B only: `ss_hints` is the hash of the published hints file at `height`.
 - `max_time <= now + 7200` (time-too-new) and `tip_hash` is on the chain the verifier sees, if it has a node.
 
 ## 5. Publishing a zyncAPP
@@ -82,7 +85,7 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 |---|---|---|---|
 | **zyncPOO** (proof of ownership) | coins with log paths; a challenge; a signature by each coin's key | `utxo_roots` | "these coins, worth X sat, are unspent at the tip (or at height h) and the holder signed the challenge". A private form commits only the total |
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
-| proof of payment | block header, its block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
+| proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
 | snapshot check | a Core `dumptxoutset` | `utxo_roots`, `utxo_value` | "this snapshot is the UTXO set at H" (`utxo_snapshot_check.py` does it outside the zkVM today) |
 

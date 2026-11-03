@@ -1,6 +1,7 @@
 #!/bin/bash
 # Pod-side: prove signet 1..HI from genesis as one recursive chain on the published image, resuming after the
-# newest receipt in out/ if there is one, then verify the final receipt with no anchor: the verdict must be OK.
+# newest receipt in out/ if there is one, then verify the final receipt with no anchor: OK, or DEMO (exit 2) when the chain is below Core's minimum chainwork
+# (every signet test range is: a valid chain from genesis, not shown to be the network's).
 export PATH=/usr/local/cuda-12.8/bin:$HOME/.cargo/bin:$PATH CUDA_PATH=/usr/local/cuda-12.8 LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64
 HI=${1:?hi}; S=/workspace/sb; O=/workspace/out; mkdir -p $O
 H=/workspace/hazync/prover/target/release/host

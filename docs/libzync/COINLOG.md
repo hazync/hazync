@@ -40,6 +40,10 @@ s               = height u32 LE ‖ tx u32 LE ‖ vin u32 LE ‖ 20 zero bytes
 Test vectors (`coinlog.rs` test `refusals`, from `coinlog_ref.py`): with x = SHA-256("c"), y = SHA-256("d"),
 `spent(x, s(974000, 5, 1)) = cdcc3dda…388993e`, `parent(3, x, y) = fcd6a122…6c29f14f`.
 
+**Chain vector** (mainnet blocks 1..200, `coinlog_ref.py`, equal to the guest's proof in `handover/retest_c4.out`):
+209 leaves appended, 204 live, 10^12 sat; roots[0] `70d43a0c…`, roots[4] `74d46d9b…`, roots[6] `707a6708…`,
+roots[7] `ba3401d0…` (levels 1-3 and 5 empty).
+
 ## 3. Shape and order
 
 - The forest of n leaves has one perfect tree per set bit of n, the largest (oldest leaves) first. `roots[l]` is the
@@ -66,7 +70,7 @@ The aggregate reads, after its hint block: `[k, (position lo, hi) × k, sibling 
 | field | under the coin log |
 |---|---|
 | `utxo_roots`, `utxo_leaves` | the log's roots and the number of coins **ever appended** (live and spent) |
-| `utxo_value` | the satoshis of the **live** coins: previous + this block's appends − this block's flips |
+| `utxo_value` | the satoshis of the **live** coins: previous + this block's appends − this block's flips. Computed as previous + appends (saturating) − (Σ over its transactions of fee + all outputs, minus coins created and spent in the block), with a checked subtraction: on a valid block the same number; an underflow aborts the proof |
 | `ss_set`, `ss_hints` | unused: carried unchanged from the anchor, so 0 on a chain from genesis (what the verifiers require); a hints file is refused |
 | `profile` bit 4 | set |
 | `block_roots` | each block's leaf commits the coin state after it (HANDOVER.md §3), so a tip proof commits the log at every height |

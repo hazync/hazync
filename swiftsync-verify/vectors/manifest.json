@@ -1,5 +1,5 @@
 {
- "about": "Test vectors for a libzync SwiftSync-hints verifier (docs/libzync/SWIFTSYNC_PROOFS.md §5). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. No genesis-anchored receipt exists yet, so no case expects 0. The receipts are from the round-4 signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae and start from a supplied state at 2,500 (r4_anchor_2500.json).",
+ "about": "Test vectors for a libzync SwiftSync-hints verifier (docs/libzync/SWIFTSYNC_PROOFS.md \u00a75). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. No genesis-anchored receipt exists yet, so no case expects 0. The receipts are from the round-4 signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae and start from a supplied state at 2,500 (r4_anchor_2500.json).",
  "cases": [
   {
    "name": "demo_receipt",
@@ -228,9 +228,8 @@
    "mainnet200.hints": "e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd"
   },
   "genesis_anchor_id": {
-   "mainnet 9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55": "5b2020ae48fdf2d180837b612b13c2b36192208f4afb94dee350553fa7ea1d44",
-   "signet 067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36": "636271d3f46ea120f22da161648247bdd004afba1cb92378ba3af407c9e4e2b2",
-   "signet c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae": "91ccd466f6efd6609ca24a9b4c58406de61211a9e53226a30be6dfe13906461a"
+   "mainnet (every image, pinned)": "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
+   "signet (every image, pinned)": "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827"
   },
   "empty_smt_root": "507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32",
   "utreexo_mainnet_200": {
@@ -243,5 +242,6 @@
     "7": "339752865cc905092ec186b4dae9902e4951bd182855b61d80003867f4cbb452"
    }
   }
- }
+ },
+ "status": "STALE since ChainState version 2 / kind 0xC4A1_0012 (11-03): the receipts and anchors here are round-4 images whose journals no longer decode as today's ChainState, so the cases fail before the check each was written for. Regenerate from the first GPU proofs of the frozen image (experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md). The reference values above are current."
 }

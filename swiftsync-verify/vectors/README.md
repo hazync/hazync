@@ -1,5 +1,11 @@
 # Test vectors for a SwiftSync-hints proof verifier
 
+⚠ **STALE (11-03).** The receipts and anchor files are round-4 images from before ChainState version 2 (kind
+`0xC4A1_0012`, the `version` field, coin state in block leaves): they no longer decode, so every case fails before
+the check it was written for (`run_vectors.py` gives 13/15, for the wrong reasons). They are regenerated from the
+first GPU proofs of the frozen image (`experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md`). The reference values in
+`manifest.json` (genesis anchors, empty SMT root) are current.
+
 `manifest.json` lists 14 cases: verifier arguments (in `swiftsync-verify` syntax) and the exit code a correct
 verifier must give (0 OK, 2 DEMO, 1 FAIL), with a description of what each one breaks. It also lists reference
 values a second implementation should reproduce: `ss_hints` of three hints files, genesis `anchor_id`s per image,

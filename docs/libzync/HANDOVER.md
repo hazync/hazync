@@ -63,7 +63,8 @@ parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                         
 - Trees run largest first: the forest of `n` leaves has a tree of height `h` for each set bit `h` of `n`, the highest
   bit holding the earliest leaves.
 - Height is in the leaf so a path cannot be moved to another position. Tag 0x02 separates it from coin leaves (0x00),
-  interior nodes (0x01), lineage steps (0x03) and SMT nodes (0x11).
+  interior nodes (0x01), lineage steps (0x03), coin-state digests (0x04) and the BIP30 SMT's leaves (0x10) and nodes
+  (0x11). The coin log uses its own IVs, not tags.
 
 **Checking a block.** Given a verified state, a height, a block hash, its coin state and a path of sibling hashes, locate the leaf's
 tree, require the path length to equal that tree's height, fold the leaf up the path and compare with `block_roots[h]`.
@@ -139,6 +140,8 @@ and needs every block file before it (the BIP30 tree is replayed, never seeded).
 L_0     = 32 zero bytes
 L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE )     69-byte preimage
 ```
+
+`image, as 8 u32 LE` is the image id's 32 bytes exactly as risc0 prints the id in hex.
 
 Each handover sets `lineage` to the digest of the image's whole pinned list. No other step changes it.
 

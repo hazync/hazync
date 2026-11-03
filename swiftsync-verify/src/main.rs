@@ -29,7 +29,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
     eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] <receipt|bundle.sspf> <file.hints | - with --coinlog>");
-    eprintln!("       swiftsync-verify [--network ...] [--image <hex>] [--anchor state.json] bundle <receipt> <file.hints> <out.sspf>");
+    eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <file.hints> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
 
@@ -65,7 +65,7 @@ fn main() {
             "--coinlog" => coinlog = true,
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
-                let bad = || -> ! { fail(&format!("--handover {v}: want <64 hex digits>:<height>")) };
+                let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>")) };
                 let (id, h) = v.split_once(':').unwrap_or_else(|| bad());
                 let id = swiftsync_verify::hex32(&id.to_lowercase()).unwrap_or_else(|| bad());
                 handovers.push(swiftsync_verify::Handover {
@@ -82,9 +82,9 @@ fn main() {
     if make_bundle {
         files.remove(0);
     }
-    let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network}")));
+    let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network:?}")));
     if let Some(h) = &image_hex {
-        image = image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h}: not 64 hex digits")));
+        image = image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h:?}: not 64 hex digits")));
         println!("  image id given on the command line: {}", image.method_id_hex);
     }
     if !handovers.is_empty() {
@@ -122,6 +122,8 @@ fn main() {
         exit(0);
     }
     let [receipt, hints] = files.as_slice() else { usage() };
+    // A coin-log proof has no hints file: say so with '-', so an empty or wrong file is never taken for "none".
+    if coinlog && hints != "-" { fail("a coin-log image takes no hints file: pass '-'"); }
     let (receipt_bytes, hints_bytes) = (read(receipt), read(hints));
     let mut rep = if receipt_bytes.starts_with(BUNDLE_MAGIC) {
         let b = Bundle::decode(&receipt_bytes).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(receipt))));

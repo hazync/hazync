@@ -10,8 +10,10 @@
 //
 // A chunk holds a run of a transaction's inputs, not always all of them. Each input belongs to exactly one
 // run, so each run applies Core's per-coin rules to its own inputs and the runs together cover the
-// transaction. Coin existence is not checked here: it is what the ECMH total establishes at H.
+// transaction. Coin existence is not checked here: it is the coin commitment's job (the coin log at every block;
+// design B's ECMH total at H).
 
+#include <cstdlib>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
@@ -81,7 +83,9 @@ public:
         for (unsigned j = 0; j < m_k; j++) {
             const int key = m_ch[j] == 0 ? 0 : static_cast<int>(m_ch[j]) - 1;
             if (key != height) continue;
-            if (found && found->m_mtp != static_cast<int64_t>(m_cmtp[j])) return nullptr;
+            // Two coins of one height with different MTPs: one leaf is false (the coin log would refuse it), but Core's
+            // CalculateSequenceLocks dereferences the ancestor, so refuse here explicitly rather than fault on nullptr.
+            if (found && found->m_mtp != static_cast<int64_t>(m_cmtp[j])) abort();
             m_scratch->m_mtp = m_cmtp[j];
             found = m_scratch;
         }

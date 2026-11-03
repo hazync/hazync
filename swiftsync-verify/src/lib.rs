@@ -397,7 +397,7 @@ pub fn describe_profile(p: u32) -> String {
     format!("{}, {}, {}{}",
             if p & PROFILE_LIBZYNC != 0 { "libzync" } else { "canonical" },
             if p & PROFILE_ASSUMEVALID != 0 { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" },
-            if p & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" },
+            if p & PROFILE_SIGNET != 0 { "signet" } else if p & 8 != 0 { "regtest" } else { "mainnet" },
             if p & PROFILE_COINLOG != 0 { ", coin log" } else { "" })
 }
 
@@ -743,12 +743,16 @@ impl Bundle {
     /// Build a bundle from a receipt and its hints file; fails unless the receipt verifies (OK or DEMO) for `img`.
     pub fn make(receipt: &[u8], hints: &[u8], img: &'static Image, anchor: Option<ChainState>, now: u64) -> Result<Bundle, String> {
         use sha2::{Digest as _, Sha256};
-        let rep = verify(&Inputs { receipt, hints, image: img, anchor, now });
+        let rep = verify(&Inputs { receipt, hints, image: img, anchor: anchor.clone(), now });
         if img.profile & PROFILE_COINLOG != 0 {
             return Err("a bundle carries a hints file; a coin-log proof has none".into());
         }
-        if rep.verdict != Verdict::Ok {
-            return Err(format!("the receipt's verdict is {:?}, not Ok; refusing to bundle it", rep.verdict));
+        // Ok, or Demo only for low work on a chain from genesis (a valid chain, e.g. a signet test range). Never an
+        // anchored proof: the bundle's reader would have to trust the same anchor.
+        let anchored = anchor.is_some();
+        if rep.verdict == Verdict::Fail || (rep.verdict == Verdict::Demo && (anchored || !rep.low_work)) {
+            return Err(format!("the receipt's verdict is {:?}{}; refusing to bundle it", rep.verdict,
+                               if anchored { " from a given anchor" } else { "" }));
         }
         let cs = rep.state.expect("verified");
         Ok(Bundle {

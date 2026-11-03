@@ -17,13 +17,14 @@ Status: ready to run once the guest is frozen. Spends money: the user starts eve
 
 | # | run | script | what it shows | expected |
 |---|---|---|---|---|
-| A | **signet 1..2600 from genesis**, 1× RTX PRO 6000 | `signet/genesis/mkbundle.sh 2600` then `gpu_run.sh 2600` (COINLOG=1 default) | a real, genesis-anchored coin-log chain proof; `libzync-verify <rcpt> -` says **OK** (not DEMO); its state equals `coinlog_ref.py` and `block_forest_ref.py` | the 2501..2600 design-B run cost $1.39 per 100 blocks; early signet blocks are smaller. A deadline (`DEADLINE_MIN`) and checkpoints (receipt + `state_<h>.coinlog`) bound the cost and survive a dead pod |
+| A | **signet 1..2600 from genesis**, 1× RTX PRO 6000 | `signet/genesis/mkbundle.sh 2600` then `gpu_run.sh 2600` (COINLOG=1 default) | a real, genesis-anchored coin-log chain proof; `libzync-verify <rcpt> -` says **DEMO** for minimum work only (signet 1..2600 is below Core's `nMinimumChainWork`; every other check `[ok]`, `anchor_id is genesis`); its state equals `coinlog_ref.py` and `block_forest_ref.py` | the 2501..2600 design-B run cost $1.39 per 100 blocks; early signet blocks are smaller. A deadline (`DEADLINE_MIN`) and checkpoints (receipt + `state_<h>.coinlog`) bound the cost and survive a dead pod |
 | B | **mainnet 962,000**, 4× RTX PRO 6000, aggregate spread | `gpu/gpu-libzync-multi.sh` on a coin-log bundle | wall time against design B's **174 s** on the same box shape (GPU_RESULTS.md) | cycles +2.7% (execute mode), so about 180 s. A DEMO proof: a modelled log around one real block (`cl_synth_around`), cycles not history. ⚠ The script predates the consolidated build (it sets round-4 levers and an ECMH hints file): it needs the pins + `HAZYNC_LIBZYNC` + `HAZYNC_COINLOG` build and `HAZYNC_COINLOG_TXCOUNTS` in the bundle, dry-run on the laptop with `HAZYNC_AGG_EXECUTE=1` first |
 | C | **live tip hour**, 4× PRO 6000 | `gpu/fleet/tiprun.sh` | detect-to-verified per block against 191 s (design B, 10-29) | needs a real mainnet log at the tip ⇒ ⚠ not possible until the disk-backed store and a log built from genesis exist; skip for now |
 
 ## 2. Checks after each run
 
-- `libzync-verify <final receipt> -` on the laptop: every line `[ok]`, verdict OK (A) or DEMO (B).
+- `libzync-verify <final receipt> -` on the laptop: every line `[ok]`; verdict DEMO for low work only (A) or DEMO from a modelled anchor (B).
+- Regenerate `swiftsync-verify/vectors/` (marked STALE) from run A's receipts: genesis-anchored cases, the bad_* cases made from them.
 - A: `coinlog_ref.py <blocks> 2600 state_2600.json` → `COINLOG_REF_MATCH`;
   `STATES_OUT=… coinlog_ref.py …` then `block_forest_ref.py check hashes_2600.txt states.jsonl state_2600.json` →
   `BLOCK_FOREST_OK`; `genesis_anchor_id.py signet <id> state_2600.json` → `ANCHOR_MATCH`.

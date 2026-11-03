@@ -5,7 +5,12 @@
 # A watcher harvests and terminates at the deadline, or when the balance falls under $1.
 # Spends money. Env: DEADLINE_MIN (default 570, 9.5 h).
 HI=${1:-2600}; DEADLINE_MIN=${DEADLINE_MIN:-570}; HERE=$(cd "$(dirname "$0")" && pwd)
-cd ~/libzync-gpu/signet-genesis; mkdir -p ckpt; cp -r "$HERE/pod" .; LOG=gpu_run.log; exec >> $LOG 2>&1
+cd ~/libzync-gpu/signet-genesis; cp -r "$HERE/pod" .; LOG=gpu_run.log; exec >> $LOG 2>&1
+# Checkpoints are per image: a receipt of another image (or design B) can never resume this run (review 11-03).
+M=$(tar xzOf sb/sb.tgz ./pins/METHOD_ID 2>/dev/null | grep -v '^#' | head -1); [ -n "$M" ] || { echo "no METHOD_ID pin in sb/sb.tgz"; exit 1; }
+CK=ckpt/$M; mkdir -p $CK
+# A coin-log bundle resumes only from a receipt that has its log: pick the highest height with both.
+CL=$(tar xzOf sb/sb.tgz ./COINLOG 2>/dev/null || echo 0)
 [ -f sb/sb.tgz ] || { echo "run mkbundle.sh first"; exit 1; }
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-n -i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
@@ -44,9 +49,10 @@ scp -q $KS -P $P pod/setup.sh pod/prep.sh pod/run.sh root@$IP:/workspace/ && say
 ssh $K -p $P root@$IP 'cd /workspace && (setsid nohup bash prep.sh > prep.out 2>&1 < /dev/null &)'
 scp -q $KS -P $P sb/sb.tgz sb/sb.tgz.sha256 root@$IP:/workspace/ && say "bundle sent"
 ssh $K -p $P root@$IP 'mkdir -p /workspace/out'
-C=$(ls ckpt 2>/dev/null | sed -n 's/^block_\([0-9]*\)\.rcpt$/\1/p' | sort -n | tail -1)
+C=$(for n in $(ls $CK 2>/dev/null | sed -n 's/^block_\([0-9]*\)\.rcpt$/\1/p' | sort -n); do
+      [ "$CL" != 1 ] || [ -f $CK/state_$n.coinlog ] && echo $n; done | tail -1)
 # A coin-log run resumes only with the log file of the same height (state_<C>.coinlog), sent with its receipt.
-[ -z "$C" ] || { scp -q $KS -P $P ckpt/block_$C.rcpt $(ls ckpt/state_$C.coinlog 2>/dev/null) root@$IP:/workspace/out/ && say "checkpoint $C sent"; }
+[ -z "$C" ] || { scp -q $KS -P $P $CK/block_$C.rcpt $(ls $CK/state_$C.coinlog 2>/dev/null) root@$IP:/workspace/out/ && say "checkpoint $C sent"; }
 for i in $(seq 1 120); do
   [ -f pod_id.txt ] || exit 1   # the deadline fired (and harvested)
   S=$(ssh $K -p $P root@$IP 'grep -h "PREP_OK\|PREP_FAIL\|built in" /workspace/prep.out 2>/dev/null')
@@ -59,14 +65,16 @@ for i in $(seq 1 $((DEADLINE_MIN*4))); do
   [ -f pod_id.txt ] || exit 1   # the deadline fired (and harvested)
   ssh $K -p $P root@$IP 'grep -q RUN_DONE /workspace/out/prove.log 2>/dev/null' && break
   ssh $K -p $P root@$IP true && F=0 || F=$((${F:-0}+1))
-  [ "${F:-0}" -ge 40 ] && { say "POD_LOST: unreachable for 10 min; rerun to resume from ckpt/"; rm -f pod_id.txt; term; exit 1; }
+  [ "${F:-0}" -ge 40 ] && { say "POD_LOST: unreachable for 10 min; rerun to resume from $CK"; rm -f pod_id.txt; term; exit 1; }
   [ $((i % 10)) = 0 ] && say "  $(ssh $K -p $P root@$IP 'tail -1 /workspace/out/times.tsv 2>/dev/null')"
   if [ $((i % 40)) = 0 ]; then   # write under a temp name: a cut-off copy must never look like a receipt
     N=$(ssh $K -p $P root@$IP 'ls /workspace/out' | sed -n 's/^block_\([0-9]*\)\.rcpt$/\1/p' | sort -n | tail -2 | head -1)
-    [ -z "$N" ] || { timeout 120 scp -q $KS -P $P root@$IP:/workspace/out/block_$N.rcpt ckpt/.tmp && mv ckpt/.tmp ckpt/block_$N.rcpt && say "  checkpoint $N"
-      # coin log: the log at N (the run keeps the last two); the receipt is only a checkpoint together with it
-      if ssh $K -p $P root@$IP "test -f /workspace/out/state_$N.coinlog"; then
-        timeout 300 scp -q $KS -P $P root@$IP:/workspace/out/state_$N.coinlog ckpt/.tmpl && mv ckpt/.tmpl ckpt/state_$N.coinlog && say "  coin log $N"; fi; }
+    # Coin log first, then the receipt: a receipt in $CK is a checkpoint only with its log (the run keeps the last
+    # two logs, so N's may already be gone; then this round takes nothing and the next one tries again).
+    if [ -n "$N" ] && { [ "$CL" != 1 ] || { timeout 300 scp -q $KS -P $P root@$IP:/workspace/out/state_$N.coinlog $CK/.tmpl \
+          && mv $CK/.tmpl $CK/state_$N.coinlog; }; }; then
+      timeout 120 scp -q $KS -P $P root@$IP:/workspace/out/block_$N.rcpt $CK/.tmp && mv $CK/.tmp $CK/block_$N.rcpt && say "  checkpoint $N"
+    fi
   fi
   sleep 15; done
 rm -f pod_id.txt   # stop the watcher; if it already started, the lock makes it the one that harvests

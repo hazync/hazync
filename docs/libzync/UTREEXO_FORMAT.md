@@ -38,6 +38,24 @@ The preimage is `58 + len(scriptPubKey)` bytes.
 - A plain SHA-256, not double SHA-256 and not a BIP340 tagged hash.
 - In `verify_input.cpp`, `tx_out_leaves` takes this value as `creation_mtp`.
 
+### 2a. Flag bit 1: tracked by the BIP30 tree
+
+Bits 2-7 of `flags` are zero. Bit 1 is set on every output of a **tracked** transaction, the only transactions that
+can ever repeat a txid (coinbase-smt/src/bip30.rs):
+
+1. **A coinbase is tracked** if either
+   - it is mined at height h below the network's BIP34 height (mainnet 227,931; signet 1; regtest 110, as the test
+     chain runs it with `-testactivationheight=bip34@110`) and **indicates** a height Y with h < Y < 100,000,000; or
+   - its txid repeats a tracked coinbase whose outputs are all spent (the BIP30 tree holds it as REPEATABLE).
+2. **A coinbase indicates Y** when its first input's scriptSig begins with exactly the bytes of Core's `CScript() << Y`:
+   OP_1..OP_16 (0x51..0x60) for 1..16, otherwise a push of 1-5 bytes holding Y little-endian in minimal CScriptNum form
+   (a 0x00 byte appended when the top bit is set). Any other prefix indicates nothing (Y = 0).
+3. **A non-coinbase transaction is tracked** if it has at least one input and every input spends a coin with bit 1.
+
+On mainnet that is 173 transactions to height 940,000; signet (BIP34 from height 1) has none. The guest learns bit 1
+from the BIP30 tree's proofs and the chunk records (agg_lite.rs); `scripts/libzync/utreexo_ref.py` (`Tracked`)
+implements this text.
+
 ## 3. Which outputs are leaves
 
 An output of a block at height h becomes a leaf if and only if all of these hold:
