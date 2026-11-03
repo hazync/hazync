@@ -245,6 +245,11 @@ Given a receipt R, the hints file F and the network:
 4. `J.height == F.stop_height`.
 5. `J.ss_set == 0`.
 6. `J.ss_hints == ss_hints(F)` (§3).
+3b. **Checkpoint.** A libzync image pins one block (`prover/methods/guest/src/checkpoint.rs`): mainnet 970,000 =
+   `000000000000000000014e6a…f29b5a07`, signet 325,000 = `000000057a36…e306fcd4`; none on regtest. The guest refuses any
+   other block at that height, so a proof at or above it shows that its chain contains the checkpoint: a fork must
+   branch after it and carry the work of that stretch of the real chain. Below the checkpoint height the verdict is at
+   best DEMO, as for low work (step 3a). The checkpoint is fixed by the image id; the tip itself still needs step 7.
 7. **Chain identity.** `J.tip_hash` is the block at height `J.height` on the network's chain. The proof says the chain
    it covers is valid from genesis; which chain it is, is its tip hash (each header commits to the previous one, so the
    tip hash identifies the whole history), and a valid fork has its own. Compare it with a source you trust:

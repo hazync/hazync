@@ -2107,6 +2107,12 @@ fn min_chain_work() -> [u8; 32] {
     arr(rev(hx(h)))
 }
 
+/// The height of the checkpoint the guest pins (prover/methods/guest/src/checkpoint.rs; 0 on regtest). Below it a proof
+/// does not show that its chain contains that block: at best DEMO, as for low work.
+fn checkpoint_height() -> u32 {
+    match methods::NETWORK { "mainnet" => 970_000, "signet" => 325_000, _ => 0 }
+}
+
 /// cum_work (little-endian) >= min (little-endian).
 fn work_at_least(w: &[u8; 32], min: [u8; 32]) -> bool {
     (0..32).rev().map(|i| w[i].cmp(&min[i])).find(|o| o.is_ne()).map_or(true, |o| o.is_gt())
@@ -2182,7 +2188,8 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>, expect: 
     }
     check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
     // Core's nMinimumChainWork (v28): below it, a valid chain from genesis is no evidence of the network's chain.
-    let low_work = !work_at_least(&cs.cum_work, min_chain_work());
+    let low_work = !work_at_least(&cs.cum_work, min_chain_work()) || cs.height < checkpoint_height();
+    println!("  height {} {} the pinned checkpoint height {}", cs.height, if cs.height < checkpoint_height() { "<" } else { ">=" }, checkpoint_height());
     // The coin log (COINLOG.md) is sound at every block: no hints file, nothing to close. The SwiftSync fields stay zero.
     if methods::COINLOG {
         check(hints == "-", "a coin-log proof takes no hints file (pass '-')");
@@ -2239,7 +2246,7 @@ fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>, expect: 
         format!(" (chain identity NOT checked: compare block {} = {tip} with a source you trust, --mempool or --expect)", cs.height)
     };
     if fails == 0 && anchor.is_none() && low_work {
-        println!("LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height {}, but below Core's minimum chainwork for {}: not shown to be the network's chain", cs.height, methods::NETWORK);
+        println!("LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height {}, but below Core's minimum chainwork or the pinned checkpoint for {}: not shown to be the network's chain", cs.height, methods::NETWORK);
         std::process::exit(2);
     }
     if fails == 0 && anchor.is_some() {

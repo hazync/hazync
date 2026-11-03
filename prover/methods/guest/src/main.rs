@@ -52,6 +52,8 @@ mod lineage;
 #[cfg(all(feature = "regtest", feature = "coinlog"))]
 #[path = "lineage/regtest_coinlog.rs"]
 mod lineage;
+#[cfg(feature = "libzync")]
+mod checkpoint;
 mod script_flags;
 // libzync: the hint wire format, the SwiftSync hint hash and the network parameters -- the SAME files
 // the host compiles (libzync crate), included by path for the reason coinbase-smt is (hazync#88).
@@ -2265,6 +2267,10 @@ fn aggregate() {
     // The block forest. Induction from the genesis state gives one leaf per height; the check also refuses a base
     // step on an anchor that has no forest, which would otherwise commit a forest with the wrong leaf numbering.
     let utxo_value = prev.utxo_value.saturating_add(r.survivor_value).checked_sub(r.spent_value).expect("utxo_value: the block spends more than the log holds");
+    #[cfg(feature = "libzync")]
+    if let Some((h, x)) = checkpoint::CHECKPOINT {
+        assert!(height != h || r.tip_hash == x, "aggregate: block {height} is not this image's checkpoint");
+    }
     #[cfg(feature = "libzync")]
     let (block_roots, block_leaves) = {
         assert!(prev.block_leaves == prev.height as u64 + 1, "aggregate: block forest {} leaves at height {}", prev.block_leaves, prev.height);

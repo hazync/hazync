@@ -28,6 +28,8 @@ pub const IMAGES: &[Image] = &[
         // Core v28 chainparams.cpp, consensus.nMinimumChainWork (mainnet).
         min_work_hex: "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
         genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
+        checkpoint_height: 970_000,
         lineage: &[],
     },
     Image {
@@ -41,6 +43,8 @@ pub const IMAGES: &[Image] = &[
         // Core v28 chainparams.cpp, consensus.nMinimumChainWork (default signet).
         min_work_hex: "0000000000000000000000000000000000000000000000000000025dbd66e58f",
         genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
+        checkpoint_height: 325_000,
         lineage: &[],
     },
 ];
@@ -77,6 +81,9 @@ pub struct Image {
     pub genesis_anchor_hex: &'static str,
     /// The handovers this image's source pins, oldest first (HANDOVER.md). A proof by this image carries either a
     /// zero lineage (one image since genesis) or the digest of exactly this list.
+    /// The height of the checkpoint the image pins (the guest refuses any other block there). Below it a proof does not
+    /// show that its chain contains the checkpoint, so the verdict is at best `Demo`, as for low work.
+    pub checkpoint_height: u32,
     pub lineage: &'static [Handover],
 }
 
@@ -376,6 +383,11 @@ pub fn verify(inp: &Inputs) -> Report {
     rep.checks.push((true, format!("cum_work 0x{} {} Core's nMinimumChainWork 0x{}{}", work_be_hex(&cs.cum_work),
         if enough_work { ">=" } else { "<" }, inp.image.min_work_hex,
         if enough_work { "" } else { " -- a valid chain, but NOT shown to be the network's: verdict at best DEMO" })));
+    let past_checkpoint = cs.height >= inp.image.checkpoint_height;
+    rep.checks.push((true, format!("height {} {} the image's checkpoint height {}{}", cs.height,
+        if past_checkpoint { ">=" } else { "<" }, inp.image.checkpoint_height,
+        if past_checkpoint { ": the chain contains the pinned checkpoint block" } else { " -- the pinned checkpoint is not reached: verdict at best DEMO" })));
+    let enough_work = enough_work && past_checkpoint;
     rep.low_work = !enough_work;
     rep.verdict = if rep.failed() {
         Verdict::Fail
@@ -537,6 +549,16 @@ pub fn identity_matches(claimed_height: u32, claimed: &str, height: u32, tip: &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_heights_match_the_guest() {
+        let g = include_str!("../../prover/methods/guest/src/checkpoint.rs");
+        for img in IMAGES {
+            let h = img.checkpoint_height.to_string();
+            let h = format!("{}_{}", &h[..h.len() - 3], &h[h.len() - 3..]);
+            assert!(g.contains(&format!("Some(({h}, [")), "{} checkpoint {h} not in the guest's checkpoint.rs", img.network);
+        }
+    }
 
     #[test]
     fn chain_identity() {
