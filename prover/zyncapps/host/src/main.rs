@@ -1,10 +1,12 @@
-//! `zyncapp`: proves and verifies zyncAPP receipts (docs/libzync/ZYNCAPPS.md §5).
+//! `zyncapp`: proves and verifies zyncAPP receipts (docs/libzync/ZYNCAPPS.md §8).
 //!
 //!   zyncapp prove-coin <core receipt> <fact.json from zync-path coin, at = tip> <out receipt> [--signet]
 //!   zyncapp verify-coin <zyncapp receipt>
 //!   zyncapp prove-zeroconf <core tip receipt> <speculative chunk receipt> <record index> <paths.json> <out> [--signet]
 //!       paths.json: [[position, [sibling hex, ...]], ...], one per input of the transaction, from zync-path coin
 //!   zyncapp verify-zeroconf <zyncapp receipt>
+//!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
+//!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
 //!   zyncapp id
 //!
 //! The core receipt is an ASSUMPTION of the zyncAPP receipt (risc0 composition): the zyncAPP receipt's verification
@@ -16,7 +18,72 @@ use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, Z
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
     kind: u32, core_id: [u32; 8], lineage: [u8; 32], anchor_id: [u8; 32], tip_height: u32, tip_hash: [u8; 32],
-    cum_work: [u8; 32], txid: [u8; 32], wtxid: [u8; 32], fee: i64, weight: i64, sigops: i64,
+    cum_work: [u8; 32], max_time: u32, profile: u32, txid: [u8; 32], wtxid: [u8; 32], fee: i64, weight: i64, sigops: i64,
+}
+
+/// The core statement a zyncAPP receipt rests on, judged by the SAME policy as the core verifier (SWIFTSYNC_PROOFS.md
+/// steps 3a, 3b, 4, 6, 7): the core image must be the network's trusted one (or `--core-image <hex>`), the anchor the
+/// network's pinned genesis anchor, the largest block time not in the future; below minimum work or the checkpoint the
+/// answer is DEMO (exit 2); `--expect h:hash` / `--mempool` compare the tip with a source the user trusts. A zyncAPP
+/// guest takes core_id as INPUT (so it survives handovers), so without this a receipt resting on any image would pass.
+struct Core<'a> { core_id: &'a [u32; 8], anchor_id: &'a [u8; 32], profile: u32, height: u32, tip_hash: &'a [u8; 32],
+                  cum_work: &'a [u8; 32], max_time: u32 }
+
+/// Ok(true) = OK, Ok(false) = DEMO; Err = FAIL.
+fn core_policy(c: &Core, a: &[String]) -> Result<bool, String> {
+    use swiftsync_verify::{hex32, identity_matches, parse_expect, work_at_least, words, Image, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
+    let flag = |f: &str| a.iter().position(|x| x == f).and_then(|i| a.get(i + 1)).cloned();
+    let net = if c.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
+    let mut img = Image::by_network(net).ok_or("no built-in image for this network")?;
+    if let Some(h) = flag("--core-image") {
+        img = img.with_method_id(&h.to_lowercase()).ok_or("--core-image: not 64 hex digits")?;
+    }
+    if words(&img.method_id()) != *c.core_id {
+        return Err(format!("rests on core image {}, not the trusted {net} core image {}", id_hex(c.core_id), img.method_id_hex));
+    }
+    if hex32(img.genesis_anchor_hex) != Some(*c.anchor_id) {
+        return Err(format!("anchor_id {} is not the {net} genesis anchor", hex(c.anchor_id)));
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    if c.max_time as u64 > now + MAX_FUTURE_BLOCK_TIME {
+        return Err("time-too-new: the core chain has a block more than 2 h in the future".into());
+    }
+    let mut tip = *c.tip_hash;
+    tip.reverse();
+    let tip = hex(&tip);
+    let mut checked = false;
+    if let Some(e) = flag("--expect") {
+        let (h, x) = parse_expect(&e).ok_or("--expect: want <height>:<64 hex digits>")?;
+        if !identity_matches(h, &x, c.height, c.tip_hash) {
+            return Err(format!("--expect: block {h} is {x}; the core tip is block {} {tip}", c.height));
+        }
+        checked = true;
+    }
+    if a.iter().any(|x| x == "--mempool") {
+        let base = if net == "signet" { "https://mempool.space/signet/api" } else { "https://mempool.space/api" };
+        let url = format!("{base}/block-height/{}", c.height);
+        let o = std::process::Command::new("curl").args(["-sf", "--max-time", "30", &url]).output().map_err(|e| format!("curl: {e}"))?;
+        let got = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
+        if !o.status.success() || !identity_matches(c.height, &got, c.height, c.tip_hash) {
+            return Err(format!("{url} says block {} is {got:?}; the core tip is {tip}", c.height));
+        }
+        checked = true;
+    }
+    if !checked {
+        println!("  chain identity NOT checked: compare block {} = {tip} with a source you trust (--expect, --mempool)", c.height);
+    }
+    Ok(work_at_least(c.cum_work, img.min_work_hex) && c.height >= img.checkpoint_height)
+}
+
+fn verdict(r: Result<bool, String>, ok_line: String) -> ! {
+    match r {
+        Ok(true) => { println!("{ok_line}"); std::process::exit(0) }
+        Ok(false) => {
+            println!("ZYNCAPP_DEMO: {ok_line} -- but the core chain is below minimum work or the checkpoint: not shown to be the network's");
+            std::process::exit(2)
+        }
+        Err(e) => { println!("ZYNCAPP_FAIL: {e}"); std::process::exit(1) }
+    }
 }
 
 #[derive(Deserialize)]
@@ -97,10 +164,12 @@ fn main() {
             let (mut t, mut id) = (z.tip_hash, z.txid);
             t.reverse();
             id.reverse();
-            println!("ZYNCAPP_ZEROCONF_OK: tx {} is valid for block {} on tip {} and spends only coins unspent there (fee {} sat)",
-                     hex(&id), z.tip_height + 1, hex(&t), z.fee);
             println!("  rests on core image {} with anchor_id {}", id_hex(&z.core_id), hex(&z.anchor_id));
             println!("  ⚠ valid now, not final: a conflicting transaction can still confirm first");
+            let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, profile: z.profile, height: z.tip_height,
+                           tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
+            verdict(core_policy(&c, &a), format!("ZYNCAPP_ZEROCONF_OK: tx {} is valid for block {} on tip {} and spends only coins unspent there (fee {} sat)",
+                     hex(&id), z.tip_height + 1, hex(&t), z.fee));
         }
         Some("prove-coin") if a.len() >= 4 => {
             let core: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| die(&e.to_string())))
@@ -132,9 +201,10 @@ fn main() {
             let mut t = z.tip_hash;
             t.reverse();
             let what = match z.spent_by { None => "UNSPENT".to_string(), Some((h, tx, v)) => format!("SPENT at height {h} by tx {tx} input {v}") };
-            println!("ZYNCAPP_COIN_OK: coin {} at log position {} is {what} at height {} (tip {})", hex(&z.coin), z.pos, z.height, hex(&t));
             println!("  rests on core image {} with anchor_id {} and lineage {}", id_hex(&z.core_id), hex(&z.anchor_id), hex(&z.lineage));
-            println!("  ⚠ check that core image is one you trust and anchor_id is the network's genesis anchor (swiftsync-verify IMAGES)");
+            let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, profile: z.profile, height: z.height,
+                           tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
+            verdict(core_policy(&c, &a), format!("ZYNCAPP_COIN_OK: coin {} at log position {} is {what} at height {} (tip {})", hex(&z.coin), z.pos, z.height, hex(&t)));
         }
         _ => die("usage: zyncapp id | prove-coin <core.rcpt> <fact.json> <out.rcpt> [--signet] | verify-coin <zync.rcpt>"),
     }

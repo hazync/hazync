@@ -89,7 +89,7 @@ fn main() {
     let j: ChainState = risc0_zkvm::serde::from_slice(&words).expect("core journal is not a ChainState");
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, ss_set: j.ss_set as u64 };
     // The anchor is policy (the final verifier pins it), so the guest compares it with itself here.
-    facts::check_core_statement(&st, &core_id, 2, signet, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
+    facts::check_core_statement(&st, &core_id, 2, if signet { facts::Network::Signet } else { facts::Network::Mainnet }, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
     let ok = match q.spent_by {
         None => facts::coin_unspent(&j.utxo_roots, j.utxo_leaves, q.pos, &q.coin, &q.path),
         Some((h, t, v)) => h <= j.height && facts::coin_spent_by(&j.utxo_roots, j.utxo_leaves, q.pos, &q.coin, h, t, v, &q.path),

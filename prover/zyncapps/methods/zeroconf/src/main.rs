@@ -43,6 +43,8 @@ pub struct ZeroConf {
     pub tip_height: u32,
     pub tip_hash: [u8; 32],
     pub cum_work: [u8; 32],
+    pub max_time: u32,
+    pub profile: u32,
     pub txid: [u8; 32],
     pub wtxid: [u8; 32],
     pub fee: i64,
@@ -80,7 +82,7 @@ fn main() {
     env::verify(core_id, &chunk_journal).expect("the chunk receipt does not verify under core_id");
     let j: ChainState = risc0_zkvm::serde::from_slice(&words(&tip_journal)).expect("tip journal is not a ChainState");
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, ss_set: j.ss_set as u64 };
-    facts::check_core_statement(&st, &core_id, 2, signet, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
+    facts::check_core_statement(&st, &core_id, 2, if signet { facts::Network::Signet } else { facts::Network::Mainnet }, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
     let mut t = j.recent_times.clone();
     t.sort_unstable();
     let mtp = t[t.len() / 2];
@@ -130,6 +132,6 @@ fn main() {
     }
     env::commit(&ZeroConf {
         kind: KIND_ZYNC_ZEROCONF, core_id, lineage: j.lineage, anchor_id: j.anchor_id, tip_height: j.height,
-        tip_hash: j.tip_hash, cum_work: j.cum_work, txid, wtxid, fee, weight, sigops,
+        tip_hash: j.tip_hash, cum_work: j.cum_work, max_time: j.max_time, profile: j.profile, txid, wtxid, fee, weight, sigops,
     });
 }
