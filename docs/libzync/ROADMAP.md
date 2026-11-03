@@ -22,7 +22,7 @@ refuse it.
 | # | item | status |
 |---|---|---|
 | B1 | `libzync::facts`: coin leaf, unspent / spent-by, block in chain + state at a height, tx in block, tx parsing, `check_core_statement` | done |
-| B2 | host writes `history.bin`; `zync-path coin|find` produce coin facts | done |
+| B2 | host writes `history.bin`; `zync-path coin` / `find` produce coin facts | done |
 | B3 | coin journey: creating tx in a proven block, the coin leaf from its output, the spending tx (`zync-path journey`, `--journey`) | done |
 | B4 | `swiftsync-verify --coin / --journey` (wasm/ffi exposure: next) | done (CLI) |
 | B5 | the first zyncAPP guest: "coin C at its position is unspent/spent at the proof's tip", verifying a core receipt inside the zkVM | next |
@@ -49,7 +49,7 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| E1 | keyed tree (outpoint-keyed sparse tree beside the coin log): "X never existed / is not live" | experiment; measure aggregate cost first, keep only if it pays |
+| E1 | keyed tree for absence: estimated +14% to +74% per block (absence/README.md); build behind a flag and measure late; script-keyed variant is the one proof of reserves needs | estimated |
 
 ## F. main branch
 
