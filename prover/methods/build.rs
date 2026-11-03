@@ -32,6 +32,8 @@ fn lever(name: &str) -> bool {
 /// `profile.rs` in OUT_DIR: what the embedded guest was built for, so the HOST writes the stream that
 /// guest reads instead of trusting a matching set of run-time env vars.
 fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool, txlog: bool) {
+    let otree = std::env::var("HAZYNC_OTREE").as_deref() == Ok("1");
+    let stree = std::env::var("HAZYNC_STREE").as_deref() == Ok("1");
     let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
     std::fs::write(&out, format!(
         "/// The embedded guest reads libzync hint blocks (libzync/src/wire.rs).\n\
@@ -43,7 +45,10 @@ fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool,
          /// The coin log instead of design B's SwiftSync forest (HAZYNC_COINLOG=1).\n\
          pub const COINLOG: bool = {coinlog};\n\
          /// Pre-proved transactions: speculative chunks + the block's record order (HAZYNC_TXLOG=1).\n\
-         pub const TXLOG: bool = {txlog};\n",
+         pub const TXLOG: bool = {txlog};\n\
+         /// E1 measurement trees: outpoint (HAZYNC_OTREE=1), script (HAZYNC_STREE=1).\n\
+         pub const OTREE: bool = {otree};\n\
+         pub const STREE: bool = {stree};\n",
         network)).expect("write profile.rs");
 }
 
@@ -246,6 +251,14 @@ fn main() {
     assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
     if coinlog {
         features.push("coinlog".to_string());
+    }
+    // E1 measurement builds: the outpoint / script trees (libzync/src/itree.rs). Cost only, never a release image.
+    for (env_name, feat) in [("HAZYNC_OTREE", "otree"), ("HAZYNC_STREE", "stree")] {
+        println!("cargo:rerun-if-env-changed={env_name}");
+        if lever(env_name) {
+            assert!(coinlog, "{env_name} needs HAZYNC_COINLOG");
+            features.push(feat.to_string());
+        }
     }
     println!("cargo:rerun-if-env-changed=HAZYNC_TXLOG");
     let txlog = lever("HAZYNC_TXLOG");

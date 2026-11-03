@@ -3544,6 +3544,28 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
     if let Some(h) = hints { std::env::set_var("HAZYNC_LZ_HINTS", h); }
     let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
     let (roots, n, wit) = cl_synth(&std::env::var("HAZYNC_BLOCK").unwrap(), &spends);
+    // E1 measurement trees: the keys the collect run logged, inside a modelled tree of HAZYNC_ITREE_N live keys
+    // (default 180 M, about mainnet's UTXO set).
+    if methods::OTREE || methods::STREE {
+        let text = String::from_utf8_lossy(&log);
+        let tn: u64 = std::env::var("HAZYNC_ITREE_N").ok().and_then(|v| v.parse().ok()).unwrap_or(180_000_000);
+        let mut tw = TREE_WIT.lock().unwrap();
+        tw.clear();
+        for t in 0..2u32 {
+            if (t == 0 && !methods::OTREE) || (t == 1 && !methods::STREE) { continue; }
+            let (mut rem, mut ins): (Vec<libzync::itree::Key>, Vec<libzync::itree::Key>) = (Vec::new(), Vec::new());
+            for l in text.lines() {
+                let Some(i) = l.find("itree: ") else { continue };
+                let f: Vec<&str> = l[i + 7..].split_whitespace().collect();
+                if f.len() != 3 || f[0] != t.to_string() { continue; }
+                let k: [u8; 64] = hx_bytes(f[2]).try_into().expect("itree key: 64 bytes");
+                if f[1] == "R" { rem.push(k) } else { ins.push(k) }
+            }
+            let (r, touched, sib) = libzync::itree::synth(tn, &rem, &ins, 0x5eed + t as u64);
+            println!("  itree {t}: {} removes, {} inserts, {} touched leaves, {} siblings (modelled {tn} keys)", rem.len(), ins.len(), touched.len(), sib.len());
+            tw.push(libzync::itree::encode_bench(&r, tn, &touched, &sib));
+        }
+    }
     println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
     anchor.utxo_roots = roots.clone();
     anchor.utxo_leaves = n;
@@ -3600,6 +3622,16 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
         assert!(order.len() % 2 == 0, "HAZYNC_TXLOG_ORDER: pairs");
         b.write(&((order.len() / 2) as u32)).unwrap();
         if !order.is_empty() { b.write_slice(&order); }
+    }
+    // E1 measurement trees: one block each (empty in a collect run, which logs the keys instead).
+    if methods::OTREE || methods::STREE {
+        let tw = TREE_WIT.lock().unwrap();
+        let want = methods::OTREE as usize + methods::STREE as usize;
+        for i in 0..want {
+            let wv = if bundle.is_none() { Vec::new() } else { tw.get(i).cloned().unwrap_or_default() };
+            b.write(&(wv.len() as u32)).unwrap();
+            if !wv.is_empty() { b.write_slice(&wv); }
+        }
     }
     match &bundle {
         Some(bd) => println!("  libzync: {} bytes of ECMH hints, {}", bd.ecmh.len(),
@@ -10420,6 +10452,8 @@ struct ClHost {
 }
 static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
 static CL_WIT: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+/// E1 measurement: one witness block per tree the image carries (outpoint tree first), itree::encode_bench.
+static TREE_WIT: std::sync::Mutex<Vec<Vec<u32>>> = std::sync::Mutex::new(Vec::new());
 
 /// `state_<h>.json` -> `state_<h>.coinlog`; `anchor.json` -> `anchor.coinlog`.
 fn cl_path_for(state_json: &str) -> String {

@@ -109,3 +109,8 @@ coinlog = ["libzync"]
 # speculative chunks (proved for this height and MTP before the block existed) and takes the block's record order from
 # the host, so a batch may hold transactions the block does not.
 txlog = ["libzync"]
+# libzync MEASUREMENT (E1, HAZYNC_OTREE=1 / HAZYNC_STREE=1): the outpoint-keyed and script-keyed indexed trees
+# (libzync/src/itree.rs) updated in the aggregate, witness and old roots from the host. Cost only, not a chain.
+itree = ["coinlog"]
+otree = ["itree"]
+stree = ["itree"]

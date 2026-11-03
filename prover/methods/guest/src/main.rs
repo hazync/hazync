@@ -96,6 +96,10 @@ mod agg_lite;
 #[cfg(feature = "coinlog")]
 #[path = "../../../../libzync/src/coinlog.rs"]
 mod coinlog;
+#[cfg(feature = "itree")]
+#[path = "../../../../libzync/src/itree.rs"]
+#[allow(dead_code)]
+mod itree;
 // Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
 #[cfg(feature = "msm")]
 mod msm;
@@ -2185,6 +2189,15 @@ fn aggregate() {
     };
     #[cfg(not(feature = "txlog"))]
     let rec_order: Vec<(u32, u32)> = Vec::new();
+    // E1 measurement: one witness block per tree the image carries (outpoint tree first), itree::encode_bench.
+    #[cfg(feature = "itree")]
+    for t in [0usize, 1] {
+        if (t == 0 && !cfg!(feature = "otree")) || (t == 1 && !cfg!(feature = "stree")) { continue; }
+        let n: u32 = env::read();
+        let mut words = vec![0u32; n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        agg_lite::set_tree_witness(t, words);
+    }
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
     // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
@@ -2303,6 +2316,9 @@ fn aggregate() {
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
         block_roots, block_leaves, lineage,
     });
+    // E1 measurement: the trees' new roots after the ChainState (decoders of the ChainState prefix ignore them).
+    #[cfg(feature = "itree")]
+    env::commit_slice(agg_lite::tree_out());
 }
 
 fn main() {

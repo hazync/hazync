@@ -38,8 +38,87 @@ pub const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 static mut LOG_WITNESS: Vec<u32> = Vec::new();
 #[cfg(feature = "coinlog")]
 pub fn set_log_witness(w: Vec<u32>) { unsafe { LOG_WITNESS = w } }
+
+// E1 measurement builds (features otree / stree, docs/libzync/ROADMAP.md): each tree's witness block (itree::encode_bench)
+// and the new roots the aggregate computed, committed after the ChainState. ⛔ MEASUREMENT ONLY: the trees' previous
+// state comes from the witness, not from the previous proof, so these images prove the COST, not a chain of trees.
+#[cfg(feature = "itree")]
+static mut TREE_WITNESS: [Vec<u32>; 2] = [Vec::new(), Vec::new()];
+#[cfg(feature = "itree")]
+static mut TREE_OUT: Vec<u32> = Vec::new();
+#[cfg(feature = "itree")]
+pub fn set_tree_witness(i: usize, w: Vec<u32>) { unsafe { TREE_WITNESS[i] = w } }
+#[cfg(feature = "itree")]
+#[allow(static_mut_refs)]
+pub fn tree_out() -> &'static [u32] { unsafe { &TREE_OUT } }
+
+/// itree: a transaction's input outpoints and output scriptPubKey ranges, from its serialization (witness or not).
+#[cfg(feature = "itree")]
+fn tx_io(b: &[u8]) -> Option<(Vec<([u8; 32], u32)>, Vec<(usize, usize)>)> {
+    fn vi(b: &[u8], o: &mut usize) -> Option<usize> {
+        let f = *b.get(*o)?; *o += 1;
+        let n = match f { 0xfd => 2, 0xfe => 4, 0xff => 8, x => return Some(x as usize) };
+        let mut v = 0u64;
+        for i in 0..n { v |= (*b.get(*o + i)? as u64) << (8 * i); }
+        *o += n;
+        Some(v as usize)
+    }
+    let mut o = 4;
+    if b.get(4) == Some(&0) && b.get(5) == Some(&1) { o += 2; }
+    let nin = vi(b, &mut o)?;
+    let mut ins = Vec::with_capacity(nin);
+    for _ in 0..nin {
+        let t: [u8; 32] = b.get(o..o + 32)?.try_into().ok()?;
+        let v = u32::from_le_bytes(b.get(o + 32..o + 36)?.try_into().ok()?);
+        o += 36;
+        let l = vi(b, &mut o)?;
+        o += l + 4;
+        ins.push((t, v));
+    }
+    let nout = vi(b, &mut o)?;
+    let mut outs = Vec::with_capacity(nout);
+    for _ in 0..nout {
+        o += 8;
+        let l = vi(b, &mut o)?;
+        outs.push((o, l));
+        o += l;
+    }
+    if o > b.len() { return None; }
+    Some((ins, outs))
+}
+
+/// itree: the scriptPubKey ranges of a serialized Vec<TxOut> (a run's prevouts).
+#[cfg(feature = "itree")]
+fn prevout_spks(b: &[u8]) -> Option<Vec<(usize, usize)>> {
+    let mut o = 0;
+    let n = { let f = *b.first()?; o = 1; match f { 0xfd => { o = 3; u16::from_le_bytes(b.get(1..3)?.try_into().ok()?) as usize } 0xfe => { o = 5; u32::from_le_bytes(b.get(1..5)?.try_into().ok()?) as usize } x => x as usize } };
+    let mut v = Vec::with_capacity(n);
+    for _ in 0..n {
+        o += 8;
+        let f = *b.get(o)?; o += 1;
+        let l = match f { 0xfd => { let x = u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?) as usize; o += 2; x } 0xfe => { let x = u32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?) as usize; o += 4; x } x => x as usize };
+        v.push((o, l));
+        o += l;
+    }
+    if o > b.len() { return None; }
+    Some(v)
+}
+
+/// itree keys: SHA-256(txid ‖ vout LE) for the outpoint; SHA-256(scriptPubKey) for the script.
+#[cfg(feature = "itree")]
+fn okey(txid: &[u8; 32], vout: u32) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new(); h.update(txid); h.update(vout.to_le_bytes()); h.finalize().into()
+}
+#[cfg(feature = "stree")]
+fn shash(spk: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(spk).into()
+}
 #[cfg(feature = "coinlog")]
 fn hex32(h: &[u8; 32]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
+#[cfg(feature = "itree")]
+fn hex64(h: &[u8; 64]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
 
 extern "C" {
     /// Empty verify_input.cpp's per-transaction caches and bump hz_tx_generation (round 11).
@@ -160,12 +239,30 @@ impl ChunkCtx {
             #[cfg(feature = "coinlog")]
             push_i64(&mut self.words, unsafe { tx_total_out(tp, tl) });
             self.words.push(n_out);
+            #[cfg(feature = "itree")]
+            let io = tx_io(raw_tx);
+            #[cfg(feature = "itree")]
+            if io.is_none() { ok = false; }
             for l in 0..n_out as usize {
                 push_hash(&mut self.words, &self.out[32 * l..32 * l + 32]);
                 self.words.push(self.out_vout[l]);
                 push_i64(&mut self.words, self.out_val[l] as i64);
+                #[cfg(feature = "itree")]
+                {
+                    let v = self.out_vout[l];
+                    push_hash(&mut self.words, &okey(&txid, v));
+                    #[cfg(feature = "stree")]
+                    {
+                        let (so, sl) = io.as_ref().and_then(|x| x.1.get(v as usize).copied()).unwrap_or((0, 0));
+                        push_hash(&mut self.words, &shash(raw_tx.get(so..so + sl).unwrap_or(&[])));
+                    }
+                }
             }
         }
+        #[cfg(feature = "itree")]
+        let (io_in, pspk) = (tx_io(raw_tx).map(|x| x.0), prevout_spks(prevouts));
+        #[cfg(feature = "itree")]
+        if io_in.is_none() || pspk.is_none() { ok = false; }
         for j in 0..k {
             if results[j] != 1 { ok = false; env::log("core-reject: script"); }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
@@ -177,6 +274,17 @@ impl ChunkCtx {
                 let mut t = [0u8; 32];
                 if unsafe { tx_input_prevout_txid(tp, tl, idx[j], t.as_mut_ptr()) } != 1 { ok = false; }
                 push_hash(&mut self.words, &t);
+            }
+            // itree: the spent coin's outpoint (from the transaction) and script (from the prevout the coin leaf binds)
+            #[cfg(feature = "itree")]
+            {
+                let (t, v) = io_in.as_ref().and_then(|x| x.get(idx[j] as usize).copied()).unwrap_or(([0; 32], 0));
+                push_hash(&mut self.words, &okey(&t, v));
+                #[cfg(feature = "stree")]
+                {
+                    let (so, sl) = pspk.as_ref().and_then(|x| x.get(idx[j] as usize).copied()).unwrap_or((0, 0));
+                    push_hash(&mut self.words, &shash(prevouts.get(so..so + sl).unwrap_or(&[])));
+                }
             }
         }
         self.n_records += 1;
@@ -212,6 +320,9 @@ impl Rd<'_> {
     fn i64(&mut self) -> i64 { let lo = self.u() as u64; let hi = self.u() as u64; (lo | (hi << 32)) as i64 }
 }
 
+/// Words of itree keys per output and per input in a record: the outpoint key (otree / stree) and the script hash (stree).
+const KEY_WORDS: usize = if cfg!(feature = "stree") { 16 } else if cfg!(feature = "itree") { 8 } else { 0 };
+
 /// Advances `r` past one record (the layout `ChunkCtx::record` writes) without interpreting it.
 fn skip_record(r: &mut Rd) {
     r.i = r.i.saturating_add(24);
@@ -222,12 +333,13 @@ fn skip_record(r: &mut Rd) {
         #[cfg(feature = "coinlog")]
         { r.i = r.i.saturating_add(2); }
         let n_out = r.u() as usize;
-        r.i = r.i.saturating_add(n_out.saturating_mul(11));
+        r.i = r.i.saturating_add(n_out.saturating_mul(11 + KEY_WORDS));
     }
     for _ in 0..count {
         if r.bad || r.i > r.w.len() { r.bad = true; return; }
         r.i = r.i.saturating_add(8);
         if r.u() & 1 == 1 { r.i = r.i.saturating_add(8); }
+        r.i = r.i.saturating_add(KEY_WORDS);
     }
     if r.i > r.w.len() { r.bad = true; }
 }
@@ -253,6 +365,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let words: usize = journals.iter().map(|j| j.len()).sum();
     // Coinbase: the only transaction the aggregate parses.
     let mut output_leaves: Vec<[u8; 32]> = Vec::with_capacity(words / 9);
+    #[cfg(feature = "itree")]
+    let mut out_keys: Vec<([u8; 32], [u8; 32])> = Vec::with_capacity(words / 9);
     let mut out_pos: Vec<u32> = Vec::with_capacity(words / 9);   // creating tx position, parallel
     let mut out_vout: Vec<u32> = Vec::with_capacity(words / 9);  // output index in its transaction, parallel
     let mut out_val: Vec<u64> = Vec::with_capacity(words / 9);   // amount, parallel
@@ -280,6 +394,15 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 out_pos.push(0);
                 out_vout.push(cb_vout[l]);
                 out_val.push(cb_val[l]);
+                #[cfg(feature = "itree")]
+                {
+                    #[cfg(feature = "stree")]
+                    let sh = tx_io(&w.coinbase_tx).and_then(|x| x.1.get(cb_vout[l] as usize).copied())
+                        .map(|(o, n)| shash(&w.coinbase_tx[o..o + n])).unwrap_or([0; 32]);
+                    #[cfg(not(feature = "stree"))]
+                    let sh = [0u8; 32];
+                    out_keys.push((okey(&cb_txid, cb_vout[l]), sh));
+                }
             }
         }
         n
@@ -298,6 +421,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut total_sigops: i64 = 0;
     let mut spends: Vec<([u8; 32], u32, bool, u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height, input index), block order
     let mut cb_spends: Vec<([u8; 32], bool)> = Vec::new();
+    // itree: (outpoint key, script hash) per spend and per indexed output, parallel to `spends` / `output_leaves`
+    #[cfg(feature = "itree")]
+    let mut spend_keys: Vec<([u8; 32], [u8; 32])> = Vec::with_capacity(words / 9);
     let mut tracked_new: Vec<([u8; 32], u32)> = Vec::new();
     // The open transaction: all inputs seen so far are tracked, and whether it claimed to be.
     let (mut tr_all, mut tr_claim) = (false, false);
@@ -382,6 +508,15 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     out_pos.push(tx_pos);
                     out_vout.push(v);
                     out_val.push(val);
+                    #[cfg(feature = "itree")]
+                    {
+                        let ok_ = r.h();
+                        #[cfg(feature = "stree")]
+                        let sh = r.h();
+                        #[cfg(not(feature = "stree"))]
+                        let sh = [0u8; 32];
+                        out_keys.push((ok_, sh));
+                    }
                 }
                 if tr_claim && n_out > 0 { tracked_new.push((txid, n_out)); }
                 cur = Some((txid, wt, ph, n_vin, 0));
@@ -399,12 +534,24 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 let f = r.u();
                 if f > 7 { all_ok = false; }
                 spends.push((leaf, tx_pos, f & 2 != 0, start.wrapping_add(k)));
+                #[cfg(feature = "itree")]
+                let spend_key_at = spends.len() - 1;
                 tr_all &= f & 4 != 0;
                 // The BIP30 tree counts only TRACKED transactions' outputs (UTREEXO_FORMAT.md §2a), the only ones that can
                 // ever repeat. A repeat of an untracked coinbase is refused whatever its count says (live or SPENT), so
                 // decrementing it on a spend changed no verdict, and a double spend is the coin log's refusal (review
                 // 11-03; it was ~1.5 M cycles per spent coinbase coin). The txid is still read, to keep the record aligned.
                 if f & 1 == 1 { let t = r.h(); if f & 4 != 0 { cb_spends.push((t, true)); } }
+                #[cfg(feature = "itree")]
+                {
+                    let ok_ = r.h();
+                    #[cfg(feature = "stree")]
+                    let sh = r.h();
+                    #[cfg(not(feature = "stree"))]
+                    let sh = [0u8; 32];
+                    debug_assert!(spend_keys.len() == spend_key_at);
+                    spend_keys.push((ok_, sh));
+                }
             }
             if r.bad { all_ok = false; break; }
         }
@@ -451,7 +598,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let (mut ext, mut in_block_spent): (Vec<([u8; 32], u32, u32)>, u64) = (Vec::new(), 0);   // (leaf, tx position, input index)
     #[cfg(feature = "coinlog")]
     if ss_mode == 1 { env::log("agg-lite: REJECT a coin-log image takes no hints file"); all_ok = false; }
-    for (leaf, txp, same_height, _vin) in &spends {
+    #[cfg(feature = "itree")]
+    let mut ext_keys: Vec<([u8; 32], [u8; 32])> = Vec::new();
+    for (_si, (leaf, txp, same_height, _vin)) in spends.iter().enumerate() {
         match find(&key(leaf)) {
             Ok(i) => {
                 // In-block spend: created by a strictly earlier tx, spent at most once.
@@ -477,6 +626,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 // coinlog: a coin from an earlier block, which must be unspent in the log at the position the prover names
                 #[cfg(feature = "coinlog")]
                 ext.push((*leaf, *txp, *_vin));
+                #[cfg(feature = "itree")]
+                ext_keys.push(spend_keys[_si]);
             }
         }
     }
@@ -511,10 +662,14 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     #[cfg(feature = "coinlog")]
     let (next_roots, next_leaves, survivor_value, spent_value) = {
         let mut appends: Vec<[u8; 32]> = Vec::with_capacity(output_leaves.len());
+        #[cfg(feature = "itree")]
+        let mut app_keys: Vec<([u8; 32], [u8; 32])> = Vec::with_capacity(output_leaves.len());
         let mut survivor_value: u64 = 0;
         for (k, leaf) in output_leaves.iter().enumerate() {
             if let Ok(i) = find(&key(leaf)) { if spent[i] { continue; } }
             appends.push(*leaf);
+            #[cfg(feature = "itree")]
+            app_keys.push(out_keys[k]);
             survivor_value = survivor_value.saturating_add(out_val[k]);
         }
         let (mut roots, mut n) = (w.root_prev.roots.clone(), w.root_prev.num_leaves);
@@ -534,6 +689,43 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     }
                 }
                 _ => { env::log("agg-lite: REJECT coin log witness malformed or wrong length"); all_ok = false; }
+            }
+        }
+        // E1 measurement: the outpoint tree (key = outpoint ‖ 0) and the script tree (key = script ‖ outpoint) take the
+        // same removes (the earlier coins spent) and inserts (the coins appended), in block order.
+        #[cfg(feature = "itree")]
+        {
+            let mk = |t: usize, k: &([u8; 32], [u8; 32])| -> itree::Key {
+                let mut o = [0u8; 64];
+                if t == 0 { o[..32].copy_from_slice(&k.0); } else { o[..32].copy_from_slice(&k.1); o[32..].copy_from_slice(&k.0); }
+                o
+            };
+            let trees: &[usize] = if cfg!(all(feature = "otree", feature = "stree")) { &[0, 1] } else if cfg!(feature = "stree") { &[1] } else { &[0] };
+            for &t in trees {
+                let rem: Vec<itree::Key> = ext_keys.iter().map(|k| mk(t, k)).collect();
+                let ins: Vec<itree::Key> = app_keys.iter().map(|k| mk(t, k)).collect();
+                if swiftsync::collecting() {
+                    for k in &rem { env::log(&alloc::format!("itree: {t} R {}", hex64(k))); }
+                    for k in &ins { env::log(&alloc::format!("itree: {t} I {}", hex64(k))); }
+                    continue;
+                }
+                #[allow(static_mut_refs)]
+                match itree::decode_bench(unsafe { &TREE_WITNESS[t] }) {
+                    Some((mut tr, mut tn, touched, sib)) => {
+                        if let Err(e) = itree::apply(&mut tr, &mut tn, &touched, &sib, &rem, &ins) {
+                            env::log(&alloc::format!("agg-lite: REJECT tree {t}: {e:?}"));
+                            all_ok = false;
+                        }
+                        #[allow(static_mut_refs)]
+                        unsafe {
+                            TREE_OUT.push(t as u32);
+                            TREE_OUT.push(tn as u32);
+                            TREE_OUT.push((tn >> 32) as u32);
+                            for r in &tr { TREE_OUT.push(r.is_some() as u32); TREE_OUT.extend_from_slice(&r.unwrap_or([0; 8])); }
+                        }
+                    }
+                    None => { env::log("agg-lite: REJECT tree witness malformed"); all_ok = false; }
+                }
             }
         }
         (normalize(roots), n, survivor_value, total_in.saturating_sub(in_block_spent))
