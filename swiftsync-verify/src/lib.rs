@@ -612,6 +612,92 @@ pub fn check_coin_fact(cs: &ChainState, f: &CoinFact) -> Result<String, String> 
     }
 }
 
+/// A transaction in a proven block (ZYNCAPPS.md §5): the block's header and coin state, its path in the proof's block
+/// forest, and the transaction's Merkle branch.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TxFact {
+    pub height: u32,
+    /// The 80-byte header, hex.
+    pub header: String,
+    /// The coin-state digest after this block (`utxo_state`), hex.
+    pub state: String,
+    pub block_path: Vec<String>,
+    /// The transaction, hex, with or without witness.
+    pub tx: String,
+    /// Its position in the block (coinbase 0) and its Merkle branch, bottom-up.
+    pub index: u32,
+    pub branch: Vec<String>,
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+}
+
+/// Checks that the transaction is at `index` of the block at `height` of the proven chain. Ok: its txid and parse.
+pub fn check_tx_fact(cs: &ChainState, f: &TxFact) -> Result<([u8; 32], libzync::facts::TxView), String> {
+    let header: [u8; 80] = unhex(&f.header).and_then(|h| h.try_into().ok()).ok_or("header: not 80 bytes of hex")?;
+    let state = hex32(&f.state.to_lowercase()).ok_or("state: not 64 hex digits")?;
+    let bp = hexes(&f.block_path).ok_or("block_path: not 64-hex-digit hashes")?;
+    let hash = libzync::facts::header_hash(&header);
+    if !block_in_chain(cs, f.height, &hash, &state, &bp) {
+        return Err(format!("block {} with that header and state is not in the proof's block forest", f.height));
+    }
+    let raw = unhex(&f.tx).ok_or("tx: not hex")?;
+    let mut o = 0;
+    let view = libzync::facts::parse_tx(&raw, &mut o).filter(|_| o == raw.len()).ok_or("tx: not one transaction")?;
+    let br = hexes(&f.branch).ok_or("branch: not 64-hex-digit hashes")?;
+    let txid = libzync::facts::tx_in_block(&header, &view.stripped, f.index, &br)
+        .ok_or_else(|| format!("tx is not at position {} of block {}", f.index, f.height))?;
+    Ok((txid, view))
+}
+
+/// One hop of a coin's journey: the transaction that created it, the coin's state in the log, and (if spent) the
+/// transaction that spent it. `tracked` and `creation_mtp` complete the coin leaf (UTREEXO_FORMAT.md §2); a wrong
+/// value gives a leaf the log does not hold, so they are checked, not trusted.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CoinJourney {
+    pub origin: TxFact,
+    pub vout: u32,
+    pub tracked: bool,
+    pub creation_mtp: u32,
+    pub fact: CoinFact,
+    pub spend: Option<TxFact>,
+}
+
+pub fn check_coin_journey(cs: &ChainState, j: &CoinJourney) -> Result<String, String> {
+    let (txid, view) = check_tx_fact(cs, &j.origin).map_err(|e| format!("origin: {e}"))?;
+    let (value, spk) = view.outputs.get(j.vout as usize).ok_or("origin: no such output")?;
+    let leaf = libzync::facts::coin_leaf(&txid, j.vout, *value, spk, j.origin.height, j.origin.index == 0, j.tracked, j.creation_mtp);
+    if hex(&leaf) != j.fact.coin.to_lowercase() {
+        return Err("the origin output's coin leaf is not the fact's coin".into());
+    }
+    let line = check_coin_fact(cs, &j.fact)?;
+    let mut d = txid;
+    d.reverse();
+    let mut out = format!("{}:{} ({value} sat) created at height {} -- {line}", hex(&d), j.vout, j.origin.height);
+    match (j.fact.spent_by, &j.spend) {
+        (None, None) => {}
+        (Some((h, t, v)), Some(sp)) => {
+            let (sid, sview) = check_tx_fact(cs, sp).map_err(|e| format!("spend: {e}"))?;
+            if sp.height != h || sp.index != t {
+                return Err("spend: not the transaction the log names".into());
+            }
+            if sview.inputs.get(v as usize) != Some(&(txid, j.vout)) {
+                return Err("spend: that input does not spend this coin".into());
+            }
+            let mut d = sid;
+            d.reverse();
+            out += &format!("; spent by {} input {v}", hex(&d));
+        }
+        (Some(_), None) => return Err("the coin was spent: the journey needs the spending transaction".into()),
+        (None, Some(_)) => return Err("the coin is unspent: a spending transaction makes no sense".into()),
+    }
+    Ok(out)
+}
+
 fn normalize_roots(mut r: Vec<Option<[u8; 32]>>) -> Vec<Option<[u8; 32]>> {
     while r.last() == Some(&None) {
         r.pop();
@@ -673,6 +759,96 @@ mod tests {
         assert!(check_coin_fact(&cs, &f).is_err());
         cs.profile &= !PROFILE_COINLOG;
         assert!(check_coin_fact(&cs, &fact(3, 5)).is_err());
+    }
+
+    #[test]
+    fn coin_journey_end_to_end() {
+        use libzync::facts::{coin_leaf, header_hash, merkle_branch, parse_tx, txid};
+        use libzync::history::{block_path, replay, Rec};
+        // legacy txs: version, 1 input, outputs, locktime
+        let mk = |prev: [u8; 32], vout: u32, outs: &[(u64, &[u8])]| -> Vec<u8> {
+            let mut t = 1u32.to_le_bytes().to_vec();
+            t.push(1);
+            t.extend_from_slice(&prev);
+            t.extend_from_slice(&vout.to_le_bytes());
+            t.extend_from_slice(&[2, 0x51, 0x51]);
+            t.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+            t.push(outs.len() as u8);
+            for (v, spk) in outs {
+                t.extend_from_slice(&v.to_le_bytes());
+                t.push(spk.len() as u8);
+                t.extend_from_slice(spk);
+            }
+            t.extend_from_slice(&[0; 4]);
+            t
+        };
+        let cb1 = mk([0; 32], 0xffff_ffff, &[(50, b"\x51\x52\x60")]); // 65 bytes: a 64-byte tx is refused by design
+        let id1 = txid(&parse_tx(&cb1, &mut 0).unwrap());
+        let cb2 = mk([0; 32], 0xffff_ffff, &[(51, b"\x53")]);
+        let sp = mk(id1, 0, &[(40, b"\x54\x55\x56")]);
+        let id_cb2 = txid(&parse_tx(&cb2, &mut 0).unwrap());
+        let id_sp = txid(&parse_tx(&sp, &mut 0).unwrap());
+        let header = |prev: [u8; 32], root: [u8; 32]| -> [u8; 80] {
+            let mut h = [0u8; 80];
+            h[4..36].copy_from_slice(&prev);
+            h[36..68].copy_from_slice(&root);
+            h
+        };
+        let h1 = header([9; 32], id1);
+        let mut p = [0u8; 64];
+        p[..32].copy_from_slice(&id_cb2);
+        p[32..].copy_from_slice(&id_sp);
+        let root2: [u8; 32] = sha256(&sha256(&p));
+        let h2 = header(header_hash(&h1), root2);
+        let mtp1 = 1_231_006_505u32;
+        let leaf_a = coin_leaf(&id1, 0, 50, b"\x51\x52\x60", 1, true, false, mtp1);
+        let leaf_b = coin_leaf(&id_cb2, 0, 51, b"\x53", 2, true, false, 777);
+        let leaf_c = coin_leaf(&id_sp, 0, 40, b"\x54\x55\x56", 2, false, false, 777);
+        let recs = vec![
+            Rec { height: 0, hash: [7; 32], value: 0, flips: vec![], appends: vec![] },
+            Rec { height: 1, hash: header_hash(&h1), value: 50, flips: vec![], appends: vec![leaf_a] },
+            Rec { height: 2, hash: header_hash(&h2), value: 91, flips: vec![(0, 1, 0)], appends: vec![leaf_b, leaf_c] },
+        ];
+        let r = replay(&recs, 2, 2).unwrap();
+        let mut cs = genesis_anchor(&IMAGES[0]);
+        cs.profile |= PROFILE_COINLOG;
+        cs.height = 2;
+        cs.utxo_roots = r.log.roots();
+        cs.utxo_leaves = r.log.len();
+        cs.block_roots = block_path(&r.block_leaves, 0).1;
+        cs.block_leaves = 3;
+        let txf = |h: u32, hdr: &[u8; 80], ids: &[[u8; 32]], raw: &[u8], index: usize| TxFact {
+            height: h, header: hex(hdr), state: hex(&r.states[h as usize]),
+            block_path: block_path(&r.block_leaves, h as u64).0.iter().map(|x| hex(x)).collect(),
+            tx: hex(raw), index: index as u32, branch: merkle_branch(ids, index).iter().map(|x| hex(x)).collect(),
+        };
+        let j = CoinJourney {
+            origin: txf(1, &h1, &[id1], &cb1, 0), vout: 0, tracked: false, creation_mtp: mtp1,
+            fact: CoinFact {
+                at: 2, pos: 0, coin: hex(&leaf_a), spent_by: r.spenders.get(&0).copied(),
+                path: r.log.path(0).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
+                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None,
+            },
+            spend: Some(txf(2, &h2, &[id_cb2, id_sp], &sp, 1)),
+        };
+        let ok = check_coin_journey(&cs, &j).unwrap();
+        assert!(ok.contains("(50 sat) created at height 1") && ok.contains("SPENT at height 2 by transaction 1 input 0"), "{ok}");
+        // refusals
+        let mut b = j.clone();
+        b.creation_mtp += 1;
+        assert!(check_coin_journey(&cs, &b).is_err(), "wrong mtp");
+        let mut b = j.clone();
+        b.spend = Some(txf(2, &h2, &[id_cb2, id_sp], &cb2, 0));
+        assert!(check_coin_journey(&cs, &b).is_err(), "a spend tx that is not the one the log names");
+        let mut b = j.clone();
+        b.spend = None;
+        assert!(check_coin_journey(&cs, &b).is_err(), "spent but no spend tx");
+        let mut b = j.clone();
+        b.origin.index = 1;
+        assert!(check_coin_journey(&cs, &b).is_err(), "wrong position in the block");
+        let mut b = j.clone();
+        b.origin.state = hex(&r.states[2]);
+        assert!(check_coin_journey(&cs, &b).is_err(), "wrong block state");
     }
 
     #[test]

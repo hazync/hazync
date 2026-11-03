@@ -98,3 +98,24 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 - Freshness: settled by the coin log (sound at every block). Under design B coins are "at H".
 - Paths for old heights: the host keeps (or replays) the log at that height; a disk-backed store is needed on mainnet.
 - Signature checks inside a zyncAPP should reuse the core's libsecp and script code, not a new implementation.
+
+## 5. Coin facts and journeys (built, 11-03)
+
+The shared checks are `libzync/src/facts.rs` (no_std, for zyncAPP guests and native verifiers). The host writes
+`history.bin` (libzync/src/history.rs) on every run from genesis: per height the block hash, the live value, the
+spends as (position, tx, vin) and the appended leaves. From it `zync-path` (swiftsync-verify crate) produces, and
+`swiftsync-verify --coin / --journey` checks against a verified tip proof:
+
+| file | proves |
+|---|---|
+| `CoinFact` (`zync-path coin <history> <tip> <at> <pos>`) | coin C at log position p is unspent, or was spent by (height, tx, vin), in the coin state after height `at`; below the tip, `at`'s block leaf is opened in the tip's block forest |
+| `CoinJourney` (`zync-path journey <history> <tip> <pos> --bitcoin-cli "<cmd>"`) | the transaction that created C is at its position in a proven block (header + Merkle branch + block leaf), C's leaf is that output's (value, scriptPubKey, height, coinbase, tracked, creation MTP), C's state at the tip, and, if spent, the spending transaction is the one the log names and its input spends C |
+
+Walking a journey backwards (a creating transaction's inputs) and forwards (the spender's outputs) is a chain of
+these files. Limits:
+
+- **A 64-byte transaction cannot be shown in a block** (`tx_in_block`): its txid could be an inner node of the Merkle
+  tree. Coins created or spent by one have a coin fact but no journey.
+- **Coins created and spent in the same block** never enter the log: that hop is shown by the block alone.
+- `history.bin` and `zync-path` replay everything in memory; a mainnet path service needs the disk-backed store
+  (ROADMAP C1).

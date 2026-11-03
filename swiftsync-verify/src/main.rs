@@ -36,7 +36,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--coin <fact.json>]... <receipt|bundle.sspf> <file.hints | - with --coinlog>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--coin <fact.json>]... [--journey <journey.json>]... <receipt|bundle.sspf> <file.hints | - with --coinlog>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <file.hints> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
@@ -65,6 +65,7 @@ fn main() {
     let mut coinlog = false;
     let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
     let mut coin_facts: Vec<String> = Vec::new();
+    let mut journeys: Vec<String> = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -77,6 +78,7 @@ fn main() {
             "--mempool" => mempool = Some(String::new()),
             "--mempool-url" => mempool = Some(args.next().unwrap_or_else(|| usage())),
             "--coin" => coin_facts.push(args.next().unwrap_or_else(|| usage())),
+            "--journey" => journeys.push(args.next().unwrap_or_else(|| usage())),
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
                 let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>")) };
@@ -201,6 +203,14 @@ fn main() {
             match f.and_then(|f| swiftsync_verify::check_coin_fact(cs, &f)) {
                 Ok(line) => rep.checks.push((true, format!("--coin {}: {line}", esc(p)))),
                 Err(e) => rep.checks.push((false, format!("--coin {}: {e}", esc(p)))),
+            }
+        }
+        for p in &journeys {
+            let f: Result<swiftsync_verify::CoinJourney, String> = std::fs::read(p).map_err(|e| e.to_string())
+                .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
+            match f.and_then(|f| swiftsync_verify::check_coin_journey(cs, &f)) {
+                Ok(line) => rep.checks.push((true, format!("--journey {}: {line}", esc(p)))),
+                Err(e) => rep.checks.push((false, format!("--journey {}: {e}", esc(p)))),
             }
         }
         if rep.checks.iter().any(|(ok, _)| !ok) {

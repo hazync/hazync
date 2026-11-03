@@ -159,6 +159,130 @@ pub fn tx_in_block(header: &[u8; 80], tx: &[u8], index: u32, branch: &[H]) -> Op
     (node[..] == header[36..68]).then_some(txid)
 }
 
+/// A transaction's outpoints and outputs, from its serialization (with or without witness).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TxView {
+    /// The serialization without witness: its double SHA-256 is the txid.
+    pub stripped: alloc::vec::Vec<u8>,
+    pub inputs: alloc::vec::Vec<(H, u32)>,
+    pub outputs: alloc::vec::Vec<(u64, alloc::vec::Vec<u8>)>,
+}
+
+fn rd<'a>(b: &'a [u8], o: &mut usize, n: usize) -> Option<&'a [u8]> {
+    let e = o.checked_add(n)?;
+    let r = b.get(*o..e)?;
+    *o = e;
+    Some(r)
+}
+
+fn varint(b: &[u8], o: &mut usize) -> Option<u64> {
+    let f = rd(b, o, 1)?[0];
+    Some(match f {
+        0xfd => u16::from_le_bytes(rd(b, o, 2)?.try_into().ok()?) as u64,
+        0xfe => u32::from_le_bytes(rd(b, o, 4)?.try_into().ok()?) as u64,
+        0xff => u64::from_le_bytes(rd(b, o, 8)?.try_into().ok()?),
+        x => x as u64,
+    })
+}
+
+fn put_varint(v: &mut alloc::vec::Vec<u8>, n: u64) {
+    match n {
+        0..=0xfc => v.push(n as u8),
+        0xfd..=0xffff => { v.push(0xfd); v.extend_from_slice(&(n as u16).to_le_bytes()); }
+        0x1_0000..=0xffff_ffff => { v.push(0xfe); v.extend_from_slice(&(n as u32).to_le_bytes()); }
+        _ => { v.push(0xff); v.extend_from_slice(&n.to_le_bytes()); }
+    }
+}
+
+/// Parses one transaction at `*o` (BIP144 witness form or legacy), advancing `*o` past it.
+pub fn parse_tx(b: &[u8], o: &mut usize) -> Option<TxView> {
+    let start = *o;
+    let version = rd(b, o, 4)?;
+    let mut seg = false;
+    if b.get(*o) == Some(&0) && b.get(*o + 1) == Some(&1) {
+        seg = true;
+        *o += 2;
+    }
+    let mut st = alloc::vec::Vec::new();
+    st.extend_from_slice(version);
+    let nin = varint(b, o)?;
+    if nin == 0 || nin > 1 << 20 {
+        return None;
+    }
+    put_varint(&mut st, nin);
+    let mut inputs = alloc::vec::Vec::new();
+    for _ in 0..nin {
+        let s0 = *o;
+        let txid: H = rd(b, o, 32)?.try_into().ok()?;
+        let vout = u32::from_le_bytes(rd(b, o, 4)?.try_into().ok()?);
+        let l = varint(b, o)? as usize;
+        rd(b, o, l)?;
+        rd(b, o, 4)?;
+        st.extend_from_slice(&b[s0..*o]);
+        inputs.push((txid, vout));
+    }
+    let nout = varint(b, o)?;
+    if nout > 1 << 20 {
+        return None;
+    }
+    put_varint(&mut st, nout);
+    let mut outputs = alloc::vec::Vec::new();
+    for _ in 0..nout {
+        let s0 = *o;
+        let value = u64::from_le_bytes(rd(b, o, 8)?.try_into().ok()?);
+        let l = varint(b, o)? as usize;
+        let spk = rd(b, o, l)?.to_vec();
+        st.extend_from_slice(&b[s0..*o]);
+        outputs.push((value, spk));
+    }
+    if seg {
+        for _ in 0..nin {
+            let k = varint(b, o)?;
+            for _ in 0..k {
+                let l = varint(b, o)? as usize;
+                rd(b, o, l)?;
+            }
+        }
+    }
+    st.extend_from_slice(rd(b, o, 4)?);
+    let _ = start;
+    Some(TxView { stripped: st, inputs, outputs })
+}
+
+/// A whole block: its 80-byte header and every transaction.
+pub fn parse_block(b: &[u8]) -> Option<([u8; 80], alloc::vec::Vec<TxView>)> {
+    let header: [u8; 80] = b.get(..80)?.try_into().ok()?;
+    let mut o = 80;
+    let n = varint(b, &mut o)?;
+    let mut txs = alloc::vec::Vec::new();
+    for _ in 0..n {
+        txs.push(parse_tx(b, &mut o)?);
+    }
+    (o == b.len()).then_some((header, txs))
+}
+
+/// The Merkle branch (bottom-up) of transaction `index` among `txids`, as Core builds the tree (an odd level
+/// duplicates its last node).
+pub fn merkle_branch(txids: &[H], index: usize) -> alloc::vec::Vec<H> {
+    let mut level = txids.to_vec();
+    let mut i = index;
+    let mut br = alloc::vec::Vec::new();
+    while level.len() > 1 {
+        if level.len() % 2 == 1 {
+            level.push(*level.last().unwrap());
+        }
+        br.push(level[i ^ 1]);
+        level = level.chunks_exact(2).map(|c| { let mut p = [0u8; 64]; p[..32].copy_from_slice(&c[0]); p[32..].copy_from_slice(&c[1]); dsha(&p) }).collect();
+        i /= 2;
+    }
+    br
+}
+
+/// The txid of a [`TxView`].
+pub fn txid(t: &TxView) -> H {
+    dsha(&t.stripped)
+}
+
 /// The fields of a core `ChainState` a zyncAPP's statement rests on (SWIFTSYNC_PROOFS.md §3).
 pub struct CoreStatement<'a> {
     pub kind: u32,
@@ -292,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn merkle_branch() {
+    fn merkle_branch_check() {
         // a 3-tx block: Core duplicates the last node on an odd level
         let txs: [&[u8]; 3] = [b"coinbase tx bytes", b"second tx bytes!", b"third transaction"];
         let ids: Vec<H> = txs.iter().map(|t| dsha(t)).collect();
@@ -306,6 +430,50 @@ mod tests {
         assert_eq!(tx_in_block(&header, txs[1], 0, &[ids[0], l1]), None);
         assert_eq!(tx_in_block(&header, &[0u8; 64], 0, &[]), None);
         assert_eq!(tx_in_block(&header, txs[0], 4, &[ids[1], l1]), None, "index past the branch");
+    }
+
+    #[test]
+    fn parse_real_txs() {
+        // mainnet block 170's second tx (the first bitcoin payment, legacy) and a segwit tx shape
+        let hexs = "0100000001c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704000000004847304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff0200ca9a3b00000000434104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac00286bee0000000043410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac00000000";
+        let raw: alloc::vec::Vec<u8> = (0..hexs.len()).step_by(2).map(|i| u8::from_str_radix(&hexs[i..i + 2], 16).unwrap()).collect();
+        let mut o = 0;
+        let t = parse_tx(&raw, &mut o).unwrap();
+        assert_eq!(o, raw.len());
+        let mut id = txid(&t);
+        id.reverse();
+        let shown: alloc::string::String = id.iter().map(|b| alloc::format!("{b:02x}")).collect();
+        assert_eq!(shown, "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16");
+        assert_eq!(t.outputs.len(), 2);
+        assert_eq!(t.outputs[0].0, 1_000_000_000);
+        // the same tx in witness form (one empty witness stack): same txid
+        let mut w = raw[..4].to_vec();
+        w.extend_from_slice(&[0, 1]);
+        w.extend_from_slice(&raw[4..raw.len() - 4]);
+        w.push(0);
+        w.extend_from_slice(&raw[raw.len() - 4..]);
+        let mut o = 0;
+        let tw = parse_tx(&w, &mut o).unwrap();
+        assert_eq!((o, txid(&tw)), (w.len(), txid(&t)));
+        // branch round trip
+        let ids: alloc::vec::Vec<H> = (0..5u64).map(h).collect();
+        let mut header = [0u8; 80];
+        let mut level = ids.clone();
+        while level.len() > 1 {
+            if level.len() % 2 == 1 { level.push(*level.last().unwrap()); }
+            level = level.chunks_exact(2).map(|c| { let mut p = [0u8; 64]; p[..32].copy_from_slice(&c[0]); p[32..].copy_from_slice(&c[1]); dsha(&p) }).collect();
+        }
+        header[36..68].copy_from_slice(&level[0]);
+        for i in 0..5 {
+            let br = merkle_branch(&ids, i);
+            let mut node = ids[i];
+            for (j, s) in br.iter().enumerate() {
+                let mut p = [0u8; 64];
+                if (i >> j) & 1 == 0 { p[..32].copy_from_slice(&node); p[32..].copy_from_slice(s); } else { p[..32].copy_from_slice(s); p[32..].copy_from_slice(&node); }
+                node = dsha(&p);
+            }
+            assert_eq!(node, level[0], "{i}");
+        }
     }
 
     #[test]

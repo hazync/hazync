@@ -10,9 +10,9 @@ until everything is built and reviewed; then one full test pass on the final ima
 
 | # | item | status |
 |---|---|---|
-| A1 | guest pins one checkpoint (`checkpoint.rs`: mainnet 970,000, signet 325,000); verifiers give DEMO below its height | building (image c8) |
+| A1 | guest pins one checkpoint (`checkpoint.rs`: mainnet 970,000, signet 325,000); verifiers give DEMO below its height | done (c8 compiles, 9d9adb54 before B1) |
 | A2 | `--expect` / `--mempool` / `--mempool-url` in both verifiers, refuse mistyped flags, unit tests | done (`3785f56`, `8e47047`) |
-| A3 | host verifier `--bitcoin-cli` (as `swiftsync-verify`) | next |
+| A3 | host verifier `--bitcoin-cli` | done |
 
 Minimum work stays a verifier check: every proof below the tip is low-work by construction, so the guest cannot
 refuse it.
@@ -21,10 +21,10 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| B1 | `libzync::facts`: `check_core_statement` + the coin-fact checks (unspent at tip, spent by (h, tx, vin), state at height h through the block forest), no_std, shared by native verifiers and zyncAPP guests | next |
-| B2 | host: produce the paths (`coinlog-path`, `block-path`) from the saved log and block forest | next |
-| B3 | coin history: a transaction's Merkle branch + block path, chained backwards through inputs and forwards through spender records | next |
-| B4 | `swiftsync-verify coin …` CLI over B1 (and the wasm/ffi builds) | next |
+| B1 | `libzync::facts`: coin leaf, unspent / spent-by, block in chain + state at a height, tx in block, tx parsing, `check_core_statement` | done |
+| B2 | host writes `history.bin`; `zync-path coin|find` produce coin facts | done |
+| B3 | coin journey: creating tx in a proven block, the coin leaf from its output, the spending tx (`zync-path journey`, `--journey`) | done |
+| B4 | `swiftsync-verify --coin / --journey` (wasm/ffi exposure: next) | done (CLI) |
 | B5 | the first zyncAPP guest: "coin C at its position is unspent/spent at the proof's tip", verifying a core receipt inside the zkVM | next |
 
 ## C. Production host

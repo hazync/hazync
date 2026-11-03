@@ -97,6 +97,8 @@ pub struct Replay {
     pub coins: Vec<H>,
     pub spenders: alloc::collections::BTreeMap<u64, (u32, u32, u32)>,
     pub block_leaves: Vec<H>,
+    /// The coin-state digest after each height 0..=tip (what each block leaf commits).
+    pub states: Vec<H>,
 }
 
 pub fn replay(recs: &[Rec], at: u32, tip: u32) -> Result<Replay, &'static str> {
@@ -108,6 +110,7 @@ pub fn replay(recs: &[Rec], at: u32, tip: u32) -> Result<Replay, &'static str> {
     let mut by: alloc::collections::BTreeMap<u64, (u32, u32, u32)> = alloc::collections::BTreeMap::new();
     let mut keep: Option<(Store, u64, alloc::collections::BTreeMap<u64, (u32, u32, u32)>)> = None;
     let mut leaves = Vec::with_capacity(tip as usize + 1);
+    let mut states = Vec::with_capacity(tip as usize + 1);
     for r in &recs[..=tip as usize] {
         for (p, t, v) in &r.flips {
             if *p >= s.len() || by.contains_key(p) {
@@ -121,14 +124,16 @@ pub fn replay(recs: &[Rec], at: u32, tip: u32) -> Result<Replay, &'static str> {
             coins.push(*l);
         }
         let roots = s.roots();
-        leaves.push(block_leaf(&r.hash, r.height, &utxo_state(s.len(), r.value, &roots)));
+        let st = utxo_state(s.len(), r.value, &roots);
+        leaves.push(block_leaf(&r.hash, r.height, &st));
+        states.push(st);
         if r.height == at {
             keep = Some((s.clone(), r.value, by.clone()));
         }
     }
     let (log, value, spenders) = keep.expect("at <= tip");
     coins.truncate(log.len() as usize);
-    Ok(Replay { log, value, coins, spenders, block_leaves: leaves })
+    Ok(Replay { log, value, coins, spenders, block_leaves: leaves, states })
 }
 
 /// A Merkle path in the block forest of `leaves` (bottom-up), with the forest's roots.
