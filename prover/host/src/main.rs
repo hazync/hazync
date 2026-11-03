@@ -2113,6 +2113,18 @@ fn checkpoint_height() -> u32 {
     match methods::NETWORK { "mainnet" => 970_000, "signet" => 325_000, _ => 0 }
 }
 
+#[cfg(test)]
+mod checkpoint_tests {
+    /// The host's checkpoint heights are the guest's (review 11-03: they were hard-coded with no tie).
+    #[test]
+    fn checkpoint_heights_match_the_guest() {
+        let g = include_str!("../../methods/guest/src/checkpoint.rs");
+        assert!(g.contains("Some((970_000, ["), "mainnet");
+        assert!(g.contains("Some((325_000, ["), "signet");
+        assert!(g.contains("pub const CHECKPOINT: Option<(u32, [u8; 32])> = None;"), "regtest");
+    }
+}
+
 /// cum_work (little-endian) >= min (little-endian).
 fn work_at_least(w: &[u8; 32], min: [u8; 32]) -> bool {
     (0..32).rev().map(|i| w[i].cmp(&min[i])).find(|o| o.is_ne()).map_or(true, |o| o.is_gt())
@@ -4019,22 +4031,13 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     // history.bin starts at height 0 only on a run from genesis (libzync::history).
     let prev_is_genesis = handover.is_none() && anchor_path == "genesis";
-    if methods::COINLOG {
-        match (&handover, anchor_path) {
-            (Some(_), _) => {
-                let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").unwrap();
-                // A bare file name has the parent "" (review 11-03): read the log next to it, in ".".
-                let d = std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().to_string())
-                    .filter(|x| !x.is_empty()).unwrap_or_else(|| ".".to_string());
-                cl_load(&format!("{d}/state_{}.coinlog", prev.height));
-            }
-            (None, "genesis") => cl_init_empty(),
-            (None, a) => cl_load(&cl_path_for(a)),
-        }
-        let g = CL.lock().unwrap();
-        let st = &g.as_ref().unwrap().store;
-        assert!(st.len() == prev.utxo_leaves && normalize_host(st.roots()) == normalize_host(prev.utxo_roots.clone()),
-                "the coin log file does not match the anchor's utxo_roots / utxo_leaves");
+    // The coin log at the run's start. Disk mode (HAZYNC_COINLOG_DIR) with HAZYNC_RESUME and a store already there: leave
+    // it alone (loading the anchor would WIPE it, review 11-03); the resume below loads it at its receipt, and only if no
+    // receipt is found is the anchor's log loaded after all.
+    let disk_resume = methods::COINLOG && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
+        && cl_dir().map_or(false, |d| d.join("L0.bin").exists());
+    if methods::COINLOG && !disk_resume {
+        cl_init_at_start(handover.is_some(), anchor_path, &prev);
     }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
@@ -4112,6 +4115,9 @@ fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str)
             first = k + 1;
             println!("resuming after block {k}");
         }
+    }
+    if disk_resume && first == lo {
+        cl_init_at_start(handover_pending, anchor_path, &prev);
     }
     let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
     let opts = ProverOpts::succinct();
@@ -10420,6 +10426,25 @@ fn cl_path_for(state_json: &str) -> String {
     match state_json.strip_suffix(".json") { Some(s) => format!("{s}.coinlog"), None => format!("{state_json}.coinlog") }
 }
 
+/// The coin log for a run starting after `prev`: the handover receipt's log, an empty log (genesis), or the anchor's.
+fn cl_init_at_start(handover: bool, anchor_path: &str, prev: &ChainState) {
+    if handover {
+        let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").unwrap();
+        // A bare file name has the parent "" (review 11-03): read the log next to it, in ".".
+        let d = std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().to_string())
+            .filter(|x| !x.is_empty()).unwrap_or_else(|| ".".to_string());
+        cl_load(&format!("{d}/state_{}.coinlog", prev.height));
+    } else if anchor_path == "genesis" {
+        cl_init_empty();
+    } else {
+        cl_load(&cl_path_for(anchor_path));
+    }
+    let g = CL.lock().unwrap();
+    let st = &g.as_ref().unwrap().store;
+    assert!(st.len() == prev.utxo_leaves && normalize_host(st.roots()) == normalize_host(prev.utxo_roots.clone()),
+            "the coin log file does not match the anchor's utxo_roots / utxo_leaves");
+}
+
 /// HAZYNC_COINLOG_DIR: the on-disk store's directory (C1). Unset: the log lives in memory.
 fn cl_dir() -> Option<std::path::PathBuf> {
     std::env::var("HAZYNC_COINLOG_DIR").ok().filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
@@ -10428,6 +10453,37 @@ fn cl_dir() -> Option<std::path::PathBuf> {
 /// A state_<h>.coinlog written in disk mode: this magic, then the leaf count and the roots it had (the leaves are in
 /// HAZYNC_COINLOG_DIR, mutated in place, so a load can only check that the directory is still at that state).
 const CL_DISK_MAGIC: &[u8; 8] = b"LZDISK01";
+
+/// Undoes one block from its pending.bin record: cut the appends (and drop them from the index), restore each spent
+/// coin's unspent leaf at its position (and put it back in the index). Refuses a record that does not start at `n`.
+fn cl_rollback(store: &mut libzync::coinlog::NodeStore<libzync::host::AnyNodes>, pos: &mut libzync::host::AnyIndex, u: &[u8], n: u64) {
+    let rd = |o: usize| u64::from_le_bytes(u[o..o + 8].try_into().expect("pending.bin truncated"));
+    assert!(rd(0) == n, "pending.bin is for a store of {} leaves, the state file says {n}: rebuild the store", rd(0));
+    let k = rd(8) as usize;
+    let mut o = 16;
+    let mut flips = Vec::with_capacity(k);
+    for _ in 0..k {
+        let p = rd(o);
+        let l: [u8; 32] = u[o + 8..o + 40].try_into().unwrap();
+        flips.push((p, l));
+        o += 40;
+    }
+    let m = rd(o) as usize;
+    o += 8;
+    for j in 0..m {
+        let l: [u8; 32] = u[o + 32 * j..o + 32 * j + 32].try_into().unwrap();
+        pos.remove(&l);
+    }
+    if let libzync::host::AnyNodes::Disk(dn) = &mut store.nodes {
+        dn.truncate_to(n).unwrap_or_else(|e| panic!("coin log store truncate: {e}"));
+    }
+    for (p, l) in flips {
+        if p < n {
+            store.set(p, l);
+            pos.insert(l, p);
+        }
+    }
+}
 
 /// The position index: on disk in HAZYNC_COINLOG_DIR (index.bin), else in memory.
 fn cl_index() -> libzync::host::AnyIndex {
@@ -10463,6 +10519,7 @@ fn cl_save(path: &str) {
     let mut b = Vec::new();
     if let libzync::host::AnyNodes::Disk(d) = &h.store.nodes {
         d.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}"));
+        if let libzync::host::AnyIndex::Disk(ix) = &h.pos { ix.sync().unwrap_or_else(|e| panic!("index sync: {e}")); }
         b.extend_from_slice(CL_DISK_MAGIC);
         b.extend_from_slice(&h.store.len().to_le_bytes());
         for r in h.store.roots() { b.extend_from_slice(&r.unwrap_or([0; 32])); b.push(r.is_some() as u8); }
@@ -10475,6 +10532,10 @@ fn cl_save(path: &str) {
     let tmp = format!("{path}.tmp");
     std::fs::write(&tmp, b).unwrap_or_else(|e| panic!("{tmp}: {e}"));
     std::fs::rename(&tmp, path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    // The state is recorded: the block's undo record is no longer needed.
+    if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
+        let _ = std::fs::remove_file(d.join("pending.bin"));
+    }
 }
 
 fn cl_load(path: &str) {
@@ -10485,10 +10546,20 @@ fn cl_load(path: &str) {
             libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
         let n = u64::from_le_bytes(b[8..16].try_into().unwrap());
         let roots: Vec<Option<[u8; 32]>> = b[16..].chunks_exact(33).map(|c| (c[32] == 1).then(|| c[..32].try_into().unwrap())).collect();
+        let mut store = store;
+        let mut pos = cl_index();
+        // A block that started changing the store after this state was saved (a crash, or a failed check): undo it.
+        let pend = d.join("pending.bin");
+        if let Ok(u) = std::fs::read(&pend) {
+            if store.len() != n || store.roots() != roots {
+                cl_rollback(&mut store, &mut pos, &u, n);
+                eprintln!("  coin log store: rolled back one unfinished block to {n} leaves");
+            }
+            let _ = std::fs::remove_file(&pend);
+        }
         assert!(store.len() == n && store.roots() == roots,
                 "{}: the on-disk coin log is not at the state {path} recorded (it moved on after that receipt?): rebuild it from a run from genesis", d.display());
         // C1b: the index lives next to the nodes and was kept in step with them (written before each state file).
-        let pos = cl_index();
         *CL.lock().unwrap() = Some(ClHost { store, pos });
         return;
     }
@@ -10538,6 +10609,24 @@ fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {
 fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainState) -> Vec<(u64, u32, u32)> {
     let mut g = CL.lock().unwrap();
     let h = g.as_mut().expect("coin log not initialised");
+    // Disk mode: write (and fsync) how to undo this block BEFORE the store changes in place, so a crash or a failed
+    // check below leaves a store that cl_load can roll back to the last saved state (review 11-03).
+    if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
+        let mut b = Vec::new();
+        b.extend_from_slice(&h.store.len().to_le_bytes());
+        b.extend_from_slice(&(spends.len() as u64).to_le_bytes());
+        for (l, _, _) in spends {
+            let p = h.pos.get(l).unwrap_or(u64::MAX);
+            b.extend_from_slice(&p.to_le_bytes());
+            b.extend_from_slice(l);
+        }
+        b.extend_from_slice(&(appends.len() as u64).to_le_bytes());
+        for l in appends { b.extend_from_slice(l); }
+        let tmp = d.join("pending.tmp");
+        let f = std::fs::File::create(&tmp).and_then(|mut f| { use std::io::Write as _; f.write_all(&b)?; f.sync_data()?; Ok(f) });
+        f.unwrap_or_else(|e| panic!("{}: {e}", tmp.display()));
+        std::fs::rename(&tmp, d.join("pending.bin")).unwrap_or_else(|e| panic!("pending.bin: {e}"));
+    }
     let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
         let p = h.pos.remove(l).expect("a proved spend of a coin the host's log does not hold");
@@ -10566,17 +10655,17 @@ fn hist_append(out: &str, rec: &libzync::history::Rec) {
     let mut g = HIST_N.lock().unwrap();
     if g.is_none() {
         let b = std::fs::read(&path).unwrap_or_default();
-        *g = Some(match libzync::history::decode_all(&b) {
-            Ok(r) => {
-                let keep = (rec.height as usize).min(r.len());
-                if keep < r.len() {
-                    let cut: Vec<u8> = r[..keep].iter().flat_map(|x| x.encode()).collect();
-                    std::fs::write(&path, cut).unwrap_or_else(|e| panic!("{path}: {e}"));
-                }
-                Some(keep as u64)
-            }
-            Err(e) => { eprintln!("  history.bin: {e}; no zyncAPP history for this run"); None }
-        });
+        // The longest whole prefix (a torn last append is cut off), then cut back to this run's start height.
+        let (r, good) = libzync::history::decode_prefix(&b);
+        if good < b.len() {
+            eprintln!("  history.bin: {} trailing bytes are not a whole record (a torn write): cut off", b.len() - good);
+        }
+        let keep = (rec.height as usize).min(r.len());
+        if keep < r.len() || good < b.len() {
+            let cut: Vec<u8> = r[..keep].iter().flat_map(|x| x.encode()).collect();
+            std::fs::write(&path, cut).unwrap_or_else(|e| panic!("{path}: {e}"));
+        }
+        *g = Some(Some(keep as u64));
     }
     let Some(Some(n)) = *g else { return };
     if n != rec.height as u64 {
@@ -10586,6 +10675,7 @@ fn hist_append(out: &str, rec: &libzync::history::Rec) {
     }
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     f.write_all(&rec.encode()).unwrap_or_else(|e| panic!("{path}: {e}"));
+    f.sync_data().unwrap_or_else(|e| panic!("{path}: {e}"));
     *g = Some(Some(n + 1));
 }
 
