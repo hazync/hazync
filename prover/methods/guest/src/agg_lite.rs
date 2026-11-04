@@ -274,6 +274,8 @@ impl ChunkCtx {
                 #[cfg(feature = "itree")]
                 {
                     let v = self.out_vout[l];
+                    // ttree: the aggregate derives an output's coin key from the txid and vout it already reads
+                    #[cfg(not(feature = "ttree"))]
                     push_hash(&mut self.words, &okey(&txid, v));
                     #[cfg(feature = "stree")]
                     {
@@ -346,6 +348,8 @@ impl Rd<'_> {
 
 /// Words of itree keys per output and per input in a record: the outpoint key (otree / stree) and the script hash (stree).
 const KEY_WORDS: usize = if cfg!(feature = "stree") { 16 } else if cfg!(feature = "itree") { 8 } else { 0 };
+/// Per output: ttree drops the coin key (derived in the aggregate).
+const OUT_KEY_WORDS: usize = if cfg!(feature = "ttree") { 8 } else { KEY_WORDS };
 
 /// Advances `r` past one record (the layout `ChunkCtx::record` writes) without interpreting it.
 fn skip_record(r: &mut Rd) {
@@ -357,7 +361,7 @@ fn skip_record(r: &mut Rd) {
         #[cfg(feature = "coinlog")]
         { r.i = r.i.saturating_add(2); }
         let n_out = r.u() as usize;
-        r.i = r.i.saturating_add(n_out.saturating_mul(11 + KEY_WORDS));
+        r.i = r.i.saturating_add(n_out.saturating_mul(11 + OUT_KEY_WORDS));
     }
     for _ in 0..count {
         if r.bad || r.i > r.w.len() { r.bad = true; return; }
@@ -534,7 +538,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     out_val.push(val);
                     #[cfg(feature = "itree")]
                     {
+                        #[cfg(not(feature = "ttree"))]
                         let ok_ = r.h();
+                        #[cfg(feature = "ttree")]
+                        let ok_ = okey(&txid, v);
                         #[cfg(feature = "stree")]
                         let sh = r.h();
                         #[cfg(not(feature = "stree"))]
