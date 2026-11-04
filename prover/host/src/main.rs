@@ -3570,7 +3570,7 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
                 let (root, tr) = libzync::ttree::synth(&rem, &ins, addrs, sub, counts, 0x5eed + t as u64);
                 let wit = libzync::ttree::encode(counts, &root, &tr);
                 // compressions the guest does: old pass over the pruned trie, new pass after the block (host replay)
-                fn cs(n: &libzync::ttree::Sub, c: bool) -> (u64, u64) { use libzync::ttree::Sub::*; match n { Inner(l, r) => { let (a, b) = cs(l, c); let (x, y) = cs(r, c); (a + x + 1, b + y) } Coin { .. } => (0, 1 + c as u64), _ => (0, 0) } }
+                fn cs(n: &libzync::ttree::Sub, c: bool) -> (u64, u64) { use libzync::ttree::Sub::*; match n { Inner(l, r) => { let (a, b) = cs(l, c); let (x, y) = cs(r, c); (a + x + 1, b + y) } Coin { .. } => (0, 1), _ => (0, 0) } }
                 fn ct(n: &libzync::ttree::Top, c: bool) -> (u64, u64) { use libzync::ttree::Top::*; match n { Inner(l, r) => { let (a, b) = ct(l, c); let (x, y) = ct(r, c); (a + x + 1, b + y) } Addr { sub, .. } => { let (a, b) = cs(sub, c); (a, b + 1 + c as u64) } _ => (0, 0) } }
                 let (oi, ol) = ct(&tr, counts);
                 let mut t2 = tr.clone();
