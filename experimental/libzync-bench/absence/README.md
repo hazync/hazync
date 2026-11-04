@@ -322,3 +322,11 @@ no output coin key in the chunk journal (the aggregate derives txid xor vout). 9
 +30.0%); per block 962,000 +20.4%, 750,000 +36.9%, 850,000 +38.0%, 970,000 +16.1%. Against main on 962,000: 530 M =
 **8.36x**. As predicted, a few percent: the trie is at its hashing floor. Not done: the real address count (a whole-chain
 scan; the model's 2.32 B is high, each halving ~1 level).
+
+**Fixes, nothing given up** (c10t5, c7c1463e; ea35dd8): the address leaf binds the full 256-bit script hash again
+(count and value 64-bit, two compressions with counts; the 160-bit leaf let two scripts one party controls collide in
+~2^80), and the coin key XORs the output index into the txid's FIRST bytes (in the last bytes, one transaction's coins
+at one address shared 224 bits and needed a ~224-node chain). 9 modern blocks **+28.0%** (trim 3: +28.9%): the
+coin-key fix more than pays for the full binding (800,000 +31.9% vs +34.6%, 850,000 +34.6% vs +38.0%). Per block:
+650,000 +25.7%, 692,261 +31.5%, 700,000 +31.9%, 750,000 +36.9%, 900,000 +21.8%, 962,000 +19.8%, 970,000 +15.6%.
+Against main on 962,000: 527 M = **8.40x**.

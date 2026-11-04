@@ -51,7 +51,7 @@ refuse it.
 |---|---|---|
 | E1 | keyed trees for absence (outpoint / script), built as guest features otree / stree and MEASURED on 10 blocks: +55.6% one tree, +110.7% both, almost all in the aggregate (absence/README.md); key-prefix sharding measured: no saving in work, only splits serial execution — not pursued; history-keeping script tree measured +49.7% alone / +100.1% with the outpoint tree, BUT undercounted (within-block spent coins not inserted; README correction 11-04) | measured; needs your call |
 | E1b | corrected history tree (every created coin, within-block spends inserted marked) and the counting trie (one two-level trie: address then coin, history kept, per-address unspent count and value; `ttree.rs`), images c10h2 / c10t. MEASURED (9 modern blocks): corrected history tree +60.5%; **counting trie +51.3%, every fact in one tree** (counts ~free; 1,024 coins per address: +44% / +82% on 962,000 / 750,000) | measured; needs your call |
-| E1c | counting trie TRIMMED (one pass over the witness, hashes in place, cheaper chunk keys, one-compression address leaf): **+28.9% over 9 modern blocks (was +51.3%), 962,000 8.36x vs main** (c10t4); at its hashing floor (absence/README.md) | measured; needs your call |
+| E1c | counting trie TRIMMED (one pass over the witness, hashes in place, cheaper chunk keys, one-compression address leaf): **+28.0% over 9 modern blocks (was +51.3%), 962,000 8.40x vs main** (c10t5: full 256-bit address binding, coin key fix); at its hashing floor (absence/README.md) | measured; needs your call |
 | E2 | if a tree is chosen: production integration — tree root(s) in ChainState bound proof to proof (not from the witness), host tree store, absence / history / balance verifiers (cli, wasm, C ABI), zync-serve endpoints | after E1 decision |
 
 ## F. main branch
@@ -107,3 +107,4 @@ test finds a bug.
 | c10h / c10oh (E1 history script tree) | b704daf3 / cba70157 | ⚠ undercounted (within-block coins); superseded by c10h2 |
 | c10h2 / c10t (corrected history tree / counting trie) | ab3f1ac1 / a87a541e | tree state from the witness; cost only |
 | c10t2 / c10t3 / c10t4 (trie trims 1-3) | 00ec71b3 / 73158901 / 58bab460 | tree state from the witness; cost only |
+| c10t5 (trie, final measured) | c7c1463e | tree state from the witness; cost only |
