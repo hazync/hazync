@@ -353,3 +353,28 @@ coin log proves a state at EVERY block, with each spent coin's spender (history)
 
 Per-block soundness and coin history (the coin log) cost about 2% over SwiftSync's one-height proof. Absence, address
 history and balances (the trie) are the remaining ~28%.
+
+## Trie in the aggregate vs trie as a parallel receipt (11-04, measured, execute mode)
+
+c10tsp (e48145b7): the aggregate recomputes the trie update list's digest (`ttree::list_digest`) instead of updating
+the trie; the zyncAPP `triebench` guest does the update alone from the same witness and commits root + digest
+(`zyncapp bench-trie`, input dumped by the core host with HAZYNC_TRIE_DUMP). Compared with c10t5 (trie in the aggregate):
+
+| block | aggregate, trie inside | aggregate, split | trie guest | serial aggregate saved |
+|---|---|---|---|---|
+| 650,000 | 228.0 M | 107.5 M | 133.2 M | 120.5 M (53%) |
+| 692,261 | 229.7 M | 110.0 M | 136.2 M | 119.8 M (52%) |
+| 700,000 | 212.7 M | 96.1 M | 131.3 M | 116.6 M (55%) |
+| 750,000 | 238.2 M | 110.3 M | 145.4 M | 127.9 M (54%) |
+| 800,000 | 211.0 M | 113.5 M | 117.7 M | 97.5 M (46%) |
+| 850,000 | 239.8 M | 118.4 M | 139.6 M | 121.3 M (51%) |
+| 900,000 | 110.8 M | 59.5 M | 59.7 M | 51.3 M (46%) |
+| 962,000 | 140.8 M | 95.0 M | 58.3 M | 45.8 M (33%) |
+| 970,000 | 113.4 M | 80.0 M | 43.7 M | 33.4 M (29%) |
+
+- 9 modern blocks: serial aggregate 192 M -> 99 M (no-tree base 77 M); the trie guest averages 107 M and runs beside the
+  chunks. Whole-block cycles **+2.4%** for the split (the update list is hashed on both sides, plus reading).
+- Not in these numbers: verifying one more receipt in the aggregate (a recursion step at proving time) and real GPU
+  wall-clock. Both belong to the GPU benchmarks.
+- The split aggregate is still 22 M over the no-tree base: building the keys, marks and inserts and the digest. A
+  hunt target.
