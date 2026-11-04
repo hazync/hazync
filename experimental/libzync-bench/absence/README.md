@@ -428,3 +428,27 @@ downloaded UTXO set (~10 GB) against one value. Against c10b1:
 
 About 2.4k cycles per ECMH operation (750,000: ~14k operations, +33 M). Recent blocks are cheap because most of their
 coins are created and spent inside the block (never enter the set). The estimate given before measuring was ~2.5%.
+
+## Cycle hunt, batch 2: aggregate (11-04, measured)
+
+80c3043, image c10b2 (c0bd9f2f; split + live-coin hash): created coins through a per-block-salted hash table (was a
+sort of 40-byte rows + binary searches), external double spend and distinct-txid checks through the same table,
+coin-log spends ordered by an index sort, no unused trie key list. Against c10u (batch 1 + live-coin hash):
+
+| block | aggregate | whole (padded) |
+|---|---|---|
+| 650,000 | -25.2% | -4.6% |
+| 692,261 | -27.2% | -6.2% |
+| 700,000 | -27.1% | -5.8% |
+| 750,000 | -28.9% | -7.3% |
+| 800,000 | -30.9% | -8.7% |
+| 850,000 | -28.3% | -7.7% |
+| 900,000 | -25.5% | -5.0% |
+| 962,000 | -32.3% | -6.5% |
+| 970,000 | -32.6% | -5.7% |
+| **9 modern blocks** | **-28.5%** | **-6.4%** |
+
+Same contents: the aggregate journals of c10b2 and a baseline built from 909b07f (HAZYNC_JOURNAL_DUMP) differ only in
+`self_id` and `anchor_id` (the test anchor's journal embeds the image id) on 962,000 and 750,000; every other word
+(coin-log roots, live-coin hash, trie digest, chain fields) is identical. The rejection rules touched (spend before
+create, in-block and external double spend) are covered by the Core-comparison rig in the full test pass (same messages).
