@@ -316,3 +316,9 @@ from the witness, 32-byte copies (memcpy 36 M) and paging (~40 M) dominated. Two
   a 160-bit script hash, one compression instead of two), fewer modelled addresses (2.32 B at 962,000 is deliberately
   high; each halving is about one level), dropping the coin key from the chunk journal for outputs. Each is a few
   percent.
+
+**Trim 3** (c10t4, 58bab460): address leaf one compression (160-bit script hash + count u32 + value in one block) and
+no output coin key in the chunk journal (the aggregate derives txid xor vout). 9 modern blocks **+28.9%** (trim 2:
++30.0%); per block 962,000 +20.4%, 750,000 +36.9%, 850,000 +38.0%, 970,000 +16.1%. Against main on 962,000: 530 M =
+**8.36x**. As predicted, a few percent: the trie is at its hashing floor. Not done: the real address count (a whole-chain
+scan; the model's 2.32 B is high, each halving ~1 level).
