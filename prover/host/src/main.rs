@@ -3603,9 +3603,14 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
                 // split measurement: the trie bench guest's input ([marks, inserts, witness words], keys as 16 BE words each)
                 if let Ok(path) = std::env::var("HAZYNC_TRIE_DUMP") {
                     let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
-                    let mut d: Vec<u32> = vec![rem.len() as u32, ins.len() as u32, wit.len() as u32];
+                    // + the update order (batch 3): perm[j] = index of the j-th smallest key (the guest checks it)
+                    let ks: Vec<_> = rem.iter().chain(ins.iter()).map(libzync::ttree::split).collect();
+                    let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
+                    perm.sort_by(|&a, &b| ks[a as usize].cmp(&ks[b as usize]));
+                    let mut d: Vec<u32> = vec![rem.len() as u32, ins.len() as u32, wit.len() as u32, perm.len() as u32];
                     for k in rem.iter().chain(ins.iter()) { d.extend(kw(k)); }
                     d.extend_from_slice(&wit);
+                    d.extend_from_slice(&perm);
                     let b: Vec<u8> = d.iter().flat_map(|x| x.to_le_bytes()).collect();
                     std::fs::write(&path, b).expect("HAZYNC_TRIE_DUMP");
                     println!("  ttree: dumped the trie bench input to {path}");

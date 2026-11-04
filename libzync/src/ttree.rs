@@ -205,12 +205,18 @@ pub fn apply(root: &mut W, t: &mut Top, counts: bool, marks: &[(Key, W)], insert
 // ---- witness encoding: [counts, root 8 words] then the trie in preorder.
 // Top: 0 empty | 1 pruned, 8 | 2 inner, L, R | 3 address, S 8, count 2, value 2, coin trie
 // Sub: 0 empty | 1 pruned, 8 | 2 inner, L, R | 4 coin, O 8, spent flag 1, spender 8, value 2
+// Both: 5 inner whose LEFT child is pruned: its hash 8, then R | 6 inner whose RIGHT child is pruned: its hash 8, then L
+// (batch 3: the one-sided nodes on a touched path, sibling first, so the guest walks a chain of them in a loop)
 
 fn enc_sub(n: &Sub, v: &mut Vec<u32>) {
     match n {
         Sub::Empty => v.push(0),
         Sub::Pruned(x) => { v.push(1); v.extend_from_slice(x); }
-        Sub::Inner(l, r) => { v.push(2); enc_sub(l, v); enc_sub(r, v); }
+        Sub::Inner(l, r) => match (&**l, &**r) {
+            (Sub::Pruned(h), x) if !matches!(x, Sub::Pruned(_)) => { v.push(5); v.extend_from_slice(h); enc_sub(x, v); }
+            (x, Sub::Pruned(h)) if !matches!(x, Sub::Pruned(_)) => { v.push(6); v.extend_from_slice(h); enc_sub(x, v); }
+            _ => { v.push(2); enc_sub(l, v); enc_sub(r, v); }
+        },
         Sub::Coin { o, sp, value } => {
             v.push(4);
             v.extend_from_slice(o);
@@ -225,7 +231,11 @@ fn enc_top(n: &Top, v: &mut Vec<u32>) {
     match n {
         Top::Empty => v.push(0),
         Top::Pruned(x) => { v.push(1); v.extend_from_slice(x); }
-        Top::Inner(l, r) => { v.push(2); enc_top(l, v); enc_top(r, v); }
+        Top::Inner(l, r) => match (&**l, &**r) {
+            (Top::Pruned(h), x) if !matches!(x, Top::Pruned(_)) => { v.push(5); v.extend_from_slice(h); enc_top(x, v); }
+            (x, Top::Pruned(h)) if !matches!(x, Top::Pruned(_)) => { v.push(6); v.extend_from_slice(h); enc_top(x, v); }
+            _ => { v.push(2); enc_top(l, v); enc_top(r, v); }
+        },
         Top::Addr { s, count, value, sub } => {
             v.push(3);
             v.extend_from_slice(s);
@@ -260,6 +270,8 @@ fn dec_sub(r: &mut Rd, d: u32) -> Option<Sub> {
         0 => Sub::Empty,
         1 => Sub::Pruned(r.hash()?),
         2 => { let l = dec_sub(r, d + 1)?; Sub::Inner(Box::new(l), Box::new(dec_sub(r, d + 1)?)) }
+        5 => { let h = r.hash()?; Sub::Inner(Box::new(Sub::Pruned(h)), Box::new(dec_sub(r, d + 1)?)) }
+        6 => { let h = r.hash()?; Sub::Inner(Box::new(dec_sub(r, d + 1)?), Box::new(Sub::Pruned(h))) }
         4 => { let o = r.hash()?; let f = r.word()?; let s = r.hash()?; Sub::Coin { o, sp: (f == 1).then_some(s), value: r.u64()? } }
         _ => return None,
     })
@@ -271,6 +283,8 @@ fn dec_top(r: &mut Rd, d: u32) -> Option<Top> {
         0 => Top::Empty,
         1 => Top::Pruned(r.hash()?),
         2 => { let l = dec_top(r, d + 1)?; Top::Inner(Box::new(l), Box::new(dec_top(r, d + 1)?)) }
+        5 => { let h = r.hash()?; Top::Inner(Box::new(Top::Pruned(h)), Box::new(dec_top(r, d + 1)?)) }
+        6 => { let h = r.hash()?; Top::Inner(Box::new(dec_top(r, d + 1)?), Box::new(Top::Pruned(h))) }
         3 => { let s = r.hash()?; let count = r.u64()?; let value = r.u64()?; Top::Addr { s, count, value, sub: Box::new(dec_sub(r, 0)?) } }
         _ => return None,
     })
@@ -449,6 +463,76 @@ fn addr_into(s: &W, sub: &W, count: u64, value: u64, counts: bool, out: &mut W) 
     }
 }
 
+/// Batch 3: walk a chain of one-sided inner nodes (tags 5 / 6) in a loop, keeping each pruned sibling by reference, then
+/// run `node` at the chain's end and fold the siblings back up: two compressions per level, no call, no zeroed outputs,
+/// no partition. Every update must lie on the expanded side (they are sorted, so the first and last decide). A chain
+/// longer than CH is finished by the next call (the loop ends and `node` sees the tag).
+const CH: usize = if cfg!(test) { 3 } else { 64 };  // tests: 3, so both the loop and the fallback run
+#[inline(always)]
+fn chain<'a>(r: &mut Rs<'a>, d0: u32, ups: &[Up], key: fn(&Up) -> &W, old: &mut W, new: &mut W,
+             node: &mut dyn FnMut(&mut Rs<'a>, u32, &mut W, &mut W) -> Result<(), TErr>) -> Result<(), TErr> {
+    let mut sib: [core::mem::MaybeUninit<(&'a W, bool)>; CH] = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
+    let (mut n, mut d) = (0usize, d0);
+    while n < CH {
+        let t = r.peek();
+        if t != 5 && t != 6 { break; }
+        if d >= 256 { return Err(TErr::Witness); }
+        r.word()?;
+        let h = r.hash()?;
+        let left_pruned = t == 5;
+        if let (Some(f), Some(l)) = (ups.first(), ups.last()) {
+            // left pruned: every update goes right (bit 1), so the smallest has bit 1; right pruned: the largest has bit 0
+            if left_pruned && !bit(key(f), d) { return Err(TErr::Witness); }
+            if !left_pruned && bit(key(l), d) { return Err(TErr::Witness); }
+        }
+        sib[n].write((h, left_pruned));
+        n += 1;
+        d += 1;
+    }
+    if n == 0 { return node(r, d, old, new); }
+    let mut buf = [[ZERO; 2]; 2];
+    {
+        let (a, b) = buf[0].split_at_mut(1);
+        node(r, d, &mut a[0], &mut b[0])?;
+    }
+    let mut c = 0usize;
+    for i in (0..n).rev() {
+        let (h, lp) = unsafe { sib[i].assume_init() };
+        let (x, y) = buf.split_at_mut(1);
+        let (src, dst) = if c == 0 { (&x[0], &mut y[0]) } else { (&y[0], &mut x[0]) };
+        if lp { parent_w(50, h, &src[0], &mut dst[0]); parent_w(50, h, &src[1], &mut dst[1]); }
+        else { parent_w(50, &src[0], h, &mut dst[0]); parent_w(50, &src[1], h, &mut dst[1]); }
+        c ^= 1;
+    }
+    *old = buf[c][0];
+    *new = buf[c][1];
+    Ok(())
+}
+
+fn sub_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W, new: &mut W) -> Result<(), TErr> {
+    chain(r, d, ups, |u| &u.o, old, new, &mut |r, d, o, n| sub_node(r, d, ups, cx, acc, o, n))
+}
+
+fn top_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -> Result<(), TErr> {
+    chain(r, d, ups, |u| &u.s, old, new, &mut |r, d, o, n| top_node(r, d, ups, cx, o, n))
+}
+
+/// A one-sided node reached by `node` itself (a chain longer than CH): handled recursively.
+fn one_sided(r: &mut Rs, d: u32, tag: u32, ups: &[Up], key: fn(&Up) -> &W, old: &mut W, new: &mut W,
+             rest: &mut dyn FnMut(&mut Rs, u32, &mut W, &mut W) -> Result<(), TErr>) -> Result<(), TErr> {
+    if d >= 256 { return Err(TErr::Witness); }
+    let h = *r.hash()?;
+    let lp = tag == 5;
+    if let (Some(f), Some(l)) = (ups.first(), ups.last()) {
+        if lp && !bit(key(f), d) { return Err(TErr::Witness); }
+        if !lp && bit(key(l), d) { return Err(TErr::Witness); }
+    }
+    let (mut a, mut b) = (ZERO, ZERO);
+    rest(r, d + 1, &mut a, &mut b)?;
+    if lp { parent_w(50, &h, &a, old); parent_w(50, &h, &b, new); } else { parent_w(50, &a, &h, old); parent_w(50, &b, &h, new); }
+    Ok(())
+}
+
 /// A new coin trie from inserts only (`a`, then `b`, sorted by O) plus at most one existing coin leaf (O, hash).
 fn build_sub(d: u32, a: &[Up], b: &[Up], extra: Option<(&W, &W)>, cx: &Cx, acc: &mut Acc, out: &mut W) -> Result<(), TErr> {
     let n = a.len() + b.len() + extra.is_some() as usize;
@@ -471,7 +555,7 @@ fn build_sub(d: u32, a: &[Up], b: &[Up], extra: Option<(&W, &W)>, cx: &Cx, acc: 
     Ok(())
 }
 
-fn sub_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W, new: &mut W) -> Result<(), TErr> {
+fn sub_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W, new: &mut W) -> Result<(), TErr> {
     if d > 256 { return Err(TErr::Witness); }
     match r.word()? {
         0 => { *old = ZERO; build_sub(d, ups, &[], None, cx, acc, new) }
@@ -487,6 +571,7 @@ fn sub_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W,
             parent_w(50, l1, r1, new);
             Ok(())
         }
+        t @ (5 | 6) => one_sided(r, d, t, ups, |u| &u.o, old, new, &mut |r, d, o, n| sub_pass(r, d, ups, cx, acc, o, n)),
         4 => {
             let o0 = r.hash()?;
             let f = r.word()?;
@@ -494,8 +579,8 @@ fn sub_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W,
             let value = r.u64()?;
             let spent = f == 1;
             coin_into(o0, spent.then_some(sp), value, cx.counts, old);
-            let lo = ups.partition_point(|u| u.o < *o0);
-            let hi = ups.partition_point(|u| u.o <= *o0);
+            let (lo, hi) = if ups.is_empty() { (0, 0) } else if ups.len() == 1 && ups[0].o == *o0 { (0, 1) }
+                else { (ups.partition_point(|u| u.o < *o0), ups.partition_point(|u| u.o <= *o0)) };
             let mut leaf = ZERO;
             let lref: &W = match &ups[lo..hi] {
                 [] => old,
@@ -543,7 +628,7 @@ fn build_top(d: u32, a: &[Up], b: &[Up], extra: Option<(&W, &W)>, cx: &Cx, out: 
     Ok(())
 }
 
-fn top_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -> Result<(), TErr> {
+fn top_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -> Result<(), TErr> {
     if d > 256 { return Err(TErr::Witness); }
     match r.word()? {
         0 => { *old = ZERO; build_top(d, ups, &[], None, cx, new) }
@@ -559,11 +644,13 @@ fn top_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -
             parent_w(50, l1, r1, new);
             Ok(())
         }
+        t @ (5 | 6) => one_sided(r, d, t, ups, |u| &u.s, old, new, &mut |r, d, o, n| top_pass(r, d, ups, cx, o, n)),
         3 => {
             let s0 = r.hash()?;
             let (count, value) = (r.u64()?, r.u64()?);
-            let lo = ups.partition_point(|u| u.s < *s0);
-            let hi = ups.partition_point(|u| u.s <= *s0);
+            // fast path: every update is this address's (the common case on a touched leaf)
+            let (lo, hi) = if ups.is_empty() { (0, 0) } else if ups[0].s == *s0 && ups[ups.len() - 1].s == *s0 { (0, ups.len()) }
+                else { (ups.partition_point(|u| u.s < *s0), ups.partition_point(|u| u.s <= *s0)) };
             let mut acc = Acc::default();
             let (mut so, mut sn) = (ZERO, ZERO);
             sub_pass(r, 0, &ups[lo..hi], cx, &mut acc, &mut so, &mut sn)?;
@@ -586,19 +673,43 @@ fn top_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -
 /// The guest's update: the witness `w` (as `encode`) against its old root, with `marks` and `inserts` (as `apply`).
 /// Returns the new root.
 pub fn apply_stream(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)]) -> Result<W, TErr> {
+    apply_stream_perm(w, marks, inserts, None)
+}
+
+/// `apply_stream` with the update order supplied (batch 3): `perm[j]` = the index (marks, then inserts) of the j-th
+/// smallest key. The guest checks it is a permutation (each index once) and that the keys strictly increase in that
+/// order — which also refuses a repeated key — instead of sorting. None: sort here.
+pub fn apply_stream_perm(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)], perm: Option<&[u32]>)
+                         -> Result<W, TErr> {
     let mut r = Rs { w, i: 0 };
     let counts = r.word()? == 1;
     let root = *r.hash()?;
     let keys: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
     if keys.len() >= 1 << 31 { return Err(TErr::Witness); }
-    let mut idx: Vec<u32> = (0..keys.len() as u32).collect();
-    idx.sort_unstable_by(|&x, &y| keys[x as usize].cmp(&keys[y as usize]));
+    let idx: Vec<u32> = match perm {
+        Some(p) => {
+            if p.len() != keys.len() { return Err(TErr::Witness); }
+            let mut seen = alloc::vec![0u32; keys.len().div_ceil(32)];
+            for &i in p {
+                let i = i as usize;
+                if i >= keys.len() || seen[i / 32] >> (i % 32) & 1 == 1 { return Err(TErr::Witness); }
+                seen[i / 32] |= 1 << (i % 32);
+            }
+            if p.windows(2).any(|q| keys[q[0] as usize] >= keys[q[1] as usize]) { return Err(TErr::Duplicate); }
+            p.to_vec()
+        }
+        None => {
+            let mut idx: Vec<u32> = (0..keys.len() as u32).collect();
+            idx.sort_unstable_by(|&x, &y| keys[x as usize].cmp(&keys[y as usize]));
+            idx
+        }
+    };
     let nm = marks.len() as u32;
     let ups: Vec<Up> = idx.iter().map(|&i| {
         let k = &keys[i as usize];
         Up { s: k.0, o: k.1, k: if i < nm { i } else { (i - nm) | 1 << 31 } }
     }).collect();
-    if ups.windows(2).any(|p| p[0].s == p[1].s && p[0].o == p[1].o) { return Err(TErr::Duplicate); }
+    if perm.is_none() && ups.windows(2).any(|p| p[0].s == p[1].s && p[0].o == p[1].o) { return Err(TErr::Duplicate); }
     let cx = Cx { marks, ins: inserts, counts };
     let (mut old, mut new) = (ZERO, ZERO);
     top_pass(&mut r, 0, &ups, &cx, &mut old, &mut new)?;
@@ -686,6 +797,18 @@ mod tests {
             let (mut r, mut tt) = (root, t.clone());
             let want = apply(&mut r, &mut tt, counts, &m, &i).map(|_| r);
             assert_eq!(apply_stream(&w, &m, &i), want, "round {round}");
+            // the host-supplied order gives the same root; a wrong or repeated order is refused
+            let keys: Vec<(W, W)> = m.iter().map(|x| split(&x.0)).chain(i.iter().map(|x| split(&x.0))).collect();
+            let mut p: Vec<u32> = (0..keys.len() as u32).collect();
+            p.sort_by(|&a, &b| keys[a as usize].cmp(&keys[b as usize]));
+            assert_eq!(apply_stream_perm(&w, &m, &i, Some(&p)), want, "round {round} perm");
+            if p.len() >= 2 {
+                let mut bad = p.clone(); bad.swap(0, 1);
+                assert!(apply_stream_perm(&w, &m, &i, Some(&bad)).is_err());
+                let mut rep = p.clone(); rep[1] = rep[0];
+                assert!(apply_stream_perm(&w, &m, &i, Some(&rep)).is_err());
+            }
+            if round == 0 { assert!(w.iter().any(|&x| x == 5 || x == 6), "the witness uses one-sided tags"); }
         }
     }
 
