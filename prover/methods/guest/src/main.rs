@@ -100,6 +100,10 @@ mod coinlog;
 #[path = "../../../../libzync/src/itree.rs"]
 #[allow(dead_code)]
 mod itree;
+#[cfg(feature = "ttree")]
+#[path = "../../../../libzync/src/ttree.rs"]
+#[allow(dead_code)]
+mod ttree;
 // Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
 #[cfg(feature = "msm")]
 mod msm;

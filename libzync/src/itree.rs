@@ -487,8 +487,8 @@ pub fn hleaf(key: &Key, next: &Key, sp: &Option<W>) -> W {
 }
 
 /// One block on the history tree: mark `marks` (key, spender; the key must be present and unspent), then insert
-/// `inserts` (relinking each predecessor, spent or not). Same witness shape and refusals as `apply`.
-pub fn apply_hist(roots: &mut Vec<Option<W>>, n: &mut u64, touched: &[HTouched], siblings: &[W], marks: &[(Key, W)], inserts: &[Key])
+/// `inserts` (key, spender if already spent in its own block; relinking each predecessor, spent or not). Same witness shape and refusals as `apply`.
+pub fn apply_hist(roots: &mut Vec<Option<W>>, n: &mut u64, touched: &[HTouched], siblings: &[W], marks: &[(Key, W)], inserts: &[(Key, Option<W>)])
                   -> Result<(), TreeError> {
     use TreeError::*;
     if (0..64).any(|l| ((*n >> l) & 1 == 1) != roots.get(l).copied().flatten().is_some()) || roots.len() > 64 {
@@ -507,13 +507,13 @@ pub fn apply_hist(roots: &mut Vec<Option<W>>, n: &mut u64, touched: &[HTouched],
         if ent[i].2.is_some() { return Err(Missing); }
         ent[i].2 = Some(*s);
     }
-    for k in inserts {
+    for (k, sp) in inserts {
         let (_, &p) = by_key.range(..*k).next_back().ok_or(Predecessor)?;
         if !(ent[p].0 < *k && *k < ent[p].1) { return Err(Predecessor); }
         let next = ent[p].1;
         ent[p].1 = *k;
         by_key.insert(*k, ent.len());
-        ent.push((*k, next, None));
+        ent.push((*k, next, *sp));
     }
     let changes: Vec<(u64, W, W)> = touched.iter().zip(&ent[..t])
         .map(|(o, e)| (o.0, hleaf(&o.1, &o.2, &o.3), hleaf(&e.0, &e.1, &e.2))).collect();
@@ -661,7 +661,7 @@ mod hist_tests {
         assert_eq!((r2.clone(), n2, t2.clone(), s2.clone()), (roots.clone(), 1000, touched.clone(), sib.clone()));
         let mut n = 1000u64;
         let sp = [1u32; 8];
-        apply_hist(&mut roots, &mut n, &touched, &sib, &[(marks[0], sp), (marks[1], sp)], &ins).unwrap();
+        apply_hist(&mut roots, &mut n, &touched, &sib, &[(marks[0], sp), (marks[1], sp)], &[(ins[0], None), (ins[1], Some(sp))]).unwrap();
         assert_eq!(n, 1002);
         // marking twice is refused
         let (mut roots, touched, sib) = synth_hist(1000, &marks, &[], 9);

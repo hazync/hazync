@@ -33,7 +33,8 @@ fn lever(name: &str) -> bool {
 /// guest reads instead of trusting a matching set of run-time env vars.
 fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool, txlog: bool) {
     let otree = std::env::var("HAZYNC_OTREE").as_deref() == Ok("1");
-    let htree = std::env::var("HAZYNC_HTREE").as_deref() == Ok("1");
+    let ttree = std::env::var("HAZYNC_TTREE").as_deref() == Ok("1");
+    let htree = std::env::var("HAZYNC_HTREE").as_deref() == Ok("1") || ttree;
     let stree = std::env::var("HAZYNC_STREE").as_deref() == Ok("1") || htree;
     let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
     std::fs::write(&out, format!(
@@ -51,7 +52,9 @@ fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool,
          pub const OTREE: bool = {otree};\n\
          pub const STREE: bool = {stree};\n\
          /// E1: the script tree keeps history (HAZYNC_HTREE=1; implies STREE).\n\
-         pub const HTREE: bool = {htree};\n",
+         pub const HTREE: bool = {htree};\n\
+         /// E1: the counting trie instead of the history script tree (HAZYNC_TTREE=1; implies HTREE).\n\
+         pub const TTREE: bool = {ttree};\n",
         network)).expect("write profile.rs");
 }
 
@@ -256,7 +259,7 @@ fn main() {
         features.push("coinlog".to_string());
     }
     // E1 measurement builds: the outpoint / script trees (libzync/src/itree.rs). Cost only, never a release image.
-    for (env_name, feat) in [("HAZYNC_OTREE", "otree"), ("HAZYNC_STREE", "stree"), ("HAZYNC_HTREE", "htree")] {
+    for (env_name, feat) in [("HAZYNC_OTREE", "otree"), ("HAZYNC_STREE", "stree"), ("HAZYNC_HTREE", "htree"), ("HAZYNC_TTREE", "ttree")] {
         println!("cargo:rerun-if-env-changed={env_name}");
         if lever(env_name) {
             assert!(coinlog, "{env_name} needs HAZYNC_COINLOG");

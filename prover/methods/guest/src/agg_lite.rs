@@ -600,6 +600,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     if ss_mode == 1 { env::log("agg-lite: REJECT a coin-log image takes no hints file"); all_ok = false; }
     #[cfg(feature = "itree")]
     let mut ext_keys: Vec<([u8; 32], [u8; 32])> = Vec::new();
+    // htree: the spender (tx position, input index) of each created coin this block also spends
+    #[cfg(feature = "htree")]
+    let mut in_sp: Vec<Option<(u32, u32)>> = alloc::vec![None; created.len()];
     for (_si, (leaf, txp, same_height, _vin)) in spends.iter().enumerate() {
         match find(&key(leaf)) {
             Ok(i) => {
@@ -608,6 +611,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 if created[i].1 >= *txp { env::log("agg-lite: REJECT a coin is spent before the transaction that creates it"); all_ok = false; }
                 if spent[i] { env::log("agg-lite: REJECT a coin created in this block is spent twice"); all_ok = false; }
                 spent[i] = true;
+                #[cfg(feature = "htree")]
+                { in_sp[i] = Some((*txp, *_vin)); }
                 #[cfg(feature = "coinlog")]
                 { in_block_spent = in_block_spent.saturating_add(out_val[created[i].2 as usize]); }
                 // A coin spent in its own block cannot be unspent at H: the hint lies.
@@ -700,10 +705,21 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 if t == 0 { o[..32].copy_from_slice(&k.0); } else { o[..32].copy_from_slice(&k.1); o[32..].copy_from_slice(&k.0); }
                 o
             };
+            // htree: the history tree inserts EVERY coin the block creates, one spent in its own block already marked
+            // (the coin log skips those). One entry per created key (a repeated leaf keeps its first position).
+            #[cfg(feature = "htree")]
+            let hins: Vec<(itree::Key, Option<coinlog::W>, u64)> = output_leaves.iter().enumerate().filter_map(|(k, leaf)| {
+                let i = find(&key(leaf)).ok()?;
+                if created[i].2 as usize != k { return None; }
+                Some((mk(1, &out_keys[k]), in_sp[i].map(|(t, v)| coinlog::w_of(&coinlog::spender(w.height, t, v))), out_val[k]))
+            }).collect();
             let trees: &[usize] = if cfg!(all(feature = "otree", feature = "stree")) { &[0, 1] } else if cfg!(feature = "stree") { &[1] } else { &[0] };
             for &t in trees {
                 let rem: Vec<itree::Key> = ext_keys.iter().map(|k| mk(t, k)).collect();
+                #[cfg(not(feature = "htree"))]
                 let ins: Vec<itree::Key> = app_keys.iter().map(|k| mk(t, k)).collect();
+                #[cfg(feature = "htree")]
+                let ins: Vec<itree::Key> = if t == 1 { hins.iter().map(|x| x.0).collect() } else { app_keys.iter().map(|k| mk(t, k)).collect() };
                 if swiftsync::collecting() {
                     for k in &rem { env::log(&alloc::format!("itree: {t} R {}", hex64(k))); }
                     for k in &ins { env::log(&alloc::format!("itree: {t} I {}", hex64(k))); }
@@ -714,10 +730,28 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 if t == 1 {
                     let marks: Vec<(itree::Key, coinlog::W)> = rem.iter().zip(ext.iter())
                         .map(|(k, (_, tx, vin))| (*k, coinlog::w_of(&coinlog::spender(w.height, *tx, *vin)))).collect();
+                    // E1 counting trie (ttree): the same marks and inserts on the two-level trie (libzync/src/ttree.rs)
+                    #[cfg(feature = "ttree")]
+                    {
+                        #[allow(static_mut_refs)]
+                        match ttree::decode(unsafe { &TREE_WITNESS[t] }) {
+                            Some((counts, mut root, mut tr)) => {
+                                if let Err(e) = ttree::apply(&mut root, &mut tr, counts, &marks, &hins) {
+                                    env::log(&alloc::format!("agg-lite: REJECT trie: {e:?}"));
+                                    all_ok = false;
+                                }
+                                #[allow(static_mut_refs)]
+                                unsafe { TREE_OUT.push(t as u32); TREE_OUT.extend_from_slice(&root); }
+                            }
+                            None => { env::log("agg-lite: REJECT trie witness malformed"); all_ok = false; }
+                        }
+                        continue;
+                    }
+                    let hins2: Vec<(itree::Key, Option<coinlog::W>)> = hins.iter().map(|x| (x.0, x.1)).collect();
                     #[allow(static_mut_refs)]
                     match itree::decode_bench_hist(unsafe { &TREE_WITNESS[t] }) {
                         Some((mut tr, mut tn, touched, sib)) => {
-                            if let Err(e) = itree::apply_hist(&mut tr, &mut tn, &touched, &sib, &marks, &ins) {
+                            if let Err(e) = itree::apply_hist(&mut tr, &mut tn, &touched, &sib, &marks, &hins2) {
                                 env::log(&alloc::format!("agg-lite: REJECT tree {t}: {e:?}"));
                                 all_ok = false;
                             }

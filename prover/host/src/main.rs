@@ -3561,11 +3561,25 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
                 let k: [u8; 64] = hx_bytes(f[2]).try_into().expect("itree key: 64 bytes");
                 if f[1] == "R" { rem.push(k) } else { ins.push(k) }
             }
+            let envu = |k: &str, d: u64| -> u64 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
+            if t == 1 && methods::TTREE {
+                // the counting trie: HAZYNC_TTREE_ADDRS addresses (default the coin log's modelled size), each address the
+                // block spends from holding HAZYNC_TTREE_SUB other coins (default 2); counts on unless HAZYNC_TTREE_COUNTS=0
+                let (addrs, sub) = (envu("HAZYNC_TTREE_ADDRS", n), envu("HAZYNC_TTREE_SUB", 2));
+                let counts = envu("HAZYNC_TTREE_COUNTS", 1) == 1;
+                let (root, tr) = libzync::ttree::synth(&rem, &ins, addrs, sub, counts, 0x5eed + t as u64);
+                let wit = libzync::ttree::encode(counts, &root, &tr);
+                println!("  ttree: {} marks, {} inserts, witness {} words (modelled {addrs} addresses, {sub} other coins per spent-from address, counts {counts})", rem.len(), ins.len(), wit.len());
+                tw.push(wit);
+                continue;
+            }
             if t == 1 && methods::HTREE {
-                // the history tree holds every coin ever appended: the coin log's modelled size
-                let (r, touched, sib) = libzync::itree::synth_hist(n, &rem, &ins, 0x5eed + t as u64);
-                println!("  itree {t} (history): {} marks, {} inserts, {} touched leaves, {} siblings (modelled {n} keys)", rem.len(), ins.len(), touched.len(), sib.len());
-                tw.push(libzync::itree::encode_bench_hist(&r, n, &touched, &sib));
+                // the history tree holds every coin ever created; the coin log omits coins spent in their own block, so
+                // model it at HAZYNC_HIST_MULT (default 2) x the coin log's size
+                let hn = n.saturating_mul(envu("HAZYNC_HIST_MULT", 2));
+                let (r, touched, sib) = libzync::itree::synth_hist(hn, &rem, &ins, 0x5eed + t as u64);
+                println!("  itree {t} (history): {} marks, {} inserts, {} touched leaves, {} siblings (modelled {hn} keys)", rem.len(), ins.len(), touched.len(), sib.len());
+                tw.push(libzync::itree::encode_bench_hist(&r, hn, &touched, &sib));
                 continue;
             }
             let (r, touched, sib) = libzync::itree::synth(tn, &rem, &ins, 0x5eed + t as u64);

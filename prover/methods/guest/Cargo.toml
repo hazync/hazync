@@ -116,3 +116,6 @@ otree = ["itree"]
 stree = ["itree"]
 # E1 history variant (HAZYNC_HTREE=1): the script tree keeps spent keys, marked with their spender (itree::apply_hist).
 htree = ["stree"]
+# E1 counting trie (HAZYNC_TTREE=1): one two-level trie (address, then coin) with history and per-address unspent
+# count and value (libzync/src/ttree.rs), in place of the history script tree. Measurement only.
+ttree = ["htree"]
