@@ -470,3 +470,202 @@ mod tests {
         assert_eq!((roots, n), (r0, n0), "unchanged on refusal");
     }
 }
+
+// ---- E1 history variant (HAZYNC_HTREE): the script tree that never removes. A spent key stays, marked with its
+// spender; the list stays sorted over every key ever inserted, so a range gives a script's complete history (and its
+// live subset). Leaf: unspent = live(key, next); spent = parent(59, live(key, next), spender).
+
+/// One touched leaf of the history tree: position, key, next, spender (None = unspent) before the block.
+pub type HTouched = (u64, Key, Key, Option<W>);
+
+pub fn hleaf(key: &Key, next: &Key, sp: &Option<W>) -> W {
+    let l = live(key, next);
+    match sp {
+        None => l,
+        Some(s) => { let mut o = [0u32; 8]; parent_w(59, &l, s, &mut o); o }
+    }
+}
+
+/// One block on the history tree: mark `marks` (key, spender; the key must be present and unspent), then insert
+/// `inserts` (relinking each predecessor, spent or not). Same witness shape and refusals as `apply`.
+pub fn apply_hist(roots: &mut Vec<Option<W>>, n: &mut u64, touched: &[HTouched], siblings: &[W], marks: &[(Key, W)], inserts: &[Key])
+                  -> Result<(), TreeError> {
+    use TreeError::*;
+    if (0..64).any(|l| ((*n >> l) & 1 == 1) != roots.get(l).copied().flatten().is_some()) || roots.len() > 64 {
+        return Err(Log(LogError::Shape));
+    }
+    if touched.windows(2).any(|p| p[0].0 >= p[1].0) { return Err(Log(LogError::Order)); }
+    if touched.last().is_some_and(|x| x.0 >= *n) { return Err(Log(LogError::PastEnd)); }
+    let t = touched.len();
+    let mut ent: Vec<(Key, Key, Option<W>)> = touched.iter().map(|x| (x.1, x.2, x.3)).collect();
+    let mut by_key: BTreeMap<Key, usize> = BTreeMap::new();
+    for (i, e) in ent.iter().enumerate() {
+        if by_key.insert(e.0, i).is_some() { return Err(Predecessor); }
+    }
+    for (k, s) in marks {
+        let i = *by_key.get(k).ok_or(Missing)?;
+        if ent[i].2.is_some() { return Err(Missing); }
+        ent[i].2 = Some(*s);
+    }
+    for k in inserts {
+        let (_, &p) = by_key.range(..*k).next_back().ok_or(Predecessor)?;
+        if !(ent[p].0 < *k && *k < ent[p].1) { return Err(Predecessor); }
+        let next = ent[p].1;
+        ent[p].1 = *k;
+        by_key.insert(*k, ent.len());
+        ent.push((*k, next, None));
+    }
+    let changes: Vec<(u64, W, W)> = touched.iter().zip(&ent[..t])
+        .map(|(o, e)| (o.0, hleaf(&o.1, &o.2, &o.3), hleaf(&e.0, &e.1, &e.2))).collect();
+    let mut r: Vec<Option<W>> = roots.clone();
+    let mut sib = siblings.iter();
+    let (mut start, mut k) = (0u64, 0usize);
+    let (mut o, mut nw) = ([0u32; 8], [0u32; 8]);
+    for l in (0..r.len()).rev() {
+        let Some(root) = r[l] else { continue };
+        let end = start + (1u64 << l);
+        let m = k + changes[k..].partition_point(|x| x.0 < end);
+        if m > k {
+            if !update(l as u32, start, &changes[k..m], &mut sib, &mut o, &mut nw) { return Err(Log(LogError::Witness)); }
+            if o != root { return Err(Log(LogError::OldRoot)); }
+            r[l] = Some(nw);
+        }
+        k = m;
+        start = end;
+    }
+    if sib.next().is_some() { return Err(Log(LogError::Witness)); }
+    let mut c = *n;
+    for e in &ent[t..] {
+        let (mut node, mut l) = (hleaf(&e.0, &e.1, &e.2), 0usize);
+        while l < r.len() && r[l].is_some() {
+            let left = r[l].take().unwrap();
+            let mut up = [0u32; 8];
+            parent_w(l as u32 + 1, &left, &node, &mut up);
+            node = up;
+            l += 1;
+        }
+        if l == r.len() { r.push(None); }
+        r[l] = Some(node);
+        c += 1;
+    }
+    while r.last() == Some(&None) { r.pop(); }
+    *roots = r;
+    *n = c;
+    Ok(())
+}
+
+/// Measurement only: a history tree of `n` leaves holding `marks` (unspent) and the predecessors `inserts` need, at
+/// random positions, every other leaf random. Marked keys' leaves are (k, k+1); each insert's predecessor (x-1, x+1).
+pub fn synth_hist(n: u64, marks: &[Key], inserts: &[Key], seed: u64) -> (Vec<Option<W>>, Vec<HTouched>, Vec<W>) {
+    let bump = |k: &Key, up: bool| -> Key {
+        let mut o = *k;
+        for i in (0..64).rev() {
+            if up { let (v, c) = o[i].overflowing_add(1); o[i] = v; if !c { break; } } else { let (v, c) = o[i].overflowing_sub(1); o[i] = v; if !c { break; } }
+        }
+        o
+    };
+    let leaves: Vec<(Key, Key)> = marks.iter().map(|x| (*x, bump(x, true)))
+        .chain(inserts.iter().map(|x| (bump(x, false), bump(x, true)))).collect();
+    let (roots, t3, sib) = synth_leaves(n, &leaves, seed);
+    (roots, t3.into_iter().map(|(p, k, nx)| (p, k, nx, None)).collect(), sib)
+}
+
+/// The position / tree-building half of `synth`, for given (key, next) live leaves.
+fn synth_leaves(n: u64, leaves: &[(Key, Key)], seed: u64) -> (Vec<Option<W>>, Vec<Touched>, Vec<W>) {
+    let mut rng = seed | 1;
+    let mut rnd = move || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+    let mut pos: Vec<u64> = Vec::with_capacity(leaves.len());
+    let mut seen = alloc::collections::BTreeSet::new();
+    while pos.len() < leaves.len() {
+        let p = rnd() % n;
+        if seen.insert(p) { pos.push(p); }
+    }
+    let mut touched: Vec<Touched> = pos.into_iter().zip(leaves.iter().copied()).map(|(p, (k, nx))| (p, k, nx)).collect();
+    touched.sort_unstable_by_key(|x| x.0);
+    let e: Vec<(u64, W)> = touched.iter().map(|x| (x.0, live(&x.1, &x.2))).collect();
+    fn build(l: u32, start: u64, e: &[(u64, W)], rnd: &mut dyn FnMut() -> u64, sib: &mut Vec<W>) -> W {
+        if e.is_empty() {
+            let mut h = [0u32; 8];
+            for x in h.iter_mut() { *x = rnd() as u32; }
+            sib.push(h);
+            return h;
+        }
+        if l == 0 { return e[0].1; }
+        let mid = start + (1u64 << (l - 1));
+        let m = e.partition_point(|x| x.0 < mid);
+        let a = build(l - 1, start, &e[..m], rnd, sib);
+        let b = build(l - 1, mid, &e[m..], rnd, sib);
+        let mut o = [0u32; 8];
+        parent_w(l, &a, &b, &mut o);
+        o
+    }
+    let mut roots: Vec<Option<W>> = (0..64).map(|_| None).collect();
+    let mut sib = Vec::new();
+    let (mut start, mut k) = (0u64, 0usize);
+    for l in (0..64u32).rev() {
+        if (n >> l) & 1 == 0 { continue; }
+        let end = start + (1u64 << l);
+        let m = k + e[k..].partition_point(|x| x.0 < end);
+        roots[l as usize] = Some(if m > k { build(l, start, &e[k..m], &mut rnd, &mut sib) } else {
+            let mut h = [0u32; 8];
+            for x in h.iter_mut() { *x = rnd() as u32; }
+            h
+        });
+        k = m;
+        start = end;
+    }
+    while roots.last() == Some(&None) { roots.pop(); }
+    (roots, touched, sib)
+}
+
+/// `encode_bench` for the history tree: each touched leaf carries 9 more words (spent flag, spender).
+pub fn encode_bench_hist(roots: &[Option<W>], n: u64, touched: &[HTouched], sib: &[W]) -> Vec<u32> {
+    let t3: Vec<Touched> = touched.iter().map(|x| (x.0, x.1, x.2)).collect();
+    let mut v = encode_bench(roots, n, &t3, &[]);
+    for x in touched {
+        v.push(x.3.is_some() as u32);
+        v.extend_from_slice(&x.3.unwrap_or([0; 8]));
+    }
+    for s in sib { v.extend_from_slice(s); }
+    v
+}
+
+pub fn decode_bench_hist(w: &[u32]) -> Option<(Vec<Option<W>>, u64, Vec<HTouched>, Vec<W>)> {
+    // header + roots + touched, as decode_bench, then 9 words per touched, then siblings
+    let nr = *w.get(2)? as usize;
+    if nr > 64 { return None; }
+    let tpos = 3 + 9 * nr;
+    let t = *w.get(tpos)? as usize;
+    let body = tpos + 1 + 34 * t;
+    let sp_end = body.checked_add(9 * t)?;
+    let mut head: Vec<u32> = w.get(..body)?.to_vec();
+    let rest = w.get(sp_end..)?;
+    head.extend_from_slice(rest);
+    let (roots, n, t3, sib) = decode_bench(&head)?;
+    let sps = w.get(body..sp_end)?;
+    let touched = t3.into_iter().zip(sps.chunks_exact(9)).map(|((p, k, nx), s)| (p, k, nx, (s[0] == 1).then(|| s[1..9].try_into().unwrap()))).collect();
+    Some((roots, n, touched, sib))
+}
+
+#[cfg(test)]
+mod hist_tests {
+    use super::*;
+    #[test]
+    fn synth_hist_applies_and_roundtrips() {
+        let k = |b: u8| { let mut x = [0u8; 64]; x[0] = b; x[1] = 7; x };
+        let marks = [k(10), k(30)];
+        let ins = [k(20), k(40)];
+        let (mut roots, touched, sib) = synth_hist(1000, &marks, &ins, 9);
+        let w = encode_bench_hist(&roots, 1000, &touched, &sib);
+        let (r2, n2, t2, s2) = decode_bench_hist(&w).unwrap();
+        assert_eq!((r2.clone(), n2, t2.clone(), s2.clone()), (roots.clone(), 1000, touched.clone(), sib.clone()));
+        let mut n = 1000u64;
+        let sp = [1u32; 8];
+        apply_hist(&mut roots, &mut n, &touched, &sib, &[(marks[0], sp), (marks[1], sp)], &ins).unwrap();
+        assert_eq!(n, 1002);
+        // marking twice is refused
+        let (mut roots, touched, sib) = synth_hist(1000, &marks, &[], 9);
+        let mut n = 1000u64;
+        assert_eq!(apply_hist(&mut roots, &mut n, &touched, &sib, &[(marks[0], sp), (marks[0], sp)], &[]), Err(TreeError::Missing));
+    }
+}

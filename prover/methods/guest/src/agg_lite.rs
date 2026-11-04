@@ -709,6 +709,30 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     for k in &ins { env::log(&alloc::format!("itree: {t} I {}", hex64(k))); }
                     continue;
                 }
+                // E1 history variant: the script tree marks spent keys (with the coin log's spender) instead of removing.
+                #[cfg(feature = "htree")]
+                if t == 1 {
+                    let marks: Vec<(itree::Key, coinlog::W)> = rem.iter().zip(ext.iter())
+                        .map(|(k, (_, tx, vin))| (*k, coinlog::w_of(&coinlog::spender(w.height, *tx, *vin)))).collect();
+                    #[allow(static_mut_refs)]
+                    match itree::decode_bench_hist(unsafe { &TREE_WITNESS[t] }) {
+                        Some((mut tr, mut tn, touched, sib)) => {
+                            if let Err(e) = itree::apply_hist(&mut tr, &mut tn, &touched, &sib, &marks, &ins) {
+                                env::log(&alloc::format!("agg-lite: REJECT tree {t}: {e:?}"));
+                                all_ok = false;
+                            }
+                            #[allow(static_mut_refs)]
+                            unsafe {
+                                TREE_OUT.push(t as u32);
+                                TREE_OUT.push(tn as u32);
+                                TREE_OUT.push((tn >> 32) as u32);
+                                for r in &tr { TREE_OUT.push(r.is_some() as u32); TREE_OUT.extend_from_slice(&r.unwrap_or([0; 8])); }
+                            }
+                        }
+                        None => { env::log("agg-lite: REJECT tree witness malformed"); all_ok = false; }
+                    }
+                    continue;
+                }
                 #[allow(static_mut_refs)]
                 match itree::decode_bench(unsafe { &TREE_WITNESS[t] }) {
                     Some((mut tr, mut tn, touched, sib)) => {

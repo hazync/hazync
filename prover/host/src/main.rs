@@ -3561,6 +3561,13 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
                 let k: [u8; 64] = hx_bytes(f[2]).try_into().expect("itree key: 64 bytes");
                 if f[1] == "R" { rem.push(k) } else { ins.push(k) }
             }
+            if t == 1 && methods::HTREE {
+                // the history tree holds every coin ever appended: the coin log's modelled size
+                let (r, touched, sib) = libzync::itree::synth_hist(n, &rem, &ins, 0x5eed + t as u64);
+                println!("  itree {t} (history): {} marks, {} inserts, {} touched leaves, {} siblings (modelled {n} keys)", rem.len(), ins.len(), touched.len(), sib.len());
+                tw.push(libzync::itree::encode_bench_hist(&r, n, &touched, &sib));
+                continue;
+            }
             let (r, touched, sib) = libzync::itree::synth(tn, &rem, &ins, 0x5eed + t as u64);
             println!("  itree {t}: {} removes, {} inserts, {} touched leaves, {} siblings (modelled {tn} keys)", rem.len(), ins.len(), touched.len(), sib.len());
             tw.push(libzync::itree::encode_bench(&r, tn, &touched, &sib));

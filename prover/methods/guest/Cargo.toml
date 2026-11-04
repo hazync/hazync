@@ -114,3 +114,5 @@ txlog = ["libzync"]
 itree = ["coinlog"]
 otree = ["itree"]
 stree = ["itree"]
+# E1 history variant (HAZYNC_HTREE=1): the script tree keeps spent keys, marked with their spender (itree::apply_hist).
+htree = ["stree"]
