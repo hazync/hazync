@@ -279,3 +279,40 @@ Whole-block cycles vs c10b:
 - Against main on 962,000 (CORE ~4,430 M): c10t 595 M = 7.4x (base 10.1x, c10h2 6.2x, c10os 6.3x).
 - Not tried: the trie in the guest uses boxed nodes and recursion (a flat array would cut non-hash work); the 37-41%
   non-hash share measured for the indexed tree suggests the order of what a trim can win.
+
+## Counting trie, trimmed (11-04, measured)
+
+Profiling c10t's aggregate (risc0 pprof, 962,000) showed hashing was a minority of the trie's cost: building the trie
+from the witness, 32-byte copies (memcpy 36 M) and paging (~40 M) dominated. Two trims:
+
+1. **One pass** (40269e1): the guest reads the witness once in preorder and computes each expanded node's old and new
+   hash together; new subtrees are built straight from the sorted inserts; no tree in memory. Coin leaf one compression
+   (value and spent flag in the spender record's spare words). Chunk side: coin key = txid xor vout (no hash), script
+   hash one raw compression, transaction parsed once. Result (c10t2, 00ec71b3): chunks -13 M per block, but the
+   aggregate got WORSE (+63.3% whole): memcpy rose to 62 M (hashes copied through return values and the reader).
+2. **In place** (trim 2, c10t3 73158901): hashes written through out-parameters, witness hashes read by reference,
+   updates sorted by index. A random test (300 blocks) checks the one-pass roots equal the reference `apply`.
+
+| block | c10s live script tree | c10t trie | **c10t3 trie, trimmed** |
+|---|---|---|---|
+| 170,060 | +14.3% | +9.7% | +5.6% |
+| 650,000 | +55.6% | +46.9% | +26.1% |
+| 692,261 | +68.0% | +58.0% | +32.7% |
+| 700,000 | +67.8% | +58.8% | +32.8% |
+| 750,000 | +78.5% | +68.0% | +38.5% |
+| 800,000 | +78.0% | +58.8% | +36.3% |
+| 850,000 | +72.0% | +63.6% | +39.6% |
+| 900,000 | +54.3% | +39.4% | +24.0% |
+| 962,000 | +35.9% | +35.3% | +21.3% |
+| 970,000 | +27.3% | +27.5% | +16.9% |
+| **9 modern blocks** | **+60.2%** | **+51.3%** | **+30.0%** |
+
+- Against main on 962,000 (CORE ~4,430 M): c10t3 534 M = **8.3x** (base 10.1x).
+- Address reuse (HAZYNC_TTREE_SUB=1024 other coins per spent-from address): 962,000 +24.9%, 750,000 +44.1%
+  (vs +21.3% / +38.5% at 2).
+- What is left is hashing: the aggregate's extra cycles per trie compression are 368 (962,000), 281 (750,000) and
+  288 (850,000), against ~283 per compression measured alone. 962,000 still has ~16 M of non-hash work; the heavy
+  blocks have almost none. Further cuts must remove compressions: a shorter address leaf (count and value packed with
+  a 160-bit script hash, one compression instead of two), fewer modelled addresses (2.32 B at 962,000 is deliberately
+  high; each halving is about one level), dropping the coin key from the chunk journal for outputs. Each is a few
+  percent.
