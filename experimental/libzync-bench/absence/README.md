@@ -236,3 +236,9 @@ Aggregate extra per modern block: 201 M (c10h) vs 251 M (c10s); 439 M (c10oh) vs
 
 Against main on 962,000 (CORE ~4,430 M): base 440 M = 10.1x; c10h 570 M = 7.8x; c10oh 679 M = 6.5x (c10s 7.4x,
 c10os 6.3x). Not measured: an outpoint tree that also keeps history (same mark trick; expected to save similarly).
+
+⚠ **Correction (11-04): c10h / c10oh undercount the history tree.** The tree takes the coin log's appends, and the
+coin log skips coins created and spent inside the same block (`agg_lite.rs`: `if spent[i] { continue; }`). At 962,000
+that is 5,464 of 7,246 created coins (the history tree inserted 1,782). A complete address history must also insert
+those coins, already marked. Their cost is not in the table above, so "+49.7%, cheaper than live-only" is not yet a
+valid result. Re-measure with the within-block coins inserted marked.
