@@ -10,12 +10,13 @@
 //!   zyncapp id
 //!   zyncapp bench-shard <removes> <inserts> <tree keys N> <shards> [seed]   (E1 sharding measurement, execute only)
 //!   zyncapp bench-merge <runs> <entries per run> <cancel %> [seed]          (E1 option C merge step, execute only)
+//!   zyncapp bench-boot <spent leaves> <live coins> <sorted entries>         (E1 tree bootstrap per-unit costs)
 //!
 //! The core receipt is an ASSUMPTION of the zyncAPP receipt (risc0 composition): the zyncAPP receipt's verification
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_SHARDBENCH_ELF, ZYNCAPP_MERGEBENCH_ELF};
+use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_SHARDBENCH_ELF, ZYNCAPP_MERGEBENCH_ELF, ZYNCAPP_BOOTBENCH_ELF};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -138,6 +139,24 @@ fn main() {
                 let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HASHBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
                 println!("mode {mode}: total {} cycles over 20000 hashes (user cycles; see HASHBENCH log line for the loop alone)", info.cycles());
             }
+        }
+        Some("bench-boot") if a.len() >= 4 => {
+            // E1 bootstrap (absence/README.md): per-unit cycles of building the trees once from the coin log.
+            let num = |i: usize| -> usize { a[i].parse().unwrap_or_else(|_| die(&format!("{}: not a number", a[i]))) };
+            let (na, nb, nc) = (num(1), num(2), num(3));
+            let mut rng = 0x5eedu64 | 1;
+            let mut rnd = move || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng as u32 };
+            let mut w: Vec<u32> = vec![na as u32, nb as u32, nc as u32];
+            w.extend((0..8 * na).map(|_| rnd()));
+            for _ in 0..nb { w.extend((0..21).map(|_| rnd())); }
+            let mut keys: Vec<[u32; 16]> = (0..nc).map(|_| core::array::from_fn(|_| rnd())).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            w[2] = keys.len() as u32;
+            for k in &keys { w.extend_from_slice(k); }
+            let env = ExecutorEnv::builder().write_slice(&w).build().unwrap();
+            let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_BOOTBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
+            println!("BENCH_BOOT total {} cycles, {} segments", info.cycles(), info.segments.len());
         }
         Some("bench-merge") if a.len() >= 4 => {
             // E1 option C (absence/README.md): one merge step of a log-structured tree. `runs` sorted runs of random

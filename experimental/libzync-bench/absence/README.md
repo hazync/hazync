@@ -161,3 +161,46 @@ merge: **~3.9 k / ~4.2 k cycles per update, 5.5-6.8x cheaper than today's tree.*
 
 base 440 M = 10.1x; option C both trees ~512 M = 8.7x (~482 M = 9.2x with net-only key hashing); option C script tree
 only ~9.3-9.6x. In card-seconds the base itself measured 8.6x, not 10x.
+
+## Bootstrap-at-a-height design: three measurements (11-04; not decided)
+
+The design: the whole-chain proof carries no trees; one bootstrap proof builds both trees from the coin log at a height
+(host sorts, guest checks order + a multiset hash equal to the coin log's live set); from then on each tip block's own
+proof updates both trees (no lag).
+
+**1. Bootstrap per-unit cost** (`zyncapp bench-boot`, execute mode):
+
+| unit | cycles |
+|---|---|
+| spent coin-log leaf (fold into the forest root) | 279 |
+| live coin (coin leaf from preimage, fold, both keys, both multiset sums) | 2,775 |
+| sorted tree entry, per tree (order, leaf, fold, multiset sum) | 1,748 |
+
+At 970,000 (~1.45 B transactions; coin log ~2.5-3.6 B leaves, estimated; ~180 M live): spent leaves 0.64-0.95 T +
+live coins 0.50 T + two sorted trees 0.63 T = **~1.8-2.1 T cycles once, ~0.7-0.8% of a whole-chain proof (~$1k at
+A40)**, input reading not counted. Every pass is range-parallel. The trees start with only live keys (depth ~27.4,
+what the cost table modelled); dead leaves accumulate afterwards (~+1 level a year).
+
+**2. Overhead trim ceiling** (cost table + exact compression counts from each block's witness x 283 cycles):
+
+| block | tree cost in aggregate | hashing | non-hash (trim ceiling) |
+|---|---|---|---|
+| 970,000 | 83 M | 52 M | 37% |
+| 962,000 | 114 M | 70 M | 38% |
+| 750,000 | 324 M | 192 M | 41% |
+| 650,000 | 306 M | 188 M | 39% |
+
+Correction to 11-03: hashing is ~62% of the tree cost (old and new paths are both recomputed), not about half. A
+realistic trim is ~20-25%. Chunk key hashing (+38 M on 962,000, both trees) is separate and could shrink to the net
+entries only (not measured).
+
+**3. Tip latency** (`tip_latency.sh`, laptop executor, timestamped host output):
+
+| block | aggregate execution, no trees | both trees | added |
+|---|---|---|---|
+| 962,000 | 6.3 s | 20.3 s | +14 s |
+| 750,000 | 10.0 s | 38.7 s | +29 s |
+
+The harness's host preparation also grew (962,000: 13.1 -> 16.9 s; 750,000: 14.5 -> 40.6 s), but that is the
+measurement build's collect run plus witness synthesis; a production host serves the witness from its own tree store
+(not measured). Against a ~200 s tip block: +7-15% wall-clock from execution.
