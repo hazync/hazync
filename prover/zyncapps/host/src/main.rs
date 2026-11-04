@@ -9,12 +9,13 @@
 //!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
 //!   zyncapp id
 //!   zyncapp bench-shard <removes> <inserts> <tree keys N> <shards> [seed]   (E1 sharding measurement, execute only)
+//!   zyncapp bench-merge <runs> <entries per run> <cancel %> [seed]          (E1 option C merge step, execute only)
 //!
 //! The core receipt is an ASSUMPTION of the zyncAPP receipt (risc0 composition): the zyncAPP receipt's verification
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_SHARDBENCH_ELF};
+use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_SHARDBENCH_ELF, ZYNCAPP_MERGEBENCH_ELF};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -137,6 +138,37 @@ fn main() {
                 let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HASHBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
                 println!("mode {mode}: total {} cycles over 20000 hashes (user cycles; see HASHBENCH log line for the loop alone)", info.cycles());
             }
+        }
+        Some("bench-merge") if a.len() >= 4 => {
+            // E1 option C (absence/README.md): one merge step of a log-structured tree. `runs` sorted runs of random
+            // keys; `cancel %` of the entries are live coins whose tombstone is in a later run, so both cancel here.
+            let num = |i: usize| -> u64 { a[i].parse().unwrap_or_else(|_| die(&format!("{}: not a number", a[i]))) };
+            let (k, n, pc) = (num(1) as usize, num(2) as usize, num(3));
+            if k < 2 || k > 16 { die("runs: 2..16"); }
+            let mut rng = a.get(4).and_then(|x| x.parse::<u64>().ok()).unwrap_or(0x5eed) | 1;
+            let mut rnd = move || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+            let mut runs: Vec<Vec<([u32; 16], u32)>> = vec![Vec::new(); k];
+            for r in 0..k {
+                while runs[r].len() < n {
+                    let mut key = [0u32; 16];
+                    for w in key.iter_mut().take(8) { *w = rnd() as u32; }
+                    if r + 1 < k && (rnd() % 100) < pc && runs[r].len() + 1 < n {
+                        runs[r].push((key, 0));
+                        let later = r + 1 + (rnd() as usize % (k - r - 1));
+                        runs[later].push((key, 1));
+                    } else {
+                        runs[r].push((key, (rnd() % 3 == 0) as u32)); // older-run tombstones and new coins
+                    }
+                }
+            }
+            for r in runs.iter_mut() { r.sort_unstable_by(|x, y| x.0.cmp(&y.0)); r.dedup_by(|x, y| x.0 == y.0); }
+            let mut words: Vec<u32> = vec![k as u32];
+            words.extend(runs.iter().map(|r| r.len() as u32));
+            for r in &runs { for (key, kind) in r { words.extend_from_slice(key); words.push(*kind); } }
+            let env = ExecutorEnv::builder().write_slice(&words).build().unwrap();
+            let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_MERGEBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
+            let tot: usize = runs.iter().map(|r| r.len()).sum();
+            println!("BENCH_MERGE runs {k} entries {tot} cycles {} per_entry {:.0} segments {}", info.cycles(), info.cycles() as f64 / tot as f64, info.segments.len());
         }
         Some("bench-shard") if a.len() >= 5 => {
             // E1 sharding measurement (absence/README.md): the block's tree removes / inserts as random 32-byte keys
