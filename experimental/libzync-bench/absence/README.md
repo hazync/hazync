@@ -330,3 +330,26 @@ at one address shared 224 bits and needed a ~224-node chain). 9 modern blocks **
 coin-key fix more than pays for the full binding (800,000 +31.9% vs +34.6%, 850,000 +34.6% vs +38.0%). Per block:
 650,000 +25.7%, 692,261 +31.5%, 700,000 +31.9%, 750,000 +36.9%, 900,000 +21.8%, 962,000 +19.8%, 970,000 +15.6%.
 Against main on 962,000: 527 M = **8.40x**.
+
+## What per-block history costs: coin log vs SwiftSync (11-04, measured)
+
+c10sw (9035a44d): the libzync image with SwiftSync accounting (design B: hint bits from the published hints file,
+stop height 970,000, every block covered), on the same 10 blocks. SwiftSync proves one state at its stop height; the
+coin log proves a state at EVERY block, with each spent coin's spender (history).
+
+| block | coin log vs SwiftSync | coin log + trie vs SwiftSync |
+|---|---|---|
+| 170,060 | +0.3% | +5.7% |
+| 650,000 | +5.2% | +32.1% |
+| 692,261 | +2.0% | +34.2% |
+| 700,000 | +2.1% | +34.7% |
+| 750,000 | +0.9% | +38.2% |
+| 800,000 | -1.8% | +29.5% |
+| 850,000 | +1.5% | +36.6% |
+| 900,000 | +2.8% | +25.3% |
+| 962,000 | +2.8% | +23.2% |
+| 970,000 | +2.6% | +18.6% |
+| **9 modern blocks** | **+2.1%** | **+30.7%** |
+
+Per-block soundness and coin history (the coin log) cost about 2% over SwiftSync's one-height proof. Absence, address
+history and balances (the trie) are the remaining ~28%.
