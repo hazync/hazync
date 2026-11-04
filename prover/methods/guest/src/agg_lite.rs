@@ -710,6 +710,15 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             survivor_value = survivor_value.saturating_add(out_val[k]);
         }
         let (mut roots, mut n) = (w.root_prev.roots.clone(), w.root_prev.num_leaves);
+        // utxohash (instant IBD, 11-04): the chain state's multiset hash of the LIVE coins. Every coin that outlives
+        // its block enters it, every earlier coin this block spends leaves it; in-block create-then-spend never
+        // enters. A new node checks a downloaded UTXO set (coin leaves) against this one value. Collect runs log the
+        // leaves for the host's hints (swiftsync.rs).
+        #[cfg(feature = "utxohash")]
+        {
+            for l in &appends { swiftsync::add(l); }
+            for (l, _, _) in &ext { swiftsync::sub(l); }
+        }
         if swiftsync::collecting() {
             for (l, t, v) in &ext { env::log(&alloc::format!("coinlog: S {} {t} {v}", hex32(l))); }
             for l in &appends { env::log(&alloc::format!("coinlog: A {}", hex32(l))); }

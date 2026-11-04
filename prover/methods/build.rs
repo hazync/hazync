@@ -262,7 +262,7 @@ fn main() {
         features.push("coinlog".to_string());
     }
     // E1 measurement builds: the outpoint / script trees (libzync/src/itree.rs). Cost only, never a release image.
-    for (env_name, feat) in [("HAZYNC_OTREE", "otree"), ("HAZYNC_STREE", "stree"), ("HAZYNC_HTREE", "htree"), ("HAZYNC_TTREE", "ttree"), ("HAZYNC_TSPLIT", "tsplit")] {
+    for (env_name, feat) in [("HAZYNC_OTREE", "otree"), ("HAZYNC_STREE", "stree"), ("HAZYNC_HTREE", "htree"), ("HAZYNC_TTREE", "ttree"), ("HAZYNC_TSPLIT", "tsplit"), ("HAZYNC_UTXOHASH", "utxohash")] {
         println!("cargo:rerun-if-env-changed={env_name}");
         if lever(env_name) {
             assert!(coinlog, "{env_name} needs HAZYNC_COINLOG");
