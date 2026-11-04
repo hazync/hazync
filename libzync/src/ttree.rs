@@ -15,8 +15,10 @@
 //!   inner(L, R)              = parent(50, L, R), empty = 0^32
 //!   coin                     = parent(51, O, P): P = the spender record (height, tx, vin; words 0-2) or 0, with the
 //!                              value in words 5-6 (counts only) and 1 in word 7 if spent: one compression either way
-//!   address                  = parent(53, S, coin trie root)          [counts: parent(53, S[0..20] ‖ count u32 ‖ value, root)]
+//!   address                  = parent(53, S, coin trie root)          [counts: parent(54, that, count ‖ value)]
 //! With `counts` off the leaves carry no count or value (the plain three-state tree), one compression fewer per address.
+//! Coin key O (the chunk's): the txid with the output index XORed into its FIRST 4 bytes, so one transaction's coins at
+//! one address part at the top of the coin trie (in the last bytes they shared 224 bits: ~224 one-child nodes).
 //!
 //! ⛔ MEASUREMENT ONLY: the witness is the old trie pruned to the touched paths, synthesised by the host around a
 //! modelled population (`synth`). The image proves the cost of the update, not a chain of tries.
@@ -432,13 +434,16 @@ fn coin_into(o: &W, sp: Option<&W>, value: u64, counts: bool, out: &mut W) {
     parent_w(51, o, &p, out);
 }
 
-/// An address leaf, one compression. With counts: the script hash's first 160 bits (as Bitcoin's own hash160), the
-/// unspent count (32 bits) and value (64 bits) in one word block. The trie path binds the leading bits too.
+/// An address leaf: the FULL 256-bit script hash and the coin trie root, then (counts) the unspent count and value, both
+/// 64-bit. Two compressions with counts: binding all 256 bits costs one compression per address (decided 11-04: a
+/// 160-bit leaf saved under a point but let two scripts one party controls collide in ~2^80).
 #[inline(always)]
 fn addr_into(s: &W, sub: &W, count: u64, value: u64, counts: bool, out: &mut W) {
     if counts {
-        let p = [s[0], s[1], s[2], s[3], s[4], count as u32, value as u32, (value >> 32) as u32];
-        parent_w(53, &p, sub, out);
+        let mut a = ZERO;
+        parent_w(53, s, sub, &mut a);
+        let n = [count as u32, (count >> 32) as u32, value as u32, (value >> 32) as u32, 0, 0, 0, 0];
+        parent_w(54, &a, &n, out);
     } else {
         parent_w(53, s, sub, out);
     }
@@ -567,7 +572,6 @@ fn top_pass(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -
             let lref: &W = if lo == hi { old } else {
                 let c = count.checked_sub(acc.mc).and_then(|c| c.checked_add(acc.pc)).ok_or(TErr::Count)?;
                 let v = value.checked_sub(acc.mv).and_then(|v| v.checked_add(acc.pv)).ok_or(TErr::Count)?;
-                if c > u32::MAX as u64 { return Err(TErr::Count); }
                 addr_into(s0, &sn, c, v, cx.counts, &mut leaf);
                 &leaf
             };

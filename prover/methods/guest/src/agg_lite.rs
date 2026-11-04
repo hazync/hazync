@@ -110,12 +110,13 @@ fn okey(txid: &[u8; 32], vout: u32) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new(); h.update(txid); h.update(vout.to_le_bytes()); h.finalize().into()
 }
-/// ttree (trim): the coin key is the txid with vout XORed into its last 4 bytes, no hash. The txid is already a hash;
-/// two outpoints collide only if their txids agree in 224 bits.
+/// ttree (trim): the coin key is the txid with vout XORed into its FIRST 4 bytes, no hash. The txid is already a hash;
+/// two outpoints collide only if their txids agree in 224 bits. In the first bytes, one transaction's coins at one
+/// address part at the top of the coin trie (in the last bytes they shared 224 bits: a ~224-node one-child chain).
 #[cfg(feature = "ttree")]
 fn okey(txid: &[u8; 32], vout: u32) -> [u8; 32] {
     let mut o = *txid;
-    for (b, v) in o[28..].iter_mut().zip(vout.to_le_bytes()) { *b ^= v; }
+    for (b, v) in o[..4].iter_mut().zip(vout.to_le_bytes()) { *b ^= v; }
     o
 }
 #[cfg(all(feature = "stree", not(feature = "ttree")))]
