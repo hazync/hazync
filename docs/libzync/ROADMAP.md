@@ -49,7 +49,7 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| E1 | keyed trees for absence (outpoint / script), built as guest features otree / stree and MEASURED on 10 blocks: +55.6% one tree, +110.7% both, almost all in the aggregate (absence/README.md); key-prefix sharding measured: no saving in work, only splits serial execution — not pursued | measured; needs your call |
+| E1 | keyed trees for absence (outpoint / script), built as guest features otree / stree and MEASURED on 10 blocks: +55.6% one tree, +110.7% both, almost all in the aggregate (absence/README.md); key-prefix sharding measured: no saving in work, only splits serial execution — not pursued; history-keeping script tree (spent keys marked with spender, full address history) measured cheaper: +49.7% alone, +100.1% with the outpoint tree | measured; needs your call |
 
 ## F. main branch
 
@@ -81,3 +81,4 @@ refuse it.
 | zyncAPP coin | 26e09637 | |
 | zyncAPP zeroconf | a61caf76 | |
 | c10b / c10o / c10s / c10os (E1 measurement) | e7514dc8 / 629005ae / 3c948172 / 95df867e | tree state from the witness; cost only |
+| c10h / c10oh (E1 history script tree) | b704daf3 / cba70157 | tree state from the witness; cost only |

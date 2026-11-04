@@ -204,3 +204,35 @@ entries only (not measured).
 The harness's host preparation also grew (962,000: 13.1 -> 16.9 s; 750,000: 14.5 -> 40.6 s), but that is the
 measurement build's collect run plus witness synthesis; a production host serves the witness from its own tree store
 (not measured). Against a ~200 s tip block: +7-15% wall-clock from execution.
+
+## History-keeping script tree (11-04, measured)
+
+Variant `htree` (guest feature, `HAZYNC_HTREE=1`, commit 32b47d6). The script tree never removes: a spent key stays,
+its leaf becomes `parent(59, live(key,next), spender)` with the coin log's spender (height, tx, vin). The tree holds
+every coin ever made at every script, so it gives complete address history (each coin, unspent or spent-by) at every
+proven height. Modelled at the coin log's size (962,000: 2.32 B keys; 750,000: 1.24 B) instead of 180 M live keys.
+Images c10h b704daf3, c10oh cba70157 (outpoint tree still live-only + history script tree).
+
+Whole-block cycles vs c10b (no trees), same 10 blocks:
+
+| block | c10s (live script) | **c10h (history script)** | c10os (both, live) | **c10oh (outpoint + history script)** |
+|---|---|---|---|---|
+| 170,060 | +14.3% | +9.4% | +26.8% | +21.9% |
+| 650,000 | +55.6% | +38.7% | +104.7% | +87.7% |
+| 692,261 | +68.0% | +55.8% | +127.1% | +114.8% |
+| 700,000 | +67.8% | +54.2% | +127.2% | +113.5% |
+| 750,000 | +78.5% | +65.8% | +146.6% | +133.8% |
+| 800,000 | +78.0% | +73.2% | +142.3% | +137.5% |
+| 850,000 | +72.0% | +63.5% | +133.4% | +124.8% |
+| 900,000 | +54.3% | +42.2% | +100.1% | +87.8% |
+| 962,000 | +35.9% | +29.6% | +60.5% | +54.2% |
+| 970,000 | +27.3% | +21.7% | +44.9% | +39.3% |
+| **9 modern blocks** | **+60.2%** | **+49.7%** | **+110.7%** | **+100.1%** |
+
+Keeping history is **cheaper** than removing, despite the deeper tree: a mark rewrites one leaf, a remove rewrites
+the removed leaf and relinks its predecessor. 962,000: 4,324 touched leaves / 78,451 siblings (history) vs 6,866 /
+94,726 (live); 750,000: 14,029 / 217,994 vs 20,142 / 246,374. The ~3.7 extra levels cost less than the leaves saved.
+Aggregate extra per modern block: 201 M (c10h) vs 251 M (c10s); 439 M (c10oh) vs 489 M (c10os).
+
+Against main on 962,000 (CORE ~4,430 M): base 440 M = 10.1x; c10h 570 M = 7.8x; c10oh 679 M = 6.5x (c10s 7.4x,
+c10os 6.3x). Not measured: an outpoint tree that also keeps history (same mark trick; expected to save similarly).
