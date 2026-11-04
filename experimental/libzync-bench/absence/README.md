@@ -406,3 +406,25 @@ Against c10tsp (user cycles):
 - Two corrections from the agents: an accelerated SHA-256 compression is ~74 cycles (risc0 circuit source), not the
   ~283 measured through a byte-converting wrapper, so the trie was NOT at its hashing floor (hashing ~21-24% of the trie
   guest); and the aggregate journal embeds the image id, so journal hashes differ between builds by design.
+
+## Live-coin hash for instant IBD (11-04, measured; E2b candidate)
+
+c10u (4b87b5ab, 909b07f): c10b1 + `utxohash` — the chain state's ECMH total tracks the LIVE coin set under the coin
+log (every coin that outlives its block added, every earlier coin a block spends subtracted), so a new node checks a
+downloaded UTXO set (~10 GB) against one value. Against c10b1:
+
+| block | user cycles | padded cycles |
+|---|---|---|
+| 650,000 | +4.44% | +4.06% |
+| 692,261 | +5.71% | +5.32% |
+| 700,000 | +5.69% | +5.23% |
+| 750,000 | +6.60% | +6.12% |
+| 800,000 | +6.96% | +6.44% |
+| 850,000 | +6.52% | +6.01% |
+| 900,000 | +4.66% | +4.11% |
+| 962,000 | +1.96% | +1.81% |
+| 970,000 | +1.33% | +1.23% |
+| **9 modern blocks** | **+4.95%** | **+4.56%** |
+
+About 2.4k cycles per ECMH operation (750,000: ~14k operations, +33 M). Recent blocks are cheap because most of their
+coins are created and spent inside the block (never enter the set). The estimate given before measuring was ~2.5%.
