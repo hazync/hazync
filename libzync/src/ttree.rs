@@ -13,9 +13,10 @@
 //!
 //! Hashes (one SHA-256 compression each, the coin log's per-level IVs at levels no tree reaches):
 //!   inner(L, R)              = parent(50, L, R), empty = 0^32
-//!   coin                     = parent(51, O, spender or 0)            [counts: parent(52, that, value)]
+//!   coin                     = parent(51, O, P): P = the spender record (height, tx, vin; words 0-2) or 0, with the
+//!                              value in words 5-6 (counts only) and 1 in word 7 if spent: one compression either way
 //!   address                  = parent(53, S, coin trie root)          [counts: parent(54, that, count ‖ value)]
-//! With `counts` off the leaves carry no count or value (the plain three-state tree), one compression fewer each.
+//! With `counts` off the leaves carry no count or value (the plain three-state tree), one compression fewer per address.
 //!
 //! ⛔ MEASUREMENT ONLY: the witness is the old trie pruned to the touched paths, synthesised by the host around a
 //! modelled population (`synth`). The image proves the cost of the update, not a chain of tries.
@@ -77,6 +78,14 @@ fn h(l: u32, a: &W, b: &W) -> W {
     o
 }
 
+/// A coin leaf: one compression, the value and spent flag packed into the spender record's zero words.
+pub fn coin_h(o: &W, sp: &Option<W>, value: u64, counts: bool) -> W {
+    let mut p = sp.unwrap_or([0; 8]);
+    if counts { p[5] = value as u32; p[6] = (value >> 32) as u32; }
+    p[7] = sp.is_some() as u32;
+    h(51, o, &p)
+}
+
 fn num(a: u64, b: u64) -> W {
     [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32, 0, 0, 0, 0]
 }
@@ -86,10 +95,7 @@ pub fn hash_sub(n: &Sub, counts: bool) -> W {
         Sub::Empty => [0; 8],
         Sub::Pruned(x) => *x,
         Sub::Inner(l, r) => h(50, &hash_sub(l, counts), &hash_sub(r, counts)),
-        Sub::Coin { o, sp, value } => {
-            let c = h(51, o, &sp.unwrap_or([0; 8]));
-            if counts { h(52, &c, &num(*value, 0)) } else { c }
-        }
+        Sub::Coin { o, sp, value } => coin_h(o, sp, *value, counts),
     }
 }
 
@@ -378,6 +384,152 @@ pub fn synth(marks: &[Key], inserts: &[Key], addrs: u64, sub_extra: u64, counts:
     (hash_top(&t, counts), t)
 }
 
+// ---- the guest's update (trim, 11-04): ONE pass over the witness in preorder, no tree built. Each expanded node yields
+// its old and new hash at once (as itree's `update`); a slot where inserts land (empty, or a leaf they must share) gets
+// its new subtree built straight from the sorted inserts. Same roots as `apply` on the decoded trie (tested).
+
+/// One update, sorted by (S, O): a mark (spender) or an insert (spender if already spent in its own block, value).
+#[derive(Clone, Copy)]
+pub struct Up { pub s: W, pub o: W, pub mark: bool, pub sp: Option<W>, pub value: u64 }
+
+#[derive(Default)]
+struct Acc { mc: u64, mv: u64, pc: u64, pv: u64 }
+
+/// A new coin trie from inserts only (`a`, then `b`, sorted by O) plus at most one existing coin leaf (O, hash).
+fn build_sub(d: u32, a: &[Up], b: &[Up], extra: Option<(&W, W)>, counts: bool, acc: &mut Acc) -> Result<W, TErr> {
+    let n = a.len() + b.len() + extra.is_some() as usize;
+    if n == 0 { return Ok([0; 8]); }
+    if n == 1 {
+        if let Some((_, h)) = extra { return Ok(h); }
+        let u = if a.is_empty() { &b[0] } else { &a[0] };
+        if u.mark { return Err(TErr::Missing); }
+        if u.sp.is_none() { acc.pc += 1; acc.pv = acc.pv.checked_add(u.value).ok_or(TErr::Count)?; }
+        return Ok(coin_h(&u.o, &u.sp, u.value, counts));
+    }
+    if d >= 256 { return Err(TErr::Duplicate); }
+    let (ma, mb) = (a.partition_point(|u| !bit(&u.o, d)), b.partition_point(|u| !bit(&u.o, d)));
+    let (el, er) = match extra { Some(e) if bit(e.0, d) => (None, Some(e)), e => (e, None) };
+    let l = build_sub(d + 1, &a[..ma], &b[..mb], el, counts, acc)?;
+    let r = build_sub(d + 1, &a[ma..], &b[mb..], er, counts, acc)?;
+    Ok(h(50, &l, &r))
+}
+
+fn sub_pass(r: &mut Rd, d: u32, ups: &[Up], counts: bool, acc: &mut Acc) -> Result<(W, W), TErr> {
+    if d > 256 { return Err(TErr::Witness); }
+    match r.word().ok_or(TErr::Witness)? {
+        0 => Ok(([0; 8], build_sub(d, ups, &[], None, counts, acc)?)),
+        1 => { let x = r.hash().ok_or(TErr::Witness)?; if ups.is_empty() { Ok((x, x)) } else { Err(TErr::Witness) } }
+        2 => {
+            let m = ups.partition_point(|u| !bit(&u.o, d));
+            let (a0, a1) = sub_pass(r, d + 1, &ups[..m], counts, acc)?;
+            let (b0, b1) = sub_pass(r, d + 1, &ups[m..], counts, acc)?;
+            let old = h(50, &a0, &b0);
+            Ok((old, if a0 == a1 && b0 == b1 { old } else { h(50, &a1, &b1) }))
+        }
+        4 => {
+            let o0 = r.hash().ok_or(TErr::Witness)?;
+            let f = r.word().ok_or(TErr::Witness)?;
+            let sp = r.hash().ok_or(TErr::Witness)?;
+            let value = r.u64().ok_or(TErr::Witness)?;
+            let sp0 = (f == 1).then_some(sp);
+            let old = coin_h(&o0, &sp0, value, counts);
+            let lo = ups.partition_point(|u| u.o < o0);
+            let hi = ups.partition_point(|u| u.o <= o0);
+            let leaf = match &ups[lo..hi] {
+                [] => old,
+                [u] if u.mark && sp0.is_none() => {
+                    acc.mc += 1;
+                    acc.mv = acc.mv.checked_add(value).ok_or(TErr::Count)?;
+                    coin_h(&o0, &u.sp, value, counts)
+                }
+                [u, ..] if u.mark => return Err(TErr::Missing),
+                _ => return Err(TErr::Duplicate),
+            };
+            if lo == 0 && hi == ups.len() { return Ok((old, leaf)); }
+            Ok((old, build_sub(d, &ups[..lo], &ups[hi..], Some((&o0, leaf)), counts, acc)?))
+        }
+        _ => Err(TErr::Witness),
+    }
+}
+
+fn addr_h(s: &W, sub: &W, count: u64, value: u64, counts: bool) -> W {
+    let a = h(53, s, sub);
+    if counts { h(54, &a, &num(count, value)) } else { a }
+}
+
+/// The ups of one address: the run starting at ups[0].
+fn run(ups: &[Up]) -> usize { ups.partition_point(|u| u.s <= ups[0].s) }
+
+/// New top subtree: new addresses (`a`, then `b`; inserts only) plus at most one existing address leaf (S, hash).
+fn build_top(d: u32, a: &[Up], b: &[Up], extra: Option<(&W, W)>, counts: bool) -> Result<W, TErr> {
+    let one = |x: &[Up]| x.is_empty() || x[0].s == x[x.len() - 1].s;
+    let groups = (!a.is_empty()) as usize + (!b.is_empty()) as usize + extra.is_some() as usize;
+    if groups == 0 { return Ok([0; 8]); }
+    if groups == 1 && one(a) && one(b) {
+        if let Some((_, h)) = extra { return Ok(h); }
+        let g = if a.is_empty() { b } else { a };
+        let mut acc = Acc::default();
+        let sub = build_sub(0, g, &[], None, counts, &mut acc)?;
+        return Ok(addr_h(&g[0].s, &sub, acc.pc, acc.pv, counts));
+    }
+    if d >= 256 { return Err(TErr::Witness); }
+    let (ma, mb) = (a.partition_point(|u| !bit(&u.s, d)), b.partition_point(|u| !bit(&u.s, d)));
+    let (el, er) = match extra { Some(e) if bit(e.0, d) => (None, Some(e)), e => (e, None) };
+    let l = build_top(d + 1, &a[..ma], &b[..mb], el, counts)?;
+    let r = build_top(d + 1, &a[ma..], &b[mb..], er, counts)?;
+    Ok(h(50, &l, &r))
+}
+
+fn top_pass(r: &mut Rd, d: u32, ups: &[Up], counts: bool) -> Result<(W, W), TErr> {
+    if d > 256 { return Err(TErr::Witness); }
+    match r.word().ok_or(TErr::Witness)? {
+        0 => Ok(([0; 8], build_top(d, ups, &[], None, counts)?)),
+        1 => { let x = r.hash().ok_or(TErr::Witness)?; if ups.is_empty() { Ok((x, x)) } else { Err(TErr::Witness) } }
+        2 => {
+            let m = ups.partition_point(|u| !bit(&u.s, d));
+            let (a0, a1) = top_pass(r, d + 1, &ups[..m], counts)?;
+            let (b0, b1) = top_pass(r, d + 1, &ups[m..], counts)?;
+            let old = h(50, &a0, &b0);
+            Ok((old, if a0 == a1 && b0 == b1 { old } else { h(50, &a1, &b1) }))
+        }
+        3 => {
+            let s0 = r.hash().ok_or(TErr::Witness)?;
+            let (count, value) = (r.u64().ok_or(TErr::Witness)?, r.u64().ok_or(TErr::Witness)?);
+            let lo = ups.partition_point(|u| u.s < s0);
+            let hi = ups.partition_point(|u| u.s <= s0);
+            let mut acc = Acc::default();
+            let (so, sn) = sub_pass(r, 0, &ups[lo..hi], counts, &mut acc)?;
+            let old = addr_h(&s0, &so, count, value, counts);
+            let leaf = if lo == hi { old } else {
+                let c = count.checked_sub(acc.mc).and_then(|c| c.checked_add(acc.pc)).ok_or(TErr::Count)?;
+                let v = value.checked_sub(acc.mv).and_then(|v| v.checked_add(acc.pv)).ok_or(TErr::Count)?;
+                addr_h(&s0, &sn, c, v, counts)
+            };
+            if lo == 0 && hi == ups.len() { return Ok((old, leaf)); }
+            Ok((old, build_top(d, &ups[..lo], &ups[hi..], Some((&s0, leaf)), counts)?))
+        }
+        _ => Err(TErr::Witness),
+    }
+}
+
+/// The guest's update: the witness `w` (as `encode`) against its old root, with `marks` and `inserts` (as `apply`).
+/// Returns the new root.
+pub fn apply_stream(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)]) -> Result<W, TErr> {
+    let mut r = Rd { w, i: 0 };
+    let counts = r.word().ok_or(TErr::Witness)? == 1;
+    let root = r.hash().ok_or(TErr::Witness)?;
+    let mut ups: Vec<Up> = Vec::with_capacity(marks.len() + inserts.len());
+    for (k, sp) in marks { let (s, o) = split(k); ups.push(Up { s, o, mark: true, sp: Some(*sp), value: 0 }); }
+    for (k, sp, v) in inserts { let (s, o) = split(k); ups.push(Up { s, o, mark: false, sp: *sp, value: *v }); }
+    ups.sort_unstable_by(|a, b| a.s.cmp(&b.s).then(a.o.cmp(&b.o)));
+    if ups.windows(2).any(|p| p[0].s == p[1].s && p[0].o == p[1].o) { return Err(TErr::Duplicate); }
+    let _ = run;
+    let (old, new) = top_pass(&mut r, 0, &ups, counts)?;
+    if r.i != w.len() { return Err(TErr::Witness); }
+    if old != root { return Err(TErr::OldRoot); }
+    Ok(new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +551,11 @@ mod tests {
             let mut tt = t.clone();
             apply(&mut r, &mut tt, counts, &m, &i).unwrap();
             assert_ne!(r, root);
+            assert_eq!(apply_stream(&w, &m, &i), Ok(r), "one-pass update gives apply's root");
+            assert_eq!(apply_stream(&w, &[m[0], m[0]], &[]), Err(TErr::Duplicate));
+            let mut bad = w.clone();
+            bad[1] ^= 1;
+            assert_eq!(apply_stream(&bad, &m, &i), Err(TErr::OldRoot));
             // marking twice, inserting twice, a wrong old root: refused
             let (mut r, mut tt) = (root, t.clone());
             assert_eq!(apply(&mut r, &mut tt, counts, &[m[0], m[0]], &[]), Err(TErr::Missing));
@@ -406,6 +563,32 @@ mod tests {
             assert_eq!(apply(&mut r, &mut tt, counts, &[], &[i[0], i[0]]), Err(TErr::Duplicate));
             let (mut r, mut tt) = ([9u32; 8], t.clone());
             assert_eq!(apply(&mut r, &mut tt, counts, &m, &i), Err(TErr::OldRoot));
+        }
+    }
+
+    #[test]
+    fn stream_matches_apply_on_random_blocks() {
+        let mut x = 0x9e3779b97f4a7c15u64;
+        let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        for round in 0..300u64 {
+            let counts = round % 2 == 0;
+            // a few addresses, several coins each: marks on some, inserts on others (new and existing addresses)
+            let na = 1 + rnd() % 6;
+            let addrs: Vec<u8> = (0..na).map(|_| rnd() as u8).collect();
+            let mut used = alloc::collections::BTreeSet::new();
+            let (mut marks, mut ins) = (Vec::new(), Vec::new());
+            for _ in 0..(1 + rnd() % 12) {
+                let k = key(addrs[(rnd() % na) as usize], rnd() as u8);
+                if !used.insert(k) { continue; }
+                if rnd() % 2 == 0 { marks.push(k) } else { ins.push(k) }
+            }
+            let (root, t) = synth(&marks, &ins, 1 + rnd() % 5000, rnd() % 40, counts, rnd());
+            let w = encode(counts, &root, &t);
+            let m: Vec<(Key, W)> = marks.iter().map(|k| (*k, [rnd() as u32; 8])).collect();
+            let i: Vec<(Key, Option<W>, u64)> = ins.iter().map(|k| (*k, (rnd() % 3 == 0).then(|| [7u32; 8]), rnd() >> 30)).collect();
+            let (mut r, mut tt) = (root, t.clone());
+            let want = apply(&mut r, &mut tt, counts, &m, &i).map(|_| r);
+            assert_eq!(apply_stream(&w, &m, &i), want, "round {round}");
         }
     }
 

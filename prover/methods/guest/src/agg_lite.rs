@@ -105,15 +105,38 @@ fn prevout_spks(b: &[u8]) -> Option<Vec<(usize, usize)>> {
 }
 
 /// itree keys: SHA-256(txid ‖ vout LE) for the outpoint; SHA-256(scriptPubKey) for the script.
-#[cfg(feature = "itree")]
+#[cfg(all(feature = "itree", not(feature = "ttree")))]
 fn okey(txid: &[u8; 32], vout: u32) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new(); h.update(txid); h.update(vout.to_le_bytes()); h.finalize().into()
 }
-#[cfg(feature = "stree")]
+/// ttree (trim): the coin key is the txid with vout XORed into its last 4 bytes, no hash. The txid is already a hash;
+/// two outpoints collide only if their txids agree in 224 bits.
+#[cfg(feature = "ttree")]
+fn okey(txid: &[u8; 32], vout: u32) -> [u8; 32] {
+    let mut o = *txid;
+    for (b, v) in o[28..].iter_mut().zip(vout.to_le_bytes()) { *b ^= v; }
+    o
+}
+#[cfg(all(feature = "stree", not(feature = "ttree")))]
 fn shash(spk: &[u8]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     Sha256::digest(spk).into()
+}
+/// ttree (trim): SHA-256(scriptPubKey), one raw compression for scripts up to 55 bytes (every standard type).
+#[cfg(feature = "ttree")]
+fn shash(spk: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    if spk.len() > 55 { return Sha256::digest(spk).into(); }
+    let mut blk = [0u8; 64];
+    blk[..spk.len()].copy_from_slice(spk);
+    blk[spk.len()] = 0x80;
+    blk[56..].copy_from_slice(&((spk.len() as u64) * 8).to_be_bytes());
+    let mut st = [0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    sha2::compress256(&mut st, &[blk.into()]);
+    let mut o = [0u8; 32];
+    for (c, x) in o.chunks_exact_mut(4).zip(st) { c.copy_from_slice(&x.to_be_bytes()); }
+    o
 }
 #[cfg(feature = "coinlog")]
 fn hex32(h: &[u8; 32]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
@@ -228,6 +251,9 @@ impl ChunkCtx {
         } else {
             ok = false;
         }
+        // itree: the transaction's inputs and output scripts, parsed once per run
+        #[cfg(feature = "itree")]
+        let io = tx_io(raw_tx);
         if first {
             let n_vin = unsafe { tx_vin_count(tp, tl) };
             self.words.push(has_witness | (tracked_tx as u32) << 1);
@@ -239,8 +265,6 @@ impl ChunkCtx {
             #[cfg(feature = "coinlog")]
             push_i64(&mut self.words, unsafe { tx_total_out(tp, tl) });
             self.words.push(n_out);
-            #[cfg(feature = "itree")]
-            let io = tx_io(raw_tx);
             #[cfg(feature = "itree")]
             if io.is_none() { ok = false; }
             for l in 0..n_out as usize {
@@ -260,7 +284,7 @@ impl ChunkCtx {
             }
         }
         #[cfg(feature = "itree")]
-        let (io_in, pspk) = (tx_io(raw_tx).map(|x| x.0), prevout_spks(prevouts));
+        let (io_in, pspk) = (io.as_ref().map(|x| &x.0), prevout_spks(prevouts));
         #[cfg(feature = "itree")]
         if io_in.is_none() || pspk.is_none() { ok = false; }
         for j in 0..k {
@@ -733,17 +757,14 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     // E1 counting trie (ttree): the same marks and inserts on the two-level trie (libzync/src/ttree.rs)
                     #[cfg(feature = "ttree")]
                     {
+                        // one pass over the witness, no tree built (ttree::apply_stream)
                         #[allow(static_mut_refs)]
-                        match ttree::decode(unsafe { &TREE_WITNESS[t] }) {
-                            Some((counts, mut root, mut tr)) => {
-                                if let Err(e) = ttree::apply(&mut root, &mut tr, counts, &marks, &hins) {
-                                    env::log(&alloc::format!("agg-lite: REJECT trie: {e:?}"));
-                                    all_ok = false;
-                                }
+                        match ttree::apply_stream(unsafe { &TREE_WITNESS[t] }, &marks, &hins) {
+                            Ok(root) => {
                                 #[allow(static_mut_refs)]
                                 unsafe { TREE_OUT.push(t as u32); TREE_OUT.extend_from_slice(&root); }
                             }
-                            None => { env::log("agg-lite: REJECT trie witness malformed"); all_ok = false; }
+                            Err(e) => { env::log(&alloc::format!("agg-lite: REJECT trie: {e:?}")); all_ok = false; }
                         }
                         continue;
                     }

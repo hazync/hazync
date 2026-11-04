@@ -3569,6 +3569,18 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
                 let counts = envu("HAZYNC_TTREE_COUNTS", 1) == 1;
                 let (root, tr) = libzync::ttree::synth(&rem, &ins, addrs, sub, counts, 0x5eed + t as u64);
                 let wit = libzync::ttree::encode(counts, &root, &tr);
+                // compressions the guest does: old pass over the pruned trie, new pass after the block (host replay)
+                fn cs(n: &libzync::ttree::Sub, c: bool) -> (u64, u64) { use libzync::ttree::Sub::*; match n { Inner(l, r) => { let (a, b) = cs(l, c); let (x, y) = cs(r, c); (a + x + 1, b + y) } Coin { .. } => (0, 1 + c as u64), _ => (0, 0) } }
+                fn ct(n: &libzync::ttree::Top, c: bool) -> (u64, u64) { use libzync::ttree::Top::*; match n { Inner(l, r) => { let (a, b) = ct(l, c); let (x, y) = ct(r, c); (a + x + 1, b + y) } Addr { sub, .. } => { let (a, b) = cs(sub, c); (a, b + 1 + c as u64) } _ => (0, 0) } }
+                let (oi, ol) = ct(&tr, counts);
+                let mut t2 = tr.clone();
+                let mut r2 = root;
+                let mk: Vec<([u8; 64], [u32; 8])> = rem.iter().map(|k| (*k, [1u32; 8])).collect();
+                let ik: Vec<([u8; 64], Option<[u32; 8]>, u64)> = ins.iter().map(|k| (*k, None, 1u64)).collect();
+                let ok = libzync::ttree::apply(&mut r2, &mut t2, counts, &[], &ik).is_ok();
+                let _ = mk;
+                let (ni, nl) = ct(&t2, counts);
+                println!("  ttree compressions: old inner {oi} leaf {ol}; new inner {ni} leaf {nl}; total {} (inserts replayed {ok})", oi + ol + ni + nl);
                 println!("  ttree: {} marks, {} inserts, witness {} words (modelled {addrs} addresses, {sub} other coins per spent-from address, counts {counts})", rem.len(), ins.len(), wit.len());
                 tw.push(wit);
                 continue;
