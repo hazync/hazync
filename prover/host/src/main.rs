@@ -3146,11 +3146,24 @@ fn liftx_hints(w: &BlockWitness, lo: usize, hi: usize) -> Vec<([u8; 32], [u8; 32
         }
         let raw = &w.txs[inp.tx_idx as usize].0;
         let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(raw) else { continue };
+        // The spent outputs' scripts: a taproot output key (OP_1 <32>, lifted on every key-path spend), and P2PK /
+        // bare multisig keys.
+        if let Ok(pv) = bitcoin::consensus::deserialize::<Vec<bitcoin::TxOut>>(&w.tx_prevouts[inp.tx_idx as usize].0) {
+            for o in &pv {
+                let spk = o.script_pubkey.as_bytes();
+                if spk.len() == 34 && spk[0] == 0x51 && spk[1] == 0x20 { add_push(&spk[2..34]); continue; }
+                for ins in o.script_pubkey.instructions().flatten() {
+                    if let bitcoin::script::Instruction::PushBytes(pb) = ins { add_push(pb.as_bytes()); }
+                }
+            }
+        }
         for txin in &tx.input {
             // Witness items: the key itself for P2WPKH, and the redeem/tapscript for the rest --
             // walk those as scripts too, which is where multisig keys live.
             for item in txin.witness.iter() {
                 add_push(item);
+                // A taproot control block (33 + 32m bytes): its internal key, lifted by the tweak check.
+                if item.len() >= 33 && (item.len() - 33) % 32 == 0 && item[0] & 0xfe == 0xc0 { add_push(&item[1..33]); }
                 if item.len() > 33 {
                     for ins in bitcoin::Script::from_bytes(item).instructions().flatten() {
                         if let bitcoin::script::Instruction::PushBytes(pb) = ins {
@@ -3343,6 +3356,8 @@ fn report_agg_execute_only(mut b: risc0_zkvm::ExecutorEnvBuilder) {
     let cycles = session.cycles();
     println!("=== AGGREGATE, EXECUTE ONLY (no proving) ===");
     println!("  block validation cycles  {cycles}");
+    // What the prover pays for: every segment padded to its power of two (user cycles + paging + padding).
+    println!("  block validation padded  {} ({} segments)", session.segments.iter().map(|g| 1u64 << g.po2).sum::<u64>(), session.segments.len());
     {
         use sha2::Digest;
         println!("  journal sha256           {}", hex(&sha2::Sha256::digest(&session.journal.bytes)));
@@ -3507,6 +3522,7 @@ fn agg_exec_fake() {
         let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("exec chunk");
         let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
         println!("  chunk {i:>3} [{lo}..{hi}) executed: {} cycles", s.cycles());
+        println!("  chunk {i:>3} padded {} ({} segments)", s.segments.iter().map(|g| 1u64 << g.po2).sum::<u64>(), s.segments.len());
         receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
     }
     // Negative control (test-only): HAZYNC_LITE_DROP_CHUNK=i omits chunk i; coverage must fail.

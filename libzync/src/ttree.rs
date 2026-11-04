@@ -612,17 +612,32 @@ pub fn apply_stream(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u
 /// LE), each insert (key, spent flag byte, spender words LE, value u64 LE).
 pub fn list_digest(marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
-    let mut b: Vec<u8> = Vec::with_capacity(8 + marks.len() * 96 + inserts.len() * 105);
-    b.extend_from_slice(&(marks.len() as u32).to_le_bytes());
-    b.extend_from_slice(&(inserts.len() as u32).to_le_bytes());
-    for (k, sp) in marks { b.extend_from_slice(k); for x in sp { b.extend_from_slice(&x.to_le_bytes()); } }
-    for (k, sp, v) in inserts {
-        b.extend_from_slice(k);
-        b.push(sp.is_some() as u8);
-        for x in sp.unwrap_or([0; 8]) { b.extend_from_slice(&x.to_le_bytes()); }
-        b.extend_from_slice(&v.to_le_bytes());
+    // Streamed through a small stack buffer (no list-sized byte Vec: the trim hunt's copy and paging cost). Same bytes.
+    struct St { h: Sha256, b: [u8; 1024], n: usize }
+    impl St {
+        #[inline(always)]
+        fn put(&mut self, x: &[u8]) {
+            if self.n + x.len() > self.b.len() { self.h.update(&self.b[..self.n]); self.n = 0; }
+            self.b[self.n..self.n + x.len()].copy_from_slice(x);
+            self.n += x.len();
+        }
     }
-    Sha256::digest(&b).into()
+    let mut st = St { h: Sha256::new(), b: [0; 1024], n: 0 };
+    st.put(&(marks.len() as u32).to_le_bytes());
+    st.put(&(inserts.len() as u32).to_le_bytes());
+    let mut w32 = [0u8; 32];
+    let ww = |sp: &W, w32: &mut [u8; 32]| { for (c, x) in w32.chunks_exact_mut(4).zip(sp) { c.copy_from_slice(&x.to_le_bytes()); } };
+    for (k, sp) in marks { st.put(k); ww(sp, &mut w32); st.put(&w32); }
+    for (k, sp, v) in inserts {
+        st.put(k);
+        st.put(&[sp.is_some() as u8]);
+        ww(&sp.unwrap_or([0; 8]), &mut w32);
+        st.put(&w32);
+        st.put(&v.to_le_bytes());
+    }
+    let St { mut h, b, n } = st;
+    h.update(&b[..n]);
+    h.finalize().into()
 }
 
 #[cfg(test)]
@@ -685,6 +700,25 @@ mod tests {
             let want = apply(&mut r, &mut tt, counts, &m, &i).map(|_| r);
             assert_eq!(apply_stream(&w, &m, &i), want, "round {round}");
         }
+    }
+
+    #[test]
+    fn list_digest_is_sha256_of_the_list_bytes() {
+        use sha2::{Digest, Sha256};
+        let marks: Vec<(Key, W)> = (0..40u8).map(|i| (key(i, i), [i as u32; 8])).collect();
+        let ins: Vec<(Key, Option<W>, u64)> = (0..50u8).map(|i| (key(i, 200 - i), (i % 3 == 0).then_some([7; 8]), i as u64 * 1000)).collect();
+        let mut b = Vec::new();
+        b.extend_from_slice(&(marks.len() as u32).to_le_bytes());
+        b.extend_from_slice(&(ins.len() as u32).to_le_bytes());
+        for (k, sp) in &marks { b.extend_from_slice(k); for x in sp { b.extend_from_slice(&x.to_le_bytes()); } }
+        for (k, sp, v) in &ins {
+            b.extend_from_slice(k);
+            b.push(sp.is_some() as u8);
+            for x in sp.unwrap_or([0; 8]) { b.extend_from_slice(&x.to_le_bytes()); }
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        let want: [u8; 32] = Sha256::digest(&b).into();
+        assert_eq!(list_digest(&marks, &ins), want);
     }
 
     #[test]

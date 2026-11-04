@@ -2129,7 +2129,21 @@ fn aggregate() {
     #[cfg(feature = "agg-lite")]
     let mut lite_journals: Vec<Vec<u32>> = Vec::with_capacity(k as usize);
     for _ in 0..k {
+        // agg-lite: read the journal straight into words and verify those (env::verify hashes the same bytes on a
+        // little-endian guest); no byte copy and no second word copy. Every chunk commits whole words, so a length
+        // that is not a multiple of 4 is refused.
+        #[cfg(all(feature = "agg-lite", feature = "agg-readslice"))]
+        {
+            let n: u32 = env::read();
+            assert!(n % 4 == 0, "aggregate: a chunk journal is not whole words");
+            let mut words = vec![0u32; (n / 4) as usize];
+            env::read_slice(&mut words);
+            env::verify(self_id, &words).expect("chunk proof invalid");
+            lite_journals.push(words);
+            continue;
+        }
         #[cfg(feature = "agg-readslice")]
+        #[allow(unreachable_code)]
         let cj: Vec<u8> = { let n: u32 = env::read(); read_bytes_agg(n) };
         #[cfg(not(feature = "agg-readslice"))]
         let cj: Vec<u8> = env::read();

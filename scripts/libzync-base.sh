@@ -4,7 +4,7 @@
 # hook/apply_*.py scripts produced patches/libzync/*.patch and are kept only as history.
 #
 #   <dir>/bitcoin-core  Bitcoin Core v28.0 (110183746) + 0001 0002 0009 0010 + libzync/0101
-#   <dir>/secp256k1     libsecp256k1 v0.5.1 (642c885)  + 0012 0013 0005 0006 0008 + libzync/0102
+#   <dir>/secp256k1     libsecp256k1 v0.5.1 (642c885)  + 0012 0013 0005 0006 0008 + libzync/0102 0103
 #   <dir>/coreshim      the repo's coreshim/*.h + an empty config/bitcoin-config.h
 #
 # Then:  HAZYNC_BASE=<dir> HAZYNC_LIBZYNC=1 [HAZYNC_NETWORK=signet] cargo build -p host
@@ -41,7 +41,8 @@ apply bitcoin-core 0001-serialize-ilp32-int-overload.patch 0002-sha256-route-thr
                    libzync/0101-core-libzync-levers.patch
 apply secp256k1 0012-select-field-bigint2-backend.patch 0013-lift-x-via-witness-hint.patch \
                 0005-ecdsa-verify-group-arith-via-bigint2.patch 0006-schnorr-verify-group-arith-via-bigint2.patch \
-                0008-scalar-inverse-via-bigint2.patch libzync/0102-secp-libzync-batch-hooks.patch
+                0008-scalar-inverse-via-bigint2.patch libzync/0102-secp-libzync-batch-hooks.patch \
+                libzync/0103-secp-sha256-via-accelerator.patch
 mkdir -p "$DIR/coreshim/config"
 : > "$DIR/coreshim/config/bitcoin-config.h"
 cp "$REPO"/coreshim/*.h "$DIR/coreshim/"

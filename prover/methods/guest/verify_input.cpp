@@ -224,7 +224,7 @@ static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     hz_remember(e.head, e.tail, tx_bytes, tx_len);
-    e.tx = std::make_unique<const CTransaction>(mtx);
+    e.tx = std::make_unique<const CTransaction>(std::move(mtx));  // move: no deep copy of vin / vout / witness
 #ifdef HAZYNC_RAW_TXID
     // Only when the parse consumed EVERY byte: Core's deserialiser rejects non-canonical compact sizes
     // and superfluous witness records, so a fully consumed buffer IS the canonical serialisation, and
