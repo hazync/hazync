@@ -50,6 +50,8 @@ refuse it.
 | # | item | status |
 |---|---|---|
 | E1 | keyed trees for absence (outpoint / script), built as guest features otree / stree and MEASURED on 10 blocks: +55.6% one tree, +110.7% both, almost all in the aggregate (absence/README.md); key-prefix sharding measured: no saving in work, only splits serial execution — not pursued; history-keeping script tree measured +49.7% alone / +100.1% with the outpoint tree, BUT undercounted (within-block spent coins not inserted; README correction 11-04) | measured; needs your call |
+| E1b | corrected history tree (every created coin, within-block spends inserted marked) and the counting trie (one two-level trie: address then coin, history kept, per-address unspent count and value; `ttree.rs`), images c10h2 / c10t | measuring (11-04) |
+| E2 | if a tree is chosen: production integration — tree root(s) in ChainState bound proof to proof (not from the witness), host tree store, absence / history / balance verifiers (cli, wasm, C ABI), zync-serve endpoints | after E1 decision |
 
 ## F. main branch
 
@@ -63,13 +65,33 @@ refuse it.
 |---|---|---|
 | G1 | spec text for each item as it lands (SWIFTSYNC_PROOFS, COINLOG, ZYNCAPPS, txproofs) | with each item |
 
-## H. Review, test, freeze (the user's gates)
+## H. Path to the core freeze (the user's gates, in order)
 
-1. Several cold review rounds on everything since `00b7ac2` (feedback: reviews before any freeze).
-2. One full test pass on the final image: rig vs Core, handover, mainnet 1..200, signet from genesis, edge blocks, cost table.
-3. **Freeze: ask the user.**
-4. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
-   from GPU run A, proposal page refresh. GPU runs and a full mainnet proof are the user's trigger.
+1. **E1 tree decision** (user). The only open design decision in the core.
+2. **E2** integration if a tree is chosen (moves the image).
+3. Several cold review rounds on everything since `00b7ac2` (feedback: reviews before any freeze).
+4. One full test pass on the final image: rig vs Core, Core's own test vectors (I1), handover, mainnet 1..200, signet
+   from genesis, edge blocks, cost table.
+5. **GPU proving benchmarks** on the final image (user's trigger).
+6. **Freeze: ask the user.**
+7. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
+   from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger.
+
+## I. Gaps beyond the core (11-04)
+
+What SwiftSync + Utreexo + libzync still do not solve, and how each is closed. None changes the core image unless a
+test finds a bug.
+
+| # | gap | how | status |
+|---|---|---|---|
+| I1 | trust in our guest | Core's own test vectors (`script_tests`, `tx_valid`, `tx_invalid`) through the guest; fuzzing; extend the rig | next (before freeze, part of H4) |
+| I2 | trust in our guest + verifiers | external audit and a bug bounty before anyone relies on proofs for money | after freeze |
+| I3 | trust in the zkVM | pin one risc0 version and track its audits; optional: prove periodic checkpoints on a second zkVM (e.g. SP1), so one prover bug cannot forge alone (~2x cost, checkpoints only) | later; user's call |
+| I4 | data availability | the blocks are the data: publish coin log / tree snapshots (verifiable against proven roots, any untrusted mirror works) + a "rebuild from my own node" tool | after freeze |
+| I5 | proving cost | the 10x target (E1); one proof per block shared by every user; zyncAPP revenue pays (payment is the rate limiter); speculative pre-proving (D1) moves work off the critical path | ongoing |
+| I6 | not consensus | Ghost pool commits the proven roots in its coinbase (no fork; miner attestation on chain); wallet / exchange adoption via the verifiers; a soft fork is a community process for much later | I6a Ghost coinbase: after freeze (Ghost-side, user's call) |
+| I7 | tip latency | speculative chunks (D1, 7.5% waste measured), zeroconf zyncAPP (D5), more cards per block; trim the tree's +14-29 s execution | ongoing |
+| I8 | privacy of queries | whole-snapshot download and local queries; batched / padded queries; private information retrieval later | later |
 
 ## Image ids built (11-03, unit tests + compiles only)
 
