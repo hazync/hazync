@@ -242,3 +242,40 @@ coin log skips coins created and spent inside the same block (`agg_lite.rs`: `if
 that is 5,464 of 7,246 created coins (the history tree inserted 1,782). A complete address history must also insert
 those coins, already marked. Their cost is not in the table above, so "+49.7%, cheaper than live-only" is not yet a
 valid result. Re-measure with the within-block coins inserted marked.
+
+## Corrected history tree and the counting trie (11-04, measured)
+
+Commit 0bc7dff. **c10h2** (ab3f1ac1): the history script tree inserting EVERY created coin (one spent in its own block
+inserted already marked), modelled at 2x the coin log's size (962,000: 4.64 B keys). **c10t** (a87a541e): the counting
+trie (`libzync/src/ttree.rs`), one two-level binary trie: address (S) then coin (O), coins never removed (spender
+written), each address leaf holding its unspent count and value. Modelled with as many addresses as coin-log coins
+(962,000: 2.32 B, deliberately high) and 2 other coins under each address the block spends from.
+
+Whole-block cycles vs c10b:
+
+| block | c10s live script tree | c10h2 history tree (corrected) | **c10t counting trie** | c10os two live trees |
+|---|---|---|---|---|
+| 170,060 | +14.3% | +10.2% | +9.7% | +26.8% |
+| 650,000 | +55.6% | +40.5% | +46.9% | +104.7% |
+| 692,261 | +68.0% | +60.6% | +58.0% | +127.1% |
+| 700,000 | +67.8% | +57.4% | +58.8% | +127.2% |
+| 750,000 | +78.5% | +70.8% | +68.0% | +146.6% |
+| 800,000 | +78.0% | +84.2% | +58.8% | +142.3% |
+| 850,000 | +72.0% | +72.2% | +63.6% | +133.4% |
+| 900,000 | +54.3% | +48.8% | +39.4% | +100.1% |
+| 962,000 | +35.9% | +61.2% | +35.3% | +60.5% |
+| 970,000 | +27.3% | +51.0% | +27.5% | +44.9% |
+| **9 modern blocks** | **+60.2%** | **+60.5%** | **+51.3%** | **+110.7%** |
+
+- The correction matters most on recent blocks: 962,000 creates 7,246 coins, 5,464 of them spent in the same block
+  (750,000: 310). c10h2's inserts go from 1,782 to 7,246 there, and its cost from +29.6% to +61.2%.
+- The counting trie gives every fact in ONE tree (coin unspent / spent by X / never existed, an address's complete
+  history, its unspent count and value) for less than the live-only script tree: a coin is one leaf with no neighbour
+  to relink, and an address's coins share one path.
+- Counts are nearly free: without them (HAZYNC_TTREE_COUNTS=0) 962,000 +34.7% (vs +35.3%), 750,000 +66.5% (vs +68.0%).
+- Address reuse is the sensitive assumption: 1,024 other coins under each spent-from address (HAZYNC_TTREE_SUB=1024):
+  962,000 +44.0%, 750,000 +82.1%. Real reuse lies between (most addresses are used once or twice; exchanges hold
+  millions); not measured from the chain.
+- Against main on 962,000 (CORE ~4,430 M): c10t 595 M = 7.4x (base 10.1x, c10h2 6.2x, c10os 6.3x).
+- Not tried: the trie in the guest uses boxed nodes and recursion (a flat array would cut non-hash work); the 37-41%
+  non-hash share measured for the indexed tree suggests the order of what a trim can win.
