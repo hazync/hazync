@@ -452,3 +452,26 @@ Same contents: the aggregate journals of c10b2 and a baseline built from 909b07f
 `self_id` and `anchor_id` (the test anchor's journal embeds the image id) on 962,000 and 750,000; every other word
 (coin-log roots, live-coin hash, trie digest, chain fields) is identical. The rejection rules touched (spend before
 create, in-block and external double spend) are covered by the Core-comparison rig in the full test pass (same messages).
+
+## Cycle hunt, batch 3: trie guest (11-04, measured)
+
+158fa40: one-sided inner nodes as compact witness tags walked in a loop (fold back with two compressions per level),
+leaf fast paths, host-supplied update order checked (permutation + strictly increasing) instead of sorted. Trie guest
+(`zyncapp bench-trie`), user cycles:
+
+| block | before | after | change |
+|---|---|---|---|
+| 650,000 | 133.2 M | 123.0 M | -7.7% |
+| 692,261 | 136.2 M | 121.8 M | -10.6% |
+| 700,000 | 131.3 M | 118.2 M | -9.9% |
+| 750,000 | 145.4 M | 129.7 M | -10.8% |
+| 800,000 | 117.7 M | 101.2 M | -14.0% |
+| 850,000 | 139.6 M | 123.0 M | -11.9% |
+| 900,000 | 59.7 M | 52.8 M | -11.6% |
+| 962,000 | 58.3 M | 49.5 M | -15.1% |
+| 970,000 | 43.7 M | 37.0 M | -15.4% |
+| **9 modern blocks** | | | **-11.3%** (segments -11.2%) |
+
+Below the agent's estimate (7-14 M / 22-43 M on 962,000 / 750,000; measured 8.8 M / 15.7 M). At ~74 cycles per
+compression, hashing is ~14 M of 962,000's 49.5 M: non-hash work remains (witness paging, the zeroed buffers in the
+two-sided path, the update list). Not pursued further before the consolidation.
