@@ -11,12 +11,13 @@
 //!   zyncapp bench-shard <removes> <inserts> <tree keys N> <shards> [seed]   (E1 sharding measurement, execute only)
 //!   zyncapp bench-merge <runs> <entries per run> <cancel %> [seed]          (E1 option C merge step, execute only)
 //!   zyncapp bench-boot <spent leaves> <live coins> <sorted entries>         (E1 tree bootstrap per-unit costs)
+//!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
 //!
 //! The core receipt is an ASSUMPTION of the zyncAPP receipt (risc0 composition): the zyncAPP receipt's verification
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_SHARDBENCH_ELF, ZYNCAPP_MERGEBENCH_ELF, ZYNCAPP_BOOTBENCH_ELF};
+use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_SHARDBENCH_ELF, ZYNCAPP_MERGEBENCH_ELF, ZYNCAPP_BOOTBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -157,6 +158,15 @@ fn main() {
             let env = ExecutorEnv::builder().write_slice(&w).build().unwrap();
             let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_BOOTBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
             println!("BENCH_BOOT total {} cycles, {} segments", info.cycles(), info.segments.len());
+        }
+        Some("bench-trie") if a.len() >= 2 => {
+            // E1 split (absence/README.md): the trie update alone, from the core host's HAZYNC_TRIE_DUMP file.
+            let b = std::fs::read(&a[1]).unwrap_or_else(|e| die(&format!("{}: {e}", a[1])));
+            let w: Vec<u32> = b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+            let env = ExecutorEnv::builder().write_slice(&w).build().unwrap();
+            let t = std::time::Instant::now();
+            let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_TRIEBENCH_ELF).unwrap_or_else(|e| die(&e.to_string()));
+            println!("BENCH_TRIE total {} cycles, {} segments, executed in {:.1} s", info.cycles(), info.segments.len(), t.elapsed().as_secs_f64());
         }
         Some("bench-merge") if a.len() >= 4 => {
             // E1 option C (absence/README.md): one merge step of a log-structured tree. `runs` sorted runs of random

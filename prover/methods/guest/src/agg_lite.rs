@@ -765,6 +765,15 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     // E1 counting trie (ttree): the same marks and inserts on the two-level trie (libzync/src/ttree.rs)
                     #[cfg(feature = "ttree")]
                     {
+                        // E1 split measurement (tsplit): the trie is updated in its own receipt; the aggregate only recomputes
+                        // the update list's digest that receipt commits (its verification is not modelled in execute mode)
+                        #[cfg(feature = "tsplit")]
+                        {
+                            let dg = ttree::list_digest(&marks, &hins);
+                            #[allow(static_mut_refs)]
+                            unsafe { TREE_OUT.push(t as u32); TREE_OUT.extend(dg.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()))); }
+                            continue;
+                        }
                         // one pass over the witness, no tree built (ttree::apply_stream)
                         #[allow(static_mut_refs)]
                         match ttree::apply_stream(unsafe { &TREE_WITNESS[t] }, &marks, &hins) {

@@ -607,6 +607,24 @@ pub fn apply_stream(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u
     Ok(new)
 }
 
+/// Split mode (E1 measurement): the digest of one block's update list, which the trie receipt commits and the aggregate
+/// recomputes from the chunks' keys. SHA-256 over [marks count, inserts count] (u32 LE), each mark (key, spender words
+/// LE), each insert (key, spent flag byte, spender words LE, value u64 LE).
+pub fn list_digest(marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut b: Vec<u8> = Vec::with_capacity(8 + marks.len() * 96 + inserts.len() * 105);
+    b.extend_from_slice(&(marks.len() as u32).to_le_bytes());
+    b.extend_from_slice(&(inserts.len() as u32).to_le_bytes());
+    for (k, sp) in marks { b.extend_from_slice(k); for x in sp { b.extend_from_slice(&x.to_le_bytes()); } }
+    for (k, sp, v) in inserts {
+        b.extend_from_slice(k);
+        b.push(sp.is_some() as u8);
+        for x in sp.unwrap_or([0; 8]) { b.extend_from_slice(&x.to_le_bytes()); }
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    Sha256::digest(&b).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

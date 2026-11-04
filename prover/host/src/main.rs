@@ -3581,6 +3581,21 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
                 let _ = mk;
                 let (ni, nl) = ct(&t2, counts);
                 println!("  ttree compressions: old inner {oi} leaf {ol}; new inner {ni} leaf {nl}; total {} (inserts replayed {ok})", oi + ol + ni + nl);
+                // split measurement: the trie bench guest's input ([marks, inserts, witness words], keys as 16 BE words each)
+                if let Ok(path) = std::env::var("HAZYNC_TRIE_DUMP") {
+                    let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
+                    let mut d: Vec<u32> = vec![rem.len() as u32, ins.len() as u32, wit.len() as u32];
+                    for k in rem.iter().chain(ins.iter()) { d.extend(kw(k)); }
+                    d.extend_from_slice(&wit);
+                    let b: Vec<u8> = d.iter().flat_map(|x| x.to_le_bytes()).collect();
+                    std::fs::write(&path, b).expect("HAZYNC_TRIE_DUMP");
+                    println!("  ttree: dumped the trie bench input to {path}");
+                }
+                if methods::TSPLIT {
+                    println!("  ttree: split mode, the aggregate gets no trie witness");
+                    tw.push(Vec::new());
+                    continue;
+                }
                 println!("  ttree: {} marks, {} inserts, witness {} words (modelled {addrs} addresses, {sub} other coins per spent-from address, counts {counts})", rem.len(), ins.len(), wit.len());
                 tw.push(wit);
                 continue;

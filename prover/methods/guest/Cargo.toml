@@ -119,3 +119,5 @@ htree = ["stree"]
 # E1 counting trie (HAZYNC_TTREE=1): one two-level trie (address, then coin) with history and per-address unspent
 # count and value (libzync/src/ttree.rs), in place of the history script tree. Measurement only.
 ttree = ["htree"]
+# E1 split measurement (HAZYNC_TSPLIT=1): the aggregate checks the trie update list's digest instead of updating the trie.
+tsplit = ["ttree"]
