@@ -378,3 +378,31 @@ the trie; the zyncAPP `triebench` guest does the update alone from the same witn
   wall-clock. Both belong to the GPU benchmarks.
 - The split aggregate is still 22 M over the no-tree base: building the keys, marks and inserts and the digest. A
   hunt target.
+
+## Cycle hunt, batch 1 (11-04, measured; E2a)
+
+Three read-only agents profiled the chunk, the aggregate and the trie guest (`~/libzync-gpu/e1/prof`). Batch 1 = the
+no-risk items (6862ec5, image c10b1 b9e00ee6, split build): libsecp SHA-256 through the accelerator
+(patches/libzync/0103), `cached_tx` moves the parsed transaction, the aggregate reads chunk journals straight into words,
+host pubkey hints also cover taproot output keys / control-block internal keys / P2PK and bare-multisig prevout keys.
+Against c10tsp (user cycles):
+
+| block | chunks | aggregate | whole |
+|---|---|---|---|
+| 650,000 | -1.5% | -2.8% | -1.7% |
+| 692,261 | -1.1% | -3.0% | -1.5% |
+| 700,000 | -0.9% | -2.6% | -1.2% |
+| 750,000 | -1.0% | -2.9% | -1.4% |
+| 800,000 | -7.8% | -3.2% | -6.8% |
+| 850,000 | -9.0% | -3.0% | -7.7% |
+| 900,000 | -14.2% | -3.6% | -12.5% |
+| 962,000 | -2.9% | -6.4% | -3.6% |
+| 970,000 | -11.3% | -6.8% | -10.6% |
+
+- Padded (proven) cycles are now in every row: on 962,000 the whole block is 464 M user, 563 M padded (+21%: paging and
+  segment padding). Earlier tables are user cycles only.
+- The streamed update-list digest measured SLOWER in the trie guest (962,000 58.3 -> 59.8 M; 750,000 145.4 -> 147.3 M)
+  and was reverted.
+- Two corrections from the agents: an accelerated SHA-256 compression is ~74 cycles (risc0 circuit source), not the
+  ~283 measured through a byte-converting wrapper, so the trie was NOT at its hashing floor (hashing ~21-24% of the trie
+  guest); and the aggregate journal embeds the image id, so journal hashes differ between builds by design.
