@@ -108,3 +108,56 @@ its witness by slice.
   one long execution's segments in parallel, that buys executor time at the tip, not proving cost.
 
 **Verdict:** sharding does not meet the bar ("seriously saves us something"). It is not built further.
+
+## Options B and C measured (11-04)
+
+### Inputs
+
+**Coin lifetimes** (`lifetimes.py`, read-only raw blocks from the bridge node; `lsm_model.py`). Tree updates per block
+are what the guest applies (spends of coins not created in the same block + creates not spent in it); the parse
+reproduces 962,000's guest counts exactly (2,542 removes, 1,782 inserts).
+
+| coins spent within | 961,000-963,015 (2,016 blocks) | 750,000-751,007 (1,008 blocks) |
+|---|---|---|
+| the same block | 37.7% | 3.8% |
+| 16 blocks | 64.2% | 33.0% |
+| 144 blocks (a day) | 79.1% | 61.7% |
+| 1,008 blocks (a week) | 87.4% | 75.3% (504) |
+| tree updates per block | 9,369 | 10,011 |
+
+**Merge step** (`zyncapp bench-merge`, execute mode): rebuild each input run's root, check order, merge with
+cancellation, build the output root. **16-way: ~1,400 cycles per entry; 4-way: ~1,110** (about half hashing, half the
+merge loop; flat from 16 k to 320 k entries).
+
+**Batch apply of today's tree** (`bench-shard` with 1 shard): 20.9 k cycles per update at 4 k updates, 19.7 k at 20 k,
+18.7 k at 80 k. Bigger batches barely help: the cost is per touched leaf, not shared upper paths.
+
+**Today's tree, per update** (cost table, aggregate growth / updates): 962,000 26.4 k; 750,000 23.1 k.
+
+### Option B: one batch per epoch
+
+Epoch 144: 43.9% (modern) / 50.6% (mid) of the per-block updates survive; epoch 1,008: 26.4% / 27.7%. At ~19 k cycles
+per update that is **~2-2.5x cheaper (epoch 144) or ~4x (epoch 1,008)** in tree work, facts a day or a week old.
+
+### Option C: log-structured tree (per-block sorted runs, merged 16 at a time)
+
+Survival after the 16-block merge: 70% / 80%; after the 256-block merge: 38% / 44%; beyond the window no further
+cancellation is assumed (conservative). Merges per update: **2.46 / 2.68**. With a block run (~400) plus ~1,400 per
+merge: **~3.9 k / ~4.2 k cycles per update, 5.5-6.8x cheaper than today's tree.** Fanout 4 is worse (more levels).
+
+| block, both trees | today | option C (tree work modelled from the measured parts) | + today's chunk key hashing |
+|---|---|---|---|
+| 962,000 | +266 M (+60%) | 2 x 4,324 x 3.9 k = 34 M | +38 M => **+72 M (+16%)** |
+| 750,000 | +684 M (+147%) | 2 x 14,029 x 4.2 k = 117 M | +35 M => **+152 M (+33%)** |
+
+- The per-block critical path carries only the block's own run; merges are separate proofs, range-partitionable.
+- What remains is about half chunk key hashing (both keys for every input and output, ~2.5 k cycles per item).
+  Hashing only the net entries would cut it to an estimated ~9 M on 962,000 (not measured).
+- Whole chain, rough: today's trees ~+111%; option C both trees ~+20-30%.
+- Cost of the design: an absence / completeness fact checks every live run (up to ~15 per level, ~4 levels), so
+  zyncAPP proofs are larger; merges are new core proof steps.
+
+### Against the 10x bar (962,000, cycles; live main ~4,430 M)
+
+base 440 M = 10.1x; option C both trees ~512 M = 8.7x (~482 M = 9.2x with net-only key hashing); option C script tree
+only ~9.3-9.6x. In card-seconds the base itself measured 8.6x, not 10x.
