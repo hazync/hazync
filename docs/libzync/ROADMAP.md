@@ -54,6 +54,7 @@ refuse it.
 | E1c | counting trie TRIMMED (one pass over the witness, hashes in place, cheaper chunk keys, one-compression address leaf): **+28.0% over 9 modern blocks (was +51.3%), 962,000 8.40x vs main** (c10t5: full 256-bit address binding, coin key fix); at its hashing floor (absence/README.md) | **CHOSEN 11-04 (user): the path forward** |
 | E2 | integrate the counting trie (c10t5 design) into the core: trie root in ChainState bound proof to proof (not from the witness); the trie updated in its OWN receipt in parallel with the chunks and verified inside the core proof (split measured: serial aggregate 192 M -> 99 M, whole-block cycles +2.4%; pinned in the core image like the chunk program); host trie store; absence / history / balance verifiers (cli, wasm, C ABI); zync-serve endpoints | next |
 | E2b | instant IBD: the chain state's ECMH total tracks the LIVE coin set (`utxohash`), so a new node verifies a downloaded UTXO set (~10 GB) against the proof. Measured +4.56% padded over 9 modern blocks (+1.2-1.8% on recent blocks). **CHOSEN 11-04 (user)**; part of E2 | chosen |
+| E2c | consolidation (after E2a batches 2-3, before E2 integration and the reviews): ONE product configuration (coin log + counting trie as a parallel receipt + live-coin hash; signet / regtest / txlog kept); delete the dead experiments from the guest (otree / stree / htree / itree, design B + hints file, msm / field-bench / liftx-accel / tx-cycles, trie inside-vs-split switch); split `libzync` into the core library (coin log, trie update, facts, wire) and tooling / bench code kept out of anything that ships; break host main.rs into modules (prover, verifier, tools; benches out of the main binary). Cost table + unit tests green after each step | next after E2a |
 | E2a | cycle hunt across all core units (chunk, aggregate, trie guest): profiles in `~/libzync-gpu/e1/prof`, three read-only agents, each candidate measured on the cost table before it lands | in progress |
 
 ## F. main branch
@@ -71,7 +72,7 @@ refuse it.
 ## H. Path to the core freeze (the user's gates, in order)
 
 1. ~~E1 tree decision~~ — **done 11-04: the counting trie (E1c) is the path forward.**
-2. **E2** trie integration, with the trie as a parallel receipt inside the core proof (moves the image), and E2a cycle savings.
+2. **E2a** cycle-hunt batches 2-3, then **E2c** consolidation (one product configuration, dead experiments deleted, library split), then **E2** integration (trie as a parallel receipt inside the core proof, live-coin hash) — moves the image.
 3. Several cold review rounds on everything since `00b7ac2` (feedback: reviews before any freeze).
 4. One full test pass on the final image: rig vs Core, Core's own test vectors (I1), handover, mainnet 1..200, signet
    from genesis, edge blocks, cost table.
