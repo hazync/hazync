@@ -3358,6 +3358,9 @@ fn report_agg_execute_only(mut b: risc0_zkvm::ExecutorEnvBuilder) {
     println!("  block validation cycles  {cycles}");
     // What the prover pays for: every segment padded to its power of two (user cycles + paging + padding).
     println!("  block validation padded  {} ({} segments)", session.segments.iter().map(|g| 1u64 << g.po2).sum::<u64>(), session.segments.len());
+    // Same-contents check across builds: the journal embeds the image's own id, so compare dumps byte by byte and
+    // expect differences only there (E2a).
+    if let Ok(path) = std::env::var("HAZYNC_JOURNAL_DUMP") { std::fs::write(&path, &session.journal.bytes).expect("HAZYNC_JOURNAL_DUMP"); }
     {
         use sha2::Digest;
         println!("  journal sha256           {}", hex(&sha2::Sha256::digest(&session.journal.bytes)));

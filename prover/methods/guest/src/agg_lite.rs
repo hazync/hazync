@@ -159,6 +159,43 @@ fn key(h: &[u8; 32]) -> [u64; 4] {
     [w(0), w(8), w(16), w(24)]
 }
 
+/// E2a batch 2: an open-addressing set of indices into a key array (32-byte keys as [u64; 4]), replacing sorts and
+/// binary searches over 40-byte rows. Capacity a power of two >= 2n. The slot is the key's first word mixed with a
+/// per-block salt (from the block hash, fixed before any transaction could be ground against it); it only places
+/// entries — every probe compares the FULL key, so a collision costs a probe, never a wrong answer.
+struct KeyTab { slots: Vec<u32>, mask: usize, salt: u64 }
+impl KeyTab {
+    fn new(n: usize, salt: u64) -> KeyTab {
+        let cap = (2 * n.max(1)).next_power_of_two();
+        KeyTab { slots: alloc::vec![0; cap], mask: cap - 1, salt }
+    }
+    #[inline(always)]
+    fn slot(&self, k: &[u64; 4]) -> usize { ((k[0] ^ self.salt).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32) as usize & self.mask }
+    /// Insert index `i` (key `keys[i]`) unless an equal key is present: None if inserted, Some(first index) if not.
+    #[inline(always)]
+    fn insert(&mut self, keys: &[[u64; 4]], i: u32) -> Option<u32> {
+        let k = &keys[i as usize];
+        let mut s = self.slot(k);
+        loop {
+            let v = self.slots[s];
+            if v == 0 { self.slots[s] = i + 1; return None; }
+            if keys[(v - 1) as usize] == *k { return Some(v - 1); }
+            s = (s + 1) & self.mask;
+        }
+    }
+    /// The index whose key equals `k`, if any.
+    #[inline(always)]
+    fn find(&self, keys: &[[u64; 4]], k: &[u64; 4]) -> Option<u32> {
+        let mut s = self.slot(k);
+        loop {
+            let v = self.slots[s];
+            if v == 0 { return None; }
+            if keys[(v - 1) as usize] == *k { return Some(v - 1); }
+            s = (s + 1) & self.mask;
+        }
+    }
+}
+
 fn push_hash(v: &mut Vec<u32>, h: &[u8]) {
     for c in h.chunks_exact(4) { v.push(u32::from_le_bytes([c[0], c[1], c[2], c[3]])); }
 }
@@ -609,23 +646,21 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         all_ok = false;
     }
     let bit = |k: usize| ss_mode == 1 && k < ss_nbits as usize && (ss_words[k / 32] >> (k % 32)) & 1 == 1;
-    let mut created: Vec<([u64; 4], u32, u32)> =
-        output_leaves.iter().zip(&out_pos).enumerate().map(|(k, (l, p))| (key(l), *p, k as u32)).collect();
-    created.sort_unstable();
-    created.dedup_by_key(|e| e.0);
-    let mut spent = vec![false; created.len()];
-    let find = |k: &[u64; 4]| created.binary_search_by(|e| e.0.cmp(k));
+    // The coins this block creates, by leaf: a hash table of output indices (E2a batch 2; it was a sort of 40-byte rows
+    // and four binary-search passes). A repeated leaf keeps its FIRST output (lowest position), as the full path's
+    // `entry().or_insert` does: outputs are inserted in block order and a present key is never replaced.
+    let salt = u64::from_le_bytes(block_hash[..8].try_into().unwrap());
+    let okeys: Vec<[u64; 4]> = output_leaves.iter().map(key).collect();
+    let mut ctab = KeyTab::new(okeys.len(), salt);
+    for k in 0..okeys.len() as u32 { let _ = ctab.insert(&okeys, k); }
+    // Indexed by the coin's FIRST output index (what `find` returns).
+    let mut spent = vec![false; okeys.len()];
+    let find = |k: &[u64; 4]| ctab.find(&okeys, k);
     // The same external coin spent twice in one block: Core rejects it at the second spend
-    // (bad-txns-inputs-missingorspent). The ECMH total would also catch it at H, but only with a correct
-    // map; rejecting here costs one sort and pins the failure to this block (review 2026-10-30).
-    {
-        let mut ext: Vec<[u64; 4]> = spends.iter().map(|(l, _, _, _)| key(l)).filter(|k| find(k).is_err()).collect();
-        ext.sort_unstable();
-        if ext.windows(2).any(|p| p[0] == p[1]) {
-            env::log("agg-lite: REJECT the same external coin is spent twice in this block");
-            all_ok = false;
-        }
-    }
+    // (bad-txns-inputs-missingorspent). Checked in the spend walk below with a second table (review 2026-10-30).
+    let skeys: Vec<[u64; 4]> = spends.iter().map(|(l, _, _, _)| key(l)).collect();
+    let mut etab = KeyTab::new(skeys.len(), salt);
+    let mut ext_twice = false;
     #[cfg(feature = "coinlog")]
     let (mut ext, mut in_block_spent): (Vec<([u8; 32], u32, u32)>, u64) = (Vec::new(), 0);   // (leaf, tx position, input index)
     #[cfg(feature = "coinlog")]
@@ -634,26 +669,28 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut ext_keys: Vec<([u8; 32], [u8; 32])> = Vec::new();
     // htree: the spender (tx position, input index) of each created coin this block also spends
     #[cfg(feature = "htree")]
-    let mut in_sp: Vec<Option<(u32, u32)>> = alloc::vec![None; created.len()];
+    let mut in_sp: Vec<Option<(u32, u32)>> = alloc::vec![None; okeys.len()];
     for (_si, (leaf, txp, same_height, _vin)) in spends.iter().enumerate() {
-        match find(&key(leaf)) {
-            Ok(i) => {
+        match find(&skeys[_si]) {
+            Some(i) => {
+                let i = i as usize;
                 // In-block spend: created by a strictly earlier tx, spent at most once.
                 // Core: bad-txns-inputs-missingorspent, the coin is not in the view yet or no longer.
-                if created[i].1 >= *txp { env::log("agg-lite: REJECT a coin is spent before the transaction that creates it"); all_ok = false; }
+                if out_pos[i] >= *txp { env::log("agg-lite: REJECT a coin is spent before the transaction that creates it"); all_ok = false; }
                 if spent[i] { env::log("agg-lite: REJECT a coin created in this block is spent twice"); all_ok = false; }
                 spent[i] = true;
                 #[cfg(feature = "htree")]
                 { in_sp[i] = Some((*txp, *_vin)); }
                 #[cfg(feature = "coinlog")]
-                { in_block_spent = in_block_spent.saturating_add(out_val[created[i].2 as usize]); }
+                { in_block_spent = in_block_spent.saturating_add(out_val[i]); }
                 // A coin spent in its own block cannot be unspent at H: the hint lies.
-                if bit(created[i].2 as usize) {
+                if bit(i) {
                     env::log("agg-lite: REJECT a hint marks a coin unspent-at-H that this block spends");
                     all_ok = false;
                 }
             }
-            Err(_) => {
+            None => {
+                if etab.insert(&skeys, _si as u32).is_some() { ext_twice = true; }
                 if *same_height {
                     env::log("agg-lite: REJECT a spend claims a coin of this height that this block does not create");
                     all_ok = false;
@@ -668,6 +705,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             }
         }
     }
+    if ext_twice {
+        env::log("agg-lite: REJECT the same external coin is spent twice in this block");
+        all_ok = false;
+    }
     // Design B: survivors (bit 1) go into an append-only utreexo forest -- at H it holds exactly the UTXO
     // set, in creation order; everything else into the ECMH total, which must be the identity at H.
     // Within the block, survivors are appended sorted by (txid, vout), compared as bytes in internal order: Core's own
@@ -678,7 +719,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         let mut stump = utreexo::Stump::new(w.root_prev.roots.clone(), w.root_prev.num_leaves);
         let mut live: Vec<(&[u8; 32], u32, usize)> = Vec::new();
         for (k, leaf) in output_leaves.iter().enumerate() {
-            if let Ok(i) = find(&key(leaf)) {
+            if let Some(i) = find(&okeys[k]).map(|i| i as usize) {
                 if spent[i] { continue; }
                 if bit(k) { live.push((&txids[out_pos[k] as usize], out_vout[k], k)); } else { swiftsync::add(leaf); }
             }
@@ -703,7 +744,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         let mut app_keys: Vec<([u8; 32], [u8; 32])> = Vec::with_capacity(output_leaves.len());
         let mut survivor_value: u64 = 0;
         for (k, leaf) in output_leaves.iter().enumerate() {
-            if let Ok(i) = find(&key(leaf)) { if spent[i] { continue; } }
+            if let Some(i) = find(&okeys[k]) { if spent[i as usize] { continue; } }
             appends.push(*leaf);
             #[cfg(feature = "itree")]
             app_keys.push(out_keys[k]);
@@ -726,9 +767,13 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             #[allow(static_mut_refs)]
             match coinlog::decode_witness(unsafe { &LOG_WITNESS }) {
                 Some((pos, sib)) if pos.len() == ext.len() => {
-                    let mut sp: Vec<coinlog::Spend> = pos.into_iter().zip(ext.iter())
-                        .map(|(p, (l, t, v))| (p, coinlog::w_of(l), coinlog::w_of(&coinlog::spender(w.height, *t, *v)))).collect();
-                    sp.sort_unstable_by_key(|x| x.0);
+                    // Sorted by log position through a (position, index) list: 16-byte rows moved, not 72-byte ones.
+                    let mut ord: Vec<(u64, u32)> = pos.iter().enumerate().map(|(i, p)| (*p, i as u32)).collect();
+                    ord.sort_unstable();
+                    let sp: Vec<coinlog::Spend> = ord.iter().map(|&(p, i)| {
+                        let (l, t, v) = &ext[i as usize];
+                        (p, coinlog::w_of(l), coinlog::w_of(&coinlog::spender(w.height, *t, *v)))
+                    }).collect();
                     if let Err(e) = coinlog::apply(&mut roots, &mut n, &sp, &appends, &sib) {
                         env::log(&alloc::format!("agg-lite: REJECT coin log: {e:?}"));
                         all_ok = false;
@@ -750,8 +795,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             // (the coin log skips those). One entry per created key (a repeated leaf keeps its first position).
             #[cfg(feature = "htree")]
             let hins: Vec<(itree::Key, Option<coinlog::W>, u64)> = output_leaves.iter().enumerate().filter_map(|(k, leaf)| {
-                let i = find(&key(leaf)).ok()?;
-                if created[i].2 as usize != k { return None; }
+                let i = find(&okeys[k])? as usize;
+                if i != k { return None; }
                 Some((mk(1, &out_keys[k]), in_sp[i].map(|(t, v)| coinlog::w_of(&coinlog::spender(w.height, t, v))), out_val[k]))
             }).collect();
             let trees: &[usize] = if cfg!(all(feature = "otree", feature = "stree")) { &[0, 1] } else if cfg!(feature = "stree") { &[1] } else { &[0] };
@@ -759,8 +804,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 let rem: Vec<itree::Key> = ext_keys.iter().map(|k| mk(t, k)).collect();
                 #[cfg(not(feature = "htree"))]
                 let ins: Vec<itree::Key> = app_keys.iter().map(|k| mk(t, k)).collect();
+                // (the history tree's own update reads `hins`; its key list is only for a collect run's log)
                 #[cfg(feature = "htree")]
-                let ins: Vec<itree::Key> = if t == 1 { hins.iter().map(|x| x.0).collect() } else { app_keys.iter().map(|k| mk(t, k)).collect() };
+                let ins: Vec<itree::Key> = if t == 1 && !swiftsync::collecting() { Vec::new() }
+                    else if t == 1 { hins.iter().map(|x| x.0).collect() } else { app_keys.iter().map(|k| mk(t, k)).collect() };
                 if swiftsync::collecting() {
                     for k in &rem { env::log(&alloc::format!("itree: {t} R {}", hex64(k))); }
                     for k in &ins { env::log(&alloc::format!("itree: {t} I {}", hex64(k))); }
@@ -860,9 +907,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     }
 
     let ids_distinct = {
-        let mut ids: Vec<[u64; 4]> = txids.iter().map(key).collect();
-        ids.sort_unstable();
-        ids.windows(2).all(|p| p[0] != p[1])
+        let ids: Vec<[u64; 4]> = txids.iter().map(key).collect();
+        let mut t = KeyTab::new(ids.len(), salt);
+        (0..ids.len() as u32).all(|i| t.insert(&ids, i).is_none())
     };
     let spends_ok = w.smt.coinbase_txid == cb_txid
         && w.smt.coinbase_outputs == cb_outputs
