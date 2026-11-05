@@ -88,8 +88,10 @@ Limits of the column:
 Core 28's `script_tests.json`, `tx_valid.json` and `tx_invalid.json` run through the guest's consensus code (guest mode
 10; cases from `scripts/libzync/core_vectors.py`, which follows Core's test drivers; `host core-vectors`). Image c10e10,
 libsecp path: **1,420 / 1,420 agree, 0 differ**, the exact `ScriptError` for every script test
-(`experimental/libzync-bench/core_vectors/RESULT_c10e10_base.txt`). The batched-signature path (honest and forged hints)
-and the 22,666 flag variants: see ROADMAP I1.
+(`experimental/libzync-bench/core_vectors/RESULT_c10e10_base.txt`). Through the BATCHED signature path that chunks use (c10e11): with honest hints the
+same 1,420 / 1,420 and the same ScriptError codes; with forged hints (every verify claimed valid with an R that passes
+the per-signature check, the opposite parity, or every other verify forged) no case Core rejects passes
+(`core_vectors/RESULT_c10e11_sig6.txt`). The 22,666 flag variants: see ROADMAP I1.
 
 ### Where Core catches an exception, the guest aborts
 
