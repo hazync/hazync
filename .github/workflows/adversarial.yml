@@ -1942,6 +1942,10 @@ jobs:
     #                      risc0-circuit-recursion, which opens the recursion programs compiled into the
     #                      binary (include_bytes!) and reads entries into memory: no extract(), no outside
     #                      archive. The fix (zip 9) needs a risc0 bump, ruled out above.
+    #   RUSTSEC-2026-0429  zip 2.4.2 (2026-10-22): ZipArchive::extract aborts the process on a symlink entry with a
+    #                      large declared size. extract() again, on the same path: risc0-circuit-recursion's
+    #                      prove/zkr.rs only does ZipArchive::new + by_name + read_exact on its include_bytes!
+    #                      archive. Accepted for the same reason as 0367-0369.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1949,7 +1953,7 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Audit every lockfile
         run: |
-          IGNORE="--ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2026-0344 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369"
+          IGNORE="--ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2026-0344 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369 --ignore RUSTSEC-2026-0429"
           rc=0
           # The verifier lockfiles were NOT audited, and they are the SHIPPED artifacts — the
           # standalone verifier, the C ABI ghostd links, and the browser build. All three pull
