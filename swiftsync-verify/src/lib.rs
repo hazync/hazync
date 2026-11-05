@@ -607,19 +607,49 @@ pub struct TrieFact {
     pub vout: Option<u32>,
     /// The trie pruned to the question, as little-endian u32 words, hex.
     pub proof: String,
+    /// The CLAIMED answer, which the check must reproduce or refuse ([`trie_verdict`]): for "coin" `absent`,
+    /// `unspent:<sat>` or `spent:<sat>:<height>:<tx>:<input>`; for "balance" / "history" `never` or `<count>:<sat>`.
+    /// Without it the fact is a question: the check states the answer but cannot refuse it (the C ABI demands it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<String>,
+}
+
+/// The canonical answer token of a coin state (see [`TrieFact::expect`]).
+pub fn coin_verdict(s: &libzync::trie_fact::CoinState) -> String {
+    use libzync::trie_fact::CoinState::*;
+    match s {
+        Absent => "absent".into(),
+        Unspent { value } => format!("unspent:{value}"),
+        Spent { value, by } => format!("spent:{value}:{}:{}:{}", by.height, by.tx, by.vin),
+    }
+}
+
+/// The canonical answer token of a balance (see [`TrieFact::expect`]).
+pub fn balance_verdict(b: Option<(u64, u64)>) -> String {
+    match b { None => "never".into(), Some((c, v)) => format!("{c}:{v}") }
 }
 
 fn coin_state_line(s: &libzync::trie_fact::CoinState) -> String {
     use libzync::trie_fact::CoinState::*;
     match s {
-        Absent => "ABSENT (never created)".into(),
+        Absent => "ABSENT (no such coin was ever paid to this script)".into(),
         Unspent { value } => format!("UNSPENT, {value} sat"),
         Spent { value, by } => format!("SPENT at height {} by transaction {} input {}, {value} sat", by.height, by.tx, by.vin),
     }
 }
 
-/// Checks a trie fact against a state that passed [`verify`] (and is a trie chain). Ok: what it proves.
+/// Checks a trie fact against a state that passed [`verify`] (and is a trie chain): its proof holds and, when it claims
+/// an answer (`expect`), the proof gives that answer. Ok: what it proves.
 pub fn check_trie_fact(cs: &ChainState, f: &TrieFact) -> Result<String, String> {
+    let (got, line) = trie_verdict(cs, f)?;
+    match &f.expect {
+        Some(want) if *want != got => Err(format!("the fact claims {want:?}, its proof gives {got:?}: {line}")),
+        _ => Ok(line),
+    }
+}
+
+/// The answer a trie fact's proof gives, as its token, and the line saying what it proves. Err: the proof does not hold.
+pub fn trie_verdict(cs: &ChainState, f: &TrieFact) -> Result<(String, String), String> {
     use libzync::trie_fact as tf;
     if cs.profile & PROFILE_TRIE == 0 {
         return Err("the proof is not a counting-trie chain".into());
@@ -641,18 +671,20 @@ pub fn check_trie_fact(cs: &ChainState, f: &TrieFact) -> Result<String, String> 
             txid.reverse();
             let vout = f.vout.ok_or("coin: vout")?;
             let s = tf::coin(&proof, &root, &tf::coin_key(&spk, &txid, vout)).map_err(e)?;
-            Ok(format!("coin {}:{vout} to script {} is {} at height {}", f.txid.as_deref().unwrap_or(""), f.script_pubkey, coin_state_line(&s), cs.height))
+            Ok((coin_verdict(&s), format!("coin {}:{vout} to script {} is {} at height {}", f.txid.as_deref().unwrap_or(""), f.script_pubkey, coin_state_line(&s), cs.height)))
         }
         "balance" => Ok(match tf::balance(&proof, &root, &sh).map_err(e)? {
-            None => format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height),
-            Some(b) => format!("script {} holds {} unspent coin(s), {} sat, at height {}", f.script_pubkey, b.count, b.value, cs.height),
+            None => (balance_verdict(None), format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height)),
+            Some(b) => (balance_verdict(Some((b.count, b.value))),
+                        format!("script {} holds {} unspent coin(s), {} sat, at height {}", f.script_pubkey, b.count, b.value, cs.height)),
         }),
         "history" => Ok(match tf::history(&proof, &root, &sh).map_err(e)? {
-            None => format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height),
+            None => (balance_verdict(None), format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height)),
             Some((b, coins)) => {
                 let spent = coins.iter().filter(|c| matches!(c.state, tf::CoinState::Spent { .. })).count();
-                format!("script {}: complete history at height {}: {} coin(s) ever paid, {spent} spent, {} unspent holding {} sat",
-                        f.script_pubkey, cs.height, coins.len(), b.count, b.value)
+                (balance_verdict(Some((b.count, b.value))),
+                 format!("script {}: complete history at height {}: {} coin(s) ever paid, {spent} spent, {} unspent holding {} sat",
+                         f.script_pubkey, cs.height, coins.len(), b.count, b.value))
             }
         }),
         k => Err(format!("kind {k:?}: want coin, balance or history")),
@@ -664,20 +696,37 @@ pub fn check_trie_fact(cs: &ChainState, f: &TrieFact) -> Result<String, String> 
 pub fn make_trie_fact(st: &libzync::trie_store::TrieStore, kind: &str, script_pubkey: &[u8], txid: Option<&str>, vout: Option<u32>)
                       -> Result<TrieFact, String> {
     use libzync::trie_fact as tf;
-    let proof = match kind {
+    // the answer, from the proof itself against the store's root, goes into the fact as its claim (`expect`)
+    let root = st.root();
+    let fe = |x: tf::FactErr| format!("the store's own proof does not hold ({x:?})");
+    let (proof, expect) = match kind {
         "coin" => {
             let mut t = txid.and_then(|t| hex32(&t.to_lowercase())).ok_or("coin: txid (64 hex digits)")?;
             t.reverse();
-            st.prove_coins(&[tf::coin_key(script_pubkey, &t, vout.ok_or("coin: vout")?)])
+            let k = tf::coin_key(script_pubkey, &t, vout.ok_or("coin: vout")?);
+            let p = st.prove_coins(&[k]);
+            let v = coin_verdict(&tf::coin(&p, &root, &k).map_err(fe)?);
+            (p, v)
         }
-        "balance" => st.prove_addr(&tf::script_hash(script_pubkey)),
-        "history" => st.prove_history(&tf::script_hash(script_pubkey)),
+        "balance" => {
+            let sh = tf::script_hash(script_pubkey);
+            let p = st.prove_addr(&sh);
+            let v = balance_verdict(tf::balance(&p, &root, &sh).map_err(fe)?.map(|b| (b.count, b.value)));
+            (p, v)
+        }
+        "history" => {
+            let sh = tf::script_hash(script_pubkey);
+            let p = st.prove_history(&sh);
+            let v = balance_verdict(tf::history(&p, &root, &sh).map_err(fe)?.map(|(b, _)| (b.count, b.value)));
+            (p, v)
+        }
         k => return Err(format!("kind {k:?}: want coin, balance or history")),
     };
     Ok(TrieFact {
         kind: kind.into(), at: st.height as u32, script_pubkey: hex(script_pubkey),
         txid: txid.map(|t| t.to_lowercase()), vout,
         proof: hex(&proof.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()),
+        expect: Some(expect),
     })
 }
 
@@ -840,6 +889,32 @@ mod tests {
         let mut bad = f.clone();
         bad.proof.replace_range(8..10, if &bad.proof[8..10] == "00" { "01" } else { "00" });
         assert!(check_trie_fact(&cs, &bad).is_err());
+
+        // the producer writes the answer as the claim; a false claim is refused; no claim = a question (answered)
+        assert_eq!(f.expect.as_deref(), Some("spent:500:2:1:0"));
+        assert_eq!(f1.expect.as_deref(), Some("unspent:70"));
+        assert_eq!(f9.expect.as_deref(), Some("absent"));
+        assert_eq!(b.expect.as_deref(), Some("1:70"));
+        assert_eq!(hst.expect.as_deref(), Some("1:70"));
+        assert_eq!(n.expect.as_deref(), Some("never"));
+        for lie in ["unspent:500", "absent", "spent:500:2:1:1", "spent:501:2:1:0"] {
+            let mut l = f.clone();
+            l.expect = Some(lie.into());
+            assert!(check_trie_fact(&cs, &l).unwrap_err().contains("claims"), "{lie}");
+        }
+        let mut l = b.clone();
+        l.expect = Some("1:71".into());
+        assert!(check_trie_fact(&cs, &l).is_err());
+        let mut l = n.clone();
+        l.expect = Some("0:0".into());
+        assert!(check_trie_fact(&cs, &l).is_err(), "never-paid is not a zero balance claim");
+        let mut q = f.clone();
+        q.expect = None;
+        assert!(check_trie_fact(&cs, &q).unwrap().contains("SPENT"));
+        // the JSON without the field still reads (facts written before it)
+        let mut j = serde_json::to_value(&q).unwrap();
+        j.as_object_mut().unwrap().remove("expect");
+        assert!(serde_json::from_value::<TrieFact>(j).unwrap().expect.is_none());
     }
 
     #[test]

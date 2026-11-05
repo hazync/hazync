@@ -123,7 +123,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
                 for t in &tries {
-                    let r = swiftsync_verify::check_trie_fact(cs, t);
+                    let r = trie_check(cs, t);
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
             }
@@ -169,5 +169,43 @@ mod tests {
         for (k, n) in ["mainnet", "signet"].iter().enumerate() {
             assert_eq!(super::IDS[k].trim_end_matches('\0'), swiftsync_verify::Image::by_network(n).unwrap().method_id_hex);
         }
+    }
+}
+
+/// The C result carries no answer, so a trie fact must CLAIM one (its "expect") for OK to mean anything.
+fn trie_check(cs: &swiftsync_verify::ChainState, t: &swiftsync_verify::TrieFact) -> Result<String, String> {
+    match &t.expect {
+        None => Err(format!("trie fact ({}) without \"expect\": the C ABI returns only whether a claim holds", t.kind)),
+        Some(_) => swiftsync_verify::check_trie_fact(cs, t),
+    }
+}
+
+#[cfg(test)]
+mod trie_tests {
+    use super::*;
+
+    #[test]
+    fn trie_facts_need_a_claim_and_a_false_claim_fails() {
+        use libzync::trie_fact::coin_key;
+        let a = b"\x00\x14aaaaaaaaaaaaaaaaaaaa".to_vec();
+        let disp = "11".repeat(31) + "22";
+        let mut txid = [0x11u8; 32];
+        txid[31] = 0x22;
+        txid.reverse();
+        let mut st = libzync::trie_store::TrieStore::new(true);
+        st.apply(&[], &[(coin_key(&a, &txid, 0), None, 500)]).unwrap();
+        st.height = 1;
+        let mut cs = swiftsync_verify::genesis_anchor(&swiftsync_verify::IMAGES[0]);
+        cs.profile |= swiftsync_verify::PROFILE_COINLOG | swiftsync_verify::PROFILE_TRIE;
+        cs.height = 1;
+        cs.trie_root = libzync::coinlog::h_of(&st.root());
+        let f = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(0)).unwrap();
+        assert!(trie_check(&cs, &f).is_ok());
+        let mut q = f.clone();
+        q.expect = None;
+        assert!(trie_check(&cs, &q).unwrap_err().contains("without"));
+        let mut l = f.clone();
+        l.expect = Some("absent".into());
+        assert!(trie_check(&cs, &l).is_err());
     }
 }

@@ -11,6 +11,7 @@ M=$(tar xzOf sb/sb.tgz ./pins/METHOD_ID 2>/dev/null | grep -v '^#' | head -1); [
 CK=ckpt/$M; mkdir -p $CK
 # A coin-log bundle resumes only from a receipt that has its log: pick the highest height with both.
 CL=$(tar xzOf sb/sb.tgz ./COINLOG 2>/dev/null || echo 0)
+TR=$(tar xzOf sb/sb.tgz ./TRIE 2>/dev/null || echo 0)   # a product bundle: the trie snapshot is part of a checkpoint
 [ -f sb/sb.tgz ] || { echo "run mkbundle.sh first"; exit 1; }
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-n -i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
@@ -50,9 +51,10 @@ ssh $K -p $P root@$IP 'cd /workspace && (setsid nohup bash prep.sh > prep.out 2>
 scp -q $KS -P $P sb/sb.tgz sb/sb.tgz.sha256 root@$IP:/workspace/ && say "bundle sent"
 ssh $K -p $P root@$IP 'mkdir -p /workspace/out'
 C=$(for n in $(ls $CK 2>/dev/null | sed -n 's/^block_\([0-9]*\)\.rcpt$/\1/p' | sort -n); do
-      [ "$CL" != 1 ] || [ -f $CK/state_$n.coinlog ] && echo $n; done | tail -1)
-# A coin-log run resumes only with the log file of the same height (state_<C>.coinlog), sent with its receipt.
-[ -z "$C" ] || { scp -q $KS -P $P $CK/block_$C.rcpt $(ls $CK/state_$C.coinlog 2>/dev/null) root@$IP:/workspace/out/ && say "checkpoint $C sent"; }
+      { [ "$CL" != 1 ] || [ -f $CK/state_$n.coinlog ]; } && { [ "$TR" != 1 ] || [ -f $CK/state_$n.trie ]; } && echo $n; done | tail -1)
+# A coin-log run resumes only with the log file of the same height (state_<C>.coinlog), and a product run also with
+# the trie snapshot (state_<C>.trie), each sent with its receipt.
+[ -z "$C" ] || { scp -q $KS -P $P $CK/block_$C.rcpt $(ls $CK/state_$C.coinlog $CK/state_$C.trie 2>/dev/null) root@$IP:/workspace/out/ && say "checkpoint $C sent"; }
 for i in $(seq 1 120); do
   [ -f pod_id.txt ] || exit 1   # the deadline fired (and harvested)
   S=$(ssh $K -p $P root@$IP 'grep -h "PREP_OK\|PREP_FAIL\|built in" /workspace/prep.out 2>/dev/null')
@@ -69,10 +71,12 @@ for i in $(seq 1 $((DEADLINE_MIN*4))); do
   [ $((i % 10)) = 0 ] && say "  $(ssh $K -p $P root@$IP 'tail -1 /workspace/out/times.tsv 2>/dev/null')"
   if [ $((i % 40)) = 0 ]; then   # write under a temp name: a cut-off copy must never look like a receipt
     N=$(ssh $K -p $P root@$IP 'ls /workspace/out' | sed -n 's/^block_\([0-9]*\)\.rcpt$/\1/p' | sort -n | tail -2 | head -1)
-    # Coin log first, then the receipt: a receipt in $CK is a checkpoint only with its log (the run keeps the last
-    # two logs, so N's may already be gone; then this round takes nothing and the next one tries again).
+    # Coin log and trie first, then the receipt: a receipt in $CK is a checkpoint only with its log and trie (the run
+    # keeps the last two of each, so N's may already be gone; then this round takes nothing and the next one tries again).
     if [ -n "$N" ] && { [ "$CL" != 1 ] || { timeout 300 scp -q $KS -P $P root@$IP:/workspace/out/state_$N.coinlog $CK/.tmpl \
-          && mv $CK/.tmpl $CK/state_$N.coinlog; }; }; then
+          && mv $CK/.tmpl $CK/state_$N.coinlog; }; } \
+                   && { [ "$TR" != 1 ] || { timeout 300 scp -q $KS -P $P root@$IP:/workspace/out/state_$N.trie $CK/.tmpt \
+          && mv $CK/.tmpt $CK/state_$N.trie; }; }; then
       timeout 120 scp -q $KS -P $P root@$IP:/workspace/out/block_$N.rcpt $CK/.tmp && mv $CK/.tmp $CK/block_$N.rcpt && say "  checkpoint $N"
     fi
   fi

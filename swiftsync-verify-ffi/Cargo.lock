@@ -1322,6 +1322,7 @@ dependencies = [
 name = "swiftsync-verify-ffi"
 version = "0.1.0"
 dependencies = [
+ "libzync",
  "serde_json",
  "swiftsync-verify",
 ]

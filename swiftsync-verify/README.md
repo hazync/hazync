@@ -3,7 +3,10 @@
 A standalone verifier for libzync proofs. No prover, no Bitcoin Core build, no GPU, no chain data. It checks that the
 receipt proves the chain from genesis (with its coin log, and with the product image its counting trie and live-coin
 hash), and checks facts given with it against the proven state: coins (`--coin`, `--journey`) and counting-trie facts
-(`--trie`: a coin unspent / spent by / never created, a script's balance or complete history). The name is historical:
+(`--trie`: a coin unspent / spent by / absent under its script, a script's balance or complete history). A trie fact
+carries its claimed answer in `expect` (`absent`, `unspent:<sat>`, `spent:<sat>:<height>:<tx>:<input>`; for balance and
+history `never` or `<count>:<sat>`), which `zync-path trie` writes and the check must reproduce: a false claim fails.
+Without `expect` the fact is a question, answered in the output line (the C ABI refuses those). The name is historical:
 the SwiftSync hints file (design B) was retired in E2 and no proof takes one.
 
 ```sh

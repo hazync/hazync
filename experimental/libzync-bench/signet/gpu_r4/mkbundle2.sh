@@ -1,4 +1,7 @@
 #!/bin/bash
+# RETIRED (E2): a design-B bundle (hints file, PROFILE without coinlog=1). The prover no longer builds such an image
+# (build.rs refuses that PROFILE); kept as the record of that run. A product bundle: signet/genesis/mkbundle.sh.
+echo "retired: design-B bundle; see signet/genesis/mkbundle.sh" >&2; exit 1
 # Signet re-prove bundle (round-4 image: ChainState max_time + profile): repo HEAD, the signet guest + pins,
 # blocks 1..2600, the anchor = the laptop sweep's committed state at 2500 (same image), the 2600 hints file.
 # Blocks 1..2500 are shipped (13 MB in all) so libzync-prove-range REPLAYS the BIP30 coinbase tree and checks it

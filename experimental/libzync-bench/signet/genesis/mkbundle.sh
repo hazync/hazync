@@ -15,7 +15,7 @@ read -r M E < <(awk -v k=$KIND '$1==k && $2=="signet"{print $4, $6}' "$R/reprodu
 [ -n "$M" ] || { echo "no $KIND signet line in reproduce/LIBZYNC_IDS"; exit 1; }
 [ "$(sha256sum "$B/method.bin" | cut -c1-64)" = "$E" ] || { echo "container ELF is not the published signet ELF"; exit 1; }
 echo "$M" > "$B/pins/METHOD_ID"; echo "$E" > "$B/pins/GUEST_ELF_SHA256"
-echo "libzync=1 assumevalid=0 network=signet coinlog=1 trie=1 utxohash=1" > "$B/pins/PROFILE"; echo signet > "$B/NETWORK"; echo "$CL" > "$B/COINLOG"
+echo "libzync=1 assumevalid=0 network=signet coinlog=1 trie=1 utxohash=1" > "$B/pins/PROFILE"; echo signet > "$B/NETWORK"; echo "$CL" > "$B/COINLOG"; echo 1 > "$B/TRIE"
 for h in $(seq 1 "$HI"); do cp "$J/block_$h.json" "$B/json/"; done
 git -C "$R" archive --format=tar.gz -o "$B/repo.tgz" HEAD
 cd "$B" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS

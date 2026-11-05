@@ -1,4 +1,7 @@
 #!/bin/bash
+# RETIRED (E2): a design-B bundle (hints file, PROFILE without coinlog=1). The prover no longer builds such an image
+# (build.rs refuses that PROFILE); kept as the record of that run. A product bundle: signet/genesis/mkbundle.sh.
+echo "retired: design-B bundle; see signet/genesis/mkbundle.sh" >&2; exit 1
 # Mainnet pre-H bundle: repo snapshot, the mainnet libzync guest + pins, blocks 969,996..970,000, the anchor state at
 # 969,995 (derived from the block file: a demonstration anchor), and the published hints file (stop 970,000).
 P=~/libzync-gpu/pre970; B=$P/bundle; rm -rf $B; mkdir -p $B/json $B/pins
