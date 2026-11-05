@@ -475,3 +475,27 @@ leaf fast paths, host-supplied update order checked (permutation + strictly incr
 Below the agent's estimate (7-14 M / 22-43 M on 962,000 / 750,000; measured 8.8 M / 15.7 M). At ~74 cycles per
 compression, hashing is ~14 M of 962,000's 49.5 M: non-hash work remains (witness paging, the zeroed buffers in the
 two-sided path, the update list). Not pursued further before the consolidation.
+
+## The product, integrated (11-05, measured; E2 steps 1-2)
+
+Image c10e5 (ce96f2ec): coin log + counting trie as guest mode 17 (its receipt verified inside the aggregate, old root
+bound to the previous chain state, update list bound by digest, new root committed) + live-coin hash, after the
+cycle hunt and the consolidation. Negative controls on 962,000 (HAZYNC_TEST_TRIE): a different update list, a
+different starting root and no receipt are each refused by name. User cycles, whole block = chunks + aggregate + the
+trie update (proven beside the chunks):
+
+| block | core | trie | total | vs the no-tree base measured before the hunt (c10b) | padded total |
+|---|---|---|---|---|---|
+| 650,000 | 630 M | 117 M | 747 M | +22.1% | 927 M |
+| 692,261 | 538 M | 117 M | 655 M | +27.6% | 801 M |
+| 700,000 | 506 M | 113 M | 620 M | +28.5% | 756 M |
+| 750,000 | 492 M | 125 M | 617 M | +32.3% | 753 M |
+| 800,000 | 462 M | 97 M | 559 M | +21.2% | 681 M |
+| 850,000 | 479 M | 119 M | 597 M | +22.9% | 734 M |
+| 900,000 | 312 M | 51 M | 363 M | +6.8% | 449 M |
+| 962,000 | 440 M | 47 M | 487 M | +10.8% | 594 M |
+| 970,000 | 409 M | 35 M | 444 M | -0.2% | 542 M |
+| **9 modern blocks** | | | | **+19.9%** | |
+
+Against main on 962,000 (CORE ~4,430 M): **9.09x** with every feature (history, absence, balances, instant IBD), against
+10.1x for the bare base before the hunt. The trie's old state is still synthesised (E2 step 3: the host trie store).
