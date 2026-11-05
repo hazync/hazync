@@ -19,6 +19,7 @@ mod lz;
 mod trie;
 mod seg;
 mod verify;
+mod prep;
 
 use bench::{adversarial, bundle_roundtrip_test, check_bip30, check_full, check_ibd, chunk_profile,
     exec_time_cmd, prove_chain_bad, regress, script_flags_test, segment_mem_cmd, segment_size_cmd,
@@ -1899,6 +1900,11 @@ fn main() {
         let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).unwrap_or_else(|e| panic!("{f}: {e}"))).expect("receipt");
         r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{f} does not verify against this image: {e}"));
         println!("JOURNAL_SHA256 {}", lz::journal_sha(&r));
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-prep") {
+        let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect("libzync-prep <lo> <hi> <json dir> <anchor.json|genesis> <out dir>") };
+        prep::lz_prep_cmd(n(1), n(2), &args[p + 3], &args[p + 4], &args[p + 5]);
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-join") {
