@@ -130,6 +130,23 @@ is a marketing win that shows the core working.
 | K1 | **header chain** | the most-work chain of valid proof-of-work headers from genesis: double SHA-256 under target, nBits and the 2,016-block retarget, median-time-past, chainwork. SPV-level (no transactions, coins or scripts); the core already runs these checks inside every block proof. Kept at the tip at a fixed few seconds a block (one header ~3 k cycles, far below the smallest segment) | ESTIMATED, not measured: ~2-3 k cycles a header (3 compressions: 283 cycles each on words, 1,105 per 65-byte `sha2` hash, measured; the rest small) => ~2-3 B cycles for ~975 k headers => ~40-60 min on one RTX PRO 6000 (1.2 s per M cycles, measured) ~$2, or ~1.5-2.2 h on an A40 ~$1; minutes on 16 cards. About the cost of 5-7 full modern blocks | idea; first step: a headers-only guest mode, then MEASURE. Launch line: "the whole Bitcoin header chain, proved, for about $2" |
 | K2 | SwiftSync hints for any H | see J1 | see J1 | candidate |
 
+## L. Business model for zAPPs (11-05; reasoning, not measured demand)
+
+The code is open source, so it is not the moat. Open SDK (anyone builds zAPPs) + a curated registry + our paid proving
+network. A marketplace grows out of the registry and the proving service; it is not built first, and builders are
+not gated (that cannot be enforced, and slows the ecosystem).
+
+| # | lever | why it pays | revenue |
+|---|---|---|---|
+| L1 | **registry of reviewed zAPP image ids** | a zAPP proof means nothing unless the verifier trusts its image id; whoever publishes the reviewed, reproducibly built ids is the gatekeeper wallets / exchanges rely on (the app-store position) | review + listing fees for third-party zAPPs |
+| L2 | **proving network + live state** | every zAPP needs the proven tip and its state (coin log, trie, block forest) kept current per block, plus GPUs: cheap to write a zAPP, expensive to run this | pay per proof, subscriptions for tip-following; a take rate on third-party zAPPs proved on it. Payment is the rate limiter (as the coordinator) |
+| L3 | **first-party zAPPs for buyers with budgets** | proof of reserves (exchanges, custodians: coins unspent at the tip, summing to X) — the clearest paying market; Bitcoin state for bridges / L2s (BitVM-style bridges, sidechains, rollups) — likely the most lucrative; instant IBD / UTXO-set checks (node and wallet vendors); wallet light clients (balance, history, absence: volume, low price) | per proof / per query / contracts |
+| L4 | marketing zAPPs | header chain (K1), SwiftSync hints (J1): cheap, visible, not revenue | none directly |
+
+Order: freeze the core -> ship 2-3 first-party zAPPs (header chain for the launch, then proof of reserves and coin /
+balance facts) -> open the SDK with the reviewed-id registry -> talk to 2-3 exchanges and one bridge team BEFORE
+building more (their answers set the pricing). Cheapest real test of demand: ask them.
+
 ## Image ids built (11-03, unit tests + compiles only)
 
 | image | id | note |
