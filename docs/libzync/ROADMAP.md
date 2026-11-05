@@ -100,6 +100,22 @@ test finds a bug.
 | I7 | tip latency | speculative chunks (D1, 7.5% waste measured), zeroconf zyncAPP (D5), more cards per block; trim the tree's +14-29 s execution | ongoing |
 | I8 | privacy of queries | whole-snapshot download and local queries; batched / padded queries; private information retrieval later | later |
 
+## J. SwiftSync: what Hazync can offer Ruben (11-05)
+
+An offer, not a dependency: SwiftSync stays as it is, Hazync only removes its worst failure mode (a bad hints file is
+found only at the END of a sync). Proofs of concept from design B are kept at tag `archive/swiftsync-design-b`
+(806d9e1, the last commit before E2 removed them). The hand-over is a one-page note the user edits and sends.
+
+| # | idea | what exists | status |
+|---|---|---|---|
+| J1 | **SwiftSync zAPP: a proven hints file for ANY height H.** The core already proves every block and commits the coin log (and the block forest, each block's coin state); a zAPP walks the log as it stood at H, emits one bit per output (unspent at H), commits (H, block hash at H, sha256(hints)). Anyone can serve the file; a node checks the receipt against a Hazync tip proof BEFORE syncing, then still validates every block itself (the proof buys liveness, not trust). A new H is a new zAPP run, not a new checkpoint scheme: the "moving H" answer | design only | candidate, after the freeze. First: (a) the hints index EVERY output in block order, the log holds only coins that outlived their block and are not OP_RETURN (all 0 bits): check a coin leaf (or the tx log, D) gives each survivor's position in its block and each block's output count; (b) MEASURE the cost (every log leaf up to H; parallel by range + join; once per H) |
+| J2 | **proven hints file inside the proof (design B).** Ruben's check on a proof: `ss_set == 0`, `height == H`, `ss_hints == sha256(file)` | built + GPU-proved: signet 2501..2600 verified on GPU; verifiers (cli / ffi / wasm) took the hints file | retired from the core in E2 (tag); J1 is its zAPP form |
+| J3 | **the coin log IS a hints file for every H**: leaves in birth order, a spend flips its leaf in place, so a leaf's state at H is that output's hint bit; one structure serves hints for any H as it moves with the tip | the coin log (COINLOG.md), live in the core | idea for Ruben; the basis of J1 |
+| J4 | **BIP30 done exactly**: only the transactions that can ever repeat are tracked (pre-BIP34 coinbases indicating a later height, and every tx whose inputs are all such coins), with live counts: a repeat is refused while it has unspent outputs, allowed once it has none, as Core. Measured on mainnet to 974,111: 173 such transactions for indicated heights under 100M, 22 outputs unspent, 1 after block 300,000; the grandfathered 91,842 / 91,880 overwrites. Any hints-based sync must get these right | `coinbase-smt/src/bip30.rs`, 29188b5, rig 83/84 agree with Core 28.0 | data + method to share |
+| J5 | **hints-format hygiene**: canonical encoding rules, a Python reference, malformed-file vectors (flipped bit, non-canonical size, trailing byte, bad version), a hint-hash definition both sides compute the same way | at the tag: `scripts/libzync/ss_hints_ref.py`, `swiftsync-verify/vectors/bad_*.hints`, `libzync/src/ss_hints.rs` | ready to share as is |
+| J6 | **SwiftSync + moving H + Utreexo**: SwiftSync to reach H fast, a Utreexo accumulator to carry the tip with no UTXO set; J3 bridges the two. The coherent end state for SwiftSync (NOT for Hazync, whose design stays the coin log + trie) | design notes: `experimental/libzync-bench/HANDOVER_DESIGN.md` (option B) | idea for Ruben |
+| J7 | the note: one page, J1-J6, what each is, what was measured, where the code is | not written | after the freeze, user edits and sends |
+
 ## Image ids built (11-03, unit tests + compiles only)
 
 | image | id | note |
