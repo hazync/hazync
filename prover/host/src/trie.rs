@@ -95,6 +95,21 @@ pub(crate) fn trie_commit(marks: &Marks, ins: &Inserts, st: &ChainState) {
     ts.hash = st.tip_hash;
 }
 
+/// HAZYNC_TRIE_DIR: the trie kept on disk there (libzync::trie_store::DiskArena; mainnet's trie is hundreds of GB),
+/// one store advanced in place, instead of an in-memory store with a snapshot per saved height. A save flushes it and
+/// writes a small marker (dir, height, root) where the snapshot would go.
+pub(crate) fn trie_dir() -> Option<std::path::PathBuf> { std::env::var("HAZYNC_TRIE_DIR").ok().map(std::path::PathBuf::from) }
+
+/// The disk store, checked to be the trie of `st` (its height, block and root): a store left at another height is
+/// refused (it is advanced in place; resume from its own height).
+fn trie_open_disk(d: &std::path::Path, st: &ChainState) {
+    let ts = TrieStore::open_dir(d, true).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
+    assert_eq!(libzync::coinlog::h_of(&ts.root()), st.trie_root, "{}: its root is not the state's trie root", d.display());
+    assert!(ts.height == st.height as u64 && (ts.hash == st.tip_hash || st.height == 0 || ts.root() == [0; 8]),
+            "{}: the disk trie is at {} not {}", d.display(), ts.height, st.height);
+    *TS.lock().unwrap() = Some(ts);
+}
+
 /// `state_<h>.json` -> `state_<h>.trie`; `anchor.json` -> `anchor.trie`.
 pub(crate) fn trie_path_for(state_json: &str) -> String {
     match state_json.strip_suffix(".json") { Some(s) => format!("{s}.trie"), None => format!("{state_json}.trie") }
@@ -102,6 +117,14 @@ pub(crate) fn trie_path_for(state_json: &str) -> String {
 
 /// Atomic, as the coin log's: a run killed mid-write must not leave a short file a resume would then refuse.
 pub(crate) fn trie_save(path: &str) {
+    if let Some(d) = trie_dir() {
+        let mut g = TS.lock().unwrap();
+        let ts = g.as_mut().expect("trie store not initialised");
+        ts.flush().unwrap_or_else(|e| panic!("{e}"));
+        let root: String = ts.root().iter().map(|w| format!("{w:08x}")).collect();
+        std::fs::write(path, format!("HZTRIE-DISK {} height {} root {root}\n", d.display(), ts.height)).unwrap_or_else(|e| panic!("{path}: {e}"));
+        return;
+    }
     let b = TS.lock().unwrap().as_ref().expect("trie store not initialised").to_bytes();
     let tmp = format!("{path}.tmp");
     let f = std::fs::File::create(&tmp).and_then(|mut f| { use std::io::Write as _; f.write_all(&b)?; f.sync_data() });
@@ -114,6 +137,7 @@ pub(crate) fn trie_save(path: &str) {
 
 /// Load a snapshot and check it is the trie of `st` (its height, block and root).
 pub(crate) fn trie_load(path: &str, st: &ChainState) {
+    if let Some(d) = trie_dir() { return trie_open_disk(&d, st); }
     let b = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e} (a trie image's anchor needs its .trie file)"));
     let ts = TrieStore::from_bytes(&b).unwrap_or_else(|e| panic!("{path}: not a valid trie snapshot ({e:?})"));
     assert!(ts.counts(), "{path}: not a counts-mode trie");
@@ -124,6 +148,7 @@ pub(crate) fn trie_load(path: &str, st: &ChainState) {
 
 /// The trie at the run's start: empty from genesis, the handover receipt's directory's snapshot, or the anchor's.
 pub(crate) fn trie_init_at_start(handover: bool, anchor_path: &str, prev: &ChainState) {
+    if let Some(d) = trie_dir() { return trie_open_disk(&d, prev); }
     if anchor_path == "genesis" && !handover {
         assert_eq!(prev.trie_root, [0; 32], "genesis: the trie root must be the empty trie's");
         let mut ts = TrieStore::new(true);

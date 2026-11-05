@@ -2538,6 +2538,7 @@ dependencies = [
 name = "libzync"
 version = "0.1.0"
 dependencies = [
+ "memmap2",
  "num-bigint 0.4.8",
  "secp256k1",
  "sha2",
