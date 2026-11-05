@@ -10,6 +10,7 @@
 #    twice, a leaf on a tampered anchor (max_time: not cross-checked by the host, so it must reach the join); and a
 #    receipt of another image, refused by the host before proving.
 # usage: test_join.sh <host> <linear run dir with every state (test_store.sh's a/)> <out dir> [N] [other-image receipt]
+# P=<jobs> (default 3): leaves, and each level's joins, run in parallel (they are independent: the point of H-B).
 H=${1:?host}; A=${2:?linear run dir}; O=${3:?out dir}; N=${4:-200}; OTHER=${5:-}; J=~/libzync-gpu/ssweep
 mkdir -p $O; rm -rf $O/leaf $O/join $O/badleaf* $O/neg_*; mkdir -p $O/leaf $O/join
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_COINLOG_SAVE_EACH=1
@@ -19,24 +20,28 @@ leaf() {  # leaf <h> <anchor json> <out dir>
   rm -rf $3; mkdir -p $3
   $H libzync-prove-range $1 $1 $J $2 $3 > $3.log 2>&1 && [ -f $3/block_$1.rcpt ]
 }
-echo "== 1. $N leaves, last block first"
-for h in $(seq $N -1 1); do
-  if [ $h = 1 ]; then a=genesis; else a=$A/state_$((h - 1)).json; fi
-  leaf $h $a $O/leaf/$h || { echo "LEAF $h FAILED: $(grep -a panicked -A1 $O/leaf/$h.log | head -2 | tr '\n' ' ')"; exit 1; }
-done
+P=${P:-3}
+export H A J O
+export -f leaf
+echo "== 1. $N leaves, last block first, $P at a time"
+seq $N -1 1 | xargs -P $P -I{} bash -c 'h={}; if [ $h = 1 ]; then a=genesis; else a=$A/state_$((h - 1)).json; fi
+  leaf $h $a $O/leaf/$h || echo "LEAF $h FAILED: $(grep -a panicked -A1 $O/leaf/$h.log | head -2 | tr "\n" " ")"' | tee $O/leaf_fail.txt
+[ -s $O/leaf_fail.txt ] && exit 1
 echo "leaves: $(ls $O/leaf/*/block_*.rcpt | wc -l)"
 echo "== 2. join tree"
 lvl=0; cur=(); for h in $(seq 1 $N); do cur+=($O/leaf/$h/block_$h.rcpt); done
 joins=0
 while [ ${#cur[@]} -gt 1 ]; do
-  lvl=$((lvl + 1)); nxt=()
+  lvl=$((lvl + 1)); nxt=(); pairs=()
   for ((i = 0; i < ${#cur[@]}; i += 2)); do
     if [ $((i + 1)) -lt ${#cur[@]} ]; then
       o=$O/join/l${lvl}_$i.rcpt
-      $H libzync-join ${cur[$i]} ${cur[$((i + 1))]} $o > $o.log 2>&1 || { echo "JOIN FAILED l$lvl $i: $(grep -a panicked -A1 $o.log | head -2 | tr '\n' ' ')"; exit 1; }
+      pairs+=("${cur[$i]} ${cur[$((i + 1))]} $o")
       joins=$((joins + 1)); nxt+=($o)
     else nxt+=(${cur[$i]}); fi
   done
+  printf '%s\n' "${pairs[@]}" | xargs -P $P -L1 bash -c '$H libzync-join $0 $1 $2 > $2.log 2>&1 || echo "JOIN FAILED $2: $(grep -a panicked -A1 $2.log | head -2 | tr "\n" " ")"' > $O/join_fail.txt
+  [ -s $O/join_fail.txt ] && { cat $O/join_fail.txt; exit 1; }
   echo "level $lvl: ${#nxt[@]} proofs"
   cur=("${nxt[@]}")
 done
