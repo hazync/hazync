@@ -43,36 +43,43 @@ static mut TRIE_J: Vec<u32> = Vec::new();
 #[cfg(feature = "trie")]
 pub fn set_trie_journal(w: Vec<u32>) { unsafe { TRIE_J = w } }
 
+/// trie: a CompactSize exactly as Core's ReadCompactSize reads it: the shortest encoding only, at most MAX_SIZE
+/// (0x02000000). The keys the trie files coins under come from these parsers while Core's C++ verifies the same bytes,
+/// so they must accept exactly what Core accepts (review round 2: a lenient reader could split the two readings).
+#[cfg(feature = "trie")]
+fn compact_size(b: &[u8], o: &mut usize) -> Option<usize> {
+    let f = *b.get(*o)?;
+    *o += 1;
+    let (n, min) = match f { 0xfd => (2, 0xfd), 0xfe => (4, 0x1_0000), 0xff => (8, 0x1_0000_0000), x => return Some(x as usize) };
+    let mut v = 0u64;
+    for i in 0..n { v |= (*b.get(*o + i)? as u64) << (8 * i); }
+    *o += n;
+    (v >= min && v <= 0x0200_0000).then_some(v as usize)
+}
+
 /// trie: a transaction's input outpoints and output scriptPubKey ranges, from its serialization (witness or not).
 #[cfg(feature = "trie")]
 fn tx_io(b: &[u8]) -> Option<(Vec<([u8; 32], u32)>, Vec<(usize, usize)>)> {
-    fn vi(b: &[u8], o: &mut usize) -> Option<usize> {
-        let f = *b.get(*o)?; *o += 1;
-        let n = match f { 0xfd => 2, 0xfe => 4, 0xff => 8, x => return Some(x as usize) };
-        let mut v = 0u64;
-        for i in 0..n { v |= (*b.get(*o + i)? as u64) << (8 * i); }
-        *o += n;
-        Some(v as usize)
-    }
     let mut o = 4;
     if b.get(4) == Some(&0) && b.get(5) == Some(&1) { o += 2; }
-    let nin = vi(b, &mut o)?;
+    let nin = compact_size(b, &mut o)?;
     let mut ins = Vec::with_capacity(nin);
     for _ in 0..nin {
         let t: [u8; 32] = b.get(o..o + 32)?.try_into().ok()?;
         let v = u32::from_le_bytes(b.get(o + 32..o + 36)?.try_into().ok()?);
         o += 36;
-        let l = vi(b, &mut o)?;
-        o += l + 4;
+        let l = compact_size(b, &mut o)?;
+        o = o.checked_add(l)?.checked_add(4)?;
         ins.push((t, v));
     }
-    let nout = vi(b, &mut o)?;
+    let nout = compact_size(b, &mut o)?;
     let mut outs = Vec::with_capacity(nout);
     for _ in 0..nout {
-        o += 8;
-        let l = vi(b, &mut o)?;
+        o = o.checked_add(8)?;
+        let l = compact_size(b, &mut o)?;
         outs.push((o, l));
-        o += l;
+        o = o.checked_add(l)?;
+        if o > b.len() { return None; }
     }
     if o > b.len() { return None; }
     Some((ins, outs))
@@ -82,14 +89,14 @@ fn tx_io(b: &[u8]) -> Option<(Vec<([u8; 32], u32)>, Vec<(usize, usize)>)> {
 #[cfg(feature = "trie")]
 fn prevout_spks(b: &[u8]) -> Option<Vec<(usize, usize)>> {
     let mut o = 0;
-    let n = { let f = *b.first()?; o = 1; match f { 0xfd => { o = 3; u16::from_le_bytes(b.get(1..3)?.try_into().ok()?) as usize } 0xfe => { o = 5; u32::from_le_bytes(b.get(1..5)?.try_into().ok()?) as usize } x => x as usize } };
+    let n = compact_size(b, &mut o)?;
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
-        o += 8;
-        let f = *b.get(o)?; o += 1;
-        let l = match f { 0xfd => { let x = u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?) as usize; o += 2; x } 0xfe => { let x = u32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?) as usize; o += 4; x } x => x as usize };
+        o = o.checked_add(8)?;
+        let l = compact_size(b, &mut o)?;
         v.push((o, l));
-        o += l;
+        o = o.checked_add(l)?;
+        if o > b.len() { return None; }
     }
     if o > b.len() { return None; }
     Some(v)
@@ -436,8 +443,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 out_val.push(cb_val[l]);
                 #[cfg(feature = "trie")]
                 {
-                    let sh = tx_io(&w.coinbase_tx).and_then(|x| x.1.get(cb_vout[l] as usize).copied())
-                        .map(|(o, n)| shash(&w.coinbase_tx[o..o + n])).unwrap_or([0; 32]);
+                    // An unparsable coinbase is refused, never filed under some default address (review round 2).
+                    let sh = match tx_io(&w.coinbase_tx).and_then(|x| x.1.get(cb_vout[l] as usize).copied()) {
+                        Some((o, n)) => shash(&w.coinbase_tx[o..o + n]),
+                        None => { env::log("agg-lite: REJECT coinbase outputs not parsable for the trie"); all_ok = false; [0; 32] }
+                    };
                     out_keys.push((okey(&cb_txid, cb_vout[l]), sh));
                 }
             }

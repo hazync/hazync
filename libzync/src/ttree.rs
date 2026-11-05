@@ -233,6 +233,8 @@ fn sub_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W,
         0 => { *old = ZERO; build_sub(d, ups, &[], None, cx, acc, new) }
         1 => { let x = r.hash()?; if !ups.is_empty() { return Err(TErr::Witness); } *old = *x; *new = *x; Ok(()) }
         2 => {
+            // an inner node splits on key bit d: none exists at depth 256 (a forged witness, refused, not a panic)
+            if d >= 256 { return Err(TErr::Witness); }
             let m = ups.partition_point(|u| !bit(&u.o, d));
             let (mut a0, mut a1, mut b0, mut b1) = (ZERO, ZERO, ZERO, ZERO);
             let (l0, l1): (&W, &W) = if m == 0 && r.peek() == 1 { r.word()?; let x = r.hash()?; (x, x) } else {
@@ -306,6 +308,8 @@ fn top_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -
         0 => { *old = ZERO; build_top(d, ups, &[], None, cx, new) }
         1 => { let x = r.hash()?; if !ups.is_empty() { return Err(TErr::Witness); } *old = *x; *new = *x; Ok(()) }
         2 => {
+            // an inner node splits on key bit d: none exists at depth 256 (a forged witness, refused, not a panic)
+            if d >= 256 { return Err(TErr::Witness); }
             let m = ups.partition_point(|u| !bit(&u.s, d));
             let (mut a0, mut a1, mut b0, mut b1) = (ZERO, ZERO, ZERO, ZERO);
             let (l0, l1): (&W, &W) = if m == 0 && r.peek() == 1 { r.word()?; let x = r.hash()?; (x, x) } else {

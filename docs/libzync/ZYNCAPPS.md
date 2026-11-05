@@ -18,13 +18,21 @@ HANDOVER.md §2); the shared check of §4 is the code every zyncAPP must carry a
 | which chain, how much work | `tip_hash`, `height`, `cum_work`, `recent_times`, `max_time` | the tip, its height and chainwork, time context |
 | every spendable coin that outlived its block, and who spent it (coin log; not coins spent in their own block, not OP_RETURN outputs, COINLOG.md §6) | `utxo_roots`, `utxo_leaves` (COINLOG.md) | a coin is unspent now, or was spent by (height, tx, input); amount, scriptPubKey, height, coinbase flag, creation MTP; by one path |
 | every coin ever created, and its state (coin log) | `utxo_roots`, `utxo_leaves` (COINLOG.md) | a coin exists, unspent or spent by a given input, at any height |
-| every coin by script, with history and balances (counting trie, bit 5) | `trie_root` (`libzync::trie_fact`) | a coin was never created; a script's unspent count and value; its complete history |
+| every coin by script, with history and balances (counting trie, bit 5; which coins: below) | `trie_root` (`libzync::trie_fact`) | a coin is absent under a script; a script's unspent count and value; its complete history |
 | the live coin set (bit 6) | `live_set`, `live_hash` | a downloaded UTXO set is exactly the chain's (instant IBD) |
 | total amount of the live coins | `utxo_value` | the UTXO set's total, with no walk over the coins |
 | every block in the chain, and the coin state after it | `block_roots`, `block_leaves` (HANDOVER.md §3) | a block at a height is in this chain; with a Merkle branch, any transaction; with the coin log, any coin's state at that height |
 | what was checked | `profile` | network; scripts and signatures checked or skipped |
 | where it started | `anchor_id` | genesis-anchored (or not) |
 | which images proved it | `self_id`, `lineage` | the image that made the receipt and the handovers behind it |
+
+**What the counting trie holds** (review round 2, 11-05). Every output Core puts in its coin set, keyed by
+(SHA-256(scriptPubKey), outpoint), including coins spent in their own block (with their spender) and zero-value outputs.
+NOT in it, as not in Core's: provably unspendable outputs (OP_RETURN, scripts over 10,000 bytes) and the genesis
+coinbase. BIP30: the coinbases of 91,722 and 91,812 are overwritten by those of 91,880 and 91,842 (same txids) and are
+filed once, at the later block, so those two scripts' histories show one payment where the chain paid two. An ABSENT
+coin fact is about the (script, outpoint) pair: asked with another script, an existing outpoint is absent too, so a
+wallet must not read ABSENT as "this outpoint never existed". Trie facts carry their claimed answer (`expect`).
 
 With the **coin log** (profile bit 4), coin facts hold at every block: a zyncAPP about coins answers at the tip, or at
 any earlier height through the block forest. (Design B, whose coin forest was the UTXO set only in a proof closed at a

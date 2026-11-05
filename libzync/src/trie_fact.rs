@@ -12,6 +12,9 @@
 //!
 //! A path that meets a pruned node is "not covered": the proof does not answer for that key (never a verdict).
 //! A HISTORY proof expands an address's whole coin trie: every coin ever paid to that script, each with its state.
+//!
+//! Which coins: those Core keeps (no OP_RETURN / over-10,000-byte scripts, no genesis coinbase; the BIP30 pairs 91,722 /
+//! 91,880 and 91,812 / 91,842 filed once, at the later block). ABSENT is per (script, outpoint): ZYNCAPPS.md §2.
 
 use crate::coinlog::W;
 use crate::trie_model::{decode, hash_top, Sub, Top};
