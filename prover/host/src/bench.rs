@@ -74,8 +74,12 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
     let i = args.iter().position(|a| a == "core-vectors").unwrap();
     let path = args.get(i + 1).expect("usage: core-vectors <cases.json> [batch] [--sig honest|forged]");
     let batch: usize = args.get(i + 2).filter(|x| !x.starts_with("--")).map(|x| x.parse().expect("batch")).unwrap_or(500);
-    let sig: Option<bool> = args.iter().position(|a| a == "--sig").map(|k| match args.get(k + 1).map(|s| s.as_str()) {
-        Some("honest") => false, Some("forged") => true, x => panic!("--sig honest|forged, got {x:?}") });
+    // None: libsecp. Some(None): honest hints. Some(Some(v)): forged hints, variant v (libzync::host::sig_hint_forged):
+    // 0 every verify claimed valid with the wanted parity, 1 the opposite parity, 2 x = r + n (ECDSA), 3 mixed (forge
+    // every other verify, honest otherwise: the batch must still fail as a whole).
+    let sig: Option<Option<u8>> = args.iter().position(|a| a == "--sig").map(|k| match args.get(k + 1).map(|s| s.as_str()) {
+        Some("honest") => None, Some("forged") => Some(0), Some("forged-odd") => Some(1), Some("forged-rn") => Some(2),
+        Some("forged-mixed") => Some(3), x => panic!("--sig honest|forged|forged-odd|forged-rn|forged-mixed, got {x:?}") });
     let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}")))
         .expect("cases JSON");
     let unhex = |h: &str| -> Vec<u8> { (0..h.len()).step_by(2).map(|j| u8::from_str_radix(&h[j..j + 2], 16).unwrap()).collect() };
@@ -112,8 +116,13 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
             if let Some(at) = l.find("CVCASE ") { cur = l[at + 7..].trim().parse().ok(); continue; }
             if let (Some(k), true) = (cur, l.contains(libzync::wire::BATCHREC_TAG)) { per[k].push_str(l); per[k].push('\n'); }
         }
-        let hints: Vec<Vec<u8>> = per.iter().map(|t| libzync::host::sig_records(t).iter()
-            .flat_map(|r| if forged { libzync::host::sig_hint_forged(r) } else { libzync::host::sig_hint(r) }).collect()).collect();
+        let hints: Vec<Vec<u8>> = per.iter().map(|t| libzync::host::sig_records(t).iter().enumerate()
+            .flat_map(|(j, r)| match forged {
+                None => libzync::host::sig_hint(r),
+                Some(3) if j % 2 == 1 => libzync::host::sig_hint(r),
+                Some(3) => libzync::host::sig_hint_forged(r, 0),
+                Some(v) => libzync::host::sig_hint_forged(r, v),
+            }).collect()).collect();
         let (g, c1, _) = exec(chunk, 2, &hints)?;
         Some((g, c0 + c1))
     };
@@ -130,12 +139,14 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
         for (c, rc) in chunk.iter().zip(got) {
             let core_valid = match (c.code, c.valid) { (Some(code), _) => code == 1, (None, Some(v)) => v,
                                                        (None, None) => panic!("{}: no expectation", c.label) };
-            let ok = if sig == Some(true) {
+            let ok = if matches!(sig, Some(Some(_))) {
                 // forged hints: soundness only. Nothing Core rejects may pass.
                 if core_valid && rc != 1 { broken += 1; }
                 core_valid || rc != 1
             } else {
                 match (rc, c.code, c.valid) {
+                    // honest hints must never make the batch fail, whatever Core says of the case
+                    (-2000, _, _) => false,
                     (ABORT, Some(code), _) => code == UNKNOWN_ERROR,
                     (ABORT, None, v) => v == Some(false),
                     (_, Some(code), _) => rc == code,
@@ -152,9 +163,10 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
         }
         eprintln!("  {} / {} cases, {} mismatches", agree + bad, cases.len(), bad);
     }
-    let mode = match sig { None => "libsecp", Some(false) => "batched, honest hints", Some(true) => "batched, FORGED hints" };
+    let mode = match sig { None => "libsecp".to_string(), Some(None) => "batched, honest hints".to_string(),
+                           Some(Some(v)) => format!("batched, FORGED hints (variant {v})") };
     println!("CORE_VECTORS [{mode}] {agree} agree ({aborts} of them by a guest abort where Core catches a throw), {bad} differ, of {} ({} cycles){}",
-             cases.len(), cycles, if sig == Some(true) { format!("; {broken} Core-valid cases failed under forged hints (liveness only)") } else { String::new() });
+             cases.len(), cycles, if matches!(sig, Some(Some(_))) { format!("; {broken} Core-valid cases failed under forged hints (liveness only)") } else { String::new() });
     if bad > 0 { std::process::exit(1); }
 }
 

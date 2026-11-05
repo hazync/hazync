@@ -2349,6 +2349,7 @@ fn main() {
         8 => test_locks(),
         9 => test_merkle(),
         10 => test_core_vectors(),
+        #[cfg(feature = "libzync")]
         18 => join(),
         12 => validate_block_stages(),
         #[cfg(feature = "trie")]
@@ -2412,6 +2413,7 @@ fn trie_update() {
 /// wrong host state only fails here. Commits the right state with the LEFT's anchor_id: "from the left's start, every
 /// block up to the right's tip is valid". A tree of joins over N blocks is N-1 joins; the root starts at the genesis
 /// anchor exactly as a linear chain does, so the verifier is unchanged. Across an image change: the handover step.
+#[cfg(feature = "libzync")]
 fn join() {
     let self_id: [u32; 8] = env::read();
     let left: Vec<u8> = env::read();

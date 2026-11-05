@@ -94,14 +94,21 @@ pub fn sig_hint(s: &SigRecord) -> [u8; SIG_HINT_BYTES] {
 /// R = (r, y) of the parity the scheme's acceptance test wants, so R passes the guest's per-signature check (on the
 /// curve, x(R) == r, parity) whenever r is a curve x. Only the batch equation can then catch a bad signature. When r is
 /// not a curve x no such R exists: the honest hint.
-pub fn sig_hint_forged(s: &SigRecord) -> [u8; SIG_HINT_BYTES] {
+///
+/// `variant`: 0 the parity the acceptance test wants; 1 the opposite parity (refused per signature where parity is
+/// checked, so it must fall back; deferred for ECDSA); 2 x = r + n for ECDSA (also passes x(R) mod n == r), else 0.
+pub fn sig_hint_forged(s: &SigRecord, variant: u8) -> [u8; SIG_HINT_BYTES] {
     let p = BigUint::from_bytes_be(&P);
-    let x = BigUint::from_bytes_be(&s.r);
+    let mut x = BigUint::from_bytes_be(&s.r);
+    if variant == 2 && s.kind == 0 {
+        x += BigUint::from_bytes_be(&N);
+        if x >= p { return sig_hint(s); }
+    }
     if x >= p { return sig_hint(s); }
     let rhs = (&x * &x * &x + 7u32) % &p;
     let y = rhs.modpow(&((&p + 1u32) >> 2), &p);
     if &y * &y % &p != rhs { return sig_hint(s); }
-    let want_odd = matches!(s.kind, 4);
+    let want_odd = matches!(s.kind, 4) != (variant == 1);
     let y = if (y.bit(0)) == want_odd { y } else { &p - &y };
     let be32 = |v: &BigUint| { let b = v.to_bytes_be(); let mut o = [0u8; 32]; o[32 - b.len()..].copy_from_slice(&b); o };
     let mut out = [0u8; SIG_HINT_BYTES];

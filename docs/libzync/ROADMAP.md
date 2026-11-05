@@ -111,8 +111,9 @@ receipt): fine at the tip, a serial bottleneck for a whole-chain backfill.
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;
 (c) negatives: gap, overlap / duplicate, swapped order, tampered anchor, other image, non-chain journal — all refused;
-(d) MEASURE join cycles / cost (the old fold was $0.0043, another guest) and arity (2 / 4 / 8) and leaf size in the GPU
-benchmark step; (e) after the freeze: the coordinator's work queue (prep ahead, leaves in any order, joins as children
+(d) in the GPU benchmark step: a REAL (non-dev) join of joins (the dev-mode test shows byte-equivalence, not the
+recursion: env::verify / assumption resolution and "succinct, joinable again" need real receipts), and MEASURE join
+cycles / cost (the old fold was $0.0043, another guest), arity (2 / 4 / 8) and leaf size; (e) after the freeze: the coordinator's work queue (prep ahead, leaves in any order, joins as children
 land, resume points).
 
 ## I. Gaps beyond the core (11-04)

@@ -1897,6 +1897,7 @@ fn main() {
     if let Some(p) = args.iter().position(|a| a == "journal-sha") {
         let f = args.get(p + 1).expect("journal-sha <rcpt>");
         let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).unwrap_or_else(|e| panic!("{f}: {e}"))).expect("receipt");
+        r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{f} does not verify against this image: {e}"));
         println!("JOURNAL_SHA256 {}", lz::journal_sha(&r));
         return;
     }
