@@ -68,6 +68,8 @@ refuse it.
 | # | item | status |
 |---|---|---|
 | G1 | spec text for each item as it lands (SWIFTSYNC_PROOFS, COINLOG, ZYNCAPPS, txproofs) | with each item |
+| G2 | **final repo cleanup (user, 11-05): a concise, readable repo, minimal docs and tools, no fluff, precise info.** Every experiment-era doc, script, bench and result moves to `experimental/` (or is deleted): the retired design-B docs (SWIFTSYNC_PROOFS, CORE_HOOK, UTREEXO_FORMAT), this ROADMAP, the reference scripts in `scripts/libzync` (keep only what a test or a reproducible id needs), the zyncapps bench guests (hashbench, triebench), checked-in test outputs. Live spec content those docs still carry (the coin leaf, UTREEXO_FORMAT §2; the genesis anchor rule) is folded into a few short specs first, and code comments re-pointed. Then decide the historical names (`swiftsync-verify*`) and what of main's docs / tools a libzync repo keeps | after the freeze (H7), before the paper |
+| G3 | **the paper, written WITH the user** (not drafted alone): what libzync proves, how, measured costs, soundness argument, limits | after G2 |
 
 ## H. Path to the core freeze (the user's gates, in order)
 
@@ -80,6 +82,7 @@ refuse it.
 6. **Freeze: ask the user.**
 7. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger.
+8. **G2 repo cleanup** (concise repo, experiment-era material to `experimental/`), then **G3 the paper with the user**.
 
 ## I. Gaps beyond the core (11-04)
 
