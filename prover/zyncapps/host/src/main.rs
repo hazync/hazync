@@ -14,7 +14,7 @@
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF};
+use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -130,6 +130,50 @@ fn main() {
         Some("id") => {
             println!("ZYNCAPP_COIN_ID {}", id_hex(&ZYNCAPP_COIN_ID));
             println!("ZYNCAPP_ZEROCONF_ID {}", id_hex(&ZYNCAPP_ZEROCONF_ID));
+        }
+        Some("headers-exec") if a.len() >= 2 => {
+            // K1: the header-chain zAPP, EXECUTED (cycles, no proof) over a file of "height hex80" lines, as
+            // fetched from a node. A file starting at 0 runs from genesis; otherwise its first 11 headers seed the state
+            // (times, hash, bits) and the run starts at the first retarget boundary after them, with the chainwork there
+            // given as a third argument (hex, from getblockheader). Prints the end hash and chainwork for the node check.
+            let lines: Vec<(i64, Vec<u8>)> = std::fs::read_to_string(&a[1]).unwrap_or_else(|e| die(&e.to_string())).lines()
+                .filter(|l| !l.trim().is_empty()).map(|l| {
+                    let mut f = l.split_whitespace();
+                    let h: i64 = f.next().unwrap().parse().unwrap();
+                    let x = f.next().unwrap();
+                    (h, (0..x.len()).step_by(2).map(|i| u8::from_str_radix(&x[i..i + 2], 16).unwrap()).collect())
+                }).collect();
+            let dsha = |b: &[u8]| -> [u8; 32] { use sha2::Digest; sha2::Sha256::digest(sha2::Sha256::digest(b)).into() };
+            #[derive(serde::Serialize)]
+            struct HState { height: i64, hash: [u8; 32], work: [u8; 32], bits: u32, time: u32, epoch_first_time: u32, recent_times: Vec<u32>, max_time: u32 }
+            let (st, run): (HState, &[(i64, Vec<u8>)]) = if lines[0].0 == 0 {
+                (HState { height: -1, hash: [0; 32], work: [0; 32], bits: 0, time: 0, epoch_first_time: 0, recent_times: vec![], max_time: 0 }, &lines[..])
+            } else {
+                let start = lines.iter().position(|(h, _)| h % 2016 == 0).unwrap_or_else(|| die("no retarget boundary in the file"));
+                assert!(start >= 11, "need 11 headers before the boundary");
+                let seed = &lines[start - 11..start];
+                let last = &seed[10].1;
+                let le = |b: &[u8]| u32::from_le_bytes(b.try_into().unwrap());
+                let wh = a.get(2).unwrap_or_else(|| die("headers-exec <file> <chainwork hex at the header before the boundary>"));
+                let mut work = [0u8; 32];
+                let wb: Vec<u8> = (0..64).step_by(2).map(|i| u8::from_str_radix(&format!("{:0>64}", wh)[i..i + 2], 16).unwrap()).collect();
+                for (i, b) in wb.iter().rev().enumerate() { work[i] = *b; }
+                (HState { height: seed[10].0, hash: dsha(last), work, bits: le(&last[72..76]), time: le(&last[68..72]), epoch_first_time: 0,
+                          recent_times: seed.iter().map(|(_, h)| le(&h[68..72])).collect(), max_time: seed.iter().map(|(_, h)| le(&h[68..72])).max().unwrap() }, &lines[start..])
+            };
+            let words: Vec<u32> = run.iter().flat_map(|(_, h)| h.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>()).collect();
+            let env = ExecutorEnv::builder().write(&st).unwrap().write(&(run.len() as u32)).unwrap().write_slice(&words).build().unwrap();
+            let t = std::time::Instant::now();
+            let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HEADERS_ELF).unwrap_or_else(|e| die(&e.to_string()));
+            #[derive(serde::Deserialize)]
+            struct HOut { height: i64, hash: [u8; 32], work: [u8; 32], bits: u32, time: u32, epoch_first_time: u32, recent_times: Vec<u32>, max_time: u32 }
+            let (_d, out): ([u8; 32], HOut) = info.journal.decode().unwrap_or_else(|e| die(&e.to_string()));
+            let _ = (out.bits, out.time, out.epoch_first_time, &out.recent_times, out.max_time);
+            let disp = |b: &[u8; 32]| -> String { b.iter().rev().map(|x| format!("{x:02x}")).collect() };
+            println!("HEADERS_EXEC {} headers ({}..{}) {} cycles = {:.0} per header, {} segments, executed in {:.1} s",
+                     run.len(), run[0].0, out.height, info.cycles(), info.cycles() as f64 / run.len() as f64, info.segments.len(), t.elapsed().as_secs_f64());
+            println!("END height {} hash {} chainwork {}", out.height, disp(&out.hash), disp(&out.work));
+            println!("HEADERS_ID {}", id_hex(&ZYNCAPP_HEADERS_ID));
         }
         Some("bench-hash") => {
             // E1 calibration, execute mode (no proof): cycles per node hash for both hash shapes.
