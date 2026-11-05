@@ -8,7 +8,7 @@ use risc0_zkvm::guest::env;
 risc0_zkvm::guest::entry!(main);
 
 #[path = "../../../../../libzync/src/coinlog.rs"]
-#[allow(dead_code)]
+#[allow(dead_code)] // a shared libzync file (#[path], hazync#88): each includer uses its own subset
 mod coinlog;
 
 fn main() {

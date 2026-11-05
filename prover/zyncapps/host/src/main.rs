@@ -94,7 +94,7 @@ fn verdict(r: Result<bool, String>, ok_line: String) -> ! {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // the journal's layout: every field must be read to decode it, not every one is used here
 struct ChainState {
     kind: u32, version: u32, tip_hash: [u8; 32], utxo_roots: Vec<Option<[u8; 32]>>, utxo_leaves: u64, utxo_value: u64,
     cum_work: [u8; 32], height: u32, prev_nbits: u32, prev_time: u32, epoch_start: u32, recent_times: Vec<u32>,

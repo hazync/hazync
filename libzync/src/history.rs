@@ -18,7 +18,8 @@
 //! gives the coin log after h; the block leaf of h is `block_leaf(hash, h, utxo_state(n, value, roots))` (HANDOVER.md §3).
 //! Mainnet's history is ~100 GB (every leaf ever, plus each flip): C1's disk-backed store will page it.
 
-use crate::coinlog::{Store, H};
+use crate::coinlog::H;
+use crate::coinlog_forest::Store;
 use crate::facts::{block_leaf, utxo_state};
 use alloc::vec::Vec;
 

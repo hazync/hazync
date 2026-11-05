@@ -94,9 +94,12 @@ mod agg_lite;
 #[cfg(feature = "coinlog")]
 #[path = "../../../../libzync/src/coinlog.rs"]
 mod coinlog;
+#[cfg(feature = "coinlog")]
+#[path = "../../../../libzync/src/coinlog_forest.rs"]
+mod coinlog_forest;
 #[cfg(feature = "trie")]
 #[path = "../../../../libzync/src/ttree.rs"]
-#[allow(dead_code)]
+#[allow(dead_code)] // a shared libzync file (#[path], hazync#88): each includer uses its own subset
 mod ttree;
 // Coprocessor half of libsecp's field_bigint2 backend. See docs/FIELD_BIGINT2_BACKEND.md.
 #[cfg(feature = "field-bigint2")]
@@ -619,13 +622,8 @@ fn dsha256(data: &[u8]) -> [u8; 32] {
 // it from the block's own input and requires equality. Without it a chunk could prove "some valid spend
 // of this coin under attacker-chosen (weaker) flags" and the aggregation would accept a DIFFERENT
 // spending witness / lower-flag verification for the block's input. Length-prefixed to be unambiguous.
-/// The two halves composed. Kept as the single-call reference form — no hot path uses it, because
-/// every caller now hoists `tx_bind` out of its per-input loop, which is the entire point.
-#[allow(dead_code)]
-fn input_bind(raw_tx: &[u8], input_idx: u32, prevouts: &[u8],
-              coin_height: u32, coin_is_coinbase: u32, coin_mtp: u32, flags: u32) -> [u8; 32] {
-    input_bind_from(&tx_bind(raw_tx, prevouts, flags), input_idx, coin_height, coin_is_coinbase, coin_mtp)
-}
+// The digest is `input_bind_from(&tx_bind(raw_tx, prevouts, flags), input_idx, ..)`: every caller hoists `tx_bind`
+// out of its per-input loop.
 
 /// The per-TRANSACTION half of the binding digest — everything every input of a transaction shares.
 ///

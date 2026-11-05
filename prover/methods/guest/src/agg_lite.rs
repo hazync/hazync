@@ -675,16 +675,16 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             for l in &appends { env::log(&alloc::format!("coinlog: A {}", hex32(l))); }
         } else {
             #[allow(static_mut_refs)]
-            match coinlog::decode_witness(unsafe { &LOG_WITNESS }) {
+            match coinlog_forest::decode_witness(unsafe { &LOG_WITNESS }) {
                 Some((pos, sib)) if pos.len() == ext.len() => {
                     // Sorted by log position through a (position, index) list: 16-byte rows moved, not 72-byte ones.
                     let mut ord: Vec<(u64, u32)> = pos.iter().enumerate().map(|(i, p)| (*p, i as u32)).collect();
                     ord.sort_unstable();
-                    let sp: Vec<coinlog::Spend> = ord.iter().map(|&(p, i)| {
+                    let sp: Vec<coinlog_forest::Spend> = ord.iter().map(|&(p, i)| {
                         let (l, t, v) = &ext[i as usize];
                         (p, coinlog::w_of(l), coinlog::w_of(&coinlog::spender(w.height, *t, *v)))
                     }).collect();
-                    if let Err(e) = coinlog::apply(&mut roots, &mut n, &sp, &appends, &sib) {
+                    if let Err(e) = coinlog_forest::apply(&mut roots, &mut n, &sp, &appends, &sib) {
                         env::log(&alloc::format!("agg-lite: REJECT coin log: {e:?}"));
                         all_ok = false;
                     }

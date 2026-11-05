@@ -17,16 +17,15 @@ use serde::{Deserialize, Serialize};
 risc0_zkvm::guest::entry!(main);
 
 #[path = "../../../../../libzync/src/coinlog.rs"]
-#[allow(dead_code)] // the shared file; these guests read entries, the update and node-store halves are the main guest's
 mod coinlog;
 #[path = "../../../../../libzync/src/facts.rs"]
-#[allow(dead_code)]
+#[allow(dead_code)] // a shared libzync file (#[path], hazync#88): each includer uses its own subset
 mod facts;
 
 /// The core ChainState, field for field (prover/methods/guest/src/main.rs): risc0 serde reads fields in order, so every
 /// field up to the last one used must be declared; later (appended) fields are ignored.
 #[derive(Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // the journal's layout: every field must be read to decode it, not every one is used here
 struct ChainState {
     kind: u32,
     version: u32,

@@ -1047,7 +1047,7 @@ pub(crate) fn agg_chunks() {
 
 pub(crate) struct ClHost {
     // In memory, or on disk when HAZYNC_COINLOG_DIR is set (ROADMAP C1; libzync::host::DiskNodes).
-    store: libzync::coinlog::NodeStore<libzync::host::AnyNodes>,
+    store: libzync::coinlog_forest::NodeStore<libzync::host::AnyNodes>,
     pos: libzync::host::AnyIndex, // unspent leaf -> position; on disk (<dir>/index.bin) with HAZYNC_COINLOG_DIR (C1b)
 }
 pub(crate) static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
@@ -1098,7 +1098,7 @@ pub(crate) const CL_DISK_MAGIC: &[u8; 8] = b"LZDISK01";
 
 /// Undoes one block from its pending.bin record: cut the appends (and drop them from the index), restore each spent
 /// coin's unspent leaf at its position (and put it back in the index). Refuses a record that does not start at `n`.
-pub(crate) fn cl_rollback(store: &mut libzync::coinlog::NodeStore<libzync::host::AnyNodes>, pos: &mut libzync::host::AnyIndex, u: &[u8], n: u64) {
+pub(crate) fn cl_rollback(store: &mut libzync::coinlog_forest::NodeStore<libzync::host::AnyNodes>, pos: &mut libzync::host::AnyIndex, u: &[u8], n: u64) {
     let rd = |o: usize| u64::from_le_bytes(u[o..o + 8].try_into().expect("pending.bin truncated"));
     assert!(rd(0) == n, "pending.bin is for a store of {} leaves, the state file says {n}: rebuild the store", rd(0));
     let k = rd(8) as usize;
@@ -1144,7 +1144,7 @@ pub(crate) fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
         }
         None => libzync::host::AnyNodes::Mem(Vec::new()),
     };
-    let mut store = libzync::coinlog::NodeStore::with_nodes(nodes);
+    let mut store = libzync::coinlog_forest::NodeStore::with_nodes(nodes);
     let mut pos = cl_index();
     for (i, l) in leaves.iter().enumerate() {
         store.push(*l);
@@ -1188,7 +1188,7 @@ pub(crate) fn cl_load(path: &str) {
     if b.starts_with(CL_DISK_MAGIC) {
         assert!(b.len() >= 16 && (b.len() - 16) % 33 == 0, "{path}: a disk-mode state file of the wrong size");
         let d = cl_dir().unwrap_or_else(|| panic!("{path} was written in disk mode: set HAZYNC_COINLOG_DIR"));
-        let store = libzync::coinlog::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
+        let store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
             libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
         let n = u64::from_le_bytes(b[8..16].try_into().unwrap());
         let roots: Vec<Option<[u8; 32]>> = b[16..].chunks_exact(33).map(|c| (c[32] == 1).then(|| c[..32].try_into().unwrap())).collect();
@@ -1253,7 +1253,7 @@ pub(crate) fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {
     let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().map(|s| s.0)).collect();
     sorted.sort_unstable_by_key(|x| x.0);
     let sib = h.store.witness(&sorted);
-    libzync::coinlog::encode_witness(&positions, &sib)
+    libzync::coinlog_forest::encode_witness(&positions, &sib)
 }
 
 /// After the block is proved: the same flips and appends on the host's log, which must then equal the state.
@@ -1397,10 +1397,10 @@ pub(crate) fn cl_synth(block: &str, spends: &[ClSpend]) -> (Vec<Option<[u8; 32]>
             wit(l, start, &sorted[kk..m], &mut sib, &rnd);
             use libzync::coinlog::{w_of, h_of};
             // Old roots only: the spender never enters the old side, so any spender serves here.
-            let e: Vec<libzync::coinlog::Spend> = sorted[kk..m].iter().map(|(p, h)| (*p, w_of(h), [0u32; 8])).collect();
+            let e: Vec<libzync::coinlog_forest::Spend> = sorted[kk..m].iter().map(|(p, h)| (*p, w_of(h), [0u32; 8])).collect();
             let sw: Vec<libzync::coinlog::W> = sib.iter().map(w_of).collect();
             let (mut o, mut nw) = ([0u32; 8], [0u32; 8]);
-            assert!(libzync::coinlog::update(l, start, &e, &mut sw.iter(), &mut o, &mut nw));
+            assert!(libzync::coinlog_forest::update(l, start, &e, &mut sw.iter(), &mut o, &mut nw));
             roots[l as usize] = Some(h_of(&o));
             sib_all.extend(sib);
         } else {
@@ -1411,5 +1411,5 @@ pub(crate) fn cl_synth(block: &str, spends: &[ClSpend]) -> (Vec<Option<[u8; 32]>
     }
     while roots.last() == Some(&None) { roots.pop(); }
     println!("  coinlog SYNTH: log size {n} (k = {k}), {} spends, {} siblings", spends.len(), sib_all.len());
-    (roots, n, libzync::coinlog::encode_witness(&positions, &sib_all))
+    (roots, n, libzync::coinlog_forest::encode_witness(&positions, &sib_all))
 }

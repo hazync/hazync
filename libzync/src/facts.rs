@@ -375,7 +375,7 @@ pub fn check_core_statement(j: &CoreStatement, core_id: &[u32; 8], min_version: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coinlog::Store;
+    use crate::coinlog_forest::Store;
     use alloc::vec::Vec;
 
     fn h(i: u64) -> H {

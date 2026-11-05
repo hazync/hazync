@@ -8,6 +8,7 @@ extern crate std;
 pub mod wire;
 pub mod net;
 pub mod coinlog;
+pub mod coinlog_forest;
 pub mod facts;
 pub mod history;
 pub mod ttree;

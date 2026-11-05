@@ -313,7 +313,7 @@ impl DiskNodes {
     }
 }
 
-impl crate::coinlog::Nodes for DiskNodes {
+impl crate::coinlog_forest::Nodes for DiskNodes {
     fn levels(&self) -> usize {
         self.files.len()
     }
@@ -340,11 +340,11 @@ impl crate::coinlog::Nodes for DiskNodes {
 
 /// Either backend, chosen at run time (host: `HAZYNC_COINLOG_DIR` set = on disk).
 pub enum AnyNodes {
-    Mem(crate::coinlog::MemNodes),
+    Mem(crate::coinlog_forest::MemNodes),
     Disk(DiskNodes),
 }
 
-impl crate::coinlog::Nodes for AnyNodes {
+impl crate::coinlog_forest::Nodes for AnyNodes {
     fn levels(&self) -> usize {
         match self { AnyNodes::Mem(m) => m.levels(), AnyNodes::Disk(d) => d.levels() }
     }
@@ -352,20 +352,20 @@ impl crate::coinlog::Nodes for AnyNodes {
         match self { AnyNodes::Mem(m) => m.count(l), AnyNodes::Disk(d) => d.count(l) }
     }
     fn get(&self, l: usize, i: u64) -> [u8; 32] {
-        match self { AnyNodes::Mem(m) => crate::coinlog::Nodes::get(m, l, i), AnyNodes::Disk(d) => d.get(l, i) }
+        match self { AnyNodes::Mem(m) => crate::coinlog_forest::Nodes::get(m, l, i), AnyNodes::Disk(d) => d.get(l, i) }
     }
     fn put(&mut self, l: usize, i: u64, h: [u8; 32]) {
         match self { AnyNodes::Mem(m) => m.put(l, i, h), AnyNodes::Disk(d) => d.put(l, i, h) }
     }
     fn append(&mut self, l: usize, h: [u8; 32]) {
-        match self { AnyNodes::Mem(m) => crate::coinlog::Nodes::append(m, l, h), AnyNodes::Disk(d) => d.append(l, h) }
+        match self { AnyNodes::Mem(m) => crate::coinlog_forest::Nodes::append(m, l, h), AnyNodes::Disk(d) => d.append(l, h) }
     }
 }
 
 #[cfg(test)]
 mod disk_tests {
     use super::*;
-    use crate::coinlog::{NodeStore, Store};
+    use crate::coinlog_forest::{NodeStore, Store};
 
     #[test]
     fn disk_store_equals_memory_store() {
