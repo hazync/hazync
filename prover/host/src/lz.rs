@@ -712,6 +712,47 @@ pub(crate) fn rig_echo(log: &[u8]) {
     }
 }
 
+/// SHA-256 of a receipt's journal bytes (`journal-sha <rcpt>`): two runs proved the same statement iff these match.
+pub(crate) fn journal_sha(r: &risc0_zkvm::Receipt) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(&r.journal.bytes).iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// `libzync-join <left.rcpt> <right.rcpt> <out.rcpt>` (ROADMAP H-B): one join (guest mode 18) of two adjacent chain proofs
+/// of this image, the right one starting exactly where the left one ends (its anchor_id is the digest of the left's
+/// journal; the guest checks it). Writes the joined receipt: the left's start, the right's tip. Succinct, so a join can
+/// itself be joined. Leaves: `libzync-prove-range h h <json> state_<h-1>.json <out>` (a base step on any state).
+pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
+    use risc0_zkvm::Receipt;
+    let rd = |p: &str| -> Receipt {
+        let r: Receipt = bincode::deserialize(&std::fs::read(p).unwrap_or_else(|e| panic!("{p}: {e}")))
+            .unwrap_or_else(|e| panic!("{p}: {e}"));
+        r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{p} does not verify against this image: {e}"));
+        r
+    };
+    let (l, r) = (rd(left), rd(right));
+    let (ls, rs): (ChainState, ChainState) = (l.journal.decode().expect("left ChainState"), r.journal.decode().expect("right ChainState"));
+    let mut b = ExecutorEnv::builder();
+    b.add_assumption(l.clone());
+    b.add_assumption(r.clone());
+    b.write(&18u32).unwrap();
+    b.write(&METHOD_ID).unwrap();
+    b.write(&l.journal.bytes).unwrap();
+    b.write(&r.journal.bytes).unwrap();
+    let t = std::time::Instant::now();
+    let opts = ProverOpts::succinct();
+    let j = risc0_zkvm::default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts)
+        .unwrap_or_else(|e| panic!("join {left} + {right}: {e}"));
+    j.receipt.verify(METHOD_ID).expect("joined receipt verifies");
+    let st: ChainState = j.receipt.journal.decode().unwrap();
+    assert!(st.anchor_id == ls.anchor_id && st.height == rs.height && st.tip_hash == rs.tip_hash, "join: unexpected output state");
+    std::fs::write(out, bincode::serialize(&j.receipt).unwrap()).unwrap_or_else(|e| panic!("{out}: {e}"));
+    println!("JOURNAL_SHA256 {}", journal_sha(&j.receipt));
+    let a: String = ls.anchor_id.iter().take(8).map(|x| format!("{x:02x}")).collect();
+    println!("JOINED left tip {} + right tip {} (anchor {a}..) -> {out}: {} cycles, {:.1} s",
+             ls.height, rs.height, j.stats.total_cycles, t.elapsed().as_secs_f64());
+}
+
 /// `libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>`: PROVE blocks lo..=hi as one
 /// recursive chain on this machine's prover (GPU with the cuda feature). Block lo is a base step on the
 /// given anchor (the committed state at lo-1, e.g. from `libzync-anchor-json`); every

@@ -2333,10 +2333,11 @@ fn main() {
     // 2 chain_step, 3 multi_check, 6 prove_range, 7 fold_range, 12 stages) neither run the SwiftSync
     // accounting nor the signet check, and their per-input caches assume the bump allocator; a receipt
     // from them under this image id would attest something the libzync design never checked
-    // (review 2026-10-30). 8/9/10 are self-tests that commit nothing a chain proof consumes. 17 is the trie update (E2),
+    // (review 2026-10-30). 8/9/10 are self-tests that commit nothing a chain proof consumes. 18 joins two adjacent chain
+    // proofs of this image (ROADMAP H-B). 17 is the trie update (E2),
     // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag.
     #[cfg(feature = "libzync")]
-    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17), "libzync image: mode {mode} is not available (chunks + trie + aggregate only)");
+    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
     match mode {
         1 => block_proof(),
         2 => chain_step(),
@@ -2348,6 +2349,7 @@ fn main() {
         8 => test_locks(),
         9 => test_merkle(),
         10 => test_core_vectors(),
+        18 => join(),
         12 => validate_block_stages(),
         #[cfg(feature = "trie")]
         17 => trie_update(),
@@ -2403,6 +2405,37 @@ fn trie_update() {
 // Mode 8: isolated exerciser for the real Core-derived maturity/BIP68 relative-lock check
 // (`check_input_locks`). Used by the host `test-locks` command to drive the time-based branch with
 // real MTP numbers (no block; the check only reads tx.version + vin[idx].nSequence + the two MTPs).
+/// Mode 18 (ROADMAP H-B): JOIN two adjacent chain proofs of this image into one. Blocks are proved in any order, each a
+/// base step on the host's state before it (anchor_id = sha256d of that state's journal); a join requires the right
+/// proof to start exactly where the left one ends: sha256d(left journal) == right.anchor_id. The digest covers every
+/// field (height, tip, work, times, coin log, trie, BIP30 tree, block forest, live set, image, profile, lineage), so a
+/// wrong host state only fails here. Commits the right state with the LEFT's anchor_id: "from the left's start, every
+/// block up to the right's tip is valid". A tree of joins over N blocks is N-1 joins; the root starts at the genesis
+/// anchor exactly as a linear chain does, so the verifier is unchanged. Across an image change: the handover step.
+fn join() {
+    let self_id: [u32; 8] = env::read();
+    let left: Vec<u8> = env::read();
+    let right: Vec<u8> = env::read();
+    env::verify(self_id, &left).expect("join: left proof invalid");
+    env::verify(self_id, &right).expect("join: right proof invalid");
+    let decode = |b: &[u8], side: &str| -> ChainState {
+        assert!(b.len() % 4 == 0, "join: {side} journal is not whole words");
+        let w: Vec<u32> = b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let st: ChainState = risc0_zkvm::serde::from_slice(&w).expect("join: decode");
+        assert!(st.kind == KIND_CHAIN, "join: {side} journal is not a ChainState (domain tag)");
+        assert!(st.version == CHAIN_STATE_VERSION, "join: {side} ChainState version {}", st.version);
+        assert!(st.self_id == self_id, "join: {side} proof recursed against another image");
+        assert!(st.profile == chain_profile(), "join: {side} profile mismatch");
+        st
+    };
+    let l = decode(&left, "left");
+    let mut r = decode(&right, "right");
+    assert!(l.lineage == r.lineage, "join: lineage mismatch");
+    assert!(dsha256(&left) == r.anchor_id, "join: the right proof does not start where the left one ends");
+    r.anchor_id = l.anchor_id;
+    env::commit(&r);
+}
+
 /// Mode 10 (self-test, I1): Core's own script and transaction test vectors through the guest's consensus code, with
 /// explicit flags and no hints installed (libsecp verifies every signature itself, as Core). Each case: kind (0: one
 /// input's VerifyScript, script_tests.json; 1: CheckTransaction + every input, tx_valid / tx_invalid), the transaction,

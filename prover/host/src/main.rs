@@ -1894,6 +1894,17 @@ fn main() {
         println!("anchor for block {} (state at {}) -> {}", w.height, anchor.height, args[p + 1]);
         return;
     }
+    if let Some(p) = args.iter().position(|a| a == "journal-sha") {
+        let f = args.get(p + 1).expect("journal-sha <rcpt>");
+        let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).unwrap_or_else(|e| panic!("{f}: {e}"))).expect("receipt");
+        println!("JOURNAL_SHA256 {}", lz::journal_sha(&r));
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-join") {
+        let f = |k: usize| args.get(p + k).cloned().expect("libzync-join <left.rcpt> <right.rcpt> <out.rcpt>");
+        lz::lz_join_cmd(&f(1), &f(2), &f(3));
+        return;
+    }
     if let Some(p) = args.iter().position(|a| a == "libzync-prove-range") {
         let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect("libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>") };
         lz_prove_range_cmd(n(1), n(2), &args[p + 3], &args[p + 4], &args[p + 5]);
