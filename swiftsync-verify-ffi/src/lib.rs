@@ -137,12 +137,13 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             rep.verdict = Verdict::Demo;
         }
     }
-    if let (Some(cs), false) = (&rep.state, out.is_null()) {
+    // Only a journal that passed: under FAIL its fields are the prover's word (review round 3).
+    if let (Some(cs), false, false) = (&rep.state, out.is_null(), rep.verdict == Verdict::Fail) {
         *out = SwiftsyncResult { height: cs.height, tip_hash: cs.tip_hash, chainwork: cs.cum_work,
                                  utxo_leaves: cs.utxo_leaves, profile: cs.profile };
     }
     match rep.verdict {
-        Verdict::Ok => { write_msg(msg, msg_len, ""); OK }
+        Verdict::Ok => { write_msg(msg, msg_len, "proven from genesis; chain identity NOT checked here: out->tip_hash must be the block at out->height on your own node"); OK }
         Verdict::Demo => { write_msg(msg, msg_len, "a valid chain, but from a given anchor, below minimum work, or below the checkpoint height, or facts without a matching \"expect\": not shown to be the network's"); DEMO }
         Verdict::Fail => fail(rep.checks.iter().find(|(ok, _)| !ok).map(|(_, w)| w.as_str()).unwrap_or("failed")),
     }

@@ -2,11 +2,11 @@
   [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== env MODE=good swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.MLsvX4zOYY/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
+== env MODE=good swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.idEUN2QUU3/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
   [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== env MODE=fork swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.MLsvX4zOYY/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
+== env MODE=fork swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.idEUN2QUU3/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
   [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
@@ -28,12 +28,10 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
 == env RISC0_DEV_MODE=1 swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] RISC0_DEV_MODE is not set in this verifier's environment
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
-SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
+SWIFTSYNC_VERIFY_FAIL: panicked at /home/defenwycke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.0.5/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been disabled by feature flag.
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /tmp/tmp.MLsvX4zOYY/junk.rcpt (expect exit 1)
-  [FAIL] the receipt file decodes (invalid value: integer `2800023188`, expected variant index 0 <= i < 4)
+== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /tmp/tmp.idEUN2QUU3/junk.rcpt (expect exit 1)
+  [FAIL] the receipt file decodes (invalid value: integer `184469182`, expected variant index 0 <= i < 4)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
 == swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /nonexistent.rcpt (expect exit 1)

@@ -348,7 +348,7 @@ pub fn verify(inp: &Inputs) -> Report {
               inp.image.profile, describe_profile(cs.profile)));
 
     // Step 11: time-too-new on this verifier's clock.
-    rep.check(cs.max_time as u64 <= inp.now + MAX_FUTURE_BLOCK_TIME, format!(
+    rep.check(cs.max_time as u64 <= inp.now.saturating_add(MAX_FUTURE_BLOCK_TIME), format!(
         "time-too-new: largest block time {} <= this clock {} + {} s", cs.max_time, inp.now, MAX_FUTURE_BLOCK_TIME));
 
     // The block forest: one leaf per block, in the shape that leaf count forces.

@@ -115,7 +115,8 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
                 r.reverse();
                 hex(&r)
             };
-            let st = rep.state.as_ref();
+            // Only a journal that passed: under FAIL its fields are the prover's word (review round 3).
+            let st = rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail);
             ret(serde_json::json!({
                 "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
                 "image": image.method_id_hex,
@@ -204,7 +205,7 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
                 "image": image.method_id_hex,
                 "network": image.network,
                 "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
-                "height": rep.state.as_ref().map(|c| c.height),
+                "height": rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail).map(|c| c.height),
                 "facts": facts,
             }).to_string())
         }

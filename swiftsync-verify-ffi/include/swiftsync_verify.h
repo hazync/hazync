@@ -32,7 +32,7 @@ typedef struct {
  *   now:         the caller's clock, unix seconds (for time-too-new, §5 step 11).
  *   image_hex:   NULL for the built-in image id, or 64 hex digits (an id you rebuilt, §5 step 9).
  *   anchor_json: NULL for genesis, or a ChainState JSON; the result is then at best SWIFTSYNC_VERIFY_DEMO.
- *   out:         filled when the receipt decoded (any verdict); may be NULL.
+ *   out:         filled under OK and DEMO only (under FAIL its fields would be the prover's word); may be NULL.
  *   msg/msg_len: optional buffer for a NUL-terminated description of the first failed check.
  * Step 7 of §5 is the caller's: `out->tip_hash` must be the block at `out->height` on its own most-work chain,
  * with `out->chainwork`. Returns SWIFTSYNC_VERIFY_OK, _DEMO or _FAIL. */

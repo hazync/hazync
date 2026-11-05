@@ -29,7 +29,8 @@ name = "zync-serve"
 path = "src/zync_serve.rs"
 
 [dependencies]
-risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+# disable-dev-mode: RISC0_DEV_MODE can never make this verifier accept a fake receipt (review round 3).
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std", "disable-dev-mode"] }
 # The hint hash (§3 of the proposal) from the crate the prover uses; without default features it is sha2 only.
 libzync = { path = "../libzync", default-features = false }
 serde = { version = "1", features = ["derive"] }

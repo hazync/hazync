@@ -81,7 +81,11 @@ refuse it.
 5. **GPU proving benchmarks** on the final image (user's trigger).
 6. **Freeze: ask the user.**
 7. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
-   from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger.
+   from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
+   then the built-in IMAGES (9f469930 / 067822b9, from c1101a3 10-31: ChainState v1, profile 1) verify NOTHING current,
+   so OK is reachable only via `--image` / `image_hex`, and the table's `checkpoint_height: 970_000` describes an image
+   with no checkpoint: replace both with the frozen product images (cli, ffi `IDS`, wasm `image_id`). Also decide a
+   proof-age policy (today a genuine year-old proof is OK; facts are "as of its height").
 8. **G2 repo cleanup** (concise repo, experiment-era material to `experimental/`), then **G3 the paper with the user**.
 
 ## I. Gaps beyond the core (11-04)

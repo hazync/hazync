@@ -248,7 +248,8 @@ fn main() {
     for (ok, what) in &rep.checks {
         println!("  [{}] {what}", if *ok { "ok" } else { "FAIL" });
     }
-    if let Some(cs) = &rep.state {
+    // Only a journal that passed: under FAIL its fields are the prover's word (review round 3).
+    if let Some(cs) = rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
         println!("  chain: tip {} at height {}, cum_work 0x{}", display(&cs.tip_hash), cs.height, work_hex(&cs.cum_work));
         if coinlog {
             println!("  coin log: {} coins ever appended, {} sat live (COINLOG.md)", cs.utxo_leaves, cs.utxo_value);
