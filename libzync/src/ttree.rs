@@ -27,6 +27,20 @@ use alloc::vec::Vec;
 
 pub type Key = [u8; 64];
 
+/// The trie receipt's journal (guest mode 17, E2): [KIND_TRIE, old root 8 words, new root 8 words, update-list digest 8
+/// words (its bytes as little-endian words)]. The aggregate verifies the receipt, requires the old root to be the
+/// previous chain state's trie root and the digest to be its own update list's, and commits the new root.
+pub const KIND_TRIE: u32 = 0xC4A1_0017;
+pub const TRIE_JOURNAL_WORDS: usize = 25;
+pub fn trie_journal(old: &W, new: &W, digest: &[u8; 32]) -> [u32; TRIE_JOURNAL_WORDS] {
+    let mut j = [0u32; TRIE_JOURNAL_WORDS];
+    j[0] = KIND_TRIE;
+    j[1..9].copy_from_slice(old);
+    j[9..17].copy_from_slice(new);
+    for (x, c) in j[17..25].iter_mut().zip(digest.chunks_exact(4)) { *x = u32::from_le_bytes(c.try_into().unwrap()); }
+    j
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum TErr {
     /// the witness's old root is not the one given

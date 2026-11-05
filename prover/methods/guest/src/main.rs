@@ -2196,6 +2196,18 @@ fn aggregate() {
     };
     #[cfg(not(feature = "txlog"))]
     let rec_order: Vec<(u32, u32)> = Vec::new();
+    // E2: the block's trie receipt journal (mode 17), verified here like a chunk's. Empty in a collect run, which logs the
+    // update list for the host instead (and commits no chain state); empty anywhere else is refused in agg_lite.
+    #[cfg(feature = "trie")]
+    {
+        let n: u32 = env::read();
+        let mut tj = vec![0u32; n as usize];
+        if n > 0 {
+            env::read_slice(&mut tj);
+            env::verify(self_id, &tj).expect("trie proof invalid");
+        }
+        agg_lite::set_trie_journal(tj);
+    }
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
     // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
@@ -2314,9 +2326,6 @@ fn aggregate() {
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
         block_roots, block_leaves, lineage,
     });
-    // The trie's update-list digest after the ChainState (decoders of the ChainState prefix ignore it).
-    #[cfg(feature = "trie")]
-    env::commit_slice(agg_lite::tree_out());
 }
 
 fn main() {
@@ -2343,6 +2352,8 @@ fn main() {
         8 => test_locks(),
         9 => test_merkle(),
         12 => validate_block_stages(),
+        #[cfg(feature = "trie")]
+        17 => trie_update(),
         // Mode 16 (signet): Core's CheckSignetBlockSolution on (header, coinbase, other txids) ALONE, with no
         // merkle or PoW check in front of it, so a test can show the signature check itself rejects.
         #[cfg(feature = "signet")]
@@ -2355,6 +2366,38 @@ fn main() {
         }
         _ => panic!("unknown guest mode {mode}"),
     }
+}
+
+/// Mode 17 (E2): one block's counting-trie update, proven beside the chunks and verified inside the aggregate.
+/// Input (read_slice words): [witness words, marks, inserts, order words], the witness (ttree::encode: counts flag, old
+/// root, the old trie pruned to the block's paths), each mark (key 16 big-endian words, spender 8), each insert (key 16,
+/// spent flag 1, spender 8, value 2), then the update order (sorted indices, checked). Commits ttree::trie_journal: the
+/// old root the witness proves, the new root, and the update list's digest, which the aggregate requires to equal its
+/// own list's. A wrong witness, list or order panics: no receipt.
+#[cfg(feature = "trie")]
+fn trie_update() {
+    let mut h = [0u32; 4];
+    env::read_slice(&mut h);
+    let (nw, nm, ni, np) = (h[0] as usize, h[1] as usize, h[2] as usize, h[3] as usize);
+    let mut wit = vec![0u32; nw];
+    env::read_slice(&mut wit);
+    let mut mw = vec![0u32; nm.checked_mul(24).expect("trie: marks")];
+    env::read_slice(&mut mw);
+    let mut iw = vec![0u32; ni.checked_mul(27).expect("trie: inserts")];
+    env::read_slice(&mut iw);
+    let mut perm = vec![0u32; np];
+    env::read_slice(&mut perm);
+    let key = |w: &[u32]| -> ttree::Key {
+        let mut k = [0u8; 64];
+        for j in 0..16 { k[4 * j..4 * j + 4].copy_from_slice(&w[j].to_be_bytes()); }
+        k
+    };
+    let marks: Vec<(ttree::Key, coinlog::W)> = mw.chunks_exact(24).map(|c| (key(&c[..16]), c[16..24].try_into().unwrap())).collect();
+    let ins: Vec<(ttree::Key, Option<coinlog::W>, u64)> = iw.chunks_exact(27)
+        .map(|c| (key(&c[..16]), (c[16] == 1).then(|| c[17..25].try_into().unwrap()), c[25] as u64 | (c[26] as u64) << 32)).collect();
+    let old: coinlog::W = wit.get(1..9).expect("trie: witness header").try_into().unwrap();
+    let new = ttree::apply_stream_perm(&wit, &marks, &ins, Some(&perm)).expect("trie update");
+    env::commit_slice(&ttree::trie_journal(&old, &new, &ttree::list_digest(&marks, &ins)));
 }
 
 // Mode 8: isolated exerciser for the real Core-derived maturity/BIP68 relative-lock check

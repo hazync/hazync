@@ -2051,7 +2051,6 @@ dependencies = [
  "bitcoin",
  "hazync-coinbase-smt",
  "hazync-utreexo",
- "hintsfile",
  "libzync",
  "methods",
  "num-bigint 0.4.8",

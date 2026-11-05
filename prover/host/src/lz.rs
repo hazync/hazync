@@ -216,31 +216,14 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str
     // Core's nMinimumChainWork (v28): below it, a valid chain from genesis is no evidence of the network's chain.
     let low_work = !work_at_least(&cs.cum_work, min_chain_work()) || cs.height < checkpoint_height();
     println!("  height {} {} the pinned checkpoint height {}", cs.height, if cs.height < checkpoint_height() { "<" } else { ">=" }, checkpoint_height());
-    // The coin log (COINLOG.md) is sound at every block: no hints file, nothing to close. The SwiftSync fields stay zero.
-    if methods::COINLOG {
-        check(hints == "-", "a coin-log proof takes no hints file (pass '-')");
-        check(cs.ss_set == 0 && cs.ss_hints == [0; 32], "SwiftSync fields unused (ss_set == 0, ss_hints == 0)");
-    }
-    let raw = if methods::COINLOG { Vec::new() } else { std::fs::read(hints).unwrap_or_else(|e| panic!("{hints:?}: {e}")) };
-    if !methods::COINLOG {
-    let file = hintsfile::Hintsfile::from_reader(&mut raw.as_slice()).unwrap_or_else(|e| panic!("{hints:?}: {e}"));
-    {
-        use sha2::Digest;
-        println!("  file: {hints:?}, {} bytes, sha256 {}", raw.len(), hex(&sha2::Sha256::digest(&raw)));
-    }
-    // The proof covers the DECODED lists; only a canonically encoded file is unambiguously those lists.
-    let canon = libzync::host::canonical_bytes(&file);
-    check(canon.as_deref() == Ok(raw.as_slice()),
-          "the file is canonically encoded (re-encoding its lists gives the same bytes; no trailing data)");
-    check(cs.height == file.stop_height(), &format!("height {} == the file's stop height {}", cs.height, file.stop_height()));
-    check(cs.ss_set == 0, "SwiftSync total is the identity (ss_set == 0)");
-    let fh = match libzync::host::file_hash(&file) {
-        Ok(h) => h,
-        Err(e) => { check(false, &format!("{hints:?} is well formed: {e}")); [0u8; 32] }
-    };
-    check(cs.ss_hints == fh, &format!("ss_hints {} == hash of {hints:?}", hex(&fh)));
-    }
-    let _ = raw;
+    // The coin log (COINLOG.md) is sound at every block: no hints file, nothing to close. Design B (SwiftSync hints) is
+    // gone (E2c). The former SwiftSync fields now carry the live-coin ECMH (instant IBD; ss_set / ss_acc) and the
+    // counting trie's root (the former hint-hash slot): each is zero exactly when its feature is off.
+    check(hints == "-", "a libzync proof takes no hints file (pass '-')");
+    check(methods::UTXOHASH || (cs.ss_set == 0 && cs.ss_acc == [0; 16]), "live-coin hash unused in this image (ss_set == 0)");
+    check(methods::TRIE || cs.ss_hints == [0; 32], "trie root unused in this image (zero)");
+    if methods::UTXOHASH { println!("  live-coin hash: {}", if cs.ss_set == 0 { "the empty set".to_string() } else { format!("x {:08x}..", cs.ss_acc[7]) }); }
+    if methods::TRIE { println!("  trie root: {}", hex(&cs.ss_hints)); }
     // As swiftsync-verify: a root exactly at each set bit of block_leaves (HANDOVER.md §6).
     let shape = (0..64).all(|i| ((cs.block_leaves >> i) & 1 == 1) == cs.block_roots.get(i).copied().flatten().is_some());
     check(cs.block_leaves == cs.height as u64 + 1 && shape, &format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
@@ -469,37 +452,52 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
     // HAZYNC_TRIE_DUMP, writes the trie guest's input (`zyncapp bench-trie`).
     if methods::TRIE {
         let text = String::from_utf8_lossy(&log);
-        let (mut rem, mut ins): (Vec<[u8; 64]>, Vec<[u8; 64]>) = (Vec::new(), Vec::new());
+        // the collect run's full update list: "trie: R <key> <spender words>" / "trie: I <key> <spent> <spender> <value>"
+        let hw = |x: &str| -> [u32; 8] { core::array::from_fn(|i| u32::from_str_radix(&x[8 * i..8 * i + 8], 16).expect("trie: spender hex")) };
+        let (mut marks, mut ins): (Vec<([u8; 64], [u32; 8])>, Vec<([u8; 64], Option<[u32; 8]>, u64)>) = (Vec::new(), Vec::new());
         for l in text.lines() {
-            let Some(i) = l.find("itree: ") else { continue };
-            let f: Vec<&str> = l[i + 7..].split_whitespace().collect();
-            if f.len() != 3 || f[0] != "1" { continue; }
-            let k: [u8; 64] = hx_bytes(f[2]).try_into().expect("trie key: 64 bytes");
-            if f[1] == "R" { rem.push(k) } else { ins.push(k) }
+            let Some(i) = l.find("trie: ") else { continue };
+            let f: Vec<&str> = l[i + 6..].split_whitespace().collect();
+            match f.as_slice() {
+                ["R", k, sp] => marks.push((hx_bytes(k).try_into().expect("trie key: 64 bytes"), hw(sp))),
+                ["I", k, fl, sp, v] => ins.push((hx_bytes(k).try_into().expect("trie key: 64 bytes"),
+                                                 (*fl == "1").then(|| hw(sp)), v.parse().expect("trie: value"))),
+                _ => {}
+            }
         }
         let envu = |k: &str, d: u64| -> u64 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
-        // HAZYNC_TTREE_ADDRS addresses (default the coin log's modelled size), each address the block spends from
-        // holding HAZYNC_TTREE_SUB other coins (default 2); counts on unless HAZYNC_TTREE_COUNTS=0
+        // MEASUREMENT: the old trie is synthesised around the block's keys (HAZYNC_TTREE_ADDRS addresses, default the
+        // coin log's modelled size; HAZYNC_TTREE_SUB other coins under each spent-from address, default 2), and the test
+        // anchor's trie root is set to it. A production host serves the witness from its trie store instead (E2 step 3).
         let (addrs, sub) = (envu("HAZYNC_TTREE_ADDRS", n), envu("HAZYNC_TTREE_SUB", 2));
         let counts = envu("HAZYNC_TTREE_COUNTS", 1) == 1;
-        println!("  trie: {} marks, {} inserts (modelled {addrs} addresses, {sub} other coins per spent-from address)", rem.len(), ins.len());
-        if let Ok(path) = std::env::var("HAZYNC_TRIE_DUMP") {
-            let (root, tr) = libzync::trie_model::synth(&rem, &ins, addrs, sub, counts, 0x5eed + 1);
-            let wit = libzync::trie_model::encode(counts, &root, &tr);
-            let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
-            // [marks, inserts, witness words, order words], keys as 16 BE words, the witness, the update order
-            // (perm[j] = index of the j-th smallest key; the trie guest checks it)
-            let ks: Vec<_> = rem.iter().chain(ins.iter()).map(libzync::ttree::split).collect();
-            let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
-            perm.sort_by(|&a, &b| ks[a as usize].cmp(&ks[b as usize]));
-            let mut d: Vec<u32> = vec![rem.len() as u32, ins.len() as u32, wit.len() as u32, perm.len() as u32];
-            for k in rem.iter().chain(ins.iter()) { d.extend(kw(k)); }
-            d.extend_from_slice(&wit);
-            d.extend_from_slice(&perm);
-            let b: Vec<u8> = d.iter().flat_map(|x| x.to_le_bytes()).collect();
-            std::fs::write(&path, b).expect("HAZYNC_TRIE_DUMP");
-            println!("  trie: witness {} words, dumped the trie guest's input to {path}", wit.len());
-        }
+        let rem: Vec<[u8; 64]> = marks.iter().map(|x| x.0).collect();
+        let ink: Vec<[u8; 64]> = ins.iter().map(|x| x.0).collect();
+        let (root, tr) = libzync::trie_model::synth(&rem, &ink, addrs, sub, counts, 0x5eed + 1);
+        let wit = libzync::trie_model::encode(counts, &root, &tr);
+        let ks: Vec<_> = rem.iter().chain(ink.iter()).map(libzync::ttree::split).collect();
+        let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
+        perm.sort_by(|&a, &b| ks[a as usize].cmp(&ks[b as usize]));
+        let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
+        let mut mw: Vec<u32> = Vec::with_capacity(marks.len() * 24);
+        for (k, sp) in &marks { mw.extend(kw(k)); mw.extend_from_slice(sp); }
+        let mut iw: Vec<u32> = Vec::with_capacity(ins.len() * 27);
+        for (k, sp, v) in &ins { iw.extend(kw(k)); iw.push(sp.is_some() as u32); iw.extend_from_slice(&sp.unwrap_or([0; 8])); iw.push(*v as u32); iw.push((*v >> 32) as u32); }
+        let mut b = ExecutorEnv::builder();
+        b.segment_limit_po2(seg_po2());
+        b.write(&17u32).unwrap();
+        b.write_slice(&[wit.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32]);
+        b.write_slice(&wit);
+        if !mw.is_empty() { b.write_slice(&mw); }
+        if !iw.is_empty() { b.write_slice(&iw); }
+        if !perm.is_empty() { b.write_slice(&perm); }
+        let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("trie update (mode 17) failed: {e}"));
+        println!("  trie: {} marks, {} inserts, witness {} words; trie update executed: {} cycles, padded {} ({} segments)",
+                 marks.len(), ins.len(), wit.len(), t.cycles, t.padded, t.segments);
+        let claim = t.receipt_claim.expect("trie session has no receipt claim");
+        *TRIE_RCPT.lock().unwrap() = Some(risc0_zkvm::Receipt::new(
+            risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)), t.journal.bytes.clone()));
+        anchor.ss_hints = libzync::coinlog::h_of(&root);
     }
     println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
     anchor.utxo_roots = roots.clone();
@@ -557,6 +555,14 @@ pub(crate) fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &Block
         b.write(&((order.len() / 2) as u32)).unwrap();
         if !order.is_empty() { b.write_slice(&order); }
     }
+    // E2: the trie receipt's journal (empty in a collect run), its receipt an assumption the aggregate verifies
+    if methods::TRIE {
+        let r = if bundle.is_none() { None } else { TRIE_RCPT.lock().unwrap().clone() };
+        let tj: Vec<u32> = r.as_ref().map(|r| r.journal.bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()).unwrap_or_default();
+        b.write(&(tj.len() as u32)).unwrap();
+        if !tj.is_empty() { b.write_slice(&tj); }
+        if let Some(r) = r { b.add_assumption(r); }
+    }
     match &bundle {
         Some(bd) => println!("  libzync: {} bytes of ECMH hints, no hints file", bd.ecmh.len()),
         None => println!("  libzync: ECMH COLLECT (no bundle)"),
@@ -574,12 +580,17 @@ pub(crate) static LZ_IMAGE: std::sync::OnceLock<risc0_binfmt::MemoryImage> = std
 pub(crate) struct Exec {
     pub(crate) journal: risc0_zkvm::Journal,
     receipt_claim: Option<risc0_zkvm::ReceiptClaim>,
+    /// user cycles, padded (proven) cycles, segments
+    pub(crate) cycles: u64,
+    pub(crate) padded: u64,
+    pub(crate) segments: usize,
 }
 
 pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
     if std::env::var("RISC0_PPROF_OUT").is_ok() {
         let s = default_executor().execute(env, METHOD_ELF).map_err(|e| e.to_string())?;
-        return Ok(Exec { journal: s.journal, receipt_claim: s.receipt_claim });
+        let padded = s.segments.iter().map(|g| 1u64 << g.po2).sum();
+        return Ok(Exec { cycles: s.cycles(), padded, segments: s.segments.len(), journal: s.journal, receipt_claim: s.receipt_claim });
     }
     let image = LZ_IMAGE.get_or_init(|| {
         risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image")
@@ -588,7 +599,9 @@ pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
         .run_with_callback(|_| Ok(Box::new(risc0_zkvm::NullSegmentRef)))
         .map_err(|e| e.to_string())?;
     let claim = session.claim().map_err(|e| e.to_string())?;
-    Ok(Exec { journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim) })
+    // Session::total_cycles = every segment padded to its power of two (what proving pays)
+    let padded = session.total_cycles;
+    Ok(Exec { cycles: session.user_cycles, padded, segments: session.segments.len(), journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim) })
 }
 
 /// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
@@ -1048,6 +1061,8 @@ pub(crate) struct ClHost {
 }
 pub(crate) static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
 pub(crate) static CL_WIT: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+/// E2: the block's trie receipt (guest mode 17) for the aggregate (measurement: executed, a FakeReceipt).
+pub(crate) static TRIE_RCPT: std::sync::Mutex<Option<risc0_zkvm::Receipt>> = std::sync::Mutex::new(None);
 
 /// `state_<h>.json` -> `state_<h>.coinlog`; `anchor.json` -> `anchor.coinlog`.
 pub(crate) fn cl_path_for(state_json: &str) -> String {

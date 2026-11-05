@@ -18,7 +18,6 @@ serde = { version = "1.0", features = ["derive"] }
 bitcoin = "0.32"
 bincode = "1"
 num-bigint = "0.4"
-hintsfile = "0.2.0"
 # libzync: the hint formats, producers and network parameters shared with the guest (one copy).
 libzync = { path = "../../libzync" }
 # libzync laptop tools: build the guest memory image once per process (lz_execute). Already in the lock.

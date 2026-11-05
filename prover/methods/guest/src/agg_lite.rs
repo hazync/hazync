@@ -37,12 +37,11 @@ pub const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 static mut LOG_WITNESS: Vec<u32> = Vec::new();
 pub fn set_log_witness(w: Vec<u32>) { unsafe { LOG_WITNESS = w } }
 
-// The trie's update-list digest, committed after the ChainState (E2 binds it to the trie receipt).
+// E2: the block's trie receipt journal (guest mode 17), verified by the aggregate before this runs.
 #[cfg(feature = "trie")]
-static mut TREE_OUT: Vec<u32> = Vec::new();
+static mut TRIE_J: Vec<u32> = Vec::new();
 #[cfg(feature = "trie")]
-#[allow(static_mut_refs)]
-pub fn tree_out() -> &'static [u32] { unsafe { &TREE_OUT } }
+pub fn set_trie_journal(w: Vec<u32>) { unsafe { TRIE_J = w } }
 
 /// trie: a transaction's input outpoints and output scriptPubKey ranges, from its serialization (witness or not).
 #[cfg(feature = "trie")]
@@ -655,6 +654,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // coinlog: every coin the block creates and does not spend is appended in block order; the earlier coins it spends
     // are flipped in the log at the positions the witness names. A collect run (no witness yet) logs both lists for the
     // host instead and commits no state.
+    // E2: the counting trie's root, carried in the chain state's former hint-hash slot (an empty trie's root is zero)
+    #[allow(unused_mut)]
+    let mut trie_root: [u8; 32] = prev_hints;
     let (next_roots, next_leaves, survivor_value, spent_value) = {
         let mut appends: Vec<[u8; 32]> = Vec::with_capacity(output_leaves.len());
         let mut survivor_value: u64 = 0;
@@ -716,18 +718,35 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
             let marks: Vec<(ttree::Key, coinlog::W)> = ext_keys.iter().zip(ext.iter())
                 .map(|(k, (_, tx, vin))| (mk(k), coinlog::w_of(&coinlog::spender(w.height, *tx, *vin)))).collect();
             if swiftsync::collecting() {
-                for (k, _) in &marks { env::log(&alloc::format!("itree: 1 R {}", hex64(k))); }
-                for (k, _, _) in &hins { env::log(&alloc::format!("itree: 1 I {}", hex64(k))); }
+                // the whole list, for the host's trie update (mode 17): key, then spender words / spent flag + value
+                let hw = |w: &coinlog::W| -> alloc::string::String { w.iter().map(|x| alloc::format!("{x:08x}")).collect() };
+                for (k, sp) in &marks { env::log(&alloc::format!("trie: R {} {}", hex64(k), hw(sp))); }
+                for (k, sp, v) in &hins {
+                    env::log(&alloc::format!("trie: I {} {} {} {v}", hex64(k), sp.is_some() as u32, hw(&sp.unwrap_or([0; 8]))));
+                }
             } else {
+                // The trie receipt must start from the chain's trie root and apply exactly this list.
                 let dg = ttree::list_digest(&marks, &hins);
                 #[allow(static_mut_refs)]
-                unsafe { TREE_OUT.push(1); TREE_OUT.extend(dg.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()))); }
+                let tj = unsafe { &TRIE_J };
+                let prev_root = coinlog::w_of(&trie_root);
+                let jd: alloc::vec::Vec<u32> = dg.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+                if tj.len() != ttree::TRIE_JOURNAL_WORDS || tj[0] != ttree::KIND_TRIE {
+                    env::log("agg-lite: REJECT no trie receipt for this block"); all_ok = false;
+                } else if tj[1..9] != prev_root[..] {
+                    env::log("agg-lite: REJECT the trie receipt does not start from the chain's trie root"); all_ok = false;
+                } else if tj[17..25] != jd[..] {
+                    env::log("agg-lite: REJECT the trie receipt applies a different update list"); all_ok = false;
+                } else {
+                    let nr: coinlog::W = tj[9..17].try_into().unwrap();
+                    trie_root = coinlog::h_of(&nr);
+                }
             }
         }
         (normalize(roots), n, survivor_value, total_in.saturating_sub(in_block_spent))
     };
     swiftsync::report();
-    let ss_hints = prev_hints;
+    let ss_hints = trie_root;
 
     let pow_ok = unsafe { check_pow(w.header.as_ptr()) } == 1;
     let mut mroot = [0u8; 32];
