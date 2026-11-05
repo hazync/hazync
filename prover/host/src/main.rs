@@ -2270,7 +2270,7 @@ fn main() {
 #[cfg(test)]
 mod smt_bridge {
     use super::*;
-    use hazync_coinbase_smt::bip30::{apply_block, BlockUpdate, Spend};
+    use hazync_coinbase_smt::bip30::{apply_block, BlockUpdate, Spend, TrackedTx, REPEATABLE, SPENT};
 
     fn txid(n: u64) -> [u8; 32] {
         use sha2::{Digest, Sha256};
@@ -2281,15 +2281,17 @@ mod smt_bridge {
 
     fn to_update(cb: [u8; 32], nout: u32, w: &SmtBlockWitness) -> BlockUpdate {
         BlockUpdate {
-            coinbase_prior: None,
-            tracked: Vec::new(),
+            coinbase_prior: w.coinbase_prior,
+            tracked: w.tracked.iter()
+                .map(|t| TrackedTx { txid: t.txid, outputs: t.outputs, prior: t.prior, proof: t.proof.clone() })
+                .collect(),
             coinbase_txid: cb,
             coinbase_outputs: nout,
             absence_proof: w.absence_proof.clone(),
             overwrite: w.smt_overwrite,
             spends: w.spends.iter()
                 .map(|s| Spend { coinbase_txid: s.coinbase_txid, current_count: s.current_count,
-                                 proof: s.proof.clone(), tracked: false })
+                                 proof: s.proof.clone(), tracked: s.tracked })
                 .collect(),
         }
     }
@@ -2374,24 +2376,33 @@ mod smt_bridge {
                 "a duplicate of an UNSPENT coinbase was accepted outside the two grandfathered blocks");
     }
 
-    /// The two historical duplicates, in shape: once the earlier coinbase is fully spent, the later
-    /// one is an ordinary insert. This is what retires the F3 grandfathered-overwrite special case.
+    /// BIP30 since libzync #26 (29188b5), exact: a fully spent coinbase may be duplicated only if it is TRACKED (one that
+    /// can ever repeat: pre-BIP34, indicating a later height, or itself a repeat). Spent to zero it is held REPEATABLE and
+    /// the duplicate is an ordinary insert; an untracked one is held SPENT and a duplicate is refused (on chain it cannot
+    /// occur: its txid can never be produced again). This test asserted the pre-#26 rule (any fully spent coinbase may
+    /// repeat) until review round 2 (11-05).
     #[test]
-    fn a_fully_spent_coinbase_can_be_duplicated_with_no_special_case() {
-        let mut bridge = Smt::new();
-        let dup = txid(91812);
-        let w0 = smt_advance(&mut bridge, dup, 1, &[], false).0;
-        let mut root = apply_block(&Smt::new().root(), &to_update(dup, 1, &w0)).unwrap();
+    fn a_fully_spent_coinbase_repeats_only_if_tracked() {
+        for tracked in [true, false] {
+            let mut bridge = Smt::new();
+            let dup = txid(91812);
+            let w0 = smt_advance(&mut bridge, dup, 1, &[], false).0;
+            let mut root = apply_block(&Smt::new().root(), &to_update(dup, 1, &w0)).unwrap();
 
-        // Spend it to zero via an ordinary later block.
-        let w1 = smt_advance(&mut bridge, txid(999), 1, &[dup], false).0;
-        root = apply_block(&root, &to_update(txid(999), 1, &w1)).unwrap();
+            // Spend it to zero via an ordinary later block.
+            let w1 = smt_advance_ex(&mut bridge, txid(999), 1, &[dup], false, &[tracked], &[]).0;
+            root = apply_block(&root, &to_update(txid(999), 1, &w1)).unwrap();
+            assert_eq!(bridge.get(&dup), Some(if tracked { REPEATABLE } else { SPENT }));
 
-        // Now the duplicate is legal.
-        let w2 = smt_advance(&mut bridge, dup, 1, &[], false).0;
-        root = apply_block(&root, &to_update(dup, 1, &w2))
-            .expect("duplicating a fully-spent coinbase was rejected — this is legal under BIP30");
-        assert_eq!(root, bridge.root());
+            let w2 = smt_advance(&mut bridge, dup, 1, &[], false).0;
+            let r = apply_block(&root, &to_update(dup, 1, &w2));
+            if tracked {
+                assert_eq!(w2.coinbase_prior, Some(REPEATABLE));
+                assert_eq!(r.expect("duplicating a fully spent TRACKED coinbase was rejected (legal under BIP30)"), bridge.root());
+            } else {
+                assert!(r.is_err(), "a duplicate of an untracked (SPENT) coinbase was accepted");
+            }
+        }
     }
 }
 
