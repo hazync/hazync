@@ -479,6 +479,10 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
         perm.sort_by(|&a, &b| ks[a as usize].cmp(&ks[b as usize]));
         let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
+        // Negative controls (test-only), HAZYNC_TEST_TRIE: "list" = the receipt applies a different update list (one
+        // spender changed), "root" = the chain's trie root is not the receipt's old root, "none" = no receipt at all.
+        let neg = std::env::var("HAZYNC_TEST_TRIE").unwrap_or_default();
+        if neg == "list" && !marks.is_empty() { marks[0].1[0] ^= 1; }
         let mut mw: Vec<u32> = Vec::with_capacity(marks.len() * 24);
         for (k, sp) in &marks { mw.extend(kw(k)); mw.extend_from_slice(sp); }
         let mut iw: Vec<u32> = Vec::with_capacity(ins.len() * 27);
@@ -495,9 +499,11 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         println!("  trie: {} marks, {} inserts, witness {} words; trie update executed: {} cycles, padded {} ({} segments)",
                  marks.len(), ins.len(), wit.len(), t.cycles, t.padded, t.segments);
         let claim = t.receipt_claim.expect("trie session has no receipt claim");
-        *TRIE_RCPT.lock().unwrap() = Some(risc0_zkvm::Receipt::new(
-            risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)), t.journal.bytes.clone()));
+        *TRIE_RCPT.lock().unwrap() = if neg == "none" { None } else { Some(risc0_zkvm::Receipt::new(
+            risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)), t.journal.bytes.clone())) };
         anchor.ss_hints = libzync::coinlog::h_of(&root);
+        if neg == "root" { anchor.ss_hints[0] ^= 1; }
+        if !neg.is_empty() { println!("  trie: NEGATIVE CONTROL HAZYNC_TEST_TRIE={neg}"); }
     }
     println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
     anchor.utxo_roots = roots.clone();
