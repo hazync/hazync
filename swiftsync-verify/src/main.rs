@@ -23,6 +23,9 @@
 //! A failed identity check is FAIL. With none of them the verdict says the identity was NOT checked and prints the hash.
 //!
 //! `--coinlog`: the image is a coin-log build (docs/libzync/COINLOG.md, profile bit 4). It has no hints file: pass `-`.
+//! `--product`: the product image (coin log, counting trie, live-coin hash; profile bits 4-6). No hints file: pass `-`.
+//! `--trie <fact.json>` (repeat): a counting-trie fact at the tip (coin unspent / spent by / absent, a script's balance,
+//! its complete history), as `zync-path trie` writes it; checked against the verified state's trie root.
 //!
 //! A proof whose chainwork is below Core's `nMinimumChainWork` for the network is at best DEMO (exit 2): a valid chain
 //! from genesis, but a low-work fork costs little to mine, so it is no evidence of the network's chain.
@@ -36,7 +39,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--coin <fact.json>]... [--journey <journey.json>]... <receipt|bundle.sspf> <file.hints | - with --coinlog>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf> <file.hints | - with --coinlog>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <file.hints> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
@@ -63,6 +66,8 @@ fn main() {
     let mut now_arg: Option<String> = None;
     let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
     let mut coinlog = false;
+    let mut product = false;
+    let mut trie_facts: Vec<String> = Vec::new();
     let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
     let mut coin_facts: Vec<String> = Vec::new();
     let mut journeys: Vec<String> = Vec::new();
@@ -75,6 +80,8 @@ fn main() {
             "--image" => image_hex = Some(args.next().unwrap_or_else(|| usage())),
             "--now" => now_arg = Some(args.next().unwrap_or_else(|| usage())),
             "--coinlog" => coinlog = true,
+            "--product" => { coinlog = true; product = true }
+            "--trie" => trie_facts.push(args.next().unwrap_or_else(|| usage())),
             "--expect" => expect = Some(args.next().unwrap_or_else(|| usage())),
             "--mempool" => mempool = Some(String::new()),
             "--mempool-url" => mempool = Some(args.next().unwrap_or_else(|| usage())),
@@ -107,7 +114,9 @@ fn main() {
     if !handovers.is_empty() {
         image = image.with_lineage(handovers);
     }
-    if coinlog {
+    if product {
+        image = image.with_product();
+    } else if coinlog {
         image = image.with_coinlog();
     }
     // `-` is "no hints file", and only a coin-log image has none.
@@ -201,13 +210,22 @@ fn main() {
         // Facts are checked only against a state whose receipt verified: on a failed receipt the journal is the
         // prover's word, so a fact "holding" against it means nothing (review 11-03).
         let receipt_failed = rep.verdict == Verdict::Fail;
-        n_facts = coin_facts.len() + journeys.len();
+        n_facts = coin_facts.len() + journeys.len() + trie_facts.len();
         if receipt_failed {
-            for p in coin_facts.iter().chain(journeys.iter()) {
+            for p in coin_facts.iter().chain(journeys.iter()).chain(trie_facts.iter()) {
                 rep.checks.push((false, format!("{}: NOT checked: the receipt did not verify", esc(p))));
             }
             coin_facts.clear();
             journeys.clear();
+            trie_facts.clear();
+        }
+        for p in &trie_facts {
+            let f: Result<swiftsync_verify::TrieFact, String> = std::fs::read(p).map_err(|e| e.to_string())
+                .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
+            match f.and_then(|f| swiftsync_verify::check_trie_fact(cs, &f)) {
+                Ok(line) => rep.checks.push((true, format!("--trie {}: {line}", esc(p)))),
+                Err(e) => rep.checks.push((false, format!("--trie {}: {e}", esc(p)))),
+            }
         }
         for p in &coin_facts {
             let f: Result<swiftsync_verify::CoinFact, String> = std::fs::read(p).map_err(|e| e.to_string())
@@ -237,6 +255,10 @@ fn main() {
         println!("  chain: tip {} at height {}, cum_work 0x{}", display(&cs.tip_hash), cs.height, work_hex(&cs.cum_work));
         if coinlog {
             println!("  coin log: {} coins ever appended, {} sat live (COINLOG.md)", cs.utxo_leaves, cs.utxo_value);
+            if product {
+                println!("  counting trie root: {} (absence, history, balances: --trie)", hex(&cs.ss_hints));
+                println!("  live-coin hash: {} coins (instant IBD: a downloaded UTXO set must hash to it)", cs.ss_set);
+            }
         } else {
             println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);
         }

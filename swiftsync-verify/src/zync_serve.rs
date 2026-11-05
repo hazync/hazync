@@ -6,6 +6,11 @@
 //!   GET /tip                      {"tip": h}
 //!   GET /coin/<at>/<position>     CoinFact (at = tip for the state now, or an earlier height)
 //!   GET /find/<coin leaf hex>     {"position": p}
+//! With a trie snapshot (`zync-serve <history.bin> <addr:port> <state_<tip>.trie>`), counting-trie facts at the tip
+//! (TrieFact, checked with `swiftsync-verify --trie`):
+//!   GET /trie/coin/<scriptPubKey hex>/<txid>/<vout>   unspent / spent by / absent
+//!   GET /trie/balance/<scriptPubKey hex>              unspent count and value
+//!   GET /trie/history/<scriptPubKey hex>              every coin ever paid to the script
 use libzync::history::{block_path, decode_all, replay, Rec};
 use std::io::{BufRead, BufReader, Write};
 // ⚠ Single-threaded, and /coin replays the history per request: a production service caches the tip replay (C1).
@@ -29,7 +34,7 @@ fn fact(recs: &[Rec], tip: u32, at: u32, pos: u64) -> Result<String, String> {
     Ok(serde_json::to_string(&f).unwrap())
 }
 
-fn answer(recs: &[Rec], tip: u32, coins: &[[u8; 32]], path: &str) -> (u16, String) {
+fn answer(recs: &[Rec], tip: u32, coins: &[[u8; 32]], trie: Option<&libzync::trie_store::TrieStore>, path: &str) -> (u16, String) {
     let p: Vec<&str> = path.trim_matches('/').split('/').collect();
     let err = |c: u16, m: String| (c, serde_json::json!({ "error": m }).to_string());
     match p.as_slice() {
@@ -45,19 +50,38 @@ fn answer(recs: &[Rec], tip: u32, coins: &[[u8; 32]], path: &str) -> (u16, Strin
             },
             None => err(400, "want 64 hex digits".into()),
         },
+        ["trie", kind, spk, rest @ ..] => {
+            let Some(t) = trie else { return err(404, "no trie snapshot loaded".into()) };
+            let Some(spk) = swiftsync_verify::unhex(spk) else { return err(400, "scriptPubKey: not hex".into()) };
+            let (txid, vout) = match (*kind, rest) {
+                ("coin", [txid, vout]) => match vout.parse() { Ok(v) => (Some(*txid), Some(v)), Err(_) => return err(400, "vout?".into()) },
+                ("balance" | "history", []) => (None, None),
+                _ => return err(400, "want /trie/coin/<spk>/<txid>/<vout>, /trie/balance/<spk> or /trie/history/<spk>".into()),
+            };
+            match swiftsync_verify::make_trie_fact(t, kind, &spk, txid, vout) {
+                Ok(f) => (200, serde_json::to_string(&f).unwrap()),
+                Err(e) => err(400, e),
+            }
+        }
         _ => err(404, "unknown path".into()),
     }
 }
 
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
-    if a.len() != 2 {
-        eprintln!("usage: zync-serve <history.bin> <addr:port>");
+    if a.len() != 2 && a.len() != 3 {
+        eprintln!("usage: zync-serve <history.bin> <addr:port> [state_<tip>.trie]");
         std::process::exit(1);
     }
     let recs = decode_all(&std::fs::read(&a[0]).unwrap_or_else(|e| panic!("{}: {e}", a[0]))).unwrap_or_else(|e| panic!("{e}"));
     let tip = recs.len().checked_sub(1).expect("empty history") as u32;
     let coins = replay(&recs, tip, tip).unwrap().coins;
+    let trie = a.get(2).map(|p| {
+        let t = libzync::trie_store::TrieStore::from_bytes(&std::fs::read(p).unwrap_or_else(|e| panic!("{p}: {e}")))
+            .unwrap_or_else(|e| panic!("{p}: not a trie snapshot ({e:?})"));
+        assert_eq!(t.height, tip as u64, "{p}: the trie snapshot is at {}, the history's tip is {tip}", t.height);
+        t
+    });
     let l = std::net::TcpListener::bind(&a[1]).unwrap_or_else(|e| panic!("{}: {e}", a[1]));
     eprintln!("zync-serve: tip {tip}, {} coins, listening on {}", coins.len(), a[1]);
     for s in l.incoming().flatten() {
@@ -70,7 +94,7 @@ fn main() {
             continue;
         }
         let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
-        let (code, body) = if line.starts_with("GET ") { answer(&recs, tip, &coins, &path) } else { (405, "{}".into()) };
+        let (code, body) = if line.starts_with("GET ") { answer(&recs, tip, &coins, trie.as_ref(), &path) } else { (405, "{}".into()) };
         let mut w = &s;
         let _ = write!(w, "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     }
@@ -88,13 +112,13 @@ mod tests {
             Rec { height: 2, hash: h(7), value: 5, flips: vec![(0, 1, 0)], appends: vec![] },
         ];
         let coins = replay(&recs, 2, 2).unwrap().coins;
-        assert_eq!(answer(&recs, 2, &coins, "/tip").1, "{\"tip\":2}");
-        let (c, b) = answer(&recs, 2, &coins, "/coin/2/0");
+        assert_eq!(answer(&recs, 2, &coins, None, "/tip").1, "{\"tip\":2}");
+        let (c, b) = answer(&recs, 2, &coins, None, "/coin/2/0");
         assert_eq!(c, 200);
         let f: CoinFact = serde_json::from_str(&b).unwrap();
         assert_eq!(f.spent_by, Some((2, 1, 0)));
-        assert_eq!(answer(&recs, 2, &coins, &format!("/find/{}", hex(&h(2)))).1, "{\"position\":1}");
-        assert_eq!(answer(&recs, 2, &coins, "/coin/2/9").0, 404);
-        assert_eq!(answer(&recs, 2, &coins, "/coin/1/0").0, 200);
+        assert_eq!(answer(&recs, 2, &coins, None, &format!("/find/{}", hex(&h(2)))).1, "{\"position\":1}");
+        assert_eq!(answer(&recs, 2, &coins, None, "/coin/2/9").0, 404);
+        assert_eq!(answer(&recs, 2, &coins, None, "/coin/1/0").0, 200);
     }
 }

@@ -4,6 +4,8 @@
 //!
 //!   zync-path coin <history.bin> <tip> <at> <position>      the coin at a log position, its state after height <at>
 //!   zync-path find <history.bin> <tip> <coin leaf hex>       the log position of a coin leaf
+//!   zync-path trie coin|balance|history <state_<h>.trie> <scriptPubKey hex> [<txid> <vout>]
+//!                                                            a counting-trie fact at h (swiftsync-verify --trie)
 //!   zync-path journey <history.bin> <tip> <position> --bitcoin-cli "<cmd>"
 //!                                                            created-by tx, state at the tip, spent-by tx
 //!
@@ -56,6 +58,16 @@ fn main() {
             }
         }
         Some("journey") => journey(&a),
+        // zync-path trie coin|balance|history <state_h.trie> <scriptPubKey hex> [<txid> <vout>]
+        Some("trie") => {
+            let kind = a.get(1).unwrap_or_else(|| die("trie: coin, balance or history?"));
+            let b = std::fs::read(a.get(2).unwrap_or_else(|| die("trie: state_<h>.trie?"))).unwrap_or_else(|e| die(&e.to_string()));
+            let st = libzync::trie_store::TrieStore::from_bytes(&b).unwrap_or_else(|e| die(&format!("not a trie snapshot ({e:?})")));
+            let spk = swiftsync_verify::unhex(a.get(3).unwrap_or_else(|| die("trie: scriptPubKey hex?"))).unwrap_or_else(|| die("scriptPubKey: not hex"));
+            let f = swiftsync_verify::make_trie_fact(&st, kind, &spk, a.get(4).map(|x| x.as_str()), a.get(5).map(|x| x.parse().unwrap_or_else(|_| die("vout?"))))
+                .unwrap_or_else(|e| die(&e));
+            println!("{}", serde_json::to_string_pretty(&f).unwrap());
+        }
         _ => die("usage: zync-path coin <history.bin> <tip> <at> <pos> | zync-path find <history.bin> <tip> <coin leaf hex>"),
     }
 }

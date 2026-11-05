@@ -57,6 +57,10 @@ pub const PROFILE_ASSUMEVALID: u32 = 2;
 pub const PROFILE_SIGNET: u32 = 4;
 /// The coin log (docs/libzync/COINLOG.md): no hints file, sound at every block.
 pub const PROFILE_COINLOG: u32 = 16;
+/// The counting trie (libzync/src/ttree.rs): `ss_hints` is its root; absence, history and balance facts ([`TrieFact`]).
+pub const PROFILE_TRIE: u32 = 32;
+/// The live-coin multiset hash (instant IBD): `ss_set` / `ss_acc` hash the unspent coins.
+pub const PROFILE_UTXOHASH: u32 = 64;
 /// Core's MAX_FUTURE_BLOCK_TIME.
 pub const MAX_FUTURE_BLOCK_TIME: u64 = 2 * 60 * 60;
 
@@ -104,6 +108,10 @@ impl Image {
     /// The same image built as the coin log (profile bit 4, docs/libzync/COINLOG.md): no hints file.
     pub fn with_coinlog(&'static self) -> &'static Image {
         Box::leak(Box::new(Image { profile: self.profile | PROFILE_COINLOG, ..*self }))
+    }
+    /// The product image (E2): coin log, counting trie and live-coin hash (profile bits 4, 5, 6). No hints file.
+    pub fn with_product(&'static self) -> &'static Image {
+        Box::leak(Box::new(Image { profile: self.profile | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH, ..*self }))
     }
     pub fn method_id(&self) -> Digest {
         Digest::from_bytes(hex32(self.method_id_hex).expect("IMAGES holds valid hex"))
@@ -356,7 +364,13 @@ pub fn verify(inp: &Inputs) -> Report {
     // Step 10, then 4-6: the file. A coin-log image has none: its commitment is sound at every block.
     if inp.image.profile & PROFILE_COINLOG != 0 {
         rep.check(inp.hints.is_empty(), "a coin-log proof takes no hints file");
-        rep.check(cs.ss_set == 0 && cs.ss_hints == [0; 32], "SwiftSync fields unused (ss_set == 0, ss_hints == 0)");
+        // The former SwiftSync fields: the live-coin hash (bit 6) and the trie root (bit 5), or zero without them.
+        if inp.image.profile & PROFILE_UTXOHASH == 0 {
+            rep.check(cs.ss_set == 0 && cs.ss_acc == [0; 16], "live-coin hash unused in this image (ss_set == 0)");
+        }
+        if inp.image.profile & PROFILE_TRIE == 0 {
+            rep.check(cs.ss_hints == [0; 32], "trie root unused in this image (ss_hints == 0)");
+        }
     } else {
     match hints_file(inp.hints) {
         Err(e) => {
@@ -403,6 +417,8 @@ pub fn describe_profile(p: u32) -> String {
             if p & PROFILE_ASSUMEVALID != 0 { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" },
             if p & PROFILE_SIGNET != 0 { "signet" } else if p & 8 != 0 { "regtest" } else { "mainnet" },
             if p & PROFILE_COINLOG != 0 { ", coin log" } else { "" })
+        + if p & PROFILE_TRIE != 0 { ", counting trie" } else { "" }
+        + if p & PROFILE_UTXOHASH != 0 { ", live-coin hash" } else { "" }
 }
 
 /// cum_work as 64 hex digits big-endian (chainwork as Core prints it).
@@ -604,6 +620,103 @@ pub fn check_coin_fact(cs: &ChainState, f: &CoinFact) -> Result<String, String> 
     }
 }
 
+/// A counting-trie fact (E2): a question about the proof's TIP and the trie proof that answers it (libzync::trie_fact).
+/// `zync-path trie ...` writes one from a run's `state_<h>.trie`; `swiftsync-verify --trie` checks it.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TrieFact {
+    /// "coin" (unspent / spent by / absent), "balance" (unspent count and value) or "history" (every coin ever paid)
+    pub kind: String,
+    /// The proof's tip the fact is about.
+    pub at: u32,
+    /// The output script, hex.
+    pub script_pubkey: String,
+    /// For "coin": the txid as block explorers print it, and the output index.
+    #[serde(default)]
+    pub txid: Option<String>,
+    #[serde(default)]
+    pub vout: Option<u32>,
+    /// The trie pruned to the question, as little-endian u32 words, hex.
+    pub proof: String,
+}
+
+fn coin_state_line(s: &libzync::trie_fact::CoinState) -> String {
+    use libzync::trie_fact::CoinState::*;
+    match s {
+        Absent => "ABSENT (never created)".into(),
+        Unspent { value } => format!("UNSPENT, {value} sat"),
+        Spent { value, by } => format!("SPENT at height {} by transaction {} input {}, {value} sat", by.height, by.tx, by.vin),
+    }
+}
+
+/// Checks a trie fact against a state that passed [`verify`] (and is a trie chain). Ok: what it proves.
+pub fn check_trie_fact(cs: &ChainState, f: &TrieFact) -> Result<String, String> {
+    use libzync::trie_fact as tf;
+    if cs.profile & PROFILE_TRIE == 0 {
+        return Err("the proof is not a counting-trie chain".into());
+    }
+    if f.at != cs.height {
+        return Err(format!("the fact is about height {}, the proof's tip is {} (trie facts are at the tip)", f.at, cs.height));
+    }
+    let spk = unhex(&f.script_pubkey).ok_or("script_pubkey: not hex")?;
+    let pb = unhex(&f.proof).ok_or("proof: not hex")?;
+    if pb.len() % 4 != 0 { return Err("proof: not whole words".into()); }
+    let proof: Vec<u32> = pb.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let root = libzync::coinlog::w_of(&cs.ss_hints);
+    let e = |x: tf::FactErr| format!("the trie proof does not hold against the proof's trie root ({x:?})");
+    let sh = tf::script_hash(&spk);
+    match f.kind.as_str() {
+        "coin" => {
+            let tx = f.txid.as_deref().and_then(|t| hex32(&t.to_lowercase())).ok_or("coin: txid (64 hex digits)")?;
+            let mut txid = tx;
+            txid.reverse();
+            let vout = f.vout.ok_or("coin: vout")?;
+            let s = tf::coin(&proof, &root, &tf::coin_key(&spk, &txid, vout)).map_err(e)?;
+            Ok(format!("coin {}:{vout} to script {} is {} at height {}", f.txid.as_deref().unwrap_or(""), f.script_pubkey, coin_state_line(&s), cs.height))
+        }
+        "balance" => Ok(match tf::balance(&proof, &root, &sh).map_err(e)? {
+            None => format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height),
+            Some(b) => format!("script {} holds {} unspent coin(s), {} sat, at height {}", f.script_pubkey, b.count, b.value, cs.height),
+        }),
+        "history" => Ok(match tf::history(&proof, &root, &sh).map_err(e)? {
+            None => format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height),
+            Some((b, coins)) => {
+                let spent = coins.iter().filter(|c| matches!(c.state, tf::CoinState::Spent { .. })).count();
+                format!("script {}: complete history at height {}: {} coin(s) ever paid, {spent} spent, {} unspent holding {} sat",
+                        f.script_pubkey, cs.height, coins.len(), b.count, b.value)
+            }
+        }),
+        k => Err(format!("kind {k:?}: want coin, balance or history")),
+    }
+}
+
+/// The producer side (zync-path / zync-serve): a [`TrieFact`] from a run's trie snapshot at its tip. `txid` as explorers
+/// print it. Holds no secret and proves nothing by itself: a wrong proof simply fails `check_trie_fact`.
+pub fn make_trie_fact(st: &libzync::trie_store::TrieStore, kind: &str, script_pubkey: &[u8], txid: Option<&str>, vout: Option<u32>)
+                      -> Result<TrieFact, String> {
+    use libzync::trie_fact as tf;
+    let proof = match kind {
+        "coin" => {
+            let mut t = txid.and_then(|t| hex32(&t.to_lowercase())).ok_or("coin: txid (64 hex digits)")?;
+            t.reverse();
+            st.prove_coins(&[tf::coin_key(script_pubkey, &t, vout.ok_or("coin: vout")?)])
+        }
+        "balance" => st.prove_addr(&tf::script_hash(script_pubkey)),
+        "history" => st.prove_history(&tf::script_hash(script_pubkey)),
+        k => return Err(format!("kind {k:?}: want coin, balance or history")),
+    };
+    Ok(TrieFact {
+        kind: kind.into(), at: st.height as u32, script_pubkey: hex(script_pubkey),
+        txid: txid.map(|t| t.to_lowercase()), vout,
+        proof: hex(&proof.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()),
+    })
+}
+
+/// Lower or upper case hex to bytes.
+pub fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 { return None; }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+}
+
 /// A transaction in a proven block (ZYNCAPPS.md §8): the block's header and coin state, its path in the proof's block
 /// forest, and the transaction's Merkle branch.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -622,13 +735,6 @@ pub struct TxFact {
     /// The block's coinbase (hex) and ITS branch: they bind the tree's depth (libzync::facts::tx_in_block).
     pub coinbase: String,
     pub coinbase_branch: Vec<String>,
-}
-
-fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
 }
 
 /// Checks that the transaction is at `index` of the block at `height` of the proven chain. Ok: its txid and parse.
@@ -705,6 +811,66 @@ fn normalize_roots(mut r: Vec<Option<[u8; 32]>>) -> Vec<Option<[u8; 32]>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real-run check (no receipt): HAZYNC_TRIE_STATE=<state_h.json> HAZYNC_TRIE_FACTS=<fact.json>,... cargo test -- --ignored
+    #[test]
+    #[ignore]
+    fn trie_facts_against_a_run_state() {
+        let st: ChainState = serde_json::from_slice(&std::fs::read(std::env::var("HAZYNC_TRIE_STATE").unwrap()).unwrap()).unwrap();
+        for p in std::env::var("HAZYNC_TRIE_FACTS").unwrap().split(',') {
+            let f: TrieFact = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+            println!("{p}: {}", check_trie_fact(&st, &f).unwrap());
+        }
+    }
+
+    #[test]
+    fn trie_facts_round_trip_and_refuse() {
+        use libzync::trie_fact::coin_key;
+        let a = b"\x00\x14aaaaaaaaaaaaaaaaaaaa".to_vec();
+        let txid_disp = "11".repeat(31) + "22";
+        let mut txid = hex32(&txid_disp).unwrap();
+        txid.reverse();
+        let sp = |h: u32| -> [u32; 8] { [h, 1, 0, 0, 0, 0, 0, 0] };
+        let mut st = libzync::trie_store::TrieStore::new(true);
+        st.apply(&[], &[(coin_key(&a, &txid, 0), None, 500), (coin_key(&a, &txid, 1), None, 70)]).unwrap();
+        st.apply(&[(coin_key(&a, &txid, 0), sp(2))], &[]).unwrap();
+        st.height = 2;
+        let mut cs = genesis_anchor(&IMAGES[0]);
+        cs.profile |= PROFILE_COINLOG | PROFILE_TRIE;
+        cs.height = 2;
+        cs.ss_hints = libzync::coinlog::h_of(&st.root());
+
+        let f = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(0)).unwrap();
+        let ok = check_trie_fact(&cs, &f).unwrap();
+        assert!(ok.contains("SPENT at height 2 by transaction 1 input 0, 500 sat"), "{ok}");
+        let f1 = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(1)).unwrap();
+        assert!(check_trie_fact(&cs, &f1).unwrap().contains("UNSPENT, 70 sat"));
+        let f9 = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(9)).unwrap();
+        assert!(check_trie_fact(&cs, &f9).unwrap().contains("ABSENT"));
+        let b = make_trie_fact(&st, "balance", &a, None, None).unwrap();
+        assert!(check_trie_fact(&cs, &b).unwrap().contains("1 unspent coin(s), 70 sat"));
+        let hst = make_trie_fact(&st, "history", &a, None, None).unwrap();
+        assert!(check_trie_fact(&cs, &hst).unwrap().contains("2 coin(s) ever paid, 1 spent"));
+        let n = make_trie_fact(&st, "balance", b"\x6a", None, None).unwrap();
+        assert!(check_trie_fact(&cs, &n).unwrap().contains("NEVER"));
+        // the fact's own claim (txid / vout / script) is what is checked, not the proof's: a swapped question fails
+        let mut sw = f.clone();
+        sw.vout = Some(1);
+        assert!(check_trie_fact(&cs, &sw).is_err(), "a coin proof answers only for its own coin");
+        // another root, another height, a chain without the trie: refused
+        let mut c2 = cs.clone();
+        c2.ss_hints[0] ^= 1;
+        assert!(check_trie_fact(&c2, &f).is_err());
+        let mut c3 = cs.clone();
+        c3.height = 3;
+        assert!(check_trie_fact(&c3, &f).is_err());
+        let mut c4 = cs.clone();
+        c4.profile &= !PROFILE_TRIE;
+        assert!(check_trie_fact(&c4, &f).is_err());
+        let mut bad = f.clone();
+        bad.proof.replace_range(8..10, if &bad.proof[8..10] == "00" { "01" } else { "00" });
+        assert!(check_trie_fact(&cs, &bad).is_err());
+    }
 
     #[test]
     fn coin_facts_from_history() {
