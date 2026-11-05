@@ -30,7 +30,7 @@ mod facts;
 struct ChainState {
     kind: u32, version: u32, tip_hash: [u8; 32], utxo_roots: Vec<Option<[u8; 32]>>, utxo_leaves: u64, utxo_value: u64,
     cum_work: [u8; 32], height: u32, prev_nbits: u32, prev_time: u32, epoch_start: u32, recent_times: Vec<u32>,
-    anchor_id: [u8; 32], self_id: [u32; 8], ss_set: u32, ss_acc: [u32; 16], ss_hints: [u8; 32], smt_root: [u8; 32],
+    anchor_id: [u8; 32], self_id: [u32; 8], live_set: u32, live_hash: [u32; 16], trie_root: [u8; 32], smt_root: [u8; 32],
     max_time: u32, profile: u32, block_roots: Vec<Option<[u8; 32]>>, block_leaves: u64, lineage: [u8; 32],
 }
 
@@ -81,7 +81,7 @@ fn main() {
     env::verify(core_id, &tip_journal).expect("the tip receipt does not verify under core_id");
     env::verify(core_id, &chunk_journal).expect("the chunk receipt does not verify under core_id");
     let j: ChainState = risc0_zkvm::serde::from_slice(&words(&tip_journal)).expect("tip journal is not a ChainState");
-    let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, ss_set: j.ss_set as u64 };
+    let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
     facts::check_core_statement(&st, &core_id, 2, if signet { facts::Network::Signet } else { facts::Network::Mainnet }, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
     let mut t = j.recent_times.clone();
     t.sort_unstable();

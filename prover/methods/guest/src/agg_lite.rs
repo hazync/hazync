@@ -387,11 +387,10 @@ compile_error!("libzync's aggregate keeps its coins in the coin log: build with 
 
 /// Aggregate side. Same checks, same order of SwiftSync operations, as `validate_block_staged`'s
 /// aggregation path, with every per-transaction fact taken from the chunk journals.
-/// `ss` = ((mode, nbits, packed bits), previous hint hash): design B's SwiftSync hint bits for this block,
-/// one per INDEXED output (see below), and the running hash they extend. mode 0 = no hints file.
+/// `prev_trie` = the previous chain state's counting-trie root (zero without the trie).
 #[inline(never)] // inlined, the aggregate ran ~1.08 M cycles dearer on 962,000 (HANDOVER.md §8)
 pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
-                           ss: (&(u32, u32, Vec<u32>), [u8; 32]), order: &[(u32, u32)]) -> BlockResult {
+                           prev_trie: [u8; 32], order: &[(u32, u32)]) -> BlockResult {
     let mut all_ok = true;
     assert!(w.header.len() == 80, "block header must be exactly 80 bytes, got {}", w.header.len());
     let block_time = u32::from_le_bytes(w.header[68..72].try_into().unwrap());
@@ -596,10 +595,6 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     if w.height >= bip30::REPEAT_HORIZON { all_ok = false; }
     if !all_ok { env::log(&format!("agg-lite: REJECT after the record walk (transactions={}, last covered={covered})", tx_pos)); }
 
-    // libzync takes no SwiftSync hints file (design B, removed 11-04 in E2c): the wire still carries the hint-bit field
-    // (mode 0) and the chain state its running hash (carried unchanged) until E2 reworks both.
-    let (&(ss_mode, _, _), prev_hints) = (ss.0, ss.1);
-    if ss_mode != 0 { env::log("agg-lite: REJECT libzync takes no hints file"); all_ok = false; }
     // The coins this block creates, by leaf: a hash table of output indices (E2a batch 2; it was a sort of 40-byte rows
     // and four binary-search passes). A repeated leaf keeps its FIRST output (lowest position), as the full path's
     // `entry().or_insert` does: outputs are inserted in block order and a present key is never replaced.
@@ -656,7 +651,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     // host instead and commits no state.
     // E2: the counting trie's root, carried in the chain state's former hint-hash slot (an empty trie's root is zero)
     #[allow(unused_mut)]
-    let mut trie_root: [u8; 32] = prev_hints;
+    let mut trie_root: [u8; 32] = prev_trie;
     let (next_roots, next_leaves, survivor_value, spent_value) = {
         let mut appends: Vec<[u8; 32]> = Vec::with_capacity(output_leaves.len());
         let mut survivor_value: u64 = 0;
@@ -746,7 +741,6 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         (normalize(roots), n, survivor_value, total_in.saturating_sub(in_block_spent))
     };
     swiftsync::report();
-    let ss_hints = trie_root;
 
     let pow_ok = unsafe { check_pow(w.header.as_ptr()) } == 1;
     let mut mroot = [0u8; 32];
@@ -847,7 +841,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         block_time,
         root_next_roots: next_roots,
         root_next_leaves: next_leaves,
-        ss_hints,
+        trie_root,
         survivor_value,
         spent_value,
         ..Default::default()

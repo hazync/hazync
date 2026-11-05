@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SwiftSync Proof Check</title>
+<title>Chain Proof Check</title>
 <style>
   :root { --bg: #fbfbf9; --fg: #1d1d1b; --muted: #5d5d58; --line: #d9d8d2; --ok: #1f7a3a; --bad: #b42318; --demo: #8a5a00; --card: #ffffff; }
   @media (prefers-color-scheme: dark) { :root { --bg: #151514; --fg: #ecebe6; --muted: #a3a29b; --line: #34332f; --ok: #5cc27b; --bad: #f2786a; --demo: #e0b354; --card: #1d1d1b; } }
@@ -30,8 +30,8 @@
 </head>
 <body>
 <main>
-  <h1>SwiftSync proof check</h1>
-  <p class="lede">Checks a libzync proof that a SwiftSync hints file is correct, on this device. Nothing is uploaded: the proof is verified by WebAssembly in this page.</p>
+  <h1>Chain proof check</h1>
+  <p class="lede">Checks a libzync chain proof on this device. Nothing is uploaded: the proof is verified by WebAssembly in this page.</p>
   <form id="f">
     <label>Network
       <select id="network"><option value="signet">signet</option><option value="mainnet">mainnet</option></select>
@@ -39,8 +39,8 @@
     <label>Proof <span>a receipt (.rcpt) or proof bundle (.sspf)</span>
       <input type="file" id="receipt" required>
     </label>
-    <label>Hints file <span>the SwiftSync hints file the proof is about</span>
-      <input type="file" id="hints" required>
+    <label>Image
+      <select id="img"><option value="product">product (coin log, counting trie, live-coin hash)</option><option value="coinlog">coin log only</option></select>
     </label>
     <label>Image id <span>optional: the id you rebuilt yourself; empty uses the built-in one shown below</span>
       <input type="text" id="image" placeholder="64 hex digits" spellcheck="false">
@@ -65,9 +65,9 @@ $('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('out').textContent = 'Checking…';
   const anchor = await bytes($('anchor'));
-  const r = v.verify({ network: $('network').value, receipt: await bytes($('receipt')), hints: await bytes($('hints')),
+  const r = v.verify({ network: $('network').value, image: $('img').value, receipt: await bytes($('receipt')),
     imageHex: $('image').value.trim(), anchorJson: anchor ? new TextDecoder().decode(anchor) : '' });
-  const words = { ok: 'OK: the hints file is proven correct for the chain below', demo: 'DEMO: consistent from the given anchor only, not a proof of the file', fail: 'FAIL' };
+  const words = { ok: 'OK: the chain below and its coin log are proven', demo: 'DEMO: a valid chain, but from the given anchor or below the minimum work: not shown to be the network\'s', fail: 'FAIL' };
   let html = `<div class="verdict v-${r.verdict}">${esc(words[r.verdict])}</div><ul class="checks">`;
   for (const c of r.checks) html += `<li class="${c.ok ? 'ok' : 'fail'}">[${c.ok ? 'ok' : 'FAIL'}] ${esc(c.what)}</li>`;
   html += '</ul>';

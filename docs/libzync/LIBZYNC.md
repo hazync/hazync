@@ -47,6 +47,10 @@ laptop execute mode. GPU figures are RunPod wall clock, with every receipt verif
 
 ### A proof SwiftSync can use
 
+> ⚠ **Retired in E2 (2026-11-05)** with design B: no proof takes a hints file now. The coin log (`COINLOG.md`) proves
+> every block; the chain state's former SwiftSync slots carry the counting trie's root (`trie_root`) and the live
+> coins' multiset hash (`live_set` / `live_hash`). This section and the design-B rows below are the record.
+
 - **Unmodified input:** the guest reads the **published `hintsfile` v0 format** (2140-dev/swiftsync,
   `utxohints.store`) unmodified.
 - **What a proof at height H commits:**
@@ -66,7 +70,7 @@ laptop execute mode. GPU figures are RunPod wall clock, with every receipt verif
 |---|---|
 | ~22 build flags, set identically at build time and at run time, or the input stream silently desynchronised | **one profile:** `HAZYNC_LIBZYNC=1` (or `assumevalid`), plus `HAZYNC_NETWORK=signet`. The host reads what the embedded guest was built for (`methods::LIBZYNC`, `NETWORK`) |
 | 4 hint streams (pubkey-Y, batch signatures, ECMH, SwiftSync bits), 3 file kinds per block, each with its own reader | **one hint block per guest run** (`libzync/src/wire.rs`) and **one bundle file per block** (`libzync::host::BlockBundle`) |
-| the SwiftSync hint hash computed two ways (guest and host) | one definition (`libzync/src/ss_hints.rs`), compiled into both |
+| the SwiftSync hint hash computed two ways (guest and host) | one definition (`libzync/src/ss_hints.rs`), compiled into both (removed with design B in E2) |
 | Core edits made by Python scripts rewriting a source tree in place | two reviewable patch files (`patches/libzync/0101`, `0102`) and `scripts/libzync-base.sh`, which rebuilds the exact tree from pinned upstream releases |
 | mainnet only | mainnet and **default signet** (§8) |
 

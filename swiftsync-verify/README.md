@@ -1,48 +1,47 @@
-# `swiftsync-verify`: check a proof that a SwiftSync hints file is correct
+# `swiftsync-verify`: check a libzync chain proof, and facts about the chain it proves
 
-A 1.8 MB standalone verifier for libzync proofs (`docs/libzync/SWIFTSYNC_PROOFS.md`). No prover, no Bitcoin Core
-build, no GPU, no chain data. It runs every check of the proposal's §5, and step 7 too if you point it at your node.
+A standalone verifier for libzync proofs. No prover, no Bitcoin Core build, no GPU, no chain data. It checks that the
+receipt proves the chain from genesis (with its coin log, and with the product image its counting trie and live-coin
+hash), and checks facts given with it against the proven state: coins (`--coin`, `--journey`) and counting-trie facts
+(`--trie`: a coin unspent / spent by / never created, a script's balance or complete history). The name is historical:
+the SwiftSync hints file (design B) was retired in E2 and no proof takes one.
 
 ```sh
 cargo build --release --manifest-path swiftsync-verify/Cargo.toml
-swiftsync-verify/target/release/swiftsync-verify --network signet proof.rcpt signet.hints
-swiftsync-verify/target/release/swiftsync-verify --network signet --bitcoin-cli "bitcoin-cli -signet" proof.rcpt signet.hints
+swiftsync-verify/target/release/swiftsync-verify --network signet --product proof.rcpt
+swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --mempool --trie fact.json proof.rcpt
 ```
 
 | verdict | exit | meaning |
 |---|---|---|
-| `SWIFTSYNC_VERIFY_OK` | 0 | a genesis-anchored proof: the file is exactly right for the chain printed, at its stop height |
-| `SWIFTSYNC_VERIFY_DEMO` | 2 | every check passed against a state given with `--anchor`: **never** a proof of the file |
+| `SWIFTSYNC_VERIFY_OK` | 0 | a genesis-anchored proof with enough work: the chain printed, and every fact given, hold |
+| `SWIFTSYNC_VERIFY_DEMO` | 2 | every check passed, but from a state given with `--anchor`, below the minimum work, or facts without the tip compared with the network |
 | `SWIFTSYNC_VERIFY_FAIL` | 1 | anything else, including unreadable input |
 
-**What it checks** (§5 of the proposal):
-1. the receipt is a real proof (no dev-mode `FakeReceipt`, `RISC0_DEV_MODE` unset) of image M;
-2. the journal is that image's `ChainState`;
-3. `anchor_id` is the network's genesis state for M (or the `--anchor` state, giving at most DEMO);
-4. to 6. the proof's height is the file's stop height, the ECMH total is the identity, and `ss_hints` is the
-   file's hint hash;
-7. with `--bitcoin-cli "<command>"`, your node's block at that height is the proven tip, with the same
-   chainwork; otherwise the tip and work are printed and the verdict line says step 7 was not run;
-8. to 11. the profile the image commits (scripts checked or not, network), canonical encoding of the file, and
-   `time-too-new` on this machine's clock.
+**What it checks:**
+1. the receipt is a real proof (no dev-mode `FakeReceipt`, `RISC0_DEV_MODE` unset) of image M, and its journal is
+   that image's `ChainState` (kind, version, `self_id`);
+2. the profile the image commits (scripts checked or not, network, coin log, trie, live-coin hash); a field of a
+   feature the image lacks is zero;
+3. `anchor_id` is the network's genesis state (or the `--anchor` state, giving at most DEMO), and the lineage;
+4. the block forest has one leaf per block; `time-too-new` on this machine's clock;
+5. chain identity, with `--expect <h>:<hash>`, `--mempool` or `--bitcoin-cli "<command>"`: the proven tip is the
+   network's block at that height. Without one the tip and work are printed and the verdict line says so.
 
-**Proof bundles.** `swiftsync-verify [--network ...] bundle <receipt> <file.hints> <out.sspf>` writes one file
-holding the receipt and a header naming network, image, height, tip, work, `ss_hints` and the hints file's
-SHA-256 (`docs/libzync/PROOF_BUNDLE.md`). A bundle is accepted wherever a receipt is; its header is checked against
-the verified result and never trusted.
+**Trie facts.** `zync-path trie coin|balance|history <state_<h>.trie> <scriptPubKey hex> [<txid> <vout>]` writes one
+from a prover run's trie snapshot; `zync-serve` serves them at `/trie/coin/<spk>/<txid>/<vout>`, `/trie/balance/<spk>`
+and `/trie/history/<spk>`. Each is checked against the verified state's trie root (`libzync::trie_fact`).
 
-**Test vectors** for this or any other verifier: `vectors/` (14 cases with expected exit codes, plus reference
-values; `python3 vectors/run_vectors.py <verifier>`).
+**Proof bundles.** `swiftsync-verify [--network ...] bundle <receipt> <out.sspf>` writes one file holding the
+receipt and a header naming network, image, height, tip, work and trie root (`docs/libzync/PROOF_BUNDLE.md`, version
+2). A bundle is accepted wherever a receipt is; its header is checked against the verified result and never trusted.
 
-**The image id is the trust root.** The built-in ids (`src/lib.rs`, `IMAGES`) are the current round-8 images. A
-reader should rebuild M from the published commit and pass it with `--image <hex>` rather than trust this file
-(a reproducible build kit is planned). `--image` is printed on the first line of the output.
+**Test vectors** for this or any other verifier: `vectors/` (refusals only until the first GPU proofs of the frozen
+image; `python3 vectors/run_vectors.py <verifier>`).
 
-**Tests:** `cargo test --release` (genesis work by long division, the empty-SMT root and the genesis `anchor_id`
-vectors of §5 step 3), and `bash swiftsync-verify/test.sh` from the repo root (15 end-to-end cases on the real
-round-4 signet receipt and corrupted inputs; output in `test.out`). That receipt starts from a supplied state at
-2,500, so the best it can reach is DEMO; no genesis-anchored receipt exists yet.
+**The image id is the trust root.** The built-in ids (`src/lib.rs`, `IMAGES`) are pinned at the image freeze. A
+reader should rebuild M from the published commit and pass it with `--image <hex>` rather than trust this file.
+`--image` is printed on the first line of the output.
 
-**Shares code with the prover** only for the hint hash (`libzync::ss_hints::step`) and the hints-file decoder
-(`hintsfile` 0.2.1). `scripts/libzync/ss_hints_ref.py` is an independent Python implementation of the hints side
-from the spec text alone, to check both.
+**Tests:** `cargo test --release` (genesis work, the empty-SMT root and genesis `anchor_id`, coin and trie facts),
+and `bash swiftsync-verify/test.sh` from the repo root (end-to-end refusals; output in `test.out`).

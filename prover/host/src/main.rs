@@ -209,9 +209,12 @@ struct ChainState {
     prev_nbits: u32, prev_time: u32, epoch_start: u32, recent_times: Vec<u32>,
     anchor_id: [u8; 32], // S5: dsha256 of the base anchor; verifier pins == dsha256(genesis_anchor)
     self_id: [u32; 8],  // S1: image id recursed against; verifier asserts == METHOD_ID
-    // libzync SwiftSync design B (HANDOVER_DESIGN.md): the guest's ECMH running total (ss_set 0 = identity)
-    // and running hint-bit hash. Mirrors the guest's ChainState field for field.
-    ss_set: u32, ss_acc: [u32; 16], ss_hints: [u8; 32],
+    // libzync (E2): the multiset hash of the LIVE coins (profile bit 6; live_set 0 = the identity) and the counting
+    // trie's root (bit 5). Zero without those bits. Mirrors the guest's ChainState field for field. The aliases read a
+    // state JSON written before the rename (ss_set / ss_acc / ss_hints, the retired SwiftSync design B's names).
+    #[serde(alias = "ss_set")] live_set: u32,
+    #[serde(alias = "ss_acc")] live_hash: [u32; 16],
+    #[serde(alias = "ss_hints")] trie_root: [u8; 32],
     // libzync (review 2): the coinbase-txid SMT root after this block, carried so each block's BIP30 check
     // runs against the chain's own tree (genesis: empty). Mirrors the guest.
     smt_root: [u8; 32],
@@ -498,7 +501,7 @@ fn seed_and_anchor() -> (Forest, ChainState) {
         cum_work: [0u8; 32], height: 169,
         prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, epoch_start: 1_231_006_505,
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        anchor_id: [0u8; 32], self_id: METHOD_ID, live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: 1_231_730_523, profile: 0, block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
     };
     (forest, anchor)
@@ -727,7 +730,7 @@ fn build_full() -> (ChainState, BlockWitness) {
         // window) when the fetcher/bridge supplies them; else the benign placeholder for pre-S2 vectors
         // (130000/140000) that carry no `recent_times` — computed above (with the COV-1 hook applied).
         recent_times: recent_times.clone(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        anchor_id: [0u8; 32], self_id: METHOD_ID, live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: recent_times.iter().copied().max().unwrap_or(0), profile: 0,
         block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
     };
@@ -904,7 +907,7 @@ fn genesis_anchor() -> ChainState {
         cum_work: arr_u128(g_work), height: 0,
         prev_nbits: g_bits, prev_time: g_time, epoch_start: g_time,
         // self_id is zero, not this image: anchor_id must stay the same across a handover (HANDOVER.md).
-        recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: [0; 8], ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        recent_times: vec![g_time], anchor_id: [0u8; 32], self_id: [0; 8], live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: g_time, profile: 0,
         block_roots: vec![Some(sha256_host(&handover_pin::block_leaf_preimage(&arr(rev(hx(g_hash))), 0, &empty_utxo_state())))],
         block_leaves: 1, lineage: [0; 32],
@@ -1958,7 +1961,7 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-verify") {
         libzync_verify_fail_hook();
-        // Positional: <receipt> <file.hints | -> [anchor.json]. Flags anywhere after: --expect <h>:<hash>, --mempool,
+        // Positional: <receipt> [anchor.json]. Flags anywhere after: --expect <h>:<hash>, --mempool,
         // --mempool-url <base> (chain identity, as swiftsync-verify).
         let mut pos: Vec<&str> = Vec::new();
         let (mut expect, mut mempool, mut cli): (Option<String>, Option<String>, Option<String>) = (None, None, None);
@@ -1973,9 +1976,11 @@ fn main() {
                 x => pos.push(x),
             }
         }
-        let usage = "libzync-verify <receipt> <file.hints | -> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<command>\"]";
-        assert!(pos.len() <= 3, "{usage}");
-        libzync_verify_cmd(pos.first().expect(usage), pos.get(1).expect(usage), pos.get(2).copied(), expect.as_deref(), mempool.as_deref(), cli.as_deref());
+        let usage = "libzync-verify <receipt> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<command>\"]";
+        assert!(pos.len() <= 2, "{usage}");
+        // The retired hints-file argument ("-" or a .hints file) must not be read as an anchor.
+        assert!(pos.get(1).is_none_or(|a| *a != "-" && !a.ends_with(".hints")), "libzync-verify takes no hints file (E2): {usage}");
+        libzync_verify_cmd(pos.first().expect(usage), pos.get(1).copied(), expect.as_deref(), mempool.as_deref(), cli.as_deref());
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-hints") {
@@ -2186,7 +2191,7 @@ fn main() {
         epoch_start: 1_231_006_505, // epoch 0's first block = genesis timestamp
         // last 11 block timestamps up to 169 (approx; MTP unused pre-BIP113 at heights 170-172).
         recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, ss_set: 0, ss_acc: [0; 16], ss_hints: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        anchor_id: [0u8; 32], self_id: METHOD_ID, live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: 1_231_730_523, profile: 0, block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
     };
 

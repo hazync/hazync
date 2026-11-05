@@ -75,10 +75,10 @@ def main():
     w.bytes_fixed(bytes(32))                                # anchor_id
     for _ in range(8):                                      # self_id: zero, so anchor_id survives a handover
         w.u32(0)
-    w.u32(0)                                                # ss_set
-    for _ in range(16):                                     # ss_acc
+    w.u32(0)                                                # live_set
+    for _ in range(16):                                     # live_hash
         w.u32(0)
-    w.bytes_fixed(bytes(32))                                # ss_hints
+    w.bytes_fixed(bytes(32))                                # trie_root
     w.bytes_fixed(empty_smt_root())                         # smt_root
     w.u32(g_time)                                           # max_time
     w.u32(0)                                                # profile

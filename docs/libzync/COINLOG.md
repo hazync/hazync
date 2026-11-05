@@ -1,6 +1,7 @@
 # libzync: the coin log
 
-Status: built behind `HAZYNC_COINLOG=1` (profile bit 4, `0x10`); design B (SwiftSync forest + hints file) without it.
+Status: the product's coin accounting (profile bit 4, `0x10`; on in every libzync image since E2c). Design B (SwiftSync
+forest + hints file), the alternative, was retired in E2.
 Normative source: `libzync/src/coinlog.rs` (shared by the host and the guest) and the coin-log block of
 `prover/methods/guest/src/agg_lite.rs`. `scripts/libzync/coinlog_ref.py` is an independent implementation written from
 this document, with its own SHA-256 compression function.
@@ -71,7 +72,7 @@ The aggregate reads, after its hint block: `[k, (position lo, hi) × k, sibling 
 |---|---|
 | `utxo_roots`, `utxo_leaves` | the log's roots and the number of coins **ever appended** (live and spent) |
 | `utxo_value` | the satoshis of the **live** coins: previous + this block's appends − this block's flips. Computed as previous + appends (saturating) − (Σ over its transactions of fee + all outputs, minus coins created and spent in the block), with a checked subtraction: on a valid block the same number; an underflow aborts the proof |
-| `ss_set`, `ss_hints` | unused: carried unchanged from the anchor, so 0 on a chain from genesis (what the verifiers require); a hints file is refused |
+| `live_set`, `live_hash`, `trie_root` | the live coins' multiset hash (bit 6) and the counting trie's root (bit 5); zero, carried unchanged, in an image without them (what the verifiers require). Before E2 these were design B's `ss_set` / `ss_acc` / `ss_hints` |
 | `profile` bit 4 | set |
 | `block_roots` | each block's leaf commits the coin state after it (HANDOVER.md §3), so a tip proof commits the log at every height |
 

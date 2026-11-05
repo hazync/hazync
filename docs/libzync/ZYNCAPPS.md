@@ -17,17 +17,18 @@ HANDOVER.md §2); the shared check of §4 is the code every zyncAPP must carry a
 |---|---|---|
 | which chain, how much work | `tip_hash`, `height`, `cum_work`, `recent_times`, `max_time` | the tip, its height and chainwork, time context |
 | every spendable coin that outlived its block, and who spent it (coin log; not coins spent in their own block, not OP_RETURN outputs, COINLOG.md §6) | `utxo_roots`, `utxo_leaves` (COINLOG.md) | a coin is unspent now, or was spent by (height, tx, input); amount, scriptPubKey, height, coinbase flag, creation MTP; by one path |
-| every coin unspent at H (design B) | `utxo_roots`, `utxo_leaves` (UTREEXO_FORMAT.md) | a coin exists at H, by an inclusion path |
+| every coin ever created, and its state (coin log) | `utxo_roots`, `utxo_leaves` (COINLOG.md) | a coin exists, unspent or spent by a given input, at any height |
+| every coin by script, with history and balances (counting trie, bit 5) | `trie_root` (`libzync::trie_fact`) | a coin was never created; a script's unspent count and value; its complete history |
+| the live coin set (bit 6) | `live_set`, `live_hash` | a downloaded UTXO set is exactly the chain's (instant IBD) |
 | total amount of the live coins | `utxo_value` | the UTXO set's total, with no walk over the coins |
 | every block in the chain, and the coin state after it | `block_roots`, `block_leaves` (HANDOVER.md §3) | a block at a height is in this chain; with a Merkle branch, any transaction; with the coin log, any coin's state at that height |
 | what was checked | `profile` | network; scripts and signatures checked or skipped |
 | where it started | `anchor_id` | genesis-anchored (or not) |
-| SwiftSync closed at H | `ss_set`, `ss_hints` | the coin forest really is the UTXO set at H |
 | which images proved it | `self_id`, `lineage` | the image that made the receipt and the handovers behind it |
 
 With the **coin log** (profile bit 4), coin facts hold at every block: a zyncAPP about coins answers at the tip, or at
-any earlier height through the block forest. ⚠ Under **design B** the coin forest is the UTXO set **only** in a proof
-closed at H (`ss_set == 0` and `ss_hints` equal to the published hints file's hash), so a zyncAPP answers "at H".
+any earlier height through the block forest. (Design B, whose coin forest was the UTXO set only in a proof closed at a
+hints file's height H, was retired in E2.)
 
 ## 3. When a zyncAPP can ship
 
@@ -50,9 +51,9 @@ inputs:  core_id, core_journal, <the question's own inputs>
 3. check_core_statement(J, core_id):                   the same function in every zyncAPP
      J.kind == KIND_CHAIN, J.version >= needed, J.self_id == core_id
      J.profile: the network the zyncAPP is for; scripts checked (bit 1 clear) unless it states otherwise
-     coin log (profile bit 4), or J.ss_set == 0          design B: closed at H (for any question about coins)
+     coin log (profile bit 4)                            every libzync image since E2
 4. answer the question from J and its own inputs only
-5. commit: core_id, J.lineage, J.anchor_id, J.ss_hints, J.height, J.tip_hash, J.max_time, J.cum_work, the answer
+5. commit: core_id, J.lineage, J.anchor_id, J.trie_root, J.height, J.tip_hash, J.max_time, J.cum_work, the answer
 ```
 
 `check_core_statement` exists because the core image id is not enough on its own: the `is_base` bug (LIBZYNC.md §7)
@@ -69,7 +70,6 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 - `anchor_id` is the network's PINNED genesis anchor (SWIFTSYNC_PROOFS.md §5 step 3).
 - `cum_work` is at least Core's `nMinimumChainWork` for the network (§5 step 3a); below it the answer is about a
   valid chain, but not shown to be the network's.
-- design B only: `ss_hints` is the hash of the published hints file at `height`.
 - `max_time <= now + 7200` (time-too-new).
 - **Chain identity:** `tip_hash` is the network's block at `height`, from the verifier's node, a block explorer
   (mempool.space) or a known hash (SWIFTSYNC_PROOFS.md §5 step 7). Without it, the answer is about a valid chain,

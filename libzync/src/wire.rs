@@ -6,8 +6,8 @@
 //! ```text
 //! chunk run:      CHUNK_MAGIC mtp block_time liftx_bytes sig_collect sig_bytes
 //!                 liftx[liftx_bytes] sig[sig_bytes]                       (each padded to a word)
-//! aggregate run:  AGG_MAGIC ecmh_collect ecmh_bytes ss_mode ss_nbits
-//!                 ecmh[ecmh_bytes] ss_words[ceil(ss_nbits / 32)]          (ecmh padded to a word)
+//! aggregate run:  AGG_MAGIC ecmh_collect ecmh_bytes
+//!                 ecmh[ecmh_bytes]                                        (padded to a word)
 //! ```
 //!
 //! - `liftx`: 64-byte (x, y) pairs, big-endian, any order -- public-key Y hints, each checked
@@ -16,8 +16,6 @@
 //!   `sig_collect = 1` sends none and the guest logs every verify (BATCHREC) instead.
 //! - `ecmh`: per ECMH operation, in operation order: ctr u32 LE | y BE | one w BE per skipped ctr.
 //!   `ecmh_collect = 1` sends none and the guest logs every leaf (ECMHREC) instead.
-//! - `ss`: design B's SwiftSync hint bits, one per indexed output, LSB-first in LE words. Mode 0 =
-//!   no hints file (every created coin goes to the ECMH total).
 //!
 //! Everything here is UNTRUSTED input to the guest: each hint is re-checked where it is used, so a
 //! wrong one makes a run slower or makes it fail; it never makes a bad block pass. The decoders only
@@ -29,8 +27,8 @@ use alloc::vec::Vec;
 
 /// "LZC1" as little-endian bytes.
 pub const CHUNK_MAGIC: u32 = u32::from_le_bytes(*b"LZC1");
-/// "LZA1" as little-endian bytes.
-pub const AGG_MAGIC: u32 = u32::from_le_bytes(*b"LZA1");
+/// "LZA2" as little-endian bytes (LZA1 carried design B's SwiftSync hint bits, removed in E2).
+pub const AGG_MAGIC: u32 = u32::from_le_bytes(*b"LZA2");
 /// One batch-signature hint: valid u32 LE, R.x, R.y.
 pub const SIG_HINT_BYTES: usize = 68;
 /// One pubkey-Y hint: x, y.
@@ -52,8 +50,6 @@ pub struct ChunkHints<'a> {
 pub struct AggHints<'a> {
     pub ecmh_collect: bool,
     pub ecmh: &'a [u8],
-    /// Some((nbits, words)) = design B hint bits for this block; None = no hints file.
-    pub ss: Option<(u32, &'a [u32])>,
 }
 
 fn words_for(bytes: usize) -> usize {
@@ -114,31 +110,19 @@ impl<'a> ChunkHints<'a> {
 
 impl<'a> AggHints<'a> {
     pub fn encode(&self) -> Vec<u32> {
-        let (mode, nbits, sw): (u32, u32, &[u32]) = match self.ss { Some((n, w)) => (1, n, w), None => (0, 0, &[]) };
-        let mut v = Vec::with_capacity(5 + words_for(self.ecmh.len()) + sw.len());
-        v.extend_from_slice(&[AGG_MAGIC, self.ecmh_collect as u32, self.ecmh.len() as u32, mode, nbits]);
+        let mut v = Vec::with_capacity(3 + words_for(self.ecmh.len()));
+        v.extend_from_slice(&[AGG_MAGIC, self.ecmh_collect as u32, self.ecmh.len() as u32]);
         push_bytes(&mut v, self.ecmh);
-        v.extend_from_slice(sw);
         v
     }
 
     pub fn decode(w: &'a [u32]) -> Result<Self, &'static str> {
-        if w.len() < 5 || w[0] != AGG_MAGIC { return Err("agg hints: bad header"); }
-        let (ec, eb, mode, nbits) = (w[1], w[2] as usize, w[3], w[4]);
+        if w.len() < 3 || w[0] != AGG_MAGIC { return Err("agg hints: bad header"); }
+        let (ec, eb) = (w[1], w[2] as usize);
         if ec > 1 || (ec == 1 && eb != 0) { return Err("agg hints: bad ecmh mode"); }
-        if mode > 1 || (mode == 0 && nbits != 0) { return Err("agg hints: bad ss mode"); }
         let ew = words_for(eb);
-        let sw = (nbits as usize).div_ceil(32);
-        if w.len() != 5 + ew + sw { return Err("agg hints: length mismatch"); }
-        let ss_words = &w[5 + ew..];
-        if !padding_zero(&w[5..5 + ew], eb) { return Err("agg hints: nonzero padding"); }
-        if mode == 1 && !super::ss_hints::bits_canonical(nbits, ss_words) {
-            return Err("agg hints: a hint bit is set past the block's indexed outputs");
-        }
-        Ok(AggHints {
-            ecmh_collect: ec == 1,
-            ecmh: &as_bytes(&w[5..5 + ew])[..eb],
-            ss: if mode == 1 { Some((nbits, ss_words)) } else { None },
-        })
+        if w.len() != 3 + ew { return Err("agg hints: length mismatch"); }
+        if !padding_zero(&w[3..], eb) { return Err("agg hints: nonzero padding"); }
+        Ok(AggHints { ecmh_collect: ec == 1, ecmh: &as_bytes(&w[3..])[..eb] })
     }
 }

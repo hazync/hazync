@@ -1,5 +1,5 @@
 //! Counting-trie FACTS (E2 step 4): what a zyncAPP or a wallet checks against the trie root a verified chain state
-//! commits (the state's `ss_hints` field under profile bit 5). Shared by the CLI, C and WASM verifiers; no_std.
+//! commits (the state's `trie_root` field under profile bit 5). Shared by the CLI, C and WASM verifiers; no_std.
 //!
 //! A proof is the trie pruned to the keys it answers for: the same preorder format the guest's update reads
 //! (`trie_model::encode`), served by the host's store (`TrieStore::prove`). The checks: the proof is in counts mode, its

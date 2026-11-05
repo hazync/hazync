@@ -134,19 +134,25 @@ fn main() {
                  including its PROFILE): the canonical pins describe a scripts-checked image (review 11-03)");
         // The pin directory names the image's profile too, so the labels the host trusts (LIBZYNC, NETWORK,
         // ASSUMEVALID) are tied to the pinned bytes instead of to this shell's variables (review 2).
-        // The coin log is part of the profile: a coin-log image's pins say `coinlog=1`, and HAZYNC_COINLOG must agree,
-        // so the host never writes a design-B stream to a coin-log guest or the reverse.
-        let coinlog = std::env::var("HAZYNC_COINLOG").as_deref() == Ok("1");
+        // The product's state is part of the profile: the pins say `coinlog=1 trie=1 utxohash=1` for the product image,
+        // and the build's levers (on by default in the libzync profile, as for a guest built here) must agree, so the
+        // host never writes a stream the pinned guest does not read (no trie receipt for a trie guest, say).
+        println!("cargo:rerun-if-env-changed=HAZYNC_TRIE");
+        println!("cargo:rerun-if-env-changed=HAZYNC_UTXOHASH");
+        let coinlog = lever("HAZYNC_COINLOG");
         assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
+        assert!(!libzync || coinlog, "a libzync guest needs the coin log (HAZYNC_COINLOG must not be 0)");
+        let (trie, utxohash) = (coinlog && lever("HAZYNC_TRIE"), coinlog && lever("HAZYNC_UTXOHASH"));
         let txlog = std::env::var("HAZYNC_TXLOG").as_deref() == Ok("1");
         assert!(!txlog || libzync, "HAZYNC_TXLOG needs HAZYNC_LIBZYNC");
         if let Some(d) = pins.as_deref() {
             println!("cargo:rerun-if-changed={d}/PROFILE");
-            let want = format!("libzync={} assumevalid={} network={}{}", libzync as u8, assumevalid as u8,
-                               network, format!("{}{}", if coinlog { " coinlog=1" } else { "" }, if txlog { " txlog=1" } else { "" }));
+            let want = format!("libzync={} assumevalid={} network={}{}{}{}{}", libzync as u8, assumevalid as u8, network,
+                               if coinlog { " coinlog=1" } else { "" }, if trie { " trie=1" } else { "" },
+                               if utxohash { " utxohash=1" } else { "" }, if txlog { " txlog=1" } else { "" });
             let got = std::fs::read_to_string(Path::new(d).join("PROFILE"))
                 .unwrap_or_else(|e| panic!("{d}/PROFILE: {e} (the pin directory must name the image's profile)"));
-            assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS");
+            assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS / the product levers");
         }
         assert!(!coinlog || pins.is_some(), "HAZYNC_COINLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
         assert!(!txlog || pins.is_some(), "HAZYNC_TXLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");

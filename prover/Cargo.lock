@@ -2029,12 +2029,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3011d1213f159867b13cfd6ac92d2cd5f1345762c63be3554e84092d85a50bbd"
 
 [[package]]
-name = "hintsfile"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e8fa0fc6da2bbed4cc9db8a008a7e5c46e8fce5ffe36a5eff97aa4dff568846"
-
-[[package]]
 name = "home"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2544,7 +2538,6 @@ dependencies = [
 name = "libzync"
 version = "0.1.0"
 dependencies = [
- "hintsfile",
  "num-bigint 0.4.8",
  "secp256k1",
  "sha2",
@@ -4546,7 +4539,6 @@ name = "swiftsync-verify"
 version = "0.1.0"
 dependencies = [
  "bincode",
- "hintsfile",
  "libzync",
  "risc0-zkvm",
  "serde",

@@ -48,7 +48,7 @@ pub(crate) fn libzync_verify_fail_hook() {
 pub(crate) fn hex_id(id: &[u32; 8]) -> String { hex(&id.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()) }
 
 /// `libzync-snark-wrap <receipt> <out>`: compress a libzync chain receipt (succinct STARK, ~227 KB) to Groth16 (a
-/// few hundred bytes of seal), for shipping next to a hints file. Refuses a receipt that is not a real proof of this
+/// few hundred bytes of seal), for shipping to light clients. Refuses a receipt that is not a real proof of this
 /// image's ChainState, and refuses to write a wrap whose journal is not byte-identical to the input's: a wrap that
 /// changed the statement would be a forgery vector. Needs the risc0 Groth16 prover (x86, lots of RAM): run on a
 /// proving box, not a laptop. Verify the result with `swiftsync-verify`, which accepts either receipt kind.
@@ -73,21 +73,19 @@ pub(crate) fn libzync_snark_wrap_cmd(bin: &str, out: &str) {
              before as f64 / bytes.len().max(1) as f64, t.elapsed().as_secs_f64());
 }
 
-/// `libzync-verify <receipt> <file.hints> [anchor.json]`: everything a SwiftSync user checks before trusting
-/// a hints file because of a Hazync proof. Exit 0 only if every check passes.
+/// `libzync-verify <receipt> [anchor.json]`: everything a user checks before trusting a Hazync chain proof. Exit 0
+/// only if every check passes (2 = DEMO: a valid chain not shown to be the network's).
 ///
 ///  1. the receipt verifies against THIS host's METHOD_ID (the libzync image for the network), and the
 ///     journal is a ChainState whose self_id is that id (so every recursion step ran the same guest);
 ///  2. anchor_id is the digest of the network's GENESIS anchor -- otherwise the chain started from a
 ///     state the prover asserted, and nothing below means anything (the base step is not verified);
-///  3. height == the file's stop height H;
-///  4. ss_set == 0: the SwiftSync total is the identity, so every coin the file calls spent was created
-///     and spent exactly once, and nothing else was spent;
-///  5. ss_hints == the hash of the file's per-height index lists, computed from the file ALONE.
+///  3. the profile is this image's, the block forest has one leaf per block, and the fields of features the image
+///     lacks (live-coin hash, trie root) are zero; time-too-new on this machine's clock.
 ///
-/// It prints tip_hash and cum_work too: the proof is about THAT chain, and a client must check it is the
-/// chain it follows (most work). If 1-5 hold, the file is correct for that chain at H, and the forest
-/// (utxo_roots, utxo_leaves) is exactly the UTXO set at H, as a Utreexo accumulator.
+/// It prints tip_hash and cum_work too: the proof is about THAT chain, and a client must check it is the chain it
+/// follows (--expect / --mempool / --bitcoin-cli). If 1-3 hold, the coin log (utxo_roots, utxo_leaves) is exactly
+/// the UTXO set history to H, and the trie root and live-coin hash are those of the chain to H.
 ///
 /// With [anchor.json] (a ChainState written by a trusted run), check 2 is against that state instead:
 /// for demonstration proofs that start mid-chain. The output says so.
@@ -155,7 +153,7 @@ pub(crate) fn node_block_hash(cmd: &str, height: u32) -> Result<String, String> 
     Ok(String::from_utf8_lossy(&o.stdout).trim().to_lowercase())
 }
 
-pub(crate) fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str>, expect: Option<&str>, mempool: Option<&str>, cli: Option<&str>) {
+pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Option<&str>, mempool: Option<&str>, cli: Option<&str>) {
     libzync_verify_fail_hook(); // also installed by the dispatcher, before the arguments are read
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}")))
         .unwrap_or_else(|e| panic!("{receipt:?}: not a receipt: {e}"));
@@ -217,14 +215,12 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str
     // Core's nMinimumChainWork (v28): below it, a valid chain from genesis is no evidence of the network's chain.
     let low_work = !work_at_least(&cs.cum_work, min_chain_work()) || cs.height < checkpoint_height();
     println!("  height {} {} the pinned checkpoint height {}", cs.height, if cs.height < checkpoint_height() { "<" } else { ">=" }, checkpoint_height());
-    // The coin log (COINLOG.md) is sound at every block: no hints file, nothing to close. Design B (SwiftSync hints) is
-    // gone (E2c). The former SwiftSync fields now carry the live-coin ECMH (instant IBD; ss_set / ss_acc) and the
-    // counting trie's root (the former hint-hash slot): each is zero exactly when its feature is off.
-    check(hints == "-", "a libzync proof takes no hints file (pass '-')");
-    check(methods::UTXOHASH || (cs.ss_set == 0 && cs.ss_acc == [0; 16]), "live-coin hash unused in this image (ss_set == 0)");
-    check(methods::TRIE || cs.ss_hints == [0; 32], "trie root unused in this image (zero)");
-    if methods::UTXOHASH { println!("  live-coin hash: {}", if cs.ss_set == 0 { "the empty set".to_string() } else { format!("x {:08x}..", cs.ss_acc[7]) }); }
-    if methods::TRIE { println!("  trie root: {}", hex(&cs.ss_hints)); }
+    // The coin log (COINLOG.md) is sound at every block: nothing to close at H. The live-coin ECMH (instant IBD;
+    // live_set / live_hash) and the counting trie's root are each zero exactly when its feature is off.
+    check(methods::UTXOHASH || (cs.live_set == 0 && cs.live_hash == [0; 16]), "live-coin hash unused in this image (live_set == 0)");
+    check(methods::TRIE || cs.trie_root == [0; 32], "trie root unused in this image (zero)");
+    if methods::UTXOHASH { println!("  live-coin hash: {}", if cs.live_set == 0 { "the empty set".to_string() } else { format!("x {:08x}..", cs.live_hash[7]) }); }
+    if methods::TRIE { println!("  trie root: {}", hex(&cs.trie_root)); }
     // As swiftsync-verify: a root exactly at each set bit of block_leaves (HANDOVER.md §6).
     let shape = (0..64).all(|i| ((cs.block_leaves >> i) & 1 == 1) == cs.block_roots.get(i).copied().flatten().is_some());
     check(cs.block_leaves == cs.height as u64 + 1 && shape, &format!("block forest has one leaf per block ({} leaves at height {})", cs.block_leaves, cs.height));
@@ -268,14 +264,12 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str
     if fails == 0 && anchor.is_some() {
         // Never the OK line: the base state was the prover's (or a sweep's) assertion, not genesis, so the
         // proof says nothing about history before it (review 2).
-        println!("LIBZYNC_VERIFY_DEMO: consistent with {hints:?} at height {} FROM THE GIVEN ANCHOR ONLY -- not a proof of the file", cs.height);
+        println!("LIBZYNC_VERIFY_DEMO: a valid chain to height {} FROM THE GIVEN ANCHOR ONLY -- not a proof from genesis", cs.height);
         std::process::exit(2);
     } else if fails == 0 {
         // The verdict line names an assumevalid profile, so a reader of this line alone (or a script) cannot
         // take a scripts-skipped proof for a full one (review 5).
-        if methods::COINLOG { println!("LIBZYNC_VERIFY_OK: the chain and its coin log are proven at height {}{}{id_note}", cs.height,
-                 if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" }); return; }
-        println!("LIBZYNC_VERIFY_OK: {hints:?} is proven correct for this chain at height {}{}{id_note}", cs.height,
+        println!("LIBZYNC_VERIFY_OK: the chain and its coin log are proven at height {}{}{id_note}", cs.height,
                  if cs.profile & 2 != 0 { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" });
     } else {
         println!("LIBZYNC_VERIFY_FAIL: {fails} check(s) failed");
@@ -475,8 +469,8 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         let claim = t.receipt_claim.expect("trie session has no receipt claim");
         *TRIE_RCPT.lock().unwrap() = if neg == "none" { None } else { Some(risc0_zkvm::Receipt::new(
             risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)), t.journal.bytes.clone())) };
-        anchor.ss_hints = libzync::coinlog::h_of(&root);
-        if neg == "root" { anchor.ss_hints[0] ^= 1; }
+        anchor.trie_root = libzync::coinlog::h_of(&root);
+        if neg == "root" { anchor.trie_root[0] ^= 1; }
         if !neg.is_empty() { println!("  trie: NEGATIVE CONTROL HAZYNC_TEST_TRIE={neg}"); }
     }
     println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
@@ -507,14 +501,13 @@ pub(crate) fn libzync_agg_prep(w: &mut BlockWitness) {
 }
 
 /// libzync: the aggregate's ONE hint block, after the witness: ECMH hints from the block's bundle
-/// ($HAZYNC_LZ_HINTS; none = the guest collects, logging ECMHREC lines) and the SwiftSync hint bits.
+/// ($HAZYNC_LZ_HINTS; none = the guest collects, logging ECMHREC lines).
 pub(crate) fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
     if !methods::LIBZYNC { return; }
     let bundle = lz_bundle(w.height, &header_hash(&w.header));
     let words = libzync::wire::AggHints {
         ecmh_collect: bundle.is_none(),
         ecmh: bundle.as_ref().map(|b| b.ecmh.as_slice()).unwrap_or(&[]),
-        ss: None, // SwiftSync design B is gone from the guest: no hint bits, always mode 0.
     }.encode();
     b.write(&(words.len() as u32)).unwrap();
     b.write_slice(&words);
@@ -991,8 +984,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         let rbytes = std::fs::metadata(format!("{out}/block_{h}.rcpt")).map(|m| m.len()).unwrap_or(0);
         writeln!(times, "{h}\t{}\t{t_sig:.1}\t{:.1}\t{:.1}\t{dt:.1}\t{}\t{rbytes}", bounds.len(),
                  t_chunks - t_sig, t_hints - t_chunks, ["recursive", "base", "handover"][step as usize]).unwrap();
-        println!("  block {h}: {} chunks, proved in {dt:.1} s ({}), forest {} ss_set {}  [{:.0} s total]",
-                 bounds.len(), ["verifies prev", "base on anchor", "handover: verifies predecessor"][step as usize], st.utxo_leaves, st.ss_set, t_all.elapsed().as_secs_f64());
+        println!("  block {h}: {} chunks, proved in {dt:.1} s ({}), forest {} live_set {}  [{:.0} s total]",
+                 bounds.len(), ["verifies prev", "base on anchor", "handover: verifies predecessor"][step as usize], st.utxo_leaves, st.live_set, t_all.elapsed().as_secs_f64());
         prev = st;
         prev_rcpt = Some(r);
         handover_pending = false;

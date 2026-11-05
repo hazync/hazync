@@ -1,16 +1,9 @@
-PASS  demo_receipt         exit 2 (want 2)  SWIFTSYNC_VERIFY_DEMO: consistent with signet2600.hints FROM THE GIVEN ANCHOR ONLY -- not a proof of the file;
-PASS  future_timestamp     exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  demo_bundle          exit 2 (want 2)  SWIFTSYNC_VERIFY_DEMO: consistent with signet2600.hints FROM THE GIVEN ANCHOR ONLY -- not a proof of the file;
-PASS  no_anchor            exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  retired_design_b     exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  retired_design_b_product exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 PASS  wrong_image          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
-PASS  wrong_network        exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  early_stop           exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
-PASS  wrong_file           exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
-PASS  trailing_byte        exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  flipped_bit          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  noncanonical_size    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  bad_version          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  fake_receipt         exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 7 check(s) failed
-PASS  bundle_header_lies   exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  bundle_wrong_file    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 3 check(s) failed
-15/15 cases as expected
+PASS  fake_receipt         exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 3 check(s) failed
+PASS  bundle_v1            exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: "r4_2600.sspf": unsupported bundle version 1
+PASS  bundle_header_lies   exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: "bad_bundle_header.sspf": unsupported bundle version 1
+PASS  hints_arg_refused    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the rece
+PASS  dash_arg_refused     exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the rece
+8/8 cases as expected

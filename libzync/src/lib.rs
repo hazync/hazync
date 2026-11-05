@@ -5,7 +5,6 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-pub mod ss_hints;
 pub mod wire;
 pub mod net;
 pub mod coinlog;
@@ -50,38 +49,22 @@ mod tests {
     #[test]
     fn agg_hints_round_trip() {
         let ecmh = vec![3u8; 101]; // not a multiple of 4: padding must be dropped on decode
-        let bits = vec![0b1011u32, 0x8000_0000, 0x1];
-        let h = wire::AggHints { ecmh_collect: false, ecmh: &ecmh, ss: Some((65, &bits)) };
-        let w = h.encode();
+        let w = wire::AggHints { ecmh_collect: false, ecmh: &ecmh }.encode();
         let d = wire::AggHints::decode(&w).unwrap();
         assert_eq!(d.ecmh, &ecmh[..]);
-        assert_eq!(d.ss, Some((65, &bits[..])));
-        let none = wire::AggHints { ecmh_collect: true, ecmh: &[], ss: None }.encode();
-        let d = wire::AggHints::decode(&none).unwrap();
-        assert!(d.ecmh_collect && d.ss.is_none());
-        // a set padding bit (index 65 of nbits 65) is refused
-        let pad = vec![0u32, 0, 0b10];
-        let w = wire::AggHints { ecmh_collect: false, ecmh: &[], ss: Some((65, &pad)) }.encode();
-        assert!(wire::AggHints::decode(&w).is_err());
+        let none = wire::AggHints { ecmh_collect: true, ecmh: &[] }.encode();
+        assert!(wire::AggHints::decode(&none).unwrap().ecmh_collect);
         // nonzero padding after a 101-byte ECMH blob is refused (one encoding per value)
-        let mut w = wire::AggHints { ecmh_collect: false, ecmh: &ecmh, ss: None }.encode();
-        w[5 + 25] |= 0x0100_0000;
-        assert!(wire::AggHints::decode(&w).is_err());
-    }
-
-    #[test]
-    fn hint_hash_two_ways_agree() {
-        let words = vec![0x8000_0001u32, 0, 0x10];
-        let idx = ss_hints::indices(&words);
-        assert_eq!(idx, vec![0, 31, 68]);
-        let p = [1u8; 32];
-        assert_eq!(ss_hints::step(&p, 9, &idx), ss_hints::step_bits(&p, 9, &words));
-        assert_eq!(ss_hints::bits_from_indices(69, &idx).unwrap(), words);
-        assert!(ss_hints::bits_from_indices(68, &idx).is_none());
-        assert!(ss_hints::bits_canonical(69, &words));
-        assert!(!ss_hints::bits_canonical(68, &words));
-        assert!(!ss_hints::bits_canonical(69, &words[..2]));
-        assert!(ss_hints::bits_canonical(0, &[]));
+        let mut bad = w.clone();
+        bad[3 + 25] |= 0x0100_0000;
+        assert!(wire::AggHints::decode(&bad).is_err());
+        // trailing words (the retired hint-bit field) and the old magic are refused
+        let mut long = w.clone();
+        long.push(0);
+        assert!(wire::AggHints::decode(&long).is_err());
+        let mut old = w;
+        old[0] = u32::from_le_bytes(*b"LZA1");
+        assert!(wire::AggHints::decode(&old).is_err());
     }
 
     #[test]

@@ -1,5 +1,10 @@
 # Checking a hints proof inside Bitcoin Core: a sketch
 
+> ⚠ **SUPERSEDED (E2, 2026-11-05).** The hints proof this sketch checks (design B) is retired: no libzync proof takes a
+> hints file, and `swiftsync_verify(...)` no longer has hints arguments. The same hook would now check a chain proof
+> and, with the product image, a downloaded UTXO set against the proven live-coin hash (instant IBD). Kept as the
+> record of the earlier design.
+
 **Status: a design sketch against Core PR #34004 ("Implementation of SwiftSync", closed), not compiled or run.** It
 shows where a proof check fits in that PR's code and what it costs. The library it calls is real and tested
 (`swiftsync-verify-ffi/`: C header, static library, `test.c` 9/9 on the real signet receipt). How SwiftSync lands in

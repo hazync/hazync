@@ -19,13 +19,12 @@ publish = false
 [features]
 default = ["std"]
 # Host side: the hint PRODUCERS (libsecp for R, num-bigint for ECMH) and the per-block bundle file.
-std = ["dep:secp256k1", "dep:num-bigint", "dep:hintsfile"]
+std = ["dep:secp256k1", "dep:num-bigint"]
 
 [dependencies]
 sha2 = { version = "0.10", default-features = false, features = ["compress"] }
 # The version bitcoin 0.32 re-exports, so the host links one libsecp, not two.
 secp256k1 = { version = "0.29", optional = true, features = ["global-context"] }
 num-bigint = { version = "0.4", optional = true }
-hintsfile = { version = "0.2.0", optional = true }
 
 [workspace]

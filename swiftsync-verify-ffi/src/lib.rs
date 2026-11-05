@@ -34,10 +34,10 @@ unsafe fn write_msg(msg: *mut c_char, len: usize, s: &str) {
 
 /// See include/swiftsync_verify.h.
 #[no_mangle]
-pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize, hints: *const u8, hints_len: usize,
+pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize,
                                           network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
                                           out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
-    swiftsync_verify_facts(receipt, receipt_len, hints, hints_len, network, now, image_hex, anchor_json, std::ptr::null(),
+    swiftsync_verify_facts(receipt, receipt_len, network, now, image_hex, anchor_json, std::ptr::null(),
                            out, msg, msg_len)
 }
 
@@ -46,7 +46,7 @@ pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize
 /// hold is FAIL, with its reason in `msg`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len: usize, hints: *const u8, hints_len: usize,
+pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len: usize,
                                                 network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
                                                 facts_json: *const c_char,
                                                 out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
@@ -75,14 +75,14 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             Err(e) => return fail(&format!("anchor is not a ChainState: {e}")),
         }
     };
-    let (receipt, hints) = (slice(receipt, receipt_len), slice(hints, hints_len));
+    let receipt = slice(receipt, receipt_len);
     let rep = if receipt.starts_with(BUNDLE_MAGIC) {
         match Bundle::decode(receipt) {
-            Ok(b) => check_bundle(&b, hints, image, anchor, now),
+            Ok(b) => check_bundle(&b, image, anchor, now),
             Err(e) => return fail(&e),
         }
     } else {
-        verify(&Inputs { receipt, hints, image, anchor, now })
+        verify(&Inputs { receipt, image, anchor, now })
     };
     let mut rep = rep;
     if !facts_json.is_null() {
@@ -143,7 +143,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
     }
     match rep.verdict {
         Verdict::Ok => { write_msg(msg, msg_len, ""); OK }
-        Verdict::Demo => { write_msg(msg, msg_len, "a valid chain, but from a given anchor, below minimum work, or below the checkpoint height: not shown to be the network's"); DEMO }
+        Verdict::Demo => { write_msg(msg, msg_len, "a valid chain, but from a given anchor, below minimum work, or below the checkpoint height, or facts without a matching \"expect\": not shown to be the network's"); DEMO }
         Verdict::Fail => fail(rep.checks.iter().find(|(ok, _)| !ok).map(|(_, w)| w.as_str()).unwrap_or("failed")),
     }
 }

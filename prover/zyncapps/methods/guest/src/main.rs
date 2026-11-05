@@ -41,9 +41,9 @@ struct ChainState {
     recent_times: Vec<u32>,
     anchor_id: [u8; 32],
     self_id: [u32; 8],
-    ss_set: u32,
-    ss_acc: [u32; 16],
-    ss_hints: [u8; 32],
+    live_set: u32,
+    live_hash: [u32; 16],
+    trie_root: [u8; 32],
     smt_root: [u8; 32],
     max_time: u32,
     profile: u32,
@@ -87,7 +87,7 @@ fn main() {
     let words: Vec<u32> = journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     assert!(journal.len() % 4 == 0, "core journal is not whole words");
     let j: ChainState = risc0_zkvm::serde::from_slice(&words).expect("core journal is not a ChainState");
-    let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, ss_set: j.ss_set as u64 };
+    let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
     // The anchor is policy (the final verifier pins it), so the guest compares it with itself here.
     facts::check_core_statement(&st, &core_id, 2, if signet { facts::Network::Signet } else { facts::Network::Mainnet }, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
     let ok = match q.spent_by {

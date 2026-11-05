@@ -9,7 +9,7 @@
 H=${1:?host}; O=${2:?out dir}; J=~/libzync-gpu/ssweep; Z=~/dev/hazync-libzync
 mkdir -p $O; rm -rf $O/a $O/b
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_COINLOG_SAVE_EACH=1
-root() { python3 -c "import json;print(json.load(open('$1'))['ss_hints'])" 2>/dev/null; }
+root() { python3 -c "import json;j=json.load(open('$1'));print(j.get('trie_root', j.get('ss_hints')))" 2>/dev/null; }
 echo "== 1. genesis..200"
 $H libzync-prove-range 1 200 $J genesis $O/a > $O/a.log 2>&1; echo "exit=$?"
 grep -a 'LZ_PROVE_RANGE_DONE\|panicked\|REJECT' $O/a.log | grep -v 'main.rs:2297' | head -5

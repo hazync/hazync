@@ -190,11 +190,11 @@ pub(crate) fn verify_any_cmd(bin: &str) {
 // journal-indistinguishable from a genuine genesis-anchored one. The expected anchor_id is the double-
 // SHA256 of the canonical genesis-anchor journal — exactly what the guest commits in the base step.
 pub(crate) fn verify_chain_cmd(bin: &str) {
-    // A libzync ChainState is only meaningful with ss_set == 0 against a hints file, the profile and the rest
-    // of libzync-verify's checks; this command checks none of them, so it would call a chain that spends a
+    // A libzync ChainState is only meaningful with the profile, the block forest and the rest of libzync-verify's
+    // checks; this command checks none of them, so it would call a chain that spends a
     // fabricated coin VERIFIED (review 5). Refuse rather than give a partial verdict.
     if methods::LIBZYNC {
-        eprintln!("verify-chain: this is a libzync build; use `libzync-verify <receipt> <file.hints>`");
+        eprintln!("verify-chain: this is a libzync build; use `libzync-verify <receipt>`");
         std::process::exit(1);
     }
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(bin).expect("bin")).unwrap();

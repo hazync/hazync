@@ -1,6 +1,7 @@
-/* swiftsync_verify.h: check a libzync proof that a SwiftSync hints file is correct (docs/libzync/SWIFTSYNC_PROOFS.md
- * §5), from C or C++. The same checks as the swiftsync-verify CLI; link libswiftsync_verify.a (and -lpthread -ldl -lm).
- * Thread-safe; no global state; never aborts on bad input. */
+/* swiftsync_verify.h: check a libzync chain proof (the chain from genesis, its coin log, and with the product image its
+ * counting trie and live-coin hash) and facts about it, from C or C++. The same checks as the swiftsync-verify CLI;
+ * link libswiftsync_verify.a (and -lpthread -ldl -lm). Thread-safe; no global state; never aborts on bad input.
+ * (E2 retired the SwiftSync hints file: no proof takes one, and the hints arguments are gone from both calls.) */
 #ifndef SWIFTSYNC_VERIFY_H
 #define SWIFTSYNC_VERIFY_H
 #include <stddef.h>
@@ -9,23 +10,25 @@
 extern "C" {
 #endif
 
-#define SWIFTSYNC_VERIFY_OK   0  /* genesis-anchored: the file is correct for the chain in `out` */
+#define SWIFTSYNC_VERIFY_OK   0  /* genesis-anchored, enough work: the chain in `out` is proven */
 #define SWIFTSYNC_VERIFY_FAIL 1
-#define SWIFTSYNC_VERIFY_DEMO 2  /* passed against a supplied anchor only: never a proof of the file */
+#define SWIFTSYNC_VERIFY_DEMO 2  /* a valid chain, but from a supplied anchor or below the minimum work */
 
 #define SWIFTSYNC_NET_MAINNET 0
 #define SWIFTSYNC_NET_SIGNET  1
+#define SWIFTSYNC_IMG_COINLOG 0x10  /* OR into network: a coin-log image */
+#define SWIFTSYNC_IMG_PRODUCT 0x20  /* OR into network: the product image (coin log, counting trie, live-coin hash) */
 
 typedef struct {
     uint32_t height;         /* H */
     uint8_t  tip_hash[32];   /* the proven block at H, internal byte order (as uint256 holds it) */
     uint8_t  chainwork[32];  /* cumulative work at H, 32 bytes little-endian (as arith_uint256 serialises) */
     uint64_t utxo_leaves;    /* coins in the UTXO set at H */
-    uint32_t profile;        /* bit 0 libzync, bit 1 scripts NOT checked (assumevalid), bit 2 signet */
+    uint32_t profile;        /* bit 0 libzync, 1 scripts NOT checked (assumevalid), 2 signet, 4 coin log, 5 trie, 6 live-coin hash */
 } swiftsync_result;
 
-/* Verify `receipt` (a .rcpt receipt or a .sspf bundle) against the hints file bytes.
- *   network:     SWIFTSYNC_NET_*.
+/* Verify `receipt` (a .rcpt receipt or a .sspf bundle).
+ *   network:     SWIFTSYNC_NET_*, OR SWIFTSYNC_IMG_COINLOG / SWIFTSYNC_IMG_PRODUCT.
  *   now:         the caller's clock, unix seconds (for time-too-new, §5 step 11).
  *   image_hex:   NULL for the built-in image id, or 64 hex digits (an id you rebuilt, §5 step 9).
  *   anchor_json: NULL for genesis, or a ChainState JSON; the result is then at best SWIFTSYNC_VERIFY_DEMO.
@@ -33,7 +36,7 @@ typedef struct {
  *   msg/msg_len: optional buffer for a NUL-terminated description of the first failed check.
  * Step 7 of §5 is the caller's: `out->tip_hash` must be the block at `out->height` on its own most-work chain,
  * with `out->chainwork`. Returns SWIFTSYNC_VERIFY_OK, _DEMO or _FAIL. */
-int swiftsync_verify(const uint8_t* receipt, size_t receipt_len, const uint8_t* hints, size_t hints_len,
+int swiftsync_verify(const uint8_t* receipt, size_t receipt_len,
                      uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                      swiftsync_result* out, char* msg, size_t msg_len);
 
@@ -42,7 +45,7 @@ int swiftsync_verify(const uint8_t* receipt, size_t receipt_len, const uint8_t* 
  * NUL-terminated JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact] (counting-trie facts at the
  * tip: coin unspent / spent by / absent, a script's balance or complete history), "expect": "<height>:<hash>"}, or NULL. Any fact that does not hold is FAIL (1), with its reason in msg; facts with no
  * matching "expect" (the network's block at the proof's height) give at most DEMO (2). */
-int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len, const uint8_t* hints, size_t hints_len,
+int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len,
                            uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                            const char* facts_json, swiftsync_result* out, char* msg, size_t msg_len);
 

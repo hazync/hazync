@@ -133,8 +133,8 @@ pub fn ecmh_hint(leaf: &[u8; 32]) -> Vec<u8> {
 
 /// Everything expensive a block's proof needs, in ONE file (`libzync-hints` writes it).
 ///
-/// Only what costs a collect pass to learn is stored. The pubkey-Y hints, the block's MTP and the
-/// SwiftSync bits are cheap and derived at run time (from the block and from the hints file).
+/// Only what costs a collect pass to learn is stored. The pubkey-Y hints and the block's MTP are cheap and derived
+/// at run time from the block.
 ///
 /// ```text
 /// "LZB1" version=1 height block_hash[32] nchunks { lo hi sig_len sig[sig_len] }* ecmh_len ecmh[ecmh_len]
@@ -219,40 +219,6 @@ impl BlockBundle {
         std::fs::File::open(path).and_then(|mut f| f.read_to_end(&mut b)).map_err(|e| format!("{path}: {e}"))?;
         Self::from_bytes(&b).map_err(|e| format!("{path}: {e}"))
     }
-}
-
-/// The hint hash a proof at a hints file's stop height must commit, from the file ALONE.
-/// Err if a height's list is not STRICTLY ascending: the Elias-Fano decoder does not enforce order, and a
-/// client walking the list as sorted would mark the wrong outputs (review 2). Sorting it here instead would
-/// let a proof vouch for a file that is not what it says.
-pub fn file_hash(file: &hintsfile::Hintsfile) -> Result<[u8; 32], String> {
-    let mut h = [0u8; 32];
-    for height in 1..=file.stop_height() {
-        let idx = file.indices_at_height(height).ok_or_else(|| format!("height {height}: missing"))?;
-        if !idx.windows(2).all(|p| p[0] < p[1]) {
-            return Err(format!("height {height}: index list is not strictly ascending"));
-        }
-        h = crate::ss_hints::step(&h, height, &idx);
-    }
-    Ok(h)
-}
-
-/// The file re-encoded from what it decodes to. A hints file is CANONICAL when this equals its bytes: the
-/// hintsfile crate's Elias-Fano decoder does not check low-bit padding, values against the header's bound or
-/// trailing bytes, so two byte-different files can decode alike and another decoder may read either one
-/// differently (audit 3). A proof vouches for the decoded lists; requiring canonical bytes makes that the file.
-pub fn canonical_bytes(file: &hintsfile::Hintsfile) -> Result<Vec<u8>, String> {
-    use hintsfile::{EliasFano, HintsfileBuilder};
-    let mut out = Vec::new();
-    {
-        let mut b = HintsfileBuilder::new(&mut out).initialize(file.stop_height()).map_err(|e| format!("{e}"))?;
-        for h in 1..=file.stop_height() {
-            let idx = file.indices_at_height(h).ok_or_else(|| format!("height {h}: missing"))?;
-            b.append(EliasFano::compress(&idx)).map_err(|e| format!("{e}"))?;
-        }
-        b.finish().map_err(|e| format!("{e}"))?;
-    }
-    Ok(out)
 }
 
 /// ROADMAP C1: the coin log's nodes on disk, one file per level (`L<l>.bin`, 32 bytes per node, node i at offset 32·i),

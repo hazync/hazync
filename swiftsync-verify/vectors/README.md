@@ -1,26 +1,22 @@
-# Test vectors for a SwiftSync-hints proof verifier
+# Test vectors for the libzync chain-proof verifier
 
-⚠ **STALE (11-03).** The receipts and anchor files are round-4 images from before ChainState version 2 (kind
-`0xC4A1_0012`, the `version` field, coin state in block leaves): they no longer decode, so every case fails before
-the check it was written for (`run_vectors.py` gives 13/15, for the wrong reasons). They are regenerated from the
-first GPU proofs of the frozen image (`experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md`). The reference values in
-`manifest.json` (genesis anchors, empty SMT root) are current.
+⚠ **Refusals only, until the first GPU proofs of the frozen image.** Every receipt here is from the retired round-4
+design-B signet image (`c3501ac9…`): its journal predates ChainState version 2 and its image kept no coin log, so every
+case must FAIL. E2 (11-05) removed the SwiftSync hints file from every proof; the hints-file cases went with it. OK and
+DEMO cases come back with receipts of the product image (`experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md`).
 
-`manifest.json` lists 14 cases: verifier arguments (in `swiftsync-verify` syntax) and the exit code a correct
-verifier must give (0 OK, 2 DEMO, 1 FAIL), with a description of what each one breaks. It also lists reference
-values a second implementation should reproduce: `ss_hints` of three hints files, genesis `anchor_id`s per image,
-the empty coinbase-SMT root, and the Utreexo roots at mainnet height 200.
+`manifest.json` lists 8 cases: verifier arguments (in `swiftsync-verify` syntax), the exit code a correct verifier must
+give (0 OK, 2 DEMO, 1 FAIL), and what each one breaks. `cli_only` cases test the CLI's own argument handling (a
+hints-file or `-` argument is refused, not ignored); the C and WASM harnesses skip them. It also lists reference
+values a second implementation should reproduce: genesis `anchor_id`s per network, the empty coinbase-SMT root, and
+the Utreexo roots at mainnet height 200.
 
 ```sh
 python3 run_vectors.py ../target/release/swiftsync-verify     # or any verifier taking the same arguments
 ```
 
-`run_vectors.out` is the result for `swiftsync-verify` at this commit: 14/14.
+`run_vectors.out` is the result for `swiftsync-verify` at this commit: 8/8.
 
-**What is real and what is made.** `r4_block_2600.rcpt` and `r4_block_2530.rcpt` are real GPU proofs from the
-round-4 signet image (`c3501ac9…`), starting from a supplied state at 2,500 (`r4_anchor_2500.json`), so the best
-verdict any case can reach is DEMO: no genesis-anchored receipt exists yet. `fake_block_2501.rcpt` is a dev-mode
-FakeReceipt. The `bad_*` files are made from the real ones by one change each (see the manifest).
-
-`fake_block_2501.rcpt` was made under the laptop-built signet image (`4b91b085…`), so against the published image it
-fails the `self_id` check as well as the fake-receipt check (7 failed checks, 6 when it was made). The verdict is unchanged.
+`fake_block_2501.rcpt` is a dev-mode FakeReceipt. `bad_bundle_header.sspf` and `r4_2600.sspf` are version-1 bundles
+(they carried a hints-file hash), refused by today's version-2 reader. `signet2600.hints` is kept only as the argument
+the CLI must refuse.

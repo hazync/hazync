@@ -70,7 +70,7 @@ pub(crate) fn trie_journal_words(j: &[u8]) -> [u32; libzync::ttree::TRIE_JOURNAL
 pub(crate) fn trie_prove(h: u32, marks: &Marks, ins: &Inserts, prev: &ChainState, opts: &risc0_zkvm::ProverOpts) -> risc0_zkvm::Receipt {
     let g = TS.lock().unwrap();
     let st = g.as_ref().expect("trie store not initialised");
-    assert_eq!(libzync::coinlog::h_of(&st.root()), prev.ss_hints, "block {h}: the trie store is not at the previous state's trie root");
+    assert_eq!(libzync::coinlog::h_of(&st.root()), prev.trie_root, "block {h}: the trie store is not at the previous state's trie root");
     let wit = st.witness(marks, ins);
     drop(g);
     let mut b = ExecutorEnv::builder();
@@ -79,7 +79,7 @@ pub(crate) fn trie_prove(h: u32, marks: &Marks, ins: &Inserts, prev: &ChainState
         .unwrap_or_else(|e| panic!("block {h}: trie update proof (mode 17) failed: {e}")).receipt;
     r.verify(methods::METHOD_ID).expect("trie receipt verifies");
     let j = trie_journal_words(&r.journal.bytes);
-    assert!(j[0] == libzync::ttree::KIND_TRIE && j[1..9] == libzync::coinlog::w_of(&prev.ss_hints)[..],
+    assert!(j[0] == libzync::ttree::KIND_TRIE && j[1..9] == libzync::coinlog::w_of(&prev.trie_root)[..],
             "block {h}: the trie receipt is not from the previous trie root");
     println!("  block {h}: trie update proved: {} marks, {} inserts, witness {} words", marks.len(), ins.len(), wit.len());
     r
@@ -90,7 +90,7 @@ pub(crate) fn trie_commit(marks: &Marks, ins: &Inserts, st: &ChainState) {
     let mut g = TS.lock().unwrap();
     let ts = g.as_mut().expect("trie store not initialised");
     let new = ts.apply(marks, ins).unwrap_or_else(|e| panic!("block {}: the trie store refused the proved update list: {e:?}", st.height));
-    assert_eq!(libzync::coinlog::h_of(&new), st.ss_hints, "block {}: the trie store's new root != the chain state's", st.height);
+    assert_eq!(libzync::coinlog::h_of(&new), st.trie_root, "block {}: the trie store's new root != the chain state's", st.height);
     ts.height = st.height as u64;
     ts.hash = st.tip_hash;
 }
@@ -117,7 +117,7 @@ pub(crate) fn trie_load(path: &str, st: &ChainState) {
     let b = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e} (a trie image's anchor needs its .trie file)"));
     let ts = TrieStore::from_bytes(&b).unwrap_or_else(|e| panic!("{path}: not a valid trie snapshot ({e:?})"));
     assert!(ts.counts(), "{path}: not a counts-mode trie");
-    assert_eq!(libzync::coinlog::h_of(&ts.root()), st.ss_hints, "{path}: its root is not the state's trie root");
+    assert_eq!(libzync::coinlog::h_of(&ts.root()), st.trie_root, "{path}: its root is not the state's trie root");
     assert!(ts.height == st.height as u64 && ts.hash == st.tip_hash, "{path}: a snapshot at {} not {}", ts.height, st.height);
     *TS.lock().unwrap() = Some(ts);
 }
@@ -125,7 +125,7 @@ pub(crate) fn trie_load(path: &str, st: &ChainState) {
 /// The trie at the run's start: empty from genesis, the handover receipt's directory's snapshot, or the anchor's.
 pub(crate) fn trie_init_at_start(handover: bool, anchor_path: &str, prev: &ChainState) {
     if anchor_path == "genesis" && !handover {
-        assert_eq!(prev.ss_hints, [0; 32], "genesis: the trie root must be the empty trie's");
+        assert_eq!(prev.trie_root, [0; 32], "genesis: the trie root must be the empty trie's");
         let mut ts = TrieStore::new(true);
         ts.hash = prev.tip_hash;
         *TS.lock().unwrap() = Some(ts);

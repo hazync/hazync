@@ -1,5 +1,5 @@
-//! `swiftsync-verify-wasm`: the SwiftSync hints-proof verifier in a browser. Local verification, not a
-//! service: the proof and the file are checked on the device, by the same `swiftsync_verify::verify` the CLI
+//! `swiftsync-verify-wasm`: the libzync chain-proof verifier in a browser. Local verification, not a
+//! service: the proof and its facts are checked on the device, by the same `swiftsync_verify::verify` the CLI
 //! uses, with no network. Raw ABI and no wasm-bindgen, for the reason ../verifier-wasm gives: the .wasm is a
 //! plain cargo output anyone can rebuild and compare.
 //!
@@ -8,8 +8,8 @@
 //!   verify(ptr, len) -> p    returns a pointer to [u32 LE length][UTF-8 JSON]
 //! ```
 //!
-//! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet][u64 now, unix seconds]`
-//! `[u32 n][receipt or .sspf bundle][u32 n][hints file][u32 n][anchor JSON, n = 0 for genesis]`
+//! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet; | 0x10 coin-log image, | 0x20 product image]`
+//! `[u64 now, unix seconds][u32 n][receipt or .sspf bundle][u32 n][anchor JSON, n = 0 for genesis]`
 //! `[u32 n][image id hex, n = 0 for the built-in id]`. The page supplies `now` because WebAssembly has no clock.
 //!
 //! The JSON always has `verdict` ("ok", "demo" or "fail", the CLI's 0 / 2 / 1) and `checks`. There is no step 7
@@ -78,7 +78,6 @@ fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
     };
     let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
     let receipt = f.chunk()?;
-    let hints = f.chunk()?;
     let anchor_json = f.chunk()?;
     let image_hex = f.chunk()?;
     let mut image = Image::by_network(network).ok_or("no built-in image")?;
@@ -98,9 +97,9 @@ fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
         Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
     };
     let rep = if receipt.starts_with(BUNDLE_MAGIC) {
-        check_bundle(&Bundle::decode(receipt)?, hints, image, anchor, now)
+        check_bundle(&Bundle::decode(receipt)?, image, anchor, now)
     } else {
-        verify(&Inputs { receipt, hints, image, anchor, now })
+        verify(&Inputs { receipt, image, anchor, now })
     };
     Ok((rep, image))
 }

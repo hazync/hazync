@@ -1,12 +1,12 @@
-# `swiftsync-verify-wasm`: the SwiftSync hints-proof verifier in a browser
+# `swiftsync-verify-wasm`: the libzync chain-proof verifier in a browser
 
 The same checks as `swiftsync-verify` (one library), compiled to WebAssembly, with a one-page front end. The proof
-and the hints file are verified on the device; nothing is uploaded. No wasm-bindgen: a raw ABI and ~60 lines of
+and its facts are verified on the device; nothing is uploaded. No wasm-bindgen: a raw ABI and ~60 lines of
 hand-written glue (`swiftsync-verify.js`), so the `.wasm` is a plain cargo output anyone can rebuild and compare.
 
 ```sh
 ./build.sh                                   # byte-reproducible: stages the sources at a fixed path
-node test-vectors.mjs                        # the 14 vectors of ../swiftsync-verify/vectors through the WASM
+node test-vectors.mjs                        # the vectors of ../swiftsync-verify/vectors through the WASM
 cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3 -m http.server   # then open index.html
 ```
 

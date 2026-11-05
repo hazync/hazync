@@ -1,11 +1,13 @@
-//! `swiftsync-verify`: the checks a SwiftSync user runs before trusting a hints file because of a libzync proof
-//! (docs/libzync/SWIFTSYNC_PROOFS.md §5). One implementation, shared by the CLI and any later C or WASM build.
+//! `swiftsync-verify`: the checks a user runs before trusting a libzync chain proof, and the facts (coins, the
+//! counting trie) checked against the state it proves. One implementation, shared by the CLI, the C ABI and WASM.
+//! (The name is historical: the SwiftSync hints file, design B, was retired in E2. The proofs need none.)
 //!
-//! Given a receipt R, a hints file F, the network, and optionally a trusted anchor state, [`verify`] runs
-//! steps 1-6 and 8-11 of §5 and returns every check with its result, the proven chain's tip and work (for step
-//! 7, which needs the user's own node), and one of three verdicts:
-//!   - `Ok`:   a genesis-anchored proof; F is correct for the chain ending at the tip;
-//!   - `Demo`: every check passed against a SUPPLIED anchor: never a proof of F;
+//! Given a receipt R, the network, and optionally a trusted anchor state, [`verify`] checks the receipt, its
+//! journal, the profile, the anchor, the block forest and time-too-new, and returns every check with its result,
+//! the proven chain's tip and work (whose identity with the network's chain a caller checks against a source it
+//! trusts), and one of three verdicts:
+//!   - `Ok`:   a genesis-anchored proof of a chain with enough work;
+//!   - `Demo`: every check passed, but against a SUPPLIED anchor, or below the minimum work / checkpoint;
 //!   - `Fail`: anything else, including unreadable inputs.
 //!
 //! It never panics on input: a malformed receipt, file or anchor is a failed check.
@@ -57,9 +59,9 @@ pub const PROFILE_ASSUMEVALID: u32 = 2;
 pub const PROFILE_SIGNET: u32 = 4;
 /// The coin log (docs/libzync/COINLOG.md): no hints file, sound at every block.
 pub const PROFILE_COINLOG: u32 = 16;
-/// The counting trie (libzync/src/ttree.rs): `ss_hints` is its root; absence, history and balance facts ([`TrieFact`]).
+/// The counting trie (libzync/src/ttree.rs): `trie_root` is its root; absence, history and balance facts ([`TrieFact`]).
 pub const PROFILE_TRIE: u32 = 32;
-/// The live-coin multiset hash (instant IBD): `ss_set` / `ss_acc` hash the unspent coins.
+/// The live-coin multiset hash (instant IBD): `live_set` / `live_hash` hash the unspent coins.
 pub const PROFILE_UTXOHASH: u32 = 64;
 /// Core's MAX_FUTURE_BLOCK_TIME.
 pub const MAX_FUTURE_BLOCK_TIME: u64 = 2 * 60 * 60;
@@ -140,9 +142,15 @@ pub struct ChainState {
     pub recent_times: Vec<u32>,
     pub anchor_id: [u8; 32],
     pub self_id: [u32; 8],
-    pub ss_set: u32,
-    pub ss_acc: [u32; 16],
-    pub ss_hints: [u8; 32],
+    /// The multiset hash of the LIVE coins (profile bit 6, instant IBD): 0 = the identity, 1 = `live_hash` is the point.
+    /// The serde aliases read a JSON written before E2 renamed the retired SwiftSync design B's fields.
+    #[serde(alias = "ss_set")]
+    pub live_set: u32,
+    #[serde(alias = "ss_acc")]
+    pub live_hash: [u32; 16],
+    /// The counting trie's root (profile bit 5): absence, history and balance facts ([`TrieFact`]).
+    #[serde(alias = "ss_hints")]
+    pub trie_root: [u8; 32],
     pub smt_root: [u8; 32],
     pub max_time: u32,
     pub profile: u32,
@@ -298,7 +306,6 @@ impl Report {
 /// Everything the verifier is given. `now` is the verifier's own clock (unix seconds), for step 11.
 pub struct Inputs<'a> {
     pub receipt: &'a [u8],
-    pub hints: &'a [u8],
     pub image: &'static Image,
     /// A trusted state to check `anchor_id` against instead of genesis: the verdict is then at best `Demo`.
     pub anchor: Option<ChainState>,
@@ -361,28 +368,15 @@ pub fn verify(inp: &Inputs) -> Report {
     };
     rep.check(cs.anchor_id == want, format!("anchor_id is {what}"));
 
-    // Step 10, then 4-6: the file. A coin-log image has none: its commitment is sound at every block.
-    if inp.image.profile & PROFILE_COINLOG != 0 {
-        rep.check(inp.hints.is_empty(), "a coin-log proof takes no hints file");
-        // The former SwiftSync fields: the live-coin hash (bit 6) and the trie root (bit 5), or zero without them.
-        if inp.image.profile & PROFILE_UTXOHASH == 0 {
-            rep.check(cs.ss_set == 0 && cs.ss_acc == [0; 16], "live-coin hash unused in this image (ss_set == 0)");
-        }
-        if inp.image.profile & PROFILE_TRIE == 0 {
-            rep.check(cs.ss_hints == [0; 32], "trie root unused in this image (ss_hints == 0)");
-        }
-    } else {
-    match hints_file(inp.hints) {
-        Err(e) => {
-            rep.check(false, format!("the hints file is canonically encoded and well formed ({e})"));
-        }
-        Ok((stop, fh)) => {
-            rep.check(true, "the hints file is canonically encoded (re-encoding its lists gives the same bytes; no trailing data)");
-            rep.check(cs.height == stop, format!("height {} == the file's stop height {}", cs.height, stop));
-            rep.check(cs.ss_set == 0, "SwiftSync total is the identity (ss_set == 0)");
-            rep.check(cs.ss_hints == fh, format!("ss_hints {} == the hash of the file", hex(&fh)));
-        }
+    // The coin log is sound at every block: nothing to close at H. A design-B image (a SwiftSync hints file closed
+    // the commitment at H) is retired: its proofs are not checked.
+    rep.check(inp.image.profile & PROFILE_COINLOG != 0, "the image keeps its coins in the coin log (design B, the hints-file images, is retired)");
+    // The live-coin hash (bit 6) and the trie root (bit 5), or zero without them.
+    if inp.image.profile & PROFILE_UTXOHASH == 0 {
+        rep.check(cs.live_set == 0 && cs.live_hash == [0; 16], "live-coin hash unused in this image (live_set == 0)");
     }
+    if inp.image.profile & PROFILE_TRIE == 0 {
+        rep.check(cs.trie_root == [0; 32], "trie root unused in this image (trie_root == 0)");
     }
     // Not a failed check: the chain may be valid, it just does not carry the work that makes it the network's chain.
     let enough_work = work_at_least(&cs.cum_work, inp.image.min_work_hex);
@@ -459,9 +453,9 @@ pub fn genesis_anchor(img: &Image) -> ChainState {
         anchor_id: [0; 32],
         // Zero, not this image: anchor_id must stay the same across a handover (HANDOVER.md).
         self_id: [0; 8],
-        ss_set: 0,
-        ss_acc: [0; 16],
-        ss_hints: [0; 32],
+        live_set: 0,
+        live_hash: [0; 16],
+        trie_root: [0; 32],
         smt_root: empty_smt_root(),
         max_time: img.genesis_time,
         profile: 0,
@@ -491,30 +485,6 @@ pub fn empty_smt_root() -> [u8; 32] {
         e = h.finalize().into();
     }
     e
-}
-
-/// Decode a hints file, require it to be canonically encoded, and return (stop height, ss_hints).
-pub fn hints_file(raw: &[u8]) -> Result<(u32, [u8; 32]), String> {
-    use hintsfile::{EliasFano, Hintsfile, HintsfileBuilder};
-    let file = Hintsfile::from_reader(&mut &raw[..]).map_err(|e| format!("{e:?}"))?;
-    let mut canon = Vec::new();
-    let mut h = [0u8; 32];
-    {
-        let mut b = HintsfileBuilder::new(&mut canon).initialize(file.stop_height()).map_err(|e| format!("{e:?}"))?;
-        for height in 1..=file.stop_height() {
-            let idx = file.indices_at_height(height).ok_or_else(|| format!("height {height}: missing"))?;
-            if !idx.windows(2).all(|p| p[0] < p[1]) {
-                return Err(format!("height {height}: list is not strictly ascending"));
-            }
-            h = libzync::ss_hints::step(&h, height, &idx);
-            b.append(EliasFano::compress(&idx)).map_err(|e| format!("{e:?}"))?;
-        }
-        b.finish().map_err(|e| format!("{e:?}"))?;
-    }
-    if canon != raw {
-        return Err("not canonically encoded".into());
-    }
-    Ok((file.stop_height(), h))
 }
 
 pub fn words(d: &Digest) -> [u32; 8] {
@@ -661,7 +631,7 @@ pub fn check_trie_fact(cs: &ChainState, f: &TrieFact) -> Result<String, String> 
     let pb = unhex(&f.proof).ok_or("proof: not hex")?;
     if pb.len() % 4 != 0 { return Err("proof: not whole words".into()); }
     let proof: Vec<u32> = pb.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-    let root = libzync::coinlog::w_of(&cs.ss_hints);
+    let root = libzync::coinlog::w_of(&cs.trie_root);
     let e = |x: tf::FactErr| format!("the trie proof does not hold against the proof's trie root ({x:?})");
     let sh = tf::script_hash(&spk);
     match f.kind.as_str() {
@@ -838,7 +808,7 @@ mod tests {
         let mut cs = genesis_anchor(&IMAGES[0]);
         cs.profile |= PROFILE_COINLOG | PROFILE_TRIE;
         cs.height = 2;
-        cs.ss_hints = libzync::coinlog::h_of(&st.root());
+        cs.trie_root = libzync::coinlog::h_of(&st.root());
 
         let f = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(0)).unwrap();
         let ok = check_trie_fact(&cs, &f).unwrap();
@@ -859,7 +829,7 @@ mod tests {
         assert!(check_trie_fact(&cs, &sw).is_err(), "a coin proof answers only for its own coin");
         // another root, another height, a chain without the trie: refused
         let mut c2 = cs.clone();
-        c2.ss_hints[0] ^= 1;
+        c2.trie_root[0] ^= 1;
         assert!(check_trie_fact(&c2, &f).is_err());
         let mut c3 = cs.clone();
         c3.height = 3;
@@ -1200,9 +1170,9 @@ mod tests {
     }
 }
 
-/// A proof bundle (`docs/libzync/PROOF_BUNDLE.md`): one file that travels with a hints file. Its header is a
-/// convenience for people and indexes, NEVER trusted: [`check_bundle`] requires every field to equal what the
-/// verified receipt and the actual file say.
+/// A proof bundle (`docs/libzync/PROOF_BUNDLE.md`): a receipt behind a short header naming what it proves. The header
+/// is a convenience for people and indexes, NEVER trusted: [`check_bundle`] requires every field to equal what the
+/// verified receipt says. Version 2 (E2): version 1 also carried the sha256 of a SwiftSync hints file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bundle {
     pub network: u8,
@@ -1210,14 +1180,13 @@ pub struct Bundle {
     pub stop_height: u32,
     pub tip_hash: [u8; 32],
     pub cum_work: [u8; 32],
-    pub ss_hints: [u8; 32],
-    pub hints_sha256: [u8; 32],
+    pub trie_root: [u8; 32],
     pub receipt: Vec<u8>,
 }
 
 pub const BUNDLE_MAGIC: &[u8; 4] = b"SSPF";
-pub const BUNDLE_VERSION: u8 = 1;
-const BUNDLE_HEADER: usize = 4 + 1 + 1 + 32 + 4 + 32 + 32 + 32 + 32 + 4;
+pub const BUNDLE_VERSION: u8 = 2;
+const BUNDLE_HEADER: usize = 4 + 1 + 1 + 32 + 4 + 32 + 32 + 32 + 4;
 
 pub fn network_code(name: &str) -> Option<u8> {
     match name {
@@ -1237,8 +1206,7 @@ impl Bundle {
         out.extend_from_slice(&self.stop_height.to_le_bytes());
         out.extend_from_slice(&self.tip_hash);
         out.extend_from_slice(&self.cum_work);
-        out.extend_from_slice(&self.ss_hints);
-        out.extend_from_slice(&self.hints_sha256);
+        out.extend_from_slice(&self.trie_root);
         out.extend_from_slice(&(self.receipt.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.receipt);
         out
@@ -1263,19 +1231,14 @@ impl Bundle {
             stop_height: u32le(38),
             tip_hash: a32(42),
             cum_work: a32(74),
-            ss_hints: a32(106),
-            hints_sha256: a32(138),
+            trie_root: a32(106),
             receipt: b[BUNDLE_HEADER..].to_vec(),
         })
     }
 
-    /// Build a bundle from a receipt and its hints file; fails unless the receipt verifies (OK or DEMO) for `img`.
-    pub fn make(receipt: &[u8], hints: &[u8], img: &'static Image, anchor: Option<ChainState>, now: u64) -> Result<Bundle, String> {
-        use sha2::{Digest as _, Sha256};
-        let rep = verify(&Inputs { receipt, hints, image: img, anchor: anchor.clone(), now });
-        if img.profile & PROFILE_COINLOG != 0 {
-            return Err("a bundle carries a hints file; a coin-log proof has none".into());
-        }
+    /// Build a bundle from a receipt; fails unless the receipt verifies (OK or DEMO) for `img`.
+    pub fn make(receipt: &[u8], img: &'static Image, anchor: Option<ChainState>, now: u64) -> Result<Bundle, String> {
+        let rep = verify(&Inputs { receipt, image: img, anchor: anchor.clone(), now });
         // Ok, or Demo only for low work on a chain from genesis (a valid chain, e.g. a signet test range). Never an
         // anchored proof: the bundle's reader would have to trust the same anchor.
         let anchored = anchor.is_some();
@@ -1290,8 +1253,7 @@ impl Bundle {
             stop_height: cs.height,
             tip_hash: cs.tip_hash,
             cum_work: cs.cum_work,
-            ss_hints: cs.ss_hints,
-            hints_sha256: Sha256::digest(hints).into(),
+            trie_root: cs.trie_root,
             receipt: receipt.to_vec(),
         })
     }
@@ -1299,17 +1261,14 @@ impl Bundle {
 
 /// Verify a bundle: the receipt as [`verify`] does, then every header field against the result. The image and
 /// network come from the VERIFIER (`img`), never from the bundle.
-pub fn check_bundle(bundle: &Bundle, hints: &[u8], img: &'static Image, anchor: Option<ChainState>, now: u64) -> Report {
-    use sha2::{Digest as _, Sha256};
-    let mut rep = verify(&Inputs { receipt: &bundle.receipt, hints, image: img, anchor, now });
+pub fn check_bundle(bundle: &Bundle, img: &'static Image, anchor: Option<ChainState>, now: u64) -> Report {
+    let mut rep = verify(&Inputs { receipt: &bundle.receipt, image: img, anchor, now });
     rep.check(Some(bundle.network) == network_code(img.network), "bundle header: network is this verifier's");
     rep.check(hex32(img.method_id_hex) == Some(bundle.image), format!("bundle header: image {} is this verifier's", hex(&bundle.image)));
-    let digest: [u8; 32] = Sha256::digest(hints).into();
-    rep.check(digest == bundle.hints_sha256, "bundle header: sha256 of the hints file matches");
     if let Some(cs) = &rep.state {
         let same = cs.height == bundle.stop_height && cs.tip_hash == bundle.tip_hash && cs.cum_work == bundle.cum_work
-            && cs.ss_hints == bundle.ss_hints;
-        rep.check(same, "bundle header: height, tip, work and ss_hints equal the verified journal's");
+            && cs.trie_root == bundle.trie_root;
+        rep.check(same, "bundle header: height, tip, work and trie_root equal the verified journal's");
     }
     if rep.failed() {
         rep.verdict = Verdict::Fail;
@@ -1324,13 +1283,13 @@ mod bundle_tests {
     #[test]
     fn roundtrip() {
         let b = Bundle { network: 1, image: [7; 32], stop_height: 2600, tip_hash: [1; 32], cum_work: [2; 32],
-                         ss_hints: [3; 32], hints_sha256: [4; 32], receipt: vec![9; 100] };
+                         trie_root: [3; 32], receipt: vec![9; 100] };
         let e = b.encode();
         assert_eq!(e.len(), BUNDLE_HEADER + 100);
         assert_eq!(Bundle::decode(&e).unwrap(), b);
         assert!(Bundle::decode(&e[..e.len() - 1]).is_err());
         let mut v = e.clone();
-        v[4] = 2;
+        v[4] = 1; // a version-1 bundle (with a hints-file hash) is refused
         assert!(Bundle::decode(&v).is_err());
     }
 }

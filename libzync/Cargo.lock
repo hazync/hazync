@@ -79,12 +79,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hintsfile"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e8fa0fc6da2bbed4cc9db8a008a7e5c46e8fce5ffe36a5eff97aa4dff568846"
-
-[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -94,7 +88,6 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 name = "libzync"
 version = "0.1.0"
 dependencies = [
- "hintsfile",
  "num-bigint",
  "secp256k1",
  "sha2",

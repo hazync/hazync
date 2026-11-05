@@ -1,5 +1,9 @@
 # libzync UTXO accumulator: format specification
 
+> ⚠ **RETIRED with design B (E2, 2026-11-05).** The forest of coins unspent at a hints file's stop height is gone: every
+> libzync image keeps its coins in the coin log (`COINLOG.md`), whose leaf format (§2 here: `hz_leaf`, `coin_leaf`) is
+> unchanged. Kept for the leaf format and the record.
+
 Status: describes the code at branch `libzync`. Normative sources are `prover/methods/guest/verify_input.cpp`
 (`hz_leaf`, `coin_leaf`, `tx_out_leaves`), `prover/methods/guest/src/utreexo.rs` (`parent`, `Stump::add`) and
 `prover/methods/guest/src/agg_lite.rs` (which outputs enter the forest). An independent implementation written

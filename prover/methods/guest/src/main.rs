@@ -57,9 +57,6 @@ mod checkpoint;
 mod script_flags;
 // libzync: the hint wire format and the network parameters -- the SAME files the host compiles (libzync crate),
 // included by path for the reason coinbase-smt is (hazync#88).
-// ss_hints: only the wire decoder's hint-bit field check uses it, until E2 removes that field from the wire.
-#[path = "../../../../libzync/src/ss_hints.rs"]
-mod ss_hints;
 #[path = "../../../../libzync/src/wire.rs"]
 mod lz_wire;
 #[path = "../../../../libzync/src/net.rs"]
@@ -605,9 +602,9 @@ struct BlockResult {
     block_time: u32,
     root_next_roots: Vec<Option<[u8; 32]>>,
     root_next_leaves: u64,
-    ss_hints: [u8; 32],       // libzync design B: the running hint-bit hash after this block
+    trie_root: [u8; 32],      // libzync: the counting trie's root after this block (zero without the trie)
     survivor_value: u64,      // libzync: satoshis appended to the coin forest / log by this block
-    spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends (0 under design B)
+    spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends
 }
 
 fn dsha256(data: &[u8]) -> [u8; 32] {
@@ -1388,7 +1385,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         block_time: u32::from_le_bytes(w.header[68..72].try_into().unwrap()),
         root_next_roots: stump.normalized(),
         root_next_leaves: stump.num_leaves,
-        ss_hints: [0u8; 32], // design B lives on the agg-lite path only
+        trie_root: [0u8; 32], // the trie lives on the agg-lite path only
         survivor_value: 0,
         spent_value: 0,
     }
@@ -1425,8 +1422,7 @@ struct ChainState {
     tip_hash: [u8; 32],
     utxo_roots: Vec<Option<[u8; 32]>>,
     utxo_leaves: u64,
-    // libzync: the satoshis held by the coin forest's leaves (design B: the coins unspent at H, so at H this is the
-    // UTXO set's total amount, Core's `gettxoutsetinfo` total_amount). Design B: survivors' amounts only, never decreases; coin log: the live coins' total, down by each spend.
+    // libzync coin log: the live coins' total amount, down by each spend (Core's `gettxoutsetinfo` total_amount).
     utxo_value: u64,
     cum_work: [u8; 32], // cumulative chainwork (256-bit accumulator)
     height: u32,
@@ -1441,13 +1437,13 @@ struct ChainState {
     // is journal-indistinguishable from a genesis-anchored one.
     anchor_id: [u8; 32],
     self_id: [u32; 8],  // S1: the guest image id this proof recursed against (verifier asserts ==METHOD_ID)
-    // libzync SwiftSync, design B (experimental/libzync-bench/HANDOVER_DESIGN.md). The ECMH running total
-    // over every coin created and marked SPENT-BY-H in the hints file, minus every coin spent (ss_set 0 =
-    // the identity), and a running hash of the hint bits. At H the verifier requires ss_set == 0 and
-    // ss_hints == the hash of the published hints file. Identity / zero, carried unchanged, elsewhere.
-    ss_set: u32,
-    ss_acc: [u32; 16],
-    ss_hints: [u8; 32],
+    // libzync (E2): the multiset hash (ECMH) of the LIVE coins, profile bit 6 (instant IBD: a downloaded UTXO set is
+    // checked against it; live_set 0 = the identity), and the counting trie's root, bit 5 (absence, history and
+    // balance facts). Zero, carried unchanged, without those bits. (Until E2 these slots held SwiftSync design B's
+    // hint total and hint hash, ss_set / ss_acc / ss_hints; same layout.)
+    live_set: u32,
+    live_hash: [u32; 16],
+    trie_root: [u8; 32],
     // libzync (review 2, 2026-10-30): the coinbase-txid SMT root after this block. BIP30 is checked against
     // the block's in_smt_root, which was pure witness: carried here, each aggregate requires its block's
     // in_smt_root == prev.smt_root, so the tree is the chain's own from genesis (empty) onwards.
@@ -1487,7 +1483,7 @@ fn chain_profile() -> u32 {
     let lz = cfg!(feature = "libzync") as u32;
     let av = unsafe { hz_no_scripts() } & 1;
     let sig = cfg!(feature = "signet") as u32;
-    // bit 5: ss_hints is the counting trie's root; bit 6: ss_set / ss_acc are the live-coin multiset hash (instant IBD)
+    // bit 5: trie_root is the counting trie's root; bit 6: live_set / live_hash are the live-coin multiset hash (instant IBD)
     lz | av << 1 | sig << 2 | (cfg!(feature = "regtest") as u32) << 3 | (cfg!(feature = "coinlog") as u32) << 4
         | (cfg!(feature = "trie") as u32) << 5 | (cfg!(feature = "utxohash") as u32) << 6
 }
@@ -1665,7 +1661,7 @@ fn chain_step() {
         recent_times,
         anchor_id,
         self_id,
-        ss_set: prev.ss_set, ss_acc: prev.ss_acc, ss_hints: prev.ss_hints,
+        live_set: prev.live_set, live_hash: prev.live_hash, trie_root: prev.trie_root,
         smt_root: r.out_smt_root, // canonical chain_step (unreachable in a libzync image)
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
         block_roots: prev.block_roots.clone(), block_leaves: prev.block_leaves, lineage: prev.lineage,
@@ -2167,18 +2163,15 @@ fn aggregate() {
     // anchored" state one block back, and a receipt every verifier check passed (adversarial audit, 2026-10-30).
     let is_base: u32 = env::read();
     assert!(is_base <= 2, "is_base must be 0, 1 or 2, got {is_base}");
-    // libzync: ONE hint block for the aggregate (libzync/src/wire.rs): ECMH hints (or collect) and
-    // design B's SwiftSync hint bits, one per indexed output (none = no hints file: every created coin
-    // goes to the ECMH total). The decoder refuses hint bits set past the block's outputs.
+    // libzync: ONE hint block for the aggregate (libzync/src/wire.rs): the ECMH hints, or collect mode.
     #[cfg(feature = "libzync")]
-    let ss_bits: (u32, u32, Vec<u32>) = {
+    {
         let n: u32 = env::read();
         let mut words = vec![0u32; n as usize];
         if n > 0 { env::read_slice(&mut words); }
         let h = lz_wire::AggHints::decode(&words).expect("libzync aggregate hints malformed");
         swiftsync::install(h.ecmh_collect, h.ecmh.to_vec());
-        match h.ss { Some((nbits, w)) => (1, nbits, w.to_vec()), None => (0, 0, Vec::new()) }
-    };
+    }
     // libzync coin log: the block's log witness (libzync/src/coinlog.rs encode_witness), after the hint block.
     #[cfg(feature = "coinlog")]
     {
@@ -2247,11 +2240,10 @@ fn aggregate() {
     let prev_mtp = median_time_past(&prev.recent_times);
 
     #[cfg(feature = "libzync")]
-    swiftsync::start(prev.ss_set, &prev.ss_acc);
+    swiftsync::start(prev.live_set, &prev.live_hash);
     #[cfg(feature = "agg-lite")]
     let r = { let _ = (&all_binds, chunks_ok, &chunk_wtxids, &chunk_leaves, &chunk_seqs, &chunk_vers);
-              let ss = (&ss_bits, prev.ss_hints);
-              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals, ss, &rec_order) };
+              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals, prev.trie_root, &rec_order) };
     #[cfg(not(feature = "agg-lite"))]
     let r = validate_block_wtx(&w, prev_mtp, Some((&all_binds, chunks_ok)), &chunk_wtxids,
                                &chunk_leaves, &chunk_seqs, &chunk_vers);
@@ -2289,7 +2281,7 @@ fn aggregate() {
     recent_times.push(r.block_time);
     if recent_times.len() > 11 { let e = recent_times.len() - 11; recent_times.drain(0..e); }
     #[cfg(feature = "libzync")]
-    let ((ss_set, ss_acc), ss_hints) = (swiftsync::total(), r.ss_hints);
+    let ((live_set, live_hash), trie_root) = (swiftsync::total(), r.trie_root);
     // A COLLECT-mode aggregate skipped every ECMH add and subtract (it only logged the leaves for the
     // host), so its total means nothing. It must not produce a chain state: stop here, after the whole
     // block was checked and every leaf logged. Before this, the hint flag alone switched the coin
@@ -2299,7 +2291,7 @@ fn aggregate() {
         panic!("libzync: ECMH collect run finished (leaves logged); a collect run commits no chain state");
     }
     #[cfg(not(feature = "libzync"))]
-    let (ss_set, ss_acc, ss_hints) = (prev.ss_set, prev.ss_acc, prev.ss_hints);
+    let (live_set, live_hash, trie_root) = (prev.live_set, prev.live_hash, prev.trie_root);
     // The block forest. Induction from the genesis state gives one leaf per height; the check also refuses a base
     // step on an anchor that has no forest, which would otherwise commit a forest with the wrong leaf numbering.
     let utxo_value = prev.utxo_value.saturating_add(r.survivor_value).checked_sub(r.spent_value).expect("utxo_value: the block spends more than the log holds");
@@ -2324,7 +2316,7 @@ fn aggregate() {
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
         utxo_value,
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
-        ss_set, ss_acc, ss_hints, smt_root,
+        live_set, live_hash, trie_root, smt_root,
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
         block_roots, block_leaves, lineage,
     });

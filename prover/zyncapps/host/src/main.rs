@@ -98,7 +98,8 @@ fn verdict(r: Result<bool, String>, ok_line: String) -> ! {
 struct ChainState {
     kind: u32, version: u32, tip_hash: [u8; 32], utxo_roots: Vec<Option<[u8; 32]>>, utxo_leaves: u64, utxo_value: u64,
     cum_work: [u8; 32], height: u32, prev_nbits: u32, prev_time: u32, epoch_start: u32, recent_times: Vec<u32>,
-    anchor_id: [u8; 32], self_id: [u32; 8], ss_set: u32, ss_acc: [u32; 16], ss_hints: [u8; 32], smt_root: [u8; 32],
+    anchor_id: [u8; 32], self_id: [u32; 8], #[serde(alias = "ss_set")] live_set: u32,
+    #[serde(alias = "ss_acc")] live_hash: [u32; 16], #[serde(alias = "ss_hints")] trie_root: [u8; 32], smt_root: [u8; 32],
     max_time: u32, profile: u32, block_roots: Vec<Option<[u8; 32]>>, block_leaves: u64, lineage: [u8; 32],
 }
 

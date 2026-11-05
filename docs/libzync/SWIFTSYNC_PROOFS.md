@@ -1,5 +1,11 @@
 # Proven SwiftSync hints: a proposal (draft v0.1, 2026-10-30)
 
+> ⚠ **RETIRED (E2, 2026-11-05).** This proposal's design B (a proof that a SwiftSync hints file is correct) is gone
+> from the code: no proof takes a hints file, the chain state's hint-hash slot now holds the counting trie's root
+> (`trie_root`) and its ECMH slots the live-coin multiset hash (`live_set` / `live_hash`), and the verifiers dropped
+> the hints-file argument. Hazync proves every block (the coin log, `COINLOG.md`) and serves facts from it
+> (`ZYNCAPPS.md`, `LIBZYNC.md`). Kept as the record of what was proposed and measured.
+
 **For:** Ruben Somsen, Robert Netzke, and anyone building on SwiftSync.
 **From:** the Hazync project (`libzync` branch).
 **Status:** working code and real measurements, as execute-mode sweeps and GPU proofs (signet, §10). The design has

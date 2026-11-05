@@ -1,8 +1,10 @@
-//! `swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli "<command>"] <receipt> <file.hints>`
+//! `swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli "<command>"] <receipt>`
 //!
-//! Checks a libzync proof that a SwiftSync hints file is correct (docs/libzync/SWIFTSYNC_PROOFS.md §5) and
-//! prints every check. Exit 0 `SWIFTSYNC_VERIFY_OK`, 2 `SWIFTSYNC_VERIFY_DEMO` (checked against a supplied
-//! anchor: never a proof of the file), 1 `SWIFTSYNC_VERIFY_FAIL` (anything else, including bad input).
+//! Checks a libzync chain proof (the chain from genesis, its coin log, and with the product image its counting trie
+//! and live-coin hash) and the facts given with it, and prints every check. Exit 0 `SWIFTSYNC_VERIFY_OK`, 2
+//! `SWIFTSYNC_VERIFY_DEMO` (a valid chain, but from a supplied anchor or below the minimum work: not shown to be the
+//! network's), 1 `SWIFTSYNC_VERIFY_FAIL` (anything else, including bad input). The SwiftSync hints file (design B) is
+//! retired: no proof takes one.
 //!
 //! Step 7 (the proven tip is on YOUR most-work chain) needs your node: with `--bitcoin-cli "bitcoin-cli -signet"`
 //! (any command line that accepts RPC names as arguments) it asks the node for its block at the proof's height
@@ -22,8 +24,8 @@
 //! - `--bitcoin-cli` (step 7 above), your own node.
 //! A failed identity check is FAIL. With none of them the verdict says the identity was NOT checked and prints the hash.
 //!
-//! `--coinlog`: the image is a coin-log build (docs/libzync/COINLOG.md, profile bit 4). It has no hints file: pass `-`.
-//! `--product`: the product image (coin log, counting trie, live-coin hash; profile bits 4-6). No hints file: pass `-`.
+//! `--coinlog`: the image is a coin-log build (docs/libzync/COINLOG.md, profile bit 4).
+//! `--product`: the product image (coin log, counting trie, live-coin hash; profile bits 4-6).
 //! `--trie <fact.json>` (repeat): a counting-trie fact at the tip (coin unspent / spent by / absent, a script's balance,
 //! its complete history), as `zync-path trie` writes it; checked against the verified state's trie root.
 //!
@@ -31,7 +33,7 @@
 //! from genesis, but a low-work fork costs little to mine, so it is no evidence of the network's chain.
 //!
 //! `<receipt>` may also be a proof bundle (`.sspf`, docs/libzync/PROOF_BUNDLE.md); its header is then checked
-//! against the verified result. `swiftsync-verify [flags] bundle <receipt> <file.hints> <out.sspf>` writes one,
+//! against the verified result. `swiftsync-verify [flags] bundle <receipt> <out.sspf>` writes one,
 //! and refuses a receipt that does not verify.
 
 use std::process::{exit, Command};
@@ -39,8 +41,8 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf> <file.hints | - with --coinlog>");
-    eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <file.hints> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
+    eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
 
@@ -119,14 +121,11 @@ fn main() {
     } else if coinlog {
         image = image.with_coinlog();
     }
-    // `-` is "no hints file", and only a coin-log image has none.
-    let read = |p: &str| -> Vec<u8> {
-        if p == "-" {
-            if !coinlog { fail("'-' (no hints file) is only for a coin-log image (--coinlog)") }
-            return Vec::new();
-        }
-        std::fs::read(p).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(p))))
-    };
+    let read = |p: &str| -> Vec<u8> { std::fs::read(p).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(p)))) };
+    // The retired hints-file argument: say so rather than print the usage.
+    if files.iter().any(|f| f == "-" || f.ends_with(".hints")) {
+        fail("no proof takes a SwiftSync hints file any more (design B is retired, E2): give the receipt alone");
+    }
     let anchor_given = anchor.is_some();
     let anchor: Option<ChainState> = anchor.map(|p| {
         serde_json::from_slice(&read(&p)).unwrap_or_else(|e| fail(&format!("{}: not a ChainState: {e}", esc(&p))))
@@ -141,22 +140,20 @@ fn main() {
         now = t;
     }
     if make_bundle {
-        let [receipt, hints, out] = files.as_slice() else { usage() };
-        let b = Bundle::make(&read(receipt), &read(hints), image, anchor, now).unwrap_or_else(|e| fail(&e));
+        let [receipt, out] = files.as_slice() else { usage() };
+        let b = Bundle::make(&read(receipt), image, anchor, now).unwrap_or_else(|e| fail(&e));
         std::fs::write(out, b.encode()).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(out))));
         println!("SWIFTSYNC_BUNDLE_WRITTEN: {} (height {}, image {})", esc(out), b.stop_height, image.method_id_hex);
         exit(0);
     }
-    let [receipt, hints] = files.as_slice() else { usage() };
-    // A coin-log proof has no hints file: say so with '-', so an empty or wrong file is never taken for "none".
-    if coinlog && hints != "-" { fail("a coin-log image takes no hints file: pass '-'"); }
-    let (receipt_bytes, hints_bytes) = (read(receipt), read(hints));
+    let [receipt] = files.as_slice() else { usage() };
+    let receipt_bytes = read(receipt);
     let mut rep = if receipt_bytes.starts_with(BUNDLE_MAGIC) {
         let b = Bundle::decode(&receipt_bytes).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(receipt))));
         println!("  {} is a proof bundle; its header is checked against the verified result", esc(receipt));
-        check_bundle(&b, &hints_bytes, image, anchor, now)
+        check_bundle(&b, image, anchor, now)
     } else {
-        verify(&Inputs { receipt: &receipt_bytes, hints: &hints_bytes, image, anchor, now })
+        verify(&Inputs { receipt: &receipt_bytes, image, anchor, now })
     };
 
     // Step 7, against the user's own node.
@@ -256,8 +253,8 @@ fn main() {
         if coinlog {
             println!("  coin log: {} coins ever appended, {} sat live (COINLOG.md)", cs.utxo_leaves, cs.utxo_value);
             if product {
-                println!("  counting trie root: {} (absence, history, balances: --trie)", hex(&cs.ss_hints));
-                println!("  live-coin hash: {} coins (instant IBD: a downloaded UTXO set must hash to it)", cs.ss_set);
+                println!("  counting trie root: {} (absence, history, balances: --trie)", hex(&cs.trie_root));
+                println!("  live-coin hash: {} coins (instant IBD: a downloaded UTXO set must hash to it)", cs.live_set);
             }
         } else {
             println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);
@@ -277,11 +274,10 @@ fn main() {
     let av = rep.state.as_ref().map_or(false, |c| c.profile & swiftsync_verify::PROFILE_ASSUMEVALID != 0);
     let h = rep.state.as_ref().map_or(0, |c| c.height);
     let avs = if av { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" };
-    let what = if coinlog { "the chain and its coin log".to_string() } else { esc(hints) };
+    let what = "the chain and its coin log";
     match rep.verdict {
         Verdict::Demo if facts_unanchored => println!("SWIFTSYNC_VERIFY_DEMO: the chain and the facts check, but facts need the tip compared with the network (--mempool, --expect or --bitcoin-cli){step7}"),
-        Verdict::Ok if coinlog => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{step7}"),
-        Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: {} is proven correct for the chain above at height {h}{avs}{step7}", esc(hints)),
+        Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{step7}"),
         Verdict::Demo if rep.low_work && anchor_given => println!("SWIFTSYNC_VERIFY_DEMO: {what}: FROM THE GIVEN ANCHOR ONLY, and below Core's minimum chainwork or the pinned checkpoint{step7}"),
         Verdict::Demo if rep.low_work => println!("SWIFTSYNC_VERIFY_DEMO: {what}: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for {}: not shown to be the network's chain{step7}", image.network),
         Verdict::Demo => println!("SWIFTSYNC_VERIFY_DEMO: consistent with {what} FROM THE GIVEN ANCHOR ONLY -- not a proof{step7}"),

@@ -8,15 +8,15 @@ cd /hazync-zkvm/prover
 # risc0's pinned Rust (rzup), not by this host toolchain.
 export RUSTUP_TOOLCHAIN=$(rustup toolchain list | awk '/^stable/{print $1; exit}')
 echo "host toolchain: $RUSTUP_TOOLCHAIN ($(rustc --version)); guest toolchain: $(ls /root/.risc0/toolchains 2>/dev/null | tr '\n' ' ')" >&2
-# The coin log (docs/libzync/COINLOG.md) is the frozen design; LIBZYNC_COINLOG=0 builds design B (SwiftSync hints).
-CL=${LIBZYNC_COINLOG:-1}
+# The product image: the libzync profile builds the coin log, the counting trie and the live-coin hash (E2c / E2;
+# design B, the SwiftSync hints file, is retired).
 # Only the variables set below may reach the build: an inherited HAZYNC_* lever would change the image while the
 # line printed still names the plain one (review 11-03).
 for v in $(compgen -e | grep '^HAZYNC_'); do unset "$v"; done
-kind=$([ "$CL" = 1 ] && echo libzync-coinlog || echo libzync)
+kind=libzync-product
 for net in mainnet signet; do
   rm -rf target/riscv-guest   # never reuse a guest across networks (LIBZYNC.md round 8: a stale ELF)
-  env HAZYNC_BASE=/root/hazync-libzync-base HAZYNC_LIBZYNC=1 $([ $net = signet ] && echo HAZYNC_NETWORK=signet) $([ "$CL" = 1 ] && echo HAZYNC_COINLOG=1) \
+  env HAZYNC_BASE=/root/hazync-libzync-base HAZYNC_LIBZYNC=1 $([ $net = signet ] && echo HAZYNC_NETWORK=signet) \
     cargo build --profile fasthost -p host -j"$(nproc)" >&2
   id=$(target/fasthost/host method-id | head -1 | awk '{print $NF}')
   elf=$(sha256sum target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin | cut -c1-64)

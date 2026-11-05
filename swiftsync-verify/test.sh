@@ -1,6 +1,7 @@
 #!/bin/bash
-# swiftsync-verify end-to-end tests on the real round-4 signet receipt (image c3501ac9, from a supplied 2,500 anchor,
-# so the best verdict is DEMO) plus corrupted inputs. Run from the repo root after `cargo build --release`.
+# swiftsync-verify end-to-end tests on the real round-4 signet receipt (image c3501ac9, retired design B: its journal
+# predates ChainState v2, so EVERY case must now FAIL) plus corrupted inputs and the retired hints-file arguments. The OK
+# / DEMO cases come back with receipts of the frozen product image. Run from the repo root after `cargo build --release`.
 # Writes swiftsync-verify/test.out. Every case prints its verdict line and exit code.
 cd "$(dirname "$0")/.." || exit 1
 BAD=0; N=0
@@ -16,31 +17,23 @@ case "$1" in
 esac
 S
 chmod +x $T/cli
-python3 - $E/signet2600.hints $T <<'P'
-import sys
-b=open(sys.argv[1],'rb').read(); T=sys.argv[2]
-open(T+'/trail.hints','wb').write(b+b'\x00')
-x=bytearray(b); x[-1]^=0x80; open(T+'/flip.hints','wb').write(bytes(x))
-P
 head -c 1000 /dev/urandom > $T/junk.rcpt
 run() { local want=$1; shift; echo "== $* (expect exit $want)"; "$@" 2>&1 | grep -a 'VERIFY_\|\[FAIL\]' | sed "s#$T#<tmp>#g"; local got=${PIPESTATUS[0]}; N=$((N+1)); if [ "$got" = "$want" ]; then echo "exit=$got PASS"; else echo "exit=$got WRONG"; BAD=$((BAD+1)); fi; }
-A="--network signet --image $OLD --anchor $G/anchor_effective.json"
-run 2 $V $A $G/block_2600.rcpt $E/signet2600.hints
-run 2 env MODE=good $V $A --bitcoin-cli $T/cli $G/block_2600.rcpt $E/signet2600.hints
-run 1 env MODE=fork $V $A --bitcoin-cli $T/cli $G/block_2600.rcpt $E/signet2600.hints
-run 1 env MODE=err $V $A --bitcoin-cli $T/cli $G/block_2600.rcpt $E/signet2600.hints
-run 1 $V --network signet $G/block_2600.rcpt $E/signet2600.hints
-run 1 $V --network signet --image $OLD $G/block_2600.rcpt $E/signet2600.hints
-run 1 $V $A $G/block_2600.rcpt $T/trail.hints
-run 1 $V $A $G/block_2600.rcpt $T/flip.hints
-run 1 $V $A $G/block_2600.rcpt experimental/libzync-bench/signet/signet3000.hints
-run 1 $V --network mainnet --image $OLD --anchor $G/anchor_effective.json $G/block_2600.rcpt $E/signet2600.hints
-run 1 env RISC0_DEV_MODE=1 $V $A $G/block_2600.rcpt $E/signet2600.hints
-run 1 $V $A $T/junk.rcpt $E/signet2600.hints
-run 1 $V $A /nonexistent.rcpt $E/signet2600.hints
-run 1 $V $A $G/block_2600.rcpt
-run 1 $V --network signet --image xyz $G/block_2600.rcpt $E/signet2600.hints
-run 1 $V $A --now 1599000000 $G/block_2600.rcpt $E/signet2600.hints
-run 1 $V $A --now 99999999999 $G/block_2600.rcpt $E/signet2600.hints
+A="--network signet --product --image $OLD --anchor $G/anchor_effective.json"
+R=$G/block_2600.rcpt
+run 1 $V $A $R
+run 1 env MODE=good $V $A --bitcoin-cli $T/cli $R
+run 1 env MODE=fork $V $A --bitcoin-cli $T/cli $R
+run 1 $V --network signet --product $R
+run 1 $V --network signet --coinlog --image $OLD $R
+run 1 $V --network signet --image $OLD --anchor $G/anchor_effective.json $R
+run 1 $V --network mainnet --product --image $OLD --anchor $G/anchor_effective.json $R
+run 1 env RISC0_DEV_MODE=1 $V $A $R
+run 1 $V $A $T/junk.rcpt
+run 1 $V $A /nonexistent.rcpt
+run 1 $V --network signet --product --image xyz $R
+run 1 $V $A --now 99999999999 $R
+run 1 $V $A $R $E/signet2600.hints
+run 1 $V $A $R -
 echo "swiftsync-verify test.sh: $((N-BAD))/$N as expected"
 [ "$N" -gt 0 ] && [ "$BAD" = 0 ]

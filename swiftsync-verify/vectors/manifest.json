@@ -1,232 +1,118 @@
 {
- "about": "Test vectors for a libzync SwiftSync-hints verifier (docs/libzync/SWIFTSYNC_PROOFS.md \u00a75). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. No genesis-anchored receipt exists yet, so no case expects 0. The receipts are from the round-4 signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae and start from a supplied state at 2,500 (r4_anchor_2500.json).",
+ "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. The receipts are from the retired round-4 design-B signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae: every one must now FAIL (the journal format and the hints file are both gone). `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
  "cases": [
   {
-   "name": "demo_receipt",
-   "description": "The real round-4 signet proof of 2,501..2,600 from a supplied 2,500 state, with its hints file: every check passes, verdict DEMO.",
+   "name": "retired_design_b",
+   "description": "A real round-4 design-B receipt, given as a coin-log image: refused (its journal is not today's ChainState, and its image keeps no coin log).",
    "args": [
     "--network",
     "signet",
+    "--coinlog",
     "--image",
     "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
     "--anchor",
     "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "signet2600.hints"
-   ],
-   "expect_exit": 2
-  },
-  {
-   "name": "future_timestamp",
-   "description": "The same receipt on a clock set before its largest block time: time-too-new fails, so FAIL.",
-   "args": [
-    "--now",
-    "1599000000",
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "signet2600.hints"
+    "r4_block_2600.rcpt"
    ],
    "expect_exit": 1
   },
   {
-   "name": "demo_bundle",
-   "description": "The same proof as a bundle: header matches the verified result.",
+   "name": "retired_design_b_product",
+   "description": "The same receipt as the product image: refused.",
    "args": [
     "--network",
     "signet",
+    "--product",
     "--image",
     "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
     "--anchor",
     "r4_anchor_2500.json",
-    "r4_2600.sspf",
-    "signet2600.hints"
-   ],
-   "expect_exit": 2
-  },
-  {
-   "name": "no_anchor",
-   "description": "The same proof checked against genesis: anchor_id is not genesis, FAIL.",
-   "args": [
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "r4_block_2600.rcpt",
-    "signet2600.hints"
+    "r4_block_2600.rcpt"
    ],
    "expect_exit": 1
   },
   {
    "name": "wrong_image",
-   "description": "The same proof against the current signet image: a different M, FAIL.",
+   "description": "The same receipt against the built-in image id: refused.",
    "args": [
     "--network",
     "signet",
+    "--product",
     "--anchor",
     "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "signet2600.hints"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "wrong_network",
-   "description": "The same proof with the mainnet parameters (and its image id given): the committed profile says signet, FAIL.",
-   "args": [
-    "--network",
-    "mainnet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "signet2600.hints"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "early_stop",
-   "description": "A real receipt that stops at 2,530: height and ss_hints differ from the 2,600 file, FAIL.",
-   "args": [
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2530.rcpt",
-    "signet2600.hints"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "wrong_file",
-   "description": "The 2,600 proof against a correct file for a different stop height (3,000), FAIL.",
-   "args": [
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "signet3000.hints"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "trailing_byte",
-   "description": "The right file with one byte appended: not canonical, FAIL.",
-   "args": [
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "bad_trailing_byte.hints"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "flipped_bit",
-   "description": "The right file with one bit flipped in the last list: FAIL.",
-   "args": [
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "bad_flipped_bit.hints"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "noncanonical_size",
-   "description": "The right lists with height 1's count written as a 3-byte CompactSize: decodes alike, not canonical, FAIL.",
-   "args": [
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "bad_noncanonical_size.hints"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "bad_version",
-   "description": "The right file with version 1: FAIL.",
-   "args": [
-    "--network",
-    "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt",
-    "bad_version.hints"
+    "r4_block_2600.rcpt"
    ],
    "expect_exit": 1
   },
   {
    "name": "fake_receipt",
-   "description": "A dev-mode FakeReceipt (no proof): FAIL.",
+   "description": "A dev-mode FakeReceipt: never a proof.",
    "args": [
     "--network",
     "signet",
-    "fake_block_2501.rcpt",
-    "signet2600.hints"
+    "--product",
+    "fake_block_2501.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bundle_v1",
+   "description": "A version-1 bundle (it carried a hints-file hash): refused.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_2600.sspf"
    ],
    "expect_exit": 1
   },
   {
    "name": "bundle_header_lies",
-   "description": "The real bundle with its header's stop height changed to 2,599: FAIL although the receipt is valid.",
+   "description": "A bundle whose header disagrees with its receipt: refused.",
    "args": [
     "--network",
     "signet",
+    "--product",
     "--image",
     "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
     "--anchor",
     "r4_anchor_2500.json",
-    "bad_bundle_header.sspf",
-    "signet2600.hints"
+    "bad_bundle_header.sspf"
    ],
    "expect_exit": 1
   },
   {
-   "name": "bundle_wrong_file",
-   "description": "The real bundle with a different hints file: FAIL.",
+   "name": "hints_arg_refused",
+   "description": "A hints-file argument (the retired design B): the CLI refuses it rather than ignore it.",
    "args": [
     "--network",
     "signet",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_2600.sspf",
-    "signet3000.hints"
+    "--product",
+    "r4_block_2600.rcpt",
+    "signet2600.hints"
    ],
-   "expect_exit": 1
+   "expect_exit": 1,
+   "cli_only": true
+  },
+  {
+   "name": "dash_arg_refused",
+   "description": "The old '-' (no hints file) argument: refused.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "r4_block_2600.rcpt",
+    "-"
+   ],
+   "expect_exit": 1,
+   "cli_only": true
   }
  ],
  "reference_values": {
-  "ss_hints": {
-   "signet2600.hints": "f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b",
-   "signet3000.hints": "5979d283d04530bc35fd450b5b99fb89ad2cbb9f9c640b1038c8c72f837ed779",
-   "mainnet200.hints": "e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd"
-  },
   "genesis_anchor_id": {
    "mainnet (every image, pinned)": "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
    "signet (every image, pinned)": "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827"
@@ -243,5 +129,5 @@
    }
   }
  },
- "status": "STALE since ChainState version 2 / kind 0xC4A1_0012 (11-03): the receipts and anchors here are round-4 images whose journals no longer decode as today's ChainState, so the cases fail before the check each was written for. Regenerate from the first GPU proofs of the frozen image (experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md). The reference values above are current."
+ "status": "Hints-file cases removed in E2 (11-05: no proof takes a hints file). OK / DEMO cases need receipts of the product image: regenerate from the first GPU proofs of the frozen image (experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md)."
 }
