@@ -32,7 +32,7 @@ pub(crate) fn lz_bundle(height: u32, block_hash: &[u8; 32]) -> Option<libzync::h
 /// The profile word this host's image commits (guest `chain_profile`).
 pub(crate) fn expected_profile() -> u32 {
     methods::LIBZYNC as u32 | (methods::LIBZYNC_ASSUMEVALID as u32) << 1 | ((methods::NETWORK == "regtest") as u32) << 3 | ((methods::NETWORK == "signet") as u32) << 2
-        | (methods::COINLOG as u32) << 4
+        | (methods::COINLOG as u32) << 4 | (methods::TRIE as u32) << 5 | (methods::UTXOHASH as u32) << 6
 }
 
 /// libzync-verify's outcomes are 0, 2 and 1 only: any panic (bad arguments, unreadable or malformed inputs)
@@ -184,10 +184,11 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, hints: &str, anchor: Option<&str
           &format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
     // The profile is committed by the image itself (bits from the compiled code, never from input), so the
     // proof states what was checked; it must also be what this verifier was built to accept.
-    check(cs.profile == expected_profile(), &format!("profile in the proof 0x{:x} == this verifier's 0x{:x} ({}{}{}{})",
+    check(cs.profile == expected_profile(), &(format!("profile in the proof 0x{:x} == this verifier's 0x{:x} ({}{}{}{})",
         cs.profile, expected_profile(), if cs.profile & 1 != 0 { "libzync" } else { "canonical" },
         if cs.profile & 2 != 0 { ", ASSUMEVALID: scripts and signatures NOT checked" } else { ", scripts checked" },
-        if cs.profile & 4 != 0 { ", signet" } else { ", mainnet" }, if cs.profile & 16 != 0 { ", coin log" } else { "" }));
+        if cs.profile & 4 != 0 { ", signet" } else { ", mainnet" }, if cs.profile & 16 != 0 { ", coin log" } else { "" }) + if cs.profile & 32 != 0 { ", counting trie" } else { "" }
+        + if cs.profile & 64 != 0 { ", live-coin hash" } else { "" }));
     // time-too-new (Core ContextualCheckBlockHeader): no block more than 2 h past THIS node's clock. The proof
     // has no clock; it commits the largest timestamp and the rule is applied here, as Core applies it to
     // every block during IBD. HAZYNC_VERIFY_NOW overrides the clock for tests, and is itself a failed check.
@@ -448,53 +449,26 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
     let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
     let (roots, n, wit) = cl_synth(&std::env::var("HAZYNC_BLOCK").unwrap(), &spends);
     // The counting trie: the keys the collect run logged. The aggregate takes no trie witness (the trie is applied in its
-    // own receipt); for measurement the host synthesises the trie's witness around a modelled population and, with
-    // HAZYNC_TRIE_DUMP, writes the trie guest's input (`zyncapp bench-trie`).
+    // own receipt, guest mode 17); for measurement the host synthesises the trie's witness around a modelled population.
     if methods::TRIE {
-        let text = String::from_utf8_lossy(&log);
-        // the collect run's full update list: "trie: R <key> <spender words>" / "trie: I <key> <spent> <spender> <value>"
-        let hw = |x: &str| -> [u32; 8] { core::array::from_fn(|i| u32::from_str_radix(&x[8 * i..8 * i + 8], 16).expect("trie: spender hex")) };
-        let (mut marks, mut ins): (Vec<([u8; 64], [u32; 8])>, Vec<([u8; 64], Option<[u32; 8]>, u64)>) = (Vec::new(), Vec::new());
-        for l in text.lines() {
-            let Some(i) = l.find("trie: ") else { continue };
-            let f: Vec<&str> = l[i + 6..].split_whitespace().collect();
-            match f.as_slice() {
-                ["R", k, sp] => marks.push((hx_bytes(k).try_into().expect("trie key: 64 bytes"), hw(sp))),
-                ["I", k, fl, sp, v] => ins.push((hx_bytes(k).try_into().expect("trie key: 64 bytes"),
-                                                 (*fl == "1").then(|| hw(sp)), v.parse().expect("trie: value"))),
-                _ => {}
-            }
-        }
+        let (mut marks, ins) = crate::trie::trie_parse(&String::from_utf8_lossy(&log));
         let envu = |k: &str, d: u64| -> u64 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
         // MEASUREMENT: the old trie is synthesised around the block's keys (HAZYNC_TTREE_ADDRS addresses, default the
         // coin log's modelled size; HAZYNC_TTREE_SUB other coins under each spent-from address, default 2), and the test
-        // anchor's trie root is set to it. A production host serves the witness from its trie store instead (E2 step 3).
+        // anchor's trie root is set to it. The prover (libzync-prove-range) serves the witness from its trie store.
         let (addrs, sub) = (envu("HAZYNC_TTREE_ADDRS", n), envu("HAZYNC_TTREE_SUB", 2));
-        let counts = envu("HAZYNC_TTREE_COUNTS", 1) == 1;
+        // Negative controls (test-only), HAZYNC_TEST_TRIE: "list" = the receipt applies a different update list (one
+        // spender changed), "root" = the chain's trie root is not the receipt's old root, "none" = no receipt at all,
+        // "counts" = a witness without values and counts (mode 17 must refuse it).
+        let neg = std::env::var("HAZYNC_TEST_TRIE").unwrap_or_default();
+        let counts = neg != "counts";
         let rem: Vec<[u8; 64]> = marks.iter().map(|x| x.0).collect();
         let ink: Vec<[u8; 64]> = ins.iter().map(|x| x.0).collect();
         let (root, tr) = libzync::trie_model::synth(&rem, &ink, addrs, sub, counts, 0x5eed + 1);
         let wit = libzync::trie_model::encode(counts, &root, &tr);
-        let ks: Vec<_> = rem.iter().chain(ink.iter()).map(libzync::ttree::split).collect();
-        let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
-        perm.sort_by(|&a, &b| ks[a as usize].cmp(&ks[b as usize]));
-        let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
-        // Negative controls (test-only), HAZYNC_TEST_TRIE: "list" = the receipt applies a different update list (one
-        // spender changed), "root" = the chain's trie root is not the receipt's old root, "none" = no receipt at all.
-        let neg = std::env::var("HAZYNC_TEST_TRIE").unwrap_or_default();
         if neg == "list" && !marks.is_empty() { marks[0].1[0] ^= 1; }
-        let mut mw: Vec<u32> = Vec::with_capacity(marks.len() * 24);
-        for (k, sp) in &marks { mw.extend(kw(k)); mw.extend_from_slice(sp); }
-        let mut iw: Vec<u32> = Vec::with_capacity(ins.len() * 27);
-        for (k, sp, v) in &ins { iw.extend(kw(k)); iw.push(sp.is_some() as u32); iw.extend_from_slice(&sp.unwrap_or([0; 8])); iw.push(*v as u32); iw.push((*v >> 32) as u32); }
         let mut b = ExecutorEnv::builder();
-        b.segment_limit_po2(seg_po2());
-        b.write(&17u32).unwrap();
-        b.write_slice(&[wit.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32]);
-        b.write_slice(&wit);
-        if !mw.is_empty() { b.write_slice(&mw); }
-        if !iw.is_empty() { b.write_slice(&iw); }
-        if !perm.is_empty() { b.write_slice(&perm); }
+        crate::trie::trie_env(&mut b, &wit, &marks, &ins);
         let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("trie update (mode 17) failed: {e}"));
         println!("  trie: {} marks, {} inserts, witness {} words; trie update executed: {} cycles, padded {} ({} segments)",
                  marks.len(), ins.len(), wit.len(), t.cycles, t.padded, t.segments);
@@ -812,6 +786,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     if methods::COINLOG && !disk_resume {
         cl_init_at_start(handover.is_some(), anchor_path, &prev);
     }
+    // The counting trie at the run's start (a resume below replaces it with the snapshot at its receipt).
+    if methods::TRIE { crate::trie::trie_init_at_start(handover.is_some(), anchor_path, &prev); }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
     // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
@@ -858,7 +834,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     if std::env::var("HAZYNC_RESUME").map(|v| v == "1").unwrap_or(false) {
         // With the coin log, only a receipt whose log file was also written (the log is saved after the receipt).
         let done = |k: &u32| std::path::Path::new(&format!("{out}/block_{k}.rcpt")).exists()
-            && (!methods::COINLOG || std::path::Path::new(&format!("{out}/state_{k}.coinlog")).exists());
+            && (!methods::COINLOG || std::path::Path::new(&format!("{out}/state_{k}.coinlog")).exists())
+            && (!methods::TRIE || std::path::Path::new(&format!("{out}/state_{k}.trie")).exists());
         if let Some(k) = (lo..=hi).rev().find(done) {
             assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
             let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
@@ -881,6 +858,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
                 assert!(cl.len() == st.utxo_leaves && normalize_host(cl.roots()) == normalize_host(st.utxo_roots.clone()),
                         "state_{k}.coinlog does not match block_{k}.rcpt's utxo_roots / utxo_leaves");
             }
+            // The trie at k: its snapshot, checked against the receipt's trie root, height and block.
+            if methods::TRIE { crate::trie::trie_load(&format!("{out}/state_{k}.trie"), &st); }
             smt = t;
             prev = st;
             prev_rcpt = Some(r);
@@ -949,6 +928,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         };
         // collect pass: the leaves the ECMH hints are for (and, for a coin-log image, the log's spends and appends)
         CL_WIT.lock().unwrap().clear();
+        *TRIE_RCPT.lock().unwrap() = None;
         let mut log = Vec::new();
         {
             let mut b = ExecutorEnv::builder();
@@ -966,6 +946,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         }
         let cl_lists = if methods::COINLOG { cl_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
         if methods::COINLOG { *CL_WIT.lock().unwrap() = cl_prepare(&cl_lists.0); }
+        // The trie update (mode 17), proved from the store's witness; the aggregate verifies it as an assumption.
+        let trie_lists = if methods::TRIE { crate::trie::trie_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
+        if methods::TRIE { *TRIE_RCPT.lock().unwrap() = Some(crate::trie::trie_prove(h, &trie_lists.0, &trie_lists.1, &prev, &opts)); }
         bd.write(&bp).unwrap();
         std::env::set_var("HAZYNC_LZ_HINTS", &bp);
         let t_hints = t0.elapsed().as_secs_f64();
@@ -992,6 +975,15 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             cl_save(&format!("{out}/state_{h}.coinlog"));
             if h >= first + 2 && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() != Ok("1") {
                 let _ = std::fs::remove_file(format!("{out}/state_{}.coinlog", h - 2));
+            }
+        }
+        // The trie: the same update list applied to the store must reach the committed root; its snapshot beside the
+        // receipt (the last two kept, as the coin log's; HAZYNC_COINLOG_SAVE_EACH=1 keeps every one).
+        if methods::TRIE {
+            crate::trie::trie_commit(&trie_lists.0, &trie_lists.1, &st);
+            crate::trie::trie_save(&format!("{out}/state_{h}.trie"));
+            if h >= first + 2 && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() != Ok("1") {
+                let _ = std::fs::remove_file(format!("{out}/state_{}.trie", h - 2));
             }
         }
         let dt = t0.elapsed().as_secs_f64();

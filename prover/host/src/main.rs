@@ -16,6 +16,7 @@ mod bench;
 mod bridge;
 mod chunks;
 mod lz;
+mod trie;
 mod seg;
 mod verify;
 

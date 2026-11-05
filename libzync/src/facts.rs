@@ -323,6 +323,10 @@ pub const PROFILE_ASSUMEVALID: u32 = 2;
 pub const PROFILE_SIGNET: u32 = 4;
 pub const PROFILE_REGTEST: u32 = 8;
 pub const PROFILE_COINLOG: u32 = 16;
+/// The chain state's former hint hash is the counting trie's root (ttree.rs; absence, history and balance facts).
+pub const PROFILE_TRIE: u32 = 32;
+/// ss_set / ss_acc are the live-coin multiset hash (instant IBD), not SwiftSync's total.
+pub const PROFILE_UTXOHASH: u32 = 64;
 
 /// The network a zyncAPP answers for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -358,7 +362,8 @@ pub fn check_core_statement(j: &CoreStatement, core_id: &[u32; 8], min_version: 
     if j.profile & PROFILE_ASSUMEVALID != 0 && !allow_assumevalid {
         return Err("scripts were not checked (assumevalid)");
     }
-    if j.profile & PROFILE_COINLOG == 0 || j.ss_set != 0 {
+    // ss_set may be non-zero only as the live-coin hash's count; without that bit it is SwiftSync's total, unused.
+    if j.profile & PROFILE_COINLOG == 0 || (j.ss_set != 0 && j.profile & PROFILE_UTXOHASH == 0) {
         return Err("not a coin-log chain: coin facts are not sound at every block");
     }
     if j.anchor_id != genesis_anchor {
@@ -548,5 +553,10 @@ mod tests {
         assert!(check_core_statement(&rt, &id, 2, Network::Regtest, false, &anchor).is_ok());
         let b = CoreStatement { profile: 1, ..av };
         assert!(check_core_statement(&b, &id, 2, Network::Mainnet, true, &anchor).is_err());
+        // the product: a non-zero ss_set is the live-coin hash's count, accepted only under that profile bit
+        let p = CoreStatement { profile: 1 | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH, ss_set: 5, ..ok };
+        assert!(check_core_statement(&p, &id, 2, Network::Mainnet, false, &anchor).is_ok());
+        let q = CoreStatement { profile: 1 | PROFILE_COINLOG | PROFILE_TRIE, ..p };
+        assert!(check_core_statement(&q, &id, 2, Network::Mainnet, false, &anchor).is_err());
     }
 }

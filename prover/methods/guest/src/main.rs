@@ -1487,7 +1487,9 @@ fn chain_profile() -> u32 {
     let lz = cfg!(feature = "libzync") as u32;
     let av = unsafe { hz_no_scripts() } & 1;
     let sig = cfg!(feature = "signet") as u32;
+    // bit 5: ss_hints is the counting trie's root; bit 6: ss_set / ss_acc are the live-coin multiset hash (instant IBD)
     lz | av << 1 | sig << 2 | (cfg!(feature = "regtest") as u32) << 3 | (cfg!(feature = "coinlog") as u32) << 4
+        | (cfg!(feature = "trie") as u32) << 5 | (cfg!(feature = "utxohash") as u32) << 6
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state
@@ -2396,6 +2398,9 @@ fn trie_update() {
     let marks: Vec<(ttree::Key, coinlog::W)> = mw.chunks_exact(24).map(|c| (key(&c[..16]), c[16..24].try_into().unwrap())).collect();
     let ins: Vec<(ttree::Key, Option<coinlog::W>, u64)> = iw.chunks_exact(27)
         .map(|c| (key(&c[..16]), (c[16] == 1).then(|| c[17..25].try_into().unwrap()), c[25] as u64 | (c[26] as u64) << 32)).collect();
+    // The product trie hashes values and counts (balances). The mode is the witness's first word, and an empty trie's
+    // root is zero in both modes, so without this a chain could be proved from genesis with no values committed.
+    assert!(wit.first() == Some(&1), "trie: the witness is not in counts mode");
     let old: coinlog::W = wit.get(1..9).expect("trie: witness header").try_into().unwrap();
     let new = ttree::apply_stream_perm(&wit, &marks, &ins, Some(&perm)).expect("trie update");
     env::commit_slice(&ttree::trie_journal(&old, &new, &ttree::list_digest(&marks, &ins)));

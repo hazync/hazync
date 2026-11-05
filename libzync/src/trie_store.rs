@@ -278,6 +278,32 @@ fn t_wit(n: &TN, ks: &[(W, W)], d: u32) -> Top {
     }
 }
 
+// ---- fact proofs (trie_fact.rs): one address's leaf, with its coin trie pruned or whole
+
+fn s_full(n: &SN) -> Sub {
+    match n {
+        SN::Empty => Sub::Empty,
+        SN::Inner(l, r, _) => Sub::Inner(Box::new(s_full(l)), Box::new(s_full(r))),
+        SN::Coin { o, sp, value, .. } => Sub::Coin { o: *o, sp: *sp, value: *value },
+    }
+}
+
+fn t_addr(n: &TN, s: &W, d: u32, whole: bool) -> Top {
+    let side = |x: &TN| if matches!(x, TN::Empty) { Top::Empty } else { Top::Pruned(x.h()) };
+    match n {
+        TN::Empty => Top::Empty,
+        TN::Inner(l, r, _) => if bit(s, d) {
+            Top::Inner(Box::new(side(l)), Box::new(t_addr(r, s, d + 1, whole)))
+        } else {
+            Top::Inner(Box::new(t_addr(l, s, d + 1, whole)), Box::new(side(r)))
+        },
+        TN::Addr { s: a, count, value, sub, .. } => Top::Addr { s: *a, count: *count, value: *value,
+            sub: Box::new(if a == s && whole { s_full(sub) } else { Sub::Pruned(sub.h()) }) },
+    }
+}
+
+fn words_be(b: &[u8; 32]) -> W { core::array::from_fn(|i| u32::from_be_bytes(b[4 * i..4 * i + 4].try_into().unwrap())) }
+
 // ---- snapshot
 
 struct Wr(Vec<u8>, u64);
@@ -409,6 +435,24 @@ impl TrieStore {
         let mut ks: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
         ks.sort_unstable();
         crate::trie_model::encode(self.counts, &self.root(), &t_wit(&self.t, &ks, 0))
+    }
+
+    /// A proof (trie_fact::coin) for each coin key: present, spent or absent.
+    pub fn prove_coins(&self, keys: &[Key]) -> Vec<u32> {
+        let mut ks: Vec<(W, W)> = keys.iter().map(split).collect();
+        ks.sort_unstable();
+        ks.dedup();
+        crate::trie_model::encode(self.counts, &self.root(), &t_wit(&self.t, &ks, 0))
+    }
+
+    /// A balance proof (trie_fact::balance) for the script hash `s`: its address leaf, coin trie pruned.
+    pub fn prove_addr(&self, s: &[u8; 32]) -> Vec<u32> {
+        crate::trie_model::encode(self.counts, &self.root(), &t_addr(&self.t, &words_be(s), 0, false))
+    }
+
+    /// A history proof (trie_fact::history): the address leaf with its WHOLE coin trie.
+    pub fn prove_history(&self, s: &[u8; 32]) -> Vec<u32> {
+        crate::trie_model::encode(self.counts, &self.root(), &t_addr(&self.t, &words_be(s), 0, true))
     }
 
     /// Apply one block's update list (marks, then inserts). All or nothing: on an error the store is as it was.
