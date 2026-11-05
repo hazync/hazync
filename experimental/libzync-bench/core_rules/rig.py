@@ -561,6 +561,8 @@ def run():
         shutil.copy(f"{o}/state_{BASE}.json", anchor)
         if os.path.exists(f"{o}/state_{BASE}.coinlog"):     # a coin-log image: the log travels with its anchor
             shutil.copy(f"{o}/state_{BASE}.coinlog", f"{BLOCKS}/anchor.coinlog")
+        if os.path.exists(f"{o}/state_{BASE}.trie"):        # a trie image: so does the trie snapshot
+            shutil.copy(f"{o}/state_{BASE}.trie", f"{BLOCKS}/anchor.trie")
     res = []
     for name, f in CASES:
         if ONLY and name not in ONLY:
