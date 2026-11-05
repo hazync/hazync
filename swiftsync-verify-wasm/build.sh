@@ -11,6 +11,9 @@ for c in swiftsync-verify-wasm swiftsync-verify libzync; do
     mkdir -p "$STAGE/$c"
     (cd "$REPO/$c" && tar --exclude=./target --exclude=./vectors -cf - .) | (cd "$STAGE/$c" && tar -xf -)
 done
+# swiftsync-verify include!s the guest's handover pin (one source for the pinned receipt ids)
+mkdir -p "$STAGE/prover/methods/guest/src"
+cp "$REPO/prover/methods/guest/src/handover_pin.rs" "$STAGE/prover/methods/guest/src/"
 SYSROOT=$(rustc --print sysroot)
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$SYSROOT=/rust-sysroot --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$STAGE=/hazync"
 (cd "$STAGE/swiftsync-verify-wasm" && cargo build --release --target wasm32-unknown-unknown)

@@ -42,7 +42,7 @@ pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize
 }
 
 /// As `swiftsync_verify`, plus zyncAPP facts (ZYNCAPPS.md §8): `facts_json` (NUL-terminated, may be NULL) is
-/// `{"coins": [CoinFact], "journeys": [CoinJourney]}`, each checked against the verified state. Any fact that does not
+/// `{"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact], "expect": "h:hash"}`, each checked against the verified state. Any fact that does not
 /// hold is FAIL, with its reason in `msg`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
@@ -51,12 +51,16 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
                                                 facts_json: *const c_char,
                                                 out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
-    // network: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (the one whose proofs carry coin facts).
-    let Some(mut image) = Image::by_network(match network & !0x10 { 0 => "mainnet", 1 => "signet", _ => "" }) else {
+    // network: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (the one whose proofs carry coin facts); bit 0x20 = the
+    // product image (coin log, counting trie, live-coin hash: the one whose proofs carry trie facts).
+    let Some(mut image) = Image::by_network(match network & !0x30 { 0 => "mainnet", 1 => "signet", _ => "" }) else {
         return fail("unknown network");
     };
     if network & 0x10 != 0 {
         image = image.with_coinlog();
+    }
+    if network & 0x20 != 0 {
+        image = image.with_product();
     }
     if !image_hex.is_null() {
         let Ok(h) = CStr::from_ptr(image_hex).to_str() else { return fail("image id is not UTF-8") };
@@ -94,6 +98,10 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             Ok(j) => j,
             Err(e) => return fail(&format!("facts JSON journeys: {e}")),
         };
+        let tries: Vec<swiftsync_verify::TrieFact> = match serde_json::from_value(v.get("tries").cloned().unwrap_or_else(|| serde_json::json!([]))) {
+            Ok(t) => t,
+            Err(e) => return fail(&format!("facts JSON tries: {e}")),
+        };
         // Facts need the tip compared with the network (step 7): "expect": "h:hash" in the facts JSON. Without a
         // match the verdict is at most DEMO (adversarial review, 11-03).
         let tip_checked = match (v.get("expect").and_then(|x| x.as_str()), rep.state.as_ref()) {
@@ -103,7 +111,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             },
             _ => false,
         };
-        let any = !coins.is_empty() || !journeys.is_empty();
+        let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty();
         match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
             Some(cs) => {
                 for c in &coins {
@@ -114,8 +122,12 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
                     let r = swiftsync_verify::check_coin_journey(cs, j);
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
+                for t in &tries {
+                    let r = swiftsync_verify::check_trie_fact(cs, t);
+                    rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
+                }
             }
-            None if !coins.is_empty() || !journeys.is_empty() => rep.checks.push((false, "facts NOT checked: the receipt did not verify".into())),
+            None if any => rep.checks.push((false, "facts NOT checked: the receipt did not verify".into())),
             None => {}
         }
         if rep.checks.iter().any(|(ok, _)| !ok) {

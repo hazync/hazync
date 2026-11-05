@@ -68,8 +68,10 @@ fn run(input: &[u8]) -> Result<(Report, &'static Image), String> {
 fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
     // Network code: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (COINLOG.md), whose proofs carry coin facts.
     let code = f.take(1)?[0];
+    // bit 0x20 = the product image (coin log, counting trie, live-coin hash), whose proofs carry trie facts.
     let coinlog = code & 0x10 != 0;
-    let network = match code & !0x10 {
+    let product = code & 0x20 != 0;
+    let network = match code & !0x30 {
         0 => "mainnet",
         1 => "signet",
         n => return Err(format!("unknown network code {n}")),
@@ -82,6 +84,9 @@ fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
     let mut image = Image::by_network(network).ok_or("no built-in image")?;
     if coinlog {
         image = image.with_coinlog();
+    }
+    if product {
+        image = image.with_product();
     }
     if !image_hex.is_empty() {
         let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
@@ -128,7 +133,7 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
 }
 
 /// `verify_facts(ptr, len)`: the `verify_frame` input (network code | 0x10 for a coin-log image) followed by
-/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "expect": "<height>:<hash>"}]`; "expect" is the
+/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact], "expect": "<height>:<hash>"}]`; "expect" is the
 /// network's block at the proof's height from a source the page trusts, and without it the verdict is at most DEMO (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
 /// against the verified state. A failed fact makes the verdict "fail", as `swiftsync-verify --coin` does.
 #[no_mangle]
@@ -145,12 +150,15 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
             .map_err(|e| format!("facts JSON coins: {e}"))?;
         let journeys: Vec<swiftsync_verify::CoinJourney> = serde_json::from_value(v.get("journeys").cloned().unwrap_or_else(|| serde_json::json!([])))
             .map_err(|e| format!("facts JSON journeys: {e}"))?;
+        let tries: Vec<swiftsync_verify::TrieFact> = serde_json::from_value(v.get("tries").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .map_err(|e| format!("facts JSON tries: {e}"))?;
         let expect = v.get("expect").and_then(|x| x.as_str()).map(|x| x.to_string());
-        Ok((r, coins, journeys, expect))
+        Ok((r, coins, journeys, tries, expect))
     });
     match res {
         Err(e) => fail(e),
-        Ok(((mut rep, image), coins, journeys, expect)) => {
+        Ok(((mut rep, image), coins, journeys, tries, expect)) => {
+            let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty();
             let mut out = Vec::new();
             // Facts need the tip compared with the network (step 7): the page passes "expect": "h:hash" from a source
             // it trusts. Without a match the verdict is at most DEMO (adversarial review, 11-03).
@@ -163,7 +171,7 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
             };
             if rep.verdict == Verdict::Fail {
                 // the journal of a receipt that did not verify is the prover's word: nothing is checked against it
-                if !coins.is_empty() || !journeys.is_empty() {
+                if any {
                     out.push(Err("facts NOT checked: the receipt did not verify".to_string()));
                 }
             } else if let Some(cs) = rep.state.as_ref() {
@@ -173,13 +181,16 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
                 for j in &journeys {
                     out.push(swiftsync_verify::check_coin_journey(cs, j));
                 }
-            } else if !coins.is_empty() || !journeys.is_empty() {
+                for t in &tries {
+                    out.push(swiftsync_verify::check_trie_fact(cs, t));
+                }
+            } else if any {
                 out.push(Err("no verified state to check facts against".to_string()));
             }
             if out.iter().any(|r| r.is_err()) {
                 rep.verdict = Verdict::Fail;
             }
-            if rep.verdict == Verdict::Ok && !tip_checked && !(coins.is_empty() && journeys.is_empty()) {
+            if rep.verdict == Verdict::Ok && !tip_checked && any {
                 rep.verdict = Verdict::Demo;
             }
             // A fact is "ok" only under an OK verdict: under DEMO it holds on a chain not shown to be the network's.
