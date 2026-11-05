@@ -77,6 +77,13 @@ fn main() {
     if n > 0 { env::read_slice(&mut words); }
     let input_digest: [u8; 32] = Sha256::digest(risc0_zkvm::serde::to_vec(&st).unwrap().iter()
         .flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()).into();
+    // a run from genesis starts from the ONE empty state, or a "from genesis" receipt could carry any starting work
+    // (review round 5); a run from elsewhere is joined to the run that ends in its input state (input_digest)
+    assert!(st.height >= -1, "headers: start height {}", st.height);
+    if st.height == -1 {
+        assert!(st.hash == [0; 32] && st.work == [0; 32] && st.bits == 0 && st.time == 0 && st.epoch_first_time == 0
+                && st.recent_times.is_empty() && st.max_time == 0, "headers: a run from genesis must start from the empty state");
+    }
     let pow_limit = set_compact(POW_LIMIT_BITS).0;
     let mut s = st;
     // nBits changes only at a retarget: its target and work are computed once per value, not once per header.

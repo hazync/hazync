@@ -907,7 +907,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             // The same chain as this run's anchor: an output directory reused with another anchor must not be resumed.
             // From an anchor, the chain's anchor_id is the anchor's digest; after a handover, the predecessor's anchor_id.
             let aid = if handover_pending { prev.anchor_id }
-                      else { bitcoin::hashes::sha256d::Hash::hash(&state_journal_bytes(&prev)).to_byte_array() };
+                      else { crate::link_digest(&prev) };
             assert!(st.anchor_id == aid, "block_{k}.rcpt was proved from another anchor (anchor_id {}, this run's {})", hex(&st.anchor_id), hex(&aid));
             let (t, _) = lz_smt_replay(dir, k);
             assert_eq!(t.root(), st.smt_root, "replayed BIP30 tree at {k} != the receipt's smt_root");

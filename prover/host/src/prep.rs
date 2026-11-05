@@ -138,7 +138,8 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
             let op = inp.previous_output;
             let ptxid = op.txid.to_byte_array();
             let (ch, cb, mtp) = p.meta[vin];
-            if cb & 1 != 0 { cb_spends.push(ptxid); spend_tracked.push(cb & 2 != 0); }
+            // every spend of a BIP30-TRACKED coin or a coinbase coin moves the BIP30 tree (the guest's cb_spends: flag != 0)
+            if cb != 0 { cb_spends.push(ptxid); spend_tracked.push(cb & 2 != 0); }
             if let Some(&k) = first.get(&okey(&ptxid, op.vout)) {
                 in_sp[k].get_or_insert((txp, vin as u32));
                 continue;
@@ -245,7 +246,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     let mut ecmh = Ecmh::from_state(prev.live_set, &prev.live_hash);
     // The first block is a base step on the anchor: its anchor_id is the digest of the anchor's journal, and the image
     // stamps its own id and profile; every later block carries them.
-    let anchor_id = bitcoin::hashes::sha256d::Hash::hash(&crate::state_journal_bytes(&prev)).to_byte_array();
+    let anchor_id = crate::link_digest(&prev);
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
     let each = std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() == Ok("1");
     let t0 = std::time::Instant::now();

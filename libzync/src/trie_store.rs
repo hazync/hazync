@@ -153,13 +153,19 @@ impl DiskArena {
                 if b.len() < 8 + 8 + 1 + 8 + 32 + 8 + 8 || &b[..8] != Self::MAGIC { return Err(bad()); }
                 let u = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
                 let root = u(8);
+                if b[16] > 1 { return Err(bad()); }
                 let counts = b[16] == 1;
                 let height = u(17);
                 let hash: [u8; 32] = b[25..57].try_into().unwrap();
                 a.len = u(57);
-                let nfree = u(65) as usize;
-                if b.len() != 73 + 8 * nfree || a.len * RECORD as u64 > a.file.metadata()?.len() { return Err(bad()); }
-                a.free = (0..nfree).map(|i| u(73 + 8 * i)).collect();
+                let nfree = u(65);
+                // every reference in range: the root (0 = empty) and each free slot (1..=len); no size overflow
+                let fits = nfree.checked_mul(8).and_then(|x| x.checked_add(73)) == Some(b.len() as u64);
+                let flen = a.file.metadata()?.len();
+                if !fits || a.len.checked_mul(RECORD as u64).map_or(true, |x| x > flen)
+                    || root > a.len || nfree > a.len { return Err(bad()); }
+                a.free = (0..nfree as usize).map(|i| u(73 + 8 * i)).collect();
+                if a.free.iter().any(|&r| r == 0 || r > a.len || r == root) { return Err(bad()); }
                 Some((root, counts, height, hash))
             }
         };
@@ -199,6 +205,7 @@ impl Arena for DiskArena {
         use std::io::Write as _;
         let e = |x: std::io::Error| alloc::format!("trie arena {}: {x}", self.dir.display());
         self.map.flush().map_err(e)?;
+        self.file.sync_all().map_err(e)?; // the file's size after a grow, not only its pages
         let all: Vec<R> = self.free.iter().chain(self.pending.iter()).copied().collect();
         let mut b = Vec::with_capacity(73 + 8 * all.len());
         b.extend_from_slice(Self::MAGIC);
@@ -876,6 +883,10 @@ mod tests {
         let mut replay = TrieStore::new(true);
         for (m, i) in &blocks[..200] { replay.apply(m, i).unwrap(); }
         assert_eq!((back.root(), back.height), (replay.root(), 200), "reopened = flushed state");
+        let h = replay.height;
+        replay.height = 200;
+        assert_eq!(back.to_bytes(), replay.to_bytes(), "the WHOLE flushed tree is on disk, not only the root record");
+        replay.height = h;
         for (m, i) in &blocks[200..] { assert_eq!(back.apply(m, i), replay.apply(m, i)); }
         assert_eq!(back.root(), mem.root(), "continues identically after the reopen");
         assert!(TrieStore::open_dir(&dir, false).is_err(), "counts mode is checked");

@@ -462,6 +462,14 @@ fn build_block(
 }
 
 // Serialize a ChainState to the exact bytes env::commit(&state) would produce (LE u32 words).
+/// The guest's link digest (ROADMAP H-B): sha256d of the state's journal with anchor_id zeroed; what a base step on
+/// `s` commits as its anchor_id and what a join requires of the left part.
+fn link_digest(s: &ChainState) -> [u8; 32] {
+    let mut z = s.clone();
+    z.anchor_id = [0; 32];
+    bitcoin::hashes::sha256d::Hash::hash(&state_journal_bytes(&z)).to_byte_array()
+}
+
 fn state_journal_bytes(s: &ChainState) -> Vec<u8> {
     risc0_zkvm::serde::to_vec(s).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect()
 }

@@ -107,6 +107,14 @@ receipt): fine at the tip, a serial bottleneck for a whole-chain backfill.
    receipt (pinned image, start == the genesis anchor else DEMO, tip vs a trusted source); "block X is valid" = a
    block-forest path from X to the root's block_roots; coin / trie facts against the same state.
 6. Across an image change: the handover step, not a join.
+7. (review round 5, 11-05) The LINK digest excludes `anchor_id`: a base step commits anchor_id = sha256d(the anchor's
+   journal with anchor_id zeroed) and a join requires that of the left part. With anchor_id inside the digest a leaf
+   on the host's S(h-1) linked only to a left part that started where S(h-1) says, so only a left comb from the
+   range's start could be joined, never a balanced tree. The genesis state's anchor_id is zero: its pinned id is
+   unchanged. anchor_id still records where a chain started (genesis, for the verifier).
+8. Leaves in any order need the trie WITNESS for block h against the trie at h-1. Prep with the trie in memory can
+   snapshot every height; on disk (one store advanced in place) prep must write each block's witness (small) as it
+   goes, for the leaf provers. ⏳ build that with the coordinator's work queue (e).
 
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;

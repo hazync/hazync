@@ -465,10 +465,13 @@ pub fn genesis_anchor(img: &Image) -> ChainState {
     }
 }
 
-/// dsha256 of the state's journal encoding: what the guest commits as `anchor_id` after a base step on it.
+/// The guest's link digest of a state: dsha256 of its journal encoding with `anchor_id` zeroed. What the guest commits
+/// as `anchor_id` after a base step on it (ROADMAP H-B). The genesis state's anchor_id is zero: unchanged for it.
 pub fn anchor_id(s: &ChainState) -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
-    let words = risc0_zkvm::serde::to_vec(s).expect("ChainState serialises");
+    let mut z = s.clone();
+    z.anchor_id = [0; 32];
+    let words = risc0_zkvm::serde::to_vec(&z).expect("ChainState serialises");
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     Sha256::digest(Sha256::digest(bytes)).into()
 }

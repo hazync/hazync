@@ -613,6 +613,19 @@ struct BlockResult {
     spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends
 }
 
+/// ROADMAP H-B (review round 5): the digest that LINKS chain states, sha256d of the state's journal with `anchor_id`
+/// zeroed. `anchor_id` records where a chain started (a base step's link digest of its anchor, carried by every later
+/// step); the link covers every other field. Were anchor_id inside it, a leaf proved on the host's state S(h-1) could
+/// link only to a left part that started where that state says, so blocks proved in any order could not be joined.
+/// The genesis state's anchor_id is zero, so its link digest is the pinned genesis anchor_id unchanged.
+fn link_digest(s: &ChainState) -> [u8; 32] {
+    let mut z = s.clone();
+    z.anchor_id = [0; 32];
+    let w = risc0_zkvm::serde::to_vec(&z).expect("ChainState serialises");
+    let b: Vec<u8> = w.iter().flat_map(|x| x.to_le_bytes()).collect();
+    dsha256(&b)
+}
+
 fn dsha256(data: &[u8]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let h1 = Sha256::digest(data);
@@ -2237,7 +2250,7 @@ fn aggregate() {
     assert!(w.height == prev.height + 1, "aggregate: block height {} != chain height {}", w.height, prev.height + 1);
     // S5: same anchor binding as chain_step — base step commits the trusted anchor's digest, recursive
     // step carries the verified prev's anchor_id forward.
-    let anchor_id = if is_base == 1 { dsha256(&prev_journal) } else { prev.anchor_id };
+    let anchor_id = if is_base == 1 { link_digest(&prev) } else { prev.anchor_id };
     let prev_mtp = median_time_past(&prev.recent_times);
 
     #[cfg(feature = "libzync")]
@@ -2407,10 +2420,10 @@ fn trie_update() {
 // (`check_input_locks`). Used by the host `test-locks` command to drive the time-based branch with
 // real MTP numbers (no block; the check only reads tx.version + vin[idx].nSequence + the two MTPs).
 /// Mode 18 (ROADMAP H-B): JOIN two adjacent chain proofs of this image into one. Blocks are proved in any order, each a
-/// base step on the host's state before it (anchor_id = sha256d of that state's journal); a join requires the right
-/// proof to start exactly where the left one ends: sha256d(left journal) == right.anchor_id. The digest covers every
-/// field (height, tip, work, times, coin log, trie, BIP30 tree, block forest, live set, image, profile, lineage), so a
-/// wrong host state only fails here. Commits the right state with the LEFT's anchor_id: "from the left's start, every
+/// base step on the host's state before it (anchor_id = link_digest of that state); a join requires the right proof to
+/// start exactly where the left one ends: link_digest(left) == right.anchor_id. The link digest covers every field but
+/// anchor_id (height, tip, work, times, coin log, trie, BIP30 tree, block forest, live set, image, profile, lineage), so
+/// a wrong host state only fails here. Commits the right state with the LEFT's anchor_id: "from the left's start, every
 /// block up to the right's tip is valid". A tree of joins over N blocks is N-1 joins; the root starts at the genesis
 /// anchor exactly as a linear chain does, so the verifier is unchanged. Across an image change: the handover step.
 #[cfg(feature = "libzync")]
@@ -2433,7 +2446,7 @@ fn join() {
     let l = decode(&left, "left");
     let mut r = decode(&right, "right");
     assert!(l.lineage == r.lineage, "join: lineage mismatch");
-    assert!(dsha256(&left) == r.anchor_id, "join: the right proof does not start where the left one ends");
+    assert!(link_digest(&l) == r.anchor_id, "join: the right proof does not start where the left one ends");
     r.anchor_id = l.anchor_id;
     env::commit(&r);
 }
