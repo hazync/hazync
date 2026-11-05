@@ -105,7 +105,11 @@ fn ins_sub(n: &mut Sub, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<(), TEr
         }
         Sub::Pruned(_) => return Err(TErr::Witness),
         Sub::Inner(l, r) => return if bit(o, d) { ins_sub(r, o, sp, v, d + 1) } else { ins_sub(l, o, sp, v, d + 1) },
-        Sub::Coin { o: c, .. } => *c,
+        Sub::Coin { o: c, sp: old_sp, .. } => {
+            // BIP30: a coin created again over its own spent record replaces it (ttree.rs, the coin leaf case)
+            if *c == *o && old_sp.is_some() { *n = Sub::Coin { o: *o, sp: *sp, value: v }; return Ok(()); }
+            *c
+        }
     };
     if other == *o { return Err(TErr::Duplicate); }
     // a leaf where the new key leads: push it one level down and try again
@@ -139,10 +143,19 @@ fn ins_top(n: &mut Top, s: &W, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<
     ins_top(n, s, o, sp, v, d)
 }
 
+/// A key twice in one update list (marks and inserts together): the guest refuses it (`Duplicate`), so do the
+/// model and the store. (Spending a coin and creating it again in one block: Core refuses that under BIP30.)
+pub fn repeated_key<'a>(keys: impl Iterator<Item = &'a Key>) -> bool {
+    let mut v: Vec<&Key> = keys.collect();
+    v.sort_unstable();
+    v.windows(2).any(|p| p[0] == p[1])
+}
+
 /// One block: check the pruned old trie `t` against `root`, mark `marks` (key S ‖ O, spender), insert `inserts`
 /// (key, spender if the coin is already spent in its own block, value), and set `root` to the new root.
 pub fn apply(root: &mut W, t: &mut Top, counts: bool, marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)]) -> Result<(), TErr> {
     if hash_top(t, counts) != *root { return Err(TErr::OldRoot); }
+    if repeated_key(marks.iter().map(|m| &m.0).chain(inserts.iter().map(|i| &i.0))) { return Err(TErr::Duplicate); }
     for (k, sp) in marks {
         let (s, o) = split(k);
         mark_top(t, &s, &o, sp, 0)?;
@@ -379,7 +392,7 @@ mod tests {
             assert_eq!(apply_stream(&bad, &m, &i), Err(TErr::OldRoot));
             // marking twice, inserting twice, a wrong old root: refused
             let (mut r, mut tt) = (root, t.clone());
-            assert_eq!(apply(&mut r, &mut tt, counts, &[m[0], m[0]], &[]), Err(TErr::Missing));
+            assert_eq!(apply(&mut r, &mut tt, counts, &[m[0], m[0]], &[]), Err(TErr::Duplicate));
             let (mut r, mut tt) = (root, t.clone());
             assert_eq!(apply(&mut r, &mut tt, counts, &[], &[i[0], i[0]]), Err(TErr::Duplicate));
             let (mut r, mut tt) = ([9u32; 8], t.clone());

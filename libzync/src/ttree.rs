@@ -266,6 +266,16 @@ fn sub_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W,
                         &leaf
                     }
                     Some(_) => return Err(TErr::Missing),
+                    // BIP30: a coin created again over its own SPENT record (a coinbase repeated byte for byte once
+                    // the first was spent; Core allows it, the old coin has left its set). The new coin replaces the
+                    // record; the counts are of unspent coins, so the old one never counted. Over an unspent coin
+                    // it is a duplicate (Core refuses; the mainnet pairs are kept out by bip30_unspendable).
+                    None if spent => {
+                        let (sp, v) = cx.ins(u).ok_or(TErr::Missing)?;
+                        if sp.is_none() { acc.pc += 1; acc.pv = acc.pv.checked_add(v).ok_or(TErr::Count)?; }
+                        coin_into(o0, sp, v, cx.counts, &mut leaf);
+                        &leaf
+                    }
                     None => return Err(TErr::Duplicate),
                 },
                 _ => return Err(TErr::Duplicate),

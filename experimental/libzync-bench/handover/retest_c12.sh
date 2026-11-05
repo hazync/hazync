@@ -34,6 +34,7 @@ grep -a 'REAL_EXIT\|^METHOD_ID' $R/build_c12regN.log; [ -x $R/host_c12regN ] || 
 ( cd $Z && git diff --quiet -- prover/methods/guest/src/lineage/regtest_coinlog.rs ) && echo "pin reverted" || echo "PIN NOT REVERTED"
 step "handover O -> N"
 rm -rf $O/ho; mkdir -p $O/ho
+$R/host_c12reg method-id 2>/dev/null | sed -n "s/^METHOD_ID //p" > $O/ho/o_id; $R/host_c12regN method-id 2>/dev/null | sed -n "s/^METHOD_ID //p" > $O/ho/n_id
 bash $Z/experimental/libzync-bench/handover/run.sh $R/host_c12reg $R/host_c12regN $O/rig/blocks/main $O/ho 2>&1 | grep -a 'PASS\|WRONG\|as expected'; echo HO_EXIT=${PIPESTATUS[0]}
 step "build signet (c12sig)"; build c12sig $B HAZYNC_NETWORK=signet
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=2

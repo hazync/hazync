@@ -30,7 +30,9 @@ HANDOVER.md §2); the shared check of §4 is the code every zyncAPP must carry a
 (SHA-256(scriptPubKey), outpoint), including coins spent in their own block (with their spender) and zero-value outputs.
 NOT in it, as not in Core's: provably unspendable outputs (OP_RETURN, scripts over 10,000 bytes) and the genesis
 coinbase. BIP30: the coinbases of 91,722 and 91,812 are overwritten by those of 91,880 and 91,842 (same txids) and are
-filed once, at the later block, so those two scripts' histories show one payment where the chain paid two. An ABSENT
+filed once, at the later block, so those two scripts' histories show one payment where the chain paid two. Likewise a coin created again
+over its own SPENT record (a coinbase repeated byte for byte once the first was spent; Core allows it, and it is possible
+on mainnet from 1,983,702, where Core checks BIP30 again) replaces that record: the history keeps the later coin only. An ABSENT
 coin fact is about the (script, outpoint) pair: asked with another script, an existing outpoint is absent too, so a
 wallet must not read ABSENT as "this outpoint never existed". Trie facts carry their claimed answer (`expect`).
 

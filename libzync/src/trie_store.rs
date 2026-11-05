@@ -1,7 +1,7 @@
 //! The host's counting-trie STORE (E2 step 3; host only, never compiled into a guest): the whole trie, every inner
 //! node's hash cached, advanced one block at a time. Per block it serves the guest's witness (the old trie pruned to the
 //! block's paths, the format `trie_model::encode` writes and `ttree::apply_stream_perm` reads), applies the block's
-//! update list, and can undo it exactly (a reorg). It replaces `trie_model::synth` for real proofs.
+//! update list, and can undo it (a reorg; exact except over a BIP30 re-creation, see `undo`). It replaces `trie_model::synth` for real proofs.
 //!
 //! The trie's shape is a function of its key set (a subtree holding one leaf IS that leaf), so a store built by any
 //! sequence of applies and undos that leaves the same coins has the same root. Undo removes an inserted coin and
@@ -330,7 +330,9 @@ impl TrieStore {
                 self.drop_node(n);
                 Ok(self.sinner(l, r))
             }
-            Node::Coin { o: x, .. } => {
+            Node::Coin { o: x, sp: old_sp, .. } => {
+                // BIP30: a coin created again over its own spent record replaces it (ttree.rs, the coin leaf case)
+                if x == *o && old_sp.is_some() { self.drop_node(n); return Ok(self.put(Node::Coin { o: *o, sp: *sp, value: v })); }
                 if x == *o { return Err(TErr::Duplicate); }
                 // the existing coin moves one level down, on its own side, and the new one goes in beside or below it
                 let t = if bit(&x, d) { self.sinner(EMPTY, n) } else { self.sinner(n, EMPTY) };
@@ -673,6 +675,7 @@ impl TrieStore {
         // a spender record is words 0-4 (the leaf hash overwrites 5-7): refuse more, so the store stays loadable
         let wide = |sp: &W| sp[5..] != [0; 3];
         if marks.iter().any(|m| wide(&m.1)) || inserts.iter().any(|i| i.1.as_ref().is_some_and(wide)) { return Err(TErr::Witness); }
+        if crate::trie_model::repeated_key(marks.iter().map(|m| &m.0).chain(inserts.iter().map(|i| &i.0))) { return Err(TErr::Duplicate); }
         let r = (|| {
             let mut t = self.root;
             for (k, sp) in marks { let (s, o) = split(k); t = self.t_mark(t, &s, &o, sp, 0)?; }
@@ -683,6 +686,8 @@ impl TrieStore {
     }
 
     /// Undo one block's update list (the one last applied): remove its inserts, unmark its marks. All or nothing.
+    /// Not exact for a block that created a coin over its own spent record (BIP30, `s_ins`): the record it replaced
+    /// is gone, so undo removes the coin outright; restore such a block's predecessor from its snapshot.
     pub fn undo(&mut self, marks: &Marks, inserts: &Inserts) -> Result<W, TErr> {
         let r = (|| {
             let mut t = self.root;
@@ -864,8 +869,8 @@ mod tests {
             }
             assert_eq!(mem.witness(&marks, &ins), disk.witness(&marks, &ins), "block {blk}: witness");
             assert_eq!(mem.apply(&marks, &ins), disk.apply(&marks, &ins), "block {blk}: root");
-            // a refused update (a duplicate) changes neither
-            if let Some(i) = ins.first() {
+            // a refused update (a duplicate of an UNSPENT coin; over a spent one it is a BIP30 re-creation) changes neither
+            if let Some(i) = ins.iter().find(|i| i.1.is_none()) {
                 assert_eq!(mem.apply(&[], &[*i]), Err(TErr::Duplicate));
                 assert_eq!(disk.apply(&[], &[*i]), Err(TErr::Duplicate));
             }
@@ -904,7 +909,7 @@ mod tests {
         // a duplicate insert after a good one, a mark of an absent coin, a double spend: refused, nothing changes
         assert_eq!(st.apply(&[], &[(key(2, 0, 1, 0), None, 1), a]), Err(TErr::Duplicate));
         assert_eq!(st.apply(&[(key(1, 0, 3, 0), [1, 0, 0, 0, 0, 0, 0, 0])], &[]), Err(TErr::Missing));
-        assert_eq!(st.apply(&[(a.0, [1, 0, 0, 0, 0, 0, 0, 0]), (a.0, [2, 0, 0, 0, 0, 0, 0, 0])], &[]), Err(TErr::Missing));
+        assert_eq!(st.apply(&[(a.0, [1, 0, 0, 0, 0, 0, 0, 0]), (a.0, [2, 0, 0, 0, 0, 0, 0, 0])], &[]), Err(TErr::Duplicate));
         assert_eq!(st.apply(&[(a.0, [0, 0, 0, 0, 0, 1, 0, 0])], &[]), Err(TErr::Witness), "spender word 5");
         assert_eq!((st.root(), st.to_bytes()), (r0, snap));
         // insertion order does not matter
@@ -912,6 +917,54 @@ mod tests {
         st2.apply(&[], &[b]).unwrap();
         st2.apply(&[], &[a]).unwrap();
         assert_eq!(st2.root(), r0);
+    }
+
+    /// BIP30 (the regtest rig's blocks 130 / 131): a coinbase repeated byte for byte once the first was spent.
+    /// Core allows it, so the guest, the model and the store must all accept it, with the same root, and the new coin
+    /// counts as unspent. Over an UNSPENT coin, or spent and created again in one block, all three refuse.
+    #[test]
+    fn a_coin_created_again_over_its_spent_record() {
+        for counts in [true, false] {
+            let mut st = TrieStore::new(counts);
+            let (c, other) = (key(4, 0, 1, 0), key(4, 0, 9, 1));
+            st.apply(&[], &[(c, None, 50), (other, None, 7)]).unwrap();
+            let unspent = st.root();
+            let ups_dup: Vec<(Key, Option<W>, u64)> = alloc::vec![(c, None, 50)];
+            // over the UNSPENT coin: refused everywhere
+            let wit = st.witness(&[], &ups_dup);
+            assert_eq!(apply_stream_perm(&wit, &[], &ups_dup, Some(&perm(&[], &ups_dup))), Err(TErr::Duplicate), "guest, unspent");
+            let (_, _, mut t) = decode(&wit).unwrap();
+            let mut r = unspent;
+            assert_eq!(model_apply(&mut r, &mut t, counts, &[], &ups_dup), Err(TErr::Duplicate), "model, unspent");
+            assert_eq!(st.apply(&[], &ups_dup), Err(TErr::Duplicate), "store, unspent");
+            assert_eq!(st.root(), unspent);
+            // spent and created again in the same block: refused everywhere
+            let sp = [5, 0, 0, 0, 0, 0, 0, 0];
+            let both: Vec<(Key, W)> = alloc::vec![(c, sp)];
+            let wit = st.witness(&both, &ups_dup);
+            assert_eq!(apply_stream_perm(&wit, &both, &ups_dup, None), Err(TErr::Duplicate), "guest, one block");
+            let (_, _, mut t) = decode(&wit).unwrap();
+            let mut r = unspent;
+            assert_eq!(model_apply(&mut r, &mut t, counts, &both, &ups_dup), Err(TErr::Duplicate), "model, one block");
+            assert_eq!(st.apply(&both, &ups_dup), Err(TErr::Duplicate), "store, one block");
+            // spent at one block, created again at a later one: accepted, the same root from all three
+            st.apply(&both, &[]).unwrap();
+            let old = st.root();
+            let wit = st.witness(&[], &ups_dup);
+            let new = st.apply(&[], &ups_dup).unwrap();
+            assert_ne!(new, old);
+            assert_eq!(apply_stream_perm(&wit, &[], &ups_dup, Some(&perm(&[], &ups_dup))), Ok(new), "guest");
+            let (_, _, mut t) = decode(&wit).unwrap();
+            let mut r = old;
+            model_apply(&mut r, &mut t, counts, &[], &ups_dup).unwrap();
+            assert_eq!(r, new, "model");
+            // ... and is the same trie as one where the coin was only ever created once: the record is replaced
+            let mut once = TrieStore::new(counts);
+            once.apply(&[], &[(c, None, 50), (other, None, 7)]).unwrap();
+            assert_eq!(once.root(), new, "the new coin replaces the spent record; counts are of unspent coins");
+            // and it can be spent again
+            st.apply(&[(c, [6, 0, 0, 0, 0, 0, 0, 0])], &[]).unwrap();
+        }
     }
 
     #[test]
