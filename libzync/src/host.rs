@@ -90,6 +90,27 @@ pub fn sig_hint(s: &SigRecord) -> [u8; SIG_HINT_BYTES] {
     out
 }
 
+/// An ADVERSARIAL hint for one deferred verify (a soundness test of the batch, I1): it always claims VALID, with
+/// R = (r, y) of the parity the scheme's acceptance test wants, so R passes the guest's per-signature check (on the
+/// curve, x(R) == r, parity) whenever r is a curve x. Only the batch equation can then catch a bad signature. When r is
+/// not a curve x no such R exists: the honest hint.
+pub fn sig_hint_forged(s: &SigRecord) -> [u8; SIG_HINT_BYTES] {
+    let p = BigUint::from_bytes_be(&P);
+    let x = BigUint::from_bytes_be(&s.r);
+    if x >= p { return sig_hint(s); }
+    let rhs = (&x * &x * &x + 7u32) % &p;
+    let y = rhs.modpow(&((&p + 1u32) >> 2), &p);
+    if &y * &y % &p != rhs { return sig_hint(s); }
+    let want_odd = matches!(s.kind, 4);
+    let y = if (y.bit(0)) == want_odd { y } else { &p - &y };
+    let be32 = |v: &BigUint| { let b = v.to_bytes_be(); let mut o = [0u8; 32]; o[32 - b.len()..].copy_from_slice(&b); o };
+    let mut out = [0u8; SIG_HINT_BYTES];
+    out[..4].copy_from_slice(&1u32.to_le_bytes());
+    out[4..36].copy_from_slice(&be32(&x));
+    out[36..68].copy_from_slice(&be32(&y));
+    out
+}
+
 /// Every ECMHREC leaf in a guest log, in operation order.
 pub fn ecmh_leaves(log: &str) -> Vec<[u8; 32]> {
     log.lines()

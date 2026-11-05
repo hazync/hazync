@@ -2439,14 +2439,26 @@ fn join() {
 /// Mode 10 (self-test, I1): Core's own script and transaction test vectors through the guest's consensus code, with
 /// explicit flags and no hints installed (libsecp verifies every signature itself, as Core). Each case: kind (0: one
 /// input's VerifyScript, script_tests.json; 1: CheckTransaction + every input, tx_valid / tx_invalid), the transaction,
-/// its spent outputs (Core's Vec<CTxOut>), the input index (kind 0), the flags. Commits each case's code: 1 valid,
-/// -(ScriptError) - 1, or -1000 (CheckTransaction). Commits nothing a chain proof consumes.
+/// its spent outputs (Core's Vec<CTxOut>), the input index (kind 0), the flags, and the signature mode (0 libsecp, 1
+/// collect, 2 hinted + the batch check). Commits each case's code: 1 valid, -(ScriptError) - 1, -1000
+/// (CheckTransaction), or -2000 (the batch check failed). Commits nothing a chain proof consumes.
 fn test_core_vectors() {
     let n: u32 = env::read();
     let mut out: Vec<i32> = Vec::with_capacity(n as usize);
-    for _ in 0..n {
-        let (kind, tx, prevouts, input, flags): (u32, Vec<u8>, Vec<u8>, u32, u32) = env::read();
-        let rc = unsafe {
+    for i in 0..n {
+        // sig: 0 libsecp verifies every signature (no hints); 1 COLLECT (log the batch records, after a CVCASE <i>
+        // marker); 2 the given hints, then the batch check, as a chunk: a failed batch is -2000.
+        let (kind, tx, prevouts, input, flags, sig, hints): (u32, Vec<u8>, Vec<u8>, u32, u32, u32, Vec<u8>) = env::read();
+        #[cfg(feature = "batch-ecdsa")]
+        match sig {
+            0 => batch_ecdsa::install(false, Vec::new()),
+            1 => { env::log(&alloc::format!("CVCASE {i}")); batch_ecdsa::install(true, Vec::new()) }
+            2 => batch_ecdsa::install(false, hints),
+            _ => panic!("mode 10: unknown sig mode {sig}"),
+        }
+        #[cfg(not(feature = "batch-ecdsa"))]
+        { let _ = (i, &hints); assert!(sig == 0, "mode 10: this image has no batch verification"); }
+        let mut rc = unsafe {
             match kind {
                 0 => verify_input(tx.as_ptr(), tx.len() as u32, input, prevouts.as_ptr(), prevouts.len() as u32, flags,
                                   0, 0, 0, core::ptr::null_mut()),
@@ -2454,6 +2466,8 @@ fn test_core_vectors() {
                 _ => panic!("mode 10: unknown case kind {kind}"),
             }
         };
+        #[cfg(feature = "batch-ecdsa")]
+        if sig == 2 && !batch_ecdsa::finish() { rc = -2000; }
         out.push(rc);
     }
     env::commit(&out);

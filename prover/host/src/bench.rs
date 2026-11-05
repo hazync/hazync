@@ -62,14 +62,20 @@ pub(crate) fn test_merkle_cmd() {
 /// ROADMAP I1: Core's own script / transaction test vectors through the guest (mode 10). Cases from
 /// `scripts/libzync/core_vectors.py <bitcoin-core> <cases.json>`; each is compared with Core's expectation (validity, and
 /// for script_tests the exact ScriptError; BADTX = CheckTransaction refused). Prints every mismatch and a total.
-///   host core-vectors <cases.json> [cases per execution, default 500]
+///   host core-vectors <cases.json> [cases per execution, default 500] [--sig honest|forged]
+/// --sig runs the BATCHED signature path, as a chunk does: a collect run learns each case's deferred verifies, then the
+/// case runs on hints and the batch check. honest (R = u1*G + u2*Q): must still agree with Core exactly. forged (every
+/// verify claimed VALID with an R that passes the per-signature check): no case Core rejects may pass; a case Core
+/// accepts may fail (a lying host only costs liveness), counted apart.
 pub(crate) fn core_vectors_cmd(args: &[String]) {
     #[derive(Deserialize)]
     struct Case { kind: u32, tx: String, prevouts: String, input: u32, flags: u32, label: String,
                   valid: Option<bool>, code: Option<i32> }
     let i = args.iter().position(|a| a == "core-vectors").unwrap();
-    let path = args.get(i + 1).expect("usage: core-vectors <cases.json> [batch]");
-    let batch: usize = args.get(i + 2).map(|x| x.parse().expect("batch")).unwrap_or(500);
+    let path = args.get(i + 1).expect("usage: core-vectors <cases.json> [batch] [--sig honest|forged]");
+    let batch: usize = args.get(i + 2).filter(|x| !x.starts_with("--")).map(|x| x.parse().expect("batch")).unwrap_or(500);
+    let sig: Option<bool> = args.iter().position(|a| a == "--sig").map(|k| match args.get(k + 1).map(|s| s.as_str()) {
+        Some("honest") => false, Some("forged") => true, x => panic!("--sig honest|forged, got {x:?}") });
     let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}")))
         .expect("cases JSON");
     let unhex = |h: &str| -> Vec<u8> { (0..h.len()).step_by(2).map(|j| u8::from_str_radix(&h[j..j + 2], 16).unwrap()).collect() };
@@ -78,19 +84,40 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
     // it. Both reject: agreement only where Core rejects (script_tests: UNKNOWN_ERROR; tx tests: invalid).
     const ABORT: i32 = i32::MIN;
     const UNKNOWN_ERROR: i32 = -2;
-    let run = |chunk: &[Case]| -> Option<(Vec<i32>, u64)> {
-        let mut b = ExecutorEnv::builder();
-        b.write(&10u32).unwrap();
-        b.write(&(chunk.len() as u32)).unwrap();
-        for c in chunk {
-            b.write(&(c.kind, unhex(&c.tx), unhex(&c.prevouts), c.input, c.flags)).unwrap();
-        }
-        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).ok()?;
+    // One guest execution of mode 10: (codes, cycles, the guest's log).
+    let exec = |chunk: &[Case], mode: u32, hints: &[Vec<u8>]| -> Option<(Vec<i32>, u64, String)> {
+        let mut log = Vec::new();
+        let s = {
+            let mut b = ExecutorEnv::builder();
+            b.stdout(&mut log);
+            b.write(&10u32).unwrap();
+            b.write(&(chunk.len() as u32)).unwrap();
+            for (k, c) in chunk.iter().enumerate() {
+                let h = hints.get(k).cloned().unwrap_or_default();
+                b.write(&(c.kind, unhex(&c.tx), unhex(&c.prevouts), c.input, c.flags, mode, h)).unwrap();
+            }
+            default_executor().execute(b.build().unwrap(), METHOD_ELF).ok()?
+        };
         let got: Vec<i32> = s.journal.decode().expect("mode 10 journal");
         assert_eq!(got.len(), chunk.len());
-        Some((got, s.cycles()))
+        Some((got, s.cycles(), String::from_utf8_lossy(&log).into_owned()))
     };
-    let (mut agree, mut bad, mut aborts, mut cycles) = (0usize, 0usize, 0usize, 0u64);
+    // A chunk through the selected path: plain, or collect -> hints -> hinted run.
+    let run = |chunk: &[Case]| -> Option<(Vec<i32>, u64)> {
+        let Some(forged) = sig else { return exec(chunk, 0, &[]).map(|(g, c, _)| (g, c)) };
+        let (_, c0, log) = exec(chunk, 1, &[])?;
+        let mut per: Vec<String> = vec![String::new(); chunk.len()];
+        let mut cur: Option<usize> = None;
+        for l in log.lines() {
+            if let Some(at) = l.find("CVCASE ") { cur = l[at + 7..].trim().parse().ok(); continue; }
+            if let (Some(k), true) = (cur, l.contains(libzync::wire::BATCHREC_TAG)) { per[k].push_str(l); per[k].push('\n'); }
+        }
+        let hints: Vec<Vec<u8>> = per.iter().map(|t| libzync::host::sig_records(t).iter()
+            .flat_map(|r| if forged { libzync::host::sig_hint_forged(r) } else { libzync::host::sig_hint(r) }).collect()).collect();
+        let (g, c1, _) = exec(chunk, 2, &hints)?;
+        Some((g, c0 + c1))
+    };
+    let (mut agree, mut bad, mut aborts, mut broken, mut cycles) = (0usize, 0usize, 0usize, 0usize, 0u64);
     for chunk in cases.chunks(batch) {
         // A batch that aborts is rerun one case at a time, so one throwing case does not hide the others.
         let got: Vec<i32> = match run(chunk) {
@@ -101,13 +128,20 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
             }).collect(),
         };
         for (c, rc) in chunk.iter().zip(got) {
-            let ok = match (rc, c.code, c.valid) {
-                (ABORT, Some(code), _) => code == UNKNOWN_ERROR,
-                (ABORT, None, v) => v == Some(false),
-                (_, Some(code), _) => rc == code,
-                (_, None, Some(true)) => rc == 1,
-                (_, None, Some(false)) => rc != 1 && rc != -1000,
-                (_, None, None) => panic!("{}: no expectation", c.label),
+            let core_valid = match (c.code, c.valid) { (Some(code), _) => code == 1, (None, Some(v)) => v,
+                                                       (None, None) => panic!("{}: no expectation", c.label) };
+            let ok = if sig == Some(true) {
+                // forged hints: soundness only. Nothing Core rejects may pass.
+                if core_valid && rc != 1 { broken += 1; }
+                core_valid || rc != 1
+            } else {
+                match (rc, c.code, c.valid) {
+                    (ABORT, Some(code), _) => code == UNKNOWN_ERROR,
+                    (ABORT, None, v) => v == Some(false),
+                    (_, Some(code), _) => rc == code,
+                    (_, None, Some(true)) => rc == 1,
+                    (_, None, _) => rc != 1 && rc != -1000,
+                }
             };
             if ok && rc == ABORT { aborts += 1 }
             if ok { agree += 1 } else {
@@ -118,8 +152,9 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
         }
         eprintln!("  {} / {} cases, {} mismatches", agree + bad, cases.len(), bad);
     }
-    println!("CORE_VECTORS {agree} agree ({aborts} of them by a guest abort where Core catches a throw), {bad} differ, of {} ({} cycles)",
-             cases.len(), cycles);
+    let mode = match sig { None => "libsecp", Some(false) => "batched, honest hints", Some(true) => "batched, FORGED hints" };
+    println!("CORE_VECTORS [{mode}] {agree} agree ({aborts} of them by a guest abort where Core catches a throw), {bad} differ, of {} ({} cycles){}",
+             cases.len(), cycles, if sig == Some(true) { format!("; {broken} Core-valid cases failed under forged hints (liveness only)") } else { String::new() });
     if bad > 0 { std::process::exit(1); }
 }
 
