@@ -149,16 +149,19 @@ fn main() {
             let (st, run): (HState, &[(i64, Vec<u8>)]) = if lines[0].0 == 0 {
                 (HState { height: -1, hash: [0; 32], work: [0; 32], bits: 0, time: 0, epoch_first_time: 0, recent_times: vec![], max_time: 0 }, &lines[..])
             } else {
-                let start = lines.iter().position(|(h, _)| h % 2016 == 0).unwrap_or_else(|| die("no retarget boundary in the file"));
-                assert!(start >= 11, "need 11 headers before the boundary");
+                // the run starts just AFTER a retarget boundary: the boundary header is in the seed and is its epoch's first
+                // time, so the next retarget in the run is computed from real timestamps
+                let b = lines.iter().position(|(h, _)| h % 2016 == 0).unwrap_or_else(|| die("no retarget boundary in the file"));
+                let start = b + 1;
+                assert!(start >= 11, "need 11 headers up to the boundary");
                 let seed = &lines[start - 11..start];
                 let last = &seed[10].1;
                 let le = |b: &[u8]| u32::from_le_bytes(b.try_into().unwrap());
-                let wh = a.get(2).unwrap_or_else(|| die("headers-exec <file> <chainwork hex at the header before the boundary>"));
+                let wh = a.get(2).unwrap_or_else(|| die("headers-exec <file> <chainwork hex at the retarget boundary header>"));
                 let mut work = [0u8; 32];
                 let wb: Vec<u8> = (0..64).step_by(2).map(|i| u8::from_str_radix(&format!("{:0>64}", wh)[i..i + 2], 16).unwrap()).collect();
                 for (i, b) in wb.iter().rev().enumerate() { work[i] = *b; }
-                (HState { height: seed[10].0, hash: dsha(last), work, bits: le(&last[72..76]), time: le(&last[68..72]), epoch_first_time: 0,
+                (HState { height: seed[10].0, hash: dsha(last), work, bits: le(&last[72..76]), time: le(&last[68..72]), epoch_first_time: le(&lines[b].1[68..72]),
                           recent_times: seed.iter().map(|(_, h)| le(&h[68..72])).collect(), max_time: seed.iter().map(|(_, h)| le(&h[68..72])).max().unwrap() }, &lines[start..])
             };
             let words: Vec<u32> = run.iter().flat_map(|(_, h)| h.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>()).collect();
