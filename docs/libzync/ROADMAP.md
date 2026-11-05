@@ -175,6 +175,23 @@ Order: freeze the core -> ship 2-3 first-party zAPPs (header chain for the launc
 balance facts) -> open the SDK with the reviewed-id registry -> talk to 2-3 exchanges and one bridge team BEFORE
 building more (their answers set the pricing). Cheapest real test of demand: ask them.
 
+## M. Cost after the freeze (11-05; candidates, none measured yet)
+
+The dominant cost is verifying every signature in Bitcoin's history; what is left is mostly levers on how that and the
+memory around it are paid for. Each is measured on the cost table (9 modern blocks + 962,000) before it lands, and any
+change after the freeze ships as a new image through the handover.
+
+| # | lever | why it might pay | size |
+|---|---|---|---|
+| M1 | "verify, don't compute" in more places: the host supplies an answer, the guest checks a cheap certificate (as liftx, batch signatures, ECMH points, trie witnesses already do): divisions (q(t+1) <= ~t < (q+1)(t+1)), sorts (check a permutation), anything the host already knows | safe by construction (a wrong hint fails); local | small, per site |
+| M2 | zkVM memory, not arithmetic: risc0 charges cycles for paging; libsecp's precomputed tables are tuned for CPUs (big tables, fewer ops). Smaller tables / other window sizes may win in the zkVM | contained: a few table sizes on 962,000 | small experiment |
+| M3 | padding: proving pays padded (power-of-two) segments, not raw cycles; better chunk packing or a per-chunk segment size | no change to what is proved | small-medium |
+| M4 | bigger signature batches: the batch check (Pippenger) grows sub-linearly, so batching across chunks or blocks amortises more; moves the batch up a level (aggregate or its own receipt) | measure the curve first | medium, design change |
+| M5 | a specialised signature prover: a block's signatures proved in a system built for curve arithmetic (custom gates, GKR-style batch ECDSA), its proof verified inside the zkVM | the big ZK teams' route to large signature speedups; guess 2-5x on the signature share, UNMEASURED; a second proof system to audit | weeks; research project, after the GPU benchmarks say what signatures cost in dollars |
+
+Not levers: skipping signatures (assumevalid, ruled out: every block is proved); replacing Core's interpreter (<1% of
+cycles, measured); a risc0 upgrade for new accelerators (ruled out).
+
 ## Image ids built (11-03, unit tests + compiles only)
 
 | image | id | note |
