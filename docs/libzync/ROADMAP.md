@@ -95,7 +95,7 @@ test finds a bug.
 
 | # | gap | how | status |
 |---|---|---|---|
-| I1 | trust in our guest | Core's own test vectors (`script_tests`, `tx_valid`, `tx_invalid`) through the guest; fuzzing; extend the rig | next (before freeze, part of H4) |
+| I1 | trust in our guest | Core's own test vectors (`script_tests`, `tx_valid`, `tx_invalid`) through the guest; fuzzing; extend the rig | **harness built 11-05 (c909841)**: guest mode 10, `scripts/libzync/core_vectors.py` (1,420 base cases = Core 28's counts, 22,666 with flag variants), `host core-vectors`; first run on c10e10. ⏳ the BATCHED signature path (mode 10 runs libsecp, no hints): an adversarial run (host hints R = lift_x(r) for every call: no invalid case may pass) and an honest run (real R: every valid case passes), next image; fuzzing; extend the rig |
 | I2 | trust in our guest + verifiers | external audit and a bug bounty before anyone relies on proofs for money | after freeze |
 | I3 | trust in the zkVM | pin one risc0 version and track its audits; optional: prove periodic checkpoints on a second zkVM (e.g. SP1), so one prover bug cannot forge alone (~2x cost, checkpoints only) | later; user's call |
 | I4 | data availability | the blocks are the data: publish coin log / tree snapshots (verifiable against proven roots, any untrusted mirror works) + a "rebuild from my own node" tool | after freeze |
