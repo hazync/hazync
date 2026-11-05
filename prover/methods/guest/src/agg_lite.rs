@@ -34,9 +34,7 @@ use super::*;
 pub const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 
 /// coinlog: the block's log witness, read by the aggregate before validation (libzync/src/coinlog.rs).
-#[cfg(feature = "coinlog")]
 static mut LOG_WITNESS: Vec<u32> = Vec::new();
-#[cfg(feature = "coinlog")]
 pub fn set_log_witness(w: Vec<u32>) { unsafe { LOG_WITNESS = w } }
 
 // The trie's update-list digest, committed after the ChainState (E2 binds it to the trie receipt).
@@ -122,7 +120,6 @@ fn shash(spk: &[u8]) -> [u8; 32] {
     for (c, x) in o.chunks_exact_mut(4).zip(st) { c.copy_from_slice(&x.to_be_bytes()); }
     o
 }
-#[cfg(feature = "coinlog")]
 fn hex32(h: &[u8; 32]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
 #[cfg(feature = "trie")]
 fn hex64(h: &[u8; 64]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
@@ -283,7 +280,6 @@ impl ChunkCtx {
             push_i64(&mut self.words, weight);
             push_i64(&mut self.words, sigops);
             // coinlog: every output's amount, spendable or not, so the aggregate knows the transaction's inputs (fee + this).
-            #[cfg(feature = "coinlog")]
             push_i64(&mut self.words, unsafe { tx_total_out(tp, tl) });
             self.words.push(n_out);
             #[cfg(feature = "trie")]
@@ -374,7 +370,6 @@ fn skip_record(r: &mut Rd) {
     if first == 1 {
         let _ = (r.u(), r.u());
         r.i = r.i.saturating_add(6);
-        #[cfg(feature = "coinlog")]
         { r.i = r.i.saturating_add(2); }
         let n_out = r.u() as usize;
         r.i = r.i.saturating_add(n_out.saturating_mul(11 + OUT_KEY_WORDS));
@@ -387,6 +382,9 @@ fn skip_record(r: &mut Rd) {
     }
     if r.i > r.w.len() { r.bad = true; }
 }
+
+#[cfg(all(feature = "agg-lite", not(feature = "coinlog")))]
+compile_error!("libzync's aggregate keeps its coins in the coin log: build with HAZYNC_COINLOG (on in the libzync profile)");
 
 /// Aggregate side. Same checks, same order of SwiftSync operations, as `validate_block_staged`'s
 /// aggregation path, with every per-transaction fact taken from the chunk journals.
@@ -456,7 +454,6 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     wtxids.push([0u8; 32]);
     let mut total_fee: i64 = 0;
     // coinlog: the amount of every coin the block's transactions spend (fee + every output, per transaction).
-    #[cfg(feature = "coinlog")]
     let mut total_in: u64 = 0;
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
@@ -533,7 +530,6 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 (tr_all, tr_claim) = (true, hw & 2 != 0);
                 let n_vin = r.u();
                 let (fee, weight, sigops) = (r.i64(), r.i64(), r.i64());
-                #[cfg(feature = "coinlog")]
                 { let t_out = r.i64(); total_in = total_in.saturating_add((fee as u64).saturating_add(t_out as u64)); }
                 let n_out = r.u();
                 txids.push(txid);
@@ -601,17 +597,10 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     if w.height >= bip30::REPEAT_HORIZON { all_ok = false; }
     if !all_ok { env::log(&format!("agg-lite: REJECT after the record walk (transactions={}, last covered={covered})", tx_pos)); }
 
-    // Spends then adds, in the same order as the full path (so the same ECMH hints apply).
-    // `created` = every created leaf with its creating tx position, sorted by word key; a duplicate
-    // leaf keeps its FIRST (lowest) position, as the full path's `entry().or_insert` does.
-    // Design B: one hint bit per indexed output (= every entry of output_leaves, in order). 1 = still
-    // UNSPENT at the hints file's stop height H.
-    let (&(ss_mode, ss_nbits, ref ss_words), prev_hints) = (ss.0, ss.1);
-    if ss_mode == 1 && ss_nbits as usize != output_leaves.len() {
-        env::log(&format!("agg-lite: REJECT hint bits {} != indexed outputs {}", ss_nbits, output_leaves.len()));
-        all_ok = false;
-    }
-    let bit = |k: usize| ss_mode == 1 && k < ss_nbits as usize && (ss_words[k / 32] >> (k % 32)) & 1 == 1;
+    // libzync takes no SwiftSync hints file (design B, removed 11-04 in E2c): the wire still carries the hint-bit field
+    // (mode 0) and the chain state its running hash (carried unchanged) until E2 reworks both.
+    let (&(ss_mode, _, _), prev_hints) = (ss.0, ss.1);
+    if ss_mode != 0 { env::log("agg-lite: REJECT libzync takes no hints file"); all_ok = false; }
     // The coins this block creates, by leaf: a hash table of output indices (E2a batch 2; it was a sort of 40-byte rows
     // and four binary-search passes). A repeated leaf keeps its FIRST output (lowest position), as the full path's
     // `entry().or_insert` does: outputs are inserted in block order and a present key is never replaced.
@@ -627,10 +616,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let skeys: Vec<[u64; 4]> = spends.iter().map(|(l, _, _, _)| key(l)).collect();
     let mut etab = KeyTab::new(skeys.len(), salt);
     let mut ext_twice = false;
-    #[cfg(feature = "coinlog")]
     let (mut ext, mut in_block_spent): (Vec<([u8; 32], u32, u32)>, u64) = (Vec::new(), 0);   // (leaf, tx position, input index)
-    #[cfg(feature = "coinlog")]
-    if ss_mode == 1 { env::log("agg-lite: REJECT a coin-log image takes no hints file"); all_ok = false; }
     #[cfg(feature = "trie")]
     let mut ext_keys: Vec<([u8; 32], [u8; 32])> = Vec::new();
     // htree: the spender (tx position, input index) of each created coin this block also spends
@@ -647,13 +633,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 spent[i] = true;
                 #[cfg(feature = "trie")]
                 { in_sp[i] = Some((*txp, *_vin)); }
-                #[cfg(feature = "coinlog")]
                 { in_block_spent = in_block_spent.saturating_add(out_val[i]); }
-                // A coin spent in its own block cannot be unspent at H: the hint lies.
-                if bit(i) {
-                    env::log("agg-lite: REJECT a hint marks a coin unspent-at-H that this block spends");
-                    all_ok = false;
-                }
             }
             None => {
                 if etab.insert(&skeys, _si as u32).is_some() { ext_twice = true; }
@@ -661,10 +641,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     env::log("agg-lite: REJECT a spend claims a coin of this height that this block does not create");
                     all_ok = false;
                 }
-                #[cfg(not(feature = "coinlog"))]
-                swiftsync::sub(leaf);
                 // coinlog: a coin from an earlier block, which must be unspent in the log at the position the prover names
-                #[cfg(feature = "coinlog")]
                 ext.push((*leaf, *txp, *_vin));
                 #[cfg(feature = "trie")]
                 ext_keys.push(spend_keys[_si]);
@@ -675,35 +652,9 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         env::log("agg-lite: REJECT the same external coin is spent twice in this block");
         all_ok = false;
     }
-    // Design B: survivors (bit 1) go into an append-only utreexo forest -- at H it holds exactly the UTXO
-    // set, in creation order; everything else into the ECMH total, which must be the identity at H.
-    // Within the block, survivors are appended sorted by (txid, vout), compared as bytes in internal order: Core's own
-    // coin-key order, so a Core `dumptxoutset` (it carries each coin's height) gives the forest order with no block
-    // data (UTREEXO_FORMAT.md §4). The hint bits stay in block order, as the hints file has them.
-    #[cfg(not(feature = "coinlog"))]
-    let (next_roots, next_leaves, survivor_value, spent_value) = {
-        let mut stump = utreexo::Stump::new(w.root_prev.roots.clone(), w.root_prev.num_leaves);
-        let mut live: Vec<(&[u8; 32], u32, usize)> = Vec::new();
-        for (k, leaf) in output_leaves.iter().enumerate() {
-            if let Some(i) = find(&okeys[k]).map(|i| i as usize) {
-                if spent[i] { continue; }
-                if bit(k) { live.push((&txids[out_pos[k] as usize], out_vout[k], k)); } else { swiftsync::add(leaf); }
-            }
-        }
-        live.sort_unstable_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
-        let mut survivor_value: u64 = 0;
-        for &(_, _, k) in &live {
-            stump.add(output_leaves[k]);
-            // On a valid chain the survivors never hold more than the coins ever issued (< MAX_MONEY), far below 2^64.
-            // Saturating, so an invalid chain (refused at H by the ECMH total) cannot wrap it to a small number.
-            survivor_value = survivor_value.saturating_add(out_val[k]);
-        }
-        (normalize(stump.roots.clone()), stump.num_leaves, survivor_value, 0u64)
-    };
     // coinlog: every coin the block creates and does not spend is appended in block order; the earlier coins it spends
     // are flipped in the log at the positions the witness names. A collect run (no witness yet) logs both lists for the
     // host instead and commits no state.
-    #[cfg(feature = "coinlog")]
     let (next_roots, next_leaves, survivor_value, spent_value) = {
         let mut appends: Vec<[u8; 32]> = Vec::with_capacity(output_leaves.len());
         let mut survivor_value: u64 = 0;
@@ -776,9 +727,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         (normalize(roots), n, survivor_value, total_in.saturating_sub(in_block_spent))
     };
     swiftsync::report();
-    // v2 over the height and its list of unspent INDICES -- exactly what the hints file stores per
-    // height -- so a verifier recomputes it from the published file alone (libzync/src/ss_hints.rs).
-    let ss_hints = if ss_mode == 1 { ss_hints::step_bits(&prev_hints, w.height, ss_words) } else { prev_hints };
+    let ss_hints = prev_hints;
 
     let pow_ok = unsafe { check_pow(w.header.as_ptr()) } == 1;
     let mut mroot = [0u8; 32];

@@ -55,8 +55,9 @@ mod lineage;
 #[cfg(feature = "libzync")]
 mod checkpoint;
 mod script_flags;
-// libzync: the hint wire format, the SwiftSync hint hash and the network parameters -- the SAME files
-// the host compiles (libzync crate), included by path for the reason coinbase-smt is (hazync#88).
+// libzync: the hint wire format and the network parameters -- the SAME files the host compiles (libzync crate),
+// included by path for the reason coinbase-smt is (hazync#88).
+// ss_hints: only the wire decoder's hint-bit field check uses it, until E2 removes that field from the wire.
 #[path = "../../../../libzync/src/ss_hints.rs"]
 mod ss_hints;
 #[path = "../../../../libzync/src/wire.rs"]

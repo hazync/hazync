@@ -253,6 +253,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HAZYNC_COINLOG");
     let coinlog = lever("HAZYNC_COINLOG");
     assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
+    // design B (the SwiftSync forest + hints file) was removed in E2c: a libzync guest keeps its coins in the coin log
+    assert!(!libzync || coinlog, "a libzync guest needs the coin log (HAZYNC_COINLOG must not be 0)");
     if coinlog {
         features.push("coinlog".to_string());
     }
