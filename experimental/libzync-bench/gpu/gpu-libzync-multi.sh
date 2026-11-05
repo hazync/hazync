@@ -1,60 +1,74 @@
 #!/usr/bin/env bash
-# libzync GPU test, multi-card: prove block 962,000 on ONE box with N GPUs, chunks AND aggregate spread.
+# libzync GPU run B (COINLOG_GPU_PLAN.md), the PRODUCT image (coin log + counting trie + live-coin hash): prove block
+# 962,000 on ONE box with N GPUs, chunks AND aggregate spread. A DEMO proof: the coin log and trie around the block are
+# MODELLED (lz::cl_synth_around, from the block's own spends and $BUNDLE/txcounts.txt), so the cycles are a real block's
+# and the state is not history. The trie update (mode 17) is PROVED, as in a chain.
 #
 #   BUNDLE=/workspace/libzync-bundle ./experimental/libzync-bench/gpu/gpu-libzync-multi.sh
 #
-# Same build, pins and execute check as gpu-libzync.sh (run that first or set SKIP_BUILD=1 after it).
-# Then:
+# Bundle: method.bin (the prebuilt product guest), pins/ (METHOD_ID, GUEST_ELF_SHA256, PROFILE), block_962000.json,
+# txcounts.txt. Optional EXPECT_CYCLES: the aggregate's "block validation cycles" from a laptop execute of the same
+# image and bundle; the pod must reproduce it before proving anything.
+#   1. build the CUDA host around the prebuilt guest; METHOD_ID must equal the pin;
+#   2. the hint bundle (libzync-hints: chunk signature hints, the aggregate's ECMH hints), then an EXECUTE check of the
+#      whole block (agg-exec-fake): no REJECT, and EXPECT_CYCLES when given;
 #   3. the 16 chunks in N lanes, lane k on GPU k (CUDA_VISIBLE_DEVICES), chunks i with i % N == k;
-#   4. the aggregate on ONE card (agg-chunks), the control: same box, same receipts;
-#   5. the aggregate SPREAD: seg-serve on loopback (segments + joins handed out), N seg-connect workers,
-#      one per GPU. Loopback means no RunPod hairpin problem (memory: gotcha_runpod_no_hairpin_to_public_port).
-# Block time = step 3 wall + step 5 wall, both measured.
+#   4. the aggregate on ONE card (agg-chunks; it proves the trie update first), the control;
+#   5. the aggregate SPREAD: seg-serve on loopback (segments + joins handed out), N seg-connect workers, one per GPU.
+# Block time = step 3 wall + step 5 wall, both measured. Harvest $OUT before releasing the pod.
 set -uo pipefail
 H=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 P="$H/prover"; BIN="$P/target/release/host"
 BUNDLE="${BUNDLE:?set BUNDLE to the unpacked libzync bundle}"
 OUT="${OUT:-$HOME/libzync-multi-$(date +%Y%m%d-%H%M)}"; mkdir -p "$OUT/receipts"
 N=$(nvidia-smi -L | grep -c '^GPU')
-WANT_ID=$(grep -v '^#' "$H/reproduce/METHOD_ID" | grep -m1 .)
+WANT_ID=$(grep -v '^#' "$BUNDLE/pins/METHOD_ID" | head -1)
 say () { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 die () { echo "FATAL: $*" | tee -a "$OUT/run.log" >&2; exit 1; }
+echo "$WANT_ID" | grep -Eq '^[0-9a-f]{64}$' || die "pins/METHOD_ID is not a 64-hex id"
+for f in method.bin pins/PROFILE pins/GUEST_ELF_SHA256 block_962000.json txcounts.txt; do [ -f "$BUNDLE/$f" ] || die "bundle has no $f"; done
+[ "$(sha256sum "$BUNDLE/method.bin" | cut -c1-64)" = "$(grep -v '^#' "$BUNDLE/pins/GUEST_ELF_SHA256" | head -1)" ] || die "method.bin is not the pinned ELF"
 say "CARDS: $N x $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 nvidia-smi >"$OUT/nvidia-smi.txt" 2>&1
 
+# Only the levers set here reach the build (an inherited HAZYNC_* would change the image while the pins still pass).
+for v in $(compgen -e | grep '^HAZYNC_'); do unset "$v"; done
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   say "=== 1. build ==="; T0=$SECONDS
-  ( cd "$P" && HAZYNC_GUEST_ELF="$BUNDLE/method.bin" cargo build --release --features cuda -p host ) >"$OUT/build.log" 2>&1
+  ( cd "$P" && HAZYNC_GUEST_ELF="$BUNDLE/method.bin" HAZYNC_GUEST_PIN_DIR="$BUNDLE/pins" HAZYNC_LIBZYNC=1 \
+      cargo build --release --features cuda -p host ) >"$OUT/build.log" 2>&1
   echo "REAL_EXIT=$?" >>"$OUT/build.log"
   grep -q "REAL_EXIT=0" "$OUT/build.log" || die "build failed, see $OUT/build.log"
   say "built in $((SECONDS-T0)) s"
 fi
 ldd "$BIN" 2>/dev/null | grep -qi cuda || die "host is NOT linked against CUDA"
-GOT_ID=$("$BIN" method-id | awk '/METHOD_ID/{print $2}')
-[ "$GOT_ID" = "$WANT_ID" ] || die "METHOD_ID $GOT_ID != pinned $WANT_ID"
+"$BIN" method-id | grep -qw "$WANT_ID" || die "METHOD_ID is not the pinned $WANT_ID"
 
-export HAZYNC_BLOCK="$BUNDLE/block_962000.json" HAZYNC_LIFTX_HINT=1 HAZYNC_PROFILE_LAYOUT=cost \
-       HAZYNC_BATCH_ECDSA=1 HAZYNC_SWIFTSYNC=1 HAZYNC_AGG_READSLICE=1 HAZYNC_AGG_LITE=1 \
-       HAZYNC_ECMH_HINTS="$BUNDLE/ecmh_g.bin"
-# shellcheck disable=SC2046
-export $(sed 's/^FIT=//' "$BUNDLE/fit_env.txt")
-export HAZYNC_COST_MODEL=fit HAZYNC_PACK_KEYS=1 HAZYNC_COST_EC_OP=14537 HAZYNC_COST_EC_OP_REPEAT=0
+export HAZYNC_BLOCK="$BUNDLE/block_962000.json" HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=16 \
+       HAZYNC_COINLOG_TXCOUNTS="$BUNDLE/txcounts.txt" HAZYNC_HINT_THREADS="${HAZYNC_HINT_THREADS:-$(nproc)}"
 
-say "=== 2. execute check ==="
-( cd "$P" && HAZYNC_CHUNKS=1 HAZYNC_PROFILE_EXEC=1 HAZYNC_BATCH_HINTS_DIR="$BUNDLE/h1" "$BIN" chunk-profile ) >"$OUT/exec1.log" 2>&1
-grep -q 'journal sha256 98e2652d5184e30a' "$OUT/exec1.log" || die "journal mismatch, see $OUT/exec1.log"
-grep -qE 'cycles +326652314' "$OUT/exec1.log" || die "cycle mismatch, see $OUT/exec1.log"
-say "PASS: journal 98e2652d, cycles 326652314"
+say "=== 2. hints + execute check ==="; T0=$SECONDS
+( cd "$P" && "$BIN" libzync-hints "$OUT/b.lzb" ) >"$OUT/hints.log" 2>&1 || die "libzync-hints failed, see $OUT/hints.log"
+export HAZYNC_LZ_HINTS="$OUT/b.lzb"
+( cd "$P" && "$BIN" agg-exec-fake ) >"$OUT/exec.log" 2>&1 || die "execute check failed, see $OUT/exec.log"
+grep -aq "REJECT" "$OUT/exec.log" && die "the aggregate REJECTED the block, see $OUT/exec.log"
+CYC=$(grep -ao 'block validation cycles *[0-9]*' "$OUT/exec.log" | awk '{print $NF}' | tail -1)
+[ -n "$CYC" ] || die "no 'block validation cycles' in $OUT/exec.log"
+[ -z "${EXPECT_CYCLES:-}" ] || [ "$CYC" = "$EXPECT_CYCLES" ] || die "aggregate cycles $CYC != expected $EXPECT_CYCLES"
+say "PASS: hints + execute in $((SECONDS-T0)) s, aggregate $CYC cycles${EXPECT_CYCLES:+ (= expected)}"
 
-export HAZYNC_CHUNKS=16 HAZYNC_BATCH_HINTS_DIR="$BUNDLE/hg" HAZYNC_RECEIPTS="$OUT/receipts"
+export HAZYNC_RECEIPTS="$OUT/receipts"
 ( nvidia-smi --query-gpu=index,utilization.gpu,memory.used,power.draw --format=csv,noheader -l 1 >"$OUT/smi.log" 2>/dev/null ) & SMI=$!
 trap 'kill $SMI 2>/dev/null' EXIT
 
 # ---- 3. chunks, N lanes ----
-say "=== 3. 16 chunks over $N GPUs ==="
+# the partition can give fewer runs than HAZYNC_CHUNKS asked for: take the count libzync-hints used
+NCH=$(sed -n 's/^libzync-hints: block [0-9]* \([0-9]*\) chunks.*/\1/p' "$OUT/hints.log" | tail -1)
+[ -n "$NCH" ] || die "no chunk count in $OUT/hints.log"
+say "=== 3. $NCH chunks over $N GPUs ==="
 lane () {
   local k=$1 i ATT RC A0
-  for i in $(seq "$k" "$N" 15); do
+  for i in $(seq "$k" "$N" $((NCH-1))); do
     for ATT in 1 2 3 4; do
       A0=$SECONDS
       ( cd "$P" && CUDA_VISIBLE_DEVICES=$k HAZYNC_OUT="$OUT/receipts/chunk_$i.hzk" "$BIN" prove-chunk "$i" ) >"$OUT/prove_$i.log" 2>&1
@@ -71,21 +85,21 @@ for k in $(seq 0 $((N-1))); do lane "$k" & pids+=($!); done
 ok=1; for p in "${pids[@]}"; do wait "$p" || ok=0; done
 CHUNK_S=$((SECONDS-T0))
 [ $ok = 1 ] || die "a chunk lane failed, see $OUT/run.log"
-say "chunks: all 16 proved in $CHUNK_S s wall on $N GPUs"
+say "chunks: all $NCH proved in $CHUNK_S s wall on $N GPUs"
 
 # ---- 4. control: the aggregate on one card ----
 if [ "${SKIP_CONTROL:-0}" != "1" ]; then
   say "=== 4. aggregate on ONE card (control) ==="; T0=$SECONDS
   ( cd "$P" && CUDA_VISIBLE_DEVICES=0 HAZYNC_AGG_OUT="$OUT/block_1card.receipt" "$BIN" agg-chunks ) >"$OUT/agg_1card.log" 2>&1
   RC=$?; echo "REAL_EXIT=$RC" >>"$OUT/agg_1card.log"
-  AGG1_S=$((SECONDS-T0)); [ $RC -eq 0 ] || die "one-card aggregate failed"
-  say "one-card aggregate proved + VERIFIED in $AGG1_S s"
+  AGG1_S=$((SECONDS-T0)); [ $RC -eq 0 ] || die "one-card aggregate failed, see $OUT/agg_1card.log"
+  say "one-card aggregate (trie update proved first) proved + VERIFIED in $AGG1_S s"
 fi
 
 # ---- 5. the aggregate spread over N GPUs ----
 say "=== 5. aggregate SPREAD: seg-serve + $N local workers ==="; T0=$SECONDS
 ( cd "$P" && CUDA_VISIBLE_DEVICES=0 HAZYNC_AGG=1 HAZYNC_OUT="$OUT/block_spread.receipt" "$BIN" seg-serve ) >"$OUT/agg_spread.log" 2>&1 & SRV=$!
-for t in $(seq 1 120); do grep -q "listening on" "$OUT/agg_spread.log" && break; kill -0 $SRV 2>/dev/null || break; sleep 0.5; done
+for t in $(seq 1 600); do grep -q "listening on" "$OUT/agg_spread.log" && break; kill -0 $SRV 2>/dev/null || break; sleep 0.5; done
 wpids=()
 for k in $(seq 0 $((N-1))); do
   ( cd "$P" && CUDA_VISIBLE_DEVICES=$k HAZYNC_WORKER_ID="gpu$k" "$BIN" seg-connect 127.0.0.1:${HAZYNC_PORT:-9110} ) >"$OUT/worker_$k.log" 2>&1 & wpids+=($!)

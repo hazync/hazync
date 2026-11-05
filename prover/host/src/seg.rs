@@ -1723,8 +1723,11 @@ pub(crate) fn seg_serve_cmd() {
             } else { read_chunk_receipts(bounds.len()) };
             println!("=== segment coordinator (push): AGGREGATE of {} chunk receipts, block {} po2 {} ===",
                      receipts.len(), w.height, seg_po2());
-            // libzync: the same aggregate stream as agg-chunks, or the guest desyncs.
+            // libzync: the same aggregate stream as agg-chunks, or the guest desyncs: the modelled coin log and trie
+            // around the block (product image), its trie update PROVED (this aggregate is proved for real).
             libzync_agg_prep(&mut w);
+            let mut anchor = anchor;
+            if methods::COINLOG { crate::lz::cl_synth_around(&receipts, &mut anchor, &mut w, true); }
             write_aggregate_env(&mut b, &receipts, &anchor, &w);
             libzync_agg_tail(&mut b, &w);
         } else {

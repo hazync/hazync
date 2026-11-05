@@ -418,7 +418,7 @@ pub(crate) fn agg_exec_fake() {
     }
     libzync_agg_prep(&mut w);
     let mut anchor = anchor;
-    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w); }
+    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, false); }
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
     libzync_agg_tail(&mut b, &w);
@@ -427,7 +427,9 @@ pub(crate) fn agg_exec_fake() {
 
 /// Coin log, single-block measurement (agg-exec-fake, agg-chunks): a collect run for the block's spends, then a
 /// modelled log around them (cl_synth) set as the anchor's coin state. A demonstration anchor: cycles, not history.
-pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w: &mut BlockWitness) {
+/// `prove`: the modelled trie update (mode 17) is PROVED (succinct), for an aggregate that will be proved for real
+/// (agg-chunks, seg-serve HAZYNC_AGG): an executed one is a fake receipt the aggregate's proof could never resolve.
+pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w: &mut BlockWitness, prove: bool) {
     // collect run for the block's spends, then a modelled log around them (cl_synth)
     let hints = std::env::var("HAZYNC_LZ_HINTS").ok();
     std::env::remove_var("HAZYNC_LZ_HINTS");
@@ -465,12 +467,22 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         if neg == "list" && !marks.is_empty() { marks[0].1[0] ^= 1; }
         let mut b = ExecutorEnv::builder();
         crate::trie::trie_env(&mut b, &wit, &marks, &ins);
-        let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("trie update (mode 17) failed: {e}"));
-        println!("  trie: {} marks, {} inserts, witness {} words; trie update executed: {} cycles, padded {} ({} segments)",
-                 marks.len(), ins.len(), wit.len(), t.cycles, t.padded, t.segments);
-        let claim = t.receipt_claim.expect("trie session has no receipt claim");
-        *TRIE_RCPT.lock().unwrap() = if neg == "none" { None } else { Some(risc0_zkvm::Receipt::new(
-            risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)), t.journal.bytes.clone())) };
+        let rcpt = if prove {
+            let t0 = std::time::Instant::now();
+            let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct())
+                .unwrap_or_else(|e| panic!("{}", guest_failure("trie update (mode 17) proof", &e))).receipt;
+            r.verify(METHOD_ID).expect("trie receipt verifies");
+            println!("  trie: {} marks, {} inserts, witness {} words; trie update PROVED in {:.1} s",
+                     marks.len(), ins.len(), wit.len(), t0.elapsed().as_secs_f64());
+            r
+        } else {
+            let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("trie update (mode 17)", &e)));
+            println!("  trie: {} marks, {} inserts, witness {} words; trie update executed: {} cycles, padded {} ({} segments)",
+                     marks.len(), ins.len(), wit.len(), t.cycles, t.padded, t.segments);
+            let claim = t.receipt_claim.expect("trie session has no receipt claim");
+            risc0_zkvm::Receipt::new(risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)), t.journal.bytes.clone())
+        };
+        *TRIE_RCPT.lock().unwrap() = if neg == "none" { None } else { Some(rcpt) };
         anchor.trie_root = libzync::coinlog::h_of(&root);
         if neg == "root" { anchor.trie_root[0] ^= 1; }
         if !neg.is_empty() { println!("  trie: NEGATIVE CONTROL HAZYNC_TEST_TRIE={neg}"); }
@@ -1061,7 +1073,8 @@ pub(crate) fn agg_chunks() {
     // libzync: same stream as agg-exec-fake (chunk_bounds above needed the full witness first).
     libzync_agg_prep(&mut w);
     let mut anchor = anchor;
-    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w); }
+    let execute_only = std::env::var("HAZYNC_AGG_EXECUTE").is_ok();
+    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, !execute_only); }
     let mut b = ExecutorEnv::builder();
     write_aggregate_env(&mut b, &receipts, &anchor, &w);
     libzync_agg_tail(&mut b, &w);
