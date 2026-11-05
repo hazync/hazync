@@ -300,7 +300,7 @@ pub(crate) struct BlockUndo {
     /// Forest mutations in the order they happened; inverted newest-first.
     forest_ops: Vec<UndoForestOp>,
     /// Coins the block spent, with everything needed to put them back.
-    utxo_spent: Vec<((([u8; 32], u32)), (u64, Vec<u8>, u32, bool))>,
+    utxo_spent: Vec<(([u8; 32], u32), (u64, Vec<u8>, u32, bool))>,
     /// Coins the block created — removing these is the inverse.
     utxo_created: Vec<([u8; 32], u32)>,
     /// Every coinbase-SMT key the block touched, with the value it held BEFORE. `None` = absent.
@@ -1132,6 +1132,7 @@ mod bridge_undo_tests {
     }
 }
 
+#[cfg(test)]
 mod bridge_reorg_tests {
     use super::{bridge_reorg_seen, bridge_save_head, bridge_load_head};
 

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 risc0_zkvm::guest::entry!(main);
 
 #[path = "../../../../../libzync/src/coinlog.rs"]
+#[allow(dead_code)] // the shared file; these guests read entries, the update and node-store halves are the main guest's
 mod coinlog;
 #[path = "../../../../../libzync/src/facts.rs"]
 #[allow(dead_code)]

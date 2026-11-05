@@ -27,3 +27,8 @@ hazync-coinbase-smt = { path = "../../coinbase-smt", features = ["std", "serde"]
 
 [features]
 cuda = ["risc0-zkvm/cuda"]
+
+# bench.rs includes the guest's script_flags.rs, whose network constants test the guest's `signet` / `regtest`
+# features. The host has neither, so it reads the mainnet constants; declare the values so they are not "unexpected".
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signet", "regtest"))'] }

@@ -1171,6 +1171,7 @@ pub(crate) fn seg_reconnect(id: &str, addr: &str, s: &mut std::net::TcpStream,
     }
 }
 
+#[cfg(test)]
 mod seg_reconnect_tests {
     use super::{seg_reconnect_backoff_s, seg_reconnect_cap_from, seg_reconnect_is_link_failure,
                 seg_reconnect_retry_within};
@@ -1529,6 +1530,7 @@ pub(crate) struct BlockPhases {
 
 impl BlockPhases {
     /// Wall time for the block. The phases that do NOT overlap, so this is the honest total.
+    #[cfg(test)]
     fn total_s(&self) -> f64 { self.prologue_s + self.segment_s + self.assembly_s }
 
     /// The part no number of cards can shrink.
@@ -1539,12 +1541,14 @@ impl BlockPhases {
     /// ⚠ All four fields, because the old `execution` column was itself `prologue + executor` — its
     /// timer started before the bind. Summing those columns therefore added the prologue once and the
     /// executor once, on top of a segment phase that already contained both.
+    #[cfg(test)]
     fn naive_sum_s(&self) -> f64 {
         self.prologue_s + self.exec_s + self.segment_s + self.assembly_s
     }
 
     /// How much the naive sum over-counted: exactly the executor window, which ran inside the
     /// segment phase and was then added to it.
+    #[cfg(test)]
     fn overcount_s(&self) -> f64 { self.naive_sum_s() - self.total_s() }
 
     /// Fleet size at which EXECUTION becomes the binding constraint rather than proving.

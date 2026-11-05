@@ -1641,30 +1641,9 @@ fn smt_witness_standalone(
     (root_in, w)
 }
 
-/// `smt_witness_standalone`, but aware of the two BIP30-grandfathered heights (91,842 / 91,880): there the
-/// duplicated coinbase is still UNSPENT, so the tree is seeded holding it and the witness carries the
-/// overwrite claim instead of an absence proof. The guest gates this on the block HASH, not the height.
-fn smt_witness_standalone_at(
-    height: u32,
-    coinbase_txid: [u8; 32],
-    coinbase_outputs: u32,
-    coinbase_spends: &[[u8; 32]],
-) -> ([u8; 32], SmtBlockWitness) {
-    if height != 91_842 && height != 91_880 {
-        return smt_witness_standalone(coinbase_txid, coinbase_outputs, coinbase_spends);
-    }
-    let mut t = Smt::new();
-    for s in coinbase_spends {
-        let c = t.get(s).unwrap_or(0);
-        t.insert(*s, c + 1);
-    }
-    t.insert(coinbase_txid, coinbase_outputs.max(1));
-    let root_in = t.root();
-    let w = smt_advance(&mut t, coinbase_txid, coinbase_outputs, coinbase_spends, true).0;
-    (root_in, w)
-}
-
-/// `smt_witness_standalone_at` for a block that spends or creates tracked coins (bip30.rs).
+/// `smt_witness_standalone`, aware of the BIP30-grandfathered heights (91,842 / 91,880: the duplicated coinbase is still
+/// UNSPENT, so the witness carries the overwrite claim; the guest gates that on the block HASH) and of blocks that spend
+/// or create tracked coins (bip30.rs).
 fn smt_witness_standalone_ex(height: u32, coinbase_txid: [u8; 32], coinbase_outputs: u32, coinbase_spends: &[[u8; 32]],
                              spend_tracked: &[bool], tracked_new: &[([u8; 32], u32)]) -> ([u8; 32], SmtBlockWitness) {
     let mut t = Smt::new();
