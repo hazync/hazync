@@ -1,0 +1,10 @@
+# image c10e10 (METHOD_ID f75698b1...200e), Core 28 test vectors (scripts/libzync/core_vectors.py --no-variants: 1,207 script_tests + 120 tx_valid + 93 tx_invalid), libsecp path (no hints), 2026-11-05
+  250 / 1420: 250 agree (0 by abort), 0 differ
+  500 / 1420: 500 agree (0 by abort), 0 differ
+  750 / 1420: 750 agree (4 by abort), 0 differ
+  1000 / 1420: 1000 agree (65 by abort), 0 differ
+  1250 / 1420: 1250 agree (66 by abort), 0 differ
+  1420 / 1420: 1420 agree (68 by abort), 0 differ
+
+CORE_VECTORS 1420 agree (68 by a guest abort where Core catches a throw), 0 differ, of 1420
+
