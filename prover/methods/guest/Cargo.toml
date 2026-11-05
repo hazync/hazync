@@ -49,19 +49,11 @@ serde = []
 # hazync#139: swap ONLY the group arithmetic under libsecp ECDSA verify. EXPERIMENTAL, opt-in,
 # and it MOVES METHOD_ID — never enable for a shipped build.
 bigint2-ecdsa = ["dep:risc0-crypto"]
-# hazync#205 / GHOST_GAINS G1: recover a pubkey's Y through the bigint2 coprocessor instead of
-# libsecp's software modular sqrt. EXPERIMENTAL, opt-in, MOVES METHOD_ID. See src/liftx_accel.rs
-# and patches/0007. Shares the risc0-crypto dependency with the #139 middle path.
-liftx-accel = ["dep:risc0-crypto"]
 # #136's read_slice fix for the AGGREGATE: 29.31% of it is serde Vec<u8> deserialisation of the chunk
 # journals. Host and guest must agree -- see HAZYNC_AGG_READSLICE.
 agg-readslice = []
 # libzync: log per-transaction cycles (TXCYC) in chunks, for fitting the host packer. Measurement only.
 tx-cycles = []
-# Pippenger MSM over the coprocessor. Primitive only; see src/msm.rs and docs/MSM_BATCH_VERIFY.md.
-msm = ["dep:risc0-crypto"]
-# Field-op benchmark (mode 15). Needs patches/0011 for the libsecp half.
-field-bench = []
 # libsecp field backend on the coprocessor. Canonical 8x32 limbs, no conversion. patches/0012.
 field-bigint2 = ["dep:risc0-crypto"]
 # hazync#205 — recover a pubkey's Y from a host HINT and VERIFY it with y^2 == x^3+7. Advice-and-
@@ -83,9 +75,6 @@ tx-once = []
 # libzync: chunks commit per-transaction facts; the aggregate never parses a transaction (src/agg_lite.rs).
 # SwiftSync only. Needs HAZYNC_TX_ONCE (the chunk's helpers share one parse through cached_tx).
 agg-lite = ["swiftsync", "tx-once"]
-# libzync round 11: risc0's TLSF allocator (frees and reuses) instead of the bump allocator. Only safe
-# with agg-lite's per-transaction cache reset (pointer-keyed caches).
-tlsf = ["agg-lite", "risc0-zkvm/heap-embedded-alloc"]
 # libzync EXPERIMENT: SwiftSync-style ECMH coin accounting in the aggregate instead of Utreexo
 # inclusion proofs. Cost measurement only (no handover check); see src/swiftsync.rs.
 swiftsync = ["batch-ecdsa"]
@@ -107,19 +96,11 @@ regtest = ["libzync"]
 coinlog = ["libzync"]
 # Instant IBD (HAZYNC_UTXOHASH=1): the chain state's ECMH total tracks the LIVE coin set under the coin log.
 utxohash = ["coinlog"]
+# The counting trie (libzync/src/ttree.rs): chunks journal script-hash keys; the aggregate builds the block's trie
+# update list and its digest for the trie's own receipt (E2c: replaces the E1 measurement features itree / otree /
+# stree / htree / ttree / tsplit).
+trie = ["coinlog"]
 # libzync EXPERIMENT (HAZYNC_TXLOG=1): pre-proved transactions (txproofs/README.md §7, Phase A). The aggregate accepts
 # speculative chunks (proved for this height and MTP before the block existed) and takes the block's record order from
 # the host, so a batch may hold transactions the block does not.
 txlog = ["libzync"]
-# libzync MEASUREMENT (E1, HAZYNC_OTREE=1 / HAZYNC_STREE=1): the outpoint-keyed and script-keyed indexed trees
-# (libzync/src/itree.rs) updated in the aggregate, witness and old roots from the host. Cost only, not a chain.
-itree = ["coinlog"]
-otree = ["itree"]
-stree = ["itree"]
-# E1 history variant (HAZYNC_HTREE=1): the script tree keeps spent keys, marked with their spender (itree::apply_hist).
-htree = ["stree"]
-# E1 counting trie (HAZYNC_TTREE=1): one two-level trie (address, then coin) with history and per-address unspent
-# count and value (libzync/src/ttree.rs), in place of the history script tree. Measurement only.
-ttree = ["htree"]
-# E1 split measurement (HAZYNC_TSPLIT=1): the aggregate checks the trie update list's digest instead of updating the trie.
-tsplit = ["ttree"]

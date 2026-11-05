@@ -77,9 +77,9 @@ compile_error!("batch-ecdsa / swiftsync / agg-lite are parts of the libzync gues
 // hazync#139 middle-path experiment. Off by default; see the module docs and patches/0005.
 #[cfg(feature = "bigint2-ecdsa")]
 mod bigint2_ecmult;
-// hazync#205 / G1 — recover a pubkey's Y through the bigint2 coprocessor. The module also carries
-// patches/0008's scalar inverse, which is an INDEPENDENT lever, so it compiles for either feature.
-#[cfg(any(feature = "liftx-accel", feature = "scalar-inv-accel"))]
+// patches/0008's scalar inverse through the bigint2 coprocessor (the module's G1 lift-x path was removed 11-04; the
+// host-hinted lift in liftx_hint.rs replaced it).
+#[cfg(feature = "scalar-inv-accel")]
 mod liftx_accel;
 // hazync#205 — the same recovery as a HOST HINT that libsecp then verifies. Core-legal, unlike
 // liftx_accel above, which substitutes the sqrt outright.
@@ -96,17 +96,10 @@ mod agg_lite;
 #[cfg(feature = "coinlog")]
 #[path = "../../../../libzync/src/coinlog.rs"]
 mod coinlog;
-#[cfg(feature = "itree")]
-#[path = "../../../../libzync/src/itree.rs"]
-#[allow(dead_code)]
-mod itree;
-#[cfg(feature = "ttree")]
+#[cfg(feature = "trie")]
 #[path = "../../../../libzync/src/ttree.rs"]
 #[allow(dead_code)]
 mod ttree;
-// Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
-#[cfg(feature = "msm")]
-mod msm;
 // Coprocessor half of libsecp's field_bigint2 backend. See docs/FIELD_BIGINT2_BACKEND.md.
 #[cfg(feature = "field-bigint2")]
 mod field_bigint2;
@@ -2047,11 +2040,6 @@ fn chunk_prove() {
     let tc_fin = env::cycle_count();
     // A memo that never hits would silently reinstate the full decompression cost while every gate
     // still passed, so report it: 0 hits is a FAILED experiment, not a null result.
-    #[cfg(feature = "liftx-accel")]
-    {
-        let (h, m) = liftx_accel::memo_stats();
-        risc0_zkvm::guest::env::log(&alloc::format!("liftx memo: hits={h} misses={m}"));
-    }
     // Same reasoning for the HINT, which is a separate, Core-legal feature: an empty table would
     // reinstate the sqrt while every gate still passed, so 0 hits must read as a FAILED experiment.
     #[cfg(feature = "liftx-hint")]
@@ -2207,15 +2195,6 @@ fn aggregate() {
     };
     #[cfg(not(feature = "txlog"))]
     let rec_order: Vec<(u32, u32)> = Vec::new();
-    // E1 measurement: one witness block per tree the image carries (outpoint tree first), itree::encode_bench.
-    #[cfg(feature = "itree")]
-    for t in [0usize, 1] {
-        if (t == 0 && !cfg!(feature = "otree")) || (t == 1 && !cfg!(feature = "stree")) { continue; }
-        let n: u32 = env::read();
-        let mut words = vec![0u32; n as usize];
-        if n > 0 { env::read_slice(&mut words); }
-        agg_lite::set_tree_witness(t, words);
-    }
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
     // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
     // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
@@ -2334,8 +2313,8 @@ fn aggregate() {
         max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
         block_roots, block_leaves, lineage,
     });
-    // E1 measurement: the trees' new roots after the ChainState (decoders of the ChainState prefix ignore them).
-    #[cfg(feature = "itree")]
+    // The trie's update-list digest after the ChainState (decoders of the ChainState prefix ignore it).
+    #[cfg(feature = "trie")]
     env::commit_slice(agg_lite::tree_out());
 }
 
@@ -2372,65 +2351,6 @@ fn main() {
             let txids: Vec<u8> = env::read();
             let ok = unsafe { hz_check_signet(header.as_ptr(), cb.as_ptr(), cb.len() as u32, txids.as_ptr(), (txids.len() / 32) as u32) };
             env::commit(&ok);
-        }
-        // Mode 13: MSM self-test. Reports the positive comparison AND a negative control, because a
-        // check that can only ever pass is not a check.
-        // Mode 15: field-op benchmark. libsecp's software field_10x26 against the bigint2
-        // coprocessor, same operation count, same run — the ratio decides whether Core mode can have
-        // field-level acceleration without conceding an algorithm.
-        #[cfg(all(feature = "msm", feature = "field-bench"))]
-        15 => {
-            use risc0_crypto::curves::secp256k1::Fq;
-            extern "C" {
-                fn hazync_bench_fe_mul(n: u32) -> i32;
-                fn hazync_bench_fe_sqr(n: u32) -> i32;
-                fn hazync_bench_fe_mul_hw(n: u32) -> i32;
-            }
-            let n: u32 = env::read();
-            let t0 = env::cycle_count();
-            let s1 = unsafe { hazync_bench_fe_mul(n) };
-            let t1 = env::cycle_count();
-            let s2 = unsafe { hazync_bench_fe_sqr(n) };
-            let t2 = env::cycle_count();
-            // Coprocessor: same chaining so the comparison is like for like.
-            let mut a = Fq::from_be_bytes_mod_order(&[3u8; 32]);
-            let b = Fq::from_be_bytes_mod_order(&[5u8; 32]);
-            let t3 = env::cycle_count();
-            for _ in 0..n { a = &a * &b; }
-            let t4 = env::cycle_count();
-            // The number that decides the design: coprocessor WITH libsecp's conversions.
-            let t7 = env::cycle_count();
-            let s3 = unsafe { hazync_bench_fe_mul_hw(n) };
-            let t8 = env::cycle_count();
-            let mut c = Fq::from_be_bytes_mod_order(&[7u8; 32]);
-            let t5 = env::cycle_count();
-            for _ in 0..n { c = &c * &c; }
-            let t6 = env::cycle_count();
-            env::log(&alloc::format!(
-                "FIELD BENCH n={n}\n  sw_mul={} sw_sqr={}\n  hw_native={} hw_sqr={}\n  hw_WITH_CONVERSION={}\n  guard={} {} {} {} {}",
-                t1 - t0, t2 - t1, t4 - t3, t6 - t5, t8 - t7, s1, s2, s3,
-                a.to_bigint().as_le_bytes()[0], c.to_bigint().as_le_bytes()[0]));
-            env::commit(&((t1 - t0) as u64));
-        }
-        // Mode 14: MSM benchmark at scale. Timing only — mode 13 is the correctness check.
-        #[cfg(feature = "msm")]
-        14 => {
-            let n: u32 = env::read();
-            let window: u32 = env::read();
-            let (x, _y) = msm::bench(n as usize, window as usize);
-            env::commit(&x);
-        }
-        #[cfg(feature = "msm")]
-        13 => {
-            let n: u32 = env::read();
-            let window: u32 = env::read();
-            let (pos, neg) = msm::selftest(n as usize, window as usize);
-            env::log(&alloc::format!(
-                "msm selftest n={n} window={window}: matches_reference={pos} perturbed_differs={neg}"
-            ));
-            assert!(pos, "MSM DISAGREES WITH REFERENCE");
-            assert!(neg, "MSM NEGATIVE CONTROL FAILED — a perturbed scalar produced the same result");
-            env::commit(&(pos && neg));
         }
         _ => panic!("unknown guest mode {mode}"),
     }

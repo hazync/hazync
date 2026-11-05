@@ -11,7 +11,6 @@ pub mod net;
 pub mod coinlog;
 pub mod facts;
 pub mod history;
-pub mod itree;
 pub mod ttree;
 #[cfg(feature = "std")]
 pub mod host;

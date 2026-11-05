@@ -41,6 +41,11 @@ pub const LIBZYNC_LEVERS: &[&str] = &[
     "HAZYNC_RAW_TXID",
     "HAZYNC_PUBKEY_MEMO",
     "HAZYNC_LEAF_ONEBUF",
+    // the product's state (E2c, 11-04): coin log, counting trie, live-coin hash (instant IBD). A measurement build turns
+    // one off with its variable set to 0 (e.g. HAZYNC_TRIE=0 for the no-tree base).
+    "HAZYNC_COINLOG",
+    "HAZYNC_TRIE",
+    "HAZYNC_UTXOHASH",
 ];
 
 /// libsecp's ECMULT_WINDOW_SIZE under the profile (the measured optimum, canonical since v0.21).

@@ -3563,79 +3563,41 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
     if let Some(h) = hints { std::env::set_var("HAZYNC_LZ_HINTS", h); }
     let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
     let (roots, n, wit) = cl_synth(&std::env::var("HAZYNC_BLOCK").unwrap(), &spends);
-    // E1 measurement trees: the keys the collect run logged, inside a modelled tree of HAZYNC_ITREE_N live keys
-    // (default 180 M, about mainnet's UTXO set).
-    if methods::OTREE || methods::STREE {
+    // The counting trie: the keys the collect run logged. The aggregate takes no trie witness (the trie is applied in its
+    // own receipt); for measurement the host synthesises the trie's witness around a modelled population and, with
+    // HAZYNC_TRIE_DUMP, writes the trie guest's input (`zyncapp bench-trie`).
+    if methods::TRIE {
         let text = String::from_utf8_lossy(&log);
-        let tn: u64 = std::env::var("HAZYNC_ITREE_N").ok().and_then(|v| v.parse().ok()).unwrap_or(180_000_000);
-        let mut tw = TREE_WIT.lock().unwrap();
-        tw.clear();
-        for t in 0..2u32 {
-            if (t == 0 && !methods::OTREE) || (t == 1 && !methods::STREE) { continue; }
-            let (mut rem, mut ins): (Vec<libzync::itree::Key>, Vec<libzync::itree::Key>) = (Vec::new(), Vec::new());
-            for l in text.lines() {
-                let Some(i) = l.find("itree: ") else { continue };
-                let f: Vec<&str> = l[i + 7..].split_whitespace().collect();
-                if f.len() != 3 || f[0] != t.to_string() { continue; }
-                let k: [u8; 64] = hx_bytes(f[2]).try_into().expect("itree key: 64 bytes");
-                if f[1] == "R" { rem.push(k) } else { ins.push(k) }
-            }
-            let envu = |k: &str, d: u64| -> u64 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
-            if t == 1 && methods::TTREE {
-                // the counting trie: HAZYNC_TTREE_ADDRS addresses (default the coin log's modelled size), each address the
-                // block spends from holding HAZYNC_TTREE_SUB other coins (default 2); counts on unless HAZYNC_TTREE_COUNTS=0
-                let (addrs, sub) = (envu("HAZYNC_TTREE_ADDRS", n), envu("HAZYNC_TTREE_SUB", 2));
-                let counts = envu("HAZYNC_TTREE_COUNTS", 1) == 1;
-                let (root, tr) = libzync::ttree::synth(&rem, &ins, addrs, sub, counts, 0x5eed + t as u64);
-                let wit = libzync::ttree::encode(counts, &root, &tr);
-                // compressions the guest does: old pass over the pruned trie, new pass after the block (host replay)
-                fn cs(n: &libzync::ttree::Sub, c: bool) -> (u64, u64) { use libzync::ttree::Sub::*; match n { Inner(l, r) => { let (a, b) = cs(l, c); let (x, y) = cs(r, c); (a + x + 1, b + y) } Coin { .. } => (0, 1), _ => (0, 0) } }
-                fn ct(n: &libzync::ttree::Top, c: bool) -> (u64, u64) { use libzync::ttree::Top::*; match n { Inner(l, r) => { let (a, b) = ct(l, c); let (x, y) = ct(r, c); (a + x + 1, b + y) } Addr { sub, .. } => { let (a, b) = cs(sub, c); (a, b + 1 + c as u64) } _ => (0, 0) } }
-                let (oi, ol) = ct(&tr, counts);
-                let mut t2 = tr.clone();
-                let mut r2 = root;
-                let mk: Vec<([u8; 64], [u32; 8])> = rem.iter().map(|k| (*k, [1u32; 8])).collect();
-                let ik: Vec<([u8; 64], Option<[u32; 8]>, u64)> = ins.iter().map(|k| (*k, None, 1u64)).collect();
-                let ok = libzync::ttree::apply(&mut r2, &mut t2, counts, &[], &ik).is_ok();
-                let _ = mk;
-                let (ni, nl) = ct(&t2, counts);
-                println!("  ttree compressions: old inner {oi} leaf {ol}; new inner {ni} leaf {nl}; total {} (inserts replayed {ok})", oi + ol + ni + nl);
-                // split measurement: the trie bench guest's input ([marks, inserts, witness words], keys as 16 BE words each)
-                if let Ok(path) = std::env::var("HAZYNC_TRIE_DUMP") {
-                    let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
-                    // + the update order (batch 3): perm[j] = index of the j-th smallest key (the guest checks it)
-                    let ks: Vec<_> = rem.iter().chain(ins.iter()).map(libzync::ttree::split).collect();
-                    let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
-                    perm.sort_by(|&a, &b| ks[a as usize].cmp(&ks[b as usize]));
-                    let mut d: Vec<u32> = vec![rem.len() as u32, ins.len() as u32, wit.len() as u32, perm.len() as u32];
-                    for k in rem.iter().chain(ins.iter()) { d.extend(kw(k)); }
-                    d.extend_from_slice(&wit);
-                    d.extend_from_slice(&perm);
-                    let b: Vec<u8> = d.iter().flat_map(|x| x.to_le_bytes()).collect();
-                    std::fs::write(&path, b).expect("HAZYNC_TRIE_DUMP");
-                    println!("  ttree: dumped the trie bench input to {path}");
-                }
-                if methods::TSPLIT {
-                    println!("  ttree: split mode, the aggregate gets no trie witness");
-                    tw.push(Vec::new());
-                    continue;
-                }
-                println!("  ttree: {} marks, {} inserts, witness {} words (modelled {addrs} addresses, {sub} other coins per spent-from address, counts {counts})", rem.len(), ins.len(), wit.len());
-                tw.push(wit);
-                continue;
-            }
-            if t == 1 && methods::HTREE {
-                // the history tree holds every coin ever created; the coin log omits coins spent in their own block, so
-                // model it at HAZYNC_HIST_MULT (default 2) x the coin log's size
-                let hn = n.saturating_mul(envu("HAZYNC_HIST_MULT", 2));
-                let (r, touched, sib) = libzync::itree::synth_hist(hn, &rem, &ins, 0x5eed + t as u64);
-                println!("  itree {t} (history): {} marks, {} inserts, {} touched leaves, {} siblings (modelled {hn} keys)", rem.len(), ins.len(), touched.len(), sib.len());
-                tw.push(libzync::itree::encode_bench_hist(&r, hn, &touched, &sib));
-                continue;
-            }
-            let (r, touched, sib) = libzync::itree::synth(tn, &rem, &ins, 0x5eed + t as u64);
-            println!("  itree {t}: {} removes, {} inserts, {} touched leaves, {} siblings (modelled {tn} keys)", rem.len(), ins.len(), touched.len(), sib.len());
-            tw.push(libzync::itree::encode_bench(&r, tn, &touched, &sib));
+        let (mut rem, mut ins): (Vec<[u8; 64]>, Vec<[u8; 64]>) = (Vec::new(), Vec::new());
+        for l in text.lines() {
+            let Some(i) = l.find("itree: ") else { continue };
+            let f: Vec<&str> = l[i + 7..].split_whitespace().collect();
+            if f.len() != 3 || f[0] != "1" { continue; }
+            let k: [u8; 64] = hx_bytes(f[2]).try_into().expect("trie key: 64 bytes");
+            if f[1] == "R" { rem.push(k) } else { ins.push(k) }
+        }
+        let envu = |k: &str, d: u64| -> u64 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
+        // HAZYNC_TTREE_ADDRS addresses (default the coin log's modelled size), each address the block spends from
+        // holding HAZYNC_TTREE_SUB other coins (default 2); counts on unless HAZYNC_TTREE_COUNTS=0
+        let (addrs, sub) = (envu("HAZYNC_TTREE_ADDRS", n), envu("HAZYNC_TTREE_SUB", 2));
+        let counts = envu("HAZYNC_TTREE_COUNTS", 1) == 1;
+        println!("  trie: {} marks, {} inserts (modelled {addrs} addresses, {sub} other coins per spent-from address)", rem.len(), ins.len());
+        if let Ok(path) = std::env::var("HAZYNC_TRIE_DUMP") {
+            let (root, tr) = libzync::ttree::synth(&rem, &ins, addrs, sub, counts, 0x5eed + 1);
+            let wit = libzync::ttree::encode(counts, &root, &tr);
+            let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
+            // [marks, inserts, witness words, order words], keys as 16 BE words, the witness, the update order
+            // (perm[j] = index of the j-th smallest key; the trie guest checks it)
+            let ks: Vec<_> = rem.iter().chain(ins.iter()).map(libzync::ttree::split).collect();
+            let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
+            perm.sort_by(|&a, &b| ks[a as usize].cmp(&ks[b as usize]));
+            let mut d: Vec<u32> = vec![rem.len() as u32, ins.len() as u32, wit.len() as u32, perm.len() as u32];
+            for k in rem.iter().chain(ins.iter()) { d.extend(kw(k)); }
+            d.extend_from_slice(&wit);
+            d.extend_from_slice(&perm);
+            let b: Vec<u8> = d.iter().flat_map(|x| x.to_le_bytes()).collect();
+            std::fs::write(&path, b).expect("HAZYNC_TRIE_DUMP");
+            println!("  trie: witness {} words, dumped the trie guest's input to {path}", wit.len());
         }
     }
     println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
@@ -3694,16 +3656,6 @@ fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
         assert!(order.len() % 2 == 0, "HAZYNC_TXLOG_ORDER: pairs");
         b.write(&((order.len() / 2) as u32)).unwrap();
         if !order.is_empty() { b.write_slice(&order); }
-    }
-    // E1 measurement trees: one block each (empty in a collect run, which logs the keys instead).
-    if methods::OTREE || methods::STREE {
-        let tw = TREE_WIT.lock().unwrap();
-        let want = methods::OTREE as usize + methods::STREE as usize;
-        for i in 0..want {
-            let wv = if bundle.is_none() { Vec::new() } else { tw.get(i).cloned().unwrap_or_default() };
-            b.write(&(wv.len() as u32)).unwrap();
-            if !wv.is_empty() { b.write_slice(&wv); }
-        }
     }
     match &bundle {
         Some(bd) => println!("  libzync: {} bytes of ECMH hints, {}", bd.ecmh.len(),
@@ -10524,8 +10476,6 @@ struct ClHost {
 }
 static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
 static CL_WIT: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
-/// E1 measurement: one witness block per tree the image carries (outpoint tree first), itree::encode_bench.
-static TREE_WIT: std::sync::Mutex<Vec<Vec<u32>>> = std::sync::Mutex::new(Vec::new());
 
 /// `state_<h>.json` -> `state_<h>.coinlog`; `anchor.json` -> `anchor.coinlog`.
 fn cl_path_for(state_json: &str) -> String {

@@ -23,20 +23,20 @@ use std::path::{Path, PathBuf};
 // libzync: what HAZYNC_LIBZYNC means, shared with the guest's own build.rs (one list).
 include!("../../libzync/src/profile.rs");
 
-/// A lever is on if its env var is "1", or if the libzync profile includes it.
+/// A lever is on if its env var is "1", off if it is "0", else on exactly when the libzync profile includes it.
 fn lever(name: &str) -> bool {
     let (lz, _) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
-    std::env::var(name).as_deref() == Ok("1") || (lz && LIBZYNC_LEVERS.contains(&name))
+    match std::env::var(name).as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => lz && LIBZYNC_LEVERS.contains(&name),
+    }
 }
 
 /// `profile.rs` in OUT_DIR: what the embedded guest was built for, so the HOST writes the stream that
 /// guest reads instead of trusting a matching set of run-time env vars.
 fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool, txlog: bool) {
-    let otree = std::env::var("HAZYNC_OTREE").as_deref() == Ok("1");
-    let tsplit = std::env::var("HAZYNC_TSPLIT").as_deref() == Ok("1");
-    let ttree = std::env::var("HAZYNC_TTREE").as_deref() == Ok("1") || tsplit;
-    let htree = std::env::var("HAZYNC_HTREE").as_deref() == Ok("1") || ttree;
-    let stree = std::env::var("HAZYNC_STREE").as_deref() == Ok("1") || htree;
+    let (trie, utxohash) = (coinlog && lever("HAZYNC_TRIE"), coinlog && lever("HAZYNC_UTXOHASH"));
     let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
     std::fs::write(&out, format!(
         "/// The embedded guest reads libzync hint blocks (libzync/src/wire.rs).\n\
@@ -49,15 +49,10 @@ fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool,
          pub const COINLOG: bool = {coinlog};\n\
          /// Pre-proved transactions: speculative chunks + the block's record order (HAZYNC_TXLOG=1).\n\
          pub const TXLOG: bool = {txlog};\n\
-         /// E1 measurement trees: outpoint (HAZYNC_OTREE=1), script (HAZYNC_STREE=1).\n\
-         pub const OTREE: bool = {otree};\n\
-         pub const STREE: bool = {stree};\n\
-         /// E1: the script tree keeps history (HAZYNC_HTREE=1; implies STREE).\n\
-         pub const HTREE: bool = {htree};\n\
-         /// E1: the counting trie instead of the history script tree (HAZYNC_TTREE=1; implies HTREE).\n\
-         pub const TTREE: bool = {ttree};\n\
-         /// E1: the aggregate checks the trie update list only (HAZYNC_TSPLIT=1; implies TTREE).\n\
-         pub const TSPLIT: bool = {tsplit};\n",
+         /// The counting trie (HAZYNC_TRIE; on in the libzync profile).\n\
+         pub const TRIE: bool = {trie};\n\
+         /// The live-coin ECMH for instant IBD (HAZYNC_UTXOHASH; on in the libzync profile).\n\
+         pub const UTXOHASH: bool = {utxohash};\n",
         network)).expect("write profile.rs");
 }
 
@@ -261,8 +256,8 @@ fn main() {
     if coinlog {
         features.push("coinlog".to_string());
     }
-    // E1 measurement builds: the outpoint / script trees (libzync/src/itree.rs). Cost only, never a release image.
-    for (env_name, feat) in [("HAZYNC_OTREE", "otree"), ("HAZYNC_STREE", "stree"), ("HAZYNC_HTREE", "htree"), ("HAZYNC_TTREE", "ttree"), ("HAZYNC_TSPLIT", "tsplit"), ("HAZYNC_UTXOHASH", "utxohash")] {
+    // The product's state on top of the coin log: the counting trie and the live-coin hash (both in the libzync profile).
+    for (env_name, feat) in [("HAZYNC_TRIE", "trie"), ("HAZYNC_UTXOHASH", "utxohash")] {
         println!("cargo:rerun-if-env-changed={env_name}");
         if lever(env_name) {
             assert!(coinlog, "{env_name} needs HAZYNC_COINLOG");
