@@ -12,6 +12,7 @@ pub mod coinlog;
 pub mod facts;
 pub mod history;
 pub mod ttree;
+pub mod trie_model;
 #[cfg(feature = "std")]
 pub mod host;
 

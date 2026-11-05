@@ -3583,8 +3583,8 @@ fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w:
         let counts = envu("HAZYNC_TTREE_COUNTS", 1) == 1;
         println!("  trie: {} marks, {} inserts (modelled {addrs} addresses, {sub} other coins per spent-from address)", rem.len(), ins.len());
         if let Ok(path) = std::env::var("HAZYNC_TRIE_DUMP") {
-            let (root, tr) = libzync::ttree::synth(&rem, &ins, addrs, sub, counts, 0x5eed + 1);
-            let wit = libzync::ttree::encode(counts, &root, &tr);
+            let (root, tr) = libzync::trie_model::synth(&rem, &ins, addrs, sub, counts, 0x5eed + 1);
+            let wit = libzync::trie_model::encode(counts, &root, &tr);
             let kw = |k: &[u8; 64]| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
             // [marks, inserts, witness words, order words], keys as 16 BE words, the witness, the update order
             // (perm[j] = index of the j-th smallest key; the trie guest checks it)
