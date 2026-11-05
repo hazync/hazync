@@ -1,0 +1,21 @@
+# c10e12 (a9dd2da5...), 2026-11-05: test_store.sh genesis..200, resume at 120, tampered snapshots, negatives on 962,000
+== store test
+exit=0
+exit=0
+LZ_PROVE_RANGE_DONE 1..=200 in 1435 s; final receipt /home/defenwycke/libzync-gpu/e2s8/b/block_200.rcpt
+same root at 200: yes
+byte: exit=101 /home/defenwycke/libzync-gpu/e2s8/c/state_120.trie: not a valid trie snapshot (OldRoot)
+swap: exit=101 assertion `left == right` failed: /home/defenwycke/libzync-gpu/e2s8/c/state_120.trie: its root is not the state's trie root
+neg=[]: block validation cycles  64896838
+neg=[list]: REJECT the trie receipt applies a different update list
+neg=[root]: REJECT the trie receipt does not start from the chain's trie root
+neg=[none]: REJECT no trie receipt for this block
+neg=[counts]: counts mode
+TRIE_STORE_TEST_DONE
+
+# prep (native) 1..200 vs the proved run, trie in memory and on disk
+== prep 1..200 (memory) vs the proved run
+LZ_PREP_DONE 1..=200 in 0.0 s; every state's journal byte-identical to the proved run
+== prep 1..200 (trie on disk) vs the proved run
+LZ_PREP_DONE 1..=200 in 0.0 s; every state's journal byte-identical to the proved run
+HZTRIE-DISK /home/defenwycke/libzync-gpu/trie_disk height 200 root da9e444a7f47657146806405e5d8dfc2ebbe7b78dd05f793daad4c04d2094b2e
