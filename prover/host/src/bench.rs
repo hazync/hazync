@@ -73,34 +73,53 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
     let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}")))
         .expect("cases JSON");
     let unhex = |h: &str| -> Vec<u8> { (0..h.len()).step_by(2).map(|j| u8::from_str_radix(&h[j..j + 2], 16).unwrap()).collect() };
-    let (mut agree, mut bad, mut cycles) = (0usize, 0usize, 0u64);
-    for chunk in cases.chunks(batch) {
+    // A guest abort: Core's EvalScript catches a thrown exception (script number over 4 bytes or non-minimal, the only
+    // throws in script code) and fails the script with UNKNOWN_ERROR; the guest has no unwinding, so the throw aborts
+    // it. Both reject: agreement only where Core rejects (script_tests: UNKNOWN_ERROR; tx tests: invalid).
+    const ABORT: i32 = i32::MIN;
+    const UNKNOWN_ERROR: i32 = -2;
+    let run = |chunk: &[Case]| -> Option<(Vec<i32>, u64)> {
         let mut b = ExecutorEnv::builder();
         b.write(&10u32).unwrap();
         b.write(&(chunk.len() as u32)).unwrap();
         for c in chunk {
             b.write(&(c.kind, unhex(&c.tx), unhex(&c.prevouts), c.input, c.flags)).unwrap();
         }
-        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("core-vectors: guest execution failed");
-        cycles += s.cycles();
+        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).ok()?;
         let got: Vec<i32> = s.journal.decode().expect("mode 10 journal");
         assert_eq!(got.len(), chunk.len());
+        Some((got, s.cycles()))
+    };
+    let (mut agree, mut bad, mut aborts, mut cycles) = (0usize, 0usize, 0usize, 0u64);
+    for chunk in cases.chunks(batch) {
+        // A batch that aborts is rerun one case at a time, so one throwing case does not hide the others.
+        let got: Vec<i32> = match run(chunk) {
+            Some((g, c)) => { cycles += c; g }
+            None => chunk.iter().map(|c| match run(core::slice::from_ref(c)) {
+                Some((g, cy)) => { cycles += cy; g[0] }
+                None => ABORT,
+            }).collect(),
+        };
         for (c, rc) in chunk.iter().zip(got) {
-            let ok = match (c.code, c.valid) {
-                (Some(code), _) => rc == code,
-                (None, Some(true)) => rc == 1,
-                (None, Some(false)) => rc != 1 && rc != -1000,
-                (None, None) => panic!("{}: no expectation", c.label),
+            let ok = match (rc, c.code, c.valid) {
+                (ABORT, Some(code), _) => code == UNKNOWN_ERROR,
+                (ABORT, None, v) => v == Some(false),
+                (_, Some(code), _) => rc == code,
+                (_, None, Some(true)) => rc == 1,
+                (_, None, Some(false)) => rc != 1 && rc != -1000,
+                (_, None, None) => panic!("{}: no expectation", c.label),
             };
+            if ok && rc == ABORT { aborts += 1 }
             if ok { agree += 1 } else {
                 bad += 1;
-                println!("MISMATCH {}: guest {rc}, want {}", c.label,
+                println!("MISMATCH {}: guest {}, want {}", c.label, if rc == ABORT { "ABORT".into() } else { rc.to_string() },
                          c.code.map(|x| x.to_string()).unwrap_or_else(|| if c.valid == Some(true) { "valid".into() } else { "invalid".into() }));
             }
         }
         eprintln!("  {} / {} cases, {} mismatches", agree + bad, cases.len(), bad);
     }
-    println!("CORE_VECTORS {agree} agree, {bad} differ, of {} ({} cycles)", cases.len(), cycles);
+    println!("CORE_VECTORS {agree} agree ({aborts} of them by a guest abort where Core catches a throw), {bad} differ, of {} ({} cycles)",
+             cases.len(), cycles);
     if bad > 0 { std::process::exit(1); }
 }
 
