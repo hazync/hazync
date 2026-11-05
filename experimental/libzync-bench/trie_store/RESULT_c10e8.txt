@@ -1,0 +1,20 @@
+# image c10e8, METHOD_ID e8f9ac1beb69eeed19d3265c6330323f772a47ce27b54e547f5d473d20646311 (2026-11-05, E2 cleanup: hint-bit field removed, LZA2, trie_root rename)
+== 1. genesis..200
+exit=0
+trie proofs: 200  with marks: 5
+root at 200: [74, 68, 158, 218, 113, 101, 71, 127, 5, 100, 128, 70, 194, 223, 216, 229, 120, 123, 190, 235, 147, 247, 5, 221, 4, 76, 173, 218, 46, 75, 9, 210]
+== 2. resume at 120 (the store reloaded from state_120.trie)
+exit=0
+resuming after block 120
+LZ_PROVE_RANGE_DONE 1..=200 in 1206 s; final receipt /home/defenwycke/libzync-gpu/e2s4/b/block_200.rcpt
+same root at 200: yes
+== 3. tampered snapshots (resume must refuse)
+byte: exit=101 /home/defenwycke/libzync-gpu/e2s4/c/state_120.trie: not a valid trie snapshot (OldRoot)
+swap: exit=101 assertion `left == right` failed: /home/defenwycke/libzync-gpu/e2s4/c/state_120.trie: its root is not the state's trie root
+== 4. negative controls, 962,000
+neg=[]: block validation cycles  64872703
+neg=[list]: REJECT the trie receipt applies a different update list
+neg=[root]: REJECT the trie receipt does not start from the chain's trie root
+neg=[none]: REJECT no trie receipt for this block
+neg=[counts]: counts mode
+TRIE_STORE_TEST_DONE
