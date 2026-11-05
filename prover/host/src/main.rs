@@ -2042,6 +2042,10 @@ fn main() {
         prove_block();
         return;
     }
+    if args.iter().any(|a| a == "core-vectors") {
+        bench::core_vectors_cmd(&args);
+        return;
+    }
     if args.iter().any(|a| a == "test-locks") {
         test_locks_cmd();
         return;

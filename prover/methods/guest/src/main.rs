@@ -181,6 +181,9 @@ extern "C" {
                                spend_height: u32, spend_mtp: u32,
                                out_results: *mut i32) -> i32;
 
+    /// Mode 10: CheckTransaction + every input's VerifyScript with explicit flags (Core's tx_valid / tx_invalid).
+    fn hz_test_tx(tx: *const u8, tx_len: u32, prevouts: *const u8, prevouts_len: u32, flags: u32) -> i32;
+
     fn verify_inputs_batch(
         tx: *const u8, tx_len: u32,
         prevouts: *const u8, prevouts_len: u32,
@@ -2330,10 +2333,10 @@ fn main() {
     // 2 chain_step, 3 multi_check, 6 prove_range, 7 fold_range, 12 stages) neither run the SwiftSync
     // accounting nor the signet check, and their per-input caches assume the bump allocator; a receipt
     // from them under this image id would attest something the libzync design never checked
-    // (review 2026-10-30). 8/9 are self-tests that commit nothing a chain proof consumes. 17 is the trie update (E2),
+    // (review 2026-10-30). 8/9/10 are self-tests that commit nothing a chain proof consumes. 17 is the trie update (E2),
     // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag.
     #[cfg(feature = "libzync")]
-    assert!(matches!(mode, 4 | 5 | 8 | 9 | 16 | 17), "libzync image: mode {mode} is not available (chunks + trie + aggregate only)");
+    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17), "libzync image: mode {mode} is not available (chunks + trie + aggregate only)");
     match mode {
         1 => block_proof(),
         2 => chain_step(),
@@ -2344,6 +2347,7 @@ fn main() {
         7 => fold_range(),
         8 => test_locks(),
         9 => test_merkle(),
+        10 => test_core_vectors(),
         12 => validate_block_stages(),
         #[cfg(feature = "trie")]
         17 => trie_update(),
@@ -2399,6 +2403,29 @@ fn trie_update() {
 // Mode 8: isolated exerciser for the real Core-derived maturity/BIP68 relative-lock check
 // (`check_input_locks`). Used by the host `test-locks` command to drive the time-based branch with
 // real MTP numbers (no block; the check only reads tx.version + vin[idx].nSequence + the two MTPs).
+/// Mode 10 (self-test, I1): Core's own script and transaction test vectors through the guest's consensus code, with
+/// explicit flags and no hints installed (libsecp verifies every signature itself, as Core). Each case: kind (0: one
+/// input's VerifyScript, script_tests.json; 1: CheckTransaction + every input, tx_valid / tx_invalid), the transaction,
+/// its spent outputs (Core's Vec<CTxOut>), the input index (kind 0), the flags. Commits each case's code: 1 valid,
+/// -(ScriptError) - 1, or -1000 (CheckTransaction). Commits nothing a chain proof consumes.
+fn test_core_vectors() {
+    let n: u32 = env::read();
+    let mut out: Vec<i32> = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let (kind, tx, prevouts, input, flags): (u32, Vec<u8>, Vec<u8>, u32, u32) = env::read();
+        let rc = unsafe {
+            match kind {
+                0 => verify_input(tx.as_ptr(), tx.len() as u32, input, prevouts.as_ptr(), prevouts.len() as u32, flags,
+                                  0, 0, 0, core::ptr::null_mut()),
+                1 => hz_test_tx(tx.as_ptr(), tx.len() as u32, prevouts.as_ptr(), prevouts.len() as u32, flags),
+                _ => panic!("mode 10: unknown case kind {kind}"),
+            }
+        };
+        out.push(rc);
+    }
+    env::commit(&out);
+}
+
 fn test_locks() {
     let tx: Vec<u8> = env::read();
     let input_idx: u32 = env::read();

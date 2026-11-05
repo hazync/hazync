@@ -59,6 +59,51 @@ pub(crate) fn test_merkle_cmd() {
         root_n == root_m);
 }
 
+/// ROADMAP I1: Core's own script / transaction test vectors through the guest (mode 10). Cases from
+/// `scripts/libzync/core_vectors.py <bitcoin-core> <cases.json>`; each is compared with Core's expectation (validity, and
+/// for script_tests the exact ScriptError; BADTX = CheckTransaction refused). Prints every mismatch and a total.
+///   host core-vectors <cases.json> [cases per execution, default 500]
+pub(crate) fn core_vectors_cmd(args: &[String]) {
+    #[derive(Deserialize)]
+    struct Case { kind: u32, tx: String, prevouts: String, input: u32, flags: u32, label: String,
+                  valid: Option<bool>, code: Option<i32> }
+    let i = args.iter().position(|a| a == "core-vectors").unwrap();
+    let path = args.get(i + 1).expect("usage: core-vectors <cases.json> [batch]");
+    let batch: usize = args.get(i + 2).map(|x| x.parse().expect("batch")).unwrap_or(500);
+    let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}")))
+        .expect("cases JSON");
+    let unhex = |h: &str| -> Vec<u8> { (0..h.len()).step_by(2).map(|j| u8::from_str_radix(&h[j..j + 2], 16).unwrap()).collect() };
+    let (mut agree, mut bad, mut cycles) = (0usize, 0usize, 0u64);
+    for chunk in cases.chunks(batch) {
+        let mut b = ExecutorEnv::builder();
+        b.write(&10u32).unwrap();
+        b.write(&(chunk.len() as u32)).unwrap();
+        for c in chunk {
+            b.write(&(c.kind, unhex(&c.tx), unhex(&c.prevouts), c.input, c.flags)).unwrap();
+        }
+        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("core-vectors: guest execution failed");
+        cycles += s.cycles();
+        let got: Vec<i32> = s.journal.decode().expect("mode 10 journal");
+        assert_eq!(got.len(), chunk.len());
+        for (c, rc) in chunk.iter().zip(got) {
+            let ok = match (c.code, c.valid) {
+                (Some(code), _) => rc == code,
+                (None, Some(true)) => rc == 1,
+                (None, Some(false)) => rc != 1 && rc != -1000,
+                (None, None) => panic!("{}: no expectation", c.label),
+            };
+            if ok { agree += 1 } else {
+                bad += 1;
+                println!("MISMATCH {}: guest {rc}, want {}", c.label,
+                         c.code.map(|x| x.to_string()).unwrap_or_else(|| if c.valid == Some(true) { "valid".into() } else { "invalid".into() }));
+            }
+        }
+        eprintln!("  {} / {} cases, {} mismatches", agree + bad, cases.len(), bad);
+    }
+    println!("CORE_VECTORS {agree} agree, {bad} differ, of {} ({} cycles)", cases.len(), cycles);
+    if bad > 0 { std::process::exit(1); }
+}
+
 pub(crate) fn test_locks_cmd() {
     let ev = |k: &str, d: u32| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
     let seq = ev("HAZYNC_LOCK_SEQ", 0);

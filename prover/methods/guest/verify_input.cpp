@@ -1297,3 +1297,31 @@ extern "C" int verify_input(const uint8_t* tx_bytes, unsigned tx_len,
                            checker, &err);
     return ok ? 1 : -(int)err - 1; // negative encodes the ScriptError code
 }
+
+// Mode 10 (self-test on Core's own vectors, tx_valid / tx_invalid): CheckTransaction, then VerifyScript on every input
+// with `flags`, as Core's transaction_tests CheckTxScripts. Returns 1 (valid), -1000 (CheckTransaction refused), or the
+// first failing input's code as verify_input's (-(ScriptError) - 1).
+extern "C" int hz_test_tx(const uint8_t* tx_bytes, unsigned tx_len,
+                          const uint8_t* prevouts, unsigned prevouts_len, unsigned flags) {
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
+                 reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    CTransaction tx{mtx};
+    MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
+                  reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
+    std::vector<CTxOut> spent;
+    pr >> spent;
+    TxValidationState st;
+    if (!CheckTransaction(tx, st) || st.IsInvalid()) return -1000;
+    if (spent.size() != tx.vin.size()) return -60;
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, std::vector<CTxOut>(spent), true);
+    for (unsigned i = 0; i < tx.vin.size(); i++) {
+        TransactionSignatureChecker checker(&tx, i, spent[i].nValue, txdata, MissingDataBehavior::FAIL);
+        ScriptError err = SCRIPT_ERR_OK;
+        if (!VerifyScript(tx.vin[i].scriptSig, spent[i].scriptPubKey, &tx.vin[i].scriptWitness, flags, checker, &err))
+            return -(int)err - 1;
+    }
+    return 1;
+}
