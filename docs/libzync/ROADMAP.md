@@ -88,6 +88,33 @@ refuse it.
    proof-age policy (today a genuine year-old proof is OK; facts are "as of its height").
 8. **G2 repo cleanup** (concise repo, experiment-era material to `experimental/`), then **G3 the paper with the user**.
 
+### H-B. Backfill design: anchored blocks + one join tree (agreed with the user 11-05)
+
+The original Hazync's shape (independent block proofs folded into one chain proof; its prove_range / fold_range) was
+right; the separate anchoring stage goes. Today libzync is strictly LINEAR (block N's aggregate verifies N-1's
+receipt): fine at the tip, a serial bottleneck for a whole-chain backfill.
+
+1. Prep (host, native): the exact chain state before every block, S0 (genesis) .. S_tip: coin log, trie, BIP30 tree,
+   block forest, work, times. Not trusted, only starting points.
+2. Leaves: any block, any order, any number of GPUs: block h proved as a base step on S(h-1) ("from the state whose
+   digest is anchor_id, block h is valid and gives S(h)"). Already supported (the anchor path).
+3. Joins: a NEW guest mode (~50 lines): env::verify left and right (same image), require sha256d(left journal) ==
+   right.anchor_id, same kind / profile / lineage; commit the right state with the left's anchor_id. The full-journal
+   digest covers every state field at once. A binary tree over N blocks is N-1 joins (= the N-1 links), ~20 levels for
+   ~975 k blocks, every level parallel. A wrong host state only fails a join (digest), never forges.
+4. Tip: unchanged (linear step, or prove on S_tip and join onto the root: the same statement).
+5. Published: ONE receipt (root, genesis -> tip; optionally Groth16-wrapped) + its chain state. WASM verifies that one
+   receipt (pinned image, start == the genesis anchor else DEMO, tip vs a trusted source); "block X is valid" = a
+   block-forest path from X to the root's block_roots; coin / trie facts against the same state.
+6. Across an image change: the handover step, not a join.
+
+Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
+200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;
+(c) negatives: gap, overlap / duplicate, swapped order, tampered anchor, other image, non-chain journal — all refused;
+(d) MEASURE join cycles / cost (the old fold was $0.0043, another guest) and arity (2 / 4 / 8) and leaf size in the GPU
+benchmark step; (e) after the freeze: the coordinator's work queue (prep ahead, leaves in any order, joins as children
+land, resume points).
+
 ## I. Gaps beyond the core (11-04)
 
 What SwiftSync + Utreexo + libzync still do not solve, and how each is closed. None changes the core image unless a
