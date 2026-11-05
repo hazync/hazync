@@ -83,6 +83,30 @@ Limits of the column:
 - The two script-flag exception blocks, 170,060 and 692,261, are not rig cases. They were run on mainnet with a control: the
   host fails the exception's chunk when the block hash is changed (`core_rules/exception_blocks.out`).
 
+### Core's own test vectors
+
+Core 28's `script_tests.json`, `tx_valid.json` and `tx_invalid.json` run through the guest's consensus code (guest mode
+10; cases from `scripts/libzync/core_vectors.py`, which follows Core's test drivers; `host core-vectors`). Image c10e10,
+libsecp path: **1,420 / 1,420 agree, 0 differ**, the exact `ScriptError` for every script test
+(`experimental/libzync-bench/core_vectors/RESULT_c10e10_base.txt`). The batched-signature path (honest and forged hints)
+and the 22,666 flag variants: see ROADMAP I1.
+
+### Where Core catches an exception, the guest aborts
+
+The guest has no C++ unwinding: a `throw` in Core's code aborts it (no receipt). Core catches in two places the guest can
+reach, and both REJECT the block, so the abort gives the same answer (no proof of a valid chain is ever lost):
+
+| site | Core | the block |
+|---|---|---|
+| `script/interpreter.cpp` `EvalScript` | `catch (...)` -> `SCRIPT_ERR_UNKNOWN_ERROR`; every `EvalScript` caller in `VerifyScript` then fails | invalid (68 of Core's script / tx vectors, all agree) |
+| `signet.cpp` `SignetTxs::Create` | malformed solution -> `nullopt` -> `CheckSignetBlockSolution` false | invalid |
+
+Core's `logging.h` catches and CONTINUES, but `coreshim/logging.h` replaces it. The list is enforced at every guest
+build: `prover/methods/guest/build.rs` walks the include graph from every C++ file the guest compiles (resolving headers
+as the compiler does, shim first) and fails unless the catch sites are exactly `REVIEWED_CATCHES`; a Core bump that adds
+one must be reviewed (does Core reject after it?) before the guest builds. The host reports a guest abort as
+`BLOCK REFUSED` (`lz::guest_failure`).
+
 ## How to read the "where enforced" column
 
 The guest compiles these Core sources unmodified (`prover/methods/guest/build.rs:311-325`, plus `signet.cpp` on signet at

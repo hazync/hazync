@@ -75,6 +75,57 @@ fn lib_dir(gcc: &str, query: &[&str]) -> String {
     PathBuf::from(p).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// I1 (2026-11-05): every C++ `catch` the guest can reach, PINNED. The guest has no C++ unwinding: a throw aborts it.
+/// Where Core catches an exception and REJECTS, the abort rejects too (no proof); a Core catch that recovers and
+/// CONTINUES would make a valid block abort (a liveness gap). Both sites below reject the block (reviewed):
+///   - script/interpreter.cpp, EvalScript: catch (...) -> SCRIPT_ERR_UNKNOWN_ERROR, and every EvalScript caller in
+///     VerifyScript then fails the input (Core's own script_tests: 68 such cases agree, core_vectors/RESULT_*).
+///   - signet.cpp, SignetTxs::Create: a malformed solution -> nullopt -> CheckSignetBlockSolution false.
+/// (Core's logging.h catches and continues, but coreshim/logging.h replaces it: the walk below resolves headers as the
+/// compiler does, shim first.) A new, moved-to-another-file or changed catch (a Core bump, a new source) fails the
+/// build until it is reviewed and listed here.
+const REVIEWED_CATCHES: &[(&str, &str)] = &[
+    ("script/interpreter.cpp", "catch (...)"),
+    ("signet.cpp", "} catch (const std::exception&) {"),
+];
+
+/// Every `catch (` line in `roots` and everything they #include, resolved against `dirs` in order (system headers,
+/// found in none, are skipped). Returns (path relative to its include dir, trimmed line), sorted.
+fn reachable_catches(roots: &[String], dirs: &[String]) -> Vec<(String, String)> {
+    use std::collections::BTreeSet;
+    let rel = |p: &std::path::Path| -> String {
+        for d in dirs {
+            if let Ok(r) = p.strip_prefix(d) { return r.to_string_lossy().into_owned(); }
+        }
+        p.file_name().unwrap().to_string_lossy().into_owned()
+    };
+    let mut seen: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+    let mut todo: Vec<std::path::PathBuf> = roots.iter().map(std::path::PathBuf::from).collect();
+    let mut out: BTreeSet<(String, String)> = BTreeSet::new();
+    while let Some(f) = todo.pop() {
+        let Ok(f) = f.canonicalize() else { continue };
+        if !seen.insert(f.clone()) { continue; }
+        let src = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("catch audit: {}: {e}", f.display()));
+        for line in src.lines() {
+            let t = line.trim();
+            if t.starts_with("//") { continue; }
+            if t.contains("catch (") || t.contains("catch(") { out.insert((rel(&f), t.to_string())); }
+            let Some(rest) = t.strip_prefix("#include") else { continue };
+            let rest = rest.trim();
+            let (quoted, name) = match rest.chars().next() {
+                Some('"') => (true, rest[1..].split('"').next().unwrap_or("")),
+                Some('<') => (false, rest[1..].split('>').next().unwrap_or("")),
+                _ => continue,
+            };
+            let mut cands: Vec<std::path::PathBuf> = Vec::new();
+            if quoted { cands.push(f.parent().unwrap().join(name)); }
+            cands.extend(dirs.iter().map(|d| std::path::Path::new(d).join(name)));
+            if let Some(c) = cands.into_iter().find(|c| c.is_file()) { todo.push(c); }
+        }
+    }
+    out.into_iter().collect()
+}
+
 fn main() {
     // #358: every env var this script READS must also be declared, or cargo cannot know the guest
     // depends on it. These three choose the consensus source root and the riscv toolchain — the two
@@ -415,6 +466,25 @@ fn main() {
         b.include(&out_dir);
         b.file("core_block_rules.cpp");
         b.file(format!("{core}/util/moneystr.cpp"));
+    }
+
+    // I1: the catch sites this guest's C++ can reach must be exactly the reviewed ones (REVIEWED_CATCHES). signet.cpp is
+    // always walked, so the list is the same for every network's image.
+    {
+        let here = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        let mut roots: Vec<String> = core_tus.iter().map(|tu| format!("{core}/{tu}")).collect();
+        roots.push(format!("{core}/signet.cpp"));
+        roots.push(format!("{here}/verify_input.cpp"));
+        let mut dirs = vec![shim.clone(), core.clone(), format!("{secp}/include")];
+        if lz_env {
+            roots.extend([format!("{here}/core_tx_rules.cpp"), format!("{here}/core_block_rules.cpp"), format!("{core}/util/moneystr.cpp")]);
+            dirs.push(std::env::var("OUT_DIR").expect("OUT_DIR"));
+        }
+        let found = reachable_catches(&roots, &dirs);
+        let want: Vec<(String, String)> = REVIEWED_CATCHES.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        assert!(found == want, "the C++ catch sites the guest can reach changed (a Core bump or a new source?).\n\
+            The guest has no unwinding: each must be reviewed (does Core REJECT after catching?) and listed in \
+            REVIEWED_CATCHES.\nfound: {found:#?}\nreviewed: {want:#?}");
     }
 
     // Tell cargo what this build actually depends on. Without these the C++ dependency is INVISIBLE:

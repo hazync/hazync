@@ -304,7 +304,8 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
 pub(crate) fn report_agg_execute_only(mut b: risc0_zkvm::ExecutorEnvBuilder) {
     use std::time::Instant;
     let t_x = Instant::now();
-    let session = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("execute mode 5");
+    let session = default_executor().execute(b.build().unwrap(), METHOD_ELF)
+        .unwrap_or_else(|e| panic!("{}", guest_failure("aggregate (mode 5) execution", &e)));
     let cycles = session.cycles();
     println!("=== AGGREGATE, EXECUTE ONLY (no proving) ===");
     println!("  block validation cycles  {cycles}");
@@ -401,7 +402,8 @@ pub(crate) fn agg_exec_fake() {
         b.write(&w.height).unwrap();
         b.write(&chunk_block_hash(&w.header)).unwrap();
         write_chunk_inputs(&mut b, &w, lo, hi);
-        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("exec chunk");
+        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF)
+            .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)));
         let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
         println!("  chunk {i:>3} [{lo}..{hi}) executed: {} cycles", s.cycles());
         println!("  chunk {i:>3} padded {} ({} segments)", s.segments.iter().map(|g| 1u64 << g.po2).sum::<u64>(), s.segments.len());
@@ -600,7 +602,7 @@ pub(crate) fn execute_chunks_parallel(w: &BlockWitness, bounds: &[(usize, usize)
                     b.write(&w.height).unwrap();
                     b.write(&chunk_block_hash(&w.header)).unwrap();
                     write_chunk_inputs(&mut b, w, lo, hi);
-                    lz_execute(b.build().unwrap()).expect("execute chunk")
+                    lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)))
                 };
                 let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
                 let r = Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone());
@@ -709,6 +711,19 @@ pub(crate) fn rig_echo(log: &[u8]) {
     if std::env::var("HAZYNC_RIG").is_err() { return; }
     for l in String::from_utf8_lossy(log).lines().filter(|l| l.contains("core-reject:") || l.contains("agg-lite:")) {
         println!("{l}");
+    }
+}
+
+/// A guest execution that failed, said plainly. "C abort()" is the guest dying inside Core's C++: Core threw and would
+/// have caught it, and every catch the guest can reach REJECTS the block (guest build.rs REVIEWED_CATCHES; the guest has
+/// no unwinding), so it is the block refused, not a crash of the prover. Other failures (a guest assert or REJECT
+/// panic) pass through with their own message.
+pub(crate) fn guest_failure(what: &str, e: &dyn std::fmt::Display) -> String {
+    let m = e.to_string();
+    if m.contains("C abort()") {
+        format!("BLOCK REFUSED ({what}): the guest aborted inside Core's C++ (a thrown exception; Core rejects such a block): {m}")
+    } else {
+        format!("{what} failed: {m}")
     }
 }
 
@@ -1064,7 +1079,7 @@ pub(crate) fn agg_chunks() {
     let server = risc0_zkvm::get_prover_server(&opts).expect("prover server");
     let ctx = risc0_zkvm::VerifierContext::default();
     let session = risc0_zkvm::ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF)
-        .unwrap().run().unwrap();
+        .unwrap().run().unwrap_or_else(|e| panic!("{}", guest_failure("aggregate execution", &e)));
     let nseg = session.segments.len();
     println!("  {nseg} segments to prove at po2 {}", seg_po2());
     // #237: the aggregate had the SAME unprotected `prove_session` as `prove-chunk`. A #119 fault
@@ -1453,4 +1468,17 @@ pub(crate) fn cl_synth(block: &str, spends: &[ClSpend]) -> (Vec<Option<[u8; 32]>
     while roots.last() == Some(&None) { roots.pop(); }
     println!("  coinlog SYNTH: log size {n} (k = {k}), {} spends, {} siblings", spends.len(), sib_all.len());
     (roots, n, libzync::coinlog_forest::encode_witness(&positions, &sib_all))
+}
+
+#[cfg(test)]
+mod guest_failure_tests {
+    use super::guest_failure;
+
+    #[test]
+    fn an_abort_reads_as_a_refused_block_and_other_failures_keep_their_message() {
+        let a = guest_failure("chunk execution", &"Guest panicked: C abort()");
+        assert!(a.starts_with("BLOCK REFUSED (chunk execution)") && a.contains("C abort()"), "{a}");
+        let r = guest_failure("aggregate execution", &"Guest panicked: agg-lite: REJECT no trie receipt for this block");
+        assert_eq!(r, "aggregate execution failed: Guest panicked: agg-lite: REJECT no trie receipt for this block");
+    }
 }

@@ -596,7 +596,8 @@ pub(crate) fn exec_chunk_cycles(w: &BlockWitness, lo: usize, hi: usize) -> u64 {
     b.write(&w.height).unwrap();
     b.write(&chunk_block_hash(&w.header)).unwrap();
     write_chunk_inputs(&mut b, &w, lo, hi);
-    let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("exec chunk");
+    let s = default_executor().execute(b.build().unwrap(), METHOD_ELF)
+        .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("chunk execution", &e)));
     // Report what the chunk COMMITTED, not just how long it took. A payload-format change that
     // silently mis-reads its input would show up as fewer cycles and look like a win; the journal
     // digest is what makes an A/B trustworthy. #135.

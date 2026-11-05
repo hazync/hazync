@@ -177,7 +177,8 @@ pub(crate) fn seg_distribute_cmd() {
     write_chunk_inputs(&mut b, &w, lo, hi);
 
     let t_exec = Instant::now();
-    let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run().unwrap();
+    let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run()
+        .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("guest execution", &e)));
     let exec_s = t_exec.elapsed().as_secs_f64();
     let total = session.segments.len();
 
@@ -345,7 +346,8 @@ pub(crate) fn seg_coordinate_cmd() {
     write_chunk_inputs(&mut b, &w, lo, hi);
 
     let t_exec = Instant::now();
-    let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run().unwrap();
+    let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run()
+        .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("guest execution", &e)));
     let exec_s = t_exec.elapsed().as_secs_f64();
     let total = session.segments.len();
 
@@ -497,7 +499,8 @@ pub(crate) fn seg_coordinate_tree_cmd() {
     write_chunk_inputs(&mut b, &w, lo, hi);
 
     let t_exec = Instant::now();
-    let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run().unwrap();
+    let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run()
+        .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("guest execution", &e)));
     let exec_s = t_exec.elapsed().as_secs_f64();
     let total = session.segments.len();
 
