@@ -2338,9 +2338,10 @@ fn main() {
     // 2 chain_step, 3 multi_check, 6 prove_range, 7 fold_range, 12 stages) neither run the SwiftSync
     // accounting nor the signet check, and their per-input caches assume the bump allocator; a receipt
     // from them under this image id would attest something the libzync design never checked
-    // (review 2026-10-30). 8/9 are self-tests that commit nothing a chain proof consumes.
+    // (review 2026-10-30). 8/9 are self-tests that commit nothing a chain proof consumes. 17 is the trie update (E2),
+    // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag.
     #[cfg(feature = "libzync")]
-    assert!(matches!(mode, 4 | 5 | 8 | 9 | 13 | 15 | 16), "libzync image: mode {mode} is not available (chunks + aggregate only)");
+    assert!(matches!(mode, 4 | 5 | 8 | 9 | 16 | 17), "libzync image: mode {mode} is not available (chunks + trie + aggregate only)");
     match mode {
         1 => block_proof(),
         2 => chain_step(),
