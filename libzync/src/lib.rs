@@ -13,6 +13,7 @@ pub mod facts;
 pub mod history;
 pub mod ttree;
 pub mod trie_model;
+pub mod trie_store;
 #[cfg(feature = "std")]
 pub mod host;
 
