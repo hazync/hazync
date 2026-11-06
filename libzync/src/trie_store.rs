@@ -244,6 +244,9 @@ pub struct TrieStore {
     /// this update's new nodes (dropped if it is refused) and the nodes it replaced (freed once it stands)
     fresh: Vec<R>,
     garbage: Vec<R>,
+    /// the update being applied re-created a coin over its spent record; `last_replaced`: the last one applied did
+    replaced: bool,
+    last_replaced: bool,
 }
 
 /// One block's update list, as the aggregate's collect run logs it and the trie receipt commits.
@@ -252,7 +255,7 @@ pub type Inserts = [(Key, Option<W>, u64)];
 
 impl TrieStore {
     fn with_arena(counts: bool, a: Box<dyn Arena + Send>) -> Self {
-        TrieStore { counts, height: 0, hash: [0; 32], root: EMPTY, a, fresh: Vec::new(), garbage: Vec::new() }
+        TrieStore { counts, height: 0, hash: [0; 32], root: EMPTY, a, fresh: Vec::new(), garbage: Vec::new(), replaced: false, last_replaced: false }
     }
     pub fn new(counts: bool) -> Self { Self::with_arena(counts, Box::new(MemArena::default())) }
 
@@ -322,9 +325,10 @@ impl TrieStore {
     }
 
     fn s_ins(&mut self, n: R, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<R, TErr> {
-        if d >= 256 { return Err(TErr::Witness); }
+        // depth as the guest and the model (trie_model::ins_sub)
         if n == EMPTY { return Ok(self.put(Node::Coin { o: *o, sp: *sp, value: v })); }
         match self.get(n) {
+            Node::SubInner { .. } if d >= 256 => Err(TErr::Witness),
             Node::SubInner { l, r, .. } => {
                 let (l, r) = if bit(o, d) { (l, self.s_ins(r, o, sp, v, d + 1)?) } else { (self.s_ins(l, o, sp, v, d + 1)?, r) };
                 self.drop_node(n);
@@ -332,8 +336,12 @@ impl TrieStore {
             }
             Node::Coin { o: x, sp: old_sp, .. } => {
                 // BIP30: a coin created again over its own spent record replaces it (ttree.rs, the coin leaf case)
-                if x == *o && old_sp.is_some() { self.drop_node(n); return Ok(self.put(Node::Coin { o: *o, sp: *sp, value: v })); }
-                if x == *o { return Err(TErr::Duplicate); }
+                if x == *o && old_sp.is_some() {
+                    self.replaced = true;
+                    self.drop_node(n);
+                    return Ok(self.put(Node::Coin { o: *o, sp: *sp, value: v }));
+                }
+                if x == *o || d >= 256 { return Err(TErr::Duplicate); }
                 // the existing coin moves one level down, on its own side, and the new one goes in beside or below it
                 let t = if bit(&x, d) { self.sinner(EMPTY, n) } else { self.sinner(n, EMPTY) };
                 self.s_ins(t, o, sp, v, d)
@@ -676,19 +684,23 @@ impl TrieStore {
         let wide = |sp: &W| sp[5..] != [0; 3];
         if marks.iter().any(|m| wide(&m.1)) || inserts.iter().any(|i| i.1.as_ref().is_some_and(wide)) { return Err(TErr::Witness); }
         if crate::trie_model::repeated_key(marks.iter().map(|m| &m.0).chain(inserts.iter().map(|i| &i.0))) { return Err(TErr::Duplicate); }
+        self.replaced = false;
         let r = (|| {
             let mut t = self.root;
             for (k, sp) in marks { let (s, o) = split(k); t = self.t_mark(t, &s, &o, sp, 0)?; }
             for (k, sp, v) in inserts { let (s, o) = split(k); t = self.t_ins(t, &s, &o, sp, *v, 0)?; }
             Ok(t)
         })();
-        self.finish(r)
+        let out = self.finish(r);
+        if out.is_ok() { self.last_replaced = self.replaced; }
+        out
     }
 
     /// Undo one block's update list (the one last applied): remove its inserts, unmark its marks. All or nothing.
-    /// Not exact for a block that created a coin over its own spent record (BIP30, `s_ins`): the record it replaced
-    /// is gone, so undo removes the coin outright; restore such a block's predecessor from its snapshot.
+    /// REFUSED (`Missing`: the record it would restore is gone) after a block that created a coin over its own spent
+    /// record (BIP30, `s_ins`): restore that block's predecessor from its snapshot instead.
     pub fn undo(&mut self, marks: &Marks, inserts: &Inserts) -> Result<W, TErr> {
+        if self.last_replaced { return Err(TErr::Missing); }
         let r = (|| {
             let mut t = self.root;
             for (k, _, _) in inserts.iter().rev() { let (s, o) = split(k); t = self.t_rm(t, &s, &o, 0)?; }
@@ -943,6 +955,7 @@ mod tests {
             let both: Vec<(Key, W)> = alloc::vec![(c, sp)];
             let wit = st.witness(&both, &ups_dup);
             assert_eq!(apply_stream_perm(&wit, &both, &ups_dup, None), Err(TErr::Duplicate), "guest, one block");
+            assert_eq!(apply_stream_perm(&wit, &both, &ups_dup, Some(&perm(&both, &ups_dup))), Err(TErr::Duplicate), "guest, one block, host order");
             let (_, _, mut t) = decode(&wit).unwrap();
             let mut r = unspent;
             assert_eq!(model_apply(&mut r, &mut t, counts, &both, &ups_dup), Err(TErr::Duplicate), "model, one block");
@@ -962,8 +975,58 @@ mod tests {
             let mut once = TrieStore::new(counts);
             once.apply(&[], &[(c, None, 50), (other, None, 7)]).unwrap();
             assert_eq!(once.root(), new, "the new coin replaces the spent record; counts are of unspent coins");
-            // and it can be spent again
+            // undo cannot restore the replaced record: refused, the store unchanged
+            assert_eq!(st.undo(&[], &ups_dup), Err(TErr::Missing), "undo after a re-creation");
+            assert_eq!(st.root(), new);
+            // and it can be spent again (after which undo works again)
             st.apply(&[(c, [6, 0, 0, 0, 0, 0, 0, 0])], &[]).unwrap();
+            assert_eq!(st.undo(&[(c, [6, 0, 0, 0, 0, 0, 0, 0])], &[]), Ok(new));
+        }
+    }
+
+    /// A random chain that re-creates spent coins (some spent again in their own block): at every block the guest's
+    /// one-pass update and the model give the store's new root (review round 6: the replace path under random tries).
+    #[test]
+    fn random_chain_with_re_creations_matches_the_guest_and_the_model() {
+        for counts in [true, false] {
+            let mut x = 0x9e3779b97f4a7c15u64 ^ counts as u64;
+            let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+            let mut st = TrieStore::new(counts);
+            let (mut unspent, mut spent): (Vec<Key>, Vec<Key>) = (Vec::new(), Vec::new());
+            let mut all = alloc::collections::BTreeSet::new();
+            let mut re = 0;
+            for blk in 0..200u32 {
+                let mut marks = Vec::new();
+                for _ in 0..(rnd() % 5) {
+                    if unspent.is_empty() { break; }
+                    let k = unspent.swap_remove((rnd() as usize) % unspent.len());
+                    marks.push((k, [blk, rnd() as u32 & 0xffff, 0, 0, 0, 0, 0, 0]));
+                }
+                let mut ins: Vec<(Key, Option<W>, u64)> = Vec::new();
+                let mut new_spent = Vec::new();
+                for _ in 0..(1 + rnd() % 6) {
+                    let again = !spent.is_empty() && rnd() % 3 == 0;
+                    let k = if again { spent.swap_remove((rnd() as usize) % spent.len()) }
+                            else { key(rnd() as u8 & 0x0f, (rnd() % 2) as u8, rnd() as u8, (rnd() % 2) as u8) };
+                    if !again && !all.insert(k) { continue; }
+                    if ins.iter().any(|i| i.0 == k) || marks.iter().any(|m| m.0 == k) { continue; }
+                    re += again as u32;
+                    let sp = rnd() % 4 == 0;
+                    if sp { new_spent.push(k); } else { unspent.push(k); }
+                    ins.push((k, sp.then(|| [blk, 3, 0, 0, 0, 0, 0, 0]), rnd() >> 40));
+                }
+                let old = st.root();
+                let wit = st.witness(&marks, &ins);
+                let (_, _, mut t) = decode(&wit).expect("witness decodes");
+                let new = st.apply(&marks, &ins).unwrap_or_else(|e| panic!("block {blk}: store {e:?}"));
+                assert_eq!(apply_stream_perm(&wit, &marks, &ins, Some(&perm(&marks, &ins))), Ok(new), "block {blk}: guest");
+                let mut r = old;
+                model_apply(&mut r, &mut t, counts, &marks, &ins).unwrap();
+                assert_eq!(r, new, "block {blk}: model");
+                spent.extend(marks.iter().map(|m| m.0));
+                spent.extend(new_spent);
+            }
+            assert!(re > 50, "the chain re-created coins ({re})");
         }
     }
 

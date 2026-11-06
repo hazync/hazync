@@ -97,13 +97,15 @@ fn mark_top(n: &mut Top, s: &W, o: &W, sp: &W, d: u32) -> Result<(), TErr> {
 }
 
 fn ins_sub(n: &mut Sub, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<(), TErr> {
-    if d >= 256 { return Err(TErr::Witness); }
+    // depth as the guest (ttree.rs): a leaf or an empty slot at 256 is handled, an inner node there is a bad witness,
+    // two coins that would need splitting there are a duplicate
     let other = match n {
         Sub::Empty => {
             *n = Sub::Coin { o: *o, sp: *sp, value: v };
             return Ok(());
         }
         Sub::Pruned(_) => return Err(TErr::Witness),
+        Sub::Inner(_, _) if d >= 256 => return Err(TErr::Witness),
         Sub::Inner(l, r) => return if bit(o, d) { ins_sub(r, o, sp, v, d + 1) } else { ins_sub(l, o, sp, v, d + 1) },
         Sub::Coin { o: c, sp: old_sp, .. } => {
             // BIP30: a coin created again over its own spent record replaces it (ttree.rs, the coin leaf case)
@@ -111,7 +113,7 @@ fn ins_sub(n: &mut Sub, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<(), TEr
             *c
         }
     };
-    if other == *o { return Err(TErr::Duplicate); }
+    if other == *o || d >= 256 { return Err(TErr::Duplicate); }
     // a leaf where the new key leads: push it one level down and try again
     let old = core::mem::replace(n, Sub::Empty);
     *n = if bit(&other, d) { Sub::Inner(Box::new(Sub::Empty), Box::new(old)) } else { Sub::Inner(Box::new(old), Box::new(Sub::Empty)) };
