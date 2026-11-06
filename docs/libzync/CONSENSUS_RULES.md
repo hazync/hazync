@@ -1,6 +1,6 @@
 # Consensus rules: the libzync guest against Bitcoin Core v28.0
 
-**For:** outside reviewers of the proposal in [`SWIFTSYNC_PROOFS.md`](SWIFTSYNC_PROOFS.md).
+**For:** outside reviewers of libzync. What a proof states and how it is verified: [`SWIFTSYNC_PROOFS.md`](SWIFTSYNC_PROOFS.md).
 
 **Read at:** repo commit `bf8e60764` (branch `libzync`). Its `prover/`, `coinbase-smt/` and `libzync/` are clean, so the
 guest read here is that commit. These guest inputs are newer than `c1101a3`, the source of the image ids in

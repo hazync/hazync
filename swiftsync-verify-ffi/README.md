@@ -1,7 +1,7 @@
 # `swiftsync-verify-ffi`: the libzync chain-proof verifier as a C library
 
 One call, `swiftsync_verify(...)` (`include/swiftsync_verify.h`), running the same checks as the CLI and the WASM
-build. For C or C++ hosts, e.g. a SwiftSync node in Bitcoin Core (`docs/libzync/CORE_HOOK.md` sketches where).
+build. For C or C++ hosts, e.g. a SwiftSync node in Bitcoin Core (`experimental/libzync-bench/retired-docs/CORE_HOOK.md` sketched where).
 
 ```sh
 cargo build --release --manifest-path swiftsync-verify-ffi/Cargo.toml
