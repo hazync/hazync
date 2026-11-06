@@ -1,7 +1,9 @@
 # zyncAPPs: building on the core proof
 
-Status: design. No zyncAPP is built yet. The core facts in §2 exist in `ChainState` version 2 (SWIFTSYNC_PROOFS.md §3,
-HANDOVER.md §2); the shared check of §4 is the code every zyncAPP must carry and is not written yet.
+Status: two zyncAPPs are built in `prover/zyncapps` (ROADMAP B5, K1): `coin` (a coin unspent or spent at the core
+tip, the core receipt verified in the zkVM) and `headers` (the header chain from genesis, executed on real headers,
+not yet proved); `zeroconf` (D5) is being built; the rest is design. The core facts in §2 exist in `ChainState`
+version 2 (SWIFTSYNC_PROOFS.md §3, HANDOVER.md §2); the shared check of §4 is `libzync::facts::check_core_statement`.
 
 ## 1. Core and zyncAPPs
 
@@ -100,7 +102,7 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
-| snapshot check | a Core `dumptxoutset` | `utxo_roots`, `utxo_value` | "this snapshot is the UTXO set at H" (`utxo_snapshot_check.py` does it outside the zkVM today) |
+| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). No checker exists yet; design B's `utxo_snapshot_check.py` checked the retired survivor forest (`experimental/libzync-bench/retired-scripts/`) |
 
 ## 7. Open
 

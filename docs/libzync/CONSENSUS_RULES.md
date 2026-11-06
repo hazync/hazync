@@ -43,16 +43,16 @@ A WEAKER or NOT ENFORCED row is the kind that matters for soundness: a proof cou
 `mandatory-script-verify-flag-failed`, `block-validation-failed`, the three signature rows, and the script side of the
 soft-fork table. The proof says so itself (§5 step 9). BIP325 stays enforced there, because it runs in the aggregate.
 
-### Rows marked †: true only at H
+### Rows marked †: rules on prevouts
 
-A block's spent coins are prover-supplied. A spend names a coin by its leaf, and nothing checks that coin exists until
-the ECMH total is the identity at H (`ss_set == 0`, §5 step 5). Everything computed from a prevout therefore rests on
-that final check: value, fee, maturity, BIP68, P2SH and witness sigops, the script being satisfied, and which spends
-decrement the BIP30 tree.
+A block's spent coins are prover-supplied. A spend names a coin by its leaf and opens that unspent leaf, at its
+position, against the coin log's current roots (`COINLOG.md` §1), and the counting trie's update marks the same coin
+spent. A coin that does not exist, or was already spent, therefore cannot be spent: these rows hold **at every block**,
+like the rest. Everything computed from a prevout rests on that opening: value, fee, maturity, BIP68, P2SH and witness
+sigops, the script being satisfied, and which spends decrement the BIP30 tree. The rig's `missing_coin` and
+`spend_spent_coinbase` are refused (the guest's reason is the trie update's `Missing`).
 
-- A proof that passes the whole of §5 establishes these rows, under the ECMH collision assumption of §4.
-- Core rejects the bad block itself. The guest may reject it only at H, without saying which block failed.
-- A receipt not closed at H establishes none of them (§6a).
+(Under design B, retired in E2, these rows held only once the ECMH total closed at a height H.)
 
 ## Tested against Core
 
@@ -284,7 +284,7 @@ not that a case targets it.
 |---|---|---|
 | Stand-ins for Core's coin view, block index, chainstate and clock | `core_tx_rules.cpp:35-86`, `core_block_rules.cpp:46-105` | Every case. `split_tx_bad` for a partial run, `bip68_time_*` for `GetAncestor`. The retarget's first block: read only |
 | Block composition: walking the chunk journals, chunk linkage, input coverage, totals across chunks | `agg_lite.rs:251-317`, `:447-465` | `split_tx`, `split_tx_bad`, `cb_overpay`, `cb_fee_too_much`, `cb_exact`, `weight_*`, `sigops_*`. A journal that lies about coverage cannot be crafted from a block, so no rig case reaches those checks |
-| Coin accounting and SwiftSync | `agg_lite.rs:339-378`, `swiftsync.rs` | `double_spend_in_block`, `spend_later_in_block`, `chain_in_block`. The rig stops at the block, so no case reaches `ss_set == 0`: `missing_coin` is deferred |
+| Coin accounting: the coin log, the trie update, the live-coin hash | the coin-log block of `agg_lite.rs`, `libzync/src/coinlog.rs`, `libzync/src/ttree.rs` (mode 17), `swiftsync.rs` (live-coin hash) | `double_spend_in_block`, `spend_later_in_block`, `chain_in_block`, `missing_coin`, `spend_spent_coinbase` (rig 96/96 on c13 and c14) |
 | BIP30 tree and tracked transactions | `bip30.rs`, `agg_lite.rs:212-217`, `:286`, `:407-436`, `hz_indicated_height` `verify_input.cpp:1028` | `bip30_repeat_unspent`, `bip30_repeat_spent`, `bip30_child_of_repeat`, the rig's staged base chain, and the unit tests in `bip30.rs` |
 | Batch signature verifier and its libsecp hooks | `batch_ecdsa.rs`, `patches/libzync/0102` | `sig_*`, `multisig_*`, `taproot_*` |
 | Host hints the guest checks | `liftx_hint.rs`, ECMH hints in `swiftsync.rs` | Every case with a signature or a coin. No case hands the guest a false hint |
