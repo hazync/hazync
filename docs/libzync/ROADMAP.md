@@ -91,14 +91,18 @@ refuse it.
    **On c14: EXPECT_CYCLES=64896840** (the cost table, RESULT_c14.txt). ✅ **DONE 11-06** (`gpu/GPU_RESULTS.md`, $3.72):
    block 962,000 on one PRO 6000 in **537 s** (406 s chunks + 132 s aggregate incl. the 51 s trie proof; design B 517 s),
    every receipt verified; a first pod on a loaded host took 894 s (the host, not the image: same bundle).
-6. **Freeze: ask the user.**
-7. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
+6. **Before the freeze (user, 11-06): a review of everything since round 6, then the G2 repo cleanup, then a full cold
+   review of the cleaned repo; a retest only if a fix moves the image.** Cleanup keeps guest-compiled files untouched
+   (their bytes, comments included, are the image). Proof age is NOT an expiry (a proof is valid forever): verifiers
+   say "as of height H" (and how far behind a known tip) on every coin / trie answer, and the app decides (host-only).
+7. **Freeze: ask the user.**
+8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
    then the built-in IMAGES (9f469930 / 067822b9, from c1101a3 10-31: ChainState v1, profile 1) verify NOTHING current,
    so OK is reachable only via `--image` / `image_hex`, and the table's `checkpoint_height: 970_000` describes an image
    with no checkpoint: replace both with the frozen product images (cli, ffi `IDS`, wasm `image_id`). Also decide a
    proof-age policy (today a genuine year-old proof is OK; facts are "as of its height").
-8. **G2 repo cleanup** (concise repo, experiment-era material to `experimental/`), then **G3 the paper with the user**.
+9. **G3 the paper with the user** (G2 cleanup moved before the freeze).
 
 ### H-B. Backfill design: anchored blocks + one join tree (agreed with the user 11-05)
 
