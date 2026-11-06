@@ -50,14 +50,16 @@ export HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=${HAZYNC_CHUNKS:-1} HAZYNC_HINT_
 ( nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader -l 1 >"$OUT/smi.log" 2>/dev/null ) & SMI=$!
 trap 'kill $SMI 2>/dev/null' EXIT
 
-# run a file of commands (one per line) in batches of G, job k of a batch on card k: never two on one card
+# run a file of commands (one per line) in batches of G, job k of a batch on card k: never two on one card.
+# Waits on the batch's OWN pids: a bare `wait` also waits for the nvidia-smi logger, which never exits (it hung the
+# first GPU run after leaf 1; the laptop dry run has no nvidia-smi, so its logger died at once and hid this).
 pool () {
-  local k=0 line
+  local k=0 line pids=()
   while IFS= read -r line; do
-    ( CUDA_VISIBLE_DEVICES=$k bash -c "$line" ) & k=$((k + 1))
-    if [ "$k" -ge "$G" ]; then wait; k=0; fi
+    ( CUDA_VISIBLE_DEVICES=$k bash -c "$line" ) & pids+=($!); k=$((k + 1))
+    if [ "$k" -ge "$G" ]; then wait "${pids[@]}"; pids=(); k=0; fi
   done < "$1"
-  wait
+  [ ${#pids[@]} -eq 0 ] || wait "${pids[@]}"
 }
 
 say "=== leaves: blocks 1..$N, each a base step on the state before it ==="; T0=$SECONDS

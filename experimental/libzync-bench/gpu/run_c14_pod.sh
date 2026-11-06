@@ -5,8 +5,10 @@
 # From the laptop: deploy, set up, upload the bundles, run both, HARVEST, then terminate (by the captured id).
 # A hard deadline (DEADLINE_MIN, default 150) harvests what exists and terminates, so spend is bounded.
 #   bash run_c14_pod.sh            (bundles in ~/libzync-gpu/gpu14: runb/, join/; output in ~/libzync-gpu/gpu14/pod)
+#   RUNS=runb OUT=~/libzync-gpu/gpu14/pod2 bash run_c14_pod.sh    (run B only, e.g. a rerun on another host)
+# Every run records the host: CPU model, cores, load and the busiest processes before and during proving.
 set -uo pipefail
-L=~/libzync-gpu/gpu14; OUT=$L/pod; mkdir -p "$OUT"
+L=~/libzync-gpu/gpu14; OUT=${OUT:-$L/pod}; RUNS=${RUNS:-runb join}; mkdir -p "$OUT"
 COMMIT=${COMMIT:-e24f7d3}; DEADLINE=$(( $(date +%s) + ${DEADLINE_MIN:-150} * 60 ))
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 -o ServerAliveInterval=30"
@@ -21,7 +23,7 @@ term () {
 harvest () {
   [ -n "$HOST" ] || return 0
   log "harvest"
-  ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && tar czf harvest.tgz runb join pod.log setup.log 2>/dev/null; ls -la harvest.tgz' >> "$OUT/driver.log" 2>&1
+  ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && tar czf harvest.tgz runb join host pod.log setup.log 2>/dev/null; ls -la harvest.tgz' >> "$OUT/driver.log" 2>&1
   scp -q $K -P "$PORT" root@"$HOST":/workspace/harvest.tgz "$OUT/harvest.tgz" && (cd "$OUT" && tar xzf harvest.tgz) && log "harvested to $OUT" || log "HARVEST FAILED"
 }
 trap 'harvest; term' EXIT
@@ -81,12 +83,19 @@ cd /workspace
 until grep -q SETUP_DONE setup.log; do sleep 10; done
 echo "SETUP $(tail -2 setup.log | head -1)"
 H=/workspace/hazync/experimental/libzync-bench/gpu
-EXPECT_CYCLES=$(cat bundles/runb/EXPECT_CYCLES) BUNDLE=/workspace/bundles/runb OUT=/workspace/runb bash $H/gpu-libzync-multi.sh; echo "RUNB_EXIT=$?"
-SKIP_BUILD=1 BUNDLE=/workspace/bundles/join N=8 OUT=/workspace/join bash $H/gpu-join.sh; echo "JOIN_EXIT=$?"
+# the host, before and during: is anything else using the CPUs this card's witness generation needs?
+mkdir -p host; lscpu > host/lscpu.txt; nproc > host/nproc.txt; nvidia-smi -q > host/nvidia-smi-q.txt 2>&1
+( while :; do echo "== $(date +%T) $(cut -d' ' -f1-3 /proc/loadavg)"; top -bn1 -w 200 | sed -n '7,22p'; sleep 20; done ) > host/top.log 2>&1 & TOP=$!
+echo "HOST $(grep -m1 'Model name' host/lscpu.txt | sed 's/.*: *//') x$(cat host/nproc.txt), load $(cut -d' ' -f1-3 /proc/loadavg)"
+case " $RUNS " in *" runb "*)
+EXPECT_CYCLES=$(cat bundles/runb/EXPECT_CYCLES) BUNDLE=/workspace/bundles/runb OUT=/workspace/runb bash $H/gpu-libzync-multi.sh; echo "RUNB_EXIT=$?";; esac
+case " $RUNS " in *" join "*)
+SKIP_BUILD=1 BUNDLE=/workspace/bundles/join N=8 OUT=/workspace/join bash $H/gpu-join.sh; echo "JOIN_EXIT=$?";; esac
+kill $TOP 2>/dev/null
 echo POD_DONE
 EOF
-ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && (setsid nohup bash pod.sh > pod.log 2>&1 < /dev/null &)'
-log "pod.sh started"
+ssh $K -p "$PORT" root@"$HOST" "cd /workspace && (RUNS='$RUNS' setsid nohup bash pod.sh > pod.log 2>&1 < /dev/null &)"
+log "pod.sh started (runs: $RUNS)"
 
 # 6. wait (POD_DONE or the deadline), relaying progress lines
 seen=0
