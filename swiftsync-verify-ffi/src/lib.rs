@@ -85,6 +85,18 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
         verify(&Inputs { receipt, image, anchor, now })
     };
     let mut rep = rep;
+    // Step 7: `expect` ("h:hash"), the network's block at the proof's height from the integrator's OWN trusted source,
+    // checked whenever it is given, with facts or without (round 9: without facts it was silently ignored).
+    let expect_s: Option<String> = if expect.is_null() { None } else {
+        match CStr::from_ptr(expect).to_str() { Ok(e) => Some(e.to_string()), Err(_) => return fail("expect is not UTF-8") }
+    };
+    let tip_checked = match (expect_s.as_deref(), rep.state.as_ref()) {
+        (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {
+            Some((h, x)) if swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash) => true,
+            _ => { rep.checks.push((false, format!("expect {e:?}: not the proof's tip"))); false }
+        },
+        _ => false,
+    };
     if !facts_json.is_null() {
         let v: serde_json::Value = match serde_json::from_slice(CStr::from_ptr(facts_json).to_bytes()) {
             Ok(v) => v,
@@ -106,16 +118,6 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
         // integrator's own trusted source. Inside the facts JSON it would be the fact server vouching for its own fork
         // (cold review 11-06), so it is refused there. Without a match the verdict is at most DEMO.
         if v.get("expect").is_some() { return fail("\"expect\" inside the facts JSON is refused: the expected tip is the integrator's own trusted source (its node, an explorer), passed separately, never the fact server's word"); }
-        let expect_s: Option<String> = if expect.is_null() { None } else {
-            match CStr::from_ptr(expect).to_str() { Ok(e) => Some(e.to_string()), Err(_) => return fail("expect is not UTF-8") }
-        };
-        let tip_checked = match (expect_s.as_deref(), rep.state.as_ref()) {
-            (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {
-                Some((h, x)) if swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash) => true,
-                _ => { rep.checks.push((false, format!("expect {e:?}: not the proof's tip"))); false }
-            },
-            _ => false,
-        };
         let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty();
         match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
             Some(cs) => {
@@ -142,12 +144,14 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             rep.verdict = Verdict::Demo;
         }
     }
+    if rep.checks.iter().any(|(ok, _)| !ok) { rep.verdict = Verdict::Fail; }
     // Only a journal that passed: under FAIL its fields are the prover's word (review round 3).
     if let (Some(cs), false, false) = (&rep.state, out.is_null(), rep.verdict == Verdict::Fail) {
         *out = SwiftsyncResult { height: cs.height, tip_hash: cs.tip_hash, chainwork: cs.cum_work,
                                  utxo_leaves: cs.utxo_leaves, profile: cs.profile };
     }
     match rep.verdict {
+        Verdict::Ok if tip_checked => { write_msg(msg, msg_len, "proven from genesis; chain identity checked: the tip is the block expect names"); OK }
         Verdict::Ok => { write_msg(msg, msg_len, "proven from genesis; chain identity NOT checked here: out->tip_hash must be the block at out->height on your own node"); OK }
         Verdict::Demo => { write_msg(msg, msg_len, "a valid chain, but from a given anchor, below minimum work, or below the checkpoint height, or facts without a matching \"expect\": not shown to be the network's"); DEMO }
         Verdict::Fail => fail(rep.checks.iter().find(|(ok, _)| !ok).map(|(_, w)| w.as_str()).unwrap_or("failed")),

@@ -48,7 +48,10 @@ export async function loadVerifier(source) {
   };
   return {
     /** Verify a receipt (or .sspf bundle). `now` defaults to this device's clock. */
-    verify(args) { return call(verify_frame, { ...args, facts: undefined }); },
+    verify(args) {
+      // an expected tip is a check, never dropped: with one, verify through the facts path with no facts (round 9)
+      return args.expect ? call(verify_facts, { ...args, facts: {} }) : call(verify_frame, { ...args, facts: undefined });
+    },
     /** As verify, plus facts ({coins, journeys, tries}) checked against the verified state; `expect` ('<height>:<hash>')
      *  is the tip from a source you trust, passed beside the facts, never inside them. */
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },

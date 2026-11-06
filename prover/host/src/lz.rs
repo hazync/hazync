@@ -957,9 +957,15 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let mut first = lo;
     if std::env::var("HAZYNC_RESUME").map(|v| v == "1").unwrap_or(false) {
         // With the coin log, only a receipt whose log file was also written (the log is saved after the receipt).
+        // A disk trie (HAZYNC_TRIE_DIR) is at the height its own metadata says: a crash between its flush and the
+        // marker file leaves the trie at k with no state_<k>.trie, so ask the store too (round 9).
+        let disk_trie_h: Option<u64> = if methods::TRIE {
+            crate::trie::trie_dir().filter(|d| d.join("meta").exists())
+                .and_then(|d| libzync::trie_store::TrieStore::open_dir(&d, true).ok()).map(|t| t.height)
+        } else { None };
         let done = |k: &u32| std::path::Path::new(&format!("{out}/block_{k}.rcpt")).exists()
             && (!methods::COINLOG || std::path::Path::new(&format!("{out}/state_{k}.coinlog")).exists())
-            && (!methods::TRIE || std::path::Path::new(&format!("{out}/state_{k}.trie")).exists());
+            && (!methods::TRIE || std::path::Path::new(&format!("{out}/state_{k}.trie")).exists() || disk_trie_h == Some(*k as u64));
         if let Some(k) = (lo..=hi).rev().find(done) {
             assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
             let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
@@ -1248,25 +1254,44 @@ pub(crate) const CL_DISK_MAGIC2: &[u8; 8] = b"LZDISK02";
 pub(crate) const CL_PEND_MAGIC: &[u8; 8] = b"LZPEND02";
 
 /// The journal records in pending.bin: (height, body), oldest first. A version-1 file (one bare body) is (None, body).
-fn cl_journal_records(u: &[u8]) -> Vec<(Option<u64>, &[u8])> {
-    if !u.starts_with(CL_PEND_MAGIC) { return if u.len() >= 8 { vec![(None, u)] } else { vec![] }; }
+/// A version-2 record is MAGIC | height | body | SHA-256 of the three (11-06): a record whose checksum fails is TORN if
+/// it is the last one (its sync never returned, so its block never changed the store: ignored) and corruption anywhere
+/// else (Err: the journal cannot be trusted, nothing is undone).
+fn cl_journal_records(u: &[u8]) -> Result<Vec<(Option<u64>, &[u8])>, String> {
+    use sha2::{Digest, Sha256};
+    if !u.starts_with(CL_PEND_MAGIC) { return Ok(if u.len() >= 8 { vec![(None, u)] } else { vec![] }); }
     let rd = |b: &[u8], o: usize| b.get(o..o + 8).map(|x| u64::from_le_bytes(x.try_into().unwrap()));
     let mut out = Vec::new();
     let mut o = 0;
-    while u[o..].starts_with(CL_PEND_MAGIC) {
-        if u.len() < o + 16 { break } // a torn last record
-        let (Some(h), body) = (rd(u, o + 8), &u[o + 16..]) else { break };
-        // the body's length: n, k, k * 40, m, m * 32
-        let Some(k) = rd(body, 8) else { break };
-        let at_m = 16usize.saturating_add(40usize.saturating_mul(k as usize));
-        let Some(m) = rd(body, at_m) else { break };
-        let len = at_m.saturating_add(8).saturating_add(32usize.saturating_mul(m as usize));
-        if body.len() < len { break } // a torn last record: its block never changed the store
-        out.push((Some(h), &body[..len]));
-        o += 16 + len;
-        if o >= u.len() { break }
+    while o < u.len() {
+        // the body: n, k, k * (8 + 32), m, m * 32; then a 32-byte checksum
+        let parsed = (|| {
+            if !u[o..].starts_with(CL_PEND_MAGIC) { return None; }
+            let h = rd(u, o + 8)?;
+            let body = u.get(o + 16..)?;
+            let k = rd(body, 8)?;
+            let at_m = 16usize.checked_add(40usize.checked_mul(k as usize)?)?;
+            let m = rd(body, at_m)?;
+            let len = at_m.checked_add(8)?.checked_add(32usize.checked_mul(m as usize)?)?;
+            let end = o.checked_add(16)?.checked_add(len)?;
+            let sum = u.get(end..end.checked_add(32)?)?;
+            (Sha256::digest(&u[o..end]).as_slice() == sum).then_some((h, &body[..len], end + 32))
+        })();
+        match parsed {
+            Some((h, body, next)) => { out.push((Some(h), body)); o = next; }
+            // a torn LAST record: no record starts after it (records are only ever appended)
+            None if !u[o + 1..].windows(8).any(|w| w == CL_PEND_MAGIC) => break,
+            None => return Err(format!("a damaged record at byte {o} that is not the last one")),
+        }
     }
-    out
+    Ok(out)
+}
+
+/// A journal record body's leaf count before its block, and after (its appends added).
+fn cl_record_span(body: &[u8]) -> (u64, u64) {
+    let rd = |o: usize| u64::from_le_bytes(body[o..o + 8].try_into().unwrap());
+    let k = rd(8) as usize;
+    (rd(0), rd(0) + rd(16 + 40 * k))
 }
 
 /// Disk mode: append this block's undo record to pending.bin and sync it, BEFORE the block changes the store.
@@ -1280,6 +1305,7 @@ fn cl_journal_append(d: &std::path::Path, height: u32, store_len: u64, spends: &
     for (p, l) in spends { b.extend_from_slice(&p.to_le_bytes()); b.extend_from_slice(l); }
     b.extend_from_slice(&(appends.len() as u64).to_le_bytes());
     for l in appends { b.extend_from_slice(l); }
+    { use sha2::Digest as _; let sum = sha2::Sha256::digest(&b); b.extend_from_slice(&sum); }
     let p = d.join("pending.bin");
     std::fs::OpenOptions::new().create(true).append(true).open(&p).and_then(|mut f| { f.write_all(&b)?; f.sync_data() })
         .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
@@ -1406,27 +1432,35 @@ pub(crate) fn cl_load(path: &str) {
             // may already have lost a spent coin (cl_commit removes it before setting the leaf; review round 2).
             // Repeating an undo is harmless: the truncate does nothing and the sets and inserts rewrite the same values.
             // A record at or below the state's height belongs to a block this state already includes: nothing to undo.
-            let recs = cl_journal_records(&u);
-            let mut undone = 0;
-            for (rh, body) in recs.iter().rev() {
-                let start = u64::from_le_bytes(body[..8].try_into().unwrap());
-                let after = match (rh, saved_h) {
-                    (Some(rh), Some(sh)) => *rh > sh,
-                    // a version-1 record or state file: the record is for this state when it starts at its leaf count
-                    _ => start == n || (start >= n && undone > 0),
-                };
-                if !after { continue; }
-                cl_rollback(&mut store, &mut pos, body, start);
-                undone += 1;
+            let recs = cl_journal_records(&u).unwrap_or_else(|e| panic!("{}: {e}: the journal cannot be trusted; nothing undone", pend.display()));
+            // The blocks after this state: the records above its height (version 2), or from the first record that
+            // starts at its leaf count (version 1). Checked BEFORE anything is undone: they must start at the state,
+            // chain into each other (each starts where the one before ends) and end at the store's length, so a
+            // journal that does not describe this store changes nothing (round 9).
+            let first = match saved_h {
+                Some(sh) => recs.iter().position(|(rh, _)| rh.map_or(true, |h| h > sh)),
+                None => recs.iter().position(|(_, b)| cl_record_span(b).0 == n),
+            };
+            if let Some(i) = first {
+                let todo = &recs[i..];
+                let mut at = n;
+                for (rh, b) in todo {
+                    let (s0, s1) = cl_record_span(b);
+                    assert!(s0 == at, "{}: journal record for block {rh:?} starts at {s0} leaves, not {at}: it does not describe this store (nothing undone)", pend.display());
+                    at = s1;
+                }
+                assert!(at == store.len(), "{}: the journal ends at {at} leaves, the store has {} (nothing undone)", pend.display(), store.len());
+                for (_, b) in todo.iter().rev() {
+                    cl_rollback(&mut store, &mut pos, b, cl_record_span(b).0);
+                }
+                eprintln!("  coin log store: undid {} unfinished block(s) recorded in pending.bin (back to {} leaves)", todo.len(), store.len());
             }
-            if undone > 0 {
-                eprintln!("  coin log store: undid {undone} unfinished block(s) recorded in pending.bin (back to {} leaves)", store.len());
-            }
-            let _ = std::fs::remove_file(&pend);
-            cl_sync_dir(&d);
         }
         assert!(store.len() == n && store.roots() == roots,
-                "{}: the on-disk coin log is not at the state {path} recorded (it moved on after that receipt?): rebuild it from a run from genesis", d.display());
+                "{}: the on-disk coin log is not at the state {path} recorded (it moved on after that receipt?): rebuild it from a run from genesis (pending.bin is kept)", d.display());
+        // Only now, with the store at the state, is the journal no longer needed (a failed undo above keeps it, and
+        // repeating an undo is harmless).
+        if pend.exists() { let _ = std::fs::remove_file(&pend); cl_sync_dir(&d); }
         // C1b: the index lives next to the nodes and was kept in step with them (written before each state file).
         *CL.lock().unwrap() = Some(ClHost { store, pos });
         return;
@@ -1649,5 +1683,38 @@ mod guest_failure_tests {
         assert!(a.starts_with("BLOCK REFUSED (chunk execution)") && a.contains("C abort()"), "{a}");
         let r = guest_failure("aggregate execution", &"Guest panicked: agg-lite: REJECT no trie receipt for this block");
         assert_eq!(r, "aggregate execution failed: Guest panicked: agg-lite: REJECT no trie receipt for this block");
+    }
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+
+    #[test]
+    fn journal_records_round_trip_and_refuse_damage() {
+        let d = std::env::temp_dir().join(format!("lz-journal-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // three blocks: 10 -> 12 -> 12 (no appends) -> 13 leaves
+        cl_journal_append(&d, 5, 10, &[(3, [7; 32])], &[[1; 32], [2; 32]]);
+        cl_journal_append(&d, 6, 12, &[(11, [8; 32])], &[]);
+        cl_journal_append(&d, 7, 12, &[], &[[3; 32]]);
+        let u = std::fs::read(d.join("pending.bin")).unwrap();
+        let r = cl_journal_records(&u).unwrap();
+        assert_eq!(r.iter().map(|x| x.0).collect::<Vec<_>>(), vec![Some(5), Some(6), Some(7)]);
+        assert_eq!(r.iter().map(|x| cl_record_span(x.1)).collect::<Vec<_>>(), vec![(10, 12), (12, 12), (12, 13)]);
+        // a torn LAST record (its sync never returned) is ignored
+        let torn = &u[..u.len() - 5];
+        assert_eq!(cl_journal_records(torn).unwrap().len(), 2);
+        // a zero-filled tail of the last record fails its checksum: torn, ignored
+        let mut z = u.clone();
+        let n = z.len();
+        for b in &mut z[n - 40..n - 32] { *b = 0; }
+        assert_eq!(cl_journal_records(&z).unwrap().len(), 2);
+        // damage in a record that is NOT the last: the journal is refused, nothing is undone from it
+        let mut m = u.clone();
+        m[30] ^= 1;
+        assert!(cl_journal_records(&m).is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

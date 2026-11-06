@@ -266,7 +266,9 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         if h == lo { st.anchor_id = anchor_id; }
         st.self_id = methods::METHOD_ID;
         st.profile = crate::lz::expected_profile();
-        std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
+        // atomic: a save point's state_<h>.json is the anchor a restart takes (round 9: a torn one after a power loss,
+        // with the stores already at h, left no state to restart from)
+        crate::lz::write_atomic(&format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap().as_bytes());
         if each || h == hi || (every > 0 && h % every == 0) {
             crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);
             crate::trie::trie_save(&format!("{out}/state_{h}.trie"));

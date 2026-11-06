@@ -1733,7 +1733,9 @@ pub(crate) fn seg_serve_cmd() {
                 for (i, want) in early_claims.iter().enumerate() {
                     for f in [format!("{dir}/chunk_{i}.hzk"), format!("{dir}/chunk_{i}.bin")] {
                         if !std::path::Path::new(&f).exists() { continue; }
-                        if early_claim_of(&f).as_ref() != Some(want) {
+                        // only a WHOLE receipt of another claim: a file that does not decode yet may be this block's
+                        // chunk still being copied in (round 9), and the wait below checks it
+                        if early_claim_of(&f).is_some_and(|d| d != *want) {
                             let to = format!("{f}.stale");
                             std::fs::rename(&f, &to).unwrap_or_else(|e| panic!("{f}: {e}"));
                             println!("  AGG_EARLY: {f} is not this block's chunk {i}: moved aside to {to}");
@@ -2524,7 +2526,9 @@ come back by itself. Start one against this coordinator, or re-run.");
         while ok.iter().any(|x| !x) {
             for i in 0..agg_nchunks {
                 if ok[i] { continue; }
-                let f = format!("{dir}/chunk_{i}.hzk");
+                // .hzk, or .bin as read_chunk_receipts falls back to (an older writer's name; round 9)
+                let hzk = format!("{dir}/chunk_{i}.hzk");
+                let f = if std::path::Path::new(&hzk).exists() { hzk } else { format!("{dir}/chunk_{i}.bin") };
                 if !std::path::Path::new(&f).exists() { continue; }
                 match early_claim_of(&f) {
                     Some(d) if d == early_claims[i] => ok[i] = true,

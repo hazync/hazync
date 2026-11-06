@@ -33,6 +33,7 @@ A WEAKER or NOT ENFORCED row is the kind that matters for soundness: a proof cou
 
 | row | status | what it means for a proof |
 |---|---|---|
+| A chain that forks below the image's checkpoint | **STRICTER** (by design) | Core v28 has no checkpoint above 295,000: a deeper reorg with more work is valid there. A libzync image pins one block (`checkpoint.rs`: mainnet 970,000 `…f29b5a07`, signet 325,000) and the aggregate refuses any other block at that height, so no proof exists for a chain branching below it (SWIFTSYNC_PROOFS.md step 3b). Liveness only, chosen: it is what lets a proof at or above it show it contains the real chain's checkpoint. Not a Core reject reason, so not counted in the 63 rows |
 | `bad-txns-oversize`, `bad-blk-length`, `bad-blk-weight` | **SAME** (was WEAKER, fixed) | On rv32 `size_t` is 32 bits, so `tx_check.cpp:20` wraps at a stripped size of 2^30, and Core's `GetTransactionWeight` (`consensus/validation.h:149`, `int32_t`) wraps the same way. The guest now refuses any transaction over 4,000,000 raw bytes before that arithmetic runs (`agg_lite.rs`, coinbase). Below that bound nothing wraps. It rejects nothing Core accepts: weight ≥ raw size, so such a transaction already fails `bad-blk-weight`. |
 | `bad-txns-BIP30`, non-coinbase transactions | **SAME** † (tested, rig `bip30_repeat_*`) | The tree tracks every transaction whose inputs are all repeatable coins, the only ones that can repeat: 173 on mainnet. Refused while it has unspent outputs, allowed once it has none, as in Core. |
 | `bad-txns-BIP30`, coinbases | **STRICTER** † on a chain that is not mainnet | Coinbases indicating a future height behave as in Core. An untracked coinbase repeated before BIP34 is refused even when fully spent, which Core allows. Mainnet has no such block: exactly two txids repeat, both grandfathered. Blocks at height 100,000,000 and above are refused. |
@@ -59,8 +60,9 @@ sigops, the script being satisfied, and which spends decrement the BIP30 tree. T
 
 `experimental/libzync-bench/core_rules/rig.py` runs real Bitcoin Core and the regtest guest on the same crafted blocks.
 Bitcoin Core 28.0, the release the guest compiles (`rig_v28.out`).
-95 cases: 94 agree, 1 (`missing_coin`, a coin that does not exist) is deferred to H by design (regtest guest `r15reg`,
-libzync `3d9526f`, 2026-11-02). Controls with no row: `valid_empty`, `valid_spend`.
+96 cases, 96 agree, none deferred, on c13 and on c14 (2026-11-06; `rig_c13.out`; RESULT_c14.txt): `missing_coin` is
+refused like every other spend of a coin that does not exist (the coin log at every block; the trie update's `Missing`).
+Controls with no row: `valid_empty`, `valid_spend`.
 
 The "Tested" columns name the cases that exercise a row, controls included. A case counts only if Core's answer in
 `rig_v28.out` is that row's reject reason. Four cases named for a rule do not meet that, so they are not counted for it:
@@ -145,8 +147,9 @@ Paths: `agg_lite.rs`, `main.rs`, `script_flags.rs`, `batch_ecdsa.rs` are in `pro
 and commits it (). The aggregate requires it (`agg_lite.rs`), gathers its own flags (`main.rs`) and asserts
 them all (`main.rs`). A failed assert means no receipt. Every chunk result is tied to the block by height, block
 hash, MTP and time (`agg_lite.rs`), and to the block's transactions by the merkle root and witness commitment.
-A libzync image accepts only modes 4, 5, 8, 9, 13, 15 and 16 (`main.rs`), so a `ChainState` can come only from the chunk
-and aggregate path. The older transcriptions still in `verify_input.cpp` and `main.rs` (`is_final_tx`, `check_input_locks`,
+A libzync image accepts only modes 4, 5, 8, 9, 10, 16, 17 and 18 (`main.rs`): chunk, aggregate, the trie update, the join
+and measurement / vector modes whose journals carry no chain-state kind tag. So a `ChainState` can come only from the
+aggregate (or a join of two of them). The older transcriptions still in `verify_input.cpp` and `main.rs` (`is_final_tx`, `check_input_locks`,
 `tx_full_sigops`, `check_witness_commitment`, `check_bip34`, `validate_block`) cannot produce one.
 
 ## Header and chain
@@ -255,9 +258,8 @@ Core's buried heights use `height >= value` (`deploymentstatus.h`). The flags go
 `GetBlockScriptFlags` (`validation.cpp:2361`), lifted, through `hz_block_flags`, `core_block_rules.cpp`, and `main.rs`.
 Its height table and exception table are Core's compiled chainparams, so `script_flags.rs` no longer decides anything in a
 libzync image. Two Rust gates remain: `BIP34_HEIGHT` (`main.rs`, used at `agg_lite.rs`) and `NET.csv_height`
-(`agg_lite.rs`). `assert_core_constants` (`main.rs`) pins the first to Core at start-up. It does not pin
-`NET.csv_height`: it compares `script_flags::CSV_HEIGHT` instead. The `NET` value equals Core's on mainnet, signet and regtest
-(`libzync/src/net.rs`) by reading only.
+(`agg_lite.rs`). `assert_core_constants` (`main.rs`) pins both to Core's compiled chainparams at start-up, with
+`NET`'s powLimit, BIP66, BIP65 and segwit heights and genesis.
 
 | rule | Core | mainnet | signet | where enforced in the guest | status | Tested |
 |---|---|---|---|---|---|---|
@@ -294,7 +296,7 @@ not that a case targets it.
 | Rust height gate and lock cutoff | `agg_lite.rs` | `locktime_time_*`, `bip68_*`. CSV is at height 1 on regtest, so the boundary is read only |
 | Chain linkage and state | `main.rs`: previous receipt, prevhash, height, MTP window, epoch start, chainwork (`add_work`) | `time_equal_mtp`, `bad_bits`. The rest: read only |
 | Verifier | `libzync_verify_cmd`, host `main.rs` | Not in the rig |
-| Network constants | `libzync/src/net.rs` | Regtest's values in every case. Mainnet's and signet's: `assert_core_constants`, and by reading for `csv_height` |
+| Network constants | `libzync/src/net.rs` | Regtest's values in every case. Mainnet's and signet's: `assert_core_constants` pins them to Core's chainparams |
 | Header shims | `coreshim/logging.h`, `sync.h`, `threadsafety.h`: they replace Core's own headers in every Core file compiled | Every case. They drop logging and locks; a lifted function's `LogPrintf` and `AssertLockHeld` compile to nothing |
 
 ## Rules left out on purpose
@@ -303,7 +305,7 @@ not that a case targets it.
 |---|---|
 | `time-too-new` | Depends on the node's clock. Core's test is lifted with `ContextualCheckBlockHeader` but its stand-in clock never reads past a block (`core_block_rules.cpp`). The guest commits the largest block time (`main.rs`); the verifier applies the 2-hour rule to it (§5 step 11, host `main.rs`), as Core does for every block during IBD |
 | Best chain, `too-little-chainwork` | A proof says a chain is valid, not that it has the most work: §5 step 7. `cum_work` is public in the journal (`add_work`, `verify_input.cpp`, transcribes `GetBlockProof`) |
-| `bad-fork-prior-to-checkpoint` | Core's checkpoints, last at 295,000 on mainnet, are node-level anti-DoS. Lifted, and off in the stand-in (`core_block_rules.cpp`). Covered in effect by §5 step 7 |
+| `bad-fork-prior-to-checkpoint` | Core's checkpoints, last at 295,000 on mainnet, are node-level anti-DoS. Lifted, and off in the stand-in (`core_block_rules.cpp`). The image's own checkpoint is a separate, STRICTER rule (the table above) |
 | `duplicate`, `inconclusive-*`, `BLOCK_MUTATED` retention | Node bookkeeping for blocks already seen, RPC strings, and not caching a mutated block as invalid |
 | `non-mandatory-script-verify-flag` | Mempool only. Every block flag is in `MANDATORY_SCRIPT_VERIFY_FLAGS` (`policy/policy.h:89`), so a block check can never produce it |
 | Core's `assumevalid` | A node setting. The guest's equivalent is the assumevalid image, stated in `profile` |
