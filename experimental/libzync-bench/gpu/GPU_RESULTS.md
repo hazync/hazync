@@ -34,7 +34,8 @@ from native prep (byte-identical to the proved chain), then a balanced tree of 7
 
 So recursion works with real receipts: env::verify, assumption resolution, and a joined receipt that can be joined
 again. A whole-chain backfill of ~975 k blocks needs ~975 k joins over ~20 levels, every level parallel; at 6.4 s a
-join that is ~1,700 card-hours of joins in total, i.e. a minor addition to the block proofs themselves.
+join that is ~1,700 PRO 6000 card-hours of joins in total (~$4.3k at $2.49/hr): roughly a tenth on top of the
+block proofs (the whole-chain estimate is ~$37-42k, an A40 estimate, not measured on c14).
 
 ⚠ The first pod's join hung after leaf 1: `gpu-join.sh` waited on every background job, including the nvidia-smi
 logger, which never exits (the laptop dry run has no nvidia-smi). Fixed in 6f00c58 and dry-run tested with a stand-in
