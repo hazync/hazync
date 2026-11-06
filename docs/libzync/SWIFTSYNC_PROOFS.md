@@ -57,7 +57,8 @@ below; step 7 needs a source you name (without one they print the tip hash to co
 
 1. `R.verify(M)`, where M is the published libzync image id for that network. ⚠ Until the freeze publishes the
    product ids (ROADMAP H7), the built-in table holds round-8 images whose journals do not decode as today's
-   `ChainState`: pass the id with `--image <hex>`.
+   `ChainState` and carry the round-8 profile: run `swiftsync-verify --product --image <hex>` (`--product` = profile bits
+   4-6, the coin log, trie and live-coin hash). `host libzync-verify` checks against the image it was built with.
 2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10012`, `J.version >= 2` and `J.self_id == M`. M is
    the **newest** image: after a handover the receipt verifies against the image that continued the chain.
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.

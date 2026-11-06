@@ -182,7 +182,7 @@ pinned at 101) continues 101–110. 15/15 cases as expected:
   handover; `lineage` equals `block_forest_ref.py`'s digest; the block forest at 100 and at 110 equals the reference
   over the real block hashes, and block 7 checks against both.
 
-**Cost on mainnet block 962,000** (`ab_962000.sh`, execute mode, 16 chunks, logs in `ab_962000/`). Baseline built from
+**Cost on mainnet block 962,000** (`experimental/libzync-bench/handover/ab_962000.sh`, execute mode, 16 chunks; its logs are not kept in the repo). Baseline built from
 `bf8e607` and the handover branch built in the same worktree path:
 
 | | bf8e607 | handover | difference |

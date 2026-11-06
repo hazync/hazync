@@ -38,7 +38,7 @@ s               = height u32 LE ‖ tx u32 LE ‖ vin u32 LE ‖ 20 zero bytes
 - An unspent leaf is the coin leaf of UTREEXO_FORMAT.md §2 (tag 0x00, a full SHA-256). A spent leaf is a compression
   output from another IV, so it never equals a coin leaf.
 
-Test vectors (`coinlog.rs` test `refusals`, from `coinlog_ref.py`): with x = SHA-256("c"), y = SHA-256("d"),
+Test vectors (`coinlog_forest.rs` test `refusals`, from `coinlog_ref.py`): with x = SHA-256("c"), y = SHA-256("d"),
 `spent(x, s(974000, 5, 1)) = cdcc3dda…388993e`, `parent(3, x, y) = fcd6a122…6c29f14f`.
 
 **Chain vector** (mainnet blocks 1..200, `coinlog_ref.py`, equal to the guest's proof in `handover/retest_c4.out`):

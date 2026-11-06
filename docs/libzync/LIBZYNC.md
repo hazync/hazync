@@ -184,7 +184,7 @@ aggregate has since gained the coin log, the trie receipt check and the live-coi
 |---|---|---|
 | Bitcoin Core v28.0, 22 translation units (23 on signet) | 7,061 | interpreter, sighash, transactions and serialisation, hashes, CheckTransaction, merkle, PoW and retarget, chainparams, signet solution |
 | libsecp256k1 v0.5.1 | 16,811 | every key and signature parse and check before the group equation; the full verify on fallback |
-| libzync patches | 2 (`patches/libzync/0101`, `0102`) | each `#ifdef`'d, each reviewed to compute the same bytes as Core |
+| libzync patches | 3 (`patches/libzync/0101`, `0102`, `0103` sha256 via the accelerator; `scripts/libzync-base.sh`) | each `#ifdef`'d, each reviewed to compute the same bytes as Core |
 
 Execution profile of block 962,000 (`cost/core_share.py`, cycles charged to the innermost non-runtime frame):
 chunks **46.7% Core C++**, 6.7% libsecp, 46.7% Hazync/libzync (of which the batch MSM 19%); the aggregate 0.8% Core,
@@ -226,7 +226,8 @@ signedness bug was in Hazync's own transcription.
 - **The image is not frozen.** Before it: a review of everything since round 6, the repo cleanup (G2), a full cold
   review of the cleaned repo; then the freeze is the user's call (ROADMAP H6-H7). Until the freeze publishes the
   product ids, the verifiers' built-in table (`reproduce/LIBZYNC_IDS`: `9f469930…` / `067822b9…`, round 8) verifies
-  nothing current: pass `--image <hex>`.
+  nothing current: `swiftsync-verify --product --image <hex>` (the built-in entries also carry the round-8 profile);
+  `host libzync-verify` checks against the image it was built with.
 - **No external audit or bug bounty** (ROADMAP I2): needed before anyone relies on a proof for money. Fuzzing and a
   wider rig are open (I1). Trust in risc0 itself: one pinned version (I3).
 - **The batch-signature soundness margin is untested at the edge:** x = r + n is infeasible for real r and effectively

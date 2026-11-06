@@ -22,8 +22,9 @@ Every reject string below came from reading the Core source, not from memory. Ev
 | N-A | 1 | The rule does not apply on mainnet or signet |
 | NOT FOUND | 0 | No enforcing code could be located |
 
-63 rows. 45 name a rig case, 18 are "read only". Counted for an image that checks scripts. Rows marked † are true only once
-the proof is closed at H (below).
+63 rows. Files of this repository are named without line numbers (they drift); Core v28.0's line numbers are
+exact. 45 name a rig case, 18 are "read only". Counted for an image that checks scripts. Rows marked † are rules on
+prevouts; they hold at every block (below).
 
 ### Every row that is not SAME
 
@@ -32,10 +33,10 @@ A WEAKER or NOT ENFORCED row is the kind that matters for soundness: a proof cou
 
 | row | status | what it means for a proof |
 |---|---|---|
-| `bad-txns-oversize`, `bad-blk-length`, `bad-blk-weight` | **SAME** (was WEAKER, fixed) | On rv32 `size_t` is 32 bits, so `tx_check.cpp:20` wraps at a stripped size of 2^30, and Core's `GetTransactionWeight` (`consensus/validation.h:149`, `int32_t`) wraps the same way. The guest now refuses any transaction over 4,000,000 raw bytes before that arithmetic runs (`agg_lite.rs:127`, coinbase `:470`). Below that bound nothing wraps. It rejects nothing Core accepts: weight ≥ raw size, so such a transaction already fails `bad-blk-weight`. |
+| `bad-txns-oversize`, `bad-blk-length`, `bad-blk-weight` | **SAME** (was WEAKER, fixed) | On rv32 `size_t` is 32 bits, so `tx_check.cpp:20` wraps at a stripped size of 2^30, and Core's `GetTransactionWeight` (`consensus/validation.h:149`, `int32_t`) wraps the same way. The guest now refuses any transaction over 4,000,000 raw bytes before that arithmetic runs (`agg_lite.rs`, coinbase). Below that bound nothing wraps. It rejects nothing Core accepts: weight ≥ raw size, so such a transaction already fails `bad-blk-weight`. |
 | `bad-txns-BIP30`, non-coinbase transactions | **SAME** † (tested, rig `bip30_repeat_*`) | The tree tracks every transaction whose inputs are all repeatable coins, the only ones that can repeat: 173 on mainnet. Refused while it has unspent outputs, allowed once it has none, as in Core. |
 | `bad-txns-BIP30`, coinbases | **STRICTER** † on a chain that is not mainnet | Coinbases indicating a future height behave as in Core. An untracked coinbase repeated before BIP34 is refused even when fully spent, which Core allows. Mainnet has no such block: exactly two txids repeat, both grandfathered. Blocks at height 100,000,000 and above are refused. |
-| Spending the coinbase coins of 91,722 and 91,812 | **STRICTER** (known) | These coins are never indexed, so a spend of one fails at H. Core allows the spend on a chain that holds the block but has not overwritten its coinbase. Mainnet never spent them. Only a fork reaches this, and no proof can be made for that fork |
+| Spending the coinbase coins of 91,722 and 91,812 | **STRICTER** (known) | These coins are never appended to the coin log (UTREEXO_FORMAT.md §3 rule 2), so a spend of one fails in the block that tries it. Core allows the spend on a chain that holds the block but has not overwritten its coinbase. Mainnet never spent them. Only a fork reaches this, and no proof can be made for that fork |
 | `bad-cb-amount` | **STRICTER** † (new, harmless) | The guest also requires subsidy + fees ≤ `MAX_MONEY`. Core does not check this. No chain reaches it: fees cannot exceed the coins already issued, and all subsidies together are below `MAX_MONEY` |
 | `time-timewarp-attack` | **N-A** | testnet4 and regtest only |
 
@@ -111,17 +112,16 @@ one must be reviewed (does Core reject after it?) before the guest builds. The h
 
 ## How to read the "where enforced" column
 
-The guest compiles these Core sources unmodified (`prover/methods/guest/build.rs:311-325`, plus `signet.cpp` on signet at
-`:388`): `script/interpreter.cpp`, `script/script.cpp`, `primitives/transaction.cpp`, `primitives/block.cpp`, `pubkey.cpp`,
+The guest compiles these Core sources unmodified (`prover/methods/guest/build.rs`, plus `signet.cpp` on signet at): `script/interpreter.cpp`, `script/script.cpp`, `primitives/transaction.cpp`, `primitives/block.cpp`, `pubkey.cpp`,
 `hash.cpp`, the `crypto/` hashes, `consensus/tx_check.cpp`, `consensus/merkle.cpp`, `arith_uint256.cpp`, `pow.cpp`,
 `chain.cpp`, `kernel/chainparams.cpp`. `consensus/tx_verify.cpp` is also compiled unmodified, by `#include` in
-`core_tx_rules.cpp:88`, so `IsFinalTx`, `Consensus::CheckTxInputs`, `SequenceLocks`, `GetTransactionSigOpCost` and
+`core_tx_rules.cpp`, so `IsFinalTx`, `Consensus::CheckTxInputs`, `SequenceLocks`, `GetTransactionSigOpCost` and
 `GetTransactionWeight` are Core's code, run per run of a transaction's inputs.
 
-It does **not** compile `validation.cpp` or `coins.cpp`. `build.rs:399-414` lifts six functions' text out of `validation.cpp`
+It does **not** compile `validation.cpp` or `coins.cpp`. `build.rs` lifts six functions' text out of `validation.cpp`
 and `pow.cpp` at build time into `core_extract.inc`, and the build fails if one is not found: `GetNextWorkRequired`,
 `GetBlockSubsidy`, `CheckWitnessMalleation`, `GetBlockScriptFlags`, `ContextualCheckBlockHeader`, `ContextualCheckBlock`.
-`core_block_rules.cpp:103` compiles them against the stand-ins listed in that file's header.
+`core_block_rules.cpp` compiles them against the stand-ins listed in that file's header.
 
 `CheckBlock` and `ConnectBlock` are **not** lifted: each walks a whole block, and no single guest run holds one. Their
 checks are composed instead. `CheckProofOfWork` and `CheckTransaction` are called directly, in a chunk or in the aggregate;
@@ -134,18 +134,18 @@ and the legacy `bad-blk-sigops` have no check of their own and follow from a tig
 | **Core lifted** | Text of a Core function extracted at build time and compiled, unedited, against our stand-ins |
 | **Core patched** | Core source with a patch from `patches/` in that file (listed at the end) |
 | **Glue** | Hand-written C++ using Core's types, in `verify_input.cpp` or the stand-ins of `core_tx_rules.cpp` and `core_block_rules.cpp` |
-| **Rust** | Guest Rust, `prover/methods/guest/src/` and `coinbase-smt/src/`. "(verifier)" marks Rust outside the guest: `libzync_verify_cmd`, host `main.rs:2015` |
+| **Rust** | Guest Rust, `prover/methods/guest/src/` and `coinbase-smt/src/`. "(verifier)" marks Rust outside the guest: `libzync_verify_cmd`, host `main.rs` |
 
 Paths: `agg_lite.rs`, `main.rs`, `script_flags.rs`, `batch_ecdsa.rs` are in `prover/methods/guest/src/`; `verify_input.cpp`,
-`core_tx_rules.cpp` and `core_block_rules.cpp` are in `prover/methods/guest/`; `bip30.rs` is in `coinbase-smt/src/`; "host
+`core_tx_rules.cpp` and `core_block_rules.cpp` are in `prover/methods/guest/`; `coinbase-smt/src/bip30.rs` is in `coinbase-smt/src/`; "host
 `main.rs`" is `prover/host/src/main.rs`; `validation.cpp`, `pow.cpp`, `signet.cpp`, `coins.cpp`, `tx_check.cpp`,
 `tx_verify.cpp`, `transaction.h`, `chain.h` and `chainparams.cpp` are Core's.
 
-**How a result takes effect.** A chunk folds every per-transaction result into `all_valid` (`main.rs:1897`, `:1901`, `:1967`)
-and commits it (`:1975`). The aggregate requires it (`agg_lite.rs:254`), gathers its own flags (`main.rs:2108`) and asserts
-them all (`main.rs:2131`). A failed assert means no receipt. Every chunk result is tied to the block by height, block
-hash, MTP and time (`agg_lite.rs:258`), and to the block's transactions by the merkle root and witness commitment.
-A libzync image accepts only modes 4, 5, 8, 9, 13, 15 and 16 (`main.rs:2173`), so a `ChainState` can come only from the chunk
+**How a result takes effect.** A chunk folds every per-transaction result into `all_valid` (`main.rs`)
+and commits it (). The aggregate requires it (`agg_lite.rs`), gathers its own flags (`main.rs`) and asserts
+them all (`main.rs`). A failed assert means no receipt. Every chunk result is tied to the block by height, block
+hash, MTP and time (`agg_lite.rs`), and to the block's transactions by the merkle root and witness commitment.
+A libzync image accepts only modes 4, 5, 8, 9, 13, 15 and 16 (`main.rs`), so a `ChainState` can come only from the chunk
 and aggregate path. The older transcriptions still in `verify_input.cpp` and `main.rs` (`is_final_tx`, `check_input_locks`,
 `tx_full_sigops`, `check_witness_commitment`, `check_bip34`, `validate_block`) cannot produce one.
 
@@ -153,43 +153,43 @@ and aggregate path. The older transcriptions still in `verify_input.cpp` and `ma
 
 | reject reason | rule | where enforced in the guest | status | Tested |
 |---|---|---|---|---|
-| `high-hash` | `nBits` decodes to a target that is positive, not overflowing and ≤ `powLimit`; block hash ≤ target. `validation.cpp:3913`, `pow.cpp:137` | **Core** `CheckProofOfWork`, through glue `check_pow`, `verify_input.cpp:626`, which hashes the header; called `agg_lite.rs:383` | SAME. Core's function and Core's `powLimit` | `high_hash` |
-| `bad-diffbits` | `nBits` equals `GetNextWorkRequired`: the parent's value inside an epoch, a retarget at each 2,016th height over the first and last timestamps of the epoch. `validation.cpp:4168`, `pow.cpp:13` | **Core lifted** `ContextualCheckBlockHeader` and `GetNextWorkRequired`, `core_block_rules.cpp:132`, called `main.rs:2116`; **Core** `CalculateNextWorkRequired` (`pow.cpp:49`) through glue `core_block_rules.cpp:86`, `calc_next_bits` `verify_input.cpp:967`. Epoch start `main.rs:2136` | SAME. Same first block as Core: height − 2,016, carried in `epoch_start` and answered by the stand-in's `GetAncestor`. The min-difficulty branch is now compiled, and dead on mainnet and signet (`chainparams.cpp:102`, `:463`) | `bad_bits`, inside an epoch only; the retarget is read only |
-| `time-too-old` | Block time > median of the last 11 timestamps ending at the parent. `validation.cpp:4184`, `chain.h:278` | **Core lifted** `ContextualCheckBlockHeader`; **Core** `CBlockIndex::GetMedianTimePast` through glue `hz_median_time_past`, `verify_input.cpp:1015`, `main.rs:1461`, `:2097`. **Rust** window `main.rs:2137-2139` | SAME | `time_equal_mtp`, `time_above_mtp` |
-| `bad-version(0x%08x)` | Version < 2 from BIP34, < 3 from BIP66, < 4 from BIP65, compared as signed `int32_t`. `validation.cpp:4204-4208` | **Core lifted** `ContextualCheckBlockHeader`. **Glue** `DeploymentActiveAfter`, `core_block_rules.cpp:78`, on Core's height table | SAME. Signed on both sides. The stand-in is Core's comparison without the version-bits cache | `bad_version`, `version_4`; the version 3 branch only |
-| `time-timewarp-attack` | Testnet4 and regtest only (`enforce_BIP94`). `validation.cpp:4188-4193` | **Core lifted**, compiled and dead: `enforce_BIP94 = false` on mainnet and signet (`chainparams.cpp:103`, `:464`) | N-A | read only |
-| `prev-blk-not-found` | The parent is known. `validation.cpp:4307` | **Rust** `main.rs:2109`: `hashPrevBlock` equals the verified previous state's tip | SAME | read only |
-| `bad-prevblk` | The parent is not invalid. `validation.cpp:4312`, `:4353` | **Rust** `main.rs:2079`: the previous state is a verified receipt, so an invalid parent has no receipt to build on | SAME | read only |
-| `bad-signet-blksig` | Signet: the block solution satisfies the challenge. `validation.cpp:4012-4013`, `signet.cpp:124` | **Core** `signet.cpp` through glue `hz_check_signet`, `verify_input.cpp:939`; called `agg_lite.rs:392-400` | SAME on signet, no such rule on mainnet. Non-coinbase transactions are placeholders with their txid seeded from the list the merkle check binds; `signet.cpp:57-64` reads only `GetHash()` from them. The signature runs through libsecp's own path: the aggregate installs no batch hints (`install` is called only at `main.rs:1798`) | read only |
+| `high-hash` | `nBits` decodes to a target that is positive, not overflowing and ≤ `powLimit`; block hash ≤ target. `validation.cpp:3913`, `pow.cpp:137` | **Core** `CheckProofOfWork`, through glue `check_pow`, `verify_input.cpp`, which hashes the header; called `agg_lite.rs` | SAME. Core's function and Core's `powLimit` | `high_hash` |
+| `bad-diffbits` | `nBits` equals `GetNextWorkRequired`: the parent's value inside an epoch, a retarget at each 2,016th height over the first and last timestamps of the epoch. `validation.cpp:4168`, `pow.cpp:13` | **Core lifted** `ContextualCheckBlockHeader` and `GetNextWorkRequired`, `core_block_rules.cpp`, called `main.rs`; **Core** `CalculateNextWorkRequired` (`pow.cpp:49`) through glue `core_block_rules.cpp`, `calc_next_bits` `verify_input.cpp`. Epoch start `main.rs` | SAME. Same first block as Core: height − 2,016, carried in `epoch_start` and answered by the stand-in's `GetAncestor`. The min-difficulty branch is now compiled, and dead on mainnet and signet (`chainparams.cpp:102`) | `bad_bits`, inside an epoch only; the retarget is read only |
+| `time-too-old` | Block time > median of the last 11 timestamps ending at the parent. `validation.cpp:4184`, `chain.h:278` | **Core lifted** `ContextualCheckBlockHeader`; **Core** `CBlockIndex::GetMedianTimePast` through glue `hz_median_time_past`, `verify_input.cpp`, `main.rs`. **Rust** window `main.rs` | SAME | `time_equal_mtp`, `time_above_mtp` |
+| `bad-version(0x%08x)` | Version < 2 from BIP34, < 3 from BIP66, < 4 from BIP65, compared as signed `int32_t`. `validation.cpp:4204-4208` | **Core lifted** `ContextualCheckBlockHeader`. **Glue** `DeploymentActiveAfter`, `core_block_rules.cpp`, on Core's height table | SAME. Signed on both sides. The stand-in is Core's comparison without the version-bits cache | `bad_version`, `version_4`; the version 3 branch only |
+| `time-timewarp-attack` | Testnet4 and regtest only (`enforce_BIP94`). `validation.cpp:4188-4193` | **Core lifted**, compiled and dead: `enforce_BIP94 = false` on mainnet and signet (`chainparams.cpp:103`) | N-A | read only |
+| `prev-blk-not-found` | The parent is known. `validation.cpp:4307` | **Rust** `main.rs`: `hashPrevBlock` equals the verified previous state's tip | SAME | read only |
+| `bad-prevblk` | The parent is not invalid. `validation.cpp:4312` | **Rust** `main.rs`: the previous state is a verified receipt, so an invalid parent has no receipt to build on | SAME | read only |
+| `bad-signet-blksig` | Signet: the block solution satisfies the challenge. `validation.cpp:4012-4013`, `signet.cpp:124` | **Core** `signet.cpp` through glue `hz_check_signet`, `verify_input.cpp`; called `agg_lite.rs` | SAME on signet, no such rule on mainnet. Non-coinbase transactions are placeholders with their txid seeded from the list the merkle check binds; `signet.cpp:57-64` reads only `GetHash()` from them. The signature runs through libsecp's own path: the aggregate installs no batch hints (`install` is called only at `main.rs`) | read only |
 
 ## Block structure: `CheckBlock`, `ContextualCheckBlock`
 
 | reject reason | rule | where enforced in the guest | status | Tested |
 |---|---|---|---|---|
-| `bad-txnmrklroot` | The header's merkle root equals the root over the txids. `validation.cpp:3925` | **Core** `ComputeMerkleRoot` (`consensus/merkle.cpp:45`, hash primitive patched) through glue `merkle_root`, `verify_input.cpp:711`; compared `agg_lite.rs:387`. The list is the coinbase txid, then each transaction's txid in chunk order (`agg_lite.rs:234`, `:275`) | SAME | `bad_merkle` |
-| `bad-txns-duplicate` | No mutation of the tree (CVE-2012-2459). `validation.cpp:3935` | **Core** `mutated` flag, `agg_lite.rs:387` | SAME. The guest also refuses any two equal txids (`agg_lite.rs:402-406`, `:415`). That rejects nothing new: Core refuses them as a double spend, and a transaction with no inputs fails `bad-txns-vin-empty` | read only, `txns_duplicate` |
+| `bad-txnmrklroot` | The header's merkle root equals the root over the txids. `validation.cpp:3925` | **Core** `ComputeMerkleRoot` (`consensus/merkle.cpp:45`, hash primitive patched) through glue `merkle_root`, `verify_input.cpp`; compared `agg_lite.rs`. The list is the coinbase txid, then each transaction's txid in chunk order (`agg_lite.rs`) | SAME | `bad_merkle` |
+| `bad-txns-duplicate` | No mutation of the tree (CVE-2012-2459). `validation.cpp:3935` | **Core** `mutated` flag, `agg_lite.rs` | SAME. The guest also refuses any two equal txids (`agg_lite.rs`). That rejects nothing new: Core refuses them as a double spend, and a transaction with no inputs fails `bad-txns-vin-empty` | read only, `txns_duplicate` |
 | `bad-blk-length` | At least one transaction; transaction count × 4 and stripped size × 4 ≤ 4,000,000. `validation.cpp:4028-4029` | No check of its own. **Core lifted** weight limit, as `bad-blk-weight`. The coinbase is always present | SAME (see above). Weight ≥ 4 × stripped size and each transaction is at least 60 bytes, so this holds whenever weight is computed without wrapping | `oversize_weight` |
-| `bad-cb-missing` | The first transaction is a coinbase. `validation.cpp:4033` | **Glue** `is_coinbase_tx` (`verify_input.cpp:760`, Core's `IsCoinBase`), `agg_lite.rs:444-445`. Its txid is the first merkle leaf (`:234`) | SAME | read only |
-| `bad-cb-multiple` | No other transaction is a coinbase. `validation.cpp:4036` | **Rust** `agg_lite.rs:104`, with glue `is_coinbase_tx`, on every run of every transaction | SAME | `cb_multiple`, `tx_null_prevout` |
-| `bad-blk-sigops` (legacy) | Legacy sigops × 4 ≤ 80,000. `validation.cpp:4055-4056` | No check of its own. **Rust** limit `agg_lite.rs:465` on **Core** `GetTransactionSigOpCost` | SAME. The ConnectBlock total below starts from the same legacy × 4 for every transaction, so it can only be larger | `sigops_limit`, `sigops_at_limit` |
-| `bad-txns-nonfinal` (nLockTime) | Every transaction, coinbase included, is final at this height and cutoff. The cutoff is the parent's MTP from CSV activation, the block time before it. `validation.cpp:4228-4238`, `tx_verify.cpp:17` | **Core** `IsFinalTx`, `core_tx_rules.cpp:110`, with **Rust** cutoff `agg_lite.rs:121`; **Core lifted** `ContextualCheckBlock` for the coinbase, `core_block_rules.cpp:170` | SAME. `height >= csv_height` is `DeploymentActiveAfter` | `locktime_height_future`, `locktime_height_ok`, `locktime_final_seq`, `locktime_time_mtp`, `locktime_time_past`; the coinbase path is read only |
-| `bad-cb-height` | From BIP34, the coinbase scriptSig starts with `CScript() << height`. `validation.cpp:4242-4248` | **Core lifted** `ContextualCheckBlock`, called `agg_lite.rs:462` | SAME. Mainnet 227,931, signet 1 | `cb_wrong_height` |
-| `unexpected-witness` | No transaction has a witness unless the block carries a valid commitment. `validation.cpp:3989` | **Core lifted** `CheckWitnessMalleation`. **Glue** `core_block_rules.cpp:157-162`: one stand-in transaction with a witness says "another transaction has one". `has_witness` covers the coinbase (`agg_lite.rs:236`) and every transaction (`:277`) | SAME | `witness_no_commit`, `no_commit_no_witness` |
+| `bad-cb-missing` | The first transaction is a coinbase. `validation.cpp:4033` | **Glue** `is_coinbase_tx` (`verify_input.cpp`, Core's `IsCoinBase`), `agg_lite.rs`. Its txid is the first merkle leaf () | SAME | read only |
+| `bad-cb-multiple` | No other transaction is a coinbase. `validation.cpp:4036` | **Rust** `agg_lite.rs`, with glue `is_coinbase_tx`, on every run of every transaction | SAME | `cb_multiple`, `tx_null_prevout` |
+| `bad-blk-sigops` (legacy) | Legacy sigops × 4 ≤ 80,000. `validation.cpp:4055-4056` | No check of its own. **Rust** limit `agg_lite.rs` on **Core** `GetTransactionSigOpCost` | SAME. The ConnectBlock total below starts from the same legacy × 4 for every transaction, so it can only be larger | `sigops_limit`, `sigops_at_limit` |
+| `bad-txns-nonfinal` (nLockTime) | Every transaction, coinbase included, is final at this height and cutoff. The cutoff is the parent's MTP from CSV activation, the block time before it. `validation.cpp:4228-4238`, `tx_verify.cpp:17` | **Core** `IsFinalTx`, `core_tx_rules.cpp`, with **Rust** cutoff `agg_lite.rs`; **Core lifted** `ContextualCheckBlock` for the coinbase, `core_block_rules.cpp` | SAME. `height >= csv_height` is `DeploymentActiveAfter` | `locktime_height_future`, `locktime_height_ok`, `locktime_final_seq`, `locktime_time_mtp`, `locktime_time_past`; the coinbase path is read only |
+| `bad-cb-height` | From BIP34, the coinbase scriptSig starts with `CScript() << height`. `validation.cpp:4242-4248` | **Core lifted** `ContextualCheckBlock`, called `agg_lite.rs` | SAME. Mainnet 227,931, signet 1 | `cb_wrong_height` |
+| `unexpected-witness` | No transaction has a witness unless the block carries a valid commitment. `validation.cpp:3989` | **Core lifted** `CheckWitnessMalleation`. **Glue** `core_block_rules.cpp`: one stand-in transaction with a witness says "another transaction has one". `has_witness` covers the coinbase (`agg_lite.rs`) and every transaction () | SAME | `witness_no_commit`, `no_commit_no_witness` |
 | `bad-witness-nonce-size` | With a commitment, the coinbase witness is one 32-byte item. `validation.cpp:3962` | **Core lifted** `CheckWitnessMalleation`, on the real coinbase | SAME. Checked whenever a commitment output exists, even with no witness in the block, as in Core | `nonce_too_big_witness` |
-| `bad-witness-merkle-match` | The last matching output (at least 38 bytes, prefix `6a24aa21a9ed`) holds SHA256d(witness root ‖ reserved value). `validation.cpp:3975` | **Core lifted** `CheckWitnessMalleation`. **Glue** `hz_witness_root`, `core_block_rules.cpp:93`, over the chunks' wtxids (`agg_lite.rs:276`) with **Core** `ComputeMerkleRoot` | SAME. Coinbase leaf zero, as in `BlockWitnessMerkleRoot`. Every run of a transaction commits the wtxid and they must agree (`agg_lite.rs:290`) | `witness_mismatch`, `merkle_mutated` |
-| `bad-blk-weight` | Block weight ≤ 4,000,000, at every height. `validation.cpp:4271` | **Core lifted** limit in `ContextualCheckBlock`. **Glue** `GetBlockWeight` answered from the block total, `core_block_rules.cpp:101`. **Rust** total `agg_lite.rs:279`, `:455-459`, of **Core** `GetTransactionWeight`, `core_tx_rules.cpp:143`, `:154` | SAME (see above). `3×stripped + total` per transaction plus `4 × (80 + CompactSize(n))` equals `GetBlockWeight`. Each term is 32-bit here and the size bound keeps it from wrapping | `weight_over`, `weight_under` |
+| `bad-witness-merkle-match` | The last matching output (at least 38 bytes, prefix `6a24aa21a9ed`) holds SHA256d(witness root ‖ reserved value). `validation.cpp:3975` | **Core lifted** `CheckWitnessMalleation`. **Glue** `hz_witness_root`, `core_block_rules.cpp`, over the chunks' wtxids (`agg_lite.rs`) with **Core** `ComputeMerkleRoot` | SAME. Coinbase leaf zero, as in `BlockWitnessMerkleRoot`. Every run of a transaction commits the wtxid and they must agree (`agg_lite.rs`) | `witness_mismatch`, `merkle_mutated` |
+| `bad-blk-weight` | Block weight ≤ 4,000,000, at every height. `validation.cpp:4271` | **Core lifted** limit in `ContextualCheckBlock`. **Glue** `GetBlockWeight` answered from the block total, `core_block_rules.cpp`. **Rust** total `agg_lite.rs`, of **Core** `GetTransactionWeight`, `core_tx_rules.cpp` | SAME (see above). `3×stripped + total` per transaction plus `4 × (80 + CompactSize(n))` equals `GetBlockWeight`. Each term is 32-bit here and the size bound keeps it from wrapping | `weight_over`, `weight_under` |
 
 ## Transactions: `CheckTransaction`
 
 All nine run Core's `consensus/tx_check.cpp`, unchanged. The run holding input 0 calls it in `hz_tx_rules`
-(`core_tx_rules.cpp:109`, from `agg_lite.rs:124`) for each non-coinbase transaction; the aggregate runs it for the coinbase
-through glue `check_tx` (`verify_input.cpp:582`, from `agg_lite.rs:441`).
+(`core_tx_rules.cpp`, from `agg_lite.rs`) for each non-coinbase transaction; the aggregate runs it for the coinbase
+through glue `check_tx` (`verify_input.cpp`, from `agg_lite.rs`).
 
 | reject reason | rule | where enforced in the guest | status | Tested |
 |---|---|---|---|---|
 | `bad-txns-vin-empty` | At least one input | **Core** `tx_check.cpp:15` | SAME | read only |
 | `bad-txns-vout-empty` | At least one output | **Core** `tx_check.cpp:17` | SAME | `tx_no_outputs` |
-| `bad-txns-oversize` | Stripped size × 4 ≤ 4,000,000 | **Core** `tx_check.cpp:20` | SAME (see above). On rv32 this `size_t` product would wrap at 2^30 bytes; `agg_lite.rs:127` refuses first | read only |
+| `bad-txns-oversize` | Stripped size × 4 ≤ 4,000,000 | **Core** `tx_check.cpp:20` | SAME (see above). On rv32 this `size_t` product would wrap at 2^30 bytes; `agg_lite.rs` refuses first | read only |
 | `bad-txns-vout-negative` | No negative output value | **Core** `tx_check.cpp:28` | SAME | `tx_negative_out` |
 | `bad-txns-vout-toolarge` | No output above `MAX_MONEY` | **Core** `tx_check.cpp:30` | SAME | `tx_huge_out` |
 | `bad-txns-txouttotal-toolarge` | Output total stays in range | **Core** `tx_check.cpp:33` | SAME | `tx_total_huge` |
@@ -199,65 +199,65 @@ through glue `check_tx` (`verify_input.cpp:582`, from `agg_lite.rs:441`).
 
 ## Coins and block totals: `ConnectBlock`, `CheckTxInputs`
 
-`hz_tx_rules` (`core_tx_rules.cpp:93`) calls Core's `CheckTxInputs` and `SequenceLocks` once per run of a transaction's inputs.
-Every run sees all the transaction's prevouts, tied together by their hash (`agg_lite.rs:290`), but only its own coins'
+`hz_tx_rules` (`core_tx_rules.cpp`) calls Core's `CheckTxInputs` and `SequenceLocks` once per run of a transaction's inputs.
+Every run sees all the transaction's prevouts, tied together by their hash (`agg_lite.rs`), but only its own coins'
 height, coinbase flag and MTP. Each input belongs to exactly one run, so the runs together cover the transaction.
 
 | reject reason | rule | where enforced in the guest | status | Tested |
 |---|---|---|---|---|
-| `bad-txns-BIP30` (coinbase) † | A coinbase may not create an outpoint that is still unspent. Skipped at 91,842 and 91,880, and from 227,932 to 1,983,701 on a chain through the BIP34 block. `validation.cpp:2505-2575` | **Rust** `bip30.rs:165`: the slot must be absent or `REPEATABLE`. Tracked or not: `agg_lite.rs:214-217` | STRICTER (see above). The guest has no skip window. In it Core's comment (`validation.cpp:2522-2523`, `:2539`) leaves only 490,897, indicated by 176,684's coinbase, spent at 185,956: `REPEATABLE`, allowed on both sides | read only. The rig's base chain stages allowed repeats at 130 and 131; no case repeats a coinbase while unspent |
-| `bad-txns-BIP30` (non-coinbase) † | A non-coinbase transaction may not create an outpoint that is still unspent. Same conditions | **Rust** `bip30.rs:191`, tracked transactions; `agg_lite.rs:94`, `:268`, `:286` derive which they are | SAME. Whether a coin is tracked comes from its leaf flag, so this rests on H | `bip30_repeat_unspent`, `bip30_repeat_spent`, `bip30_child_of_repeat` |
-| `bad-txns-inputs-missingorspent` † | Every input spends an unspent coin. For a coin made in this block: an earlier transaction made it. `tx_verify.cpp:168` | **Rust**: unknown or already spent coin: `swiftsync::sub`, `agg_lite.rs:365`, then **Rust** (verifier) `ss_set == 0`, host `main.rs:2071`. Same coin twice in a block: `agg_lite.rs:339-346`. In-block order and single spend: `:351-352`. Coin claiming a later height: `:117`. Coin claiming this height that this block does not create: `:361-364`. Core's `HaveInputs` runs but its stand-in cannot refuse a real input, `core_tx_rules.cpp:52` | SAME † | `double_spend_in_block`, `spend_later_in_block`, `chain_in_block`; `missing_coin` is deferred: Core refuses, the guest accepts the block and the rig stops short of H |
-| `bad-txns-premature-spend-of-coinbase` † | A coinbase coin waits 100 blocks. `tx_verify.cpp:180` | **Core** `CheckTxInputs`, `core_tx_rules.cpp:115`, on this run's coins. **Rust** flag ≤ 3, `agg_lite.rs:117`; height and flag bound by the leaf (`verify_input.cpp:94`) | SAME †. Signet is also 100 | `premature`, `one_short_of_mature`, `exactly_mature` |
+| `bad-txns-BIP30` (coinbase) † | A coinbase may not create an outpoint that is still unspent. Skipped at 91,842 and 91,880, and from 227,932 to 1,983,701 on a chain through the BIP34 block. `validation.cpp:2505-2575` | **Rust** `coinbase-smt/src/bip30.rs`: the slot must be absent or `REPEATABLE`. Tracked or not: `agg_lite.rs` | STRICTER (see above). The guest has no skip window. In it Core's comment (`validation.cpp:2522-2523`) leaves only 490,897, indicated by 176,684's coinbase, spent at 185,956: `REPEATABLE`, allowed on both sides | read only. The rig's base chain stages allowed repeats at 130 and 131; no case repeats a coinbase while unspent |
+| `bad-txns-BIP30` (non-coinbase) † | A non-coinbase transaction may not create an outpoint that is still unspent. Same conditions | **Rust** `coinbase-smt/src/bip30.rs`, tracked transactions; `agg_lite.rs` derive which they are | SAME. Whether a coin is tracked comes from its leaf flag, opened against the coin log at every block | `bip30_repeat_unspent`, `bip30_repeat_spent`, `bip30_child_of_repeat` |
+| `bad-txns-inputs-missingorspent` † | Every input spends an unspent coin. For a coin made in this block: an earlier transaction made it. `tx_verify.cpp:168` | **Rust**: unknown or already spent coin: its unspent leaf is opened at its position against the coin log's roots (`libzync/src/coinlog_forest.rs`), and the trie update marks it (`libzync/src/ttree.rs`: `Missing`). Same coin twice in a block: `agg_lite.rs`. In-block order and single spend:. Coin claiming a later height:. Coin claiming this height that this block does not create:. Core's `HaveInputs` runs but its stand-in cannot refuse a real input, `core_tx_rules.cpp` | SAME † | `double_spend_in_block`, `spend_later_in_block`, `chain_in_block`; `missing_coin`, `spend_spent_coinbase` (refused: the trie update's `Missing`) |
+| `bad-txns-premature-spend-of-coinbase` † | A coinbase coin waits 100 blocks. `tx_verify.cpp:180` | **Core** `CheckTxInputs`, `core_tx_rules.cpp`, on this run's coins. **Rust** flag ≤ 3, `agg_lite.rs`; height and flag bound by the leaf (`verify_input.cpp`) | SAME †. Signet is also 100 | `premature`, `one_short_of_mature`, `exactly_mature` |
 | `bad-txns-inputvalues-outofrange` † | Each input value and the running sum stay in `MoneyRange`. `tx_verify.cpp:187` | **Core** `CheckTxInputs` | SAME † | read only |
 | `bad-txns-in-belowout` † | Inputs ≥ outputs. `tx_verify.cpp:193` | **Core** `CheckTxInputs` | SAME † | `in_below_out`, `valid_zero_fee` |
 | `bad-txns-fee-outofrange` † | Fee in `MoneyRange`. `tx_verify.cpp:200` | **Core** `CheckTxInputs` | SAME † | read only |
-| `bad-txns-accumulated-fee-outofrange` † | The block's running fee stays in `MoneyRange`. `validation.cpp:2632` | **Rust** `agg_lite.rs:278`, `:449` | SAME †. Checks the final sum, not each step. Every fee is ≥ 0, so the sum only grows and the two agree | read only |
-| `bad-txns-nonfinal` (BIP68) † | From CSV, for version ≥ 2 and disable bit clear, each input's relative lock has passed. `validation.cpp:2645`, `tx_verify.cpp:39-108` | **Core** `SequenceLocks`, `core_tx_rules.cpp:131`, `:138`. **Rust** height gate `agg_lite.rs:126`. **Glue** block index `core_tx_rules.cpp:65-86`: `GetAncestor` answers from the coin's leaf-committed MTP | SAME †. Version is unsigned on both sides (`transaction.h:308`). The coin's MTP is the one `GetAncestor(coin − 1)` gives, and the leaf commits it. A coin made in this block uses this block's parent MTP, as in Core. In a split transaction, inputs outside the run are given `SEQUENCE_FINAL`, which Core's code skips (`core_tx_rules.cpp:133-138`) | `bip68_height_unmet`, `bip68_height_met`, `bip68_time_unmet`, `bip68_time_met`, `bip68_disabled`, `bip68_v1_ignored`, `bip68_uint_version`, `split_tx`, `split_tx_bad` |
-| `bad-blk-sigops` (cost) † | Sum of legacy × 4 + P2SH × 4 + witness sigops ≤ 80,000; coinbase legacy only. `validation.cpp:2656`, `tx_verify.cpp:145` | **Core** `GetTransactionSigOpCost`, `core_tx_rules.cpp:144`, `:150`; **Rust** sum and limit `agg_lite.rs:280`, `:456`, `:465` | SAME †. Same flags: `GetBlockScriptFlags`, in chunk and aggregate | `sigops_witness_over`, `sigops_witness_under`, `sigops_p2sh_over`, `sigops_p2sh_under` |
-| `bad-cb-amount` † | Coinbase value ≤ fees + subsidy. `validation.cpp:2689-2692` | **Rust** `agg_lite.rs:447-453`; **Core lifted** `GetBlockSubsidy`, `core_block_rules.cpp:108`; **Glue** `coinbase_value`, `verify_input.cpp:723` | STRICTER, unreachable. The limit itself is the same. The guest adds subsidy + fees ≤ `MAX_MONEY` | `cb_overpay`, `cb_fee_too_much`, `cb_exact` |
-| `mandatory-script-verify-flag-failed (…)` † | Every input's script passes `VerifyScript` with the block's flags. `validation.cpp:2208` | **Core patched** `script/interpreter.cpp` through glue `verify_inputs_batch_once`, `verify_input.cpp:1200-1211`, `main.rs:1875`; result `agg_lite.rs:143` | SAME †. Same flags (table below). The interpreter's own script errors are not listed: the file is compiled with only the hunks at the end of this document | read only |
+| `bad-txns-accumulated-fee-outofrange` † | The block's running fee stays in `MoneyRange`. `validation.cpp:2632` | **Rust** `agg_lite.rs` | SAME †. Checks the final sum, not each step. Every fee is ≥ 0, so the sum only grows and the two agree | read only |
+| `bad-txns-nonfinal` (BIP68) † | From CSV, for version ≥ 2 and disable bit clear, each input's relative lock has passed. `validation.cpp:2645`, `tx_verify.cpp:39-108` | **Core** `SequenceLocks`, `core_tx_rules.cpp`. **Rust** height gate `agg_lite.rs`. **Glue** block index `core_tx_rules.cpp`: `GetAncestor` answers from the coin's leaf-committed MTP | SAME †. Version is unsigned on both sides (`transaction.h:308`). The coin's MTP is the one `GetAncestor(coin − 1)` gives, and the leaf commits it. A coin made in this block uses this block's parent MTP, as in Core. In a split transaction, inputs outside the run are given `SEQUENCE_FINAL`, which Core's code skips (`core_tx_rules.cpp`) | `bip68_height_unmet`, `bip68_height_met`, `bip68_time_unmet`, `bip68_time_met`, `bip68_disabled`, `bip68_v1_ignored`, `bip68_uint_version`, `split_tx`, `split_tx_bad` |
+| `bad-blk-sigops` (cost) † | Sum of legacy × 4 + P2SH × 4 + witness sigops ≤ 80,000; coinbase legacy only. `validation.cpp:2656`, `tx_verify.cpp:145` | **Core** `GetTransactionSigOpCost`, `core_tx_rules.cpp`; **Rust** sum and limit `agg_lite.rs` | SAME †. Same flags: `GetBlockScriptFlags`, in chunk and aggregate | `sigops_witness_over`, `sigops_witness_under`, `sigops_p2sh_over`, `sigops_p2sh_under` |
+| `bad-cb-amount` † | Coinbase value ≤ fees + subsidy. `validation.cpp:2689-2692` | **Rust** `agg_lite.rs`; **Core lifted** `GetBlockSubsidy`, `core_block_rules.cpp`; **Glue** `coinbase_value`, `verify_input.cpp` | STRICTER, unreachable. The limit itself is the same. The guest adds subsidy + fees ≤ `MAX_MONEY` | `cb_overpay`, `cb_fee_too_much`, `cb_exact` |
+| `mandatory-script-verify-flag-failed (…)` † | Every input's script passes `VerifyScript` with the block's flags. `validation.cpp:2208` | **Core patched** `script/interpreter.cpp` through glue `verify_inputs_batch_once`, `verify_input.cpp`, `main.rs`; result `agg_lite.rs` | SAME †. Same flags (table below). The interpreter's own script errors are not listed: the file is compiled with only the hunks at the end of this document | read only |
 | `block-validation-failed` † | The same failure, as reported with parallel script threads. `validation.cpp:2697` | As above | SAME † | `script_fails`, `sig_p2wpkh_bad`, `sig_not_der`, `sig_zero_r`, `sig_p2pkh_other_key`, `multisig_order`, `multisig_dummy`, `sig_must_fail_but_good`, `taproot_key_bad`, `taproot_tweak_parity`, `taproot_script_bad_sig` |
 
 ## Rules with no reject string
 
 | rule | Core | where enforced in the guest | status | Tested |
 |---|---|---|---|---|
-| Transaction parsing | `transaction.h:216-254`: canonical CompactSize, superfluous witness and unknown flag rejected. A failed parse means no block | **Core patched** `UnserializeTransaction` (`serialize.h` gains 32-bit `int` overloads; parsing unchanged), through glue `cached_tx`, `verify_input.cpp:219`. A failed parse aborts: no proof | SAME | read only. `tx_no_inputs` stops at the host's parser |
-| Block height | From the block index | **Rust** `main.rs:2093`: exactly previous height + 1 | SAME | read only |
-| Genesis and its coinbase | `validation.cpp:2451` skips genesis's transactions; its coin never exists | **Rust** (verifier) §5 step 3, host `main.rs:2059`: the proof must start from `genesis_anchor`, host `main.rs:1280`, with an empty forest and `recent_times = [genesis time]`. The guest commits the digest of its base state at `main.rs:2096` | SAME | read only |
-| Unspendable outputs never become coins | `coins.cpp:72`: OP_RETURN, or script over 10,000 bytes | **Core** `IsUnspendable` in glue `tx_out_leaves`, `verify_input.cpp:358` | SAME | read only |
-| Grandfathered coinbases 91,842 and 91,880 | `validation.cpp:6304`, height and hash | **Rust** `agg_lite.rs:201`, `:414`, `bip30.rs:180`; hashes `main.rs:334-335` (checked equal to Core's) | SAME. The hash alone fixes the height | read only |
-| Spending the coinbase coins of 91,722 and 91,812 | Ordinary coins until overwritten. `IsBIP30Unspendable` (`validation.cpp:6310`) is not consensus code: only `coinstatsindex.cpp` calls it | **Rust** `agg_lite.rs:223`: never indexed, so a spend fails at H | STRICTER. Same final set as Core on the real chain, where neither was spent. Keyed on height and hash, so signet is unaffected | read only |
+| Transaction parsing | `transaction.h:216-254`: canonical CompactSize, superfluous witness and unknown flag rejected. A failed parse means no block | **Core patched** `UnserializeTransaction` (`serialize.h` gains 32-bit `int` overloads; parsing unchanged), through glue `cached_tx`, `verify_input.cpp`. A failed parse aborts: no proof | SAME | read only. `tx_no_inputs` stops at the host's parser |
+| Block height | From the block index | **Rust** `main.rs`: exactly previous height + 1 | SAME | read only |
+| Genesis and its coinbase | `validation.cpp:2451` skips genesis's transactions; its coin never exists | **Rust** (verifier) §5 step 3, host `main.rs`: the proof must start from `genesis_anchor`, host `main.rs`, with an empty forest and `recent_times = [genesis time]`. The guest commits the digest of its base state at `main.rs` | SAME | read only |
+| Unspendable outputs never become coins | `coins.cpp:72`: OP_RETURN, or script over 10,000 bytes | **Core** `IsUnspendable` in glue `tx_out_leaves`, `verify_input.cpp` | SAME | read only |
+| Grandfathered coinbases 91,842 and 91,880 | `validation.cpp:6304`, height and hash | **Rust** `agg_lite.rs`, `coinbase-smt/src/bip30.rs`; hashes `main.rs` (checked equal to Core's) | SAME. The hash alone fixes the height | read only |
+| Spending the coinbase coins of 91,722 and 91,812 | Ordinary coins until overwritten. `IsBIP30Unspendable` (`validation.cpp:6310`) is not consensus code: only `coinstatsindex.cpp` calls it | **Rust** `agg_lite.rs`: never appended to the coin log, so a spend fails in the block that tries it | STRICTER. Same final set as Core on the real chain, where neither was spent. Keyed on height and hash, so signet is unaffected | read only |
 | 64-byte transactions | No consensus rule in v28. `IsBlockMutated` (`validation.cpp:4109`) is called only from `net_processing.cpp`, and tests for them only in a block with no coinbase | None | SAME. Neither side rejects them. The txid list a proof uses is bound by the merkle root, with the same inner-node ambiguity Core has | `tx_64_bytes` |
 
 ## Signatures
 
 Each check is hooked in libsecp after its own parsing and range checks (`patches/libzync/0102`). If the hook returns 0, libsecp
 verifies as usual (**Core patched**). If it returns 1, the check joins the chunk's batch, `finish()` runs before the chunk
-commits (`main.rs:1967`), and a failure clears `all_valid`. In collect mode no check joins a batch: every one runs in libsecp.
+commits (`main.rs`), and a failure clears `all_valid`. In collect mode no check joins a batch: every one runs in libsecp.
 
 **The hint cannot change a result.** A hint can send a signature to libsecp, or make the batch fail. Valid bit 0, a
 missing hint, or a hint failing the tests below means libsecp decides. Valid bit 1 on a signature libsecp would reject
 means the batch equation fails. The weights are 128-bit, drawn from a hash of every (u1, u2, Q, R) in the batch
-(`batch_ecdsa.rs:167-192`), so a false equation passes with probability about 2^-128 per attempt. The result of
-each coprocessor point operation is asserted canonical (`batch_ecdsa.rs:273`, `:281`).
+(`batch_ecdsa.rs`), so a false equation passes with probability about 2^-128 per attempt. The result of
+each coprocessor point operation is asserted canonical (`batch_ecdsa.rs`).
 
 | check | libsecp accepts when | batch accepts when (`batch_ecdsa.rs`) | status | Tested |
 |---|---|---|---|---|
-| ECDSA | r, s ≠ 0 and x(u1·G + u2·Q) mod n == r (`ecdsa_impl.h`, including the `r + n` case). Core normalises s first | `:92-96` computes u1, u2 from the same scalars; R on the curve with canonical coordinates (`:114-118`); `x(R) mod n == r` (`:125`); u1·G + u2·Q == R in the batch | SAME. x < p < 2n makes `mod n` the same two cases libsecp tests. R at infinity has no affine hint, so it falls to libsecp, which rejects | `sig_p2wpkh`, `sig_p2wpkh_bad`, `sig_high_s`, `sig_not_der`, `sig_zero_r`, `sig_p2pkh`, `sig_p2pkh_other_key`, `multisig_ok`, `multisig_order`, `sig_must_fail`, `sig_must_fail_but_good` |
-| BIP340 Schnorr | s < n, r_x < p, x on the curve; s·G − e·P has even y and x == r_x | Hook after those checks, with libsecp's own e; `rx == r` and even y (`:127`) | SAME | `taproot_key`, `taproot_key_bad`, `taproot_script`, `taproot_script_bad_sig` |
-| BIP341 tweak | t < n; P + t·G has x == the output key and the committed parity | t ≥ n, x ≥ p or a bad parity value skip the hook (`0102`); `rx == r` and parity (`:129`) | SAME | `taproot_tweak_parity`, `taproot_script` |
+| ECDSA | r, s ≠ 0 and x(u1·G + u2·Q) mod n == r (`ecdsa_impl.h`, including the `r + n` case). Core normalises s first | computes u1, u2 from the same scalars; R on the curve with canonical coordinates (); `x(R) mod n == r` (); u1·G + u2·Q == R in the batch | SAME. x < p < 2n makes `mod n` the same two cases libsecp tests. R at infinity has no affine hint, so it falls to libsecp, which rejects | `sig_p2wpkh`, `sig_p2wpkh_bad`, `sig_high_s`, `sig_not_der`, `sig_zero_r`, `sig_p2pkh`, `sig_p2pkh_other_key`, `multisig_ok`, `multisig_order`, `sig_must_fail`, `sig_must_fail_but_good` |
+| BIP340 Schnorr | s < n, r_x < p, x on the curve; s·G − e·P has even y and x == r_x | Hook after those checks, with libsecp's own e; `rx == r` and even y () | SAME | `taproot_key`, `taproot_key_bad`, `taproot_script`, `taproot_script_bad_sig` |
+| BIP341 tweak | t < n; P + t·G has x == the output key and the committed parity | t ≥ n, x ≥ p or a bad parity value skip the hook (`0102`); `rx == r` and parity () | SAME | `taproot_tweak_parity`, `taproot_script` |
 
 ## Soft-fork activation
 
 Core's buried heights use `height >= value` (`deploymentstatus.h`). The flags go to `VerifyScript` from Core's own
-`GetBlockScriptFlags` (`validation.cpp:2361`), lifted, through `hz_block_flags`, `core_block_rules.cpp:110`, and `main.rs:83`.
+`GetBlockScriptFlags` (`validation.cpp:2361`), lifted, through `hz_block_flags`, `core_block_rules.cpp`, and `main.rs`.
 Its height table and exception table are Core's compiled chainparams, so `script_flags.rs` no longer decides anything in a
-libzync image. Two Rust gates remain: `BIP34_HEIGHT` (`main.rs:332`, used at `agg_lite.rs:215`) and `NET.csv_height`
-(`agg_lite.rs:121`, `:126`). `assert_core_constants` (`main.rs:291-316`) pins the first to Core at start-up. It does not pin
+libzync image. Two Rust gates remain: `BIP34_HEIGHT` (`main.rs`, used at `agg_lite.rs`) and `NET.csv_height`
+(`agg_lite.rs`). `assert_core_constants` (`main.rs`) pins the first to Core at start-up. It does not pin
 `NET.csv_height`: it compares `script_flags::CSV_HEIGHT` instead. The `NET` value equals Core's on mainnet, signet and regtest
-(`libzync/src/net.rs:32`, `:50`, `:64`) by reading only.
+(`libzync/src/net.rs`) by reading only.
 
 | rule | Core | mainnet | signet | where enforced in the guest | status | Tested |
 |---|---|---|---|---|---|---|
@@ -268,12 +268,12 @@ libzync image. Two Rust gates remain: `BIP34_HEIGHT` (`main.rs:332`, used at `ag
 | BIP66 DERSIG | `BIP66Height` | 363,725 | 1 | **Core lifted** `GetBlockScriptFlags`, `ContextualCheckBlockHeader` | SAME | `sig_not_der` |
 | BIP65 CLTV | `BIP65Height` | 388,381 | 1 | **Core lifted** `GetBlockScriptFlags`, `ContextualCheckBlockHeader` | SAME | `bad_version`, the version gate only; `cltv_future` (`OP_CHECKLOCKTIMEVERIFY` unmet), `cltv_met` |
 | BIP112 CSV | `CSVHeight` | 419,328 | 1 | **Core lifted** `GetBlockScriptFlags` | SAME | `csv_op_met`. `csv_op_unmet` is refused first by BIP68 (`bad-txns-nonfinal`), so a failing `OP_CHECKSEQUENCEVERIFY` is read only |
-| BIP68 sequence locks | `CSVHeight` | 419,328 | 1 | **Core** `SequenceLocks`; **Rust** height gate `agg_lite.rs:126` | SAME | `bip68_*`, `split_tx_bad`, `csv_op_unmet` |
-| BIP113 MTP cutoff | `CSVHeight` | 419,328 | 1 | **Rust** cutoff `agg_lite.rs:121` for non-coinbase transactions; **Core lifted** `ContextualCheckBlock` for the coinbase | SAME | `locktime_time_mtp`, `locktime_time_past` |
+| BIP68 sequence locks | `CSVHeight` | 419,328 | 1 | **Core** `SequenceLocks`; **Rust** height gate `agg_lite.rs` | SAME | `bip68_*`, `split_tx_bad`, `csv_op_unmet` |
+| BIP113 MTP cutoff | `CSVHeight` | 419,328 | 1 | **Rust** cutoff `agg_lite.rs` for non-coinbase transactions; **Core lifted** `ContextualCheckBlock` for the coinbase | SAME | `locktime_time_mtp`, `locktime_time_past` |
 | BIP141 commitment | `SegwitHeight` | 481,824 | 1 | **Core lifted** `ContextualCheckBlock`, `CheckWitnessMalleation` | SAME | `witness_mismatch`, `nonce_too_big_witness`, `witness_no_commit` |
 | BIP147 NULLDUMMY | `SegwitHeight` | 481,824 | 1 | **Core lifted** `GetBlockScriptFlags` | SAME | `multisig_dummy` |
 
-Mainnet chainparams: `kernel/chainparams.cpp:87-104`. Signet: `:454-465`.
+Mainnet chainparams: `kernel/chainparams.cpp:87-104`. Signet:.
 
 ## What is still our own code
 
@@ -282,18 +282,18 @@ not that a case targets it.
 
 | piece | where | tested by |
 |---|---|---|
-| Stand-ins for Core's coin view, block index, chainstate and clock | `core_tx_rules.cpp:35-86`, `core_block_rules.cpp:46-105` | Every case. `split_tx_bad` for a partial run, `bip68_time_*` for `GetAncestor`. The retarget's first block: read only |
-| Block composition: walking the chunk journals, chunk linkage, input coverage, totals across chunks | `agg_lite.rs:251-317`, `:447-465` | `split_tx`, `split_tx_bad`, `cb_overpay`, `cb_fee_too_much`, `cb_exact`, `weight_*`, `sigops_*`. A journal that lies about coverage cannot be crafted from a block, so no rig case reaches those checks |
+| Stand-ins for Core's coin view, block index, chainstate and clock | `core_tx_rules.cpp`, `core_block_rules.cpp` | Every case. `split_tx_bad` for a partial run, `bip68_time_*` for `GetAncestor`. The retarget's first block: read only |
+| Block composition: walking the chunk journals, chunk linkage, input coverage, totals across chunks | `agg_lite.rs` | `split_tx`, `split_tx_bad`, `cb_overpay`, `cb_fee_too_much`, `cb_exact`, `weight_*`, `sigops_*`. A journal that lies about coverage cannot be crafted from a block, so no rig case reaches those checks |
 | Coin accounting: the coin log, the trie update, the live-coin hash | the coin-log block of `agg_lite.rs`, `libzync/src/coinlog.rs`, `libzync/src/ttree.rs` (mode 17), `swiftsync.rs` (live-coin hash) | `double_spend_in_block`, `spend_later_in_block`, `chain_in_block`, `missing_coin`, `spend_spent_coinbase` (rig 96/96 on c13 and c14) |
-| BIP30 tree and tracked transactions | `bip30.rs`, `agg_lite.rs:212-217`, `:286`, `:407-436`, `hz_indicated_height` `verify_input.cpp:1028` | `bip30_repeat_unspent`, `bip30_repeat_spent`, `bip30_child_of_repeat`, the rig's staged base chain, and the unit tests in `bip30.rs` |
+| BIP30 tree and tracked transactions | `coinbase-smt/src/bip30.rs`, `agg_lite.rs`, `hz_indicated_height` `verify_input.cpp` | `bip30_repeat_unspent`, `bip30_repeat_spent`, `bip30_child_of_repeat`, the rig's staged base chain, and the unit tests in `coinbase-smt/src/bip30.rs` |
 | Batch signature verifier and its libsecp hooks | `batch_ecdsa.rs`, `patches/libzync/0102` | `sig_*`, `multisig_*`, `taproot_*` |
 | Host hints the guest checks | `liftx_hint.rs`, ECMH hints in `swiftsync.rs` | Every case with a signature or a coin. No case hands the guest a false hint |
-| Parse cache and txid seeding | `cached_tx` `verify_input.cpp:219`, `hz_seed_hashes` `:201` | Every case. Non-canonical encodings: read only |
-| Coin leaves | `verify_input.cpp:69`, `:94`, `:340` | Every spend case. `premature` and `bip68_*` depend on the fields |
+| Parse cache and txid seeding | `cached_tx` `verify_input.cpp`, `hz_seed_hashes` | Every case. Non-canonical encodings: read only |
+| Coin leaves | `verify_input.cpp` | Every spend case. `premature` and `bip68_*` depend on the fields |
 | Wrappers round Core calls | `check_pow`, `merkle_root`, `coinbase_value`, `is_coinbase_tx`, `check_tx`, `hz_check_signet` in `verify_input.cpp` | `high_hash`, `bad_merkle`, `cb_overpay`, `cb_multiple`, `cb_script_short`. `hz_check_signet`: read only |
-| Rust height gate and lock cutoff | `agg_lite.rs:121`, `:126` | `locktime_time_*`, `bip68_*`. CSV is at height 1 on regtest, so the boundary is read only |
-| Chain linkage and state | `main.rs:2079-2139`: previous receipt, prevhash, height, MTP window, epoch start, chainwork (`add_work`) | `time_equal_mtp`, `bad_bits`. The rest: read only |
-| Verifier | `libzync_verify_cmd`, host `main.rs:2015` | Not in the rig |
+| Rust height gate and lock cutoff | `agg_lite.rs` | `locktime_time_*`, `bip68_*`. CSV is at height 1 on regtest, so the boundary is read only |
+| Chain linkage and state | `main.rs`: previous receipt, prevhash, height, MTP window, epoch start, chainwork (`add_work`) | `time_equal_mtp`, `bad_bits`. The rest: read only |
+| Verifier | `libzync_verify_cmd`, host `main.rs` | Not in the rig |
 | Network constants | `libzync/src/net.rs` | Regtest's values in every case. Mainnet's and signet's: `assert_core_constants`, and by reading for `csv_height` |
 | Header shims | `coreshim/logging.h`, `sync.h`, `threadsafety.h`: they replace Core's own headers in every Core file compiled | Every case. They drop logging and locks; a lifted function's `LogPrintf` and `AssertLockHeld` compile to nothing |
 
@@ -301,14 +301,14 @@ not that a case targets it.
 
 | rule | why it is not in the tables |
 |---|---|
-| `time-too-new` | Depends on the node's clock. Core's test is lifted with `ContextualCheckBlockHeader` but its stand-in clock never reads past a block (`core_block_rules.cpp:82`). The guest commits the largest block time (`main.rs:2157`); the verifier applies the 2-hour rule to it (§5 step 11, host `main.rs:2049`), as Core does for every block during IBD |
-| Best chain, `too-little-chainwork` | A proof says a chain is valid, not that it has the most work: §5 step 7. `cum_work` is public in the journal (`add_work`, `verify_input.cpp:978`, transcribes `GetBlockProof`) |
-| `bad-fork-prior-to-checkpoint` | Core's checkpoints, last at 295,000 on mainnet, are node-level anti-DoS. Lifted, and off in the stand-in (`core_block_rules.cpp:62`). Covered in effect by §5 step 7 |
+| `time-too-new` | Depends on the node's clock. Core's test is lifted with `ContextualCheckBlockHeader` but its stand-in clock never reads past a block (`core_block_rules.cpp`). The guest commits the largest block time (`main.rs`); the verifier applies the 2-hour rule to it (§5 step 11, host `main.rs`), as Core does for every block during IBD |
+| Best chain, `too-little-chainwork` | A proof says a chain is valid, not that it has the most work: §5 step 7. `cum_work` is public in the journal (`add_work`, `verify_input.cpp`, transcribes `GetBlockProof`) |
+| `bad-fork-prior-to-checkpoint` | Core's checkpoints, last at 295,000 on mainnet, are node-level anti-DoS. Lifted, and off in the stand-in (`core_block_rules.cpp`). Covered in effect by §5 step 7 |
 | `duplicate`, `inconclusive-*`, `BLOCK_MUTATED` retention | Node bookkeeping for blocks already seen, RPC strings, and not caching a mutated block as invalid |
 | `non-mandatory-script-verify-flag` | Mempool only. Every block flag is in `MANDATORY_SCRIPT_VERIFY_FLAGS` (`policy/policy.h:89`), so a block check can never produce it |
 | Core's `assumevalid` | A node setting. The guest's equivalent is the assumevalid image, stated in `profile` |
 | Mempool, relay and P2P rules | Not consensus. This covers every string `MemPoolAccept` raises in `validation.cpp` |
-| testnet3, testnet4, regtest, custom signets | The guest proves mainnet and default signet only (`libzync/src/net.rs`). The regtest build exists for the rig and carries its own profile bit (`main.rs:1412`) |
+| testnet3, testnet4, regtest, custom signets | The guest proves mainnet and default signet only (`libzync/src/net.rs`). The regtest build exists for the rig and carries its own profile bit (`main.rs`) |
 
 ## Patches on consensus paths
 
@@ -319,7 +319,7 @@ the merkle root, the commitment or a signature.
 | where | patch | what changes |
 |---|---|---|
 | `crypto/sha256.cpp` | 0002, 0009, 0010, 0101 | SHA-256 and `SHA256D64` through the zkVM accelerator |
-| `primitives/transaction.{h,cpp}` | 0101 | Txid and wtxid computed lazily, or seeded from raw bytes when the parse used every byte (`verify_input.cpp:201`, `:233`) |
+| `primitives/transaction.{h,cpp}` | 0101 | Txid and wtxid computed lazily, or seeded from raw bytes when the parse used every byte (`verify_input.cpp`) |
 | `hash.h` | 0101 | `HashWriter` stages small writes in a 512-byte buffer; same bytes hashed |
 | `serialize.h` | 0001 | `int` overloads for ILP32, where `int32_t` is `long` |
 | `pubkey.cpp` | 0101 | Memo of parsed keys, full key compared |
