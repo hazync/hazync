@@ -255,7 +255,9 @@ fn main() {
             println!("  coin log: {} coins ever appended, {} sat live (COINLOG.md)", cs.utxo_leaves, cs.utxo_value);
             if product {
                 println!("  counting trie root: {} (absence, history, balances: --trie)", hex(&cs.trie_root));
-                println!("  live-coin hash: {} coins (instant IBD: a downloaded UTXO set must hash to it)", cs.live_set);
+                // live_set is a flag, not a count: 0 = the hash is the identity (no live coins), 1 = live_hash is the point
+                println!("  live-coin hash: {} (instant IBD: a downloaded UTXO set must hash to it)",
+                         if cs.live_set == 0 { "the empty set".to_string() } else { format!("x {:08x}..", cs.live_hash[7]) });
             }
         } else {
             println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);

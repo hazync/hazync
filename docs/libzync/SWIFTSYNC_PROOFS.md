@@ -119,5 +119,5 @@ below; step 7 needs a source you name (without one they print the tip hash to co
 
 An OK verdict for an assumevalid image says so on the verdict line itself. A coin, trie or transaction fact
 (`--coin`, `--trie`, `--journey`) is checked against the same `ChainState`, so its answer is about the chain as of
-`J.height`: a coin unspent then may have been spent since. A proof does not expire; how stale an answer may be is
-the application's call (ROADMAP H6: the verifiers will print that height on every answer).
+`J.height`: a coin unspent then may have been spent since. A proof does not expire: every answer names the height
+it is about (a trie fact must be about the proof's tip), and how stale an answer may be is the application's call.

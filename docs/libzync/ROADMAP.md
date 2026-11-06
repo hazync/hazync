@@ -93,8 +93,8 @@ refuse it.
    every receipt verified; a first pod on a loaded host took 894 s (the host, not the image: same bundle).
 6. **Before the freeze (user, 11-06): a review of everything since round 6, then the G2 repo cleanup, then a full cold
    review of the cleaned repo; a retest only if a fix moves the image.** Cleanup keeps guest-compiled files untouched
-   (their bytes, comments included, are the image). Proof age is NOT an expiry (a proof is valid forever): verifiers
-   say "as of height H" (and how far behind a known tip) on every coin / trie answer, and the app decides (host-only).
+   (their bytes, comments included, are the image). Proof age is NOT an expiry (a proof is valid forever): every coin / trie / journey answer already names its height
+   (checked 11-06; a trie fact must be about the proof's tip), and the app decides how old is too old. Nothing to build.
 7. **Freeze: ask the user.**
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
