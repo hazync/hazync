@@ -83,8 +83,12 @@ refuse it.
    rig 96/96, handover 16/16, mainnet 1..200 and signet 1..2600 = both references, cost identical to c10e12, edge
    10/10). c14 (9d28cd9: a collect run exits with COLLECT_EXIT instead of a panic; the host checks every exit code)
    gets the short pass (`SN=100 retest_final.sh`): the change touches no network rule or long-chain state.
+   **c14 (bbf82800) GREEN on every step 11-06** (`handover/RESULT_c14.txt`): unit tests, rig 96/96, handover 16/16,
+   mainnet 1..200 and signet 1..100 = both references with 0 panics, edge 10/10, cost vs c13 +2 aggregate cycles and
+   about -2,000 chunk cycles a block (<0.01%). **c14 is the freeze candidate** (reg 3036d379, regN fcde3e5a, sig 219215fb).
 5. **GPU proving benchmarks** on the final image (user's trigger). Ready: run B (`gpu/gpu-libzync-multi.sh`, product image) dry-run on CPU
-   with c10e12: hints 45 s (2 threads), execute check passes, **EXPECT_CYCLES=64896838** (block 962,000 aggregate).
+   with c10e12: hints 45 s (2 threads), execute check passes, EXPECT_CYCLES=64896838 (block 962,000 aggregate).
+   **On c14: EXPECT_CYCLES=64896840** (the cost table, RESULT_c14.txt).
 6. **Freeze: ask the user.**
 7. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
