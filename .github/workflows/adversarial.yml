@@ -40,6 +40,23 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  libzync-tests:
+    # libzync, the new core (docs/libzync/LIBZYNC.md): the coin log, the counting trie (guest, model and store must
+    # agree), facts, wire formats; and the verifiers built on it. Until 2026-11-06 no workflow ran these, so
+    # check-test-surfaces.sh flagged them as rotting test surfaces: they were run only by hand.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - name: libzync (coin log, counting trie, facts, wire)
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std
+      - name: swiftsync-verify (the libzync verifier)
+        run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
+      - name: swiftsync-verify-ffi (its C ABI)
+        run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
+
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
     runs-on: ubuntu-latest
