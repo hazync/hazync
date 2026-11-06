@@ -2298,11 +2298,13 @@ fn aggregate() {
     let ((live_set, live_hash), trie_root) = (swiftsync::total(), r.trie_root);
     // A COLLECT-mode aggregate skipped every ECMH add and subtract (it only logged the leaves for the
     // host), so its total means nothing. It must not produce a chain state: stop here, after the whole
-    // block was checked and every leaf logged. Before this, the hint flag alone switched the coin
+    // block was checked and every leaf logged, with nothing committed and a non-zero exit, which no
+    // verifier accepts (lz_wire::COLLECT_EXIT). Before this, the hint flag alone switched the coin
     // accounting off for a proof (review 2026-10-30, two reviewers independently).
     #[cfg(feature = "libzync")]
     if swiftsync::collecting() {
-        panic!("libzync: ECMH collect run finished (leaves logged); a collect run commits no chain state");
+        let _ = std::io::Write::flush(&mut std::io::stdout()); // the host reads the logged leaves
+        risc0_zkvm::guest::env::exit(lz_wire::COLLECT_EXIT);
     }
     #[cfg(not(feature = "libzync"))]
     let (live_set, live_hash, trie_root) = (prev.live_set, prev.live_hash, prev.trie_root);

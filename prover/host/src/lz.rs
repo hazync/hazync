@@ -441,7 +441,7 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         libzync_agg_tail(&mut b, w);
         let r = lz_execute(b.build().unwrap());
         drop(b);
-        if let Err(e) = r { assert!(e.contains("collect run commits no chain state"), "coin-log collect run failed: {e}"); }
+        expect_collected(r, "coin-log collect run");
     }
     if let Some(h) = hints { std::env::set_var("HAZYNC_LZ_HINTS", h); }
     let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
@@ -571,13 +571,36 @@ pub(crate) struct Exec {
     pub(crate) cycles: u64,
     pub(crate) padded: u64,
     pub(crate) segments: usize,
+    /// the guest stopped as a finished ECMH collect run (lz_wire COLLECT_EXIT): leaves logged, nothing committed
+    pub(crate) collected: bool,
+}
+
+/// Halted(0) is a run that committed; Halted(COLLECT_EXIT) a finished collect run; anything else is a failure
+/// (a run must never pass on an exit code that no verifier accepts).
+fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
+    match code {
+        risc0_zkvm::ExitCode::Halted(0) => Ok(false),
+        risc0_zkvm::ExitCode::Halted(c) if c == libzync::wire::COLLECT_EXIT as u32 => Ok(true),
+        c => Err(format!("guest exited with {c:?}")),
+    }
+}
+
+/// A collect run (no ECMH hints) checks the whole block, logs every leaf, then exits with COLLECT_EXIT before
+/// committing: a collect run never yields a chain state. Any other outcome, a commit included, is a real failure.
+pub(crate) fn expect_collected(r: Result<Exec, String>, what: &str) {
+    match r {
+        Ok(e) if e.collected => {}
+        Ok(_) => panic!("{what}: the collect run committed a chain state"),
+        Err(e) => panic!("{what} failed: {e}"),
+    }
 }
 
 pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
     if std::env::var("RISC0_PPROF_OUT").is_ok() {
         let s = default_executor().execute(env, METHOD_ELF).map_err(|e| e.to_string())?;
         let padded = s.segments.iter().map(|g| 1u64 << g.po2).sum();
-        return Ok(Exec { cycles: s.cycles(), padded, segments: s.segments.len(), journal: s.journal, receipt_claim: s.receipt_claim });
+        let collected = exit_ok(s.exit_code)?;
+        return Ok(Exec { cycles: s.cycles(), padded, segments: s.segments.len(), journal: s.journal, receipt_claim: s.receipt_claim, collected });
     }
     let image = LZ_IMAGE.get_or_init(|| {
         risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image")
@@ -585,10 +608,11 @@ pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
     let session = risc0_zkvm::ExecutorImpl::new(env, image).map_err(|e| e.to_string())?
         .run_with_callback(|_| Ok(Box::new(risc0_zkvm::NullSegmentRef)))
         .map_err(|e| e.to_string())?;
+    let collected = exit_ok(session.exit_code)?;
     let claim = session.claim().map_err(|e| e.to_string())?;
     // Session::total_cycles = every segment padded to its power of two (what proving pays)
     let padded = session.total_cycles;
-    Ok(Exec { cycles: session.user_cycles, padded, segments: session.segments.len(), journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim) })
+    Ok(Exec { cycles: session.user_cycles, padded, segments: session.segments.len(), journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim), collected })
 }
 
 /// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
@@ -677,9 +701,7 @@ pub(crate) fn libzync_hints_cmd(out: &str) {
         libzync_agg_tail(&mut b, &w);
         // A collect aggregate checks the whole block, logs every leaf, then STOPS before committing
         // (a collect run must never yield a chain state). Any other failure is a real one.
-        if let Err(e) = lz_execute(b.build().unwrap()) {
-            assert!(e.contains("collect run commits no chain state"), "collect aggregate failed: {e}");
-        }
+        expect_collected(lz_execute(b.build().unwrap()), "collect aggregate");
     }
     let leaves = libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log));
     for leaf in &leaves { bundle.ecmh.extend_from_slice(&libzync::host::ecmh_hint(leaf)); }
@@ -998,9 +1020,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             let collected = lz_execute(b.build().unwrap());
             drop(b); // releases its borrow of `log`
             rig_echo(&log);
-            if let Err(e) = collected {
-                assert!(e.contains("collect run commits no chain state"), "block {h}: collect aggregate failed: {e}");
-            }
+            expect_collected(collected, &format!("block {h}: collect aggregate"));
         }
         for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log)) {
             bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
@@ -1093,6 +1113,10 @@ pub(crate) fn agg_chunks() {
     let ctx = risc0_zkvm::VerifierContext::default();
     let session = risc0_zkvm::ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF)
         .unwrap().run().unwrap_or_else(|e| panic!("{}", guest_failure("aggregate execution", &e)));
+    // stop before proving anything that no verifier accepts (a collect run exits COLLECT_EXIT: the hints are missing)
+    if let Err(e) = exit_ok(session.exit_code).and_then(|c| if c { Err("a collect run (no ECMH hints)".into()) } else { Ok(()) }) {
+        panic!("aggregate execution: {e}; nothing proved");
+    }
     let nseg = session.segments.len();
     println!("  {nseg} segments to prove at po2 {}", seg_po2());
     // #237: the aggregate had the SAME unprotected `prove_session` as `prove-chunk`. A #119 fault

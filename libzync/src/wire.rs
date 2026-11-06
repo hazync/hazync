@@ -29,6 +29,10 @@ use alloc::vec::Vec;
 pub const CHUNK_MAGIC: u32 = u32::from_le_bytes(*b"LZC1");
 /// "LZA2" as little-endian bytes (LZA1 carried design B's SwiftSync hint bits, removed in E2).
 pub const AGG_MAGIC: u32 = u32::from_le_bytes(*b"LZA2");
+/// The exit code of a finished ECMH collect run (no hints: every leaf logged, no chain state). Not 0, so its
+/// receipt fails `Receipt::verify` and `env::verify`, which both require Halted(0): a collect run can never stand
+/// as a proof. The host's executor accepts it only where it asked for a collect run.
+pub const COLLECT_EXIT: u8 = 2;
 /// One batch-signature hint: valid u32 LE, R.x, R.y.
 pub const SIG_HINT_BYTES: usize = 68;
 /// One pubkey-Y hint: x, y.
