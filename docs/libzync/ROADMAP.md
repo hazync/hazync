@@ -110,7 +110,7 @@ refuse it.
    anywhere in a libzync-prep range, resumes from the last saved height (prep now also saves every 1,000 blocks in disk
    mode; a record carries its height, which also ends the false rollback of a block with no appends); AGG_EARLY moves
    stale chunk files aside at start, checks each file's claim while waiting and times out
-   (`HAZYNC_AGG_EARLY_WAIT_S`). Still by design: FFI/WASM take `now` from the caller; a regtest host prints OK.
+   (`HAZYNC_AGG_EARLY_WAIT_S`). Tested (cb5d3e5 + `HAZYNC_PREP_CONTINUE`): host rebuilt, image still bbf82800; resume 1..5 -> 10 in memory and with a disk trie, prove-range killed between the two saves then resumed, prep killed at 25 and restarted from 20 to 60: every state byte-identical to the proved chain's; libzync 31, swiftsync-verify 16, ffi 3, host 68, wasm vectors 6/6. Still by design: FFI/WASM take `now` from the caller; a regtest host prints OK.
 7. **Freeze: ask the user.**
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
