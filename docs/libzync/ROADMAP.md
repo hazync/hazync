@@ -75,7 +75,9 @@ refuse it.
 
 1. ~~E1 tree decision~~ — **done 11-04: the counting trie (E1c) is the path forward.**
 2. **E2a** cycle-hunt batches 2-3, then **E2c** consolidation (one product configuration, dead experiments deleted, library split), then **E2** integration (trie as a parallel receipt inside the core proof, live-coin hash) — moves the image.
-3. Several cold review rounds on everything since `00b7ac2` (feedback: reviews before any freeze).
+3. Several cold review rounds on everything since `00b7ac2` (feedback: reviews before any freeze). Round 6 (11-06,
+   the BIP30 re-creation fix d6f8b4b): no accept / root divergence reachable; model / store depth aligned with the
+   guest, undo refuses after a re-creation, tests added (838bf5b).
 4. One full test pass on the final image: rig vs Core, Core's own test vectors (I1), handover, mainnet 1..200, signet
    from genesis, edge blocks, cost table.
 5. **GPU proving benchmarks** on the final image (user's trigger). Ready: run B (`gpu/gpu-libzync-multi.sh`, product image) dry-run on CPU
@@ -115,7 +117,10 @@ receipt): fine at the tip, a serial bottleneck for a whole-chain backfill.
    unchanged. anchor_id still records where a chain started (genesis, for the verifier).
 8. Leaves in any order need the trie WITNESS for block h against the trie at h-1. Prep with the trie in memory can
    snapshot every height; on disk (one store advanced in place) prep must write each block's witness (small) as it
-   goes, for the leaf provers. ⏳ build that with the coordinator's work queue (e).
+   goes, for the leaf provers. ⏳ build that with the coordinator's work queue (e). (11-06) The COIN LOG too: a leaf
+   loads `state_<h-1>.coinlog`, the whole log (mainnet: billions of leaves), so prep must write each block's leaf
+   inputs (coin-log paths for its spends, the trie witness, the state) as one small bundle per block; the BIP30 tree is
+   replayed from the block files (fine). Host only, no image change.
 
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;
@@ -125,7 +130,8 @@ joins (8 levels, odd carries), root journal **byte-identical** to the linear blo
 linear 101; gap / swapped / twice / tampered anchor refused by the guest's link check, another image's receipt refused
 by the host (`join/RESULT_c10e12.txt`). Native prep 1..200 (`host libzync-prep`) gives every state's journal
 byte-identical to the proved run, trie in memory and on disk (`trie_store/RESULT_c10e12.txt`);
-(d) in the GPU benchmark step: a REAL (non-dev) join of joins (the dev-mode test shows byte-equivalence, not the
+(d) in the GPU benchmark step (script ready 11-06: `gpu/gpu-join.sh`, `--mkbundle`; its DRY=1 dev-mode run passes on
+the laptop, 8 leaves / 7 joins / 3 levels, root == linear block_8): a REAL (non-dev) join of joins (the dev-mode test shows byte-equivalence, not the
 recursion: env::verify / assumption resolution and "succinct, joinable again" need real receipts), and MEASURE join
 cycles / cost (the old fold was $0.0043, another guest), arity (2 / 4 / 8) and leaf size; (e) after the freeze: the coordinator's work queue (prep ahead, leaves in any order, joins as children
 land, resume points).
