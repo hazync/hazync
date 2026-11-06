@@ -1,3 +1,47 @@
+# libzync on real GPUs: the freeze candidate c14, measured 2026-11-06
+
+**What ran:** the product image c14 (`bbf82800`: coin log + counting trie as its own receipt + live-coin hash), one
+RunPod secure-cloud RTX PRO 6000 per run, driver `gpu/run_c14_pod.sh`. Every receipt **verified**. Spend: **$3.72** for
+two pods. Outputs: `~/libzync-gpu/gpu14/pod` (first) and `pod2` (rerun).
+
+| block 962,000, one card | first pod (Server Ed., host load ~55) | **rerun (Workstation Ed., EPYC 9575F, load ~13)** | design B, 10-29 |
+|---|---|---|---|
+| host build | 653 s | 352 s | 381 s |
+| hints + execute check | 161 s, aggregate **64,896,840** cycles = laptop | 118 s, same | |
+| 16 chunks | 678 s (36-57 s each) | **406 s** (23-37 s each) | 452 s |
+| aggregate, one card (trie update proved first) | 223 s (trie 92.8 s) | **132 s** (trie 51.1 s) | 65 s (no trie) |
+| **block** (chunks + aggregate) | 894 s | **537 s** | 517 s |
+| GPU busy, mean | 30% | 42% | |
+
+- **The first pod's slowdown was the host, not c14:** the same image and bundle on a quieter host ran 40% faster, and
+  its chunks beat design B's despite ~5% more cycles. No chunk needed a retry on either pod.
+- **c14 costs about what design B did per block** (537 vs 517 s) while also proving the coin log, the counting trie and
+  the live-coin hash. In the pipeline the trie update (51 s) runs on its own card alongside the chunks; this control
+  runs it serially.
+- **Even the good host keeps the card under half busy** (42%): each chunk is its own process, and host-side witness
+  generation dominates. Two chunk processes per card is a cheap lever to measure (ROADMAP M3).
+
+**The first real join tree** (H-B d), rerun pod: blocks 1..8 proved as independent leaves, each a base step on a state
+from native prep (byte-identical to the proved chain), then a balanced tree of 7 joins over 3 levels.
+
+| | measured |
+|---|---|
+| leaves | 8 in 146 s, 18.2 s each |
+| joins | 7, **6.4 s each**, every one a single 2^20 segment (padded size; raw cycles not logged) |
+| joins of joins (levels 2-3) | same cost as level 1 |
+| root | journal **identical** to the linear chain's block 8 (`1cc0785d…`), verified against the image |
+| root receipt | 226,002 bytes (succinct) |
+
+So recursion works with real receipts: env::verify, assumption resolution, and a joined receipt that can be joined
+again. A whole-chain backfill of ~975 k blocks needs ~975 k joins over ~20 levels, every level parallel; at 6.4 s a
+join that is ~1,700 card-hours of joins in total, i.e. a minor addition to the block proofs themselves.
+
+⚠ The first pod's join hung after leaf 1: `gpu-join.sh` waited on every background job, including the nvidia-smi
+logger, which never exits (the laptop dry run has no nvidia-smi). Fixed in 6f00c58 and dry-run tested with a stand-in
+logger that never exits.
+
+---
+
 # libzync on real GPUs: measured 2026-10-29
 
 **What ran:** the round-13 libzync guest (METHOD_ID `5e460bf3…`, branch `libzync-gpu`) proving real blocks on RunPod

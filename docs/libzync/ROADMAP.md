@@ -88,7 +88,9 @@ refuse it.
    about -2,000 chunk cycles a block (<0.01%). **c14 is the freeze candidate** (reg 3036d379, regN fcde3e5a, sig 219215fb).
 5. **GPU proving benchmarks** on the final image (user's trigger). Ready: run B (`gpu/gpu-libzync-multi.sh`, product image) dry-run on CPU
    with c10e12: hints 45 s (2 threads), execute check passes, EXPECT_CYCLES=64896838 (block 962,000 aggregate).
-   **On c14: EXPECT_CYCLES=64896840** (the cost table, RESULT_c14.txt).
+   **On c14: EXPECT_CYCLES=64896840** (the cost table, RESULT_c14.txt). ✅ **DONE 11-06** (`gpu/GPU_RESULTS.md`, $3.72):
+   block 962,000 on one PRO 6000 in **537 s** (406 s chunks + 132 s aggregate incl. the 51 s trie proof; design B 517 s),
+   every receipt verified; a first pod on a loaded host took 894 s (the host, not the image: same bundle).
 6. **Freeze: ask the user.**
 7. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
@@ -140,7 +142,9 @@ byte-identical to the proved run, trie in memory and on disk (`trie_store/RESULT
 (d) in the GPU benchmark step (script ready 11-06: `gpu/gpu-join.sh`, `--mkbundle`; its DRY=1 dev-mode run passes on
 the laptop, 8 leaves / 7 joins / 3 levels, root == linear block_8): a REAL (non-dev) join of joins (the dev-mode test shows byte-equivalence, not the
 recursion: env::verify / assumption resolution and "succinct, joinable again" need real receipts), and MEASURE join
-cycles / cost (the old fold was $0.0043, another guest), arity (2 / 4 / 8) and leaf size; (e) after the freeze: the coordinator's work queue (prep ahead, leaves in any order, joins as children
+cycles / cost (the old fold was $0.0043, another guest), arity (2 / 4 / 8) and leaf size; ✅ **DONE 11-06 on c14**: 8 real
+leaves on prep states, 7 joins over 3 levels, root identical to linear block 8 and verified; a join is one 2^20 segment,
+6.4 s on a PRO 6000; root receipt 226 KB (arity and leaf size not yet measured); (e) after the freeze: the coordinator's work queue (prep ahead, leaves in any order, joins as children
 land, resume points).
 
 ## I. Gaps beyond the core (11-04)
