@@ -79,7 +79,10 @@ refuse it.
    the BIP30 re-creation fix d6f8b4b): no accept / root divergence reachable; model / store depth aligned with the
    guest, undo refuses after a re-creation, tests added (838bf5b).
 4. One full test pass on the final image: rig vs Core, Core's own test vectors (I1), handover, mainnet 1..200, signet
-   from genesis, edge blocks, cost table.
+   from genesis, edge blocks, cost table. **c13 (f769cb8d) GREEN on every step 11-06** (`handover/RESULT_c13.txt`:
+   rig 96/96, handover 16/16, mainnet 1..200 and signet 1..2600 = both references, cost identical to c10e12, edge
+   10/10). c14 (9d28cd9: a collect run exits with COLLECT_EXIT instead of a panic; the host checks every exit code)
+   gets the short pass (`SN=100 retest_final.sh`): the change touches no network rule or long-chain state.
 5. **GPU proving benchmarks** on the final image (user's trigger). Ready: run B (`gpu/gpu-libzync-multi.sh`, product image) dry-run on CPU
    with c10e12: hints 45 s (2 threads), execute check passes, **EXPECT_CYCLES=64896838** (block 962,000 aggregate).
 6. **Freeze: ask the user.**

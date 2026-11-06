@@ -1,9 +1,11 @@
 #!/bin/bash
 # ROADMAP H4: the full test pass on the product image (coin log + trie receipt + live-coin hash + join mode).
 # Unit tests; rig vs Core 28.0 (regtest); handover O -> N; mainnet 1..200 vs the reference implementations; cost on
-# real blocks (vs the previous image); edge blocks; signet 1..2600 from genesis. Each step prints its own verdict line.
-# usage: retest_final.sh <tag, e.g. c13: builds host_<tag>m / reg / regN / sig> <previous mainnet host tag, e.g. c10e12>
-T=${1:?tag}; PREV=${2:?previous mainnet host tag}
+# real blocks (vs the previous image); edge blocks; signet 1..SN from genesis. Each step prints its own verdict line.
+# usage: [SN=100] retest_final.sh <tag, e.g. c13: builds host_<tag>m / reg / regN / sig> <previous mainnet host tag, e.g. c10e12>
+# SN (default 2600, the full signet chain the references cover): a short pass sets it lower when the change does not
+# touch network rules or the long-chain coin log. Any 'panicked' line in a prove-range log is a failure.
+T=${1:?tag}; PREV=${2:?previous mainnet host tag}; SN=${SN:-2600}
 R=~/libzync-gpu/r18; O=~/libzync-gpu/$T; Z=~/dev/hazync-libzync; CR=$Z/experimental/libzync-bench/core_rules; S=$Z/scripts/libzync
 B="HAZYNC_BASE=$HOME/hzb-r8"
 mkdir -p $O
@@ -42,7 +44,7 @@ bash $Z/experimental/libzync-bench/handover/run.sh $R/host_${T}reg $R/host_${T}r
 step "build signet (${T}sig)"; build ${T}sig $B HAZYNC_NETWORK=signet
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=2
 step "mainnet 1..200 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py, genesis anchor"
-M=$O/m200; rm -rf $M; $R/host_${T}m libzync-prove-range 1 200 $HOME/libzync-gpu/ssweep genesis $M > $O/m200.log 2>&1; echo PR_EXIT=$?; grep -a 'LZ_PROVE_RANGE_DONE\|panicked' $O/m200.log | grep -v 'collect run' | tail -2
+M=$O/m200; rm -rf $M; $R/host_${T}m libzync-prove-range 1 200 $HOME/libzync-gpu/ssweep genesis $M > $O/m200.log 2>&1; echo PR_EXIT=$?; grep -a 'LZ_PROVE_RANGE_DONE' $O/m200.log; echo "PANICS=$(grep -ac panicked $O/m200.log)"
 STATES_OUT=$O/m200_states.jsonl python3 $S/coinlog_ref.py $HOME/libzync-gpu/ssweep 200 $M/state_200.json
 python3 $S/block_forest_ref.py check $HOME/libzync-gpu/r17/hashes_200.txt $O/m200_states.jsonl $M/state_200.json | tail -1
 python3 $S/genesis_anchor_id.py mainnet $(printf '0%.0s' {1..64}) | tail -1; python3 -c "import json;s=json.load(open('$M/state_200.json'));print('state anchor_id', bytes(s['anchor_id']).hex(), 'version', s['version'], 'profile', hex(s['profile']))"
@@ -65,8 +67,8 @@ for h in 2016 91842 91880 185956 227931 363725 364292 388381 419328 481824; do
   awk -v n=$h -v rc=$rc '/chunk .*executed:/{c+=$(NF-1)} /block validation cycles/{a=$NF} /REJECT|INVALID/{bad=1} END{printf "edge %-7s chunks %12d aggregate %11d whole %12d %s (exit %s)\n", n, c, a, c+a, (bad?"INVALID":(a>0?"ok":"NO RESULT")), rc}' $O/cost/edge_$h.log
 done
 export RISC0_DEV_MODE=1 HAZYNC_CHUNKS=1
-step "signet 1..2600 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py"
-rm -rf $O/s2600; $R/host_${T}sig libzync-prove-range 1 2600 $HOME/libzync-gpu/signet/json genesis $O/s2600 > $O/s2600.log 2>&1; echo PR_EXIT=$?; grep -a 'LZ_PROVE_RANGE_DONE\|panicked' $O/s2600.log | grep -v 'collect run' | tail -2
-STATES_OUT=$O/s2600_states.jsonl python3 $S/coinlog_ref.py $HOME/libzync-gpu/signet/json 2600 $O/s2600/state_2600.json
-python3 $S/block_forest_ref.py check $HOME/libzync-gpu/r17/hashes_2600.txt $O/s2600_states.jsonl $O/s2600/state_2600.json | tail -1
+step "signet 1..$SN from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py"
+G=$O/s$SN; rm -rf $G; $R/host_${T}sig libzync-prove-range 1 $SN $HOME/libzync-gpu/signet/json genesis $G > $G.log 2>&1; echo PR_EXIT=$?; grep -a 'LZ_PROVE_RANGE_DONE' $G.log; echo "PANICS=$(grep -ac panicked $G.log)"
+STATES_OUT=${G}_states.jsonl python3 $S/coinlog_ref.py $HOME/libzync-gpu/signet/json $SN $G/state_$SN.json
+python3 $S/block_forest_ref.py check $HOME/libzync-gpu/r17/hashes_2600.txt ${G}_states.jsonl $G/state_$SN.json | tail -1
 echo RETEST_DONE
