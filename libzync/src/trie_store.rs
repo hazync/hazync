@@ -244,9 +244,11 @@ pub struct TrieStore {
     /// this update's new nodes (dropped if it is refused) and the nodes it replaced (freed once it stands)
     fresh: Vec<R>,
     garbage: Vec<R>,
-    /// the update being applied re-created a coin over its spent record; `last_replaced`: the last one applied did
+    /// the update being applied re-created a coin over its spent record
     replaced: bool,
-    last_replaced: bool,
+    /// one entry per update applied in this session (true: it re-created a coin over its spent record), so undo can
+    /// refuse any update whose replaced record it cannot restore, however many levels back (review round 7)
+    applied: Vec<bool>,
 }
 
 /// One block's update list, as the aggregate's collect run logs it and the trie receipt commits.
@@ -255,7 +257,7 @@ pub type Inserts = [(Key, Option<W>, u64)];
 
 impl TrieStore {
     fn with_arena(counts: bool, a: Box<dyn Arena + Send>) -> Self {
-        TrieStore { counts, height: 0, hash: [0; 32], root: EMPTY, a, fresh: Vec::new(), garbage: Vec::new(), replaced: false, last_replaced: false }
+        TrieStore { counts, height: 0, hash: [0; 32], root: EMPTY, a, fresh: Vec::new(), garbage: Vec::new(), replaced: false, applied: Vec::new() }
     }
     pub fn new(counts: bool) -> Self { Self::with_arena(counts, Box::new(MemArena::default())) }
 
@@ -371,13 +373,14 @@ impl TrieStore {
     }
 
     fn t_ins(&mut self, n: R, s: &W, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<R, TErr> {
-        if d >= 256 { return Err(TErr::Witness); }
+        if d > 256 { return Err(TErr::Witness); } // a leaf may sit at depth 256, as in the guest (trie_model::ins_top)
         let (dc, dv) = if sp.is_none() { (1u64, v) } else { (0, 0) };
         if n == EMPTY {
             let sub = self.put(Node::Coin { o: *o, sp: *sp, value: v });
             return Ok(self.put(Node::Addr { s: *s, count: dc, value: dv, sub }));
         }
         match self.get(n) {
+            Node::TopInner { .. } if d >= 256 => Err(TErr::Witness),
             Node::TopInner { l, r, .. } => {
                 let (l, r) = if bit(s, d) { (l, self.t_ins(r, s, o, sp, v, d + 1)?) } else { (self.t_ins(l, s, o, sp, v, d + 1)?, r) };
                 self.drop_node(n);
@@ -392,6 +395,7 @@ impl TrieStore {
                     self.drop_node(n);
                     return Ok(self.put(Node::Addr { s: a, count: nc, value: nv, sub }));
                 }
+                if d >= 256 { return Err(TErr::Witness); }
                 let t = if bit(&a, d) { self.tinner(EMPTY, n) } else { self.tinner(n, EMPTY) };
                 self.t_ins(t, s, o, sp, v, d)
             }
@@ -692,22 +696,25 @@ impl TrieStore {
             Ok(t)
         })();
         let out = self.finish(r);
-        if out.is_ok() { self.last_replaced = self.replaced; }
+        if out.is_ok() { self.applied.push(self.replaced); }
         out
     }
 
-    /// Undo one block's update list (the one last applied): remove its inserts, unmark its marks. All or nothing.
-    /// REFUSED (`Missing`: the record it would restore is gone) after a block that created a coin over its own spent
-    /// record (BIP30, `s_ins`): restore that block's predecessor from its snapshot instead.
+    /// Undo one block's update list (the one last applied in this session): remove its inserts, unmark its marks.
+    /// All or nothing. REFUSED (`Missing`) for a block that created a coin over its own spent record (BIP30, `s_ins`:
+    /// the record it would restore is gone), and for any block not applied in this session (a store loaded from a
+    /// snapshot does not know): restore that block's predecessor from its snapshot instead.
     pub fn undo(&mut self, marks: &Marks, inserts: &Inserts) -> Result<W, TErr> {
-        if self.last_replaced { return Err(TErr::Missing); }
+        if self.applied.last() != Some(&false) { return Err(TErr::Missing); }
         let r = (|| {
             let mut t = self.root;
             for (k, _, _) in inserts.iter().rev() { let (s, o) = split(k); t = self.t_rm(t, &s, &o, 0)?; }
             for (k, _) in marks.iter().rev() { let (s, o) = split(k); t = self.t_unmark(t, &s, &o, 0)?; }
             Ok(t)
         })();
-        self.finish(r)
+        let out = self.finish(r);
+        if out.is_ok() { self.applied.pop(); }
+        out
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -981,6 +988,61 @@ mod tests {
             // and it can be spent again (after which undo works again)
             st.apply(&[(c, [6, 0, 0, 0, 0, 0, 0, 0])], &[]).unwrap();
             assert_eq!(st.undo(&[(c, [6, 0, 0, 0, 0, 0, 0, 0])], &[]), Ok(new));
+        }
+    }
+
+    /// Undo is refused for a re-creating update however many levels back it is, and for a store loaded from a snapshot
+    /// (review round 7: the guard used to cover only the last update applied).
+    #[test]
+    fn undo_refuses_a_re_creation_further_back_and_a_loaded_store() {
+        for counts in [true, false] {
+            let mut st = TrieStore::new(counts);
+            let (c, other, later) = (key(4, 0, 1, 0), key(4, 0, 9, 1), key(7, 0, 3, 0));
+            st.apply(&[], &[(c, None, 50), (other, None, 7)]).unwrap();
+            st.apply(&[(c, [5, 0, 0, 0, 0, 0, 0, 0])], &[]).unwrap();
+            let before_a = st.root();
+            st.apply(&[], &[(c, None, 50)]).unwrap();              // A: re-creates c over its spent record
+            let after_a = st.root();
+            st.apply(&[], &[(later, None, 3)]).unwrap();           // B: an ordinary block
+            assert_eq!(st.undo(&[], &[(later, None, 3)]), Ok(after_a), "B undoes");
+            assert_eq!(st.undo(&[], &[(c, None, 50)]), Err(TErr::Missing), "A, now the last, is refused");
+            assert_eq!(st.root(), after_a);
+            assert_ne!(st.root(), before_a);
+            // a store loaded from a snapshot knows nothing of how its updates were applied: undo refused
+            let mut back = TrieStore::from_bytes(&st.to_bytes()).unwrap();
+            assert_eq!(back.undo(&[], &[(c, None, 50)]), Err(TErr::Missing), "loaded store");
+        }
+    }
+
+    /// Two script hashes sharing their first 255 bits put both address leaves at depth 256: the guest accepts it, and
+    /// so must the model and the store, with the same root (review round 7: they refused any insert at depth 256).
+    /// A third address there would need a split at depth 256: refused by all three.
+    #[test]
+    fn address_leaves_at_depth_256_agree_with_the_guest() {
+        for counts in [true, false] {
+            let mut k1 = key(9, 0, 1, 0);
+            k1[31] = 0x02;
+            let mut k2 = k1;
+            k2[31] = 0x03;                 // only bit 255 of the script hash differs
+            k2[32] = 2;                    // another coin
+            let mut st = TrieStore::new(counts);
+            st.apply(&[], &[(k1, None, 10)]).unwrap();
+            let old = st.root();
+            let ins: Vec<(Key, Option<W>, u64)> = alloc::vec![(k2, None, 20)];
+            let wit = st.witness(&[], &ins);
+            let new = st.apply(&[], &ins).unwrap();
+            assert_eq!(apply_stream_perm(&wit, &[], &ins, Some(&perm(&[], &ins))), Ok(new), "guest");
+            let (_, _, mut t) = decode(&wit).unwrap();
+            let mut r = old;
+            model_apply(&mut r, &mut t, counts, &[], &ins).unwrap();
+            assert_eq!(r, new, "model");
+            // a further coin at each depth-256 address: fine everywhere
+            let mut k3 = k2;
+            k3[32] = 3;
+            let ins3: Vec<(Key, Option<W>, u64)> = alloc::vec![(k3, None, 5)];
+            let wit = st.witness(&[], &ins3);
+            let new3 = st.apply(&[], &ins3).unwrap();
+            assert_eq!(apply_stream_perm(&wit, &[], &ins3, Some(&perm(&[], &ins3))), Ok(new3), "guest, a second coin");
         }
     }
 

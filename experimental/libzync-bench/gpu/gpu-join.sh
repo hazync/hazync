@@ -29,7 +29,9 @@ if [ "${1:-}" = "--mkbundle" ]; then
 fi
 
 BUNDLE="${BUNDLE:?set BUNDLE to the unpacked join bundle}"; N=${N:-8}
-OUT="${OUT:-$HOME/libzync-join-$(date +%Y%m%d-%H%M)}"; mkdir -p "$OUT/leaf" "$OUT/join"
+# read the caller's levers BEFORE every HAZYNC_* is unset below (only the levers set here reach the host)
+CHUNKS=${HAZYNC_CHUNKS:-1}; HINT_THREADS=${HAZYNC_HINT_THREADS:-$(nproc)}
+OUT="${OUT:-$HOME/libzync-join-$(date +%Y%m%d-%H%M)}"; mkdir -p "$OUT/leaf" "$OUT/join"; : > "$OUT/leaf_exit.txt"
 # DRY=1 DRYBIN=<host>: the script's logic on a laptop (dev mode, no GPU, no build)
 if [ "${DRY:-0}" = 1 ]; then G=${G:-2}; BIN=${DRYBIN:?DRYBIN=<host binary of the bundle image>}; export RISC0_DEV_MODE=1 SKIP_BUILD=1
 else G=$(nvidia-smi -L | grep -c '^GPU'); fi
@@ -45,8 +47,8 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   ( cd "$P" && HAZYNC_GUEST_ELF="$BUNDLE/method.bin" HAZYNC_GUEST_PIN_DIR="$BUNDLE/pins" HAZYNC_LIBZYNC=1 \
       cargo build --release --features cuda -p host ) >"$OUT/build.log" 2>&1 || die "build failed, see $OUT/build.log"
 fi
-"$BIN" method-id | grep -qw "$WANT_ID" || die "METHOD_ID is not the pinned $WANT_ID"
-export HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=${HAZYNC_CHUNKS:-1} HAZYNC_HINT_THREADS=${HAZYNC_HINT_THREADS:-$(nproc)}
+"$BIN" method-id 2>/dev/null | grep -w "$WANT_ID" >/dev/null || die "METHOD_ID is not the pinned $WANT_ID"
+export HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=$CHUNKS HAZYNC_HINT_THREADS=$HINT_THREADS
 ( nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader -l 1 >"$OUT/smi.log" 2>/dev/null ) & SMI=$!
 trap 'kill $SMI 2>/dev/null' EXIT
 

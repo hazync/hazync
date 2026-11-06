@@ -41,8 +41,8 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   grep -q "REAL_EXIT=0" "$OUT/build.log" || die "build failed, see $OUT/build.log"
   say "built in $((SECONDS-T0)) s"
 fi
-ldd "$BIN" 2>/dev/null | grep -qi cuda || die "host is NOT linked against CUDA"
-"$BIN" method-id | grep -qw "$WANT_ID" || die "METHOD_ID is not the pinned $WANT_ID"
+ldd "$BIN" 2>/dev/null | grep -i cuda >/dev/null || die "host is NOT linked against CUDA"
+"$BIN" method-id 2>/dev/null | grep -w "$WANT_ID" >/dev/null || die "METHOD_ID is not the pinned $WANT_ID"
 
 export HAZYNC_BLOCK="$BUNDLE/block_962000.json" HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=16 \
        HAZYNC_COINLOG_TXCOUNTS="$BUNDLE/txcounts.txt" HAZYNC_HINT_THREADS="${HAZYNC_HINT_THREADS:-$(nproc)}"

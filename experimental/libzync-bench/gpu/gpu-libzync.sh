@@ -39,7 +39,7 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   grep -q "REAL_EXIT=0" "$OUT/build.log" || die "build failed, see $OUT/build.log"
   say "built in $((SECONDS-T0)) s"
 fi
-ldd "$BIN" 2>/dev/null | grep -qi cuda || die "host is NOT linked against CUDA"
+ldd "$BIN" 2>/dev/null | grep -i cuda >/dev/null || die "host is NOT linked against CUDA"
 GOT_ID=$("$BIN" method-id | awk '/METHOD_ID/{print $2}')
 [ "$GOT_ID" = "$WANT_ID" ] || die "METHOD_ID $GOT_ID != pinned $WANT_ID"
 grep -qa "agg-lite: REJECT chunk context" "$BIN" || die "embedded guest lacks the agg-lite strings — wrong image"

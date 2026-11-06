@@ -179,6 +179,7 @@ pub(crate) fn seg_distribute_cmd() {
     let t_exec = Instant::now();
     let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run()
         .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("guest execution", &e)));
+    crate::lz::require_committed(session.exit_code, "guest execution");
     let exec_s = t_exec.elapsed().as_secs_f64();
     let total = session.segments.len();
 
@@ -348,6 +349,7 @@ pub(crate) fn seg_coordinate_cmd() {
     let t_exec = Instant::now();
     let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run()
         .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("guest execution", &e)));
+    crate::lz::require_committed(session.exit_code, "guest execution");
     let exec_s = t_exec.elapsed().as_secs_f64();
     let total = session.segments.len();
 
@@ -501,6 +503,7 @@ pub(crate) fn seg_coordinate_tree_cmd() {
     let t_exec = Instant::now();
     let session = ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF).unwrap().run()
         .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("guest execution", &e)));
+    crate::lz::require_committed(session.exit_code, "guest execution");
     let exec_s = t_exec.elapsed().as_secs_f64();
     let total = session.segments.len();
 
@@ -2277,6 +2280,8 @@ come back by itself. Start one against this coordinator, or re-run.");
             })
             .expect("execute")
     };
+    // segments already went out while it ran; stop before anything is assembled or verified
+    crate::lz::require_committed(session.exit_code, "streamed execution");
     let exec_s = t_exec.elapsed().as_secs_f64();
     let total = wire.lock().unwrap().len();
     total_known.store(total, std::sync::atomic::Ordering::SeqCst);

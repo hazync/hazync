@@ -482,6 +482,7 @@ fn chain_step(prev: &ChainState, w: &BlockWitness, _is_base: u32) -> (ChainState
     b.write(&1u32).unwrap(); // execute: is_base=1 skips env::verify (logic validation only)
     b.write(&METHOD_ID).unwrap();
     let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).unwrap();
+    crate::lz::require_committed(s.exit_code, "execution");
     (s.journal.decode().unwrap(), s.cycles())
 }
 
@@ -1503,6 +1504,7 @@ fn prove_chunk(idx: usize) {
     let ctx = risc0_zkvm::VerifierContext::default();
     let session = risc0_zkvm::ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF)
         .unwrap().run().unwrap();
+    crate::lz::require_committed(session.exit_code, "chunk execution");
     let nseg = session.segments.len();
     println!("chunk {idx}: {} inputs, {nseg} segments at po2 {} — proving", hi - lo, seg_po2());
     // SCALING: prove the chunk to a SUCCINCT receipt (not the default composite). This runs the
@@ -2286,6 +2288,7 @@ fn main() {
         mb.write(s).unwrap();
     }
     let sess = default_executor().execute(mb.build().unwrap(), METHOD_ELF).unwrap();
+    crate::lz::require_committed(sess.exit_code, "multi-tx execution");
     let results: Vec<SpendResult> = sess.journal.decode().unwrap();
     println!("(flags 0x{:x} = P2SH|DERSIG|CLTV|CSV|WITNESS|NULLDUMMY|TAPROOT)", results.first().map(|r| r.flags).unwrap_or(0));
     for ((name, _), r) in specs.iter().zip(&results) {
@@ -2520,6 +2523,7 @@ fn prove_env_with_progress(env: ExecutorEnv, label: &str) -> risc0_zkvm::Receipt
         .expect("executor")
         .run()
         .expect("execute");
+    crate::lz::require_committed(session.exit_code, "execution");
     println!("{label}: executed, {} segments at po2 {} -- proving", session.segments.len(), seg_po2());
     prove_session_resilient(&server, &ctx, &session)
 }

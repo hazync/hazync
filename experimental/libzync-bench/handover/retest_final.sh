@@ -54,15 +54,16 @@ mkdir -p $O/cost
 for b in $Z/prover/block_962000.json $HOME/libzync-gpu/sample/block_{970000,900000,850000,800000,750000,700000,650000}.json $R/exc/block_170060.json $R/exc/block_692261.json; do
   n=$(basename $b .json)
   for img in $PREV ${T}m; do
-    HAZYNC_BLOCK=$b $R/host_$img libzync-hints $O/cost/${n}_$img.lzb > /dev/null 2>&1
+    # a failed hints step would leave a collect run (no hints): no cost figure, so it must not print ok
+    HAZYNC_BLOCK=$b $R/host_$img libzync-hints $O/cost/${n}_$img.lzb > $O/cost/${n}_$img.hints.log 2>&1 || echo "HINTS_FAILED $n $img"
     HAZYNC_BLOCK=$b HAZYNC_LZ_HINTS=$O/cost/${n}_$img.lzb $R/host_$img agg-exec-fake > $O/cost/${n}_$img.log 2>&1
-    awk -v n=$n -v i=$img '/chunk .*executed:/{c+=$(NF-1)} /block validation cycles/{a=$NF} /REJECT|INVALID/{bad=1} END{printf "%-14s %-6s chunks %12d aggregate %11d whole %12d %s\n", n, i, c, a, c+a, (bad?"INVALID":"ok")}' $O/cost/${n}_$img.log
+    awk -v n=$n -v i=$img '/chunk .*executed:/{c+=$(NF-1)} /block validation cycles/{a=$NF} /REJECT|INVALID/{bad=1} END{printf "%-14s %-6s chunks %12d aggregate %11d whole %12d %s\n", n, i, c, a, c+a, (bad?"INVALID":(a>0?"ok":"NO RESULT"))}' $O/cost/${n}_$img.log
   done
 done
 step "edge blocks: BIP30 repeats, activation boundaries, first retarget, the largest legacy tx (${T}m, modelled log)"
 for h in 2016 91842 91880 185956 227931 363725 364292 388381 419328 481824; do
   b=$HOME/libzync-gpu/edge/block_$h.json
-  HAZYNC_BLOCK=$b $R/host_${T}m libzync-hints $O/cost/edge_$h.lzb > /dev/null 2>&1
+  HAZYNC_BLOCK=$b $R/host_${T}m libzync-hints $O/cost/edge_$h.lzb > $O/cost/edge_$h.hints.log 2>&1 || echo "HINTS_FAILED edge $h"
   HAZYNC_BLOCK=$b HAZYNC_LZ_HINTS=$O/cost/edge_$h.lzb timeout 3600 $R/host_${T}m agg-exec-fake > $O/cost/edge_$h.log 2>&1; rc=$?
   awk -v n=$h -v rc=$rc '/chunk .*executed:/{c+=$(NF-1)} /block validation cycles/{a=$NF} /REJECT|INVALID/{bad=1} END{printf "edge %-7s chunks %12d aggregate %11d whole %12d %s (exit %s)\n", n, c, a, c+a, (bad?"INVALID":(a>0?"ok":"NO RESULT")), rc}' $O/cost/edge_$h.log
 done

@@ -121,7 +121,9 @@ fn ins_sub(n: &mut Sub, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<(), TEr
 }
 
 fn ins_top(n: &mut Top, s: &W, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<(), TErr> {
-    if d >= 256 { return Err(TErr::Witness); }
+    // as the guest's top_node / build_top: a leaf may sit at depth 256 (two script hashes sharing 255 bits); an inner
+    // node there, or a split it would need, is refused
+    if d > 256 { return Err(TErr::Witness); }
     let (dc, dv) = if sp.is_none() { (1u64, v) } else { (0, 0) };
     let other = match n {
         Top::Empty => {
@@ -129,6 +131,7 @@ fn ins_top(n: &mut Top, s: &W, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<
             return Ok(());
         }
         Top::Pruned(_) => return Err(TErr::Witness),
+        Top::Inner(_, _) if d >= 256 => return Err(TErr::Witness),
         Top::Inner(l, r) => return if bit(s, d) { ins_top(r, s, o, sp, v, d + 1) } else { ins_top(l, s, o, sp, v, d + 1) },
         Top::Addr { s: a, count, value, sub } => {
             if a == s {
@@ -137,6 +140,7 @@ fn ins_top(n: &mut Top, s: &W, o: &W, sp: &Option<W>, v: u64, d: u32) -> Result<
                 *value = value.checked_add(dv).ok_or(TErr::Count)?;
                 return Ok(());
             }
+            if d >= 256 { return Err(TErr::Witness); }
             *a
         }
     };

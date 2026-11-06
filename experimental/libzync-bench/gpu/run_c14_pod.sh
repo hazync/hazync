@@ -9,7 +9,11 @@
 # Every run records the host: CPU model, cores, load and the busiest processes before and during proving.
 set -uo pipefail
 L=~/libzync-gpu/gpu14; OUT=${OUT:-$L/pod}; RUNS=${RUNS:-runb join}; mkdir -p "$OUT"
-COMMIT=${COMMIT:-e24f7d3}; DEADLINE=$(( $(date +%s) + ${DEADLINE_MIN:-150} * 60 ))
+# the commit the pod runs: by default this checkout's HEAD, which must be on the remote (the pod clones it)
+Z=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+COMMIT=${COMMIT:-$(git -C "$Z" rev-parse HEAD)}
+git -C "$Z" fetch -q origin && git -C "$Z" branch -r --contains "$COMMIT" | grep . >/dev/null || { echo "commit $COMMIT is not pushed"; exit 1; }
+DEADLINE=$(( $(date +%s) + ${DEADLINE_MIN:-150} * 60 ))
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 -o ServerAliveInterval=30"
 log () { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/driver.log"; }
@@ -60,18 +64,24 @@ log "ssh root@$HOST -p $PORT"
 
 # 4. setup (background on the pod) while the bundles upload
 ssh $K -p "$PORT" root@"$HOST" "cat > /workspace/setup.sh" <<EOF
-set -x
+set -ex
+trap 'echo SETUP_FAILED' ERR
 export DEBIAN_FRONTEND=noninteractive
+# spend guard on the pod itself, in case the laptop driver dies: remove this pod after the deadline (best effort:
+# needs runpodctl and the pod's own RUNPOD_* environment; the laptop's deadline is the primary guard)
+( sleep $(( ${DEADLINE_MIN:-150} * 60 + 900 )); runpodctl remove pod "\$RUNPOD_POD_ID" ) > /workspace/selfterm.log 2>&1 &
 apt-get update -qq && apt-get install -y -qq build-essential cmake git curl ca-certificates pkg-config libssl-dev clang lld protobuf-compiler
 curl -fsSL -o /tmp/k.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && dpkg -i /tmp/k.deb && apt-get update -qq && apt-get install -y -qq cuda-toolkit-12-8
 ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-cd /workspace && git clone -q -b libzync https://github.com/hazync/hazync.git && cd hazync && git checkout -q $COMMIT && git log --oneline -1
+cd /workspace && git clone -q -b libzync https://github.com/hazync/hazync.git && cd hazync && git checkout -q $COMMIT
+[ "\$(git rev-parse HEAD)" = "\$(git rev-parse $COMMIT)" ] || false
+git log --oneline -1
 echo SETUP_DONE
 EOF
 ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && (setsid nohup bash setup.sh > setup.log 2>&1 < /dev/null &)'
 scp -q $K -P "$PORT" "$OUT/bundles.tgz" root@"$HOST":/workspace/ || { log "bundle upload failed"; exit 1; }
-ssh $K -p "$PORT" root@"$HOST" "cd /workspace && [ \"\$(sha256sum bundles.tgz | cut -c1-64)\" = $(cat "$OUT/bundles.sha") ] && tar xzf bundles.tgz && echo BUNDLES_OK" | tee -a "$OUT/driver.log" | grep -q BUNDLES_OK || { log "bundle check failed"; exit 1; }
+ssh $K -p "$PORT" root@"$HOST" "cd /workspace && [ \"\$(sha256sum bundles.tgz | cut -c1-64)\" = $(cat "$OUT/bundles.sha") ] && tar xzf bundles.tgz && echo BUNDLES_OK" | tee -a "$OUT/driver.log" | grep BUNDLES_OK >/dev/null || { log "bundle check failed"; exit 1; }
 log "bundles uploaded and checked"
 
 # 5. the run, on the pod
@@ -80,7 +90,8 @@ ssh $K -p "$PORT" root@"$HOST" "cat > /workspace/pod.sh" <<'EOF'
 set -uo pipefail
 export CUDA_PATH=/usr/local/cuda-12.8 PATH="/usr/local/cuda-12.8/bin:$HOME/.cargo/bin:$PATH" LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH:-}"
 cd /workspace
-until grep -q SETUP_DONE setup.log; do sleep 10; done
+until grep -q '^SETUP_DONE\|^SETUP_FAILED' setup.log; do sleep 10; done
+grep -q '^SETUP_DONE' setup.log || { echo "SETUP FAILED (setup.log)"; echo POD_DONE; exit 1; }
 echo "SETUP $(tail -2 setup.log | head -1)"
 H=/workspace/hazync/experimental/libzync-bench/gpu
 # the host, before and during: is anything else using the CPUs this card's witness generation needs?
@@ -106,4 +117,7 @@ while :; do
   [ "$(date +%s)" -ge "$DEADLINE" ] && { log "DEADLINE reached: harvesting what exists"; break; }
   sleep 30
 done
-exit 0   # the EXIT trap harvests, then terminates
+# the EXIT trap harvests, then terminates; the exit code says whether every run passed
+grep -q 'RUNB_EXIT=[1-9]\|JOIN_EXIT=[1-9]\|SETUP FAILED' "$OUT/pod.log.live" && exit 2
+grep -q POD_DONE "$OUT/pod.log.live" || exit 3
+exit 0

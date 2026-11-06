@@ -306,6 +306,7 @@ pub(crate) fn report_agg_execute_only(mut b: risc0_zkvm::ExecutorEnvBuilder) {
     let t_x = Instant::now();
     let session = default_executor().execute(b.build().unwrap(), METHOD_ELF)
         .unwrap_or_else(|e| panic!("{}", guest_failure("aggregate (mode 5) execution", &e)));
+    require_committed(session.exit_code, "aggregate (mode 5) execution");
     let cycles = session.cycles();
     println!("=== AGGREGATE, EXECUTE ONLY (no proving) ===");
     println!("  block validation cycles  {cycles}");
@@ -582,6 +583,17 @@ fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
         risc0_zkvm::ExitCode::Halted(0) => Ok(false),
         risc0_zkvm::ExitCode::Halted(c) if c == libzync::wire::COLLECT_EXIT as u32 => Ok(true),
         c => Err(format!("guest exited with {c:?}")),
+    }
+}
+
+/// For a run that must COMMIT (anything proved, or measured as a block): Halted(0) or a panic naming `what`. A collect
+/// run (no ECMH hints) exits COLLECT_EXIT having skipped every ECMH add and subtract, so it is neither a proof nor a
+/// cost figure; any other exit is a failure. Call it right after execution, before any proving or reporting.
+pub(crate) fn require_committed(code: risc0_zkvm::ExitCode, what: &str) {
+    match exit_ok(code) {
+        Ok(false) => {}
+        Ok(true) => panic!("{what}: a collect run (no ECMH hints): it commits nothing and is not a block's cost"),
+        Err(e) => panic!("{what}: {e}"),
     }
 }
 
@@ -1114,9 +1126,7 @@ pub(crate) fn agg_chunks() {
     let session = risc0_zkvm::ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF)
         .unwrap().run().unwrap_or_else(|e| panic!("{}", guest_failure("aggregate execution", &e)));
     // stop before proving anything that no verifier accepts (a collect run exits COLLECT_EXIT: the hints are missing)
-    if let Err(e) = exit_ok(session.exit_code).and_then(|c| if c { Err("a collect run (no ECMH hints)".into()) } else { Ok(()) }) {
-        panic!("aggregate execution: {e}; nothing proved");
-    }
+    require_committed(session.exit_code, "aggregate execution (nothing proved)");
     let nseg = session.segments.len();
     println!("  {nseg} segments to prove at po2 {}", seg_po2());
     // #237: the aggregate had the SAME unprotected `prove_session` as `prove-chunk`. A #119 fault
