@@ -245,21 +245,34 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     assert_eq!(smt.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
     let mut ecmh = Ecmh::from_state(prev.live_set, &prev.live_hash);
     // The first block is a base step on the anchor: its anchor_id is the digest of the anchor's journal, and the image
-    // stamps its own id and profile; every later block carries them.
-    let anchor_id = crate::link_digest(&prev);
+    // stamps its own id and profile; every later block carries them. HAZYNC_PREP_CONTINUE=1: the anchor is a state of
+    // the SAME chain (a restart after a crash, from the last saved state_<h>.json), so the chain's own anchor_id carries
+    // on and the states stay byte-identical to an uninterrupted run (11-06).
+    let anchor_id = if std::env::var("HAZYNC_PREP_CONTINUE").as_deref() == Ok("1") { prev.anchor_id } else { crate::link_digest(&prev) };
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
     let each = std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() == Ok("1");
+    // Disk mode (HAZYNC_COINLOG_DIR): also save every HAZYNC_PREP_SAVE_EVERY blocks (default 1,000), so the journal of
+    // blocks since the last save stays bounded and a crash resumes from at most that far back (anchor: the last
+    // state_<h>.json saved with its .coinlog / .trie).
+    let every: u32 = if crate::lz::cl_dir().is_some() {
+        std::env::var("HAZYNC_PREP_SAVE_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1000).max(1)
+    } else { 0 };
     let t0 = std::time::Instant::now();
     for h in lo..=hi {
         let j = crate::read_block_json(dir, h);
         let mut st = prep_block(&prev, &j, &mut smt, &mut ecmh);
+        // test hook: die after block h changed the stores, before any save (the window the journal covers)
+        if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok(&format!("prep-after:{h}")) { std::process::exit(9); }
         if h == lo { st.anchor_id = anchor_id; }
         st.self_id = methods::METHOD_ID;
         st.profile = crate::lz::expected_profile();
         std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
-        if each || h == hi {
-            crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"));
+        if each || h == hi || (every > 0 && h % every == 0) {
+            crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);
             crate::trie::trie_save(&format!("{out}/state_{h}.trie"));
+            // both stores saved at h: the journal of the blocks since the last save can go (crash before: a resume
+            // from the last saved state undoes them; the disk trie falls back to its last flush by itself)
+            crate::lz::cl_journal_commit();
         }
         if let Some(c) = &check {
             let want: ChainState = serde_json::from_str(&std::fs::read_to_string(format!("{c}/state_{h}.json"))

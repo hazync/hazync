@@ -1700,6 +1700,8 @@ pub(crate) fn seg_serve_cmd() {
     // there -- meanwhile the aggregate's segments are proved alongside the chunks (GPU_RESULTS.md step 1).
     let agg_early = agg && std::env::var("HAZYNC_AGG_EARLY").as_deref() == Ok("1");
     let mut agg_nchunks = 0usize;
+    // AGG_EARLY: each chunk's expected claim digest, from this box's own execution of the chunks
+    let mut early_claims: Vec<risc0_zkvm::sha::Digest> = Vec::new();
     let mut b = ExecutorEnv::builder();
     // The only witness field the rest of this function needs. A bundle carries it too, so mode 6 never
     // builds a BlockWitness — there is no HAZYNC_BLOCK fixture for a board block, which is the whole
@@ -1722,6 +1724,22 @@ pub(crate) fn seg_serve_cmd() {
                 let r: Vec<_> = execute_chunks_parallel(&w, &bounds, hint_threads()).into_iter().map(|(r, _)| r).collect();
                 println!("  AGG_EARLY: {} chunk claims from local execution in {:.1} s; receipts are awaited at resolve",
                          r.len(), t.elapsed().as_secs_f64());
+                use risc0_zkvm::sha::Digestible;
+                early_claims = r.iter().map(|x| x.claim().expect("chunk claim").digest()).collect();
+                // A chunk file already there that is NOT this block's chunk (an earlier block's, left in the receipts
+                // directory) would pass the wait at resolve and fail only after every aggregate segment is proved
+                // (review 11-06): move it aside now.
+                let dir = std::env::var("HAZYNC_RECEIPTS").unwrap_or_else(|_| ".".into());
+                for (i, want) in early_claims.iter().enumerate() {
+                    for f in [format!("{dir}/chunk_{i}.hzk"), format!("{dir}/chunk_{i}.bin")] {
+                        if !std::path::Path::new(&f).exists() { continue; }
+                        if early_claim_of(&f).as_ref() != Some(want) {
+                            let to = format!("{f}.stale");
+                            std::fs::rename(&f, &to).unwrap_or_else(|e| panic!("{f}: {e}"));
+                            println!("  AGG_EARLY: {f} is not this block's chunk {i}: moved aside to {to}");
+                        }
+                    }
+                }
                 r
             } else { read_chunk_receipts(bounds.len()) };
             println!("=== segment coordinator (push): AGGREGATE of {} chunk receipts, block {} po2 {} ===",
@@ -2498,7 +2516,27 @@ come back by itself. Start one against this coordinator, or re-run.");
         // be finishing. Each one is verified against METHOD_ID on the way in (read_chunk_receipts).
         let dir = std::env::var("HAZYNC_RECEIPTS").unwrap_or_else(|_| ".".into());
         let t_wait = Instant::now();
-        while (0..agg_nchunks).any(|i| !std::path::Path::new(&format!("{dir}/chunk_{i}.hzk")).exists()) {
+        // Each file must decode to this block's chunk i (a file still being copied is retried; a WRONG chunk is a
+        // loud failure at once), and the wait is bounded: HAZYNC_AGG_EARLY_WAIT_S (default 7,200 s) names the
+        // chunks still missing instead of holding the fleet for ever (review 11-06).
+        let limit = std::env::var("HAZYNC_AGG_EARLY_WAIT_S").ok().and_then(|v| v.parse().ok()).unwrap_or(7200.0f64);
+        let mut ok = vec![false; agg_nchunks];
+        while ok.iter().any(|x| !x) {
+            for i in 0..agg_nchunks {
+                if ok[i] { continue; }
+                let f = format!("{dir}/chunk_{i}.hzk");
+                if !std::path::Path::new(&f).exists() { continue; }
+                match early_claim_of(&f) {
+                    Some(d) if d == early_claims[i] => ok[i] = true,
+                    Some(d) => panic!("{f} has claim {d}, not this block's chunk {i} ({}): refusing it before the resolves", early_claims[i]),
+                    None => {} // not yet a whole receipt (a copy in progress): retry
+                }
+            }
+            if ok.iter().all(|x| *x) { break; }
+            if t_wait.elapsed().as_secs_f64() > limit {
+                let missing: Vec<usize> = (0..agg_nchunks).filter(|i| !ok[*i]).collect();
+                panic!("AGG_EARLY: chunks {missing:?} not here after {limit} s (HAZYNC_AGG_EARLY_WAIT_S)");
+            }
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
         println!("    AGG_EARLY: all {agg_nchunks} chunk receipts present after {:.1} s of waiting",
@@ -2914,4 +2952,11 @@ mod join_tree_tests {
         assert!(no_peers_breached(0, 4, 61.0, 60.0), "a tightened window fires sooner");
         assert!(!no_peers_breached(0, 4, 1000.0, 3600.0), "a widened window waits longer");
     }
+}
+
+/// AGG_EARLY: the claim digest of the chunk receipt in `f`, or None if it is not (yet) a whole receipt.
+fn early_claim_of(f: &str) -> Option<risc0_zkvm::sha::Digest> {
+    use risc0_zkvm::sha::Digestible;
+    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).ok()?).ok()?;
+    Some(r.claim().ok()?.digest())
 }

@@ -103,13 +103,14 @@ refuse it.
    FFI/WASM took the trusted tip from the facts JSON: now a separate argument, refused inside it; L1 host
    `--anchor` hashed without zeroing anchor_id: fixed; host: a resume with a disk trie always panicked (fixed),
    receipts / states / history.bin now written atomically, dev-mode runs say so on their DONE line, an existing disk
-   coin log is never wiped without HAZYNC_COINLOG_FRESH=1. **Open, recorded (none affects soundness):** a receipt
-   nested ~50k deep can overflow the verifier's stack (no verdict line; FFI/WASM abort): cap depth before decode
-   (verifiers, before publishing them); FFI/WASM take `now` from the caller (u64::MAX disables time-too-new):
-   document; a regtest host prints OK (by design: regtest has no min work); disk coin log and disk trie are saved as
-   two steps (a crash between them needs a rebuild): one commit marker, and libzync-prep's in-place coin log needs
-   an undo journal, both with the mainnet prep (H-B 8 / e); AGG_EARLY waits on a chunk FILE (stale file passes, no
-   timeout): with the coordinator queue (H-B e).
+   coin log is never wiped without HAZYNC_COINLOG_FRESH=1. **The three open items, FIXED 11-06 (user):** a
+   composite receipt (it nests without bound: a hostile one overflowed the verifier's stack) is refused from its first
+   4 bytes before decoding, in swiftsync-verify (CLI / FFI / WASM) and host libzync-verify; the disk coin log keeps a
+   multi-block journal until the block's ONE commit point (both stores saved), so a crash between the two saves, or
+   anywhere in a libzync-prep range, resumes from the last saved height (prep now also saves every 1,000 blocks in disk
+   mode; a record carries its height, which also ends the false rollback of a block with no appends); AGG_EARLY moves
+   stale chunk files aside at start, checks each file's claim while waiting and times out
+   (`HAZYNC_AGG_EARLY_WAIT_S`). Still by design: FFI/WASM take `now` from the caller; a regtest host prints OK.
 7. **Freeze: ask the user.**
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until

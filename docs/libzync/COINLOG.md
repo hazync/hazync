@@ -124,3 +124,17 @@ design B's SwiftSync accounting. On 800,000 the coin log is cheaper. The log wit
 The host keeps every node of the log (`coinlog::Store`) and writes `state_<h>.coinlog` (u64 count, then 32 bytes per
 leaf) at the end of a range, or at every height with `HAZYNC_COINLOG_SAVE_EACH=1`. A run anchored on a receipt needs
 that receipt height's log file. Mainnet's log is about 2.4 billion leaves; a production host needs a disk-backed store.
+
+**On disk** (`HAZYNC_COINLOG_DIR`, `libzync::host::DiskNodes` + `DiskIndex`; the trie likewise with `HAZYNC_TRIE_DIR`).
+The store is advanced in place, so `state_<h>.coinlog` is a small marker (`LZDISK02`: height, leaf count, roots) and
+crash safety comes from a journal:
+- before a block changes the store, its undo record (`LZPEND02`: height, leaf count, spent positions and leaves,
+  appends) is appended to `pending.bin` and synced;
+- the block's commit point is after BOTH the coin log and the trie are saved at h: only then is the journal cleared
+  (prove-range: every block; `libzync-prep`: at its save points, every `HAZYNC_PREP_SAVE_EVERY` blocks, default
+  1,000, and at the range's end);
+- a load of `state_<k>.coinlog` undoes, newest first, every journaled block above k. The disk trie needs no journal:
+  it is copy-on-write and falls back to its last flush. So a crash anywhere resumes from the last saved height
+  (prove-range `HAZYNC_RESUME=1`; prep from the last saved `state_<h>.json` with `HAZYNC_PREP_CONTINUE=1`, which
+  keeps the chain's own `anchor_id` instead of starting a new base step on it).
+- An existing store is never replaced unless `HAZYNC_COINLOG_FRESH=1`.

@@ -155,7 +155,15 @@ pub(crate) fn node_block_hash(cmd: &str, height: u32) -> Result<String, String> 
 
 pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Option<&str>, mempool: Option<&str>, cli: Option<&str>) {
     libzync_verify_fail_hook(); // also installed by the dispatcher, before the arguments are read
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}")))
+    let raw = std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}"));
+    // Refuse a composite receipt BEFORE decoding it (it nests without bound: a hostile one overflows the stack; cold
+    // review 11-06). bincode's first u32 is the InnerReceipt variant: 1 succinct, 2 Groth16.
+    match raw.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap())) {
+        Some(1) | Some(2) => {}
+        Some(3) => {} // a FakeReceipt: decoded, then refused below with its own message
+        k => { println!("  [FAIL] the receipt file is a single succinct or Groth16 proof (kind tag {k:?})"); println!("LIBZYNC_VERIFY_FAIL"); std::process::exit(1); }
+    }
+    let r: risc0_zkvm::Receipt = bincode::deserialize(&raw)
         .unwrap_or_else(|e| panic!("{receipt:?}: not a receipt: {e}"));
     let mut fails = 0;
     let mut check = |ok: bool, what: &str| {
@@ -1089,7 +1097,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             // two are kept (a checkpoint copier takes the second newest receipt, which may still be complete while
             // the newest is being written); HAZYNC_COINLOG_SAVE_EACH=1 keeps every one (tests). A mainnet-sized log
             // needs a disk-backed store instead (COINLOG.md §8).
-            cl_save(&format!("{out}/state_{h}.coinlog"));
+            cl_save(&format!("{out}/state_{h}.coinlog"), h);
+            // test hook: die between the coin log's save and the trie's (the window the journal covers)
+            if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok(&format!("after-coinlog-save:{h}")) { std::process::exit(9); }
             if h >= first + 2 && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() != Ok("1") {
                 let _ = std::fs::remove_file(format!("{out}/state_{}.coinlog", h - 2));
             }
@@ -1103,6 +1113,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
                 let _ = std::fs::remove_file(format!("{out}/state_{}.trie", h - 2));
             }
         }
+        // The block's commit point: the coin log and the trie are both saved at h, so its journal record can go. A crash
+        // before this line resumes at h-1, and the coin log's record undoes the block (11-06).
+        if methods::COINLOG { cl_journal_commit(); }
         let dt = t0.elapsed().as_secs_f64();
         // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
         let rbytes = std::fs::metadata(format!("{out}/block_{h}.rcpt")).map(|m| m.len()).unwrap_or(0);
@@ -1223,6 +1236,64 @@ pub(crate) fn cl_dir() -> Option<std::path::PathBuf> {
 /// A state_<h>.coinlog written in disk mode: this magic, then the leaf count and the roots it had (the leaves are in
 /// HAZYNC_COINLOG_DIR, mutated in place, so a load can only check that the directory is still at that state).
 pub(crate) const CL_DISK_MAGIC: &[u8; 8] = b"LZDISK01";
+/// Version 2 of that file: the magic, the HEIGHT of the state, then as version 1 (11-06: the height says which
+/// journal records postdate it).
+pub(crate) const CL_DISK_MAGIC2: &[u8; 8] = b"LZDISK02";
+/// One journal record (pending.bin, disk mode): this magic, the block height, then the undo body cl_rollback reads
+/// (leaf count before the block, the spends' positions and leaves, the appends). pending.bin is a SEQUENCE of these,
+/// one per block applied since the last commit (cl_journal_commit), each appended and synced before its block changes
+/// the store. A load undoes, newest first, every record above the saved state's height (11-06: before, the record was
+/// one block, replaced each block and removed at the coin log's save, so a crash between the coin log's save and the
+/// trie's, or anywhere inside a libzync-prep range, left a store no saved state matched).
+pub(crate) const CL_PEND_MAGIC: &[u8; 8] = b"LZPEND02";
+
+/// The journal records in pending.bin: (height, body), oldest first. A version-1 file (one bare body) is (None, body).
+fn cl_journal_records(u: &[u8]) -> Vec<(Option<u64>, &[u8])> {
+    if !u.starts_with(CL_PEND_MAGIC) { return if u.len() >= 8 { vec![(None, u)] } else { vec![] }; }
+    let rd = |b: &[u8], o: usize| b.get(o..o + 8).map(|x| u64::from_le_bytes(x.try_into().unwrap()));
+    let mut out = Vec::new();
+    let mut o = 0;
+    while u[o..].starts_with(CL_PEND_MAGIC) {
+        if u.len() < o + 16 { break } // a torn last record
+        let (Some(h), body) = (rd(u, o + 8), &u[o + 16..]) else { break };
+        // the body's length: n, k, k * 40, m, m * 32
+        let Some(k) = rd(body, 8) else { break };
+        let at_m = 16usize.saturating_add(40usize.saturating_mul(k as usize));
+        let Some(m) = rd(body, at_m) else { break };
+        let len = at_m.saturating_add(8).saturating_add(32usize.saturating_mul(m as usize));
+        if body.len() < len { break } // a torn last record: its block never changed the store
+        out.push((Some(h), &body[..len]));
+        o += 16 + len;
+        if o >= u.len() { break }
+    }
+    out
+}
+
+/// Disk mode: append this block's undo record to pending.bin and sync it, BEFORE the block changes the store.
+fn cl_journal_append(d: &std::path::Path, height: u32, store_len: u64, spends: &[(u64, [u8; 32])], appends: &[[u8; 32]]) {
+    use std::io::Write as _;
+    let mut b = Vec::new();
+    b.extend_from_slice(CL_PEND_MAGIC);
+    b.extend_from_slice(&(height as u64).to_le_bytes());
+    b.extend_from_slice(&store_len.to_le_bytes());
+    b.extend_from_slice(&(spends.len() as u64).to_le_bytes());
+    for (p, l) in spends { b.extend_from_slice(&p.to_le_bytes()); b.extend_from_slice(l); }
+    b.extend_from_slice(&(appends.len() as u64).to_le_bytes());
+    for l in appends { b.extend_from_slice(l); }
+    let p = d.join("pending.bin");
+    std::fs::OpenOptions::new().create(true).append(true).open(&p).and_then(|mut f| { f.write_all(&b)?; f.sync_data() })
+        .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    cl_sync_dir(d);
+}
+
+/// Disk mode: every store this block touched is saved (the coin log's state file AND the trie's): its undo records
+/// are no longer needed. The one commit point of a block; call it after the last save.
+pub(crate) fn cl_journal_commit() {
+    if let Some(d) = cl_dir().filter(|d| d.join("pending.bin").exists()) {
+        let _ = std::fs::remove_file(d.join("pending.bin"));
+        cl_sync_dir(&d);
+    }
+}
 
 /// Undoes one block from its pending.bin record: cut the appends (and drop them from the index), restore each spent
 /// coin's unspent leaf at its position (and put it back in the index). Refuses a record that does not start at `n`.
@@ -1287,14 +1358,15 @@ pub(crate) fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
     ClHost { store, pos }
 }
 
-pub(crate) fn cl_save(path: &str) {
+pub(crate) fn cl_save(path: &str, height: u32) {
     let g = CL.lock().unwrap();
     let h = g.as_ref().expect("coin log not initialised");
     let mut b = Vec::new();
     if let libzync::host::AnyNodes::Disk(d) = &h.store.nodes {
         d.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}"));
         if let libzync::host::AnyIndex::Disk(ix) = &h.pos { ix.sync().unwrap_or_else(|e| panic!("index sync: {e}")); }
-        b.extend_from_slice(CL_DISK_MAGIC);
+        b.extend_from_slice(CL_DISK_MAGIC2);
+        b.extend_from_slice(&(height as u64).to_le_bytes());
         b.extend_from_slice(&h.store.len().to_le_bytes());
         for r in h.store.roots() { b.extend_from_slice(&r.unwrap_or([0; 32])); b.push(r.is_some() as u8); }
     } else {
@@ -1308,35 +1380,47 @@ pub(crate) fn cl_save(path: &str) {
     f.unwrap_or_else(|e| panic!("{tmp}: {e}"));
     std::fs::rename(&tmp, path).unwrap_or_else(|e| panic!("{path}: {e}"));
     if let Some(dir) = std::path::Path::new(path).parent() { cl_sync_dir(if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir }); }
-    // The state is recorded: the block's undo record is no longer needed.
-    if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
-        let _ = std::fs::remove_file(d.join("pending.bin"));
-    }
+    // The journal is NOT cleared here: the trie may not be saved yet (cl_journal_commit, after the last save).
 }
 
 pub(crate) fn cl_load(path: &str) {
     let b = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e} (a coin-log anchor needs its .coinlog file)"));
     assert!(b.len() >= 8, "{path}: too short to be a coin log state file");
-    if b.starts_with(CL_DISK_MAGIC) {
-        assert!(b.len() >= 16 && (b.len() - 16) % 33 == 0, "{path}: a disk-mode state file of the wrong size");
+    if b.starts_with(CL_DISK_MAGIC) || b.starts_with(CL_DISK_MAGIC2) {
+        let (saved_h, body) = if b.starts_with(CL_DISK_MAGIC2) {
+            assert!(b.len() >= 16, "{path}: a disk-mode state file of the wrong size");
+            (Some(u64::from_le_bytes(b[8..16].try_into().unwrap())), &b[16..])
+        } else { (None, &b[8..]) };
+        assert!(body.len() >= 8 && (body.len() - 8) % 33 == 0, "{path}: a disk-mode state file of the wrong size");
         let d = cl_dir().unwrap_or_else(|| panic!("{path} was written in disk mode: set HAZYNC_COINLOG_DIR"));
         let store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
             libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
-        let n = u64::from_le_bytes(b[8..16].try_into().unwrap());
-        let roots: Vec<Option<[u8; 32]>> = b[16..].chunks_exact(33).map(|c| (c[32] == 1).then(|| c[..32].try_into().unwrap())).collect();
+        let n = u64::from_le_bytes(body[..8].try_into().unwrap());
+        let roots: Vec<Option<[u8; 32]>> = body[8..].chunks_exact(33).map(|c| (c[32] == 1).then(|| c[..32].try_into().unwrap())).collect();
         let mut store = store;
         let mut pos = cl_index();
         // A block that started changing the store after this state was saved (a crash, or a failed check): undo it.
         let pend = d.join("pending.bin");
         if let Ok(u) = std::fs::read(&pend) {
-            // Always roll back when the record is for this state, even if the nodes look untouched: the index may
-            // already have lost a spent coin (cl_commit removes it before setting the leaf; review round 2). Repeating
-            // it is harmless: the truncate does nothing and the sets and inserts rewrite the same values.
-            // A record for an older state belongs to a block that FINISHED (crash after its state file, before the
-            // record's removal): nothing to undo.
-            if u.len() >= 8 && u64::from_le_bytes(u[..8].try_into().unwrap()) == n {
-                cl_rollback(&mut store, &mut pos, &u, n);
-                eprintln!("  coin log store: undid the unfinished block recorded in pending.bin (back to {n} leaves)");
+            // Undo, newest first, every block recorded after this state, even if the nodes look untouched: the index
+            // may already have lost a spent coin (cl_commit removes it before setting the leaf; review round 2).
+            // Repeating an undo is harmless: the truncate does nothing and the sets and inserts rewrite the same values.
+            // A record at or below the state's height belongs to a block this state already includes: nothing to undo.
+            let recs = cl_journal_records(&u);
+            let mut undone = 0;
+            for (rh, body) in recs.iter().rev() {
+                let start = u64::from_le_bytes(body[..8].try_into().unwrap());
+                let after = match (rh, saved_h) {
+                    (Some(rh), Some(sh)) => *rh > sh,
+                    // a version-1 record or state file: the record is for this state when it starts at its leaf count
+                    _ => start == n || (start >= n && undone > 0),
+                };
+                if !after { continue; }
+                cl_rollback(&mut store, &mut pos, body, start);
+                undone += 1;
+            }
+            if undone > 0 {
+                eprintln!("  coin log store: undid {undone} unfinished block(s) recorded in pending.bin (back to {} leaves)", store.len());
             }
             let _ = std::fs::remove_file(&pend);
             cl_sync_dir(&d);
@@ -1396,21 +1480,8 @@ pub(crate) fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainStat
     // Disk mode: write (and fsync) how to undo this block BEFORE the store changes in place, so a crash or a failed
     // check below leaves a store that cl_load can roll back to the last saved state (review 11-03).
     if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
-        let mut b = Vec::new();
-        b.extend_from_slice(&h.store.len().to_le_bytes());
-        b.extend_from_slice(&(spends.len() as u64).to_le_bytes());
-        for (l, _, _) in spends {
-            let p = h.pos.get(l).unwrap_or(u64::MAX);
-            b.extend_from_slice(&p.to_le_bytes());
-            b.extend_from_slice(l);
-        }
-        b.extend_from_slice(&(appends.len() as u64).to_le_bytes());
-        for l in appends { b.extend_from_slice(l); }
-        let tmp = d.join("pending.tmp");
-        let f = std::fs::File::create(&tmp).and_then(|mut f| { use std::io::Write as _; f.write_all(&b)?; f.sync_data()?; Ok(f) });
-        f.unwrap_or_else(|e| panic!("{}: {e}", tmp.display()));
-        std::fs::rename(&tmp, d.join("pending.bin")).unwrap_or_else(|e| panic!("pending.bin: {e}"));
-        cl_sync_dir(&d);
+        let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
+        cl_journal_append(&d, st.height, h.store.len(), &sp, appends);
     }
     let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
@@ -1433,6 +1504,12 @@ pub(crate) fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainStat
 pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) -> (Vec<Option<[u8; 32]>>, u64) {
     let mut g = CL.lock().unwrap();
     let h = g.as_mut().expect("coin log not initialised");
+    // Disk mode: journal the block first, as cl_commit (prep advances the store in place and saves only at its save
+    // points, so a crash mid-range is undone back to the last one).
+    if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
+        let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
+        cl_journal_append(&d, height, h.store.len(), &sp, appends);
+    }
     for (l, t, v) in spends {
         let p = h.pos.remove(l).unwrap_or_else(|| panic!("prep: block {height} spends a coin the coin log does not hold"));
         h.store.set(p, libzync::coinlog::spent(l, &libzync::coinlog::spender(height, *t, *v)));

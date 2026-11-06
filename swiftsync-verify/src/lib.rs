@@ -312,9 +312,29 @@ pub struct Inputs<'a> {
     pub now: u64,
 }
 
+/// The receipt's kind, from its first bytes, BEFORE it is decoded: a chain proof is succinct or Groth16. A composite
+/// receipt holds assumption receipts that may themselves be composite, without bound, so decoding a hostile one ~50k
+/// levels deep (~1 MB) overflowed the stack (an abort in the C ABI, a trap in WASM, no verdict line in the CLI; cold
+/// review 11-06). Succinct and Groth16 claims nest to a fixed depth. bincode writes the InnerReceipt variant first, as
+/// a u32 LE: 0 Composite, 1 Succinct, 2 Groth16, 3 Fake (risc0-zkvm 3.0.5).
+pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
+    match receipt.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap())) {
+        Some(1) => Ok("succinct"),
+        Some(2) => Ok("groth16"),
+        Some(0) => Err("a composite receipt: a chain proof is succinct or Groth16 (composite receipts nest without bound, so they are refused before decoding)".into()),
+        Some(3) => Err("a dev-mode FakeReceipt, not a proof".into()),
+        Some(k) => Err(format!("not a receipt (kind tag {k})")),
+        None => Err("not a receipt (too short)".into()),
+    }
+}
+
 pub fn verify(inp: &Inputs) -> Report {
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false };
     let m = inp.image.method_id();
+    if let Err(e) = receipt_kind(inp.receipt) {
+        rep.check(false, format!("the receipt file is a single succinct or Groth16 proof ({e})"));
+        return rep;
+    }
 
     // Steps 1 and 8: a real proof of this image.
     let receipt: risc0_zkvm::Receipt = match bincode::deserialize(inp.receipt) {
