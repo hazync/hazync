@@ -16,7 +16,9 @@ two pods. Outputs: `~/libzync-gpu/gpu14/pod` (first) and `pod2` (rerun).
 - **The first pod's slowdown was the host, not c14:** the same image and bundle on a quieter host ran 40% faster, and
   its chunks beat design B's despite ~5% more cycles. No chunk needed a retry on either pod.
 - **c14 costs about what design B did per block** (537 vs 517 s) while also proving the coin log, the counting trie and
-  the live-coin hash. In the pipeline the trie update (51 s) runs on its own card alongside the chunks; this control
+  the live-coin hash. Against the canonical CORE guest: design B measured 8.6x card time on an A40 (9,990 vs 1,167 s);
+  scaled by 537/517, c14 is ESTIMATED at ~8.2x (not measured on the same card). c14's 440.6 M cycles a block are chunks
+  plus aggregate; the trie update is its own receipt on top (not measured separately on c14; 47 M on c10e5). In the pipeline the trie update (51 s) runs on its own card alongside the chunks; this control
   runs it serially.
 - **Even the good host keeps the card under half busy** (42%): each chunk is its own process, and host-side witness
   generation dominates. Two chunk processes per card is a cheap lever to measure (ROADMAP M3).
@@ -34,8 +36,8 @@ from native prep (byte-identical to the proved chain), then a balanced tree of 7
 
 So recursion works with real receipts: env::verify, assumption resolution, and a joined receipt that can be joined
 again. A whole-chain backfill of ~975 k blocks needs ~975 k joins over ~20 levels, every level parallel; at 6.4 s a
-join that is ~1,700 PRO 6000 card-hours of joins in total (~$4.3k at $2.49/hr): roughly a tenth on top of the
-block proofs (the whole-chain estimate is ~$37-42k, an A40 estimate, not measured on c14).
+join that is ~1,700 PRO 6000 card-hours of joins in total (~$4.3k at $2.49/hr): about 2% on top of the block proofs
+on the same card (~$214-225k with scripts checked, ESTIMATED for design B, `cost/WHOLE_CHAIN_COST.md`; not yet for c14).
 
 ⚠ The first pod's join hung after leaf 1: `gpu-join.sh` waited on every background job, including the nvidia-smi
 logger, which never exits (the laptop dry run has no nvidia-smi). Fixed in 6f00c58 and dry-run tested with a stand-in
