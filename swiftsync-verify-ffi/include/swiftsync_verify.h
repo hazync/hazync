@@ -43,15 +43,17 @@ int swiftsync_verify(const uint8_t* receipt, size_t receipt_len,
 /* As swiftsync_verify, plus zyncAPP facts (docs/libzync/ZYNCAPPS.md section 8). network: 0 mainnet, 1 signet, OR
  * 0x10 for a coin-log image, OR 0x20 for the product image (coin log + counting trie + live-coin hash). facts_json:
  * NUL-terminated JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact] (counting-trie facts at the
- * tip: coin unspent / spent by / absent, a script's balance or complete history), "expect": "<height>:<hash>"}, or NULL.
+ * tip: coin unspent / spent by / absent, a script's balance or complete history)}, or NULL. expect: NUL-terminated
+ * "<height>:<hash>", the network's block at the proof's height from a source YOU trust (your node, an explorer), or
+ * NULL; never take it from the fact server (an "expect" key inside facts_json is FAIL). A TrieFact that finds a coin
+ * must carry its creating transaction ("origin", a TxFact; ZYNCAPPS.md).
  * Each TrieFact must carry its claimed answer in its own "expect" ("absent", "unspent:<sat>",
  * "spent:<sat>:<height>:<tx>:<input>"; for balance / history "never" or "<count>:<sat>"): this result returns only
  * whether the claim holds, so a trie fact without one is FAIL. Any fact that does not hold is FAIL (1), with its
- * reason in msg; facts with no matching top-level "expect" (the network's block at the proof's height) give at most
- * DEMO (2). */
+ * reason in msg; facts without a matching expect give at most DEMO (2). */
 int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len,
                            uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
-                           const char* facts_json, swiftsync_result* out, char* msg, size_t msg_len);
+                           const char* facts_json, const char* expect, swiftsync_result* out, char* msg, size_t msg_len);
 
 /* The built-in image id for `network`, as 64 hex digits and a NUL; NULL for an unknown network. Static storage. */
 const char* swiftsync_image_id(uint8_t network);

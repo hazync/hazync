@@ -8,7 +8,9 @@
 //!   GET /find/<coin leaf hex>     {"position": p}
 //! With a trie snapshot (`zync-serve <history.bin> <addr:port> <state_<tip>.trie>`), counting-trie facts at the tip
 //! (TrieFact, checked with `swiftsync-verify --trie`):
-//!   GET /trie/coin/<scriptPubKey hex>/<txid>/<vout>   unspent / spent by / absent
+//!   GET /trie/coin/<scriptPubKey hex>/<txid>/<vout>   unspent / spent by / absent. A coin the trie HOLDS verifies only with
+//!                                                     its creating transaction attached as `origin` (`zync-path tx`):
+//!                                                     this server has no node, so the client adds it (TrieFact::origin)
 //!   GET /trie/balance/<scriptPubKey hex>              unspent count and value
 //!   GET /trie/history/<scriptPubKey hex>              every coin ever paid to the script
 use libzync::history::{block_path, decode_all, replay, Rec};

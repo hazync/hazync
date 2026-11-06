@@ -29,7 +29,14 @@ version 2 (SWIFTSYNC_PROOFS.md §3, HANDOVER.md §2); the shared check of §4 is
 | which images proved it | `self_id`, `lineage` | the image that made the receipt and the handovers behind it |
 
 **What the counting trie holds** (review round 2, 11-05). Every output Core puts in its coin set, keyed by
-(SHA-256(scriptPubKey), outpoint), including coins spent in their own block (with their spender) and zero-value outputs.
+(SHA-256(scriptPubKey), coin key), where the coin key is the txid with the output index XORed, little-endian, into its
+first 4 bytes (`agg_lite.rs` `okey`, `trie_fact::coin_key`). ⚠ That key is NOT injective: (txid, vout) and
+(txid ^ d, vout ^ d) share it, so a leaf alone does not say which outpoint it is. A verifier therefore accepts a coin
+fact that finds a coin (UNSPENT or SPENT) only with its creating transaction attached (`origin`, a tx fact: the
+transaction in a proven block, with this txid and an output at `vout` paying this script this value); an alias would
+need a real transaction whose txid is another's with its first 4 bytes changed (cold review 11-06). An ABSENT answer
+needs no origin (no key, no such coin), and history lists coins by key: an application names each outpoint with a tx
+fact. The trie includes coins spent in their own block (with their spender) and zero-value outputs.
 NOT in it, as not in Core's: provably unspendable outputs (OP_RETURN, scripts over 10,000 bytes) and the genesis
 coinbase. BIP30: the coinbases of 91,722 and 91,812 are overwritten by those of 91,880 and 91,842 (same txids) and are
 filed once, at the later block, so those two scripts' histories show one payment where the chain paid two. Likewise a coin created again

@@ -1,7 +1,8 @@
 # libzync coin leaf and forest format
 
-The byte-exact coin leaf (§2), which outputs become leaves (§3) and the forest hashing (§5) used by the coin log
-(`COINLOG.md`) and, for `parent`, the block forest (`HANDOVER.md` §3). Normative sources:
+The byte-exact coin leaf (§2) and which outputs become leaves (§3), used by the coin log (`COINLOG.md`), and the
+`parent` hash of §5, used by the block forest (`HANDOVER.md` §3). ⚠ The coin log does NOT hash its forest with §5: it
+has its own tagged compressions (`COINLOG.md` §2). Normative sources:
 `prover/methods/guest/verify_input.cpp` (`hz_leaf`, `coin_leaf`, `tx_out_leaves`), `prover/methods/guest/src/utreexo.rs`
 (`parent`, `Stump::add`) and `prover/methods/guest/src/agg_lite.rs` (which outputs enter the log).
 
@@ -87,9 +88,9 @@ parent(L, R) = SHA-256( 0x01 ‖ L ‖ R )                      65-byte preimage
 - After `n` leaves, `roots[k]` exists exactly when bit k of `n` is set.
 - **Normalisation:** trailing empty entries are dropped. Two states are equal when their normalised root lists
   and their `num_leaves` are equal.
-- **Serialisation:** in the committed `ChainState`, `utxo_roots` is a list of optional 32-byte values indexed
-  by k, and `utxo_leaves` is a u64 (the coin log's forest, COINLOG.md; the block forest, HANDOVER.md §3, uses the
-  same `parent`).
+- **Serialisation:** the roots are a list of optional 32-byte values indexed by k, and the leaf count a u64. Today
+  this `parent` and add rule build the block forest (`ChainState.block_roots` / `block_leaves`, HANDOVER.md §3).
+  `ChainState.utxo_roots` / `utxo_leaves` hold the coin log, whose nodes hash differently (COINLOG.md §2).
 
 The tags 0x00 and 0x01 separate the leaf domain from the interior domain. Without them, a leaf whose script
 is 7 bytes would have a 64-byte preimage (57 + 7), the same length as an interior node's (32 + 32).

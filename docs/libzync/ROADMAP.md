@@ -95,6 +95,21 @@ refuse it.
    review of the cleaned repo; a retest only if a fix moves the image.** Cleanup keeps guest-compiled files untouched
    (their bytes, comments included, are the image). Proof age is NOT an expiry (a proof is valid forever): every coin / trie / journey answer already names its height
    (checked 11-06; a trie fact must be about the proof's tip), and the app decides how old is too old. Nothing to build.
+   **Full cold review of the cleaned repo (11-06), four reviewers:** guest CLEAN (no host input gets an invalid block,
+   wrong state or forged chain proof accepted); docs vs code: 10 mismatches, fixed (2403c4f); verifiers: H1 the trie
+   coin key (txid with vout XORed into 4 bytes) aliases (txid ^ d, vout ^ d), so a trie coin fact could certify an
+   outpoint that never existed: FIXED verifier-side, a coin the trie holds needs its creating transaction (`origin`,
+   a tx fact; `zync-path tx`), image unchanged (user asked for a recommendation: verifier rule, no guest change); M1
+   FFI/WASM took the trusted tip from the facts JSON: now a separate argument, refused inside it; L1 host
+   `--anchor` hashed without zeroing anchor_id: fixed; host: a resume with a disk trie always panicked (fixed),
+   receipts / states / history.bin now written atomically, dev-mode runs say so on their DONE line, an existing disk
+   coin log is never wiped without HAZYNC_COINLOG_FRESH=1. **Open, recorded (none affects soundness):** a receipt
+   nested ~50k deep can overflow the verifier's stack (no verdict line; FFI/WASM abort): cap depth before decode
+   (verifiers, before publishing them); FFI/WASM take `now` from the caller (u64::MAX disables time-too-new):
+   document; a regtest host prints OK (by design: regtest has no min work); disk coin log and disk trie are saved as
+   two steps (a crash between them needs a rebuild): one commit marker, and libzync-prep's in-place coin log needs
+   an undo journal, both with the mainnet prep (H-B 8 / e); AGG_EARLY waits on a chunk FILE (stale file passes, no
+   timeout): with the coordinator queue (H-B e).
 7. **Freeze: ask the user.**
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until

@@ -37,7 +37,7 @@ unsafe fn write_msg(msg: *mut c_char, len: usize, s: &str) {
 pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize,
                                           network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
                                           out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
-    swiftsync_verify_facts(receipt, receipt_len, network, now, image_hex, anchor_json, std::ptr::null(),
+    swiftsync_verify_facts(receipt, receipt_len, network, now, image_hex, anchor_json, std::ptr::null(), std::ptr::null(),
                            out, msg, msg_len)
 }
 
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len: usize,
                                                 network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
-                                                facts_json: *const c_char,
+                                                facts_json: *const c_char, expect: *const c_char,
                                                 out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
     // network: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (the one whose proofs carry coin facts); bit 0x20 = the
@@ -102,9 +102,14 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             Ok(t) => t,
             Err(e) => return fail(&format!("facts JSON tries: {e}")),
         };
-        // Facts need the tip compared with the network (step 7): "expect": "h:hash" in the facts JSON. Without a
-        // match the verdict is at most DEMO (adversarial review, 11-03).
-        let tip_checked = match (v.get("expect").and_then(|x| x.as_str()), rep.state.as_ref()) {
+        // Facts need the tip compared with the network (step 7): `expect` ("h:hash"), a SEPARATE argument from the
+        // integrator's own trusted source. Inside the facts JSON it would be the fact server vouching for its own fork
+        // (cold review 11-06), so it is refused there. Without a match the verdict is at most DEMO.
+        if v.get("expect").is_some() { return fail("\"expect\" inside the facts JSON is refused: the expected tip is the integrator's own trusted source (its node, an explorer), passed separately, never the fact server's word"); }
+        let expect_s: Option<String> = if expect.is_null() { None } else {
+            match CStr::from_ptr(expect).to_str() { Ok(e) => Some(e.to_string()), Err(_) => return fail("expect is not UTF-8") }
+        };
+        let tip_checked = match (expect_s.as_deref(), rep.state.as_ref()) {
             (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {
                 Some((h, x)) if swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash) => true,
                 _ => { rep.checks.push((false, format!("expect {e:?}: not the proof's tip"))); false }
@@ -186,6 +191,19 @@ mod trie_tests {
     use super::*;
 
     #[test]
+    fn an_expect_inside_the_facts_json_is_refused() {
+        // the trusted tip is the integrator's own argument; inside the server's facts it would vouch for a fork
+        let facts = std::ffi::CString::new(r#"{"tries": [], "expect": "1:00"}"#).unwrap();
+        let mut out = std::mem::MaybeUninit::<SwiftsyncResult>::zeroed();
+        let mut msg = [0 as c_char; 256];
+        let rc = unsafe { swiftsync_verify_facts(b"junk".as_ptr(), 4, 1, 0, std::ptr::null(), std::ptr::null(),
+                                                 facts.as_ptr(), std::ptr::null(), out.as_mut_ptr(), msg.as_mut_ptr(), msg.len()) };
+        let m = unsafe { CStr::from_ptr(msg.as_ptr()) }.to_string_lossy().to_string();
+        assert_eq!(rc, FAIL);
+        assert!(m.contains("refused"), "{m}");
+    }
+
+    #[test]
     fn trie_facts_need_a_claim_and_a_false_claim_fails() {
         use libzync::trie_fact::coin_key;
         let a = b"\x00\x14aaaaaaaaaaaaaaaaaaaa".to_vec();
@@ -200,13 +218,16 @@ mod trie_tests {
         cs.profile |= swiftsync_verify::PROFILE_COINLOG | swiftsync_verify::PROFILE_TRIE;
         cs.height = 1;
         cs.trie_root = libzync::coinlog::h_of(&st.root());
-        let f = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(0)).unwrap();
+        // an ABSENT answer (vout 5) needs no creating transaction; one the trie holds does (TrieFact::origin)
+        let f = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(5)).unwrap();
         assert!(trie_check(&cs, &f).is_ok());
         let mut q = f.clone();
         q.expect = None;
         assert!(trie_check(&cs, &q).unwrap_err().contains("without"));
         let mut l = f.clone();
-        l.expect = Some("absent".into());
+        l.expect = Some("unspent:500".into());
         assert!(trie_check(&cs, &l).is_err());
+        let held = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(0)).unwrap();
+        assert!(trie_check(&cs, &held).unwrap_err().contains("origin"));
     }
 }

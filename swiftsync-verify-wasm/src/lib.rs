@@ -133,8 +133,10 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
 }
 
 /// `verify_facts(ptr, len)`: the `verify_frame` input (network code | 0x10 for a coin-log image) followed by
-/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact], "expect": "<height>:<hash>"}]`; "expect" is the
-/// network's block at the proof's height from a source the page trusts, and without it the verdict is at most DEMO (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
+/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact]}][u32 n][expect]`; expect
+/// ("<height>:<hash>", empty for none) is the network's block at the proof's height from a source the PAGE trusts, kept
+/// out of the facts JSON so a fact server cannot vouch for its own fork (an "expect" key inside it is refused; cold
+/// review 11-06). Without it the verdict is at most DEMO (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
 /// against the verified state. A failed fact makes the verdict "fail", as `swiftsync-verify --coin` does.
 #[no_mangle]
 pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
@@ -142,6 +144,7 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
     let mut f = Frame { b: &input, i: 0 };
     let res = run_frame(&mut f).and_then(|r| {
         let facts = f.chunk()?;
+        let expect = std::str::from_utf8(f.chunk()?).map_err(|_| "expect: not UTF-8".to_string())?.trim().to_string();
         if f.i != input.len() {
             return Err("input frame has trailing bytes".to_string());
         }
@@ -152,7 +155,10 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
             .map_err(|e| format!("facts JSON journeys: {e}"))?;
         let tries: Vec<swiftsync_verify::TrieFact> = serde_json::from_value(v.get("tries").cloned().unwrap_or_else(|| serde_json::json!([])))
             .map_err(|e| format!("facts JSON tries: {e}"))?;
-        let expect = v.get("expect").and_then(|x| x.as_str()).map(|x| x.to_string());
+        if v.get("expect").is_some() {
+            return Err("\"expect\" inside the facts JSON is refused: pass the expected tip separately, from a source the page trusts".to_string());
+        }
+        let expect = Some(expect).filter(|e| !e.is_empty());
         Ok((r, coins, journeys, tries, expect))
     });
     match res {

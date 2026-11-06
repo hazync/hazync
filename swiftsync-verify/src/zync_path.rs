@@ -58,17 +58,36 @@ fn main() {
             }
         }
         Some("journey") => journey(&a),
-        // zync-path trie coin|balance|history <state_h.trie> <scriptPubKey hex> [<txid> <vout>]
+        // zync-path tx <history.bin> <tip> <height> <index> --bitcoin-cli "<cmd>": a TxFact for transaction <index> of
+        // block <height> (what a trie coin fact needs as its `origin`)
+        Some("tx") => {
+            let cli = a.iter().position(|x| x == "--bitcoin-cli").and_then(|i| a.get(i + 1)).unwrap_or_else(|| die("tx needs --bitcoin-cli \"<cmd>\""));
+            let recs = decode_all(&std::fs::read(a.get(1).unwrap_or_else(|| die("tx: history.bin?"))).unwrap_or_else(|e| die(&e.to_string()))).unwrap_or_else(|e| die(e));
+            let num = |i: usize, w: &str| -> u32 { a.get(i).and_then(|x| x.parse().ok()).unwrap_or_else(|| die(w)) };
+            let (tip, h, index) = (num(2, "tip?"), num(3, "height?"), num(4, "index?"));
+            if h > tip { die("height above the tip"); }
+            let r = replay(&recs, tip, tip).unwrap_or_else(|e| die(e));
+            let (_, header, txs) = block_at(cli, h, &recs[h as usize].hash);
+            if index as usize >= txs.len() { die("no such transaction in that block"); }
+            println!("{}", serde_json::to_string_pretty(&tx_fact(&r, h, &header, &txs, index as usize)).unwrap());
+        }
+        // zync-path trie coin|balance|history <state_h.trie> <scriptPubKey hex> [<txid> <vout> [--origin <tx fact.json>]]
+        // A coin the trie holds needs --origin (from `zync-path tx`): the trie key alone does not bind the outpoint.
         Some("trie") => {
             let kind = a.get(1).unwrap_or_else(|| die("trie: coin, balance or history?"));
             let b = std::fs::read(a.get(2).unwrap_or_else(|| die("trie: state_<h>.trie?"))).unwrap_or_else(|e| die(&e.to_string()));
             let st = libzync::trie_store::TrieStore::from_bytes(&b).unwrap_or_else(|e| die(&format!("not a trie snapshot ({e:?})")));
             let spk = swiftsync_verify::unhex(a.get(3).unwrap_or_else(|| die("trie: scriptPubKey hex?"))).unwrap_or_else(|| die("scriptPubKey: not hex"));
-            let f = swiftsync_verify::make_trie_fact(&st, kind, &spk, a.get(4).map(|x| x.as_str()), a.get(5).map(|x| x.parse().unwrap_or_else(|_| die("vout?"))))
+            let mut f = swiftsync_verify::make_trie_fact(&st, kind, &spk, a.get(4).filter(|x| !x.starts_with("--")).map(|x| x.as_str()),
+                    a.get(5).filter(|x| !x.starts_with("--")).map(|x| x.parse().unwrap_or_else(|_| die("vout?"))))
                 .unwrap_or_else(|e| die(&e));
+            if let Some(p) = a.iter().position(|x| x == "--origin").and_then(|i| a.get(i + 1)) {
+                let b = std::fs::read(p).unwrap_or_else(|e| die(&format!("{p}: {e}")));
+                f.origin = Some(serde_json::from_slice(&b).unwrap_or_else(|e| die(&format!("{p}: not a tx fact ({e})"))));
+            }
             println!("{}", serde_json::to_string_pretty(&f).unwrap());
         }
-        _ => die("usage: zync-path coin <history.bin> <tip> <at> <pos> | zync-path find <history.bin> <tip> <coin leaf hex>"),
+        _ => die("usage: zync-path coin <history.bin> <tip> <at> <pos> | find <history.bin> <tip> <coin leaf hex> | journey ... | tx <history.bin> <tip> <height> <index> --bitcoin-cli \"<cmd>\" | trie coin|balance|history <state_h.trie> <spk hex> [<txid> <vout> [--origin <tx fact.json>]]"),
     }
 }
 

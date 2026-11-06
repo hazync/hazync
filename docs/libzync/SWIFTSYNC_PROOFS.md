@@ -28,14 +28,14 @@ In field order. Types are exact: risc0's serde writes a u32 as one word, a u64 a
 | `kind` | u32 | `0xC4A10012` (domain tag) |
 | `version` | u32 | `2`, the layout. Fields are only ever appended, never reordered or removed, so a reader of version n decodes the prefix it knows from any later version (HANDOVER.md §2) |
 | `tip_hash` | [u8; 32] | the chain proven: its last block's hash, internal byte order |
-| `utxo_roots` | Vec<Option<[u8; 32]>> | the coin log's forest roots, index = tree level, trailing empties removed (except the genesis state's `[None]`, §5 step 3): every coin ever appended (COINLOG.md; leaf and `parent`: UTREEXO_FORMAT.md §2, §5) |
+| `utxo_roots` | Vec<Option<[u8; 32]>> | the coin log's forest roots, index = tree level, trailing empties removed (except the genesis state's `[None]`, §5 step 3): every coin ever appended (COINLOG.md: its node hashes are §2 there; the leaf is UTREEXO_FORMAT.md §2) |
 | `utxo_leaves` | u64 | leaves in that forest |
 | `utxo_value` | u64 | satoshis of the live coins |
 | `cum_work` | [u8; 32] | cumulative work, little-endian |
 | `height` | u32 | height of the tip |
 | `prev_nbits`, `prev_time`, `epoch_start` | u32 each | difficulty and time context, so the chain can be extended |
 | `recent_times` | Vec<u32> | timestamps of the last ≤ 11 blocks |
-| `anchor_id` | [u8; 32] | double-SHA-256 of the state the chain started from (genesis for a full proof; pinned per network) |
+| `anchor_id` | [u8; 32] | the link digest of the state the chain started from: double-SHA-256 of that state's journal with ITS `anchor_id` zeroed (genesis for a full proof, whose `anchor_id` is zero; pinned per network) |
 | `self_id` | [u32; 8] | the image id every step since the last handover ran (risc0's digest words) |
 | `live_set` | u32 | profile bit 6: the multiset hash of the LIVE coins is the identity iff 0 (instant IBD: a downloaded UTXO set is checked against it). 0 without bit 6 |
 | `live_hash` | [u32; 16] | profile bit 6: that hash's point. Zero without bit 6 |
@@ -61,7 +61,8 @@ below; step 7 needs a source you name (without one they print the tip hash to co
    4-6, the coin log, trie and live-coin hash). `host libzync-verify` checks against the image it was built with.
 2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10012`, `J.version >= 2` and `J.self_id == M`. M is
    the **newest** image: after a handover the receipt verifies against the image that continued the chain.
-3. `J.anchor_id == dsha256(genesis ChainState journal for the network)`.
+3. `J.anchor_id == dsha256(genesis ChainState journal for the network)` (the genesis state's own `anchor_id` is zero, so
+   this equals its link digest; for a supplied anchor, zero the anchor's `anchor_id` before hashing).
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
    nothing about history.
    - The genesis ChainState, in field order: `kind = 0xC4A10012`; `version = 2`; `tip_hash` = the genesis hash

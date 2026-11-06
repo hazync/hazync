@@ -4,7 +4,8 @@
 //   import { loadVerifier } from './swiftsync-verify.js';
 //   const v = await loadVerifier(fetch('./swiftsync_verify_wasm.wasm'));
 //   const r = v.verify({ network: 'signet', image: 'product', receipt });   // Uint8Array; optional anchorJson, imageHex
-//   const f = v.verifyFacts({ ...same, facts: { tries: [trieFact], expect: '<height>:<hash>' } });
+//   const f = v.verifyFacts({ ...same, facts: { tries: [trieFact] }, expect: '<height>:<hash>' });
+//   (expect: the network's block at the proof's height from a source YOU trust, never from the fact server)
 //   r.verdict  // 'ok' | 'demo' | 'fail'
 
 function readString(memory, ptr) {
@@ -14,10 +15,10 @@ function readString(memory, ptr) {
 }
 
 // image: 'product' (coin log + counting trie + live-coin hash), 'coinlog', or the built-in profile.
-function frame({ network, image, now, receipt, anchorJson, imageHex, facts }) {
+function frame({ network, image, now, receipt, anchorJson, imageHex, facts, expect }) {
   const enc = new TextEncoder();
   const parts = [receipt, enc.encode(anchorJson || ''), enc.encode(imageHex || '')];
-  if (facts !== undefined) parts.push(enc.encode(JSON.stringify(facts)));
+  if (facts !== undefined) parts.push(enc.encode(JSON.stringify(facts)), enc.encode(expect || ''));
   const out = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
   const view = new DataView(out.buffer);
   out[0] = (network === 'signet' ? 1 : network === 'mainnet' ? 0 : 255)
@@ -48,7 +49,8 @@ export async function loadVerifier(source) {
   return {
     /** Verify a receipt (or .sspf bundle). `now` defaults to this device's clock. */
     verify(args) { return call(verify_frame, { ...args, facts: undefined }); },
-    /** As verify, plus facts ({coins, journeys, tries, expect}) checked against the verified state. */
+    /** As verify, plus facts ({coins, journeys, tries}) checked against the verified state; `expect` ('<height>:<hash>')
+     *  is the tip from a source you trust, passed beside the facts, never inside them. */
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },
     /** The built-in image id for 'mainnet' or 'signet'. */
     imageId(network) {

@@ -196,14 +196,16 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
     }
     check(time_ok(cs.max_time, now), &format!(
         "time-too-new: largest block time {} <= this clock {} + {} s", cs.max_time, now, MAX_FUTURE_BLOCK_TIME));
-    let (want_anchor, what) = match anchor {
-        None => (state_journal_bytes(&genesis_anchor()), "genesis".to_string()),
+    // The anchor's link digest, as the guest's base step commits it: sha256d of its journal with ITS anchor_id zeroed
+    // (main.rs link_digest). Hashing the state as it is gave a different value for any anchor whose own anchor_id is
+    // not zero (cold review 11-06: a genuine proof from such an anchor failed here). Genesis's anchor_id is zero.
+    let (mut want_anchor, what) = match anchor {
+        None => (crate::link_digest(&genesis_anchor()), "genesis".to_string()),
         Some(p) => {
             let a: ChainState = serde_json::from_str(&std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{p:?}: {e}"))).unwrap_or_else(|e| panic!("{p:?}: {e}"));
-            (state_journal_bytes(&a), format!("the GIVEN anchor at height {} ({p:?}) -- NOT genesis", a.height))
+            (crate::link_digest(&a), format!("the GIVEN anchor at height {} ({p:?}) -- NOT genesis", a.height))
         }
     };
-    let mut want_anchor = bitcoin::hashes::sha256d::Hash::hash(&want_anchor).to_byte_array();
     // Genesis anchors are PINNED per network (as swiftsync-verify's Image::genesis_anchor_hex): a chain keeps its
     // anchor_id across every handover, so a later image must not recompute it in its own layout (review 11-03).
     // The pin is used as it is, never re-derived here: a later layout's genesis_anchor() would differ from it by design.
@@ -405,6 +407,7 @@ pub(crate) fn agg_exec_fake() {
         write_chunk_inputs(&mut b, &w, lo, hi);
         let s = default_executor().execute(b.build().unwrap(), METHOD_ELF)
             .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)));
+        require_committed(s.exit_code, &format!("chunk {i} execution"));
         let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
         println!("  chunk {i:>3} [{lo}..{hi}) executed: {} cycles", s.cycles());
         println!("  chunk {i:>3} padded {} ({} segments)", s.segments.iter().map(|g| 1u64 << g.po2).sum::<u64>(), s.segments.len());
@@ -583,6 +586,20 @@ fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
         risc0_zkvm::ExitCode::Halted(0) => Ok(false),
         risc0_zkvm::ExitCode::Halted(c) if c == libzync::wire::COLLECT_EXIT as u32 => Ok(true),
         c => Err(format!("guest exited with {c:?}")),
+    }
+}
+
+/// Writes `bytes` to `path` so a crash leaves the old file or the new one, never a torn one: a temporary file,
+/// synced, renamed over `path`, then the directory synced (review 11-06: receipts, states and history.bin were
+/// plain writes, and a torn receipt beside a durable coin log made a resume impossible).
+pub(crate) fn write_atomic(path: &str, bytes: &[u8]) {
+    use std::io::Write as _;
+    let tmp = format!("{path}.tmp");
+    std::fs::File::create(&tmp).and_then(|mut f| { f.write_all(bytes)?; f.sync_all() })
+        .unwrap_or_else(|e| panic!("{tmp}: {e}"));
+    std::fs::rename(&tmp, path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    if let Some(d) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {
+        let _ = std::fs::File::open(d).and_then(|f| f.sync_all());
     }
 }
 
@@ -807,7 +824,7 @@ pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
     j.receipt.verify(METHOD_ID).expect("joined receipt verifies");
     let st: ChainState = j.receipt.journal.decode().unwrap();
     assert!(st.anchor_id == ls.anchor_id && st.height == rs.height && st.tip_hash == rs.tip_hash, "join: unexpected output state");
-    std::fs::write(out, bincode::serialize(&j.receipt).unwrap()).unwrap_or_else(|e| panic!("{out}: {e}"));
+    write_atomic(out, &bincode::serialize(&j.receipt).unwrap());
     println!("JOURNAL_SHA256 {}", journal_sha(&j.receipt));
     let a: String = ls.anchor_id.iter().take(8).map(|x| format!("{x:02x}")).collect();
     println!("JOINED left tip {} + right tip {} (anchor {a}..) -> {out}: {} cycles, {:.1} s",
@@ -881,8 +898,12 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     if methods::COINLOG && !disk_resume {
         cl_init_at_start(handover.is_some(), anchor_path, &prev);
     }
-    // The counting trie at the run's start (a resume below replaces it with the snapshot at its receipt).
-    if methods::TRIE { crate::trie::trie_init_at_start(handover.is_some(), anchor_path, &prev); }
+    // The counting trie at the run's start (a resume below replaces it with the snapshot at its receipt). A disk trie
+    // (HAZYNC_TRIE_DIR) is advanced in place, so on a resume it is at the receipt's height, not the anchor's: open it
+    // there below, and at the anchor only if no receipt is found (as the disk coin log; review 11-06).
+    let disk_trie_resume = methods::TRIE && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
+        && crate::trie::trie_dir().map_or(false, |d| d.join("meta").exists());
+    if methods::TRIE && !disk_trie_resume { crate::trie::trie_init_at_start(handover.is_some(), anchor_path, &prev); }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
     // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
@@ -965,6 +986,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     }
     if disk_resume && first == lo {
         cl_init_at_start(handover_pending, anchor_path, &prev);
+    }
+    if disk_trie_resume && first == lo {
+        crate::trie::trie_init_at_start(handover_pending, anchor_path, &prev);
     }
     let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
     let opts = ProverOpts::succinct();
@@ -1053,8 +1077,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         r.verify(METHOD_ID).expect("aggregate receipt verifies");
         let st: ChainState = r.journal.decode().expect("ChainState");
         assert_eq!(st.height, h);
-        std::fs::write(format!("{out}/block_{h}.rcpt"), bincode::serialize(&r).unwrap()).unwrap();
-        std::fs::write(format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap()).unwrap();
+        write_atomic(&format!("{out}/block_{h}.rcpt"), &bincode::serialize(&r).unwrap());
+        write_atomic(&format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap().as_bytes());
         if methods::COINLOG {
             let flips = cl_commit(&cl_lists.0, &cl_lists.1, &st);
             if h == 1 && prev_is_genesis {
@@ -1090,7 +1114,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         prev_rcpt = Some(r);
         handover_pending = false;
     }
-    println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final receipt {out}/block_{hi}.rcpt", t_all.elapsed().as_secs_f64());
+    println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final receipt {out}/block_{hi}.rcpt{}", t_all.elapsed().as_secs_f64(),
+             if crate::verify::dev_mode_env() { " (DEV MODE: fake receipts, not proofs; the times are execution, not proving)" } else { "" });
 }
 
 pub(crate) fn agg_chunks() {
@@ -1242,6 +1267,10 @@ pub(crate) fn cl_index() -> libzync::host::AnyIndex {
 pub(crate) fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
     let nodes = match cl_dir() {
         Some(d) => {
+            // Starting a log here replaces the store: refuse to wipe one that exists unless asked (a mainnet store is
+            // days of work; review 11-06). Resume with HAZYNC_RESUME=1, or set HAZYNC_COINLOG_FRESH=1 to start over.
+            assert!(!d.join("L0.bin").exists() || std::env::var("HAZYNC_COINLOG_FRESH").as_deref() == Ok("1"),
+                    "{}: a coin-log store is already there; HAZYNC_RESUME=1 to continue it, HAZYNC_COINLOG_FRESH=1 to replace it", d.display());
             let _ = std::fs::remove_dir_all(&d);
             libzync::host::AnyNodes::Disk(libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())))
         }
@@ -1441,7 +1470,7 @@ pub(crate) fn hist_append(out: &str, rec: &libzync::history::Rec) {
         let keep = (rec.height as usize).min(r.len());
         if keep < r.len() || good < b.len() {
             let cut: Vec<u8> = r[..keep].iter().flat_map(|x| x.encode()).collect();
-            std::fs::write(&path, cut).unwrap_or_else(|e| panic!("{path}: {e}"));
+            write_atomic(&path, &cut);
         }
         *g = Some(Some(keep as u64));
     }

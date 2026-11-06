@@ -615,6 +615,14 @@ pub struct TrieFact {
     /// Without it the fact is a question: the check states the answer but cannot refuse it (the C ABI demands it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect: Option<String>,
+    /// For "coin" answers UNSPENT or SPENT: the creating transaction ([`TxFact`]), required. The trie's coin key is the
+    /// txid with the output index XORed into its first 4 bytes (the guest's `okey`), so (txid, vout) and
+    /// (txid ^ d, vout ^ d) share a key: alone, a trie leaf does not show WHICH outpoint it is. The transaction, in a
+    /// proven block, with this txid and an output at `vout` paying this script this value, does (an alias would need a
+    /// real transaction whose txid is another's with its first 4 bytes changed). An ABSENT answer needs none: no key,
+    /// no coin with that outpoint (cold review 11-06).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<TxFact>,
 }
 
 /// The canonical answer token of a coin state (see [`TrieFact::expect`]).
@@ -674,6 +682,19 @@ pub fn trie_verdict(cs: &ChainState, f: &TrieFact) -> Result<(String, String), S
             txid.reverse();
             let vout = f.vout.ok_or("coin: vout")?;
             let s = tf::coin(&proof, &root, &tf::coin_key(&spk, &txid, vout)).map_err(e)?;
+            // A coin the trie holds: bind the outpoint to a real transaction (see TrieFact::origin).
+            let value = match &s { tf::CoinState::Absent => None,
+                                    tf::CoinState::Unspent { value } | tf::CoinState::Spent { value, .. } => Some(*value) };
+            if let Some(value) = value {
+                let o = f.origin.as_ref().ok_or("coin: the trie holds a coin under this key, but which outpoint it is needs the creating transaction (`origin`, a tx fact)")?;
+                let (otxid, view) = check_tx_fact(cs, o).map_err(|x| format!("origin: {x}"))?;
+                if otxid != txid { return Err("origin: that transaction's txid is not this coin's".into()); }
+                match view.outputs.get(vout as usize) {
+                    Some((v, script)) if *v == value && *script == spk => {}
+                    Some(_) => return Err(format!("origin: output {vout} does not pay this script {value} sat")),
+                    None => return Err(format!("origin: the transaction has no output {vout}")),
+                }
+            }
             Ok((coin_verdict(&s), format!("coin {}:{vout} to script {} is {} at height {}", f.txid.as_deref().unwrap_or(""), f.script_pubkey, coin_state_line(&s), cs.height)))
         }
         "balance" => Ok(match tf::balance(&proof, &root, &sh).map_err(e)? {
@@ -730,6 +751,7 @@ pub fn make_trie_fact(st: &libzync::trie_store::TrieStore, kind: &str, script_pu
         txid: txid.map(|t| t.to_lowercase()), vout,
         proof: hex(&proof.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()),
         expect: Some(expect),
+        origin: None,
     })
 }
 
@@ -863,10 +885,10 @@ mod tests {
         cs.trie_root = libzync::coinlog::h_of(&st.root());
 
         let f = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(0)).unwrap();
-        let ok = check_trie_fact(&cs, &f).unwrap();
-        assert!(ok.contains("SPENT at height 2 by transaction 1 input 0, 500 sat"), "{ok}");
+        // a coin the trie HOLDS needs its creating transaction (TrieFact::origin; with one: coin_journey_end_to_end)
+        assert!(check_trie_fact(&cs, &f).unwrap_err().contains("origin"), "spent coin without an origin");
         let f1 = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(1)).unwrap();
-        assert!(check_trie_fact(&cs, &f1).unwrap().contains("UNSPENT, 70 sat"));
+        assert!(check_trie_fact(&cs, &f1).unwrap_err().contains("origin"), "unspent coin without an origin");
         let f9 = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(9)).unwrap();
         assert!(check_trie_fact(&cs, &f9).unwrap().contains("ABSENT"));
         let b = make_trie_fact(&st, "balance", &a, None, None).unwrap();
@@ -900,20 +922,24 @@ mod tests {
         assert_eq!(b.expect.as_deref(), Some("1:70"));
         assert_eq!(hst.expect.as_deref(), Some("1:70"));
         assert_eq!(n.expect.as_deref(), Some("never"));
-        for lie in ["unspent:500", "absent", "spent:500:2:1:1", "spent:501:2:1:0"] {
-            let mut l = f.clone();
+        // lies about an absent coin are refused by the claim check (a held coin is refused before it without an origin)
+        for lie in ["unspent:500", "spent:500:2:1:1", "spent:501:2:1:0"] {
+            let mut l = f9.clone();
             l.expect = Some(lie.into());
             assert!(check_trie_fact(&cs, &l).unwrap_err().contains("claims"), "{lie}");
         }
+        let mut l = f.clone();
+        l.expect = Some("absent".into());
+        assert!(check_trie_fact(&cs, &l).is_err(), "a held coin claimed absent");
         let mut l = b.clone();
         l.expect = Some("1:71".into());
         assert!(check_trie_fact(&cs, &l).is_err());
         let mut l = n.clone();
         l.expect = Some("0:0".into());
         assert!(check_trie_fact(&cs, &l).is_err(), "never-paid is not a zero balance claim");
-        let mut q = f.clone();
+        let mut q = f9.clone();
         q.expect = None;
-        assert!(check_trie_fact(&cs, &q).unwrap().contains("SPENT"));
+        assert!(check_trie_fact(&cs, &q).unwrap().contains("ABSENT"), "a question (no claim) is answered");
         // the JSON without the field still reads (facts written before it)
         let mut j = serde_json::to_value(&q).unwrap();
         j.as_object_mut().unwrap().remove("expect");
@@ -1064,6 +1090,36 @@ mod tests {
         let mut b = j.clone();
         b.origin.state = hex(&r.states[2]);
         assert!(check_coin_journey(&cs, &b).is_err(), "wrong block state");
+
+        // Trie coin facts (cold review 11-06): the trie key aliases (txid, vout) with (txid ^ d, vout ^ d); the
+        // creating transaction, in a proven block, binds the outpoint.
+        use libzync::trie_fact::coin_key;
+        let spk_a: &[u8] = b"\x51\x52\x60";
+        let mut st = libzync::trie_store::TrieStore::new(true);
+        st.apply(&[], &[(coin_key(spk_a, &id1, 0), None, 50)]).unwrap();
+        st.height = 2;
+        cs.profile |= PROFILE_TRIE;
+        cs.trie_root = libzync::coinlog::h_of(&st.root());
+        let disp = |t: &[u8; 32]| { let mut d = *t; d.reverse(); hex(&d) };
+        let mut tf = make_trie_fact(&st, "coin", spk_a, Some(&disp(&id1)), Some(0)).unwrap();
+        assert!(check_trie_fact(&cs, &tf).unwrap_err().contains("origin"), "no origin");
+        tf.origin = Some(txf(1, &h1, &[id1], &cb1, 0, &cb1));
+        assert!(check_trie_fact(&cs, &tf).unwrap().contains("UNSPENT, 50 sat"), "with its origin");
+        // the alias: same key, an outpoint that never existed; refused with or without the real coin's origin
+        let mut alias = id1;
+        alias[0] ^= 1;
+        let mut al = make_trie_fact(&st, "coin", spk_a, Some(&disp(&alias)), Some(1)).unwrap();
+        assert_eq!(coin_key(spk_a, &alias, 1), coin_key(spk_a, &id1, 0), "the key aliases");
+        assert!(check_trie_fact(&cs, &al).is_err(), "alias, no origin");
+        al.origin = Some(txf(1, &h1, &[id1], &cb1, 0, &cb1));
+        assert!(check_trie_fact(&cs, &al).unwrap_err().contains("txid"), "alias with the real coin's origin");
+        // an origin whose output does not pay this script or value
+        let mut wrong = tf.clone();
+        wrong.script_pubkey = hex(b"\x53");
+        assert!(check_trie_fact(&cs, &wrong).is_err());
+        // ABSENT needs no origin
+        let ab = make_trie_fact(&st, "coin", spk_a, Some(&disp(&id1)), Some(7)).unwrap();
+        assert!(check_trie_fact(&cs, &ab).unwrap().contains("ABSENT"));
     }
 
     #[test]
