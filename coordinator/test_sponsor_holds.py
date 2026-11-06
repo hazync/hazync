@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sponsor holds (docs/SPONSORSHIP.md, "Holds"): a sponsorship paid at least its minimum keeps its blocks for the
+Sponsor holds (docs/history/SPONSORSHIP.md, "Holds"): a sponsorship paid at least its minimum keeps its blocks for the
 sponsor proving bot until they are proven.
 
 What is asserted:

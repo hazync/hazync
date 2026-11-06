@@ -754,7 +754,7 @@ curl -s localhost:8899/api/state | head -c 200   # frontier/proven should match 
 
 ## Re-baseline and releases
 
-Moved to [`docs/RELEASE_PROCESS.md`](../../docs/RELEASE_PROCESS.md) on 2026-09-14: cutting a release, deploying
+Moved to [`docs/BUILD_AND_RELEASE.md`](../../docs/BUILD_AND_RELEASE.md) on 2026-09-14: cutting a release, deploying
 the browser verifier to both sites, and the whole re-baseline section that was here — reading an id only off
 a binary you watched get built, the `latest` pointer, CUDA build disk space, `RZUP_TIMEOUT`, canonical build
 paths, `rebaseline-id.sh`, ride-alongs, the list of things that must change with the id, the board cutover

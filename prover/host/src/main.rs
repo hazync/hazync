@@ -313,7 +313,7 @@ fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
 // ⛔ THIS COMMENT USED TO SAY "flat to 22, so 21 is the sweet spot (same speed as 22)". THAT IS WRONG,
 // and reading it cost an evening of wrong advice. It was measured on block 130,000 — a 2011 block with
 // almost no transactions and ~30 segments, where there is barely any fold tree to save. On a TIP block
-// po2 22 measured ~11.5% faster (block 962,000 on an L40S, docs/TOPOLOGY_AND_SETTINGS.md §3.1), and the
+// po2 22 measured ~11.5% faster (block 962,000 on an L40S, docs/history/TOPOLOGY_AND_SETTINGS.md §3.1), and the
 // saving grows with segment count because that is what the fold tree is built from. 21 is the DEFAULT
 // because it peaks ~22 GB and fits a 24 GB card; 22 peaks ~40.6 GB and needs ≥48 GB. Judge po2 on a
 // block the size of the one you are proving, never on a young one.
@@ -354,7 +354,7 @@ fn verify_receipt_ex(r: &risc0_zkvm::Receipt, claimed_id: Option<[u32; 8]>) {
             if let Some(id) = claimed_id { eprintln!("  proof's guest id:      {}", digest_hex(id)); }
             eprintln!("  this host's METHOD_ID: {}", method_id_hex());
             eprintln!("Build a host that matches the proof's guest (reproduce/Dockerfile), then retry.");
-            eprintln!("See PROVING.md -> \"the guest image id (METHOD_ID) & reproducibility\".");
+            eprintln!("See docs/OPERATIONS.md §2.7 \"METHOD_ID and reproducibility\".");
         } else {
             eprintln!("STARK verification FAILED: PROOF INVALID (not a genuine proof for this guest).");
             eprintln!("The receipt claims THIS guest (METHOD_ID {}) but the STARK did not", method_id_hex());

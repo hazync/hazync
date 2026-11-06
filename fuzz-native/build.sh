@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Compile the CONSENSUS-MATH half of the guest's Core build for the HOST, so it can be
-# differentially fuzzed without a zkVM. docs/FUZZING.md calls this "the highest-value next step" and
+# differentially fuzzed without a zkVM. docs/history/FUZZING.md calls this "the highest-value next step" and
 # names the missing prerequisite: standing up $HAZYNC_BASE the way provision-vps.sh does.
 #
 # Mirrors prover/methods/guest/build.rs exactly, MINUS the rv32im/ilp32 flags — Core consensus code
@@ -33,7 +33,7 @@ TUS=(
 # ⛔ BOTH base patches make the provisioned tree non-portable, not just 0001.
 #   0001  adds a Serialize(int) overload that is a redefinition on LP64   -> serialize.h
 #   0002  routes CSHA256 through RISC0's accelerator (sys_sha_compress)   -> crypto/sha256.cpp
-# docs/FUZZING.md says "Core consensus code is portable". Core is; the tree after provision-vps.sh
+# docs/history/FUZZING.md says "Core consensus code is portable". Core is; the tree after provision-vps.sh
 # is not. Compile pristine copies of exactly those two files for the host.
 OVERLAY_TUS=(crypto/sha256.cpp)
 
@@ -53,7 +53,7 @@ SECP_DEFS=(-DENABLE_MODULE_SCHNORRSIG=1 -DENABLE_MODULE_EXTRAKEYS=1 -DENABLE_MOD
 #
 #   serialize.h:267: error: redefinition of 'template<class Stream> void Serialize(Stream&, int)'
 #
-# docs/FUZZING.md says "Core consensus code is portable", which is true of Core itself and NOT of
+# docs/history/FUZZING.md says "Core consensus code is portable", which is true of Core itself and NOT of
 # the tree after provisioning. Overlay the pristine serialize.h ahead of $CORE on the include path.
 OVERLAY="$OUT/overlay"; mkdir -p "$OVERLAY"
 if [ ! -f "$OVERLAY/serialize.h" ]; then

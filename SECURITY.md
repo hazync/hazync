@@ -19,8 +19,8 @@ most.
 
 > ⚠️ **Two numbering schemes run through this repo, and they do not line up.** The **rounds**
 > (1–9 self, 10–11 external) are the review passes recorded in the audit log. The **internal audits**
-> (#1–#5, counted in [`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md)) are a separate series, and
-> they are what `reproduce/METHOD_ID`, `docs/history/ROADMAP.md` and `docs/PROVING.md` mean by "audit #3" and
+> (#1–#5, counted in [`docs/SECURITY.md`](docs/SECURITY.md)) are a separate series, and
+> they are what `reproduce/METHOD_ID`, `docs/history/ROADMAP.md` and `docs/history/PROVING.md` mean by "audit #3" and
 > "audit #5". Audit #3 is *not* round 3: it is the 2026-08-03 pass that found the BIP30 F-1
 > canonical-chain break, and audit #5 is the 2026-08-04 pass whose guest guards were pinned as
 > `4722cec8` (superseded since; the guest that ships now is `37987b85`, pinned 2026-09-06).
@@ -33,7 +33,7 @@ canonical guest applies `patches/0001` (an ILP32 `Serialize` overload) and `patc
 the zkVM accelerator) to Core and, since v0.21.0, `patches/0012` (a coprocessor field backend) and
 `patches/0013` (a `lift_x` witness hint that libsecp's own arithmetic checks) to libsecp256k1. Those
 four patches are part of the trust base. The prover-side changes in `vendor/` are listed in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) states
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). [`docs/SECURITY.md`](docs/SECURITY.md) states
 the rest of the trust base; its patch list predates v0.21.0.
 
 ## Verifying releases

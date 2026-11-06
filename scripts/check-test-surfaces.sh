@@ -3,7 +3,7 @@
 # nothing. Every instance below is something that really happened in this repo, silently, for weeks:
 #
 #   * guest-pure-fuzz DID NOT COMPILE — its build.rs extracts guest items verbatim and they had moved
-#     to another file. FUZZING.md still advertised it as clean at 700k+ execs. Nothing ran it.
+#     to another file. docs/history/FUZZING.md still advertised it as clean at 700k+ execs. Nothing ran it.
 #   * prover/test_bip68_real.sh printed "expect REJECT", got VALID, and exited 0. It had no assertion
 #     at all, so it could not fail. Nothing ran it either.
 #   * prover/test_cov_negatives.sh duplicated coverage that ci_negative_tests.sh already had, and was

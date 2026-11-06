@@ -56,8 +56,8 @@ ROUTES = {
         "Everything about one block: proofs covering it, who anchored it, a live claim, a public sponsor. "
         "`400` unless the segment is 1-9 digits; `404` above the chain tip. A live fold claim covering the block is `fold_claim` (#333).",
     "GET /api/sponsor":
-        "Sponsorship settings: `open`, `max_blocks`, `payments` (always `false`), `priced`, `bands`, "
-        "`btc_usd`, `name_max`. See `docs/SPONSORSHIP.md`.",
+        "Sponsorship settings: `open`, `max_blocks`, `payments` (true once BTCPay is configured: `payments_enabled()`), `priced`, `bands`, "
+        "`btc_usd`, `name_max`. See `docs/COORDINATOR.md`.",
     "GET /api/sponsor/quote":
         "Minimum USD and sats for `?lo=&hi=`. Answers while sponsorship is closed; refuses spans that are "
         "not open (proven, anchored, claimed or already held).",
@@ -735,7 +735,7 @@ def build(root):
       "are extracted from the source; the one-line meanings are kept in the generator and checked against "
       "the code in both directions.")
     w("")
-    w("Out of scope: `coordinator/sponsor_bot.py` (see `docs/SPONSOR_BOT.md`) and the deploy units under "
+    w("Out of scope: `coordinator/sponsor_bot.py` (see `docs/COORDINATOR.md`) and the deploy units under "
       "`coordinator/deploy/` (see `coordinator/deploy/RUNBOOK.md`).")
     w("")
     w("## HTTP API")

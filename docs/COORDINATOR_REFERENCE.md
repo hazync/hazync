@@ -2,7 +2,7 @@
 
 **Generated. Do not edit by hand.** Regenerate with `python3 scripts/gen-coordinator-reference.py`; CI runs `--check`, which fails when this page and the code disagree. The code is authoritative: `coordinator/server.py` for the HTTP API and its configuration, `coordinator/hazync` for the worker CLI (shipped as `hazync-worker`), `coordinator/run-workers.sh` for the launcher (shipped as `hazync-run-workers.sh`). Routes, variables, defaults, read sites, signature checks and status codes are extracted from the source; the one-line meanings are kept in the generator and checked against the code in both directions.
 
-Out of scope: `coordinator/sponsor_bot.py` (see `docs/SPONSOR_BOT.md`) and the deploy units under `coordinator/deploy/` (see `coordinator/deploy/RUNBOOK.md`).
+Out of scope: `coordinator/sponsor_bot.py` (see `docs/COORDINATOR.md`) and the deploy units under `coordinator/deploy/` (see `coordinator/deploy/RUNBOOK.md`).
 
 ## HTTP API
 
@@ -32,7 +32,7 @@ Applies to every route, from `H` in `server.py`:
 | `/api/vranges` | — | `vranges_cached()` | 200, 304 | The full verified-range index (`lo`, `hi`, `handle`, `fold`, `proof` link), built by `build_vranges`. Single-flight cache for `VRANGES_CACHE_TTL`; weak `ETag`, `304` on `If-None-Match`. |
 | `/api/blockstatus` | `prover` | `known_handles_cached()`, `block_status_cached()` | 200, 304, 404 | Every block's furthest state as runs `[lo, hi, status]` (3 proven, 4 folded, 5 anchored). `?prover=<handle>` keeps only ranges that prover proved; `404` for an unknown handle. `ETag`/`304`. |
 | `/api/block/<height>` | — | `block_detail()` | 200, 400, 404 | Everything about one block: proofs covering it, who anchored it, a live claim, a public sponsor. `400` unless the segment is 1-9 digits; `404` above the chain tip. A live fold claim covering the block is `fold_claim` (#333). |
-| `/api/sponsor` | — | `sponsor_info()` | 200 | Sponsorship settings: `open`, `max_blocks`, `payments` (always `false`), `priced`, `bands`, `btc_usd`, `name_max`. See `docs/SPONSORSHIP.md`. |
+| `/api/sponsor` | — | `sponsor_info()` | 200 | Sponsorship settings: `open`, `max_blocks`, `payments` (true once BTCPay is configured: `payments_enabled()`), `priced`, `bands`, `btc_usd`, `name_max`. See `docs/COORDINATOR.md`. |
 | `/api/sponsor/quote` | `lo`, `hi` | `sponsor_quote()` | 200 | Minimum USD and sats for `?lo=&hi=`. Answers while sponsorship is closed; refuses spans that are not open (proven, anchored, claimed or already held). |
 | `/api/sponsor/status/<token>` | — | `sponsor_status()` | 200, 404 | One sponsorship, looked up by the sha256 of its private token (`[A-Za-z0-9_-]{16,128}`); `404` otherwise. |
 | `/api/sponsors` | — | `sponsors_public()` | 200 | Public table of sponsorships whose status is paid, proving or proven and whose settled amount covers the minimum (`SPONSOR_PUBLIC_SQL`). |

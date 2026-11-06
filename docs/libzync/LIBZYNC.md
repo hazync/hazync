@@ -1,486 +1,259 @@
-# libzync: what it achieves, what it costs, and what Core could take from it
+# libzync: the core of Hazync
 
-**Branch `libzync`, 2026-10-30.** Every number here was measured unless it is marked ESTIMATED; each says which image
-it was measured on where that matters. Where something was not run, the text says so.
+**Branch `libzync`, 2026-11-06. Freeze candidate: image c14** (mainnet `bbf82800…`, signet `219215fb…`, regtest
+`3036d379…`; `handover/RESULT_c14.txt`). Every number names what it was measured on and says MEASURED or ESTIMATED.
+Status of every item, built or open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rounds
+1-8 in full) is [`LIBZYNC_2026-10-31.md`](../../experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
 
-⛔ **libzync is an experiment, not a release.** It moves METHOD_ID, it is not on any shipped proving path,
-and it had its first independent review on 2026-10-30 (§7). That review found soundness bugs, now fixed and
-retested.
+⛔ **Not frozen, not audited, no proof from genesis of mainnet yet.** See §7.
 
 ---
 
 ## 1. In one paragraph
 
-Hazync proves Bitcoin blocks valid inside a RISC Zero zkVM by running **Bitcoin Core's own consensus code**:
-Core v28.0's interpreter, sighash, serialisation and PoW, and libsecp256k1 0.5.1, compiled to rv32im.
-libzync keeps that code as the judge of every script and signature. It changes **how the proof is
-organised**:
+libzync is the new core of Hazync: a RISC Zero zkVM guest (risc0-zkvm 3.0.5) and its host, which prove every Bitcoin
+block valid from genesis by running **Bitcoin Core v28.0's own consensus code** (interpreter, sighash, serialisation,
+CheckTransaction, merkle, PoW and retarget) and libsecp256k1 0.5.1, compiled to rv32im. A block is split into
+**chunks** that run Core's `VerifyScript` on the inputs they own, with every signature's group equation checked by one
+batch per chunk; an **aggregate** verifies the chunk receipts and the previous block's chain proof, applies the
+block-level rules, and commits the new chain state. Coins are kept in an append-only **coin log** that is sound at
+every block; a **counting trie**, updated in its own receipt, answers script-keyed questions (absence, history,
+balances); a **live-coin multiset hash** lets a new node check a downloaded UTXO set. A **block forest** commits every
+block and the coin state after it, a **handover** lets a new image continue a chain, and **joins** fold independently
+proved blocks into one proof. **zyncAPPs** are separate guests that verify a core proof and answer one question with
+it. SwiftSync hints files (design B) are no longer part of the proof: retired in E2, 2026-11-05.
 
-- **Signatures:** each one is checked by a cheap hinted test, and all of them are confirmed together by one
-  batch equation per chunk.
-- **Transactions:** each is parsed and hashed once.
-- **The aggregate:** it never re-parses a transaction.
-- **The UTXO set:** it is accounted the **SwiftSync** way, using Ruben Somsen's published hints format. Coins
-  spent before a handover height H go into an ECMH running total. Coins still unspent at H go into a Utreexo
-  forest.
+## 2. What a proof states
 
-The result is 8.2× fewer cycles than the canonical guest on a modern block (409.5 M against 3.36 G, block 962,000,
-round-8 image), mainnet tip blocks proven in 4.4–5.5 minutes (266–332 s) on 4 GPUs (round-13 image), and a proof
-design that a SwiftSync hints file is correct, demonstrated on signet from a trusted mid-chain state; no proof from
-genesis exists yet.
+Normative: [`SWIFTSYNC_PROOFS.md`](SWIFTSYNC_PROOFS.md) (the file name is historical; it is now exactly the
+statement, the `ChainState` layout and the verifier procedure). In short:
 
-## 2. What it achieves (measured)
-
-### Speed and cost
-
-| measure | canonical Hazync (CORE, `37987b85`) | libzync | gain |
-|---|---|---|---|
-| block 962,000 (8,006 inputs), guest cycles | 3,357.6 M (one chunk) | round 8: chunks 345.2 M + aggregate 64.3 M = **409.5 M** (round 13, before the audits: 397 M) | **8.2×** |
-| block 962,000 proved on 1× A40, wall | 9,990 s | **1,167 s** | **8.6×** card time |
-| block 962,000, critical path on one card (max chunk + aggregate) | 2,922 s | 219 s | **13.3×** |
-| 2026-09-29 tip blocks 969,122 / 969,118 | 558 s / 368 s on **38** cards | **197 s / 220 s on 4** RTX PRO 6000 | 2–3× faster on ~1/10 the cards |
-| live mainnet tip hour (2026-10-29/30) | 5 blocks, 38 cards, $15.83 per block | **4/4 blocks verified, 266–332 s each**, ~$10 for the hour | ~1/6 the cost per block |
-
-Sources: `experimental/libzync-bench/gpu/GPU_RESULTS.md` and `BLOCK_962000.md`. The cycle figures come from
-laptop execute mode. GPU figures are RunPod wall clock, with every receipt verified, measured on the round-13 image
-(`5e460bf3`) before the audits; the audits added about 3% to the cycles (row 1).
-
-### A proof SwiftSync can use
-
-> ⚠ **Retired in E2 (2026-11-05)** with design B: no proof takes a hints file now. The coin log (`COINLOG.md`) proves
-> every block; the chain state's former SwiftSync slots carry the counting trie's root (`trie_root`) and the live
-> coins' multiset hash (`live_set` / `live_hash`). This section and the design-B rows below are the record.
-
-- **Unmodified input:** the guest reads the **published `hintsfile` v0 format** (2140-dev/swiftsync,
-  `utxohints.store`) unmodified.
-- **What a proof at height H commits:**
-  - `ss_set = 0`: the ECMH total is the identity;
-  - `ss_hints`: a hash computable **from the hints file alone**;
-  - Utreexo roots that are exactly the UTXO set at H.
-- **What follows:** with the checks in §5 of the proposal (`docs/libzync/SWIFTSYNC_PROOFS.md`), the hints file is
-  proven correct for that chain, with no trust in whoever served it.
-- **Checked on mainnet blocks 1–500** (execute mode, real chain-state carry):
-  - balanced, and the forest is exactly the 503 coins unspent at 500;
-  - one flipped hint bit in either direction is rejected;
-  - our indexing agrees with the published 970,000-height file on every coin it marks unspent.
-
-### Engineering consolidation (this round)
-
-| before | after |
-|---|---|
-| ~22 build flags, set identically at build time and at run time, or the input stream silently desynchronised | **one profile:** `HAZYNC_LIBZYNC=1` (or `assumevalid`), plus `HAZYNC_NETWORK=signet`. The host reads what the embedded guest was built for (`methods::LIBZYNC`, `NETWORK`) |
-| 4 hint streams (pubkey-Y, batch signatures, ECMH, SwiftSync bits), 3 file kinds per block, each with its own reader | **one hint block per guest run** (`libzync/src/wire.rs`) and **one bundle file per block** (`libzync::host::BlockBundle`) |
-| the SwiftSync hint hash computed two ways (guest and host) | one definition (`libzync/src/ss_hints.rs`), compiled into both (removed with design B in E2) |
-| Core edits made by Python scripts rewriting a source tree in place | two reviewable patch files (`patches/libzync/0101`, `0102`) and `scripts/libzync-base.sh`, which rebuilds the exact tree from pinned upstream releases |
-| mainnet only | mainnet and **default signet** (§8) |
-
-Gate: on block 962,000 the consolidated guest commits **byte-identical chunk journals** to the previous
-round (`687a2c5c…`, `a9593daf…`, `ada2363a…`, `4554492b…`), from the same 7,031 signature hints and 4,324 ECMH
-operations. That was measured before the review fixes, which deliberately change the journal layout (§7).
+- A receipt of a libzync image says every block from genesis to `tip_hash` is valid under Core's rules as compiled into
+  the image ([`CONSENSUS_RULES.md`](CONSENSUS_RULES.md): 59 rows SAME, 3 STRICTER, 0 WEAKER, 0 NOT ENFORCED).
+- Its journal, `ChainState` version 2, is the state after the tip: coin-log roots and live value, trie root,
+  live-coin hash, block forest, work, time context, BIP30 tree root, `profile`, `self_id`, `lineage`, `anchor_id`.
+- It means something only if `anchor_id` is the network's pinned genesis anchor (mainnet `852c5c7e…390167`).
+- Verdicts: OK (genesis-anchored, enough work, at or past the pinned checkpoint, mainnet 970,000), DEMO (exit 2:
+  supplied anchor, low work or below the checkpoint), FAIL. Which chain it is stays a separate check against a source
+  the verifier trusts (`--bitcoin-cli`, `--mempool`, `--expect`).
+- Product profile `0x71` mainnet / `0x75` signet: libzync, coin log, counting trie, live-coin hash; scripts checked.
 
 ## 3. How it works
 
 ```
-block ──► host: split inputs into chunks (cost-packed) ──► hint bundle (libzync-hints)
-            │
-            ├─► chunk k (mode 4): Core's VerifyScript for every input it owns
-            │     - libsecp parses, checks r,s; the batch hook DEFERS the group equation (hinted R)
-            │     - one MSM per chunk checks every deferred signature together
-            │     - commits per-transaction FACTS: txid, wtxid, fee, weight, sigops, coin leaves
-            │
-            └─► aggregate (mode 5): verifies every chunk receipt + the previous block's chain proof
-                  (at a handover, the pinned predecessor image's proof: HANDOVER.md)
-                  - block rules from the facts: merkle, witness commitment, PoW, retarget, MTP,
-                    subsidy, weight, sigops, BIP30/34, coverage of every input exactly once
-                  - SwiftSync design B: spent-before-H coins -> ECMH total; unspent-at-H -> Utreexo
-                  - appends the block to the block forest (one leaf per height, genesis first)
-                  - commits ChainState (tip, work, forest, ECMH total, hint hash, anchor, self id,
-                    block forest, lineage)
+block ─► host: chunks (cost-packed), signature + ECMH hints, coin-log and trie witnesses
+          ├─► chunk k        (mode 4)  Core VerifyScript per input; batch check of deferred signatures;
+          │                            commits per-transaction facts (txid, wtxid, fee, weight, sigops, coin leaves)
+          ├─► trie update    (mode 17) the counting trie: old root, update list by digest, new root
+          └─► aggregate      (mode 5)  verifies chunk receipts, the trie receipt and the previous chain proof;
+                                       block rules from the facts; coin-log flips and appends; live-coin hash;
+                                       appends the block-forest leaf; commits ChainState
+two chain proofs ─► join     (mode 18) left ends where right starts ─► one proof of both ranges
 ```
 
-A new image can continue a chain from a stated height without proving it again from genesis, and the block forest
-lets a proof of the tip show any earlier block was in the chain. Both are specified in [`HANDOVER.md`](HANDOVER.md),
-with when a handover may be used: a rule change, yes; a soundness fix, never.
+### Chunks and aggregate
 
-zyncAPPs, the separate guests that verify a core proof and answer one question with it (proof of ownership, proof of
-payment, supply), and how they survive handovers: [`ZYNCAPPS.md`](ZYNCAPPS.md).
+Chunks run Core's code unchanged as the judge of every script; libsecp parses and range-checks every key and
+signature, and a hinted R defers the group equation to one Fiat-Shamir-weighted multi-scalar multiplication per chunk
+(a bad hint can only fall back to libsecp or fail). The aggregate never re-parses a transaction: it checks the
+chunk-committed facts against the merkle-committed bytes and enforces merkle root, witness commitment, PoW, retarget,
+MTP, subsidy, weight, sigops, BIP30/34/68, and that every input is covered exactly once. Any C++ exception the guest
+can reach rejects the block (no unwinding, by decision; pinned in guest `build.rs` `REVIEWED_CATCHES`).
 
-## 4. How much of Bitcoin Core is still in the proof
+### Coin log — [`COINLOG.md`](COINLOG.md)
 
-### Source
+Every coin that outlives its block is appended in birth order to an append-only forest of perfect Merkle trees; a
+spend flips the coin's leaf in place to a spent leaf recording (height, tx, vin). A spend opens the unspent leaf at
+its position against the current roots, so a missing or already-spent coin cannot be spent, **at every block**: no
+hints file, no closing height. The coin leaf's bytes are in [`UTREEXO_FORMAT.md`](UTREEXO_FORMAT.md) §2 (also a
+historical name; it is not the utreexod format). Mainnet's log is about 2.4 billion leaves (COINLOG §8).
 
-| | lines | role in libzync |
+### Counting trie — ROADMAP E1c / E2
+
+One two-level trie, script hash then coin, keyed by (SHA-256(scriptPubKey), outpoint), with history kept and a
+per-script unspent count and value. It gives what the birth-ordered log cannot: absence ("no coin of script S"),
+a script's complete history, and its balance. It is updated in **its own receipt** (guest mode 17), proved beside the
+chunks, and verified inside the aggregate; its old root comes from the previous `ChainState`, never from the witness,
+and the new root is committed as `trie_root`. Its contents, including the BIP30 edge cases, are listed in
+[`ZYNCAPPS.md`](ZYNCAPPS.md) §2. The host keeps it in an arena of 64-byte records, in memory or memory-mapped on disk,
+copy-on-write, with a passing crash test (ROADMAP E2).
+
+### Live-coin hash (instant IBD) — ROADMAP E2b
+
+`live_set` / `live_hash` are an ECMH multiset hash of the **live** coins, so a node that downloads a UTXO set checks it
+against the proof instead of replaying the chain.
+
+### Block forest and handover — [`HANDOVER.md`](HANDOVER.md)
+
+The block forest has one leaf per block, genesis first, each committing the block hash, its height and the coin state
+after it; so a tip proof commits the coin log at every earlier height, and a path shows any block (and, with a merkle
+branch, any transaction) is in the chain. A handover (`is_base = 2`) lets a new image continue at a pinned
+`first_height` from a pinned predecessor, recording it in `lineage`. Allowed for a soft fork or a cheaper prover with
+the same statement; **never for a soundness fix** (re-prove from before the bug).
+
+### Joins of independent block proofs — ROADMAP H-B
+
+Today's chain is linear (block N's aggregate verifies N−1's receipt). For a whole-chain backfill, the host prepares
+the state before every block natively (untrusted starting points); each block is proved as a base step on its state
+in any order, on any number of cards; a join (guest mode 18) verifies two adjacent proofs of the same image and
+requires the right one to start where the left one ends (the link digest excludes `anchor_id`, so balanced trees
+work). A wrong host state can only fail a join, never forge. N blocks need N−1 joins over ~log2 N levels, every level
+parallel. Not yet built: per-block leaf bundles from prep and the coordinator's work queue (H-B 8, step e).
+
+### zyncAPPs — [`ZYNCAPPS.md`](ZYNCAPPS.md)
+
+Separate small guests that verify a core receipt inside the zkVM (the core image id is an input, so they survive
+handovers) and answer one question. Built: `coin` (unspent / spent at the core tip) and `headers` (the header chain
+from genesis, executed on real headers, not yet proved). Being built: `zeroconf`. New core facts are appended to
+`ChainState` only at a handover. Proof bundle format: [`PROOF_BUNDLE.md`](PROOF_BUNDLE.md).
+
+## 4. Measured
+
+| what | measured on | result | source |
+|---|---|---|---|
+| block 962,000, guest cycles | c14, execute mode, 16 chunks, laptop | **440,594,143** = chunks 375,697,303 + aggregate 64,896,840 (the trie update's own receipt is not in this sum) | `handover/RESULT_c14.txt` |
+| trie update, block 962,000 | c10e5, execute mode (trie's old state synthesised) | 47 M cycles; core 440 M; total 487 M | `absence/README.md` "The product, integrated" |
+| block 962,000 vs canonical CORE, cycles | c10e5 incl. trie (487 M) vs CORE ~4,430 M | **9.09x** fewer | `absence/README.md` |
+| block 962,000 proved, one RTX PRO 6000 | c14, 11-06, quiet host (load ~13) | **537 s** = 16 chunks 406 s + aggregate 132 s (incl. the trie proof, 51.1 s, run serially here); every receipt verified | `gpu/GPU_RESULTS.md` (top) |
+| same, loaded host (load ~55) | c14, 11-06, same image and bundle | 894 s (chunks 678 s, aggregate 223 s incl. trie 92.8 s): the host, not the image | `gpu/GPU_RESULTS.md` |
+| GPU busy, mean | c14, quiet host | 42% (host-side witness generation dominates; lever M3) | `gpu/GPU_RESULTS.md` |
+| block 962,000, one RTX PRO 6000 | design B, round-13 image `5e460bf3`, 10-29 | 517 s (452 + 65) | `gpu/GPU_RESULTS.md` (10-29) |
+| block 962,000, 4× RTX PRO 6000 | design B, round 13, 10-29 | 174 s (141.2 + 32.6) | same |
+| block 962,000 vs CORE, card time on one A40 | design B round 13 vs CORE `37987b85`, 10-29 | **8.6x MEASURED** (9,990 vs 1,167 s); critical path 13.3x (2,922 vs 219 s) | same |
+| c14 vs CORE, card time | — | **~8.2x ESTIMATED, not measured**: chaining design B's A40 time by c14/design B on the PRO 6000 (1,167 × 537/517 ≈ 1,212 s vs 9,990 s) | derived from the two rows above |
+| join of two chain proofs | c14, 11-06, real (non-dev) receipts, one PRO 6000 | **6.4 s** each, one 2^20 segment (padded; raw cycles not logged); 8 leaves (18.2 s each) + 7 joins over 3 levels; root journal identical to the linear chain's block 8, verified; root receipt 226,002 bytes | `gpu/GPU_RESULTS.md` (top) |
+| joins for a whole-chain backfill | ESTIMATED from the 6.4 s join | ~975 k joins, ~1,700 PRO 6000 card-hours, ~$4.3k at $2.49/hr | same |
+| whole mainnet chain to 970,000, A40 | ESTIMATED 10-30 on design B images (19 sampled blocks) | scripts ON ~$114-119k; scripts OFF ~$37-42k. Not re-estimated on c14 | `cost/WHOLE_CHAIN_COST.md` |
+| header chain zyncAPP | `headers` guest, execute mode, real mainnet headers | 2,427 cycles per header (genesis..2,100); whole chain ~47 min on a PRO 6000 ESTIMATED from cycles | ROADMAP K1 |
+
+The GPU benchmark's coin log and trie around block 962,000 are **MODELLED** (`lz::cl_synth_around`, from the block's
+own spends and real transaction counts): the cycles are a real block's, the coin state is not mainnet history
+(`gpu/gpu-libzync-multi.sh`). Paths above are under `experimental/libzync-bench/`.
+
+## 5. Testing and review
+
+### Tests on the freeze candidate
+
+| test | image | result | source |
+|---|---|---|---|
+| unit tests | c14 | libzync 29/29, swiftsync-verify 16/16, -ffi 2/2, host 68/68 | `handover/RESULT_c14.txt` |
+| rig: blocks built to hit each rule, guest vs Bitcoin Core 28.0 (regtest) | c14 | **96/96 agree**, 0 deferred | same |
+| handover O → N (regtest, every tampered handover refused) | c14 | **16/16** as expected | same |
+| mainnet 1..200 from genesis (dev mode) | c14 (and c13) | coin log = `coinlog_ref.py`, block forest = `block_forest_ref.py` (independent implementations), genesis anchor `852c5c7e`, 0 panics | same; `RESULT_c13.txt` |
+| signet from genesis (dev mode) | c13: **1..2,600**; c14: 1..100 (short pass) | coin log and block forest match the references (2,600: 2,693 leaves, 293 live coins) | `RESULT_c13.txt`, `RESULT_c14.txt` |
+| edge blocks (2016, 91,842, 91,880, 185,956, 227,931, 363,725, 364,292, 388,381, 419,328, 481,824) | c14 | 10/10 valid | `RESULT_c14.txt` |
+| Core's `script_tests`, `tx_valid`, `tx_invalid`, every flag variant (guest mode 10) | c10e12 | **22,666 / 22,666 agree**, 0 differ (679 by a guest abort where Core catches a throw: both reject) | `core_vectors/RESULT_c10e12_variants.txt` |
+| same, batched signature path with forged hints | c10e11 | honest 1,420/1,420; forged: 0 Core-invalid cases pass | ROADMAP I1 |
+| joins, dev mode: 200 leaves, balanced tree | c10e12 | 199 joins over 8 levels, root **byte-identical** to the linear block 200; join(linear 100, leaf 101) = linear 101; gap, swapped, twice, tampered anchor, other image all refused | `join/RESULT_c10e12.txt` |
+| trie store: resume, tampered snapshots, on-disk = in-memory | c10e7 / c10e12 | identical roots; tampered refused; native prep 1..200 byte-identical to the proved run | ROADMAP E2 |
+
+c14 differs from c13 only in how a finished collect run exits (`COLLECT_EXIT` instead of a panic); its cost moved by
++2 aggregate cycles and about −2,000 chunk cycles a block. c13 had the full pass, c14 the short one (ROADMAP H4).
+
+### Review history
+
+Cold reviews, each by fresh reviewers given the code, not the author's conclusions. Rounds 1-8 were on design B;
+the numbering restarted for the reviews after E2. Full findings for 1-8:
+[`LIBZYNC_2026-10-31.md`](../../experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md) §7.
+
+| round | date | what it found | outcome |
+|---|---|---|---|
+| 1 | 10-30 | 12 findings, soundness-critical among them: a hint-block flag that switched coin accounting off, ECMH points with two y values, witness bytes unbound across chunks, BIP68 signed version compare, a second coinbase, coin height unchecked | all fixed and retested |
+| 2 | 10-30 | coinbase flag 2 spent immature coinbase; BIP30 tree root not carried between blocks; verifier accepted a dev-mode receipt | fixed |
+| 3 | 10-30 | `is_base` any value skipped verifying the previous proof (forgery); BIP30 descendants of a repeated coinbase | fixed; the `is_base` and BIP68 bugs are also on `main`: draft PR #668, merge is the user's call (ROADMAP F1) |
+| 4 | 10-30 | open items: `time-too-new`, scripts-skipped label | `max_time` and `profile` in the proof |
+| 5 | 10-31 | `verify-chain` accepted a libzync receipt with none of its checks; signet GPU evidence had failed its own verify | fixed (host and docs; image unchanged) |
+| 6 | 10-31 | C++ side (patches, `verify_input.cpp`) accepts exactly what Core and libsecp accept; evidence scripts circular | scripts fixed |
+| 7 | 10-31 | guest hygiene (`hz_copy` out-of-bounds read, lock arithmetic) | fixed; image moved |
+| 8 | 10-31 | a stale guest build; claims stronger than the code | clean builds only; proposal tightened |
+| E2 r1 | 11-05 | trie facts must carry their claimed answer | fixed (`a4a7c40`) |
+| E2 r2 | 11-05 | trie soundness: no forgery found | low items hardened (`b551bc9`) |
+| E2 r3 | 11-05 | verifier: no forgery found; built-in image table verifies nothing current | dev mode compiled out (`3d753ae`); table replaced at the freeze |
+| E2 r4 | 11-05 | joins and mode 10: no soundness break | tests made able to fail (`050dce4`) |
+| E2 r5 | 11-05 | join link digest included `anchor_id` (only left combs joinable); prep's BIP30 counting | fixed (`aa4036c`) |
+| — | 11-05 | the rig found a coin re-created over its own spent record (BIP30, Core allows it) stalling the chain | liveness fix in guest, model and store (`d6f8b4b`) → c13 |
+| E2 r6 | 11-06 | that fix: no accept or root divergence reachable | model / store depth aligned, undo refuses after a re-creation (`838bf5b`) |
+| E2 r7 | 11-06 | host and harness: every committing run checked, undo stack, GPU script flakes | fixed, image unchanged (`73977b7`) |
+
+## 6. How much of Bitcoin Core is in the proof
+
+Measured on the design-B guest `09a02eed` (10-30), not re-measured on c14. The chunk code is the same design; the
+aggregate has since gained the coin log, the trie receipt check and the live-coin hash, all Hazync code.
+
+| source | lines | role |
 |---|---|---|
-| Bitcoin Core v28.0: 22 translation units (23 on signet) | 7,061 (pristine) | interpreter, sighash, transactions and serialisation, hashes, CheckTransaction, merkle, PoW and retarget, chainparams, signet solution |
-| libsecp256k1 v0.5.1 | 16,811 | every key and signature parse, every check before the group equation, and the full verify on fallback |
-| patches to Core / libsecp | canonical 4, GHOST 5, **libzync 2** (`0101`: 9 levers, +355 −5 lines; `0102`: 3 hooks, +58 −2; `git apply --numstat`, round 8) | each is `#ifdef`'d; each computes the same bytes (third reviewer, §7) |
-| Hazync guest code (Rust + C++ wrapper) | 5,428 | wiring, chain state, block bookkeeping |
-| of which written for libzync | ~2,000 | batch MSM, ECMH, agg-lite, the `libzync` crate |
+| Bitcoin Core v28.0, 22 translation units (23 on signet) | 7,061 | interpreter, sighash, transactions and serialisation, hashes, CheckTransaction, merkle, PoW and retarget, chainparams, signet solution |
+| libsecp256k1 v0.5.1 | 16,811 | every key and signature parse and check before the group equation; the full verify on fallback |
+| libzync patches | 2 (`patches/libzync/0101`, `0102`) | each `#ifdef`'d, each reviewed to compute the same bytes as Core |
 
-### Execution (block 962,000)
+Execution profile of block 962,000 (`cost/core_share.py`, cycles charged to the innermost non-runtime frame):
+chunks **46.7% Core C++**, 6.7% libsecp, 46.7% Hazync/libzync (of which the batch MSM 19%); the aggregate 0.8% Core,
+99.2% Hazync, by design.
 
-**Method:**
-- Execute-mode `RISC0_PPROF_OUT` profiles of the fixed guest (`09a02eed…`), 4 chunks plus the aggregate.
-- Each cycle is charged to the **innermost frame that is not runtime**, so memcpy, paging and the SHA
-  accelerator count for the code that asked for them.
-- Tool: `experimental/libzync-bench/cost/core_share.py`.
-- Totals include paging, so they exceed the executor's user cycles.
-
-| | chunks (406.6 M cycles) | aggregate (74.7 M) |
-|---|---|---|
-| **Bitcoin Core C++** (interpreter, sighash, CSHA256, transaction parsing, CheckTransaction, merkle, pow) | **46.7%** | 0.8% |
-| **libsecp256k1** (incl. GHOST coprocessor field/lift-x shims) | 6.7% | 0.0% |
-| **Hazync/libzync own code** | 46.7% | **99.2%** |
-| ↳ of which the batch-verification MSM (guest-logged `finish_cycles`) | 78.5 M (19% of chunks) | — |
-
-**How to read it:**
-- **Chunks: roughly half the cycles run Core's own code.** That half is all the script work, sighash, hashing and
-  parsing.
-- **The other half is libzync's machinery:** the batch MSM, caches, leaf hashing and per-transaction records.
-  libsecp's share is small because the expensive part of each signature, the group equation, now happens in the
-  batch.
-- **The aggregate is almost entirely Hazync's own code.** That is by design: agg-lite replaced Core's block-level
-  orchestration with checks on chunk-committed facts. The Core code it still calls (`ComputeMerkleRoot`, PoW,
-  retarget, chainparams) is a small part of its cycles.
-- **Attribution limit:** inlined Rust in the guest crate shows up as an unnamed frame and is charged to libzync.
-
-### What Core still decides, and what Hazync decides instead
-
-| decision | who decides in libzync |
+| decision | who decides |
 |---|---|
-| is this script valid (all opcodes, all flags) | **Core**: `VerifyScript`, unchanged |
-| what message a signature signs (sighash, all types) | **Core**: `SignatureHash`, plus a legacy fast path proven to produce the same bytes |
-| is this signature/key well-formed, low-level checks | **libsecp**, unchanged |
-| does R = u1·G + u2·Q hold (the group equation) | **libzync batch MSM** with Fiat–Shamir weights (on fallback: libsecp) |
-| is this transaction well-formed (CheckTransaction), amounts in range | **Core**: `CheckTransaction`, `CheckTxInputs` logic via the wrapper |
-| merkle root, witness commitment hashing, PoW target, retarget | **Core** code (`ComputeMerkleRoot`, `arith_uint256`, `CalculateNextWorkRequired`) |
-| does the coin being spent exist and is it unspent | **SwiftSync + ECMH + Utreexo** (Core: `CCoinsViewCache`) |
-| block-level sums and orchestration (fees, weight, sigops, BIP68, BIP30, coverage) | **Hazync Rust** (Core: `ConnectBlock` / `CheckBlock`), transcribed rule by rule |
+| script validity (all opcodes, all flags), sighash | **Core** (`VerifyScript`, `SignatureHash`; a legacy SIGHASH_ALL fast path reviewed byte-equal) |
+| key and signature well-formedness | **libsecp**, unchanged |
+| the group equation R = u1·G + u2·Q | **libzync batch MSM** (fallback: libsecp) |
+| transaction well-formedness, amounts | **Core** `CheckTransaction`, `CheckTxInputs` logic |
+| merkle root, PoW target, retarget | **Core** code |
+| the spent coin exists and is unspent | **coin log** (+ trie update marks it spent) (Core: `CCoinsViewCache`) |
+| block sums and orchestration (fees, weight, sigops, BIP68, BIP30, coverage) | **Hazync Rust**, transcribed rule by rule (Core: `ConnectBlock` / `CheckBlock`) |
 
-## 5. What we gave up by going this way
+**What that costs.** "Core's code checks everything" is not literally true: the batch MSM, the block orchestration
+and the coin accounting are new consensus-critical code, and the reviews found real soundness bugs in exactly those
+parts. A prover now needs host preprocessing (signature and ECMH hints: 118 s for hints plus an execute check on the c14 GPU host; untrusted, so a
+liveness cost only). One network per image. A libzync image runs only chunks, aggregate, trie update and join among
+the block modes.
 
-1. **"Core's code checks everything" is no longer literally true.** The group equation of most signatures is checked by
-   libzync's batch, and block orchestration by Hazync's Rust. Both are new consensus-critical code. The first review
-   found real soundness bugs in exactly these parts (§7).
-2. **The trust model gained a hints file and an epoch.**
-   - A SwiftSync proof is complete only at the hints file's stop height H.
-   - Before H, the ECMH total is not yet zero and the proof says nothing about the UTXO set.
-   - The tip beyond H needs Utreexo with deletions (the canonical path). Two modes means a handover, and that
-     handover must itself be proven (proposal §7).
-3. **A failure is not localised.** One running total from 1 to H tells you the file is wrong, not where. The host
-   tool `swiftsync-diff-hints` localises it by replaying blocks; the proof itself does not (proposal §7).
-4. **Host preprocessing.**
-   - Every block needs a hint bundle: R points and ECMH hints, about 47 s of laptop CPU for 962,000.
-   - Hints are untrusted (§7), so this costs liveness, not soundness. But a prover now needs this step.
-5. **Assumevalid mode.** `HAZYNC_LIBZYNC=assumevalid` skips scripts entirely: about 3× cheaper (`cost/WHOLE_CHAIN_COST.md`).
-   It proves accounting, not script validity, which is SwiftSync's own assumevalid trade-off.
-6. **Reproducibility work to redo.** The canonical guest is reproducible through `reproduce/Dockerfile` and pinned by
-   `METHOD_ID` + `GUEST_ELF_SHA256`. libzync guests are built from `scripts/libzync-base.sh` and are deterministic on one
-   machine when the guest is built from a clean target (two builds gave the same id; an incremental build once reused a
-   stale guest, round 8), and the container now fixes those paths:
-   `reproduce/libzync.Dockerfile` builds both guests and prints the ids pinned in `reproduce/LIBZYNC_IDS`. **Only a
-   guest built in that container has the published id**, so a proof to publish must use its ELF.
-7. **One network per image.**
-   - A signet proof and a mainnet proof have different image ids. That is by design, and it is safe.
-   - Custom signets, with a different challenge, are not supported.
-8. **Older block modes are disabled in a libzync image.** Only chunks and the aggregate are available (§7, fix 7).
+**What Core could take** (from the 10-30 report, still applicable): a salt-free, provable SwiftSync aggregate (ECMH
+or MuHash: ~3.0k cycles per element measured in the guest, vs ~1.3k for the salted sum); one hint-index convention
+(Core PR #34004 and the `hintsfile` crate count outputs differently); batch Schnorr verification (about 4× per
+signature at block scale in the guest); legacy sighash midstate reuse (removes the quadratic term); lazy
+txid / wtxid; "hints are advice, the code decides" for one-way checks. None of these is a Core bug fix: the BIP68
+signedness bug was in Hazync's own transcription.
 
-## 6. Each change: why, pros, cons
+## 7. Limits and open work
 
-| change | why | pros | cons |
-|---|---|---|---|
-| **Batch signature verification** (hinted R, one MSM per chunk) | ECDSA was 75% of a modern block's cycles in libsecp's per-signature ecmult | 3.4–4.5× cheaper per signature; libsecp still parses and checks; a bad hint only falls back or fails | new crypto code; correctness rests on a 128-bit Fiat–Shamir batch; hints must be precomputed |
-| **ECMH SwiftSync accounting** instead of Utreexo inclusion proofs | inclusion proofs dominated the aggregate's input, and they force serial proving | no per-input proofs; blocks provable in any order before H; ~3k cycles per coin operation | correct only at H; needs a hints file; non-local failures |
-| **Design B: survivors to an append-only Utreexo forest** | the tip needs the UTXO set as an accumulator | the UTXO set at H falls out for free; no separate handover pass | the forest is only meaningful together with `ss_set = 0` at H |
-| **agg-lite: the aggregate trusts chunk-committed facts** | re-parsing every transaction serially was the aggregate's cost | aggregate 57.7 M cycles on 962,000 | the facts must be bound to the merkle-committed bytes; the wtxid binding was missing (§7, fix 3) |
-| **parse/hash once** (tx-once, lazy and raw txid, HashWriter buffer, SHA stream, D64 stream) | the same transaction was deserialised and hashed 3× | large cut in hashing and memcpy | patches inside Core's classes; reviewed equivalent (§7) |
-| **memos** (pubkey parse, HASH160) | 6,986 signatures over 2,099 distinct keys on 962,000 | each repeated key costs nothing | caches in consensus code; only safe under the bump allocator, so TLSF is not in the profile |
-| **legacy SIGHASH_ALL fast path** | quadratic hashing on one 400-input legacy transaction | halves the bytes hashed | a second implementation of the legacy sighash; reviewed byte-equal |
-| **signet** | a cheap complete demonstration | full chain in reach (ESTIMATED ~$0.7–2.5k for the whole chain, scripts off) | one more build profile; BIP325 adds a Core TU |
+- **No proof from genesis of mainnet yet.** Mainnet is proven 1..200 and signet 1..2,600 from genesis in dev mode
+  (rules executed, receipts not real); on current images, real receipts exist only for block 962,000 and the 8-block join tree. A full mainnet proof is
+  the user's trigger after the freeze (ROADMAP H8).
+- **The GPU benchmark's coin state is modelled** (`cl_synth_around`), not mainnet history (§4).
+- **Mainnet-scale prep is not done.** The trie on disk is built and crash-tested, but real bytes per coin are
+  unmeasured: 4.04 nodes / 258 bytes per coin on a synthetic chain; mainnet ESTIMATED at hundreds of GB, needing NVMe
+  on the prep / tip box (ROADMAP E2). Per-block leaf bundles from prep (H-B 8) and the coordinator's work queue (H-B e)
+  are not built.
+- **The image is not frozen.** Before it: a review of everything since round 6, the repo cleanup (G2), a full cold
+  review of the cleaned repo; then the freeze is the user's call (ROADMAP H6-H7). Until the freeze publishes the
+  product ids, the verifiers' built-in table (`reproduce/LIBZYNC_IDS`: `9f469930…` / `067822b9…`, round 8) verifies
+  nothing current: pass `--image <hex>`.
+- **No external audit or bug bounty** (ROADMAP I2): needed before anyone relies on a proof for money. Fuzzing and a
+  wider rig are open (I1). Trust in risc0 itself: one pinned version (I3).
+- **The batch-signature soundness margin is untested at the edge:** x = r + n is infeasible for real r and effectively
+  untested (ROADMAP I1).
+- Not consensus: adoption is through the verifiers and, later, Ghost's coinbase (I6). Tip latency and the cost levers
+  are in ROADMAP I7 and M.
 
-## 7. Independent review, 2026-10-30, and the fixes
-
-Three reviewers each read the code without my conclusions: one on the cryptography, one on consensus
-equivalence, one on the Core patches. Findings and status:
-
-| # | finding | severity | status |
-|---|---|---|---|
-| 1 | the aggregate accepted an `ecmh_collect` flag from the (untrusted) hint block: **coin accounting off, the proof still valid** | soundness, critical (both reviewers) | **fixed**: a collect aggregate stops before committing |
-| 2 | ECMH point had two values (±y), so a prover could cancel a fake or repeated spend | soundness, critical (both reviewers) | **fixed**: even y required; host normalises |
-| 3 | a transaction split across chunks bound its witness only in the input-0 run; another run could verify against different witness bytes | soundness, critical | **fixed**: every record commits the wtxid; the aggregate requires all runs to agree |
-| 4 | BIP68 compared `version >= 2` signed; Core v28's `version` is `uint32_t` | soundness, critical. ⚠ **also present in the canonical guest's chunked path on `main`** | fixed on `libzync`; **main: for your decision** |
-| 5 | a second coinbase-shaped transaction was not rejected (`bad-cb-multiple`) | soundness (exploitable with 2) | **fixed** |
-| 6 | a coin's committed creation height was never checked against the spending block | soundness, critical | **fixed**: `coin_height <= height` |
-| 7 | old block modes (1, 2, 3, 6, 7, 12) were reachable in a libzync image: no SwiftSync, no signet check, caches unsafe under TLSF | hygiene → soundness under TLSF/signet | **fixed**: a libzync image runs chunks + aggregate only |
-| 8 | coprocessor EC results not range-checked before equality decisions | hygiene (~2^224 work to reach) | **fixed**: canonical check on every add/double |
-| 9 | the documented verifier checks omitted `anchor_id` and the image id | interface, critical as documented | **fixed**: `host libzync-verify` checks all of them |
-| 10 | the same external coin spent twice in one block only failed at H | completeness of error location | **fixed**: rejected in that block |
-| 11 | hint-block padding not required to be zero | hygiene | **fixed** |
-| 12 | `hz_copy` reads up to 3 bytes past a buffer (UB at -O3); the `CMutableTransaction` sighash fast path is unsafe if ever used for signing | hygiene | `hz_copy` **fixed in round 7**; the sighash note stands (verification only, never signing) |
-
-**Retest after the fixes** (guest `09a02eed…`; output in `experimental/libzync-bench/swiftsync/r18_fixed_tests.out`):
-
-| check | result |
-|---|---|
-| block 962,000, valid | ✅ valid. Chunks 342.6 M cycles (+0.9%), aggregate 64.3 M (+11%: wtxid per record, the duplicate-spend sort, range checks) |
-| ECMH hint with the odd root | ✅ refused: `ECMH: hinted y must be the even root` |
-| a spend whose coin claims a creation height after the block | ✅ chunk `all_valid = 0` |
-| design B sweep 1..200 | ✅ BALANCED; forest 204 = the coins unspent at 200; `ss_hints` `e33c66b3…` = the file's hash (unchanged) |
-| one hint bit flipped, either way | ✅ NOT BALANCED (both) |
-| `swiftsync-diff-hints` on the exact file / one toggled entry, both directions | ✅ EXACT / names exactly that height, index and outpoint, and for a spent coin the height that spent it |
-| sweep 1..200 wall time | 40 s (382 s before the cached guest image) |
-
-### Second review round (same day, after the fixes)
-
-Three new reviewers:
-- one re-checked every fix above;
-- one made a fresh adversarial pass over the guest, without the earlier findings;
-- one reviewed the verifier and the host tooling.
-
-**All 11 fixes were confirmed correct and complete.** New findings:
-
-| # | finding | severity | status |
-|---|---|---|---|
-| 13 | a coinbase flag of **2**: the leaf reads it as coinbase, maturity tested `== 1`, so an immature coinbase output could be spent | soundness, critical | **fixed**: flag must be 0 or 1 (bit 1, BIP30-tracked, added later: 0-3, maturity reads bit 0) |
-| 14 | the BIP30 coinbase-SMT root was never carried between blocks, so each block's starting tree was the prover's choice | soundness (exploitable only by re-mining pre-BIP34 history) | **fixed**: `ChainState.smt_root`, checked every block; the host keeps one real tree across sweeps and chains |
-| 15 | an external spend claiming the current block's height was only caught at H | completeness | **fixed**: flagged by the chunk, rejected in that block |
-| 16 | `libzync-verify` accepted a dev-mode FakeReceipt when `RISC0_DEV_MODE` was set | verifier soundness | **fixed**: fake receipts and the dev-mode variable are refused |
-| 17 | with a supplied anchor, `libzync-verify` printed the same OK line as a genesis proof | verifier soundness for anyone automating on it | **fixed**: `LIBZYNC_VERIFY_DEMO`, exit code 2 |
-| 18 | a hints list that is not strictly ascending was sorted, then accepted | verifier soundness against the spec | **fixed**: rejected |
-| 19 | a scripts-off image (assumevalid, or a bare `HAZYNC_NO_SCRIPTS=1`) was not labelled as such | misleading output | **fixed**: recorded in the profile and printed by the verifier |
-| 20 | a prebuilt guest's network/profile labels came from the shell, not the pinned bytes | hygiene | **fixed**: the pin directory carries a `PROFILE` file, which must match |
-| 21 | `swiftsync-diff-hints` could call a file with duplicate indices EXACT | misleading output | **fixed** |
-| 22 | no tool wrote a genesis anchor | completeness | **fixed**: `libzync-anchor-json --genesis` |
-| 23 | the claim "every Core rule" includes `time-too-new` (MAX_FUTURE_BLOCK_TIME), which needs a clock | documentation | **closed in round 4**: the proof commits `max_time` and the verifier applies the rule |
-
-### Third round: adversarial audit (same day)
-
-Two fresh auditors: one on the guest, one on the verifier and spec.
-
-| # | finding | severity | status |
-|---|---|---|---|
-| 24 | **`is_base` was a free u32: any value other than 0 or 1 skipped the previous proof's verification and copied `anchor_id` from the unverified journal**, so a forged "genesis-anchored" state at H−1 plus one real block passed every verifier check | soundness, critical. ⚠ **The canonical guest on `main` has the same code** (`chain_step` and `aggregate`) | fixed on `libzync` (must be 0 or 1); **main: for your decision, urgent** |
-| 25 | the proof covers the hints file as `hintsfile` 0.2.1 decodes it; that decoder accepts non-canonical encodings and trailing bytes | verifier vs spec | **fixed**: `libzync-verify` and `swiftsync-file-hash` require canonical bytes |
-| 26 | BIP30 was enforced for coinbases only; a descendant of a fully spent, repeated coinbase could recreate an unspent outpoint | soundness (no mainnet history affected) | **fixed**: the tree tracks the 173 transactions that can ever repeat, with live counts, as Core would answer (rig `bip30_repeat_*`). Blocks at height 100,000,000 and above are refused |
-| 27 | spec: "Utreexo nodes need only the roots" (it is Hazync's own variant); §5 missing the time-too-new step; the evidence predated the audit images; epoch hash chaining unspecified | spec | **fixed** in the proposal |
-| 28 | the assumevalid label is build metadata, not carried in the receipt | interface | **closed in round 4**: `ChainState.profile`; reproducible builds still needed to trust M itself |
-
-**Verdicts that held:** batch ECDSA, Schnorr and taproot-tweak deferral match libsecp's acceptance exactly. The
-Fiat–Shamir weights are sound to about 2^-128. The signed-digit Pippenger is correct. Every Core lever computes the
-same bytes as Core in the shipped (bump-allocator) build. The record walk enforces coverage. Design B's argument
-holds once the map is single-valued.
-
-### Round 4: closing the open items (2026-10-30)
-
-| item | change |
-|---|---|
-| `time-too-new` | `ChainState.max_time` = the largest block timestamp so far. `libzync-verify` requires `max_time <= now + 7200` on its own clock, as Core does for every block during IBD. OpenTimestamps was considered and does not help: it bounds a time by Bitcoin block times, which are miner-set within the same 2 hours |
-| scripts-on vs assumevalid in the proof | `ChainState.profile`: bit 0 libzync, bit 1 scripts SKIPPED, bit 2 signet. Bit 1 comes from `hz_no_scripts()` in `verify_input.cpp`, the file that does or skips the checks. In a libzync image (always the tx-once path, where the `#ifdef` acts) the label is exact; a non-tx-once build with the flag would check scripts yet claim it skipped them, the safe direction. A recursive step requires the previous profile to equal its own; the verifier requires the profile it was built for |
-| Utreexo format | standalone spec [`UTREEXO_FORMAT.md`](UTREEXO_FORMAT.md) with a test vector, and an independent implementation `scripts/libzync/utreexo_ref.py` that checks the guest's committed forest from the block files alone |
-| Utreexo compatibility | measured (bench §7): a SHA-512/256 parent costs 14,530 cycles against 929. The blocker is that utreexod's roots depend on deletion history, so compatibility means proving every deletion |
-
-Guests: mainnet `ddcaf1d0…`, signet `c3501ac9…`.
-
-### Round 5: audit of round 4 and the verifier (2026-10-31)
-
-Three fresh reviews: a code review of `196086d..` (round 4), an adversarial pass over the guest, and one over the
-verifier, specs and evidence. The guest held: no way was found to make it commit a wrong state, and the round-4
-fields are bound (`max_time` through `anchor_id`, `profile` as a constant of the image). Every fix below is
-host-side or documentation, so the image ids are unchanged.
-
-| # | finding | severity | status |
-|---|---|---|---|
-| 29 | **`verify-chain` on a libzync build accepted a libzync receipt** with none of libzync-verify's checks (hints file, `ss_set == 0`, profile, time-too-new, dev-mode refusal): a chain spending a fabricated coin printed `CHAIN PROOF VERIFIED` | verifier soundness, critical for that command | **fixed**: refused on a libzync build; on a canonical build it now refuses fake/dev-mode receipts and applies time-too-new |
-| 30 | `HAZYNC_VERIFY_NOW` (test clock) was honoured silently; an unparsable value fell back to the real clock | verifier hygiene | **fixed**: when set it is itself a failed check, so the verdict is never OK or DEMO |
-| 31 | the OK verdict line did not say ASSUMEVALID | interface (same class as #17) | **fixed** |
-| 32 | §5 step 3 (genesis `anchor_id`) could not be implemented from the spec | spec | **fixed**: field values and encoding in the proposal, an independent `scripts/libzync/genesis_anchor_id.py`, test vectors; it matches the guest on both networks (and caught that genesis `utxo_roots` is `[None]`, not empty) |
-| 33 | signet evidence: the pod's own verify **failed** on `anchor_id`; the passing verify used `anchor_effective.json`, whose BIP30 tree the prover seeded from the range's coinbase spends; the docs said "verified" and that the state equalled the sweep's apart from `anchor_id` (`smt_root` differs too) | evidence integrity | **fixed** in the docs; the scripts were fixed in round 6 (#40) |
-| 34 | the GPU deadline watcher terminated the pod without fetching its output | evidence loss | **fixed**: the deadline harvests first; the main loops stop when it fires |
-| 35 | an empty METHOD_ID pin passed `prep.sh` (`grep -q ""`) | pin check | **fixed**: a 64-hex id is required and matched as a word |
-| 36 | `max_time` back-fill for old anchors used only the last 11 timestamps | hygiene (demonstration anchors only) | **fixed**: exact from the block files when they are present; a warning otherwise |
-| 37 | unreadable inputs made `libzync-verify` exit 101 (a panic), outside the documented 0 / 2 / 1 | interface | **fixed**: `LIBZYNC_VERIFY_FAIL`, exit 1 |
-| 38 | `swiftsync-file-hash` labelled a non-canonical file but exited 0, contrary to #25's status | interface | **fixed**: exit 1 |
-| 39 | docs: per-block times counted the base step as a transaction block; the Utreexo spec's "exactly the coins unspent at H" missed the mainnet 91,722 / 91,812 window; "the label cannot disagree" overstated (exact in the tx-once path every libzync image uses); `tx_out_leaves`' parameter name and comment are stale | docs | **fixed** in the docs; the `.cpp` comment is left, since editing the guest source moves the image id |
-
-**Considered and not changed:** the aggregate's `prev.profile == chain_profile()` check is implied by `self_id`
-(kept as a cheap second statement of it); `chain_step` has no profile check (unreachable in a libzync image); the
-canonical image id on this branch differs from `main` (expected since audit 3); a float conversion in a fleet
-fetcher (false: it parses with `Decimal`).
-
-### Round 6: code review of round 5, and the C++ side (2026-10-31)
-
-A code review of `167789e..14a7b49`, and a fresh audit of `verify_input.cpp` and both patches (last reviewed
-independently in round 1) against unpatched Core v28 and libsecp 0.5.1. **The C++ side holds:** every lever in 0101
-and hook in 0102 accepts exactly what unpatched Core and libsecp accept for any prover input. Batch ECDSA, Schnorr and
-the taproot tweak defer only after libsecp's own parse and range checks; a hint can only route a signature to libsecp
-or make the batch fail; `finish()` runs on every path before a commit. The legacy-sighash fast path matches Core's
-preimage byte for byte. The raw-txid seeding relies on Core's canonical deserialiser.
-
-| # | finding | severity | status |
-|---|---|---|---|
-| 40 | round 5 fixed the docs but not the scripts: the bundle still shipped only 2,501..2,600, and `pod/run.sh` verified against the prover-written `anchor_effective.json`, a circular check | evidence integrity | **fixed**: the bundle ships blocks 1..2,600 (13 MB) so the tree is replayed; the pod verifies against the sweep's `anchor.json` |
-| 41 | the deadline watcher and the main script could both harvest and terminate at once; and (found testing the fix) a failed fetch skipped the terminate | evidence loss, cost leak | **fixed**: an atomic lock makes exactly one caller harvest, and it always terminates; tested with stubs |
-| 42 | the `is_base = 2` negative test could never print `NOT_REFUSED` (`head`'s exit status) | test | **fixed** |
-| 43 | `libzync-verify` with a missing argument still exited 101; a closed stdout could abort the panic hook (134) | interface | **fixed**: hook installed before the arguments are read; its write ignores errors |
-| 44 | an empty `HAZYNC_VERIFY_NOW` counted as an override | interface | **fixed**: empty = unset, as for `RISC0_DEV_MODE` |
-| 45 | dev-mode and time-too-new logic duplicated across the two verifiers; `max_time` fill parsed every block file twice | maintenance, cost | **fixed**: shared helpers; the fill comes from the replay's own pass |
-| 46 | round-5 evidence not reproducible from committed scripts | evidence | **fixed**: `audit_r5/run_r5.sh` regenerates both outputs |
-| 47 | C++: `tx_full_sigops` returns legacy-only cost when the prevouts blob is empty (safe only because the chunk already trapped on it); `uint32_t` wraparound in `check_input_locks*` (paths not in a libzync image); `hz_copy` also reads up to 3 bytes **before** the source (addendum to #12; data correct) | hygiene | **fixed in round 7** |
-
-### Round 7: the guest hygiene items (2026-10-31)
-
-The three C++ items of #47, and #12's `hz_copy`, fixed in the guest source. This moves the image ids, accepted for
-this branch: **mainnet `a50c3bac…`, signet `5e552ce9…`**. The Core/libsecp tree is rebuilt from the repo's patches
-by `scripts/libzync-base.sh` (the build tree used until now matched them, apart from build outputs).
-
-| change | where |
-|---|---|
-| `hz_copy`: byte copy under 12 bytes, `__builtin_memcpy` otherwise; no access outside the source or destination. (Round 8: plain memcpy, and the remaining `uint32_t*` views of byte buffers handed to the accelerator are covered by `-fno-strict-aliasing`) | `patches/libzync/0101` (SHA_STREAM) |
-| `tx_full_sigops`: a non-coinbase tx with an empty prevouts blob returns the poison cost (fails closed by itself) | `verify_input.cpp` |
-| maturity and BIP68 height arithmetic in 64 bits in both lock checks | `verify_input.cpp` |
-| `tx_out_leaves`: parameter named `creation_mtp`, comment states the real preimage | `verify_input.cpp` |
-
-**Retest** (`experimental/libzync-bench/audit_r5/`, same suite):
-- block 962,000 valid;
-- every committed state identical: both sweeps BALANCED with `REF_MATCH`, `max_time` and profile as before;
-- the flip and `is_base = 2` negatives fail as they should; BIP325 check OK; genesis `anchor_id` matches the
-  independent script on both networks.
-
-Cycles on block 962,000 for the round-7 image as a whole (the three changes are not measured separately): chunks
-342,910,547 → 344,047,105 (+0.33%), aggregate 64,309,178 → 64,309,273.
-
-### Round 8: review of round 7, and a pre-publication read of the proposal (2026-10-31)
-
-A code review of round 7 found no correctness bug in the guest changes. A sceptical read of the proposal, as its
-recipients would read it, found claims stronger than the code, steps that could not be implemented from the text,
-and numbers not tied to an image. Both are addressed below; the image ids move again.
-
-**Guest and build**, now **mainnet `6fcb65af…`, signet `4b91b085…`** as built on the development laptop; the same
-source built in the container is mainnet `9f469930…`, signet `067822b9…`, the published ids:
-
-| change | why |
-|---|---|
-| `-fno-strict-aliasing` for every C and C++ unit in the guest | the patches and shims still hand byte buffers to the accelerator as `uint32_t*`; this makes that defined rather than relying on the call being opaque |
-| `hz_copy` is a plain `memcpy` | the byte-loop split had no measured benefit |
-| stale comments in `verify_input.cpp` (the leaf preimage of `coin_leaf`, the tag rationale's 57 + len) | they contradicted the code and the spec |
-| `0101`'s stale hunk header | it no longer matched a regenerated patch |
-| ⛔ **a stale guest**: the first round-8 mainnet build reported the round-7 id, because both networks share `target/riscv-guest` and switching network did not rebuild the ELF | caught by the cycle count being identical to round 7; the test hosts now always build the guest from clean. Every image id in these docs is from a clean build |
-
-Cycles on block 962,000: chunks 345,160,159, aggregate 64,309,642 (409.5 M; 8.2× fewer than the canonical guest).
-The full suite passes on the clean builds; genesis `anchor_id` matches the independent script on both networks.
-
-**Proposal** (`SWIFTSYNC_PROOFS.md`):
-- the statement of §2 now says the rules *follow* Core v28 and lists where they come from (Core's C++ or Rust) and
-  where they differ (#26, and the coinbase SMT being stricter after BIP34); the rule-by-rule table is [`CONSENSUS_RULES.md`](CONSENSUS_RULES.md);
-- §4 gives the soundness argument with its assumptions (ECMH collision resistance, distinct leaves, how F is bound
-  to the blocks, the recursion, which chain, genesis);
-- §5 gives the full image ids, the empty-SMT root, the word order and M's encoding; §3 specifies the canonical
-  Elias–Fano encoding step 10 requires;
-- a tip proof is described for what it is: blocks checked against prover-supplied prevouts until the epoch closes;
-- every number names its image, and §9 is marked as an estimate with its method and rate;
-- the signet-from-genesis estimate is corrected to ~7.4 card-hours (~$18.5): 2,374 coinbase spends at ~1.3 s each;
-- a table of the questions we expect, with today's answers;
-- test-vector files committed with full sha256s; `utreexo_ref.py` now derives creation MTP from header timestamps
-  and checks block linkage instead of reading the host's precomputed windows.
-
-**Still open for publication:** no genesis-anchored receipt verifies OK yet. The ids in `reproduce/LIBZYNC_IDS`
-are the round-8 images, from before the handover format (HANDOVER.md); they stay stale until the image freeze. The rule-by-rule table is [`CONSENSUS_RULES.md`](CONSENSUS_RULES.md). The reproducible build kit is done (`reproduce/libzync.Dockerfile`; three
-builds agree: one cached, one with no cache from a fresh clone, one with the dependency stage built from scratch on a
-newer host Rust, 1.99.1 vs 1.98.0). All three ran on one machine; a second machine is still to do.
-
-## 8. Signet
-
-**Build:** `HAZYNC_NETWORK=signet`, guest `067822b9…` (round 8, container build; `4b91b085…` on the laptop; `c3501ac9…` in round 4, the image the GPU proof
-below used; first built as `cf7f75ff…`). What changes:
-- Core's own `CChainParams::SigNet` (default challenge) replaces `Main()`;
-- Core's `signet.cpp` is compiled in;
-- the aggregate calls Core's unmodified `CheckSignetBlockSolution`;
-- every network constant the guest uses (`libzync/src/net.rs`) is asserted against Core's compiled chainparams at
-  run time: genesis, powLimit, and buried heights all at 1.
-
-The aggregate holds only txids, not the block's other transactions. So the check is given placeholder transactions
-whose txid is seeded with the merkle-bound value. Core's code reads nothing else from them (third reviewer: exactly
-equivalent).
-
-**Measured on the laptop** (execute mode, signet blocks from a local `bitcoind -signet`):
-
-| check | result |
-|---|---|
-| BIP325 alone (mode 16), block 2,148 (400 inputs) and block 100 (coinbase-only) | real block → 1; one txid changed → 0 (both) |
-| our hints file at 3,000 vs the **published** signet file (stop 320,000) | **SUBSET_OK**: all 606 coins the published file marks unspent sit at the same index in ours |
-| `swiftsync-diff-hints` on our 3,000 file | EXACT for 1..=3,000 |
-| design B sweep 1..3,000 | **BALANCED** in 687 s; forest = **695 coins** = the UTXO set at 3,000; `ss_hints` `5979d283…` = the file's hash |
-| design B sweep 1..2,600 (the GPU demo's handover height) | **BALANCED**; forest = 293 coins; `ss_hints` `f097b8f2…` |
-| `libzync-prove-range 2501 2530` in dev mode (fake receipts) | base step on the 2,500 state, then 29 recursive steps, including 8 transaction blocks |
-
-**GPU** (proposal §10):
-- first run (pre-audit `cf7f75ff`): signet 2,501..2,600 in 1,464 s ($1.39). The verifier of the time printed OK; it had
-  no DEMO verdict yet, and the proof started from a supplied state at 2,500, so by today's rules it is DEMO;
-- **re-proved on the round-4 image `c3501ac9`:** 1,452 s of proving on 1× RTX PRO 6000, ~$1.52; verified on the
-  laptop (DEMO verdict) against the prover-written `anchor_effective.json`, whose BIP30 tree was seeded from this
-  range's coinbase spends; the pod's own verify against the sweep anchor failed on `anchor_id` (proposal §10);
-  receipts 225–227 KB; evidence in `experimental/libzync-bench/signet/gpu_r4/`;
-- 8.7–9.2 s per coinbase-only recursive block, 14.7 s for the base step, 16.5–16.7 s per small transaction block,
-  514 s for block 2,523.
-
-**Found on the GPU run: the BIP30 coinbase-txid SMT dominates blocks that spend many coinbases.**
-- Signet block 2,523 spends 374 coinbase outputs (514 s on the GPU, round-4 run). Its aggregate executes **565 M cycles**, of which **557 M (97%)** is
-  `coinbase-smt` (SHA-256 path updates) at about **1.5 M cycles per coinbase spend**. Every other part of the block
-  costs 18 M.
-- The SMT is existing Hazync machinery (#54), not libzync. It closes BIP30 permanently, which is stricter than Core:
-  `ConnectBlock` skips the BIP30 check between BIP34 activation and height 1,983,702.
-- A cheaper rule there (or batched SMT updates) would remove this cost wherever coinbases are spent in bulk. That
-  happens in mining-pool payout blocks on mainnet, and in faucet sweeps on signet.
-- **Taken 11-03 (`e3f85e0`):** libzync images update the tree only for spends of TRACKED coins (UTREEXO_FORMAT.md §2a).
-  An untracked coinbase's count never decided a verdict, and double spends are the coin commitment's. Mainnet block
-  185,956 (190 coinbase spends): aggregate 294 M -> 8.3 M cycles. What remains is one coinbase insert per block.
-
-**Signet's first 2,147 blocks are coinbase-only.** Transactions start at 2,148. A full signet run (to 320,000,
-against the published file) is the cost-table item in the proposal, §9.
-
-## 9. Changes Core could take
-
-Ordered by how directly they transfer:
-
-1. **A salt-free SwiftSync aggregate (ECMH or MuHash) as an option.**
-   - SwiftSync's salted SHA-256 sum needs a *secret* salt, so it cannot be checked by anyone else.
-   - An ECMH or MuHash3072 aggregate (Core already ships MuHash for `gettxoutsetinfo`) makes the per-node
-     computation reproducible and provable.
-   - Measured guest cost: ECMH ~3.0k cycles per element against ~1.3k for the salted sum.
-2. **One index convention for hints.**
-   - Core PR #34004 advances its hint index over **every** output, OP_RETURN included, and over the BIP30
-     coinbases' outputs.
-   - The `hintsfile` crate (and utxohints.store) counts only **spendable** outputs and skips the BIP30
-     coinbases entirely.
-   - Both are internally consistent, but a file made for one is wrong for the other. Pick one before files are
-     published at scale.
-3. **Batch Schnorr verification in validation.**
-   - BIP340 was designed to batch, and batch verification has been proposed for libsecp and Core before.
-   - libzync measured what batching buys in a constrained verifier: about 4× per signature at block scale
-     (`experimental/libzync-bench/README.md` §3).
-   - libzync's ECDSA batching needs a hinted R, so it is zkVM-specific. Schnorr batching is not.
-4. **Legacy sighash midstate reuse.** Hashing the blanked-input prefix once per transaction, rather than once per
-   input, removes the quadratic term in legacy SIGHASH_ALL. It is byte-identical by construction (reviewed).
-5. **Lazy txid/wtxid in `CTransaction`.** Computing both hashes in the constructor costs every caller, including
-   those that never ask. Lazy computation is behaviour-preserving (reviewed). The win natively is smaller than in a
-   zkVM.
-6. **A "hints are advice, the code decides" pattern** for expensive one-way checks: pubkey Y from a hint checked by
-   y² = x³ + 7; R from a hint checked by the batch. This is useful anywhere validation is replayed by a weaker
-   verifier.
-7. **Found while reviewing: none of these is a Core bug.** The BIP68 signedness issue (§7, 4) is in Hazync's own
-   transcription, not in Core.
-
-## 10. Reproduce
+## 8. Reproduce
 
 ```bash
-scripts/libzync-base.sh ~/lz-base                                   # Core + libsecp + patches, pinned
-cd prover && HAZYNC_BASE=~/lz-base HAZYNC_LIBZYNC=1 cargo build --release -p host
-# signet:   ... HAZYNC_NETWORK=signet ...
-host libzync-hints  out.lzb                     # HAZYNC_BLOCK=block.json: the block's hint bundle
-host agg-exec-fake                              # HAZYNC_LZ_HINTS=out.lzb: execute chunks + aggregate
-host swiftsync-sweep 200 <json dir>             # HAZYNC_SS_HINTS=file.hints: design B, blocks 1..200
-host swiftsync-diff-hints file.hints <json dir> # WHERE a hints file is wrong
-host swiftsync-file-hash file.hints             # what a proof at H must commit
-host libzync-verify block_H.rcpt file.hints     # the checks a SwiftSync user runs
-cd ../libzync && cargo test                     # wire format, hint hash, producers
+scripts/libzync-base.sh ~/lz-base                       # Core v28.0 + libsecp 0.5.1 + patches, pinned
+cd prover && rm -rf target/riscv-guest                  # always build the guest from clean (round 8: stale ELF)
+HAZYNC_BASE=~/lz-base HAZYNC_LIBZYNC=1 cargo build --release -p host     # signet: HAZYNC_NETWORK=signet
+host method-id                                          # c14 mainnet: bbf82800…
+HAZYNC_BLOCK=block.json host libzync-hints out.lzb      # a block's hint bundle
+HAZYNC_BLOCK=block.json HAZYNC_LZ_HINTS=out.lzb host agg-exec-fake      # execute chunks + aggregate, print cycles
+host libzync-prove-range 1 200 <json dir> genesis <out>                 # prove a range from genesis
+host libzync-prep <lo> <hi> <json dir> genesis <out>                    # native states for anchored leaves
+host libzync-join left.rcpt right.rcpt out.rcpt                         # join two adjacent proofs
+host libzync-verify block_H.rcpt --bitcoin-cli "bitcoin-cli"            # §5 of SWIFTSYNC_PROOFS.md
+host core-vectors                                       # Core's script / tx vectors (scripts/libzync/core_vectors.py)
 ```
+
+Full test pass: `experimental/libzync-bench/handover/retest_final.sh <tag> <previous tag>` (`SN=100` for the short
+pass). GPU: `experimental/libzync-bench/gpu/run_c14_pod.sh`, `gpu-libzync-multi.sh`, `gpu-join.sh`. A published id
+needs the container build, `reproduce/libzync.Dockerfile` (ids depend on absolute build paths).
+
+Related Hazync docs: [`OVERVIEW.md`](../OVERVIEW.md), [`SECURITY.md`](../SECURITY.md),
+[`BUILD_AND_RELEASE.md`](../BUILD_AND_RELEASE.md), [`COORDINATOR.md`](../COORDINATOR.md),
+[`OPERATIONS.md`](../OPERATIONS.md).

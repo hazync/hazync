@@ -579,7 +579,7 @@ def init_db():
     for col in ("last_version TEXT", "last_version_at REAL"):
         try: c.execute(f"ALTER TABLE contributors ADD COLUMN {col}")
         except Exception: pass
-    # Sponsorship (docs/SPONSORSHIP.md). A sponsorship paid at least its minimum HOLDS its blocks until
+    # Sponsorship (docs/COORDINATOR.md). A sponsorship paid at least its minimum HOLDS its blocks until
     # they are proven: coverage_and_held() keeps them out of every claim (SPONSOR_HOLD_SQL). Its name is
     # published only then too, and nothing can set a paid status until payments are connected. `requested` -> `invoiced` -> `paid` -> `proving` -> `proven`; a payment
     # below the minimum settles as `underpaid`; or `expired` / `cancelled` / `refunded`.
@@ -610,7 +610,7 @@ def init_db():
         if col not in have:
             c.execute(f"ALTER TABLE sponsorships ADD COLUMN {col} {decl}")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS sponsorships_token ON sponsorships(token_hash)")
-    # Payments through BTCPay (docs/SPONSORSHIP.md, "Payments"). checkout_url is where the sponsor pays;
+    # Payments through BTCPay (docs/history/SPONSORSHIP.md, "Payments"). checkout_url is where the sponsor pays;
     # hold_until is how long an UNPAID invoice keeps its blocks from other sponsors and from claims (the invoice's
     # expiry, pushed out while a payment is still confirming); watch_until is how long the poller keeps asking
     # BTCPay about it, so a payment that arrives after expiry is still credited.
@@ -2192,7 +2192,7 @@ SPONSOR_NAME_MAX = 40                               # characters (code points); 
 # 966,256 ($1.39 of GPU time), and the bridge has built no bundles there yet: a sponsorship above them is held
 # until it does, and the quote's `waiting` says how many blocks wait. Blocks above 1,000,000 are $6 each; the
 # top band runs to SPONSOR_BAND_TOP, meaning "and above", and no block can be sponsored before it is mined.
-# docs/SPONSORSHIP.md has the figures.
+# docs/COORDINATOR.md has the figures.
 SPONSOR_BAND_TOP = 10 ** 9
 SPONSOR_PRICE_BANDS_DEFAULT = [(1, 200000, 1), (200001, 400000, 2), (400001, 600000, 3),
                                (600001, 800000, 4), (800001, 1000000, 5), (1000001, SPONSOR_BAND_TOP, 6)]
@@ -2218,7 +2218,7 @@ SPONSOR_PUBLIC = ("paid", "proving", "proven")     # the only statuses that ever
 SPONSOR_PUBLIC_SQL = ("status IN ('paid','proving','proven') AND paid_sats IS NOT NULL"
                       " AND min_sats IS NOT NULL AND paid_sats >= min_sats")
 
-# A HOLD (docs/SPONSORSHIP.md, "Holds"): a sponsorship paid at least its minimum and not yet proven keeps
+# A HOLD (docs/history/SPONSORSHIP.md, "Holds"): a sponsorship paid at least its minimum and not yet proven keeps
 # its blocks for the sponsor proving bot. No claim or pick ever offers a held block to anyone, and a proof of
 # a held block is accepted only from a key registered for that sponsorship (_hold_refusal). The hold ends when the whole span is covered
 # (submit() moves the sponsorship to `proven`) or it is cancelled or refunded. It has no expiry, so /api/state
@@ -2227,7 +2227,7 @@ SPONSOR_HOLD_SQL = ("status IN ('paid','proving') AND paid_sats IS NOT NULL"
                     " AND min_sats IS NOT NULL AND paid_sats >= min_sats")
 SPONSOR_HOLD_ALERT = int(os.environ.get("SPONSOR_HOLD_ALERT", str(6 * 3600)))
 
-# Payments (docs/SPONSORSHIP.md, "Payments"). Connected only when all three are set and the key file can be read:
+# Payments (docs/history/SPONSORSHIP.md, "Payments"). Connected only when all three are set and the key file can be read:
 # the key is a Greenfield API key limited to one store (create and view invoices, view store settings for the
 # rate), kept in a root-only file and never in the unit's environment, where `systemctl show` would print it.
 BTCPAY_URL = os.environ.get("BTCPAY_URL", "").rstrip("/")
@@ -2581,7 +2581,7 @@ def sponsor_request(body):
     Without payments connected it only RECORDS a request: nothing is charged, queued or proven. With payments
     connected (payments_enabled) it opens a BTCPay invoice for the pledge in sats and answers with its
     checkout link; the invoice holds the blocks while it is open, and the poller (sponsor_payments_poll) moves
-    the sponsorship on as BTCPay reports payment (docs/SPONSORSHIP.md, "Payments")."""
+    the sponsorship on as BTCPay reports payment (docs/history/SPONSORSHIP.md, "Payments")."""
     if not SPONSOR_OPEN:
         return 503, {"error": "Sponsorship is not open yet.", "open": False}
     if not isinstance(body, dict):
@@ -4070,7 +4070,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "a block height, for example /api/block/170"})
             code, obj = block_detail(int(seg))
             return self._send(code, obj)
-        if p == "/api/sponsor":                            # is sponsorship open; see docs/SPONSORSHIP.md
+        if p == "/api/sponsor":                            # is sponsorship open; see docs/COORDINATOR.md
             return self._send(200, sponsor_info())
         if p == "/api/sponsor/quote":                      # the minimum for a span
             q = parse_qs(urlparse(self.path).query)

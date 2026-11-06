@@ -423,7 +423,7 @@ pub struct Forest {
 
     /// leaf hash -> its positions, ascending. Replaces the bridge's `leaves.iter().position(...)`.
     ///
-    /// This was measured as NOT worth having (GOALS.md §G2, "Ruled out"): an A/B on 100 real blocks
+    /// This was measured as NOT worth having (docs/history/GOALS.md §G2, "Ruled out"): an A/B on 100 real blocks
     /// gave 291 vs 285 blocks/hr, because the scan was ~4% of a 12.4 s block. That measurement was
     /// correct and the conclusion was correct *at the time*. Caching internal nodes then removed 94%
     /// of the bridge's work, and a `perf` profile of the result put 71% of the remaining time in the

@@ -109,7 +109,7 @@ pub(crate) const COST_PER_EC_OP: u64 = 417_798;
 /// EQUAL to COST_PER_EC_OP was the obvious inference — and MEASURED WORSE: straggler 1.361 ->
 /// 1.539, a whole card. 93 of the block's 145 Schnorr inputs sit in one chunk, so repricing them
 /// down made the packer over-load it. 1,950,000 was not RIGHT either, merely the pre-#139 stock
-/// ECDSA cost that happened to pack well. Ghost still has no honest fit — docs/BUILDS.md §3.
+/// ECDSA cost that happened to pack well. Ghost still has no honest fit — docs/history/BUILDS.md §3.
 pub(crate) const COST_PER_SCHNORR_OP: u64 = 462_435;
 
 /// What a verify costs when its public key was ALREADY decompressed earlier in the same chunk.

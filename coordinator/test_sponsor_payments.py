@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sponsorship payments through BTCPay (docs/SPONSORSHIP.md, "Payments").
+Sponsorship payments through BTCPay (docs/history/SPONSORSHIP.md, "Payments").
 
 The coordinator talks to a FAKE BTCPay Greenfield server here, over real HTTP, shaped from BTCPay's own
 controllers and swagger (GreenfieldInvoiceController, GreenfieldStoreRatesController): the store-scoped invoice

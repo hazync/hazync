@@ -21,7 +21,7 @@ coordinator checks every change it makes. The bot's own cost log is a database o
 
 Money is the dangerous part. Live mode refuses to start without --max-pods, --max-usd and
 --max-usd-per-hour, and every pod is terminated on normal exit, on an exception, on SIGINT/SIGTERM, when
-it stalls, when its boot fails and when there is nothing left for it. See docs/SPONSOR_BOT.md.
+it stalls, when its boot fails and when there is nothing left for it. See docs/COORDINATOR.md.
 
   python3 sponsor_bot.py                    # plan: what it would do; touches nothing
   python3 sponsor_bot.py run --live --max-pods 2 --max-usd 20 --max-usd-per-hour 2
