@@ -1,0 +1,26 @@
+# slice_test.sh, 2026-11-07, host d2fdf9e (image bbf82800), mainnet 1..240 over ssh RPC from the laptop (the rate is the ssh round trips, not prep)
+BUILD=0
+METHOD_ID bbf828007f59fe3fa7d0060f5ad10f8362a03718fd0eec3cfbc844b444c22ded
+prep EXIT=0
+PREP_PROGRESS h=40 blocks_per_s=0.66 coinlog_leaves=40 coinlog_mb=0 trie_mb=0 out_mb=0 rss_mb=10 elapsed_s=61
+PREP_PROGRESS h=80 blocks_per_s=0.66 coinlog_leaves=80 coinlog_mb=0 trie_mb=0 out_mb=0 rss_mb=10 elapsed_s=122
+PREP_PROGRESS h=120 blocks_per_s=0.68 coinlog_leaves=120 coinlog_mb=0 trie_mb=0 out_mb=1 rss_mb=10 elapsed_s=181
+PREP_PROGRESS h=160 blocks_per_s=0.68 coinlog_leaves=160 coinlog_mb=1 trie_mb=0 out_mb=1 rss_mb=10 elapsed_s=240
+PREP_PROGRESS h=200 blocks_per_s=0.67 coinlog_leaves=209 coinlog_mb=1 trie_mb=0 out_mb=1 rss_mb=10 elapsed_s=299
+PREP_PROGRESS h=240 blocks_per_s=0.68 coinlog_leaves=250 coinlog_mb=1 trie_mb=0 out_mb=1 rss_mb=10 elapsed_s=358
+LZ_PREP_DONE 1..=240 in 357.8 s; every state's journal byte-identical to the proved run
+fetch EXIT=0 (240 blocks fetched), files left 0
+leaf bundles: leaf_170.bin leaf_200.bin leaf_230.bin 
+3
+L0.bin
+L4.bin
+L5.bin
+L6.bin
+L7.bin
+LOCK
+SKIP
+index.bin
+memory prep EXIT=0
+disk+consume+4 jobs state_240 == in-memory prep's
+SLICE_TEST_DONE
+
