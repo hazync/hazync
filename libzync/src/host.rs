@@ -665,9 +665,10 @@ impl DiskIndex {
         }
         // Sized by the LIVE entries, not the old capacity (11-07): spends leave tombstones, so a full table is mostly
         // tombstones on a long run, and doubling it every time made the file track every coin EVER indexed (mainnet:
-        // ~2.4 B, 100-200 GB) instead of the live set (~180 M). Rebuilt at 4x live, it is between a quarter and half
-        // full afterwards, and the next rebuild is at least cap/4 inserts away (amortised O(1)).
-        let cap = (live.len() as u64 * 4).next_power_of_two().max(1 << 16);
+        // ~2.4 B, 100-200 GB) instead of the live set (~180 M). Rebuilt at the next power of two at or above 2.5x live,
+        // it is at most 40% full afterwards, so the next rebuild (at 50%) is at least cap/10 fresh inserts away: never a
+        // rebuild loop, amortised O(1). Mainnet ~180 M live -> 2^29 slots, ~21 GB (4x: ~43 GB; slice run 11-07).
+        let cap = (live.len() as u64 * 5 / 2).next_power_of_two().max(1 << 16);
         let tmp = self.path.with_extension("grow");
         // A temp file left by a crash mid-grow may have a half-written header that open() refuses (review 11-03).
         let _ = std::fs::remove_file(&tmp);
