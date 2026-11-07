@@ -31,8 +31,7 @@ fn fact(recs: &[Rec], tip: u32, at: u32, pos: u64) -> Result<String, String> {
         log_leaves: r.log.len(),
         log_value: r.value,
         log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
-        block: (at < tip).then(|| (hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())),
-    };
+        block: (at < tip).then(|| (hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())), preimage: None };
     Ok(serde_json::to_string(&f).unwrap())
 }
 

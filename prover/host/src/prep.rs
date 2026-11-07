@@ -233,6 +233,7 @@ mod tests {
 pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str) {
     assert!(methods::LIBZYNC && methods::COINLOG && methods::TRIE, "libzync-prep needs the product image (coin log + trie)");
     std::fs::create_dir_all(out).unwrap();
+    crate::lz::lock_run_dirs(out);
     let mut prev: ChainState = if anchor_path == "genesis" { crate::genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };
@@ -248,7 +249,21 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     // stamps its own id and profile; every later block carries them. HAZYNC_PREP_CONTINUE=1: the anchor is a state of
     // the SAME chain (a restart after a crash, from the last saved state_<h>.json), so the chain's own anchor_id carries
     // on and the states stay byte-identical to an uninterrupted run (11-06).
-    let anchor_id = if std::env::var("HAZYNC_PREP_CONTINUE").as_deref() == Ok("1") { prev.anchor_id } else { crate::link_digest(&prev) };
+    // Default (round 11): an anchor whose own anchor_id is the network's genesis anchor is a state of the chain from
+    // genesis (a prep / proved state, e.g. a restart's save point), so the chain continues; any other anchor starts a
+    // base step on it. HAZYNC_PREP_CONTINUE=1 / HAZYNC_PREP_BASE=1 force either; the choice is printed.
+    let genesis_aid = crate::lz::pinned_genesis_anchor().unwrap_or_else(|| crate::link_digest(&crate::genesis_anchor()));
+    let cont = match (std::env::var("HAZYNC_PREP_CONTINUE").as_deref(), std::env::var("HAZYNC_PREP_BASE").as_deref()) {
+        (Ok("1"), Ok("1")) => panic!("HAZYNC_PREP_CONTINUE and HAZYNC_PREP_BASE both set"),
+        (Ok("1"), _) => true,
+        (_, Ok("1")) => false,
+        _ => anchor_path != "genesis" && prev.anchor_id == genesis_aid,
+    };
+    if anchor_path != "genesis" {
+        println!("  prep from the state at {}: {}", prev.height,
+                 if cont { "CONTINUING its chain (anchor_id kept)" } else { "a base step on it (anchor_id = its link digest)" });
+    }
+    let anchor_id = if cont { prev.anchor_id } else { crate::link_digest(&prev) };
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
     let each = std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() == Ok("1");
     // Disk mode (HAZYNC_COINLOG_DIR): also save every HAZYNC_PREP_SAVE_EVERY blocks (default 1,000), so the journal of

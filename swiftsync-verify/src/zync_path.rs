@@ -44,8 +44,7 @@ fn main() {
                 log_leaves: r.log.len(),
                 log_value: r.value,
                 log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
-                block,
-            };
+                block, preimage: None };
             println!("{}", serde_json::to_string_pretty(&f).unwrap());
         }
         Some("find") => {
@@ -179,8 +178,7 @@ pub fn journey(a: &[String]) {
             path: r.log.path(pos).iter().map(|x| hex(x)).collect(),
             log_leaves: r.log.len(), log_value: r.value,
             log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
-            block: None,
-        },
+            block: None, preimage: None },
         spend,
     };
     println!("{}", serde_json::to_string_pretty(&j).unwrap());

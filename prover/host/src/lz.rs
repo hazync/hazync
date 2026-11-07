@@ -597,6 +597,26 @@ fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
     }
 }
 
+/// An exclusive lock on each directory a run writes in place (the out dir, HAZYNC_COINLOG_DIR, HAZYNC_TRIE_DIR), held
+/// until the process exits: two runs on the same stores interleave their in-place writes and, in the trie, reuse each
+/// other's freed slots (round 11). A second run fails at once instead.
+pub(crate) fn lock_run_dirs(out: &str) {
+    static LOCKS: std::sync::Mutex<Vec<std::fs::File>> = std::sync::Mutex::new(Vec::new());
+    let mut dirs = vec![std::path::PathBuf::from(out)];
+    dirs.extend(cl_dir());
+    dirs.extend(crate::trie::trie_dir());
+    for d in dirs {
+        std::fs::create_dir_all(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
+        let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(d.join("LOCK"))
+            .unwrap_or_else(|e| panic!("{}/LOCK: {e}", d.display()));
+        match f.try_lock() {
+            Ok(()) => LOCKS.lock().unwrap().push(f),
+            Err(std::fs::TryLockError::WouldBlock) => panic!("{}: another run holds this directory (LOCK): one run per store", d.display()),
+            Err(std::fs::TryLockError::Error(e)) => panic!("{}/LOCK: {e}", d.display()),
+        }
+    }
+}
+
 /// Writes `bytes` to `path` so a crash leaves the old file or the new one, never a torn one: a temporary file,
 /// synced, renamed over `path`, then the directory synced (review 11-06: receipts, states and history.bin were
 /// plain writes, and a torn receipt beside a durable coin log made a resume impossible).
@@ -851,6 +871,7 @@ pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
 /// image, the BIP30 tree is replayed to k and must equal the receipt's smt_root, and block k+1 verifies that receipt
 /// in the guest, so a resumed chain is the same statement as an unbroken one. Needs block files 1..k.
 pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str) {
+    lock_run_dirs(out);
     use risc0_zkvm::Receipt;
     use std::io::Write as _;
     use std::time::Instant;
@@ -1245,7 +1266,7 @@ pub(crate) const CL_DISK_MAGIC: &[u8; 8] = b"LZDISK01";
 /// Version 2 of that file: the magic, the HEIGHT of the state, then as version 1 (11-06: the height says which
 /// journal records postdate it).
 pub(crate) const CL_DISK_MAGIC2: &[u8; 8] = b"LZDISK02";
-/// One journal record (pending.bin, disk mode): this magic, the block height, then the undo body cl_rollback reads
+/// One journal record (pending.bin, disk mode): this magic, the block height, then the undo body cl_undo_to reads
 /// (leaf count before the block, the spends' positions and leaves, the appends). pending.bin is a SEQUENCE of these,
 /// one per block applied since the last commit (cl_journal_commit), each appended and synced before its block changes
 /// the store. A load undoes, newest first, every record above the saved state's height (11-06: before, the record was
@@ -1324,24 +1345,16 @@ pub(crate) fn cl_journal_commit() {
     }
 }
 
-/// Undoes one block from its pending.bin record: cut the appends (and drop them from the index), restore each spent
-/// coin's unspent leaf at its position (and put it back in the index). Refuses a record that does not start at `n`.
-pub(crate) fn cl_rollback(store: &mut libzync::coinlog_forest::NodeStore<libzync::host::AnyNodes>, pos: &mut libzync::host::AnyIndex, u: &[u8], n: u64) {
+/// Undoes one journaled block back to the state of `n` leaves (round 11): drop its appends from the index, cut every
+/// level to `n` leaves, restore each of its spends at a position below `n`. Idempotent, and independent of how much of
+/// the block (or of later blocks, or of an earlier undo) reached the disk.
+fn cl_undo_to(store: &mut libzync::coinlog_forest::NodeStore<libzync::host::AnyNodes>, pos: &mut libzync::host::AnyIndex, u: &[u8], n: u64) {
     let rd = |o: usize| u64::from_le_bytes(u[o..o + 8].try_into().expect("pending.bin truncated"));
-    assert!(rd(0) == n, "pending.bin is for a store of {} leaves, the state file says {n}: rebuild the store", rd(0));
     let k = rd(8) as usize;
-    let mut o = 16;
-    let mut flips = Vec::with_capacity(k);
-    for _ in 0..k {
-        let p = rd(o);
-        let l: [u8; 32] = u[o + 8..o + 40].try_into().unwrap();
-        flips.push((p, l));
-        o += 40;
-    }
-    let m = rd(o) as usize;
-    o += 8;
-    for j in 0..m {
-        let l: [u8; 32] = u[o + 32 * j..o + 32 * j + 32].try_into().unwrap();
+    let flips: Vec<(u64, [u8; 32])> = (0..k).map(|j| (rd(16 + 40 * j), u[24 + 40 * j..56 + 40 * j].try_into().unwrap())).collect();
+    let o = 16 + 40 * k;
+    for j in 0..rd(o) as usize {
+        let l: [u8; 32] = u[o + 8 + 32 * j..o + 40 + 32 * j].try_into().unwrap();
         pos.remove(&l);
     }
     if let libzync::host::AnyNodes::Disk(dn) = &mut store.nodes {
@@ -1394,6 +1407,8 @@ pub(crate) fn cl_save(path: &str, height: u32) {
     if let libzync::host::AnyNodes::Disk(d) = &h.store.nodes {
         d.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}"));
         if let libzync::host::AnyIndex::Disk(ix) = &h.pos { ix.sync().unwrap_or_else(|e| panic!("index sync: {e}")); }
+        // and the directory: a new level file, or the index's grow-and-rename, must survive with the marker (round 11)
+        if let Some(cd) = cl_dir() { cl_sync_dir(&cd); }
         b.extend_from_slice(CL_DISK_MAGIC2);
         b.extend_from_slice(&(height as u64).to_le_bytes());
         b.extend_from_slice(&h.store.len().to_le_bytes());
@@ -1452,15 +1467,17 @@ pub(crate) fn cl_load(path: &str) {
                     assert!(s0 == at, "{}: journal record for block {rh:?} starts at {s0} leaves, not {at}: it does not describe this store (nothing undone)", pend.display());
                     at = s1;
                 }
-                // The store may be anywhere from the state to the journal's end: the last block partly applied (a crash
-                // after its record was synced), or an undo partly done (a crash during an earlier recovery; round 10).
+                // The store may be anywhere from the state to the journal's end: a block partly applied, an undo partly
+                // done, or (prep, power loss between save points) any mix of the journaled blocks' writes reaching the
+                // disk. So every record above the state is undone BACK TO THE STATE, newest first, with no inference
+                // from the store's length (round 11): every level cut to the state's leaf count (synced at the save),
+                // every recorded spend below it restored (each position is spent at most once, so the restored leaf is
+                // the state's), every recorded append dropped from the index. Each step is idempotent; the roots
+                // check below stands guard.
                 assert!((n..=at).contains(&store.len()),
                         "{}: the journal spans {n}..={at} leaves, the store has {} (nothing undone)", pend.display(), store.len());
                 for (_, b) in todo.iter().rev() {
-                    let s0 = cl_record_span(b).0;
-                    // a record starting above the store's length was undone already (its flips would be past the end)
-                    if s0 > store.len() { continue; }
-                    cl_rollback(&mut store, &mut pos, b, s0);
+                    cl_undo_to(&mut store, &mut pos, b, n);
                     // test hook: die part-way through an undo (after the newest block), its changes synced
                     if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok("mid-undo") && todo.len() > 1 {
                         if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { let _ = dn.sync(); }

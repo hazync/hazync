@@ -521,7 +521,8 @@ pub fn hex(b: &[u8]) -> String {
 }
 
 pub fn hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
+    // hex digits only: from_str_radix also takes a leading '+', so the printed string could differ from the bytes
+    if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let mut out = [0u8; 32];
@@ -567,6 +568,31 @@ pub struct CoinFact {
     pub log_roots: Vec<Option<String>>,
     /// When `at` is below the tip: the block at `at` (hash) and its path in the tip's block forest.
     pub block: Option<(String, Vec<String>)>,
+    /// The coin `coin` is the leaf OF, filled in by the CALLER from its own knowledge of its coin (not the server's
+    /// word). Required for an UNSPENT answer: the check proves only that a 32-byte value is the log's leaf at `pos`,
+    /// and once a coin is spent that leaf is its spent-leaf hash, which an UNSPENT check cannot tell from a coin leaf
+    /// (round 11). A SPENT answer is bound already (the spent leaf hashes `coin` with the spender). A journey
+    /// (CoinJourney, from the creating transaction) binds the coin without this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preimage: Option<CoinPreimage>,
+}
+
+/// The fields a coin leaf commits (UTREEXO_FORMAT.md §2; libzync::facts::coin_leaf).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CoinPreimage {
+    /// as block explorers print it
+    pub txid: String,
+    pub vout: u32,
+    pub value: u64,
+    /// hex
+    pub script_pubkey: String,
+    /// the block that created the coin
+    pub height: u32,
+    pub coinbase: bool,
+    /// tracked by the BIP30 tree (UTREEXO_FORMAT.md §2a)
+    pub tracked: bool,
+    /// the median time past of the creating block's parent
+    pub creation_mtp: u32,
 }
 
 fn hexes(v: &[String]) -> Option<Vec<[u8; 32]>> {
@@ -576,6 +602,28 @@ fn hexes(v: &[String]) -> Option<Vec<[u8; 32]>> {
 /// Checks a coin fact against a state that passed [`verify`] (and must be a coin-log chain). Ok: one line saying what
 /// it proves.
 pub fn check_coin_fact(cs: &ChainState, f: &CoinFact) -> Result<String, String> {
+    // the coin the leaf is of (round 11): required for UNSPENT, checked whenever given
+    let coin = hex32(&f.coin.to_lowercase()).ok_or("coin: not 64 hex digits")?;
+    let bound = match &f.preimage {
+        Some(p) => {
+            let mut t = hex32(&p.txid.to_lowercase()).ok_or("preimage txid: not 64 hex digits")?;
+            t.reverse();
+            let spk = unhex(&p.script_pubkey).ok_or("preimage script_pubkey: not hex")?;
+            let leaf = libzync::facts::coin_leaf(&t, p.vout, p.value, &spk, p.height, p.coinbase, p.tracked, p.creation_mtp);
+            if leaf != coin { return Err("coin: not the leaf of the coin in `preimage`".into()); }
+            true
+        }
+        None => false,
+    };
+    if f.spent_by.is_none() && !bound {
+        return Err("an UNSPENT answer needs the coin it is about (`preimage`, from your own coin, or a journey): a spent coin's flipped leaf passes the position check too".into());
+    }
+    coin_fact_position(cs, f)
+}
+
+/// The position half of [`check_coin_fact`]: `coin` is the log's leaf at `pos` (unspent) or flipped by `spent_by`, in
+/// the state at `at`. It does NOT say `coin` is a coin's leaf; the caller binds that (preimage or journey).
+fn coin_fact_position(cs: &ChainState, f: &CoinFact) -> Result<String, String> {
     if cs.profile & PROFILE_COINLOG == 0 {
         return Err("the proof is not a coin-log chain: coin facts need the coin log".into());
     }
@@ -663,7 +711,7 @@ pub fn balance_verdict(b: Option<(u64, u64)>) -> String {
 fn coin_state_line(s: &libzync::trie_fact::CoinState) -> String {
     use libzync::trie_fact::CoinState::*;
     match s {
-        Absent => "ABSENT (no such coin was ever paid to this script)".into(),
+        Absent => "ABSENT (no coin with this outpoint was ever paid to THIS script; the trie never files unspendable outputs or the genesis coinbase)".into(),
         Unspent { value } => format!("UNSPENT, {value} sat"),
         Spent { value, by } => format!("SPENT at height {} by transaction {} input {}, {value} sat", by.height, by.tx, by.vin),
     }
@@ -718,12 +766,12 @@ pub fn trie_verdict(cs: &ChainState, f: &TrieFact) -> Result<(String, String), S
             Ok((coin_verdict(&s), format!("coin {}:{vout} to script {} is {} at height {}", f.txid.as_deref().unwrap_or(""), f.script_pubkey, coin_state_line(&s), cs.height)))
         }
         "balance" => Ok(match tf::balance(&proof, &root, &sh).map_err(e)? {
-            None => (balance_verdict(None), format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height)),
+            None => (balance_verdict(None), format!("script {} has NEVER been paid a spendable coin (height {})", f.script_pubkey, cs.height)),
             Some(b) => (balance_verdict(Some((b.count, b.value))),
                         format!("script {} holds {} unspent coin(s), {} sat, at height {}", f.script_pubkey, b.count, b.value, cs.height)),
         }),
         "history" => Ok(match tf::history(&proof, &root, &sh).map_err(e)? {
-            None => (balance_verdict(None), format!("script {} has NEVER been paid (height {})", f.script_pubkey, cs.height)),
+            None => (balance_verdict(None), format!("script {} has NEVER been paid a spendable coin (height {})", f.script_pubkey, cs.height)),
             Some((b, coins)) => {
                 let spent = coins.iter().filter(|c| matches!(c.state, tf::CoinState::Spent { .. })).count();
                 (balance_verdict(Some((b.count, b.value))),
@@ -777,7 +825,7 @@ pub fn make_trie_fact(st: &libzync::trie_store::TrieStore, kind: &str, script_pu
 
 /// Lower or upper case hex to bytes.
 pub fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 { return None; }
+    if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
 }
 
@@ -992,9 +1040,13 @@ mod tests {
                 path: r.log.path(pos).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
                 log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
                 block: (at < 3).then(|| (hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())),
+                preimage: None,
             }
         };
         assert!(check_coin_fact(&cs, &fact(3, 0)).unwrap().contains("SPENT at height 3 by transaction 1 input 2"));
+        // an UNSPENT answer with no coin bound is refused (round 11); the position logic is checked below directly
+        assert!(check_coin_fact(&cs, &fact(3, 5)).unwrap_err().contains("preimage"));
+        let check_coin_fact = coin_fact_position; // these leaves are synthetic: no preimage exists for them
         assert!(check_coin_fact(&cs, &fact(3, 5)).unwrap().contains("UNSPENT at height 3"));
         // coin 0 was still unspent after block 2
         assert!(check_coin_fact(&cs, &fact(2, 0)).unwrap().contains("UNSPENT at height 2"));
@@ -1085,8 +1137,7 @@ mod tests {
             fact: CoinFact {
                 at: 2, pos: 0, coin: hex(&leaf_a), spent_by: r.spenders.get(&0).copied(),
                 path: r.log.path(0).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
-                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None,
-            },
+                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None, preimage: None },
             spend: Some(txf(2, &h2, &[id_cb2, id_sp], &sp, 1, &cb2)),
         };
         let ok = check_coin_journey(&cs, &j).unwrap();
@@ -1110,6 +1161,30 @@ mod tests {
         let mut b = j.clone();
         b.origin.state = hex(&r.states[2]);
         assert!(check_coin_journey(&cs, &b).is_err(), "wrong block state");
+
+        // A standalone coin fact binds the coin by its preimage (round 11): with the coin's fields it holds; the
+        // SPENT coin's flipped leaf presented as an unspent coin is refused, with or without the real preimage.
+        let pre = CoinPreimage { txid: { let mut d = id1; d.reverse(); hex(&d) }, vout: 0, value: 50,
+                                 script_pubkey: hex(b"\x51\x52\x60"), height: 1, coinbase: true, tracked: false, creation_mtp: mtp1 };
+        let r1 = replay(&recs, 1, 2).unwrap();
+        let mut cf = CoinFact {
+            at: 1, pos: 0, coin: hex(&leaf_a), spent_by: None, path: r1.log.path(0).iter().map(|x| hex(x)).collect(),
+            log_leaves: r1.log.len(), log_value: r1.value, log_roots: r1.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
+            block: Some((hex(&recs[1].hash), block_path(&r.block_leaves, 1).0.iter().map(|x| hex(x)).collect())),
+            preimage: Some(pre.clone()),
+        };
+        assert!(check_coin_fact(&cs, &cf).unwrap().contains("UNSPENT at height 1"), "a bound unspent coin");
+        cf.preimage = None;
+        assert!(check_coin_fact(&cs, &cf).is_err(), "unbound unspent");
+        // at the tip coin 0 is spent: its log leaf is the flipped one; offered as an "unspent coin" it is refused
+        let tipf = |coin: [u8; 32], preimage: Option<CoinPreimage>| CoinFact {
+            at: 2, pos: 0, coin: hex(&coin), spent_by: None, path: r.log.path(0).iter().map(|x| hex(x)).collect(),
+            log_leaves: r.log.len(), log_value: r.value, log_roots: vec![], block: None, preimage };
+        let flipped = libzync::coinlog::spent(&leaf_a, &libzync::coinlog::spender(2, 1, 0)); // spent at 2 by tx 1 input 0
+        assert_ne!(flipped, leaf_a);
+        assert!(check_coin_fact(&cs, &tipf(flipped, None)).is_err(), "the flipped leaf, unbound");
+        assert!(check_coin_fact(&cs, &tipf(flipped, Some(pre.clone()))).is_err(), "the flipped leaf with the real preimage");
+        assert!(coin_fact_position(&cs, &tipf(flipped, None)).is_ok(), "(the position check alone would have passed it)");
 
         // Trie coin facts (cold review 11-06): the trie key aliases (txid, vout) with (txid ^ d, vout ^ d); the
         // creating transaction, in a proven block, binds the outpoint.

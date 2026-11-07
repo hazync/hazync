@@ -104,6 +104,9 @@ pub(crate) fn trie_dir() -> Option<std::path::PathBuf> { std::env::var("HAZYNC_T
 /// refused (it is advanced in place; resume from its own height).
 fn trie_open_disk(d: &std::path::Path, st: &ChainState) {
     let ts = TrieStore::open_dir(d, true).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
+    assert!(ts.height == st.height as u64 || st.height == 0,
+            "{}: the disk trie is at height {}, not {}: start from the state the trie is at (its save point: state_{}.json)",
+            d.display(), ts.height, st.height, ts.height);
     assert_eq!(libzync::coinlog::h_of(&ts.root()), st.trie_root, "{}: its root is not the state's trie root", d.display());
     assert!(ts.height == st.height as u64 && (ts.hash == st.tip_hash || st.height == 0 || ts.root() == [0; 8]),
             "{}: the disk trie is at {} not {}", d.display(), ts.height, st.height);
