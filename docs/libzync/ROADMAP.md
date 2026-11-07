@@ -123,7 +123,11 @@ refuse it.
    rule), the LOCK surviving a fresh store's wipe, overlapping run directories refused, prep from a mid-chain state
    naming its mode (CONTINUE or BASE) before any store is opened. Crash test: 10 scenarios, each refusal checked for
    its reason; host 69, verify 16, ffi 3; image bbf82800.
-7. **Freeze: ask the user.**
+7. **Freeze: ✅ DECIDED by the user 11-07: c14 is frozen.** Guest source as of 9d28cd9 (unchanged through b732263);
+   laptop-built ids c14m bbf82800 / sig 219215fb (regtest 3036d379 / fcde3e5a are test-only). The PUBLISHED ids are the
+   reproducible container's (reproduce/libzync.Dockerfile; an id built elsewhere differs by design): built twice,
+   checked against the laptop image's behaviour, then pinned in reproduce/LIBZYNC_IDS and the verifiers (H7). ⏳ waiting
+   for space on C: (98% full; the user frees it first).
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
    then the built-in IMAGES (9f469930 / 067822b9, from c1101a3 10-31: ChainState v1, profile 1) verify NOTHING current,
