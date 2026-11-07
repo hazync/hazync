@@ -182,6 +182,21 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
 4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
 The server (provider, price) is the user's call; nothing here needs a GPU.
 
+**Coordinator work queue for backfill, H-B (e): design (11-07).** The coordinator already has the shape: width-1
+block claims that expire by themselves (`claim`, advisory; `submit` accepts any valid proof), fold claims over
+adjacent proven ranges (`fold_claim`, `GET /api/foldable`), a spine, and receipts that authenticate themselves
+against one pinned image id (`expected_method_id`). Mapping:
+- a block claim = a libzync LEAF: block h proved as a base step on prep's S(h-1);
+- a fold claim = a JOIN (`libzync-join`, mode 18) of two adjacent proven ranges; the spine is the root of the tree,
+  published when it covers genesis..tip.
+What is new: (1) the coordinator serves prep's per-block leaf bundles (H-B 8: S(h-1), the coin-log paths, the trie
+witness, the block), produced on the prep server; the coordinator stores and serves them and never computes
+(decision_coordinator_serves_never_computes); (2) submit checks a libzync receipt: verifies against the FROZEN libzync
+id (a libzync coordinator instance pins it in place of reproduce/METHOD_ID), and for a leaf requires
+`anchor_id == link_digest(S(h-1))` and the tip = block h; for a join, the receipt verifies (the guest already enforced
+the link) and covers the two ranges' union; (3) the worker side: `libzync-prove-range h h <bundle> <S(h-1)>` for a
+leaf, `libzync-join` for a fold. Leaves on a modern block are ~9 min of PRO 6000 time (537 s); joins 6.4 s.
+
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;
 (c) negatives: gap, overlap / duplicate, swapped order, tampered anchor, other image, non-chain journal — all refused;
