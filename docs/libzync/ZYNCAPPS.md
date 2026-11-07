@@ -1,6 +1,7 @@
 # zyncAPPs: building on the core proof
 
-Status: two zyncAPPs are built in `prover/zyncapps` (ROADMAP B5, K1): `coin` (a coin unspent or spent at the core
+Status: two zyncAPPs are built in `prover/zyncapps` (ROADMAP B5, K1): `coin` (version 2, image 3f503000: a coin, given by its
+fields, which the guest hashes to its leaf and commits, unspent or spent at the core
 tip, the core receipt verified in the zkVM) and `headers` (the header chain from genesis, executed on real headers,
 not yet proved); `zeroconf` (D5) is being built; the rest is design. The core facts in §2 exist in `ChainState`
 version 2 (SWIFTSYNC_PROOFS.md §3, HANDOVER.md §2); the shared check of §4 is `libzync::facts::check_core_statement`.

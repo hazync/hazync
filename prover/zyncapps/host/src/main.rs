@@ -1,6 +1,6 @@
 //! `zyncapp`: proves and verifies zyncAPP receipts (docs/libzync/ZYNCAPPS.md §8).
 //!
-//!   zyncapp prove-coin <core receipt> <fact.json from zync-path coin, at = tip> <out receipt> [--signet]
+//!   zyncapp prove-coin <core receipt> <fact.json from zync-path coin, at = tip> <out receipt> [--signet] [--preimage <coin.json>] [--execute]
 //!   zyncapp verify-coin <zyncapp receipt>
 //!   zyncapp prove-zeroconf <core tip receipt> <speculative chunk receipt> <record index> <paths.json> <out> [--signet]
 //!       paths.json: [[position, [sibling hex, ...]], ...], one per input of the transaction, from zync-path coin
@@ -103,18 +103,25 @@ struct ChainState {
     max_time: u32, profile: u32, block_roots: Vec<Option<[u8; 32]>>, block_leaves: u64, lineage: [u8; 32],
 }
 
-/// zync-path's CoinFact (swiftsync-verify), the fields this zyncAPP uses.
+/// zync-path's CoinFact (swiftsync-verify), the fields this zyncAPP uses; `preimage` is the coin's own fields, which the
+/// coin's owner supplies (in the fact, or `--preimage <file>`): the guest computes the leaf from them (version 2).
 #[derive(Deserialize)]
-struct CoinFact { at: u32, pos: u64, coin: String, spent_by: Option<(u32, u32, u32)>, path: Vec<String> }
+struct CoinFact { at: u32, pos: u64, coin: String, spent_by: Option<(u32, u32, u32)>, path: Vec<String>,
+                  #[serde(default)] preimage: Option<swiftsync_verify::CoinPreimage> }
+
+/// The guest's CoinFields: txid in INTERNAL byte order.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CoinFields { txid: [u8; 32], vout: u32, value: u64, script_pubkey: Vec<u8>, height: u32, coinbase: bool, tracked: bool, creation_mtp: u32 }
 
 #[derive(Serialize, Deserialize)]
-struct CoinQuery { pos: u64, coin: [u8; 32], spent_by: Option<(u32, u32, u32)>, path: Vec<[u8; 32]> }
+struct CoinQuery { pos: u64, fields: CoinFields, spent_by: Option<(u32, u32, u32)>, path: Vec<[u8; 32]> }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZyncCoin {
     kind: u32, core_id: [u32; 8], lineage: [u8; 32], anchor_id: [u8; 32], height: u32, tip_hash: [u8; 32],
-    cum_work: [u8; 32], max_time: u32, profile: u32, pos: u64, coin: [u8; 32], spent_by: Option<(u32, u32, u32)>,
+    cum_work: [u8; 32], max_time: u32, profile: u32, pos: u64, coin: [u8; 32], fields: CoinFields, spent_by: Option<(u32, u32, u32)>,
 }
+const KIND_ZYNC_COIN: u32 = 0x5A43_0002;
 
 fn die(m: &str) -> ! { eprintln!("zyncapp: {m}"); std::process::exit(1) }
 fn h32(s: &str) -> [u8; 32] {
@@ -242,7 +249,22 @@ fn main() {
             let f: CoinFact = serde_json::from_slice(&std::fs::read(&a[2]).unwrap_or_else(|e| die(&e.to_string())))
                 .unwrap_or_else(|e| die(&format!("fact: {e}")));
             if f.at != cs.height { die("this zyncAPP answers at the core proof's tip: make the fact with at = tip"); }
-            let q = CoinQuery { pos: f.pos, coin: h32(&f.coin), spent_by: f.spent_by, path: f.path.iter().map(|x| h32(x)).collect() };
+            let pre: swiftsync_verify::CoinPreimage = match (&f.preimage, a.iter().position(|x| x == "--preimage").and_then(|i| a.get(i + 1))) {
+                (_, Some(p)) => serde_json::from_slice(&std::fs::read(p).unwrap_or_else(|e| die(&e.to_string())))
+                    .unwrap_or_else(|e| die(&format!("--preimage: {e}"))),
+                (Some(p), None) => p.clone(),
+                (None, None) => die("the coin zyncAPP proves a statement about the COIN: give its fields (`preimage` in the fact, or --preimage <file.json>: txid, vout, value, script_pubkey, height, coinbase, tracked, creation_mtp)"),
+            };
+            let mut txid = h32(&pre.txid);
+            txid.reverse(); // explorers print txids reversed
+            let spk: Vec<u8> = (0..pre.script_pubkey.len()).step_by(2)
+                .map(|i| u8::from_str_radix(pre.script_pubkey.get(i..i + 2).unwrap_or("zz"), 16).unwrap_or_else(|_| die("script_pubkey: bad hex"))).collect();
+            let fields = CoinFields { txid, vout: pre.vout, value: pre.value, script_pubkey: spk, height: pre.height, coinbase: pre.coinbase,
+                                      tracked: pre.tracked, creation_mtp: pre.creation_mtp };
+            // the same leaf the guest will compute, checked here so a wrong preimage fails before any proving
+            let leaf = libzync::facts::coin_leaf(&fields.txid, fields.vout, fields.value, &fields.script_pubkey, fields.height, fields.coinbase, fields.tracked, fields.creation_mtp);
+            if leaf != h32(&f.coin) { die("the preimage's coin leaf is not the fact's coin: wrong fields for this coin"); }
+            let q = CoinQuery { pos: f.pos, fields, spent_by: f.spent_by, path: f.path.iter().map(|x| h32(x)).collect() };
             let signet = a.iter().any(|x| x == "--signet");
             let env = ExecutorEnv::builder()
                 .add_assumption(core.clone())
@@ -251,9 +273,30 @@ fn main() {
                 .write(&signet).unwrap()
                 .write(&q).unwrap()
                 .build().unwrap();
+            if a.iter().any(|x| x == "--execute") {
+                // the guest EXECUTED, every check in it run, no proof (tests against a dev-mode core receipt)
+                let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_COIN_ELF).unwrap_or_else(|e| die(&format!("execute: {e}")));
+                let z: ZyncCoin = info.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
+                let mut txid = z.fields.txid;
+                txid.reverse();
+                println!("EXECUTED (not a proof): kind {:#x} coin {}:{} value {} created {} leaf {} pos {} spent_by {:?} at core height {}; {} cycles",
+                         z.kind, hex(&txid), z.fields.vout, z.fields.value, z.fields.height, hex(&z.coin), z.pos, z.spent_by, z.height,
+                         info.cycles());
+                return;
+            }
             let r = default_prover().prove(env, ZYNCAPP_COIN_ELF).unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
             std::fs::write(&a[3], bincode::serialize(&r).unwrap()).unwrap_or_else(|e| die(&e.to_string()));
             println!("zyncapp coin receipt written: {}", a[3]);
+        }
+        Some("inspect-coin") if a.len() >= 2 => {
+            // the journal of a coin receipt, NOT verified (dev-mode test runs; never an answer: verify-coin is)
+            let r: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| die(&e.to_string())))
+                .unwrap_or_else(|e| die(&format!("receipt: {e}")));
+            let z: ZyncCoin = r.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
+            let mut txid = z.fields.txid;
+            txid.reverse();
+            println!("UNVERIFIED journal: kind {:#x} coin {}:{} value {} height {} leaf {} pos {} spent_by {:?} at core height {}",
+                     z.kind, hex(&txid), z.fields.vout, z.fields.value, z.fields.height, hex(&z.coin), z.pos, z.spent_by, z.height);
         }
         Some("verify-coin") if a.len() >= 2 => {
             let r: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| die(&e.to_string())))
@@ -261,15 +304,21 @@ fn main() {
             if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { die("a dev-mode FakeReceipt is not a proof"); }
             r.verify(ZYNCAPP_COIN_ID).unwrap_or_else(|e| die(&format!("does not verify: {e}")));
             let z: ZyncCoin = r.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
-            if z.kind != 0x5A43_0001 { die("not a zyncAPP coin statement"); }
+            if z.kind == 0x5A43_0001 { die("a version-1 coin statement (the leaf only, not the coin's fields): re-prove with this zyncapp"); }
+            if z.kind != KIND_ZYNC_COIN { die("not a zyncAPP coin statement"); }
             let mut t = z.tip_hash;
             t.reverse();
             let what = match z.spent_by { None => "UNSPENT".to_string(), Some((h, tx, v)) => format!("SPENT at height {h} by tx {tx} input {v}") };
             println!("  rests on core image {} with anchor_id {} and lineage {}", id_hex(&z.core_id), hex(&z.anchor_id), hex(&z.lineage));
             let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, lineage: &z.lineage, profile: z.profile, height: z.height,
                            tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
-            verdict(core_policy(&c, &a), format!("ZYNCAPP_COIN_OK: coin {} at log position {} is {what} at height {} (tip {})", hex(&z.coin), z.pos, z.height, hex(&t)));
+            let mut txid = z.fields.txid;
+            txid.reverse();
+            println!("  coin: {}:{} value {} sat, script {}, created at height {}{}", hex(&txid), z.fields.vout, z.fields.value,
+                     hex(&z.fields.script_pubkey), z.fields.height, if z.fields.coinbase { " (coinbase)" } else { "" });
+            verdict(core_policy(&c, &a), format!("ZYNCAPP_COIN_OK: coin {}:{} (leaf {}) at log position {} is {what} at height {} (tip {})",
+                                                 hex(&txid), z.fields.vout, hex(&z.coin), z.pos, z.height, hex(&t)));
         }
-        _ => die("usage: zyncapp id | prove-coin <core.rcpt> <fact.json> <out.rcpt> [--signet] | verify-coin <zync.rcpt>"),
+        _ => die("usage: zyncapp id | prove-coin <core.rcpt> <fact.json> <out.rcpt> [--signet] | verify-coin <zync.rcpt> | inspect-coin <zync.rcpt>"),
     }
 }

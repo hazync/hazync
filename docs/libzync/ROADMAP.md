@@ -25,7 +25,7 @@ refuse it.
 | B2 | host writes `history.bin`; `zync-path coin` / `find` produce coin facts | done |
 | B3 | coin journey: creating tx in a proven block, the coin leaf from its output, the spending tx (`zync-path journey`, `--journey`) | done |
 | B4 | `swiftsync-verify --coin / --journey`, wasm `verify_facts`, C ABI `swiftsync_verify_facts` | done |
-| B5 | zyncAPP `coin` guest (prover/zyncapps): unspent/spent at the core tip, core receipt verified in the zkVM; image 26e09637 | done. ⚠ (round 11) it commits the LEAF it checked, so "unspent" is about that 32-byte leaf: a spent coin's flipped leaf also passes; a consumer must compare `coin` with its own `coin_leaf`. Next zyncAPP image: take the coin's fields and commit them, the leaf computed in the guest (as the verifiers' CoinFact.preimage) |
+| B5 | zyncAPP `coin` guest (prover/zyncapps): unspent/spent at the core tip, core receipt verified in the zkVM; image 26e09637 | done. ⚠ (round 11) it commits the LEAF it checked, so "unspent" is about that 32-byte leaf: a spent coin's flipped leaf also passes; a consumer must compare `coin` with its own `coin_leaf`. ✅ **11-07: version 2** (image 3f503000): the guest takes the coin's FIELDS (txid, vout, value, script, height, flags, creation MTP), computes the leaf and commits the fields (kind 0x5A430002; verify-coin refuses version 1); `prove-coin --preimage`, `--execute`; tested on mainnet 1..200 (spent coin, unspent coin, both mis-claims refused in the guest, wrong / missing preimage refused: `zcoin/RESULT_coin_v2.txt`) |
 
 ## C. Production host
 
@@ -353,7 +353,7 @@ cycles, measured); a risc0 upgrade for new accelerators (ruled out).
 | c8m (checkpoint) | 9d9adb54 | superseded |
 | c9tx (coin log + txlog) | df86c392 | |
 | c9m (coin log) | 0d8cac45 | ⚠ built while a zyncAPP build held part of target/riscv-guest: rebuild from clean before the test pass |
-| zyncAPP coin | 26e09637 | |
+| zyncAPP coin | 3f503000 (v2, 11-07; v1 26e09637) | |
 | zyncAPP zeroconf | a61caf76 | |
 | c10b / c10o / c10s / c10os (E1 measurement) | e7514dc8 / 629005ae / 3c948172 / 95df867e | tree state from the witness; cost only |
 | c10h / c10oh (E1 history script tree) | b704daf3 / cba70157 | ⚠ undercounted (within-block coins); superseded by c10h2 |

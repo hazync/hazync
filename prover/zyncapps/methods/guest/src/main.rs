@@ -1,12 +1,13 @@
 //! zyncAPP "coin": proves, from a verified core receipt, that a coin is unspent or was spent by (height, tx, vin) at the
 //! core proof's tip (docs/libzync/ZYNCAPPS.md §4-§5). Its own image; it never changes the core.
 //!
-//! Input:  core_id [u32; 8], core journal bytes, signet flag, CoinQuery
+//! Input:  core_id [u32; 8], core journal bytes, signet flag, CoinQuery (the coin's FIELDS, its position and path)
 //! Checks: env::verify(core_id, journal) (an assumption the host resolves with the core receipt);
 //!         check_core_statement (kind, version >= 2, self_id == core_id, network, scripts checked, coin log);
-//!         the coin fact against the journal's coin-log roots.
+//!         the coin's leaf, COMPUTED here from its fields, against the journal's coin-log roots.
 //! Commits: ZyncCoin: core_id, the core statement it rests on (lineage, anchor_id, height, tip_hash, cum_work,
-//!          max_time, profile), and the answer. The final verifier pins core_id to a known core image and anchor_id
+//!          max_time, profile), the coin's fields and the answer. (Version 2, 11-07: version 1 took and committed the
+//!          32-byte leaf, so a spent coin's flipped leaf also passed as "unspent"; ROADMAP B5.) The final verifier pins core_id to a known core image and anchor_id
 //!          to the network's genesis anchor (policy, as for the core proof itself).
 #![no_main]
 extern crate alloc;
@@ -52,10 +53,23 @@ struct ChainState {
     lineage: [u8; 32],
 }
 
+/// The fields a coin leaf commits (UTREEXO_FORMAT.md §2; facts::coin_leaf). txid in internal byte order.
+#[derive(Deserialize, Serialize, Clone)]
+pub struct CoinFields {
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub value: u64,
+    pub script_pubkey: Vec<u8>,
+    pub height: u32,
+    pub coinbase: bool,
+    pub tracked: bool,
+    pub creation_mtp: u32,
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct CoinQuery {
     pub pos: u64,
-    pub coin: [u8; 32],
+    pub fields: CoinFields,
     pub spent_by: Option<(u32, u32, u32)>,
     pub path: Vec<[u8; 32]>,
 }
@@ -73,10 +87,12 @@ pub struct ZyncCoin {
     pub profile: u32,
     pub pos: u64,
     pub coin: [u8; 32],
+    pub fields: CoinFields,
     pub spent_by: Option<(u32, u32, u32)>,
 }
 
-pub const KIND_ZYNC_COIN: u32 = 0x5A43_0001;
+/// Version 2 (fields committed); 0x5A43_0001 was version 1 (leaf only).
+pub const KIND_ZYNC_COIN: u32 = 0x5A43_0002;
 
 fn main() {
     let core_id: [u32; 8] = env::read();
@@ -90,13 +106,15 @@ fn main() {
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
     // The anchor is policy (the final verifier pins it), so the guest compares it with itself here.
     facts::check_core_statement(&st, &core_id, 2, if signet { facts::Network::Signet } else { facts::Network::Mainnet }, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
+    let f = &q.fields;
+    let coin = facts::coin_leaf(&f.txid, f.vout, f.value, &f.script_pubkey, f.height, f.coinbase, f.tracked, f.creation_mtp);
     let ok = match q.spent_by {
-        None => facts::coin_unspent(&j.utxo_roots, j.utxo_leaves, q.pos, &q.coin, &q.path),
-        Some((h, t, v)) => h <= j.height && facts::coin_spent_by(&j.utxo_roots, j.utxo_leaves, q.pos, &q.coin, h, t, v, &q.path),
+        None => facts::coin_unspent(&j.utxo_roots, j.utxo_leaves, q.pos, &coin, &q.path),
+        Some((h, t, v)) => h <= j.height && facts::coin_spent_by(&j.utxo_roots, j.utxo_leaves, q.pos, &coin, h, t, v, &q.path),
     };
     assert!(ok, "the coin is not in that state at that position");
     env::commit(&ZyncCoin {
         kind: KIND_ZYNC_COIN, core_id, lineage: j.lineage, anchor_id: j.anchor_id, height: j.height, tip_hash: j.tip_hash,
-        cum_work: j.cum_work, max_time: j.max_time, profile: j.profile, pos: q.pos, coin: q.coin, spent_by: q.spent_by,
+        cum_work: j.cum_work, max_time: j.max_time, profile: j.profile, pos: q.pos, coin, fields: q.fields, spent_by: q.spent_by,
     });
 }
