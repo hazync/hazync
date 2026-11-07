@@ -136,5 +136,7 @@ crash safety comes from a journal:
 - a load of `state_<k>.coinlog` undoes, newest first, every journaled block above k. The disk trie needs no journal:
   it is copy-on-write and falls back to its last flush. So a crash anywhere resumes from the last saved height
   (prove-range `HAZYNC_RESUME=1`; prep from the last saved `state_<h>.json` with `HAZYNC_PREP_CONTINUE=1`, which
-  keeps the chain's own `anchor_id` instead of starting a new base step on it).
+  keeps the chain's own `anchor_id`; prep from any state other than genesis must name its mode, `HAZYNC_PREP_CONTINUE=1`
+  or `HAZYNC_PREP_BASE=1`, a base step on it as a leaf proof commits).
+- One run per store: each run holds an exclusive `LOCK` in its out dir and each store dir.
 - An existing store is never replaced unless `HAZYNC_COINLOG_FRESH=1`.

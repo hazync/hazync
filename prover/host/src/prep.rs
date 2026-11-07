@@ -249,15 +249,16 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     // stamps its own id and profile; every later block carries them. HAZYNC_PREP_CONTINUE=1: the anchor is a state of
     // the SAME chain (a restart after a crash, from the last saved state_<h>.json), so the chain's own anchor_id carries
     // on and the states stay byte-identical to an uninterrupted run (11-06).
-    // Default (round 11): an anchor whose own anchor_id is the network's genesis anchor is a state of the chain from
-    // genesis (a prep / proved state, e.g. a restart's save point), so the chain continues; any other anchor starts a
-    // base step on it. HAZYNC_PREP_CONTINUE=1 / HAZYNC_PREP_BASE=1 force either; the choice is printed.
-    let genesis_aid = crate::lz::pinned_genesis_anchor().unwrap_or_else(|| crate::link_digest(&crate::genesis_anchor()));
+    // From a state other than genesis the run must SAY which it is (round 12: either default is wrong for someone):
+    // HAZYNC_PREP_CONTINUE=1, the same chain carries on (a restart from a save point: states byte-identical to an
+    // uninterrupted run); HAZYNC_PREP_BASE=1, a base step on that state (anchor_id = its link digest, as a leaf proof
+    // on it commits, and as prove-range does from an anchor). The choice is printed.
     let cont = match (std::env::var("HAZYNC_PREP_CONTINUE").as_deref(), std::env::var("HAZYNC_PREP_BASE").as_deref()) {
         (Ok("1"), Ok("1")) => panic!("HAZYNC_PREP_CONTINUE and HAZYNC_PREP_BASE both set"),
         (Ok("1"), _) => true,
         (_, Ok("1")) => false,
-        _ => anchor_path != "genesis" && prev.anchor_id == genesis_aid,
+        _ if anchor_path == "genesis" => false,
+        _ => panic!("libzync-prep from the state at {}: set HAZYNC_PREP_CONTINUE=1 (the same chain, e.g. a restart from a save point) or HAZYNC_PREP_BASE=1 (a base step on it, as a leaf proof)", prev.height),
     };
     if anchor_path != "genesis" {
         println!("  prep from the state at {}: {}", prev.height,

@@ -568,8 +568,8 @@ pub struct CoinFact {
     pub log_roots: Vec<Option<String>>,
     /// When `at` is below the tip: the block at `at` (hash) and its path in the tip's block forest.
     pub block: Option<(String, Vec<String>)>,
-    /// The coin `coin` is the leaf OF, filled in by the CALLER from its own knowledge of its coin (not the server's
-    /// word). Required for an UNSPENT answer: the check proves only that a 32-byte value is the log's leaf at `pos`,
+    /// The coin `coin` is the leaf OF: its fields, from the caller's own coin or from the server (either is sound: a
+    /// flipped leaf can never equal a coin leaf, so a lying preimage simply fails). Required for an UNSPENT answer: the check proves only that a 32-byte value is the log's leaf at `pos`,
     /// and once a coin is spent that leaf is its spent-leaf hash, which an UNSPENT check cannot tell from a coin leaf
     /// (round 11). A SPENT answer is bound already (the spent leaf hashes `coin` with the spender). A journey
     /// (CoinJourney, from the creating transaction) binds the coin without this.
@@ -654,7 +654,8 @@ fn coin_fact_position(cs: &ChainState, f: &CoinFact) -> Result<String, String> {
     let roots = normalize_roots(roots);
     match f.spent_by {
         None if libzync::facts::coin_unspent(&roots, n, f.pos, &coin, &path) =>
-            Ok(format!("coin {} at log position {} is UNSPENT at height {}{block_line}", f.coin, f.pos, f.at)),
+            Ok(format!("coin {}{} at log position {} is UNSPENT at height {}{block_line}", f.coin,
+                       f.preimage.as_ref().map(|p| format!(" ({}:{})", p.txid, p.vout)).unwrap_or_default(), f.pos, f.at)),
         Some((h, t, v)) if h <= f.at && libzync::facts::coin_spent_by(&roots, n, f.pos, &coin, h, t, v, &path) =>
             Ok(format!("coin {} at log position {} was SPENT at height {h} by transaction {t} input {v} (state at {}){block_line}", f.coin, f.pos, f.at)),
         _ => Err(format!("coin {} is not at log position {} in the state it names", f.coin, f.pos)),
@@ -889,7 +890,9 @@ pub fn check_coin_journey(cs: &ChainState, j: &CoinJourney) -> Result<String, St
     if hex(&leaf) != j.fact.coin.to_lowercase() {
         return Err("the origin output's coin leaf is not the fact's coin".into());
     }
-    let line = check_coin_fact(cs, &j.fact)?;
+    // the journey has already bound `coin` to the origin's output (the leaf recomputed from the transaction), so only
+    // the position half is needed here (round 12: check_coin_fact's preimage rule refused every unspent journey)
+    let line = coin_fact_position(cs, &j.fact)?;
     let mut d = txid;
     d.reverse();
     let mut out = format!("{}:{} ({value} sat) created at height {} -- {line}", hex(&d), j.vout, j.origin.height);
@@ -1161,6 +1164,25 @@ mod tests {
         let mut b = j.clone();
         b.origin.state = hex(&r.states[2]);
         assert!(check_coin_journey(&cs, &b).is_err(), "wrong block state");
+
+        // An UNSPENT journey (round 12: the preimage rule had refused every one; the journey binds the coin itself):
+        // block 2's coinbase output, unspent at the tip
+        let uj = CoinJourney {
+            origin: txf(2, &h2, &[id_cb2, id_sp], &cb2, 0, &cb2), vout: 0, tracked: false, creation_mtp: 777,
+            fact: CoinFact {
+                at: 2, pos: 1, coin: hex(&leaf_b), spent_by: None,
+                path: r.log.path(1).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
+                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None, preimage: None,
+            },
+            spend: None,
+        };
+        let ok = check_coin_journey(&cs, &uj).unwrap();
+        assert!(ok.contains("UNSPENT at height 2"), "{ok}");
+        // ... and an unspent journey for the SPENT coin (its flipped leaf at the tip) still fails
+        let mut bad = j.clone();
+        bad.spend = None;
+        bad.fact.spent_by = None;
+        assert!(check_coin_journey(&cs, &bad).is_err(), "a spent coin's journey claimed unspent");
 
         // A standalone coin fact binds the coin by its preimage (round 11): with the coin's fields it holds; the
         // SPENT coin's flipped leaf presented as an unspent coin is refused, with or without the real preimage.

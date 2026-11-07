@@ -602,11 +602,21 @@ fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
 /// other's freed slots (round 11). A second run fails at once instead.
 pub(crate) fn lock_run_dirs(out: &str) {
     static LOCKS: std::sync::Mutex<Vec<std::fs::File>> = std::sync::Mutex::new(Vec::new());
-    let mut dirs = vec![std::path::PathBuf::from(out)];
-    dirs.extend(cl_dir());
-    dirs.extend(crate::trie::trie_dir());
-    for d in dirs {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    for d in [Some(std::path::PathBuf::from(out)), cl_dir(), crate::trie::trie_dir()].into_iter().flatten() {
         std::fs::create_dir_all(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
+        // compared as real paths: the same directory given twice or by another path (round 12)
+        let c = std::fs::canonicalize(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
+        // overlapping directories are refused: a fresh coin log empties its directory, which would take the out dir's
+        // files or the other store with it (and the same directory locked twice would block on itself)
+        for o in &dirs {
+            if c.starts_with(o) || o.starts_with(&c) {
+                panic!("{} and {} overlap: give the out dir, HAZYNC_COINLOG_DIR and HAZYNC_TRIE_DIR each their own directory", o.display(), c.display());
+            }
+        }
+        dirs.push(c);
+    }
+    for d in dirs {
         let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(d.join("LOCK"))
             .unwrap_or_else(|e| panic!("{}/LOCK: {e}", d.display()));
         match f.try_lock() {
@@ -1384,7 +1394,16 @@ pub(crate) fn cl_from_leaves(leaves: &[[u8; 32]]) -> ClHost {
             // days of work; review 11-06). Resume with HAZYNC_RESUME=1, or set HAZYNC_COINLOG_FRESH=1 to start over.
             assert!(!d.join("L0.bin").exists() || std::env::var("HAZYNC_COINLOG_FRESH").as_deref() == Ok("1"),
                     "{}: a coin-log store is already there; HAZYNC_RESUME=1 to continue it, HAZYNC_COINLOG_FRESH=1 to replace it", d.display());
-            let _ = std::fs::remove_dir_all(&d);
+            // the store's files only: the run's LOCK stays (round 12: wiping the directory unlinked the lock just taken,
+            // so a second run could lock a fresh file and write the same store)
+            if let Ok(rd) = std::fs::read_dir(&d) {
+                for e in rd.flatten() {
+                    if e.file_name() != "LOCK" {
+                        let p = e.path();
+                        let _ = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+                    }
+                }
+            }
             libzync::host::AnyNodes::Disk(libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())))
         }
         None => libzync::host::AnyNodes::Mem(Vec::new()),

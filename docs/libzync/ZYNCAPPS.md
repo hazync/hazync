@@ -127,7 +127,7 @@ spends as (position, tx, vin) and the appended leaves. From it `zync-path` (swif
 
 | file | proves |
 |---|---|
-| `CoinFact` (`zync-path coin <history> <tip> <at> <pos>`) | coin C at log position p is unspent, or was spent by (height, tx, vin), in the coin state after height `at`; below the tip, `at`'s block leaf is opened in the tip's block forest |
+| `CoinFact` (`zync-path coin <history> <tip> <at> <pos>`) | coin C at log position p was spent by (height, tx, vin), or is unspent, in the coin state after height `at`; below the tip, `at`'s block leaf is opened in the tip's block forest. ⚠ An UNSPENT answer needs `preimage`, the coin's fields (yours or the server's), so C is shown to be a coin's leaf: the position check alone also passes a spent coin's flipped leaf (round 11). A journey binds the coin without it |
 | `CoinJourney` (`zync-path journey <history> <tip> <pos> --bitcoin-cli "<cmd>"`) | the transaction that created C is at its position in a proven block (header + Merkle branch + block leaf), C's leaf is that output's (value, scriptPubKey, height, coinbase, tracked, creation MTP), C's state at the tip, and, if spent, the spending transaction is the one the log names and its input spends C |
 
 Walking a journey backwards (a creating transaction's inputs) and forwards (the spender's outputs) is a chain of
