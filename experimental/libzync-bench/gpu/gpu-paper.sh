@@ -3,6 +3,9 @@
 # from prep's real-state leaf_<h>.bin, and by the original CORE guest (37987b85, the v0.22.1 CUDA release binary) from
 # the original bridge's bundle_<h>.json. Records wall time, LZ_STATS (libzync), segments (CORE), GPU use.
 #   BUNDLE=<dir: method.bin pins/ leaf/leaf_<h>.bin core/bundle_<h>.json> HEIGHTS="200000 300000" OUT=<dir> bash gpu-paper.sh
+# CONCURRENCY=N (default 1): N blocks in flight at once on the card, for CORE and libzync alike, so one block's CPU
+# phases (libzync: signature hints, the collect pass; CORE: execution, assembly) overlap another's GPU work. The
+# card time per block is then the phase's wall divided by its blocks (results.tsv: one PHASE row per prover).
 # MODELLED="<heights>": also libzync on MODELLED state (lz::cl_synth_around, as the 962,000 benchmark), from
 # modelled/block_<h>.json + txcounts.txt: real block, cycles a real block's, state not history (labelled as such).
 set -uo pipefail
@@ -31,19 +34,30 @@ trap 'kill $SMI 2>/dev/null' EXIT
 echo -e "height\twhat\twall_s\texit\tdetail" > "$OUT/results.tsv"
 # CORE first (its bundles are all here), then libzync: a leaf bundle may still be arriving (the laptop driver pushes
 # each one as prep writes it), so a libzync block waits for its leaf up to LEAF_WAIT_S
+C=${CONCURRENCY:-1}
+throttle () { while [ "$(jobs -rp | grep -v "^$SMI$" | wc -l)" -ge "$C" ]; do sleep 2; done; }
+t_phase=$(date +%s.%N); n_phase=0
 for h in $HEIGHTS; do
   [ -f "$BUNDLE/core/bundle_$h.json" ] || { say "no CORE bundle for $h"; continue; }
+  throttle; n_phase=$((n_phase+1))
+  (
   say "CORE $h"; mkdir -p "$OUT/core_$h"
   t=$(date +%s.%N)
   ( cd "$OUT/core_$h" && HAZYNC_BRIDGE_OUT="$BUNDLE/core" "$CORE" prove-range-bridge "$h" ) > "$OUT/core_$h.log" 2>&1; rc=$?
   w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
   seg=$(grep -a -o 'executed, [0-9]* segments at po2 [0-9]*' "$OUT/core_$h.log" | head -1)
   echo -e "$h\tCORE\t$w\t$rc\t$seg" >> "$OUT/results.tsv"; say "CORE $h: ${w} s exit $rc ($seg)"
+  ) &
 done
+for j in $(jobs -rp); do [ "$j" = "$SMI" ] || wait "$j"; done
+[ "$n_phase" -gt 0 ] && { w=$(python3 -c "import time;print(f'{time.time()-$t_phase:.1f}')"); echo -e "PHASE\tCORE\t$w\t$n_phase\tconcurrency=$C" >> "$OUT/results.tsv"; say "CORE phase: $n_phase blocks in ${w} s at concurrency $C"; }
+t_phase=$(date +%s.%N); n_phase=0
 for h in $HEIGHTS; do
   f="$BUNDLE/leaf/leaf_$h.bin"; t0=$(date +%s)
   until [ -f "$f" ] || [ $(( $(date +%s) - t0 )) -ge ${LEAF_WAIT_S:-10800} ]; do sleep 20; done
   [ -f "$f" ] || { say "no leaf bundle for $h after ${LEAF_WAIT_S:-10800} s"; continue; }
+  throttle; n_phase=$((n_phase+1))
+  (
   say "libzync leaf $h"; rm -rf "$OUT/lz_$h"; mkdir -p "$OUT/lz_$h"
   t=$(date +%s.%N)
   HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=$(nproc) HAZYNC_LEAF_BUNDLE="$f" \
@@ -51,7 +65,10 @@ for h in $HEIGHTS; do
   w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
   st=$(grep -a '^LZ_STATS' "$OUT/lz_$h.log" | awk '{print $2"="$4","$5}' | tr '\n' ' ')
   echo -e "$h\tlibzync\t$w\t$rc\t$st" >> "$OUT/results.tsv"; say "libzync $h: ${w} s exit $rc $st"
+  ) &
 done
+for j in $(jobs -rp); do [ "$j" = "$SMI" ] || wait "$j"; done
+[ "$n_phase" -gt 0 ] && { w=$(python3 -c "import time;print(f'{time.time()-$t_phase:.1f}')"); echo -e "PHASE\tlibzync\t$w\t$n_phase\tconcurrency=$C" >> "$OUT/results.tsv"; say "libzync phase: $n_phase blocks in ${w} s at concurrency $C"; }
 for h in $MODELLED; do
   f="$BUNDLE/modelled/block_$h.json"; [ -f "$f" ] || { say "no modelled block file for $h"; continue; }
   say "libzync MODELLED $h"; d="$OUT/mod_$h"; rm -rf "$d"; mkdir -p "$d/receipts"
