@@ -1239,6 +1239,19 @@ mod tests {
         assert!(check_trie_fact(&cs, &ab).unwrap().contains("ABSENT"));
     }
 
+    /// The built-in table is the published one (reproduce/LIBZYNC_IDS, written with the table by
+    /// reproduce/pin-libzync-ids.py): a hand edit to either fails here.
+    #[test]
+    fn images_match_the_published_ids() {
+        let f = include_str!("../../reproduce/LIBZYNC_IDS");
+        for img in IMAGES {
+            let line = f.lines().find(|l| l.split_whitespace().nth(1) == Some(img.network))
+                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {} line", img.network));
+            let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
+            assert_eq!(id, img.method_id_hex, "{}: IMAGES and reproduce/LIBZYNC_IDS disagree", img.network);
+        }
+    }
+
     #[test]
     fn checkpoint_heights_match_the_guest() {
         let g = include_str!("../../prover/methods/guest/src/checkpoint.rs");
