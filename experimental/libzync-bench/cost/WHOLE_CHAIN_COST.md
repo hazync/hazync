@@ -1,4 +1,22 @@
-# What a whole-chain libzync proof would cost (measured survey, 2026-10-30)
+# What a whole-chain libzync proof would cost
+
+## The frozen core c14 (survey 2026-11-07)
+
+Same method as below (the 19 sample blocks, one chunk per block, scaled by real transaction counts per era), on the
+frozen product image: chunk + aggregate + the trie update's own receipt, three proof processes per block
+(`survey_c14.sh`, data `survey_c14.out`, `python3 estimate.py survey_c14.out 3`).
+
+| mainnet 1..970,000, scripts ON | total work | A40 | PRO 6000 |
+|---|---|---|---|
+| c14 (coin log + trie receipt + live-coin hash) | **335.0 T cycles** | ~251-265k card-h, **~$148-156k** | ~$278-295k |
+| design B (10-30, below) | 257.7 T | ~$114-119k | ~$214-225k |
+
+- +30% over design B, most of it the trie update (its receipt is 10-25% of a modern block's cycles in the survey).
+- ⚠ The coin log and trie around each block are MODELLED (`cl_synth_around`): a mainnet-scale trie is deeper, so
+  the trie's share is likely UNDERSTATED here. One chunk per block (production uses 16). ±50% as below.
+- Joins for a backfill (GPU_RESULTS.md 11-06): ~1,700 PRO 6000 card-hours, ~$4.3k, about 1.5% on top.
+
+## Design B (measured survey, 2026-10-30)
 
 **Method:**
 - **Sample:** 19 real mainnet blocks, every 50k from 100,000 to 970,000.

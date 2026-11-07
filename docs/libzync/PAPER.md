@@ -78,7 +78,8 @@ the canonical guest (ESTIMATED for the frozen image), and blocks can be proved i
 - Cost: cycles per block (c14: 440.6 M + the trie receipt); GPU: 537 s on one RTX PRO 6000 for block 962,000; the
   first real join tree (6.4 s / join); vs the canonical guest (8.6× MEASURED for design B on one A40; ~8.2×
   ESTIMATED for c14). ⚠ the GPU block's coin state is MODELLED, not mainnet history: say so in the text.
-- Whole-chain cost: an ESTIMATE (~$114-119k A40, scripts checked, design B) — re-estimate on c14 before quoting.
+- Whole-chain cost, ESTIMATED on c14 (11-07): 335 T cycles, ~$148-156k on A40 / ~$278-295k on PRO 6000, scripts
+  checked; the trie is modelled (likely understated), one chunk per block, ±50% (cost/WHOLE_CHAIN_COST.md).
 - Evidence: GPU_RESULTS.md, RESULT_c13.txt, RESULT_c14.txt, core_vectors/RESULT_c10e12_variants.txt,
   cost/WHOLE_CHAIN_COST.md.
 

@@ -123,7 +123,7 @@ from genesis, executed on real headers, not yet proved). Being built: `zeroconf`
 | c14 vs CORE, card time | — | **~8.2x ESTIMATED, not measured**: chaining design B's A40 time by c14/design B on the PRO 6000 (1,167 × 537/517 ≈ 1,212 s vs 9,990 s) | derived from the two rows above |
 | join of two chain proofs | c14, 11-06, real (non-dev) receipts, one PRO 6000 | **6.4 s** each, one 2^20 segment (padded; raw cycles not logged); 8 leaves (18.2 s each) + 7 joins over 3 levels; root journal identical to the linear chain's block 8, verified; root receipt 226,002 bytes | `gpu/GPU_RESULTS.md` (top) |
 | joins for a whole-chain backfill | ESTIMATED from the 6.4 s join | ~975 k joins, ~1,700 PRO 6000 card-hours, ~$4.3k at $2.49/hr | same |
-| whole mainnet chain to 970,000, A40 | ESTIMATED 10-30 on design B images (19 sampled blocks) | scripts ON ~$114-119k; scripts OFF ~$37-42k. Not re-estimated on c14 | `cost/WHOLE_CHAIN_COST.md` |
+| whole mainnet chain to 970,000 | ESTIMATED 11-07 on c14 (19 sampled blocks, chunk + aggregate + trie receipt; trie modelled) | 335 T cycles: ~$148-156k on A40, ~$278-295k on PRO 6000, scripts ON (design B was 257.7 T, ~$114-119k A40); ±50% | `cost/WHOLE_CHAIN_COST.md` |
 | header chain zyncAPP | `headers` guest, execute mode, real mainnet headers | 2,427 cycles per header (genesis..2,100); whole chain ~47 min on a PRO 6000 ESTIMATED from cycles | ROADMAP K1 |
 
 The GPU benchmark's coin log and trie around block 962,000 are **MODELLED** (`lz::cl_synth_around`, from the block's
