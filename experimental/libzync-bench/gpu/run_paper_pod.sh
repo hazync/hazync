@@ -4,7 +4,7 @@
 # From the laptop: deploy, set up, upload, run, HARVEST, then terminate (by the captured id); DEADLINE_MIN bounds spend.
 #   HEIGHTS="200000 300000" bash run_paper_pod.sh      (bundle dir ~/libzync-gpu/paper: method.bin pins/ leaf/ core/)
 set -uo pipefail
-L=~/libzync-gpu/paper; OUT=${OUT:-$L/pod-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:?set HEIGHTS}; mkdir -p "$OUT"
+L=~/libzync-gpu/paper; OUT=${OUT:-$L/pod-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:-}; MODELLED=${MODELLED:-}; mkdir -p "$OUT"
 # the commit the pod runs: by default this checkout's HEAD, which must be on the remote (the pod clones it)
 Z=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 COMMIT=${COMMIT:-$(git -C "$Z" rev-parse HEAD)}
@@ -30,7 +30,7 @@ trap 'harvest; term' EXIT
 
 # 1. bundles: one tarball (the pinned libzync guest + pins, leaf bundles, CORE bundles)
 log "packing bundles"
-rm -rf "$OUT/up"; mkdir -p "$OUT/up/bundles"; cp -r $L/method.bin $L/pins $L/leaf $L/core "$OUT/up/bundles/"
+rm -rf "$OUT/up"; mkdir -p "$OUT/up/bundles"; cp -r $L/method.bin $L/pins $L/leaf $L/core $L/modelled $L/txcounts.txt "$OUT/up/bundles/"
 (cd "$OUT/up" && tar czhf ../bundles.tgz bundles) && sha256sum "$OUT/bundles.tgz" | cut -c1-64 > "$OUT/bundles.sha"
 log "bundles.tgz $(du -h "$OUT/bundles.tgz" | cut -f1)"
 
@@ -93,11 +93,11 @@ H=/workspace/hazync/experimental/libzync-bench/gpu
 mkdir -p host; lscpu > host/lscpu.txt; nproc > host/nproc.txt; nvidia-smi -q > host/nvidia-smi-q.txt 2>&1
 ( while :; do echo "== $(date +%T) $(cut -d' ' -f1-3 /proc/loadavg)"; top -bn1 -w 200 | sed -n '7,22p'; sleep 20; done ) > host/top.log 2>&1 & TOP=$!
 echo "HOST $(grep -m1 'Model name' host/lscpu.txt | sed 's/.*: *//') x$(cat host/nproc.txt), load $(cut -d' ' -f1-3 /proc/loadavg)"
-BUNDLE=/workspace/bundles HEIGHTS="$HEIGHTS" OUT=/workspace/paper bash $H/gpu-paper.sh; echo "PAPER_EXIT=$?"
+BUNDLE=/workspace/bundles HEIGHTS="$HEIGHTS" MODELLED="$MODELLED" OUT=/workspace/paper bash $H/gpu-paper.sh; echo "PAPER_EXIT=$?"
 kill $TOP 2>/dev/null
 echo POD_DONE
 EOF
-ssh $K -p "$PORT" root@"$HOST" "cd /workspace && (HEIGHTS='$HEIGHTS' setsid nohup bash pod.sh > pod.log 2>&1 < /dev/null &)"
+ssh $K -p "$PORT" root@"$HOST" "cd /workspace && (HEIGHTS='$HEIGHTS' MODELLED='$MODELLED' setsid nohup bash pod.sh > pod.log 2>&1 < /dev/null &)"
 log "pod.sh started (heights: $HEIGHTS)"
 
 # 6. wait (POD_DONE or the deadline), relaying progress lines

@@ -3,9 +3,11 @@
 # from prep's real-state leaf_<h>.bin, and by the original CORE guest (37987b85, the v0.22.1 CUDA release binary) from
 # the original bridge's bundle_<h>.json. Records wall time, LZ_STATS (libzync), segments (CORE), GPU use.
 #   BUNDLE=<dir: method.bin pins/ leaf/leaf_<h>.bin core/bundle_<h>.json> HEIGHTS="200000 300000" OUT=<dir> bash gpu-paper.sh
+# MODELLED="<heights>": also libzync on MODELLED state (lz::cl_synth_around, as the 962,000 benchmark), from
+# modelled/block_<h>.json + txcounts.txt: real block, cycles a real block's, state not history (labelled as such).
 set -uo pipefail
 P=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../prover" && pwd)
-BUNDLE="${BUNDLE:?}"; HEIGHTS="${HEIGHTS:?}"; OUT="${OUT:?}"; mkdir -p "$OUT"
+BUNDLE="${BUNDLE:?}"; HEIGHTS="${HEIGHTS:-}"; MODELLED="${MODELLED:-}"; OUT="${OUT:?}"; mkdir -p "$OUT"
 say () { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 die () { echo "FATAL: $*" | tee -a "$OUT/run.log" >&2; exit 1; }
 for v in $(compgen -e | grep '^HAZYNC_'); do unset "$v"; done; unset RISC0_DEV_MODE
@@ -49,5 +51,19 @@ for h in $HEIGHTS; do
   w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
   st=$(grep -a '^LZ_STATS' "$OUT/lz_$h.log" | awk '{print $2"="$4","$5}' | tr '\n' ' ')
   echo -e "$h\tlibzync\t$w\t$rc\t$st" >> "$OUT/results.tsv"; say "libzync $h: ${w} s exit $rc $st"
+done
+for h in $MODELLED; do
+  f="$BUNDLE/modelled/block_$h.json"; [ -f "$f" ] || { say "no modelled block file for $h"; continue; }
+  say "libzync MODELLED $h"; d="$OUT/mod_$h"; rm -rf "$d"; mkdir -p "$d/receipts"
+  t=$(date +%s.%N)
+  ( cd "$P" && export HAZYNC_BLOCK="$f" HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_COINLOG_TXCOUNTS="$BUNDLE/txcounts.txt" \
+        HAZYNC_HINT_THREADS=$(nproc) HAZYNC_RECEIPTS="$d/receipts" && \
+    "$LZ" libzync-hints "$d/b.lzb" > "$d/hints.log" 2>&1 && export HAZYNC_LZ_HINTS="$d/b.lzb" && \
+    n=$(sed -n 's/^libzync-hints: block [0-9]* \([0-9]*\) chunks.*/\1/p' "$d/hints.log" | tail -1) && \
+    for i in $(seq 0 $(( ${n:-1} - 1 ))); do HAZYNC_OUT="$d/receipts/chunk_$i.hzk" "$LZ" prove-chunk "$i" >> "$d/chunks.log" 2>&1 || exit 7; done && \
+    HAZYNC_AGG_OUT="$d/block.receipt" "$LZ" agg-chunks > "$d/agg.log" 2>&1 ); rc=$?
+  w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
+  ls "$d/block.receipt" >/dev/null 2>&1 || rc=${rc/#0/9}
+  echo -e "$h\tlibzync-modelled\t$w\t$rc\t$(tail -c 300 "$d/agg.log" | tr '\n' ' ' | tail -c 160)" >> "$OUT/results.tsv"; say "libzync MODELLED $h: ${w} s exit $rc"
 done
 say "PAPER_RUN_DONE"; cat "$OUT/results.tsv" | tee -a "$OUT/run.log"
