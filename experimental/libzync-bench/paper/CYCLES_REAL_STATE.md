@@ -60,3 +60,30 @@ Reading: libzync needs 5-20x fewer proven cycles per block (9.5x over the 8); ca
 lower than the cycle ratio because libzync's fixed per-block work (CPU hint collection, the trie and aggregate proofs,
 process start) weighs more on small blocks: 230,000 (151 M CORE cycles) is 2.7x, 200,000 (2,028 M) is 15.1x. These
 are 2012-2014 blocks; the modern blocks (970k+) are batch 2, when prep reaches them.
+
+## GPU run 2 (2026-11-07): the tip-hour blocks 969,118..969,122, libzync on ONE card, MODELLED state
+
+The five blocks the original CORE proved live in tip hour 4 (2026-09-29, 38x RTX PRO 6000, po2 22). libzync c14
+(bbf82800) on ONE RTX PRO 6000 Blackwell Server Edition (host Xeon 6952P), each block from its real JSON with the coin
+log and trie MODELLED around it (lz::cl_synth_around, as the 962,000 benchmark): the block and its cycles are real,
+the state is not history. To be re-done on real state when prep reaches these heights (the user's call, 11-07). One
+chunk per block; wall = CPU hints + chunk proof + aggregate (with the trie-update proof). Execute-checked on the
+coordinator box first, no rejects. CORE was not re-proved: its proven cycles are MEASURED (the canonical guest,
+segments at po2 20, dev mode on the coordinator box) and its one-card time ESTIMATED from them at run 1's measured
+CORE rate on the same card type (6,176 s / 7,013 Mcycles = 0.881 s per Mcycle). The tip-hour column is CORE's
+measured WALL on 38 cards (not card time). Raw: `run2/`. Run cost ~$5.
+
+| block | libzync s, 1 card (MEASURED) | libzync user Mcycles | CORE proven Mcycles (MEASURED) | CORE s, 1 card (ESTIMATED) | ratio | CORE tip hour, 38 cards (MEASURED wall) |
+|---|---|---|---|---|---|---|
+| 969,118 | 1,001 | 620 | 15,022 | 13,229 | 13.2x | 368 s |
+| 969,119 | 454 | 277 | 3,216 | 2,832 | 6.2x | 121 s |
+| 969,120 | 972 | 606 | 8,705 | 7,666 | 7.9x | 254 s |
+| 969,121 | 1,035 | 649 | 13,344 | 11,752 | 11.4x | 383 s |
+| 969,122 | 732 | 463 | 19,403 | 17,087 | 23.4x | 558 s |
+| **all 5** | **4,194** | | | **52,566** | **12.5x** | |
+
+Reading: on full 2026 blocks one card running libzync takes 454-1,035 s; CORE needs 3.2-19.4 billion proven cycles,
+~2,800-17,100 s on one card (estimated) — 6-23x, 12.5x over the five. Of libzync's ~1,000 s on the big blocks the
+aggregate step (ECMH collect + the trie-update proof + the aggregate proof) is ~350 s: with a MODELLED trie whose
+update costs ~108 M cycles (as much as the aggregate itself); on real state at 200,000 the trie was 21% above the
+model. The single big chunk (235 segments) is proved serially here; split into chunks across cards it parallelises.
