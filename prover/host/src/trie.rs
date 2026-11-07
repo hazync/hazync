@@ -78,8 +78,10 @@ pub(crate) fn trie_witness(h: u32, marks: &Marks, ins: &Inserts, prev: &ChainSta
 pub(crate) fn trie_prove_wit(h: u32, wit: &[u32], marks: &Marks, ins: &Inserts, prev: &ChainState, opts: &risc0_zkvm::ProverOpts) -> risc0_zkvm::Receipt {
     let mut b = ExecutorEnv::builder();
     trie_env(&mut b, wit, marks, ins);
-    let r = risc0_zkvm::default_prover().prove_with_opts(b.build().unwrap(), methods::METHOD_ELF, opts)
-        .unwrap_or_else(|e| panic!("block {h}: trie update proof (mode 17) failed: {e}")).receipt;
+    let info = risc0_zkvm::default_prover().prove_with_opts(b.build().unwrap(), methods::METHOD_ELF, opts)
+        .unwrap_or_else(|e| panic!("block {h}: trie update proof (mode 17) failed: {e}"));
+    crate::lz::lz_stats("trie", h, &info.stats);
+    let r = info.receipt;
     r.verify(methods::METHOD_ID).expect("trie receipt verifies");
     let j = trie_journal_words(&r.journal.bytes);
     assert!(j[0] == libzync::ttree::KIND_TRIE && j[1..9] == libzync::coinlog::w_of(&prev.trie_root)[..],

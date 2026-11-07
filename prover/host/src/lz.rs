@@ -880,6 +880,12 @@ pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
 /// HAZYNC_RESUME=1: continue after the highest block_<k>.rcpt in <out dir>. The receipt is verified against this
 /// image, the BIP30 tree is replayed to k and must equal the receipt's smt_root, and block k+1 verifies that receipt
 /// in the guest, so a resumed chain is the same statement as an unbroken one. Needs block files 1..k.
+/// One proof's session statistics, one line each (the paper's cycle counts; also printed in dev mode, where the session
+/// is really executed): segments, total (proven, padded) cycles, user cycles.
+pub(crate) fn lz_stats(what: &str, h: u32, s: &risc0_zkvm::SessionStats) {
+    println!("LZ_STATS {what} h={h} segments={} total_cycles={} user_cycles={}", s.segments, s.total_cycles, s.user_cycles);
+}
+
 pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str) {
     lock_run_dirs(out);
     use risc0_zkvm::Receipt;
@@ -1102,7 +1108,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             b.write(&w.height).unwrap();
             b.write(&chunk_block_hash(&w.header)).unwrap();
             write_chunk_inputs(&mut b, &w, clo, chi);
-            let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts).expect("prove chunk").receipt;
+            let info = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts).expect("prove chunk");
+            lz_stats("chunk", h, &info.stats);
+            let r = info.receipt;
             r.verify(METHOD_ID).expect("chunk receipt verifies");
             chunks.push(r);
         }
@@ -1155,8 +1163,10 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         let mut b = ExecutorEnv::builder();
         b.segment_limit_po2(seg_po2()); // env_for sets it too; restated here for check_seg_guards.sh's 25-line window
         env_for(&mut b);
-        let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts)
-            .unwrap_or_else(|e| panic!("block {h}: aggregate proof failed: {e}")).receipt;
+        let info = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts)
+            .unwrap_or_else(|e| panic!("block {h}: aggregate proof failed: {e}"));
+        lz_stats("aggregate", h, &info.stats);
+        let r = info.receipt;
         r.verify(METHOD_ID).expect("aggregate receipt verifies");
         let st: ChainState = r.journal.decode().expect("ChainState");
         assert_eq!(st.height, h);
