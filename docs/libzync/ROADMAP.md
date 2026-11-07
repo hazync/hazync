@@ -165,7 +165,14 @@ receipt): fine at the tip, a serial bottleneck for a whole-chain backfill.
    goes, for the leaf provers. ⏳ build that with the coordinator's work queue (e). (11-06) The COIN LOG too: a leaf
    loads `state_<h-1>.coinlog`, the whole log (mainnet: billions of leaves), so prep must write each block's leaf
    inputs (coin-log paths for its spends, the trie witness, the state) as one small bundle per block; the BIP30 tree is
-   replayed from the block files (fine). Host only, no image change.
+   replayed from the block files (fine). Host only, no image change. **Design (11-07):** `leaf_<h>.bin`, written by
+   libzync-prep (HAZYNC_PREP_LEAF_BUNDLES=<dir>) from its stores AT S(h-1), before it applies block h: S(h-1); the
+   block's BIP30 witness (`BlockWitness.smt` + `in_smt_root`, what lz_smt_rebind computes; the BIP30 tree is NOT
+   replayed by a leaf prover after all: at mainnet scale that means every block file below h); the coin-log witness
+   (positions + siblings, as cl_prepare); the trie witness (TrieStore::witness). A leaf prover
+   (`libzync-prove-range h h` with HAZYNC_LEAF_BUNDLE=<file>) then needs only the bundle and block h's JSON, no
+   stores. Test: every block 1..200 proved (dev mode) as a leaf from its bundle; the guest checks every witness, and
+   the joined root must equal the linear block 200.
 
 **Mainnet prep plan (11-07; the long pole for any real-chain proof).** What it produces: the exact state before every
 block (coin log, counting trie, BIP30 tree, block forest), then per-block leaf bundles (item 8). Sizes are ESTIMATES
