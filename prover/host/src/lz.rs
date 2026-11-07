@@ -1599,6 +1599,19 @@ pub(crate) fn cl_parse(log: &str) -> (Vec<ClSpend>, Vec<[u8; 32]>) {
 pub(crate) fn hx_bytes(h: &str) -> Vec<u8> { (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect() }
 
 /// The block's witness words: each spend's position in block order, and the siblings for the sorted spends.
+/// Read ahead what a block's spends will read in a DISK coin log (mainnet prep, 11-07): their index slots, then, at the
+/// positions found, the leaf pages and every stored level's nodes; each step's reads in parallel. In memory: nothing.
+pub(crate) fn cl_prefetch(spends: &[ClSpend]) {
+    let g = CL.lock().unwrap();
+    let Some(h) = g.as_ref() else { return };
+    if let (libzync::host::AnyIndex::Disk(ix), libzync::host::AnyNodes::Disk(nodes)) = (&h.pos, &h.store.nodes) {
+        let leaves: Vec<[u8; 32]> = spends.iter().map(|s| s.0).collect();
+        ix.prefetch(&leaves);
+        let pos: Vec<u64> = leaves.iter().filter_map(|l| h.pos.get(l)).collect();
+        nodes.prefetch(&pos);
+    }
+}
+
 pub(crate) fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {
     let g = CL.lock().unwrap();
     let h = g.as_ref().expect("coin log not initialised");

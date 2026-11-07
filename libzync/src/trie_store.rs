@@ -102,6 +102,8 @@ pub trait Arena {
     /// Make the trie with this root durable (a disk arena: records synced, then the meta written atomically, and only
     /// then are the slots freed since the last flush reusable). In memory: nothing to do.
     fn durable(&mut self, _root: R, _counts: bool, _height: u64, _hash: &[u8; 32]) -> Result<(), alloc::string::String> { Ok(()) }
+    /// Ask for these nodes' pages to be read ahead (asynchronously); in memory: nothing to do.
+    fn prefetch(&self, _rs: &[R]) {}
 }
 
 #[derive(Default)]
@@ -215,6 +217,17 @@ impl Arena for DiskArena {
     }
     fn free(&mut self, r: R) { self.pending.push(r); }
     fn live(&self) -> u64 { self.len - (self.free.len() + self.pending.len()) as u64 }
+    fn prefetch(&self, rs: &[R]) {
+        // one madvise(WILLNEED) per distinct page: the kernel reads them all ahead at once, so a level of the walk costs
+        // about one read latency, not one per node (the volume serves ~75 k random reads/s in parallel, ~5 k serially)
+        let mut pages: Vec<u64> = rs.iter().filter(|&&r| r != EMPTY && (r as u64) * RECORD as u64 <= self.cap)
+            .map(|&r| ((r - 1) * RECORD as u64) & !4095).collect();
+        pages.sort_unstable();
+        pages.dedup();
+        for p in pages {
+            let _ = self.map.advise_range(memmap2::Advice::WillNeed, p as usize, 4096);
+        }
+    }
     fn durable(&mut self, root: R, counts: bool, height: u64, hash: &[u8; 32]) -> Result<(), alloc::string::String> {
         use std::io::Write as _;
         let e = |x: std::io::Error| alloc::format!("trie arena {}: {x}", self.dir.display());
@@ -654,6 +667,41 @@ impl TrieStore {
     // ---- the API
 
     /// The guest's witness for this update list (`trie_model::encode` format), against the current root.
+    /// Read ahead every node an update of these keys will read (mainnet prep, 11-07): the keys' paths AND each inner
+    /// node's other child (its hash is read when the path is rebuilt), level by level, each level's pages requested
+    /// together. Read-only: changes nothing (the update itself is `apply`).
+    pub fn prefetch(&self, marks: &Marks, inserts: &Inserts) {
+        let mut ks: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
+        ks.sort_unstable();
+        if ks.is_empty() || self.root == EMPTY { return; }
+        self.a.prefetch(&[self.root]);
+        // nodes on a key's path (already requested): (node, in a coin trie, depth, its keys)
+        let mut cur: Vec<(R, bool, u32, &[(W, W)])> = alloc::vec![(self.root, false, 0, &ks[..])];
+        while !cur.is_empty() {
+            let mut kids: Vec<R> = Vec::new();
+            let mut next: Vec<(R, bool, u32, &[(W, W)])> = Vec::new();
+            for &(n, sub, d, k) in &cur {
+                match self.get(n) {
+                    Node::TopInner { l, r, .. } | Node::SubInner { l, r, .. } => {
+                        let m = k.partition_point(|x| !bit(if sub { &x.1 } else { &x.0 }, d));
+                        kids.push(l);
+                        kids.push(r); // both: a keyless child is read for its hash, not walked
+                        if m > 0 && l != EMPTY { next.push((l, sub, d + 1, &k[..m])); }
+                        if m < k.len() && r != EMPTY { next.push((r, sub, d + 1, &k[m..])); }
+                    }
+                    Node::Addr { s, sub: c, .. } => {
+                        let a = k.partition_point(|x| x.0 < s);
+                        let b = k.partition_point(|x| x.0 <= s);
+                        if b > a && c != EMPTY { kids.push(c); next.push((c, true, 0, &k[a..b])); }
+                    }
+                    Node::Coin { .. } => {}
+                }
+            }
+            self.a.prefetch(&kids);
+            cur = next;
+        }
+    }
+
     pub fn witness(&self, marks: &Marks, inserts: &Inserts) -> Vec<u32> {
         let mut ks: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
         ks.sort_unstable();

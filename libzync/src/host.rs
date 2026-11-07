@@ -417,6 +417,39 @@ impl crate::coinlog_forest::Nodes for DiskNodes {
     }
 }
 
+/// Read one 4 KiB page at each offset of `f`, on up to 32 threads (a read-ahead: the bytes are dropped; the page cache
+/// keeps them for the reads that follow). Offsets past the end are skipped.
+pub fn parallel_touch(f: &std::fs::File, mut offs: std::vec::Vec<u64>) {
+    offs.sort_unstable();
+    offs.dedup();
+    if offs.len() < 4 { return; } // a few reads: not worth the threads
+    let n = offs.len().min(32);
+    let per = offs.len().div_ceil(n);
+    std::thread::scope(|sc| {
+        for part in offs.chunks(per) {
+            sc.spawn(move || {
+                let mut b = [0u8; 4096];
+                for &o in part {
+                    let _ = read_at(f, &mut b, o); // a short read at the file's end is fine: the page is in
+                }
+            });
+        }
+    });
+}
+
+impl DiskNodes {
+    /// Read ahead the pages an update at these leaf positions reads (mainnet prep, 11-07): the leaf's page in L0 (it
+    /// holds the 8 leaves a level-3 node is recomputed from) and, at every stored level, the node and its sibling.
+    pub fn prefetch(&self, positions: &[u64]) {
+        for l in 0..self.files.len() {
+            let Some(f) = &self.files[l] else { continue };
+            let offs: std::vec::Vec<u64> = positions.iter().map(|p| p >> l).filter(|&i| i < self.counts[l])
+                .map(|i| (32 * (i & !1)) & !4095).collect();
+            parallel_touch(f, offs);
+        }
+    }
+}
+
 /// Either backend, chosen at run time (host: `HAZYNC_COINLOG_DIR` set = on disk).
 pub enum AnyNodes {
     Mem(crate::coinlog_forest::MemNodes),
@@ -621,6 +654,12 @@ impl DiskIndex {
     }
     pub fn get(&self, leaf: &[u8; 32]) -> Option<u64> {
         self.find(leaf).map(|i| self.slot(i).1 - 1)
+    }
+    /// Read ahead the pages these leaves' lookups start on, in parallel (mainnet prep, 11-07): the index is far larger
+    /// than RAM's share of it, and its lookups are random; read one at a time each costs a full storage round trip.
+    pub fn prefetch(&self, leaves: &[[u8; 32]]) {
+        let offs: std::vec::Vec<u64> = leaves.iter().map(|l| (IX_HDR + self.start(l) * IX_SLOT) & !4095).collect();
+        parallel_touch(&self.f, offs);
     }
     pub fn sync(&self) -> std::io::Result<()> {
         self.f.sync_data()

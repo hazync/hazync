@@ -204,6 +204,12 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
 
     // The leaf bundle's coin-log and trie witnesses: the stores at S(h-1), before this block changes them.
     let wits = leaf.then(|| (crate::lz::cl_prepare(&ext), crate::trie::trie_witness(height, &marks, &ins, prev)));
+    // Disk stores at mainnet size are far larger than RAM: read ahead what the updates below will read, in parallel
+    // (the storage serves ~15x more random reads in parallel than one at a time; HAZYNC_PREP_PREFETCH=0 turns it off)
+    if std::env::var("HAZYNC_PREP_PREFETCH").as_deref() != Ok("0") {
+        crate::lz::cl_prefetch(&ext);
+        if let Some(ts) = crate::trie::TS.lock().unwrap().as_ref() { ts.prefetch(&marks, &ins); }
+    }
     // The coin log and the trie (the host's stores), the BIP30 tree.
     let (utxo_roots, utxo_leaves) = crate::lz::cl_apply(&ext, &appends, height);
     let trie_root = {
