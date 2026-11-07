@@ -37,8 +37,13 @@ the canonical guest (ESTIMATED for the frozen image), and blocks can be proved i
     original proposal is bitcoin/bitcoin issue #15605. Read from the upstream repo, not a mirror.
   - Prior Hazync announcement: "Running Core's real consensus code inside a zkVM", Delving Bitcoin, 2026-08-15 (the
     original CORE guest; blocks 1..1,789 in one receipt). The paper must say what libzync adds since.
-- Still to look up: risc0's own papers (the STARK and recursion soundness we rely on), and other zk Bitcoin light
-  clients / bridges (BitVM-era header-chain proofs).
+  - risc0: the proof system and recursion are documented at dev.risczero.com (proof-system, api/recursion); the
+    "ZKP Whitepaper" it cites is still to locate for a citable reference. The security model page states ~98 bits of
+    conjectured security (random-oracle model plus a conjecture), no published zero-knowledge proof for the Groth16
+    layer, and Hexens audits (2023-24). L2Beat's zk-catalog lists a critical malicious-host vulnerability disclosed
+    2025-10-02: check whether risc0-zkvm 3.0.5 (pinned here, ROADMAP I3) is affected before citing the trust base.
+  - zk Bitcoin light clients: header-chain proofs, e.g. Citrea's Clementine bridge (BitVM, 2025, the project's own
+    claims); E. Ozmiş, ePrint 2025/1271 (STARK proof of a header chain). Compare with our header-chain zyncAPP (K1).
 
 ## 3. What a proof states (the statement)
 - `ChainState`, field by field; the genesis anchor; the verifier's 13 steps; DEMO vs OK; what is NOT claimed
