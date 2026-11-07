@@ -254,9 +254,17 @@ impl BlockBundle {
 /// ⚠ The position index (leaf -> position, host `ClHost::pos`) is still in memory: C1b.
 pub struct DiskNodes {
     dir: std::path::PathBuf,
-    files: std::vec::Vec<std::fs::File>,
+    /// one per level; None for a level that is not stored (1..=skip)
+    files: std::vec::Vec<Option<std::fs::File>>,
     counts: std::vec::Vec<u64>,
+    /// levels 1..=skip are NOT stored: a node there is recomputed from its 2^l leaves when read (11-07). They are 7/8
+    /// of the upper nodes at skip 3 (mainnet: ~65 GB of ~75 GB), for at most 8 leaf reads and 7 hashes per node read.
+    /// Fixed per store (the `SKIP` file); a store without one (written before) stores every level.
+    skip: usize,
 }
+
+/// The skip level of a NEW disk store (one with no L0.bin yet).
+pub const DISK_SKIP_DEFAULT: usize = 3;
 
 #[cfg(unix)]
 fn read_at(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
@@ -295,30 +303,72 @@ impl DiskNodes {
     /// Opens (or creates) the store in `dir`. Each level's count is its file length / 32; a torn last node (a crash
     /// mid-write) is cut off, and the caller checks the roots against a receipt before trusting the store.
     pub fn open(dir: &std::path::Path) -> std::io::Result<DiskNodes> {
+        Self::open_with(dir, DISK_SKIP_DEFAULT)
+    }
+    /// `open`, with the skip level a NEW store gets (an existing store keeps its own: its SKIP file, or 0 without one).
+    pub fn open_with(dir: &std::path::Path, skip_if_new: usize) -> std::io::Result<DiskNodes> {
         std::fs::create_dir_all(dir)?;
-        let mut d = DiskNodes { dir: dir.to_path_buf(), files: std::vec::Vec::new(), counts: std::vec::Vec::new() };
+        let sp = dir.join("SKIP");
+        let skip = if !dir.join("L0.bin").exists() {
+            let _ = std::fs::remove_file(&sp);
+            std::fs::write(&sp, std::format!("{skip_if_new}\n"))?;
+            std::fs::File::open(dir)?.sync_all()?;
+            skip_if_new
+        } else if sp.exists() {
+            std::fs::read_to_string(&sp)?.trim().parse().map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "coin log SKIP: not a number"))?
+        } else { 0 };
+        let mut d = DiskNodes { dir: dir.to_path_buf(), files: std::vec::Vec::new(), counts: std::vec::Vec::new(), skip };
         loop {
-            let p = dir.join(std::format!("L{}.bin", d.files.len()));
+            let l = d.files.len();
+            if l >= 1 && l <= skip {
+                // not stored: present while the leaves fill a node at this level
+                let n = d.counts[0] >> l;
+                if n == 0 { break; }
+                if dir.join(std::format!("L{l}.bin")).exists() {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, std::format!("coin log: L{l}.bin in a store with SKIP {skip}")));
+                }
+                d.files.push(None);
+                d.counts.push(n);
+                continue;
+            }
+            let p = dir.join(std::format!("L{l}.bin"));
             if !p.exists() {
                 break;
             }
             let f = std::fs::OpenOptions::new().read(true).write(true).open(&p)?;
             let n = f.metadata()?.len() / 32;
             f.set_len(n * 32)?;
-            d.files.push(f);
+            d.files.push(Some(f));
             d.counts.push(n);
         }
         Ok(d)
     }
-    fn level_file(&mut self, l: usize) -> &std::fs::File {
+    fn stored(&self, l: usize) -> bool { l == 0 || l > self.skip }
+    /// A level-l node not stored: the root of its 2^l leaves, read in one go.
+    fn computed(&self, l: usize, i: u64) -> [u8; 32] {
+        let w = 1usize << l;
+        let mut b = std::vec![0u8; 32 * w];
+        read_at(self.files[0].as_ref().unwrap(), &mut b, 32 * (i << l)).unwrap_or_else(|e| panic!("coin log store L0: {e}"));
+        let mut v: std::vec::Vec<[u8; 32]> = b.chunks_exact(32).map(|c| c.try_into().unwrap()).collect();
+        for k in 1..=l {
+            v = v.chunks_exact(2).map(|p| crate::coinlog::parent(k as u32, &p[0], &p[1])).collect();
+        }
+        v[0]
+    }
+    fn level_file(&mut self, l: usize) -> Option<&std::fs::File> {
         while self.files.len() <= l {
-            let p = self.dir.join(std::format!("L{}.bin", self.files.len()));
-            let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&p)
-                .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-            self.files.push(f);
+            let k = self.files.len();
+            if !self.stored(k) {
+                self.files.push(None);
+            } else {
+                let p = self.dir.join(std::format!("L{k}.bin"));
+                let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&p)
+                    .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+                self.files.push(Some(f));
+            }
             self.counts.push(0);
         }
-        &self.files[l]
+        self.files[l].as_ref()
     }
     /// Cuts the store back to `n` leaves: every level keeps n >> l nodes (an append never changes an existing node, so
     /// this undoes appends exactly; flipped leaves are restored by the caller with `set`).
@@ -326,7 +376,7 @@ impl DiskNodes {
         for l in 0..self.files.len() {
             let c = n >> l;
             if c < self.counts[l] {
-                self.files[l].set_len(c * 32)?;
+                if let Some(f) = &self.files[l] { f.set_len(c * 32)?; }
                 self.counts[l] = c;
             }
         }
@@ -334,7 +384,7 @@ impl DiskNodes {
     }
     /// fsync every level (after a block, before its receipt is relied on).
     pub fn sync(&self) -> std::io::Result<()> {
-        for f in &self.files {
+        for f in self.files.iter().flatten() {
             f.sync_data()?;
         }
         Ok(())
@@ -350,18 +400,19 @@ impl crate::coinlog_forest::Nodes for DiskNodes {
     }
     fn get(&self, l: usize, i: u64) -> [u8; 32] {
         assert!(i < self.counts[l], "coin log store: node {l}/{i} past the end");
+        let Some(f) = &self.files[l] else { return self.computed(l, i) };
         let mut b = [0u8; 32];
-        read_at(&self.files[l], &mut b, 32 * i).unwrap_or_else(|e| panic!("coin log store L{l}: {e}"));
+        read_at(f, &mut b, 32 * i).unwrap_or_else(|e| panic!("coin log store L{l}: {e}"));
         b
     }
     fn put(&mut self, l: usize, i: u64, h: [u8; 32]) {
         assert!(i < self.counts[l], "coin log store: node {l}/{i} past the end");
-        write_at(&self.files[l], &h, 32 * i).unwrap_or_else(|e| panic!("coin log store L{l}: {e}"));
+        // a level not stored follows its leaves by itself
+        if let Some(f) = &self.files[l] { write_at(f, &h, 32 * i).unwrap_or_else(|e| panic!("coin log store L{l}: {e}")); }
     }
     fn append(&mut self, l: usize, h: [u8; 32]) {
         let n = self.count(l);
-        let f = self.level_file(l);
-        write_at(f, &h, 32 * n).unwrap_or_else(|e| panic!("coin log store L{l}: {e}"));
+        if let Some(f) = self.level_file(l) { write_at(f, &h, 32 * n).unwrap_or_else(|e| panic!("coin log store L{l}: {e}")); }
         self.counts[l] = n + 1;
     }
 }
@@ -419,6 +470,56 @@ mod disk_tests {
         let d2 = NodeStore::with_nodes(DiskNodes::open(&dir).unwrap());
         assert_eq!(d2.len(), 1000);
         assert_eq!(m.roots(), d2.roots());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every skip level gives the memory store's roots, paths and witnesses, before and after a reopen, with flips
+    /// and a rollback; a store written without a SKIP file (every level stored) reopens as one (11-07).
+    #[test]
+    fn disk_store_skip_levels_equal_memory() {
+        let h = |i: u64| -> [u8; 32] { use sha2::Digest; sha2::Sha256::digest(i.to_le_bytes()).into() };
+        for skip in 0..=5usize {
+            let dir = std::env::temp_dir().join(std::format!("libzync-skip{skip}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let mut m = Store::default();
+            let mut d = NodeStore::with_nodes(DiskNodes::open_with(&dir, skip).unwrap());
+            for i in 0..1_337u64 {
+                m.push(h(i));
+                d.push(h(i));
+                if i % 5 == 2 { m.set(i * 3 / 4, h(i + 9_000)); d.set(i * 3 / 4, h(i + 9_000)); }
+            }
+            let sp: std::vec::Vec<(u64, [u8; 32])> = [0u64, 1, 7, 8, 9, 300, 301, 1_023, 1_024, 1_300].iter().map(|&p| (p, m.leaf(p))).collect();
+            assert_eq!(m.roots(), d.roots(), "skip {skip}");
+            assert_eq!(m.witness(&sp), d.witness(&sp), "skip {skip}");
+            for p in [0u64, 5, 513, 1_336] { assert_eq!(m.path(p), d.path(p), "skip {skip} path {p}"); }
+            for l in 1..=skip { assert!(!dir.join(std::format!("L{l}.bin")).exists(), "skip {skip}: L{l}.bin written"); }
+            drop(d);
+            let mut d = NodeStore::with_nodes(DiskNodes::open_with(&dir, 0).unwrap()); // an existing store keeps its skip
+            assert_eq!(m.roots(), d.roots(), "skip {skip} reopened");
+            assert_eq!(m.witness(&sp), d.witness(&sp), "skip {skip} reopened");
+            // a rollback across a level boundary, then more appends
+            let before = (d.roots(), d.len());
+            let old = [(3u64, d.leaf(3)), (1_200, d.leaf(1_200))];
+            d.set(3, h(77)); d.set(1_200, h(78));
+            for i in 0..100u64 { d.push(h(20_000 + i)); }
+            d.nodes.truncate_to(before.1).unwrap();
+            for (p, l) in old { d.set(p, l); }
+            assert_eq!((d.roots(), d.len()), before, "skip {skip} rollback");
+            for i in 0..50u64 { m.push(h(30_000 + i)); d.push(h(30_000 + i)); }
+            assert_eq!(m.roots(), d.roots(), "skip {skip} after rollback");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // a store from before SKIP existed: every level on disk, no SKIP file -> opens as skip 0
+        let dir = std::env::temp_dir().join(std::format!("libzync-skipold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut d = NodeStore::with_nodes(DiskNodes::open_with(&dir, 0).unwrap());
+        for i in 0..100u64 { d.push(h(i)); }
+        let r = d.roots();
+        drop(d);
+        std::fs::remove_file(dir.join("SKIP")).unwrap();
+        let d = NodeStore::with_nodes(DiskNodes::open(&dir).unwrap());
+        assert_eq!(d.roots(), r);
+        assert!(dir.join("L1.bin").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -533,16 +634,19 @@ impl DiskIndex {
             self.grow();
         }
         let mut i = self.start(&leaf);
-        loop {
+        let fresh = loop {
             let v = self.slot(i).1;
             if v == 0 || v == u64::MAX {
-                break;
+                break v == 0;
             }
             i = (i + 1) & (self.cap - 1);
-        }
+        };
         self.put_slot(i, &leaf, pos + 1);
-        self.used += 1;
-        self.hdr().expect("index header");
+        // a reused tombstone is already counted in `used`
+        if fresh {
+            self.used += 1;
+            self.hdr().expect("index header");
+        }
     }
     pub fn remove(&mut self, leaf: &[u8; 32]) -> Option<u64> {
         let i = self.find(leaf)?;
@@ -559,7 +663,11 @@ impl DiskIndex {
                 live.push((k, v - 1));
             }
         }
-        let cap = (self.cap * 2).max((live.len() as u64 * 4).next_power_of_two());
+        // Sized by the LIVE entries, not the old capacity (11-07): spends leave tombstones, so a full table is mostly
+        // tombstones on a long run, and doubling it every time made the file track every coin EVER indexed (mainnet:
+        // ~2.4 B, 100-200 GB) instead of the live set (~180 M). Rebuilt at 4x live, it is between a quarter and half
+        // full afterwards, and the next rebuild is at least cap/4 inserts away (amortised O(1)).
+        let cap = (live.len() as u64 * 4).next_power_of_two().max(1 << 16);
         let tmp = self.path.with_extension("grow");
         // A temp file left by a crash mid-grow may have a half-written header that open() refuses (review 11-03).
         let _ = std::fs::remove_file(&tmp);
@@ -617,6 +725,31 @@ mod index_tests {
         drop(d);
         let d = DiskIndex::open(&p).unwrap();
         assert_eq!(d.get(&h(69_999)), Some(69_999));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// A long run where most coins are spent: the file follows the LIVE set, not every coin ever indexed (11-07).
+    #[test]
+    fn disk_index_size_follows_the_live_set() {
+        let p = std::env::temp_dir().join(std::format!("libzync-ix-live-{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let h = |i: u64| -> [u8; 32] { use sha2::Digest; sha2::Sha256::digest(i.to_le_bytes()).into() };
+        let mut d = DiskIndex::open(&p).unwrap();
+        let mut m = std::collections::HashMap::new();
+        // 400,000 coins created, each spent 1,000 later: never more than ~1,000 live
+        for i in 0..400_000u64 {
+            d.insert(h(i), i);
+            m.insert(h(i), i);
+            if i >= 1_000 { assert_eq!(d.remove(&h(i - 1_000)), m.remove(&h(i - 1_000))); }
+        }
+        for i in (398_000..400_000u64).step_by(7) { assert_eq!(d.get(&h(i)), m.get(&h(i)).copied(), "{i}"); }
+        assert_eq!(d.get(&h(5)), None);
+        let len = std::fs::metadata(&p).unwrap().len();
+        // the minimum table (65,536 slots, 2.6 MB); doubling per rebuild reached 2^20 slots (42 MB) here
+        assert!(len <= IX_HDR + (1 << 16) * IX_SLOT, "index file {len} bytes for ~1,000 live coins");
+        drop(d);
+        let d = DiskIndex::open(&p).unwrap();
+        assert_eq!(d.get(&h(399_999)), Some(399_999));
         let _ = std::fs::remove_file(&p);
     }
 }
