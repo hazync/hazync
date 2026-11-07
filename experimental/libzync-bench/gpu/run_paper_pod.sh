@@ -22,11 +22,21 @@ term () {
   log "terminating pod $ID"; gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$ID\\\"}) }\"}" >> "$OUT/driver.log"; echo >> "$OUT/driver.log"
   ID=""
 }
+# one attempt at copying the run's outputs off the pod (tar of whatever exists, then scp, then unpack here)
+harvest_once () {
+  ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && tar czf harvest.tgz $(ls -d paper range/keep range/*.log host pod.log setup.log 2>/dev/null); ls -la harvest.tgz' >> "$OUT/driver.log" 2>&1 \
+    && scp -q $K -P "$PORT" root@"$HOST":/workspace/harvest.tgz "$OUT/harvest.tgz" && (cd "$OUT" && tar xzf harvest.tgz)
+}
+# the 11-07 range run lost its proof: ONE failed attempt (an ssh timeout at the end) and the pod was terminated. Now:
+# retry with back-off for up to 10 minutes, and say clearly if it never worked (the caller still terminates: spend)
 harvest () {
   [ -n "$HOST" ] || return 0
   log "harvest"
-  ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && tar czf harvest.tgz paper range/keep range/run.log range/prove.log range/verify.log range/smi.log host pod.log setup.log 2>/dev/null; ls -la harvest.tgz' >> "$OUT/driver.log" 2>&1
-  scp -q $K -P "$PORT" root@"$HOST":/workspace/harvest.tgz "$OUT/harvest.tgz" && (cd "$OUT" && tar xzf harvest.tgz) && log "harvested to $OUT" || log "HARVEST FAILED"
+  for i in 1 2 3 4 5 6 7 8; do
+    harvest_once && { log "harvested to $OUT (attempt $i)"; return 0; }
+    log "harvest attempt $i failed; retrying in $((i * 15)) s"; sleep $((i * 15))
+  done
+  log "HARVEST FAILED after 8 attempts (~9 min)"
 }
 trap 'harvest; term' EXIT
 
@@ -128,6 +138,10 @@ while :; do
       fi
     done
   done
+  # copy the key outputs as soon as they exist, not only at the end (a pod can vanish before the final harvest)
+  if [ ! -f "$OUT/early.done" ] && grep -q "RANGE_RUN_DONE\|PAPER_RUN_DONE" "$OUT/pod.log.live"; then
+    harvest_once && touch "$OUT/early.done" && log "early copy of the outputs to $OUT"
+  fi
   grep -q POD_DONE "$OUT/pod.log.live" && { log "POD_DONE"; break; }
   [ "$(date +%s)" -ge "$DEADLINE" ] && { log "DEADLINE reached: harvesting what exists"; break; }
   sleep 30
