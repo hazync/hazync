@@ -88,7 +88,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
     // Step 7: `expect` ("h:hash"), the network's block at the proof's height from the integrator's OWN trusted source,
     // checked whenever it is given, with facts or without (round 9: without facts it was silently ignored).
     let expect_s: Option<String> = if expect.is_null() { None } else {
-        match CStr::from_ptr(expect).to_str() { Ok(e) => Some(e.to_string()), Err(_) => return fail("expect is not UTF-8") }
+        match CStr::from_ptr(expect).to_str() { Ok(e) => Some(e.trim().to_string()).filter(|e| !e.is_empty()), Err(_) => return fail("expect is not UTF-8") }
     };
     let tip_checked = match (expect_s.as_deref(), rep.state.as_ref()) {
         (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {

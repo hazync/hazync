@@ -2539,7 +2539,9 @@ come back by itself. Start one against this coordinator, or re-run.");
             if ok.iter().all(|x| *x) { break; }
             if t_wait.elapsed().as_secs_f64() > limit {
                 let missing: Vec<usize> = (0..agg_nchunks).filter(|i| !ok[*i]).collect();
-                panic!("AGG_EARLY: chunks {missing:?} not here after {limit} s (HAZYNC_AGG_EARLY_WAIT_S)");
+                let undecodable: Vec<String> = missing.iter().flat_map(|i| [format!("{dir}/chunk_{i}.hzk"), format!("{dir}/chunk_{i}.bin")])
+                    .filter(|f| std::path::Path::new(f).exists()).collect();
+                panic!("AGG_EARLY: chunks {missing:?} not here after {limit} s (HAZYNC_AGG_EARLY_WAIT_S); present but not a whole receipt: {undecodable:?}");
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
         }

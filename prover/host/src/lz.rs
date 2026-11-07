@@ -1251,7 +1251,7 @@ pub(crate) const CL_DISK_MAGIC2: &[u8; 8] = b"LZDISK02";
 /// the store. A load undoes, newest first, every record above the saved state's height (11-06: before, the record was
 /// one block, replaced each block and removed at the coin log's save, so a crash between the coin log's save and the
 /// trie's, or anywhere inside a libzync-prep range, left a store no saved state matched).
-pub(crate) const CL_PEND_MAGIC: &[u8; 8] = b"LZPEND02";
+pub(crate) const CL_PEND_MAGIC: &[u8; 8] = b"LZPEND03";
 
 /// The journal records in pending.bin: (height, body), oldest first. A version-1 file (one bare body) is (None, body).
 /// A version-2 record is MAGIC | height | body | SHA-256 of the three (11-06): a record whose checksum fails is TORN if
@@ -1259,6 +1259,9 @@ pub(crate) const CL_PEND_MAGIC: &[u8; 8] = b"LZPEND02";
 /// else (Err: the journal cannot be trusted, nothing is undone).
 fn cl_journal_records(u: &[u8]) -> Result<Vec<(Option<u64>, &[u8])>, String> {
     use sha2::{Digest, Sha256};
+    if u.starts_with(b"LZPEND02") {
+        return Err("an LZPEND02 journal (a pre-release format of 11-06 without checksums): rebuild the store".into());
+    }
     if !u.starts_with(CL_PEND_MAGIC) { return Ok(if u.len() >= 8 { vec![(None, u)] } else { vec![] }); }
     let rd = |b: &[u8], o: usize| b.get(o..o + 8).map(|x| u64::from_le_bytes(x.try_into().unwrap()));
     let mut out = Vec::new();
@@ -1449,10 +1452,26 @@ pub(crate) fn cl_load(path: &str) {
                     assert!(s0 == at, "{}: journal record for block {rh:?} starts at {s0} leaves, not {at}: it does not describe this store (nothing undone)", pend.display());
                     at = s1;
                 }
-                assert!(at == store.len(), "{}: the journal ends at {at} leaves, the store has {} (nothing undone)", pend.display(), store.len());
+                // The store may be anywhere from the state to the journal's end: the last block partly applied (a crash
+                // after its record was synced), or an undo partly done (a crash during an earlier recovery; round 10).
+                assert!((n..=at).contains(&store.len()),
+                        "{}: the journal spans {n}..={at} leaves, the store has {} (nothing undone)", pend.display(), store.len());
                 for (_, b) in todo.iter().rev() {
-                    cl_rollback(&mut store, &mut pos, b, cl_record_span(b).0);
+                    let s0 = cl_record_span(b).0;
+                    // a record starting above the store's length was undone already (its flips would be past the end)
+                    if s0 > store.len() { continue; }
+                    cl_rollback(&mut store, &mut pos, b, s0);
+                    // test hook: die part-way through an undo (after the newest block), its changes synced
+                    if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok("mid-undo") && todo.len() > 1 {
+                        if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { let _ = dn.sync(); }
+                        if let libzync::host::AnyIndex::Disk(ix) = &pos { let _ = ix.sync(); }
+                        std::process::exit(9);
+                    }
                 }
+                // the undo durable BEFORE the journal goes (round 10: a power loss could lose both)
+                if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { dn.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}")); }
+                if let libzync::host::AnyIndex::Disk(ix) = &pos { ix.sync().unwrap_or_else(|e| panic!("index sync: {e}")); }
+
                 eprintln!("  coin log store: undid {} unfinished block(s) recorded in pending.bin (back to {} leaves)", todo.len(), store.len());
             }
         }
@@ -1516,6 +1535,8 @@ pub(crate) fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainStat
     if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
         let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
         cl_journal_append(&d, st.height, h.store.len(), &sp, appends);
+        // test hook: die with the record synced and the store not yet changed
+        if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok(&format!("after-journal:{}", st.height)) { std::process::exit(9); }
     }
     let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
@@ -1711,10 +1732,20 @@ mod journal_tests {
         let n = z.len();
         for b in &mut z[n - 40..n - 32] { *b = 0; }
         assert_eq!(cl_journal_records(&z).unwrap().len(), 2);
-        // damage in a record that is NOT the last: the journal is refused, nothing is undone from it
+        // damage in a record that is NOT the last: the journal is refused, nothing is undone from it.
+        // (a) a count byte: the record's lengths no longer parse
         let mut m = u.clone();
         m[30] ^= 1;
         assert!(cl_journal_records(&m).is_err());
+        // (b) a byte of record 1's spent LEAF (magic 8 | height 8 | n 8 | k 8 | pos 8 | leaf 32 ...): the lengths still
+        // parse, only the checksum catches it
+        let mut c = u.clone();
+        c[50] ^= 1;
+        assert!(cl_journal_records(&c).is_err(), "a flipped leaf byte mid-file");
+        // a pre-release LZPEND02 journal is refused, not misread
+        let mut old = u.clone();
+        old[..8].copy_from_slice(b"LZPEND02");
+        assert!(cl_journal_records(&old).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 }
