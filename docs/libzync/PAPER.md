@@ -40,8 +40,11 @@ the canonical guest (ESTIMATED for the frozen image), and blocks can be proved i
   - risc0: the proof system and recursion are documented at dev.risczero.com (proof-system, api/recursion); the
     "ZKP Whitepaper" it cites is still to locate for a citable reference. The security model page states ~98 bits of
     conjectured security (random-oracle model plus a conjecture), no published zero-knowledge proof for the Groth16
-    layer, and Hexens audits (2023-24). L2Beat's zk-catalog lists a critical malicious-host vulnerability disclosed
-    2025-10-02: check whether risc0-zkvm 3.0.5 (pinned here, ROADMAP I3) is affected before citing the trust base.
+    layer, and Hexens audits (2023-24). The critical host-input advisory of 2025-10-01 (CVE-2025-61588,
+    GHSA-jqq4-c7wq-36h7: a crafted `sys_read` response could write guest memory) is fixed in risc0-zkvm 3.0.3,
+    risc0-zkvm-platform 2.1.0 and risc0-zkos-v1compat 2.1.0; the frozen guest compiles 3.0.5 / 2.2.3 / 2.2.3 (checked
+    in prover/methods/guest/Cargo.lock, 11-07): not affected. The earlier CVE-2025-52484 (rv32im 3-register
+    constraint) was fixed in 2.1.0.
   - zk Bitcoin light clients: header-chain proofs, e.g. Citrea's Clementine bridge (BitVM, 2025, the project's own
     claims); E. Ozmiş, ePrint 2025/1271 (STARK proof of a header chain). Compare with our header-chain zyncAPP (K1).
 
