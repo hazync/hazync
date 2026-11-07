@@ -151,6 +151,16 @@ impl Smt {
     pub fn len(&self) -> usize {
         self.leaves.len()
     }
+    /// Every (key, value) leaf, in key order: the whole state (the nodes and root follow from it).
+    pub fn leaves(&self) -> impl Iterator<Item = (&Key, &u32)> {
+        self.leaves.iter()
+    }
+    /// The tree with exactly these leaves (a snapshot's load; the root is recomputed, so a caller checks it).
+    pub fn from_leaves(leaves: impl IntoIterator<Item = (Key, u32)>) -> Self {
+        let mut s = Self::new();
+        for (k, v) in leaves { s.insert(k, v); }
+        s
+    }
     pub fn is_empty(&self) -> bool {
         self.leaves.is_empty()
     }

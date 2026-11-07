@@ -254,7 +254,14 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
 
     crate::lz::cl_init_at_start(false, anchor_path, &prev);
     crate::trie::trie_init_at_start(false, anchor_path, &prev);
-    let (mut smt, replay_max) = crate::lz::lz_smt_replay(dir, lo - 1);
+    // The BIP30 tree at lo-1: from the anchor's snapshot (state_<h>.smt, written at prep's save points) when it is
+    // there, so a restart needs no block files below lo (mainnet: the whole chain's JSON would not be kept); else
+    // replayed from the block files 1..lo-1. Either way it must give the anchor's smt_root.
+    let snap = smt_snapshot_path(anchor_path);
+    let (mut smt, replay_max) = match snap.as_deref().map(std::fs::read) {
+        Some(Ok(b)) => (smt_from_bytes(&b).unwrap_or_else(|e| panic!("{}: {e}", snap.as_deref().unwrap())), 0),
+        _ => crate::lz::lz_smt_replay(dir, lo - 1),
+    };
     if prev.max_time == 0 { prev.max_time = replay_max.max(crate::genesis_params().1); }
     assert_eq!(smt.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
     let mut ecmh = Ecmh::from_state(prev.live_set, &prev.live_hash);
@@ -276,6 +283,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         std::env::var("HAZYNC_PREP_SAVE_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1000).max(1)
     } else { 0 };
     let t0 = std::time::Instant::now();
+    let consume = std::env::var("HAZYNC_PREP_CONSUME").as_deref() == Ok("1");
+    let mut consumed_from = lo;
     for h in lo..=hi {
         let j = crate::read_block_json(dir, h);
         let mut st = prep_block(&prev, &j, &mut smt, &mut ecmh);
@@ -291,11 +300,19 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         if save { crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes()); }
         else { std::fs::write(format!("{out}/state_{h}.json"), json).unwrap(); }
         if save {
+            crate::lz::write_atomic(&format!("{out}/state_{h}.smt"), &smt_to_bytes(&smt));
             crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);
             crate::trie::trie_save(&format!("{out}/state_{h}.trie"));
             // both stores saved at h: the journal of the blocks since the last save can go (crash before: a resume
             // from the last saved state undoes them; the disk trie falls back to its last flush by itself)
             crate::lz::cl_journal_commit();
+            // HAZYNC_PREP_CONSUME=1: the block files this save point covers are no longer needed (a restart starts
+            // here, its BIP30 tree from state_<h>.smt), so a whole-chain prep fed by fetch_block_rpc.py range
+            // --window keeps only a window of blocks on disk
+            if consume {
+                for k in consumed_from..=h { let _ = std::fs::remove_file(format!("{dir}/block_{k}.json")); }
+                consumed_from = h + 1;
+            }
         }
         if let Some(c) = &check {
             let want: ChainState = serde_json::from_str(&std::fs::read_to_string(format!("{c}/state_{h}.json"))
@@ -312,4 +329,25 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     }
     println!("LZ_PREP_DONE {lo}..={hi} in {:.1} s{}", t0.elapsed().as_secs_f64(),
              if check.is_some() { "; every state's journal byte-identical to the proved run" } else { "" });
+}
+
+/// The BIP30 tree's snapshot beside a state file (state_<h>.json -> state_<h>.smt); None for genesis.
+fn smt_snapshot_path(anchor_path: &str) -> Option<String> {
+    anchor_path.strip_suffix(".json").map(|s| format!("{s}.smt"))
+}
+
+/// "LZSMT001", the leaf count (u64 LE), then each leaf: key (32 bytes) and value (u32 LE), in key order.
+fn smt_to_bytes(smt: &Smt) -> Vec<u8> {
+    let mut b = b"LZSMT001".to_vec();
+    b.extend_from_slice(&(smt.len() as u64).to_le_bytes());
+    for (k, v) in smt.leaves() { b.extend_from_slice(k); b.extend_from_slice(&v.to_le_bytes()); }
+    b
+}
+
+fn smt_from_bytes(b: &[u8]) -> Result<Smt, String> {
+    if b.len() < 16 || &b[..8] != b"LZSMT001" { return Err("not a BIP30 tree snapshot".into()); }
+    let n = u64::from_le_bytes(b[8..16].try_into().unwrap()) as usize;
+    if b.len() != 16 + 36 * n { return Err(format!("{} bytes for {n} leaves", b.len())); }
+    let leaves = b[16..].chunks_exact(36).map(|c| (c[..32].try_into().unwrap(), u32::from_le_bytes(c[32..].try_into().unwrap())));
+    Ok(Smt::from_leaves(leaves))
 }
