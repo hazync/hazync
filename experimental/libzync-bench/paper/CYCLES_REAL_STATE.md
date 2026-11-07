@@ -34,3 +34,29 @@ the trie and 2.4% of the block.
 recent blocks (after the prep run passes them); then the same blocks on one GPU card type for card time and dollars.
 The ratio here is proven cycles, CORE's padded segments against libzync's; card time is what the paper leads with
 after cycles.
+
+## GPU run 1 (2026-11-07): same card, real state, 8 blocks
+
+ONE RunPod RTX PRO 6000 Blackwell Server Edition (97 GB; host AMD EPYC 9355, load ~10 from other tenants), the same
+pod for both: CORE = the v0.22.1 CUDA release binary (37987b85, checksum-verified), `prove-range-bridge h` from
+`bundle_<h>.json`; libzync = c14 (bbf82800, the pinned guest), `libzync-prove-range h h` as a LEAF from prep's
+real-state `leaf_<h>.bin`, one chunk, signature hints collected on the CPU first. Wall time per block includes every
+step each needs (libzync: hint collection on the CPU, chunk + trie + aggregate proofs; CORE: segments + assembly).
+Both release builds use 2^21-cycle segments. Cost of the run: $5.71 (setup, build, 16 proofs). Raw: `run1/`.
+
+| block | CORE s | libzync s | card-time ratio | CORE Mcycles (proven) | libzync Mcycles (proven) | cycle ratio |
+|---|---|---|---|---|---|---|
+| 200,000 | 1,805 | 120 | 15.1x | 2,028 | 102 | 19.9x |
+| 210,000 | 769 | 102 | 7.5x | 875 | 84 | 10.4x |
+| 220,000 | 690 | 125 | 5.5x | 780 | 109 | 7.2x |
+| 230,000 | 137 | 50 | 2.7x | 151 | 29 | 5.3x |
+| 270,000 | 774 | 129 | 6.0x | 891 | 113 | 7.9x |
+| 280,000 | 393 | 84 | 4.7x | 447 | 66 | 6.8x |
+| 290,000 | 1,245 | 185 | 6.7x | 1,430 | 174 | 8.2x |
+| 300,000 | 362 | 82 | 4.4x | 411 | 63 | 6.5x |
+| **all 8** | **6,176** | **877** | **7.0x** | 7,013 | 738 | 9.5x |
+
+Reading: libzync needs 5-20x fewer proven cycles per block (9.5x over the 8); card time is 2.7-15x (7.0x over the 8),
+lower than the cycle ratio because libzync's fixed per-block work (CPU hint collection, the trie and aggregate proofs,
+process start) weighs more on small blocks: 230,000 (151 M CORE cycles) is 2.7x, 200,000 (2,028 M) is 15.1x. These
+are 2012-2014 blocks; the modern blocks (970k+) are batch 2, when prep reaches them.

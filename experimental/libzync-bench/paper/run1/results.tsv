@@ -1,0 +1,17 @@
+height	what	wall_s	exit	detail
+200000	CORE	1805.4	0	executed, 967 segments at po2 21
+210000	CORE	769.1	0	executed, 417 segments at po2 21
+220000	CORE	690.0	0	executed, 372 segments at po2 21
+230000	CORE	136.6	0	executed, 72 segments at po2 21
+270000	CORE	774.4	0	executed, 425 segments at po2 21
+280000	CORE	393.4	0	executed, 213 segments at po2 21
+290000	CORE	1245.3	0	executed, 682 segments at po2 21
+300000	CORE	361.6	0	executed, 196 segments at po2 21
+200000	libzync	119.7	0	chunk=segments=34,total_cycles=70254592 trie=segments=8,total_cycles=14942208 aggregate=segments=8,total_cycles=16777216 
+210000	libzync	102.0	0	chunk=segments=26,total_cycles=54525952 trie=segments=7,total_cycles=12845056 aggregate=segments=8,total_cycles=16777216 
+220000	libzync	124.7	0	chunk=segments=30,total_cycles=62914560 trie=segments=11,total_cycles=23068672 aggregate=segments=11,total_cycles=23068672 
+230000	libzync	50.0	0	chunk=segments=8,total_cycles=14942208 trie=segments=3,total_cycles=6291456 aggregate=segments=4,total_cycles=7340032 
+270000	libzync	129.1	0	chunk=segments=34,total_cycles=69730304 trie=segments=10,total_cycles=20971520 aggregate=segments=11,total_cycles=22020096 
+280000	libzync	83.9	0	chunk=segments=18,total_cycles=37748736 trie=segments=6,total_cycles=12582912 aggregate=segments=8,total_cycles=15204352 
+290000	libzync	184.9	0	chunk=segments=47,total_cycles=96993280 trie=segments=21,total_cycles=44040192 aggregate=segments=16,total_cycles=32505856 
+300000	libzync	82.3	0	chunk=segments=18,total_cycles=37748736 trie=segments=6,total_cycles=12582912 aggregate=segments=6,total_cycles=12582912 
