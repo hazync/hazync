@@ -167,6 +167,21 @@ receipt): fine at the tip, a serial bottleneck for a whole-chain backfill.
    inputs (coin-log paths for its spends, the trie witness, the state) as one small bundle per block; the BIP30 tree is
    replayed from the block files (fine). Host only, no image change.
 
+**Mainnet prep plan (11-07; the long pole for any real-chain proof).** What it produces: the exact state before every
+block (coin log, counting trie, BIP30 tree, block forest), then per-block leaf bundles (item 8). Sizes are ESTIMATES
+until a prep run measures them: coin log ~2.4 B leaves × (32 B leaf + ~32 B of upper nodes) ≈ 150 GB, its position
+index ~2.4 B × 40-byte slots at the index's load ≈ 100-200 GB, the trie (every spendable output ever, history kept;
+258 B / coin measured on a SYNTHETIC chain) × ~3 B outputs ≈ 0.8 TB, a bitcoind block store ~0.7 TB. So a server
+with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
+1. a block source on the server: its own bitcoind (full blocks), and prep reading blocks over RPC instead of one
+   block_<h>.json per height (JSON for the whole chain would be larger than the chain): host change, image unchanged;
+2. measure first: prep from genesis in disk mode (HAZYNC_PREP_SAVE_EVERY=1000, HAZYNC_PREP_CHECK against proved
+   states where they exist), the rate and bytes per block recorded every 10 k blocks; the whole-chain time is
+   estimated from those, not before;
+3. per-block leaf bundles (item 8) written as prep goes;
+4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
+The server (provider, price) is the user's call; nothing here needs a GPU.
+
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;
 (c) negatives: gap, overlap / duplicate, swapped order, tampered anchor, other image, non-chain journal — all refused;
