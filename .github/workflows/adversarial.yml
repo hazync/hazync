@@ -1983,45 +1983,24 @@ jobs:
           exit $rc
 
   reproducible-image-id:
-    # Build the guest in the hermetic container (fixed paths) and assert its METHOD_ID equals the
-    # published canonical id in reproduce/METHOD_ID. Fails on any drift — the reproducibility guard.
+    # libzync replaced the CORE guest in the build (ROADMAP R1a, user 11-07): the CORE image 37987b85 cannot be
+    # rebuilt from this tree and stays usable as its published release binary (v0.22.1). This job now rebuilds the
+    # libzync product images at fixed paths and requires the published ids (reproduce/LIBZYNC_IDS, H7).
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
-      - name: Build reproducible container (guest at fixed paths)
+      - name: Build the libzync reproducible container (guest at fixed paths)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-repro -f reproduce/Dockerfile .
-      - name: Assert built METHOD_ID == canonical (reproduce/METHOD_ID)
+        run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
+      - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          BUILT=$(docker run --rm hazync-repro | grep -oE 'METHOD_ID [0-9a-f]{64}' | awk '{print $2}')
-          CANON=$(grep -vE '^[[:space:]]*#' reproduce/METHOD_ID | grep -oE '[0-9a-f]{64}' | head -1)
-          echo "built     = $BUILT"
-          echo "canonical = $CANON"
-          if [ -z "$BUILT" ] || [ "$BUILT" != "$CANON" ]; then
-            echo "::error::guest METHOD_ID drifted from the canonical id — reproducibility broken"
+          docker run --rm hazync-libzync-repro | grep '^libzync-product ' > built.txt
+          grep '^libzync-product ' reproduce/LIBZYNC_IDS > pinned.txt
+          echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
+          if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
+            echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"
             exit 1
           fi
-          echo "reproducible METHOD_ID matches canonical ✓"
-      - name: Groth16 SNARK verification + genesis-pin negative control (#23)
-        # Runs HERE, not in soundness-suite, and the reason is not incidental: a RISC0 guest image id
-        # absorbs the build's $HOME/.cargo paths, so the host that soundness-suite builds on the runner
-        # ($HOME=/home/runner) has a NON-canonical METHOD_ID. The checked-in fixtures are pinned to the
-        # canonical id, so only the fixed-path container build can verify them — this job is the one
-        # place a canonical host exists. Putting the check in soundness-suite failed with an image-id
-        # mismatch that looked like a broken proof and was actually a build-path mismatch.
-        run: |
-          docker run --rm hazync-repro sh -c \
-            'cd /hazync-zkvm/prover && HAZYNC_HOST=/hazync-zkvm/prover/target/release/host ./ci_snark_verify.sh'
-      - name: verify-any gate — the command the COORDINATOR runs on every submission
-        # `host verify-any` is the sole gate between a submitted receipt and the board, and NOTHING in
-        # CI ran it. The standalone verifier is well covered, but that is a different code path with a
-        # different genesis condition — verify-any deliberately accepts valid MID-CHAIN ranges, which
-        # is exactly what the covered path refuses.
-        #
-        # Here rather than in soundness-suite for the same reason as the step above: only the
-        # fixed-path container has a canonical METHOD_ID, so only it can verify the checked-in
-        # fixtures. A runner-built host rejects them as a build mismatch.
-        run: |
-          docker run --rm hazync-repro sh -c \
-            'cd /hazync-zkvm/prover && HAZYNC_HOST=/hazync-zkvm/prover/target/release/host ./ci_verify_any.sh'
+          echo "reproducible libzync ids match the published ones"

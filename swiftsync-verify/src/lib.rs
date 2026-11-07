@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 pub const IMAGES: &[Image] = &[
     Image {
         network: "mainnet",
-        method_id_hex: "9f469930c612139342e4f2a403eccba7663b1231ecc53b396470c6fe93e72f55",
-        profile: PROFILE_LIBZYNC,
+        method_id_hex: "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5",
+        profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
         genesis_time: 1_231_006_505,
         genesis_bits: 0x1d00_ffff,
@@ -36,8 +36,8 @@ pub const IMAGES: &[Image] = &[
     },
     Image {
         network: "signet",
-        method_id_hex: "067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36",
-        profile: PROFILE_LIBZYNC | PROFILE_SIGNET,
+        method_id_hex: "73b62530ca89eea376e7753f47ab4f16aed3be3138d6052d84d30510aed0f38d",
+        profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,
         genesis_bits: 0x1e03_77ae,
