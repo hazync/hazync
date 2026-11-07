@@ -4,7 +4,7 @@
 # anyone who has a full node.
 #
 #   usage: python3 fetch_block_rpc.py <height> <out.json>
-#          python3 fetch_block_rpc.py range <lo> <hi> <dir> [--window N] [--jobs N]     (HAZYNC_RPC_CLI="bitcoin-cli" or "ssh <host> bitcoin-cli" for RPC via the CLI)
+#          python3 fetch_block_rpc.py range <lo> <hi> <dir> [--window N] [--jobs N] [--after-saves <prep out>]     (HAZYNC_RPC_CLI="bitcoin-cli" or "ssh <host> bitcoin-cli" for RPC via the CLI)
 #
 # Why: fetch_block.py talks to blockstream/mempool and needs roughly one request per unique funding tx
 # (thousands for a modern block). That is rate-limited into hours, and 429s make it unreliable. A full
@@ -164,6 +164,14 @@ def main():
         window = int(sys.argv[sys.argv.index("--window") + 1]) if "--window" in sys.argv else 0
         # --jobs N: N processes, process k fetching heights lo+k, lo+k+N, ... (RPC and JSON decoding are the cost)
         jobs = int(sys.argv[sys.argv.index("--jobs") + 1]) if "--jobs" in sys.argv else 1
+        # --after-saves <prep out dir>: start after prep's newest save point (state_<h>.smt), the height a restarted
+        # prep resumes from; the files below it were consumed and deleted, and must not be fetched again
+        if "--after-saves" in sys.argv:
+            od = pathlib.Path(sys.argv[sys.argv.index("--after-saves") + 1])
+            saves = [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()] if od.exists() else []
+            if saves and max(saves) + 1 > lo:
+                lo = max(saves) + 1
+                print(f"resuming after prep's save point {lo - 1}", flush=True)
         d.mkdir(parents=True, exist_ok=True)
         # ⛔ prep with HAZYNC_PREP_CONSUME=1 deletes files only at its SAVE POINTS: the window must be larger than
         # HAZYNC_PREP_SAVE_EVERY, or the producer waits for a save that waits for the producer

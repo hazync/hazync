@@ -1,0 +1,22 @@
+[Unit]
+Description=libzync prep: the exact chain state before every block, leaf bundles (the libzync bridge)
+After=bitcoind.service libzync-fetch.service
+Wants=libzync-fetch.service
+
+[Service]
+Type=simple
+# LZ_HI and the HAZYNC_PREP_* settings in a drop-in (libzync-prep.service.d/run.conf)
+Environment=LZ_ROOT=/var/lib/libzync-prep
+ExecStart=/var/lib/libzync-prep/bin/libzync-prep-run.sh
+# exit 3 = stopped at the free-space floor (HAZYNC_PREP_MIN_FREE_GB): do not restart into a full disk
+Restart=on-failure
+RestartPreventExitStatus=3
+RestartSec=30
+# the bridge box runs bitcoind (and the original bridge): prep yields to both
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=10G
+MemoryMax=14G
+
+[Install]
+WantedBy=multi-user.target
