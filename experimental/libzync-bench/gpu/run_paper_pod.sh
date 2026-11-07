@@ -4,7 +4,9 @@
 # From the laptop: deploy, set up, upload, run, HARVEST, then terminate (by the captured id); DEADLINE_MIN bounds spend.
 #   HEIGHTS="200000 300000" bash run_paper_pod.sh      (bundle dir ~/libzync-gpu/paper: method.bin pins/ leaf/ core/)
 set -uo pipefail
-L=~/libzync-gpu/paper; OUT=${OUT:-$L/pod-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:-}; MODELLED=${MODELLED:-}; mkdir -p "$OUT"
+# RUN=range: gpu-range.sh instead (a real chain proof LO..HI from genesis; bundle: method.bin pins/ blocks/)
+RUN=${RUN:-paper}; LO=${LO:-1}; HI=${HI:-}
+L=~/libzync-gpu/paper; OUT=${OUT:-$L/pod-$RUN-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:-}; MODELLED=${MODELLED:-}; mkdir -p "$OUT"
 # the commit the pod runs: by default this checkout's HEAD, which must be on the remote (the pod clones it)
 Z=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 COMMIT=${COMMIT:-$(git -C "$Z" rev-parse HEAD)}
@@ -20,17 +22,34 @@ term () {
   log "terminating pod $ID"; gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$ID\\\"}) }\"}" >> "$OUT/driver.log"; echo >> "$OUT/driver.log"
   ID=""
 }
+# one attempt at copying the run's outputs off the pod (tar of whatever exists, then scp, then unpack here)
+harvest_once () {
+  ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && tar czf harvest.tgz $(ls -d paper range/keep range/*.log host pod.log setup.log 2>/dev/null); ls -la harvest.tgz' >> "$OUT/driver.log" 2>&1 \
+    && scp -q $K -P "$PORT" root@"$HOST":/workspace/harvest.tgz "$OUT/harvest.tgz" && (cd "$OUT" && tar xzf harvest.tgz)
+}
+# the 11-07 range run lost its proof: ONE failed attempt (an ssh timeout at the end) and the pod was terminated. Now:
+# retry with back-off for up to 10 minutes, and say clearly if it never worked (the caller still terminates: spend)
 harvest () {
   [ -n "$HOST" ] || return 0
   log "harvest"
-  ssh $K -p "$PORT" root@"$HOST" 'cd /workspace && tar czf harvest.tgz paper host pod.log setup.log 2>/dev/null; ls -la harvest.tgz' >> "$OUT/driver.log" 2>&1
-  scp -q $K -P "$PORT" root@"$HOST":/workspace/harvest.tgz "$OUT/harvest.tgz" && (cd "$OUT" && tar xzf harvest.tgz) && log "harvested to $OUT" || log "HARVEST FAILED"
+  for i in 1 2 3 4 5 6 7 8; do
+    harvest_once && { log "harvested to $OUT (attempt $i)"; return 0; }
+    log "harvest attempt $i failed; retrying in $((i * 15)) s"; sleep $((i * 15))
+  done
+  log "HARVEST FAILED after 8 attempts (~9 min)"
 }
 trap 'harvest; term' EXIT
 
 # 1. bundles: one tarball (the pinned libzync guest + pins, leaf bundles, CORE bundles)
 log "packing bundles"
-rm -rf "$OUT/up"; mkdir -p "$OUT/up/bundles"; cp -r $L/method.bin $L/pins $L/leaf $L/core $L/modelled $L/txcounts.txt "$OUT/up/bundles/"
+rm -rf "$OUT/up"; mkdir -p "$OUT/up/bundles"
+if [ "$RUN" = range ]; then
+  [ -n "$HI" ] || { echo "RUN=range needs HI"; exit 1; }
+  cp -r $L/method.bin $L/pins "$OUT/up/bundles/"; mkdir -p "$OUT/up/bundles/blocks"
+  for h in $(seq "$LO" "$HI"); do cp ~/libzync-gpu/ssweep/block_$h.json "$OUT/up/bundles/blocks/" || exit 1; done
+else
+  cp -r $L/method.bin $L/pins $L/leaf $L/core $L/modelled $L/txcounts.txt "$OUT/up/bundles/"
+fi
 (cd "$OUT/up" && tar czhf ../bundles.tgz bundles) && sha256sum "$OUT/bundles.tgz" | cut -c1-64 > "$OUT/bundles.sha"
 log "bundles.tgz $(du -h "$OUT/bundles.tgz" | cut -f1)"
 
@@ -93,11 +112,12 @@ H=/workspace/hazync/experimental/libzync-bench/gpu
 mkdir -p host; lscpu > host/lscpu.txt; nproc > host/nproc.txt; nvidia-smi -q > host/nvidia-smi-q.txt 2>&1
 ( while :; do echo "== $(date +%T) $(cut -d' ' -f1-3 /proc/loadavg)"; top -bn1 -w 200 | sed -n '7,22p'; sleep 20; done ) > host/top.log 2>&1 & TOP=$!
 echo "HOST $(grep -m1 'Model name' host/lscpu.txt | sed 's/.*: *//') x$(cat host/nproc.txt), load $(cut -d' ' -f1-3 /proc/loadavg)"
-BUNDLE=/workspace/bundles HEIGHTS="$HEIGHTS" MODELLED="$MODELLED" OUT=/workspace/paper bash $H/gpu-paper.sh; echo "PAPER_EXIT=$?"
+if [ "$RUN" = range ]; then BUNDLE=/workspace/bundles LO="$LO" HI="$HI" OUT=/workspace/range bash $H/gpu-range.sh; echo "PAPER_EXIT=$?"
+else BUNDLE=/workspace/bundles HEIGHTS="$HEIGHTS" MODELLED="$MODELLED" OUT=/workspace/paper bash $H/gpu-paper.sh; echo "PAPER_EXIT=$?"; fi
 kill $TOP 2>/dev/null
 echo POD_DONE
 EOF
-ssh $K -p "$PORT" root@"$HOST" "cd /workspace && (HEIGHTS='$HEIGHTS' MODELLED='$MODELLED' setsid nohup bash pod.sh > pod.log 2>&1 < /dev/null &)"
+ssh $K -p "$PORT" root@"$HOST" "cd /workspace && (RUN='$RUN' LO='$LO' HI='$HI' HEIGHTS='$HEIGHTS' MODELLED='$MODELLED' setsid nohup bash pod.sh > pod.log 2>&1 < /dev/null &)"
 log "pod.sh started (heights: $HEIGHTS)"
 
 # 6. wait (POD_DONE or the deadline), relaying progress lines
@@ -118,6 +138,10 @@ while :; do
       fi
     done
   done
+  # copy the key outputs as soon as they exist, not only at the end (a pod can vanish before the final harvest)
+  if [ ! -f "$OUT/early.done" ] && grep -q "RANGE_RUN_DONE\|PAPER_RUN_DONE" "$OUT/pod.log.live"; then
+    harvest_once && touch "$OUT/early.done" && log "early copy of the outputs to $OUT"
+  fi
   grep -q POD_DONE "$OUT/pod.log.live" && { log "POD_DONE"; break; }
   [ "$(date +%s)" -ge "$DEADLINE" ] && { log "DEADLINE reached: harvesting what exists"; break; }
   sleep 30
