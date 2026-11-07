@@ -19,7 +19,26 @@ the canonical guest (ESTIMATED for the frozen image), and blocks can be proved i
 ## 2. Background and related work
 - risc0 / STARK recursion; SwiftSync (Ruben Somsen); Utreexo; assumeutxo; ZeroSync / earlier zk-Bitcoin efforts;
   Peter Todd's TXO commitments (COINLOG.md §1).
-- ⚠ needs a literature pass with citations we check, not from memory.
+- Checked 11-07 (web; read the primary source before citing):
+  - ZeroSync, R. Linus et al., "ZeroSync: Introducing Validity Proofs to Bitcoin" (2023; Cairo, Utreexo, recursive
+    STARKs; announced on bitcoin-dev 2023-05-12; PDF at zerosync.org). The closest prior work: contrast Core's own C++
+    in a general zkVM vs a re-implementation in Cairo. Current status not confirmed.
+  - SwiftSync, R. Somsen (hints file: which outputs survive to a height); PoC by S. Falbesoner on Delving Bitcoin
+    (2025, topic 1562); BIP draft "SwiftSync initial block download", R. Netzke and R. Somsen, bitcoin/bips PR #2152
+    (May 2026, Draft). Our design B proved such a hints file; retired for the coin log (ROADMAP J).
+  - Utreexo, T. Dryja, "Utreexo: A dynamic hash-based accumulator optimized for the Bitcoin UTXO set", Cryptology
+    ePrint 2019/611.
+  - ECMH, J. Maitin-Shepard, M. Tibouchi, D. F. Aranha, "Elliptic Curve Multiset Hash", arXiv 1601.06502 (2016),
+    The Computer Journal (2017). Note: their construction is over binary curves; ours maps to secp256k1 (state the
+    assumption we rely on, not theirs).
+  - TXO commitments, P. Todd, "Delayed TXO commitments" (petertodd.org, 2016) and "TXO commitments do not need a
+    soft-fork to be useful" (bitcoin-dev, 2017-02).
+  - assumeutxo, Bitcoin Core `doc/design/assumeutxo.md` and `doc/assumeutxo.md` (dumptxoutset / loadtxoutset); the
+    original proposal is bitcoin/bitcoin issue #15605. Read from the upstream repo, not a mirror.
+  - Prior Hazync announcement: "Running Core's real consensus code inside a zkVM", Delving Bitcoin, 2026-08-15 (the
+    original CORE guest; blocks 1..1,789 in one receipt). The paper must say what libzync adds since.
+- Still to look up: risc0's own papers (the STARK and recursion soundness we rely on), and other zk Bitcoin light
+  clients / bridges (BitVM-era header-chain proofs).
 
 ## 3. What a proof states (the statement)
 - `ChainState`, field by field; the genesis anchor; the verifier's 13 steps; DEMO vs OK; what is NOT claimed
