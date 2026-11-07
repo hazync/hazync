@@ -205,6 +205,14 @@ its `leaf_<h>.bin` pushed by the same write-only `hazync-bundle-push` channel an
 (`server.py`, HAZYNC_LIBZYNC=1). The open question is disk on the bridge box: the coin log + trie are ESTIMATED at
 hundreds of GB to ~2.5-3 TB NVMe (not measured). Nothing here needs a GPU.
 
+**Evidence the paper needs (user, 11-07), before writing:** (1) MAINNET block proofs on REAL chain state, across a
+range of heights from genesis to tip (no modelled state): mainnet prep to tip on the bridge box, leaf bundles at the
+sampled heights, GPU leaf proofs; (2) cycles first, then card time and dollars, **every measurement on ONE card
+type**, with the original Hazync CORE guest re-measured on that same card for a direct ratio (replacing the chained
+~8.2x). Proposed sample: ~10 heights spread genesis..tip by era (early, 2013-2016 growth, segwit 2017, taproot 2021,
+recent full blocks), each proved by libzync from its leaf bundle and by CORE, on one PRO 6000 (cost to estimate per
+block before renting).
+
 **Coordinator work queue for backfill, H-B (e): design (11-07).** The coordinator already has the shape: width-1
 block claims that expire by themselves (`claim`, advisory; `submit` accepts any valid proof), fold claims over
 adjacent proven ranges (`fold_claim`, `GET /api/foldable`), a spine, and receipts that authenticate themselves
