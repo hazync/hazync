@@ -111,6 +111,14 @@ refuse it.
    mode; a record carries its height, which also ends the false rollback of a block with no appends); AGG_EARLY moves
    stale chunk files aside at start, checks each file's claim while waiting and times out
    (`HAZYNC_AGG_EARLY_WAIT_S`). Tested (cb5d3e5 + `HAZYNC_PREP_CONTINUE`): host rebuilt, image still bbf82800; resume 1..5 -> 10 in memory and with a disk trie, prove-range killed between the two saves then resumed, prep killed at 25 and restarted from 20 to 60: every state byte-identical to the proved chain's; libzync 31, swiftsync-verify 16, ffi 3, host 68, wasm vectors 6/6. Still by design: FFI/WASM take `now` from the caller; a regtest host prints OK. **For the next image (guest files, so not in c14; round 9):** `field_bigint2.h`'s comment says elements are canonical, the code is lazy ([0, 2^256), correct); and make the parse cache's reliance on the bump allocator (no address reuse; `verify_input.cpp` cached_tx) a build-time check instead of a comment.
+   **Review rounds 9-11 (11-06/07, user asked for more):** no guest change. Clean: consensus completeness vs Core v28
+   (rule families, heights, flags, per-chunk vs per-block); the guest's C/C++ (batch signatures, lift-x, parse cache,
+   Core stand-ins, exceptions); every patch the build applies (Core 0001 0002 0009 0010 0101; secp 0012 0013 0005 0006
+   0008 0102 0103; 0014 not applied); the facts library (no false fact once the coin is bound). Fixed (host / verifier /
+   docs): the disk coin-log journal through three rounds (checksummed LZPEND03 records, the one commit point, recovery
+   from any crash or power loss by undoing every journaled block back to the saved state), directory locks, the disk
+   trie resume, the C ABI `expect`, the standalone CoinFact needing the caller's preimage for UNSPENT, CONSENSUS_RULES
+   (the checkpoint as a STRICTER row). Crash test: 7 scenarios, all byte-identical to the proved chain. 45e2d2d.
 7. **Freeze: ask the user.**
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
