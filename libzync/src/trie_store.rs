@@ -126,6 +126,8 @@ pub struct DiskArena {
     dir: std::path::PathBuf,
     file: std::fs::File,
     map: memmap2::MmapMut,
+    /// the file's length in bytes (the mapping is larger: see VIRT)
+    cap: u64,
     len: u64,
     free: Vec<R>,
     pending: Vec<R>,
@@ -133,10 +135,18 @@ pub struct DiskArena {
 
 #[cfg(feature = "std")]
 impl DiskArena {
-    const STEP: u64 = 1 << 20; // records per growth step (64 MiB)
+    const STEP: u64 = 1 << 20; // records per growth step at least (64 MiB); larger files grow by 1/8
+    /// The mapping's length: address space, mapped ONCE (11-07). Growing used to msync the whole file and map it again,
+    /// so every page faulted back in after each 64 MiB step: on the slice run ~40% of prep's CPU went to page faults
+    /// and TLB shootdowns. Now a grow only lengthens the file under the mapping (pages past the file's end are never
+    /// touched). 16 TiB: the mainnet trie is ~1 TB (slice run, 11-07).
+    const VIRT: u64 = 1 << 44;
     const MAGIC: &'static [u8; 8] = b"HZTRIED1";
 
-    fn map(file: &std::fs::File) -> std::io::Result<memmap2::MmapMut> { unsafe { memmap2::MmapMut::map_mut(file) } }
+    fn map(file: &std::fs::File) -> std::io::Result<memmap2::MmapMut> {
+        let n = file.metadata()?.len().max(Self::VIRT);
+        unsafe { memmap2::MmapOptions::new().len(n as usize).map_mut(file) }
+    }
 
     /// Open (or create) the arena in `dir`; returns it with the flushed (root, counts, height, hash), if any.
     pub fn open(dir: &std::path::Path) -> std::io::Result<(Self, Option<(R, bool, u64, [u8; 32])>)> {
@@ -144,7 +154,8 @@ impl DiskArena {
         let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("nodes.bin"))?;
         if file.metadata()?.len() < Self::STEP * RECORD as u64 { file.set_len(Self::STEP * RECORD as u64)?; }
         let map = Self::map(&file)?;
-        let mut a = DiskArena { dir: dir.to_path_buf(), file, map, len: 0, free: Vec::new(), pending: Vec::new() };
+        let cap = file.metadata()?.len();
+        let mut a = DiskArena { dir: dir.to_path_buf(), file, map, cap, len: 0, free: Vec::new(), pending: Vec::new() };
         let meta = match std::fs::read(dir.join("meta")) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e),
@@ -173,10 +184,11 @@ impl DiskArena {
     }
 
     fn grow(&mut self) {
-        let cap = self.file.metadata().expect("trie arena: stat").len() / RECORD as u64;
-        self.map.flush().expect("trie arena: msync");
-        self.file.set_len((cap + Self::STEP) * RECORD as u64).expect("trie arena: grow the file");
-        self.map = Self::map(&self.file).expect("trie arena: remap");
+        // no msync and no remap: the mapping already covers the new length (durable() syncs the file and its size)
+        let n = (self.cap + (Self::STEP * RECORD as u64).max(self.cap / 8)).next_multiple_of(RECORD as u64);
+        assert!(n <= self.map.len() as u64, "trie arena: past the {} TiB mapping", Self::VIRT >> 40);
+        self.file.set_len(n).expect("trie arena: grow the file");
+        self.cap = n;
     }
 }
 
@@ -184,13 +196,15 @@ impl DiskArena {
 impl Arena for DiskArena {
     fn get(&self, r: R) -> Node {
         let i = (r - 1) as usize * RECORD;
+        // inside the FILE (the mapping runs past it: a reference beyond the file must panic, not SIGBUS)
+        assert!(r >= 1 && (i + RECORD) as u64 <= self.cap, "trie arena: node {r} past the file");
         Node::dec(&self.map[i..i + RECORD])
     }
     fn put(&mut self, n: Node) -> R {
         let r = match self.free.pop() {
             Some(r) => r,
             None => {
-                if (self.len + 1) * RECORD as u64 > self.map.len() as u64 { self.grow(); }
+                if (self.len + 1) * RECORD as u64 > self.cap { self.grow(); }
                 self.len += 1;
                 self.len
             }
@@ -204,7 +218,7 @@ impl Arena for DiskArena {
     fn durable(&mut self, root: R, counts: bool, height: u64, hash: &[u8; 32]) -> Result<(), alloc::string::String> {
         use std::io::Write as _;
         let e = |x: std::io::Error| alloc::format!("trie arena {}: {x}", self.dir.display());
-        self.map.flush().map_err(e)?;
+        self.map.flush_range(0, self.cap as usize).map_err(e)?;
         self.file.sync_all().map_err(e)?; // the file's size after a grow, not only its pages
         let all: Vec<R> = self.free.iter().chain(self.pending.iter()).copied().collect();
         let mut b = Vec::with_capacity(73 + 8 * all.len());
