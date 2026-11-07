@@ -69,7 +69,7 @@ refuse it.
 |---|---|---|
 | G1 | spec text for each item as it lands (SWIFTSYNC_PROOFS, COINLOG, ZYNCAPPS, txproofs) | with each item |
 | G2 | **final repo cleanup (user, 11-05): a concise, readable repo, minimal docs and tools, no fluff, precise info.** Every experiment-era doc, script, bench and result moves to `experimental/` (or is deleted): the retired design-B docs (SWIFTSYNC_PROOFS, CORE_HOOK, UTREEXO_FORMAT), this ROADMAP, the reference scripts in `scripts/libzync` (keep only what a test or a reproducible id needs), the zyncapps bench guests (hashbench, triebench), checked-in test outputs. Live spec content those docs still carry (the coin leaf, UTREEXO_FORMAT §2; the genesis anchor rule) is folded into a few short specs first, and code comments re-pointed. Then decide the historical names (`swiftsync-verify*`). Hazync's own docs (docs/*.md, ~25: coordinator, fleet, proving, soundness, ...): libzync IS Hazync (the new library), so each doc that is relevant and current stays or is updated, stale ones go, and the many overlapping ones are condensed / combined into fewer | ✅ **DONE 11-06** (d7929e0, da06835, b32d7a4, efcdc3f, 4a97842): docs/ 27 → 8 (OVERVIEW, OPERATIONS, COORDINATOR, SECURITY, BUILD_AND_RELEASE + SPEC, the generated COORDINATOR_REFERENCE, the index), originals in docs/history/; LIBZYNC.md rewritten; SWIFTSYNC_PROOFS / UTREEXO_FORMAT trimmed to live spec; CONSENSUS_RULES / ZYNCAPPS de-staled; check-versions no longer passes on a missing file or line; libzync crates now in CI. **BEFORE the freeze (user 11-06).** Scope decided 11-06: original-Hazync CODE stays (coordinator, tools, CORE path); its docs are condensed into a few current ones, dated ones to docs/history; experiment-era docs, outputs and one-off scripts MOVE to `experimental/` (nothing deleted); fuzz crates and the `swiftsync-verify*` names left as they are (names decided with the paper). Guest-compiled files untouched (image) |
-| G3 | **the paper, written WITH the user** (not drafted alone): what libzync proves, how, measured costs, soundness argument, limits | after G2 |
+| G3 | **the paper, written WITH the user** (not drafted alone): what libzync proves, how, measured costs, soundness argument, limits. Kept PRIVATE, out of this repo (user 11-07) | after G2 |
 
 ## H. Path to the core freeze (the user's gates, in order)
 
@@ -199,7 +199,11 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
    estimated from those, not before;
 3. per-block leaf bundles (item 8) written as prep goes: ✅ built + tested 11-07 (HAZYNC_PREP_LEAF_BUNDLES);
 4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
-The server (provider, price) is the user's call; nothing here needs a GPU.
+**Where it runs (user, 11-07): on the EXISTING bridge infrastructure, not a new server.** libzync prep is the
+libzync BRIDGE: the same role as `hazync-bridge` (archive node beside bitcoind, resident state, one bundle per block),
+its `leaf_<h>.bin` pushed by the same write-only `hazync-bundle-push` channel and served by the same coordinator
+(`server.py`, HAZYNC_LIBZYNC=1). The open question is disk on the bridge box: the coin log + trie are ESTIMATED at
+hundreds of GB to ~2.5-3 TB NVMe (not measured). Nothing here needs a GPU.
 
 **Coordinator work queue for backfill, H-B (e): design (11-07).** The coordinator already has the shape: width-1
 block claims that expire by themselves (`claim`, advisory; `submit` accepts any valid proof), fold claims over

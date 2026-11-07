@@ -23,7 +23,6 @@ releases are canonical.
 | [`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md) | zyncAPPs: separate guests that answer one question from a core proof |
 | [`libzync/PROOF_BUNDLE.md`](libzync/PROOF_BUNDLE.md) | the proof bundle format |
 | [`libzync/ROADMAP.md`](libzync/ROADMAP.md) | everything built, measured and still open, in order |
-| [`libzync/PAPER.md`](libzync/PAPER.md) | the paper's proposed outline and its open questions (G3, written with the author) |
 
 ## The Hazync system
 
