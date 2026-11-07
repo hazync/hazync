@@ -25,7 +25,7 @@ refuse it.
 | B2 | host writes `history.bin`; `zync-path coin` / `find` produce coin facts | done |
 | B3 | coin journey: creating tx in a proven block, the coin leaf from its output, the spending tx (`zync-path journey`, `--journey`) | done |
 | B4 | `swiftsync-verify --coin / --journey`, wasm `verify_facts`, C ABI `swiftsync_verify_facts` | done |
-| B5 | zyncAPP `coin` guest (prover/zyncapps): unspent/spent at the core tip, core receipt verified in the zkVM; image 26e09637 | done |
+| B5 | zyncAPP `coin` guest (prover/zyncapps): unspent/spent at the core tip, core receipt verified in the zkVM; image 26e09637 | done. ⚠ (round 11) it commits the LEAF it checked, so "unspent" is about that 32-byte leaf: a spent coin's flipped leaf also passes; a consumer must compare `coin` with its own `coin_leaf`. Next zyncAPP image: take the coin's fields and commit them, the leaf computed in the guest (as the verifiers' CoinFact.preimage) |
 
 ## C. Production host
 
