@@ -211,6 +211,13 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
    estimated from those, not before;
 3. per-block leaf bundles (item 8) written as prep goes: ✅ built + tested 11-07 (HAZYNC_PREP_LEAF_BUNDLES);
 4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
+**H7 DONE 11-07** (`h7/RESULT_h7.txt`, tag `libzync-c14` = source ce4e1e3): two container builds on the bridge box
+agree, mainnet **863c9ce3**, signet **73b62530**, pinned in `reproduce/LIBZYNC_IDS` and the verifier tables; the
+container ELF behaves as c14 (962,000 aggregate 64,896,840 cycles, identical; mainnet 1..200 states identical but
+`self_id`). ⚠ The laptop builds (bbf82800) differ by design (build paths): published proofs run the container ELF, and
+a prep run whose leaves are to be JOINED must run a host embedding it (its states carry `self_id`, which the join's
+link digest covers); the paper's single-leaf samples are unaffected (a leaf is a base step on an untrusted state).
+
 **Where it runs (user, 11-07): on the EXISTING bridge infrastructure, not a new server.** libzync prep is the
 libzync BRIDGE: the same role as `hazync-bridge` (archive node beside bitcoind, resident state, one bundle per block),
 its `leaf_<h>.bin` pushed by the same write-only `hazync-bundle-push` channel and served by the same coordinator
