@@ -239,16 +239,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     };
     crate::demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
-    crate::lz::cl_init_at_start(false, anchor_path, &prev);
-    crate::trie::trie_init_at_start(false, anchor_path, &prev);
-    let (mut smt, replay_max) = crate::lz::lz_smt_replay(dir, lo - 1);
-    if prev.max_time == 0 { prev.max_time = replay_max.max(crate::genesis_params().1); }
-    assert_eq!(smt.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
-    let mut ecmh = Ecmh::from_state(prev.live_set, &prev.live_hash);
-    // The first block is a base step on the anchor: its anchor_id is the digest of the anchor's journal, and the image
-    // stamps its own id and profile; every later block carries them. HAZYNC_PREP_CONTINUE=1: the anchor is a state of
-    // the SAME chain (a restart after a crash, from the last saved state_<h>.json), so the chain's own anchor_id carries
-    // on and the states stay byte-identical to an uninterrupted run (11-06).
+    // decided BEFORE any store is opened: loading from an anchor can already undo journaled blocks (round 12)
     // From a state other than genesis the run must SAY which it is (round 12: either default is wrong for someone):
     // HAZYNC_PREP_CONTINUE=1, the same chain carries on (a restart from a save point: states byte-identical to an
     // uninterrupted run); HAZYNC_PREP_BASE=1, a base step on that state (anchor_id = its link digest, as a leaf proof
@@ -260,6 +251,17 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         _ if anchor_path == "genesis" => false,
         _ => panic!("libzync-prep from the state at {}: set HAZYNC_PREP_CONTINUE=1 (the same chain, e.g. a restart from a save point) or HAZYNC_PREP_BASE=1 (a base step on it, as a leaf proof)", prev.height),
     };
+
+    crate::lz::cl_init_at_start(false, anchor_path, &prev);
+    crate::trie::trie_init_at_start(false, anchor_path, &prev);
+    let (mut smt, replay_max) = crate::lz::lz_smt_replay(dir, lo - 1);
+    if prev.max_time == 0 { prev.max_time = replay_max.max(crate::genesis_params().1); }
+    assert_eq!(smt.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
+    let mut ecmh = Ecmh::from_state(prev.live_set, &prev.live_hash);
+    // The first block is a base step on the anchor: its anchor_id is the digest of the anchor's journal, and the image
+    // stamps its own id and profile; every later block carries them. HAZYNC_PREP_CONTINUE=1: the anchor is a state of
+    // the SAME chain (a restart after a crash, from the last saved state_<h>.json), so the chain's own anchor_id carries
+    // on and the states stay byte-identical to an uninterrupted run (11-06).
     if anchor_path != "genesis" {
         println!("  prep from the state at {}: {}", prev.height,
                  if cont { "CONTINUING its chain (anchor_id kept)" } else { "a base step on it (anchor_id = its link digest)" });

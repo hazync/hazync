@@ -118,7 +118,11 @@ refuse it.
    docs): the disk coin-log journal through three rounds (checksummed LZPEND03 records, the one commit point, recovery
    from any crash or power loss by undoing every journaled block back to the saved state), directory locks, the disk
    trie resume, the C ABI `expect`, the standalone CoinFact needing the caller's preimage for UNSPENT, CONSENSUS_RULES
-   (the checkpoint as a STRICTER row). Crash test: 7 scenarios, all byte-identical to the proved chain. 45e2d2d.
+   (the checkpoint as a STRICTER row). Crash test: 7 scenarios, all byte-identical to the proved chain. 45e2d2d. **Round 12** (on round 11's fixes): the
+   undo-to-state recovery confirmed sound node by node; fixed a regression (unspent journeys refused by the preimage
+   rule), the LOCK surviving a fresh store's wipe, overlapping run directories refused, prep from a mid-chain state
+   naming its mode (CONTINUE or BASE) before any store is opened. Crash test: 10 scenarios, each refusal checked for
+   its reason; host 69, verify 16, ffi 3; image bbf82800.
 7. **Freeze: ask the user.**
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
    from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
