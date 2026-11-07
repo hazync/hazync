@@ -80,7 +80,44 @@ pub(crate) fn add_work(cum: &[u8; 32], bits: u32) -> [u8; 32] {
 
 /// One block: the next chain state from `prev` and the block file, advancing the host's coin log (lz::CL), trie store
 /// (trie::TS), BIP30 tree (`smt`) and live-coin sum (`ecmh`).
-pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt, ecmh: &mut Ecmh) -> ChainState {
+/// One block's leaf bundle (ROADMAP H-B 8): every input a leaf proof of block h needs besides the block itself, cut by
+/// libzync-prep from its stores at S(h-1). A leaf prover (`libzync-prove-range h h`, HAZYNC_LEAF_BUNDLE=<file>) then
+/// needs no coin log, trie or BIP30 tree; the guest checks every witness against `prev`, so a wrong bundle is refused,
+/// never proved. File: LEAF_MAGIC, bincode of this, SHA-256 of both (a torn write is refused on read).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct LeafBundle {
+    pub(crate) prev: ChainState,
+    /// the BIP30 witness, as lz_smt_rebind cuts it against the running tree
+    pub(crate) in_smt_root: [u8; 32],
+    pub(crate) smt: crate::SmtBlockWitness,
+    /// the coin-log witness (cl_prepare) and the trie witness (TrieStore::witness)
+    pub(crate) cl_wit: Vec<u32>,
+    pub(crate) trie_wit: Vec<u32>,
+}
+pub(crate) const LEAF_MAGIC: &[u8; 8] = b"LZLEAF01";
+
+pub(crate) fn leaf_write(path: &str, b: &LeafBundle) {
+    let mut v = LEAF_MAGIC.to_vec();
+    v.extend(bincode::serialize(b).unwrap());
+    let d: [u8; 32] = Sha256::digest(&v).into();
+    v.extend_from_slice(&d);
+    // tmp + rename, no fsync: a bundle lost in a crash is cut again when prep redoes the block from its save point
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, &v).unwrap_or_else(|e| panic!("{tmp}: {e}"));
+    std::fs::rename(&tmp, path).unwrap_or_else(|e| panic!("{path}: {e}"));
+}
+
+pub(crate) fn leaf_read(path: &str) -> LeafBundle {
+    let v = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    assert!(v.len() >= 40 && &v[..8] == LEAF_MAGIC, "{path}: not a leaf bundle ({})", String::from_utf8_lossy(&LEAF_MAGIC[..]));
+    let (body, d) = v.split_at(v.len() - 32);
+    assert!(Sha256::digest(body)[..] == d[..], "{path}: checksum mismatch (torn or damaged)");
+    bincode::deserialize(&body[8..]).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// One block of native prep: the state after it, and with `leaf` its leaf bundle, the witnesses cut from the stores
+/// BEFORE they apply the block.
+pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt, ecmh: &mut Ecmh, leaf: bool) -> (ChainState, Option<LeafBundle>) {
     use crate::{arr, build_header_v, hx, median_u32, normalize_host, out_leaf_of, out_spendable, rev};
     let height = j["height"].as_u64().unwrap() as u32;
     assert_eq!(height, prev.height + 1, "prep: block {height} after state {}", prev.height);
@@ -162,6 +199,8 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
         ecmh.add(&o.leaf);
     }
 
+    // The leaf bundle's coin-log and trie witnesses: the stores at S(h-1), before this block changes them.
+    let wits = leaf.then(|| (crate::lz::cl_prepare(&ext), crate::trie::trie_witness(height, &marks, &ins, prev)));
     // The coin log and the trie (the host's stores), the BIP30 tree.
     let (utxo_roots, utxo_leaves) = crate::lz::cl_apply(&ext, &appends, height);
     let trie_root = {
@@ -176,7 +215,8 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
         .map(|p| (p.txid, p.tx.output.iter().filter(|o| out_spendable(o.script_pubkey.as_bytes())).count() as u32))
         .filter(|t| t.1 > 0).collect();
     let grandfathered = methods::NETWORK == "mainnet" && (height == 91_842 || height == 91_880);
-    crate::smt_advance_ex(smt, cb_txid, crate::cb_spendable_outputs(&coinbase), &cb_spends, grandfathered, &spend_tracked, &tracked_new);
+    let in_smt_root = smt.root();
+    let smt_w = crate::smt_advance_ex(smt, cb_txid, crate::cb_spendable_outputs(&coinbase), &cb_spends, grandfathered, &spend_tracked, &tracked_new);
 
     let utxo_value = prev.utxo_value.saturating_add(survivor_value).checked_sub(spent_value)
         .unwrap_or_else(|| panic!("prep: block {height} spends more than the log holds"));
@@ -195,14 +235,15 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     recent_times.push(time);
     if recent_times.len() > 11 { let e = recent_times.len() - 11; recent_times.drain(0..e); }
     let (live_set, live_hash) = ecmh.to_state();
-    ChainState {
+    let bundle = wits.map(|(cl_wit, trie_wit)| LeafBundle { prev: prev.clone(), in_smt_root, smt: smt_w.0, cl_wit, trie_wit });
+    (ChainState {
         tip_hash, utxo_roots, utxo_leaves, utxo_value,
         cum_work: add_work(&prev.cum_work, bits), height, prev_nbits: bits, prev_time: time,
         epoch_start: if height % 2016 == 0 { time } else { prev.epoch_start }, recent_times,
         live_set, live_hash, trie_root, smt_root: smt.root(),
         max_time: prev.max_time.max(time), block_roots, block_leaves,
         ..prev.clone()
-    }
+    }, bundle)
 }
 
 #[cfg(test)]
@@ -275,6 +316,9 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     }
     let anchor_id = if cont { prev.anchor_id } else { crate::link_digest(&prev) };
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
+    // HAZYNC_PREP_LEAF_BUNDLES=<dir>: also write leaf_<h>.bin per block (ROADMAP H-B 8), for leaf provers without stores
+    let leaves = std::env::var("HAZYNC_PREP_LEAF_BUNDLES").ok();
+    if let Some(d) = &leaves { std::fs::create_dir_all(d).unwrap_or_else(|e| panic!("{d}: {e}")); }
     let each = std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() == Ok("1");
     // Disk mode (HAZYNC_COINLOG_DIR): also save every HAZYNC_PREP_SAVE_EVERY blocks (default 1,000), so the journal of
     // blocks since the last save stays bounded and a crash resumes from at most that far back (anchor: the last
@@ -297,7 +341,9 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             }
         }
         let j = crate::read_block_json(dir, h);
-        let mut st = prep_block(&prev, &j, &mut smt, &mut ecmh);
+        let (mut st, bundle) = prep_block(&prev, &j, &mut smt, &mut ecmh, leaves.is_some());
+        // the leaf bundle carries prev = S(h-1) as this run commits it (anchor_id, self_id and profile included)
+        if let (Some(d), Some(b)) = (&leaves, bundle) { leaf_write(&format!("{d}/leaf_{h}.bin"), &b); }
         // test hook: die after block h changed the stores, before any save (the window the journal covers)
         if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok(&format!("prep-after:{h}")) { std::process::exit(9); }
         if h == lo { st.anchor_id = anchor_id; }

@@ -1,0 +1,25 @@
+# leaf_test.sh, 2026-11-07, host 098d530+leaf (image bbf82800, unchanged), dev mode, mainnet 1..200
+prep EXIT=0
+LZ_PREP_DONE 1..=200 in 0.2 s; every state's journal byte-identical to the proved run
+bundles: 200, 804K; largest leaf_183.bin 2278 B
+leaf 198 EXIT=0
+LZ_PROVE_RANGE_DONE 198..=198 in 20 s; final receipt /home/defenwycke/libzync-gpu/c14b/leaf/leaf198/block_198.rcpt (DEV MODE: fake receipts, not proofs; the times are execution, not proving)
+  leaf state vs linear: differs only in ['anchor_id'] (want ['anchor_id'])
+leaf 199 EXIT=0
+LZ_PROVE_RANGE_DONE 199..=199 in 20 s; final receipt /home/defenwycke/libzync-gpu/c14b/leaf/leaf199/block_199.rcpt (DEV MODE: fake receipts, not proofs; the times are execution, not proving)
+  leaf state vs linear: differs only in ['anchor_id'] (want ['anchor_id'])
+leaf 200 EXIT=0
+LZ_PROVE_RANGE_DONE 200..=200 in 20 s; final receipt /home/defenwycke/libzync-gpu/c14b/leaf/leaf200/block_200.rcpt (DEV MODE: fake receipts, not proofs; the times are execution, not proving)
+  leaf state vs linear: differs only in ['anchor_id'] (want ['anchor_id'])
+join 197+198 EXIT=0
+join +199 EXIT=0
+join +200 EXIT=0
+JOINED left tip 197 + right tip 198 (anchor 852c5c7e009317c2..) -> /home/defenwycke/libzync-gpu/c14b/leaf/j198.rcpt: 1048576 cycles, 6.9 s
+JOINED left tip 198 + right tip 199 (anchor 852c5c7e009317c2..) -> /home/defenwycke/libzync-gpu/c14b/leaf/j199.rcpt: 1048576 cycles, 6.8 s
+JOINED left tip 199 + right tip 200 (anchor 852c5c7e009317c2..) -> /home/defenwycke/libzync-gpu/c14b/leaf/j200.rcpt: 1048576 cycles, 6.8 s
+joined 197+198+199+200 journal edd7a213e5be26f8 vs linear block 200 edd7a213e5be26f8: EQUAL
+prove-range with HAZYNC_LEAF_CHECK EXIT=0
+LZ_PROVE_RANGE_DONE 1..=200 in 2679 s; final receipt /home/defenwycke/libzync-gpu/c14b/leaf/check/block_200.rcpt (DEV MODE: fake receipts, not proofs; the times are execution, not proving)
+check run: state_200 == the c14 pass's
+LEAF_TEST_DONE
+

@@ -922,19 +922,30 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         } else { r };
         (r, st)
     });
-    let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
+    // HAZYNC_LEAF_BUNDLE=<leaf_<h>.bin> (ROADMAP H-B 8): a LEAF proof of the one block h, a base step on S(h-1) taken from
+    // prep's bundle with every witness in it: no coin log, trie or BIP30 tree, and no block files but block h's. The
+    // receipt joins with its neighbours (libzync-join). HAZYNC_LEAF_CHECK=<dir>: an ordinary run that asserts each
+    // block's witnesses are byte-identical to <dir>/leaf_<h>.bin's (the test of prep's bundles).
+    let leaf: Option<crate::prep::LeafBundle> = std::env::var("HAZYNC_LEAF_BUNDLE").ok().map(|p| crate::prep::leaf_read(&p));
+    let leaf_check = std::env::var("HAZYNC_LEAF_CHECK").ok();
+    if let Some(b) = &leaf {
+        assert!(lo == hi && b.prev.height + 1 == lo, "HAZYNC_LEAF_BUNDLE: the bundle is for block {}; prove exactly that block", b.prev.height + 1);
+        assert!(handover.is_none() && std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no handover, no resume");
+        assert!(leaf_check.is_none(), "HAZYNC_LEAF_BUNDLE and HAZYNC_LEAF_CHECK: one or the other");
+    }
+    let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if let Some(b) = &leaf { b.prev.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };
     demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     // history.bin starts at height 0 only on a run from genesis (libzync::history).
-    let prev_is_genesis = handover.is_none() && anchor_path == "genesis";
+    let prev_is_genesis = handover.is_none() && leaf.is_none() && anchor_path == "genesis";
     // The coin log at the run's start. Disk mode (HAZYNC_COINLOG_DIR) with HAZYNC_RESUME and a store already there: leave
     // it alone (loading the anchor would WIPE it, review 11-03); the resume below loads it at its receipt, and only if no
     // receipt is found is the anchor's log loaded after all.
     let disk_resume = methods::COINLOG && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
         && cl_dir().map_or(false, |d| d.join("L0.bin").exists());
-    if methods::COINLOG && !disk_resume {
+    if methods::COINLOG && !disk_resume && leaf.is_none() {
         cl_init_at_start(handover.is_some(), anchor_path, &prev);
     }
     // The counting trie at the run's start (a resume below replaces it with the snapshot at its receipt). A disk trie
@@ -942,19 +953,19 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     // there below, and at the anchor only if no receipt is found (as the disk coin log; review 11-06).
     let disk_trie_resume = methods::TRIE && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
         && crate::trie::trie_dir().map_or(false, |d| d.join("meta").exists());
-    if methods::TRIE && !disk_trie_resume { crate::trie::trie_init_at_start(handover.is_some(), anchor_path, &prev); }
+    if methods::TRIE && !disk_trie_resume && leaf.is_none() { crate::trie::trie_init_at_start(handover.is_some(), anchor_path, &prev); }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
     // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
     // written to anchor_effective.json, which is what libzync-verify must be given.
-    let replay = (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists());
+    let replay = leaf.is_none() && (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists());
     // A handover continues a proved chain: its BIP30 tree must be replayed and equal the receipt's, never seeded (the
     // seeding path rewrites smt_root, and the state sent would no longer be the predecessor's journal).
     assert!(replay || handover.is_none(), "a handover needs every block file 1..{} to replay the BIP30 tree", lo - 1);
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
-    let mut smt = if replay {
+    let mut smt = if leaf.is_some() { Smt::new() } else if replay {
         let (t, replay_max) = lz_smt_replay(dir, lo - 1);
         if prev.max_time == 0 { prev.max_time = replay_max.max(genesis_params().1); }
         assert_eq!(t.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
@@ -1045,7 +1056,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         let (_, mut w) = build_full();
         assert_eq!(w.height, h);
         w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
-        lz_smt_rebind(&mut w, &mut smt);
+        if let Some(b) = &leaf {
+            w.in_smt_root = b.in_smt_root;
+            w.smt = b.smt.clone();
+        } else { lz_smt_rebind(&mut w, &mut smt); }
+        let check_b = leaf_check.as_ref().map(|d| crate::prep::leaf_read(&format!("{d}/leaf_{h}.bin")));
+        if let Some(b) = &check_b {
+            assert!(state_journal_bytes(&b.prev) == state_journal_bytes(&prev), "HAZYNC_LEAF_CHECK: leaf_{h}.bin's prev != this run's S({})", h - 1);
+            assert!(b.in_smt_root == w.in_smt_root && bincode::serialize(&b.smt).unwrap() == bincode::serialize(&w.smt).unwrap(),
+                    "HAZYNC_LEAF_CHECK: leaf_{h}.bin's BIP30 witness != this run's");
+        }
         let bounds = chunk_bounds(&w, nchunks_env());
         // Signature hints first: every chunk executes once in collect mode (in parallel), and R for each
         // logged verify comes from libsecp -- the same bundle `libzync-hints` writes. Without this every chunk
@@ -1107,10 +1127,18 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
         }
         let cl_lists = if methods::COINLOG { cl_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
-        if methods::COINLOG { *CL_WIT.lock().unwrap() = cl_prepare(&cl_lists.0); }
+        if methods::COINLOG {
+            let wit = match &leaf { Some(b) => b.cl_wit.clone(), None => cl_prepare(&cl_lists.0) };
+            if let Some(b) = &check_b { assert!(b.cl_wit == wit, "HAZYNC_LEAF_CHECK: leaf_{h}.bin's coin-log witness != this run's"); }
+            *CL_WIT.lock().unwrap() = wit;
+        }
         // The trie update (mode 17), proved from the store's witness; the aggregate verifies it as an assumption.
         let trie_lists = if methods::TRIE { crate::trie::trie_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
-        if methods::TRIE { *TRIE_RCPT.lock().unwrap() = Some(crate::trie::trie_prove(h, &trie_lists.0, &trie_lists.1, &prev, &opts)); }
+        if methods::TRIE {
+            let wit = match &leaf { Some(b) => b.trie_wit.clone(), None => crate::trie::trie_witness(h, &trie_lists.0, &trie_lists.1, &prev) };
+            if let Some(b) = &check_b { assert!(b.trie_wit == wit, "HAZYNC_LEAF_CHECK: leaf_{h}.bin's trie witness != this run's"); }
+            *TRIE_RCPT.lock().unwrap() = Some(crate::trie::trie_prove_wit(h, &wit, &trie_lists.0, &trie_lists.1, &prev, &opts));
+        }
         bd.write(&bp).unwrap();
         std::env::set_var("HAZYNC_LZ_HINTS", &bp);
         let t_hints = t0.elapsed().as_secs_f64();
@@ -1124,7 +1152,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         assert_eq!(st.height, h);
         write_atomic(&format!("{out}/block_{h}.rcpt"), &bincode::serialize(&r).unwrap());
         write_atomic(&format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap().as_bytes());
-        if methods::COINLOG {
+        // a leaf has no stores to advance (the guest checked its witnesses against S(h-1))
+        if methods::COINLOG && leaf.is_none() {
             let flips = cl_commit(&cl_lists.0, &cl_lists.1, &st);
             if h == 1 && prev_is_genesis {
                 hist_append(&out, &libzync::history::Rec { height: 0, hash: genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![] });
@@ -1143,7 +1172,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         }
         // The trie: the same update list applied to the store must reach the committed root; its snapshot beside the
         // receipt (the last two kept, as the coin log's; HAZYNC_COINLOG_SAVE_EACH=1 keeps every one).
-        if methods::TRIE {
+        if methods::TRIE && leaf.is_none() {
             crate::trie::trie_commit(&trie_lists.0, &trie_lists.1, &st);
             crate::trie::trie_save(&format!("{out}/state_{h}.trie"));
             if h >= first + 2 && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() != Ok("1") {
@@ -1152,7 +1181,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         }
         // The block's commit point: the coin log and the trie are both saved at h, so its journal record can go. A crash
         // before this line resumes at h-1, and the coin log's record undoes the block (11-06).
-        if methods::COINLOG { cl_journal_commit(); }
+        if methods::COINLOG && leaf.is_none() { cl_journal_commit(); }
         let dt = t0.elapsed().as_secs_f64();
         // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
         let rbytes = std::fs::metadata(format!("{out}/block_{h}.rcpt")).map(|m| m.len()).unwrap_or(0);

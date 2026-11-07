@@ -172,7 +172,13 @@ receipt): fine at the tip, a serial bottleneck for a whole-chain backfill.
    (positions + siblings, as cl_prepare); the trie witness (TrieStore::witness). A leaf prover
    (`libzync-prove-range h h` with HAZYNC_LEAF_BUNDLE=<file>) then needs only the bundle and block h's JSON, no
    stores. Test: every block 1..200 proved (dev mode) as a leaf from its bundle; the guest checks every witness, and
-   the joined root must equal the linear block 200.
+   the joined root must equal the linear block 200. ✅ **built + tested 11-07** (host only, image bbf82800 unchanged; `leaf/RESULT_c14_leaf.txt`):
+   mainnet 1..200: 200 bundles, 804 KB in all, largest 2,278 B (block 183), prep's states byte-identical to the proved
+   run; leaves 198, 199 and 200 each proved with ONLY their bundle and their own block file (state = the linear one but
+   `anchor_id`, as a base step); linear 197 + leaf 198 + leaf 199 + leaf 200 joined (3 joins, 6.8 s each in dev
+   mode) = the linear block 200's journal exactly (edd7a213); prove-range 1..200 with HAZYNC_LEAF_CHECK: every block's
+   coin-log, trie and BIP30 witnesses and S(h-1) byte-identical to its bundle's. Not yet: bundle bytes on mainnet-sized
+   blocks (a prep run measures them), and the coordinator serving them (e).
 
 **Mainnet prep plan (11-07; the long pole for any real-chain proof).** What it produces: the exact state before every
 block (coin log, counting trie, BIP30 tree, block forest), then per-block leaf bundles (item 8). Sizes are ESTIMATES
@@ -191,7 +197,7 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
 2. measure first: prep from genesis in disk mode (HAZYNC_PREP_SAVE_EVERY=1000, HAZYNC_PREP_CHECK against proved
    states where they exist), the rate and bytes per block recorded every 10 k blocks; the whole-chain time is
    estimated from those, not before;
-3. per-block leaf bundles (item 8) written as prep goes;
+3. per-block leaf bundles (item 8) written as prep goes: ✅ built + tested 11-07 (HAZYNC_PREP_LEAF_BUNDLES);
 4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
 The server (provider, price) is the user's call; nothing here needs a GPU.
 

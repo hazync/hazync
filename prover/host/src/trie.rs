@@ -66,15 +66,18 @@ pub(crate) fn trie_journal_words(j: &[u8]) -> [u32; libzync::ttree::TRIE_JOURNAL
     core::array::from_fn(|i| u32::from_le_bytes(j[4 * i..4 * i + 4].try_into().unwrap()))
 }
 
-/// PROVE one block's trie update against the store's current root (prove-range). Returns the receipt for the aggregate.
-pub(crate) fn trie_prove(h: u32, marks: &Marks, ins: &Inserts, prev: &ChainState, opts: &risc0_zkvm::ProverOpts) -> risc0_zkvm::Receipt {
+/// The store's witness for one block's update list (the store at the previous state's trie root).
+pub(crate) fn trie_witness(h: u32, marks: &Marks, ins: &Inserts, prev: &ChainState) -> Vec<u32> {
     let g = TS.lock().unwrap();
     let st = g.as_ref().expect("trie store not initialised");
     assert_eq!(libzync::coinlog::h_of(&st.root()), prev.trie_root, "block {h}: the trie store is not at the previous state's trie root");
-    let wit = st.witness(marks, ins);
-    drop(g);
+    st.witness(marks, ins)
+}
+
+/// PROVE one block's trie update from a given witness (a leaf proof takes it from prep's leaf bundle, no store).
+pub(crate) fn trie_prove_wit(h: u32, wit: &[u32], marks: &Marks, ins: &Inserts, prev: &ChainState, opts: &risc0_zkvm::ProverOpts) -> risc0_zkvm::Receipt {
     let mut b = ExecutorEnv::builder();
-    trie_env(&mut b, &wit, marks, ins);
+    trie_env(&mut b, wit, marks, ins);
     let r = risc0_zkvm::default_prover().prove_with_opts(b.build().unwrap(), methods::METHOD_ELF, opts)
         .unwrap_or_else(|e| panic!("block {h}: trie update proof (mode 17) failed: {e}")).receipt;
     r.verify(methods::METHOD_ID).expect("trie receipt verifies");
