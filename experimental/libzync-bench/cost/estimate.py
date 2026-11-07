@@ -9,11 +9,14 @@ GPU time = cycles * s_per_Mcycle (measured 2026-10-29: PRO 6000 ~1.2, A40 ~2.7)
 "Batched" drops the per-block fixed term: many blocks per proof session. That is NOT built.
 All rough: one sample per era, cycles->seconds from 962,000-sized work.
 """
-import re
+import re, sys
 
 R = "/home/defenwycke/libzync-gpu"
+# usage: estimate.py [<survey file> [<proof processes per block>]]; defaults: the round-16/17 survey, 2 processes
+SURVEY = sys.argv[1] if len(sys.argv) > 1 else f"{R}/r17/survey.out"
+PROCS = int(sys.argv[2]) if len(sys.argv) > 2 else 2
 surv = {}
-for l in open(f"{R}/r17/survey.out"):
+for l in open(SURVEY):
     p = l.split("\t")
     if len(p) >= 5 and p[0] in ("on", "off"):
         surv[(p[0], int(p[1]))] = int(p[4])
@@ -26,8 +29,8 @@ bounds = sorted(tc)
 samples = sorted(ntx)
 eras = list(zip(samples, bounds[:-1], bounds[1:]))   # sample h stands for [lo, hi)
 
-CARDS = {"PRO 6000": (1.2, 8.5 * 2, 2.49), "A40": (2.7, 17.0 * 2, 0.59)}
-for mode in ("on", "off"):
+CARDS = {"PRO 6000": (1.2, 8.5 * PROCS, 2.49), "A40": (2.7, 17.0 * PROCS, 0.59)}
+for mode in [m for m in ("on", "off") if (m, 100000) in surv]:
     base = surv[(mode, 100000)]
     cyc = blk = 0
     for h, lo, hi in eras:
