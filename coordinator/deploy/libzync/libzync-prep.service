@@ -7,12 +7,13 @@ Wants=libzync-fetch.service
 Type=simple
 # LZ_HI and the HAZYNC_PREP_* settings in a drop-in (libzync-prep.service.d/run.conf)
 Environment=LZ_ROOT=/var/lib/libzync-prep
-ExecStart=/var/lib/libzync-prep/bin/libzync-prep-run.sh
+ExecStart=/bin/sh -c 'exec "$LZ_ROOT/bin/libzync-prep-run.sh"'
 # exit 3 = stopped at the free-space floor (HAZYNC_PREP_MIN_FREE_GB): do not restart into a full disk
 Restart=on-failure
 RestartPreventExitStatus=3
 RestartSec=30
-# the bridge box runs bitcoind (and the original bridge): prep yields to both
+# prep yields to whatever else the box runs (bitcoind, the coordinator, the original bridge); a box with RAM to spare
+# raises the memory caps in its drop-in (the trie is read through the page cache)
 Nice=19
 IOSchedulingClass=idle
 MemoryHigh=10G

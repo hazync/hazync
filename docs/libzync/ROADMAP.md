@@ -214,7 +214,13 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
 libzync BRIDGE: the same role as `hazync-bridge` (archive node beside bitcoind, resident state, one bundle per block),
 its `leaf_<h>.bin` pushed by the same write-only `hazync-bundle-push` channel and served by the same coordinator
 (`server.py`, HAZYNC_LIBZYNC=1). The open question is disk on the bridge box: the coin log + trie are ESTIMATED at
-hundreds of GB to ~2.5-3 TB NVMe (not measured). Nothing here needs a GPU.
+hundreds of GB to ~2.5-3 TB NVMe (not measured). Nothing here needs a GPU. **Looked 11-07:** the bridge box has 16 cores, 62 GB RAM of
+which the original bridge holds 46 GB, 457 GB free; the COORDINATOR box has 16 cores, 59 GB RAM free, 3.5 TB free on
+`/srv/bulk` and its own archive bitcoind (txindex, synced). So prep runs on the coordinator box (no deletions; room
+for the trie in the page cache; leaf bundles where the coordinator serves them). The coordinator box also holds
+349,263 original-Hazync bundles over heights 1..974,926: the CORE inputs for the same-card comparison. Disk fixes
+first (13e395f): the position index follows the LIVE coins (~10-20 GB, was 100-200), coin-log levels 1..3 not
+stored (~65 GB saved).
 
 **Evidence the paper needs (user, 11-07), before writing:** (1) MAINNET block proofs on REAL chain state, across a
 range of heights from genesis to tip (no modelled state): mainnet prep to tip on the bridge box, leaf bundles at the
