@@ -285,7 +285,17 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     let t0 = std::time::Instant::now();
     let consume = std::env::var("HAZYNC_PREP_CONSUME").as_deref() == Ok("1");
     let mut consumed_from = lo;
+    let wait_s: u64 = std::env::var("HAZYNC_PREP_WAIT_S").ok().and_then(|v| v.parse().ok()).unwrap_or(3600);
     for h in lo..=hi {
+        // fed by a producer (fetch_block_rpc.py range --window): wait for the block's file to arrive
+        if consume {
+            let f = format!("{dir}/block_{h}.json");
+            let t = std::time::Instant::now();
+            while !std::path::Path::new(&f).exists() {
+                assert!(t.elapsed().as_secs() < wait_s, "{f}: not there after {wait_s} s (HAZYNC_PREP_WAIT_S); is the producer running?");
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        }
         let j = crate::read_block_json(dir, h);
         let mut st = prep_block(&prev, &j, &mut smt, &mut ecmh);
         // test hook: die after block h changed the stores, before any save (the window the journal covers)
