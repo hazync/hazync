@@ -33,8 +33,10 @@ mkdir -p "$STATE_DIR" 2>/dev/null || { echo "[bundle-gap] cannot check: cannot c
 
 # Heights at or above EMIT_FROM -- the ones the tip box is responsible for. Everything below predates the
 # split and is not this check's business.
-HEIGHTS=$(find "$DIR" -maxdepth 1 -type f -name 'bundle_*.json' -printf '%f\n' 2>/dev/null |
-          sed -n 's/^bundle_\([0-9][0-9]*\)\.json$/\1/p' |
+# A libzync coordinator (HAZYNC_LIBZYNC=1) holds prep's leaf_<n>.bin instead (ROADMAP H-B e).
+if [ "${HAZYNC_LIBZYNC:-}" = 1 ]; then PRE=leaf_; EXT=bin; else PRE=bundle_; EXT=json; fi
+HEIGHTS=$(find "$DIR" -maxdepth 1 -type f -name "${PRE}*.${EXT}" -printf '%f\n' 2>/dev/null |
+          sed -n "s/^${PRE}\([0-9][0-9]*\)\.${EXT}\$/\1/p" |
           awk -v e="$EMIT_FROM" '$1 >= e' | sort -n)
 
 # ⛔ `grep -c` would print 0 and exit 1 here, turning "no tip bundles yet" into a failure under pipefail.
@@ -54,10 +56,10 @@ MISSING=$(( SPAN - N ))
 if [ "$MISSING" -gt 0 ]; then
     echo "[bundle-gap] GAP: hold $N bundle(s) spanning $LO..$HI, so $MISSING height(s) are missing"
     # Name a few, so the alert is actionable rather than just alarming.
-    printf '%s\n' "$HEIGHTS" | sed '/^$/d' | awk -v lo="$LO" -v hi="$HI" '
+    printf '%s\n' "$HEIGHTS" | sed '/^$/d' | awk -v lo="$LO" -v hi="$HI" -v pre="$PRE" -v ext="$EXT" '
         { seen[$1] = 1 }
         END { n = 0
-              for (h = lo; h <= hi && n < 10; h++) if (!(h in seen)) { print "  missing: bundle_" h ".json"; n++ }
+              for (h = lo; h <= hi && n < 10; h++) if (!(h in seen)) { print "  missing: " pre h "." ext; n++ }
               if (n == 10) print "  ... (first 10 shown)" }'
     echo "[bundle-gap] a missing bundle makes its block unclaimable — /api/vranges will never offer it"
     exit 1

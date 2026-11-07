@@ -234,8 +234,8 @@ HAZYNC_LIBZYNC=1 serves `leaf_<h>.bin` (GENESIS_TIP = `host libzync-genesis-tip`
 `hazync-bundle-push` also pushes `leaf_*.bin`. Test: local coordinator + the stock worker, mainnet 1..4 in dev mode:
 leaves 1, 2 submitted, `hazync run 3-4` (2 leaves + 1 join) accepted, frontier 4 from genesis; wrong start heights
 refused; CI's 128 coordinator test commands pass. The leaf bundle now carries the block's JSON (LZLEAF02), so it is a
-leaf prover's only input. Not yet: deployment (a libzync coordinator instance beside the original one), the checks
-that grep `bundle_*.json` (bundle-gap, check-deployment) taught `leaf_*.bin`.
+leaf prover's only input. Not yet: deployment (a libzync coordinator instance beside the original one), `scripts/check-deployment.sh` (still greps
+`bundle_*.json`); the bundle-gap check reads `leaf_*.bin` with HAZYNC_LIBZYNC=1.
 
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;
