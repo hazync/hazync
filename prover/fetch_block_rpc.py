@@ -4,7 +4,7 @@
 # anyone who has a full node.
 #
 #   usage: python3 fetch_block_rpc.py <height> <out.json>
-#          python3 fetch_block_rpc.py range <lo> <hi> <dir> [--window N]     (HAZYNC_RPC_CLI="bitcoin-cli" or "ssh <host> bitcoin-cli" for RPC via the CLI)
+#          python3 fetch_block_rpc.py range <lo> <hi> <dir> [--window N] [--jobs N]     (HAZYNC_RPC_CLI="bitcoin-cli" or "ssh <host> bitcoin-cli" for RPC via the CLI)
 #
 # Why: fetch_block.py talks to blockstream/mempool and needs roughly one request per unique funding tx
 # (thousands for a modern block). That is rate-limited into hours, and 429s make it unreliable. A full
@@ -162,15 +162,31 @@ def main():
     if sys.argv[1] == "range":
         lo, hi, d = int(sys.argv[2]), int(sys.argv[3]), pathlib.Path(sys.argv[4])
         window = int(sys.argv[sys.argv.index("--window") + 1]) if "--window" in sys.argv else 0
+        # --jobs N: N processes, process k fetching heights lo+k, lo+k+N, ... (RPC and JSON decoding are the cost)
+        jobs = int(sys.argv[sys.argv.index("--jobs") + 1]) if "--jobs" in sys.argv else 1
         d.mkdir(parents=True, exist_ok=True)
-        import time
-        for height in range(lo, hi + 1):
-            p = d / f"block_{height}.json"
-            if p.exists(): continue
-            while window and len(list(d.glob("block_*.json"))) >= window: time.sleep(1)
-            out, n_meta = build(height)
-            write(out, p)
-            print(f"block {height}: {len(out['txs'])} txs, {n_meta} prevouts", flush=True)
+        # ⛔ prep with HAZYNC_PREP_CONSUME=1 deletes files only at its SAVE POINTS: the window must be larger than
+        # HAZYNC_PREP_SAVE_EVERY, or the producer waits for a save that waits for the producer
+        def worker(k):
+            import time
+            for height in range(lo + k, hi + 1, jobs):
+                p = d / f"block_{height}.json"
+                if p.exists(): continue
+                # files waiting below this height: only those count, so the block prep needs next is never held back
+                while window and sum(1 for q in d.glob("block_*.json") if q.name[6:-5].isdigit() and int(q.name[6:-5]) < height) >= window:
+                    time.sleep(1)
+                out, n_meta = build(height)
+                write(out, p)
+                print(f"block {height}: {len(out['txs'])} txs, {n_meta} prevouts", flush=True)
+        if jobs == 1:
+            worker(0)
+            return
+        import multiprocessing
+        ps = [multiprocessing.Process(target=worker, args=(k,)) for k in range(jobs)]
+        for x in ps: x.start()
+        for x in ps: x.join()
+        bad = [x.exitcode for x in ps if x.exitcode != 0]
+        if bad: raise SystemExit(f"{len(bad)} fetch worker(s) failed: exit codes {bad}")
         return
     height, out_path = int(sys.argv[1]), sys.argv[2]
     out, n_meta = build(height)

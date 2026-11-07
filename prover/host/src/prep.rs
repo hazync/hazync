@@ -323,6 +323,17 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     // HAZYNC_PREP_LEAF_BUNDLES=<dir>: also write leaf_<h>.bin per block (ROADMAP H-B 8), for leaf provers without stores
     let leaves = std::env::var("HAZYNC_PREP_LEAF_BUNDLES").ok();
     if let Some(d) = &leaves { std::fs::create_dir_all(d).unwrap_or_else(|e| panic!("{d}: {e}")); }
+    // HAZYNC_PREP_LEAF_AT=<h,h,...>: bundles only at those heights (a sample: a bundle carries its block's JSON, so
+    // one per block for the whole chain would be larger than the chain)
+    let leaf_at: Option<std::collections::BTreeSet<u32>> = std::env::var("HAZYNC_PREP_LEAF_AT").ok().map(|v|
+        v.split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().parse().unwrap_or_else(|_| panic!("HAZYNC_PREP_LEAF_AT: not a height: {x}"))).collect());
+    // HAZYNC_PREP_MIN_FREE_GB: stop (exit 3, after a save) when the coin log's filesystem has less free (default 50)
+    let min_free_gb: u64 = std::env::var("HAZYNC_PREP_MIN_FREE_GB").ok().and_then(|v| v.parse().ok()).unwrap_or(50);
+    // HAZYNC_PREP_REPORT_EVERY: one PREP_PROGRESS line per that many blocks (default 1,000): the rate and every
+    // store's bytes, so a slice run measures what the whole chain will need
+    let report_every: u32 = std::env::var("HAZYNC_PREP_REPORT_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1000).max(1);
+    let mut t_rep = std::time::Instant::now();
+    let mut h_rep = lo;
     let each = std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() == Ok("1");
     // Disk mode (HAZYNC_COINLOG_DIR): also save every HAZYNC_PREP_SAVE_EVERY blocks (default 1,000), so the journal of
     // blocks since the last save stays bounded and a crash resumes from at most that far back (anchor: the last
@@ -345,7 +356,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             }
         }
         let j = crate::read_block_json(dir, h);
-        let (mut st, bundle) = prep_block(&prev, &j, &mut smt, &mut ecmh, leaves.is_some());
+        let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
+        let (mut st, bundle) = prep_block(&prev, &j, &mut smt, &mut ecmh, want_leaf);
         // the leaf bundle carries prev = S(h-1) as this run commits it (anchor_id, self_id and profile included)
         if let (Some(d), Some(b)) = (&leaves, bundle) { leaf_write(&format!("{d}/leaf_{h}.bin"), &b); }
         // test hook: die after block h changed the stores, before any save (the window the journal covers)
@@ -374,9 +386,10 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 consumed_from = h + 1;
             }
         }
-        if let Some(c) = &check {
-            let want: ChainState = serde_json::from_str(&std::fs::read_to_string(format!("{c}/state_{h}.json"))
-                .unwrap_or_else(|e| panic!("{c}/state_{h}.json: {e}"))).unwrap();
+        // the check covers the heights the reference run has (a proved range: a slice run goes past it)
+        let want_path = check.as_ref().map(|c| format!("{c}/state_{h}.json")).filter(|p| std::path::Path::new(p).exists());
+        if let Some(wp) = &want_path {
+            let want: ChainState = serde_json::from_str(&std::fs::read_to_string(wp).unwrap_or_else(|e| panic!("{wp}: {e}"))).unwrap();
             if crate::state_journal_bytes(&st) != crate::state_journal_bytes(&want) {
                 let (a, b) = (serde_json::to_value(&st).unwrap(), serde_json::to_value(&want).unwrap());
                 let diff: Vec<&String> = a.as_object().unwrap().keys().filter(|k| a[k.as_str()] != b[k.as_str()]).collect();
@@ -385,10 +398,49 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 std::process::exit(1);
             }
         }
+        if h % report_every == 0 || h == hi {
+            let dt = t_rep.elapsed().as_secs_f64();
+            let mb = |d: Option<std::path::PathBuf>| d.map_or(0, |d| dir_bytes(&d)) as f64 / 1e6;
+            println!("PREP_PROGRESS h={h} blocks_per_s={:.2} coinlog_leaves={} coinlog_mb={:.0} trie_mb={:.0} out_mb={:.0} rss_mb={} elapsed_s={:.0}",
+                     (h - h_rep + 1) as f64 / dt.max(1e-9), st.utxo_leaves, mb(crate::lz::cl_dir()), mb(crate::trie::trie_dir()),
+                     mb(Some(out.into())), rss_mb(), t0.elapsed().as_secs_f64());
+            t_rep = std::time::Instant::now();
+            h_rep = h + 1;
+        }
+        // the free-space floor, checked at a save point (a stop there needs no undo on restart)
+        if save && h != hi {
+            if let Some(gb) = crate::lz::cl_dir().and_then(|d| free_gb(&d)) {
+                if gb < min_free_gb {
+                    println!("PREP_STOPPED_LOW_DISK at the save point {h}: {gb} GB free < HAZYNC_PREP_MIN_FREE_GB={min_free_gb}; restart from state_{h}.json with HAZYNC_PREP_CONTINUE=1");
+                    std::process::exit(3);
+                }
+            }
+        }
         prev = st;
     }
     println!("LZ_PREP_DONE {lo}..={hi} in {:.1} s{}", t0.elapsed().as_secs_f64(),
              if check.is_some() { "; every state's journal byte-identical to the proved run" } else { "" });
+}
+
+/// Bytes in a directory's files (one level: the stores keep their files flat).
+fn dir_bytes(d: &std::path::Path) -> u64 {
+    std::fs::read_dir(d).map(|it| it.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| {
+        // allocated bytes, not the apparent length (a sparse index or arena)
+        use std::os::unix::fs::MetadataExt;
+        m.blocks() * 512
+    }).sum()).unwrap_or(0)
+}
+
+/// This process's resident memory, MB (Linux).
+fn rss_mb() -> u64 {
+    std::fs::read_to_string("/proc/self/status").ok().and_then(|s| s.lines().find(|l| l.starts_with("VmRSS:"))
+        .and_then(|l| l.split_whitespace().nth(1)).and_then(|k| k.parse::<u64>().ok())).map_or(0, |k| k / 1024)
+}
+
+/// Free space on the filesystem holding `d`, GB (df; None if it cannot be read).
+fn free_gb(d: &std::path::Path) -> Option<u64> {
+    let o = std::process::Command::new("df").arg("-k").arg("--output=avail").arg(d).output().ok()?;
+    String::from_utf8_lossy(&o.stdout).lines().nth(1)?.trim().parse::<u64>().ok().map(|k| k / 1_000_000)
 }
 
 /// The BIP30 tree's snapshot beside a state file (state_<h>.json -> state_<h>.smt); None for genesis.
