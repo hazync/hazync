@@ -182,6 +182,12 @@ index ~2.4 B × 40-byte slots at the index's load ≈ 100-200 GB, the trie (ever
 with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
 1. a block source on the server: its own bitcoind (full blocks), and prep reading blocks over RPC instead of one
    block_<h>.json per height (JSON for the whole chain would be larger than the chain): host change, image unchanged;
+   ✅ **built + tested 11-07** (be162dc, 22bf3d0): `fetch_block_rpc.py range <lo> <hi> <dir> --window N` (any
+   `bitcoin-cli`, HAZYNC_RPC_CLI) feeds prep, which waits for each file (HAZYNC_PREP_WAIT_S) and with
+   HAZYNC_PREP_CONSUME=1 deletes the files a save point covers; the BIP30 tree is snapshotted at each save point
+   (`state_<h>.smt`), so a restart needs no block files below it. Test (mainnet 1..60 over ssh RPC, window 15, save
+   every 10): prep killed at 35, restarted from 30 with only blocks 31+ on disk, every state byte-identical to the
+   proved chain; 0 block files left at the end;
 2. measure first: prep from genesis in disk mode (HAZYNC_PREP_SAVE_EVERY=1000, HAZYNC_PREP_CHECK against proved
    states where they exist), the rate and bytes per block recorded every 10 k blocks; the whole-chain time is
    estimated from those, not before;
