@@ -63,6 +63,17 @@ refuse it.
 |---|---|---|
 | F1 | port the `is_base` forgery fix and the BIP68 fix to `main` | draft PR #668 (merge + deploy: user) |
 
+**Release: libzync onto `main` and the public infra (user, 11-07; a plan to agree, nothing cut).** Order to agree with
+the user; every release's contents are gone through with the user before it is cut.
+
+| # | item | what exists | what is left |
+|---|---|---|---|
+| R1 | merge `libzync` into `main` | `libzync` is 307 commits ahead, main 1 (#669). CI has never run on `libzync` (main + PRs only) | a PR from `libzync` (runs the whole CI for the first time: expect reds to fix), main's #669 merged in, F1 (#668) decided; the release (`release.sh`) builds and publishes the libzync host + the frozen image ids (H7, waits for the container builds) |
+| R2 | keep donations and **donate to prove** (sponsor a block range) | `server.py`: BTCPay invoices, sponsor holds and queue, the sponsor bot, `/api/donations`; all keyed by block ranges | check on a libzync coordinator (HAZYNC_LIBZYNC=1): a sponsored range is a run of leaves + joins, so the semantics carry over; run the sponsor / donation tests in libzync mode; the board text says libzync |
+| R3 | the Windows app, so anyone can help | `tools/win-gui` (GUI around the `hazync` worker; runs end to end on real Windows) | a Windows libzync host. ⛔ GPU proving on Windows is blocked by #631 (CUDA cooperative launch under WDDM, still open); CPU-only is slow (a modern leaf is ~9 GPU-minutes). Decide: fix #631 first, or ship Windows as CPU / small-block work + Linux for GPUs |
+| R4 | zyncAPP front ends on the website | the verifier in WASM (`swiftsync-verify-wasm`: coin, balance, history, absence facts against a core proof), `zync-serve` endpoints, two zyncAPPs (`prover/zyncapps`: coin, header chain) | a web page that fetches a fact + the core receipt and checks it in the browser (no trust in the server), one per zyncAPP; hosted with the board |
+| R5 | zyncAPPs as their own applications (Windows / Linux) | the C ABI (`swiftsync-verify-ffi`) and the CLI | a small desktop app per zyncAPP on the C ABI (or the WASM in a webview); packaging for both OSes |
+
 ## G. Docs
 
 | # | item | status |
