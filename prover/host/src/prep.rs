@@ -401,7 +401,9 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         if h % report_every == 0 || h == hi {
             let dt = t_rep.elapsed().as_secs_f64();
             let mb = |d: Option<std::path::PathBuf>| d.map_or(0, |d| dir_bytes(&d)) as f64 / 1e6;
-            println!("PREP_PROGRESS h={h} blocks_per_s={:.2} coinlog_leaves={} coinlog_mb={:.0} trie_mb={:.0} out_mb={:.0} rss_mb={} elapsed_s={:.0}",
+            // trie_nodes: nodes in use (x 64 B = the trie's real size; trie_mb also counts free slots and the growth step)
+            let trie_nodes = crate::trie::TS.lock().unwrap().as_ref().map_or(0, |t| t.nodes());
+            println!("PREP_PROGRESS h={h} blocks_per_s={:.2} coinlog_leaves={} coinlog_mb={:.0} trie_mb={:.0} trie_nodes={trie_nodes} out_mb={:.0} rss_mb={} elapsed_s={:.0}",
                      (h - h_rep + 1) as f64 / dt.max(1e-9), st.utxo_leaves, mb(crate::lz::cl_dir()), mb(crate::trie::trie_dir()),
                      mb(Some(out.into())), rss_mb(), t0.elapsed().as_secs_f64());
             t_rep = std::time::Instant::now();
