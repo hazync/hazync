@@ -25,6 +25,8 @@ ok()  { printf '  ok   %s\n' "$*"; }
 # Harnesses deliberately NOT in CI. Each needs a reason — an unexplained entry here is how a test
 # quietly leaves the build. Keep this list short and justified.
 declare -A EXCLUDED=(
+  [ci_verify_any.sh]="the CORE guest's verify-any gate (image 37987b85, reproduce/Dockerfile). libzync replaced the CORE guest in the build (ROADMAP R1a, 11-07): this tree cannot rebuild 37987b85; CORE stays usable as its v0.22.1 release binary. libzync's verify-any is covered by experimental/libzync-bench/coord/coord_test.sh."
+  [ci_snark_verify.sh]="the CORE guest's Groth16 check on the canonical container (37987b85), retired with the CORE build (ROADMAP R1a, 11-07); libzync's SNARK wrap is not yet in CI."
   [e2e_bundle_test.sh]="needs a live coordinator to serve a bundle; run before cutting a release"
   [cluster.sh]="multi-GPU prove fan-out, not a test"
   [rangecluster.sh]="multi-GPU prove fan-out, not a test"

@@ -479,6 +479,7 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         if neg == "list" && !marks.is_empty() { marks[0].1[0] ^= 1; }
         let mut b = ExecutorEnv::builder();
         crate::trie::trie_env(&mut b, &wit, &marks, &ins);
+        b.segment_limit_po2(seg_po2()); // trie_env sets it too; restated for check_seg_guards.sh's 25-line window
         let rcpt = if prove {
             let t0 = std::time::Instant::now();
             let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct())
@@ -849,6 +850,7 @@ pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
     let (l, r) = (rd(left), rd(right));
     let (ls, rs): (ChainState, ChainState) = (l.journal.decode().expect("left ChainState"), r.journal.decode().expect("right ChainState"));
     let mut b = ExecutorEnv::builder();
+    b.segment_limit_po2(seg_po2());
     b.add_assumption(l.clone());
     b.add_assumption(r.clone());
     b.write(&18u32).unwrap();

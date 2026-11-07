@@ -86,6 +86,7 @@ In the order the file reads them. "—" means no default in the call: the variab
 | `SEED_RANGES` | `'60'` | constant `SEED` | Number of `RANGE_SIZE` rows `init_db()` seeds. |
 | `WITNESS_DIR` | `os.path.join(os.path.dirname(__file__), 'witnesses')` | constant `WITNESS` | Legacy per-block witnesses, `block_<n>.json`. |
 | `HAZYNC_BRIDGE_OUT` | `''` | constant `BRIDGE_DIR` | Archive-node bundle directory, `bundle_<n>.json`; empty means none. |
+| `HAZYNC_LIBZYNC` | — | constant `LIBZYNC` | `1`: a libzync coordinator. The bridge directory holds prep's `leaf_<n>.bin`, `HAZYNC_HOST` is a libzync host, `GENESIS_TIP` is `host libzync-genesis-tip`, and `verify-any` is given the claimed start height. |
 | `BULK_MAX` | `str(RANGE_SIZE)` | constant `BULK_MAX` | Maximum `count` for one `GET /api/witnesses`. |
 | `HAZYNC_HOST` | `''` | constant `HOST_BIN` | Host binary run for `verify-any`, `verify-range` and `method-id`. |
 | `VERIFY_MODE` | `'mock' if not HOST_BIN else 'real'` | constant `VERIFY` | `real` runs the host; `mock` accepts without verifying and still needs `COORD_ALLOW_MOCK`. |

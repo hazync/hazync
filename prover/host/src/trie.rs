@@ -78,6 +78,7 @@ pub(crate) fn trie_witness(h: u32, marks: &Marks, ins: &Inserts, prev: &ChainSta
 pub(crate) fn trie_prove_wit(h: u32, wit: &[u32], marks: &Marks, ins: &Inserts, prev: &ChainState, opts: &risc0_zkvm::ProverOpts) -> risc0_zkvm::Receipt {
     let mut b = ExecutorEnv::builder();
     trie_env(&mut b, wit, marks, ins);
+    { use crate::seg_po2; b.segment_limit_po2(seg_po2()); } // trie_env sets it too; restated for check_seg_guards.sh
     let info = risc0_zkvm::default_prover().prove_with_opts(b.build().unwrap(), methods::METHOD_ELF, opts)
         .unwrap_or_else(|e| panic!("block {h}: trie update proof (mode 17) failed: {e}"));
     crate::lz::lz_stats("trie", h, &info.stats);

@@ -1,4 +1,4 @@
-//! ⚠ GUEST-COMPILED (feature `trie`, and the trie guest) — editing this file changes those images' METHOD_IDs.
+//! ⚠ GUEST-COMPILED CRATE (feature `trie`, and the trie guest) — editing this file changes those images' METHOD_IDs.
 //!
 //! The counting trie: one tree for every coin fact, a two-level binary trie (chosen 11-04, ROADMAP E1c).
 //!

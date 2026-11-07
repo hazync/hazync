@@ -185,6 +185,7 @@ ENV = {
     "server:SEED_RANGES": "Number of `RANGE_SIZE` rows `init_db()` seeds.",
     "server:WITNESS_DIR": "Legacy per-block witnesses, `block_<n>.json`.",
     "server:HAZYNC_BRIDGE_OUT": "Archive-node bundle directory, `bundle_<n>.json`; empty means none.",
+    "server:HAZYNC_LIBZYNC": "`1`: a libzync coordinator. The bridge directory holds prep's `leaf_<n>.bin`, `HAZYNC_HOST` is a libzync host, `GENESIS_TIP` is `host libzync-genesis-tip`, and `verify-any` is given the claimed start height.",
     "server:BULK_MAX": "Maximum `count` for one `GET /api/witnesses`.",
     "server:HAZYNC_HOST": "Host binary run for `verify-any`, `verify-range` and `method-id`.",
     "server:VERIFY_MODE": "`real` runs the host; `mock` accepts without verifying and still needs "

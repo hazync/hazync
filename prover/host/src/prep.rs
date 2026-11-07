@@ -328,6 +328,11 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
     // HAZYNC_PREP_LEAF_BUNDLES=<dir>: also write leaf_<h>.bin per block (ROADMAP H-B 8), for leaf provers without stores
     let leaves = std::env::var("HAZYNC_PREP_LEAF_BUNDLES").ok();
+    // HAZYNC_PREP_LEAF_WINDOW=<n>: the backfill's window (ROADMAP H-B, 11-07). Before writing a bundle, wait while the
+    // bundle directory already holds n of them: the coordinator's side removes a bundle once its block is proved, so
+    // prep runs at most n blocks ahead of the provers and the bundles on disk stay bounded (a whole chain of them would
+    // be ~3-5 TB). Unset: no window (the paper's sample heights).
+    let leaf_window: Option<usize> = std::env::var("HAZYNC_PREP_LEAF_WINDOW").ok().and_then(|v| v.parse().ok());
     if let Some(d) = &leaves { std::fs::create_dir_all(d).unwrap_or_else(|e| panic!("{d}: {e}")); }
     // HAZYNC_PREP_LEAF_AT=<h,h,...>: bundles only at those heights (a sample: a bundle carries its block's JSON, so
     // one per block for the whole chain would be larger than the chain)
@@ -365,7 +370,19 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
         let (mut st, bundle) = prep_block(&prev, &j, &mut smt, &mut ecmh, want_leaf);
         // the leaf bundle carries prev = S(h-1) as this run commits it (anchor_id, self_id and profile included)
-        if let (Some(d), Some(b)) = (&leaves, bundle) { leaf_write(&format!("{d}/leaf_{h}.bin"), &b); }
+        if let (Some(d), Some(b)) = (&leaves, bundle) {
+            if let Some(n) = leaf_window {
+                let held = || std::fs::read_dir(d).map(|it| it.flatten().filter(|e| {
+                    let f = e.file_name(); let f = f.to_string_lossy(); f.starts_with("leaf_") && f.ends_with(".bin")
+                }).count()).unwrap_or(0);
+                let mut said = false;
+                while held() >= n {
+                    if !said { println!("  prep: {n} leaf bundles waiting to be proved (HAZYNC_PREP_LEAF_WINDOW): waiting before block {h}"); said = true; }
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }
+            }
+            leaf_write(&format!("{d}/leaf_{h}.bin"), &b);
+        }
         // test hook: die after block h changed the stores, before any save (the window the journal covers)
         if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok(&format!("prep-after:{h}")) { std::process::exit(9); }
         if h == lo { st.anchor_id = anchor_id; }

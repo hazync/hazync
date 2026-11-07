@@ -1,4 +1,4 @@
-//! ⚠ GUEST-COMPILED — editing this file changes METHOD_ID (it is #[path]-included into the main guest, beside coinlog.rs).
+//! ⚠ GUEST-COMPILED CRATE — editing this file changes METHOD_ID (it is #[path]-included into the main guest, beside coinlog.rs).
 //! The coin log's forest: a block's update, its witness and the host's node store. The hashing is `coinlog.rs`.
 //!
 //! A block's update: the spends of coins from earlier blocks as (position, leaf, spender), sorted and strictly increasing, then
