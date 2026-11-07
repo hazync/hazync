@@ -20,6 +20,7 @@ mod trie;
 mod seg;
 mod verify;
 mod prep;
+mod lz_coord;
 
 use bench::{adversarial, bundle_roundtrip_test, check_bip30, check_full, check_ibd, chunk_profile,
     exec_time_cmd, prove_chain_bad, regress, script_flags_test, segment_mem_cmd, segment_size_cmd,
@@ -2101,7 +2102,12 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "fold-range") {
         let (l, r, o) = (args.get(p + 1).expect("left"), args.get(p + 2).expect("right"), args.get(p + 3).expect("out"));
-        fold_range_cmd(l, r, o);
+        // libzync on the original coordinator (lz_coord.rs): a fold is a join
+        if methods::LIBZYNC { lz::lz_join_cmd(l, r, o); } else { fold_range_cmd(l, r, o); }
+        return;
+    }
+    if args.iter().any(|a| a == "libzync-genesis-tip") {
+        lz_coord::genesis_tip_cmd();
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "extend-spine") {
@@ -2140,7 +2146,10 @@ fn main() {
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "verify-any") {
-        verify_any_cmd(args.get(p + 1).expect("verify-any <bin>"));
+        let f = args.get(p + 1).expect("verify-any <bin> [<lo>]");
+        if methods::LIBZYNC {
+            lz_coord::verify_any_cmd(f, args.get(p + 2).map(|v| v.parse().expect("verify-any <bin> [<lo>]: lo is a height")));
+        } else { verify_any_cmd(f); }
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "snark-wrap") {
@@ -2162,7 +2171,7 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "prove-range-bridge") {
         let n: u32 = args.get(p + 1).and_then(|s| s.parse().ok()).expect("prove-range-bridge <n>");
-        cmd_prove_range_bridge(n);
+        if methods::LIBZYNC { lz_coord::prove_bridge_cmd(n); } else { cmd_prove_range_bridge(n); }
         return;
     }
     if args.iter().any(|a| a == "prove-full") {

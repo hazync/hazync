@@ -218,7 +218,16 @@ witness, the block), produced on the prep server; the coordinator stores and ser
 id (a libzync coordinator instance pins it in place of reproduce/METHOD_ID), and for a leaf requires
 `anchor_id == link_digest(S(h-1))` and the tip = block h; for a join, the receipt verifies (the guest already enforced
 the link) and covers the two ranges' union; (3) the worker side: `libzync-prove-range h h <bundle> <S(h-1)>` for a
-leaf, `libzync-join` for a fold. Leaves on a modern block are ~9 min of PRO 6000 time (537 s); joins 6.4 s.
+leaf, `libzync-join` for a fold. Leaves on a modern block are ~9 min of PRO 6000 time (537 s); joins 6.4 s. ✅ **built + tested 11-07** (`coord/RESULT_c14_coord.txt`): a libzync host answers the original
+coordinator's three host commands (`prover/host/src/lz_coord.rs`): `prove-range-bridge <h>` = a leaf from
+`leaf_<h>.bin`, `fold-range` = a join, `verify-any <rcpt> <lo>` = the RANGE-OK line with link digests as tips (lo is
+checked: the receipt's anchor_id must be the digest of genesis or of leaf_<lo>.bin's prev); `server.py` with
+HAZYNC_LIBZYNC=1 serves `leaf_<h>.bin` (GENESIS_TIP = `host libzync-genesis-tip`); the worker stores an LZLEAF bundle;
+`hazync-bundle-push` also pushes `leaf_*.bin`. Test: local coordinator + the stock worker, mainnet 1..4 in dev mode:
+leaves 1, 2 submitted, `hazync run 3-4` (2 leaves + 1 join) accepted, frontier 4 from genesis; wrong start heights
+refused; CI's 128 coordinator test commands pass. The leaf bundle now carries the block's JSON (LZLEAF02), so it is a
+leaf prover's only input. Not yet: deployment (a libzync coordinator instance beside the original one), the checks
+that grep `bundle_*.json` (bundle-gap, check-deployment) taught `leaf_*.bin`.
 
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;

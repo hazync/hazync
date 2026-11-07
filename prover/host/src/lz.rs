@@ -933,6 +933,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         assert!(handover.is_none() && std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no handover, no resume");
         assert!(leaf_check.is_none(), "HAZYNC_LEAF_BUNDLE and HAZYNC_LEAF_CHECK: one or the other");
     }
+    // the bundle carries the block: written into the out dir, which then serves as the block dir
+    let leaf_dir: String;
+    let dir = match &leaf {
+        Some(b) => {
+            write_atomic(&format!("{out}/block_{lo}.json"), &b.block_json);
+            leaf_dir = out.to_string();
+            leaf_dir.as_str()
+        }
+        None => dir,
+    };
     let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if let Some(b) = &leaf { b.prev.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };

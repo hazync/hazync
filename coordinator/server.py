@@ -40,6 +40,14 @@ RANGE_SIZE = int(os.environ.get("RANGE_SIZE", "1000"))
 SEED       = int(os.environ.get("SEED_RANGES", "60"))
 WITNESS    = os.environ.get("WITNESS_DIR", os.path.join(os.path.dirname(__file__), "witnesses"))
 BRIDGE_DIR = os.environ.get("HAZYNC_BRIDGE_OUT", "")   # archive-node bundle dir (co-located); serves bundle_<n>.json
+# A libzync coordinator (ROADMAP H-B e; prover/host/src/lz_coord.rs): HAZYNC_HOST is a libzync host, the bundles are
+# prep's leaf_<n>.bin, GENESIS_TIP is `host libzync-genesis-tip`, and verify-any is told the claimed start height.
+LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
+
+
+def _bridge_files(blk):
+    """The bridge's file for block `blk` (a libzync coordinator: prep's leaf bundle), as a list (empty: no bridge)."""
+    return [os.path.join(BRIDGE_DIR, f"leaf_{blk}.bin" if LIBZYNC else f"bundle_{blk}.json")] if BRIDGE_DIR else []
 
 # ── How high does this coordinator go? ────────────────────────────────────────────────────────────
 #
@@ -77,15 +85,16 @@ def _servable_high(force=False):
         if not force and _tip_cache["v"] is not None and now - _tip_cache["t"] < TIP_TTL:
             return _tip_cache["v"]
     hi = None
-    for d, pre in ((BRIDGE_DIR, "bundle_"), (WITNESS, "block_")):
+    for d, pre, ext in ((BRIDGE_DIR, "leaf_" if LIBZYNC else "bundle_", ".bin" if LIBZYNC else ".json"),
+                        (WITNESS, "block_", ".json")):
         if not d:
             continue
         try:
             with os.scandir(d) as it:
                 for e in it:
                     n = e.name
-                    if n.startswith(pre) and n.endswith(".json"):
-                        core = n[len(pre):-5]
+                    if n.startswith(pre) and n.endswith(ext):
+                        core = n[len(pre):-len(ext)]
                         if core.isdigit():
                             v = int(core)
                             if hi is None or v > hi:
@@ -774,7 +783,7 @@ def bundle_path(blk):
     inclusion proofs, provable with NO replay), then the legacy per-block witness. Kept as one function
     so the single and bulk endpoints cannot drift into serving different files for the same height.
     """
-    for f in ([os.path.join(BRIDGE_DIR, f"bundle_{blk}.json")] if BRIDGE_DIR else []) \
+    for f in _bridge_files(blk) \
              + [os.path.join(WITNESS, f"block_{blk}.json")]:
         if os.path.exists(f):
             return f
@@ -1146,7 +1155,10 @@ def verify_receipt(receipt: bytes, rng):
     with open(tmp, "wb") as f:
         f.write(receipt)
     try:
-        r = subprocess.run([HOST_BIN, "verify-any", tmp], capture_output=True, timeout=120)
+        # libzync: a receipt names only the DIGEST of the state before its range, so the host is told the claimed
+        # start and checks it against that state (genesis, or leaf_<lo>.bin's prev)
+        r = subprocess.run([HOST_BIN, "verify-any", tmp] + ([str(max(rng["lo"], 1))] if LIBZYNC else []),
+                           capture_output=True, timeout=120)
         out = r.stdout.decode(errors="replace")  # S3: parse ONLY stdout, never fold stderr/RUST_LOG in
         # take the single line the verifier prints (it starts with RANGE-OK) — no free-text can inject keys
         line = next((l for l in out.splitlines() if l.startswith("RANGE-OK")), None)
@@ -3780,7 +3792,7 @@ def log_beat_rejection(ip, body, code, obj):
 def witness_available(blk):
     """True if a witness for `blk` can be served. Free-running proving needs arbitrary heights, and
     the bridge already provides them — the lookup is a direct file path with no frontier window."""
-    for f in ([os.path.join(BRIDGE_DIR, f"bundle_{blk}.json")] if BRIDGE_DIR else []) \
+    for f in _bridge_files(blk) \
              + [os.path.join(WITNESS, f"block_{blk}.json")]:
         if os.path.exists(f):
             return True

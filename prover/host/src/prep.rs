@@ -93,8 +93,11 @@ pub(crate) struct LeafBundle {
     /// the coin-log witness (cl_prepare) and the trie witness (TrieStore::witness)
     pub(crate) cl_wit: Vec<u32>,
     pub(crate) trie_wit: Vec<u32>,
+    /// block h's JSON (as read_block_json parses it), so a bundle is the leaf prover's ONLY input (the coordinator
+    /// serves it as the block's witness, as the original bridge's bundle_<n>.json)
+    pub(crate) block_json: Vec<u8>,
 }
-pub(crate) const LEAF_MAGIC: &[u8; 8] = b"LZLEAF01";
+pub(crate) const LEAF_MAGIC: &[u8; 8] = b"LZLEAF02";
 
 pub(crate) fn leaf_write(path: &str, b: &LeafBundle) {
     let mut v = LEAF_MAGIC.to_vec();
@@ -235,7 +238,8 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     recent_times.push(time);
     if recent_times.len() > 11 { let e = recent_times.len() - 11; recent_times.drain(0..e); }
     let (live_set, live_hash) = ecmh.to_state();
-    let bundle = wits.map(|(cl_wit, trie_wit)| LeafBundle { prev: prev.clone(), in_smt_root, smt: smt_w.0, cl_wit, trie_wit });
+    let bundle = wits.map(|(cl_wit, trie_wit)| LeafBundle { prev: prev.clone(), in_smt_root, smt: smt_w.0, cl_wit, trie_wit,
+                                                                     block_json: serde_json::to_vec(j).unwrap() });
     (ChainState {
         tip_hash, utxo_roots, utxo_leaves, utxo_value,
         cum_work: add_work(&prev.cum_work, bits), height, prev_nbits: bits, prev_time: time,
