@@ -27,24 +27,27 @@ chmod +x "$CORE"
 ( nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader -l 1 >"$OUT/smi.log" 2>/dev/null ) & SMI=$!
 trap 'kill $SMI 2>/dev/null' EXIT
 echo -e "height\twhat\twall_s\texit\tdetail" > "$OUT/results.tsv"
+# CORE first (its bundles are all here), then libzync: a leaf bundle may still be arriving (the laptop driver pushes
+# each one as prep writes it), so a libzync block waits for its leaf up to LEAF_WAIT_S
 for h in $HEIGHTS; do
-  # libzync: one chunk per block (as the cycle table), signature hints collected first
-  if [ -f "$BUNDLE/leaf/leaf_$h.bin" ]; then
-    say "libzync leaf $h"; rm -rf "$OUT/lz_$h"; mkdir -p "$OUT/lz_$h"
-    t=$(date +%s.%N)
-    HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=$(nproc) HAZYNC_LEAF_BUNDLE="$BUNDLE/leaf/leaf_$h.bin" \
-      "$LZ" libzync-prove-range "$h" "$h" "$OUT/lz_$h" leaf "$OUT/lz_$h/run" > "$OUT/lz_$h.log" 2>&1; rc=$?
-    w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
-    st=$(grep -a '^LZ_STATS' "$OUT/lz_$h.log" | awk '{print $2"="$4","$5}' | tr '\n' ' ')
-    echo -e "$h\tlibzync\t$w\t$rc\t$st" >> "$OUT/results.tsv"; say "libzync $h: ${w} s exit $rc $st"
-  fi
-  if [ -f "$BUNDLE/core/bundle_$h.json" ]; then
-    say "CORE $h"; mkdir -p "$OUT/core_$h"
-    t=$(date +%s.%N)
-    ( cd "$OUT/core_$h" && HAZYNC_BRIDGE_OUT="$BUNDLE/core" "$CORE" prove-range-bridge "$h" ) > "$OUT/core_$h.log" 2>&1; rc=$?
-    w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
-    seg=$(grep -a -o 'executed, [0-9]* segments at po2 [0-9]*' "$OUT/core_$h.log" | head -1)
-    echo -e "$h\tCORE\t$w\t$rc\t$seg" >> "$OUT/results.tsv"; say "CORE $h: ${w} s exit $rc ($seg)"
-  fi
+  [ -f "$BUNDLE/core/bundle_$h.json" ] || { say "no CORE bundle for $h"; continue; }
+  say "CORE $h"; mkdir -p "$OUT/core_$h"
+  t=$(date +%s.%N)
+  ( cd "$OUT/core_$h" && HAZYNC_BRIDGE_OUT="$BUNDLE/core" "$CORE" prove-range-bridge "$h" ) > "$OUT/core_$h.log" 2>&1; rc=$?
+  w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
+  seg=$(grep -a -o 'executed, [0-9]* segments at po2 [0-9]*' "$OUT/core_$h.log" | head -1)
+  echo -e "$h\tCORE\t$w\t$rc\t$seg" >> "$OUT/results.tsv"; say "CORE $h: ${w} s exit $rc ($seg)"
+done
+for h in $HEIGHTS; do
+  f="$BUNDLE/leaf/leaf_$h.bin"; t0=$(date +%s)
+  until [ -f "$f" ] || [ $(( $(date +%s) - t0 )) -ge ${LEAF_WAIT_S:-10800} ]; do sleep 20; done
+  [ -f "$f" ] || { say "no leaf bundle for $h after ${LEAF_WAIT_S:-10800} s"; continue; }
+  say "libzync leaf $h"; rm -rf "$OUT/lz_$h"; mkdir -p "$OUT/lz_$h"
+  t=$(date +%s.%N)
+  HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=$(nproc) HAZYNC_LEAF_BUNDLE="$f" \
+    "$LZ" libzync-prove-range "$h" "$h" "$OUT/lz_$h" leaf "$OUT/lz_$h/run" > "$OUT/lz_$h.log" 2>&1; rc=$?
+  w=$(python3 -c "import time;print(f'{time.time()-$t:.1f}')")
+  st=$(grep -a '^LZ_STATS' "$OUT/lz_$h.log" | awk '{print $2"="$4","$5}' | tr '\n' ' ')
+  echo -e "$h\tlibzync\t$w\t$rc\t$st" >> "$OUT/results.tsv"; say "libzync $h: ${w} s exit $rc $st"
 done
 say "PAPER_RUN_DONE"; cat "$OUT/results.tsv" | tee -a "$OUT/run.log"

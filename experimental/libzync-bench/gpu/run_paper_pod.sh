@@ -105,6 +105,19 @@ seen=0
 while :; do
   ssh $K -p "$PORT" root@"$HOST" 'cat /workspace/pod.log 2>/dev/null' > "$OUT/pod.log.live" 2>/dev/null
   n=$(wc -l < "$OUT/pod.log.live"); [ "$n" -gt "$seen" ] && { sed -n "$((seen+1)),${n}p" "$OUT/pod.log.live" | tee -a "$OUT/driver.log"; seen=$n; }
+  # push each leaf bundle to the pod as prep writes it (on the coordinator box: the main run's or the check run's leaves)
+  for h in $HEIGHTS; do
+    [ -f "$OUT/pushed_$h" ] && continue
+    for d in /srv/bulk/libzync-prep/leaves /srv/bulk/libzync-check/leaves; do
+      if ssh -o ConnectTimeout=15 hazync-proof "test -f $d/leaf_$h.bin" 2>/dev/null; then
+        mkdir -p "$L/leaf"; scp -q hazync-proof:$d/leaf_$h.bin "$L/leaf/leaf_$h.bin.part" && mv "$L/leaf/leaf_$h.bin.part" "$L/leaf/leaf_$h.bin" \
+          && scp -q $K -P "$PORT" "$L/leaf/leaf_$h.bin" root@"$HOST":/workspace/bundles/leaf/leaf_$h.bin.part \
+          && ssh $K -p "$PORT" root@"$HOST" "mv /workspace/bundles/leaf/leaf_$h.bin.part /workspace/bundles/leaf/leaf_$h.bin" \
+          && touch "$OUT/pushed_$h" && log "pushed leaf_$h.bin"
+        break
+      fi
+    done
+  done
   grep -q POD_DONE "$OUT/pod.log.live" && { log "POD_DONE"; break; }
   [ "$(date +%s)" -ge "$DEADLINE" ] && { log "DEADLINE reached: harvesting what exists"; break; }
   sleep 30
