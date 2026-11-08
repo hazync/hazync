@@ -74,7 +74,9 @@ else:
 if not CONTROL:
     readme = open(os.path.join(HERE, "..", "README.md"), encoding="utf8").read()
     badges = re.findall(r"img\.shields\.io/badge/dynamic/json\?url=([^&]+)&query=([^&]+)", readme)
-    check(len(badges) >= 4, f"found {len(badges)} dynamic badges in README.md")
+    # 2026-11-08: README.md dropped its badges when libzync replaced the CORE board (they counted the CORE board's
+    # proofs); they return with the libzync board. Whatever badges it carries must still ask only the slim endpoint.
+    print(f"  --   {len(badges)} dynamic badges in README.md")
     for url, query in badges:
         check("slim%3D1" in url or "slim=1" in url,
               f"badge {query} asks the slim endpoint")
