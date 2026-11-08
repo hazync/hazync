@@ -208,7 +208,11 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
    proved chain; 0 block files left at the end;
 2. measure first: prep from genesis in disk mode (HAZYNC_PREP_SAVE_EVERY=1000, HAZYNC_PREP_CHECK against proved
    states where they exist), the rate and bytes per block recorded every 10 k blocks; the whole-chain time is
-   estimated from those, not before;
+   estimated from those, not before; **measured 11-08:** 0 mismatches to 370 k; ~0.9 blocks/s to ~367 k, then
+   0.18-0.28 once the trie (59 GB) passed RAM (62 GB) in the 2015 spam blocks. Cause: the bulk volume's WRITES, ~40 MB/s
+   flat whatever the queue settings (wbt off: same), prep half its time in `balance_dirty_pages` (the service's
+   MemoryHigh made it worse: lifted) and the rest in page faults; the disk arena reused freed 64-byte slots in random
+   order, one dirty 4 KiB page each. Fix dbcc628: reuse them in address order (layout only). ⏳ measure;
 3. per-block leaf bundles (item 8) written as prep goes: ✅ built + tested 11-07 (HAZYNC_PREP_LEAF_BUNDLES);
 4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
 **H7 DONE 11-07** (`h7/RESULT_h7.txt`, tag `libzync-c14` = source ce4e1e3): two container builds on the bridge box
