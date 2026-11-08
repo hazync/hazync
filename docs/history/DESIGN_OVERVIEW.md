@@ -238,9 +238,9 @@ parallel backfill; every tip hash and UTXO count matches mainnet. Empirically va
 segwit, taproot, big-block and pre-BIP34 eras.
 
 Two external reviews ran in August 2026, findings, fixes and what each could *not* verify are
-recorded in [`SECURITY.md`](../SECURITY.md). Still to come: the full genesis→tip proving campaign and a
+recorded in [`SECURITY.md`](SECURITY_MODEL_CORE.md). Still to come: the full genesis→tip proving campaign and a
 commissioned audit. Trying to break it is the most useful thing you can do,
-[`SECURITY.md`](../SECURITY.md) maps the soft spots.
+[`SECURITY.md`](SECURITY_MODEL_CORE.md) maps the soft spots.
 
 ## More
 
@@ -249,7 +249,7 @@ commissioned audit. Trying to break it is the most useful thing you can do,
 - Run your own coordinator (archive node + bridge + board): [`docs/RUN_YOUR_OWN_COORDINATOR.md`](RUN_YOUR_OWN_COORDINATOR.md)
 - **Specification** (formats, invariants, how to verify independently): [`docs/SPEC.md`](SPEC.md)
 - Soundness statement (a reviewer's best first read): [`docs/SOUNDNESS.md`](SOUNDNESS.md)
-- Audit record: [`SECURITY.md`](../SECURITY.md) (status, open items) · every round, 1–11, the last two
+- Audit record: [`SECURITY.md`](SECURITY_MODEL_CORE.md) (status, open items) · every round, 1–11, the last two
   external: [`docs/history/SECURITY_AUDIT_LOG.md`](history/SECURITY_AUDIT_LOG.md) · round 8's
   full write-up: [`AUDIT_2026-07.md`](history/AUDIT_2026-07.md)
 - Adversarial fuzzing (what was fuzzed, what wasn't): [`docs/FUZZING.md`](FUZZING.md)

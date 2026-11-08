@@ -8,8 +8,8 @@ TOPOLOGY_AND_SETTINGS (now in `docs/history/`).
 libzync is replacing the guest ([`libzync/LIBZYNC.md`](libzync/LIBZYNC.md)); its own GPU scripts are in
 `experimental/libzync-bench/gpu/`. Everything below is still the reference for the shipped system.
 
-New to proving: [`CONTRIBUTING.md`](../CONTRIBUTING.md) first. Concepts: [`OVERVIEW.md`](OVERVIEW.md).
-Board coordinator: [`COORDINATOR.md`](COORDINATOR.md). Soundness: [`SECURITY.md`](SECURITY.md). Builds and
+New to proving: [`CONTRIBUTING.md`](../CONTRIBUTING.md) first. Concepts: [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md).
+Board coordinator: [`COORDINATOR.md`](COORDINATOR.md). Soundness: [`SECURITY.md`](history/SECURITY_MODEL_CORE.md). Builds and
 releases: [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md).
 
 **Labels.** MEASURED = in this repo's evidence (CORE guest unless it says *stock*). INFERRED = arithmetic
@@ -146,8 +146,8 @@ NGPU=2 LO=1 HI=550 HAZYNC_WITNESS_DIR=/w bash rangecluster.sh   # multi-GPU fan-
   `straggler: max ... = N.NNx` line (sample `prover/evidence/chunk_packing_741000.txt`). `HAZYNC_CHUNKS` is a
   request — an uneven block can pack into fewer runs.
 - `verify-chain` checks `self_id`, the `KIND_CHAIN` tag and the genesis anchor, so a checkpoint-anchored demo
-  proof fails it ([`SECURITY.md`](SECURITY.md)). A fold checks the full seam (tip, UTXO roots+leaves,
-  difficulty, MTP window); [`SPEC.md`](SPEC.md) §10.
+  proof fails it ([`SECURITY.md`](history/SECURITY_MODEL_CORE.md)). A fold checks the full seam (tip, UTXO roots+leaves,
+  difficulty, MTP window); [`history/SPEC_CORE.md`](history/SPEC_CORE.md) §10.
 - `prove-range-bridge` proves a **board** block in one process on one card; for many cards use mode 6 (§2.4).
 
 ### 2.2 One block across many cards: chunks + aggregate (fixture only)
@@ -792,7 +792,7 @@ an answered po2-23 question).
 | field backend + `lift_x` hint | `patches/0012` + `0013` | **4.095x** fewer cycles on 962,000 (13,748,003,793 → 3,357,576,338), journal byte-identical (`all_valid=1`, `binds=8006`) |
 
 Codegen/window shipped in v0.20.0 (`42417d2`); `0012`/`0013` canonical in v0.21.0 (`c12ad67`, 2026-09-07),
-applied unconditionally by `provision-vps.sh`, and in the trust base ([`SECURITY.md`](SECURITY.md)). SHA-256
+applied unconditionally by `provision-vps.sh`, and in the trust base ([`SECURITY.md`](history/SECURITY_MODEL_CORE.md)). SHA-256
 uses the RISC0 accelerator (patch `0002`). Window 21 is the `build.rs` default and `provision-vps.sh` exports
 it. Detail: [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md), [`history/FIELD_BIGINT2_BACKEND.md`](history/FIELD_BIGINT2_BACKEND.md).
 

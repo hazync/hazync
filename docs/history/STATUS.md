@@ -24,7 +24,7 @@ minute, so use the live API; the snapshot below is dated.
 - **Previous: [v0.21.7](https://github.com/hazync/hazync/releases/tag/v0.21.7)**, published
   2026-09-19 ([notes](history/releases/RELEASE_NOTES_v0.21.7.md)). Every release ships the same seven assets
   plus `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`; check them as in
-  [`SECURITY.md`](../SECURITY.md#verifying-releases).
+  [`SECURITY.md`](SECURITY_MODEL_CORE.md#verifying-releases).
 
 ## Guest
 
@@ -112,7 +112,7 @@ Each verified on 2026-09-14; detail in [`THREAT_MODEL.md`](THREAT_MODEL.md#open-
 ## Resolved on 2026-09-14 and 2026-09-15
 
 - **Reporting route**: security and conduct reports go through GitHub private vulnerability reporting
-  ([`SECURITY.md`](../SECURITY.md#reporting-a-vulnerability), [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md)).
+  ([`SECURITY.md`](SECURITY_MODEL_CORE.md#reporting-a-vulnerability), [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md)).
 - **Everything that cannot be rebuilt cheaply has two off-site copies**: receipts, the spine, the sponsor keys
   (encrypted) and the ledger, in Cloudflare R2 and Backblaze B2, checked daily with restore drills
   (#328, #331, #335, #338).

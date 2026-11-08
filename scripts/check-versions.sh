@@ -47,14 +47,26 @@ HISTORY_RE='^(docs/history/|docs/RELEASE_NOTES_|CHANGELOG\.md$)'
 # README.md states the canonical id in its place.
 # docs/OPERATIONS.md took over docs/PROVING.md's role on 2026-11-06 (G2 cleanup). A missing file is a FAILURE, not a
 # skip: a check that passes on a file that is not there checks nothing.
-for f in docs/OPERATIONS.md SECURITY.md README.md; do
-    [ -f "$f" ] || { bad "$f is missing: it must state the canonical id"; continue; }
+# 2026-11-08: libzync replaced the CORE guest on main (#670). README.md and SECURITY.md state the PUBLISHED libzync
+# mainnet image (reproduce/LIBZYNC_IDS) instead; docs/OPERATIONS.md still describes the CORE fleet and keeps
+# reproduce/METHOD_ID's id until that re-baseline.
+LZ_MAIN=$(grep -oE 'libzync-product mainnet METHOD_ID [0-9a-f]{64}' reproduce/LIBZYNC_IDS | grep -oE '[0-9a-f]{64}$')
+[ ${#LZ_MAIN} -eq 64 ] || bad "reproduce/LIBZYNC_IDS has no 'libzync-product mainnet METHOD_ID <64 hex>' line"
+for f in SECURITY.md README.md; do
+    [ -f "$f" ] || { bad "$f is missing: it must state the published libzync id"; continue; }
+    if grep -q "${LZ_MAIN:-unset}" "$f"; then note "ok   $f states the published libzync mainnet id"; elif [ "$f" = README.md ]; then
+        bad "$f never states the published libzync mainnet id ${LZ_MAIN:0:8} (reproduce/LIBZYNC_IDS)"; else
+        grep -q "reproduce/LIBZYNC_IDS" "$f" && note "ok   $f points at reproduce/LIBZYNC_IDS" || bad "$f names neither the libzync id nor reproduce/LIBZYNC_IDS"; fi
+done
+f=docs/OPERATIONS.md
+{
+    [ -f "$f" ] || { bad "$f is missing: it must state the canonical id"; }
     if grep -q "$CANON8" "$f"; then
         note "ok   $f references the canonical id"
     else
         bad "$f never mentions the canonical id $CANON8 — was it re-baselined without updating this doc?"
     fi
-done
+}
 
 # ── 2. any token CLAIMED AS a guest id must be canonical or a documented predecessor ──────────────
 # Scoped to lines that actually talk about the guest id. The repo is full of other 8-hex hashes — tip

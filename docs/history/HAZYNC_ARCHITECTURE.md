@@ -1,6 +1,6 @@
 # Hazync engine — architecture & integration plan
 
-> **Historical record, moved here on 2026-09-14.** Superseded by [`../SPEC.md`](../SPEC.md),
+> **Historical record, moved here on 2026-09-14.** Superseded by [`../SPEC.md`](SPEC_CORE.md),
 > [`../SOUNDNESS.md`](../SOUNDNESS.md) and [`../PROVING.md`](../PROVING.md) — what is current: those three for
 > the design, the trust model and proving. The bigint2 field backend discussed below shipped as `patches/0012`
 > in the canonical CORE guest from v0.21.0 ([`../BUILDS.md`](../BUILDS.md)). `ACCELERATION.md` below is

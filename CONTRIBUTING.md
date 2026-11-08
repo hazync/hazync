@@ -1,5 +1,9 @@
 # Join the Hazync Proof Party
 
+> **2026-11-08: being replaced.** This guide is for the original board (the CORE guest `37987b85`), whose proving
+> is stopped. libzync, the new core ([`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md)), will be proved from genesis
+> as independent per-block work items once its coordinator is live; this guide is rewritten for it then.
+
 You prove one block of Bitcoin's history on your own machine, sign it, and submit it. Your name goes on the board at https://hazync.org/, and the proof is public for anyone to download and check. This guide takes you from nothing to your first proof.
 
 ## What you need

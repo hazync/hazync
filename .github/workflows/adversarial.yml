@@ -1710,7 +1710,7 @@ jobs:
           ./verifier-wasm/build.sh
           ./verifier-wasm/test-parity.sh
       - name: SPEC.md formats match the code (a drifted spec is worse than no spec)
-        # docs/SPEC.md is normative about byte layouts and constants. If it drifts, a reviewer
+        # docs/history/SPEC_CORE.md is normative about byte layouts and constants. If it drifts, a reviewer
         # implements against it, their verifier disagrees with ours, and the disagreement looks like
         # OUR bug. Only mechanically checkable claims are covered — constants, tags, and the full
         # RangeState field list in declaration order, because the journal decodes positionally.

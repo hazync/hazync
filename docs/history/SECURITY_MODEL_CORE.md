@@ -2,15 +2,15 @@
 
 What a Hazync proof guarantees, what it rests on, who can attack what, the soundness argument and its
 known gaps, what happens to proofs when the guest changes, what has been reviewed, and what has been
-fuzzed. Written to pre-empt critique, not to hide it. Read the root [`../SECURITY.md`](../SECURITY.md)
+fuzzed. Written to pre-empt critique, not to hide it. Read the root [`../SECURITY.md`](../../SECURITY.md)
 (audit status, finding index, vulnerability reporting) before relying on any "undeniable" framing.
 
 **Scope.** Sections 1-6 describe the original system, the canonical CORE guest, as of September 2026
 (threat model checked against code at `d5286b8`, v0.21.4 plus 13 commits, canonical guest `37987b85`, on
 2026-09-14). libzync has its own statement and verifier: §7. Where a doc and the code disagree, the code
-wins. Terms: [`OVERVIEW.md`](OVERVIEW.md). Routes and configuration: [`COORDINATOR.md`](COORDINATOR.md).
-History of findings: [`history/SECURITY_AUDIT_LOG.md`](history/SECURITY_AUDIT_LOG.md).
-Report a vulnerability privately: [`../SECURITY.md`](../SECURITY.md#reporting-a-vulnerability).
+wins. Terms: [`OVERVIEW.md`](OVERVIEW_CORE.md). Routes and configuration: [`COORDINATOR.md`](../COORDINATOR.md).
+History of findings: [`history/SECURITY_AUDIT_LOG.md`](SECURITY_AUDIT_LOG.md).
+Report a vulnerability privately: [`../SECURITY.md`](../../SECURITY.md#reporting-a-vulnerability).
 
 Merged from SOUNDNESS, THREAT_MODEL, EXTERNAL_REVIEW, METHOD_ID_DURABILITY, PROOF_DURABILITY and FUZZING.
 
@@ -24,7 +24,7 @@ A verified **chain-tip proof** attests: every block from the anchor to the tip i
 Core consensus, the UTXO set is exactly the committed root, and cumulative proof-of-work is as committed,
 checkable by verifying one succinct proof without re-executing history or trusting peers.
 
-Concretely, a receipt that passes SPEC §11.1 ([`SPEC.md`](SPEC.md)) — verifies against the canonical
+Concretely, a receipt that passes SPEC §11.1 ([`SPEC.md`](SPEC_CORE.md)) — verifies against the canonical
 `METHOD_ID`, `journal.self_id` equals it, `journal.kind == KIND_RANGE`, and the genesis pin of SPEC §9
 holds — attests that blocks `1..hi` are valid and that the UTXO set is the committed out-boundary.
 Liveness, attribution, availability and cost are outside that statement.
@@ -52,14 +52,14 @@ Liveness, attribution, availability and cost are outside that statement.
      Gates 0-3 passed: a mod-p harness against arbitrary precision, libsecp's suite under `-DVERIFY`,
      mutation controls (two deliberately broken lazy backends pass libsecp's suite and are caught only by
      the harness), and a block-962,000 journal digest byte-identical to stock
-     (`scripts/field-backend-tests.sh`, [`history/FIELD_BIGINT2_BACKEND.md`](history/FIELD_BIGINT2_BACKEND.md) §5b).
+     (`scripts/field-backend-tests.sh`, [`history/FIELD_BIGINT2_BACKEND.md`](FIELD_BIGINT2_BACKEND.md) §5b).
      ⚠ **Gate 4, the corrupt-signature negative control, has not run on a CORE build** — an open soundness
      item for shipped code (§3.6).
    - **`0013` — the `lift_x` witness hint** (`src/liftx_hint.rs`). `hazync_lift_x_hint` offers a host
      `y` for `secp256k1_ge_set_xo_var`, accepted only if `secp256k1_fe_sqr(y)` equals `x³ + 7`
      (`secp256k1_fe_equal`); the existing parity fix-up then fixes y uniquely, and a missing or wrong hint
      falls back to libsecp's `secp256k1_fe_sqrt`. Advice-and-verify: a hint can skip work, not change a
-     result ([`history/LIFTX_HINT.md`](history/LIFTX_HINT.md) §3) — but that check is itself computed on the `0012` backend.
+     result ([`history/LIFTX_HINT.md`](LIFTX_HINT.md) §3) — but that check is itself computed on the `0012` backend.
 3. **SHA-256 collision resistance.** The Utreexo accumulator, the coinbase SMT and the merkle/commitment
    checks are SHA-256; that is their entire security. `sha2` comes from `risc0/RustCrypto-hashes` tag
    `sha2-v0.10.8-risczero.0` (`[patch.crates-io]` in the guest `Cargo.toml`).
@@ -165,7 +165,7 @@ block verify.
 
 - **Segment workers** (`seg-serve`/`seg-connect`) cannot forge a segment receipt; a correct receipt for the
   wrong segment fails the join's state-digest continuity. Returned receipts pass
-  `verify_integrity_with_context` before use ([`OPERATIONS.md`](OPERATIONS.md), "Trust model"). Cost: latency.
+  `verify_integrity_with_context` before use ([`OPERATIONS.md`](../OPERATIONS.md), "Trust model"). Cost: latency.
 - **Whoever controls a rented host** can read `$HAZYNC_HOME/key.hex` (mode 600 guards it from other users,
   not root) and submit, fold and beat claims as the contributor. Rotation (`rotate()`: old+new key
   signatures over `rotate_message(old, new, ts)` within `ROTATE_MAX_SKEW`) is something a thief can do, is
@@ -173,7 +173,7 @@ block verify.
   `/api/rotate` answers `410` unless `ROTATE_ENABLED=1`; nobody had rotated on the public board. A stolen
   key can no longer move attribution, but can still submit and fold under the owner's name. Proofs are
   unaffected.
-- **Sponsor bot pods** get a per-sponsorship key ([`COORDINATOR.md`](COORDINATOR.md), "Identities"); SSH
+- **Sponsor bot pods** get a per-sponsorship key ([`COORDINATOR.md`](../COORDINATOR.md), "Identities"); SSH
   runs with `StrictHostKeyChecking=no` because pods reuse addresses. An on-path attacker could impersonate a
   pod: blast radius is spend within the bot's caps and attribution of sponsored blocks; every proof is
   still verified.
@@ -277,7 +277,7 @@ and HTTP 200, so only calling it shows the difference. `scripts/check-deployed-v
 `HAZYNC_SITE`) requires a byte-identical loader, the release wasm size, `methodId()` equal to
 `reproduce/METHOD_ID`, and that a one-bit-flipped spine fails. CI job `deployed-verifier` runs it on
 schedule and `workflow_dispatch` only, so it catches drift after the fact. The signed CLI remains the
-stronger check. Deploying both copies is part of [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md).
+stronger check. Deploying both copies is part of [`BUILD_AND_RELEASE.md`](../BUILD_AND_RELEASE.md).
 
 ### 2.9 Release signing
 
@@ -368,7 +368,7 @@ A re-audit of those fixes found:
 
 ### 3.3 Anchor identity and completeness (round 8, 2026-07-22)
 
-Five-reviewer audit ([`history/AUDIT_2026-07.md`](history/AUDIT_2026-07.md)). Accumulator, FFI/VerifyScript
+Five-reviewer audit ([`history/AUDIT_2026-07.md`](AUDIT_2026-07.md)). Accumulator, FFI/VerifyScript
 boundary and enforcement gating held; one verifier hole and five completeness deviations, all fixed except
 the unprovable one:
 
@@ -430,7 +430,7 @@ timestamps and per-coin MTP. The IBD/chain path has no such dependency.
 regression (`regress`, `check-full`: block 170 tip-match + adversarial inflation in seconds; standard
 pre-flight before any GPU prove). 5. ✅ Block 741000 (670 inputs) proven on GPU: 16 chunk receipts →
 aggregate, VERIFIED, tip byte-matches mainnet; exercised BIP141, BIP34/30, maturity/BIP68; fixed a header
-builder that hardcoded version 1. 6. Scaling ([`history/HAZYNC_ARCHITECTURE.md`](history/HAZYNC_ARCHITECTURE.md)):
+builder that hardcoded version 1. 6. Scaling ([`history/HAZYNC_ARCHITECTURE.md`](HAZYNC_ARCHITECTURE.md)):
 (a) ✅ succinct chunk receipts (2026-07-15; the 1645 s aggregate was dominated by lifting 16 composite
 receipts); (b) ✅ archive-node bridge (§1.3); (c) parallel backfill → tree fold. Items 1-6 did not change the
 trust base; it grew in v0.21.0 with patches 0012/0013.
@@ -544,10 +544,10 @@ permanent id list. ⏰ **Unmeasured and possibly decisive:** the cost of lifting
 ## 5. Review and audit status
 
 **Nine rounds of self-audit and two external reviews** (rounds 10 and 11,
-[`history/SECURITY_AUDIT_LOG.md`](history/SECURITY_AUDIT_LOG.md)). Both external passes were
+[`history/SECURITY_AUDIT_LOG.md`](SECURITY_AUDIT_LOG.md)). Both external passes were
 **AI-assisted full-source reviews by people outside the project, not a commissioned professional audit**.
 Neither found a soundness break in the guest, the verifier or the coordinator frontier. Only round 8 has a
-standalone write-up ([`history/AUDIT_2026-07.md`](history/AUDIT_2026-07.md)); others are recorded where their
+standalone write-up ([`history/AUDIT_2026-07.md`](AUDIT_2026-07.md)); others are recorded where their
 findings were fixed (the audit log indexed from `../SECURITY.md`, `reproduce/METHOD_ID`, code comments,
 including our own mistakes and retractions). They found real defects, among them a canonical-chain break
 (audit #3, F-1) that survived internal review because a comment, a test name and a fixture agreed with each
@@ -595,7 +595,7 @@ coordinator chaining many ranges, not checkable in one download).
    leaf construction, `core_*` exports pinning constants). The zkVM has no memory protection, so an
    out-of-bounds read is a silent wrong answer. Audit #5 found one unguarded index (L-1, fixed, no exposure).
 5. **The coordinator under a hostile-coordinator model.** Reviewed so far with `COORD_URL` operator-chosen
-   and trusted. Since hazync#69 (closed 2026-08-24) anyone can run a coordinator ([`COORDINATOR.md`](COORDINATOR.md)),
+   and trusted. Since hazync#69 (closed 2026-08-24) anyone can run a coordinator ([`COORDINATOR.md`](../COORDINATOR.md)),
    seed from peers and set `PEER_COORDINATORS`, so the worker's handling of responses (unbounded `get()`,
    claim responses, anything assuming well-formed answers) needs a second pass.
 6. **ghostd integration** (hazync#31/#42/#46 closed; ghost PRs #543/#627/#630/#631) — **start here: a
@@ -620,9 +620,9 @@ far more review than could be commissioned; the pinning is item 1.
 
 1. Field backend gate 4 not run (§3.6).
 2. Accumulator reference fuzz control needs a rerun (§6).
-3. **CORE fleet figures rest on few measurements.** [`OVERVIEW.md`](OVERVIEW.md) (G2) gives **44–73 L40S
+3. **CORE fleet figures rest on few measurements.** [`OVERVIEW.md`](OVERVIEW_CORE.md) (G2) gives **44–73 L40S
    card-years**, INFERRED from one near-tip block (966,108, ~0.77 card-s per input);
-   [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) computes 10 cards from block 962,000 proved serially, and
+   [`BUILD_AND_RELEASE.md`](../BUILD_AND_RELEASE.md) computes 10 cards from block 962,000 proved serially, and
    its 8 × L40S check on 966,108 puts a sub-10-minute block at ~13.
 4. ✅ Decided: no accepted set of method ids (§4.3).
 5. Worker reads coordinator responses unbounded (§2.6).
@@ -638,7 +638,7 @@ far more review than could be commissioned; the pinning is item 1.
 
 Components reachable without a GPU or full Core build. Each pass: an **independent oracle**, a **positive
 control** proving the harness catches the bug class, an honest scope note. Detailed reports:
-[`../audit-fuzz/FINDINGS.md`](../audit-fuzz/FINDINGS.md), [`../coordinator/SEAM_FINDINGS.md`](../coordinator/SEAM_FINDINGS.md).
+[`../audit-fuzz/FINDINGS.md`](../../audit-fuzz/FINDINGS.md), [`../coordinator/SEAM_FINDINGS.md`](../../coordinator/SEAM_FINDINGS.md).
 
 | # | Target | Harness | Scenarios | Result |
 |---|---|---|---|---|
@@ -716,7 +716,7 @@ libzync is a new core with its own proof statement, image ids and review history
 should be read as describing it.
 
 - What a libzync proof states and every check a verifier makes:
-  [`libzync/SWIFTSYNC_PROOFS.md`](libzync/SWIFTSYNC_PROOFS.md) (§2 what is proven, §5 verifier procedure).
+  [`libzync/SWIFTSYNC_PROOFS.md`](../libzync/SWIFTSYNC_PROOFS.md) (§2 what is proven, §5 verifier procedure).
 - Consensus rules the libzync guest enforces against Bitcoin Core v28.0, and what is still our own code:
-  [`libzync/CONSENSUS_RULES.md`](libzync/CONSENSUS_RULES.md).
-- Review rounds and fixes: [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md) §7.
+  [`libzync/CONSENSUS_RULES.md`](../libzync/CONSENSUS_RULES.md).
+- Review rounds and fixes: [`libzync/LIBZYNC.md`](../libzync/LIBZYNC.md) §7.
