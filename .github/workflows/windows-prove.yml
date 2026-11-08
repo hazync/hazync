@@ -131,7 +131,9 @@ jobs:
         if: steps.elfcache.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile . 2>&1 | tail -25
+        run: |
+          set -o pipefail   # the tail must not hide a failed build (a 504 from GitHub's downloads surfaced a step late)
+          docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile . 2>&1 | tail -25
 
       - name: The container's own id check must have passed
         if: steps.elfcache.outputs.cache-hit != 'true'
