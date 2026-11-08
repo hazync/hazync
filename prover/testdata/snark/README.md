@@ -1,6 +1,6 @@
 # Groth16 SNARK fixtures
 
-Two wrapped range proofs, used by `prover/ci_snark_verify.sh` to gate Groth16 **verification** on every
+Two wrapped range proofs, used by `history/prover/ci_snark_verify.sh` to gate Groth16 **verification** on every
 push (#23).
 
 ✅ **Regenerated 2026-09-07 under `37987b85…`**, the Core-becomes-canonical guest. Both gates were
@@ -106,7 +106,7 @@ re-baseline, alongside the other artifacts listed in `docs/RELEASE_PROCESS.md`.
 
 Needs a host binary with `snark-wrap` **and** a working Groth16 backend, which means a **CPU** build.
 Groth16 crashed in sppark on every CUDA build tested (#20, captured 2026-07-28 on an L40S in
-`prover/evidence/groth16_cuda_crash_sm89.txt`); #20 was closed the same day as an upstream defect not
+`history/prover/evidence/groth16_cuda_crash_sm89.txt`); #20 was closed the same day as an upstream defect not
 worth working around, and the CUDA path has not been re-measured since.
 
 **Use a CANONICAL host binary, but do NOT run the wrap inside the container.** Both halves of that
@@ -179,6 +179,6 @@ which says the checker was pointed at the wrong thing, not that the receipt is b
 ## What this does NOT cover
 
 Only **verification**. Whether `snark-wrap` still *produces* a valid proof is not exercised here,
-because a CPU Groth16 prove is far too slow for per-push CI. That half is `prover/ci_snark_prove.sh`,
+because a CPU Groth16 prove is far too slow for per-push CI. That half is `history/prover/ci_snark_prove.sh`,
 which is opt-in. Groth16 shipped broken from v0.8.0 precisely because neither half was tested, so the
 gap is narrowed here, not closed.

@@ -65,8 +65,8 @@ per-block aggregates are independent). **INFERRED**, block 966,108:
 L40S**. ⚠ One near-tip block, aggregate from the fit; the §1.2 blocks span 3,942–5,075 chunk card-s.
 
 **The chain fold does not threaten it.** MEASURED (stock): **3.76 s/fold** on an L40S, flat in range length
-(`prover/evidence/fold_and_snark_wrap_1_1000.txt`); 2.0–3.0 s/fold by concurrency
-(`prover/evidence/fold_concurrency_2xL40S.txt`). ⚠ Both on early receipts; per-fold VRAM at high-UTXO
+(`history/prover/evidence/fold_and_snark_wrap_1_1000.txt`); 2.0–3.0 s/fold by concurrency
+(`history/prover/evidence/fold_concurrency_2xL40S.txt`). ⚠ Both on early receipts; per-fold VRAM at high-UTXO
 heights is UNKNOWN.
 
 ### 1.4 The card
@@ -143,7 +143,7 @@ NGPU=2 LO=1 HI=550 HAZYNC_WITNESS_DIR=/w bash rangecluster.sh   # multi-GPU fan-
 - **Chunk packing** is by equal predicted **cost** (#132), not input count (which left block 741000's
   straggler at 1.22x the mean). Constants in §6.1 (Core's fit; Ghost has its own); repeat keys discounted
   (`COST_PER_EC_OP_REPEAT`); `HAZYNC_CHUNK_PACK=count` restores the old split. Read `chunk-profile`'s
-  `straggler: max ... = N.NNx` line (sample `prover/evidence/chunk_packing_741000.txt`). `HAZYNC_CHUNKS` is a
+  `straggler: max ... = N.NNx` line (sample `history/prover/evidence/chunk_packing_741000.txt`). `HAZYNC_CHUNKS` is a
   request — an uneven block can pack into fewer runs.
 - `verify-chain` checks `self_id`, the `KIND_CHAIN` tag and the genesis anchor, so a checkpoint-anchored demo
   proof fails it ([`SECURITY.md`](history/SECURITY_MODEL_CORE.md)). A fold checks the full seam (tip, UTXO roots+leaves,
@@ -285,7 +285,7 @@ waited 1,855 s; a join is ~0.4 s of GPU and ~47 s of round trip.
 
 MEASURED: block 170 (CPU, guest `3f52baff`) **825.7 s**, 9.7 GB peak RSS, whole receipt **2033 bytes**;
 folded `[1..1000]` genesis-anchored **66–77 s**, 1.4 GB, **3,441 bytes**; `[500..500]` mid-chain 5,633 bytes
-(`prover/evidence/groth16_snark_wrap.txt`, `prover/evidence/fold_and_snark_wrap_1_1000.txt`). Wrap cost is flat in chain length; size follows boundary content (popcount of Utreexo roots: min 7 / mean
+(`history/prover/evidence/groth16_snark_wrap.txt`, `history/prover/evidence/fold_and_snark_wrap_1_1000.txt`). Wrap cost is flat in chain length; size follows boundary content (popcount of Utreexo roots: min 7 / mean
 ~14 / max 22). INFERRED full-chain wrap: ~3.4 KB best / ~5.4 KB typical / ~7.6 KB worst — say **"a few KB"**.
 The Groth16 proof proper is ~128–256 bytes; the journal dominates (u8-per-word serde, #22).
 
@@ -333,7 +333,7 @@ arch=compute_90,code=sm_90 -gencode arch=compute_100,code=sm_100 -gencode arch=c
 (`sm_100` needs 12.8+, #181); check `cuobjdump --list-elf <host>` shows `sm_80 sm_86 sm_89 sm_90 sm_100`.
 ⛔ Do not build natively on a CUDA 13 box. Smoke-test each binary: `host method-id`, `host
 bundle-roundtrip-test`, `host verify-any` on a served proof, and for CUDA **`host prove-snark`** (no CI GPU;
-Groth16 shipped broken v0.8.0–v0.10.0, #20/#23). `prover/e2e_bundle_test.sh` covers served-bundle → prove →
+Groth16 shipped broken v0.8.0–v0.10.0, #20/#23). `history/prover/e2e_bundle_test.sh` covers served-bundle → prove →
 verify. Process: [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md), `scripts/release.sh`.
 
 ## 3. Prover operations (board workers)

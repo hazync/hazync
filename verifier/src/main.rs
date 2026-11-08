@@ -67,7 +67,7 @@ fn main() {
             eprintln!("  --json   emit the chain state a node can ADOPT from this proof, as JSON.");
             eprintln!("           Everything a node needs to resume at height+1 without validating");
             eprintln!("           anything below it: tip, cumulative work, UTXO commitment, and the");
-            eprintln!("           difficulty/median-time context. See prover/node-sync-demo.sh.");
+            eprintln!("           difficulty/median-time context. See history/prover/node-sync-demo.sh.");
             std::process::exit(2);
         }
     };

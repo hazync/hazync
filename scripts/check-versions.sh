@@ -34,13 +34,13 @@ echo "canonical METHOD_ID: $CANON  (short $CANON8)"
 KNOWN=$(grep -oE '\b[0-9a-f]{8}\b' "$CANON_FILE" | sort -u)
 
 # DATED HISTORICAL RECORDS are exempt from the currency checks (7 and 8), and rebaseline-id.sh never
-# rewrites them either (its own HISTORY_RE also adds prover/evidence and prover/testdata). A dated record states what was true when it was written:
+# rewrites them either (its own HISTORY_RE also adds history/prover/evidence and prover/testdata). A dated record states what was true when it was written:
 # an overnight log naming that night's container id, a release body naming the id it shipped. Demanding the
 # canonical id there does not fix a reference, it falsifies the record — and demanding it is exactly how
 # one got falsified: the b161735a re-baseline rewrote the id the 2026-08-03 overnight log had measured
 # (now docs/history/OVERNIGHT_2026-08-03.md). Checks 2-6 still cover these files: an id that matches no
 # lineage entry is a typo in any document, historical or not.
-HISTORY_RE='^(docs/history/|docs/RELEASE_NOTES_|CHANGELOG\.md$)'
+HISTORY_RE='^(history/|docs/history/|docs/RELEASE_NOTES_|CHANGELOG\.md$)'
 
 # ── 1. the canonical id must appear in every doc that states it ────────────────────────────────────
 # docs/ROADMAP.md was the third until 2026-09-14, when it became a historical record under docs/history/;
@@ -78,9 +78,9 @@ while IFS= read -r hit; do
     if ! grep -qx "$tok" <<<"$KNOWN"; then
         bad "$f:$ln claims guest id '$tok', which is neither canonical nor listed in $CANON_FILE"
     fi
-# experimental/ is left out of this check only: it records libzync experiment images (their own lineage, pinned per
+# experimental/ (and its retired parts under history/experimental/) is left out of this check only: it records libzync experiment images (their own lineage, pinned per
 # experiment, not reproduce/METHOD_ID's), so their ids can never be in this list, by design.
-done < <(git ls-files '*.md' | grep -v '^experimental/' | while read -r f; do
+done < <(git ls-files '*.md' | grep -vE '^(experimental|history/experimental)/' | while read -r f; do
              grep -nE 'METHOD_ID|image id|guest id|canonical id|Superseded' "$f" 2>/dev/null \
              | while IFS= read -r line; do
                  n=${line%%:*}

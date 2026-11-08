@@ -791,7 +791,7 @@ jobs:
         # foldable() pair selection, the range-id grammar, and the spine's store/monotonic/serve path.
         # NOT covered, deliberately and stated in the script: real STARK verification (needs the
         # 184 MB host binary) and actual folding (a prove op; CI has no GPU). Those are verified by
-        # hand against real board receipts under prover/evidence/.
+        # hand against real board receipts under history/prover/evidence/.
         run: cd coordinator && python3 test_spine_fold.py
       - name: Spine + fold POSITIVE CONTROL (already-folded check removed — must FAIL)
         run: |

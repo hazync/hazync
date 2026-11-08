@@ -39,7 +39,7 @@ It replaced the original per-signature CORE guest (`37987b85`, documented in [`h
 | `history/*.md` | the 23 September-era documents merged in 2026-11-06, unchanged (e.g. `history/SOUNDNESS.md`, `history/PROVING.md`), plus the dated `STATUS`, the v0.21.7 pre-release trial, the field-backend and lift-x design notes |
 | [`history/releases/`](history/releases/) | copies of release bodies |
 | [`history/SECURITY_AUDIT_LOG.md`](history/SECURITY_AUDIT_LOG.md) | the round-by-round security review record, indexed from `../SECURITY.md` |
-| `../experimental/` | experiments and their results; `../experimental/libzync-bench/retired-docs/` holds libzync's retired design-B documents |
+| `../experimental/` | experiments and their results; `../history/experimental/libzync-bench/retired-docs/` holds libzync's retired design-B documents |
 
 ## ⛔ How to read a number in this repository
 

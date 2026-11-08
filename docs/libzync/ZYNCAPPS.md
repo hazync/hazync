@@ -110,7 +110,7 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
-| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). No checker exists yet; design B's `utxo_snapshot_check.py` checked the retired survivor forest (`experimental/libzync-bench/retired-scripts/`) |
+| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). No checker exists yet; design B's `utxo_snapshot_check.py` checked the retired survivor forest (`history/experimental/libzync-bench/retired-scripts/`) |
 
 ## 7. Open
 
