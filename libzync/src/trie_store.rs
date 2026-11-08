@@ -233,7 +233,11 @@ impl Arena for DiskArena {
         let e = |x: std::io::Error| alloc::format!("trie arena {}: {x}", self.dir.display());
         self.map.flush_range(0, self.cap as usize).map_err(e)?;
         self.file.sync_all().map_err(e)?; // the file's size after a grow, not only its pages
-        let all: Vec<R> = self.free.iter().chain(self.pending.iter()).copied().collect();
+        let mut all: Vec<R> = self.free.iter().chain(self.pending.iter()).copied().collect();
+        // reuse slots in ascending address order (put() pops from the end; the meta keeps the order for a restart):
+        // the next interval's writes then walk the file forwards, several to a page, instead of one 64-byte record per
+        // 4 KiB page at random (11-08: past RAM, prep spent half its time throttled on dirty pages). Layout only.
+        all.sort_unstable_by(|a, b| b.cmp(a));
         let mut b = Vec::with_capacity(73 + 8 * all.len());
         b.extend_from_slice(Self::MAGIC);
         b.extend_from_slice(&root.to_le_bytes());
