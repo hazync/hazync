@@ -212,7 +212,9 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
    0.18-0.28 once the trie (59 GB) passed RAM (62 GB) in the 2015 spam blocks. Cause: the bulk volume's WRITES, ~40 MB/s
    flat whatever the queue settings (wbt off: same), prep half its time in `balance_dirty_pages` (the service's
    MemoryHigh made it worse: lifted) and the rest in page faults; the disk arena reused freed 64-byte slots in random
-   order, one dirty 4 KiB page each. Fix dbcc628: reuse them in address order (layout only). ⏳ measure;
+   order, one dirty 4 KiB page each. Fixes: reuse them in address order (dbcc628, layout only): 0.50 blocks/s; then
+   the trie, coin log and states moved to the root volume (vda: 40 k random-write IOPS; `/srv/bulk` stays the block
+   and leaf store, symlinks keep the paths): **1.44 blocks/s** at 371.5-372.7 k, the process mostly on CPU again;
 3. per-block leaf bundles (item 8) written as prep goes: ✅ built + tested 11-07 (HAZYNC_PREP_LEAF_BUNDLES);
 4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
 **H7 DONE 11-07** (`h7/RESULT_h7.txt`, tag `libzync-c14` = source ce4e1e3): two container builds on the bridge box
