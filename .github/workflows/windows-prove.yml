@@ -97,10 +97,11 @@ jobs:
       - name: The pin this run must reproduce
         id: pin
         run: |
-          PIN=$(grep -vE '^\s*#|^\s*$' reproduce/METHOD_ID | head -1 | tr -d '[:space:]')
+          # 2026-11-08: libzync replaced the CORE guest; the Windows host embeds the PUBLISHED libzync mainnet image
+          PIN=$(grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $4}')
           case "$PIN" in
               ????????????????????????????????????????????????????????????????) : ;;
-              *) echo "reproduce/METHOD_ID is not a 64-hex id"; exit 1 ;;
+              *) echo "reproduce/LIBZYNC_IDS has no 64-hex mainnet id"; exit 1 ;;
           esac
           echo "id=$PIN" >> "$GITHUB_OUTPUT"
 
@@ -117,7 +118,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: hazync-guest.elf
-          key: guest-elf-${{ hashFiles('prover/methods/guest/**', 'reproduce/METHOD_ID', 'reproduce/GUEST_ELF_SHA256') }}
+          key: libzync-guest-elf-${{ hashFiles('prover/methods/guest/**', 'libzync/src/**', 'coinbase-smt/src/**', 'patches/**', 'coreshim/**', 'reproduce/LIBZYNC_IDS', 'reproduce/libzync.Dockerfile', 'scripts/libzync-base.sh') }}
 
       - name: Free disk, because the container build needs ~15 GB
         if: steps.elfcache.outputs.cache-hit != 'true'
@@ -126,9 +127,11 @@ jobs:
           sudo docker image prune -af || true
           df -h / | tail -1
 
-      - name: Build the guest in the pinned container
+      - name: Build the guest in the libzync reproducible container
         if: steps.elfcache.outputs.cache-hit != 'true'
-        run: CARGO_BUILD_JOBS=4 ./prover/build-release.sh cpu 2>&1 | tail -25
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile . 2>&1 | tail -25
 
       - name: The container's own id check must have passed
         if: steps.elfcache.outputs.cache-hit != 'true'
@@ -136,8 +139,8 @@ jobs:
           PIN: ${{ steps.pin.outputs.id }}
         run: |
           set -o pipefail
-          GOT=$(./dist/hazync-host-x86_64-linux-gnu method-id | grep -oE '[0-9a-f]{64}' | head -1)
-          [ "$GOT" = "$PIN" ] || { echo "the CONTAINER build is not canonical"; exit 1; }
+          GOT=$(docker run --rm hazync-libzync-repro | grep '^libzync-product mainnet ' | awk '{print $4}')
+          [ "$GOT" = "$PIN" ] || { echo "the CONTAINER build is not the published image"; exit 1; }
           echo "container id $GOT = the pin"
 
       - name: Stage the guest ELF, and check it against the recorded sha whether built or cached
@@ -156,9 +159,10 @@ jobs:
           if [ "$CACHE_HIT" = "true" ]; then
               echo "cache hit — no container build ran"
           else
-              ELF=prover/target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin
-              [ -s "$ELF" ] || { echo "no guest ELF at $ELF"; exit 1; }
-              cp "$ELF" hazync-guest.elf
+              docker create --name lzelf hazync-libzync-repro >/dev/null
+              docker cp lzelf:/root/libzync-elf/mainnet.bin hazync-guest.elf
+              docker rm lzelf >/dev/null
+              [ -s hazync-guest.elf ] || { echo "no guest ELF in the container"; exit 1; }
           fi
           # ⛔ ONE CHECK ON BOTH PATHS. A cached artefact that is never verified is a cached
           # artefact nobody can trust; reproduce/GUEST_ELF_SHA256 is the pin build.rs already
@@ -168,16 +172,23 @@ jobs:
           # `grep -oE '[0-9a-f]{64}' | head -1` returns 37987b85… — the METHOD_ID, which appears in
           # that file's PROSE explaining why the two pins differ. The check would then demand the
           # image id as the file's sha256 and fail on every correct build. Caught before dispatch.
-          WANT=$(grep -vE '^\s*#|^\s*$' reproduce/GUEST_ELF_SHA256 | head -1 | tr -d '[:space:]')
+          WANT=$(grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $6}')
           echo "guest ELF: $(stat -c%s hazync-guest.elf) bytes  sha256 $GOT"
-          [ -n "$WANT" ] || { echo "⛔ no sha in reproduce/GUEST_ELF_SHA256"; exit 1; }
+          [ -n "$WANT" ] || { echo "⛔ no mainnet GUEST_ELF_SHA256 in reproduce/LIBZYNC_IDS"; exit 1; }
           [ "$GOT" = "$WANT" ] || { echo "⛔ guest ELF sha MISMATCH; want $WANT"; exit 1; }
-          echo "✅ matches reproduce/GUEST_ELF_SHA256"
+          echo "✅ matches reproduce/LIBZYNC_IDS"
+          # the pins build.rs requires beside a prebuilt libzync ELF (HAZYNC_GUEST_PIN_DIR)
+          mkdir -p lz-pins
+          grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $4}' > lz-pins/METHOD_ID
+          echo "$WANT" > lz-pins/GUEST_ELF_SHA256
+          echo "libzync=1 assumevalid=0 network=mainnet coinlog=1 trie=1 utxohash=1" > lz-pins/PROFILE
 
       - uses: actions/upload-artifact@v4
         with:
           name: hazync-guest-elf
-          path: hazync-guest.elf
+          path: |
+            hazync-guest.elf
+            lz-pins/
           compression-level: 0        # ⚠ measured: it compresses 2.6%, so this buys nothing
           retention-days: 5
 
@@ -215,6 +226,9 @@ jobs:
         env:
           # ⚠ A bare filename: build.rs resolves it against its own crate dir, where the artifact is.
           HAZYNC_GUEST_ELF: hazync-guest.elf
+          # libzync (2026-11-08): the published mainnet image; its pins sit beside the ELF (both resolve against the crate dir)
+          HAZYNC_LIBZYNC: '1'
+          HAZYNC_GUEST_PIN_DIR: lz-pins
           # ⛔⛔ MSVC NEEDS C++20 FOR THESE KERNELS. Measured, run 36892040422: over 100 instances of
           #
           #   risc0-circuit-keccak-sys-4.0.3/kernels/cxx/layout.cpp.inc(91):
@@ -318,9 +332,14 @@ jobs:
           # threw away the panic message at the top. The same trap, in the adjacent block, one run
           # after a commit message was written about it.
           set +e
-          ./target/release/host.exe prove-block > prove.log 2>&1
+          # libzync: mainnet block 1 proved from genesis (a real receipt: chunk-free block, trie update, aggregate),
+          # then verified by the same exe; genesis..1 is below Core's minimum chainwork, so the verdict is DEMO (exit 2)
+          ./target/release/host.exe libzync-prove-range 1 1 testdata/libzync/mainnet genesis win-out > prove.log 2>&1
           rc=$?
-          set -e
+          if [ "$rc" = 0 ]; then
+              ./target/release/host.exe libzync-verify win-out/block_1.rcpt >> prove.log 2>&1; v=$?
+              [ "$v" = 2 ] && /usr/bin/grep -qa "LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 1" prove.log || rc=9
+          fi
           echo "prove exit: $rc  ($(wc -l < prove.log) lines captured)"
           # ⚠ The FIRST lines matter as much as the last: a panic message precedes its backtrace,
           # and a prover OOM names neither the knob nor a value, so both ends go in the job log.
@@ -345,10 +364,10 @@ jobs:
           # ⛔ QUOTE prove.log, DO NOT INFER FROM $STATUS. The receipt line is the evidence; a job
           # status is a summary of steps and has been made to lie here before by continue-on-error.
           # ⇒ Print the prover's own words, and say plainly when there are none.
-          if [ -f prove.log ] && /usr/bin/grep -qa "receipt VERIFIED against METHOD_ID" prove.log; then
-              /usr/bin/grep -a "PROVED in\|receipt VERIFIED against METHOD_ID" prove.log | sed 's/^/  /'
-              echo "⭐ A non-Linux machine produced a receipt against the canonical guest id."
-              echo "   That is the bar hazync#616 asks for -- measured, not documented."
+          if [ -f prove.log ] && /usr/bin/grep -qa "LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 1" prove.log; then
+              /usr/bin/grep -a "LZ_PROVE_RANGE_DONE\|LIBZYNC_VERIFY_DEMO" prove.log | sed 's/^/  /'
+              echo "⭐ A native Windows host proved mainnet block 1 from genesis under the published libzync image,"
+              echo "   and verified the receipt (DEMO: genesis..1 is below the minimum chainwork, as it must be)."
           elif [ -f prove.log ]; then
               echo "⛔ prove.log exists but does NOT say the receipt verified. The prove did not pass,"
               echo "   whatever this job's status says. Read the windows-build-log artifact."
@@ -357,7 +376,7 @@ jobs:
           fi
           echo "⛔ This is the CPU path. A windows-latest runner has no GPU, so it says nothing about"
           echo "   CUDA on Windows -- hazync#631 tracks that, and it needs real hardware to run."
-          echo "⚠ And 2875s for block 170 (one spend) means CPU proving is for small/early blocks."
+          echo "⚠ CPU proving is for small/early blocks; GPUs (RTX 20-series and newer, #631) do the rest."
 
       # ⛔⛔ THE ARTIFACT IS THE DELIVERABLE. A Windows desktop with an NVIDIA GPU needs neither Rust
       # nor a CUDA toolkit to try this -- download and run.
@@ -751,6 +770,9 @@ jobs:
         working-directory: prover
         env:
           HAZYNC_GUEST_ELF: hazync-guest.elf
+          # libzync (2026-11-08): the published mainnet image; its pins sit beside the ELF (both resolve against the crate dir)
+          HAZYNC_LIBZYNC: '1'
+          HAZYNC_GUEST_PIN_DIR: lz-pins
           # ⛔⛔ NO /std:c++20 HERE, AND THAT IS THE POINT. `cc` injects CXXFLAGS into EVERY C++
           # compilation, and a `.cuda(true)` build is one — so this variable reached nvcc as
           # `-Xcompiler /std:c++20` and `cudafe++` died with 0xC0000409 on all seven .cu files
@@ -1038,7 +1060,8 @@ jobs:
           # ⛔ AND IT REPORTS THE TWO THINGS SEPARATELY. A step here once printed "the binary is
           # canonical" having checked only that a file EXISTED, in a run where the id check had
           # just failed. The guest is verified; the image id is NOT read, and it says so.
-          if python3 ../scripts/embedded_guest_sha.py target/release/host.exe --root .. ; then
+          PIN_SHA=$(cat methods/lz-pins/GUEST_ELF_SHA256); SIZE=$(wc -c < methods/hazync-guest.elf)
+          if python3 ../scripts/embedded_guest_sha.py target/release/host.exe --root .. --pin "$PIN_SHA" --size "$SIZE" ; then
               echo "verdict=guest-canonical" >> "$GITHUB_OUTPUT"
           else
               echo "verdict=guest-mismatch" >> "$GITHUB_OUTPUT"
@@ -1074,10 +1097,10 @@ jobs:
           if [ ! -f target/release/host.exe ]; then
               echo "⛔ No host.exe — the CUDA build did not complete. Read the cuda-build.log artifact."
           else
-              echo "✅ The CUDA kernels COMPILED under MSVC and a host.exe was produced."
+              echo "✅ The CUDA kernels COMPILED under MSVC and a host.exe was produced (libzync, published image)."
               case "$V" in
                 guest-canonical)
-                  echo "✅ and it embeds the CANONICAL guest, verified against reproduce/GUEST_ELF_SHA256."
+                  echo "✅ and it embeds the PUBLISHED libzync guest, verified against reproduce/LIBZYNC_IDS."
                   echo "⚠ its own METHOD_ID was NOT read: a CUDA-linked exe imports nvcuda.dll and"
                   echo "  cannot start without an NVIDIA driver. On a GPU box: host.exe method-id" ;;
                 guest-mismatch)
@@ -1096,8 +1119,7 @@ jobs:
               echo "  only thing that would settle it. Treat a compile alone as the weaker claim."
           fi
           echo "⛔ THIS RUNNER HAS NO GPU, so nothing here shows that it PROVES. That needs hardware."
-          echo "⚠ Built for sm_61 (Pascal) + PTX. The smallest card measured to prove has 24 GB;"
-          echo "  a 1050 Ti has 4 GB, so 'out of memory' is a likely and still-useful result."
+          echo "⚠ Supported cards: compute capability 7.0+ (RTX 20-series and newer); Pascal is refused by name (#631)."
 
       # ⛔⛔ host.exe ALONE WOULD NOT START ON THE TEST MACHINE. The NVIDIA driver supplies
       # `nvcuda.dll` (the driver API) but NOT `cudart64_*.dll` (the CUDA runtime) — that ships with
