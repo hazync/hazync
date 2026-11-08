@@ -12,7 +12,7 @@ mkdir -p "$R/blocks" "$R/cl" "$R/trie" "$R/out" "$R/leaves"
 export HAZYNC_COINLOG_DIR="$R/cl" HAZYNC_TRIE_DIR="$R/trie" HAZYNC_PREP_CONSUME=1 HAZYNC_PREP_LEAF_BUNDLES="$R/leaves"
 # the newest COMPLETE save point: a crash between its writes (state, .smt, .coinlog, .trie) leaves a newer partial one
 last=""
-for h in $(find "$R/out" -maxdepth 1 -name 'state_*.smt' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\.smt$/\1/p' | sort -rn); do
+for h in $(find "$R/out/" -maxdepth 1 -name 'state_*.smt' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\.smt$/\1/p' | sort -rn); do
     if [ -s "$R/out/state_$h.json" ] && [ -e "$R/out/state_$h.coinlog" ] && [ -e "$R/out/state_$h.trie" ]; then last=$h; break; fi
 done
 if [ -z "$last" ]; then
@@ -24,7 +24,7 @@ fi
 echo "libzync-prep: $lo..$HI from ${anchor##*/}"
 # only the two newest BIP30 snapshots are kept (a restart needs the newest; each is the whole tree, tens of MB on mainnet)
 ( while sleep 60; do
-    find "$R/out" -maxdepth 1 -name 'state_*.smt' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\.smt$/\1/p' | sort -n | head -n -2 |
+    find "$R/out/" -maxdepth 1 -name 'state_*.smt' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\.smt$/\1/p' | sort -n | head -n -2 |
         while read -r h; do rm -f "$R/out/state_$h.smt"; done
   done ) &
 PRUNER=$!

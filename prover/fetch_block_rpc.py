@@ -168,7 +168,10 @@ def main():
         # prep resumes from; the files below it were consumed and deleted, and must not be fetched again
         if "--after-saves" in sys.argv:
             od = pathlib.Path(sys.argv[sys.argv.index("--after-saves") + 1])
-            saves = [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()] if od.exists() else []
+            # a COMPLETE save point only (as libzync-prep-run.sh): a stop during a save leaves a newer partial one
+            # (state_<h>.smt without its .coinlog / .trie), and prep then resumes from the one before it
+            saves = [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()
+                     and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog", "trie"))] if od.exists() else []
             if saves and max(saves) + 1 > lo:
                 lo = max(saves) + 1
                 print(f"resuming after prep's save point {lo - 1}", flush=True)
