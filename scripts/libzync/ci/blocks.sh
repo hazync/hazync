@@ -14,6 +14,8 @@ unset RISC0_DEV_MODE
 export HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=${HAZYNC_CHUNKS:-4} HAZYNC_HINT_THREADS=${HAZYNC_HINT_THREADS:-2}
 $H method-id | head -1
 
+# agg-exec-fake models the coin log around each block from real transaction counts (lz::cl_synth)
+export HAZYNC_COINLOG_TXCOUNTS=$Z/experimental/libzync-bench/cost/txcounts.txt
 step "1. edge blocks"
 for h in 2016 91842 91880 185956 227931 363725 364292 388381 419328 481824; do
   f=$T/edge/block_$h.json; [ -f "$f" ] || f=$Z/prover/testdata/boundaries/block_$h.json
