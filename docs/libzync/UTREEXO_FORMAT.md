@@ -9,7 +9,7 @@ has its own tagged compressions (`COINLOG.md` §2). Normative sources:
 The file name is historical: it began as the format of design B's Utreexo-style forest of the coins unspent at a
 hints file's height, retired in E2 (2026-11-05). Section numbers are kept because the frozen guest's comments cite
 §2 and §2a. Design B's §1 (what that forest committed to), §4 (its order), §6 (its test vector) and §7 (differences
-from utreexod / Floresta) are in the full original, `experimental/libzync-bench/retired-docs/UTREEXO_FORMAT.md`.
+from utreexod / Floresta) are in the full original, `history/experimental/libzync-bench/retired-docs/UTREEXO_FORMAT.md`.
 
 ⚠ This is **not** the utreexod / Floresta format: other hashes and leaves, and no deletions.
 

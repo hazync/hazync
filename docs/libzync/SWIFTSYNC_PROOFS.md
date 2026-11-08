@@ -5,7 +5,7 @@ What a libzync chain proof commits (§3) and every check a verifier makes on it 
 
 The file name is historical: it began as a proposal for proven SwiftSync hints files (design B), retired in E2
 (2026-11-05). Section and step numbers are kept because code cites them (the frozen guest cites step 3b). Design B's
-proposal, measurements and questions are in the full original, `experimental/libzync-bench/retired-docs/SWIFTSYNC_PROOFS.md`.
+proposal, measurements and questions are in the full original, `history/experimental/libzync-bench/retired-docs/SWIFTSYNC_PROOFS.md`.
 
 ## 2. What is proven
 

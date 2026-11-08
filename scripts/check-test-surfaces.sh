@@ -25,20 +25,7 @@ ok()  { printf '  ok   %s\n' "$*"; }
 # Harnesses deliberately NOT in CI. Each needs a reason — an unexplained entry here is how a test
 # quietly leaves the build. Keep this list short and justified.
 declare -A EXCLUDED=(
-  [ci_verify_any.sh]="the CORE guest's verify-any gate (image 37987b85, reproduce/Dockerfile). libzync replaced the CORE guest in the build (ROADMAP R1a, 11-07): this tree cannot rebuild 37987b85; CORE stays usable as its v0.22.1 release binary. libzync's verify-any is covered by experimental/libzync-bench/coord/coord_test.sh."
-  [ci_snark_verify.sh]="the CORE guest's Groth16 check on the canonical container (37987b85), retired with the CORE build (ROADMAP R1a, 11-07); libzync's SNARK wrap is not yet in CI."
-  [e2e_bundle_test.sh]="needs a live coordinator to serve a bundle; run before cutting a release"
-  [cluster.sh]="multi-GPU prove fan-out, not a test"
-  [rangecluster.sh]="multi-GPU prove fan-out, not a test"
   [build-release.sh]="release build tool, not a test"
-  [hazed-chain-verify.py]="needs a live mainnet bitcoind, or a hazed archive via --txid-source gsb (#31 Phase 1). Demonstrates that merkle-root identity composes with Hazync validity for hazed blocks. Run by hand; it refuses --txid-source gsb with exit 1 rather than silently falling back, so it cannot report a pass for an untested path."
-  [node-sync-demo.sh]="needs a live mainnet bitcoind to cross-check the proof against the real chain (#19). Runs by hand or before a release; it exits NON-ZERO if no node is reachable rather than passing quietly, so it cannot report a partial run as success."
-  [bench-fold-concurrency.sh]="benchmark, not a test — measures fold concurrency/VRAM to size a whole-board fold (#24). It has no pass/fail semantics beyond its own dependency checks, needs a GPU and a receipt set, and is run by hand before a fold. NOTE it does fail loudly if it measures nothing."
-  [snapshot-binding-test.sh]="needs a bridge checkpoint, a canonical host binary and a proof at the same height (#42). Binds a UTXO snapshot to the proof that attests to it — assumeutxo with the developer-chosen hash replaced by a proof. Run by hand on the coordinator; it asserts the real snapshot BINDS and that the same coin set in a different ORDER does NOT, because a positive-only run passes at any height before the first spend where swap-and-pop has never reordered the forest, and would prove nothing."
-  [ibd-equivalence-test.sh]="needs a built ghostd AND a synced mainnet archive node to sync from (#33). Proves a proof-backed IBD reaches a byte-identical UTXO set. Run by hand on the coordinator; it asserts the control skipped ZERO blocks and the proof run skipped a NON-ZERO number, so a gate that silently stopped firing fails the run rather than passing quietly."
-  [reorg-probe.sh]="needs a built ghostd AND a synced mainnet archive node (#34). Exercises the proof gate across a disconnect/reconnect via invalidateblock+reconsiderblock. Run by hand on the coordinator; it aborts if the initial sync skipped nothing and warns if the rollback did not land, so a reconnect that tested nothing cannot report a pass."
-  [adv-skip-test.sh]="needs a built ghostd AND a synced mainnet archive node (#34). Eight adversarial proof inputs against the script-skip gate. Run by hand on the coordinator; the control case must skip 1000 blocks or every other case's '0 skips' would be vacuous, and a rejected proof that kills the node is counted as a FAILURE, so it cannot report a pass for an untested path."
-  [ci_snark_prove.sh]="Groth16 PROVING is minutes-to-hours on CPU (76.6s for a 1000-block fold, 825.7s for one block) and crashes on CUDA (#20) — too slow for per-push CI; run before cutting a release. The verification half, ci_snark_verify.sh, DOES run on every push."
 )
 
 echo "== 1. every Rust crate that has tests is run by CI =="

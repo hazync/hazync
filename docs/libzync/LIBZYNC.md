@@ -6,7 +6,7 @@
 (mainnet `bbf82800…`), because ids depend on absolute build paths; several results below were measured on those and
 say so. Every number names what it was measured on and says MEASURED or ESTIMATED. Status of every item, built or
 open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rounds 1-8 in full) is
-[`LIBZYNC_2026-10-31.md`](../../experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
+[`LIBZYNC_2026-10-31.md`](../../history/experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
 
 ⛔ **Not audited, no proof of the whole mainnet chain yet.** See §7.
 
@@ -158,7 +158,7 @@ c14 differs from c13 only in how a finished collect run exits (`COLLECT_EXIT` in
 
 Cold reviews, each by fresh reviewers given the code, not the author's conclusions. Rounds 1-8 were on design B;
 the numbering restarted for the reviews after E2. Full findings for 1-8:
-[`LIBZYNC_2026-10-31.md`](../../experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md) §7.
+[`LIBZYNC_2026-10-31.md`](../../history/experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md) §7.
 
 | round | date | what it found | outcome |
 |---|---|---|---|

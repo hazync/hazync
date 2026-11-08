@@ -17,7 +17,7 @@ nothing is pinned, the lock is the one it always was, and the prover picks its c
 always has. Everything new here happens only when there are two or more cards that can prove.
 
 ⛔ NOT YET RUN ON A REAL TWO-CARD MACHINE. The pinning is the mechanism the Linux fleet scripts
-already use (`prover/rangecluster.sh`), and that each child really receives its own card and lock
+already use (`history/prover/rangecluster.sh`), and that each child really receives its own card and lock
 is tested through real child processes — but nobody has watched two cards prove under this window.
 """
 import re

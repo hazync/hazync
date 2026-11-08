@@ -9,7 +9,7 @@ WHAT THIS DOES NOT COVER, stated first so nothing reads as more assurance than i
     SERVE logic around verification, never verification itself.
   * Actual folding. `fold-range` and `extend-spine` are prove operations. CI has no GPU and, on CPU,
     one fold is ~2-3 minutes. Those are verified by hand against real board receipts and recorded in
-    prover/evidence/extend_spine_*.txt.
+    history/prover/evidence/extend_spine_*.txt.
 
 What IS covered here is the logic that has no excuse for being untested: which pairs get offered for
 folding, what a range id is allowed to be, and whether a shorter spine can overwrite a longer one.

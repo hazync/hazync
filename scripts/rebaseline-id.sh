@@ -38,7 +38,7 @@ echo
 # Every tracked TEXT file that names the old id, excluding two categories that must never be rewritten.
 # Repo-wide rather than a hardcoded list, because the hardcoded list is what goes stale.
 #
-#   prover/evidence/**  are RECORDS OF PAST RUNS. Those runs really did happen under the old guest;
+#   history/prover/evidence/**  are RECORDS OF PAST RUNS. Those runs really did happen under the old guest;
 #                       rewriting the id in them does not update a reference, it falsifies the
 #                       measurement. The first version of this script rewrote five evidence files.
 #   docs/history/**,    same category: dated records (the development record, release bodies, the
@@ -66,7 +66,7 @@ echo
 #                       id while containing the old build, which is worse than a corrupt one. No
 #                       guest-dependent binary is committed any more (hazync#85): release-sign.yml builds
 #                       hazync-verify-aarch64 from the tag and asserts its embedded id.
-HISTORY_RE='^(prover/evidence/|prover/testdata/|docs/history/|docs/RELEASE_NOTES_|CHANGELOG\.md$)'
+HISTORY_RE='^(history/|prover/testdata/|docs/history/|docs/RELEASE_NOTES_|CHANGELOG\.md$)'
 mapfile -t FILES < <(git ls-files | grep -Ev "$HISTORY_RE" | while read -r f; do
     grep -Iq . "$f" 2>/dev/null || continue          # -I: skip binary files
     grep -lq "$OLD" "$f" 2>/dev/null && echo "$f"
@@ -138,7 +138,7 @@ tail -1 reproduce/METHOD_ID | grep -qE "^$NEW$" \
 
 echo
 echo "NOT touched, deliberately:"
-echo "  prover/evidence/**, docs/history/**  records made under the OLD guest — history, not references"
+echo "  history/prover/evidence/**, docs/history/**  records made under the OLD guest — history, not references"
 echo "  (and the rest of HISTORY_RE)"
 echo "  verifier binaries                   none committed; release-sign.yml builds them from the tag (#85)"
 echo "  the DEPLOYED site                   a live host; step 5 below, and nothing here can do it for you"

@@ -29,7 +29,7 @@ prover/
 │                    vectors, boundary fixtures, and the Groth16 fixtures in snark/
 ├── evidence/        logs from the demonstrated runs (block 741000, genesis→550, BIP68, …)
 └── block_*.json     real mainnet blocks: the HAZYNC_BLOCK input to check-full / prove-full, also read
-                     by ci_negative_tests.sh, ../fuzz-native/negative-corpus.sh and tools/*.py
+                     by ci_negative_tests.sh, ../history/fuzz-native/negative-corpus.sh and tools/*.py
                      (`host regress` builds block 170 in code and reads none of them)
 ```
 
