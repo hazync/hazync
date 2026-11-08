@@ -4,7 +4,8 @@
 Chunk level (exec-chunk, the whole block as one chunk; the honest block's signature hints reused, since none of these
 edits changes a signature): coin maturity (a coinbase coin one block short), a relative height lock one block short,
 an input value below the outputs; each beside the same edit made valid. Aggregate level (agg-exec-fake, hints rebuilt):
-a header nonce that breaks proof of work, a coinbase paying 50 BTC too much. The honest block must be valid first.
+a header nonce that breaks proof of work, a coinbase paying 50 BTC too much, each refused at the aggregate's
+block-validity check (which rule is the rig's to show, against Core). The honest block must be valid first.
 Ported from experimental/libzync-bench/core_rules/neg_962000.py and neg_aggregate_962000.py (11-01).
 
 usage: negatives.py <mainnet host> <block_962000.json> <out dir>; prints NEGATIVES_OK only if every case is as expected
@@ -52,9 +53,16 @@ def agg(name, edit, flag):
     b = json.loads(json.dumps(base)); edit(b); f = f"{O}/agg_{name}.json"; json.dump(b, open(f, "w"))
     hints(f, name)
     rc, x = run(["agg-exec-fake"], dict(env, HAZYNC_BLOCK=f, HAZYNC_LZ_HINTS=f"{O}/{name}.lzb"), f"{O}/{name}.agg.log")
+    # An agg-lite image logs each rule (block INVALID ... pow= subsidy= ...); the published image's aggregate logs only
+    # its summary, so there the refusal must be the block-validity bit alone, every other aggregate check passing.
+    # Which rule a block breaks is the rig's to show, rule by rule against Core (high-hash, bad-cb-amount, ...).
     m = re.search(r"block INVALID (all_ok=\w+ pow=\w+ merkle=\w+ subsidy=\w+.*?bip30=\w+)", x, re.S)
-    fl = " ".join(m.group(1).split()) if m else None
-    verdict(bool(fl) and f"{flag}=false" in fl, name, f"| {fl or 'no INVALID verdict (rc %d)' % rc}"); os.remove(f)
+    if m:
+        fl = " ".join(m.group(1).split()); ok = f"{flag}=false" in fl
+    else:
+        fl = next((l.strip() for l in x.splitlines() if "Guest panicked: aggregate:" in l), None)
+        ok = bool(fl) and fl.endswith("aggregate: bv=false ph=true carry=true rt=true time=true smt=true")
+    verdict(ok and rc != 0, name, f"| {fl or 'no refusal (rc %d)' % rc}"); os.remove(f)
 def rich(b):
     x = bytearray.fromhex(b["coinbase_hex"]); o = 6; o += 1 + 36; L = x[o]; o += 1 + L + 4; o += 1
     val = struct.unpack_from("<Q", x, o)[0]; struct.pack_into("<Q", x, o, val + 5_000_000_000); b["coinbase_hex"] = x.hex()
