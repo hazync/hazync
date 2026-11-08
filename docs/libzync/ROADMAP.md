@@ -223,6 +223,9 @@ container ELF behaves as c14 (962,000 aggregate 64,896,840 cycles, identical; ma
 `self_id`). ⚠ The laptop builds (bbf82800) differ by design (build paths): published proofs run the container ELF, and
 a prep run whose leaves are to be JOINED must run a host embedding it (its states carry `self_id`, which the join's
 link digest covers); the paper's single-leaf samples are unaffected (a leaf is a base step on an untrusted state).
+**11-08:** the coordinator-box prep run switched to a host embedding 863c9ce3 at the save point 378,500 (7089c3d:
+CONTINUE under another image re-stamps the saved state; test `prep/RESULT_restamp.txt`), so states and leaves from
+378,501 on are joinable; 1..378,500 need a windowed re-prep under 863c9ce3 for the genesis join tree.
 
 **Where it runs (user, 11-07): on the EXISTING bridge infrastructure, not a new server.** libzync prep is the
 libzync BRIDGE: the same role as `hazync-bridge` (archive node beside bitcoind, resident state, one bundle per block),
