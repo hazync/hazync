@@ -325,6 +325,15 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                  if cont { "CONTINUING its chain (anchor_id kept)" } else { "a base step on it (anchor_id = its link digest)" });
     }
     let anchor_id = if cont { prev.anchor_id } else { crate::link_digest(&prev) };
+    // CONTINUING under a different image (11-08: a run started under the laptop build bbf82800 carried on by a host
+    // embedding the published 863c9ce3): the saved state is re-stamped with this image's id and profile, so the
+    // first block's leaf bundle carries the same prev a join of leaves proved by this image links to. Prep states
+    // are untrusted starting points; a leaf's guest checks every witness against them either way.
+    if cont && (prev.self_id != methods::METHOD_ID || prev.profile != crate::lz::expected_profile()) {
+        println!("  prep: the anchor was saved under another image; re-stamped with this image's id and profile");
+        prev.self_id = methods::METHOD_ID;
+        prev.profile = crate::lz::expected_profile();
+    }
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
     // HAZYNC_PREP_LEAF_BUNDLES=<dir>: also write leaf_<h>.bin per block (ROADMAP H-B 8), for leaf provers without stores
     let leaves = std::env::var("HAZYNC_PREP_LEAF_BUNDLES").ok();
