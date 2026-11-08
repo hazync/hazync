@@ -5,8 +5,9 @@
 #  3. leaf proofs of 198, 199, 200 from their bundles alone (an EMPTY block dir but the block's own file);
 #  4. linear 197 + leaf 198 + leaf 199 + leaf 200 joined == the linear block 200's journal.
 set -u
-R=~/libzync-gpu/r18; H=$R/host_c14leaf; O=~/libzync-gpu/c14b/leaf; rm -rf $O; mkdir -p $O
-J=$HOME/libzync-gpu/ssweep; REF=$HOME/libzync-gpu/c14/m200
+# H (host), O (out), J (block files 1..200), REF (a linear run 1..200 with every state and block_*.rcpt): overridable (CI)
+R=~/libzync-gpu/r18; H=${H:-$R/host_c14leaf}; O=${O:-~/libzync-gpu/c14b/leaf}; rm -rf $O; mkdir -p $O
+J=${J:-$HOME/libzync-gpu/ssweep}; REF=${REF:-$HOME/libzync-gpu/c14/m200}
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=2
 HAZYNC_PREP_LEAF_BUNDLES=$O/leaves HAZYNC_PREP_CHECK=$REF $H libzync-prep 1 200 $J genesis $O/prep > $O/prep.log 2>&1
 echo "prep EXIT=$?"; grep -a 'LZ_PREP_DONE\|PREP_MISMATCH\|panicked' $O/prep.log | head -3

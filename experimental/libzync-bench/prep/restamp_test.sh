@@ -3,7 +3,7 @@
 # bbf82800, written into state_100.json) carried on 101..200 by the published-image host (863c9ce3) must give the
 # same states and leaf bundles as one uninterrupted 1..200 run by that host.
 set -u
-H=${H:-$HOME/dev/hazync-libzync/prover/target/fasthost/host}; B=$HOME/libzync-gpu/ssweep; O=$HOME/libzync-gpu/restamp
+H=${H:-$HOME/dev/hazync-libzync/prover/target/fasthost/host}; B=${J:-$HOME/libzync-gpu/ssweep}; O=${O:-$HOME/libzync-gpu/restamp}
 rm -rf $O; mkdir -p $O
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_PREP_SAVE_EVERY=20 HAZYNC_PREP_LEAF_AT=101,150,200
 run() { HAZYNC_COINLOG_DIR=$O/$1/cl HAZYNC_TRIE_DIR=$O/$1/trie HAZYNC_PREP_LEAF_BUNDLES=$O/$1/leaves "${@:2}"; }
