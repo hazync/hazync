@@ -1784,7 +1784,9 @@ jobs:
         # run every check against the wrong directory, found no test surfaces, and PASSED.
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning $(git ls-files '*.sh')
+          # experimental/ holds one-off experiment and benchmark records, not tooling anything runs (the versions check
+          # skips it too); every other script is held to warning level
+          shellcheck -S warning $(git ls-files '*.sh' | grep -v '^experimental/')
 
   boundary-heavy:
     # The six expensive activation-boundary blocks (#83): 388380, 419327/8, 434499, 481823/4.
