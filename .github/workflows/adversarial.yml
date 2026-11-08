@@ -2061,19 +2061,40 @@ jobs:
         with: { name: libzync-chain-logs, path: "out/**/*.log", retention-days: 7 }
 
   libzync-blocks:
-    # edge blocks; Core's script / tx vectors (libsecp, honest hints, four forged-hint variants); negatives on 962,000
+    # edge blocks; negatives on 962,000
     needs: libzync-hosts
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { name: libzync-hosts, path: hosts }
-      - name: Edge blocks, Core's vectors, negative tests
-        run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/blocks.sh hosts/host_m hosts/core_vectors.json hosts/core_vectors_base.json out
+      - name: Edge blocks, negative tests
+        run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/blocks.sh hosts/host_m out
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }
+
+  libzync-vectors:
+    # Core 28's script / tx vectors in 8 shards (each case once): libsecp and honest hints agree with Core on every
+    # case; under four forged-hint variants nothing Core rejects passes. A shard must report exactly its case count.
+    needs: libzync-hosts
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: libzync-hosts, path: hosts }
+      - name: Core's vectors, one shard of 8
+        env: { SHARD: "${{ matrix.shard }}" }
+        run: chmod +x hosts/host_*; bash scripts/libzync/ci/vectors.sh hosts/host_m hosts/core_vectors.json hosts/core_vectors_base.json out "$SHARD" 8
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: "libzync-vectors-logs-${{ matrix.shard }}", path: "out/**/*.log", retention-days: 7 }
 
   libzync-rig:
     # the guest against a real Bitcoin Core 28.0 on regtest, rule by rule; then handover O -> N

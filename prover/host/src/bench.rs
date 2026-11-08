@@ -88,6 +88,9 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
     // it. Both reject: agreement only where Core rejects (script_tests: UNKNOWN_ERROR; tx tests: invalid).
     const ABORT: i32 = i32::MIN;
     const UNKNOWN_ERROR: i32 = -2;
+    // The guest image, decoded once: each execution from the ELF re-decoded it, ~7 s a run, which was the whole cost of
+    // a batch rerun case by case.
+    let image = risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image");
     // One guest execution of mode 10: (codes, cycles, the guest's log).
     let exec = |chunk: &[Case], mode: u32, hints: &[Vec<u8>]| -> Option<(Vec<i32>, u64, String)> {
         let mut log = Vec::new();
@@ -100,11 +103,11 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
                 let h = hints.get(k).cloned().unwrap_or_default();
                 b.write(&(c.kind, unhex(&c.tx), unhex(&c.prevouts), c.input, c.flags, mode, h)).unwrap();
             }
-            default_executor().execute(b.build().unwrap(), METHOD_ELF).ok()?
+            risc0_zkvm::ExecutorImpl::new(b.build().unwrap(), image.clone()).ok()?.run().ok()?
         };
-        let got: Vec<i32> = s.journal.decode().expect("mode 10 journal");
+        let got: Vec<i32> = s.journal.as_ref().expect("mode 10 journal").decode().expect("mode 10 journal");
         assert_eq!(got.len(), chunk.len());
-        Some((got, s.cycles(), String::from_utf8_lossy(&log).into_owned()))
+        Some((got, s.user_cycles, String::from_utf8_lossy(&log).into_owned()))
     };
     // A chunk through the selected path: plain, or collect -> hints -> hinted run.
     let run = |chunk: &[Case]| -> Option<(Vec<i32>, u64)> {
@@ -127,15 +130,22 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
         Some((g, c0 + c1))
     };
     let (mut agree, mut bad, mut aborts, mut broken, mut cycles) = (0usize, 0usize, 0usize, 0usize, 0u64);
+    // A batch that aborts is split in halves until each abort is alone, so one throwing case does not hide the others
+    // (rerunning it case by case cost a run per case, and nearly every batch of Core's vectors holds a throw).
+    fn solve<C>(chunk: &[C], run: &dyn Fn(&[C]) -> Option<(Vec<i32>, u64)>, cycles: &mut u64, abort: i32) -> Vec<i32> {
+        match run(chunk) {
+            Some((g, c)) => { *cycles += c; g }
+            None if chunk.len() == 1 => vec![abort],
+            None => {
+                let (l, r) = chunk.split_at(chunk.len() / 2);
+                let mut g = solve(l, run, cycles, abort);
+                g.extend(solve(r, run, cycles, abort));
+                g
+            }
+        }
+    }
     for chunk in cases.chunks(batch) {
-        // A batch that aborts is rerun one case at a time, so one throwing case does not hide the others.
-        let got: Vec<i32> = match run(chunk) {
-            Some((g, c)) => { cycles += c; g }
-            None => chunk.iter().map(|c| match run(core::slice::from_ref(c)) {
-                Some((g, cy)) => { cycles += cy; g[0] }
-                None => ABORT,
-            }).collect(),
-        };
+        let got: Vec<i32> = solve(chunk, &run, &mut cycles, ABORT);
         for (c, rc) in chunk.iter().zip(got) {
             let core_valid = match (c.code, c.valid) { (Some(code), _) => code == 1, (None, Some(v)) => v,
                                                        (None, None) => panic!("{}: no expectation", c.label) };
