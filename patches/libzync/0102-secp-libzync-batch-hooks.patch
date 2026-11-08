@@ -1,0 +1,101 @@
+libzync: libsecp256k1 0.5.1 batch-verification hooks, applied ON TOP of 0012, 0013, 0005, 0006, 0008.
+
+  HAZYNC_BATCH_ECDSA  ecdsa_impl.h                 after r,s != 0: hand (e, s, Q, r) to hazync_batch_defer
+                      modules/schnorrsig/main_impl.h  after e is computed: hand (s, -e, P, r_x)
+                      modules/extrakeys/main_impl.h   BIP341 tweak check: hand (t, 1, P, Q.x) with Q's parity
+
+A return of 1 = "deferred into the end-of-chunk batch" (prover/methods/guest/src/batch_ecdsa.rs);
+anything else falls through to libsecp's own verification, unchanged.
+⛔ The hooks pass field and scalar LIMBS, so they REQUIRE the 8x32 field_bigint2 backend (0012) and
+libsecp's 8x32 scalars (rv32). The guest build refuses HAZYNC_BATCH_ECDSA without HAZYNC_FIELD_BIGINT2.
+
+diff -ruN a/src/ecdsa_impl.h b/src/ecdsa_impl.h
+--- a/src/ecdsa_impl.h
++++ b/src/ecdsa_impl.h
+@@ -204,6 +204,21 @@
+     if (secp256k1_scalar_is_zero(sigr) || secp256k1_scalar_is_zero(sigs)) {
+         return 0;
+     }
++#ifdef HAZYNC_BATCH_ECDSA
++    {
++        secp256k1_ge q = *pubkey;
++        extern int hazync_batch_defer(int kind, const uint32_t *u1, const uint32_t *u2,
++                                      const uint32_t *qx, const uint32_t *qy, const uint32_t *r);
++        secp256k1_fe_normalize_var(&q.x);
++        secp256k1_fe_normalize_var(&q.y);
++        /* kind 2: (e, s, Q, r) BEFORE libsecp's scalar inverse and the two scalar products --
++         * the batch computes u1 = e/s and u2 = r/s on the coprocessor, for a few hundred cycles
++         * against ~2.7k of libsecp's software scalar arithmetic. On fallback libsecp does it all. */
++        if (hazync_batch_defer(2, message->d, sigs->d, q.x.n, q.y.n, sigr->d) == 1) {
++            return 1;
++        }
++    }
++#endif /* HAZYNC_BATCH_ECDSA */
+ 
+ #ifdef HAZYNC_SCALAR_INV_ACCEL
+     {
+diff -ruN a/src/modules/extrakeys/main_impl.h b/src/modules/extrakeys/main_impl.h
+--- a/src/modules/extrakeys/main_impl.h
++++ b/src/modules/extrakeys/main_impl.h
+@@ -141,8 +141,35 @@
+     ARG_CHECK(tweaked_pubkey32 != NULL);
+     ARG_CHECK(tweak32 != NULL);
+ 
+-    if (!secp256k1_xonly_pubkey_load(ctx, &pk, internal_pubkey)
+-        || !secp256k1_ec_pubkey_tweak_add_helper(&pk, tweak32)) {
++    if (!secp256k1_xonly_pubkey_load(ctx, &pk, internal_pubkey)) {
++        return 0;
++    }
++#ifdef HAZYNC_BATCH_ECDSA
++    {
++        /* kind 3 / 4: BIP341 tweak check Q == P + t*G with y(Q) even / odd. The same linear shape as
++         * the signature equations (u1 = t, u2 = 1, the internal key P as "Q", the output key as R),
++         * so it joins the same end-of-chunk batch. Any value libsecp would reject (tweak >= n,
++         * output x >= p) falls through to libsecp unchanged. */
++        secp256k1_scalar hz_t;
++        secp256k1_fe hz_qx;
++        int hz_overflow = 0;
++        secp256k1_scalar_set_b32(&hz_t, tweak32, &hz_overflow);
++        if (!hz_overflow && secp256k1_fe_set_b32_limit(&hz_qx, tweaked_pubkey32)
++            && (tweaked_pk_parity == 0 || tweaked_pk_parity == 1)) {
++            extern int hazync_batch_defer(int kind, const uint32_t *u1, const uint32_t *u2,
++                                          const uint32_t *qx, const uint32_t *qy, const uint32_t *r);
++            secp256k1_ge hz_p = pk;
++            secp256k1_fe_normalize_var(&hz_p.x);
++            secp256k1_fe_normalize_var(&hz_p.y);
++            secp256k1_fe_normalize_var(&hz_qx);
++            if (hazync_batch_defer(3 + tweaked_pk_parity, hz_t.d, secp256k1_scalar_one.d,
++                                   hz_p.x.n, hz_p.y.n, hz_qx.n) == 1) {
++                return 1;
++            }
++        }
++    }
++#endif /* HAZYNC_BATCH_ECDSA */
++    if (!secp256k1_ec_pubkey_tweak_add_helper(&pk, tweak32)) {
+         return 0;
+     }
+     secp256k1_fe_normalize_var(&pk.x);
+diff -ruN a/src/modules/schnorrsig/main_impl.h b/src/modules/schnorrsig/main_impl.h
+--- a/src/modules/schnorrsig/main_impl.h
++++ b/src/modules/schnorrsig/main_impl.h
+@@ -252,6 +252,20 @@
+     /* Compute rj =  s*G + (-e)*pkj */
+     secp256k1_scalar_negate(&e, &e);
+     secp256k1_gej_set_ge(&pkj, &pk);
++#ifdef HAZYNC_BATCH_ECDSA
++    {
++        secp256k1_ge pk_n = pk;
++        secp256k1_fe rx_n = rx;
++        extern int hazync_batch_defer(int kind, const uint32_t *u1, const uint32_t *u2,
++                                      const uint32_t *qx, const uint32_t *qy, const uint32_t *r);
++        secp256k1_fe_normalize_var(&pk_n.x);
++        secp256k1_fe_normalize_var(&pk_n.y);
++        secp256k1_fe_normalize_var(&rx_n);
++        if (hazync_batch_defer(1, s.d, e.d, pk_n.x.n, pk_n.y.n, rx_n.n) == 1) {
++            return 1;
++        }
++    }
++#endif /* HAZYNC_BATCH_ECDSA */
+ #ifdef HAZYNC_BIGINT2_SCHNORR
+     {
+         /* rj = s*G + e*pkj, with e already negated above -- the SAME double-scalar-mul shape that

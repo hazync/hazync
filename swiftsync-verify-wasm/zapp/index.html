@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coin Check</title>
+<style>
+  :root { --bg: #fbfbf9; --fg: #1d1d1b; --muted: #5d5d58; --line: #d9d8d2; --ok: #1f7a3a; --bad: #b42318; --demo: #8a5a00; --card: #ffffff; --accent: #c2410c; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #151514; --fg: #ecebe6; --muted: #a3a29b; --line: #34332f; --ok: #5cc27b; --bad: #f2786a; --demo: #e0b354; --card: #1d1d1b; --accent: #fb923c; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 28px 0 8px; }
+  p.lede { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  label { display: grid; gap: 4px; font-weight: 600; font-size: .95rem; }
+  label span { font-weight: 400; color: var(--muted); font-size: .85rem; }
+  input[type=text] { font: inherit; font-family: ui-monospace, monospace; font-size: .85rem; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); width: 100%; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button { font: inherit; font-weight: 600; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--fg); background: var(--fg); color: var(--bg); cursor: pointer; }
+  button.ghost { background: transparent; color: var(--fg); border-color: var(--line); font-weight: 500; font-size: .85rem; padding: 6px 10px; }
+  .verdict { font-weight: 700; padding: 10px 12px; border-radius: 8px; border: 1px solid currentColor; }
+  .v-ok { color: var(--ok); } .v-demo { color: var(--demo); } .v-fail { color: var(--bad); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: .9rem; margin: 12px 0 0; }
+  dt { color: var(--muted); } dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+  .answer { font-size: 1.05rem; margin: 0 0 8px; }
+  .fact { font-family: ui-monospace, monospace; font-size: .82rem; overflow-wrap: anywhere; margin: 4px 0; }
+  .ok { color: var(--ok); } .fail { color: var(--bad); } .demo { color: var(--demo); }
+  .note { color: var(--muted); font-size: .85rem; }
+  #result:empty { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Coin check</h1>
+  <p class="lede">Ask about any output script, and check the answer against the libzync chain proof <strong>on this device</strong>.
+    The server only supplies the proof and the facts; this page verifies the proof with WebAssembly and checks each fact against it,
+    so a wrong answer from the server is refused, not shown.</p>
+
+  <h2>The proof</h2>
+  <div class="card" id="proof">Loading the proof…</div>
+
+  <h2>Ask</h2>
+  <div class="card">
+    <label>Output script <span>scriptPubKey, hex. Blocks 1–200 pay to public keys directly (P2PK), so there are no addresses yet.</span>
+      <input type="text" id="spk" spellcheck="false" placeholder="41 04… ac">
+    </label>
+    <div class="row">
+      <button class="ghost" data-spk="410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac">Block 9's coinbase (the coin sent to Hal)</button>
+      <button class="ghost" data-spk="4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac">Hal Finney's coin from block 170</button>
+    </div>
+    <div class="row">
+      <button id="balance">Balance</button>
+      <button id="history">History</button>
+    </div>
+  </div>
+  <p class="note">Why block 9's key shows 5 coins and 28 BTC: its one 50 BTC coinbase was spent in block 170 (10 to Hal, 40
+    back to the same key as change), then the change was spent again in blocks 181 (10 out, 30 back), 182 (1 out, 29 back)
+    and 183 (1 out, 28 back). Coins 50, 40, 30, 29 are spent; the 28 is what is left at block 200.</p>
+  <div id="result"></div>
+  <p class="note">What the proof can and cannot say: it shows the chain up to its tip is valid Bitcoin from genesis and what the coin state is there.
+    Which chain it is (that the tip is the network's block at that height) is checked against a source you trust; below
+    Bitcoin Core's minimum chain work the verdict is DEMO, as here.</p>
+</main>
+<script type="module">
+import { loadVerifier } from '../swiftsync-verify.js';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const v = await loadVerifier(fetch('../swiftsync_verify_wasm.wasm'));
+const receipt = new Uint8Array(await (await fetch('./proof.rcpt')).arrayBuffer());
+const base = { network: 'mainnet', image: 'product', receipt };
+const words = { ok: 'OK: verified, on the network\'s chain', demo: 'DEMO: a valid chain from genesis, not shown to be the network\'s (below the minimum work)', fail: 'FAIL: not a valid proof' };
+const r = v.verify(base);
+$('proof').innerHTML = `<div class="verdict v-${r.verdict}">${esc(words[r.verdict])}</div>` + (r.height != null ?
+  `<dl><dt>blocks proven</dt><dd>genesis to ${r.height}</dd><dt>tip</dt><dd>${esc(r.tip)}</dd><dt>coins ever created</dt><dd>${r.utxo_leaves}</dd><dt>image</dt><dd>${esc(r.image ?? v.imageId('mainnet'))}</dd></dl>` : '') +
+  `<p class="note">${r.checks.filter((c) => !c.ok).map((c) => esc(c.what)).join('<br>')}</p>`;
+document.querySelectorAll('[data-spk]').forEach((b) => b.addEventListener('click', () => { $('spk').value = b.dataset.spk; }));
+async function ask(kind) {
+  const spk = $('spk').value.trim().toLowerCase();
+  if (!/^([0-9a-f]{2})+$/.test(spk)) { $('result').innerHTML = '<p class="fail">Enter a scriptPubKey as hex.</p>'; return; }
+  $('result').innerHTML = '<p class="note">Fetching the fact…</p>';
+  const resp = await fetch(`./api/trie/${kind}/${spk}`);
+  const fact = await resp.json();
+  if (!resp.ok) { $('result').innerHTML = `<p class="fail">The server: ${esc(fact.error ?? resp.status)}</p>`; return; }
+  const c = v.verifyFacts({ ...base, facts: { tries: [fact] } });
+  const f = (c.facts ?? [])[0];
+  const cls = c.verdict === 'fail' ? 'fail' : c.verdict === 'demo' ? 'demo' : 'ok';
+  $('result').innerHTML = `<h2>${kind === 'balance' ? 'Balance' : 'History'}</h2><div class="card">` +
+    `<p class="answer ${cls}">${f ? esc(f.what) : 'no answer'}</p>` +
+    `<p class="note">Checked on this device against the proof above (verdict ${esc(c.verdict.toUpperCase())}). ` +
+    `The server sent ${fact.proof.length / 8} words of trie; ${c.verdict === 'fail' ? 'they did NOT match the proof.' : 'they hash to the proof\'s trie root.'}</p></div>`;
+}
+$('balance').addEventListener('click', () => ask('balance'));
+$('history').addEventListener('click', () => ask('history'));
+</script>
+</body>
+</html>

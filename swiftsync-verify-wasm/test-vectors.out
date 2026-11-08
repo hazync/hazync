@@ -1,0 +1,7 @@
+PASS  retired_design_b     fail (want exit 1)
+PASS  retired_design_b_product fail (want exit 1)
+PASS  wrong_image          fail (want exit 1)
+PASS  fake_receipt         fail (want exit 1)
+PASS  bundle_v1            fail (want exit 1)
+PASS  bundle_header_lies   fail (want exit 1)
+6/6 cases as expected (wasm)

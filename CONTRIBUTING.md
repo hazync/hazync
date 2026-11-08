@@ -237,7 +237,7 @@ name. Each problem is pushed at most once an hour (`HAZYNC_NTFY_REPEAT`). `run-w
 5 failures in a row (`NOTIFY_FAIL_STREAK`), again when the worker recovers, and when it refuses to start; a
 board with nothing free to claim is not a failure. A push that cannot be sent never stops the work.
 
-**Running workers for days?** [`docs/PROVER_OPERATIONS.md`](docs/PROVER_OPERATIONS.md) is the operator's
+**Running workers for days?** [`docs/OPERATIONS.md`](docs/OPERATIONS.md) is the operator's
 manual: which modes to run, how claims work, stopping without stranding a block, a systemd unit, upgrading,
 watching the board, disk use, and a table of what goes wrong.
 
@@ -313,7 +313,7 @@ VRAM (22,521–22,917 MiB measured on an L40S, 2026-08-28); at po2 22, which you
 `HAZYNC_SEG_PO2`, it is about 40.6 GB, so a 48 GB card holds exactly one. Running two on the same card
 leaves no headroom at po2 21 and will exhaust it at po2 22, and it would buy roughly 3% even if it fit.
 
-Details, the aggregate case, and every knob: [`docs/FLEET_OPERATIONS.md`](docs/FLEET_OPERATIONS.md).
+Details, the aggregate case, and every knob: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Just want to check a proof, not make one?
 
@@ -337,7 +337,7 @@ If it prints a line starting with `RANGE-OK`, the proof is genuine — with one 
 
 The `.hzk` is a **binary STARK receipt** (a RISC0 proof, a few hundred KB), not text — opening it in a text editor just shows gibberish, which is expected. You *use* it with `verify-any`, you don't read it.
 
-If `verify-any` prints `STARK verification FAILED ... METHOD_ID MISMATCH` instead of `RANGE-OK`, that is **not** a bad proof — your host was built from a different guest than made the proof, so their image ids differ. The prebuilt binary above avoids this (it's the canonical guest). If you built from source, run `host method-id` to see yours and reproduce the canonical id with the container (`docker build -f reproduce/Dockerfile .`) — it's pinned in [`reproduce/METHOD_ID`](reproduce/METHOD_ID). See [`docs/PROVING.md`](docs/PROVING.md).
+If `verify-any` prints `STARK verification FAILED ... METHOD_ID MISMATCH` instead of `RANGE-OK`, that is **not** a bad proof — your host was built from a different guest than made the proof, so their image ids differ. The prebuilt binary above avoids this (it's the canonical guest). If you built from source, run `host method-id` to see yours and reproduce the canonical id with the container (`docker build -f reproduce/Dockerfile .`) — it's pinned in [`reproduce/METHOD_ID`](reproduce/METHOD_ID). See [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## If something breaks
 
@@ -365,7 +365,7 @@ If `verify-any` prints `STARK verification FAILED ... METHOD_ID MISMATCH` instea
 
 ## Running your own party
 
-The coordinator (`coordinator/`) is optional and reusable. If you want to run your own proving effort, for a testnet, another chain, or a private run, [`docs/RUN_YOUR_OWN_COORDINATOR.md`](docs/RUN_YOUR_OWN_COORDINATOR.md) walks through standing one up (`coordinator/deploy/RUNBOOK.md` is the operator's runbook for the public board's own box). Contributors point their `COORD_URL` at your coordinator, and their proofs land in your ledger, not ours. Each coordinator is its own island: separate ledger, separate frontier, separate stored proofs. The proofs themselves are universal, so anyone can verify a proof from any party, but coordinators do not share state with each other.
+The coordinator (`coordinator/`) is optional and reusable. If you want to run your own proving effort, for a testnet, another chain, or a private run, [`docs/COORDINATOR.md`](docs/COORDINATOR.md) walks through standing one up (`coordinator/deploy/RUNBOOK.md` is the operator's runbook for the public board's own box). Contributors point their `COORD_URL` at your coordinator, and their proofs land in your ledger, not ours. Each coordinator is its own island: separate ledger, separate frontier, separate stored proofs. The proofs themselves are universal, so anyone can verify a proof from any party, but coordinators do not share state with each other.
 
 ## Reviewing the code
 

@@ -1,0 +1,24 @@
+[package]
+name = "swiftsync-verify-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "swiftsync-verify compiled to WebAssembly: check a SwiftSync hints proof in a browser, on the device"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# The same library as the CLI (one implementation of the checks); raw ABI, no wasm-bindgen, as ../verifier-wasm.
+[dependencies]
+swiftsync-verify = { path = "../swiftsync-verify" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

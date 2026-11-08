@@ -1,0 +1,9 @@
+PASS  retired_design_b         verdict 1 (want 1)  journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
+PASS  retired_design_b_product verdict 1 (want 1)  journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
+PASS  wrong_image              verdict 1 (want 1)  receipt verifies against image 067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36 (signet): claim digest does not match the expected digest ca0aa75905f3630ab92f7e5fdf8ad96b0a08c38c5789cc711a557c29239fb1c8; expected dda820799187684c1a03703c17
+PASS  fake_receipt             verdict 1 (want 1)  receipt is a real proof (not a dev-mode FakeReceipt)
+PASS  bundle_v1                verdict 1 (want 1)  unsupported bundle version 1
+PASS  bundle_header_lies       verdict 1 (want 1)  unsupported bundle version 1
+PASS  bad_image_hex            verdict 1 (want 1)  image id is not 64 hex digits
+PASS  unknown_network          verdict 1 (want 1)  unknown network
+all cases as expected

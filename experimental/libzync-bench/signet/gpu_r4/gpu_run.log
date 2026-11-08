@@ -1,0 +1,19 @@
+---- retry2 21:17:05
+[21:17:06] pod t89c84flmqfxde deployed (NVIDIA RTX PRO 6000 Blackwell Server Edition)
+[21:17:15] ssh 107.150.186.62:14075
+[21:17:20] scripts sent
+[21:21:24] bundle sent
+[21:28:04] prep: built in 391 s PREP_OK 
+[21:28:06] proving 2501..2600
+[21:30:38]   2512	1	0.1	7.6	0.1	16.6	recursive	225714
+[21:33:22]   2522	0	0.0	0.0	0.1	8.8	recursive	226226
+[21:36:04]   2522	0	0.0	0.0	0.1	8.8	recursive	226226
+[21:38:48]   2522	0	0.0	0.0	0.1	8.8	recursive	226226
+[21:41:32]   2527	0	0.0	0.0	0.1	9.0	recursive	226226
+[21:44:14]   2545	0	0.0	0.0	0.1	8.8	recursive	226482
+[21:46:58]   2564	0	0.0	0.0	0.1	8.9	recursive	225466
+[21:49:47]   2583	0	0.0	0.0	0.1	8.9	recursive	225722
+[21:52:27] fetching
+[21:53:07] fetched: 305 files
+[21:53:07] terminating t89c84flmqfxde
+[21:53:12] GPU_RUN_DONE

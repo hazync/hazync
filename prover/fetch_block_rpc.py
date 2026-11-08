@@ -4,6 +4,7 @@
 # anyone who has a full node.
 #
 #   usage: python3 fetch_block_rpc.py <height> <out.json>
+#          python3 fetch_block_rpc.py range <lo> <hi> <dir> [--window N] [--jobs N] [--after-saves <prep out>]     (HAZYNC_RPC_CLI="bitcoin-cli" or "ssh <host> bitcoin-cli" for RPC via the CLI)
 #
 # Why: fetch_block.py talks to blockstream/mempool and needs roughly one request per unique funding tx
 # (thousands for a modern block). That is rate-limited into hours, and 429s make it unreliable. A full
@@ -40,7 +41,18 @@ def _auth():
             f"Set HAZYNC_RPC_COOKIE to the node's cookie path, or HAZYNC_RPC_AUTH to 'user:pass'.")
     return base64.b64encode(COOKIE.read_text().strip().encode()).decode()
 
+CLI = os.environ.get("HAZYNC_RPC_CLI")   # e.g. "bitcoin-cli" or "ssh <host> bitcoin-cli": RPC through that command
+
 def rpc(method, params=None):
+    if CLI:
+        import subprocess, shlex
+        args = shlex.split(CLI) + [method] + [p if isinstance(p, str) else json.dumps(p) for p in (params or [])]
+        r = subprocess.run(args, capture_output=True, text=True)
+        if r.returncode != 0: raise SystemExit(f"{CLI} {method} failed: {r.stderr.strip()}")
+        out = r.stdout.strip()
+        # bitcoin-cli prints a string result bare, an object or number as JSON
+        try: return json.loads(out, parse_float=Decimal)
+        except ValueError: return out
     auth = _auth()
     body = json.dumps({"jsonrpc": "2.0", "id": "h", "method": method, "params": params or []})
     c = http.client.HTTPConnection(HOST, PORT, timeout=600)
@@ -56,8 +68,14 @@ def rpc(method, params=None):
 def sats(btc):
     return int((Decimal(btc) * 100_000_000).to_integral_value())
 
-def main():
-    height, out_path = int(sys.argv[1]), sys.argv[2]
+HDR = {}    # header by hash, across blocks of a range
+def header(bh):
+    if bh not in HDR: HDR[bh] = rpc("getblockheader", [bh])
+    return HDR[bh]
+
+MTP_AT = {}  # median time past by height, across blocks of a range
+
+def build(height):
     h = rpc("getblockhash", [height])
     b = rpc("getblock", [h, 3])
 
@@ -82,11 +100,11 @@ def main():
     # nCoinTime = GetMedianTimePast(coinHeight-1)). Using the coin block's own nTime is WRONG: nTime >=
     # MTP(h-1), so it over-shoots and false-rejects boundary-tight BIP68 time locks. Cached per height,
     # since many funding txs share a creation block.
-    mtp_at = {}
+    mtp_at = MTP_AT
     def block_mtp(hh):
         if hh < 0: return 0
         if hh not in mtp_at:
-            mtp_at[hh] = rpc("getblockheader", [rpc("getblockhash", [hh])])["mediantime"]
+            mtp_at[hh] = header(rpc("getblockhash", [hh]))["mediantime"]
         return mtp_at[hh]
 
     # Previous-11 block timestamps (h-11..h-1), oldest first; their median = MTP(h-1), the spend block's
@@ -94,7 +112,7 @@ def main():
     recent_times, ph = [], b.get("previousblockhash")
     for _ in range(11):
         if not ph: break
-        pj = rpc("getblockheader", [ph])
+        pj = header(ph)
         recent_times.append(pj["time"])
         ph = pj.get("previousblockhash")
     recent_times.reverse()
@@ -130,9 +148,61 @@ def main():
             n_meta += 1
         out["txs"].append({"raw": t["hex"], "prevouts": prevs})
 
-    json.dump(out, open(out_path, "w"))
-    print(f"saved {out_path}: {len(out['txs'])} txs, {n_meta} prevouts, "
-          f"{len(mtp_at)} unique coin heights ({2 + len(mtp_at) * 2 + len(recent_times)} RPCs)", flush=True)
+    return out, n_meta
+
+def write(out, path):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f: json.dump(out, f)
+    os.replace(tmp, path)   # a consumer never reads half a file
+
+def main():
+    # range <lo> <hi> <dir> [--window N]: every block lo..hi into <dir>/block_<h>.json (existing files kept), waiting
+    # while N block files are already waiting to be consumed (libzync-prep with HAZYNC_PREP_CONSUME=1 deletes each
+    # after use), so a whole-chain prep never needs the whole chain's JSON on disk.
+    if sys.argv[1] == "range":
+        lo, hi, d = int(sys.argv[2]), int(sys.argv[3]), pathlib.Path(sys.argv[4])
+        window = int(sys.argv[sys.argv.index("--window") + 1]) if "--window" in sys.argv else 0
+        # --jobs N: N processes, process k fetching heights lo+k, lo+k+N, ... (RPC and JSON decoding are the cost)
+        jobs = int(sys.argv[sys.argv.index("--jobs") + 1]) if "--jobs" in sys.argv else 1
+        # --after-saves <prep out dir>: start after prep's newest save point (state_<h>.smt), the height a restarted
+        # prep resumes from; the files below it were consumed and deleted, and must not be fetched again
+        if "--after-saves" in sys.argv:
+            od = pathlib.Path(sys.argv[sys.argv.index("--after-saves") + 1])
+            # a COMPLETE save point only (as libzync-prep-run.sh): a stop during a save leaves a newer partial one
+            # (state_<h>.smt without its .coinlog / .trie), and prep then resumes from the one before it
+            saves = [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()
+                     and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog", "trie"))] if od.exists() else []
+            if saves and max(saves) + 1 > lo:
+                lo = max(saves) + 1
+                print(f"resuming after prep's save point {lo - 1}", flush=True)
+        d.mkdir(parents=True, exist_ok=True)
+        # ⛔ prep with HAZYNC_PREP_CONSUME=1 deletes files only at its SAVE POINTS: the window must be larger than
+        # HAZYNC_PREP_SAVE_EVERY, or the producer waits for a save that waits for the producer
+        def worker(k):
+            import time
+            for height in range(lo + k, hi + 1, jobs):
+                p = d / f"block_{height}.json"
+                if p.exists(): continue
+                # files waiting below this height: only those count, so the block prep needs next is never held back
+                while window and sum(1 for q in d.glob("block_*.json") if q.name[6:-5].isdigit() and int(q.name[6:-5]) < height) >= window:
+                    time.sleep(1)
+                out, n_meta = build(height)
+                write(out, p)
+                print(f"block {height}: {len(out['txs'])} txs, {n_meta} prevouts", flush=True)
+        if jobs == 1:
+            worker(0)
+            return
+        import multiprocessing
+        ps = [multiprocessing.Process(target=worker, args=(k,)) for k in range(jobs)]
+        for x in ps: x.start()
+        for x in ps: x.join()
+        bad = [x.exitcode for x in ps if x.exitcode != 0]
+        if bad: raise SystemExit(f"{len(bad)} fetch worker(s) failed: exit codes {bad}")
+        return
+    height, out_path = int(sys.argv[1]), sys.argv[2]
+    out, n_meta = build(height)
+    write(out, out_path)
+    print(f"saved {out_path}: {len(out['txs'])} txs, {n_meta} prevouts", flush=True)
 
 if __name__ == "__main__":
     main()

@@ -16,7 +16,7 @@ WHAT THIS DOES NOT GIVE YOU, first, because the distinction matters:
   make you prove something false.
 
   If you want the stronger property — that the bundles are what an archive node would have produced —
-  run your own node. That is what `docs/RUN_YOUR_OWN_COORDINATOR.md` describes and this does not
+  run your own node. That is what `docs/COORDINATOR.md` describes and this does not
   replace it.
 
 RESUMABLE BY DESIGN. It walks in chunks and skips heights already present, so an interrupted run is

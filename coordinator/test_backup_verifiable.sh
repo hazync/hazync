@@ -71,8 +71,8 @@ if [ "$CONTROL" -eq 1 ]; then
     exit 1
 fi
 
-[ "$rc" -eq 0 ]; check $? "a healthy backup exits 0 (got $rc; see below if not)"
-[ -n "$DEST" ] && [ -s "$DEST/SHA256SUMS" ]; check $? "SHA256SUMS exists and is NOT empty"
+if [ "$rc" -eq 0 ]; then r=0; else r=1; fi; check $r "a healthy backup exits 0 (got $rc; see below if not)"
+if [ -n "$DEST" ] && [ -s "$DEST/SHA256SUMS" ]; then r=0; else r=1; fi; check $r "SHA256SUMS exists and is NOT empty"
 # ⛔ THE RESTORE DRILL, RUN FOR REAL. RUNBOOK.md § Backup & restore verifies a restore with exactly
 # this command; if it does not pass here it will not pass at 4am either.
 ( cd "$DEST" && sha256sum -c SHA256SUMS >/dev/null 2>&1 )

@@ -1,0 +1,5 @@
+PASS bad_nonce_pow hints rc 101 agg rc 101 | all_ok=true pow=false merkle=true subsidy=true weight=true sigops=true witness=true bip34=true bip30=true
+PASS coinbase_overpays hints rc 101 agg rc 101 | all_ok=true pow=true merkle=false subsidy=false weight=true sigops=true witness=true bip34=true bip30=true
+DONE
+
+[exited with code 0]

@@ -25,11 +25,13 @@ codegen-units = 1
 # its ABSOLUTE path into the guest ELF, making the image id depend on the checkout location. The same
 # source is #[path]-included instead, so there is still exactly one copy and no drift.
 risc0-zkvm = { version = "=3.0.5", default-features = false, features = ['std', 'unstable'] }
-sha2 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["compress"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 # hazync#139 middle-path experiment ONLY. Optional so a default build neither compiles it nor
 # changes METHOD_ID. Enable with --features bigint2-ecdsa; see src/bigint2_ecmult.rs.
 risc0-crypto = { version = "0.1.0-rc.1", optional = true }
+# libzync experiment only (batch-ecdsa): direct coprocessor calls for the batch MSM.
+risc0-bigint2 = { version = "=1.4.14", optional = true }
 
 [build-dependencies]
 cc = "1"
@@ -47,17 +49,11 @@ serde = []
 # hazync#139: swap ONLY the group arithmetic under libsecp ECDSA verify. EXPERIMENTAL, opt-in,
 # and it MOVES METHOD_ID — never enable for a shipped build.
 bigint2-ecdsa = ["dep:risc0-crypto"]
-# hazync#205 / GHOST_GAINS G1: recover a pubkey's Y through the bigint2 coprocessor instead of
-# libsecp's software modular sqrt. EXPERIMENTAL, opt-in, MOVES METHOD_ID. See src/liftx_accel.rs
-# and patches/0007. Shares the risc0-crypto dependency with the #139 middle path.
-liftx-accel = ["dep:risc0-crypto"]
 # #136's read_slice fix for the AGGREGATE: 29.31% of it is serde Vec<u8> deserialisation of the chunk
 # journals. Host and guest must agree -- see HAZYNC_AGG_READSLICE.
 agg-readslice = []
-# Pippenger MSM over the coprocessor. Primitive only; see src/msm.rs and docs/MSM_BATCH_VERIFY.md.
-msm = ["dep:risc0-crypto"]
-# Field-op benchmark (mode 15). Needs patches/0011 for the libsecp half.
-field-bench = []
+# libzync: log per-transaction cycles (TXCYC) in chunks, for fitting the host packer. Measurement only.
+tx-cycles = []
 # libsecp field backend on the coprocessor. Canonical 8x32 limbs, no conversion. patches/0012.
 field-bigint2 = ["dep:risc0-crypto"]
 # hazync#205 — recover a pubkey's Y from a host HINT and VERIFY it with y^2 == x^3+7. Advice-and-
@@ -69,3 +65,42 @@ liftx-hint = []
 # the scalar inverse WITHOUT G1 failed to link with `undefined symbol: hazync_scalar_inverse`.
 # They are independent patches (0008 vs 0007) and now have independent features.
 scalar-inv-accel = []
+# libzync EXPERIMENT: defer every libsecp ECDSA verify that a host hint marks valid into ONE batch
+# check per chunk (hinted R, Fiat-Shamir weights, one MSM). Not reviewed; moves METHOD_ID.
+# See src/batch_ecdsa.rs and experimental/libzync-bench/README.md.
+batch-ecdsa = ["dep:risc0-crypto", "dep:risc0-bigint2"]
+# libzync EXPERIMENT: one deserialise + one txid/wtxid hash per transaction per chunk instead of
+# three and two. Same outputs; Core's code untouched; moves METHOD_ID. Pair with HAZYNC_TX_ONCE.
+tx-once = []
+# libzync: chunks commit per-transaction facts; the aggregate never parses a transaction (src/agg_lite.rs).
+# SwiftSync only. Needs HAZYNC_TX_ONCE (the chunk's helpers share one parse through cached_tx).
+agg-lite = ["swiftsync", "tx-once"]
+# libzync EXPERIMENT: SwiftSync-style ECMH coin accounting in the aggregate instead of Utreexo
+# inclusion proofs. Cost measurement only (no handover check); see src/swiftsync.rs.
+swiftsync = ["batch-ecdsa"]
+# libzync EXPERIMENT: commit the chunk journal as prebuilt serde words (identical bytes).
+fast-commit = []
+# ⭐ The libzync guest, as ONE feature (HAZYNC_LIBZYNC=1; libzync/src/profile.rs lists the C half).
+# It also switches the chunk and aggregate input streams to ONE hint block each (libzync/src/wire.rs).
+# batch-ecdsa, swiftsync and agg-lite read their hints only through that block, so they refuse to
+# build without it -- there is one way to build a libzync guest.
+libzync = ["bigint2-ecdsa", "liftx-hint", "field-bigint2", "scalar-inv-accel", "agg-readslice",
+           "batch-ecdsa", "tx-once", "swiftsync", "agg-lite", "fast-commit"]
+# Default signet instead of mainnet (HAZYNC_NETWORK=signet): Core's SigNet chainparams and the BIP325
+# block-solution check in the aggregate. libzync only.
+signet = ["libzync"]
+# Core's regtest (HAZYNC_NETWORK=regtest), for the rig that compares verdicts with Core on crafted blocks.
+regtest = ["libzync"]
+# libzync EXPERIMENT (HAZYNC_COINLOG=1): the coin log (libzync/src/coinlog.rs + coinlog_forest.rs) instead of design B's SwiftSync forest.
+# Every coin that outlives its block is appended; a spend flips its leaf in place. No hints file; sound at every block.
+coinlog = ["libzync"]
+# Instant IBD (HAZYNC_UTXOHASH=1): the chain state's ECMH total tracks the LIVE coin set under the coin log.
+utxohash = ["coinlog"]
+# The counting trie (libzync/src/ttree.rs): chunks journal script-hash keys; the aggregate builds the block's trie
+# update list and its digest for the trie's own receipt (E2c: replaces the E1 measurement features itree / otree /
+# stree / htree / ttree / tsplit).
+trie = ["coinlog"]
+# libzync EXPERIMENT (HAZYNC_TXLOG=1): pre-proved transactions (txproofs/README.md §7, Phase A). The aggregate accepts
+# speculative chunks (proved for this height and MTP before the block existed) and takes the block's record order from
+# the host, so a batch may hold transactions the block does not.
+txlog = ["libzync"]

@@ -1,0 +1,37 @@
+== 1. block 962,000: hints bundle + aggregate (valid block must still pass)
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  time: chunks 31.1 s, batch hints 0.3 s, aggregate + ecmh 2.9 s, total 34.4 s
+  chunk   0 [0..1662) executed: 81385880 cycles
+  chunk   1 [1662..4307) executed: 99594769 cycles
+  chunk   2 [4307..6156) executed: 80900413 cycles
+  chunk   3 [6156..8006) executed: 80697419 cycles
+  block validation cycles  64288359
+  journal sha256           98d1e38531bbc0a8ff7547d86961be31ca27e125475aa6d954ea63c7d38fe066
+rc=0
+== 2. negative: ECMH hint with the ODD root (guest must refuse)
+ECMH: hinted y must be the even root
+== 3. negative: a spent coin claims a creation height AFTER the spending block
+exec-chunk 0 [0..1662): kind=0xc4a10010 all_valid=0 journal sha256 d8a3b89266bc393ad5d0cc0ae2cfcb3cd13198bb2437d3bd82d652d4f4c114ad
+== 4. design B sweep 1..200 (balanced) and both flips (not balanced), timed
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  ss_hints e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd == host's hash of the hints file
+  forest: 204 leaves (= coins unspent at H), roots 4
+SWEEP_OK
+sweep wall 40.13 s, max rss 596800 KB
+  ss_set=1 -> NOT BALANCED
+SWEEP_FAIL
+  ss_set=1 -> NOT BALANCED
+SWEEP_FAIL
+== 5. diff-hints: exact file, then one corrupted entry
+swiftsync-diff-hints: /home/defenwycke/libzync-gpu/r15/h200.hints is EXACT for 1..=200
+  NEGATIVE CONTROL: index 1 at height 170 toggled
+swiftsync-make-hints: H=200, 203 coins unspent at H -> /home/defenwycke/libzync-gpu/r18/fixed/h200_bad.hints
+  height 170 index 1: file says SPENT, f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0 is unspent at 200
+swiftsync-diff-hints: 1 wrong entries at 1 heights
+  NEGATIVE CONTROL: index 0 at height 9 toggled
+swiftsync-make-hints: H=200, 205 coins unspent at H -> /home/defenwycke/libzync-gpu/r18/fixed/h200_bad2.hints
+  height 9 index 0: file says UNSPENT, 0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0 was spent at 170
+swiftsync-diff-hints: 1 wrong entries at 1 heights
+swiftsync-file-hash: stop height 970000 -> ss_hints e215fe7e73298dd9dcd509de6c772f47704068485f187dc3fed158d793b1171d
+FIXED_TESTS_DONE

@@ -1,0 +1,23 @@
+ROADMAP H4: the full test pass on the fixed image (c13 = BIP30 re-creation fix d6f8b4b + round 6 838bf5b host side)
+retest_final.sh c13 c10e12, laptop (WSL, dev mode for proving steps), 2026-11-06. Raw log: ~/libzync-gpu/c13.out
+
+images
+  c13m    mainnet  f769cb8d890ac294e7ff984118f64f7b5ba79c06e8b51350abf28e88e8737a0f
+  c13reg  regtest  510d13a1…   c13regN (O pinned at 101) 7991de90…
+  c13sig  signet   c8c60d81090056bd07ef87a2ea2988be0daa88b279c76bde9f130468a84ebad1
+
+unit tests          libzync 28/28 (29/29 after 838bf5b), swiftsync-verify 16/16, -ffi 2/2, -wasm 0 (no tests), host 68/68
+rig vs Core 28.0    96/96 agree (rig_c13.out). First run: 37 HOST-FAIL from the rig's anchor lacking state_<BASE>.trie
+                    (harness, fixed in rig.py); then 94/96, the 2 being the trie's own Missing reason for
+                    bad-txns-inputs-missingorspent, now accepted as OURS
+handover O -> N     16/16 as expected
+mainnet 1..200      PR_EXIT=0, 3426 s; COINLOG_REF_MATCH; BLOCK_FOREST_OK; genesis anchor 852c5c7e… (same for every image)
+                    (the 'panicked' lines are each block's deliberate ECMH collect-run stop; unexpected panics = 0)
+cost vs c10e12      10 real blocks, execute mode, 16 chunks: cycles IDENTICAL on every block (the fix costs nothing)
+edge blocks         10/10 ok: 2016 91842 91880 185956 227931 363725 364292 388381 419328 481824
+signet 1..2600      PR_EXIT=0, 37,863 s (10.5 h, dev mode); COINLOG_REF_MATCH (2,693 leaves, 293 live coins, 130,000 BTC); BLOCK_FOREST_OK
+                    (a stray PR_EXIT=127 after it: the script was edited while running and bash read on from a shifted
+                    offset; the two reference checks after it ran on the full run)
+
+verdict             GREEN on every step. c13 is superseded by c14 (9d28cd9: the collect run exits cleanly instead of
+                    panicking; guest change, cost unchanged expected), which gets the short pass (SN=100): see RESULT_c14.txt

@@ -1,0 +1,28 @@
+{
+ "tip": 974290,
+ "blocks": 144,
+ "windows": {
+  "1": {
+   "single_key_sigs": 1000690,
+   "distinct_keys": 572488,
+   "distinct_per_sig": 0.5721
+  },
+  "6": {
+   "single_key_sigs": 1000690,
+   "distinct_keys": 550653,
+   "distinct_per_sig": 0.5503
+  },
+  "36": {
+   "single_key_sigs": 1000690,
+   "distinct_keys": 523161,
+   "distinct_per_sig": 0.5228
+  },
+  "144": {
+   "single_key_sigs": 1000690,
+   "distinct_keys": 491856,
+   "distinct_per_sig": 0.4915
+  }
+ },
+ "other_inputs": 49943,
+ "single_key_inputs": 1000690
+}

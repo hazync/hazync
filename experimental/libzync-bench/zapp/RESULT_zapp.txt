@@ -1,0 +1,12 @@
+# coin-check zyncAPP page, end to end (2026-11-08): a REAL proof of mainnet 1..200 from genesis, published image 863c9ce3,
+# one RTX PRO 6000 in 3,031 s (pod wvgzvzr6uxf46g); zync-serve on its block-200 trie; zapp/check.mjs (the page's logic under Node):
+proof: DEMO, genesis to 200, tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320, 209 coins ever
+  balance 410411db93e1dcdb...: DEMO - holds on this chain, but the chain is not shown to be the network's: script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac holds 1 unspent coin(s), 2800000000 sat, at height 200
+    tampered balance: FAIL (want FAIL)
+  history 410411db93e1dcdb...: DEMO - holds on this chain, but the chain is not shown to be the network's: script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac: complete history at height 200: 5 coin(s) ever paid, 4 spent, 1 unspent holding 2800000000 sat
+    tampered history: FAIL (want FAIL)
+  balance 4104ae1a62fe09c5...: DEMO - holds on this chain, but the chain is not shown to be the network's: script 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac holds 1 unspent coin(s), 1000000000 sat, at height 200
+    tampered balance: FAIL (want FAIL)
+  history 4104ae1a62fe09c5...: DEMO - holds on this chain, but the chain is not shown to be the network's: script 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac: complete history at height 200: 1 coin(s) ever paid, 0 spent, 1 unspent holding 1000000000 sat
+    tampered history: FAIL (want FAIL)
+CHECK_OK

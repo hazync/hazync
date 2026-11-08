@@ -1,0 +1,12 @@
+HINTS_START 1793318822.666180149
+HINTS_END 1793318852.540260034
+DIST_END 1793318862.504611705
+SERVE_END 1793319077.445654543 rc=0
+  AGG_EARLY: 16 chunk claims from local execution in 14.7 s; receipts are awaited at resolve
+    AGG_EARLY: all 16 chunk receipts present after 3.2 s of waiting
+    AGG_EARLY: resolve order (chunk index per session assumption) [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+  segment phase     186.1 s   <- 44 segments produced AND proved, overlapped
+  assembly           13.3 s   <- serial: last segment + join tree + resolves
+  TOTAL             199.4 s   <- MEASURED, not the sum of the above
+  serial floor       13.3 s   <- prologue + assembly; no fleet size reduces it
+>>> PUSH-TRANSPORT RECEIPT VERIFIED against METHOD_ID

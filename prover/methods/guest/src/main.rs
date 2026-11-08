@@ -32,25 +32,85 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod utreexo;
+mod handover_pin;
+// The lineage this image variant pins (src/lineage/): only the variant's own file is compiled in.
+#[cfg(all(not(feature = "signet"), not(feature = "regtest"), not(feature = "coinlog")))]
+#[path = "lineage/mainnet.rs"]
+mod lineage;
+#[cfg(all(feature = "signet", not(feature = "coinlog")))]
+#[path = "lineage/signet.rs"]
+mod lineage;
+#[cfg(all(feature = "regtest", not(feature = "coinlog")))]
+#[path = "lineage/regtest.rs"]
+mod lineage;
+#[cfg(all(not(feature = "signet"), not(feature = "regtest"), feature = "coinlog"))]
+#[path = "lineage/mainnet_coinlog.rs"]
+mod lineage;
+#[cfg(all(feature = "signet", feature = "coinlog"))]
+#[path = "lineage/signet_coinlog.rs"]
+mod lineage;
+#[cfg(all(feature = "regtest", feature = "coinlog"))]
+#[path = "lineage/regtest_coinlog.rs"]
+mod lineage;
+#[cfg(feature = "libzync")]
+mod checkpoint;
 mod script_flags;
+// libzync: the hint wire format and the network parameters -- the SAME files the host compiles (libzync crate),
+// included by path for the reason coinbase-smt is (hazync#88).
+#[path = "../../../../libzync/src/wire.rs"]
+mod lz_wire;
+#[path = "../../../../libzync/src/net.rs"]
+mod net;
+/// The network this guest validates. Fixed at build time (HAZYNC_NETWORK), so a signet proof and a
+/// mainnet proof can never share an image id.
+#[cfg(feature = "regtest")]
+pub const NET: &net::Net = &net::REGTEST;
+#[cfg(not(any(feature = "signet", feature = "regtest")))]
+pub const NET: &net::Net = &net::MAINNET;
+#[cfg(feature = "signet")]
+pub const NET: &net::Net = &net::SIGNET;
+// One way to build a libzync guest: these read their hints only through the libzync hint block.
+#[cfg(all(any(feature = "batch-ecdsa", feature = "swiftsync", feature = "agg-lite"), not(feature = "libzync")))]
+compile_error!("batch-ecdsa / swiftsync / agg-lite are parts of the libzync guest: build with HAZYNC_LIBZYNC=1");
 // hazync#139 middle-path experiment. Off by default; see the module docs and patches/0005.
 #[cfg(feature = "bigint2-ecdsa")]
 mod bigint2_ecmult;
-// hazync#205 / G1 — recover a pubkey's Y through the bigint2 coprocessor. The module also carries
-// patches/0008's scalar inverse, which is an INDEPENDENT lever, so it compiles for either feature.
-#[cfg(any(feature = "liftx-accel", feature = "scalar-inv-accel"))]
+// patches/0008's scalar inverse through the bigint2 coprocessor (the module's G1 lift-x path was removed 11-04; the
+// host-hinted lift in liftx_hint.rs replaced it).
+#[cfg(feature = "scalar-inv-accel")]
 mod liftx_accel;
 // hazync#205 — the same recovery as a HOST HINT that libsecp then verifies. Core-legal, unlike
 // liftx_accel above, which substitutes the sqrt outright.
 #[cfg(feature = "liftx-hint")]
 mod liftx_hint;
-// Pippenger MSM over the bigint2 coprocessor. PRIMITIVE ONLY — not wired into verification.
-#[cfg(feature = "msm")]
-mod msm;
+#[cfg(feature = "batch-ecdsa")]
+mod batch_ecdsa;
+#[cfg(feature = "swiftsync")]
+mod swiftsync;
+// libzync: chunks commit per-transaction facts so the aggregate never parses a transaction.
+#[cfg(feature = "agg-lite")]
+mod agg_lite;
+// libzync EXPERIMENT: the coin log, the same file the host compiles.
+#[cfg(feature = "coinlog")]
+#[path = "../../../../libzync/src/coinlog.rs"]
+mod coinlog;
+#[cfg(feature = "coinlog")]
+#[path = "../../../../libzync/src/coinlog_forest.rs"]
+mod coinlog_forest;
+#[cfg(feature = "trie")]
+#[path = "../../../../libzync/src/ttree.rs"]
+#[allow(dead_code)] // a shared libzync file (#[path], hazync#88): each includer uses its own subset
+mod ttree;
 // Coprocessor half of libsecp's field_bigint2 backend. See docs/FIELD_BIGINT2_BACKEND.md.
 #[cfg(feature = "field-bigint2")]
 mod field_bigint2;
+#[cfg(not(feature = "libzync"))]
 use script_flags::block_script_flags;
+// libzync: Core's own GetBlockScriptFlags, lifted from validation.cpp (core_block_rules.cpp).
+#[cfg(feature = "libzync")]
+fn block_script_flags(height: u32, block_hash: &[u8; 32]) -> u32 {
+    unsafe { hz_block_flags_c(height, block_hash.as_ptr()) }
+}
 
 // A byte blob that (de)serialises via risc0 serde's PACKED byte path (deserialize_bytes → 4 bytes/word)
 // instead of the default seq path (serialize_u8 emits one u32 word PER byte → 4x bloat). Used for the
@@ -79,7 +139,15 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 // aborts and commits no self_id) or a RangeState/ChunkOut could in principle be laundered in where a
 // ChainState is expected, if its bytes happened to decode as one. Committing a distinct constant first
 // and asserting it on every decode makes cross-mode confusion impossible.
-const KIND_CHAIN: u32 = 0xC4A1_0002;
+// 0xC4A1_0012 since the layout gained `version` (11-03 review): under the old 0xC4A1_0002 the word now read as
+// `version` was tip_hash[0], so an old journal could pass a version check 1 time in 256.
+const KIND_CHAIN: u32 = 0xC4A1_0012;
+/// ChainState layout version (docs/libzync/HANDOVER.md §2). Fields after `version` are only ever APPENDED, never
+/// reordered or removed, so a reader (a zyncAPP, a verifier) built for version n decodes the prefix it knows from any
+/// later version: risc0's serde reads fields in order and ignores trailing words.
+/// 2: same fields as 1; each block leaf also commits the coin state after that block, and a coin-log spent leaf records
+/// its spender (HANDOVER.md §3, COINLOG.md §2).
+const CHAIN_STATE_VERSION: u32 = 2;
 const KIND_RANGE: u32 = 0xC4A1_0006;
 const KIND_CHUNK: u32 = 0xC4A1_0004;
 
@@ -113,6 +181,9 @@ extern "C" {
                                spend_height: u32, spend_mtp: u32,
                                out_results: *mut i32) -> i32;
 
+    /// Mode 10: CheckTransaction + every input's VerifyScript with explicit flags (Core's tx_valid / tx_invalid).
+    fn hz_test_tx(tx: *const u8, tx_len: u32, prevouts: *const u8, prevouts_len: u32, flags: u32) -> i32;
+
     fn verify_inputs_batch(
         tx: *const u8, tx_len: u32,
         prevouts: *const u8, prevouts_len: u32,
@@ -120,6 +191,17 @@ extern "C" {
         input_idx: *const u32, coin_height: *const u32,
         coin_is_coinbase: *const u32, coin_mtp: *const u32,
         out_results: *mut i32, out_leaves: *mut u8,
+    ) -> i32;
+    #[cfg(feature = "tx-once")]
+    fn verify_inputs_batch_once(
+        tx: *const u8, tx_len: u32,
+        prevouts: *const u8, prevouts_len: u32,
+        flags: u32, n: u32,
+        input_idx: *const u32, coin_height: *const u32,
+        coin_is_coinbase: *const u32, coin_mtp: *const u32,
+        out_results: *mut i32, out_leaves: *mut u8,
+        out_seqs: *mut u32, out_version: *mut i32,
+        out_wtxid: *mut u8, out_has_witness: *mut u32,
     ) -> i32;
     // Absolute locktime finality (real Core IsFinalTx). 1 = final.
     fn is_final_tx(tx: *const u8, tx_len: u32, height: i64, block_time: i64) -> i32;
@@ -155,6 +237,29 @@ extern "C" {
     // Sum of a coinbase tx's outputs, and the height's block subsidy (exact halving formula).
     fn coinbase_value(tx: *const u8, tx_len: u32) -> i64;
     fn block_subsidy(height: u32) -> i64;
+    // libzync: Core's consensus/tx_verify.cpp itself (core_tx_rules.cpp).
+    #[cfg(feature = "libzync")]
+    fn hz_tx_rules_c(tx: *const u8, tx_len: u32, prevouts: *const u8, prevouts_len: u32, start: u32, k: u32,
+                     ch: *const u32, cb: *const u32, cmtp: *const u32, height: u32, mtp: u32, lock_cutoff: i64,
+                     script_flags: u32, csv_active: u32, out_fee: *mut i64, out_weight: *mut i64,
+                     out_sigops: *mut i64) -> i32;
+    #[cfg(feature = "libzync")]
+    fn hz_coinbase_sigops_c(tx: *const u8, tx_len: u32, script_flags: u32) -> i64;
+    #[cfg(feature = "libzync")]
+    fn hz_weight_c(tx: *const u8, tx_len: u32) -> i64;
+    #[cfg(feature = "libzync")]
+    fn hz_reject_reason(out: *mut u8, cap: u32) -> u32;
+    #[cfg(feature = "libzync")]
+    fn hz_indicated_height(cb: *const u8, cb_len: u32) -> u32;
+    #[cfg(feature = "libzync")]
+    fn hz_block_flags_c(height: u32, block_hash: *const u8) -> u32;
+    #[cfg(feature = "libzync")]
+    fn hz_header_rules_c(header: *const u8, height: u32, prev_bits: u32, prev_time: u32, prev_mtp: u32, period_first_time: u32) -> i32;
+    #[cfg(feature = "libzync")]
+    fn hz_block_rules_c(header: *const u8, cb: *const u8, cb_len: u32, wtxids: *const u8, n: u32, other_has_witness: u32,
+                        height: u32, prev_mtp: u32, weight: i64) -> i32;
+    #[cfg(feature = "libzync")]
+    fn hz_median_time_past(times: *const u32, n: u32) -> u32;
     // Cumulative chainwork: cum += GetBlockProof(nBits) (real Core 256-bit formula).
     fn add_work(cum: *mut u8, nbits: u32);
     // Per-tx weight + legacy sigop cost (real GetSerializeSize + GetSigOpCount).
@@ -172,6 +277,14 @@ extern "C" {
     fn core_csv_height() -> u32;
     fn core_segwit_height() -> u32;
     fn core_bip34_height() -> u32;
+    // libzync/src/net.rs pins: powLimit (compact) and the genesis hash (internal order) of the network
+    // Core's chainparams were built for.
+    fn core_pow_limit_bits() -> u32;
+    fn core_genesis_hash(out: *mut u8);
+    fn hz_no_scripts() -> u32;
+    // BIP325: Core's CheckSignetBlockSolution on (header, coinbase, the block's other txids).
+    #[cfg(feature = "signet")]
+    fn hz_check_signet(header: *const u8, cb: *const u8, cb_len: u32, txids: *const u8, n_txids: u32) -> i32;
     fn core_retarget_interval() -> u32;
     fn core_max_block_weight() -> i64;
     fn core_max_block_sigops_cost() -> i64;
@@ -193,6 +306,13 @@ extern "C" {
         tx: *const u8, tx_len: u32, height: u32, is_coinbase: u32, block_time: u32,
         out: *mut u8, out_txid: *mut u8,
     ) -> u32;
+    // The sum of every output's amount, spendable or not (verify_input.cpp). coinlog only.
+    fn tx_total_out(tx: *const u8, tx_len: u32) -> i64;
+    // tx_out_leaves, and each leaf's output index and amount (verify_input.cpp).
+    fn tx_out_leaves_mv(
+        tx: *const u8, tx_len: u32, height: u32, is_coinbase: u32, block_time: u32,
+        out: *mut u8, out_txid: *mut u8, out_vout: *mut u32, out_value: *mut u64,
+    ) -> u32;
     // Recompute a tx's BIP141 wtxid (into out_wtxid) + return whether it carries witness data (SEC-1).
     fn tx_wtxid_info(tx: *const u8, tx_len: u32, out_wtxid: *mut u8) -> u32;
 
@@ -205,6 +325,9 @@ extern "C" {
 
 const MAX_BLOCK_WEIGHT: i64 = 4_000_000;
 const MAX_BLOCK_SIGOPS_COST: i64 = 80_000;
+#[cfg(feature = "regtest")]
+const RETARGET_INTERVAL: u32 = 144;
+#[cfg(not(feature = "regtest"))]
 const RETARGET_INTERVAL: u32 = 2016;
 
 // Pin every hard-coded consensus literal in the Rust guest to Bitcoin Core's OWN compiled value
@@ -220,6 +343,17 @@ fn assert_core_constants() {
         assert_eq!(MAX_BLOCK_WEIGHT, core_max_block_weight(), "MAX_BLOCK_WEIGHT != Core");
         assert_eq!(MAX_BLOCK_SIGOPS_COST, core_max_block_sigops_cost(), "MAX_BLOCK_SIGOPS_COST != Core");
         assert_eq!(BIP34_HEIGHT, core_bip34_height(), "BIP34Height != Core");
+        // libzync/src/net.rs, pinned to Core's own chainparams for the network this guest was built for.
+        assert_eq!(NET.pow_limit_bits, core_pow_limit_bits(), "powLimit != Core ({})", NET.name);
+        assert_eq!(NET.bip66_height, core_bip66_height(), "NET.bip66_height != Core ({})", NET.name);
+        assert_eq!(NET.bip65_height, core_bip65_height(), "NET.bip65_height != Core ({})", NET.name);
+        assert_eq!(NET.csv_height, core_csv_height(), "NET.csv_height != Core ({})", NET.name);
+        assert_eq!(NET.segwit_height, core_segwit_height(), "NET.segwit_height != Core ({})", NET.name);
+        assert_eq!(net::hash_le(NET.genesis_hex), {
+            let mut g = [0u8; 32];
+            core_genesis_hash(g.as_mut_ptr());
+            g
+        }, "genesis != Core ({})", NET.name);
         assert_eq!(sf::BIP66_HEIGHT, core_bip66_height(), "BIP66Height != Core");
         assert_eq!(sf::BIP65_HEIGHT, core_bip65_height(), "BIP65Height != Core");
         assert_eq!(sf::CSV_HEIGHT, core_csv_height(), "CSVHeight != Core");
@@ -247,10 +381,11 @@ fn assert_core_constants() {
 /// Core mainnet `consensus.BIP34Height`. Runtime-pinned to Core's compiled value by
 /// `assert_core_constants`, like BIP66/BIP65/CSV/Segwit — audit #3's phase-2 sweep found this was the
 /// one buried height still hand-typed, in two places, with nothing checking it.
-const BIP34_HEIGHT: u32 = 227_931;
+const BIP34_HEIGHT: u32 = NET.bip34_height;
 
 const BIP30_OVERWRITE_A: [u8; 32] = [0xec, 0xca, 0xe0, 0x00, 0xe3, 0xc8, 0xe4, 0xe0, 0x93, 0x93, 0x63, 0x60, 0x43, 0x1f, 0x3b, 0x76, 0x03, 0xc5, 0x63, 0xc1, 0xff, 0x61, 0x81, 0x39, 0x0a, 0x4d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]; // block 91842
 const BIP30_OVERWRITE_B: [u8; 32] = [0x21, 0xd7, 0x7c, 0xcb, 0x4c, 0x08, 0x38, 0x6a, 0x04, 0xac, 0x01, 0x96, 0xae, 0x10, 0xf6, 0xa1, 0xd2, 0xc2, 0xa3, 0x77, 0x55, 0x8c, 0xa1, 0x90, 0xf1, 0x43, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00]; // block 91880
+
 
 // --- libc glue for bare-metal C/C++ in the zkVM guest: malloc family + abort, backed by the
 // guest's Rust global allocator (size stored in a 16-byte header before each block). ---
@@ -274,7 +409,8 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
 }
 #[no_mangle]
 pub unsafe extern "C" fn calloc(n: usize, sz: usize) -> *mut u8 {
-    let total = n.wrapping_mul(sz);
+    // C's calloc fails on overflow instead of returning a short block (review 11-03).
+    let Some(total) = n.checked_mul(sz) else { return core::ptr::null_mut() };
     let p = malloc(total);
     if !p.is_null() { core::ptr::write_bytes(p, 0, total); }
     p
@@ -373,7 +509,9 @@ struct Bip30Overwrite { old_height: u32, old_mtp: u32, dels: Vec<Bip30Del> }
 // cannot rot rather than an input a prover controls. `current_count` and `proof` are the only things
 // genuinely supplied, and both are pinned by the root: a wrong count folds to a different root.
 #[derive(Deserialize)]
-struct SmtSpendW { coinbase_txid: [u8; 32], current_count: u32, proof: SmtProof }
+struct SmtSpendW { coinbase_txid: [u8; 32], current_count: u32, proof: SmtProof, tracked: bool }
+#[derive(Deserialize)]
+struct SmtTrackedW { txid: [u8; 32], outputs: u32, prior: Option<u32>, proof: SmtProof }
 #[derive(Deserialize)]
 struct SmtWitnessW {
     // Cross-checks, not inputs — the guest derives both and refuses the block if they disagree. See
@@ -387,6 +525,9 @@ struct SmtWitnessW {
     // two hashes, forbidden everywhere else. A prover cannot opt into it. LAST, because risc0's serde
     // is positional and appending is the only change that does not renumber every field on both sides.
     smt_overwrite: Option<u32>,
+    // libzync: the prior state of the coinbase's slot, and the tracked transactions this block creates (bip30.rs).
+    coinbase_prior: Option<u32>,
+    tracked: Vec<SmtTrackedW>,
 }
 #[derive(Deserialize)]
 // ⚠ `wtxids` and `new_outputs` USED TO BE HERE and were removed. The guest never read either: it
@@ -467,6 +608,22 @@ struct BlockResult {
     block_time: u32,
     root_next_roots: Vec<Option<[u8; 32]>>,
     root_next_leaves: u64,
+    trie_root: [u8; 32],      // libzync: the counting trie's root after this block (zero without the trie)
+    survivor_value: u64,      // libzync: satoshis appended to the coin forest / log by this block
+    spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends
+}
+
+/// ROADMAP H-B (review round 5): the digest that LINKS chain states, sha256d of the state's journal with `anchor_id`
+/// zeroed. `anchor_id` records where a chain started (a base step's link digest of its anchor, carried by every later
+/// step); the link covers every other field. Were anchor_id inside it, a leaf proved on the host's state S(h-1) could
+/// link only to a left part that started where that state says, so blocks proved in any order could not be joined.
+/// The genesis state's anchor_id is zero, so its link digest is the pinned genesis anchor_id unchanged.
+fn link_digest(s: &ChainState) -> [u8; 32] {
+    let mut z = s.clone();
+    z.anchor_id = [0; 32];
+    let w = risc0_zkvm::serde::to_vec(&z).expect("ChainState serialises");
+    let b: Vec<u8> = w.iter().flat_map(|x| x.to_le_bytes()).collect();
+    dsha256(&b)
 }
 
 fn dsha256(data: &[u8]) -> [u8; 32] {
@@ -481,13 +638,8 @@ fn dsha256(data: &[u8]) -> [u8; 32] {
 // it from the block's own input and requires equality. Without it a chunk could prove "some valid spend
 // of this coin under attacker-chosen (weaker) flags" and the aggregation would accept a DIFFERENT
 // spending witness / lower-flag verification for the block's input. Length-prefixed to be unambiguous.
-/// The two halves composed. Kept as the single-call reference form — no hot path uses it, because
-/// every caller now hoists `tx_bind` out of its per-input loop, which is the entire point.
-#[allow(dead_code)]
-fn input_bind(raw_tx: &[u8], input_idx: u32, prevouts: &[u8],
-              coin_height: u32, coin_is_coinbase: u32, coin_mtp: u32, flags: u32) -> [u8; 32] {
-    input_bind_from(&tx_bind(raw_tx, prevouts, flags), input_idx, coin_height, coin_is_coinbase, coin_mtp)
-}
+// The digest is `input_bind_from(&tx_bind(raw_tx, prevouts, flags), input_idx, ..)`: every caller hoists `tx_bind`
+// out of its per-input loop.
 
 /// The per-TRANSACTION half of the binding digest — everything every input of a transaction shares.
 ///
@@ -574,7 +726,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // Consensus script flags (Core GetBlockScriptFlags: always-on base + buried deployments + exceptions).
     let flags = block_script_flags(w.height, &block_hash);
     // BIP113: from CSV activation (419328), locktime uses median-time-past instead of block time.
-    let lock_time = if w.height >= 419_328 { mtp } else { block_time };
+    let lock_time = if w.height >= NET.csv_height { mtp } else { block_time };
 
     // nVersion soft-fork rejection (Core ContextualCheckBlockHeader): once a version's soft fork is
     // buried, a block below that version is invalid regardless of its scripts. Heights: BIP34 (v>=2 @
@@ -582,8 +734,8 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // enforce the RULES; this rejects the stale header itself as Core does, closing an accept-invalid gap.
     let version = i32::from_le_bytes(w.header[0..4].try_into().unwrap());
     if (version < 2 && w.height >= BIP34_HEIGHT)
-        || (version < 3 && w.height >= 363_725)
-        || (version < 4 && w.height >= 388_381) {
+        || (version < 3 && w.height >= NET.bip66_height)
+        || (version < 4 && w.height >= NET.bip65_height) {
         all_ok = false;
     }
 
@@ -737,7 +889,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
             const MASK: u32 = 0x0000_ffff; const GRAN: u32 = 9;
             let seq = chunk_seqs[gi];
             let got_lock = if inp.coin_is_coinbase == 1 && w.height < inp.coin_height + 100 { -40 }
-                else if w.height >= 419_328 && chunk_vers[gi] >= 2 && (seq & DISABLE) == 0 {
+                else if w.height >= NET.csv_height && (chunk_vers[gi] as u32) >= 2 && (seq & DISABLE) == 0 {
                     if seq & TYPE != 0 {
                         let req = inp.coin_mtp as u64 + (((seq & MASK) as u64) << GRAN);
                         if (mtp as u64) < req { -42 } else { 1 }
@@ -770,7 +922,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         pre_locks = w.inputs.iter().enumerate().map(|(gi, inp)| {
             if inp.coin_is_coinbase == 1 && w.height < inp.coin_height + 100 { return -40; }
             let seq = chunk_seqs[gi];
-            if w.height >= 419_328 && chunk_vers[gi] >= 2 && (seq & DISABLE) == 0 {
+            if w.height >= NET.csv_height && (chunk_vers[gi] as u32) >= 2 && (seq & DISABLE) == 0 {
                 if seq & TYPE != 0 {
                     let required = inp.coin_mtp as u64 + (((seq & MASK) as u64) << GRAN);
                     if (mtp as u64) < required { return -42; }
@@ -940,6 +1092,9 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
             if creator >= cur_tx { all_ok = false; }
             if !spent_in_block.insert(leaf) { all_ok = false; }
         } else {
+            // libzync SwiftSync: one ECMH subtraction instead of an inclusion proof + delete.
+            #[cfg(feature = "swiftsync")]
+            { swiftsync::sub(&leaf); continue; }
             // EXTERNAL spend: the coin exists in the accumulator — verify inclusion + delete it.
             if inp.proof_i.leaf.0 != leaf {
                 all_ok = false;
@@ -994,10 +1149,18 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // cancelled), in canonical order (coinbase then each tx, vout order). NOT host-supplied new_outputs.
     for leaf in &output_leaves {
         if !spent_in_block.contains(leaf) {
+            #[cfg(feature = "swiftsync")]
+            swiftsync::add(leaf);
+            #[cfg(not(feature = "swiftsync"))]
             stump.add(*leaf);
         }
     }
 
+    // libzync SwiftSync: no per-block root to compare. The running total is only checked at a
+    // handover height, which this experiment does not implement (see swiftsync.rs).
+    #[cfg(feature = "swiftsync")]
+    let root_matches = { swiftsync::report(); true };
+    #[cfg(not(feature = "swiftsync"))]
     let root_matches =
         stump.normalized() == normalize(w.root_next.roots.clone()) && stump.num_leaves == w.root_next.num_leaves;
 
@@ -1054,7 +1217,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
     // commitment output (its own has_witness gate). Running the commitment check at ALL heights (the previous
     // behaviour) rejected the canonical pre-activation blocks that already carried an early commitment output
     // yet have a witness-free coinbase — a reject-valid liveness bug in the 433k–481823 range.
-    let witness_ok = if w.height >= 481_824 {
+    let witness_ok = if w.height >= NET.segwit_height {
         let rc = unsafe {
             check_witness_commitment(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32,
                 flat_wtx.as_ptr(), rec_wtxids.len() as u32, has_witness as u32)
@@ -1142,12 +1305,14 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         (false, w.in_smt_root)
     } else {
         let u = bip30::BlockUpdate {
+            coinbase_prior: None,
+            tracked: Vec::new(),
             coinbase_txid: cb_txid,
             coinbase_outputs: cb_outputs,
             absence_proof: w.smt.absence_proof.clone(),
             overwrite: w.smt.smt_overwrite,
             spends: w.smt.spends.iter()
-                .map(|s| bip30::Spend { coinbase_txid: s.coinbase_txid,
+                .map(|s| bip30::Spend { coinbase_txid: s.coinbase_txid, tracked: false,
                                         current_count: s.current_count, proof: s.proof.clone() })
                 .collect(),
         };
@@ -1234,6 +1399,9 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         block_time: u32::from_le_bytes(w.header[68..72].try_into().unwrap()),
         root_next_roots: stump.normalized(),
         root_next_leaves: stump.num_leaves,
+        trie_root: [0u8; 32], // the trie lives on the agg-lite path only
+        survivor_value: 0,
+        spent_value: 0,
     }
 }
 
@@ -1264,9 +1432,12 @@ fn block_proof() {
 #[derive(Serialize, Deserialize, Clone)]
 struct ChainState {
     kind: u32,          // H8: == KIND_CHAIN (domain tag; asserted by every consumer)
+    version: u32,       // == CHAIN_STATE_VERSION: which fields exist (see the const)
     tip_hash: [u8; 32],
     utxo_roots: Vec<Option<[u8; 32]>>,
     utxo_leaves: u64,
+    // libzync coin log: the live coins' total amount, down by each spend (Core's `gettxoutsetinfo` total_amount).
+    utxo_value: u64,
     cum_work: [u8; 32], // cumulative chainwork (256-bit accumulator)
     height: u32,
     prev_nbits: u32,    // difficulty of the tip block (for the retarget rule)
@@ -1280,6 +1451,55 @@ struct ChainState {
     // is journal-indistinguishable from a genesis-anchored one.
     anchor_id: [u8; 32],
     self_id: [u32; 8],  // S1: the guest image id this proof recursed against (verifier asserts ==METHOD_ID)
+    // libzync (E2): the multiset hash (ECMH) of the LIVE coins, profile bit 6 (instant IBD: a downloaded UTXO set is
+    // checked against it; live_set 0 = the identity), and the counting trie's root, bit 5 (absence, history and
+    // balance facts). Zero, carried unchanged, without those bits. (Until E2 these slots held SwiftSync design B's
+    // hint total and hint hash, ss_set / ss_acc / ss_hints; same layout.)
+    live_set: u32,
+    live_hash: [u32; 16],
+    trie_root: [u8; 32],
+    // libzync (review 2, 2026-10-30): the coinbase-txid SMT root after this block. BIP30 is checked against
+    // the block's in_smt_root, which was pure witness: carried here, each aggregate requires its block's
+    // in_smt_root == prev.smt_root, so the tree is the chain's own from genesis (empty) onwards.
+    smt_root: [u8; 32],
+    // libzync (2026-10-30): the largest block timestamp in the chain so far. Core rejects a block more than
+    // 2 h ahead of the node's clock (time-too-new); a proof has no clock, so the verifier applies the rule
+    // to this one number (max_time <= now + 7200), as Core does for every block during IBD.
+    max_time: u32,
+    // libzync: what this image checked, set by the image and never carried from input. bit 0 libzync,
+    // bit 1 scripts and signatures SKIPPED (assumevalid), bit 2 signet. A verifier reads the profile from
+    // the proof instead of inferring it from which image id it accepted.
+    profile: u32,
+    // libzync: an append-only Utreexo forest with one leaf per block, genesis first, so leaf i is the block at
+    // height i and block_leaves == height + 1. It is what lets a proof of the tip answer "was this block in the
+    // chain" for ANY height: the state above says nothing about history but tip_hash (docs/libzync/HANDOVER.md).
+    block_roots: Vec<Option<[u8; 32]>>,
+    block_leaves: u64,
+    // libzync: zero for a chain that has been one image since genesis. Each handover folds in the image it left
+    // and the height it left at, and no other step changes it (handover_pin.rs).
+    lineage: [u8; 32],
+}
+
+fn sha256_guest(b: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b).into()
+}
+
+/// The lineage digest of `list`, an initial slice of lineage::LINEAGE.
+fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
+    let mut l = [0u8; 32];
+    for h in list { l = sha256_guest(&handover_pin::lineage_preimage(&l, h)); }
+    l
+}
+
+/// This image's ChainState.profile (see the field).
+fn chain_profile() -> u32 {
+    let lz = cfg!(feature = "libzync") as u32;
+    let av = unsafe { hz_no_scripts() } & 1;
+    let sig = cfg!(feature = "signet") as u32;
+    // bit 5: trie_root is the counting trie's root; bit 6: live_set / live_hash are the live-coin multiset hash (instant IBD)
+    lz | av << 1 | sig << 2 | (cfg!(feature = "regtest") as u32) << 3 | (cfg!(feature = "coinlog") as u32) << 4
+        | (cfg!(feature = "trie") as u32) << 5 | (cfg!(feature = "utxohash") as u32) << 6
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state
@@ -1326,7 +1546,21 @@ fn decode_words<T: for<'de> Deserialize<'de>>(journal: &[u8]) -> T {
     risc0_zkvm::serde::from_slice(&words).expect("decode journal")
 }
 
+/// Log Core's reject reason for the rule that just failed. For the differential rig; the verdict never reads it.
+#[cfg(feature = "libzync")]
+pub fn log_reject() {
+    let mut b = [0u8; 64];
+    let n = unsafe { hz_reject_reason(b.as_mut_ptr(), 64) } as usize;
+    env::log(&format!("core-reject: {}", core::str::from_utf8(&b[..n]).unwrap_or("?")));
+}
+
+// libzync: Core's own CBlockIndex::GetMedianTimePast.
+#[cfg(feature = "libzync")]
+fn median_time_past(times: &[u32]) -> u32 {
+    unsafe { hz_median_time_past(times.as_ptr(), times.len() as u32) }
+}
 // Median-time-past: median of the last (≤11) block timestamps.
+#[cfg(not(feature = "libzync"))]
 fn median_time_past(times: &[u32]) -> u32 {
     let mut v = times.to_vec();
     v.sort_unstable();
@@ -1345,7 +1579,11 @@ fn median_time_past(times: &[u32]) -> u32 {
 fn chain_step() {
     let prev_journal: Vec<u8> = env::read(); // the previous chain proof's committed journal bytes
     let w: BlockWitness = env::read();
+    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor. ANY other value used to
+    // skip the verification below and copy anchor_id out of the unverified journal: a forged "genesis-
+    // anchored" state one block back, and a receipt every verifier check passed (adversarial audit, 2026-10-30).
     let is_base: u32 = env::read();
+    assert!(is_base <= 1, "is_base must be 0 or 1, got {is_base}");
     let self_id: [u32; 8] = env::read(); // this guest's own image id (host passes METHOD_ID)
     if is_base == 0 {
         // Composition: a receipt with (self_id, prev_journal) must exist — the previous chain proof.
@@ -1358,6 +1596,7 @@ fn chain_step() {
         .collect();
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev chain state");
     assert!(prev.kind == KIND_CHAIN, "chain step: prev journal is not a ChainState (domain tag)"); // H8
+    assert!(prev.version == CHAIN_STATE_VERSION, "chain step: ChainState version {}", prev.version);
     // S1: chain the image-id constraint down — the prev proof must have recursed against the SAME id.
     // With the verifier asserting the FINAL self_id == METHOD_ID, this forces every level to METHOD_ID.
     if is_base == 0 {
@@ -1423,9 +1662,11 @@ fn chain_step() {
 
     env::commit(&ChainState {
         kind: KIND_CHAIN,
+        version: CHAIN_STATE_VERSION,
         tip_hash: r.tip_hash,
         utxo_roots: r.root_next_roots,
         utxo_leaves: r.root_next_leaves,
+        utxo_value: prev.utxo_value.saturating_add(r.survivor_value),
         cum_work: cum,
         height,
         prev_nbits: r.nbits,
@@ -1434,6 +1675,10 @@ fn chain_step() {
         recent_times,
         anchor_id,
         self_id,
+        live_set: prev.live_set, live_hash: prev.live_hash, trie_root: prev.trie_root,
+        smt_root: r.out_smt_root, // canonical chain_step (unreachable in a libzync image)
+        max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
+        block_roots: prev.block_roots.clone(), block_leaves: prev.block_leaves, lineage: prev.lineage,
     });
 }
 
@@ -1642,7 +1887,20 @@ fn chunk_prove() {
     // hazync#205 — install the pubkey-Y hint table BEFORE any script runs, since verification
     // happens inside the read loop below. Host writes this block at the same point, gated on the
     // same HAZYNC_LIFTX_HINT; the two must agree or the stream desynchronises.
-    #[cfg(feature = "liftx-hint")]
+    // libzync: ONE hint block for the chunk (libzync/src/wire.rs): pubkey-Y hints, batch-signature
+    // hints (or collect), and the block's MTP and time. Read BEFORE any script runs.
+    #[cfg(feature = "libzync")]
+    let mut lite = {
+        let n: u32 = env::read();
+        let mut words = vec![0u32; n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        let h = lz_wire::ChunkHints::decode(&words).expect("libzync chunk hints malformed");
+        liftx_hint::install(h.liftx.chunks_exact(lz_wire::LIFTX_PAIR_BYTES)
+            .map(|c| (c[..32].try_into().unwrap(), c[32..].try_into().unwrap())).collect());
+        batch_ecdsa::install(h.sig_collect, h.sig.to_vec());
+        agg_lite::ChunkCtx::new(height, flags, h.mtp, h.block_time)
+    };
+    #[cfg(all(feature = "liftx-hint", not(feature = "libzync")))]
     {
         let n_hints: u32 = env::read();
         let mut flat = vec![0u8; n_hints as usize * 64];
@@ -1679,12 +1937,18 @@ fn chunk_prove() {
     // concatenates chunk binds and indexes them by the block's own input index, so any reordering here
     // would silently compare the wrong input.
     fn read_bytes(len: u32) -> Vec<u8> {
-        let mut v = vec![0u8; (len as usize).div_ceil(4) * 4];
+        // Checked: on rv32 a length near 2^32 would round to 0 and desync the stream (review 11-03).
+        let mut v = vec![0u8; (len as usize).checked_next_multiple_of(4).expect("input length")];
         env::read_slice(&mut v);
         v.truncate(len as usize);
         v
     }
     for _ in 0..n_txs {
+        // libzync tx-cycles: per-transaction cycle trace, the ground truth the host packer is fitted to.
+        #[cfg(feature = "tx-cycles")]
+        let tc0 = env::cycle_count();
+        #[cfg(feature = "agg-lite")]
+        agg_lite::begin_tx();
         let tx_len: u32 = env::read();
         let prevouts_len: u32 = env::read();
         let n_owned: u32 = env::read();
@@ -1703,6 +1967,27 @@ fn chunk_prove() {
 
         let mut results = vec![0i32; k];
         let mut leaves = vec![0u8; 32 * k];
+        let mut seqbuf = vec![0u32; k];
+        let mut verbuf = 0i32;
+        let mut wt = [0u8; 32];
+        // libzync tx-once: one deserialise + one CTransaction for all three results.
+        #[cfg(feature = "tx-once")]
+        let (structural, hw) = {
+            let mut hw = 0u32;
+            let s = unsafe {
+                verify_inputs_batch_once(
+                    raw_tx.as_ptr(), raw_tx.len() as u32,
+                    prevouts.as_ptr(), prevouts.len() as u32,
+                    flags, n_owned,
+                    idx.as_ptr(), ch.as_ptr(), cb.as_ptr(), mtp.as_ptr(),
+                    results.as_mut_ptr(), leaves.as_mut_ptr(),
+                    seqbuf.as_mut_ptr(), &mut verbuf as *mut i32,
+                    wt.as_mut_ptr(), &mut hw as *mut u32,
+                )
+            };
+            (s, hw)
+        };
+        #[cfg(not(feature = "tx-once"))]
         let structural = unsafe {
             verify_inputs_batch(
                 raw_tx.as_ptr(), raw_tx.len() as u32,
@@ -1713,6 +1998,17 @@ fn chunk_prove() {
             )
         };
         if structural != 1 { all_valid = false; }
+        #[cfg(feature = "agg-lite")]
+        {
+            let _ = (&mut binds, &mut tx_wtxids, &mut leaves_out, &mut seqs_out, &mut vers_out);
+            if !lite.record(&raw_tx, &prevouts, &idx, &ch, &cb, &mtp, &results, &leaves, &wt, hw) {
+                all_valid = false;
+            }
+            #[cfg(feature = "tx-cycles")]
+            risc0_zkvm::guest::env::log(&alloc::format!(
+                "TXCYC {} {} {}", tx_len, n_owned, env::cycle_count() - tc0));
+            continue;
+        }
         // ONE digest for the transaction, reused by every input it owns. The payload was already
         // grouped by transaction (#137); this removes the last place the whole transaction was still
         // being hashed per input.
@@ -1728,14 +2024,13 @@ fn chunk_prove() {
         // separately. A disagreement there is a silent consensus divergence. Handing back the two raw
         // fields lets the aggregate keep doing the arithmetic with its OWN mtp, in Rust, with no
         // deserialise — the cost being removed — and no new coupling.
-        let mut seqbuf = vec![0u32; k];
-        let mut verbuf = 0i32;
+        #[cfg(not(feature = "tx-once"))]
         unsafe {
             tx_seqs_batch(raw_tx.as_ptr(), raw_tx.len() as u32, n_owned,
                           idx.as_ptr(), seqbuf.as_mut_ptr(), &mut verbuf as *mut i32);
         }
         let first_local = binds.len() as u32;
-        let mut wt = [0u8; 32];
+        #[cfg(not(feature = "tx-once"))]
         let hw = unsafe { tx_wtxid_info(raw_tx.as_ptr(), raw_tx.len() as u32, wt.as_mut_ptr()) };
         tx_wtxids.push((first_local, wt, hw as u32));
         for j in 0..k {
@@ -1750,14 +2045,14 @@ fn chunk_prove() {
             seqs_out.push(seqbuf[j]);
             vers_out.push(verbuf);
         }
+        #[cfg(feature = "tx-cycles")]
+        risc0_zkvm::guest::env::log(&alloc::format!(
+            "TXCYC {} {} {}", tx_len, n_owned, env::cycle_count() - tc0));
     }
+    #[cfg(feature = "tx-cycles")]
+    let tc_fin = env::cycle_count();
     // A memo that never hits would silently reinstate the full decompression cost while every gate
     // still passed, so report it: 0 hits is a FAILED experiment, not a null result.
-    #[cfg(feature = "liftx-accel")]
-    {
-        let (h, m) = liftx_accel::memo_stats();
-        risc0_zkvm::guest::env::log(&alloc::format!("liftx memo: hits={h} misses={m}"));
-    }
     // Same reasoning for the HINT, which is a separate, Core-legal feature: an empty table would
     // reinstate the sqrt while every gate still passed, so 0 hits must read as a FAILED experiment.
     #[cfg(feature = "liftx-hint")]
@@ -1765,7 +2060,45 @@ fn chunk_prove() {
         let (hits, misses) = liftx_hint::stats();
         risc0_zkvm::guest::env::log(&alloc::format!("liftx: hits={} misses={}", hits, misses));
     }
+    #[cfg(feature = "batch-ecdsa")]
+    {
+        if !batch_ecdsa::finish() {
+            all_valid = false;
+        }
+    }
+    #[cfg(feature = "tx-cycles")]
+    risc0_zkvm::guest::env::log(&alloc::format!("TXFIN {}", env::cycle_count() - tc_fin));
+    #[cfg(feature = "agg-lite")]
+    {
+        lite.commit(all_valid, &block_hash);
+        return;
+    }
+    #[cfg(not(feature = "fast-commit"))]
     env::commit(&ChunkOut { kind: KIND_CHUNK, all_valid, binds, tx_wtxids, leaves_out, seqs_out, vers_out });
+    // libzync fast-commit: the SAME words risc0's serde would emit for ChunkOut, built directly and
+    // committed in one call. serde walks them one word at a time through the journal writer, which
+    // measured 49 M cycles on block 962,000. Rules: u32/i32/bool = one word; [u8; 32] = 32 words,
+    // one per byte, no length (it is a tuple); Vec = a length word, then its elements; tuples and
+    // structs = their fields in order. The journal digest is the check: it must not change.
+    #[cfg(feature = "fast-commit")]
+    {
+        let mut v: Vec<u32> = Vec::with_capacity(
+            8 + binds.len() * 32 + tx_wtxids.len() * 34 + leaves_out.len() * 32 + seqs_out.len() + vers_out.len());
+        let h = |v: &mut Vec<u32>, x: &[u8; 32]| v.extend(x.iter().map(|b| *b as u32));
+        v.push(KIND_CHUNK);
+        v.push(all_valid as u32);
+        v.push(binds.len() as u32);
+        for b in &binds { h(&mut v, b); }
+        v.push(tx_wtxids.len() as u32);
+        for (a, w, c) in &tx_wtxids { v.push(*a); h(&mut v, w); v.push(*c); }
+        v.push(leaves_out.len() as u32);
+        for l in &leaves_out { h(&mut v, l); }
+        v.push(seqs_out.len() as u32);
+        v.extend_from_slice(&seqs_out);
+        v.push(vers_out.len() as u32);
+        v.extend(vers_out.iter().map(|x| *x as u32));
+        env::commit_slice(&v);
+    }
 }
 
 // Mode 5: aggregate K chunk proofs into a block/chain proof. env::verify each chunk (composition),
@@ -1789,18 +2122,38 @@ fn aggregate() {
     // changes the READ METHOD. Packing and read_slice are independent.
     #[cfg(feature = "agg-readslice")]
     fn read_bytes_agg(len: u32) -> Vec<u8> {
-        let mut v = vec![0u8; (len as usize).div_ceil(4) * 4];
+        let mut v = vec![0u8; (len as usize).checked_next_multiple_of(4).expect("journal length")];
         env::read_slice(&mut v);
         v.truncate(len as usize);
         v
     }
+    #[cfg(feature = "agg-lite")]
+    let mut lite_journals: Vec<Vec<u32>> = Vec::with_capacity(k as usize);
     for _ in 0..k {
+        // agg-lite: read the journal straight into words and verify those (env::verify hashes the same bytes on a
+        // little-endian guest); no byte copy and no second word copy. Every chunk commits whole words, so a length
+        // that is not a multiple of 4 is refused.
+        #[cfg(all(feature = "agg-lite", feature = "agg-readslice"))]
+        {
+            let n: u32 = env::read();
+            assert!(n % 4 == 0, "aggregate: a chunk journal is not whole words");
+            let mut words = vec![0u32; (n / 4) as usize];
+            env::read_slice(&mut words);
+            env::verify(self_id, &words).expect("chunk proof invalid");
+            lite_journals.push(words);
+            continue;
+        }
         #[cfg(feature = "agg-readslice")]
+        #[allow(unreachable_code)]
         let cj: Vec<u8> = { let n: u32 = env::read(); read_bytes_agg(n) };
         #[cfg(not(feature = "agg-readslice"))]
         let cj: Vec<u8> = env::read();
         env::verify(self_id, &cj).expect("chunk proof invalid");
         let words: Vec<u32> = cj.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        // agg-lite: raw words, decoded by agg_lite::validate_block_lite (it checks the domain tag).
+        #[cfg(feature = "agg-lite")]
+        { lite_journals.push(words); continue; }
+        #[allow(unreachable_code)]
         let out: ChunkOut = risc0_zkvm::serde::from_slice(&words).expect("decode chunk");
         assert!(out.kind == KIND_CHUNK, "aggregate: assumption is not a ChunkOut (domain tag)"); // H8
         if !out.all_valid { chunks_ok = false; }
@@ -1818,16 +2171,78 @@ fn aggregate() {
     #[cfg(not(feature = "agg-readslice"))]
     let prev_journal: Vec<u8> = env::read();
     let w: BlockWitness = env::read();
+    // 0 = recursive (verify the previous chain proof), 1 = base step on an anchor, 2 = handover (verify the
+    // previous chain proof under the PREDECESSOR image pinned in this image's source). ANY other value used to
+    // skip the verification below and copy anchor_id out of the unverified journal: a forged "genesis-
+    // anchored" state one block back, and a receipt every verifier check passed (adversarial audit, 2026-10-30).
     let is_base: u32 = env::read();
+    assert!(is_base <= 2, "is_base must be 0, 1 or 2, got {is_base}");
+    // libzync: ONE hint block for the aggregate (libzync/src/wire.rs): the ECMH hints, or collect mode.
+    #[cfg(feature = "libzync")]
+    {
+        let n: u32 = env::read();
+        let mut words = vec![0u32; n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        let h = lz_wire::AggHints::decode(&words).expect("libzync aggregate hints malformed");
+        swiftsync::install(h.ecmh_collect, h.ecmh.to_vec());
+    }
+    // libzync coin log: the block's log witness (libzync/src/coinlog.rs encode_witness), after the hint block.
+    #[cfg(feature = "coinlog")]
+    {
+        let n: u32 = env::read();
+        let mut words = vec![0u32; n as usize];
+        if n > 0 { env::read_slice(&mut words); }
+        agg_lite::set_log_witness(words);
+    }
+    // txlog (txproofs/README.md §7): the block's record order as (journal, record) pairs, after the log witness. Empty =
+    // every record in journal order.
+    #[cfg(feature = "txlog")]
+    let rec_order: Vec<(u32, u32)> = {
+        let n: u32 = env::read();
+        let mut words = vec![0u32; (n as usize).checked_mul(2).expect("txlog order: too many pairs")];
+        if n > 0 { env::read_slice(&mut words); }
+        words.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+    };
+    #[cfg(not(feature = "txlog"))]
+    let rec_order: Vec<(u32, u32)> = Vec::new();
+    // E2: the block's trie receipt journal (mode 17), verified here like a chunk's. Empty in a collect run, which logs the
+    // update list for the host instead (and commits no chain state); empty anywhere else is refused in agg_lite.
+    #[cfg(feature = "trie")]
+    {
+        let n: u32 = env::read();
+        let mut tj = vec![0u32; n as usize];
+        if n > 0 {
+            env::read_slice(&mut tj);
+            env::verify(self_id, &tj).expect("trie proof invalid");
+        }
+        agg_lite::set_trie_journal(tj);
+    }
     if is_base == 0 { env::verify(self_id, &prev_journal).expect("previous chain proof invalid"); }
+    // Handover: the receipt must be the pinned predecessor's. The image id comes from this image's own source, never
+    // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
+    let pred = lineage::LINEAGE.last().filter(|_| is_base == 2);
+    assert!(is_base != 2 || pred.is_some(), "handover: this image has no predecessor");
+    if let Some(p) = pred { env::verify(p.image, &prev_journal).expect("predecessor chain proof invalid"); }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    // ⛔ A new image that changes ChainState must decode the PREDECESSOR's format here when is_base == 2.
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev");
     assert!(prev.kind == KIND_CHAIN, "aggregate: prev journal is not a ChainState (domain tag)"); // H8
+    assert!(prev.version == CHAIN_STATE_VERSION, "aggregate: ChainState version {}", prev.version);
     // S1: chunk verification above AND the prev-chain verification both used `self_id`; committing it
     // + asserting prev.self_id==self_id (below) + the verifier checking final==METHOD_ID forces every
     // recursion (chunks and chain) to the real guest.
     if is_base == 0 {
         assert!(prev.self_id == self_id, "recursion image-id mismatch");
+        assert!(prev.profile == chain_profile(), "recursion profile mismatch");
+    }
+    if let Some(p) = pred {
+        assert!(prev.self_id == p.image, "handover: previous proof is not the predecessor's");
+        // The same network, and the same scripts-on or assumevalid claim: a chain cannot gain a claim at a handover.
+        assert!(prev.profile == chain_profile(), "handover: profile mismatch");
+        assert!(w.height == p.first_height, "handover: height {} != pinned {}", w.height, p.first_height);
+        // The predecessor's own lineage must be the rest of the pinned list, so the list cannot misstate history.
+        let n = lineage::LINEAGE.len();
+        assert!(prev.lineage == lineage_of(&lineage::LINEAGE[..n - 1]), "handover: predecessor lineage mismatch");
     }
     // #1: bind the block's height to the real chain height (same reason as chain_step — otherwise the
     // segmented path validates flags/subsidy at an attacker-chosen height). Also closes half of #2: the
@@ -1835,30 +2250,91 @@ fn aggregate() {
     assert!(w.height == prev.height + 1, "aggregate: block height {} != chain height {}", w.height, prev.height + 1);
     // S5: same anchor binding as chain_step — base step commits the trusted anchor's digest, recursive
     // step carries the verified prev's anchor_id forward.
-    let anchor_id = if is_base == 1 { dsha256(&prev_journal) } else { prev.anchor_id };
+    let anchor_id = if is_base == 1 { link_digest(&prev) } else { prev.anchor_id };
     let prev_mtp = median_time_past(&prev.recent_times);
 
+    #[cfg(feature = "libzync")]
+    swiftsync::start(prev.live_set, &prev.live_hash);
+    #[cfg(feature = "agg-lite")]
+    let r = { let _ = (&all_binds, chunks_ok, &chunk_wtxids, &chunk_leaves, &chunk_seqs, &chunk_vers);
+              agg_lite::validate_block_lite(&w, prev_mtp, &lite_journals, prev.trie_root, &rec_order) };
+    #[cfg(not(feature = "agg-lite"))]
     let r = validate_block_wtx(&w, prev_mtp, Some((&all_binds, chunks_ok)), &chunk_wtxids,
                                &chunk_leaves, &chunk_seqs, &chunk_vers);
     let block_valid = r.all_ok && r.root_matches && r.pow_ok && r.merkle_ok && r.subsidy_ok && r.weight_ok && r.sigops_ok && r.witness_ok && r.bip34_ok && r.bip30_ok;
     let prevhash_ok = w.header[4..36] == prev.tip_hash[..];
     let carry_ok = normalize(w.root_prev.roots.clone()) == normalize(prev.utxo_roots.clone()) && w.root_prev.num_leaves == prev.utxo_leaves;
     let height = prev.height + 1;
+    // libzync: Core's own ContextualCheckBlockHeader, lifted from validation.cpp (core_block_rules.cpp): bad-diffbits,
+    // time-too-old, bad-version.
+    #[cfg(feature = "libzync")]
+    let (retarget_ok, time_ok) = {
+        let ok = unsafe { hz_header_rules_c(w.header.as_ptr(), height, prev.prev_nbits, prev.prev_time, prev_mtp, prev.epoch_start) } == 1;
+        if !ok { log_reject(); }
+        (ok, ok)
+    };
+    #[cfg(not(feature = "libzync"))]
     let expected_nbits = if height % RETARGET_INTERVAL != 0 { prev.prev_nbits } else { unsafe { calc_next_bits(prev.prev_nbits, prev.epoch_start as i64, prev.prev_time as i64) } };
+    #[cfg(not(feature = "libzync"))]
     let retarget_ok = r.nbits == expected_nbits;
+    #[cfg(not(feature = "libzync"))]
     let time_ok = r.block_time > prev_mtp; // time-too-old (Core ContextualCheckBlockHeader)
-    assert!(block_valid && prevhash_ok && carry_ok && retarget_ok && time_ok,
-        "aggregate: bv={} ph={} carry={} rt={} time={}", block_valid, prevhash_ok, carry_ok, retarget_ok, time_ok);
+    // libzync (review 2): the BIP30 tree this block was checked against must be the chain's own, carried in
+    // the verified previous state (genesis: the empty tree), not a root the prover picked.
+    #[cfg(feature = "libzync")]
+    let smt_ok = w.in_smt_root == prev.smt_root;
+    #[cfg(not(feature = "libzync"))]
+    let smt_ok = true;
+    assert!(block_valid && prevhash_ok && carry_ok && retarget_ok && time_ok && smt_ok,
+        "aggregate: bv={} ph={} carry={} rt={} time={} smt={}", block_valid, prevhash_ok, carry_ok, retarget_ok, time_ok, smt_ok);
+    let smt_root = r.out_smt_root;
     let mut cum = prev.cum_work;
     unsafe { add_work(cum.as_mut_ptr(), r.nbits) };
     let epoch_start = if height % RETARGET_INTERVAL == 0 { r.block_time } else { prev.epoch_start };
     let mut recent_times = prev.recent_times.clone();
     recent_times.push(r.block_time);
     if recent_times.len() > 11 { let e = recent_times.len() - 11; recent_times.drain(0..e); }
+    #[cfg(feature = "libzync")]
+    let ((live_set, live_hash), trie_root) = (swiftsync::total(), r.trie_root);
+    // A COLLECT-mode aggregate skipped every ECMH add and subtract (it only logged the leaves for the
+    // host), so its total means nothing. It must not produce a chain state: stop here, after the whole
+    // block was checked and every leaf logged, with nothing committed and a non-zero exit, which no
+    // verifier accepts (lz_wire::COLLECT_EXIT). Before this, the hint flag alone switched the coin
+    // accounting off for a proof (review 2026-10-30, two reviewers independently).
+    #[cfg(feature = "libzync")]
+    if swiftsync::collecting() {
+        let _ = std::io::Write::flush(&mut std::io::stdout()); // the host reads the logged leaves
+        risc0_zkvm::guest::env::exit(lz_wire::COLLECT_EXIT);
+    }
+    #[cfg(not(feature = "libzync"))]
+    let (live_set, live_hash, trie_root) = (prev.live_set, prev.live_hash, prev.trie_root);
+    // The block forest. Induction from the genesis state gives one leaf per height; the check also refuses a base
+    // step on an anchor that has no forest, which would otherwise commit a forest with the wrong leaf numbering.
+    let utxo_value = prev.utxo_value.saturating_add(r.survivor_value).checked_sub(r.spent_value).expect("utxo_value: the block spends more than the log holds");
+    #[cfg(feature = "libzync")]
+    if let Some((h, x)) = checkpoint::CHECKPOINT {
+        assert!(height != h || r.tip_hash == x, "aggregate: block {height} is not this image's checkpoint");
+    }
+    #[cfg(feature = "libzync")]
+    let (block_roots, block_leaves) = {
+        assert!(prev.block_leaves == prev.height as u64 + 1, "aggregate: block forest {} leaves at height {}", prev.block_leaves, prev.height);
+        let mut f = utreexo::Stump::new(prev.block_roots.clone(), prev.block_leaves);
+        let mut st: Vec<u8> = Vec::with_capacity(17 + 32 * r.root_next_roots.len());
+        handover_pin::utxo_state_preimage(r.root_next_leaves, utxo_value, &r.root_next_roots, &mut |b: &[u8]| st.extend_from_slice(b));
+        f.add(sha256_guest(&handover_pin::block_leaf_preimage(&r.tip_hash, height, &sha256_guest(&st))));
+        (normalize(f.roots), f.num_leaves)
+    };
+    #[cfg(not(feature = "libzync"))]
+    let (block_roots, block_leaves) = (prev.block_roots.clone(), prev.block_leaves);
+    let lineage = if pred.is_some() { lineage_of(lineage::LINEAGE) } else { prev.lineage };
     env::commit(&ChainState {
-        kind: KIND_CHAIN,
+        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION,
         tip_hash: r.tip_hash, utxo_roots: r.root_next_roots, utxo_leaves: r.root_next_leaves,
+        utxo_value,
         cum_work: cum, height, prev_nbits: r.nbits, prev_time: r.block_time, epoch_start, recent_times, anchor_id, self_id,
+        live_set, live_hash, trie_root, smt_root,
+        max_time: prev.max_time.max(r.block_time), profile: chain_profile(),
+        block_roots, block_leaves, lineage,
     });
 }
 
@@ -1868,6 +2344,15 @@ fn main() {
     // Pin every Rust-side consensus literal to Core's own compiled value before doing any work.
     assert_core_constants();
     let mode: u32 = env::read();
+    // A libzync image proves blocks ONLY as chunks + aggregate. The older block modes (1 block_proof,
+    // 2 chain_step, 3 multi_check, 6 prove_range, 7 fold_range, 12 stages) neither run the SwiftSync
+    // accounting nor the signet check, and their per-input caches assume the bump allocator; a receipt
+    // from them under this image id would attest something the libzync design never checked
+    // (review 2026-10-30). 8/9/10 are self-tests that commit nothing a chain proof consumes. 18 joins two adjacent chain
+    // proofs of this image (ROADMAP H-B). 17 is the trie update (E2),
+    // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag.
+    #[cfg(feature = "libzync")]
+    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
     match mode {
         1 => block_proof(),
         2 => chain_step(),
@@ -1878,73 +2363,133 @@ fn main() {
         7 => fold_range(),
         8 => test_locks(),
         9 => test_merkle(),
+        10 => test_core_vectors(),
+        #[cfg(feature = "libzync")]
+        18 => join(),
         12 => validate_block_stages(),
-        // Mode 13: MSM self-test. Reports the positive comparison AND a negative control, because a
-        // check that can only ever pass is not a check.
-        // Mode 15: field-op benchmark. libsecp's software field_10x26 against the bigint2
-        // coprocessor, same operation count, same run — the ratio decides whether Core mode can have
-        // field-level acceleration without conceding an algorithm.
-        #[cfg(all(feature = "msm", feature = "field-bench"))]
-        15 => {
-            use risc0_crypto::curves::secp256k1::Fq;
-            extern "C" {
-                fn hazync_bench_fe_mul(n: u32) -> i32;
-                fn hazync_bench_fe_sqr(n: u32) -> i32;
-                fn hazync_bench_fe_mul_hw(n: u32) -> i32;
-            }
-            let n: u32 = env::read();
-            let t0 = env::cycle_count();
-            let s1 = unsafe { hazync_bench_fe_mul(n) };
-            let t1 = env::cycle_count();
-            let s2 = unsafe { hazync_bench_fe_sqr(n) };
-            let t2 = env::cycle_count();
-            // Coprocessor: same chaining so the comparison is like for like.
-            let mut a = Fq::from_be_bytes_mod_order(&[3u8; 32]);
-            let b = Fq::from_be_bytes_mod_order(&[5u8; 32]);
-            let t3 = env::cycle_count();
-            for _ in 0..n { a = &a * &b; }
-            let t4 = env::cycle_count();
-            // The number that decides the design: coprocessor WITH libsecp's conversions.
-            let t7 = env::cycle_count();
-            let s3 = unsafe { hazync_bench_fe_mul_hw(n) };
-            let t8 = env::cycle_count();
-            let mut c = Fq::from_be_bytes_mod_order(&[7u8; 32]);
-            let t5 = env::cycle_count();
-            for _ in 0..n { c = &c * &c; }
-            let t6 = env::cycle_count();
-            env::log(&alloc::format!(
-                "FIELD BENCH n={n}\n  sw_mul={} sw_sqr={}\n  hw_native={} hw_sqr={}\n  hw_WITH_CONVERSION={}\n  guard={} {} {} {} {}",
-                t1 - t0, t2 - t1, t4 - t3, t6 - t5, t8 - t7, s1, s2, s3,
-                a.to_bigint().as_le_bytes()[0], c.to_bigint().as_le_bytes()[0]));
-            env::commit(&((t1 - t0) as u64));
-        }
-        // Mode 14: MSM benchmark at scale. Timing only — mode 13 is the correctness check.
-        #[cfg(feature = "msm")]
-        14 => {
-            let n: u32 = env::read();
-            let window: u32 = env::read();
-            let (x, _y) = msm::bench(n as usize, window as usize);
-            env::commit(&x);
-        }
-        #[cfg(feature = "msm")]
-        13 => {
-            let n: u32 = env::read();
-            let window: u32 = env::read();
-            let (pos, neg) = msm::selftest(n as usize, window as usize);
-            env::log(&alloc::format!(
-                "msm selftest n={n} window={window}: matches_reference={pos} perturbed_differs={neg}"
-            ));
-            assert!(pos, "MSM DISAGREES WITH REFERENCE");
-            assert!(neg, "MSM NEGATIVE CONTROL FAILED — a perturbed scalar produced the same result");
-            env::commit(&(pos && neg));
+        #[cfg(feature = "trie")]
+        17 => trie_update(),
+        // Mode 16 (signet): Core's CheckSignetBlockSolution on (header, coinbase, other txids) ALONE, with no
+        // merkle or PoW check in front of it, so a test can show the signature check itself rejects.
+        #[cfg(feature = "signet")]
+        16 => {
+            let header: Vec<u8> = env::read();
+            let cb: Vec<u8> = env::read();
+            let txids: Vec<u8> = env::read();
+            let ok = unsafe { hz_check_signet(header.as_ptr(), cb.as_ptr(), cb.len() as u32, txids.as_ptr(), (txids.len() / 32) as u32) };
+            env::commit(&ok);
         }
         _ => panic!("unknown guest mode {mode}"),
     }
 }
 
+/// Mode 17 (E2): one block's counting-trie update, proven beside the chunks and verified inside the aggregate.
+/// Input (read_slice words): [witness words, marks, inserts, order words], the witness (ttree::encode: counts flag, old
+/// root, the old trie pruned to the block's paths), each mark (key 16 big-endian words, spender 8), each insert (key 16,
+/// spent flag 1, spender 8, value 2), then the update order (sorted indices, checked). Commits ttree::trie_journal: the
+/// old root the witness proves, the new root, and the update list's digest, which the aggregate requires to equal its
+/// own list's. A wrong witness, list or order panics: no receipt.
+#[cfg(feature = "trie")]
+fn trie_update() {
+    let mut h = [0u32; 4];
+    env::read_slice(&mut h);
+    let (nw, nm, ni, np) = (h[0] as usize, h[1] as usize, h[2] as usize, h[3] as usize);
+    let mut wit = vec![0u32; nw];
+    env::read_slice(&mut wit);
+    let mut mw = vec![0u32; nm.checked_mul(24).expect("trie: marks")];
+    env::read_slice(&mut mw);
+    let mut iw = vec![0u32; ni.checked_mul(27).expect("trie: inserts")];
+    env::read_slice(&mut iw);
+    let mut perm = vec![0u32; np];
+    env::read_slice(&mut perm);
+    let key = |w: &[u32]| -> ttree::Key {
+        let mut k = [0u8; 64];
+        for j in 0..16 { k[4 * j..4 * j + 4].copy_from_slice(&w[j].to_be_bytes()); }
+        k
+    };
+    let marks: Vec<(ttree::Key, coinlog::W)> = mw.chunks_exact(24).map(|c| (key(&c[..16]), c[16..24].try_into().unwrap())).collect();
+    let ins: Vec<(ttree::Key, Option<coinlog::W>, u64)> = iw.chunks_exact(27)
+        .map(|c| (key(&c[..16]), (c[16] == 1).then(|| c[17..25].try_into().unwrap()), c[25] as u64 | (c[26] as u64) << 32)).collect();
+    // The product trie hashes values and counts (balances). The mode is the witness's first word, and an empty trie's
+    // root is zero in both modes, so without this a chain could be proved from genesis with no values committed.
+    assert!(wit.first() == Some(&1), "trie: the witness is not in counts mode");
+    let old: coinlog::W = wit.get(1..9).expect("trie: witness header").try_into().unwrap();
+    let new = ttree::apply_stream_perm(&wit, &marks, &ins, Some(&perm)).expect("trie update");
+    env::commit_slice(&ttree::trie_journal(&old, &new, &ttree::list_digest(&marks, &ins)));
+}
+
 // Mode 8: isolated exerciser for the real Core-derived maturity/BIP68 relative-lock check
 // (`check_input_locks`). Used by the host `test-locks` command to drive the time-based branch with
 // real MTP numbers (no block; the check only reads tx.version + vin[idx].nSequence + the two MTPs).
+/// Mode 18 (ROADMAP H-B): JOIN two adjacent chain proofs of this image into one. Blocks are proved in any order, each a
+/// base step on the host's state before it (anchor_id = link_digest of that state); a join requires the right proof to
+/// start exactly where the left one ends: link_digest(left) == right.anchor_id. The link digest covers every field but
+/// anchor_id (height, tip, work, times, coin log, trie, BIP30 tree, block forest, live set, image, profile, lineage), so
+/// a wrong host state only fails here. Commits the right state with the LEFT's anchor_id: "from the left's start, every
+/// block up to the right's tip is valid". A tree of joins over N blocks is N-1 joins; the root starts at the genesis
+/// anchor exactly as a linear chain does, so the verifier is unchanged. Across an image change: the handover step.
+#[cfg(feature = "libzync")]
+fn join() {
+    let self_id: [u32; 8] = env::read();
+    let left: Vec<u8> = env::read();
+    let right: Vec<u8> = env::read();
+    env::verify(self_id, &left).expect("join: left proof invalid");
+    env::verify(self_id, &right).expect("join: right proof invalid");
+    let decode = |b: &[u8], side: &str| -> ChainState {
+        assert!(b.len() % 4 == 0, "join: {side} journal is not whole words");
+        let w: Vec<u32> = b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let st: ChainState = risc0_zkvm::serde::from_slice(&w).expect("join: decode");
+        assert!(st.kind == KIND_CHAIN, "join: {side} journal is not a ChainState (domain tag)");
+        assert!(st.version == CHAIN_STATE_VERSION, "join: {side} ChainState version {}", st.version);
+        assert!(st.self_id == self_id, "join: {side} proof recursed against another image");
+        assert!(st.profile == chain_profile(), "join: {side} profile mismatch");
+        st
+    };
+    let l = decode(&left, "left");
+    let mut r = decode(&right, "right");
+    assert!(l.lineage == r.lineage, "join: lineage mismatch");
+    assert!(link_digest(&l) == r.anchor_id, "join: the right proof does not start where the left one ends");
+    r.anchor_id = l.anchor_id;
+    env::commit(&r);
+}
+
+/// Mode 10 (self-test, I1): Core's own script and transaction test vectors through the guest's consensus code, with
+/// explicit flags and no hints installed (libsecp verifies every signature itself, as Core). Each case: kind (0: one
+/// input's VerifyScript, script_tests.json; 1: CheckTransaction + every input, tx_valid / tx_invalid), the transaction,
+/// its spent outputs (Core's Vec<CTxOut>), the input index (kind 0), the flags, and the signature mode (0 libsecp, 1
+/// collect, 2 hinted + the batch check). Commits each case's code: 1 valid, -(ScriptError) - 1, -1000
+/// (CheckTransaction), or -2000 (the batch check failed). Commits nothing a chain proof consumes.
+fn test_core_vectors() {
+    let n: u32 = env::read();
+    let mut out: Vec<i32> = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        // sig: 0 libsecp verifies every signature (no hints); 1 COLLECT (log the batch records, after a CVCASE <i>
+        // marker); 2 the given hints, then the batch check, as a chunk: a failed batch is -2000.
+        let (kind, tx, prevouts, input, flags, sig, hints): (u32, Vec<u8>, Vec<u8>, u32, u32, u32, Vec<u8>) = env::read();
+        #[cfg(feature = "batch-ecdsa")]
+        match sig {
+            0 => batch_ecdsa::install(false, Vec::new()),
+            1 => { env::log(&alloc::format!("CVCASE {i}")); batch_ecdsa::install(true, Vec::new()) }
+            2 => batch_ecdsa::install(false, hints),
+            _ => panic!("mode 10: unknown sig mode {sig}"),
+        }
+        #[cfg(not(feature = "batch-ecdsa"))]
+        { let _ = (i, &hints); assert!(sig == 0, "mode 10: this image has no batch verification"); }
+        let mut rc = unsafe {
+            match kind {
+                0 => verify_input(tx.as_ptr(), tx.len() as u32, input, prevouts.as_ptr(), prevouts.len() as u32, flags,
+                                  0, 0, 0, core::ptr::null_mut()),
+                1 => hz_test_tx(tx.as_ptr(), tx.len() as u32, prevouts.as_ptr(), prevouts.len() as u32, flags),
+                _ => panic!("mode 10: unknown case kind {kind}"),
+            }
+        };
+        #[cfg(feature = "batch-ecdsa")]
+        if sig == 2 && !batch_ecdsa::finish() { rc = -2000; }
+        out.push(rc);
+    }
+    env::commit(&out);
+}
+
 fn test_locks() {
     let tx: Vec<u8> = env::read();
     let input_idx: u32 = env::read();

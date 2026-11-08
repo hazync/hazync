@@ -1,0 +1,10 @@
+block 962000: 8005 inputs, 12845 outputs, k = 20850 updates, n = 1.8e+08 live keys, depth ~ 27.4
+distinct touched nodes 307,796 (14.8 per update); hashes ~ 615,592
+  at 100 cycles/hash: 62 M cycles
+  at 250 cycles/hash: 154 M cycles
+  at 525 cycles/hash: 323 M cycles
+block 741000: 669 inputs, 393 outputs, k = 1062 updates, n = 1.8e+08 live keys, depth ~ 27.4
+distinct touched nodes 20,288 (19.1 per update); hashes ~ 40,576
+  at 100 cycles/hash: 4 M cycles
+  at 250 cycles/hash: 10 M cycles
+  at 525 cycles/hash: 21 M cycles

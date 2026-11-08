@@ -1,0 +1,231 @@
+//! `swiftsync-verify-wasm`: the libzync chain-proof verifier in a browser. Local verification, not a
+//! service: the proof and its facts are checked on the device, by the same `swiftsync_verify::verify` the CLI
+//! uses, with no network. Raw ABI and no wasm-bindgen, for the reason ../verifier-wasm gives: the .wasm is a
+//! plain cargo output anyone can rebuild and compare.
+//!
+//! ```text
+//!   alloc(len) -> ptr        reserve len bytes for the caller to write the input frame into
+//!   verify(ptr, len) -> p    returns a pointer to [u32 LE length][UTF-8 JSON]
+//! ```
+//!
+//! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet; | 0x10 coin-log image, | 0x20 product image]`
+//! `[u64 now, unix seconds][u32 n][receipt or .sspf bundle][u32 n][anchor JSON, n = 0 for genesis]`
+//! `[u32 n][image id hex, n = 0 for the built-in id]`. The page supplies `now` because WebAssembly has no clock.
+//!
+//! The JSON always has `verdict` ("ok", "demo" or "fail", the CLI's 0 / 2 / 1) and `checks`. There is no step 7
+//! here (a browser has no node); the page shows the tip and work for the reader to compare.
+
+use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inputs, Report, Verdict, BUNDLE_MAGIC};
+
+#[no_mangle]
+pub extern "C" fn alloc(len: usize) -> *mut u8 {
+    let mut buf = Vec::with_capacity(len);
+    let ptr = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    ptr
+}
+
+fn ret(s: String) -> *const u8 {
+    let bytes = s.into_bytes();
+    let mut out = Vec::with_capacity(4 + bytes.len());
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&bytes);
+    let ptr = out.as_ptr();
+    std::mem::forget(out);
+    ptr
+}
+
+fn fail(msg: String) -> *const u8 {
+    ret(serde_json::json!({"verdict": "fail", "checks": [{"ok": false, "what": msg}]}).to_string())
+}
+
+struct Frame<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl<'a> Frame<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+        let out = self.b.get(self.i..self.i + n).ok_or("input frame truncated")?;
+        self.i += n;
+        Ok(out)
+    }
+    fn chunk(&mut self) -> Result<&'a [u8], String> {
+        let n = u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize;
+        self.take(n)
+    }
+}
+
+fn run(input: &[u8]) -> Result<(Report, &'static Image), String> {
+    let mut f = Frame { b: input, i: 0 };
+    let out = run_frame(&mut f)?;
+    if f.i != input.len() {
+        return Err("input frame has trailing bytes".into());
+    }
+    Ok(out)
+}
+
+fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
+    // Network code: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (COINLOG.md), whose proofs carry coin facts.
+    let code = f.take(1)?[0];
+    // bit 0x20 = the product image (coin log, counting trie, live-coin hash), whose proofs carry trie facts.
+    let coinlog = code & 0x10 != 0;
+    let product = code & 0x20 != 0;
+    let network = match code & !0x30 {
+        0 => "mainnet",
+        1 => "signet",
+        n => return Err(format!("unknown network code {n}")),
+    };
+    let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
+    let receipt = f.chunk()?;
+    let anchor_json = f.chunk()?;
+    let image_hex = f.chunk()?;
+    let mut image = Image::by_network(network).ok_or("no built-in image")?;
+    if coinlog {
+        image = image.with_coinlog();
+    }
+    if product {
+        image = image.with_product();
+    }
+    if !image_hex.is_empty() {
+        let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
+        image = image.with_method_id(&h).ok_or("image id is not 64 hex digits")?;
+    }
+    let anchor: Option<ChainState> = if anchor_json.is_empty() {
+        None
+    } else {
+        Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
+    };
+    let rep = if receipt.starts_with(BUNDLE_MAGIC) {
+        check_bundle(&Bundle::decode(receipt)?, image, anchor, now)
+    } else {
+        verify(&Inputs { receipt, image, anchor, now })
+    };
+    Ok((rep, image))
+}
+
+#[no_mangle]
+pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
+    let input = unsafe { Vec::from_raw_parts(ptr, len, len) };
+    match run(&input) {
+        Err(e) => fail(e),
+        Ok((rep, image)) => {
+            let rev = |h: &[u8; 32]| {
+                let mut r = *h;
+                r.reverse();
+                hex(&r)
+            };
+            // Only a journal that passed: under FAIL its fields are the prover's word (review round 3).
+            let st = rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail);
+            ret(serde_json::json!({
+                "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
+                "image": image.method_id_hex,
+                "network": image.network,
+                "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
+                "height": st.map(|c| c.height),
+                "tip": st.map(|c| rev(&c.tip_hash)),
+                "chainwork": st.map(|c| rev(&c.cum_work)),
+                "utxo_leaves": st.map(|c| c.utxo_leaves),
+                "profile": st.map(|c| swiftsync_verify::describe_profile(c.profile)),
+            }).to_string())
+        }
+    }
+}
+
+/// `verify_facts(ptr, len)`: the `verify_frame` input (network code | 0x10 for a coin-log image) followed by
+/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact]}][u32 n][expect]`; expect
+/// ("<height>:<hash>", empty for none) is the network's block at the proof's height from a source the PAGE trusts, kept
+/// out of the facts JSON so a fact server cannot vouch for its own fork (an "expect" key inside it is refused; cold
+/// review 11-06). Without it the verdict is at most DEMO (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
+/// against the verified state. A failed fact makes the verdict "fail", as `swiftsync-verify --coin` does.
+#[no_mangle]
+pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
+    let input = unsafe { Vec::from_raw_parts(ptr, len, len) };
+    let mut f = Frame { b: &input, i: 0 };
+    let res = run_frame(&mut f).and_then(|r| {
+        let facts = f.chunk()?;
+        let expect = std::str::from_utf8(f.chunk()?).map_err(|_| "expect: not UTF-8".to_string())?.trim().to_string();
+        if f.i != input.len() {
+            return Err("input frame has trailing bytes".to_string());
+        }
+        let v: serde_json::Value = serde_json::from_slice(facts).map_err(|e| format!("facts JSON: {e}"))?;
+        let coins: Vec<swiftsync_verify::CoinFact> = serde_json::from_value(v.get("coins").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .map_err(|e| format!("facts JSON coins: {e}"))?;
+        let journeys: Vec<swiftsync_verify::CoinJourney> = serde_json::from_value(v.get("journeys").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .map_err(|e| format!("facts JSON journeys: {e}"))?;
+        let tries: Vec<swiftsync_verify::TrieFact> = serde_json::from_value(v.get("tries").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .map_err(|e| format!("facts JSON tries: {e}"))?;
+        if v.get("expect").is_some() {
+            return Err("\"expect\" inside the facts JSON is refused: pass the expected tip separately, from a source the page trusts".to_string());
+        }
+        let expect = Some(expect).filter(|e| !e.is_empty());
+        Ok((r, coins, journeys, tries, expect))
+    });
+    match res {
+        Err(e) => fail(e),
+        Ok(((mut rep, image), coins, journeys, tries, expect)) => {
+            let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty();
+            let mut out = Vec::new();
+            // Facts need the tip compared with the network (step 7): the page passes "expect": "h:hash" from a source
+            // it trusts. Without a match the verdict is at most DEMO (adversarial review, 11-03).
+            let tip_checked = match (&expect, rep.state.as_ref()) {
+                (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {
+                    Some((h, x)) if swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash) => true,
+                    _ => { out.push(Err(format!("expect {e:?}: not the proof's tip"))); false }
+                },
+                _ => false,
+            };
+            if rep.verdict == Verdict::Fail {
+                // the journal of a receipt that did not verify is the prover's word: nothing is checked against it
+                if any {
+                    out.push(Err("facts NOT checked: the receipt did not verify".to_string()));
+                }
+            } else if let Some(cs) = rep.state.as_ref() {
+                for c in &coins {
+                    out.push(swiftsync_verify::check_coin_fact(cs, c));
+                }
+                for j in &journeys {
+                    out.push(swiftsync_verify::check_coin_journey(cs, j));
+                }
+                for t in &tries {
+                    out.push(swiftsync_verify::check_trie_fact(cs, t));
+                }
+            } else if any {
+                out.push(Err("no verified state to check facts against".to_string()));
+            }
+            if out.iter().any(|r| r.is_err()) {
+                rep.verdict = Verdict::Fail;
+            }
+            if rep.verdict == Verdict::Ok && !tip_checked && any {
+                rep.verdict = Verdict::Demo;
+            }
+            // A fact is "ok" only under an OK verdict: under DEMO it holds on a chain not shown to be the network's.
+            let demo = rep.verdict != Verdict::Ok;
+            let facts: Vec<serde_json::Value> = out.into_iter().map(|r| match r {
+                Ok(w) if demo => serde_json::json!({"ok": false, "what": format!("holds on this chain, but the chain is not shown to be the network's: {w}")}),
+                Ok(w) => serde_json::json!({"ok": true, "what": w}),
+                Err(w) => serde_json::json!({"ok": false, "what": w}),
+            }).collect();
+            ret(serde_json::json!({
+                "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
+                "image": image.method_id_hex,
+                "network": image.network,
+                "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
+                "height": rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail).map(|c| c.height),
+                "facts": facts,
+            }).to_string())
+        }
+    }
+}
+
+/// The built-in image id for a network code (0 mainnet, 1 signet), for the page to display.
+#[no_mangle]
+pub extern "C" fn image_id(network: u32) -> *const u8 {
+    ret(match network {
+        0 => Image::by_network("mainnet"),
+        1 => Image::by_network("signet"),
+        _ => None,
+    }
+    .map(|i| i.method_id_hex.to_string())
+    .unwrap_or_default())
+}

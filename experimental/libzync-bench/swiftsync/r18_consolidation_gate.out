@@ -1,0 +1,30 @@
+=== chunk journals (old vs new)
+exec-chunk 0 [0..1662): kind=0xc4a10010 all_valid=1 journal sha256 687a2c5c0df2482a98d224968a32746d3ea0c6d1f66ffea79e05a2a2c32d92b9
+exec-chunk 0 [0..1662): kind=0xc4a10010 all_valid=1 journal sha256 687a2c5c0df2482a98d224968a32746d3ea0c6d1f66ffea79e05a2a2c32d92b9
+exec-chunk 1 [1662..4307): kind=0xc4a10010 all_valid=1 journal sha256 a9593dafed8c0f34b4369aff458c779f1f5afc20bde15a3f18c759f5c1c33bb4
+exec-chunk 1 [1662..4307): kind=0xc4a10010 all_valid=1 journal sha256 a9593dafed8c0f34b4369aff458c779f1f5afc20bde15a3f18c759f5c1c33bb4
+exec-chunk 2 [4307..6156): kind=0xc4a10010 all_valid=1 journal sha256 ada2363a22c064d1f5b1a82c7b55c4ddc91b5e5c0603cc59b71a2e80fa49d4da
+exec-chunk 2 [4307..6156): kind=0xc4a10010 all_valid=1 journal sha256 ada2363a22c064d1f5b1a82c7b55c4ddc91b5e5c0603cc59b71a2e80fa49d4da
+exec-chunk 3 [6156..8006): kind=0xc4a10010 all_valid=1 journal sha256 4554492b521bc13917945deddde1237d8b1fbb883be7a9242aafd907484ff04f
+exec-chunk 3 [6156..8006): kind=0xc4a10010 all_valid=1 journal sha256 4554492b521bc13917945deddde1237d8b1fbb883be7a9242aafd907484ff04f
+CHUNK_JOURNALS_IDENTICAL
+/home/defenwycke/libzync-gpu/r18/regress/old_agg.log:  chunk   0 [0..1662) executed: 80803107 cycles
+/home/defenwycke/libzync-gpu/r18/regress/old_agg.log:  chunk   1 [1662..4307) executed: 98590530 cycles
+/home/defenwycke/libzync-gpu/r18/regress/old_agg.log:  chunk   2 [4307..6156) executed: 80021135 cycles
+/home/defenwycke/libzync-gpu/r18/regress/old_agg.log:  chunk   3 [6156..8006) executed: 79879606 cycles
+/home/defenwycke/libzync-gpu/r18/regress/old_agg.log:  block validation cycles  57420470
+/home/defenwycke/libzync-gpu/r18/regress/new_agg.log:  chunk   0 [0..1662) executed: 80991570 cycles
+/home/defenwycke/libzync-gpu/r18/regress/new_agg.log:  chunk   1 [1662..4307) executed: 98665765 cycles
+/home/defenwycke/libzync-gpu/r18/regress/new_agg.log:  chunk   2 [4307..6156) executed: 80088808 cycles
+/home/defenwycke/libzync-gpu/r18/regress/new_agg.log:  chunk   3 [6156..8006) executed: 79947736 cycles
+/home/defenwycke/libzync-gpu/r18/regress/new_agg.log:  block validation cycles  57687091
+/home/defenwycke/libzync-gpu/r18/regress/new_agg.log:  journal sha256           d97e8652c7c34d48c1c9e57c660e9ab6b2a03869aa066be4fd0149efebeb4a72
+/home/defenwycke/libzync-gpu/r18/regress/old_hints.log:  batch: COLLECT for inputs 1662..4307 (no /home/defenwycke/libzync-gpu/r18/regress/old/.collect/batch_1662_4307.bin)
+/home/defenwycke/libzync-gpu/r18/regress/old_hints.log:  batch: COLLECT for inputs 0..1662 (no /home/defenwycke/libzync-gpu/r18/regress/old/.collect/batch_0_1662.bin)
+/home/defenwycke/libzync-gpu/r18/regress/old_hints.log:  batch: COLLECT for inputs 4307..6156 (no /home/defenwycke/libzync-gpu/r18/regress/old/.collect/batch_4307_6156.bin)
+/home/defenwycke/libzync-gpu/r18/regress/old_hints.log:  batch: COLLECT for inputs 6156..8006 (no /home/defenwycke/libzync-gpu/r18/regress/old/.collect/batch_6156_8006.bin)
+/home/defenwycke/libzync-gpu/r18/regress/old_hints.log:  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+/home/defenwycke/libzync-gpu/r18/regress/old_hints.log:  ecmh: 4324 operations, 296368 bytes
+/home/defenwycke/libzync-gpu/r18/regress/new_hints.log:  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+/home/defenwycke/libzync-gpu/r18/regress/new_hints.log:  ecmh: 4324 operations, 296368 bytes
+REGRESS_DONE

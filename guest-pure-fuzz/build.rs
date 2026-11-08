@@ -15,13 +15,15 @@ const GUEST_SRCS: [&str; 2] = [
 /// Take a whole `const NAME ... ;` line, or a whole `fn NAME(...) { ... }` item (naive brace match;
 /// valid here because none of the extracted items contain braces inside strings or comments).
 fn extract(srcs: &[(String, String)], needle: &str, is_fn: bool) -> String {
-    let (name, src) = srcs
+    // The first definition NOT gated `#[cfg(feature = "libzync")]`: libzync's versions of block_script_flags and
+    // median_time_past call Core's own C++ (hz_block_flags_c, hz_median_time_past), with no Rust to check here; the
+    // pure-Rust versions beside them are the ones this harness tests (11-07, PR #670's first CI run).
+    let libzync_gated = |src: &str, at: usize| src[..at].trim_end().lines().last().map_or(false, |l| l.contains("cfg(feature = \"libzync\")"));
+    let (src, start) = srcs
         .iter()
-        .find(|(_, s)| s.contains(needle))
-        .unwrap_or_else(|| panic!("item not found in any guest source: {needle}"));
-    let src = src.as_str();
-    let _ = name;
-    let start = src.find(needle).expect("checked by contains");
+        .flat_map(|(_, s)| s.match_indices(needle).map(move |(i, _)| (s.as_str(), i)))
+        .find(|&(s, i)| !libzync_gated(s, i))
+        .unwrap_or_else(|| panic!("item not found in any guest source (outside libzync-only code): {needle}"));
     if !is_fn {
         // These consts are single-line (a `;` also appears inside the `[u8; 32]` type, so grab the
         // whole line rather than up to the first `;`).

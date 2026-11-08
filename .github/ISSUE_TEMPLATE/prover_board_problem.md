@@ -4,7 +4,7 @@ about: A worker that fails, stalls or is rejected, or a board that looks wrong
 ---
 
 <!-- Most rejections are a guest id that differs from the coordinator's. Run `hazync-worker selftest`
-     first and include its output. The "When something is wrong" table in docs/PROVER_OPERATIONS.md
+     first and include its output. The "When something is wrong" table in docs/OPERATIONS.md
      covers the common cases. -->
 
 **What happened**

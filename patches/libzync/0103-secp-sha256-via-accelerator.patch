@@ -1,0 +1,33 @@
+diff --git a/src/hash_impl.h b/src/hash_impl.h
+index 89f75ac..06db05c 100644
+--- a/src/hash_impl.h
++++ b/src/hash_impl.h
+@@ -40,6 +40,20 @@ static void secp256k1_sha256_initialize(secp256k1_sha256 *hash) {
+     hash->bytes = 0;
+ }
+ 
++#if defined(__riscv)
++/* libzync (patches/libzync/0103): the SHA-256 compression through the RISC0 zkVM accelerator, as patches/0002 does for
++ * Core's CSHA256. Same function: state byte-swapped in and out (RISC0 keeps it big-endian), the raw 64-byte block.
++ * Used by BIP340's challenge hash and every tagged hash libsecp computes in the guest. */
++extern void sys_sha_compress(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*);
++static void secp256k1_sha256_transform(uint32_t* s, const unsigned char* buf) {
++    uint32_t st[8], blk[16];
++    int i;
++    for (i = 0; i < 8; i++) st[i] = __builtin_bswap32(s[i]);
++    __builtin_memcpy(blk, buf, 64);
++    sys_sha_compress(st, st, blk, blk + 8);
++    for (i = 0; i < 8; i++) s[i] = __builtin_bswap32(st[i]);
++}
++#else
+ /** Perform one SHA-256 transformation, processing 16 big endian 32-bit words. */
+ static void secp256k1_sha256_transform(uint32_t* s, const unsigned char* buf) {
+     uint32_t a = s[0], b = s[1], c = s[2], d = s[3], e = s[4], f = s[5], g = s[6], h = s[7];
+@@ -122,6 +136,7 @@ static void secp256k1_sha256_transform(uint32_t* s, const unsigned char* buf) {
+     s[6] += g;
+     s[7] += h;
+ }
++#endif
+ 
+ static void secp256k1_sha256_write(secp256k1_sha256 *hash, const unsigned char *data, size_t len) {
+     size_t bufsize = hash->bytes & 0x3F;

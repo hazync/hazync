@@ -45,8 +45,10 @@ HISTORY_RE='^(docs/history/|docs/RELEASE_NOTES_|CHANGELOG\.md$)'
 # ── 1. the canonical id must appear in every doc that states it ────────────────────────────────────
 # docs/ROADMAP.md was the third until 2026-09-14, when it became a historical record under docs/history/;
 # README.md states the canonical id in its place.
-for f in docs/PROVING.md SECURITY.md README.md; do
-    [ -f "$f" ] || continue
+# docs/OPERATIONS.md took over docs/PROVING.md's role on 2026-11-06 (G2 cleanup). A missing file is a FAILURE, not a
+# skip: a check that passes on a file that is not there checks nothing.
+for f in docs/OPERATIONS.md SECURITY.md README.md; do
+    [ -f "$f" ] || { bad "$f is missing: it must state the canonical id"; continue; }
     if grep -q "$CANON8" "$f"; then
         note "ok   $f references the canonical id"
     else
@@ -64,7 +66,9 @@ while IFS= read -r hit; do
     if ! grep -qx "$tok" <<<"$KNOWN"; then
         bad "$f:$ln claims guest id '$tok', which is neither canonical nor listed in $CANON_FILE"
     fi
-done < <(git ls-files '*.md' | while read -r f; do
+# experimental/ is left out of this check only: it records libzync experiment images (their own lineage, pinned per
+# experiment, not reproduce/METHOD_ID's), so their ids can never be in this list, by design.
+done < <(git ls-files '*.md' | grep -v '^experimental/' | while read -r f; do
              grep -nE 'METHOD_ID|image id|guest id|canonical id|Superseded' "$f" 2>/dev/null \
              | while IFS= read -r line; do
                  n=${line%%:*}
@@ -89,7 +93,7 @@ done < <(git ls-files '*.md' '*.html' | while read -r f; do
 # Skipped when tags are unavailable (shallow clone), rather than failing on missing data.
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$(git tag -l 'v*' 2>/dev/null)" ]; then
     NEWEST=$(git tag -l 'v*' | sort -V | tail -1)
-    claimed=$(grep -ohE 'current release is \*\*(v[0-9]+\.[0-9]+\.[0-9]+)\*\*' docs/PROVING.md 2>/dev/null \
+    claimed=$(grep -ohE 'current release is \*\*(v[0-9]+\.[0-9]+\.[0-9]+)\*\*' docs/OPERATIONS.md 2>/dev/null \
               | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     if [ -n "$claimed" ]; then
         # AHEAD is legitimate; BEHIND is the bug. Requiring exact equality made the check fail in both
@@ -101,12 +105,14 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$(git tag -l 'v*
         # OLDER one is finding #2 above — PROVING said v0.9.1 after v0.10.0 shipped — and still fails.
         newer=$(printf '%s\n%s\n' "$claimed" "$NEWEST" | sort -V | tail -1)
         if [ "$claimed" = "$NEWEST" ]; then
-            note "ok   docs/PROVING.md current release ($claimed) == newest tag"
+            note "ok   docs/OPERATIONS.md current release ($claimed) == newest tag"
         elif [ "$newer" = "$claimed" ]; then
-            note "ok   docs/PROVING.md names $claimed, ahead of the newest tag $NEWEST (release in preparation)"
+            note "ok   docs/OPERATIONS.md names $claimed, ahead of the newest tag $NEWEST (release in preparation)"
         else
-            bad "docs/PROVING.md says the current release is $claimed but the newest tag is $NEWEST — stale"
+            bad "docs/OPERATIONS.md says the current release is $claimed but the newest tag is $NEWEST — stale"
         fi
+    else
+        bad "docs/OPERATIONS.md has no 'current release is **vX.Y.Z**' line: nothing to check against $NEWEST"
     fi
 else
     note "skip release-vs-tag check (no tags in this clone)"
@@ -174,7 +180,7 @@ fi
 # prose legitimately discusses lineage ("supersedes 3f52baff"). What it cannot see is a stale id
 # presented as CURRENT EVIDENCE.
 #
-# That happened: GOALS.md — the document that says "measured, not asserted" — carried a G1 evidence
+# That happened: GOALS.md (now docs/history/) — the document that says "measured, not asserted" — carried a G1 evidence
 # block showing `hazync-verify` output citing guest 3f52baff, two re-baselines after it was retired.
 # It read as a live verification of the current system and was a transcript of a dead one. Nothing
 # flagged it, because 3f52baff is a documented predecessor.
@@ -201,7 +207,7 @@ done < <(git ls-files '*.md' 2>/dev/null | grep -Ev "$HISTORY_RE" | while read -
 # ── 8. a superseded id described as CURRENT, in prose ─────────────────────────────────────────────
 #
 # Check 7 only inspects fenced blocks, on the reasoning that prose should discuss history freely.
-# That left a real gap: docs/PROVING.md carried "the CPU-only reproduce/Dockerfile attests the
+# That left a real gap: docs/PROVING.md (now docs/history/) carried "the CPU-only reproduce/Dockerfile attests the
 # canonical id (`3f52baff`, the current guest)" through TWO re-baselines. Every gate passed — the id
 # was outside a fence, and the file did mention the canonical id elsewhere, so checks 4 and 6 were
 # satisfied. Found by an external auditor reading the page, which is the wrong way to find it.
@@ -239,7 +245,7 @@ done < <(git ls-files '*.md' 2>/dev/null | grep -Ev "$HISTORY_RE" | while read -
                          # claim line naming no id, whose open sentence ENDS by introducing one ("... id
                          # is", "METHOD_ID:"), carries to the next line — up to that line'"'"'s first sentence
                          # break, no further. Any looser rule flags history on the line after an unrelated
-                         # "currently" (docs/PROOF_DURABILITY.md did exactly that when this was added).
+                         # "currently" (docs/PROOF_DURABILITY.md, now in docs/history/, did exactly that when this was added).
                          if (!scan($0, NR) && /([Cc]urrent|[Cc]anonical|[Ll]atest)[^.;!?]*([Ii][Dd]|METHOD_ID|is|was|:)[`*]*[[:space:]]*$/) carry = 1
                      } else if (was) {
                          head = $0

@@ -1,0 +1,7 @@
+swiftsync-make-hints: H=2600, 293 coins unspent at H -> /home/defenwycke/libzync-gpu/r18/signet/signet2600.hints
+swiftsync-file-hash: stop height 2600 -> ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b == host's hash of the hints file
+  forest: 293 leaves (= coins unspent at H), roots 4
+SWEEP_OK
+SIGNET2600_DONE

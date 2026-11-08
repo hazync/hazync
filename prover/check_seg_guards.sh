@@ -12,17 +12,20 @@
 # It fails if any `default_prover().prove(... METHOD_ELF)` / `.prove_with_opts(... METHOD_ELF)` call is
 # not preceded, within 25 lines, by a `segment_limit_po2(seg_po2())` on its builder. `forest.prove(pos)`
 # (Utreexo accumulator proofs) carry no METHOD_ELF and are correctly ignored.
+# The host is split into modules (host/src/*.rs); every one is scanned, and the 25-line window never
+# crosses a file boundary (the guard must sit next to its prove, in the same function).
 set -euo pipefail
-f="$(dirname "$0")/host/src/main.rs"
+files=("$(dirname "$0")"/host/src/*.rs)
 bad=$(awk '
-  /segment_limit_po2\(seg_po2\(\)\)/         { seg = NR }
-  /(prove|prove_with_opts)\(.*METHOD_ELF/    { if (!seg || NR - seg > 25) printf "  line %d:%s\n", NR, $0 }
-' "$f")
+  FNR == 1                                    { seg = 0 }
+  /segment_limit_po2\(seg_po2\(\)\)/         { seg = FNR }
+  /(prove|prove_with_opts)\(.*METHOD_ELF/    { if (!seg || FNR - seg > 25) printf "  %s line %d:%s\n", FILENAME, FNR, $0 }
+' "${files[@]}")
 if [ -n "$bad" ]; then
   echo "ERROR: zkVM prove path(s) missing a segment_limit_po2(seg_po2()) guard:"
   echo "$bad"
   echo "Fix: add 'b.segment_limit_po2(seg_po2());' right after the ExecutorEnv::builder() for each."
   exit 1
 fi
-n=$(grep -cE '(prove|prove_with_opts)\(.*METHOD_ELF' "$f")
+n=$(cat "${files[@]}" | grep -cE '(prove|prove_with_opts)\(.*METHOD_ELF')
 echo "OK: all $n zkVM prove paths carry a segment_limit_po2(seg_po2()) guard."

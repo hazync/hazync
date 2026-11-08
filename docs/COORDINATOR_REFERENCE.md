@@ -2,7 +2,7 @@
 
 **Generated. Do not edit by hand.** Regenerate with `python3 scripts/gen-coordinator-reference.py`; CI runs `--check`, which fails when this page and the code disagree. The code is authoritative: `coordinator/server.py` for the HTTP API and its configuration, `coordinator/hazync` for the worker CLI (shipped as `hazync-worker`), `coordinator/run-workers.sh` for the launcher (shipped as `hazync-run-workers.sh`). Routes, variables, defaults, read sites, signature checks and status codes are extracted from the source; the one-line meanings are kept in the generator and checked against the code in both directions.
 
-Out of scope: `coordinator/sponsor_bot.py` (see `docs/SPONSOR_BOT.md`) and the deploy units under `coordinator/deploy/` (see `coordinator/deploy/RUNBOOK.md`).
+Out of scope: `coordinator/sponsor_bot.py` (see `docs/COORDINATOR.md`) and the deploy units under `coordinator/deploy/` (see `coordinator/deploy/RUNBOOK.md`).
 
 ## HTTP API
 
@@ -32,7 +32,7 @@ Applies to every route, from `H` in `server.py`:
 | `/api/vranges` | — | `vranges_cached()` | 200, 304 | The full verified-range index (`lo`, `hi`, `handle`, `fold`, `proof` link), built by `build_vranges`. Single-flight cache for `VRANGES_CACHE_TTL`; weak `ETag`, `304` on `If-None-Match`. |
 | `/api/blockstatus` | `prover` | `known_handles_cached()`, `block_status_cached()` | 200, 304, 404 | Every block's furthest state as runs `[lo, hi, status]` (3 proven, 4 folded, 5 anchored). `?prover=<handle>` keeps only ranges that prover proved; `404` for an unknown handle. `ETag`/`304`. |
 | `/api/block/<height>` | — | `block_detail()` | 200, 400, 404 | Everything about one block: proofs covering it, who anchored it, a live claim, a public sponsor. `400` unless the segment is 1-9 digits; `404` above the chain tip. A live fold claim covering the block is `fold_claim` (#333). |
-| `/api/sponsor` | — | `sponsor_info()` | 200 | Sponsorship settings: `open`, `max_blocks`, `payments` (always `false`), `priced`, `bands`, `btc_usd`, `name_max`. See `docs/SPONSORSHIP.md`. |
+| `/api/sponsor` | — | `sponsor_info()` | 200 | Sponsorship settings: `open`, `max_blocks`, `payments` (true once BTCPay is configured: `payments_enabled()`), `priced`, `bands`, `btc_usd`, `name_max`. See `docs/COORDINATOR.md`. |
 | `/api/sponsor/quote` | `lo`, `hi` | `sponsor_quote()` | 200 | Minimum USD and sats for `?lo=&hi=`. Answers while sponsorship is closed; refuses spans that are not open (proven, anchored, claimed or already held). |
 | `/api/sponsor/status/<token>` | — | `sponsor_status()` | 200, 404 | One sponsorship, looked up by the sha256 of its private token (`[A-Za-z0-9_-]{16,128}`); `404` otherwise. |
 | `/api/sponsors` | — | `sponsors_public()` | 200 | Public table of sponsorships whose status is paid, proving or proven and whose settled amount covers the minimum (`SPONSOR_PUBLIC_SQL`). |
@@ -86,6 +86,7 @@ In the order the file reads them. "—" means no default in the call: the variab
 | `SEED_RANGES` | `'60'` | constant `SEED` | Number of `RANGE_SIZE` rows `init_db()` seeds. |
 | `WITNESS_DIR` | `os.path.join(os.path.dirname(__file__), 'witnesses')` | constant `WITNESS` | Legacy per-block witnesses, `block_<n>.json`. |
 | `HAZYNC_BRIDGE_OUT` | `''` | constant `BRIDGE_DIR` | Archive-node bundle directory, `bundle_<n>.json`; empty means none. |
+| `HAZYNC_LIBZYNC` | — | constant `LIBZYNC` | `1`: a libzync coordinator. The bridge directory holds prep's `leaf_<n>.bin`, `HAZYNC_HOST` is a libzync host, `GENESIS_TIP` is `host libzync-genesis-tip`, and `verify-any` is given the claimed start height. |
 | `BULK_MAX` | `str(RANGE_SIZE)` | constant `BULK_MAX` | Maximum `count` for one `GET /api/witnesses`. |
 | `HAZYNC_HOST` | `''` | constant `HOST_BIN` | Host binary run for `verify-any`, `verify-range` and `method-id`. |
 | `VERIFY_MODE` | `'mock' if not HOST_BIN else 'real'` | constant `VERIFY` | `real` runs the host; `mock` accepts without verifying and still needs `COORD_ALLOW_MOCK`. |

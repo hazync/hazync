@@ -1,0 +1,51 @@
+== 1. BIP325 isolated: real block passes, one txid changed fails
+signet-check-test block 2148: real block -> 1
+signet-check-test block 2148: one txid changed -> 0
+SIGNET_CHECK_OK
+signet-check-test block 100: real block -> 1
+signet-check-test block 100: one txid changed -> 0
+SIGNET_CHECK_OK
+== 2. our hints file at 3,000 vs the published signet file (stop 320,000): same numbering?
+swiftsync-make-hints: H=3000, 695 coins unspent at H -> /home/defenwycke/libzync-gpu/r18/signet/signet3000.hints
+ours: stop 3000, 695 unspent; published: stop 320000, 606 of those heights' coins still unspent
+SUBSET_OK
+heights where a coin unspent at 3000 was spent by 320000: 71  e.g. [(2148, [2]), (2232, [1, 2, 4, 5, 6, 8]), (2390, [0])]
+swiftsync-file-hash: stop height 3000 -> ss_hints 5979d283d04530bc35fd450b5b99fb89ad2cbb9f9c640b1038c8c72f837ed779
+swiftsync-diff-hints: /home/defenwycke/libzync-gpu/r18/signet/signet3000.hints is EXACT for 1..=3000
+== 3. design B sweep 1..3000 on signet, states saved every 100
+  block 100: forest leaves 0  ss_set 1  (25 s)
+  block 200: forest leaves 0  ss_set 1  (43 s)
+  block 300: forest leaves 0  ss_set 1  (60 s)
+  block 400: forest leaves 0  ss_set 1  (78 s)
+  block 500: forest leaves 0  ss_set 1  (96 s)
+  block 600: forest leaves 0  ss_set 1  (114 s)
+  block 700: forest leaves 0  ss_set 1  (132 s)
+  block 800: forest leaves 0  ss_set 1  (149 s)
+  block 900: forest leaves 0  ss_set 1  (167 s)
+  block 1000: forest leaves 0  ss_set 1  (185 s)
+  block 1100: forest leaves 0  ss_set 1  (202 s)
+  block 1200: forest leaves 0  ss_set 1  (220 s)
+  block 1300: forest leaves 0  ss_set 1  (238 s)
+  block 1400: forest leaves 0  ss_set 1  (255 s)
+  block 1500: forest leaves 0  ss_set 1  (273 s)
+  block 1600: forest leaves 0  ss_set 1  (291 s)
+  block 1700: forest leaves 0  ss_set 1  (309 s)
+  block 1800: forest leaves 0  ss_set 1  (326 s)
+  block 1900: forest leaves 0  ss_set 1  (344 s)
+  block 2000: forest leaves 0  ss_set 1  (362 s)
+  block 2100: forest leaves 0  ss_set 1  (380 s)
+  block 2200: forest leaves 1  ss_set 1  (420 s)
+  block 2300: forest leaves 8  ss_set 1  (530 s)
+  block 2400: forest leaves 32  ss_set 1  (548 s)
+  block 2500: forest leaves 133  ss_set 1  (567 s)
+  block 2600: forest leaves 288  ss_set 1  (608 s)
+  block 2700: forest leaves 393  ss_set 1  (628 s)
+  block 2800: forest leaves 493  ss_set 1  (648 s)
+  block 2900: forest leaves 593  ss_set 1  (667 s)
+  block 3000: forest leaves 695  ss_set 0  (687 s)
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  ss_hints 5979d283d04530bc35fd450b5b99fb89ad2cbb9f9c640b1038c8c72f837ed779 == host's hash of the hints file
+  forest: 695 leaves (= coins unspent at H), roots 7
+SWEEP_OK
+sweep wall 686.77 s, max rss 705264 KB
+SIGNET_TESTS_DONE

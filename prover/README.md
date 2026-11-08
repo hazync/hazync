@@ -1,14 +1,14 @@
 # Hazync prover
 
 The zkVM prover: it runs Bitcoin Core's **real** consensus code inside RISC0 — Core's consensus logic
-unmodified, with the patches in [`../patches/`](../patches/) listed in the [design overview](../docs/DESIGN_OVERVIEW.md#what-is-actually-compiled-from-core) — and emits a
+unmodified, with the patches in [`../patches/`](../patches/) listed in the [design overview](../docs/history/DESIGN_OVERVIEW.md#what-is-actually-compiled-from-core) — and emits a
 STARK proof that a block — or a whole range of blocks folded together — is valid. This directory holds
 the guest program (the code that runs in the zkVM), the host driver (builds witnesses, drives proving,
 verifies receipts), and the test scaffolding.
 
 > **Just want to prove a block?** Follow **[`../CONTRIBUTING.md`](../CONTRIBUTING.md)** — it takes you
 > from nothing to your first proof with one build command. This README is for driving the prover
-> directly. The full operator's guide is **[`PROVING.md`](../docs/PROVING.md)**.
+> directly. The full operator's guide is **[`docs/OPERATIONS.md`](../docs/OPERATIONS.md)**.
 
 ## Layout
 
@@ -76,6 +76,6 @@ HAZYNC_BRIDGE_OUT=bundles HAZYNC_OUT=range_500.bin ./target/release/host prove-r
 ./target/release/host adversarial
 ```
 
-See [`PROVING.md`](../docs/PROVING.md) for the complete command reference (SNARK-wrap, tip protocol,
+See [`docs/OPERATIONS.md`](../docs/OPERATIONS.md) for the complete command reference (SNARK-wrap, tip protocol,
 the archive-node witness bridge) and [`SECURITY.md`](../SECURITY.md) for what the adversarial suite
 checks.

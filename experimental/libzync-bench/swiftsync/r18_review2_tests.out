@@ -1,0 +1,32 @@
+== 1. block 962,000 valid
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  block validation cycles  64244707
+rc=0
+== 2. negative: coinbase flag 2 on a coinbase spend (block 170 spends block 9's coinbase)
+exec-chunk 0 [0..1): kind=0xc4a10010 all_valid=0 journal sha256 e2b11c45de640ddbd60d0aa66ded5915b6884405b609ba4e2ec52f8411e1a800
+== 3. negative: an external spend claims this block's height
+collect aggregate failed: Guest panicked: aggregate: bv=false ph=true carry=true rt=true time=true smt=true
+== 4. sweep 1..200 with the carried BIP30 tree; flips
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  ss_hints e33c66b38a04cbf2e4cdf1813a6530a66121234d13a68e0a6f3ecd17907c4ccd == host's hash of the hints file
+SWEEP_OK
+SWEEP_FAIL
+== 5. signet: sweep 1..2600 again (states with smt_root), then a dev-mode chain 2501..2510 on a REPLAYED tree
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b == host's hash of the hints file
+SWEEP_OK
+LZ_PROVE_RANGE_DONE 2501..=2510 in 95 s; final receipt /home/defenwycke/libzync-gpu/r18/r2/dev/block_2510.rcpt
+== 6. verifier: a dev-mode receipt is refused even with RISC0_DEV_MODE set; demo anchor -> DEMO, exit 2
+  [FAIL] receipt is a real proof (not a dev-mode FakeReceipt)
+  [FAIL] RISC0_DEV_MODE is not set in this verifier's environment
+  [FAIL] height 2510 == the file's stop height 2600
+  [FAIL] SwiftSync total is the identity (ss_set == 0)
+  [FAIL] ss_hints f097b8f2a52a23d5e75db23b24e9a473a31b804534ac43592d816806c7722f7b == hash of /home/defenwycke/libzync-gpu/r18/signet/signet2600.hints
+LIBZYNC_VERIFY_FAIL: 5 check(s) failed
+rc=1
+== 7. diff-hints and file hash still exact; published files parse strictly
+swiftsync-diff-hints: /home/defenwycke/libzync-gpu/r15/h200.hints is EXACT for 1..=200
+swiftsync-file-hash: stop height 970000 -> ss_hints e215fe7e73298dd9dcd509de6c772f47704068485f187dc3fed158d793b1171d
+swiftsync-file-hash: stop height 320000 -> ss_hints d9c88278135e495749dd04e8a635a444e99d6dc470a43d11f37ecd91f02b4947
+R2_TESTS_DONE

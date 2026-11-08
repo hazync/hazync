@@ -4,6 +4,15 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+// libzync: what HAZYNC_LIBZYNC means -- the SAME list methods/build.rs turns into cargo features.
+include!("../../../libzync/src/profile.rs");
+
+/// A lever is on if its env var is "1", or if the libzync profile includes it.
+fn lever(name: &str) -> bool {
+    let (lz, _) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
+    std::env::var(name).as_deref() == Ok("1") || (lz && LIBZYNC_LEVERS.contains(&name))
+}
+
 fn find_riscv_bin() -> String {
     if let Ok(b) = std::env::var("HAZYNC_RISCV_BIN") {
         return b;
@@ -64,6 +73,57 @@ fn lib_dir(gcc: &str, query: &[&str]) -> String {
         .expect("run gcc for lib path");
     let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
     PathBuf::from(p).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// I1 (2026-11-05): every C++ `catch` the guest can reach, PINNED. The guest has no C++ unwinding: a throw aborts it.
+/// Where Core catches an exception and REJECTS, the abort rejects too (no proof); a Core catch that recovers and
+/// CONTINUES would make a valid block abort (a liveness gap). Both sites below reject the block (reviewed):
+///   - script/interpreter.cpp, EvalScript: catch (...) -> SCRIPT_ERR_UNKNOWN_ERROR, and every EvalScript caller in
+///     VerifyScript then fails the input (Core's own script_tests: 68 such cases agree, core_vectors/RESULT_*).
+///   - signet.cpp, SignetTxs::Create: a malformed solution -> nullopt -> CheckSignetBlockSolution false.
+/// (Core's logging.h catches and continues, but coreshim/logging.h replaces it: the walk below resolves headers as the
+/// compiler does, shim first.) A new, moved-to-another-file or changed catch (a Core bump, a new source) fails the
+/// build until it is reviewed and listed here.
+const REVIEWED_CATCHES: &[(&str, &str)] = &[
+    ("script/interpreter.cpp", "catch (...)"),
+    ("signet.cpp", "} catch (const std::exception&) {"),
+];
+
+/// Every `catch (` line in `roots` and everything they #include, resolved against `dirs` in order (system headers,
+/// found in none, are skipped). Returns (path relative to its include dir, trimmed line), sorted.
+fn reachable_catches(roots: &[String], dirs: &[String]) -> Vec<(String, String)> {
+    use std::collections::BTreeSet;
+    let rel = |p: &std::path::Path| -> String {
+        for d in dirs {
+            if let Ok(r) = p.strip_prefix(d) { return r.to_string_lossy().into_owned(); }
+        }
+        p.file_name().unwrap().to_string_lossy().into_owned()
+    };
+    let mut seen: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+    let mut todo: Vec<std::path::PathBuf> = roots.iter().map(std::path::PathBuf::from).collect();
+    let mut out: BTreeSet<(String, String)> = BTreeSet::new();
+    while let Some(f) = todo.pop() {
+        let Ok(f) = f.canonicalize() else { continue };
+        if !seen.insert(f.clone()) { continue; }
+        let src = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("catch audit: {}: {e}", f.display()));
+        for line in src.lines() {
+            let t = line.trim();
+            if t.starts_with("//") { continue; }
+            if t.contains("catch (") || t.contains("catch(") { out.insert((rel(&f), t.to_string())); }
+            let Some(rest) = t.strip_prefix("#include") else { continue };
+            let rest = rest.trim();
+            let (quoted, name) = match rest.chars().next() {
+                Some('"') => (true, rest[1..].split('"').next().unwrap_or("")),
+                Some('<') => (false, rest[1..].split('>').next().unwrap_or("")),
+                _ => continue,
+            };
+            let mut cands: Vec<std::path::PathBuf> = Vec::new();
+            if quoted { cands.push(f.parent().unwrap().join(name)); }
+            cands.extend(dirs.iter().map(|d| std::path::Path::new(d).join(name)));
+            if let Some(c) = cands.into_iter().find(|c| c.is_file()) { todo.push(c); }
+        }
+    }
+    out.into_iter().collect()
 }
 
 fn main() {
@@ -156,30 +216,30 @@ fn main() {
     // the same re-baselining.
     // hazync#139 middle path. See prover/methods/guest/src/bigint2_ecmult.rs and patches/0005.
     println!("cargo:rerun-if-env-changed=HAZYNC_BIGINT2_ECDSA");
-    let bigint2 = std::env::var("HAZYNC_BIGINT2_ECDSA").as_deref() == Ok("1");
+    let bigint2 = lever("HAZYNC_BIGINT2_ECDSA");
     // hazync#205 / GHOST_GAINS G1. Same two-part shape as the middle path above, and the same trap:
     // patch 0007 ADDS the #ifdef to group_impl.h, this define is what turns it on. Either alone
     // compiles the stock sqrt and says nothing.
     println!("cargo:rerun-if-env-changed=HAZYNC_LIFTX_ACCEL");
-    let liftx_accel = std::env::var("HAZYNC_LIFTX_ACCEL").as_deref() == Ok("1");
+    let liftx_accel = lever("HAZYNC_LIFTX_ACCEL");
     // hazync#205 / G3 — Schnorr through the same accelerator. Needs bigint2 too: it reuses
     // hazync_ecmult_verify, which only the bigint2-ecdsa feature exports.
     println!("cargo:rerun-if-env-changed=HAZYNC_BIGINT2_SCHNORR");
-    let schnorr_accel = std::env::var("HAZYNC_BIGINT2_SCHNORR").as_deref() == Ok("1");
+    let schnorr_accel = lever("HAZYNC_BIGINT2_SCHNORR");
     // The ECDSA scalar inverse, which patch 0005 left as literal libsecp. 7.0% of the current stack.
     println!("cargo:rerun-if-env-changed=HAZYNC_SCALAR_INV_ACCEL");
-    let scalar_inv = std::env::var("HAZYNC_SCALAR_INV_ACCEL").as_deref() == Ok("1");
+    let scalar_inv = lever("HAZYNC_SCALAR_INV_ACCEL");
     // SHA Transform fast path: inline byte swap, and no staging copy when already aligned.
     println!("cargo:rerun-if-env-changed=HAZYNC_SHA_FASTPATH");
-    let sha_fast = std::env::var("HAZYNC_SHA_FASTPATH").as_deref() == Ok("1");
+    let sha_fast = lever("HAZYNC_SHA_FASTPATH");
     // Merkle-node double-SHA through the accelerated Transform. Different function from Transform;
     // patches/0002 never touched it. See patches/0010.
     println!("cargo:rerun-if-env-changed=HAZYNC_SHA_D64_ACCEL");
-    let sha_d64 = std::env::var("HAZYNC_SHA_D64_ACCEL").as_deref() == Ok("1");
+    let sha_d64 = lever("HAZYNC_SHA_D64_ACCEL");
     // Field-op benchmark shim. Patches secp256k1.c, so this define goes on the SECP build below --
     // NOT the Core build. Getting that backwards is what left patches 0009/0010 inert for four arms.
     println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BENCH");
-    let field_bench = std::env::var("HAZYNC_FIELD_BENCH").as_deref() == Ok("1");
+    let field_bench = lever("HAZYNC_FIELD_BENCH");
     // field_bigint2 backend: canonical 8x32 limbs backed by the coprocessor. The two headers are
     // copied into the secp tree and selected by patches/0012, which edits field.h's backend switch.
     println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BIGINT2");
@@ -187,10 +247,10 @@ fn main() {
     // hazync_lift_x_hint under the `liftx-hint` cargo feature; THIS is what makes the C half call it.
     // Wiring only the cargo feature builds a guest that exports the symbol and never references it.
     println!("cargo:rerun-if-env-changed=HAZYNC_LIFTX_HINT");
-    let liftx_hint = std::env::var("HAZYNC_LIFTX_HINT").as_deref() == Ok("1");
+    let liftx_hint = lever("HAZYNC_LIFTX_HINT");
     println!("cargo:rerun-if-changed=field_bigint2.h");
     println!("cargo:rerun-if-changed=field_bigint2_impl.h");
-    let field_bigint2 = std::env::var("HAZYNC_FIELD_BIGINT2").as_deref() == Ok("1");
+    let field_bigint2 = lever("HAZYNC_FIELD_BIGINT2");
     for f in ["field_bigint2.h", "field_bigint2_impl.h"] {
         let dst = format!("{secp}/src/{f}");
         if field_bigint2 {
@@ -261,6 +321,9 @@ fn main() {
         // is not an oversight: rust-lld cannot read GCC's LTO bytecode, and -ffat-lto-objects links
         // but performs no cross-TU optimisation. See TIER0_RESULTS_2026-08-26.md 3.
         .flag("-march=rv32im").flag("-mabi=ilp32").opt_level(3).warnings(false)
+        // No type-based alias analysis: Core and libsecp are clean, but our patches and shims hand byte
+        // buffers to the accelerator as uint32_t*, and this makes such code defined by construction (round 8).
+        .flag("-fno-strict-aliasing")
         .flag(&fpm)
         .include(&secp).include(format!("{secp}/src"))
         .define("ECMULT_WINDOW_SIZE", win.as_str()).define("ECMULT_GEN_KB", gen_kb.as_str())
@@ -285,6 +348,14 @@ fn main() {
     // hard compile error rather than a wrong measurement. That is deliberate.
     define_if(&mut secp_build, "HAZYNC_FIELD_BIGINT2", field_bigint2);
     define_if(&mut secp_build, "HAZYNC_LIFTX_HINT", liftx_hint);
+    // libzync experiment: the hook experimental/libzync-bench/hook/apply_batch_hook.py inserts into
+    // ecdsa_impl.h. The Rust half is src/batch_ecdsa.rs behind the `batch-ecdsa` feature.
+    println!("cargo:rerun-if-env-changed=HAZYNC_BATCH_ECDSA");
+    let batch = lever("HAZYNC_BATCH_ECDSA");
+    // The hooks hand libsecp's field LIMBS to the batch as 8x32 canonical values, which only the
+    // field_bigint2 backend (patches/0012) stores. On the default 10x26 backend they would be garbage.
+    assert!(!batch || field_bigint2, "HAZYNC_BATCH_ECDSA needs HAZYNC_FIELD_BIGINT2 (the hooks pass 8x32 field limbs)");
+    define_if(&mut secp_build, "HAZYNC_BATCH_ECDSA", batch);
     secp_build.compile("secp256k1");
 
     // 2) REAL Bitcoin Core consensus C++ (interpreter + sighash + deps) + our wrapper.
@@ -307,6 +378,7 @@ fn main() {
     b.cpp(true).compiler(&gpp).archiver(&ar)
         .flag("-march=rv32im").flag("-mabi=ilp32").flag("-std=c++20")
         .flag("-fexceptions").flag("-fno-rtti").opt_level(3).warnings(false)  // TIER 0: -O3
+        .flag("-fno-strict-aliasing") // as for the C sources above (round 8)
         .flag(&fpm)
         // coreshim FIRST: its no-op sync.h/threadsafety.h override Core's pthread-backed versions so
         // the real chain.h CBlockIndex + pow.cpp compile on the single-threaded freestanding guest.
@@ -323,8 +395,97 @@ fn main() {
     // both SHA levers on for every arm after the first that applied them.
     define_if(&mut b, "HAZYNC_SHA_FASTPATH", sha_fast);
     define_if(&mut b, "HAZYNC_SHA_D64_ACCEL", sha_d64);
+    // libzync: verify_inputs_batch_once in verify_input.cpp (one deserialise + hash per transaction).
+    println!("cargo:rerun-if-env-changed=HAZYNC_TX_ONCE");
+    define_if(&mut b, "HAZYNC_TX_ONCE", lever("HAZYNC_TX_ONCE"));
+    // libzync: CSHA256 kept in accelerator layout (hook/apply_sha_stream.py patches sha256.cpp), and
+    // PrecomputedTransactionData computed lazily as Core's own validation does (force=false).
+    println!("cargo:rerun-if-env-changed=HAZYNC_SHA_STREAM");
+    define_if(&mut b, "HAZYNC_SHA_STREAM", lever("HAZYNC_SHA_STREAM"));
+    // libzync round 7: HashWriter staging buffer, lazy txid/wtxid, OP_HASH160 key memo; round 8: legacy
+    // sighash from preserialised bytes + a walking midstate (interpreter.cpp only). Round 7's three change
+    // class layouts (HashWriter, CTransaction), so they must be defined on EVERY Core TU -- this
+    // cc::Build compiles all of them, verify_input.cpp included.
+    for d in ["HAZYNC_HASHWRITER_BUF", "HAZYNC_LAZY_TXID", "HAZYNC_H160_MEMO", "HAZYNC_LEGACY_SIGHASH", "HAZYNC_D64_STREAM", "HAZYNC_RAW_TXID", "HAZYNC_PUBKEY_MEMO", "HAZYNC_LEAF_ONEBUF"] {
+        println!("cargo:rerun-if-env-changed={d}");
+        define_if(&mut b, d, lever(d));
+    }
+    // libzync agg-lite: verify_inputs_batch_once parses through cached_tx (see src/agg_lite.rs).
+    println!("cargo:rerun-if-env-changed=HAZYNC_AGG_LITE");
+    define_if(&mut b, "HAZYNC_AGG_LITE", lever("HAZYNC_AGG_LITE"));
+    // libzync sweep-1 cost measurement: skip scripts/signatures in verify_inputs_batch_once.
+    println!("cargo:rerun-if-env-changed=HAZYNC_NO_SCRIPTS");
+    println!("cargo:rerun-if-env-changed=HAZYNC_LIBZYNC");
+    let (lz_env, assumevalid) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
+    // The C half follows HAZYNC_LIBZYNC, the Rust half follows cargo features. They must agree, or the
+    // guest links a Rust agg-lite against C++ compiled without its caches (review 2026-10-30).
+    let lz_feat = std::env::var("CARGO_FEATURE_LIBZYNC").is_ok();
+    assert_eq!(lz_feat, lz_env, "the guest's `libzync` feature and HAZYNC_LIBZYNC disagree: build through \
+        methods/build.rs with HAZYNC_LIBZYNC set, not with --features");
+    define_if(&mut b, "HAZYNC_NO_SCRIPTS", assumevalid || std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1"));
+    // HAZYNC_NETWORK=signet: Core's SigNet chainparams + CheckSignetBlockSolution (signet.cpp below).
+    println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
+    let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    assert_eq!(std::env::var("CARGO_FEATURE_SIGNET").is_ok(), signet,
+        "the guest's `signet` feature and HAZYNC_NETWORK disagree: build through methods/build.rs");
+    define_if(&mut b, "HAZYNC_SIGNET", signet);
+    let regtest = libzync_regtest(std::env::var("HAZYNC_NETWORK").ok().as_deref());
+    assert_eq!(std::env::var("CARGO_FEATURE_REGTEST").is_ok(), regtest,
+        "the guest's `regtest` feature and HAZYNC_NETWORK disagree: build through methods/build.rs");
+    define_if(&mut b, "HAZYNC_REGTEST", regtest);
+    println!("cargo:rerun-if-env-changed=HAZYNC_TXDATA_LAZY");
+    define_if(&mut b, "HAZYNC_TXDATA_LAZY", lever("HAZYNC_TXDATA_LAZY"));
     for tu in core_tus { b.file(format!("{core}/{tu}")); }
+    if signet { b.file(format!("{core}/signet.cpp")); }
     b.file("verify_input.cpp");
+    // libzync: Core's consensus/tx_verify.cpp, unmodified, #included with stand-ins for the coin view and block
+    // index, and the rest of what its error paths link against (FormatMoney).
+    if lz_env {
+        b.file("core_tx_rules.cpp");
+        // Core's functions lifted verbatim out of validation.cpp, which cannot be compiled whole. See core_block_rules.cpp.
+        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+        let validation = std::fs::read_to_string(format!("{core}/validation.cpp")).expect("read validation.cpp");
+        let pow = std::fs::read_to_string(format!("{core}/pow.cpp")).expect("read pow.cpp");
+        let mut inc = String::new();
+        let lift = |src: &str, sig: &str, inc: &mut String| {
+            let from = src.find(sig).unwrap_or_else(|| panic!("not found: {sig}"));
+            let body = &src[from..];
+            let end = body.find("\n}\n").unwrap_or_else(|| panic!("unterminated: {sig}"));
+            inc.push_str(&body[..end + 3]);
+            inc.push('\n');
+        };
+        lift(&pow, "unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)\n{", &mut inc);
+        for sig in ["CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)\n{",
+                    "static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_commitment, BlockValidationState& state)\n{",
+                    "static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman)\n{",
+                    "static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, BlockManager& blockman, const ChainstateManager& chainman, const CBlockIndex* pindexPrev) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)\n{",
+                    "static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& state, const ChainstateManager& chainman, const CBlockIndex* pindexPrev)\n{"] {
+            lift(&validation, sig, &mut inc);
+        }
+        std::fs::write(format!("{out_dir}/core_extract.inc"), inc).expect("write core_extract.inc");
+        b.include(&out_dir);
+        b.file("core_block_rules.cpp");
+        b.file(format!("{core}/util/moneystr.cpp"));
+    }
+
+    // I1: the catch sites this guest's C++ can reach must be exactly the reviewed ones (REVIEWED_CATCHES). signet.cpp is
+    // always walked, so the list is the same for every network's image.
+    {
+        let here = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        let mut roots: Vec<String> = core_tus.iter().map(|tu| format!("{core}/{tu}")).collect();
+        roots.push(format!("{core}/signet.cpp"));
+        roots.push(format!("{here}/verify_input.cpp"));
+        let mut dirs = vec![shim.clone(), core.clone(), format!("{secp}/include")];
+        if lz_env {
+            roots.extend([format!("{here}/core_tx_rules.cpp"), format!("{here}/core_block_rules.cpp"), format!("{core}/util/moneystr.cpp")]);
+            dirs.push(std::env::var("OUT_DIR").expect("OUT_DIR"));
+        }
+        let found = reachable_catches(&roots, &dirs);
+        let want: Vec<(String, String)> = REVIEWED_CATCHES.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        assert!(found == want, "the C++ catch sites the guest can reach changed (a Core bump or a new source?).\n\
+            The guest has no unwinding: each must be reviewed (does Core REJECT after catching?) and listed in \
+            REVIEWED_CATCHES.\nfound: {found:#?}\nreviewed: {want:#?}");
+    }
 
     // Tell cargo what this build actually depends on. Without these the C++ dependency is INVISIBLE:
     // on 2026-07-30 a change to verify_input.cpp's leaf commitment did not recompile — the guest ELF
@@ -337,6 +498,12 @@ fn main() {
     // files are covered by the default fingerprint but are listed anyway, because relying on a default
     // is what produced a three-day-old object.
     println!("cargo:rerun-if-changed=verify_input.cpp");
+    println!("cargo:rerun-if-changed=core_tx_rules.cpp");
+    println!("cargo:rerun-if-changed=core_block_rules.cpp");
+    println!("cargo:rerun-if-changed={core}/validation.cpp");
+    println!("cargo:rerun-if-changed={core}/pow.cpp");
+    println!("cargo:rerun-if-changed={core}/consensus/tx_verify.cpp");
+    println!("cargo:rerun-if-changed={core}/util/moneystr.cpp");
     println!("cargo:rerun-if-changed=cshims.c");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
@@ -351,6 +518,12 @@ fn main() {
     for tu in ["secp256k1.c", "precomputed_ecmult.c", "precomputed_ecmult_gen.c"] {
         println!("cargo:rerun-if-changed={secp}/src/{tu}");
     }
+    // libzync: the TUs above are not enough. secp256k1.c #includes its modules' *_impl.h, and Core's
+    // TUs include patched headers (transaction.h, hash.h). An edit to a header ONLY, with the same env,
+    // reused the cached guest: round 13's tweak hook (modules/extrakeys/main_impl.h) was silently
+    // absent from the measured build. A directory makes cargo scan every file under it.
+    println!("cargo:rerun-if-changed={secp}/src");
+    println!("cargo:rerun-if-changed={core}");
 
     b.compile("bitcoinconsensus");
 
@@ -382,7 +555,7 @@ fn main() {
         (&gcc, "cshims.c", &[][..]),
     ] {
         let mut c = std::process::Command::new(compiler);
-        c.args(["-march=rv32im", "-mabi=ilp32", "-O3"]).args(lang)  // TIER 0: -O3
+        c.args(["-march=rv32im", "-mabi=ilp32", "-O3", "-fno-strict-aliasing"]).args(lang)  // TIER 0: -O3
             // Only the classes that are UB or a silent miscompile, not a style sweep — a warning set
             // this code has never been held to would fail on noise and get switched off within a week.
             .args(["-Werror=return-type", "-Wreturn-type"])

@@ -1,6 +1,6 @@
 // Real-vector differential: every input of a real mainnet block must verify.
 //
-// This is the test docs/FUZZING.md asks for and the one that touches the project's CENTRAL CLAIM —
+// This is the test docs/history/FUZZING.md asks for and the one that touches the project's CENTRAL CLAIM —
 // that the guest's VerifyScript/sighash/libsecp agree with real Core. The corpus needs no trusted
 // node to adjudicate it: these blocks are IN THE CHAIN, so Bitcoin's own consensus already ruled
 // every one of their inputs valid. If verify_input disagrees with that, the guest is wrong.

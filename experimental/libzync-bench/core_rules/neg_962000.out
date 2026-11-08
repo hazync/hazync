@@ -1,0 +1,9 @@
+PASS maturity_ok            chunk  0 all_valid=1 (want 1)
+PASS maturity_immature      chunk  0 all_valid=0 (want 0)
+PASS height_lock_met        chunk  1 all_valid=1 (want 1)
+PASS height_lock_unmet      chunk  1 all_valid=0 (want 0)
+PASS value_more             chunk  0 all_valid=1 (want 1)
+PASS value_below_outputs    chunk  0 all_valid=0 (want 0)
+NEG_DONE
+
+[exited with code 0]

@@ -68,6 +68,13 @@ pub fn parent(left: &Hash, right: &Hash) -> Hash {
 /// be spent twice.
 pub fn coin_leaf(txid_internal: &[u8; 32], vout: u32, value_sat: u64, spk: &[u8],
                  height: u32, is_coinbase: bool, coin_mtp: u32) -> Hash {
+    coin_leaf_flags(txid_internal, vout, value_sat, spk, height, is_coinbase as u8, coin_mtp)
+}
+
+/// `coin_leaf` with the leaf's flag byte in full. Bit 0: created by a coinbase. Bit 1: a coin the BIP30 tree tracks
+/// (coinbase-smt/src/bip30.rs). Almost every coin has bit 1 clear, so its leaf is what it always was.
+pub fn coin_leaf_flags(txid_internal: &[u8; 32], vout: u32, value_sat: u64, spk: &[u8],
+                       height: u32, flags: u8, coin_mtp: u32) -> Hash {
     let mut b = Vec::with_capacity(57 + spk.len());
     b.extend_from_slice(txid_internal);
     b.extend_from_slice(&vout.to_le_bytes());
@@ -75,7 +82,7 @@ pub fn coin_leaf(txid_internal: &[u8; 32], vout: u32, value_sat: u64, spk: &[u8]
     b.extend_from_slice(&(spk.len() as u32).to_le_bytes());
     b.extend_from_slice(spk);
     b.extend_from_slice(&height.to_le_bytes());
-    b.push(is_coinbase as u8);
+    b.push(flags);
     b.extend_from_slice(&coin_mtp.to_le_bytes());
     hash_leaf(&b)
 }
@@ -416,7 +423,7 @@ pub struct Forest {
 
     /// leaf hash -> its positions, ascending. Replaces the bridge's `leaves.iter().position(...)`.
     ///
-    /// This was measured as NOT worth having (GOALS.md §G2, "Ruled out"): an A/B on 100 real blocks
+    /// This was measured as NOT worth having (docs/history/GOALS.md §G2, "Ruled out"): an A/B on 100 real blocks
     /// gave 291 vs 285 blocks/hr, because the scan was ~4% of a 12.4 s block. That measurement was
     /// correct and the conclusion was correct *at the time*. Caching internal nodes then removed 94%
     /// of the bridge's work, and a `perf` profile of the result put 71% of the remaining time in the

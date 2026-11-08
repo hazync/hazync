@@ -1,0 +1,4 @@
+# Published libzync image ids (frozen core c14, commit ce4e1e3 source): reproduce/libzync.Dockerfile output,
+# verbatim below, reproduced by two builds. Product profile: coin log, counting trie, live-coin hash.
+libzync-product mainnet METHOD_ID 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 GUEST_ELF_SHA256 9b2a65622db37df00fc5c59b767f38196a62561b8f9d0305c87a859ad86ec224
+libzync-product signet METHOD_ID 73b62530ca89eea376e7753f47ab4f16aed3be3138d6052d84d30510aed0f38d GUEST_ELF_SHA256 afedd046d984a2ecd7a1c72138dbebdbc0c982585418533078f4c7db4a1f79d4

@@ -1,0 +1,16 @@
+# image c10e11 (METHOD_ID 14ef64e5...c3a8), Core 28 base vectors (1,420), six signature paths, batches of 25, 2026-11-05
+== libsecp
+CORE_VECTORS [libsecp] 1420 agree (68 of them by a guest abort where Core catches a throw), 0 differ, of 1420 (83209471 cycles)
+== honest
+CORE_VECTORS [batched, honest hints] 1420 agree (68 of them by a guest abort where Core catches a throw), 0 differ, of 1420 (299910450 cycles)
+== forged
+CORE_VECTORS [batched, FORGED hints (variant 0)] 1420 agree (68 of them by a guest abort where Core catches a throw), 0 differ, of 1420 (329949294 cycles); 80 Core-valid cases failed under forged hints (liveness only)
+== forged-odd
+CORE_VECTORS [batched, FORGED hints (variant 1)] 1420 agree (68 of them by a guest abort where Core catches a throw), 0 differ, of 1420 (330126974 cycles); 67 Core-valid cases failed under forged hints (liveness only)
+== forged-rn
+CORE_VECTORS [batched, FORGED hints (variant 2)] 1420 agree (68 of them by a guest abort where Core catches a throw), 0 differ, of 1420 (299910450 cycles); 0 Core-valid cases failed under forged hints (liveness only)
+== forged-mixed
+CORE_VECTORS [batched, FORGED hints (variant 3)] 1420 agree (68 of them by a guest abort where Core catches a throw), 0 differ, of 1420 (329777273 cycles); 77 Core-valid cases failed under forged hints (liveness only)
+
+
+# forged-rn (x = r + n): for real signatures r + n >= p almost always, so no such point exists and the honest hint is used (cycles = the honest run's): this variant is effectively untested by Core's vectors.

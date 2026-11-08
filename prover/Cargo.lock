@@ -606,7 +606,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2045,7 +2045,10 @@ dependencies = [
  "bitcoin",
  "hazync-coinbase-smt",
  "hazync-utreexo",
+ "libzync",
  "methods",
+ "num-bigint 0.4.8",
+ "risc0-binfmt",
  "risc0-zkvm",
  "serde",
  "serde_json",
@@ -2529,6 +2532,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "libzync"
+version = "0.1.0"
+dependencies = [
+ "memmap2",
+ "num-bigint 0.4.8",
+ "secp256k1",
+ "sha2",
 ]
 
 [[package]]
@@ -4523,6 +4536,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "swiftsync-verify"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "libzync",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4577,7 +4602,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -5570,4 +5595,25 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zyncapp-host"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "libzync",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "swiftsync-verify",
+ "zyncapp-methods",
+]
+
+[[package]]
+name = "zyncapp-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
 ]

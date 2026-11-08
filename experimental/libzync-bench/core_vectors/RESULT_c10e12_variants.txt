@@ -1,0 +1,6 @@
+# c10e12 (a9dd2da5...), 2026-11-05: Core 28's script_tests / tx_valid / tx_invalid with every flag variant (22,666 cases), libsecp path, 4 parts in parallel
+p0: CORE_VECTORS [libsecp] 5667 agree (171 of them by a guest abort where Core catches a throw), 0 differ, of 5667 (309411061 cycles)
+p1: CORE_VECTORS [libsecp] 5667 agree (174 of them by a guest abort where Core catches a throw), 0 differ, of 5667 (311215688 cycles)
+p2: CORE_VECTORS [libsecp] 5666 agree (170 of them by a guest abort where Core catches a throw), 0 differ, of 5666 (312341981 cycles)
+p3: CORE_VECTORS [libsecp] 5666 agree (164 of them by a guest abort where Core catches a throw), 0 differ, of 5666 (311368983 cycles)
+TOTAL: 22666 agree (679 by a guest abort where Core catches a throw), 0 differ, of 22666

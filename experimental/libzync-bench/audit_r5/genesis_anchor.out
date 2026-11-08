@@ -1,0 +1,4 @@
+mainnet M=6fcb65af355846a0f2ed846e2d35344934eaaf8636066ba620e1c54084e1822d: genesis anchor_id dc17a42542c306e4ac11f55af2341d30072de90875311fd6a2330d35448e657f
+ANCHOR_MATCH: the state's anchor_id equals the spec's genesis anchor
+signet M=4b91b085297f1a6e13c062b7c0580d53fed275dd0f0d895d7070d668ca1f5bd2: genesis anchor_id a7c7e9a591d0b05f96719862aa571ab94230487da3e3eb20c64a7fdd1613ce35
+ANCHOR_MATCH: the state's anchor_id equals the spec's genesis anchor

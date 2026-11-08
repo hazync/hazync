@@ -1,0 +1,14 @@
+# coord_test.sh, 2026-11-07, image bbf82800 (unchanged), dev mode, mainnet 1..4; plus CI's 128 coordinator test commands: 0 failures
+prep EXIT=0 bundles 8
+genesis tip 852c5c7e009317c2
+worker id EXIT=0
+prove 1 EXIT=0 / submit 1 EXIT=0: ✓ range 1: the coordinator re-verified your proof and put it on the board
+prove 2 EXIT=0 / submit 2 EXIT=0: ✓ range 2: the coordinator re-verified your proof and put it on the board
+run 3-4 EXIT=0
+✓ range 3 ... ✓ range 4 ... folding into one receipt: 2 → 1 (7s) ... ✓ range 3-4: the coordinator re-verified your proof and put it on the board
+RANGE-OK lo=2 hi=2 in_tip=2ba4f6a4090037b79a94e6e23f6cfb7051...
+verify-any block 2 claimed as starting at 1 EXIT=1 (want 1): REJECT the receipt is not anchored on the state before block 1
+verify-any 3-4 claimed as starting at 4 EXIT=1 (want 1): REJECT the receipt is not anchored on the state before block 4
+board: {"frontier_proof": {"height": 4, ...}}  (genesis-anchored frontier at 4)
+COORD_TEST_DONE
+(a first run submitted 3-4 with `prove` + `submit`: refused by the board's existing rule that a wide range must fold proofs already on the board; `run 3-4` submits the leaves first)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # In-zkVM NEGATIVE corpus: every consensus rule violated ONE AT A TIME, each of which must be REFUSED.
 #
-# docs/FUZZING.md asks for exactly this and pairs it with a positive corpus that must all prove. The
+# docs/history/FUZZING.md asks for exactly this and pairs it with a positive corpus that must all prove. The
 # positive half is covered elsewhere (fuzz-native/realvector.cpp: 892 real mainnet inputs, all valid;
 # and `host regress`). This is the other half — evidence the guest REJECTS what Core rejects, which
 # 892 passing inputs say nothing about.

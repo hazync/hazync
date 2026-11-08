@@ -1,0 +1,270 @@
+# libzync on real GPUs: the freeze candidate c14, measured 2026-11-06
+
+**What ran:** the product image c14 (`bbf82800`: coin log + counting trie as its own receipt + live-coin hash), one
+RunPod secure-cloud RTX PRO 6000 per run, driver `gpu/run_c14_pod.sh`. Every receipt **verified**. Spend: **$3.72** for
+two pods. Outputs: `~/libzync-gpu/gpu14/pod` (first) and `pod2` (rerun).
+
+| block 962,000, one card | first pod (Server Ed., host load ~55) | **rerun (Workstation Ed., EPYC 9575F, load ~13)** | design B, 10-29 |
+|---|---|---|---|
+| host build | 653 s | 352 s | 381 s |
+| hints + execute check | 161 s, aggregate **64,896,840** cycles = laptop | 118 s, same | |
+| 16 chunks | 678 s (36-57 s each) | **406 s** (23-37 s each) | 452 s |
+| aggregate, one card (trie update proved first) | 223 s (trie 92.8 s) | **132 s** (trie 51.1 s) | 65 s (no trie) |
+| **block** (chunks + aggregate) | 894 s | **537 s** | 517 s |
+| GPU busy, mean | 30% | 42% | |
+
+- **The first pod's slowdown was the host, not c14:** the same image and bundle on a quieter host ran 40% faster, and
+  its chunks beat design B's despite ~5% more cycles. No chunk needed a retry on either pod.
+- **c14 costs about what design B did per block** (537 vs 517 s) while also proving the coin log, the counting trie and
+  the live-coin hash. Against the canonical CORE guest: design B measured 8.6x card time on an A40 (9,990 vs 1,167 s);
+  scaled by 537/517, c14 is ESTIMATED at ~8.2x (not measured on the same card). c14's 440.6 M cycles a block are chunks
+  plus aggregate; the trie update is its own receipt on top (not measured separately on c14; 47 M on c10e5). In the pipeline the trie update (51 s) runs on its own card alongside the chunks; this control
+  runs it serially.
+- **Even the good host keeps the card under half busy** (42%): each chunk is its own process, and host-side witness
+  generation dominates. Two chunk processes per card is a cheap lever to measure (ROADMAP M3).
+
+**The first real join tree** (H-B d), rerun pod: blocks 1..8 proved as independent leaves, each a base step on a state
+from native prep (byte-identical to the proved chain), then a balanced tree of 7 joins over 3 levels.
+
+| | measured |
+|---|---|
+| leaves | 8 in 146 s, 18.2 s each |
+| joins | 7, **6.4 s each**, every one a single 2^20 segment (padded size; raw cycles not logged) |
+| joins of joins (levels 2-3) | same cost as level 1 |
+| root | journal **identical** to the linear chain's block 8 (`1cc0785d…`), verified against the image |
+| root receipt | 226,002 bytes (succinct) |
+
+So recursion works with real receipts: env::verify, assumption resolution, and a joined receipt that can be joined
+again. A whole-chain backfill of ~975 k blocks needs ~975 k joins over ~20 levels, every level parallel; at 6.4 s a
+join that is ~1,700 PRO 6000 card-hours of joins in total (~$4.3k at $2.49/hr): about 1.5% on top of the block proofs
+on the same card (c14: ~$278-295k on PRO 6000 with scripts checked, ESTIMATED, `cost/WHOLE_CHAIN_COST.md`).
+
+⚠ The first pod's join hung after leaf 1: `gpu-join.sh` waited on every background job, including the nvidia-smi
+logger, which never exits (the laptop dry run has no nvidia-smi). Fixed in 6f00c58 and dry-run tested with a stand-in
+logger that never exits.
+
+---
+
+# libzync on real GPUs: measured 2026-10-29
+
+**What ran:** the round-13 libzync guest (METHOD_ID `5e460bf3…`, branch `libzync-gpu`) proving real blocks on RunPod
+secure cloud.
+- Every number below is a measured wall-clock time, and every block receipt **verified**.
+- Total spend: **$10.35**.
+
+⛔ This is an experiment. The SwiftSync path still lacks its handover check, and batch verification is unreviewed. These are
+**speed** results, not a sound proof of the chain.
+
+## Headline
+
+| block | setup | proving wall (chunks + aggregate) | for comparison |
+|---|---|---|---|
+| 962,000 | 1× A40 | **1,167 s** (1,016 + 151) | CORE on the same card: **9,990 s** |
+| 962,000 | 1× RTX PRO 6000 | **517 s** (452 + 65) | |
+| 962,000 | 4× RTX PRO 6000, aggregate spread | **174 s** (141.2 + 32.6) | |
+| **969,122** (09-29 tip hour) | 4× RTX PRO 6000 | **197 s** (162.6 + 34.0) | **558.2 s on 38 cards**, 09-29 |
+| **969,118** (09-29 tip hour) | 4× RTX PRO 6000 | **220 s** (182.5 + 37.6) | **368.2 s on 38 cards**, 09-29 |
+
+- **Tip blocks run 2–3× faster on about one tenth of the cards.**
+- **Cost:**
+  - 4 dedicated PRO 6000s cost about **$1.66 per 10-minute block**, against **$15.83 per tip block** on 09-29.
+  - Card time alone is **$0.19 per block** on an A40 and **$0.36** on a PRO 6000. That is what a block costs when spare capacity
+    does backlog work.
+- **vs CORE, measured in seconds:**
+  - Card time: **8.6×** (9,990 vs 1,167 s on the A40; the cycle count said 10.7×).
+  - Critical path: **13.3×** (max chunk + aggregate = 2,922 vs 219 s).
+- **No #119 faults:** 34 single-card proofs plus 48 fleet chunk proofs, all on the first attempt.
+- Not included in the times above: the receipt hop via the laptop (16–19 s; pod to pod would be about 1 s) and hint collection
+  (see below).
+
+## Detail
+
+**Single card, block 962,000**
+
+| | A40 ($0.59/hr) | RTX PRO 6000 ($2.49/hr) |
+|---|---|---|
+| build (prebuilt guest, CUDA host) | 956 s on 96 cores | 381 s on 128 cores |
+| execute check (one chunk) | journal `98e2652d`, 326,652,314 cycles, **= laptop** | same |
+| 16 chunks (≈22.4 M cycles each, 12–14 segments at po2 21) | 61–68 s each, Σ 1,016 s | 27–31 s each, Σ 452 s |
+| aggregate (57.6 M cycles, 32 segments) | 151 s | 65 s |
+| s per M cycles, chunks / aggregate | 2.84 / 2.62 | 1.26 / 1.13 |
+
+- **A40 per segment:** about 3.5 s per po2-21 segment, plus about 9 s of assembly per chunk.
+- **Fixed cost:** small chunks pay a fixed per-process and assembly cost, so they run at 2.84 s/Mcycle against CORE's 2.24.
+
+**CORE baseline:** A40, canonical v0.22.1 host, `37987b85`, the same block in 16 chunks.
+
+| | measured |
+|---|---|
+| per-chunk cycles | 172–255 M (Σ 3,369.5 M, matching the laptop) |
+| 16 chunks | 389–558 s each, **Σ 7,626 s** |
+| aggregate (555 segments) | **2,364 s** |
+| whole block, one card | **9,990 s** (2 h 46 m) |
+
+**Fleet: 4× PRO 6000, 4 separate single-card pods**
+- No 2- or 4-GPU PRO 6000 box was available on secure cloud.
+- Chunks:
+  - pod k proved chunks i ≡ k (mod 4);
+  - receipts went to pod A;
+  - pod A ran `seg-serve` (HAZYNC_AGG=1, HAZYNC_SEG_REMOTE=1);
+  - each of the 4 pods ran one `seg-connect` worker; A's own connected over loopback.
+- Every worker attached over A's public port. No hairpin problem with these four IPs.
+
+| block | per-pod lane time (A / B / C / D) | aggregate: segments, segment phase, assembly | aggregate wall |
+|---|---|---|---|
+| 962,000 | 141.2 / 104.0 / 112.0 / 112.0 s | 32 seg, 22.9 s, 9.0 s | 32.6 s (one card: 65 s) |
+| 969,122 | 162.6 / 123.2 / 131.6 / 127.5 s | 32 seg, 22.3 s, 10.1 s | 34.0 s |
+| 969,118 | 182.5 / 139.4 / 149.2 / 143.7 s | 39 seg, 26.3 s, 10.1 s | 37.6 s |
+
+⚠ **Pod A was about 25% slower than the others on all three blocks**, and it alone set the chunk-phase wall. That matches
+the stable per-card effect found on 09-29 (memory: project_hazync_tip_hour_4_measured). With A at the others' speed, the chunk
+phase is about 110–145 s and a tip block takes about 2.5–3 minutes.
+
+**Tip blocks 969,118 and 969,122**
+- **Block files:** `mkblock.py` builds each one from the tip bridge's node (`getblock <hash> 3`). As a positive control it
+  regenerated `block_962000.json` **byte for byte**, before it was trusted for the tip blocks.
+- **Hints:** collected on the pods with the same host.
+- **Checks:** both passed the hinted full execute (`ok=true` ×16, aggregate exit 0).
+
+| block | inputs | libzync chunk cycles | ECMH ops | hint collect + check |
+|---|---|---|---|---|
+| 969,122 | 9,047 | 425.1 M (max 29.4 M) | 5,744 | 314 + 132 s |
+| 969,118 | 8,441 | 488.5 M (max 33.1 M) | 13,184 | 231 + 118 s |
+
+## Improvements and next steps
+
+Ranked by expected payoff per unit of work.
+
+### Speed: the tip block's critical path
+
+1. **Overlap the aggregate with chunk proving.**
+   - Today the aggregate (33–38 s) waits for every chunk receipt.
+   - It needs only the chunk *journals* to execute, and those exist as soon as each chunk is **executed**, seconds into
+     the block. The receipts are needed only when its assumptions are resolved, at the very end.
+   - So: execute chunks, start aggregate segments at once, prove chunks alongside, resolve last.
+   - Expected: the block costs about the chunk phase + 10 s, i.e. about **−25 s per block**.
+2. **Balance the chunk phase.**
+   - Replace static round-robin with a pull queue (work stealing) over 32 smaller chunks, or weight the lanes by each card's
+     measured speed.
+   - The slow pod cost 30–40 s per block today.
+   - Expected: the chunk phase falls from 141–183 s to about 110–145 s.
+3. **Spread chunk segments as well,** not only the aggregate's.
+   - One global segment pool for chunks and aggregate removes lanes and stragglers altogether. seg-serve already does
+     this for one session.
+   - Expected: the block approaches (total segments × per-segment time) / cards + serial floor, i.e. roughly
+     **90–120 s on 4 cards**.
+4. **Keep the prover resident.**
+   - Each `prove-chunk` is a fresh process: it loads the block, builds the prover server, assembles alone (about 9 s on the A40).
+   - A long-lived worker per card that takes jobs removes this per-chunk cost.
+5. **Move receipts pod to pod,** or let workers upload them straight to the coordinator over the seg-serve connection.
+   About −17 s per block today.
+
+### Readiness: things a live tip run needs
+
+6. **Fast native hints.**
+   - Hint collection today re-executes every chunk *unbatched* in the zkVM (230–315 s), then runs a hinted check.
+   - Both kinds of hint can be computed **natively** from the block + prevouts in seconds:
+     - batch hints (R points, valid bits);
+     - ECMH adds/subs.
+   - Without this, hints cost more than proving.
+7. **A block-JSON source at the tip.** `mkblock.py` from a node is enough. It was not timed today: it ran well inside a few minutes per block.
+   Fold it into the bridge, which already holds the block and the coins.
+8. **A live 1-hour tip run** on 4 cards with this pipeline, measuring end to end against real block arrival, including arming
+   and staging overheads. On 09-29 those cost about 86 s and about 110 s per block.
+
+### Coverage and soundness: before any claim beyond speed
+
+9. **The SwiftSync handover check**: without it the SwiftSync path is not sound on its own.
+   - Also handle the two BIP30-grandfathered blocks on the agg-lite path.
+10. **A review of batch ECDSA/Schnorr verification.** Covers the Fiat–Shamir transcript, hint validity, and the
+    fallback cases: 1–66 fallbacks per chunk were seen on the tip blocks.
+11. **More blocks,** chosen to stress the cost model:
+    - a taproot- and inscription-heavy block;
+    - a block with many CHECKMULTISIG inputs (969,118 had up to 66 fallbacks in one chunk);
+    - an old, small block.
+    Refit the packer if the per-chunk spread grows.
+12. **Card choice:** A40 is cheapest per block ($0.19) for backlog proving; PRO 6000 is the tip card.
+    - Measure an H100 or B200 on one chunk and the aggregate before buying time on them. Their per-dollar speed is
+      unmeasured on this guest.
+
+
+## Phase 1 follow-up, same day: the live-tip pipeline (rehearsal on 969,122)
+
+**What was built.** All host-side changes; METHOD_ID is unchanged.
+
+| piece | what it does | evidence |
+|---|---|---|
+| `host libzync-hints <dir>` | All hint files for a block in one pass: chunks execute in parallel, R is computed with libsecp, ECMH natively, and the aggregate collect reuses the chunk executions | 969,122 hints **byte-identical** to the collect-log path (16/16 batch files + ecmh.bin). **58 s on 4 laptop threads, 26.5 s on the pod**, against ~450 s before |
+| seg-serve `HAZYNC_AGG_EARLY=1` | The aggregate starts from chunk claims that A executes itself (14.4 s); real receipts are awaited only at resolve and matched to the session's assumption order **by claim digest** | The first try failed: **the session lists assumptions in REVERSE chunk order** (15→0). Matching by digest fixed it; the receipt verified |
+| work-stealing lanes | Chunks are claimed on A with an atomic `mkdir`; receipts go pod→A directly (`.tmp` + rename) | lanes ended within **8 s** of each other (136–145 s), against a 40 s straggler with fixed lanes |
+| `fleet/live/tiplive.sh` | Tip follower: the bridge node builds the block file (`mkblock.py`, 3.0 s on a tip block) and pushes it straight to A; A computes hints and copies them to the peers; lanes and the early aggregate run; done on a verified receipt. `REPLAY=h` runs it as a rehearsal | below |
+
+**Measured end to end:** block 969,122, 4× RTX PRO 6000, from "block detected" to a verified block receipt.
+
+| stage | time since detection |
+|---|---|
+| block file on A (built on the bridge node, pushed directly) | 6.5 s |
+| all hints computed | +26.5 s |
+| hints on all peers | 41.3 s |
+| chunks (work-stealing) + early aggregate → **verified block receipt** | **191.0 s** |
+
+- **Proving portion: 150 s,** against 197 s before (162.6 chunks + 34.0 aggregate).
+- **The aggregate now costs ~3.5 s after the last chunk** instead of 33–38 s. Its 31 segments were proved in the first 28.6 s, sharing the GPUs with chunks. The price: each pod's first chunk ran 35–44 s instead of ~31 s.
+- **Hints are no longer the blocker** (26.5 s, against ~450 s).
+- **Not done: a live tip window.** The credit ran out: bring-up, two rehearsals and a rebuild used it. The pipeline is ready for one with `./tiplive.sh <seconds>`.
+
+**Costs, for planning the next run.** 4× PRO 6000 is $9.96/hr. This session's bring-up took ~12 min (setup + bundle + build) before any proving. A 30-minute live window therefore needs about **$8–9 including bring-up**.
+
+### Updated next steps (live pipeline)
+1. **A live tip window** (~$9): the pipeline is built and rehearsed.
+2. **Hints in parallel with distribution:**
+   - start the lanes on A while hints copy to the peers;
+   - send `libzync-hints`' chunk claims to seg-serve, so A does not execute the chunks a second time (14.4 s of CPU at the start of every block).
+3. **Cut the serial head:** detection → hints on peers is 41 s. The block file and hints could stream to all pods at once, or every pod could compute its own hints: each has 128 cores and they are deterministic.
+4. **Item 3 of the plan above (a global segment pool)** is now the main speed lever. The block is ≈ chunk phase + 3.5 s, and the chunk phase is per-chunk process overhead plus proving.
+
+
+## Live tip run: 1 hour, 2026-10-29/30 (4× RTX PRO 6000, after a top-up)
+
+**What ran:** the rehearsed pipeline (`fleet/live/tiplive.sh`), following mainnet from 973,751 for 3,600 s. It was
+unattended: `live_hour.sh` harvested and terminated the pods, and `watchdog.sh` was armed to kill every pod on a
+balance under $3 or after 85 min. The chain produced **4 blocks** in the hour, then went quiet for 27 minutes.
+**All 4 were proved and verified.**
+
+| block | inputs | block file on A | hints | on all peers | **verified (from pickup)** | aggregate wait for last receipt |
+|---|---|---|---|---|---|---|
+| 973,752 | 8,863 | 10.9 s | 29.9 s | 50.9 s | **265.9 s** | 3.2 s |
+| 973,753 | 9,435 | 11.1 s | 30.3 s | 51.6 s | **291.8 s** | 6.6 s |
+| 973,754 | 7,887 | 10.6 s | 29.4 s | 49.5 s | **270.7 s** | 4.2 s |
+| 973,755 | 11,858 | 23.7 s | 31.4 s | 66.6 s | **332.2 s** | 7.8 s |
+
+**Latency:**
+- Every block was verified **within ~8 min of its header time**, inside the 10-minute interval.
+- 973,753 arrived while 973,752 was still proving, waited its turn, and finished 491 s after its header.
+- Header times are loose miner clocks; two came out negative, so these are indicative only.
+
+**Compared with 09-29** (5 blocks in an hour on 38 cards, $15.83 per block): the same job on **4 cards, ~$2.50 per
+block of fleet time, ~$10 for the hour**.
+
+**Slower than the rehearsal** (191 s on 969,122):
+- **Bigger blocks** (7.9–11.9 k inputs).
+- **Two of the four pods shared one host.** RunPod's PRO 6000 stock was all in one network at the time, and three of the
+  first four pods could not reach each other at all (hairpin blocked).
+- **Fix that worked:** pick the coordinator in a network every peer can reach, and admit a pod only after it reaches A
+  (`fleet/live/grab2.sh`). Ten consecutive deploys landed in the blocked network before this.
+
+**Lost:** pod A's own archive (its ssh went quiet at harvest). The per-block times and verification lines above had
+already been copied to the laptop by the driver.
+
+## Files
+
+- **Logs and receipts (laptop):** `~/libzync-gpu/`.
+  - Single-card runs: `outA.tgz` (A40), `outP6K.tgz` (PRO 6000).
+  - CORE baseline: `outC.tgz`.
+  - Fleet runs: `run/r4`, `run/t969122`, `run/t969118`.
+  - Tip-block files and hints: `run/block_96911{8,22}.json`, `run/th12{2,18}.tgz`.
+- **Live pipeline:** `fleet/live/` (`tiplive.sh`, `blockA.sh`, `lanew.sh`). Rehearsal harvest: `~/libzync-gpu/live/harvest/`.
+- **Scripts:**
+  - In this directory: `gpu-libzync.sh` (one card), `gpu-libzync-multi.sh` (one box, N GPUs; unused: no multi-GPU box was
+    available).
+  - Under `fleet/`: `run4.sh` with its pod scripts, and `mkblock.py`.

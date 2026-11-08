@@ -12,7 +12,7 @@
 # The four coprocessor primitives are supplied by testsupport/field_bigint2_native.c, a schoolbook
 # host reference. It stands in for risc0-crypto's Fq, so what these gates test is the BACKEND GLUE:
 # the representation, the lazy invariant, and libsecp's contracts. They do NOT test the coprocessor,
-# and they are NOT the digest gate -- see docs/FIELD_BIGINT2_BACKEND.md §5.
+# and they are NOT the digest gate -- see docs/history/FIELD_BIGINT2_BACKEND.md §5.
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

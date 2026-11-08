@@ -23,8 +23,14 @@
 #include <consensus/params.h>   // Consensus::Params (mainnet PoW parameters)
 #include <consensus/consensus.h> // MAX_BLOCK_WEIGHT / MAX_BLOCK_SIGOPS_COST / WITNESS_SCALE_FACTOR
 #include <kernel/chainparams.h> // real mainnet CChainParams::Main() (authoritative consensus constants)
+#ifdef HAZYNC_SIGNET
+#include <signet.h>             // CheckSignetBlockSolution (BIP325)
+#include <primitives/block.h>
+#endif
 #include <memory>
 #include <string>
+
+static const Consensus::Params& net_params();
 
 // Minimal byte reader satisfying the Stream interface Core's Unserialize needs (no streams.h).
 struct MiniReader {
@@ -49,15 +55,39 @@ static void le(unsigned char* b, uint64_t v, int n) { for (int i = 0; i < n; i++
 // Domain-separation tags — MUST equal hazync-utreexo's TAG_LEAF/TAG_NODE (accumulator/src/lib.rs) and
 // the guest Rust utreexo.rs. `scripts/check-utreexo.sh` gates all three.
 //
-// A leaf preimage is 57 + scriptPubKey bytes, so a 7-byte scriptPubKey yields a 64-byte preimage — the
-// same length an interior node hashes. Without a tag the leaf and interior domains genuinely overlap,
+// A leaf preimage is 58 + scriptPubKey bytes (tag included), so an untagged one would be 57 + len and a
+// 7-byte scriptPubKey would give a 64-byte preimage — the length an untagged interior node hashes. Without a tag the leaf and interior domains genuinely overlap,
 // and the only barrier is that a leaf preimage opens with a txid. A txid is the hash of a transaction
 // an attacker can construct and grind, so that is a cost argument, not a separation. One tag byte
 // makes it a property of the construction instead.
 static const unsigned char TAG_LEAF = 0x00;
 
+#ifdef HAZYNC_LEAF_ONEBUF
+// libzync round 12: the leaf preimage assembled in one buffer and hashed with ONE CSHA256::Write,
+// instead of nine small writes. Byte-identical preimage; false (caller uses the field-by-field path)
+// only for a scriptPubKey too long for the stack buffer.
+static bool hz_leaf(uint8_t* out, const unsigned char* txid, uint32_t vout, uint64_t value,
+                    const unsigned char* spk, size_t spk_len, uint32_t height, uint32_t cb, uint32_t mtp) {
+    unsigned char b[384];
+    if (spk_len > sizeof(b) - 58) return false;
+    b[0] = TAG_LEAF;
+    std::memcpy(b + 1, txid, 32);
+    le(b + 33, vout, 4);
+    le(b + 37, value, 8);
+    le(b + 45, spk_len, 4);
+    std::memcpy(b + 49, spk, spk_len);
+    unsigned char* t = b + 49 + spk_len;
+    le(t, height, 4);
+    t[4] = (unsigned char)cb;
+    le(t + 5, mtp, 4);
+    CSHA256().Write(b, 58 + spk_len).Finalize(out);
+    return true;
+}
+#endif
+
 // Canonical Hazync UTXO-leaf commitment for the coin spent by input `input_idx`:
-//   SHA256( TAG_LEAF || txid || vout || value || scriptPubKey || coin_height || is_coinbase || coin_mtp ).
+//   SHA256( TAG_LEAF || txid || vout || value || len(scriptPubKey) || scriptPubKey || coin_height
+//           || is_coinbase || coin_mtp ), byte-exact in docs/libzync/UTREEXO_FORMAT.md section 2.
 // Height, coinbase flag, and creation median-time-past are committed so maturity + BIP68 (height AND
 // time) checks can't lie about the coin's age.
 // Returns false without writing `out_leaf` when the witness cannot address the input; see the guard.
@@ -76,6 +106,11 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
     if (input_idx >= spent.size() || input_idx >= tx.vin.size()) return false;
     const COutPoint& op = tx.vin[input_idx].prevout;
     const CTxOut& coin = spent[input_idx];
+#ifdef HAZYNC_LEAF_ONEBUF
+    if (hz_leaf(out_leaf, reinterpret_cast<const unsigned char*>(op.hash.begin()), op.n, (uint64_t)coin.nValue,
+                reinterpret_cast<const unsigned char*>(coin.scriptPubKey.data()), coin.scriptPubKey.size(),
+                coin_height, coin_is_coinbase, coin_mtp)) return true;
+#endif
     CSHA256 h;
     unsigned char b8[8];
     h.Write(&TAG_LEAF, 1);
@@ -87,7 +122,7 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
     le(b8, coin.scriptPubKey.size(), 4); h.Write(b8, 4);
     h.Write(reinterpret_cast<const unsigned char*>(coin.scriptPubKey.data()), coin.scriptPubKey.size());
     le(b8, coin_height, 4); h.Write(b8, 4);
-    unsigned char cb = (unsigned char)(coin_is_coinbase ? 1 : 0); h.Write(&cb, 1);
+    unsigned char cb = (unsigned char)coin_is_coinbase; h.Write(&cb, 1);
     le(b8, coin_mtp, 4); h.Write(b8, 4);
     h.Finalize(out_leaf);
     return true;
@@ -111,6 +146,123 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
 // On any failure the leaf is ZEROED rather than left as whatever was in the caller's buffer — a
 // deterministic function must not return uninitialised memory, and zero is a value no real coin
 // hashes to, so it fails the accumulator delete rather than passing silently.
+#ifdef HAZYNC_TX_ONCE
+#include <map>
+// libzync EXPERIMENT: parse each transaction ONCE per guest run.
+//
+// The aggregate called ~6 of the functions below per transaction, and every one deserialised the
+// bytes again and most rebuilt a CTransaction -- which hashes the txid AND the wtxid in its
+// constructor. Measured on block 962,000: the CTransaction constructor alone was 36.8% of the
+// aggregate. This keeps one CTransaction per distinct transaction and hands every caller the same
+// object. The SAME Core types and functions consume it; only the number of parses changes.
+//
+// Keyed by (pointer, length), and a hit is CONFIRMED by comparing the stored bytes with the caller's,
+// so a reused buffer holding different bytes re-parses instead of returning a stale transaction.
+// Entries are never evicted: the guest validates one block and exits.
+struct HzCachedTx {
+    unsigned char head[32], tail[32];   // the hit guard: first / last 32 bytes (see hz_same_bytes)
+    std::unique_ptr<const CTransaction> tx;
+};
+// The hit guard. The key is (pointer, length), and risc0's default guest heap is a BUMP allocator:
+// dealloc never returns memory, so within one guest run no address is ever handed out twice and the
+// key alone identifies a buffer. (This guest enables no other allocator; `heap-embedded-alloc` would
+// break that and must not be combined with tx-once.) So a full compare is redundant, and it cost 9%
+// of the aggregate. What remains is a tripwire on the first and last 32 bytes, against a future
+// allocator change -- not the soundness argument.
+static void hz_remember(unsigned char* head, unsigned char* tail, const uint8_t* p, unsigned len) {
+    const unsigned k = len < 32 ? len : 32;
+    std::memcpy(head, p, k);
+    std::memcpy(tail, p + len - k, k);
+}
+static bool hz_same_bytes(const unsigned char* head, const unsigned char* tail, const uint8_t* p, unsigned len) {
+    const unsigned k = len < 32 ? len : 32;
+    return std::memcmp(head, p, k) == 0 && std::memcmp(tail, p + len - k, k) == 0;
+}
+// libzync round 11: the caches live at file scope so hz_cache_reset can empty them. Under agg-lite the
+// chunk calls hz_cache_reset before EVERY transaction, which is what makes a freeing allocator
+// (HAZYNC_TLSF) safe here: once addresses can be reused, (pointer, length) alone no longer identifies a
+// buffer, and an entry must never outlive the transaction it was made for. hz_tx_generation lets
+// caches in other TUs (the legacy sighash cache in interpreter.cpp) follow the same rule.
+extern "C" { unsigned hz_tx_generation = 0; }
+#ifdef HAZYNC_RAW_TXID
+static void hz_dsha_parts(uint256& out, const unsigned char* a, size_t na, const unsigned char* b, size_t nb,
+                          const unsigned char* c, size_t nc) {
+    unsigned char t[32];
+    CSHA256 h;
+    h.Write(a, na);
+    if (nb) h.Write(b, nb);
+    if (nc) h.Write(c, nc);
+    h.Finalize(t);
+    CSHA256().Write(t, 32).Finalize(out.begin());
+}
+// txid and wtxid from the raw bytes. A witness serialisation is
+//   version(4) | 0x00 0x01 | inputs..outputs (M) | witnesses | locktime(4)
+// and the txid's (no-witness) serialisation is version | inputs..outputs | locktime, so M = its size - 8.
+static void hz_seed_hashes(const CTransaction& tx, const uint8_t* raw, unsigned len) {
+    uint256 txid, wtxid;
+    if (!tx.HasWitness()) {
+        hz_dsha_parts(txid, raw, len, nullptr, 0, nullptr, 0);
+        tx.HzSetHashes(txid, txid);
+        return;
+    }
+    const size_t nowit = ::GetSerializeSize(TX_NO_WITNESS(tx));
+    if (len < 10 || raw[4] != 0x00 || raw[5] != 0x01 || nowit < 8 || 6 + (nowit - 8) + 4 > len) return;
+    hz_dsha_parts(txid, raw, 4, raw + 6, nowit - 8, raw + len - 4, 4);
+    hz_dsha_parts(wtxid, raw, len, nullptr, 0, nullptr, 0);
+    tx.HzSetHashes(txid, wtxid);
+}
+#endif
+static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx>& hz_tx_cache() {
+    static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx> c;
+    return c;
+}
+static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
+    HzCachedTx& e = hz_tx_cache()[{tx_bytes, tx_len}];
+    if (e.tx && hz_same_bytes(e.head, e.tail, tx_bytes, tx_len)) return *e.tx;
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
+                 reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    hz_remember(e.head, e.tail, tx_bytes, tx_len);
+    e.tx = std::make_unique<const CTransaction>(std::move(mtx));  // move: no deep copy of vin / vout / witness
+#ifdef HAZYNC_RAW_TXID
+    // Only when the parse consumed EVERY byte: Core's deserialiser rejects non-canonical compact sizes
+    // and superfluous witness records, so a fully consumed buffer IS the canonical serialisation, and
+    // hashing it equals re-serialising the parsed transaction. Any mistake changes the txid / wtxid,
+    // which the merkle root and the BIP141 commitment then reject.
+    if (r.p == r.e) hz_seed_hashes(*e.tx, tx_bytes, tx_len);
+#endif
+    return *e.tx;
+}
+#ifdef HAZYNC_AGG_LITE
+// The spent-coin vector, parsed ONCE per transaction: verify_inputs_batch_once, check_tx and
+// tx_full_sigops each parsed the same prevouts blob.
+struct HzCachedSpent { unsigned char head[32], tail[32]; bool ok = false; std::vector<CTxOut> v; };
+static std::map<std::pair<const uint8_t*, unsigned>, HzCachedSpent>& hz_spent_cache() {
+    static std::map<std::pair<const uint8_t*, unsigned>, HzCachedSpent> c;
+    return c;
+}
+static const std::vector<CTxOut>& cached_spent(const uint8_t* prevouts, unsigned len) {
+    HzCachedSpent& e = hz_spent_cache()[{prevouts, len}];
+    if (e.ok && hz_same_bytes(e.head, e.tail, prevouts, len)) return e.v;
+    MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
+                  reinterpret_cast<const std::byte*>(prevouts) + len};
+    e.v.clear();
+    pr >> e.v;
+    hz_remember(e.head, e.tail, prevouts, len);
+    e.ok = true;
+    return e.v;
+}
+#endif
+extern "C" void hz_cache_reset() {
+    hz_tx_cache().clear();
+#ifdef HAZYNC_AGG_LITE
+    hz_spent_cache().clear();
+#endif
+    ++hz_tx_generation;
+}
+#endif
+
 extern "C" int coin_leaves_batch(const uint8_t* tx_bytes, unsigned tx_len,
                                  const uint8_t* prevouts, unsigned prevouts_len,
                                  unsigned n,
@@ -123,9 +275,13 @@ extern "C" int coin_leaves_batch(const uint8_t* tx_bytes, unsigned tx_len,
 
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
 
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
@@ -153,7 +309,13 @@ extern "C" void coin_leaf_only(const uint8_t* tx_bytes, unsigned tx_len, unsigne
                                uint8_t* out_leaf) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent; pr >> spent;
@@ -171,14 +333,33 @@ extern "C" void coin_leaf_only(const uint8_t* tx_bytes, unsigned tx_len, unsigne
 // and identify in-block-created coins. Provably-unspendable outputs (Core CScript::IsUnspendable():
 // OP_RETURN, or script > MAX_SCRIPT_SIZE) never enter the UTXO set and are skipped. Each leaf uses the
 // SAME commitment as a spent coin, so a created-output leaf equals the leaf later presented to spend it:
-//   SHA256( txid || vout || value || scriptPubKey || height || is_coinbase || block_time ).
+//   SHA256( 0x00 || txid || vout || value || len(scriptPubKey) || scriptPubKey || height || is_coinbase
+//           || creation_mtp ), creation_mtp = the median-time-past of the creating block's PARENT
+//   (docs/libzync/UTREEXO_FORMAT.md section 2 is the byte-exact statement).
 // Writes n*32 leaf bytes into `out` and the tx's txid (32 bytes) into `out_txid`; returns n.
+// tx_out_leaves_mv: the same, and for each leaf written also its output index (`out_vout`, u32) and amount
+// (`out_value`, u64), when those are not null. The aggregate sorts a block's survivors by (txid, vout) and sums
+// their amounts, and an unspendable output skipped here would otherwise shift every later index.
+extern "C" uint32_t tx_out_leaves_mv(const uint8_t* tx_bytes, unsigned tx_len,
+                                     uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
+                                     uint8_t* out, uint8_t* out_txid, uint32_t* out_vout, uint64_t* out_value);
 extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
-                                  uint32_t height, uint32_t is_coinbase, uint32_t block_time,
+                                  uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
                                   uint8_t* out, uint8_t* out_txid) {
+    return tx_out_leaves_mv(tx_bytes, tx_len, height, is_coinbase, creation_mtp, out, out_txid, nullptr, nullptr);
+}
+extern "C" uint32_t tx_out_leaves_mv(const uint8_t* tx_bytes, unsigned tx_len,
+                                     uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
+                                     uint8_t* out, uint8_t* out_txid, uint32_t* out_vout, uint64_t* out_value) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+
     const uint256 txid = tx.GetHash();
     std::memcpy(out_txid, txid.begin(), 32);
     uint32_t n = 0;
@@ -186,6 +367,15 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
     for (uint32_t v = 0; v < tx.vout.size(); v++) {
         const CTxOut& o = tx.vout[v];
         if (o.scriptPubKey.IsUnspendable()) continue; // not part of the UTXO set (H3)
+#ifdef HAZYNC_LEAF_ONEBUF
+        if (hz_leaf(out + (size_t)n * 32, reinterpret_cast<const unsigned char*>(txid.begin()), v, (uint64_t)o.nValue,
+                    reinterpret_cast<const unsigned char*>(o.scriptPubKey.data()), o.scriptPubKey.size(),
+                    height, is_coinbase, creation_mtp)) {
+            if (out_vout) out_vout[n] = v;
+            if (out_value) out_value[n] = (uint64_t)o.nValue;
+            n++; continue;
+        }
+#endif
         CSHA256 h;
         h.Write(&TAG_LEAF, 1);
         h.Write(reinterpret_cast<const unsigned char*>(txid.begin()), 32);
@@ -195,12 +385,32 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
         le(b8, o.scriptPubKey.size(), 4); h.Write(b8, 4);
         h.Write(reinterpret_cast<const unsigned char*>(o.scriptPubKey.data()), o.scriptPubKey.size());
         le(b8, height, 4); h.Write(b8, 4);
-        unsigned char cb = (unsigned char)(is_coinbase ? 1 : 0); h.Write(&cb, 1);
-        le(b8, block_time, 4); h.Write(b8, 4);
+        unsigned char cb = (unsigned char)is_coinbase; h.Write(&cb, 1);
+        le(b8, creation_mtp, 4); h.Write(b8, 4);
         h.Finalize(out + (size_t)n * 32);
+        if (out_vout) out_vout[n] = v;
+        if (out_value) out_value[n] = (uint64_t)o.nValue;
         n++;
     }
     return n;
+}
+
+// The sum of every output's amount, spendable or not. coinlog: with the chunk's fee (inputs minus outputs) it gives the
+// amount of every coin the transaction spends, so the aggregate can keep the log's total without per-input amounts.
+// CheckTransaction bounds each output and the sum by MAX_MONEY; this runs before the block is refused for a transaction
+// that failed it, so the sum saturates rather than overflow (undefined in C++).
+extern "C" int64_t tx_total_out(const uint8_t* tx_bytes, unsigned tx_len) {
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes), reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+    int64_t s = 0;
+    for (const CTxOut& o : tx.vout) {
+        if (o.nValue < 0 || __builtin_add_overflow(s, o.nValue, &s)) return INT64_MAX;
+    }
+    return s;
 }
 
 // Batch form: txid and output leaves for a transaction, from the deserialise the chunk already did.
@@ -209,14 +419,14 @@ extern "C" uint32_t tx_out_leaves(const uint8_t* tx_bytes, unsigned tx_len,
 // decoding it again in the serial aggregate. The aggregate's `gather()` cost 143 M cycles on block
 // 962,000 doing exactly this work over bytes the chunks were already holding.
 //
-// ⚠ THE LEAF COMMITS TO `block_time` (the block's median-time-past), so a caller computing these in a
+// ⚠ THE LEAF COMMITS TO `creation_mtp` (the median-time-past of the block's parent), so a caller computing these in a
 // chunk must use the SAME value the aggregate will. Unlike the lock check, getting that wrong is
 // FAIL-CLOSED: a mismatched leaf will not match `root_next`, so the block is rejected rather than
 // wrongly accepted. A systematic mismatch breaks every block loudly instead of accepting bad ones.
 extern "C" uint32_t tx_out_leaves_from(const uint8_t* tx_bytes, unsigned tx_len,
-                                       uint32_t height, uint32_t is_coinbase, uint32_t block_time,
+                                       uint32_t height, uint32_t is_coinbase, uint32_t creation_mtp,
                                        uint8_t* out, uint8_t* out_txid) {
-    return tx_out_leaves(tx_bytes, tx_len, height, is_coinbase, block_time, out, out_txid);
+    return tx_out_leaves(tx_bytes, tx_len, height, is_coinbase, creation_mtp, out, out_txid);
 }
 
 
@@ -226,18 +436,56 @@ extern "C" uint32_t tx_out_leaves_from(const uint8_t* tx_bytes, unsigned tx_len,
 extern "C" uint32_t tx_wtxid_info(const uint8_t* tx_bytes, unsigned tx_len, uint8_t* out_wtxid) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx; r >> TX_WITH_WITNESS(mtx); CTransaction tx{mtx};
+#endif
+
     const uint256 w = tx.GetWitnessHash();
     std::memcpy(out_wtxid, w.begin(), 32);
     return tx.HasWitness() ? 1u : 0u;
 }
 
+#ifdef HAZYNC_AGG_LITE
+#ifndef HAZYNC_TX_ONCE
+#error "the libzync guest parses through cached_tx"
+#endif
+// Core's own consensus/tx_verify.cpp, compiled in core_tx_rules.cpp.
+int hz_tx_rules(const CTransaction& tx, const std::vector<CTxOut>& spent, unsigned start, unsigned k,
+                const uint32_t* ch, const uint32_t* cb, const uint32_t* cmtp,
+                int height, int64_t mtp, int64_t lock_cutoff, uint32_t script_flags, bool csv_active,
+                int64_t* out_fee, int64_t* out_weight, int64_t* out_sigops);
+int64_t hz_coinbase_sigops(const CTransaction& tx, uint32_t script_flags);
+int64_t hz_weight(const CTransaction& tx);
+
+extern "C" int hz_tx_rules_c(const uint8_t* tx_bytes, unsigned tx_len, const uint8_t* prevouts, unsigned prevouts_len,
+                             unsigned start, unsigned k, const uint32_t* ch, const uint32_t* cb, const uint32_t* cmtp,
+                             uint32_t height, uint32_t mtp, int64_t lock_cutoff, uint32_t script_flags,
+                             uint32_t csv_active, int64_t* out_fee, int64_t* out_weight, int64_t* out_sigops) {
+    return hz_tx_rules(cached_tx(tx_bytes, tx_len), cached_spent(prevouts, prevouts_len), start, k, ch, cb, cmtp,
+                       static_cast<int>(height), mtp, lock_cutoff, script_flags, csv_active != 0,
+                       out_fee, out_weight, out_sigops);
+}
+extern "C" int64_t hz_coinbase_sigops_c(const uint8_t* tx_bytes, unsigned tx_len, uint32_t script_flags) {
+    return hz_coinbase_sigops(cached_tx(tx_bytes, tx_len), script_flags);
+}
+extern "C" int64_t hz_weight_c(const uint8_t* tx_bytes, unsigned tx_len) {
+    return hz_weight(cached_tx(tx_bytes, tx_len));
+}
+#endif
+
 // Absolute locktime finality — exact Core IsFinalTx (consensus/tx_verify.cpp).
 extern "C" int is_final_tx(const uint8_t* tx_bytes, unsigned tx_len, int64_t height, int64_t block_time) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     if (mtx.nLockTime == 0) return 1;
     const int64_t LOCKTIME_THRESHOLD = 500000000;
     int64_t thr = ((int64_t)mtx.nLockTime < LOCKTIME_THRESHOLD) ? height : block_time;
@@ -273,8 +521,12 @@ extern "C" int tx_seqs_batch(const uint8_t* tx_bytes, unsigned tx_len, unsigned 
                              const uint32_t* input_idx, uint32_t* out_seqs, int32_t* out_version) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     *out_version = mtx.version;
     for (unsigned k = 0; k < n; k++) {
         const unsigned i = input_idx[k];
@@ -295,23 +547,27 @@ extern "C" int check_input_locks_batch(const uint8_t* tx_bytes, unsigned tx_len,
                                        int32_t* out_results) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
 
     const uint32_t DISABLE = 1u << 31, TYPE = 1u << 22, MASK = 0x0000ffff, GRANULARITY = 9;
     for (unsigned k = 0; k < n; k++) {
         const unsigned i = input_idx[k];
         if (i >= mtx.vin.size()) { out_results[k] = -43; continue; }
-        if (coin_is_coinbase[k] && spend_height < coin_height[k] + 100) { out_results[k] = -40; continue; }
+        if (coin_is_coinbase[k] && (uint64_t)spend_height < (uint64_t)coin_height[k] + 100) { out_results[k] = -40; continue; }
         uint32_t seq = mtx.vin[i].nSequence;
         int32_t res = 1;
-        if (spend_height >= 419328 && mtx.version >= 2 && !(seq & DISABLE)) {
+        if (spend_height >= (uint32_t)net_params().CSVHeight && mtx.version >= 2 && !(seq & DISABLE)) {
             if (seq & TYPE) {
                 uint64_t required = (uint64_t)coin_mtp[k] + (((uint64_t)(seq & MASK)) << GRANULARITY);
                 if ((uint64_t)spend_mtp < required) res = -42;
             } else {
-                uint32_t required = coin_height[k] + (seq & MASK);
-                if (spend_height < required) res = -41;
+                uint64_t required = (uint64_t)coin_height[k] + (seq & MASK); // 64-bit: no wraparound (audit 6)
+                if ((uint64_t)spend_height < required) res = -41;
             }
         }
         out_results[k] = res;
@@ -324,27 +580,31 @@ extern "C" int check_input_locks(const uint8_t* tx_bytes, unsigned tx_len, unsig
                                  uint32_t spend_height, uint32_t spend_mtp) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     // Fail closed on an out-of-range input index (mirrors verify_input's -60 guard) — otherwise a
     // malicious witness triggers an OOB std::vector access below rather than a clean rejection.
     if (input_idx >= mtx.vin.size()) return -43;
     // Coinbase maturity: a coinbase output is unspendable for COINBASE_MATURITY (100) blocks.
-    if (coin_is_coinbase && spend_height < coin_height + 100) return -40;
+    if (coin_is_coinbase && (uint64_t)spend_height < (uint64_t)coin_height + 100) return -40; // 64-bit (audit 6)
     // BIP68 relative locktime — only ENFORCED once CSV is active (Core sets LOCKTIME_VERIFY_SEQUENCE
     // from CSVHeight 419328; below that CalculateSequenceLocks imposes no constraint), and only for tx
     // version >= 2 with the disable bit clear. Gating on spend_height matches Core; without it the guest
     // rejects pre-CSV v2 txs with unmet relative locks that Core accepts.
     uint32_t seq = mtx.vin[input_idx].nSequence;
     const uint32_t DISABLE = 1u << 31, TYPE = 1u << 22, MASK = 0x0000ffff, GRANULARITY = 9;
-    if (spend_height >= 419328 && mtx.version >= 2 && !(seq & DISABLE)) {
+    if (spend_height >= (uint32_t)net_params().CSVHeight && mtx.version >= 2 && !(seq & DISABLE)) {
         if (seq & TYPE) {
             // Time-based: coin's creation MTP + (value << 9) seconds must have elapsed by this block's MTP.
             uint64_t required = (uint64_t)coin_mtp + (((uint64_t)(seq & MASK)) << GRANULARITY);
             if ((uint64_t)spend_mtp < required) return -42;
         } else {
-            uint32_t required = coin_height + (seq & MASK);
-            if (spend_height < required) return -41;
+            uint64_t required = (uint64_t)coin_height + (seq & MASK); // 64-bit: no wraparound (audit 6)
+            if ((uint64_t)spend_height < required) return -41;
         }
     }
     return 1;
@@ -354,22 +614,38 @@ extern "C" int check_input_locks(const uint8_t* tx_bytes, unsigned tx_len, unsig
 // amount rules (all values in MoneyRange, and for non-coinbase Σinputs ≥ Σoutputs so fee ≥ 0).
 // `prevouts` is the full spent-outputs vector for the tx (all inputs). Returns 1 valid, else a
 // negative code; `out_fee` gets Σin−Σout (0 for coinbase, handled at block level).
+#ifdef HAZYNC_AGG_LITE
+extern std::string hz_last_reject;
+#endif
 extern "C" int check_tx(const uint8_t* tx_bytes, unsigned tx_len,
                         const uint8_t* prevouts, unsigned prevouts_len,
                         int64_t* out_fee) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
+    #ifdef HAZYNC_AGG_LITE
+    const std::vector<CTxOut>& spent = cached_spent(prevouts, prevouts_len);
+#else
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent;
     pr >> spent;
+#endif
     if (!tx.IsCoinBase() && spent.size() != tx.vin.size()) return -24; // SEC-3: prevouts must match inputs
 
     TxValidationState state;
-    if (!CheckTransaction(tx, state)) return -20; // structural consensus failure
+    if (!CheckTransaction(tx, state)) { // structural consensus failure
+#ifdef HAZYNC_AGG_LITE
+        hz_last_reject = state.GetRejectReason(); // for the rig: the aggregate's coinbase check logs it
+#endif
+        return -20;
+    }
 
     CAmount sum_out = 0;
     for (const auto& o : tx.vout) sum_out += o.nValue; // per-output ranges checked in CheckTransaction
@@ -398,10 +674,18 @@ extern "C" int check_pow(const uint8_t* header) {
     std::memcpy(hash.begin(), h2, 32);
     uint32_t nBits = (uint32_t)header[72] | ((uint32_t)header[73] << 8) |
                      ((uint32_t)header[74] << 16) | ((uint32_t)header[75] << 24);
+#ifdef HAZYNC_AGG_LITE
+    return CheckProofOfWork(hash, nBits, net_params()) ? 1 : -31; // Core's own, from pow.cpp
+#endif
     bool neg, over, n2, o2;
     arith_uint256 target, powLimit;
     target.SetCompact(nBits, &neg, &over);
+#ifdef HAZYNC_SIGNET
+    (void)n2; (void)o2;
+    powLimit = UintToArith256(net_params().powLimit); // signet: Core's CheckProofOfWorkImpl bound exactly
+#else
     powLimit.SetCompact(0x1d00ffff, &n2, &o2); // mainnet consensus powLimit
+#endif
     if (neg || over || target == 0 || target > powLimit) return -30;
     if (UintToArith256(hash) > target) return -31;
     return 1;
@@ -450,11 +734,11 @@ extern "C" int check_witness_commitment(const uint8_t* cb, unsigned cb_len,
 // Compared against Core's own `CScript() << height` serialization (minimal push). 1 valid.
 // Defined further down (it builds CChainParams once); declared here so the BIP34 gate can read the
 // buried height out of Core rather than repeating it as a literal.
-static const Consensus::Params& mainnet_params();
+static const Consensus::Params& net_params();
 
 extern "C" int check_bip34(const uint8_t* cb, unsigned cb_len, uint32_t height) {
     // Read from Core's own compiled Consensus::Params rather than typed here — see core_bip34_height.
-    if (height < (uint32_t)mainnet_params().BIP34Height) return 1;
+    if (height < (uint32_t)net_params().BIP34Height) return 1;
     MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
@@ -482,8 +766,12 @@ extern "C" void merkle_root(const uint8_t* txids, uint32_t n, uint8_t* out_root,
 extern "C" int64_t coinbase_value(const uint8_t* tx_bytes, unsigned tx_len) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     // Detect the overflow instead of risking it (audit #5, N-2). Signed overflow is UB in C++, and
     // while Core's CheckTransaction independently rejects any tx whose output total leaves MoneyRange —
     // so no overflowed value has ever reached a decision — "unreachable" there is a property of another
@@ -515,9 +803,13 @@ extern "C" int64_t coinbase_value(const uint8_t* tx_bytes, unsigned tx_len) {
 extern "C" int is_coinbase_tx(const uint8_t* tx_bytes, unsigned tx_len) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
     return tx.IsCoinBase() ? 1 : 0;
 }
 
@@ -527,8 +819,12 @@ extern "C" int is_coinbase_tx(const uint8_t* tx_bytes, unsigned tx_len) {
 extern "C" uint32_t tx_vin_count(const uint8_t* tx_bytes, unsigned tx_len) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     return (uint32_t)mtx.vin.size();
 }
 
@@ -546,8 +842,12 @@ extern "C" int tx_input_prevout_txid(const uint8_t* tx_bytes, unsigned tx_len,
                                      uint32_t input_idx, uint8_t* out_txid) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& mtx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
+#endif
     if (input_idx >= mtx.vin.size()) return 0;
     const uint256 h = mtx.vin[input_idx].prevout.hash;
     std::memcpy(out_txid, h.begin(), 32);
@@ -559,9 +859,13 @@ extern "C" int tx_input_prevout_txid(const uint8_t* tx_bytes, unsigned tx_len,
 extern "C" void tx_wu_sigops(const uint8_t* tx_bytes, unsigned tx_len, int64_t* out_weight, int64_t* out_sigops) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
     int64_t base = (int64_t)::GetSerializeSize(TX_NO_WITNESS(tx));
     int64_t total = (int64_t)::GetSerializeSize(TX_WITH_WITNESS(tx));
     *out_weight = base * (WITNESS_SCALE_FACTOR - 1) + total;
@@ -577,23 +881,34 @@ extern "C" int64_t tx_full_sigops(const uint8_t* tx_bytes, unsigned tx_len,
                                   const uint8_t* prevouts, unsigned prevouts_len, unsigned flags) {
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+#ifdef HAZYNC_TX_ONCE
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+#endif
     int64_t legacy = 0;
     for (const auto& in : tx.vin) legacy += in.scriptSig.GetSigOpCount(false);
     for (const auto& o : tx.vout) legacy += o.scriptPubKey.GetSigOpCount(false);
     int64_t cost = legacy * WITNESS_SCALE_FACTOR;
-    if (tx.IsCoinBase() || prevouts_len == 0) return cost;
+    if (tx.IsCoinBase()) return cost;
+    // A non-coinbase tx with no spent coins is malformed: fail CLOSED with the N3 poison cost below, rather
+    // than return the legacy-only cost and rely on another function trapping on the same buffer (audit 6).
+    if (prevouts_len == 0) return 1LL << 40;
 
+    #ifdef HAZYNC_AGG_LITE
+    const std::vector<CTxOut>& spent = cached_spent(prevouts, prevouts_len);
+#else
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent;
     pr >> spent;
+#endif
     // N3: a non-coinbase tx with fewer spent coins than inputs is malformed. Fail CLOSED with a poison
     // sigop cost (>> MAX_BLOCK_SIGOPS_COST, but small enough that summing across a block can't overflow
     // i64) so sigops_ok becomes false — instead of silently returning the legacy-only cost and leaning on
-    // verify_input's independent -60 rejection. (The coinbase / prevouts_len==0 case returned above.)
+    // verify_input's independent -60 rejection. (Coinbase and prevouts_len==0 returned above.)
     if (spent.size() < tx.vin.size()) return 1LL << 40;
     for (size_t i = 0; i < tx.vin.size(); i++) {
         const CScript& spk = spent[i].scriptPubKey;
@@ -624,10 +939,69 @@ std::string FormatISO8601Date(int64_t) { return std::string(); }
 // nPowTargetTimespan/Spacing, the buried soft-fork heights, the halving interval — and asserts the
 // genesis hash. Constructed once (function-static) and reused; every consensus constant below comes
 // from here rather than a hand-typed literal, so there is nothing to mis-transcribe.
-static const Consensus::Params& mainnet_params() {
+//
+// libzync HAZYNC_SIGNET: the same, for default signet -- CChainParams::SigNet with no options builds
+// Core's CSigNetParams with its built-in challenge (and asserts that genesis hash too).
+static const Consensus::Params& net_params() {
+#if defined(HAZYNC_REGTEST)
+    // BIP34 at 110, not 1, so the rig can stage a real repeat. bitcoind runs with -testactivationheight=bip34@110.
+    static const std::unique_ptr<const CChainParams> params = [] {
+        CChainParams::RegTestOptions o{};
+        o.activation_heights[Consensus::DEPLOYMENT_HEIGHTINCB] = 110;
+        return CChainParams::RegTest(o);
+    }();
+#elif defined(HAZYNC_SIGNET)
+    static const std::unique_ptr<const CChainParams> params = CChainParams::SigNet(CChainParams::SigNetOptions{});
+#else
     static const std::unique_ptr<const CChainParams> params = CChainParams::Main();
+#endif
     return params->GetConsensus();
 }
+
+// libzync/src/net.rs pins (assert_core_constants): powLimit as compact bits and the genesis hash.
+extern "C" uint32_t core_pow_limit_bits() { return UintToArith256(net_params().powLimit).GetCompact(); }
+extern "C" void core_genesis_hash(uint8_t* out) { std::memcpy(out, net_params().hashGenesisBlock.begin(), 32); }
+// The proof's profile word (ChainState.profile) reads "scripts skipped" from HERE, the translation unit
+// whose verify_inputs_batch_once actually skips them, so the label cannot disagree with what was checked.
+extern "C" uint32_t hz_no_scripts() {
+#ifdef HAZYNC_NO_SCRIPTS
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+#ifdef HAZYNC_SIGNET
+// BIP325 through Core's own, unmodified CheckSignetBlockSolution (signet.cpp is compiled in).
+//
+// It reads, of the block: the header, vtx[0] in full (the commitment it strips the solution from) and
+// GetHash() of every other transaction (the modified merkle root). The libzync aggregate never holds
+// those transactions -- only their txids, which the block's merkle check has just bound to the header.
+// So vtx[1..] are empty placeholders whose lazily computed txid is SEEDED with the bound value
+// (HAZYNC_RAW_TXID's HzSetHashes): GetHash() returns exactly what the real transaction's would.
+extern "C" int hz_check_signet(const uint8_t* header, const uint8_t* cb, uint32_t cb_len,
+                               const uint8_t* txids, uint32_t n_txids) {
+    CBlock block;
+    {
+        MiniReader r{reinterpret_cast<const std::byte*>(header), reinterpret_cast<const std::byte*>(header) + 80};
+        r >> static_cast<CBlockHeader&>(block);
+    }
+    {
+        MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
+        CMutableTransaction mcb;
+        r >> TX_WITH_WITNESS(mcb);
+        block.vtx.push_back(MakeTransactionRef(std::move(mcb)));
+    }
+    for (uint32_t i = 0; i < n_txids; i++) {
+        uint256 t;
+        std::memcpy(t.begin(), txids + 32 * i, 32);
+        CTransactionRef p = MakeTransactionRef(CMutableTransaction{});
+        p->HzSetHashes(t, t);
+        block.vtx.push_back(std::move(p));
+    }
+    return CheckSignetBlockSolution(block, net_params()) ? 1 : 0;
+}
+#endif
 
 // Difficulty retarget: the expected nBits for the block after `prev_bits`, given the epoch's first
 // block time and the last block's time. This drives Bitcoin Core's REAL, unmodified
@@ -639,7 +1013,7 @@ extern "C" uint32_t calc_next_bits(uint32_t prev_bits, int64_t first_time, int64
     pindexLast.nTime   = (uint32_t)last_time;
     pindexLast.nHeight = 0;  // unused on the mainnet retarget path (only the BIP94/min-difficulty
                              // branches read it, and both are disabled for mainnet params)
-    return CalculateNextWorkRequired(&pindexLast, first_time, mainnet_params());
+    return CalculateNextWorkRequired(&pindexLast, first_time, net_params());
 }
 
 // Cumulative chainwork: cum += GetBlockProof(nBits) (real Core formula, chain.cpp), 256-bit.
@@ -659,9 +1033,68 @@ extern "C" void add_work(uint8_t* cum, uint32_t nBits) {
 
 // Block subsidy — Core's GetBlockSubsidy formula (the 6-line body lives in validation.cpp, which is
 // un-carvable; this is that body verbatim). The one consensus constant, the halving interval, is read
-// from Core's chainparams (mainnet_params().nSubsidyHalvingInterval) rather than hard-typed.
+// from Core's chainparams (net_params().nSubsidyHalvingInterval) rather than hard-typed.
+#ifdef HAZYNC_AGG_LITE
+// Core's own functions, lifted from validation.cpp by build.rs (core_block_rules.cpp).
+int64_t hz_block_subsidy(int height);
+uint32_t hz_block_flags(int height, const uint8_t* block_hash);
+bool hz_header_rules(const uint8_t* header, int height, uint32_t prev_bits, int64_t prev_time, int64_t prev_mtp, int64_t period_first_time);
+bool hz_block_rules(const uint8_t* header, const CMutableTransaction& coinbase, const uint8_t* wtxids, uint32_t n,
+                    bool other_has_witness, int height, int64_t prev_mtp, int64_t weight);
+const Consensus::Params& hz_net_params() { return net_params(); }
+extern "C" uint32_t hz_block_flags_c(uint32_t height, const uint8_t* block_hash) { return hz_block_flags(static_cast<int>(height), block_hash); }
+extern std::string hz_last_reject;
+extern "C" unsigned hz_reject_reason(char* out, unsigned cap) {
+    unsigned n = hz_last_reject.size() < cap ? hz_last_reject.size() : cap;
+    std::memcpy(out, hz_last_reject.data(), n);
+    return n;
+}
+extern "C" int hz_header_rules_c(const uint8_t* header, uint32_t height, uint32_t prev_bits, uint32_t prev_time,
+                                 uint32_t prev_mtp, uint32_t period_first_time) {
+    return hz_header_rules(header, static_cast<int>(height), prev_bits, prev_time, prev_mtp, period_first_time) ? 1 : 0;
+}
+extern "C" int hz_block_rules_c(const uint8_t* header, const uint8_t* cb, unsigned cb_len, const uint8_t* wtxids, uint32_t n,
+                                uint32_t other_has_witness, uint32_t height, uint32_t prev_mtp, int64_t weight) {
+    MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    return hz_block_rules(header, mtx, wtxids, n, other_has_witness != 0, static_cast<int>(height), prev_mtp, weight) ? 1 : 0;
+}
+// Core's own CBlockIndex::GetMedianTimePast, on a chain of real index entries. `times` runs oldest first.
+extern "C" uint32_t hz_median_time_past(const uint32_t* times, uint32_t n) {
+    if (n == 0) return 0;
+    std::vector<CBlockIndex> v(n);
+    for (uint32_t i = 0; i < n; i++) {
+        v[i].nTime = times[i];
+        v[i].pprev = i ? &v[i - 1] : nullptr;
+    }
+    return static_cast<uint32_t>(v[n - 1].GetMedianTimePast());
+}
+#endif
+#ifdef HAZYNC_AGG_LITE
+// The height a coinbase's scriptSig indicates: the Y for which `CScript() << Y` is its prefix, BIP34's own test
+// (validation.cpp, bad-cb-height). 0 if it indicates none, 0xFFFFFFFF for a value no block height can be.
+extern "C" uint32_t hz_indicated_height(const uint8_t* cb, unsigned cb_len) {
+    MiniReader r{reinterpret_cast<const std::byte*>(cb), reinterpret_cast<const std::byte*>(cb) + cb_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    if (mtx.vin.empty() || mtx.vin[0].scriptSig.empty()) return 0;
+    const CScript& ss = mtx.vin[0].scriptSig;
+    int64_t v = 0;
+    const unsigned op = ss[0];
+    if (op >= 0x51 && op <= 0x60) v = op - 0x50;
+    else if (op >= 1 && op <= 5 && ss.size() > op) { for (unsigned i = op; i >= 1; i--) v = (v << 8) | ss[i]; }
+    else return 0;
+    const CScript expect = CScript() << v;
+    if (ss.size() < expect.size() || !std::equal(expect.begin(), expect.end(), ss.begin())) return 0;
+    return v > 0x7fffffff ? 0xFFFFFFFFu : static_cast<uint32_t>(v);
+}
+#endif
 extern "C" int64_t block_subsidy(uint32_t height) {
-    int halvings = height / mainnet_params().nSubsidyHalvingInterval;
+#ifdef HAZYNC_AGG_LITE
+    return hz_block_subsidy(static_cast<int>(height));
+#endif
+    int halvings = height / net_params().nSubsidyHalvingInterval;
     if (halvings >= 64) return 0;
     int64_t subsidy = 50LL * 100000000LL; // 50 * COIN
     subsidy >>= halvings;
@@ -670,19 +1103,19 @@ extern "C" int64_t block_subsidy(uint32_t height) {
 
 // Consensus constants sourced from Core's own compiled source, exposed to the Rust guest so it can pin
 // every hard-coded literal to Core's value at runtime (a mismatch aborts the proof). Heights + retarget
-// interval come from chainparams (mainnet_params()); the weight/sigop limits from consensus/consensus.h;
+// interval come from chainparams (net_params()); the weight/sigop limits from consensus/consensus.h;
 // the SCRIPT_VERIFY_* bit positions from script/interpreter.h — so nothing consensus-relevant is a
 // magic number we could have typed wrong.
-extern "C" uint32_t core_bip66_height()            { return (uint32_t)mainnet_params().BIP66Height; }
-extern "C" uint32_t core_bip65_height()            { return (uint32_t)mainnet_params().BIP65Height; }
-extern "C" uint32_t core_csv_height()              { return (uint32_t)mainnet_params().CSVHeight; }
-extern "C" uint32_t core_segwit_height()           { return (uint32_t)mainnet_params().SegwitHeight; }
+extern "C" uint32_t core_bip66_height()            { return (uint32_t)net_params().BIP66Height; }
+extern "C" uint32_t core_bip65_height()            { return (uint32_t)net_params().BIP65Height; }
+extern "C" uint32_t core_csv_height()              { return (uint32_t)net_params().CSVHeight; }
+extern "C" uint32_t core_segwit_height()           { return (uint32_t)net_params().SegwitHeight; }
 // BIP34Height was the ONE buried height still hand-typed (audit #3 phase-2 sweep). Its four siblings
 // were already read from Core; this one was a literal in two places, so the claim that nothing
 // consensus-relevant is a hand-typed magic number did not hold for it.
-extern "C" uint32_t core_bip34_height()            { return (uint32_t)mainnet_params().BIP34Height; }
-extern "C" uint32_t core_retarget_interval()       { return (uint32_t)mainnet_params().DifficultyAdjustmentInterval(); }
-extern "C" uint32_t core_subsidy_halving_interval(){ return (uint32_t)mainnet_params().nSubsidyHalvingInterval; }
+extern "C" uint32_t core_bip34_height()            { return (uint32_t)net_params().BIP34Height; }
+extern "C" uint32_t core_retarget_interval()       { return (uint32_t)net_params().DifficultyAdjustmentInterval(); }
+extern "C" uint32_t core_subsidy_halving_interval(){ return (uint32_t)net_params().nSubsidyHalvingInterval; }
 extern "C" int64_t  core_max_block_weight()        { return (int64_t)MAX_BLOCK_WEIGHT; }
 extern "C" int64_t  core_max_block_sigops_cost()   { return (int64_t)MAX_BLOCK_SIGOPS_COST; }
 extern "C" int64_t  core_witness_scale_factor()    { return (int64_t)WITNESS_SCALE_FACTOR; }
@@ -742,6 +1175,93 @@ extern "C" int verify_inputs_batch(const uint8_t* tx_bytes, unsigned tx_len,
     return 1;
 }
 
+#ifdef HAZYNC_TX_ONCE
+// libzync EXPERIMENT: verify_inputs_batch + tx_seqs_batch + tx_wtxid_info from ONE deserialise and
+// ONE CTransaction. The chunk used to call all three per transaction, so every transaction was
+// deserialised three times and its txid and wtxid hashed twice. Outputs are filled BEFORE the -60
+// early return so they are defined on every path, exactly as the three separate calls defined them.
+extern "C" int verify_inputs_batch_once(const uint8_t* tx_bytes, unsigned tx_len,
+                                        const uint8_t* prevouts, unsigned prevouts_len,
+                                        unsigned flags, unsigned n,
+                                        const uint32_t* input_idx,
+                                        const uint32_t* coin_height,
+                                        const uint32_t* coin_is_coinbase,
+                                        const uint32_t* coin_mtp,
+                                        int32_t* out_results,
+                                        uint8_t* out_leaves,
+                                        uint32_t* out_seqs, int32_t* out_version,
+                                        uint8_t* out_wtxid, uint32_t* out_has_witness) {
+#ifdef HAZYNC_AGG_LITE
+    // agg-lite: the chunk then calls tx_out_leaves / check_tx / tx_full_sigops / ... on the same
+    // bytes, and each of those goes through cached_tx. Parse into the cache once, here.
+    const CTransaction& tx = cached_tx(tx_bytes, tx_len);
+#else
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
+                 reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    CTransaction tx{mtx};
+#endif
+
+    // tx_wtxid_info's outputs.
+    const uint256 w = tx.GetWitnessHash();
+    std::memcpy(out_wtxid, w.begin(), 32);
+    *out_has_witness = tx.HasWitness() ? 1u : 0u;
+    // tx_seqs_batch's outputs.
+    *out_version = tx.version;
+    for (unsigned k = 0; k < n; k++) {
+        const unsigned i = input_idx[k];
+        out_seqs[k] = (i < tx.vin.size()) ? tx.vin[i].nSequence : 0xFFFFFFFFu;
+    }
+
+    #ifdef HAZYNC_AGG_LITE
+    const std::vector<CTxOut>& spent = cached_spent(prevouts, prevouts_len);
+#else
+    MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
+                  reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
+    std::vector<CTxOut> spent;
+    pr >> spent;
+#endif
+    if (spent.size() != tx.vin.size()) return -60;
+
+#ifdef HAZYNC_NO_SCRIPTS
+    // libzync "sweep 1" COST MEASUREMENT ONLY: everything but scripts and signatures (parse, wtxid,
+    // coin leaves for the SwiftSync total). Every input is reported valid. Never a real build.
+    for (unsigned k = 0; k < n; k++) {
+        const unsigned i = input_idx[k];
+        if (i >= spent.size()) { out_results[k] = -60; continue; }
+        if (out_leaves) coin_leaf(tx, spent, i, coin_height[k], coin_is_coinbase[k], coin_mtp[k],
+                                  out_leaves + 32 * k);
+        out_results[k] = 1;
+    }
+    return 1;
+#endif
+    PrecomputedTransactionData txdata;
+#ifdef HAZYNC_TXDATA_LAZY
+    // Core's own validation calls Init with force=false: compute the BIP143 / BIP341 precomputed
+    // hashes only if some input actually spends a witness program. force=true computed both for
+    // every transaction, legacy ones included.
+    txdata.Init(tx, std::vector<CTxOut>(spent), false);
+#else
+    txdata.Init(tx, std::vector<CTxOut>(spent), true);
+#endif
+
+    for (unsigned k = 0; k < n; k++) {
+        const unsigned i = input_idx[k];
+        if (i >= spent.size()) { out_results[k] = -60; continue; }
+        if (out_leaves) coin_leaf(tx, spent, i, coin_height[k], coin_is_coinbase[k], coin_mtp[k],
+                                  out_leaves + 32 * k);
+        const CTxIn& in = tx.vin[i];
+        TransactionSignatureChecker checker(&tx, i, spent[i].nValue, txdata, MissingDataBehavior::FAIL);
+        ScriptError err = SCRIPT_ERR_OK;
+        bool ok = VerifyScript(in.scriptSig, spent[i].scriptPubKey, &in.scriptWitness, flags,
+                               checker, &err);
+        out_results[k] = ok ? 1 : -(int)err - 1;
+    }
+    return 1;
+}
+#endif
+
 extern "C" int verify_input(const uint8_t* tx_bytes, unsigned tx_len,
                             unsigned input_idx,
                             const uint8_t* prevouts, unsigned prevouts_len,
@@ -776,4 +1296,32 @@ extern "C" int verify_input(const uint8_t* tx_bytes, unsigned tx_len,
     bool ok = VerifyScript(in.scriptSig, spent[input_idx].scriptPubKey, &in.scriptWitness, flags,
                            checker, &err);
     return ok ? 1 : -(int)err - 1; // negative encodes the ScriptError code
+}
+
+// Mode 10 (self-test on Core's own vectors, tx_valid / tx_invalid): CheckTransaction, then VerifyScript on every input
+// with `flags`, as Core's transaction_tests CheckTxScripts. Returns 1 (valid), -1000 (CheckTransaction refused), or the
+// first failing input's code as verify_input's (-(ScriptError) - 1).
+extern "C" int hz_test_tx(const uint8_t* tx_bytes, unsigned tx_len,
+                          const uint8_t* prevouts, unsigned prevouts_len, unsigned flags) {
+    MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
+                 reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
+    CMutableTransaction mtx;
+    r >> TX_WITH_WITNESS(mtx);
+    CTransaction tx{mtx};
+    MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
+                  reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
+    std::vector<CTxOut> spent;
+    pr >> spent;
+    TxValidationState st;
+    if (!CheckTransaction(tx, st) || st.IsInvalid()) return -1000;
+    if (spent.size() != tx.vin.size()) return -60;
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, std::vector<CTxOut>(spent), true);
+    for (unsigned i = 0; i < tx.vin.size(); i++) {
+        TransactionSignatureChecker checker(&tx, i, spent[i].nValue, txdata, MissingDataBehavior::FAIL);
+        ScriptError err = SCRIPT_ERR_OK;
+        if (!VerifyScript(tx.vin[i].scriptSig, spent[i].scriptPubKey, &tx.vin[i].scriptWitness, flags, checker, &err))
+            return -(int)err - 1;
+    }
+    return 1;
 }

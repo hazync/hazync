@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # THE GPU benchmark. One command per build, on a fresh GPU box.
 #
-# Everything in docs/BUILDS.md was measured in EXECUTE mode on CPU: cycles, digests, cycle
+# Everything in docs/history/BUILDS.md was measured in EXECUTE mode on CPU: cycles, digests, cycle
 # stragglers. Card counts were DERIVED from those by a fixed ratio. This is what turns them into
 # wall-clock, and it is the only thing hardware is needed for.
 #
@@ -34,7 +34,7 @@ grep -q sys_sha_compress "$CORE/src/crypto/sha256.cpp" || die "base not restored
 case "$MODE" in
   core)  PATCHES="0012-select-field-bigint2-backend 0013-lift-x-via-witness-hint"
          export HAZYNC_FIELD_BIGINT2=1 HAZYNC_LIFTX_HINT=1
-         # The PER-CURVE fit (`docs/BUILDS.md` §Core), not the older curve-blind one. 450020/450020
+         # The PER-CURVE fit (`docs/history/BUILDS.md` §Core), not the older curve-blind one. 450020/450020
          # priced Schnorr == ECDSA by assumption; measured, Core's Schnorr:ECDSA is 1.11x, and
          # correcting it is straggler 1.311 -> 1.210. This script shipped with the stale set.
          COSTS=(HAZYNC_COST_EC_OP=417798 HAZYNC_COST_SCHNORR_OP=462435 HAZYNC_COST_INPUT_BYTE=2 HAZYNC_COST_INPUT_BASE=41387)
@@ -43,7 +43,7 @@ case "$MODE" in
          export HAZYNC_BIGINT2_ECDSA=1 HAZYNC_LIFTX_HINT=1 HAZYNC_FIELD_BIGINT2=1 HAZYNC_BIGINT2_SCHNORR=1 \
                 HAZYNC_SCALAR_INV_ACCEL=1 HAZYNC_SHA_FASTPATH=1 HAZYNC_AGG_READSLICE=1 HAZYNC_SHA_D64_ACCEL=1
          # ⛔ Ghost ships DEFAULT packing constants. Core's refit is a REGRESSION here: 1.469 -> 1.884
-         # (1.469 is the DERIVED baseline; measured at default constants is 1.438 -- docs/BUILDS.md §1).
+         # (1.469 is the DERIVED baseline; measured at default constants is 1.438 -- docs/history/BUILDS.md §1).
          COSTS=()
          WANT="hazync_ecmult_verify hazync_lift_x_hint hazync_scalar_inverse hazync_fq_mul_limbs"; DENY="hazync_lift_x" ;;
   *) die "unknown mode '$MODE'" ;;
@@ -77,7 +77,7 @@ C=$(grep -oE 'cycles +[0-9]+' "$OUT/exec1.log" | tail -1 | awk '{print $2}')
 say "digest PASS; cycles $C"
 
 say "=== 2. sixteen chunks, PROVING — the wall-clock the card count actually needs ==="
-say "    ⏰ this is the number docs/BUILDS.md 4 says is derived rather than measured"
+say "    ⏰ this is the number docs/history/BUILDS.md §4 says is derived rather than measured"
 # ⛔ `prove-chunk` is SINGULAR and takes an index; there is no `prove-chunks`. An unrecognised
 # argument does not error -- it falls through to a demo path and exits 0 in twenty seconds, which
 # looks exactly like a successful run. Loop the indices explicitly, as scripts/gpu-stack-ab.sh does.

@@ -1,0 +1,76 @@
+# 2026-11-02: libzync-handover rebased onto libzync 6a339bd (branch head 7900b8d). Laptop, dev mode / execute mode.
+# Images (this worktree's path): regtest O2 8234e6ef..., N2 52695b6b... (O2 pinned at 101, pin not committed),
+# mainnet M2 8d1d6bbe..., signet S2 babe1e31...; same-path libzync 6a339bd mainnet baseline L6 6f3d3925...
+
+== handover/run.sh, O2 -> N2
+PASS O proves 1..100 from genesis
+PASS reject self_id: not the predecessor's
+PASS reject profile: handover: profile mismatch
+PASS reject lineage: predecessor lineage mismatch
+PASS reject forest: block forest
+PASS reject kind: not a ChainState
+PASS reject height: handover: height
+PASS reject wrong_image: predecessor chain proof invalid\|no receipt found\|assumption
+PASS reject no_receipt: predecessor chain proof invalid\|no receipt found\|assumption
+PASS O refuses is_base = 2
+PASS host refuses a receipt at the wrong height
+PASS N continues 101..110 by a handover
+PASS block 101 ran as a handover step
+PASS every block after the handover ran as ordinary recursion
+PASS O's state: its own id, zero lineage
+PASS after the handover the state carries N's id
+PASS anchor_id unchanged across the handover
+PASS lineage = the reference's digest of [O at first]; unchanged by later steps
+PASS block forest at 100 == the reference over real block hashes
+PASS block 7 checks against the state at 100
+PASS block forest at 110 == the reference over real block hashes
+PASS block 7 checks against the state at 110
+PASS state checks
+handover run.sh: 15/15 as expected
+RUN_EXIT=0
+
+== rig (core_rules/rig.py, ports 18992/18993), O2 vs Core 28.0
+RIG 95 cases, 94 agree, 1 deferred, 0 to look at
+RIG_EXIT=0
+
+== gate (core_rules/gate.py), M2
+CHUNK_JOURNALS vs round 8: IDENTICAL 16
+b962000 rc 0 chunks 361,594,461 aggregate 64,609,137 whole 426,203,598 []
+b170060 rc 0 chunks 5,533,228 aggregate 3,035,723 whole 8,568,951 []
+b692261 rc 0 chunks 424,654,046 aggregate 76,353,898 whole 501,007,944 []
+GATE_EXIT=0
+
+== gate, L6 (libzync 6a339bd, same path)
+CHUNK_JOURNALS vs round 8: IDENTICAL 16
+b962000 rc 0 chunks 361,594,437 aggregate 63,021,004 whole 424,615,441 []
+b170060 rc 0 chunks 5,533,210 aggregate 2,962,628 whole 8,495,838 []
+b692261 rc 0 chunks 424,653,664 aggregate 75,135,041 whole 499,788,705 []
+
+== SwiftSync regression (core_rules/swiftsync_regress.sh), M2 + S2; 2,800 ECMH collect stops removed (main.rs:2201, by design)
+== 1. block 962,000 valid
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  block validation cycles  64524147
+rc=0
+== 2. negative: is_base = 2 on an image with no predecessor pinned (must be refused, HANDOVER.md §4)
+REFUSED
+== 3. mainnet sweep 1..200 (saved), reference forest, max_time/profile; then a flip
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  max_time 1231753120 (block files' largest time 1..200: 1231753120) -> OK; profile 0x1 -> OK
+SWEEP_FAIL
+== 4. signet sweep 1..2600 (saved): reference forest, profile = libzync|signet
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  forest: 293 leaves (= coins unspent at H), roots 4
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  profile 0x5 -> OK  max_time 1599732600
+== 5. signet BIP325 check still works
+signet-check-test block 2523: one txid changed -> 0
+SIGNET_CHECK_OK
+R4_TESTS_DONE
+REG_EXIT=0
+
+== block forest of the sweep states vs scripts/libzync/block_forest_ref.py over the real block hashes
+mainnet state_200: BLOCK_FOREST_OK; signet state_2600: BLOCK_FOREST_OK; one hash changed: BLOCK_FOREST_MISMATCH rc=1

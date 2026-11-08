@@ -45,7 +45,7 @@ A proof verifies in **tens of milliseconds**, in a browser, with nothing sent an
 
 Or from the command line — download `hazync-verify-x86_64-linux-gnu` from the
 [latest release](https://github.com/hazync/hazync/releases/latest) and point it at any proof. The
-[full walkthrough](docs/DESIGN_OVERVIEW.md#check-one-yourself-it-takes-about-thirty-seconds) takes
+[full walkthrough](docs/history/DESIGN_OVERVIEW.md#check-one-yourself-it-takes-about-thirty-seconds) takes
 about thirty seconds.
 
 A proof names the exact program that produced it. The canonical prover is
@@ -82,15 +82,15 @@ Honest, because overclaiming here would be the whole problem again:
 ## Help
 
 The most valuable contribution is **trying to break it** — specifically, finding a case where
-Hazync says a block is valid and Bitcoin Core would not. [`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md)
+Hazync says a block is valid and Bitcoin Core would not. [`docs/SECURITY.md`](docs/SECURITY.md)
 says where an hour is worth most.
 
 | | |
 |---|---|
 | **Prove blocks** on your GPU | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| **Plain-English explanation** | [`docs/EXPLAINER.md`](docs/EXPLAINER.md) |
-| **How it works, in detail** | [`docs/DESIGN_OVERVIEW.md`](docs/DESIGN_OVERVIEW.md) |
-| **Specification & soundness** | [`docs/SPEC.md`](docs/SPEC.md), [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) |
+| **Plain-English explanation** | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) |
+| **How it works, in detail** | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) |
+| **Specification & soundness** | [`docs/SPEC.md`](docs/SPEC.md), [`docs/SECURITY.md`](docs/SECURITY.md) |
 | **Every document** | [`docs/README.md`](docs/README.md) |
 | **Discussion** | [Delving Bitcoin](https://delvingbitcoin.org/t/running-cores-real-consensus-code-inside-a-zkvm/2811) |
 

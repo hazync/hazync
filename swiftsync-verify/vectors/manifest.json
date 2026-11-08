@@ -1,0 +1,133 @@
+{
+ "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. The receipts are from the retired round-4 design-B signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae: every one must now FAIL (the journal format and the hints file are both gone). `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
+ "cases": [
+  {
+   "name": "retired_design_b",
+   "description": "A real round-4 design-B receipt, given as a coin-log image: refused (its journal is not today's ChainState, and its image keeps no coin log).",
+   "args": [
+    "--network",
+    "signet",
+    "--coinlog",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "retired_design_b_product",
+   "description": "The same receipt as the product image: refused.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "wrong_image",
+   "description": "The same receipt against the built-in image id: refused.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_block_2600.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "fake_receipt",
+   "description": "A dev-mode FakeReceipt: never a proof.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "fake_block_2501.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bundle_v1",
+   "description": "A version-1 bundle (it carried a hints-file hash): refused.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "r4_2600.sspf"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bundle_header_lies",
+   "description": "A bundle whose header disagrees with its receipt: refused.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "--image",
+    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
+    "--anchor",
+    "r4_anchor_2500.json",
+    "bad_bundle_header.sspf"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "hints_arg_refused",
+   "description": "A hints-file argument (the retired design B): the CLI refuses it rather than ignore it.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "r4_block_2600.rcpt",
+    "signet2600.hints"
+   ],
+   "expect_exit": 1,
+   "cli_only": true
+  },
+  {
+   "name": "dash_arg_refused",
+   "description": "The old '-' (no hints file) argument: refused.",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "r4_block_2600.rcpt",
+    "-"
+   ],
+   "expect_exit": 1,
+   "cli_only": true
+  }
+ ],
+ "reference_values": {
+  "genesis_anchor_id": {
+   "mainnet (every image, pinned)": "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
+   "signet (every image, pinned)": "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827"
+  },
+  "empty_smt_root": "507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32",
+  "utreexo_mainnet_200": {
+   "leaves": 204,
+   "utxo_value": 1000000000000,
+   "roots": {
+    "2": "ac7ca14570ba4972538dfe1587a44d87fc1e7a6d2f24f9ffef0a113afa5c189d",
+    "3": "7ced478f2fdebea9ce3293a479b092618073fe5c89045085ec312b7854ea9a9a",
+    "6": "94ed3b428abfc24c6261ac76dfab9cad07ca35bc28a39bd9109a5288a6886e51",
+    "7": "339752865cc905092ec186b4dae9902e4951bd182855b61d80003867f4cbb452"
+   }
+  }
+ },
+ "status": "Hints-file cases removed in E2 (11-05: no proof takes a hints file). OK / DEMO cases need receipts of the product image: regenerate from the first GPU proofs of the frozen image (experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md)."
+}

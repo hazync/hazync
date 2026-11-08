@@ -4,9 +4,9 @@
 verification procedure. It is the document to hand a reviewer who asks "what exactly is being claimed,
 and how would I check it myself".
 
-It deliberately does not argue. The soundness argument is [`SOUNDNESS.md`](SOUNDNESS.md); the design
+It deliberately does not argue. The soundness argument is [`SECURITY.md`](SECURITY.md); the design
 rationale and history are [`history/HAZYNC_ARCHITECTURE.md`](history/HAZYNC_ARCHITECTURE.md); what is measured and what
-is still open is [`GOALS.md`](GOALS.md). Where this document and those disagree about a *format*, this
+is still open is [`OVERVIEW.md`](OVERVIEW.md). Where this document and those disagree about a *format*, this
 one is wrong and should be fixed — the code is the authority, and `reproduce/METHOD_ID` is the
 authority on which code.
 

@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["host", "methods"]
+
+[profile.release]
+opt-level = 3

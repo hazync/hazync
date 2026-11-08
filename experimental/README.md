@@ -123,3 +123,24 @@ Two traps it has already caught, both preserved as guards:
   is zero.
 - Piping `cc` through `head` truncated a compile error and left a stale binary, so a failed build
   presented as a hang.
+
+---
+
+## `libzync-bench/` — batch ECDSA verification and multiset hashes on the coprocessor
+
+**Measured 2026-10-28 (execute only). Branch `libzync`, not adopted.**
+
+**Batch verification**
+- Real ECDSA signatures, hinted R, one MSM.
+- Per signature: **3.44x** cheaper at a chunk's 438 signatures, **4.50x** at a block's 7,015, 5.1x at 50k.
+- Negative controls are rejected.
+
+**MSM**
+- The tree's `msm.rs` loses 40% to memcpy.
+- A raw-coprocessor rewrite runs at the coprocessor's own ~270 cycles per point op.
+
+**Set hashes**
+- ECMH costs 3,045 cycles per element.
+- MuHash-style costs 9,840.
+
+Full numbers in its README.

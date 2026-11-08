@@ -1,0 +1,59 @@
+ROADMAP H4: the SHORT pass on c14 (9d28cd9: a finished collect run exits with COLLECT_EXIT = 2 instead of a panic;
+the host checks every guest exit code). retest_final.sh c14 c13m with SN=100, laptop (WSL, dev mode for proving steps),
+2026-11-06. Short because the change touches no network rule or long-chain state: c13's full pass (RESULT_c13.txt,
+signet 1..2600) covers those on identical consensus code. Raw log: ~/libzync-gpu/c14.out
+
+images
+  c14m     bbf828007f59fe3fa7d0060f5ad10f8362a03718fd0eec3cfbc844b444c22ded
+  c14reg   3036d37941e963fe223617d0e57645507149e515b0ac03221e29bdfca822d94c
+  c14regN  fcde3e5a8fb12c6a4bfa5d2877f5ffcc9ae35a66889eb5d6c477103da36d6e47
+  c14sig   219215fbefcb0c76dd5a3823e17eeca9fe7c8a487d644efcd2a93eb483fafc3f
+
+unit   libzync: 29 passed, 0 failed EXIT=0
+unit   swiftsync-verify: 16 passed, 0 failed EXIT=0
+unit   swiftsync-verify-ffi: 2 passed, 0 failed EXIT=0
+unit   swiftsync-verify-wasm: 0 passed, 0 failed EXIT=0
+unit   host: 68 passed, 0 failed EXIT=0
+rig    RIG 96 cases, 96 agree, 0 deferred, 0 to look at   (invalid blocks now fail inside the clean-exit collect run)
+handover  handover run.sh: 16/16 as expected
+mainnet 1..200  LZ_PROVE_RANGE_DONE 1..=200 in 3275 s; PANICS=0; COINLOG_REF_MATCH; BLOCK_FOREST_OK; genesis anchor 852c5c7e (unchanged)
+
+cost vs c13m (execute mode, 16 chunks): every block valid; aggregate +2 cycles on every block (the changed branch),
+chunks about -2,000 (the chunk code is unchanged: most likely the guest's memory layout shifted, which risc0's paging
+charges see; not confirmed). Block 962,000 aggregate = 64,896,840 (EXPECT_CYCLES for GPU run B on c14).
+  block_962000   c13m   chunks    375699069 aggregate    64896838 whole    440595907 ok
+  block_962000   c14m   chunks    375697303 aggregate    64896840 whole    440594143 ok
+  block_970000   c13m   chunks    356726319 aggregate    52846285 whole    409572604 ok
+  block_970000   c14m   chunks    356724309 aggregate    52846287 whole    409570596 ok
+  block_900000   c13m   chunks    260055732 aggregate    52363127 whole    312418859 ok
+  block_900000   c14m   chunks    260053518 aggregate    52363129 whole    312416647 ok
+  block_850000   c13m   chunks    377496386 aggregate   101743527 whole    479239913 ok
+  block_850000   c14m   chunks    377494172 aggregate   101743529 whole    479237701 ok
+  block_800000   c13m   chunks    367231665 aggregate    95137662 whole    462369327 ok
+  block_800000   c14m   chunks    367229218 aggregate    95137664 whole    462366882 ok
+  block_750000   c13m   chunks    396435909 aggregate    96063025 whole    492498934 ok
+  block_750000   c14m   chunks    396433701 aggregate    96063027 whole    492496728 ok
+  block_700000   c13m   chunks    419889902 aggregate    86825784 whole    506715686 ok
+  block_700000   c14m   chunks    419887749 aggregate    86825786 whole    506713535 ok
+  block_650000   c13m   chunks    532907621 aggregate    97111706 whole    630019327 ok
+  block_650000   c14m   chunks    532905788 aggregate    97111708 whole    630017496 ok
+  block_170060   c13m   chunks     23508942 aggregate     3521551 whole     27030493 ok
+  block_170060   c14m   chunks     23506542 aggregate     3521553 whole     27028095 ok
+  block_692261   c13m   chunks    440541678 aggregate    97449894 whole    537991572 ok
+  block_692261   c14m   chunks    440539652 aggregate    97449896 whole    537989548 ok
+
+edge blocks: 10/10 ok
+  edge 2016    chunks            0 aggregate     2567618 whole      2567618 ok (exit 0)
+  edge 91842   chunks            0 aggregate     1910583 whole      1910583 ok (exit 0)
+  edge 91880   chunks      1171350 aggregate     1955923 whole      3127273 ok (exit 0)
+  edge 185956  chunks     54970057 aggregate     9367289 whole     64337346 ok (exit 0)
+  edge 227931  chunks     59587627 aggregate    12911189 whole     72498816 ok (exit 0)
+  edge 363725  chunks            0 aggregate     2728196 whole      2728196 ok (exit 0)
+  edge 364292  chunks   1572006982 aggregate    36348423 whole   1608355405 ok (exit 0)
+  edge 388381  chunks    159266417 aggregate    25580284 whole    184846701 ok (exit 0)
+  edge 419328  chunks    353191879 aggregate    63331124 whole    416523003 ok (exit 0)
+  edge 481824  chunks    334753590 aggregate    71174051 whole    405927641 ok (exit 0)
+
+signet 1..100  LZ_PROVE_RANGE_DONE 1..=100 in 1455 s; PANICS=0; COINLOG_REF_MATCH; BLOCK_FOREST_OK
+
+verdict  GREEN on every step. c14 is the freeze candidate.

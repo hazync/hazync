@@ -1,0 +1,25 @@
+# c10e12 (a9dd2da5...), 2026-11-05: test_join.sh, 200 leaves (each a base step on the linear run's state, last first, 3 at a time), balanced join tree, dev mode
+== join test
+join exit=0
+level 1: 100 proofs
+level 2: 50 proofs
+level 3: 25 proofs
+level 4: 13 proofs
+level 5: 7 proofs
+level 6: 4 proofs
+level 7: 2 proofs
+level 8: 1 proofs
+joins: 199 (= N-1)
+== 3. root == linear chain
+root   dc18a80389bc14c642eeac16c97b4fbfcce310d44671e8f9793d4bd36e7897ab
+linear dc18a80389bc14c642eeac16c97b4fbfcce310d44671e8f9793d4bd36e7897ab
+IDENTICAL: yes
+== 4. mixed: join(linear block_100, leaf 101) == linear block_101
+IDENTICAL: yes
+== 5. negatives (each must be refused with the guest's own message)
+gap: refused (join: the right proof does not start where the left one ends)
+swapped: refused (join: the right proof does not start where the left one ends)
+twice: refused (join: the right proof does not start where the left one ends)
+tampered_anchor: refused (join: the right proof does not start where the left one ends)
+other_image: refused (does not verify against this image)
+JOIN_TEST_PASS

@@ -1,0 +1,96 @@
+== build regtest O (c4reg)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 148b62b757796495db53e229064b9919a1698a872a46732bd6d839624e528ac2
+== rig vs Core 28.0, coin log
+RIG_EXIT=0
+RIG 95 cases, 95 agree, 0 deferred, 0 to look at
+== build regtest N: O pinned at 101 (pin not committed)
+REAL_EXIT=0
+METHOD_ID METHOD_ID f43a5c6b71faeef3ffc0c476489b53606a77095ca7a736fd1f08e2b1ed591542
+pin reverted
+== handover O -> N
+PASS O proves 1..100 from genesis
+PASS reject self_id: not the predecessor's
+PASS reject profile: handover: profile mismatch
+PASS reject lineage: predecessor lineage mismatch
+PASS reject forest: block forest
+PASS reject kind: not a ChainState
+PASS reject height: handover: height
+PASS reject wrong_image: predecessor chain proof invalid\|no receipt found\|assumption
+PASS reject no_receipt: predecessor chain proof invalid\|no receipt found\|assumption
+PASS O refuses is_base = 2
+PASS host refuses a receipt at the wrong height
+PASS N continues 101..110 by a handover
+PASS block 101 ran as a handover step
+PASS every block after the handover ran as ordinary recursion
+PASS O's state: its own id, zero lineage
+PASS after the handover the state carries N's id
+PASS anchor_id unchanged across the handover
+PASS lineage = the reference's digest of [O at first]; unchanged by later steps
+WRONG block forest at 100 == the reference over real block hashes
+WRONG block 7 checks against the state at 100
+WRONG block forest at 110 == the reference over real block hashes
+WRONG block 7 checks against the state at 110
+WRONG state checks
+WRONG coin log at 110 == coinlog_ref.py
+handover run.sh: 14/16 as expected
+HO_EXIT=1
+== build signet (c4sig)
+REAL_EXIT=0
+METHOD_ID METHOD_ID 2ecf0612ef13d1b7ec57f4cb7b21172503ca1ccb2ad852ef95f5a4b9fe18926b
+== mainnet 1..200 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py, genesis anchor
+PR_EXIT=0
+LZ_PROVE_RANGE_DONE 1..=200 in 1825 s; final receipt /home/defenwycke/libzync-gpu/c4/m200/block_200.rcpt
+H=200: 209 leaves appended, 204 live coins, 1000000000000 sat, 4 roots
+COINLOG_REF_MATCH: the proof's coin log equals this implementation
+BLOCK_FOREST_OK
+mainnet: genesis anchor_id 5652addca32eebf2dffd4cfb6427813c2ee6c9326dd8666d2750a9a032848d46 (the same for every image)
+state anchor_id 5652addca32eebf2dffd4cfb6427813c2ee6c9326dd8666d2750a9a032848d46 version 2 profile 0x11
+== cost on real blocks: coin log (c4m) vs design B (r17m), execute mode, 16 chunks
+block_962000   r17m  chunks    362589752 aggregate    64135226 whole    426724978 ok
+block_962000   c4m   chunks    365146763 aggregate    74141080 whole    439287843 ok
+block_970000   r17m  chunks    380200561 aggregate    53103272 whole    433303833 ok
+block_970000   c4m   chunks    382416140 aggregate    62363305 whole    444779445 ok
+block_900000   r17m  chunks    291296663 aggregate    38467866 whole    329764529 ok
+block_900000   c4m   chunks    291924380 aggregate    47270486 whole    339194866 ok
+block_850000   r17m  chunks    393483951 aggregate    84858742 whole    478342693 ok
+block_850000   c4m   chunks    394772673 aggregate    90883233 whole    485655906 ok
+block_800000   r17m  chunks    375824724 aggregate    93588607 whole    469413331 ok
+block_800000   c4m   chunks    377343356 aggregate    83591115 whole    460934471 ok
+block_750000   r17m  chunks    380698857 aggregate    80319099 whole    461017956 ok
+block_750000   c4m   chunks    381712796 aggregate    84125423 whole    465838219 ok
+block_700000   r17m  chunks    406735909 aggregate    69338013 whole    476073922 ok
+block_700000   c4m   chunks    407278586 aggregate    79151832 whole    486430418 ok
+block_650000   r17m  chunks    522800039 aggregate    58103158 whole    580903197 ok
+block_650000   c4m   chunks    523232293 aggregate    88295916 whole    611528209 ok
+block_170060   r17m  chunks     23480676 aggregate     3139964 whole     26620640 ok
+block_170060   c4m   chunks     23488488 aggregate     3213397 whole     26701885 ok
+block_692261   r17m  chunks    425654925 aggregate    76244971 whole    501899896 ok
+block_692261   c4m   chunks    426711808 aggregate    85932277 whole    512644085 ok
+== signet 1..2600 from genesis (dev mode) vs coinlog_ref.py, block_forest_ref.py
+--- handover re-run after the reference fix (4e4ef1c) ---
+PASS O proves 1..100 from genesis
+PASS reject self_id: not the predecessor's
+PASS reject profile: handover: profile mismatch
+PASS reject lineage: predecessor lineage mismatch
+PASS reject forest: block forest
+PASS reject kind: not a ChainState
+PASS reject height: handover: height
+PASS reject wrong_image: predecessor chain proof invalid\|no receipt found\|assumption
+PASS reject no_receipt: predecessor chain proof invalid\|no receipt found\|assumption
+PASS O refuses is_base = 2
+PASS host refuses a receipt at the wrong height
+PASS N continues 101..110 by a handover
+PASS block 101 ran as a handover step
+PASS every block after the handover ran as ordinary recursion
+PASS O's state: its own id, zero lineage
+PASS after the handover the state carries N's id
+PASS anchor_id unchanged across the handover
+PASS lineage = the reference's digest of [O at first]; unchanged by later steps
+PASS block forest at 100 == the reference over real block hashes
+PASS block 7 checks against the state at 100
+PASS block forest at 110 == the reference over real block hashes
+PASS block 7 checks against the state at 110
+PASS state checks
+PASS coin log at 110 == coinlog_ref.py
+handover run.sh: 16/16 as expected

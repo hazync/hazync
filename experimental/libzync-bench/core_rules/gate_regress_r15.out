@@ -1,0 +1,38 @@
+# 2026-11-02, libzync 0ebe88c guest source (= 3d9526f): host_r15m (mainnet afb6620b...), host_r15sig (signet 529800a8...). Laptop dev-mode execution.
+# 2,800 'collect run commits no chain state' panics removed: each ECMH collect run stops itself by design (guest main.rs:2161-2163).
+REAL_EXIT=0
+METHOD_ID afb6620bb43226333cc34e5e5874224c87fe3d7aea1787f915836394701fdc12
+REAL_EXIT=0
+METHOD_ID 529800a8149bb251cbc2555a271323903c24c87d3f5c59f64f5c06ff75cc1730
+== GATE
+CHUNK_JOURNALS vs round 8: IDENTICAL 16
+b962000 rc 0 chunks 361,594,437 aggregate 63,021,004 whole 424,615,441 []
+b170060 rc 0 chunks 5,533,210 aggregate 2,962,628 whole 8,495,838 []
+b692261 rc 0 chunks 424,653,664 aggregate 75,135,041 whole 499,788,705 []
+== SWIFTSYNC REGRESSION
+== 1. block 962,000 valid
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  block validation cycles  62936614
+rc=0
+== 2. negative: is_base = 2 (must be refused)
+is_base must be 0 or 1, got 2
+== 3. mainnet sweep 1..200 (saved), reference forest, max_time/profile; then a flip
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  max_time 1231753120 (block files' largest time 1..200: 1231753120) -> OK; profile 0x1 -> OK
+SWEEP_FAIL
+== 4. signet sweep 1..2600 (saved): reference forest, profile = libzync|signet
+  ss_set=0 -> BALANCED (SwiftSync total is the identity)
+  forest: 293 leaves (= coins unspent at H), roots 4
+SWEEP_OK
+REF_MATCH: guest state equals this implementation
+  profile 0x5 -> OK  max_time 1599732600
+== 5. signet BIP325 check still works
+signet-check-test block 2523: one txid changed -> 0
+SIGNET_CHECK_OK
+R4_TESTS_DONE
+ALL_DONE
+
+[exited with code 0]

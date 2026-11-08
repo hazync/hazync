@@ -1,0 +1,17 @@
+[Unit]
+Description=libzync prep's block source: bitcoind blocks as block_<h>.json, a window ahead of prep
+After=bitcoind.service
+
+[Service]
+Type=simple
+# LZ_HI, LZ_WINDOW (> HAZYNC_PREP_SAVE_EVERY: prep deletes files only at save points) and LZ_JOBS in a drop-in
+Environment=LZ_ROOT=/var/lib/libzync-prep LZ_WINDOW=1500 LZ_JOBS=4
+ExecStart=/bin/sh -c 'exec /usr/bin/python3 "$LZ_ROOT/bin/fetch_block_rpc.py" range 1 "$LZ_HI" "$LZ_ROOT/blocks" --window "$LZ_WINDOW" --jobs "$LZ_JOBS" --after-saves "$LZ_ROOT/out"'
+Restart=on-failure
+RestartSec=30
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

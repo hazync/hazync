@@ -1,0 +1,91 @@
+# rig.py on Bitcoin Core 28.0, regtest guest r15reg (libzync 3d9526f, METHOD_ID eabc6131...), 2026-11-02
+core: /Satoshi:28.0.0/
+AGREE        valid_empty              core=accept                                 guest=accept 
+AGREE        valid_spend              core=accept                                 guest=accept 
+AGREE        valid_zero_fee           core=accept                                 guest=accept 
+AGREE        cb_multiple              core=bad-cb-multiple                        guest=reject core-reject: bad-witness-merkle-match | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=fa
+AGREE        cb_overpay               core=bad-cb-amount                          guest=reject block INVALID all_ok=true pow=true merkle=true subsidy=false weight=true sigops=true witness=true bip34=true b
+AGREE        cb_exact                 core=accept                                 guest=accept 
+AGREE        cb_fee_too_much          core=bad-cb-amount                          guest=reject block INVALID all_ok=true pow=true merkle=true subsidy=false weight=true sigops=true witness=true bip34=true b
+AGREE        cb_script_short          core=bad-cb-length                          guest=reject core-reject: bad-cb-length | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=false sigops=
+AGREE        cb_script_long           core=bad-cb-length                          guest=reject core-reject: bad-cb-length | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=t
+AGREE        cb_wrong_height          core=bad-cb-height                          guest=reject core-reject: bad-cb-height | block INVALID all_ok=true pow=true merkle=true subsidy=true weight=false sigops=t
+AGREE        bad_merkle               core=bad-txnmrklroot                        guest=reject block INVALID all_ok=true pow=true merkle=false subsidy=true weight=true sigops=true witness=true bip34=true b
+AGREE        merkle_mutated           core=bad-witness-merkle-match               guest=reject core-reject: bad-witness-merkle-match | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=fa
+AGREE        tx_dup_inputs            core=bad-txns-inputs-duplicate              guest=reject core-reject: bad-txns-inputs-duplicate | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=t
+AGREE        tx_no_inputs             core=decode-failed                          guest=reject called `Result::unwrap()` on an `Err` value: ParseFailed("data not consumed entirely when explicitly deseriali
+AGREE        tx_no_outputs            core=bad-txns-vout-empty                    guest=reject core-reject: bad-txns-vout-empty | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true si
+AGREE        tx_negative_out          core=bad-txns-vout-negative                 guest=reject core-reject: bad-txns-vout-negative | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true
+AGREE        tx_huge_out              core=bad-txns-vout-toolarge                 guest=reject core-reject: bad-txns-vout-toolarge | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true
+AGREE        tx_total_huge            core=bad-txns-txouttotal-toolarge           guest=reject core-reject: bad-txns-txouttotal-toolarge | block INVALID all_ok=false pow=true merkle=true subsidy=true weigh
+AGREE        tx_null_prevout          core=bad-cb-multiple                        guest=reject block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true witness=true bip34=true b
+AGREE        premature                core=bad-txns-premature-spend-of-coinbase   guest=reject core-reject: bad-txns-premature-spend-of-coinbase | block INVALID all_ok=false pow=true merkle=true subsidy=tr
+AGREE        exactly_mature           core=accept                                 guest=accept 
+AGREE        one_short_of_mature      core=bad-txns-premature-spend-of-coinbase   guest=reject core-reject: bad-txns-premature-spend-of-coinbase | block INVALID all_ok=false pow=true merkle=true subsidy=tr
+AGREE        in_below_out             core=bad-txns-in-belowout                   guest=reject core-reject: bad-txns-in-belowout | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true s
+DEFERRED-OK  missing_coin             core=bad-txns-inputs-missingorspent         guest=accept 
+AGREE        double_spend_in_block    core=bad-txns-inputs-missingorspent         guest=reject block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true witness=true bip34=true b
+AGREE        chain_in_block           core=accept                                 guest=accept 
+AGREE        spend_later_in_block     core=bad-txns-inputs-missingorspent         guest=reject block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true witness=true bip34=true b
+AGREE        locktime_height_future   core=bad-txns-nonfinal                      guest=reject core-reject: bad-txns-nonfinal | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        locktime_height_ok       core=accept                                 guest=accept 
+AGREE        locktime_final_seq       core=accept                                 guest=accept 
+AGREE        locktime_time_mtp        core=bad-txns-nonfinal                      guest=reject core-reject: bad-txns-nonfinal | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        locktime_time_past       core=accept                                 guest=accept 
+AGREE        bip68_height_unmet       core=bad-txns-nonfinal                      guest=reject core-reject: bad-txns-nonfinal | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        bip68_height_met         core=accept                                 guest=accept 
+AGREE        bip68_disabled           core=accept                                 guest=accept 
+AGREE        bip68_v1_ignored         core=accept                                 guest=accept 
+AGREE        bip68_uint_version       core=bad-txns-nonfinal                      guest=reject core-reject: bad-txns-nonfinal | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        bip68_time_met           core=accept                                 guest=accept 
+AGREE        bip68_time_unmet         core=bad-txns-nonfinal                      guest=reject core-reject: bad-txns-nonfinal | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        time_above_mtp           core=accept                                 guest=accept 
+AGREE        version_4                core=accept                                 guest=accept 
+AGREE        high_hash                core=high-hash                              guest=reject block INVALID all_ok=true pow=false merkle=true subsidy=true weight=true sigops=true witness=true bip34=true b
+AGREE        nonce_too_big_witness    core=bad-witness-nonce-size                 guest=reject core-reject: bad-witness-nonce-size | block INVALID all_ok=true pow=true merkle=true subsidy=true weight=false
+AGREE        witness_mismatch         core=bad-witness-merkle-match               guest=reject core-reject: bad-witness-merkle-match | block INVALID all_ok=true pow=true merkle=true subsidy=true weight=fal
+AGREE        no_commit_no_witness     core=accept                                 guest=accept 
+AGREE        valid_p2wsh              core=accept                                 guest=accept 
+AGREE        witness_no_commit        core=unexpected-witness                     guest=reject core-reject: unexpected-witness | block INVALID all_ok=true pow=true merkle=true subsidy=true weight=false sig
+AGREE        script_fails             core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        sigops_limit             core=bad-blk-sigops                         guest=reject block INVALID all_ok=true pow=true merkle=true subsidy=true weight=true sigops=false witness=true bip34=true b
+AGREE        sigops_at_limit          core=accept                                 guest=accept 
+AGREE        oversize_weight          core=bad-blk-length                         guest=reject core-reject: bad-txns-oversize | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        split_tx                 core=accept                                 guest=accept 
+AGREE        split_tx_bad             core=bad-txns-nonfinal                      guest=reject core-reject: bad-txns-nonfinal | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        sig_p2wpkh               core=accept                                 guest=accept 
+AGREE        sig_p2wpkh_bad           core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        sig_high_s               core=accept                                 guest=accept 
+AGREE        sig_not_der              core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        sig_zero_r               core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        sig_p2pkh                core=accept                                 guest=accept 
+AGREE        sig_p2pkh_other_key      core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        multisig_ok              core=accept                                 guest=accept 
+AGREE        multisig_order           core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        multisig_dummy           core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        sig_must_fail            core=accept                                 guest=accept 
+AGREE        sig_must_fail_but_good   core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        taproot_key              core=accept                                 guest=accept 
+AGREE        taproot_key_bad          core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        weight_under             core=accept                                 guest=accept 
+AGREE        weight_over              core=bad-blk-weight                         guest=reject core-reject: bad-blk-weight | block INVALID all_ok=true pow=true merkle=true subsidy=true weight=false sigops=
+AGREE        taproot_script           core=accept                                 guest=accept 
+AGREE        taproot_tweak_parity     core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        taproot_script_bad_sig   core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        sigops_witness_under     core=accept                                 guest=accept 
+AGREE        sigops_witness_over      core=bad-blk-sigops                         guest=reject block INVALID all_ok=true pow=true merkle=true subsidy=true weight=true sigops=false witness=true bip34=true b
+AGREE        sigops_p2sh_under        core=accept                                 guest=accept 
+AGREE        sigops_p2sh_over         core=bad-blk-sigops                         guest=reject block INVALID all_ok=true pow=true merkle=true subsidy=true weight=true sigops=false witness=true bip34=true b
+AGREE        tx_64_bytes              core=accept                                 guest=accept 
+AGREE        txns_duplicate           core=bad-txns-duplicate                     guest=reject block INVALID all_ok=false pow=true merkle=false subsidy=true weight=true sigops=true witness=true bip34=true 
+AGREE        prevout_null             core=bad-txns-prevout-null                  guest=reject core-reject: bad-txns-prevout-null | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true 
+AGREE        cltv_future              core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        cltv_met                 core=accept                                 guest=accept 
+AGREE        csv_op_unmet             core=bad-txns-nonfinal                      guest=reject core-reject: bad-txns-nonfinal | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigo
+AGREE        csv_op_met               core=accept                                 guest=accept 
+AGREE        p2sh_redeem_fails        core=block-validation-failed                guest=reject core-reject: script | block INVALID all_ok=false pow=true merkle=true subsidy=true weight=true sigops=true wit
+AGREE        p2sh_ok                  core=accept                                 guest=accept 
+AGREE        bip30_repeat_unspent     core=bad-txns-BIP30                         guest=reject block INVALID all_ok=true pow=true merkle=true subsidy=true weight=true sigops=true witness=true bip34=true bi
+AGREE        bip30_repeat_spent       core=accept                                 guest=accept 
+AGREE        bip30_child_of_repeat    core=accept                                 guest=accept 
+RIG 95 cases, 94 agree, 1 deferred, 0 to look at

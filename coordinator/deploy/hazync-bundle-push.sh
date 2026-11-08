@@ -72,12 +72,14 @@ trap 'rm -f "$NEWSTAMP" "$LIST"' EXIT
 # happen once the store is large, and it has already read as ZERO elsewhere in this project for exactly
 # that reason. find + --files-from has no such ceiling.
 #
+# leaf_*.bin: a libzync bridge's (libzync-prep's) leaf bundles, pushed the same way (ROADMAP H-B e).
+#
 # ⛔ AND state.bin MUST NOT BE PUSHED. It lives in this same directory and is ~14 GB; a pattern of
 # "everything here" would ship it every single run and drop it into the coordinator's bundle store.
 if [ -f "$STAMP" ]; then
-    find "$SRC" -maxdepth 1 -type f -name 'bundle_*.json' -newer "$STAMP" -printf '%f\n' > "$LIST"
+    find "$SRC" -maxdepth 1 -type f \( -name 'bundle_*.json' -o -name 'leaf_*.bin' \) -newer "$STAMP" -printf '%f\n' > "$LIST"
 else
-    find "$SRC" -maxdepth 1 -type f -name 'bundle_*.json' -printf '%f\n' > "$LIST"
+    find "$SRC" -maxdepth 1 -type f \( -name 'bundle_*.json' -o -name 'leaf_*.bin' \) -printf '%f\n' > "$LIST"
 fi
 
 # ⛔ `wc -l`, NOT `grep -c .`: grep prints 0 AND exits non-zero on no match, which under pipefail turns

@@ -430,10 +430,17 @@ def fetch_bundles(lo, hi):
     os.makedirs(BUNDLES, exist_ok=True)
     for h in range(lo, hi + 1):
         bf = os.path.join(BUNDLES, f"bundle_{h}.json")
-        if os.path.exists(bf):
+        lf = os.path.join(BUNDLES, f"leaf_{h}.bin")
+        if os.path.exists(bf) or os.path.exists(lf):
             continue
         try:
             data = get(f"/api/witness/{h}")
+            # a libzync coordinator serves prep's leaf bundle (binary, LZLEAF magic), which a libzync host proves
+            if data[:6] == b"LZLEAF":
+                with open(lf + ".tmp", "wb") as fh:
+                    fh.write(data)
+                os.replace(lf + ".tmp", lf)
+                continue
             j = json.loads(data)
         except Exception:
             return False

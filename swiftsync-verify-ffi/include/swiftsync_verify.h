@@ -1,0 +1,64 @@
+/* swiftsync_verify.h: check a libzync chain proof (the chain from genesis, its coin log, and with the product image its
+ * counting trie and live-coin hash) and facts about it, from C or C++. The same checks as the swiftsync-verify CLI;
+ * link libswiftsync_verify.a (and -lpthread -ldl -lm). Thread-safe; no global state; never aborts on bad input.
+ * (E2 retired the SwiftSync hints file: no proof takes one, and the hints arguments are gone from both calls.) */
+#ifndef SWIFTSYNC_VERIFY_H
+#define SWIFTSYNC_VERIFY_H
+#include <stddef.h>
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define SWIFTSYNC_VERIFY_OK   0  /* genesis-anchored, enough work: the chain in `out` is proven */
+#define SWIFTSYNC_VERIFY_FAIL 1
+#define SWIFTSYNC_VERIFY_DEMO 2  /* a valid chain, but from a supplied anchor or below the minimum work */
+
+#define SWIFTSYNC_NET_MAINNET 0
+#define SWIFTSYNC_NET_SIGNET  1
+#define SWIFTSYNC_IMG_COINLOG 0x10  /* OR into network: a coin-log image */
+#define SWIFTSYNC_IMG_PRODUCT 0x20  /* OR into network: the product image (coin log, counting trie, live-coin hash) */
+
+typedef struct {
+    uint32_t height;         /* H */
+    uint8_t  tip_hash[32];   /* the proven block at H, internal byte order (as uint256 holds it) */
+    uint8_t  chainwork[32];  /* cumulative work at H, 32 bytes little-endian (as arith_uint256 serialises) */
+    uint64_t utxo_leaves;    /* coins in the UTXO set at H */
+    uint32_t profile;        /* bit 0 libzync, 1 scripts NOT checked (assumevalid), 2 signet, 4 coin log, 5 trie, 6 live-coin hash */
+} swiftsync_result;
+
+/* Verify `receipt` (a .rcpt receipt or a .sspf bundle).
+ *   network:     SWIFTSYNC_NET_*, OR SWIFTSYNC_IMG_COINLOG / SWIFTSYNC_IMG_PRODUCT.
+ *   now:         the caller's clock, unix seconds (for time-too-new, §5 step 11).
+ *   image_hex:   NULL for the built-in image id, or 64 hex digits (an id you rebuilt, §5 step 9).
+ *   anchor_json: NULL for genesis, or a ChainState JSON; the result is then at best SWIFTSYNC_VERIFY_DEMO.
+ *   out:         filled under OK and DEMO only (under FAIL its fields would be the prover's word); may be NULL.
+ *   msg/msg_len: optional buffer for a NUL-terminated description of the first failed check.
+ * Step 7 of §5 is the caller's: `out->tip_hash` must be the block at `out->height` on its own most-work chain,
+ * with `out->chainwork`. Returns SWIFTSYNC_VERIFY_OK, _DEMO or _FAIL. */
+int swiftsync_verify(const uint8_t* receipt, size_t receipt_len,
+                     uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
+                     swiftsync_result* out, char* msg, size_t msg_len);
+
+/* As swiftsync_verify, plus zyncAPP facts (docs/libzync/ZYNCAPPS.md section 8). network: 0 mainnet, 1 signet, OR
+ * 0x10 for a coin-log image, OR 0x20 for the product image (coin log + counting trie + live-coin hash). facts_json:
+ * NUL-terminated JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact] (counting-trie facts at the
+ * tip: coin unspent / spent by / absent, a script's balance or complete history)}, or NULL. expect: NUL-terminated
+ * "<height>:<hash>", the network's block at the proof's height from a source YOU trust (your node, an explorer), or
+ * NULL; never take it from the fact server (an "expect" key inside facts_json is FAIL). A TrieFact that finds a coin
+ * must carry its creating transaction ("origin", a TxFact; ZYNCAPPS.md).
+ * Each TrieFact must carry its claimed answer in its own "expect" ("absent", "unspent:<sat>",
+ * "spent:<sat>:<height>:<tx>:<input>"; for balance / history "never" or "<count>:<sat>"): this result returns only
+ * whether the claim holds, so a trie fact without one is FAIL. Any fact that does not hold is FAIL (1), with its
+ * reason in msg; facts without a matching expect give at most DEMO (2). */
+int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len,
+                           uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
+                           const char* facts_json, const char* expect, swiftsync_result* out, char* msg, size_t msg_len);
+
+/* The built-in image id for `network`, as 64 hex digits and a NUL; NULL for an unknown network. Static storage. */
+const char* swiftsync_image_id(uint8_t network);
+
+#ifdef __cplusplus
+}
+#endif
+#endif

@@ -21,7 +21,8 @@ import pathlib
 import re
 import sys
 
-MAIN = pathlib.Path(__file__).resolve().parents[1] / "src" / "main.rs"
+# The host is split into modules; every one of them is read (seg_serve_cmd lives in seg.rs).
+SRC_DIR = pathlib.Path(__file__).resolve().parents[1] / "src"
 
 # Calls that do real proving work. `join` is lever 2's; the others are here so that a future lever
 # moving `prove_segment`/`lift`/`resolve` work around cannot land inside a lock scope unnoticed.
@@ -118,7 +119,7 @@ SELF_TESTS = [
 
 
 def main() -> int:
-    src = MAIN.read_text(encoding="utf8")
+    files = {p: p.read_text(encoding="utf8") for p in sorted(SRC_DIR.glob("*.rs"))}
 
     for name, sample, want in SELF_TESTS:
         got = bool(violations(sample))
@@ -129,11 +130,13 @@ def main() -> int:
             return 1
 
     # ⛔ POSITIVE CONTROL AGAINST THE REAL FILE. The samples above are synthetic; this one plants
-    # the exact mistake in main.rs itself, so the check cannot pass because it stopped finding the
-    # code it is meant to be reading.
+    # the exact mistake in the host source itself, so the check cannot pass because it stopped finding
+    # the code it is meant to be reading.
+    anchor = "            let mut q = jobs.lock().unwrap();"
+    src = next((t for t in files.values() if anchor in t), "")
     planted = src.replace(
-        "            let mut q = jobs.lock().unwrap();",
-        "            let mut q = jobs.lock().unwrap();\n"
+        anchor,
+        anchor + "\n"
         "            let _ = server.join(&a, &b).expect(\"planted\");",
         1,
     )
@@ -146,16 +149,20 @@ def main() -> int:
         print("The scope walker is broken; this check proves nothing until it is fixed.")
         return 1
 
-    found = violations(src)
-    if found:
-        print(f"{MAIN}: proving under a held lock:")
-        for line_no, what in found:
-            print(f"  lock taken at line {line_no}: `.{what}(` called before it is released")
+    bad = False
+    for path, text in files.items():
+        found = violations(text)
+        if found:
+            bad = True
+            print(f"{path}: proving under a held lock:")
+            for line_no, what in found:
+                print(f"  lock taken at line {line_no}: `.{what}(` called before it is released")
+    if bad:
         print()
         print("Decide inside the lock, prove after it -- see hazync#252.")
         return 1
 
-    n = sum(1 for _ in lock_scopes(src))
+    n = sum(1 for text in files.values() for _ in lock_scopes(text))
     print(f"ok: {n} lock scopes checked, none prove; "
           f"{len(SELF_TESTS)} self-tests and a planted join all behaved")
     return 0

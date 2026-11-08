@@ -1,0 +1,12 @@
+A EXIT=0
+B1 EXIT=0
+B2 EXIT=0
+  prep: the anchor was saved under another image; re-stamped with this image's id and profile
+state_101 identical
+state_150 identical
+state_199 identical
+state_200 identical
+leaf_101 identical
+leaf_150 identical
+leaf_200 identical
+RESTAMP_TEST_OK

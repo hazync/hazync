@@ -1,0 +1,11 @@
+# zyncAPP coin version 2 (11-07): the guest takes the coin's FIELDS, computes its leaf, commits the fields.
+# Image ZYNCAPP_COIN_ID 3f5030006310997a9f63b7f9a59c41ebbd99035d2db2a0f062ceb12f2615bee7 (version 1 was 26e09637).
+# Core: the c14 mainnet 1..200 run (~/libzync-gpu/c14/m200, dev-mode receipts), so the guest is EXECUTED
+# (prove-coin --execute: every check runs, no proof). Facts from zync-path coin, preimages from zync-path journey
+# (mkpre.py; RPC through ssh hazync-coord bitcoin-cli).
+A spent coin (block 9 coinbase, spent at 170): EXECUTED (not a proof): kind 0x5a430002 coin 0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0 value 5000000000 created 9 leaf eaad77e1c86247b362f885ffe75d33b2808667e519c0975e8beb9879a27520a9 pos 8 spent_by Some((170, 1, 0)) at core height 200; 356860 cycles
+B the same coin claimed UNSPENT: refused in the guest ("the coin is not in that state at that position")
+E unspent coin (block 200 coinbase): EXECUTED (not a proof): kind 0x5a430002 coin 2b1f06c2401d3b49a33c3f5ad5864c0bc70044c4068f9174546f3cfc1887d5ba:0 value 5000000000 created 200 leaf 70d43a0c91f8bbc58e8554ac2492fda2059176064a95f51b4c8ab43a0b2c9a78 pos 208 spent_by None at core height 200; 320082 cycles
+F that unspent coin claimed SPENT: refused in the guest
+D a preimage with the value +1: refused by the host before proving (its leaf is not the fact's coin)
+no preimage: refused by the host ("give its fields")

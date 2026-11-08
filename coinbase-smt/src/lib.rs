@@ -35,11 +35,10 @@
 //!
 //! # Why the value is a COUNT and not a presence bit
 //!
-//! This is the part most likely to be got wrong. BIP30 permits duplicating a **fully spent** txid —
-//! that is exactly what Core accepted in 2010. A presence-only set would reject those, turning today's
-//! accept-invalid risk into a **reject-valid** one at the same height, stalling a from-genesis prover
-//! instead of fixing anything. So the value is "how many outputs of this coinbase are still unspent",
-//! and absence and zero mean the same thing: duplication permitted.
+//! Core's BIP30 permits duplicating a **fully spent** txid. `bip30.rs` does not, on purpose: it keeps a
+//! spent coinbase as `SPENT` and refuses any repeat (see its header). The value is "how many outputs
+//! of this coinbase are still unspent", because the tree must know when the last one goes. In THIS
+//! layer 0 still means absent.
 //!
 //! Measured 2026-08-02: ~18% of pre-BIP34 coinbases still have an unspent output (~41,000 of them,
 //! 95% CI 27k–55k). The danger set is not small, and it SHRINKS as those coins are spent — which is
@@ -151,6 +150,16 @@ impl Smt {
 
     pub fn len(&self) -> usize {
         self.leaves.len()
+    }
+    /// Every (key, value) leaf, in key order: the whole state (the nodes and root follow from it).
+    pub fn leaves(&self) -> impl Iterator<Item = (&Key, &u32)> {
+        self.leaves.iter()
+    }
+    /// The tree with exactly these leaves (a snapshot's load; the root is recomputed, so a caller checks it).
+    pub fn from_leaves(leaves: impl IntoIterator<Item = (Key, u32)>) -> Self {
+        let mut s = Self::new();
+        for (k, v) in leaves { s.insert(k, v); }
+        s
     }
     pub fn is_empty(&self) -> bool {
         self.leaves.is_empty()
