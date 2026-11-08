@@ -8,7 +8,7 @@ The scripts are authoritative: `scripts/release.sh`, `scripts/package-release.sh
 `.github/workflows/release-sign.yml`, `scripts/rebaseline-id.sh`, `scripts/check-deployed-verifier.sh`.
 Coordinator deployment and day-to-day operation stay in
 [`coordinator/deploy/RUNBOOK.md`](../coordinator/deploy/RUNBOOK.md); see also [OPERATIONS.md](OPERATIONS.md),
-[COORDINATOR.md](COORDINATOR.md) and [SECURITY.md](SECURITY.md).
+[COORDINATOR.md](COORDINATOR.md) and [SECURITY.md](history/SECURITY_MODEL_CORE.md).
 
 **libzync** builds its images with the same machinery plus its own Dockerfile,
 `reproduce/libzync.Dockerfile` (prints the mainnet and signet ids and ELF hashes), and pins them in

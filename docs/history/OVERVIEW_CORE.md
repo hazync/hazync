@@ -2,17 +2,17 @@
 
 What Hazync proves, its goals and where each stands, how the original system works, where libzync fits, and a
 glossary. Merged from the September 2026 `EXPLAINER`, `GOALS`, `DESIGN_OVERVIEW` and `GLOSSARY` (now in
-[`history/`](history/README.md)).
+[`history/`](README.md)).
 
 Numbers come from committed evidence (`prover/evidence/`, `docs/history/`) unless marked INFERRED or ESTIMATE.
 Sections 1–3 describe the **original system**: the canonical CORE guest `37987b85`, the coordinator and the
 fleet. Its code is still in the repo. Section 4 covers libzync, the core that is replacing it.
 
-Related: [`SPEC.md`](SPEC.md) (formats, invariants) · [`SECURITY.md`](SECURITY.md) (soundness, threat model,
-reviews, fuzzing) · [`OPERATIONS.md`](OPERATIONS.md) (proving, fleet, tip runs, settings) ·
-[`COORDINATOR.md`](COORDINATOR.md) (routes, running one, sponsorship) ·
-[`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) (CORE/GHOST builds, releases) ·
-[`../CONTRIBUTING.md`](../CONTRIBUTING.md) (join the board) · [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md).
+Related: [`SPEC.md`](SPEC_CORE.md) (formats, invariants) · [`SECURITY.md`](SECURITY_MODEL_CORE.md) (soundness, threat model,
+reviews, fuzzing) · [`OPERATIONS.md`](../OPERATIONS.md) (proving, fleet, tip runs, settings) ·
+[`COORDINATOR.md`](../COORDINATOR.md) (routes, running one, sponsorship) ·
+[`BUILD_AND_RELEASE.md`](../BUILD_AND_RELEASE.md) (CORE/GHOST builds, releases) ·
+[`../CONTRIBUTING.md`](../../CONTRIBUTING.md) (join the board) · [`libzync/LIBZYNC.md`](../libzync/LIBZYNC.md).
 
 ---
 
@@ -40,7 +40,7 @@ transaction/weight/sigop machinery, the retarget (`pow.cpp`'s `CalculateNextWork
 | `0013` | libsecp | `lift_x` witness hint, checked by libsecp's own arithmetic before use (since v0.21.0) |
 
 wNAF, GLV, the ECDSA and Schnorr logic and every check above the field stay libsecp's. The guest is therefore
-*maximal-Core*, not pure Core; [`SPEC.md`](SPEC.md) §12 lists every non-Core piece of the circuit.
+*maximal-Core*, not pure Core; [`SPEC.md`](SPEC_CORE.md) §12 lists every non-Core piece of the circuit.
 
 **Not compiled from Core:**
 - the subsidy halving schedule and the script-flag activation heights, each differentially tested against Core (the
@@ -50,13 +50,13 @@ wNAF, GLV, the ECDSA and Schnorr logic and every check above the field stay libs
   accumulator was differentially fuzzed ~900k executions against a reference model (`audit-fuzz/`).
 
 **Reviews.** Two external reviews ran in August 2026 (rounds 10 and 11,
-[`history/SECURITY_AUDIT_LOG.md`](history/SECURITY_AUDIT_LOG.md)). They were AI-assisted code reviews, not a
+[`history/SECURITY_AUDIT_LOG.md`](SECURITY_AUDIT_LOG.md)). They were AI-assisted code reviews, not a
 commissioned professional audit, which has still not happened. Neither found a way to make the guest accept an
 invalid chain. Both found real defects, now fixed or tracked, and both named the C++ shim layer and the accumulator as
 the residual risk; one found panic paths in the reference crate, now fixed. The most serious finding of that period
 was internal: audit #3 found that the guest would **reject** a valid chain at block 91841, because blocks 91842 and
 91880 duplicate still-unspent coinbases and the new non-membership check had no exception for them. Fixed in v0.15.0;
-the real blocks are now fixtures. Audit record: [`../SECURITY.md`](../SECURITY.md).
+the real blocks are now fixtures. Audit record: [`../SECURITY.md`](../../SECURITY.md).
 
 **Not a goal:**
 - *Beating a full node on trust.* The claim is a smaller trust assumption than the status quo: Core already skips
@@ -68,7 +68,7 @@ the real blocks are now fixtures. Audit record: [`../SECURITY.md`](../SECURITY.m
 Prior art: [ZeroSync](https://zerosync.org) (Robin Linus and collaborators). The zkVM is
 [RISC Zero](https://risczero.com): `vendor/risc0-zkvm` is their 3.0.5 crate with two local changes
 (segment-distributed assembly, a balanced join tree), `vendor/risc0-circuit-rv32im-sys` their 4.0.3 crate with one
-prover-side fix for #119. Attribution: [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+prover-side fix for #119. Attribution: [`../THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md).
 
 ## 2. Goals
 
@@ -101,7 +101,7 @@ The risk is folding deleting leaves; since v0.13.0 folding is a separate task ov
 `fold_1000` is a genesis-anchored proof of blocks 1..1000 in **3,441 bytes**, verified in CI and on ARM64. A
 genesis-anchored spine is live at `/api/spine`. Current figures belong only on the [live board](https://hazync.org/)
 (`/api/state` as JSON); every re-baseline resets the board, because receipts from a superseded guest do not verify
-under the new one. Every canonical id is in [`../reproduce/LINEAGE.tsv`](../reproduce/LINEAGE.tsv).
+under the new one. Every canonical id is in [`../reproduce/LINEAGE.tsv`](../../reproduce/LINEAGE.tsv).
 
 **Cost by inputs, not blocks.** Early blocks are nearly empty (block 20,000 holds 19,023 UTXOs in total).
 
@@ -224,7 +224,7 @@ block ── cost packer ── chunks (independent, one card each) ── aggre
 - **Ranges** fold: `[a..b] + [b+1..c] → [a..c]`, same receipt size for 2 blocks or 200,000. The spine `[1..N]` grows
   by absorption. Spine receipt ~227 KB STARK, verifies in ms; a Groth16 wrap is a few KB.
 
-**CORE vs GHOST.** Both commit the same digest as stock Core. Details: [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md).
+**CORE vs GHOST.** Both commit the same digest as stock Core. Details: [`BUILD_AND_RELEASE.md`](../BUILD_AND_RELEASE.md).
 
 | | CORE (ships since v0.21.0) | GHOST (experimental) |
 |---|---|---|
@@ -265,20 +265,20 @@ not `docs/history/`.
 ## 4. Where libzync fits
 
 libzync is the new core library that is replacing the original guest; the original system's code stays in the repo.
-Full account: [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md); plan: [`libzync/ROADMAP.md`](libzync/ROADMAP.md) §H.
+Full account: [`libzync/LIBZYNC.md`](../libzync/LIBZYNC.md); plan: [`libzync/ROADMAP.md`](../libzync/ROADMAP.md) §H.
 
 - **Same judge.** Core v28.0's interpreter, sighash, serialisation and PoW and libsecp256k1 0.5.1 still decide every
   script and signature. libzync changes how the proof is organised: hinted signature checks confirmed by one batch
   equation per chunk, each transaction parsed and hashed once, an aggregate that never re-parses.
-- **Coin accounting:** the coin log ([`libzync/COINLOG.md`](libzync/COINLOG.md)) proves every block; the chain state
+- **Coin accounting:** the coin log ([`libzync/COINLOG.md`](../libzync/COINLOG.md)) proves every block; the chain state
   carries a counting trie root and a live-coin hash. The SwiftSync hints design (design B) was retired in E2
   (2026-11-05).
-- **Handover and block forest** ([`libzync/HANDOVER.md`](libzync/HANDOVER.md)): a new image can continue a chain
+- **Handover and block forest** ([`libzync/HANDOVER.md`](../libzync/HANDOVER.md)): a new image can continue a chain
   instead of re-proving from genesis (allowed for a rule change, never for a soundness fix); a tip proof can show an
   earlier block was in the chain.
-- **zyncAPPs** ([`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md)): separate guests that verify a core receipt and answer
+- **zyncAPPs** ([`libzync/ZYNCAPPS.md`](../libzync/ZYNCAPPS.md)): separate guests that verify a core receipt and answer
   one question (ownership, payment, supply). Design only; none built.
-- **Proof statement and verifier:** [`libzync/SWIFTSYNC_PROOFS.md`](libzync/SWIFTSYNC_PROOFS.md) (name historical).
+- **Proof statement and verifier:** [`libzync/SWIFTSYNC_PROOFS.md`](../libzync/SWIFTSYNC_PROOFS.md) (name historical).
 - **Networks:** mainnet and default signet.
 - **Measured** (LIBZYNC.md, 2026-10-30): 8.2× fewer cycles than CORE `37987b85` on block 962,000 (409.5 M vs 3.36 G,
   round-8 image); mainnet tip blocks in 266–332 s on 4 GPUs (round-13 image). ROADMAP §H, 2026-11-06: block 962,000
@@ -297,7 +297,7 @@ Where a doc and the code disagree, the code wins. ⚠ marks an overloaded or dis
   worker `hazync spine`). Block-map status 5 "anchored" = absorbed.
 - **aggregate** — guest mode 5 (`aggregate()`), combining a block's chunk receipts into one block proof and
   re-checking each chunk's input binding digest. Host `prove-seg`, `agg-chunks`.
-- ⚠ **anchor** — in [`SECURITY.md`](SECURITY.md) the trusted start of a chain proof (genesis or a block-hash
+- ⚠ **anchor** — in [`SECURITY.md`](SECURITY_MODEL_CORE.md) the trusted start of a chain proof (genesis or a block-hash
   checkpoint); in #277 ("anchor warp") a non-genesis checkpoint proved backwards from.
 - ⚠ **audit #N vs round N** — review rounds 1–9 internal, 10–11 external AI-assisted (`history/SECURITY_AUDIT_LOG.md`);
   "audit #1–#5" is a separate series (#3 = 2026-08-03 BIP30 F-1, #5 = 2026-08-04). Round 8 =
@@ -330,7 +330,7 @@ Where a doc and the code disagree, the code wins. ⚠ marks an overloaded or dis
   `POST /api/rotate` moves attribution to a new key (both sign; history not rewritten, #113); off unless
   `ROTATE_ENABLED=1` (#311).
 - **field backend** — patch `0012` (`field_bigint2`): libsecp field arithmetic on bigint2. See
-  [`history/FIELD_BIGINT2_BACKEND.md`](history/FIELD_BIGINT2_BACKEND.md).
+  [`history/FIELD_BIGINT2_BACKEND.md`](FIELD_BIGINT2_BACKEND.md).
 - **fold** — `[a..b] + [b+1..c] → [a..c]` when boundaries match in full; `range_work` sums (SPEC §10). Guest mode 7,
   host `fold-range`, worker `hazync fold`. The coordinator offers only aligned equal-width sibling pairs
   (`GET /api/foldable`), so folds build a tree.
@@ -346,7 +346,7 @@ Where a doc and the code disagree, the code wins. ⚠ marks an overloaded or dis
   step.
 - **lift** — risc0 step turning a `SegmentReceipt` into a `SuccinctReceipt`.
 - **lift_x hint** — patch `0013`: the host supplies pubkey Y and the guest checks `y² = x³ + 7` with libsecp
-  arithmetic. See [`history/LIFTX_HINT.md`](history/LIFTX_HINT.md).
+  arithmetic. See [`history/LIFTX_HINT.md`](LIFTX_HINT.md).
 - **join / join tree** — risc0 step merging two adjacent succinct receipts; the vendored risc0 uses a balanced tree of
   depth `log2(N)` whose levels are published as work.
 - **lineage** — every canonical id in order with risc0/rzup versions: `reproduce/LINEAGE.tsv`, from
@@ -357,7 +357,7 @@ Where a doc and the code disagree, the code wins. ⚠ marks an overloaded or dis
 - **METHOD_ID / guest id / image id** — risc0 image id of the guest ELF; receipts verify against it and commit it as
   `self_id`. Canonical value in `reproduce/METHOD_ID`; `host method-id`; `GET /api/meta`.
 - **po2 / seg_po2** — segment size exponent: `HAZYNC_SEG_PO2`, else 21 (CUDA) or 20; worker retries down to 18.
-- **proof party** — the public effort to prove the chain from genesis ([`../CONTRIBUTING.md`](../CONTRIBUTING.md)).
+- **proof party** — the public effort to prove the chain from genesis ([`../CONTRIBUTING.md`](../../CONTRIBUTING.md)).
 - **range** — inclusive span `[lo..hi]`, written `lo-hi` or `N`.
 - **re-baseline** — any change that moves the id, including line-moving comment edits in guest or `#[path]`-included
   files (panic metadata embeds line numbers). Old proofs stop verifying. `scripts/rebaseline-id.sh`,
@@ -372,7 +372,7 @@ Where a doc and the code disagree, the code wins. ⚠ marks an overloaded or dis
   board coordinator.
 - **spine** — the single genesis-anchored `[1..N]` with the largest N, advanced only by absorption; verified and
   stored but not built by the coordinator. `GET /api/spine`, `/api/spine/proof`. Run one spine worker fleet-wide.
-- ⚠ **sponsor** — someone paying for a span to be proven (`/api/sponsor*`, [`COORDINATOR.md`](COORDINATOR.md)).
+- ⚠ **sponsor** — someone paying for a span to be proven (`/api/sponsor*`, [`COORDINATOR.md`](../COORDINATOR.md)).
   Handles folding to `sponsor…` need a key in `sponsor_keys`; the bot (`coordinator/sponsor_bot.py`) submits as
   `SPONSOR: <name>`. The September docs disagreed on whether the bot exists; the code exists and had never run live.
 - **STARK receipt / succinct** — risc0's native proof; composite = list of segment receipts, succinct = one

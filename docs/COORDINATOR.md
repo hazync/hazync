@@ -413,6 +413,6 @@ body/path/query, replay, stale, proxied, non-loopback, no key, forbidden transit
 
 ## Related
 
-[`COORDINATOR_REFERENCE.md`](COORDINATOR_REFERENCE.md) · [`OVERVIEW.md`](OVERVIEW.md) · [`OPERATIONS.md`](OPERATIONS.md) (segment coordinator, fleets) ·
-[`SECURITY.md`](SECURITY.md) · [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) · [`SPEC.md`](SPEC.md) (design
+[`COORDINATOR_REFERENCE.md`](COORDINATOR_REFERENCE.md) · [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md) · [`OPERATIONS.md`](OPERATIONS.md) (segment coordinator, fleets) ·
+[`../SECURITY.md`](../SECURITY.md) · [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) · [`history/SPEC_CORE.md`](history/SPEC_CORE.md) (CORE design
 history: `history/HAZYNC_ARCHITECTURE.md`) · hazync#69 (federation design) · `coordinator/deploy/RUNBOOK.md`

@@ -1,10 +1,5 @@
 # Hazync
 
-[![blocks proven](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.hazync.org%2Fapi%2Fstate%3Fslim%3D1&query=%24.progress.proven&label=blocks%20proven&color=1f6feb&style=flat-square&cacheSeconds=300)](https://hazync.org/)
-[![chain tip](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.hazync.org%2Fapi%2Fstate%3Fslim%3D1&query=%24.progress.tip&label=chain%20tip&color=30363d&style=flat-square&cacheSeconds=300)](https://hazync.org/)
-[![share of chain](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.hazync.org%2Fapi%2Fstate%3Fslim%3D1&query=%24.progress.pct&label=%2525%20of%20chain&color=8957e5&style=flat-square&cacheSeconds=300)](https://hazync.org/)
-[![provers](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.hazync.org%2Fapi%2Fstate%3Fslim%3D1&query=%24.progress.contributors&label=provers&color=238636&style=flat-square&cacheSeconds=300)](CONTRIBUTING.md)
-
 **Sync Bitcoin from a proof, not from trust.**
 
 ---
@@ -30,72 +25,77 @@ Every other attempt rewrites Bitcoin's consensus rules in a language a prover ca
 rewrite then has to match Bitcoin Core **exactly, in every edge case, forever** — including the bugs
 Core can never fix because they're now consensus. Nobody can prove that about a rewrite.
 
-Hazync doesn't rewrite them. It compiles **Bitcoin Core's actual C++** — the real
+Hazync doesn't rewrite them. Its core, **libzync**, compiles **Bitcoin Core's actual C++** — the real
 `interpreter.cpp`, the real `SignatureHash`, the real `libsecp256k1` — to RISC-V and runs it inside a
-zero-knowledge VM.
+zero-knowledge VM. Around that code it adds only what a proof needs: one batch check of each chunk's
+signatures, an append-only **coin log** that makes a missing or double spend unprovable at every block, a
+**counting trie** that answers questions by script (balance, history, "no such coin"), and **joins** that fold
+independently proved blocks into one proof.
 
 If Core accepts a block, so does this. Not because the behaviour was carefully matched, but because
-it is the same code.
+it is the same code. [`docs/libzync/CONSENSUS_RULES.md`](docs/libzync/CONSENSUS_RULES.md) goes through
+Core's rules one by one.
 
-## Check one yourself
+## The program
 
-A proof verifies in **tens of milliseconds**, in a browser, with nothing sent anywhere:
-
-**[hazync.org/explorer/#verify](https://hazync.org/explorer/#verify)**
-
-Or from the command line — download `hazync-verify-x86_64-linux-gnu` from the
-[latest release](https://github.com/hazync/hazync/releases/latest) and point it at any proof. The
-[full walkthrough](docs/history/DESIGN_OVERVIEW.md#check-one-yourself-it-takes-about-thirty-seconds) takes
-about thirty seconds.
-
-A proof names the exact program that produced it. The canonical prover is
+A proof names the exact program that produced it. The published libzync images are
 
 ```
-37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd
+mainnet  863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5
+signet   73b62530ca89eea376e7753f47ab4f16aed3be3138d6052d84d30510aed0f38d
 ```
 
-and the build is reproducible, so anyone can rebuild from source and check they get the same id. A
-proof made by any other program is a proof of something else — that is what stops "trust us" from
-creeping back in.
+and the build is reproducible: [`reproduce/libzync.Dockerfile`](reproduce/libzync.Dockerfile) gives
+the same ids bit for bit ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), and CI rebuilds them on
+every change. A proof made by any other program is a proof of something else — that is what stops
+"trust us" from creeping back in.
 
 ## Where it actually stands
 
-Honest, because overclaiming here would be the whole problem again:
+Honest, because overclaiming here would be the whole problem again. Every figure below was measured;
+the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench/).
 
 **Works today**
 
-- Bitcoin Core's consensus code proven inside a zkVM, on real blocks from every era
-- An open **proof party**: anyone proves any block on their own GPU and signs it with their own key
-- Proofs combine — a chain of them reaches back to genesis
-- A node holding only stripped blocks validated them against a proof
-- A near-tip block (966,256, 9,079 inputs) proven in **544 seconds on 27 rented GPUs**
-- Reproducible builds: the same source gives the same program ID, bit for bit
+- A real proof of mainnet from **genesis to block 200** by the published image: 3,031 s on one RTX PRO 6000,
+  one 227 KB receipt that verifies in a browser
+- A **coin check** page that verifies that proof on your own device and checks a server's answers
+  about any script against it; a server that alters one word of an answer is refused
+  ([`swiftsync-verify-wasm/zapp/`](swiftsync-verify-wasm/zapp/))
+- On real mainnet state, blocks 200,000 to 300,000 on one card: **9.5x fewer proven cycles** and
+  **7.0x less card time** than the original per-signature design
+  ([`results/CYCLES_REAL_STATE.md`](experimental/libzync-bench/results/CYCLES_REAL_STATE.md))
+- Blocks proved independently and **joined**: the joined proof equals the linear one exactly
+- Reproducible builds, confirmed by an independent CI runner
 
 **Not yet**
 
-- **No independent audit.** Nobody outside the project has reproduced the build or reviewed the
-  accumulator, which is the one component that isn't Core's code
-- The chain is **~13% proven** (see the badge — it's live)
-- Syncing a node from a proof is shown at low height, not at scale
-- Following the chain's tip continuously is the current target, not a result
+- **No independent audit.** The parts that are not Core's code (the coin log, the trie, the batch
+  signature check, the aggregate) are where review matters most
+- **No proof of the whole chain yet.** The state before every block is being prepared on our server;
+  the chain will be proved from genesis under the published image, in parallel, and joined
+- Following the chain's tip with libzync is built, not yet running live
 
 ## Help
 
 The most valuable contribution is **trying to break it** — specifically, finding a case where
-Hazync says a block is valid and Bitcoin Core would not. [`docs/SECURITY.md`](docs/SECURITY.md)
-says where an hour is worth most.
+Hazync says a block is valid and Bitcoin Core would not. [`SECURITY.md`](SECURITY.md) says how to
+report one.
 
 | | |
 |---|---|
-| **Prove blocks** on your GPU | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| **Plain-English explanation** | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) |
-| **How it works, in detail** | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) |
-| **Specification & soundness** | [`docs/SPEC.md`](docs/SPEC.md), [`docs/SECURITY.md`](docs/SECURITY.md) |
+| **What it proves and how** | [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md) |
+| **The proof statement, and what a verifier checks** | [`docs/libzync/SWIFTSYNC_PROOFS.md`](docs/libzync/SWIFTSYNC_PROOFS.md) |
+| **What is built and what is open** | [`docs/libzync/ROADMAP.md`](docs/libzync/ROADMAP.md) |
+| **Prove blocks on your GPU** | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | **Every document** | [`docs/README.md`](docs/README.md) |
 | **Discussion** | [Delving Bitcoin](https://delvingbitcoin.org/t/running-cores-real-consensus-code-inside-a-zkvm/2811) |
 
 Running it costs real money in GPU time. [What it costs and how to help pay for
 it](https://hazync.org/donate/).
+
+The original Hazync design, which proved each signature with Core's code directly (image `37987b85`), is
+superseded by libzync; its record is kept in [`docs/history/`](docs/history/README.md).
 
 ## Licence
 

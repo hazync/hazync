@@ -13,7 +13,7 @@
 #
 # The C3/C4 pair is the point: the SAME 388-day time-locked spend at the SAME block is wrongly VALID
 # under the placeholder coin_mtp=0 (the open SEC gap) but correctly REJECTED once the real creation-MTP
-# is supplied (what the archive-node bridge provides for free). See SECURITY.md / docs/SECURITY.md.
+# is supplied (what the archive-node bridge provides for free). See docs/history/SECURITY_MODEL_CORE.md.
 set -uo pipefail
 H=${HAZYNC_HOST:-./target/release/host}
 fail=0

@@ -1,5 +1,5 @@
 #!/bin/bash
-# docs/SPEC.md states formats normatively. A spec that has drifted from the code is worse than no
+# docs/history/SPEC_CORE.md (the CORE guest's spec) states formats normatively. A spec that has drifted from the code is worse than no
 # spec: a reviewer implements against it, their verifier disagrees with ours, and the disagreement
 # looks like OUR bug. So the concrete values in it are checked against the source they describe.
 #
@@ -10,7 +10,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 exec python3 - <<'PY'
 import re, sys
 
-spec = open('docs/SPEC.md').read()
+spec = open('docs/history/SPEC_CORE.md').read()
 rs   = open('rangestate/src/lib.rs').read()
 acc  = open('accumulator/src/lib.rs').read()
 bad  = 0

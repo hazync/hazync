@@ -1,11 +1,14 @@
 # libzync: the core of Hazync
 
-**Branch `libzync`, 2026-11-06. Freeze candidate: image c14** (mainnet `bbf82800…`, signet `219215fb…`, regtest
-`3036d379…`; `handover/RESULT_c14.txt`). Every number names what it was measured on and says MEASURED or ESTIMATED.
-Status of every item, built or open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rounds
-1-8 in full) is [`LIBZYNC_2026-10-31.md`](../../experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
+**On `main` since 2026-11-08 (#670). Published images** (frozen core c14, source tag `libzync-c14` = `ce4e1e3`, built by
+`reproduce/libzync.Dockerfile`, reproduced by two builds and by CI): mainnet **`863c9ce3…`**, signet **`73b62530…`**
+([`../../reproduce/LIBZYNC_IDS`](../../reproduce/LIBZYNC_IDS)). Laptop builds of the same source give other ids
+(mainnet `bbf82800…`), because ids depend on absolute build paths; several results below were measured on those and
+say so. Every number names what it was measured on and says MEASURED or ESTIMATED. Status of every item, built or
+open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rounds 1-8 in full) is
+[`LIBZYNC_2026-10-31.md`](../../experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
 
-⛔ **Not frozen, not audited, no proof from genesis of mainnet yet.** See §7.
+⛔ **Not audited, no proof of the whole mainnet chain yet.** See §7.
 
 ---
 
@@ -98,7 +101,8 @@ the state before every block natively (untrusted starting points); each block is
 in any order, on any number of cards; a join (guest mode 18) verifies two adjacent proofs of the same image and
 requires the right one to start where the left one ends (the link digest excludes `anchor_id`, so balanced trees
 work). A wrong host state can only fail a join, never forge. N blocks need N−1 joins over ~log2 N levels, every level
-parallel. Not yet built: per-block leaf bundles from prep and the coordinator's work queue (H-B 8, step e).
+parallel. Prep writes a per-block leaf bundle (the state before the block and every witness its proof needs),
+and the coordinator serves them as work items (ROADMAP H-B 8, e).
 
 ### zyncAPPs — [`ZYNCAPPS.md`](ZYNCAPPS.md)
 
@@ -132,7 +136,7 @@ own spends and real transaction counts): the cycles are a real block's, the coin
 
 ## 5. Testing and review
 
-### Tests on the freeze candidate
+### Tests on the frozen core (c14)
 
 | test | image | result | source |
 |---|---|---|---|
@@ -160,7 +164,7 @@ the numbering restarted for the reviews after E2. Full findings for 1-8:
 |---|---|---|---|
 | 1 | 10-30 | 12 findings, soundness-critical among them: a hint-block flag that switched coin accounting off, ECMH points with two y values, witness bytes unbound across chunks, BIP68 signed version compare, a second coinbase, coin height unchecked | all fixed and retested |
 | 2 | 10-30 | coinbase flag 2 spent immature coinbase; BIP30 tree root not carried between blocks; verifier accepted a dev-mode receipt | fixed |
-| 3 | 10-30 | `is_base` any value skipped verifying the previous proof (forgery); BIP30 descendants of a repeated coinbase | fixed; the `is_base` and BIP68 bugs are also on `main`: draft PR #668, merge is the user's call (ROADMAP F1) |
+| 3 | 10-30 | `is_base` any value skipped verifying the previous proof (forgery); BIP30 descendants of a repeated coinbase | fixed (the same two bugs in the CORE guest: #668, closed as superseded when libzync replaced it) |
 | 4 | 10-30 | open items: `time-too-new`, scripts-skipped label | `max_time` and `profile` in the proof |
 | 5 | 10-31 | `verify-chain` accepted a libzync receipt with none of its checks; signet GPU evidence had failed its own verify | fixed (host and docs; image unchanged) |
 | 6 | 10-31 | C++ side (patches, `verify_input.cpp`) accepts exactly what Core and libsecp accept; evidence scripts circular | scripts fixed |
@@ -215,19 +219,14 @@ signedness bug was in Hazync's own transcription.
 
 ## 7. Limits and open work
 
-- **No proof from genesis of mainnet yet.** Mainnet is proven 1..200 and signet 1..2,600 from genesis in dev mode
-  (rules executed, receipts not real); on current images, real receipts exist only for block 962,000 and the 8-block join tree. A full mainnet proof is
-  the user's trigger after the freeze (ROADMAP H8).
-- **The GPU benchmark's coin state is modelled** (`cl_synth_around`), not mainnet history (§4).
-- **Mainnet-scale prep is not done.** The trie on disk is built and crash-tested, but real bytes per coin are
-  unmeasured: 4.04 nodes / 258 bytes per coin on a synthetic chain; mainnet ESTIMATED at hundreds of GB, needing NVMe
-  on the prep / tip box (ROADMAP E2). Per-block leaf bundles from prep (H-B 8) and the coordinator's work queue (H-B e)
-  are not built.
-- **The image is not frozen.** Before it: a review of everything since round 6, the repo cleanup (G2), a full cold
-  review of the cleaned repo; then the freeze is the user's call (ROADMAP H6-H7). Until the freeze publishes the
-  product ids, the verifiers' built-in table (`reproduce/LIBZYNC_IDS`: `9f469930…` / `067822b9…`, round 8) verifies
-  nothing current: `swiftsync-verify --product --image <hex>` (the built-in entries also carry the round-8 profile);
-  `host libzync-verify` checks against the image it was built with.
+- **No proof of the whole mainnet chain yet.** Real receipts from the published image: mainnet 1..200 from genesis
+  (3,031 s on one RTX PRO 6000; `experimental/libzync-bench/zapp/`); with laptop-built images, block 962,000, the
+  8-block join tree, and 16 leaf proofs on real mainnet state (`experimental/libzync-bench/results/`). Signet is proved
+  1..2,600 from genesis in dev mode.
+- **Mainnet prep is running, not finished.** The state before every block (coin log, counting trie, BIP30 tree) and
+  per-block leaf bundles are built by `libzync-prep` on the coordinator box: 0 mismatches against proved states so
+  far; rate and storage measured as it goes (ROADMAP, mainnet prep plan). The coordinator serves leaf bundles
+  (`server.py` with `HAZYNC_LIBZYNC=1`); a live tip instance is not running yet.
 - **No external audit or bug bounty** (ROADMAP I2): needed before anyone relies on a proof for money. Fuzzing and a
   wider rig are open (I1). Trust in risc0 itself: one pinned version (I3).
 - **The batch-signature soundness margin is untested at the edge:** x = r + n is infeasible for real r and effectively
@@ -241,7 +240,7 @@ signedness bug was in Hazync's own transcription.
 scripts/libzync-base.sh ~/lz-base                       # Core v28.0 + libsecp 0.5.1 + patches, pinned
 cd prover && rm -rf target/riscv-guest                  # always build the guest from clean (round 8: stale ELF)
 HAZYNC_BASE=~/lz-base HAZYNC_LIBZYNC=1 cargo build --release -p host     # signet: HAZYNC_NETWORK=signet
-host method-id                                          # c14 mainnet: bbf82800…
+host method-id                                          # laptop path: bbf82800…; the published 863c9ce3 is the container build
 HAZYNC_BLOCK=block.json host libzync-hints out.lzb      # a block's hint bundle
 HAZYNC_BLOCK=block.json HAZYNC_LZ_HINTS=out.lzb host agg-exec-fake      # execute chunks + aggregate, print cycles
 host libzync-prove-range 1 200 <json dir> genesis <out>                 # prove a range from genesis
@@ -255,6 +254,6 @@ Full test pass: `experimental/libzync-bench/handover/retest_final.sh <tag> <prev
 pass). GPU: `experimental/libzync-bench/gpu/run_c14_pod.sh`, `gpu-libzync-multi.sh`, `gpu-join.sh`. A published id
 needs the container build, `reproduce/libzync.Dockerfile` (ids depend on absolute build paths).
 
-Related Hazync docs: [`OVERVIEW.md`](../OVERVIEW.md), [`SECURITY.md`](../SECURITY.md),
+Related Hazync docs: [`SECURITY.md`](../../SECURITY.md),
 [`BUILD_AND_RELEASE.md`](../BUILD_AND_RELEASE.md), [`COORDINATOR.md`](../COORDINATOR.md),
 [`OPERATIONS.md`](../OPERATIONS.md).

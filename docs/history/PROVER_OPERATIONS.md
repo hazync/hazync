@@ -148,7 +148,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now hazync-workers
 
 1. **Download the new files beside the old ones**, keeping the asset names, with `SHA256SUMS.txt` and
    `SHA256SUMS.txt.asc`, and verify them
-   ([`SECURITY.md`](../SECURITY.md#verifying-releases)): `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt`, then
+   ([`SECURITY.md`](SECURITY_MODEL_CORE.md#verifying-releases)): `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt`, then
    `sha256sum -c --ignore-missing SHA256SUMS.txt`.
 2. **Check the guest id** against the coordinator. A re-baseline changes it, and a mismatched prover has
    every proof rejected:
