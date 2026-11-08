@@ -55,6 +55,9 @@
       <button id="history">History</button>
     </div>
   </div>
+  <p class="note">Why block 9's key shows 5 coins and 28 BTC: its one 50 BTC coinbase was spent in block 170 (10 to Hal, 40
+    back to the same key as change), then the change was spent again in blocks 181 (10 out, 30 back), 182 (1 out, 29 back)
+    and 183 (1 out, 28 back). Coins 50, 40, 30, 29 are spent; the 28 is what is left at block 200.</p>
   <div id="result"></div>
   <p class="note">What the proof can and cannot say: it shows the chain up to its tip is valid Bitcoin from genesis and what the coin state is there.
     Which chain it is (that the tip is the network's block at that height) is checked against a source you trust; below
