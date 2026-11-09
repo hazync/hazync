@@ -228,6 +228,54 @@ rc, out = run([sys.executable, SPINE, "--spine-dir", sd, "--db", db, "--verify",
                "--repo", os.path.join(T, "no-repo")], {"FAKE_VERIFY_OUT": verify_out(), "FAKE_CHAIN": chain_fixture()})
 check(rc == 2 and "guest id" in out, "no canonical METHOD_ID to compare with is COULD NOT CHECK", out)
 
+# ── check-spine.py on the libzync board (HAZYNC_LIBZYNC=1): the libzync verifier prints text, not JSON ──────────────
+LZ_MID = "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5"
+
+
+def lz_verify_out(anchor_ok=True, image=LZ_MID, height=3, tip=TIP, work=WORK,
+                  verdict="SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below "
+                          "Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain"):
+    """The libzync verifier's output, in its real format (captured from swiftsync-verify --product on 2026-11-09)."""
+    text = "\n".join([
+        f"  [ok] receipt verifies against image {image} (mainnet)",
+        "  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)",
+        f"  [{'ok' if anchor_ok else 'FAIL'}] anchor_id is genesis",
+        f"  chain: tip {tip} at height {height}, cum_work 0x{work:064x}",
+        verdict if anchor_ok else "SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed"])
+    fd, p = tempfile.mkstemp(prefix="lzverify-", suffix=".txt", dir=T)
+    os.close(fd)
+    with open(p, "w") as f:
+        f.write(text)
+    return p
+
+
+def spine_lz(env=None, **kw):
+    sd, _ = spine_fixture(out_tip="aa" * 32, **kw)          # a libzync head's out_tip is a state digest
+    db, _ = db_fixture()
+    e = {"HAZYNC_LIBZYNC": "1", "FAKE_VERIFY_OUT": lz_verify_out(), "FAKE_CHAIN": chain_fixture()}
+    e.update(env or {})
+    return run([sys.executable, SPINE, "--spine-dir", sd, "--db", db, "--verify", FAKE_VERIFY, "--bitcoin-cli",
+                FAKE_CLI, "--method-id", LZ_MID], e)
+
+
+print("== check-spine.py on the libzync board ==")
+rc, out = spine_lz()
+check(rc == 0 and "holds" in out and "state digest" in out,
+      "libzync: a good genesis proof (DEMO below min chainwork) passes, tip and work held to the node", out)
+rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(anchor_ok=False)})
+check(rc == 1, "libzync: a proof whose anchor is not genesis FAILS", out)
+rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(verdict="SWIFTSYNC_VERIFY_DEMO: consistent with the chain "
+                                                                  "FROM THE GIVEN ANCHOR ONLY -- not a proof")})
+check(rc == 1, "libzync: a DEMO from a given anchor (not from genesis) FAILS", out)
+rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(image="37987b85" + "0" * 56)})
+check(rc == 1 and "not the canonical" in out, "libzync: a proof from another image FAILS", out)
+rc, out = spine_lz(env={"FAKE_CHAIN": chain_fixture(block="00000000" + "ee" * 28)})
+check(rc == 1 and "is NOT Bitcoin's block" in out, "libzync: a tip that is not our node's block FAILS", out)
+rc, out = spine_lz(env={"FAKE_CHAIN": chain_fixture(work=WORK + 1)})
+check(rc == 1 and "chainwork" in out, "libzync: cumulative work that is not the node's chainwork FAILS", out)
+rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(height=4)})
+check(rc == 1 and "head record says 3" in out, "libzync: a proof whose height is not the head record's FAILS", out)
+
 # Stall: old head AND a proof waiting at hi+1 fails; old head with nothing waiting does not.
 old = time.time() - 3 * 3600
 sd, _ = spine_fixture(ts=old)
