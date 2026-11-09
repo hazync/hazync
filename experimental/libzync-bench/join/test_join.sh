@@ -11,7 +11,7 @@
 #    receipt of another image, refused by the host before proving.
 # usage: test_join.sh <host> <linear run dir with every state (test_store.sh's a/)> <out dir> [N] [other-image receipt]
 # P=<jobs> (default 3): leaves, and each level's joins, run in parallel (they are independent: the point of H-B).
-H=${1:?host}; A=${2:?linear run dir}; O=${3:?out dir}; N=${4:-200}; OTHER=${5:-}; J=~/libzync-gpu/ssweep
+H=${1:?host}; A=${2:?linear run dir}; O=${3:?out dir}; N=${4:-200}; OTHER=${5:-}; J=${J:-~/libzync-gpu/ssweep}
 mkdir -p $O; rm -rf $O/leaf $O/join $O/badleaf* $O/neg_*; mkdir -p $O/leaf $O/join
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_COINLOG_SAVE_EACH=1
 fails=0; miss() { echo "FAIL: $*"; fails=$((fails + 1)); }

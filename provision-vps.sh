@@ -102,15 +102,19 @@ fi
 # like a build that is being slow. Bound it and retry.
 rzup_install() {
     local what="$*" attempt
-    for attempt in 1 2 3; do
+    # 10 attempts, backing off 30 s, 60, 120, 240, then 300 s: 2026-11-08, github.com's release redirector answered
+    # 504 Gateway Timeout in bursts lasting tens of minutes (seen from CI and from a dev box alike); three attempts
+    # 10-20 s apart, then five over ~8 minutes, all fell inside one burst. Worst case ~40 minutes of waiting.
+    local n=${RZUP_ATTEMPTS:-10}
+    for attempt in $(seq 1 "$n"); do
         # shellcheck disable=SC2086
         if timeout "${RZUP_TIMEOUT:-3600}" rzup install --force $what; then
             return 0
         fi
-        echo "   rzup install $what failed or timed out after ${RZUP_TIMEOUT:-3600}s (attempt $attempt/3)" >&2
-        sleep $(( attempt * 10 ))
+        echo "   rzup install $what failed or timed out after ${RZUP_TIMEOUT:-3600}s (attempt $attempt/$n)" >&2
+        if [ "$attempt" -lt "$n" ]; then w=$(( 15 * (1 << attempt) )); [ "$w" -gt 300 ] && w=300; sleep "$w"; fi
     done
-    echo "rzup install $what failed three times." >&2
+    echo "rzup install $what failed $n times (a 504 from github.com is GitHub's side: re-run later)." >&2
     echo "  These artifacts are LARGE — the rust toolchain alone is 488 MB — so on a slow link the" >&2
     echo "  download can be killed by the timeout while it is still making progress. That is not a" >&2
     echo "  network fault and retrying will not help: raise it, e.g. RZUP_TIMEOUT=7200." >&2

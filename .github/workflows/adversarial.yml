@@ -2006,3 +2006,129 @@ jobs:
             exit 1
           fi
           echo "reproducible libzync ids match the published ones"
+
+  # ── libzync soundness (2026-11-08) ────────────────────────────────────────────────────────────────────────────
+  # The libzync test pass in CI, on hosts built in the reproducible container: the mainnet and signet hosts embed the
+  # PUBLISHED guest ELFs (reproduce/LIBZYNC_IDS), so these jobs test what is published. soundness-suite above still
+  # runs the CORE-mode build of the shared guest source, which keeps its C++ and rule tests running. Drivers:
+  # scripts/libzync/ci/ (each step greps a positive marker: a step that crashed or printed nothing fails).
+  libzync-hosts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the libzync reproducible container
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
+      - name: Build the test hosts in it (published mainnet / signet ELFs; regtest O and N), the host unit tests, Core's vectors
+        run: |
+          mkdir -p hosts
+          docker run --rm -v "$PWD/hosts:/out" hazync-libzync-repro bash /hazync-zkvm/scripts/libzync/ci/build-hosts.sh /out
+          sudo chown -R "$(id -u):$(id -g)" hosts
+          cat hosts/ids.txt
+          for n in host_m host_sig host_reg host_regN core_vectors.json core_vectors_base.json; do
+            [ -s "hosts/$n" ] || { echo "::error::hosts/$n was not built"; exit 1; }
+          done
+          grep -q '^HOST_UNIT_OK .*, 0 failed$' hosts/ids.txt || { echo "::error::host unit tests (libzync mode) failed"; tail -40 hosts/host_unit.log; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libzync-hosts
+          path: |
+            hosts/host_m
+            hosts/host_sig
+            hosts/host_reg
+            hosts/host_regN
+            hosts/core_vectors.json
+            hosts/core_vectors_base.json
+            hosts/ids.txt
+          retention-days: 3
+
+  libzync-chain:
+    # mainnet 1..200 from genesis vs the reference implementations; leaf bundles; a 200-leaf join tree and its
+    # negatives; prep re-stamped under another image; the coordinator in libzync mode with the stock worker
+    needs: libzync-hosts
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: libzync-hosts, path: hosts }
+      - name: Chain from genesis and everything built on it
+        run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 P=4 bash scripts/libzync/ci/chain.sh hosts/host_m out
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: libzync-chain-logs, path: "out/**/*.log", retention-days: 7 }
+
+  libzync-blocks:
+    # edge blocks; negatives on 962,000
+    needs: libzync-hosts
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: libzync-hosts, path: hosts }
+      - name: Edge blocks, negative tests
+        run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/blocks.sh hosts/host_m out
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }
+
+  libzync-vectors:
+    # Core 28's script / tx vectors in 8 shards (each case once): libsecp and honest hints agree with Core on every
+    # case; under four forged-hint variants nothing Core rejects passes. A shard must report exactly its case count.
+    needs: libzync-hosts
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: libzync-hosts, path: hosts }
+      - name: Core's vectors, one shard of 8
+        env: { SHARD: "${{ matrix.shard }}" }
+        run: chmod +x hosts/host_*; bash scripts/libzync/ci/vectors.sh hosts/host_m hosts/core_vectors.json hosts/core_vectors_base.json out "$SHARD" 8
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: "libzync-vectors-logs-${{ matrix.shard }}", path: "out/**/*.log", retention-days: 7 }
+
+  libzync-rig:
+    # the guest against a real Bitcoin Core 28.0 on regtest, rule by rule; then handover O -> N
+    needs: libzync-hosts
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: libzync-hosts, path: hosts }
+      - name: Bitcoin Core 28.0 (release binary, sha256 pinned) and its source (test_framework, pinned commit)
+        run: |
+          curl -fsSLO https://bitcoincore.org/bin/bitcoin-core-28.0/bitcoin-28.0-x86_64-linux-gnu.tar.gz
+          echo "7fe294b02b25b51acb8e8e0a0eb5af6bbafa7cd0c5b0e5fcbb61263104a82fbc  bitcoin-28.0-x86_64-linux-gnu.tar.gz" | sha256sum -c
+          tar xzf bitcoin-28.0-x86_64-linux-gnu.tar.gz
+          git clone -q --depth 1 -b v28.0 https://github.com/bitcoin/bitcoin.git core-src
+          test "$(git -C core-src rev-parse HEAD)" = 110183746150428e6385880c79f8c5733b1361ba
+      - name: Rig vs Core, handover
+        run: chmod +x hosts/host_*; bash scripts/libzync/ci/rig.sh hosts/host_reg hosts/host_regN bitcoin-28.0/bin/bitcoind core-src out
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: libzync-rig-logs, path: "out/**/*.log", retention-days: 7 }
+
+  libzync-signet:
+    # signet 1..100 from genesis on the published signet image vs the reference implementations
+    needs: libzync-hosts
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: libzync-hosts, path: hosts }
+      - name: Signet from genesis
+        run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/signet.sh hosts/host_sig out
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: libzync-signet-logs, path: "out/**/*.log", retention-days: 7 }
