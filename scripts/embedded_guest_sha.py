@@ -145,10 +145,12 @@ def main(argv):
         raise SystemExit(__doc__.strip().splitlines()[-4].strip())
     path = Path(argv[1])
     root = argv[argv.index("--root") + 1] if "--root" in argv else "."
-    pin = read_pin(root)
+    # --pin <sha256> --size <bytes>: another image's guest (2026-11-08: the published libzync mainnet ELF,
+    # reproduce/LIBZYNC_IDS), instead of reproduce/GUEST_ELF_SHA256's CORE guest
+    pin = argv[argv.index("--pin") + 1] if "--pin" in argv else read_pin(root)
     data = path.read_bytes()
     print(f"binary : {path}  ({len(data):,} bytes)")
-    print(f"pin    : {pin}  ({PIN_FILE})")
+    print(f"pin    : {pin}  ({'--pin' if '--pin' in argv else PIN_FILE})")
 
     dlls = imported_dlls(data)
     if "--imports" in argv or any(d.lower() == "nvcuda.dll" for d in dlls):
@@ -159,7 +161,7 @@ def main(argv):
                 note = "   ⛔ CUDA DRIVER API — ships with the driver, so this binary cannot START here"
             print(f"         {d}{note}")
 
-    size = GUEST_SIZE
+    size = int(argv[argv.index("--size") + 1]) if "--size" in argv else GUEST_SIZE
     find_guest.want = pin
     off, got = find_guest(data, size)
     print()

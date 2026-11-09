@@ -488,9 +488,11 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
 /// Bytes in a directory's files (one level: the stores keep their files flat).
 fn dir_bytes(d: &std::path::Path) -> u64 {
     std::fs::read_dir(d).map(|it| it.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| {
-        // allocated bytes, not the apparent length (a sparse index or arena)
-        use std::os::unix::fs::MetadataExt;
-        m.blocks() * 512
+        // allocated bytes, not the apparent length (a sparse index or arena); the length off Unix
+        #[cfg(unix)]
+        { use std::os::unix::fs::MetadataExt; m.blocks() * 512 }
+        #[cfg(not(unix))]
+        { m.len() }
     }).sum()).unwrap_or(0)
 }
 

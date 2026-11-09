@@ -280,6 +280,9 @@ impl Arena for DiskArena {
     }
     fn free(&mut self, r: R) { self.pending.push(r); }
     fn live(&self) -> u64 { self.len - (self.free.len() + self.pending.len()) as u64 }
+    #[cfg(not(unix))]
+    fn prefetch(&self, _rs: &[R]) {} // madvise is Unix-only: elsewhere (Windows) reads fault in on demand, slower, same result
+    #[cfg(unix)]
     fn prefetch(&self, rs: &[R]) {
         // one madvise(WILLNEED) per distinct page: the kernel reads them all ahead at once, so a level of the walk costs
         // about one read latency, not one per node (the volume serves ~75 k random reads/s in parallel, ~5 k serially)
