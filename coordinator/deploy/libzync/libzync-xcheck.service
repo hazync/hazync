@@ -1,0 +1,10 @@
+[Unit]
+Description=libzync: the board pass and the paper prep run agree on the chain state at every shared height
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/libzync-xcheck /var/lib/libzync-fast/out /var/lib/libzync-board/out --state /var/lib/hazync-checks/libzync-xcheck.last
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=50min

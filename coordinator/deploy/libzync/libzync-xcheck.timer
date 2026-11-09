@@ -1,0 +1,9 @@
+[Unit]
+Description=libzync prep cross-check, hourly
+
+[Timer]
+OnCalendar=*-*-* *:41:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
