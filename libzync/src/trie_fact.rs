@@ -210,4 +210,148 @@ mod tests {
         nc[0] = 0;
         assert_eq!(coin(&nc, &root, &k), Err(FactErr::NotCounts));
     }
+
+    /// Fixture: an address with an unspent coin, a coin spent later, a coin spent in its own block, and a neighbour.
+    fn fixture() -> (TrieStore, W, [u8; 32], Vec<Key>) {
+        let a = b"\x00\x14aaaaaaaaaaaaaaaaaaaa".to_vec();
+        let b = b"\x51\x20bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_vec();
+        let (tx1, tx2) = ([1u8; 32], [2u8; 32]);
+        let mut st = TrieStore::new(true);
+        st.apply(&[], &[(coin_key(&a, &tx1, 0), None, 500), (coin_key(&a, &tx1, 1), Some(sp(1, 2, 0)), 70),
+                        (coin_key(&a, &tx2, 0), None, 30), (coin_key(&b, &tx2, 1), None, 9)]).unwrap();
+        st.apply(&[(coin_key(&a, &tx1, 0), sp(2, 1, 3))], &[]).unwrap();
+        let root = st.root();
+        (st, root, script_hash(&a), alloc::vec![coin_key(&a, &tx1, 0), coin_key(&a, &tx2, 0), coin_key(&a, &tx2, 7)])
+    }
+
+    /// What the pre-11-09 reader made of a witness, re-encoded: the one canonical form of its MEANING (an independent
+    /// re-implementation of the old lenient grammar). A mutation whose canonical form verifies is one the old decoder
+    /// accepted with the same answer; the tests below show each such mutation is refused now.
+    fn old_reader_accepts(w: &[u32], ok: impl Fn(&[u32]) -> bool) -> bool {
+        let c = canonicalise(w);
+        !c.is_empty() && c != w && ok(&c)
+    }
+
+    fn canonicalise(w: &[u32]) -> Vec<u32> {
+        // parse leniently with the same grammar as trie_model, then re-encode
+        fn sub(w: &[u32], i: &mut usize, out: &mut Vec<u32>) -> Option<()> {
+            let tag = *w.get(*i)?; *i += 1;
+            match tag {
+                0 => out.push(0),
+                1 => { out.push(1); out.extend_from_slice(w.get(*i..*i + 8)?); *i += 8; }
+                2 | 5 | 6 => {
+                    // tag 2 whose one child is pruned is the one-sided 5 / 6 the encoder writes
+                    if tag != 2 { out.push(tag); out.extend_from_slice(w.get(*i..*i + 8)?); *i += 8; return sub(w, i, out); }
+                    let (mut l, mut r) = (Vec::new(), Vec::new());
+                    sub(w, i, &mut l)?; sub(w, i, &mut r)?;
+                    let pruned = |x: &[u32]| x.first() == Some(&1);
+                    if pruned(&l) && !pruned(&r) { out.push(5); out.extend_from_slice(&l[1..9]); out.extend(r); }
+                    else if pruned(&r) && !pruned(&l) { out.push(6); out.extend_from_slice(&r[1..9]); out.extend(l); }
+                    else { out.push(2); out.extend(l); out.extend(r); }
+                }
+                4 => {
+                    out.push(4); out.extend_from_slice(w.get(*i..*i + 8)?); *i += 8;
+                    let f = *w.get(*i)?; *i += 1;
+                    let s = w.get(*i..*i + 8)?; *i += 8;
+                    out.push((f == 1) as u32);
+                    // spent: the hash binds words 0-4 (5-7 are overwritten); unspent: nothing
+                    let mut sp = [0u32; 8];
+                    if f == 1 { sp[..5].copy_from_slice(&s[..5]); }
+                    out.extend_from_slice(&sp);
+                    out.extend_from_slice(w.get(*i..*i + 2)?); *i += 2;
+                }
+                _ => return None,
+            }
+            Some(())
+        }
+        fn top(w: &[u32], i: &mut usize, out: &mut Vec<u32>) -> Option<()> {
+            let tag = *w.get(*i)?;
+            if tag == 3 {
+                *i += 1; out.push(3); out.extend_from_slice(w.get(*i..*i + 12)?); *i += 12;
+                return sub(w, i, out);
+            }
+            if tag == 2 {
+                *i += 1;
+                let (mut l, mut r) = (Vec::new(), Vec::new());
+                top(w, i, &mut l)?; top(w, i, &mut r)?;
+                let pruned = |x: &[u32]| x.first() == Some(&1);
+                if pruned(&l) && !pruned(&r) { out.push(5); out.extend_from_slice(&l[1..9]); out.extend(r); }
+                else if pruned(&r) && !pruned(&l) { out.push(6); out.extend_from_slice(&r[1..9]); out.extend(l); }
+                else { out.push(2); out.extend(l); out.extend(r); }
+                return Some(());
+            }
+            if tag == 5 || tag == 6 { *i += 1; out.push(tag); out.extend_from_slice(w.get(*i..*i + 8)?); *i += 8; return top(w, i, out); }
+            sub(w, i, out)
+        }
+        let mut out = w[..9].to_vec();
+        out[0] = (w[0] == 1) as u32;
+        let mut i = 9;
+        if top(w, &mut i, &mut out).is_none() || i != w.len() { return alloc::vec![] }
+        out
+    }
+
+    /// Each kind of redundant encoding: decoded before 11-09 (same meaning), refused now. Root cause: the fact check
+    /// hashes the DECODED trie, so bytes the decoder discards or reads leniently were never bound.
+    #[test]
+    fn non_canonical_witnesses_are_refused() {
+        let (st, root, sa, keys) = fixture();
+        let h = st.prove_history(&sa);
+        assert!(history(&h, &root, &sa).is_ok(), "the honest history verifies");
+        // find each unspent coin record (tag 4 ... flag 0) in the history witness
+        let coins: Vec<usize> = (0..h.len().saturating_sub(19))
+            .filter(|&i| h[i] == 4 && h[i + 9] == 0 && h[i + 10..i + 18].iter().all(|&x| x == 0)).collect();
+        assert!(!coins.is_empty(), "the fixture's history has an unspent coin");
+        let c = coins[0];
+        let mut cases: Vec<(&str, Vec<u32>)> = Vec::new();
+        let mut m = h.clone(); m[c + 10] = 0xdead_beef; cases.push(("an unspent coin's spender slot carries data", m));
+        let mut m = h.clone(); m[c + 17] = 1; cases.push(("an unspent coin's spender slot, its last word", m));
+        let mut m = h.clone(); m[c + 9] = 2; cases.push(("a spent flag of 2", m));
+        let mut m = h.clone(); m[c + 9] = 0xffff_ffff; cases.push(("a spent flag of all ones", m));
+        // (a counts header other than 1 was never a hole: the old reader read it as "counts off", which facts refuse)
+        let mut m = h.clone(); m[0] = 7;
+        assert!(history(&m, &root, &sa).is_err(), "a counts header of 7: refused");
+        // a SPENT coin's spender words 5-7: the leaf hash overwrites them with the value and the flag
+        let spent: Vec<usize> = (0..h.len().saturating_sub(19)).filter(|&i| h[i] == 4 && h[i + 9] == 1).collect();
+        assert!(!spent.is_empty(), "the fixture's history has a spent coin");
+        for w in [5, 6, 7] {
+            let mut m = h.clone(); m[spent[0] + 10 + w] = 0x5a5a_5a5a;
+            cases.push((["a spent coin's spender word 5", "a spent coin's spender word 6", "a spent coin's spender word 7"][w - 5], m));
+        }
+        for (what, m) in &cases {
+            assert!(old_reader_accepts(m, |c| history(c, &root, &sa).is_ok()),
+                    "{what}: the old reader accepted it with the same answer (the test exercises the class)");
+            assert_eq!(history(m, &root, &sa).err(), Some(FactErr::Decode), "{what}: refused");
+        }
+        // tag 2 with a pruned child, which the encoder writes as one-sided 5: same meaning, refused
+        let p = st.prove_coins(&[keys[1]]);
+        assert!(coin(&p, &root, &keys[1]).is_ok());
+        let i5 = (9..p.len()).find(|&i| p[i] == 5).expect("a one-sided node in the coin proof");
+        let mut two = p[..i5].to_vec();
+        two.push(2); two.push(1); two.extend_from_slice(&p[i5 + 1..i5 + 9]); two.extend_from_slice(&p[i5 + 9..]);
+        assert!(old_reader_accepts(&two, |c| coin(c, &root, &keys[1]).is_ok()), "tag 2 + pruned child: the old reader accepted it");
+        assert_eq!(coin(&two, &root, &keys[1]).err(), Some(FactErr::Decode), "tag 2 + pruned child: refused");
+    }
+
+    /// The property the fix gives: no single changed bit anywhere in an honest fact verifies (each kind of fact).
+    #[test]
+    fn every_single_bit_change_to_a_fact_is_refused() {
+        let (st, root, sa, keys) = fixture();
+        let proofs: Vec<(&str, Vec<u32>)> = alloc::vec![("history", st.prove_history(&sa)), ("balance", st.prove_addr(&sa)),
+            ("coin spent", st.prove_coins(&[keys[0]])), ("coin unspent", st.prove_coins(&[keys[1]])),
+            ("coin absent", st.prove_coins(&[keys[2]]))];
+        let check = |p: &[u32]| -> bool {
+            history(p, &root, &sa).is_ok() || balance(p, &root, &sa).is_ok()
+                || keys.iter().any(|k| coin(p, &root, k).is_ok())
+        };
+        for (what, p) in &proofs {
+            assert!(check(p), "{what}: the honest proof verifies");
+            for i in 0..p.len() {
+                for b in [0, 1, 7, 15, 31] {
+                    let mut m = p.clone();
+                    m[i] ^= 1 << b;
+                    assert!(!check(&m), "{what}: word {i} bit {b} flipped and it still verified");
+                }
+            }
+        }
+    }
 }
