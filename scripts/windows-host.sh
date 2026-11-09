@@ -18,7 +18,7 @@
 #   * the zip holds exactly host.exe and the cudart64_*.dll runtime, flat, nothing else;
 #   * host.exe embeds the published mainnet guest byte for byte (sha256 against reproduce/LIBZYNC_IDS,
 #     the size taken from <guest-elf>, itself checked against the same pin);
-#   * host.exe carries the published image id exactly once ([u32;8] little-endian, as on Linux).
+#   * host.exe carries the published image id ([u32;8] little-endian, as on Linux; MSVC keeps 2 copies).
 # What it CANNOT check is `host.exe method-id`: scripts/release.sh requires that from an operator who
 # ran it on a Windows NVIDIA machine (HAZYNC_ATTEST_hazync_host_x86_64_windows_cuda_zip=<id>).
 #
@@ -50,9 +50,14 @@ check_dir() {
     ls "$d"/cudart64_*.dll >/dev/null 2>&1 || die "no cudart64_*.dll beside host.exe"
     python3 scripts/embedded_guest_sha.py "$d/host.exe" --pin "$WANT_SHA" --size "$size" > "$d/.guest.txt" 2>&1 \
         || { sed 's/^/       /' "$d/.guest.txt" >&2; die "host.exe does not embed the published mainnet guest"; }
-    ./scripts/embeds-method-id.sh "$d/host.exe" "$WANT_ID" \
-        || die "host.exe does not carry the published image id ${WANT_ID:0:8} exactly once"
-    echo "  ok   host.exe embeds the published guest (${WANT_SHA:0:16}…, $size bytes) and image id ${WANT_ID:0:8} once"
+    # The id as [u32;8] little-endian. NOT "exactly once" as on Linux (scripts/embeds-method-id.sh):
+    # MSVC keeps two copies of the constant — measured, 2 in the host.exe of windows-prove run
+    # 42540389071 — so require at least one. The guest's sha256 above is the binding check.
+    local n
+    n=$(python3 -c "import sys;print(open(sys.argv[1],'rb').read().count(bytes.fromhex(sys.argv[2])))" "$d/host.exe" "$WANT_ID") \
+        || die "could not read host.exe"
+    [ "${n:-0}" -ge 1 ] || die "host.exe does not carry the published image id ${WANT_ID:0:8}"
+    echo "  ok   host.exe embeds the published guest (${WANT_SHA:0:16}…, $size bytes) and image id ${WANT_ID:0:8} (${n}x)"
 }
 
 case "${1:-}" in
