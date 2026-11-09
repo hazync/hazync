@@ -12,11 +12,14 @@
 #   LEAVES   leaf bundle directory (default /srv/bulk/libzync-board/leaves)
 #   COORD    the libzync coordinator (default http://127.0.0.1:8900)
 #   MARGIN   blocks below the frontier to keep (default 1000)
+#   KEEP     leaf bundles kept for good, comma-separated heights (default 1: block 1's bundle is what the worker's
+#            `selftest` and the sponsor bot's pod GPU smoke prove, a few KB)
 #   --apply  delete (without it: report what would go)
 set -uo pipefail
 LEAVES="${LEAVES:-/srv/bulk/libzync-board/leaves}"
 COORD="${COORD:-http://127.0.0.1:8900}"
 MARGIN="${MARGIN:-1000}"
+KEEP="${KEEP-1}"
 APPLY=0; [ "${1:-}" = --apply ] && APPLY=1
 
 meta=$(curl -sf --max-time 20 "$COORD/api/meta") || { echo "[prune-leaves] cannot reach $COORD/api/meta" >&2; exit 2; }
@@ -29,6 +32,7 @@ while IFS= read -r f; do
     h=${f#leaf_}; h=${h%.bin}
     case "$h" in ''|*[!0-9]*) continue;; esac
     [ "$h" -le "$CUT" ] || continue
+    case ",$KEEP," in *",$h,"*) continue;; esac
     n=$((n + 1)); bytes=$((bytes + $(stat -c %s "$LEAVES/$f")))
     [ "$APPLY" = 1 ] && rm -f -- "$LEAVES/$f"
 done < <(find "$LEAVES" -maxdepth 1 -type f -name 'leaf_*.bin' -printf '%f\n')
