@@ -2359,7 +2359,8 @@ mod smt_bridge {
             } else { Vec::new() };
             // txid(h-10) has 2 outputs exactly when (h-10) % 5 == 0, i.e. when h % 5 == 0.
 
-            let w = smt_advance(&mut bridge, cb, nout, &spends, false).0;
+            // every spend tracked: the libzync bridge needs a tracked bit per coinbase spend, and CORE ignores them
+            let w = smt_advance_ex(&mut bridge, cb, nout, &spends, false, &vec![true; spends.len()], &[]).0;
             guest_root = apply_block(&guest_root, &to_update(cb, nout, &w))
                 .unwrap_or_else(|e| panic!("guest refused the bridge's own block at height {h}: {e:?}"));
             assert_eq!(guest_root, bridge.root(), "roots diverged at height {h}");
@@ -2434,7 +2435,10 @@ mod smt_bridge {
             // Spend it to zero via an ordinary later block.
             let w1 = smt_advance_ex(&mut bridge, txid(999), 1, &[dup], false, &[tracked], &[]).0;
             root = apply_block(&root, &to_update(txid(999), 1, &w1)).unwrap();
-            assert_eq!(bridge.get(&dup), Some(if tracked { REPEATABLE } else { SPENT }));
+            // libzync counts only tracked coins (agg_lite.rs), so an untracked spend leaves the count where it was;
+            // either way the duplicate of an untracked coinbase must be refused below.
+            let untracked_after = if methods::LIBZYNC { 1 } else { SPENT };
+            assert_eq!(bridge.get(&dup), Some(if tracked { REPEATABLE } else { untracked_after }));
 
             let w2 = smt_advance(&mut bridge, dup, 1, &[], false).0;
             let r = apply_block(&root, &to_update(dup, 1, &w2));

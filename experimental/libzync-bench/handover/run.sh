@@ -13,6 +13,10 @@ HERE=$(cd "$(dirname "$0")" && pwd); REF=$HERE/../../../scripts/libzync/block_fo
 export RISC0_DEV_MODE=1 HAZYNC_RIG=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_COINLOG_SAVE_EACH=1
 BAD=0; N_CASES=0
 mkdir -p "$R"
+# each image's id, for the state checks (written here, not by a caller: CI calls this script directly)
+"$O" method-id 2>/dev/null | sed -n "s/^METHOD_ID //p" > "$R/o_id"
+"$N" method-id 2>/dev/null | sed -n "s/^METHOD_ID //p" > "$R/n_id"
+[ -s "$R/o_id" ] && [ -s "$R/n_id" ] || { echo "method-id of O or N failed"; exit 1; }
 pass() { N_CASES=$((N_CASES+1)); echo "PASS $1"; }
 wrong() { N_CASES=$((N_CASES+1)); BAD=$((BAD+1)); echo "WRONG $1"; }
 

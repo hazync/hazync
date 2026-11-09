@@ -3,8 +3,9 @@
 # A local server.py (HAZYNC_LIBZYNC=1) serves prep's leaf bundles; the stock `hazync` worker proves leaves, submits
 # them, proves + folds (joins) a range; the frontier must reach 4 from genesis. Negatives: verify-any with a wrong lo.
 set -u
-H=~/libzync-gpu/r18/host_c14coord; O=~/libzync-gpu/c14b/coord; rm -rf $O; mkdir -p $O/bridge $O/w
-J=$HOME/libzync-gpu/ssweep; REF=$HOME/libzync-gpu/c14/m200; C=~/dev/hazync-libzync/coordinator
+# H, O, J, REF, C overridable (CI)
+H=${H:-~/libzync-gpu/r18/host_c14coord}; O=${O:-~/libzync-gpu/c14b/coord}; rm -rf $O; mkdir -p $O/bridge $O/w
+J=${J:-$HOME/libzync-gpu/ssweep}; REF=${REF:-$HOME/libzync-gpu/c14/m200}; C=${C:-$(cd "$(dirname "$0")/../../../coordinator" && pwd)}
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=2
 HAZYNC_PREP_LEAF_BUNDLES=$O/bridge HAZYNC_PREP_CHECK=$REF $H libzync-prep 1 8 $J genesis $O/prep > $O/prep.log 2>&1
 echo "prep EXIT=$? bundles $(ls $O/bridge | grep -c '^leaf_')"
