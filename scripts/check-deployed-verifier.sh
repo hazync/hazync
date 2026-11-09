@@ -60,10 +60,10 @@ fetch "$SITE/api/spine/proof"           "$TMP/spine.bin" || { bad "cannot fetch 
 
 # The loader is deployed separately from the wasm and is NOT in the signed release, so it drifts on its
 # own axis. Compare it to the repo's copy, which is the source of truth.
-if cmp -s "$TMP/live.js" verifier-wasm/hazync-verify.js; then
-    note "ok   deployed loader is byte-identical to verifier-wasm/hazync-verify.js"
+if cmp -s "$TMP/live.js" swiftsync-verify-wasm/swiftsync-verify.js; then
+    note "ok   deployed loader is byte-identical to swiftsync-verify-wasm/swiftsync-verify.js"
 else
-    bad "deployed hazync-verify.js differs from verifier-wasm/hazync-verify.js"
+    bad "deployed hazync-verify.js differs from swiftsync-verify-wasm/swiftsync-verify.js"
 fi
 
 # ── Sizes: build, release, deployment and the README must agree ──────────────────────────────────
@@ -76,12 +76,12 @@ fi
 # Size is a WEAK check on its own: the 2026-08-11 stale module was byte-for-byte the same length as the
 # correct one. It is asserted here because it is nearly free and catches a different failure (a partial
 # or wrong-artifact deploy), never as a substitute for the id and verdict checks below.
-README=verifier-wasm/README.md
-BUILD_WASM=verifier-wasm/target/wasm32-unknown-unknown/release/hazync_verify_wasm.wasm
+README=swiftsync-verify-wasm/README.md
+BUILD_WASM=swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
 RELEASE_URL=https://github.com/hazync/hazync/releases/latest/download/hazync-verify.wasm
 
 DEPLOYED_SZ=$(wc -c < "$TMP/live.wasm" | tr -d ' ')
-README_SZ=$(grep -oE '^raw[[:space:]]+[0-9,]+' "$README" 2>/dev/null | head -1 | tr -cd '0-9')
+README_SZ=$(grep -oE '[0-9,]+ bytes raw' "$README" 2>/dev/null | head -1 | tr -cd '0-9')
 RELEASE_SZ=$(curl -sIL --max-time 60 "$RELEASE_URL" \
     | awk 'tolower($1)=="content-length:" {n=$2} END {gsub(/\r/,"",n); print n}')
 BUILD_SZ=""
@@ -93,7 +93,7 @@ note "size local build  ${BUILD_SZ:-not built}"
 note "size README       ${README_SZ:-unparsed}  ($README)"
 
 if [ -z "$README_SZ" ]; then
-    bad "could not parse a 'raw <n> bytes' figure from $README — the size table has moved or gone"
+    bad "could not parse a '<n> bytes raw' figure from $README — the size table has moved or gone"
 elif [ "$README_SZ" != "$DEPLOYED_SZ" ]; then
     bad "$README says raw $README_SZ bytes, the deployed module is $DEPLOYED_SZ — update the README"
 else
@@ -133,9 +133,17 @@ cat > "$TMP/run.mjs" <<'EOF'
 import fs from 'fs';
 const { loadVerifier } = await import(process.argv[2]);
 const v = await loadVerifier(fs.readFileSync(process.argv[3]));
-const out = { method_id: v.methodId() };
+// the libzync module (v0.23.0 on): verify({network, image, receipt}) -> {verdict: ok|demo|fail, checks, height, ...}.
+// Below Core's pinned chainwork a genesis proof is "demo" (valid from genesis, not shown to be the network's chain);
+// what this check needs is that it verifies and is anchored on genesis.
+const out = { method_id: v.imageId('mainnet') };
 for (const [k, p] of [['good', process.argv[4]], ['bitflip', process.argv[5]]]) {
-    try { out[k] = v.verify(new Uint8Array(fs.readFileSync(p))); }
+    try {
+        const r = v.verify({ network: 'mainnet', image: 'product', receipt: new Uint8Array(fs.readFileSync(p)) });
+        const ok = (re) => (r.checks || []).some((c) => c.ok && re.test(String(c.what)));
+        out[k] = { status: (r.verdict === 'ok' || r.verdict === 'demo') && ok(/^receipt verifies against image /) ? 'verified' : 'invalid',
+                   genesis_anchored: ok(/^anchor_id is genesis/), height: r.height, verdict: r.verdict };
+    }
     catch (e) { out[k] = { status: 'threw', error: String(e && e.message) }; }
 }
 console.log(JSON.stringify(out));
