@@ -15,9 +15,6 @@ use crate::{BlockWitness, CHAIN_STATE_VERSION, ChainState, KIND_CHAIN, PackedHas
 use crate::chunks::{chunk_block_hash, chunk_bounds, nchunks_env, read_chunk_receipts, write_chunk_inputs};
 use crate::verify::{MAX_FUTURE_BLOCK_TIME, dev_mode_env, time_ok, verifier_clock};
 
-/// The embedded guest is a libzync guest (methods/build.rs records what it was built for), so the host
-/// writes libzync hint blocks. Replaces six run-time env vars that had to match the build exactly.
-pub(crate) fn agg_lite() -> bool { methods::LIBZYNC }
 /// libzync: the per-block hint bundle at $HAZYNC_LZ_HINTS, if there is one for THIS block. None means
 /// collect mode (the guest logs what it needs). A bundle for another block is refused, not applied.
 pub(crate) fn lz_bundle(height: u32, block_hash: &[u8; 32]) -> Option<libzync::host::BlockBundle> {
@@ -54,7 +51,6 @@ pub(crate) fn hex_id(id: &[u32; 8]) -> String { hex(&id.iter().flat_map(|w| w.to
 /// proving box, not a laptop. Verify the result with `swiftsync-verify`, which accepts either receipt kind.
 pub(crate) fn libzync_snark_wrap_cmd(bin: &str, out: &str) {
     use std::time::Instant;
-    assert!(methods::LIBZYNC, "libzync-snark-wrap needs a libzync build");
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(bin).unwrap_or_else(|e| panic!("{bin}: {e}")))
         .unwrap_or_else(|e| panic!("{bin}: not a receipt: {e}"));
     assert!(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "refusing to wrap a dev-mode FakeReceipt");
@@ -178,7 +174,7 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
     check(!dev, "RISC0_DEV_MODE is not set in this verifier's environment");
     let v = r.verify(METHOD_ID);
     check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {}, {})", hex_id(&METHOD_ID),
-        if methods::LIBZYNC { "libzync" } else { "canonical" }, methods::NETWORK,
+        "libzync", methods::NETWORK,
         if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
     let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => {
         println!("  [FAIL] journal is not a ChainState: {}", format!("{e}").escape_debug());
@@ -366,12 +362,9 @@ pub(crate) fn write_aggregate_env_ex(
     b.write(&5u32).unwrap();
     b.write(&METHOD_ID).unwrap();
     b.write(&(receipts.len() as u32)).unwrap();
-    // #136's fix for the AGGREGATE. Guest reads these with read_slice when built with
-    // `agg-readslice`; a length prefix then a 4-byte-padded slice, exactly as write_chunk_inputs does.
-    // ⛔ HAZYNC_AGG_READSLICE must hold the SAME value at BUILD and RUN time -- the guest only reads
-    // this shape when compiled for it, so a mismatch desynchronises the stream rather than merely
-    // losing the optimisation. Same discipline as HAZYNC_BIGINT2_ECDSA.
-    if methods::LIBZYNC || std::env::var("HAZYNC_AGG_READSLICE").as_deref() == Ok("1") {
+    // #136's fix for the AGGREGATE (`agg-readslice`, part of the libzync profile): a length prefix then a
+    // 4-byte-padded slice, exactly as write_chunk_inputs does.
+    {
         fn padded(v: &[u8]) -> Vec<u8> {
             let mut p = v.to_vec();
             p.resize(v.len().div_ceil(4) * 4, 0);
@@ -384,9 +377,6 @@ pub(crate) fn write_aggregate_env_ex(
         let sj = prev_journal.map(|j| j.to_vec()).unwrap_or_else(|| state_journal_bytes(anchor));
         b.write(&(sj.len() as u32)).unwrap();
         b.write_slice(&padded(&sj));
-    } else {
-        for r in receipts { b.write(&r.journal.bytes).unwrap(); }
-        b.write(&prev_journal.map(|j| j.to_vec()).unwrap_or_else(|| state_journal_bytes(anchor))).unwrap();
     }
     b.write(w).unwrap();
     // Negative-test hook (test-only, inert unless set): send is_base = 2, which the guest must refuse.
@@ -422,11 +412,9 @@ pub(crate) fn agg_exec_fake() {
         receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
     }
     // Negative control (test-only): HAZYNC_LITE_DROP_CHUNK=i omits chunk i; coverage must fail.
-    if agg_lite() {
-        if let Some(i) = std::env::var("HAZYNC_LITE_DROP_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()) {
-            receipts.remove(i);
-            println!("  agg-lite NEGATIVE CONTROL: chunk {i} dropped");
-        }
+    if let Some(i) = std::env::var("HAZYNC_LITE_DROP_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()) {
+        receipts.remove(i);
+        println!("  agg-lite NEGATIVE CONTROL: chunk {i} dropped");
     }
     libzync_agg_prep(&mut w);
     let mut anchor = anchor;
@@ -513,24 +501,19 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
 /// transaction fact from the chunk journals, so no transactions, prevouts, inputs or txids at all.
 /// Shared by `agg-exec-fake` and `agg-chunks` (the real-receipt aggregate) so both send one stream.
 pub(crate) fn libzync_agg_prep(w: &mut BlockWitness) {
-    if methods::LIBZYNC {
-        for inp in w.inputs.iter_mut() {
-            inp.proof_i.siblings = PackedHashes(Vec::new());
-            inp.proof_last.siblings = PackedHashes(Vec::new());
-        }
+    for inp in w.inputs.iter_mut() {
+        inp.proof_i.siblings = PackedHashes(Vec::new());
+        inp.proof_last.siblings = PackedHashes(Vec::new());
     }
-    if agg_lite() {
-        w.txs.clear();
-        w.tx_prevouts.clear();
-        w.inputs.clear();
-        w.txids = PackedHashes(Vec::new());
-    }
+    w.txs.clear();
+    w.tx_prevouts.clear();
+    w.inputs.clear();
+    w.txids = PackedHashes(Vec::new());
 }
 
 /// libzync: the aggregate's ONE hint block, after the witness: ECMH hints from the block's bundle
 /// ($HAZYNC_LZ_HINTS; none = the guest collects, logging ECMHREC lines).
 pub(crate) fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
-    if !methods::LIBZYNC { return; }
     let bundle = lz_bundle(w.height, &header_hash(&w.header));
     let words = libzync::wire::AggHints {
         ecmh_collect: bundle.is_none(),
@@ -734,7 +717,6 @@ pub(crate) fn hint_threads() -> usize {
 pub(crate) fn libzync_hints_cmd(out: &str) {
     use risc0_zkvm::Receipt;
     use std::time::Instant;
-    assert!(methods::LIBZYNC, "libzync-hints needs a libzync guest (build with HAZYNC_LIBZYNC=1)");
     let t0 = Instant::now();
     // Collect mode for every hint kind: no bundle.
     std::env::remove_var("HAZYNC_LZ_HINTS");
@@ -893,7 +875,6 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     use risc0_zkvm::Receipt;
     use std::io::Write as _;
     use std::time::Instant;
-    assert!(methods::LIBZYNC, "libzync-prove-range needs a libzync guest");
     std::fs::create_dir_all(out).unwrap();
     // HAZYNC_HANDOVER_RECEIPT=<receipt>: the first block is a handover step on the pinned predecessor's receipt. The
     // anchor argument is unused (pass the word `handover`): the chain state comes from the verified receipt.
