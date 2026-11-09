@@ -3467,6 +3467,34 @@ def state_cached(slim=False):
 
 _MID_CACHE = {"v": None}
 
+# ── zyncAPP facts (ROADMAP R4) ───────────────────────────────────────────────────────────────────────────────────────
+# A zyncAPP page (hazync.org/zapp/) asks for counting-trie facts about a script or a coin. They come from `zync-serve`
+# (swiftsync-verify), which holds the trie at a proof's tip and runs only on this box (127.0.0.1). The coordinator
+# relays a fixed set of read-only paths to it and nothing else. It adds no trust: the page verifies the proof with the
+# browser verifier and checks every fact against it, so a wrong answer from here, or from zync-serve, is refused there.
+ZYNC_SERVE = os.environ.get("ZYNC_SERVE_URL", "")            # e.g. http://127.0.0.1:8601; unset: no relay (404)
+_ZYNC_PATH = re.compile(r"^/(tip|trie/balance/[0-9a-f]{2,20000}|trie/history/[0-9a-f]{2,20000}"
+                        r"|trie/coin/[0-9a-f]{2,20000}/[0-9a-f]{64}/[0-9]{1,10})$")
+
+
+def zync_relay(path):
+    """(status, body) for a zyncAPP fact request. Only the read-only paths above, only when ZYNC_SERVE_URL is set."""
+    if not ZYNC_SERVE:
+        return 404, "no zyncAPP fact service on this coordinator"
+    if not _ZYNC_PATH.match(path):
+        return 400, "not a zyncAPP fact path (/tip, /trie/balance/<spk>, /trie/history/<spk>, /trie/coin/<spk>/<txid>/<vout>)"
+    try:
+        with urllib.request.urlopen(ZYNC_SERVE.rstrip("/") + path, timeout=20) as r:
+            body = r.read(8 * 1024 * 1024 + 1)
+        if len(body) > 8 * 1024 * 1024:
+            return 502, "the fact service's answer is too large"
+        return 200, body
+    except urllib.error.HTTPError as e:
+        return (e.code if 400 <= e.code < 500 else 502), f"the fact service refused: {e.code}"
+    except Exception as e:
+        return 502, f"the fact service is unreachable: {type(e).__name__}"
+
+
 def expected_method_id():
     # The guest image id this coordinator verifies against == HOST_BIN's method-id. Exposed via /api/meta
     # so a contributor can pre-flight `host method-id` BEFORE proving, instead of discovering a mismatch
@@ -4131,6 +4159,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, raw=open(f, "rb").read(), ctype="application/octet-stream",
                                   headers={"Content-Disposition": f'attachment; filename="{name}"'})
             return self._send(404, {"error": "no spine yet"})
+        if p.startswith("/api/zync/"):                     # zyncAPP facts, relayed from a local zync-serve (untrusted)
+            code, body = zync_relay(p[len("/api/zync"):])
+            return self._send(code, raw=body) if code == 200 else self._send(code, {"error": body})
         if p.startswith("/api/proof/"):                    # download a verified proof receipt (re-verify with `host verify-any`)
             rid = p.rsplit("/", 1)[-1]
             rng = parse_any_range(rid)

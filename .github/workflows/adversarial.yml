@@ -1162,6 +1162,12 @@ jobs:
         run: |
           cd coordinator
           python3 test_offsite_proofs.py --control
+      - name: zyncAPP relay passes only read-only fact paths to the local zync-serve
+        run: cd coordinator && python3 test_zync_relay.py
+      - name: zyncAPP relay POSITIVE CONTROL (path filter accepts anything — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_zync_relay.py --control
       - name: libzync prep cross-check — two runs must agree on every shared state
         run: cd coordinator && python3 test_libzync_xcheck.py
       - name: libzync prep cross-check POSITIVE CONTROL (compares nothing — must FAIL)
