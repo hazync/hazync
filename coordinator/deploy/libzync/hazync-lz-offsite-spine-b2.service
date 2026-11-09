@@ -1,0 +1,17 @@
+[Unit]
+Description=Hazync libzync board: copy the genesis-anchored spine to Backblaze B2 (second copy) under spine-863c9ce3/ (verified first, never overwritten)
+After=network-online.target hazync-lz-coordinator.service
+Wants=network-online.target
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+# Root only for reading the root-only key file. The copy is verified with the libzync host (genesis-anchored) first.
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py spine --keys /etc/hazync/backup/b2.keys --bucket hazync-backup --spine /var/lib/hazync-lz/spine --method-id 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 --verify /usr/local/sbin/hazync-lz-verify-spine
+TimeoutStartSec=5min
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/hazync-lz/spine /opt/hazync-lz
