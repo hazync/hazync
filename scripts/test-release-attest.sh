@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# release.sh step 4's CUDA attestation (#275; since v0.23.0 an operator's measured id is required).
+# release.sh step 4's CUDA attestation (#275).
 #
 # The bug: the attestation sat under `! host_is_current "$CU" …`, which is TRUE for exactly the
 # artifact that needs it. A freshly built CUDA host matches .built-from AND embeds the canonical id,
@@ -67,12 +67,6 @@ check "$(printf '%s' "$step4" | grep -q 'never overwrite it\|using the attestati
       "an operator-supplied attestation is preferred over the byte check"
 check "$(printf '%s' "$step4" | grep -q 'does not carry .* in its bytes exactly once' && echo 1)" \
       "an unreadable artifact gets its own message, not 'different guest'"
-# v0.23.0: every host must ANSWER method-id, so step 4 no longer attests a host from its bytes itself.
-# An export of the attestation variable would put the #275/#579 byte path back.
-check "$(printf '%s' "$step4_code" | grep -q 'export "\$_att\|export "\${_att}' || echo 1)" \
-      "step 4 never sets the CUDA attestation itself (an operator's measured id is required)"
-check "$(printf '%s' "$step4_code" | grep -q 'has not answered method-id' && echo 1)" \
-      "  ...and refuses to go on without one"
 
 # The variable NAME is load-bearing and silent when wrong: check-dist.sh simply never reads
 # HAZYNC_ATTEST_..._cuda_ and the gate fails with the artifact sitting right there. Evaluate the

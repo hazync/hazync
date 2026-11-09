@@ -285,10 +285,10 @@ CU="$DIST/hazync-host-x86_64-linux-gnu-cuda"
 # would fail with the artifact sitting right there.
 _cu=hazync-host-x86_64-linux-gnu-cuda
 _att="HAZYNC_ATTEST_${_cu//[^A-Za-z0-9]/_}"
-# ⛔ A HOST THAT CANNOT RUN HERE NEEDS AN OPERATOR'S MEASURED ID (v0.23.0). Until v0.22.1 this branch
-# exported an attestation itself when the id was found in the bytes (#275, #579). The release rule is
-# now that EVERY host asset answers `method-id` with the published id, so the bytes are checked as well
-# but are no longer enough on their own: run it on a GPU box and pass what it printed.
+# A host that cannot run here (no NVIDIA driver on the release box) is checked from its BYTES, as before v0.23.0
+# (operator decision 2026-11-09: no GPU rental per release): `method-id` prints a constant compiled into the binary
+# and never touches CUDA, so the id found in the bytes is the id it would print. An operator who did run it on a card
+# can pass the measured id instead, and that is preferred.
 if timeout 120 "$CU" method-id >/dev/null 2>&1; then
     :   # it runs here — check-dist.sh will ask it directly, which is the strongest evidence there is
 elif [ -n "${!_att:-}" ]; then
@@ -297,23 +297,27 @@ elif [ -n "${!_att:-}" ]; then
     # check-dist.sh refusing a bad hand-typed attestation is the point of passing one.
     ok "cuda host: cannot execute here; using the attestation you supplied (${!_att:0:8}…)"
     # ...and the bytes must agree with it: an attestation typed for a DIFFERENT file than the one
-    # staged would otherwise pass. The id is stored once, as [u32;8] little-endian.
+    # staged would otherwise pass.
     ./scripts/embeds-method-id.sh "$CU" "$CANON" \
         || die "cuda host: attested, but the staged file does not carry ${CANON:0:8} in its bytes exactly once —
        the attestation is for a different binary than the one about to ship"
+elif ./scripts/embeds-method-id.sh "$CU" "$CANON"; then
+    ok "cuda host: cannot execute here, but embeds ${CANON:0:8} in its bytes"
+    echo "  !    that is a BYTE check, not a run. Nothing here has proved this binary works on a GPU —"
+    echo "       smoke it on a real card and pass $_att=<measured id> to gate on that instead."
+    export "$_att=$CANON"
+    # ⛔ Mark the PROVENANCE so check-dist.sh does not report this as an operator attestation
+    # (hazync#579). Without it the log reads "attested canonical from a capable host" on a box with
+    # no card — the strongest wording available and the least true one.
+    export "${_att}_SOURCE=bytes"
 else
-    if ./scripts/embeds-method-id.sh "$CU" "$CANON"; then
-        echo "  !    cuda host: cannot execute here; it embeds ${CANON:0:8} in its bytes, but a byte check is not a run."
-    else
-        echo "  !    cuda host: cannot execute here AND does not carry ${CANON:0:8} in its bytes exactly once."
-        echo "       Either it was built from a different guest, or it is not the artifact you think it is."
-    fi
-    die "the CUDA host has not answered method-id. On a box with an NVIDIA driver:
-           $_cu method-id            # want $CANON
-       then re-run with  $_att=<the id it printed>"
+    # Say which of the two failures this is. "belongs to a different guest" is what check-dist.sh
+    # prints next, and it is wrong for a binary that is simply unreadable here.
+    echo "  !    cuda host: cannot execute here AND does not carry ${CANON:0:8} in its bytes exactly once."
+    echo "       Either it was built from a different guest, or it is not the artifact you think it is."
 fi
-# The Windows host never runs here; check-dist.sh checks its bytes and requires its attestation:
-#   HAZYNC_ATTEST_${WIN//[^A-Za-z0-9]/_}=<what host.exe method-id printed on a Windows NVIDIA machine>
+# The Windows host never runs here; check-dist.sh checks its bytes (the embedded guest's sha256 and the id). An
+# operator who ran it may pass HAZYNC_ATTEST_${WIN//[^A-Za-z0-9]/_}=<what host.exe method-id printed>, preferred.
 export HAZYNC_GUEST_ELF_STAGED="$LZ_ELF"
 ./scripts/check-dist.sh "$DIST" || die "a staged artifact belongs to a different guest, or is unattested — do NOT publish"
 

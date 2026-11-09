@@ -53,21 +53,23 @@ for f in "$DIST"/*; do
         # exercised with the module on a real receipt by scripts/check-release-verifiers.sh.
         echo "  --   $b (verifier glue, guest-independent; tested with the wasm on a real proof)" ;;
       *windows*.zip)
-        # The Windows CUDA host cannot run here at all (a PE, and it imports nvcuda.dll). Check its
-        # bytes (scripts/windows-host.sh: embedded guest sha256 + image id once), and require an
-        # operator who RAN `host.exe method-id` on a Windows NVIDIA machine to attest the id.
+        # The Windows CUDA host cannot run here at all (a PE, and it imports nvcuda.dll). Check its bytes
+        # (scripts/windows-host.sh: the embedded guest's sha256 and the image id) -- the same check that binds the
+        # Linux CUDA host on a box with no card (operator decision 2026-11-09). An operator who RAN
+        # `host.exe method-id` on a Windows NVIDIA machine may attest the id instead, which is reported as such.
         att="HAZYNC_ATTEST_${b//[^A-Za-z0-9]/_}"
         if ! wlog=$(./scripts/windows-host.sh check "$f" "$GUEST_ELF" 2>&1); then
             printf '%s\n' "$wlog" | sed 's/^/       /'
             echo "FAIL $b does not carry the published guest and id — do not ship it"
             fail=1; wrong_guest=$((wrong_guest+1))
+        elif [ -n "${!att:-}" ] && [ "${!att}" != "$CANON" ]; then
+            echo "FAIL $b: the attested id ${!att:0:8}… is not the published $CANON8"
+            fail=1; wrong_guest=$((wrong_guest+1))
         elif [ "${!att:-}" = "$CANON" ]; then
             echo "  ok   $b: host.exe embeds the published guest and id $CANON8, and an operator ran it (via $att)"
         else
-            echo "FAIL $b: its bytes carry $CANON8, but nobody has run host.exe method-id on Windows"
-            echo "       On a Windows machine with an NVIDIA driver:  host.exe method-id   (want $CANON8...)"
-            echo "       Then record it:                             $att=<id> $0"
-            fail=1; unverified=$((unverified+1))
+            echo "  ok   $b: host.exe carries the published guest and id $CANON8 IN ITS BYTES (cannot execute here)"
+            echo "       ⚠ NOT a run. Smoke it on a Windows NVIDIA machine and set $att to the measured id to gate on that."
         fi ;;
       *verify*)
         # Match the FULL 64-character id, not the 8-character prefix.
