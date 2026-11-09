@@ -512,6 +512,23 @@ check(len(ckr.callbacks) == n_files and all(b > 0 for _, b in ckr.callbacks),
 check(sum(b for _, b in ckr.callbacks) == sum(len(v) for (bk, k), v in ckr.objects.items() if k.startswith(C)),
       "the bytes reported by the callback add up to the bytes actually stored")
 
+# 10. --method-id: a coordinator whose host pins another image (the libzync board beside the original) namespaces its
+#     receipts by that id, not by the checkout's reproduce/METHOD_ID; a malformed id is refused, nothing uploaded
+LZ = "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5"
+s3m = FakeS3()
+rc, out = run(s3m, "copy", "--method-id", LZ)
+keys = sorted(k for (_, k) in s3m.objects)
+check(rc == 0 and keys and all(k.startswith("proofs-863c9ce3/") for k in keys),
+      f"copy --method-id uploads under proofs-863c9ce3/ (rc={rc}, {keys[:2]})")
+check(not any(k.startswith(P) for k in keys), f"copy --method-id puts nothing under the repo's {P}")
+s3m = FakeS3()
+try:
+    run(s3m, "copy", "--method-id", "863c9ce3")
+    refused = False
+except SystemExit as e:
+    refused = "64-hex" in str(e)
+check(refused and not s3m.objects, "a --method-id that is not 64 hex is refused before any upload")
+
 print(f"{'CONTROL: ' if CONTROL else ''}{fails} failure(s)")
 if CONTROL:
     sys.exit(0 if fails else 1)
