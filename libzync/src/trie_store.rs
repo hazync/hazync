@@ -104,6 +104,9 @@ pub trait Arena {
     fn durable(&mut self, _root: R, _counts: bool, _height: u64, _hash: &[u8; 32]) -> Result<(), alloc::string::String> { Ok(()) }
     /// Ask for these nodes' pages to be read ahead (asynchronously); in memory: nothing to do.
     fn prefetch(&self, _rs: &[R]) {}
+    /// Ask for the pages of the next `n` slots `put` will reuse to be read ahead: a write into a slot whose page is not
+    /// cached first reads that page, one fault at a time, and an update writes a new node for every node on its path.
+    fn prefetch_free(&self, _n: usize) {}
 }
 
 #[derive(Default)]
@@ -234,6 +237,11 @@ impl Arena for DiskArena {
         for p in pages {
             let _ = self.map.advise_range(memmap2::Advice::WillNeed, p as usize, 4096);
         }
+    }
+    fn prefetch_free(&self, n: usize) {
+        // put pops from the end of the free list
+        let k = self.free.len().saturating_sub(n);
+        self.prefetch(&self.free[k..]);
     }
     fn durable(&mut self, root: R, counts: bool, height: u64, hash: &[u8; 32]) -> Result<(), alloc::string::String> {
         use std::io::Write as _;
@@ -681,14 +689,17 @@ impl TrieStore {
     /// Read ahead every node an update of these keys will read (mainnet prep, 11-07): the keys' paths AND each inner
     /// node's other child (its hash is read when the path is rebuilt), level by level, each level's pages requested
     /// together. Read-only: changes nothing (the update itself is `apply`).
-    pub fn prefetch(&self, marks: &Marks, inserts: &Inserts) {
+    /// Returns the number of nodes on the keys' paths (about the nodes the update will write).
+    pub fn prefetch(&self, marks: &Marks, inserts: &Inserts) -> usize {
         let mut ks: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
         ks.sort_unstable();
-        if ks.is_empty() || self.root == EMPTY { return; }
+        if ks.is_empty() || self.root == EMPTY { return ks.len(); }
         self.a.prefetch(&[self.root]);
+        let mut on_path = 0usize;
         // nodes on a key's path (already requested): (node, in a coin trie, depth, its keys)
         let mut cur: Vec<(R, bool, u32, &[(W, W)])> = alloc::vec![(self.root, false, 0, &ks[..])];
         while !cur.is_empty() {
+            on_path += cur.len();
             let mut kids: Vec<R> = Vec::new();
             let mut next: Vec<(R, bool, u32, &[(W, W)])> = Vec::new();
             for &(n, sub, d, k) in &cur {
@@ -711,7 +722,11 @@ impl TrieStore {
             self.a.prefetch(&kids);
             cur = next;
         }
+        on_path + ks.len()
     }
+
+    /// Read ahead the pages of the next `n` slots the store will write into (see `Arena::prefetch_free`).
+    pub fn prefetch_free(&self, n: usize) { self.a.prefetch_free(n); }
 
     pub fn witness(&self, marks: &Marks, inserts: &Inserts) -> Vec<u32> {
         let mut ks: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
