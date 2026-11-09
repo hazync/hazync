@@ -123,7 +123,27 @@ pub(crate) fn leaf_read(path: &str) -> LeafBundle {
 /// Seconds spent per phase since the last PREP_PROGRESS line: prefetch, coin log apply, trie apply, rest of the block,
 /// reading the block, writing the state, save points (PREP_TIMING; the rate is spent somewhere, and a guess cost a day).
 static PHASES: std::sync::Mutex<[f64; 7]> = std::sync::Mutex::new([0.0; 7]);
-fn phase(i: usize, t: std::time::Instant) { PHASES.lock().unwrap()[i] += t.elapsed().as_secs_f64(); }
+/// Per phase: major page faults (a read from the disk the process waited on) and CPU seconds, so a slow phase is told
+/// apart as waiting on the disk or computing (11-09: the trie phase's time was assumed to be disk waits; measure it).
+static FAULTS: std::sync::Mutex<[(u64, f64); 7]> = std::sync::Mutex::new([(0, 0.0); 7]);
+/// (major faults, CPU seconds) of this process so far: /proc/self/stat fields 12, 14 and 15 (Linux; elsewhere zeros).
+fn proc_counts() -> (u64, f64) {
+    let s = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    // fields after the command name, which is in parentheses and may contain spaces: field 3 is the state
+    let f: Vec<&str> = s.rsplit_once(')').map_or(Vec::new(), |(_, r)| r.split_whitespace().collect());
+    let n = |k: usize| f.get(k - 3).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    (n(12), (n(14) + n(15)) as f64 / 100.0) // USER_HZ is 100 on Linux
+}
+/// The start of a timed phase: the clock and the process counters.
+struct Mark { t: std::time::Instant, c: (u64, f64) }
+fn mark() -> Mark { Mark { t: std::time::Instant::now(), c: proc_counts() } }
+fn phase(i: usize, m: Mark) {
+    PHASES.lock().unwrap()[i] += m.t.elapsed().as_secs_f64();
+    let c = proc_counts();
+    let mut f = FAULTS.lock().unwrap();
+    f[i].0 += c.0.saturating_sub(m.c.0);
+    f[i].1 += c.1 - m.c.1;
+}
 
 pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt, ecmh: &mut Ecmh, leaf: bool) -> (ChainState, Option<LeafBundle>) {
     use crate::{arr, build_header_v, hx, median_u32, normalize_host, out_leaf_of, out_spendable, rev};
@@ -212,7 +232,7 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     // Disk stores at mainnet size are far larger than RAM: read ahead what the updates below will read, in parallel
     // (the storage serves ~15x more random reads in parallel than one at a time; HAZYNC_PREP_PREFETCH=0 turns it off)
     if std::env::var("HAZYNC_PREP_PREFETCH").as_deref() != Ok("0") {
-        let t = std::time::Instant::now();
+        let t = mark();
         crate::lz::cl_prefetch(&ext);
         if let Some(ts) = crate::trie::TS.lock().unwrap().as_ref() {
             let n = ts.prefetch(&marks, &ins);
@@ -223,10 +243,10 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
         phase(0, t);
     }
     // The coin log and the trie (the host's stores), the BIP30 tree.
-    let t = std::time::Instant::now();
+    let t = mark();
     let (utxo_roots, utxo_leaves) = crate::lz::cl_apply(&ext, &appends, height);
     phase(1, t);
-    let t = std::time::Instant::now();
+    let t = mark();
     let trie_root = {
         let mut g = crate::trie::TS.lock().unwrap();
         let ts = g.as_mut().expect("trie store not initialised");
@@ -391,7 +411,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
-        let t = std::time::Instant::now();
+        let t = mark();
         let j = crate::read_block_json(dir, h);
         phase(4, t);
         let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
@@ -421,12 +441,12 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // atomic at a save point (its state_<h>.json is the anchor a restart takes; round 9); a plain write between
         // them (a restart never starts there, and two fsyncs per block across a mainnet prep cost; round 10)
         let save = each || h == hi || (every > 0 && h % every == 0);
-        let t = std::time::Instant::now();
+        let t = mark();
         let json = serde_json::to_string(&st).unwrap();
         if save { crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes()); }
         else { std::fs::write(format!("{out}/state_{h}.json"), json).unwrap(); }
         phase(5, t);
-        let t = std::time::Instant::now();
+        let t = mark();
         if save {
             crate::lz::write_atomic(&format!("{out}/state_{h}.smt"), &smt_to_bytes(&smt));
             crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);
@@ -467,6 +487,9 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             let (ch, cm) = crate::trie::TS.lock().unwrap().as_ref().map_or((0, 0), |t| t.cache_stats());
             println!("PREP_TIMING h={h} s: prefetch={:.0} coinlog={:.0} trie={:.0} rest={:.0} read_block={:.0} write_state={:.0} save={:.0} of {:.0}; trie cache hits={ch} misses={cm}",
                      p[0], p[1], p[2], p[3], p[4], p[5], p[6], dt);
+            let f = std::mem::replace(&mut *FAULTS.lock().unwrap(), [(0, 0.0); 7]);
+            println!("PREP_FAULTS h={h} major faults / cpu s: prefetch={}/{:.0} coinlog={}/{:.0} trie={}/{:.0} read_block={}/{:.0} write_state={}/{:.0} save={}/{:.0}",
+                     f[0].0, f[0].1, f[1].0, f[1].1, f[2].0, f[2].1, f[4].0, f[4].1, f[5].0, f[5].1, f[6].0, f[6].1);
             t_rep = std::time::Instant::now();
             h_rep = h + 1;
         }
