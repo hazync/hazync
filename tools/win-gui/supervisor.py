@@ -55,7 +55,8 @@ IS_WINDOWS = os.name == "nt"
 
 # The canonical guest image id. A binary printing anything else produces proofs the coordinator
 # rejects with EX_CONFIG, so this is the first thing checked and the only one that is fatal.
-CANONICAL_METHOD_ID = "37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd"
+# The published libzync mainnet image (reproduce/LIBZYNC_IDS): the board verifies against it from the switch on.
+CANONICAL_METHOD_ID = "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5"
 
 # ⭐ The guest is embedded VERBATIM in the host binary, so "is this canonical" can be answered from
 # the FILE — which matters because a CUDA build on a machine with no NVIDIA driver cannot start at
@@ -300,8 +301,8 @@ def check_host_binary(host_path):
     ⚠ Parsed as "the first 64-hex token in the output", because `host method-id` prints the digest
     AND a `u32x8` decomposition, and a looser match would pick up the words. Measured output:
 
-        METHOD_ID 37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd
-          u32x8   [2239469623, ...]
+        METHOD_ID 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5
+          u32x8   [3818667142, ...]
     """
     host = Path(host_path)
     if not host.is_file():
@@ -868,17 +869,22 @@ def explain(text):
 DIAGNOSTICS = [
     ("method-id", "Is this prover genuine?",
      "Prints the guest id. Must be the canonical one or every proof is rejected.", 120, True),
-    ("regress", "Does consensus work here?",
-     "Replays block 170 through the full consensus path. Seconds, no GPU.", 300, True),
-    ("prove-block", "Can it actually prove?",
-     "Builds block 170's witness in-process and produces a real STARK receipt. This is the long "
-     "one — 2875 s on four CPU cores; a GPU should be far quicker.", 10800, False),
+    # ⚠ libzync: the CORE host's offline `regress` and `prove-block` (block 170 from built-in fixtures) do not
+    # exist in a libzync host. The worker's own `selftest` is the libzync check: it asks the board for its image id,
+    # verifies a real board proof, then PROVES mainnet block 1 for real from the board's leaf bundle. It needs the
+    # network and minutes of proving, so it is not run at startup.
+    ("selftest", "Can it actually prove?",
+     "Runs the client's selftest: checks this prover against the board, verifies a real board proof, then "
+     "proves mainnet block 1 for real. Minutes on a CPU, less on a GPU.", 3600, False),
 ]
 
 AUTO_DIAGNOSTICS = [d[0] for d in DIAGNOSTICS if d[4]]
 
 
-def diagnostic_command(host, name):
+def diagnostic_command(host, name, worker=None, python_exe=None):
+    """The argv for one diagnostic: a host command, or the client's `selftest` (needs the client)."""
+    if name == "selftest":
+        return worker_command(python_exe or _sys.executable, worker, "selftest")
     return [str(host), name]
 
 
@@ -893,18 +899,14 @@ def diagnostic_verdict(name, rc, out):
         if m:
             return False, f"NOT canonical: {m.group(0)[:16]}… — proofs would be rejected"
         return False, (why or f"no id printed (exit {rc})")
-    if name == "regress":
-        # ⛔ Look for the PASS line, not for exit 0. A check that passes on silence is not a check.
-        if "regression pass" in low:
-            return True, "consensus regression passed"
-        return False, (why or f"did not print a pass (exit {rc})")
-    if name == "prove-block":
-        if "proved" in low and ("verified" in low or "receipt" in low):
-            import re as _re
-            t = _re.search(r"PROVED in ([0-9.]+)s", out or "")
-            return True, (f"proved and verified in {t.group(1)}s" if t else "proved and verified")
-        return False, (why or f"did not produce a receipt (exit {rc})")
-    return rc == 0, (why or f"exit {rc}")
+    if name == "selftest":
+        # ⛔ Both lines, not the exit code: "ALL GOOD" is printed only after every step, and the prove line only
+        # when a real receipt came out. A selftest that passes on silence is not a check.
+        if rc == 0 and "all good" in low and "proved a real block end to end" in low:
+            return True, "proved mainnet block 1 and verified a board proof"
+        return False, (why or f"did not prove and pass (exit {rc})")
+    # ⛔ An unknown check FAILS: passing on exit 0 alone is the silence-passes shape this list exists to refuse.
+    return False, (why or f"no verdict for an unknown check {name!r} (exit {rc})")
 
 
 def preflight(host_path, worker_path, identity_dir=None, python_exe=None):

@@ -1105,6 +1105,10 @@ class App(tk.Tk):
 
         def go():
             env = dict(os.environ)
+            if name == "selftest":
+                # the client's own selftest: the same environment a worker runs with (host, identity, board)
+                env = supervisor.worker_env(host, self.worker_var.get().strip(), self.ident_var.get() or None, None,
+                                            coord_url=self.coord_var.get().strip() or None)
             if po2:
                 env["HAZYNC_SEG_PO2"] = po2
             # ⚠ The prover forces RISC0_PROVER=local when unset; leave it alone rather than
@@ -1113,7 +1117,8 @@ class App(tk.Tk):
             # 2,875 s prove is forty minutes of a window saying "running…" and nothing else —
             # reported from a real machine as "there isn't any form of progress being shown".
             rc, out = supervisor.run_stream(
-                supervisor.diagnostic_command(host, name), env=env, timeout=timeout,
+                supervisor.diagnostic_command(host, name, self.worker_var.get().strip(), sys.executable),
+                env=env, timeout=timeout,
                 on_line=lambda l: self.results.put((self._diag_line, l)))
             self.results.put((self._after_diag, (name, title, rc, out, then)))
         threading.Thread(target=go, daemon=True).start()

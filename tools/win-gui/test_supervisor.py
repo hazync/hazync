@@ -165,19 +165,22 @@ def main():
         ("method-id", 0, "METHOD_ID " + supervisor.CANONICAL_METHOD_ID, True),
         ("method-id", 0, "METHOD_ID " + "de" * 32, False),
         ("method-id", 0, "", False),
-        ("regress", 0, ">>> REGRESSION PASS ✓", True),
+        ("selftest", 0, "✓ proved a real block end to end — your prover works\nALL GOOD — you're ready.", True),
         # ⛔ THE ONE THAT MATTERS: exit 0 with no pass line must FAIL. A check that passes on
         # silence is not a check, and this project has been bitten by exactly that shape.
-        ("regress", 0, "started, then nothing", False),
-        ("prove-block", 0, "PROVED in 2875.1s — receipt VERIFIED against METHOD_ID", True),
-        ("prove-block", 134, "fatal runtime error: Rust cannot catch foreign exceptions", False),
+        ("selftest", 0, "started, then nothing", False),
+        # a selftest that verified a board proof but never proved anything is not a pass either
+        ("selftest", 0, "ALL GOOD — you're ready.", False),
+        ("selftest", 134, "fatal runtime error: Rust cannot catch foreign exceptions", False),
+        # the CORE host's checks are gone: a name with no verdict must never pass on exit 0
+        ("regress", 0, ">>> REGRESSION PASS ✓", False),
     ]
     for name, rc, out, want in cases:
         ok, msg = supervisor.diagnostic_verdict(name, rc, out)
         check(ok == want, f"{name:12} rc={rc:<4} -> {'pass' if ok else 'FAIL'}  ({msg[:44]})")
-    _, msg = supervisor.diagnostic_verdict("prove-block", 0,
-                                           "PROVED in 2875.1s — receipt VERIFIED")
-    check("2875.1" in msg, f"and a successful prove reports its TIME ({msg})")
+    check(supervisor.diagnostic_command("C:/h/host.exe", "selftest", "C:/h/hazync-worker", "py.exe")[-1]
+          == "selftest" and supervisor.diagnostic_command("C:/h/host.exe", "method-id") == ["C:/h/host.exe", "method-id"],
+          "selftest runs the client's `selftest`; method-id runs the host")
 
     print("── 9. the verdict line ──")
     check(supervisor.summarise([r]) == "ready", "all-ok reads 'ready'")
@@ -224,10 +227,10 @@ def main():
     # of the three the answer is yes. The distinction is COST, so it is asserted rather than left to
     # whoever edits the list next.
     auto = supervisor.AUTO_DIAGNOSTICS
-    check("method-id" in auto and "regress" in auto,
-          f"the two cheap checks run automatically ({auto})")
-    check("prove-block" not in auto,
-          "⛔ the 2,875 s prove does NOT — starting it uninvited pins the machine for ~an hour")
+    check("method-id" in auto,
+          f"the cheap check runs automatically ({auto})")
+    check("selftest" not in auto,
+          "⛔ the selftest, which proves a real block, does NOT — starting it uninvited pins the machine")
     # ⚠ A timeout is the honest measure of what a check costs. Anything allowed to run at startup
     # must be bounded by something a person would not notice; this catches a future check being
     # flagged auto= with an hour-long budget.
@@ -656,9 +659,9 @@ def control():
     # ⛔ naive 5: judge a diagnostic by its exit code
     out = "started, then nothing"
     naive = (0 == 0)                       # "exit 0, so it passed"
-    real, _ = supervisor.diagnostic_verdict("regress", 0, out)
+    real, _ = supervisor.diagnostic_verdict("selftest", 0, out)
     ok = naive and not real
-    print(f"  {'ok  ' if ok else 'FAIL'} ⛔ control: 'exit 0 means it passed' calls a regress that "
+    print(f"  {'ok  ' if ok else 'FAIL'} ⛔ control: 'exit 0 means it passed' calls a selftest that "
           f"printed NO pass line a success — a check that passes on silence is not a check")
     broke += 1 if ok else 0
 
