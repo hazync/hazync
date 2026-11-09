@@ -95,7 +95,8 @@ Running it costs real money in GPU time. [What it costs and how to help pay for
 it](https://hazync.org/donate/).
 
 The original Hazync design, which proved each signature with Core's code directly (image `37987b85`), is
-superseded by libzync; its record is kept in [`docs/history/`](docs/history/README.md).
+superseded by libzync; its documents are kept in [`docs/history/`](docs/history/README.md) and its code in
+[`history/`](history/README.md).
 
 ## Licence
 

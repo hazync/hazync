@@ -2,7 +2,8 @@
 
 > **2026-11-08: being replaced.** This guide is for the original board (the CORE guest `37987b85`), whose proving
 > is stopped. libzync, the new core ([`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md)), will be proved from genesis
-> as independent per-block work items once its coordinator is live; this guide is rewritten for it then.
+> as independent per-block work items once its coordinator is live; this guide is rewritten for it then. The CORE
+> prover is the v0.22.1 release binary: the host in this tree is libzync-only ([`prover/README.md`](prover/README.md)).
 
 You prove one block of Bitcoin's history on your own machine, sign it, and submit it. Your name goes on the board at https://hazync.org/, and the proof is public for anyone to download and check. This guide takes you from nothing to your first proof.
 
@@ -144,7 +145,7 @@ Both it and the prover are covered by the signed `SHA256SUMS.txt`.
 
 Want to check what you downloaded? Verify its SHA256 + PGP signature — see [`SECURITY.md`](SECURITY.md#verifying-releases) — or, stronger, run `./hazync-host-x86_64-linux-gnu-cuda method-id` (or the CPU binary) and confirm it matches `reproduce/METHOD_ID`.
 
-> **Building from source instead?** You *must* build the **canonical guest** so your `METHOD_ID` matches `reproduce/METHOD_ID`. [`reproduce/`](reproduce/) is how: `docker build -t hazync-repro -f reproduce/Dockerfile .` builds at the fixed paths the id depends on and `docker run --rm hazync-repro` prints the id; the `host` it built is at `/hazync-zkvm/prover/target/release/host` inside the image (the `docker cp` steps are in `prover/testdata/snark/README.md`). If it doesn't, the coordinator rejects every proof you submit (`METHOD_ID` mismatch). The prebuilt binary above sidesteps this entirely.
+> **Building from source instead?** You *must* build the **canonical guest** so your `METHOD_ID` matches `reproduce/METHOD_ID`. [`reproduce/`](reproduce/) is how: `docker build -t hazync-repro -f reproduce/Dockerfile .` builds at the fixed paths the id depends on and `docker run --rm hazync-repro` prints the id; the `host` it built is at `/hazync-zkvm/prover/target/release/host` inside the image (the `docker cp` steps are in `history/prover/testdata/snark/README.md`). If it doesn't, the coordinator rejects every proof you submit (`METHOD_ID` mismatch). The prebuilt binary above sidesteps this entirely.
 
 ## Step 2: set your name and point at the party
 
