@@ -1,0 +1,23 @@
+[Unit]
+Description=libzync board pass: a leaf bundle for EVERY block from genesis under 863c9ce3, paced by proving (the libzync board's bridge)
+After=bitcoind.service libzync-board-fetch.service
+Wants=libzync-board-fetch.service
+
+[Service]
+Type=simple
+Environment=LZ_ROOT=/srv/bulk/libzync-board LZ_HI=974936
+Environment=HAZYNC_PREP_SAVE_EVERY=1000 HAZYNC_PREP_REPORT_EVERY=10000 HAZYNC_PREP_MIN_FREE_GB=250
+# at most this many leaf bundles waiting to be proved: the pass pauses until the board's pruner removes proven ones
+Environment=HAZYNC_PREP_LEAF_WINDOW=5000
+ExecStart=/bin/sh -c 'exec "$LZ_ROOT/bin/libzync-prep-run.sh"'
+Restart=on-failure
+RestartPreventExitStatus=3
+RestartSec=30
+# the main (paper) prep run on this box comes first
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=10G
+MemoryMax=14G
+
+[Install]
+WantedBy=multi-user.target

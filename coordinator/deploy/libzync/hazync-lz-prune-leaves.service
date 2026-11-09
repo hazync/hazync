@@ -1,0 +1,8 @@
+[Unit]
+Description=libzync board: delete proven leaf bundles below the frontier (lets the paced board pass continue)
+After=hazync-lz-coordinator.service
+
+[Service]
+Type=oneshot
+Environment=LEAVES=/srv/bulk/libzync-board/leaves COORD=http://127.0.0.1:8900 MARGIN=1000
+ExecStart=/usr/local/sbin/hazync-lz-prune-leaves --apply

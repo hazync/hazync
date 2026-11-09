@@ -99,7 +99,7 @@ while read -r unit; do
         *)  [ "$st" = active ] && ok "$unit is active (optional)" \
                                || printf '  note %s is %s (optional service)\n' "$unit" "$st" ;;
     esac
-done < <(systemctl list-unit-files 'hazync-*' --no-legend 2>/dev/null | awk '{print $1}' | grep -vE 'backup|\.timer')
+done < <(systemctl list-unit-files 'hazync-*' --no-legend 2>/dev/null | awk '{print $1}' | grep -vE 'backup|\.timer|^hazync-lz-')
 [ "$found" -eq 0 ] && skip "no hazync units found here — is this the coordinator?"
 
 echo "== bundles the bridge is emitting are in the format the current host parses =="
@@ -121,6 +121,45 @@ sys.exit(0 if 'txs' in w and 'tx_prevouts' in w else 1)" 2>/dev/null
         then ok "newest bundle $(basename "$newest") has txs/tx_prevouts"
         else bad "$(basename "$newest") is missing txs/tx_prevouts — bridge is emitting a stale format; provers will panic"; fi
     fi
+fi
+
+echo "== the libzync board (beside the original until the switch) runs the published libzync image =="
+# The libzync board's units (hazync-lz-*, libzync-*) verify and prove against the published libzync image, not the
+# CORE id above, so they are checked here against reproduce/LIBZYNC_IDS. Absent units: a box without the libzync
+# board, said as a SKIP, not passed.
+LZ=$(awk '$1 == "libzync-product" && $2 == "mainnet" { print $4 }' reproduce/LIBZYNC_IDS 2>/dev/null)
+if [ ${#LZ} -ne 64 ]; then
+    bad "cannot read the libzync mainnet id from reproduce/LIBZYNC_IDS"
+elif ! systemctl list-unit-files 'hazync-lz-coordinator.service' --no-legend 2>/dev/null | grep -q .; then
+    skip "no hazync-lz-coordinator here — the libzync board was NOT checked"
+else
+    for unit in hazync-lz-coordinator.service libzync-board-prep.service libzync-prep.service; do
+        env=$(systemctl show "$unit" -p Environment --value 2>/dev/null | tr ' ' '\n')
+        b=$(grep -oE '^HAZYNC_HOST=.*' <<<"$env" | cut -d= -f2)
+        root=$(grep -oE '^LZ_ROOT=.*' <<<"$env" | tail -1 | cut -d= -f2)
+        [ -z "$b" ] && [ -n "$root" ] && b="$root/bin/host_lz"
+        if [ -z "$b" ] || [ ! -x "$b" ]; then
+            [ "$unit" = libzync-prep.service ] && { printf '  note %s: no host binary found (optional)\n' "$unit"; continue; }
+            bad "$unit: no host binary found (HAZYNC_HOST or \$LZ_ROOT/bin/host_lz)"; continue
+        fi
+        id=$("$b" method-id 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)
+        if [ "$id" = "$LZ" ]; then ok "$unit -> $b is the published libzync image (${LZ:0:8}…)"
+        else bad "$unit runs $b with guest ${id:-unknown} — NOT the published libzync image (${LZ:0:8}…)"; fi
+        st=$(systemctl is-active "$unit" 2>/dev/null)
+        case "$unit" in
+            hazync-lz-coordinator.service|libzync-board-prep.service)
+                [ "$st" = active ] && ok "$unit is active" \
+                                   || bad "$unit is $st — REQUIRED for the libzync board" ;;
+            *)  [ "$st" = active ] && ok "$unit is active (optional)" \
+                                   || printf '  note %s is %s (optional service)\n' "$unit" "$st" ;;
+        esac
+    done
+    # the coordinator serves prep's leaf bundles: the newest must be the format the image's leaf prover reads
+    LV=$(systemctl show hazync-lz-coordinator -p Environment --value 2>/dev/null | tr ' ' '\n' | grep -oE '^HAZYNC_BRIDGE_OUT=.*' | cut -d= -f2)
+    newest=$( [ -d "$LV" ] && find "$LV" -maxdepth 1 -name 'leaf_*.bin' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    if [ -z "$newest" ]; then skip "no leaf bundles in ${LV:-the libzync coordinator HAZYNC_BRIDGE_OUT} — leaf format NOT checked"
+    elif [ "$(head -c 8 "$newest")" = LZLEAF02 ]; then ok "newest leaf bundle $(basename "$newest") is LZLEAF02"
+    else bad "$(basename "$newest") is not an LZLEAF02 leaf bundle — the board pass is emitting a stale format"; fi
 fi
 
 echo
