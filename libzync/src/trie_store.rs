@@ -104,6 +104,11 @@ pub trait Arena {
     fn durable(&mut self, _root: R, _counts: bool, _height: u64, _hash: &[u8; 32]) -> Result<(), alloc::string::String> { Ok(()) }
     /// Ask for these nodes' pages to be read ahead (asynchronously); in memory: nothing to do.
     fn prefetch(&self, _rs: &[R]) {}
+    /// Ask for the pages of the next `n` slots `put` will reuse to be read ahead: a write into a slot whose page is not
+    /// cached first reads that page, one fault at a time, and an update writes a new node for every node on its path.
+    fn prefetch_free(&self, _n: usize) {}
+    /// (hits, misses) of the arena's record cache since the last call; no cache: (0, 0).
+    fn cache_stats(&self) -> (u64, u64) { (0, 0) }
 }
 
 #[derive(Default)]
@@ -133,6 +138,38 @@ pub struct DiskArena {
     len: u64,
     free: Vec<R>,
     pending: Vec<R>,
+    cache: core::cell::RefCell<RecCache>,
+}
+
+/// A direct-mapped cache, in RAM, of the address trie's inner records (HAZYNC_TRIE_CACHE_MB, default 0: off).
+/// Every update walks the address trie from the root, so its inner nodes are the hot part of the store; in the page
+/// cache each sits in a 4 KiB page with 63 unrelated records, so RAM held ~64x fewer of them than it could (11-09: at
+/// 420,000 the walk read ~28 random pages per update and prep ran at 0.25 blocks/s, waiting on the disk). A slot holds
+/// one record and its reference; a record's bytes change only through `put`, which writes through, so a hit is
+/// always the record on disk.
+#[cfg(feature = "std")]
+struct RecCache { tags: Vec<R>, recs: Vec<[u8; RECORD]>, bits: u32, hits: u64, misses: u64 }
+
+#[cfg(feature = "std")]
+impl RecCache {
+    fn new(mb: u64) -> Self {
+        let n = (mb << 20) / (RECORD as u64 + 8);
+        if n < 2 { return RecCache { tags: Vec::new(), recs: Vec::new(), bits: 0, hits: 0, misses: 0 }; }
+        let bits = 63 - n.leading_zeros(); // the largest power of two that fits
+        let n = 1usize << bits;
+        RecCache { tags: alloc::vec![EMPTY; n], recs: alloc::vec![[0u8; RECORD]; n], bits, hits: 0, misses: 0 }
+    }
+    #[cfg(test)]
+    fn new_slots(n: usize) -> Self {
+        let bits = 63 - (n as u64).leading_zeros();
+        let n = 1usize << bits;
+        RecCache { tags: alloc::vec![EMPTY; n], recs: alloc::vec![[0u8; RECORD]; n], bits, hits: 0, misses: 0 }
+    }
+    fn slot(&self, r: R) -> Option<usize> {
+        (self.bits > 0).then(|| (r.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - self.bits)) as usize)
+    }
+    /// only the address trie's inner records (tag 3)
+    fn keeps(b: &[u8]) -> bool { b[0] == 3 }
 }
 
 #[cfg(feature = "std")]
@@ -147,17 +184,31 @@ impl DiskArena {
 
     fn map(file: &std::fs::File) -> std::io::Result<memmap2::MmapMut> {
         let n = file.metadata()?.len().max(Self::VIRT);
-        unsafe { memmap2::MmapOptions::new().len(n as usize).map_mut(file) }
+        let map = unsafe { memmap2::MmapOptions::new().len(n as usize).map_mut(file) }?;
+        // Random access: no read-around on a fault. The walk touches one 64-byte record per page it faults, so the
+        // kernel's default read-around (read_ahead_kb, 128 KiB on hazync-proof) read ~30 pages for each one used and
+        // evicted the cached trie with them; once the arena outgrew RAM (~415,000) prep fell from 0.6 to 0.27 blocks/s,
+        // waiting on the disk at 9% CPU (11-09). prefetch's WILLNEED still reads exactly the pages asked for.
+        #[cfg(unix)]
+        map.advise(memmap2::Advice::Random)?;
+        Ok(map)
     }
 
     /// Open (or create) the arena in `dir`; returns it with the flushed (root, counts, height, hash), if any.
     pub fn open(dir: &std::path::Path) -> std::io::Result<(Self, Option<(R, bool, u64, [u8; 32])>)> {
+        let mb: u64 = std::env::var("HAZYNC_TRIE_CACHE_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        Self::open_cached(dir, mb)
+    }
+
+    /// `open` with a record cache of `cache_mb` MiB (0: none).
+    pub fn open_cached(dir: &std::path::Path, cache_mb: u64) -> std::io::Result<(Self, Option<(R, bool, u64, [u8; 32])>)> {
         std::fs::create_dir_all(dir)?;
         let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("nodes.bin"))?;
         if file.metadata()?.len() < Self::STEP * RECORD as u64 { file.set_len(Self::STEP * RECORD as u64)?; }
         let map = Self::map(&file)?;
         let cap = file.metadata()?.len();
-        let mut a = DiskArena { dir: dir.to_path_buf(), file, map, cap, len: 0, free: Vec::new(), pending: Vec::new() };
+        let cache = core::cell::RefCell::new(RecCache::new(cache_mb));
+        let mut a = DiskArena { dir: dir.to_path_buf(), file, map, cap, len: 0, free: Vec::new(), pending: Vec::new(), cache };
         let meta = match std::fs::read(dir.join("meta")) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e),
@@ -200,7 +251,13 @@ impl Arena for DiskArena {
         let i = (r - 1) as usize * RECORD;
         // inside the FILE (the mapping runs past it: a reference beyond the file must panic, not SIGBUS)
         assert!(r >= 1 && (i + RECORD) as u64 <= self.cap, "trie arena: node {r} past the file");
-        Node::dec(&self.map[i..i + RECORD])
+        let mut c = self.cache.borrow_mut();
+        let Some(k) = c.slot(r) else { return Node::dec(&self.map[i..i + RECORD]) };
+        if c.tags[k] == r { c.hits += 1; return Node::dec(&c.recs[k]); }
+        c.misses += 1;
+        let b = &self.map[i..i + RECORD];
+        if RecCache::keeps(b) { c.tags[k] = r; c.recs[k].copy_from_slice(b); }
+        Node::dec(b)
     }
     fn put(&mut self, n: Node) -> R {
         let r = match self.free.pop() {
@@ -212,7 +269,13 @@ impl Arena for DiskArena {
             }
         };
         let i = (r - 1) as usize * RECORD;
-        self.map[i..i + RECORD].copy_from_slice(&n.enc());
+        let e = n.enc();
+        self.map[i..i + RECORD].copy_from_slice(&e);
+        // write through: the slot's cached record (if any) becomes this one, or goes
+        let c = self.cache.get_mut();
+        if let Some(k) = c.slot(r) {
+            if RecCache::keeps(&e) { c.tags[k] = r; c.recs[k] = e; } else if c.tags[k] == r { c.tags[k] = EMPTY; }
+        }
         r
     }
     fn free(&mut self, r: R) { self.pending.push(r); }
@@ -223,13 +286,24 @@ impl Arena for DiskArena {
     fn prefetch(&self, rs: &[R]) {
         // one madvise(WILLNEED) per distinct page: the kernel reads them all ahead at once, so a level of the walk costs
         // about one read latency, not one per node (the volume serves ~75 k random reads/s in parallel, ~5 k serially)
-        let mut pages: Vec<u64> = rs.iter().filter(|&&r| r != EMPTY && (r as u64) * RECORD as u64 <= self.cap)
+        let c = self.cache.borrow();
+        let cached = |r: R| c.slot(r).is_some_and(|k| c.tags[k] == r);
+        let mut pages: Vec<u64> = rs.iter().filter(|&&r| r != EMPTY && (r as u64) * RECORD as u64 <= self.cap && !cached(r))
             .map(|&r| ((r - 1) * RECORD as u64) & !4095).collect();
         pages.sort_unstable();
         pages.dedup();
         for p in pages {
             let _ = self.map.advise_range(memmap2::Advice::WillNeed, p as usize, 4096);
         }
+    }
+    fn cache_stats(&self) -> (u64, u64) {
+        let mut c = self.cache.borrow_mut();
+        (core::mem::take(&mut c.hits), core::mem::take(&mut c.misses))
+    }
+    fn prefetch_free(&self, n: usize) {
+        // put pops from the end of the free list
+        let k = self.free.len().saturating_sub(n);
+        self.prefetch(&self.free[k..]);
     }
     fn durable(&mut self, root: R, counts: bool, height: u64, hash: &[u8; 32]) -> Result<(), alloc::string::String> {
         use std::io::Write as _;
@@ -298,7 +372,14 @@ impl TrieStore {
     /// The store kept on disk in `dir` (trie_store::DiskArena): the trie last flushed there, or a new empty one.
     #[cfg(feature = "std")]
     pub fn open_dir(dir: &std::path::Path, counts: bool) -> std::io::Result<Self> {
-        let (a, meta) = DiskArena::open(dir)?;
+        let mb: u64 = std::env::var("HAZYNC_TRIE_CACHE_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        Self::open_dir_cached(dir, counts, mb)
+    }
+
+    /// `open_dir` with a record cache of `cache_mb` MiB in the disk arena (0: none; see `RecCache`).
+    #[cfg(feature = "std")]
+    pub fn open_dir_cached(dir: &std::path::Path, counts: bool, cache_mb: u64) -> std::io::Result<Self> {
+        let (a, meta) = DiskArena::open_cached(dir, cache_mb)?;
         let mut st = Self::with_arena(counts, Box::new(a));
         if let Some((root, c, height, hash)) = meta {
             if c != counts { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "trie arena: counts mode differs")); }
@@ -677,14 +758,17 @@ impl TrieStore {
     /// Read ahead every node an update of these keys will read (mainnet prep, 11-07): the keys' paths AND each inner
     /// node's other child (its hash is read when the path is rebuilt), level by level, each level's pages requested
     /// together. Read-only: changes nothing (the update itself is `apply`).
-    pub fn prefetch(&self, marks: &Marks, inserts: &Inserts) {
+    /// Returns the number of nodes on the keys' paths (about the nodes the update will write).
+    pub fn prefetch(&self, marks: &Marks, inserts: &Inserts) -> usize {
         let mut ks: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
         ks.sort_unstable();
-        if ks.is_empty() || self.root == EMPTY { return; }
+        if ks.is_empty() || self.root == EMPTY { return ks.len(); }
         self.a.prefetch(&[self.root]);
+        let mut on_path = 0usize;
         // nodes on a key's path (already requested): (node, in a coin trie, depth, its keys)
         let mut cur: Vec<(R, bool, u32, &[(W, W)])> = alloc::vec![(self.root, false, 0, &ks[..])];
         while !cur.is_empty() {
+            on_path += cur.len();
             let mut kids: Vec<R> = Vec::new();
             let mut next: Vec<(R, bool, u32, &[(W, W)])> = Vec::new();
             for &(n, sub, d, k) in &cur {
@@ -707,7 +791,13 @@ impl TrieStore {
             self.a.prefetch(&kids);
             cur = next;
         }
+        on_path + ks.len()
     }
+
+    /// Read ahead the pages of the next `n` slots the store will write into (see `Arena::prefetch_free`).
+    pub fn prefetch_free(&self, n: usize) { self.a.prefetch_free(n); }
+    /// (hits, misses) of the disk arena's record cache since the last call.
+    pub fn cache_stats(&self) -> (u64, u64) { self.a.cache_stats() }
 
     pub fn witness(&self, marks: &Marks, inserts: &Inserts) -> Vec<u32> {
         let mut ks: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
@@ -928,12 +1018,36 @@ mod tests {
     /// reopened store continues identically. Prints nodes per coin (sizing: RECORD bytes each).
     #[cfg(feature = "std")]
     #[test]
-    fn disk_arena_matches_memory_and_survives_a_crash() {
-        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}", std::process::id()));
+    fn disk_arena_matches_memory_and_survives_a_crash() { disk_arena_run(0, 0, "nocache"); }
+
+    /// The record cache: a tiny one (a few dozen slots: every insert collides) with a flush every 7 blocks, so freed
+    /// slots are reused under cached references; and a large one. Each must match the memory store record for record.
+    #[cfg(feature = "std")]
+    #[test]
+    fn disk_arena_record_cache_is_exact() {
+        disk_arena_run(1, 7, "tinycache");
+        disk_arena_run(64, 0, "bigcache");
+    }
+
+    #[cfg(feature = "std")]
+    fn disk_arena_run(cache_mb: u64, flush_every: u32, tag: &str) {
+        // cache_mb 1 means a tiny cache of 64 slots (below what a MiB gives), so nearly every insert collides
+        let mb = if cache_mb == 1 { 0 } else { cache_mb };
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        let open = |d: &std::path::Path| -> TrieStore {
+            if cache_mb == 1 {
+                let (a, meta) = DiskArena::open_cached(d, 0).unwrap();
+                let mut a = a;
+                a.cache = core::cell::RefCell::new(RecCache::new_slots(64));
+                let mut st = TrieStore::with_arena(true, Box::new(a));
+                if let Some((root, _, height, hash)) = meta { (st.root, st.height, st.hash) = (root, height, hash); }
+                st
+            } else { TrieStore::open_dir_cached(d, true, mb).unwrap() }
+        };
         let mut x = 0x9e3779b97f4a7c15u64;
         let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
-        let (mut mem, mut disk) = (TrieStore::new(true), TrieStore::open_dir(&dir, true).unwrap());
+        let (mut mem, mut disk) = (TrieStore::new(true), open(&dir));
         let mut unspent: Vec<Key> = Vec::new();
         let mut all = alloc::collections::BTreeSet::new();
         let mut blocks: Vec<(Vec<(Key, W)>, Vec<(Key, Option<W>, u64)>)> = Vec::new();
@@ -964,15 +1078,20 @@ mod tests {
             }
             (mem.height, disk.height) = (blk as u64 + 1, blk as u64 + 1);
             blocks.push((marks, ins));
-            if blk == 199 { disk.flush().unwrap(); }
+            if blk == 199 || (flush_every > 0 && blk < 199 && blk % flush_every == 0) { disk.flush().unwrap(); }
         }
         assert_eq!(mem.to_bytes(), disk.to_bytes());
         let coins = all.len() as u64;
         std::println!("trie arena: {} coins, {} nodes ({:.2} per coin, {} bytes per coin at {RECORD}-byte records)",
                       coins, disk.nodes(), disk.nodes() as f64 / coins as f64, disk.nodes() * RECORD as u64 / coins);
+        if cache_mb > 0 {
+            let (h, m) = disk.cache_stats();
+            std::println!("record cache [{tag}]: {h} hits, {m} misses");
+            assert!(h > 0, "the record cache was never hit: the test would not show it exact");
+        }
         // "crash": drop the disk store without flushing blocks 200..299; reopen = the trie flushed at 199
         drop(disk);
-        let mut back = TrieStore::open_dir(&dir, true).unwrap();
+        let mut back = open(&dir);
         let mut replay = TrieStore::new(true);
         for (m, i) in &blocks[..200] { replay.apply(m, i).unwrap(); }
         assert_eq!((back.root(), back.height), (replay.root(), 200), "reopened = flushed state");
