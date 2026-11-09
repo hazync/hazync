@@ -464,7 +464,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                      (h - h_rep + 1) as f64 / dt.max(1e-9), st.utxo_leaves, mb(crate::lz::cl_dir()), mb(crate::trie::trie_dir()),
                      mb(Some(out.into())), rss_mb(), t0.elapsed().as_secs_f64());
             let p = std::mem::replace(&mut *PHASES.lock().unwrap(), [0.0; 7]);
-            println!("PREP_TIMING h={h} s: prefetch={:.0} coinlog={:.0} trie={:.0} rest={:.0} read_block={:.0} write_state={:.0} save={:.0} of {:.0}",
+            let (ch, cm) = crate::trie::TS.lock().unwrap().as_ref().map_or((0, 0), |t| t.cache_stats());
+            println!("PREP_TIMING h={h} s: prefetch={:.0} coinlog={:.0} trie={:.0} rest={:.0} read_block={:.0} write_state={:.0} save={:.0} of {:.0}; trie cache hits={ch} misses={cm}",
                      p[0], p[1], p[2], p[3], p[4], p[5], p[6], dt);
             t_rep = std::time::Instant::now();
             h_rep = h + 1;
