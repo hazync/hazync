@@ -147,7 +147,14 @@ impl DiskArena {
 
     fn map(file: &std::fs::File) -> std::io::Result<memmap2::MmapMut> {
         let n = file.metadata()?.len().max(Self::VIRT);
-        unsafe { memmap2::MmapOptions::new().len(n as usize).map_mut(file) }
+        let map = unsafe { memmap2::MmapOptions::new().len(n as usize).map_mut(file) }?;
+        // Random access: no read-around on a fault. The walk touches one 64-byte record per page it faults, so the
+        // kernel's default read-around (read_ahead_kb, 128 KiB on hazync-proof) read ~30 pages for each one used and
+        // evicted the cached trie with them; once the arena outgrew RAM (~415,000) prep fell from 0.6 to 0.27 blocks/s,
+        // waiting on the disk at 9% CPU (11-09). prefetch's WILLNEED still reads exactly the pages asked for.
+        #[cfg(unix)]
+        map.advise(memmap2::Advice::Random)?;
+        Ok(map)
     }
 
     /// Open (or create) the arena in `dir`; returns it with the flushed (root, counts, height, hash), if any.
