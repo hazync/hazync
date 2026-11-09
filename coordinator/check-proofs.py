@@ -20,7 +20,9 @@ took 2.9 s. The run prints its own total, which is the measurement for later pas
 Exit status: 0 every proof holds; 1 at least one does not; 2 could not check (no database, no proof directory, no
 host binary). Verified ranges with no file are counted and listed, not failed: per-block ones are the G1 retention
 check's job, and whether a missing fold file matters is not settled.
-Environment: COORD_DB, COORD_PROOFS, HAZYNC_HOST, CHECK_PROOFS_WORKERS (4), CHECK_PROOFS_MIN_AGE (600 s).
+Environment: COORD_DB, COORD_PROOFS, HAZYNC_HOST, CHECK_PROOFS_WORKERS (4), CHECK_PROOFS_MIN_AGE (600 s); on the libzync
+board HAZYNC_LIBZYNC=1 (verify-any is given each range's start height), HAZYNC_BRIDGE_OUT and HAZYNC_LZ_STATE_DIR (where
+the host finds the state before that height once its leaf bundle is pruned).
 """
 import argparse
 import concurrent.futures
@@ -33,6 +35,7 @@ import sys
 import time
 
 NAME = re.compile(r"^proof_(\d+(?:-\d+)?)\.bin$")
+LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
 FIELDS = ("lo", "hi", "in_tip", "out_tip", "in_bhash", "out_bhash")
 
 
@@ -57,7 +60,10 @@ def check_one(path, rid, want_sha, record, host):
     elif hashlib.sha256(data).hexdigest() != want_sha:
         problems.append("no longer hashes to the receipt the coordinator accepted")
     try:
-        p = subprocess.run([host, "verify-any", path], capture_output=True, text=True, timeout=300)
+        # a libzync host checks the receipt's anchor against the state before its first block, so it is told that
+        # height (as the coordinator does at submit); without it a multi-block range reads as starting at its end
+        lo = [str(max(int(rid.split("-")[0]), 1))] if LIBZYNC else []
+        p = subprocess.run([host, "verify-any", path] + lo, capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
         return rid, problems + ["verify-any did not finish in 300 s"]
     kv = range_ok(p.stdout)
