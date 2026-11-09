@@ -234,7 +234,10 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     if std::env::var("HAZYNC_PREP_PREFETCH").as_deref() != Ok("0") {
         let t = mark();
         crate::lz::cl_prefetch(&ext);
-        if let Some(ts) = crate::trie::TS.lock().unwrap().as_ref() {
+        if let Some(ts) = crate::trie::TS.lock().unwrap().as_mut() {
+            // HAZYNC_PREP_PREFETCH_FROM_LEVEL=n: no read-ahead for the top n-1 levels of the walk (always cached)
+            static FROM: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+            ts.set_prefetch_from(*FROM.get_or_init(|| std::env::var("HAZYNC_PREP_PREFETCH_FROM_LEVEL").ok().and_then(|v| v.parse().ok()).unwrap_or(0)));
             let n = ts.prefetch(&marks, &ins);
             // the slots the update will write into (HAZYNC_PREP_PREFETCH_FREE=0 turns it off): twice the path, as a
             // margin (an insert can split a leaf into a chain)

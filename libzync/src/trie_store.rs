@@ -354,6 +354,8 @@ pub struct TrieStore {
     garbage: Vec<R>,
     /// the update being applied re-created a coin over its spent record
     replaced: bool,
+    /// `prefetch` asks the kernel for the pages of path nodes from this walk level down (0 and 1: every level)
+    prefetch_from: u32,
     /// one entry per update applied in this session (true: it re-created a coin over its spent record), so undo can
     /// refuse any update whose replaced record it cannot restore, however many levels back (review round 7)
     applied: Vec<bool>,
@@ -365,7 +367,7 @@ pub type Inserts = [(Key, Option<W>, u64)];
 
 impl TrieStore {
     fn with_arena(counts: bool, a: Box<dyn Arena + Send>) -> Self {
-        TrieStore { counts, height: 0, hash: [0; 32], root: EMPTY, a, fresh: Vec::new(), garbage: Vec::new(), replaced: false, applied: Vec::new() }
+        TrieStore { counts, height: 0, hash: [0; 32], root: EMPTY, a, fresh: Vec::new(), garbage: Vec::new(), replaced: false, prefetch_from: 0, applied: Vec::new() }
     }
     pub fn new(counts: bool) -> Self { Self::with_arena(counts, Box::new(MemArena::default())) }
 
@@ -767,7 +769,9 @@ impl TrieStore {
         let mut on_path = 0usize;
         // nodes on a key's path (already requested): (node, in a coin trie, depth, its keys)
         let mut cur: Vec<(R, bool, u32, &[(W, W)])> = alloc::vec![(self.root, false, 0, &ks[..])];
+        let mut level = 0u32;
         while !cur.is_empty() {
+            level += 1;
             on_path += cur.len();
             let mut kids: Vec<R> = Vec::new();
             let mut next: Vec<(R, bool, u32, &[(W, W)])> = Vec::new();
@@ -788,7 +792,9 @@ impl TrieStore {
                     Node::Coin { .. } => {}
                 }
             }
-            self.a.prefetch(&kids);
+            // the top levels are read by every block and stay cached: asking for them again costs a kernel call per
+            // page for nothing (11-09 profile: madvise was 17% of prep's CPU)
+            if level >= self.prefetch_from { self.a.prefetch(&kids); }
             cur = next;
         }
         on_path + ks.len()
@@ -796,6 +802,8 @@ impl TrieStore {
 
     /// Read ahead the pages of the next `n` slots the store will write into (see `Arena::prefetch_free`).
     pub fn prefetch_free(&self, n: usize) { self.a.prefetch_free(n); }
+    /// Read ahead only from walk level `l` down (the levels above stay cached; a hint, so no effect on any result).
+    pub fn set_prefetch_from(&mut self, l: u32) { self.prefetch_from = l; }
     /// (hits, misses) of the disk arena's record cache since the last call.
     pub fn cache_stats(&self) -> (u64, u64) { self.a.cache_stats() }
 
