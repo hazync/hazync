@@ -47,7 +47,7 @@ python3 "$REPO/scripts/libzync/core_vectors.py" "$BASE/bitcoin-core" "$OUT/core_
 python3 "$REPO/scripts/libzync/core_vectors.py" "$BASE/bitcoin-core" "$OUT/core_vectors_base.json" --no-variants >> "$OUT/core_vectors.log" 2>&1
 tail -2 "$OUT/core_vectors.log"
 ls -la "$OUT"
-# the host's own unit tests, in libzync mode (the CORE-mode run is in soundness-suite)
+# the host's own unit tests (the host is libzync-only)
 if env HAZYNC_BASE=$BASE HAZYNC_LIBZYNC=1 RISC0_SKIP_BUILD=1 cargo test --profile fasthost -p host -j"$(nproc)" > "$OUT/host_unit.log" 2>&1; then
   echo "HOST_UNIT_OK $(grep -a '^test result' "$OUT/host_unit.log" | awk '{p+=$4; f+=$6} END{print p" passed, "f" failed"}')" | tee -a "$OUT/ids.txt"
 else

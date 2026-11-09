@@ -1,12 +1,12 @@
 name: adversarial
 
-# Builds the real prover (Bitcoin Core consensus code -> riscv32 guest) and runs the self-contained
-# soundness checks on every push: the block-170 consensus regression and the adversarial suite, which
-# asserts that a witness exploiting each known hole (host-controlled height, in-block double-spend /
-# ordering, malformed coinbase) is REJECTED, alongside an honest baseline that must be accepted.
+# The repo's checks on every push: libzync and its verifiers, the shared accumulators, the coordinator and tooling
+# gates, the dependency audit, the reproducible libzync images, and the libzync soundness pass on hosts that embed
+# the PUBLISHED guests. `soundness-suite` is the gate over that pass. The original CORE design's jobs (the CORE-mode
+# host suite, the boundary blocks, the CORE verifiers) were retired with it; see history/README.md.
 
 # `push:` was unqualified, so every branch with an open PR ran the whole suite TWICE — once for the
-# push and once for the pull_request. soundness-suite is a 45+ minute job, so on a night with five
+# push and once for the pull_request. The soundness pass is hours of runner time, so on a night with five
 # PRs open that was five wasted hours of runner time and a queue nothing could get through.
 #
 # Now: branches are covered by `pull_request`, and `main` by `push` — which still matters, because
@@ -95,11 +95,6 @@ jobs:
           rustup target add riscv32im-unknown-none-elf
           cargo build --release --manifest-path coinbase-smt/Cargo.toml \
                 --no-default-features --target riscv32im-unknown-none-elf
-      - name: Genesis-anchor pin, including the empty coinbase-SMT root
-        # `is_genesis_anchored` is the assertion the whole artifact rests on. #54 added a field to it,
-        # and a range that anchors at genesis while starting from a FABRICATED coinbase-SMT would
-        # otherwise verify happily against a history that never happened.
-        run: cargo test --manifest-path rangestate/Cargo.toml --release
       - name: Coinbase SMT no_std build for the GUEST target, WITH serde
         # `Proof` crosses the wire, so its serde impls have to build for bare metal too — the guest
         # deserialises the same type the bridge serialises. The default no_std check above does not
@@ -107,8 +102,6 @@ jobs:
         run: |
           cargo build --release --manifest-path coinbase-smt/Cargo.toml \
                 --no-default-features --features serde --target riscv32im-unknown-none-elf
-      - name: Accumulator fuzz-harness unit tests
-        run: cargo test --manifest-path audit-fuzz/Cargo.toml --release
       - name: Coordinator seam fuzz (soundness — must find NOTHING)
         run: cd coordinator && python3 seam_fuzz.py 20000
       - name: Coordinator seam fuzz POSITIVE CONTROL (H9 guard removed — must find SOMETHING)
@@ -1654,67 +1647,6 @@ jobs:
         run: ./prover/test-prebuilt-guest.sh --control
       - name: Prove-path segment guards (risc0 segment-boundary bug can't recur silently)
         run: ./prover/check_seg_guards.sh
-      - name: "Standalone verifier — builds, verifies, and rejects a non-genesis proof (#19, #24)"
-        # The product claim is that a phone can check a few-KB proof. This builds the verify-only
-        # binary (no prover, no guest ELF) and runs it against the same fixtures the host is gated on.
-        # It must ACCEPT the genesis-anchored proof and REJECT the non-genesis one — a verifier that
-        # checked less would make a fabricated-anchor range MORE shareable, not less.
-        run: |
-          cargo build --release --manifest-path verifier/Cargo.toml
-          B=verifier/target/release/hazync-verify
-          echo "verifier size: $(stat -c%s "$B") bytes"
-          # Assert EXACT exit codes, not merely "non-zero". A bare `if $B neg500; then fail; fi`
-          # also passes when the binary segfaults, which is a check that cannot distinguish "correctly
-          # refused" from "crashed" — the exact failure mode this suite exists to catch elsewhere.
-          #   0 = verified and genesis-anchored
-          #   1 = the proof is invalid (forged/tampered/corrupt/wrong guest)
-          #   2 = the SNARK is valid but the range is not genesis-anchored
-          # `cmd; rc=$?` does NOT work here: GitHub runs these under `bash -e`, so a non-zero exit
-          # kills the step before rc is ever assigned. `|| rc=$?` is the form that survives set -e.
-          rc=0; "$B" prover/testdata/snark/fold_8.snark || rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "::error::verifier REJECTED the genesis-anchored proof (exit $rc)"; exit 1
-          fi
-          rc=0; "$B" prover/testdata/snark/neg500.snark >/dev/null 2>&1 || rc=$?
-          if [ $rc -eq 0 ]; then
-            echo "::error::verifier ACCEPTED a non-genesis range — the genesis pin is not enforced"; exit 1
-          fi
-          if [ $rc -ne 2 ]; then
-            echo "::error::non-genesis range gave exit $rc, expected 2 — it was refused for the WRONG"
-            echo "::error::reason (2 means 'valid SNARK, not anchored'; 1 means 'invalid proof')"; exit 1
-          fi
-          echo "verifier rejects the non-genesis range with the anchoring code ✓"
-      - name: FFI verifier — adversarial suite from C++ (#31)
-        # ghostd will call THIS, not a C++ reimplementation of risc0 verification, and #31 makes
-        # "adversarial tests first" non-negotiable: adopting a proof is a trust decision, and a bug
-        # here means accepting an invalid chain — strictly worse than slow IBD.
-        #
-        # Every case asserts the output struct is left BYTE-FOR-BYTE untouched on rejection. The
-        # smoke test this replaces printed "state correctly not written" and checked nothing, so a
-        # rejection path that wrote partial state would have passed it while reassuring the reader.
-        #
-        # The baseline acceptance runs FIRST and hard-fails the suite: a verifier that rejects
-        # everything passes an adversarial suite trivially.
-        run: |
-          cargo build --release --manifest-path verifier-ffi/Cargo.toml
-          g++ -O2 -I verifier-ffi/include prover/testdata/ffi_adversarial.cpp \
-              verifier-ffi/target/release/libhazync_verify.a -lpthread -ldl -lm -o /tmp/ffi_adv
-          /tmp/ffi_adv prover/testdata/snark/fold_8.snark prover/testdata/snark/neg500.snark
-      - name: WASM verifier agrees with the CLI on every fixture (browsers are the copy nobody can audit)
-        # The browser build is the copy most people will run and the one least inspectable after the
-        # fact. It shares hazync_verify::verify with the CLI, so it cannot disagree "in principle" —
-        # but that is exactly what was true of the RangeState mirrors before they drifted (#32).
-        # Asserted against real proofs plus mutations that must be refused.
-        run: |
-          rustup target add wasm32-unknown-unknown
-          ./verifier-wasm/build.sh
-          ./verifier-wasm/test-parity.sh
-      - name: SPEC.md formats match the code (a drifted spec is worse than no spec)
-        # docs/history/SPEC_CORE.md is normative about byte layouts and constants. If it drifts, a reviewer
-        # implements against it, their verifier disagrees with ours, and the disagreement looks like
-        # OUR bug. Only mechanically checkable claims are covered — constants, tags, and the full
-        # RangeState field list in declaration order, because the journal decodes positionally.
-        run: ./scripts/check-spec.sh
       - name: Utreexo hash construction agrees across host, guest Rust and guest C++
         # Three implementations of the same hash. A drift means the host builds proofs the guest
         # cannot verify — and only for SOME blocks, because the domain tag only matters once a leaf
@@ -1730,8 +1662,6 @@ jobs:
         # implementation — the version whose strtoul ignored its base and whose _sbrk checked only
         # the upper bound.
         run: ./prover/methods/guest/test-cshims.sh
-      - name: RangeState mirrors agree (a reordered field MISREADS a valid proof, it does not reject it)
-        run: ./scripts/check-rangestate.sh
       - name: Every crate the GUEST compiles is flagged as a METHOD_ID input
         # "guest source" is wider than prover/methods/guest/ — the guest has path dependencies, and
         # editing one re-baselines the board with nothing in the guest directory changed. That has
@@ -1788,153 +1718,6 @@ jobs:
           # skips it too); every other script is held to warning level
           shellcheck -S warning $(git ls-files '*.sh' | grep -v '^experimental/')
 
-  boundary-heavy:
-    # The six expensive activation-boundary blocks (#83): 388380, 419327/8, 434499, 481823/4.
-    # ~30,700 prevouts, ~34 minutes. Nightly and on demand, never per push.
-    #
-    # 434499 is the one that matters most: the first pre-segwit block whose coinbase carries a BIP141
-    # commitment with no witness data anywhere. witness_ok's own comment records that checking the
-    # commitment at every height "rejected the canonical pre-activation blocks ... a reject-valid
-    # liveness bug in the 433k-481823 range". That was fixed and nothing drove the window it broke.
-    #
-    # 419328 and 481824 are both exactly 2016k, because BIP9 forks activate ON retarget boundaries —
-    # which is why their fixtures carry a real epoch_start rather than a synthesised one.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Provision (RISC0 toolchain, Bitcoin Core v28 source, patches, build)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./provision-vps.sh
-      - name: Activation boundaries — heavy set
-        run: |
-          cd prover && HAZYNC_HOST=./target/release/host ./ci_boundary_tests.sh heavy
-
-  soundness-suite:
-    # Full build (RISC0 toolchain + Core source + patches) then run regress + adversarial.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Provision (RISC0 toolchain, Bitcoin Core v28 source, patches, build)
-        env:
-          REPO_DIR: ${{ github.workspace }}
-          # rzup authenticates its GitHub API calls with this, avoiding the anonymous
-          # rate limit that otherwise flakes the toolchain install on shared CI runners.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./provision-vps.sh
-      - name: Guest image id (METHOD_ID) — for reproducibility tracking
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          ./prover/target/release/host method-id
-      - name: Block-170 consensus regression
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          ./prover/target/release/host regress
-      - name: Adversarial soundness suite (every hole must REJECT)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          ./prover/target/release/host adversarial
-      - name: Consensus reject-path negative tests (COV-1 time-too-old, COV-2 merkle CVE-2012-2459, SEC-2 forged accumulator inclusion)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          cd prover && HAZYNC_HOST=./target/release/host ./ci_negative_tests.sh
-      - name: Consensus activation boundaries — real blocks, cheap set (#83)
-        # Before #83 the fixtures were 130000/140000 (before every activation) and 741000 (after all of
-        # them), so every height gate in validate_block had one side exercised and no boundary. These
-        # are the real blocks either side of BIP34, BIP66 and BIP65.
-        #
-        # CHEAP SET ONLY here. Cost tracks prevout count: block 741000 has 670 and runs in ~45s; this
-        # set totals ~2,760 (~3 min). The heavy six total ~30,700 (~34 min) and run on a schedule
-        # instead — adding half an hour to every push to re-execute blocks that never change is how a
-        # suite gets switched off six months later.
-        run: |
-          cd prover && HAZYNC_HOST=./target/release/host ./ci_boundary_tests.sh cheap
-      - name: Leaf preimage — all THREE implementations agree byte for byte (#50)
-        # MOVED HERE FROM accumulator-tests. That job is deliberately "fast, always-green: the pure-Rust
-        # accumulator" and provisions NO Core sources — but leaf-differential's build.rs compiles Bitcoin
-        # Core natively to call the guest's real C++ leaf builders. Putting it there broke the job's
-        # premise and failed with exit 101; this job already provisions Core, which is what it needs.
-        #
-        # It gates the accumulator's leaf preimage BYTES (field order, widths, endianness,
-        # length-prefixing) across the C++ spend-side, C++ create-side and Rust builders — not just the
-        # tag shape check-utreexo.sh does.
-        run: |
-          HAZYNC_BASE="$HOME/hazync-build" cargo test --manifest-path leaf-differential/Cargo.toml --release
-      - name: Bridge <-> guest BIP30 agreement (host unit tests)
-        # ⚠ THIS RUNS THE WHOLE prover/host SUITE, not just BIP30 — 60 tests, and it is the ONLY place
-        # they run in CI, because building this crate needs the risc0 guest toolchain that the light jobs
-        # do not have. It therefore covers `hello_wire_tests` (the #570 frame over a real socket),
-        # `hello_tests` and `block_phases_tests` (#567). Do not narrow it to a filter without moving
-        # those somewhere that still runs them.
-        # MOVED HERE FROM accumulator-tests, for the same reason leaf-differential moved: prover/host
-        # depends on the `methods` crate, whose build script builds the GUEST — so it needs the RISC0
-        # toolchain, which the fast job deliberately does not install. It failed with
-        # "Risc Zero Rust toolchain not found".
-        #
-        # The bridge emits the SMT proofs and the guest consumes them; the two must agree about which
-        # intermediate root each proof is taken against. Both halves are individually well-formed, so a
-        # disagreement fails CLOSED — it looks like a board that stopped advancing, not a wrong answer.
-        run: cargo test --manifest-path prover/host/Cargo.toml --release
-      - name: BIP30 grandfathered overwrite (real block 91842)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          ./prover/target/release/host check-bip30
-      - name: Retarget differential (carved real Core pow.cpp vs actual on-chain nBits at every mainnet retarget)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          cd prover && ./retarget_diff_test.sh
-      - name: Script-flag schedule differential (guest ⊇ Core, buried forks exact, exception blocks)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          ./prover/target/release/host script-flags-test
-      - name: Bundle JSON round-trip (regression for the v0.9.0 spend-block parse bug, block 170)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          ./prover/target/release/host bundle-roundtrip-test
-      - name: Chainparams anchor (Core's compiled consensus constants == canonical mainnet values)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          cd prover && ./chainparams_check.sh
-      - name: BIP68 relative-locktime matrix (real mainnet MTP, height and time based)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          cd prover && ./test_bip68_locks.sh
-      - name: BIP68 time-lock on a real mainnet transaction (and the pre-CSV non-enforcement control)
-        run: |
-          . "$HOME/.cargo/env"
-          export PATH="$HOME/.risc0/bin:$PATH" HAZYNC_BASE="$HOME/hazync-build"
-          cd prover && ./test_bip68_real.sh
-
-  deployed-verifier:
-    # Everything else in this file tests an artifact we BUILD. This one tests the artifact we SERVE.
-    #
-    # On 2026-08-11 the browser verifier on bitcoinghost.org was two re-baselines behind — it reported
-    # guest b161735a while the coordinator served proofs under 4722cec8 — so the site told every
-    # visitor the live spine was "forged, tampered, corrupt". It had been that way for a week. CI was
-    # green throughout and correctly so: the release shipped the right wasm, the build was never at
-    # fault, and the web deploy is a manual step no gate here could see. The two modules are also
-    # byte-for-byte the SAME SIZE, so nothing short of executing method_id() notices.
-    #
-    # Scheduled + manual only, deliberately. The failure mode is drift over days, not per-commit, and
-    # a momentarily unreachable web box must not fail somebody's push.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: The verifier the public actually loads still checks the proof the site actually serves
-        run: ./scripts/check-deployed-verifier.sh
-
   dependency-audit:
     # Nothing was scanning dependencies for known advisories until now. This job fails on any NEW one.
     #
@@ -1974,11 +1757,11 @@ jobs:
         run: |
           IGNORE="--ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2026-0344 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369 --ignore RUSTSEC-2026-0429"
           rc=0
-          # The verifier lockfiles were NOT audited, and they are the SHIPPED artifacts — the
-          # standalone verifier, the C ABI ghostd links, and the browser build. All three pull
-          # ark-bn254 -> ruint for Groth16 verification, so an advisory there lands directly in what
-          # users run. Missed by the original list because they are not part of the prover workspace.
-          for f in accumulator prover prover/methods/guest guest-pure-fuzz verifier verifier-ffi verifier-wasm; do
+          # The verifier lockfiles are audited too: they are what users run (the CLI, the C ABI and the browser build
+          # of the libzync verifier), and they are not part of the prover workspace. The CORE verifiers' lockfiles went
+          # to history/ with them.
+          for f in accumulator coinbase-smt libzync prover prover/methods/guest guest-pure-fuzz \
+                   swiftsync-verify swiftsync-verify-ffi swiftsync-verify-wasm; do
             echo "== $f =="
             cargo audit --file "$f/Cargo.lock" $IGNORE || rc=1
           done
@@ -2009,9 +1792,9 @@ jobs:
 
   # ── libzync soundness (2026-11-08) ────────────────────────────────────────────────────────────────────────────
   # The libzync test pass in CI, on hosts built in the reproducible container: the mainnet and signet hosts embed the
-  # PUBLISHED guest ELFs (reproduce/LIBZYNC_IDS), so these jobs test what is published. soundness-suite above still
-  # runs the CORE-mode build of the shared guest source, which keeps its C++ and rule tests running. Drivers:
-  # scripts/libzync/ci/ (each step greps a positive marker: a step that crashed or printed nothing fails).
+  # PUBLISHED guest ELFs (reproduce/LIBZYNC_IDS), so these jobs test what is published. `soundness-suite` (the required
+  # check) gates on all of them. Drivers: scripts/libzync/ci/ (each step greps a positive marker: a step that crashed
+  # or printed nothing fails).
   libzync-hosts:
     runs-on: ubuntu-latest
     timeout-minutes: 300
@@ -2132,3 +1915,44 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: libzync-signet-logs, path: "out/**/*.log", retention-days: 7 }
+
+  soundness-suite:
+    # The REQUIRED check for the libzync soundness pass. It fails unless every libzync-* job above succeeded: a needed
+    # job that failed would otherwise leave this one SKIPPED, and GitHub counts a skipped required check as passing,
+    # hence `if: always()` and a positive test of each result. Then the checks that need Core's source tree and not a
+    # guest: Core's compiled consensus constants against the canonical mainnet values, Core's retarget code against
+    # the on-chain nBits at every mainnet retarget, and BIP68 relative locks (guest mode 8) on the published host.
+    needs: [libzync-hosts, libzync-chain, libzync-blocks, libzync-vectors, libzync-rig, libzync-signet]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Every libzync soundness job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          want = ["libzync-hosts", "libzync-chain", "libzync-blocks", "libzync-vectors", "libzync-rig", "libzync-signet"]
+          bad = [(j, needs.get(j, {}).get("result", "absent")) for j in want if needs.get(j, {}).get("result") != "success"]
+          for j in want:
+              print(f"{j}: {needs.get(j, {}).get('result', 'absent')}")
+          if bad:
+              print("::error::libzync soundness jobs did not all succeed: " + ", ".join(f"{j}={r}" for j, r in bad))
+              sys.exit(1)
+          print("ALL_LIBZYNC_JOBS_OK")
+          PY
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: libzync-hosts, path: hosts }
+      - name: Core's source tree, as the libzync guest compiles it (pinned upstream + this repo's patches)
+        run: bash scripts/libzync-base.sh "$HOME/lzbase"
+      - name: Chainparams anchor (Core's compiled consensus constants == canonical mainnet values)
+        run: cd prover && HAZYNC_BASE="$HOME/lzbase" ./chainparams_check.sh
+      - name: Retarget differential (Core's pow.cpp vs the on-chain nBits at every mainnet retarget)
+        run: cd prover && HAZYNC_BASE="$HOME/lzbase" ./retarget_diff_test.sh
+      - name: BIP68 relative-lock matrix (real mainnet MTP, height and time based), published mainnet host
+        run: chmod +x hosts/host_m && cd prover && HAZYNC_HOST=../hosts/host_m ./test_bip68_locks.sh
+      - name: BIP68 time lock on a real mainnet transaction (and the pre-CSV non-enforcement control)
+        run: cd prover && HAZYNC_HOST=../hosts/host_m ./test_bip68_real.sh
