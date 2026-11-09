@@ -1855,6 +1855,16 @@ def cmd_spine(args):
         return "rejected"
 
     index, index_at = {}, None
+    # A libzync coordinator (its /api/meta says so) runs a libzync host, which has no `extend-spine`: there the
+    # spine advances by a join of [1..N] and [N+1..M] (`fold-range`), whose guest enforces the seam, and the
+    # coordinator checks the result is anchored at genesis when it is submitted.
+    try:
+        lz = bool(json.loads(get("/api/meta")).get("libzync"))
+    except SystemExit:
+        raise
+    except Exception:
+        lz = False
+    absorb = "fold-range" if lz else "extend-spine"
 
     def chunks_at(nxt):
         nonlocal index, index_at
@@ -1914,7 +1924,7 @@ def cmd_spine(args):
                 out = work / f"spine_{hi}.bin"
                 print(f"absorbing {span} into [1..{was}] — one fold, no re-proving…")
                 with gpu_lock("absorb"):
-                    r = subprocess.run([HOSTBIN, "extend-spine", str(cur), str(chunk), str(out)],
+                    r = subprocess.run([HOSTBIN, absorb, str(cur), str(chunk), str(out)],
                                        capture_output=True, text=True)
                 if r.returncode != 0 or not out.exists():
                     both = (r.stdout or "") + (r.stderr or "")
@@ -1949,7 +1959,7 @@ def cmd_spine(args):
                         continue
                     # Head unchanged, so the host's build-mismatch advice is now actually the likely
                     # cause, and a seam failure here is information rather than noise.
-                    sys.exit(f"extend-spine failed for {span}:\n{both[-400:]}")
+                    sys.exit(f"{absorb} failed for {span}:\n{both[-400:]}")
                 outcome = submit_head(out, hi)
                 if outcome == "rejected" and narrower:
                     print(f"  trying a narrower chunk than {span}")
