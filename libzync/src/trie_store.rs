@@ -377,6 +377,7 @@ impl TrieStore {
     }
 
     /// `open_dir` with a record cache of `cache_mb` MiB in the disk arena (0: none; see `RecCache`).
+    #[cfg(feature = "std")]
     pub fn open_dir_cached(dir: &std::path::Path, counts: bool, cache_mb: u64) -> std::io::Result<Self> {
         let (a, meta) = DiskArena::open_cached(dir, cache_mb)?;
         let mut st = Self::with_arena(counts, Box::new(a));
@@ -1021,12 +1022,14 @@ mod tests {
 
     /// The record cache: a tiny one (a few dozen slots: every insert collides) with a flush every 7 blocks, so freed
     /// slots are reused under cached references; and a large one. Each must match the memory store record for record.
+    #[cfg(feature = "std")]
     #[test]
     fn disk_arena_record_cache_is_exact() {
         disk_arena_run(1, 7, "tinycache");
         disk_arena_run(64, 0, "bigcache");
     }
 
+    #[cfg(feature = "std")]
     fn disk_arena_run(cache_mb: u64, flush_every: u32, tag: &str) {
         // cache_mb 1 means a tiny cache of 64 slots (below what a MiB gives), so nearly every insert collides
         let mb = if cache_mb == 1 { 0 } else { cache_mb };
