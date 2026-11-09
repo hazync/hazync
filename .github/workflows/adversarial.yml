@@ -1168,6 +1168,12 @@ jobs:
         run: |
           cd coordinator
           python3 test_libzync_coord_files.py --control
+      - name: libzync prep cross-check — two runs must agree on every shared state
+        run: cd coordinator && python3 test_libzync_xcheck.py
+      - name: libzync prep cross-check POSITIVE CONTROL (compares nothing — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_libzync_xcheck.py --control
       - name: Backup notifications push once, recover once, and the daily summary tells the truth
         run: cd coordinator && python3 test_offsite_watch.py
       - name: Backup notifications POSITIVE CONTROL (watcher blind, every check ok — must FAIL)

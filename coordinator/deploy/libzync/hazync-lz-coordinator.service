@@ -1,0 +1,27 @@
+[Unit]
+Description=Hazync libzync coordinator (board for image 863c9ce3; beside the original board until the switch)
+After=network.target
+
+[Service]
+User=hazync
+WorkingDirectory=/opt/hazync-lz/coordinator
+Environment=HAZYNC_LIBZYNC=1
+Environment=COORD_PORT=8900
+Environment=COORD_BIND=127.0.0.1
+Environment=COORD_DB=/var/lib/hazync-lz/coordinator.db
+Environment=COORD_STATE=/var/lib/hazync-lz/coord_state
+Environment=COORD_PROOFS=/var/lib/hazync-lz/proofs
+Environment=COORD_SPINE=/var/lib/hazync-lz/spine
+Environment=WITNESS_DIR=/var/lib/hazync-lz/witnesses
+Environment=HAZYNC_BRIDGE_OUT=/srv/bulk/libzync-board/leaves
+Environment=HAZYNC_HOST=/opt/hazync-lz/bin/host
+# `/opt/hazync-lz/bin/host libzync-genesis-tip` (image 863c9ce3)
+Environment=GENESIS_TIP=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167
+Environment=VERIFY_MODE=real
+Environment=SEED_RANGES=0
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/server.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
