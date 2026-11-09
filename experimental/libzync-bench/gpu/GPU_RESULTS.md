@@ -92,7 +92,7 @@ secure cloud.
 - **A40 per segment:** about 3.5 s per po2-21 segment, plus about 9 s of assembly per chunk.
 - **Fixed cost:** small chunks pay a fixed per-process and assembly cost, so they run at 2.84 s/Mcycle against CORE's 2.24.
 
-**CORE baseline:** A40, canonical v0.22.1 host, `37987b85`, the same block in 16 chunks.
+**CORE baseline:** A40, canonical v0.22.1 host, `37987b85` (since superseded), the same block in 16 chunks.
 
 | | measured |
 |---|---|

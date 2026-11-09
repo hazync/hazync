@@ -4,6 +4,12 @@ How the guest and host are built (channels, flags, measured cycles), how the ima
 reproduced, and how a release of the original system is cut, verified and re-baselined. Merged from
 `BUILDS.md` and `RELEASE_PROCESS.md` (September 2026); the process is current for that code.
 
+⚠ **The CORE design was retired from the active tree on 2026-11-09** ([`../history/README.md`](../history/README.md)).
+The CORE verifiers (`verifier/`, `verifier-ffi/`, `verifier-wasm/`), the SNARK fixtures (`prover/testdata/snark/`)
+and `scripts/rebaseline-id.sh` named below are now under `history/` at those paths, the host is libzync-only, and
+`reproduce/METHOD_ID` names libzync's published mainnet image. The release tooling below has not been changed yet:
+it still builds and checks the CORE artefacts, so a libzync release needs it revised first.
+
 The scripts are authoritative: `scripts/release.sh`, `scripts/package-release.sh`, `scripts/check-dist.sh`,
 `.github/workflows/release-sign.yml`, `scripts/rebaseline-id.sh`, `scripts/check-deployed-verifier.sh`.
 Coordinator deployment and day-to-day operation stay in
@@ -165,8 +171,10 @@ straggler: the cost packer balances its own predictor and always reports a perfe
 
 ## 2 · The image id, reproducible builds and pins
 
-`reproduce/METHOD_ID` is the source of truth; the canonical id is
-`37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd`. Also pinned: `reproduce/GUEST_ELF_SHA256`,
+`reproduce/METHOD_ID` is the source of truth; the canonical id is libzync's published mainnet image
+`863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5` (`reproduce/LIBZYNC_IDS`, built by
+`reproduce/libzync.Dockerfile`). The rest of this section describes the CORE images `reproduce/Dockerfile` built;
+the CORE id it names, `37987b85`, is superseded. Also pinned: `reproduce/GUEST_ELF_SHA256`,
 `reproduce/LINEAGE.tsv` (`scripts/lineage.sh --write` appends a row from git history once an id change is
 committed; `lineage.sh --check` is the CI gate).
 
@@ -177,7 +185,7 @@ paths**, which the ELF embeds. The same tree measured three ids on 2026-08-03:
 |---|---|
 | `/home/…/dev/projects/hazync` (dev box) | `1bed31ef…` |
 | `/root/hazync-rebuild` (coordinator, scratch) | `1112670d…` |
-| `/hazync-zkvm` (container / canonical) | `37987b85…` |
+| `/hazync-zkvm` (container / canonical at the time; superseded) | `37987b85…` |
 
 Only the canonical path produces a publishable proof; anything else verifies against nothing published.
 The canonical id comes **only** from the container:

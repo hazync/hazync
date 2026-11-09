@@ -1,3 +1,24 @@
+# Canonical Hazync guest image id (METHOD_ID): libzync's PUBLISHED MAINNET image.
+#
+# ── 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 ─ 2026-11-09 ─────────
+#
+# libzync replaced the CORE design on main (#670) and the active tree retired CORE (history/README.md). The canonical
+# id is now the published libzync mainnet product image: the `libzync-product mainnet` line of reproduce/LIBZYNC_IDS,
+# which `reproduce/libzync.Dockerfile` reproduces bit for bit and the `reproducible-image-id` CI job rebuilds on every
+# push. reproduce/GUEST_ELF_SHA256 pins the same image's ELF. The signet image is published in
+# LIBZYNC_IDS only. NO GUEST SOURCE CHANGED in this re-baseline: the id is the one published before it (frozen core
+# c14, source commit ce4e1e3); only the file naming the canonical image moved to it.
+#
+# A host embeds this image with HAZYNC_LIBZYNC=1, HAZYNC_GUEST_ELF=<the published ELF> and HAZYNC_GUEST_PIN_DIR=<its
+# METHOD_ID, GUEST_ELF_SHA256 and PROFILE> (prover/methods/build.rs checks the sha256 and recomputes the id).
+#
+# Superseded the CORE design's last canonical id 37987b85… (2026-09-07, release v0.22.1). The CORE lineage below is
+# the record: `reproduce/Dockerfile` built those images, and their notes are kept as written.
+
+863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5
+
+# ════ THE CORE DESIGN'S LINEAGE (the record; each entry was true when written) ══════════════════════════════════════
+#
 # Canonical Hazync guest image id (METHOD_ID).
 #
 # `docker build -f reproduce/Dockerfile .` produces EXACTLY this id on any machine (the container runs
@@ -426,7 +447,7 @@
 #
 # Superseded the earlier id 3867611d…
 
-37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd
+# 37987b85ec665970ac6c5e8031deb8160ac8ed846f09056c3790b5f78c8bb5dd   (the CORE design's last canonical id; superseded, see the top of this file)
 
 # ── THE OTHER BINARY: the tip bridge's guest ──────────────────────────────────────────────────────
 #
