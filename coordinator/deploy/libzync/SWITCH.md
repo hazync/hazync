@@ -18,7 +18,7 @@ Nothing here runs by itself. Each step is done by hand, in order, and step 1 mus
 
 All of these must hold:
 
-- **Merged:** #677, #678, #679, #680, #682, #683, #685, #686, #687 and #688; then #676 and #684, which are drafts that land with the switch.
+- **Merged:** #677, #678, #679, #680, #682, #683, #685, #686, #687, #688, #690 and #691; then #676 and #684, which are drafts that land with the switch.
 - **After #676 merges:** re-run `scripts/lineage.sh --write` and commit, because the squash changes the commit the row names.
 - **Release v0.23.0** is cut and published with 5 assets. The pods and the Windows GUI download the libzync host from it.
 - **`/opt/hazync-lz`** is at the merge commit, and `/opt/hazync-lz/bin/host` is the host from it (`method-id` = `863c9ce3…`). It must include #686's `HAZYNC_LZ_STATE_DIR` fallback.
@@ -28,9 +28,9 @@ All of these must hold:
   - `libzync-xcheck`;
   - `check-proofs.py` with `HAZYNC_LIBZYNC=1` and `HAZYNC_LZ_STATE_DIR=/var/lib/libzync-board/out`.
 
-## 2. Decisions for the operator (not made here)
+## 2. Decisions (made by the operator on 2026-11-09)
 
-The original board's database holds, as of 2026-11-09:
+The original board's database held, on 2026-11-09:
 
 | table | rows |
 |---|---|
@@ -40,12 +40,10 @@ The original board's database holds, as of 2026-11-09:
 | sponsor_keys | 3 |
 | ranges | 244,016 |
 
-The ranges are proofs under the CORE image (`37987b85`). They don't verify under libzync, so they don't carry over. Decide for each of the rest:
-
-1. **Contributors (handles and keys).** Copy them into the libzync database so provers keep their identity, or start fresh?
-2. **Open or paid sponsorships.** They name CORE block ranges. Refund, or re-issue them on the libzync board?
-3. **The donations record and the ledger.** Keep the original database read-only as the record, served as history? Or migrate the rows?
-4. **The original board's proofs, spine and offsite copies.** They stay where they are (`/var/lib/hazync`, `proofs-37987b85/` and `spine-37987b85/` in R2 and B2) as the record. Nothing is deleted.
+- **Contributors carry over**, by `carry-contributors.py` (#691): handle, key, first seen and last version. Block counts don't, because they count CORE proofs.
+- **Nothing else carries over.** Sponsorships, sponsor payments and the donations record stay in the original database, which is kept read-only as the record.
+- **The CORE proofs** (244,016 ranges under `37987b85`) don't verify under libzync. They stay where they are as the record: `/var/lib/hazync`, and `proofs-37987b85/` and `spine-37987b85/` in R2 and B2. Nothing is deleted.
+- **Release v0.23.0** keeps the asset names: `hazync-verify-*` and `hazync-verify.wasm` now contain the libzync verifier. It adds the Windows CUDA prover, and ships nothing extra for CORE proofs, since v0.22.1 keeps its CORE verifier.
 
 ## 3. The units
 
@@ -69,15 +67,19 @@ The ranges are proofs under the CORE image (`37987b85`). They don't verify under
 ## 4. Steps
 
 1. **Freeze the original board.** Stop `hazync-sponsor-bot` and `hazync-coordinator`, then take a `VACUUM INTO` copy of its database for the record.
-2. **Move the libzync coordinator to the public port.** Give `hazync-lz-coordinator` the original's drop-ins (step 3), `COORD_PORT=8899` and `COORD_BIND=0.0.0.0`. Then `daemon-reload` and restart it. Check `curl -s 127.0.0.1:8899/api/meta`: it should show `"libzync": true` and `method_id 863c9ce3…`.
-3. **Swap the units.** Disable the CORE-only ones and retarget the rest, as in step 3.
-4. **Enable the libzync timers:** `hazync-lz-offsite-{proofs,spine}{,-b2}` and the retargeted `hazync-check-proofs`.
-5. **Check from outside.** `COORD_URL=https://api.hazync.org scripts/check-deployment.sh` and `--local` must both pass the libzync section. Then run a `hazync selftest` from a contributor machine against `api.hazync.org`.
-6. **Switch the website** to the libzync board and the zAPP page. This is the operator's step.
+2. **Carry the contributors over**, with `hazync-lz-coordinator` stopped:
+   ```
+   carry-contributors.py --from /var/lib/hazync/coordinator.db --to /var/lib/hazync-lz/coordinator.db --apply
+   ```
+3. **Move the libzync coordinator to the public port.** Give `hazync-lz-coordinator` the original's drop-ins (step 3), `COORD_PORT=8899` and `COORD_BIND=0.0.0.0`. Then `daemon-reload` and restart it. Check `curl -s 127.0.0.1:8899/api/meta`: it should show `"libzync": true` and `method_id 863c9ce3…`.
+4. **Swap the units.** Disable the CORE-only ones and retarget the rest, as in step 3.
+5. **Enable the libzync timers:** `hazync-lz-offsite-{proofs,spine}{,-b2}` and the retargeted `hazync-check-proofs`.
+6. **Check from outside.** `COORD_URL=https://api.hazync.org scripts/check-deployment.sh` and `--local` must both pass the libzync section. Then run a `hazync selftest` from a contributor machine against `api.hazync.org`.
+7. **Switch the website** to the libzync board and the zAPP page. This is the operator's step.
 
 ## 5. Rollback
 
-The original board's data is never changed, so going back is the reverse of steps 2 to 4:
+The original board's data is never changed, so going back is the reverse of steps 3 to 5:
 
 1. Stop `hazync-lz-coordinator`, or move it back to `127.0.0.1:8900`.
 2. Start `hazync-coordinator` and `hazync-sponsor-bot`.
