@@ -1,0 +1,20 @@
+# Integrity check 1 on the libzync board, every 10 minutes: the genesis proof verifies with the libzync verifier
+# (#688), is built by the published image, ends on Bitcoin's real block at its height with the node's chainwork, and
+# is not stalled. An early spine's verifier verdict is DEMO (exit 2), which this check completes against the node.
+[Unit]
+Description=Hazync libzync board integrity: the genesis proof verifies and ends on Bitcoin's real chain
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+Environment=HAZYNC_LIBZYNC=1
+Environment=COORD_SPINE=/var/lib/hazync-lz/spine
+Environment=COORD_DB=/var/lib/hazync-lz/coordinator.db
+Environment=HAZYNC_VERIFY=/opt/hazync-lz/bin/hazync-verify
+Environment=HAZYNC_METHOD_ID=863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5
+Environment=HAZYNC_BITCOIN_DATADIR=/var/lib/hazync/bitcoin-client
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/check-spine.py
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=5min
