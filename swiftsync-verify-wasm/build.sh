@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the WASM verifier byte-reproducibly, as ../verifier-wasm/build.sh does: stage the crate and its path
+# Build the WASM verifier byte-reproducibly, as ../history/verifier-wasm/build.sh did: stage the crate and its path
 # dependencies at one fixed location and remap every embedded path, so any checkout gives the same .wasm.
 set -euo pipefail
 cd "$(dirname "$0")"

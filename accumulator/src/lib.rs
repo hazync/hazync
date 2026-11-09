@@ -56,11 +56,11 @@ pub fn parent(left: &Hash, right: &Hash) -> Hash {
 /// `prover/methods/guest/verify_input.cpp`. A drift is unrecoverable: every proof made against a
 /// broken commitment is worthless and the only repair is re-proving from genesis.
 ///
-/// It lives HERE, in the library, rather than in the host binary, so `leaf-differential` can call the
+/// It lives HERE, in the library, rather than in the host binary, so `history/leaf-differential` could call the
 /// real function instead of a re-typed copy. A differential test against a duplicate proves only that
 /// the duplicate is self-consistent.
 ///
-/// `scripts/check-utreexo.sh` gates the construction textually; `leaf-differential` gates the BYTES.
+/// `scripts/check-utreexo.sh` gates the construction textually; `history/leaf-differential` gated the BYTES for the CORE guest.
 ///
 /// The `scriptPubKey` length prefix (N2) is what keeps the preimage injective: without it the
 /// concatenation of a variable-length script and the fixed fields after it is ambiguous, and two
@@ -310,7 +310,7 @@ impl Stump {
 /// replaced is retained here and diffed against — rather than trusting that the new one "looks right".
 ///
 /// It is `pub` so there is exactly ONE reference: the unit tests in this crate and the differential
-/// fuzz target in `audit-fuzz/` compare against the same code. A second copy in the fuzz crate would
+/// fuzz target in `history/audit-fuzz/` compare against the same code. A second copy in the fuzz crate would
 /// only prove that copy self-consistent, which is the failure this oracle exists to avoid.
 ///
 /// NOT a production path. Nothing outside tests and fuzzing should call it: it is O(n) per root and
@@ -1277,7 +1277,7 @@ mod cached_internals_equivalence {
             f.delete(i);
             // Trailing `None`s are a representation artifact, not state: the two vectors are sized
             // by different rules (Stump grows on demand, Forest sizes from the leaf count), so one
-            // can carry padding the other does not. `normalize_roots` exists in the rangestate crate
+            // can carry padding the other does not. `normalize_roots` exists in the rangestate crate (history/rangestate)
             // for exactly this. Compare the meaningful prefix.
             let trim = |mut v: Vec<Option<Hash>>| {
                 while v.last() == Some(&None) {

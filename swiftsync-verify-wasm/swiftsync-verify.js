@@ -1,5 +1,5 @@
 // Glue for the libzync chain-proof verifier in WebAssembly. Hand-written and short on purpose, as
-// ../verifier-wasm/hazync-verify.js: no wasm-bindgen, nothing here touches the network.
+// ../history/verifier-wasm/hazync-verify.js: no wasm-bindgen, nothing here touches the network.
 //
 //   import { loadVerifier } from './swiftsync-verify.js';
 //   const v = await loadVerifier(fetch('./swiftsync_verify_wasm.wasm'));

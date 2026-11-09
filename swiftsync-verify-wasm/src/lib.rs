@@ -1,6 +1,6 @@
 //! `swiftsync-verify-wasm`: the libzync chain-proof verifier in a browser. Local verification, not a
 //! service: the proof and its facts are checked on the device, by the same `swiftsync_verify::verify` the CLI
-//! uses, with no network. Raw ABI and no wasm-bindgen, for the reason ../verifier-wasm gives: the .wasm is a
+//! uses, with no network. Raw ABI and no wasm-bindgen, for the reason ../history/verifier-wasm gives: the .wasm is a
 //! plain cargo output anyone can rebuild and compare.
 //!
 //! ```text
