@@ -1162,6 +1162,12 @@ jobs:
         run: |
           cd coordinator
           python3 test_offsite_proofs.py --control
+      - name: libzync switch — contributors carry over with their identity, never their CORE block counts
+        run: cd coordinator && python3 test_libzync_carry.py
+      - name: libzync contributor carry POSITIVE CONTROL (copies CORE block counts — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_libzync_carry.py --control
       - name: libzync prep cross-check — two runs must agree on every shared state
         run: cd coordinator && python3 test_libzync_xcheck.py
       - name: libzync prep cross-check POSITIVE CONTROL (compares nothing — must FAIL)
