@@ -1,0 +1,16 @@
+[Unit]
+Description=libzync board pass's block source: bitcoind blocks as block_<h>.json, a window ahead of the board pass
+After=bitcoind.service
+
+[Service]
+Type=simple
+Environment=LZ_ROOT=/srv/bulk/libzync-board LZ_HI=974936 LZ_WINDOW=1500 LZ_JOBS=2
+Environment=HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie
+ExecStart=/bin/sh -c 'exec /usr/bin/python3 "$LZ_ROOT/bin/fetch_block_rpc.py" range 1 "$LZ_HI" "$LZ_ROOT/blocks" --window "$LZ_WINDOW" --jobs "$LZ_JOBS" --after-saves "$LZ_ROOT/out"'
+Restart=on-failure
+RestartSec=30
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
