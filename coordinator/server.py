@@ -1250,7 +1250,10 @@ def verify_spine(receipt: bytes):
     with open(tmp, "wb") as f:
         f.write(receipt)
     try:
-        g = subprocess.run([HOST_BIN, "verify-range", tmp], capture_output=True, timeout=180)
+        # A libzync host has no `verify-range`: its `verify-any <rcpt> 1` is the genesis gate (it refuses a receipt
+        # whose anchor is not the digest of the genesis state), and its RANGE-OK line is read below as before.
+        g = (subprocess.run([HOST_BIN, "verify-any", tmp, "1"], capture_output=True, timeout=180) if LIBZYNC
+             else subprocess.run([HOST_BIN, "verify-range", tmp], capture_output=True, timeout=180))
         if g.returncode != 0:
             both = (g.stdout + g.stderr).decode(errors="replace")
             if "MISMATCH" in both:
@@ -1258,7 +1261,7 @@ def verify_spine(receipt: bytes):
                                "it was built against a different guest."), None
             # The usual cause is a receipt that verifies but is not anchored at genesis.
             return False, "spine rejected — not a genesis-anchored range proof: " + both[-200:], None
-        r = subprocess.run([HOST_BIN, "verify-any", tmp], capture_output=True, timeout=180)
+        r = subprocess.run([HOST_BIN, "verify-any", tmp] + (["1"] if LIBZYNC else []), capture_output=True, timeout=180)
         line = next((l for l in r.stdout.decode(errors="replace").splitlines() if l.startswith("RANGE-OK")), None)
         if r.returncode != 0 or line is None:
             return False, "spine rejected — verify-any produced no RANGE-OK line", None
@@ -4128,6 +4131,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/pick": code, obj = pick(None); return self._send(code, obj)
         if p == "/api/meta":                               # pre-flight: expected guest id + frontier
             return self._send(200, {"method_id": expected_method_id(), "frontier": frontier_hi(),
+                                    "libzync": LIBZYNC,
                                     "reproduce": "reproduce/METHOD_ID",
                                     "source_sha256": source_sha256()})
         if p == "/api/foldable":                           # adjacent pairs whose fold does not exist yet

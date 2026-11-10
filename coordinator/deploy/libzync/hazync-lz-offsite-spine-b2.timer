@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 10 minutes: libzync board spine copy to Backblaze B2 (second copy)
+
+[Timer]
+OnCalendar=*:07/10
+RandomizedDelaySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
