@@ -13,3 +13,9 @@ HEADERS_ID (this build, not yet pinned) 50512831aa62a82cb80762ddd65c952e7517c6d1
 
 Proving time is an ESTIMATE until proved: 2.35 B cycles at the core's measured 1.2 s per M cycles (RTX PRO 6000)
 ~ 47 min on one card.
+
+CORRECTION (11-10, CI run 42794594753): the PUBLISHED headers image is the container's, 4d04d6bf... (ELF ea1d49e3...),
+not the laptop build's 50512831... above. Root cause: the guest ELF embeds 11 absolute paths to dependency sources
+(/home/<user>/.cargo/registry/src/...), so the id follows the builder's CARGO_HOME. Two laptop builds agreed only
+because they shared one home; the container builds with HOME=/root, as it does for the core. The receipts proved so far
+(hdr_0_100.rcpt, hdr_101_200.rcpt) are under the laptop id and are re-proved with the container-built ELF.

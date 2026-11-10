@@ -16,7 +16,7 @@ use sha2::{Digest as _, Sha256};
 
 /// The header-chain image id this verifier trusts by default: the `zyncapp-headers` line of reproduce/LIBZYNC_IDS (the
 /// reproducible build; reproduce/pin-libzync-ids.py sets it). `--image <hex>` replaces it for a reader who rebuilt it.
-pub const HEADERS_IMAGE_ID: &str = "50512831aa62a82cb80762ddd65c952e7517c6d175bf21ca1afbe357409ce801";
+pub const HEADERS_IMAGE_ID: &str = "4d04d6bfbdebce55293baca2c1c2e59341ac7b0cc9cf6894ba43a6ad13e5d127";
 
 /// The guest's state, field for field and in order (risc0 serde): the last header's height, hash (internal byte
 /// order), chainwork (little-endian), nBits, time, its retarget epoch's first time, the last <= 11 times, and the
