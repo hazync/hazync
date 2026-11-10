@@ -20,7 +20,7 @@ All of these must hold:
 
 - **Merged:** #677, #678, #679, #680, #682, #683, #685, #686, #687, #688, #690 and #691; then #676 and #684, which are drafts that land with the switch.
 - **After #676 merges:** re-run `scripts/lineage.sh --write` and commit, because the squash changes the commit the row names.
-- **Release v0.23.0** is cut and published with 5 assets. The pods and the Windows GUI download the libzync host from it.
+- **Release v0.23.0** is cut and published with exactly the 12 assets of `scripts/release-assets.txt`. The pods and the Windows GUI download the libzync host from it.
 - **`/opt/hazync-lz`** is at the merge commit, and `/opt/hazync-lz/bin/host` is the host from it (`method-id` = `863c9ce3…`). It must include #686's `HAZYNC_LZ_STATE_DIR` fallback.
 - **The leaf pruner keeps `leaf_1.bin` for good.** The pods' GPU smoke (#685) and the worker's `selftest` use it.
 - **The libzync board's own checks are green:**
@@ -50,7 +50,7 @@ The original board's database held, on 2026-11-09:
 | unit(s) | at the switch |
 |---|---|
 | `hazync-coordinator` | **stop and disable.** Its port 8899 goes to the libzync coordinator; see step 4. |
-| `hazync-lz-coordinator` | **becomes public.** Bind `0.0.0.0:8899`, and copy the original's drop-ins: `btcpay`, `zz-proxies`, `ratelimit`, `sponsor-bot`, `sponsor-open`, `zz-signed-claims`, `alert`, `hardening`, `umask`, `50-open-files…`. Add `HAZYNC_LZ_STATE_DIR=/var/lib/libzync-board/out`. Copy the files; never print them, they carry secrets. |
+| `hazync-lz-coordinator` | **becomes public.** Bind `0.0.0.0:8899`, and copy the original's drop-ins: `btcpay`, `zz-proxies`, `ratelimit`, `sponsor-bot`, `sponsor-open`, `zz-signed-claims`, `alert`, `hardening`, `umask`, `50-open-files…`. Add `HAZYNC_LZ_STATE_DIR=/var/lib/libzync-board/out`. Copy the files; never print them, they carry secrets. ⛔ **Never copy `paths-and-user.conf` or `network.conf`:** the first points `COORD_DB`, `COORD_PROOFS`, `HAZYNC_HOST` and `ReadWritePaths` at the CORE board and would override the libzync paths; the second's `TRUSTED_PROXIES` is set again by `zz-proxies.conf`, and its `COORD_BIND` is replaced here. `HAZYNC_LZ_STATE_DIR` is already in the libzync unit's `state-dir.conf`. |
 | `hazync-bridge`, `hazync-bridge-backfill` | **stop and disable.** They're CORE bundle producers; the board pass replaces them. |
 | `hazync-archive-checkpoint{,-backfill}`, `hazync-offsite-checkpoints{,-b2}` | **disable.** These are CORE bridge rungs; a libzync re-start point is a prep save point. |
 | `hazync-check-bundle-gap` | **retarget**: `HAZYNC_LIBZYNC=1`, `HAZYNC_BRIDGE_OUT=/srv/bulk/libzync-board/leaves` (already supported). |
@@ -76,6 +76,20 @@ The original board's database held, on 2026-11-09:
 5. **Enable the libzync timers:** `hazync-lz-offsite-{proofs,spine}{,-b2}` and the retargeted `hazync-check-proofs`.
 6. **Check from outside.** `COORD_URL=https://api.hazync.org scripts/check-deployment.sh` and `--local` must both pass the libzync section. Then run a `hazync selftest` from a contributor machine against `api.hazync.org`.
 7. **Switch the website** to the libzync board and the zAPP page. This is the operator's step.
+
+## 4b. Rehearsed (2026-11-10)
+
+Steps 2 and 3 were run on a temporary `hazync-lz-rehearse` unit:
+- **Setup:** port 8901, bound to 127.0.0.1, with `VACUUM INTO` copies of both databases and the 10 copied drop-ins. A last drop-in redirected the data paths and cleared `OnFailure`.
+- **Step 3 (drop-ins):**
+  - it started with the copied drop-ins;
+  - `/api/meta` gave `libzync: true`, `863c9ce3…`, frontier 4;
+  - the journal showed no errors. `hardening.conf`'s `ProtectSystem=full` leaves `/var/lib/hazync-lz` writable.
+- **Step 2 (contributors):** `carry-contributors.py --apply` copied 13 contributors; 14 in all.
+  - `/api/state`'s `contributors` still says **1**. That's expected: it counts contributors with work on THIS board, so the site shows 1 prover until the carried ones prove something.
+- **Clean-up:** the unit and its data were removed afterwards. Both real boards were untouched throughout.
+
+To repeat it before the real switch, follow the same pattern: a copy of the unit, its drop-ins plus a `zzz-` override of the port and data paths, and copies of the data.
 
 ## 5. Rollback
 
