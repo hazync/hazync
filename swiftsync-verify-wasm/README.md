@@ -12,8 +12,9 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,237,433 bytes raw, 358,172 gzipped |
-| sha256 (this commit, `./build.sh`) | `3ea3bc1e32b054065920b919c7aa7b79cfcec77d51563030edf54f76d75103f1` (with `verifyHeaders`, the header-chain zyncAPP) |
+| size | 1,237,433 bytes raw, 358,169 gzipped |
+| sha256 (this commit, `./build.sh`) | `bce00ae64aa1a950b3320244fd22c7bd308e71da66e809c55cdad20f4e4ea633` (with `verifyHeaders`, headers image `4d04d6bf`) |
+| reproduces | only at the default stage path: a `SWIFTSYNC_WASM_STAGE` override gave other bytes (`2ea330c0…`, +235 bytes) with no path in the strings |
 | vectors | 14/14 (`test-vectors.out`), all 14 in 0.5 s under Node 24 |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |
 
