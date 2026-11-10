@@ -14,7 +14,7 @@ A run is published only after `swiftsync-verify headers --expect <tip>:<the node
 
 ## Where it runs
 
-- **hazync-proof** proves, with its own bitcoind (`runuser -u bitcoin -- bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf`),
+- **hazync-proof** proves, with its own bitcoind (`bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf -datadir=/var/lib/bitcoind`, as root with the cookie),
   at the lowest CPU and I/O priority. Measured: 37 headers in 49 s on a laptop CPU.
 - **The web box** serves `/var/www/hazync-headers/` at `/headers-live/` (nginx alias, outside the site root, so the
   site deploy's `rsync --delete` cannot touch it). The publish key is pinned there to
