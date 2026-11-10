@@ -1162,6 +1162,12 @@ jobs:
         run: |
           cd coordinator
           python3 test_offsite_proofs.py --control
+      - name: zyncAPP relay passes only read-only fact paths to the local zync-serve
+        run: cd coordinator && python3 test_zync_relay.py
+      - name: zyncAPP relay POSITIVE CONTROL (path filter accepts anything — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_zync_relay.py --control
       - name: libzync switch — contributors carry over with their identity, never their CORE block counts
         run: cd coordinator && python3 test_libzync_carry.py
       - name: libzync contributor carry POSITIVE CONTROL (copies CORE block counts — must FAIL)
