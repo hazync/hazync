@@ -1162,6 +1162,12 @@ jobs:
         run: |
           cd coordinator
           python3 test_offsite_proofs.py --control
+      - name: libzync switch — contributors carry over with their identity, never their CORE block counts
+        run: cd coordinator && python3 test_libzync_carry.py
+      - name: libzync contributor carry POSITIVE CONTROL (copies CORE block counts — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_libzync_carry.py --control
       - name: libzync coordinator — the bot and the worker name a block's bundle as the coordinator serves it
         run: cd coordinator && python3 test_libzync_coord_files.py
       - name: libzync coordinator bundle names POSITIVE CONTROL (bot looks for the original bridge's file — must FAIL)
