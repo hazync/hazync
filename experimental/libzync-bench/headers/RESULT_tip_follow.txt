@@ -1,0 +1,17 @@
+Header-chain zyncAPP: following the tip (2026-11-10). The new headers since the whole-chain receipt, proved as one
+short run chained to it with --after, on a LAPTOP CPU (Ryzen 7 7730U, WSL2, 8 GB), with the published container ELF
+ea1d49e3 (image 4d04d6bf).
+
+  zyncapp headers-prove h975279_tip.txt hdr_975279_975315.rcpt --after headers_0_tip.rcpt --elf zyncapp-headers.bin
+  HEADERS_PROVED 37 headers (975279..975315) in 48.9 s; END 975315 000000000000000000004e5ee1a45298e46cda2a7f86bab7e3c825eff8fb86c8
+  wall 49.97 s, peak RSS 2.29 GiB, no GPU
+
+The 37 headers were read from the full node on hazync-coord (getblockheader <hash> false); its hash at 975,315 is
+the one above.
+
+  swiftsync-verify headers --expect 975315:<node hash> headers_0_tip.rcpt hdr_975279_975315.rcpt -> OK, exit 0
+  swiftsync-verify headers hdr_975279_975315.rcpt (not from genesis)                          -> FAIL
+  swiftsync-verify headers hdr_975279_975315.rcpt headers_0_tip.rcpt (wrong order)            -> FAIL
+
+So keeping the proof at the tip costs under a minute of ordinary CPU per update and no rented card. Each update adds
+one ~219 KB receipt to the chain a verifier reads; folding the runs back into one receipt is not built.

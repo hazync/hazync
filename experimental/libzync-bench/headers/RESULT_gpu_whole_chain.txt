@@ -1,0 +1,29 @@
+Header-chain zyncAPP: the whole mainnet header chain, genesis..975,278, proved on ONE GPU (2026-11-10).
+
+Image      4d04d6bfbdebce55293baca2c1c2e59341ac7b0cc9cf6894ba43a6ad13e5d127 (reproduce/LIBZYNC_IDS zyncapp-headers)
+Guest ELF  ea1d49e3c349805e93ccb0d02033caba0fb546f9d080ade487ba4b14527cb71e, from CI's reproducible container
+           (run 42817971474, artifact zyncapp-headers-elf), hash-checked by run_headers_pod.sh before upload
+Commit     dfa95009d (feat/header-chain-launch)
+Card       1x NVIDIA RTX PRO 6000 Blackwell Server Edition, RunPod secure cloud, $2.49/hr (pod s8wv0bp2km2q4p)
+Host       AMD EPYC 9554, 256 threads
+
+Measured
+  execute              975,279 headers, 2,350,725,289 cycles, 2,437 segments, 31.6 s
+  prove (whole chain)  3,434.6 s (57.2 min) for the prover; wall 57:15.71 under /usr/bin/time; peak RSS 2.42 GiB
+  GPU busy             40.5 % average over 344 nvidia-smi samples (the host side is single-threaded between segments)
+  pod billed           13:11:22 .. 14:27:02 = 75.7 min = $3.14 (build + setup + fixtures + the proof)
+  proof share only     57.2 min x $2.49/hr = $2.37
+  receipt              headers_0_tip.rcpt, 224,138 bytes, sha256 94ff52c08c84759a5240063b1730465a92abf010bbec88b62c6c35d7d1a692ae
+
+End state (identical to the full node on hazync-coord, getblockheader 975278)
+  hash       00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
+  chainwork  00000000000000000000000000000000000000015731592c05251d96d07f062f
+
+Verified on the laptop
+  swiftsync-verify headers --expect 975278:<hash> headers_0_tip.rcpt  -> SWIFTSYNC_VERIFY_OK, exit 0
+  WASM verifyHeaders({receipts:[tip], expect})                        -> verdict "ok", identity_checked true
+  the same receipt with one byte changed                              -> SWIFTSYNC_VERIFY_FAIL
+
+The test fixtures hdr_0_100.rcpt / hdr_101_200.rcpt were re-proved on the same pod with the same ELF (the
+earlier pair was proved under the laptop id 50512831). test_headers_verify.sh: HEADERS_VERIFY_TESTS_OK (10 cases);
+test_headers_wasm.mjs: WASM_HEADERS_OK.

@@ -1,0 +1,21 @@
+Header-chain zyncAPP (ROADMAP K1 / N3): the whole mainnet header chain EXECUTED in one run, 2026-11-10
+
+headers:  0..975,278 from our archive node (hazync-proof), batched getblockhash + getblockheader, 975,279 lines
+host:     prover/target/release/zyncapp headers-exec (built 11-07; the headers guest is unchanged since #670)
+machine:  laptop, AMD Ryzen 7 7730U, WSL2
+
+HEADERS_EXEC 975279 headers (0..975278) 2350725289 cycles = 2410 per header, 2439 segments, executed in 71.2 s
+END height 975278 hash 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 chainwork 00000000000000000000000000000000000000015731592c05251d96d07f062f
+node:   getblockheader 975278 -> hash 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
+                                  chainwork 00000000000000000000000000000000000000015731592c05251d96d07f062f   IDENTICAL
+peak memory 548 MB (host + executor). One run holds the whole chain: no split needed.
+HEADERS_ID (this build, not yet pinned) 50512831aa62a82cb80762ddd65c952e7517c6d175bf21ca1afbe357409ce801
+
+Proving time is an ESTIMATE until proved: 2.35 B cycles at the core's measured 1.2 s per M cycles (RTX PRO 6000)
+~ 47 min on one card.
+
+CORRECTION (11-10, CI run 42794594753): the PUBLISHED headers image is the container's, 4d04d6bf... (ELF ea1d49e3...),
+not the laptop build's 50512831... above. Root cause: the guest ELF embeds 11 absolute paths to dependency sources
+(/home/<user>/.cargo/registry/src/...), so the id follows the builder's CARGO_HOME. Two laptop builds agreed only
+because they shared one home; the container builds with HOME=/root, as it does for the core. The receipts proved so far
+(hdr_0_100.rcpt, hdr_101_200.rcpt) are under the laptop id and are re-proved with the container-built ELF.

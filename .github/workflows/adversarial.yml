@@ -2020,10 +2020,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
+      - name: Export the published header-chain zyncAPP ELF (the GPU run proves with it; its sha256 is pinned)
+        run: |
+          mkdir -p elf && docker run --rm -v "$PWD/elf:/out" hazync-libzync-repro cp /root/libzync-elf/zyncapp-headers.bin /out/
+          sudo chown -R "$(id -u):$(id -g)" elf && sha256sum elf/zyncapp-headers.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zyncapp-headers-elf
+          path: elf/zyncapp-headers.bin
       - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          docker run --rm hazync-libzync-repro | grep '^libzync-product ' > built.txt
-          grep '^libzync-product ' reproduce/LIBZYNC_IDS > pinned.txt
+          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers) ' > built.txt
+          grep -E '^(libzync-product|zyncapp-headers) ' reproduce/LIBZYNC_IDS > pinned.txt
           echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
           if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
             echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"

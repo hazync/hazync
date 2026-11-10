@@ -165,6 +165,8 @@ pub struct ChainState {
 }
 
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
+pub mod headers;
+
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");
 }
@@ -1245,11 +1247,20 @@ mod tests {
     fn images_match_the_published_ids() {
         let f = include_str!("../../reproduce/LIBZYNC_IDS");
         for img in IMAGES {
-            let line = f.lines().find(|l| l.split_whitespace().nth(1) == Some(img.network))
+            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(img.network))
                 .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {} line", img.network));
             let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
             assert_eq!(id, img.method_id_hex, "{}: IMAGES and reproduce/LIBZYNC_IDS disagree", img.network);
         }
+    }
+
+    /// The header-chain zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-headers` line).
+    #[test]
+    fn headers_image_matches_the_published_id() {
+        let f = include_str!("../../reproduce/LIBZYNC_IDS");
+        let line = f.lines().find(|l| l.starts_with("zyncapp-headers mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-headers line");
+        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
+        assert_eq!(id, crate::headers::HEADERS_IMAGE_ID, "headers::HEADERS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
     }
 
     #[test]
