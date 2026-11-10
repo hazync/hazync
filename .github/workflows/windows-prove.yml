@@ -84,7 +84,7 @@ permissions:
 
 jobs:
   # ── the canonical guest, built where it is canonical ───────────────────────────────────────────
-  # ⚠ Same shape as cross-platform-guest.yml, which is measured to work: the container build
+  # ⚠ Same shape as cross-platform-guest.yml (now history/.github/workflows/), which is measured to work: the container build
   # succeeds on a runner once ~15 GB is freed, and its own id check passes.
   guest:
     runs-on: ubuntu-latest

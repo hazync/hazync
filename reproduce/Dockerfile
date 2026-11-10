@@ -1,17 +1,20 @@
-# Reproducible-build container for the Hazync guest image id (METHOD_ID).
+# Reproducible-build container for the Hazync host and the guest image id it carries (METHOD_ID).
 #
-# A proof only verifies against the guest it was made with, so the METHOD_ID must be reproducible by
-# anyone — otherwise a from-source `host` can't verify published proofs (see docs/PROVING.md). The id
-# is a hash of the exact guest build, and we found it also depends on absolute build paths baked into
-# the ELF ($HOME/.cargo, $HAZYNC_BASE). This container removes that last variable by FIXING every
-# path: HOME=/root, so $CARGO_HOME=/root/.cargo and the Core/secp sources live at /root/hazync-build
-# on every machine. Combined with the pinned toolchain + Core v28.0 + secp256k1 v0.5.1 + committed
-# Cargo.lock (all via provision-vps.sh), the resulting METHOD_ID is identical wherever this is built.
+# ⭐ SINCE #676 THE HOST IS libzync-ONLY, and this builds the libzync release host: stage 1 is the
+# dependency stage (unchanged), and the build stage does what reproduce/libzync.Dockerfile does (the
+# patched Core tree from scripts/libzync-base.sh, then both libzync images from clean with
+# reproduce/libzync-ids.sh, printing their ids and ELF hashes), then builds the CPU release host
+# embedding the mainnet ELF it just built, as prover/build-release.sh does. The image the CORE design
+# built here (37987b85, last released in v0.22.1) is in history/ with the CORE guest; this file's
+# version as of v0.22.1 is in git history.
 #
 #   docker build -t hazync-repro -f reproduce/Dockerfile .
-#   docker run --rm hazync-repro          # prints the canonical METHOD_ID
+#   docker run --rm hazync-repro          # prints the host's METHOD_ID: the published libzync mainnet id
 #
-# Two independent builds (different machines) that print the same id == reproducibility proven.
+# Why a container: the image id depends on absolute build paths baked into the ELF ($HOME/.cargo, the
+# Core tree). This FIXES every path (HOME=/root, the repo at /hazync-zkvm, the Core tree at
+# /root/hazync-libzync-base), so the id is identical wherever this is built. Two independent builds
+# that print the same id == reproducibility shown. reproduce/LIBZYNC_IDS records the published pair.
 #
 # PINNED BY DIGEST, not by tag (hazync#146). `ubuntu:22.04` is a moving pointer: the same Dockerfile
 # built a month apart can start from different bytes, and the one property this container exists to
@@ -93,7 +96,7 @@ RUN --mount=type=secret,id=gh_token,required=false \
     SKIP_GROTH16=1 GPU=1 HAZYNC_PROVISION=deps ./provision-vps.sh
 LABEL org.opencontainers.image.source=https://github.com/hazync/hazync
 
-# ── STAGE 2: the guest build ──────────────────────────────────────────────────────────────────────
+# ── STAGE 2: the guest and host build ──────────────────────────────────────────────────────────────────────
 #
 # Now the repo. Everything above is cached, so this is the only layer an ordinary change rebuilds.
 # Paths are IDENTICAL to the single-stage build that preceded this split — HOME=/root,
@@ -140,7 +143,22 @@ COPY . /hazync-zkvm
 # build.rs falls back to downloading -- so this is a safety net, not a requirement.
 ENV RECURSION_SRC_PATH=/hazync-zkvm/reproduce/vendor/recursion_zkr.zip
 
-RUN SKIP_GROTH16=1 HAZYNC_PROVISION=build ./provision-vps.sh
+# The libzync guest, exactly as reproduce/libzync.Dockerfile builds it (see that file for why the
+# toolchain components line is dropped in this copy). Leaves /root/libzync-elf/{mainnet,signet}.bin.
+RUN sed -i '/^components/d' prover/rust-toolchain.toml
+RUN bash scripts/libzync-base.sh /root/hazync-libzync-base
+RUN bash reproduce/libzync-ids.sh > /root/LIBZYNC_IDS && cat /root/LIBZYNC_IDS
 
-# Default: emit the guest image id. Run this container on any machine; the id must match.
+# The release host embedding the mainnet ELF just built. build.rs checks it against these pins (the
+# published line of reproduce/LIBZYNC_IDS) and refuses a mismatch, so a non-reproducing guest fails
+# HERE rather than producing a host that prints a different id.
+RUN mkdir -p /root/lz-pins && \
+    grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $4}' > /root/lz-pins/METHOD_ID && \
+    grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $6}' > /root/lz-pins/GUEST_ELF_SHA256 && \
+    echo "libzync=1 assumevalid=0 network=mainnet coinlog=1 trie=1 utxohash=1" > /root/lz-pins/PROFILE && \
+    RUSTUP_TOOLCHAIN=$(rustup toolchain list | awk '/^stable/{print $1; exit}') \
+    SKIP_GROTH16=1 HAZYNC_PROVISION=build HAZYNC_GUEST_ELF=/root/libzync-elf/mainnet.bin \
+        HAZYNC_GUEST_PIN_DIR=/root/lz-pins ./provision-vps.sh
+
+# Default: emit the host's image id. Run this container on any machine; the id must match.
 CMD ["/hazync-zkvm/prover/target/release/host", "method-id"]

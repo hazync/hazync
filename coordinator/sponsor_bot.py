@@ -38,6 +38,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import signal
 import sqlite3
 import statistics
@@ -85,6 +86,9 @@ BANDS = ((1, 200000), (200001, 400000), (400001, 600000), (600001, 800000), (800
 # legacy witness, with the same variables and default as the coordinator. Set HAZYNC_BRIDGE_OUT for the bot as
 # for the coordinator: without it only the legacy witnesses count, and no pod is rented for anything above them.
 BRIDGE_DIR = os.environ.get("HAZYNC_BRIDGE_OUT", "")
+# A libzync coordinator (HAZYNC_LIBZYNC=1, as server.py) serves prep's leaf_<n>.bin from that directory, not the
+# original bridge's bundle_<n>.json: the bot must look for the same file, or it never rents a pod for anything.
+LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
 WITNESS = os.environ.get("WITNESS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "witnesses"))
 
 # test_sponsor_bot.py --control sets these to show its cleanup and landed-proof tests can fail. Never set them otherwise.
@@ -319,7 +323,8 @@ def has_bundle(h):
     """True when the coordinator can serve block h to a worker, so a pod can prove it."""
     if _CONTROL_IGNORE_BUNDLES:
         return True
-    files = ([os.path.join(BRIDGE_DIR, f"bundle_{int(h)}.json")] if BRIDGE_DIR else []) \
+    name = f"leaf_{int(h)}.bin" if LIBZYNC else f"bundle_{int(h)}.json"
+    files = ([os.path.join(BRIDGE_DIR, name)] if BRIDGE_DIR else []) \
         + [os.path.join(WITNESS, f"block_{int(h)}.json")]
     return any(os.path.exists(f) for f in files)
 
@@ -751,9 +756,34 @@ chmod +x hazync-worker hazync-run-workers.sh hazync-host-x86_64-linux-gnu-cuda
 sha256sum -c --quiet want.txt && echo SHA_OK || echo SHA_BAD
 ln -sf hazync-host-x86_64-linux-gnu-cuda hazync-host-cuda
 # #261: a card can pass boot with no usable CUDA device. A real, tiny GPU prove must succeed first.
-timeout 300 ./hazync-host-cuda prove-block > gpu_smoke.log 2>&1 && grep -q VERIFIED gpu_smoke.log && echo GPU_OK || echo "GPU_BAD $(tail -1 gpu_smoke.log | cut -c1-120)"
+@SMOKE@
 echo "MID=$(./hazync-host-cuda method-id 2>&1 | grep -oE '[0-9a-f]{64}' | head -1)"
 """
+
+
+# The GPU smoke, per board. The original host proves block 170 from fixtures compiled into it (`prove-block`);
+# a libzync host has no fixtures and no `prove-block`, so the bot ships block 1's leaf bundle (leaf_1.bin, kept
+# by the board's pruner for exactly this) and the pod proves it as a worker would, then verifies the receipt
+# against genesis. Only a RANGE-OK for block 1 is a pass: a receipt that does not verify is a card that does not prove.
+SMOKE_CORE = ('timeout 300 ./hazync-host-cuda prove-block > gpu_smoke.log 2>&1 && grep -q VERIFIED gpu_smoke.log '
+              '&& echo GPU_OK || echo "GPU_BAD $(tail -1 gpu_smoke.log | cut -c1-120)"')
+SMOKE_LIBZYNC = ('mkdir -p smoke && cp leaf_1.bin smoke/ && (cd smoke && export HAZYNC_BRIDGE_OUT=$W/smoke '
+                 '&& timeout 600 ../hazync-host-cuda prove-range-bridge 1 > ../gpu_smoke.log 2>&1 '
+                 '&& ../hazync-host-cuda verify-any range_1.bin 1 >> ../gpu_smoke.log 2>&1) '
+                 '&& grep -q "^RANGE-OK lo=1 hi=1 " gpu_smoke.log && echo GPU_OK '
+                 '|| echo "GPU_BAD $(tail -1 gpu_smoke.log | cut -c1-120)"')
+
+
+def boot_script(tag, libzync=None):
+    """The pod's boot script for release `tag`, with the GPU smoke for this board."""
+    lz = LIBZYNC if libzync is None else libzync
+    return BOOT_SH.replace("@REL@", tag).replace("@SMOKE@", SMOKE_LIBZYNC if lz else SMOKE_CORE)
+
+
+def boot_files(dir_, libzync=None):
+    """What boot() copies to a pod before running boot.sh (a libzync board adds the smoke's leaf bundle)."""
+    lz = LIBZYNC if libzync is None else libzync
+    return [os.path.join(dir_, f) for f in ("boot.sh", "want.txt") + (("leaf_1.bin",) if lz else ())]
 
 
 # ⛔⛔ TRANSIENT HTTP IS NOT A REASON TO PAGE A HUMAN, AND IT PAGED ONE. 2026-10-01 15:05:46, the bot
@@ -866,8 +896,15 @@ class SshRunner:
             raise SystemExit(f"sponsor_bot: the {tag} manifest does not list all of {', '.join(self.FILES)}")
         with open(os.path.join(self.dir, "want.txt"), "w") as f:
             f.write("".join(want))
+        if LIBZYNC:
+            # the libzync GPU smoke proves block 1 from its leaf bundle: refuse before a cent is spent if it is missing
+            src = os.path.join(BRIDGE_DIR, "leaf_1.bin") if BRIDGE_DIR else ""
+            if not (src and os.path.isfile(src)):
+                raise SystemExit(f"sponsor_bot: no leaf_1.bin in HAZYNC_BRIDGE_OUT ({BRIDGE_DIR or 'unset'}) for the "
+                                 "pods' GPU smoke; nothing was started")
+            shutil.copyfile(src, os.path.join(self.dir, "leaf_1.bin"))
         with open(os.path.join(self.dir, "boot.sh"), "w") as f:
-            f.write(BOOT_SH.replace("@REL@", tag))
+            f.write(boot_script(tag))
         return self
 
     def verify_manifest(self):
@@ -906,12 +943,11 @@ class SshRunner:
         for _ in range(3):
             try:
                 ok = (self._ssh(pod, "mkdir -p /workspace /root/.hazync-ids && chmod 700 /root/.hazync-ids").returncode == 0
-                      and self._scp(pod, [os.path.join(self.dir, "boot.sh"), os.path.join(self.dir, "want.txt")],
-                                    "/workspace/").returncode == 0)
+                      and self._scp(pod, boot_files(self.dir), "/workspace/").returncode == 0)
                 if not ok:
                     detail = "ssh or scp failed"
                 else:
-                    out = self._ssh(pod, "bash /workspace/boot.sh", 900).stdout
+                    out = self._ssh(pod, "bash /workspace/boot.sh", 1200 if LIBZYNC else 900).stdout
                     if "SHA_OK" in out and "GPU_OK" in out and f"MID={self.method_id}" in out:
                         return True, "SHA_OK GPU_OK MID ok"
                     detail = " ".join(out.split())[-200:] or "boot printed nothing"

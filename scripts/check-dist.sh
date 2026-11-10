@@ -25,8 +25,16 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 DIST="${1:-dist}"
-CANON=$(grep -vE '^[[:space:]]*#' reproduce/METHOD_ID | grep -oE '[0-9a-f]{64}' | head -1)
+# The id a release ships is the PUBLISHED libzync mainnet image (reproduce/LIBZYNC_IDS); since #676
+# reproduce/METHOD_ID names the same id. Read the published record and refuse if the two disagree:
+# the repo would be contradicting itself about what this release is.
+CANON=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
+[[ "$CANON" =~ ^[0-9a-f]{64}$ ]] || { echo "FAIL no libzync-product mainnet id in reproduce/LIBZYNC_IDS"; exit 1; }
+_mid=$(grep -vE '^[[:space:]]*#' reproduce/METHOD_ID | grep -oE '[0-9a-f]{64}' | head -1)
+[ "$_mid" = "$CANON" ] || { echo "FAIL reproduce/METHOD_ID (${_mid:0:8}) is not the published libzync mainnet id (${CANON:0:8})"; exit 1; }
 CANON8=${CANON:0:8}
+# The published guest ELF, staged by prover/build-release.sh: the Windows host is checked against it.
+GUEST_ELF="${HAZYNC_GUEST_ELF_STAGED:-$DIST/.libzync-guest/mainnet.bin}"
 KNOWN=$(grep -oE '\b[0-9a-f]{8}\b' reproduce/METHOD_ID | sort -u)
 fail=0; n=0
 # Counted separately because "wrong guest" and "could not check here" are different findings, and the
@@ -40,6 +48,29 @@ for f in "$DIST"/*; do
     [ -f "$f" ] || continue
     b=$(basename "$f"); n=$((n + 1))
     case "$b" in
+      *.js)
+        # The WASM verifier's JavaScript glue: frames input and reads verdicts, carries no id. It is
+        # exercised with the module on a real receipt by scripts/check-release-verifiers.sh.
+        echo "  --   $b (verifier glue, guest-independent; tested with the wasm on a real proof)" ;;
+      *windows*.zip)
+        # The Windows CUDA host cannot run here at all (a PE, and it imports nvcuda.dll). Check its bytes
+        # (scripts/windows-host.sh: the embedded guest's sha256 and the image id) -- the same check that binds the
+        # Linux CUDA host on a box with no card (operator decision 2026-11-09). An operator who RAN
+        # `host.exe method-id` on a Windows NVIDIA machine may attest the id instead, which is reported as such.
+        att="HAZYNC_ATTEST_${b//[^A-Za-z0-9]/_}"
+        if ! wlog=$(./scripts/windows-host.sh check "$f" "$GUEST_ELF" 2>&1); then
+            printf '%s\n' "$wlog" | sed 's/^/       /'
+            echo "FAIL $b does not carry the published guest and id — do not ship it"
+            fail=1; wrong_guest=$((wrong_guest+1))
+        elif [ -n "${!att:-}" ] && [ "${!att}" != "$CANON" ]; then
+            echo "FAIL $b: the attested id ${!att:0:8}… is not the published $CANON8"
+            fail=1; wrong_guest=$((wrong_guest+1))
+        elif [ "${!att:-}" = "$CANON" ]; then
+            echo "  ok   $b: host.exe embeds the published guest and id $CANON8, and an operator ran it (via $att)"
+        else
+            echo "  ok   $b: host.exe carries the published guest and id $CANON8 IN ITS BYTES (cannot execute here)"
+            echo "       ⚠ NOT a run. Smoke it on a Windows NVIDIA machine and set $att to the measured id to gate on that."
+        fi ;;
       *verify*)
         # Match the FULL 64-character id, not the 8-character prefix.
         #

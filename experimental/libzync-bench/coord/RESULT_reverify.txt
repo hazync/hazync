@@ -1,0 +1,15 @@
+libzync board: stored ranges stay re-verifiable after their leaf bundles are pruned (2026-11-09, coordinator box)
+host: this branch, METHOD_ID 863c9ce3 (host-side change only), as /opt/hazync-lz/bin/host.new
+proofs: the libzync board's real receipts (1, 2, 3, 4, 3-4; RESULT_board_e2e.txt); state dir /var/lib/libzync-board/out
+
+verify-any, an empty HAZYNC_BRIDGE_OUT standing for "every leaf pruned":
+  3-4 lo 3, leaf bundles present            RANGE-OK lo=3 hi=4 in_tip=5b38822c091c
+  3-4 lo 3, leaves pruned, state dir set    RANGE-OK lo=3 hi=4 in_tip=5b38822c091c   (identical)
+  3-4 lo 3, leaves pruned, no state dir     REJECT no leaf bundle ... (nor a state_2.json in HAZYNC_LZ_STATE_DIR)
+  3-4 lo 4 (wrong), state dir               REJECT the receipt is not anchored on the state before block 4
+  2   lo 3 (wrong), state dir               REJECT claimed start 3 for a state at 2
+  3-4 lo 3, a state file for the wrong height  REJECT .../state_2.json is the state at 1, not before block 3
+
+check-proofs.py (the nightly re-verify), same proofs, leaves pruned:
+  HAZYNC_LIBZYNC=1 + HAZYNC_LZ_STATE_DIR    "Every one of the 5 stored proofs still hashes and verifies to its record." rc 0
+  without (verify-any given no start height) INTEGRITY FAILURE: 4 stored proofs (every one not starting at 1)

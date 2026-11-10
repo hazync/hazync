@@ -44,10 +44,12 @@ changes stated here, which are marked in the source (`hazync patch`, `hazync#…
 ## Our own code
 
 - The Utreexo UTXO accumulator (`accumulator/`), the coinbase sparse Merkle tree (`coinbase-smt/`),
-  the shared range-state types (`rangestate/`), the host/prover driver (`prover/host/`), the guest
-  glue (`prover/methods/guest/`), the verifiers (`verifier/`, `verifier-ffi/`, `verifier-wasm/`), and
-  the coordinator (`coordinator/`) are original work under the root MIT licence (the `verifier`
-  crate additionally declares Apache-2.0 in its `Cargo.toml`).
+  libzync (`libzync/`), the host/prover driver (`prover/host/`), the guest glue
+  (`prover/methods/guest/`), the libzync verifiers (`swiftsync-verify/`, `swiftsync-verify-ffi/`,
+  `swiftsync-verify-wasm/`), the coordinator (`coordinator/`), and the retired CORE design's code under
+  `history/` (including its range-state types and verifiers) are original work under the root MIT
+  licence (the CORE `verifier` crate, `history/verifier/`, additionally declares Apache-2.0 in its
+  `Cargo.toml`).
 
 Nothing here overrides the terms of the components' own licences; consult each upstream project for
 the authoritative text.

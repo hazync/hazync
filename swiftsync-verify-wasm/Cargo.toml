@@ -9,7 +9,7 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
-# The same library as the CLI (one implementation of the checks); raw ABI, no wasm-bindgen, as ../verifier-wasm.
+# The same library as the CLI (one implementation of the checks); raw ABI, no wasm-bindgen, as ../history/verifier-wasm.
 [dependencies]
 swiftsync-verify = { path = "../swiftsync-verify" }
 serde_json = "1"

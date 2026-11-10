@@ -1,0 +1,18 @@
+libzync on a real Windows GPU (#631 follow-up), 2026-11-09
+machine: Xesktop, Windows 10, NVIDIA RTX PRO 6000 Blackwell Server Edition (96 GB), driver 595.97, CUDA 13.2,
+         driver model WDDM (the mode #631's crash was tied to)
+binary:  host.exe + cudart64_12.dll from windows-prove run 42540389071 (#674's head e6129d2, merged as bbcc212),
+         artifact hazync-host-windows-x86_64-cuda; host.exe sha256 56f9062f3879b091…
+         method-id 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 (the published libzync mainnet image)
+env:     RUST_MIN_STACK=33554432 (as CI), HAZYNC_BRIDGE_OUT = the leaf bundles; run over SSH (session 0)
+command: host.exe prove-range-bridge <h>   (the coordinator worker's leaf command), then host.exe verify-any range_<h>.bin <h>
+
+block 170     prove exit 0 in 319 s; chunk 1 segment, trie 1, aggregate 2 (user cycles 2.56 M in the aggregate)
+              Windows verify-any: RANGE-OK lo=170 hi=170
+block 400000  prove exit 0 in 823 s; chunks 86 + 68 segments, trie 38, aggregate 36
+              GPU during the chunk phase: 100 % utilisation, 27 GB, ~290 W
+              Windows verify-any: RANGE-OK lo=400000 hi=400000
+
+independent check on Linux (hazync-proof, /opt/hazync-lz/bin/host, same image):
+  win range_170.bin    verify-any ... 170     RANGE-OK      ... 169     EXIT=1 (refused)
+  win range_400000.bin verify-any ... 400000  RANGE-OK      ... 170     EXIT=1 (refused)

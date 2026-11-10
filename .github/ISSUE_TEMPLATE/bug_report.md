@@ -20,7 +20,7 @@ labels: bug
 
 **Where**
 - Commit or release (`git rev-parse --short HEAD`, or the release tag):
-- Component (guest, host, verifier, verifier-wasm, coordinator, worker CLI, scripts, docs):
+- Component (guest, host, libzync, swiftsync-verify (CLI, FFI or WASM), coordinator, worker CLI, scripts, docs):
 - OS and architecture:
 
 **Output** (the full error, not a summary)

@@ -69,7 +69,7 @@ the user; every release's contents are gone through with the user before it is c
 | # | item | what exists | what is left |
 |---|---|---|---|
 | R1 | merge `libzync` into `main` | `libzync` is 307 commits ahead, main 1 (#669). CI has never run on `libzync` (main + PRs only) | a PR from `libzync` (runs the whole CI for the first time: expect reds to fix), main's #669 merged in, F1 (#668) decided; the release (`release.sh`) builds and publishes the libzync host + the frozen image ids (H7, waits for the container builds) |
-| R1a | ⚖ **DECIDED 11-07 (user): libzync REPLACES CORE in the build (option a)** | the CORE guest's own sources differ on `libzync` (main.rs +739/-, verify_input.cpp +620, msm.rs removed, 28 files), so the merged tree can NOT rebuild the canonical CORE id 37987b85 and CI's `reproducible-image-id` (pinned to it) goes red | (a) RECOMMENDED: libzync replaces CORE in the build; CI pins the libzync ids (H7); CORE stays usable as its published release binary (37987b85) + a tag, which is all the paper's same-card CORE re-measure needs; (b) keep CORE buildable by restoring its guest files byte-identically as a separate crate (upkeep for an image nobody proves with) |
+| R1a | ⚖ **DECIDED 11-07 (user): libzync REPLACES CORE in the build (option a)** | the CORE guest's own sources differ on `libzync` (main.rs +739/-, verify_input.cpp +620, msm.rs removed, 28 files), so the merged tree can NOT rebuild the canonical CORE id 37987b85 (since superseded) and CI's `reproducible-image-id` (pinned to it) goes red | (a) RECOMMENDED: libzync replaces CORE in the build; CI pins the libzync ids (H7); CORE stays usable as its published release binary (37987b85) + a tag, which is all the paper's same-card CORE re-measure needs; (b) keep CORE buildable by restoring its guest files byte-identically as a separate crate (upkeep for an image nobody proves with) |
 | R2 | keep donations and **donate to prove** (sponsor a block range) | `server.py`: BTCPay invoices, sponsor holds and queue, the sponsor bot, `/api/donations`; all keyed by block ranges | check on a libzync coordinator (HAZYNC_LIBZYNC=1): a sponsored range is a run of leaves + joins, so the semantics carry over; run the sponsor / donation tests in libzync mode; the board text says libzync |
 | R3 | the Windows app, so anyone can help | `tools/win-gui` (GUI around the `hazync` worker; runs end to end on real Windows) | a Windows libzync host. ⛔ GPU proving on Windows is blocked by #631 (CUDA cooperative launch under WDDM, still open); CPU-only is slow (a modern leaf is ~9 GPU-minutes). Decide: fix #631 first, or ship Windows as CPU / small-block work + Linux for GPUs |
 | R4 | zyncAPP front ends on the website | the verifier in WASM (`swiftsync-verify-wasm`: coin, balance, history, absence facts against a core proof), `zync-serve` endpoints, two zyncAPPs (`prover/zyncapps`: coin, header chain) | a web page that fetches a fact + the core receipt and checks it in the browser (no trust in the server), one per zyncAPP; hosted with the board |
@@ -362,6 +362,30 @@ change after the freeze ships as a new image through the handover.
 
 Not levers: skipping signatures (assumevalid, ruled out: every block is proved); replacing Core's interpreter (<1% of
 cycles, measured); a risc0 upgrade for new accelerators (ruled out).
+
+## N. Launch (11-10)
+
+What goes out together, in order. Each item is the operator's call to ship.
+
+| # | item | status |
+|---|---|---|
+| N1 | release v0.23.0 (#692): the libzync host, verifier and Windows CUDA host | tooling drafted; notes drafted for the operator; contents discussed before cutting |
+| N2 | the board switch (`coordinator/deploy/libzync/SWITCH.md`; #676, #684) | prerequisites merged; waits on N1 |
+| N3 | **the header-chain zAPP (K1)**, proved from genesis to the tip and checkable on hazync.org | in progress, steps below |
+| N4 | the paper | draft 2, private; written with the operator |
+
+N3, step by step:
+
+1. Execute the whole chain from genesis against our node: end hash and chainwork must match.
+2. `zyncapp headers-prove` (a succinct receipt) and a verifier: `swiftsync-verify --headers`, and `verifyHeaders` in
+   the WebAssembly build. The verdict follows the core's rule: OK once the chainwork reaches Core's minimum, DEMO below.
+3. Pin the image: a reproducible build gives the same id bit for bit, as for the core (`reproduce/`).
+4. Following the tip: a run starts from the state the previous one ended in (the guest commits both), so new headers
+   are a short run chained to the last one; the verifier checks the chain of runs.
+5. A page on hazync.org that verifies the proof in the browser.
+6. One proving run on a GPU, the operator's trigger (estimated about $2 for the whole chain on one RTX PRO 6000).
+
+No prep is needed: headers carry no coin state.
 
 ## Image ids built (11-03, unit tests + compiles only)
 

@@ -1,5 +1,5 @@
 // Glue for the libzync chain-proof verifier in WebAssembly. Hand-written and short on purpose, as
-// ../verifier-wasm/hazync-verify.js: no wasm-bindgen, nothing here touches the network.
+// ../history/verifier-wasm/hazync-verify.js: no wasm-bindgen, nothing here touches the network.
 //
 //   import { loadVerifier } from './swiftsync-verify.js';
 //   const v = await loadVerifier(fetch('./swiftsync_verify_wasm.wasm'));
@@ -7,6 +7,8 @@
 //   const f = v.verifyFacts({ ...same, facts: { tries: [trieFact] }, expect: '<height>:<hash>' });
 //   (expect: the network's block at the proof's height from a source YOU trust, never from the fact server)
 //   r.verdict  // 'ok' | 'demo' | 'fail'
+//   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });   // the header-chain zyncAPP
+//   h.verdict, h.height, h.hash, h.chainwork
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
@@ -39,7 +41,7 @@ export async function loadVerifier(source) {
     typeof Response !== 'undefined' && resolved instanceof Response
       ? await WebAssembly.instantiateStreaming(resolved, {})
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
-  const { alloc, verify_frame, verify_facts, image_id, memory } = instance.exports;
+  const { alloc, verify_frame, verify_facts, image_id, verify_headers, headers_image_id, memory } = instance.exports;
   const call = (fn, args) => {
     const bytes = frame(args);
     const ptr = alloc(bytes.length);
@@ -55,6 +57,23 @@ export async function loadVerifier(source) {
     /** As verify, plus facts ({coins, journeys, tries}) checked against the verified state; `expect` ('<height>:<hash>')
      *  is the tip from a source you trust, passed beside the facts, never inside them. */
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },
+    /** The header-chain zyncAPP: receipts = [first from genesis, then each run chained to the one before];
+     *  expect ('<height>:<hash>') is the tip from a source you trust. `now` defaults to this device's clock. */
+    verifyHeaders({ receipts, now, imageHex, expect }) {
+      const enc = new TextEncoder();
+      const parts = [...receipts, enc.encode(imageHex || ''), enc.encode(expect || '')];
+      const bytes = new Uint8Array(12 + parts.reduce((n, p) => n + 4 + p.length, 0));
+      const view = new DataView(bytes.buffer);
+      view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);
+      view.setUint32(8, receipts.length, true);
+      let o = 12;
+      for (const p of parts) { view.setUint32(o, p.length, true); bytes.set(p, o + 4); o += 4 + p.length; }
+      const ptr = alloc(bytes.length);
+      new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+      return JSON.parse(readString(memory, verify_headers(ptr, bytes.length)));
+    },
+    /** The built-in header-chain image id. */
+    headersImageId() { return readString(memory, headers_image_id()); },
     /** The built-in image id for 'mainnet' or 'signet'. */
     imageId(network) {
       return readString(memory, image_id(network === 'signet' ? 1 : 0));

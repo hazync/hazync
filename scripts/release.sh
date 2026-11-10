@@ -19,6 +19,12 @@
 #
 # Every one of those is now a step below that fails loudly instead of a paragraph someone must recall.
 #
+# WHAT IT SHIPS (since v0.23.0, the libzync release): the libzync host for the published mainnet image
+# (reproduce/LIBZYNC_IDS) for Linux CPU and CUDA and for Windows CUDA, the libzync verifier
+# (swiftsync-verify) as CLI, WebAssembly and its JavaScript glue, and the proof-party scripts. The exact
+# list is scripts/release-assets.txt, which release-sign.yml reads too. The CORE design's last release
+# is v0.22.1, whose assets stay where they are.
+#
 # RESUMABLE. Each phase checks whether its work is already done and skips it. A failure at phase 5
 # does not rebuild the guest; just run the same command again.
 set -uo pipefail
@@ -35,9 +41,15 @@ VERIFY_ONLY=0
 
 REPO_SLUG="${REPO_SLUG:-hazync/hazync}"
 DIST="${DIST:-dist}"
-# Every artifact that must carry the current guest id. The aarch64 verifier is NOT here: CI builds it
-# from the tag and attaches it during signing (#85/#90), so it cannot exist before publish.
-BINS="hazync-host-x86_64-linux-gnu hazync-host-x86_64-linux-gnu-cuda hazync-verify-x86_64-linux-gnu hazync-verify.wasm hazync-worker hazync-coordinator.py hazync-run-workers.sh"
+# Every asset this script uploads, and the ones release-sign.yml adds, from ONE list both read
+# (scripts/release-assets.txt). The aarch64 verifier is NOT uploaded here: CI builds it from the tag and
+# attaches it during signing (#85/#90), so it cannot exist before publish.
+BINS=$(awk '$1=="release" {print $2}' scripts/release-assets.txt | xargs)
+SIGNED_EXTRA=$(awk '$1=="sign" {print $2}' scripts/release-assets.txt | xargs)
+WIN=hazync-host-x86_64-windows-cuda.zip
+# The published mainnet guest ELF, staged by prover/build-release.sh. The Windows host is checked
+# against it (scripts/windows-host.sh), and it is where a host build finds it again on a resumed run.
+LZ_ELF=dist/.libzync-guest/mainnet.bin
 
 die()  { echo; echo "FAIL  $*" >&2; exit 1; }
 ok()   { echo "  ok   $*"; }
@@ -46,9 +58,15 @@ run()  { [ "$DRY" = 1 ] && { echo "  (dry-run, would run) $*"; return 0; }; "$@"
 
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] \
     || die "usage: $0 vMAJOR.MINOR.PATCH [--dry-run|--verify-only]   (release-sign.yml refuses anything else)"
+[ "$(echo $BINS | wc -w)" -ge 9 ] || die "scripts/release-assets.txt lists only $(echo $BINS | wc -w) release asset(s)"
 
-CANON=$(grep -vE '^[[:space:]]*#' reproduce/METHOD_ID | grep -oE '[0-9a-f]{64}' | head -1)
-[ -n "$CANON" ] || die "no canonical id in reproduce/METHOD_ID"
+# The id this release ships: the PUBLISHED libzync mainnet image, from its record. reproduce/METHOD_ID
+# names the same id since #676; if they disagree the repo contradicts itself, and nothing is shipped.
+CANON=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
+CANON_SHA=$(awk '$1=="libzync-product" && $2=="mainnet" {print $6}' reproduce/LIBZYNC_IDS)
+[[ "$CANON" =~ ^[0-9a-f]{64}$ && "$CANON_SHA" =~ ^[0-9a-f]{64}$ ]] || die "no libzync-product mainnet line in reproduce/LIBZYNC_IDS"
+_mid=$(grep -vE '^[[:space:]]*#' reproduce/METHOD_ID | grep -oE '[0-9a-f]{64}' | head -1)
+[ "$_mid" = "$CANON" ] || die "reproduce/METHOD_ID (${_mid:0:8}) is not the published libzync mainnet id (${CANON:0:8})"
 echo "releasing $TAG at guest ${CANON:0:8}…"
 [ "$DRY" = 1 ] && echo "(DRY RUN — nothing will be built, tagged, or published)"
 
@@ -104,35 +122,12 @@ if command -v gh >/dev/null; then
     #
     # Requiring a PASS rather than merely "no failures" keeps the audit-#6 property that made this
     # check exist: zero runs and all-green must not look the same.
-    # ⛔ `deployed-verifier` tests the LIVE SITE, not this commit, and it is red BY CONSTRUCTION
-    # between a re-baseline and its cutover: the repo carries the new guest while bitcoinghost.org
-    # still serves the old one. The cutover needs the wasm from the release this gate is guarding, so
-    # counting that job made every re-baseline release unreachable — the exact shape as the
-    # `cancelled` bug above, where a run that cannot have a useful opinion was given one.
-    #
-    # Its failure is still REPORTED below, because after the cutover it is a genuine regression.
-    IGNORABLE_JOB='deployed-verifier'
     Q() { gh run list --limit 40 --json headSha,conclusion \
           --jq "[.[]|select(.headSha==\"$HEAD_SHA\")|select($1)]|length" 2>/dev/null || echo "?"; }
-    # A failed run counts UNLESS every job that failed in it is ignorable.
-    run_is_ignorable() {
-        local jobs; jobs=$(gh api "repos/{owner}/{repo}/actions/runs/$1/jobs" \
-            --jq '[.jobs[]|select(.conclusion=="failure")|.name]|join(" ")' 2>/dev/null) || return 1
-        [ -n "$jobs" ] || return 1
-        for j in $jobs; do [ "$j" = "$IGNORABLE_JOB" ] || return 1; done
-        return 0
-    }
+    # (A `deployed-verifier` exemption lived here: that job tested the CORE browser verifier on the
+    # live site and was removed with it in #676, so every failed run counts again.)
     PASS=$(Q '.conclusion=="success"')
-    BAD=0
-    for rid in $(gh run list --limit 40 --json headSha,conclusion,databaseId \
-                 --jq "[.[]|select(.headSha==\"$HEAD_SHA\")|select(.conclusion|IN(\"failure\",\"timed_out\",\"startup_failure\",\"action_required\"))|.databaseId][]" 2>/dev/null); do
-        if run_is_ignorable "$rid"; then
-            echo "  --   run $rid failed only in '$IGNORABLE_JOB' — that job tests the LIVE SITE and is"
-            echo "       expected to be red until this release is deployed. Not counted."
-        else
-            BAD=$((BAD+1))
-        fi
-    done
+    BAD=$(Q '.conclusion|IN("failure","timed_out","startup_failure","action_required")')
     [ "$PASS" = "?" ] && BAD="?"
     if [ "$PASS" = "?" ] || [ "$BAD" = "?" ]; then
         echo "  --   could not read CI status (continuing)"
@@ -148,6 +143,9 @@ if command -v gh >/dev/null; then
 fi
 
 command -v docker >/dev/null || die "docker is required for the canonical container build"
+command -v gh >/dev/null || die "gh is required: the Windows host is fetched from a windows-prove.yml run"
+command -v node >/dev/null || die "node is required: step 4 runs the WebAssembly verifier on a real proof"
+command -v python3 >/dev/null || die "python3 is required (byte checks, the Windows zip)"
 FREE_GB=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
 [ "${FREE_GB:-0}" -ge 25 ] || die "only ${FREE_GB}GB free; a CUDA build needs 25GB.
        It does NOT report as a disk error — nvcc segfaults (exit status: 139) and reads as a
@@ -199,10 +197,12 @@ for mode in cpu cuda; do
     if host_is_current "$DIST/$asset" "$asset"; then
         ok "$asset already canonical and built from this source — skipping rebuild"
     else
-        echo "  building $mode (guest + kernels; cuda is tens of minutes)…"
+        echo "  building $mode (the host around the published guest ELF; cuda kernels take tens of minutes)…"
         # SKIP_GROTH16: a runtime rzup component the host does not link against — pure download cost.
         # RZUP_TIMEOUT: the default is far too short for the 488MB toolchain on a domestic link.
-        run env SKIP_GROTH16=1 RZUP_TIMEOUT="${RZUP_TIMEOUT:-7200}" ${IMAGE:+IMAGE="$IMAGE"} \
+        # OUT: into $DIST. Without it both scripts wrote to ./dist whatever DIST said, so DIST=elsewhere
+        # gated and uploaded a directory nothing had built into.
+        run env SKIP_GROTH16=1 RZUP_TIMEOUT="${RZUP_TIMEOUT:-7200}" ${IMAGE:+IMAGE="$IMAGE"} OUT="$(realpath -m "$DIST")" \
             ./prover/build-release.sh "$mode" || die "$mode build failed"
         # Record what it was built from, so the next release can tell a fresh artifact from a stale
         # one that merely embeds the right guest. Written only after the build succeeds.
@@ -210,33 +210,62 @@ for mode in cpu cuda; do
     fi
 done
 
-step "3. package worker, wasm and the x86_64 verifier"
+step "2b. the Windows CUDA host (built by windows-prove.yml on GitHub's Windows runners)"
+# Not built here: it needs MSVC and the Windows CUDA toolkit. scripts/windows-host.sh takes the
+# `hazync-host-windows-x86_64-cuda` artifact of a windows-prove run OF THIS COMMIT whose build-cuda job
+# passed, checks host.exe embeds the published guest and id, and zips it with cudart64_12.dll.
+# Current = the zip was fetched for HEAD (its .run file says so) and still passes the check.
+if [ ! -f "$LZ_ELF" ] && [ -n "${HAZYNC_GUEST_ELF:-}" ]; then
+    mkdir -p "$(dirname "$LZ_ELF")" && cp "$HAZYNC_GUEST_ELF" "$LZ_ELF"
+fi
+[ "$(sha256sum "$LZ_ELF" 2>/dev/null | cut -c1-64)" = "$CANON_SHA" ] || [ "$DRY" = 1 ] \
+    || die "$LZ_ELF is not the published mainnet ELF (prover/build-release.sh stages it; or set HAZYNC_GUEST_ELF)"
+if [ "$(cut -d' ' -f2 "$DIST/.$WIN.run" 2>/dev/null)" = "$SRC_REV" ] \
+   && ./scripts/windows-host.sh check "$DIST/$WIN" "$LZ_ELF" >/dev/null 2>&1; then
+    ok "$WIN already fetched for this commit (windows-prove run $(cut -d' ' -f1 "$DIST/.$WIN.run"))"
+else
+    run ./scripts/windows-host.sh fetch "$SRC_REV" "$DIST/$WIN" "$LZ_ELF" || die "could not obtain the Windows host"
+fi
+
+step "3. package worker, wasm + glue and the x86_64 verifier"
 # #247: package-release.sh SKIPS the wasm (stderr warning, exit 0) when this box has no wasm32
 # target -- which is every release from hazync-coord, which has no host Rust at all. This used to print
 # "ok worker + wasm packaged" regardless. Report what actually happened; step 4 still gates the file.
-PKG_ERR=$( { run env TAG="$TAG" ./scripts/package-release.sh >/dev/null; } 2>&1 ) || { printf '%s\n' "$PKG_ERR" >&2; die "package-release failed"; }
+PKG_ERR=$( { run env TAG="$TAG" OUT="$(realpath -m "$DIST")" ./scripts/package-release.sh >/dev/null; } 2>&1 ) || { printf '%s\n' "$PKG_ERR" >&2; die "package-release failed"; }
 [ -n "$PKG_ERR" ] && printf '%s\n' "$PKG_ERR" >&2
 if printf '%s' "$PKG_ERR" | grep -q "skipping hazync-verify.wasm"; then
     ok "worker packaged"
     if [ -f "$DIST/hazync-verify.wasm" ]; then
         echo "  !    wasm NOT built here -- the staged $DIST/hazync-verify.wasm ($(sha256sum "$DIST/hazync-verify.wasm" | cut -c1-16)) is from elsewhere; step 4 checks its guest"
     else
-        echo "  !    wasm NOT built here and none is staged -- build it where wasm32 exists (./verifier-wasm/build.sh)"
+        echo "  !    wasm NOT built here and none is staged -- build it where wasm32 exists (./swiftsync-verify-wasm/build.sh)"
         echo "       and copy it to $DIST/hazync-verify.wasm, or: rustup target add wasm32-unknown-unknown"
     fi
 else
     ok "worker + wasm packaged"
 fi
-if ! grep -aq "${CANON:0:8}" "$DIST/hazync-verify-x86_64-linux-gnu" 2>/dev/null; then
-    run cargo build -q --release --manifest-path verifier/Cargo.toml || die "verifier build failed"
-    run cp verifier/target/release/hazync-verify "$DIST/hazync-verify-x86_64-linux-gnu"
-fi
+# The libzync verifier CLI (swiftsync-verify; its other binaries, zync-path and zync-serve, are not
+# shipped). Built EVERY time rather than when the staged copy lacks the id: an id check cannot see a
+# verifier change that leaves the image alone, which is the host staleness trap of v0.18.0 (step 2)
+# in another binary. An unchanged tree makes this a no-op.
+run cargo build -q --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify || die "verifier build failed"
+run install -m 0755 swiftsync-verify/target/release/swiftsync-verify "$DIST/hazync-verify-x86_64-linux-gnu"
 ok "x86_64 verifier staged"
 
 # ---- 4. gate -----------------------------------------------------------------------------------
 # The last point at which a wrong artifact is free to fix. After this it is public and signed.
 step "4. verify every staged artifact belongs to guest ${CANON:0:8}"
-for b in $BINS; do [ -f "$DIST/$b" ] || die "$DIST/$b is missing — nothing to publish"; done
+for b in $BINS; do [ -s "$DIST/$b" ] || die "$DIST/$b is missing or empty — nothing to publish"; done
+# EXACTLY the release set, nothing else: dist/ is not cleaned between releases, and check-dist.sh
+# judges every file in it. A stray file is either a stale artifact or an asset this list forgot.
+extra=""
+for f in "$DIST"/*; do
+    [ -f "$f" ] || continue
+    case " $BINS " in *" $(basename "$f") "*) ;; *) extra="$extra $(basename "$f")";; esac
+done
+[ -z "$extra" ] || die "$DIST holds files that are not release assets:$extra
+       Move them out (or add them to scripts/release-assets.txt if they should ship)."
+ok "$DIST holds exactly the $(echo $BINS | wc -w) release assets"
 
 # A CUDA host cannot run without libcuda.so.1. Rather than force a GPU box, read the id out of the
 # bytes: the host stores it as [u32;8] LITTLE-ENDIAN, which puts the raw 32 bytes on disk in natural
@@ -256,6 +285,10 @@ CU="$DIST/hazync-host-x86_64-linux-gnu-cuda"
 # would fail with the artifact sitting right there.
 _cu=hazync-host-x86_64-linux-gnu-cuda
 _att="HAZYNC_ATTEST_${_cu//[^A-Za-z0-9]/_}"
+# A host that cannot run here (no NVIDIA driver on the release box) is checked from its BYTES, as before v0.23.0
+# (operator decision 2026-11-09: no GPU rental per release): `method-id` prints a constant compiled into the binary
+# and never touches CUDA, so the id found in the bytes is the id it would print. An operator who did run it on a card
+# can pass the measured id instead, and that is preferred.
 if timeout 120 "$CU" method-id >/dev/null 2>&1; then
     :   # it runs here — check-dist.sh will ask it directly, which is the strongest evidence there is
 elif [ -n "${!_att:-}" ]; then
@@ -263,6 +296,11 @@ elif [ -n "${!_att:-}" ]; then
     # running this binary on a real GPU. Never overwrite it — including when it is wrong, because
     # check-dist.sh refusing a bad hand-typed attestation is the point of passing one.
     ok "cuda host: cannot execute here; using the attestation you supplied (${!_att:0:8}…)"
+    # ...and the bytes must agree with it: an attestation typed for a DIFFERENT file than the one
+    # staged would otherwise pass.
+    ./scripts/embeds-method-id.sh "$CU" "$CANON" \
+        || die "cuda host: attested, but the staged file does not carry ${CANON:0:8} in its bytes exactly once —
+       the attestation is for a different binary than the one about to ship"
 elif ./scripts/embeds-method-id.sh "$CU" "$CANON"; then
     ok "cuda host: cannot execute here, but embeds ${CANON:0:8} in its bytes"
     echo "  !    that is a BYTE check, not a run. Nothing here has proved this binary works on a GPU —"
@@ -278,7 +316,18 @@ else
     echo "  !    cuda host: cannot execute here AND does not carry ${CANON:0:8} in its bytes exactly once."
     echo "       Either it was built from a different guest, or it is not the artifact you think it is."
 fi
-./scripts/check-dist.sh "$DIST" || die "a staged artifact belongs to a different guest — do NOT publish"
+# The Windows host never runs here; check-dist.sh checks its bytes (the embedded guest's sha256 and the id). An
+# operator who ran it may pass HAZYNC_ATTEST_${WIN//[^A-Za-z0-9]/_}=<what host.exe method-id printed>, preferred.
+export HAZYNC_GUEST_ELF_STAGED="$LZ_ELF"
+./scripts/check-dist.sh "$DIST" || die "a staged artifact belongs to a different guest, or is unattested — do NOT publish"
+
+# An embedded id says which image a verifier is pinned to, not that it works: run the staged verifiers
+# (CLI, WASM through its glue, and each host that runs here) on a real receipt and on tampered ones.
+./scripts/check-release-verifiers.sh "$DIST" || die "a staged verifier accepted a bad proof or refused a real one — do NOT publish"
+
+echo "  staged assets (sha256):"
+( cd "$DIST" && sha256sum $BINS ) | sed 's/^/    /'
+
 
 if [ "$DRY" = 1 ]; then echo; echo "DRY RUN COMPLETE — preflight and artifacts are good for $TAG."; exit 0; fi
 
@@ -301,7 +350,18 @@ if ! gh release view "$TAG" >/dev/null 2>&1; then
     ( cd "$DIST" && gh release create "$TAG" --title "$TAG" --notes-file "$(cd - >/dev/null; realpath "$NOTES")" $BINS ) \
         || die "release create failed. The tag exists, so fix and re-run: this step is resumable."
 fi
-ok "release published with all assets attached"
+# Read back what the release ACTUALLY carries: the exact set, each the size of the staged file. A
+# create that uploads nothing, or some, must not be called published — that is how an empty release
+# went out once, in another project, with every later check passing.
+ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[]|"\(.name) \(.size)"' 2>/dev/null)
+for b in $BINS; do
+    got=$(printf '%s\n' "$ASSETS" | awk -v n="$b" '$1==n {print $2}')
+    [ "$got" = "$(stat -c%s "$DIST/$b")" ] || die "the release carries '$b' at ${got:-no} bytes, staged $(stat -c%s "$DIST/$b")"
+done
+n_assets=$(printf '%s\n' "$ASSETS" | grep -c . || true)
+[ "$n_assets" = "$(echo $BINS | wc -w)" ] || die "the release carries $n_assets assets, want exactly $(echo $BINS | wc -w):
+$ASSETS"
+ok "release published with exactly the $(echo $BINS | wc -w) staged assets, sizes matching"
 
 fi   # end of the build-and-publish half, skipped by --verify-only
 
@@ -381,6 +441,21 @@ for b in $BINS hazync-verify-aarch64; do
     grep -q " $b\$" "$M" || die "$b is NOT in the signed manifest"
 done
 ok "manifest covers all $(( $(echo $BINS | wc -w) + 1 )) binaries"
+# ...and signs the bytes that were staged and checked here, not merely their names.
+if [ "$VERIFY_ONLY" = 0 ]; then
+    for b in $BINS; do
+        [ "$(awk -v n="$b" '$2==n {print $1}' "$M")" = "$(sha256sum "$DIST/$b" | cut -c1-64)" ] \
+            || die "the manifest's sha256 for $b is not the staged file's"
+    done
+    ok "manifest hashes equal the staged files'"
+fi
+# The final release: EXACTLY scripts/release-assets.txt, every line, nothing more.
+FINAL=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null | sort)
+WANT=$(printf '%s\n' $BINS $SIGNED_EXTRA | sort)
+[ "$FINAL" = "$WANT" ] || die "the release's assets are not exactly scripts/release-assets.txt:
+       on the release: $(echo $FINAL)
+       wanted:         $(echo $WANT)"
+ok "release carries exactly the $(echo $WANT | wc -w) assets of scripts/release-assets.txt"
 gpg --verify "$A" "$M" 2>&1 | grep -q "Good signature" \
     && ok "PGP: good signature" \
     || echo "  --   could not verify PGP locally (is the maintainer key imported?)"
@@ -411,11 +486,12 @@ echo; echo "DONE — $TAG is published, signed, verified, and latest."
 echo "https://github.com/$REPO_SLUG/releases/tag/$TAG"
 echo
 echo "NOT done automatically, because it needs a machine with the hardware:"
-echo "  * smoke-test the CUDA host where a real GPU exists (method-id, regress, prove-block)"
+echo "  * prove on the CUDA hosts where a real GPU exists (method-id was attested before publishing):"
+echo "        host libzync-prove-range 1 1 testdata/libzync/mainnet genesis out && host libzync-verify out/block_1.rcpt"
 echo "  * repoint any running provers at this guest — run-workers.sh only checks its id at STARTUP,"
 echo "    so loops started before a re-baseline keep proving into rejections forever (#99)"
-echo "  * ⛔ CUT OVER THE BROWSER VERIFIER (docs/history/RELEASE_PROCESS.md §3) if hazync-verify.wasm changed."
-echo "    The 'deployed-verifier' job above is IGNORED by this script precisely because it tests the"
-echo "    LIVE SITE and is red until you do this — so a green release is compatible with a stale site."
-echo "    On 2026-09-19 that gap left hazync.org serving the PREVIOUS release's module. Check with:"
-echo "        ./scripts/check-deployed-verifier.sh     # over the wire; the only proof it landed"
+echo "  * ⛔ CUT OVER THE BROWSER VERIFIER if hazync-verify.wasm changed: serve this release's"
+echo "    hazync-verify.wasm AND hazync-verify.js together (the glue's API is the libzync one, not the"
+echo "    CORE module's), and update the page's pinned sha256 of the wasm."
+echo "    ⚠ scripts/check-deployed-verifier.sh still drives the CORE module (history/verifier-wasm/), so it"
+echo "    cannot confirm this cutover until it is rewritten for the libzync glue."

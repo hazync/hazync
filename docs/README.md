@@ -3,7 +3,8 @@
 Bitcoin Core's own consensus code, executed inside a RISC Zero zkVM, so that a block's validity can be **proven once
 and verified by anyone** without re-executing it. **libzync** (`libzync/`, the guest in `prover/methods/guest`) is
 Hazync's core: published images mainnet `863c9ce3`, signet `73b62530` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)).
-It replaced the original per-signature CORE guest (`37987b85`, documented in [`history/`](history/README.md)).
+It replaced the original per-signature CORE guest (`37987b85`, documented in [`history/`](history/README.md), its code in
+[`../history/`](../history/README.md)).
 
 ## libzync: what it proves and how
 
@@ -25,7 +26,7 @@ It replaced the original per-signature CORE guest (`37987b85`, documented in [`h
 |---|---|
 | [`COORDINATOR.md`](COORDINATOR.md) | the coordinator: running your own, sponsorship, the sponsor bot |
 | [`COORDINATOR_REFERENCE.md`](COORDINATOR_REFERENCE.md) | every coordinator route and setting, and the worker CLI, **generated from the code** (`scripts/gen-coordinator-reference.py`) |
-| [`OPERATIONS.md`](OPERATIONS.md) | topology and settings, proving, running provers, the GPU fleet; states the current release (still written for the CORE fleet: being revised) |
+| [`OPERATIONS.md`](OPERATIONS.md) | topology and settings, proving, running provers, the GPU fleet; states the current release and the canonical id (written for the CORE fleet; this tree's libzync host commands are in [`../prover/README.md`](../prover/README.md)) |
 | [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) | builds, image ids and reproducibility, cutting a release |
 | [`../SECURITY.md`](../SECURITY.md) | security policy, reporting, review status, where review is worth most |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | contributing GPU time |
@@ -35,7 +36,7 @@ It replaced the original per-signature CORE guest (`37987b85`, documented in [`h
 | | |
 |---|---|
 | [`history/README.md`](history/README.md) | the development record, with its known-stale figures |
-| [`history/OVERVIEW_CORE.md`](history/OVERVIEW_CORE.md), [`history/SPEC_CORE.md`](history/SPEC_CORE.md), [`history/SECURITY_MODEL_CORE.md`](history/SECURITY_MODEL_CORE.md), [`history/SECURITY_CORE.md`](history/SECURITY_CORE.md) | the original CORE system: overview and glossary, its normative spec (`scripts/check-spec.sh` still checks it), threat model, and review status (moved 2026-11-08) |
+| [`history/OVERVIEW_CORE.md`](history/OVERVIEW_CORE.md), [`history/SPEC_CORE.md`](history/SPEC_CORE.md), [`history/SECURITY_MODEL_CORE.md`](history/SECURITY_MODEL_CORE.md), [`history/SECURITY_CORE.md`](history/SECURITY_CORE.md) | the original CORE system: overview and glossary, its normative spec (checked by `history/scripts/check-spec.sh` while CORE was current), threat model, and review status (moved 2026-11-08) |
 | `history/*.md` | the 23 September-era documents merged in 2026-11-06, unchanged (e.g. `history/SOUNDNESS.md`, `history/PROVING.md`), plus the dated `STATUS`, the v0.21.7 pre-release trial, the field-backend and lift-x design notes |
 | [`history/releases/`](history/releases/) | copies of release bodies |
 | [`history/SECURITY_AUDIT_LOG.md`](history/SECURITY_AUDIT_LOG.md) | the round-by-round security review record, indexed from `../SECURITY.md` |

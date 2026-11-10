@@ -80,6 +80,17 @@ def method_prefix(repo):
     raise SystemExit("could not read a 64-hex METHOD_ID from reproduce/METHOD_ID")
 
 
+def id_prefix(a):
+    """The guest id namespacing proofs and the spine: --method-id when given (a coordinator whose host pins another
+    image than the checkout's reproduce/METHOD_ID, e.g. the libzync board beside the original one), else the repo's."""
+    if a.method_id:
+        tok = a.method_id.strip().lower()
+        if len(tok) != 64 or any(ch not in "0123456789abcdef" for ch in tok):
+            raise SystemExit("--method-id must be a 64-hex image id")
+        return tok[:8]
+    return method_prefix(a.repo)
+
+
 def store_name(endpoint):
     """How log lines name the store: R2, B2, or the endpoint's host."""
     if "r2.cloudflarestorage.com" in endpoint:
@@ -705,6 +716,8 @@ def main(argv=None, client=None):
     ap.add_argument("--db", default=os.environ.get("COORD_DB", "/var/lib/hazync/coordinator.db"),
                     help="ledger: the live coordinator database")
     ap.add_argument("--repo", default=os.environ.get("HZ_REPO", "/opt/hazync"))
+    ap.add_argument("--method-id", default=os.environ.get("HZ_METHOD_ID", ""),
+                    help="proofs, spine: namespace by this 64-hex image id instead of the repo's reproduce/METHOD_ID")
     ap.add_argument("--min-age", type=float, default=120, help="skip proofs modified in the last N seconds")
     ap.add_argument("--threads", type=int, default=16)
     ap.add_argument("--bwlimit-mbit", type=float, default=64)
@@ -722,7 +735,7 @@ def main(argv=None, client=None):
     where = store_name(endpoint)
 
     if a.mode == "spine":
-        return spine_copy(s3, bucket, f"spine-{method_prefix(a.repo)}/", a.spine, a.verify, where)
+        return spine_copy(s3, bucket, f"spine-{id_prefix(a)}/", a.spine, a.verify, where)
 
     if a.mode == "checkpoints":
         # ⛔ NOT namespaced by guest id, unlike proofs and the spine. A rung is bridge state — the UTXO
@@ -744,7 +757,7 @@ def main(argv=None, client=None):
             raise SystemExit("keys needs --pubkey and --recipient")
         return keys_copy(s3, bucket, "sponsor-keys/", a.identities, a.pubkey, a.recipient, where)
 
-    prefix = f"proofs-{method_prefix(a.repo)}/"
+    prefix = f"proofs-{id_prefix(a)}/"
     t0 = time.monotonic()
     remote = list_remote(s3, bucket, prefix)
     local, young = list_local(a.proofs, a.min_age, time.time())

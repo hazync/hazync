@@ -1,0 +1,22 @@
+libzync board, end to end on the coordinator box (hazync-proof), REAL proving (not dev mode), 2026-11-09
+host: /opt/hazync-lz/bin/host, METHOD_ID 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5
+coordinator: hazync-lz-coordinator (server.py at afdb02a, HAZYNC_LIBZYNC=1, 127.0.0.1:8900)
+leaf bundles: libzync-board-prep from genesis, 1..5000 written then paused at HAZYNC_PREP_LEAF_WINDOW=5000
+worker: the stock coordinator/hazync, CPU proving (16 cores, Nice=19 beside the main prep run)
+
+worker id EXIT=0
+prove 1 EXIT=0 in 400 s
+submit 1 EXIT=0: the coordinator re-verified the proof and put it on the board
+prove 2 EXIT=0 in 405 s
+submit 2 EXIT=0: re-verified, on the board
+run 3-4 EXIT=0 in 946 s: leaves 3 and 4 proved and submitted, folded (a libzync join, 133 s) into 3-4, re-verified
+/api/meta: method_id 863c9ce3..., frontier 4
+
+negatives (verify-any, the coordinator's check):
+  2.bin as starting at 2      RANGE-OK lo=2 hi=2
+  2.bin as starting at 1      EXIT=1 REJECT the receipt is not anchored on the state before block 1
+  3-4.bin as starting at 4    EXIT=1 REJECT the receipt is not anchored on the state before block 4
+  3-4.bin as starting at 3    RANGE-OK lo=3 hi=4
+
+leaf pruner (hazync-lz-prune-leaves.sh) against a stub coordinator: frontier 2000 margin 1000 deletes leaves <= 1000
+only (and skips a malformed name); frontier 0: nothing; no frontier field: exit 2; unreachable: exit 2

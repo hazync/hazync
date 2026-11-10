@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Build a canonical release `host` binary (CPU or CUDA) in a fixed-path container.
+# Build a release `host` binary (CPU or CUDA): the libzync host, embedding the PUBLISHED mainnet image.
 #
 #   ./prover/build-release.sh cpu          # -> hazync-host-x86_64-linux-gnu
 #   ./prover/build-release.sh cuda         # -> hazync-host-x86_64-linux-gnu-cuda
 #
 # Env: REPO (default: this checkout) · OUT (default: ./dist) · IMAGE (default: ubuntu:22.04)
+#      HAZYNC_GUEST_ELF (optional): an already-built copy of the published mainnet guest ELF. Without
+#      it the ELF is built here by reproduce/libzync.Dockerfile (the reproducible build; hours cold).
+#      Either way its sha256 must equal the `libzync-product mainnet` line of reproduce/LIBZYNC_IDS.
 #
-# Why a container, and why these exact settings — each one is load-bearing:
+# THE GUEST IS NOT BUILT BY THIS SCRIPT. Since #676 the host is libzync-only and embeds a prebuilt
+# guest (prover/methods/build.rs, HAZYNC_GUEST_ELF + HAZYNC_GUEST_PIN_DIR). The image id depends on
+# absolute build paths, so the guest is built once, in reproduce/libzync.Dockerfile where every path
+# is fixed, and every host embeds those bytes; build.rs refuses any ELF whose sha256 or image id is
+# not the pinned one. So the host's own build location no longer moves the id. What still matters:
 #
-#   HOME=/root       The guest image id absorbs absolute paths from $HOME/.cargo. Build under your own
-#                    home directory and you get a DIFFERENT (not wrong, just non-canonical) METHOD_ID
-#                    that will not verify published proofs. The repo path does NOT matter — only $HOME.
-#                    reproduce/Dockerfile exists to pin exactly this.
 #   ubuntu:22.04     glibc 2.34, so the binary runs on 22.04+/Debian 12+. A 24.04 build needs glibc 2.39.
 #   CUDA 12          risc0-sys 1.5.0's kernels DO NOT COMPILE under CUDA 13 (`nvcc -arch=native` fails).
 #                    The container brings its own CUDA 12 toolchain, so a CUDA-13 host is fine.
@@ -105,6 +108,48 @@ fi
 mkdir -p "$OUT"
 
 [ -x "$REPO/provision-vps.sh" ] || { echo "no provision-vps.sh under REPO=$REPO" >&2; exit 1; }
+
+# ---- the published libzync guest ----------------------------------------------------------------
+# reproduce/LIBZYNC_IDS is the record of the published images; reproduce/METHOD_ID must name the same
+# mainnet id (#676 re-baselined it), or the repo disagrees with itself about what is being shipped.
+LZ_LINE=$(grep '^libzync-product mainnet ' "$REPO/reproduce/LIBZYNC_IDS" || true)
+WANT_ID=$(echo "$LZ_LINE" | awk '{print $4}')
+WANT_SHA=$(echo "$LZ_LINE" | awk '{print $6}')
+[[ "$WANT_ID" =~ ^[0-9a-f]{64}$ && "$WANT_SHA" =~ ^[0-9a-f]{64}$ ]] \
+    || { echo "reproduce/LIBZYNC_IDS has no well-formed 'libzync-product mainnet' line" >&2; exit 1; }
+CANON_FILE=$(grep -vE '^[[:space:]]*#' "$REPO/reproduce/METHOD_ID" | grep -oE '[0-9a-f]{64}' | head -1)
+[ "$CANON_FILE" = "$WANT_ID" ] \
+    || { echo "reproduce/METHOD_ID (${CANON_FILE:0:8}) is not the published libzync mainnet id (${WANT_ID:0:8})" >&2; exit 1; }
+
+# Staged inside the MOUNTED repo so the container can read it, under dist/ (git-ignored, so the tree
+# stays clean) in a dot-directory (so check-dist.sh and the release upload never see it). NOT under
+# prover/target: the glibc preflight below may delete that whole directory.
+LZ_STAGE="$REPO/dist/.libzync-guest"
+mkdir -p "$LZ_STAGE/pins"
+sha_of() { sha256sum "$1" 2>/dev/null | cut -c1-64; }
+if [ "$(sha_of "$LZ_STAGE/mainnet.bin")" = "$WANT_SHA" ]; then
+    echo "  guest: the published mainnet ELF is already staged (${WANT_SHA:0:16}…)"
+elif [ -n "${HAZYNC_GUEST_ELF:-}" ]; then
+    [ "$(sha_of "$HAZYNC_GUEST_ELF")" = "$WANT_SHA" ] \
+        || { echo "HAZYNC_GUEST_ELF=$HAZYNC_GUEST_ELF is not the published mainnet ELF (want sha256 $WANT_SHA)" >&2; exit 1; }
+    cp "$HAZYNC_GUEST_ELF" "$LZ_STAGE/mainnet.bin"
+    echo "  guest: staged $HAZYNC_GUEST_ELF (sha256 matches reproduce/LIBZYNC_IDS)"
+else
+    # The reproducible build: the same container CI's libzync-* jobs and windows-prove.yml use. Its own
+    # RUN step prints both images' ids; the ELF it leaves in /root/libzync-elf is what we embed.
+    echo "  guest: building it with reproduce/libzync.Dockerfile (the published image's reproducible build)…"
+    docker build -t hazync-libzync-repro -f "$REPO/reproduce/libzync.Dockerfile" "$REPO"
+    cid=$(docker create hazync-libzync-repro)
+    docker cp "$cid:/root/libzync-elf/mainnet.bin" "$LZ_STAGE/mainnet.bin.tmp" || { docker rm -f "$cid" >/dev/null; exit 1; }
+    docker rm -f "$cid" >/dev/null
+    [ "$(sha_of "$LZ_STAGE/mainnet.bin.tmp")" = "$WANT_SHA" ] \
+        || { echo "the container built a mainnet ELF that is NOT the published one (want sha256 $WANT_SHA)" >&2; exit 1; }
+    mv -f "$LZ_STAGE/mainnet.bin.tmp" "$LZ_STAGE/mainnet.bin"
+fi
+# The pins build.rs checks the ELF against: the same three files scripts/libzync/ci/build-hosts.sh writes.
+echo "$WANT_ID"  > "$LZ_STAGE/pins/METHOD_ID"
+echo "$WANT_SHA" > "$LZ_STAGE/pins/GUEST_ELF_SHA256"
+echo "libzync=1 assumevalid=0 network=mainnet coinlog=1 trie=1 utxohash=1" > "$LZ_STAGE/pins/PROFILE"
 
 # Native SASS for every architecture we expect to meet, plus PTX for anything newer (hazync#178).
 #
@@ -211,6 +256,9 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
     -e "RECURSION_SRC_PATH=/hazync-zkvm/reproduce/vendor/recursion_zkr.zip" \
     -e "SKIP_GROTH16=${SKIP_GROTH16:-0}" ${RZUP_TIMEOUT:+-e "RZUP_TIMEOUT=$RZUP_TIMEOUT"} \
     -e "HAZYNC_PROVISION=$PROVISION_PHASE" \
+    -e HAZYNC_GUEST_ELF=/hazync-zkvm/dist/.libzync-guest/mainnet.bin \
+    -e HAZYNC_GUEST_PIN_DIR=/hazync-zkvm/dist/.libzync-guest/pins \
+    -e "WANT_ID=$WANT_ID" \
     ${CARGO_BUILD_JOBS:+-e "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"} \
     "${docker_args[@]}" "$IMAGE" bash -lc '
     set -e
@@ -266,16 +314,25 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
     if $H method-id >/dev/null 2>&1; then
       echo "=== METHOD_ID ==="; $H method-id
       echo "=== seg-po2 ==="; $H seg-po2
-      echo "=== smoke ==="; $H bundle-roundtrip-test; $H regress
+      # A host that runs must carry the published image AND accept a real proof of it: mainnet 1..200
+      # from genesis (below Core minimum chainwork, so the correct verdict is DEMO, exit 2). The CORE
+      # smoke tests (regress, bundle-roundtrip-test) drove guest modes this image refuses (#676).
+      [ "$($H method-id | head -1 | awk "{print \$NF}")" = "$WANT_ID" ] \
+        || { echo "=== FAIL: this host does not carry the published libzync image $WANT_ID ===" >&2; exit 1; }
+      echo "=== smoke: libzync-verify on a real proof of mainnet 1..200 ==="
+      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_863c9ce3.rcpt > /tmp/smoke.log 2>&1 || rc=$?
+      tail -1 /tmp/smoke.log
+      [ "$rc" = 2 ] && grep -q "^LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 200" /tmp/smoke.log \
+        || { echo "=== FAIL: the host did not accept a real proof of its own image (exit $rc) ===" >&2; exit 1; }
     else
       echo "=== NOT VERIFIED HERE: the binary cannot execute in this container ===" >&2
       echo "    Almost certainly no NVIDIA driver (libcuda.so.1) because --gpus all was unavailable." >&2
       echo "    The artifact is still produced and staged. Verify it where it can run:" >&2
-      echo "      hazync-host-x86_64-linux-gnu-cuda method-id      # want the canonical id" >&2
-      echo "      hazync-host-x86_64-linux-gnu-cuda regress" >&2
-      echo "    scripts/check-dist.sh accepts that result via HAZYNC_ATTEST_<artifact>=<id>." >&2
+      echo "      hazync-host-x86_64-linux-gnu-cuda method-id      # want $WANT_ID" >&2
+      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_200_863c9ce3.rcpt   # DEMO, exit 2" >&2
+      echo "    scripts/release.sh then needs HAZYNC_ATTEST_<artifact>=<id> from that run." >&2
     fi
-    # Stage r0vm into the MOUNTED repo so it survives this --rm container. `host snark-wrap` shells
+    # Stage r0vm into the MOUNTED repo so it survives this --rm container. `host libzync-snark-wrap` shells
     # out to it, and provision installs it in here where nothing on the host can reach it.
     # Do not guess rzup'"'"'s layout — it has moved between versions and both guesses (PATH, and
     # ~/.risc0/bin) came back empty on 2026-07-31 even though the log said r0vm was installed. Search.
@@ -301,7 +358,7 @@ mv -f "$OUT/.$asset.tmp.$$" "$OUT/$asset"
 # Leave the HOST able to SNARK-wrap, not just to prove.
 #
 # Everything above happens inside a --rm container, so a box that has only ever run this script ends
-# up with a working prover and no way to wrap a receipt. `host snark-wrap` shells out to the risc0
+# up with a working prover and no way to wrap a receipt. `host libzync-snark-wrap` shells out to the risc0
 # Groth16 prover IMAGE; without it the wrap dies with "Missing required risc0-groth16 rzup component",
 # which sends you looking for an rzup component when what is actually missing is a docker image — and
 # installing rzup needs rustc, which a container-only box also does not have. That dead end cost real
@@ -323,7 +380,7 @@ mv -f "$OUT/.$asset.tmp.$$" "$OUT/$asset"
 # "Missing required risc0-groth16 rzup component" — that is a SEPARATE, pre-existing problem with the
 # CUDA groth16 path, not something this fixes. Wrap with the CPU binary; both produce the same artifact
 # and wrapping is not the expensive step.
-# r0vm is the other half of being able to wrap: `host snark-wrap` shells out to it, and the container
+# r0vm is the other half of being able to wrap: `host libzync-snark-wrap` shells out to it, and the container
 # installs it somewhere only the container can see. Staged out above; installed here.
 # /usr/local/bin needs root, and this script is deliberately runnable as an ordinary user (it only
 # needs docker). Rather than warn and leave the box unable to wrap, fall back to a user-writable
@@ -340,12 +397,12 @@ if [ -f "$REPO/dist/r0vm" ]; then
                 echo "== installed r0vm -> $FALLBACK/r0vm (no root; /usr/local/bin needs sudo) =="
                 case ":$PATH:" in
                     *":$FALLBACK:"*) ;;
-                    *) echo "   NOTE: $FALLBACK is not on your PATH — \`host snark-wrap\` will not find r0vm."
+                    *) echo "   NOTE: $FALLBACK is not on your PATH — \`host libzync-snark-wrap\` will not find r0vm."
                        echo "         Add it:  export PATH=\"$FALLBACK:\$PATH\"" ;;
                 esac
             else
                 echo "   NOTE: r0vm not installed (tried /usr/local/bin and $FALLBACK)." >&2
-                echo "         Proving and verifying work regardless; only \`host snark-wrap\` needs it." >&2
+                echo "         Proving and verifying work regardless; only \`host libzync-snark-wrap\` needs it." >&2
                 echo "         To install:  sudo install -m 0755 $REPO/dist/r0vm /usr/local/bin/r0vm" >&2
             fi
         fi
@@ -360,15 +417,26 @@ if [ "${SKIP_GROTH16_PULL:-0}" != 1 ]; then
     else
         echo "== pulling the groth16 prover image so this box can snark-wrap (~5.2 GB) =="
         docker pull "$GROTH16_IMAGE" >/dev/null 2>&1 \
-            && echo "   ok — `host snark-wrap` will work on this box" \
-            || echo "   WARNING: pull failed. The prover binary is fine, but `host snark-wrap` will not run here." >&2
+            && echo "   ok — host libzync-snark-wrap will work on this box" \
+            || echo "   WARNING: pull failed. The prover binary is fine, but host libzync-snark-wrap will not run here." >&2
     fi
 fi
 
 echo
 echo "wrote $OUT/$asset"
-echo "  METHOD_ID : $("$OUT/$asset" method-id 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)"
-echo "  canonical : $(grep -vE '^\s*(#|$)' "$REPO/reproduce/METHOD_ID" | tr -d '[:space:]')"
+GOT_ID=$("$OUT/$asset" method-id 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1 || true)
+echo "  METHOD_ID : ${GOT_ID:-<cannot execute here>}"
+echo "  published : $WANT_ID  (reproduce/LIBZYNC_IDS, libzync-product mainnet)"
 echo "  seg-po2   : $("$OUT/$asset" seg-po2 2>/dev/null | tail -1)  (expected $want_po2)"
 echo
-echo "The two ids above MUST match, or this binary cannot verify published proofs."
+# A host that runs here and reports another id is wrong, not unverified: refuse it outright rather
+# than leave two lines for a reader to compare. One that cannot run (CUDA, no driver) is checked by
+# its bytes here, and scripts/release.sh will not publish it without an attestation from a GPU box.
+if [ -n "$GOT_ID" ]; then
+    [ "$GOT_ID" = "$WANT_ID" ] || { echo "FAIL $asset reports $GOT_ID, not the published $WANT_ID" >&2; exit 1; }
+    echo "ok: $asset carries the published libzync mainnet image."
+elif "$REPO/scripts/embeds-method-id.sh" "$OUT/$asset" "$WANT_ID"; then
+    echo "ok (bytes only): $asset embeds $WANT_ID once; it cannot run here, so attest it on a GPU box."
+else
+    echo "FAIL $asset neither runs here nor embeds $WANT_ID exactly once" >&2; exit 1
+fi

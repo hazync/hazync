@@ -172,8 +172,26 @@ fi
 # frontier. Block 170 proves in ~18 s on a GPU. Only on a box that has one; SKIP_GPU_SMOKE=1 to opt out.
 if [ -z "${SKIP_GPU_SMOKE:-}" ] && command -v nvidia-smi >/dev/null && nvidia-smi -L 2>/dev/null | grep -q '^GPU'; then
     smoke_dir=$(mktemp -d)
-    if (cd "$smoke_dir" && timeout 600 "$HAZYNC_HOST" prove-block > smoke.log 2>&1) && grep -q "VERIFIED" "$smoke_dir/smoke.log"; then
-        echo "gpu smoke       : ok ($(grep -oE 'PROVED in [0-9.]+s' "$smoke_dir/smoke.log" | head -1))"
+    # A libzync board serves block 1 as a leaf bundle (LZLEAF magic) and a libzync host has no `prove-block`
+    # fixtures: prove that leaf as a worker would and require block 1's RANGE-OK, the receipt verified against
+    # genesis. Any other board (or no answer) keeps the original host's fixture prove of block 170.
+    if curl -sf --max-time 30 "$COORD_URL/api/witness/1" -o "$smoke_dir/leaf_1.bin" 2>/dev/null \
+       && [ "$(head -c 6 "$smoke_dir/leaf_1.bin")" = LZLEAF ]; then
+        smoke_ok() {
+            (cd "$smoke_dir" && export HAZYNC_BRIDGE_OUT="$smoke_dir" \
+             && timeout 600 "$HAZYNC_HOST" prove-range-bridge 1 > smoke.log 2>&1 \
+             && "$HAZYNC_HOST" verify-any range_1.bin 1 >> smoke.log 2>&1) && grep -q "^RANGE-OK lo=1 hi=1 " "$smoke_dir/smoke.log"
+        }
+        smoke_what="proved and verified block 1 (libzync)"
+    else
+        smoke_ok() {
+            (cd "$smoke_dir" && timeout 600 "$HAZYNC_HOST" prove-block > smoke.log 2>&1) && grep -q "VERIFIED" "$smoke_dir/smoke.log"
+        }
+        smoke_what="$(grep -oE 'PROVED in [0-9.]+s' "$smoke_dir/smoke.log" 2>/dev/null | head -1)"
+    fi
+    if smoke_ok; then
+        [ -n "$smoke_what" ] || smoke_what="$(grep -oE 'PROVED in [0-9.]+s' "$smoke_dir/smoke.log" | head -1)"
+        echo "gpu smoke       : ok ($smoke_what)"
     else
         echo >&2
         echo "FATAL: this box has a GPU but cannot prove on it -- nothing was claimed." >&2

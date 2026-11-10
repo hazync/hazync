@@ -33,8 +33,8 @@ echo "canonical METHOD_ID: $CANON  (short $CANON8)"
 # Superseded ids are the documented lineage inside the comments — legitimate to mention historically.
 KNOWN=$(grep -oE '\b[0-9a-f]{8}\b' "$CANON_FILE" | sort -u)
 
-# DATED HISTORICAL RECORDS are exempt from the currency checks (7 and 8), and rebaseline-id.sh never
-# rewrites them either (its own HISTORY_RE also adds history/prover/evidence and prover/testdata). A dated record states what was true when it was written:
+# DATED HISTORICAL RECORDS are exempt from the currency checks (7 and 8), and the CORE design's rebaseline-id.sh
+# (now history/scripts/) never rewrote them either. A dated record states what was true when it was written:
 # an overnight log naming that night's container id, a release body naming the id it shipped. Demanding the
 # canonical id there does not fix a reference, it falsifies the record — and demanding it is exactly how
 # one got falsified: the b161735a re-baseline rewrote the id the 2026-08-03 overnight log had measured
@@ -129,23 +129,6 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$(git tag -l 'v*
 else
     note "skip release-vs-tag check (no tags in this clone)"
 fi
-
-# The standalone verifier EMBEDS the guest image id as a literal — it deliberately does not depend on
-# the `methods` crate, because that would drag in the guest build and defeat the point of a 1.6 MB
-# artifact. That literal is invisible to the doc scan above, so without this a re-baseline would ship a
-# verifier that silently rejects every current proof.
-for V in verifier/src/lib.rs verifier-ffi/src/lib.rs; do
-if [ -f "$V" ]; then
-    emb=$(grep -oE 'METHOD_ID_HEX: &str = "[0-9a-f]{64}"' "$V" | grep -oE '[0-9a-f]{64}')
-    if [ -z "$emb" ]; then
-        bad "$V has no METHOD_ID_HEX literal to check"
-    elif [ "$emb" != "$CANON" ]; then
-        bad "$V embeds ${emb:0:8}… but canonical is ${CANON:0:8}… — it would reject every current proof"
-    else
-        note "ok   $V embeds the canonical id"
-    fi
-fi
-done
 
 # ── 6. guest-dependent BINARIES must not be committed, and CI must verify the one it builds ───────
 #

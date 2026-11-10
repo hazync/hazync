@@ -26,3 +26,10 @@ for net in mainnet signet; do
   cp target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin /root/libzync-elf/$net.bin   # what a published proof must run
   echo "$kind $net METHOD_ID $id GUEST_ELF_SHA256 $elf"
 done
+# The header-chain zyncAPP (ROADMAP K1 / N3): a separate image, never the core's. Pure Rust, built by the same pinned
+# guest toolchain; no HAZYNC_* variable reaches it (unset above).
+cargo build --profile fasthost -p zyncapp-host -j"$(nproc)" >&2
+hid=$(target/fasthost/zyncapp id | awk '/^ZYNCAPP_HEADERS_ID /{print $2}')
+helf=target/riscv-guest/zyncapp-methods/zyncapp-headers/riscv32im-risc0-zkvm-elf/release/zyncapp-headers.bin
+cp "$helf" /root/libzync-elf/zyncapp-headers.bin
+echo "zyncapp-headers mainnet METHOD_ID $hid GUEST_ELF_SHA256 $(sha256sum "$helf" | cut -c1-64)"

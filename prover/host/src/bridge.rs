@@ -1,17 +1,16 @@
 //! The bridge: walks the node's chain into per-block bundles, its checkpoint, the undo log and reorg
-//! handling, plus the UTXO snapshot commands (dump-snapshot, snapshot-emit, snapshot-verify).
+//! handling, plus the UTXO snapshot commands (dump-snapshot, snapshot-emit). The CORE design's bridge, kept until the board switches.
 
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash as _;
 use hazync_coinbase_smt::Smt;
 use hazync_utreexo::{Forest, coin_leaf};
-use methods::METHOD_ID;
 use serde::{Deserialize, Serialize};
-use crate::{Bundle, GENESIS_BITS, GENESIS_TIME, KIND_RANGE, RangeState, build_block_carried, hex, hx,
-    normalize_host, out_spendable, push_mtp, smt_advance, verify_receipt_ex, wire_stump};
+use crate::{Bundle, GENESIS_BITS, GENESIS_TIME, build_block_carried, hex, hx, out_spendable, push_mtp, smt_advance, wire_stump};
 
 // ============================================================================================
-// G4 — proven assumeutxo: bind a UTXO snapshot to a range proof (#42)
+// G4 — proven assumeutxo: bind a UTXO snapshot to a range proof (#42). CORE only: the binding check
+// (snapshot-verify) went with the CORE range proof; snapshot-emit remains with the CORE bridge.
 // ============================================================================================
 //
 // Core already ships `assumeutxo`: a node adopts a UTXO set at height N on the authority of a hash
@@ -87,76 +86,6 @@ pub(crate) fn snapshot_emit_cmd(dir: &str, out: &str) {
     std::fs::write(out, &buf).expect("write snapshot");
     println!("wrote {out}: height {}, {} coins, {} bytes (forest-position order)",
              st.height, st.leaves.len(), buf.len());
-}
-
-/// MTP(h-1) from the header chain — the value the leaf commits. Cached, because a snapshot has many
-/// coins per height and each miss is 22 RPC round-trips.
-pub(crate) fn mtp_at(coin_height: u32) -> u32 {
-    use std::sync::Mutex;
-    static CACHE: Mutex<Option<std::collections::HashMap<u32, u32>>> = Mutex::new(None);
-    let mut g = CACHE.lock().unwrap();
-    let c = g.get_or_insert_with(std::collections::HashMap::new);
-    if let Some(v) = c.get(&coin_height) { return *v; }
-    let lo = coin_height.saturating_sub(11);
-    let mut ts: Vec<u32> = Vec::new();
-    for h in lo..coin_height {
-        let hash = bcli(&["getblockhash", &h.to_string()]);
-        let hdr = bcli(&["getblockheader", &hash]);
-        let t = hdr.split("\"time\":").nth(1).and_then(|x| x.split(|ch: char| !ch.is_ascii_digit()).find(|x| !x.is_empty()))
-            .and_then(|x| x.parse::<u32>().ok()).expect("header time");
-        ts.push(t);
-    }
-    ts.sort_unstable();
-    let m = ts[ts.len() / 2];
-    c.insert(coin_height, m);
-    m
-}
-
-pub(crate) fn snapshot_verify_cmd(snap: &str, proof: &str) {
-    let b = std::fs::read(snap).expect("read snapshot");
-    assert!(b.len() > 20 && &b[..8] == SNAP_MAGIC, "not a HZSNAP01 snapshot");
-    let height = u32::from_le_bytes(b[8..12].try_into().unwrap());
-    let count = u64::from_le_bytes(b[12..20].try_into().unwrap()) as usize;
-
-    // Rebuild every leaf FROM THE SNAPSHOT. Taking them from the bridge would only prove the bridge
-    // agrees with itself; the whole point is to check the snapshot independently.
-    let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(count);
-    let mut p = 20usize;
-    for _ in 0..count {
-        let txid: [u8; 32] = b[p..p + 32].try_into().unwrap(); p += 32;
-        let vout = u32::from_le_bytes(b[p..p + 4].try_into().unwrap()); p += 4;
-        let value = u64::from_le_bytes(b[p..p + 8].try_into().unwrap()); p += 8;
-        let sl = u32::from_le_bytes(b[p..p + 4].try_into().unwrap()) as usize; p += 4;
-        let spk = b[p..p + sl].to_vec(); p += sl;
-        let ch = u32::from_le_bytes(b[p..p + 4].try_into().unwrap()); p += 4;
-        let cb = b[p] != 0; p += 1;
-        leaves.push(coin_leaf(&txid, vout, value, &spk, ch, cb, mtp_at(ch)));
-    }
-    assert!(p == b.len(), "trailing bytes in snapshot: parsed {p} of {}", b.len());
-
-    let forest = Forest::from_leaves(leaves);
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(proof).expect("proof")).unwrap();
-    let claimed = r.journal.decode::<RangeState>().ok().map(|rs| rs.self_id);
-    verify_receipt_ex(&r, claimed);
-    let rs: RangeState = r.journal.decode().unwrap();
-    assert!(rs.self_id == METHOD_ID, "proof was made by a different guest");
-    assert!(rs.kind == KIND_RANGE, "receipt is not a RangeState");
-
-    let ok_h = rs.hi == height;
-    let ok_n = rs.out_leaves == forest.leaves.len() as u64;
-    let ok_r = normalize_host(rs.out_roots.clone()) == normalize_host(forest.roots());
-    println!("snapshot height {height}, {} coins", forest.leaves.len());
-    println!("  proof range        [{}..{}]", rs.lo, rs.hi);
-    println!("  height matches     {ok_h}");
-    println!("  leaf count matches {ok_n}   (snapshot {} vs proof {})", forest.leaves.len(), rs.out_leaves);
-    println!("  ROOTS match        {ok_r}");
-    if ok_h && ok_n && ok_r {
-        println!(">>> SNAPSHOT BOUND TO PROOF — this is the UTXO set the proof attests to.");
-        println!("    A node may adopt it at height {height} and validate from {} onward.", height + 1);
-    } else {
-        eprintln!(">>> NOT BOUND — the snapshot is not the set this proof commits to.");
-        std::process::exit(1);
-    }
 }
 
 pub(crate) fn bcli(args: &[&str]) -> String {
