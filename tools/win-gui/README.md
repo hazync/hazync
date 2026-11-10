@@ -40,7 +40,7 @@ the machine tests, the technical log, paths, the CPU/GPU choice and your key.
 | | state |
 |---|---|
 | Windows CUDA build compiles, embeds the canonical guest | ✅ #631/#644 |
-| `host.exe method-id` prints the canonical `37987b85…` on real hardware | ✅ measured 2026-10-04, GTX 1050 Ti |
+| `host.exe method-id` prints the then-canonical CORE id `37987b85…` (since superseded) on real hardware | ✅ measured 2026-10-04, GTX 1050 Ti |
 | `host.exe regress` — full consensus path | ✅ measured, same machine |
 | **CPU** build proves a block on Windows | ✅ measured |
 | This GUI opens and works on Windows | ✅ **tested on Windows Python 3.13** |

@@ -298,7 +298,7 @@ mod tests {
 /// HAZYNC_PREP_CHECK=<run dir>: each state's journal must be byte-identical to that run's `state_<h>.json` (a proved
 /// chain); the first difference is named and the command fails.
 pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str) {
-    assert!(methods::LIBZYNC && methods::COINLOG && methods::TRIE, "libzync-prep needs the product image (coin log + trie)");
+    assert!(methods::COINLOG && methods::TRIE, "libzync-prep needs the product image (coin log + trie)");
     std::fs::create_dir_all(out).unwrap();
     crate::lz::lock_run_dirs(out);
     let mut prev: ChainState = if anchor_path == "genesis" { crate::genesis_anchor() } else {

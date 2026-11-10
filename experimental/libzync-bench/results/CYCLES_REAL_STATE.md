@@ -8,7 +8,7 @@ dollars are measured separately, on one card type (paper plan).
   `libzync-prep` from genesis on the coordinator box (REAL coin log, trie and BIP30 tree at h-1; the guest checks every
   witness against that state). One chunk per block (`HAZYNC_CHUNKS=1`); signature hints collected first, as on a
   prover. `LZ_STATS` lines (prover/host/src/lz.rs).
-- **CORE** (the canonical guest 37987b85, the published host `/usr/local/bin/hazync-host` on the coordinator box):
+- **CORE** (the canonical guest 37987b85, since superseded, the published host `/usr/local/bin/hazync-host` on the coordinator box):
   `prove-range-bridge h` from the original bridge's `bundle_<h>.json`, dev mode; the segment count from its
   "executed, N segments at po2 20" line (it then stops at assembly, which dev mode cannot do). CORE bundles exist for
   1..50,000, 126,433..418,268 and 967,500..974,932 only, so the head-to-head is limited to those ranges.

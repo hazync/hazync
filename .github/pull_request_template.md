@@ -10,7 +10,8 @@
 - [ ] Touches nothing the guest compiles: no change under `prover/methods/`, and none in a crate or
       `#[path]`-included file listed by `scripts/check-guest-inputs.sh` / `reproduce/METHOD_ID`
 - [ ] Changes the guest. Even a comment moves the id. Say why this is worth a re-baseline and
-      update `reproduce/METHOD_ID` (`scripts/rebaseline-id.sh`, `scripts/lineage.sh --check`)
+      re-pin the published images (`reproduce/pin-libzync-ids.py`, which writes `reproduce/LIBZYNC_IDS`),
+      then `reproduce/METHOD_ID`, `reproduce/GUEST_ELF_SHA256` and `scripts/lineage.sh --write`
 
 ## Docs
 - [ ] Docs updated, or not needed because:

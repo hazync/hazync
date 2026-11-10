@@ -43,8 +43,14 @@ while read -r manifest; do
   # paths. That is a stronger check on our two edits than upstream's unit tests would be.
   case "$d" in
     vendor/*) ok "$d skipped — vendored upstream, not our test surface (our edits are gated by receipt equality)"; continue ;;
+    # history/ is the record of the retired CORE design (history/README.md): kept, not built or run.
+    history/*) ok "$d skipped — history/, the retired CORE design's record, not built"; continue ;;
   esac
   if grep -rqs -- "--manifest-path $d/Cargo.toml" "$WF"; then ok "$d has tests and CI runs them"
+  # prover/host's tests need a libzync guest, so they run inside the reproducible container, from
+  # scripts/libzync/ci/build-hosts.sh (named by the libzync-hosts job), as `cargo test -p host`.
+  elif [ "$d" = prover/host ] && grep -qs 'cargo test .*-p host' scripts/libzync/ci/build-hosts.sh \
+       && grep -rqs 'scripts/libzync/ci/build-hosts.sh' "$WF"; then ok "$d has tests and CI runs them (build-hosts.sh, libzync mode)"
   else bad "$d contains #[test] but no workflow runs it — a rotting test surface"; fi
 done < <(git ls-files '*/Cargo.toml' | grep -v '/fuzz/Cargo.toml$')
 
@@ -88,8 +94,6 @@ echo "== 4. fuzz positive controls are still able to detect their bug class =="
 # already exits 1 when it finds NOTHING; assert CI actually runs it in that mode.
 if grep -rqs 'seam_fuzz.py --control' "$WF"; then ok "seam_fuzz control runs in CI"
 else bad "seam_fuzz.py --control is not in CI — nothing proves the seam fuzzer can still catch H9"; fi
-if [ -f audit-fuzz/seeds/sec2-position-crash.bin ]; then ok "SEC-2 control seed is committed"
-else bad "audit-fuzz/seeds/sec2-position-crash.bin missing — the proof the accumulator fuzzer detects SEC-2"; fi
 
 echo "== 5. block fixtures carry the fields the host needs =="
 # Without coin_height a fixture cannot express an in-block spend, and the block still proves VALID —

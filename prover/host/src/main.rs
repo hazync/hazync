@@ -4,13 +4,12 @@ use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
 use hazync_utreexo::{coin_leaf, hash_leaf, Forest, Hash};
 use hazync_coinbase_smt::{Proof as SmtProof, Smt};
 use methods::{METHOD_ELF, METHOD_ID};
-use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts};
+use risc0_zkvm::{ExecutorEnv, ProverOpts};
 use serde::{Deserialize, Serialize};
 
-// The guest's actual script-flag schedule, compiled here too so `script-flags-test` exercises the real
-// code (no drifting copy). Same file the guest builds as `mod script_flags`.
-#[path = "../../methods/guest/src/script_flags.rs"]
-mod script_flags;
+// The host is libzync-only: the CORE design (a per-signature guest, image 37987b85) is in history/, and this host
+// writes only the libzync input streams. Refuse to build against any other guest.
+const _: () = assert!(methods::LIBZYNC, "prover/host is libzync-only: build it with HAZYNC_LIBZYNC=1 (history/README.md)");
 
 mod bench;
 mod bridge;
@@ -22,17 +21,14 @@ mod verify;
 mod prep;
 mod lz_coord;
 
-use bench::{adversarial, bundle_roundtrip_test, check_bip30, check_full, check_ibd, chunk_profile,
-    exec_time_cmd, prove_chain_bad, regress, script_flags_test, segment_mem_cmd, segment_size_cmd,
-    test_locks_cmd, test_merkle_cmd, vb_stages_cmd};
-use bridge::{cmd_bridge, cmd_dump_snapshot, snapshot_emit_cmd, snapshot_verify_cmd};
+use bench::{chunk_profile, exec_time_cmd, segment_mem_cmd, segment_size_cmd, test_locks_cmd, test_merkle_cmd};
+use bridge::{cmd_bridge, cmd_dump_snapshot, snapshot_emit_cmd};
 use chunks::{chunk_block_hash, chunk_bounds, nchunks_env, write_chunk_inputs};
 use lz::{agg_chunks, agg_exec_fake, execute_chunks_parallel, libzync_hints_cmd, libzync_snark_wrap_cmd,
     libzync_verify_cmd, libzync_verify_fail_hook, lz_execute, lz_prove_range_cmd};
 use seg::{seg_connect_cmd, seg_coordinate_cmd, seg_coordinate_tree_cmd, seg_distribute_cmd, seg_join_cmd,
     seg_prove_one_cmd, seg_serve_cmd, seg_work_cmd};
-use verify::{assert_genesis_in_boundary, receipt_digest_cmd, verify_any_cmd, verify_chain_cmd,
-    verify_range_cmd, verify_snark_cmd};
+use verify::receipt_digest_cmd;
 
 // A byte blob (de)serialised via risc0 serde's PACKED byte path (serialize_bytes → 4 bytes/word) instead
 // of the default one-word-per-byte. Must match the guest's PackedBytes. Wire encoding only. Used for the
@@ -55,7 +51,6 @@ impl<'de> serde::Deserialize<'de> for PackedBytes {
 /// Mirrors the guest's CHAIN_STATE_VERSION.
 const CHAIN_STATE_VERSION: u32 = 2;
 const KIND_CHAIN: u32 = 0xC4A1_0012;
-const KIND_RANGE: u32 = 0xC4A1_0006;
 /// libzync agg-lite: the block's median-time-past, set by `build_full` for `write_chunk_inputs`.
 // Per block, not per process: `libzync-prove-range` runs many blocks in one process.
 static HZ_BLOCK_MTP: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
@@ -279,24 +274,6 @@ fn demo_block_forest(s: &mut ChainState, warn: bool) {
     s.block_roots = (0..64 - n.leading_zeros()).map(|i| ((n >> i) & 1 == 1).then(|| sha256_host(&[b"hazync demo block forest root", &[i as u8][..]].concat()))).collect();
     if warn { eprintln!("WARNING: anchor at {} has no block forest; using PLACEHOLDER roots (demonstration only)", s.height); }
 }
-#[derive(Serialize, Deserialize)]
-struct SpendCheck { raw_tx: Vec<u8>, prevouts: Vec<u8>, block_height: u32 }
-#[derive(Serialize, Deserialize)]
-struct SpendResult { script: i32, sigops: i64, tx_check: i32, flags: u32 }
-
-// ---- Real mainnet blocks 170 (coinbase + first Bitcoin tx) → 171 → 172 (coinbase-only). ----
-const CB170: &str = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0102ffffffff0100f2052a01000000434104d46c4968bde02899d2aa0963367c7a6ce34eec332b32e42e5f3407e052d64ac625da6f0718e7b302140434bd725706957c092db53805b821a85b23a7ac61725bac00000000";
-const SPEND170: &str = "0100000001c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704000000004847304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff0200ca9a3b00000000434104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac00286bee0000000043410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac00000000";
-const SPEND170_PREV_SPK: &str = "410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac";
-const SPEND170_PREV_VALUE: u64 = 5_000_000_000;
-const CB171: &str = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d010effffffff0100f2052a01000000434104566824c312073315df60e5aa6490b6cdd80cd90f6a8f02e022ca3c2d52968c253006c9c602e03aed7be52d6ac55f5b557c72529bcc3899ace7eb4227153eb44bac00000000";
-const CB172: &str = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0106ffffffff0100f2052a010000004341044c718603ac207940cfce606b414b42b7cb10abbc714fe44f42f1c10a9990fb0f7202838cfb4fb8512f884ee3e2f47d55992d916880a2c6b46e254d86cd5952b3ac00000000";
-
-const HASH169: &str = "000000002a22cfee1f2c846adbd12b3e183d4f97683f85dad08a79780a84bd55"; // block 170's prev
-const HASH170: &str = "00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee";
-const HASH171: &str = "00000000c9ec538cab7f38ef9c67a95742f56ab07b0a37c5be6b02808dbfb4e0";
-const HASH172: &str = "00000000e3efabf60693ecc2519c5f761801ccac25c2ac89e32d11dd92686854";
-const MERKLE170: &str = "7dac2c5666815c17a3b36427de37bb9d2e2c5ccec3f8633eb91a4205cb4c10ff";
 
 fn hx(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
@@ -331,40 +308,6 @@ fn seg_po2() -> u32 {
 // This host's guest image id (METHOD_ID) as the canonical RISC0 hex digest.
 fn method_id_hex() -> String { risc0_zkvm::Digest::from(METHOD_ID).to_string() }
 
-// Verify a receipt's STARK against THIS host's guest image id. On failure, explain the usual cause
-// instead of a raw panic: the host was built from a different guest/toolchain than produced the
-// proof, so the image ids (METHOD_ID) differ. That is a BUILD mismatch, not an invalid proof.
-fn digest_hex(id: [u32; 8]) -> String { risc0_zkvm::Digest::from(id).to_string() }
-
-fn verify_receipt(r: &risc0_zkvm::Receipt) { verify_receipt_ex(r, None) }
-
-// Verify a receipt's STARK against THIS host's guest image id, distinguishing the two failure modes when
-// the caller can supply the proof's own committed guest id (`claimed_id`, the journal's self_id):
-//   - MISMATCH  — the proof was made by a DIFFERENT guest (claimed_id != METHOD_ID); a build mismatch,
-//                 the common onboarding trip, NOT evidence the proof is bad.
-//   - INVALID   — the proof claims THIS guest but the STARK does not verify; forged/tampered/corrupt.
-// Without a claimed_id (generic callers) we can't tell, so we assume the common build-mismatch cause.
-fn verify_receipt_ex(r: &risc0_zkvm::Receipt, claimed_id: Option<[u32; 8]>) {
-    if let Err(e) = r.verify(METHOD_ID) {
-        let mismatch = claimed_id.map_or(true, |id| id != METHOD_ID);
-        if mismatch {
-            eprintln!("STARK verification FAILED: guest image-id (METHOD_ID) MISMATCH.");
-            eprintln!("The proof was produced by a DIFFERENT guest build than this host (a RISC0 image id");
-            eprintln!("is a hash of the exact guest build), so the ids differ. This is a BUILD mismatch,");
-            eprintln!("not necessarily a bad proof.");
-            if let Some(id) = claimed_id { eprintln!("  proof's guest id:      {}", digest_hex(id)); }
-            eprintln!("  this host's METHOD_ID: {}", method_id_hex());
-            eprintln!("Build a host that matches the proof's guest (reproduce/Dockerfile), then retry.");
-            eprintln!("See docs/OPERATIONS.md §2.7 \"METHOD_ID and reproducibility\".");
-        } else {
-            eprintln!("STARK verification FAILED: PROOF INVALID (not a genuine proof for this guest).");
-            eprintln!("The receipt claims THIS guest (METHOD_ID {}) but the STARK did not", method_id_hex());
-            eprintln!("verify — the proof is forged, tampered, or corrupt. This is NOT a build mismatch.");
-        }
-        eprintln!("Underlying verifier error: {e}");
-        std::process::exit(1);
-    }
-}
 fn rev(mut v: Vec<u8>) -> Vec<u8> { v.reverse(); v }
 fn arr(v: Vec<u8>) -> [u8; 32] { v.try_into().unwrap() }
 
@@ -388,9 +331,6 @@ fn out_leaf_of(tx: &Transaction, txid: &[u8; 32], vout: usize, height: u32, flag
     let o = &tx.output[vout];
     hazync_utreexo::coin_leaf_flags(txid, vout as u32, o.value.to_sat(), o.script_pubkey.as_bytes(), height, flags.into() as u8, mtp)
 }
-fn build_header(prev_disp: &str, merkle_internal: &[u8; 32], time: u32, bits: u32, nonce: u32) -> Vec<u8> {
-    build_header_v(1, prev_disp, merkle_internal, time, bits, nonce) // version-1 helper (early blocks)
-}
 fn build_header_v(version: i32, prev_disp: &str, merkle_internal: &[u8; 32], time: u32, bits: u32, nonce: u32) -> Vec<u8> {
     let mut h = Vec::with_capacity(80);
     h.extend_from_slice(&version.to_le_bytes());     // real block version (versionbits post-BIP9)
@@ -400,66 +340,6 @@ fn build_header_v(version: i32, prev_disp: &str, merkle_internal: &[u8; 32], tim
     h.extend_from_slice(&bits.to_le_bytes());
     h.extend_from_slice(&nonce.to_le_bytes());
     h
-}
-
-// One non-coinbase spend to fold into a block.
-struct Spend { raw: Vec<u8>, prev_value: u64, prev_spk: Vec<u8>, coin_height: u32, coin_is_coinbase: bool, coin_mtp: u32 }
-
-/// Build a block witness against (and advancing) the running accumulator `forest`.
-fn build_block(
-    forest: &mut Forest, header: Vec<u8>, height: u32, coinbase_hex: &str, spends: &[Spend], create_mtp: u32,
-) -> BlockWitness {
-    let coinbase: Transaction = deserialize(&hx(coinbase_hex)).unwrap();
-    let cb_txid = coinbase.compute_txid().to_byte_array();
-    let root_prev = wire_stump(forest);
-
-    let mut txids = vec![cb_txid];
-    let mut inputs = Vec::new();
-    let mut txs = Vec::new();
-    let mut tx_prevouts = Vec::new();
-    for (tx_i, sp) in spends.iter().enumerate() {
-        let tx: Transaction = deserialize(&sp.raw).unwrap();
-        txids.push(tx.compute_txid().to_byte_array());
-        let op = tx.input[0].previous_output;
-        let spk = ScriptBuf::from_bytes(sp.prev_spk.clone());
-        let coin = coin_leaf(&op.txid.to_byte_array(), op.vout, sp.prev_value, spk.as_bytes(), sp.coin_height, sp.coin_is_coinbase, sp.coin_mtp);
-        let prevouts = serialize(&vec![TxOut { value: Amount::from_sat(sp.prev_value), script_pubkey: spk }]);
-        txs.push(PackedBytes(sp.raw.clone()));
-        tx_prevouts.push(PackedBytes(prevouts));
-        let pos = forest.find(&coin).expect("spent coin in accumulator");
-        let last = forest.leaves.len() - 1;
-        inputs.push(BlockInput {
-            tx_idx: tx_i as u32, input_idx: 0,
-            global_pos: pos as u64, coin_height: sp.coin_height, coin_is_coinbase: sp.coin_is_coinbase as u32, coin_mtp: sp.coin_mtp, tx_first: 1,
-            proof_i: wire_proof(&forest.prove(pos)),
-            proof_last: wire_proof(&forest.prove(last)),
-        });
-        forest.delete(pos);
-    }
-
-    // Insert created coins: coinbase outputs then each spend's outputs. Creation-MTP = `create_mtp`
-    // (= MTP(height-1), the same value the guest's median(prev.recent_times) commits).
-    let mut new_outputs = Vec::new();
-    for v in 0..coinbase.output.len() {
-        if !out_spendable(coinbase.output[v].script_pubkey.as_bytes()) { continue; }
-        let l = out_leaf_of(&coinbase, &cb_txid, v, height, true, create_mtp);
-        forest.add(l);
-        new_outputs.push(l);
-    }
-    for sp in spends {
-        let tx: Transaction = deserialize(&sp.raw).unwrap();
-        let txid = tx.compute_txid().to_byte_array();
-        for v in 0..tx.output.len() {
-            if !out_spendable(tx.output[v].script_pubkey.as_bytes()) { continue; }
-            let l = out_leaf_of(&tx, &txid, v, height, false, create_mtp);
-            forest.add(l);
-            new_outputs.push(l);
-        }
-    }
-    let root_next = wire_stump(forest);
-    let (in_smt_root, smt) = smt_witness_standalone(cb_txid, cb_spendable_outputs(&coinbase),
-        &cb_spends_from(&inputs, &txs));
-    BlockWitness { header, height, coinbase_tx: hx(coinbase_hex), txids: PackedHashes(txids), root_prev, txs, tx_prevouts, inputs, root_next, bip30: None, in_smt_root, smt }
 }
 
 // Serialize a ChainState to the exact bytes env::commit(&state) would produce (LE u32 words).
@@ -475,164 +355,14 @@ fn state_journal_bytes(s: &ChainState) -> Vec<u8> {
     risc0_zkvm::serde::to_vec(s).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
-fn chain_step(prev: &ChainState, w: &BlockWitness, _is_base: u32) -> (ChainState, u64) {
-    let mut b = ExecutorEnv::builder();
-    b.write(&2u32).unwrap();
-    b.write(&state_journal_bytes(prev)).unwrap();
-    b.write(w).unwrap();
-    b.write(&1u32).unwrap(); // execute: is_base=1 skips env::verify (logic validation only)
-    b.write(&METHOD_ID).unwrap();
-    let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).unwrap();
-    crate::lz::require_committed(s.exit_code, "execution");
-    (s.journal.decode().unwrap(), s.cycles())
-}
-
 fn work_u128(w: &[u8; 32]) -> u128 {
     let mut low = [0u8; 16];
     low.copy_from_slice(&w[0..16]); // arith_uint256 internal = little-endian
     u128::from_le_bytes(low)
 }
 
-// Seed the running UTXO accumulator (block-9 coinbase + filler) and the anchor checkpoint at 169.
-fn seed_and_anchor() -> (Forest, ChainState) {
-    let mut forest = Forest::new();
-    for i in 0..4u64 {
-        forest.add(hash_leaf(&[b"pre".as_slice(), &i.to_le_bytes()].concat()));
-    }
-    let spk9 = ScriptBuf::from_bytes(hx(SPEND170_PREV_SPK));
-    let spend170_tx: Transaction = deserialize(&hx(SPEND170)).unwrap();
-    let op9 = spend170_tx.input[0].previous_output;
-    forest.add(coin_leaf(&op9.txid.to_byte_array(), op9.vout, SPEND170_PREV_VALUE, spk9.as_bytes(), 9, true, 1_231_473_279));
-    for i in 0..2u64 {
-        forest.add(hash_leaf(&[b"post".as_slice(), &i.to_le_bytes()].concat()));
-    }
-    let anchor = ChainState {
-        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, utxo_value: 0,
-        tip_hash: arr(rev(hx(HASH169))), utxo_roots: forest.roots(), utxo_leaves: forest.leaves.len() as u64,
-        cum_work: [0u8; 32], height: 169,
-        prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, epoch_start: 1_231_006_505,
-        recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
-        max_time: 1_231_730_523, profile: 0, block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
-    };
-    (forest, anchor)
-}
-
-fn header_170() -> Vec<u8> {
-    build_header(HASH169, &arr(rev(hx(MERKLE170))), 1_231_731_025, 0x1d00ffff, 1_889_418_792)
-}
-fn spend_170() -> Spend {
-    Spend { raw: hx(SPEND170), prev_value: SPEND170_PREV_VALUE, prev_spk: hx(SPEND170_PREV_SPK), coin_height: 9, coin_is_coinbase: true, coin_mtp: 1_231_473_279 }
-}
-
-// PROVE (not execute) the block-170 fold: a real STARK receipt attesting the block is valid and
-// extends the anchor. Run on the VPS (this is memory-heavy). is_base=1 → no recursion assumption.
-fn prove_block() {
-    use std::time::Instant;
-    let (mut forest, anchor) = seed_and_anchor();
-    let w = build_block(&mut forest, header_170(), 170, CB170, &[spend_170()], median_u32(&anchor.recent_times));
-
-    println!("=== PROVING block 170 chain_step (real STARK receipt) ===");
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.write(&2u32).unwrap();
-    b.write(&state_journal_bytes(&anchor)).unwrap();
-    b.write(&w).unwrap();
-    b.write(&1u32).unwrap(); // is_base = 1 (anchor-trusted; no env::verify assumption)
-    b.write(&METHOD_ID).unwrap();
-    let env = b.build().unwrap();
-
-    let t = Instant::now();
-    let info = default_prover().prove(env, METHOD_ELF).expect("prove");
-    let secs = t.elapsed().as_secs_f64();
-    let receipt = info.receipt;
-    receipt.verify(METHOD_ID).expect("receipt verify");
-    let out: ChainState = receipt.journal.decode().unwrap();
-    assert!(out.self_id == METHOD_ID, "S1: proof recursed against wrong image id");
-    let seal = bincode::serialize(&receipt).map(|v| v.len()).unwrap_or(0);
-    println!("PROVED in {:.1}s — receipt VERIFIED against METHOD_ID.", secs);
-    println!("  chain tip: height {}  tip_hash {}  cum_work {}", out.height, hex(&out.tip_hash), work_u128(&out.cum_work));
-    println!("  UTXO root leaves: {}", out.utxo_leaves);
-    println!("  receipt ~{} bytes (STARK). SNARK-wrap → ~200-300 B for trivial verification anywhere.", seal);
-}
-
-// Prove one chain step, discharging the env::verify recursion assumption with the previous receipt.
-fn prove_step(prev_journal: Vec<u8>, prev_receipt: Option<risc0_zkvm::Receipt>, w: &BlockWitness, is_base: u32) -> risc0_zkvm::Receipt {
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    if let Some(r) = prev_receipt {
-        b.add_assumption(r); // discharge env::verify(self_id, prev_journal)
-    }
-    b.write(&2u32).unwrap();
-    b.write(&prev_journal).unwrap();
-    b.write(w).unwrap();
-    b.write(&is_base).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    let receipt = default_prover().prove(b.build().unwrap(), METHOD_ELF).expect("prove step").receipt;
-    receipt.verify(METHOD_ID).expect("step receipt verify");
-    receipt
-}
-
-// PROVE the recursive chain 170 → 171 → 172: fold each block, binding to the previous proof via
-// env::verify. The final receipt is a chain-tip proof of the whole range. Run on the VPS.
-fn prove_chain() {
-    use std::time::Instant;
-    let (mut forest, anchor) = seed_and_anchor();
-    let mut recent = anchor.recent_times.clone();
-    let w170 = build_block(&mut forest, header_170(), 170, CB170, &[spend_170()], median_u32(&recent));
-    advance_recent(&mut recent, 1_231_731_025); // block 170 time
-    let cb171: Transaction = deserialize(&hx(CB171)).unwrap();
-    let hdr171 = build_header(HASH170, &cb171.compute_txid().to_byte_array(), 1_231_731_401, 0x1d00ffff, 653_436_935);
-    let w171 = build_block(&mut forest, hdr171, 171, CB171, &[], median_u32(&recent));
-    advance_recent(&mut recent, 1_231_731_401); // block 171 time
-    let cb172: Transaction = deserialize(&hx(CB172)).unwrap();
-    let hdr172 = build_header(HASH171, &cb172.compute_txid().to_byte_array(), 1_231_731_853, 0x1d00ffff, 1_565_279_797);
-    let w172 = build_block(&mut forest, hdr172, 172, CB172, &[], median_u32(&recent));
-
-    println!("=== PROVING recursive chain 170 → 171 → 172 (env::verify composition) ===");
-    let t = Instant::now();
-    let r170 = prove_step(state_journal_bytes(&anchor), None, &w170, 1);
-    println!("  block 170 proved ({:.0}s cum)", t.elapsed().as_secs_f64());
-    let r171 = prove_step(r170.journal.bytes.clone(), Some(r170.clone()), &w171, 0);
-    println!("  block 171 folded ({:.0}s cum)", t.elapsed().as_secs_f64());
-    let r172 = prove_step(r171.journal.bytes.clone(), Some(r171.clone()), &w172, 0);
-    let secs = t.elapsed().as_secs_f64();
-    let tip: ChainState = r172.journal.decode().unwrap();
-    assert!(tip.self_id == METHOD_ID, "S1: proof recursed against wrong image id");
-    let seal = bincode::serialize(&r172).map(|v| v.len()).unwrap_or(0);
-    println!("\n>>> CHAIN-TIP PROOF (170→172) in {:.1}s — receipt VERIFIED.", secs);
-    println!("  tip height {}  tip_hash {}  cum_work {}", tip.height, hex(&tip.tip_hash), work_u128(&tip.cum_work));
-    println!("  receipt ~{} bytes. This one proof attests the whole 170→172 range is valid.", seal);
-}
-
-// SNARK-wrap: prove block 170 and compress STARK -> Groth16 (~200-300 B, verifiable anywhere).
-fn prove_snark() {
-    use std::time::Instant;
-    let (mut forest, anchor) = seed_and_anchor();
-    let w = build_block(&mut forest, header_170(), 170, CB170, &[spend_170()], median_u32(&anchor.recent_times));
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.write(&2u32).unwrap();
-    b.write(&state_journal_bytes(&anchor)).unwrap();
-    b.write(&w).unwrap();
-    b.write(&1u32).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    println!("=== SNARK-wrapping block 170 (STARK → Groth16) ===");
-    let t = Instant::now();
-    let receipt = default_prover()
-        .prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::groth16())
-        .expect("groth16 prove")
-        .receipt;
-    receipt.verify(METHOD_ID).expect("groth16 verify");
-    let secs = t.elapsed().as_secs_f64();
-    let seal = bincode::serialize(&receipt).map(|v| v.len()).unwrap_or(0);
-    println!(">>> GROTH16 receipt in {:.1}s — VERIFIED. size ~{} bytes (verifiable on a phone / on-chain).", secs, seal);
-}
-
-// Prove an ARBITRARY real block from a JSON file (HAZYNC_BLOCK). Handles a coinbase + N single-input
-// txs with real prevouts. coin_height/coinbase/mtp are set benign (maturity/BIP68 no-op) — scripts,
-// amounts, PoW, retarget, merkle, subsidy and the UTXO transition are all REAL and fully checked.
-// Build the anchor + full block witness from the HAZYNC_BLOCK JSON (coinbase + N multi-input txs).
+// Build the anchor + full block witness from the HAZYNC_BLOCK JSON (coinbase + N multi-input txs, real prevouts).
+// Coins without coin_height/coinbase/mtp get benign values (maturity/BIP68 no-op).
 fn build_full() -> (ChainState, BlockWitness) {
     let path = std::env::var("HAZYNC_BLOCK").unwrap_or_else(|_| "block_full.json".into());
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -861,28 +591,11 @@ fn build_full() -> (ChainState, BlockWitness) {
     }
     // Silent: most callers discard this anchor (prove-range carries the real state); the ones that keep it are
     // block-file measurements, which are anchored demonstrations anyway.
-    if methods::LIBZYNC { demo_block_forest(&mut anchor, false); }
+    demo_block_forest(&mut anchor, false);
     (anchor, w)
 }
 
-fn prove_full() {
-    use std::time::Instant;
-    let (anchor, w) = build_full();
-    println!("=== PROVING REAL BLOCK {} ({} inputs) — full consensus, monolithic, on GPU ===", w.height, w.inputs.len());
-    let t = Instant::now();
-    let r = prove_step(state_journal_bytes(&anchor), None, &w, 1);
-    let tip: ChainState = r.journal.decode().unwrap();
-    assert!(tip.self_id == METHOD_ID, "S1: proof recursed against wrong image id");
-    println!(">>> BLOCK {} PROVED in {:.1}s — receipt VERIFIED.", w.height, t.elapsed().as_secs_f64());
-    println!("  tip_hash {}  cum_work {}  UTXO leaves {}", hex(&tip.tip_hash), work_u128(&tip.cum_work), tip.utxo_leaves);
-}
-
-// ===================== IBD / tip proof-chain driver (Tests 1 & 2) ============================
-// Fold the recursive validity chain over a directory of per-block witnesses (block_<h>.json, the exact
-// shape the archive-node bridge and fetch_block.py emit), carrying the REAL UTXO accumulator
-// from the genesis anchor. This is what closes S3: each spent coin's inclusion proof binds it to the
-// real UTXO set built from genesis, not a fabricated per-block root.
-
+// ===================== Genesis and per-block witnesses from block_<h>.json ===========================
 // Mainnet genesis (the unconditional trusted anchor — its hash/params are consensus constants).
 const GENESIS_HASH: &str = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f";
 const GENESIS_TIME: u32 = 1_231_006_505;
@@ -939,13 +652,6 @@ fn read_block_json(dir: &str, h: u32) -> serde_json::Value {
 // (median of the ≤11 most recent block timestamps, Core's `GetMedianTimePast`). Assumes blocks are fed
 // in order from the genesis anchor (block_mtp is indexed by absolute height).
 fn median_u32(v: &[u32]) -> u32 { let mut s = v.to_vec(); s.sort_unstable(); s[s.len() / 2] }
-
-// Advance a median-time-past window by one block (mirrors the guest's chain_step recent_times update),
-// so a demo driver can compute each block's create_mtp = median of the window through the prev block.
-fn advance_recent(recent: &mut Vec<u32>, block_time: u32) {
-    recent.push(block_time);
-    if recent.len() > 11 { let n = recent.len() - 11; recent.drain(0..n); }
-}
 
 fn push_mtp(j: &serde_json::Value, win: &mut Vec<u32>, block_mtp: &mut Vec<u32>) {
     // block_mtp[h] = MTP(h-1): median of the window through the PREVIOUS block, matching Core's BIP68
@@ -1113,374 +819,6 @@ fn build_block_carried(forest: &mut Forest, j: &serde_json::Value, block_mtp: &[
     BlockWitness { header, height, coinbase_tx: hx(cb_hex), txids: PackedHashes(txids), root_prev, txs, tx_prevouts, inputs, root_next, bip30, in_smt_root, smt }
 }
 
-// Prove one chain step to a SUCCINCT receipt (FIX A): cheap composition for a long recursive chain.
-fn prove_step_succinct(prev_journal: Vec<u8>, prev_receipt: Option<risc0_zkvm::Receipt>, w: &BlockWitness, is_base: u32) -> risc0_zkvm::Receipt {
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    if let Some(r) = prev_receipt { b.add_assumption(r); }
-    b.write(&2u32).unwrap();
-    b.write(&prev_journal).unwrap();
-    b.write(w).unwrap();
-    b.write(&is_base).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    let receipt = default_prover()
-        .prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct()).expect("prove ibd step").receipt;
-    receipt.verify(METHOD_ID).expect("ibd step verify");
-    receipt
-}
-
-fn ibd_range() -> (String, u32, u32) {
-    let dir = std::env::var("HAZYNC_WITNESS_DIR").expect("set HAZYNC_WITNESS_DIR");
-    let from: u32 = std::env::var("HAZYNC_FROM").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
-    let to: u32 = std::env::var("HAZYNC_TO").expect("set HAZYNC_TO to the last block height").parse().unwrap();
-    (dir, from, to)
-}
-
-// PROVE-IBD: the real recursive STARK chain from genesis (Test 1), then an explicit incremental
-// tip-extension phase (Test 2 — each block folds onto the existing tip proof, the marginal cost of
-// proving a new block AT THE TIP). HAZYNC_TIP=<n> folds n extra blocks past HAZYNC_TO one at a time.
-fn prove_ibd() {
-    use std::time::Instant;
-    let (dir, from, to) = ibd_range();
-    let tip_extra: u32 = std::env::var("HAZYNC_TIP").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
-    println!("=== PROVE-IBD: recursive validity chain, genesis → block {to} (Test 1){} ===",
-        if tip_extra > 0 { format!(", then +{tip_extra} tip extensions (Test 2)") } else { String::new() });
-    let mut forest = Forest::new();
-    let mut state = genesis_anchor();
-    let mut prev_receipt: Option<risc0_zkvm::Receipt> = None;
-    let t = Instant::now();
-    let mut block_mtp: Vec<u32> = vec![GENESIS_TIME];
-    let mut win: Vec<u32> = vec![GENESIS_TIME];
-    for h in from..=to {
-        let j = read_block_json(&dir, h);
-        push_mtp(&j, &mut win, &mut block_mtp);
-        let w = build_block_carried(&mut forest, &j, &block_mtp);
-        let is_base = (h == from) as u32;
-        let prev_journal = match &prev_receipt { Some(r) => r.journal.bytes.clone(), None => state_journal_bytes(&state) };
-        let st = Instant::now();
-        let r = prove_step_succinct(prev_journal, prev_receipt.clone(), &w, is_base);
-        state = r.journal.decode().unwrap();
-        prev_receipt = Some(r);
-        if h % 50 == 0 || h == to || h == from {
-            println!("  [IBD] proved block {h}: tip {} ({:.1}s this block, {:.0}s cum)", hex(&state.tip_hash), st.elapsed().as_secs_f64(), t.elapsed().as_secs_f64());
-        }
-    }
-    println!(">>> IBD CHAIN PROOF genesis→{to} in {:.0}s — receipt VERIFIED. tip_hash {}  cum_work {}  UTXO leaves {}",
-        t.elapsed().as_secs_f64(), hex(&state.tip_hash), work_u128(&state.cum_work), state.utxo_leaves);
-
-    // Test 2: incremental tip proving — each block extends the existing chain proof by one step.
-    for h in (to + 1)..=(to + tip_extra) {
-        let j = read_block_json(&dir, h);
-        push_mtp(&j, &mut win, &mut block_mtp);
-        let w = build_block_carried(&mut forest, &j, &block_mtp);
-        let prev_journal = prev_receipt.as_ref().unwrap().journal.bytes.clone();
-        let st = Instant::now();
-        let r = prove_step_succinct(prev_journal, prev_receipt.clone(), &w, 0);
-        state = r.journal.decode().unwrap();
-        prev_receipt = Some(r);
-        println!("  [TIP] block {h} validated + folded onto the chain proof in {:.1}s — tip now {} (height {})",
-            st.elapsed().as_secs_f64(), hex(&state.tip_hash), state.height);
-    }
-    if tip_extra > 0 {
-        println!(">>> TIP PROOF at height {} — one verified receipt attests genesis→{} valid. Marginal cost per tip block above.", state.height, state.height);
-    }
-}
-
-// ===================== PARALLEL RANGE-FOLD (backfill) =========================================
-// Prove each block INDEPENDENTLY as a range [N..N] (parallel across GPUs), then fold adjacent ranges
-// pairwise in a tree (parallel, log-depth). Replaces the sequential chain for backfill. The in-boundary
-// of each block comes from a cheap host "bridge pass" (fold the accumulator, no proving).
-
-// Host mirror of the guest RangeState (identical field order — journal decodes into this).
-#[derive(serde::Serialize, serde::Deserialize)]
-struct RangeState {
-    kind: u32, // H8: == KIND_RANGE
-    lo: u32, hi: u32,
-    in_tip_hash: [u8; 32], in_roots: Vec<Option<[u8; 32]>>, in_leaves: u64,
-    in_nbits: u32, in_time: u32, in_epoch_start: u32, in_recent: Vec<u32>,
-    in_smt_root: [u8; 32],
-    out_tip_hash: [u8; 32], out_roots: Vec<Option<[u8; 32]>>, out_leaves: u64,
-    out_nbits: u32, out_time: u32, out_epoch_start: u32, out_recent: Vec<u32>,
-    out_smt_root: [u8; 32],
-    range_work: [u8; 32], self_id: [u32; 8],
-}
-
-fn add256_host(a: &mut [u8; 32], b: &[u8; 32]) {
-    let mut carry = 0u16;
-    for i in 0..32 { let s = a[i] as u16 + b[i] as u16 + carry; a[i] = s as u8; carry = s >> 8; }
-}
-
-struct InCtx { roots: Vec<Option<[u8; 32]>>, leaves: u64, nbits: u32, time: u32, epoch_start: u32, recent: Vec<u32>, block_mtp: Vec<u32> }
-
-// Cheap bridge pass: fold blocks 1..n (exclusive) advancing the accumulator + difficulty/MTP context,
-// returning the forest + the chain context just BEFORE block n. No proving — pure host replay.
-fn bridge_pass(dir: &str, n: u32) -> (Forest, InCtx) {
-    let mut forest = Forest::new();
-    let (mut nbits, mut time, mut epoch_start) = (GENESIS_BITS, GENESIS_TIME, GENESIS_TIME);
-    let mut recent = vec![GENESIS_TIME];
-    let mut block_mtp: Vec<u32> = vec![GENESIS_TIME];
-    for h in 1..n {
-        let j = read_block_json(dir, h);
-        push_mtp(&j, &mut recent, &mut block_mtp); // advances the MTP window + block_mtp[h] BEFORE build
-        let _ = build_block_carried(&mut forest, &j, &block_mtp); // advances the forest (spends + outputs)
-        let bt = j["time"].as_u64().unwrap() as u32;
-        nbits = j["bits"].as_u64().unwrap() as u32;
-        time = bt;
-        if h % 2016 == 0 { epoch_start = bt; }
-    }
-    let s = wire_stump(&forest);
-    (forest, InCtx { roots: s.roots, leaves: s.num_leaves, nbits, time, epoch_start, recent, block_mtp })
-}
-
-// `prove-range <n>`: prove block n as a self-contained range [n..n] → range_<n>.bin (parallelisable).
-fn prove_range_cmd(n: u32) {
-    use std::time::Instant;
-    let dir = std::env::var("HAZYNC_WITNESS_DIR").expect("set HAZYNC_WITNESS_DIR");
-    let (mut forest, ctx) = bridge_pass(&dir, n);
-    let jn = read_block_json(&dir, n);
-    let mut block_mtp = ctx.block_mtp.clone();
-    let mut win = ctx.recent.clone();
-    push_mtp(&jn, &mut win, &mut block_mtp); // block_mtp[n]
-    let w = build_block_carried(&mut forest, &jn, &block_mtp);
-    let in_tip_hash = arr(rev(hx(jn["prev"].as_str().unwrap())));
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.write(&6u32).unwrap();
-    b.write(&in_tip_hash).unwrap();
-    b.write(&ctx.roots).unwrap();
-    b.write(&ctx.leaves).unwrap();
-    b.write(&ctx.nbits).unwrap();
-    b.write(&ctx.time).unwrap();
-    b.write(&ctx.epoch_start).unwrap();
-    b.write(&ctx.recent).unwrap();
-    b.write(&w).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    let t = Instant::now();
-    let receipt = prove_env_with_progress(b.build().unwrap(), &format!("range [{n}..{n}]"));
-    receipt.verify(METHOD_ID).expect("range verify");
-    let out = std::env::var("HAZYNC_OUT").unwrap_or_else(|_| format!("range_{n}.hzk"));
-    std::fs::write(&out, bincode::serialize(&receipt).unwrap()).unwrap();
-    println!("proved range [{n}..{n}] in {:.1}s -> {out}", t.elapsed().as_secs_f64());
-}
-
-// `fold-range <left.bin> <right.bin> <out.bin>`: verify both adjacent range proofs, fold into one.
-fn fold_range_cmd(left: &str, right: &str, out: &str) {
-    use std::time::Instant;
-    let lr: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(left).expect("left")).unwrap();
-    let rr: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(right).expect("right")).unwrap();
-    lr.verify(METHOD_ID).expect("left verify");
-    rr.verify(METHOD_ID).expect("right verify");
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.add_assumption(lr.clone());
-    b.add_assumption(rr.clone());
-    b.write(&7u32).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    b.write(&lr.journal.bytes).unwrap();
-    b.write(&rr.journal.bytes).unwrap();
-    let t = Instant::now();
-    let receipt = default_prover()
-        .prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct()).expect("fold range").receipt;
-    receipt.verify(METHOD_ID).expect("fold verify");
-    let rs: RangeState = receipt.journal.decode().unwrap();
-    std::fs::write(out, bincode::serialize(&receipt).unwrap()).unwrap();
-    println!("folded -> range [{}..{}] in {:.1}s -> {out}", rs.lo, rs.hi, t.elapsed().as_secs_f64());
-}
-
-// `extend-spine <spine.bin> <next.bin> <out.bin>`: advance the genesis-anchored spine by absorbing one
-// adjacent chunk. This is #30's whole point — the spine must EXTEND, never be re-folded from scratch.
-// Re-folding [1..N] every time the board grows makes the cost both recur and grow with the board,
-// which is what made a one-off fold look like a 21-hour job that gets worse every day you wait.
-//
-//     spine [1..N]  +  chunk [N+1..M]   ->   spine [1..M]
-//
-// Mechanically this is `fold-range`. What it adds is the checks around the fold, in both directions:
-//
-//   BEFORE — adjacency and the full seam are checked on the HOST, in milliseconds. The guest checks
-//   the seam too (mode 7), so an unchecked mismatch is caught either way — but it is caught after a
-//   multi-second GPU fold and reported as a guest panic. Absorption is the one serial step in the
-//   system; making its failures cheap and legible is worth the duplication.
-//
-//   AFTER — the result must still be genesis-anchored AND must actually have advanced. A fold that
-//   silently returned the left operand would verify perfectly and stall the spine forever, so the
-//   post-conditions assert hi/out_tip moved to the chunk's.
-fn extend_spine_cmd(spine: &str, next: &str, out: &str) {
-    use std::time::Instant;
-    let sr: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(spine).expect("spine")).unwrap();
-    let nr: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(next).expect("next")).unwrap();
-    verify_receipt(&sr);
-    verify_receipt(&nr);
-    let ss: RangeState = sr.journal.decode().expect("spine journal is not a RangeState");
-    let ns: RangeState = nr.journal.decode().expect("next journal is not a RangeState");
-
-    assert!(ss.kind == KIND_RANGE, "spine is not a RangeState (domain tag)");
-    assert!(ns.kind == KIND_RANGE, "next is not a RangeState (domain tag)");
-    assert!(ss.self_id == METHOD_ID, "spine self_id != METHOD_ID");
-    assert!(ns.self_id == METHOD_ID, "next self_id != METHOD_ID");
-
-    // The spine must be genesis-anchored. Absorbing into a non-anchored range would produce a proof
-    // that looks like a spine and attests nothing about genesis.
-    assert_eq!(ss.lo, 1, "spine must start at block 1 — {} is not a spine", ss.lo);
-    assert_genesis_in_boundary(&ss);
-
-    assert_eq!(ns.lo, ss.hi + 1,
-        "chunk is not adjacent: spine ends at {} so the chunk must start at {}, but starts at {}",
-        ss.hi, ss.hi + 1, ns.lo);
-    assert!(ns.hi >= ns.lo, "chunk has an empty range [{}..{}]", ns.lo, ns.hi);
-
-    // Full seam equality. out_tip alone is not enough for the same reason the genesis pin is not just
-    // in_tip: nbits/time/epoch_start/recent feed the retarget and MTP, and roots/leaves are the UTXO
-    // carry. A seam that matched on tip alone could still splice two incompatible chain contexts.
-    assert_eq!(ns.in_tip_hash, ss.out_tip_hash, "seam: chunk in_tip != spine out_tip");
-    // Roots must be compared NORMALIZED. The accumulator's root vector carries empty slots for absent
-    // levels, so the same UTXO set has more than one representation — [A, B] and [A, B, None] differ
-    // as Vecs and are identical as accumulators. A raw compare rejects a perfectly valid adjacent
-    // chunk whenever the two sides happen to carry different trailing padding.
-    //
-    // Found by running it: absorbing real board block 4 into [1..3] failed the seam with left
-    // [Some(A), Some(B), None] against right [Some(A), Some(B)] — same roots, different padding. The
-    // guest normalizes before comparing, so this host check was STRICTER than the thing it exists to
-    // pre-empt, which is the worst way for a fail-fast check to be wrong: it turns a cheap early
-    // warning into a false rejection of valid work.
-    assert_eq!(normalize_host(ns.in_roots.clone()), normalize_host(ss.out_roots.clone()),
-        "seam: chunk in_roots != spine out_roots (normalized)");
-    assert_eq!(ns.in_leaves, ss.out_leaves, "seam: chunk in_leaves != spine out_leaves");
-    assert_eq!(ns.in_nbits, ss.out_nbits, "seam: chunk in_nbits != spine out_nbits");
-    assert_eq!(ns.in_time, ss.out_time, "seam: chunk in_time != spine out_time");
-    assert_eq!(ns.in_epoch_start, ss.out_epoch_start, "seam: chunk in_epoch_start != spine out_epoch_start");
-    assert_eq!(ns.in_recent, ss.out_recent, "seam: chunk in_recent != spine out_recent");
-
-    println!("=== EXTEND SPINE [1..{}] + [{}..{}] -> [1..{}] ===", ss.hi, ns.lo, ns.hi, ns.hi);
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.add_assumption(sr.clone());
-    b.add_assumption(nr.clone());
-    b.write(&7u32).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    b.write(&sr.journal.bytes).unwrap();
-    b.write(&nr.journal.bytes).unwrap();
-    let t = Instant::now();
-    let receipt = default_prover()
-        .prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct())
-        .expect("extend spine").receipt;
-    receipt.verify(METHOD_ID).expect("extended spine failed to verify");
-    let rs: RangeState = receipt.journal.decode().expect("folded journal is not a RangeState");
-
-    // Post-conditions: still a spine, and it moved.
-    assert!(rs.kind == KIND_RANGE, "folded receipt is not a RangeState");
-    assert_eq!(rs.lo, 1, "extended spine no longer starts at block 1");
-    assert_genesis_in_boundary(&rs);
-    assert_eq!(rs.hi, ns.hi, "extended spine ends at {} but the chunk ended at {}", rs.hi, ns.hi);
-    assert_eq!(rs.out_tip_hash, ns.out_tip_hash, "extended spine out_tip != chunk out_tip");
-    assert!(rs.hi > ss.hi, "spine did not advance: still ends at {}", rs.hi);
-
-    std::fs::write(out, bincode::serialize(&receipt).unwrap()).unwrap();
-    let mut total = arr_u128(GENESIS_WORK);
-    add256_host(&mut total, &rs.range_work);
-    println!("  spine [1..{}] in {:.1}s -> {out}", rs.hi, t.elapsed().as_secs_f64());
-    println!("  out_tip_hash {}  total_cum_work {}  UTXO leaves {}",
-        hex(&rs.out_tip_hash), work_u128(&total), rs.out_leaves);
-    println!("  absorbed {} block(s); the spine is genesis-anchored and shippable as it stands.",
-        ns.hi - ns.lo + 1);
-}
-
-// `snark-wrap <range.bin> <out.snark>`: Groth16-compress an EXISTING folded range receipt.
-//
-// Note this wraps a receipt that already exists rather than re-proving: risc0's `compress` takes the
-// composite/succinct receipt and produces a Groth16 one committing the SAME journal. The journal is
-// what every assertion below reads, so wrapping cannot weaken those checks — but it also cannot
-// strengthen them, which is why `verify-snark` re-applies the full genesis pin rather than trusting
-// that a small receipt must have come from a good one.
-fn snark_wrap_cmd(bin: &str, out: &str) {
-    use std::time::Instant;
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(bin).expect("bin")).unwrap();
-    // Verify BEFORE wrapping. Compressing an invalid receipt would either fail deep inside the prover
-    // or, worse, produce a small artifact nobody re-checks — so establish validity here first.
-    verify_receipt(&r);
-    let rs: RangeState = r.journal.decode().expect("receipt journal is not a RangeState");
-    assert!(rs.kind == KIND_RANGE, "receipt is not a RangeState (domain tag)"); // H8
-    assert!(rs.self_id == METHOD_ID, "self_id != METHOD_ID");
-    let before = bincode::serialize(&r).map(|v| v.len()).unwrap_or(0);
-    println!("=== SNARK-wrapping range [{}..{}] (STARK -> Groth16) ===", rs.lo, rs.hi);
-    println!("  input receipt: {} bytes", before);
-    let t = Instant::now();
-    let snark = default_prover()
-        .compress(&ProverOpts::groth16(), &r)
-        .expect("groth16 compress");
-    let secs = t.elapsed().as_secs_f64();
-    // The wrapped receipt must verify against the same guest id, and must carry the same journal —
-    // a wrap that silently changed either would be a forgery vector, not an optimisation.
-    snark.verify(METHOD_ID).expect("wrapped receipt failed to verify");
-    let rs2: RangeState = snark.journal.decode().expect("wrapped journal is not a RangeState");
-    assert!(rs2.lo == rs.lo && rs2.hi == rs.hi && rs2.out_tip_hash == rs.out_tip_hash
-            && rs2.range_work == rs.range_work && rs2.self_id == rs.self_id,
-            "wrapped journal differs from the original — refusing to write it");
-    let bytes = bincode::serialize(&snark).unwrap();
-    std::fs::write(out, &bytes).unwrap();
-    println!("  wrapped in {:.1}s -> {} ({} bytes, {:.0}x smaller)",
-        secs, out, bytes.len(), before as f64 / bytes.len().max(1) as f64);
-    println!("  verify with: host verify-snark {out}");
-}
-
-// SEGMENTED proof: split the block's inputs into chunks, prove each chunk's scripts (mode 4), then
-// aggregate (mode 5) — env::verify the chunks + do the cheap accumulator transition + block checks.
-fn prove_seg() {
-    use std::time::Instant;
-    let (anchor, w) = build_full();
-    let n = w.inputs.len();
-    let bounds = chunk_bounds(&w, nchunks_env());
-    let nchunks = bounds.len();
-    // ADVERSARIAL #2 (test-only, inert unless HAZYNC_H2_BADHEIGHT set): prove the chunk at height 1
-    // (script flags 0) while aggregating into the real modern block. The chunk's committed binding
-    // digest folds in flags(1)=0, but the aggregation recomputes it with the block's real flags, so the
-    // digests differ and the aggregate MUST reject. Pre-fix (chunk committed bare coin leaves) this was
-    // ACCEPTED — the segmented-path flag/witness hole. NEVER set in production.
-    let h2_bad = std::env::var("HAZYNC_H2_BADHEIGHT").is_ok();
-    let chunk_height = if h2_bad { 1 } else { w.height };
-    println!("=== SEGMENTED PROOF block {}: {} inputs → {} chunks → aggregate (on GPU) ===", w.height, n, nchunks);
-    if h2_bad { println!("  [H2-TEST] proving chunks at height {} (flags 0) — aggregate must REJECT", chunk_height); }
-    let t = Instant::now();
-
-    let mut chunk_receipts: Vec<risc0_zkvm::Receipt> = Vec::new();
-    for (c, &(lo, hi)) in bounds.iter().enumerate() {
-        let mut b = ExecutorEnv::builder();
-        b.segment_limit_po2(seg_po2());
-        b.write(&4u32).unwrap();
-        b.write(&chunk_height).unwrap();
-        b.write(&chunk_block_hash(&w.header)).unwrap(); // block hash for flag exceptions
-        write_chunk_inputs(&mut b, &w, lo, hi);
-        let receipt = default_prover()  // succinct: lift now, cheap aggregate later (see prove_chunk note)
-            .prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct()).unwrap().receipt;
-        receipt.verify(METHOD_ID).unwrap();
-        println!("  chunk {} ({} inputs) proved ({:.0}s cum)", c, hi - lo, t.elapsed().as_secs_f64());
-        chunk_receipts.push(receipt);
-    }
-
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    for r in &chunk_receipts { b.add_assumption(r.clone()); }
-    b.write(&5u32).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    b.write(&(chunk_receipts.len() as u32)).unwrap();
-    for r in &chunk_receipts { b.write(&r.journal.bytes).unwrap(); }
-    b.write(&state_journal_bytes(&anchor)).unwrap();
-    b.write(&w).unwrap();
-    b.write(&1u32).unwrap();
-    let agg_res = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct());
-    if h2_bad {
-        match agg_res {
-            Ok(_) => { println!(">>> ADVERSARIAL #2: FAIL — chunk at wrong height ACCEPTED (soundness hole!)"); std::process::exit(1); }
-            Err(e) => { println!(">>> ADVERSARIAL #2: wrong-height chunk REJECTED ✓  ({})", format!("{e}").lines().next().unwrap_or("")); return; }
-        }
-    }
-    let agg = agg_res.unwrap().receipt;
-    agg.verify(METHOD_ID).unwrap();
-    let tip: ChainState = agg.journal.decode().unwrap();
-    assert!(tip.self_id == METHOD_ID, "S1: proof recursed against wrong image id");
-    println!(">>> SEGMENTED BLOCK {} PROVED in {:.1}s — succinct receipt VERIFIED (chunks map, aggregate reduces).", w.height, t.elapsed().as_secs_f64());
-    println!("  tip_hash {}  cum_work {}  UTXO leaves {}", hex(&tip.tip_hash), work_u128(&tip.cum_work), tip.utxo_leaves);
-}
-
 // `prove-chunk <i>`: prove chunk i's scripts, write the receipt to chunk_<i>.hzk (or $HAZYNC_OUT).
 fn prove_chunk(idx: usize) {
     use std::time::Instant;
@@ -1521,48 +859,6 @@ fn prove_chunk(idx: usize) {
     std::fs::write(format!("{out}.tmp"), bincode::serialize(&receipt).unwrap()).unwrap();
     std::fs::rename(format!("{out}.tmp"), &out).unwrap();
     println!("chunk {idx} ({} inputs) proved in {:.0}s -> {out}", hi - lo, t.elapsed().as_secs_f64());
-}
-
-/// The mode-5 aggregate environment, in ONE place (hazync#153).
-///
-/// Both the in-process aggregate and the push coordinator need this exact sequence, and it is not
-/// self-describing: the trailing `1u32` in particular is easy to leave out when copying, and the
-/// guest would then read the witness that follows as that flag. A second copy of a protocol
-/// sequence is a second thing to keep in step, and this one is read by the guest -- so it is written
-/// once and called twice rather than written twice and hopefully kept identical.
-///
-/// The assumptions must be added BEFORE the writes: `add_assumption` records what the guest may
-/// `env::verify`, and the writes are the journals it verifies against.
-/// Read the bridge's per-block bundle for height `n` (`bundle_<n>.json` under `HAZYNC_BRIDGE_OUT`).
-///
-/// Shared by `prove-range-bridge` and by `seg-serve` in mode 6 (#361), so both locate the bundle the
-/// same way and a board block spread over N cards reads exactly what one card would have read.
-fn read_bridge_bundle(n: u32) -> Bundle {
-    let dir = std::env::var("HAZYNC_BRIDGE_OUT").unwrap_or_else(|_| "/root/bridge_bundles".into());
-    let raw = std::fs::read(format!("{dir}/bundle_{n}.json")).expect("read bundle");
-    serde_json::from_slice(&raw).expect("parse bundle")
-}
-
-/// Write the mode-6 RANGE input stream — the board's own per-block proof, from a bridge bundle.
-///
-/// Same discipline as `write_aggregate_env` below, and for the same reason (#361). The guest reads a
-/// FIXED order, so a second copy of this sequence is a second thing to keep in step: it is written
-/// once and called twice -- by `prove-range-bridge` proving on one card, and by `seg-serve` proving
-/// the same block across N. A divergence would desynchronise the guest's stream rather than fail
-/// loudly, and the two receipts have to be interchangeable, because the coordinator verifies
-/// whichever one it is handed against METHOD_ID and the claimed [lo..hi].
-fn write_range_env(b: &mut risc0_zkvm::ExecutorEnvBuilder<'_>, bd: &Bundle) {
-    b.segment_limit_po2(seg_po2());
-    b.write(&6u32).unwrap();
-    b.write(&bd.in_tip).unwrap();
-    b.write(&bd.in_roots).unwrap();
-    b.write(&bd.in_leaves).unwrap();
-    b.write(&bd.in_nbits).unwrap();
-    b.write(&bd.in_time).unwrap();
-    b.write(&bd.in_epoch_start).unwrap();
-    b.write(&bd.in_recent).unwrap();
-    b.write(&bd.witness).unwrap();
-    b.write(&METHOD_ID).unwrap();
 }
 
 // ============ ARCHIVE-NODE BRIDGE — persistent forest driver over a local bitcoind ============
@@ -1755,12 +1051,12 @@ fn smt_advance_ex(
     //    a block spend two outputs of the same coinbase: the second proof sees the first's effect.
     let mut spends = Vec::with_capacity(coinbase_spends.len());
     // libzync filters by the tracked bit, so it must have one per spend: an empty list would drop tracked decrements.
-    assert!(!methods::LIBZYNC || coinbase_spends.is_empty() || spend_tracked.len() == coinbase_spends.len(),
+    assert!(coinbase_spends.is_empty() || spend_tracked.len() == coinbase_spends.len(),
             "smt_advance_ex: libzync needs the tracked bit of every coinbase spend ({} spends, {} bits)", coinbase_spends.len(), spend_tracked.len());
     for (i, t) in coinbase_spends.iter().enumerate() {
         let is_tracked = spend_tracked.get(i).copied().unwrap_or(false);
         // libzync: only tracked coins are counted (agg_lite.rs: an untracked coinbase's count changes no verdict).
-        if methods::LIBZYNC && !is_tracked { continue; }
+        if !is_tracked { continue; }
         let cur = smt.get(t).unwrap_or(0);
         // ⚠ FIRST TOUCH ONLY. A block may spend two outputs of the same coinbase; the second sees
         // the first's decrement, so recording it too would restore the intermediate value.
@@ -1788,23 +1084,6 @@ struct Bundle {
     in_roots: Vec<Option<[u8; 32]>>, in_leaves: u64,
     in_nbits: u32, in_time: u32, in_epoch_start: u32, in_recent: Vec<u32>,
     witness: BlockWitness,
-}
-
-// `host prove-range-bridge <n>`: prove block n from its bridge bundle (mode 6), NO replay. Same output as
-// prove-range (range_n.bin), so fold-range / verify-range / submit are unchanged.
-fn cmd_prove_range_bridge(n: u32) {
-    use std::time::Instant;
-    // The bundle read and the input stream are shared with mode-6 `seg-serve` (#361), so this block
-    // proved on one card and the same block proved across N write the guest byte-for-byte alike.
-    let bd = read_bridge_bundle(n);
-    let mut b = ExecutorEnv::builder();
-    write_range_env(&mut b, &bd);
-    let t = Instant::now();
-    let receipt = prove_env_with_progress(b.build().unwrap(), &format!("range [{n}..{n}] (bridge)"));
-    receipt.verify(METHOD_ID).expect("verify");
-    let out = std::env::var("HAZYNC_OUT").unwrap_or_else(|_| format!("range_{n}.hzk"));
-    std::fs::write(&out, bincode::serialize(&receipt).unwrap()).unwrap();
-    println!("proved range [{n}..{n}] from bridge bundle in {:.1}s -> {out}", t.elapsed().as_secs_f64());
 }
 
 fn main() {
@@ -1864,10 +1143,6 @@ fn main() {
     }));
 
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "prove-chain-bad") { prove_chain_bad(); return; }
-    if args.iter().any(|a| a == "adversarial") { adversarial(); return; }
-    if args.iter().any(|a| a == "check-bip30") { check_bip30(); return; }
-    if args.iter().any(|a| a == "regress") { regress(); return; }
     if args.iter().any(|a| a == "agg-exec-fake") {
         agg_exec_fake();
         return;
@@ -2055,20 +1330,12 @@ fn main() {
         exec_time_cmd();
         return;
     }
-    if args.iter().any(|a| a == "vb-stages") {
-        vb_stages_cmd();
-        return;
-    }
     if args.iter().any(|a| a == "chunk-profile") {
         chunk_profile();
         return;
     }
     if args.iter().any(|a| a == "agg-chunks") {
         agg_chunks();
-        return;
-    }
-    if args.iter().any(|a| a == "prove-block") {
-        prove_block();
         return;
     }
     if args.iter().any(|a| a == "core-vectors") {
@@ -2083,42 +1350,14 @@ fn main() {
         test_merkle_cmd();
         return;
     }
-    if args.iter().any(|a| a == "check-full") {
-        check_full();
-        return;
-    }
-    if args.iter().any(|a| a == "check-ibd") {
-        check_ibd();
-        return;
-    }
-    if args.iter().any(|a| a == "prove-ibd") {
-        prove_ibd();
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "prove-range") {
-        let n: u32 = args.get(p + 1).and_then(|s| s.parse().ok()).expect("prove-range <n>");
-        prove_range_cmd(n);
-        return;
-    }
     if let Some(p) = args.iter().position(|a| a == "fold-range") {
         let (l, r, o) = (args.get(p + 1).expect("left"), args.get(p + 2).expect("right"), args.get(p + 3).expect("out"));
-        // libzync on the original coordinator (lz_coord.rs): a fold is a join
-        if methods::LIBZYNC { lz::lz_join_cmd(l, r, o); } else { fold_range_cmd(l, r, o); }
+        // the original coordinator's fold is a libzync join (lz_coord.rs)
+        lz::lz_join_cmd(l, r, o);
         return;
     }
     if args.iter().any(|a| a == "libzync-genesis-tip") {
         lz_coord::genesis_tip_cmd();
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "extend-spine") {
-        let (s, n, o) = (args.get(p + 1).expect("extend-spine <spine.bin> <next.bin> <out.bin>"),
-                         args.get(p + 2).expect("extend-spine <spine.bin> <next.bin> <out.bin>"),
-                         args.get(p + 3).expect("extend-spine <spine.bin> <next.bin> <out.bin>"));
-        extend_spine_cmd(s, n, o);
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "verify-range") {
-        verify_range_cmd(args.get(p + 1).expect("verify-range <bin>"));
         return;
     }
     if args.iter().any(|a| a == "method-id") {
@@ -2133,36 +1372,14 @@ fn main() {
         println!("{}", seg_po2());
         return;
     }
-    if args.iter().any(|a| a == "script-flags-test") { script_flags_test(); return; }
-    if args.iter().any(|a| a == "bundle-roundtrip-test") { bundle_roundtrip_test(); return; }
     if let Some(p) = args.iter().position(|a| a == "snapshot-emit") {
         snapshot_emit_cmd(args.get(p + 1).map(|s| s.as_str()).unwrap_or("/root/bridge_bundles"),
                           args.get(p + 2).expect("snapshot-emit <bridge_dir> <out.snap>"));
         return;
     }
-    if let Some(p) = args.iter().position(|a| a == "snapshot-verify") {
-        snapshot_verify_cmd(args.get(p + 1).expect("snapshot-verify <snap> <proof>"),
-                            args.get(p + 2).expect("snapshot-verify <snap> <proof>"));
-        return;
-    }
     if let Some(p) = args.iter().position(|a| a == "verify-any") {
         let f = args.get(p + 1).expect("verify-any <bin> [<lo>]");
-        if methods::LIBZYNC {
-            lz_coord::verify_any_cmd(f, args.get(p + 2).map(|v| v.parse().expect("verify-any <bin> [<lo>]: lo is a height")));
-        } else { verify_any_cmd(f); }
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "snark-wrap") {
-        snark_wrap_cmd(args.get(p + 1).expect("snark-wrap <range.bin> <out.snark>"),
-                       args.get(p + 2).expect("snark-wrap <range.bin> <out.snark>"));
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "verify-snark") {
-        verify_snark_cmd(args.get(p + 1).expect("verify-snark <out.snark>"));
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "verify-chain") {
-        verify_chain_cmd(args.get(p + 1).expect("verify-chain <bin>"));
+        lz_coord::verify_any_cmd(f, args.get(p + 2).map(|v| v.parse().expect("verify-any <bin> [<lo>]: lo is a height")));
         return;
     }
     if args.iter().any(|a| a == "bridge") {
@@ -2171,148 +1388,19 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "prove-range-bridge") {
         let n: u32 = args.get(p + 1).and_then(|s| s.parse().ok()).expect("prove-range-bridge <n>");
-        if methods::LIBZYNC { lz_coord::prove_bridge_cmd(n); } else { cmd_prove_range_bridge(n); }
+        lz_coord::prove_bridge_cmd(n);
         return;
     }
-    if args.iter().any(|a| a == "prove-full") {
-        prove_full();
-        return;
-    }
-    if args.iter().any(|a| a == "prove-seg") {
-        prove_seg();
-        return;
-    }
-    if args.iter().any(|a| a == "prove-snark") {
-        prove_snark();
-        return;
-    }
-    if args.iter().any(|a| a == "prove-chain") {
-        prove_chain();
-        return;
-    }
-    println!("=== Hazync CHAIN PROOF — fold real mainnet blocks 170 → 171 → 172 (IVC transition) ===\n");
-
-    // Running UTXO accumulator (the bridge). Seed with block-9's coinbase (spent in block 170) + filler.
-    let mut forest = Forest::new();
-    for i in 0..4u64 { forest.add(hash_leaf(&[b"pre".as_slice(), &i.to_le_bytes()].concat())); }
-    let spk9 = ScriptBuf::from_bytes(hx(SPEND170_PREV_SPK));
-    let spend170_tx: Transaction = deserialize(&hx(SPEND170)).unwrap();
-    let op9 = spend170_tx.input[0].previous_output;
-    // Block 9's coinbase output (height 9, coinbase) — spent by block 170, i.e. 161 blocks mature.
-    forest.add(coin_leaf(&op9.txid.to_byte_array(), op9.vout, SPEND170_PREV_VALUE, spk9.as_bytes(), 9, true, 1_231_473_279));
-    for i in 0..2u64 { forest.add(hash_leaf(&[b"post".as_slice(), &i.to_le_bytes()].concat())); }
-
-    // Anchor checkpoint = the trusted state at block 169 (interim: single-signer GHAST checkpoint).
-    let anchor = ChainState {
-        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, utxo_value: 0,
-        tip_hash: arr(rev(hx(HASH169))), utxo_roots: forest.roots(), utxo_leaves: forest.leaves.len() as u64,
-        cum_work: [0u8; 32], height: 169,
-        prev_nbits: 0x1d00ffff, prev_time: 1_231_730_523, // block 169 (difficulty-1 epoch)
-        epoch_start: 1_231_006_505, // epoch 0's first block = genesis timestamp
-        // last 11 block timestamps up to 169 (approx; MTP unused pre-BIP113 at heights 170-172).
-        recent_times: (0..11).map(|i| 1_231_729_000u32 + i * 140).collect(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
-        max_time: 1_231_730_523, profile: 0, block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
-    };
-
-    // Fold each real block. (170 has the P2PK spend; 171/172 are coinbase-only.)
-    let blocks: Vec<(u32, Vec<u8>, &str, Vec<Spend>, &str)> = vec![
-        (170, build_header(HASH169, &arr(rev(hx(MERKLE170))), 1_231_731_025, 0x1d00ffff, 1_889_418_792), CB170,
-            vec![Spend { raw: hx(SPEND170), prev_value: SPEND170_PREV_VALUE, prev_spk: hx(SPEND170_PREV_SPK), coin_height: 9, coin_is_coinbase: true, coin_mtp: 1_231_473_279 }], HASH170),
-        (171, vec![], CB171, vec![], HASH171), // header built below (merkle = coinbase txid)
-        (172, vec![], CB172, vec![], HASH172),
-    ];
-
-    let mut state = anchor.clone();
-    let mut recent = anchor.recent_times.clone();
-    for (i, (height, hdr0, cb_hex, spends, expect_hash)) in blocks.into_iter().enumerate() {
-        // For coinbase-only blocks (empty hdr0), build the header now: merkle = coinbase txid.
-        let header = if hdr0.is_empty() {
-            let cb: Transaction = deserialize(&hx(cb_hex)).unwrap();
-            let (prev, time, nonce) = match height {
-                171 => (HASH170, 1_231_731_401u32, 653_436_935u32),
-                172 => (HASH171, 1_231_731_853, 1_565_279_797),
-                _ => unreachable!(),
-            };
-            build_header(prev, &cb.compute_txid().to_byte_array(), time, 0x1d00ffff, nonce)
-        } else { hdr0 };
-
-        let create_mtp = median_u32(&recent);
-        let blk_time = u32::from_le_bytes(header[68..72].try_into().unwrap());
-        let w = build_block(&mut forest, header, height, cb_hex, &spends, create_mtp);
-        advance_recent(&mut recent, blk_time);
-        let is_base = if i == 0 { 1 } else { 0 };
-        let (next, cycles) = chain_step(&state, &w, is_base);
-
-        let hash_ok = next.tip_hash == arr(rev(hx(expect_hash)));
-        println!("block {height:>3}: tip {} {}  height {}  cumwork {}  Δwork {}  ({} cyc){}",
-            &hex(&next.tip_hash)[..16], if hash_ok { "✓" } else { "✗MISMATCH" }, next.height,
-            work_u128(&next.cum_work), work_u128(&next.cum_work) - work_u128(&state.cum_work), cycles,
-            if is_base == 1 { "  [base: anchored at 169]" } else { "  [recursion hook: prev is a chain proof]" });
-        state = next;
-    }
-
-    println!("\n>>> CHAIN TIP at height {} — cumulative work {} over 3 real blocks, one linked UTXO root.",
-        state.height, work_u128(&state.cum_work));
-    println!(">>> Each step (all enforced in-guest, panic⇒reject): scripts + CheckTransaction + no-inflation");
-    println!("    + PoW + merkle + subsidy + weight ≤4M + sigops ≤80k + difficulty-retarget + coinbase-maturity");
-    println!("    + absolute-locktime finality + BIP68 relative-locktime + prevhash linkage + UTXO carry + work.");
-    println!("    (block 170 spends block-9's coinbase 161 blocks later — the maturity rule is exercised for real.)");
-    println!("    (Cryptographic recursion — env::verify(prev proof) — is the compiled hook; proving is deferred to the big box.)");
-
-    // ---- Multi-tx segwit/P2SH/taproot validation with correct per-height flags + full sigops. ----
-    println!("\n=== Multi-tx modern validation: real segwit/P2SH/taproot spends at height 800000 (all soft-forks active) ===");
-    let base = std::env::var("HAZYNC_BASE")
-        .unwrap_or_else(|_| format!("{}/hazync-build", std::env::var("HOME").unwrap_or_default()));
-    let mut specs: Vec<(&str, SpendCheck)> = Vec::new();
-    let cov: serde_json::Value = match std::fs::read_to_string(format!("{base}/coverage_spends.json")) {
-        Ok(txt) => serde_json::from_str(&txt).unwrap(),
-        Err(_) => {
-            println!("    (skipped — modern-validation test vectors not found under {base}; set HAZYNC_BASE to the build dir to run this demo)");
-            return;
-        }
-    };
-    for (key, name) in [("v0_p2wpkh", "P2WPKH"), ("p2sh", "P2SH"), ("v0_p2wsh", "P2WSH-multisig")] {
-        let j = &cov[key];
-        specs.push((name, SpendCheck {
-            raw_tx: hx(j["raw_tx"].as_str().unwrap()),
-            prevouts: hx(j["prevouts"].as_str().unwrap()),
-            block_height: 800_000,
-        }));
-    }
-    for (file, name) in [("real_tap_full.json", "P2TR-keypath"), ("tapscript_full.json", "P2TR-script")] {
-        if let Ok(txt) = std::fs::read_to_string(format!("{base}/{file}")) {
-            let j: serde_json::Value = serde_json::from_str(&txt).unwrap();
-            specs.push((name, SpendCheck {
-                raw_tx: hx(j["raw_tx"].as_str().unwrap()),
-                prevouts: hx(j["prevouts"].as_str().unwrap()),
-                block_height: 800_000,
-            }));
-        }
-    }
-    let mut mb = ExecutorEnv::builder();
-    mb.write(&3u32).unwrap();
-    mb.write(&(specs.len() as u32)).unwrap();
-    for (_, s) in &specs {
-        mb.write(s).unwrap();
-    }
-    let sess = default_executor().execute(mb.build().unwrap(), METHOD_ELF).unwrap();
-    crate::lz::require_committed(sess.exit_code, "multi-tx execution");
-    let results: Vec<SpendResult> = sess.journal.decode().unwrap();
-    println!("(flags 0x{:x} = P2SH|DERSIG|CLTV|CSV|WITNESS|NULLDUMMY|TAPROOT)", results.first().map(|r| r.flags).unwrap_or(0));
-    for ((name, _), r) in specs.iter().zip(&results) {
-        println!("  {:<14} script={} {}  tx_check={}  sigop_cost={}",
-            name, r.script, if r.script == 1 { "VALID ✓" } else { "reject" }, r.tx_check, r.sigops);
-    }
-    let all_valid = results.iter().all(|r| r.script == 1 && r.tx_check == 1);
-    println!(">>> multi-tx modern validation {} — segwit witness + P2SH + taproot verified with correct flags + full sigop cost.",
-        if all_valid { "ALL VALID ✓" } else { "had rejects ✗" });
+    // No command matched. The CORE design's demonstrations, block modes and range, spine and SNARK commands are
+    // in history/ (a libzync image refuses those guest modes); prover/README.md lists this host's commands.
+    eprintln!("usage: host <command> [args]  (see prover/README.md)");
+    std::process::exit(2);
 }
 
 #[cfg(test)]
 mod smt_bridge {
     use super::*;
-    use hazync_coinbase_smt::bip30::{apply_block, BlockUpdate, Spend, TrackedTx, REPEATABLE, SPENT};
+    use hazync_coinbase_smt::bip30::{apply_block, BlockUpdate, Spend, TrackedTx, REPEATABLE};
 
     fn txid(n: u64) -> [u8; 32] {
         use sha2::{Digest, Sha256};
@@ -2437,8 +1525,7 @@ mod smt_bridge {
             root = apply_block(&root, &to_update(txid(999), 1, &w1)).unwrap();
             // libzync counts only tracked coins (agg_lite.rs), so an untracked spend leaves the count where it was;
             // either way the duplicate of an untracked coinbase must be refused below.
-            let untracked_after = if methods::LIBZYNC { 1 } else { SPENT };
-            assert_eq!(bridge.get(&dup), Some(if tracked { REPEATABLE } else { untracked_after }));
+            assert_eq!(bridge.get(&dup), Some(if tracked { REPEATABLE } else { 1 }));
 
             let w2 = smt_advance(&mut bridge, dup, 1, &[], false).0;
             let r = apply_block(&root, &to_update(dup, 1, &w2));
@@ -2500,45 +1587,6 @@ fn prove_segment_resilient(
         }
     }
     panic!("{what}: failed {ATTEMPTS} times, last error: {}", last.unwrap_or_default());
-}
-
-/// Proves an executed session segment by segment, each through `prove_segment_resilient`, then
-/// assembles — the #119-resilient equivalent of `ProverServer::prove_session`.
-///
-/// ⛔ WHY THIS EXISTS (#237). `prove_session` proves every segment behind a single call, so a
-/// transient #119 fault surfaces as one `Err` *after* the whole chunk's work, and takes the chunk
-/// with it. The only retry for that path lived in `scripts/gpu-benchmark.sh` — outside the binary —
-/// so anyone running `prove-chunk` by hand simply lost the chunk.
-///
-/// Measured on 8× L40S (docs/history/BENCH_8xL40S_2026-09-08.md): a fault two-thirds of the way
-/// through a chunk cost **33% of the block's critical path** — 817 s wall against 614 s of useful
-/// work — because recovery could only restart from segment zero. The observed fault rate was 5 in 80
-/// chunk attempts (6.3%), i.e. a ~40% chance of at least one per 8-chunk block. It is not rare.
-///
-/// Driving the segments here puts every one through the bounded retry, so a #119 fault costs ONE
-/// segment instead of the chunk.
-///
-/// ⚠ Retrying "proof is invalid" is safe ONLY because the guest and the inputs are identical across
-/// attempts: a genuinely invalid proof fails every attempt and the bounded loop still terminates.
-/// That is `prove_segment_resilient`'s reasoning and it is the reason this wrapper is not a way of
-/// papering over a real soundness failure.
-///
-/// Assembly is NOT reimplemented. `assemble_from_segment_receipts` is the same code `prove_session`
-/// runs after its own loop, so this path and that one cannot drift.
-/// #256: prove a board block segment by segment instead of in one silent `prove_with_opts` call:
-/// every segment goes through the #119 retry (#240), and each prints a progress line the worker can
-/// watch. Same ProverOpts::succinct(), same receipt kind as before.
-fn prove_env_with_progress(env: ExecutorEnv, label: &str) -> risc0_zkvm::Receipt {
-    let opts = ProverOpts::succinct();
-    let server = risc0_zkvm::get_prover_server(&opts).expect("prover server");
-    let ctx = risc0_zkvm::VerifierContext::default();
-    let session = risc0_zkvm::ExecutorImpl::from_elf(env, METHOD_ELF)
-        .expect("executor")
-        .run()
-        .expect("execute");
-    crate::lz::require_committed(session.exit_code, "execution");
-    println!("{label}: executed, {} segments at po2 {} -- proving", session.segments.len(), seg_po2());
-    prove_session_resilient(&server, &ctx, &session)
 }
 
 fn prove_session_resilient(

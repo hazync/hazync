@@ -4,7 +4,7 @@
 
 use methods::{METHOD_ELF, METHOD_ID};
 use risc0_zkvm::{ExecutorEnv, ProverOpts};
-use crate::{build_full, hex, prove_segment_resilient, read_bridge_bundle, seg_po2, write_range_env};
+use crate::{build_full, hex, prove_segment_resilient, seg_po2};
 use crate::chunks::{chunk_block_hash, chunk_bounds, nchunks_env, read_chunk_receipts, write_chunk_inputs};
 use crate::lz::{execute_chunks_parallel, hint_threads, libzync_agg_prep, libzync_agg_tail,
     write_aggregate_env};
@@ -1681,19 +1681,8 @@ pub(crate) fn seg_serve_cmd() {
     // add_assumption, so the aggregate -- the thing that folds the chunk receipts into the block
     // proof -- could not be served at all. Everything downstream is unchanged, because an aggregate
     // session produces ordinary segments like any other.
-    // HAZYNC_RANGE=<n> serves the mode-6 BRIDGE RANGE — the board's own per-block proof (#361).
-    //
-    // The same gap as #153, one mode along. `prove-range-bridge` builds its session from
-    // bundle_<n>.json and proves it in ONE local process, so a board block got exactly one card
-    // however large it was, while the fixture path (modes 4/5) could spread a block over 27. The two
-    // produce different artifacts — the coordinator verifies a KIND_RANGE receipt — so the fast path
-    // was unsubmittable and the submittable path was single-card. Serving mode 6 here closes that:
-    // everything downstream is untouched, because a range session produces ordinary segments too.
-    //
-    // ⛔ The input stream is written by the SAME helper `prove-range-bridge` uses, and must be: the
-    // guest reads a fixed order, so a divergence desynchronises its stream rather than failing loudly.
+    // (The CORE design's HAZYNC_RANGE served its mode-6 bridge range, #361; a libzync image has no mode 6.)
     let agg = std::env::var("HAZYNC_AGG").is_ok();
-    let range_n: Option<u32> = std::env::var("HAZYNC_RANGE").ok().and_then(|s| s.parse().ok());
     // libzync HAZYNC_AGG_EARLY=1: start the aggregate BEFORE the chunk receipts exist. Its execution only
     // needs each chunk's claim (journal + image id), which this box gets by executing the chunks itself, in
     // parallel, in seconds. The receipts are needed only by the resolves at the very end, so they are read
@@ -1703,65 +1692,53 @@ pub(crate) fn seg_serve_cmd() {
     // AGG_EARLY: each chunk's expected claim digest, from this box's own execution of the chunks
     let mut early_claims: Vec<risc0_zkvm::sha::Digest> = Vec::new();
     let mut b = ExecutorEnv::builder();
-    // The only witness field the rest of this function needs. A bundle carries it too, so mode 6 never
-    // builds a BlockWitness — there is no HAZYNC_BLOCK fixture for a board block, which is the whole
-    // reason `build_full()` cannot serve this path.
-    let height: u32;
-    if let Some(n) = range_n {
-        let bd = read_bridge_bundle(n);
-        height = bd.height;
-        println!("=== segment coordinator (push): RANGE [{n}..{n}] from bridge bundle, po2 {} ===",
-                 seg_po2());
-        write_range_env(&mut b, &bd);
-    } else {
-        let (anchor, mut w) = build_full();
-        height = w.height;
-        if agg {
-            let bounds = chunk_bounds(&w, nchunks_env());
-            agg_nchunks = bounds.len();
-            let receipts: Vec<risc0_zkvm::Receipt> = if agg_early {
-                let t = std::time::Instant::now();
-                let r: Vec<_> = execute_chunks_parallel(&w, &bounds, hint_threads()).into_iter().map(|(r, _)| r).collect();
-                println!("  AGG_EARLY: {} chunk claims from local execution in {:.1} s; receipts are awaited at resolve",
-                         r.len(), t.elapsed().as_secs_f64());
-                use risc0_zkvm::sha::Digestible;
-                early_claims = r.iter().map(|x| x.claim().expect("chunk claim").digest()).collect();
-                // A chunk file already there that is NOT this block's chunk (an earlier block's, left in the receipts
-                // directory) would pass the wait at resolve and fail only after every aggregate segment is proved
-                // (review 11-06): move it aside now.
-                let dir = std::env::var("HAZYNC_RECEIPTS").unwrap_or_else(|_| ".".into());
-                for (i, want) in early_claims.iter().enumerate() {
-                    for f in [format!("{dir}/chunk_{i}.hzk"), format!("{dir}/chunk_{i}.bin")] {
-                        if !std::path::Path::new(&f).exists() { continue; }
-                        // only a WHOLE receipt of another claim: a file that does not decode yet may be this block's
-                        // chunk still being copied in (round 9), and the wait below checks it
-                        if early_claim_of(&f).is_some_and(|d| d != *want) {
-                            let to = format!("{f}.stale");
-                            std::fs::rename(&f, &to).unwrap_or_else(|e| panic!("{f}: {e}"));
-                            println!("  AGG_EARLY: {f} is not this block's chunk {i}: moved aside to {to}");
-                        }
+    let (anchor, mut w) = build_full();
+    let height = w.height;
+    if agg {
+        let bounds = chunk_bounds(&w, nchunks_env());
+        agg_nchunks = bounds.len();
+        let receipts: Vec<risc0_zkvm::Receipt> = if agg_early {
+            let t = std::time::Instant::now();
+            let r: Vec<_> = execute_chunks_parallel(&w, &bounds, hint_threads()).into_iter().map(|(r, _)| r).collect();
+            println!("  AGG_EARLY: {} chunk claims from local execution in {:.1} s; receipts are awaited at resolve",
+                     r.len(), t.elapsed().as_secs_f64());
+            use risc0_zkvm::sha::Digestible;
+            early_claims = r.iter().map(|x| x.claim().expect("chunk claim").digest()).collect();
+            // A chunk file already there that is NOT this block's chunk (an earlier block's, left in the receipts
+            // directory) would pass the wait at resolve and fail only after every aggregate segment is proved
+            // (review 11-06): move it aside now.
+            let dir = std::env::var("HAZYNC_RECEIPTS").unwrap_or_else(|_| ".".into());
+            for (i, want) in early_claims.iter().enumerate() {
+                for f in [format!("{dir}/chunk_{i}.hzk"), format!("{dir}/chunk_{i}.bin")] {
+                    if !std::path::Path::new(&f).exists() { continue; }
+                    // only a WHOLE receipt of another claim: a file that does not decode yet may be this block's
+                    // chunk still being copied in (round 9), and the wait below checks it
+                    if early_claim_of(&f).is_some_and(|d| d != *want) {
+                        let to = format!("{f}.stale");
+                        std::fs::rename(&f, &to).unwrap_or_else(|e| panic!("{f}: {e}"));
+                        println!("  AGG_EARLY: {f} is not this block's chunk {i}: moved aside to {to}");
                     }
                 }
-                r
-            } else { read_chunk_receipts(bounds.len()) };
-            println!("=== segment coordinator (push): AGGREGATE of {} chunk receipts, block {} po2 {} ===",
-                     receipts.len(), w.height, seg_po2());
-            // libzync: the same aggregate stream as agg-chunks, or the guest desyncs: the modelled coin log and trie
-            // around the block (product image), its trie update PROVED (this aggregate is proved for real).
-            libzync_agg_prep(&mut w);
-            let mut anchor = anchor;
-            if methods::COINLOG { crate::lz::cl_synth_around(&receipts, &mut anchor, &mut w, true); }
-            write_aggregate_env(&mut b, &receipts, &anchor, &w);
-            libzync_agg_tail(&mut b, &w);
-        } else {
-            let bounds = chunk_bounds(&w, nchunks_env());
-            let (lo, hi) = *bounds.get(idx).expect("chunk index");
-            b.segment_limit_po2(seg_po2());
-            b.write(&4u32).unwrap();
-            b.write(&w.height).unwrap();
-            b.write(&chunk_block_hash(&w.header)).unwrap();
-            write_chunk_inputs(&mut b, &w, lo, hi);
-        }
+            }
+            r
+        } else { read_chunk_receipts(bounds.len()) };
+        println!("=== segment coordinator (push): AGGREGATE of {} chunk receipts, block {} po2 {} ===",
+                 receipts.len(), w.height, seg_po2());
+        // libzync: the same aggregate stream as agg-chunks, or the guest desyncs: the modelled coin log and trie
+        // around the block (product image), its trie update PROVED (this aggregate is proved for real).
+        libzync_agg_prep(&mut w);
+        let mut anchor = anchor;
+        if methods::COINLOG { crate::lz::cl_synth_around(&receipts, &mut anchor, &mut w, true); }
+        write_aggregate_env(&mut b, &receipts, &anchor, &w);
+        libzync_agg_tail(&mut b, &w);
+    } else {
+        let bounds = chunk_bounds(&w, nchunks_env());
+        let (lo, hi) = *bounds.get(idx).expect("chunk index");
+        b.segment_limit_po2(seg_po2());
+        b.write(&4u32).unwrap();
+        b.write(&w.height).unwrap();
+        b.write(&chunk_block_hash(&w.header)).unwrap();
+        write_chunk_inputs(&mut b, &w, lo, hi);
     }
 
     // hazync#235 / hazync#207: STREAM segments as the executor produces them.
@@ -1831,7 +1808,7 @@ pub(crate) fn seg_serve_cmd() {
         } else { depth }
     };
 
-    if !agg && range_n.is_none() {
+    if !agg {
         println!("=== segment coordinator (push) — block {} chunk {} po2 {} ===", height, idx, seg_po2());
     }
     println!("  streaming segments as they are produced (hazync#235), depth {depth}");
@@ -2648,13 +2625,7 @@ come back by itself. Start one against this coordinator, or re-run.");
     //
     // `prove-chunk` has always honoured HAZYNC_OUT; the aggregate simply never did. Same convention
     // here, with a default so the file exists even when nobody sets it.
-    //
-    // ⛔ Mode 6 defaults to the name `prove-range-bridge` writes, so a board block proved across N
-    // cards lands as the same artifact one card would have produced and submits unchanged (#361).
-    let out = std::env::var("HAZYNC_OUT").unwrap_or_else(|_| match range_n {
-        Some(n) => format!("range_{n}.hzk"),
-        None => "aggregate_receipt.bin".into(),
-    });
+    let out = std::env::var("HAZYNC_OUT").unwrap_or_else(|_| "aggregate_receipt.bin".into());
     match bincode::serialize(&info.receipt) {
         Ok(bytes) => match std::fs::write(&out, &bytes) {
             Ok(()) => println!("    receipt written to {out} ({} bytes)", bytes.len()),

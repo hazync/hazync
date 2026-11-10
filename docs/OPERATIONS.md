@@ -1,12 +1,17 @@
 # Operations
 
-The operator's reference for the **original Hazync system**: the canonical CORE guest (`METHOD_ID
-37987b85`, release v0.22.1), board provers, multi-card fleets on RunPod, and tip runs. It merges the
-September 2026 pages PROVING, PROVER_OPERATIONS, FLEET_OPERATIONS, TIP_RUN_OPERATIONS and
-TOPOLOGY_AND_SETTINGS (now in `docs/history/`).
+The operator's reference for the **original Hazync system**: the CORE guest (`37987b85`, now superseded), its
+last release v0.22.1, board provers, multi-card fleets on RunPod, and tip runs. It merges the September 2026 pages
+PROVING, PROVER_OPERATIONS, FLEET_OPERATIONS, TIP_RUN_OPERATIONS and TOPOLOGY_AND_SETTINGS (now in
+`docs/history/`).
 
-libzync is replacing the guest ([`libzync/LIBZYNC.md`](libzync/LIBZYNC.md)); its own GPU scripts are in
-`experimental/libzync-bench/gpu/`. Everything below is still the reference for the shipped system.
+⚠ **The host in this tree is libzync-only.** The canonical image is libzync's published mainnet image `863c9ce3`
+(§2.7), and `prover/host` refuses to build without `HAZYNC_LIBZYNC=1`. The CORE commands below that drive a guest mode
+a libzync image refuses (`regress`, `adversarial`, `check-*`, `prove-full`, `prove-seg`, `prove-chain*`, `prove-ibd`,
+`prove-range`, `extend-spine`, `verify-range`, `verify-chain`, `prove-snark`, mode 6) exist only in the v0.22.1
+release binaries; [`history/README.md`](../history/README.md) lists what was removed. This tree's commands are in
+[`prover/README.md`](../prover/README.md), and libzync's GPU scripts in `experimental/libzync-bench/gpu/`. The rest of
+this page stays the reference for the CORE board until the board switches to libzync.
 
 New to proving: [`CONTRIBUTING.md`](../CONTRIBUTING.md) first. Concepts: [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md).
 Board coordinator: [`COORDINATOR.md`](COORDINATOR.md). Soundness: [`SECURITY.md`](history/SECURITY_MODEL_CORE.md). Builds and
@@ -294,18 +299,25 @@ it runs once per artifact. `SKIP_GROTH16=1` boxes cannot `snark-wrap` at all.
 
 ### 2.7 METHOD_ID and reproducibility
 
-**Releases.** The current release is **v0.22.1**. It ships `METHOD_ID 37987b85`, canonical since 2026-09-07
-(`c12ad67`, the Core-becomes-canonical re-baseline: patches `0012` and `0013` applied unconditionally by
-`provision-vps.sh`). `scripts/check-versions.sh` requires this line to name the newest tag (or one ahead of it).
+**Releases.** The current release is **v0.22.1**, the CORE design's last; `scripts/check-versions.sh` requires this
+line to name the newest tag (or one ahead of it). It ships the CORE guest `37987b85`, superseded on 2026-11-09
+after two months as the canonical id.
+
+**The canonical id** (`reproduce/METHOD_ID`) is libzync's published mainnet image
+`863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5`, with the signet image in
+[`reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). `reproduce/libzync.Dockerfile` reproduces both bit for bit and the
+`reproducible-image-id` job rebuilds them on every push. No release ships it yet.
 
 A receipt verifies only against the guest that produced it. A mismatch prints `STARK verification FAILED.
 This is almost certainly a guest image-id (METHOD_ID) MISMATCH` — a build mismatch, not a bad proof.
 
 ```
 ./target/release/host method-id
-docker build -f reproduce/Dockerfile -t hazync-repro .
-docker run --rm hazync-repro          # must equal reproduce/METHOD_ID
+docker build -f reproduce/libzync.Dockerfile -t hazync-libzync-repro .
+docker run --rm hazync-libzync-repro  # must equal reproduce/LIBZYNC_IDS (mainnet: reproduce/METHOD_ID)
 ```
+
+The CORE bullets below describe `reproduce/Dockerfile`, which built the CORE images.
 
 - Pins: `risc0-zkvm`/`risc0-build` `=3.0.5`; `rzup` rust 1.94.1 / cpp 2024.1.5 / `cargo-risczero`+`r0vm`
   3.0.5; Bitcoin Core `v28.0`; secp256k1 `v0.5.1`; committed `Cargo.lock`; fixed container paths. CI job

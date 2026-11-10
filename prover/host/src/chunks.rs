@@ -760,38 +760,24 @@ pub(crate) fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &Blo
 
     // libzync guest: ONE hint block (libzync/src/wire.rs) -- pubkey-Y hints, batch-signature hints from
     // the block's bundle ($HAZYNC_LZ_HINTS, or collect mode without one), and the block's MTP and time.
-    if methods::LIBZYNC {
-        let liftx: Vec<u8> = liftx_hints(w, lo, hi).iter().flat_map(|(x, y)| x.iter().chain(y.iter()).copied()).collect();
-        let bundle = lz_bundle(w.height, &header_hash(&w.header));
-        let sig = bundle.as_ref().and_then(|b| b.chunk_sig(lo as u32, hi as u32));
-        // Negative control (test-only): HAZYNC_LITE_BAD_MTP feeds chunks a wrong MTP; the aggregate must reject.
-        let bump = std::env::var("HAZYNC_LITE_BAD_MTP").is_ok() as u32;
-        let words = libzync::wire::ChunkHints {
-            mtp: HZ_BLOCK_MTP.lock().unwrap().expect("libzync: build_full has not set the block MTP") + bump,
-            block_time: if speculative() { 0 } else { u32::from_le_bytes(w.header[68..72].try_into().unwrap()) },
-            liftx: &liftx,
-            sig_collect: sig.is_none(),
-            sig: sig.unwrap_or(&[]),
-        }.encode();
-        b.write(&(words.len() as u32)).unwrap();
-        b.write_slice(&words);
-        match sig {
-            Some(s) => eprintln!("  libzync: inputs {lo}..{hi}: {} pubkey hints, {} signature hints",
-                                 liftx.len() / 64, s.len() / libzync::wire::SIG_HINT_BYTES),
-            None => eprintln!("  libzync: inputs {lo}..{hi}: {} pubkey hints, signatures COLLECT (no bundle entry)", liftx.len() / 64),
-        }
-    } else if std::env::var("HAZYNC_LIFTX_HINT").as_deref() == Ok("1") {
-        // hazync#205 pubkey-Y hints for the canonical guest, written BEFORE the groups because the guest
-        // verifies scripts as it reads them. ⛔ Must match the guest build (canonical: on).
-        let hints = liftx_hints(w, lo, hi);
-        b.write(&(hints.len() as u32)).unwrap();
-        let mut flat = Vec::with_capacity(hints.len() * 64);
-        for (x, y) in &hints {
-            flat.extend_from_slice(x);
-            flat.extend_from_slice(y);
-        }
-        b.write_slice(&flat);
-        eprintln!("  liftx: {} pubkey hints for inputs {}..{}", hints.len(), lo, hi);
+    let liftx: Vec<u8> = liftx_hints(w, lo, hi).iter().flat_map(|(x, y)| x.iter().chain(y.iter()).copied()).collect();
+    let bundle = lz_bundle(w.height, &header_hash(&w.header));
+    let sig = bundle.as_ref().and_then(|b| b.chunk_sig(lo as u32, hi as u32));
+    // Negative control (test-only): HAZYNC_LITE_BAD_MTP feeds chunks a wrong MTP; the aggregate must reject.
+    let bump = std::env::var("HAZYNC_LITE_BAD_MTP").is_ok() as u32;
+    let words = libzync::wire::ChunkHints {
+        mtp: HZ_BLOCK_MTP.lock().unwrap().expect("libzync: build_full has not set the block MTP") + bump,
+        block_time: if speculative() { 0 } else { u32::from_le_bytes(w.header[68..72].try_into().unwrap()) },
+        liftx: &liftx,
+        sig_collect: sig.is_none(),
+        sig: sig.unwrap_or(&[]),
+    }.encode();
+    b.write(&(words.len() as u32)).unwrap();
+    b.write_slice(&words);
+    match sig {
+        Some(s) => eprintln!("  libzync: inputs {lo}..{hi}: {} pubkey hints, {} signature hints",
+                             liftx.len() / 64, s.len() / libzync::wire::SIG_HINT_BYTES),
+        None => eprintln!("  libzync: inputs {lo}..{hi}: {} pubkey hints, signatures COLLECT (no bundle entry)", liftx.len() / 64),
     }
 
     for (tx_idx, gs, ge) in groups {
