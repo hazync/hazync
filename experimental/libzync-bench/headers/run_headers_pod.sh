@@ -98,6 +98,10 @@ ZA=hazync/prover/target/release/zyncapp
 \$ZA headers-prove headers.txt /dev/null --execute --elf zyncapp-headers.bin | tee run/exec.txt
 grep -q "^HEADERS_ID $WANT_ID\$" run/exec.txt || { echo "IMAGE ID is not the published $WANT_ID"; echo POD_DONE; exit 1; }
 ( nvidia-smi --query-gpu=utilization.gpu,memory.used,power.draw --format=csv,noheader -l 10 > run/smi.log 2>/dev/null ) & SMI=\$!
+echo "[\$(date +%T)] === the test fixtures: genesis..100, then 101..200 chained to it ==="
+head -101 headers.txt > h0_100.txt; head -201 headers.txt > h0_200.txt
+\$ZA headers-prove h0_100.txt run/hdr_0_100.rcpt --elf zyncapp-headers.bin | head -1
+\$ZA headers-prove h0_200.txt run/hdr_101_200.rcpt --after run/hdr_0_100.rcpt --elf zyncapp-headers.bin | head -1
 echo "[\$(date +%T)] === prove genesis to tip ==="
 /usr/bin/time -v \$ZA headers-prove headers.txt run/headers_0_tip.rcpt --elf zyncapp-headers.bin > run/prove.txt 2> run/prove.time
 echo "PROVE_EXIT=\$?"; cat run/prove.txt; grep -E 'Elapsed|Maximum resident' run/prove.time
