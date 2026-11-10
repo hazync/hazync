@@ -13,6 +13,10 @@
 # a refused cooperative launch is cudaErrorNotSupported -- and ONLY the second one's message is the
 # bare words "operation not supported".
 #
+# ⭐ `probe.exe path\to\host.exe` goes one step further and loads the PROVER'S OWN finished GPU
+# modules onto the card, after first saying whether that build holds code for the card at all. It
+# reports CANNOT TELL for a module it cannot see inside rather than passing it.
+#
 # ⚠ CI HAS NO GPU, so this workflow only BUILDS. The answer comes from running the exe on the card.
 # That is the whole design: a ~1 MB download instead of 177 MB, and seconds of compile instead of
 # two hours.
