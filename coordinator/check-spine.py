@@ -255,7 +255,9 @@ def main(argv=None):
     except (OSError, subprocess.TimeoutExpired) as e:
         rep.cannot_check(f"hazync-verify could not run ({a.verify}): {e}")
         return rep.finish()
-    if rc != 0 or not isinstance(v, dict):
+    # the libzync verifier exits 0 OK, 2 DEMO (a valid chain from genesis below Core's pinned work, the verdict of an early
+    # spine), 1 FAIL: 2 is not a rejection -- its parsed verdict, anchor and image decide, below
+    if rc not in ((0, 2) if LIBZYNC else (0,)) or not isinstance(v, dict):
         rep.fail(f"hazync-verify rejected the proof (exit {rc}): {' | '.join(lines[:3])[:300]}")
         return rep.finish()
     if v.get("verified") is True and v.get("genesis_anchored") is True:

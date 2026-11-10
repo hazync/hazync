@@ -12,8 +12,9 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,225,120 bytes raw, 354,277 gzipped |
-| sha256 (`./build.sh`, 2026-11-10, main at #695) | `235ab8278a6f227b7a0f9a2aca84af449e07c8a51ed3b4aa83a89c00035e0aa3`; the #695 branch on 11-09 and main on 11-10 gave the same bytes |
+| size | 1,237,433 bytes raw, 358,169 gzipped |
+| sha256 (this commit, `./build.sh`) | `bce00ae64aa1a950b3320244fd22c7bd308e71da66e809c55cdad20f4e4ea633` (with `verifyHeaders`, headers image `4d04d6bf`) |
+| reproduces | only at the default stage path: a `SWIFTSYNC_WASM_STAGE` override gave other bytes (`2ea330c0…`, +235 bytes) with no path in the strings |
 | vectors | 14/14 (`test-vectors.out`), all 14 in 0.5 s under Node 24 |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |
 

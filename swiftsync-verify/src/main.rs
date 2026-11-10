@@ -63,6 +63,9 @@ fn main() {
         let _ = writeln!(std::io::stdout(), "SWIFTSYNC_VERIFY_FAIL: {}", format!("{i}").escape_debug());
         exit(1);
     }));
+    if std::env::args().nth(1).as_deref() == Some("headers") {
+        headers_main(std::env::args().skip(2).collect());
+    }
     let mut args = std::env::args().skip(1);
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
     let mut now_arg: Option<String> = None;
@@ -316,4 +319,42 @@ fn display(h: &[u8; 32]) -> String {
 /// cum_work (32 bytes LE) as `getblockheader` prints chainwork: 64 hex digits, big-endian.
 fn work_hex(w: &[u8; 32]) -> String {
     display(w)
+}
+
+/// `swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <unix seconds>] <receipt>...`: a proof of
+/// the mainnet header chain from genesis (the header-chain zyncAPP), as one receipt or a chain of runs, the first from
+/// genesis and each next one starting where the one before ended. Exit 0 OK (chainwork at least Core's minimum), 2 DEMO
+/// (below it), 1 FAIL.
+fn headers_main(a: Vec<String>) -> ! {
+    let (mut image, mut expect, mut now, mut files) = (swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string(), None, None, Vec::new());
+    let mut it = a.into_iter();
+    while let Some(x) = it.next() {
+        match x.as_str() {
+            "--image" => image = it.next().unwrap_or_else(|| usage()),
+            "--expect" => expect = Some(it.next().unwrap_or_else(|| usage())),
+            "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
+            f if f.starts_with("--") => fail(&format!("headers: unknown flag {}", esc(f))),
+            f => files.push(f.to_string()),
+        }
+    }
+    if files.is_empty() { usage(); }
+    let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
+    let bytes: Vec<Vec<u8>> = files.iter().map(|f| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))))).collect();
+    let exp = expect.as_deref().map(|e| {
+        let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
+        (h.parse::<i64>().unwrap_or_else(|_| fail("--expect: bad height")), x)
+    });
+    let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
+    let rep = swiftsync_verify::headers::verify_headers(&refs, &image, now, exp);
+    for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
+    let ident = if expect.is_some() { "" } else { "; chain identity NOT checked (give --expect <height>:<hash> from a source you trust)" };
+    match (&rep.verdict, &rep.state) {
+        (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
+        (v, Some(s)) => {
+            let what = format!("header chain from genesis to {} {} (chainwork {}){ident}", s.height, s.hash_hex(), s.work_hex());
+            if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
+            println!("SWIFTSYNC_VERIFY_DEMO: a valid header chain below Core's minimum chain work: {what}"); exit(2)
+        }
+    }
 }

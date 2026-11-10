@@ -23,6 +23,7 @@ import server  # noqa: E402
 import sponsor_bot  # noqa: E402
 if CONTROL:
     sponsor_bot.LIBZYNC = False
+    sponsor_bot.SMOKE_LIBZYNC = sponsor_bot.SMOKE_CORE
     print("CONTROL: the bot looks for bundle_<n>.json on a libzync coordinator -- the checks below MUST fail")
 
 fails = 0
@@ -44,6 +45,18 @@ worker = importlib.util.module_from_spec(spec)
 loader.exec_module(worker)
 check(worker.bundle_name(b"LZLEAF02\x00\x01", 1) == "leaf_1.bin", "a served LZLEAF bundle is stored as leaf_1.bin")
 check(worker.bundle_name(b'{"witness": {}}', 1) == "bundle_1.json", "a JSON bundle is stored as bundle_1.json")
+
+# 3. the pods' GPU smoke: a libzync board proves block 1 from the leaf bundle it ships, and passes only on a
+#    RANGE-OK for block 1; the original board's smoke is unchanged
+lz_boot, core_boot = sponsor_bot.boot_script("v9.9.9", libzync=True), sponsor_bot.boot_script("v9.9.9", libzync=False)
+check("prove-range-bridge 1" in lz_boot and "verify-any range_1.bin 1" in lz_boot and "RANGE-OK lo=1 hi=1 " in lz_boot
+      and "prove-block" not in lz_boot and "@SMOKE@" not in lz_boot,
+      "a libzync pod proves block 1 from its leaf bundle and passes only on its RANGE-OK")
+check("prove-block" in core_boot and "prove-range-bridge" not in core_boot and "/v9.9.9/" in core_boot,
+      "the original board's pod smoke is unchanged")
+check([os.path.basename(f) for f in sponsor_bot.boot_files("/d", libzync=True)] == ["boot.sh", "want.txt", "leaf_1.bin"]
+      and [os.path.basename(f) for f in sponsor_bot.boot_files("/d", libzync=False)] == ["boot.sh", "want.txt"],
+      "boot() copies leaf_1.bin to a pod on the libzync board only")
 
 print(f"{'CONTROL: ' if CONTROL else ''}{fails} failure(s)")
 if CONTROL:

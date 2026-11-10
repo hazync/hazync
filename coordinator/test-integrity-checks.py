@@ -64,6 +64,7 @@ if int(os.environ.get("FAKE_VERIFY_RC", "0")):
     print("verification FAILED: the seal does not match", file=sys.stderr)
     sys.exit(1)
 print(open(os.environ["FAKE_VERIFY_OUT"]).read())
+sys.exit(int(os.environ.get("FAKE_VERIFY_EXIT", "0")))   # the libzync verifier: 0 OK, 2 DEMO, 1 FAIL
 """)
 
 FAKE_CLI = script("fake-bitcoin-cli", """#!/usr/bin/env python3
@@ -252,7 +253,8 @@ def lz_verify_out(anchor_ok=True, image=LZ_MID, height=3, tip=TIP, work=WORK,
 def spine_lz(env=None, **kw):
     sd, _ = spine_fixture(out_tip="aa" * 32, **kw)          # a libzync head's out_tip is a state digest
     db, _ = db_fixture()
-    e = {"HAZYNC_LIBZYNC": "1", "FAKE_VERIFY_OUT": lz_verify_out(), "FAKE_CHAIN": chain_fixture()}
+    # exit 2 by default: the real verifier's exit for DEMO, an early spine's verdict (11-09: the first real run failed on it)
+    e = {"HAZYNC_LIBZYNC": "1", "FAKE_VERIFY_OUT": lz_verify_out(), "FAKE_CHAIN": chain_fixture(), "FAKE_VERIFY_EXIT": "2"}
     e.update(env or {})
     return run([sys.executable, SPINE, "--spine-dir", sd, "--db", db, "--verify", FAKE_VERIFY, "--bitcoin-cli",
                 FAKE_CLI, "--method-id", LZ_MID], e)
@@ -262,7 +264,10 @@ print("== check-spine.py on the libzync board ==")
 rc, out = spine_lz()
 check(rc == 0 and "holds" in out and "state digest" in out,
       "libzync: a good genesis proof (DEMO below min chainwork) passes, tip and work held to the node", out)
-rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(anchor_ok=False)})
+rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(verdict="SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven"),
+                        "FAKE_VERIFY_EXIT": "0"})
+check(rc == 0 and "holds" in out, "libzync: an OK verdict (exit 0) passes too", out)
+rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(anchor_ok=False), "FAKE_VERIFY_EXIT": "1"})
 check(rc == 1, "libzync: a proof whose anchor is not genesis FAILS", out)
 rc, out = spine_lz(env={"FAKE_VERIFY_OUT": lz_verify_out(verdict="SWIFTSYNC_VERIFY_DEMO: consistent with the chain "
                                                                   "FROM THE GIVEN ANCHOR ONLY -- not a proof")})

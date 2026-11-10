@@ -1176,6 +1176,18 @@ jobs:
         run: |
           cd coordinator
           python3 test_offsite_proofs.py --control
+      - name: zyncAPP relay passes only read-only fact paths to the local zync-serve
+        run: cd coordinator && python3 test_zync_relay.py
+      - name: zyncAPP relay POSITIVE CONTROL (path filter accepts anything — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_zync_relay.py --control
+      - name: libzync switch — contributors carry over with their identity, never their CORE block counts
+        run: cd coordinator && python3 test_libzync_carry.py
+      - name: libzync contributor carry POSITIVE CONTROL (copies CORE block counts — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_libzync_carry.py --control
       - name: libzync coordinator — the bot and the worker name a block's bundle as the coordinator serves it
         run: cd coordinator && python3 test_libzync_coord_files.py
       - name: libzync coordinator bundle names POSITIVE CONTROL (bot looks for the original bridge's file — must FAIL)
@@ -1812,10 +1824,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
+      - name: Export the published header-chain zyncAPP ELF (the GPU run proves with it; its sha256 is pinned)
+        run: |
+          mkdir -p elf && docker run --rm -v "$PWD/elf:/out" hazync-libzync-repro cp /root/libzync-elf/zyncapp-headers.bin /out/
+          sudo chown -R "$(id -u):$(id -g)" elf && sha256sum elf/zyncapp-headers.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zyncapp-headers-elf
+          path: elf/zyncapp-headers.bin
       - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          docker run --rm hazync-libzync-repro | grep '^libzync-product ' > built.txt
-          grep '^libzync-product ' reproduce/LIBZYNC_IDS > pinned.txt
+          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers) ' > built.txt
+          grep -E '^(libzync-product|zyncapp-headers) ' reproduce/LIBZYNC_IDS > pinned.txt
           echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
           if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
             echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"

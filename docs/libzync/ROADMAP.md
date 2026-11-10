@@ -363,6 +363,30 @@ change after the freeze ships as a new image through the handover.
 Not levers: skipping signatures (assumevalid, ruled out: every block is proved); replacing Core's interpreter (<1% of
 cycles, measured); a risc0 upgrade for new accelerators (ruled out).
 
+## N. Launch (11-10)
+
+What goes out together, in order. Each item is the operator's call to ship.
+
+| # | item | status |
+|---|---|---|
+| N1 | release v0.23.0 (#692): the libzync host, verifier and Windows CUDA host | tooling drafted; notes drafted for the operator; contents discussed before cutting |
+| N2 | the board switch (`coordinator/deploy/libzync/SWITCH.md`; #676, #684) | prerequisites merged; waits on N1 |
+| N3 | **the header-chain zAPP (K1)**, proved from genesis to the tip and checkable on hazync.org | in progress, steps below |
+| N4 | the paper | draft 2, private; written with the operator |
+
+N3, step by step:
+
+1. Execute the whole chain from genesis against our node: end hash and chainwork must match.
+2. `zyncapp headers-prove` (a succinct receipt) and a verifier: `swiftsync-verify --headers`, and `verifyHeaders` in
+   the WebAssembly build. The verdict follows the core's rule: OK once the chainwork reaches Core's minimum, DEMO below.
+3. Pin the image: a reproducible build gives the same id bit for bit, as for the core (`reproduce/`).
+4. Following the tip: a run starts from the state the previous one ended in (the guest commits both), so new headers
+   are a short run chained to the last one; the verifier checks the chain of runs.
+5. A page on hazync.org that verifies the proof in the browser.
+6. One proving run on a GPU, the operator's trigger (estimated about $2 for the whole chain on one RTX PRO 6000).
+
+No prep is needed: headers carry no coin state.
+
 ## Image ids built (11-03, unit tests + compiles only)
 
 | image | id | note |

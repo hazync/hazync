@@ -7,6 +7,9 @@ edition = "2021"
 name = "zyncapp"
 path = "src/main.rs"
 
+[features]
+cuda = ["risc0-zkvm/cuda"]
+
 [dependencies]
 zyncapp-methods = { path = "../methods" }
 risc0-zkvm = { version = "=3.0.5", features = ["prove"] }
