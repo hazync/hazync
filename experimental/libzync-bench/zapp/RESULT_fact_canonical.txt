@@ -1,0 +1,35 @@
+Trie facts must be canonical: the 11-09 finding, its root cause and the fix (verifier-side only; image 863c9ce3 unchanged)
+
+FOUND (end-to-end test of the coin-check zyncAPP): the real history fact for Hal Finney's key at block 200
+(fact_history_hal_200.json, from zync-serve), every hex digit flipped in turn, checked with verifyFacts against the
+real mainnet 1..200 proof (mainnet_1_200_863c9ce3.rcpt), wasm cbd958f0:
+  history 984 hex: 71 flips NOT refused (words 112-120), each giving a byte-identical answer
+  balance 824 hex: 0 flips not refused
+
+ROOT CAUSE: a fact is checked by hashing the DECODED trie (trie_fact::open -> trie_model::decode -> hash_top), and the
+witness carries words that hash never binds:
+  - discarded by the decoder: an unspent coin's whole 8-word spender slot (sp = (f == 1).then_some(s)); any spent-flag
+    value other than 1 read as "unspent"
+  - overwritten by the leaf hash: a SPENT coin's spender words 5-7 (ttree::coin_into binds words 0-4 and puts the
+    value and the flag in 5-7) -- not in the field data, found by the new exhaustive bit-flip test on a synthetic trie
+  - redundant node forms: tag 2 with a pruned child, which the encoder writes as one-sided 5 / 6
+  (a counts header other than 1 was NOT a hole: read as "counts off", which facts refuse -- the test shows it)
+  Same lenient read in the guest's streaming reader (libzync/src/ttree.rs): left as is -- frozen image, and harmless
+  there: the guest commits trie_journal(old root, new root, list digest), never witness bytes.
+
+FIX (libzync/src/trie_model.rs, decode / dec_sub): flag must be 0 or 1; unspent -> spender all zero; spent -> spender
+words 3-7 zero (a spender is (height, tx, vin), coinlog::spender); counts header 0 or 1; and encode(decoded) == input.
+trie_model is not compiled into the guest (it includes wire, net, coinlog, coinlog_forest, ttree by #[path];
+scripts/check-guest-inputs.sh ok), so METHOD_ID does not move.
+
+TESTS (libzync, cargo test --release --features std: 36 passed):
+  non_canonical_witnesses_are_refused: an unspent coin's spender slot (first / last word), spent flag 2 and all-ones,
+    a spent coin's spender words 5 / 6 / 7: each accepted by the OLD reader with the same answer (an independent
+    re-implementation of the old grammar), each refused now; tag 2 + pruned child: same; counts header 7: refused
+  every_single_bit_change_to_a_fact_is_refused: history, balance, coin spent / unspent / absent; every word, bits
+    0 1 7 15 31: no change verifies
+  with the old decoder line restored, both new tests FAIL (they detect the bug)
+REAL DATA, fixed wasm (235ab8278a6f227b7a0f9a2aca84af449e07c8a51ed3b4aa83a89c00035e0aa3, ./build.sh):
+  history 984 hex: 0 flips not refused (was 71); balance 824: 0; the honest facts verify with the same answers
+  swiftsync-verify-wasm test-vectors.mjs 6/6; swiftsync-verify cargo test 16 + 1 passed
+  zAPP end to end through the coordinator relay (#694) and the real zync-serve: ZAPP_E2E_OK
