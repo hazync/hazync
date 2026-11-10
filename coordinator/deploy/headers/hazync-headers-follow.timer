@@ -1,0 +1,9 @@
+[Unit]
+Description=Prove and publish new Bitcoin headers every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
