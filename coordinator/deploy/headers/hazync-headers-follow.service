@@ -1,0 +1,20 @@
+# Keep the header-chain zyncAPP proof at the tip for hazync.org/headers/ (README.md here). Re-proves base+1..tip on the
+# CPU, verifies it against the node's own tip hash, and only then publishes to the web box's /headers-live/ folder.
+[Unit]
+Description=Hazync header chain: prove the new headers to the tip and publish them
+OnFailure=hazync-alert@%n.service
+After=bitcoind.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=HEADERS_DIR=/var/lib/hazync-headers
+Environment=HEADERS_BIN=/opt/hazync-headers/bin
+Environment=PUBLISH=root@152.53.86.216:./
+Environment=PUBLISH_KEY=/root/.ssh/hazync_headers_publish
+ExecStart=/opt/hazync-headers/bin/hazync-headers-follow
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=6G
+PrivateTmp=true
+TimeoutStartSec=2h

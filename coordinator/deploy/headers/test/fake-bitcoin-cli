@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+# A stand-in for bitcoin-cli over a "height hexheader" file: getblockcount, getblockhash <h>, getblockheader <hash> false.
+# FAKE_TIP caps the tip; FAKE_HASH_AT=<h>:<hash> makes getblockhash lie at one height (a reorg below the base).
+import sys, os, hashlib
+rows = {}
+for f in os.environ['FAKE_HEADERS'].split(':'):
+    for line in open(f):
+        h, x = line.split(); rows[int(h)] = x
+tip = int(os.environ.get('FAKE_TIP', max(rows)))
+hsh = lambda raw: hashlib.sha256(hashlib.sha256(bytes.fromhex(raw)).digest()).digest()[::-1].hex()
+lie = os.environ.get('FAKE_HASH_AT', '')
+a = sys.argv[1:]
+if a[0] == 'getblockcount': print(tip)
+elif a[0] == 'getblockhash':
+    h = int(a[1])
+    if lie and int(lie.split(':')[0]) == h: print(lie.split(':')[1])
+    else: print(hsh(rows[h]))
+elif a[0] == 'getblockheader':
+    for h, raw in rows.items():
+        if h <= tip and hsh(raw) == a[1]: print(raw); break
+    else: sys.exit('no such header')
+else: sys.exit('unsupported ' + a[0])

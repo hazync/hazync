@@ -1,0 +1,117 @@
+#!/bin/bash
+# Keep the header-chain zyncAPP proof at Bitcoin's tip, for hazync.org/headers/.
+#
+# The page reads TWO receipts: the BASE (genesis..B, proved once on a GPU) and one RUN (B+1..tip) chained to it with
+# --after. Every update re-proves the run from B to the current tip, so the page never reads more than two receipts
+# and a reorg above B needs nothing special: the next run simply follows the new tip. A fresh base resets the run's
+# length (one GPU run, ~$2.40, experimental/libzync-bench/headers/run_headers_pod.sh); install it with --set-base.
+#
+#   hazync-headers-follow                      prove + verify + publish if the tip moved (the timer runs this)
+#   hazync-headers-follow --set-base <rcpt> <height> <hash>   install a new base (verified before it is accepted)
+#
+# Nothing is published unless the verifier, with the node's own hash at the tip, says SWIFTSYNC_VERIFY_OK.
+set -euo pipefail
+
+D=${HEADERS_DIR:-/var/lib/hazync-headers}
+BIN=${HEADERS_BIN:-/opt/hazync-headers/bin}
+ZYNCAPP=${ZYNCAPP:-$BIN/zyncapp}
+VERIFY=${VERIFY:-$BIN/swiftsync-verify}
+ELF=${ELF:-$BIN/zyncapp-headers.bin}
+# The published headers ELF (reproduce/LIBZYNC_IDS, zyncapp-headers line): prove with nothing else.
+WANT_ELF=${WANT_ELF:-ea1d49e3c349805e93ccb0d02033caba0fb546f9d080ade487ba4b14527cb71e}
+BITCOIN_CLI=${BITCOIN_CLI:-runuser -u bitcoin -- bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf}
+# rsync destination for the published folder (served at /headers-live/). Empty: publish to $D/pub only.
+PUBLISH=${PUBLISH:-}
+PUBLISH_KEY=${PUBLISH_KEY:-/root/.ssh/hazync_headers_publish}
+# A run longer than this many headers is still proved, but logs a warning: time for a new GPU base.
+REBASE_WARN=${REBASE_WARN:-20000}
+
+log () { echo "[$(date -u +%FT%TZ)] $*"; }
+die () { log "ERROR: $*"; exit 1; }
+cli () { $BITCOIN_CLI "$@"; }
+
+mkdir -p "$D/work" "$D/pub"
+exec 9>"$D/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
+
+[ "$(sha256sum "$ELF" | cut -c1-64)" = "$WANT_ELF" ] || die "$ELF is not the published headers ELF $WANT_ELF"
+
+verify_ok () {  # verify_ok <height> <hash> <receipt>... : POSITIVE check, the OK line and exit 0
+  local h=$1 x=$2; shift 2
+  local out; out=$("$VERIFY" headers --expect "$h:$x" "$@" 2>&1) || { echo "$out" | tail -3; return 1; }
+  echo "$out" | grep -q "^SWIFTSYNC_VERIFY_OK: header chain from genesis to $h $x " || { echo "$out" | tail -3; return 1; }
+}
+
+if [ "${1:-}" = "--set-base" ]; then
+  R=${2:?receipt}; H=${3:?height}; X=${4:?hash}
+  [ "$(cli getblockhash "$H")" = "$X" ] || die "the node's hash at $H is not $X"
+  verify_ok "$H" "$X" "$R" || die "the base does not verify as genesis..$H $X"
+  cp "$R" "$D/base.rcpt.new" && printf '%s %s\n' "$H" "$X" > "$D/base.meta.new"
+  mv "$D/base.rcpt.new" "$D/base.rcpt" && mv "$D/base.meta.new" "$D/base.meta"
+  rm -f "$D/published"
+  log "base installed: genesis..$H $X"
+  exit 0
+fi
+
+[ -s "$D/base.rcpt" ] && [ -s "$D/base.meta" ] || die "no base: run --set-base first"
+read -r B BX < "$D/base.meta"
+
+T=$(cli getblockcount)
+TX=$(cli getblockhash "$T")
+[ "$T" -gt "$B" ] || { log "tip $T is not above the base $B"; exit 0; }
+# The base must still be on the node's chain; a reorg deeper than the base needs a new base.
+[ "$(cli getblockhash "$B")" = "$BX" ] || die "the base tip $B $BX is no longer on the node's chain"
+if [ "$(cat "$D/published" 2>/dev/null)" = "$T $TX" ]; then log "tip $T unchanged"; exit 0; fi
+N=$((T - B))
+[ "$N" -le "$REBASE_WARN" ] || log "WARNING: the run is $N headers; prove a new GPU base"
+
+# Headers B+1..T, walked back from the tip by each header's previous-block field (one RPC per header), so the run
+# is one chain ending at T and starting on the base's tip.
+HDRS=$D/work/headers_$((B + 1))_$T.txt
+python3 - "$B" "$BX" "$T" "$TX" "$HDRS" $BITCOIN_CLI <<'PY'
+import subprocess, sys, hashlib
+b, bx, t, tx, out, cli = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6:]
+rows, h, x = [], t, tx
+while h > b:
+    raw = subprocess.run(cli + ['getblockheader', x, 'false'], capture_output=True, text=True, check=True).stdout.strip()
+    hb = bytes.fromhex(raw)
+    assert len(hb) == 80, (h, len(hb))
+    assert hashlib.sha256(hashlib.sha256(hb).digest()).digest()[::-1].hex() == x, ('header does not hash to', h, x)
+    rows.append(f'{h} {raw}')
+    x, h = hb[4:36][::-1].hex(), h - 1
+assert x == bx, ('the walk did not end on the base tip', x, bx)
+open(out, 'w').write('\n'.join(reversed(rows)) + '\n')
+PY
+[ "$(wc -l < "$HDRS")" -eq "$N" ] || die "fetched $(wc -l < "$HDRS") headers, wanted $N"
+
+RUN=run_$((B + 1))_$T.rcpt
+log "proving $N headers $((B + 1))..$T"
+S=$(date +%s)
+"$ZYNCAPP" headers-prove "$HDRS" "$D/work/$RUN" --after "$D/base.rcpt" --elf "$ELF" > "$D/work/prove.log" 2>&1 \
+  || { tail -5 "$D/work/prove.log"; die "prove failed"; }
+SECS=$(( $(date +%s) - S ))
+verify_ok "$T" "$TX" "$D/base.rcpt" "$D/work/$RUN" || die "the new run does not verify to the node's tip $T $TX"
+log "proved and verified $((B + 1))..$T in $SECS s"
+
+# The published folder: base + run + runs.json (written last; the page reads it first).
+BASE_NAME=base_0_$B.rcpt
+P=$D/pub
+[ -f "$P/$BASE_NAME" ] && cmp -s "$D/base.rcpt" "$P/$BASE_NAME" || cp "$D/base.rcpt" "$P/$BASE_NAME"
+mv "$D/work/$RUN" "$P/$RUN"
+python3 - "$P" "$BASE_NAME" "$RUN" "$T" "$TX" "$SECS" <<'PY'
+import json, sys, time, os
+p, base, run, t, tx, secs = sys.argv[1:]
+doc = {'runs': [base, run], 'tip': int(t), 'hash': tx, 'proved_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+       'prove_seconds': int(secs)}
+open(os.path.join(p, 'runs.json.new'), 'w').write(json.dumps(doc) + '\n')
+os.replace(os.path.join(p, 'runs.json.new'), os.path.join(p, 'runs.json'))
+PY
+find "$P" -maxdepth 1 -name '*.rcpt' ! -name "$BASE_NAME" ! -name "$RUN" -delete
+rm -f "$HDRS"
+
+if [ -n "$PUBLISH" ]; then
+  # --delay-updates: every file lands at once at the end; --delete-after: old runs go only after the new ones are in.
+  rsync -rt --delay-updates --delete-after -e "ssh -i $PUBLISH_KEY -o BatchMode=yes" "$P/" "$PUBLISH" \
+    || die "publish to $PUBLISH failed"
+fi
+echo "$T $TX" > "$D/published"
+log "published genesis..$T $TX (base $B + run $((B + 1))..$T)"
