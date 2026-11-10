@@ -14,8 +14,8 @@ use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-/// The header-chain image id this verifier trusts by default. Set from the reproducible build (`reproduce/`), as the
-/// core's ids are; `--image <hex>` replaces it for a reader who rebuilt the image themselves.
+/// The header-chain image id this verifier trusts by default: the `zyncapp-headers` line of reproduce/LIBZYNC_IDS (the
+/// reproducible build; reproduce/pin-libzync-ids.py sets it). `--image <hex>` replaces it for a reader who rebuilt it.
 pub const HEADERS_IMAGE_ID: &str = "50512831aa62a82cb80762ddd65c952e7517c6d175bf21ca1afbe357409ce801";
 
 /// The guest's state, field for field and in order (risc0 serde): the last header's height, hash (internal byte

@@ -2016,8 +2016,8 @@ jobs:
         run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
       - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          docker run --rm hazync-libzync-repro | grep '^libzync-product ' > built.txt
-          grep '^libzync-product ' reproduce/LIBZYNC_IDS > pinned.txt
+          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers) ' > built.txt
+          grep -E '^(libzync-product|zyncapp-headers) ' reproduce/LIBZYNC_IDS > pinned.txt
           echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
           if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
             echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"
