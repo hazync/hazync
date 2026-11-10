@@ -423,6 +423,11 @@ def fetch_witnesses(lo, hi):
         with open(wf, "wb") as fh:
             fh.write(data)
 
+def bundle_name(data, h):
+    """The file a host reads block h's bundle from: a libzync coordinator serves prep's leaf bundle (binary, LZLEAF
+    magic) as leaf_<h>.bin; the original bridge's JSON bundle is bundle_<h>.json."""
+    return f"leaf_{h}.bin" if data[:6] == b"LZLEAF" else f"bundle_{h}.json"
+
 def fetch_bundles(lo, hi):
     # Fetch an archive-node bundle for every block in [lo..hi]. Returns True iff all are available (the
     # bridge path — prove with NO replay); False if any block is missing or only a legacy per-block witness
@@ -1295,7 +1300,7 @@ def cmd_selftest(args):
     try:
         wit = get("/api/witness/1")
         wd = pathlib.Path(WITNESS); wd.mkdir(parents=True, exist_ok=True)
-        (wd / "bundle_1.json").write_bytes(wit)
+        (wd / bundle_name(wit, 1)).write_bytes(wit)
         work = RCPTDIR / ".selftest"; work.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, HAZYNC_BRIDGE_OUT=str(wd))
         print("… proving block 1 as a real pre-flight (this is the step that actually exercises the prover)")
@@ -1855,6 +1860,16 @@ def cmd_spine(args):
         return "rejected"
 
     index, index_at = {}, None
+    # A libzync coordinator (its /api/meta says so) runs a libzync host, which has no `extend-spine`: there the
+    # spine advances by a join of [1..N] and [N+1..M] (`fold-range`), whose guest enforces the seam, and the
+    # coordinator checks the result is anchored at genesis when it is submitted.
+    try:
+        lz = bool(json.loads(get("/api/meta")).get("libzync"))
+    except SystemExit:
+        raise
+    except Exception:
+        lz = False
+    absorb = "fold-range" if lz else "extend-spine"
 
     def chunks_at(nxt):
         nonlocal index, index_at
@@ -1914,7 +1929,7 @@ def cmd_spine(args):
                 out = work / f"spine_{hi}.bin"
                 print(f"absorbing {span} into [1..{was}] — one fold, no re-proving…")
                 with gpu_lock("absorb"):
-                    r = subprocess.run([HOSTBIN, "extend-spine", str(cur), str(chunk), str(out)],
+                    r = subprocess.run([HOSTBIN, absorb, str(cur), str(chunk), str(out)],
                                        capture_output=True, text=True)
                 if r.returncode != 0 or not out.exists():
                     both = (r.stdout or "") + (r.stderr or "")
@@ -1949,7 +1964,7 @@ def cmd_spine(args):
                         continue
                     # Head unchanged, so the host's build-mismatch advice is now actually the likely
                     # cause, and a seam failure here is information rather than noise.
-                    sys.exit(f"extend-spine failed for {span}:\n{both[-400:]}")
+                    sys.exit(f"{absorb} failed for {span}:\n{both[-400:]}")
                 outcome = submit_head(out, hi)
                 if outcome == "rejected" and narrower:
                     print(f"  trying a narrower chunk than {span}")

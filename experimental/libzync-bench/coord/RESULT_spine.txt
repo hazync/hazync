@@ -1,0 +1,19 @@
+libzync spine, real (not dev mode), 2026-11-09, on the coordinator box
+A temporary coordinator (this branch's server.py, HAZYNC_LIBZYNC=1, :8901) on a COPY of the libzync board's
+database and proofs (blocks 1, 2, 3, 4 and 3-4 from RESULT_board_e2e.txt); the stock worker from this branch;
+host /opt/hazync-lz/bin/host (863c9ce3).
+
+/api/meta: "libzync": true, frontier 4
+hazync spine  EXIT=0 in 291 s
+  no spine yet — seeding it with the block 1 receipt (225650 bytes)
+  ✓ spine now [1..1] — genesis-anchored
+  absorbing block 2 into [1..1] — one fold (fold-range = a libzync join), no re-proving
+  ✓ spine now [1..2] — genesis-anchored
+  absorbing [3..4] into [1..2] — one fold
+  ✓ spine now [1..4] — genesis-anchored
+/api/spine: lo 1, hi 4, out_leaves 4
+
+negatives, the coordinator's own verify_spine (verify-any <r> 1 as the genesis gate):
+  verify_spine 2    False  spine rejected — not a genesis-anchored range proof: anchored on the state before block 1
+  verify_spine 3-4  False  spine rejected — not a genesis-anchored range proof: anchored on the state before block 1
+  verify_spine 1    True   spine [1..1] VERIFIED genesis-anchored

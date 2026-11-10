@@ -1,0 +1,9 @@
+[Unit]
+Description=Every 10 minutes: check the libzync board's genesis proof against Bitcoin
+
+[Timer]
+OnCalendar=*:04/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

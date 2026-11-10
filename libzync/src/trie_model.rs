@@ -244,7 +244,20 @@ fn dec_sub(r: &mut Rd, d: u32) -> Option<Sub> {
         2 => { let l = dec_sub(r, d + 1)?; Sub::Inner(Box::new(l), Box::new(dec_sub(r, d + 1)?)) }
         5 => { let h = r.hash()?; Sub::Inner(Box::new(Sub::Pruned(h)), Box::new(dec_sub(r, d + 1)?)) }
         6 => { let h = r.hash()?; Sub::Inner(Box::new(dec_sub(r, d + 1)?), Box::new(Sub::Pruned(h))) }
-        4 => { let o = r.hash()?; let f = r.word()?; let s = r.hash()?; Sub::Coin { o, sp: (f == 1).then_some(s), value: r.u64()? } }
+        4 => {
+            // a coin's leaf hash (ttree::coin_into) binds the spent flag and spender words 0-4 only, and an unspent coin
+            // binds no spender at all: every word it does not bind must hold the encoder's value (zero), or two
+            // different witnesses would verify to one fact. A spender is (height, tx, vin): words 3-7 are always zero.
+            let o = r.hash()?;
+            let f = r.word()?;
+            let s = r.hash()?;
+            let sp = match f {
+                0 if s == [0; 8] => None,
+                1 if s[3..] == [0; 5] => Some(s),
+                _ => return None,
+            };
+            Sub::Coin { o, sp, value: r.u64()? }
+        }
         _ => return None,
     })
 }
@@ -262,12 +275,25 @@ fn dec_top(r: &mut Rd, d: u32) -> Option<Top> {
     })
 }
 
+/// Decode a witness, accepting ONLY the encoder's own output (the trie facts' verifier, `trie_fact::check`).
+///
+/// Root cause of the 11-09 finding: a fact is checked by hashing the DECODED trie, and the witness carries words that
+/// hash never binds -- some because the decoder discarded them (an unspent coin's whole spender slot; any spent-flag
+/// value other than 1 read as "unspent"; any counts header other than 1 read as "off"), some because the leaf hash
+/// overwrites them (a spent coin's spender words 5-7: `coin_into` puts the value and the flag there). Each such word
+/// could take any value and the fact still verified: two byte strings, one fact (a real history fact took any value in
+/// 9 words). The rules here require every unbound word to hold the encoder's value (dec_sub), and the re-encoding to
+/// equal the input, which also refuses the other redundant forms (tag 2 with a pruned child, which the encoder writes
+/// as the one-sided 5 / 6). Together: decoding is one-to-one, so a fact's bytes are exactly the encoder's.
+/// The guest's streaming reader (ttree) keeps the lenient read: it is in the frozen image, and harmless there, as the
+/// guest commits only roots and the update list's digest, never the witness bytes.
 pub fn decode(w: &[u32]) -> Option<(bool, W, Top)> {
     let mut r = Rd { w, i: 0 };
-    let counts = r.word()? == 1;
+    let counts = match r.word()? { 0 => false, 1 => true, _ => return None };
     let root = r.hash()?;
     let t = dec_top(&mut r, 0)?;
     if r.i != w.len() { return None; }
+    if encode(counts, &root, &t) != w { return None; }
     Some((counts, root, t))
 }
 

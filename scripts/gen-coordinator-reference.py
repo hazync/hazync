@@ -96,6 +96,11 @@ ROUTES = {
         "`VRANGES_CACHE_TTL`.",
     "GET /api/spine/proof":
         "The spine receipt bytes, served as `hazync-spine-1-<hi>.hzk`. Check with `hazync-verify`.",
+    "GET /api/zync/<rest>":
+        "zyncAPP facts (hazync.org/zapp/), relayed from the box's own `zync-serve` when `ZYNC_SERVE_URL` is set: only "
+        "`/tip`, `/trie/balance/<spk>`, `/trie/history/<spk>` and `/trie/coin/<spk>/<txid>/<vout>`; anything else is "
+        "`400` before it reaches the service, a query string is dropped, `404` when no service is set, `502` when it is "
+        "down. Untrusted: the page checks every fact against a proof it verifies itself.",
     "GET /api/proof/<id>":
         "A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The "
         "id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with "
@@ -170,6 +175,7 @@ ROUTES = {
 
 # Keyed "<source key>:<NAME>".
 ENV = {
+    "server:ZYNC_SERVE_URL": "The local `zync-serve` behind `/api/zync/*` (e.g. `http://127.0.0.1:8601`). Unset: no relay.",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
     "server:COORD_BIND": "Listen address. Use `127.0.0.1` behind a reverse proxy; a non-loopback bind in an "
