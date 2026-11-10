@@ -1,0 +1,24 @@
+[Unit]
+Description=Hazync libzync board: mirror new proof receipts to Cloudflare R2 under proofs-863c9ce3/ (append-only), then check nothing is missing
+After=network-online.target hazync-lz-coordinator.service
+Wants=network-online.target
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+# Root only for reading the root-only key file; the proofs directory is world-readable.
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py copy --keys /etc/hazync/backup/r2.keys --bucket hazync-proofs --proofs /var/lib/hazync-lz/proofs --method-id 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 --threads 8 --bwlimit-mbit 64
+# The check fails the unit (and so alerts) if any proof older than the grace period is still not in R2.
+# 30 min grace: a proof written just after the copy listed the directory is caught by the next hourly run.
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py check --keys /etc/hazync/backup/r2.keys --bucket hazync-proofs --proofs /var/lib/hazync-lz/proofs --method-id 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 --min-age 1800
+# A normal hourly run uploads a few thousand ~230 KB files. The cap ensures a stalled run becomes a failed
+# unit before the next firing, not a silently stuck one (hazync#123).
+TimeoutStartSec=45min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/hazync-lz/proofs /opt/hazync-lz

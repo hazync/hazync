@@ -1,0 +1,23 @@
+# Integrity check 2 on the libzync board: every stored proof still hashes to the receipt that was accepted and still
+# verifies to its record. A libzync host is told each range's start height and finds the state before it in the board
+# pass's state_<h>.json once the leaf bundle is pruned (#686). Nightly, at the lowest CPU and I/O priority.
+[Unit]
+Description=Hazync libzync board integrity: stored proofs still hash and verify to their records
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+User=hazync
+Environment=HAZYNC_LIBZYNC=1
+Environment=COORD_DB=/var/lib/hazync-lz/coordinator.db
+Environment=COORD_PROOFS=/var/lib/hazync-lz/proofs
+Environment=HAZYNC_HOST=/opt/hazync-lz/bin/host
+Environment=HAZYNC_BRIDGE_OUT=/srv/bulk/libzync-board/leaves
+Environment=HAZYNC_LZ_STATE_DIR=/var/lib/libzync-board/out
+Environment=CHECK_PROOFS_WORKERS=4
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/check-proofs.py
+Nice=19
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=4h

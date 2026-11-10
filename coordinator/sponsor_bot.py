@@ -85,6 +85,9 @@ BANDS = ((1, 200000), (200001, 400000), (400001, 600000), (600001, 800000), (800
 # legacy witness, with the same variables and default as the coordinator. Set HAZYNC_BRIDGE_OUT for the bot as
 # for the coordinator: without it only the legacy witnesses count, and no pod is rented for anything above them.
 BRIDGE_DIR = os.environ.get("HAZYNC_BRIDGE_OUT", "")
+# A libzync coordinator (HAZYNC_LIBZYNC=1, as server.py) serves prep's leaf_<n>.bin from that directory, not the
+# original bridge's bundle_<n>.json: the bot must look for the same file, or it never rents a pod for anything.
+LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
 WITNESS = os.environ.get("WITNESS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "witnesses"))
 
 # test_sponsor_bot.py --control sets these to show its cleanup and landed-proof tests can fail. Never set them otherwise.
@@ -319,7 +322,8 @@ def has_bundle(h):
     """True when the coordinator can serve block h to a worker, so a pod can prove it."""
     if _CONTROL_IGNORE_BUNDLES:
         return True
-    files = ([os.path.join(BRIDGE_DIR, f"bundle_{int(h)}.json")] if BRIDGE_DIR else []) \
+    name = f"leaf_{int(h)}.bin" if LIBZYNC else f"bundle_{int(h)}.json"
+    files = ([os.path.join(BRIDGE_DIR, name)] if BRIDGE_DIR else []) \
         + [os.path.join(WITNESS, f"block_{int(h)}.json")]
     return any(os.path.exists(f) for f in files)
 

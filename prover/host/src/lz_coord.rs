@@ -25,14 +25,27 @@ fn bridge_dir() -> String {
     std::env::var("HAZYNC_BRIDGE_OUT").unwrap_or_else(|_| "/root/bridge_bundles".into())
 }
 
-/// The state before block `lo`: genesis for 1, else the `prev` of the block's leaf bundle.
+/// The state before block `lo`: genesis for 1, else the `prev` of the block's leaf bundle, else the prep run's own
+/// `state_<lo-1>.json` in `$HAZYNC_LZ_STATE_DIR`: the same state, which the run that wrote the bundle also saved.
+/// The board prunes a leaf once its block is proved below the frontier, but a stored range starting there must stay
+/// re-verifiable (the nightly check-proofs), so the small state file outlives the bundle.
 fn state_before(lo: u32) -> Result<ChainState, String> {
     if lo == 1 { return Ok(crate::genesis_anchor()); }
     let p = format!("{}/leaf_{lo}.bin", bridge_dir());
-    if !std::path::Path::new(&p).exists() { return Err(format!("no leaf bundle {p}: the state before block {lo} is unknown here")); }
-    let b = crate::prep::leaf_read(&p);
-    if b.prev.height + 1 != lo { return Err(format!("{p} is for block {}, not {lo}", b.prev.height + 1)); }
-    Ok(b.prev)
+    if std::path::Path::new(&p).exists() {
+        let b = crate::prep::leaf_read(&p);
+        if b.prev.height + 1 != lo { return Err(format!("{p} is for block {}, not {lo}", b.prev.height + 1)); }
+        return Ok(b.prev);
+    }
+    if let Ok(d) = std::env::var("HAZYNC_LZ_STATE_DIR") {
+        let sp = format!("{d}/state_{}.json", lo - 1);
+        if let Ok(t) = std::fs::read_to_string(&sp) {
+            let st: ChainState = serde_json::from_str(&t).map_err(|e| format!("{sp}: {e}"))?;
+            if st.height + 1 != lo { return Err(format!("{sp} is the state at {}, not before block {lo}", st.height)); }
+            return Ok(st);
+        }
+    }
+    Err(format!("no leaf bundle {p} (nor a state_{}.json in HAZYNC_LZ_STATE_DIR): the state before block {lo} is unknown here", lo - 1))
 }
 
 /// `libzync-genesis-tip`: the in_tip of every range that starts at block 1 (the coordinator's GENESIS_TIP).

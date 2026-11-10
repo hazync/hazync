@@ -120,6 +120,11 @@ pub(crate) fn leaf_read(path: &str) -> LeafBundle {
 
 /// One block of native prep: the state after it, and with `leaf` its leaf bundle, the witnesses cut from the stores
 /// BEFORE they apply the block.
+/// Seconds spent per phase since the last PREP_PROGRESS line: prefetch, coin log apply, trie apply, rest of the block,
+/// reading the block, writing the state, save points (PREP_TIMING; the rate is spent somewhere, and a guess cost a day).
+static PHASES: std::sync::Mutex<[f64; 7]> = std::sync::Mutex::new([0.0; 7]);
+fn phase(i: usize, t: std::time::Instant) { PHASES.lock().unwrap()[i] += t.elapsed().as_secs_f64(); }
+
 pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt, ecmh: &mut Ecmh, leaf: bool) -> (ChainState, Option<LeafBundle>) {
     use crate::{arr, build_header_v, hx, median_u32, normalize_host, out_leaf_of, out_spendable, rev};
     let height = j["height"].as_u64().unwrap() as u32;
@@ -207,11 +212,21 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     // Disk stores at mainnet size are far larger than RAM: read ahead what the updates below will read, in parallel
     // (the storage serves ~15x more random reads in parallel than one at a time; HAZYNC_PREP_PREFETCH=0 turns it off)
     if std::env::var("HAZYNC_PREP_PREFETCH").as_deref() != Ok("0") {
+        let t = std::time::Instant::now();
         crate::lz::cl_prefetch(&ext);
-        if let Some(ts) = crate::trie::TS.lock().unwrap().as_ref() { ts.prefetch(&marks, &ins); }
+        if let Some(ts) = crate::trie::TS.lock().unwrap().as_ref() {
+            let n = ts.prefetch(&marks, &ins);
+            // the slots the update will write into (HAZYNC_PREP_PREFETCH_FREE=0 turns it off): twice the path, as a
+            // margin (an insert can split a leaf into a chain)
+            if std::env::var("HAZYNC_PREP_PREFETCH_FREE").as_deref() != Ok("0") { ts.prefetch_free(2 * n); }
+        }
+        phase(0, t);
     }
     // The coin log and the trie (the host's stores), the BIP30 tree.
+    let t = std::time::Instant::now();
     let (utxo_roots, utxo_leaves) = crate::lz::cl_apply(&ext, &appends, height);
+    phase(1, t);
+    let t = std::time::Instant::now();
     let trie_root = {
         let mut g = crate::trie::TS.lock().unwrap();
         let ts = g.as_mut().expect("trie store not initialised");
@@ -220,6 +235,7 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
         ts.hash = tip_hash;
         libzync::coinlog::h_of(&r)
     };
+    phase(2, t);
     let tracked_new: Vec<([u8; 32], u32)> = ptxs.iter().filter(|p| tx_flags(p) != 0)
         .map(|p| (p.txid, p.tx.output.iter().filter(|o| out_spendable(o.script_pubkey.as_bytes())).count() as u32))
         .filter(|t| t.1 > 0).collect();
@@ -375,9 +391,14 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
+        let t = std::time::Instant::now();
         let j = crate::read_block_json(dir, h);
+        phase(4, t);
         let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
+        let t = std::time::Instant::now();
+        let inner0 = { let p = PHASES.lock().unwrap(); p[0] + p[1] + p[2] };
         let (mut st, bundle) = prep_block(&prev, &j, &mut smt, &mut ecmh, want_leaf);
+        { let mut p = PHASES.lock().unwrap(); let inner = p[0] + p[1] + p[2] - inner0; p[3] += t.elapsed().as_secs_f64() - inner; }
         // the leaf bundle carries prev = S(h-1) as this run commits it (anchor_id, self_id and profile included)
         if let (Some(d), Some(b)) = (&leaves, bundle) {
             if let Some(n) = leaf_window {
@@ -400,9 +421,12 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // atomic at a save point (its state_<h>.json is the anchor a restart takes; round 9); a plain write between
         // them (a restart never starts there, and two fsyncs per block across a mainnet prep cost; round 10)
         let save = each || h == hi || (every > 0 && h % every == 0);
+        let t = std::time::Instant::now();
         let json = serde_json::to_string(&st).unwrap();
         if save { crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes()); }
         else { std::fs::write(format!("{out}/state_{h}.json"), json).unwrap(); }
+        phase(5, t);
+        let t = std::time::Instant::now();
         if save {
             crate::lz::write_atomic(&format!("{out}/state_{h}.smt"), &smt_to_bytes(&smt));
             crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);
@@ -418,6 +442,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 consumed_from = h + 1;
             }
         }
+        phase(6, t);
         // the check covers the heights the reference run has (a proved range: a slice run goes past it)
         let want_path = check.as_ref().map(|c| format!("{c}/state_{h}.json")).filter(|p| std::path::Path::new(p).exists());
         if let Some(wp) = &want_path {
@@ -438,6 +463,10 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             println!("PREP_PROGRESS h={h} blocks_per_s={:.2} coinlog_leaves={} coinlog_mb={:.0} trie_mb={:.0} trie_nodes={trie_nodes} out_mb={:.0} rss_mb={} elapsed_s={:.0}",
                      (h - h_rep + 1) as f64 / dt.max(1e-9), st.utxo_leaves, mb(crate::lz::cl_dir()), mb(crate::trie::trie_dir()),
                      mb(Some(out.into())), rss_mb(), t0.elapsed().as_secs_f64());
+            let p = std::mem::replace(&mut *PHASES.lock().unwrap(), [0.0; 7]);
+            let (ch, cm) = crate::trie::TS.lock().unwrap().as_ref().map_or((0, 0), |t| t.cache_stats());
+            println!("PREP_TIMING h={h} s: prefetch={:.0} coinlog={:.0} trie={:.0} rest={:.0} read_block={:.0} write_state={:.0} save={:.0} of {:.0}; trie cache hits={ch} misses={cm}",
+                     p[0], p[1], p[2], p[3], p[4], p[5], p[6], dt);
             t_rep = std::time::Instant::now();
             h_rep = h + 1;
         }

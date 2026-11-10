@@ -113,16 +113,52 @@ def read_remote(url, tries=3, pause=2.0):
     return data, head, False
 
 
+# The libzync board (HAZYNC_LIBZYNC=1) checks its spine with the libzync verifier (`swiftsync-verify --product`), which
+# prints text, not JSON. Its fields map onto the same checks: a verdict line, "[ok] anchor_id is genesis", "receipt
+# verifies against image <id>" and "chain: tip <hash> at height <h>, cum_work 0x<work>". Below Core's minimum
+# chainwork (and the image's pinned checkpoint) its verdict is DEMO, "a valid chain from genesis ... not shown to be
+# the network's chain": the tip and work are compared with Bitcoin by this check, below, which is what DEMO asks for.
+LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
+
+
+def swiftsync_fields(text):
+    """The libzync verifier's output as the fields check-spine reads, or None if it printed no verdict."""
+    import re
+    lines = (text or "").splitlines()
+    verdict = next((l for l in lines if l.startswith("SWIFTSYNC_VERIFY_")), None)
+    if verdict is None:
+        return None
+    m_img = next((re.search(r"\[ok\] receipt verifies against image ([0-9a-f]{64})", l) for l in lines
+                  if "receipt verifies against image" in l), None)
+    m_tip = next((re.search(r"chain: tip ([0-9a-f]{64}) at height (\d+), cum_work 0x([0-9a-f]+)", l) for l in lines
+                  if l.strip().startswith("chain: tip")), None)
+    failed = any(l.strip().startswith("[FAIL]") for l in lines)
+    ok_verdict = verdict.startswith("SWIFTSYNC_VERIFY_OK") or (
+        verdict.startswith("SWIFTSYNC_VERIFY_DEMO") and "a valid chain from genesis" in verdict)
+    return {
+        "verified": bool(ok_verdict and not failed and m_img),
+        "genesis_anchored": any(l.strip() == "[ok] anchor_id is genesis" for l in lines),
+        "guest_image_id": m_img.group(1) if m_img else "",
+        "height": int(m_tip.group(2)) if m_tip else -1,
+        "tip_hash": m_tip.group(1) if m_tip else "",
+        "cumulative_work": int(m_tip.group(3), 16) if m_tip else -1,
+    }
+
+
 def run_verify(verify, data):
-    """(exit code, parsed --json output or None, output lines). Raises OSError or TimeoutExpired if it cannot run."""
+    """(exit code, parsed output or None, output lines). Raises OSError or TimeoutExpired if it cannot run."""
     with tempfile.NamedTemporaryFile(suffix=".hzk") as f:
         f.write(data)
         f.flush()
-        p = subprocess.run([verify, "--json", f.name], capture_output=True, text=True, timeout=180)
-    try:
-        out = json.loads(p.stdout)
-    except ValueError:
-        out = None
+        argv = [verify, "--product", f.name] if LIBZYNC else [verify, "--json", f.name]
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=180)
+    if LIBZYNC:
+        out = swiftsync_fields(p.stdout)
+    else:
+        try:
+            out = json.loads(p.stdout)
+        except ValueError:
+            out = None
     return p.returncode, out, ((p.stderr or "") + "\n" + (p.stdout or "")).strip().splitlines()
 
 
@@ -250,7 +286,11 @@ def main(argv=None):
         head_tip = bytes.fromhex(str(head.get("out_tip", "")))[::-1].hex()
     except ValueError:
         head_tip = None
-    if head_tip == tip:
+    if LIBZYNC:
+        # a libzync head's out_tip is the link digest of the proof's end state, not a block hash: the tip itself is
+        # held to Bitcoin's block at that height below (the node, or the explorers), so nothing is skipped silently
+        print("  note the head record's out_tip is a libzync state digest; the tip is checked against Bitcoin below")
+    elif head_tip == tip:
         rep.ok("the head record's out_tip is the proof's tip")
     else:
         rep.fail(f"the head record's out_tip ({str(head.get('out_tip'))[:16]}…, stored byte-reversed) is not the "

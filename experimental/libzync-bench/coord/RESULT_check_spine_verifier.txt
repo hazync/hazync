@@ -1,0 +1,35 @@
+swiftsync-verify --product on the libzync board's real receipts (2026-11-09), as check-spine.py parses them
+
+== proof_1.bin
+  [ok] receipt is a real proof (not a dev-mode FakeReceipt)
+  [ok] RISC0_DEV_MODE is not set in this verifier's environment
+  [ok] receipt verifies against image 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 (mainnet)
+  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [ok] profile 0x71 == 0x71 (libzync, scripts checked, mainnet, coin log, counting trie, live-coin hash)
+  [ok] time-too-new: largest block time 1231469665 <= this clock 1794246582 + 7200 s
+  [ok] block forest has one leaf per block (2 leaves at height 1)
+  [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) stated)
+  [ok] anchor_id is genesis
+  [ok] the image keeps its coins in the coin log (design B, the hints-file images, is retired)
+  [ok] cum_work 0x0000000000000000000000000000000000000000000000000000000200020002 < Core's nMinimumChainWork 0x000000000000000000000000000000000000000088e186b70e0862c193ec44d6 -- a valid chain, but NOT shown to be the network's: verdict at best DEMO
+  [ok] height 1 < the image's checkpoint height 970000 -- the pinned checkpoint is not reached: verdict at best DEMO
+  chain: tip 00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048 at height 1, cum_work 0x0000000000000000000000000000000000000000000000000000000200020002
+  coin log: 1 coins ever appended, 5000000000 sat live (COINLOG.md)
+  counting trie root: 45d41a2c0c6db93abe93a6322f66f668a3f20e6743399e067b18a7fdfc3f54a0 (absence, history, balances: --trie)
+  live-coin hash: x f63eedab.. (instant IBD: a downloaded UTXO set must hash to it)
+SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain; chain identity NOT checked: compare block 1 = 00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048 with a source you trust (--mempool, --expect, --bitcoin-cli)
+
+== proof_3-4.bin
+  [ok] receipt is a real proof (not a dev-mode FakeReceipt)
+  [ok] RISC0_DEV_MODE is not set in this verifier's environment
+  [ok] receipt verifies against image 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 (mainnet)
+  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [ok] profile 0x71 == 0x71 (libzync, scripts checked, mainnet, coin log, counting trie, live-coin hash)
+  [ok] time-too-new: largest block time 1231470988 <= this clock 1794246582 + 7200 s
+  [ok] block forest has one leaf per block (5 leaves at height 4)
+  [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) stated)
+  [FAIL] anchor_id is genesis
+  [ok] the image keeps its coins in the coin log (design B, the hints-file images, is retired)
+  [ok] cum_work 0x0000000000000000000000000000000000000000000000000000000500050005 < Core's nMinimumChainWork 0x000000000000000000000000000000000000000088e186b70e0862c193ec44d6 -- a valid chain, but NOT shown to be the network's: verdict at best DEMO
+  [ok] height 4 < the image's checkpoint height 970000 -- the pinned checkpoint is not reached: verdict at best DEMO
+SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
