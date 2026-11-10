@@ -296,12 +296,30 @@ export HAZYNC_BASE="$WORK"
 export RISC0_HOME="$HOME/.risc0"
 export PATH="$HOME/.risc0/bin:$HOME/.cargo/bin:$PATH"
 
-# ...including the CORE defines. `build` skips phase 6, and reproduce/Dockerfile builds the
-# canonical image with exactly HAZYNC_PROVISION=build — so omitting these here would compile the
-# 5a-patched source WITHOUT its defines and silently yield a different, unshipped METHOD_ID.
-export HAZYNC_FIELD_BIGINT2=1
-export HAZYNC_LIFTX_HINT=1
-export HAZYNC_ECMULT_WINDOW=21
+# The host is libzync-only (#676) and EMBEDS the published libzync guest rather than building one:
+# the guest is compiled once, in reproduce/libzync.Dockerfile, against the libzync Core tree
+# (scripts/libzync-base.sh), and every host embeds those exact bytes. build.rs checks the ELF's sha256
+# and image id against the pin directory and refuses anything else, so this cannot build a host for a
+# different image by accident. (The CORE defines this phase used to export described the retired
+# CORE guest, which is in history/; they have no effect on a prebuilt guest and are no longer set.)
+#
+#   HAZYNC_GUEST_ELF      the published mainnet ELF (reproduce/libzync.Dockerfile leaves it at
+#                         /root/libzync-elf/mainnet.bin; prover/build-release.sh fetches and stages it)
+#   HAZYNC_GUEST_PIN_DIR  METHOD_ID, GUEST_ELF_SHA256 and PROFILE for it, from reproduce/LIBZYNC_IDS
+if [ -z "${HAZYNC_GUEST_ELF:-}" ] || [ -z "${HAZYNC_GUEST_PIN_DIR:-}" ]; then
+  echo
+  echo "prover NOT built: the host embeds the published libzync guest, and HAZYNC_GUEST_ELF /" >&2
+  echo "HAZYNC_GUEST_PIN_DIR are not set. Dependencies are provisioned. Either:" >&2
+  echo "  * download the release host (hazync-host-x86_64-linux-gnu[-cuda]), or" >&2
+  echo "  * build it with prover/build-release.sh {cpu|cuda}, which fetches and checks the guest, or" >&2
+  echo "  * pass the ELF built by reproduce/libzync.Dockerfile and a pin directory (see" >&2
+  echo "    scripts/libzync/ci/build-hosts.sh for its three files) and run HAZYNC_PROVISION=build." >&2
+  exit 1
+fi
+# Only the variables below may shape the build: an inherited HAZYNC_* lever could change what the
+# host writes for the guest (build.rs checks the pinned PROFILE against them and refuses a mismatch).
+for _v in $(compgen -e | grep '^HAZYNC_' | grep -vxE 'HAZYNC_GUEST_ELF|HAZYNC_GUEST_PIN_DIR|HAZYNC_PROVISION|HAZYNC_BASE'); do unset "$_v"; done
+export HAZYNC_LIBZYNC=1
 
 # VENDORED zkr (hazync#164). risc0-circuit-recursion's build.rs downloads a 57 MB blob from
 # risc0-artifacts.s3.us-west-2.amazonaws.com during cargo build. On 2026-08-24 that object returned
@@ -340,16 +358,18 @@ if [ "${GPU:-0}" = "1" ]; then
   }
 fi
 
-echo "== 8. build the prover (release${GPU_FEATURES:+ + CUDA}) — HAZYNC_BASE is exported above =="
+echo "== 8. build the libzync host (release${GPU_FEATURES:+ + CUDA}), embedding $HAZYNC_GUEST_ELF =="
 cd "$REPO_DIR/prover"
-cargo build --release $GPU_FEATURES
+# -p host: the workspace also holds the zyncAPP crates, whose guest this host does not embed.
+cargo build --release -p host $GPU_FEATURES
 
 echo
-echo "DONE. Verify the build with the self-contained checks (no GPU, no files):"
-echo "  cd $REPO_DIR/prover && ./target/release/host regress        # block 170 consensus regression"
-echo "  cd $REPO_DIR/prover && ./target/release/host adversarial    # soundness suite (all holes must REJECT)"
-echo "Then prove:"
-echo "  ./target/release/host prove-block                           # single block 170 -> real STARK receipt"
+echo "DONE. Verify the build with the self-contained checks (no GPU, no network):"
+echo "  cd $REPO_DIR/prover && ./target/release/host method-id      # want the libzync-product mainnet id in reproduce/LIBZYNC_IDS"
+echo "  ./target/release/host libzync-verify ../experimental/libzync-bench/zapp/mainnet_1_200_863c9ce3.rcpt"
+echo "                                                              # a real proof of mainnet 1..200: DEMO (exit 2)"
+echo "Then prove (mainnet block 1 from genesis, and verify it):"
+echo "  ./target/release/host libzync-prove-range 1 1 testdata/libzync/mainnet genesis out && ./target/release/host libzync-verify out/block_1.rcpt"
 if [ "${GPU:-0}" = "1" ]; then
   echo "  (CUDA env is set in this shell and persisted to ~/.bashrc for future logins)"
 fi

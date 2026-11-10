@@ -16,6 +16,13 @@
 #
 # ⛔ AND IT VERIFIES BEFORE IT PUBLISHES. A binary whose embedded guest is not canonical produces
 # proofs the coordinator rejects, and publishing one would hand that to every newcomer at once.
+#
+# ⚠ SINCE v0.23.0 THE WINDOWS CUDA HOST IS A REGULAR RELEASE ASSET (hazync-host-x86_64-windows-cuda.zip,
+# fetched and checked by scripts/release.sh via scripts/windows-host.sh). This preview path is only for
+# a build BETWEEN releases. It checks the same thing: the published libzync mainnet guest
+# (reproduce/LIBZYNC_IDS), so it needs that ELF to know the guest's size:
+#
+#     HAZYNC_GUEST_ELF=dist/.libzync-guest/mainnet.bin ./publish_host_asset.sh
 
 set -uo pipefail
 trap 'echo "ERR at line $LINENO (rc=$?)" >&2' ERR
@@ -81,12 +88,22 @@ exe="$work/host.exe"
 [ -f "$exe" ] || { echo "⛔ no host.exe inside the artifact" >&2; exit 1; }
 
 # ── 3. ⛔ VERIFY BEFORE PUBLISHING ───────────────────────────────────────────────────────────────
+# Against the PUBLISHED libzync mainnet image. (reproduce/GUEST_ELF_SHA256 names the same ELF since
+# #676, but embedded_guest_sha.py's default size is the retired CORE guest's, so pass both.)
 say "verifying the embedded guest (this is what makes proofs acceptable)…"
-if ! python3 "$root/scripts/embedded_guest_sha.py" "$exe" --root "$root" >"$work/verify.txt" 2>&1; then
-  echo "⛔ REFUSING TO PUBLISH: the binary does not carry the canonical guest." >&2
+lz=$(grep '^libzync-product mainnet ' "$root/reproduce/LIBZYNC_IDS")
+want_id=$(echo "$lz" | awk '{print $4}'); want_sha=$(echo "$lz" | awk '{print $6}')
+elf="${HAZYNC_GUEST_ELF:-$root/dist/.libzync-guest/mainnet.bin}"
+[ "$(sha256sum "$elf" 2>/dev/null | cut -c1-64)" = "$want_sha" ] || {
+  echo "⛔ need the published mainnet guest ELF (sha256 $want_sha) for its size: set HAZYNC_GUEST_ELF" >&2; exit 1; }
+if ! python3 "$root/scripts/embedded_guest_sha.py" "$exe" --root "$root" --pin "$want_sha" --size "$(stat -c%s "$elf")" \
+       >"$work/verify.txt" 2>&1; then
+  echo "⛔ REFUSING TO PUBLISH: the binary does not carry the published libzync guest." >&2
   sed 's/^/     /' "$work/verify.txt" >&2
   exit 1
 fi
+"$root/scripts/embeds-method-id.sh" "$exe" "$want_id" || {
+  echo "⛔ REFUSING TO PUBLISH: the binary does not carry the image id ${want_id:0:8} exactly once." >&2; exit 1; }
 grep -aE "canonical guest embedded|ESTABLISHED" "$work/verify.txt" | sed 's/^/  /'
 
 # ⚠ Also record WHICH build it is, because a CUDA build cannot start without an NVIDIA driver and
@@ -124,21 +141,21 @@ if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
   gh release create "$TAG" -R "$REPO" --prerelease \
     --title "Windows prover (preview)" \
     --notes "$(cat <<EOF
-An experimental native Windows build of the Hazync prover, published so the Windows GUI
-(\`tools/win-gui\`) can download it without a GitHub login.
+An experimental native Windows build of the Hazync prover (the libzync host), published so the
+Windows GUI (\`tools/win-gui\`) can download it without a GitHub login. Released builds ship as
+\`hazync-host-x86_64-windows-cuda.zip\` on the regular releases.
 
 **What is established**
 
-- The binary carries the canonical guest, \`35e3f55e…\`, verified before publishing.
-- \`host.exe method-id\` prints the canonical \`37987b85…\` on real hardware.
-- \`host.exe regress\` passes — the full consensus path, natively on Windows.
-- The **CPU** build proves a block on Windows.
+- The binary embeds the published libzync mainnet guest (\`${want_sha:0:8}…\`) and its image id
+  \`${want_id:0:8}…\`, both checked from its bytes before publishing.
 
 **What is not**
 
-- Native Windows **CUDA** proving has never completed. It aborts on the first GPU call.
+- Its own \`host.exe method-id\` was not run by this script (it cannot start without an NVIDIA
+  driver). Run it on your machine: it must print \`${want_id:0:8}…\`.
 - A CUDA build imports \`nvcuda.dll\` from the NVIDIA driver, so it cannot even start on a
-  machine without one. That is not a corrupt download. Use the CPU build there.
+  machine without one. That is not a corrupt download.
 
 sha256 \`$sha\`
 EOF

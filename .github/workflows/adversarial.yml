@@ -56,6 +56,27 @@ jobs:
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
+      - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
+        # scripts/release.sh runs this on the staged assets before publishing (CLI, the wasm through its
+        # JavaScript glue); run here on every push so the gate is known to pass before a release needs it.
+        run: |
+          cargo build --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify
+          ./swiftsync-verify-wasm/build.sh
+          mkdir -p rel
+          cp swiftsync-verify/target/release/swiftsync-verify rel/hazync-verify-x86_64-linux-gnu
+          cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm rel/hazync-verify.wasm
+          cp swiftsync-verify-wasm/swiftsync-verify.js rel/hazync-verify.js
+          ./scripts/check-release-verifiers.sh rel
+      - name: Release gate CONTROL - a verifier that accepts everything must fail it
+        run: |
+          mkdir -p bad && cp rel/* bad/
+          printf '#!/bin/sh\necho "receipt verifies against image %s (mainnet)"\necho "chain: tip %s at height 200"\necho SWIFTSYNC_VERIFY_DEMO\nexit 2\n' \
+            "$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)" \
+            000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 > bad/hazync-verify-x86_64-linux-gnu
+          chmod +x bad/hazync-verify-x86_64-linux-gnu
+          if ./scripts/check-release-verifiers.sh bad; then
+            echo "::error::the release gate passed a verifier that accepts tampered receipts"; exit 1
+          fi
 
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).

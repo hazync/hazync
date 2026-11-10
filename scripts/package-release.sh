@@ -6,7 +6,8 @@
 # non-canonical id. Neither artifact here contains a guest, so neither has that constraint:
 #
 #   hazync-worker       the Proof Party contributor CLI (hint -> prove -> submit; #37 removed claims)
-#   hazync-verify.wasm  the browser verifier
+#   hazync-verify.wasm  the browser verifier (swiftsync-verify-wasm, the libzync verifier)
+#   hazync-verify.js    the JavaScript glue a page needs to load that module (raw ABI, no wasm-bindgen)
 #
 # Both belong on the release and in the signed SHA256SUMS. The worker especially: it holds the
 # contributor's ed25519 signing key and decides what is submitted under their name, so shipping it
@@ -74,9 +75,15 @@ chmod +x "$OUT/hazync-run-workers.sh"
 # step 7 of release.sh exists to catch.
 
 # ---- browser verifier ---------------------------------------------------------------------------
+# The libzync verifier (swiftsync-verify-wasm): the same library as the CLI, built byte-reproducibly by
+# its build.sh. It has a raw ABI, so a page cannot use the .wasm without the glue that frames the
+# input and reads the verdict back: ship it beside the module, under the same `hazync-verify` name, so
+# it is in the signed manifest too. The glue takes the module's bytes or a fetch() of any URL, so the
+# rename costs a page nothing.
+cp swiftsync-verify-wasm/swiftsync-verify.js "$OUT/hazync-verify.js"
 if command -v cargo >/dev/null && rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then
-    ./verifier-wasm/build.sh >/dev/null
-    cp verifier-wasm/target/wasm32-unknown-unknown/release/hazync_verify_wasm.wasm "$OUT/hazync-verify.wasm"
+    ./swiftsync-verify-wasm/build.sh >/dev/null
+    cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm "$OUT/hazync-verify.wasm"
 else
     echo "! skipping hazync-verify.wasm — no wasm32 target installed (rustup target add wasm32-unknown-unknown)" >&2
 fi
@@ -84,7 +91,7 @@ fi
 echo "packaged into $OUT:"
 # List everything this script stages, not a subset. A summary that under-reports is how an asset gets
 # dropped without anyone noticing — the operator reads the summary, not the source.
-for f in hazync-worker hazync-coordinator.py hazync-run-workers.sh hazync-verify.wasm; do
+for f in hazync-worker hazync-coordinator.py hazync-run-workers.sh hazync-verify.wasm hazync-verify.js; do
     [ -f "$OUT/$f" ] && printf '  %-22s %9d bytes  %s\n' "$f" "$(stat -c%s "$OUT/$f")" "$(sha256sum "$OUT/$f" | cut -c1-16)"
 done
 echo

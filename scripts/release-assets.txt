@@ -1,0 +1,29 @@
+# Every asset of a Hazync release, ONE list for both ends of the pipeline:
+#   scripts/release.sh uploads the `release` lines (all of them, nothing else) and then checks the
+#   published release carries EXACTLY this set; .github/workflows/release-sign.yml reads this file
+#   from the tag it signs and refuses a release whose hazync-* assets differ from it.
+#
+# Format: <who> <asset name>
+#   release  staged in dist/ and uploaded by scripts/release.sh in the create call
+#   sign     added by release-sign.yml (the aarch64 verifier it builds, the manifest and its signature)
+#
+# An exact set, not a minimum: a release once went out EMPTY and was called verified (the tag phase
+# of another project's release script), and a set that only has to contain some names cannot tell.
+
+# The libzync host (mainnet image, reproduce/LIBZYNC_IDS), Linux CPU and CUDA.
+release hazync-host-x86_64-linux-gnu
+release hazync-host-x86_64-linux-gnu-cuda
+# The Windows CUDA host from windows-prove.yml's build-cuda job: host.exe + cudart64_12.dll, zipped
+# so the DLL keeps the name Windows looks for. Unzips to a folder the Windows GUI searches.
+release hazync-host-x86_64-windows-cuda.zip
+# The libzync verifier (swiftsync-verify), CLI, WebAssembly module and its JavaScript glue.
+release hazync-verify-x86_64-linux-gnu
+release hazync-verify.wasm
+release hazync-verify.js
+# Proof-party tooling.
+release hazync-worker
+release hazync-coordinator.py
+release hazync-run-workers.sh
+sign hazync-verify-aarch64
+sign SHA256SUMS.txt
+sign SHA256SUMS.txt.asc

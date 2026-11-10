@@ -7,8 +7,24 @@ reproduced, and how a release of the original system is cut, verified and re-bas
 ⚠ **The CORE design was retired from the active tree on 2026-11-09** ([`../history/README.md`](../history/README.md)).
 The CORE verifiers (`verifier/`, `verifier-ffi/`, `verifier-wasm/`), the SNARK fixtures (`prover/testdata/snark/`)
 and `scripts/rebaseline-id.sh` named below are now under `history/` at those paths, the host is libzync-only, and
-`reproduce/METHOD_ID` names libzync's published mainnet image. The release tooling below has not been changed yet:
-it still builds and checks the CORE artefacts, so a libzync release needs it revised first.
+`reproduce/METHOD_ID` names libzync's published mainnet image.
+
+**The release tooling is libzync's from v0.23.0** (the CORE text below is the record for v0.22.1 and earlier):
+
+- **Assets** are listed once, in `scripts/release-assets.txt` (read by `scripts/release.sh` and `release-sign.yml`):
+  the libzync host for the published mainnet image (`reproduce/LIBZYNC_IDS`) as `hazync-host-x86_64-linux-gnu`,
+  `-cuda` and `hazync-host-x86_64-windows-cuda.zip` (`host.exe` + `cudart64_12.dll`); the libzync verifier
+  (`swiftsync-verify`) as `hazync-verify-x86_64-linux-gnu`, `hazync-verify-aarch64` (built by `release-sign.yml`),
+  `hazync-verify.wasm` and its glue `hazync-verify.js`; `hazync-worker`, `hazync-coordinator.py`,
+  `hazync-run-workers.sh`; `SHA256SUMS.txt` and `.asc`. The release must carry exactly that set.
+- **Hosts:** `prover/build-release.sh` embeds the published mainnet ELF (built by `reproduce/libzync.Dockerfile`, or
+  passed as `HAZYNC_GUEST_ELF` and checked against its pinned sha256). The Windows host is built by `windows-prove.yml`
+  on GitHub's runners: dispatch it on the release commit first (`gh workflow run windows-prove.yml --ref main -f
+  skip_cpu_prove=true`); `scripts/windows-host.sh` fetches the artifact of that run and checks it from its bytes.
+- **Gates before publishing:** every host answers `method-id` with the published id; one that cannot run on the
+  release box (CUDA, Windows) needs `HAZYNC_ATTEST_<asset>=<id>` from an operator who ran it, and its bytes must agree.
+  `scripts/check-release-verifiers.sh` runs the staged verifiers (CLI, WASM through its glue, runnable hosts) on the
+  real mainnet 1..200 receipt (`DEMO`) and on tampered copies (`FAIL`).
 
 The scripts are authoritative: `scripts/release.sh`, `scripts/package-release.sh`, `scripts/check-dist.sh`,
 `.github/workflows/release-sign.yml`, `scripts/rebaseline-id.sh`, `scripts/check-deployed-verifier.sh`.
