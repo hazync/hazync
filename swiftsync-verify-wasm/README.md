@@ -12,8 +12,8 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,148,465 bytes raw, 324,113 gzipped |
-| sha256 (this commit, `./build.sh`) | `45031415f4ffb8a4574a7322bac7d8e8bfdd31b477a8f839f1e0ed1813d9208c`; two builds gave the same bytes |
+| size | 1,237,433 bytes raw, 358,172 gzipped |
+| sha256 (this commit, `./build.sh`) | `3ea3bc1e32b054065920b919c7aa7b79cfcec77d51563030edf54f76d75103f1` (with `verifyHeaders`, the header-chain zyncAPP) |
 | vectors | 14/14 (`test-vectors.out`), all 14 in 0.5 s under Node 24 |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |
 

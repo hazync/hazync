@@ -7,6 +7,7 @@
 //!   zyncapp verify-zeroconf <zyncapp receipt>
 //!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
 //!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
+//!   zyncapp headers-prove <headers file> <out receipt> [--after <previous headers receipt>] [--execute]
 //!   zyncapp id
 //!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
 //!
@@ -137,6 +138,7 @@ fn main() {
         Some("id") => {
             println!("ZYNCAPP_COIN_ID {}", id_hex(&ZYNCAPP_COIN_ID));
             println!("ZYNCAPP_ZEROCONF_ID {}", id_hex(&ZYNCAPP_ZEROCONF_ID));
+            println!("ZYNCAPP_HEADERS_ID {}", id_hex(&ZYNCAPP_HEADERS_ID));
         }
         Some("headers-exec") if a.len() >= 2 => {
             // K1: the header-chain zAPP, EXECUTED (cycles, no proof) over a file of "height hex80" lines, as
@@ -183,6 +185,54 @@ fn main() {
             println!("HEADERS_EXEC {} headers ({}..{}) {} cycles = {:.0} per header, {} segments, executed in {:.1} s",
                      run.len(), run[0].0, out.height, info.cycles(), info.cycles() as f64 / run.len() as f64, info.segments.len(), t.elapsed().as_secs_f64());
             println!("END height {} hash {} chainwork {}", out.height, disp(&out.hash), disp(&out.work));
+            println!("HEADERS_ID {}", id_hex(&ZYNCAPP_HEADERS_ID));
+        }
+        Some("headers-prove") if a.len() >= 3 => {
+            // K1 / N3: PROVE the header chain over a file of "height hex80" lines (as fetched from a node), as one
+            // succinct receipt. Without --after the file must start at genesis (height 0) and the run starts from the
+            // empty state; with --after <receipt> the run starts from the exact state that receipt ended in, and takes
+            // the file's headers above it, so new headers are a short run chained to the last one.
+            // --execute: execute only (cycles, no proof). Verify with `swiftsync-verify headers <receipt>...`.
+            use swiftsync_verify::headers::HeaderState;
+            let lines: Vec<(i64, Vec<u8>)> = std::fs::read_to_string(&a[1]).unwrap_or_else(|e| die(&e.to_string())).lines()
+                .filter(|l| !l.trim().is_empty()).map(|l| {
+                    let mut f = l.split_whitespace();
+                    let h: i64 = f.next().and_then(|x| x.parse().ok()).unwrap_or_else(|| die("a line without a height"));
+                    let x = f.next().unwrap_or_else(|| die("a line without a header"));
+                    let b: Vec<u8> = (0..x.len()).step_by(2).map(|i| u8::from_str_radix(x.get(i..i + 2).unwrap_or("zz"), 16).unwrap_or_else(|_| die("bad hex"))).collect();
+                    if b.len() != 80 { die(&format!("header {h} is {} bytes, not 80", b.len())); }
+                    (h, b)
+                }).collect();
+            let after = a.iter().position(|x| x == "--after").and_then(|i| a.get(i + 1));
+            let st: HeaderState = match after {
+                None => HeaderState::empty(),
+                Some(p) => {
+                    let r: Receipt = bincode::deserialize(&std::fs::read(p).unwrap_or_else(|e| die(&e.to_string()))).unwrap_or_else(|e| die(&e.to_string()));
+                    let (_d, s): ([u8; 32], HeaderState) = r.journal.decode().unwrap_or_else(|e| die(&format!("--after: not a headers receipt: {e}")));
+                    s
+                }
+            };
+            let run: Vec<&(i64, Vec<u8>)> = lines.iter().filter(|(h, _)| *h > st.height).collect();
+            if run.is_empty() { die("no headers above the starting state"); }
+            for (k, (h, _)) in run.iter().enumerate() {
+                if *h != st.height + 1 + k as i64 { die(&format!("the file is not consecutive from {}: found {h}", st.height + 1)); }
+            }
+            let words: Vec<u32> = run.iter().flat_map(|(_, h)| h.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>()).collect();
+            let env = ExecutorEnv::builder().write(&st).unwrap().write(&(run.len() as u32)).unwrap().write_slice(&words).build().unwrap();
+            let t = std::time::Instant::now();
+            if a.iter().any(|x| x == "--execute") {
+                let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HEADERS_ELF).unwrap_or_else(|e| die(&e.to_string()));
+                let (_d, out): ([u8; 32], HeaderState) = info.journal.decode().unwrap_or_else(|e| die(&e.to_string()));
+                println!("HEADERS_EXEC {} headers ({}..{}) {} cycles, {} segments, {:.1} s; END {} {} chainwork {}", run.len(), st.height + 1, out.height,
+                         info.cycles(), info.segments.len(), t.elapsed().as_secs_f64(), out.height, out.hash_hex(), out.work_hex());
+            } else {
+                let r = default_prover().prove_with_opts(env, ZYNCAPP_HEADERS_ELF, &risc0_zkvm::ProverOpts::succinct())
+                    .unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
+                let (_d, out): ([u8; 32], HeaderState) = r.journal.decode().unwrap_or_else(|e| die(&e.to_string()));
+                std::fs::write(&a[2], bincode::serialize(&r).unwrap()).unwrap_or_else(|e| die(&e.to_string()));
+                println!("HEADERS_PROVED {} headers ({}..{}) in {:.1} s -> {}; END {} {} chainwork {}", run.len(), st.height + 1, out.height,
+                         t.elapsed().as_secs_f64(), a[2], out.height, out.hash_hex(), out.work_hex());
+            }
             println!("HEADERS_ID {}", id_hex(&ZYNCAPP_HEADERS_ID));
         }
         Some("bench-hash") => {
