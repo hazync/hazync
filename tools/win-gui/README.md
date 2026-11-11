@@ -41,7 +41,8 @@ the machine tests, the technical log, paths, the CPU/GPU choice and your key.
 |---|---|
 | Windows CUDA build compiles, embeds the canonical guest | ✅ #631/#644 |
 | `host.exe method-id` prints the then-canonical CORE id `37987b85…` (since superseded) on real hardware | ✅ measured 2026-10-04, GTX 1050 Ti |
-| `host.exe regress` — full consensus path | ✅ measured, same machine |
+| `host.exe regress` — full consensus path (the CORE host; gone from the libzync host) | ✅ measured, same machine |
+| **libzync CUDA** host proves mainnet leaves on a real GPU under WDDM (blocks 170 and 400,000), verified on Windows and Linux | ✅ **measured 2026-11-09, RTX PRO 6000** (`experimental/libzync-bench/windows/`) |
 | **CPU** build proves a block on Windows | ✅ measured |
 | This GUI opens and works on Windows | ✅ **tested on Windows Python 3.13** |
 | This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`** |
@@ -124,19 +125,19 @@ prover already holds. `/api/pick` is the coordinator's own answer and the Dashbo
 
 ## Testing this machine
 
-The **Prove** tab has three buttons that run what you would otherwise type:
+The **Prove** tab has two buttons that run what you would otherwise type:
 
 | | |
 |---|---|
-| Is this prover genuine? | `method-id` — must print the canonical id or proofs are rejected |
-| Does consensus work here? | `regress` — block 170 through the full consensus path, seconds |
-| Can it actually prove? | `prove-block` — a real STARK receipt from built-in fixtures |
+| Is this prover genuine? | `method-id` — must print the canonical libzync id (`863c9ce3…`) or proofs are rejected; runs at startup |
+| Can it actually prove? | the client's `selftest` — checks the prover against the board, verifies a real board proof, then proves mainnet block 1 for real from the board's leaf bundle |
 
-⭐ **No block is claimed and nothing is submitted.** They use only the block-170 fixtures compiled
-into the prover, so a machine that cannot prove learns that without holding up the board.
+⭐ **No block is claimed and nothing is submitted.** The selftest fetches block 1's bundle and a board proof
+to check against, so a machine that cannot prove learns that without holding up the board. (The CORE host's
+offline `regress` and `prove-block` do not exist in the libzync host.)
 
-Each verdict reads the **output**, not the exit code — `regress` exiting 0 while printing no pass
-line is reported as a failure, because a check that passes on silence is not a check. The last few
+Each verdict reads the **output**, not the exit code — a selftest exiting 0 without both its prove line and
+`ALL GOOD` is reported as a failure, because a check that passes on silence is not a check. The last few
 real lines are shown underneath, so the verdict always comes with its evidence.
 
 Known failures are translated. `fatal runtime error: Rust cannot catch foreign exceptions` becomes
