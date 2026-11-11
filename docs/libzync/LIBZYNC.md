@@ -1,7 +1,7 @@
 # libzync: the core of Hazync
 
 **On `main` since 2026-11-08 (#670). Published images** (frozen core c14, source tag `libzync-c14` = `ce4e1e3`, built by
-`reproduce/libzync.Dockerfile`, reproduced by two builds and by CI): mainnet **`863c9ce3…`**, signet **`73b62530…`**
+`reproduce/libzync.Dockerfile`, reproduced by two builds and by CI): mainnet **`8888d59c…`**, signet **`d4210dae…`**
 ([`../../reproduce/LIBZYNC_IDS`](../../reproduce/LIBZYNC_IDS)). Laptop builds of the same source give other ids
 (mainnet `bbf82800…`), because ids depend on absolute build paths; several results below were measured on those and
 say so. Every number names what it was measured on and says MEASURED or ESTIMATED. Status of every item, built or
@@ -14,7 +14,7 @@ open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rou
 
 ## 1. In one paragraph
 
-libzync is the new core of Hazync: a RISC Zero zkVM guest (risc0-zkvm 3.0.5) and its host, which prove every Bitcoin
+libzync is the new core of Hazync: a RISC Zero zkVM guest (risc0-zkvm 3.1.0) and its host, which prove every Bitcoin
 block valid from genesis by running **Bitcoin Core v28.0's own consensus code** (interpreter, sighash, serialisation,
 CheckTransaction, merkle, PoW and retarget) and libsecp256k1 0.5.1, compiled to rv32im. A block is split into
 **chunks** that run Core's `VerifyScript` on the inputs they own, with every signature's group equation checked by one
@@ -240,7 +240,7 @@ signedness bug was in Hazync's own transcription.
 scripts/libzync-base.sh ~/lz-base                       # Core v28.0 + libsecp 0.5.1 + patches, pinned
 cd prover && rm -rf target/riscv-guest                  # always build the guest from clean (round 8: stale ELF)
 HAZYNC_BASE=~/lz-base HAZYNC_LIBZYNC=1 cargo build --release -p host     # signet: HAZYNC_NETWORK=signet
-host method-id                                          # laptop path: bbf82800…; the published 863c9ce3 is the container build
+host method-id                                          # laptop path: bbf82800…; the published 8888d59c is the container build
 HAZYNC_BLOCK=block.json host libzync-hints out.lzb      # a block's hint bundle
 HAZYNC_BLOCK=block.json HAZYNC_LZ_HINTS=out.lzb host agg-exec-fake      # execute chunks + aggregate, print cycles
 host libzync-prove-range 1 200 <json dir> genesis <out>                 # prove a range from genesis

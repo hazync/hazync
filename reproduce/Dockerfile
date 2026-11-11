@@ -124,24 +124,8 @@ FROM ${DEPS_IMAGE} AS build
 
 COPY . /hazync-zkvm
 
-# VENDORED zkr ARTEFACT (hazync#164). risc0-circuit-recursion's build.rs downloads a 57 MB zkr from
-# risc0-artifacts.s3.us-west-2.amazonaws.com during `cargo build` -- the BUILD stage, not this one --
-# and on 2026-08-24 that object began returning 403 from every network we tried, breaking every
-# from-scratch build including cutting a release.
-#
-# Its build.rs takes a local path first and only downloads as a fallback:
-#
-#     if src_path.exists() && check_sha2(&src_path) { copy; return; }
-#     ... download ...
-#
-# and check_sha2 compares against the SHA256_HASH compiled into the crate. So supplying it locally
-# satisfies the SAME integrity check the download would have -- this bypasses a fetch, not a check.
-# The S3 key IS that hash, so the artefact is self-verifying: 744b999f...d8849.
-#
-# The file arrives via `COPY . /hazync-zkvm` above; no separate COPY is needed, and an optional one
-# using a glob is unreliable across docker versions. If the file is absent the build still works --
-# build.rs falls back to downloading -- so this is a safety net, not a requirement.
-ENV RECURSION_SRC_PATH=/hazync-zkvm/reproduce/vendor/recursion_zkr.zip
+# (hazync#164's vendored recursion zkr is gone: risc0 3.1.0's risc0-circuit-recursion has no build.rs and takes
+# its programs from the risc0-circuit-recursion-zkrs crates, so nothing is downloaded at build time.)
 
 # The libzync guest, exactly as reproduce/libzync.Dockerfile builds it (see that file for why the
 # toolchain components line is dropped in this copy). Leaves /root/libzync-elf/{mainnet,signet}.bin.

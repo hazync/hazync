@@ -188,7 +188,7 @@ straggler: the cost packer balances its own predictor and always reports a perfe
 ## 2 · The image id, reproducible builds and pins
 
 `reproduce/METHOD_ID` is the source of truth; the canonical id is libzync's published mainnet image
-`863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5` (`reproduce/LIBZYNC_IDS`, built by
+`8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` (`reproduce/LIBZYNC_IDS`, built by
 `reproduce/libzync.Dockerfile`). The rest of this section describes the CORE images `reproduce/Dockerfile` built;
 the CORE id it names, `37987b85`, is superseded. Also pinned: `reproduce/GUEST_ELF_SHA256`,
 `reproduce/LINEAGE.tsv` (`scripts/lineage.sh --write` appends a row from git history once an id change is

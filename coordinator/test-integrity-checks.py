@@ -230,7 +230,7 @@ rc, out = run([sys.executable, SPINE, "--spine-dir", sd, "--db", db, "--verify",
 check(rc == 2 and "guest id" in out, "no canonical METHOD_ID to compare with is COULD NOT CHECK", out)
 
 # ── check-spine.py on the libzync board (HAZYNC_LIBZYNC=1): the libzync verifier prints text, not JSON ──────────────
-LZ_MID = "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5"
+LZ_MID = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4"
 
 
 def lz_verify_out(anchor_ok=True, image=LZ_MID, height=3, tip=TIP, work=WORK,

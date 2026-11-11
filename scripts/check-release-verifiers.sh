@@ -9,7 +9,7 @@
 #
 # An embedded id says which image a verifier is pinned to; it does not say the verifier works. This
 # runs the artifacts that are about to ship on a REAL receipt: mainnet blocks 1..200 proved from
-# genesis by the published image 863c9ce3 (experimental/libzync-bench/zapp/, one RTX PRO 6000,
+# genesis by the published image 8888d59c (experimental/libzync-bench/zapp/, one RTX PRO 6000,
 # 2026-11-08). 1..200 is far below Core's minimum chainwork, so the best verdict a correct verifier
 # can give it is DEMO (exit 2) with every check passed; anything else is a broken verifier.
 #
@@ -26,8 +26,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 CLI_ONLY=0
 if [ "${1:-}" = "--cli" ]; then CLI_ONLY=1; V="${2:?usage: $0 --cli <binary>}"; DIST=$(dirname "$V"); else DIST="${1:-dist}"; V="$DIST/hazync-verify-x86_64-linux-gnu"; fi
 read -ra WRAP <<< "${CLI_WRAP:-}"
-RCPT=experimental/libzync-bench/zapp/mainnet_1_200_863c9ce3.rcpt
-RCPT_SHA=c58cf678c53d09990f21db15be1472aeaacd92c13d8565414b3d39037300ec45
+RCPT=experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt
+RCPT_SHA=11f4f9ad57731b6d8b9be11efcaa91051918503b5e86ff649791fb271aee7c9b
 TIP200=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 CANON=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
 fails=0; n=0

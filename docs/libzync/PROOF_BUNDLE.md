@@ -20,7 +20,7 @@ All integers little-endian. Hashes in internal byte order, as the proof commits 
 | 74 | 32 | cumulative work at H (32 bytes LE) |
 | 106 | 32 | the counting trie's root at H (`trie_root`; zero for an image without the trie) |
 | 138 | 4 | receipt length L |
-| 142 | L | the receipt: a risc0 3.0.5 `Receipt`, bincode 1 encoded: a succinct STARK (about 227 KB) or its Groth16 wrap (`host libzync-snark-wrap`) |
+| 142 | L | the receipt: a risc0 3.1.0 `Receipt` (3.0.x receipts are refused: their verifier parameters differ), bincode 1 encoded: a succinct STARK (about 227 KB) or its Groth16 wrap (`host libzync-snark-wrap`) |
 
 The file ends at `142 + L`; anything else is an error.
 

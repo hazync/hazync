@@ -1,5 +1,5 @@
 {
- "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. The receipts are from the retired round-4 design-B signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae: every one must now FAIL (the journal format and the hints file are both gone). `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
+ "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. The mainnet_1_200_8888d59c receipts are a real GPU proof of mainnet 1..200 under the frozen product image 8888d59c (risc0 3.1.0). The r4_* receipts are from the retired round-4 design-B signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae: every one must FAIL (the journal format and the hints file are both gone). `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
  "cases": [
   {
    "name": "retired_design_b",
@@ -82,6 +82,63 @@
     "--anchor",
     "r4_anchor_2500.json",
     "bad_bundle_header.sspf"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "mainnet_1_200_demo",
+   "description": "A real GPU proof of mainnet blocks 1..200 under the frozen product image 8888d59c (risc0 3.1.0): valid, but below Core's minimum chainwork, so DEMO.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--product",
+    "mainnet_1_200_8888d59c.rcpt"
+   ],
+   "expect_exit": 2
+  },
+  {
+   "name": "mainnet_1_200_as_signet",
+   "description": "The same receipt checked as signet: refused (another network's image and genesis).",
+   "args": [
+    "--network",
+    "signet",
+    "--product",
+    "mainnet_1_200_8888d59c.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "mainnet_1_200_old_image",
+   "description": "The same receipt against 863c9ce3, the same guest built on risc0 3.0.5: refused (the image id commits to the toolchain).",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5",
+    "mainnet_1_200_8888d59c.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "mainnet_1_200_flipped",
+   "description": "The same receipt with one bit flipped at byte 5000 (inside the seal): refused.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--product",
+    "mainnet_1_200_8888d59c_flipped.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "risc0_305_receipt",
+   "description": "A real risc0 3.0.5 proof of mainnet 1..200 by 863c9ce3 (v0.23.0's image), checked against that same image: refused, because a 3.1.0 verifier refuses every 3.0.x receipt (its verifier parameters digest differs).",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5",
+    "mainnet_1_200_863c9ce3_risc0_305.rcpt"
    ],
    "expect_exit": 1
   },

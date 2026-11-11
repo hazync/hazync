@@ -77,7 +77,7 @@ below; step 7 needs a source you name (without one they print the tip hash to co
      `block_roots` = one entry, `Some(SHA-256(0x02 ‖ genesis hash, internal byte order ‖ 0u32 LE ‖
      SHA-256(0x04 ‖ 0u64 LE ‖ 0u64 LE)))` (HANDOVER.md §3: the empty coin state); `block_leaves = 1` (u64);
      `lineage` = 32 zero bytes.
-   - The journal is risc0's serde word encoding (risc0-zkvm 3.0.5 `serde::to_vec`, each word little-endian), as in §3.
+   - The journal is risc0's serde word encoding (risc0-zkvm 3.1.0 `serde::to_vec`, unchanged from 3.0.5, each word little-endian), as in §3.
    - `host libzync-verify` computes this itself; `scripts/libzync/genesis_anchor_id.py` computes it from this text
      alone. The values are PINNED (a chain keeps its anchor through every handover, HANDOVER.md §4): mainnet
      `852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167`, signet

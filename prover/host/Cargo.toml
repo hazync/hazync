@@ -12,7 +12,7 @@ methods = { path = "../methods" }
 # release does not ship. That is why the CPU host could not prove for a fresh contributor while the
 # CUDA host could: `cuda = ["prove", ...]` pulls it in, so the GPU path had a linked-in prover and the
 # "No GPU still works" path had a missing dependency and an OS errno.
-risc0-zkvm = { version = "=3.0.5", features = ["prove"] }
+risc0-zkvm = { version = "=3.1.0", features = ["prove"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1.0", features = ["derive"] }
 bitcoin = "0.32"
@@ -21,7 +21,7 @@ num-bigint = "0.4"
 # libzync: the hint formats, producers and network parameters shared with the guest (one copy).
 libzync = { path = "../../libzync" }
 # libzync laptop tools: build the guest memory image once per process (lz_execute). Already in the lock.
-risc0-binfmt = "=3.0.5"
+risc0-binfmt = "=3.0.6"
 hazync-utreexo = { path = "../../accumulator" }
 hazync-coinbase-smt = { path = "../../coinbase-smt", features = ["std", "serde"] }
 

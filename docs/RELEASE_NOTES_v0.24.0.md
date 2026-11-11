@@ -1,0 +1,85 @@
+**Hazync has a new engine.** The original core is replaced by **libzync**, a library that proves Bitcoin
+blocks with up to **20x fewer proven cycles** than the core it replaces, measured on real mainnet state (19.9x on
+block 200,000, and 9.5x across all eight blocks measured; GPU time up to 15.1x less, 7.0x across the eight;
+`experimental/libzync-bench/results/CYCLES_REAL_STATE.md`). It still runs Bitcoin Core's own C++ inside the zkVM.
+
+**Every Bitcoin block header, in one proof, in under an hour.** Hazync has proved the whole header chain, from
+the genesis block to block 975,278 (975,279 headers), in a single proof: 59.4 minutes on one NVIDIA RTX PRO 6000,
+about $2.50 of GPU time. The proof is a 224 KB file. Hazync's WebAssembly verifier, the one that runs in a
+browser, checks it in 39 ms (on a laptop, under Node) and confirms the tip is the block a full node reports. So
+anyone can check the whole history of Bitcoin's proof of work without downloading the 78 MB of headers.
+
+v0.24.0 also moves Hazync to **RISC Zero 3.1.0**, which fixes soundness bugs in the proof system beneath it.
+v0.23.0 was the first release with libzync and was built on the version those bugs are in. **Use v0.24.0.
+v0.23.0 is withdrawn and must not be deployed.**
+
+**Why.** RISC Zero 3.1.0 fixes these bugs in the zkVM's proof system. RISC Zero has said earlier versions will be yanked
+(on 2026-11-11, 3.0.1 to 3.0.6 were not yet):
+- an rv32im trace could hold two executions;
+- `sys_read` words were not range-checked;
+- the recursion circuit's `BIT_AND_ELEM` decompositions were not unique;
+- Groth16 claim handling;
+- the Poseidon S-box.
+
+None of these bugs is in Hazync's own code, but a proof is only as sound as the system that checks it.
+Verifiers built on 3.1.0 refuse every 3.0.x receipt, because the verifier parameters differ. A test vector checks
+this with v0.23.0's real 3.0.5 proof of blocks 1..200.
+
+**The images change.** The guest source is unchanged, but the image id depends on the toolchain, so every
+id moved:
+
+```
+mainnet  8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+signet   d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387
+headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632
+```
+
+`reproduce/libzync.Dockerfile` rebuilds them bit for bit (`reproduce/LIBZYNC_IDS`).
+
+This release's verifier refuses proofs by v0.23.0's image `863c9ce3…` (exit `1`). Those proofs must be
+re-made under `8888d59c`.
+
+## What changed in what you download
+
+The asset names and what each one does are the same as in v0.23.0. Every binary is rebuilt on 3.1.0:
+- the host and the CUDA host for Linux, and the CUDA host for Windows;
+- the CLI verifier and the browser verifier (`hazync-verify.wasm` sha256
+  `446fdaeb5a2937d6f442e16058969d83af8c6ddebdbaba103d8d934787ea107f`);
+- the proof-party tools.
+
+The verifier's three answers are unchanged: `0` OK, `2` DEMO (valid, not yet at minimum work), `1` refused.
+
+**A provers' note:** run-workers.sh checks the image id only at startup. Any worker loop started on
+v0.23.0 must be restarted on v0.24.0, or it will keep producing proofs the board refuses.
+
+## Measured on 3.1.0
+
+One NVIDIA RTX PRO 6000 per run, 2026-11-11 (`experimental/libzync-bench/RESULT_risc0_3_1_gpu.txt`).
+
+**Mainnet genesis to block 200**, proved by the published image:
+- 3,074 s;
+- the result is a 227 KB receipt;
+- the verifier answers `DEMO`;
+- the same receipt is refused when checked as signet, when checked against the old image, and with one
+  bit flipped.
+
+**The whole header chain, genesis to block 975,278**, in one proof:
+- 59.4 min (57.2 min on 3.0.5), 224 KB;
+- verifies `OK` against a full node's tip hash, on the CLI and in the WebAssembly verifier (39 ms).
+
+These cases, and v0.23.0's 3.0.5 proof, are test vectors that CI now runs on every push against the CLI, the C
+library and the WASM verifier, together with the header-chain receipts.
+
+## The board
+
+The libzync board starts again from genesis under `8888d59c`. Its leaf bundles each record the state before
+their block, stamped with the image that prepared them, and leaves from bundles prepared under `863c9ce3` would
+not chain. So the board pass restarts from genesis with this release's host (`coordinator/deploy/libzync/SWITCH.md`,
+step 0). On 2026-11-11 it had prepared blocks 1 to 5,000 and proved blocks 1 to 4, so little is lost.
+
+## Not yet
+
+These are unchanged from v0.23.0:
+- **No independent audit.**
+- **No proof of the whole chain's blocks yet** (the header chain is proved, above).
+- **Following the tip with libzync** is not running yet.

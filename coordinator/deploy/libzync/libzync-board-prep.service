@@ -1,5 +1,5 @@
 [Unit]
-Description=libzync board pass: a leaf bundle for EVERY block from genesis under 863c9ce3, paced by proving (the libzync board's bridge)
+Description=libzync board pass: a leaf bundle for EVERY block from genesis under 8888d59c, paced by proving (the libzync board's bridge)
 After=bitcoind.service libzync-board-fetch.service
 Wants=libzync-board-fetch.service
 

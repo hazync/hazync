@@ -85,7 +85,7 @@ if ! command -v rzup >/dev/null; then
   curl -L https://risczero.com/install | bash
   export PATH="$HOME/.risc0/bin:$PATH"
 fi
-# PINNED toolchain versions. With the risc0 crates (=3.0.5) these determine the guest image id
+# PINNED toolchain versions. With the risc0 crates (=3.1.0) these determine the guest image id
 # (METHOD_ID). Bare `rzup install` grabs whatever is *latest* — which drifts the METHOD_ID over time
 # and, unauthenticated, hits GitHub's API rate limit. rzup authenticates via $GITHUB_TOKEN when set.
 #
@@ -123,8 +123,8 @@ rzup_install() {
 }
 rzup_install rust 1.94.1
 rzup_install cpp 2024.1.5
-rzup_install cargo-risczero 3.0.5
-rzup_install r0vm 3.0.5
+rzup_install cargo-risczero 3.1.0
+rzup_install r0vm 3.1.0
 # Groth16 (SNARK-wrapping a STARK) needs its own rzup component and is NOT pulled in by the others.
 # Without it `host snark-wrap` dies with "Missing required `risc0-groth16` rzup component" — so a
 # freshly provisioned box cannot wrap at all, which is not obvious until you try. Pinned like the rest,
@@ -144,7 +144,7 @@ rzup_install r0vm 3.0.5
 # before this was measured. Fail fast, say what is lost, carry on.
 if [ "${SKIP_GROTH16:-0}" = 1 ]; then
     echo "== skipping risc0-groth16 (SKIP_GROTH16=1) — this box will prove but not snark-wrap =="
-elif ! RZUP_TIMEOUT="${GROTH16_TIMEOUT:-300}" rzup_install risc0-groth16 0.1.0; then
+elif ! RZUP_TIMEOUT="${GROTH16_TIMEOUT:-300}" rzup_install risc0-groth16 0.2.0; then
     echo "   NOTE: risc0-groth16 did not install (it is known to hang; see the comment above)." >&2
     echo "   Nothing else is affected: the guest, the prover and every verifier work without it." >&2
     echo "   Only \`host snark-wrap\` needs it. Retry with GROTH16_TIMEOUT=3600 if you want to wait." >&2
@@ -321,22 +321,8 @@ fi
 for _v in $(compgen -e | grep '^HAZYNC_' | grep -vxE 'HAZYNC_GUEST_ELF|HAZYNC_GUEST_PIN_DIR|HAZYNC_PROVISION|HAZYNC_BASE'); do unset "$_v"; done
 export HAZYNC_LIBZYNC=1
 
-# VENDORED zkr (hazync#164). risc0-circuit-recursion's build.rs downloads a 57 MB blob from
-# risc0-artifacts.s3.us-west-2.amazonaws.com during cargo build. On 2026-08-24 that object returned
-# 403 from every network tried, aborting the build ~14 minutes in, after every other fetch had
-# already succeeded.
-#
-# Set HERE rather than in reproduce/Dockerfile alone, because there are THREE build paths and only
-# one of them is that Dockerfile: prover/build-release.sh bind-mounts the repo into a bare ubuntu
-# image, and CI runs this script directly. All three go through this file, so one line covers them.
-#
-# build.rs prefers a local path and verifies it against the SHA256_HASH compiled into the crate, so
-# this satisfies the same check the download would have. Respects an existing value, and if the file
-# is missing build.rs simply downloads as before.
-if [ -z "${RECURSION_SRC_PATH:-}" ]; then
-  _zkr="$REPO_DIR/reproduce/vendor/recursion_zkr.zip"
-  [ -f "$_zkr" ] && export RECURSION_SRC_PATH="$_zkr"
-fi
+# risc0 3.1.0 (hazync: risc0-3.1 bump): the recursion circuit ships inside the risc0-circuit-recursion-zkrs
+# crate, so a cold build no longer downloads it from S3 and the vendored recursion_zkr.zip (#164) is gone.
 
 # ...including the CUDA env, and GPU_FEATURES itself. Phase 7 is the ONLY place that sets
 # GPU_FEATURES=--features cuda, and `build` skips phase 7 — so before this, `GPU=1 HAZYNC_PROVISION=build`
@@ -366,7 +352,7 @@ cargo build --release -p host $GPU_FEATURES
 echo
 echo "DONE. Verify the build with the self-contained checks (no GPU, no network):"
 echo "  cd $REPO_DIR/prover && ./target/release/host method-id      # want the libzync-product mainnet id in reproduce/LIBZYNC_IDS"
-echo "  ./target/release/host libzync-verify ../experimental/libzync-bench/zapp/mainnet_1_200_863c9ce3.rcpt"
+echo "  ./target/release/host libzync-verify ../experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt"
 echo "                                                              # a real proof of mainnet 1..200: DEMO (exit 2)"
 echo "Then prove (mainnet block 1 from genesis, and verify it):"
 echo "  ./target/release/host libzync-prove-range 1 1 testdata/libzync/mainnet genesis out && ./target/release/host libzync-verify out/block_1.rcpt"

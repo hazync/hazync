@@ -514,16 +514,16 @@ check(sum(b for _, b in ckr.callbacks) == sum(len(v) for (bk, k), v in ckr.objec
 
 # 10. --method-id: a coordinator whose host pins another image (the libzync board beside the original) namespaces its
 #     receipts by that id, not by the checkout's reproduce/METHOD_ID; a malformed id is refused, nothing uploaded
-LZ = "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5"
+LZ = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4"
 s3m = FakeS3()
 rc, out = run(s3m, "copy", "--method-id", LZ)
 keys = sorted(k for (_, k) in s3m.objects)
-check(rc == 0 and keys and all(k.startswith("proofs-863c9ce3/") for k in keys),
-      f"copy --method-id uploads under proofs-863c9ce3/ (rc={rc}, {keys[:2]})")
+check(rc == 0 and keys and all(k.startswith("proofs-8888d59c/") for k in keys),
+      f"copy --method-id uploads under proofs-8888d59c/ (rc={rc}, {keys[:2]})")
 check(not any(k.startswith(P) for k in keys), f"copy --method-id puts nothing under the repo's {P}")
 s3m = FakeS3()
 try:
-    run(s3m, "copy", "--method-id", "863c9ce3")
+    run(s3m, "copy", "--method-id", "8888d59c")
     refused = False
 except SystemExit as e:
     refused = "64-hex" in str(e)

@@ -244,16 +244,7 @@ echo "   HEAD: $(git -C "$REPO" describe --tags --always 2>/dev/null || echo unk
 # matter — only $HOME") is true once more. Keep the fixed mount anyway: it costs nothing, it keeps this
 # script and the Dockerfile visibly in agreement, and if an external path dependency is ever
 # re-introduced it is the difference between a shipped-and-broken host and a working one.
-# RECURSION_SRC_PATH points at the vendored zkr (hazync#164). This script does NOT use
-# reproduce/Dockerfile -- it bind-mounts the repo into a bare $IMAGE -- so the ENV set there does not
-# reach here and has to be passed explicitly. Without it, risc0-circuit-recursion's build.rs
-# downloads a 57 MB blob from S3, and on 2026-08-24 that object returned 403 from every network,
-# aborting the build ~14 minutes in, after every other fetch had already succeeded.
-#
-# Passed unconditionally: if the file is absent build.rs simply falls back to downloading, so this
-# costs nothing when upstream is healthy.
 docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninteractive \
-    -e "RECURSION_SRC_PATH=/hazync-zkvm/reproduce/vendor/recursion_zkr.zip" \
     -e "SKIP_GROTH16=${SKIP_GROTH16:-0}" ${RZUP_TIMEOUT:+-e "RZUP_TIMEOUT=$RZUP_TIMEOUT"} \
     -e "HAZYNC_PROVISION=$PROVISION_PHASE" \
     -e HAZYNC_GUEST_ELF=/hazync-zkvm/dist/.libzync-guest/mainnet.bin \
@@ -320,7 +311,7 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
       [ "$($H method-id | head -1 | awk "{print \$NF}")" = "$WANT_ID" ] \
         || { echo "=== FAIL: this host does not carry the published libzync image $WANT_ID ===" >&2; exit 1; }
       echo "=== smoke: libzync-verify on a real proof of mainnet 1..200 ==="
-      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_863c9ce3.rcpt > /tmp/smoke.log 2>&1 || rc=$?
+      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt > /tmp/smoke.log 2>&1 || rc=$?
       tail -1 /tmp/smoke.log
       [ "$rc" = 2 ] && grep -q "^LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 200" /tmp/smoke.log \
         || { echo "=== FAIL: the host did not accept a real proof of its own image (exit $rc) ===" >&2; exit 1; }
@@ -329,7 +320,7 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
       echo "    Almost certainly no NVIDIA driver (libcuda.so.1) because --gpus all was unavailable." >&2
       echo "    The artifact is still produced and staged. Verify it where it can run:" >&2
       echo "      hazync-host-x86_64-linux-gnu-cuda method-id      # want $WANT_ID" >&2
-      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_200_863c9ce3.rcpt   # DEMO, exit 2" >&2
+      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_200_8888d59c.rcpt   # DEMO, exit 2" >&2
       echo "    scripts/release.sh then needs HAZYNC_ATTEST_<artifact>=<id> from that run." >&2
     fi
     # Stage r0vm into the MOUNTED repo so it survives this --rm container. `host libzync-snark-wrap` shells
@@ -410,7 +401,7 @@ if [ -f "$REPO/dist/r0vm" ]; then
     rm -f "$REPO/dist/r0vm"
 fi
 
-GROTH16_IMAGE="${GROTH16_IMAGE:-risczero/risc0-groth16-prover:v2025-04-03.1}"
+GROTH16_IMAGE="${GROTH16_IMAGE:-risczero/risc0-groth16-prover:v2026-10-20.1}"
 if [ "${SKIP_GROTH16_PULL:-0}" != 1 ]; then
     if docker image inspect "$GROTH16_IMAGE" >/dev/null 2>&1; then
         echo "== groth16 prover image already present ($GROTH16_IMAGE) =="

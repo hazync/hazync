@@ -33,9 +33,6 @@ export RISC0_HOME="$HOME/.risc0"
 export CUDA_PATH="/usr/local/cuda-${CUDA_VER}"
 export PATH="$HOME/.risc0/bin:$HOME/.cargo/bin:/usr/local/cuda-${CUDA_VER}/bin:$PATH"
 export LD_LIBRARY_PATH="/usr/local/cuda-${CUDA_VER}/lib64:${LD_LIBRARY_PATH:-}"
-# VENDORED zkr: risc0-circuit-recursion's build.rs otherwise fetches a 57 MB blob that has
-# returned 403 from every network tried, aborting the build ~14 minutes in.
-[ -f "$REPO/reproduce/vendor/recursion_zkr.zip" ] && export RECURSION_SRC_PATH="$REPO/reproduce/vendor/recursion_zkr.zip"
 
 # ⛔ This script git-checkouts `main` for arm C, and `main` does not contain this file — so the
 # checkout DELETES the script out from under the running shell. The first run survives only because

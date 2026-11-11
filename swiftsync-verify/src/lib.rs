@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 pub const IMAGES: &[Image] = &[
     Image {
         network: "mainnet",
-        method_id_hex: "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5",
+        method_id_hex: "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4",
         profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
         genesis_time: 1_231_006_505,
@@ -36,7 +36,7 @@ pub const IMAGES: &[Image] = &[
     },
     Image {
         network: "signet",
-        method_id_hex: "73b62530ca89eea376e7753f47ab4f16aed3be3138d6052d84d30510aed0f38d",
+        method_id_hex: "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387",
         profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,
@@ -318,7 +318,7 @@ pub struct Inputs<'a> {
 /// receipt holds assumption receipts that may themselves be composite, without bound, so decoding a hostile one ~50k
 /// levels deep (~1 MB) overflowed the stack (an abort in the C ABI, a trap in WASM, no verdict line in the CLI; cold
 /// review 11-06). Succinct and Groth16 claims nest to a fixed depth. bincode writes the InnerReceipt variant first, as
-/// a u32 LE: 0 Composite, 1 Succinct, 2 Groth16, 3 Fake (risc0-zkvm 3.0.5).
+/// a u32 LE: 0 Composite, 1 Succinct, 2 Groth16, 3 Fake (risc0-zkvm 3.0.5; unchanged in 3.1.0, checked 11-11).
 pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
     match receipt.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap())) {
         Some(1) => Ok("succinct"),

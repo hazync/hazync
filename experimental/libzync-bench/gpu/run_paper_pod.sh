@@ -6,7 +6,7 @@
 set -uo pipefail
 # RUN=range: gpu-range.sh instead (a real chain proof LO..HI from genesis; bundle: method.bin pins/ blocks/)
 RUN=${RUN:-paper}; LO=${LO:-1}; HI=${HI:-}
-L=~/libzync-gpu/paper; OUT=${OUT:-$L/pod-$RUN-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:-}; MODELLED=${MODELLED:-}; mkdir -p "$OUT"
+L=${L:-$HOME/libzync-gpu/paper}; OUT=${OUT:-$L/pod-$RUN-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:-}; MODELLED=${MODELLED:-}; mkdir -p "$OUT"
 # the commit the pod runs: by default this checkout's HEAD, which must be on the remote (the pod clones it)
 Z=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 COMMIT=${COMMIT:-$(git -C "$Z" rev-parse HEAD)}
@@ -88,7 +88,7 @@ apt-get update -qq && apt-get install -y -qq build-essential cmake git curl ca-c
 curl -fsSL -o /tmp/k.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && dpkg -i /tmp/k.deb && apt-get update -qq && apt-get install -y -qq cuda-toolkit-12-8
 ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-cd /workspace && git clone -q -b libzync https://github.com/hazync/hazync.git && cd hazync && git checkout -q $COMMIT
+cd /workspace && git clone -q https://github.com/hazync/hazync.git && cd hazync && git checkout -q $COMMIT
 [ "\$(git rev-parse HEAD)" = "\$(git rev-parse $COMMIT)" ] || false
 git log --oneline -1
 echo SETUP_DONE

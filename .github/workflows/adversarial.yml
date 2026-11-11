@@ -77,6 +77,17 @@ jobs:
           if ./scripts/check-release-verifiers.sh bad; then
             echo "::error::the release gate passed a verifier that accepts tampered receipts"; exit 1
           fi
+      - name: Verifier vectors on every surface (CLI, C ABI, WASM) and the header-chain receipts
+        # swiftsync-verify/vectors/manifest.json: a real risc0 3.1.0 proof (DEMO), the same as signet, against the
+        # 3.0.5 image, with a flipped seal, v0.23.0's real 3.0.5 receipt, and the retired design-B refusals.
+        run: |
+          python3 swiftsync-verify/vectors/run_vectors.py swiftsync-verify/target/release/swiftsync-verify
+          cargo build --release --manifest-path swiftsync-verify-ffi/Cargo.toml
+          (cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o vtest && ./vtest)
+          (cd swiftsync-verify-wasm && node test-vectors.mjs target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm)
+          bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
+          node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
+          swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
 
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).

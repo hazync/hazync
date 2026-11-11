@@ -10,7 +10,7 @@ The page never reads more than two receipts, and a reorg above B needs nothing s
 tip. When the run gets long (a warning at 20,000 headers), prove a new base and install it with `--set-base`.
 
 A run is published only after `swiftsync-verify headers --expect <tip>:<the node's hash>` prints
-`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`ea1d49e3`, image `4d04d6bf`).
+`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`5bd8011d`, image `2db34e12`).
 
 ## Where it runs
 
@@ -27,7 +27,7 @@ install -d /opt/hazync-headers/bin /var/lib/hazync-headers
 install -m755 hazync-headers-follow /opt/hazync-headers/bin/
 # zyncapp + swiftsync-verify from this commit (release builds), and the container-built ELF:
 install -m755 zyncapp swiftsync-verify /opt/hazync-headers/bin/
-install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 ea1d49e3…
+install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 5bd8011d…
 ssh-keygen -t ed25519 -N '' -C hazync-headers-publish -f /root/.ssh/hazync_headers_publish
 #   web box, /root/.ssh/authorized_keys:
 #   command="/usr/bin/rrsync -wo /var/www/hazync-headers",restrict ssh-ed25519 AAAA… hazync-headers-publish
@@ -36,6 +36,14 @@ HEADERS_DIR=/var/lib/hazync-headers HEADERS_BIN=/opt/hazync-headers/bin \
 cp hazync-headers-follow.service hazync-headers-follow.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now hazync-headers-follow.timer
 ```
+
+## Upgrading the image (risc0 3.1.0, 11-11)
+
+The headers image moved from `4d04d6bf` to `2db34e12`. The installed base (proved by `4d04d6bf`) no longer
+verifies, so every timer run fails until a base of the new image is installed. Re-run the four `install`
+lines above with this release's files: `hazync-headers-follow` (its `WANT_ELF` is now `5bd8011d…`, so the old
+script refuses the new ELF), `zyncapp`, `swiftsync-verify` and `zyncapp-headers.bin`. Then re-run the `--set-base` line with the 3.1.0 `headers_0_tip.rcpt` (`experimental/libzync-bench/headers/`,
+sha256 `a2931d89…`).
 
 ## Test
 

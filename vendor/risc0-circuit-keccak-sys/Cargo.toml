@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "risc0-circuit-keccak-sys"
-version = "4.0.3"
+version = "4.1.0"
 build = "build.rs"
 links = "risc0-circuit-keccak-sys"
 autolib = false
@@ -51,7 +51,7 @@ version = "3.0.2"
 default-features = false
 
 [dependencies.risc0-sys]
-version = "1.5.0"
+version = "1.5.1"
 default-features = false
 
 [dependencies.sppark]

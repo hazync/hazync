@@ -12,10 +12,10 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,237,433 bytes raw, 358,169 gzipped |
-| sha256 (this commit, `./build.sh`) | `bce00ae64aa1a950b3320244fd22c7bd308e71da66e809c55cdad20f4e4ea633` (with `verifyHeaders`, headers image `4d04d6bf`) |
+| size | 1,240,229 bytes raw, 359,069 gzipped |
+| sha256 (this commit, `./build.sh`) | `446fdaeb5a2937d6f442e16058969d83af8c6ddebdbaba103d8d934787ea107f` (risc0 3.1.0; mainnet `8888d59c`, signet `d4210dae`, headers `2db34e12`; two clean builds agree) |
 | reproduces | only at the default stage path: a `SWIFTSYNC_WASM_STAGE` override gave other bytes (`2ea330c0…`, +235 bytes) with no path in the strings |
-| vectors | 14/14 (`test-vectors.out`), all 14 in 0.5 s under Node 24 |
+| vectors | 11/11 (`test-vectors.out`; the 2 CLI-only cases of the manifest are skipped) |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |
 
 **What a browser cannot do:** step 7 of the proposal's §5 (the tip is on your own most-work chain) needs your
