@@ -74,13 +74,29 @@ The original board's database held, on 2026-11-09:
    the frontier stops. The re-stamp on a continued prep fixes only the run's starting state, not bundles already
    written. On 11-11 the pass held 5,000 bundles (blocks 1..5,000) and the libzync coordinator 5 proofs of blocks 1..4
    and 1 contributor, so nothing of value is lost:
-   - stop `libzync-board-prep`, `hazync-lz-coordinator`, the `hazync-lz-offsite-*` timers and any leaf workers;
-   - keep a record: `VACUUM INTO` a copy of `/var/lib/hazync-lz/coordinator.db`, then move `/var/lib/hazync-lz` aside;
-   - delete `/srv/bulk/libzync-board/{leaves,out,cl,trie}` (the pass rebuilds them from genesis; `blocks/` stays);
-   - install the v0.24.0 host as **both** `/opt/hazync-lz/bin/host` and `$LZ_ROOT/bin/host_lz` (the board pass runs
-     the second, `libzync-prep-run.sh`); `host_lz method-id` must print `8888d59c…`;
-   - start `libzync-board-prep`, then check one bundle: `leaf_1.bin`'s `prev.self_id` is `8888d59c…`.
-   Only then carry on with step 1. ⛔ Do not enable the `hazync-lz-offsite-*` timers before this step: the copy is
+   The board pass's `out`, `cl` and `trie` under `/srv/bulk/libzync-board` are **symlinks** into
+   `/var/lib/libzync-board` (the coordinator, check-proofs and xcheck read that path): empty the targets, never the
+   links. Prep consumes its block files (`HAZYNC_PREP_CONSUME=1`), and the fetcher picks its start height once at
+   startup, so the fetcher must restart too or prep waits for `block_1.json` for ever.
+   1. Stop `libzync-board-prep`, `libzync-board-fetch`, `hazync-lz-coordinator`, `hazync-lz-zync-serve`, the timers
+      `hazync-lz-offsite-{proofs,spine}{,-b2}.timer`, `hazync-lz-prune-leaves.timer`, `hazync-lz-check-{proofs,spine}.timer`
+      and `libzync-xcheck.timer`, and any leaf workers.
+   2. Keep a record: `sqlite3 /var/lib/hazync-lz/coordinator.db "VACUUM INTO '/root/lz-863c9ce3.db'"`, then
+      `mv /var/lib/hazync-lz /var/lib/hazync-lz.863c9ce3`.
+   3. Recreate it for the `hazync` user and put the zApp data back (zync-serve reads it):
+      `install -d -o hazync -g hazync /var/lib/hazync-lz && cp -a /var/lib/hazync-lz.863c9ce3/zapp /var/lib/hazync-lz/`.
+   4. Empty the pass: `rm -rf /var/lib/libzync-board/{out,cl,trie}/* /srv/bulk/libzync-board/leaves/* /srv/bulk/libzync-board/blocks/*`
+      (the symlinks stay), and `rm -f /var/lib/hazync-checks/libzync-xcheck.last` so xcheck starts again at 1.
+   5. Install the v0.24.0 host as **both** `/opt/hazync-lz/bin/host` and `/srv/bulk/libzync-board/bin/host_lz` (the
+      pass runs the second, `libzync-prep-run.sh`). `host_lz method-id` must print `8888d59c…`.
+   6. Start `libzync-board-fetch`, then `libzync-board-prep`, then `hazync-lz-coordinator` (it creates a fresh
+      database, which step 2's `carry-contributors.py` needs, since it opens the target `mode=rw`) and
+      `hazync-lz-zync-serve`; re-enable the prune, check and xcheck timers (not the offsite ones yet).
+   7. Check the stamp. Block 1's bundle starts from genesis, whose `self_id` is zero, so look at the first
+      state written: `self_id` in `/var/lib/libzync-board/out/state_1.json` must be
+      `[2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963]` (= `8888d59c…`
+      as eight u32 words; it is `leaf_2.bin`'s `prev`).
+   Only then carry on with step 1. ⛔ Do not re-enable the `hazync-lz-offsite-*` timers before step 5 of section 4: the copy is
    append-only by name, so a `863c9ce3` receipt uploaded under `proofs-8888d59c/` would stay there, and the
    re-proved receipt of the same range would never be uploaded.
 1. **Freeze the original board.** Stop `hazync-sponsor-bot` and `hazync-coordinator`, then take a `VACUUM INTO` copy of its database for the record.

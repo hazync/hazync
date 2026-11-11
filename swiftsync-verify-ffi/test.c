@@ -28,7 +28,7 @@ static void run(const char* name, const char* rc, uint8_t net, const char* image
 int main(void) {
     const char* V = "../swiftsync-verify/vectors/";
     const char* OLD = "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae";
-    const char* R31 = "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5"; /* the same guest on risc0 3.0.5 */
+    const char* OLD305 = "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5"; /* the same guest on risc0 3.0.5 */
     const uint8_t MP = SWIFTSYNC_NET_MAINNET | SWIFTSYNC_IMG_PRODUCT;
     const uint8_t S = SWIFTSYNC_NET_SIGNET, SP = SWIFTSYNC_NET_SIGNET | SWIFTSYNC_IMG_PRODUCT;
     char a[512], c[512];
@@ -41,9 +41,9 @@ int main(void) {
     run("bundle_header_lies", P(a, "bad_bundle_header.sspf"), SP, OLD, P(c, "r4_anchor_2500.json"), SWIFTSYNC_VERIFY_FAIL);
     run("mainnet_1_200_demo", P(a, "mainnet_1_200_8888d59c.rcpt"), MP, NULL, NULL, SWIFTSYNC_VERIFY_DEMO);
     run("mainnet_1_200_as_signet", P(a, "mainnet_1_200_8888d59c.rcpt"), SP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
-    run("mainnet_1_200_old_image", P(a, "mainnet_1_200_8888d59c.rcpt"), MP, R31, NULL, SWIFTSYNC_VERIFY_FAIL);
+    run("mainnet_1_200_old_image", P(a, "mainnet_1_200_8888d59c.rcpt"), MP, OLD305, NULL, SWIFTSYNC_VERIFY_FAIL);
     run("mainnet_1_200_flipped", P(a, "mainnet_1_200_8888d59c_flipped.rcpt"), MP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
-    run("risc0_305_receipt", P(a, "mainnet_1_200_863c9ce3_risc0_305.rcpt"), MP, R31, NULL, SWIFTSYNC_VERIFY_FAIL);
+    run("risc0_305_receipt", P(a, "mainnet_1_200_863c9ce3_risc0_305.rcpt"), MP, OLD305, NULL, SWIFTSYNC_VERIFY_FAIL);
     run("bad_image_hex", P(a, "r4_block_2600.rcpt"), SP, "xyz", NULL, SWIFTSYNC_VERIFY_FAIL);
     run("unknown_network", P(a, "r4_block_2600.rcpt"), 7, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
     printf("%s\n", bad ? "SOME CASES WRONG" : "all cases as expected");

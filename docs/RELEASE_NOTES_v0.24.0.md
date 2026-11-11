@@ -4,7 +4,8 @@ v0.24.0 is libzync on **RISC Zero 3.1.0**. The guest source is the same as in v0
 the proof system beneath it: 3.1.0 fixes soundness bugs in RISC Zero, and v0.23.0's proofs were made with
 the version those bugs are in. **Use v0.24.0. v0.23.0 is withdrawn and must not be deployed.**
 
-**Why.** RISC Zero 3.1.0 fixes these bugs in the zkVM's proof system, and earlier versions are to be yanked:
+**Why.** RISC Zero 3.1.0 fixes these bugs in the zkVM's proof system. RISC Zero has said earlier versions will be yanked
+(on 2026-11-11, 3.0.1 to 3.0.6 were not yet):
 - an rv32im trace could hold two executions;
 - `sys_read` words were not range-checked;
 - the recursion circuit's `BIT_AND_ELEM` decompositions were not unique;
@@ -64,9 +65,8 @@ library and the WASM verifier, together with the header-chain receipts.
 
 The libzync board starts again from genesis under `8888d59c`. Its leaf bundles each record the state before
 their block, stamped with the image that prepared them, and leaves from bundles prepared under `863c9ce3` would
-not chain. So the board pass is restarted from genesis with this release's host
-(`coordinator/deploy/libzync/SWITCH.md`, step 0). When it was stopped it had prepared blocks 1 to 5,000 and proved
-blocks 1 to 4, so little is lost.
+not chain. So the board pass restarts from genesis with this release's host (`coordinator/deploy/libzync/SWITCH.md`,
+step 0). On 2026-11-11 it had prepared blocks 1 to 5,000 and proved blocks 1 to 4, so little is lost.
 
 [DISCUSS: the progress wording at the time of release.]
 

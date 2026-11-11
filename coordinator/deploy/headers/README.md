@@ -40,8 +40,9 @@ systemctl daemon-reload && systemctl enable --now hazync-headers-follow.timer
 ## Upgrading the image (risc0 3.1.0, 11-11)
 
 The headers image moved from `4d04d6bf` to `2db34e12`. The installed base (proved by `4d04d6bf`) no longer
-verifies, so every timer run fails until a base of the new image is installed. Install the new binary, then
-re-run the `--set-base` line above with the 3.1.0 `headers_0_tip.rcpt` (`experimental/libzync-bench/headers/`,
+verifies, so every timer run fails until a base of the new image is installed. Re-run the four `install`
+lines above with this release's files: `hazync-headers-follow` (its `WANT_ELF` is now `5bd8011d…`, so the old
+script refuses the new ELF), `zyncapp`, `swiftsync-verify` and `zyncapp-headers.bin`. Then re-run the `--set-base` line with the 3.1.0 `headers_0_tip.rcpt` (`experimental/libzync-bench/headers/`,
 sha256 `a2931d89…`).
 
 ## Test
