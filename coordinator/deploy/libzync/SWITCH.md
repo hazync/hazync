@@ -20,7 +20,8 @@ All of these must hold:
 
 - **Merged:** #677, #678, #679, #680, #682, #683, #685, #686, #687, #688, #690 and #691; then #676 and #684, which are drafts that land with the switch.
 - **After #676 merges:** re-run `scripts/lineage.sh --write` and commit, because the squash changes the commit the row names.
-- **Release v0.23.0** is cut and published with exactly the 12 assets of `scripts/release-assets.txt`. The pods and the Windows GUI download the libzync host from it.
+- **Release v0.24.0** (risc0 3.1.0, image `8888d59c`) is cut and published with exactly the 12 assets of `scripts/release-assets.txt`. The pods and the Windows GUI download the libzync host from it. v0.23.0 (`863c9ce3`, risc0 3.0.5) is withdrawn: its proofs are refused by 3.1.0 verifiers.
+- **The board pass has been restarted under `8888d59c`** (step 0 below).
 - **`/opt/hazync-lz`** is at the merge commit, and `/opt/hazync-lz/bin/host` is the host from it (`method-id` = `8888d59c…`). It must include #686's `HAZYNC_LZ_STATE_DIR` fallback.
 - **The leaf pruner keeps `leaf_1.bin` for good.** The pods' GPU smoke (#685) and the worker's `selftest` use it.
 - **The libzync board's own checks are green:**
@@ -60,12 +61,28 @@ The original board's database held, on 2026-11-09:
 | `hazync-check-continuity`, `hazync-retention-check`, `hazync-coordinator-backup`, `hazync-offsite-ledger-b2`, `hazync-offsite-keys{,-b2}` | **retarget** `COORD_DB` and `COORD_PROOFS` to `/var/lib/hazync-lz`. These scripts call no host command. |
 | `hazync-offsite-proofs{,-b2}`, `hazync-offsite-spine{,-b2}` | **disable.** The `hazync-lz-offsite-*` twins (#678, #687) replace them, and the CORE copies stay in the bucket. |
 | `hazync-check-board-progress`, `hazync-check-breakers`, `hazync-check-disk`, `hazync-check-unit-drift`, `hazync-node-tip`, `hazync-offsite-watch`, `hazync-offsite-summary` | **keep.** Board-progress keeps `COORD_URL=http://127.0.0.1:8899`, which is the libzync coordinator after step 4. Unit-drift needs the new units in its list. |
-| `hazync-sponsor-bot` | **retarget**: `HAZYNC_LIBZYNC=1` and `HAZYNC_BRIDGE_OUT=/srv/bulk/libzync-board/leaves` (#682, #685); release v0.23.0 for the pods. |
+| `hazync-sponsor-bot` | **retarget**: `HAZYNC_LIBZYNC=1` and `HAZYNC_BRIDGE_OUT=/srv/bulk/libzync-board/leaves` (#682, #685); release v0.24.0 for the pods (v0.23.0 was decided on 11-09 and withdrawn on 11-11). |
 | `hazync-snapshot-emit`, `hazync-quiet-cutover` | **disable.** They're CORE and one-off. |
 | `libzync-prep` (the paper run) | **keep** until it reaches the tip. |
 
 ## 4. Steps
 
+0. **Restart the libzync board pass under `8888d59c`** (needed once, because v0.23.0's image was replaced; 11-11).
+   Every leaf bundle carries `prev`, the state before its block, stamped with the image that prepared it (`prep.rs`).
+   A leaf's anchor is the link digest of that `prev`, and the link digest covers `self_id`. So leaves proved by
+   `8888d59c` from bundles prepared under `863c9ce3` each verify on their own but never chain: no join succeeds and
+   the frontier stops. The re-stamp on a continued prep fixes only the run's starting state, not bundles already
+   written. On 11-11 the pass held 5,000 bundles (blocks 1..5,000) and the libzync coordinator 5 proofs of blocks 1..4
+   and 1 contributor, so nothing of value is lost:
+   - stop `libzync-board-prep`, `hazync-lz-coordinator`, the `hazync-lz-offsite-*` timers and any leaf workers;
+   - keep a record: `VACUUM INTO` a copy of `/var/lib/hazync-lz/coordinator.db`, then move `/var/lib/hazync-lz` aside;
+   - delete `/srv/bulk/libzync-board/{leaves,out,cl,trie}` (the pass rebuilds them from genesis; `blocks/` stays);
+   - install the v0.24.0 host as **both** `/opt/hazync-lz/bin/host` and `$LZ_ROOT/bin/host_lz` (the board pass runs
+     the second, `libzync-prep-run.sh`); `host_lz method-id` must print `8888d59c…`;
+   - start `libzync-board-prep`, then check one bundle: `leaf_1.bin`'s `prev.self_id` is `8888d59c…`.
+   Only then carry on with step 1. ⛔ Do not enable the `hazync-lz-offsite-*` timers before this step: the copy is
+   append-only by name, so a `863c9ce3` receipt uploaded under `proofs-8888d59c/` would stay there, and the
+   re-proved receipt of the same range would never be uploaded.
 1. **Freeze the original board.** Stop `hazync-sponsor-bot` and `hazync-coordinator`, then take a `VACUUM INTO` copy of its database for the record.
 2. **Carry the contributors over**, with `hazync-lz-coordinator` stopped:
    ```

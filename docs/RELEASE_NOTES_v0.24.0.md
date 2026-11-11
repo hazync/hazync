@@ -4,15 +4,16 @@ v0.24.0 is libzync on **RISC Zero 3.1.0**. The guest source is the same as in v0
 the proof system beneath it: 3.1.0 fixes soundness bugs in RISC Zero, and v0.23.0's proofs were made with
 the version those bugs are in. **Use v0.24.0. v0.23.0 is withdrawn and must not be deployed.**
 
-**Why.** RISC Zero 3.1.0 fixes these bugs in the zkVM's proof system, and has yanked 3.0.x:
+**Why.** RISC Zero 3.1.0 fixes these bugs in the zkVM's proof system, and earlier versions are to be yanked:
 - an rv32im trace could hold two executions;
 - `sys_read` words were not range-checked;
 - the recursion circuit's `BIT_AND_ELEM` decompositions were not unique;
-- a Groth16 claim could be substituted;
+- Groth16 claim handling;
 - the Poseidon S-box.
 
 None of these bugs is in libzync's own code, but a proof is only as sound as the system that checks it.
-Verifiers built on 3.1.0 refuse every 3.0.x receipt, because the verifier parameters differ.
+Verifiers built on 3.1.0 refuse every 3.0.x receipt, because the verifier parameters differ. A test vector checks
+this with v0.23.0's real 3.0.5 proof of blocks 1..200.
 
 **The images change.** The guest source is unchanged, but the image id depends on the toolchain, so every
 id moved:
@@ -31,7 +32,7 @@ re-made under `8888d59c`.
 ## What changed in what you download
 
 The asset names and what each one does are the same as in v0.23.0. Every binary is rebuilt on 3.1.0:
-- the host and the CUDA host, for Linux and for Windows;
+- the host and the CUDA host for Linux, and the CUDA host for Windows;
 - the CLI verifier and the browser verifier (`hazync-verify.wasm` sha256
   `446fdaeb5a2937d6f442e16058969d83af8c6ddebdbaba103d8d934787ea107f`);
 - the proof-party tools.
@@ -56,13 +57,18 @@ One NVIDIA RTX PRO 6000 per run, 2026-11-11 (`experimental/libzync-bench/RESULT_
 - 59.4 min, against 57.2 min on 3.0.5;
 - verifies `OK` against a full node's tip hash.
 
-These four cases are now permanent test vectors for the CLI, the C library and the WASM verifier.
+These cases, and v0.23.0's 3.0.5 proof, are test vectors that CI now runs on every push against the CLI, the C
+library and the WASM verifier, together with the header-chain receipts.
 
 ## The board
 
-[DISCUSS: the board's prep state was built under 863c9ce3. It carries over by being re-stamped with the new
-image id, not re-prepared. Leaf bundles proved under 863c9ce3 must be re-proved. Give the frontier
-figures at the time of release.]
+The libzync board starts again from genesis under `8888d59c`. Its leaf bundles each record the state before
+their block, stamped with the image that prepared them, and leaves from bundles prepared under `863c9ce3` would
+not chain. So the board pass is restarted from genesis with this release's host
+(`coordinator/deploy/libzync/SWITCH.md`, step 0). When it was stopped it had prepared blocks 1 to 5,000 and proved
+blocks 1 to 4, so little is lost.
+
+[DISCUSS: the progress wording at the time of release.]
 
 ## Not yet
 

@@ -8,6 +8,7 @@ PASS  mainnet_1_200_demo   exit 2 (want 2)  SWIFTSYNC_VERIFY_DEMO: the chain and
 PASS  mainnet_1_200_as_signet exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 4 check(s) failed
 PASS  mainnet_1_200_old_image exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
 PASS  mainnet_1_200_flipped exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  risc0_305_receipt    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 PASS  hints_arg_refused    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the rece
 PASS  dash_arg_refused     exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the rece
-12/12 cases as expected
+13/13 cases as expected

@@ -43,6 +43,7 @@ int main(void) {
     run("mainnet_1_200_as_signet", P(a, "mainnet_1_200_8888d59c.rcpt"), SP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
     run("mainnet_1_200_old_image", P(a, "mainnet_1_200_8888d59c.rcpt"), MP, R31, NULL, SWIFTSYNC_VERIFY_FAIL);
     run("mainnet_1_200_flipped", P(a, "mainnet_1_200_8888d59c_flipped.rcpt"), MP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
+    run("risc0_305_receipt", P(a, "mainnet_1_200_863c9ce3_risc0_305.rcpt"), MP, R31, NULL, SWIFTSYNC_VERIFY_FAIL);
     run("bad_image_hex", P(a, "r4_block_2600.rcpt"), SP, "xyz", NULL, SWIFTSYNC_VERIFY_FAIL);
     run("unknown_network", P(a, "r4_block_2600.rcpt"), 7, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
     printf("%s\n", bad ? "SOME CASES WRONG" : "all cases as expected");

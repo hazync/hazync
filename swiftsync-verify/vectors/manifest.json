@@ -131,6 +131,18 @@
    "expect_exit": 1
   },
   {
+   "name": "risc0_305_receipt",
+   "description": "A real risc0 3.0.5 proof of mainnet 1..200 by 863c9ce3 (v0.23.0's image), checked against that same image: refused, because a 3.1.0 verifier refuses every 3.0.x receipt (its verifier parameters digest differs).",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5",
+    "mainnet_1_200_863c9ce3_risc0_305.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
    "name": "hints_arg_refused",
    "description": "A hints-file argument (the retired design B): the CLI refuses it rather than ignore it.",
    "args": [
