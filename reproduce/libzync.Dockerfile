@@ -32,7 +32,6 @@ RUN --mount=type=secret,id=gh_token,required=false \
 
 FROM ${DEPS_IMAGE} AS build
 COPY . /hazync-zkvm
-ENV RECURSION_SRC_PATH=/hazync-zkvm/reproduce/vendor/recursion_zkr.zip
 # prover/rust-toolchain.toml asks for channel "stable" plus components the dependency image lacks. Current rustup
 # then updates the whole toolchain to today's stable to add them, and that fails on overlayfs (EXDEV), and would
 # make the host toolchain depend on the build date. Drop the components line in this copy: the host toolchain stays

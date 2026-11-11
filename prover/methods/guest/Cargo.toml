@@ -24,7 +24,7 @@ codegen-units = 1
 # NO coinbase-smt DEPENDENCY — see the note in src/main.rs (hazync#88). A Cargo path dependency bakes
 # its ABSOLUTE path into the guest ELF, making the image id depend on the checkout location. The same
 # source is #[path]-included instead, so there is still exactly one copy and no drift.
-risc0-zkvm = { version = "=3.0.5", default-features = false, features = ['std', 'unstable'] }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ['std', 'unstable'] }
 sha2 = { version = "0.10", default-features = false, features = ["compress"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 # hazync#139 middle-path experiment ONLY. Optional so a default build neither compiles it nor

@@ -141,7 +141,6 @@ COPY . /hazync-zkvm
 # The file arrives via `COPY . /hazync-zkvm` above; no separate COPY is needed, and an optional one
 # using a glob is unreliable across docker versions. If the file is absent the build still works --
 # build.rs falls back to downloading -- so this is a safety net, not a requirement.
-ENV RECURSION_SRC_PATH=/hazync-zkvm/reproduce/vendor/recursion_zkr.zip
 
 # The libzync guest, exactly as reproduce/libzync.Dockerfile builds it (see that file for why the
 # toolchain components line is dropped in this copy). Leaves /root/libzync-elf/{mainnet,signet}.bin.

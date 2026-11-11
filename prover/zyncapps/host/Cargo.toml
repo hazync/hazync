@@ -12,7 +12,7 @@ cuda = ["risc0-zkvm/cuda"]
 
 [dependencies]
 zyncapp-methods = { path = "../methods" }
-risc0-zkvm = { version = "=3.0.5", features = ["prove"] }
+risc0-zkvm = { version = "=3.1.0", features = ["prove"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

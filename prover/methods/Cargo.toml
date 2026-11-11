@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [build-dependencies]
-risc0-build = { version = "=3.0.5", features = ["unstable"] }
+risc0-build = { version = "=3.0.7", features = ["unstable"] }
 # ⚠ Already in the lock (0.10.9) via risc0, so this pulls nothing new. Pure Rust, links anywhere.
 sha2 = "0.10"
 # ⛔⛔ THIS ONE LINE IS WHY A WINDOWS HOST CAN LINK THIS BUILD SCRIPT AT ALL.
@@ -41,7 +41,7 @@ risc0-zkvm-platform = { version = "2.2.3", default-features = false, features = 
 # Windows host build the methods crate at all; the guest is verified by sha256 on every platform
 # and the id is additionally recomputed wherever this crate IS present.
 [target.'cfg(not(target_env = "msvc"))'.build-dependencies]
-risc0-binfmt = "=3.0.5"
+risc0-binfmt = "=3.0.6"
 
 [package.metadata.risc0]
 methods = ["guest"]

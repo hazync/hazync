@@ -10,7 +10,7 @@ lto = "fat"
 codegen-units = 1
 
 [dependencies]
-risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std", "unstable"] }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "unstable"] }
 risc0-crypto = "=0.1.0-rc.1"
 risc0-bigint2 = "=1.4.14"
 sha2 = { version = "0.10", default-features = false }
