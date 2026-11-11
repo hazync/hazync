@@ -352,7 +352,7 @@ cargo build --release -p host $GPU_FEATURES
 echo
 echo "DONE. Verify the build with the self-contained checks (no GPU, no network):"
 echo "  cd $REPO_DIR/prover && ./target/release/host method-id      # want the libzync-product mainnet id in reproduce/LIBZYNC_IDS"
-echo "  ./target/release/host libzync-verify ../experimental/libzync-bench/zapp/mainnet_1_200_863c9ce3.rcpt"
+echo "  ./target/release/host libzync-verify ../experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt"
 echo "                                                              # a real proof of mainnet 1..200: DEMO (exit 2)"
 echo "Then prove (mainnet block 1 from genesis, and verify it):"
 echo "  ./target/release/host libzync-prove-range 1 1 testdata/libzync/mainnet genesis out && ./target/release/host libzync-verify out/block_1.rcpt"

@@ -2,7 +2,7 @@
 
 Bitcoin Core's own consensus code, executed inside a RISC Zero zkVM, so that a block's validity can be **proven once
 and verified by anyone** without re-executing it. **libzync** (`libzync/`, the guest in `prover/methods/guest`) is
-Hazync's core: published images mainnet `863c9ce3`, signet `73b62530` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)).
+Hazync's core: published images mainnet `8888d59c`, signet `d4210dae` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)).
 It replaced the original per-signature CORE guest (`37987b85`, documented in [`history/`](history/README.md), its code in
 [`../history/`](../history/README.md)).
 

@@ -41,8 +41,8 @@ Core's rules one by one.
 A proof names the exact program that produced it. The published libzync images are
 
 ```
-mainnet  863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5
-signet   73b62530ca89eea376e7753f47ab4f16aed3be3138d6052d84d30510aed0f38d
+mainnet  8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+signet   d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387
 ```
 
 and the build is reproducible: [`reproduce/libzync.Dockerfile`](reproduce/libzync.Dockerfile) gives

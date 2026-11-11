@@ -10,7 +10,7 @@ The page never reads more than two receipts, and a reorg above B needs nothing s
 tip. When the run gets long (a warning at 20,000 headers), prove a new base and install it with `--set-base`.
 
 A run is published only after `swiftsync-verify headers --expect <tip>:<the node's hash>` prints
-`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`ea1d49e3`, image `4d04d6bf`).
+`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`5bd8011d`, image `2db34e12`).
 
 ## Where it runs
 
@@ -27,7 +27,7 @@ install -d /opt/hazync-headers/bin /var/lib/hazync-headers
 install -m755 hazync-headers-follow /opt/hazync-headers/bin/
 # zyncapp + swiftsync-verify from this commit (release builds), and the container-built ELF:
 install -m755 zyncapp swiftsync-verify /opt/hazync-headers/bin/
-install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 ea1d49e3…
+install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 5bd8011d…
 ssh-keygen -t ed25519 -N '' -C hazync-headers-publish -f /root/.ssh/hazync_headers_publish
 #   web box, /root/.ssh/authorized_keys:
 #   command="/usr/bin/rrsync -wo /var/www/hazync-headers",restrict ssh-ed25519 AAAA… hazync-headers-publish

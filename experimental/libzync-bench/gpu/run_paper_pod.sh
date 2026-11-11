@@ -6,7 +6,7 @@
 set -uo pipefail
 # RUN=range: gpu-range.sh instead (a real chain proof LO..HI from genesis; bundle: method.bin pins/ blocks/)
 RUN=${RUN:-paper}; LO=${LO:-1}; HI=${HI:-}
-L=~/libzync-gpu/paper; OUT=${OUT:-$L/pod-$RUN-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:-}; MODELLED=${MODELLED:-}; mkdir -p "$OUT"
+L=${L:-$HOME/libzync-gpu/paper}; OUT=${OUT:-$L/pod-$RUN-$(date +%m%d-%H%M)}; HEIGHTS=${HEIGHTS:-}; MODELLED=${MODELLED:-}; mkdir -p "$OUT"
 # the commit the pod runs: by default this checkout's HEAD, which must be on the remote (the pod clones it)
 Z=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 COMMIT=${COMMIT:-$(git -C "$Z" rev-parse HEAD)}

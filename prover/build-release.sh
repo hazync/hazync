@@ -311,7 +311,7 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
       [ "$($H method-id | head -1 | awk "{print \$NF}")" = "$WANT_ID" ] \
         || { echo "=== FAIL: this host does not carry the published libzync image $WANT_ID ===" >&2; exit 1; }
       echo "=== smoke: libzync-verify on a real proof of mainnet 1..200 ==="
-      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_863c9ce3.rcpt > /tmp/smoke.log 2>&1 || rc=$?
+      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt > /tmp/smoke.log 2>&1 || rc=$?
       tail -1 /tmp/smoke.log
       [ "$rc" = 2 ] && grep -q "^LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 200" /tmp/smoke.log \
         || { echo "=== FAIL: the host did not accept a real proof of its own image (exit $rc) ===" >&2; exit 1; }
@@ -320,7 +320,7 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
       echo "    Almost certainly no NVIDIA driver (libcuda.so.1) because --gpus all was unavailable." >&2
       echo "    The artifact is still produced and staged. Verify it where it can run:" >&2
       echo "      hazync-host-x86_64-linux-gnu-cuda method-id      # want $WANT_ID" >&2
-      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_200_863c9ce3.rcpt   # DEMO, exit 2" >&2
+      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_200_8888d59c.rcpt   # DEMO, exit 2" >&2
       echo "    scripts/release.sh then needs HAZYNC_ATTEST_<artifact>=<id> from that run." >&2
     fi
     # Stage r0vm into the MOUNTED repo so it survives this --rm container. `host libzync-snark-wrap` shells

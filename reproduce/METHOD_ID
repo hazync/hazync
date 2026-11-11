@@ -1,7 +1,17 @@
 # Canonical Hazync guest image id (METHOD_ID): libzync's PUBLISHED MAINNET image.
 #
-# ── 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 ─ 2026-11-09 ─────────
+# ── 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 ─ 2026-11-11 ─────────
 #
+# RISC Zero 3.1.0 (released 2026-11-10) fixes soundness bugs in the rv32im and recursion circuits that every receipt
+# passes through: a trace could hold two executions (so a guest's own checks could be skipped), sys_read words were
+# not range-checked, and BIT_AND_ELEM decompositions in the recursion circuit were not unique. There is no 3.0.x
+# backport and earlier versions will be yanked; receipts from 3.0.5 do not verify under 3.1.0. This re-baseline moves
+# the risc0 crates to =3.1.0 (risc0-build =3.0.7, circuits 4.1.0) and rzup cargo-risczero/r0vm to 3.1.0. NO GUEST
+# SOURCE CHANGED: the id moved because the guest links risc0's new crates. Same product profile as 863c9ce3.
+#
+# Superseded 863c9ce3… (2026-11-09, release v0.23.0, risc0 3.0.5), whose note follows.
+#
+# ── 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 ─ 2026-11-09 ─────────
 # libzync replaced the CORE design on main (#670) and the active tree retired CORE (history/README.md). The canonical
 # id is now the published libzync mainnet product image: the `libzync-product mainnet` line of reproduce/LIBZYNC_IDS,
 # which `reproduce/libzync.Dockerfile` reproduces bit for bit and the `reproducible-image-id` CI job rebuilds on every
@@ -15,7 +25,7 @@
 # Superseded the CORE design's last canonical id 37987b85… (2026-09-07, release v0.22.1). The CORE lineage below is
 # the record: `reproduce/Dockerfile` built those images, and their notes are kept as written.
 
-863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5
+8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
 
 # ════ THE CORE DESIGN'S LINEAGE (the record; each entry was true when written) ══════════════════════════════════════
 #

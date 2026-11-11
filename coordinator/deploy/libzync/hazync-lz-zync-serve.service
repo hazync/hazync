@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=hazync
 # The demo zyncAPP (hazync.org/zapp/) checks facts against the real mainnet 1..200 proof (experimental/libzync-bench/zapp,
-# image 863c9ce3): the coin-log history and the counting trie at block 200 that proof ends on. The service holds no
+# image 8888d59c): the coin-log history and the counting trie at block 200 that proof ends on. The service holds no
 # secrets and proves nothing: the page verifies the proof in the browser and checks every fact against it.
 ExecStart=/opt/hazync-lz/bin/zync-serve /var/lib/hazync-lz/zapp/history.bin 127.0.0.1:8601 /var/lib/hazync-lz/zapp/state_200.trie
 Restart=on-failure

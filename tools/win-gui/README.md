@@ -129,7 +129,7 @@ The **Prove** tab has two buttons that run what you would otherwise type:
 
 | | |
 |---|---|
-| Is this prover genuine? | `method-id` — must print the canonical libzync id (`863c9ce3…`) or proofs are rejected; runs at startup |
+| Is this prover genuine? | `method-id` — must print the canonical libzync id (`8888d59c…`) or proofs are rejected; runs at startup |
 | Can it actually prove? | the client's `selftest` — checks the prover against the board, verifies a real board proof, then proves mainnet block 1 for real from the board's leaf bundle |
 
 ⭐ **No block is claimed and nothing is submitted.** The selftest fetches block 1's bundle and a board proof

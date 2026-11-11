@@ -21,7 +21,7 @@ All of these must hold:
 - **Merged:** #677, #678, #679, #680, #682, #683, #685, #686, #687, #688, #690 and #691; then #676 and #684, which are drafts that land with the switch.
 - **After #676 merges:** re-run `scripts/lineage.sh --write` and commit, because the squash changes the commit the row names.
 - **Release v0.23.0** is cut and published with exactly the 12 assets of `scripts/release-assets.txt`. The pods and the Windows GUI download the libzync host from it.
-- **`/opt/hazync-lz`** is at the merge commit, and `/opt/hazync-lz/bin/host` is the host from it (`method-id` = `863c9ce3…`). It must include #686's `HAZYNC_LZ_STATE_DIR` fallback.
+- **`/opt/hazync-lz`** is at the merge commit, and `/opt/hazync-lz/bin/host` is the host from it (`method-id` = `8888d59c…`). It must include #686's `HAZYNC_LZ_STATE_DIR` fallback.
 - **The leaf pruner keeps `leaf_1.bin` for good.** The pods' GPU smoke (#685) and the worker's `selftest` use it.
 - **The libzync board's own checks are green:**
   - `scripts/check-deployment.sh --local`, libzync section;
@@ -56,7 +56,7 @@ The original board's database held, on 2026-11-09:
 | `hazync-check-bundle-gap` | **retarget**: `HAZYNC_LIBZYNC=1`, `HAZYNC_BRIDGE_OUT=/srv/bulk/libzync-board/leaves` (already supported). |
 | `hazync-prune-bundles` | **disable**; `hazync-lz-prune-leaves` replaces it. |
 | `hazync-check-proofs` | **retarget** to `/var/lib/hazync-lz`, with `HAZYNC_HOST=/opt/hazync-lz/bin/host`, `HAZYNC_LIBZYNC=1`, `HAZYNC_BRIDGE_OUT=…/leaves` and `HAZYNC_LZ_STATE_DIR=/var/lib/libzync-board/out` (#686). |
-| `hazync-check-spine` | **retarget**: `COORD_DB` and `COORD_SPINE` to `/var/lib/hazync-lz`, plus `HAZYNC_LIBZYNC=1`, `HAZYNC_VERIFY=<swiftsync-verify from v0.23.0>` and `--method-id 863c9ce3…` (#688; it uses the libzync verifier's text output). Do the same for the web box's remote copy (`watchdog/hazync-check-spine-remote`). |
+| `hazync-check-spine` | **retarget**: `COORD_DB` and `COORD_SPINE` to `/var/lib/hazync-lz`, plus `HAZYNC_LIBZYNC=1`, `HAZYNC_VERIFY=<swiftsync-verify from v0.24.0>` and `--method-id 8888d59c…` (#688; it uses the libzync verifier's text output). Do the same for the web box's remote copy (`watchdog/hazync-check-spine-remote`). |
 | `hazync-check-continuity`, `hazync-retention-check`, `hazync-coordinator-backup`, `hazync-offsite-ledger-b2`, `hazync-offsite-keys{,-b2}` | **retarget** `COORD_DB` and `COORD_PROOFS` to `/var/lib/hazync-lz`. These scripts call no host command. |
 | `hazync-offsite-proofs{,-b2}`, `hazync-offsite-spine{,-b2}` | **disable.** The `hazync-lz-offsite-*` twins (#678, #687) replace them, and the CORE copies stay in the bucket. |
 | `hazync-check-board-progress`, `hazync-check-breakers`, `hazync-check-disk`, `hazync-check-unit-drift`, `hazync-node-tip`, `hazync-offsite-watch`, `hazync-offsite-summary` | **keep.** Board-progress keeps `COORD_URL=http://127.0.0.1:8899`, which is the libzync coordinator after step 4. Unit-drift needs the new units in its list. |

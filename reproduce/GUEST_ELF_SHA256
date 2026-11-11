@@ -1,11 +1,11 @@
-# sha256 of the canonical Hazync guest ELF: libzync's PUBLISHED MAINNET image (METHOD_ID 863c9ce3…), the
+# sha256 of the canonical Hazync guest ELF: libzync's PUBLISHED MAINNET image (METHOD_ID 8888d59c…), the
 # GUEST_ELF_SHA256 of the `libzync-product mainnet` line of reproduce/LIBZYNC_IDS, as reproduce/libzync.Dockerfile
 # emits it. Re-baselined with reproduce/METHOD_ID; the CORE guest's pin and its notes follow as the record.
 #
-# Corresponds to METHOD_ID 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5.
+# Corresponds to METHOD_ID 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4.
 # (Read the pin as the first non-comment line, never as the first 64-hex string: that is the id above.)
 
-9b2a65622db37df00fc5c59b767f38196a62561b8f9d0305c87a859ad86ec224
+ded6f8844fe02eae2f65ebf61bc4e008eac61ac838a83c641d81b465d54a4655
 
 # ════ THE CORE GUEST'S PIN (the record) ════════════════════════════════════════════════════════════════════════════
 # sha256 of the canonical Hazync guest, as the container emits it.

@@ -5,7 +5,7 @@ last release v0.22.1, board provers, multi-card fleets on RunPod, and tip runs. 
 PROVING, PROVER_OPERATIONS, FLEET_OPERATIONS, TIP_RUN_OPERATIONS and TOPOLOGY_AND_SETTINGS (now in
 `docs/history/`).
 
-⚠ **The host in this tree is libzync-only.** The canonical image is libzync's published mainnet image `863c9ce3`
+⚠ **The host in this tree is libzync-only.** The canonical image is libzync's published mainnet image `8888d59c`
 (§2.7), and `prover/host` refuses to build without `HAZYNC_LIBZYNC=1`. The CORE commands below that drive a guest mode
 a libzync image refuses (`regress`, `adversarial`, `check-*`, `prove-full`, `prove-seg`, `prove-chain*`, `prove-ibd`,
 `prove-range`, `extend-spine`, `verify-range`, `verify-chain`, `prove-snark`, mode 6) exist only in the v0.22.1
@@ -299,12 +299,12 @@ it runs once per artifact. `SKIP_GROTH16=1` boxes cannot `snark-wrap` at all.
 
 ### 2.7 METHOD_ID and reproducibility
 
-**Releases.** The current release is **v0.22.1**, the CORE design's last; `scripts/check-versions.sh` requires this
-line to name the newest tag (or one ahead of it). It ships the CORE guest `37987b85`, superseded on 2026-11-09
-after two months as the canonical id.
+**Releases.** The current release is **v0.24.0**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
+line to name the newest tag (or one ahead of it). It ships the published libzync image `8888d59c`. v0.23.0 (`863c9ce3`, risc0
+3.0.5) was the first libzync release and v0.22.1 (`37987b85`) the CORE design's last; 3.0.5 receipts do not verify under 3.1.0.
 
 **The canonical id** (`reproduce/METHOD_ID`) is libzync's published mainnet image
-`863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5`, with the signet image in
+`8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, with the signet image in
 [`reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). `reproduce/libzync.Dockerfile` reproduces both bit for bit and the
 `reproducible-image-id` job rebuilds them on every push. No release ships it yet.
 
