@@ -1,9 +1,13 @@
-PASS  retired_design_b     exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-PASS  retired_design_b_product exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+PASS  retired_design_b     exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
+PASS  retired_design_b_product exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
 PASS  wrong_image          exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
-PASS  fake_receipt         exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 3 check(s) failed
+PASS  fake_receipt         exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 PASS  bundle_v1            exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: "r4_2600.sspf": unsupported bundle version 1
 PASS  bundle_header_lies   exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: "bad_bundle_header.sspf": unsupported bundle version 1
+PASS  mainnet_1_200_demo   exit 2 (want 2)  SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below Core's minimum chainw
+PASS  mainnet_1_200_as_signet exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 4 check(s) failed
+PASS  mainnet_1_200_old_image exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
+PASS  mainnet_1_200_flipped exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 PASS  hints_arg_refused    exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the rece
 PASS  dash_arg_refused     exit 1 (want 1)  SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the rece
-8/8 cases as expected
+12/12 cases as expected

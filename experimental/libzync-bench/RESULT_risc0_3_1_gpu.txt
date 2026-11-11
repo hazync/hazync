@@ -1,0 +1,39 @@
+risc0 3.1.0 re-proof batch (2026-11-11): the frozen guests rebuilt on risc0 3.1.0 and proved on GPU.
+
+Why: risc0 3.1.0 fixes soundness bugs in the rv32im circuit, the recursion circuit's BIT_AND_ELEM decomposition,
+Groth16 claim handling and the Poseidon S-box; 3.0.x receipts are refused by 3.1.0 verifiers (new control root).
+The guest SOURCE is unchanged (frozen core c14); only the toolchain moved, so every image id moved.
+
+Images (reproduce/LIBZYNC_IDS, from the reproducible container; two builds agree)
+  mainnet  8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4  ELF ded6f884...4a655
+  signet   d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387  ELF e9a19719...a0225
+  headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632  ELF 5bd8011d...55afc
+The pods were given these published ELFs (hash-checked on upload); no guest was built on a pod.
+
+Cards: 2 pods, each 1x NVIDIA RTX PRO 6000 Blackwell Server Edition, RunPod, $2.49/hr
+  headers pod cx0eqvgm2d6lih (AMD EPYC 9554 x256), mainnet pod p7ckpv74va8cg4 (AMD EPYC 9355 x128)
+
+1. Header chain, genesis..975,278, one receipt (headers/headers_0_tip.rcpt)
+  execute   975,279 headers, 2,350,725,289 cycles, 2,437 segments, 38.0 s (identical cycles/segments to 3.0.5)
+  prove     3,564.8 s (59.4 min) for the prover; wall 59:25.90; peak RSS 2.39 GiB; GPU util mean 39.4 % (357 samples)
+            (3.0.5 on the same card type: 3,434.6 s, so 3.1.0 is +3.8 %)
+  receipt   224,138 bytes, sha256 a2931d894ba55373b8c04ed1e923b8604a587925ca468bd2128cfe8f349a1352
+  end       975278 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
+            chainwork 00000000000000000000000000000000000000015731592c05251d96d07f062f
+  fixtures  hdr_0_100.rcpt (1.2 s) and hdr_101_200.rcpt (1.1 s), re-proved under 2db34e12
+  laptop    swiftsync-verify headers --expect 975278:<hash> headers_0_tip.rcpt -> SWIFTSYNC_VERIFY_OK, exit 0
+            test_headers_verify.sh -> HEADERS_VERIFY_TESTS_OK (10 cases); test_headers_wasm.mjs -> WASM_HEADERS_OK
+  hdr_975279_975315.rcpt (RESULT_tip_follow.txt) is a 3.0.5 receipt of the retired image 4d04d6bf: kept as a record,
+  not re-proved, refused by today's verifier, used by no test.
+
+2. Mainnet 1..200 from genesis, product image 8888d59c (zapp/mainnet_1_200_8888d59c.rcpt)
+  prove     LZ_PROVE_RANGE_DONE 1..=200 in 3,074 s; block 1 (base) 21.0 s, blocks 2..200 ~15.1 s each (recursive)
+  receipt   block_200.rcpt, 227,362 bytes
+  pod       libzync-verify exit 2: LIBZYNC_VERIFY_DEMO, valid chain from genesis at height 200 (below minimum work)
+  laptop    swiftsync-verify (3.1.0): DEMO exit 2; --network signet: FAIL; --image 863c9ce3 (3.0.5 build): FAIL;
+            one bit flipped at byte 5000: FAIL. These four are vectors in swiftsync-verify/vectors (CLI 12/12,
+            WASM 10/10, C ABI swiftsync-verify-ffi/test.c).
+
+Cost: the proofs alone 59.4 min + 51.2 min at $2.49/hr = $4.59. Billed more: both pods idled ~35-40 min after
+finishing because their laptop-side drivers were killed (laptop memory pressure from an unrelated build), and the
+pods were harvested and terminated by hand at 13:41. Balance 16.81 -> 11.81 over the batch.

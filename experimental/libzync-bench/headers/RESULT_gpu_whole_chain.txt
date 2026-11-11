@@ -1,3 +1,6 @@
+⚠ SUPERSEDED 2026-11-11: headers_0_tip.rcpt and the hdr_* fixtures are now the risc0 3.1.0 proofs of image 2db34e12
+  (../RESULT_risc0_3_1_gpu.txt). This note records the 3.0.5 proof of 4d04d6bf; its receipt is in git history.
+
 Header-chain zyncAPP: the whole mainnet header chain, genesis..975,278, proved on ONE GPU (2026-11-10).
 
 Image      4d04d6bfbdebce55293baca2c1c2e59341ac7b0cc9cf6894ba43a6ad13e5d127 (reproduce/LIBZYNC_IDS zyncapp-headers)
