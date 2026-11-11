@@ -32,7 +32,7 @@ echo "== 1. every Rust crate that has tests is run by CI =="
 while read -r manifest; do
   d=$(dirname "$manifest")
   grep -rqs --include='*.rs' '#\[test\]' "$d/src" 2>/dev/null || continue
-  # VENDORED UPSTREAM IS NOT OUR TEST SURFACE. vendor/risc0-zkvm is risc0 3.0.5 verbatim apart from
+  # VENDORED UPSTREAM IS NOT OUR TEST SURFACE. vendor/risc0-zkvm is risc0 3.1.0 verbatim apart from
   # two files we changed — the recursion fold, rebalanced from linear to a tree, and the split that
   # lets assembly run from externally proved segment receipts. Its #[test]s test risc0. Running them
   # here would report on upstream's health and say nothing about this repo, and a failure would not

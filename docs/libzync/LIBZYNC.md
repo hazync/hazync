@@ -14,7 +14,7 @@ open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rou
 
 ## 1. In one paragraph
 
-libzync is the new core of Hazync: a RISC Zero zkVM guest (risc0-zkvm 3.0.5) and its host, which prove every Bitcoin
+libzync is the new core of Hazync: a RISC Zero zkVM guest (risc0-zkvm 3.1.0) and its host, which prove every Bitcoin
 block valid from genesis by running **Bitcoin Core v28.0's own consensus code** (interpreter, sighash, serialisation,
 CheckTransaction, merkle, PoW and retarget) and libsecp256k1 0.5.1, compiled to rv32im. A block is split into
 **chunks** that run Core's `VerifyScript` on the inputs they own, with every signature's group equation checked by one

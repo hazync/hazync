@@ -71,7 +71,7 @@ The original board's database held, on 2026-11-09:
    ```
    carry-contributors.py --from /var/lib/hazync/coordinator.db --to /var/lib/hazync-lz/coordinator.db --apply
    ```
-3. **Move the libzync coordinator to the public port.** Give `hazync-lz-coordinator` the original's drop-ins (step 3), `COORD_PORT=8899` and `COORD_BIND=0.0.0.0`. Then `daemon-reload` and restart it. Check `curl -s 127.0.0.1:8899/api/meta`: it should show `"libzync": true` and `method_id 863c9ce3…`.
+3. **Move the libzync coordinator to the public port.** Give `hazync-lz-coordinator` the original's drop-ins (step 3), `COORD_PORT=8899` and `COORD_BIND=0.0.0.0`. Then `daemon-reload` and restart it. Check `curl -s 127.0.0.1:8899/api/meta`: it should show `"libzync": true` and `method_id 8888d59c…` (risc0 3.1.0; the 11-10 rehearsal below ran under 863c9ce3).
 4. **Swap the units.** Disable the CORE-only ones and retarget the rest, as in step 3.
 5. **Enable the libzync timers:** `hazync-lz-offsite-{proofs,spine}{,-b2}` and the retargeted `hazync-check-proofs`.
 6. **Check from outside.** `COORD_URL=https://api.hazync.org scripts/check-deployment.sh` and `--local` must both pass the libzync section. Then run a `hazync selftest` from a contributor machine against `api.hazync.org`.

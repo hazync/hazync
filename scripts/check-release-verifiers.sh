@@ -27,7 +27,7 @@ CLI_ONLY=0
 if [ "${1:-}" = "--cli" ]; then CLI_ONLY=1; V="${2:?usage: $0 --cli <binary>}"; DIST=$(dirname "$V"); else DIST="${1:-dist}"; V="$DIST/hazync-verify-x86_64-linux-gnu"; fi
 read -ra WRAP <<< "${CLI_WRAP:-}"
 RCPT=experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt
-RCPT_SHA=c58cf678c53d09990f21db15be1472aeaacd92c13d8565414b3d39037300ec45
+RCPT_SHA=11f4f9ad57731b6d8b9be11efcaa91051918503b5e86ff649791fb271aee7c9b
 TIP200=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 CANON=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
 fails=0; n=0

@@ -101,8 +101,8 @@ per proof.
 ## 2. Proving a block
 
 Proving is RAM- and GPU-heavy. Build on a provisioned box; a small WSL2 machine can run *execute-mode*
-validation but not proving. GPU proving needs CUDA **12.8** (RISC0 3.0.5's kernels do not build against
-13.x) and the `cuda` feature.
+validation but not proving. GPU proving needs CUDA **12.8** (RISC0 3.0.5's kernels did not build against
+13.x; the 3.1.0 GPU runs of 2026-11-11 also used 12.8) and the `cuda` feature.
 
 ```
 GPU=1 REPO_DIR=$PWD ./provision-vps.sh
@@ -277,8 +277,8 @@ waited 1,855 s; a join is ~0.4 s of GPU and ~47 s of round trip.
   timeout is retried **once at the same size**, then abandoned with how far it got (`_run_with_seg_retry`
   in `coordinator/hazync`). ⚠ Swapping is not a failure, so the ladder never fires on it — it just crawls.
 - **#119** (accum-pass LogUp bug → non-canonical field element → receipt fails `verify()`): fixed in v0.21.1
-  (#245) by vendored `risc0-circuit-rv32im-sys` 4.0.3 (`vendor/`, search `HAZYNC_119_ACCUM_FIX`), patched in
-  `prover/Cargo.toml`; prover-only, drop once upstream ships. `prove-chunk`, `agg-chunks` (#240) and every
+  (#245) by vendored `risc0-circuit-rv32im-sys` 4.0.3; upstream shipped the same fix in 4.1.0 (risc0 3.1.0), so
+  since v0.24.0 the vendored 4.1.0 copy carries only the Windows build fix (#631). `prove-chunk`, `agg-chunks` (#240) and every
   `seg-connect` worker also retry via `prove_segment_resilient` (up to 3 attempts, only the known transient
   verify failure, a `[#119]` line per retry). **A retry now is new information — report it on the issue.**
 

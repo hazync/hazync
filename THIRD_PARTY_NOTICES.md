@@ -19,7 +19,7 @@ third-party components under their own licences. This file records them.
 
 ## Build / proving stack (linked, not part of the consensus path)
 
-- **RISC Zero (risc0)** zkVM, `risc0-zkvm` / `risc0-build` / `risc0-zkp` `=3.0.5`, and the rzup
+- **RISC Zero (risc0)** zkVM, `risc0-zkvm` `=3.1.0` / `risc0-build` `=3.0.7`, and the rzup
   cross-toolchain — Apache-2.0. The `prover/` crate was scaffolded from the risc0 project template and
   carries an additional Apache-2.0 notice at [`prover/LICENSE`](prover/LICENSE) covering that
   risc0-derived build scaffolding. Copyright (c) RISC Zero, Inc.
@@ -32,14 +32,13 @@ Both are RISC Zero crates, copied into `vendor/` and wired in through `[patch.cr
 `prover/Cargo.toml`. Copyright (c) RISC Zero, Inc. Each is upstream's published crate except for the
 changes stated here, which are marked in the source (`hazync patch`, `hazync#…`).
 
-- **`vendor/risc0-zkvm`** — `risc0-zkvm` 3.0.5. Modified in `src/host/server/prove/mod.rs` and
+- **`vendor/risc0-zkvm`** — `risc0-zkvm` 3.1.0. Modified in `src/host/server/prove/mod.rs` and
   `src/host/server/prove/prover_impl.rs` only: an API to assemble a receipt from segment receipts
   proved on other machines (segment distribution, hazync#148, #153, #161), and a balanced join tree
   in place of the linear fold. Host-side proving only.
-- **`vendor/risc0-circuit-rv32im-sys`** — `risc0-circuit-rv32im-sys` 4.0.3. Modified in
-  `kernels/cxx/ffi.cpp` and `kernels/cuda/ffi.cu` only (marked `HAZYNC_119_ACCUM_FIX`): phase 3 of the
-  accum pass no longer adds to LogUp cells an instruction arm never wrote, which produced an invalid
-  receipt (hazync#119). Prover-only; the circuit, the verifier and `METHOD_ID` are unchanged.
+- **`vendor/risc0-circuit-rv32im-sys`** — `risc0-circuit-rv32im-sys` 4.1.0. Modified in `build.rs`
+  only (marked `HAZYNC_631_MSVC_FLAGS`): the CUDA flags MSVC needs to build on Windows (hazync#631).
+  The hazync#119 accum-pass fix we used to carry is upstream since 4.1.0. Prover-only.
 
 ## Our own code
 
