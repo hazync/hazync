@@ -1,8 +1,19 @@
 <!-- DRAFT for discussion with the operator before any release is cut. Lines marked [DISCUSS] are open. -->
 
-v0.24.0 is libzync on **RISC Zero 3.1.0**. The guest source is the same as in v0.23.0. What changed is
-the proof system beneath it: 3.1.0 fixes soundness bugs in RISC Zero, and v0.23.0's proofs were made with
-the version those bugs are in. **Use v0.24.0. v0.23.0 is withdrawn and must not be deployed.**
+**Hazync has a new engine.** The original core is replaced by **libzync**, a library that proves Bitcoin
+blocks with up to **20x fewer proven cycles** than the core it replaces, measured on real mainnet state (19.9x on
+block 200,000, and 9.5x across all eight blocks measured; GPU time up to 15.1x less, 7.0x across the eight;
+`experimental/libzync-bench/results/CYCLES_REAL_STATE.md`). It still runs Bitcoin Core's own C++ inside the zkVM.
+
+**Every Bitcoin block header, in one proof, in under an hour.** Hazync has proved the whole header chain, from
+the genesis block to block 975,278 (975,279 headers), in a single proof: 59.4 minutes on one NVIDIA RTX PRO 6000,
+about $2.50 of GPU time. The proof is a 224 KB file. Hazync's WebAssembly verifier, the one that runs in a
+browser, checks it in 39 ms (on a laptop, under Node) and confirms the tip is the block a full node reports. So
+anyone can check the whole history of Bitcoin's proof of work without downloading the 78 MB of headers.
+
+v0.24.0 also moves Hazync to **RISC Zero 3.1.0**, which fixes soundness bugs in the proof system beneath it.
+v0.23.0 was the first release with libzync and was built on the version those bugs are in. **Use v0.24.0.
+v0.23.0 is withdrawn and must not be deployed.**
 
 **Why.** RISC Zero 3.1.0 fixes these bugs in the zkVM's proof system. RISC Zero has said earlier versions will be yanked
 (on 2026-11-11, 3.0.1 to 3.0.6 were not yet):
@@ -12,7 +23,7 @@ the version those bugs are in. **Use v0.24.0. v0.23.0 is withdrawn and must not 
 - Groth16 claim handling;
 - the Poseidon S-box.
 
-None of these bugs is in libzync's own code, but a proof is only as sound as the system that checks it.
+None of these bugs is in Hazync's own code, but a proof is only as sound as the system that checks it.
 Verifiers built on 3.1.0 refuse every 3.0.x receipt, because the verifier parameters differ. A test vector checks
 this with v0.23.0's real 3.0.5 proof of blocks 1..200.
 
@@ -55,8 +66,8 @@ One NVIDIA RTX PRO 6000 per run, 2026-11-11 (`experimental/libzync-bench/RESULT_
   bit flipped.
 
 **The whole header chain, genesis to block 975,278**, in one proof:
-- 59.4 min, against 57.2 min on 3.0.5;
-- verifies `OK` against a full node's tip hash.
+- 59.4 min (57.2 min on 3.0.5), 224 KB;
+- verifies `OK` against a full node's tip hash, on the CLI and in the WebAssembly verifier (39 ms).
 
 These cases, and v0.23.0's 3.0.5 proof, are test vectors that CI now runs on every push against the CLI, the C
 library and the WASM verifier, together with the header-chain receipts.
@@ -74,7 +85,7 @@ step 0). On 2026-11-11 it had prepared blocks 1 to 5,000 and proved blocks 1 to 
 
 These are unchanged from v0.23.0:
 - **No independent audit.**
-- **No proof of the whole chain yet.**
+- **No proof of the whole chain's blocks yet** (the header chain is proved, above).
 - **Following the tip with libzync** is not running yet.
 
 [DISCUSS: tone, and whether to repeat the "v0.23.0 withdrawn" line at the top of the v0.23.0 release page (it is already there).]
