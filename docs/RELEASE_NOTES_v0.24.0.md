@@ -1,5 +1,3 @@
-<!-- DRAFT for discussion with the operator before any release is cut. Lines marked [DISCUSS] are open. -->
-
 **Hazync has a new engine.** The original core is replaced by **libzync**, a library that proves Bitcoin
 blocks with up to **20x fewer proven cycles** than the core it replaces, measured on real mainnet state (19.9x on
 block 200,000, and 9.5x across all eight blocks measured; GPU time up to 15.1x less, 7.0x across the eight;
@@ -79,13 +77,9 @@ their block, stamped with the image that prepared them, and leaves from bundles 
 not chain. So the board pass restarts from genesis with this release's host (`coordinator/deploy/libzync/SWITCH.md`,
 step 0). On 2026-11-11 it had prepared blocks 1 to 5,000 and proved blocks 1 to 4, so little is lost.
 
-[DISCUSS: the progress wording at the time of release.]
-
 ## Not yet
 
 These are unchanged from v0.23.0:
 - **No independent audit.**
 - **No proof of the whole chain's blocks yet** (the header chain is proved, above).
 - **Following the tip with libzync** is not running yet.
-
-[DISCUSS: tone, and whether to repeat the "v0.23.0 withdrawn" line at the top of the v0.23.0 release page (it is already there).]
