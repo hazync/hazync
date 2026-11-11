@@ -318,7 +318,7 @@ pub struct Inputs<'a> {
 /// receipt holds assumption receipts that may themselves be composite, without bound, so decoding a hostile one ~50k
 /// levels deep (~1 MB) overflowed the stack (an abort in the C ABI, a trap in WASM, no verdict line in the CLI; cold
 /// review 11-06). Succinct and Groth16 claims nest to a fixed depth. bincode writes the InnerReceipt variant first, as
-/// a u32 LE: 0 Composite, 1 Succinct, 2 Groth16, 3 Fake (risc0-zkvm 3.0.5).
+/// a u32 LE: 0 Composite, 1 Succinct, 2 Groth16, 3 Fake (risc0-zkvm 3.0.5; unchanged in 3.1.0, checked 11-11).
 pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
     match receipt.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap())) {
         Some(1) => Ok("succinct"),
