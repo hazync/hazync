@@ -88,7 +88,7 @@ apt-get update -qq && apt-get install -y -qq build-essential cmake git curl ca-c
 curl -fsSL -o /tmp/k.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && dpkg -i /tmp/k.deb && apt-get update -qq && apt-get install -y -qq cuda-toolkit-12-8
 ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-cd /workspace && git clone -q -b libzync https://github.com/hazync/hazync.git && cd hazync && git checkout -q $COMMIT
+cd /workspace && git clone -q https://github.com/hazync/hazync.git && cd hazync && git checkout -q $COMMIT
 [ "\$(git rev-parse HEAD)" = "\$(git rev-parse $COMMIT)" ] || false
 git log --oneline -1
 echo SETUP_DONE
