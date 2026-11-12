@@ -209,6 +209,8 @@ ENV = {
                         "never beaten is released sooner, at `CLAIM_GRACE`.",
     "server:CLAIM_MAX": "Hard cap in seconds from `claimed_at`, whatever the beats.",
     "server:CLAIM_GRACE": "Seconds before a claim that has never beaten is released (#296).",
+    "server:CLAIM_NEW_IP_MAX": "Live claims that keys with no proven block may hold together from one IP (0: no limit; "
+                               "RATE_EXEMPT addresses are exempt); a key with a proven block is limited by CLAIM_OPEN_MAX only.",
     "server:CLAIM_OPEN_MAX": "Live claims one key may hold at once; a further claim is refused with 429 until one is "
                              "proven or lapses. `0` means no limit.",
     "server:CLAIM_REQUIRE_SIG": "`1` refuses claims that are not signed by their key (#310). Off by default: workers "

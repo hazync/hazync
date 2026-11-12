@@ -62,7 +62,8 @@ def check_one(path, rid, want_sha, record, host):
     try:
         # a libzync host checks the receipt's anchor against the state before its first block, so it is told that
         # height (as the coordinator does at submit); without it a multi-block range reads as starting at its end
-        lo = [str(max(int(rid.split("-")[0]), 1))] if LIBZYNC else []
+        # and --check-end: the state it ends on must be the board's own (a block that is not Bitcoin's is refused)
+        lo = [str(max(int(rid.split("-")[0]), 1)), "--check-end"] if LIBZYNC else []
         p = subprocess.run([host, "verify-any", path] + lo, capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
         return rid, problems + ["verify-any did not finish in 300 s"]
