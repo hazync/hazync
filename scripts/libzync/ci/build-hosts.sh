@@ -11,7 +11,9 @@ set -euo pipefail
 OUT=${1:?out dir}; mkdir -p "$OUT"
 REPO=/hazync-zkvm; BASE=/root/hazync-libzync-base; P=$REPO/prover
 cd "$P"
-RUSTUP_TOOLCHAIN=$(rustup toolchain list | awk '/^stable/{print $1; exit}'); export RUSTUP_TOOLCHAIN
+# the pinned host toolchain (prover/rust-toolchain.toml): it reaches the guest image ids (stable 1.100.0, 2026-11-12)
+RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml); export RUSTUP_TOOLCHAIN
+[ -n "$RUSTUP_TOOLCHAIN" ] || { echo "no pinned channel in prover/rust-toolchain.toml" >&2; exit 1; }
 for v in $(compgen -e | grep '^HAZYNC_'); do unset "$v"; done
 ids() { "$1" method-id | head -1 | awk '{print $NF}'; }
 pins() {  # pins <net> <dir>: the published pins for net, from reproduce/LIBZYNC_IDS

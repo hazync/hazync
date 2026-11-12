@@ -3,10 +3,11 @@
 # (reproduce/libzync.Dockerfile), where every path is fixed: the image id depends on absolute build paths.
 set -euo pipefail
 cd /hazync-zkvm/prover
-# prover/rust-toolchain.toml says only "stable", which makes rustup try to update inside the image (and fail on
-# overlayfs). Use the toolchain the dependency stage installed. The guest, and so the image id, is compiled by
-# risc0's pinned Rust (rzup), not by this host toolchain.
-RUSTUP_TOOLCHAIN=$(rustup toolchain list | awk '/^stable/{print $1; exit}')
+# The host toolchain is the one prover/rust-toolchain.toml pins (1.99.1), which the dependency stage installed. It
+# reaches the image ids even though the guest is compiled by risc0's pinned Rust (rzup): stable 1.100.0 gave other
+# ids from the same source (2026-11-12). Name it explicitly so rustup never resolves a channel inside the image.
+RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+[ -n "$RUSTUP_TOOLCHAIN" ] || { echo "no pinned channel in prover/rust-toolchain.toml" >&2; exit 1; }
 export RUSTUP_TOOLCHAIN
 echo "host toolchain: $RUSTUP_TOOLCHAIN ($(rustc --version)); guest toolchain: $(ls /root/.risc0/toolchains 2>/dev/null | tr '\n' ' ')" >&2
 # The product image: the libzync profile builds the coin log, the counting trie and the live-coin hash (E2c / E2;

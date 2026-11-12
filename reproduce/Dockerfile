@@ -140,7 +140,7 @@ RUN mkdir -p /root/lz-pins && \
     grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $4}' > /root/lz-pins/METHOD_ID && \
     grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $6}' > /root/lz-pins/GUEST_ELF_SHA256 && \
     echo "libzync=1 assumevalid=0 network=mainnet coinlog=1 trie=1 utxohash=1" > /root/lz-pins/PROFILE && \
-    RUSTUP_TOOLCHAIN=$(rustup toolchain list | awk '/^stable/{print $1; exit}') \
+    RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' prover/rust-toolchain.toml) \
     SKIP_GROTH16=1 HAZYNC_PROVISION=build HAZYNC_GUEST_ELF=/root/libzync-elf/mainnet.bin \
         HAZYNC_GUEST_PIN_DIR=/root/lz-pins ./provision-vps.sh
 
