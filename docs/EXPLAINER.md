@@ -114,8 +114,8 @@ answer without trusting whoever gave it to you. Two exist today:
   of Bitcoin's proof of work. Hazync has proved the whole header chain, from the first block to block 975,278, in
   one proof: about an hour on one graphics card, a 224 KB file that a web browser checks in a fraction of a second
   (39 ms, measured on a laptop). See [hazync.org/headers](https://hazync.org/headers/).
-- **Coin check.** Is this coin still unspent, or was it spent, and where? The answer comes with a proof against the
-  chain state. Today the demo runs against a proof of Bitcoin's first 200 blocks. See
+- **Coin check.** Give it an output script and it tells you the balance there and its history: every coin it
+  received, and where each spent one went. Each answer is checked against the chain proof in your browser. Today the demo runs against a proof of Bitcoin's first 200 blocks. See
   [hazync.org/zapp](https://hazync.org/zapp/).
 
 More are planned. What a zAPP may rely on, and how to build one, is in [`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md).
