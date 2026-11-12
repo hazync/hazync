@@ -115,7 +115,7 @@ answer without trusting whoever gave it to you. Two exist today:
   one proof: about an hour on one graphics card, a 224 KB file that a web browser checks in a fraction of a second
   (39 ms, measured on a laptop). See [hazync.org/headers](https://hazync.org/headers/).
 - **Coin check.** Give it an output script and it tells you the balance there and its history: every coin it
-  received, and where each spent one went. Each answer is checked against the chain proof in your browser. Today the demo runs against a proof of Bitcoin's first 200 blocks. See
+  received, and the block each spent one was spent in. Each answer is checked against the chain proof in your browser. Today the demo runs against a proof of Bitcoin's first 200 blocks. See
   [hazync.org/zapp](https://hazync.org/zapp/).
 
 More are planned. What a zAPP may rely on, and how to build one, is in [`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md).
