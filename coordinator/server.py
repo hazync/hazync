@@ -3396,8 +3396,17 @@ def state(slim=False):
                          f"{_claim_age % 3600 // 60}m and is still heartbeating ({_beat_age}s ago, "
                          f"hazync-worker/{_ver}) — a large block, not a stall")
         else:
+            # The same liveness as LIVE_CLAIM_SQL: beaten within CLAIM_TTL, or never beaten and inside CLAIM_GRACE, and
+            # younger than CLAIM_MAX. A lapsed claim stays in the table until someone re-claims the block, so without
+            # this a dead claim read as "a live worker" (2026-11-12: stopped workers' claims, the frontier moved onto one).
+            _holds = (_claim_age < CLAIM_MAX and
+                      (_beat_age < CLAIM_TTL if blocker["last_beat"] is not None else _claim_age < CLAIM_GRACE))
             _attn = False
-            _attn_why = f"a live worker is proving it ({_who}, hazync-worker/{_ver})"
+            if _holds:
+                _attn_why = f"a live worker is proving it ({_who}, hazync-worker/{_ver})"
+            else:
+                _attn_why = (f"{_who}'s claim lapsed (last heard from {_beat_age}s ago); the block is open to any "
+                             f"prover")
     elif _hold:
         # Normal workers are kept off a held block, so "nobody has held it for a claim cycle" would be a false
         # alarm; the real question is whether the sponsor bot is getting to it.

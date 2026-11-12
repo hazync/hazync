@@ -44,6 +44,7 @@ Applies to every route, from `H` in `server.py`:
 | `/api/spine` | — | `spine_head()` | 200, 404 | Spine head metadata (`lo`, `hi`, `out_tip`, `out_leaves`, `range_work`, `sha256`, `bytes`, `handle`, `pubkey`, `ts`); `404` before the first spine. |
 | `/api/spine/segments` | — | `spine_segments()`, `spine_head()` | 200 | Who absorbed each block into the spine, as runs keyed on pubkey (#244). Cached for `VRANGES_CACHE_TTL`. |
 | `/api/spine/proof` | — | `spine_head()` | 200, 404 | The spine receipt bytes, served as `hazync-spine-1-<hi>.hzk`. Check with `hazync-verify`. |
+| `/api/zync/proof` | — | — | 200, 404 | The receipt the zyncAPP facts are at (`ZYNC_PROOF`, kept beside the facts by `hazync-lz-zapp-follow`), served as `hazync-zapp.hzk`; `404` when unset or missing. Untrusted: the page verifies it, then checks each fact against it. |
 | `/api/zync/<rest>` | — | `zync_relay()` | 200, 400, 404, 502 | zyncAPP facts (hazync.org/zapp/), relayed from the box's own `zync-serve` when `ZYNC_SERVE_URL` is set: only `/tip`, `/trie/balance/<spk>`, `/trie/history/<spk>` and `/trie/coin/<spk>/<txid>/<vout>`; anything else is `400` before it reaches the service, a query string is dropped, `404` when no service is set, `502` when it is down. Untrusted: the page checks every fact against a proof it verifies itself. |
 | `/api/proof/<id>` | — | `parse_any_range()` | 200, 404 | A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with `host verify-any`. |
 | `/api/witnesses` | `from`, `count` | `bulk_plan()`, `bundle_path()` | 200, 400 | Bulk bundle sync (#69): a streamed tar of `MANIFEST.json` (`served`, `missing`) then the bundles for `?from=&count=`, `count` at most `BULK_MAX`. `400` on a malformed request. |
@@ -157,6 +158,7 @@ In the order the file reads them. "—" means no default in the call: the variab
 | `SPONSOR_BOT_SKEW` | `'120'` | constant `SPONSOR_BOT_SKEW` | Seconds a sponsor bot request's timestamp may be off; its nonce is remembered twice as long. |
 | `PROVERS_TTL` | `'30'` | constant `PROVERS_TTL` | Seconds the full prover list is cached before it is rebuilt. |
 | `ZYNC_SERVE_URL` | `''` | constant `ZYNC_SERVE` | The local `zync-serve` behind `/api/zync/*` (e.g. `http://127.0.0.1:8601`). Unset: no relay. |
+| `ZYNC_PROOF` | `''` | constant `ZYNC_PROOF` | The receipt `/api/zync/proof` serves: the proof of 1..H the zync-serve facts are at. Unset: `404`. |
 | `BEAT_LOG_WINDOW` | `'600'` | constant `BEAT_LOG_WINDOW` | Seconds identical beat rejections are collapsed into one log line. |
 | `COORD_ALLOW_PUBLIC_INSECURE` | — | `__main__` | Allows a non-loopback bind in an insecure mode. Not for production. |
 | `PEER_SYNC_INTERVAL` | `'300'` | `__main__` | Seconds between peer sync passes (only when `PEER_COORDINATORS` is set). |
@@ -230,6 +232,7 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 | `COORD_URL` | `https://api.hazync.org` | Coordinator base URL, used for the `/api/meta` guest-id pre-flight. |
 | `LOG_DIR` | `$HOME/hazync-workers` | Per-worker logs `worker_<i>.log` and bundle directories `bundles_<i>`. |
 | `MODE` | `prove` | What the loops run; see the modes table. |
+| `DRAIN_WAIT` | `7200` | Seconds `--drain` waits for blocks in flight to be submitted before it stops them anyway (default 7200). |
 | `HAZYNC_HOST` | (required) | Prover binary. Required, and must be executable. |
 | `HAZYNC_BASE` | `$HOME/hazync-build` | Core/secp source root, exported to the workers. |
 | `SKIP_GPU_SMOKE` | `(empty)` | Non-empty skips the pre-flight `prove-block` on a box with a GPU (#261). |

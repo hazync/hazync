@@ -125,6 +125,16 @@ b = scenario(fr=70, stalled_for=20000, claim_age=9000, beat_age=5000)
 check(b["needs_attention"] is True, "a stale heartbeat is still flagged")
 check("no proving progress is landing" in b["why"], "and the reason names the dead heartbeat")
 
+print("5. a lapsed claim on a frontier that has only just moved (the 2026-11-12 stranger test: 1,288)")
+# A fleet's workers were stopped mid-prove; their claims stayed in the table, stale. When another prover moved the
+# frontier up to one of them, the board said "a live worker is proving it (G H O S T ...)" -- a dead claim, and a
+# newcomer told someone else held the block they were about to take.
+b = scenario(fr=80, stalled_for=60, claim_age=19835, beat_age=19835, handle="G H O S T")
+check("a live worker is proving it" not in b["why"], "a lapsed claim is not called a live worker")
+check("open to any prover" in b["why"], "and the board says the block is free to take")
+b = scenario(fr=90, stalled_for=60, claim_age=120, beat_age=30)
+check("a live worker is proving it" in b["why"], "a fresh, beating claim still reads as a live worker")
+
 print()
 if CONTROL:
     if fails:
