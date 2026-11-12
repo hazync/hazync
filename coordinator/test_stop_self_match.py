@@ -35,8 +35,10 @@ check("pgrep -c" not in src.split("--stop")[-1][:2000],
 # its PATH and its flag — a phantom in a survivor list, from a pattern nobody meant to be that wide.
 check("hazync-.*-loop" not in src,
       "the survivor pattern names the loops instead of wildcarding them")
-check("hazync-(worker|fold|spine)-loop" in src,
-      "and names worker/fold/spine explicitly, matching the kill list above it")
+check("hazync-(worker|distributed|fold|spine)-loop" in src,
+      "and names worker/distributed/fold/spine explicitly, matching the kill list above it")
+# The distributed loop was missing from both lists (2026-11-12): --stop killed its child and the loop started another.
+check("'hazync-distributed-loop'" in src, "the kill list names the distributed loop too")
 
 # ── 2. ⛔ THE CENTRAL CASE, executed: an ANCESTOR whose argv mentions the pattern is excluded ─────
 # ⚠ Do NOT assert "zero survivors". Other processes on the box legitimately match this (loose)
