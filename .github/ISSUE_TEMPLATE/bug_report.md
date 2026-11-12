@@ -19,8 +19,10 @@ labels: bug
 ```
 
 **Where**
-- Commit or release (`git rev-parse --short HEAD`, or the release tag):
-- Component (guest, host, libzync, swiftsync-verify (CLI, FFI or WASM), coordinator, worker CLI, scripts, docs):
+- Commit or release (`git rev-parse --short HEAD`, or the release tag; v0.23.0 is withdrawn, so reproduce on
+  v0.24.0 or later):
+- Component (guest, host, libzync, a zyncAPP such as the header chain, swiftsync-verify (CLI, FFI or WASM),
+  coordinator, worker CLI, Windows GUI, scripts, docs):
 - OS and architecture:
 
 **Output** (the full error, not a summary)

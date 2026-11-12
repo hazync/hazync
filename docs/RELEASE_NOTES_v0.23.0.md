@@ -1,4 +1,6 @@
-<!-- DRAFT for discussion with the operator before any release is cut. Lines marked [DISCUSS] are open. -->
+> **Withdrawn on 2026-11-11: use [v0.24.0](RELEASE_NOTES_v0.24.0.md).** v0.23.0 was built on RISC Zero 3.0.5, whose
+> proof system has soundness bugs fixed in 3.1.0. Its image `863c9ce3` was never run by the public board. These are
+> the notes as published, kept as the record.
 
 v0.23.0 is the first release of **libzync**, the core that replaces the original Hazync design. Every
 binary in it is new code, the program a proof names is new, and the board moves to it.

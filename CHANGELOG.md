@@ -7,9 +7,43 @@ nothing else. Dates are the GitHub publication date (UTC).
 Maintenance: add the new entry here in the same change that publishes the release notes. An entry marked
 **re-baseline** moved the guest image id, so every proof made under the previous id stops verifying; the full
 id history, with the commit that produced each id, is [`reproduce/LINEAGE.tsv`](reproduce/LINEAGE.tsv).
-Copies of recent release bodies are kept in [`docs/history/releases/`](docs/history/releases/).
+Copies of Hazync v1's release bodies (up to v0.22.1) are kept in [`docs/history/releases/`](docs/history/releases/);
+Hazync v2's release notes are in [`docs/`](docs/README.md).
 
-## v0.21.7 — unreleased
+Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
+v0.23.0 onwards are **Hazync v2** (the libzync engine).
+
+## v0.24.0 — 2026-11-12 — re-baseline `863c9ce3` → `8888d59c`
+Hazync v2 (the libzync engine) on **RISC Zero 3.1.0**, which fixes soundness bugs in the zkVM's proof system. No
+guest source changed; every image id moved because the guest links risc0's new crates: mainnet `8888d59c`, signet
+`d4210dae`, and the header-chain zyncAPP `2db34e12`, which proved the whole header chain (genesis to 975,278) in one
+proof in 59.4 min on one RTX PRO 6000. Verifiers built on 3.1.0 refuse every 3.0.x receipt, so v0.23.0's proofs must
+be re-made; `run-workers.sh` loops started on v0.23.0 must be restarted. The board starts again from genesis under
+`8888d59c`. Same asset names as v0.23.0.
+Notes: [`docs/RELEASE_NOTES_v0.24.0.md`](docs/RELEASE_NOTES_v0.24.0.md).
+<https://github.com/hazync/hazync/releases/tag/v0.24.0>
+
+## v0.23.0 — 2026-11-11 — re-baseline `37987b85` → `863c9ce3` — **withdrawn**
+⚠ **Withdrawn, do not deploy: use v0.24.0.** It was built on RISC Zero 3.0.5, whose soundness bugs 3.1.0 fixes.
+The first release of Hazync v2, the libzync engine, replacing Hazync v1's per-signature CORE guest: a block is proved
+as independent pieces that join into one proof, signatures are checked in batches, and the verifier gains a third
+answer (exit `2`, DEMO: valid from genesis, not yet at minimum chain work). Adds the native Windows CUDA host
+(`hazync-host-x86_64-windows-cuda.zip`). Its verifier refuses Hazync v1 proofs; v0.22.1 still verifies them.
+Notes: [`docs/RELEASE_NOTES_v0.23.0.md`](docs/RELEASE_NOTES_v0.23.0.md).
+<https://github.com/hazync/hazync/releases/tag/v0.23.0>
+
+## v0.22.1 — 2026-09-29
+The aggregate's `TOTAL` double-counted execution, so tip-block fleet sizing was wrong by roughly three times; it is
+now one whole-block timer. `[rtt]` names the card that sent a join; `/api/state` no longer ships the full
+verified-range list by default. The last Hazync v1 release, and the one that still verifies v1 proofs. Not a
+re-baseline. <https://github.com/hazync/hazync/releases/tag/v0.22.1>
+
+## v0.22.0 — 2026-09-27
+Hazync can be paid: block sponsorship (on-chain or Lightning, proved by a bot that rents a card) and donations are
+live. The bridge follows the chain head (`FINALITY` defaults to 0) with reorg detection; the tip aggregate is chosen
+by its measured link. Not a re-baseline. <https://github.com/hazync/hazync/releases/tag/v0.22.0>
+
+## v0.21.7 — 2026-09-19
 A board block across many cards, and the height cap comes off. `seg-serve` serves a mode-6 bridge range so a
 board block gets N cards and still emits the `KIND_RANGE` receipt the coordinator accepts (#361, #364), and
 `hazync run --distributed` drives the whole thing from one command (#408); `seg-connect` reconnects after a
@@ -19,6 +53,7 @@ bridge still stops short of the tip on current hardware (#350); any bundle in
 the gap can be rebuilt on demand from a checkpoint rung (#374, #377, #378, #383); sponsorship payments run
 through BTCPay (#371, #372); key rotation is off unless `ROTATE_ENABLED=1` (#311, #348); offsite mirroring
 handles files over 5 GB and stops paging on a throttled listing (#390, #393, #403). Not a re-baseline.
+<https://github.com/hazync/hazync/releases/tag/v0.21.7>
 
 ## v0.21.6 — 2026-09-15
 Workers move to api.hazync.org, and folders stop colliding. The worker's default coordinator is

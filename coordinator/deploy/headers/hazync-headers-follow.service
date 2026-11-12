@@ -15,6 +15,7 @@ Environment=PUBLISH_KEY=/root/.ssh/hazync_headers_publish
 ExecStart=/opt/hazync-headers/bin/hazync-headers-follow
 Nice=19
 IOSchedulingClass=idle
-MemoryMax=6G
+# Each run re-proves base+1..tip on CPU: 250 headers peaked at 9.8 GB (2026-11-12); 6G OOM-killed every run from 11-11.
+MemoryMax=24G
 PrivateTmp=true
 TimeoutStartSec=2h

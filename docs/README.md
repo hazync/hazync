@@ -1,10 +1,25 @@
 # Hazync documentation
 
 Bitcoin Core's own consensus code, executed inside a RISC Zero zkVM, so that a block's validity can be **proven once
-and verified by anyone** without re-executing it. **libzync** (`libzync/`, the guest in `prover/methods/guest`) is
-Hazync's core: published images mainnet `8888d59c`, signet `d4210dae` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)).
-It replaced the original per-signature CORE guest (`37987b85`, documented in [`history/`](history/README.md), its code in
-[`../history/`](../history/README.md)).
+and verified by anyone** without re-executing it. **Hazync v2** is the libzync engine (`libzync/`, the guest in
+`prover/methods/guest`), on RISC Zero 3.1.0 since release v0.24.0: published images mainnet `8888d59c`, signet
+`d4210dae`, and the header-chain zyncAPP `2db34e12` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)). The
+public board has run it since 2026-11-12, from genesis.
+
+**Hazync v1**, the original per-signature CORE guest (`37987b85`, last release v0.22.1), is documented in
+[`history/`](history/README.md) and its code is in [`../history/`](../history/README.md). Those pages are the record
+of the past and are not kept current.
+
+## Start here
+
+| | |
+|---|---|
+| [`../README.md`](../README.md) | what Hazync is and where it stands |
+| [`EXPLAINER.md`](EXPLAINER.md) | Hazync v2 in plain words |
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | prove blocks on your GPU (Linux, Windows natively or via WSL2), verify a proof |
+| [`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md) | the current release: RISC Zero 3.1.0, the new image ids, the header chain in one proof |
+| [`RELEASE_NOTES_v0.23.0.md`](RELEASE_NOTES_v0.23.0.md) | the first Hazync v2 release, **withdrawn** (RISC Zero 3.0.5); kept for what it says about the switch |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | every release, newest first |
 
 ## libzync: what it proves and how
 
@@ -20,25 +35,38 @@ It replaced the original per-signature CORE guest (`37987b85`, documented in [`h
 | [`libzync/PROOF_BUNDLE.md`](libzync/PROOF_BUNDLE.md) | the proof bundle format |
 | [`libzync/ROADMAP.md`](libzync/ROADMAP.md) | everything built, measured and still open, in order |
 
+## Soundness and review
+
+| | |
+|---|---|
+| [`SOUNDNESS.md`](SOUNDNESS.md) | what a Hazync v2 proof rests on, and what would break it |
+| [`EXTERNAL_REVIEW.md`](EXTERNAL_REVIEW.md) | a guide for an outside reviewer: where to start, what to try |
+| [`../SECURITY.md`](../SECURITY.md) | security policy, reporting, supported versions, review status, where review is worth most |
+
 ## Running it
 
 | | |
 |---|---|
+| [`RUN_YOUR_OWN_COORDINATOR.md`](RUN_YOUR_OWN_COORDINATOR.md) | standing up your own Hazync v2 proof party |
 | [`COORDINATOR.md`](COORDINATOR.md) | the coordinator: running your own, sponsorship, the sponsor bot |
 | [`COORDINATOR_REFERENCE.md`](COORDINATOR_REFERENCE.md) | every coordinator route and setting, and the worker CLI, **generated from the code** (`scripts/gen-coordinator-reference.py`) |
-| [`OPERATIONS.md`](OPERATIONS.md) | topology and settings, proving, running provers, the GPU fleet; states the current release and the canonical id (written for the CORE fleet; this tree's libzync host commands are in [`../prover/README.md`](../prover/README.md)) |
+| [`OPERATIONS.md`](OPERATIONS.md) | the operator's manual: §0 the live Hazync v2 board, §3 board workers (both boards); the rest is the Hazync v1 fleet's reference (topology, multi-card fleets, tip runs) |
 | [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) | builds, image ids and reproducibility, cutting a release |
-| [`../SECURITY.md`](../SECURITY.md) | security policy, reporting, review status, where review is worth most |
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | contributing GPU time |
+| [`../coordinator/deploy/RUNBOOK.md`](../coordinator/deploy/RUNBOOK.md) | the public board's own box, day to day |
+| [`../coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md) | how the board moved from Hazync v1 to v2 on 2026-11-12 |
+| [`../coordinator/deploy/headers/README.md`](../coordinator/deploy/headers/README.md) | the header-chain follower that keeps the header proof at the tip |
+| [`../prover/README.md`](../prover/README.md) | the prover: layout, build, host commands |
+| [`../swiftsync-verify/README.md`](../swiftsync-verify/README.md) | the standalone verifier: verdicts, options, test vectors |
+| [`../tools/win-gui/README.md`](../tools/win-gui/README.md) | the Windows GUI for the prover |
 
-## History
+## History: Hazync v1
 
 | | |
 |---|---|
 | [`history/README.md`](history/README.md) | the development record, with its known-stale figures |
 | [`history/OVERVIEW_CORE.md`](history/OVERVIEW_CORE.md), [`history/SPEC_CORE.md`](history/SPEC_CORE.md), [`history/SECURITY_MODEL_CORE.md`](history/SECURITY_MODEL_CORE.md), [`history/SECURITY_CORE.md`](history/SECURITY_CORE.md) | the original CORE system: overview and glossary, its normative spec (checked by `history/scripts/check-spec.sh` while CORE was current), threat model, and review status (moved 2026-11-08) |
-| `history/*.md` | the 23 September-era documents merged in 2026-11-06, unchanged (e.g. `history/SOUNDNESS.md`, `history/PROVING.md`), plus the dated `STATUS`, the v0.21.7 pre-release trial, the field-backend and lift-x design notes |
-| [`history/releases/`](history/releases/) | copies of release bodies |
+| `history/*.md` | the 23 September-era documents merged in 2026-11-06, unchanged (e.g. `history/SOUNDNESS.md`, `history/PROVING.md`), plus the dated `STATUS`, the v0.21.7 pre-release trial, the field-backend and lift-x design notes. `history/EXPLAINER.md`, `history/SOUNDNESS.md`, `history/EXTERNAL_REVIEW.md` and `history/RUN_YOUR_OWN_COORDINATOR.md` are the Hazync v1 versions of the pages of the same name above |
+| [`history/releases/`](history/releases/) | copies of Hazync v1's release bodies (to v0.22.1) |
 | [`history/SECURITY_AUDIT_LOG.md`](history/SECURITY_AUDIT_LOG.md) | the round-by-round security review record, indexed from `../SECURITY.md` |
 | `../experimental/` | experiments and their results; `../history/experimental/libzync-bench/retired-docs/` holds libzync's retired design-B documents |
 

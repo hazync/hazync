@@ -9,9 +9,9 @@ The GUI just renders that and offers the fixable ones as buttons.
 
 ⚠ ONE STEP CANNOT BE AUTOMATED, AND IT IS NAMED RATHER THAN HIDDEN. `hazync-worker` is a public
 release asset and downloads with no credentials (measured: HTTP 200 unauthenticated). The Windows
-`host.exe` is NOT a release asset — it exists only as a CI artifact, which GitHub refuses to serve
-anonymously even for a public repository. Until it is published as a release asset, that download
-stays manual, and `publish_host_asset.sh` beside this file is the one command that fixes it.
+`host.exe` is a release asset since v0.23.0, inside `hazync-host-x86_64-windows-cuda.zip` (with
+`cudart64_12.dll`), but fetching and unzipping it is not automated here yet: the user downloads the zip
+from the latest release, extracts it, and points at host.exe.
 
 ⛔ NOTHING IS TRUSTED JUST BECAUSE IT DOWNLOADED. The worker is checked by running its own CLI; the
 host binary is checked by reading the canonical guest out of it, which works even for a build that
@@ -435,14 +435,14 @@ def setup_steps(cfg, python_exe=None):
     else:
         found = find_hosts()
         detail = ("not set. " + (f"Found one at {found[0]['path']}" if found
-                                 else "Download it from the GitHub Actions run and point at it — "
-                                      "see the Setup tab."))
+                                 else "Download hazync-host-x86_64-windows-cuda.zip from the latest "
+                                      "release, extract it and point at host.exe — see the Setup tab."))
     steps.append(Step(
         "host", "The prover (host.exe)",
         hgood, detail,
-        manual=("The Windows prover is not a release asset yet, so it cannot be fetched "
-                "automatically. Download the artifact from the latest windows-prove run and "
-                "select host.exe." if not hgood else None)))
+        manual=("Download hazync-host-x86_64-windows-cuda.zip from "
+                "https://github.com/hazync/hazync/releases/latest, extract it (keep "
+                "cudart64_12.dll beside host.exe) and select host.exe." if not hgood else None)))
 
     # 4 — identity
     handle = pub = None

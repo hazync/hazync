@@ -1,12 +1,12 @@
 # Hazync prover
 
-The zkVM prover for **libzync**: Bitcoin Core v28.0's own consensus code and libsecp256k1, compiled to RISC-V and
-run inside RISC Zero, with the patches in [`../patches/`](../patches/). It proves a block valid as chunks plus an
+The zkVM prover for **Hazync v2** (the libzync engine): Bitcoin Core v28.0's own consensus code and libsecp256k1,
+compiled to RISC-V and run inside RISC Zero (3.1.0 since v0.24.0), with the patches in [`../patches/`](../patches/). It proves a block valid as chunks plus an
 aggregate, keeps coins in the coin log and a counting trie, and joins independently proved blocks into one proof.
 What it proves and how: [`../docs/libzync/LIBZYNC.md`](../docs/libzync/LIBZYNC.md).
 
-The host is **libzync-only**: it refuses to build without `HAZYNC_LIBZYNC=1`. The original per-signature CORE design
-and its commands are in [`../history/`](../history/README.md); the guest still carries its CORE-mode branches until
+The host is **libzync-only**: it refuses to build without `HAZYNC_LIBZYNC=1`. Hazync v1, the original per-signature
+CORE design (last released as v0.22.1), and its commands are in [`../history/`](../history/README.md); the guest still carries its CORE-mode branches until
 the next deliberate image change, and a libzync image refuses those modes.
 
 ## Layout
@@ -29,7 +29,8 @@ prover/
 ## Build
 
 The published images are embedded, not rebuilt: a guest built anywhere but the reproducible container has a
-different id. Take the ELF from `reproduce/libzync.Dockerfile` (or CI's `libzync-hosts` artefact) and pin it with a
+different id (v0.24.0's mainnet image is `8888d59c…`). Take the ELF from `reproduce/libzync.Dockerfile` (or CI's
+`libzync-hosts` artefact) and pin it with a
 directory holding its `METHOD_ID`, `GUEST_ELF_SHA256` and `PROFILE` (`reproduce/LIBZYNC_IDS` has the values;
 `scripts/libzync/ci/build-hosts.sh` writes such a directory):
 
@@ -55,8 +56,9 @@ HAZYNC_BLOCK=block_962000.json $H agg-exec-fake           # one block's aggregat
 $H test-locks | test-merkle | core-vectors ...            # guest self-tests (modes 8, 9, 10)
 ```
 
-On the original board coordinator a libzync host answers `prove-range-bridge`, `fold-range` (a join) and `verify-any`
-(`host/src/lz_coord.rs`). `chunk-profile`, `prove-chunk`, `agg-chunks` and the `seg-*` commands split one block over
+For the board coordinator (`HAZYNC_LIBZYNC=1`, [`../docs/COORDINATOR.md`](../docs/COORDINATOR.md) §1a) a libzync
+host answers `prove-range-bridge` (one block from its `leaf_<n>.bin`), `fold-range` (a join, also how the spine
+advances), `verify-any <receipt> <lo>` and `libzync-genesis-tip` (`host/src/lz_coord.rs`). `chunk-profile`, `prove-chunk`, `agg-chunks` and the `seg-*` commands split one block over
 many cards. Every setting: [`../docs/OPERATIONS.md`](../docs/OPERATIONS.md) §6.1 (written for the CORE fleet; the
 libzync settings are in `host/src/lz.rs` and `docs/libzync/`).
 

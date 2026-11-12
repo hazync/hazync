@@ -3,6 +3,12 @@
 The orchestration that produced `docs/history/MILESTONE_966256_RUN4_2026-09-10.md`: block 966,256
 proved end to end in 544.0 s across 27 rented RTX 4090s, T0 to VERIFIED, no manual steps.
 
+⚠ **Hazync v1 tooling.** This proves one block with the v1 (CORE) host: `bootstrap2.sh` and `pod-prove.sh`
+download the **v0.22.1** CUDA host by default (`HAZYNC_HOST_URL` overrides) and set the CORE levers
+(`HAZYNC_LIFTX_HINT`, `HAZYNC_FIELD_BIGINT2`, `HAZYNC_ECMULT_WINDOW`) before `prove-chunk`. It has not been run with
+a Hazync v2 (libzync) host and is kept for its lessons, which apply to any rented fleet. v2's measured runs are in
+`experimental/libzync-bench/`.
+
 It lived in a scratch directory through four runs and is committed here because it encodes a night's
 worth of failures that are not obvious from the outside, and every one of them **produced a
 plausible wrong answer rather than an error**.

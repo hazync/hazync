@@ -21,8 +21,47 @@ It is **not a trust anchor**: a receipt verifies against `METHOD_ID` whoever coo
 coordinator loses the work queue and the scoreboard, never the validity of anything proved. Anyone can stand
 up another and provers can point at it. Duplicate work between coordinators is waste, never fault.
 
-libzync will later use the coordinator as the work queue for its whole-chain backfill
-([`libzync/ROADMAP.md`](libzync/ROADMAP.md), H-B step (e)).
+**Hazync v2.** Since 2026-11-12 the public board (`api.hazync.org`) runs Hazync v2 (the libzync engine): the
+same `coordinator/server.py` with `HAZYNC_LIBZYNC=1`, restarted from genesis under image `8888d59c`
+([`coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md)). Claims, per-block proofs,
+folds, the genesis-anchored spine, the leaderboard, sponsorships and the sponsor bot all carry over; what differs
+is in §1a. Hazync v1's board (frontier 144,769) is kept read-only as the record. Much of §3 (the archive node,
+the bridge, its bundles) describes v1's board and is marked so.
+
+## 1a. A libzync coordinator (`HAZYNC_LIBZYNC=1`)
+
+What changes when `HAZYNC_LIBZYNC=1` (`coordinator/server.py`; the unit is
+`coordinator/deploy/libzync/hazync-lz-coordinator.service`):
+
+- **Leaf bundles, no bridge.** `HAZYNC_HOST` is a libzync host. The per-block input is a **leaf bundle**,
+  `leaf_<n>.bin` (binary, `LZLEAF` magic), read from `HAZYNC_BRIDGE_OUT` (on the board,
+  `/srv/bulk/libzync-board/leaves`) and served by the same `GET /api/witness/<n>`; the worker saves it as
+  `leaf_<n>.bin` instead of `bundle_<n>.json` (`bundle_name()` in `coordinator/hazync`). There is no archive-node
+  bridge: a prep pass on the board box (`libzync-board-prep`) writes one leaf per block, each recording the state
+  before its block, stamped with the image that prepared it, paced by proving; `hazync-lz-prune-leaves` removes
+  leaves more than `MARGIN` (1,000) blocks below the frontier, keeping block 1's (`KEEP`). How far the board can hand out work is the highest leaf on disk. Following
+  the chain tip with libzync is not running yet.
+- **Verification.** A libzync receipt names only the digest of the state before its range, so the coordinator
+  runs `host verify-any <receipt> <lo>`, telling it the claimed start; the host checks it against genesis or
+  `leaf_<lo>.bin`'s `prev`. `GENESIS_TIP` is `host libzync-genesis-tip`. `/api/meta` reports `"libzync": true`.
+- **Folds.** Unchanged in shape: `hazync fold` joins two adjacent verified ranges with `host fold-range`, offered
+  by `/api/foldable` and reserved with a fold claim (`FOLD_CLAIM_TTL`, 60 s; `FOLD_CLAIM_CAP`, 2 per key).
+- **The spine.** A libzync host has no `extend-spine`. When `/api/meta` says `libzync`, `hazync spine` advances
+  `[1..N] + [N+1..M]` with `fold-range` (whose guest enforces the seam), and on `POST /api/spine` the coordinator
+  checks the result with `verify-any <receipt> 1`, its genesis gate, and requires it to start at block 1.
+
+**Claims, as measured on the v2 board on 2026-11-12:**
+
+- **`CLAIM_OPEN_MAX`** (default 4) caps the live claims one key may hold; over it, `claim()` refuses with
+  `open_claims` and `max`. One key running more than 4 workers starves itself: the extra workers get no work.
+  Give each group of up to four workers its own `HAZYNC_HOME` (its own key), or raise the cap on your own
+  coordinator.
+- **Restarting workers mid-run orphans their claims on that key.** An orphaned claim that had beaten stays live
+  until `CLAIM_TTL` (3,600 s) after its last beat (one that never beat lapses after `CLAIM_GRACE`, 600 s), and
+  until then it counts against the key's cap. An orphaned claim on the **frontier** block stalls the frontier until
+  it lapses. Stop workers with `run-workers.sh <n> --stop` and avoid restarting a key's workers mid-run.
+- The worker's GPU lock (`HAZYNC_GPU_LOCK`, default `/tmp/hazync-gpu.lock`) serialises GPU jobs per box;
+  disabling it on a 96 GB card measured worse (7 vs 15 blocks in 5 minutes).
 
 ## 2. API reference
 
@@ -37,7 +76,8 @@ hand-written sponsorship docs.
 
 ### 3.1 The cost is the data
 
-The software is one file; the data is not (measured once, 2026-08-02, not re-measured):
+The software is one file; the data is not. **v1 board** (measured once, 2026-08-02, not re-measured; a v2 board
+instead needs a node to fetch blocks from and the prep pass's leaves and state, `coordinator/deploy/libzync/`):
 
 | what | size | why |
 |---|---|---|
@@ -80,6 +120,9 @@ with the same set converge with nothing to agree on. Keep it that way.
 
 ### 3.4 Minimum configuration
 
+For a v1 board (for v2, add `HAZYNC_LIBZYNC=1`, point `HAZYNC_HOST` at a libzync host, `HAZYNC_BRIDGE_OUT` at the
+leaves and set `GENESIS_TIP`, as in `coordinator/deploy/libzync/hazync-lz-coordinator.service`):
+
 ```bash
 HAZYNC_HOST=/usr/local/bin/hazync-host   # canonical host binary the coordinator VERIFIES with
 VERIFY_MODE=real                         # default once HAZYNC_HOST is set; stated so it cannot slip
@@ -120,7 +163,8 @@ Live since **2026-09-26**: `SPONSOR_OPEN=1`, BTCPay connected, the bot on a time
 or range to be proven; the payment funds GPU time, the bot proves it, and the block map shows
 **Sponsor: <name>** next to the prover. The name is a coordinator record, never inside a proof (that would
 change the program ID). First sponsorship: 2,000 sats over Lightning for block 196,001; the bot rented an
-RTX 4090, proved it in 819.6 s and released the pod.
+RTX 4090, proved it in 819.6 s and released the pod (v1 board). On the v2 board the bot is on again since
+2026-11-12.
 
 ⚠ ONE sponsorship has been proved this way: treat the price ladder as a starting point. For that block the
 ladder projected $0.01 of GPU against an actual $0.19 (cost follows the UTXO set; a band median predicts a
@@ -335,7 +379,9 @@ caught: look-alike letters from other scripts (Cyrillic `о`). Also refused: ord
 falling back to A40 (4090 community hosts often never expose public SSH), image
 `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`, port 22, 40 GB disk, named
 `hz-sponsor-<run>-<n>`. Boot: download the Latest release's worker, run script and CUDA host; check against
-PGP-verified `SHA256SUMS.txt`; GPU smoke `prove-block` (#261); program ID vs `/api/meta`. Heights then run
+PGP-verified `SHA256SUMS.txt`; GPU smoke (#261: on a v1 board `prove-block`; on a libzync board the pod proves
+block 1 from `leaf_1.bin`, which the bot ships and the pruner keeps, and `verify-any range_1.bin 1` must print
+`RANGE-OK lo=1 hi=1`); program ID vs `/api/meta`. Heights then run
 one after another; progress is read from the coordinator.
 
 **Cost log** (`SPONSOR_BOT_DB`, default `bot.db`): `sponsor_work` (one row per block: sponsorship, height,

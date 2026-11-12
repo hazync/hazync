@@ -65,8 +65,8 @@ CANONICAL_METHOD_ID = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2
 # Searching for \x7fELF finds 51 coincidental hits in this binary and none of them is the guest.
 # ⛔ And it is not the FIRST R0BF hit either — measured, it was the second.
 GUEST_MAGIC = b"R0BF"
-GUEST_SIZE = 69_980_208
-GUEST_SHA256 = "35e3f55ed873de27f3e06b4452fb9ac80940e02f845b671a0e019cf83735c02f"
+GUEST_SIZE = 70_191_408
+GUEST_SHA256 = "ded6f8844fe02eae2f65ebf61bc4e008eac61ac838a83c641d81b465d54a4655"   # reproduce/LIBZYNC_IDS, mainnet GUEST_ELF_SHA256
 
 EX_CONFIG = 78      # the worker established it can never land anything — STOP, do not retry
 EX_TEMPFAIL = 75    # nothing to claim right now — a busy board, not a fault

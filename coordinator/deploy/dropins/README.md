@@ -1,5 +1,21 @@
 # systemd drop-ins — hardening and the /root migration
 
+> **Hazync v2 (since 2026-11-12).** Every file here was written for the Hazync v1 units (`hazync-coordinator`,
+> `hazync-bridge`, …), and this page records how they came about. At the switch to v2
+> ([`../libzync/SWITCH.md`](../libzync/SWITCH.md) section 3):
+>
+> - `hazync-lz-coordinator` was given copies of the coordinator's `btcpay`, `zz-proxies`, `ratelimit`, `sponsor-bot`,
+>   `sponsor-open`, `zz-signed-claims`, `alert`, `hardening`, `umask` and `50-open-files…` drop-ins, plus its own port
+>   and bind (8899, `0.0.0.0`). ⛔ **Never** `paths-and-user.conf` or `network.conf`: the first points the data paths
+>   and `ReadWritePaths` at the v1 board and would override the v2 paths.
+> - The v1 units that stayed and were pointed at the v2 board got a drop-in named **`zz-libzync.conf`** each
+>   (`hazync-check-continuity`, `hazync-retention-check`, `hazync-coordinator-backup`, `hazync-offsite-ledger-b2`,
+>   `hazync-offsite-keys{,-b2}`, `hazync-check-bundle-gap`, `hazync-sponsor-bot`), and `hazync-lz-prune-leaves` one
+>   that sets `COORD=http://127.0.0.1:8899`. They load last, so deleting them is the rollback. ⚠ **They are on the
+>   box only, not in this directory**; `hazync-check-unit-drift` reports a drop-in that is in no repo file unless it
+>   is declared in `../unit-drift-allow.txt`.
+> - The bridge drop-ins (`hazync-bridge-*`) belong to units that are now stopped and disabled.
+
 Applied to the live coordinator box on 2026-08-02: first hardening (audit M-1), then the path
 migration off `/root` (#58) that unblocked the rest of it. Kept here so both are reproducible rather
 than existing only on one machine.
@@ -97,6 +113,9 @@ Every `.conf` in this directory, each installed as `<service>.service.d/<name>.c
 name, because `hazync-coordinator-backup-paths` would otherwise read as a `hazync-coordinator` drop-in.
 **Edit `hazync-coordinator-network.conf` and `hazync-coordinator-ratelimit.conf` first**: they carry
 the public board's proxy address, which is wrong for any other box.
+
+⚠ This list is the original ten (2026-08-02). The directory now holds more drop-ins (alerts, sponsor bot, BTCPay,
+proxies, Litestream, …), each named `<service>-<name>.conf` and installed the same way; the guard below says so.
 
 ```bash
 [ "$(ls *.conf | wc -l)" -eq 10 ] || echo "⚠ this directory no longer holds 10 drop-ins — update the list below"

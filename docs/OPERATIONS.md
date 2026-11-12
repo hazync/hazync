@@ -1,7 +1,11 @@
 # Operations
 
-The operator's reference for the **original Hazync system**: the CORE guest (`37987b85`, now superseded), its
-last release v0.22.1, board provers, multi-card fleets on RunPod, and tip runs. It merges the September 2026 pages
+The operator's reference for proving on the board, and for the **Hazync v1 system**: the CORE guest (`37987b85`,
+now superseded), its last release v0.22.1, multi-card fleets on RunPod, and tip runs.
+
+**Since 2026-11-12 the public board is Hazync v2** (the libzync engine, image `8888d59c`, release v0.24.0); §0 covers
+it and its proving fleets. §3 (board workers) applies to both boards. §1, §2, §4 and §5 describe v1 and stay as its
+reference. It merges the September 2026 pages
 PROVING, PROVER_OPERATIONS, FLEET_OPERATIONS, TIP_RUN_OPERATIONS and TOPOLOGY_AND_SETTINGS (now in
 `docs/history/`).
 
@@ -11,7 +15,7 @@ a libzync image refuses (`regress`, `adversarial`, `check-*`, `prove-full`, `pro
 `prove-range`, `extend-spine`, `verify-range`, `verify-chain`, `prove-snark`, mode 6) exist only in the v0.22.1
 release binaries; [`history/README.md`](../history/README.md) lists what was removed. This tree's commands are in
 [`prover/README.md`](../prover/README.md), and libzync's GPU scripts in `experimental/libzync-bench/gpu/`. The rest of
-this page stays the reference for the CORE board until the board switches to libzync.
+this page is the reference for the v1 (CORE) board, which was retired on 2026-11-12.
 
 New to proving: [`CONTRIBUTING.md`](../CONTRIBUTING.md) first. Concepts: [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md).
 Board coordinator: [`COORDINATOR.md`](COORDINATOR.md). Soundness: [`SECURITY.md`](history/SECURITY_MODEL_CORE.md). Builds and
@@ -27,6 +31,44 @@ number in [§7](#7-superseded-numbers--do-not-quote) was once someone's confiden
 blocks and verifies submitted proofs; it never proves. The **segment coordinator** is the `seg-serve`
 process that executes one guest run, pushes work to `seg-connect` workers and assembles the result; it
 lives for one prove. They share no code.
+
+## 0. The live board: Hazync v2
+
+The board at `api.hazync.org` switched to Hazync v2 on 2026-11-12 and restarted from genesis under `8888d59c`
+([`coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md)). The v1 board reached frontier
+144,769 (145,223 blocks proven); its data and proofs are kept read-only as the record, and 13 contributors carried over
+(handles and keys, not block counts). v1 proofs still verify with the v0.22.1 release.
+
+What runs on the board box, where its state lives, how to check it and how to update it:
+[`coordinator/deploy/RUNBOOK.md`](../coordinator/deploy/RUNBOOK.md) § "The live board: Hazync v2". In short: the
+coordinator is `hazync-lz-coordinator` on port 8899 (state in `/var/lib/hazync-lz`), and there is **no bridge**: a
+prep pass on the board box (`libzync-board-prep`) writes one leaf bundle per block (LZLEAF02) under
+`/srv/bulk/libzync-board/leaves`, paced by proving. Following the tip with libzync is not running yet. v2 keeps
+claims, per-block proofs, folds, the genesis-anchored spine, the leaderboard, sponsorships and the sponsor bot.
+
+Workers: the v0.24.0 release (`hazync-worker`, `hazync-run-workers.sh`, the CUDA host), run as in §3. A worker whose
+host is not `8888d59c` is refused at start (§3.4).
+
+**MEASURED, first v2 proving run** (2026-11-12, 4× RTX PRO 6000, 2 h 38 min): 1,287 blocks proven, ~490 blocks/hr,
+~$0.021/block on early blocks, $27.13 in all. An early block takes ~22–27 s on an RTX PRO 6000, mostly fixed per-block
+proving (trie + aggregate ≈ 3.4 M cycles, plus recursion), not JIT. Early blocks only: later blocks are larger.
+
+### 0.1 Proving fleets: four things measured on 2026-11-12
+
+- ⛔ **`CLAIM_OPEN_MAX` is per key, default 4** (`coordinator/server.py`). One key running more than 4 proving
+  workers starves itself: the fifth and later get "nothing to claim right now" while the board has work. Give each
+  box its own key (`HAZYNC_HOME`, §3.9), or have the operator raise `CLAIM_OPEN_MAX` on the coordinator.
+- ⛔ **Restarting workers mid-run orphans their claims.** The claims stay on that key, and because the key is
+  still live they look alive for up to `CLAIM_TTL` (60 min). They count against the key's 4, and an orphaned claim
+  on the **frontier** block stalls the frontier until it lapses. Stop gracefully (§3.4) where you can; if the
+  frontier waits on an orphaned claim, prove that block directly (`hazync run <n>`, §3.3).
+- **Keep the GPU lock.** `HAZYNC_GPU_LOCK` serialises GPU jobs per box (§3.2). Turning it off on a 96 GB card was
+  measured **worse**: 7 blocks per 5 min against 15 with the lock.
+- **Blackwell workstation and server cards (RTX PRO 6000, `sm_120`) compile the kernels on first use.** The release
+  CUDA host carries native kernels for `sm_80/86/89/90/100` and `compute_100` PTX; an `sm_120` card JIT-compiles from
+  the PTX for **~10 min on the first prove on a fresh machine**, cached afterwards. A fresh pod that looks stuck on
+  its first block is usually doing this — allow for it in selftests and in pod timeouts, and do not judge a card's
+  speed by its first block.
 
 ## 1. Topology
 
@@ -94,7 +136,7 @@ per proof.
 |---|---|
 | board coordinator | `api.hazync.org` (`/api/meta`, `/api/state`), board at <https://hazync.org/>, live page `hazync.org/live`. [`COORDINATOR.md`](COORDINATOR.md) |
 | tip driver box | `coordinator/tip_smoke.py`; needs the identity (`/var/lib/hazync/identity-GHOST`), the RunPod key (`/root/.hazync/runpod.key`), the live rig (`/root/hazync-live-rig`) and the publish key (`/root/.ssh/hazync_publish`, dest `root@152.53.86.216:`). Repo at `/opt/hazync`. **No GPU needed** |
-| bridge | serves tip bundles (`--bridge-host`); retains every bundle back to the emit floor (1,489, oldest 967,500, 2026-09-28; nothing prunes them) |
+| bridge (**v1 only**; v2 has none, §0) | serves tip bundles (`--bridge-host`); retains every bundle back to the emit floor (1,489, oldest 967,500, 2026-09-28; nothing prunes them) |
 | prover box | `run-workers.sh` loops (§3), one GPU job at a time |
 | rented pods (RunPod) | `tip_smoke.py` fleets (§4–5); 40 GB container disk on the project's cards |
 
@@ -306,7 +348,8 @@ line to name the newest tag (or one ahead of it). It ships the published libzync
 **The canonical id** (`reproduce/METHOD_ID`) is libzync's published mainnet image
 `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, with the signet image in
 [`reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). `reproduce/libzync.Dockerfile` reproduces both bit for bit and the
-`reproducible-image-id` job rebuilds them on every push. No release ships it yet.
+`reproducible-image-id` job rebuilds them on every push. Release v0.24.0 ships it (and the board runs it since
+2026-11-12).
 
 A receipt verifies only against the guest that produced it. A mismatch prints `STARK verification FAILED.
 This is almost certainly a guest image-id (METHOD_ID) MISMATCH` — a build mismatch, not a bad proof.
@@ -376,7 +419,8 @@ tail -f ~/hazync-workers/worker_1.log
 - ⚠ **Someone must be proving new blocks** — folding and the spine only use existing proofs (the frontier
   stood still 40 min on 2026-09-14 when the only proving card was switched to folding).
 - **One GPU job at a time per box**: workers take `/tmp/hazync-gpu.lock` (`HAZYNC_GPU_LOCK`); two provers on
-  one card fail when memory peaks coincide. Extra workers help only during fetch/coordinator waits; the
+  one card fail when memory peaks coincide. On v2, disabling the lock on a 96 GB card was measured worse, not
+  better (7 vs 15 blocks / 5 min, §0.1). Extra workers help only during fetch/coordinator waits; the
   project's cards run two. A direct `host prove-*` does not take the lock (#97).
 - **One prove per card**: ~22 GB VRAM at po2 21 (L40S, 2026-08-28).
 
@@ -396,6 +440,10 @@ at any height from anyone; claims only decide who is **offered** a block. Public
 | `CLAIM_RETAKE_WAIT` | 3,600 s | a key does not get back a block its own claim let lapse |
 | signed claims | v0.21.5+ workers | nobody else can use up your 4 claims |
 
+⛔ **More than 4 proving workers on one key starve themselves**, and **restarting workers mid-run orphans their
+claims** for up to `CLAIM_TTL` — an orphaned frontier claim stalls the frontier until it lapses (measured on v2,
+2026-11-12; §0.1).
+
 ⚠ **Proving by hand** (`hazync run <n>`, for a block stuck behind a claim): not on a box whose loop may be
 proving the same block — both use `~/.hazync/receipts/.work-<n>` and the loop's prove crashes. Check
 `worker_<i>.log` or use another box.
@@ -404,7 +452,8 @@ proving the same block — both use `~/.hazync/receipts/.work-<n>` and the loop'
 
 - **Start** refuses if the prover's guest id differs from `/api/meta`, or if the GPU cannot prove a test
   block; warns if no handle is set.
-- **Quick stop**: `./run-workers.sh N --stop`. An in-flight block stays claimed up to an hour.
+- **Quick stop**: `./run-workers.sh N --stop`. An in-flight block stays claimed up to an hour (`CLAIM_TTL`), and
+  counts against the key's 4 claims meanwhile (§0.1).
 - **Graceful stop** (before an upgrade):
 
 ```
