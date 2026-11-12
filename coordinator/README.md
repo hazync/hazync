@@ -8,6 +8,13 @@ live dashboard.
 The web **coordinates**; a contributor's **local GPU + CLI** does the proving. The browser never
 runs the prover.
 
+> **The live board runs this server in Hazync v2 (libzync) mode since 2026-11-12** (`HAZYNC_LIBZYNC=1`, image
+> `8888d59c`): the unit is `deploy/libzync/hazync-lz-coordinator.service`, the bundles it serves are the board pass's
+> `leaf_<n>.bin`, and there is no bridge. How the live board is deployed and checked:
+> [`deploy/RUNBOOK.md`](deploy/RUNBOOK.md) § "The live board: Hazync v2". The rest of this page was written for the
+> v1 (CORE) board; where v2 differs it says so. The generated settings and endpoint list is
+> [`../docs/COORDINATOR_REFERENCE.md`](../docs/COORDINATOR_REFERENCE.md).
+
 ```
   pick/claim a range ──► witnesses auto-fetched ──► hazync prove (your GPU) ──► sign ──► hazync submit
    coordinator verifies signature + STARK receipt ──► chains it by tip ──► credits the block to you
@@ -29,8 +36,8 @@ or `COORD_ALLOW_UNSIGNED`) unless `COORD_ALLOW_PUBLIC_INSECURE=1`.
 ### Config (env)
 
 This table and the API list below are **partial**: `server.py` reads every setting with
-`os.environ.get` and routes every endpoint in `do_GET`/`do_POST`, and it is the reference until a
-generated one exists. Not listed here, among others: `COORD_STATE`, `CLAIM_WIDTH`, `BEAT_SKEW`,
+`os.environ.get` and routes every endpoint in `do_GET`/`do_POST`. The full, generated list is
+[`../docs/COORDINATOR_REFERENCE.md`](../docs/COORDINATOR_REFERENCE.md). Not listed here, among others: `COORD_STATE`, `CLAIM_WIDTH`, `BEAT_SKEW`,
 `MAX_ATTEMPTS`, `MAX_ENV_FAILURES`, `BULK_MAX`, `RATE_EXEMPT`, `TIP_FILE`, `TIP_FILE_MAX_AGE`,
 `PEER_*`, `SPONSOR_*`, `MOD_BLOCK_FILE`, `COORD_ALLOW_*`.
 
@@ -45,13 +52,17 @@ generated one exists. Not listed here, among others: `COORD_STATE`, `CLAIM_WIDTH
 | `TIP_CACHE_TTL` | `300` | seconds to cache that bundle scan (~0.17s over 220,000 files) |
 | `RANGE_SIZE` | `1000` | blocks per claimable range |
 | `SEED_RANGES` | `60` | ranges to create on first run |
-| `HAZYNC_BRIDGE_OUT` | — | archive-bridge bundle dir; `/api/witness/<n>` serves `bundle_<n>.json` from here |
+| `HAZYNC_BRIDGE_OUT` | — | bundle dir; `/api/witness/<n>` serves `bundle_<n>.json` from here (v1: the archive bridge's), or `leaf_<n>.bin` when `HAZYNC_LIBZYNC=1` (v2: the board pass's, `/srv/bulk/libzync-board/leaves` on the live board) |
+| `HAZYNC_LIBZYNC` | unset | `1` = a Hazync v2 (libzync) board: `HAZYNC_HOST` is a libzync host, bundles are leaves, `verify-any` is told the claimed start height |
+| `GENESIS_TIP` | Bitcoin's genesis block hash (v1) | the in-tip a genesis-anchored range must start from; on a v2 board, the output of `host libzync-genesis-tip` (set in the `hazync-lz-coordinator` unit) |
+| `ZYNC_SERVE_URL` | unset | the local zync-serve behind `/api/zync/*` (zyncAPP facts); unset, those paths 404 |
 | `WITNESS_DIR` | `./witnesses` | legacy per-block witnesses (`block_<n>.json`), replay fallback |
 | `HAZYNC_HOST` | — | path to the canonical prover `host` binary (for real verification) |
 | `VERIFY_MODE` | `real` if `HAZYNC_HOST` set, else `mock` | `mock` stubs the STARK check for testing |
 | `CLAIM_TTL` | `3600` | a claim stops being held after this many seconds without a heartbeat |
 | `CLAIM_GRACE` | `600` | a claim that has **never** sent a heartbeat stops being held after this (#296) |
 | `CLAIM_MAX` | `86400` | hard cap: a claim stops being held after this long regardless of heartbeats |
+| `CLAIM_OPEN_MAX` | `4` | live claims one key may hold; a key running more proving workers than this starves itself (measured 2026-11-12, `docs/OPERATIONS.md` §0.1) |
 | `RATE_MAX` | `120` | max writes per IP per window (over → `429`) |
 | `RATE_MAX_GET` | `600` | max `GET /api/*` per IP per window |
 | `RATE_WINDOW` | `60` | rate-limit window, seconds |
@@ -157,7 +168,12 @@ neither credits anything. The dashboard shows **two numbers**: *verified* blocks
 
 ## Deploy
 
-Deployed **co-located with the archive bridge and a full `bitcoind`** on one box: `bitcoind` feeds the
+**Hazync v2 (live since 2026-11-12):** on hazync-proof as `hazync-lz-coordinator` (checkout `/opt/hazync-lz`, state
+`/var/lib/hazync-lz`, public on 8899 through drop-ins), beside the board pass (`libzync-board-fetch`,
+`libzync-board-prep`) that writes the leaves it serves. Units: `deploy/libzync/`. Runbook:
+`deploy/RUNBOOK.md` § "The live board: Hazync v2"; the switch: `deploy/libzync/SWITCH.md`.
+
+**Hazync v1 (retired 2026-11-12):** deployed **co-located with the archive bridge and a full `bitcoind`** on one box: `bitcoind` feeds the
 bridge (`hazync-bridge.service`), which writes bundles the coordinator serves via `HAZYNC_BRIDGE_OUT` (a
 local read — no cross-box copy); the coordinator verifies receipts on CPU with the canonical `host`
 binary (no GPU required to *verify*). Put it behind a reverse proxy (nginx) with TLS; the public

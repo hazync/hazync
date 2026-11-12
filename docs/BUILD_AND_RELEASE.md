@@ -1,51 +1,63 @@
 # Build and release
 
-How the guest and host are built (channels, flags, measured cycles), how the image id is pinned and
-reproduced, and how a release of the original system is cut, verified and re-baselined. Merged from
-`BUILDS.md` and `RELEASE_PROCESS.md` (September 2026); the process is current for that code.
+How Hazync's host, guest and verifiers are built, how the image ids are pinned and reproduced, and how a release
+is cut, gated, signed and checked. §3.2 is the flow as run for **v0.24.0** (2026-11-12): **Hazync v2** (the libzync
+engine) on **RISC Zero 3.1.0** (`risc0-zkvm` 3.1.0, circuits 4.1.0). Merged from `BUILDS.md` and
+`RELEASE_PROCESS.md` (September 2026); the parts marked **v1** are the record of Hazync v1 (the original "CORE"
+design, last released as v0.22.1) and are kept as history, not as instructions.
 
-⚠ **The CORE design was retired from the active tree on 2026-11-09** ([`../history/README.md`](../history/README.md)).
-The CORE verifiers (`verifier/`, `verifier-ffi/`, `verifier-wasm/`), the SNARK fixtures (`prover/testdata/snark/`)
+⚠ **Hazync v1 (CORE) was retired from the active tree on 2026-11-09** ([`../history/README.md`](../history/README.md)).
+The v1 verifiers (`verifier/`, `verifier-ffi/`, `verifier-wasm/`), the SNARK fixtures (`prover/testdata/snark/`)
 and `scripts/rebaseline-id.sh` named below are now under `history/` at those paths, the host is libzync-only, and
-`reproduce/METHOD_ID` names libzync's published mainnet image.
+`reproduce/METHOD_ID` names Hazync v2's published mainnet image. v0.23.0 (the first v2 release, RISC Zero 3.0.5,
+image `863c9ce3…`) is **withdrawn**: 3.1.0 fixes soundness bugs in RISC Zero's proof system and 3.1.0 verifiers
+refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
 
-**The release tooling is libzync's from v0.23.0** (the CORE text below is the record for v0.22.1 and earlier):
+**The release tooling is Hazync v2's from v0.23.0** (the v1 text below is the record for v0.22.1 and earlier):
 
 - **Assets** are listed once, in `scripts/release-assets.txt` (read by `scripts/release.sh` and `release-sign.yml`):
   the libzync host for the published mainnet image (`reproduce/LIBZYNC_IDS`) as `hazync-host-x86_64-linux-gnu`,
   `-cuda` and `hazync-host-x86_64-windows-cuda.zip` (`host.exe` + `cudart64_12.dll`); the libzync verifier
   (`swiftsync-verify`) as `hazync-verify-x86_64-linux-gnu`, `hazync-verify-aarch64` (built by `release-sign.yml`),
   `hazync-verify.wasm` and its glue `hazync-verify.js`; `hazync-worker`, `hazync-coordinator.py`,
-  `hazync-run-workers.sh`; `SHA256SUMS.txt` and `.asc`. The release must carry exactly that set.
+  `hazync-run-workers.sh`; `SHA256SUMS.txt` and `.asc`. Nine are uploaded by `release.sh`, three added by
+  `release-sign.yml`: the release must carry **exactly those 12**.
+- **Images** (v0.24.0): mainnet `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, signet
+  `d4210dae…`, headers zyncAPP `2db34e12…`. `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the
+  ids and ELF hashes); `reproduce/LIBZYNC_IDS` pins them.
 - **Hosts:** `prover/build-release.sh` embeds the published mainnet ELF (built by `reproduce/libzync.Dockerfile`, or
   passed as `HAZYNC_GUEST_ELF` and checked against its pinned sha256). The Windows host is built by `windows-prove.yml`
-  on GitHub's runners: dispatch it on the release commit first (`gh workflow run windows-prove.yml --ref main -f
-  skip_cpu_prove=true`); `scripts/windows-host.sh` fetches the artifact of that run and checks it from its bytes.
-- **Gates before publishing:** every host answers `method-id` with the published id; one that cannot run on the
-  release box (CUDA, Windows) needs `HAZYNC_ATTEST_<asset>=<id>` from an operator who ran it, and its bytes must agree.
-  `scripts/check-release-verifiers.sh` runs the staged verifiers (CLI, WASM through its glue, runnable hosts) on the
-  real mainnet 1..200 receipt (`DEMO`) and on tampered copies (`FAIL`).
+  on GitHub's `windows-2022` runners: dispatch it on the release commit first (`gh workflow run windows-prove.yml
+  --ref main -f skip_cpu_prove=true`); `scripts/windows-host.sh` fetches the artifact of that run and checks it from
+  its bytes.
+- **Gates before publishing:** every host that runs on the release box answers `method-id` with the published id;
+  one that cannot (CUDA without a driver, Windows) is checked from its bytes, or, stronger, by
+  `HAZYNC_ATTEST_<asset>=<id>` from an operator who ran it. `scripts/check-release-verifiers.sh` runs the staged
+  verifiers (CLI, WASM through its glue, runnable hosts) on the real mainnet 1..200 receipt (`DEMO`) and on tampered
+  copies (`FAIL`).
 
 The scripts are authoritative: `scripts/release.sh`, `scripts/package-release.sh`, `scripts/check-dist.sh`,
-`.github/workflows/release-sign.yml`, `scripts/rebaseline-id.sh`, `scripts/check-deployed-verifier.sh`.
-Coordinator deployment and day-to-day operation stay in
-[`coordinator/deploy/RUNBOOK.md`](../coordinator/deploy/RUNBOOK.md); see also [OPERATIONS.md](OPERATIONS.md),
-[COORDINATOR.md](COORDINATOR.md) and [SECURITY.md](history/SECURITY_MODEL_CORE.md).
-
-**libzync** builds its images with the same machinery plus its own Dockerfile,
-`reproduce/libzync.Dockerfile` (prints the mainnet and signet ids and ELF hashes), and pins them in
-`reproduce/LIBZYNC_IDS`.
+`scripts/windows-host.sh`, `scripts/check-release-verifiers.sh`, `.github/workflows/release-sign.yml`,
+`scripts/check-deployed-verifier.sh`. Coordinator deployment and day-to-day operation stay in
+[`coordinator/deploy/RUNBOOK.md`](../coordinator/deploy/RUNBOOK.md) and, for the v2 board,
+[`coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md); see also
+[OPERATIONS.md](OPERATIONS.md), [COORDINATOR.md](COORDINATOR.md) and the v1
+[security model](history/SECURITY_MODEL_CORE.md).
 
 ---
 
-## 1 · Builds
+## 1 · Builds (v1 record: the CORE channels)
+
+Everything in §1 measured Hazync v1's guest (the CORE/GHOST channels on Bitcoin Core's C++), not Hazync v2.
+v2's measurements are in `experimental/libzync-bench/results/` (for example `CYCLES_REAL_STATE.md`: 19.9x fewer
+proven cycles than v1 on block 200,000, 9.5x across eight blocks 200k–300k).
 
 ### 1.1 The three channels — one canonical guest id (hazync#225)
 
 | channel | role | contributes to the board? |
 |---|---|---|
 | **stock** | the digest **oracle**: the fidelity floor every acceleration is checked against | no |
-| **CORE** (§1.3) | **canonical** (v0.21.0). What the release binary builds and the board counts | **yes** |
+| **CORE** (§1.3) | **canonical** v0.21.0–v0.22.1: what the v1 release binary built and the v1 board counted | was **yes** |
 | **GHOST** (§1.4) | experimental, where new levers land first | no |
 
 Stock is kept because it is how a claim that an acceleration left consensus untouched is made. Core was
@@ -187,10 +199,30 @@ straggler: the cost packer balances its own predictor and always reports a perfe
 
 ## 2 · The image id, reproducible builds and pins
 
-`reproduce/METHOD_ID` is the source of truth; the canonical id is libzync's published mainnet image
+`reproduce/METHOD_ID` is the source of truth; the canonical id is Hazync v2's published mainnet image
 `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` (`reproduce/LIBZYNC_IDS`, built by
-`reproduce/libzync.Dockerfile`). The rest of this section describes the CORE images `reproduce/Dockerfile` built;
-the CORE id it names, `37987b85`, is superseded. Also pinned: `reproduce/GUEST_ELF_SHA256`,
+`reproduce/libzync.Dockerfile`).
+
+**Hazync v2 (v0.24.0):**
+
+```bash
+docker build -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
+docker run --rm hazync-libzync-repro      # prints the mainnet, signet and headers ids and ELF hashes
+```
+
+The id still depends on absolute build paths, so the Dockerfile fixes them (`HOME=/root`, the repo at
+`/hazync-zkvm`); an id built anywhere else differs by design. The guest is built once there and every host embeds
+those bytes: `prover/methods/build.rs` refuses an ELF whose sha256 or image id is not the pinned one, so the host's
+own build location does not move the id. v0.24.0 moved every id with no guest source change, because the image id
+depends on the RISC Zero toolchain (3.0.5 → 3.1.0).
+
+The browser verifier is reproducible only with the same **host** Rust: `swiftsync-verify-wasm/build.sh` under Rust
+**1.99.0** gives the published `hazync-verify.wasm` (`446fdaeb…`); 1.97.1 gives other bytes. Build it with
+`RUSTUP_TOOLCHAIN=1.99.0` (pinning the toolchain in the repo is a known follow-up).
+
+**Hazync v1 (record).** The rest of this section describes the CORE images `reproduce/Dockerfile` built;
+the CORE id it names, `37987b85`, is superseded (v0.22.1 is the last v1 release, and v1 proofs still verify with
+it). Also pinned: `reproduce/GUEST_ELF_SHA256`,
 `reproduce/LINEAGE.tsv` (`scripts/lineage.sh --write` appends a row from git history once an id change is
 committed; `lineage.sh --check` is the CI gate).
 
@@ -261,8 +293,8 @@ strings <artifact> | grep -c <old-id>   # want 0
 `release.sh` refuses unless the tree is clean, `HEAD` is `origin/main` and CI passed on that commit, so all
 of this is merged first:
 
-- [ ] **Release notes** in a file, passed as `NOTES=<file>`; keep a copy in
-      `docs/history/releases/RELEASE_NOTES_vX.Y.Z.md`.
+- [ ] **Release notes** in a file, passed as `NOTES=<file>`: `docs/RELEASE_NOTES_vX.Y.Z.md` (v0.23.0 and v0.24.0
+      are there; v1's are in `docs/history/releases/`).
 - [ ] **`CHANGELOG.md`** entry, newest first; mark it **re-baseline** if the id moved.
 - [ ] **`docs/OPERATIONS.md`**: bump "The current release is **vX.Y.Z**". `scripts/check-versions.sh` check 4
       reads that line: newer than the newest tag passes, older fails.
@@ -270,52 +302,84 @@ of this is merged first:
   shipped items go in `CHANGELOG.md` and the release body.)
 - [ ] **`docs/COORDINATOR_REFERENCE.md`**, if `coordinator/server.py`, `coordinator/hazync` or
       `coordinator/run-workers.sh` changed: `python3 scripts/gen-coordinator-reference.py` (CI's `--check`).
-- [ ] **`verifier-wasm/README.md`** raw and gzipped sizes if the wasm changed size
-      (`check-deployed-verifier.sh` fails until `raw` equals the deployed module).
-- [ ] On a re-baseline, everything in §3.5.
+- [ ] **`swiftsync-verify-wasm/README.md`** size and sha256 if the wasm changed (`check-deployed-verifier.sh`
+      fails until its `raw` figure equals the deployed module).
+- [ ] On an id change, everything in §3.5.
 
-### 3.2 Cutting it: `scripts/release.sh`
+### 3.2 Cutting it: `scripts/release.sh` (as run for v0.24.0)
 
 ```bash
-./scripts/release.sh vX.Y.Z --dry-run                   # preflight + build + gate; publishes nothing
-NOTES=<notes file> ./scripts/release.sh vX.Y.Z          # the release
-./scripts/release.sh vX.Y.Z --verify-only               # resume at signing for a published, unsigned release
+gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true   # FIRST, on the release commit (Windows host)
+RUSTUP_TOOLCHAIN=1.99.0 ./scripts/release.sh vX.Y.Z --dry-run         # preflight + build + gate; publishes nothing
+RUSTUP_TOOLCHAIN=1.99.0 NOTES=docs/RELEASE_NOTES_vX.Y.Z.md ./scripts/release.sh vX.Y.Z   # the release
+./scripts/release.sh vX.Y.Z --verify-only                              # resume at signing for a published, unsigned release
 ```
 
-The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$` (also enforced by `release-sign.yml`). The
-script is resumable; each phase skips work already done.
+`RUSTUP_TOOLCHAIN=1.99.0` is what makes step 3's wasm byte-identical to the published `446fdaeb…` (§2); the
+script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$` (also enforced by
+`release-sign.yml`). The script is resumable; each phase skips work already done.
 
 1. **Preflight.** Clean tree; `HEAD == origin/main`; tag free locally and on origin; `check-versions.sh`
-   passes; at least one passing and no failed CI run on `HEAD` (a run whose only failure is
-   `deployed-verifier` is not counted: it tests the live site, red until a re-baseline is deployed);
-   `docker` present; **≥ 25 GB free**.
-2. **Build hosts**: `prover/build-release.sh cpu` and `cuda`, with `SKIP_GROTH16=1` and `RZUP_TIMEOUT`
-   defaulting to 7200. A staged host is reused only if `dist/.built-from-<asset>` equals `HEAD` **and** it
-   carries the canonical id.
-3. **Package** (`scripts/package-release.sh` with `TAG`): `hazync-worker` (`VERSION` stamped from the tag and
-   asserted), `hazync-coordinator.py`, `hazync-run-workers.sh`, and `hazync-verify.wasm` only if a
-   `wasm32-unknown-unknown` target is installed (otherwise it warns; stage a wasm built elsewhere in `dist/`).
-   The x86_64 verifier is built unless the staged one already contains the canonical id.
-4. **Gate** (`scripts/check-dist.sh dist`): every staged artifact must belong to the canonical guest. A CUDA
-   host that cannot run on the box is checked by its bytes (`scripts/embeds-method-id.sh`), or, stronger, by
-   `HAZYNC_ATTEST_hazync_host_x86_64_linux_gnu_cuda=<id measured on a GPU>`.
-5. **Publish.** Annotated tag pushed, then `gh release create` with **all seven** assets in one call:
-   `release-sign.yml` signs what is attached at publish and picks up nothing later.
-6. **Wait for signing**: the `Sign release` run whose `headBranch` is the tag. On failure or timeout the
-   script prints how to re-run it and keep `latest` on the last signed release.
-7. **Manifest**: `SHA256SUMS.txt` must list the seven assets plus `hazync-verify-aarch64`;
+   passes; at least one passing and no failed CI run on `HEAD` (cancelled runs count as neither);
+   `docker`, `gh`, `node`, `python3` present; **≥ 25 GB free**; `reproduce/METHOD_ID` equals the
+   `libzync-product mainnet` id of `reproduce/LIBZYNC_IDS`.
+2. **Build the Linux hosts**: `prover/build-release.sh cpu` and `cuda`, with `SKIP_GROTH16=1` and `RZUP_TIMEOUT`
+   defaulting to 7200. **A prebuilt host is accepted** (not rebuilt) when `dist/.built-from-<asset>` equals `HEAD`
+   **and** it carries the canonical id: asked with `method-id` where it runs, read from its bytes
+   (`scripts/embeds-method-id.sh`) where it cannot (the CUDA host on a box with no driver).
+   `build-release.sh` stages the published mainnet ELF at `dist/.libzync-guest/mainnet.bin` (or set
+   `HAZYNC_GUEST_ELF`).
+3. **The Windows host** (step 2b): never built here. `scripts/windows-host.sh fetch <HEAD> …` takes the
+   `hazync-host-windows-x86_64-cuda` artifact of a `windows-prove.yml` run **of this commit** whose `build-cuda`
+   job passed, checks that the zip holds only `host.exe` + `cudart64_*.dll`, that `host.exe` embeds the published
+   guest byte for byte and carries the image id, and zips it as `hazync-host-x86_64-windows-cuda.zip`.
+   Artifacts expire after 14 days, so dispatch the workflow close to the release.
+4. **Package** (`scripts/package-release.sh` with `TAG`): `hazync-worker` (`VERSION` stamped from the tag and
+   asserted), `hazync-coordinator.py`, `hazync-run-workers.sh`, `hazync-verify.js` (from
+   `swiftsync-verify-wasm/swiftsync-verify.js`) and `hazync-verify.wasm` via `swiftsync-verify-wasm/build.sh`, only
+   if a `wasm32-unknown-unknown` target is installed (otherwise it warns; stage a wasm built elsewhere in `dist/`).
+   The x86_64 verifier (`swiftsync-verify`) is built every time.
+5. **Gate.** `dist/` must hold **exactly** the nine `release` assets of `scripts/release-assets.txt`, nothing
+   else: it is not cleaned between releases, so move stray files out first. Then `scripts/check-dist.sh dist`:
+   every staged artifact must belong to the canonical guest. The CUDA host, if it cannot run here, is **checked
+   from its bytes** unless an operator passes `HAZYNC_ATTEST_hazync_host_x86_64_linux_gnu_cuda=<id measured on a
+   GPU>` (preferred; the bytes must still agree). The Windows zip is checked from its bytes;
+   `HAZYNC_ATTEST_hazync_host_x86_64_windows_cuda_zip=<id>` may be passed by an operator who ran it. Then
+   `scripts/check-release-verifiers.sh dist` runs the staged verifiers on the real mainnet 1..200 receipt and on
+   tampered copies.
+6. **Publish.** Annotated tag pushed, then `gh release create` with **all nine** assets in one call
+   (`release-sign.yml` signs what is attached at publish and picks up nothing later); the release is read back
+   and must carry exactly those nine, each the staged size.
+7. **Wait for signing**: the `Sign release` run whose `headBranch` is the tag. It builds `hazync-verify-aarch64`,
+   checks it (under qemu) with `check-release-verifiers.sh --cli`, and adds `SHA256SUMS.txt` and `.asc`. On
+   failure or timeout the script prints how to re-run it and keep `latest` on the last signed release.
+8. **Manifest**: `SHA256SUMS.txt` must list the nine assets plus `hazync-verify-aarch64`, with the staged files'
+   hashes; the release must carry exactly the **12** assets of `scripts/release-assets.txt`;
    `SHA256SUMS.txt.asc` should verify (reported, not fatal, if the key is not imported locally).
-8. **`latest`**: set `make_latest`, read `/releases/latest` back, then download
+9. **`latest`**: set `make_latest`, read `/releases/latest` back, then download
    `/releases/latest/download/hazync-verify-x86_64-linux-gnu` until it contains the canonical id.
 
-**`release-sign.yml`** (on `release: published`, or `workflow_dispatch` with a tag): builds
-`hazync-verify-aarch64` from the tag, asserts its embedded id and attaches it; downloads the `hazync-*`
-assets, fails if any would be left out, writes `SHA256SUMS.txt`, signs it with the `GPG_PRIVATE_KEY` secret,
-uploads `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`. The aarch64 verifier is not committed (#85); a gate fails if
-anything guest-dependent is committed under `verifier/dist/`.
+Check the count yourself afterwards:
 
-**Not automated, still required:** smoke-test the CUDA host on a real GPU (`method-id`, `regress`,
-`prove-block`), and repoint running provers (`run-workers.sh` checks the id only at startup, #99).
+```bash
+gh release view vX.Y.Z --json assets --jq '.assets|length'    # want 12
+```
+
+**`release-sign.yml`** (on `release: published`, or `workflow_dispatch` with a tag): builds
+`hazync-verify-aarch64` from the tag, asserts its embedded id, runs it on the real and tampered receipts, and
+attaches it; downloads the `hazync-*` assets, refuses unless they are exactly `scripts/release-assets.txt` at the
+tag, writes `SHA256SUMS.txt`, signs it with the `GPG_PRIVATE_KEY` secret, uploads `SHA256SUMS.txt` and
+`SHA256SUMS.txt.asc`.
+
+**The CUDA kernels' targets.** `prover/build-release.sh` sets `NVCC_FLAGS` to native SASS for sm_80, 86, 89, 90 and
+100 plus compute_100 PTX. Cards outside that list run from the PTX: Blackwell workstation and server cards such as
+the **RTX PRO 6000 (sm_120)** JIT-compile the kernels on the **first prove of a fresh machine** (about 10 minutes),
+then use the driver's cache. Adding a target costs build time (ptxas assembles each architecture in turn, ~6–7 min
+per kernel file, per the script's note) and was not done for v0.24.0.
+
+**Not automated, still required:** smoke-test the CUDA hosts on a real GPU (`method-id`, then
+`host libzync-prove-range 1 1 testdata/libzync/mainnet genesis out && host libzync-verify out/block_1.rcpt`, as
+`release.sh` prints), and repoint running provers (`run-workers.sh` checks the id only at startup, #99).
 
 ### 3.3 Verifying the published assets
 
@@ -340,16 +404,19 @@ grep -ac <old-id> v    # want 0
 
 Served at `https://hazync.org/verify/` (from `hazync/hazync-web`). A stale module has the same size and
 exports as a correct one, so it is caught only by calling it. Deploy after every release whose
-`hazync-verify.wasm` differs from the deployed one, and on a re-baseline in the **same cutover** as the
-coordinator binary swap and board reset (earlier rejects the live old board; later rejects the new one).
+`hazync-verify.wasm` differs from the deployed one (every v2 release so far: a new RISC Zero version or image moves
+it), and on an id change in the **same cutover** as the coordinator binary swap and board reset (earlier rejects the
+live old board; later rejects the new one). Since v0.23.0 the module is the libzync verifier
+(`swiftsync-verify-wasm`), and its glue `hazync-verify.js` has the libzync API (`loadVerifier`, `verify({network,
+image, receipt})`, `imageId(network)`), not v1's: serve the release's `.wasm` and `.js` **together**.
 
 Note: the source says "both sites"; bitcoinghost.org/hazync was retired 2026-09-16, so hazync.org is the only
 site serving the verifier.
 
 **`hazync/hazync-web`** (its `README.md` lists the pins):
 
-1. Copy the verified wasm to `verify/hazync-verify.wasm`, and `verifier-wasm/hazync-verify.js` from this repo
-   at the tag to `verify/hazync-verify.js` if it changed.
+1. Copy the verified wasm to `verify/hazync-verify.wasm`, and the release's `hazync-verify.js` (this repo's
+   `swiftsync-verify-wasm/swiftsync-verify.js` at the tag) to `verify/hazync-verify.js`.
 2. Update the release version and wasm sha256 where pinned: `deploy/deploy.sh` (`want=` and its message),
    `tools/check.py` (`WASM_SHA` and its message), `README.md`, `devs/index.html` (hash, release link, and on a
    re-baseline the program-id table), `explorer/index.html` (release named beside the in-browser verifier).
@@ -369,15 +436,25 @@ If the loader changed, install `hazync-verify.js` beside it the same way (its pa
 served URL, not a deploy script).
 
 **Check over the wire:** `./scripts/check-deployed-verifier.sh` (hazync.org is the `HAZYNC_SITE` default).
-It requires: the served loader byte-identical to `verifier-wasm/hazync-verify.js`; the served wasm size equal
-to the release asset and `verifier-wasm/README.md`'s `raw`; `methodId()` and `/api/meta` equal to
-`reproduce/METHOD_ID`; the live spine verified as genesis-anchored in the served module; a one-bit-flipped
-spine not verified. `/api/spine/proof` measured 200 on 2026-09-14.
+It requires: the served loader byte-identical to `swiftsync-verify-wasm/swiftsync-verify.js`; the served wasm
+size equal to the release asset and `swiftsync-verify-wasm/README.md`'s `raw`; `imageId('mainnet')` and
+`/api/meta`'s `method_id` equal to `reproduce/METHOD_ID`; the live spine verified (verdict `ok` or `demo`) and
+genesis-anchored in the served module; a one-bit-flipped spine not verified. (`release.sh`'s closing message still
+says this script drives the v1 module; the script itself was rewritten for the libzync glue.)
 
 After the release: restart provers on the
 new binaries (on a re-baseline, purge their bundle caches, §3.5).
 
 ### 3.5 Re-baseline (the guest id changed)
+
+**Hazync v2.** The ids live in `reproduce/LIBZYNC_IDS` and `reproduce/METHOD_ID`. Pin new ones from two agreeing
+`reproduce/libzync.Dockerfile` runs with `python3 reproduce/pin-libzync-ids.py <ids file> <source commit>`, which
+also rewrites the verifier tables in `swiftsync-verify` and `swiftsync-verify-ffi`; and `check-versions.sh` checks the documented sites.
+The v2 board restarts from genesis on an id change, because every leaf bundle is stamped with the image that
+prepared it: for v0.24.0 (`863c9ce3` → `8888d59c`) that was step 0 of
+[`coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md). The rest of this section is the
+**v1** procedure (`rebaseline-id.sh` is now `history/scripts/rebaseline-id.sh`, the SNARK fixtures and v1 verifiers
+are under `history/`, and the bridge has no v2 counterpart), kept as the record.
 
 A guest change moves `METHOD_ID`; the coordinator then (correctly) rejects every proof on the board, which
 restarts from genesis. Batch guest changes deliberately.
@@ -489,6 +566,19 @@ the new `/api/meta` id, so update every worker's `HAZYNC_HOST` too.
 
 ## 4 · Release pitfalls (each broke or nearly broke a release)
 
+Hazync v2:
+
+- **The wasm's bytes depend on the host Rust.** Rust 1.99.0 gives the published `446fdaeb…`; 1.97.1 gives
+  `a3a85b7f…`. Release with `RUSTUP_TOOLCHAIN=1.99.0` until the toolchain is pinned in the repo (§2).
+- **`dist/` must hold exactly the release assets.** It is never cleaned, so a previous release's file or a stray
+  build output stops step 5 of §3.2; move it out rather than adding it to the list.
+- **The Windows host comes from a `windows-prove.yml` run of the release commit.** Dispatch it before releasing;
+  its artifact expires after 14 days.
+- **Blackwell workstation cards JIT on first prove.** The release CUDA host has no sm_120 SASS, so an RTX PRO 6000
+  spends about 10 minutes compiling PTX on its first prove on a fresh machine (§3.2). It is not a hang.
+
+Hazync v1 (record; several still apply to any release):
+
 - **Stale id read off an old binary** (v0.16.0, three times): exit code + mtime before `method-id` (§2).
 - **Non-canonical build paths** (2026-08-03): three ids from one tree; only `/hazync-zkvm` is publishable.
 - **Size/sha256/PGP do not detect a stale id**: check embedded id (§2).
@@ -499,8 +589,8 @@ the new `/api/meta` id, so update every worker's `HAZYNC_HOST` too.
   passing sha256 against their own manifest; only the embedded id told them apart (§3.3).
 - **CUDA release build needs ≥ 25 GB free** (`df -h /`; 21 GB is NOT enough): it went 21 → 4.4 GB at
   **3.7 GB/min** during the toolkit unpack, nearly filling root on a box running services. Reclaim with
-  `docker system prune -af` (5.3 GB), `/usr/local/cuda-13.x` (~4.8 GB; RISC0 3.0.5 kernels do not build against
-  13.x; `provision-vps.sh` installs 12.8 via `HAZYNC_CUDA_VER` in the container), `~/.hazync/receipts`
+  `docker system prune -af` (5.3 GB), `/usr/local/cuda-13.x` (~4.8 GB; the release build brings CUDA 12 in its
+  container because risc0-sys's kernels did not compile under CUDA 13, per `prover/build-release.sh`), `~/.hazync/receipts`
   (~3.7 GB for 17k; local copies only).
 - **groth16 is ~5 GB; set `RZUP_TIMEOUT` and `SKIP_GROTH16=1`.** `build-release.sh` forwards `RZUP_TIMEOUT`
   only when the caller sets it; at the default the download burns 3 x 300 s of retries (non-fatal: groth16 is a

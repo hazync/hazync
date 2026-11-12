@@ -3,8 +3,11 @@
 **For:** outside reviewers of libzync. What a proof states and how it is verified: [`SWIFTSYNC_PROOFS.md`](SWIFTSYNC_PROOFS.md).
 
 **Read at:** repo commit `bf8e60764` (branch `libzync`). Its `prover/`, `coinbase-smt/` and `libzync/` are clean, so the
-guest read here is that commit. These guest inputs are newer than `c1101a3`, the source of the image ids in
-`reproduce/LIBZYNC_IDS`, so those ids do not describe this guest. Bitcoin Core v28.0 `110183746` and libsecp256k1 v0.5.1
+guest read here is that commit (2026-11-01). It is OLDER than the frozen core c14 whose source the published ids in
+`reproduce/LIBZYNC_IDS` are built from (risc0 3.1.0 at `7dfb05b`: mainnet `8888d59c…`, signet `d4210dae…`). The rows
+were brought up to c14 by the later reviews and test passes they cite (the checkpoint row, the coin log, the
+96/96 rig on c13 and c14; ROADMAP H6, rounds 9-11 re-checked consensus completeness against Core v28). The
+whole table has not been re-read line by line at c14. Bitcoin Core v28.0 `110183746` and libsecp256k1 v0.5.1
 `642c885`, with the patches `scripts/libzync-base.sh` applies. `patches/` is unchanged since the byte-for-byte check of the
 patched files at `278c239cd`. In the Core tree read here only `crypto/sha256.cpp`, `hash.h`, `primitives/transaction.{h,cpp}`,
 `pubkey.cpp`, `script/interpreter.cpp` and `serialize.h` differ from v28.0, so `validation.cpp`, `pow.cpp`, `chain.h`,

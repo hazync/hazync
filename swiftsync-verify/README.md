@@ -1,6 +1,8 @@
 # `swiftsync-verify`: check a libzync chain proof, and facts about the chain it proves
 
-A standalone verifier for libzync proofs. No prover, no Bitcoin Core build, no GPU, no chain data. It checks that the
+A standalone verifier for Hazync v2 (libzync) proofs, shipped in releases as `hazync-verify-x86_64-linux-gnu` and
+`hazync-verify-aarch64` (and, built from `../swiftsync-verify-wasm`, as `hazync-verify.wasm`). It is built on RISC
+Zero 3.1.0 since v0.24.0, so it refuses every RISC Zero 3.0.x receipt, v0.23.0's included. No prover, no Bitcoin Core build, no GPU, no chain data. It checks that the
 receipt proves the chain from genesis (with its coin log, and with the product image its counting trie and live-coin
 hash), and checks facts given with it against the proven state: coins (`--coin`, `--journey`) and counting-trie facts
 (`--trie`: a coin unspent / spent by / absent under its script, a script's balance or complete history). A trie fact
@@ -35,14 +37,21 @@ swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --m
 from a prover run's trie snapshot; `zync-serve` serves them at `/trie/coin/<spk>/<txid>/<vout>`, `/trie/balance/<spk>`
 and `/trie/history/<spk>`. Each is checked against the verified state's trie root (`libzync::trie_fact`).
 
+**The header-chain zyncAPP.** `swiftsync-verify headers [--image <hex>] [--expect <h>:<hash>] [--now <t>]
+<receipt>...` checks a header-chain proof (`src/headers.rs`) against the `zyncapp-headers` image of
+`reproduce/LIBZYNC_IDS` (`2db34e12…` in v0.24.0). Without `--expect` the chain identity is not checked and the output
+says so. The whole chain from genesis to 975,278 is one such proof (`docs/RELEASE_NOTES_v0.24.0.md`).
+
 **Proof bundles.** `swiftsync-verify [--network ...] bundle <receipt> <out.sspf>` writes one file holding the
 receipt and a header naming network, image, height, tip, work and trie root (`docs/libzync/PROOF_BUNDLE.md`, version
 2). A bundle is accepted wherever a receipt is; its header is checked against the verified result and never trusted.
 
-**Test vectors** for this or any other verifier: `vectors/` (refusals only until the first GPU proofs of the frozen
-image; `python3 vectors/run_vectors.py <verifier>`).
+**Test vectors** for this or any other verifier: `vectors/` (13 cases, among them a real GPU proof of mainnet
+1..200 under `8888d59c`; `python3 vectors/run_vectors.py <verifier>`).
 
-**The image id is the trust root.** The built-in ids (`src/lib.rs`, `IMAGES`) are pinned at the image freeze. A
+**The image id is the trust root.** The built-in ids (`src/lib.rs`, `IMAGES`) are the published ones of
+`reproduce/LIBZYNC_IDS` (v0.24.0: mainnet `8888d59c…`, signet `d4210dae…`), written by
+`reproduce/pin-libzync-ids.py`. A
 reader should rebuild M from the published commit and pass it with `--image <hex>` rather than trust this file.
 `--image` is printed on the first line of the output.
 

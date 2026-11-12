@@ -1,0 +1,36 @@
+The first Hazync v2 proving run on the public board (api.hazync.org), 2026-11-12.
+
+WHAT
+  Release v0.24.0 (image 8888d59c, RISC Zero 3.1.0), the board freshly restarted from genesis that morning
+  (coordinator/deploy/libzync/SWITCH.md). Four RunPod pods, each one NVIDIA RTX PRO 6000 Blackwell Server
+  Edition at $2.49/h ($9.96/h in all), SECURE cloud, running the release's hazync-worker through
+  hazync-run-workers.sh against https://api.hazync.org. One pod MODE=mixed (prove + fold + spine), three MODE=prove.
+  The driver ran on the release box under systemd, stopped at 150 min, harvested every pod's logs, then terminated
+  each pod by its captured id (pods left: none).
+
+TIMELINE (UTC, from the driver log)
+  06:49:36  4 pods deployed            06:54:37  booted 4/4 (signed SHA256SUMS, GPU smoke of block 1, id 8888d59c)
+  06:55:07  first workers launched     09:26:51  run over; 09:27:29 all four terminated
+
+MEASURED (coordinator database: per-block ranges verified 06:55:34 .. 09:27:12)
+  blocks proven            1,287 (genesis to 1,287 contiguous at the end: frontier 1,283 a minute later)
+  folds                    192;  genesis-anchored spine to block 344
+  wall time proving        2 h 32 min  ->  ~510 blocks/h on average; ~530 blocks/h once orphaned claims were cleared
+  per block, per card      ~22-27 s (block 1 on one card: 21.6-22.0 s, three timed runs; not JIT: a 4 GB CUDA cache changed nothing)
+  spend                    $27.13 RunPod balance ($40.61 -> $13.48), boot and the ~10 min first-prove kernel JIT included
+  per block                ~$0.021
+
+WHAT THE RUN TAUGHT (each measured in this run)
+  - Per-key claim cap. CLAIM_OPEN_MAX (default 4) limits open claims per key. Nine workers on one key proved ~100
+    blocks/h until it was raised (12, then 24) for the run; it is back to 4.
+  - The GPU lock. With HAZYNC_GPU_LOCK=none and six workers, one pod accepted 7 blocks in 5 min against 15 on each
+    locked pod; peak GPU memory 25 GB. Early blocks are fixed per-block proving (trie ~0.26 M + aggregate ~3.1 M
+    cycles + recursion), not GPU-bound; more workers or no lock do not help, more cards do.
+  - Orphaned claims. Restarting a pod's workers mid-run left their claims on the shared key; such a claim looks alive
+    for up to CLAIM_TTL (60 min) and the frontier stopped at each one (105, then 107..111, 118, ...). Proving the
+    orphaned blocks directly (`hazync-worker run <n>`) cleared them; the frontier went from 110 to 792.
+  - sm_120. The release CUDA host has no native RTX PRO 6000 (sm_120) kernels; the first prove on each fresh pod
+    JIT-compiled from compute_100 PTX for ~10 min (the GPU smoke's 600 s timeout was hit once and retried).
+
+NOT MEASURED HERE
+  Later, fuller blocks: early blocks hold one coinbase each, so these rates and costs are a floor, not a forecast.

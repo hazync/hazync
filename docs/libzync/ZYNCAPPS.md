@@ -1,10 +1,14 @@
 # zyncAPPs: building on the core proof
 
-Status: two zyncAPPs are built in `prover/zyncapps` (ROADMAP B5, K1): `coin` (version 2, image 3f503000: a coin, given by its
-fields, which the guest hashes to its leaf and commits, unspent or spent at the core
-tip, the core receipt verified in the zkVM) and `headers` (the header chain from genesis, executed on real headers,
-not yet proved); `zeroconf` (D5) is being built; the rest is design. The core facts in §2 exist in `ChainState`
-version 2 (SWIFTSYNC_PROOFS.md §3, HANDOVER.md §2); the shared check of §4 is `libzync::facts::check_core_statement`.
+Status (2026-11-12): two zyncAPPs are built in `prover/zyncapps` (ROADMAP B5, K1). `headers` (the header chain from
+genesis) is **published and proved**: image `2db34e12…` (risc0 3.1.0, `reproduce/LIBZYNC_IDS`), genesis..975,278 in
+one receipt (59.4 min on one RTX PRO 6000), kept at the tip by `hazync-headers-follow`, checked in the browser at
+hazync.org `/headers/`. `coin` (version 2: a coin, given by its fields, which the guest hashes to its leaf and commits,
+unspent or spent at the core tip, the core receipt verified in the zkVM) is built and tested on laptop images
+(`3f503000`, risc0 3.0.5); no `coin` id is published. hazync.org `/zapp/` (Coin check) does not use that guest: it
+checks counting-trie balance and history facts (§2, §8) against the fixed mainnet 1..200 core proof in the browser.
+`zeroconf` (D5) is being built; the rest is design. The core facts in §2 exist in `ChainState` version 2
+(SWIFTSYNC_PROOFS.md §3, HANDOVER.md §2); the shared check of §4 is `libzync::facts::check_core_statement`.
 
 ## 1. Core and zyncAPPs
 

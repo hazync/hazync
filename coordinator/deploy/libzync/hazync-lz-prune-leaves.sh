@@ -10,14 +10,14 @@
 #
 # Exit codes follow the check contract: 0 done, 2 could not check (coordinator unreachable or no frontier).
 #   LEAVES   leaf bundle directory (default /srv/bulk/libzync-board/leaves)
-#   COORD    the libzync coordinator (default http://127.0.0.1:8900)
+#   COORD    the libzync coordinator (default http://127.0.0.1:8899, the public port since the switch)
 #   MARGIN   blocks below the frontier to keep (default 1000)
 #   KEEP     leaf bundles kept for good, comma-separated heights (default 1: block 1's bundle is what the worker's
 #            `selftest` and the sponsor bot's pod GPU smoke prove, a few KB)
 #   --apply  delete (without it: report what would go)
 set -uo pipefail
 LEAVES="${LEAVES:-/srv/bulk/libzync-board/leaves}"
-COORD="${COORD:-http://127.0.0.1:8900}"
+COORD="${COORD:-http://127.0.0.1:8899}"
 MARGIN="${MARGIN:-1000}"
 KEEP="${KEEP-1}"
 APPLY=0; [ "${1:-}" = --apply ] && APPLY=1

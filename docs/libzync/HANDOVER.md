@@ -1,10 +1,12 @@
 # libzync: image handover and the block forest
 
-Status: merged into `libzync`. Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
+Status: in the frozen core c14 and so in every published image (v0.24.0, risc0 3.1.0: mainnet `8888d59c…`, signet
+`d4210dae…`). No handover has been used yet: every `lineage/*.rs` list is empty, so published proofs carry a zero
+`lineage`. Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
 `aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
 implementation written from this document.
 
-Both features change `ChainState`, so they go in before the image freeze.
+Both features change `ChainState`, so they went in before the image freeze (c14, 11-07).
 
 ## 1. Why
 
@@ -162,13 +164,13 @@ Added to the steps in SWIFTSYNC_PROOFS.md §5:
 
 ## 7. Limits
 
-- Proofs made before this format do not decode. The old real receipts in `swiftsync-verify/vectors` are retired until
-  a real proof exists on this format.
+- Proofs made before this format do not decode. Real proofs on this format now exist: `swiftsync-verify/vectors`
+  holds mainnet 1..200 under `8888d59c` (and v0.23.0's 3.0.5 proof, kept as a vector that must be refused).
 - An anchored demonstration run has no real block history. The host fills placeholder roots of the right size and warns.
   Such a proof can only ever be DEMO, and its forest does not commit to real history.
 - An image can only name a predecessor whose final id is known. Publishing an id means freezing that image's source.
 
-## 8. Tested and measured (2026-11-02)
+## 8. Tested and measured (2026-11-02; on pre-freeze images, risc0 3.0.5)
 
 **Regtest handover, `experimental/libzync-bench/handover/run.sh`, dev mode** (rules execute, nothing proved; output in
 `run_regtest.out`). Image O (`e9b6ca6e…`, empty lineage) proves blocks 1–100 from genesis; image N (`e7f2e7bc…`, O

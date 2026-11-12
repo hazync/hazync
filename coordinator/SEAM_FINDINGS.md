@@ -75,6 +75,17 @@ python3 seam_fuzz.py --control  # weakened (pre-H9) — expect ">0 findings" (ha
 python3 parse_fuzz.py 300000    # untrusted-input handlers — expect "0 findings"
 ```
 
+## Hazync v2 (a libzync coordinator)
+
+This fuzzing (2026-07) was done for Hazync v1's boundary metadata. The v2 board (`HAZYNC_LIBZYNC=1`) runs the same
+`_frontier_chain`, but a libzync host's `verify-any` reports **link digests** as the tips (`in_tip` = the receipt's
+`anchor_id`, the digest of the state before `lo`; `out_tip` = the digest of its own end state), and it is told the
+claimed `lo` and checks it: the state before `lo` is genesis for `lo = 1`, else the `prev` of `leaf_<lo>.bin`
+(`prover/host/src/lz_coord.rs`). A join's guest requires the right range's anchor to be the left's state, so two
+ranges chain on the board exactly when they would join. ⚠ A libzync host prints `range_work=0`
+(`lz_coord.rs`), so the most-work rule below does not arbitrate between v2 chains; that case has not been analysed
+here. The harness has not been re-run against v2-shaped rows.
+
 ## Honest limits
 
 - This fuzzes the **chaining logic only**. It assumes the boundary digest from `verify-any` is a

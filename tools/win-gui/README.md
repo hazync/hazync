@@ -1,6 +1,7 @@
 # Hazync on Windows — a GUI for the prover
 
-A window that runs the prover, for people who do not use a terminal.
+A window that runs the prover, for people who do not use a terminal. It drives Hazync v2 (the libzync engine):
+the canonical image it checks for is v0.24.0's mainnet `8888d59c…` (`supervisor.py`, `CANONICAL_METHOD_ID`).
 
 ```
 python hazync_gui.py
@@ -12,13 +13,13 @@ Needs Python 3.8+ with `tkinter` (bundled with the python.org installer) and `cr
 ## Getting it onto a Windows machine
 
 ```
-git clone --depth 1 --filter=blob:none --sparse -b feat/windows-gui https://github.com/hazync/hazync
+git clone --depth 1 --filter=blob:none --sparse https://github.com/hazync/hazync
 cd hazync
 git sparse-checkout set tools/win-gui
 cd tools/win-gui
 ```
 
-Then **double-click `Hazync.bat`**. It finds Python, says what to install if there is none, and opens
+(The GUI is on `main`.) Then **double-click `Hazync.bat`**. It finds Python, says what to install if there is none, and opens
 the window with no console behind it.
 
 The window opens on **Home**, which is the whole program for most people:
@@ -43,12 +44,17 @@ the machine tests, the technical log, paths, the CPU/GPU choice and your key.
 | `host.exe method-id` prints the then-canonical CORE id `37987b85…` (since superseded) on real hardware | ✅ measured 2026-10-04, GTX 1050 Ti |
 | `host.exe regress` — full consensus path (the CORE host; gone from the libzync host) | ✅ measured, same machine |
 | **libzync CUDA** host proves mainnet leaves on a real GPU under WDDM (blocks 170 and 400,000), verified on Windows and Linux | ✅ **measured 2026-11-09, RTX PRO 6000** (`experimental/libzync-bench/windows/`) |
-| **CPU** build proves a block on Windows | ✅ measured |
+| The libzync Windows CUDA host is a **release asset** (`hazync-host-x86_64-windows-cuda.zip`: `host.exe` + `cudart64_12.dll`), built by `windows-prove.yml` and checked by `scripts/release.sh` | ✅ since v0.23.0; v0.24.0 is the current one |
+| **CPU** build proves a block on Windows | ✅ measured (v1 host) |
 | This GUI opens and works on Windows | ✅ **tested on Windows Python 3.13** |
-| This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`** |
-| **CUDA** build proves a block on Windows | ⛔ **never completed — and now we know why** |
+| This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05 with the v1 host: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`**; not yet re-run with the libzync host |
+| v1 (CORE) **CUDA** build proves a block on a GTX 1050 Ti | ⛔ never completed: the card is below the prover's floor (below) |
 
-### Why CUDA proving fails, and what it is not
+The CUDA host needs a card of **compute capability 7.0 or newer**. Release CUDA hosts carry native code for sm_80
+to sm_100 (`prover/build-release.sh`); a newer card such as the RTX PRO 6000 (sm_120) compiles the kernels from PTX
+on its first prove on a fresh machine (about 10 minutes, then cached), so a long silent first prove is expected.
+
+### v1 history: why CUDA proving failed on a GTX 1050 Ti
 
 ⛔⛔ **It is a CARD-SUPPORT question, not a Windows one.** Measured 2026-10-05 on a GTX 1050 Ti with
 a build that prints the GPU's own error before discarding it:
@@ -68,8 +74,8 @@ The enumerator above it keeps only `prop.major >= PROP_MAJOR_MIN`, and sppark se
 question for weeks. Two theories — out of memory, and a PTX/arch mismatch — were both wrong, because
 both assumed the GPU had been accepted at all.
 
-⇒ **Native Windows CUDA proving is UNTESTED, not broken.** It has never run on a card sppark
-accepts. Testing it needs **compute capability 7.0 or newer**.
+⇒ It was **untested, not broken**: it had never run on a card sppark accepts. It has since run on one: the
+libzync CUDA host proved mainnet blocks 170 and 400,000 on an RTX PRO 6000 under WDDM (2026-11-09, row above).
 
 With `HAZYNC_SPPARK_MIN_MAJOR=6` (a build from 2026-10-05 or later) the 1050 Ti IS accepted —
 `cooperativeLaunch=1`, so that second condition was never the obstacle — and then fails further in,
@@ -98,9 +104,7 @@ Two theories were tested and **killed**: it is not out of memory (`HAZYNC_SEG_PO
 instantly and identically on an idle 4 GB card) and not an arch mismatch (the card *is* the `sm_61`
 the binary embeds natively). Open: the build used CUDA 12.9.1 against a driver reporting 12.7.
 
-⇒ **So today this GUI is useful for the CPU path** and for everything around proving — checking a
-binary is canonical, managing identity, supervising workers, surfacing errors. The CUDA path is an
-open question, and that is said here rather than discovered by a user.
+What this section left open (the Pascal NTT failure) is moot for the prover's floor of 7.0 and was not pursued.
 
 ## What is in the window
 
@@ -129,7 +133,7 @@ The **Prove** tab has two buttons that run what you would otherwise type:
 
 | | |
 |---|---|
-| Is this prover genuine? | `method-id` — must print the canonical libzync id (`8888d59c…`) or proofs are rejected; runs at startup |
+| Is this prover genuine? | `method-id` — must print the canonical libzync id (`8888d59c…`) or proofs are rejected; runs at startup. ⚠ Where `method-id` cannot run (a CUDA `host.exe` on a machine with no NVIDIA driver), the fallback reads the embedded guest from the file, pinned by `GUEST_SHA256` and `GUEST_SIZE` in `supervisor.py` to the published mainnet guest of `reproduce/LIBZYNC_IDS` (`ded6f884…`, 70,191,408 bytes; it was the v1 guest until 2026-11-12 — checked against the v0.24.0 `host.exe`, which it now matches). A new image means updating both |
 | Can it actually prove? | the client's `selftest` — checks the prover against the board, verifies a real board proof, then proves mainnet block 1 for real from the board's leaf bundle |
 
 ⭐ **No block is claimed and nothing is submitted.** The selftest fetches block 1's bundle and a board proof
@@ -174,25 +178,17 @@ split exists. The logic is tested against the **real** Windows `host.exe` (via W
 A Linux contributor runs three things: the `host` binary, the `hazync-worker` Python CLI, and
 `run-workers.sh` — a supervisor loop that starts N workers, retries transient failures and stops on a
 configuration failure. **This GUI replaces the third.** The host binary and the worker are used
-exactly as they ship, because `hazync-worker` is a release asset whose source is not in this
-repository and a forked worker would drift from the one the fleet runs.
+exactly as they ship (the worker's source is `coordinator/hazync`), because a forked worker would drift from the
+one the fleet runs.
 
 ## The four Windows gaps in `hazync-worker`
 
-| gap | fixed from outside the worker? |
+| gap | status |
 |---|---|
-| module-level `import fcntl` — the worker **dies at startup** | ✅ `winshim/fcntl.py` on `PYTHONPATH` |
+| module-level `import fcntl` — the worker **died at startup** | ✅ fixed in the worker (hazync#616: `fcntl` or `msvcrt`); `winshim/fcntl.py` on `PYTHONPATH` covered older workers |
 | `/tmp/hazync-gpu.lock` — a POSIX path | ✅ `HAZYNC_GPU_LOCK` |
-| hardcoded `hazync-host-x86_64-linux-gnu[-cuda]` | ✅ `HAZYNC_HOST` |
-| `os.killpg(…, SIGKILL)` ×2 | ⛔ **no** |
-
-⚠ The `import fcntl` one is not a graceful degradation. `gpu_lock()` has an
-`except OSError: proceed rather than refuse to work` fallback that *looks* like it would cope, but
-the import fails first, so the worker never starts at all.
-
-⛔ **Residual risk:** `os.killpg` has no Windows equivalent and sits on the stall/timeout path, so a
-hung worker will raise `AttributeError` instead of killing its child cleanly. That needs the worker's
-source. Not papered over — recorded here.
+| host names searched are the Linux ones (`hazync-host-x86_64-linux-gnu[-cuda]`, …) | ✅ `HAZYNC_HOST` |
+| `os.killpg(…)` on the stall/timeout path | ✅ fixed in the worker (hazync#616): on Windows it uses `taskkill /F /T`, which the worker itself marks **untested on Windows** |
 
 ⭐ The shim is a **real** lock (`msvcrt.locking`), not a stub, so `gpu_lock()` keeps serialising GPU
 work across workers. A no-op would have let N workers share one card with no serialisation, which on
@@ -265,17 +261,18 @@ raises `RuntimeError: main thread is not in main loop`, intermittently, dependin
 Scheduling with `after()` from a thread is the same class of bug. Worker threads now snapshot every
 variable before they start and post results back through a queue drained on the main thread.
 
-## The one thing it cannot fetch for you
+## Getting the prover
 
 `hazync-worker` is a public release asset and downloads with no login (measured: HTTP 200
-unauthenticated), so the Setup tab just gets it. The Windows **prover** is not a release asset — it
-exists only as a CI artifact, and GitHub refuses to serve build artifacts anonymously even for a
-public repository. So that one download stays manual.
+unauthenticated), so the Setup tab just gets it. Since v0.23.0 the Windows **prover** is one too:
+download `hazync-host-x86_64-windows-cuda.zip` from the latest release (v0.24.0) and "Extract All" in Downloads or
+your home folder; the GUI searches one folder level under both for `host.exe`. ⚠ The GUI does not fetch it itself
+yet: its Setup step names the release zip and asks you to extract it and point at `host.exe`.
 
-`./publish_host_asset.sh` fixes that permanently: it finds the newest successful `windows-prove`
-run, **verifies the embedded guest before publishing anything**, and attaches the binary to a
-clearly-marked prerelease. It is a dry run unless you pass `--publish`, because publishing is
-outward-facing and this project does not cut releases without going through their contents.
+`./publish_host_asset.sh` is now only for a build **between** releases: it finds the newest successful
+`windows-prove` run, **verifies the embedded guest** (the published mainnet guest of `reproduce/LIBZYNC_IDS`, so it
+needs `HAZYNC_GUEST_ELF=dist/.libzync-guest/mainnet.bin`) before publishing anything, and attaches the binary to a
+clearly-marked prerelease. It is a dry run unless you pass `--publish`.
 
 ## Packaging
 
@@ -291,9 +288,9 @@ pyinstaller --clean --noconfirm hazync-gui.spec
 
 ## Not done yet
 
-- Never run on Windows. The logic is tested; the window is not.
-- No packaging. Needs a Python install today; PyInstaller would remove that, and matters if this is
-  ever aimed at people who have not installed Python.
+- Fetching the Windows prover from the release (above), and updating the embedded-guest pin in `supervisor.py`
+  to v0.24.0's guest.
+- A full prove under this window with the libzync host and a GPU.
 - No identity/key onboarding. Claims are signed, so a newcomer needs a key — `hazync-worker id`
   and `rotate` exist, and the GUI only displays what they report.
-- `os.killpg` on the stall path, above.
+- The worker's Windows kill path (`taskkill /T`) is untested on Windows, above.

@@ -1,9 +1,17 @@
-# libzync: roadmap to the freeze and beyond (11-03)
+# libzync: roadmap to the freeze and beyond (started 11-03, status updated 2026-11-12)
+
+libzync is the engine of Hazync v2 (Hazync v1, the original Core design, is in [`docs/history/`](../history/)).
+**Where it stands on 2026-11-12:** v0.24.0 is released on RISC Zero 3.1.0 (images `8888d59c` mainnet, `d4210dae`
+signet, `2db34e12` header chain; `reproduce/LIBZYNC_IDS`); v0.23.0 (`863c9ce3`, 3.0.5) is withdrawn. The public
+board switched to v2 on 2026-11-12 and restarted from genesis (N2). The header chain is proved in one receipt and
+followed at the tip on CPU (K1, N3). zyncAPP pages are live on hazync.org (R4). The Windows CUDA host proves natively
+(R3). What is still open is in **N** and **O** at the end. Entries below keep the dates and image ids they were
+written with: an id other than those three is a historical (3.0.5 or laptop-built) image.
 
 Everything built, discussed or promised so far, in build order. Status words: **done**, **building**, **next**,
 **experiment** (built behind a flag, measured, then decided).
 
-⚠ **Testing policy until phase H:** unit tests and compiles only. No long suites (rig, handover, signet from genesis)
+⚠ **Testing policy until phase H (historical: phase H is done):** unit tests and compiles only. No long suites (rig, handover, signet from genesis)
 until everything is built and reviewed; then one full test pass on the final image.
 
 ## A. Chain identity
@@ -25,7 +33,7 @@ refuse it.
 | B2 | host writes `history.bin`; `zync-path coin` / `find` produce coin facts | done |
 | B3 | coin journey: creating tx in a proven block, the coin leaf from its output, the spending tx (`zync-path journey`, `--journey`) | done |
 | B4 | `swiftsync-verify --coin / --journey`, wasm `verify_facts`, C ABI `swiftsync_verify_facts` | done |
-| B5 | zyncAPP `coin` guest (prover/zyncapps): unspent/spent at the core tip, core receipt verified in the zkVM; image 26e09637 | done. ⚠ (round 11) it commits the LEAF it checked, so "unspent" is about that 32-byte leaf: a spent coin's flipped leaf also passes; a consumer must compare `coin` with its own `coin_leaf`. ✅ **11-07: version 2** (image 3f503000): the guest takes the coin's FIELDS (txid, vout, value, script, height, flags, creation MTP), computes the leaf and commits the fields (kind 0x5A430002; verify-coin refuses version 1); `prove-coin --preimage`, `--execute`; tested on mainnet 1..200 (spent coin, unspent coin, both mis-claims refused in the guest, wrong / missing preimage refused: `zcoin/RESULT_coin_v2.txt`) |
+| B5 | zyncAPP `coin` guest (prover/zyncapps): unspent/spent at the core tip, core receipt verified in the zkVM; image 26e09637 | done. ⚠ (round 11) it commits the LEAF it checked, so "unspent" is about that 32-byte leaf: a spent coin's flipped leaf also passes; a consumer must compare `coin` with its own `coin_leaf`. ✅ **11-07: version 2** (image 3f503000): the guest takes the coin's FIELDS (txid, vout, value, script, height, flags, creation MTP), computes the leaf and commits the fields (kind 0x5A430002; verify-coin refuses version 1); `prove-coin --preimage`, `--execute`; tested on mainnet 1..200 (spent coin, unspent coin, both mis-claims refused in the guest, wrong / missing preimage refused: `zcoin/RESULT_coin_v2.txt`). ⚠ 26e09637 / 3f503000 are laptop builds on risc0 3.0.5: no `coin` zyncAPP id is published or pinned for 3.1.0 (`reproduce/LIBZYNC_IDS` holds the core and header-chain ids only). The website's Coin check uses trie facts against a core proof, not this guest |
 
 ## C. Production host
 
@@ -61,18 +69,18 @@ refuse it.
 
 | # | item | status |
 |---|---|---|
-| F1 | port the `is_base` forgery fix and the BIP68 fix to `main` | draft PR #668 (merge + deploy: user) |
+| F1 | port the `is_base` forgery fix and the BIP68 fix to `main` | **closed as superseded**: #668 closed when libzync replaced the CORE guest on `main` (R1, R1a) |
 
-**Release: libzync onto `main` and the public infra (user, 11-07; a plan to agree, nothing cut).** Order to agree with
+**Release: libzync onto `main` and the public infra (user, 11-07). Status 11-12: R1-R4 done, R5 open.** Order to agree with
 the user; every release's contents are gone through with the user before it is cut.
 
 | # | item | what exists | what is left |
 |---|---|---|---|
-| R1 | merge `libzync` into `main` | `libzync` is 307 commits ahead, main 1 (#669). CI has never run on `libzync` (main + PRs only) | a PR from `libzync` (runs the whole CI for the first time: expect reds to fix), main's #669 merged in, F1 (#668) decided; the release (`release.sh`) builds and publishes the libzync host + the frozen image ids (H7, waits for the container builds) |
-| R1a | ⚖ **DECIDED 11-07 (user): libzync REPLACES CORE in the build (option a)** | the CORE guest's own sources differ on `libzync` (main.rs +739/-, verify_input.cpp +620, msm.rs removed, 28 files), so the merged tree can NOT rebuild the canonical CORE id 37987b85 (since superseded) and CI's `reproducible-image-id` (pinned to it) goes red | (a) RECOMMENDED: libzync replaces CORE in the build; CI pins the libzync ids (H7); CORE stays usable as its published release binary (37987b85) + a tag, which is all the paper's same-card CORE re-measure needs; (b) keep CORE buildable by restoring its guest files byte-identically as a separate crate (upkeep for an image nobody proves with) |
-| R2 | keep donations and **donate to prove** (sponsor a block range) | `server.py`: BTCPay invoices, sponsor holds and queue, the sponsor bot, `/api/donations`; all keyed by block ranges | check on a libzync coordinator (HAZYNC_LIBZYNC=1): a sponsored range is a run of leaves + joins, so the semantics carry over; run the sponsor / donation tests in libzync mode; the board text says libzync |
-| R3 | the Windows app, so anyone can help | `tools/win-gui` (GUI around the `hazync` worker; runs end to end on real Windows) | a Windows libzync host. ⛔ GPU proving on Windows is blocked by #631 (CUDA cooperative launch under WDDM, still open); CPU-only is slow (a modern leaf is ~9 GPU-minutes). Decide: fix #631 first, or ship Windows as CPU / small-block work + Linux for GPUs |
-| R4 | zyncAPP front ends on the website | the verifier in WASM (`swiftsync-verify-wasm`: coin, balance, history, absence facts against a core proof), `zync-serve` endpoints, two zyncAPPs (`prover/zyncapps`: coin, header chain) | a web page that fetches a fact + the core receipt and checks it in the browser (no trust in the server), one per zyncAPP; hosted with the board |
+| R1 | merge `libzync` into `main` | `libzync` is 307 commits ahead, main 1 (#669). CI has never run on `libzync` (main + PRs only) | a PR from `libzync` (runs the whole CI for the first time: expect reds to fix), main's #669 merged in, F1 (#668) decided; the release (`release.sh`) builds and publishes the libzync host + the frozen image ids (H7, waits for the container builds). ✅ **done**: merged as #670 (11-08); released as v0.23.0 (withdrawn) and v0.24.0 (11-12, risc0 3.1.0) |
+| R1a | ⚖ **DECIDED 11-07 (user): libzync REPLACES CORE in the build (option a)** | the CORE guest's own sources differ on `libzync` (main.rs +739/-, verify_input.cpp +620, msm.rs removed, 28 files), so the merged tree can NOT rebuild the canonical CORE id 37987b85 (since superseded) and CI's `reproducible-image-id` (pinned to it) goes red | (a) RECOMMENDED: libzync replaces CORE in the build; CI pins the libzync ids (H7); CORE stays usable as its published release binary (37987b85) + a tag, which is all the paper's same-card CORE re-measure needs; (b) keep CORE buildable by restoring its guest files byte-identically as a separate crate (upkeep for an image nobody proves with). ✅ **done, (a)**: CI's image checks read `reproduce/LIBZYNC_IDS` (`adversarial.yml`, `release-sign.yml`); CORE stays as release v0.22.1 (`37987b85`) |
+| R2 | keep donations and **donate to prove** (sponsor a block range) | `server.py`: BTCPay invoices, sponsor holds and queue, the sponsor bot, `/api/donations`; all keyed by block ranges | check on a libzync coordinator (HAZYNC_LIBZYNC=1): a sponsored range is a run of leaves + joins, so the semantics carry over; run the sponsor / donation tests in libzync mode; the board text says libzync. ✅ **done at the switch (11-12)**: the v2 board keeps claims, sponsorships and the sponsor bot (`HAZYNC_LIBZYNC=1`, ON again since 11-12; caps $50/run, $10/hr, 4 pods, pods under $1/hr) and the BTCPay drop-in (`coordinator/deploy/libzync/SWITCH.md` step 3); the v1 sponsorships and donations record stays in the read-only v1 database |
+| R3 | the Windows app, so anyone can help | `tools/win-gui` (GUI around the `hazync` worker; runs end to end on real Windows) | a Windows libzync host. ⛔ GPU proving on Windows is blocked by #631 (CUDA cooperative launch under WDDM, still open); CPU-only is slow (a modern leaf is ~9 GPU-minutes). Decide: fix #631 first, or ship Windows as CPU / small-block work + Linux for GPUs. ✅ **done**: the libzync CUDA host proves natively on Windows (RTX PRO 6000 under WDDM: block 170 in 319 s, 400,000 in 823 s, both verified on Linux; `experimental/libzync-bench/windows/RESULT_xesktop_rtxpro6000.txt`, measured on 3.0.5 image `863c9ce3`); shipped as the release asset `hazync-host-x86_64-windows-cuda.zip`, and the GUI's supervisor pins `8888d59c` (`tools/win-gui/supervisor.py`) |
+| R4 | zyncAPP front ends on the website | the verifier in WASM (`swiftsync-verify-wasm`: coin, balance, history, absence facts against a core proof), `zync-serve` endpoints, two zyncAPPs (`prover/zyncapps`: coin, header chain) | a web page that fetches a fact + the core receipt and checks it in the browser (no trust in the server), one per zyncAPP; hosted with the board. ✅ **done (11-12)**: hazync.org `/zapps/` (the list), `/headers/` (header chain), `/zapp/` (Coin check). Open: Coin check reads the fixed mainnet 1..200 proof, not the board's latest (O2) |
 | R5 | zyncAPPs as their own applications (Windows / Linux) | the C ABI (`swiftsync-verify-ffi`) and the CLI | a small desktop app per zyncAPP on the C ABI (or the WASM in a webview); packaging for both OSes |
 
 ## G. Docs
@@ -97,7 +105,8 @@ the user; every release's contents are gone through with the user before it is c
    gets the short pass (`SN=100 retest_final.sh`): the change touches no network rule or long-chain state.
    **c14 (bbf82800) GREEN on every step 11-06** (`handover/RESULT_c14.txt`): unit tests, rig 96/96, handover 16/16,
    mainnet 1..200 and signet 1..100 = both references with 0 panics, edge 10/10, cost vs c13 +2 aggregate cycles and
-   about -2,000 chunk cycles a block (<0.01%). **c14 is the freeze candidate** (reg 3036d379, regN fcde3e5a, sig 219215fb).
+   about -2,000 chunk cycles a block (<0.01%). **c14 is the freeze candidate** (reg 3036d379, regN fcde3e5a, sig 219215fb;
+   all laptop builds on risc0 3.0.5, historical).
 5. **GPU proving benchmarks** on the final image (user's trigger). Ready: run B (`gpu/gpu-libzync-multi.sh`, product image) dry-run on CPU
    with c10e12: hints 45 s (2 threads), execute check passes, EXPECT_CYCLES=64896838 (block 962,000 aggregate).
    **On c14: EXPECT_CYCLES=64896840** (the cost table, RESULT_c14.txt). ✅ **DONE 11-06** (`gpu/GPU_RESULTS.md`, $3.72):
@@ -138,10 +147,14 @@ the user; every release's contents are gone through with the user before it is c
 7. **Freeze: ✅ DECIDED by the user 11-07: c14 is frozen.** Guest source as of 9d28cd9 (unchanged through b732263);
    laptop-built ids c14m bbf82800 / sig 219215fb (regtest 3036d379 / fcde3e5a are test-only). The PUBLISHED ids are the
    reproducible container's (reproduce/libzync.Dockerfile; an id built elsewhere differs by design): built twice,
-   checked against the laptop image's behaviour, then pinned in reproduce/LIBZYNC_IDS and the verifiers (H7). ⏳ waiting
-   for space on C: (98% full; the user frees it first).
+   checked against the laptop image's behaviour, then pinned in reproduce/LIBZYNC_IDS and the verifiers (H7). ✅ done
+   (H7 below); since 11-11 the pinned ids are the risc0 3.1.0 rebuild of the same source (`8888d59c` / `d4210dae`).
 8. After freeze: container ids built twice, LIBZYNC_IDS + verifier IMAGES tables (cli/ffi/wasm), vectors regenerated
-   from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ⚠ review round 3 (11-05): until
+   from GPU run A, proposal page refresh. A full mainnet proof is the user's trigger. ✅ **status 11-12:** the
+   IMAGES tables hold `8888d59c` / `d4210dae` (`swiftsync-verify/src/lib.rs`, `swiftsync-verify-ffi/src/lib.rs`), the
+   header-chain id `2db34e12` (`swiftsync-verify/src/headers.rs`); vectors regenerated on 3.1.0
+   (`swiftsync-verify/vectors/mainnet_1_200_8888d59c*.rcpt`). Proof age: decided in step 6 (no expiry). Proposal
+   page refresh: not checked. A full mainnet proof: still the user's trigger; the board proves from genesis. ⚠ review round 3 (11-05): until
    then the built-in IMAGES (9f469930 / 067822b9, from c1101a3 10-31: ChainState v1, profile 1) verify NOTHING current,
    so OK is reachable only via `--image` / `image_hex`, and the table's `checkpoint_height: 970_000` describes an image
    with no checkpoint: replace both with the frozen product images (cli, ffi `IDS`, wasm `image_id`). Also decide a
@@ -218,14 +231,18 @@ with ~2.5-3 TB NVMe, 32 GB+ RAM, 8+ cores; prep is single-threaded today. Steps:
 3. per-block leaf bundles (item 8) written as prep goes: ✅ built + tested 11-07 (HAZYNC_PREP_LEAF_BUNDLES);
 4. a real recent block proved on real state over several GPUs, then the coordinator queue (e) for backfill.
 **H7 DONE 11-07** (`h7/RESULT_h7.txt`, tag `libzync-c14` = source ce4e1e3): two container builds on the bridge box
-agree, mainnet **863c9ce3**, signet **73b62530**, pinned in `reproduce/LIBZYNC_IDS` and the verifier tables; the
+agree, mainnet **863c9ce3**, signet **73b62530** (risc0 3.0.5; **superseded 11-11** by the 3.1.0 rebuild of the same
+source at `7dfb05b`: mainnet **8888d59c**, signet **d4210dae**, header chain **2db34e12**, two builds agree,
+`RESULT_risc0_3_1_gpu.txt`), pinned in `reproduce/LIBZYNC_IDS` and the verifier tables; the
 container ELF behaves as c14 (962,000 aggregate 64,896,840 cycles, identical; mainnet 1..200 states identical but
 `self_id`). ⚠ The laptop builds (bbf82800) differ by design (build paths): published proofs run the container ELF, and
 a prep run whose leaves are to be JOINED must run a host embedding it (its states carry `self_id`, which the join's
 link digest covers); the paper's single-leaf samples are unaffected (a leaf is a base step on an untrusted state).
 **11-08:** the coordinator-box prep run switched to a host embedding 863c9ce3 at the save point 378,500 (7089c3d:
 CONTINUE under another image re-stamps the saved state; test `prep/RESULT_restamp.txt`), so states and leaves from
-378,501 on are joinable; 1..378,500 need a windowed re-prep under 863c9ce3 for the genesis join tree.
+378,501 on are joinable; 1..378,500 need a windowed re-prep under 863c9ce3 for the genesis join tree. (Historical:
+`863c9ce3` was withdrawn 11-11. The board pass was restarted from genesis under `8888d59c`, SWITCH.md step 0. Which
+image the paper prep run's states now carry is not recorded here.)
 
 **Where it runs (user, 11-07): on the EXISTING bridge infrastructure, not a new server.** libzync prep is the
 libzync BRIDGE: the same role as `hazync-bridge` (archive node beside bitcoind, resident state, one bundle per block),
@@ -269,7 +286,9 @@ HAZYNC_LIBZYNC=1 serves `leaf_<h>.bin` (GENESIS_TIP = `host libzync-genesis-tip`
 leaves 1, 2 submitted, `hazync run 3-4` (2 leaves + 1 join) accepted, frontier 4 from genesis; wrong start heights
 refused; CI's 128 coordinator test commands pass. The leaf bundle now carries the block's JSON (LZLEAF02), so it is a
 leaf prover's only input. Not yet: deployment (a libzync coordinator instance beside the original one), `scripts/check-deployment.sh` (still greps
-`bundle_*.json`); the bundle-gap check reads `leaf_*.bin` with HAZYNC_LIBZYNC=1.
+`bundle_*.json`); the bundle-gap check reads `leaf_*.bin` with HAZYNC_LIBZYNC=1. ✅ **Deployed:** the libzync
+coordinator ran beside the original on :8900 from 11-09 and became the public board on 2026-11-12
+(`coordinator/deploy/libzync/SWITCH.md`); first run 1,287 blocks from genesis on 4× RTX PRO 6000 in 2 h 38 min.
 
 Steps: (a) join mode + host `prove-anchored` / `join` commands (c10e11, before the freeze); (b) TEST: blocks 1..200 as
 200 independent anchored proofs, joined: the root journal must be byte-identical to the linear run's block_200;
@@ -285,7 +304,8 @@ recursion: env::verify / assumption resolution and "succinct, joinable again" ne
 cycles / cost (the old fold was $0.0043, another guest), arity (2 / 4 / 8) and leaf size; ✅ **DONE 11-06 on c14**: 8 real
 leaves on prep states, 7 joins over 3 levels, root identical to linear block 8 and verified; a join is one 2^20 segment,
 6.4 s on a PRO 6000; root receipt 226 KB (arity and leaf size not yet measured); (e) after the freeze: the coordinator's work queue (prep ahead, leaves in any order, joins as children
-land, resume points).
+land, resume points). ✅ running on the public board since 11-12 (claims = leaves, folds = joins, the
+genesis-anchored spine).
 
 ## I. Gaps beyond the core (11-04)
 
@@ -296,7 +316,7 @@ test finds a bug.
 |---|---|---|---|
 | I1 | trust in our guest | Core's own test vectors (`script_tests`, `tx_valid`, `tx_invalid`) through the guest; fuzzing; extend the rig | **harness built 11-05 (c909841)**: guest mode 10, `scripts/libzync/core_vectors.py` (1,420 base cases = Core 28's counts, 22,666 with flag variants), `host core-vectors`; **c10e10, base set, libsecp path: 1,420 / 1,420 agree with Core, 0 differ** (exact ScriptError for script_tests; 68 by a guest abort where Core throws and catches inside EvalScript and fails the script: the guest has no C++ unwinding, both reject; `core_vectors/RESULT_c10e10_base.txt`). **No unwinding, by decision (user, 11-05):** every catch the guest can reach rejects the block (EvalScript, signet), pinned in guest build.rs `REVIEWED_CATCHES` (the build walks the include graph and fails on any change), the host reports an abort as `BLOCK REFUSED`, CONSENSUS_RULES.md states it. **c10e11, the BATCHED signature path: honest hints 1,420 / 1,420 (exact ScriptError too); FORGED hints (every verify claimed valid with an R that passes the per-signature check; opposite parity; every other verify) 0 Core-invalid cases pass** (67-80 Core-valid cases fail under a lying host: liveness only; x = r + n is infeasible for real r, effectively untested) (`core_vectors/RESULT_c10e11_sig6.txt`). **c10e12, every flag variant (22,666 cases), libsecp path: 22,666 / 22,666 agree, 0 differ** (679 by a guest abort where Core catches) (`core_vectors/RESULT_c10e12_variants.txt`). ⏳ fuzzing; extend the rig |
 | I2 | trust in our guest + verifiers | external audit and a bug bounty before anyone relies on proofs for money | after freeze |
-| I3 | trust in the zkVM | pin one risc0 version and track its audits (11-07: the frozen guest's risc0-zkvm 3.0.5 / platform 2.2.3 / zkos-v1compat 2.2.3 are past the fixes for CVE-2025-61588 and CVE-2025-52484, the critical host-input and circuit advisories); optional: prove periodic checkpoints on a second zkVM (e.g. SP1), so one prover bug cannot forge alone (~2x cost, checkpoints only) | later; user's call |
+| I3 | trust in the zkVM | pin one risc0 version and track its audits (11-07: the frozen guest's risc0-zkvm 3.0.5 / platform 2.2.3 / zkos-v1compat 2.2.3 are past the fixes for CVE-2025-61588 and CVE-2025-52484, the critical host-input and circuit advisories; **11-11: moved to risc0-zkvm 3.1.0**, which fixes soundness bugs in the rv32im circuit, `sys_read` range checks, the recursion circuit's `BIT_AND_ELEM`, Groth16 claim handling and the Poseidon S-box; 3.1.0 verifiers refuse 3.0.x receipts; released as v0.24.0, v0.23.0 withdrawn); optional: prove periodic checkpoints on a second zkVM (e.g. SP1), so one prover bug cannot forge alone (~2x cost, checkpoints only) | 3.1.0 pinned (v0.24.0); second zkVM: later, user's call |
 | I4 | data availability | the blocks are the data: publish coin log / tree snapshots (verifiable against proven roots, any untrusted mirror works) + a "rebuild from my own node" tool | after freeze |
 | I5 | proving cost | the 10x target (E1); one proof per block shared by every user; zyncAPP revenue pays (payment is the rate limiter); speculative pre-proving (D1) moves work off the critical path | ongoing |
 | I6 | not consensus | Ghost pool commits the proven roots in its coinbase (no fork; miner attestation on chain); wallet / exchange adoption via the verifiers; a soft fork is a community process for much later | I6a Ghost coinbase: after freeze (Ghost-side, user's call) |
@@ -326,7 +346,7 @@ is a marketing win that shows the core working.
 
 | # | zAPP | what it proves | cost | status |
 |---|---|---|---|---|
-| K1 | **header chain** | the most-work chain of valid proof-of-work headers from genesis: double SHA-256 under target, nBits and the 2,016-block retarget, median-time-past, chainwork. SPV-level (no transactions, coins or scripts); the core already runs these checks inside every block proof. Kept at the tip at a fixed few seconds a block (one header ~3 k cycles, far below the smallest segment) | ESTIMATED, not measured: ~2-3 k cycles a header (3 compressions: 283 cycles each on words, 1,105 per 65-byte `sha2` hash, measured; the rest small) => ~2-3 B cycles for ~975 k headers => ~40-60 min on one RTX PRO 6000 (1.2 s per M cycles, measured) ~$2, or ~1.5-2.2 h on an A40 ~$1; minutes on 16 cards. About the cost of 5-7 full modern blocks | **BUILT 11-05** (zyncapps guest `headers`, `zyncapp headers-exec`): Core's header rules (prev link, CheckProofOfWork, CalculateNextWorkRequired, time-too-old, BIP34/66/65 versions, GetBlockProof work; target and work computed once per nBits). Executed on REAL mainnet headers from the node: 0..2,100 (through the first retarget) end hash and chainwork **identical to the node's**; tampered nonce / time / bits / prev refused (high-hash, time-too-old, bad-diffbits, link). **MEASURED: 2,427 cycles per header** (genesis..2,100). Whole chain ~975 k headers = ~2.4 B cycles; at the MEASURED core proving rate (1.2 s per M cycles, PRO 6000) ~47 min ~ $2, or A40 ~1.8 h ~ $1 (proving time an estimate from cycles until proved). Recent range 967,681..971,720 (4,040 headers, real retargets at 969,696 and 971,712: nBits 17021ec5 -> 17021ef0 -> ...): end hash and chainwork **identical to the node's**, 2,421 cycles per header. Re-checked on the rebuilt guest (11-05, run from genesis starts empty): both ranges identical to the node again (2,425 / 2,419 cycles per header). ⏳ a proved run; joins of runs (state digest in, state out) for the tip. Launch line: "the whole Bitcoin header chain, proved, for about $2" |
+| K1 | **header chain** | the most-work chain of valid proof-of-work headers from genesis: double SHA-256 under target, nBits and the 2,016-block retarget, median-time-past, chainwork. SPV-level (no transactions, coins or scripts); the core already runs these checks inside every block proof. Kept at the tip at a fixed few seconds a block (one header ~3 k cycles, far below the smallest segment) | ESTIMATED, not measured: ~2-3 k cycles a header (3 compressions: 283 cycles each on words, 1,105 per 65-byte `sha2` hash, measured; the rest small) => ~2-3 B cycles for ~975 k headers => ~40-60 min on one RTX PRO 6000 (1.2 s per M cycles, measured) ~$2, or ~1.5-2.2 h on an A40 ~$1; minutes on 16 cards. About the cost of 5-7 full modern blocks | **BUILT 11-05** (zyncapps guest `headers`, `zyncapp headers-exec`): Core's header rules (prev link, CheckProofOfWork, CalculateNextWorkRequired, time-too-old, BIP34/66/65 versions, GetBlockProof work; target and work computed once per nBits). Executed on REAL mainnet headers from the node: 0..2,100 (through the first retarget) end hash and chainwork **identical to the node's**; tampered nonce / time / bits / prev refused (high-hash, time-too-old, bad-diffbits, link). **MEASURED: 2,427 cycles per header** (genesis..2,100). Whole chain ~975 k headers = ~2.4 B cycles; at the MEASURED core proving rate (1.2 s per M cycles, PRO 6000) ~47 min ~ $2, or A40 ~1.8 h ~ $1 (proving time an estimate from cycles until proved). Recent range 967,681..971,720 (4,040 headers, real retargets at 969,696 and 971,712: nBits 17021ec5 -> 17021ef0 -> ...): end hash and chainwork **identical to the node's**, 2,421 cycles per header. Re-checked on the rebuilt guest (11-05, run from genesis starts empty): both ranges identical to the node again (2,425 / 2,419 cycles per header). ⏳ a proved run; joins of runs (state digest in, state out) for the tip. Launch line: "the whole Bitcoin header chain, proved, for about $2". ✅ **PROVED (N3):** genesis..975,278 in one receipt under `2db34e12` (risc0 3.1.0): 59.4 min on one RTX PRO 6000 (~$2.50), 2,350,725,289 cycles, 224,138 bytes; WASM verifier 39 ms on a laptop under Node (`RESULT_risc0_3_1_gpu.txt`; the 3.0.5 proof under `4d04d6bf`, 57.2 min, is retired). At the tip: `hazync-headers-follow` chains one CPU-proved run base+1..tip to that base (`coordinator/deploy/headers/`) |
 | K2 | SwiftSync hints for any H | see J1 | see J1 | candidate |
 
 ## L. Business model for zAPPs (11-05; reasoning, not measured demand)
@@ -361,33 +381,57 @@ change after the freeze ships as a new image through the handover.
 | M5 | a specialised signature prover: a block's signatures proved in a system built for curve arithmetic (custom gates, GKR-style batch ECDSA), its proof verified inside the zkVM | the big ZK teams' route to large signature speedups; guess 2-5x on the signature share, UNMEASURED; a second proof system to audit | weeks; research project, after the GPU benchmarks say what signatures cost in dollars |
 
 Not levers: skipping signatures (assumevalid, ruled out: every block is proved); replacing Core's interpreter (<1% of
-cycles, measured); a risc0 upgrade for new accelerators (ruled out).
+cycles, measured); a risc0 upgrade for new accelerators (ruled out; the 11-11 move to 3.1.0 was for soundness, I3,
+and kept the cycles the same).
 
-## N. Launch (11-10)
+## N. Launch (11-10; status 11-12)
 
 What goes out together, in order. Each item is the operator's call to ship.
 
 | # | item | status |
 |---|---|---|
-| N1 | release v0.23.0 (#692): the libzync host, verifier and Windows CUDA host | tooling drafted; notes drafted for the operator; contents discussed before cutting |
-| N2 | the board switch (`coordinator/deploy/libzync/SWITCH.md`; #676, #684) | prerequisites merged; waits on N1 |
-| N3 | **the header-chain zAPP (K1)**, proved from genesis to the tip and checkable on hazync.org | in progress, steps below |
+| N1 | release v0.23.0 (#692): the libzync host, verifier and Windows CUDA host | ✅ **done, then replaced:** v0.23.0 (risc0 3.0.5, `863c9ce3`) is **withdrawn**; **v0.24.0** (2026-11-12, risc0 3.1.0, `8888d59c` / `d4210dae` / `2db34e12`, 12 assets; `docs/RELEASE_NOTES_v0.24.0.md`) is the release |
+| N2 | the board switch (`coordinator/deploy/libzync/SWITCH.md`; #676, #684) | ✅ **done 2026-11-12**: steps 0-6, and step 7 (website). Restarted from genesis under `8888d59c`; v1's board (frontier 144,769) kept read-only as the record; 13 contributors carried over |
+| N3 | **the header-chain zAPP (K1)**, proved from genesis to the tip and checkable on hazync.org | ✅ **done**, steps below |
 | N4 | the paper | draft 2, private; written with the operator |
 
-N3, step by step:
+N3, step by step (all done):
 
-1. Execute the whole chain from genesis against our node: end hash and chainwork must match.
-2. `zyncapp headers-prove` (a succinct receipt) and a verifier: `swiftsync-verify --headers`, and `verifyHeaders` in
-   the WebAssembly build. The verdict follows the core's rule: OK once the chainwork reaches Core's minimum, DEMO below.
-3. Pin the image: a reproducible build gives the same id bit for bit, as for the core (`reproduce/`).
+1. Execute the whole chain from genesis against our node: end hash and chainwork must match. ✅
+   (`experimental/libzync-bench/headers/RESULT_exec_whole_chain.txt`)
+2. `zyncapp headers-prove` (a succinct receipt) and a verifier: `swiftsync-verify headers`, and `verify_headers` in
+   the WebAssembly build. The verdict follows the core's rule: OK once the chainwork reaches Core's minimum, DEMO below. ✅
+3. Pin the image: a reproducible build gives the same id bit for bit, as for the core (`reproduce/`). ✅ `2db34e12`
+   (`reproduce/LIBZYNC_IDS`)
 4. Following the tip: a run starts from the state the previous one ended in (the guest commits both), so new headers
-   are a short run chained to the last one; the verifier checks the chain of runs.
-5. A page on hazync.org that verifies the proof in the browser.
-6. One proving run on a GPU, the operator's trigger (estimated about $2 for the whole chain on one RTX PRO 6000).
+   are a short run chained to the last one; the verifier checks the chain of runs. ✅ as base + one run:
+   `hazync-headers-follow` on the board box re-proves base+1..tip on CPU every 10 minutes and publishes it only after
+   `swiftsync-verify headers` accepts base + run (`coordinator/deploy/headers/README.md`). Re-basing is open (O6).
+5. A page on hazync.org that verifies the proof in the browser. ✅ `/headers/`
+6. One proving run on a GPU, the operator's trigger. ✅ 59.4 min on one RTX PRO 6000, ~$2.50 (11-11, 3.1.0)
 
 No prep is needed: headers carry no coin state.
 
+## O. Open after the 12 Nov run
+
+What the switch and the first v2 proving run surfaced. None changes the core image.
+
+| # | item | what is known | status |
+|---|---|---|---|
+| O1 | **following the tip with libzync** | the board proves from genesis, paced by the prep pass (`libzync-board-prep`); there is no v2 bridge and nothing proves new blocks as they arrive | open |
+| O2 | **Coin check on the board's latest proof** | hazync.org `/zapp/` checks trie facts against the fixed mainnet 1..200 proof; it should read the board's newest genesis-anchored proof and facts at its height | open |
+| O3 | **Litestream for the v2 ledger** | Litestream is set up for v1's database (`coordinator/deploy/litestream.yml.example`, `dropins/litestream-hazync.conf`); the v2 coordinator's database under `/var/lib/hazync-lz` has no continuous replica (only the retargeted `hazync-coordinator-backup` snapshots, kept on the box, and the `hazync-lz-offsite-*` proof and spine copies; SWITCH.md step 3) | open |
+| O4 | **wasm toolchain pin** | the browser verifier is byte-reproducible only with the same rustc: Rust 1.99.0 gives the published `446fdaeb…`, 1.97.1 other bytes; v0.24.0 was built with `RUSTUP_TOOLCHAIN=1.99.0` set by hand | open |
+| O5 | **sm_120 native kernels** | the release CUDA host carries native kernels for sm_80/86/89/90/100 + compute_100 PTX; RTX PRO 6000 (sm_120) JIT-compiles ~10 min on a fresh machine's first prove (cached afterwards) | open |
+| O6 | **headers-follow re-basing** | each run re-proves base+1..tip in full: at 250 headers it peaked at 9.8 GB RAM (MemoryMax raised from 6G to 24G after the 6G cap OOM-killed it from 11-11 19:10); prove a fresh GPU base (`--set-base`) before the run grows too long | open |
+| O7 | per-key open-claim cap | `CLAIM_OPEN_MAX` defaults to 4: one key running more than 4 workers starves itself (measured 11-12); restarting workers mid-run orphans their claims, and an orphaned frontier claim stalls the frontier until it lapses (up to `CLAIM_TTL`, 60 min) | known; operator guidance |
+
 ## Image ids built (11-03, unit tests + compiles only)
+
+⚠ **Historical.** Every id in this table is a laptop build on risc0 3.0.5 and is refused by today's verifiers. The
+published ids are in `reproduce/LIBZYNC_IDS`: mainnet `8888d59c`, signet `d4210dae`, header chain `2db34e12`
+(risc0 3.1.0). Other retired ids met in this file: `bbf82800` (c14 laptop), `863c9ce3` / `73b62530` (v0.23.0
+container, 3.0.5, withdrawn), `9f469930` / `067822b9` (round-8 images, 10-31), `4d04d6bf` (header chain, 3.0.5).
 
 | image | id | note |
 |---|---|---|

@@ -7,9 +7,11 @@
 
 
 ## METHOD_ID impact
-- [ ] Touches nothing the guest compiles: no change under `prover/methods/`, and none in a crate or
-      `#[path]`-included file listed by `scripts/check-guest-inputs.sh` / `reproduce/METHOD_ID`
-- [ ] Changes the guest. Even a comment moves the id. Say why this is worth a re-baseline and
+- [ ] Touches nothing a guest compiles: no change under `prover/methods/` or `prover/zyncapps/`, none in a
+      crate or `#[path]`-included file listed by `scripts/check-guest-inputs.sh` / `reproduce/METHOD_ID`, and no
+      change to the risc0 crates or the guest toolchain
+- [ ] Changes a guest, or the risc0 crates or toolchain it links (v0.24.0's risc0 3.1.0 bump moved every id with
+      no guest source change). Even a comment moves the id. Say why this is worth a re-baseline and
       re-pin the published images (`reproduce/pin-libzync-ids.py`, which writes `reproduce/LIBZYNC_IDS`),
       then `reproduce/METHOD_ID`, `reproduce/GUEST_ELF_SHA256` and `scripts/lineage.sh --write`
 

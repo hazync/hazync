@@ -1,5 +1,81 @@
 # Hazync Proof Party — coordinator deploy runbook
 
+> **Since 2026-11-12 the public board is Hazync v2** (the libzync engine, image `8888d59c`, release v0.24.0). The
+> next section is how that board runs. **Everything after it describes the Hazync v1 (CORE) board** — the archive
+> bridge, `hazync-coordinator`, the `/var/lib/hazync` paths — and is kept because several of its units still run
+> (retargeted at the v2 board) and because it is the record of how the v1 board was built. The switch itself, and
+> what it found, is [`libzync/SWITCH.md`](libzync/SWITCH.md).
+
+## The live board: Hazync v2 (since 2026-11-12)
+
+One box, **hazync-proof** (server 1), runs the board. There is no bridge in v2: a prep pass on the same box writes one
+leaf bundle per block, paced by proving. Following the tip with libzync is **not running yet** (SWITCH.md § 6).
+
+**What runs** (unit files in [`libzync/`](libzync/) and, for the header chain, [`headers/`](headers/)):
+
+| unit | job |
+|---|---|
+| `hazync-lz-coordinator` | the board, public on `0.0.0.0:8899` behind nginx (`api.hazync.org`). The repo unit still says `127.0.0.1:8900`; the port, bind and the public drop-ins (btcpay, proxies, ratelimit, sponsor bot, signed claims, alert, hardening, umask, open files) are drop-ins on the box |
+| `hazync-lz-zync-serve` | the zyncAPP fact service behind `/api/zync/*`, local on `127.0.0.1:8601` |
+| `libzync-board-fetch`, `libzync-board-prep` | the board pass: bitcoind blocks in, one `leaf_<n>.bin` (LZLEAF02) per block out, at most `HAZYNC_PREP_LEAF_WINDOW` (5,000) waiting to be proved |
+| `hazync-lz-prune-leaves.timer` | deletes proven leaves below the frontier so the pass can continue; keeps `leaf_1.bin` (selftest and the pods' GPU smoke use it). Points at `COORD=http://127.0.0.1:8899` (the repo unit since 2026-11-12; the box also carries it as a `zz-libzync.conf` drop-in) |
+| `hazync-lz-check-proofs.timer`, `hazync-lz-check-spine.timer` | the integrity checks, retargeted at v2 (they replace the CORE `hazync-check-proofs` / `hazync-check-spine`) |
+| `libzync-xcheck.timer` | the board pass and the paper prep run (`libzync-prep`, kept until it reaches the tip) agree on the chain state |
+| `hazync-lz-offsite-proofs{,-b2}.timer`, `hazync-lz-offsite-spine{,-b2}.timer` | receipts and the spine to R2 (`hazync-proofs`) and B2 (`hazync-backup`) under `proofs-8888d59c/` and `spine-8888d59c/`. The spine copies fail while the spine is empty |
+| `hazync-headers-follow.timer` | the header-chain zyncAPP at the tip ([`headers/README.md`](headers/README.md)) |
+| `hazync-sponsor-bot` | on again since 2026-11-12, retargeted at the leaves (`HAZYNC_LIBZYNC=1`); caps $50/run, $10/hr, 4 pods, pods under $1/hr |
+
+**Kept from v1, retargeted** by a `zz-libzync.conf` drop-in each (on the box only; deleting them is the rollback):
+`hazync-check-continuity`, `hazync-retention-check`, `hazync-coordinator-backup` (writes to
+`/srv/bulk/hazync/backups-lz`, no remote), `hazync-offsite-ledger-b2`, `hazync-offsite-keys{,-b2}`,
+`hazync-check-bundle-gap` (reinstalled; the old installed copy predated libzync support).
+**Kept unchanged:** `hazync-check-board-progress`, `hazync-check-breakers`, `hazync-check-disk`,
+`hazync-check-unit-drift`, `hazync-node-tip`, `hazync-offsite-watch`, `hazync-offsite-summary`, and `litestream`
+— which still replicates **only the v1 ledger**; the v2 ledger is not in Litestream yet (open item).
+
+**Retired** (stopped and disabled): `hazync-coordinator`, `hazync-bridge`, `hazync-bridge-backfill`,
+`hazync-archive-checkpoint{,-backfill}`, `hazync-offsite-checkpoints{,-b2}`, `hazync-prune-bundles`, the CORE
+`hazync-check-proofs` and `hazync-check-spine`, `hazync-offsite-proofs{,-b2}`, `hazync-offsite-spine{,-b2}`,
+`hazync-snapshot-emit`, `hazync-quiet-cutover`.
+
+**Where state lives:**
+
+| what | where |
+|---|---|
+| ledger, receipts, spine, claim state | `/var/lib/hazync-lz/{coordinator.db,proofs,spine,coord_state}` (and `witnesses/`), owned by `hazync` |
+| zyncAPP data for zync-serve | `/var/lib/hazync-lz/zapp` |
+| leaf bundles | `/srv/bulk/libzync-board/leaves` |
+| prep state | `/var/lib/libzync-board/{out,cl,trie}`; `/srv/bulk/libzync-board/{out,cl,trie}` are symlinks to them |
+| hosts | `/opt/hazync-lz/bin/host` (coordinator, checks) and `/srv/bulk/libzync-board/bin/host_lz` (the pass); both must print `8888d59c…` for `method-id` |
+| code | the checkout at `/opt/hazync-lz` |
+| local backups | `/srv/bulk/hazync/backups-lz` |
+| the v1 record, read-only | `/var/lib/hazync`, and `proofs-37987b85/`, `spine-37987b85/` in R2 and B2 |
+
+**Is it healthy?**
+
+```bash
+curl -s 127.0.0.1:8899/api/meta        # "libzync": true and method_id 8888d59c…
+curl -s 'https://api.hazync.org/api/state?slim=1' | head -c 400
+systemctl list-timers 'hazync-lz-*' 'libzync-*' 'hazync-check-*'
+systemctl --failed
+scripts/check-deployment.sh --local    # read the libzync section; its CORE section FAILs by design after the switch (open item)
+```
+
+The checks alert through `hazync-alert@` exactly as in [Alerts](#alerts) below. A stalled frontier with healthy units is
+usually a claim, not a fault: see the proving-fleet notes in [`docs/OPERATIONS.md`](../../docs/OPERATIONS.md#0-the-live-board-hazync-v2).
+
+**Releasing and updating.** Cutting a release: [`docs/BUILD_AND_RELEASE.md`](../../docs/BUILD_AND_RELEASE.md).
+Updating the coordinator code is §1a with the v2 unit:
+`UNIT=hazync-lz-coordinator /opt/hazync-lz/coordinator/deploy/deploy-coordinator.sh <tag>` (it checks
+`127.0.0.1:${COORD_PORT:-8899}` afterwards). A new **host with the same image id** is installed as both hosts above. A
+release that **changes the image id** also needs the board pass restarted, because every leaf is stamped with the
+image that prepared it: follow [`libzync/SWITCH.md`](libzync/SWITCH.md) step 0, including reinstalling the `lz` units
+(they carry the id in `--method-id` / `HAZYNC_METHOD_ID`).
+
+---
+
+# The Hazync v1 (CORE) board
+
 Stand up the coordinator **co-located with the archive-node bridge and a full `bitcoind`** on one box, and
 wire it under **one domain** (`hazync.org`) through an nginx proxy — the box is invisible
 backend infrastructure, like the existing `/api/pool/vmN/` proxies.
@@ -797,6 +873,8 @@ signs, set `CLAIM_REQUIRE_SIG=1` and restart: unsigned claims then get `403`.
   but is retired for the live party.)
 
 ## Tip bundles: pushing them to the coordinator (hazync-admin#2)
+
+> v1 only: these are CORE bridge bundles. The v2 board has no tip pipeline yet (SWITCH.md § 6).
 
 Since 2026-09-20 the tip bridge runs on its **own box**, while `server.py` still serves
 `bundle_<n>.json` from a directory it expects to be local. That is not only a serving matter:

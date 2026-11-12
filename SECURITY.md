@@ -14,6 +14,11 @@ open: the status below, the round-by-round record in [`docs/libzync/LIBZYNC.md`]
 **Independent review is explicitly invited**; if you find a way to make an invalid block prove valid, that is the
 finding that matters most.
 
+This page covers **Hazync v2** (the libzync engine): published images mainnet `8888d59c`, signet `d4210dae` and the
+header-chain zyncAPP `2db34e12` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), release v0.24.0, RISC Zero 3.1.0.
+What a proof rests on is set out in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md), and how to review it in
+[`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md).
+
 The property that makes this worth reviewing: the prover runs **real Bitcoin Core v28 consensus code**
 (`interpreter.cpp`, `SignatureHash`, `CheckTransaction`, merkle, PoW and retarget) and libsecp256k1 0.5.1 inside a
 RISC Zero zkVM, so there is no reimplementation of script validation to diverge from Core. What is NOT Core's code,
@@ -21,6 +26,14 @@ and is therefore where a soundness bug is most likely: the batch check of each c
 block-level rules the aggregate applies from the chunks' facts, the coin log, the counting trie and the joins.
 [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md) §6 says exactly who decides what, and
 [`docs/libzync/CONSENSUS_RULES.md`](docs/libzync/CONSENSUS_RULES.md) goes through Core's rules one by one.
+
+## Supported versions
+
+| release | engine | status |
+|---|---|---|
+| v0.24.0 (latest) | Hazync v2, image `8888d59c`, RISC Zero 3.1.0 | supported: the public board runs it |
+| v0.23.0 | Hazync v2, image `863c9ce3`, RISC Zero 3.0.5 | **withdrawn**: do not deploy; 3.1.0 verifiers refuse its proofs |
+| v0.22.1 and earlier | Hazync v1, image `37987b85` (since v0.21.0) | not maintained; v0.22.1 still verifies v1 proofs |
 
 ## Verifying releases
 
@@ -67,12 +80,13 @@ one above. If you want the warning to go away, sign the key locally (`gpg --lsig
 852C2B3190F5B928`) — but check the fingerprint against a second source first, because that is the step
 the warning is asking you to think about.
 
-`--ignore-missing` matters: the manifest covers **every** published asset — eight in v0.21.4: both
-hosts, both native verifiers, the WASM verifier, the worker CLI, the fleet launcher and the coordinator
-script — so a plain `sha256sum -c` reports `FAILED open or read` and exits non-zero for each one you
-didn't download. That is
-the command complaining about a missing file, not about a bad checksum — but it looks alarming, so use
-the flag and check only what you fetched.
+`--ignore-missing` matters: the manifest covers **every** published asset (in v0.24.0: the Linux CPU and CUDA
+hosts, the Windows CUDA host zip, the x86-64 and aarch64 verifiers, the WASM verifier and its JavaScript glue, the
+worker CLI, the fleet launcher and the coordinator script; `scripts/release-assets.txt` is the list), so a plain
+`sha256sum -c` reports `FAILED open or read` and exits non-zero for each one you didn't download. That is the
+command complaining about a missing file, not about a bad checksum — but it looks alarming, so use the flag and
+check only what you fetched. (The flag cannot tell you that the file you meant to check is absent; to catch that
+too, pipe only the lines you want to `sha256sum -c -`, as [`CONTRIBUTING.md`](CONTRIBUTING.md) does.)
 
 (If you saved the binary as `host` per the quick-start, `sha256sum -c` won't find it by name — either keep the asset filename as above, or run `sha256sum host` and compare the digest to the matching line in `SHA256SUMS.txt` by eye.)
 
@@ -87,6 +101,12 @@ signature adds provenance on top of that.
 **No commissioned professional audit has happened, and no external audit of libzync.** That is the first thing
 wanted before anyone relies on a proof for money.
 
+- **The proof system beneath it.** v0.24.0 moves to **RISC Zero 3.1.0**, which fixes soundness bugs in the zkVM's
+  proof system (an rv32im trace could hold two executions; `sys_read` words were not range-checked; the recursion
+  circuit's `BIT_AND_ELEM` decompositions were not unique; Groth16 claim handling; the Poseidon S-box). None was in
+  Hazync's own code, but a proof is only as sound as what checks it. **v0.23.0, built on 3.0.5, is withdrawn**, and
+  3.1.0 verifiers refuse every 3.0.x receipt; a test vector checks this with v0.23.0's real proof of blocks 1..200
+  ([`docs/RELEASE_NOTES_v0.24.0.md`](docs/RELEASE_NOTES_v0.24.0.md)).
 - **Review so far.** Fifteen cold review rounds by fresh reviewers given the code, not the author's conclusions,
   each finding fixed and retested: [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md) §5. Among what they found
   and fixed: an `is_base` value that skipped verifying the previous proof, the BIP68 version compared as signed, a
@@ -110,6 +130,6 @@ wanted before anyone relies on a proof for money.
 5. The verifiers (`swiftsync-verify`, its WASM and FFI builds): a receipt accepted that does not say what the verdict
    claims.
 
-The original design's review record (the CORE guest `37987b85`, audit rounds 1-11 and its status table) is kept in
+Hazync v1's review record (the original CORE guest `37987b85`, audit rounds 1-11 and its status table) is kept in
 [`docs/history/SECURITY_CORE.md`](docs/history/SECURITY_CORE.md) and
 [`docs/history/SECURITY_AUDIT_LOG.md`](docs/history/SECURITY_AUDIT_LOG.md).

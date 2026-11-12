@@ -2,12 +2,24 @@
 
 `hazync-headers-follow` keeps the header-chain zyncAPP proof at Bitcoin's tip. The page reads two receipts:
 
-- **the base**, genesis..B, proved once on a GPU (`experimental/libzync-bench/headers/run_headers_pod.sh`, ~57 min,
-  ~$2.40 on one RTX PRO 6000);
+- **the base**, genesis..B, proved once on a GPU (`experimental/libzync-bench/headers/run_headers_pod.sh`; the
+  3.1.0 base, genesis..975,278, took 59.4 min, ~$2.50, on one RTX PRO 6000);
 - **one run**, B+1..tip, chained to the base with `--after`, re-proved on the CPU every time the tip moves.
 
 The page never reads more than two receipts, and a reorg above B needs nothing special: the next run follows the new
-tip. When the run gets long (a warning at 20,000 headers), prove a new base and install it with `--set-base`.
+tip. When the run gets long (the script warns at 20,000 headers, `REBASE_WARN`), prove a new base and install it with
+`--set-base`. Memory decides "long" well before that warning (next section).
+
+## Memory: re-base before the run grows
+
+A run of N headers re-proves **all N** every time the timer fires, so both its time and its memory grow with the
+distance from the base. Measured on hazync-proof: at **250 headers** the run peaked at **9.8 GB** of RAM. The unit's
+old `MemoryMax=6G` OOM-killed every run from 2026-11-11 19:10 until it was raised; the box now runs it with
+`MemoryMax=24G`. ⚠ **The `hazync-headers-follow.service` in this directory still says `MemoryMax=6G`**: on a fresh
+install raise it (a drop-in or an edit) to well above 6G, or the first long run is killed.
+
+Do not let the run grow unbounded: prove a fresh base on a GPU (`run_headers_pod.sh`) and install it with
+`--set-base` as the run grows. How far a run can grow before 24G is not enough has not been measured.
 
 A run is published only after `swiftsync-verify headers --expect <tip>:<the node's hash>` prints
 `SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`5bd8011d`, image `2db34e12`).
@@ -37,13 +49,19 @@ cp hazync-headers-follow.service hazync-headers-follow.timer /etc/systemd/system
 systemctl daemon-reload && systemctl enable --now hazync-headers-follow.timer
 ```
 
-## Upgrading the image (risc0 3.1.0, 11-11)
+## Upgrading the image (risc0 3.1.0, done 2026-11-12)
 
 The headers image moved from `4d04d6bf` to `2db34e12`. The installed base (proved by `4d04d6bf`) no longer
 verifies, so every timer run fails until a base of the new image is installed. Re-run the four `install`
 lines above with this release's files: `hazync-headers-follow` (its `WANT_ELF` is now `5bd8011d…`, so the old
 script refuses the new ELF), `zyncapp`, `swiftsync-verify` and `zyncapp-headers.bin`. Then re-run the `--set-base` line with the 3.1.0 `headers_0_tip.rcpt` (`experimental/libzync-bench/headers/`,
 sha256 `a2931d89…`).
+
+As done on hazync-proof on 2026-11-12: `zyncapp` was built from the release commit with `RISC0_SKIP_BUILD=1` (the guest
+build is skipped; the ELF is supplied separately), the ELF installed was the container-built `zyncapp-headers.bin`
+(sha256 `5bd8011d…`, image `2db34e12`), and the base installed was the 3.1.0 `headers_0_tip.rcpt` (sha256
+`a2931d89…`, genesis..975,278) with `--set-base headers_0_tip.rcpt 975278 <hash of 975,278>`. The base proof took
+59.4 min on one RTX PRO 6000 (~$2.50) and is 224 KB.
 
 ## Test
 
