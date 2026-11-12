@@ -72,12 +72,29 @@ if [ "$LOCAL" -eq 0 ]; then
     [ "$fail" -eq 0 ] && exit 0 || exit 1
 fi
 
+# HAZYNC V2. After coordinator/deploy/libzync/SWITCH.md the public board is the libzync coordinator on 8899 and the
+# v1 (CORE) units are disabled on purpose. On such a box a DISABLED, stopped v1 unit is "retired", not a failure;
+# anything still enabled is checked exactly as before (a retired unit someone re-enabled is caught).
+V2=0
+systemctl show hazync-lz-coordinator -p Environment --value 2>/dev/null | tr ' ' '\n' | grep -qx 'COORD_PORT=8899' && V2=1
+[ "$V2" -eq 1 ] && echo "board: Hazync v2 (hazync-lz-coordinator on 8899); disabled v1 units are reported as retired"
+retired() {  # $1 unit: true when this is a switched box and the unit is switched off, not merely between runs
+    [ "$V2" -eq 1 ] || return 1
+    [ "$(systemctl is-active "$1" 2>/dev/null)" = active ] && return 1
+    case "$1" in *@*) return 1 ;; esac                      # a template (hazync-alert@) runs on demand
+    # a timer-driven oneshot (the sponsor bot) is inactive between runs: it is live while its timer is enabled
+    local t="${1%.service}.timer"
+    systemctl cat "$t" >/dev/null 2>&1 && [ "$(systemctl is-enabled "$t" 2>/dev/null)" = enabled ] && return 1
+    [ "$(systemctl is-enabled "$1" 2>/dev/null)" != enabled ]
+}
+
 echo "== every hazync systemd unit runs the canonical binary =="
 # THE check that would have caught the outage. Any unit whose ExecStart is a hazync host binary must
 # report the canonical id — the bridge is as load-bearing as the coordinator here.
 found=0
 while read -r unit; do
     [ -z "$unit" ] && continue
+    if retired "$unit"; then printf '  note %s: retired (Hazync v1, disabled since the switch)\n' "$unit"; continue; fi
     exe=$(systemctl show "$unit" -p ExecStart --value 2>/dev/null | grep -oE '/[^ ]*host[^ ]*' | head -1)
     hostbin=$(systemctl show "$unit" -p Environment --value 2>/dev/null | tr ' ' '\n' | grep -oE 'HAZYNC_HOST=.*' | cut -d= -f2)
     for b in "$exe" "$hostbin"; do
@@ -103,8 +120,13 @@ done < <(systemctl list-unit-files 'hazync-*' --no-legend 2>/dev/null | awk '{pr
 [ "$found" -eq 0 ] && skip "no hazync units found here — is this the coordinator?"
 
 echo "== bundles the bridge is emitting are in the format the current host parses =="
-BR="${HAZYNC_BRIDGE_OUT:-$(systemctl show hazync-bridge -p Environment --value 2>/dev/null | tr ' ' '\n' | grep -oE 'HAZYNC_BRIDGE_OUT=.*' | cut -d= -f2)}"
-if [ -z "$BR" ] || [ ! -d "$BR" ]; then
+if [ "$V2" -eq 1 ] && retired hazync-bridge.service; then
+    printf '  note the v1 bridge is retired; Hazync v2 leaf bundles are checked below\n'
+    BR=""; BR_RETIRED=1
+else BR_RETIRED=0; BR="${HAZYNC_BRIDGE_OUT:-$(systemctl show hazync-bridge -p Environment --value 2>/dev/null | tr ' ' '\n' | grep -oE 'HAZYNC_BRIDGE_OUT=.*' | cut -d= -f2)}"
+fi
+if [ "$BR_RETIRED" -eq 1 ]; then :
+elif [ -z "$BR" ] || [ ! -d "$BR" ]; then
     skip "bridge output dir not found — bundle format NOT checked"
 else
     # find, not a glob: this directory holds >160k bundles and `ls "$BR"/bundle_*.json` overflows the
@@ -144,6 +166,11 @@ else
         fi
         id=$("$b" method-id 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)
         if [ "$id" = "$LZ" ]; then ok "$unit -> $b is the published libzync image (${LZ:0:8}…)"
+        elif [ "$unit" = libzync-prep.service ]; then
+            # the separate whole-chain prep run (the paper's), not the board: a different image is worth knowing,
+            # not a failure of the board
+            printf '  note %s runs %s with guest %s, not the published image (%s…): the separate prep run, not the board\n' \
+                "$unit" "$b" "${id:-unknown}" "${LZ:0:8}"
         else bad "$unit runs $b with guest ${id:-unknown} — NOT the published libzync image (${LZ:0:8}…)"; fi
         st=$(systemctl is-active "$unit" 2>/dev/null)
         case "$unit" in

@@ -3476,6 +3476,10 @@ _MID_CACHE = {"v": None}
 # relays a fixed set of read-only paths to it and nothing else. It adds no trust: the page verifies the proof with the
 # browser verifier and checks every fact against it, so a wrong answer from here, or from zync-serve, is refused there.
 ZYNC_SERVE = os.environ.get("ZYNC_SERVE_URL", "")            # e.g. http://127.0.0.1:8601; unset: no relay (404)
+# The proof the fact service's answers are at (ROADMAP O2): a genesis-anchored receipt ending at zync-serve's tip, kept in
+# step with it by hazync-lz-zapp-follow. Served as /api/zync/proof so a page fetches the proof and the facts from one
+# place; unset or missing: 404 (the page falls back to its shipped proof).
+ZYNC_PROOF = os.environ.get("ZYNC_PROOF", "")
 _ZYNC_PATH = re.compile(r"^/(tip|trie/balance/[0-9a-f]{2,20000}|trie/history/[0-9a-f]{2,20000}"
                         r"|trie/coin/[0-9a-f]{2,20000}/[0-9a-f]{64}/[0-9]{1,10})$")
 
@@ -4163,6 +4167,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, raw=open(f, "rb").read(), ctype="application/octet-stream",
                                   headers={"Content-Disposition": f'attachment; filename="{name}"'})
             return self._send(404, {"error": "no spine yet"})
+        if p == "/api/zync/proof":                         # the receipt the facts are at (untrusted: the page verifies it)
+            if ZYNC_PROOF and os.path.exists(ZYNC_PROOF):
+                return self._send(200, raw=open(ZYNC_PROOF, "rb").read(), ctype="application/octet-stream",
+                                  headers={"Content-Disposition": 'attachment; filename="hazync-zapp.hzk"'})
+            return self._send(404, {"error": "no zyncAPP proof on this coordinator"})
         if p.startswith("/api/zync/"):                     # zyncAPP facts, relayed from a local zync-serve (untrusted)
             code, body = zync_relay(p[len("/api/zync"):])
             return self._send(code, raw=body) if code == 200 else self._send(code, {"error": body})

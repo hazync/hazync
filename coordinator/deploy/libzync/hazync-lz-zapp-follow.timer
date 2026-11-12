@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 10 minutes: bring Coin check's facts and proof up to the board's spine
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

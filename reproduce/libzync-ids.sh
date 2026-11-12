@@ -20,7 +20,7 @@ for net in mainnet signet; do
   netenv=(); [ "$net" = signet ] && netenv=(HAZYNC_NETWORK=signet)
   env HAZYNC_BASE=/root/hazync-libzync-base HAZYNC_LIBZYNC=1 "${netenv[@]}" \
     cargo build --profile fasthost -p host -j"$(nproc)" >&2
-  id=$(target/fasthost/host method-id | head -1 | awk '{print $NF}')
+  id=$(target/fasthost/host method-id | awk 'NR==1{print $NF}')   # awk reads it all: `head -1` closed the pipe early and the host panicked on the broken pipe (2026-11-12, a timing race; fatal under pipefail)
   elf=$(sha256sum target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin | cut -c1-64)
   mkdir -p /root/libzync-elf
   cp target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin /root/libzync-elf/$net.bin   # what a published proof must run

@@ -7,7 +7,7 @@ is uploaded. No wasm-bindgen: a raw ABI and ~60 lines of
 hand-written glue (`swiftsync-verify.js`), so the `.wasm` is a plain cargo output anyone can rebuild and compare.
 
 ```sh
-RUSTUP_TOOLCHAIN=1.99.0 ./build.sh           # byte-reproducible with that Rust: stages the sources at a fixed path
+./build.sh                                   # byte-reproducible: installs and uses Rust 1.99.0 itself (HAZYNC_WASM_TOOLCHAIN), stages the sources at a fixed path
 node test-vectors.mjs                        # the vectors of ../swiftsync-verify/vectors through the WASM
 cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3 -m http.server   # then open index.html
 ```

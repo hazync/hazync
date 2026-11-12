@@ -7,7 +7,9 @@ User=hazync
 # The demo zyncAPP (hazync.org/zapp/) checks facts against the real mainnet 1..200 proof (experimental/libzync-bench/zapp,
 # image 8888d59c): the coin-log history and the counting trie at block 200 that proof ends on. The service holds no
 # secrets and proves nothing: the page verifies the proof in the browser and checks every fact against it.
-ExecStart=/opt/hazync-lz/bin/zync-serve /var/lib/hazync-lz/zapp/history.bin 127.0.0.1:8601 /var/lib/hazync-lz/zapp/state_200.trie
+# state.trie and proof.rcpt are kept at the board's spine by hazync-lz-zapp-follow (ROADMAP O2); before its first run,
+# install the 1..200 demo as history.bin + state.trie + proof.rcpt (experimental/libzync-bench/zapp).
+ExecStart=/opt/hazync-lz/bin/zync-serve /var/lib/hazync-lz/zapp/history.bin 127.0.0.1:8601 /var/lib/hazync-lz/zapp/state.trie
 Restart=on-failure
 RestartSec=10
 NoNewPrivileges=true

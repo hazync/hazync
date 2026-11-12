@@ -31,7 +31,8 @@ leaf bundle per block, paced by proving. Following the tip with libzync is **not
 `hazync-check-bundle-gap` (reinstalled; the old installed copy predated libzync support).
 **Kept unchanged:** `hazync-check-board-progress`, `hazync-check-breakers`, `hazync-check-disk`,
 `hazync-check-unit-drift`, `hazync-node-tip`, `hazync-offsite-watch`, `hazync-offsite-summary`, and `litestream`
-— which still replicates **only the v1 ledger**; the v2 ledger is not in Litestream yet (open item).
+— which replicates both ledgers since 2026-11-12 (v1 to `coordinator-server1`, v2 to `coordinator-lz-server1`).
+`hazync-lz-zapp-follow.timer` keeps Coin check's facts and proof at the board's spine (every 10 min; ROADMAP O2).
 
 **Retired** (stopped and disabled): `hazync-coordinator`, `hazync-bridge`, `hazync-bridge-backfill`,
 `hazync-archive-checkpoint{,-backfill}`, `hazync-offsite-checkpoints{,-b2}`, `hazync-prune-bundles`, the CORE

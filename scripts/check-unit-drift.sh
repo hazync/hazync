@@ -28,6 +28,16 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 HOST="${1:-}"
 [ -n "$HOST" ] || { echo "usage: $0 <ssh-host>   e.g. $0 hazync-proof   (or localhost, on the box)" >&2; exit 2; }
 DROPINS_DIR=coordinator/deploy/dropins
+# Unit files live in three places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
+# coordinator/deploy/libzync/, the header-chain follower's in coordinator/deploy/headers/. Reading only the first made
+# every setting of a v2 unit "appear NOWHERE in the repo" (2026-11-12: the switch's units failed this check).
+repo_unit() {
+    local d
+    for d in coordinator/deploy coordinator/deploy/libzync coordinator/deploy/headers; do
+        [ -f "$d/$1.service" ] && { cat "$d/$1.service"; return 0; }
+    done
+    return 0
+}
 # ⛔ DISCOVER THE UNITS, DO NOT HARDCODE TWO OF THEM.
 # This was `hazync-coordinator hazync-bridge` — two units — while the repo declares 30 service files
 # and the boxes carry 32. It then printed "no drift: everything running on localhost is declared in
@@ -236,7 +246,7 @@ for u in $UNITS; do
             *)  echo "$v";;
         esac
     }
-    gdeclared=$( { cat "coordinator/deploy/$u.service" 2>/dev/null
+    gdeclared=$( { repo_unit "$u"
                    declared_dropin_bodies "$u"; } \
                  | grep -E "^($(echo "$GUARDED" | tr ' ' '|'))=" | sort -u )
     while read -r _ kv; do
@@ -288,7 +298,7 @@ for u in $UNITS; do
     # against a repo that declared exactly that path. HAZYNC_DISK_PATHS had been in
     # unit-drift-allow.txt since 09-20 for the same reason -- an allow-list entry standing in for a
     # parse bug, which quietly exempted a real key from the comparison. It is removed in this commit.
-    declared=$( { cat "coordinator/deploy/$u.service" 2>/dev/null
+    declared=$( { repo_unit "$u"
                   declared_dropin_bodies "$u"; } \
                 | grep -E '^Environment=' | sed -e 's/^Environment=//' -e 's/^"\(.*\)"$/\1/' \
                 | sort -u )

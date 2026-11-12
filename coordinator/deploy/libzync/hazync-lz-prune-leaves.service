@@ -4,5 +4,8 @@ After=hazync-lz-coordinator.service
 
 [Service]
 Type=oneshot
-Environment=LEAVES=/srv/bulk/libzync-board/leaves COORD=http://127.0.0.1:8899 MARGIN=1000
+# One variable per line: check-unit-drift reads Environment= one assignment per line.
+Environment=LEAVES=/srv/bulk/libzync-board/leaves
+Environment=COORD=http://127.0.0.1:8899
+Environment=MARGIN=1000
 ExecStart=/usr/local/sbin/hazync-lz-prune-leaves --apply
