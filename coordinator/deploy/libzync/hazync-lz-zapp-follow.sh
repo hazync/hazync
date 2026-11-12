@@ -23,7 +23,7 @@ FETCH=${ZAPP_FETCH:-/srv/bulk/libzync-board/bin/fetch_block_rpc.py}
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
 die() { log "ERROR: $*"; exit 1; }
 
-mkdir -p "$Z/blocks" "$Z/cl" "$Z/trie" "$Z/out" "$Z/tmp"
+mkdir -p "$Z/blocks" "$Z/cl" "$Z/out" "$Z/tmp"
 exec 9>"$Z/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
 
 # 1. the proof, and what it proves (asked of the host, from the copied bytes: the spine may move under us)
@@ -46,11 +46,14 @@ if [ "$H" -gt "$last" ]; then
     python3 "$FETCH" range $((last + 1)) "$H" "$Z/blocks" >/dev/null || die "fetching blocks $((last + 1))..$H failed"
     if [ "$last" -eq 0 ]; then anchor=genesis; unset HAZYNC_PREP_CONTINUE; rm -f "$Z/out/history.bin"
     else anchor="$Z/out/state_$last.json"; export HAZYNC_PREP_CONTINUE=1; fi
-    HAZYNC_COINLOG_DIR="$Z/cl" HAZYNC_TRIE_DIR="$Z/trie" HAZYNC_PREP_HISTORY=1 HAZYNC_PREP_CONSUME=1 \
+    # The trie stays in memory (no HAZYNC_TRIE_DIR): a disk trie saves only a one-line "HZTRIE-DISK" marker as
+    # state_H.trie, which zync-serve cannot load. zync-serve holds the trie in memory anyway.
+    HAZYNC_COINLOG_DIR="$Z/cl" HAZYNC_PREP_HISTORY=1 HAZYNC_PREP_CONSUME=1 \
         "$HOST" libzync-prep $((last + 1)) "$H" "$Z/blocks" "$anchor" "$Z/out" > "$Z/tmp/prep.log" 2>&1 \
         || { tail -5 "$Z/tmp/prep.log"; die "prep $((last + 1))..$H failed"; }
 fi
 [ -s "$Z/out/state_$H.trie" ] || die "prep left no trie snapshot at $H"
+[ "$(head -c 8 "$Z/out/state_$H.trie")" = HZTRIE01 ] || die "state_$H.trie is not a trie snapshot zync-serve can load"
 # history.bin must run from genesis to exactly H: H+1 records (zync-serve refuses a trie at another height anyway)
 n=$(python3 - "$Z/out/history.bin" <<'PY'
 import sys, struct
@@ -67,8 +70,16 @@ install -d -o hazync -g hazync "$SERVE"
 for f in history.bin:"$Z/out/history.bin" state.trie:"$Z/out/state_$H.trie" proof.rcpt:"$Z/tmp/spine.bin"; do
     install -m 0644 -o hazync -g hazync "${f#*:}" "$SERVE/.${f%%:*}.new"
 done
+for f in history.bin state.trie proof.rcpt; do [ -e "$SERVE/$f" ] && cp -p "$SERVE/$f" "$SERVE/.$f.prev"; done
 for f in history.bin state.trie proof.rcpt; do mv -f "$SERVE/.$f.new" "$SERVE/$f"; done
 systemctl restart hazync-lz-zync-serve
+# zync-serve refuses files it cannot load by exiting: if it is not still up, put the previous set back
+sleep 5
+if ! systemctl is-active --quiet hazync-lz-zync-serve; then
+    for f in history.bin state.trie proof.rcpt; do [ -e "$SERVE/.$f.prev" ] && mv -f "$SERVE/.$f.prev" "$SERVE/$f"; done
+    systemctl restart hazync-lz-zync-serve
+    die "zync-serve did not stay up on the files for $H: the previous set is restored"
+fi
 # keep the newest two save points' stores; the per-block state files below them are not needed again
 find "$Z/out/" -maxdepth 1 -name 'state_*.smt' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\.smt$/\1/p' | sort -n | head -n -2 |
     while read -r h; do rm -f "$Z/out/state_$h".{smt,coinlog,trie}; done
