@@ -148,3 +148,16 @@ these files. Limits:
 - **Coins created and spent in the same block** never enter the log: that hop is shown by the block alone.
 - `history.bin` and `zync-path` replay everything in memory; a mainnet path service needs the disk-backed store
   (ROADMAP C1).
+- **OK says the facts HOLD, not that they answer YOUR question** (review 11-12, verifiers #2). Every field that says
+  what is being asked comes with the fact, from whoever served it. A fact server can answer a different question
+  truthfully, and the verifier returns OK. A caller (C ABI `swiftsync_verify_facts`, the WASM `verify_facts`, the
+  CLI's `--coin` / `--trie`) must check, for every fact it acts on:
+  - `at` is the proof's height (`out->height`). A `CoinFact` at a lower height can be a true "unspent" from before the
+    coin was spent.
+  - The script, `txid`, `vout` or log position are the ones it asked about, not the server's.
+  - A `TrieFact`'s own `expect` (`absent`, `unspent:<sat>`, `spent:…`, `<count>:<sat>`) is the answer it reads. A
+    server can send whichever form is true for a script it chose; OK means only that that form holds.
+  - The tip `expect` ("<height>:<hash>") comes from a source the caller trusts, never from the fact server.
+
+  Coin check on hazync.org does all of these (`assets/zapp.js`: a fact about another script, kind or height is
+  refused before the verifier runs).

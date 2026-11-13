@@ -1,4 +1,6 @@
 name: windows-prove
+# A release build says so in its run name: scripts/windows-host.sh takes the release's host.exe only from such a run.
+run-name: ${{ inputs.release_build == 'true' && 'windows-prove RELEASE BUILD (no caches, --locked)' || 'windows-prove' }}
 
 # Can a NATIVE Windows host actually PROVE? (hazync#616, #631)
 #
@@ -76,6 +78,9 @@ on:
         default: '12.9.1'
       skip_cpu_prove:
         description: "'true' skips the 48-minute CPU prove and runs only the CUDA build (#631)"
+        default: 'false'
+      release_build:
+        description: "'true' = the host.exe a release ships: no cargo caches restored, --locked (review 11-12, release #5)"
         default: 'false'
 
 permissions:
@@ -281,7 +286,7 @@ jobs:
           # and the cl.exe diagnostic that said WHY had already scrolled past the window. A job whose
           # failure cannot be read is a job that gets re-run blind.
           set +e
-          cargo build -p host --release > build.log 2>&1
+          cargo build -p host --release --locked > build.log 2>&1
           rc=$?
           set -e
           echo "cargo exit: $rc  ($(wc -l < build.log) lines captured)"
@@ -744,7 +749,11 @@ jobs:
       #
       # ⇒ `cache/restore` + an explicit `cache/save` with `if: always()` makes an expensive build
       # survive a cheap failure downstream, which is the whole point of caching it.
+      # ⛔ NOT FOR A RELEASE BUILD (review 11-12, release #5): these caches are restored by PREFIX and saved even from
+      # failed runs, so a release exe built on them inherits whatever an earlier run left in the registry and target
+      # dirs. A release build starts clean (about two hours) and still banks its tree below for later test runs.
       - name: Restore the cargo registry
+        if: inputs.release_build != 'true'
         id: cache-reg
         uses: actions/cache/restore@v4
         with:
@@ -755,6 +764,7 @@ jobs:
           restore-keys: cargo-reg-${{ runner.os }}-
 
       - name: Restore the CUDA build tree
+        if: inputs.release_build != 'true'
         id: cache-target
         uses: actions/cache/restore@v4
         with:
@@ -937,7 +947,7 @@ jobs:
           # ⛔ CAPTURE, DO NOT TAIL. Two runs were spent on this file discovering that a tail window
           # had eaten the diagnostic; the fix belongs here from the first run, not the third.
           set +e
-          cargo build --release -p host --features cuda > cuda-build.log 2>&1
+          cargo build --release --locked -p host --features cuda > cuda-build.log 2>&1
           rc=$?
           set -e
           echo "build exit: $rc  ($(wc -l < cuda-build.log) lines captured)"

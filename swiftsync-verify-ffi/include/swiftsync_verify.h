@@ -50,7 +50,13 @@ int swiftsync_verify(const uint8_t* receipt, size_t receipt_len,
  * Each TrieFact must carry its claimed answer in its own "expect" ("absent", "unspent:<sat>",
  * "spent:<sat>:<height>:<tx>:<input>"; for balance / history "never" or "<count>:<sat>"): this result returns only
  * whether the claim holds, so a trie fact without one is FAIL. Any fact that does not hold is FAIL (1), with its
- * reason in msg; facts without a matching expect give at most DEMO (2). */
+ * reason in msg; facts without a matching expect give at most DEMO (2).
+ *
+ * OK SAYS THE FACTS HOLD, NOT THAT THEY ANSWER YOUR QUESTION. The question's fields come inside facts_json, from the
+ * fact server, so a server can truthfully answer a different one. Before acting on a fact, check yourself that its
+ * "at" == out->height (a CoinFact at a lower height can be a true UNSPENT from before the spend), that its script /
+ * txid / vout / position are the ones YOU asked about, and read a TrieFact's answer from its own "expect" (unspent or
+ * spent: OK means only that the form the server sent holds). docs/libzync/ZYNCAPPS.md section 8. */
 int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len,
                            uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                            const char* facts_json, const char* expect, swiftsync_result* out, char* msg, size_t msg_len);
