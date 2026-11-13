@@ -130,8 +130,15 @@ pub(crate) fn trie_save(path: &str) {
         let mut g = TS.lock().unwrap();
         let ts = g.as_mut().expect("trie store not initialised");
         ts.flush().unwrap_or_else(|e| panic!("{e}"));
+        // Test hook (dev mode only): die exactly here, the trie flushed at its height and no marker yet, the crash
+        // window of review 11-12 #3 (experimental/libzync-bench/prep/crash_test.sh).
+        if crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_PREP_CRASH_AT").ok().and_then(|v| v.parse::<u64>().ok()) == Some(ts.height) {
+            eprintln!("HAZYNC_TEST_PREP_CRASH_AT: dying after the trie flush at {}, before its marker", ts.height);
+            std::process::exit(137);
+        }
         let root: String = ts.root().iter().map(|w| format!("{w:08x}")).collect();
-        std::fs::write(path, format!("HZTRIE-DISK {} height {} root {root}\n", d.display(), ts.height)).unwrap_or_else(|e| panic!("{path}: {e}"));
+        // atomic (review 11-12, #3): a plain write could leave an empty marker, which a restart reads as a save point
+        crate::lz::write_atomic(path, format!("HZTRIE-DISK {} height {} root {root}\n", d.display(), ts.height).as_bytes());
         return;
     }
     let b = TS.lock().unwrap().as_ref().expect("trie store not initialised").to_bytes();

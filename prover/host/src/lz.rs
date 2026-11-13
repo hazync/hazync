@@ -944,15 +944,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     // receipt is found is the anchor's log loaded after all.
     let disk_resume = methods::COINLOG && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
         && cl_dir().map_or(false, |d| d.join("L0.bin").exists());
-    if methods::COINLOG && !disk_resume && leaf.is_none() {
-        cl_init_at_start(handover.is_some(), anchor_path, &prev);
-    }
     // The counting trie at the run's start (a resume below replaces it with the snapshot at its receipt). A disk trie
     // (HAZYNC_TRIE_DIR) is advanced in place, so on a resume it is at the receipt's height, not the anchor's: open it
     // there below, and at the anchor only if no receipt is found (as the disk coin log; review 11-06).
+    // Opened BEFORE the coin log (review 11-12, #3): it only checks, while the coin log's load rewinds its journal.
     let disk_trie_resume = methods::TRIE && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
         && crate::trie::trie_dir().map_or(false, |d| d.join("meta").exists());
     if methods::TRIE && !disk_trie_resume && leaf.is_none() { crate::trie::trie_init_at_start(handover.is_some(), anchor_path, &prev); }
+    if methods::COINLOG && !disk_resume && leaf.is_none() {
+        cl_init_at_start(handover.is_some(), anchor_path, &prev);
+    }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
     // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
@@ -1039,11 +1040,11 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             println!("resuming after block {k}");
         }
     }
-    if disk_resume && first == lo {
-        cl_init_at_start(handover_pending, anchor_path, &prev);
-    }
     if disk_trie_resume && first == lo {
         crate::trie::trie_init_at_start(handover_pending, anchor_path, &prev);
+    }
+    if disk_resume && first == lo {
+        cl_init_at_start(handover_pending, anchor_path, &prev);
     }
     let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
     let opts = ProverOpts::succinct();
