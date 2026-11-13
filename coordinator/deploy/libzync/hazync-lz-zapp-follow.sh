@@ -29,8 +29,10 @@ exec 9>"$Z/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
 # 1. the proof, and what it proves (asked of the host, from the copied bytes: the spine may move under us)
 [ -s "$SPINE/spine.bin" ] || { log "no spine yet"; exit 0; }
 cp "$SPINE/spine.bin" "$Z/tmp/spine.bin"
-H=$("$HOST" verify-any "$Z/tmp/spine.bin" 1 2>/dev/null | awk '/^RANGE-OK lo=1 / && / anchored=1$/ { for (i = 1; i <= NF; i++) if ($i ~ /^hi=/) print substr($i, 4) }')
-[ -n "$H" ] || die "the spine does not verify as a genesis-anchored proof under this host's image"
+OKLINE=$("$HOST" verify-any "$Z/tmp/spine.bin" 1 2>/dev/null | grep -m1 '^RANGE-OK lo=1 .* anchored=1$' || true)
+H=$(echo "$OKLINE" | tr ' ' '\n' | sed -n 's/^hi=//p')
+BH=$(echo "$OKLINE" | tr ' ' '\n' | sed -n 's/^out_bhash=//p')
+[ -n "$H" ] && [ -n "$BH" ] || die "the spine does not verify as a genesis-anchored proof under this host's image"
 
 # 2. the last height this follower's stores are at (a save point with every file prep resumes from), else genesis
 last=0
@@ -52,6 +54,11 @@ if [ "$H" -gt "$last" ]; then
         "$HOST" libzync-prep $((last + 1)) "$H" "$Z/blocks" "$anchor" "$Z/out" > "$Z/tmp/prep.log" 2>&1 \
         || { tail -5 "$Z/tmp/prep.log"; die "prep $((last + 1))..$H failed"; }
 fi
+# the facts must be about the proof's chain: prep's block at H is the spine's (review 11-12, #10). A node on another
+# branch, or a reorg at H, would give history and trie for a different chain than the published proof; the page would
+# refuse every fact, and nothing would say why.
+PH=$(python3 -c 'import json,sys;print(bytes(json.load(open(sys.argv[1]))["tip_hash"]).hex())' "$Z/out/state_$H.json" 2>/dev/null || true)
+[ "$PH" = "$BH" ] || die "prep's block $H (${PH:-none}) is not the proof's ($BH): the node is on another branch or $H was reorged; not published"
 [ -s "$Z/out/state_$H.trie" ] || die "prep left no trie snapshot at $H"
 [ "$(head -c 8 "$Z/out/state_$H.trie")" = HZTRIE01 ] || die "state_$H.trie is not a trie snapshot zync-serve can load"
 # history.bin must run from genesis to exactly H: H+1 records (zync-serve refuses a trie at another height anyway)
