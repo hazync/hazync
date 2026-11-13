@@ -51,7 +51,7 @@ a = Analysis(
     ],
     hiddenimports=[
         # imported by path at runtime rather than statically, so PyInstaller cannot see them
-        "supervisor", "hazync_api", "brand", "firstrun", "frozenpy",
+        "supervisor", "hazync_api", "brand", "firstrun", "frozenpy", "gpuprep",
         # the worker signs with ed25519; collected so a frozen build can satisfy it
         "cryptography", "cryptography.hazmat.primitives.asymmetric.ed25519",
     ] + sorted(_worker_imports),

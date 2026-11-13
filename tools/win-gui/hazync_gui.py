@@ -45,6 +45,7 @@ import activity  # noqa: E402
 import brand  # noqa: E402
 import cards  # noqa: E402
 import firstrun  # noqa: E402
+import gpuprep  # noqa: E402
 import hazync_api as api  # noqa: E402
 import supervisor  # noqa: E402
 import theme  # noqa: E402
@@ -396,6 +397,10 @@ class App(tk.Tk):
                 self.v_head.set(a.headline)
                 self.v_sub.set(a.detail)
                 self._set_bar(a.fraction, busy=not a.waiting)
+                # a card newer than the prover's GPU code: say why nothing moves yet (gpuprep)
+                if getattr(self, "_gpu_prep", None) and a.job == "run" and not a.pieces and a.block:
+                    self.v_head.set(f"{gpuprep.HEADLINE}  ·  {a.headline}")
+                    self.v_sub.set(gpuprep.DETAIL)
             bits = [f"Running for {activity.clock(now - min(w.started for w in self.workers))}",
                     f"last heard from the prover {activity.clock(now - max(w.heard for w in self.workers))} ago"]
             if len(self.workers) > 1:
@@ -729,7 +734,8 @@ class App(tk.Tk):
                 "host_cuda": self.host_cuda_var.get().strip(),
                 "build_kind": self.build_kind.get(),
                 "force_gpu": bool(self.force_gpu.get()),
-                "cards_off": sorted(self.cards_off)}
+                "cards_off": sorted(self.cards_off),
+                "gpu_prepared": sorted(set(self.cfg.get("gpu_prepared") or []))}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -1535,6 +1541,7 @@ class App(tk.Tk):
         for i, card in enumerate(plan, 1):
             self._spawn(i, base, job, extra, card=card,
                         label=names.get(card["index"], "") if card else "")
+        self._gpu_prep = gpuprep.to_prepare([c for c in plan if c], cuda, self.cfg.get("gpu_prepared"))
         on = sorted({w.label for w in self.workers if w.label})
         self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
                    + (f" on {len(on)} graphics cards: {', '.join(on)}" if len(on) > 1 else
@@ -1691,6 +1698,12 @@ class App(tk.Tk):
         w.heard = time.time()
         before = w.activity.done
         event = w.activity.feed(line)
+        if getattr(self, "_gpu_prep", None) and w.activity.pieces:
+            self.cfg["gpu_prepared"] = sorted(set(self.cfg.get("gpu_prepared") or [])
+                                              | {gpuprep.card_key(c) for c in self._gpu_prep})
+            self._gpu_prep = []
+            self._persist()
+            self._feed("The graphics card is ready: its GPU code is compiled and kept for next time", "good")
         landed = w.activity.done - before
         if landed > 0:
             self._landed[w.activity.job] += landed

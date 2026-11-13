@@ -108,6 +108,7 @@ class Activity:
         self.done = 0
         self.block = None          # the block or range in hand, as the worker printed it
         self.waiting = False       # True while there is simply nothing to do yet
+        self.pieces = False        # True once the proof has reported a piece (gpuprep: the GPU code is ready)
 
     def _set(self, headline, detail="", fraction=None, waiting=False):
         self.headline, self.detail, self.fraction, self.waiting = headline, detail, fraction, waiting
@@ -150,6 +151,7 @@ class Activity:
             self.detail = f"Piece {i:,} of {n:,}{left}"
             self.fraction = _SEG_FROM + (_SEG_TO - _SEG_FROM) * min(i, n) / n
             self.waiting = False
+            self.pieces = True
             return None
         if _RE["assembled"].search(s):
             self.detail, self.fraction = "Pieces joined — finishing the proof", _ASSEMBLED
