@@ -28,7 +28,7 @@ refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
 - **Hosts:** `prover/build-release.sh` embeds the published mainnet ELF (built by `reproduce/libzync.Dockerfile`, or
   passed as `HAZYNC_GUEST_ELF` and checked against its pinned sha256). The Windows host is built by `windows-prove.yml`
   on GitHub's `windows-2022` runners: dispatch it on the release commit first (`gh workflow run windows-prove.yml
-  --ref main -f skip_cpu_prove=true`); `scripts/windows-host.sh` fetches the artifact of that run and checks it from
+  --ref main -f skip_cpu_prove=true -f release_build=true`, a clean build with no restored caches); `scripts/windows-host.sh` fetches the artifact of that run and checks it from
   its bytes.
 - **Gates before publishing:** every host that runs on the release box answers `method-id` with the published id;
   one that cannot (CUDA without a driver, Windows) is checked from its bytes, or, stronger, by
@@ -310,7 +310,7 @@ of this is merged first:
 ### 3.2 Cutting it: `scripts/release.sh` (as run for v0.24.0)
 
 ```bash
-gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true   # FIRST, on the release commit (Windows host)
+gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true -f release_build=true   # FIRST, on the release commit (Windows host)
 RUSTUP_TOOLCHAIN=1.99.0 ./scripts/release.sh vX.Y.Z --dry-run         # preflight + build + gate; publishes nothing
 RUSTUP_TOOLCHAIN=1.99.0 NOTES=docs/RELEASE_NOTES_vX.Y.Z.md ./scripts/release.sh vX.Y.Z   # the release
 ./scripts/release.sh vX.Y.Z --verify-only                              # resume at signing for a published, unsigned release
@@ -369,8 +369,11 @@ gh release view vX.Y.Z --json assets --jq '.assets|length'    # want 12
 **`release-sign.yml`** (on `release: published`, or `workflow_dispatch` with a tag): builds
 `hazync-verify-aarch64` from the tag, asserts its embedded id, runs it on the real and tampered receipts, and
 attaches it; downloads the `hazync-*` assets, refuses unless they are exactly `scripts/release-assets.txt` at the
-tag, writes `SHA256SUMS.txt`, signs it with the `GPG_PRIVATE_KEY` secret, uploads `SHA256SUMS.txt` and
-`SHA256SUMS.txt.asc`.
+tag, checks that every host and verifier carries the tag's published image (`reproduce/LIBZYNC_IDS`), writes
+`SHA256SUMS.txt` headed by `# hazync <tag> commit <sha> image <id>`, signs it with the `GPG_PRIVATE_KEY` secret, uploads
+`SHA256SUMS.txt` and `SHA256SUMS.txt.asc`. A re-sign (dispatch on an existing tag) must find the release's current
+manifest verifying and may not change any hash in it; an aarch64 verifier already on the release is kept, not rebuilt
+over. Tested by `scripts/test-release-sign.sh` (review 11-12, release #2).
 
 **The CUDA kernels' targets.** `prover/build-release.sh` sets `NVCC_FLAGS` to native SASS for sm_80, 86, 89, 90 and
 100 plus compute_100 PTX. Cards outside that list run from the PTX: Blackwell workstation and server cards such as

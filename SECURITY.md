@@ -37,7 +37,11 @@ block-level rules the aggregate applies from the chunks' facts, the coin log, th
 
 ## Verifying releases
 
-Each release carries a PGP-signed `SHA256SUMS.txt` (signed in CI by the release-signing workflow). The
+Each release carries a PGP-signed `SHA256SUMS.txt` (signed in CI by the release-signing workflow). From v0.25.0
+its first line names what it is for, `# hazync <tag> commit <sha> image <id>`, and the signature covers that line
+too: check that the tag is the one you downloaded and the image is the one the release notes publish. Before
+signing, the workflow checks that every host and verifier carries that image, and a re-sign may not change a
+hash that was already signed. The
 maintainer key is:
 
 ```
