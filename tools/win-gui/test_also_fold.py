@@ -57,7 +57,7 @@ def main():
         raise
     app.withdraw()
     stand_in = os.path.join(tmp, "stand_in_worker.py")
-    open(stand_in, "w").write(STAND_IN)
+    open(stand_in, "w", encoding="utf-8").write(STAND_IN)
     supervisor.gpu_cards = lambda: []
     supervisor.preflight = lambda *a, **kw: ([], [])
     app.worker_var.set(stand_in)
