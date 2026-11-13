@@ -109,11 +109,19 @@ if [ -z "${NTFY_URL:-}" ]; then
     exit 3
 fi
 
-if printf '%s' "$body" | curl -fsS -m 20 --retry 3 --retry-delay 5 \
+# Our own retry loop, not curl --retry: curl honours a 429's Retry-After, so on ntfy's DAILY quota (250 per IP,
+# hit on 11-12/13 by a crash-looping unit) every alert slept until its caller's timeout killed it, and the checks
+# behind it failed as "timeout" instead of reporting. A 429 is not transient: give up at once and say so.
+code=000
+for attempt in 1 2 3; do
+    code=$(printf '%s' "$body" | curl -sS -m 20 -o /dev/null -w '%{http_code}' \
         -H "Title: $title" -H "Priority: $PRIO" -H "Tags: $TAGS" \
-        --data-binary @- "$NTFY_URL" >/dev/null; then
-    echo "[hazync-alert] sent: $title"
-else
-    echo "[hazync-alert] FAILED to send: $title" >&2
-    exit 4
-fi
+        --data-binary @- "$NTFY_URL") || code=000
+    case "$code" in
+        2??) echo "[hazync-alert] sent: $title"; exit 0 ;;
+        429) echo "[hazync-alert] FAILED to send (ntfy quota or rate limit, HTTP 429; not retried): $title" >&2; exit 4 ;;
+    esac
+    [ "$attempt" = 3 ] || sleep 5
+done
+echo "[hazync-alert] FAILED to send (HTTP $code after 3 tries): $title" >&2
+exit 4
