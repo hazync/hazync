@@ -430,7 +430,12 @@ class App(tk.Tk):
             self.v_meta.set(" · ".join(bits))
             return
         self.v_meta.set((self._session_line() + " this session") if self._session_line() else "")
-        if self._diag_running:
+        if self._respawns:
+            # between two blocks (or two folds): the next start is scheduled, so this is not "ready when you are"
+            self.v_head.set("Taking the next one…")
+            self.v_sub.set("The last one finished; the next starts in a moment. Stop ends the session.")
+            self._set_bar(None, busy=True)
+        elif self._diag_running:
             name, t0 = self._diag_running
             title = next((t for n, t, *_ in supervisor.DIAGNOSTICS if n == name), name)
             self.v_head.set("Checking this machine…")

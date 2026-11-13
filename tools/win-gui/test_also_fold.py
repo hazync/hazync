@@ -102,8 +102,8 @@ def main():
     check(j.count("run") >= 4 and j.count("fold") == 1,
           f"the prover keeps taking blocks; the folder, with nothing to fold, waits the idle delay ({j.count('run')} runs, {j.count('fold')} folds)")
     app._home_refresh()
-    check("1,500" in app.v_head.get() or "block" in app.v_head.get().lower(),
-          f"the prover leads Home: {app.v_head.get()!r}")
+    check("ready when you are" not in app.v_head.get().lower(),
+          f"while it keeps going, Home never says 'ready when you are', even between blocks: {app.v_head.get()!r}")
     app._stop()
     spin(5, lambda: not app.workers and not app._respawns)
 
