@@ -40,7 +40,7 @@ HAZYNC_PREP_LEAF_BUNDLES=$D/bridge "$PREP" libzync-prep 1 $END "$J" genesis "$D/
 "$OH" libzync-prep 1 $END "$J" genesis "$D/prepO" > "$D/prepO.log" 2>&1 || { echo "O prep failed"; exit 1; }
 python3 - "$D" "$H" "$END" "$OID" "$NID" "$L1" "$REF" "$CONTROL" <<'P' && pass "prep: states below $H are O's own, from $H stamped N with L1 (= the reference)" || wrong "prep stamping by era"
 import importlib.util, json, struct, sys
-D, H, END, oid, nid, l1, ref, control = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), *sys.argv[4:8]
+D, H, END, oid, nid, l1, ref, control = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), *sys.argv[4:9]
 s = importlib.util.spec_from_file_location("ref", ref); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
 ow = list(struct.unpack("<8I", bytes.fromhex(oid))); nw = list(struct.unpack("<8I", bytes.fromhex(nid)))
 assert m.lineage([(ow, H)]).hex() == l1, "N's lineage is not the reference's digest of [O at H]"
@@ -59,14 +59,15 @@ GT=$("$NH" libzync-genesis-tip); [ "$GT" = "$("$OH" libzync-genesis-tip)" ] && p
 
 PORT=${PORT:-18941}; U=http://127.0.0.1:$PORT
 start() {  # start <host> <log>
-  ( cd "$C" && env "${NOSTAMP[@]}" COORD_ALLOW_MOCK=1 COORD_PORT=$PORT COORD_BIND=127.0.0.1 COORD_DB=$D/c.db COORD_SPINE=$D/spine \
+  ( cd "$C" && exec env "${NOSTAMP[@]}" COORD_ALLOW_MOCK=1 COORD_PORT=$PORT COORD_BIND=127.0.0.1 COORD_DB=$D/c.db COORD_SPINE=$D/spine \
     COORD_PROOFS=$D/proofs COORD_WEB=$C HAZYNC_HOST=$1 HAZYNC_LIBZYNC=1 HAZYNC_BRIDGE_OUT=$D/bridge HAZYNC_LZ_STATE_DIR=$D/prep \
-    GENESIS_TIP=$GT LZ_HANDOVER_AT=$H CLAIM_RETAKE_WAIT=0 exec python3 server.py > "$2" 2>&1 ) &
+    GENESIS_TIP=$GT LZ_HANDOVER_AT=$H CLAIM_RETAKE_WAIT=0 python3 server.py > "$2" 2>&1 ) &
   SP=$!
   for i in $(seq 1 60); do curl -s $U/api/meta > /dev/null && break; sleep 1; done
 }
 WO="env HAZYNC_HOME=$D/wO COORD_URL=$U HAZYNC_HOST=$OH python3 $C/hazync"
 WN="env ${NOSTAMP[*]} HAZYNC_HOME=$D/wN COORD_URL=$U HAZYNC_HOST=$NH python3 $C/hazync"
+sql() { python3 -c "import sqlite3,sys; r=sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone(); print('' if r is None or r[0] is None else r[0])" "$D/c.db" "$1"; }
 era() { curl -s $U/api/meta | python3 -c "import json,sys; h=json.load(sys.stdin).get('handover') or {}; print(h.get('era'), h.get('done'))"; }
 
 # 2. pre era
@@ -80,6 +81,16 @@ done
 [ "$(echo $got)" = "$(seq -s ' ' 1 $((H-1)))" ] && pass "O's worker claimed and proved 1..$((H-1)) in order" || wrong "O's claims: $got"
 $WO run > "$D/runO_more.log" 2>&1
 grep -q "nothing to claim" "$D/runO_more.log" && pass "nothing at or above $H is handed out to O" || wrong "O was handed: $(grep -a claimed "$D/runO_more.log")"
+# The worker seeds an EMPTY spine with block 1's own receipt, which the board now refuses as a replay of block 1's proof
+# (known_receipt, review 11-12): a fresh board's bootstrap problem, not the handover's. Seed it with the join [1..2].
+( cd "$D" && "$OH" fold-range "$D/wO/receipts/1.bin" "$D/wO/receipts/2.bin" "$D/seed_1_2.bin" > "$D/seed.log" 2>&1 )
+env HAZYNC_HOME=$D/wO COORD_URL=$U HAZYNC_HOST=$OH python3 - "$C/hazync" "$D/seed_1_2.bin" > "$D/seed_post.log" 2>&1 <<'P'
+import base64, importlib.machinery, importlib.util, sys
+l = importlib.machinery.SourceFileLoader("hz", sys.argv[1]); s = importlib.util.spec_from_loader("hz", l)
+hz = importlib.util.module_from_spec(s); l.exec_module(hz)
+sk, pub, handle = hz.identity(); r = open(sys.argv[2], "rb").read()
+print(hz.post("/api/spine", {"pubkey": pub, "handle": handle, "sig": sk.sign(r).hex(), "receipt": base64.b64encode(r).decode()}))
+P
 $WO spine > "$D/spineO.log" 2>&1
 [ "$(curl -s $U/api/spine | python3 -c 'import json,sys; print(json.load(sys.stdin).get("hi"))')" = $((H-1)) ] \
     && pass "O's spine is exactly [1..$((H-1))]" || wrong "O's spine: $(tail -2 "$D/spineO.log")"
@@ -105,7 +116,7 @@ for i in $(seq $((H+1)) $END); do
   $WN run > "$D/runN_$i.log" 2>&1; got="$got $(sed -n 's/^claimed block \([0-9]*\).*/\1/p' "$D/runN_$i.log")"
 done
 [ "$(echo $got)" = "$(seq -s ' ' $((H+1)) $END)" ] && pass "N's worker claimed $((H+1))..$END in order (never $H)" || wrong "N's claims: $got"
-nv=$(sqlite3 "$D/c.db" "SELECT COUNT(*) FROM vranges WHERE lo > $H")
+nv=$(sql "SELECT COUNT(*) FROM vranges WHERE lo > $H")
 [ "$nv" = $((END-H)) ] && pass "every N block above $H verified on the board ($nv)" || wrong "N blocks verified above $H: $nv of $((END-H)) ($(grep -ah 'rejected\|✗' "$D"/runN_*.log | head -1 | cut -c1-200))"
 
 # 5. the spine crosses the handover
@@ -115,7 +126,7 @@ SH=$(curl -s $U/api/spine | python3 -c 'import json,sys; print(json.load(sys.std
 [ "$SH" = $END ] && pass "the spine is [1..$END]" || wrong "spine at $SH"
 sleep 3; FR=$(curl -s $U/api/meta | python3 -c 'import json,sys; print(json.load(sys.stdin).get("frontier"))')
 [ "$FR" = $END ] && pass "the frontier is $END" || wrong "frontier $FR"
-VI=$(sqlite3 "$D/c.db" "SELECT image FROM vranges WHERE id='1-$H'")
+VI=$(sql "SELECT image FROM vranges WHERE id='1-$H'")
 [ "$VI" = "$NID" ] && pass "vrange [1..$H] recorded, image N" || wrong "vrange [1..$H]: '$VI'"
 [ "$(era)" = "post True" ] && pass "/api/meta says the handover is done" || wrong "after: $(era)"
 
@@ -130,9 +141,11 @@ old = b"".join(struct.pack("<I", x) for x in bytes.fromhex(sys.argv[3]))
 n = b.count(old)
 open(sys.argv[2], "wb").write(b.replace(old, b"".join(struct.pack("<I", 0) for _ in range(32))))
 print(f"lineage occurrences spliced to zero: {n}")
+sys.exit(0 if n else 1)
 P
+SPLICED=$?
 r=$(env "${NOSTAMP[@]}" HAZYNC_BRIDGE_OUT=$D/bridge HAZYNC_LZ_STATE_DIR=$D/prep "$NH" verify-any "$D/spliced.bin" 1 2>&1)
-echo "$r" | grep -q "^REJECT" && pass "the same spine with its lineage spliced to zero is refused ($(echo "$r" | grep -a REJECT | cut -c1-90))" || wrong "spliced lineage accepted: $r"
+[ $SPLICED = 0 ] && echo "$r" | grep -q "^REJECT" && pass "the same spine with its lineage spliced to zero is refused ($(echo "$r" | grep -a REJECT | cut -c1-90))" || wrong "spliced lineage accepted: $r"
 kill $SP; wait $SP 2>/dev/null
 grep -a -i 'traceback' "$D"/server_*.log | head -3
 echo "board_rehearsal.sh$([ $CONTROL = 1 ] && echo ' --control'): $((N_CASES-BAD))/$N_CASES as expected"
