@@ -7,6 +7,11 @@
 # Usage:  ./provision-vps.sh            # CPU proving
 #         GPU=1 ./provision-vps.sh      # also set up CUDA proving (needs an NVIDIA GPU + driver)
 set -euo pipefail
+# The GitHub token (an optional BuildKit secret in the reproduce images) is only for rzup's GitHub API calls. Keep it in
+# a private variable and hand it to `rzup install` alone, so nothing else this script runs (cargo, build scripts, apt)
+# sees it (review 11-12, release #6). Never an EMPTY GITHUB_TOKEN: rzup sends it and gets a 401.
+_RZUP_TOKEN="${GITHUB_TOKEN:-}"; unset GITHUB_TOKEN
+
 
 # Run privileged steps with sudo on a normal box; skip it when already root (e.g. in the
 # reproducible-build container), where sudo may be absent.
@@ -76,19 +81,32 @@ $SUDO apt-get install -y build-essential cmake git curl ca-certificates pkg-conf
 
 echo "== 2. Rust =="
 if ! command -v cargo >/dev/null; then
-  # pinned like prover/rust-toolchain.toml: the host toolchain reaches the guest image ids (2026-11-12, 1.100.0)
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.99.1
+  # pinned like prover/rust-toolchain.toml: the host toolchain reaches the guest image ids (2026-11-12, 1.100.0).
+  # A fixed rustup-init checked by sha256, not `curl sh.rustup.rs | sh` (review 11-12, release #6: an unpinned fetch
+  # inside the reproducible build). A mismatch stops the build; bump both lines together from
+  # https://static.rust-lang.org/rustup/archive/<version>/x86_64-unknown-linux-gnu/rustup-init.sha256
+  RUSTUP_INIT_VERSION=1.28.2
+  RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+  [ "$(uname -m)" = x86_64 ] || { echo "provision-vps.sh pins rustup-init for x86_64 only"; exit 1; }
+  ri=$(mktemp)
+  curl --proto '=https' --tlsv1.2 -sSfL -o "$ri" \
+    "https://static.rust-lang.org/rustup/archive/$RUSTUP_INIT_VERSION/x86_64-unknown-linux-gnu/rustup-init"
+  echo "$RUSTUP_INIT_SHA256  $ri" | sha256sum -c --quiet - || { echo "rustup-init $RUSTUP_INIT_VERSION: sha256 mismatch"; exit 1; }
+  chmod +x "$ri" && "$ri" -y --default-toolchain 1.99.1 && rm -f "$ri"
 fi
 source "$HOME/.cargo/env"
 
 echo "== 3. RISC0 toolchain (rzup -> cargo-risczero, r0vm, riscv32 C/C++ + Rust guest toolchains) =="
 if ! command -v rzup >/dev/null; then
-  curl -L https://risczero.com/install | bash
+  # From crates.io at a fixed version (cargo checks the crate against the registry's checksum), not
+  # `curl risczero.com/install | bash`, which installs whatever rzup binary is newest (review 11-12, release #6).
+  # Into ~/.risc0/bin, where the installer put it, so the PATH below and the rest of this script are unchanged.
+  cargo install rzup --version =0.6.0 --locked --root "$HOME/.risc0"
   export PATH="$HOME/.risc0/bin:$PATH"
 fi
 # PINNED toolchain versions. With the risc0 crates (=3.1.0) these determine the guest image id
 # (METHOD_ID). Bare `rzup install` grabs whatever is *latest* — which drifts the METHOD_ID over time
-# and, unauthenticated, hits GitHub's API rate limit. rzup authenticates via $GITHUB_TOKEN when set.
+# and, unauthenticated, hits GitHub's API rate limit. rzup authenticates via the token when one was given.
 #
 # Each install is wrapped, because rzup has NO download timeout and these are large artifacts (the
 # rust toolchain is 488 MB). Three failure modes have each cost a full build:
@@ -109,7 +127,8 @@ rzup_install() {
     local n=${RZUP_ATTEMPTS:-10}
     for attempt in $(seq 1 "$n"); do
         # shellcheck disable=SC2086
-        if timeout "${RZUP_TIMEOUT:-3600}" rzup install --force $what; then
+        if if [ -n "$_RZUP_TOKEN" ]; then GITHUB_TOKEN="$_RZUP_TOKEN" timeout "${RZUP_TIMEOUT:-3600}" rzup install --force $what
+           else timeout "${RZUP_TIMEOUT:-3600}" rzup install --force $what; fi; then
             return 0
         fi
         echo "   rzup install $what failed or timed out after ${RZUP_TIMEOUT:-3600}s (attempt $attempt/$n)" >&2
@@ -348,7 +367,7 @@ fi
 echo "== 8. build the libzync host (release${GPU_FEATURES:+ + CUDA}), embedding $HAZYNC_GUEST_ELF =="
 cd "$REPO_DIR/prover"
 # -p host: the workspace also holds the zyncAPP crates, whose guest this host does not embed.
-cargo build --release -p host $GPU_FEATURES
+cargo build --release --locked -p host $GPU_FEATURES
 
 echo
 echo "DONE. Verify the build with the self-contained checks (no GPU, no network):"

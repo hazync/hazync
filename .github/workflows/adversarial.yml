@@ -21,6 +21,11 @@ on:
   schedule:
     - cron: '0 3 * * *'
 
+# Read-only token (review 11-12, release #6): the jobs read the repo and public releases (rzup, via the docker builds'
+# gh_token secret) and pass artifacts between jobs, which uses the runtime token, not this one. Nothing here writes.
+permissions:
+  contents: read
+
 # Superseding a branch makes its in-flight run pointless; let it be cancelled rather than sit in the
 # queue ahead of the run that matters. NOT applied to main: those runs are the record of what the
 # released tree actually does, and cancelling one leaves a commit with no verdict.
@@ -1248,6 +1253,14 @@ jobs:
         run: ./scripts/test-release-attest.sh
       - name: CUDA attestation POSITIVE CONTROL (staleness gate restored — must FAIL)
         run: ./scripts/test-release-attest.sh --control
+      - name: The release CI gate needs the main suite green on the commit (review 11-12, release #4)
+        run: ./scripts/test-release-ci-gate.sh
+      - name: CI gate POSITIVE CONTROL (reduced to one green job — must FAIL)
+        run: ./scripts/test-release-ci-gate.sh --control
+      - name: The release signature is bound to the tag and cannot be laundered (review 11-12, release #2)
+        run: ./scripts/test-release-sign.sh
+      - name: Signing POSITIVE CONTROL (image check, binding and re-sign guard cut out — must FAIL)
+        run: ./scripts/test-release-sign.sh --control
       - name: Who absorbed each block into the spine (#244)
         # The record was never lost — every absorption writes a permanent spine:1-<hi> row — but the
         # only thing reading it was the 40-row `recent` feed, so attribution aged out in minutes.

@@ -24,7 +24,7 @@ pins() {  # pins <net> <dir>: the published pins for net, from reproduce/LIBZYNC
 build() {  # build <name> <env...>
   local n=$1; shift
   rm -rf target/riscv-guest
-  env "$@" cargo build --profile fasthost -p host -j"$(nproc)" >&2
+  env "$@" cargo build --locked --profile fasthost -p host -j"$(nproc)" >&2
   cp target/fasthost/host "$OUT/$n"; strip "$OUT/$n"
   echo "$n $(ids "$OUT/$n")" | tee -a "$OUT/ids.txt"
 }

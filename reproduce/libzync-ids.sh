@@ -20,7 +20,7 @@ for net in mainnet signet; do
   rm -rf target/riscv-guest   # never reuse a guest across networks (LIBZYNC.md round 8: a stale ELF)
   netenv=(); [ "$net" = signet ] && netenv=(HAZYNC_NETWORK=signet)
   env HAZYNC_BASE=/root/hazync-libzync-base HAZYNC_LIBZYNC=1 "${netenv[@]}" \
-    cargo build --profile fasthost -p host -j"$(nproc)" >&2
+    cargo build --locked --profile fasthost -p host -j"$(nproc)" >&2
   id=$(target/fasthost/host method-id | awk 'NR==1{print $NF}')   # awk reads it all: `head -1` closed the pipe early and the host panicked on the broken pipe (2026-11-12, a timing race; fatal under pipefail)
   elf=$(sha256sum target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin | cut -c1-64)
   mkdir -p /root/libzync-elf
@@ -29,7 +29,7 @@ for net in mainnet signet; do
 done
 # The header-chain zyncAPP (ROADMAP K1 / N3): a separate image, never the core's. Pure Rust, built by the same pinned
 # guest toolchain; no HAZYNC_* variable reaches it (unset above).
-cargo build --profile fasthost -p zyncapp-host -j"$(nproc)" >&2
+cargo build --locked --profile fasthost -p zyncapp-host -j"$(nproc)" >&2
 hid=$(target/fasthost/zyncapp id | awk '/^ZYNCAPP_HEADERS_ID /{print $2}')
 helf=target/riscv-guest/zyncapp-methods/zyncapp-headers/riscv32im-risc0-zkvm-elf/release/zyncapp-headers.bin
 cp "$helf" /root/libzync-elf/zyncapp-headers.bin

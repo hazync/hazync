@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Refuse any GitHub Actions `run:` block that interpolates a ${{ }} expression.
+# Refuse any GitHub Actions `run:` block that interpolates a ${{ }} expression, and any `with:` value that takes a
+# dispatch input or event field without a validating step in between.
 #
 #   ./scripts/check-workflow-injection.sh
 #
@@ -48,6 +49,14 @@ for f in files:
         for i, st in enumerate(job.get("steps") or []):
             if not isinstance(st, dict):
                 continue
+            # `with:` inputs too (review 11-12, release #7): release-sign's checkout took `ref: ${{ ... inputs.tag }}`
+            # unvalidated in a job that builds and runs tree code under contents: write. A with: value is not parsed by
+            # a shell, but it decides WHAT runs (a ref, a path, a key), so a dispatch input or event field must arrive
+            # through a step that validated it (steps.<id>.outputs.*), never directly.
+            for k, v in (st.get("with") or {}).items():
+                if isinstance(v, str) and re.search(r"\$\{\{[^}]*(inputs\.|github\.event\.|github\.head_ref)", v):
+                    print(f"{f.name}: job '{jn}' step '{st.get('name') or i}' with.{k} takes an unvalidated {v.strip()}")
+                    bad += 1
             run = st.get("run")
             if isinstance(run, str) and "${{" in run:
                 for expr in sorted(set(re.findall(r"\$\{\{[^}]*\}\}", run))):
@@ -84,3 +93,19 @@ if scan "$TMP" >/dev/null 2>&1; then
     exit 1
 fi
 echo "ok   positive control: an interpolated run: block is still detected"
+cat > "$TMP/injected.yml" <<'YAML'
+name: control2
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+YAML
+if scan "$TMP" >/dev/null 2>&1; then
+    echo "FAIL positive control passed — the checker cannot detect an unvalidated input in a with: value" >&2
+    exit 1
+fi
+echo "ok   positive control: an unvalidated input in a with: value is still detected"
