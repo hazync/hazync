@@ -1,0 +1,5 @@
+# The cross-version handover verifier (prover/methods/guest/src/xver), run INSIDE a RISC Zero 3.1.0 guest on real
+# receipts. See README.md. Its own workspace and lock, so building it never touches the prover's.
+[workspace]
+resolver = "2"
+members = ["host", "methods"]

@@ -1,0 +1,20 @@
+[package]
+name = "guest"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std"] }
+risc0-zkp = { version = "=3.0.6", default-features = false }
+risc0-zkvm-platform = { version = "=2.2.3", default-features = false }
+
+# the same feature names the prover guest uses, so its xver module compiles the same way here
+[features]
+default = ["xver-v3_0_5", "xver-v3_1_0"]
+xver-v3_0_5 = []
+xver-v3_1_0 = []
+
+[profile.release]
+lto = "thin"
