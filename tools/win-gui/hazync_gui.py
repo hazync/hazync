@@ -55,8 +55,10 @@ REFRESH_S = 60          # the website refreshes the map every minute; match it r
 
 
 class Worker:
-    def __init__(self, index, popen, log_path, job, card=None, label=""):
+    def __init__(self, index, popen, log_path, job, card=None, label="", base=None, extra=()):
         self.index, self.popen, self.log_path, self.job = index, popen, log_path, job
+        self.base, self.extra = base, tuple(extra)   # what it was started with, to start it again (_reap)
+        self.transients = 0                          # unexplained exits in a row (_reap retries a few)
         # The graphics card this worker was given, and what to call it on screen. Both empty on a
         # machine with one card, where nothing is pinned and nothing needs telling apart.
         self.card, self.label = card, label
@@ -75,6 +77,7 @@ class App(tk.Tk):
         # ⛔ SETTINGS MUST SURVIVE A RESTART. Re-typing four paths every launch is its own reason to
         # give up, and the first version of this window saved nothing at all.
         self.cfg = firstrun.load_config()
+        self._respawns = {}          # starts scheduled by _again, cancelled by _stop
         self.dark = tk.BooleanVar(value=bool(self.cfg.get("dark")))
         self.p = brand.palette(self.dark.get())
         self.q = queue.Queue()
@@ -308,7 +311,7 @@ class App(tk.Tk):
         """Start and Stop say what they will do, and only one of them is ever live."""
         if not hasattr(self, "start_btn"):
             return
-        running = bool(self.workers)
+        running = bool(self.workers) or bool(self._respawns)
         self.start_btn.configure(text=self.START_TEXT.get(self.mode.get(), "Start"),
                                  state="normal" if (self._setup_ok and not running) else "disabled")
         self.stop_btn.configure(state="normal" if running else "disabled")
@@ -1657,7 +1660,7 @@ class App(tk.Tk):
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, bufsize=1, errors="replace", **kwargs)
-        w = Worker(i, p, log_path, job, card=card, label=label)
+        w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
         self.workers.append(w)
         self._say(f"[{job} {i}] started (pid {p.pid}) — log {log_path}"
                   + (f" — on {label} (card {card['index']}, segment size "
@@ -1747,6 +1750,8 @@ class App(tk.Tk):
                 self._say("⛔ not restarting — and do not just press Start again: a box that cannot "
                           "prove claims blocks and abandons them, which holds up everyone else.",
                           "cuda-error")
+            else:
+                self._again(w, kind)
         # ⛔ str(), because ttk returns a Tcl_Obj that never compares equal to a string. Without it
         # this condition silently never fires and Start never comes back. tk returns a plain str,
         # which is why the mistake is invisible in a quick test.
@@ -1755,7 +1760,43 @@ class App(tk.Tk):
             self._home_refresh()
             self.status.configure(text=api.summarise_progress(self.prog) if self.prog else "idle")
 
+    # ⛔ ONE BLOCK, THEN NOTHING (Xesktop, 11-13). The worker's `run` proves one block and exits; on Linux
+    # run-workers.sh loops it, and the window did not, so Start proved block 1,339 and the session ended "finished
+    # cleanly". Now a worker that finished, or found nothing free, is started again on the same card until Stop:
+    # straight away after a block, after a minute when the board had nothing; an unexplained exit is retried three
+    # times in a row, then left stopped. A config or GPU error never restarts (above).
+    AGAIN_MS = {"done": 2000, "idle": 60000, "transient": 60000}
+    TRANSIENT_RETRIES = 3
+
+    def _again(self, w, kind):
+        if kind not in self.AGAIN_MS:
+            return
+        n = w.transients + 1 if kind == "transient" else 0
+        if n > self.TRANSIENT_RETRIES:
+            self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
+            return
+        key = object()
+        self._respawns[key] = self.after(self.AGAIN_MS[kind], lambda: self._respawn(key, w, n))
+        self._feed({"done": "Taking the next block", "idle": "Asking for a block again in a minute",
+                    "transient": f"Trying again in a minute ({n} of {self.TRANSIENT_RETRIES})"}[kind])
+
+    def _respawn(self, key, w, n):
+        if self._respawns.pop(key, None) is None:
+            return                      # Stop cancelled it
+        self._spawn(w.index, w.base, w.job, w.extra, card=w.card, label=w.label)
+        self.workers[-1].transients = n
+        self._sync_buttons()
+        self._home_refresh()
+
     def _stop(self):
+        pending = self._respawns
+        for h in pending.values():
+            self.after_cancel(h)
+        pending.clear()
+        if not self.workers:
+            self._feed("Stopped")
+            self._sync_buttons()
+            self._home_refresh()
         for w in self.workers:
             w.stopping = True
             try:

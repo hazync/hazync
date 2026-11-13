@@ -47,13 +47,16 @@ jobs:
           python test_frozenpy.py
           python test_frozenpy.py --control
 
-      - name: Start asks for a name when none is set (a real Tk window, on Windows)
+      - name: The app's own behaviour, in real Tk windows on Windows (name prompt, GPU preparing, keeps going)
         working-directory: tools/win-gui
         run: |
           python test_name_on_start.py
           python test_name_on_start.py --control
           python test_gpuprep.py
           python test_gpuprep.py --control
+          python test_keep_going.py
+          python test_keep_going.py --control
+          python test_home_flow.py
 
       - name: The prover and the worker, from the release, checked against its SHA256SUMS
         env:
