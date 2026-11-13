@@ -585,7 +585,8 @@ def init_db():
         try: c.execute(f"ALTER TABLE ranges ADD COLUMN {col}")
         except Exception: pass
     for col in ("out_leaves INTEGER", "range_work TEXT",
-                "in_bhash TEXT", "out_bhash TEXT"):  # H7/S1: full-boundary continuity digest
+                "in_bhash TEXT", "out_bhash TEXT",   # H7/S1: full-boundary continuity digest
+                "image TEXT"):                       # handover: the image that proved it (NULL = the board's first)
         try: c.execute(f"ALTER TABLE vranges ADD COLUMN {col}")
         except Exception: pass
     # #293: the live board's contributors table predates these, and CREATE TABLE IF NOT EXISTS does
@@ -1066,7 +1067,7 @@ def pick(body):
             # The SAME test claim() applies, so what this suggests is what that would hand out. The
             # frontier's own blocker is the one exception, and it belongs to claim(): re-offering a
             # covered block is an allocation decision, and pick is advice.
-            if n not in proven and n not in held and n not in peers \
+            if n not in proven and n not in held and n not in peers and era_open(n) \
                and not (avoid_busy and n in busy) and witness_available(n):
                 return 200, {"range": str(n), "lo": n, "hi": n, "cmd": f"hazync run {n}"}
             n += 1
@@ -1223,7 +1224,7 @@ def verify_receipt(receipt: bytes, rng):
         return True, f"range [{lo}..{hi}] VERIFIED", {"lo": lo, "hi": hi, "in_tip": kv["in_tip"], "out_tip": kv["out_tip"],
                 "out_leaves": int(kv.get("out_leaves", 0)), "range_work": kv.get("range_work", "0"),
                 "in_bhash": kv.get("in_bhash", ""), "out_bhash": kv.get("out_bhash", ""),
-                "anchored": anchored}
+                "anchored": anchored, "image": kv.get("image")}
     except Exception as e:
         return False, f"verify error: {e}", None
     finally:
@@ -1308,7 +1309,9 @@ def verify_spine(receipt: bytes):
             return False, f"spine must start at block 1, got [{lo}..{hi}]", None
         return True, f"spine [1..{hi}] VERIFIED genesis-anchored", {
             "lo": lo, "hi": hi, "in_tip": kv.get("in_tip", ""), "out_tip": kv.get("out_tip", ""),
-            "out_leaves": int(kv.get("out_leaves", 0)), "range_work": kv.get("range_work", "0")}
+            "out_leaves": int(kv.get("out_leaves", 0)), "range_work": kv.get("range_work", "0"),
+            "in_bhash": kv.get("in_bhash", ""), "out_bhash": kv.get("out_bhash", ""),
+            "image": kv.get("image"), "lineage": kv.get("lineage")}
     except Exception as e:
         return False, f"spine verify error: {e}", None
     finally:
@@ -1419,6 +1422,20 @@ def submit_spine(body):
         head = {"lo": 1, "hi": meta["hi"], "out_tip": meta["out_tip"], "out_leaves": meta["out_leaves"],
                 "range_work": meta["range_work"], "sha256": hashlib.sha256(receipt).hexdigest(),
                 "bytes": len(receipt), "handle": handle, "pubkey": pk, "ts": time.time()}
+        # The handover (docs/HANDOVER.md §6): block H has no per-block range (it is never claimable), so the
+        # spine that crosses it is recorded as vrange [1..H]. Without that row the frontier walk stops at H-1 for
+        # good; with it, N's ranges from H+1 seam onto its out_tip. Only in N's era, and only a spine ending AT H:
+        # the receipt verified genesis-anchored, with N's lineage, ending on the board's own state at H.
+        _hand = (handover_era() == "post" and meta["hi"] == LZ_HANDOVER_AT and meta.get("in_bhash"))
+        if _hand:
+            c = db()
+            c.execute("INSERT OR REPLACE INTO vranges(id,lo,hi,in_tip,out_tip,pubkey,handle,ts,out_leaves,range_work,"
+                      "in_bhash,out_bhash,image) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (f"1-{meta['hi']}", 1, meta["hi"], GENESIS_TIP, meta["out_tip"], pk, handle, time.time(),
+                       meta.get("out_leaves", 0), str(meta.get("range_work", "0")),
+                       str(meta.get("in_bhash", "")), str(meta.get("out_bhash", "")), meta.get("image")))
+            c.commit(); c.close()
+            _frontier_invalidate()
         # Write both atomically-ish: receipt first, then the json that advertises it. A crash between
         # the two leaves a stale json pointing at a shorter spine, which is safe; the reverse would
         # advertise a head whose bytes are absent.
@@ -1514,12 +1531,17 @@ def foldable(limit=FOLDABLE_DEFAULT):
             continue                      # at or below the spine: it can never absorb this node
         if not _tree_node(lo, hi):
             continue                      # not a tree node — folding from it does not converge
+        _e = handover_era()
+        if _e == "post" and lo <= LZ_HANDOVER_AT:
+            continue                      # handover: this host's image cannot join the predecessor's receipts
         w = hi - lo + 1
         if ((lo - 1) // w) % 2 != 0:
             continue                      # right-hand sibling; its left partner drives the fold
         for s in starts.get(hi + 1, ()):
             if s["hi"] - s["lo"] + 1 != w:
                 continue                  # siblings must be the same width
+            if _e == "pre" and s["hi"] >= LZ_HANDOVER_AT:
+                continue                  # handover: nothing at or above H is the predecessor's to fold
             if (lo, s["hi"]) in have:
                 continue                  # parent already exists
             res = str(lo) if lo == s["hi"] else f"{lo}-{s['hi']}"
@@ -3568,6 +3590,93 @@ def expected_method_id():
     return _MID_CACHE["v"]
 
 
+# ── handover: moving the board from image O to image N at block H (docs/HANDOVER.md §6) ────────────────
+#
+# LZ_HANDOVER_AT=H names the first block the new image proves. The ERA comes from the host itself: a host whose
+# `libzync-lineage` pins a handover AT H is N ("post"); any other host is O ("pre"), capped below H. So the same
+# setting is deployed before the switch (it stops O claims reaching H) and after it (restart with N's host).
+#   pre:  claims and submissions only below H; folds only of pairs below H.
+#   post: claims only above H. Block H is never claimable: it is the handover step, which arrives as a spine
+#         ([1..H], genesis-anchored, image N) and is recorded as vrange [1..H] so the frontier walks on to H+1.
+#         O's ranges below H stay (verify-any accepts them through the lineage); new ones must end below H.
+LZ_HANDOVER_AT = int(os.environ.get("LZ_HANDOVER_AT", "0") or 0)
+_LINEAGE_CACHE = {"v": None}
+
+
+def host_lineage():
+    """HOST_BIN's `libzync-lineage`, parsed: {"method_id", "handovers": [{"image", "first_height", "verifier"}],
+    "lineage"}. Cached (a binary's lineage never changes). LZ_HANDOVER_ERA=pre|post stands in for it in mock mode."""
+    if _LINEAGE_CACHE["v"] is None:
+        out = {"method_id": None, "handovers": [], "lineage": "0" * 64}
+        if HOST_BIN:
+            try:
+                r = subprocess.run([HOST_BIN, "libzync-lineage"], capture_output=True, text=True, timeout=30)
+                for line in r.stdout.splitlines():
+                    t = line.split()
+                    if not t:
+                        continue
+                    if t[0] == "METHOD_ID" and len(t) > 1:
+                        out["method_id"] = t[1]
+                    elif t[0] == "LINEAGE" and len(t) > 1:
+                        out["lineage"] = t[1]
+                    elif t[0] == "HANDOVER" and len(t) > 1 and t[1] != "none":
+                        kv = dict(x.split("=", 1) for x in t[1:] if "=" in x)
+                        out["handovers"].append({"image": kv.get("image"), "first_height": int(kv.get("first_height", 0)),
+                                                 "verifier": kv.get("verifier", "same")})
+            except Exception:
+                return out  # not cached: an unreadable host is retried, never taken for "no handover"
+        _LINEAGE_CACHE["v"] = out
+    return _LINEAGE_CACHE["v"]
+
+
+def handover_era():
+    """None (no handover configured), "pre" (this host is the predecessor) or "post" (this host pins the handover at
+    LZ_HANDOVER_AT)."""
+    if not LZ_HANDOVER_AT:
+        return None
+    forced = os.environ.get("LZ_HANDOVER_ERA")
+    if forced in ("pre", "post"):
+        return forced
+    hs = host_lineage()["handovers"]
+    return "post" if hs and hs[-1]["first_height"] == LZ_HANDOVER_AT else "pre"
+
+
+def era_open(n):
+    """Block n may be CLAIMED in this era."""
+    e = handover_era()
+    if e is None:
+        return True
+    return n < LZ_HANDOVER_AT if e == "pre" else n > LZ_HANDOVER_AT
+
+
+def era_refusal(lo, hi):
+    """Why a submitted [lo..hi] (not a spine) is outside this era, or None."""
+    e = handover_era()
+    H = LZ_HANDOVER_AT
+    if e == "pre" and hi >= H:
+        return (f"range [{lo}..{hi}] reaches block {H}, where this board hands over to a new image: the current image "
+                f"proves only blocks below {H}")
+    if e == "post" and lo <= H:
+        return (f"range [{lo}..{hi}] starts at or below block {H}, the handover: blocks below it were proved by the "
+                f"previous image, and block {H} itself arrives as the spine's handover step (hazync spine)")
+    return None
+
+
+def handover_meta():
+    """/api/meta's handover field: {height, era, predecessor, done} or None."""
+    e = handover_era()
+    if e is None:
+        return None
+    hs = host_lineage()["handovers"]
+    head = spine_head() or {}
+    try:
+        done = int(head.get("hi", 0)) >= LZ_HANDOVER_AT and e == "post"
+    except (TypeError, ValueError):
+        done = False
+    return {"height": LZ_HANDOVER_AT, "era": e, "predecessor": hs[-1]["image"] if (hs and e == "post") else None,
+            "done": done}
+
+
 def _claim_by_nonce(c, pk, nonce, now):
     """The live claim this exact claim request already made, if any (#268) -- see claim()."""
     if not nonce or not pk:
@@ -3726,13 +3835,16 @@ def claim(body):
         # second of its proof landing. The overwrite itself has to stay (submit() refuses a verified row, so
         # a #281 re-proof could never land), so the judgement is what changes: re-offer only a cover the
         # frontier snapshot had already seen. A real #281 blocker waits FRONTIER_SETTLE longer, no more.
-        if (_blocker < _ceiling and _blocker in proven and _blocker not in held
+        if (_blocker < _ceiling and _blocker in proven and _blocker not in held and era_open(_blocker)
                 and witness_available(_blocker) and _cover_settled(c, _blocker, _fr_taken)):
             h = _blocker
         else:
             h = 1
+            # handover: in N's era blocks up to H are not N's to prove, so the scan starts above H
+            if handover_era() == "post":
+                h = LZ_HANDOVER_AT + 1
             while h < _ceiling:
-                if h not in proven and h not in held and witness_available(h):
+                if h not in proven and h not in held and era_open(h) and witness_available(h):
                     break
                 h += 1
             else:
@@ -3962,6 +4074,8 @@ def submit(body):
     if _genesis: return _genesis
     _spelling = range_id_refusal(rid, *parse_any_range(rid))   # likewise: one id per range
     if _spelling: return _spelling
+    _era = era_refusal(*parse_any_range(rid))                 # handover: outside this image's blocks (docs/HANDOVER.md)
+    if _era: return 409, {"error": _era}
     # #281: refuse a wide range that starts INSIDE existing coverage without being backed by it.
     #
     # `_frontier_chain` needs `prev.hi + 1 == lo` EXACTLY (H9), so such a range can never join the
@@ -4073,11 +4187,11 @@ def submit(body):
             # the claim is [0..999] but the receipt proves [1..999], and the frontier chain needs lo==1.
             v_lo, v_hi = int(meta.get("lo", r["lo"])), int(meta.get("hi", r["hi"]))
             c.execute("INSERT OR REPLACE INTO vranges(id,lo,hi,in_tip,out_tip,pubkey,handle,ts,out_leaves,range_work,"
-                      "in_bhash,out_bhash)"
-                      " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "in_bhash,out_bhash,image)"
+                      " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (rid, v_lo, v_hi, meta["in_tip"], meta["out_tip"], pk, handle, time.time(),
                        meta.get("out_leaves", 0), str(meta.get("range_work", "0")),
-                       str(meta.get("in_bhash", "")), str(meta.get("out_bhash", ""))))
+                       str(meta.get("in_bhash", "")), str(meta.get("out_bhash", "")), meta.get("image")))
             c.execute("INSERT OR IGNORE INTO contributors(pubkey,handle,first_seen) VALUES(?,?,?)",
                       (pk, handle, time.time()))
             c.execute("UPDATE contributors SET blocks=blocks+?, handle=? WHERE pubkey=?",
@@ -4216,7 +4330,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/pick": code, obj = pick(None); return self._send(code, obj)
         if p == "/api/meta":                               # pre-flight: expected guest id + frontier
             return self._send(200, {"method_id": expected_method_id(), "frontier": frontier_hi(),
-                                    "libzync": LIBZYNC,
+                                    "libzync": LIBZYNC, "handover": handover_meta(),
                                     "reproduce": "reproduce/METHOD_ID",
                                     "source_sha256": source_sha256()})
         if p == "/api/foldable":                           # adjacent pairs whose fold does not exist yet

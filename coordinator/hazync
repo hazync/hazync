@@ -538,7 +538,9 @@ def cmd_pick(args):
     print("claim the next block with:  hazync run")
 
 _HARD_ERR = ("parse bundle", "invalid type", "deserialize", "missing field", "METHOD_ID", "image id",
-             "read bundle", "No such file", "no such file")
+             "read bundle", "No such file", "no such file",
+             # a fold across a handover (docs/HANDOVER.md): this host's image cannot join the other image's receipt
+             "does not verify against this image")
 # #261: this box cannot run CUDA at all. Permanent for the box, so neither a smaller segment nor the next
 # block can help -- and retrying is actively harmful: every retry of `run` CLAIMS a new block and then
 # abandons it for CLAIM_TTL. A RunPod 4090 with no usable device claimed and abandoned 14 blocks in 15
@@ -1864,12 +1866,26 @@ def cmd_spine(args):
     # spine advances by a join of [1..N] and [N+1..M] (`fold-range`), whose guest enforces the seam, and the
     # coordinator checks the result is anchored at genesis when it is submitted.
     try:
-        lz = bool(json.loads(get("/api/meta")).get("libzync"))
+        _meta = json.loads(get("/api/meta"))
+        lz = bool(_meta.get("libzync"))
+        handover = _meta.get("handover") if isinstance(_meta.get("handover"), dict) else None
     except SystemExit:
         raise
     except Exception:
-        lz = False
+        lz, handover = False, None
     absorb = "fold-range" if lz else "extend-spine"
+    # The handover (docs/HANDOVER.md §6): in the new image's era the spine crosses block H once, by proving H as the
+    # handover step on the predecessor's spine [1..H-1]. Below that the spine is the predecessor's, absorbed with ITS
+    # host (this host cannot join the predecessor's receipts).
+    H = int(handover["height"]) if (lz and handover and handover.get("era") == "post") else None
+    mine = None
+    if H:
+        try:
+            out = subprocess.run([HOSTBIN, "libzync-lineage"], capture_output=True, text=True, timeout=60).stdout
+            mine = next((int(t.split("=", 1)[1]) for l in out.splitlines() if l.startswith("HANDOVER ")
+                         for t in l.split() if t.startswith("first_height=")), None)
+        except Exception:
+            mine = None
 
     def chunks_at(nxt):
         nonlocal index, index_at
@@ -1914,6 +1930,30 @@ def cmd_spine(args):
             was = int(head["hi"]); nxt = was + 1
             cur = work / "spine_head.bin"
             cur.write_bytes(get("/api/spine/proof"))
+            if H and nxt < H and mine == H:
+                print(f"  the spine is at [1..{was}], below the handover at block {H}: blocks below {H} are the previous "
+                      f"image's, and this host (the new image) cannot join its receipts.\n"
+                      f"  Absorb them with the previous release's host: HAZYNC_HOST=<previous host> hazync spine.\n"
+                      f"  Then run this again: it proves block {H} as the handover step.")
+                break
+            if H and nxt == H:
+                if mine != H:
+                    sys.exit(f"the board hands over to a new image at block {H}, and this host does not pin that "
+                             f"handover (`{HOSTBIN} libzync-lineage`). Update the prover binary to the current release.")
+                leaf = work / f"leaf_{H}.bin"
+                leaf.write_bytes(get(f"/api/witness/{H}"))
+                out = work / f"spine_{H}.bin"
+                print(f"handover: proving block {H} on the previous image's spine [1..{was}] — the one serial step "
+                      f"between the two images…")
+                with gpu_lock("handover"):
+                    r = subprocess.run([HOSTBIN, "libzync-handover", str(cur), str(leaf), str(out)],
+                                       capture_output=True, text=True)
+                if r.returncode != 0 or not out.exists():
+                    sys.exit(f"the handover at block {H} failed:\n{((r.stdout or '') + (r.stderr or ''))[-600:]}")
+                if submit_head(out, H) != "ok":
+                    break
+                done += 1; blocks += 1
+                continue
             outcome, fetched = None, False
             cands = chunks_at(nxt)
             for i, (hi, path) in enumerate(cands):
