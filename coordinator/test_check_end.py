@@ -41,12 +41,12 @@ def check(cond, what):
     global fails
     print(("  ok   " if cond else "  FAIL ") + what); fails += 0 if cond else 1
 
-def fake_host(lo, hi, end_mark):
+def fake_host(lo, hi, end_mark, extra=""):
     tip = server.GENESIS_TIP if lo == 1 else "ab" * 32
     with open(HOST, "w") as f:
         f.write("#!/bin/sh\necho \"$@\" >> %s\n" % ARGS
                 + f"echo 'RANGE-OK lo={lo} hi={hi} in_tip={tip} out_tip={'cd' * 32} out_leaves=3 range_work=0 "
-                + f"in_bhash={'00' * 32} out_bhash={'11' * 32} anchored={int(lo == 1)}{' end=board' if end_mark else ''}'\n")
+                + f"in_bhash={'00' * 32} out_bhash={'11' * 32} anchored={int(lo == 1)}{' end=board' if end_mark else ''}{extra}'\n")
     os.chmod(HOST, os.stat(HOST).st_mode | stat.S_IEXEC)
     open(ARGS, "w").close()
 
@@ -68,6 +68,18 @@ check(ok and len(argv) == 1 and "--check-end" in argv[0].split(),
 fake_host(1, 40, False)
 ok, note, meta = server.verify_spine(b"spine")
 check(not ok and "end state" in note, f"a spine line without end=board is refused ({note[:80]})")
+
+# a dev-mode fake (the host says fake=1 only under its two test switches) is refused unless the board is a test board
+fake_host(5, 5, True, " fake=1")
+os.environ.pop("COORD_ALLOW_MOCK", None)
+ok, note, meta = server.verify_receipt(b"receipt", rng)
+check(not ok and "fake" in note, f"a fake=1 leaf is refused on a real board ({note[:80]})")
+ok, note, meta = server.verify_spine(b"spine")
+check(not ok and "fake" in note, f"a fake=1 spine is refused on a real board ({note[:80]})")
+os.environ["COORD_ALLOW_MOCK"] = "1"
+ok, note, meta = server.verify_receipt(b"receipt", rng)
+check(ok, f"a fake=1 leaf is taken under COORD_ALLOW_MOCK (testing) ({note[:60]})")
+os.environ.pop("COORD_ALLOW_MOCK")
 
 if CONTROL:
     if fails == 4:

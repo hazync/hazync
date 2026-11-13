@@ -82,8 +82,16 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
     let r: risc0_zkvm::Receipt = bincode::deserialize(&bytes).map_err(|e| format!("{path}: not a receipt: {e}"))?;
     // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in this process's environment: refuse both, as
     // libzync-verify does, so a stray dev-mode variable on the board can never let a hand-written state in.
-    if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { return Err("a dev-mode FakeReceipt is not a proof".into()); }
-    if crate::verify::dev_mode_env() { return Err("RISC0_DEV_MODE is set in the verifier's environment: refusing to verify".into()); }
+    // The one exception is a test opt-in that takes TWO switches (RISC0_DEV_MODE and HAZYNC_TEST_FAKE_RECEIPTS=1); the
+    // RANGE-OK line then says `fake=1`, which the board refuses unless it runs with COORD_ALLOW_MOCK (testing only).
+    let test_fake = crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_FAKE_RECEIPTS").as_deref() == Ok("1");
+    let fake = matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_));
+    if test_fake {
+        eprintln!("WARNING: HAZYNC_TEST_FAKE_RECEIPTS=1 under RISC0_DEV_MODE: fake receipts are accepted (testing only)");
+    } else {
+        if fake { return Err("a dev-mode FakeReceipt is not a proof".into()); }
+        if crate::verify::dev_mode_env() { return Err("RISC0_DEV_MODE is set in the verifier's environment: refusing to verify".into()); }
+    }
     // MISMATCH: the coordinator reads it as a different guest build (the common contributor mistake), not a forgery
     r.verify(METHOD_ID).map_err(|e| format!("does not verify against this coordinator's libzync image (METHOD_ID MISMATCH or invalid proof): {e}"))?;
     let st: ChainState = r.journal.decode().map_err(|e| format!("journal is not a ChainState: {e}"))?;
@@ -112,8 +120,8 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
                                 not Bitcoin's chain", st.height, hex(&st.tip_hash), hex(&after.tip_hash)));
         }
     }
-    println!("RANGE-OK lo={lo} hi={} in_tip={} out_tip={} out_leaves={} range_work=0 in_bhash={} out_bhash={} anchored={}{}",
+    println!("RANGE-OK lo={lo} hi={} in_tip={} out_tip={} out_leaves={} range_work=0 in_bhash={} out_bhash={} anchored={}{}{}",
              st.height, hex(&st.anchor_id), hex(&link_digest(&st)), st.utxo_leaves, hex(&before.tip_hash), hex(&st.tip_hash),
-             (lo == 1) as u8, if check_end { " end=board" } else { "" });
+             (lo == 1) as u8, if check_end { " end=board" } else { "" }, if fake || test_fake { " fake=1" } else { "" });
     Ok(())
 }

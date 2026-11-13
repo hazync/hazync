@@ -1184,6 +1184,8 @@ def verify_receipt(receipt: bytes, rng):
         if LIBZYNC and kv.get("end") != "board":
             # an older host ignores --check-end: fail closed rather than accept an unchecked end
             return False, "verifier did not check the receipt's end state against the board's (host too old for --check-end)", None
+        if kv.get("fake") and not os.environ.get("COORD_ALLOW_MOCK"):
+            return False, "receipt rejected — a dev-mode fake receipt is not a proof (accepted only under COORD_ALLOW_MOCK, testing)", None
         lo, hi = int(kv["lo"]), int(kv["hi"])
         # Genesis seed: block 0 is unprovable (its in-boundary IS the genesis anchor), so a claimed
         # [0..hi] range is satisfied by a [1..hi] receipt whose in_tip verify-any pins to GENESIS_TIP.
@@ -1282,6 +1284,8 @@ def verify_spine(receipt: bytes):
         kv = dict(t.split("=", 1) for t in line[len("RANGE-OK"):].split() if "=" in t)
         if LIBZYNC and kv.get("end") != "board":
             return False, "spine rejected — the verifier did not check its end state against the board's (host too old)", None
+        if kv.get("fake") and not os.environ.get("COORD_ALLOW_MOCK"):
+            return False, "spine rejected — a dev-mode fake receipt is not a proof (accepted only under COORD_ALLOW_MOCK, testing)", None
         lo, hi = int(kv["lo"]), int(kv["hi"])
         if lo != 1:
             return False, f"spine must start at block 1, got [{lo}..{hi}]", None
