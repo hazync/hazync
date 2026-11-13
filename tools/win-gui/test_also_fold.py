@@ -101,6 +101,22 @@ def main():
     j = jobs()
     check(j.count("run") >= 4 and j.count("fold") == 1,
           f"the prover keeps taking blocks; the folder, with nothing to fold, waits the idle delay ({j.count('run')} runs, {j.count('fold')} folds)")
+    log = app.log.get("1.0", "end")
+    check("✓ range 1500" in log and "âœ“" not in log,
+          "the worker's ✓ arrives as ✓ in the technical log, not as 'âœ“' (decoded as UTF-8, not the locale's)")
+    import re
+    lines = [l for l in log.splitlines() if l.strip()]
+    check(lines and all(re.match(r"^\d\d:\d\d:\d\d  ", l) for l in lines),
+          f"every technical-log line is timestamped ({lines[:1]})")
+    from types import SimpleNamespace as W
+    real = app.workers
+    app.workers = [W(job="run"), W(job="fold")]
+    crew = app._crew()
+    app.workers = [W(job="run"), W(job="run")]
+    crew2 = app._crew()
+    app.workers = real
+    check(crew == "1 proving, 1 folding" and crew2 == "2 at once",
+          f"a prover and a folder read '1 proving, 1 folding', not '2 at once' ({crew!r}; two provers: {crew2!r})")
     app._home_refresh()
     check("ready when you are" not in app.v_head.get().lower(),
           f"while it keeps going, Home never says 'ready when you are', even between blocks: {app.v_head.get()!r}")

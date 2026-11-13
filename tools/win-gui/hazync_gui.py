@@ -437,7 +437,7 @@ class App(tk.Tk):
             bits = [f"Running for {activity.clock(now - min(w.started for w in self.workers))}",
                     f"last heard from the prover {activity.clock(now - max(w.heard for w in self.workers))} ago"]
             if len(self.workers) > 1:
-                bits.append(f"{len(self.workers)} at once")
+                bits.append(self._crew())
             if self._session_line():
                 bits.append(self._session_line() + " this session")
             self.v_meta.set(" · ".join(bits))
@@ -1239,7 +1239,7 @@ class App(tk.Tk):
         self.log.configure(yscrollcommand=sb.set, state="disabled")
         for tag, key in (("cuda-error", "bad"), ("abort", "bad"), ("oom", "lamp_text"),
                          ("proved", "good"), ("accepted", "good"), ("claimed", "lamp_text"),
-                         ("sys", "slate")):
+                         ("sys", "slate"), ("when", "slate")):
             self.log.tag_configure(tag, foreground=p[key])
 
     # ── tab: settings ───────────────────────────────────────────────────────────────────────────
@@ -1494,6 +1494,9 @@ class App(tk.Tk):
             while True:
                 tag, text = self.q.get_nowait()
                 self.log.configure(state="normal")
+                # ⭐ Every line timestamped (owner, 11-13: "the technical log isn't timestamped"). Stamped as it is
+                # shown; the queue is drained every POLL_MS, so that is when it happened, to the second.
+                self.log.insert("end", time.strftime("%H:%M:%S  "), "when")
                 self.log.insert("end", text.rstrip() + "\n", tag)
                 self.log.configure(state="disabled")
                 wrote = True
@@ -1596,7 +1599,7 @@ class App(tk.Tk):
         on = sorted({w.label for w in self.workers if w.label})
         self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
                    + (f" on {len(on)} graphics cards: {', '.join(on)}" if len(on) > 1 else
-                      f", {len(self.workers)} at once" if len(self.workers) > 1 else ""))
+                      f", {self._crew()}" if len(self.workers) > 1 else ""))
         if any(plan):
             every = cards.labels(found)
             idle = [c for c in found if c["cc_major"] < floor]
@@ -1707,7 +1710,9 @@ class App(tk.Tk):
         if supervisor.IS_WINDOWS:
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, bufsize=1, errors="replace", **kwargs)
+                             text=True, encoding="utf-8", bufsize=1, errors="replace", **kwargs)
+        # ⛔ encoding="utf-8": the worker is told PYTHONIOENCODING=utf-8, and text=True alone decodes with the LOCALE's
+        # (cp1252 on Windows), so its "✓" arrived as "âœ“" (Xesktop, 11-13). test_log_visible.py checks a ✓ survives.
         w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
         if job == "run" and extra:
             w.activity.set_range(extra[0])
@@ -1716,6 +1721,14 @@ class App(tk.Tk):
                   + (f" — on {label} (card {card['index']}, segment size "
                      f"{env.get('HAZYNC_SEG_PO2', 'default')})" if card else ""))
         threading.Thread(target=self._pump, args=(w,), daemon=True).start()
+
+    def _crew(self):
+        """What is running, in words. ⚠ Not "2 at once" when one of the two is the folder (Xesktop, 11-13): that read
+        as two blocks being proved. "1 proving, 1 folding"; only provers: "3 at once"."""
+        folds = sum(1 for w in self.workers if w.job == "fold")
+        if not folds:
+            return f"{len(self.workers)} at once"
+        return f"{len(self.workers) - folds} proving, {folds} folding"
 
     def _pump(self, w):
         try:
