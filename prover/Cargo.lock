@@ -1998,6 +1998,7 @@ dependencies = [
  "methods",
  "num-bigint 0.4.8",
  "risc0-binfmt",
+ "risc0-zkp",
  "risc0-zkvm",
  "serde",
  "serde_json",
