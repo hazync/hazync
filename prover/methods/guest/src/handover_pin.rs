@@ -12,6 +12,24 @@
 pub struct Handover {
     pub image: [u32; 8],
     pub first_height: u32,
+    /// The RISC Zero version the predecessor's receipts were made under, as that version's succinct verifier-parameter
+    /// digest. ZERO = the same RISC Zero as this image (the handover step uses `env::verify`). Non-zero = an older one,
+    /// verified by its vendored recursion circuit (src/xver/); the image must be built with that version's `xver-*`
+    /// feature. ⛔ Only across a NON-soundness upgrade (docs/HANDOVER.md §4).
+    pub verifier: [u8; 32],
+}
+
+/// `verifier` for a predecessor on the same RISC Zero.
+pub const SAME_ZKVM: [u8; 32] = [0u8; 32];
+
+/// The preimage of a lineage step, at its length: 69 bytes, plus the 32-byte verifier digest when it is not
+/// SAME_ZKVM. A same-version entry therefore digests exactly as before the field existed.
+pub fn lineage_step(prev: &[u8; 32], h: &Handover) -> ([u8; 101], usize) {
+    let mut p = [0u8; 101];
+    p[..69].copy_from_slice(&lineage_preimage(prev, h));
+    if h.verifier == SAME_ZKVM { return (p, 69); }
+    p[69..101].copy_from_slice(&h.verifier);
+    (p, 101)
 }
 
 /// Domain tags. 0x00 coin leaf and 0x01 forest node are `utreexo.rs`; 0x10 / 0x11 are the coinbase SMT's leaf / node;
@@ -19,8 +37,9 @@ pub struct Handover {
 pub const TAG_BLOCK_LEAF: u8 = 0x02;
 pub const TAG_LINEAGE: u8 = 0x03;
 
-/// The preimage of one step of the lineage digest:
-/// `L' = SHA-256(0x03 ‖ L ‖ image, as 8 u32 LE ‖ first_height u32 LE)`, starting from 32 zero bytes.
+/// The first 69 bytes of one step of the lineage digest (use `lineage_step`):
+/// `L' = SHA-256(0x03 ‖ L ‖ image, as 8 u32 LE ‖ first_height u32 LE [‖ verifier, if not SAME_ZKVM])`, starting from
+/// 32 zero bytes.
 pub fn lineage_preimage(prev: &[u8; 32], h: &Handover) -> [u8; 69] {
     let mut p = [0u8; 69];
     p[0] = TAG_LINEAGE;

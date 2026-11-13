@@ -40,10 +40,10 @@ build host_reg HAZYNC_BASE=$BASE HAZYNC_LIBZYNC=1 HAZYNC_NETWORK=regtest
 # image N: O pinned at 101 in the regtest lineage, built, then the pin reverted (git checkout)
 L=methods/guest/src/lineage/regtest_coinlog.rs
 W=$("$OUT/host_reg" method-id | sed -n 's/.*u32x8 *\[\(.*\)\]/\1/p')
-sed -i "s/^pub const LINEAGE: &\[crate::handover_pin::Handover\] = &\[\];/pub const LINEAGE: \&[crate::handover_pin::Handover] = \&[crate::handover_pin::Handover { image: [$W], first_height: 101 }];/" $L
+sed -i "s/^pub const LINEAGE: &\[crate::handover_pin::Handover\] = &\[\];/pub const LINEAGE: \&[crate::handover_pin::Handover] = \&[crate::handover_pin::Handover { image: [$W], first_height: 101, verifier: crate::handover_pin::SAME_ZKVM }];/" $L
 grep -q 'first_height: 101' $L || { echo "FATAL: the regtest pin edit did not apply" >&2; exit 1; }
 build host_regN HAZYNC_BASE=$BASE HAZYNC_LIBZYNC=1 HAZYNC_NETWORK=regtest
-git -C "$REPO" checkout -- "prover/$L" 2>/dev/null || sed -i "s/^pub const LINEAGE: .*first_height: 101 }\];/pub const LINEAGE: \&[crate::handover_pin::Handover] = \&[];/" $L
+git -C "$REPO" checkout -- "prover/$L" 2>/dev/null || sed -i "s/^pub const LINEAGE: .*first_height: 101.*\];/pub const LINEAGE: \&[crate::handover_pin::Handover] = \&[];/" $L
 # Core's own test vectors as guest cases, from the Core tree the guest is built from
 python3 "$REPO/scripts/libzync/core_vectors.py" "$BASE/bitcoin-core" "$OUT/core_vectors.json" > "$OUT/core_vectors.log" 2>&1
 python3 "$REPO/scripts/libzync/core_vectors.py" "$BASE/bitcoin-core" "$OUT/core_vectors_base.json" --no-variants >> "$OUT/core_vectors.log" 2>&1

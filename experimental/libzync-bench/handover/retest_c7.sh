@@ -12,7 +12,7 @@ grep -a '^[A-Z-]\{4,\} ' $O/rig.out | grep -v '^AGREE'; tail -1 $O/rig.out
 step "build regtest N: O pinned at 101 (pin not committed)"
 P=$Z/prover/methods/guest/src/lineage/regtest_coinlog.rs; cp $P $O/lineage.rs.orig
 W=$($R/host_c7reg method-id 2>/dev/null | sed -n 's/.*u32x8 *\[\(.*\)\]/\1/p')
-sed -i "s/^pub const LINEAGE: &\[crate::handover_pin::Handover\] = &\[\];/pub const LINEAGE: \&[crate::handover_pin::Handover] = \&[crate::handover_pin::Handover { image: [$W], first_height: 101 }];/" $P
+sed -i "s/^pub const LINEAGE: &\[crate::handover_pin::Handover\] = &\[\];/pub const LINEAGE: \&[crate::handover_pin::Handover] = \&[crate::handover_pin::Handover { image: [$W], first_height: 101, verifier: crate::handover_pin::SAME_ZKVM }];/" $P
 grep -q 'first_height: 101' $P || { echo PIN_EDIT_FAILED; cp $O/lineage.rs.orig $P; exit 1; }
 bash $R/build.sh c7regN HAZYNC_NETWORK=regtest HAZYNC_COINLOG=1; cp $O/lineage.rs.orig $P
 grep -a 'REAL_EXIT\|^METHOD_ID' $R/build_c7regN.log; [ -x $R/host_c7regN ] || { echo BUILD_FAILED N; exit 1; }

@@ -73,10 +73,17 @@ def path(hashes, height):
 
 
 def lineage(handovers):
-    """handovers: (image id as 8 u32 words, first height), oldest first."""
+    """handovers: (image id as 8 u32 words, first height[, verifier]), oldest first. `verifier` is the predecessor's
+    RISC Zero succinct verifier-parameter digest (32 bytes) for a cross-version handover; absent or all zero = the same
+    RISC Zero, and then the step is exactly the 69-byte preimage it always was (docs/HANDOVER.md §3)."""
     d = bytes(32)
-    for words, first in handovers:
-        d = sha256(bytes([TAG_LINEAGE]) + d + struct.pack("<8I", *words) + struct.pack("<I", first))
+    for h in handovers:
+        words, first = h[0], h[1]
+        verifier = h[2] if len(h) > 2 else bytes(32)
+        pre = bytes([TAG_LINEAGE]) + d + struct.pack("<8I", *words) + struct.pack("<I", first)
+        if verifier != bytes(32):
+            pre += verifier
+        d = sha256(pre)
     return d
 
 
@@ -95,6 +102,7 @@ def vectors():
         print(f"path(5)[{i}]        ", p.hex())
     print("lineage(1 hop)    ", lineage([((1, 2, 3, 4, 5, 6, 7, 8), 974000)]).hex())
     print("lineage(2 hops)   ", lineage([((1, 2, 3, 4, 5, 6, 7, 8), 974000), ((9, 9, 9, 9, 9, 9, 9, 9), 980000)]).hex())
+    print("lineage(xver hop) ", lineage([((1, 2, 3, 4, 5, 6, 7, 8), 974000), ((9, 9, 9, 9, 9, 9, 9, 9), 980000, bytes(range(32)))]).hex())
 
 
 def check(hashes_path, states_path, state_path):

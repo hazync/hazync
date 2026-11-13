@@ -33,6 +33,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod utreexo;
 mod handover_pin;
+// Cross-version handover: the vendored recursion circuits of older RISC Zero versions (only those the features name).
+mod xver;
+// The predecessor's RISC Zero version must be one this build carries (an image pinning it without the feature would
+// build and then fail every handover at run time).
+const _: () = {
+    let l = lineage::LINEAGE;
+    if !l.is_empty() {
+        let v = &l[l.len() - 1].verifier;
+        let mut zero = true;
+        let mut i = 0;
+        while i < 32 { if v[i] != 0 { zero = false; } i += 1; }
+        assert!(zero || xver::carried(v), "the lineage's predecessor needs this image's xver-* feature for its RISC Zero version");
+    }
+};
 // The lineage this image variant pins (src/lineage/): only the variant's own file is compiled in.
 #[cfg(all(not(feature = "signet"), not(feature = "regtest"), not(feature = "coinlog")))]
 #[path = "lineage/mainnet.rs"]
@@ -1488,7 +1502,7 @@ fn sha256_guest(b: &[u8]) -> [u8; 32] {
 /// The lineage digest of `list`, an initial slice of lineage::LINEAGE.
 fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
     let mut l = [0u8; 32];
-    for h in list { l = sha256_guest(&handover_pin::lineage_preimage(&l, h)); }
+    for h in list { let (p, n) = handover_pin::lineage_step(&l, h); l = sha256_guest(&p[..n]); }
     l
 }
 
@@ -2222,7 +2236,20 @@ fn aggregate() {
     // from input, so `self_id` cannot widen it. An image with an empty LINEAGE has no handover step at all.
     let pred = lineage::LINEAGE.last().filter(|_| is_base == 2);
     assert!(is_base != 2 || pred.is_some(), "handover: this image has no predecessor");
-    if let Some(p) = pred { env::verify(p.image, &prev_journal).expect("predecessor chain proof invalid"); }
+    if let Some(p) = pred {
+        if p.verifier == handover_pin::SAME_ZKVM {
+            env::verify(p.image, &prev_journal).expect("predecessor chain proof invalid");
+        } else {
+            // Cross-version (src/xver): the predecessor ran an older RISC Zero, whose seal this image's recursion
+            // circuit cannot check. Its succinct seal comes from input and is verified by the vendored old circuit,
+            // bound to exactly ReceiptClaim::ok(p.image, prev_journal): the same statement env::verify checks.
+            let n: u32 = env::read();
+            let mut words = vec![0u32; n as usize];
+            if n > 0 { env::read_slice(&mut words); }
+            xver::verify(&p.verifier, p.image, &prev_journal, &words, &xver::accel::suite())
+                .expect("predecessor chain proof invalid (cross-version)");
+        }
+    }
     let words: Vec<u32> = prev_journal.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     // ⛔ A new image that changes ChainState must decode the PREDECESSOR's format here when is_base == 2.
     let prev: ChainState = risc0_zkvm::serde::from_slice(&words).expect("decode prev");
