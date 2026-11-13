@@ -13,7 +13,6 @@
 #   scripts/test-release-sign.sh --workflow <file>    # another copy of the workflow
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
-REPO_ROOT=$(pwd)
 WF=.github/workflows/release-sign.yml; CONTROL=0
 case "${1:-}" in
   --control)  CONTROL=1 ;;
@@ -54,7 +53,7 @@ fi
 # a throwaway signing key
 export GNUPGHOME=$T/gnupg; mkdir -m 700 "$GNUPGHOME"
 gpg --batch --quiet --passphrase '' --quick-gen-key "test <test@invalid>" ed25519 sign never 2>/dev/null
-export GPG_PRIVATE_KEY=$(gpg --batch --armor --export-secret-keys) GPG_PASSPHRASE=''
+GPG_PRIVATE_KEY=$(gpg --batch --armor --export-secret-keys); export GPG_PRIVATE_KEY GPG_PASSPHRASE=''
 # a stub gh: `release view --json assets` lists dist/
 mkdir -p "$T/bin"; cat > "$T/bin/gh" <<'SH'
 #!/bin/bash
@@ -120,4 +119,5 @@ if [ "$CONTROL" = 1 ]; then
     echo "CONTROL BROKEN: only $fails failed -- this test proves nothing"; exit 1
 fi
 [ "$fails" = 0 ] && echo PASS || { echo "FAIL ($fails)"; for f in "$T"/*/write.log "$T"/*/sign.log; do echo "== $f"; tail -5 "$f"; done; }
-exit $([ "$fails" = 0 ] && echo 0 || echo 1)
+[ "$fails" = 0 ] || exit 1
+exit 0

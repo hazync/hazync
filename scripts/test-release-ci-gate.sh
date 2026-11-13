@@ -56,4 +56,5 @@ if [ "$CONTROL" = 1 ]; then
     echo "CONTROL BROKEN: only $fails failed -- this test proves nothing"; exit 1
 fi
 [ "$fails" = 0 ] && echo PASS || echo "FAIL ($fails)"
-exit $([ "$fails" = 0 ] && echo 0 || echo 1)
+[ "$fails" = 0 ] || exit 1
+exit 0
