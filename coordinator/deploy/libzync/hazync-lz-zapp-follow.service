@@ -1,0 +1,15 @@
+[Unit]
+Description=Hazync libzync board: keep the zyncAPP fact service on the newest genesis-anchored proof (Coin check)
+After=network.target bitcoind.service hazync-lz-coordinator.service
+
+[Service]
+Type=oneshot
+# root: it reads the node's RPC cookie and restarts hazync-lz-zync-serve; it writes only ZAPP_ROOT and ZAPP_SERVE_DIR
+Environment=ZAPP_ROOT=/srv/bulk/libzync-zapp
+Environment=ZAPP_SERVE_DIR=/var/lib/hazync-lz/zapp
+Environment=COORD_SPINE=/var/lib/hazync-lz/spine
+Environment=ZAPP_FETCH=/srv/bulk/libzync-board/bin/fetch_block_rpc.py
+Environment=HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie
+ExecStart=/usr/local/sbin/hazync-lz-zapp-follow
+Nice=10
+IOSchedulingClass=idle

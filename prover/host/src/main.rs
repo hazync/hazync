@@ -1378,8 +1378,14 @@ fn main() {
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "verify-any") {
-        let f = args.get(p + 1).expect("verify-any <bin> [<lo>]");
-        lz_coord::verify_any_cmd(f, args.get(p + 2).map(|v| v.parse().expect("verify-any <bin> [<lo>]: lo is a height")));
+        let f = args.get(p + 1).expect("verify-any <bin> [<lo>] [--check-end]");
+        let (mut lo, mut check_end) = (None, false);
+        for a in &args[p + 2..] {
+            if a == "--check-end" { check_end = true; }
+            else if lo.is_none() { lo = Some(a.parse().expect("verify-any <bin> [<lo>] [--check-end]: lo is a height")); }
+            else { panic!("verify-any <bin> [<lo>] [--check-end]: unexpected argument {a}"); }
+        }
+        lz_coord::verify_any_cmd(f, lo, check_end);
         return;
     }
     if args.iter().any(|a| a == "bridge") {

@@ -1301,6 +1301,23 @@ jobs:
         run: |
           cd coordinator
           python3 test_blocker_message.py --control
+      - name: The board checks a receipt's END state against its own (a block that is not Bitcoin's is refused)
+        # Fable review 11-12: verify-any checked only where a receipt STARTS, so a block mined on the board's real
+        # state (difficulty 1 early on) proved and was accepted. The board now passes --check-end and refuses a
+        # RANGE-OK line without end=board; a leaf and a spine (verified once, not twice).
+        run: cd coordinator && python3 test_check_end.py
+      - name: End-state check POSITIVE CONTROL (the check taken out of server.py — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_check_end.py --control
+      - name: Free keys cannot stall the board (junk submits, per-IP cap for new keys)
+        # Fable review 11-12: three junk POSTs parked a block another worker was proving; made-up keys from one IP
+        # could take every low block. Failures count only from the live claimant; CLAIM_NEW_IP_MAX caps new keys.
+        run: cd coordinator && python3 test_claim_sybil.py
+      - name: Free-key guards POSITIVE CONTROL (both guards taken out — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_claim_sybil.py --control
       - name: G1 retention gate still detects a missing receipt (positive control)
         # check-retention.py is what separates "the board says this block is proven" from "we can
         # hand you the proof for it" — G1's actual content. It runs unattended on the coordinator, so

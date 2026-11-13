@@ -211,6 +211,11 @@ CLAIM_GRACE = int(os.environ.get("CLAIM_GRACE", "600"))  # never-beaten claims: 
 # blocks it never proved, re-claiming in bursts as CLAIM_GRACE released them: another contributor's worker on
 # the same IP proved 9,116 of its 9,133 claimed blocks, and the frontier waited over an hour behind one.
 CLAIM_OPEN_MAX = int(os.environ.get("CLAIM_OPEN_MAX", "4"))
+# Live claims all NEW keys (no verified block yet) from one IP may hold together (0: no limit). Keys are free, so
+# CLAIM_OPEN_MAX alone let one IP take a block per fresh key: the Fable review (11-12) took blocks 2..21 with 20
+# made-up keys, and at the POST rate limit one IP could hold ~1,200 of the lowest open blocks. A key with a verified
+# block has spent real work and is limited by CLAIM_OPEN_MAX only; RATE_EXEMPT addresses (our own boxes) are exempt.
+CLAIM_NEW_IP_MAX = int(os.environ.get("CLAIM_NEW_IP_MAX", "8"))
 # Seconds before a key may re-take a block its OWN claim let lapse without a single beat (0: straight away). The
 # grace (#296) frees such a block early so OTHER workers can take it; the same key must not simply take it back,
 # or one unworked block consumes that key and nobody else is offered it (the 39,318 rule). Measured 2026-09-14:
@@ -575,7 +580,8 @@ def init_db():
     for col in ("attempts INTEGER DEFAULT 0", "env_failures INTEGER DEFAULT 0", "last_error TEXT",
                 "last_failed_at REAL", "last_assignee TEXT",    # failure tracking
                 "claim_nonce TEXT",                              # #268: makes a retried claim idempotent
-                "claim_signed INTEGER"):                         # #310: the claim was signed by its key
+                "claim_signed INTEGER",                          # #310: the claim was signed by its key
+                "claim_ip TEXT"):                                # CLAIM_NEW_IP_MAX: where a new key's claim came from
         try: c.execute(f"ALTER TABLE ranges ADD COLUMN {col}")
         except Exception: pass
     for col in ("out_leaves INTEGER", "range_work TEXT",
@@ -1157,7 +1163,9 @@ def verify_receipt(receipt: bytes, rng):
     try:
         # libzync: a receipt names only the DIGEST of the state before its range, so the host is told the claimed
         # start and checks it against that state (genesis, or leaf_<lo>.bin's prev)
-        r = subprocess.run([HOST_BIN, "verify-any", tmp] + ([str(max(rng["lo"], 1))] if LIBZYNC else []),
+        # and (--check-end) that the state it ends on is the board's own at hi: without it a prover could mine its own
+        # block on the real state before it (difficulty 1 early on) and have a block that is not Bitcoin's accepted
+        r = subprocess.run([HOST_BIN, "verify-any", tmp] + ([str(max(rng["lo"], 1)), "--check-end"] if LIBZYNC else []),
                            capture_output=True, timeout=120)
         out = r.stdout.decode(errors="replace")  # S3: parse ONLY stdout, never fold stderr/RUST_LOG in
         # take the single line the verifier prints (it starts with RANGE-OK) — no free-text can inject keys
@@ -1173,6 +1181,11 @@ def verify_receipt(receipt: bytes, rng):
                                "the reproducible build (reproduce/Dockerfile); expected id is in reproduce/METHOD_ID."), None
             return False, "receipt rejected — not a valid proof (forged/tampered/corrupt): " + both[-160:], None
         kv = dict(t.split("=", 1) for t in line[len("RANGE-OK"):].split() if "=" in t)
+        if LIBZYNC and kv.get("end") != "board":
+            # an older host ignores --check-end: fail closed rather than accept an unchecked end
+            return False, "verifier did not check the receipt's end state against the board's (host too old for --check-end)", None
+        if kv.get("fake") and not os.environ.get("COORD_ALLOW_MOCK"):
+            return False, "receipt rejected — a dev-mode fake receipt is not a proof (accepted only under COORD_ALLOW_MOCK, testing)", None
         lo, hi = int(kv["lo"]), int(kv["hi"])
         # Genesis seed: block 0 is unprovable (its in-boundary IS the genesis anchor), so a claimed
         # [0..hi] range is satisfied by a [1..hi] receipt whose in_tip verify-any pins to GENESIS_TIP.
@@ -1252,7 +1265,9 @@ def verify_spine(receipt: bytes):
     try:
         # A libzync host has no `verify-range`: its `verify-any <rcpt> 1` is the genesis gate (it refuses a receipt
         # whose anchor is not the digest of the genesis state), and its RANGE-OK line is read below as before.
-        g = (subprocess.run([HOST_BIN, "verify-any", tmp, "1"], capture_output=True, timeout=180) if LIBZYNC
+        # --check-end: the spine must also END on the board's own state at its hi, or a longer chain of blocks mined
+        # from genesis (difficulty 1 early on) would replace the real spine and nothing real could extend it again
+        g = (subprocess.run([HOST_BIN, "verify-any", tmp, "1", "--check-end"], capture_output=True, timeout=180) if LIBZYNC
              else subprocess.run([HOST_BIN, "verify-range", tmp], capture_output=True, timeout=180))
         if g.returncode != 0:
             both = (g.stdout + g.stderr).decode(errors="replace")
@@ -1261,11 +1276,16 @@ def verify_spine(receipt: bytes):
                                "it was built against a different guest."), None
             # The usual cause is a receipt that verifies but is not anchored at genesis.
             return False, "spine rejected — not a genesis-anchored range proof: " + both[-200:], None
-        r = subprocess.run([HOST_BIN, "verify-any", tmp] + (["1"] if LIBZYNC else []), capture_output=True, timeout=180)
+        # libzync: the gate above already printed the RANGE-OK line; verify once, not twice (each is a full STARK check)
+        r = g if LIBZYNC else subprocess.run([HOST_BIN, "verify-any", tmp], capture_output=True, timeout=180)
         line = next((l for l in r.stdout.decode(errors="replace").splitlines() if l.startswith("RANGE-OK")), None)
         if r.returncode != 0 or line is None:
             return False, "spine rejected — verify-any produced no RANGE-OK line", None
         kv = dict(t.split("=", 1) for t in line[len("RANGE-OK"):].split() if "=" in t)
+        if LIBZYNC and kv.get("end") != "board":
+            return False, "spine rejected — the verifier did not check its end state against the board's (host too old)", None
+        if kv.get("fake") and not os.environ.get("COORD_ALLOW_MOCK"):
+            return False, "spine rejected — a dev-mode fake receipt is not a proof (accepted only under COORD_ALLOW_MOCK, testing)", None
         lo, hi = int(kv["lo"]), int(kv["hi"])
         if lo != 1:
             return False, f"spine must start at block 1, got [{lo}..{hi}]", None
@@ -3396,8 +3416,17 @@ def state(slim=False):
                          f"{_claim_age % 3600 // 60}m and is still heartbeating ({_beat_age}s ago, "
                          f"hazync-worker/{_ver}) — a large block, not a stall")
         else:
+            # The same liveness as LIVE_CLAIM_SQL: beaten within CLAIM_TTL, or never beaten and inside CLAIM_GRACE, and
+            # younger than CLAIM_MAX. A lapsed claim stays in the table until someone re-claims the block, so without
+            # this a dead claim read as "a live worker" (2026-11-12: stopped workers' claims, the frontier moved onto one).
+            _holds = (_claim_age < CLAIM_MAX and
+                      (_beat_age < CLAIM_TTL if blocker["last_beat"] is not None else _claim_age < CLAIM_GRACE))
             _attn = False
-            _attn_why = f"a live worker is proving it ({_who}, hazync-worker/{_ver})"
+            if _holds:
+                _attn_why = f"a live worker is proving it ({_who}, hazync-worker/{_ver})"
+            else:
+                _attn_why = (f"{_who}'s claim lapsed (last heard from {_beat_age}s ago); the block is open to any "
+                             f"prover")
     elif _hold:
         # Normal workers are kept off a held block, so "nobody has held it for a claim cycle" would be a false
         # alarm; the real question is whether the sponsor bot is getting to it.
@@ -3476,6 +3505,10 @@ _MID_CACHE = {"v": None}
 # relays a fixed set of read-only paths to it and nothing else. It adds no trust: the page verifies the proof with the
 # browser verifier and checks every fact against it, so a wrong answer from here, or from zync-serve, is refused there.
 ZYNC_SERVE = os.environ.get("ZYNC_SERVE_URL", "")            # e.g. http://127.0.0.1:8601; unset: no relay (404)
+# The proof the fact service's answers are at (ROADMAP O2): a genesis-anchored receipt ending at zync-serve's tip, kept in
+# step with it by hazync-lz-zapp-follow. Served as /api/zync/proof so a page fetches the proof and the facts from one
+# place; unset or missing: 404 (the page falls back to its shipped proof).
+ZYNC_PROOF = os.environ.get("ZYNC_PROOF", "")
 _ZYNC_PATH = re.compile(r"^/(tip|trie/balance/[0-9a-f]{2,20000}|trie/history/[0-9a-f]{2,20000}"
                         r"|trie/coin/[0-9a-f]{2,20000}/[0-9a-f]{64}/[0-9]{1,10})$")
 
@@ -3593,6 +3626,20 @@ def claim(body):
                                       f"(at most {CLAIM_OPEN_MAX}): prove one, or let one lapse, before claiming "
                                       f"another",
                              "open_claims": open_n, "max": CLAIM_OPEN_MAX, "signed": signed}
+        ip = str(body.get("_client_ip") or "")
+        if CLAIM_NEW_IP_MAX > 0 and ip and ip not in RATE_EXEMPT:
+            has_work = c.execute("SELECT COALESCE(blocks, 0) FROM contributors WHERE pubkey=?", (pk,)).fetchone()
+            if not (has_work and has_work[0] > 0):
+                new_n = c.execute("SELECT COUNT(*) FROM ranges r WHERE r.claim_ip=? AND " + LIVE_CLAIM_SQL.replace(
+                                      "status", "r.status").replace("last_beat", "r.last_beat").replace(
+                                      "claimed_at", "r.claimed_at")
+                                  + " AND NOT EXISTS (SELECT 1 FROM contributors k WHERE k.pubkey=r.assignee"
+                                    " AND COALESCE(k.blocks, 0) > 0)", (ip,) + _live_claim_args(now)).fetchone()[0]
+                if new_n >= CLAIM_NEW_IP_MAX:
+                    c.close()
+                    return 429, {"error": f"keys with no proven block yet hold {new_n} claimed blocks from your address "
+                                          f"(at most {CLAIM_NEW_IP_MAX}): once a key has a proven block it is limited "
+                                          f"only by its own cap", "new_ip_claims": new_n, "max": CLAIM_NEW_IP_MAX}
         proven, held = coverage_and_held(c, now)
         # CLAIM_RETAKE_WAIT: the blocks this key's own never-beaten claims let lapse are held FOR THIS KEY, in both
         # the frontier re-offer and the scan below. Every other key is offered them as soon as the grace ends.
@@ -3668,8 +3715,9 @@ def claim(body):
             else:
                 c.close()
                 return 409, {"error": "nothing available to claim"}
-        c.execute("INSERT OR REPLACE INTO ranges(id,lo,hi,status,assignee,handle,claimed_at,claim_nonce,claim_signed)"
-                  " VALUES(?,?,?,'claimed',?,?,?,?,?)", (str(h), h, h, pk, handle, now, nonce, int(signed)))
+        c.execute("INSERT OR REPLACE INTO ranges(id,lo,hi,status,assignee,handle,claimed_at,claim_nonce,claim_signed,"
+                  "claim_ip) VALUES(?,?,?,'claimed',?,?,?,?,?,?)", (str(h), h, h, pk, handle, now, nonce, int(signed),
+                                                                    ip or None))
         # A contributor may claim long before they ever submit — and if their worker cannot finish,
         # they never submit at all. That is the case this whole thing exists to diagnose, so the
         # version is recorded HERE as well, on a row that may not exist until their first proof.
@@ -4020,7 +4068,15 @@ def submit(body):
             # (MAX_ATTEMPTS, MAX_ENV_FAILURES, is_env_failure, four columns) sitting inert.
             # The environmental/block distinction and why parking waited for an un-park route are
             # documented on `record_submission_failure`; the operator side is in RUNBOOK.md.
-            record_submission_failure(c, rid, note)
+            #
+            # Only a failure that says something about the BLOCK counts: a signature that verifies, from the key
+            # holding a live claim on it (or with no live claim at all). Fable review 11-12: three junk POSTs with
+            # random signatures counted as three failures and parked a block another worker was proving, which
+            # took its claim away mid-prove and handed the block to someone else.
+            _other = c.execute(f"SELECT 1 FROM ranges WHERE id=? AND {LIVE_CLAIM_SQL} AND COALESCE(assignee,'') != ?",
+                               (rid, *_live_claim_args(time.time()), pk)).fetchone()
+            if sig_ok and not _other:
+                record_submission_failure(c, rid, note)
         c.commit(); c.close()
         _frontier_invalidate()        # #265: a new verified range can move the frontier
         if ok:
@@ -4163,6 +4219,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, raw=open(f, "rb").read(), ctype="application/octet-stream",
                                   headers={"Content-Disposition": f'attachment; filename="{name}"'})
             return self._send(404, {"error": "no spine yet"})
+        if p == "/api/zync/proof":                         # the receipt the facts are at (untrusted: the page verifies it)
+            if ZYNC_PROOF and os.path.exists(ZYNC_PROOF):
+                return self._send(200, raw=open(ZYNC_PROOF, "rb").read(), ctype="application/octet-stream",
+                                  headers={"Content-Disposition": 'attachment; filename="hazync-zapp.hzk"'})
+            return self._send(404, {"error": "no zyncAPP proof on this coordinator"})
         if p.startswith("/api/zync/"):                     # zyncAPP facts, relayed from a local zync-serve (untrusted)
             code, body = zync_relay(p[len("/api/zync"):])
             return self._send(code, raw=body) if code == 200 else self._send(code, {"error": body})

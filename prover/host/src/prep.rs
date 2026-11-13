@@ -123,6 +123,9 @@ pub(crate) fn leaf_read(path: &str) -> LeafBundle {
 /// Seconds spent per phase since the last PREP_PROGRESS line: prefetch, coin log apply, trie apply, rest of the block,
 /// reading the block, writing the state, save points (PREP_TIMING; the rate is spent somewhere, and a guess cost a day).
 static PHASES: std::sync::Mutex<[f64; 7]> = std::sync::Mutex::new([0.0; 7]);
+/// The last block's coin-log changes (flips, appends), for history.bin when HAZYNC_PREP_HISTORY=1.
+static LAST_HIST: std::sync::Mutex<Option<(Vec<(u64, u32, u32)>, Vec<[u8; 32]>)>> = std::sync::Mutex::new(None);
+
 fn phase(i: usize, t: std::time::Instant) { PHASES.lock().unwrap()[i] += t.elapsed().as_secs_f64(); }
 
 pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt, ecmh: &mut Ecmh, leaf: bool) -> (ChainState, Option<LeafBundle>) {
@@ -224,7 +227,8 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     }
     // The coin log and the trie (the host's stores), the BIP30 tree.
     let t = std::time::Instant::now();
-    let (utxo_roots, utxo_leaves) = crate::lz::cl_apply(&ext, &appends, height);
+    let (utxo_roots, utxo_leaves, flips) = crate::lz::cl_apply(&ext, &appends, height);
+    *LAST_HIST.lock().unwrap() = Some((flips, appends.clone()));
     phase(1, t);
     let t = std::time::Instant::now();
     let trie_root = {
@@ -351,6 +355,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         prev.profile = crate::lz::expected_profile();
     }
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
+    let history = std::env::var("HAZYNC_PREP_HISTORY").as_deref() == Ok("1");
     // HAZYNC_PREP_LEAF_BUNDLES=<dir>: also write leaf_<h>.bin per block (ROADMAP H-B 8), for leaf provers without stores
     let leaves = std::env::var("HAZYNC_PREP_LEAF_BUNDLES").ok();
     // HAZYNC_PREP_LEAF_WINDOW=<n>: the backfill's window (ROADMAP H-B, 11-07). Before writing a bundle, wait while the
@@ -415,6 +420,16 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         }
         // test hook: die after block h changed the stores, before any save (the window the journal covers)
         if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok(&format!("prep-after:{h}")) { std::process::exit(9); }
+        // HAZYNC_PREP_HISTORY=1: append each block to <out>/history.bin (libzync::history), as a proving run does, so a
+        // path service (zync-serve) can answer coin and trie facts at any save point without proving (ROADMAP O2).
+        // Contiguous from genesis or not at all: hist_append writes nothing for a run whose history has a gap.
+        if history {
+            let (flips, appends) = LAST_HIST.lock().unwrap().take().expect("prep_block records its changes");
+            if h == 1 && anchor_path == "genesis" {
+                crate::lz::hist_append(out, &libzync::history::Rec { height: 0, hash: crate::genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![] });
+            }
+            crate::lz::hist_append(out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends });
+        }
         if h == lo { st.anchor_id = anchor_id; }
         st.self_id = methods::METHOD_ID;
         st.profile = crate::lz::expected_profile();

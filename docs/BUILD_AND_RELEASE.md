@@ -218,7 +218,8 @@ depends on the RISC Zero toolchain (3.0.5 → 3.1.0).
 
 The browser verifier is reproducible only with the same **host** Rust: `swiftsync-verify-wasm/build.sh` under Rust
 **1.99.0** gives the published `hazync-verify.wasm` (`446fdaeb…`); 1.97.1 gives other bytes. Build it with
-`RUSTUP_TOOLCHAIN=1.99.0` (pinning the toolchain in the repo is a known follow-up).
+`swiftsync-verify-wasm/build.sh`, which pins Rust 1.99.0 itself since 2026-11-12 (installing it if missing), so the
+machine's default Rust no longer matters.
 
 **Hazync v1 (record).** The rest of this section describes the CORE images `reproduce/Dockerfile` built;
 the CORE id it names, `37987b85`, is superseded (v0.22.1 is the last v1 release, and v1 proofs still verify with
@@ -569,7 +570,7 @@ the new `/api/meta` id, so update every worker's `HAZYNC_HOST` too.
 Hazync v2:
 
 - **The wasm's bytes depend on the host Rust.** Rust 1.99.0 gives the published `446fdaeb…`; 1.97.1 gives
-  `a3a85b7f…`. Release with `RUSTUP_TOOLCHAIN=1.99.0` until the toolchain is pinned in the repo (§2).
+  `a3a85b7f…`. `build.sh` pins 1.99.0 since 2026-11-12; a new pin means a new published sha (§2).
 - **`dist/` must hold exactly the release assets.** It is never cleaned, so a previous release's file or a stray
   build output stops step 5 of §3.2; move it out rather than adding it to the list.
 - **The Windows host comes from a `windows-prove.yml` run of the release commit.** Dispatch it before releasing;

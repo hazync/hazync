@@ -165,7 +165,7 @@ Each item is written into its step above; this is the list in one place.
 | d | the installed `lz` units still named `863c9ce3` in `--method-id` / `HAZYNC_METHOD_ID` | reinstall the units from the repo (step 0.0) |
 | e | retargeting CORE `hazync-check-proofs` / `hazync-check-spine` would duplicate `hazync-lz-check-{proofs,spine}` | disabled instead (section 3) |
 | f | the CORE backup has no remote (`BACKUP_REMOTE` commented out), and `BACKUP_KEEP=2` would rotate out the v1 snapshots | the libzync backup writes to `BACKUP_DIR=/srv/bulk/hazync/backups-lz` |
-| g | Litestream replicates only the v1 ledger | **open**: the v2 ledger is not in Litestream yet |
+| g | Litestream replicated only the v1 ledger | **done 2026-11-12**: the v2 ledger replicates to `coordinator-lz-server1` (`litestream.yml.example`, `dropins/litestream-zz-hazync-lz.conf` for write access to `/var/lib/hazync-lz`) |
 | h | the installed `hazync-check-bundle-gap` predated libzync support | reinstalled from `coordinator/deploy/hazync-check-bundle-gap.sh` |
 | i | retargets need a clean rollback | all written as `zz-libzync.conf` drop-ins; rollback deletes them |
 | j | `scripts/check-deployment.sh --local` still requires the CORE coordinator and bridge | **open**: its CORE section reports expected FAILs after the switch |
@@ -184,7 +184,7 @@ Anything proved on the libzync board in the meantime stays in `/var/lib/hazync-l
 
 ## 6. After the switch (not blockers)
 
-- **The v2 ledger into Litestream** (item g above).
+- ~~The v2 ledger into Litestream~~ (item g: done 2026-11-12).
 - **`scripts/check-deployment.sh --local` without the CORE section** once the CORE units are gone (item j).
 - **The repo's `hazync-lz-coordinator.service`** still describes the pre-switch layout (port 8900, `127.0.0.1`); the
   box runs it on 8899 through the step-3 drop-ins (`zzz-public.conf`). The pruner's unit was corrected to 8899.

@@ -35,8 +35,9 @@ COPY . /hazync-zkvm
 # prover/rust-toolchain.toml asks for channel "stable" plus components the dependency image lacks. Current rustup
 # then updates the whole toolchain to today's stable to add them, and that fails on overlayfs (EXDEV), and would
 # make the host toolchain depend on the build date. Drop the components line in this copy: the host toolchain stays
-# the one the dependency stage installed. The guest, and so the image id, is compiled by risc0's pinned Rust (rzup),
-# not by this toolchain. (The canonical reproduce/Dockerfile has the same exposure once its image is not current.)
+# the one the dependency stage installed (pinned: provision-vps.sh, rust-toolchain.toml). ⚠ This host toolchain DOES
+# reach the image ids although the guest is compiled by risc0's pinned Rust (rzup): on 2026-11-12 stable 1.100.0 gave
+# other mainnet and signet ids from the same guest source, so it is pinned to 1.99.1.
 RUN sed -i '/^components/d' prover/rust-toolchain.toml
 RUN bash scripts/libzync-base.sh /root/hazync-libzync-base
 RUN bash reproduce/libzync-ids.sh > /root/LIBZYNC_IDS && cat /root/LIBZYNC_IDS

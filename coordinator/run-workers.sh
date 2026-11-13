@@ -2,7 +2,8 @@
 # Run N proof-party workers in parallel against a coordinator, and keep them running.
 #
 #   ./coordinator/run-workers.sh 4              # start 4 workers, all proving
-#   ./coordinator/run-workers.sh 4 --stop       # stop them
+#   ./coordinator/run-workers.sh 4 --drain      # stop them once each finishes the block it is on (use this one)
+#   ./coordinator/run-workers.sh 4 --stop       # stop them now: blocks in flight are abandoned, their claims lapse
 #   MODE=fold ./coordinator/run-workers.sh 2    # 2 workers FOLDING instead of proving
 #   MODE=mixed ./coordinator/run-workers.sh 4   # N-2 proving, 1 folding, 1 advancing the spine
 #   MODE=spine ./coordinator/run-workers.sh 1   # just the spine (only ever needs ONE)
@@ -75,6 +76,27 @@ alert() {
     return 0
 }
 
+# --drain: stop the loops, so no worker takes another block, and wait for the jobs already running to finish and
+# submit; then fall through to --stop. Killing a loop does not touch its child: the child finishes its block alone.
+# --stop on its own abandons every block in flight, and those claims hold their blocks until they lapse. Measured
+# 2026-11-12 (the stranger test): two workers stopped mid-prove left 1,337 and 1,338 claimed, and 1,337 was the
+# frontier, so the board's frontier sat on a dead claim. There is no release endpoint for a block claim, so the
+# fix is not to abandon it.
+if [ "$STOP" = "--drain" ]; then
+    for _pat in 'hazync-worker-loop' 'hazync-distributed-loop' 'hazync-fold-loop' 'hazync-spine-loop'; do
+        pkill -f "$_pat" 2>/dev/null
+    done
+    _wait=${DRAIN_WAIT:-7200}; _t=0
+    while :; do
+        _busy=$(pgrep -f 'hazync-worker (run|fold|spine)' 2>/dev/null | grep -c . || true)
+        [ "${_busy:-0}" -eq 0 ] && break
+        [ "$_t" -ge "$_wait" ] && { echo "still $_busy job(s) after ${_wait}s; stopping them now" >&2; break; }
+        [ $((_t % 60)) -eq 0 ] && echo "draining: $_busy job(s) finishing their block (no new blocks are taken)"
+        sleep 5; _t=$((_t + 5))
+    done
+    STOP=--stop
+fi
+
 if [ "$STOP" = "--stop" ]; then
     # Match the loop names this script sets, AND the worker's own command line. The old patterns
     # 'hazync run' / 'hazync fold' matched neither: the binary is hazync-worker, so a running child
@@ -85,7 +107,8 @@ if [ "$STOP" = "--stop" ]; then
     # its child was covered, so every start/stop cycle left another spine worker behind. One observed
     # on a live box had survived a --stop and was still taking its turn on the GPU two hours later,
     # competing with the prove-only fleet the operator had asked for.
-    for _pat in 'hazync-worker-loop' 'hazync-fold-loop' 'hazync-spine-loop' \
+    # hazync-distributed-loop was missing: its child was killed and the loop started another.
+    for _pat in 'hazync-worker-loop' 'hazync-distributed-loop' 'hazync-fold-loop' 'hazync-spine-loop' \
                 'hazync-worker (run|fold|spine)' 'prove-range-bridge' 'extend-spine'; do
         pkill -f "$_pat" 2>/dev/null
     done
@@ -122,7 +145,7 @@ if [ "$STOP" = "--stop" ]; then
     # its flag. Harmless on a worker pod, where nothing else has that shape, and exactly the kind of
     # accident that puts a phantom in a survivor list. The kill loop above already names each
     # process; the count now uses the same names.
-    _survivors=$(pgrep -f 'hazync-(worker|fold|spine)-loop|hazync-worker (run|fold|spine)|prove-range-bridge|extend-spine' 2>/dev/null \
+    _survivors=$(pgrep -f 'hazync-(worker|distributed|fold|spine)-loop|hazync-worker (run|fold|spine)|prove-range-bridge|extend-spine' 2>/dev/null \
         | while read -r _pid; do case "$_mine" in *" $_pid "*) ;; *) echo "$_pid" ;; esac; done)
     # ⚠ grep -c on a possibly-empty string, not `pgrep -c`, which prints 0 AND exits 1.
     _left=$(printf '%s' "$_survivors" | grep -c . || true)
@@ -138,7 +161,11 @@ if [ "$STOP" = "--stop" ]; then
 fi
 
 : "${HAZYNC_HOST:?set HAZYNC_HOST to the prover binary}"
-[ -x "$HAZYNC_HOST" ] || { echo "HAZYNC_HOST is not executable: $HAZYNC_HOST" >&2; exit 1; }
+[ -f "$HAZYNC_HOST" ] && [ -x "$HAZYNC_HOST" ] || { echo "HAZYNC_HOST is not an executable file: $HAZYNC_HOST" >&2; exit 1; }
+# Make it absolute: the GPU self-test and the workers run in other directories, so a relative path (as the guide's
+# `HAZYNC_HOST=./hazync-host-...` gives) was not found there, and the self-test blamed the GPU (2026-11-12).
+case "$HAZYNC_HOST" in /*) ;; *) HAZYNC_HOST="$PWD/$HAZYNC_HOST" ;; esac
+export HAZYNC_HOST
 [ -x "$CLI" ] || { echo "contributor CLI not found next to this script: $CLI" >&2; exit 1; }
 export HAZYNC_BASE="${HAZYNC_BASE:-$HOME/hazync-build}"
 mkdir -p "$LOG_DIR"
@@ -325,4 +352,4 @@ if { [ "$MODE" = spine ] || [ "$MODE" = mixed ]; } && [ "$_n_spine" -eq 0 ]; the
     echo "WARNING: MODE=$MODE asked for a spine worker and NONE is running." >&2
     echo "         The spine will not advance, and nothing else will tell you." >&2
 fi
-echo "stop with: $0 $N --stop"
+echo "stop with: $0 $N --drain   (each worker finishes its block first; --stop abandons them)"

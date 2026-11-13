@@ -170,9 +170,14 @@ echo "libzync=1 assumevalid=0 network=mainnet coinlog=1 trie=1 utxohash=1" > "$L
 # ⚠ AND IT DOES NOT MAKE THE B200 WORTH BUYING. At 1,702.3 s it still loses to an L40S's 1,565.9 s by
 # 8.7%, with native code and no JIT. See docs/history/ACCELERATION.md, "The three-card run (2026-08-25)".
 #
+# ⚠ sm_120 (Blackwell workstation/server: RTX PRO 6000, RTX 50xx) for the same MEASURED reason, on 2026-11-12:
+# v0.24.0 shipped without it, and every fresh RTX PRO 6000 pod spent ~10 min JIT-compiling the compute_100 PTX
+# on its first prove (the board's first v2 run, experimental/libzync-bench/RESULT_board_run_2026-11-12.txt; one
+# pod's 600 s GPU smoke timed out on it). sm_100 SASS does not run on sm_120. CUDA 12.8 is the first with sm_120.
+#
 # COST: ptxas assembles each architecture SEQUENTIALLY at ~6-7 min per kernel file, so this fifth
 # target adds roughly that to every cuda release. It needs CUDA 12.8+ (see provision-vps.sh phase 7).
-NVCC_FLAGS='-gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_100,code=sm_100 -gencode arch=compute_100,code=compute_100'
+NVCC_FLAGS='-gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_100,code=sm_100 -gencode arch=compute_120,code=sm_120 -gencode arch=compute_100,code=compute_100'
 
 if [ "$MODE" = cuda ]; then
     docker_args=(-e "NVCC_APPEND_FLAGS=$NVCC_FLAGS" -e GPU=1)
@@ -308,7 +313,7 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
       # A host that runs must carry the published image AND accept a real proof of it: mainnet 1..200
       # from genesis (below Core minimum chainwork, so the correct verdict is DEMO, exit 2). The CORE
       # smoke tests (regress, bundle-roundtrip-test) drove guest modes this image refuses (#676).
-      [ "$($H method-id | head -1 | awk "{print \$NF}")" = "$WANT_ID" ] \
+      [ "$($H method-id | awk "NR==1{print \$NF}")" = "$WANT_ID" ] \
         || { echo "=== FAIL: this host does not carry the published libzync image $WANT_ID ===" >&2; exit 1; }
       echo "=== smoke: libzync-verify on a real proof of mainnet 1..200 ==="
       rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt > /tmp/smoke.log 2>&1 || rc=$?

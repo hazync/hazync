@@ -54,5 +54,8 @@ want "$O/coord.log" "COORD_TEST_DONE" "coordinator test ran to the end"
 for x in "prove 1 EXIT=0" "submit 1 EXIT=0" "prove 2 EXIT=0" "submit 2 EXIT=0" "run 3-4 EXIT=0" "RANGE-OK"; do want "$O/coord.log" "$x" "$x"; done
 want "$O/coord.log" "starting at 1 EXIT=1" "verify-any: block 2 claimed from 1 refused"
 want "$O/coord.log" "starting at 4 EXIT=1" "verify-any: 3-4 claimed from 4 refused"
+want "$O/coord.log" "fake without the test switch EXIT=1 (want 1): REJECT a dev-mode FakeReceipt" "verify-any: a fake receipt refused without HAZYNC_TEST_FAKE_RECEIPTS"
+none "$O/coord.log" "starting at 1 EXIT=1 (want 1): REJECT a dev-mode" "block 2 from 1 is refused for its start, not as a fake"
+none "$O/coord.log" "starting at 4 EXIT=1 (want 1): REJECT a dev-mode" "3-4 from 4 is refused for its start, not as a fake"
 none "$O/coord.log" "Traceback" "no server traceback"
 finish chain

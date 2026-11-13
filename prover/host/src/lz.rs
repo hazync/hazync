@@ -1637,7 +1637,9 @@ pub(crate) fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainStat
 
 /// The native prep's coin-log step (prep.rs): the same flips and appends as cl_commit, returning the new roots and leaf
 /// count instead of checking them against a committed state. In memory (a disk store's undo journal is cl_commit's).
-pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) -> (Vec<Option<[u8; 32]>>, u64) {
+/// Also returns the block's flips (position, tx, vin) in spend order, as cl_commit does: a history.bin record
+/// (HAZYNC_PREP_HISTORY) is the same bytes whichever of prep or a proving run wrote it.
+pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) -> (Vec<Option<[u8; 32]>>, u64, Vec<(u64, u32, u32)>) {
     let mut g = CL.lock().unwrap();
     let h = g.as_mut().expect("coin log not initialised");
     // Disk mode: journal the block first, as cl_commit (prep advances the store in place and saves only at its save
@@ -1646,15 +1648,17 @@ pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) ->
         let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
         cl_journal_append(&d, height, h.store.len(), &sp, appends);
     }
+    let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
         let p = h.pos.remove(l).unwrap_or_else(|| panic!("prep: block {height} spends a coin the coin log does not hold"));
         h.store.set(p, libzync::coinlog::spent(l, &libzync::coinlog::spender(height, *t, *v)));
+        flips.push((p, *t, *v));
     }
     for l in appends {
         h.pos.insert(*l, h.store.len());
         h.store.push(*l);
     }
-    (h.store.roots(), h.store.len())
+    (h.store.roots(), h.store.len(), flips)
 }
 
 /// Records already in `<out>/history.bin` (libzync::history), counted once per run; None = the file does not run

@@ -3,10 +3,11 @@
 # (reproduce/libzync.Dockerfile), where every path is fixed: the image id depends on absolute build paths.
 set -euo pipefail
 cd /hazync-zkvm/prover
-# prover/rust-toolchain.toml says only "stable", which makes rustup try to update inside the image (and fail on
-# overlayfs). Use the toolchain the dependency stage installed. The guest, and so the image id, is compiled by
-# risc0's pinned Rust (rzup), not by this host toolchain.
-RUSTUP_TOOLCHAIN=$(rustup toolchain list | awk '/^stable/{print $1; exit}')
+# The host toolchain is the one prover/rust-toolchain.toml pins (1.99.1), which the dependency stage installed. It
+# reaches the image ids even though the guest is compiled by risc0's pinned Rust (rzup): stable 1.100.0 gave other
+# ids from the same source (2026-11-12). Name it explicitly so rustup never resolves a channel inside the image.
+RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+[ -n "$RUSTUP_TOOLCHAIN" ] || { echo "no pinned channel in prover/rust-toolchain.toml" >&2; exit 1; }
 export RUSTUP_TOOLCHAIN
 echo "host toolchain: $RUSTUP_TOOLCHAIN ($(rustc --version)); guest toolchain: $(ls /root/.risc0/toolchains 2>/dev/null | tr '\n' ' ')" >&2
 # The product image: the libzync profile builds the coin log, the counting trie and the live-coin hash (E2c / E2;
@@ -20,7 +21,7 @@ for net in mainnet signet; do
   netenv=(); [ "$net" = signet ] && netenv=(HAZYNC_NETWORK=signet)
   env HAZYNC_BASE=/root/hazync-libzync-base HAZYNC_LIBZYNC=1 "${netenv[@]}" \
     cargo build --profile fasthost -p host -j"$(nproc)" >&2
-  id=$(target/fasthost/host method-id | head -1 | awk '{print $NF}')
+  id=$(target/fasthost/host method-id | awk 'NR==1{print $NF}')   # awk reads it all: `head -1` closed the pipe early and the host panicked on the broken pipe (2026-11-12, a timing race; fatal under pipefail)
   elf=$(sha256sum target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin | cut -c1-64)
   mkdir -p /root/libzync-elf
   cp target/riscv-guest/methods/method/riscv32im-risc0-zkvm-elf/release/method.bin /root/libzync-elf/$net.bin   # what a published proof must run

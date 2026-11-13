@@ -4,7 +4,8 @@
   1. with no ZYNC_SERVE_URL the endpoint is 404 and nothing is contacted;
   2. a fact path (/tip, /trie/balance|history/<spk>, /trie/coin/<spk>/<txid>/<vout>) is relayed, body unchanged;
   3. anything else (other paths, traversal, non-hex) is 400 and never reaches zync-serve; a query string is dropped;
-  4. the fact service's 404 stays a 404; it being down is a 502, not a hang or a 500.
+  4. the fact service's 404 stays a 404; it being down is a 502, not a hang or a 500;
+  5. /api/zync/proof serves ZYNC_PROOF's bytes from the coordinator (404 unset or missing), never relayed.
 
   python3 test_zync_relay.py            # must PASS
   python3 test_zync_relay.py --control  # the path filter accepts anything; MUST FAIL
@@ -70,6 +71,18 @@ for p in ("/coin/tip/5", "/trie/balance/xyz", "/trie/../tip", "/trie/history/",
     seen.clear()
 code, _ = get("/api/zync/trie/balance/dead")
 check(code == 404, "the fact service's 404 stays 404")
+# /api/zync/proof: the receipt the facts are at, served from ZYNC_PROOF by the coordinator itself (never relayed)
+seen.clear()
+server.ZYNC_PROOF = ""
+code, _ = get("/api/zync/proof")
+check(code == 404 and not seen, "no ZYNC_PROOF: /api/zync/proof is 404 and zync-serve is not asked")
+pf = os.path.join(T, "zapp-proof.rcpt"); open(pf, "wb").write(b"\x00receipt bytes\xff" * 3)
+server.ZYNC_PROOF = pf
+code, body = get("/api/zync/proof")
+check(code == 200 and body == open(pf, "rb").read() and not seen, "ZYNC_PROOF set: its bytes, unchanged, not relayed")
+server.ZYNC_PROOF = pf + ".missing"
+code, _ = get("/api/zync/proof")
+check(code == 404, "ZYNC_PROOF names a missing file: 404")
 fake.shutdown(); fake.server_close()
 code, _ = get("/api/zync/tip")
 check(code == 502, f"the fact service down: 502 ({code})")

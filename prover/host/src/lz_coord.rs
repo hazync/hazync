@@ -65,18 +65,33 @@ pub(crate) fn prove_bridge_cmd(h: u32) {
     println!("leaf receipt for block {h} -> range_{h}.bin");
 }
 
-/// `verify-any <rcpt> [<lo>]` on a libzync host: verifies the receipt against this image and prints the coordinator's
-/// RANGE-OK line. Without `<lo>` the range is reported as starting at hi (a leaf), which is checked the same way.
-pub(crate) fn verify_any_cmd(path: &str, lo: Option<u32>) {
-    if let Err(e) = verify_any(path, lo) {
+/// `verify-any <rcpt> [<lo>] [--check-end]` on a libzync host: verifies the receipt against this image and prints the
+/// coordinator's RANGE-OK line. Without `<lo>` the range is reported as starting at hi (a leaf), which is checked the
+/// same way. `--check-end` (the board passes it) also requires the END state to be the board's own (see below) and
+/// adds `end=board` to the line; the board refuses a line without it, so an older host that ignores the flag fails
+/// closed. A contributor's self-test has no board states and does not pass it.
+pub(crate) fn verify_any_cmd(path: &str, lo: Option<u32>, check_end: bool) {
+    if let Err(e) = verify_any(path, lo, check_end) {
         eprintln!("REJECT {e}");
         std::process::exit(1);
     }
 }
 
-fn verify_any(path: &str, lo: Option<u32>) -> Result<(), String> {
+fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let r: risc0_zkvm::Receipt = bincode::deserialize(&bytes).map_err(|e| format!("{path}: not a receipt: {e}"))?;
+    // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in this process's environment: refuse both, as
+    // libzync-verify does, so a stray dev-mode variable on the board can never let a hand-written state in.
+    // The one exception is a test opt-in that takes TWO switches (RISC0_DEV_MODE and HAZYNC_TEST_FAKE_RECEIPTS=1); the
+    // RANGE-OK line then says `fake=1`, which the board refuses unless it runs with COORD_ALLOW_MOCK (testing only).
+    let test_fake = crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_FAKE_RECEIPTS").as_deref() == Ok("1");
+    let fake = matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_));
+    if test_fake {
+        eprintln!("WARNING: HAZYNC_TEST_FAKE_RECEIPTS=1 under RISC0_DEV_MODE: fake receipts are accepted (testing only)");
+    } else {
+        if fake { return Err("a dev-mode FakeReceipt is not a proof".into()); }
+        if crate::verify::dev_mode_env() { return Err("RISC0_DEV_MODE is set in the verifier's environment: refusing to verify".into()); }
+    }
     // MISMATCH: the coordinator reads it as a different guest build (the common contributor mistake), not a forgery
     r.verify(METHOD_ID).map_err(|e| format!("does not verify against this coordinator's libzync image (METHOD_ID MISMATCH or invalid proof): {e}"))?;
     let st: ChainState = r.journal.decode().map_err(|e| format!("journal is not a ChainState: {e}"))?;
@@ -92,8 +107,21 @@ fn verify_any(path: &str, lo: Option<u32>) -> Result<(), String> {
         return Err(format!("the receipt is not anchored on the state before block {lo} (anchor_id {}, that state's digest {})",
                            hex(&st.anchor_id), hex(&link_digest(&before))));
     }
-    println!("RANGE-OK lo={lo} hi={} in_tip={} out_tip={} out_leaves={} range_work=0 in_bhash={} out_bhash={} anchored={}",
+    // The END must be Bitcoin's too. The start check alone lets a prover take the board's real state before block N,
+    // mine its own block N on it (difficulty 1 below 32,256: seconds of work), prove that, and have it accepted as
+    // block N: the image and the anchor are right, only the block is not Bitcoin's. The board's prep states come from
+    // its own node, so the receipt's state at hi must be the board's state at hi, every field (anchor_id aside: it
+    // records where this receipt started). Unknown here means refused: a range is accepted only up to what prep has seen.
+    if check_end {
+        let after = state_before(st.height + 1)
+            .map_err(|e| format!("the board has no state at block {} to check the receipt's end against ({e})", st.height))?;
+        if link_digest(&after) != link_digest(&st) || after.tip_hash != st.tip_hash {
+            return Err(format!("the receipt ends on a state at block {} that is not the board's (its tip {}, the board's {}): \
+                                not Bitcoin's chain", st.height, hex(&st.tip_hash), hex(&after.tip_hash)));
+        }
+    }
+    println!("RANGE-OK lo={lo} hi={} in_tip={} out_tip={} out_leaves={} range_work=0 in_bhash={} out_bhash={} anchored={}{}{}",
              st.height, hex(&st.anchor_id), hex(&link_digest(&st)), st.utxo_leaves, hex(&before.tip_hash), hex(&st.tip_hash),
-             (lo == 1) as u8);
+             (lo == 1) as u8, if check_end { " end=board" } else { "" }, if fake || test_fake { " fake=1" } else { "" });
     Ok(())
 }

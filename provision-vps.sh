@@ -76,7 +76,8 @@ $SUDO apt-get install -y build-essential cmake git curl ca-certificates pkg-conf
 
 echo "== 2. Rust =="
 if ! command -v cargo >/dev/null; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  # pinned like prover/rust-toolchain.toml: the host toolchain reaches the guest image ids (2026-11-12, 1.100.0)
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.99.1
 fi
 source "$HOME/.cargo/env"
 

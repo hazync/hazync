@@ -34,3 +34,15 @@ dbs:
       force-path-style: true
       access-key-id: <R2 access key id>
       secret-access-key: <R2 secret access key>
+  # Hazync v2 (2026-11-12): the libzync coordinator's ledger, replicated beside v1's. The unit needs write access to
+  # its directory for the -litestream tracking files: dropins/litestream-zz-hazync-lz.conf.
+  - path: /var/lib/hazync-lz/coordinator.db
+    replica:
+      type: s3
+      bucket: hazync-ledger
+      path: coordinator-lz
+      endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      region: auto
+      force-path-style: true
+      access-key-id: <R2 access key id>
+      secret-access-key: <R2 secret access key>

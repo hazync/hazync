@@ -23,7 +23,7 @@ hazync — Proof Party contributor CLI.
   hazync notify new         # push to your phone (ntfy) when this worker stops or cannot work; also: test | off | <topic or URL>
 
 The party proves the chain forward from genesis, so you take a range near the current
-frontier. The coordinator serves a ready-made witness bundle for each block in its window,
+frontier. The coordinator serves each block's prepared inputs (a leaf bundle) in its window,
 so you prove a block directly — no need to run your own node or replay the chain. An
 arbitrary far-future block (past the served window) is not something a fresh contributor
 can prove yet.
@@ -974,7 +974,7 @@ def cmd_prove(args, claimed=False, submit_leaves=False, distributed=False, worke
     if fetch_bundles(start, hi):
         env = dict(os.environ, HAZYNC_BRIDGE_OUT=BUNDLES)
         prove_cmd = "prove-range-bridge"
-        print(f"using archive-node bundles (no replay) for blocks {start}..{hi}")
+        print(f"using the board's prepared block inputs for blocks {start}..{hi}")
     else:
         fetch_witnesses(start, hi)                    # pull any witnesses we're missing from the coordinator
         env = dict(os.environ, HAZYNC_WITNESS_DIR=WITNESS)

@@ -96,6 +96,10 @@ ROUTES = {
         "`VRANGES_CACHE_TTL`.",
     "GET /api/spine/proof":
         "The spine receipt bytes, served as `hazync-spine-1-<hi>.hzk`. Check with `hazync-verify`.",
+    "GET /api/zync/proof":
+        "The receipt the zyncAPP facts are at (`ZYNC_PROOF`, kept beside the facts by `hazync-lz-zapp-follow`), served "
+        "as `hazync-zapp.hzk`; `404` when unset or missing. Untrusted: the page verifies it, then checks each fact "
+        "against it.",
     "GET /api/zync/<rest>":
         "zyncAPP facts (hazync.org/zapp/), relayed from the box's own `zync-serve` when `ZYNC_SERVE_URL` is set: only "
         "`/tip`, `/trie/balance/<spk>`, `/trie/history/<spk>` and `/trie/coin/<spk>/<txid>/<vout>`; anything else is "
@@ -175,6 +179,7 @@ ROUTES = {
 
 # Keyed "<source key>:<NAME>".
 ENV = {
+    "server:ZYNC_PROOF": "The receipt `/api/zync/proof` serves: the proof of 1..H the zync-serve facts are at. Unset: `404`.",
     "server:ZYNC_SERVE_URL": "The local `zync-serve` behind `/api/zync/*` (e.g. `http://127.0.0.1:8601`). Unset: no relay.",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
@@ -204,6 +209,8 @@ ENV = {
                         "never beaten is released sooner, at `CLAIM_GRACE`.",
     "server:CLAIM_MAX": "Hard cap in seconds from `claimed_at`, whatever the beats.",
     "server:CLAIM_GRACE": "Seconds before a claim that has never beaten is released (#296).",
+    "server:CLAIM_NEW_IP_MAX": "Live claims that keys with no proven block may hold together from one IP (0: no limit; "
+                               "RATE_EXEMPT addresses are exempt); a key with a proven block is limited by CLAIM_OPEN_MAX only.",
     "server:CLAIM_OPEN_MAX": "Live claims one key may hold at once; a further claim is refused with 429 until one is "
                              "proven or lapses. `0` means no limit.",
     "server:CLAIM_REQUIRE_SIG": "`1` refuses claims that are not signed by their key (#310). Off by default: workers "
@@ -319,6 +326,7 @@ ENV = {
     "launcher:MODE": "What the loops run; see the modes table.",
     "launcher:HAZYNC_HOST": "Prover binary. Required, and must be executable.",
     "launcher:HAZYNC_BASE": "Core/secp source root, exported to the workers.",
+    "launcher:DRAIN_WAIT": "Seconds `--drain` waits for blocks in flight to be submitted before it stops them anyway (default 7200).",
     "launcher:SKIP_GPU_SMOKE": "Non-empty skips the pre-flight `prove-block` on a box with a GPU (#261).",
     "launcher:HAZYNC_HOME": "Where the handle check looks for `handle`.",
     "launcher:NOTIFY_FAIL_STREAK": "Failures in a row before a worker loop pushes an alert (`hazync notify`); exit 75, "

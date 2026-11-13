@@ -3,7 +3,13 @@
 # dependencies at one fixed location and remap every embedded path, so any checkout gives the same .wasm.
 set -euo pipefail
 cd "$(dirname "$0")"
-rustup target add wasm32-unknown-unknown 2>/dev/null || true
+# ⛔ THE BYTES DEPEND ON THE COMPILER. Same source, same paths: Rust 1.99.0 gives the published 446fdaeb…,
+# 1.97.1 gives a3a85b7f… (measured 2026-11-12, on the release box). So the toolchain is pinned here, not left
+# to whatever the machine's default is; a new pin means a new published sha (README, the site, deploy.sh).
+TOOLCHAIN=${HAZYNC_WASM_TOOLCHAIN:-1.99.0}
+rustup toolchain install "$TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown >/dev/null 2>&1 \
+    || rustup target add --toolchain "$TOOLCHAIN" wasm32-unknown-unknown >/dev/null
+export RUSTUP_TOOLCHAIN="$TOOLCHAIN"
 REPO=$(cd .. && pwd)
 STAGE=${SWIFTSYNC_WASM_STAGE:-/tmp/swiftsync-wasm-build}
 rm -rf "$STAGE" && mkdir -p "$STAGE"

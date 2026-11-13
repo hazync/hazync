@@ -7,11 +7,14 @@ set -u
 H=${H:-~/libzync-gpu/r18/host_c14coord}; O=${O:-~/libzync-gpu/c14b/coord}; rm -rf $O; mkdir -p $O/bridge $O/w
 J=${J:-$HOME/libzync-gpu/ssweep}; REF=${REF:-$HOME/libzync-gpu/c14/m200}; C=${C:-$(cd "$(dirname "$0")/../../../coordinator" && pwd)}
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_HINT_THREADS=2
+# dev-mode receipts are fakes: verify-any accepts them only with this second switch (and says fake=1), and the board
+# takes a fake=1 line only under COORD_ALLOW_MOCK. Without the switches both refuse (checked at the end).
+export HAZYNC_TEST_FAKE_RECEIPTS=1
 HAZYNC_PREP_LEAF_BUNDLES=$O/bridge HAZYNC_PREP_CHECK=$REF $H libzync-prep 1 8 $J genesis $O/prep > $O/prep.log 2>&1
 echo "prep EXIT=$? bundles $(ls $O/bridge | grep -c '^leaf_')"
 GT=$($H libzync-genesis-tip); echo "genesis tip ${GT:0:16}"
 PORT=18931
-( cd $C && COORD_PORT=$PORT COORD_BIND=127.0.0.1 COORD_DB=$O/c.db COORD_SPINE=$O/spine COORD_PROOFS=$O/proofs \
+( cd $C && COORD_ALLOW_MOCK=1 COORD_PORT=$PORT COORD_BIND=127.0.0.1 COORD_DB=$O/c.db COORD_SPINE=$O/spine COORD_PROOFS=$O/proofs \
   COORD_WEB=$C HAZYNC_HOST=$H HAZYNC_LIBZYNC=1 HAZYNC_BRIDGE_OUT=$O/bridge GENESIS_TIP=$GT \
   exec python3 server.py > $O/server.log 2>&1 ) &
 SP=$!
@@ -27,8 +30,10 @@ done
 $W run 3-4 > $O/run34.log 2>&1; echo "run 3-4 EXIT=$?"; grep -a 'archive-node\|folding\|✓\|✗\|rror' $O/run34.log | head -6
 # the coordinator's verify of a receipt against a WRONG start height must refuse
 HAZYNC_BRIDGE_OUT=$O/bridge $H verify-any $O/w/receipts/2.bin 2 | grep -a RANGE-OK | cut -c1-60
-HAZYNC_BRIDGE_OUT=$O/bridge $H verify-any $O/w/receipts/2.bin 1 > $O/neg.log 2>&1; echo "verify-any block 2 claimed as starting at 1 EXIT=$? (want 1): $(head -c 90 $O/neg.log)"
-HAZYNC_BRIDGE_OUT=$O/bridge $H verify-any $O/w/receipts/3-4.bin 4 > $O/neg2.log 2>&1; echo "verify-any 3-4 claimed as starting at 4 EXIT=$? (want 1): $(head -c 90 $O/neg2.log)"
+HAZYNC_BRIDGE_OUT=$O/bridge $H verify-any $O/w/receipts/2.bin 1 > $O/neg.log 2>&1; echo "verify-any block 2 claimed as starting at 1 EXIT=$? (want 1): $(grep -a REJECT $O/neg.log | head -c 90)"
+HAZYNC_BRIDGE_OUT=$O/bridge $H verify-any $O/w/receipts/3-4.bin 4 > $O/neg2.log 2>&1; echo "verify-any 3-4 claimed as starting at 4 EXIT=$? (want 1): $(grep -a REJECT $O/neg2.log | head -c 90)"
+# without the test switch, a fake receipt is not a proof
+env -u HAZYNC_TEST_FAKE_RECEIPTS HAZYNC_BRIDGE_OUT=$O/bridge $H verify-any $O/w/receipts/2.bin 2 > $O/neg3.log 2>&1; echo "verify-any fake without the test switch EXIT=$? (want 1): $(grep -a REJECT $O/neg3.log | head -c 90)"
 curl -s http://127.0.0.1:$PORT/api/state > $O/state.json
 python3 - $O/state.json <<'EOF'
 import json, sys

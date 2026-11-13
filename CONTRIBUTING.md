@@ -92,7 +92,7 @@ started on an older release keeps producing proofs the board refuses until you r
 ```
 # the checksum list first — everything below is verified against it before it runs
 curl -LO https://github.com/hazync/hazync/releases/latest/download/SHA256SUMS.txt
-# the prover binary (GPU)
+# the prover binary (GPU): about 390 MB, and GitHub can be slow (26 minutes on one cloud box on 2026-11-12)
 curl -LO https://github.com/hazync/hazync/releases/latest/download/hazync-host-x86_64-linux-gnu-cuda
 # the contributor CLI and the fleet launcher, both covered by SHA256SUMS.txt.asc
 curl -fLO https://github.com/hazync/hazync/releases/latest/download/hazync-worker
@@ -217,9 +217,19 @@ supplied loop — it keeps N workers going and refuses to start if your image id
 if the GPU cannot prove block 1 (a 600 s smoke test; `SKIP_GPU_SMOKE=1` skips it):
 
 ```
-HAZYNC_HOST=./hazync-host-x86_64-linux-gnu-cuda ./run-workers.sh 4          # 4 workers, logs in ~/hazync-workers
-./run-workers.sh 4 --stop
+HAZYNC_HOST=$PWD/hazync-host-x86_64-linux-gnu-cuda ./run-workers.sh 4      # 4 workers, logs in ~/hazync-workers
+./run-workers.sh 4 --drain     # stop: each worker finishes the block it is on, then exits
 ```
+
+Give `HAZYNC_HOST` a full path (`$PWD/...`). v0.24.0's `run-workers.sh` does not find a relative one from the
+directory its GPU self-test runs in, and then reports `FATAL: this box has a GPU but cannot prove on it` with
+`timeout: failed to run command './hazync-host-...': No such file or directory`: the GPU is fine, the path is not.
+Later releases make the path absolute themselves.
+
+**Stopping.** `--drain` stops the loops, so no worker takes another block, waits for the blocks already being proved to
+be submitted, then stops everything. `--stop` stops at once and abandons those blocks (see below). v0.24.0's script
+has only `--stop`: after it, prove any block your workers were on with `./hazync run <block>` (`claims` in
+https://api.hazync.org/api/state lists open claims by name), or wait an hour for the claims to lapse.
 
 That pre-flight matters: a worker on the wrong image id proves happily and has **every** submission
 rejected, burning GPU hours for nothing.
@@ -236,7 +246,7 @@ rejected, burning GPU hours for nothing.
 - **Don't restart workers mid-run without stopping them cleanly.** A worker killed mid-prove leaves its claim open
   on your key. A claim on a key that is still active looks alive for up to `CLAIM_TTL` (60 min), so it both uses one
   of your four slots and, if it was the frontier block, **stalls the board's frontier until it lapses**. On that run the frontier stopped at each orphaned
-  block. Stop with `./run-workers.sh N --stop` and let the current proves finish where you can. If you did orphan a
+  block. Stop with `./run-workers.sh N --drain`, which lets the current proves finish. If you did orphan a
   block, prove it directly (`./hazync run <block>`): that is what cleared them on that run.
 - **One GPU job at a time per box.** Workers on one box share a GPU lock (`HAZYNC_GPU_LOCK`, default
   `/tmp/hazync-gpu.lock`), so extra workers on one card queue rather than collide. Turning it off is not faster:
@@ -330,6 +340,8 @@ to check by hand.
 
 ## If something breaks
 
+- The verifier prints ``weak version `GLIBC_2.39' not found`` on Ubuntu 22.04 and then runs normally. That line is a
+  warning about an optional symbol, not a failure: the check's own result is the `SWIFTSYNC_VERIFY_*` line.
 - `./host: cannot execute` or a `GLIBC` error — the prebuilt Linux binaries need glibc 2.34+ (Ubuntu 22.04+). On an older distro, run in a container or build from source (see [`prover/README.md`](prover/README.md)).
 - The Linux CUDA prover needs **only the NVIDIA driver** (`libcuda.so.1`), not a CUDA toolkit or runtime:
 
