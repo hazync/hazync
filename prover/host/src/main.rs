@@ -285,6 +285,12 @@ pub(crate) fn lineage_at(h: u32) -> [u8; 32] {
 /// a leaf's guest checks every witness against them, so normalising one on read cannot weaken anything.
 pub(crate) fn stamp(s: &mut ChainState) {
     if s.height == 0 { return; }
+    // The rehearsal's control (experimental/libzync-bench/handover/board_rehearsal.sh --control): without stamping, the
+    // 11-11 failure must come back. A dev-mode test hook, refused anywhere else.
+    if std::env::var("HAZYNC_TEST_NO_STAMP").as_deref() == Ok("1") {
+        assert!(crate::verify::dev_mode_env(), "HAZYNC_TEST_NO_STAMP is a dev-mode test hook");
+        return;
+    }
     s.self_id = image_at(s.height);
     s.lineage = lineage_at(s.height);
     s.profile = crate::lz::expected_profile();
