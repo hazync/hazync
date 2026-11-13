@@ -15,7 +15,10 @@
 ARG DEPS_IMAGE=deps-cpu
 
 FROM ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 AS deps-cpu
+# RISC0_BUILD_LOCKED: risc0-build passes --locked to the GUEST build only when this is set, so a guest Cargo.lock that
+# no longer matches fails the build instead of being re-resolved (review 11-12, release #6).
 ENV DEBIAN_FRONTEND=noninteractive \
+    RISC0_BUILD_LOCKED=1 \
     HOME=/root \
     REPO_DIR=/hazync-zkvm \
     WORK=/root/hazync-build \

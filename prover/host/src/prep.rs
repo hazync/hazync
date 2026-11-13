@@ -104,9 +104,12 @@ pub(crate) fn leaf_write(path: &str, b: &LeafBundle) {
     v.extend(bincode::serialize(b).unwrap());
     let d: [u8; 32] = Sha256::digest(&v).into();
     v.extend_from_slice(&d);
-    // tmp + rename, no fsync: a bundle lost in a crash is cut again when prep redoes the block from its save point
+    // tmp, synced, renamed (review 11-12, #9): "a lost bundle is cut again" holds only ABOVE the save point; after a
+    // power loss a bundle at or below a just-written save point could be empty and never rewritten, and the frontier
+    // stalls on it. The directory is synced once per save point (below), not per block.
+    use std::io::Write as _;
     let tmp = format!("{path}.tmp");
-    std::fs::write(&tmp, &v).unwrap_or_else(|e| panic!("{tmp}: {e}"));
+    std::fs::File::create(&tmp).and_then(|mut f| { f.write_all(&v)?; f.sync_data() }).unwrap_or_else(|e| panic!("{tmp}: {e}"));
     std::fs::rename(&tmp, path).unwrap_or_else(|e| panic!("{path}: {e}"));
 }
 
@@ -323,8 +326,12 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         _ => panic!("libzync-prep from the state at {}: set HAZYNC_PREP_CONTINUE=1 (the same chain, e.g. a restart from a save point) or HAZYNC_PREP_BASE=1 (a base step on it, as a leaf proof)", prev.height),
     };
 
-    crate::lz::cl_init_at_start(false, anchor_path, &prev);
+    // The trie FIRST (review 11-12, #3): opening a disk trie checks its height against the anchor and changes nothing,
+    // while loading the coin log undoes its journal back to the anchor and deletes the journal. A crash after the trie's
+    // flush but before its marker landed left the trie at h and the scripts picking save point h-1000: in the old order
+    // the coin log was rewound and its journal gone before the trie refused, and no save point matched any more.
     crate::trie::trie_init_at_start(false, anchor_path, &prev);
+    crate::lz::cl_init_at_start(false, anchor_path, &prev);
     // The BIP30 tree at lo-1: from the anchor's snapshot (state_<h>.smt, written at prep's save points) when it is
     // there, so a restart needs no block files below lo (mainnet: the whole chain's JSON would not be kept); else
     // replayed from the block files 1..lo-1. Either way it must give the anchor's smt_root.
@@ -436,6 +443,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // atomic at a save point (its state_<h>.json is the anchor a restart takes; round 9); a plain write between
         // them (a restart never starts there, and two fsyncs per block across a mainnet prep cost; round 10)
         let save = each || h == hi || (every > 0 && h % every == 0);
+        // the leaf bundles' renames since the last save point made durable before the save point that covers them
+        if save { if let Some(d) = &leaves { crate::lz::cl_sync_dir(std::path::Path::new(d)); } }
         let t = std::time::Instant::now();
         let json = serde_json::to_string(&st).unwrap();
         if save { crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes()); }

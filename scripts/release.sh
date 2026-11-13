@@ -103,44 +103,11 @@ ok "tag $TAG is free"
 ./scripts/check-versions.sh >/dev/null 2>&1 || { ./scripts/check-versions.sh; die "check-versions failed"; }
 ok "check-versions: every documented id is canonical"
 
-if command -v gh >/dev/null; then
-    # Count TOTAL runs as well as non-green ones. Counting only failures makes "no runs at all" and
-    # "everything passed" the same answer — both are zero — so pushing and releasing inside the minute
-    # before Actions queues anything printed "CI green" having checked nothing (audit #6, F-1). This
-    # script exists so a tired operator does not have to remember traps; a gate that cannot fail is
-    # the exact trap it is here to mechanise away.
-    #
-    # Deliberately still ADVISORY when gh cannot answer: an unreachable API must not block a release,
-    # only an answered "no" or an unanswerable "nothing ran" should.
-    # Count PASSES and FAILURES separately, and treat `cancelled` as neither.
-    #
-    # "Zero non-green" was the obvious reading and it is wrong, measured the first time it ran: the
-    # concurrency group cancels a superseded push run, so a commit that was pushed and then also
-    # dispatched carries one `success` and one `cancelled` forever. Counting cancelled as non-green
-    # made that commit permanently unreleasable, with the failure text claiming CI had not passed when
-    # it had. A cancelled run is a run that was never allowed to have an opinion.
-    #
-    # Requiring a PASS rather than merely "no failures" keeps the audit-#6 property that made this
-    # check exist: zero runs and all-green must not look the same.
-    Q() { gh run list --limit 40 --json headSha,conclusion \
-          --jq "[.[]|select(.headSha==\"$HEAD_SHA\")|select($1)]|length" 2>/dev/null || echo "?"; }
-    # (A `deployed-verifier` exemption lived here: that job tested the CORE browser verifier on the
-    # live site and was removed with it in #676, so every failed run counts again.)
-    PASS=$(Q '.conclusion=="success"')
-    BAD=$(Q '.conclusion|IN("failure","timed_out","startup_failure","action_required")')
-    [ "$PASS" = "?" ] && BAD="?"
-    if [ "$PASS" = "?" ] || [ "$BAD" = "?" ]; then
-        echo "  --   could not read CI status (continuing)"
-    elif [ "$BAD" != "0" ]; then
-        die "$BAD failed CI run(s) on ${HEAD_SHA:0:8} — fix or re-run before releasing"
-    elif [ "$PASS" = "0" ]; then
-        die "no PASSING CI run for ${HEAD_SHA:0:8} — nothing has tested this commit.
-       (Cancelled or queued runs do not count. If Actions is degraded, that is exactly when this
-       matters: check https://www.githubstatus.com before overriding.)"
-    else
-        ok "CI green on ${HEAD_SHA:0:8} ($PASS passing run(s))"
-    fi
-fi
+# The CI gate (scripts/release-ci-gate.sh): every required job of the main suite passed on THIS commit. Not "some
+# workflow was green" (one windows-prove run used to satisfy it) and not "could not read, continuing" (review 11-12 #4).
+command -v gh >/dev/null || die "gh is required to read CI status"
+GATE=$(./scripts/release-ci-gate.sh "$HEAD_SHA" "$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo hazync/hazync)")
+case $? in 0) ok "$GATE" ;; *) die "$GATE" ;; esac
 
 command -v docker >/dev/null || die "docker is required for the canonical container build"
 command -v gh >/dev/null || die "gh is required: the Windows host is fetched from a windows-prove.yml run"
@@ -248,7 +215,7 @@ fi
 # shipped). Built EVERY time rather than when the staged copy lacks the id: an id check cannot see a
 # verifier change that leaves the image alone, which is the host staleness trap of v0.18.0 (step 2)
 # in another binary. An unchanged tree makes this a no-op.
-run cargo build -q --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify || die "verifier build failed"
+run cargo build -q --release --locked --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify || die "verifier build failed"
 run install -m 0755 swiftsync-verify/target/release/swiftsync-verify "$DIST/hazync-verify-x86_64-linux-gnu"
 ok "x86_64 verifier staged"
 

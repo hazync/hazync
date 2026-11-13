@@ -47,6 +47,19 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     steps:
+      # The tag is shape-checked HERE, before the checkout below uses it (review 11-12, release #7): this job builds and
+      # runs tree code under `contents: write`, and the dispatch input reached its checkout unvalidated. Through the
+      # environment, never spliced into shell text (see the sign job's step).
+      - name: Resolve and validate tag
+        id: tag
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          if [[ ! "$RAW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+            echo "::error::refusing: '$RAW_TAG' is not a vMAJOR.MINOR.PATCH release tag"
+            exit 1
+          fi
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
       # PIN TO THE TAG BEING SIGNED, not the default branch (hazync#90).
       #
       # A bare checkout takes the default branch. On the normal `release: published` trigger those are
@@ -61,7 +74,7 @@ jobs:
       # what makes that assertion mean "matches THIS tag" rather than "matches main".
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
       - name: Install the aarch64 cross toolchain (and qemu, to RUN what it builds)
         run: |
           sudo apt-get update -qq
@@ -73,7 +86,7 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --manifest-path swiftsync-verify/Cargo.toml \
+          cargo build --release --locked --manifest-path swiftsync-verify/Cargo.toml \
                 --target aarch64-unknown-linux-gnu --bin swiftsync-verify
           cp swiftsync-verify/target/aarch64-unknown-linux-gnu/release/swiftsync-verify hazync-verify-aarch64
       - name: Assert it embeds the CANONICAL guest id
@@ -110,8 +123,17 @@ jobs:
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: gh release upload "$TAG" hazync-verify-aarch64 --clobber
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+        # Not over one the release already carries: on a re-sign this build's bytes can differ from the signed one
+        # (another runner image), and the sign job refuses a re-sign that changes a signed asset. The one already there
+        # was tested by this job when it was attached.
+        run: |
+          if gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name' | grep -qx hazync-verify-aarch64; then
+            echo "the release already carries hazync-verify-aarch64: kept (this build was only tested)"
+          else
+            gh release upload "$TAG" -R "$REPO" hazync-verify-aarch64
+          fi
 
   sign:
     # MUST wait for the aarch64 verifier, or it silently does not get signed.
@@ -157,8 +179,10 @@ jobs:
       # this one file is checked out: nothing from the tree runs in the job that holds the signing key.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.tag.outputs.tag }}
-          sparse-checkout: scripts/release-assets.txt
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          sparse-checkout: |
+            scripts/release-assets.txt
+            reproduce/LIBZYNC_IDS
           sparse-checkout-cone-mode: false
           path: tagtree
       - name: Download the release binaries
@@ -177,6 +201,10 @@ jobs:
           gh release download "$RELEASE_TAG" -R "$REPO" \
             -p 'hazync-*' --clobber
           ls -la
+          # A manifest this release ALREADY carries (a re-sign): kept apart, checked in the signing step.
+          mkdir -p ../prev
+          gh release download "$RELEASE_TAG" -R "$REPO" -p 'SHA256SUMS.txt*' -D ../prev --clobber 2>/dev/null || true
+          ls -la ../prev
 
       - name: Write SHA256SUMS over the binaries
         env:
@@ -246,7 +274,35 @@ jobs:
             [ -s "$b" ] || { echo "::error::$b is empty"; exit 1; }
           done
 
-          sha256sum $bins > ../SHA256SUMS.txt
+          # EVERY HOST AND VERIFIER MUST CARRY THIS TAG'S PUBLISHED IMAGE (review 11-12, release #2). The signature used
+          # to attest "whatever is on the release": the name set and non-empty files were the only checks. The image id
+          # comes from the TAG's reproduce/LIBZYNC_IDS. Hosts store it as 32 raw bytes, the verifiers as 64-hex text;
+          # each exactly once (the Windows exe at least once, as scripts/windows-host.sh accepts it).
+          ID=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' ../tagtree/reproduce/LIBZYNC_IDS)
+          [[ "$ID" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no libzync mainnet image id in the tag's reproduce/LIBZYNC_IDS"; exit 1; }
+          python3 - "$ID" <<'PY'
+          import sys, zipfile
+          idh = sys.argv[1]; raw, hx = bytes.fromhex(idh), idh.encode()
+          want = {"hazync-host-x86_64-linux-gnu": (raw, 1, 1), "hazync-host-x86_64-linux-gnu-cuda": (raw, 1, 1),
+                  "hazync-verify-x86_64-linux-gnu": (hx, 1, 1), "hazync-verify-aarch64": (hx, 1, 1),
+                  "hazync-verify.wasm": (hx, 1, 1)}
+          bad = []
+          for name, (needle, lo, hi) in want.items():
+              n = open(name, "rb").read().count(needle)
+              print(f"{name}: image {idh[:8]} {n}x"); bad += [] if lo <= n <= hi else [f"{name} carries it {n}x"]
+          with zipfile.ZipFile("hazync-host-x86_64-windows-cuda.zip") as z:
+              n = z.read("host.exe").count(raw)
+          print(f"hazync-host-x86_64-windows-cuda.zip host.exe: image {idh[:8]} {n}x"); bad += [] if n >= 1 else ["host.exe does not carry it"]
+          if bad:
+              print("::error::not this tag's image (" + idh[:8] + "): " + "; ".join(bad)); sys.exit(1)
+          PY
+          # THE MANIFEST NAMES WHAT IT IS FOR: the tag, the commit the tag points at, and that image. `sha256sum -c`
+          # (and --strict) skips `#` lines, so checking downloads works as before; the signature now also covers the
+          # binding, so a manifest cannot be passed off as another tag's.
+          COMMIT=$(git -C ../tagtree rev-parse HEAD)
+          { echo "# hazync $RELEASE_TAG commit $COMMIT image $ID"
+            echo "# signed by .github/workflows/release-sign.yml (run $GITHUB_RUN_ID); check with: sha256sum -c SHA256SUMS.txt"
+            sha256sum $bins; } > ../SHA256SUMS.txt
           cat ../SHA256SUMS.txt
 
       - name: PGP-sign SHA256SUMS
@@ -260,6 +316,24 @@ jobs:
             exit 1
           fi
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # A RE-SIGN MAY NOT CHANGE WHAT WAS SIGNED (review 11-12, release #2): swapping an asset and dispatching this
+          # workflow used to yield a valid maintainer signature over the swapped binary. If the release already carries
+          # a manifest, its signature must verify and every asset in both must have the same hash. A changed binary is a
+          # new version, not a re-sign.
+          if [ -s prev/SHA256SUMS.txt ]; then
+            [ -s prev/SHA256SUMS.txt.asc ] || { echo "::error::the release has a SHA256SUMS.txt with no signature: refusing to sign over it"; exit 1; }
+            gpg --verify prev/SHA256SUMS.txt.asc prev/SHA256SUMS.txt \
+              || { echo "::error::the release's existing SHA256SUMS.txt does not verify: refusing to sign"; exit 1; }
+            python3 - prev/SHA256SUMS.txt SHA256SUMS.txt <<'PY'
+          import sys
+          def m(p): return {l.split()[1].lstrip("*"): l.split()[0] for l in open(p) if l.strip() and not l.startswith("#")}
+          old, new = m(sys.argv[1]), m(sys.argv[2])
+          changed = sorted(n for n in old.keys() & new.keys() if old[n] != new[n])
+          if changed:
+              print("::error::these assets differ from the hashes this release was already signed with: " + ", ".join(changed)); sys.exit(1)
+          print(f"re-sign: {len(old.keys() & new.keys())} asset(s) unchanged since the last signature")
+          PY
+          fi
           echo "$GPG_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
             --armor --detach-sign --output SHA256SUMS.txt.asc SHA256SUMS.txt
           gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt

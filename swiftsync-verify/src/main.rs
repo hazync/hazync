@@ -24,8 +24,8 @@
 //! - `--bitcoin-cli` (step 7 above), your own node.
 //! A failed identity check is FAIL. With none of them the verdict says the identity was NOT checked and prints the hash.
 //!
-//! `--coinlog`: the image is a coin-log build (docs/libzync/COINLOG.md, profile bit 4).
-//! `--product`: the product image (coin log, counting trie, live-coin hash; profile bits 4-6).
+//! `--coinlog`, `--product`: kept for old command lines. The published images already are the product build (coin log,
+//! counting trie, live-coin hash; profile bits 4-6), and the summary follows the proven profile, so neither is needed.
 //! `--trie <fact.json>` (repeat): a counting-trie fact at the tip (coin unspent / spent by / absent, a script's balance,
 //! its complete history), as `zync-path trie` writes it; checked against the verified state's trie root.
 //!
@@ -254,9 +254,12 @@ fn main() {
     // Only a journal that passed: under FAIL its fields are the prover's word (review round 3).
     if let Some(cs) = rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
         println!("  chain: tip {} at height {}, cum_work 0x{}", display(&cs.tip_hash), cs.height, work_hex(&cs.cum_work));
-        if coinlog {
+        // Described by the PROVEN profile (it passed: cs.profile == the image's), not by the flags: the published images
+        // already are the product build, so without --product a v2 journal was summarised the v1 way ("UTXO set at H:
+        // N coins (Utreexo roots)"), its verdict right and its description wrong (stranger test 11-12, ROADMAP O8).
+        if cs.profile & swiftsync_verify::PROFILE_COINLOG != 0 {
             println!("  coin log: {} coins ever appended, {} sat live (COINLOG.md)", cs.utxo_leaves, cs.utxo_value);
-            if product {
+            if cs.profile & swiftsync_verify::PROFILE_TRIE != 0 {
                 println!("  counting trie root: {} (absence, history, balances: --trie)", hex(&cs.trie_root));
                 // live_set is a flag, not a count: 0 = the hash is the identity (no live coins), 1 = live_hash is the point
                 println!("  live-coin hash: {} (instant IBD: a downloaded UTXO set must hash to it)",

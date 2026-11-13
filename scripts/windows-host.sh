@@ -11,7 +11,7 @@
 # takes that artifact from a run of THE RELEASE COMMIT whose `build-cuda` job succeeded. Dispatch it
 # before releasing (artifacts expire after 14 days):
 #
-#     gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true
+#     gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true -f release_build=true
 #
 # WHAT IS CHECKED, with no GPU and no Windows (a CUDA-linked exe imports nvcuda.dll, so it cannot even
 # load without an NVIDIA driver; scripts/embedded_guest_sha.py explains):
@@ -70,6 +70,10 @@ case "${1:-}" in
     run_id=""
     for r in $(gh run list -R "$REPO_SLUG" --workflow windows-prove.yml --limit 50 --json databaseId,headSha \
                  --jq "[.[]|select(.headSha==\"$SHA\")|.databaseId][]" 2>/dev/null); do
+        # Only a RELEASE BUILD (dispatched with release_build=true: no restored caches, --locked; the workflow puts it in
+        # the run's name). A cached test build of the same commit is not what a release ships (review 11-12, release #5).
+        title=$(gh api "repos/$REPO_SLUG/actions/runs/$r" --jq .display_title 2>/dev/null)
+        case "$title" in *"RELEASE BUILD"*) ;; *) echo "  --   run $r: not a release build ('${title:-?}'), skipped"; continue ;; esac
         jc=$(gh api "repos/$REPO_SLUG/actions/runs/$r/jobs" --jq '[.jobs[]|select(.name=="build-cuda")|.conclusion][0]' 2>/dev/null)
         [ "$jc" = success ] || { echo "  --   run $r: build-cuda is '${jc:-absent}', skipped"; continue; }
         live=$(gh api "repos/$REPO_SLUG/actions/runs/$r/artifacts" \
@@ -78,8 +82,8 @@ case "${1:-}" in
         run_id=$r; break
     done
     [ -n "$run_id" ] || die "no windows-prove run of ${SHA:0:8} with a successful build-cuda job and a live $ART artifact.
-       Dispatch one on the release commit and wait for build-cuda (about an hour cold):
-           gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true"
+       Dispatch a RELEASE BUILD on the release commit and wait for build-cuda (about two hours, no caches):
+           gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true -f release_build=true"
     echo "  windows-prove run $run_id (${SHA:0:8}): downloading $ART…"
     W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
     gh run download "$run_id" -R "$REPO_SLUG" -n "$ART" -D "$W/a" || die "could not download $ART from run $run_id"
