@@ -1318,6 +1318,14 @@ jobs:
         run: |
           cd coordinator
           python3 test_claim_sybil.py --control
+      - name: A replayed public proof is refused before any verification (review 11-12, board #6)
+        # A signed replay of a served proof (another range id, or the spine) used to cost a full STARK verification
+        # and hold a verify slot. Now a lookup by receipt sha refuses it first.
+        run: cd coordinator && python3 test_replay_precheck.py
+      - name: Replay pre-check POSITIVE CONTROL (pre-check taken out — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_replay_precheck.py --control
       - name: G1 retention gate still detects a missing receipt (positive control)
         # check-retention.py is what separates "the board says this block is proven" from "we can
         # hand you the proof for it" — G1's actual content. It runs unattended on the coordinator, so

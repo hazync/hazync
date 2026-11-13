@@ -640,6 +640,9 @@ def init_db():
               " PRIMARY KEY(sponsorship_id, payment_id))")
     # claim() counts one key's live claims under the global lock (CLAIM_OPEN_MAX): an index, not a table scan.
     c.execute("CREATE INDEX IF NOT EXISTS ranges_assignee_status ON ranges(assignee, status)")
+    # replays are refused by receipt sha before any verification (review 11-12, board #6)
+    c.execute("CREATE INDEX IF NOT EXISTS submissions_receipt_sha ON submissions(receipt_sha, verified)")
+    c.execute("CREATE INDEX IF NOT EXISTS ranges_receipt_sha ON ranges(receipt_sha)")
     c.commit(); c.close()
 
 def canonical_range_id(lo, hi):
@@ -1135,6 +1138,20 @@ def resolve_pubkey(pk, rmap=None):
         cur = nxt
     return cur
 
+def known_receipt(c, sha):
+    """The proof a receipt with this sha256 is already the VERIFIED proof of (a range id or spine:1-<hi>), else None.
+    Every public proof the board serves is one of these, so a replay is refused here, by a lookup, before it can cost
+    a STARK verification or hold a verify slot (review 11-12, board #6)."""
+    # a range only while it is VERIFIED with this receipt now (a range reset to be proven again takes its proof again)
+    r = c.execute("SELECT id FROM ranges WHERE receipt_sha=? AND status='verified' LIMIT 1", (sha,)).fetchone()
+    if r:
+        return r["id"]
+    # a spine, from its record (the spine only ever moves forward, so an older one is a replay too)
+    r = c.execute("SELECT range_id FROM submissions WHERE receipt_sha=? AND verified=1 AND range_id LIKE 'spine:%' LIMIT 1",
+                  (sha,)).fetchone()
+    return r["range_id"] if r else None
+
+
 def verify_receipt(receipt: bytes, rng):
     """Verify a submitted range receipt on CPU — no folding, no GPU (the 'verify-only' coordinator).
 
@@ -1378,6 +1395,12 @@ def submit_spine(body):
     except Exception: return 400, {"error": "receipt must be base64"}
     if not verify_sig(pk, sig, receipt):
         return 403, {"error": "signature invalid"}
+    with _lock:
+        c = db()
+        _known = known_receipt(c, hashlib.sha256(receipt).hexdigest())
+        c.close()
+    if _known:
+        return 409, {"error": f"this receipt is already the verified proof of {_known}: a replay does not advance the spine"}
 
     cur = spine_head()
     with _verify_sem:
@@ -4018,6 +4041,12 @@ def submit(body):
         c.close()
     if _held:
         return 403, _hold_message(_held)
+    with _lock:
+        c = db()
+        _known = known_receipt(c, sha)
+        c.close()
+    if _known:
+        return 409, {"error": f"this receipt is already the verified proof of {_known}: a replay is not a new proof"}
     # 2. expensive verification OUTSIDE the lock (concurrent submits for different ranges run in parallel),
     #    but bounded by _verify_sem so a burst can't spawn unlimited STARK verifications and OOM the box.
     with _verify_sem:
