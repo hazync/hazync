@@ -91,7 +91,6 @@ class App(tk.Tk):
         self.workers = []
         self.runs, self.meta, self.prog = [], {}, {}
         self.claims = []                 # (lo, hi) a prover is holding right now, for the map
-        self._cells = []                 # (item_id, lo, hi, state) for the map
         self._explained = set()          # each known failure explained once, not every line
         self._auto_diag_done = False     # the cheap checks run once per launch, not on every rescan
         self._auto_fix_done = False      # ...and so does fetching what setup can fetch by itself
@@ -771,7 +770,7 @@ class App(tk.Tk):
 
     # ── tab: dashboard ──────────────────────────────────────────────────────────────────────────
     def _tab_board(self):
-        """How far the whole project has got: the numbers, and the map of every block."""
+        """How far the whole project has got: the numbers, and the website's map of every block."""
         p = self.p
         t = tk.Frame(self.nb, bg=p["fog"])
         self.nb.add(t, text="  The board  ")
@@ -817,73 +816,51 @@ class App(tk.Tk):
                      font=("Segoe UI", 8)).pack(anchor="w", padx=12, pady=(0, 10))
             mid.columnconfigure(col, weight=1)
 
-    # ── tab: block map ──────────────────────────────────────────────────────────────────────────
+    # ── the block map: the website's, not a copy ────────────────────────────────────────────────
+    # ⛔ 11-13 (owner): the window drew its own condensed map (one square per range of blocks, scaled to fit), and it
+    # read as a worse copy of hazync.org's. The site's map is the one people know: every block, zoom, search, a
+    # square's proofs. So the window opens that, and for its user, the map filtered to their own blocks
+    # (/block-map/?prover=<name>, web #53).
+    MAP_URL = "https://hazync.org/block-map/"
+
     def _tab_map(self, t):
         p = self.p
-        bar = tk.Frame(t, bg=p["fog"])
-        bar.pack(fill="x", padx=10, pady=(10, 4))
-        ttk.Button(bar, text="Refresh", style="Quiet.TButton",
-                   command=self.refresh).pack(side="right")
-        tk.Label(bar, text="Every block, in order — each square is a range.",
-                 bg=p["fog"], fg=p["slate"], font=("Segoe UI", 9)).pack(side="left")
-        self.v_percell = tk.StringVar(value="")
-        tk.Label(bar, textvariable=self.v_percell, bg=p["fog"], fg=p["slate"],
-                 font=("Segoe UI", 9)).pack(side="left", padx=10)
+        box = self._card(t, "THE BLOCK MAP")
+        box.pack(fill="x", padx=10, pady=(4, 10))
+        tk.Label(box, text="Every block of Bitcoin's history, one square each, and how far each has got. "
+                           "It opens on hazync.org in your browser.",
+                 bg=p["mist"], fg=p["slate"], font=("Segoe UI", 9), wraplength=700,
+                 justify="left").pack(anchor="w", padx=12, pady=(0, 8))
+        row = tk.Frame(box, bg=p["mist"])
+        row.pack(anchor="w", padx=12, pady=(0, 12))
+        ttk.Button(row, text="Open the block map", command=self._open_map).pack(side="left")
+        ttk.Button(row, text="Show my blocks on the map", style="Quiet.TButton",
+                   command=lambda: self._open_map(mine=True)).pack(side="left", padx=8)
 
-        leg = tk.Frame(t, bg=p["fog"])
-        leg.pack(fill="x", padx=10)
-        for st in (api.ANCHORED, api.FOLDED, api.PROVEN, api.CLAIMED, api.OPEN):
-            sw = tk.Frame(leg, bg=brand.state_colours(self.dark.get())[st],
-                          width=14, height=14, highlightbackground=p["haze"], highlightthickness=1)
-            sw.pack(side="left", padx=(10, 4))
-            tk.Label(leg, text=api.STATE_NAMES[st], bg=p["fog"], fg=p["slate"],
-                     font=("Segoe UI", 8)).pack(side="left")
+    def _my_handle(self):
+        """The name this key proves under, from the setup check (None when not named yet)."""
+        for s in getattr(self, "_steps", None) or []:
+            if getattr(s, "key", None) == "identity" and s.done:
+                return s.detail.split("  (key")[0].strip() or None
+        return None
 
-        # ⚠ BLACK, in both themes — the site's map ground. The colours were chosen against it.
-        self.map_canvas = tk.Canvas(t, bg=brand.MAP_SURFACE, highlightthickness=0)
-        self.map_canvas.pack(fill="both", expand=True, padx=10, pady=8)
-        self.map_canvas.bind("<Button-1>", self._map_click)
-        self.map_canvas.bind("<Configure>", lambda e: self._draw_map())
+    def map_link(self, mine=False):
+        if not mine:
+            return self.MAP_URL
+        name = self._my_handle()
+        if not name:
+            return None
+        from urllib.parse import quote
+        return f"{self.MAP_URL}?prover={quote(name)}"
 
-        self.v_cell = tk.StringVar(value="select a square to see its range")
-        tk.Label(t, textvariable=self.v_cell, bg=p["fog"], fg=p["ink"],
-                 font=("Segoe UI", 10)).pack(anchor="w", padx=12, pady=(0, 10))
-
-    def _draw_map(self):
-        c = self.map_canvas
-        c.delete("all")
-        self._cells = []
-        if not self.runs or not self.meta.get("tip"):
-            c.create_text(14, 14, anchor="nw", text="Loading the board…",
-                          fill="#93a0aa", font=("Segoe UI", 10))
+    def _open_map(self, mine=False):
+        url = self.map_link(mine)
+        if url is None:
+            messagebox.showinfo("No name yet", "Your blocks are found by the name you prove under, and none is set "
+                                               "yet. Press Start and it asks for one.")
             return
-        w = max(c.winfo_width(), 200)
-        h = max(c.winfo_height(), 120)
-        cell, gap = 9, 2
-        per_row = max(10, (w - 20) // (cell + gap))
-        rows_max = max(4, (h - 20) // (cell + gap))
-        rows, per_cell = api.map_rows(self.runs, self.meta["tip"], per_row, rows_max,
-                                      claims=self.claims)
-        self.v_percell.set(f"{per_cell:,} blocks per square · {self.meta['tip']:,} blocks total")
-        cols = brand.state_colours(self.dark.get())
-        for r, row in enumerate(rows):
-            for i, (st, lo, hi) in enumerate(row):
-                x = 10 + i * (cell + gap)
-                y = 10 + r * (cell + gap)
-                iid = c.create_rectangle(x, y, x + cell, y + cell, fill=cols[st], outline="")
-                self._cells.append((iid, lo, hi, st))
-
-    def _map_click(self, ev):
-        hit = self.map_canvas.find_closest(ev.x, ev.y)
-        if not hit:
-            return
-        for iid, lo, hi, st in self._cells:
-            if iid == hit[0]:
-                n = hi - lo + 1
-                self.v_cell.set(f"blocks {lo:,}–{hi:,}  ({n:,} block{'s' if n > 1 else ''})  —  "
-                                + ("a prover is working in here right now" if st == api.CLAIMED
-                                   else f"least advanced state here: {api.STATE_NAMES[st]}"))
-                return
+        import webbrowser
+        webbrowser.open(url)
 
     # ── tab: run ────────────────────────────────────────────────────────────────────────────────
     def _tab_run(self):
@@ -1416,7 +1393,6 @@ class App(tk.Tk):
         self.v_anchored.set(f"{p.get('spine_hi', 0):,}")
         self.v_pct.set(f"{p.get('pct', 0)}%")
         self.v_contrib.set(str(p.get("contributors", "—")))
-        self._draw_map()
         self.status.configure(text=api.summarise_progress(p))
 
     def _apply_extras(self, extra):
