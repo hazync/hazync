@@ -84,5 +84,5 @@ fi
 find "$Z/out/" -maxdepth 1 -name 'state_*.smt' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\.smt$/\1/p' | sort -n | head -n -2 |
     while read -r h; do rm -f "$Z/out/state_$h".{smt,coinlog,trie}; done
 find "$Z/out/" -maxdepth 1 -name 'state_*.json' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\.json$/\1/p' |
-    while read -r h; do [ "$h" -lt "$last" ] && rm -f "$Z/out/state_$h.json"; done
+    while read -r h; do if [ "$h" -lt "$last" ]; then rm -f "$Z/out/state_$h.json"; fi; done   # not `[ ] &&`: a false last test fails the run under set -e
 log "serving facts at $H (proof: the spine of 1..$H)"
