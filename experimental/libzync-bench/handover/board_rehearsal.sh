@@ -113,7 +113,7 @@ $WN spine > "$D/spineN.log" 2>&1
 grep -q "handover: proving block $H" "$D/spineN.log" && pass "hazync spine proved block $H as the handover step" || wrong "no handover step: $(tail -2 "$D/spineN.log")"
 SH=$(curl -s $U/api/spine | python3 -c 'import json,sys; print(json.load(sys.stdin).get("hi"))')
 [ "$SH" = $END ] && pass "the spine is [1..$END]" || wrong "spine at $SH"
-FR=$(curl -s $U/api/state | python3 -c 'import json,sys; s=json.load(sys.stdin); print(s.get("frontier", s.get("frontier_hi")))')
+sleep 3; FR=$(curl -s $U/api/meta | python3 -c 'import json,sys; print(json.load(sys.stdin).get("frontier"))')
 [ "$FR" = $END ] && pass "the frontier is $END" || wrong "frontier $FR"
 VI=$(sqlite3 "$D/c.db" "SELECT image FROM vranges WHERE id='1-$H'")
 [ "$VI" = "$NID" ] && pass "vrange [1..$H] recorded, image N" || wrong "vrange [1..$H]: '$VI'"
