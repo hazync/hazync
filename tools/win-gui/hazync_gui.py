@@ -1740,4 +1740,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # the installed Hazync.exe started as an interpreter (the worker, a setup check): run that, not the window
+    import frozenpy
+    _rc = frozenpy.run_as_python()
+    if _rc is not None:
+        sys.exit(_rc)
     sys.exit(main())

@@ -2,7 +2,7 @@
 #
 #     pip install pyinstaller
 #     pyinstaller --clean --noconfirm hazync-gui.spec
-#     dist/Hazync.exe
+#     dist/Hazync/Hazync.exe          (the folder installer/hazync.iss packs into Hazync-Setup.exe)
 #
 # ⛔ WHY THIS EXISTS. The whole point of the GUI is reaching people who do not use a terminal, and
 # "first install Python, then pip install cryptography" undoes that before they start. A single exe
@@ -20,9 +20,24 @@
 # under the frozen interpreter it must find it; when it runs under a system Python it uses that
 # one. Both paths work, and the Setup tab reports which.
 
+import ast
 import os
 
 block_cipher = None
+
+# ⛔ THE WORKER RUNS INSIDE THIS BUNDLE (`Hazync.exe <hazync-worker> run`, frozenpy.py), and PyInstaller bundles only
+# what the APP imports: a stdlib module only the worker uses (concurrent.futures, secrets, socket...) would be missing
+# and the worker would die on import, on the user's machine. So the worker's own imports are read from its source
+# (coordinator/hazync, shipped as hazync-worker) at build time; a new import there is bundled with no edit here.
+# fcntl is not a module on Windows: winshim provides it (below).
+_WORKER = os.path.join(os.getcwd(), "..", "..", "coordinator", "hazync")
+_worker_imports = set()
+for _n in ast.walk(ast.parse(open(_WORKER, encoding="utf-8").read())):
+    if isinstance(_n, ast.Import):
+        _worker_imports |= {_a.name for _a in _n.names}
+    elif isinstance(_n, ast.ImportFrom) and _n.module and _n.level == 0:
+        _worker_imports.add(_n.module)
+_worker_imports -= {"fcntl"}
 
 a = Analysis(
     ["hazync_gui.py"],
@@ -36,10 +51,10 @@ a = Analysis(
     ],
     hiddenimports=[
         # imported by path at runtime rather than statically, so PyInstaller cannot see them
-        "supervisor", "hazync_api", "brand", "firstrun",
+        "supervisor", "hazync_api", "brand", "firstrun", "frozenpy",
         # the worker signs with ed25519; collected so a frozen build can satisfy it
         "cryptography", "cryptography.hazmat.primitives.asymmetric.ed25519",
-    ],
+    ] + sorted(_worker_imports),
     hookspath=[],
     runtime_hooks=[],
     # ⚠ Nothing excluded. A GUI that crashes on a missing stdlib module to save 3 MB is a bad trade.
@@ -52,13 +67,14 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# ONE FOLDER, not one file (2026-11-13, the installer): Hazync-Setup.exe installs this folder. A one-file exe unpacks
+# itself to %TEMP% on every start, which is slow, leaves copies behind when killed, and is what antivirus heuristics
+# flag; and the worker is started as `Hazync.exe <worker>` (frozenpy.py), so it would unpack once more per worker.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="Hazync",
     debug=False,
     bootloader_ignore_signals=False,
@@ -74,4 +90,14 @@ exe = EXE(
     entitlements_file=None,
     # ⚠ No icon yet: the brand asset is an SVG and Windows wants .ico. brand.py draws the logo
     # inside the window; converting it for the taskbar is a small follow-up, not a blocker.
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="Hazync",
 )

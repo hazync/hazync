@@ -1,0 +1,121 @@
+name: windows-installer
+# Hazync-Setup.exe: the Windows app as a normal installer (tools/win-gui/installer/hazync.iss). Builds the app with
+# PyInstaller, takes the prover (host.exe + cudart) and the worker from a published release, checked against that
+# release's SHA256SUMS.txt, packs them with Inno Setup, then INSTALLS it silently on the runner, runs the installed
+# app as the worker's interpreter, and uninstalls it, checking the signing key folder survives. The installer is an
+# artifact; a release attaches it (docs/BUILD_AND_RELEASE.md).
+#
+# Not Authenticode-signed (owner's decision, 11-13): SmartScreen warns until it is.
+
+on:
+  pull_request:
+    paths:
+      - 'tools/win-gui/**'
+      - 'coordinator/hazync'
+      - '.github/workflows/windows-installer.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "release whose prover and worker go inside (blank = the latest release)"
+        default: ''
+      version:
+        description: "installer version (blank = <release>-dev.<run number>)"
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.7'
+
+      - name: Build tools, pinned
+        run: python -m pip install --disable-pip-version-check pyinstaller==6.11.1 cryptography==44.0.0
+
+      - name: The frozen-interpreter dispatch (unit test)
+        working-directory: tools/win-gui
+        run: |
+          python test_frozenpy.py
+          python test_frozenpy.py --control
+
+      - name: The prover and the worker, from the release, checked against its SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_TAG: ${{ inputs.tag }}
+          IN_VERSION: ${{ inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          tag="$IN_TAG"
+          [ -n "$tag" ] || tag=$(gh release view -R hazync/hazync --json tagName --jq .tagName)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: '$tag'"; exit 1; }
+          mkdir -p rel && cd rel
+          gh release download "$tag" -R hazync/hazync -p 'hazync-host-x86_64-windows-cuda.zip' -p 'hazync-worker' -p 'SHA256SUMS.txt'
+          for f in hazync-host-x86_64-windows-cuda.zip hazync-worker; do
+            want=$(awk -v f="$f" '$2==f || $2=="*"f {print $1}' SHA256SUMS.txt)
+            got=$(sha256sum "$f" | cut -d' ' -f1)
+            [ -n "$want" ] && [ "$want" = "$got" ] || { echo "::error::$f does not match $tag's SHA256SUMS.txt"; exit 1; }
+            echo "$f: sha256 matches $tag's signed manifest"
+          done
+          python -c "import zipfile; zipfile.ZipFile('hazync-host-x86_64-windows-cuda.zip').extractall('prover')"
+          ls -la prover
+          v="$IN_VERSION"; [ -n "$v" ] || v="${tag#v}-dev.$RUN_NUMBER"
+          echo "VERSION=$v" >> "$GITHUB_ENV"; echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Build the app (PyInstaller, one folder)
+        working-directory: tools/win-gui
+        run: |
+          pyinstaller --clean --noconfirm hazync-gui.spec
+          ls dist/Hazync | head
+
+      - name: The frozen app is the worker's interpreter (before packing)
+        working-directory: tools/win-gui
+        run: |
+          out=$(./dist/Hazync/Hazync.exe -c "import cryptography, concurrent.futures, secrets, socket, urllib.request; print('frozen-ok', cryptography.__version__)")
+          echo "$out"; [[ "$out" == frozen-ok* ]] || { echo "::error::Hazync.exe -c did not run as an interpreter"; exit 1; }
+
+      - name: Pack Hazync-Setup.exe (Inno Setup)
+        run: |
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -x "$ISCC" ] || { choco install innosetup -y --no-progress --version=6.4.3 >/dev/null && ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"; }
+          "$ISCC" -Q "/DAppVersion=$VERSION" "/DAppDir=$(cygpath -w "$PWD/tools/win-gui/dist/Hazync")" \
+                  "/DProverDir=$(cygpath -w "$PWD/rel/prover")" "/DWorker=$(cygpath -w "$PWD/rel/hazync-worker")" \
+                  "/O$(cygpath -w "$PWD/out")" tools/win-gui/installer/hazync.iss
+          ls -la out
+          (cd out && sha256sum hazync-setup-x86_64-windows.exe | tee hazync-setup-x86_64-windows.exe.sha256)
+
+      - name: Install it, use it, uninstall it (as a person would, silently)
+        run: |
+          KEYDIR="$USERPROFILE/.hazync"; mkdir -p "$KEYDIR"; echo keep > "$KEYDIR/sentinel-do-not-delete"
+          ./out/hazync-setup-x86_64-windows.exe //VERYSILENT //SUPPRESSMSGBOXES //CURRENTUSER //NORESTART "//LOG=$(cygpath -w "$PWD/out/install.log")"
+          APP="$LOCALAPPDATA/Programs/Hazync"
+          for f in Hazync.exe hazync-worker prover/host.exe; do [ -f "$APP/$f" ] || { echo "::error::$f not installed"; exit 1; }; done
+          ls "$APP/prover"
+          # the installed prover is the release's: it carries the published mainnet image (a GPU-less runner cannot RUN it)
+          ID=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
+          python -c "import sys;n=open(sys.argv[1],'rb').read().count(bytes.fromhex(sys.argv[2]));print('image',sys.argv[2][:8],n,'x');sys.exit(0 if n>=1 else 1)" "$APP/prover/host.exe" "$ID"
+          # the installed app runs the installed worker: make a key in a scratch HAZYNC_HOME and read it back
+          export HAZYNC_HOME="$RUNNER_TEMP/hz-home" PYTHONPATH="$(cygpath -w "$APP/_internal/winshim")"
+          out=$("$APP/Hazync.exe" "$(cygpath -w "$APP/hazync-worker")" id 2>&1); echo "$out"
+          echo "$out" | grep -Eq '^pubkey *: *[0-9a-f]{64}' || { echo "::error::the installed worker did not make a key"; exit 1; }
+          "$APP/unins000.exe" //VERYSILENT //SUPPRESSMSGBOXES //NORESTART
+          for i in $(seq 1 30); do [ -e "$APP/Hazync.exe" ] || break; sleep 2; done
+          [ ! -e "$APP/Hazync.exe" ] || { echo "::error::uninstall left Hazync.exe"; exit 1; }
+          [ -f "$KEYDIR/sentinel-do-not-delete" ] || { echo "::error::uninstall touched ~/.hazync"; exit 1; }
+          echo "installed, used, uninstalled; ~/.hazync untouched"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hazync-setup-x86_64-windows
+          path: |
+            out/hazync-setup-x86_64-windows.exe
+            out/hazync-setup-x86_64-windows.exe.sha256
+          retention-days: 30
