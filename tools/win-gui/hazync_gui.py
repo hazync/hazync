@@ -51,6 +51,19 @@ import supervisor  # noqa: E402
 import theme  # noqa: E402
 
 POLL_MS = 150
+
+# The segment-size list. ⛔ ONLY 21 AND 22 ARE MEASURED: one prove at 21 peaked near 22 GB, one at 22
+# near 40.6 GB (prover/host/src/main.rs). Below 21 each step roughly halves it -- an estimate, so "about".
+# 22's SPEED was never measured; it is there for big cards, not recommended.
+SEG_CHOICES = [
+    ("", "Automatic (recommended)"),
+    ("22", "22 — about 41 GB; 48 GB cards and up (speed not measured)"),
+    ("21", "21 — about 22 GB; 24 GB cards and up"),
+    ("20", "20 — about 11 GB; 12–16 GB cards"),
+    ("19", "19 — about 6 GB; 8 GB cards"),
+    ("18", "18 — about 3 GB; 6 GB cards"),
+    ("17", "17 — about 1.5 GB; smaller cards"),
+]
 REFRESH_S = 60          # the website refreshes the map every minute; match it rather than hammer
 
 
@@ -159,6 +172,7 @@ class App(tk.Tk):
         self._tab_setup()
         self._tab_run()
         self._tab_settings()
+        self._tab_log()
         self.mode.trace_add("write", lambda *_: self._paint_tiles())
         self._paint_tiles()
         self._sync_buttons()
@@ -277,7 +291,7 @@ class App(tk.Tk):
         feedf = self._card(t, "WHAT HAS HAPPENED")
         feedf.pack(fill="both", expand=True, padx=10, pady=(8, 10))
         ttk.Button(feedf, text="Show the technical log", style="Quiet.TButton",
-                   command=lambda: self._open_advanced(1)).place(relx=1.0, x=-10, y=6, anchor="ne")
+                   command=lambda: self._open_advanced(self.LOG_TAB)).place(relx=1.0, x=-10, y=6, anchor="ne")
         self.feed = tk.Text(feedf, wrap="word", height=6, bg=p["mist"], fg=p["ink"],
                             relief="flat", font=("Segoe UI", 10), padx=4, pady=2,
                             highlightthickness=0, cursor="arrow")
@@ -866,7 +880,7 @@ class App(tk.Tk):
     def _tab_run(self):
         p = self.p
         t = tk.Frame(self.adv, bg=p["fog"])
-        self.adv.add(t, text="  Options and log  ")
+        self.adv.add(t, text="  Options  ")
 
         box = self._card(t, "WHAT TO WORK ON")
         box.pack(fill="x", padx=10, pady=10)
@@ -904,9 +918,26 @@ class App(tk.Tk):
         ttk.Spinbox(row, from_=1, to=8, width=4, textvariable=self.nworkers).pack(side="left", padx=6)
         tk.Label(row, text="segment size (HAZYNC_SEG_PO2)", bg=p["mist"], fg=p["ink"]
                  ).pack(side="left", padx=(16, 4))
-        self.po2 = tk.StringVar(value=self.cfg.get("seg_po2") or "")
-        ttk.Entry(row, textvariable=self.po2, width=6).pack(side="left")
-        tk.Label(row, text="blank = default; lower uses less graphics memory", bg=p["mist"],
+        # ⭐ A LIST, NOT A TEXT BOX (owner, 11-13). self.po2 stays the stored value ("" = automatic,
+        # else the number); the list shows words and writes the number underneath. A value the list
+        # doesn't name (an old hand-typed one) is shown as it is, not lost.
+        self.po2 = tk.StringVar(value=str(self.cfg.get("seg_po2") or "").strip())
+        self.po2_label = tk.StringVar()
+        pick = ttk.Combobox(row, textvariable=self.po2_label, state="readonly", width=52,
+                            values=[lab for _, lab in SEG_CHOICES])
+        pick.pack(side="left")
+
+        def chosen(_e=None):
+            self.po2.set(dict((lab, v) for v, lab in SEG_CHOICES).get(self.po2_label.get(), ""))
+            self._persist()
+
+        def shown(*_):
+            v = self.po2.get().strip()
+            self.po2_label.set(dict(SEG_CHOICES).get(v, f"{v} (set by hand)"))
+        pick.bind("<<ComboboxSelected>>", chosen)
+        self.po2.trace_add("write", shown)
+        shown()
+        tk.Label(row, text="lower uses less graphics memory", bg=p["mist"],
                  fg=p["slate"], font=("Segoe UI", 8)).pack(side="left", padx=6)
         # ⭐ WHICH CARDS TO USE, one tick box each; see _show_cards. Empty, and so invisible, on a
         # machine with fewer than two cards that can prove.
@@ -947,18 +978,6 @@ class App(tk.Tk):
                  font=("Segoe UI", 9), justify="left", wraplength=920
                  ).pack(anchor="w", padx=12, pady=(4, 10))
 
-        logf = self._card(t, "THE TECHNICAL LOG")
-        logf.pack(fill="both", expand=True, padx=10, pady=8)
-        self.log = tk.Text(logf, wrap="word", bg=p["fog"], fg=p["ink"],
-                           insertbackground=p["ink"], relief="flat")
-        self.log.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=8)
-        sb = ttk.Scrollbar(logf, command=self.log.yview)
-        sb.pack(side="right", fill="y", pady=8)
-        self.log.configure(yscrollcommand=sb.set, state="disabled")
-        for tag, key in (("cuda-error", "bad"), ("abort", "bad"), ("oom", "lamp_text"),
-                         ("proved", "good"), ("accepted", "good"), ("claimed", "lamp_text"),
-                         ("sys", "slate")):
-            self.log.tag_configure(tag, foreground=p[key])
 
     def _import_key(self):
         """Bring an existing signing key onto this machine."""
@@ -1197,6 +1216,31 @@ class App(tk.Tk):
             # once would make a timing-sensitive check answer about a machine under load.
             self._diagnose(nxt, auto=True, then=step)
         step()
+
+
+    # ── tab: the technical log ──────────────────────────────────────────────────────────────────
+    # ⛔ ITS OWN TAB (Xesktop, 11-13: "nothing shows on technical log, it's blank"). It was the last
+    # card on "Options and log", a tab that needs ~1,124 px; on an ordinary window the log was pushed
+    # below the bottom edge and never drawn, though every line was in it. A tab of its own always
+    # has the whole window. test_log_visible.py checks it is drawn and tall.
+    LOG_TAB = 3
+
+    def _tab_log(self):
+        p = self.p
+        t = tk.Frame(self.adv, bg=p["fog"])
+        self.adv.add(t, text="  Technical log  ")
+        logf = self._card(t, "THE TECHNICAL LOG")
+        logf.pack(fill="both", expand=True, padx=10, pady=10)
+        self.log = tk.Text(logf, wrap="word", bg=p["fog"], fg=p["ink"],
+                           insertbackground=p["ink"], relief="flat")
+        self.log.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=8)
+        sb = ttk.Scrollbar(logf, command=self.log.yview)
+        sb.pack(side="right", fill="y", pady=8)
+        self.log.configure(yscrollcommand=sb.set, state="disabled")
+        for tag, key in (("cuda-error", "bad"), ("abort", "bad"), ("oom", "lamp_text"),
+                         ("proved", "good"), ("accepted", "good"), ("claimed", "lamp_text"),
+                         ("sys", "slate")):
+            self.log.tag_configure(tag, foreground=p[key])
 
     # ── tab: settings ───────────────────────────────────────────────────────────────────────────
     def _tab_settings(self):

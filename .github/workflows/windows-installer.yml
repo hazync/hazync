@@ -64,6 +64,8 @@ jobs:
           python test_also_fold.py --control
           python test_map_link.py
           python test_map_link.py --control
+          python test_log_visible.py
+          python test_log_visible.py --control
           python test_home_flow.py
 
       - name: The prover and the worker, from the release, checked against its SHA256SUMS
