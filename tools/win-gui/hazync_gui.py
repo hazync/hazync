@@ -141,6 +141,10 @@ class App(tk.Tk):
 
         # Shared by Home and the Advanced pages, so it has to exist before either is built.
         self.mode = tk.StringVar(value=self.cfg.get("mode") or "auto")
+        # Fold beside proving (11-13): a fold is a small proof that joins two proven neighbours so the chain proof can
+        # take them in one step. The worker's GPU lock (hazync gpu_lock) makes the prover and the folder on one card
+        # take turns, so ticking it costs little proving time and helps the spine catch up with the proven blocks.
+        self.also_fold = tk.BooleanVar(value=bool(self.cfg.get("also_fold")))
 
         # ⭐ THREE PLACES, NOT FIVE. Home is the whole program for most people: one choice, one
         # button, and what is happening. The board is for looking. Everything a newcomer should
@@ -266,6 +270,10 @@ class App(tk.Tk):
         self.v_pick_note = tk.StringVar(value="")
         tk.Label(pick, textvariable=self.v_pick_note, bg=p["fog"], fg=p["slate"],
                  font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=3, sticky="w", padx=8)
+        ttk.Checkbutton(pick, variable=self.also_fold, command=self._persist,
+                        text="Also fold while proving: small joins that help the chain proof catch up, on the same "
+                             "graphics card, taking turns with the proving").grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 0))
 
         feedf = self._card(t, "WHAT HAS HAPPENED")
         feedf.pack(fill="both", expand=True, padx=10, pady=(8, 10))
@@ -372,7 +380,8 @@ class App(tk.Tk):
             return
         now = time.time()
         if self.workers:
-            lead = self.workers[0]
+            # the prover leads Home when a folder runs beside it (also_fold), whatever order restarts left them in
+            lead = next((w for w in self.workers if w.job == "run"), self.workers[0])
             a = lead.activity
             stopping = any(w.stopping for w in self.workers)
             named = [w for w in self.workers if w.label]
@@ -746,6 +755,7 @@ class App(tk.Tk):
                 "build_kind": self.build_kind.get(),
                 "force_gpu": bool(self.force_gpu.get()),
                 "cards_off": sorted(self.cards_off),
+                "also_fold": bool(self.also_fold.get()),
                 "gpu_prepared": sorted(set(self.cfg.get("gpu_prepared") or []))}
 
     def _persist(self):
@@ -1552,6 +1562,11 @@ class App(tk.Tk):
         for i, card in enumerate(plan, 1):
             self._spawn(i, base, job, extra, card=card,
                         label=names.get(card["index"], "") if card else "")
+        if job == "run" and self.also_fold.get():
+            # one folder beside each prover, on the same card (the GPU lock makes them take turns)
+            for i, card in enumerate(plan, 1):
+                self._spawn(100 + i, base, "fold", (), card=card,
+                            label=names.get(card["index"], "") if card else "")
         self._gpu_prep = gpuprep.to_prepare([c for c in plan if c], cuda, self.cfg.get("gpu_prepared"))
         on = sorted({w.label for w in self.workers if w.label})
         self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
@@ -1786,13 +1801,21 @@ class App(tk.Tk):
             # every two seconds, for ever.
             self._feed(f"Range {activity.pretty(w.extra[0])} finished", "good")
             return
+        if kind == "done" and w.activity.waiting:
+            # it exited cleanly with nothing to do ("nothing to fold", no block free): ask again in a minute, not
+            # in two seconds
+            kind = "idle"
         n = w.transients + 1 if kind == "transient" else 0
         if n > self.TRANSIENT_RETRIES:
             self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
             return
         key = object()
         self._respawns[key] = self.after(self.AGAIN_MS[kind], lambda: self._respawn(key, w, n))
-        self._feed({"done": "Taking the next block", "idle": "Asking for a block again in a minute",
+        said = {"run": ("Taking the next block", "Asking for a block again in a minute"),
+                "fold": ("Folding the next pair", "Nothing to fold yet: looking again in a minute"),
+                "spine": ("Extending the chain proof again", "Nothing to anchor yet: looking again in a minute")}
+        done_msg, idle_msg = said.get(w.job, said["run"])
+        self._feed({"done": done_msg, "idle": idle_msg,
                     "transient": f"Trying again in a minute ({n} of {self.TRANSIENT_RETRIES})"}[kind])
 
     def _respawn(self, key, w, n):
