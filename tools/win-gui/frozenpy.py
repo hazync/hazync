@@ -44,6 +44,9 @@ def run_as_python(argv=None):
         if p not in sys.path:
             sys.path.insert(0, p)
     _streams()
+    # the worker's own children (host.exe, once per block) get no console window either (winquiet)
+    import winquiet
+    winquiet.hide_child_consoles()
     kind, what, rest = mode
     try:
         if kind == "-c":

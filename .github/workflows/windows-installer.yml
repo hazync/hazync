@@ -56,6 +56,10 @@ jobs:
           python test_gpuprep.py --control
           python test_keep_going.py
           python test_keep_going.py --control
+          python test_range_progress.py
+          python test_range_progress.py --control
+          python test_winquiet.py
+          python test_winquiet.py --control
           python test_home_flow.py
 
       - name: The prover and the worker, from the release, checked against its SHA256SUMS

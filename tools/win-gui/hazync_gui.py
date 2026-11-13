@@ -400,6 +400,14 @@ class App(tk.Tk):
                 self.v_head.set(a.headline)
                 self.v_sub.set(a.detail)
                 self._set_bar(a.fraction, busy=not a.waiting)
+                # a specific range: say how far through it, and let the bar run over the whole range, not reset each
+                # block (Xesktop 11-13: on 1,342-2,000 the per-block bar filled and emptied every 32 s and read as
+                # stalling)
+                rp = a.range_progress
+                if rp:
+                    done, total = rp
+                    self.v_head.set(f"{a.headline}  ·  {done:,} of {total:,} done in {activity.pretty(f'{a.span[0]}-{a.span[1]}')}")
+                    self._set_bar(min(1.0, (done + (a.fraction or 0)) / total), busy=not a.waiting)
                 # a card newer than the prover's GPU code: say why nothing moves yet (gpuprep)
                 if getattr(self, "_gpu_prep", None) and a.job == "run" and not a.pieces and a.block:
                     self.v_head.set(f"{gpuprep.HEADLINE}  ·  {a.headline}")
@@ -1661,6 +1669,8 @@ class App(tk.Tk):
         p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, bufsize=1, errors="replace", **kwargs)
         w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
+        if job == "run" and extra:
+            w.activity.set_range(extra[0])
         self.workers.append(w)
         self._say(f"[{job} {i}] started (pid {p.pid}) — log {log_path}"
                   + (f" — on {label} (card {card['index']}, segment size "
@@ -1771,6 +1781,11 @@ class App(tk.Tk):
     def _again(self, w, kind):
         if kind not in self.AGAIN_MS:
             return
+        if w.extra and kind in ("done", "idle"):
+            # a specific range: finished means finished. Starting it again would find every block proven and exit,
+            # every two seconds, for ever.
+            self._feed(f"Range {activity.pretty(w.extra[0])} finished", "good")
+            return
         n = w.transients + 1 if kind == "transient" else 0
         if n > self.TRANSIENT_RETRIES:
             self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
@@ -1818,6 +1833,9 @@ class App(tk.Tk):
 
 
 def main():
+    # every console program the app starts (the worker, nvidia-smi, taskkill) runs without a window (winquiet)
+    import winquiet
+    winquiet.hide_child_consoles()
     if not supervisor.IS_WINDOWS:
         print("note: not on Windows — the fcntl shim stays OFF and the real module is used.")
     App().mainloop()
