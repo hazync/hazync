@@ -164,7 +164,9 @@ jobs:
           python -c "import sys;n=open(sys.argv[1],'rb').read().count(bytes.fromhex(sys.argv[2]));print('image',sys.argv[2][:8],n,'x');sys.exit(0 if n>=1 else 1)" "$APP/prover/host.exe" "$ID"
           # ...and is the release zip's host.exe, byte for byte: the sign job cannot look inside a compressed installer,
           # so this is what ties the signed installer to the signed zip.
-          a=$(sha256sum "$APP/prover/host.exe" | cut -c1-64); b=$(sha256sum rel/prover/host.exe | cut -c1-64)
+          # (not sha256sum: a path with backslashes makes it prefix its line with '\', which shifted a cut-based read)
+          sha() { python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1"; }
+          a=$(sha "$APP/prover/host.exe"); b=$(sha rel/prover/host.exe)
           [ "$a" = "$b" ] || { echo "::error::the installed host.exe ($a) is not the release zip's ($b)"; exit 1; }
           echo "installed host.exe = the release zip's ($a)"
           # the installed app runs the installed worker: make a key in a scratch HAZYNC_HOME and read it back
