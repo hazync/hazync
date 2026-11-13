@@ -215,7 +215,7 @@ fi
 # shipped). Built EVERY time rather than when the staged copy lacks the id: an id check cannot see a
 # verifier change that leaves the image alone, which is the host staleness trap of v0.18.0 (step 2)
 # in another binary. An unchanged tree makes this a no-op.
-run cargo build -q --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify || die "verifier build failed"
+run cargo build -q --release --locked --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify || die "verifier build failed"
 run install -m 0755 swiftsync-verify/target/release/swiftsync-verify "$DIST/hazync-verify-x86_64-linux-gnu"
 ok "x86_64 verifier staged"
 
