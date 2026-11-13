@@ -47,6 +47,10 @@ want "$O/join.log" "JOIN_TEST_PASS" "join tree, mixed shape, 4 refused negatives
 step "4. prep re-stamped under another image"
 H=$H J=$T/mainnet O=$O/restamp bash "$B/prep/restamp_test.sh" > "$O/restamp.log" 2>&1
 want "$O/restamp.log" "RESTAMP_TEST_OK" "states and bundles byte-identical"
+H=$H J=$T/mainnet O=$O/crash bash "$B/prep/crash_test.sh" > "$O/crash.log" 2>&1
+want "$O/crash.log" "CRASH_TEST_OK" "a crash between the trie flush and its marker: restarts from the trie's height, coin log untouched (review 11-12 #3, #8)"
+H=$H J=$T/mainnet O=$O/crash-c bash "$B/prep/crash_test.sh" --control > "$O/crash-c.log" 2>&1
+want "$O/crash-c.log" "CONTROL OK" "crash test control: the script without the trie-height rule fails"
 
 step "5. coordinator (libzync mode) + stock worker"
 H=$H O=$O/coord J=$T/mainnet REF=$M C=$Z/coordinator bash "$B/coord/coord_test.sh" > "$O/coord.log" 2>&1
