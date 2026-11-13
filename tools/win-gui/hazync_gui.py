@@ -38,7 +38,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import activity  # noqa: E402
@@ -1462,7 +1462,38 @@ class App(tk.Tk):
         self.after(POLL_MS, self._drain)
 
     # ── workers ─────────────────────────────────────────────────────────────────────────────────
+    def _ask_name_first(self):
+        """True when work may start credited to a chosen name. With no name set, ask for one now.
+
+        ⛔ The installer (11-13) made this necessary: it supplies the prover and the client, so setup is complete on
+        first launch and the card that held the name field never showed. A stranger's first run on Xesktop proved
+        block 1,339 as 'ghost:a3cb01', credited publicly to a machine-made name. So Start asks, sets it (a second or
+        two: the worker writes it), and only then starts. Cancel starts nothing."""
+        ident = [s for s in (getattr(self, "_steps", None) or []) if getattr(s, "key", None) == "identity"]
+        if not ident or ident[0].done:   # named, or not known yet: nothing to ask
+            return True
+        name = simpledialog.askstring(
+            "Your name on the board",
+            "The board credits every block you prove to a name. Which name?\n"
+            "(Shown publicly. Letters, digits, - and _.)", parent=self)
+        name = (name or "").strip()
+        if not name:
+            return False
+        cfg = self._snapshot()
+        ok, detail = firstrun.set_handle(cfg["worker"], name, cfg["host"], cfg["identity"], cfg["coord"])
+        self.handle_var.set(name)
+        self._after_handle((ok, detail))
+        if not ok:
+            messagebox.showerror("That name did not take", detail)
+            return False
+        ident[0].done = True
+        self._who = f"proving as {name}"
+        self.v_who.set(self._who)
+        return True
+
     def _start(self):
+        if not self._ask_name_first():
+            return
         checks, fatal = supervisor.preflight(self.host_var.get(), self.worker_var.get(),
                                              identity_dir=self.ident_var.get() or None)
         if fatal:

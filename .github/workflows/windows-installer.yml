@@ -47,6 +47,12 @@ jobs:
           python test_frozenpy.py
           python test_frozenpy.py --control
 
+      - name: Start asks for a name when none is set (a real Tk window, on Windows)
+        working-directory: tools/win-gui
+        run: |
+          python test_name_on_start.py
+          python test_name_on_start.py --control
+
       - name: The prover and the worker, from the release, checked against its SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
