@@ -128,6 +128,9 @@ def plan(cards, job, n_workers, cuda_build=True, skip=(), floor=FLOOR):
     return [ok[i % len(ok)] for i in range(n)]
 
 
+FITS_22_MB = 48000
+
+
 def seg_po2_for(card, configured, table):
     """The segment size for a worker on `card`, given what the settings say.
 
@@ -142,6 +145,10 @@ def seg_po2_for(card, configured, table):
     if not s.isdigit() or card is None:
         return s or None
     own = next(po2 for least, po2 in table if card["vram_mb"] >= least)
+    # ⚠ The table tops out at 21 (what Automatic picks), so 22, chosen by hand, was clamped back to 21
+    # on every card. 22 peaks near 40.6 GB: a card with room for it keeps it.
+    if card["vram_mb"] >= FITS_22_MB:
+        own = max(own, 22)
     return str(min(int(s), own))
 
 

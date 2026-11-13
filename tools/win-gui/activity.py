@@ -108,6 +108,31 @@ class Activity:
         self.done = 0
         self.block = None          # the block or range in hand, as the worker printed it
         self.waiting = False       # True while there is simply nothing to do yet
+        self.pieces = False        # True once the proof has reported a piece (gpuprep: the GPU code is ready)
+        self.span = None           # (lo, hi) when a specific range was asked for (set_range)
+        self.span_done = set()     # the range's blocks now on the board, by this worker or someone else
+
+    def set_range(self, rng):
+        """A specific range ('1342-2000' or '1342'): count its blocks as they land (range_progress)."""
+        parts = str(rng).strip().split("-")
+        if 1 <= len(parts) <= 2 and all(p.isdigit() for p in parts):
+            lo, hi = int(parts[0]), int(parts[-1])
+            if lo <= hi:
+                self.span = (lo, hi)
+
+    def _span_mark(self, rid):
+        parts = str(rid).split("-")
+        if self.span and all(p.isdigit() for p in parts) and 1 <= len(parts) <= 2:
+            for b in range(int(parts[0]), int(parts[-1]) + 1):
+                if self.span[0] <= b <= self.span[1]:
+                    self.span_done.add(b)
+
+    @property
+    def range_progress(self):
+        """(blocks done, blocks in the range) for a specific range, else None."""
+        if not self.span:
+            return None
+        return len(self.span_done), self.span[1] - self.span[0] + 1
 
     def _set(self, headline, detail="", fraction=None, waiting=False):
         self.headline, self.detail, self.fraction, self.waiting = headline, detail, fraction, waiting
@@ -150,6 +175,7 @@ class Activity:
             self.detail = f"Piece {i:,} of {n:,}{left}"
             self.fraction = _SEG_FROM + (_SEG_TO - _SEG_FROM) * min(i, n) / n
             self.waiting = False
+            self.pieces = True
             return None
         if _RE["assembled"].search(s):
             self.detail, self.fraction = "Pieces joined — finishing the proof", _ASSEMBLED
@@ -166,11 +192,13 @@ class Activity:
         m = _RE["accepted"].search(s)
         if m:
             self.done += 1
+            self._span_mark(m.group(1))
             self._set(f"Block {pretty(m.group(1))} is on the board", "Checked and accepted. "
                       "Asking for the next one…", 1.0)
             return f"Block {pretty(m.group(1))} checked and accepted — it is on the board"
         m = _RE["taken"].search(s)
         if m:
+            self._span_mark(m.group(1))
             self._set("Asking for a block to prove…", "", None)
             return f"Someone else finished block {pretty(m.group(1))} first — moving on"
         m = _RE["gpu_wait"].search(s)
