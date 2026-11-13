@@ -85,10 +85,11 @@ jobs:
       - name: Pack Hazync-Setup.exe (Inno Setup)
         run: |
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          # -D/-O, not /D//O: Git bash rewrites an argument starting with "/" into a Windows path
           [ -x "$ISCC" ] || { choco install innosetup -y --no-progress --version=6.4.3 >/dev/null && ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"; }
-          "$ISCC" -Q "/DAppVersion=$VERSION" "/DAppDir=$(cygpath -w "$PWD/tools/win-gui/dist/Hazync")" \
-                  "/DProverDir=$(cygpath -w "$PWD/rel/prover")" "/DWorker=$(cygpath -w "$PWD/rel/hazync-worker")" \
-                  "/O$(cygpath -w "$PWD/out")" tools/win-gui/installer/hazync.iss
+          "$ISCC" -Q "-DAppVersion=$VERSION" "-DAppDir=$(cygpath -w "$PWD/tools/win-gui/dist/Hazync")" \
+                  "-DProverDir=$(cygpath -w "$PWD/rel/prover")" "-DWorker=$(cygpath -w "$PWD/rel/hazync-worker")" \
+                  "-O$(cygpath -w "$PWD/out")" tools/win-gui/installer/hazync.iss
           ls -la out
           (cd out && sha256sum hazync-setup-x86_64-windows.exe | tee hazync-setup-x86_64-windows.exe.sha256)
 
