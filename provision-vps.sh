@@ -88,11 +88,12 @@ if ! command -v cargo >/dev/null; then
   RUSTUP_INIT_VERSION=1.28.2
   RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
   [ "$(uname -m)" = x86_64 ] || { echo "provision-vps.sh pins rustup-init for x86_64 only"; exit 1; }
-  ri=$(mktemp)
+  # named rustup-init: rustup picks its mode from argv[0] (as /tmp/tmp.XXXX it took itself for a proxy named "tmp")
+  rid=$(mktemp -d); ri="$rid/rustup-init"
   curl --proto '=https' --tlsv1.2 -sSfL -o "$ri" \
     "https://static.rust-lang.org/rustup/archive/$RUSTUP_INIT_VERSION/x86_64-unknown-linux-gnu/rustup-init"
   echo "$RUSTUP_INIT_SHA256  $ri" | sha256sum -c --quiet - || { echo "rustup-init $RUSTUP_INIT_VERSION: sha256 mismatch"; exit 1; }
-  chmod +x "$ri" && "$ri" -y --default-toolchain 1.99.1 && rm -f "$ri"
+  chmod +x "$ri" && "$ri" -y --default-toolchain 1.99.1 && rm -rf "$rid"
 fi
 source "$HOME/.cargo/env"
 
