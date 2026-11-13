@@ -94,8 +94,15 @@ pub struct Image {
 }
 
 impl Image {
+    /// The network's CURRENT image: the last entry for it. After a handover the table lists the new image after the
+    /// one it continues (whose own proofs stay verifiable by id, [`Image::by_id`]).
     pub fn by_network(name: &str) -> Option<&'static Image> {
-        IMAGES.iter().find(|i| i.network == name)
+        IMAGES.iter().rev().find(|i| i.network == name)
+    }
+    /// A built-in image by its id (64 hex characters): a reader holding a proof by an earlier image of the chain.
+    pub fn by_id(network: &str, method_id_hex: &str) -> Option<&'static Image> {
+        let h = method_id_hex.to_lowercase();
+        IMAGES.iter().find(|i| i.network == network && i.method_id_hex == h)
     }
     /// The network's parameters with another image id: for a reader who rebuilt M themselves (§5 step 9), or
     /// an older image. Leaked so it can live in `Inputs` like the built-in table.
@@ -179,7 +186,7 @@ fn sha256(b: &[u8]) -> [u8; 32] {
 
 /// The lineage digest of a list of handovers, oldest first.
 pub fn lineage_of(list: &[Handover]) -> [u8; 32] {
-    list.iter().fold([0u8; 32], |l, h| sha256(&pin::lineage_preimage(&l, h)))
+    list.iter().fold([0u8; 32], |l, h| { let (p, n) = pin::lineage_step(&l, h); sha256(&p[..n]) })
 }
 
 /// A block's coin-state digest: the coin commitment (roots, leaf count, total value) after that block.
@@ -516,6 +523,11 @@ pub fn words(d: &Digest) -> [u32; 8] {
     let mut w = [0u32; 8];
     w.copy_from_slice(d.as_words());
     w
+}
+
+/// An image id as printed (32 bytes) in the guest's u32x8 form.
+pub fn image_words(id: [u8; 32]) -> [u32; 8] {
+    words(&Digest::from_bytes(id))
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -1405,12 +1417,18 @@ mod tests {
     #[test]
     fn lineage_vectors() {
         // scripts/libzync/block_forest_ref.py again.
-        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000 };
-        let b = Handover { image: [9; 8], first_height: 980_000 };
+        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000, verifier: pin::SAME_ZKVM };
+        let b = Handover { image: [9; 8], first_height: 980_000, verifier: pin::SAME_ZKVM };
         assert_eq!(lineage_of(&[]), [0; 32]);
-        let one = lineage_of(&[Handover { image: a.image, first_height: a.first_height }]);
+        let one = lineage_of(&[Handover { image: a.image, first_height: a.first_height, verifier: pin::SAME_ZKVM }]);
         assert_eq!(hex(&one), "de40f074a41c9244272b66f8ce15759e646186968f348bc0cd930898c6948458");
         assert_eq!(hex(&lineage_of(&[a, b])), "fd23e4cf05d16147bcf677535f1c8bc64d8608369c55cc2fd07839dcd12a178c");
+        // a cross-version hop commits the predecessor's RISC Zero (docs/HANDOVER.md §3); same-version digests unchanged
+        let mut v = [0u8; 32];
+        for (i, x) in v.iter_mut().enumerate() { *x = i as u8; }
+        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000, verifier: pin::SAME_ZKVM };
+        let c = Handover { image: [9; 8], first_height: 980_000, verifier: v };
+        assert_eq!(hex(&lineage_of(&[a, c])), "60ce3fbb97ee9d5e2db5457d264dadb2857ef87e38b672a5aadd6e7601f9ed2f");
     }
 
     #[test]
