@@ -25,5 +25,8 @@ release hazync-worker
 release hazync-coordinator.py
 release hazync-run-workers.sh
 sign hazync-verify-aarch64
+# The Windows installer: the app with the release's prover and worker inside, built by windows-installer.yml
+# when signing (it needs the published Windows host). Not Authenticode-signed (owner, 11-13).
+sign hazync-setup-x86_64-windows.exe
 sign SHA256SUMS.txt
 sign SHA256SUMS.txt.asc

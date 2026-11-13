@@ -404,10 +404,12 @@ step "7. the signed manifest must cover EVERY binary"
 M=$(mktemp); A=$(mktemp)
 curl -sL -o "$M" "https://github.com/$REPO_SLUG/releases/download/$TAG/SHA256SUMS.txt"
 curl -sL -o "$A" "https://github.com/$REPO_SLUG/releases/download/$TAG/SHA256SUMS.txt.asc"
-for b in $BINS hazync-verify-aarch64; do
+# Every binary: the staged ones and those signing adds (the aarch64 verifier, the Windows installer), from the list.
+SIGNED_BINS=$(printf '%s\n' $SIGNED_EXTRA | grep -v '^SHA256SUMS' | xargs)
+for b in $BINS $SIGNED_BINS; do
     grep -q " $b\$" "$M" || die "$b is NOT in the signed manifest"
 done
-ok "manifest covers all $(( $(echo $BINS | wc -w) + 1 )) binaries"
+ok "manifest covers all $(echo $BINS $SIGNED_BINS | wc -w) binaries"
 # ...and signs the bytes that were staged and checked here, not merely their names.
 if [ "$VERIFY_ONLY" = 0 ]; then
     for b in $BINS; do
