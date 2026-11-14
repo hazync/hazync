@@ -43,6 +43,7 @@ fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
     eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
+    eprintln!("       swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <s>] [--include <height>:<hash> --path <file> [--tx <txid>:<position> --header <hex80> --branch <file>]] <receipt>...");
     exit(1);
 }
 
@@ -324,23 +325,61 @@ fn work_hex(w: &[u8; 32]) -> String {
     display(w)
 }
 
-/// `swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <unix seconds>] <receipt>...`: a proof of
-/// the mainnet header chain from genesis (the header-chain zyncAPP), as one receipt or a chain of runs, the first from
-/// genesis and each next one starting where the one before ended. Exit 0 OK (chainwork at least Core's minimum), 2 DEMO
-/// (below it), 1 FAIL.
+/// `swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <unix seconds>]
+/// [--include <height>:<hash> --path <file> [--tx <txid>:<position> --header <hex80> --branch <file>]] <receipt>...`: a
+/// proof of the mainnet header chain from genesis (the header-chain zyncAPP), as one receipt or a chain of runs, the
+/// first from genesis and each next one starting where the one before ended. Exit 0 OK (chainwork at least Core's
+/// minimum), 2 DEMO (below it), 1 FAIL.
+/// `--include`: also check that block <hash> (as explorers print it) is at <height> on the proven chain, by its MMR
+/// path (`--path`: the file `zyncapp headers-mmr-path` prints, one 64-hex hash per line, lowest first; empty for a
+/// one-block peak). `--tx`: and that transaction <txid> is at <position> in that block, by the block's 80-byte header
+/// (getblockheader <hash> false) and its merkle branch (`--branch`: one hash per line, lowest first, reversed hex as
+/// Electrum's blockchain.transaction.get_merkle prints it). The branch's depth is not checked (headers.rs explains).
 fn headers_main(a: Vec<String>) -> ! {
     let (mut image, mut expect, mut now, mut files) = (swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string(), None, None, Vec::new());
+    let (mut include, mut path, mut tx, mut header, mut branch) = (None, None, None, None, None);
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
             "--image" => image = it.next().unwrap_or_else(|| usage()),
             "--expect" => expect = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
+            "--include" => include = Some(it.next().unwrap_or_else(|| usage())),
+            "--path" => path = Some(it.next().unwrap_or_else(|| usage())),
+            "--tx" => tx = Some(it.next().unwrap_or_else(|| usage())),
+            "--header" => header = Some(it.next().unwrap_or_else(|| usage())),
+            "--branch" => branch = Some(it.next().unwrap_or_else(|| usage())),
             f if f.starts_with("--") => fail(&format!("headers: unknown flag {}", esc(f))),
             f => files.push(f.to_string()),
         }
     }
     if files.is_empty() { usage(); }
+    let read_lines = |f: &str| -> Vec<String> {
+        std::fs::read_to_string(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))))
+            .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    };
+    let inc = match (&include, &path) {
+        (None, None) if tx.is_none() && header.is_none() && branch.is_none() => None,
+        (Some(i), Some(p)) => {
+            let (h, x) = i.split_once(':').unwrap_or_else(|| fail("--include <height>:<hash>"));
+            let h = h.parse::<i64>().unwrap_or_else(|_| fail("--include: bad height"));
+            let pl = read_lines(p);
+            let txp = match (&tx, &header, &branch) {
+                (None, None, None) => None,
+                (Some(t), Some(hd), Some(b)) => {
+                    let (id, pos) = t.split_once(':').unwrap_or_else(|| fail("--tx <txid>:<position>"));
+                    Some((id.to_string(), pos.parse::<u32>().unwrap_or_else(|_| fail("--tx: bad position")), hd.clone(), read_lines(b)))
+                }
+                _ => fail("--tx needs --header and --branch"),
+            };
+            let pr: Vec<&str> = pl.iter().map(|s| s.as_str()).collect();
+            let br: Vec<&str> = txp.as_ref().map(|t| t.3.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
+            Some(swiftsync_verify::headers::Inclusion::parse(h, x, &pr,
+                    txp.as_ref().map(|t| (t.0.as_str(), t.1, t.2.as_str(), br.as_slice())))
+                 .unwrap_or_else(|e| fail(&format!("--include: {e}"))))
+        }
+        _ => fail("--include <height>:<hash> needs --path <file> (and --tx needs --include)"),
+    };
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
     let bytes: Vec<Vec<u8>> = files.iter().map(|f| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))))).collect();
@@ -349,13 +388,13 @@ fn headers_main(a: Vec<String>) -> ! {
         (h.parse::<i64>().unwrap_or_else(|_| fail("--expect: bad height")), x)
     });
     let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
-    let rep = swiftsync_verify::headers::verify_headers(&refs, &image, now, exp);
+    let rep = swiftsync_verify::headers::verify_headers(&refs, &image, now, exp, inc.as_ref());
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
     let ident = if expect.is_some() { "" } else { "; chain identity NOT checked (give --expect <height>:<hash> from a source you trust)" };
     match (&rep.verdict, &rep.state) {
         (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
         (v, Some(s)) => {
-            let what = format!("header chain from genesis to {} {} (chainwork {}){ident}", s.height, s.hash_hex(), s.work_hex());
+            let what = format!("header chain from genesis to {} {} (chainwork {}, MMR root {}){ident}", s.height, s.hash_hex(), s.work_hex(), s.mmr_root_hex());
             if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
             println!("SWIFTSYNC_VERIFY_DEMO: a valid header chain below Core's minimum chain work: {what}"); exit(2)
         }
