@@ -2,7 +2,8 @@
 
 libzync is the engine of Hazync v2 (Hazync v1, the original Core design, is in [`docs/history/`](../history/)).
 **Where it stands on 2026-11-12:** v0.24.0 is released on RISC Zero 3.1.0 (images `8888d59c` mainnet, `d4210dae`
-signet, `2db34e12` header chain; `reproduce/LIBZYNC_IDS`); v0.23.0 (`863c9ce3`, 3.0.5) is withdrawn. The public
+signet, `2db34e12` header chain); v0.26.0's `1ff5a129` continues `8888d59c` at block 2000 by a handover (`28e39600`
+signet; `reproduce/LIBZYNC_IDS`, [`../HANDOVER.md`](../HANDOVER.md)); v0.23.0 (`863c9ce3`, 3.0.5) is withdrawn. The public
 board switched to v2 on 2026-11-12 and restarted from genesis (N2). The header chain is proved in one receipt and
 followed at the tip on CPU (K1, N3). zyncAPP pages are live on hazync.org (R4). The Windows CUDA host proves natively
 (R3). What is still open is in **N** and **O** at the end. Entries below keep the dates and image ids they were
@@ -431,8 +432,8 @@ What the switch and the first v2 proving run surfaced. None changes the core ima
 ## Image ids built (11-03, unit tests + compiles only)
 
 ⚠ **Historical.** Every id in this table is a laptop build on risc0 3.0.5 and is refused by today's verifiers. The
-published ids are in `reproduce/LIBZYNC_IDS`: mainnet `8888d59c`, signet `d4210dae`, header chain `2db34e12`
-(risc0 3.1.0). Other retired ids met in this file: `bbf82800` (c14 laptop), `863c9ce3` / `73b62530` (v0.23.0
+published ids are in `reproduce/LIBZYNC_IDS`: mainnet `1ff5a129` (continuing `8888d59c`), signet `28e39600`, header
+chain `2db34e12` (risc0 3.1.0). Other retired ids met in this file: `bbf82800` (c14 laptop), `863c9ce3` / `73b62530` (v0.23.0
 container, 3.0.5, withdrawn), `9f469930` / `067822b9` (round-8 images, 10-31), `4d04d6bf` (header chain, 3.0.5).
 
 | image | id | note |

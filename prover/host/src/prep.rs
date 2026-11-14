@@ -118,7 +118,11 @@ pub(crate) fn leaf_read(path: &str) -> LeafBundle {
     assert!(v.len() >= 40 && &v[..8] == LEAF_MAGIC, "{path}: not a leaf bundle ({})", String::from_utf8_lossy(&LEAF_MAGIC[..]));
     let (body, d) = v.split_at(v.len() - 32);
     assert!(Sha256::digest(body)[..] == d[..], "{path}: checksum mismatch (torn or damaged)");
-    bincode::deserialize(&body[8..]).unwrap_or_else(|e| panic!("{path}: {e}"))
+    let mut b: LeafBundle = bincode::deserialize(&body[8..]).unwrap_or_else(|e| panic!("{path}: {e}"));
+    // stamped on read (docs/HANDOVER.md §5): a bundle an older image's prep wrote still carries S(h-1) as the image
+    // proving block h-1 commits it. Identity with an empty lineage.
+    crate::stamp(&mut b.prev);
+    b
 }
 
 /// One block of native prep: the state after it, and with `leaf` its leaf bundle, the witnesses cut from the stores
@@ -356,10 +360,15 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     // embedding the published 863c9ce3): the saved state is re-stamped with this image's id and profile, so the
     // first block's leaf bundle carries the same prev a join of leaves proved by this image links to. Prep states
     // are untrusted starting points; a leaf's guest checks every witness against them either way.
-    if cont && (prev.self_id != methods::METHOD_ID || prev.profile != crate::lz::expected_profile()) {
-        println!("  prep: the anchor was saved under another image; re-stamped with this image's id and profile");
-        prev.self_id = methods::METHOD_ID;
-        prev.profile = crate::lz::expected_profile();
+    // Stamped BY ERA (docs/HANDOVER.md §5): the image that proves block prev.height under this image's lineage, which
+    // is this image unless a handover is pinned above it.
+    if cont {
+        let was = (prev.self_id, prev.lineage, prev.profile);
+        crate::stamp(&mut prev);
+        if was != (prev.self_id, prev.lineage, prev.profile) {
+            println!("  prep: the anchor was saved under another image or era; re-stamped (image {}, lineage {})",
+                     crate::hex(&risc0_zkvm::sha::Digest::from(prev.self_id).as_bytes().try_into().unwrap_or([0u8; 32])), crate::hex(&prev.lineage));
+        }
     }
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
     let history = std::env::var("HAZYNC_PREP_HISTORY").as_deref() == Ok("1");
@@ -438,8 +447,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             crate::lz::hist_append(out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends });
         }
         if h == lo { st.anchor_id = anchor_id; }
-        st.self_id = methods::METHOD_ID;
-        st.profile = crate::lz::expected_profile();
+        // the image proving block h, and the lineage at h (identity with an empty lineage: METHOD_ID, zero)
+        crate::stamp(&mut st);
         // atomic at a save point (its state_<h>.json is the anchor a restart takes; round 9); a plain write between
         // them (a restart never starts there, and two fsyncs per block across a mainnet prep cost; round 10)
         let save = each || h == hi || (every > 0 && h % every == 0);

@@ -1,7 +1,7 @@
 # libzync: the coin log
 
 Status: the product's coin accounting (profile bit 4, `0x10`; on in every libzync image since E2c, including the
-published v0.24.0 images `8888d59c…` mainnet and `d4210dae…` signet, risc0 3.1.0). Design B (SwiftSync
+published v0.26.0 images `1ff5a129…` mainnet and `28e39600…` signet, and v0.24.0's `8888d59c…` / `d4210dae…`, risc0 3.1.0). Design B (SwiftSync
 forest + hints file), the alternative, was retired in E2.
 Normative source: `libzync/src/coinlog.rs` (shared by the host and the guest) and the coin-log block of
 `prover/methods/guest/src/agg_lite.rs`. `scripts/libzync/coinlog_ref.py` is an independent implementation written from

@@ -29,7 +29,7 @@ prover/
 ## Build
 
 The published images are embedded, not rebuilt: a guest built anywhere but the reproducible container has a
-different id (v0.24.0's mainnet image is `8888d59c…`). Take the ELF from `reproduce/libzync.Dockerfile` (or CI's
+different id (v0.26.0's mainnet image is `1ff5a129…`). Take the ELF from `reproduce/libzync.Dockerfile` (or CI's
 `libzync-hosts` artefact) and pin it with a
 directory holding its `METHOD_ID`, `GUEST_ELF_SHA256` and `PROFILE` (`reproduce/LIBZYNC_IDS` has the values;
 `scripts/libzync/ci/build-hosts.sh` writes such a directory):

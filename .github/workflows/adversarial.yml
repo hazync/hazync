@@ -1898,8 +1898,10 @@ jobs:
 
   # ── libzync soundness (2026-11-08) ────────────────────────────────────────────────────────────────────────────
   # The libzync test pass in CI, on hosts built in the reproducible container: the mainnet and signet hosts embed the
-  # PUBLISHED guest ELFs (reproduce/LIBZYNC_IDS), so these jobs test what is published. `soundness-suite` (the required
-  # check) gates on all of them. Drivers: scripts/libzync/ci/ (each step greps a positive marker: a step that crashed
+  # PUBLISHED guest ELFs (reproduce/LIBZYNC_IDS), so these jobs test what is published. The exception is libzync-chain:
+  # it proves mainnet from genesis, which the published image (its predecessor pinned at 2000) never does by design,
+  # so it runs on the mainnet TEST VARIANTS host_m0 / host_mN (build-hosts.sh; separate artifact). `soundness-suite`
+  # (the required check) gates on all of them. Drivers: scripts/libzync/ci/ (each step greps a positive marker: a step that crashed
   # or printed nothing fails).
   libzync-hosts:
     runs-on: ubuntu-latest
@@ -1910,13 +1912,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
-      - name: Build the test hosts in it (published mainnet / signet ELFs; regtest O and N), the host unit tests, Core's vectors
+      - name: Build the test hosts in it (published mainnet / signet ELFs; regtest O and N; mainnet test variants O and N), the host unit tests, Core's vectors
         run: |
           mkdir -p hosts
           docker run --rm -v "$PWD/hosts:/out" hazync-libzync-repro bash /hazync-zkvm/scripts/libzync/ci/build-hosts.sh /out
           sudo chown -R "$(id -u):$(id -g)" hosts
           cat hosts/ids.txt
-          for n in host_m host_sig host_reg host_regN core_vectors.json core_vectors_base.json; do
+          for n in host_m host_sig host_reg host_regN host_m0 host_mN core_vectors.json core_vectors_base.json; do
             [ -s "hosts/$n" ] || { echo "::error::hosts/$n was not built"; exit 1; }
           done
           grep -q '^HOST_UNIT_OK .*, 0 failed$' hosts/ids.txt || { echo "::error::host unit tests (libzync mode) failed"; tail -40 hosts/host_unit.log; exit 1; }
@@ -1932,19 +1934,32 @@ jobs:
             hosts/core_vectors_base.json
             hosts/ids.txt
           retention-days: 3
+      # The mainnet TEST VARIANTS (lineage/test.rs instead of the published lineage; ids in no pin table, the host prints
+      # TEST_VARIANT), a separate artifact so no job takes one for the published host by accident. Only libzync-chain
+      # uses them: the published image pins its predecessor below its handover height and never proves from genesis.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libzync-hosts-test-variant
+          path: |
+            hosts/host_m0
+            hosts/host_mN
+            hosts/ids.txt
+          retention-days: 3
 
   libzync-chain:
     # mainnet 1..200 from genesis vs the reference implementations; leaf bundles; a 200-leaf join tree and its
-    # negatives; prep re-stamped under another image; the coordinator in libzync mode with the stock worker
+    # negatives; prep re-stamped under another image; the coordinator in libzync mode with the stock worker; the
+    # board handover rehearsal and its control. On the mainnet TEST VARIANTS host_m0 (empty test lineage) and host_mN
+    # (host_m0 pinned at 11): the published host_m pins its predecessor at 2000 and by design never proves below it.
     needs: libzync-hosts
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: libzync-hosts, path: hosts }
-      - name: Chain from genesis and everything built on it
-        run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 P=4 bash scripts/libzync/ci/chain.sh hosts/host_m out
+        with: { name: libzync-hosts-test-variant, path: hosts }
+      - name: Chain from genesis and everything built on it, board handover rehearsal
+        run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 P=4 bash scripts/libzync/ci/chain.sh hosts/host_m0 hosts/host_mN out
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: libzync-chain-logs, path: "out/**/*.log", retention-days: 7 }

@@ -55,12 +55,15 @@ leaf bundle per block, paced by proving. Following the tip with libzync is **not
 **Is it healthy?**
 
 ```bash
-curl -s 127.0.0.1:8899/api/meta        # "libzync": true and method_id 8888d59c…
+curl -s 127.0.0.1:8899/api/meta        # "libzync": true, and the method_id of the era (below)
 curl -s 'https://api.hazync.org/api/state?slim=1' | head -c 400
 systemctl list-timers 'hazync-lz-*' 'libzync-*' 'hazync-check-*'
 systemctl --failed
 scripts/check-deployment.sh --local    # read the libzync section; its CORE section FAILs by design after the switch (open item)
 ```
+
+`method_id` is `8888d59c…` until the handover at block 2000 (`LZ_HANDOVER_AT`, the `pre` era) and `1ff5a129…` after it
+([`../../docs/HANDOVER.md`](../../docs/HANDOVER.md) §5).
 
 The checks alert through `hazync-alert@` exactly as in [Alerts](#alerts) below. A stalled frontier with healthy units is
 usually a claim, not a fault: see the proving-fleet notes in [`docs/OPERATIONS.md`](../../docs/OPERATIONS.md#0-the-live-board-hazync-v2).

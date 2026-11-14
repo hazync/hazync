@@ -14,8 +14,10 @@ open: the status below, the round-by-round record in [`docs/libzync/LIBZYNC.md`]
 **Independent review is explicitly invited**; if you find a way to make an invalid block prove valid, that is the
 finding that matters most.
 
-This page covers **Hazync v2** (the libzync engine): published images mainnet `8888d59c`, signet `d4210dae` and the
-header-chain zyncAPP `2db34e12` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), release v0.24.0, RISC Zero 3.1.0.
+This page covers **Hazync v2** (the libzync engine): published images mainnet `1ff5a129`, signet `28e39600` and the
+header-chain zyncAPP `2db34e12` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), release v0.26.0, RISC Zero 3.1.0.
+The mainnet image continues `8888d59c` (v0.24.0-v0.25.0) at block 2000 by a handover ([`docs/HANDOVER.md`](docs/HANDOVER.md)):
+blocks below 2000 are `8888d59c`'s proofs, and the verifier keeps that image.
 What a proof rests on is set out in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md), and how to review it in
 [`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md).
 
@@ -31,7 +33,8 @@ block-level rules the aggregate applies from the chunks' facts, the coin log, th
 
 | release | engine | status |
 |---|---|---|
-| v0.24.0 (latest) | Hazync v2, image `8888d59c`, RISC Zero 3.1.0 | supported: the public board runs it |
+| v0.26.0 (latest) | Hazync v2, image `1ff5a129`, RISC Zero 3.1.0 | supported: the public board runs it from the handover at block 2000 |
+| v0.24.0, v0.25.0 | Hazync v2, image `8888d59c`, RISC Zero 3.1.0 | supported for verifying: its proofs are the board's blocks 1..1999 |
 | v0.23.0 | Hazync v2, image `863c9ce3`, RISC Zero 3.0.5 | **withdrawn**: do not deploy; 3.1.0 verifiers refuse its proofs |
 | v0.22.1 and earlier | Hazync v1, image `37987b85` (since v0.21.0) | not maintained; v0.22.1 still verifies v1 proofs |
 

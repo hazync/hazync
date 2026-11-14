@@ -1,8 +1,9 @@
 # libzync: image handover and the block forest
 
-Status: in the frozen core c14 and so in every published image (v0.24.0, risc0 3.1.0: mainnet `8888d59c…`, signet
-`d4210dae…`). No handover has been used yet: every `lineage/*.rs` list is empty, so published proofs carry a zero
-`lineage`. Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
+Status: in the frozen core c14 and so in every published image. v0.26.0 (risc0 3.1.0) is the first to pin one: mainnet
+`1ff5a129…`'s `lineage/mainnet_coinlog.rs` pins v0.24.0's `8888d59c…` at block 2000 (same RISC Zero); every other
+`lineage/*.rs` list is empty. The operational runbook, including the cross-RISC-Zero case, is
+[`../HANDOVER.md`](../HANDOVER.md). Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
 `aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
 implementation written from this document.
 
@@ -84,7 +85,9 @@ forest's job. A proof at height H also says nothing after H.
 |---|---|
 | A consensus rule that starts at height H, such as a soft fork | **Yes** |
 | A cheaper prover, with the same statement | **Yes** |
+| A RISC Zero upgrade for speed or features (cross-version, below) | **Yes** |
 | **A soundness bug in the old image** | **NO.** The old proof may attest something false, and continuing inherits that. Re-prove from before the bug could matter, normally genesis. |
+| **A RISC Zero upgrade that fixes a soundness bug** in its circuit, verifier or recursion | **NO**, for the same reason: everything below `first_height` stays only as strong as the old version. |
 
 A handover takes the old image's claims on trust. The new image re-checks nothing before `first_height`, so it is
 only as sound as every image in its lineage.
@@ -98,7 +101,7 @@ An image's source lists what it continues, in `prover/methods/guest/src/lineage/
 variant (`mainnet`, `signet`, `regtest`, each also `_coinlog`; an assumevalid build shares its network's file):
 
 ```rust
-pub const LINEAGE: &[crate::handover_pin::Handover] = &[crate::handover_pin::Handover { image: OLD_ID, first_height: 974_000 }];
+pub const LINEAGE: &[crate::handover_pin::Handover] = &[crate::handover_pin::Handover { image: OLD_ID, first_height: 974_000, verifier: crate::handover_pin::SAME_ZKVM }];
 ```
 
 Only the variant's own file is compiled into it, so pinning one variant's predecessor does not change another
@@ -109,6 +112,7 @@ predecessor.
 The aggregate's `is_base` takes a third value. `2` = handover:
 
 1. `env::verify(pinned image, prev_journal)`. The id comes from the source, never from input, so `self_id` cannot widen it.
+   For a cross-version entry (`verifier` not `SAME_ZKVM`), the vendored old circuit instead (below).
 2. `prev.self_id` must be the pinned image.
 3. `prev.profile` must equal this image's. A chain cannot gain a claim at a handover: an assumevalid predecessor cannot
    become a scripts-checked chain, and networks cannot mix.
@@ -120,6 +124,28 @@ Everything else in the state is carried as in a recursive step: coins, work, Swi
 an empty list refuses `is_base = 2`.
 
 ⛔ **A new image that changes `ChainState` must decode the predecessor's format at step 2.** The guest marks the line.
+
+### Across a RISC Zero upgrade (2026-11-13)
+
+`env::verify` checks a receipt with THIS image's recursion circuit. Between RISC Zero 3.0.5 and 3.1.0 that circuit's
+constraints changed (`poly_ext.rs`, the taps and the control root all differ), so a 3.1.0 guest cannot check a 3.0.5
+receipt that way, even when told the old control root. The handover entry therefore names the predecessor's RISC Zero:
+`verifier` is that version's succinct verifier-parameter digest (`SAME_ZKVM`, zero, means the same RISC Zero).
+
+For a non-zero `verifier` the guest carries the old version's recursion circuit (`src/xver/v<version>/`: the generated
+`control_id.rs`, `info.rs`, `poly_ext.rs` and `taps.rs` copied verbatim from that `risc0-circuit-recursion`), and the
+handover step:
+
+1. reads the predecessor's succinct seal, control id and control inclusion path as input words;
+2. checks the seal with risc0-zkp's verifier against the OLD circuit, the control id's inclusion under the old
+   control root, and the control root the seal itself outputs: what that version's `verify_integrity` checks;
+3. requires the claim the seal outputs to equal `ReceiptClaim::ok(pinned image, prev_journal)`: the pinned image, exit
+   `Halted(0)`, no assumptions, exactly this journal. The claim is built by the guest, never read from input.
+
+Then steps 2-5 above, unchanged. An image pinning a version it does not carry does not build (a compile-time check in
+`main.rs`); the carried versions are guest features (`xver-v3_0_5`, `xver-v3_1_0`), switched on in the guest's
+`Cargo.toml` `default`, so the image id commits to them. `v3_0_5` is a test vector only (3.1.0 fixed soundness bugs in
+3.0.x). Measured 11-13 in the 3.1.0 executor on real 3.0.5 receipts: about 22 M cycles to verify one.
 
 ### Genesis anchor
 
@@ -142,8 +168,11 @@ handover from an image with the old rule until the host replays each range under
 
 ```
 L_0     = 32 zero bytes
-L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE )     69-byte preimage
+L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE )                 69-byte preimage
+L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE ‖ verifier )     101 bytes, cross-version
 ```
+
+The 32-byte `verifier` is appended only when it is not zero, so every same-version lineage digests exactly as before.
 
 `image, as 8 u32 LE` is the image id's 32 bytes exactly as risc0 prints the id in hex.
 
@@ -157,8 +186,8 @@ digest of its list. The verifier refuses any other value, and prints which one i
 Added to the steps in SWIFTSYNC_PROOFS.md §5:
 
 - `block_leaves == height + 1`, and `block_roots` has a root exactly at the set bits of `block_leaves`.
-- `lineage` is zero, or the digest of the image's stated list. `swiftsync-verify --handover <image>:<height>` states an
-  entry, oldest first.
+- `lineage` is zero, or the digest of the image's stated list. `swiftsync-verify --handover <image>:<height>[:<verifier>]`
+  states an entry, oldest first.
 - The image id pinned is still the **newest** one. It commits to its whole lineage, so a verifier needs nothing else to
   accept the chain. Deciding to trust that lineage is a decision about every image in it.
 

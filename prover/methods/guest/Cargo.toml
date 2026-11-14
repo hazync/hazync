@@ -27,6 +27,10 @@ codegen-units = 1
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ['std', 'unstable'] }
 sha2 = { version = "0.10", default-features = false, features = ["compress"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+# Cross-version handover (src/xver): the old recursion circuits verify on risc0-zkp's verifier, the one risc0-zkvm
+# already uses (same version, already in the lock); the Poseidon2 call comes from the platform crate.
+risc0-zkp = { version = "=3.0.6", default-features = false }
+risc0-zkvm-platform = { version = "=2.2.3", default-features = false }
 # hazync#139 middle-path experiment ONLY. Optional so a default build neither compiles it nor
 # changes METHOD_ID. Enable with --features bigint2-ecdsa; see src/bigint2_ecmult.rs.
 risc0-crypto = { version = "0.1.0-rc.1", optional = true }
@@ -86,6 +90,12 @@ fast-commit = []
 # build without it -- there is one way to build a libzync guest.
 libzync = ["bigint2-ecdsa", "liftx-hint", "field-bigint2", "scalar-inv-accel", "agg-readslice",
            "batch-ecdsa", "tx-once", "swiftsync", "agg-lite", "fast-commit"]
+# Cross-version handover (docs/HANDOVER.md §3): carry RISC Zero <version>'s recursion circuit, to verify a predecessor
+# image's receipts made under it. An image that moves to a later RISC Zero adds its predecessor's version to `default`
+# above (source, not a build flag: the image id commits to it), and main.rs refuses to build a lineage whose predecessor
+# names a version not carried. ⛔ Never for a version a later one fixed a soundness bug in: v3_0_5 is a TEST VECTOR.
+xver-v3_0_5 = []
+xver-v3_1_0 = []
 # Default signet instead of mainnet (HAZYNC_NETWORK=signet): Core's SigNet chainparams and the BIP325
 # block-solution check in the aggregate. libzync only.
 signet = ["libzync"]
@@ -104,3 +114,6 @@ trie = ["coinlog"]
 # speculative chunks (proved for this height and MTP before the block existed) and takes the block's record order from
 # the host, so a batch may hold transactions the block does not.
 txlog = ["libzync"]
+# TEST VARIANT ONLY (HAZYNC_TEST_LINEAGE=1, mainnet coin log): lineage/test.rs instead of lineage/mainnet_coinlog.rs, for
+# the tests that prove mainnet from genesis. Its image id is in no pin table and the host prints TEST_VARIANT.
+test-lineage = ["coinlog"]

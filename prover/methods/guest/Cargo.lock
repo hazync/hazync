@@ -793,7 +793,9 @@ dependencies = [
  "cc",
  "risc0-bigint2",
  "risc0-crypto",
+ "risc0-zkp",
  "risc0-zkvm",
+ "risc0-zkvm-platform",
  "serde",
  "sha2",
 ]

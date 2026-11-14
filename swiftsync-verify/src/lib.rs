@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 /// the published image ids M of §5 step 1; a reader should rebuild them (§5 step 9) rather than take them
 /// from this file.
 pub const IMAGES: &[Image] = &[
+    // v0.23.0-v0.25.0 (RISC Zero 3.1.0): the board's image for blocks 1..1999. Kept so its proofs verify by id.
     Image {
         network: "mainnet",
         method_id_hex: "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4",
@@ -34,9 +35,46 @@ pub const IMAGES: &[Image] = &[
         checkpoint_height: 970_000,
         lineage: &[],
     },
+    // v0.26.0: continues 8888d59c at block 2000 (the handover, docs/HANDOVER.md). The CURRENT mainnet image.
+    Image {
+        network: "mainnet",
+        method_id_hex: "1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a",
+        profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+        genesis_time: 1_231_006_505,
+        genesis_bits: 0x1d00_ffff,
+        genesis_work: 4_295_032_833,
+        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (mainnet).
+        min_work_hex: "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
+        genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
+        checkpoint_height: 970_000,
+        lineage: &[Handover {
+            image: [2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963],
+            first_height: 2000,
+            verifier: pin::SAME_ZKVM,
+        }],
+    },
+    // v0.23.0-v0.25.0 signet. Kept so its proofs verify by id.
     Image {
         network: "signet",
         method_id_hex: "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387",
+        profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
+        genesis_time: 1_598_918_400,
+        genesis_bits: 0x1e03_77ae,
+        genesis_work: 4_838_420,
+        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (default signet).
+        min_work_hex: "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
+        checkpoint_height: 325_000,
+        lineage: &[],
+    },
+    // v0.26.0 signet: a new chain from genesis (no signet board to hand over). The CURRENT signet image.
+    Image {
+        network: "signet",
+        method_id_hex: "28e396006e97a8075daeb9fb12ce3ef1b3a20e44eac935256a1c2e8c3d8d57f3",
         profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,
@@ -94,8 +132,15 @@ pub struct Image {
 }
 
 impl Image {
+    /// The network's CURRENT image: the last entry for it. After a handover the table lists the new image after the
+    /// one it continues (whose own proofs stay verifiable by id, [`Image::by_id`]).
     pub fn by_network(name: &str) -> Option<&'static Image> {
-        IMAGES.iter().find(|i| i.network == name)
+        IMAGES.iter().rev().find(|i| i.network == name)
+    }
+    /// A built-in image by its id (64 hex characters): a reader holding a proof by an earlier image of the chain.
+    pub fn by_id(network: &str, method_id_hex: &str) -> Option<&'static Image> {
+        let h = method_id_hex.to_lowercase();
+        IMAGES.iter().find(|i| i.network == network && i.method_id_hex == h)
     }
     /// The network's parameters with another image id: for a reader who rebuilt M themselves (§5 step 9), or
     /// an older image. Leaked so it can live in `Inputs` like the built-in table.
@@ -179,7 +224,7 @@ fn sha256(b: &[u8]) -> [u8; 32] {
 
 /// The lineage digest of a list of handovers, oldest first.
 pub fn lineage_of(list: &[Handover]) -> [u8; 32] {
-    list.iter().fold([0u8; 32], |l, h| sha256(&pin::lineage_preimage(&l, h)))
+    list.iter().fold([0u8; 32], |l, h| { let (p, n) = pin::lineage_step(&l, h); sha256(&p[..n]) })
 }
 
 /// A block's coin-state digest: the coin commitment (roots, leaf count, total value) after that block.
@@ -330,7 +375,34 @@ pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
     }
 }
 
+/// The earlier built-in image a receipt names, when the caller asked for its network's CURRENT built-in image (by id): after a
+/// handover the table keeps the image it continues (v0.26.0's 1ff5a129 continues 8888d59c at block 2000), and that
+/// image's proofs (the chain below the handover) must keep verifying with no `--image`. Only images in the built-in
+/// table are ever substituted: an id the caller supplied, or one not in the table, is left to fail on its own.
+pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Image) -> Option<&'static Image> {
+    let current = Image::by_network(asked.network)?;
+    // By id, not by pointer: `--product` / `--coinlog` hand verify() a modified copy of the current image.
+    if asked.method_id_hex != current.method_id_hex {
+        return None;
+    }
+    use risc0_zkvm::sha::Digestible;
+    let claim = receipt.claim().ok()?;
+    let pre = claim.as_value().ok()?.pre.digest();
+    let hex: String = pre.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    IMAGES.iter().find(|i| i.network == asked.network && i.method_id_hex == hex && !std::ptr::eq(*i, current))
+}
+
 pub fn verify(inp: &Inputs) -> Report {
+    if receipt_kind(inp.receipt).is_ok() {
+        if let Ok(r) = bincode::deserialize::<risc0_zkvm::Receipt>(inp.receipt) {
+            if let Some(e) = earlier_image_named_by(&r, inp.image) {
+                let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
+                rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
+                                                     verified as that image", e.method_id_hex, e.network)));
+                return rep;
+            }
+        }
+    }
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false };
     let m = inp.image.method_id();
     if let Err(e) = receipt_kind(inp.receipt) {
@@ -516,6 +588,11 @@ pub fn words(d: &Digest) -> [u32; 8] {
     let mut w = [0u32; 8];
     w.copy_from_slice(d.as_words());
     w
+}
+
+/// An image id as printed (32 bytes) in the guest's u32x8 form.
+pub fn image_words(id: [u8; 32]) -> [u32; 8] {
+    words(&Digest::from_bytes(id))
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -1242,15 +1319,27 @@ mod tests {
     }
 
     /// The built-in table is the published one (reproduce/LIBZYNC_IDS, written with the table by
-    /// reproduce/pin-libzync-ids.py): a hand edit to either fails here.
+    /// reproduce/pin-libzync-ids.py): each network's CURRENT image (its last entry) is the published id, and every
+    /// earlier entry is an image the record says was published and superseded (reproduce/METHOD_ID for mainnet,
+    /// reproduce/LIBZYNC_IDS's history in git for signet: named in this file's comments). A hand edit fails here.
     #[test]
     fn images_match_the_published_ids() {
         let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        for img in IMAGES {
-            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(img.network))
-                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {} line", img.network));
+        let record = include_str!("../../reproduce/METHOD_ID");
+        let this = include_str!("lib.rs");
+        for net in ["mainnet", "signet"] {
+            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(net))
+                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {net} line"));
             let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-            assert_eq!(id, img.method_id_hex, "{}: IMAGES and reproduce/LIBZYNC_IDS disagree", img.network);
+            let cur = Image::by_network(net).unwrap();
+            assert_eq!(id, cur.method_id_hex, "{net}: the current image and reproduce/LIBZYNC_IDS disagree");
+            for old in IMAGES.iter().filter(|i| i.network == net && i.method_id_hex != id) {
+                let named = if net == "mainnet" { record.contains(&format!("Superseded {}", &old.method_id_hex[..8])) }
+                            else { this.contains(&format!("// v0.23.0-v0.25.0 {net}")) };
+                assert!(named, "{net}: earlier image {} is not in the superseded record", old.method_id_hex);
+            }
+            assert_eq!(IMAGES.iter().filter(|i| i.network == net && i.method_id_hex == id).count(), 1,
+                       "{net}: the published id is listed more than once");
         }
     }
 
@@ -1405,12 +1494,18 @@ mod tests {
     #[test]
     fn lineage_vectors() {
         // scripts/libzync/block_forest_ref.py again.
-        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000 };
-        let b = Handover { image: [9; 8], first_height: 980_000 };
+        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000, verifier: pin::SAME_ZKVM };
+        let b = Handover { image: [9; 8], first_height: 980_000, verifier: pin::SAME_ZKVM };
         assert_eq!(lineage_of(&[]), [0; 32]);
-        let one = lineage_of(&[Handover { image: a.image, first_height: a.first_height }]);
+        let one = lineage_of(&[Handover { image: a.image, first_height: a.first_height, verifier: pin::SAME_ZKVM }]);
         assert_eq!(hex(&one), "de40f074a41c9244272b66f8ce15759e646186968f348bc0cd930898c6948458");
         assert_eq!(hex(&lineage_of(&[a, b])), "fd23e4cf05d16147bcf677535f1c8bc64d8608369c55cc2fd07839dcd12a178c");
+        // a cross-version hop commits the predecessor's RISC Zero (docs/HANDOVER.md §3); same-version digests unchanged
+        let mut v = [0u8; 32];
+        for (i, x) in v.iter_mut().enumerate() { *x = i as u8; }
+        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000, verifier: pin::SAME_ZKVM };
+        let c = Handover { image: [9; 8], first_height: 980_000, verifier: v };
+        assert_eq!(hex(&lineage_of(&[a, c])), "60ce3fbb97ee9d5e2db5457d264dadb2857ef87e38b672a5aadd6e7601f9ed2f");
     }
 
     #[test]

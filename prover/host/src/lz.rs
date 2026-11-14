@@ -881,7 +881,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let handover: Option<(Receipt, ChainState)> = std::env::var("HAZYNC_HANDOVER_RECEIPT").ok().map(|p| {
         let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
         let r: Receipt = bincode::deserialize(&std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
-        r.verify(last.image).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
+        // the same RISC Zero: Receipt::verify; an older one: its vendored circuit (src/xver), as the guest will
+        crate::verify_pred_receipt(&r, last).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
         let st: ChainState = r.journal.decode().expect("ChainState");
         let tamper = std::env::var("HAZYNC_TEST_HANDOVER").ok();
         if tamper.is_some() { assert!(dev_mode_env(), "HAZYNC_TEST_HANDOVER is a dev-mode test hook"); }
@@ -919,8 +920,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let leaf_check = std::env::var("HAZYNC_LEAF_CHECK").ok();
     if let Some(b) = &leaf {
         assert!(lo == hi && b.prev.height + 1 == lo, "HAZYNC_LEAF_BUNDLE: the bundle is for block {}; prove exactly that block", b.prev.height + 1);
-        assert!(handover.is_none() && std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no handover, no resume");
+        assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no resume");
         assert!(leaf_check.is_none(), "HAZYNC_LEAF_BUNDLE and HAZYNC_LEAF_CHECK: one or the other");
+        // A leaf-mode handover (the board's, docs/HANDOVER.md §5): the bundle's witnesses were cut against S(h-1), so
+        // that state must be exactly what the predecessor's receipt committed, byte for byte. No replay is needed: the
+        // bundle carries the BIP30, coin-log and trie witnesses, and the guest checks them against that state.
+        if let Some((r, _)) = &handover {
+            assert!(state_journal_bytes(&b.prev) == r.journal.bytes,
+                    "HAZYNC_LEAF_BUNDLE + HAZYNC_HANDOVER_RECEIPT: the bundle's S({}) is not the predecessor receipt's state \
+                     (prep's state differs from what the predecessor proved: a rule changed that is not keyed by height?)", b.prev.height);
+        }
     }
     // the bundle carries the block: written into the out dir, which then serves as the block dir
     let leaf_dir: String;
@@ -961,7 +970,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let replay = leaf.is_none() && (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists());
     // A handover continues a proved chain: its BIP30 tree must be replayed and equal the receipt's, never seeded (the
     // seeding path rewrites smt_root, and the state sent would no longer be the predecessor's journal).
-    assert!(replay || handover.is_none(), "a handover needs every block file 1..{} to replay the BIP30 tree", lo - 1);
+    assert!(replay || handover.is_none() || leaf.is_some(), "a handover needs every block file 1..{} to replay the BIP30 tree (or a leaf bundle)", lo - 1);
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
@@ -1103,14 +1112,27 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         libzync_agg_prep(&mut w);
         let is_base = prev_rcpt.is_none();
         let step = if handover_pending { 2 } else { is_base as u32 };
+        // A cross-version handover (src/xver): the predecessor's seal goes in as input words after the tail, not as an
+        // assumption (this RISC Zero's recursion cannot resolve an older one's receipt).
+        let foreign: Option<Vec<u32>> = match (handover_pending, pinned_lineage().last(), &prev_rcpt) {
+            (true, Some(e), Some(p)) if e.verifier != crate::handover_pin::SAME_ZKVM => match &p.inner {
+                risc0_zkvm::InnerReceipt::Succinct(s) => Some(crate::xver::encode(s)),
+                _ => panic!("a cross-version predecessor receipt must be succinct"),
+            },
+            _ => None,
+        };
         let env_for = |b: &mut risc0_zkvm::ExecutorEnvBuilder| {
             b.segment_limit_po2(seg_po2());
             if let Some(p) = &prev_rcpt {
                 // Negative test: a handover with the predecessor's journal and no receipt behind it.
-                if std::env::var("HAZYNC_TEST_HANDOVER").as_deref() != Ok("no_receipt") { b.add_assumption(p.clone()); }
+                if std::env::var("HAZYNC_TEST_HANDOVER").as_deref() != Ok("no_receipt") && foreign.is_none() { b.add_assumption(p.clone()); }
             }
             write_aggregate_env_ex(b, &chunks, &prev, prev_rcpt.as_ref().map(|p| p.journal.bytes.as_slice()), &w, step);
             libzync_agg_tail(b, &w);
+            if let Some(words) = &foreign {
+                b.write(&(words.len() as u32)).unwrap();
+                b.write_slice(words);
+            }
         };
         // collect pass: the leaves the ECMH hints are for (and, for a coin-log image, the log's spends and appends)
         CL_WIT.lock().unwrap().clear();
