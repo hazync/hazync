@@ -152,6 +152,20 @@ pub(crate) fn undo_of_block_json(j: &serde_json::Value) -> ([u8; 32], u64) {
     (u.finish(), n)
 }
 
+/// The forest marker of a saved state (`state_<h>.forest` beside `state_<h>.json`): its block forest has the leaves with
+/// the undo-data commitment. The new prep writes it at every save point, `libzync-reforest` for the state it carried
+/// over; prep continues (HAZYNC_PREP_CONTINUE=1) from a state at a height whose leaf has the commitment only with it, so
+/// a run made before the commitment cannot be continued by mistake (review 11-14, round 2).
+pub(crate) const FOREST_MARK: &str = "U0\n";
+
+fn forest_mark_path(state_json: &str) -> String {
+    format!("{}.forest", state_json.strip_suffix(".json").unwrap_or(state_json))
+}
+
+pub(crate) fn write_forest_mark(state_json: &str) {
+    crate::lz::write_atomic(&forest_mark_path(state_json), FOREST_MARK.as_bytes());
+}
+
 /// Block `height`'s leaf: with its undo hash when the image proving it has the commitment (every block of an image
 /// with an empty lineage but 0; below a pre-undo predecessor's first_height, that image's 0x02 leaf).
 pub(crate) fn block_leaf_host(tip_hash: &[u8; 32], height: u32, state: &[u8; 32], undo: &[u8; 32]) -> ([u8; 32], bool) {
@@ -394,6 +408,12 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     // are untrusted starting points; a leaf's guest checks every witness against them either way.
     // Stamped BY ERA (docs/HANDOVER.md §5): the image that proves block prev.height under this image's lineage, which
     // is this image unless a handover is pinned above it.
+    if cont && prev.height >= 1 && crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), prev.height) {
+        let mark = std::fs::read_to_string(forest_mark_path(anchor_path)).unwrap_or_default();
+        assert!(mark == FOREST_MARK, "{anchor_path}: no forest marker ({}): its block forest may be from a prep run made before the \
+                undo-data commitment, which this host cannot continue. Carry the run over with libzync-reforest first \
+                (docs/libzync/UNDO.md §8)", forest_mark_path(anchor_path));
+    }
     if cont {
         let was = (prev.self_id, prev.lineage, prev.profile);
         crate::stamp(&mut prev);
@@ -488,7 +508,11 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         if save { if let Some(d) = &leaves { crate::lz::cl_sync_dir(std::path::Path::new(d)); } }
         let t = std::time::Instant::now();
         let json = serde_json::to_string(&st).unwrap();
-        if save { crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes()); }
+        if save {
+            crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes());
+            // right after the state, before the stores: every save point the runner takes as complete has it
+            if crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), h) { write_forest_mark(&format!("{out}/state_{h}.json")); }
+        }
         else { std::fs::write(format!("{out}/state_{h}.json"), json).unwrap(); }
         phase(5, t);
         let t = std::time::Instant::now();

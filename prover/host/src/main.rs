@@ -1331,13 +1331,14 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-reforest") {
         // libzync-reforest (reforest.rs; the switch runbook is docs/libzync/UNDO.md §8)
-        let usage = "libzync-reforest <out dir> <S> --bitcoin-cli \"<cmd>\" [--all] [--jobs N] [--bundles <leaf bundle dir>]";
+        let usage = "libzync-reforest <out dir> <S> --bitcoin-cli \"<cmd>\" [--all] [--jobs N] [--bundles <leaf bundle dir>] [--check-bundles <dir>]...";
         let out = args.get(p + 1).expect(usage);
         let s_h: u32 = args.get(p + 2).and_then(|x| x.parse().ok()).expect(usage);
         let opt = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
         let cli = opt("--bitcoin-cli").expect(usage);
         let jobs: usize = opt("--jobs").map(|x| x.parse().expect("--jobs N")).unwrap_or(4);
-        reforest::reforest_cmd(out, s_h, &cli, args.iter().any(|a| a == "--all"), jobs, opt("--bundles").as_deref());
+        let checks: Vec<String> = args.iter().enumerate().filter(|(_, a)| *a == "--check-bundles").filter_map(|(i, _)| args.get(i + 1).cloned()).collect();
+        reforest::reforest_cmd(out, s_h, &cli, args.iter().any(|a| a == "--all"), jobs, opt("--bundles").as_deref(), &checks);
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-join") {

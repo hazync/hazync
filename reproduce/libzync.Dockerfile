@@ -42,6 +42,9 @@ COPY . /hazync-zkvm
 # reach the image ids although the guest is compiled by risc0's pinned Rust (rzup): on 2026-11-12 stable 1.100.0 gave
 # other mainnet and signet ids from the same guest source, so it is pinned to 1.99.1.
 RUN sed -i '/^components/d' prover/rust-toolchain.toml
-RUN bash scripts/libzync-base.sh /root/hazync-libzync-base
-RUN bash reproduce/libzync-ids.sh > /root/LIBZYNC_IDS && cat /root/LIBZYNC_IDS
+# ⛔ No HAZYNC_* build lever may reach the pinned images (review 11-14): a lever left set (HAZYNC_NO_SCRIPTS,
+# HAZYNC_HASHWRITER_BUF, ...) changes the image while the line printed still names the plain one. Every HAZYNC_*
+# variable is cleared for both steps (the ENV above sets only paths; libzync-ids.sh sets what it needs itself).
+RUN bash -c 'for v in $(compgen -e | grep "^HAZYNC_"); do unset "$v"; done; exec bash scripts/libzync-base.sh /root/hazync-libzync-base'
+RUN bash -c 'for v in $(compgen -e | grep "^HAZYNC_"); do unset "$v"; done; exec bash reproduce/libzync-ids.sh' > /root/LIBZYNC_IDS && cat /root/LIBZYNC_IDS
 CMD ["cat", "/root/LIBZYNC_IDS"]

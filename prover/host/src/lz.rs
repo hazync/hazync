@@ -587,7 +587,9 @@ fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
 pub(crate) fn lock_run_dirs(out: &str) {
     static LOCKS: std::sync::Mutex<Vec<std::fs::File>> = std::sync::Mutex::new(Vec::new());
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-    for d in [Some(std::path::PathBuf::from(out)), cl_dir(), crate::trie::trie_dir()].into_iter().flatten() {
+    // the leaf bundle directory too (review 11-14, round 2): libzync-reforest rewrites bundles there and must not race prep
+    let leaves = std::env::var_os("HAZYNC_PREP_LEAF_BUNDLES").map(std::path::PathBuf::from);
+    for d in [Some(std::path::PathBuf::from(out)), cl_dir(), crate::trie::trie_dir(), leaves].into_iter().flatten() {
         std::fs::create_dir_all(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
         // compared as real paths: the same directory given twice or by another path (round 12)
         let c = std::fs::canonicalize(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
@@ -608,6 +610,19 @@ pub(crate) fn lock_run_dirs(out: &str) {
             Err(std::fs::TryLockError::WouldBlock) => panic!("{}: another run holds this directory (LOCK): one run per store", d.display()),
             Err(std::fs::TryLockError::Error(e)) => panic!("{}/LOCK: {e}", d.display()),
         }
+    }
+}
+
+/// Holds `<dir>/LOCK` for the rest of the process, as lock_run_dirs does: refused if another run holds it.
+pub(crate) fn lock_dir(d: &str) {
+    static LOCKS: std::sync::Mutex<Vec<std::fs::File>> = std::sync::Mutex::new(Vec::new());
+    std::fs::create_dir_all(d).unwrap_or_else(|e| panic!("{d}: {e}"));
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(format!("{d}/LOCK"))
+        .unwrap_or_else(|e| panic!("{d}/LOCK: {e}"));
+    match f.try_lock() {
+        Ok(()) => LOCKS.lock().unwrap().push(f),
+        Err(std::fs::TryLockError::WouldBlock) => panic!("{d}: another run holds this directory (LOCK): one run per store"),
+        Err(std::fs::TryLockError::Error(e)) => panic!("{d}/LOCK: {e}"),
     }
 }
 

@@ -985,6 +985,9 @@ extern "C" uint32_t hz_no_scripts() {
 // (HAZYNC_RAW_TXID's HzSetHashes): GetHash() returns exactly what the real transaction's would.
 extern "C" int hz_check_signet(const uint8_t* header, const uint8_t* cb, uint32_t cb_len,
                                const uint8_t* txids, uint32_t n_txids) {
+    // CheckSignetBlockSolution runs the challenge script on a synthetic spend, through the legacy sighash cache
+    // (review 11-14, round 2): a new transaction, like every other entry point that runs scripts.
+    hz_new_script_tx();
     CBlock block;
     {
         MiniReader r{reinterpret_cast<const std::byte*>(header), reinterpret_cast<const std::byte*>(header) + 80};
