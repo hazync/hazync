@@ -510,7 +510,9 @@ fn hints_prove(a: &[String]) {
                  info.cycles(), info.segments.iter().map(|s| 1u64 << s.po2).sum::<u64>(), info.segments.len(), t1.elapsed().as_secs_f64(),
                  info.cycles() as f64 / stop as f64, info.cycles() as f64 / outs as f64, w.frames.len() + w.tail.len(),
                  if receipt.is_none() { " [core receipt: unresolved assumption, journal from the state JSON]" } else { "" });
-        println!("HINTS_STATEMENT {z:?}");
+        println!("HINTS_JOURNAL height={} block={} format={} hints_sha256={} hints_len={} counted={} unspent={} value={} undo_sha256={} core={} core_height={}",
+                 z.height, disp(&z.block_hash), z.format, hex(&z.hints_sha256), z.hints_len, z.n_counted, z.n_unspent, z.unspent_value,
+                 hex(&z.undo_sha256), id_hex(&z.core_id), z.core_height);
     } else {
         let r = default_prover().prove_with_opts(env, ZYNCAPP_HINTS_ELF, &risc0_zkvm::ProverOpts::succinct())
             .unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
@@ -519,6 +521,9 @@ fn hints_prove(a: &[String]) {
         let rp = format!("{out}/{net}-{stop}.receipt");
         std::fs::write(&rp, bincode::serialize(&r).unwrap()).unwrap();
         println!("HINTS_PROVED H={stop} -> {rp} in {:.1} s ({} bytes)", t1.elapsed().as_secs_f64(), std::fs::metadata(&rp).unwrap().len());
+        println!("HINTS_JOURNAL height={} block={} format={} hints_sha256={} hints_len={} counted={} unspent={} value={} undo_sha256={} core={} core_height={}",
+                 z.height, disp(&z.block_hash), z.format, hex(&z.hints_sha256), z.hints_len, z.n_counted, z.n_unspent, z.unspent_value,
+                 hex(&z.undo_sha256), id_hex(&z.core_id), z.core_height);
     }
     println!("HINTS_ID {}", id_hex(&ZYNCAPP_HINTS_ID));
 }
