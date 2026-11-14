@@ -41,6 +41,38 @@
 #include <cstdlib>
 #include <cub/util_device.cuh>
 
+// HAZYNC #727 TRACE (HAZYNC_CUDA_TRACE=1). The 11-14 trace on a GTX 1050 Ti found error 801 ("operation not supported")
+// pending TWICE: before the first NTT, and again before accum's inclusive_scan after it had been cleared. A refused
+// kernel LAUNCH leaves its error for cudaGetLastError() while the following cudaStreamSynchronize() reports success,
+// so check (and CLEAR) after every launch here and name it. Clearing also shows whether the stale error was the only
+// thing Thrust tripped on. Trace-only: without the variable nothing changes.
+#include <cstdio>
+#include <cstdlib>
+static inline bool hz_trace_on() { return std::getenv("HAZYNC_CUDA_TRACE") != nullptr; }
+static inline void hz_trace_err(const char* where) {
+  if (!hz_trace_on()) return;
+  cudaError_t e = cudaGetLastError();
+  std::fprintf(stderr, "HAZYNC TRACE %s: %d (%s)\n", where, (int)e, cudaGetErrorString(e));
+  std::fflush(stderr);
+}
+static inline void hz_trace_caps() {
+  static bool done = false;
+  if (!hz_trace_on() || done) return;
+  done = true;
+  int dev = -1; cudaGetDevice(&dev);
+  int v[6] = {-1, -1, -1, -1, -1, -1};
+  cudaDeviceGetAttribute(&v[0], cudaDevAttrManagedMemory, dev);
+  cudaDeviceGetAttribute(&v[1], cudaDevAttrConcurrentManagedAccess, dev);
+  cudaDeviceGetAttribute(&v[2], cudaDevAttrMemoryPoolsSupported, dev);
+  cudaDeviceGetAttribute(&v[3], cudaDevAttrCooperativeLaunch, dev);
+  cudaDeviceGetAttribute(&v[4], cudaDevAttrComputePreemptionSupported, dev);
+  cudaDeviceGetAttribute(&v[5], cudaDevAttrPageableMemoryAccess, dev);
+  std::fprintf(stderr, "HAZYNC TRACE caps dev=%d managed=%d concurrentManaged=%d memPools=%d coop=%d preempt=%d pageable=%d\n",
+               dev, v[0], v[1], v[2], v[3], v[4], v[5]);
+  std::fflush(stderr);
+  hz_trace_err("caps queries");
+}
+
 namespace risc0::circuit::rv32im_v2::cuda {
 
 constexpr size_t kUserAccumSplit = kLayout_TopAccum.columns[0].col;
@@ -441,9 +473,13 @@ const char* risc0_circuit_rv32im_cuda_witgen(uint32_t mode,
                                              ExecBuffers* buffers,
                                              PreflightTrace* preflight,
                                              uint32_t lastCycle) {
+  hz_trace_err("enter witgen (pending from earlier code)");
+  hz_trace_caps();
   try {
     HostExecContext ctx(buffers, preflight, lastCycle);
+    hz_trace_err("witgen: HostExecContext");
     CudaStream stream;
+    hz_trace_err("witgen: CudaStream");
     size_t split = preflight->tableSplitCycle;
 
     switch (mode) {
@@ -455,20 +491,24 @@ const char* risc0_circuit_rv32im_cuda_witgen(uint32_t mode,
       {
         nvtx3::scoped_range range("phase1");
         par_stepExec<<<cfg1.grid, cfg1.block, 0, stream>>>(ctx.ctx, 0, split);
+        hz_trace_err("launch par_stepExec");
         CUDA_OK(cudaStreamSynchronize(stream));
       }
       {
         nvtx3::scoped_range range("phase2");
         par_stepExec<<<cfg2.grid, cfg2.block, 0, stream>>>(ctx.ctx, split, phase2Count);
+        hz_trace_err("launch par_stepExec");
         CUDA_OK(cudaStreamSynchronize(stream));
       }
     } break;
     case kStepModeSeqForward:
       fwd_stepExec<<<1, 1, 0, stream>>>(ctx.ctx, lastCycle);
+      hz_trace_err("launch fwd_stepExec");
       CUDA_OK(cudaStreamSynchronize(stream));
       break;
     case kStepModeSeqReverse:
       rev_stepExec<<<1, 1, 0, stream>>>(ctx.ctx, split, lastCycle);
+      hz_trace_err("launch rev_stepExec");
       CUDA_OK(cudaStreamSynchronize(stream));
       break;
     }
@@ -483,14 +523,19 @@ const char* risc0_circuit_rv32im_cuda_witgen(uint32_t mode,
 const char* risc0_circuit_rv32im_cuda_accum(AccumBuffers* buffers,
                                             PreflightTrace* preflight,
                                             uint32_t lastCycle) {
+  hz_trace_err("enter accum (pending from earlier code)");
+  hz_trace_caps();
   try {
     HostAccumContext ctx(buffers, preflight, lastCycle);
+    hz_trace_err("accum: HostAccumContext");
     CudaStream stream;
+    hz_trace_err("accum: CudaStream");
     auto cfg = getSimpleConfig(lastCycle);
 
     {
       nvtx3::scoped_range range("phase1");
       stepAccum<<<cfg.grid, cfg.block, 0, stream>>>(ctx.ctx, lastCycle);
+      hz_trace_err("launch stepAccum");
       CUDA_OK(cudaStreamSynchronize(stream));
     }
 
@@ -525,7 +570,9 @@ const char* risc0_circuit_rv32im_cuda_accum(AccumBuffers* buffers,
         size_t col = buffers->accum.cols - 4 + j;
         Fp* itBegin = buffers->accum.buf + col * rows;
         Fp* itEnd = buffers->accum.buf + col * rows + lastCycle;
+        hz_trace_err("before inclusive_scan");
         thrust::inclusive_scan(thrust::device, itBegin, itEnd, itBegin);
+        hz_trace_err("after inclusive_scan");
       }
       CUDA_OK(cudaStreamSynchronize(stream));
     }
@@ -533,6 +580,7 @@ const char* risc0_circuit_rv32im_cuda_accum(AccumBuffers* buffers,
     {
       nvtx3::scoped_range range("phase3");
       finalizeAccum<<<cfg.grid, cfg.block, 0, stream>>>(ctx.ctx, lastCycle);
+      hz_trace_err("launch finalizeAccum");
       CUDA_OK(cudaStreamSynchronize(stream));
     }
 
