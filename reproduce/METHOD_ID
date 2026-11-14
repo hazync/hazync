@@ -1,17 +1,19 @@
 # Canonical Hazync guest image id (METHOD_ID): libzync's PUBLISHED MAINNET image.
 #
-# ── 1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a ─ 2026-11-14 ─────────
+# ── dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633 ─ 2026-11-14 ─────────
 #
-# Release v0.26.0: the handover (docs/HANDOVER.md). The guest gained the handover code (same RISC Zero, and across a
-# RISC Zero upgrade through a vendored copy of the predecessor's recursion circuit), and this image's lineage
-# (prover/methods/guest/src/lineage/mainnet_coinlog.rs) pins 8888d59c at block 2000 with SAME_ZKVM: it continues the
-# board's chain, proving blocks 2000 and up on top of 8888d59c's genesis spine of 1..1999, without re-proving.
-# NO CONSENSUS-RULE CHANGE, same RISC Zero 3.1.0. Pinned from two agreeing reproducible builds of a4f4ec6 (CI's
-# reproducible-image-id job and a second run on the board box). 8888d59c's proofs stay verifiable by id (swiftsync-
-# verify keeps it in IMAGES, before this one).
+# Release v0.26.0: the per-block undo-data commitment (format U0, #729, docs/libzync/UNDO.md). Every block's leaf in the
+# block forest commits the block's undo hash (tag 0x05); ChainState and the genesis anchor are unchanged. The lineage
+# (prover/methods/guest/src/lineage/mainnet_coinlog.rs) is EMPTY: the board resets and proves the chain again from
+# genesis under this image. The guest also carries the handover code (built and tested, not used by this image).
+# NO CONSENSUS-RULE CHANGE, same RISC Zero 3.1.0. Pinned from a reproducible build of d8def468 on a second machine
+# (hazync-coord); CI's reproducible-image-id job is the second build. 8888d59c's proofs stay verifiable by id
+# (swiftsync-verify keeps it in IMAGES, before this one).
 #
-# Superseded 8888d59c… (2026-11-11, releases v0.24.0 and v0.25.0, risc0 3.1.0), whose note follows. Its chain is not
-# abandoned: blocks 1..1999 stay its proofs, and this image continues them.
+# 1ff5a129… (2026-11-14, built for v0.26.0 with 8888d59c pinned at block 2000) was never released: replaced by this
+# image before the release.
+#
+# Superseded 8888d59c… (2026-11-11, releases v0.24.0 and v0.25.0, risc0 3.1.0), whose note follows.
 #
 # ── 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 ─ 2026-11-11 ─────────
 #
@@ -38,7 +40,7 @@
 # Superseded the CORE design's last canonical id 37987b85… (2026-09-07, release v0.22.1). The CORE lineage below is
 # the record: `reproduce/Dockerfile` built those images, and their notes are kept as written.
 
-1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a
+dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633
 
 # ════ THE CORE DESIGN'S LINEAGE (the record; each entry was true when written) ══════════════════════════════════════
 #

@@ -13,11 +13,11 @@ Hazync v2's release notes are in [`docs/`](docs/README.md).
 Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
 v0.23.0 onwards are **Hazync v2** (the libzync engine).
 
-## v0.26.0 — 2026-11-14 — re-baseline `8888d59c` → `@NEWM8@` (the board proves again from genesis)
+## v0.26.0 — 2026-11-14 — re-baseline `8888d59c` → `dc392f3d` (the board proves again from genesis)
 A new image whose block leaves commit each block's **undo data** (#729): per input of every non-coinbase transaction,
 SHA-256 of the spent coin's (height, coinbase flag, amount, script), and per block SHA-256 of those, in a new `0x05`
 block leaf ([`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)); measured +0.35% to +2.46% of a block's executed cycles on
-11 real mainnet blocks. `ChainState` and the genesis anchors are unchanged. Mainnet `@NEWM8@` and signet `@NEWS8@` start
+11 real mainnet blocks. `ChainState` and the genesis anchors are unchanged. Mainnet `dc392f3d` and signet `fd347b4e` start
 their chains at genesis (empty lineages) and the board resets; the header-chain zyncAPP `2db34e12` is unchanged. No
 consensus-rule change; same RISC Zero 3.1.0. Also built and tested, not used by this release: the **handover**, so a
 later image can continue a chain without re-proving it, including across a RISC Zero upgrade by checking the previous

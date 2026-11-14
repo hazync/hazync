@@ -4,7 +4,7 @@ about: A worker that fails, stalls or is rejected, or a board that looks wrong
 ---
 
 <!-- Most rejections are a guest id that differs from the coordinator's: the board takes only image
-     @NEWM8@ (release v0.26.0; 8888d59c for v0.24.0 and v0.25.0), and a run-workers.sh loop started on an older release must be
+     dc392f3d (release v0.26.0; 8888d59c for v0.24.0 and v0.25.0), and a run-workers.sh loop started on an older release must be
      restarted. Run `hazync-worker selftest` first and include its output. CONTRIBUTING.md
      ("If something breaks", "Several workers on one key") covers the common cases. -->
 

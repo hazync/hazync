@@ -14,7 +14,7 @@ open: the status below, the round-by-round record in [`docs/libzync/LIBZYNC.md`]
 **Independent review is explicitly invited**; if you find a way to make an invalid block prove valid, that is the
 finding that matters most.
 
-This page covers **Hazync v2** (the libzync engine): published images mainnet `@NEWM8@`, signet `@NEWS8@` and the
+This page covers **Hazync v2** (the libzync engine): published images mainnet `dc392f3d`, signet `fd347b4e` and the
 header-chain zyncAPP `2db34e12` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), release v0.26.0, RISC Zero 3.1.0.
 Both start their chains at genesis; the verifier keeps v0.24.0-v0.25.0's `8888d59c` so its receipts still verify.
 What a proof rests on is set out in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md), and how to review it in
@@ -32,7 +32,7 @@ block-level rules the aggregate applies from the chunks' facts, the coin log, th
 
 | release | engine | status |
 |---|---|---|
-| v0.26.0 (latest) | Hazync v2, image `@NEWM8@`, RISC Zero 3.1.0 | supported: the public board runs it, from genesis |
+| v0.26.0 (latest) | Hazync v2, image `dc392f3d`, RISC Zero 3.1.0 | supported: the public board runs it, from genesis |
 | v0.24.0, v0.25.0 | Hazync v2, image `8888d59c`, RISC Zero 3.1.0 | supported for verifying: its proofs are the board's blocks 1..1999 |
 | v0.23.0 | Hazync v2, image `863c9ce3`, RISC Zero 3.0.5 | **withdrawn**: do not deploy; 3.1.0 verifiers refuse its proofs |
 | v0.22.1 and earlier | Hazync v1, image `37987b85` (since v0.21.0) | not maintained; v0.22.1 still verifies v1 proofs |
