@@ -29,7 +29,8 @@ const H37 = '00000000ddd96d128e122d1179034ff66c27dc583eb9e8996a0b1779c60c6f86';
 const H38 = '000000007c19ee8e924d3024d58efff50f872aadf256140bb1e3d62fea4fd6dd';
 const H170 = '00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee';
 const hdr = (h) => lines('h0_200.txt').find((l) => l.startsWith(`${h} `)).split(' ')[1];
-const TX = { txid: 'f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16', pos: 1, header: hdr(170), branch: lines('branch_170_1.txt') };
+const TX = JSON.parse(readFileSync(`${here}/tx/tx_170_1.json`, 'utf8'));
+const OTHER = JSON.parse(readFileSync(`${here}/tx/tx_100003_0.json`, 'utf8'));
 const inc = v.verifyHeaders({ receipts: [a, b], expect: `200:${H}`, include: { height: 37, hash: H37, path: P37 } });
 t('block 37 is on the chain (MMR path)', 'demo', inc);
 if (inc.included !== true || !/^[0-9a-f]{64}$/.test(inc.mmr_root || '')) { fails++; console.log('FAIL included / mmr_root', inc.included, inc.mmr_root); }
@@ -41,6 +42,13 @@ t('a path that is not hex', 'fail', v.verifyHeaders({ receipts: [a, b], include:
 t('tx in block 170', 'demo', v.verifyHeaders({ receipts: [a, b], include: { height: 170, hash: H170, path: P170, tx: TX } }));
 t('  at the wrong position', 'fail', v.verifyHeaders({ receipts: [a, b], include: { height: 170, hash: H170, path: P170, tx: { ...TX, pos: 0 } } }));
 t("  under block 171's header", 'fail', v.verifyHeaders({ receipts: [a, b], include: { height: 170, hash: H170, path: P170, tx: { ...TX, header: hdr(171) } } }));
+t('  a branch deeper than the coinbase\'s', 'fail', v.verifyHeaders({ receipts: [a, b], include: { height: 170, hash: H170, path: P170, tx: { ...TX, branch: [...TX.branch, ...TX.branch] } } }));
+t('  another block\'s coinbase', 'fail', v.verifyHeaders({ receipts: [a, b], include: { height: 170, hash: H170, path: P170, tx: { ...TX, coinbase: OTHER.coinbase, coinbase_branch: OTHER.coinbase_branch } } }));
+// the 64-byte forgery: block 170's two txids concatenated hash to its merkle root
+const rev = (h) => h.match(/../g).reverse().join('');
+const inner = rev(TX.branch[0]) + rev(TX.txid);
+const root = TX.header.slice(72, 136);
+t('  a 64-byte inner node as a transaction', 'fail', v.verifyHeaders({ receipts: [a, b], include: { height: 170, hash: H170, path: P170, tx: { ...TX, raw: inner, txid: rev(root), pos: 0, branch: [] } } }));
 const none = v.verifyHeaders({ receipts: [a, b] });
 if (none.included !== null) { fails++; console.log('FAIL included without include', none.included); }
 console.log(fails ? `WASM_HEADERS: ${fails} FAILED` : 'WASM_HEADERS_OK');

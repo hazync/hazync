@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The header-chain verifier (swiftsync-verify headers) on two REAL chained receipts (CPU-proved, 11-10: genesis..100,
 # then 101..200 started from the first one's end state) and every way of misusing them, and the MMR inclusion checks
-# (block 37's path to the tip 200, mmr_path_37_tip200.txt; transaction f4184fc5... at position 1 of block 170 by its
-# header and a one-hash branch, branch_170_1.txt). Usage: test_headers_verify.sh <swiftsync-verify>
+# (block 37's path to the tip 200, mmr_path_37_tip200.txt; transaction f4184fc5... of block 170 by tx/tx_170_1.json). Usage: test_headers_verify.sh <swiftsync-verify>
 # HEADERS_IMAGE=<hex>: verify against this image id instead of the built-in one (receipts proved by a local build).
 set -u
 V=${1:?swiftsync-verify binary}; D=$(cd "$(dirname "$0")" && pwd)
@@ -35,12 +34,32 @@ t 1 "a truncated path" --include 37:$H37 --path "$T/short.txt" "${R[@]}"
 t 1 "an extended path" --include 37:$H37 --path "$T/long.txt" "${R[@]}"
 t 1 "block 37's path against the chain to 100 only (another MMR)" --include 37:$H37 --path "$P" "$D/hdr_0_100.rcpt"
 t 1 "a block above the tip" --include 201:$H37 --path "$P" "${R[@]}"
-# a transaction in block 170 (Satoshi to Hal Finney), by its header and merkle branch (the coinbase txid)
+# a transaction in block 170 (Satoshi to Hal Finney), by the path service's /tx answer (tx/tx_170_1.json: the header,
+# the raw transaction and its branch, the raw coinbase and its branch, which pin the tree's depth), and forgeries of it
 H170=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee
-HDR170=$(awk '$1==170 {print $2}' "$D/h0_200.txt")
-TX=f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16
-t 2 "tx $TX is in block 170 on the chain" --include 170:$H170 --path "$D/mmr_path_170_tip200.txt" --tx $TX:1 --header $HDR170 --branch "$D/branch_170_1.txt" "${R[@]}"
-t 1 "  at the wrong position" --include 170:$H170 --path "$D/mmr_path_170_tip200.txt" --tx $TX:0 --header $HDR170 --branch "$D/branch_170_1.txt" "${R[@]}"
-t 1 "  under another block's header" --include 170:$H170 --path "$D/mmr_path_170_tip200.txt" --tx $TX:1 --header "$(awk '$1==171 {print $2}' "$D/h0_200.txt")" --branch "$D/branch_170_1.txt" "${R[@]}"
-t 1 "  a txid that is not in it" --include 170:$H170 --path "$D/mmr_path_170_tip200.txt" --tx ${TX%?}7:1 --header $HDR170 --branch "$D/branch_170_1.txt" "${R[@]}"
+P170="$D/mmr_path_170_tip200.txt"; TXJ="$D/tx/tx_170_1.json"
+python3 - "$TXJ" "$D/tx/tx_100003_0.json" "$T" <<'PY'
+import json, sys, hashlib
+d = lambda b: hashlib.sha256(hashlib.sha256(b).digest()).digest()
+t, other, out = json.load(open(sys.argv[1])), json.load(open(sys.argv[2])), sys.argv[3]
+def w(name, **k): json.dump({**t, **k}, open(f'{out}/{name}.json', 'w'))
+w('pos0', pos=0)
+w('rawother', raw=t['coinbase'])
+w('deeper', branch=t['branch'] + t['branch'])
+w('cbother', coinbase=other['coinbase'], coinbase_branch=other['coinbase_branch'])
+# the 64-byte forgery: the two txids of block 170 concatenated ARE the preimage of its merkle root; as a "transaction"
+# at depth 0 they hash to the root with an empty branch
+ids = [bytes.fromhex(json.load(open(sys.argv[1]))['branch'][0])[::-1], bytes.fromhex(t['txid'])[::-1]]
+inner = ids[0] + ids[1]
+assert d(inner) == bytes.fromhex(t['header'])[36:68]
+w('inner64', raw=inner.hex(), txid=d(inner)[::-1].hex(), pos=0, branch=[])
+w('inner64cb', raw=inner.hex(), txid=d(inner)[::-1].hex(), pos=0, branch=[], coinbase=inner.hex(), coinbase_branch=[])
+PY
+t 2 "tx f4184fc5... is in block 170 on the chain" --include 170:$H170 --path "$P170" --tx "$TXJ" "${R[@]}"
+t 1 "  at the wrong position" --include 170:$H170 --path "$P170" --tx "$T/pos0.json" "${R[@]}"
+t 1 "  raw bytes that are not the txid's" --include 170:$H170 --path "$P170" --tx "$T/rawother.json" "${R[@]}"
+t 1 "  a branch deeper than the coinbase's" --include 170:$H170 --path "$P170" --tx "$T/deeper.json" "${R[@]}"
+t 1 "  another block's coinbase" --include 170:$H170 --path "$P170" --tx "$T/cbother.json" "${R[@]}"
+t 1 "  a 64-byte inner node (the merkle root's preimage) as a transaction" --include 170:$H170 --path "$P170" --tx "$T/inner64.json" "${R[@]}"
+t 1 "  ...and as the coinbase too" --include 170:$H170 --path "$P170" --tx "$T/inner64cb.json" "${R[@]}"
 [ $fails = 0 ] && echo "HEADERS_VERIFY_TESTS_OK" || { echo "HEADERS_VERIFY_TESTS: $fails FAILED"; exit 1; }

@@ -236,8 +236,8 @@ pub extern "C" fn image_id(network: u32) -> *const u8 {
 /// `[u32 n][receipt]` (the first from genesis, each next one starting where the one before ended), then
 /// `[u32 n][image id hex, n = 0 for the built-in id][u32 n]["height:hash" from a source the page trusts, n = 0 for none]`,
 /// optionally followed by `[u32 n][include JSON, n = 0 for none]`: `{"height", "hash" (as explorers print it), "path"
-/// (MMR hashes as zyncapp headers-mmr-path prints them), "tx"?: {"txid", "pos", "header" (80-byte hex), "branch"
-/// (reversed hex, as Electrum's blockchain.transaction.get_merkle)}}` (swiftsync_verify::headers::Inclusion::parse).
+/// (MMR hashes as zyncapp headers-mmr-path prints them), "tx"?: the path service's /tx answer (txid, pos, header, raw,
+/// branch, coinbase, coinbase_branch; swiftsync_verify::headers::TxInclusion::from_json)}`.
 #[no_mangle]
 pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
@@ -294,13 +294,8 @@ fn parse_include(j: &[u8]) -> Result<headers::Inclusion, String> {
     let path = strs(&v["path"], "path")?;
     let path: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
     let tx = &v["tx"];
-    if tx.is_null() { return headers::Inclusion::parse(height, hash, &path, None); }
-    let txid = tx["txid"].as_str().ok_or("include: tx.txid is not a string")?;
-    let pos = tx["pos"].as_u64().filter(|p| *p <= u32::MAX as u64).ok_or("include: tx.pos is not a position")? as u32;
-    let header = tx["header"].as_str().ok_or("include: tx.header is not a string")?;
-    let branch = strs(&tx["branch"], "tx.branch")?;
-    let branch: Vec<&str> = branch.iter().map(|s| s.as_str()).collect();
-    headers::Inclusion::parse(height, hash, &path, Some((txid, pos, header, &branch)))
+    let tx = if tx.is_null() { None } else { Some(headers::TxInclusion::from_json(tx)?) };
+    headers::Inclusion::parse(height, hash, &path, tx)
 }
 
 /// The built-in header-chain image id, for the page to display.

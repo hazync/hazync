@@ -43,7 +43,7 @@ fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
     eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
-    eprintln!("       swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <s>] [--include <height>:<hash> --path <file> [--tx <txid>:<position> --header <hex80> --branch <file>]] <receipt>...");
+    eprintln!("       swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <s>] [--include <height>:<hash> --path <file> [--tx <tx.json>]] <receipt>...");
     exit(1);
 }
 
@@ -326,18 +326,18 @@ fn work_hex(w: &[u8; 32]) -> String {
 }
 
 /// `swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <unix seconds>]
-/// [--include <height>:<hash> --path <file> [--tx <txid>:<position> --header <hex80> --branch <file>]] <receipt>...`: a
+/// [--include <height>:<hash> --path <file> [--tx <tx.json>]] <receipt>...`: a
 /// proof of the mainnet header chain from genesis (the header-chain zyncAPP), as one receipt or a chain of runs, the
 /// first from genesis and each next one starting where the one before ended. Exit 0 OK (chainwork at least Core's
 /// minimum), 2 DEMO (below it), 1 FAIL.
 /// `--include`: also check that block <hash> (as explorers print it) is at <height> on the proven chain, by its MMR
 /// path (`--path`: the file `zyncapp headers-mmr-path` prints, one 64-hex hash per line, lowest first; empty for a
-/// one-block peak). `--tx`: and that transaction <txid> is at <position> in that block, by the block's 80-byte header
-/// (getblockheader <hash> false) and its merkle branch (`--branch`: one hash per line, lowest first, reversed hex as
-/// Electrum's blockchain.transaction.get_merkle prints it). The branch's depth is not checked (headers.rs explains).
+/// one-block peak). `--tx <tx.json>`: and that a transaction is in that block, by the JSON the path service's /tx
+/// answers: the block's header, the raw transaction and its merkle branch, and the raw coinbase and its branch, which
+/// pin the tree's depth (headers.rs, verify_tx_in_header, explains the 64-byte attack this closes).
 fn headers_main(a: Vec<String>) -> ! {
     let (mut image, mut expect, mut now, mut files) = (swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string(), None, None, Vec::new());
-    let (mut include, mut path, mut tx, mut header, mut branch) = (None, None, None, None, None);
+    let (mut include, mut path, mut tx) = (None, None, None);
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -347,8 +347,6 @@ fn headers_main(a: Vec<String>) -> ! {
             "--include" => include = Some(it.next().unwrap_or_else(|| usage())),
             "--path" => path = Some(it.next().unwrap_or_else(|| usage())),
             "--tx" => tx = Some(it.next().unwrap_or_else(|| usage())),
-            "--header" => header = Some(it.next().unwrap_or_else(|| usage())),
-            "--branch" => branch = Some(it.next().unwrap_or_else(|| usage())),
             f if f.starts_with("--") => fail(&format!("headers: unknown flag {}", esc(f))),
             f => files.push(f.to_string()),
         }
@@ -359,24 +357,18 @@ fn headers_main(a: Vec<String>) -> ! {
             .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
     };
     let inc = match (&include, &path) {
-        (None, None) if tx.is_none() && header.is_none() && branch.is_none() => None,
+        (None, None) if tx.is_none() => None,
         (Some(i), Some(p)) => {
             let (h, x) = i.split_once(':').unwrap_or_else(|| fail("--include <height>:<hash>"));
             let h = h.parse::<i64>().unwrap_or_else(|_| fail("--include: bad height"));
             let pl = read_lines(p);
-            let txp = match (&tx, &header, &branch) {
-                (None, None, None) => None,
-                (Some(t), Some(hd), Some(b)) => {
-                    let (id, pos) = t.split_once(':').unwrap_or_else(|| fail("--tx <txid>:<position>"));
-                    Some((id.to_string(), pos.parse::<u32>().unwrap_or_else(|_| fail("--tx: bad position")), hd.clone(), read_lines(b)))
-                }
-                _ => fail("--tx needs --header and --branch"),
-            };
             let pr: Vec<&str> = pl.iter().map(|s| s.as_str()).collect();
-            let br: Vec<&str> = txp.as_ref().map(|t| t.3.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
-            Some(swiftsync_verify::headers::Inclusion::parse(h, x, &pr,
-                    txp.as_ref().map(|t| (t.0.as_str(), t.1, t.2.as_str(), br.as_slice())))
-                 .unwrap_or_else(|e| fail(&format!("--include: {e}"))))
+            let t = tx.as_ref().map(|f| {
+                let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f)))))
+                    .unwrap_or_else(|e| fail(&format!("--tx {}: not JSON ({e})", esc(f))));
+                swiftsync_verify::headers::TxInclusion::from_json(&j).unwrap_or_else(|e| fail(&format!("--tx: {e}")))
+            });
+            Some(swiftsync_verify::headers::Inclusion::parse(h, x, &pr, t).unwrap_or_else(|e| fail(&format!("--include: {e}"))))
         }
         _ => fail("--include <height>:<hash> needs --path <file> (and --tx needs --include)"),
     };

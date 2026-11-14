@@ -12,8 +12,8 @@
 //!
 //! The state carries the peaks of a Merkle Mountain Range of every block hash 0..=height (`crate::mmr`, the guest's
 //! own file), so a verified chain also answers "is block X at height h on this chain" ([`verify_inclusion`]) and,
-//! with the block's 80-byte header and a transaction merkle branch, "is transaction T in a block on this chain"
-//! ([`verify_tx_in_header`]). The MMR root ([`HeaderState::mmr_root`]) is derived from the committed peaks, not
+//! with the block's 80-byte header, the raw transaction and its merkle branch, and the block's raw coinbase and its
+//! branch (which pin the tree's depth), "is transaction T in a block on this chain" ([`verify_tx_in_header`]). The MMR root ([`HeaderState::mmr_root`]) is derived from the committed peaks, not
 //! stored: it is a short name for the peaks, to compare or publish.
 use crate::{receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
 use risc0_zkvm::sha::Digest;
@@ -130,9 +130,10 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
                   format!("block {} {} is on this chain: its MMR path ({} hashes) leads to a committed peak (MMR root {})",
                           inc.height, disp(&inc.hash), inc.path.len(), s.mmr_root_hex()));
         if let Some(tx) = &inc.tx {
-            rep.check(verify_tx_in_header(&tx.header, &inc.hash, &tx.txid, tx.pos, &tx.branch),
-                      format!("transaction {} is at position {} of block {}: the header hashes to the block and the merkle \
-                               branch ({} hashes) leads to its merkle root", disp(&tx.txid), tx.pos, inc.height, tx.branch.len()));
+            match verify_tx_in_header(&inc.hash, tx) {
+                Ok(w) => rep.check(true, format!("transaction {} is in block {}: {w}", disp(&tx.txid), inc.height)),
+                Err(e) => rep.check(false, format!("transaction {} is in block {}: {e}", disp(&tx.txid), inc.height)),
+            };
         }
     }
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
@@ -156,35 +157,56 @@ pub struct Inclusion {
     pub tx: Option<TxInclusion>,
 }
 
-/// A transaction in the included block: the block's 80-byte header, the txid (internal order), its position in the
-/// block, and the merkle branch from it to the header's merkle root (internal order, lowest level first).
+/// A transaction in the included block, with what it takes to show it is a LEAF of the block's merkle tree:
+/// the block's 80-byte header; the transaction's raw bytes (as getrawtransaction prints them, with or without its
+/// witness), the txid it must hash to (internal order), its position and merkle branch; and the block's raw COINBASE
+/// transaction with its branch (position 0). Branches are internal order, lowest level first.
 #[derive(Clone, Debug)]
 pub struct TxInclusion {
     pub header: [u8; 80],
     pub txid: [u8; 32],
+    pub raw: Vec<u8>,
     pub pos: u32,
     pub branch: Vec<[u8; 32]>,
+    pub coinbase: Vec<u8>,
+    pub coinbase_branch: Vec<[u8; 32]>,
+}
+
+impl TxInclusion {
+    /// From the JSON the path service's /tx answers (and `swiftsync-verify headers --tx <file>` reads):
+    /// `{"txid", "pos", "header", "raw", "branch", "coinbase", "coinbase_branch", ...}`. txid and branch entries are
+    /// reversed hex (as explorers and Electrum's blockchain.transaction.get_merkle print them); header, raw and
+    /// coinbase are plain hex of the bytes (getblockheader <hash> false, getrawtransaction <txid>). Other keys are ignored.
+    pub fn from_json(v: &serde_json::Value) -> Result<TxInclusion, String> {
+        let s = |k: &str| v[k].as_str().ok_or(format!("tx: {k} is not a string"));
+        let list = |k: &str| -> Result<Vec<[u8; 32]>, String> {
+            v[k].as_array().ok_or(format!("tx: {k} is not a list"))?.iter()
+                .map(|x| x.as_str().and_then(hex32).map(|mut b| { b.reverse(); b }).ok_or(format!("tx: {k} holds a non-hash")))
+                .collect()
+        };
+        let header: [u8; 80] = unhex(s("header")?).filter(|h| h.len() == 80).and_then(|h| h.try_into().ok())
+            .ok_or("tx: header is not 80 bytes of hex")?;
+        let mut txid = hex32(s("txid")?).ok_or("tx: txid is not 32 bytes of hex")?;
+        txid.reverse();
+        let pos = v["pos"].as_u64().filter(|p| *p <= u32::MAX as u64).ok_or("tx: pos is not a position")? as u32;
+        Ok(TxInclusion { header, txid, raw: unhex(s("raw")?).ok_or("tx: raw is not hex")?, pos, branch: list("branch")?,
+                         coinbase: unhex(s("coinbase")?).ok_or("tx: coinbase is not hex")?, coinbase_branch: list("coinbase_branch")? })
+    }
+}
+
+fn unhex(x: &str) -> Option<Vec<u8>> {
+    if x.len() % 2 != 0 { return None; }
+    (0..x.len()).step_by(2).map(|i| u8::from_str_radix(x.get(i..i + 2)?, 16).ok()).collect()
 }
 
 impl Inclusion {
     /// From text: `hash` as explorers print it (reversed hex); `path`: 64-hex MMR hashes as headers-mmr-path prints
-    /// them (raw byte order, not reversed). `tx` = (txid as explorers print it, position, the 80-byte header as hex
-    /// (getblockheader <hash> false), the branch as Electrum's blockchain.transaction.get_merkle prints it: reversed hex).
-    pub fn parse(height: i64, hash: &str, path: &[&str], tx: Option<(&str, u32, &str, &[&str])>) -> Result<Inclusion, String> {
-        let rev = |x: &str, what: &str| hex32(x).map(|mut b| { b.reverse(); b }).ok_or(format!("{what}: not 32 bytes of hex ({x})"));
-        let hash = rev(hash, "block hash")?;
+    /// them (raw byte order, not reversed); `tx` from [`TxInclusion::from_json`].
+    pub fn parse(height: i64, hash: &str, path: &[&str], tx: Option<TxInclusion>) -> Result<Inclusion, String> {
+        let mut h = hex32(hash).ok_or(format!("block hash: not 32 bytes of hex ({hash})"))?;
+        h.reverse();
         let path = path.iter().map(|x| hex32(x).ok_or(format!("MMR path: not 32 bytes of hex ({x})"))).collect::<Result<Vec<_>, _>>()?;
-        let tx = match tx {
-            None => None,
-            Some((txid, pos, header, branch)) => {
-                if header.len() != 160 { return Err(format!("header: not 80 bytes of hex ({} digits)", header.len())); }
-                let mut h = [0u8; 80];
-                for i in 0..80 { h[i] = u8::from_str_radix(header.get(2 * i..2 * i + 2).unwrap_or("zz"), 16).map_err(|_| "header: not hex")?; }
-                let branch = branch.iter().map(|x| rev(x, "merkle branch")).collect::<Result<Vec<_>, _>>()?;
-                Some(TxInclusion { header: h, txid: rev(txid, "txid")?, pos, branch })
-            }
-        };
-        Ok(Inclusion { height, hash, path, tx })
+        Ok(Inclusion { height, hash: h, path, tx })
     }
 }
 
@@ -194,36 +216,136 @@ pub fn verify_inclusion(state: &HeaderState, height: i64, block_hash: &[u8; 32],
     height >= 0 && crate::mmr::verify(&state.mmr_peaks, state.leaves(), height as u64, block_hash, path)
 }
 
-/// Is transaction `txid` (internal order) at position `pos` of the block `block_hash` whose 80-byte header is
-/// `header`, by this Bitcoin merkle `branch` (internal order, lowest level first)? The header must hash (dsha) to
-/// `block_hash`, and the branch must lead from the txid to the header's merkle root: at level j the node is the left
-/// child when bit j of `pos` is 0 (parent = dsha(node || sibling)), else the right child (dsha(sibling || node)).
+/// A transaction parsed just far enough to know it IS one: its txid preimage (the serialisation without witness), the
+/// number of inputs and the first input's previous output (36 bytes).
+struct ParsedTx { stripped: Vec<u8>, inputs: u64, first_prevout: [u8; 36] }
+
+/// Parse a raw transaction (Bitcoin's serialisation, legacy or BIP 144 segwit): version, inputs (at least one),
+/// outputs (at least one), the witness when the segwit marker and flag (0x00 0x01) follow the version, lock time, and
+/// nothing after it. The txid is over the serialisation WITHOUT the witness, so a segwit transaction is stripped to it
+/// here; a caller may pass either form.
+fn parse_tx(raw: &[u8]) -> Result<ParsedTx, String> {
+    struct R<'a> { b: &'a [u8], i: usize }
+    impl R<'_> {
+        fn take(&mut self, n: usize) -> Result<&[u8], String> {
+            let e = self.i.checked_add(n).filter(|e| *e <= self.b.len()).ok_or("the transaction ends early")?;
+            let s = &self.b[self.i..e]; self.i = e; Ok(s)
+        }
+        fn var(&mut self) -> Result<u64, String> {
+            let n = match self.take(1)?[0] {
+                0xfd => u16::from_le_bytes(self.take(2)?.try_into().unwrap()) as u64,
+                0xfe => u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as u64,
+                0xff => u64::from_le_bytes(self.take(8)?.try_into().unwrap()),
+                x => x as u64,
+            };
+            if n > self.b.len() as u64 { return Err("a count larger than the transaction".into()); }
+            Ok(n)
+        }
+    }
+    let mut r = R { b: raw, i: 0 };
+    let version = r.take(4)?.to_vec();
+    let segwit = raw.len() > 6 && raw[4] == 0 && raw[5] == 1;
+    if segwit { r.take(2)?; }
+    let body_start = r.i;
+    let inputs = r.var()?;
+    if inputs == 0 { return Err("a transaction with no inputs".into()); }
+    let mut first_prevout = [0u8; 36];
+    for k in 0..inputs {
+        let prev = r.take(36)?;
+        if k == 0 { first_prevout.copy_from_slice(prev); }
+        let n = r.var()?; r.take(n as usize)?; r.take(4)?;
+    }
+    let outputs = r.var()?;
+    if outputs == 0 { return Err("a transaction with no outputs".into()); }
+    for _ in 0..outputs { r.take(8)?; let n = r.var()?; r.take(n as usize)?; }
+    let body_end = r.i;
+    if segwit {
+        for _ in 0..inputs { for _ in 0..r.var()? { let n = r.var()?; r.take(n as usize)?; } }
+    }
+    let lock = r.take(4)?.to_vec();
+    if r.i != raw.len() { return Err("bytes after the lock time".into()); }
+    let mut stripped = version;
+    stripped.extend_from_slice(&raw[body_start..body_end]);
+    stripped.extend_from_slice(&lock);
+    Ok(ParsedTx { stripped, inputs, first_prevout })
+}
+
+/// Bitcoin's merkle climb from `leaf` at `pos` by `branch` (internal order, lowest first): at level j the node is the
+/// left child when bit j of `pos` is 0 (parent = dsha(node || sibling)), else the right child (dsha(sibling || node)).
 /// Bitcoin's odd-level rule (the last node is paired with itself) shows as a sibling equal to the node on the LEFT
-/// child side, which is accepted; an equal sibling on the right child side cannot occur in a real tree and is refused.
-/// `pos` must fit the branch (pos < 2^len).
-///
-/// ⚠ NOT checked: that the branch's length is the block's real tree depth. The header does not carry the
-/// transaction count, and a 64-byte transaction is indistinguishable from an inner node (the merkle tree weakness of
-/// CVE-2012-2459's family), so a branch one level short could present an inner node as a "txid". A caller that needs
-/// certainty checks the depth independently (every position of a Bitcoin tree has the same branch length, so e.g. the
-/// coinbase's branch, position 0, fixes it).
-pub fn verify_tx_in_header(header: &[u8; 80], block_hash: &[u8; 32], txid: &[u8; 32], pos: u32, branch: &[[u8; 32]]) -> bool {
-    let dsha = |b: &[u8]| -> [u8; 32] { Sha256::digest(Sha256::digest(b)).into() };
-    if dsha(header) != *block_hash || branch.len() >= 32 || (pos as u64) >> branch.len() != 0 { return false; }
-    let mut cur = *txid;
+/// child side, which is accepted; an equal sibling on the RIGHT child side cannot occur in a real tree and is refused
+/// (None), as is a position that does not fit the branch (pos >= 2^len).
+fn merkle_climb(leaf: &[u8; 32], pos: u32, branch: &[[u8; 32]]) -> Option<[u8; 32]> {
+    if branch.len() >= 32 || (pos as u64) >> branch.len() != 0 { return None; }
+    let mut cur = *leaf;
     for (j, sib) in branch.iter().enumerate() {
         let mut b = [0u8; 64];
         if pos >> j & 1 == 0 {
             b[..32].copy_from_slice(&cur);
             b[32..].copy_from_slice(sib);
         } else {
-            if *sib == cur { return false; }
+            if *sib == cur { return None; }
             b[..32].copy_from_slice(sib);
             b[32..].copy_from_slice(&cur);
         }
         cur = dsha(&b);
     }
-    cur[..] == header[36..68]
+    Some(cur)
+}
+
+fn dsha(b: &[u8]) -> [u8; 32] { Sha256::digest(Sha256::digest(b)).into() }
+
+/// Is `tx` a transaction of the block `block_hash`? `Ok` with what was shown, or `Err` with why not.
+///
+/// THE ATTACK THIS CLOSES (the merkle tree weakness, CVE-2012-2459's family). Bitcoin's merkle tree hashes a leaf
+/// (a txid = dsha of a transaction) exactly as it hashes an inner node (dsha of the 64-byte concatenation of its two
+/// children), and the header does not say how deep the tree is. So:
+///   - SHORTER: an inner node's two children, 64 bytes, presented as a "transaction", hash to that node; with the
+///     branch above the node it reaches the merkle root. A txid check alone does not help: the 64 bytes DO hash to the
+///     claimed "txid".
+///   - LONGER: a miner can put a real 64-byte transaction in a block whose bytes are two 32-byte values of their choice
+///     (one being dsha of a fake transaction), so a branch one level deeper "proves" the fake one.
+/// Both need the tree depth to be wrong for the claimed leaf. This check closes both with the standard SPV rules:
+///   1. the RAW transaction is given, must parse as a transaction (parse_tx), must hash (dsha of its serialisation
+///      without witness) to the txid, and must NOT be exactly 64 bytes long. 64 bytes is precisely the size of an inner
+///      node; a real 64-byte transaction cannot be told apart from one, is non-standard, and BIP 54 (consensus cleanup)
+///      proposes to forbid it, so it is refused rather than guessed at.
+///   2. the DEPTH is proven by the coinbase: the block's raw coinbase (position 0) is given with its own branch, must
+///      parse as a coinbase (one input, the null previous output: 32 zero bytes and index 0xffffffff), must not be 64
+///      bytes, and its branch must reach the same merkle root; the transaction's branch must be exactly as long. The
+///      coinbase pins the depth because it cannot be faked at another depth: one level SHORTER, the "coinbase" would be
+///      a 64-byte inner node (refused); one level LONGER, the block's real coinbase would have to be the 64-byte
+///      concatenation of two hashes, the first being dsha of the presented coinbase, but a real coinbase's bytes 5..36
+///      are its null previous txid (zeros), so that first hash would need ~216 leading zero bits: infeasible.
+/// With the depth pinned the transaction's branch ends on a real leaf, and rule 1 makes that leaf this transaction.
+/// Also checked: the header hashes (dsha) to `block_hash`, and the odd-level and position rules of merkle_climb.
+pub fn verify_tx_in_header(block_hash: &[u8; 32], tx: &TxInclusion) -> Result<String, String> {
+    if dsha(&tx.header) != *block_hash { return Err("the header does not hash to the block".into()); }
+    let root: [u8; 32] = tx.header[36..68].try_into().unwrap();
+    const SIXTY_FOUR: &str = "is exactly 64 bytes long: it cannot be told apart from an inner merkle node (the \
+                              CVE-2012-2459 merkle weakness), is non-standard, and BIP 54 proposes to forbid it";
+    // 64 bytes is refused before parsing, whatever the bytes: an inner node need not parse to be one
+    if tx.raw.len() == 64 { return Err(format!("the transaction {SIXTY_FOUR}")); }
+    let t = parse_tx(&tx.raw).map_err(|e| format!("the raw transaction does not parse: {e}"))?;
+    if t.stripped.len() == 64 { return Err(format!("the transaction {SIXTY_FOUR}")); }
+    if dsha(&t.stripped) != tx.txid { return Err("the raw transaction does not hash to the txid".into()); }
+    if tx.coinbase.len() == 64 { return Err(format!("the coinbase {SIXTY_FOUR}")); }
+    let c = parse_tx(&tx.coinbase).map_err(|e| format!("the raw coinbase does not parse: {e}"))?;
+    let mut null = [0u8; 36];
+    null[32..].copy_from_slice(&[0xff; 4]);
+    if c.inputs != 1 || c.first_prevout != null { return Err("the coinbase is not a coinbase (one input, the null previous output)".into()); }
+    if c.stripped.len() == 64 { return Err(format!("the coinbase {SIXTY_FOUR}")); }
+    if merkle_climb(&dsha(&c.stripped), 0, &tx.coinbase_branch) != Some(root) {
+        return Err("the coinbase's branch does not lead to the header's merkle root (not this block's coinbase)".into());
+    }
+    if tx.branch.len() != tx.coinbase_branch.len() {
+        return Err(format!("the transaction's branch is {} levels deep, the coinbase's (the tree's depth) {}",
+                           tx.branch.len(), tx.coinbase_branch.len()));
+    }
+    if merkle_climb(&tx.txid, tx.pos, &tx.branch) != Some(root) {
+        return Err(format!("the merkle branch from position {} does not lead to the header's merkle root", tx.pos));
+    }
+    Ok(format!("at position {} of {} levels, the tree's depth by the block's coinbase", tx.pos, tx.branch.len()))
 }
 
 fn hex32(s: &str) -> Option<[u8; 32]> {
@@ -260,7 +382,6 @@ mod tests {
 
     fn dsha(b: &[u8]) -> [u8; 32] { Sha256::digest(Sha256::digest(b)).into() }
     fn unhex(x: &str) -> Vec<u8> { (0..x.len()).step_by(2).map(|i| u8::from_str_radix(&x[i..i + 2], 16).unwrap()).collect() }
-    fn hx(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
     /// Mainnet blocks 0..=200 (the fixture the guest's receipts were proved on).
     fn mainnet_hashes() -> Vec<[u8; 32]> {
         include_str!("../../experimental/libzync-bench/headers/h0_200.txt").lines().filter(|l| !l.trim().is_empty())
@@ -366,57 +487,97 @@ mod tests {
         assert!(verify_inclusion(&s, 200, &hs[200], &[]), "block 200 is a one-leaf peak: an empty path");
     }
 
-    /// The Bitcoin merkle branch of position `pos` among `txids` (internal order), built the way Core builds the tree.
-    fn branch(txids: &[[u8; 32]], mut pos: usize) -> Vec<[u8; 32]> {
-        let mut lv = txids.to_vec();
-        let mut out = Vec::new();
-        while lv.len() > 1 {
-            if lv.len() % 2 == 1 { lv.push(*lv.last().unwrap()); }
-            out.push(lv[pos ^ 1]);
-            lv = lv.chunks_exact(2).map(|c| { let mut b = [0u8; 64]; b[..32].copy_from_slice(&c[0]); b[32..].copy_from_slice(&c[1]); dsha(&b) }).collect();
-            pos >>= 1;
+    fn fixture(name: &str) -> serde_json::Value {
+        let t = match name {
+            "170_0" => include_str!("../../experimental/libzync-bench/headers/tx/tx_170_0.json"),
+            "170_1" => include_str!("../../experimental/libzync-bench/headers/tx/tx_170_1.json"),
+            "100003_0" => include_str!("../../experimental/libzync-bench/headers/tx/tx_100003_0.json"),
+            "seg" => include_str!("../../experimental/libzync-bench/headers/tx/tx_seg.json"),
+            _ => unreachable!(),
+        };
+        serde_json::from_str(t).unwrap()
+    }
+    fn block_100002() -> Vec<serde_json::Value> {
+        include_str!("../../experimental/libzync-bench/headers/tx/tx_100002.jsonl").lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+    fn bhash(v: &serde_json::Value) -> [u8; 32] { let mut b = hex32(v["hash"].as_str().unwrap()).unwrap(); b.reverse(); b }
+    fn check(v: &serde_json::Value) -> Result<String, String> { verify_tx_in_header(&bhash(v), &TxInclusion::from_json(v)?) }
+
+    /// Real transactions (fixtures from a mainnet node, experimental/libzync-bench/headers/tx/): every one of block
+    /// 100,002's 9 (the odd-level rule at three levels, so several branches carry a duplicated node), both of block 170
+    /// (the coinbase itself, and Satoshi to Hal Finney), and a segwit transaction of block 800,000 (3,721 transactions,
+    /// 12 levels), given with its witness and without it.
+    #[test]
+    fn real_transactions_are_accepted() {
+        let b = block_100002();
+        assert_eq!(b.len(), 9);
+        for (k, v) in b.iter().enumerate() {
+            assert_eq!(v["pos"], k as u64);
+            assert_eq!(check(v), Ok(format!("at position {k} of 4 levels, the tree's depth by the block's coinbase")), "tx {k}");
         }
-        out
+        // tx 8 is paired with itself at level 0: its first sibling is itself
+        assert_eq!(b[8]["branch"][0], b[8]["txid"]);
+        check(&fixture("170_0")).unwrap();
+        check(&fixture("170_1")).unwrap();
+        let seg = fixture("seg");
+        assert_eq!(check(&seg).unwrap(), "at position 1 of 12 levels, the tree's depth by the block's coinbase");
+        let mut tx = TxInclusion::from_json(&seg).unwrap();
+        let p = parse_tx(&tx.raw).unwrap();
+        assert!(p.stripped.len() < tx.raw.len(), "the fixture carries a witness");
+        tx.raw = p.stripped;
+        assert!(verify_tx_in_header(&bhash(&seg), &tx).is_ok(), "the same transaction without its witness");
     }
 
-    /// Mainnet block 100,002 (9 transactions, so the odd-level rule applies at three levels): every transaction is in
-    /// it by its branch; the wrong position, txid, header or a short branch is refused.
     #[test]
-    fn transactions_in_a_real_block() {
-        let header_hex = "0100000090f0a9f110702f808219ebea1173056042a714bad51b916cb6800000000000005275289558f51c9966699404ae2294730c3c9f9bda53523ce50e9b95e558da2fdb261b4d4c86041b1ab1bf93";
-        let block = "0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af";
-        let shown = ["ef1d870d24c85b89d92ad50f4631026f585d6a34e972eaf427475e5d60acf3a3", "f9fc751cb7dc372406a9f8d738d5e6f8f63bab71986a39cf36ee70ee17036d07",
-                     "db60fb93d736894ed0b86cb92548920a3fe8310dd19b0da7ad97e48725e1e12e", "220ebc64e21abece964927322cba69180ed853bb187fbc6923bac7d010b9d87a",
-                     "71b3dbaca67e9f9189dad3617138c19725ab541ef0b49c05a94913e9f28e3f4e", "fe305e1ed08212d76161d853222048eea1f34af42ea0e197896a269fbf8dc2e0",
-                     "21d2eb195736af2a40d42107e6abd59c97eb6cffd4a5a7a7709e86590ae61987", "dd1fd2a6fc16404faf339881a90adbde7f4f728691ac62e8f168809cdfae1053",
-                     "74d681e0e03bafa802c8aa084379aa98d9fcd632ddc2ed9782b586ec87451f20"];
-        let txids: Vec<[u8; 32]> = shown.iter().map(|x| { let mut b: [u8; 32] = unhex(x).try_into().unwrap(); b.reverse(); b }).collect();
-        let header: [u8; 80] = unhex(header_hex).try_into().unwrap();
-        let mut bh: [u8; 32] = unhex(block).try_into().unwrap(); bh.reverse();
-        for (k, t) in txids.iter().enumerate() {
-            let b = branch(&txids, k);
-            assert_eq!(b.len(), 4);
-            assert!(verify_tx_in_header(&header, &bh, t, k as u32, &b), "tx {k}");
-            assert!(!verify_tx_in_header(&header, &bh, t, (k as u32 + 1) % 9, &b), "tx {k} at the wrong position");
-            assert!(!verify_tx_in_header(&header, &bh, t, k as u32 + 16, &b), "a position that does not fit the branch");
-            assert!(!verify_tx_in_header(&header, &bh, &txids[(k + 1) % 9], k as u32, &b), "another txid");
-            assert!(!verify_tx_in_header(&header, &bh, t, k as u32 & 7, &b[..3]), "a short branch");
-            let mut h2 = header; h2[0] ^= 1;
-            assert!(!verify_tx_in_header(&h2, &bh, t, k as u32, &b), "a header that is not the block's");
-        }
-        // tx 8 is paired with itself at level 0: its branch's first sibling is itself, on the left-child side (accepted);
-        // the same equal sibling claimed on the right-child side is refused
-        assert_eq!(branch(&txids, 8)[0], txids[8]);
-        let mut fake = branch(&txids, 8); fake[0] = txids[8];
-        assert!(!verify_tx_in_header(&header, &bh, &txids[8], 9, &fake));
-        // through the text parser, as the CLI and WASM give it
-        let b = branch(&txids, 5);
-        let bs: Vec<String> = b.iter().map(|x| { let mut y = *x; y.reverse(); hx(&y) }).collect();
-        let br: Vec<&str> = bs.iter().map(|x| x.as_str()).collect();
-        let inc = Inclusion::parse(100_002, block, &[], Some((shown[5], 5, header_hex, &br))).unwrap();
-        let t = inc.tx.unwrap();
-        assert!(verify_tx_in_header(&t.header, &inc.hash, &t.txid, t.pos, &t.branch));
+    fn transaction_refusals() {
+        let b = block_100002();
+        let v = &b[5];
+        let base = TxInclusion::from_json(v).unwrap();
+        let bh = bhash(v);
+        let refuse = |t: &TxInclusion, want: &str| {
+            let e = verify_tx_in_header(&bh, t).unwrap_err();
+            assert!(e.contains(want), "{e:?} lacks {want:?}");
+        };
+        // the wrong position; a position that does not fit the branch
+        let mut t = base.clone(); t.pos = 4; refuse(&t, "does not lead to the header's merkle root");
+        let mut t = base.clone(); t.pos += 16; refuse(&t, "does not lead to the header's merkle root");
+        // raw bytes that are not the txid's (another transaction of the block), and a txid that is not the raw's
+        let mut t = base.clone(); t.raw = TxInclusion::from_json(&b[6]).unwrap().raw; refuse(&t, "does not hash to the txid");
+        let mut t = base.clone(); t.txid[0] ^= 1; refuse(&t, "does not hash to the txid");
+        // a raw transaction with a byte appended, or cut short
+        let mut t = base.clone(); t.raw.push(0); refuse(&t, "does not parse");
+        let mut t = base.clone(); t.raw.pop(); refuse(&t, "does not parse");
+        // another block's header
+        let mut t = base.clone(); t.header = TxInclusion::from_json(&fixture("100003_0")).unwrap().header; refuse(&t, "does not hash to the block");
+
+        // THE 64-BYTE ATTACK, shorter: block 100,002's level-1 node over txs 0 and 1 is dsha(txid0 || txid1). Present
+        // those 64 bytes as a "transaction" at position 0 with the rest of tx 0's branch: the txid check alone would pass
+        // (the bytes DO hash to the node), and the branch DOES reach the merkle root.
+        let t0 = TxInclusion::from_json(&b[0]).unwrap();
+        let t1 = TxInclusion::from_json(&b[1]).unwrap();
+        let mut inner = t0.txid.to_vec(); inner.extend_from_slice(&t1.txid);
+        let node = dsha(&inner);
+        assert_eq!(merkle_climb(&node, 0, &t0.branch[1..]), Some(base.header[36..68].try_into().unwrap()), "the forgery reaches the root");
+        let mut t = t0.clone(); t.raw = inner.clone(); t.txid = node; t.branch = t0.branch[1..].to_vec();
+        refuse(&t, "64 bytes");
+        // the depth rule alone refuses it too: a real transaction (tx 0's raw) pretends to be at depth 3
+        let mut t = t0.clone(); t.branch = t0.branch[1..].to_vec(); refuse(&t, "3 levels deep");
+        let mut t = base.clone(); t.branch.truncate(3); refuse(&t, "3 levels deep, the coinbase's (the tree's depth) 4");
+        let mut t = base.clone(); t.branch.push(t.branch[0]); refuse(&t, "5 levels deep");
+        // ...and a coinbase "branch" shortened to match needs the coinbase to be the 64-byte inner node: refused
+        let mut t = base.clone(); t.branch.truncate(3); t.coinbase = inner.clone(); t.coinbase_branch = t0.branch[1..].to_vec();
+        refuse(&t, "the coinbase is exactly 64 bytes");
+        // a coinbase from another block (100,003's, with its own branch), and a non-coinbase given as the coinbase
+        let other = TxInclusion::from_json(&fixture("100003_0")).unwrap();
+        let mut t = base.clone(); t.coinbase = other.coinbase.clone(); t.coinbase_branch = other.coinbase_branch.clone();
+        refuse(&t, "not this block's coinbase");
+        let mut t = base.clone(); t.coinbase = t1.raw.clone(); refuse(&t, "not a coinbase");
+        // the duplicated node claimed on the right-child side (tx 8 at position 9)
+        let mut t = TxInclusion::from_json(&b[8]).unwrap(); t.pos = 9; refuse(&t, "does not lead to the header's merkle root");
+        // text that is not a transaction answer
+        assert!(TxInclusion::from_json(&serde_json::json!({"txid": "00"})).is_err());
+        let mut j = v.clone(); j["raw"] = serde_json::json!("0g"); assert!(TxInclusion::from_json(&j).is_err());
         assert!(Inclusion::parse(1, "00", &[], None).is_err());
-        assert!(Inclusion::parse(1, block, &["zz"], None).is_err());
+        assert!(Inclusion::parse(1, v["hash"].as_str().unwrap(), &["zz"], None).is_err());
     }
 }

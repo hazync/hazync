@@ -10,8 +10,9 @@
 //   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });   // the header-chain zyncAPP
 //   h.verdict, h.height, h.hash, h.chainwork, h.mmr_root
 //   v.verifyHeaders({ receipts, include: { height, hash, path } })   // and block <hash> is at <height> on that chain
-//   (path: the lines `zyncapp headers-mmr-path` prints; optional tx: { txid, pos, header, branch } for a transaction
-//   in that block, branch as Electrum's blockchain.transaction.get_merkle prints it). h.included: true / false / null
+//   (path: the lines `zyncapp headers-mmr-path` prints, or the path service's /path answer; optional tx: the path
+//   service's /tx answer { txid, pos, header, raw, branch, coinbase, coinbase_branch } for a transaction in that block:
+//   the raw coinbase and its branch pin the tree's depth). h.included: true / false / null
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
