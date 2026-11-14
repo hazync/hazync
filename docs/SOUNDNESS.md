@@ -60,7 +60,8 @@ A receipt means nothing until a verifier has made every check in
   text of §5 step 3 alone (`scripts/libzync/genesis_anchor_id.py`).
 - **Enough work, and the checkpoint.** The image pins one block (`prover/methods/guest/src/checkpoint.rs`: mainnet
   970,000, signet 325,000) and refuses any other block at that height. A proof at or above that height, with at
-  least Core v28's `nMinimumChainWork`, contains the real chain's checkpoint.
+  least Bitcoin Core v32.1's `nMinimumChainWork` (the verifier's figure since v0.26.0; the guest's consensus code is
+  Core v28.0's), contains the real chain's checkpoint.
 - **The block forest, the lineage, the profile** match what the image should commit. For the published product
   images the lineage list is empty (`prover/methods/guest/src/lineage/mainnet_coinlog.rs`): one image since genesis,
   so no predecessor image is trusted through a handover.

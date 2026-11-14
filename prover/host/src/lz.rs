@@ -95,11 +95,11 @@ pub(crate) fn pinned_genesis_anchor() -> Option<[u8; 32]> {
     Some(arr(hx(h)))
 }
 
-/// Core v28 consensus.nMinimumChainWork for this network, little-endian like cum_work (0 on regtest).
+/// Bitcoin Core v32.1's consensus.nMinimumChainWork for this network (src/kernel/chainparams.cpp at v32.1), little-endian like cum_work (0 on regtest).
 pub(crate) fn min_chain_work() -> [u8; 32] {
     let h = match methods::NETWORK {
-        "mainnet" => "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
-        "signet" => "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        "mainnet" => "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
+        "signet" => "00000000000000000000000000000000000000000000000000001090e9dc1520",
         _ => return [0; 32],
     };
     arr(rev(hx(h)))
@@ -218,7 +218,7 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         if let Some(p) = pinned_genesis_anchor() { want_anchor = p; }
     }
     check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
-    // Core's nMinimumChainWork (v28): below it, a valid chain from genesis is no evidence of the network's chain.
+    // Core's nMinimumChainWork (v32.1): below it, a valid chain from genesis is no evidence of the network's chain.
     let low_work = !work_at_least(&cs.cum_work, min_chain_work()) || cs.height < checkpoint_height();
     println!("  height {} {} the pinned checkpoint height {}", cs.height, if cs.height < checkpoint_height() { "<" } else { ">=" }, checkpoint_height());
     // The coin log (COINLOG.md) is sound at every block: nothing to close at H. The live-coin ECMH (instant IBD;
