@@ -39,7 +39,7 @@ rc=$(grab "$O/ref.log" counted); ru=$(grab "$O/ref.log" unspent); rv=$(grab "$O/
 [ "$c $u $v" = "$rc $ru $rv" ] && pass "counted / unspent / value == hints_ref.py ($c / $u / $v sat)" || fail "counts $c $u $v != ref $rc $ru $rv"
 sv=$(python3 -c "import json;print(json.load(open('$ST'))['utxo_value'])"); [ "$v" = "$sv" ] && pass "unspent value == the core state's utxo_value" || fail "value $v != state $sv"
 
-for c in spent_as_unspent unspent_as_spent wrong_spender tracked state undo header dup_tx drop_tx swap_tx witness_tx lineage pre_undo core_id format assumevalid; do
+for c in spent_as_unspent unspent_as_spent wrong_spender tracked state undo header dup_tx dup_last drop_tx swap_tx witness_tx lineage pre_undo core_id format assumevalid; do
   HINTS_TAMPER=$c "$ZA" hints-prove "$B" "$H" "$ST" "$O/neg" --execute > "$O/neg_$c.log" 2>&1; e=$?
   if [ $e = 3 ] && grep -q "^HINTS_GUEST_REFUSED $c" "$O/neg_$c.log"; then
     pass "refused: $c ($(sed -n "s/^HINTS_GUEST_REFUSED $c: //p" "$O/neg_$c.log" | cut -c1-110))"

@@ -306,6 +306,9 @@ fn tamper(case: &str, fr: &mut [Frame], blocks: &[Block], tail: &mut [H]) -> Res
         "undo" => { fr[0].undo[0] ^= 1; "block 1: its undo hash flipped".into() }
         "header" => { fr[0].stripped[76] ^= 1; "block 1: its nonce flipped".into() }
         "dup_tx" => { let b = &blocks[0]; let cb = b.txs[0].stripped.as_slice(); fr[0].stripped = restrip(b, &[cb, cb]); "block 1: the coinbase listed twice (CVE-2012-2459)".into() }
+        "dup_last" => { let i = blocks.iter().position(|b| b.txs.len() >= 3 && b.txs.len() % 2 == 1).ok_or("no block with an odd count of 3 or more transactions")?; let b = &blocks[i];
+                        let mut t: Vec<&[u8]> = b.txs.iter().map(|t| t.stripped.as_slice()).collect(); t.push(t[t.len() - 1]); fr[i].stripped = restrip(b, &t);
+                        format!("block {}: its last transaction listed twice, the same Merkle root (CVE-2012-2459)", i + 1) }
         "drop_tx" => { let i = multi.ok_or("no block with two transactions")?; let b = &blocks[i];
                        let t: Vec<&[u8]> = b.txs[..b.txs.len() - 1].iter().map(|t| t.stripped.as_slice()).collect(); fr[i].stripped = restrip(b, &t); format!("block {}: its last transaction dropped", i + 1) }
         "swap_tx" => { let i = multi.ok_or("no block with two transactions")?; let b = &blocks[i];
