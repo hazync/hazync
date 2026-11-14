@@ -22,7 +22,8 @@ The MMR is the header-chain guest's (hazync repo, prover/zyncapps/methods/header
 
 Hashes are hex as explorers print them (reversed); path entries are raw-order hex (as zyncapp headers-mmr-path
 prints them); branch entries are reversed hex (as Electrum's blockchain.transaction.get_merkle). Read-only, GET only,
-rate limited per client (the first X-Forwarded-For address when the peer is a trusted proxy), bound to 127.0.0.1.
+rate limited per client (the first X-Forwarded-For address when the peer is a trusted proxy), bound to $BIND (127.0.0.1 by
+default; on hazync-proof its own address, firewalled to the web box: README.md).
 
 Environment: BIND (127.0.0.1), PORT (8902), HEADERS_DIR (/var/lib/hazync-headers), STATE_DIR (/var/lib/hazync-headers-api),
 RPC_URL (http://127.0.0.1:8332/), RPC_COOKIE (the node's .cookie; under systemd, $CREDENTIALS_DIRECTORY/cookie),

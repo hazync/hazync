@@ -30,11 +30,21 @@ to where the node agrees. While the held hashes do not end on the published hash
 
 ## Install (hazync-proof; not done)
 
+Network, as decided: the same pattern as the coordinator's `:8899`. The service listens on hazync-proof's own address
+(`BIND=159.195.207.224`, port 8902, set in the unit), nginx on the web box (152.53.86.216) proxies
+`https://hazync.org/headers-api/` to it, and **nftables lets only the web box reach the port**. `TRUSTED_PROXIES`
+(in the unit) is the web box, so the per-client rate limit reads its `X-Forwarded-For`.
+
 ```sh
 install -m755 hazync-headers-api /opt/hazync-headers/bin/
 cp hazync-headers-api.service /etc/systemd/system/
+# nftables: only the web box may connect to 8902 (put it in the table that holds the :8899 rule, before any accept-all)
+nft add rule inet filter input ip saddr 152.53.86.216 tcp dport 8902 accept
+nft add rule inet filter input tcp dport 8902 drop
+# ...and persist it the way the :8899 rule is persisted on that box (e.g. /etc/nftables.conf)
 systemctl daemon-reload && systemctl enable --now hazync-headers-api
-curl -s 127.0.0.1:8902/status
+curl -s 159.195.207.224:8902/status                 # from hazync-proof
+curl -s -m 5 159.195.207.224:8902/status            # from anywhere else but the web box: must time out
 ```
 
 `DynamicUser=yes`: it runs as a throwaway user that reads the node's cookie through `LoadCredential=` (the unit
@@ -45,14 +55,13 @@ chain fetches 975k hashes in batches of 2,000 and hashes ~2M MMR nodes in Python
 ## Behind nginx (proposed, not applied)
 
 The page's CSP is `connect-src 'self'`, so the service must be same-origin: **`https://hazync.org/headers-api/`**
-(not api.hazync.org, which would need a CSP change). nginx runs on the web box (152.53.86.216), not on hazync-proof, so
-either set `BIND` to hazync-proof's address with `TRUSTED_PROXIES=152.53.86.216` and allow only the web box to port
-8902 in nftables (as for the coordinator's :8899), or keep `BIND=127.0.0.1` and reach it over an SSH tunnel. In
-`deploy/nginx-hazync.org.conf` of hazync-web, next to `/headers-live/`:
+(not api.hazync.org, which would need a CSP change). In `deploy/nginx-hazync.org.conf` of hazync-web, next to
+`/headers-live/`:
 
 ```nginx
     # MMR paths for the Block check on /headers/ (hazync repo, coordinator/deploy/headers-api/). Untrusted: the page
-    # checks every answer against the proof it verified. GET only; limited like /api/.
+    # checks every answer against the proof it verified. GET only; limited like /api/. hazync-proof lets only this box
+    # reach :8902 (nftables), as for the coordinator's :8899.
     location /headers-api/ {
         limit_except GET HEAD { deny all; }
         proxy_pass http://159.195.207.224:8902/;
