@@ -159,6 +159,49 @@ else:
     check("rm /var/lib/hazync/sponsor-bot/.failed" in UNIT,
           "⚠ and the unit documents how to clear it, since a latched unit starts silently doing nothing")
 
+# ── 4. ⛔ A FRESH release with no signed manifest yet is BEING SIGNED: skip, don't latch (11-14) ─────────
+# release.sh publishes a release and signs it minutes later. At 07:25 UTC on 11-14 a run found v0.25.0 "latest" with
+# no SHA256SUMS.txt, died on the 404 and latched the bot off for hours. An OLD release with no manifest is still
+# broken and must still fail loudly (section 2's rule).
+if not CONTROL:
+    import io, json as _json, tempfile, time as _time
+    fresh = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(_time.time() - 300))
+    stale = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(_time.time() - 3 * 86400))
+    now = _time.time()
+    check(sponsor_bot.release_is_being_signed(fresh, now), "a release published 5 min ago is being signed")
+    check(not sponsor_bot.release_is_being_signed(stale, now), "one published 3 days ago is not")
+    check(not sponsor_bot.release_is_being_signed("", now) and not sponsor_bot.release_is_being_signed("junk", now),
+          "an unknown or unparseable time is NOT fresh (fail loudly, as before)")
+
+    def run_prepare(published_at):
+        home = tempfile.mkdtemp()
+        key = os.path.join(home, "id_ed25519")
+        for f in (key, key + ".pub"):
+            open(f, "w").write("ssh-ed25519 AAAA test\n")
+        r = sponsor_bot.SshRunner(key, home, "http://meta", None, gnupghome=None)
+        def urlopen(req, timeout=None):
+            url = req if isinstance(req, str) else req.full_url
+            body = ({"method_id": "8" * 64} if url == "http://meta"
+                    else {"tag_name": "v9.9.9", "published_at": published_at})
+            return io.BytesIO(_json.dumps(body).encode())
+        def urlretrieve(url, path):
+            raise http_error(404)
+        o1, o2 = sponsor_bot.urllib.request.urlopen, sponsor_bot.urllib.request.urlretrieve
+        sponsor_bot.urllib.request.urlopen, sponsor_bot.urllib.request.urlretrieve = urlopen, urlretrieve
+        try:
+            r.prepare()
+            return "returned"
+        except SystemExit as e:
+            return f"exit {e.code}"
+        except urllib.error.HTTPError as e:
+            return f"http {e.code}"
+        finally:
+            sponsor_bot.urllib.request.urlopen, sponsor_bot.urllib.request.urlretrieve = o1, o2
+    got = run_prepare(fresh)
+    check(got == "exit 0", f"⛔ prepare() on a fresh unsigned release exits 0: no latch, nothing started ({got})")
+    got = run_prepare(stale)
+    check(got == "http 404", f"and on an OLD release with no manifest it still fails on the 404 ({got})")
+
 print()
 if CONTROL:
     if fails:
