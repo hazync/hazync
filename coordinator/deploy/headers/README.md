@@ -24,6 +24,15 @@ Do not let the run grow unbounded: prove a fresh base on a GPU (`run_headers_pod
 A run is published only after `swiftsync-verify headers --expect <tip>:<the node's hash>` prints
 `SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`5bd8011d`, image `2db34e12`).
 
+## Block inclusion (the MMR)
+
+Since the MMR image (feat/headers-mmr) the state also carries the peaks of a Merkle Mountain Range of every block
+hash (`prover/zyncapps/methods/headers/src/mmr.rs`), so the published pair answers "is block X at height h on this
+chain": `zyncapp headers-mmr-path <headers file from 0> <h> --tip <tip> > path.txt`, then
+`swiftsync-verify headers --include <h>:<hash> --path path.txt <base> <run>` (add `--tx <txid>:<pos> --header <hex80>
+--branch <file>` for a transaction in that block). The follower needs no change: `--after` reads the base's peaks
+from its journal. A base from an older image has no peaks: the first MMR base is re-proved from genesis.
+
 ## Where it runs
 
 - **hazync-proof** proves, with its own bitcoind (`bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf -datadir=/var/lib/bitcoind`, as root with the cookie),
