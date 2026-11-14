@@ -13,6 +13,17 @@ Hazync v2's release notes are in [`docs/`](docs/README.md).
 Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
 v0.23.0 onwards are **Hazync v2** (the libzync engine).
 
+## v0.26.0 — unreleased — re-baseline `8888d59c` → `1ff5a129` (a handover: no proof is lost)
+The handover: the board's image can change without re-proving. The new mainnet image `1ff5a129` pins `8888d59c` at
+block 2000 and continues its chain there: blocks 1..1999 stay `8888d59c`'s proofs, and the new image proves block 2000
+on top of `8888d59c`'s genesis spine. No consensus-rule change; same RISC Zero 3.1.0. Signet `28e39600` is a new chain
+from genesis; the header-chain zyncAPP `2db34e12` is unchanged. The guest can also continue a chain across a RISC Zero
+upgrade, by checking the previous version's spine with a vendored copy of that version's recursion circuit; a real
+GPU run of that path fails in RISC Zero 3.1.0's CUDA witness generation (#717), so it is not yet usable. Only upgrades
+that are not soundness fixes may be handed over ([`docs/HANDOVER.md`](docs/HANDOVER.md)). The verifier keeps
+`8888d59c` and checks a receipt by it as that image; the coordinator gains `LZ_HANDOVER_AT`.
+Notes: [`docs/RELEASE_NOTES_v0.26.0.md`](docs/RELEASE_NOTES_v0.26.0.md).
+
 ## v0.24.0 — 2026-11-12 — re-baseline `863c9ce3` → `8888d59c`
 Hazync v2 (the libzync engine) on **RISC Zero 3.1.0**, which fixes soundness bugs in the zkVM's proof system. No
 guest source changed; every image id moved because the guest links risc0's new crates: mainnet `8888d59c`, signet
