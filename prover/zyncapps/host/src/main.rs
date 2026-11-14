@@ -8,6 +8,10 @@
 //!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
 //!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
 //!   zyncapp headers-prove <headers file> <out receipt> [--after <previous headers receipt>] [--elf <guest>] [--execute]
+//!   zyncapp hints-prove <block json dir> <H> <core receipt | state_<T>.json> <out dir> [--format 1|2] [--signet] [--execute] [--prof N]
+//!       the SwiftSync hints file for H (docs/libzync/HINTS_ZAPP.md), its undo-hash file and (without --execute) the
+//!       receipt. A state JSON (prep's) instead of a receipt: execute only, the core receipt an unresolved assumption.
+//!   zyncapp hints-verify <hints receipt> <hints file> [--undo <file>] [--expect <H>:<hash>] [--expect-tip <T>:<hash>] [--core-image <hex>] [--mempool]
 //!   zyncapp id
 //!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
 //!
@@ -15,7 +19,8 @@
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
+mod hints_host;
+use zyncapp_methods::{ZYNCAPP_HINTS_ELF, ZYNCAPP_HINTS_ID, ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -139,7 +144,10 @@ fn main() {
             println!("ZYNCAPP_COIN_ID {}", id_hex(&ZYNCAPP_COIN_ID));
             println!("ZYNCAPP_ZEROCONF_ID {}", id_hex(&ZYNCAPP_ZEROCONF_ID));
             println!("ZYNCAPP_HEADERS_ID {}", id_hex(&ZYNCAPP_HEADERS_ID));
+            println!("ZYNCAPP_HINTS_ID {}", id_hex(&ZYNCAPP_HINTS_ID));
         }
+        Some("hints-prove") if a.len() >= 5 => hints_prove(&a),
+        Some("hints-verify") if a.len() >= 3 => hints_verify(&a),
         Some("headers-exec") if a.len() >= 2 => {
             // K1: the header-chain zAPP, EXECUTED (cycles, no proof) over a file of "height hex80" lines, as
             // fetched from a node. A file starting at 0 runs from genesis; otherwise its first 11 headers seed the state
@@ -379,4 +387,149 @@ fn main() {
         }
         _ => die("usage: zyncapp id | prove-coin <core.rcpt> <fact.json> <out.rcpt> [--signet] | verify-coin <zync.rcpt> | inspect-coin <zync.rcpt>"),
     }
+}
+
+/// The core ChainState with Serialize, to rebuild a journal from prep's state JSON (execute-only runs).
+#[derive(Serialize, Deserialize, Clone)]
+struct ChainStateJ {
+    kind: u32, #[serde(default)] version: u32, tip_hash: [u8; 32], utxo_roots: Vec<Option<[u8; 32]>>, utxo_leaves: u64,
+    #[serde(default)] utxo_value: u64, cum_work: [u8; 32], height: u32, prev_nbits: u32, prev_time: u32, epoch_start: u32,
+    recent_times: Vec<u32>, anchor_id: [u8; 32], self_id: [u32; 8], #[serde(alias = "ss_set")] live_set: u32,
+    #[serde(alias = "ss_acc")] live_hash: [u32; 16], #[serde(alias = "ss_hints")] trie_root: [u8; 32], smt_root: [u8; 32],
+    #[serde(default)] max_time: u32, #[serde(default)] profile: u32, #[serde(default)] block_roots: Vec<Option<[u8; 32]>>,
+    #[serde(default)] block_leaves: u64, #[serde(default)] lineage: [u8; 32],
+}
+
+/// The hints zyncAPP's statement (the guest's HintsStatement, field for field).
+#[derive(Serialize, Deserialize, Debug)]
+struct HintsStatement {
+    kind: u32, format: u32, height: u32, block_hash: [u8; 32], hints_sha256: [u8; 32], hints_len: u64, n_counted: u64,
+    n_unspent: u64, unspent_value: u64, undo_from: u32, undo_sha256: [u8; 32], core_id: [u32; 8], lineage: [u8; 32],
+    anchor_id: [u8; 32], core_height: u32, tip_hash: [u8; 32], cum_work: [u8; 32], max_time: u32, profile: u32,
+}
+
+fn flag<'a>(a: &'a [String], f: &str) -> Option<&'a String> {
+    a.iter().position(|x| x == f).and_then(|i| a.get(i + 1))
+}
+
+fn sha256(b: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(b).into()
+}
+
+fn disp(b: &[u8; 32]) -> String {
+    b.iter().rev().map(|x| format!("{x:02x}")).collect()
+}
+
+fn hints_prove(a: &[String]) {
+    let (dir, out) = (&a[1], &a[4]);
+    let stop: u32 = a[2].parse().unwrap_or_else(|_| die("H?"));
+    let format: u32 = flag(a, "--format").map(|x| x.parse().unwrap_or_else(|_| die("--format 1|2"))).unwrap_or(libzync::hints::FORMAT_BIP);
+    let prof: u32 = flag(a, "--prof").map(|x| x.parse().unwrap_or_else(|_| die("--prof N"))).unwrap_or(0);
+    let signet = a.iter().any(|x| x == "--signet");
+    let execute = a.iter().any(|x| x == "--execute");
+    let (cs, journal, receipt): (ChainStateJ, Vec<u8>, Option<Receipt>) = if a[3].ends_with(".json") {
+        if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
+        let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
+            .unwrap_or_else(|e| die(&format!("{}: {e}", a[3])));
+        let j: Vec<u8> = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        (cs, j, None)
+    } else {
+        let r: Receipt = bincode::deserialize(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
+            .unwrap_or_else(|e| die(&format!("core receipt: {e}")));
+        if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) && !execute { die("a FakeReceipt core receipt is not a proof"); }
+        let cs: ChainStateJ = r.journal.decode().unwrap_or_else(|e| die(&format!("core journal: {e}")));
+        (cs, r.journal.bytes.clone(), Some(r))
+    };
+    if stop == 0 || stop > cs.height { die(&format!("H must be in 1..={} (the core height)", cs.height)); }
+    let t0 = std::time::Instant::now();
+    let rp = hints_host::replay(cs.height, signet, |h| hints_host::read_block(dir, h));
+    if rp.block_roots != libzync::hints::trimmed(&cs.block_roots) || rp.block_leaves != cs.block_leaves {
+        die("the native replay's block forest is not the core state's: other blocks, or a rule differs");
+    }
+    let w = hints_host::witness(&rp, stop, format, signet, |h| hints_host::read_block(dir, h)).unwrap_or_else(|e| die(&e));
+    if sha256(&w.file) != w.derived.hints_sha256 || w.file.len() as u64 != w.derived.hints_len { die("internal: file bytes != derived hash"); }
+    std::fs::create_dir_all(out).unwrap();
+    let net = if signet { "signet" } else { "mainnet" };
+    let (hp, up) = (format!("{out}/{net}-{stop}.hints"), format!("{out}/{net}-{stop}.undo"));
+    std::fs::write(&hp, &w.file).unwrap();
+    std::fs::write(&up, &w.undo_file).unwrap();
+    println!("HINTS_NATIVE H={stop} T={} format={format} file={} ({} bytes, sha256 {}) counted={} unspent={} value={} undo_sha256={} block {} ({:.1} s)",
+             cs.height, hp, w.file.len(), hex(&w.derived.hints_sha256), w.derived.n_counted, w.derived.n_unspent, w.derived.unspent_value,
+             hex(&w.derived.undo_sha256), disp(&w.derived.block_hash), t0.elapsed().as_secs_f64());
+    let mut b = ExecutorEnv::builder();
+    match &receipt {
+        Some(r) => { b.add_assumption(r.clone()); }
+        None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(cs.self_id), journal.clone())); }
+    }
+    b.write(&cs.self_id).unwrap().write(&journal).unwrap().write(&signet).unwrap().write(&format).unwrap().write(&stop).unwrap()
+        .write(&hints_host::genesis(signet).to_vec()).unwrap().write(&prof).unwrap()
+        .write_slice(&w.frames).write_slice(&[cs.height - stop]).write_slice(&w.tail);
+    let env = b.build().unwrap();
+    let t1 = std::time::Instant::now();
+    let check = |z: &HintsStatement| {
+        if z.hints_sha256 != w.derived.hints_sha256 || z.height != stop || z.block_hash != w.derived.block_hash { die("the guest's statement is not the native derivation's"); }
+    };
+    if execute {
+        let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HINTS_ELF).unwrap_or_else(|e| die(&format!("execute: {e}")));
+        let z: HintsStatement = info.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
+        check(&z);
+        let outs = w.derived.n_counted.max(1);
+        println!("HINTS_EXEC H={stop} user_cycles={} padded_cycles={} segments={} executed in {:.1} s; {:.0} user cycles/block, {:.0} user cycles/counted output, input {} words{}",
+                 info.cycles(), info.segments.iter().map(|s| 1u64 << s.po2).sum::<u64>(), info.segments.len(), t1.elapsed().as_secs_f64(),
+                 info.cycles() as f64 / stop as f64, info.cycles() as f64 / outs as f64, w.frames.len() + w.tail.len(),
+                 if receipt.is_none() { " [core receipt: unresolved assumption, journal from the state JSON]" } else { "" });
+        println!("HINTS_STATEMENT {z:?}");
+    } else {
+        let r = default_prover().prove_with_opts(env, ZYNCAPP_HINTS_ELF, &risc0_zkvm::ProverOpts::succinct())
+            .unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
+        let z: HintsStatement = r.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
+        check(&z);
+        let rp = format!("{out}/{net}-{stop}.receipt");
+        std::fs::write(&rp, bincode::serialize(&r).unwrap()).unwrap();
+        println!("HINTS_PROVED H={stop} -> {rp} in {:.1} s ({} bytes)", t1.elapsed().as_secs_f64(), std::fs::metadata(&rp).unwrap().len());
+    }
+    println!("HINTS_ID {}", id_hex(&ZYNCAPP_HINTS_ID));
+}
+
+fn hints_verify(a: &[String]) {
+    let r: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| die(&e.to_string())))
+        .unwrap_or_else(|e| die(&format!("receipt: {e}")));
+    let fail = |m: String| -> ! { println!("ZYNCAPP_FAIL: {m}"); std::process::exit(1) };
+    if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { fail("a dev-mode FakeReceipt is not a proof".into()); }
+    if std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0").unwrap_or(false) { fail("RISC0_DEV_MODE is set: unset it to verify".into()); }
+    if let Err(e) = r.verify(ZYNCAPP_HINTS_ID) { fail(format!("does not verify under the hints image {}: {e}", id_hex(&ZYNCAPP_HINTS_ID))); }
+    let z: HintsStatement = r.journal.decode().unwrap_or_else(|e| fail(format!("journal: {e}")));
+    if z.kind != libzync::hints::KIND_HINTS { fail("not a hints statement".into()); }
+    if z.format != libzync::hints::FORMAT_BIP && z.format != libzync::hints::FORMAT_CRATE { fail(format!("unknown hints format {}", z.format)); }
+    let file = std::fs::read(&a[2]).unwrap_or_else(|e| fail(format!("{}: {e}", a[2])));
+    if file.len() as u64 != z.hints_len || sha256(&file) != z.hints_sha256 {
+        fail(format!("{} is not the proven file (sha256 {} / {} bytes; proven {} / {} bytes)", a[2], hex(&sha256(&file)), file.len(), hex(&z.hints_sha256), z.hints_len));
+    }
+    match libzync::hints::decode_file(&file, z.format) {
+        Some((stop, lists)) if stop == z.height && lists.iter().map(|l| l.len() as u64).sum::<u64>() == z.n_unspent => {}
+        _ => fail("the file does not decode to the proven height and count".into()),
+    }
+    if let Some(u) = flag(a, "--undo") {
+        let ub = std::fs::read(u).unwrap_or_else(|e| fail(format!("{u}: {e}")));
+        if ub.len() != 32 * z.height as usize || sha256(&ub) != z.undo_sha256 { fail(format!("{u} is not the proven undo-hash file")); }
+    }
+    let mut pa: Vec<String> = Vec::new();
+    if let Some(e) = flag(a, "--expect") {
+        let (h, x) = swiftsync_verify::parse_expect(e).unwrap_or_else(|| fail("--expect: want <height>:<64 hex digits>".into()));
+        if !swiftsync_verify::identity_matches(h, &x, z.height, &z.block_hash) {
+            fail(format!("--expect: block {h} is {x}; the file is for block {} {}", z.height, disp(&z.block_hash)));
+        }
+        if z.height == z.core_height { pa.extend(["--expect".into(), e.clone()]); }
+    }
+    if let Some(e) = flag(a, "--expect-tip") { pa.extend(["--expect".into(), e.clone()]); }
+    if let Some(c) = flag(a, "--core-image") { pa.extend(["--core-image".into(), c.clone()]); }
+    if a.iter().any(|x| x == "--mempool") { pa.push("--mempool".into()); }
+    println!("  rests on core image {} (tip {} at {}), anchor {}", id_hex(&z.core_id), disp(&z.tip_hash), z.core_height, hex(&z.anchor_id));
+    if flag(a, "--expect").is_none() { println!("  block {} NOT compared with your node: pass --expect {}:<hash from your header chain>", z.height, z.height); }
+    let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, lineage: &z.lineage, profile: z.profile, height: z.core_height,
+                   tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
+    let pol = core_policy(&c, &pa).map(|ok| ok && flag(a, "--expect").is_some());
+    verdict(pol, format!("ZYNCAPP_HINTS_OK: {} is the hints file (format {}) for block {} {}: {} outputs indexed, {} unspent ({} sat); undo hashes 1..{} sha256 {}",
+                         a[2], z.format, z.height, disp(&z.block_hash), z.n_counted, z.n_unspent, z.unspent_value, z.height, hex(&z.undo_sha256)));
 }
