@@ -78,6 +78,15 @@ if [ -z "${prev_proven:-}" ] || [ "$proven" -gt "${prev_proven:-0}" ]; then
     say "ok: $proven proven (advanced; clock reset)"
     exit 0
 fi
+# ⛔ A COUNT THAT FELL IS A DIFFERENT BOARD, not a stalled one: proofs are never un-proved, so a lower count means
+# the coordinator behind COORD_URL changed (the v1 -> v2 switch of 2026-11-11 went from 145,223 to a few hundred).
+# Without this the stamp stayed on the old board's count, never "rose" again, and the check called the board idle
+# for 840 hours -- every run, true or not, which is the same as never. Take the new count as the baseline.
+if [ "$proven" -lt "${prev_proven:-0}" ]; then
+    printf '%s %s\n' "$proven" "$now" > "$STATE"
+    say "ok: $proven proven, below the stored $prev_proven -- a different board; new baseline, clock reset"
+    exit 0
+fi
 
 idle_for=$(( now - ${prev_ts:-$now} ))
 if [ "$pick_present" != "1" ]; then
