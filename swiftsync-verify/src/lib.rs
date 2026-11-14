@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 /// the published image ids M of §5 step 1; a reader should rebuild them (§5 step 9) rather than take them
 /// from this file.
 pub const IMAGES: &[Image] = &[
+    // v0.23.0-v0.25.0 (RISC Zero 3.1.0): the board's image for blocks 1..1999. Kept so its proofs verify by id.
     Image {
         network: "mainnet",
         method_id_hex: "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4",
@@ -34,9 +35,46 @@ pub const IMAGES: &[Image] = &[
         checkpoint_height: 970_000,
         lineage: &[],
     },
+    // v0.26.0: continues 8888d59c at block 2000 (the handover, docs/HANDOVER.md). The CURRENT mainnet image.
+    Image {
+        network: "mainnet",
+        method_id_hex: "1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a",
+        profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+        genesis_time: 1_231_006_505,
+        genesis_bits: 0x1d00_ffff,
+        genesis_work: 4_295_032_833,
+        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (mainnet).
+        min_work_hex: "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
+        genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
+        checkpoint_height: 970_000,
+        lineage: &[Handover {
+            image: [2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963],
+            first_height: 2000,
+            verifier: pin::SAME_ZKVM,
+        }],
+    },
+    // v0.23.0-v0.25.0 signet. Kept so its proofs verify by id.
     Image {
         network: "signet",
         method_id_hex: "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387",
+        profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
+        genesis_time: 1_598_918_400,
+        genesis_bits: 0x1e03_77ae,
+        genesis_work: 4_838_420,
+        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (default signet).
+        min_work_hex: "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
+        checkpoint_height: 325_000,
+        lineage: &[],
+    },
+    // v0.26.0 signet: a new chain from genesis (no signet board to hand over). The CURRENT signet image.
+    Image {
+        network: "signet",
+        method_id_hex: "28e396006e97a8075daeb9fb12ce3ef1b3a20e44eac935256a1c2e8c3d8d57f3",
         profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,

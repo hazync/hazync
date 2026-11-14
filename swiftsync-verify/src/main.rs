@@ -120,7 +120,11 @@ fn main() {
     }
     let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network:?}")));
     if let Some(h) = &image_hex {
-        image = image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h:?}: not 64 hex digits")));
+        // A built-in image keeps its own lineage (an earlier image of the chain); any other id takes the network's.
+        image = match Image::by_id(&network, h) {
+            Some(i) => i,
+            None => image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h:?}: not 64 hex digits"))),
+        };
         println!("  image id given on the command line: {}", image.method_id_hex);
     }
     if !handovers.is_empty() {
