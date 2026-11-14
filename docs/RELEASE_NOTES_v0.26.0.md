@@ -29,11 +29,16 @@ A new RISC Zero version cannot check an old version's proofs: from 3.0.5 to 3.1.
 themselves changed. So the guest can carry a copy of the previous version's recursion circuit and check the old spine
 with it, and the new image's lineage names that version. This release carries copies for RISC Zero 3.0.5 and 3.1.0.
 
-**Not yet usable.** Inside the zkVM the check works: real 3.0.5 proofs and the board's real 3.1.0 proof of blocks 1
-to 1466 are accepted in about 23 M cycles, and a changed seal, wrong image, wrong output or wrong version are each
-refused. But proving that step on a GPU fails inside RISC Zero 3.1.0's CUDA witness generation (`Inconsistent set`),
-though the same step executes correctly. It has to be fixed before a RISC Zero upgrade relies on it. This release's
-own handover is between two images on the same RISC Zero and does not use it.
+**Not yet in the published image's fast form.** Inside the zkVM the check works: real 3.0.5 proofs and the board's
+real 3.1.0 proof of blocks 1 to 1466 are accepted in about 23 M cycles, and a changed seal, wrong image, wrong output or
+wrong version are each refused. Proving that fast form fails, on the CPU prover and on the GPU alike, because of a RISC
+Zero 3.1.0 bug in the Poseidon2 instruction it uses: the executor reads the instruction's addresses as word addresses
+and the proof circuit as byte addresses, so no program that calls it can be proved
+([risc0#3427](https://github.com/risc0/risc0/issues/3427); our analysis and a fix are posted there). With plain
+software hashing instead, the same step **was proved on a GPU** (2026-11-14, one RTX PRO 6000): block 1467 handed over
+on the board's real proof of blocks 1 to 1466, across the vendored 3.1.0 checker, in 280 s (257 M cycles), verified,
+and a changed receipt refused. A handover proves this step once, so the next image that crosses a RISC Zero version
+uses software hashing. This release's own handover is between two images on the same RISC Zero and does not use it.
 
 ## Measured
 
