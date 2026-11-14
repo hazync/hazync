@@ -18,6 +18,14 @@ StateDirectory=hazync-offsite
 # stuck Litestream would go unnoticed between runs.
 Environment=OFFSITE_LAG_ALERT_SECS=1800
 Environment=HOME=/var/lib/hazync-offsite
+# The v2 board's ledger, proofs and mirror units (switch, 11-12). Without these the watch read the frozen
+# CORE ledger and reported "the ledger copy in R2 is stale" from the switch on.
+Environment=COORD_DB=/var/lib/hazync-lz/coordinator.db
+Environment=COORD_PROOFS=/var/lib/hazync-lz/proofs
+Environment=HZ_REPO=/opt/hazync-lz
+Environment=OFFSITE_PROOFS_SCRIPT=/opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py
+Environment=OFFSITE_MIRROR_UNIT=hazync-lz-offsite-proofs.service
+Environment=OFFSITE_B2_MIRROR_UNIT=hazync-lz-offsite-proofs-b2.service
 TimeoutStartSec=5min
 Nice=10
 NoNewPrivileges=true

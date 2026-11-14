@@ -20,8 +20,9 @@ refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
   `-cuda` and `hazync-host-x86_64-windows-cuda.zip` (`host.exe` + `cudart64_12.dll`); the libzync verifier
   (`swiftsync-verify`) as `hazync-verify-x86_64-linux-gnu`, `hazync-verify-aarch64` (built by `release-sign.yml`),
   `hazync-verify.wasm` and its glue `hazync-verify.js`; `hazync-worker`, `hazync-coordinator.py`,
-  `hazync-run-workers.sh`; `SHA256SUMS.txt` and `.asc`. Nine are uploaded by `release.sh`, three added by
-  `release-sign.yml`: the release must carry **exactly those 12**.
+  `hazync-run-workers.sh`; the Windows installer `hazync-setup-x86_64-windows.exe` (built by `release-sign.yml`);
+  `SHA256SUMS.txt` and `.asc`. Nine are uploaded by `release.sh`, four added by `release-sign.yml`: the release must
+  carry **exactly those 13** (12 up to v0.24.0, which had no installer).
 - **Images** (v0.24.0): mainnet `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, signet
   `d4210dae…`, headers zyncAPP `2db34e12…`. `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the
   ids and ELF hashes); `reproduce/LIBZYNC_IDS` pins them.
@@ -352,10 +353,11 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    (`release-sign.yml` signs what is attached at publish and picks up nothing later); the release is read back
    and must carry exactly those nine, each the staged size.
 7. **Wait for signing**: the `Sign release` run whose `headBranch` is the tag. It builds `hazync-verify-aarch64`,
-   checks it (under qemu) with `check-release-verifiers.sh --cli`, and adds `SHA256SUMS.txt` and `.asc`. On
+   checks it (under qemu) with `check-release-verifiers.sh --cli`, builds and tests the Windows installer (about
+   5 minutes), and adds `SHA256SUMS.txt` and `.asc`. On
    failure or timeout the script prints how to re-run it and keep `latest` on the last signed release.
-8. **Manifest**: `SHA256SUMS.txt` must list the nine assets plus `hazync-verify-aarch64`, with the staged files'
-   hashes; the release must carry exactly the **12** assets of `scripts/release-assets.txt`;
+8. **Manifest**: `SHA256SUMS.txt` must list the nine assets plus every `sign` binary (`hazync-verify-aarch64`, the
+   installer), with the staged files' hashes; the release must carry exactly the **13** assets of `scripts/release-assets.txt`;
    `SHA256SUMS.txt.asc` should verify (reported, not fatal, if the key is not imported locally).
 9. **`latest`**: set `make_latest`, read `/releases/latest` back, then download
    `/releases/latest/download/hazync-verify-x86_64-linux-gnu` until it contains the canonical id.
@@ -363,17 +365,21 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
 Check the count yourself afterwards:
 
 ```bash
-gh release view vX.Y.Z --json assets --jq '.assets|length'    # want 12
+gh release view vX.Y.Z --json assets --jq '.assets|length'    # want 13
 ```
 
 **`release-sign.yml`** (on `release: published`, or `workflow_dispatch` with a tag): builds
 `hazync-verify-aarch64` from the tag, asserts its embedded id, runs it on the real and tampered receipts, and
-attaches it; downloads the `hazync-*` assets, refuses unless they are exactly `scripts/release-assets.txt` at the
+attaches it; calls `windows-installer.yml` with `release: true` (the tag's app around the release's own prover and
+worker; installed, used and uninstalled on the runner, with the installed `host.exe` checked byte-identical to the
+zip's) and attaches the installer; downloads the `hazync-*` assets, refuses unless they are exactly `scripts/release-assets.txt` at the
 tag, checks that every host and verifier carries the tag's published image (`reproduce/LIBZYNC_IDS`), writes
 `SHA256SUMS.txt` headed by `# hazync <tag> commit <sha> image <id>`, signs it with the `GPG_PRIVATE_KEY` secret, uploads
 `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`. A re-sign (dispatch on an existing tag) must find the release's current
 manifest verifying and may not change any hash in it; an aarch64 verifier already on the release is kept, not rebuilt
-over. Tested by `scripts/test-release-sign.sh` (review 11-12, release #2).
+over, and so is an installer the existing manifest already signs (PyInstaller and Inno Setup are not byte-reproducible).
+The installer is compressed, so the sign step checks only that it is an Inno Setup installer; the tie to the signed
+zip is the byte check above. Tested by `scripts/test-release-sign.sh` (review 11-12, release #2).
 
 **The CUDA kernels' targets.** `prover/build-release.sh` sets `NVCC_FLAGS` to native SASS for sm_80, 86, 89, 90 and
 100 plus compute_100 PTX. Cards outside that list run from the PTX: Blackwell workstation and server cards such as

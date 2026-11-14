@@ -24,6 +24,15 @@ that are not soundness fixes may be handed over ([`docs/HANDOVER.md`](docs/HANDO
 `8888d59c` and checks a receipt by it as that image; the coordinator gains `LZ_HANDOVER_AT`.
 Notes: [`docs/RELEASE_NOTES_v0.26.0.md`](docs/RELEASE_NOTES_v0.26.0.md).
 
+## v0.25.0 — 2026-11-14
+Hazync v2 with **a Windows installer**: `hazync-setup-x86_64-windows.exe`, built and signed with the release, so
+a release now has 13 assets. **The images are unchanged** (mainnet `8888d59c`, signet `d4210dae`, headers `2db34e12`),
+so proofs made under v0.24.0 stay valid and the board does not restart. It also has release-integrity hardening,
+verifier and prep fixes, board fixes, the board server's post-switch fixes, and quinn-udp 0.5.16
+(RUSTSEC-2026-0538).
+Notes: [`docs/RELEASE_NOTES_v0.25.0.md`](docs/RELEASE_NOTES_v0.25.0.md).
+<https://github.com/hazync/hazync/releases/tag/v0.25.0>
+
 ## v0.24.0 — 2026-11-12 — re-baseline `863c9ce3` → `8888d59c`
 Hazync v2 (the libzync engine) on **RISC Zero 3.1.0**, which fixes soundness bugs in the zkVM's proof system. No
 guest source changed; every image id moved because the guest links risc0's new crates: mainnet `8888d59c`, signet

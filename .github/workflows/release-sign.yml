@@ -135,8 +135,51 @@ jobs:
             gh release upload "$TAG" -R "$REPO" hazync-verify-aarch64
           fi
 
+  build-installer:
+    # The Windows installer (hazync-setup-x86_64-windows.exe), built from THE TAG's app around the release's own prover
+    # and worker by windows-installer.yml, which also installs it, uses it, uninstalls it, and checks the installed
+    # host.exe is the release zip's byte for byte. It is a `sign` asset like the aarch64 verifier: it needs the
+    # release's Windows host, so it can only be built after publishing, and sign must wait for it (the race above).
+    # The tag is validated inside (env, then a vMAJOR.MINOR.PATCH match) before anything uses it.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
+    uses: ./.github/workflows/windows-installer.yml
+    with:
+      tag: ${{ github.event.release.tag_name || inputs.tag }}
+      release: true
+
+  attach-installer:
+    needs: build-installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: hazync-setup-x86_64-windows
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAW_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          REPO: ${{ github.repository }}
+        # ⚠ KEPT ONLY WHEN ALREADY SIGNED. PyInstaller and Inno Setup do not build byte-identical files, so on a re-sign
+        # this build differs from the signed one and sign would refuse it (a re-sign may not change a signed hash): the
+        # signed one stays, this build was only tested. But an installer on the release that NO manifest names yet was
+        # never signed, so it is replaced by this tested build rather than trusted.
+        run: |
+          [[ "$RAW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || { echo "::error::not a release tag: '$RAW_TAG'"; exit 1; }
+          f=hazync-setup-x86_64-windows.exe
+          [ -s "$f" ] || { echo "::error::the build produced no $f"; exit 1; }
+          signed=""
+          if gh release download "$RAW_TAG" -R "$REPO" -p SHA256SUMS.txt -D prev 2>/dev/null; then
+            signed=$(awk -v f="$f" '$2==f {print $1}' prev/SHA256SUMS.txt)
+          fi
+          if [ -n "$signed" ]; then
+            echo "$f is already signed in $RAW_TAG's manifest ($signed): kept (this build was only tested)"
+          else
+            gh release upload "$RAW_TAG" -R "$REPO" "$f" --clobber
+            echo "attached $f ($(sha256sum "$f" | cut -c1-64))"
+          fi
+
   sign:
-    # MUST wait for the aarch64 verifier, or it silently does not get signed.
+    # MUST wait for the aarch64 verifier and the installer, or they silently do not get signed.
     #
     # This job writes SHA256SUMS over whatever assets the release carries AT THE MOMENT IT RUNS. Without
     # this dependency the two jobs race, and sign almost always wins — it only downloads, while the other
@@ -150,7 +193,7 @@ jobs:
     #
     # The step that writes the manifest now also asserts the count, so a future reordering fails loudly
     # rather than shipping an unsigned artifact again.
-    needs: build-aarch64-verifier
+    needs: [build-aarch64-verifier, attach-installer]
     runs-on: ubuntu-latest
     steps:
       - name: Resolve and validate tag
@@ -293,6 +336,12 @@ jobs:
           with zipfile.ZipFile("hazync-host-x86_64-windows-cuda.zip") as z:
               n = z.read("host.exe").count(raw)
           print(f"hazync-host-x86_64-windows-cuda.zip host.exe: image {idh[:8]} {n}x"); bad += [] if n >= 1 else ["host.exe does not carry it"]
+          # The installer is compressed, so the id cannot be seen in it. windows-installer.yml (build-installer above)
+          # installed it and checked the installed host.exe is the zip's byte for byte; here, only that it is one.
+          b = open("hazync-setup-x86_64-windows.exe", "rb").read()
+          ok = b[:2] == b"MZ" and b"Inno Setup" in b
+          print(f"hazync-setup-x86_64-windows.exe: {'an Inno Setup installer' if ok else 'NOT an Inno Setup installer'}, {len(b)} bytes")
+          bad += [] if ok else ["hazync-setup-x86_64-windows.exe is not an Inno Setup installer"]
           if bad:
               print("::error::not this tag's image (" + idh[:8] + "): " + "; ".join(bad)); sys.exit(1)
           PY

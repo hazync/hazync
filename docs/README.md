@@ -17,7 +17,8 @@ of the past and are not kept current.
 | [`../README.md`](../README.md) | what Hazync is and where it stands |
 | [`EXPLAINER.md`](EXPLAINER.md) | Hazync v2 in plain words |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | prove blocks on your GPU (Linux, Windows natively or via WSL2), verify a proof |
-| [`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md) | the current release: RISC Zero 3.1.0, the new image ids, the header chain in one proof |
+| [`RELEASE_NOTES_v0.25.0.md`](RELEASE_NOTES_v0.25.0.md) | the current release: the Windows installer; images unchanged |
+| [`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md) | RISC Zero 3.1.0, the new image ids, the header chain in one proof |
 | [`RELEASE_NOTES_v0.23.0.md`](RELEASE_NOTES_v0.23.0.md) | the first Hazync v2 release, **withdrawn** (RISC Zero 3.0.5); kept for what it says about the switch |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | every release, newest first |
 

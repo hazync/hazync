@@ -153,6 +153,40 @@ wd "web=file://$TMP/error.html"; wd "web=file://$TMP/error.html"
 [ "$(calls)" = "Hazync: web DOWN|" ] && note "ok   a page without method_id counts as down" \
     || bad "an nginx error page satisfied the probe — the watchdog cannot see a dead coordinator behind a live proxy: $(calls)"
 
+echo "== 6b. a 429 (ntfy's daily quota) fails at once, posted once, with no Retry-After sleep =="
+# 2026-11-13: a crash loop spent ntfy's 250-a-day quota; curl --retry honoured the 429's Retry-After and
+# every check behind an alert died on its own timeout instead of reporting. Control: the old curl --retry
+# line against this server sleeps the full Retry-After (checked by hand, see PR).
+rm -f "$TMP/port429" "$TMP"/hit429*
+python3 - "$TMP" <<'PY' &
+import http.server, socketserver, sys, os
+d = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        k = len([f for f in os.listdir(d) if f.startswith("hit429")]) + 1
+        open(os.path.join(d, f"hit429_{k}"), "w").close()
+        self.send_response(429); self.send_header("Retry-After", "600"); self.end_headers()
+        self.wfile.write(b'{"code":42908,"http":429,"error":"limit reached: daily message quota reached"}')
+    def log_message(self, *a): pass
+with socketserver.TCPServer(("127.0.0.1", 0), H) as s:
+    open(os.path.join(d, "port429"), "w").write(str(s.server_address[1]))
+    s.timeout = 30
+    for _ in range(4):
+        s.handle_request()
+PY
+Q_PID=$!
+for _ in $(seq 1 50); do [ -s "$TMP/port429" ] && break; sleep 0.1; done
+t0=$(date +%s)
+NTFY_URL="http://127.0.0.1:$(cat "$TMP/port429")/topic" "$ALERT" "Hazync: quota" "x" >"$TMP/o429" 2>&1; rc=$?
+dt=$(( $(date +%s) - t0 )); hits=$(ls "$TMP"/hit429_* 2>/dev/null | wc -l)
+if [ "$rc" = 4 ] && [ "$dt" -lt 15 ] && [ "$hits" = 1 ] && grep -q "HTTP 429" "$TMP/o429"; then
+    note "ok   429: exit 4 in ${dt}s, posted once, says why"
+else
+    bad "429 handling: rc=$rc after ${dt}s, $hits post(s)"; cat "$TMP/o429"
+fi
+kill "$Q_PID" 2>/dev/null; wait "$Q_PID" 2>/dev/null
+
 echo "== 7. every alert drop-in points at an alert command that exists =="
 for f in dropins/*-alert.conf; do
     grep -q "OnFailure=hazync-alert@%n.service" "$f" || bad "$f has no OnFailure= to hazync-alert@"
