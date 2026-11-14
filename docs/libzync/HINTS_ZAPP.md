@@ -1,6 +1,7 @@
 # zyncAPP: a proven SwiftSync hints file (design, #722)
 
-Status: DESIGN, not built. For the author's approval. Base: `feat/undo-commit` (the U0 undo commitment, UNDO.md).
+Status: design APPROVED 2026-11-14; built on `feat/hints-zapp` (§10: what exists, measured, tested). Base: `feat/undo-commit`
+(the U0 undo commitment, UNDO.md).
 
 SwiftSync is Ruben Somsen's protocol; the hints file and block-undo formats are Robert Netzke's
 (`2140-dev/swiftsync-bips`: `swiftsync.md`, `hintsfile.md`, `block-undo.md`, `test_vectors/`; the `hintsfile` crate).
@@ -17,7 +18,8 @@ that the core receipt `core_id` proves valid from genesis (scripts checked).*
 ```
 HintsStatement {
   kind            u32       'ZH' statement, version 1
-  format          u32       1 = hintsfile.md file version 0x00 (numbering §2, bit order: open question Q1)
+  format          u32       1 = hintsfile.md file version 0x00, the BIP test vectors' bit order (built);
+                            2 = the same file with the hintsfile crate 0.2.0's bit order (built, for comparison)
   height          u32       H (the file header's height)
   block_hash      [u8;32]   block at H, internal byte order
   hints_sha256    [u8;32]   SHA-256 of the exact file bytes
@@ -98,9 +100,10 @@ all txids, outputs and prevouts need) and derives everything except spent-ness i
 No scripts, signatures or UTXO lookups are re-checked (Ruben: "you do not need to prove script validity"); the core
 proof already did. Memory is O(log n) roots plus one block.
 
-**Alternative (if the image has profile bit 6).** With `live_hash` (ECMH of the live coins) at the tip, step 3's
-spent leaves go: add each hinted-unspent coin to an ECMH and require `J.live_hash`. Only at H = T. Cheaper per spent
-output, dearer per unspent (an EC addition each). Choose by measurement (§6).
+**Alternative (profile bit 6).** The published images have it (46666b6f's profile is 113: bits 0, 4, 5, 6). With
+`live_hash` (ECMH of the live coins) at the tip, step 3's spent leaves go: add each hinted-unspent coin to an ECMH and
+require `J.live_hash`. Both are sound; the coin log is built because it works at any H ≤ T (`live_hash` only exists at
+the tip) and needs no EC arithmetic.
 
 ## 4. Verifying the chain proof, and what a node checks
 
@@ -141,8 +144,8 @@ then be over per-range digests); not in v1.
 
 ## 7. Distribution and entry points
 
-Three files per (network, H): `<net>-<H>.hints`, `<net>-<H>.undo`, `<net>-<H>.receipt` (succinct; Groth16 wrap
-optional, Q7). Served by hazync.org and anyone else: the proof decides, not the server.
+Three files per (network, H): `<net>-<H>.hints`, `<net>-<H>.undo`, `<net>-<H>.receipt` (succinct; no Groth16
+wrap: no trusted setup, nodes verify with our library, CLI, WASM or C ABI). Served by hazync.org and anyone else: the proof decides, not the server.
 
 - Host: `zync-hints <out> <H> --bitcoin-cli "<cmd>"` builds the native file, the undo file and the witness (block
   data from the node, spender records from `history.bin`, states from prep), then proves; the guest's bytes must
@@ -164,14 +167,16 @@ optional, Q7). Served by hazync.org and anyone else: the proof decides, not the 
   transaction, a mutated Merkle list, a wrong `undo_h` or `state_h`, a chain without U0 from block 1.
 - **Undo:** the undo file equals `libzync-undo-hashes 1 H`; `bspent`-format coins expanded to U0 match `undo_ref.py`.
 
-## 9. Open questions
+## 9. Decisions and open questions
 
-- **Q1** (Robert Netzke) Bit order: the crate or the BIP vectors? And step 4.2's index reset, a typo?
-- **Q2** (Netzke / Ruben) Should the file header carry the block hash at H? Today a file alone fits any fork.
-- **Q3** Is U0 acceptable as the "hashes of the block inputs" file, or should the per-block hash be over the BIP's
-  `Coin` (with its input index)?
-- **Q4** Which H do providers publish (a fixed step, Core's assumevalid height)? One receipt per H.
-- **Q5** (Ruben) His answer "5: Undecided": the question it answered is unknown. Author to fill in.
-- **Q6** #34004's numbering as a second `format`, or hintsfile only?
-- **Q7** Verifying in a C++ node: Groth16 wrap plus a small BN254 verifier, or the external CLI?
-- **Q8** Is profile bit 6 (`live_hash`) in the current images (§3 alternative)? Signet first or mainnet first?
+Decided by the author (2026-11-14): no Groth16 (Q7); BIP/crate numbering only, #34004 documented, not a format (Q6);
+publish at heights we choose, any H is valid because each file is proved (Q4); Ruben's "undecided" was the refresh
+cadence, full files or per-epoch deltas, not blocking (Q5); bit 6 is in the images, the coin log is used (Q8, §3);
+mainnet first.
+
+Asked of the maintainers, open: **Q1** the bit order (format 1 follows the BIP's vectors; a change is a new format id)
+and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as the input-hash file.
+
+## 10. Built (2026-11-14)
+
+TBD

@@ -291,7 +291,7 @@ fn tamper(case: &str, fr: &mut [Frame], blocks: &[Block], tail: &mut [H]) -> Res
             let mut k = 0;
             while k < f.status.len() {
                 if f.status[k] == 0 { return Some((i, k)); }
-                k += 3;
+                k += 3; // a spent entry is (height, tx, vin)
             }
         }
         None
