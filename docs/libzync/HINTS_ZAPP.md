@@ -147,13 +147,14 @@ then be over per-range digests); not in v1.
 Three files per (network, H): `<net>-<H>.hints`, `<net>-<H>.undo`, `<net>-<H>.receipt` (succinct; no Groth16
 wrap: no trusted setup, nodes verify with our library, CLI, WASM or C ABI). Served by hazync.org and anyone else: the proof decides, not the server.
 
-- Host: `zync-hints <out> <H> --bitcoin-cli "<cmd>"` builds the native file, the undo file and the witness (block
-  data from the node, spender records from `history.bin`, states from prep), then proves; the guest's bytes must
-  equal the native file's.
-- CLI: `swiftsync-verify --hints <file> --hints-receipt <r> [--undo <file>] --expect <H>:<hash>`; prints the statement,
-  non-zero exit on any failure.
-- WASM `verify_hints(receipt, sha256, expect)` (the page hashes the ~100 MB file streaming); C ABI
-  `swiftsync_verify_hints` for a node patch to call before `-utxohints`. Core itself is unchanged.
+- Host: `zyncapp hints-prove <block dir> <H> <core receipt> <out> [--format 1|2]` replays blocks 1..T natively from
+  the block files (`fetch_block_rpc.py`), checks its block forest against the core state, writes the file and the undo
+  file, runs the same derivation natively, then proves; the guest's statement must equal the native one.
+- CLI: `swiftsync-verify hints [--expect <H>:<hash>] [--expect-tip <T>:<hash>] [--undo <file>] <receipt> <file>` (and
+  `zyncapp hints-verify`, the same library call); exit 0 OK, 2 DEMO, 1 FAIL.
+- WASM `verify_hints` / JS `verifyHints({receipt, file, undo, expect})` (the file is hashed on the device); C ABI
+  `swiftsync_verify_hints` (include/swiftsync_verify.h) for a node patch to call before `-utxohints`. One implementation,
+  `swiftsync_verify::hints::verify_hints`. Core itself is unchanged.
 
 ## 8. Tests
 
@@ -179,4 +180,53 @@ and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as
 
 ## 10. Built (2026-11-14)
 
-TBD
+**Code.** `libzync/src/hints.rs` (the derivation and the Elias-Fano encoder/strict decoder, shared by guest and host),
+`prover/zyncapps/methods/hints` (the guest; local build id `dff7f87c…`, NOT yet a reproducible published id),
+`prover/zyncapps/host/src/hints_host.rs` + `hints-prove` / `hints-verify`, `swiftsync-verify/src/hints.rs` (the
+verifier for CLI, WASM, C ABI), `scripts/libzync/hints_ref.py` (an independent generator written from hintsfile.md),
+`prover/zyncapps/hints-crate-ref` (the `hintsfile` crate 0.2.0 as a second reference, test only).
+
+**Input framing.** After the core receipt, journal, network flag, format, H, the genesis header and a profiling step:
+per block one frame `[L, k, s] ‖ block (L bytes, header ‖ count ‖ transactions without witness) ‖ k tracked positions
+‖ s status words (0 = unspent at H; height, tx, vin = its spender) ‖ state (8) ‖ undo (8)`; then `[T − H]` and the
+block-forest leaves above H.
+
+**Measured: CPU execute, no dev mode** (risc0 executor on hazync-coord; the core receipt an unresolved assumption whose
+journal is the published host's `libzync-prep` state at T, the guest's every check run). User cycles:
+
+| H (T) | user cycles | padded | segments | per block | per counted output | execute |
+|---|---|---|---|---|---|---|
+| 1,999 (1,999) | 27,432,748 | 30,932,992 | 30 | 13,723 | 13,447 | 0.6 s |
+| 1,999 (10,000) | 40,235,303 | 44,564,480 | 43 | | | 0.8 s |
+| 10,000 (10,000) | 135,059,849 | 152,043,520 | 145 | 13,506 | 13,347 | 2.9 s |
+| 100,000 (100,000) | 2,391,165,421 | 2,726,297,600 | 2,600 | 23,912 | 9,049 | 42.0 s |
+
+Per 1,000-block window (`--prof 1000`, cumulative `env::cycle_count()`): about 13.4-14.0 M while blocks hold about one
+transaction (windows to 41,000); 22.3 M for the window ending 81,000 (1,856 transactions, 2,257 outputs, 2,224 inputs,
+502 kB without witnesses). A leaf above H costs about 1,600 (12.8 M for 8,001). Two- and four-variable linear fits
+over the 100 windows did not fit (relative error up to 0.27 and 0.54), so no per-input or per-byte rate is claimed;
+modern blocks are not measured. No mainnet figure is given.
+
+**Measured: real CPU proofs** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, a shared box). The core
+receipt: the published host (`46666b6f`) proving blocks 1..3 from genesis, 1,061.5 / 980.3 / 943.3 s per block. The
+hints receipt for H = 3 (T = 3): 147.8 s; H = 2 (T = 3, one leaf above H): 156.0 s; 225,202 bytes each. Blocks 1..3
+have no spends: the paths with spends, same-block spends and the BIP30 blocks are covered by the executions above, not
+by a proof. Proving the core further on CPU (~16 min a block here) was not attempted.
+
+**Tested** (`scripts/libzync/hints_test.sh` at H = 1,999, 10,000 and 100,000: 26 of 26 each):
+- the BIP's three Elias-Fano vectors; format 1 == `hints_ref.py` byte for byte (5,822 / 28,862 / 226,363 bytes);
+  format 2 == the `hintsfile` crate's own writer on `hints_ref.py`'s indices, byte for byte, and the crate reads it back;
+  counts and value equal (100,000: 264,251 indexed, 71,888 unspent, 499,990,000,000,000 sat, i.e. 5,000,000 BTC less
+  the two overwritten 50 BTC coinbases) and equal the core state's `utxo_value`;
+- refused by the guest: a spent coin claimed unspent, the reverse, a wrong spender, a wrong tracked bit, a flipped coin
+  state, a flipped undo hash, a flipped nonce, the coinbase listed twice, the last transaction listed twice (block
+  586, the same Merkle root: "mutated", CVE-2012-2459), a dropped and a swapped transaction, a trailing byte, a core
+  lineage, a pre-undo core image, another core id, an unknown format, an assumevalid core, a flipped leaf above H;
+- H = 1,999 under T = 10,000 gives the same file as under T = 1,999;
+- the verifier on the real receipts (`hints_verify_test.sh` 11/11, `test-hints.mjs` 5/5, `test_hints.c` 4/4, unit
+  test `hints::tests::real_receipts`): the proven file DEMO (3 blocks are below minimum work), refused: a flipped bit,
+  a truncated file, a non-canonical re-encoding, the file for H = 2, a tampered undo file, another hash or height at H,
+  a receipt of another image, an untrusted core image, `RISC0_DEV_MODE` set; H = 2 needs `--expect-tip` for T.
+
+**Not done.** A reproducible build and published id for the hints guest; a proof over a chain with spends; a cost for
+modern blocks; signet (the code takes `--signet`, untested); CI wiring.
