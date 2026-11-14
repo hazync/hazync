@@ -116,19 +116,34 @@ libzync-reforest <out dir> <S> --bitcoin-cli "<cmd>" [--all] [--jobs N] [--bundl
 libzync-undo-hashes <lo> <hi> --bitcoin-cli "<cmd>" [--jobs N]      # each block's undo hash, from a node
 ```
 
-1. **Stop prep at a save point** (`systemctl stop libzync-prep`). Its runner always resumes from the newest COMPLETE
-   save point, `state_<S>.json` with `.coinlog` and `.trie` (every 1,000 blocks); take that S (`libzync-prep-run.sh`'s
-   rule). Re-forest holds the out dir's `LOCK`, so it refuses to run while prep does.
-2. **Re-forest** with the NEW host, HAZYNC_COINLOG_DIR / HAZYNC_TRIE_DIR unset:
+1. **Stop everything that writes the run's files**: `libzync-prep` at a save point (`systemctl stop libzync-prep`;
+   its runner resumes from the newest COMPLETE save point, `state_<S>.json` with `.coinlog` and `.trie`, every 1,000
+   blocks: take that S, as `libzync-prep-run.sh` does), and `libzync-board-prep`, the bundle pruner
+   (`hazync-lz-prune-leaves`) and anything else that adds or removes leaf bundles. Re-forest holds the `LOCK` of the
+   out dir and of each bundle directory it is given (prep holds both while it runs), so it refuses to run beside prep.
+2. **Re-forest** with the NEW host, HAZYNC_COINLOG_DIR / HAZYNC_TRIE_DIR / HAZYNC_PREP_LEAF_BUNDLES unset:
    `host libzync-reforest $LZ_ROOT/out S --bitcoin-cli "bitcoin-cli -datadir=…" --all --bundles $LZ_ROOT/leaves`.
    - Phase 1 asks the node (`getblock <hash> 3`, unpruned, Core ≥ 25) for each block's spent coins and writes
-     `out/reforest/undo.tsv` as it goes; a rerun resumes after its last line.
+     `out/reforest/undo.tsv`, each line with a check field, as it goes. A rerun resumes after its last line: a torn
+     last line is fetched again, a damaged line stops the command, and a sample of the cached heights is fetched again
+     and must agree. ⛔ **For a fresh run (another node, another chain, any doubt), delete `out/reforest/` first.** A
+     prevout of height 0 or above its block (undo data from before Core 0.15) is refused.
+   - Phase 1b: every leaf bundle at heights 1..S in the `--bundles` (and `--check-bundles`) directories carries prep's
+     own copy of its block's spent coins; their undo hash must be the node's, or the command stops before writing
+     anything. The prep box keeps bundles at `HAZYNC_PREP_LEAF_AT` heights: give that directory.
    - Phase 2 walks `state_1..S.json`: each must be the node's block at its height, and its `block_roots` the old forest
      over the states before it (or, on a rerun, the new one); anything else stops the command. It writes the new
-     forest, stamped as the new prep stamps (`--all`: every state, else only `state_S.json`), each file replaced by a
-     rename; `--bundles` gives each leaf bundle 2..S+1 its re-forested `prev` and names any above S+1 (remove them).
+     forest, stamped as the new prep stamps (`--all`: every state, else only `state_S.json`), each file written to a
+     temporary file, synced and renamed (the directory synced every 1,000 files and at the end); `--bundles` gives each
+     leaf bundle 2..S+1 its re-forested `prev` and names any above S+1 (remove them).
+   - A `history.bin` in the out dir gets the undo hashes in records 1..S. The deployed prep writes none
+     (`libzync-prep-run.sh` does not set `HAZYNC_PREP_HISTORY`); the zyncAPP follower writes one, but it deletes its
+     per-block states, so it cannot be re-forested: it needs a fresh `ZAPP_ROOT` after the board resets anyway.
+   - Last, `out/reforest/DONE_<S>` (S, its block hash, the new `state_S.json`'s sha256) and `state_S.forest`.
 3. **Swap the binary** (`$LZ_ROOT/bin/host_lz` = the v0.26.0 host) and **start prep**: the runner continues from S
-   with `HAZYNC_PREP_CONTINUE=1`, re-stamping on read, and every block from S+1 on gets the 0x05 leaf directly.
+   with `HAZYNC_PREP_CONTINUE=1`, re-stamping on read, and every block from S+1 on gets the 0x05 leaf directly. The new
+   prep writes `state_<h>.forest` at every save point, and refuses to continue from a state at a height whose leaf has
+   the commitment without that marker: a run made before the commitment cannot be continued by mistake.
 4. **Board-prep** cuts its window of bundles again after the board resets (or is re-forested the same way).
 
 **Tested** (2026-11-14, hazync-coord, CPU, the node there; `accept.sh` of the PR):

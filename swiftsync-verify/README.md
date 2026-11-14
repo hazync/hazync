@@ -50,7 +50,7 @@ receipt and a header naming network, image, height, tip, work and trie root (`do
 1..200 under `8888d59c`; `python3 vectors/run_vectors.py <verifier>`).
 
 **The image id is the trust root.** The built-in ids (`src/lib.rs`, `IMAGES`) are the published ones of
-`reproduce/LIBZYNC_IDS` (v0.26.0: mainnet `46666b6f…`, signet `c3a68e2d…`, each network's current image, the last entry), written by
+`reproduce/LIBZYNC_IDS` (v0.26.0: mainnet `46666b6f…`, signet `01a80f17…`, each network's current image, the last entry), written by
 `reproduce/pin-libzync-ids.py`, which keeps the earlier images (v0.24.0's `8888d59c…`, `d4210dae…`) so their
 proofs verify by id; `--image <earlier id>` selects one with its own lineage. A
 reader should rebuild M from the published commit and pass it with `--image <hex>` rather than trust this file.

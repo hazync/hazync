@@ -14,7 +14,7 @@ open: the status below, the round-by-round record in [`docs/libzync/LIBZYNC.md`]
 **Independent review is explicitly invited**; if you find a way to make an invalid block prove valid, that is the
 finding that matters most.
 
-This page covers **Hazync v2** (the libzync engine): published images mainnet `46666b6f`, signet `c3a68e2d` and the
+This page covers **Hazync v2** (the libzync engine): published images mainnet `46666b6f`, signet `01a80f17` and the
 header-chain zyncAPP `2db34e12` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), release v0.26.0, RISC Zero 3.1.0.
 Both start their chains at genesis; the verifier keeps v0.24.0-v0.25.0's `8888d59c` so its receipts still verify.
 What a proof rests on is set out in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md), and how to review it in

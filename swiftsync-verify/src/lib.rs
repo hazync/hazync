@@ -69,10 +69,10 @@ pub const IMAGES: &[Image] = &[
         checkpoint_height: 325_000,
         lineage: &[],
     },
-    // v0.26.0 signet (pinned from ca482bf5): the undo-data commitment, from genesis. The CURRENT signet image.
+    // v0.26.0 signet (pinned from 63ab228a): the undo-data commitment, from genesis. The CURRENT signet image.
     Image {
         network: "signet",
-        method_id_hex: "c3a68e2ddd6f2b229dc4c9c23b1ec6220d349f81f1629a8f0a3726e87640cd85",
+        method_id_hex: "01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7",
         profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,

@@ -8,7 +8,8 @@
 # genesis under this image. The guest also carries the handover code (built and tested, not used by this image).
 # Also the 11-14 soundness review's low findings (hardening; docs/RELEASE_NOTES_v0.26.0.md). NO CONSENSUS-RULE CHANGE,
 # same RISC Zero 3.1.0. Pinned from two agreeing reproducible builds of ca482bf5 on hazync-coord (one with the
-# dependency stage cached, one with --no-cache); CI's reproducible-image-id job rebuilds it on every push.
+# dependency stage cached, one with --no-cache), and rebuilt unchanged from 63ab228a (the round-2 fixes moved only
+# the signet image); CI's reproducible-image-id job rebuilds it on every push.
 # 8888d59c's proofs stay verifiable by id (swiftsync-verify keeps it in IMAGES, before this one).
 #
 # 1ff5a129… (2026-11-14, built for v0.26.0 with 8888d59c pinned at block 2000) and dc392f3d… (the undo commitment before

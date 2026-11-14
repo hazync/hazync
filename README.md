@@ -43,7 +43,7 @@ A proof names the exact program that produced it. The published Hazync v2 images
 
 ```
 mainnet  46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
-signet   c3a68e2ddd6f2b229dc4c9c23b1ec6220d349f81f1629a8f0a3726e87640cd85
+signet   01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7
 headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632   (the header-chain zyncAPP)
 ```
 

@@ -7,7 +7,7 @@ v0.22.1, image `37987b85…`); its documents are kept as a record in [`docs/hist
 ([`RELEASE_NOTES_v0.24.0.md`](../RELEASE_NOTES_v0.24.0.md)). **Published images** (frozen core c14 guest source,
 tag `libzync-c14` = `ce4e1e3`, rebuilt on risc0 3.1.0 at `7dfb05b`; built by `reproduce/libzync.Dockerfile`,
 reproduced by two builds and by CI): mainnet **`46666b6f…`** (v0.26.0; from genesis, with the per-block undo-data commitment,
-[`UNDO.md`](UNDO.md)), signet **`c3a68e2d…`**, header-chain zyncAPP
+[`UNDO.md`](UNDO.md)), signet **`01a80f17…`**, header-chain zyncAPP
 **`2db34e12…`** ([`../../reproduce/LIBZYNC_IDS`](../../reproduce/LIBZYNC_IDS)). v0.23.0 (risc0 3.0.5, mainnet
 `863c9ce3…`, signet `73b62530…`) is **withdrawn**: 3.1.0 fixes soundness bugs in RISC Zero's proof system, and 3.1.0
 verifiers refuse 3.0.x receipts. Laptop builds of the same source give other ids (on 3.0.5, mainnet `bbf82800…`),
