@@ -3,17 +3,20 @@
 no code with the guest or the verifier. Python standard library only.
 
   block_forest_ref.py vectors                   print the test vectors that swiftsync-verify's unit tests pin
-  block_forest_ref.py check <hashes> <states> <state>
+  block_forest_ref.py check <hashes> <states> <state> [--undo-from <h> <block dir>]
         <hashes>: one block hash per line, display order, height 0 first.
         <states>: the coin commitment after each block, one JSON object per line, height 0 first:
                   {"h": height, "leaves": n, "value": sat, "roots": [hex or null, ...]} (index = tree level), as
                   coinlog_ref.py / utreexo_ref.py write them with STATES_OUT=<file>.
         <state>:  a ChainState JSON at the last height. Compares the proof's block_roots and block_leaves with this
                   file's. Exit 1 on any difference.
+        --undo-from <h> <block dir>: blocks h and above (never block 0) have the 0x05 leaf, which commits the block's
+                  undo hash (docs/libzync/UNDO.md), computed here from <block dir>/block_<n>.json; below h, the 0x02 leaf.
+                  h is the first block proved by an image with the commitment: 1 for an image with an empty lineage.
 """
 import hashlib, json, struct, sys
 
-TAG_NODE, TAG_BLOCK_LEAF, TAG_LINEAGE, TAG_UTXO_STATE = 0x01, 0x02, 0x03, 0x04
+TAG_NODE, TAG_BLOCK_LEAF, TAG_LINEAGE, TAG_UTXO_STATE, TAG_BLOCK_LEAF_UNDO = 0x01, 0x02, 0x03, 0x04, 0x05
 
 
 def sha256(b):
@@ -26,8 +29,20 @@ def utxo_state(leaves, value, roots):
 
 
 def leaf(block, height):
-    """block = (hash in internal byte order, utxo_state digest after it)."""
+    """block = (hash in internal byte order, utxo_state digest after it[, undo hash or None])."""
+    if len(block) > 2 and block[2] is not None:
+        return sha256(bytes([TAG_BLOCK_LEAF_UNDO]) + block[0] + struct.pack("<I", height) + block[1] + block[2])
     return sha256(bytes([TAG_BLOCK_LEAF]) + block[0] + struct.pack("<I", height) + block[1])
+
+
+def undo_hash(j):
+    """docs/libzync/UNDO.md: SHA-256 over each input's SHA-256(code u32 | amount u64 | len u32 | script), block order."""
+    ds = b""
+    for t in j["txs"]:
+        for p in t["prevouts"]:
+            spk = bytes.fromhex(p["spk"])
+            ds += sha256(struct.pack("<IQI", p["coin_height"] * 2 + (p["coin_is_coinbase"] & 1), p["value"], len(spk)) + spk)
+    return sha256(ds)
 
 
 def parent(left, right):
@@ -100,20 +115,33 @@ def vectors():
         print(f"root[{i}] of 11    ", r.hex() if r else "None")
     for i, p in enumerate(path(hs, 5)):
         print(f"path(5)[{i}]        ", p.hex())
+    # The undo-data commitment from block 4 on (a handover at 4 from a pre-undo image): u_i = SHA-256("undo" | i u32 LE).
+    hu = [(b, st, sha256(b"undo" + struct.pack("<I", i)) if i >= 4 else None) for i, (b, st) in enumerate(hs)]
+    print("leaf_u(b_5, 5)    ", leaf(hu[5], 5).hex())
+    for i, r in enumerate(roots(hu)):
+        print(f"root_u[{i}] of 11  ", r.hex() if r else "None")
+    for i, p in enumerate(path(hu, 5)):
+        print(f"path_u(5)[{i}]      ", p.hex())
     print("lineage(1 hop)    ", lineage([((1, 2, 3, 4, 5, 6, 7, 8), 974000)]).hex())
     print("lineage(2 hops)   ", lineage([((1, 2, 3, 4, 5, 6, 7, 8), 974000), ((9, 9, 9, 9, 9, 9, 9, 9), 980000)]).hex())
     print("lineage(xver hop) ", lineage([((1, 2, 3, 4, 5, 6, 7, 8), 974000), ((9, 9, 9, 9, 9, 9, 9, 9), 980000, bytes(range(32)))]).hex())
 
 
-def check(hashes_path, states_path, state_path):
+def check(hashes_path, states_path, state_path, undo_from=None, block_dir=None):
     bh = [bytes.fromhex(l.strip())[::-1] for l in open(hashes_path) if l.strip()]
     sts = [json.loads(l) for l in open(states_path) if l.strip()]
     assert [x["h"] for x in sts] == list(range(len(sts))), "states file: one line per height from 0"
     st = json.load(open(state_path))
     n = st["height"] + 1
     assert len(bh) >= n and len(sts) >= n, f"need {n} hashes and states, have {len(bh)} and {len(sts)}"
-    hs = [(bh[i], utxo_state(sts[i]["leaves"], sts[i]["value"], [bytes.fromhex(r) if r else None for r in sts[i]["roots"]]))
+    def undo(i):
+        if undo_from is None or i == 0 or i < undo_from:
+            return None
+        return undo_hash(json.load(open(f"{block_dir}/block_{i}.json")))
+    hs = [(bh[i], utxo_state(sts[i]["leaves"], sts[i]["value"], [bytes.fromhex(r) if r else None for r in sts[i]["roots"]]), undo(i))
           for i in range(n)]
+    if undo_from is not None:
+        print(f"undo-data commitment in the leaves of blocks {max(undo_from, 1)}..{n - 1}")
     want = [bytes(r) if r else None for r in st["block_roots"]]
     got = roots(hs)
     print(f"blocks {len(hs)}, proof height {st['height']}, proof leaves {st['block_leaves']}")
@@ -127,5 +155,7 @@ if __name__ == "__main__":
         vectors()
     elif sys.argv[1:2] == ["check"] and len(sys.argv) == 5:
         check(sys.argv[2], sys.argv[3], sys.argv[4])
+    elif sys.argv[1:2] == ["check"] and len(sys.argv) == 8 and sys.argv[5] == "--undo-from":
+        check(sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[6]), sys.argv[7])
     else:
         sys.exit(__doc__)

@@ -2,9 +2,10 @@
 # libzync CI: the chain from genesis on the MAINNET TEST VARIANT host (dev mode: every guest executed and its claims
 # checked, no receipts proved), then every test that builds on it.
 # The test variant (build-hosts.sh host_m0, HAZYNC_TEST_LINEAGE=1) is the mainnet coin-log image with an empty test
-# lineage instead of the published one. The published image pins its predecessor below its handover height (2000 in
-# v0.26.0), so by design it never proves those blocks: its prep stamps them with the predecessor's id, and a proof of
-# one by it is refused as a forged history. Everything else is the same source.
+# lineage instead of the published one. A published image that pins a predecessor below its handover height by design
+# never proves those blocks (its prep stamps them with the predecessor's id, and a proof of one by it is refused as a
+# forged history); v0.26.0's lineage is empty, but the test variant keeps this suite independent of it, and its N
+# (host_mN) is the image the handover rehearsal needs. Everything else is the same source.
 #   1. mainnet 1..200 from genesis; the coin log and block forest equal two independent Python implementations; the
 #      genesis anchor is the pinned one;
 #   2. leaf bundles: prep 1..200 equals the proved run; witnesses equal the bundles; leaves 198..200 proved from their
@@ -34,8 +35,16 @@ want "$O/m200.log" "LZ_PROVE_RANGE_DONE 1..=200" "prove-range 1..200 finished"
 none "$O/m200.log" "panicked" "no guest or host panic"
 STATES_OUT=$O/m200_states.jsonl python3 "$Z/scripts/libzync/coinlog_ref.py" "$T/mainnet" 200 "$M/state_200.json" > "$O/coinlog_ref.log" 2>&1
 want "$O/coinlog_ref.log" "COINLOG_REF_MATCH" "coin log == coinlog_ref.py"
-python3 "$Z/scripts/libzync/block_forest_ref.py" check "$T/mainnet/hashes.txt" "$O/m200_states.jsonl" "$M/state_200.json" > "$O/forest_ref.log" 2>&1
-want "$O/forest_ref.log" "BLOCK_FOREST_OK" "block forest == block_forest_ref.py"
+# every block but genesis has the leaf with the undo-data commitment (an empty lineage; docs/libzync/UNDO.md)
+python3 "$Z/scripts/libzync/block_forest_ref.py" check "$T/mainnet/hashes.txt" "$O/m200_states.jsonl" "$M/state_200.json" --undo-from 1 "$T/mainnet" > "$O/forest_ref.log" 2>&1
+want "$O/forest_ref.log" "BLOCK_FOREST_OK" "block forest (undo-data commitment in leaves 1..200) == block_forest_ref.py"
+# the control: the same forest without the commitment (the pre-undo leaf format) must NOT match
+python3 "$Z/scripts/libzync/block_forest_ref.py" check "$T/mainnet/hashes.txt" "$O/m200_states.jsonl" "$M/state_200.json" > "$O/forest_ref_c.log" 2>&1
+want "$O/forest_ref_c.log" "BLOCK_FOREST_MISMATCH" "control: the forest without undo hashes does not match"
+# the guest's undo hash of every block with inputs (logged by each aggregate) == undo_ref.py
+n=0; bad=0; for h in $(python3 -c "import json;print(' '.join(str(h) for h in range(1,201) if any(t['prevouts'] for t in json.load(open('$T/mainnet/block_%d.json'%h))['txs'])))"); do
+  n=$((n+1)); python3 "$Z/scripts/libzync/undo_ref.py" check "$O/m200.log" "$T/mainnet/block_$h.json" >> "$O/undo_ref.log" 2>&1 || bad=$((bad+1)); done
+[ $n -gt 0 ] && [ $bad = 0 ] && pass "undo hash == undo_ref.py on all $n blocks of 1..200 with inputs" || fail "undo hash != undo_ref.py on $bad of $n blocks ($(grep -a MISMATCH "$O/undo_ref.log" | head -2))"
 GA=$(python3 "$Z/scripts/libzync/genesis_anchor_id.py" mainnet "$(printf '0%.0s' {1..64})" | grep -oE 'anchor_id [0-9a-f]{64}' | cut -d' ' -f2)
 SA=$(python3 -c "import json;print(bytes(json.load(open('$M/state_200.json'))['anchor_id']).hex())")
 [ -n "$GA" ] && [ "$GA" = "$SA" ] && pass "state_200 anchor_id == the pinned genesis anchor ${GA:0:8}" || fail "anchor_id ${SA:0:16} != genesis ${GA:0:16}"

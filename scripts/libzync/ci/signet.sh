@@ -13,6 +13,6 @@ want "$O/s100.log" "LZ_PROVE_RANGE_DONE 1..=100" "prove-range 1..100 finished"
 none "$O/s100.log" "panicked" "no guest or host panic"
 STATES_OUT=$O/s100_states.jsonl python3 "$Z/scripts/libzync/coinlog_ref.py" "$T/signet" 100 "$G/state_100.json" > "$O/coinlog_ref.log" 2>&1
 want "$O/coinlog_ref.log" "COINLOG_REF_MATCH" "coin log == coinlog_ref.py"
-python3 "$Z/scripts/libzync/block_forest_ref.py" check "$T/signet/hashes.txt" "$O/s100_states.jsonl" "$G/state_100.json" > "$O/forest_ref.log" 2>&1
-want "$O/forest_ref.log" "BLOCK_FOREST_OK" "block forest == block_forest_ref.py"
+python3 "$Z/scripts/libzync/block_forest_ref.py" check "$T/signet/hashes.txt" "$O/s100_states.jsonl" "$G/state_100.json" --undo-from 1 "$T/signet" > "$O/forest_ref.log" 2>&1
+want "$O/forest_ref.log" "BLOCK_FOREST_OK" "block forest (undo-data commitment in leaves 1..100) == block_forest_ref.py"
 finish signet

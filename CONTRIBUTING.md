@@ -1,9 +1,9 @@
 # Join the Hazync Proof Party
 
 > **The board runs Hazync v2** (the libzync engine, on RISC Zero 3.1.0) since 12 November 2026, and proves the chain
-> again from genesis: blocks 1..1999 under image `8888d59c` (v0.24.0, v0.25.0), and from block 2000 under `1ff5a129`
-> (release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0)), which continues it by a handover
-> ([`docs/HANDOVER.md`](docs/HANDOVER.md)). What it proves and how: [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md).
+> again from genesis under image `@NEWM8@` (release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0),
+> whose block leaves commit each block's undo data, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)); `8888d59c`
+> (v0.24.0, v0.25.0) ran it before. What it proves and how: [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md).
 > Hazync v1 (the original CORE guest `37987b85`) is no longer proved; its last release is v0.22.1, which still
 > verifies v1 proofs, and its documents are in [`docs/history/`](docs/history/README.md). Release v0.23.0 is
 > **withdrawn**: do not use it (see [`CHANGELOG.md`](CHANGELOG.md)).
@@ -85,8 +85,8 @@ is RAM-tight it will crawl rather than fall back — set `HAZYNC_SEG_PO2=20` (or
 
 Download the prebuilt prover from the **latest release** — it embeds the published image, so the coordinator accepts your proofs.
 
-⛔ **Take the latest release, and restart anything started on an older one.** From the handover at block 2000 the
-board accepts only proofs by image `1ff5a129` (v0.26.0); before it, only `8888d59c` (v0.24.0, v0.25.0). A v0.23.0 host proves under `863c9ce3`, which RISC Zero 3.1.0 verifiers refuse, and
+⛔ **Take the latest release, and restart anything started on an older one.** Since v0.26.0 the
+board accepts only proofs by image `@NEWM8@` (v0.26.0); before it, only `8888d59c` (v0.24.0, v0.25.0). A v0.23.0 host proves under `863c9ce3`, which RISC Zero 3.1.0 verifiers refuse, and
 a v0.22.x host proves Hazync v1. `run-workers.sh` checks the image id **only when it starts**, so a worker loop
 started on an older release keeps producing proofs the board refuses until you restart it.
 
@@ -138,7 +138,7 @@ check: see [`SECURITY.md`](SECURITY.md#verifying-releases). Take the CLI from th
 URL: it holds your ed25519 signing key and decides what gets submitted under your name.
 
 Stronger still: run `./hazync-host-x86_64-linux-gnu-cuda method-id` (or the CPU binary) and confirm it prints
-`1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a` (v0.26.0; `8888d59c…` for v0.24.0 and v0.25.0), the id in
+`@NEWMAIN@` (v0.26.0; `8888d59c…` for v0.24.0 and v0.25.0), the id in
 [`reproduce/METHOD_ID`](reproduce/METHOD_ID) and [`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS).
 
 > **Building from source instead?** You *must* embed the **published image**, or the coordinator rejects every

@@ -56,7 +56,7 @@ Given a receipt R and the network. Both verifiers (`swiftsync-verify`, `host lib
 below; step 7 needs a source you name (without one they print the tip hash to compare).
 
 1. `R.verify(M)`, where M is the published libzync image id for that network (`reproduce/LIBZYNC_IDS`; v0.26.0,
-   risc0 3.1.0: mainnet `1ff5a129…`, signet `28e39600…`). The built-in table (`IMAGES` in `swiftsync-verify/src/lib.rs`,
+   risc0 3.1.0: mainnet `@NEWM8@…`, signet `@NEWS8@…`). The built-in table (`IMAGES` in `swiftsync-verify/src/lib.rs`,
    the C ABI's and the WASM build's) holds these as each network's current image, after the earlier images they
    continue or replace (v0.24.0's `8888d59c…` / `d4210dae…`), which stay verifiable by id. Receipts of withdrawn images (v0.23.0's `863c9ce3…`, risc0
    3.0.5) are refused: 3.1.0's verifier parameters differ. Another image needs `--image <hex>` (with `--product` for

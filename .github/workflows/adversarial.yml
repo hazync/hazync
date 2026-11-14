@@ -1899,8 +1899,8 @@ jobs:
   # ── libzync soundness (2026-11-08) ────────────────────────────────────────────────────────────────────────────
   # The libzync test pass in CI, on hosts built in the reproducible container: the mainnet and signet hosts embed the
   # PUBLISHED guest ELFs (reproduce/LIBZYNC_IDS), so these jobs test what is published. The exception is libzync-chain:
-  # it proves mainnet from genesis, which the published image (its predecessor pinned at 2000) never does by design,
-  # so it runs on the mainnet TEST VARIANTS host_m0 / host_mN (build-hosts.sh; separate artifact). `soundness-suite`
+  # it runs on the mainnet TEST VARIANTS host_m0 / host_mN (build-hosts.sh; separate artifact), so its handover rehearsal
+  # has an image pinning another at a test height (v0.26.0's published lineage is empty; a later one may pin a predecessor). `soundness-suite`
   # (the required check) gates on all of them. Drivers: scripts/libzync/ci/ (each step greps a positive marker: a step that crashed
   # or printed nothing fails).
   libzync-hosts:
@@ -1950,7 +1950,7 @@ jobs:
     # mainnet 1..200 from genesis vs the reference implementations; leaf bundles; a 200-leaf join tree and its
     # negatives; prep re-stamped under another image; the coordinator in libzync mode with the stock worker; the
     # board handover rehearsal and its control. On the mainnet TEST VARIANTS host_m0 (empty test lineage) and host_mN
-    # (host_m0 pinned at 11): the published host_m pins its predecessor at 2000 and by design never proves below it.
+    # (host_m0 pinned at 11): a published image may pin a predecessor and then never proves below it (v0.26.0's pins none).
     needs: libzync-hosts
     runs-on: ubuntu-latest
     timeout-minutes: 340

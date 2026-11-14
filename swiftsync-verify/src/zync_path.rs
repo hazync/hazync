@@ -31,11 +31,13 @@ fn main() {
             if pos >= r.log.len() {
                 die(&format!("position {pos}: the log after {at} has {} coins", r.log.len()));
             }
+            let recs = hist();
             let block = (at < tip).then(|| {
                 let (path, _) = block_path(&r.block_leaves, at as u64);
-                let recs = hist();
                 (hex(&recs[at as usize].hash), path.iter().map(|x| hex(x)).collect())
             });
+            // the block's undo hash, for a block whose leaf commits one (history.bin records it, docs/libzync/UNDO.md)
+            let block_undo = if at < tip { recs[at as usize].undo.map(|u| hex(&u)) } else { None };
             let f = CoinFact {
                 at, pos,
                 coin: hex(&r.coins[pos as usize]),
@@ -44,7 +46,7 @@ fn main() {
                 log_leaves: r.log.len(),
                 log_value: r.value,
                 log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
-                block, preimage: None };
+                block, block_undo, preimage: None };
             println!("{}", serde_json::to_string_pretty(&f).unwrap());
         }
         Some("find") => {
@@ -125,6 +127,7 @@ fn tx_fact(r: &libzync::history::Replay, h: u32, header: &[u8; 80], txs: &[libzy
         height: h,
         header: hex(header),
         state: hex(&r.states[h as usize]),
+        undo: r.undos[h as usize].map(|u| hex(&u)),
         block_path: block_path(&r.block_leaves, h as u64).0.iter().map(|x| hex(x)).collect(),
         tx: hex(&txs[index].stripped),
         index: index as u32,
@@ -178,7 +181,7 @@ pub fn journey(a: &[String]) {
             path: r.log.path(pos).iter().map(|x| hex(x)).collect(),
             log_leaves: r.log.len(), log_value: r.value,
             log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
-            block: None, preimage: None },
+            block: None, block_undo: None, preimage: None },
         spend,
     };
     println!("{}", serde_json::to_string_pretty(&j).unwrap());

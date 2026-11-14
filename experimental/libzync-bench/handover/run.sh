@@ -91,8 +91,10 @@ ok &= t(a["anchor_id"] == b["anchor_id"] == c["anchor_id"], "anchor_id unchanged
 want = list(m.lineage([(ow, first)]))
 ok &= t(b["lineage"] == want == c["lineage"], "lineage = the reference's digest of [O at first]; unchanged by later steps")
 sts = [json.loads(l) for l in open(f"{R}/states.jsonl")]
-hs = [(bytes.fromhex(l.strip())[::-1], m.utxo_state(x["leaves"], x["value"], [bytes.fromhex(r) if r else None for r in x["roots"]]))
-      for l, x in zip(open(f"{R}/hashes.txt"), sts)]
+# O and N both carry the undo-data commitment (docs/libzync/UNDO.md): every block but genesis has the 0x05 leaf
+und = lambda i: m.undo_hash(json.load(open(f"{B}/block_{i}.json"))) if i > 0 else None
+hs = [(bytes.fromhex(l.strip())[::-1], m.utxo_state(x["leaves"], x["value"], [bytes.fromhex(r) if r else None for r in x["roots"]]), und(i))
+      for i, (l, x) in enumerate(zip(open(f"{R}/hashes.txt"), sts))]
 for st, h in ((a, last), (c, end)):
     got = [bytes(r) if r else None for r in st["block_roots"]]
     ok &= t(got == m.roots(hs[:h + 1]) and st["block_leaves"] == h + 1, f"block forest at {h} == the reference over real block hashes")

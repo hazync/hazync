@@ -1150,6 +1150,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log)) {
             bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
         }
+        // The block's undo hash (#729): the guest's (logged by the collect aggregate) must be the host's own from the block
+        // file, so a disagreement between the two implementations stops here, not in a verifier.
+        let undo = crate::prep::undo_of_block_json(&read_block_json(dir, h));
+        match guest_undo_line(&String::from_utf8_lossy(&log), h) {
+            Some((n, u)) => assert!((n, u) == (undo.1, undo.0), "block {h}: the guest's undo hash ({n} inputs, {}) != the host's ({} inputs, {})",
+                                    crate::hex(&u), undo.1, crate::hex(&undo.0)),
+            None => panic!("block {h}: the collect aggregate logged no `undo: block {h}` line"),
+        }
+        // what a consumer reads: the block's undo-data commitment, checked guest == host (docs/libzync/UNDO.md)
+        println!("  undo: block {h} inputs {} hash {} (guest == host)", undo.1, crate::hex(&undo.0));
         let cl_lists = if methods::COINLOG { cl_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
         if methods::COINLOG {
             let wit = match &leaf { Some(b) => b.cl_wit.clone(), None => cl_prepare(&cl_lists.0) };
@@ -1182,9 +1192,10 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         if methods::COINLOG && leaf.is_none() {
             let flips = cl_commit(&cl_lists.0, &cl_lists.1, &st);
             if h == 1 && prev_is_genesis {
-                hist_append(&out, &libzync::history::Rec { height: 0, hash: genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![] });
+                hist_append(&out, &libzync::history::Rec { height: 0, hash: genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![], undo: None });
             }
-            hist_append(&out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends: cl_lists.1.clone() });
+            let undo = crate::handover_pin::leaf_has_undo(&METHOD_ID, pinned_lineage(), h).then_some(undo.0);
+            hist_append(&out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends: cl_lists.1.clone(), undo });
             // The log next to each receipt, so a run can resume after it (HAZYNC_RESUME) or be anchored on it. The last
             // two are kept (a checkpoint copier takes the second newest receipt, which may still be complete while
             // the newest is being written); HAZYNC_COINLOG_SAVE_EACH=1 keeps every one (tests). A mainnet-sized log
@@ -1682,6 +1693,17 @@ pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) ->
         h.store.push(*l);
     }
     (h.store.roots(), h.store.len(), flips)
+}
+
+/// The guest's `undo: block <h> inputs <n> hash <hex>` line (agg_lite.rs) for block `h`: (inputs, hash).
+pub(crate) fn guest_undo_line(log: &str, h: u32) -> Option<(u64, [u8; 32])> {
+    let want = format!("undo: block {h} inputs ");
+    log.lines().filter_map(|l| l.find(&want).map(|i| &l[i + want.len()..])).find_map(|rest| {
+        let (n, x) = rest.split_once(" hash ")?;
+        let x = x.trim();
+        if x.len() != 64 || !x.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+        Some((n.parse().ok()?, crate::hx(x).try_into().ok()?))
+    })
 }
 
 /// Records already in `<out>/history.bin` (libzync::history), counted once per run; None = the file does not run

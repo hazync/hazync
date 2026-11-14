@@ -15,6 +15,9 @@
 //!     spender if any, value); key = sha256(script) || txid with the vout XORed in;
 //!   - the live-coin hash: + each append's point, - each external spend's point (first ctr with x = sha256(leaf||ctr)
 //!     on the curve, the even root), committed affine x || y in 8 little-endian limbs each, live_set 0 = the identity;
+//!   - the undo hash (#729, docs/libzync/UNDO.md): every input of every non-coinbase transaction, block order, its coin's
+//!     (height, coinbase flag, amount, script) from the block file's prevouts; the block leaf commits it for every block
+//!     whose proving image has the commitment (handover_pin::leaf_has_undo), else the 0x02 leaf;
 //!   - BIP30 tree, block forest, chainwork, times: as the guest.
 
 use crate::{ChainState, Smt};
@@ -131,7 +134,32 @@ pub(crate) fn leaf_read(path: &str) -> LeafBundle {
 /// reading the block, writing the state, save points (PREP_TIMING; the rate is spent somewhere, and a guess cost a day).
 static PHASES: std::sync::Mutex<[f64; 7]> = std::sync::Mutex::new([0.0; 7]);
 /// The last block's coin-log changes (flips, appends), for history.bin when HAZYNC_PREP_HISTORY=1.
-static LAST_HIST: std::sync::Mutex<Option<(Vec<(u64, u32, u32)>, Vec<[u8; 32]>)>> = std::sync::Mutex::new(None);
+static LAST_HIST: std::sync::Mutex<Option<(Vec<(u64, u32, u32)>, Vec<[u8; 32]>, Option<[u8; 32]>)>> = std::sync::Mutex::new(None);
+
+/// A block file's undo hash (docs/libzync/UNDO.md) and its number of inputs: every input of every non-coinbase
+/// transaction, block order, from its prevout (amount, script) and coin_height / coin_is_coinbase (bit 0). The guest's
+/// aggregate computes the same from its chunks and logs it (`undo: block <h> inputs <n> hash <hex>`).
+pub(crate) fn undo_of_block_json(j: &serde_json::Value) -> ([u8; 32], u64) {
+    let mut u = libzync::undo::UndoHasher::new();
+    for t in j["txs"].as_array().expect("block: txs") {
+        for p in t["prevouts"].as_array().expect("block: prevouts") {
+            u.coin(p["coin_height"].as_u64().expect("block: coin_height") as u32,
+                   p["coin_is_coinbase"].as_u64().expect("block: coin_is_coinbase") & 1 == 1,
+                   p["value"].as_u64().expect("block: prevout value"), &crate::hx(p["spk"].as_str().expect("block: prevout spk")));
+        }
+    }
+    let n = u.inputs();
+    (u.finish(), n)
+}
+
+/// Block `height`'s leaf: with its undo hash when the image proving it has the commitment (every block of an image
+/// with an empty lineage but 0; below a pre-undo predecessor's first_height, that image's 0x02 leaf).
+pub(crate) fn block_leaf_host(tip_hash: &[u8; 32], height: u32, state: &[u8; 32], undo: &[u8; 32]) -> ([u8; 32], bool) {
+    let with = crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), height);
+    let l = if with { Sha256::digest(crate::handover_pin::block_leaf_undo_preimage(tip_hash, height, state, undo)).into() }
+            else { Sha256::digest(crate::handover_pin::block_leaf_preimage(tip_hash, height, state)).into() };
+    (l, with)
+}
 
 fn phase(i: usize, t: std::time::Instant) { PHASES.lock().unwrap()[i] += t.elapsed().as_secs_f64(); }
 
@@ -235,7 +263,8 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     // The coin log and the trie (the host's stores), the BIP30 tree.
     let t = std::time::Instant::now();
     let (utxo_roots, utxo_leaves, flips) = crate::lz::cl_apply(&ext, &appends, height);
-    *LAST_HIST.lock().unwrap() = Some((flips, appends.clone()));
+    let undo = undo_of_block_json(j).0;
+    let mut leaf_undo = None;
     phase(1, t);
     let t = std::time::Instant::now();
     let trie_root = {
@@ -264,9 +293,12 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
         let mut st: Vec<u8> = Vec::new();
         crate::handover_pin::utxo_state_preimage(utxo_leaves, utxo_value, &utxo_roots, &mut |b: &[u8]| st.extend_from_slice(b));
         let s: [u8; 32] = Sha256::digest(&st).into();
-        f.add(Sha256::digest(crate::handover_pin::block_leaf_preimage(&tip_hash, height, &s)).into());
+        let (l, with) = block_leaf_host(&tip_hash, height, &s, &undo);
+        if with { leaf_undo = Some(undo); }
+        f.add(l);
         (normalize_host(f.roots), f.num_leaves)
     };
+    *LAST_HIST.lock().unwrap() = Some((flips, appends.clone(), leaf_undo));
     let mut recent_times = prev.recent_times.clone();
     recent_times.push(time);
     if recent_times.len() > 11 { let e = recent_times.len() - 11; recent_times.drain(0..e); }
@@ -440,11 +472,11 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // path service (zync-serve) can answer coin and trie facts at any save point without proving (ROADMAP O2).
         // Contiguous from genesis or not at all: hist_append writes nothing for a run whose history has a gap.
         if history {
-            let (flips, appends) = LAST_HIST.lock().unwrap().take().expect("prep_block records its changes");
+            let (flips, appends, undo) = LAST_HIST.lock().unwrap().take().expect("prep_block records its changes");
             if h == 1 && anchor_path == "genesis" {
-                crate::lz::hist_append(out, &libzync::history::Rec { height: 0, hash: crate::genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![] });
+                crate::lz::hist_append(out, &libzync::history::Rec { height: 0, hash: crate::genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![], undo: None });
             }
-            crate::lz::hist_append(out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends });
+            crate::lz::hist_append(out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends, undo });
         }
         if h == lo { st.anchor_id = anchor_id; }
         // the image proving block h, and the lineage at h (identity with an empty lineage: METHOD_ID, zero)
