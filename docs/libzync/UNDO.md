@@ -152,11 +152,15 @@ libzync-undo-hashes <lo> <hi> --bitcoin-cli "<cmd>" [--jobs N]      # each block
   1,500, 2,000) byte-identical to the new prep's. The coin-log and trie snapshots are untouched (same sha256).
 - a rerun rewrites nothing (2,000 already in the new format); the control (block 170's undo hash replaced by SHA-256
   of nothing) leaves 1..169 identical and makes 170..2,000 differ (1,831 of 1,831);
-- refused: a held `LOCK`, `HAZYNC_COINLOG_DIR` set, an S that is not a save point;
+- refused: a held `LOCK` (out dir, and bundle dir), `HAZYNC_COINLOG_DIR` set, an S that is not a save point, a damaged
+  cache line (its check field), a stale cache line (well formed, but the resume re-fetch disagrees);
+- the three bundles at or below S cross-checked: prep's own coins give the node's undo hash;
+- the new prep refuses to continue from the v0.25.0 run's `state_2000.json` (no forest marker), and continuing from the
+  re-forested one gives 2,001..2,010 byte-identical to the new prep from genesis;
 - the node path's undo hashes equal `undo_ref.py` on the block files of 130,000, 140,000, 741,000, 962,000, 965,500.
 
 **Phase 1 rate** (`libzync-undo-hashes`, 8 at a time, the node on hazync-coord; MEASURED on these samples only):
-946 blocks/s at 100,000-100,399; 54 at 300,000-300,199; 14.1 at 500,000-500,099; 14.0 at 590,000-590,099; 8.1 at
-970,000-970,049. Phase 2 (reading and writing the states) ran 2,000 blocks in under a second of the 3 s total.
+946 and 973 blocks/s at 100,000-100,399 (two runs); 54 and 37 at 300,000-300,199; 14.1 and 11.5 at 500,000-500,099;
+14.0 and 14.3 at 590,000-590,099; 8.1 and 8.2 at 970,000-970,049 (the box was also building images during the second). Phase 2 (reading and writing the states) ran 2,000 blocks in under a second of the 3 s total.
 ESTIMATE from those samples, not measured: a pass to about 590,000 is a few hours, dominated by 300,000 onwards
 (roughly 290,000 blocks at 14-50 blocks/s); more `--jobs` may help if the node's RPC has threads to spare.
