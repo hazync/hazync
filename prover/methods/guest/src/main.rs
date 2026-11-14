@@ -1417,6 +1417,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         trie_root: [0u8; 32], // the trie lives on the agg-lite path only
         survivor_value: 0,
         spent_value: 0,
+        undo_hash: [0u8; 32], // exp (#729): computed on the agg-lite path only
     }
 }
 
