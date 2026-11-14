@@ -57,10 +57,12 @@ checks O's seal in software (`prover/methods/guest/src/xver/`).
 
 ## 4. The rehearsal
 
-`experimental/libzync-bench/handover/board_rehearsal.sh` runs the whole switch on a local regtest board in dev mode:
-O proves 1..H-1 and its spine, the coordinator moves to N, N hands over at H and continues, and the verifiers accept
-the new spine and refuse a forged lineage. Dev mode has no real seals, so the cross-version check is covered by §3's
-tests, not by the rehearsal. Before a live switch, also run one real GPU confirmation (O's published image, a test N
+`experimental/libzync-bench/handover/board_rehearsal.sh` runs the whole switch on a local board in dev mode (mainnet
+blocks 1..20, H = 11): O proves 1..H-1 and its spine, the coordinator moves to N, N hands over at H and continues, and
+the verifiers accept the new spine and refuse a forged lineage. CI runs it and its `--control` (libzync-chain,
+`scripts/libzync/ci/chain.sh` step 6) on the mainnet TEST VARIANTS `host_m0` / `host_mN` (`HAZYNC_TEST_LINEAGE=1`:
+`lineage/test.rs` instead of the published lineage, ids in no pin table, the host prints `TEST_VARIANT`). Dev mode
+has no real seals, so the cross-version check is covered by §3's tests, not by the rehearsal. Before a live switch, also run one real GPU confirmation (O's published image, a test N
 pinning it, mainnet 1..20 handing over at 11) in the next GPU batch.
 
 ## 5. The live switch

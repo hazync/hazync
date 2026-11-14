@@ -57,7 +57,7 @@ mod lineage;
 #[cfg(all(feature = "regtest", not(feature = "coinlog")))]
 #[path = "lineage/regtest.rs"]
 mod lineage;
-#[cfg(all(not(feature = "signet"), not(feature = "regtest"), feature = "coinlog"))]
+#[cfg(all(not(feature = "signet"), not(feature = "regtest"), feature = "coinlog", not(feature = "test-lineage")))]
 #[path = "lineage/mainnet_coinlog.rs"]
 mod lineage;
 #[cfg(all(feature = "signet", feature = "coinlog"))]
@@ -2649,3 +2649,11 @@ fn validate_block_stages() {
     }
     env::commit(&(stage, fold));
 }
+
+// TEST VARIANT ONLY (feature test-lineage, HAZYNC_TEST_LINEAGE=1; never published): the mainnet coin-log image with
+// lineage/test.rs instead of lineage/mainnet_coinlog.rs, so CI can prove mainnet from genesis (the published image pins
+// its predecessor below its handover height). Kept at the END of this file: a line added above would move the panic
+// locations, and with them the published image id.
+#[cfg(all(not(feature = "signet"), not(feature = "regtest"), feature = "coinlog", feature = "test-lineage"))]
+#[path = "lineage/test.rs"]
+mod lineage;

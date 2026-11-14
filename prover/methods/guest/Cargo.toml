@@ -114,3 +114,6 @@ trie = ["coinlog"]
 # speculative chunks (proved for this height and MTP before the block existed) and takes the block's record order from
 # the host, so a batch may hold transactions the block does not.
 txlog = ["libzync"]
+# TEST VARIANT ONLY (HAZYNC_TEST_LINEAGE=1, mainnet coin log): lineage/test.rs instead of lineage/mainnet_coinlog.rs, for
+# the tests that prove mainnet from genesis. Its image id is in no pin table and the host prints TEST_VARIANT.
+test-lineage = ["coinlog"]

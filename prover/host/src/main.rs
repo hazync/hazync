@@ -243,9 +243,17 @@ mod handover_pin { include!("../../methods/guest/src/handover_pin.rs"); }
 #[path = "../../methods/guest/src/lineage/mainnet_coinlog.rs"] mod lineage_mainnet_coinlog;
 #[path = "../../methods/guest/src/lineage/signet_coinlog.rs"] mod lineage_signet_coinlog;
 #[path = "../../methods/guest/src/lineage/regtest_coinlog.rs"] mod lineage_regtest_coinlog;
+// TEST VARIANT only (HAZYNC_TEST_LINEAGE=1 at build time, methods::TEST_LINEAGE): the guest compiled this file instead.
+#[path = "../../methods/guest/src/lineage/test.rs"] mod lineage_test;
+
+/// The loud marker a test-variant host prints (`method-id`, `libzync-lineage`): its image is in no pin table.
+const TEST_VARIANT_MARKER: &str = "TEST_VARIANT lineage/test.rs (HAZYNC_TEST_LINEAGE=1): a CI test image, not a published one; never deploy it";
 
 /// The handovers this host's image pins (the guest's `lineage::LINEAGE`).
 fn pinned_lineage() -> &'static [handover_pin::Handover] {
+    if methods::TEST_LINEAGE {
+        return lineage_test::LINEAGE;
+    }
     match (methods::NETWORK, methods::COINLOG) {
         ("signet", false) => lineage_signet::LINEAGE,
         ("regtest", false) => lineage_regtest::LINEAGE,
@@ -300,6 +308,7 @@ pub(crate) fn stamp(s: &mut ChainState) {
 fn lineage_cmd() {
     let l = pinned_lineage();
     println!("METHOD_ID {}", method_id_hex());
+    if methods::TEST_LINEAGE { println!("{TEST_VARIANT_MARKER}"); }
     if l.is_empty() { println!("HANDOVER none"); }
     for (k, e) in l.iter().enumerate() {
         let v = if e.verifier == [0u8; 32] { "same".to_string() } else {
@@ -1504,6 +1513,7 @@ fn main() {
         // Print THIS host's guest image id so a contributor can check it matches a proof's guest.
         println!("METHOD_ID {}", method_id_hex());
         println!("  u32x8   {:?}", METHOD_ID);
+        if methods::TEST_LINEAGE { println!("{TEST_VARIANT_MARKER}"); }
         return;
     }
     if args.iter().any(|a| a == "seg-po2") {

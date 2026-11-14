@@ -1,7 +1,8 @@
 #!/bin/bash
 # board_rehearsal.sh <host O> <host N> [--control]: the live board's handover (docs/HANDOVER.md §5), end to end on a
 # local coordinator and the stock worker, mainnet blocks 1..END in DEV MODE (rules execute, nothing is proved).
-#   O = an image with an empty lineage; N = the same source with O pinned at H (scratchpad build_on.sh builds both).
+#   O = an image with an empty lineage; N = the same source with O pinned at H. CI (scripts/libzync/ci/chain.sh step 6)
+#   runs it and --control on the mainnet test variants scripts/libzync/ci/build-hosts.sh builds: host_m0 and host_mN.
 #   1. prep 1..END with N's binary: states below H must be byte-identical to O's own prep, from H on stamped N/L1.
 #   2. the coordinator runs O's host with LZ_HANDOVER_AT=H ("pre"): an O worker proves 1..H-1 by claims, nothing at H
 #      or above is handed out, and O's spine reaches exactly H-1.

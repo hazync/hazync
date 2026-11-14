@@ -35,7 +35,7 @@ fn lever(name: &str) -> bool {
 
 /// `profile.rs` in OUT_DIR: what the embedded guest was built for, so the HOST writes the stream that
 /// guest reads instead of trusting a matching set of run-time env vars.
-fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool, txlog: bool) {
+fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool, txlog: bool, test_lineage: bool) {
     let (trie, utxohash) = (coinlog && lever("HAZYNC_TRIE"), coinlog && lever("HAZYNC_UTXOHASH"));
     let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("profile.rs");
     std::fs::write(&out, format!(
@@ -52,7 +52,9 @@ fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool,
          /// The counting trie (HAZYNC_TRIE; on in the libzync profile).\n\
          pub const TRIE: bool = {trie};\n\
          /// The live-coin ECMH for instant IBD (HAZYNC_UTXOHASH; on in the libzync profile).\n\
-         pub const UTXOHASH: bool = {utxohash};\n",
+         pub const UTXOHASH: bool = {utxohash};\n\
+         /// TEST VARIANT: the guest's lineage is lineage/test.rs, not the published one (HAZYNC_TEST_LINEAGE=1).\n\
+         pub const TEST_LINEAGE: bool = {test_lineage};\n",
         network)).expect("write profile.rs");
 }
 
@@ -123,7 +125,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_PIN_DIR");
     println!("cargo:rerun-if-env-changed=HAZYNC_COINLOG");
     println!("cargo:rerun-if-env-changed=HAZYNC_TXLOG");
+    // TEST VARIANT (guest feature test-lineage): the mainnet coin-log image with lineage/test.rs instead of its published
+    // lineage, for the tests that prove mainnet from genesis. Built from source only: a prebuilt ELF is a published image.
+    println!("cargo:rerun-if-env-changed=HAZYNC_TEST_LINEAGE");
+    let test_lineage = std::env::var("HAZYNC_TEST_LINEAGE").as_deref() == Ok("1");
     if let Ok(elf_path) = std::env::var("HAZYNC_GUEST_ELF") {
+        assert!(!test_lineage, "HAZYNC_TEST_LINEAGE builds the test variant from source; HAZYNC_GUEST_ELF embeds a published image");
         // The prebuilt path embeds the pinned canonical guest (reproduce/). A libzync image is embedded
         // the same way -- sha256 and image id checked, never trusted -- but against pins that name THAT
         // image: HAZYNC_GUEST_PIN_DIR holds its METHOD_ID and GUEST_ELF_SHA256, and HAZYNC_LIBZYNC /
@@ -156,7 +163,7 @@ fn main() {
         }
         assert!(!coinlog || pins.is_some(), "HAZYNC_COINLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
         assert!(!txlog || pins.is_some(), "HAZYNC_TXLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
-        write_profile(libzync, assumevalid, network, coinlog, txlog);
+        write_profile(libzync, assumevalid, network, coinlog, txlog, false);
         embed_prebuilt_guest(&elf_path, pins.as_deref());
         return;
     }
@@ -278,7 +285,11 @@ fn main() {
     if txlog {
         features.push("txlog".to_string());
     }
-    write_profile(libzync, assumevalid, network, coinlog, txlog);
+    if test_lineage {
+        assert!(coinlog && network == "mainnet", "HAZYNC_TEST_LINEAGE is the mainnet coin-log image's test variant");
+        features.push("test-lineage".to_string());
+    }
+    write_profile(libzync, assumevalid, network, coinlog, txlog, test_lineage);
     if !features.is_empty() {
         use std::collections::HashMap;
         // GuestOptions is #[non_exhaustive], so it cannot be built with a struct expression from
