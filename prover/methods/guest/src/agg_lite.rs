@@ -465,6 +465,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut total_in: u64 = 0;
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
+    let mut undo_parts: Vec<u8> = Vec::with_capacity(2 * words);   // exp/undo-commit-leaves (#729): spent coin leaves, block order
     let mut spends: Vec<([u8; 32], u32, bool, u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height, input index), block order
     let mut cb_spends: Vec<([u8; 32], bool)> = Vec::new();
     // trie: (coin key, script hash) per spend and per indexed output, parallel to `spends` / `output_leaves`
@@ -576,6 +577,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 let f = r.u();
                 if f > 7 { all_ok = false; }
                 spends.push((leaf, tx_pos, f & 2 != 0, start.wrapping_add(k)));
+                undo_parts.extend_from_slice(&leaf); // exp/undo-commit-leaves (#729)
                 #[cfg(feature = "trie")]
                 let spend_key_at = spends.len() - 1;
                 tr_all &= f & 4 != 0;
@@ -854,6 +856,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         trie_root,
         survivor_value,
         spent_value,
+        undo_hash: {
+            let u: [u8; 32] = { use sha2::{Digest, Sha256}; Sha256::digest(&undo_parts).into() };
+            env::log(&alloc::format!("undo: block {} inputs {} hash {}", w.height, undo_parts.len() / 32, hex32(&u)));
+            u
+        },
         ..Default::default()
     }
 }

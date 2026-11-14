@@ -625,6 +625,7 @@ struct BlockResult {
     trie_root: [u8; 32],      // libzync: the counting trie's root after this block (zero without the trie)
     survivor_value: u64,      // libzync: satoshis appended to the coin forest / log by this block
     spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends
+    undo_hash: [u8; 32],      // exp/undo-commit-leaves (#729): SHA-256 of the block's spent coin leaves, block order
 }
 
 /// ROADMAP H-B (review round 5): the digest that LINKS chain states, sha256d of the state's journal with `anchor_id`
@@ -2348,6 +2349,7 @@ fn aggregate() {
         let mut f = utreexo::Stump::new(prev.block_roots.clone(), prev.block_leaves);
         let mut st: Vec<u8> = Vec::with_capacity(17 + 32 * r.root_next_roots.len());
         handover_pin::utxo_state_preimage(r.root_next_leaves, utxo_value, &r.root_next_roots, &mut |b: &[u8]| st.extend_from_slice(b));
+        st.extend_from_slice(&r.undo_hash); // exp/undo-commit-leaves (#729): MEASUREMENT ONLY
         f.add(sha256_guest(&handover_pin::block_leaf_preimage(&r.tip_hash, height, &sha256_guest(&st))));
         (normalize(f.roots), f.num_leaves)
     };
