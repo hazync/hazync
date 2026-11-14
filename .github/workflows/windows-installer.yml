@@ -160,7 +160,11 @@ jobs:
           for f in Hazync.exe hazync-worker prover/host.exe; do [ -f "$APP/$f" ] || { echo "::error::$f not installed"; exit 1; }; done
           ls "$APP/prover"
           # the installed prover is the release's: it carries the published mainnet image (a GPU-less runner cannot RUN it)
-          ID=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
+          # The image of the RELEASE whose prover is packaged ($TAG), read at that tag: on a PR the checkout may already
+          # pin the next image (v0.26.0's re-baseline) while the packaged prover is still the last release's.
+          git fetch -q --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          ID=$(git show "$TAG:reproduce/LIBZYNC_IDS" | awk '$1=="libzync-product" && $2=="mainnet" {print $4}')
+          [[ "$ID" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no mainnet id in $TAG's reproduce/LIBZYNC_IDS"; exit 1; }
           python -c "import sys;n=open(sys.argv[1],'rb').read().count(bytes.fromhex(sys.argv[2]));print('image',sys.argv[2][:8],n,'x');sys.exit(0 if n>=1 else 1)" "$APP/prover/host.exe" "$ID"
           # ...and is the release zip's host.exe, byte for byte: the sign job cannot look inside a compressed installer,
           # so this is what ties the signed installer to the signed zip.

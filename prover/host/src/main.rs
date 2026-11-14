@@ -234,6 +234,8 @@ struct ChainState {
 
 // The guest's own pin file: this host and that guest cannot disagree about the lineage.
 mod handover_pin { include!("../../methods/guest/src/handover_pin.rs"); }
+// Cross-version handover: every vendored RISC Zero recursion circuit (the guest compiles only the ones it pins).
+#[path = "../../methods/guest/src/xver/mod.rs"] pub mod xver;
 // Every variant's lineage file; `pinned_lineage` picks this host's (the guest compiles only its own).
 #[path = "../../methods/guest/src/lineage/mainnet.rs"] mod lineage_mainnet;
 #[path = "../../methods/guest/src/lineage/signet.rs"] mod lineage_signet;
@@ -241,9 +243,17 @@ mod handover_pin { include!("../../methods/guest/src/handover_pin.rs"); }
 #[path = "../../methods/guest/src/lineage/mainnet_coinlog.rs"] mod lineage_mainnet_coinlog;
 #[path = "../../methods/guest/src/lineage/signet_coinlog.rs"] mod lineage_signet_coinlog;
 #[path = "../../methods/guest/src/lineage/regtest_coinlog.rs"] mod lineage_regtest_coinlog;
+// TEST VARIANT only (HAZYNC_TEST_LINEAGE=1 at build time, methods::TEST_LINEAGE): the guest compiled this file instead.
+#[path = "../../methods/guest/src/lineage/test.rs"] mod lineage_test;
+
+/// The loud marker a test-variant host prints (`method-id`, `libzync-lineage`): its image is in no pin table.
+const TEST_VARIANT_MARKER: &str = "TEST_VARIANT lineage/test.rs (HAZYNC_TEST_LINEAGE=1): a CI test image, not a published one; never deploy it";
 
 /// The handovers this host's image pins (the guest's `lineage::LINEAGE`).
 fn pinned_lineage() -> &'static [handover_pin::Handover] {
+    if methods::TEST_LINEAGE {
+        return lineage_test::LINEAGE;
+    }
     match (methods::NETWORK, methods::COINLOG) {
         ("signet", false) => lineage_signet::LINEAGE,
         ("regtest", false) => lineage_regtest::LINEAGE,
@@ -261,7 +271,123 @@ fn sha256_host(b: &[u8]) -> [u8; 32] {
 
 /// The lineage digest of a list of handovers (guest `lineage_of`).
 fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
-    list.iter().fold([0u8; 32], |l, h| sha256_host(&handover_pin::lineage_preimage(&l, h)))
+    list.iter().fold([0u8; 32], |l, h| { let (p, n) = handover_pin::lineage_step(&l, h); sha256_host(&p[..n]) })
+}
+
+/// Stamping by era (docs/HANDOVER.md §5). Under the lineage `[(I0, h1), (I1, h2), ...]`, block h is proved by the
+/// first `I_k` with `h < h_{k+1}`'s entry, else by this image: entry k's image proved every block below its
+/// `first_height` that an earlier entry did not.
+pub(crate) fn image_at(h: u32) -> [u32; 8] {
+    pinned_lineage().iter().find(|e| h < e.first_height).map(|e| e.image).unwrap_or(METHOD_ID)
+}
+
+/// The lineage digest a state after block h carries: every handover at or below h.
+pub(crate) fn lineage_at(h: u32) -> [u8; 32] {
+    let l = pinned_lineage();
+    lineage_of(&l[..l.iter().take_while(|e| e.first_height <= h).count()])
+}
+
+/// A prep state S(h) as the image proving block h commits it: that image's id and the lineage at h. Genesis (h = 0)
+/// is never stamped: its self_id and lineage are zero in every image, so GENESIS_TIP never moves. With an empty
+/// lineage this is exactly what prep did before (self_id = METHOD_ID). Prep states are untrusted starting points, and
+/// a leaf's guest checks every witness against them, so normalising one on read cannot weaken anything.
+pub(crate) fn stamp(s: &mut ChainState) {
+    if s.height == 0 { return; }
+    // The rehearsal's control (experimental/libzync-bench/handover/board_rehearsal.sh --control): without stamping, the
+    // 11-11 failure must come back. A dev-mode test hook, refused anywhere else.
+    if std::env::var("HAZYNC_TEST_NO_STAMP").as_deref() == Ok("1") {
+        assert!(crate::verify::dev_mode_env(), "HAZYNC_TEST_NO_STAMP is a dev-mode test hook");
+        return;
+    }
+    s.self_id = image_at(s.height);
+    s.lineage = lineage_at(s.height);
+    s.profile = crate::lz::expected_profile();
+}
+
+/// `libzync-lineage`: the handovers this image pins, for the coordinator, the worker and the runbook.
+fn lineage_cmd() {
+    let l = pinned_lineage();
+    println!("METHOD_ID {}", method_id_hex());
+    if methods::TEST_LINEAGE { println!("{TEST_VARIANT_MARKER}"); }
+    if l.is_empty() { println!("HANDOVER none"); }
+    for (k, e) in l.iter().enumerate() {
+        let v = if e.verifier == [0u8; 32] { "same".to_string() } else {
+            format!("{} ({})", hex(&e.verifier), xver::version(&e.verifier).map_or("NOT CARRIED BY THIS HOST", |v| v.name))
+        };
+        println!("HANDOVER k={k} image={} first_height={} verifier={v}", hex_u32x8(&e.image), e.first_height);
+    }
+    println!("LINEAGE {}", hex(&lineage_of(l)));
+}
+
+fn hex_u32x8(w: &[u32; 8]) -> String {
+    hex(&risc0_zkvm::sha::Digest::from(*w).as_bytes().try_into().unwrap_or([0u8; 32]))
+}
+
+/// A predecessor's receipt verified the way the lineage entry says: env-free `Receipt::verify` for the same RISC
+/// Zero, the vendored old circuit (xver) for an older one. Returns the journal.
+pub(crate) fn verify_pred_receipt(r: &risc0_zkvm::Receipt, e: &handover_pin::Handover) -> Result<(), String> {
+    if e.verifier == [0u8; 32] {
+        return r.verify(e.image).map_err(|x| format!("does not verify against predecessor {}: {x}", hex_u32x8(&e.image)));
+    }
+    let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else {
+        return Err("a cross-version predecessor receipt must be succinct".into());
+    };
+    if s.verifier_parameters.as_bytes() != &e.verifier[..] {
+        return Err(format!("receipt's verifier parameters {} are not the pinned version's {}", s.verifier_parameters, hex(&e.verifier)));
+    }
+    xver::verify(&e.verifier, e.image, &r.journal.bytes, &xver::encode(s), &xver::soft_suite()).map_err(|x| x.to_string())
+}
+
+/// `xver-selftest <receipt> [<image hex>]`: the cross-version verifier on a real receipt, natively, with its negative
+/// controls (a seal word, the image, the journal: each changed must be refused). Also recomputes each vendored
+/// version's verifier-parameter digest from its circuit.
+fn xver_selftest_cmd(path: &str, image: Option<&str>) {
+    use risc0_zkvm::sha::Digestible;
+    for v in xver::KNOWN {
+        let p = risc0_zkvm::SuccinctReceiptVerifierParameters {
+            control_root: v.control_root,
+            inner_control_root: None,
+            proof_system_info: risc0_zkp::adapter::PROOF_SYSTEM_INFO,
+            circuit_info: v.circuit_info,
+        }.digest();
+        let ok = p.as_bytes() == &v.params[..];
+        println!("XVER {} params {} computed {} {}", v.name, hex(&v.params), p, if ok { "OK" } else { "MISMATCH" });
+        assert!(ok, "{}: the declared verifier-parameter digest is not the vendored circuit's", v.name);
+    }
+    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}")))
+        .unwrap_or_else(|e| panic!("{path}: not a receipt: {e}"));
+    let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else { panic!("{path}: not a succinct receipt") };
+    let params: [u8; 32] = s.verifier_parameters.as_bytes().try_into().unwrap();
+    let v = xver::version(&params).unwrap_or_else(|| panic!("{path}: verifier parameters {} are not a vendored version", s.verifier_parameters));
+    let claim = s.claim.as_value().expect("claim pruned");
+    let img: [u32; 8] = match image {
+        Some(h) => { let b = hx(h); let b: [u8; 32] = b.try_into().expect("image: 32 bytes hex"); risc0_zkvm::sha::Digest::from(b).into() }
+        None => claim.pre.digest().into(),
+    };
+    assert!(xver::expected_claim(img, &r.journal.bytes) == s.claim.digest(),
+            "the receipt's own claim is not ReceiptClaim::ok(image, journal) (wrong image given?)");
+    let words = xver::encode(s);
+    let suite = xver::soft_suite();
+    let t = std::time::Instant::now();
+    xver::verify(&params, img, &r.journal.bytes, &words, &suite).unwrap_or_else(|e| panic!("VALID receipt refused: {e}"));
+    println!("XVER {}: {path} ({} bytes, image {}) VERIFIES natively in {:.2} s", v.name, std::fs::metadata(path).unwrap().len(),
+             hex_u32x8(&img), t.elapsed().as_secs_f64());
+    let mut seal = words.clone();
+    let i = seal.len() - 100; seal[i] ^= 1;
+    let mut img2 = img; img2[0] ^= 1;
+    let mut j2 = r.journal.bytes.clone(); j2[0] ^= 1;
+    let cases: [(&str, Result<(), &str>); 3] = [
+        ("tampered seal", xver::verify(&params, img, &r.journal.bytes, &seal, &suite)),
+        ("wrong image", xver::verify(&params, img2, &r.journal.bytes, &words, &suite)),
+        ("wrong journal", xver::verify(&params, img, &j2, &words, &suite)),
+    ];
+    for (name, res) in cases {
+        match res {
+            Err(e) => println!("XVER negative control {name}: REFUSED ({e})"),
+            Ok(()) => panic!("XVER negative control {name}: ACCEPTED"),
+        }
+    }
+    println!("XVER-SELFTEST-OK");
 }
 
 /// A mid-chain anchor from a block file has no record of the blocks before it, but the guest needs a forest of the
@@ -1356,6 +1482,29 @@ fn main() {
         lz::lz_join_cmd(l, r, o);
         return;
     }
+    if args.iter().any(|a| a == "libzync-lineage") {
+        lineage_cmd();
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "xver-selftest") {
+        xver_selftest_cmd(args.get(p + 1).expect("xver-selftest <receipt> [<image hex>]"), args.get(p + 2).map(|s| s.as_str()));
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "xver-encode") {
+        // the words a cross-version handover feeds the guest (for the in-guest test, experimental/libzync-bench/xver)
+        let (i, o) = (args.get(p + 1).expect("xver-encode <receipt> <out>"), args.get(p + 2).expect("xver-encode <receipt> <out>"));
+        let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(i).unwrap()).expect("receipt");
+        let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else { panic!("not succinct") };
+        let w: Vec<u8> = xver::encode(s).iter().flat_map(|x| x.to_le_bytes()).collect();
+        std::fs::write(o, w).unwrap();
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-handover") {
+        // libzync-handover <pred receipt> <leaf_H.bin> <out>: block H as the handover step (docs/HANDOVER.md §5)
+        let u = "libzync-handover <predecessor spine receipt> <leaf_H.bin> <out range file>";
+        lz_coord::handover_cmd(args.get(p + 1).expect(u), args.get(p + 2).expect(u), args.get(p + 3).expect(u));
+        return;
+    }
     if args.iter().any(|a| a == "libzync-genesis-tip") {
         lz_coord::genesis_tip_cmd();
         return;
@@ -1364,6 +1513,7 @@ fn main() {
         // Print THIS host's guest image id so a contributor can check it matches a proof's guest.
         println!("METHOD_ID {}", method_id_hex());
         println!("  u32x8   {:?}", METHOD_ID);
+        if methods::TEST_LINEAGE { println!("{TEST_VARIANT_MARKER}"); }
         return;
     }
     if args.iter().any(|a| a == "seg-po2") {

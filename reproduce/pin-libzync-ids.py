@@ -9,8 +9,12 @@ Two builds must agree before pinning: pass the output of one, after diffing it w
 
 Writes, and changes nothing else:
   - reproduce/LIBZYNC_IDS: a header naming the source commit, then the lines verbatim;
-  - swiftsync-verify/src/lib.rs IMAGES: each network's method_id_hex, and its profile set to the PRODUCT profile
-    (libzync + coin log + counting trie + live-coin hash, plus signet's bit);
+  - swiftsync-verify/src/lib.rs IMAGES: each network's CURRENT image (its last entry). An unchanged id only has its
+    profile set to the PRODUCT profile (libzync + coin log + counting trie + live-coin hash, plus signet's bit). A NEW
+    id is APPENDED after the current one, which stays in the table so its proofs verify by id (a handover continues
+    it; v0.26.0): the new entry copies the network's parameters, takes the PRODUCT profile, and its lineage from
+    prover/methods/guest/src/lineage/<network>_coinlog.rs (the product variant's file). Record the superseded id in
+    reproduce/METHOD_ID (mainnet) or a `// v... <network>` comment (signet), or the unit test fails;
   - swiftsync-verify-ffi/src/lib.rs IDS: the same ids, in network order (mainnet, signet).
 swiftsync-verify's unit test `images_match_the_published_ids` then fails if the table and LIBZYNC_IDS ever disagree.
 """
@@ -60,11 +64,7 @@ def main(argv):
     p = ROOT / "swiftsync-verify/src/lib.rs"
     s = p.read_text()
     for net, mid in ids.items():
-        # the Image block of this network: from `network: "<net>",` to the next `},`
-        block = re.compile(r'(network: "' + net + r'",\s*method_id_hex: ")[0-9a-f]{64}(",\s*profile: )[^,]+(,)', re.S)
-        s, n = block.subn(lambda m: m.group(1) + mid + m.group(2) + PRODUCT[net] + m.group(3), s)
-        if n != 1:
-            sys.exit(f"{p}: found {n} IMAGES entries for {net}, want 1")
+        s = pin_network(s, net, mid, commit)
     p.write_text(s)
 
     p = ROOT / "swiftsync-verify-ffi/src/lib.rs"
@@ -75,6 +75,51 @@ def main(argv):
         sys.exit(f"{p}: found {n} IDS tables, want 1")
     p.write_text(s)
     print("pinned:", ", ".join(f"{k} {v[:8]}" for k, v in ids.items()), "from", commit)
+
+
+def entries(s):
+    """(start, end) of each `    Image {` ... `    },` block of IMAGES, in order."""
+    a = s.index("pub const IMAGES: &[Image] = &[\n")
+    b = s.index("\n];\n", a)
+    out, i = [], a
+    while True:
+        i = s.find("    Image {\n", i, b)
+        if i < 0:
+            return out
+        j = s.index("\n    },\n", i) + len("\n    },\n")
+        out.append((i, j))
+        i = j
+
+
+def lineage_rust(net):
+    """The product variant's pinned lineage, as swiftsync-verify writes it."""
+    f = (ROOT / f"prover/methods/guest/src/lineage/{net}_coinlog.rs").read_text()
+    m = re.search(r"pub const LINEAGE: &\[crate::handover_pin::Handover\] = (&\[.*?\]);", f, re.S)
+    if not m:
+        sys.exit(f"lineage/{net}_coinlog.rs: no LINEAGE")
+    body = m.group(1).replace("crate::handover_pin::Handover", "Handover").replace("crate::handover_pin::", "pin::")
+    return "\n".join(("        " + l if k else l) for k, l in enumerate(body.splitlines()))
+
+
+def pin_network(s, net, mid, commit):
+    blocks = [(i, j) for i, j in entries(s) if f'network: "{net}",' in s[i:j]]
+    if not blocks:
+        sys.exit(f"IMAGES has no {net} entry")
+    i, j = blocks[-1]
+    cur = s[i:j]
+    old = re.search(r'method_id_hex: "([0-9a-f]{64})"', cur).group(1)
+    prof = re.compile(r"(profile: )[^,]+(,)")
+    if old == mid:
+        return s[:i] + prof.sub(lambda m: m.group(1) + PRODUCT[net] + m.group(2), cur, count=1) + s[j:]
+    if any(f'method_id_hex: "{mid}"' in s[a:b] for a, b in blocks):
+        sys.exit(f"{net}: {mid[:8]} is already an earlier entry; refusing to re-append it")
+    new = cur.replace(f'method_id_hex: "{old}"', f'method_id_hex: "{mid}"', 1)
+    new = prof.sub(lambda m: m.group(1) + PRODUCT[net] + m.group(2), new, count=1)
+    new, n = re.subn(r"lineage: &\[.*?\],\n    \},\n$", lambda m: f"lineage: {lineage_rust(net)},\n    }},\n", new, flags=re.S)
+    if n != 1:
+        sys.exit(f"{net}: the current entry has no lineage field")
+    note = f"    // Pinned from {commit}: the CURRENT {net} image; the entry above stays so its proofs verify by id.\n"
+    return s[:j] + note + new + s[j:]
 
 
 if __name__ == "__main__":

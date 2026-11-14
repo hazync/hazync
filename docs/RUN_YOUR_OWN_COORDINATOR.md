@@ -53,7 +53,7 @@ Every piece that runs a host needs the **v2 host**, `hazync-host-x86_64-linux-gn
 from `reproduce/libzync.Dockerfile`). Check it before anything else:
 
 ```sh
-host method-id     # must print 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+host method-id     # must print 1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a (v0.26.0)
 ```
 
 A laptop build of the same source prints another id ([`libzync/LIBZYNC.md`](libzync/LIBZYNC.md) §8), and a
@@ -145,7 +145,7 @@ proxy, or fix the config; `COORD_ALLOW_PUBLIC_INSECURE=1` overrides, not for a r
 Check it is up and on the right image:
 
 ```sh
-curl -s 127.0.0.1:8900/api/meta     # "libzync": true and method_id 8888d59c…
+curl -s 127.0.0.1:8900/api/meta     # "libzync": true and method_id 1ff5a129…
 ```
 
 ### The leaf pruner

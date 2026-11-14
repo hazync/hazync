@@ -1,0 +1,10 @@
+[package]
+name = "xver-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xver-methods = { path = "../methods" }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["client", "std"] }
+risc0-zkp = { version = "=3.0.6", default-features = false, features = ["std"] }
+bincode = "1.3"

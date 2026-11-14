@@ -29,6 +29,9 @@ read -ra WRAP <<< "${CLI_WRAP:-}"
 RCPT=experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt
 RCPT_SHA=11f4f9ad57731b6d8b9be11efcaa91051918503b5e86ff649791fb271aee7c9b
 TIP200=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
+# The reference receipt's OWN image (v0.24.0's 8888d59c). From v0.26.0 the current image continues it at block 2000, and
+# the verifier checks a receipt by an earlier built-in image of the chain as that image (swiftsync-verify verify()).
+RCPT_IMAGE=8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
 CANON=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
 fails=0; n=0
 ok()  { n=$((n+1)); echo "  ok   $*"; }
@@ -56,11 +59,11 @@ echo "verifiers in $DIST against $RCPT (mainnet 1..200, image ${CANON:0:8})"
 if [ -x "$V" ]; then
     out=$("${WRAP[@]}" "$V" --network mainnet --product "$RCPT" 2>&1); rc=$?
     if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^SWIFTSYNC_VERIFY_DEMO' \
-       && printf '%s\n' "$out" | grep -q "receipt verifies against image $CANON (mainnet)" \
+       && printf '%s\n' "$out" | grep -q "receipt verifies against image $RCPT_IMAGE (mainnet)" \
        && printf '%s\n' "$out" | grep -q "tip $TIP200 at height 200"; then
-        ok "CLI accepts the real receipt: DEMO, image ${CANON:0:8}, tip of block 200"
+        ok "CLI accepts the real receipt: DEMO, image ${RCPT_IMAGE:0:8} (current ${CANON:0:8}), tip of block 200"
     else
-        bad "CLI on the real receipt: exit $rc, want 2 with DEMO, image $CANON and tip $TIP200"
+        bad "CLI on the real receipt: exit $rc, want 2 with DEMO, image $RCPT_IMAGE and tip $TIP200"
         printf '%s\n' "$out" | tail -3 | sed 's/^/       /'
     fi
     cli_refuses() {  # <what> <args...>

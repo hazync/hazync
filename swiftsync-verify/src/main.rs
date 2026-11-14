@@ -94,12 +94,19 @@ fn main() {
             "--journey" => journeys.push(args.next().unwrap_or_else(|| usage())),
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
-                let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>")) };
-                let (id, h) = v.split_once(':').unwrap_or_else(|| bad());
+                let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>[:<64 hex digits: the predecessor's RISC Zero verifier parameters, for a cross-version handover>]")) };
+                let mut it = v.split(':');
+                let (id, h, ver) = (it.next().unwrap_or_else(|| bad()), it.next().unwrap_or_else(|| bad()), it.next());
+                if it.next().is_some() { bad() }
                 let id = swiftsync_verify::hex32(&id.to_lowercase()).unwrap_or_else(|| bad());
+                let verifier = match ver {
+                    None => swiftsync_verify::pin::SAME_ZKVM,
+                    Some(x) => swiftsync_verify::hex32(&x.to_lowercase()).unwrap_or_else(|| bad()),
+                };
                 handovers.push(swiftsync_verify::Handover {
                     image: swiftsync_verify::words(&risc0_zkvm::sha::Digest::from_bytes(id)),
                     first_height: h.parse().unwrap_or_else(|_| bad()),
+                    verifier,
                 });
             }
             "-h" | "--help" => usage(),
@@ -113,7 +120,11 @@ fn main() {
     }
     let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network:?}")));
     if let Some(h) = &image_hex {
-        image = image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h:?}: not 64 hex digits")));
+        // A built-in image keeps its own lineage (an earlier image of the chain); any other id takes the network's.
+        image = match Image::by_id(&network, h) {
+            Some(i) => i,
+            None => image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h:?}: not 64 hex digits"))),
+        };
         println!("  image id given on the command line: {}", image.method_id_hex);
     }
     if !handovers.is_empty() {

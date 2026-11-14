@@ -80,16 +80,43 @@ fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
     let receipt = f.chunk()?;
     let anchor_json = f.chunk()?;
     let image_hex = f.chunk()?;
-    let mut image = Image::by_network(network).ok_or("no built-in image")?;
+    // Optional, last: the image's lineage (docs/HANDOVER.md), for an image the built-in table does not list. Text,
+    // one handover per comma, oldest first: `<image hex>:<first height>[:<predecessor RISC Zero verifier digest hex>]`.
+    let lineage_txt = if f.i < f.b.len() { f.chunk()? } else { &[][..] };
+    let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
+    // A built-in image by id (an earlier or the current image of the chain, with its own lineage), else the
+    // network's current image, re-pointed at the stated id.
+    let mut image = match Image::by_id(network, &h) {
+        Some(i) if !h.is_empty() => i,
+        _ => {
+            let i = Image::by_network(network).ok_or("no built-in image")?;
+            if h.is_empty() { i } else { i.with_method_id(&h).ok_or("image id is not 64 hex characters")? }
+        }
+    };
     if coinlog {
         image = image.with_coinlog();
     }
     if product {
         image = image.with_product();
     }
-    if !image_hex.is_empty() {
-        let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
-        image = image.with_method_id(&h).ok_or("image id is not 64 hex digits")?;
+    if !lineage_txt.is_empty() {
+        let t = std::str::from_utf8(lineage_txt).map_err(|_| "lineage is not text")?;
+        let mut list = Vec::new();
+        for e in t.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let bad = || format!("lineage entry {e:?}: want <image hex>:<height>[:<verifier hex>]");
+            let mut it = e.split(':');
+            let id = swiftsync_verify::hex32(&it.next().ok_or_else(bad)?.to_lowercase()).ok_or_else(bad)?;
+            let first_height: u32 = it.next().ok_or_else(bad)?.parse().map_err(|_| bad())?;
+            let verifier = match it.next() {
+                None => swiftsync_verify::pin::SAME_ZKVM,
+                Some(x) => swiftsync_verify::hex32(&x.to_lowercase()).ok_or_else(bad)?,
+            };
+            if it.next().is_some() { return Err(bad()); }
+            list.push(swiftsync_verify::Handover {
+                image: swiftsync_verify::image_words(id), first_height, verifier,
+            });
+        }
+        image = image.with_lineage(list);
     }
     let anchor: Option<ChainState> = if anchor_json.is_empty() {
         None
