@@ -233,6 +233,7 @@ struct ChainState {
 }
 
 // The guest's own pin file: this host and that guest cannot disagree about the lineage.
+#[allow(dead_code)] // shared with the guest and the verifier: each uses its own subset
 mod handover_pin { include!("../../methods/guest/src/handover_pin.rs"); }
 // Cross-version handover: every vendored RISC Zero recursion circuit (the guest compiles only the ones it pins).
 #[path = "../../methods/guest/src/xver/mod.rs"] pub mod xver;
