@@ -1,8 +1,9 @@
 # libzync: image handover and the block forest
 
-Status: in the frozen core c14 and so in every published image (v0.24.0, risc0 3.1.0: mainnet `8888d59c…`, signet
-`d4210dae…`). No handover has been used yet: every `lineage/*.rs` list is empty, so published proofs carry a zero
-`lineage`. Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
+Status: in the frozen core c14 and so in every published image. v0.26.0 (risc0 3.1.0) is the first to pin one: mainnet
+`1ff5a129…`'s `lineage/mainnet_coinlog.rs` pins v0.24.0's `8888d59c…` at block 2000 (same RISC Zero); every other
+`lineage/*.rs` list is empty. The operational runbook, including the cross-RISC-Zero case, is
+[`../HANDOVER.md`](../HANDOVER.md). Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
 `aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
 implementation written from this document.
 

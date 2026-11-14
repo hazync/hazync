@@ -6,7 +6,8 @@ v0.22.1, image `37987b85…`); its documents are kept as a record in [`docs/hist
 **On `main` since 2026-11-08 (#670). Released as v0.24.0 (2026-11-12) on RISC Zero 3.1.0**
 ([`RELEASE_NOTES_v0.24.0.md`](../RELEASE_NOTES_v0.24.0.md)). **Published images** (frozen core c14 guest source,
 tag `libzync-c14` = `ce4e1e3`, rebuilt on risc0 3.1.0 at `7dfb05b`; built by `reproduce/libzync.Dockerfile`,
-reproduced by two builds and by CI): mainnet **`8888d59c…`**, signet **`d4210dae…`**, header-chain zyncAPP
+reproduced by two builds and by CI): mainnet **`1ff5a129…`** (v0.26.0; continues v0.24.0's `8888d59c…` at block 2000,
+[`../HANDOVER.md`](../HANDOVER.md)), signet **`28e39600…`**, header-chain zyncAPP
 **`2db34e12…`** ([`../../reproduce/LIBZYNC_IDS`](../../reproduce/LIBZYNC_IDS)). v0.23.0 (risc0 3.0.5, mainnet
 `863c9ce3…`, signet `73b62530…`) is **withdrawn**: 3.1.0 fixes soundness bugs in RISC Zero's proof system, and 3.1.0
 verifiers refuse 3.0.x receipts. Laptop builds of the same source give other ids (on 3.0.5, mainnet `bbf82800…`),
@@ -15,7 +16,7 @@ so. Every number names what it was measured on and says MEASURED or ESTIMATED. S
 open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rounds 1-8 in full) is
 [`LIBZYNC_2026-10-31.md`](../../history/experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
 
-**In service (2026-11-12):** the public board (api.hazync.org) runs Hazync v2 under `8888d59c` since 2026-11-12,
+**In service (2026-11-12):** the public board (api.hazync.org) runs Hazync v2 under `8888d59c` since 2026-11-12 (`1ff5a129` from block 2000),
 restarted from genesis (first run: 1,287 blocks proven on 4× RTX PRO 6000 in 2 h 38 min); the whole header chain is
 proved in one receipt under `2db34e12` and followed at the tip on CPU; zyncAPP pages are live on hazync.org
 (`/zapps/`, `/headers/`, `/zapp/`); the Windows CUDA host proves natively.

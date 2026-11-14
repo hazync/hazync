@@ -3,14 +3,15 @@
 The operator's reference for proving on the board, and for the **Hazync v1 system**: the CORE guest (`37987b85`,
 now superseded), its last release v0.22.1, multi-card fleets on RunPod, and tip runs.
 
-**Since 2026-11-12 the public board is Hazync v2** (the libzync engine, image `8888d59c`, release v0.24.0); §0 covers
+**Since 2026-11-12 the public board is Hazync v2** (the libzync engine: image `8888d59c` for blocks 1..1999, releases v0.24.0-v0.25.0, and `1ff5a129` from block 2000,
+release v0.26.0, by a handover, [`HANDOVER.md`](HANDOVER.md)); §0 covers
 it and its proving fleets. §3 (board workers) applies to both boards. §1, §2, §4 and §5 describe v1 and stay as its
 reference. It merges the September 2026 pages
 PROVING, PROVER_OPERATIONS, FLEET_OPERATIONS, TIP_RUN_OPERATIONS and TOPOLOGY_AND_SETTINGS (now in
 `docs/history/`).
 
-⚠ **The host in this tree is libzync-only.** The canonical image is libzync's published mainnet image `8888d59c`
-(§2.7), and `prover/host` refuses to build without `HAZYNC_LIBZYNC=1`. The CORE commands below that drive a guest mode
+⚠ **The host in this tree is libzync-only.** The canonical image is libzync's published mainnet image `1ff5a129`
+(§2.7; it continues `8888d59c` at block 2000), and `prover/host` refuses to build without `HAZYNC_LIBZYNC=1`. The CORE commands below that drive a guest mode
 a libzync image refuses (`regress`, `adversarial`, `check-*`, `prove-full`, `prove-seg`, `prove-chain*`, `prove-ibd`,
 `prove-range`, `extend-spine`, `verify-range`, `verify-chain`, `prove-snark`, mode 6) exist only in the v0.22.1
 release binaries; [`history/README.md`](../history/README.md) lists what was removed. This tree's commands are in
@@ -47,7 +48,8 @@ prep pass on the board box (`libzync-board-prep`) writes one leaf bundle per blo
 claims, per-block proofs, folds, the genesis-anchored spine, the leaderboard, sponsorships and the sponsor bot.
 
 Workers: the v0.24.0 release (`hazync-worker`, `hazync-run-workers.sh`, the CUDA host), run as in §3. A worker whose
-host is not `8888d59c` is refused at start (§3.4).
+host is not `8888d59c` is refused at start (§3.4). From the handover (docs/HANDOVER.md §5) the board runs v0.26.0's
+`1ff5a129` and refuses `8888d59c` workers above block 2000 in the same way.
 
 **MEASURED, first v2 proving run** (2026-11-12, 4× RTX PRO 6000, 2 h 38 min): 1,287 blocks proven, ~490 blocks/hr,
 ~$0.021/block on early blocks, $27.13 in all. An early block takes ~22–27 s on an RTX PRO 6000, mostly fixed per-block
@@ -341,15 +343,16 @@ it runs once per artifact. `SKIP_GROTH16=1` boxes cannot `snark-wrap` at all.
 
 ### 2.7 METHOD_ID and reproducibility
 
-**Releases.** The current release is **v0.24.0**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
-line to name the newest tag (or one ahead of it). It ships the published libzync image `8888d59c`. v0.23.0 (`863c9ce3`, risc0
+**Releases.** The current release is **v0.26.0**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
+line to name the newest tag (or one ahead of it). It ships the published libzync image `1ff5a129`, which continues
+v0.24.0/v0.25.0's `8888d59c` at block 2000. v0.23.0 (`863c9ce3`, risc0
 3.0.5) was the first libzync release and v0.22.1 (`37987b85`) the CORE design's last; 3.0.5 receipts do not verify under 3.1.0.
 
 **The canonical id** (`reproduce/METHOD_ID`) is libzync's published mainnet image
-`8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, with the signet image in
+`1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a` (v0.26.0), with the signet image in
 [`reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). `reproduce/libzync.Dockerfile` reproduces both bit for bit and the
-`reproducible-image-id` job rebuilds them on every push. Release v0.24.0 ships it (and the board runs it since
-2026-11-12).
+`reproducible-image-id` job rebuilds them on every push. Release v0.26.0 ships it; the board runs it from the handover
+at block 2000 (`8888d59c`, v0.24.0, since 2026-11-12, below it).
 
 A receipt verifies only against the guest that produced it. A mismatch prints `STARK verification FAILED.
 This is almost certainly a guest image-id (METHOD_ID) MISMATCH` — a build mismatch, not a bad proof.

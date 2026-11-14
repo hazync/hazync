@@ -56,7 +56,7 @@ IS_WINDOWS = os.name == "nt"
 # The canonical guest image id. A binary printing anything else produces proofs the coordinator
 # rejects with EX_CONFIG, so this is the first thing checked and the only one that is fatal.
 # The published libzync mainnet image (reproduce/LIBZYNC_IDS): the board verifies against it from the switch on.
-CANONICAL_METHOD_ID = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4"
+CANONICAL_METHOD_ID = "1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a"
 
 # ⭐ The guest is embedded VERBATIM in the host binary, so "is this canonical" can be answered from
 # the FILE — which matters because a CUDA build on a machine with no NVIDIA driver cannot start at
@@ -301,7 +301,7 @@ def check_host_binary(host_path):
     ⚠ Parsed as "the first 64-hex token in the output", because `host method-id` prints the digest
     AND a `u32x8` decomposition, and a looser match would pick up the words. Measured output:
 
-        METHOD_ID 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+        METHOD_ID 1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a
           u32x8   [3818667142, ...]
     """
     host = Path(host_path)

@@ -21,8 +21,10 @@ The images are pinned in [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS):
 
 | image | id |
 |---|---|
-| mainnet product | `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` |
-| signet product | `d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387` |
+| mainnet product (v0.26.0; continues `8888d59c` at block 2000) | `1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a` |
+| mainnet product (v0.24.0, v0.25.0; blocks 1..1999 of the board) | `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` |
+| signet product (v0.26.0) | `28e396006e97a8075daeb9fb12ce3ef1b3a20e44eac935256a1c2e8c3d8d57f3` |
+| signet product (v0.24.0, v0.25.0) | `d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387` |
 | header-chain zyncAPP (mainnet) | `2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632` |
 
 How faithful "Core's rules as compiled into the image" is, rule by rule, is

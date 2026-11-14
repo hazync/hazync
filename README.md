@@ -39,11 +39,11 @@ Core's rules one by one.
 ## The program
 
 A proof names the exact program that produced it. The published Hazync v2 images, built on RISC Zero 3.1.0
-(release [v0.24.0](https://github.com/hazync/hazync/releases/tag/v0.24.0)), are
+(release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0)), are
 
 ```
-mainnet  8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
-signet   d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387
+mainnet  1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a   (continues 8888d59c… at block 2000)
+signet   28e396006e97a8075daeb9fb12ce3ef1b3a20e44eac935256a1c2e8c3d8d57f3
 headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632   (the header-chain zyncAPP)
 ```
 
@@ -61,7 +61,8 @@ the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench
 **Works today**
 
 - **The public board proves Hazync v2.** [hazync.org](https://hazync.org/) switched to it on 12 November 2026 and
-  restarted from genesis under `8888d59c`: anyone with an NVIDIA card claims a block, proves it and submits it,
+  restarted from genesis under `8888d59c` (continued from block 2000 by `1ff5a129`, a handover that keeps every
+  earlier proof, [`docs/HANDOVER.md`](docs/HANDOVER.md)): anyone with an NVIDIA card claims a block, proves it and submits it,
   and proved blocks are joined into one genesis-anchored proof ([`CONTRIBUTING.md`](CONTRIBUTING.md)). Its first
   proving run, on 4× RTX PRO 6000, proved 1,287 blocks in 2 h 32 min of proving (about 510 an hour), $27.13 in all,
   about $0.021 a block on these early, nearly empty blocks

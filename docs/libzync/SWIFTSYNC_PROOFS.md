@@ -55,9 +55,10 @@ read a JSON written before E2.
 Given a receipt R and the network. Both verifiers (`swiftsync-verify`, `host libzync-verify`) make every check
 below; step 7 needs a source you name (without one they print the tip hash to compare).
 
-1. `R.verify(M)`, where M is the published libzync image id for that network (`reproduce/LIBZYNC_IDS`; since v0.24.0,
-   risc0 3.1.0: mainnet `8888d59c…`, signet `d4210dae…`). The built-in table (`IMAGES` in `swiftsync-verify/src/lib.rs`,
-   the C ABI's and the WASM build's) holds exactly these. Receipts of withdrawn images (v0.23.0's `863c9ce3…`, risc0
+1. `R.verify(M)`, where M is the published libzync image id for that network (`reproduce/LIBZYNC_IDS`; v0.26.0,
+   risc0 3.1.0: mainnet `1ff5a129…`, signet `28e39600…`). The built-in table (`IMAGES` in `swiftsync-verify/src/lib.rs`,
+   the C ABI's and the WASM build's) holds these as each network's current image, after the earlier images they
+   continue or replace (v0.24.0's `8888d59c…` / `d4210dae…`), which stay verifiable by id. Receipts of withdrawn images (v0.23.0's `863c9ce3…`, risc0
    3.0.5) are refused: 3.1.0's verifier parameters differ. Another image needs `--image <hex>` (with `--product` for
    profile bits 4-6, the coin log, trie and live-coin hash). `host libzync-verify` checks against the image it was
    built with.

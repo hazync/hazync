@@ -1,7 +1,8 @@
 [toolchain]
 # PINNED, not "stable": the host toolchain reaches the guest image ids. On 2026-11-12 stable moved from 1.99.1 to
 # 1.100.0 and CI's reproducible build of the unchanged guest gave other mainnet and signet ids (a97bbe5e / 52a9789e
-# instead of the published 8888d59c / d4210dae). 1.99.1 is what reproduces them. Move it only with a new image.
+# instead of the then-published 8888d59c / d4210dae). 1.99.1 is what reproduces them, and v0.26.0's 1ff5a129 / 28e39600.
+# Move it only with a new image.
 channel = "1.99.1"
 components = ["rustfmt", "rust-src"]
 profile = "minimal"

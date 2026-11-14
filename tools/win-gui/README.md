@@ -1,7 +1,7 @@
 # Hazync on Windows — a GUI for the prover
 
 A window that runs the prover, for people who do not use a terminal. It drives Hazync v2 (the libzync engine):
-the canonical image it checks for is v0.24.0's mainnet `8888d59c…` (`supervisor.py`, `CANONICAL_METHOD_ID`).
+the canonical image it checks for is v0.26.0's mainnet `1ff5a129…` (`supervisor.py`, `CANONICAL_METHOD_ID`).
 
 ```
 python hazync_gui.py
@@ -133,7 +133,7 @@ The **Prove** tab has two buttons that run what you would otherwise type:
 
 | | |
 |---|---|
-| Is this prover genuine? | `method-id` — must print the canonical libzync id (`8888d59c…`) or proofs are rejected; runs at startup. ⚠ Where `method-id` cannot run (a CUDA `host.exe` on a machine with no NVIDIA driver), the fallback reads the embedded guest from the file, pinned by `GUEST_SHA256` and `GUEST_SIZE` in `supervisor.py` to the published mainnet guest of `reproduce/LIBZYNC_IDS` (`ded6f884…`, 70,191,408 bytes; it was the v1 guest until 2026-11-12 — checked against the v0.24.0 `host.exe`, which it now matches). A new image means updating both |
+| Is this prover genuine? | `method-id` — must print the canonical libzync id (`1ff5a129…`) or proofs are rejected; runs at startup. ⚠ Where `method-id` cannot run (a CUDA `host.exe` on a machine with no NVIDIA driver), the fallback reads the embedded guest from the file, pinned by `GUEST_SHA256` and `GUEST_SIZE` in `supervisor.py` to the published mainnet guest of `reproduce/LIBZYNC_IDS` (`ded6f884…`, 70,191,408 bytes; it was the v1 guest until 2026-11-12 — checked against the v0.24.0 `host.exe`, which it now matches). A new image means updating both |
 | Can it actually prove? | the client's `selftest` — checks the prover against the board, verifies a real board proof, then proves mainnet block 1 for real from the board's leaf bundle |
 
 ⭐ **No block is claimed and nothing is submitted.** The selftest fetches block 1's bundle and a board proof
