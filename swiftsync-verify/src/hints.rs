@@ -124,8 +124,37 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     };
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
     let enough = work_at_least(&z.cum_work, img.min_work_hex) && z.core_height >= img.checkpoint_height;
-    rep.checks.push((true, format!("core chain {} Core's minimum work and the checkpoint", if enough { "reaches" } else { "is below" })));
+    rep.checks.push((true, (if enough { "the core chain reaches Core's minimum work and the checkpoint" } else { "the core chain is below Core's minimum work or the checkpoint" }).to_string()));
     rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok { Verdict::Ok } else { Verdict::Demo };
     rep.statement = Some(z);
     rep
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const H3: &str = "0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449";
+    fn rd(f: &str) -> Vec<u8> { std::fs::read(format!("{}/vectors/hints/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap() }
+    fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
+
+    /// The real receipts (proved on CPU, 2026-11-14, hints image dff7f87c over core 46666b6f blocks 1..3).
+    #[test]
+    fn real_receipts() {
+        let (r, f, u) = (rd("mainnet-3.receipt"), rd("mainnet-3.hints"), rd("mainnet-3.undo"));
+        let ok = verify_hints(&r, &f, Some(&u), HINTS_IMAGE_ID, None, now(), Some((3, H3)), None);
+        assert_eq!(ok.verdict, Verdict::Demo, "{:?}", ok.checks); // valid, but 3 blocks are below minimum work
+        assert!(ok.identity_checked);
+        let mut flip = f.clone();
+        *flip.last_mut().unwrap() ^= 1;
+        assert_eq!(verify_hints(&r, &flip, None, HINTS_IMAGE_ID, None, now(), Some((3, H3)), None).verdict, Verdict::Fail);
+        assert_eq!(verify_hints(&r, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((3, H3)), None).verdict, Verdict::Fail);
+        assert_eq!(verify_hints(&r, &f, None, HINTS_IMAGE_ID, None, now(), Some((2, H3)), None).verdict, Verdict::Fail);
+        assert_eq!(verify_hints(&r, &f, None, &"ab".repeat(32), None, now(), None, None).verdict, Verdict::Fail);
+        // H = 2 under a core tip of 3: the tip is checked separately
+        let r2 = rd("mainnet-2.receipt");
+        let h2 = "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd";
+        let two = verify_hints(&r2, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((2, h2)), Some((3, H3)));
+        assert_eq!(two.verdict, Verdict::Demo, "{:?}", two.checks);
+        assert_eq!(verify_hints(&r2, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((2, h2)), Some((3, h2))).verdict, Verdict::Fail);
+    }
 }
