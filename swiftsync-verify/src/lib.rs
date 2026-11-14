@@ -1292,15 +1292,27 @@ mod tests {
     }
 
     /// The built-in table is the published one (reproduce/LIBZYNC_IDS, written with the table by
-    /// reproduce/pin-libzync-ids.py): a hand edit to either fails here.
+    /// reproduce/pin-libzync-ids.py): each network's CURRENT image (its last entry) is the published id, and every
+    /// earlier entry is an image the record says was published and superseded (reproduce/METHOD_ID for mainnet,
+    /// reproduce/LIBZYNC_IDS's history in git for signet: named in this file's comments). A hand edit fails here.
     #[test]
     fn images_match_the_published_ids() {
         let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        for img in IMAGES {
-            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(img.network))
-                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {} line", img.network));
+        let record = include_str!("../../reproduce/METHOD_ID");
+        let this = include_str!("lib.rs");
+        for net in ["mainnet", "signet"] {
+            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(net))
+                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {net} line"));
             let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-            assert_eq!(id, img.method_id_hex, "{}: IMAGES and reproduce/LIBZYNC_IDS disagree", img.network);
+            let cur = Image::by_network(net).unwrap();
+            assert_eq!(id, cur.method_id_hex, "{net}: the current image and reproduce/LIBZYNC_IDS disagree");
+            for old in IMAGES.iter().filter(|i| i.network == net && i.method_id_hex != id) {
+                let named = if net == "mainnet" { record.contains(&format!("Superseded {}", &old.method_id_hex[..8])) }
+                            else { this.contains(&format!("// v0.23.0-v0.25.0 {net}")) };
+                assert!(named, "{net}: earlier image {} is not in the superseded record", old.method_id_hex);
+            }
+            assert_eq!(IMAGES.iter().filter(|i| i.network == net && i.method_id_hex == id).count(), 1,
+                       "{net}: the published id is listed more than once");
         }
     }
 
