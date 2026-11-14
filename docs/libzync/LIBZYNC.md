@@ -269,7 +269,7 @@ signedness bug was in Hazync's own transcription.
 scripts/libzync-base.sh ~/lz-base                       # Core v28.0 + libsecp 0.5.1 + patches, pinned
 cd prover && rm -rf target/riscv-guest                  # always build the guest from clean (round 8: stale ELF)
 HAZYNC_BASE=~/lz-base HAZYNC_LIBZYNC=1 cargo build --release -p host     # signet: HAZYNC_NETWORK=signet
-host method-id                                          # a laptop build prints its own id; the published 8888d59c is the container build
+host method-id                                          # a laptop build prints its own id; the published 1ff5a129 is the container build
 HAZYNC_BLOCK=block.json host libzync-hints out.lzb      # a block's hint bundle
 HAZYNC_BLOCK=block.json HAZYNC_LZ_HINTS=out.lzb host agg-exec-fake      # execute chunks + aggregate, print cycles
 host libzync-prove-range 1 200 <json dir> genesis <out>                 # prove a range from genesis

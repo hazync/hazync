@@ -35,8 +35,12 @@ include a real GPU proof of mainnet blocks 1..200 under the published image:
 cargo build --release --manifest-path swiftsync-verify/Cargo.toml
 python3 swiftsync-verify/vectors/run_vectors.py swiftsync-verify/target/release/swiftsync-verify   # 13/13
 swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --mempool \
-    swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt
+    swiftsync-verify/vectors/mainnet_1_200_????????.rcpt
 ```
+
+The vector is a real proof of mainnet 1..200 by v0.24.0's image `8888d59c…`, which v0.26.0's `1ff5a129…` continues at
+block 2000: the verifier sees the receipt names that earlier built-in image and checks it as that image (first line of
+its output).
 
 The last command should answer **DEMO** (exit 2): valid from genesis, below Core's minimum chainwork and the
 checkpoint. `--mempool` makes one request to mempool.space to compare the tip hash with block 200; or pass

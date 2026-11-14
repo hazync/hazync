@@ -375,7 +375,34 @@ pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
     }
 }
 
+/// The earlier built-in image a receipt names, when the caller asked for its network's CURRENT built-in image (by id): after a
+/// handover the table keeps the image it continues (v0.26.0's 1ff5a129 continues 8888d59c at block 2000), and that
+/// image's proofs (the chain below the handover) must keep verifying with no `--image`. Only images in the built-in
+/// table are ever substituted: an id the caller supplied, or one not in the table, is left to fail on its own.
+pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Image) -> Option<&'static Image> {
+    let current = Image::by_network(asked.network)?;
+    // By id, not by pointer: `--product` / `--coinlog` hand verify() a modified copy of the current image.
+    if asked.method_id_hex != current.method_id_hex {
+        return None;
+    }
+    use risc0_zkvm::sha::Digestible;
+    let claim = receipt.claim().ok()?;
+    let pre = claim.as_value().ok()?.pre.digest();
+    let hex: String = pre.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    IMAGES.iter().find(|i| i.network == asked.network && i.method_id_hex == hex && !std::ptr::eq(*i, current))
+}
+
 pub fn verify(inp: &Inputs) -> Report {
+    if receipt_kind(inp.receipt).is_ok() {
+        if let Ok(r) = bincode::deserialize::<risc0_zkvm::Receipt>(inp.receipt) {
+            if let Some(e) = earlier_image_named_by(&r, inp.image) {
+                let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
+                rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
+                                                     verified as that image", e.method_id_hex, e.network)));
+                return rep;
+            }
+        }
+    }
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false };
     let m = inp.image.method_id();
     if let Err(e) = receipt_kind(inp.receipt) {

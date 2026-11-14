@@ -42,10 +42,13 @@ A proof names the exact program that produced it. The published Hazync v2 images
 (release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0)), are
 
 ```
-mainnet  1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a   (continues 8888d59c… at block 2000)
+mainnet  1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a
 signet   28e396006e97a8075daeb9fb12ce3ef1b3a20e44eac935256a1c2e8c3d8d57f3
 headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632   (the header-chain zyncAPP)
 ```
+
+The mainnet image continues v0.24.0's `8888d59c…` at block 2000 by a handover ([`docs/HANDOVER.md`](docs/HANDOVER.md)):
+the board's blocks below 2000 are that image's proofs, and the verifier keeps it.
 
 and the build is reproducible: [`reproduce/libzync.Dockerfile`](reproduce/libzync.Dockerfile) gives
 the same ids bit for bit ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), and CI rebuilds them on

@@ -33,7 +33,7 @@ block-level rules the aggregate applies from the chunks' facts, the coin log, th
 
 | release | engine | status |
 |---|---|---|
-| v0.26.0 (latest) | Hazync v2, image `1ff5a129` (continues `8888d59c` at block 2000), RISC Zero 3.1.0 | supported: the public board runs it from the handover |
+| v0.26.0 (latest) | Hazync v2, image `1ff5a129`, RISC Zero 3.1.0 | supported: the public board runs it from the handover at block 2000 |
 | v0.24.0, v0.25.0 | Hazync v2, image `8888d59c`, RISC Zero 3.1.0 | supported for verifying: its proofs are the board's blocks 1..1999 |
 | v0.23.0 | Hazync v2, image `863c9ce3`, RISC Zero 3.0.5 | **withdrawn**: do not deploy; 3.1.0 verifiers refuse its proofs |
 | v0.22.1 and earlier | Hazync v1, image `37987b85` (since v0.21.0) | not maintained; v0.22.1 still verifies v1 proofs |
