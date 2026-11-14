@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""A stand-in for bitcoind's JSON-RPC (batched, cookie auth) over REAL mainnet data:
+  fake-bitcoind-rpc <port> <cookie file> <headers file "height hex80"> <control.json> <tx fixture>...
+Serves getblockhash, getblockheader (verbose / raw), getrawtransaction <txid> true (blockhash), getblock <hash> 2
+(txid + hex of each transaction, for the blocks the tx fixtures cover: experimental/libzync-bench/headers/tx/*.json).
+control.json is re-read on every request: {"tip": <h>, "lie": {"<h>": "<hash>"}} caps the tip and makes getblockhash
+lie at a height (a reorg)."""
+import base64, hashlib, http.server, json, sys
+port, cookie, hdrs, control, fixtures = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
+d = lambda b: hashlib.sha256(hashlib.sha256(b).digest()).digest()
+raw = {}
+for l in open(hdrs):
+    h, x = l.split(); raw[int(h)] = x
+hash_of = {h: d(bytes.fromhex(x))[::-1].hex() for h, x in raw.items()}
+height_of = {v: k for k, v in hash_of.items()}
+blocks = {}   # block hash -> {pos: (txid, hex)}
+for f in fixtures:
+    for line in open(f):
+        t = json.loads(line)
+        b = blocks.setdefault(t['hash'], {'ntx': t['ntx'], 'tx': {}, 'height': t['height'], 'header': t['header']})
+        b['tx'][t['pos']] = (t['txid'], t['raw'])
+        cb = bytes.fromhex(t['coinbase'])
+        b['tx'][0] = (d(cb)[::-1].hex(), t['coinbase'])   # the fixtures' coinbases are legacy (no witness)
+        b['branches'] = b.get('branches', {}); b['branches'][t['pos']] = t['branch']
+tx_block = {txid: bh for bh, b in blocks.items() for txid, _ in b['tx'].values()}
+
+
+def call(m, p):
+    c = json.load(open(control))
+    tip, lie = c.get('tip', max(raw)), c.get('lie', {})
+    if m == 'getblockhash':
+        h = int(p[0])
+        if h > tip: raise KeyError('Block height out of range')
+        return lie.get(str(h), hash_of[h])
+    if m == 'getblockheader':
+        h = height_of.get(p[0])
+        if h is None and p[0] in blocks:   # a fixture block beyond the headers file (block 100,002): on the chain
+            b = blocks[p[0]]
+            return {'hash': p[0], 'height': b['height'], 'confirmations': 1} if (len(p) < 2 or p[1]) else b['header']
+        if h is None or h > tip or str(h) in lie: raise KeyError('Block not found')
+        return {'hash': p[0], 'height': h, 'confirmations': tip - h + 1} if (len(p) < 2 or p[1]) else raw[h]
+    if m == 'getrawtransaction':
+        bh = tx_block.get(p[0])
+        if bh is None: raise KeyError('No such mempool or blockchain transaction')
+        return {'txid': p[0], 'blockhash': bh}
+    if m == 'getblock':
+        b = blocks[p[0]]
+        if len(b['tx']) != b['ntx']:
+            # a fixture holds some of a block's transactions: enough for the ones asked about, never a whole block
+            raise KeyError('the fake holds only part of this block')
+        return {'hash': p[0], 'tx': [{'txid': b['tx'][i][0], 'hex': b['tx'][i][1]} for i in range(b['ntx'])]}
+    raise KeyError('Method not found')
+
+
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        want = 'Basic ' + base64.b64encode(open(cookie, 'rb').read().strip()).decode()
+        if self.headers.get('Authorization') != want:
+            self.send_response(401); self.end_headers(); return
+        reqs = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        out = []
+        for r in reqs:
+            try: out.append({'id': r['id'], 'result': call(r['method'], r['params']), 'error': None})
+            except KeyError as e: out.append({'id': r['id'], 'result': None, 'error': {'code': -5, 'message': str(e)}})
+        b = json.dumps(out).encode()
+        self.send_response(200); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
+
+
+http.server.ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()
