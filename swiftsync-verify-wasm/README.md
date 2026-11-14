@@ -14,8 +14,8 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,248,737 bytes raw, 362,504 gzipped |
-| sha256 (this commit, `./build.sh`) | `f77bae7b7f494bce211dc88e6ccca4fc3be3981b6729dbf7c9fdf98e8d270de1` (v0.26.0: the undo-data commitment; risc0 3.1.0; mainnet `46666b6f`, signet `c3a68e2d`, headers `2db34e12`, and `8888d59c` / `d4210dae` by id; one build, Rust 1.99.0, 2026-11-14). v0.24.0's release asset was `446fdaeb…` |
+| size | 1,248,921 bytes raw, 362,580 gzipped |
+| sha256 (this commit, `./build.sh`) | `1d0d88681222843d5c9d9dc236a7802477d640750c5b97acabe1cf771e51b509` (v0.26.0: the undo-data commitment and the 11-14 review's trie-fact check; risc0 3.1.0; mainnet `46666b6f`, signet `c3a68e2d`, headers `2db34e12`, and `8888d59c` / `d4210dae` by id; one build, Rust 1.99.0, 2026-11-14). v0.24.0's release asset was `446fdaeb…` |
 | reproduces | **only with the same host Rust**: 1.99.0 gave v0.24.0's `446fdaeb…`, 1.97.1 `a3a85b7f…`. The checkout path does not matter (the sources are staged), so use `RUSTUP_TOOLCHAIN=1.99.0`; the repo does not pin it yet. Also only at the default stage path: a `SWIFTSYNC_WASM_STAGE` override gave other bytes (`2ea330c0…`, +235 bytes) with no path in the strings |
 | vectors | 11/11 (`test-vectors.out`; the 2 CLI-only cases of the manifest are skipped) |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |
