@@ -123,9 +123,16 @@ def main():
             check(want in feed, f"the feed says: {want!r}")
         check("segment" not in feed.lower() and "piece 30" not in feed.lower(),
               "the feed lists what happened, not every progress line")
+        # 11-13: a landed block is followed by the next (_again); Stop stays live in between, and Start returns
+        # only once Stop is pressed
+        check(str(app.stop_btn["state"]) == "normal" and bool(app._respawns or app.workers),
+              "after a block, the next one is on its way and Stop stays live")
+        app._stop()
+        spin(app, 15, lambda: not app.workers and not app._respawns)
         check(bool(app.start_btn.winfo_manager()) and str(app.start_btn["state"]) == "normal",
-              "Start is back once nothing is running")
-        check("1 block proven" in app.v_meta.get(), f"the session count stays: {app.v_meta.get()!r}")
+              "Start is back once Stop is pressed and nothing is running")
+        check("block proven" in app.v_meta.get() or "blocks proven" in app.v_meta.get(),
+              f"the session count stays: {app.v_meta.get()!r}")
     finally:
         for w in list(app.workers):
             try:

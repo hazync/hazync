@@ -38,24 +38,40 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import activity  # noqa: E402
 import brand  # noqa: E402
 import cards  # noqa: E402
 import firstrun  # noqa: E402
+import gpuprep  # noqa: E402
 import hazync_api as api  # noqa: E402
 import supervisor  # noqa: E402
 import theme  # noqa: E402
 
 POLL_MS = 150
+
+# The segment-size list. ⛔ ONLY 21 AND 22 ARE MEASURED: one prove at 21 peaked near 22 GB, one at 22
+# near 40.6 GB (prover/host/src/main.rs). Below 21 each step roughly halves it -- an estimate, so "about".
+# 22's SPEED was never measured; it is there for big cards, not recommended.
+SEG_CHOICES = [
+    ("", "Automatic (recommended)"),
+    ("22", "22 — about 41 GB; 48 GB cards and up (speed not measured)"),
+    ("21", "21 — about 22 GB; 24 GB cards and up"),
+    ("20", "20 — about 11 GB; 12–16 GB cards"),
+    ("19", "19 — about 6 GB; 8 GB cards"),
+    ("18", "18 — about 3 GB; 6 GB cards"),
+    ("17", "17 — about 1.5 GB; smaller cards"),
+]
 REFRESH_S = 60          # the website refreshes the map every minute; match it rather than hammer
 
 
 class Worker:
-    def __init__(self, index, popen, log_path, job, card=None, label=""):
+    def __init__(self, index, popen, log_path, job, card=None, label="", base=None, extra=()):
         self.index, self.popen, self.log_path, self.job = index, popen, log_path, job
+        self.base, self.extra = base, tuple(extra)   # what it was started with, to start it again (_reap)
+        self.transients = 0                          # unexplained exits in a row (_reap retries a few)
         # The graphics card this worker was given, and what to call it on screen. Both empty on a
         # machine with one card, where nothing is pinned and nothing needs telling apart.
         self.card, self.label = card, label
@@ -74,6 +90,7 @@ class App(tk.Tk):
         # ⛔ SETTINGS MUST SURVIVE A RESTART. Re-typing four paths every launch is its own reason to
         # give up, and the first version of this window saved nothing at all.
         self.cfg = firstrun.load_config()
+        self._respawns = {}          # starts scheduled by _again, cancelled by _stop
         self.dark = tk.BooleanVar(value=bool(self.cfg.get("dark")))
         self.p = brand.palette(self.dark.get())
         self.q = queue.Queue()
@@ -87,7 +104,6 @@ class App(tk.Tk):
         self.workers = []
         self.runs, self.meta, self.prog = [], {}, {}
         self.claims = []                 # (lo, hi) a prover is holding right now, for the map
-        self._cells = []                 # (item_id, lo, hi, state) for the map
         self._explained = set()          # each known failure explained once, not every line
         self._auto_diag_done = False     # the cheap checks run once per launch, not on every rescan
         self._auto_fix_done = False      # ...and so does fetching what setup can fetch by itself
@@ -137,6 +153,10 @@ class App(tk.Tk):
 
         # Shared by Home and the Advanced pages, so it has to exist before either is built.
         self.mode = tk.StringVar(value=self.cfg.get("mode") or "auto")
+        # Fold beside proving (11-13): a fold is a small proof that joins two proven neighbours so the chain proof can
+        # take them in one step. The worker's GPU lock (hazync gpu_lock) makes the prover and the folder on one card
+        # take turns, so ticking it costs little proving time and helps the spine catch up with the proven blocks.
+        self.also_fold = tk.BooleanVar(value=bool(self.cfg.get("also_fold")))
 
         # ⭐ THREE PLACES, NOT FIVE. Home is the whole program for most people: one choice, one
         # button, and what is happening. The board is for looking. Everything a newcomer should
@@ -152,6 +172,7 @@ class App(tk.Tk):
         self._tab_setup()
         self._tab_run()
         self._tab_settings()
+        self._tab_log()
         self.mode.trace_add("write", lambda *_: self._paint_tiles())
         self._paint_tiles()
         self._sync_buttons()
@@ -262,11 +283,15 @@ class App(tk.Tk):
         self.v_pick_note = tk.StringVar(value="")
         tk.Label(pick, textvariable=self.v_pick_note, bg=p["fog"], fg=p["slate"],
                  font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=3, sticky="w", padx=8)
+        ttk.Checkbutton(pick, variable=self.also_fold, command=self._persist,
+                        text="Also fold while proving: small joins that help the chain proof catch up, on the same "
+                             "graphics card, taking turns with the proving").grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 0))
 
         feedf = self._card(t, "WHAT HAS HAPPENED")
         feedf.pack(fill="both", expand=True, padx=10, pady=(8, 10))
         ttk.Button(feedf, text="Show the technical log", style="Quiet.TButton",
-                   command=lambda: self._open_advanced(1)).place(relx=1.0, x=-10, y=6, anchor="ne")
+                   command=lambda: self._open_advanced(self.LOG_TAB)).place(relx=1.0, x=-10, y=6, anchor="ne")
         self.feed = tk.Text(feedf, wrap="word", height=6, bg=p["mist"], fg=p["ink"],
                             relief="flat", font=("Segoe UI", 10), padx=4, pady=2,
                             highlightthickness=0, cursor="arrow")
@@ -307,7 +332,7 @@ class App(tk.Tk):
         """Start and Stop say what they will do, and only one of them is ever live."""
         if not hasattr(self, "start_btn"):
             return
-        running = bool(self.workers)
+        running = bool(self.workers) or bool(self._respawns)
         self.start_btn.configure(text=self.START_TEXT.get(self.mode.get(), "Start"),
                                  state="normal" if (self._setup_ok and not running) else "disabled")
         self.stop_btn.configure(state="normal" if running else "disabled")
@@ -368,7 +393,8 @@ class App(tk.Tk):
             return
         now = time.time()
         if self.workers:
-            lead = self.workers[0]
+            # the prover leads Home when a folder runs beside it (also_fold), whatever order restarts left them in
+            lead = next((w for w in self.workers if w.job == "run"), self.workers[0])
             a = lead.activity
             stopping = any(w.stopping for w in self.workers)
             named = [w for w in self.workers if w.label]
@@ -396,16 +422,33 @@ class App(tk.Tk):
                 self.v_head.set(a.headline)
                 self.v_sub.set(a.detail)
                 self._set_bar(a.fraction, busy=not a.waiting)
+                # a specific range: say how far through it, and let the bar run over the whole range, not reset each
+                # block (Xesktop 11-13: on 1,342-2,000 the per-block bar filled and emptied every 32 s and read as
+                # stalling)
+                rp = a.range_progress
+                if rp:
+                    done, total = rp
+                    self.v_head.set(f"{a.headline}  ·  {done:,} of {total:,} done in {activity.pretty(f'{a.span[0]}-{a.span[1]}')}")
+                    self._set_bar(min(1.0, (done + (a.fraction or 0)) / total), busy=not a.waiting)
+                # a card newer than the prover's GPU code: say why nothing moves yet (gpuprep)
+                if getattr(self, "_gpu_prep", None) and a.job == "run" and not a.pieces and a.block:
+                    self.v_head.set(f"{gpuprep.HEADLINE}  ·  {a.headline}")
+                    self.v_sub.set(gpuprep.DETAIL)
             bits = [f"Running for {activity.clock(now - min(w.started for w in self.workers))}",
                     f"last heard from the prover {activity.clock(now - max(w.heard for w in self.workers))} ago"]
             if len(self.workers) > 1:
-                bits.append(f"{len(self.workers)} at once")
+                bits.append(self._crew())
             if self._session_line():
                 bits.append(self._session_line() + " this session")
             self.v_meta.set(" · ".join(bits))
             return
         self.v_meta.set((self._session_line() + " this session") if self._session_line() else "")
-        if self._diag_running:
+        if self._respawns:
+            # between two blocks (or two folds): the next start is scheduled, so this is not "ready when you are"
+            self.v_head.set("Taking the next one…")
+            self.v_sub.set("The last one finished; the next starts in a moment. Stop ends the session.")
+            self._set_bar(None, busy=True)
+        elif self._diag_running:
             name, t0 = self._diag_running
             title = next((t for n, t, *_ in supervisor.DIAGNOSTICS if n == name), name)
             self.v_head.set("Checking this machine…")
@@ -729,7 +772,9 @@ class App(tk.Tk):
                 "host_cuda": self.host_cuda_var.get().strip(),
                 "build_kind": self.build_kind.get(),
                 "force_gpu": bool(self.force_gpu.get()),
-                "cards_off": sorted(self.cards_off)}
+                "cards_off": sorted(self.cards_off),
+                "also_fold": bool(self.also_fold.get()),
+                "gpu_prepared": sorted(set(self.cfg.get("gpu_prepared") or []))}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -739,7 +784,7 @@ class App(tk.Tk):
 
     # ── tab: dashboard ──────────────────────────────────────────────────────────────────────────
     def _tab_board(self):
-        """How far the whole project has got: the numbers, and the map of every block."""
+        """How far the whole project has got: the numbers, and the website's map of every block."""
         p = self.p
         t = tk.Frame(self.nb, bg=p["fog"])
         self.nb.add(t, text="  The board  ")
@@ -785,79 +830,57 @@ class App(tk.Tk):
                      font=("Segoe UI", 8)).pack(anchor="w", padx=12, pady=(0, 10))
             mid.columnconfigure(col, weight=1)
 
-    # ── tab: block map ──────────────────────────────────────────────────────────────────────────
+    # ── the block map: the website's, not a copy ────────────────────────────────────────────────
+    # ⛔ 11-13 (owner): the window drew its own condensed map (one square per range of blocks, scaled to fit), and it
+    # read as a worse copy of hazync.org's. The site's map is the one people know: every block, zoom, search, a
+    # square's proofs. So the window opens that, and for its user, the map filtered to their own blocks
+    # (/block-map/?prover=<name>, web #53).
+    MAP_URL = "https://hazync.org/block-map/"
+
     def _tab_map(self, t):
         p = self.p
-        bar = tk.Frame(t, bg=p["fog"])
-        bar.pack(fill="x", padx=10, pady=(10, 4))
-        ttk.Button(bar, text="Refresh", style="Quiet.TButton",
-                   command=self.refresh).pack(side="right")
-        tk.Label(bar, text="Every block, in order — each square is a range.",
-                 bg=p["fog"], fg=p["slate"], font=("Segoe UI", 9)).pack(side="left")
-        self.v_percell = tk.StringVar(value="")
-        tk.Label(bar, textvariable=self.v_percell, bg=p["fog"], fg=p["slate"],
-                 font=("Segoe UI", 9)).pack(side="left", padx=10)
+        box = self._card(t, "THE BLOCK MAP")
+        box.pack(fill="x", padx=10, pady=(4, 10))
+        tk.Label(box, text="Every block of Bitcoin's history, one square each, and how far each has got. "
+                           "It opens on hazync.org in your browser.",
+                 bg=p["mist"], fg=p["slate"], font=("Segoe UI", 9), wraplength=700,
+                 justify="left").pack(anchor="w", padx=12, pady=(0, 8))
+        row = tk.Frame(box, bg=p["mist"])
+        row.pack(anchor="w", padx=12, pady=(0, 12))
+        ttk.Button(row, text="Open the block map", command=self._open_map).pack(side="left")
+        ttk.Button(row, text="Show my blocks on the map", style="Quiet.TButton",
+                   command=lambda: self._open_map(mine=True)).pack(side="left", padx=8)
 
-        leg = tk.Frame(t, bg=p["fog"])
-        leg.pack(fill="x", padx=10)
-        for st in (api.ANCHORED, api.FOLDED, api.PROVEN, api.CLAIMED, api.OPEN):
-            sw = tk.Frame(leg, bg=brand.state_colours(self.dark.get())[st],
-                          width=14, height=14, highlightbackground=p["haze"], highlightthickness=1)
-            sw.pack(side="left", padx=(10, 4))
-            tk.Label(leg, text=api.STATE_NAMES[st], bg=p["fog"], fg=p["slate"],
-                     font=("Segoe UI", 8)).pack(side="left")
+    def _my_handle(self):
+        """The name this key proves under, from the setup check (None when not named yet)."""
+        for s in getattr(self, "_steps", None) or []:
+            if getattr(s, "key", None) == "identity" and s.done:
+                return s.detail.split("  (key")[0].strip() or None
+        return None
 
-        # ⚠ BLACK, in both themes — the site's map ground. The colours were chosen against it.
-        self.map_canvas = tk.Canvas(t, bg=brand.MAP_SURFACE, highlightthickness=0)
-        self.map_canvas.pack(fill="both", expand=True, padx=10, pady=8)
-        self.map_canvas.bind("<Button-1>", self._map_click)
-        self.map_canvas.bind("<Configure>", lambda e: self._draw_map())
+    def map_link(self, mine=False):
+        if not mine:
+            return self.MAP_URL
+        name = self._my_handle()
+        if not name:
+            return None
+        from urllib.parse import quote
+        return f"{self.MAP_URL}?prover={quote(name)}"
 
-        self.v_cell = tk.StringVar(value="select a square to see its range")
-        tk.Label(t, textvariable=self.v_cell, bg=p["fog"], fg=p["ink"],
-                 font=("Segoe UI", 10)).pack(anchor="w", padx=12, pady=(0, 10))
-
-    def _draw_map(self):
-        c = self.map_canvas
-        c.delete("all")
-        self._cells = []
-        if not self.runs or not self.meta.get("tip"):
-            c.create_text(14, 14, anchor="nw", text="Loading the board…",
-                          fill="#93a0aa", font=("Segoe UI", 10))
+    def _open_map(self, mine=False):
+        url = self.map_link(mine)
+        if url is None:
+            messagebox.showinfo("No name yet", "Your blocks are found by the name you prove under, and none is set "
+                                               "yet. Press Start and it asks for one.")
             return
-        w = max(c.winfo_width(), 200)
-        h = max(c.winfo_height(), 120)
-        cell, gap = 9, 2
-        per_row = max(10, (w - 20) // (cell + gap))
-        rows_max = max(4, (h - 20) // (cell + gap))
-        rows, per_cell = api.map_rows(self.runs, self.meta["tip"], per_row, rows_max,
-                                      claims=self.claims)
-        self.v_percell.set(f"{per_cell:,} blocks per square · {self.meta['tip']:,} blocks total")
-        cols = brand.state_colours(self.dark.get())
-        for r, row in enumerate(rows):
-            for i, (st, lo, hi) in enumerate(row):
-                x = 10 + i * (cell + gap)
-                y = 10 + r * (cell + gap)
-                iid = c.create_rectangle(x, y, x + cell, y + cell, fill=cols[st], outline="")
-                self._cells.append((iid, lo, hi, st))
-
-    def _map_click(self, ev):
-        hit = self.map_canvas.find_closest(ev.x, ev.y)
-        if not hit:
-            return
-        for iid, lo, hi, st in self._cells:
-            if iid == hit[0]:
-                n = hi - lo + 1
-                self.v_cell.set(f"blocks {lo:,}–{hi:,}  ({n:,} block{'s' if n > 1 else ''})  —  "
-                                + ("a prover is working in here right now" if st == api.CLAIMED
-                                   else f"least advanced state here: {api.STATE_NAMES[st]}"))
-                return
+        import webbrowser
+        webbrowser.open(url)
 
     # ── tab: run ────────────────────────────────────────────────────────────────────────────────
     def _tab_run(self):
         p = self.p
         t = tk.Frame(self.adv, bg=p["fog"])
-        self.adv.add(t, text="  Options and log  ")
+        self.adv.add(t, text="  Options  ")
 
         box = self._card(t, "WHAT TO WORK ON")
         box.pack(fill="x", padx=10, pady=10)
@@ -895,9 +918,26 @@ class App(tk.Tk):
         ttk.Spinbox(row, from_=1, to=8, width=4, textvariable=self.nworkers).pack(side="left", padx=6)
         tk.Label(row, text="segment size (HAZYNC_SEG_PO2)", bg=p["mist"], fg=p["ink"]
                  ).pack(side="left", padx=(16, 4))
-        self.po2 = tk.StringVar(value=self.cfg.get("seg_po2") or "")
-        ttk.Entry(row, textvariable=self.po2, width=6).pack(side="left")
-        tk.Label(row, text="blank = default; lower uses less graphics memory", bg=p["mist"],
+        # ⭐ A LIST, NOT A TEXT BOX (owner, 11-13). self.po2 stays the stored value ("" = automatic,
+        # else the number); the list shows words and writes the number underneath. A value the list
+        # doesn't name (an old hand-typed one) is shown as it is, not lost.
+        self.po2 = tk.StringVar(value=str(self.cfg.get("seg_po2") or "").strip())
+        self.po2_label = tk.StringVar()
+        pick = ttk.Combobox(row, textvariable=self.po2_label, state="readonly", width=52,
+                            values=[lab for _, lab in SEG_CHOICES])
+        pick.pack(side="left")
+
+        def chosen(_e=None):
+            self.po2.set(dict((lab, v) for v, lab in SEG_CHOICES).get(self.po2_label.get(), ""))
+            self._persist()
+
+        def shown(*_):
+            v = self.po2.get().strip()
+            self.po2_label.set(dict(SEG_CHOICES).get(v, f"{v} (set by hand)"))
+        pick.bind("<<ComboboxSelected>>", chosen)
+        self.po2.trace_add("write", shown)
+        shown()
+        tk.Label(row, text="lower uses less graphics memory", bg=p["mist"],
                  fg=p["slate"], font=("Segoe UI", 8)).pack(side="left", padx=6)
         # ⭐ WHICH CARDS TO USE, one tick box each; see _show_cards. Empty, and so invisible, on a
         # machine with fewer than two cards that can prove.
@@ -938,18 +978,6 @@ class App(tk.Tk):
                  font=("Segoe UI", 9), justify="left", wraplength=920
                  ).pack(anchor="w", padx=12, pady=(4, 10))
 
-        logf = self._card(t, "THE TECHNICAL LOG")
-        logf.pack(fill="both", expand=True, padx=10, pady=8)
-        self.log = tk.Text(logf, wrap="word", bg=p["fog"], fg=p["ink"],
-                           insertbackground=p["ink"], relief="flat")
-        self.log.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=8)
-        sb = ttk.Scrollbar(logf, command=self.log.yview)
-        sb.pack(side="right", fill="y", pady=8)
-        self.log.configure(yscrollcommand=sb.set, state="disabled")
-        for tag, key in (("cuda-error", "bad"), ("abort", "bad"), ("oom", "lamp_text"),
-                         ("proved", "good"), ("accepted", "good"), ("claimed", "lamp_text"),
-                         ("sys", "slate")):
-            self.log.tag_configure(tag, foreground=p[key])
 
     def _import_key(self):
         """Bring an existing signing key onto this machine."""
@@ -1189,6 +1217,31 @@ class App(tk.Tk):
             self._diagnose(nxt, auto=True, then=step)
         step()
 
+
+    # ── tab: the technical log ──────────────────────────────────────────────────────────────────
+    # ⛔ ITS OWN TAB (Xesktop, 11-13: "nothing shows on technical log, it's blank"). It was the last
+    # card on "Options and log", a tab that needs ~1,124 px; on an ordinary window the log was pushed
+    # below the bottom edge and never drawn, though every line was in it. A tab of its own always
+    # has the whole window. test_log_visible.py checks it is drawn and tall.
+    LOG_TAB = 3
+
+    def _tab_log(self):
+        p = self.p
+        t = tk.Frame(self.adv, bg=p["fog"])
+        self.adv.add(t, text="  Technical log  ")
+        logf = self._card(t, "THE TECHNICAL LOG")
+        logf.pack(fill="both", expand=True, padx=10, pady=10)
+        self.log = tk.Text(logf, wrap="word", bg=p["fog"], fg=p["ink"],
+                           insertbackground=p["ink"], relief="flat")
+        self.log.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=8)
+        sb = ttk.Scrollbar(logf, command=self.log.yview)
+        sb.pack(side="right", fill="y", pady=8)
+        self.log.configure(yscrollcommand=sb.set, state="disabled")
+        for tag, key in (("cuda-error", "bad"), ("abort", "bad"), ("oom", "lamp_text"),
+                         ("proved", "good"), ("accepted", "good"), ("claimed", "lamp_text"),
+                         ("sys", "slate"), ("when", "slate")):
+            self.log.tag_configure(tag, foreground=p[key])
+
     # ── tab: settings ───────────────────────────────────────────────────────────────────────────
     def _tab_settings(self):
         p = self.p
@@ -1384,7 +1437,6 @@ class App(tk.Tk):
         self.v_anchored.set(f"{p.get('spine_hi', 0):,}")
         self.v_pct.set(f"{p.get('pct', 0)}%")
         self.v_contrib.set(str(p.get("contributors", "—")))
-        self._draw_map()
         self.status.configure(text=api.summarise_progress(p))
 
     def _apply_extras(self, extra):
@@ -1442,6 +1494,9 @@ class App(tk.Tk):
             while True:
                 tag, text = self.q.get_nowait()
                 self.log.configure(state="normal")
+                # ⭐ Every line timestamped (owner, 11-13: "the technical log isn't timestamped"). Stamped as it is
+                # shown; the queue is drained every POLL_MS, so that is when it happened, to the second.
+                self.log.insert("end", time.strftime("%H:%M:%S  "), "when")
                 self.log.insert("end", text.rstrip() + "\n", tag)
                 self.log.configure(state="disabled")
                 wrote = True
@@ -1462,7 +1517,38 @@ class App(tk.Tk):
         self.after(POLL_MS, self._drain)
 
     # ── workers ─────────────────────────────────────────────────────────────────────────────────
+    def _ask_name_first(self):
+        """True when work may start credited to a chosen name. With no name set, ask for one now.
+
+        ⛔ The installer (11-13) made this necessary: it supplies the prover and the client, so setup is complete on
+        first launch and the card that held the name field never showed. A stranger's first run on Xesktop proved
+        block 1,339 as 'ghost:a3cb01', credited publicly to a machine-made name. So Start asks, sets it (a second or
+        two: the worker writes it), and only then starts. Cancel starts nothing."""
+        ident = [s for s in (getattr(self, "_steps", None) or []) if getattr(s, "key", None) == "identity"]
+        if not ident or ident[0].done:   # named, or not known yet: nothing to ask
+            return True
+        name = simpledialog.askstring(
+            "Your name on the board",
+            "The board credits every block you prove to a name. Which name?\n"
+            "(Shown publicly. Letters, digits, - and _.)", parent=self)
+        name = (name or "").strip()
+        if not name:
+            return False
+        cfg = self._snapshot()
+        ok, detail = firstrun.set_handle(cfg["worker"], name, cfg["host"], cfg["identity"], cfg["coord"])
+        self.handle_var.set(name)
+        self._after_handle((ok, detail))
+        if not ok:
+            messagebox.showerror("That name did not take", detail)
+            return False
+        ident[0].done = True
+        self._who = f"proving as {name}"
+        self.v_who.set(self._who)
+        return True
+
     def _start(self):
+        if not self._ask_name_first():
+            return
         checks, fatal = supervisor.preflight(self.host_var.get(), self.worker_var.get(),
                                              identity_dir=self.ident_var.get() or None)
         if fatal:
@@ -1504,10 +1590,16 @@ class App(tk.Tk):
         for i, card in enumerate(plan, 1):
             self._spawn(i, base, job, extra, card=card,
                         label=names.get(card["index"], "") if card else "")
+        if job == "run" and self.also_fold.get():
+            # one folder beside each prover, on the same card (the GPU lock makes them take turns)
+            for i, card in enumerate(plan, 1):
+                self._spawn(100 + i, base, "fold", (), card=card,
+                            label=names.get(card["index"], "") if card else "")
+        self._gpu_prep = gpuprep.to_prepare([c for c in plan if c], cuda, self.cfg.get("gpu_prepared"))
         on = sorted({w.label for w in self.workers if w.label})
         self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
                    + (f" on {len(on)} graphics cards: {', '.join(on)}" if len(on) > 1 else
-                      f", {len(self.workers)} at once" if len(self.workers) > 1 else ""))
+                      f", {self._crew()}" if len(self.workers) > 1 else ""))
         if any(plan):
             every = cards.labels(found)
             idle = [c for c in found if c["cc_major"] < floor]
@@ -1618,13 +1710,25 @@ class App(tk.Tk):
         if supervisor.IS_WINDOWS:
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, bufsize=1, errors="replace", **kwargs)
-        w = Worker(i, p, log_path, job, card=card, label=label)
+                             text=True, encoding="utf-8", bufsize=1, errors="replace", **kwargs)
+        # ⛔ encoding="utf-8": the worker is told PYTHONIOENCODING=utf-8, and text=True alone decodes with the LOCALE's
+        # (cp1252 on Windows), so its "✓" arrived as "âœ“" (Xesktop, 11-13). test_log_visible.py checks a ✓ survives.
+        w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
+        if job == "run" and extra:
+            w.activity.set_range(extra[0])
         self.workers.append(w)
         self._say(f"[{job} {i}] started (pid {p.pid}) — log {log_path}"
                   + (f" — on {label} (card {card['index']}, segment size "
                      f"{env.get('HAZYNC_SEG_PO2', 'default')})" if card else ""))
         threading.Thread(target=self._pump, args=(w,), daemon=True).start()
+
+    def _crew(self):
+        """What is running, in words. ⚠ Not "2 at once" when one of the two is the folder (Xesktop, 11-13): that read
+        as two blocks being proved. "1 proving, 1 folding"; only provers: "3 at once"."""
+        folds = sum(1 for w in self.workers if w.job == "fold")
+        if not folds:
+            return f"{len(self.workers)} at once"
+        return f"{len(self.workers) - folds} proving, {folds} folding"
 
     def _pump(self, w):
         try:
@@ -1660,6 +1764,12 @@ class App(tk.Tk):
         w.heard = time.time()
         before = w.activity.done
         event = w.activity.feed(line)
+        if getattr(self, "_gpu_prep", None) and w.activity.pieces:
+            self.cfg["gpu_prepared"] = sorted(set(self.cfg.get("gpu_prepared") or [])
+                                              | {gpuprep.card_key(c) for c in self._gpu_prep})
+            self._gpu_prep = []
+            self._persist()
+            self._feed("The graphics card is ready: its GPU code is compiled and kept for next time", "good")
         landed = w.activity.done - before
         if landed > 0:
             self._landed[w.activity.job] += landed
@@ -1703,6 +1813,8 @@ class App(tk.Tk):
                 self._say("⛔ not restarting — and do not just press Start again: a box that cannot "
                           "prove claims blocks and abandons them, which holds up everyone else.",
                           "cuda-error")
+            else:
+                self._again(w, kind)
         # ⛔ str(), because ttk returns a Tcl_Obj that never compares equal to a string. Without it
         # this condition silently never fires and Start never comes back. tk returns a plain str,
         # which is why the mistake is invisible in a quick test.
@@ -1711,7 +1823,56 @@ class App(tk.Tk):
             self._home_refresh()
             self.status.configure(text=api.summarise_progress(self.prog) if self.prog else "idle")
 
+    # ⛔ ONE BLOCK, THEN NOTHING (Xesktop, 11-13). The worker's `run` proves one block and exits; on Linux
+    # run-workers.sh loops it, and the window did not, so Start proved block 1,339 and the session ended "finished
+    # cleanly". Now a worker that finished, or found nothing free, is started again on the same card until Stop:
+    # straight away after a block, after a minute when the board had nothing; an unexplained exit is retried three
+    # times in a row, then left stopped. A config or GPU error never restarts (above).
+    AGAIN_MS = {"done": 2000, "idle": 60000, "transient": 60000}
+    TRANSIENT_RETRIES = 3
+
+    def _again(self, w, kind):
+        if kind not in self.AGAIN_MS:
+            return
+        if w.extra and kind in ("done", "idle"):
+            # a specific range: finished means finished. Starting it again would find every block proven and exit,
+            # every two seconds, for ever.
+            self._feed(f"Range {activity.pretty(w.extra[0])} finished", "good")
+            return
+        if kind == "done" and w.activity.waiting:
+            # it exited cleanly with nothing to do ("nothing to fold", no block free): ask again in a minute, not
+            # in two seconds
+            kind = "idle"
+        n = w.transients + 1 if kind == "transient" else 0
+        if n > self.TRANSIENT_RETRIES:
+            self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
+            return
+        key = object()
+        self._respawns[key] = self.after(self.AGAIN_MS[kind], lambda: self._respawn(key, w, n))
+        said = {"run": ("Taking the next block", "Asking for a block again in a minute"),
+                "fold": ("Folding the next pair", "Nothing to fold yet: looking again in a minute"),
+                "spine": ("Extending the chain proof again", "Nothing to anchor yet: looking again in a minute")}
+        done_msg, idle_msg = said.get(w.job, said["run"])
+        self._feed({"done": done_msg, "idle": idle_msg,
+                    "transient": f"Trying again in a minute ({n} of {self.TRANSIENT_RETRIES})"}[kind])
+
+    def _respawn(self, key, w, n):
+        if self._respawns.pop(key, None) is None:
+            return                      # Stop cancelled it
+        self._spawn(w.index, w.base, w.job, w.extra, card=w.card, label=w.label)
+        self.workers[-1].transients = n
+        self._sync_buttons()
+        self._home_refresh()
+
     def _stop(self):
+        pending = self._respawns
+        for h in pending.values():
+            self.after_cancel(h)
+        pending.clear()
+        if not self.workers:
+            self._feed("Stopped")
+            self._sync_buttons()
+            self._home_refresh()
         for w in self.workers:
             w.stopping = True
             try:
@@ -1733,6 +1894,9 @@ class App(tk.Tk):
 
 
 def main():
+    # every console program the app starts (the worker, nvidia-smi, taskkill) runs without a window (winquiet)
+    import winquiet
+    winquiet.hide_child_consoles()
     if not supervisor.IS_WINDOWS:
         print("note: not on Windows — the fcntl shim stays OFF and the real module is used.")
     App().mainloop()
@@ -1740,4 +1904,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # the installed Hazync.exe started as an interpreter (the worker, a setup check): run that, not the window
+    import frozenpy
+    _rc = frozenpy.run_as_python()
+    if _rc is not None:
+        sys.exit(_rc)
     sys.exit(main())

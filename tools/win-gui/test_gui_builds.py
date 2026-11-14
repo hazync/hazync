@@ -109,7 +109,7 @@ def main():
         for want in ("Home", "The board", "Advanced"):
             check(any(want in t for t in top), f"the {want} page exists")
         check("Home" in top[0], "Home is the page the window opens on")
-        for want in ("Setup", "Options and log", "Settings"):
+        for want in ("Setup", "Options", "Settings", "Technical log"):
             check(any(want in t for t in tabs) and not any(want in t for t in top),
                   f"{want} is under Advanced, not at the top")
 

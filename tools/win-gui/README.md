@@ -12,6 +12,15 @@ Needs Python 3.8+ with `tkinter` (bundled with the python.org installer) and `cr
 
 ## Getting it onto a Windows machine
 
+**Most people: the installer.** `hazync-setup-x86_64-windows.exe` (built by `.github/workflows/windows-installer.yml`
+from `installer/hazync.iss`) installs Hazync for the current user, with no admin prompt, Start-menu and desktop
+shortcuts and an uninstaller. Everything is inside: the app, the worker and the GPU prover. Python and git are not
+needed. It is not Authenticode-signed yet, so Windows SmartScreen says "Windows protected your PC": choose More info,
+then Run anyway. Its sha256 is in the release's PGP-signed `SHA256SUMS.txt`. Uninstalling never touches
+`%USERPROFILE%\.hazync`, where the signing key lives.
+
+From source (developers):
+
 ```
 git clone --depth 1 --filter=blob:none --sparse https://github.com/hazync/hazync
 cd hazync

@@ -50,6 +50,12 @@ def config_path():
     return hazync_home() / CONFIG_NAME
 
 
+def install_dir():
+    """The folder the installed Hazync.exe lives in (Hazync-Setup.exe puts hazync-worker beside it and the prover in
+    prover/), or None when running from source."""
+    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else None
+
+
 def load_config():
     """Saved settings, or sensible defaults. Never raises — a corrupt file must not block startup."""
     d = {"host": "", "worker": "", "identity": str(hazync_home()),
@@ -59,6 +65,10 @@ def load_config():
         d.update(json.loads(config_path().read_text(encoding="utf-8")))
     except (OSError, ValueError):
         pass
+    # the installed app ships its worker: use it unless the saved one is still there (a reinstall keeps the same path)
+    inst = install_dir()
+    if inst and (inst / WORKER_ASSET).is_file() and not (d.get("worker") and Path(d["worker"]).is_file()):
+        d["worker"] = str(inst / WORKER_ASSET)
     return d
 
 
@@ -81,6 +91,9 @@ def candidate_dirs():
     """Where a downloaded binary plausibly is, best guess first."""
     here = Path(__file__).resolve().parent
     out = [here, Path.cwd(), Path.home() / "Downloads", Path.home() / "Desktop", Path.home()]
+    inst = install_dir()
+    if inst:   # the installed app's own prover first
+        out = [inst / "prover", inst] + out
     # gh run download puts an artifact in a folder named after it
     for base in list(out):
         for sub in ("hazync-host-windows-x86_64-cuda", "hazync-host-windows-x86_64-cpu",
