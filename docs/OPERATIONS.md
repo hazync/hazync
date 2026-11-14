@@ -341,7 +341,7 @@ it runs once per artifact. `SKIP_GROTH16=1` boxes cannot `snark-wrap` at all.
 
 ### 2.7 METHOD_ID and reproducibility
 
-**Releases.** The current release is **v0.24.0**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
+**Releases.** The current release is **v0.25.0**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
 line to name the newest tag (or one ahead of it). It ships the published libzync image `8888d59c`. v0.23.0 (`863c9ce3`, risc0
 3.0.5) was the first libzync release and v0.22.1 (`37987b85`) the CORE design's last; 3.0.5 receipts do not verify under 3.1.0.
 
