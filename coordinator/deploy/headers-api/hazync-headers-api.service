@@ -1,0 +1,49 @@
+# The MMR path service for the Block check on hazync.org/headers/ (README.md here). UNTRUSTED by design: the browser
+# checks every path against the peaks of the proof it verified. Read-only, GET only. On hazync-proof it listens on the
+# box's own address for nginx on the web box (152.53.86.216), the same pattern as the coordinator's :8899: nftables
+# lets ONLY the web box reach the port (README.md, "Install").
+[Unit]
+Description=Hazync header chain: MMR paths for the Block check (untrusted; the browser verifies them)
+After=bitcoind.service network-online.target
+Wants=network-online.target
+# the cookie is read at start (LoadCredential): restart with bitcoind, which writes a new one
+PartOf=bitcoind.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=hazync-headers-api
+LoadCredential=cookie:/var/lib/bitcoind/.cookie
+Environment=HEADERS_DIR=/var/lib/hazync-headers
+Environment=STATE_DIR=/var/lib/hazync-headers-api
+Environment=RPC_URL=http://127.0.0.1:8332/
+Environment=BIND=159.195.207.224
+Environment=PORT=8902
+Environment=RATE=5
+Environment=BURST=20
+# X-Forwarded-For is believed only from the web box's nginx (per-client rate limit); 127.0.0.1 for local checks
+Environment=TRUSTED_PROXIES=152.53.86.216,127.0.0.1,::1
+ExecStart=/usr/bin/python3 /opt/hazync-headers/bin/hazync-headers-api
+Restart=on-failure
+RestartSec=10
+Nice=10
+# 975,279 hashes and every MMR level: ~62 MB of hashes, a few hundred MB with Python's overhead during the first sync
+MemoryMax=1G
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+ReadOnlyPaths=/var/lib/hazync-headers
+
+[Install]
+WantedBy=multi-user.target

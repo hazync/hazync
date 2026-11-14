@@ -167,6 +167,13 @@ pub struct ChainState {
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
 pub mod headers;
 
+/// The header-chain zyncAPP's Merkle Mountain Range of block hashes: the guest's own file (one source for the guest,
+/// this verifier and the zyncapp host's path builder).
+pub mod mmr {
+    include!("../../prover/zyncapps/methods/headers/src/mmr.rs");
+}
+extern crate alloc;
+
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");
 }
