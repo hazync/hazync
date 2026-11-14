@@ -83,5 +83,7 @@ verified, and a changed receipt refused.
   by the verifier. The v0.25.0 board's prep carries over without re-running (`libzync-reforest`,
   [`libzync/UNDO.md`](libzync/UNDO.md) §8).
 
+- **The sponsor bot** (#728) skips a run while a fresh release is still being signed (no signed manifest yet), instead
+  of latching off.
 - **The board's progress alarm** (#719) takes a lower proven count as a new board, not a stall. After the v2 switch it
   had compared the new board's count with v1's and reported "nobody is proving" on every run.

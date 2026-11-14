@@ -24,7 +24,8 @@ later image can continue a chain without re-proving it, including across a RISC 
 version's spine with a vendored copy of its recursion circuit (its fast form cannot be proved because of a RISC Zero
 3.1.0 Poseidon2 bug, risc0#3427; with software hashing a cross-version handover was proved on a GPU in 280 s). Only
 upgrades that are not soundness fixes may be handed over ([`docs/HANDOVER.md`](docs/HANDOVER.md)). The verifier keeps
-`8888d59c` and checks a receipt by it as that image.
+`8888d59c` and checks a receipt by it as that image. The sponsor bot skips a release still being signed instead of
+latching off (#728).
 Notes: [`docs/RELEASE_NOTES_v0.26.0.md`](docs/RELEASE_NOTES_v0.26.0.md).
 <https://github.com/hazync/hazync/releases/tag/v0.26.0>
 
