@@ -220,6 +220,7 @@ pub struct ChainState {
 
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
 pub mod headers;
+pub mod hints;
 
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");

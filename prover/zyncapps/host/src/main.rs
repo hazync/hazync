@@ -528,44 +528,25 @@ fn hints_prove(a: &[String]) {
     println!("HINTS_ID {}", id_hex(&ZYNCAPP_HINTS_ID));
 }
 
+/// The verifier: the same `swiftsync_verify::hints::verify_hints` as `swiftsync-verify hints`, the WASM and the C ABI,
+/// against this build's hints image id. Exit 0 OK, 2 DEMO, 1 FAIL.
 fn hints_verify(a: &[String]) {
-    let r: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| die(&e.to_string())))
-        .unwrap_or_else(|e| die(&format!("receipt: {e}")));
     let fail = |m: String| -> ! { println!("ZYNCAPP_FAIL: {m}"); std::process::exit(1) };
-    if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { fail("a dev-mode FakeReceipt is not a proof".into()); }
     if std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0").unwrap_or(false) { fail("RISC0_DEV_MODE is set: unset it to verify".into()); }
-    if let Err(e) = r.verify(ZYNCAPP_HINTS_ID) { fail(format!("does not verify under the hints image {}: {e}", id_hex(&ZYNCAPP_HINTS_ID))); }
-    let z: HintsStatement = r.journal.decode().unwrap_or_else(|e| fail(format!("journal: {e}")));
-    if z.kind != libzync::hints::KIND_HINTS { fail("not a hints statement".into()); }
-    if z.format != libzync::hints::FORMAT_BIP && z.format != libzync::hints::FORMAT_CRATE { fail(format!("unknown hints format {}", z.format)); }
-    let file = std::fs::read(&a[2]).unwrap_or_else(|e| fail(format!("{}: {e}", a[2])));
-    if file.len() as u64 != z.hints_len || sha256(&file) != z.hints_sha256 {
-        fail(format!("{} is not the proven file (sha256 {} / {} bytes; proven {} / {} bytes)", a[2], hex(&sha256(&file)), file.len(), hex(&z.hints_sha256), z.hints_len));
-    }
-    match libzync::hints::decode_file(&file, z.format) {
-        Some((stop, lists)) if stop == z.height && lists.iter().map(|l| l.len() as u64).sum::<u64>() == z.n_unspent => {}
-        _ => fail("the file does not decode to the proven height and count".into()),
-    }
-    if let Some(u) = flag(a, "--undo") {
-        let ub = std::fs::read(u).unwrap_or_else(|e| fail(format!("{u}: {e}")));
-        if ub.len() != 32 * z.height as usize || sha256(&ub) != z.undo_sha256 { fail(format!("{u} is not the proven undo-hash file")); }
-    }
-    let mut pa: Vec<String> = Vec::new();
-    if let Some(e) = flag(a, "--expect") {
-        let (h, x) = swiftsync_verify::parse_expect(e).unwrap_or_else(|| fail("--expect: want <height>:<64 hex digits>".into()));
-        if !swiftsync_verify::identity_matches(h, &x, z.height, &z.block_hash) {
-            fail(format!("--expect: block {h} is {x}; the file is for block {} {}", z.height, disp(&z.block_hash)));
-        }
-        if z.height == z.core_height { pa.extend(["--expect".into(), e.clone()]); }
-    }
-    if let Some(e) = flag(a, "--expect-tip") { pa.extend(["--expect".into(), e.clone()]); }
-    if let Some(c) = flag(a, "--core-image") { pa.extend(["--core-image".into(), c.clone()]); }
-    if a.iter().any(|x| x == "--mempool") { pa.push("--mempool".into()); }
-    println!("  rests on core image {} (tip {} at {}), anchor {}", id_hex(&z.core_id), disp(&z.tip_hash), z.core_height, hex(&z.anchor_id));
-    if flag(a, "--expect").is_none() { println!("  block {} NOT compared with your node: pass --expect {}:<hash from your header chain>", z.height, z.height); }
-    let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, lineage: &z.lineage, profile: z.profile, height: z.core_height,
-                   tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
-    let pol = core_policy(&c, &pa).map(|ok| ok && flag(a, "--expect").is_some());
-    verdict(pol, format!("ZYNCAPP_HINTS_OK: {} is the hints file (format {}) for block {} {}: {} outputs indexed, {} unspent ({} sat); undo hashes 1..{} sha256 {}",
-                         a[2], z.format, z.height, disp(&z.block_hash), z.n_counted, z.n_unspent, z.unspent_value, z.height, hex(&z.undo_sha256)));
+    let rd = |p: &str| std::fs::read(p).unwrap_or_else(|e| fail(format!("{p}: {e}")));
+    let (r, f) = (rd(&a[1]), rd(&a[2]));
+    let u = flag(a, "--undo").map(|p| rd(p));
+    let pe = |k: &str| flag(a, k).map(|e| swiftsync_verify::parse_expect(e).unwrap_or_else(|| fail(format!("{k}: want <height>:<64 hex digits>"))));
+    let (e1, e2) = (pe("--expect"), pe("--expect-tip"));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let rep = swiftsync_verify::hints::verify_hints(&r, &f, u.as_deref(), &id_hex(&ZYNCAPP_HINTS_ID), flag(a, "--core-image").map(|x| x.as_str()), now,
+                                                    e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
+    for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
+    let z = match (&rep.verdict, &rep.statement) {
+        (swiftsync_verify::Verdict::Fail, _) | (_, None) => fail(rep.checks.iter().find(|c| !c.0).map(|c| c.1.clone()).unwrap_or_default()),
+        (_, Some(z)) => z,
+    };
+    let line = format!("ZYNCAPP_HINTS_OK: {} is the hints file (format {}) for block {} {}: {} outputs indexed, {} unspent ({} sat); undo hashes 1..{} sha256 {}",
+                       a[2], z.format, z.height, disp(&z.block_hash), z.n_counted, z.n_unspent, z.unspent_value, z.height, hex(&z.undo_sha256));
+    verdict(Ok(rep.verdict == swiftsync_verify::Verdict::Ok), line);
 }
