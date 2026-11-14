@@ -1,10 +1,10 @@
 **A new image, the board proved again from genesis, and each block's undo data committed in its proof.** v0.26.0 is a
-re-baseline: its mainnet image **`dc392f3d`** replaces v0.24.0/v0.25.0's `8888d59c`, and the board resets and proves the
+re-baseline: its mainnet image **`46666b6f`** replaces v0.24.0/v0.25.0's `8888d59c`, and the board resets and proves the
 chain again from block 1 under it. The rules a block is checked against do not change, and RISC Zero stays at 3.1.0.
 
 ```
-mainnet  dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633
-signet   fd347b4e3e445c631bdad34a18df0fcf44f67f6be7165868d55890cf47e677bd
+mainnet  46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
+signet   c3a68e2ddd6f2b229dc4c9c23b1ec6220d349f81f1629a8f0a3726e87640cd85
 headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632
 ```
 
@@ -64,8 +64,8 @@ verified, and a changed receipt refused.
 
 ## What changes for you
 
-- **Provers:** the board resets and takes only `dc392f3d` proofs. Take v0.26.0 and restart any worker loop:
-  `run-workers.sh` checks the image only when it starts. The Windows app checks for `dc392f3d`.
+- **Provers:** the board resets and takes only `46666b6f` proofs. Take v0.26.0 and restart any worker loop:
+  `run-workers.sh` checks the image only when it starts. The Windows app checks for `46666b6f`.
 - **Verifiers:** the verifier keeps `8888d59c` (and signet `d4210dae`), so a receipt by it is still checked as that
   image with no extra option. Facts about blocks of a v0.26.0 chain need the block's undo hash
   ([`libzync/UNDO.md`](libzync/UNDO.md) §5).
@@ -73,6 +73,15 @@ verified, and a changed receipt refused.
   now carry each block's undo hash; older files still read.
 
 ## Also
+
+- **Hardening from the 2026-11-14 soundness review** (no critical, high or medium findings; these are its low ones):
+  the legacy sighash cache starts over at every entry point that runs scripts, and the guest checks at start that its
+  allocator never reuses an address (the caches keyed by address rely on it); a transaction or coinbase larger than a
+  block is refused before any C++ call sizes a buffer from it; the live-coin total a state carries is checked to be a
+  curve point; libsecp's illegal-argument and internal-error callbacks stop the guest, as Core's defaults do; the batch
+  signature transcript binds the number of checks and their schemes; a trie fact with a pruned all-zero hash is refused
+  by the verifier. The v0.25.0 board's prep carries over without re-running (`libzync-reforest`,
+  [`libzync/UNDO.md`](libzync/UNDO.md) §8).
 
 - **The board's progress alarm** (#719) takes a lower proven count as a new board, not a stall. After the v2 switch it
   had compared the new board's count with v1's and reported "nobody is proving" on every run.

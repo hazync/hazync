@@ -160,8 +160,8 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
 }
 
 static IDS: [&str; 2] = [
-    "dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633\0",
-    "fd347b4e3e445c631bdad34a18df0fcf44f67f6be7165868d55890cf47e677bd\0",
+    "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c\0",
+    "c3a68e2ddd6f2b229dc4c9c23b1ec6220d349f81f1629a8f0a3726e87640cd85\0",
 ];
 
 /// See include/swiftsync_verify.h.

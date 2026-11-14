@@ -56,7 +56,7 @@ IS_WINDOWS = os.name == "nt"
 # The canonical guest image id. A binary printing anything else produces proofs the coordinator
 # rejects with EX_CONFIG, so this is the first thing checked and the only one that is fatal.
 # The published libzync mainnet image (reproduce/LIBZYNC_IDS): the board verifies against it from the switch on.
-CANONICAL_METHOD_ID = "dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633"
+CANONICAL_METHOD_ID = "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c"
 
 # ⭐ The guest is embedded VERBATIM in the host binary, so "is this canonical" can be answered from
 # the FILE — which matters because a CUDA build on a machine with no NVIDIA driver cannot start at
@@ -65,8 +65,8 @@ CANONICAL_METHOD_ID = "dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a
 # Searching for \x7fELF finds 51 coincidental hits in this binary and none of them is the guest.
 # ⛔ And it is not the FIRST R0BF hit either — measured, it was the second.
 GUEST_MAGIC = b"R0BF"
-GUEST_SIZE = 70_195_084
-GUEST_SHA256 = "9cfdecda961f9e4b864a478e12a3717b85c902e60ed1e5086050f6eff2c5c67a"   # reproduce/LIBZYNC_IDS, mainnet GUEST_ELF_SHA256
+GUEST_SIZE = 70_199_652
+GUEST_SHA256 = "f7b87bf118050f60c45d605e2cc953668221dff95ed43072d4fd717380c08a27"   # reproduce/LIBZYNC_IDS, mainnet GUEST_ELF_SHA256
 
 EX_CONFIG = 78      # the worker established it can never land anything — STOP, do not retry
 EX_TEMPFAIL = 75    # nothing to claim right now — a busy board, not a fault
@@ -301,7 +301,7 @@ def check_host_binary(host_path):
     ⚠ Parsed as "the first 64-hex token in the output", because `host method-id` prints the digest
     AND a `u32x8` decomposition, and a looser match would pick up the words. Measured output:
 
-        METHOD_ID dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633
+        METHOD_ID 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
           u32x8   [3818667142, ...]
     """
     host = Path(host_path)

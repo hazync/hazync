@@ -2,7 +2,7 @@
 
 libzync is the engine of Hazync v2 (Hazync v1, the original Core design, is in [`docs/history/`](../history/)).
 **Where it stands on 2026-11-12:** v0.24.0 is released on RISC Zero 3.1.0 (images `8888d59c` mainnet, `d4210dae`
-signet, `2db34e12` header chain); v0.26.0's `dc392f3d` (signet `fd347b4e`; `reproduce/LIBZYNC_IDS`) adds the per-block undo-data commitment
+signet, `2db34e12` header chain); v0.26.0's `46666b6f` (signet `c3a68e2d`; `reproduce/LIBZYNC_IDS`) adds the per-block undo-data commitment
 ([`UNDO.md`](UNDO.md)) and restarts the board from genesis, with the handover built and tested for later images
 ([`../HANDOVER.md`](../HANDOVER.md)); v0.23.0 (`863c9ce3`, 3.0.5) is withdrawn. The public
 board switched to v2 on 2026-11-12 and restarted from genesis (N2). The header chain is proved in one receipt and
@@ -433,7 +433,7 @@ What the switch and the first v2 proving run surfaced. None changes the core ima
 ## Image ids built (11-03, unit tests + compiles only)
 
 ⚠ **Historical.** Every id in this table is a laptop build on risc0 3.0.5 and is refused by today's verifiers. The
-published ids are in `reproduce/LIBZYNC_IDS`: mainnet `dc392f3d`, signet `fd347b4e`, header
+published ids are in `reproduce/LIBZYNC_IDS`: mainnet `46666b6f`, signet `c3a68e2d`, header
 chain `2db34e12` (risc0 3.1.0). Other retired ids met in this file: `bbf82800` (c14 laptop), `863c9ce3` / `73b62530` (v0.23.0
 container, 3.0.5, withdrawn), `9f469930` / `067822b9` (round-8 images, 10-31), `4d04d6bf` (header chain, 3.0.5).
 

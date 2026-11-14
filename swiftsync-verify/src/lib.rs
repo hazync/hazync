@@ -36,11 +36,11 @@ pub const IMAGES: &[Image] = &[
         checkpoint_height: 970_000,
         lineage: &[],
     },
-    // v0.26.0 (pinned from d8def468): the per-block undo-data commitment (docs/libzync/UNDO.md), a new chain from genesis.
+    // v0.26.0 (pinned from ca482bf5): the per-block undo-data commitment (docs/libzync/UNDO.md), a new chain from genesis.
     // The CURRENT mainnet image; the entry above stays so its proofs verify by id.
     Image {
         network: "mainnet",
-        method_id_hex: "dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633",
+        method_id_hex: "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c",
         profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
         genesis_time: 1_231_006_505,
@@ -69,10 +69,10 @@ pub const IMAGES: &[Image] = &[
         checkpoint_height: 325_000,
         lineage: &[],
     },
-    // v0.26.0 signet (pinned from d8def468): the undo-data commitment, from genesis. The CURRENT signet image.
+    // v0.26.0 signet (pinned from ca482bf5): the undo-data commitment, from genesis. The CURRENT signet image.
     Image {
         network: "signet",
-        method_id_hex: "fd347b4e3e445c631bdad34a18df0fcf44f67f6be7165868d55890cf47e677bd",
+        method_id_hex: "c3a68e2ddd6f2b229dc4c9c23b1ec6220d349f81f1629a8f0a3726e87640cd85",
         profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,

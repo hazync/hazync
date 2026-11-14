@@ -3,14 +3,14 @@
 The operator's reference for proving on the board, and for the **Hazync v1 system**: the CORE guest (`37987b85`,
 now superseded), its last release v0.22.1, multi-card fleets on RunPod, and tip runs.
 
-**Since 2026-11-12 the public board is Hazync v2** (the libzync engine: image `8888d59c`, releases v0.24.0-v0.25.0, then `dc392f3d`, release v0.26.0, proving the
+**Since 2026-11-12 the public board is Hazync v2** (the libzync engine: image `8888d59c`, releases v0.24.0-v0.25.0, then `46666b6f`, release v0.26.0, proving the
 chain again from genesis with the undo-data commitment, [`libzync/UNDO.md`](libzync/UNDO.md)); §0 covers
 it and its proving fleets. §3 (board workers) applies to both boards. §1, §2, §4 and §5 describe v1 and stay as its
 reference. It merges the September 2026 pages
 PROVING, PROVER_OPERATIONS, FLEET_OPERATIONS, TIP_RUN_OPERATIONS and TOPOLOGY_AND_SETTINGS (now in
 `docs/history/`).
 
-⚠ **The host in this tree is libzync-only.** The canonical image is libzync's published mainnet image `dc392f3d`
+⚠ **The host in this tree is libzync-only.** The canonical image is libzync's published mainnet image `46666b6f`
 (§2.7), and `prover/host` refuses to build without `HAZYNC_LIBZYNC=1`. The CORE commands below that drive a guest mode
 a libzync image refuses (`regress`, `adversarial`, `check-*`, `prove-full`, `prove-seg`, `prove-chain*`, `prove-ibd`,
 `prove-range`, `extend-spine`, `verify-range`, `verify-chain`, `prove-snark`, mode 6) exist only in the v0.22.1
@@ -49,7 +49,7 @@ claims, per-block proofs, folds, the genesis-anchored spine, the leaderboard, sp
 
 Workers: the v0.24.0 release (`hazync-worker`, `hazync-run-workers.sh`, the CUDA host), run as in §3. A worker whose
 host is not `8888d59c` is refused at start (§3.4). From the v0.26.0 re-baseline the board runs
-`dc392f3d` from genesis and refuses `8888d59c` workers in the same way.
+`46666b6f` from genesis and refuses `8888d59c` workers in the same way.
 
 **MEASURED, first v2 proving run** (2026-11-12, 4× RTX PRO 6000, 2 h 38 min): 1,287 blocks proven, ~490 blocks/hr,
 ~$0.021/block on early blocks, $27.13 in all. An early block takes ~22–27 s on an RTX PRO 6000, mostly fixed per-block
@@ -344,12 +344,12 @@ it runs once per artifact. `SKIP_GROTH16=1` boxes cannot `snark-wrap` at all.
 ### 2.7 METHOD_ID and reproducibility
 
 **Releases.** The current release is **v0.26.0**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
-line to name the newest tag (or one ahead of it). It ships the published libzync image `dc392f3d`, a new chain from
+line to name the newest tag (or one ahead of it). It ships the published libzync image `46666b6f`, a new chain from
 genesis (v0.24.0/v0.25.0 shipped `8888d59c`). v0.23.0 (`863c9ce3`, risc0
 3.0.5) was the first libzync release and v0.22.1 (`37987b85`) the CORE design's last; 3.0.5 receipts do not verify under 3.1.0.
 
 **The canonical id** (`reproduce/METHOD_ID`) is libzync's published mainnet image
-`dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633` (v0.26.0), with the signet image in
+`46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` (v0.26.0), with the signet image in
 [`reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). `reproduce/libzync.Dockerfile` reproduces both bit for bit and the
 `reproducible-image-id` job rebuilds them on every push. Release v0.26.0 ships it; the board runs it from genesis
 (`8888d59c`, v0.24.0, from 2026-11-12 until the v0.26.0 reset).

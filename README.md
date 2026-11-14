@@ -42,8 +42,8 @@ A proof names the exact program that produced it. The published Hazync v2 images
 (release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0)), are
 
 ```
-mainnet  dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633
-signet   fd347b4e3e445c631bdad34a18df0fcf44f67f6be7165868d55890cf47e677bd
+mainnet  46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
+signet   c3a68e2ddd6f2b229dc4c9c23b1ec6220d349f81f1629a8f0a3726e87640cd85
 headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632   (the header-chain zyncAPP)
 ```
 
@@ -65,7 +65,7 @@ the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench
 **Works today**
 
 - **The public board proves Hazync v2.** [hazync.org](https://hazync.org/) switched to it on 12 November 2026 and
-  restarted from genesis under `8888d59c`, and restarts from genesis again under v0.26.0's `dc392f3d` (the undo-data
+  restarted from genesis under `8888d59c`, and restarts from genesis again under v0.26.0's `46666b6f` (the undo-data
   commitment, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)): anyone with an NVIDIA card claims a block, proves it and submits it,
   and proved blocks are joined into one genesis-anchored proof ([`CONTRIBUTING.md`](CONTRIBUTING.md)). Its first
   proving run, on 4× RTX PRO 6000, proved 1,287 blocks in 2 h 32 min of proving (about 510 an hour), $27.13 in all,

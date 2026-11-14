@@ -21,9 +21,9 @@ The images are pinned in [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS):
 
 | image | id |
 |---|---|
-| mainnet product (v0.26.0; from genesis, undo-data commitment) | `dc392f3d446c9990e8801f904958dd3c11cc370fe887fd1b718a1729a5124633` |
+| mainnet product (v0.26.0; from genesis, undo-data commitment) | `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` |
 | mainnet product (v0.24.0, v0.25.0; blocks 1..1999 of the board) | `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` |
-| signet product (v0.26.0) | `fd347b4e3e445c631bdad34a18df0fcf44f67f6be7165868d55890cf47e677bd` |
+| signet product (v0.26.0) | `c3a68e2ddd6f2b229dc4c9c23b1ec6220d349f81f1629a8f0a3726e87640cd85` |
 | signet product (v0.24.0, v0.25.0) | `d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387` |
 | header-chain zyncAPP (mainnet) | `2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632` |
 
