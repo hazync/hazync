@@ -15,25 +15,28 @@ if [ ! -x $OLD ]; then
 fi
 say "old: $($OLD method-id | head -1)"; say "new: $($NEW method-id | head -1)"
 mkdir -p J
-[ -f J/block_2000.json ] || python3 $S/prover/fetch_block_rpc.py range 1 2000 J --jobs 4 > fetch.log 2>&1
+[ -f J/block_2010.json ] || python3 $S/prover/fetch_block_rpc.py range 1 2010 J --jobs 4 > fetch.log 2>&1
 ls J | wc -l
 export HAZYNC_PREP_LEAF_AT=171,1500,2000
-rm -rf old new rf ctl oldl newl
+rm -rf old new new10 rf rfl ctl oldl newl cont cont_old cor stale
 t=$(date +%s); HAZYNC_PREP_LEAF_BUNDLES=$A/oldl $OLD libzync-prep 1 2000 J genesis old > prep_old.log 2>&1; say "PREP_OLD exit $? ($(( $(date +%s) - t )) s)"
 t=$(date +%s); HAZYNC_PREP_LEAF_BUNDLES=$A/newl $NEW libzync-prep 1 2000 J genesis new > prep_new.log 2>&1; say "PREP_NEW exit $? ($(( $(date +%s) - t )) s)"
 unset HAZYNC_PREP_LEAF_AT
+$NEW libzync-prep 1 2010 J genesis new10 > prep_new10.log 2>&1; say "PREP_NEW 1..2010 exit $?"
 d=0; for h in $(seq 1 2000); do cmp -s old/state_$h.json new/state_$h.json || d=$((d+1)); done; say "old vs new prep: $d of 2000 states differ (expected 2000: block_roots and the stamp)"
 cp -a old rf; cp -a oldl rfl
 t=$(date +%s); $NEW libzync-reforest rf 2000 --bitcoin-cli "bitcoin-cli" --all --jobs 4 --bundles $A/rfl > rf.log 2>&1; say "REFOREST exit $? ($(( $(date +%s) - t )) s)"; grep -a "REFOREST_FETCH\|LZ_REFOREST_DONE\|reforest:" rf.log | tail -4
 d=0; for h in $(seq 1 2000); do cmp -s rf/state_$h.json new/state_$h.json || d=$((d+1)); done; say "ACCEPT re-forested old vs new prep: $((2000-d))/2000 state_<h>.json byte-identical"
+[ -s rf/reforest/DONE_2000 ] && [ "$(cat rf/state_2000.forest)" = U0 ] && say "ACCEPT markers: reforest/DONE_2000 ($(cut -c1-30 rf/reforest/DONE_2000)...) and state_2000.forest" || say "WRONG markers missing"
+grep -aq "3 leaf bundle(s) cross-checked" rf.log && say "ACCEPT 3 bundles cross-checked against the node's undo hashes" || say "WRONG bundle cross-check: $(grep -a cross-checked rf.log)"
 for b in 171 1500 2000; do cmp -s rfl/leaf_$b.bin newl/leaf_$b.bin && say "ACCEPT bundle leaf_$b.bin identical to the new prep's" || say "WRONG bundle leaf_$b.bin differs"; done
 for f in old new; do ls $f/*.coinlog $f/*.trie 2>/dev/null | wc -l; done
 sha256sum old/state_2000.coinlog rf/state_2000.coinlog | cut -c1-16; sha256sum old/state_2000.trie rf/state_2000.trie 2>/dev/null | cut -c1-16
 $NEW libzync-reforest rf 2000 --bitcoin-cli "bitcoin-cli" --all --bundles $A/rfl > rf2.log 2>&1; say "rerun exit $?: $(grep -a LZ_REFOREST_DONE rf2.log)"
-# control: block 170's undo hash replaced by SHA-256 of nothing (as if its input were skipped)
-cp -a old ctl; mkdir -p ctl/reforest
-awk -F'\t' -v OFS='\t' 'NR==170{$3="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}1' rf/reforest/undo.tsv > ctl/reforest/undo.tsv
-$NEW libzync-reforest ctl 2000 --bitcoin-cli "bitcoin-cli" --all > ctl.log 2>&1; say "control exit $?"
+# control: block 170's undo hash replaced by SHA-256 of nothing (as if its input were skipped; the dev-mode test hook)
+cp -a old ctl
+RISC0_DEV_MODE=1 HAZYNC_REFOREST_TEST_UNDO=170:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
+  $NEW libzync-reforest ctl 2000 --bitcoin-cli "bitcoin-cli" --all > ctl.log 2>&1; say "control exit $?"
 lo=0; hi=0; for h in $(seq 1 2000); do if cmp -s ctl/state_$h.json new/state_$h.json; then [ $h -lt 170 ] && lo=$((lo+1)); else [ $h -ge 170 ] && hi=$((hi+1)); fi; done
 say "CONTROL below 170 identical: $lo/169; from 170 differing: $hi/1831"
 # refusals: a held LOCK, a store directory set, a height that is not a save point
@@ -43,6 +46,29 @@ f = open("rf/LOCK", "a"); fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
 r = subprocess.run([sys.argv[1], "libzync-reforest", "rf", "2000", "--bitcoin-cli", "bitcoin-cli"], capture_output=True, text=True)
 print("REFUSE lock held: exit", r.returncode, "|", [l for l in (r.stderr + r.stdout).splitlines() if "LOCK" in l][:1])
 P
+python3 - "$NEW" "$A" <<'P'
+import fcntl, subprocess, sys
+f = open(sys.argv[2] + "/rfl/LOCK", "a"); fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+r = subprocess.run([sys.argv[1], "libzync-reforest", "rf", "2000", "--bitcoin-cli", "bitcoin-cli", "--bundles", sys.argv[2] + "/rfl"], capture_output=True, text=True)
+print("REFUSE bundle dir lock held: exit", r.returncode, "|", [l for l in (r.stderr + r.stdout).splitlines() if "LOCK" in l][:1])
+P
+# a damaged cache line (its check no longer matches) and a stale one (well formed, but not what the node gives)
+cp -a old cor; mkdir -p cor/reforest; awk -F'\t' -v OFS='\t' 'NR==500{$3=substr($3,1,63) (substr($3,64,1)=="0"?"1":"0")}1' rf/reforest/undo.tsv > cor/reforest/undo.tsv
+$NEW libzync-reforest cor 2000 --bitcoin-cli bitcoin-cli > cor.log 2>&1; say "REFUSE damaged cache line: exit $? | $(grep -ao 'line 500 is not a line this tool wrote' cor.log | head -1)"
+cp -a old stale; mkdir -p stale/reforest
+python3 - rf/reforest/undo.tsv stale/reforest/undo.tsv <<'P'
+import hashlib, sys
+ls = open(sys.argv[1]).read().splitlines()
+h, bh, u, n, _ = ls[-1].split("\t"); u = "00" * 32; body = f"{h}\t{bh}\t{u}\t{n}"
+ls[-1] = body + "\t" + hashlib.sha256(body.encode()).hexdigest()[:16]
+open(sys.argv[2], "w").write("\n".join(ls) + "\n")
+P
+$NEW libzync-reforest stale 2000 --bitcoin-cli bitcoin-cli > stale.log 2>&1; say "REFUSE stale cache line (resume re-fetch): exit $? | $(grep -ao 'block 2000 is not what the node gives now' stale.log | head -1)"
+# continuing: refused from a state without the forest marker, and from the re-forested one byte-identical to a fresh run
+HAZYNC_PREP_CONTINUE=1 $NEW libzync-prep 2001 2010 J old/state_2000.json cont_old > cont_old.log 2>&1; say "REFUSE continue from the old state: exit $? | $(grep -ao 'no forest marker' cont_old.log | head -1)"
+HAZYNC_PREP_CONTINUE=1 $NEW libzync-prep 2001 2010 J rf/state_2000.json cont > cont.log 2>&1; rc=$?
+d=0; for h in $(seq 2001 2010); do cmp -s cont/state_$h.json new10/state_$h.json || d=$((d+1)); done
+say "ACCEPT continue from the re-forested state_2000 (exit $rc): $((10-d))/10 states 2001..2010 byte-identical to the new prep from genesis"
 HAZYNC_COINLOG_DIR=/tmp/x $NEW libzync-reforest rf 2000 --bitcoin-cli bitcoin-cli > r1.log 2>&1; say "REFUSE store dir set: exit $? | $(grep -ao 'touches no store[^"]*' r1.log | head -1)"
 $NEW libzync-reforest rf 1999 --bitcoin-cli bitcoin-cli > r2.log 2>&1; say "REFUSE not a save point: exit $? | $(grep -ao 'S must be a save point' r2.log | head -1)"
 # independent cross-check: the node's undo hashes vs undo_ref.py on the repo's block files
