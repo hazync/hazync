@@ -1679,6 +1679,10 @@ jobs:
         run: ./coordinator/deploy/test-bridge-progress.sh
       - name: Bridge-progress POSITIVE CONTROL (stall guard removed — must be missed)
         run: ./coordinator/deploy/test-bridge-progress.sh --control
+      - name: The board-progress check takes a fallen count as a new board, not a stall
+        # ⛔ After the v1 -> v2 switch the stored count was v1's 145,223; v2's never passed it, so the check said
+        # "nobody is proving" on every run for 840 hours. The test fails 3 cases against the old script.
+        run: ./coordinator/deploy/test-board-progress.sh
 
       - name: A deploy refuses a branch name that means two commits on the box
         # ⛔ Measured in production 2026-09-30: `deploy-coordinator.sh main` deployed 03541e3
