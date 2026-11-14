@@ -260,14 +260,66 @@ pub struct Witness {
     pub tail: Vec<u32>,
     pub file: Vec<u8>,
     pub undo_file: Vec<u8>,
-    pub derived: hints::Derived,
+    /// None when the native derivation refused (only with a tamper case: a negative test)
+    pub derived: Option<hints::Derived>,
+    pub native_error: Option<String>,
 }
 
-pub fn witness(r: &Replay, stop: u32, format: u32, signet: bool, mut get: impl FnMut(u32) -> Block) -> Result<Witness, String> {
+struct Frame { stripped: Vec<u8>, tracked: Vec<u32>, status: Vec<u32>, state: H, undo: H }
+
+fn restrip(b: &Block, txs: &[&[u8]]) -> Vec<u8> {
+    let mut s = b.header.to_vec();
+    put_varint(&mut s, txs.len() as u64);
+    for t in txs { s.extend_from_slice(t); }
+    s
+}
+
+/// A NEGATIVE TEST's change to the witness (HINTS_TAMPER, execute only): each must make the guest refuse.
+fn tamper(case: &str, fr: &mut [Frame], blocks: &[Block], tail: &mut [H]) -> Result<String, String> {
+    let first_spent = |fr: &[Frame]| -> Option<(usize, usize)> {
+        for (i, f) in fr.iter().enumerate() {
+            let mut k = 0;
+            while k < f.status.len() {
+                if f.status[k] != 0 { return Some((i, k)); }
+                k += 1;
+            }
+        }
+        None
+    };
+    let first_unspent = |fr: &[Frame]| -> Option<(usize, usize)> {
+        for (i, f) in fr.iter().enumerate() {
+            let mut k = 0;
+            while k < f.status.len() {
+                if f.status[k] == 0 { return Some((i, k)); }
+                k += 3;
+            }
+        }
+        None
+    };
+    let multi = blocks.iter().position(|b| b.txs.len() >= 2);
+    Ok(match case {
+        "spent_as_unspent" => { let (i, k) = first_spent(fr).ok_or("no spent coin below H")?; fr[i].status.splice(k..k + 3, [0]); format!("block {}: a spent coin claimed unspent", i + 1) }
+        "unspent_as_spent" => { let (i, k) = first_unspent(fr).ok_or("no unspent coin")?; let n = fr.len() as u32; fr[i].status.splice(k..k + 1, [n, 1, 0]); format!("block {}: an unspent coin claimed spent at H", i + 1) }
+        "wrong_spender" => { let (i, k) = first_spent(fr).ok_or("no spent coin below H")?; fr[i].status[k + 2] += 1; format!("block {}: a spender's input index + 1", i + 1) }
+        "tracked" => { fr[0].tracked = vec![0]; "block 1: its coinbase claimed tracked".into() }
+        "state" => { fr[0].state[0] ^= 1; "block 1: its coin state flipped".into() }
+        "undo" => { fr[0].undo[0] ^= 1; "block 1: its undo hash flipped".into() }
+        "header" => { fr[0].stripped[76] ^= 1; "block 1: its nonce flipped".into() }
+        "dup_tx" => { let b = &blocks[0]; let cb = b.txs[0].stripped.as_slice(); fr[0].stripped = restrip(b, &[cb, cb]); "block 1: the coinbase listed twice (CVE-2012-2459)".into() }
+        "drop_tx" => { let i = multi.ok_or("no block with two transactions")?; let b = &blocks[i];
+                       let t: Vec<&[u8]> = b.txs[..b.txs.len() - 1].iter().map(|t| t.stripped.as_slice()).collect(); fr[i].stripped = restrip(b, &t); format!("block {}: its last transaction dropped", i + 1) }
+        "swap_tx" => { let i = multi.ok_or("no block with two transactions")?; let b = &blocks[i];
+                       let mut t: Vec<&[u8]> = b.txs.iter().map(|t| t.stripped.as_slice()).collect(); t.swap(0, 1); fr[i].stripped = restrip(b, &t); format!("block {}: transactions 0 and 1 swapped", i + 1) }
+        "witness_tx" => { let i = multi.ok_or("no block with two transactions")?; fr[i].stripped.push(0); format!("block {}: a trailing byte", i + 1) }
+        "tail" => { let t = tail.first_mut().ok_or("no leaf above H (H = T)")?; t[0] ^= 1; "the first block-forest leaf above H flipped".into() }
+        x => return Err(format!("HINTS_TAMPER: unknown case {x}")),
+    })
+}
+
+pub fn witness(r: &Replay, stop: u32, format: u32, signet: bool, tamper_case: Option<&str>, mut get: impl FnMut(u32) -> Block) -> Result<Witness, String> {
     let bip30: &'static [(u32, H)] = if signet { &[] } else { &hints::MAINNET_BIP30 };
-    let mut d = Deriver::new(format, stop, &genesis(signet), bip30, true).map_err(|e| e.to_string())?;
-    let mut frames = Vec::new();
-    let mut undo_file = Vec::with_capacity(32 * stop as usize);
+    let mut fr = Vec::with_capacity(stop as usize);
+    let mut blocks = Vec::new();
     for h in 1..=stop {
         let b = get(h);
         let f = &r.blocks[h as usize - 1];
@@ -278,23 +330,47 @@ pub fn witness(r: &Replay, stop: u32, format: u32, signet: bool, mut get: impl F
                 _ => status.push(0),
             }
         }
-        let state = f.state; // the coin state after h: at H, the one the hints imply (the guest recomputes it)
-        d.block(&b.stripped, &f.tracked, &status, &state, &f.undo).map_err(|e| format!("native derivation, block {h}: {e}"))?;
-        let mut words: Vec<u32> = b.stripped.chunks(4).map(|c| { let mut x = [0u8; 4]; x[..c.len()].copy_from_slice(c); u32::from_le_bytes(x) }).collect();
-        frames.extend_from_slice(&[b.stripped.len() as u32, f.tracked.len() as u32, status.len() as u32]);
-        frames.append(&mut words);
+        // the coin state after h: at H, the one the hints imply (the guest recomputes it)
+        fr.push(Frame { stripped: b.stripped.clone(), tracked: f.tracked.clone(), status, state: f.state, undo: f.undo });
+        if tamper_case.is_some() { blocks.push(b); }
+    }
+    let mut tail: Vec<H> = r.blocks[stop as usize..].iter().map(|f| f.leaf).collect();
+    if let Some(c) = tamper_case {
+        println!("HINTS_TAMPER {c}: {}", tamper(c, &mut fr, &blocks, &mut tail)?);
+    }
+    let mut d = Deriver::new(format, stop, &genesis(signet), bip30, true).map_err(|e| e.to_string())?;
+    let mut native_error = None;
+    for (i, f) in fr.iter().enumerate() {
+        if let Err(e) = d.block(&f.stripped, &f.tracked, &f.status, &f.state, &f.undo) {
+            native_error = Some(format!("native derivation, block {}: {e}", i + 1));
+            break;
+        }
+    }
+    if native_error.is_none() {
+        for l in &tail {
+            d.tail_leaf(l).map_err(|e| e.to_string())?;
+        }
+    }
+    if native_error.is_some() && tamper_case.is_none() {
+        return Err(native_error.unwrap());
+    }
+    let mut frames = Vec::new();
+    let mut undo_file = Vec::with_capacity(32 * stop as usize);
+    for f in &fr {
+        frames.extend_from_slice(&[f.stripped.len() as u32, f.tracked.len() as u32, f.status.len() as u32]);
+        frames.extend(f.stripped.chunks(4).map(|c| { let mut x = [0u8; 4]; x[..c.len()].copy_from_slice(c); u32::from_le_bytes(x) }));
         frames.extend_from_slice(&f.tracked);
-        frames.extend_from_slice(&status);
-        frames.extend_from_slice(&coinlog::w_of(&state));
+        frames.extend_from_slice(&f.status);
+        frames.extend_from_slice(&coinlog::w_of(&f.state));
         frames.extend_from_slice(&coinlog::w_of(&f.undo));
         undo_file.extend_from_slice(&f.undo);
     }
-    let mut tail = Vec::new();
-    for f in &r.blocks[stop as usize..] {
-        d.tail_leaf(&f.leaf).map_err(|e| e.to_string())?;
-        tail.extend_from_slice(&coinlog::w_of(&f.leaf));
-    }
-    let file = d.bytes.take().unwrap();
-    let derived = d.finish().map_err(|e| e.to_string())?;
-    Ok(Witness { frames, tail, file, undo_file, derived })
+    let tail_w = tail.iter().flat_map(coinlog::w_of).collect();
+    let (file, derived) = if native_error.is_none() {
+        let file = d.bytes.take().unwrap();
+        (file, Some(d.finish().map_err(|e| e.to_string())?))
+    } else {
+        (Vec::new(), None)
+    };
+    Ok(Witness { frames, tail: tail_w, file, undo_file, derived, native_error })
 }

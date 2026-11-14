@@ -447,34 +447,65 @@ fn hints_prove(a: &[String]) {
     if rp.block_roots != libzync::hints::trimmed(&cs.block_roots) || rp.block_leaves != cs.block_leaves {
         die("the native replay's block forest is not the core state's: other blocks, or a rule differs");
     }
-    let w = hints_host::witness(&rp, stop, format, signet, |h| hints_host::read_block(dir, h)).unwrap_or_else(|e| die(&e));
-    if sha256(&w.file) != w.derived.hints_sha256 || w.file.len() as u64 != w.derived.hints_len { die("internal: file bytes != derived hash"); }
+    // HINTS_TAMPER=<case>: a negative test (execute only): the witness or the core journal changed so the guest must refuse
+    let tc = std::env::var("HINTS_TAMPER").ok();
+    if tc.is_some() && !execute { die("HINTS_TAMPER is an execute-only negative test"); }
+    let jcase = matches!(tc.as_deref(), Some("lineage" | "pre_undo" | "core_id" | "format" | "assumevalid"));
+    let w = hints_host::witness(&rp, stop, format, signet, if jcase { None } else { tc.as_deref() }, |h| hints_host::read_block(dir, h)).unwrap_or_else(|e| die(&e));
+    if let Some(e) = &w.native_error { println!("HINTS_NATIVE_REFUSED {e}"); }
+    let (mut cs, mut journal, mut format) = (cs, journal, format);
+    if jcase {
+        if receipt.is_some() { die("a journal tamper case needs a state JSON (the claim is rebuilt from it)"); }
+        match tc.as_deref().unwrap() {
+            "lineage" => cs.lineage[0] ^= 1,
+            "pre_undo" => cs.self_id = [2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963],
+            "assumevalid" => cs.profile |= 2,
+            "format" => format = 3,
+            _ => {}
+        }
+        journal = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        println!("HINTS_TAMPER {}: the core journal / statement input changed", tc.as_deref().unwrap());
+    }
+    let core_id_in: [u32; 8] = if tc.as_deref() == Some("core_id") { let mut c = cs.self_id; c[0] ^= 1; c } else { cs.self_id };
     std::fs::create_dir_all(out).unwrap();
     let net = if signet { "signet" } else { "mainnet" };
-    let (hp, up) = (format!("{out}/{net}-{stop}.hints"), format!("{out}/{net}-{stop}.undo"));
-    std::fs::write(&hp, &w.file).unwrap();
-    std::fs::write(&up, &w.undo_file).unwrap();
-    println!("HINTS_NATIVE H={stop} T={} format={format} file={} ({} bytes, sha256 {}) counted={} unspent={} value={} undo_sha256={} block {} ({:.1} s)",
-             cs.height, hp, w.file.len(), hex(&w.derived.hints_sha256), w.derived.n_counted, w.derived.n_unspent, w.derived.unspent_value,
-             hex(&w.derived.undo_sha256), disp(&w.derived.block_hash), t0.elapsed().as_secs_f64());
+    if let Some(dv) = &w.derived {
+        if sha256(&w.file) != dv.hints_sha256 || w.file.len() as u64 != dv.hints_len { die("internal: file bytes != derived hash"); }
+        let (hp, up) = (format!("{out}/{net}-{stop}.hints"), format!("{out}/{net}-{stop}.undo"));
+        if tc.is_none() {
+            std::fs::write(&hp, &w.file).unwrap();
+            std::fs::write(&up, &w.undo_file).unwrap();
+        }
+        println!("HINTS_NATIVE H={stop} T={} format={format} file={} ({} bytes, sha256 {}) counted={} unspent={} value={} undo_sha256={} block {} ({:.1} s)",
+                 cs.height, hp, w.file.len(), hex(&dv.hints_sha256), dv.n_counted, dv.n_unspent, dv.unspent_value,
+                 hex(&dv.undo_sha256), disp(&dv.block_hash), t0.elapsed().as_secs_f64());
+    }
     let mut b = ExecutorEnv::builder();
     match &receipt {
         Some(r) => { b.add_assumption(r.clone()); }
         None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(cs.self_id), journal.clone())); }
     }
-    b.write(&cs.self_id).unwrap().write(&journal).unwrap().write(&signet).unwrap().write(&format).unwrap().write(&stop).unwrap()
+    b.write(&core_id_in).unwrap().write(&journal).unwrap().write(&signet).unwrap().write(&format).unwrap().write(&stop).unwrap()
         .write(&hints_host::genesis(signet).to_vec()).unwrap().write(&prof).unwrap()
         .write_slice(&w.frames).write_slice(&[cs.height - stop]).write_slice(&w.tail);
     let env = b.build().unwrap();
     let t1 = std::time::Instant::now();
     let check = |z: &HintsStatement| {
-        if z.hints_sha256 != w.derived.hints_sha256 || z.height != stop || z.block_hash != w.derived.block_hash { die("the guest's statement is not the native derivation's"); }
+        let dv = w.derived.as_ref().unwrap();
+        if z.hints_sha256 != dv.hints_sha256 || z.height != stop || z.block_hash != dv.block_hash { die("the guest's statement is not the native derivation's"); }
     };
     if execute {
-        let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HINTS_ELF).unwrap_or_else(|e| die(&format!("execute: {e}")));
+        let res = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HINTS_ELF);
+        if let Some(c) = &tc {
+            match res {
+                Err(e) => { println!("HINTS_GUEST_REFUSED {c}: {}", e.to_string().lines().next().unwrap_or("")); std::process::exit(3) }
+                Ok(_) => { println!("HINTS_GUEST_ACCEPTED {c} (a negative test that passed: a BUG)"); std::process::exit(1) }
+            }
+        }
+        let info = res.unwrap_or_else(|e| die(&format!("execute: {e}")));
         let z: HintsStatement = info.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
         check(&z);
-        let outs = w.derived.n_counted.max(1);
+        let outs = w.derived.as_ref().unwrap().n_counted.max(1);
         println!("HINTS_EXEC H={stop} user_cycles={} padded_cycles={} segments={} executed in {:.1} s; {:.0} user cycles/block, {:.0} user cycles/counted output, input {} words{}",
                  info.cycles(), info.segments.iter().map(|s| 1u64 << s.po2).sum::<u64>(), info.segments.len(), t1.elapsed().as_secs_f64(),
                  info.cycles() as f64 / stop as f64, info.cycles() as f64 / outs as f64, w.frames.len() + w.tail.len(),
