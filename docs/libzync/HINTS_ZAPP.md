@@ -62,7 +62,9 @@ positions and the two coinbases, renumber. The zAPP does not emit #34004 (could 
 - The crate master now refuses malformed lists (`m == u32::MAX`, `n > m+1`, wrong high-bit count); 0.2.0 panics.
 
 The zAPP writes the canonical encoding (minimal CompactSize, zero padding bits); a node compares hashes, so any other
-byte string, even one that decodes to the same indices, is refused (the safe direction).
+byte string, even one that decodes to the same indices, is refused (the safe direction). The verifier decodes a file
+only after its SHA-256 and length matched the receipt's, and every size is bounded by the bytes present before
+anything is reserved (review H1: a 9-byte file naming H = 2^32 − 1 reserved ~103 GB and aborted).
 
 ## 3. Deriving the hints soundly
 
@@ -108,11 +110,15 @@ the tip) and needs no EC arithmetic.
 ## 4. Verifying the chain proof, and what a node checks
 
 Inside: `env::verify(core_id, core_journal)`, then `facts::check_core_statement` (KIND_CHAIN, version ≥ 2,
-`self_id == core_id`, the network, scripts checked, coin log, genesis anchor), as the `coin` and `zeroconf` guests do.
+`self_id == core_id`, the network, scripts checked, coin log) with the network's PINNED genesis anchor compiled into the
+guest (so the statement itself says "from genesis"), then a zero lineage and a core image not in the core's own
+`handover_pin::PRE_UNDO_IMAGES` (included, not copied).
 `core_id` is an input, never compiled in (ZYNCAPPS.md §4).
 
-The node (or the CLI for it) checks: the receipt verifies under the published hints image id (rebuilt by
-`reproduce/`), not a FakeReceipt, no dev mode; `core_id` and `lineage` are a published core; `anchor_id` the pinned
+The node (or the CLI for it) checks: the receipt verifies under the published hints image id (the `zyncapp-hints`
+line of `reproduce/LIBZYNC_IDS`, rebuilt by `reproduce/libzync.Dockerfile`), not a FakeReceipt, `RISC0_DEV_MODE` unset
+(refused inside `verify_hints`, so in every entry point); `core_id`, `lineage` and the whole `profile` are a published
+core's; `anchor_id` the pinned
 genesis anchor; `cum_work` ≥ `nMinimumChainWork`; `max_time` ≤ now + 7200; **`block_hash` is its own header chain's
 block at H** (a SwiftSync node syncs headers first, so it has it); `format` is one it reads; SHA-256 of the file
 = `hints_sha256`. The file's own height field is inside the hashed bytes.

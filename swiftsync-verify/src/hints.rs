@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 
 /// The hints image id this verifier trusts by default. ⚠ A local build (hazync-coord, 2026-11-14), NOT yet a
 /// reproducible build in reproduce/LIBZYNC_IDS: publish it there before anyone relies on this default.
-pub const HINTS_IMAGE_ID: &str = "dff7f87c47837863b9adc28bf7deffeaa59f044ca3d4bc9479c0834578e5431c";
+pub const HINTS_IMAGE_ID: &str = "1894f12eaef5ea50e649b56d0e8fe6afd5b59deb99331e2a5ad49f1a52eb0e8a";
 
 /// The guest's statement, field for field and in order (risc0 serde).
 #[derive(Serialize, Deserialize, Clone, Debug)]
