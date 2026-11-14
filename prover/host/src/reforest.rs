@@ -2,7 +2,7 @@
 //! re-running prep. Only the block forest changed: every leaf from block 1 on now commits its block's undo hash, so
 //! `block_roots` differs in every state; the coin log, trie, BIP30 tree and every other ChainState field do not.
 //!
-//!   libzync-reforest <out dir> <S> --bitcoin-cli "<cmd>" [--all] [--jobs N]
+//!   libzync-reforest <out dir> <S> --bitcoin-cli "<cmd>" [--all] [--jobs N] [--bundles <leaf bundle dir>]
 //!
 //! 1. Undo hashes for blocks 1..=S from the node (`getblock <hash> 3`: each input's prevout height, coinbase flag,
 //!    value and script; libzync::undo), into `<out dir>/reforest/undo.tsv` (`height block-hash undo-hash inputs`, height
@@ -14,6 +14,9 @@
 //!    state_S.json is rewritten (the point `libzync-prep` continues from with HAZYNC_PREP_CONTINUE=1); with `--all` every
 //!    state_<h>.json, so leaf bundles cut later from earlier states are right too. Each write is a temporary file renamed
 //!    over the old one (a crash leaves either format, and a rerun accepts both); state_S.json is synced.
+//!    With `--bundles`, every leaf_<h>.bin for h = 2..=S+1 gets the re-forested S(h-1) as its `prev` (its witnesses and
+//!    block do not depend on the forest); bundles above S+1 are named, for removal (the continuing prep cuts them again).
+//!    The runbook is docs/libzync/UNDO.md §8.
 //!
 //! It never opens the coin log, the trie or the BIP30 snapshots (HAZYNC_COINLOG_DIR / HAZYNC_TRIE_DIR must be unset),
 //! and it holds the out dir's LOCK, so it refuses to run while prep does. Run it at the switch, with prep stopped at a
@@ -61,6 +64,52 @@ pub(crate) fn node_undo(cmd: &str, h: u32) -> Result<(String, [u8; 32], u64), St
     Ok((hash, u.finish(), n))
 }
 
+/// Undo hashes of blocks lo..=hi from the node, `jobs` heights in flight, handed to `each` in height order; `flush`
+/// after each batch. Prints `<tag> h=<h> blocks_per_s=<r>` every 30 s and at the end.
+fn fetch_undos(cli: &str, lo: u32, hi: u32, jobs: usize, tag: &str, each: &mut dyn FnMut(u32, &str, &[u8; 32], u64),
+               flush: &mut dyn FnMut()) {
+    let t0 = std::time::Instant::now();
+    let jobs = jobs.max(1);
+    let mut next = lo;
+    let mut tick = std::time::Instant::now();
+    while next <= hi {
+        let top = hi.min(next + 16 * jobs as u32 - 1);
+        let queue = std::sync::Mutex::new(next..=top);
+        let res: std::sync::Mutex<Vec<(u32, Result<(String, [u8; 32], u64), String>)>> = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|sc| {
+            for _ in 0..jobs {
+                sc.spawn(|| loop {
+                    let Some(h) = queue.lock().unwrap().next() else { break };
+                    let r = node_undo(cli, h);
+                    res.lock().unwrap().push((h, r));
+                });
+            }
+        }); // every worker has finished here
+        let mut got = res.into_inner().unwrap();
+        got.sort_by_key(|x| x.0);
+        for (h, r) in got {
+            let (hash, u, n) = r.unwrap_or_else(|e| panic!("block {h}: {e}"));
+            each(h, &hash, &u, n);
+        }
+        flush();
+        next = top + 1;
+        if tick.elapsed().as_secs() >= 30 || next > hi {
+            let d = t0.elapsed().as_secs_f64();
+            println!("{tag} h={} blocks_per_s={:.2} elapsed_s={:.1}", next - 1, (next - lo) as f64 / d.max(1e-9), d);
+            tick = std::time::Instant::now();
+        }
+    }
+}
+
+/// `libzync-undo-hashes <lo> <hi> --bitcoin-cli "<cmd>" [--jobs N]`: each block's undo hash (docs/libzync/UNDO.md) from
+/// a node, one `undo: block <h> inputs <n> hash <hex> blockhash <display hex>` line per block: what a proof's block
+/// leaves commit, for a node operator checking them, and the rate libzync-reforest's first phase runs at.
+pub(crate) fn undo_hashes_cmd(lo: u32, hi: u32, cli: &str, jobs: usize) {
+    fetch_undos(cli, lo, hi, jobs, "UNDO_HASHES", &mut |h, hash, u, n| {
+        println!("undo: block {h} inputs {n} hash {} blockhash {hash}", crate::hex(u));
+    }, &mut || {});
+}
+
 fn hex32(s: &str) -> Option<[u8; 32]> {
     (s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())).then(|| crate::hx(s).try_into().ok()).flatten()
 }
@@ -80,7 +129,7 @@ fn read_cache(path: &str) -> Vec<(String, [u8; 32])> {
     v
 }
 
-pub(crate) fn reforest_cmd(out: &str, s_height: u32, cli: &str, all: bool, jobs: usize) {
+pub(crate) fn reforest_cmd(out: &str, s_height: u32, cli: &str, all: bool, jobs: usize, bundles: Option<&str>) {
     for v in ["HAZYNC_COINLOG_DIR", "HAZYNC_TRIE_DIR"] {
         assert!(std::env::var_os(v).is_none(), "libzync-reforest touches no store: unset {v}");
     }
@@ -102,44 +151,16 @@ pub(crate) fn reforest_cmd(out: &str, s_height: u32, cli: &str, all: bool, jobs:
         let f = std::fs::OpenOptions::new().write(true).open(&cache_path).unwrap();
         f.set_len(good_len as u64).unwrap();
     }
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&cache_path).unwrap_or_else(|e| panic!("{cache_path}: {e}"));
+    let file = std::cell::RefCell::new(std::fs::OpenOptions::new().create(true).append(true).open(&cache_path)
+        .unwrap_or_else(|e| panic!("{cache_path}: {e}")));
     cache.truncate(s_height as usize);
     let start = cache.len() as u32 + 1;
     if start <= s_height {
         println!("  reforest: undo hashes {start}..={s_height} from the node ({jobs} at a time)");
-        let t0 = std::time::Instant::now();
-        let jobs = jobs.max(1);
-        let mut next = start;
-        let mut tick = std::time::Instant::now();
-        while next <= s_height {
-            let hi = s_height.min(next + 16 * jobs as u32 - 1);
-            let heights: Vec<u32> = (next..=hi).collect();
-            let queue = std::sync::Mutex::new(heights.into_iter());
-            let res: std::sync::Mutex<Vec<(u32, Result<(String, [u8; 32], u64), String>)>> = std::sync::Mutex::new(Vec::new());
-            std::thread::scope(|sc| {
-                for _ in 0..jobs {
-                    sc.spawn(|| loop {
-                        let Some(h) = queue.lock().unwrap().next() else { break };
-                        let r = node_undo(cli, h);
-                        res.lock().unwrap().push((h, r));
-                    });
-                }
-            }); // every worker has finished here
-            let mut got = res.into_inner().unwrap();
-            got.sort_by_key(|x| x.0);
-            for (h, r) in got {
-                let (hash, u, n) = r.unwrap_or_else(|e| panic!("block {h}: {e}"));
-                writeln!(file, "{h}\t{hash}\t{}\t{n}", crate::hex(&u)).unwrap();
-                cache.push((hash, u));
-            }
-            file.sync_data().unwrap();
-            next = hi + 1;
-            if tick.elapsed().as_secs() >= 30 || next > s_height {
-                let d = t0.elapsed().as_secs_f64();
-                println!("REFOREST_FETCH h={} blocks_per_s={:.1} elapsed_s={:.0}", next - 1, (next - start) as f64 / d.max(1e-9), d);
-                tick = std::time::Instant::now();
-            }
-        }
+        fetch_undos(cli, start, s_height, jobs, "REFOREST_FETCH", &mut |h, hash, u, n| {
+            writeln!(file.borrow_mut(), "{h}\t{hash}\t{}\t{n}", crate::hex(u)).unwrap();
+            cache.push((hash.to_string(), *u));
+        }, &mut || file.borrow().sync_data().unwrap());
     }
     assert_eq!(cache.len(), s_height as usize);
 
@@ -151,9 +172,13 @@ pub(crate) fn reforest_cmd(out: &str, s_height: u32, cli: &str, all: bool, jobs:
     let mut new = hazync_utreexo::Stump::new();
     new.roots = g.block_roots.clone();
     new.num_leaves = g.block_leaves;
-    let (mut rewritten, mut kept) = (0u64, 0u64);
+    let (mut rewritten, mut kept, mut b_rewritten) = (0u64, 0u64, 0u64);
     let t0 = std::time::Instant::now();
     for h in 1..=s_height {
+        if h % 10_000 == 0 {
+            let d = t0.elapsed().as_secs_f64();
+            println!("REFOREST_WALK h={h} blocks_per_s={:.0} rewritten={rewritten}", h as f64 / d.max(1e-9));
+        }
         let p = format!("{out}/state_{h}.json");
         let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}"));
         let mut st: ChainState = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{p}: {e}"));
@@ -169,10 +194,30 @@ pub(crate) fn reforest_cmd(out: &str, s_height: u32, cli: &str, all: bool, jobs:
         let have = crate::normalize_host(st.block_roots.clone());
         assert!(st.block_leaves == h as u64 + 1 && (have == ro || have == rn),
                 "{p}: block_roots are neither the pre-commitment forest nor the new one over states 1..{h}: not one contiguous prep run from genesis");
-        if !(all || h == s_height) { continue; }
+        // the state as the old run wrote it, and as the new prep would: the new forest, stamped by this image
+        let mut old_st = st.clone();
+        crate::stamp(&mut old_st);
         st.block_roots = rn;
         st.block_leaves = new.num_leaves;
         crate::stamp(&mut st);
+        // --bundles: leaf_<h+1>.bin carries S(h) as its `prev` (read stamped, as leaf_read always does). It must be the
+        // old state h or, on a rerun, the new one; it becomes the new one. Its witnesses (coin log, trie, BIP30) and its
+        // block are untouched: they do not depend on the block forest.
+        if let Some(bd) = bundles {
+            let bp = format!("{bd}/leaf_{}.bin", h + 1);
+            if std::path::Path::new(&bp).exists() {
+                let mut b = crate::prep::leaf_read(&bp);
+                let have = crate::state_journal_bytes(&b.prev);
+                if have == crate::state_journal_bytes(&old_st) {
+                    b.prev = st.clone();
+                    crate::prep::leaf_write(&bp, &b);
+                    b_rewritten += 1;
+                } else {
+                    assert!(have == crate::state_journal_bytes(&st), "{bp}: its prev is neither state_{h} nor its re-forested form");
+                }
+            }
+        }
+        if !(all || h == s_height) { continue; }
         let json = serde_json::to_string(&st).unwrap();
         if json == text { kept += 1; continue; }
         if h == s_height {
@@ -183,12 +228,17 @@ pub(crate) fn reforest_cmd(out: &str, s_height: u32, cli: &str, all: bool, jobs:
             std::fs::rename(&tmp, &p).unwrap_or_else(|e| panic!("{p}: {e}"));
         }
         rewritten += 1;
-        if h % 10_000 == 0 {
-            let d = t0.elapsed().as_secs_f64();
-            println!("REFOREST_WALK h={h} blocks_per_s={:.0} rewritten={rewritten}", h as f64 / d.max(1e-9));
-        }
     }
     crate::lz::cl_sync_dir(std::path::Path::new(out));
+    if let Some(bd) = bundles {
+        crate::lz::cl_sync_dir(std::path::Path::new(bd));
+        // bundles above S + 1 were cut from states this run did not rewrite: the continuing prep cuts them again
+        let above: Vec<u32> = std::fs::read_dir(bd).map(|it| it.flatten().filter_map(|e| e.file_name().to_string_lossy()
+            .strip_prefix("leaf_").and_then(|x| x.strip_suffix(".bin")).and_then(|x| x.parse().ok())).filter(|h| *h > s_height + 1).collect())
+            .unwrap_or_default();
+        println!("  reforest: {b_rewritten} leaf bundle(s) rewritten in {bd}{}", if above.is_empty() { String::new() } else {
+            format!("; {} bundle(s) above {} are still the old format: remove them (the continuing prep cuts them again)", above.len(), s_height + 1) });
+    }
     println!("LZ_REFOREST_DONE 1..={s_height}: {rewritten} state(s) rewritten, {kept} already in the new format{}; \
               continue with HAZYNC_PREP_CONTINUE=1 from state_{s_height}.json",
              if all { "" } else { " (only state_S; --all rewrites every state)" });

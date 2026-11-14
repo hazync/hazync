@@ -1321,15 +1321,23 @@ fn main() {
         prep::lz_prep_cmd(n(1), n(2), &args[p + 3], &args[p + 4], &args[p + 5]);
         return;
     }
+    if let Some(p) = args.iter().position(|a| a == "libzync-undo-hashes") {
+        let usage = "libzync-undo-hashes <lo> <hi> --bitcoin-cli \"<cmd>\" [--jobs N]";
+        let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect(usage) };
+        let opt = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+        let jobs: usize = opt("--jobs").map(|x| x.parse().expect("--jobs N")).unwrap_or(4);
+        reforest::undo_hashes_cmd(n(1), n(2), &opt("--bitcoin-cli").expect(usage), jobs);
+        return;
+    }
     if let Some(p) = args.iter().position(|a| a == "libzync-reforest") {
-        // libzync-reforest <out dir> <S> --bitcoin-cli "<cmd>" [--all] [--jobs N] (reforest.rs, docs/HANDOVER.md §6)
-        let usage = "libzync-reforest <out dir> <S> --bitcoin-cli \"<cmd>\" [--all] [--jobs N]";
+        // libzync-reforest (reforest.rs; the switch runbook is docs/libzync/UNDO.md §8)
+        let usage = "libzync-reforest <out dir> <S> --bitcoin-cli \"<cmd>\" [--all] [--jobs N] [--bundles <leaf bundle dir>]";
         let out = args.get(p + 1).expect(usage);
         let s_h: u32 = args.get(p + 2).and_then(|x| x.parse().ok()).expect(usage);
         let opt = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
         let cli = opt("--bitcoin-cli").expect(usage);
         let jobs: usize = opt("--jobs").map(|x| x.parse().expect("--jobs N")).unwrap_or(4);
-        reforest::reforest_cmd(out, s_h, &cli, args.iter().any(|a| a == "--all"), jobs);
+        reforest::reforest_cmd(out, s_h, &cli, args.iter().any(|a| a == "--all"), jobs, opt("--bundles").as_deref());
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-join") {

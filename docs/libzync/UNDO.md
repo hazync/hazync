@@ -103,3 +103,34 @@ CI (`scripts/libzync/ci/`): `blocks.sh` step 3 compares the guest's undo hash wi
 and 962,000, with a control; `chain.sh` step 1 on every block of mainnet 1..200 with inputs, and the block forest with
 `block_forest_ref.py --undo-from 1`, with a control (the forest without undo hashes must not match); `signet.sh` the
 signet forest the same way; the verifier's unit tests both leaf formats across a handover height.
+
+## 8. The switch: carrying a running prep over (no restart from genesis)
+
+A prep run made before v0.26.0 (`libzync-prep`, `libzync-board-prep`) has the right coin log, trie, BIP30 tree and
+every ChainState field except one: `block_roots`, whose leaves lack the undo hash. `libzync-reforest` (the new host)
+rebuilds the forest over the run's own states and rewrites it, without touching any store, so prep continues instead
+of starting again.
+
+```
+libzync-reforest <out dir> <S> --bitcoin-cli "<cmd>" [--all] [--jobs N] [--bundles <leaf bundle dir>]
+libzync-undo-hashes <lo> <hi> --bitcoin-cli "<cmd>" [--jobs N]      # each block's undo hash, from a node
+```
+
+1. **Stop prep at a save point** (`systemctl stop libzync-prep`). Its runner always resumes from the newest COMPLETE
+   save point, `state_<S>.json` with `.coinlog` and `.trie` (every 1,000 blocks); take that S (`libzync-prep-run.sh`'s
+   rule). Re-forest holds the out dir's `LOCK`, so it refuses to run while prep does.
+2. **Re-forest** with the NEW host, HAZYNC_COINLOG_DIR / HAZYNC_TRIE_DIR unset:
+   `host libzync-reforest $LZ_ROOT/out S --bitcoin-cli "bitcoin-cli -datadir=…" --all --bundles $LZ_ROOT/leaves`.
+   - Phase 1 asks the node (`getblock <hash> 3`, unpruned, Core ≥ 25) for each block's spent coins and writes
+     `out/reforest/undo.tsv` as it goes; a rerun resumes after its last line.
+   - Phase 2 walks `state_1..S.json`: each must be the node's block at its height, and its `block_roots` the old forest
+     over the states before it (or, on a rerun, the new one); anything else stops the command. It writes the new
+     forest, stamped as the new prep stamps (`--all`: every state, else only `state_S.json`), each file replaced by a
+     rename; `--bundles` gives each leaf bundle 2..S+1 its re-forested `prev` and names any above S+1 (remove them).
+3. **Swap the binary** (`$LZ_ROOT/bin/host_lz` = the v0.26.0 host) and **start prep**: the runner continues from S
+   with `HAZYNC_PREP_CONTINUE=1`, re-stamping on read, and every block from S+1 on gets the 0x05 leaf directly.
+4. **Board-prep** cuts its window of bundles again after the board resets (or is re-forested the same way).
+
+Tested (2026-11-14, hazync-coord, CPU): see the acceptance test in the PR — prep 1..2,000 by the v0.25.0 host, then
+re-forested, is byte-identical (every `state_<h>.json`) to prep 1..2,000 by the new host; the control (one block's
+undo hash replaced) differs from that block on.
