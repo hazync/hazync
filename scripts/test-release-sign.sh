@@ -4,7 +4,7 @@
 # Runs the two key-holding steps of .github/workflows/release-sign.yml, taken from the YAML itself, on synthetic
 # release assets with a throwaway GPG key and a stub `gh`:
 #   - a correct set signs, and the manifest names the tag, the tag's commit and its image;
-#   - a host or verifier that does not carry the tag's image (once) is refused;
+#   - a host or verifier that does not carry the tag's image (once) is refused, and an installer that is not one;
 #   - a re-sign over unchanged assets passes; a re-sign after an asset was swapped is refused; a release whose
 #     existing manifest does not verify is refused.
 #
@@ -79,6 +79,8 @@ for n in names:
     if n in ("hazync-verify-x86_64-linux-gnu", "hazync-verify-aarch64", "hazync-verify.wasm"): body += hx + os.urandom(16)
     if mode == "bad-host" and n == "hazync-host-x86_64-linux-gnu": body = os.urandom(200)
     if mode == "bad-wasm-twice" and n == "hazync-verify.wasm": body += hx
+    if n == "hazync-setup-x86_64-windows.exe": body = b"MZ" + os.urandom(64) + b"Inno Setup Setup Data (6.4.0)" + os.urandom(64)
+    if mode == "not-installer" and n == "hazync-setup-x86_64-windows.exe": body = b"MZ" + os.urandom(200)
     p = os.path.join(d, n)
     if n.endswith(".zip"):
         with zipfile.ZipFile(p, "w") as z: z.writestr("host.exe", os.urandom(64) + raw); z.writestr("cudart64_12.dll", b"x")
@@ -103,6 +105,8 @@ workspace badhost bad-host; write
 check "$([ $? != 0 ] && grep -q "not this tag's image" "$WS/write.log" && echo 1)" "a Linux host without the tag's image is refused"
 workspace badwasm bad-wasm-twice; write
 check "$([ $? != 0 ] && grep -q "hazync-verify.wasm carries it 2x" "$WS/write.log" && echo 1)" "a verifier carrying the image twice is refused"
+workspace notinst not-installer; write
+check "$([ $? != 0 ] && grep -q "is not an Inno Setup installer" "$WS/write.log" && echo 1)" "a Windows installer that is not an installer is refused"
 
 # 3. re-signs
 workspace resign; cp "$GOOD"/dist/* "$WS/dist/"; cp "$GOOD"/SHA256SUMS.txt "$GOOD"/SHA256SUMS.txt.asc "$WS/prev/"

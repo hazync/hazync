@@ -3,7 +3,8 @@ name: windows-installer
 # PyInstaller, takes the prover (host.exe + cudart) and the worker from a published release, checked against that
 # release's SHA256SUMS.txt, packs them with Inno Setup, then INSTALLS it silently on the runner, runs the installed
 # app as the worker's interpreter, and uninstalls it, checking the signing key folder survives. The installer is an
-# artifact; a release attaches it (docs/BUILD_AND_RELEASE.md).
+# artifact. A release gets it from release-sign.yml, which calls this workflow with `release: true` (the tag's own
+# app, the release's own prover), attaches it, and signs it with the rest (docs/BUILD_AND_RELEASE.md).
 #
 # Not Authenticode-signed (owner's decision, 11-13): SmartScreen warns until it is.
 
@@ -21,6 +22,16 @@ on:
       version:
         description: "installer version (blank = <release>-dev.<run number>)"
         default: ''
+  workflow_call:
+    inputs:
+      tag:
+        description: "the release being signed"
+        type: string
+        required: true
+      release:
+        description: "build the TAG's app, versioned as the tag (release-sign.yml)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,7 +43,24 @@ jobs:
       run:
         shell: bash
     steps:
+      # A release builds THE TAG's app (the same pinning reason as release-sign.yml's checkout: a re-sign from a later
+      # main must not pack a newer app into an old release). Otherwise the branch under test.
+      - name: Which source (a release builds its tag, validated first)
+        id: src
+        shell: bash
+        env:
+          IN_TAG: ${{ inputs.tag }}
+          IN_RELEASE: ${{ inputs.release }}
+        run: |
+          if [ "$IN_RELEASE" = true ]; then
+            [[ "$IN_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: '$IN_TAG'"; exit 1; }
+            echo "ref=refs/tags/$IN_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.src.outputs.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -73,22 +101,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IN_TAG: ${{ inputs.tag }}
           IN_VERSION: ${{ inputs.version }}
+          IN_RELEASE: ${{ inputs.release }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           tag="$IN_TAG"
           [ -n "$tag" ] || tag=$(gh release view -R hazync/hazync --json tagName --jq .tagName)
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: '$tag'"; exit 1; }
           mkdir -p rel && cd rel
-          gh release download "$tag" -R hazync/hazync -p 'hazync-host-x86_64-windows-cuda.zip' -p 'hazync-worker' -p 'SHA256SUMS.txt'
-          for f in hazync-host-x86_64-windows-cuda.zip hazync-worker; do
-            want=$(awk -v f="$f" '$2==f || $2=="*"f {print $1}' SHA256SUMS.txt)
-            got=$(sha256sum "$f" | cut -d' ' -f1)
-            [ -n "$want" ] && [ "$want" = "$got" ] || { echo "::error::$f does not match $tag's SHA256SUMS.txt"; exit 1; }
-            echo "$f: sha256 matches $tag's signed manifest"
-          done
+          gh release download "$tag" -R hazync/hazync -p 'hazync-host-x86_64-windows-cuda.zip' -p 'hazync-worker'
+          if gh release download "$tag" -R hazync/hazync -p 'SHA256SUMS.txt' 2>/dev/null; then
+            for f in hazync-host-x86_64-windows-cuda.zip hazync-worker; do
+              want=$(awk -v f="$f" '$2==f || $2=="*"f {print $1}' SHA256SUMS.txt)
+              got=$(sha256sum "$f" | cut -d' ' -f1)
+              [ -n "$want" ] && [ "$want" = "$got" ] || { echo "::error::$f does not match $tag's SHA256SUMS.txt"; exit 1; }
+              echo "$f: sha256 matches $tag's signed manifest"
+            done
+          elif [ "$IN_RELEASE" = true ]; then
+            # The FIRST signing of a release: no manifest yet. The sign job hashes these same assets and this installer
+            # into one manifest, and the install step below checks the packed host.exe is the zip's, byte for byte.
+            echo "first signing of $tag: no manifest yet; the sign job covers the zip, the worker and this installer together"
+          else
+            echo "::error::$tag has no SHA256SUMS.txt"; exit 1
+          fi
           python -c "import zipfile; zipfile.ZipFile('hazync-host-x86_64-windows-cuda.zip').extractall('prover')"
           ls -la prover
           v="$IN_VERSION"; [ -n "$v" ] || v="${tag#v}-dev.$RUN_NUMBER"
+          [ "$IN_RELEASE" != true ] || v="${tag#v}"
           echo "VERSION=$v" >> "$GITHUB_ENV"; echo "TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Build the app (PyInstaller, one folder)
@@ -124,6 +162,13 @@ jobs:
           # the installed prover is the release's: it carries the published mainnet image (a GPU-less runner cannot RUN it)
           ID=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
           python -c "import sys;n=open(sys.argv[1],'rb').read().count(bytes.fromhex(sys.argv[2]));print('image',sys.argv[2][:8],n,'x');sys.exit(0 if n>=1 else 1)" "$APP/prover/host.exe" "$ID"
+          # ...and is the release zip's host.exe, byte for byte: the sign job cannot look inside a compressed installer,
+          # so this is what ties the signed installer to the signed zip.
+          # (not sha256sum: a path with backslashes makes it prefix its line with '\', which shifted a cut-based read)
+          sha() { python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1"; }
+          a=$(sha "$APP/prover/host.exe"); b=$(sha rel/prover/host.exe)
+          [ "$a" = "$b" ] || { echo "::error::the installed host.exe ($a) is not the release zip's ($b)"; exit 1; }
+          echo "installed host.exe = the release zip's ($a)"
           # the installed app runs the installed worker: make a key in a scratch HAZYNC_HOME and read it back
           export HAZYNC_HOME="$RUNNER_TEMP/hz-home" PYTHONPATH="$(cygpath -w "$APP/_internal/winshim")"
           out=$("$APP/Hazync.exe" "$(cygpath -w "$APP/hazync-worker")" id 2>&1); echo "$out"
