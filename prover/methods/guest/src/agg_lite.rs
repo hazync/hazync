@@ -102,6 +102,48 @@ fn prevout_spks(b: &[u8]) -> Option<Vec<(usize, usize)>> {
     Some(v)
 }
 
+/// exp/undo-commit (#729): (value, script range) of each entry of a serialized Vec<TxOut> (a run's prevouts), as Core's
+/// ReadCompactSize reads the lengths (shortest form, at most MAX_SIZE). Not trie-gated.
+fn undo_prevouts(b: &[u8]) -> Option<Vec<(u64, usize, usize)>> {
+    fn cs(b: &[u8], o: &mut usize) -> Option<usize> {
+        let f = *b.get(*o)?;
+        *o += 1;
+        let (n, min) = match f { 0xfd => (2, 0xfd), 0xfe => (4, 0x1_0000), 0xff => (8, 0x1_0000_0000), x => return Some(x as usize) };
+        let mut v = 0u64;
+        for i in 0..n { v |= (*b.get(*o + i)? as u64) << (8 * i); }
+        *o += n;
+        (v >= min && v <= 0x0200_0000).then_some(v as usize)
+    }
+    let mut o = 0;
+    let n = cs(b, &mut o)?;
+    let mut v = Vec::with_capacity(n);
+    for _ in 0..n {
+        let val = u64::from_le_bytes(b.get(o..o + 8)?.try_into().ok()?);
+        o += 8;
+        let l = cs(b, &mut o)?;
+        v.push((val, o, l));
+        o = o.checked_add(l)?;
+        if o > b.len() { return None; }
+    }
+    Some(v)
+}
+/// exp/undo-commit (#729): one spent coin's undo record, format U0:
+///   code u32 LE (= creation height * 2 + coinbase) ‖ amount u64 LE ‖ len(scriptPubKey) u32 LE ‖ scriptPubKey
+/// and its digest SHA-256(record). The block's undo hash is SHA-256 of these digests over every input of the block's
+/// non-coinbase transactions, in block order (independent of how the inputs are split into chunks).
+fn undo_digest(code: u32, val: u64, spk: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    let mut hd = [0u8; 16];
+    hd[0..4].copy_from_slice(&code.to_le_bytes());
+    hd[4..12].copy_from_slice(&val.to_le_bytes());
+    hd[12..16].copy_from_slice(&(spk.len() as u32).to_le_bytes());
+    h.update(hd);
+    h.update(spk);
+    h.finalize().into()
+}
+pub const UNDO_WORDS: usize = 8;
+
 /// trie: the coin key is the txid with vout XORed into its FIRST 4 bytes, no hash. The txid is already a hash;
 /// two outpoints collide only if their txids agree in 224 bits. In the first bytes, one transaction's coins at one
 /// address part at the top of the coin trie (in the last bytes they shared 224 bits: a ~224-node one-child chain).
@@ -307,6 +349,8 @@ impl ChunkCtx {
         let (io_in, pspk) = (io.as_ref().map(|x| &x.0), prevout_spks(prevouts));
         #[cfg(feature = "trie")]
         if io_in.is_none() || pspk.is_none() { ok = false; }
+        let upv = undo_prevouts(prevouts);
+        if upv.is_none() { ok = false; }
         for j in 0..k {
             if results[j] != 1 { ok = false; env::log("core-reject: script"); }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
@@ -329,6 +373,12 @@ impl ChunkCtx {
                     let (so, sl) = pspk.as_ref().and_then(|x| x.get(idx[j] as usize).copied()).unwrap_or((0, 0));
                     push_hash(&mut self.words, &shash(prevouts.get(so..so + sl).unwrap_or(&[])));
                 }
+            }
+            // exp/undo-commit (#729): the spent coin's undo-record digest
+            {
+                let (val, so, sl) = upv.as_ref().and_then(|x| x.get(idx[j] as usize).copied()).unwrap_or((0, 0, 0));
+                let code = ch[j].wrapping_mul(2) | (cb[j] & 1);
+                push_hash(&mut self.words, &undo_digest(code, val, prevouts.get(so..so + sl).unwrap_or(&[])));
             }
         }
         self.n_records += 1;
@@ -385,6 +435,7 @@ fn skip_record(r: &mut Rd) {
         r.i = r.i.saturating_add(8);
         if r.u() & 1 == 1 { r.i = r.i.saturating_add(8); }
         r.i = r.i.saturating_add(KEY_WORDS);
+        r.i = r.i.saturating_add(UNDO_WORDS);
     }
     if r.i > r.w.len() { r.bad = true; }
 }
@@ -465,6 +516,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut total_in: u64 = 0;
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
+    let mut undo_parts: Vec<u8> = Vec::with_capacity(2 * words);   // exp/undo-commit (#729): per-input undo digests, block order
     let mut spends: Vec<([u8; 32], u32, bool, u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height, input index), block order
     let mut cb_spends: Vec<([u8; 32], bool)> = Vec::new();
     // trie: (coin key, script hash) per spend and per indexed output, parallel to `spends` / `output_leaves`
@@ -591,6 +643,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     debug_assert!(spend_keys.len() == spend_key_at);
                     spend_keys.push((ok_, sh));
                 }
+                // exp/undo-commit (#729)
+                { let u = r.h(); undo_parts.extend_from_slice(&u); }
             }
             if r.bad { all_ok = false; break; }
         }
@@ -854,6 +908,11 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         trie_root,
         survivor_value,
         spent_value,
+        undo_hash: {
+            let u: [u8; 32] = { use sha2::{Digest, Sha256}; Sha256::digest(&undo_parts).into() };
+            env::log(&alloc::format!("undo: block {} inputs {} hash {}", w.height, undo_parts.len() / 32, hex32(&u)));
+            u
+        },
         ..Default::default()
     }
 }
