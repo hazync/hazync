@@ -52,7 +52,7 @@ REPO = os.environ.get("HZ_REPO", "/opt/hazync")
 KEYS = os.environ.get("OFFSITE_KEYS", "/etc/hazync/backup/r2.keys")
 BUCKET = os.environ.get("OFFSITE_BUCKET", "hazync-proofs")
 MIRROR = os.environ.get("OFFSITE_PROOFS_SCRIPT", "/usr/local/sbin/hazync-offsite-proofs")
-MIRROR_UNIT = "hazync-offsite-proofs.service"
+MIRROR_UNIT = os.environ.get("OFFSITE_MIRROR_UNIT", "hazync-offsite-proofs.service")
 DRILL_DIR = os.environ.get("OFFSITE_DRILL_DIR", "/var/lib/hazync/restore-drill")
 DRILL_USER = os.environ.get("OFFSITE_DRILL_USER", "hazync")
 LAG_ALERT = int(os.environ.get("OFFSITE_LAG_ALERT_SECS", "900"))
@@ -81,7 +81,7 @@ KEYS_GRACE = int(os.environ.get("OFFSITE_KEYS_GRACE_SECS", "7200"))
 KEY_EXPIRY_WARN_DAYS = int(os.environ.get("OFFSITE_KEY_EXPIRY_WARN_DAYS", "60"))
 B2_KEYS = os.environ.get("OFFSITE_B2_KEYS", "/etc/hazync/backup/b2.keys")     # "" turns the B2 checks off
 B2_BUCKET = os.environ.get("OFFSITE_B2_BUCKET", "hazync-backup")
-B2_MIRROR_UNIT = "hazync-offsite-proofs-b2.service"
+B2_MIRROR_UNIT = os.environ.get("OFFSITE_B2_MIRROR_UNIT", "hazync-offsite-proofs-b2.service")
 # The ledger copy in B2 is taken once a day, so a newest copy older than 26 h means the daily copy stopped.
 B2_LEDGER_LAG_ALERT = int(os.environ.get("OFFSITE_B2_LEDGER_LAG_SECS", "93600"))
 
