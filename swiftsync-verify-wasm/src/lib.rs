@@ -16,6 +16,7 @@
 //! here (a browser has no node); the page shows the tip and work for the reader to compare.
 
 use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inputs, Report, Verdict, BUNDLE_MAGIC};
+use swiftsync_verify::headers;
 
 #[no_mangle]
 pub extern "C" fn alloc(len: usize) -> *mut u8 {
@@ -233,11 +234,14 @@ pub extern "C" fn image_id(network: u32) -> *const u8 {
 /// The header-chain zyncAPP (ROADMAP K1, N3), by the same `swiftsync_verify::headers::verify_headers` the CLI's
 /// `swiftsync-verify headers` uses. Input frame (little-endian): `[u64 now][u32 count]` then count times
 /// `[u32 n][receipt]` (the first from genesis, each next one starting where the one before ended), then
-/// `[u32 n][image id hex, n = 0 for the built-in id][u32 n]["height:hash" from a source the page trusts, n = 0 for none]`.
+/// `[u32 n][image id hex, n = 0 for the built-in id][u32 n]["height:hash" from a source the page trusts, n = 0 for none]`,
+/// optionally followed by `[u32 n][include JSON, n = 0 for none]`: `{"height", "hash" (as explorers print it), "path"
+/// (MMR hashes as zyncapp headers-mmr-path prints them), "tx"?: {"txid", "pos", "header" (80-byte hex), "branch"
+/// (reversed hex, as Electrum's blockchain.transaction.get_merkle)}}` (swiftsync_verify::headers::Inclusion::parse).
 #[no_mangle]
 pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let parsed = (|| -> Result<(u64, Vec<&[u8]>, String, String), String> {
+    let parsed = (|| -> Result<(u64, Vec<&[u8]>, String, String, Option<headers::Inclusion>), String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
         let n = u32::from_le_bytes(f.take(4)?.try_into().unwrap()) as usize;
@@ -246,10 +250,14 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
         for _ in 0..n { rs.push(f.chunk()?); }
         let image = std::str::from_utf8(f.chunk()?).map_err(|_| "image id: not UTF-8")?.to_string();
         let expect = std::str::from_utf8(f.chunk()?).map_err(|_| "expect: not UTF-8")?.to_string();
+        let include = if f.i == input.len() { None } else {
+            let j = f.chunk()?;
+            if j.is_empty() { None } else { Some(parse_include(j)?) }
+        };
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
-        Ok((now, rs, image, expect))
+        Ok((now, rs, image, expect, include))
     })();
-    let (now, rs, image, expect) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    let (now, rs, image, expect, include) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
     let image = if image.is_empty() { swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string() } else { image };
     let exp = if expect.is_empty() { None } else {
         match expect.split_once(':').and_then(|(h, x)| h.parse::<i64>().ok().map(|h| (h, x))) {
@@ -257,7 +265,7 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
             None => return fail(format!("expect {expect:?}: give height:hash")),
         }
     };
-    let rep = swiftsync_verify::headers::verify_headers(&rs, &image, now, exp);
+    let rep = swiftsync_verify::headers::verify_headers(&rs, &image, now, exp, include.as_ref());
     let ok = rep.verdict != Verdict::Fail;
     let s = rep.state.as_ref().filter(|_| ok);
     ret(serde_json::json!({
@@ -268,8 +276,31 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
         "hash": s.map(|s| s.hash_hex()),
         "chainwork": s.map(|s| s.work_hex()),
         "max_time": s.map(|s| s.max_time),
+        "mmr_root": s.map(|s| s.mmr_root_hex()),
         "identity_checked": ok && exp.is_some(),
+        // the block (and transaction) asked for is on the verified chain; null when none was asked
+        "included": include.as_ref().map(|_| ok),
     }).to_string())
+}
+
+fn parse_include(j: &[u8]) -> Result<headers::Inclusion, String> {
+    let v: serde_json::Value = serde_json::from_slice(j).map_err(|e| format!("include: not JSON ({e})"))?;
+    let strs = |x: &serde_json::Value, what: &str| -> Result<Vec<String>, String> {
+        x.as_array().ok_or(format!("include: {what} is not a list"))?.iter()
+            .map(|y| y.as_str().map(str::to_string).ok_or(format!("include: {what} holds a non-string"))).collect()
+    };
+    let height = v["height"].as_i64().ok_or("include: height is not an integer")?;
+    let hash = v["hash"].as_str().ok_or("include: hash is not a string")?;
+    let path = strs(&v["path"], "path")?;
+    let path: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+    let tx = &v["tx"];
+    if tx.is_null() { return headers::Inclusion::parse(height, hash, &path, None); }
+    let txid = tx["txid"].as_str().ok_or("include: tx.txid is not a string")?;
+    let pos = tx["pos"].as_u64().filter(|p| *p <= u32::MAX as u64).ok_or("include: tx.pos is not a position")? as u32;
+    let header = tx["header"].as_str().ok_or("include: tx.header is not a string")?;
+    let branch = strs(&tx["branch"], "tx.branch")?;
+    let branch: Vec<&str> = branch.iter().map(|s| s.as_str()).collect();
+    headers::Inclusion::parse(height, hash, &path, Some((txid, pos, header, &branch)))
 }
 
 /// The built-in header-chain image id, for the page to display.
