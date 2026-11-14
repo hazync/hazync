@@ -20,6 +20,9 @@ done
 # swiftsync-verify include!s the guest's handover pin (one source for the pinned receipt ids)
 mkdir -p "$STAGE/prover/methods/guest/src"
 cp "$REPO/prover/methods/guest/src/handover_pin.rs" "$STAGE/prover/methods/guest/src/"
+# ...and the header-chain guest's MMR (one source for the guest, the verifier and the host)
+mkdir -p "$STAGE/prover/zyncapps/methods/headers/src"
+cp "$REPO/prover/zyncapps/methods/headers/src/mmr.rs" "$STAGE/prover/zyncapps/methods/headers/src/"
 SYSROOT=$(rustc --print sysroot)
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$SYSROOT=/rust-sysroot --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$STAGE=/hazync"
 (cd "$STAGE/swiftsync-verify-wasm" && cargo build --release --target wasm32-unknown-unknown)

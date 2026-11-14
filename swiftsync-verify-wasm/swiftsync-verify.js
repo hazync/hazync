@@ -8,7 +8,11 @@
 //   (expect: the network's block at the proof's height from a source YOU trust, never from the fact server)
 //   r.verdict  // 'ok' | 'demo' | 'fail'
 //   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });   // the header-chain zyncAPP
-//   h.verdict, h.height, h.hash, h.chainwork
+//   h.verdict, h.height, h.hash, h.chainwork, h.mmr_root
+//   v.verifyHeaders({ receipts, include: { height, hash, path } })   // and block <hash> is at <height> on that chain
+//   (path: the lines `zyncapp headers-mmr-path` prints, or the path service's /path answer; optional tx: the path
+//   service's /tx answer { txid, pos, header, raw, branch, coinbase, coinbase_branch } for a transaction in that block:
+//   the raw coinbase and its branch pin the tree's depth). h.included: true / false / null
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
@@ -58,10 +62,12 @@ export async function loadVerifier(source) {
      *  is the tip from a source you trust, passed beside the facts, never inside them. */
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },
     /** The header-chain zyncAPP: receipts = [first from genesis, then each run chained to the one before];
-     *  expect ('<height>:<hash>') is the tip from a source you trust. `now` defaults to this device's clock. */
-    verifyHeaders({ receipts, now, imageHex, expect }) {
+     *  expect ('<height>:<hash>') is the tip from a source you trust. `now` defaults to this device's clock.
+     *  include ({ height, hash, path, tx? }): also check that this block (and transaction) is on the proven chain. */
+    verifyHeaders({ receipts, now, imageHex, expect, include }) {
       const enc = new TextEncoder();
-      const parts = [...receipts, enc.encode(imageHex || ''), enc.encode(expect || '')];
+      const parts = [...receipts, enc.encode(imageHex || ''), enc.encode(expect || ''),
+                     enc.encode(include ? JSON.stringify(include) : '')];
       const bytes = new Uint8Array(12 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(bytes.buffer);
       view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);

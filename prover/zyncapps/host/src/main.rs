@@ -8,6 +8,7 @@
 //!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
 //!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
 //!   zyncapp headers-prove <headers file> <out receipt> [--after <previous headers receipt>] [--elf <guest>] [--execute]
+//!   zyncapp headers-mmr-path <headers file from 0> <height> [--tip <height>]   (the MMR path for swiftsync-verify headers --path)
 //!   zyncapp id
 //!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
 //!
@@ -154,9 +155,9 @@ fn main() {
                 }).collect();
             let dsha = |b: &[u8]| -> [u8; 32] { use sha2::Digest; sha2::Sha256::digest(sha2::Sha256::digest(b)).into() };
             #[derive(serde::Serialize)]
-            struct HState { height: i64, hash: [u8; 32], work: [u8; 32], bits: u32, time: u32, epoch_first_time: u32, recent_times: Vec<u32>, max_time: u32 }
+            struct HState { height: i64, hash: [u8; 32], work: [u8; 32], bits: u32, time: u32, epoch_first_time: u32, recent_times: Vec<u32>, max_time: u32, mmr_peaks: Vec<[u8; 32]> }
             let (st, run): (HState, &[(i64, Vec<u8>)]) = if lines[0].0 == 0 {
-                (HState { height: -1, hash: [0; 32], work: [0; 32], bits: 0, time: 0, epoch_first_time: 0, recent_times: vec![], max_time: 0 }, &lines[..])
+                (HState { height: -1, hash: [0; 32], work: [0; 32], bits: 0, time: 0, epoch_first_time: 0, recent_times: vec![], max_time: 0, mmr_peaks: vec![] }, &lines[..])
             } else {
                 // the run starts just AFTER a retarget boundary: the boundary header is in the seed and is its epoch's first
                 // time, so the next retarget in the run is computed from real timestamps
@@ -170,17 +171,20 @@ fn main() {
                 let mut work = [0u8; 32];
                 let wb: Vec<u8> = (0..64).step_by(2).map(|i| u8::from_str_radix(&format!("{:0>64}", wh)[i..i + 2], 16).unwrap()).collect();
                 for (i, b) in wb.iter().rev().enumerate() { work[i] = *b; }
+                // the MMR peaks below the seed are unknown without every hash from genesis: placeholder peaks of the
+                // right count (one per set bit of height + 1), so the cycles are a real run's; the end MMR is not real
                 (HState { height: seed[10].0, hash: dsha(last), work, bits: le(&last[72..76]), time: le(&last[68..72]), epoch_first_time: le(&lines[b].1[68..72]),
-                          recent_times: seed.iter().map(|(_, h)| le(&h[68..72])).collect(), max_time: seed.iter().map(|(_, h)| le(&h[68..72])).max().unwrap() }, &lines[start..])
+                          recent_times: seed.iter().map(|(_, h)| le(&h[68..72])).collect(), max_time: seed.iter().map(|(_, h)| le(&h[68..72])).max().unwrap(),
+                          mmr_peaks: vec![[0; 32]; ((seed[10].0 + 1) as u64).count_ones() as usize] }, &lines[start..])
             };
             let words: Vec<u32> = run.iter().flat_map(|(_, h)| h.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>()).collect();
             let env = ExecutorEnv::builder().write(&st).unwrap().write(&(run.len() as u32)).unwrap().write_slice(&words).build().unwrap();
             let t = std::time::Instant::now();
             let info = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HEADERS_ELF).unwrap_or_else(|e| die(&e.to_string()));
             #[derive(serde::Deserialize)]
-            struct HOut { height: i64, hash: [u8; 32], work: [u8; 32], bits: u32, time: u32, epoch_first_time: u32, recent_times: Vec<u32>, max_time: u32 }
+            struct HOut { height: i64, hash: [u8; 32], work: [u8; 32], bits: u32, time: u32, epoch_first_time: u32, recent_times: Vec<u32>, max_time: u32, mmr_peaks: Vec<[u8; 32]> }
             let (_d, out): ([u8; 32], HOut) = info.journal.decode().unwrap_or_else(|e| die(&e.to_string()));
-            let _ = (out.bits, out.time, out.epoch_first_time, &out.recent_times, out.max_time);
+            let _ = (out.bits, out.time, out.epoch_first_time, &out.recent_times, out.max_time, &out.mmr_peaks);
             let disp = |b: &[u8; 32]| -> String { b.iter().rev().map(|x| format!("{x:02x}")).collect() };
             println!("HEADERS_EXEC {} headers ({}..{}) {} cycles = {:.0} per header, {} segments, executed in {:.1} s",
                      run.len(), run[0].0, out.height, info.cycles(), info.cycles() as f64 / run.len() as f64, info.segments.len(), t.elapsed().as_secs_f64());
@@ -226,22 +230,65 @@ fn main() {
                 if *h != st.height + 1 + k as i64 { die(&format!("the file is not consecutive from {}: found {h}", st.height + 1)); }
             }
             let words: Vec<u32> = run.iter().flat_map(|(_, h)| h.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>()).collect();
+            // the MMR the guest must end with, built natively by the same code (swiftsync_verify::mmr = the guest's
+            // src/mmr.rs): a guest that disagrees is refused before anything is written
+            let mut want_peaks = st.mmr_peaks.clone();
+            for (k, (_, h)) in run.iter().enumerate() {
+                use sha2::Digest;
+                swiftsync_verify::mmr::append(&mut want_peaks, (st.height + 1) as u64 + k as u64, &sha2::Sha256::digest(sha2::Sha256::digest(h)).into());
+            }
+            let mmr_check = |out: &HeaderState| if out.mmr_peaks != want_peaks {
+                die(&format!("the guest's MMR ({} peaks, root {}) is not the native one (root {})", out.mmr_peaks.len(), out.mmr_root_hex(),
+                             hex(&swiftsync_verify::mmr::root(&want_peaks))));
+            };
             let env = ExecutorEnv::builder().write(&st).unwrap().write(&(run.len() as u32)).unwrap().write_slice(&words).build().unwrap();
             let t = std::time::Instant::now();
             if a.iter().any(|x| x == "--execute") {
                 let info = risc0_zkvm::default_executor().execute(env, &elf).unwrap_or_else(|e| die(&e.to_string()));
                 let (_d, out): ([u8; 32], HeaderState) = info.journal.decode().unwrap_or_else(|e| die(&e.to_string()));
-                println!("HEADERS_EXEC {} headers ({}..{}) {} cycles, {} segments, {:.1} s; END {} {} chainwork {}", run.len(), st.height + 1, out.height,
-                         info.cycles(), info.segments.len(), t.elapsed().as_secs_f64(), out.height, out.hash_hex(), out.work_hex());
+                mmr_check(&out);
+                println!("HEADERS_EXEC {} headers ({}..{}) {} cycles, {} segments, {:.1} s; END {} {} chainwork {} MMR root {}", run.len(), st.height + 1, out.height,
+                         info.cycles(), info.segments.len(), t.elapsed().as_secs_f64(), out.height, out.hash_hex(), out.work_hex(), out.mmr_root_hex());
             } else {
                 let r = default_prover().prove_with_opts(env, &elf, &risc0_zkvm::ProverOpts::succinct())
                     .unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
                 let (_d, out): ([u8; 32], HeaderState) = r.journal.decode().unwrap_or_else(|e| die(&e.to_string()));
+                mmr_check(&out);
                 std::fs::write(&a[2], bincode::serialize(&r).unwrap()).unwrap_or_else(|e| die(&e.to_string()));
-                println!("HEADERS_PROVED {} headers ({}..{}) in {:.1} s -> {}; END {} {} chainwork {}", run.len(), st.height + 1, out.height,
-                         t.elapsed().as_secs_f64(), a[2], out.height, out.hash_hex(), out.work_hex());
+                println!("HEADERS_PROVED {} headers ({}..{}) in {:.1} s -> {}; END {} {} chainwork {} MMR root {}", run.len(), st.height + 1, out.height,
+                         t.elapsed().as_secs_f64(), a[2], out.height, out.hash_hex(), out.work_hex(), out.mmr_root_hex());
             }
             println!("HEADERS_ID {}", hex(elf_id.as_bytes()));
+        }
+        Some("headers-mmr-path") if a.len() >= 3 => {
+            // The MMR inclusion path of block <height> in the header chain proved to the file's last header (or to
+            // --tip <height>, the proven tip, when the file goes further): the file of "height hex80" lines must start
+            // at genesis and be consecutive. Prints the path to stdout, one 64-hex hash per line, lowest first (raw byte
+            // order; nothing for a one-block peak), the form `swiftsync-verify headers --include <height>:<hash>
+            // --path <file>` reads; the block, the leaf count and the MMR root go to stderr.
+            let want: u64 = a[2].parse().unwrap_or_else(|_| die("headers-mmr-path <headers file> <height> [--tip <height>]"));
+            let tip: Option<i64> = a.iter().position(|x| x == "--tip").and_then(|i| a.get(i + 1))
+                .map(|x| x.parse().unwrap_or_else(|_| die("--tip: not a height")));
+            let mut hashes: Vec<[u8; 32]> = Vec::new();
+            for l in std::fs::read_to_string(&a[1]).unwrap_or_else(|e| die(&e.to_string())).lines().filter(|l| !l.trim().is_empty()) {
+                let mut f = l.split_whitespace();
+                let h: i64 = f.next().and_then(|x| x.parse().ok()).unwrap_or_else(|| die("a line without a height"));
+                if tip.is_some_and(|t| h > t) { break; }
+                if h != hashes.len() as i64 { die(&format!("the file is not consecutive from genesis: found {h} at line {}", hashes.len() + 1)); }
+                let x = f.next().unwrap_or_else(|| die("a line without a header"));
+                let b: Vec<u8> = (0..x.len()).step_by(2).map(|i| u8::from_str_radix(x.get(i..i + 2).unwrap_or("zz"), 16).unwrap_or_else(|_| die("bad hex"))).collect();
+                if b.len() != 80 { die(&format!("header {h} is {} bytes, not 80", b.len())); }
+                if let Some(prev) = hashes.last() { if b[4..36] != prev[..] { die(&format!("header {h} does not link to {}", h - 1)); } }
+                use sha2::Digest;
+                hashes.push(sha2::Sha256::digest(sha2::Sha256::digest(&b)).into());
+            }
+            if let Some(t) = tip { if hashes.len() as i64 != t + 1 { die(&format!("the file ends at {}, below --tip {t}", hashes.len() as i64 - 1)); } }
+            let path = swiftsync_verify::mmr::path(&hashes, want)
+                .unwrap_or_else(|| die(&format!("block {want} is not in 0..={}", hashes.len() as i64 - 1)));
+            for p in &path { println!("{}", hex(p)); }
+            let disp: String = hashes[want as usize].iter().rev().map(|x| format!("{x:02x}")).collect();
+            eprintln!("MMR_PATH block {want} {disp}: {} hashes; {} leaves (tip {}), MMR root {}", path.len(), hashes.len(),
+                      hashes.len() - 1, hex(&swiftsync_verify::mmr::root(&swiftsync_verify::mmr::peaks_of(&hashes))));
         }
         Some("bench-hash") => {
             // E1 calibration, execute mode (no proof): cycles per node hash for both hash shapes.
