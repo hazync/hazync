@@ -158,9 +158,10 @@ wrap: no trusted setup, nodes verify with our library, CLI, WASM or C ABI). Serv
 
 ## 8. Tests
 
-- **Real file:** mainnet H = 1,999 from the reference generator (`rustaceanrob/bitcoin` `hintsfile-v1`, and the
-  crate) byte-equal to the zAPP's, and a #34004 file converted (§2) giving the same indices; BIP `elias_fano.json`
-  through the guest encoder. Then H = 100,000 (BIP30 blocks, first same-block spends, OP_RETURN).
+- **Real file:** H = 1,999, 10,000, 100,000 byte-equal to `hints_ref.py` (an independent generator from hintsfile.md)
+  in format 1 and to the `hintsfile` crate's writer in format 2; the BIP's `elias_fano.json` through both encoders.
+  (`rustaceanrob/bitcoin` `hintsfile-v1` and #34004's `generatetxohints` need a node rolled back to H: not run on the
+  shared node.)
 - **Refused by the verifier:** a flipped bit, a truncated file, a non-canonical re-encoding of one block; a file for
   H−1 against a journal for H; `--expect` from another chain; a receipt of another image (a core receipt, a
   dev-built hints id); an untrusted `core_id`; a FakeReceipt or dev mode.
