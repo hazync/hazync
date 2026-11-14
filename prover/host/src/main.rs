@@ -19,6 +19,7 @@ mod trie;
 mod seg;
 mod verify;
 mod prep;
+mod reforest;
 mod lz_coord;
 
 use bench::{chunk_profile, exec_time_cmd, segment_mem_cmd, segment_size_cmd, test_locks_cmd, test_merkle_cmd};
@@ -1318,6 +1319,17 @@ fn main() {
     if let Some(p) = args.iter().position(|a| a == "libzync-prep") {
         let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect("libzync-prep <lo> <hi> <json dir> <anchor.json|genesis> <out dir>") };
         prep::lz_prep_cmd(n(1), n(2), &args[p + 3], &args[p + 4], &args[p + 5]);
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-reforest") {
+        // libzync-reforest <out dir> <S> --bitcoin-cli "<cmd>" [--all] [--jobs N] (reforest.rs, docs/HANDOVER.md §6)
+        let usage = "libzync-reforest <out dir> <S> --bitcoin-cli \"<cmd>\" [--all] [--jobs N]";
+        let out = args.get(p + 1).expect(usage);
+        let s_h: u32 = args.get(p + 2).and_then(|x| x.parse().ok()).expect(usage);
+        let opt = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+        let cli = opt("--bitcoin-cli").expect(usage);
+        let jobs: usize = opt("--jobs").map(|x| x.parse().expect("--jobs N")).unwrap_or(4);
+        reforest::reforest_cmd(out, s_h, &cli, args.iter().any(|a| a == "--all"), jobs);
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-join") {

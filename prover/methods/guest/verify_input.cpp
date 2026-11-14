@@ -146,6 +146,12 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
 // On any failure the leaf is ZEROED rather than left as whatever was in the caller's buffer — a
 // deterministic function must not return uninitialised memory, and zero is a value no real coin
 // hashes to, so it fails the accumulator delete rather than passing silently.
+// The legacy sighash cache in interpreter.cpp (patches/libzync/0101, HAZYNC_LEGACY_SIGHASH) is keyed by the
+// transaction's vin / vout addresses and this generation. EVERY entry point that runs scripts starts a new
+// generation (hz_new_script_tx), so an entry can never serve another transaction, whatever the allocator
+// (review 11-14: only the chunk path did, through hz_cache_reset).
+extern "C" { unsigned hz_tx_generation = 0; }
+static inline void hz_new_script_tx() { ++hz_tx_generation; }
 #ifdef HAZYNC_TX_ONCE
 #include <map>
 // libzync EXPERIMENT: parse each transaction ONCE per guest run.
@@ -179,11 +185,9 @@ static bool hz_same_bytes(const unsigned char* head, const unsigned char* tail, 
     return std::memcmp(head, p, k) == 0 && std::memcmp(tail, p + len - k, k) == 0;
 }
 // libzync round 11: the caches live at file scope so hz_cache_reset can empty them. Under agg-lite the
-// chunk calls hz_cache_reset before EVERY transaction, which is what makes a freeing allocator
-// (HAZYNC_TLSF) safe here: once addresses can be reused, (pointer, length) alone no longer identifies a
-// buffer, and an entry must never outlive the transaction it was made for. hz_tx_generation lets
-// caches in other TUs (the legacy sighash cache in interpreter.cpp) follow the same rule.
-extern "C" { unsigned hz_tx_generation = 0; }
+// chunk calls hz_cache_reset before EVERY transaction, so an entry never outlives the transaction it was
+// made for. (pointer, length) identifies a buffer only while no address is reused: the guest checks at
+// start that its allocator never reuses one (main.rs), which every address-keyed cache here relies on.
 #ifdef HAZYNC_RAW_TXID
 static void hz_dsha_parts(uint256& out, const unsigned char* a, size_t na, const unsigned char* b, size_t nb,
                           const unsigned char* c, size_t nc) {
@@ -1149,6 +1153,7 @@ extern "C" int verify_inputs_batch(const uint8_t* tx_bytes, unsigned tx_len,
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+    hz_new_script_tx(); // a new transaction: the legacy sighash cache starts over
 
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
@@ -1191,6 +1196,7 @@ extern "C" int verify_inputs_batch_once(const uint8_t* tx_bytes, unsigned tx_len
                                         uint8_t* out_leaves,
                                         uint32_t* out_seqs, int32_t* out_version,
                                         uint8_t* out_wtxid, uint32_t* out_has_witness) {
+    hz_new_script_tx(); // a new transaction: the legacy sighash cache starts over
 #ifdef HAZYNC_AGG_LITE
     // agg-lite: the chunk then calls tx_out_leaves / check_tx / tx_full_sigops / ... on the same
     // bytes, and each of those goes through cached_tx. Parse into the cache once, here.
@@ -1273,6 +1279,7 @@ extern "C" int verify_input(const uint8_t* tx_bytes, unsigned tx_len,
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+    hz_new_script_tx(); // a new transaction: the legacy sighash cache starts over
 
     // Spent outputs (Core vector<CTxOut> serialization): value(8) + scriptPubKey per input.
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
@@ -1308,6 +1315,7 @@ extern "C" int hz_test_tx(const uint8_t* tx_bytes, unsigned tx_len,
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     CTransaction tx{mtx};
+    hz_new_script_tx(); // a new transaction: the legacy sighash cache starts over
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + prevouts_len};
     std::vector<CTxOut> spent;

@@ -152,6 +152,11 @@ pub enum Bip30Error {
 pub fn apply_block(root: &Hash, u: &BlockUpdate) -> Result<Hash, Bip30Error> {
     // A coinbase with no SPENDABLE outputs leaves its slot as it was: the tree holds no zero-valued leaves, and
     // nothing can spend such a coinbase, so nothing descends from it.
+    // The edge (review 11-14, documented, no change): Core's BIP30 check asks whether an UNSPENT output with this
+    // txid exists, and a coinbase whose outputs are all unspendable never puts one in the UTXO set (AddCoins skips
+    // them). So a later block may repeat it under Core's rules, and here its slot is unchanged, so the same block is
+    // accepted. A tracked transaction with no spendable output is never listed (the host filters it; `outputs == 0`
+    // below is refused), for the same reason.
     let new_val = if u.coinbase_outputs == 0 { u.coinbase_prior } else { Some(u.coinbase_outputs) };
 
     let mut cur = match u.overwrite {

@@ -147,8 +147,8 @@ extern "C" {
     /// Empty verify_input.cpp's per-transaction caches and bump hz_tx_generation (round 11).
     fn hz_cache_reset();
 }
-/// Called before every transaction a chunk processes. Required once the allocator can reuse
-/// addresses (HAZYNC_TLSF); harmless, and cheap, under the bump allocator.
+/// Called before every transaction a chunk processes: no cache entry outlives its transaction (the guest's allocator
+/// never reuses an address either, checked at start in main.rs; the caches rely on both).
 pub fn begin_tx() { unsafe { hz_cache_reset() } }
 
 /// A 32-byte hash as four u64 words: ordered and compared word by word instead of a byte-wise
@@ -160,8 +160,9 @@ fn key(h: &[u8; 32]) -> [u64; 4] {
 
 /// E2a batch 2: an open-addressing set of indices into a key array (32-byte keys as [u64; 4]), replacing sorts and
 /// binary searches over 40-byte rows. Capacity a power of two >= 2n. The slot is the key's first word mixed with a
-/// per-block salt (from the block hash, fixed before any transaction could be ground against it); it only places
-/// entries — every probe compares the FULL key, so a collision costs a probe, never a wrong answer.
+/// per-block salt (from the block hash); it only places entries — every probe compares the FULL key, so a collision
+/// costs a probe, never a wrong answer. The block hash commits to the transactions, so steering keys into one slot
+/// means a new valid proof of work per attempt; at worst a crafted block makes the walk slower, never wrong (review 11-14).
 struct KeyTab { slots: Vec<u32>, mask: usize, salt: u64 }
 impl KeyTab {
     fn new(n: usize, salt: u64) -> KeyTab {
@@ -232,9 +233,17 @@ impl ChunkCtx {
         use sha2::{Digest, Sha256};
         let mut ok = true;
         let k = idx.len();
+        // A transaction larger than a block is refused BEFORE any FFI call: below, `need` sizes the buffer that
+        // tx_out_leaves_mv writes, and on rv32 the old `(len / 8 + 1) * 32` wrapped at len >= 2^30 - 8 into a short
+        // buffer and an out-of-bounds write (review 11-14). Nothing over MAX_BLOCK_SERIALIZED_SIZE is in a valid block.
+        if raw_tx.len() > MAX_BLOCK_WEIGHT as usize {
+            env::log("core-reject: bad-blk-length");
+            return false;
+        }
         let (tp, tl) = (raw_tx.as_ptr(), raw_tx.len() as u32);
-        // txid (and the output leaves, used only when this run owns input 0).
-        let need = (raw_tx.len() / 8 + 1) * 32;
+        // txid (and the output leaves, used only when this run owns input 0). Each output is at least 9 bytes, so
+        // len / 8 + 1 leaves always suffice.
+        let need = (raw_tx.len() / 8 + 1).checked_mul(32).expect("output leaf buffer size");
         if self.out.len() < need { self.out.resize(need, 0); self.out_vout.resize(need / 32, 0); self.out_val.resize(need / 32, 0); }
         let mut txid = [0u8; 32];
         // A transaction can repeat only if all its inputs can (coinbase-smt/src/bip30.rs), so its outputs are tracked
@@ -273,12 +282,8 @@ impl ChunkCtx {
         // (core_tx_rules.cpp), on this run's inputs. The output arguments are set only when `first`.
         let lock_time = if self.height >= NET.csv_height { self.mtp } else { self.block_time };
         let (mut fee, mut weight, mut sigops) = (0i64, 0i64, 0i64);
-        // Sizes are 32-bit here and Core's weight arithmetic assumes they are not: a transaction past 2^30 bytes would wrap
-        // through CheckTransaction and GetTransactionWeight. None over MAX_BLOCK_SERIALIZED_SIZE can be in a valid block.
-        if raw_tx.len() > MAX_BLOCK_WEIGHT as usize {
-            env::log("core-reject: bad-blk-length");
-            ok = false;
-        }
+        // (A transaction over MAX_BLOCK_WEIGHT bytes was refused at the top, before any FFI call: Core's 32-bit size and
+        // weight arithmetic would wrap past 2^30 bytes.)
         if ok && k > 0 {
             let r = unsafe { hz_tx_rules_c(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, start, k as u32,
                                            ch.as_ptr(), cb.as_ptr(), cmtp.as_ptr(), self.height, self.mtp,
@@ -445,10 +450,14 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut out_vout: Vec<u32> = Vec::with_capacity(words / 9);  // output index in its transaction, parallel
     let mut out_val: Vec<u64> = Vec::with_capacity(words / 9);   // amount, parallel
     let mut cb_txid = [0u8; 32];
+    // The coinbase sizes the output-leaf buffers below, so a coinbase larger than a block is refused first: on rv32
+    // `(len / 8 + 1) * 32` wrapped at len >= 2^30 - 8 into a short buffer that tx_out_leaves_mv overran (review 11-14).
+    assert!(w.coinbase_tx.len() <= MAX_BLOCK_WEIGHT as usize, "agg-lite: the coinbase is larger than a block");
     let cb_outputs = {
-        let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
-        let mut cb_vout = vec![0u32; w.coinbase_tx.len() / 8 + 1];
-        let mut cb_val = vec![0u64; w.coinbase_tx.len() / 8 + 1];
+        let n_max = w.coinbase_tx.len() / 8 + 1;
+        let mut buf = vec![0u8; n_max.checked_mul(32).expect("coinbase leaf buffer size")];
+        let mut cb_vout = vec![0u32; n_max];
+        let mut cb_val = vec![0u64; n_max];
         // Tracked: mined before BIP34 and indicating a later height, or the repeat of a tracked coinbase. A false claim
         // of `coinbase_prior` does not verify in apply_block.
         let indicated = unsafe { hz_indicated_height(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32) };
