@@ -157,13 +157,20 @@ pub fn ef_decode(b: &[u8], o: &mut usize, format: u32) -> Option<Vec<u32>> {
         return None;
     }
     let l = low_bits(m, n);
-    let lo_bytes = (n as usize * l as usize).div_ceil(8);
-    let hi_bytes = (n as usize + (m >> l) as usize).div_ceil(8);
+    // sizes in u64 and bounded by the bytes left BEFORE anything is reserved or indexed (a hostile n or m must not
+    // reserve memory or overflow a 32-bit usize: review H1)
+    let left = b.len().checked_sub(*o)? as u64;
+    let lo_bytes = (n as u64 * l as u64).div_ceil(8);
+    let hi_bytes = (n as u64 + (m >> l) as u64).div_ceil(8);
+    if lo_bytes.checked_add(hi_bytes)? > left {
+        return None;
+    }
+    let (lo_bytes, hi_bytes) = (lo_bytes as usize, hi_bytes as usize);
     let lo = b.get(*o..*o + lo_bytes)?;
     let hi = b.get(*o + lo_bytes..*o + lo_bytes + hi_bytes)?;
     let msb = format == FORMAT_BIP;
     let bit = |s: &[u8], i: usize| -> bool { if msb { s[i / 8] >> (7 - i % 8) & 1 == 1 } else { s[i / 8] >> (i % 8) & 1 == 1 } };
-    let mut out = Vec::with_capacity(n as usize);
+    let mut out = Vec::with_capacity(n as usize); // n <= 8 * hi_bytes <= the bytes left: bounded above
     let (mut hp, mut hb) = (0u32, 0usize);
     for k in 0..n as usize {
         let mut lv = 0u32;
@@ -199,6 +206,11 @@ pub fn decode_file(b: &[u8], format: u32) -> Option<(u32, Vec<Vec<u32>>)> {
     }
     let stop = u32::from_le_bytes(b[5..9].try_into().ok()?);
     let mut o = 9;
+    // every block's list is at least one byte: a header naming more blocks than bytes left is refused before any
+    // reservation (a 9-byte file claiming H = 0xFFFFFFFF reserved ~103 GB and aborted: review H1)
+    if stop as u64 > (b.len() - 9) as u64 {
+        return None;
+    }
     let mut v = Vec::with_capacity(stop as usize);
     for _ in 0..stop {
         v.push(ef_decode(b, &mut o, format)?);
@@ -633,6 +645,27 @@ mod tests {
         assert!(ef_decode(&nm, &mut o, FORMAT_BIP).is_none());
         let mut o = 0;
         assert_eq!(ef_decode(&[0], &mut o, FORMAT_BIP), Some(vec![]));
+    }
+
+    /// Review H1: hostile headers and sizes are refused without reserving memory.
+    #[test]
+    fn hostile_sizes() {
+        let mut f = vec![0x55, 0x54, 0x58, 0x4f, 0x00];
+        f.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_file(&f, FORMAT_BIP).is_none(), "a 9-byte file claiming H = 2^32 - 1");
+        // n = m + 1 = 2^32 - 1 (as large as allowed) with nothing after it
+        let mut l = vec![0xfe];
+        l.extend_from_slice(&(u32::MAX - 1).to_le_bytes());
+        l.push(0xfe);
+        l.extend_from_slice(&(u32::MAX - 2).to_le_bytes());
+        let mut o = 0;
+        assert!(ef_decode(&l, &mut o, FORMAT_BIP).is_none());
+        let mut l = vec![0xfe];
+        l.extend_from_slice(&1000u32.to_le_bytes());
+        l.push(0xfe);
+        l.extend_from_slice(&(u32::MAX - 1).to_le_bytes());
+        let mut o = 0;
+        assert!(ef_decode(&l, &mut o, FORMAT_BIP).is_none(), "m near 2^32: sizes past the input");
     }
 
     #[test]

@@ -31,6 +31,13 @@ int main(int argc, char** argv) {
     u[0] ^= 1;
     rc = swiftsync_verify_hints(r, rn, f, fn, u, un, (uint64_t)time(NULL), "3:0000000000000000000000000000000000000000000000000000000000000001", &out, msg, sizeof msg);
     printf("%s wrong hash at H: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;
+    unsigned char tiny[9] = {0x55, 0x54, 0x58, 0x4f, 0, 0xff, 0xff, 0xff, 0xff};
+    rc = swiftsync_verify_hints(r, rn, tiny, 9, NULL, 0, (uint64_t)time(NULL), exp, &out, msg, sizeof msg);
+    printf("%s 9-byte file claiming H = 2^32 - 1: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;
+    setenv("RISC0_DEV_MODE", "1", 1);
+    rc = swiftsync_verify_hints(r, rn, f, fn, u, un, (uint64_t)time(NULL), exp, &out, msg, sizeof msg);
+    printf("%s RISC0_DEV_MODE set: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;
+    unsetenv("RISC0_DEV_MODE");
     printf("HINTS_C_ABI %s\n", bad ? "FAIL" : "OK");
     return bad != 0;
 }

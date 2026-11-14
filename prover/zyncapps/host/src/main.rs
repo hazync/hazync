@@ -428,6 +428,16 @@ fn hints_prove(a: &[String]) {
     let prof: u32 = flag(a, "--prof").map(|x| x.parse().unwrap_or_else(|_| die("--prof N"))).unwrap_or(0);
     let signet = a.iter().any(|x| x == "--signet");
     let execute = a.iter().any(|x| x == "--execute");
+    // --elf <zyncapp-hints.bin>: the published ELF (reproduce/LIBZYNC_IDS) instead of the embedded one
+    let elf: Vec<u8> = match flag(a, "--elf") {
+        Some(p) => std::fs::read(p).unwrap_or_else(|e| die(&format!("--elf: {e}"))),
+        None => ZYNCAPP_HINTS_ELF.to_vec(),
+    };
+    if elf.is_empty() { die("no hints guest: built with RISC0_SKIP_BUILD, so give --elf <zyncapp-hints.bin>"); }
+    let elf_id = hex(risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))).as_bytes());
+    if elf_id != swiftsync_verify::hints::HINTS_IMAGE_ID {
+        println!("HINTS_ID_NOT_PUBLISHED this guest is {elf_id}, the published hints id is {}: its receipts will not verify under the published id", swiftsync_verify::hints::HINTS_IMAGE_ID);
+    }
     let (cs, journal, receipt): (ChainStateJ, Vec<u8>, Option<Receipt>) = if a[3].ends_with(".json") {
         if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
         let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
@@ -495,7 +505,7 @@ fn hints_prove(a: &[String]) {
         if z.hints_sha256 != dv.hints_sha256 || z.height != stop || z.block_hash != dv.block_hash { die("the guest's statement is not the native derivation's"); }
     };
     if execute {
-        let res = risc0_zkvm::default_executor().execute(env, ZYNCAPP_HINTS_ELF);
+        let res = risc0_zkvm::default_executor().execute(env, &elf);
         if let Some(c) = &tc {
             match res {
                 Err(e) => { println!("HINTS_GUEST_REFUSED {c}: {}", e.to_string().lines().next().unwrap_or("")); std::process::exit(3) }
@@ -514,7 +524,7 @@ fn hints_prove(a: &[String]) {
                  z.height, disp(&z.block_hash), z.format, hex(&z.hints_sha256), z.hints_len, z.n_counted, z.n_unspent, z.unspent_value,
                  hex(&z.undo_sha256), id_hex(&z.core_id), z.core_height);
     } else {
-        let r = default_prover().prove_with_opts(env, ZYNCAPP_HINTS_ELF, &risc0_zkvm::ProverOpts::succinct())
+        let r = default_prover().prove_with_opts(env, &elf, &risc0_zkvm::ProverOpts::succinct())
             .unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
         let z: HintsStatement = r.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
         check(&z);
@@ -525,11 +535,11 @@ fn hints_prove(a: &[String]) {
                  z.height, disp(&z.block_hash), z.format, hex(&z.hints_sha256), z.hints_len, z.n_counted, z.n_unspent, z.unspent_value,
                  hex(&z.undo_sha256), id_hex(&z.core_id), z.core_height);
     }
-    println!("HINTS_ID {}", id_hex(&ZYNCAPP_HINTS_ID));
+    println!("HINTS_ID {elf_id}");
 }
 
 /// The verifier: the same `swiftsync_verify::hints::verify_hints` as `swiftsync-verify hints`, the WASM and the C ABI,
-/// against this build's hints image id. Exit 0 OK, 2 DEMO, 1 FAIL.
+/// against the published hints image id. Exit 0 OK, 2 DEMO, 1 FAIL.
 fn hints_verify(a: &[String]) {
     let fail = |m: String| -> ! { println!("ZYNCAPP_FAIL: {m}"); std::process::exit(1) };
     if std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0").unwrap_or(false) { fail("RISC0_DEV_MODE is set: unset it to verify".into()); }
@@ -539,7 +549,8 @@ fn hints_verify(a: &[String]) {
     let pe = |k: &str| flag(a, k).map(|e| swiftsync_verify::parse_expect(e).unwrap_or_else(|| fail(format!("{k}: want <height>:<64 hex digits>"))));
     let (e1, e2) = (pe("--expect"), pe("--expect-tip"));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let rep = swiftsync_verify::hints::verify_hints(&r, &f, u.as_deref(), &id_hex(&ZYNCAPP_HINTS_ID), flag(a, "--core-image").map(|x| x.as_str()), now,
+    // the PUBLISHED hints id (reproduce/LIBZYNC_IDS), the same every tool trusts, not this build's (review H2)
+    let rep = swiftsync_verify::hints::verify_hints(&r, &f, u.as_deref(), swiftsync_verify::hints::HINTS_IMAGE_ID, flag(a, "--core-image").map(|x| x.as_str()), now,
                                                     e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
     let z = match (&rep.verdict, &rep.statement) {

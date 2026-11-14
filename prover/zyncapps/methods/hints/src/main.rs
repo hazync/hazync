@@ -5,7 +5,7 @@
 //!         then per block 1..=H one frame of words: [L, k, s] ‖ the block (header ‖ count ‖ transactions without
 //!         witness, L bytes, zero-padded to words) ‖ k tracked positions ‖ s status words ‖ state (8) ‖ undo (8);
 //!         then [T - H] and T - H block-forest leaves (8 words each).
-//! Checks: env::verify(core_id, journal); check_core_statement; one image since genesis (zero lineage) and not a
+//! Checks: env::verify(core_id, journal); check_core_statement (with the network's pinned genesis anchor); one image since genesis (zero lineage) and not a
 //!         pre-undo image, so every block 1..T has the 0x05 leaf; libzync::hints::Deriver over 1..=H; its block
 //!         forest == the journal's (which binds every header, the coin state at H and every undo hash).
 //! Commits: HintsStatement.
@@ -78,11 +78,32 @@ pub struct HintsStatement {
     pub profile: u32,
 }
 
-/// The images whose blocks have the 0x02 leaf (prover/methods/guest/src/handover_pin.rs PRE_UNDO_IMAGES).
-const PRE_UNDO_IMAGES: [[u32; 8]; 2] = [
-    [2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963],
-    [2920096212, 1950372677, 2131348028, 3996009003, 3234416280, 3822776362, 4201124381, 2280912094],
-];
+// The core's own pin file (PRE_UNDO_IMAGES: the images whose blocks have the 0x02 leaf), included, not copied (review
+// H5). Including it reads the file; it does not change the core image, whose source is untouched.
+#[allow(dead_code)]
+mod handover_pin {
+    include!("../../../../methods/guest/src/handover_pin.rs");
+}
+
+/// The networks' PINNED genesis anchors (swiftsync-verify IMAGES `genesis_anchor_hex`, HANDOVER.md): checked here so the
+/// statement itself says the core chain starts at genesis, not only the verifier (review H4).
+const MAINNET_ANCHOR: [u8; 32] = hex32("852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167");
+const SIGNET_ANCHOR: [u8; 32] = hex32("3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827");
+
+const fn nib(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+const fn hex32(s: &str) -> [u8; 32] {
+    let b = s.as_bytes();
+    let mut o = [0u8; 32];
+    let mut i = 0;
+    while i < 32 {
+        o[i] = nib(b[2 * i]) << 4 | nib(b[2 * i + 1]);
+        i += 1;
+    }
+    o
+}
 
 fn words_to_bytes(w: &[u32], n: usize) -> Vec<u8> {
     let mut b: Vec<u8> = w.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -112,10 +133,11 @@ fn main() {
     let j: ChainState = risc0_zkvm::serde::from_slice(&words).expect("core journal is not a ChainState");
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
     let net = if signet { facts::Network::Signet } else { facts::Network::Mainnet };
-    facts::check_core_statement(&st, &core_id, 2, net, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
+    let anchor = if signet { &SIGNET_ANCHOR } else { &MAINNET_ANCHOR };
+    facts::check_core_statement(&st, &core_id, 2, net, false, anchor).unwrap_or_else(|e| panic!("core statement: {e}"));
     // every block 1..T carries the undo-data commitment: one image since genesis, and not one before the commitment
     assert!(j.lineage == [0u8; 32], "the core chain has a handover: blocks below it may lack the undo commitment");
-    assert!(!PRE_UNDO_IMAGES.contains(&core_id), "a pre-undo core image: its blocks carry no undo hash");
+    assert!(!handover_pin::PRE_UNDO_IMAGES.contains(&core_id), "a pre-undo core image: its blocks carry no undo hash");
     assert!(stop >= 1 && stop <= j.height, "H must be in 1..=the core height");
     let g: [u8; 80] = genesis.as_slice().try_into().expect("the genesis header is 80 bytes");
     let bip30: &'static [(u32, [u8; 32])] = if signet { &[] } else { &hints::MAINNET_BIP30 };

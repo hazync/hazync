@@ -66,6 +66,10 @@ fn disp(b: &[u8; 32]) -> String {
 pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex: &str, core_image_hex: Option<&str>, now: u64,
                     expect: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> HintsReport {
     let mut rep = HintsReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false };
+    // as the core verify(): RISC0_DEV_MODE never makes this verifier accept anything (review H3)
+    if !rep.check(!crate::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
+        return rep;
+    }
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the hints image id is 32 bytes of hex ({image_hex})"));
         return rep;
@@ -90,9 +94,12 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     let fs: [u8; 32] = Sha256::digest(file).into();
     rep.check(fs == z.hints_sha256 && file.len() as u64 == z.hints_len,
               format!("the file is the proven one (sha256 {}, {} bytes; proven {}, {} bytes)", hex(&fs), file.len(), hex(&z.hints_sha256), z.hints_len));
-    let dec = libzync::hints::decode_file(file, z.format);
-    rep.check(dec.as_ref().is_some_and(|(h, l)| *h == z.height && l.iter().map(|x| x.len() as u64).sum::<u64>() == z.n_unspent),
-              format!("the file decodes (strictly) to blocks 1..{} and {} unspent indices", z.height, z.n_unspent));
+    // decoded only once it is the proven file (review H1): a hostile header can then not reach the decoder at all
+    if fs == z.hints_sha256 && file.len() as u64 == z.hints_len {
+        let dec = libzync::hints::decode_file(file, z.format);
+        rep.check(dec.as_ref().is_some_and(|(h, l)| *h == z.height && l.iter().map(|x| x.len() as u64).sum::<u64>() == z.n_unspent),
+                  format!("the file decodes (strictly) to blocks 1..{} and {} unspent indices", z.height, z.n_unspent));
+    }
     if let Some(u) = undo {
         let us: [u8; 32] = Sha256::digest(u).into();
         rep.check(u.len() == 32 * z.height as usize && us == z.undo_sha256, format!("the undo-hash file is the proven one (sha256 {})", hex(&z.undo_sha256)));
@@ -108,6 +115,8 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
         match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
     }
     rep.check(crate::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
+    // the whole profile, as the core verifier compares it (review H5): network, scripts checked, coin log, trie, live hash
+    rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, img.profile, crate::describe_profile(z.profile)));
     rep.check(z.lineage == [0u8; 32] || z.lineage == lineage_of(img.lineage), "the core lineage is the image's");
     rep.check(hex32(img.genesis_anchor_hex) == Some(z.anchor_id), format!("anchored at the {net} genesis"));
     rep.check(z.max_time as u64 <= now.saturating_add(MAX_FUTURE_BLOCK_TIME), "time-too-new: no core block more than 2 h ahead of this clock");
@@ -150,6 +159,10 @@ mod tests {
         assert_eq!(verify_hints(&r, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((3, H3)), None).verdict, Verdict::Fail);
         assert_eq!(verify_hints(&r, &f, None, HINTS_IMAGE_ID, None, now(), Some((2, H3)), None).verdict, Verdict::Fail);
         assert_eq!(verify_hints(&r, &f, None, &"ab".repeat(32), None, now(), None, None).verdict, Verdict::Fail);
+        // review H1: a 9-byte file claiming H = 2^32 - 1 is FAIL, not an abort
+        let mut tiny = vec![0x55, 0x54, 0x58, 0x4f, 0x00];
+        tiny.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(verify_hints(&r, &tiny, None, HINTS_IMAGE_ID, None, now(), Some((3, H3)), None).verdict, Verdict::Fail);
         // H = 2 under a core tip of 3: the tip is checked separately
         let r2 = rd("mainnet-2.receipt");
         let h2 = "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd";
