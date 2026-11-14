@@ -1,5 +1,3 @@
-<!-- DRAFT for v0.26.0: not yet released. Facts only; every number is measured (sources: #717's body and its GPU comment). -->
-
 **The board's image can now change without re-proving.** Until now a new Hazync image meant proving the chain again
 from genesis, because every proof names the exact program that made it. v0.26.0 adds the **handover**: a new image
 names the image it continues and the block where it takes over, proves that block on top of the old image's
@@ -54,3 +52,8 @@ own handover is between two images on the same RISC Zero and does not use it.
   board's proofs below block 2000 keep verifying; `--handover <id>:<height>` states a lineage for an image you
   rebuilt yourself.
 - **Board operators:** `LZ_HANDOVER_AT` (docs/COORDINATOR_REFERENCE.md); the switch is [`HANDOVER.md`](HANDOVER.md) §5.
+
+## Also
+
+- **The board's progress alarm** (#719) takes a lower proven count as a new board, not a stall. After the v2 switch it
+  had compared the new board's count with v1's and reported "nobody is proving" on every run.
