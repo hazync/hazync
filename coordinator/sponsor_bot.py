@@ -32,6 +32,7 @@ it stalls, when its boot fails and when there is nothing left for it. See docs/C
   python3 sponsor_bot.py import-log <db>    # copy sponsor_work and sponsor_pods from a coordinator.db copy
 """
 import argparse
+import datetime
 import hashlib
 import json
 import math
@@ -805,6 +806,20 @@ HTTP_TRIES = 4
 HTTP_BACKOFF = (2, 8, 20)
 
 
+SIGNING_GRACE_S = 3600   # release.sh signs within minutes of publishing; an hour is generous, and past it a missing
+                         # manifest means a broken release, which must fail loudly
+
+
+def release_is_being_signed(published_at, now, grace=SIGNING_GRACE_S):
+    """True when a release published at `published_at` (GitHub's ISO time) is young enough that a missing signed
+    manifest means "still being signed". Unknown or unparseable times are NOT fresh: fail loudly as before."""
+    try:
+        t = datetime.datetime.fromisoformat(str(published_at).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return False
+    return 0 <= now - t < grace
+
+
 def http_retry(fn, what):
     """Run `fn`, retrying transient HTTP and transport failures. 4xx is NOT transient."""
     last = None
@@ -879,15 +894,29 @@ class SshRunner:
                                          headers={"Accept": "application/vnd.github+json"})
             def _latest():
                 with urllib.request.urlopen(req, timeout=30) as r:
-                    return json.load(r).get("tag_name", "")
-            tag = http_retry(_latest, "GET the latest release tag")
+                    j = json.load(r)
+                    return j.get("tag_name", ""), j.get("published_at") or ""
+            tag, published_at = http_retry(_latest, "GET the latest release tag")
+        else:
+            published_at = ""
         if not re.fullmatch(r"v\d+\.\d+\.\d+", tag or ""):
             raise SystemExit(f"sponsor_bot: could not resolve a release tag (got {tag!r})")
         self.release = tag
         base = f"https://github.com/hazync/hazync/releases/download/{tag}/"
         for f in ("SHA256SUMS.txt", "SHA256SUMS.txt.asc"):
-            http_retry(lambda f=f: urllib.request.urlretrieve(base + f, os.path.join(self.dir, f)),
-                       f"download {f}")
+            try:
+                http_retry(lambda f=f: urllib.request.urlretrieve(base + f, os.path.join(self.dir, f)),
+                           f"download {f}")
+            except urllib.error.HTTPError as e:
+                # ⛔ 11-14: release.sh PUBLISHES a release and SIGNS it minutes later (step 6). A run in that window
+                # found v0.25.0 "latest" with no SHA256SUMS.txt yet, died on the 404 and latched itself off.
+                # A FRESH release without its manifest is being signed: skip this run, start nothing, no latch.
+                # An OLD one without it is broken and still fails loudly (a 404 stays an answer, not a hiccup).
+                if e.code == 404 and release_is_being_signed(published_at, time.time()):
+                    print(f"sponsor_bot: {tag} was published {published_at} and has no {f} yet: it is still being "
+                          f"signed. Nothing was started; the next run checks again.", flush=True)
+                    raise SystemExit(0)
+                raise
         if not self.verify_manifest():
             raise SystemExit("sponsor_bot: the release manifest's signature is not good; nothing was started")
         with open(os.path.join(self.dir, "SHA256SUMS.txt")) as f:
