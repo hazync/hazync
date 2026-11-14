@@ -131,6 +131,17 @@ libzync-undo-hashes <lo> <hi> --bitcoin-cli "<cmd>" [--jobs N]      # each block
    with `HAZYNC_PREP_CONTINUE=1`, re-stamping on read, and every block from S+1 on gets the 0x05 leaf directly.
 4. **Board-prep** cuts its window of bundles again after the board resets (or is re-forested the same way).
 
-Tested (2026-11-14, hazync-coord, CPU): see the acceptance test in the PR — prep 1..2,000 by the v0.25.0 host, then
-re-forested, is byte-identical (every `state_<h>.json`) to prep 1..2,000 by the new host; the control (one block's
-undo hash replaced) differs from that block on.
+**Tested** (2026-11-14, hazync-coord, CPU, the node there; `accept.sh` of the PR):
+- prep 1..2,000 by the released v0.25.0 host (`8888d59c`), re-forested by the new host: **2,000 of 2,000
+  `state_<h>.json` byte-identical** to prep 1..2,000 by the new host, and the three leaf bundles cut on the way (171,
+  1,500, 2,000) byte-identical to the new prep's. The coin-log and trie snapshots are untouched (same sha256).
+- a rerun rewrites nothing (2,000 already in the new format); the control (block 170's undo hash replaced by SHA-256
+  of nothing) leaves 1..169 identical and makes 170..2,000 differ (1,831 of 1,831);
+- refused: a held `LOCK`, `HAZYNC_COINLOG_DIR` set, an S that is not a save point;
+- the node path's undo hashes equal `undo_ref.py` on the block files of 130,000, 140,000, 741,000, 962,000, 965,500.
+
+**Phase 1 rate** (`libzync-undo-hashes`, 8 at a time, the node on hazync-coord; MEASURED on these samples only):
+946 blocks/s at 100,000-100,399; 54 at 300,000-300,199; 14.1 at 500,000-500,099; 14.0 at 590,000-590,099; 8.1 at
+970,000-970,049. Phase 2 (reading and writing the states) ran 2,000 blocks in under a second of the 3 s total.
+ESTIMATE from those samples, not measured: a pass to about 590,000 is a few hours, dominated by 300,000 onwards
+(roughly 290,000 blocks at 14-50 blocks/s); more `--jobs` may help if the node's RPC has threads to spare.
