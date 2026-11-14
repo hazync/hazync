@@ -1,0 +1,42 @@
+old: METHOD_ID 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+
+thread 'main' (2634147) panicked at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/io/stdio.rs:1168:9:
+failed printing to stdout: Broken pipe (os error 32)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+new: METHOD_ID 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
+2000
+PREP_OLD exit 0 (1 s)
+PREP_NEW exit 0 (0 s)
+old vs new prep: 2000 of 2000 states differ (expected 2000: block_roots and the stamp)
+REFOREST exit 0 (3 s)
+  reforest: undo hashes 1..=2000 from the node (4 at a time)
+REFOREST_FETCH h=2000 blocks_per_s=677.99 elapsed_s=2.9
+  reforest: 3 leaf bundle(s) rewritten in /root/undocommit/accept/rfl
+LZ_REFOREST_DONE 1..=2000: 2000 state(s) rewritten, 0 already in the new format; continue with HAZYNC_PREP_CONTINUE=1 from state_2000.json
+ACCEPT re-forested old vs new prep: 2000/2000 state_<h>.json byte-identical
+ACCEPT bundle leaf_171.bin identical to the new prep's
+ACCEPT bundle leaf_1500.bin identical to the new prep's
+ACCEPT bundle leaf_2000.bin identical to the new prep's
+2
+2
+a6e4b2f25f91e500
+a6e4b2f25f91e500
+fc274c9506261b19
+fc274c9506261b19
+rerun exit 0: LZ_REFOREST_DONE 1..=2000: 0 state(s) rewritten, 2000 already in the new format; continue with HAZYNC_PREP_CONTINUE=1 from state_2000.json
+control exit 0
+CONTROL below 170 identical: 169/169; from 170 differing: 1831/1831
+REFUSE lock held: exit 101 | ['/root/undocommit/accept/rf: another run holds this directory (LOCK): one run per store']
+REFUSE store dir set: exit 101 | touches no store: unset HAZYNC_COINLOG_DIR
+REFUSE not a save point: exit 101 | S must be a save point
+XCHECK 130000 node == undo_ref.py (b4e25e3daa81fad2822bfcb364ef2546538f933305fc5e8247265ba5d7b5c50c)
+XCHECK 140000 node == undo_ref.py (d6dfdfbee5a855f63fc5421fcf1e90f4e70e82165c261a3c610eb59aae37e706)
+XCHECK 741000 node == undo_ref.py (8fd9c03a2cf560530e36bed677f5c4b9d70e97b82e7ad44306b6e6838cb8264b)
+XCHECK 962000 node == undo_ref.py (013d6a7ff612f421e126bf36d56852b585353921452d3bb0713c307a1cf43dcf)
+XCHECK 965500 node == undo_ref.py (585210363cc46d36d93a8d4a9ff9296d1e792a129b9cfa4442f0011e07053b65)
+RATE 100000..100399 jobs=8 UNDO_HASHES h=100399 blocks_per_s=946.33 elapsed_s=0.4
+RATE 300000..300199 jobs=8 UNDO_HASHES h=300199 blocks_per_s=54.28 elapsed_s=3.7
+RATE 500000..500099 jobs=8 UNDO_HASHES h=500099 blocks_per_s=14.10 elapsed_s=7.1
+RATE 590000..590099 jobs=8 UNDO_HASHES h=590099 blocks_per_s=13.99 elapsed_s=7.1
+RATE 970000..970049 jobs=8 UNDO_HASHES h=970049 blocks_per_s=8.05 elapsed_s=6.2
+ACCEPT_DONE
