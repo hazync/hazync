@@ -625,6 +625,7 @@ struct BlockResult {
     trie_root: [u8; 32],      // libzync: the counting trie's root after this block (zero without the trie)
     survivor_value: u64,      // libzync: satoshis appended to the coin forest / log by this block
     spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends
+    undo_hash: [u8; 32],      // libzync (#729): the block's undo-data commitment (docs/libzync/UNDO.md); agg-lite only
 }
 
 /// ROADMAP H-B (review round 5): the digest that LINKS chain states, sha256d of the state's journal with `anchor_id`
@@ -1416,6 +1417,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         trie_root: [0u8; 32], // the trie lives on the agg-lite path only
         survivor_value: 0,
         spent_value: 0,
+        undo_hash: [0u8; 32], // computed on the agg-lite path only (a libzync image proves no other way)
     }
 }
 
@@ -2348,7 +2350,9 @@ fn aggregate() {
         let mut f = utreexo::Stump::new(prev.block_roots.clone(), prev.block_leaves);
         let mut st: Vec<u8> = Vec::with_capacity(17 + 32 * r.root_next_roots.len());
         handover_pin::utxo_state_preimage(r.root_next_leaves, utxo_value, &r.root_next_roots, &mut |b: &[u8]| st.extend_from_slice(b));
-        f.add(sha256_guest(&handover_pin::block_leaf_preimage(&r.tip_hash, height, &sha256_guest(&st))));
+        // Every block this image proves gets the leaf with its undo-data commitment (tag 0x05, docs/libzync/UNDO.md). Blocks
+        // proved by a predecessor keep the leaf that image gave them (a pre-undo image's 0x02); block 0 is the anchor's.
+        f.add(sha256_guest(&handover_pin::block_leaf_undo_preimage(&r.tip_hash, height, &sha256_guest(&st), &r.undo_hash)));
         (normalize(f.roots), f.num_leaves)
     };
     #[cfg(not(feature = "libzync"))]
