@@ -6,8 +6,9 @@
 #   host_reg  regtest image O (built here; regtest is not published)
 #   host_regN regtest image N: O pinned as its predecessor at height 101 (the handover test; the pin is not committed)
 #   host_m0   TEST VARIANT of the mainnet image (HAZYNC_TEST_LINEAGE=1: lineage/test.rs, empty, instead of the published
-#             lineage), for the tests that prove mainnet from genesis: the published image pins its predecessor below
-#             its handover height, so by design it never proves those blocks. Its id is in no pin table (checked).
+#             lineage), for the tests that prove mainnet from genesis (a published image that pins a predecessor
+#             never proves the blocks below it). Its id is in no pin table (checked): lineage/test.rs also carries a
+#             constructor that makes its program its own, since v0.26.0's published mainnet lineage is empty as well.
 #   host_mN   TEST VARIANT: host_m0 pinned in lineage/test.rs at height 11 (the board rehearsal's O -> N; not committed)
 # Every host is stripped (the tests need no symbols); ids.txt lists what was built.
 # usage (in the container): build-hosts.sh <out dir>
