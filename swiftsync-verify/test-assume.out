@@ -15,27 +15,27 @@ exit=1 PASS
   [FAIL] assumevalid / assumeutxo: NOT checked: the receipt did not verify
 SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.T6ob3o7yKu/txid.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.Ne5UxvcEtu/txid.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x 0f5e8049.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set (no coin was marked BIP30-tracked; a chain with tracked live coins needs --tracked)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.T6ob3o7yKu/body.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.Ne5UxvcEtu/body.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x 3c409c60.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set (no coin was marked BIP30-tracked; a chain with tracked live coins needs --tracked)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.T6ob3o7yKu/net.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.Ne5UxvcEtu/net.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: network magic f9bfb4d9 is not the proof's network (f9beb4d9)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.T6ob3o7yKu/base.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.Ne5UxvcEtu/base.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: base block 000000008f1a7008320c16b8402b7f11e82951f44ca2673caf6860ab2eeef320 is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200): the proof commits the live-coin hash at its tip only
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.T6ob3o7yKu/trail.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.Ne5UxvcEtu/trail.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: bytes after the 204 coins the header names
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.T6ob3o7yKu/short.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.Ne5UxvcEtu/short.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: truncated at byte 14238 (failed to fill whole buffer)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
@@ -44,10 +44,10 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
 == swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_1003.dat (expect exit 1)
-  [FAIL] assumeutxo: snapshot: coin 46e421bd0d33659cf4be11abfa1b864c25a0e5671a646ed6e7c81d3a69211700:0 at height 218, outside 1..200
+  [FAIL] assumeutxo: snapshot: base block 000000002d5d8c3264d9c6e352b76430cda7a1edac661a515dd1445c15168de5 is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200): the proof commits the live-coin hash at its tip only
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin --tracked /tmp/tmp.T6ob3o7yKu/tracked.txt swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers swiftsync-verify/vectors/assume/headers_0_200.bin --tracked /tmp/tmp.Ne5UxvcEtu/tracked.txt swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x c210a27e.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
@@ -55,15 +55,15 @@ exit=1 PASS
   [FAIL] assumeutxo: the headers (genesis to the proven tip) are required: each coin's creation MTP comes from them
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers /tmp/tmp.T6ob3o7yKu/hdr_short.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers /tmp/tmp.Ne5UxvcEtu/hdr_short.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
   [FAIL] headers: the last header hashes to 00000000b7691ccc084542565697eca256e56bb7f67e560b48789db27f0468eb, not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers /tmp/tmp.T6ob3o7yKu/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers /tmp/tmp.Ne5UxvcEtu/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
   [FAIL] headers: header 151 (height 151) does not link to the one before it
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers /tmp/tmp.T6ob3o7yKu/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumeutxo --headers /tmp/tmp.Ne5UxvcEtu/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt swiftsync-verify/vectors/assume/utxo_200.dat (expect exit 1)
   [FAIL] assumeutxo: the headers must run from genesis to the proven tip at 200 (given 150..200)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
@@ -79,7 +79,7 @@ exit=2 PASS
   assumevalid: -assumevalid=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee (height 170; scripts proven valid for blocks 0..200)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; -assumevalid block proven: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.T6ob3o7yKu/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
+== swiftsync-verify/target/release/swiftsync-verify assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.Ne5UxvcEtu/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
   assumevalid: -assumevalid=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee (height 170; scripts proven valid for blocks 0..200)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; -assumevalid block proven: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain; chain identity NOT checked: compare block 200 = 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 with a source you trust (--mempool, --expect, --bitcoin-cli)
 exit=2 PASS
@@ -100,7 +100,7 @@ exit=1 PASS
   [FAIL] assumevalid: --block "xyz": not 64 hex digits
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.T6ob3o7yKu/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.Ne5UxvcEtu/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] headers: header 151 (height 151) does not link to the one before it
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS

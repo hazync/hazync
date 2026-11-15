@@ -39,7 +39,7 @@ run 1 "is not the proven tip" $U $R $T/base.dat
 run 1 "bytes after" $U $R $T/trail.dat
 run 1 "truncated" $U $R $T/short.dat
 run 1 "tip only" $U $R $A/utxo_199.dat
-run 1 "outside 1..200" $U $R $A/utxo_1003.dat
+run 1 "is not the proven tip" $U $R $A/utxo_1003.dat
 run 1 "NOT the proven UTXO set" $U --tracked $T/tracked.txt $R $A/utxo_200.dat
 run 1 "required" $V assumeutxo $R $A/utxo_200.dat
 run 1 "more than\|not a positive\|not the proven tip" $V assumeutxo --headers $T/hdr_short.bin $R $A/utxo_200.dat

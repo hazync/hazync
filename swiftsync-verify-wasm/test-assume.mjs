@@ -18,7 +18,7 @@ const cases = [
   ['assumevalid_170', { receipt, assumevalid: B170, headers }, 'demo', (r) => r.assume.assumevalid.height === 170],
   ['tampered_snapshot', { receipt, headers, snapshot: tampered }, 'fail'],
   ['snapshot_199', { receipt, headers, snapshot: rd('assume/utxo_199.dat') }, 'fail'],
-  ['snapshot_1003', { receipt, headers, snapshot: rd('assume/utxo_1003.dat') }, 'fail'],
+  ['snapshot_1003', { receipt, headers, snapshot: rd('assume/utxo_1003.dat') }, 'fail', (r) => r.assume.checks.some((c) => c.what.includes('not the proven tip'))],
   ['no_headers', { receipt, snapshot: snap }, 'fail'],
   ['wrong_expect', { receipt, headers, snapshot: snap, expect: `200:${B170}` }, 'fail'],
   ['flipped_receipt', { receipt: flipped, headers, snapshot: snap }, 'fail'],

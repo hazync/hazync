@@ -1,0 +1,221 @@
+# zyncAPP checkers: assumevalid and assumeutxo from the chain proof (#721)
+
+Status: built on `feat/zapp-assume` (15.11.2026), not merged, not reviewed. No new guest and no change to any image:
+both are checks a verifier makes on a core chain proof it has already verified. Normative source:
+`swiftsync-verify/src/assume.rs`. `scripts/libzync/assume_ref.py` is an independent implementation of §3 written
+from this document and Core's snapshot format.
+
+Bitcoin Core ships two shortcuts that rest on a value compiled into each release: **assumevalid** (skip script
+checks for the ancestors of a hardcoded block) and **assumeutxo** (load a UTXO snapshot whose hash is hardcoded).
+A libzync chain proof to height H already proves what both of them trust. These checkers let a node check the
+compiled value, or a value it is offered, against a proof. They add a check and remove nothing: the node's existing
+behaviour (its own assumevalid, its own `m_assumeutxo_data` hash, the background validation of a snapshot) stays the
+fallback.
+
+## 1. Commands
+
+```sh
+swiftsync-verify assumevalid [--block <hash>] [--headers <file>] [--expect <h>:<hash> | --bitcoin-cli "<cmd>" | --mempool] <receipt>
+swiftsync-verify assumeutxo --headers <file> [--tracked <file>] [--expect … | --bitcoin-cli … | --mempool] <receipt> <snapshot>
+```
+
+Both run the full receipt verification first (SWIFTSYNC_PROOFS.md §5) and check nothing against a receipt that
+fails it. They print the usual verdict line; the exit codes are the verifier's (0 OK, 2 DEMO, 1 FAIL). As for every
+fact, OK needs the chain identity checked (`--expect`, `--bitcoin-cli` or `--mempool`) and the proof at or past
+Core's minimum chain work and the pinned checkpoint; a proof below that is at best DEMO. On success they print:
+
+```
+assumevalid: -assumevalid=<hash> (height <h>; scripts proven valid for blocks 0..<H>)
+assumeutxo: <snapshot> is the proven UTXO set at height <H>; Core's hash_serialized_3 of it: <hex>
+live_hash x <hex> y <hex>
+```
+
+The same checks are in the C ABI (`swiftsync_verify_assume`, `swiftsync-verify-ffi/include/swiftsync_verify.h`) and
+the WASM build (`verify_assume`; `verifyAssume` in `swiftsync-verify.js`), all three through one library function,
+`assume::run_assume`. `scripts/libzync/assume_inputs.py` writes the two side inputs (`--headers`, `--tracked`) from a
+node; `scripts/libzync/assume_check.sh` runs the whole thing against a real `dumptxoutset` (§6).
+
+## 2. assumevalid
+
+**What the proof says.** A receipt of a libzync image with profile bit 1 clear (scripts checked; every published
+image) says every block from genesis to `tip_hash` passed Core v28's script and signature rules, as compiled into
+the image: Core's interpreter, sighash and libsecp256k1 (CONSENSUS_RULES.md). Core's `-assumevalid=X` skips script
+checks for X and its ancestors only. So any X in the proven chain at a height h ≤ H is covered by the proof.
+
+**The check.** `assume_valid(cs, headers, block)`:
+
+1. `cs` is the state of a receipt that verified; `cs.profile` has bit 0 (libzync) and NOT bit 1. An image that
+   skipped scripts (bit 1, the assumevalid build) is refused: it proves nothing here.
+2. No `--block`, or `--block` = the tip: X = `tip_hash`, h = H. This is the value a node needs: `-assumevalid=tip`
+   covers every block the proof covers.
+3. Any other X needs `--headers`: raw 80-byte headers, oldest first, ending at the proven tip. They are bound to the
+   proof by hashing alone: each header's `prev` field must be the double SHA-256 of the one before it, and the last
+   one must hash to `tip_hash` (`HeaderChain::bind`). Their heights follow from the tip's. X must be one of them.
+   The run may start anywhere at or above genesis (a node needs only the headers from X to the tip).
+
+**Which membership proof, and why.** The header chain, not the block forest or the header MMR zyncAPP
+(`feat/headers-mmr`). `tip_hash` is in the journal, and SHA-256d links bind every ancestor to it, so the headers a
+node already holds (it syncs headers before blocks) are a complete membership proof with no prover data. A block
+forest path is shorter (log H hashes) but needs each block's coin state and undo hash from the prover's records
+(HANDOVER.md §3); the header MMR proves header validity (work, retargets), which the core proof already covers for
+every block to H. Neither adds anything for this question.
+
+**What it does not say.** It says nothing about blocks above H, and nothing about whether the proven chain is the
+network's: that is the identity check, as for every fact. Core keeps its own conditions for using assumevalid (the
+block in its best header chain, minimum chain work, two weeks of work below the best header); they are not changed.
+
+## 3. assumeutxo
+
+### 3.1 What the proof commits
+
+Every libzync chain proof with profile bit 6 (every published image: `0x71` mainnet, `0x75` signet) commits, at its
+tip and only there, `live_set` / `live_hash`: an ECMH multiset hash of the **live** coins (`prover/methods/guest/src/swiftsync.rs`).
+
+**The element.** Each live coin contributes the point of its 32-byte coin leaf (UTREEXO_FORMAT.md §2):
+
+```
+leaf = SHA-256( 0x00 ‖ txid (32, internal order) ‖ vout u32 LE ‖ value u64 LE ‖ len(scriptPubKey) u32 LE
+              ‖ scriptPubKey ‖ height u32 LE ‖ flags u8 ‖ creation_mtp u32 LE )
+flags = bit 0: created by a coinbase; bit 1: tracked by the BIP30 tree (UTREEXO_FORMAT.md §2a)
+creation_mtp = the median of the timestamps of blocks max(0, h-11) .. h-1, h the creating block's height
+```
+
+**The map to the curve.** For ctr = 0, 1, …: x = SHA-256(leaf ‖ ctr u32 LE), read big-endian; the first x with
+x³ + 7 a square mod p is the point's x, and y is its EVEN square root (x ≥ p is refused, as in the guest; p is
+secp256k1's field prime). The hash is the sum of the points of all live coins in secp256k1's group, committed as
+`live_set = 0` for the identity, else `live_set = 1` and `live_hash` = x's eight 32-bit words, least significant
+first, then y's.
+
+Which coins: the coin log's (COINLOG.md §3): spendable outputs (no `OP_RETURN` first byte, script ≤ 10,000 bytes),
+not the outputs of the two BIP30-overwritten coinbases (91,722 and 91,812; their outpoints come back as 91,880's and
+91,842's), not spent by the tip. Genesis's output was never added. Zero-value outputs are included. That is exactly
+the set Core keeps (`AddCoin` skips `IsUnspendable`; `IsBIP30Unspendable` skips the two coinbases; the genesis
+output is never added).
+
+### 3.2 What a Core snapshot coin carries, and the gap
+
+Core's `dumptxoutset` (format version 2, Core 28 to 31; checked on v31.1.0): `utxo\xff`, version u16, the network's
+message start, the base block hash, the coin count u64, then the coins grouped by txid: txid, CompactSize count,
+and per coin CompactSize vout and a `Coin` (VARINT code = height·2 + coinbase, then the compressed `CTxOut`:
+VARINT of the compressed amount and the compressed script; a P2PK key of special type 4/5 is stored as x only and
+decompressed to 65 bytes).
+
+| leaf field | in the snapshot | from |
+|---|---|---|
+| txid, vout | yes | the snapshot |
+| value | yes (compressed) | the snapshot, `DecompressAmount` |
+| scriptPubKey | yes (compressed) | the snapshot, Core's `DecompressScript` (type 4/5: y from x and the parity) |
+| height | yes (`code >> 1`) | the snapshot |
+| flags bit 0, coinbase | yes (`code & 1`) | the snapshot |
+| flags bit 1, BIP30-tracked | **no** | a side input: the list of tracked live outpoints (`--tracked`) |
+| creation_mtp | **no** | a side input: the header chain from genesis to H (`--headers`) |
+
+So the live-coin hash **can** be recomputed from a snapshot, with two side inputs a snapshot lacks. The 11-02
+worry, a coin's position in its transaction or block, does not arise: the ECMH element has no position in it.
+Positions are in the coin log's Merkle forest, not in the multiset hash. No new zyncAPP is needed, and no change to
+the core image. (The issue's fallback, a zyncAPP that proves Core's own `hash_serialized_3` for H from the coin log,
+was therefore not built or measured.)
+
+- **The headers** are the node's own (a node syncs headers before it loads a snapshot), bound to the proof exactly
+  as in §2 and required to run from genesis to the tip. 80·(H + 1) bytes: 16,080 at H = 200.
+- **The tracked list** is small: on mainnet to 974,111, 173 transactions are tracked and 22 of their outputs are
+  unspent (ROADMAP J4), 0 at H = 200 (measured, §5). It is derived from the blocks (`assume_inputs.py --tracked`:
+  utreexo_ref.py's own `Tracked` rule over every block 1..H). A node that loads a snapshot does not have the blocks,
+  so for mainnet the list would have to come with the proof or be published (§7).
+
+**Neither side input is trusted.** The check passes only if the multiset of leaves built from the snapshot and the
+side inputs has the proven hash. Every snapshot field is in the leaf preimage, so (SHA-256 and the ECMH being
+collision-resistant) a pass means the snapshot's coins, field for field, are the live coins, each exactly once. A
+wrong MTP or tracked bit changes a leaf: the true snapshot then fails, and a false one does not pass. Choosing the
+side inputs adversarially is finding an ECMH collision with chosen elements, which is what the ECMH's security
+(discrete logarithm in secp256k1, the hash to the curve modelled as a random oracle) rules out. The headers are bound
+anyway; the tracked list is free, and can only refuse.
+
+### 3.3 The check
+
+`check_snapshot(cs, snapshot, headers, tracked)`, against the state of a receipt that verified:
+
+1. `cs.profile` has bit 6; the headers run from genesis to the proven tip (§2 step 3).
+2. Read the snapshot as Core's loader would and refuse: another magic or version; a CompactSize that is not
+   canonical or over `MAX_SIZE`; a VARINT out of range; a txid group of 0 coins or more than are left; vout ≥ 2³²−1;
+   an amount outside `MoneyRange`; a script of special type 4/5 whose x is not on the curve; a raw script over
+   10,000 bytes (Core reads it as `OP_RETURN`: never in a UTXO set); a coin at height 0 or above H; fewer coins than
+   the header names; any byte after the last coin.
+3. Each coin: its leaf (§3.1) with `creation_mtp` from the headers and flag bit 1 iff its outpoint is in the tracked
+   list; add the leaf's point to the sum; add its value; feed Core's `hash_serialized_3` (below).
+4. Require: the network magic is the proof's (mainnet `f9beb4d9`, signet `0a03cf40`); the base block is `tip_hash`;
+   the total value is `utxo_value`; the sum is (`live_set`, `live_hash`).
+
+**Only at the tip.** `live_hash` exists only in a proof's final state, so a snapshot at height S needs a proof whose
+tip is S. A snapshot at another height is refused at step 4 (base block), and its coins relabelled with the right
+base fail the hash.
+
+**Core's own hash.** The checker also computes Core's `hash_serialized_3` of the snapshot (SHA-256d over each coin's
+outpoint ‖ u32 (height·2 + coinbase) ‖ `CTxOut`, in the file's order, which is Core's database order) and prints it.
+After a pass that value is derived from the proven UTXO set, so a node built with another `m_assumeutxo_data` entry,
+or a reader comparing with the one compiled into a release, can use it without trusting whoever published it.
+
+## 4. What is proven and what is trusted
+
+| | |
+|---|---|
+| proven by the receipt | the chain 0..H is valid under Core v28's rules as compiled into image M, scripts and signatures included; the `ChainState` at H, including `live_set`, `live_hash`, `utxo_value`, `tip_hash` |
+| checked by the verifier | the receipt (SWIFTSYNC_PROOFS.md §5); the headers link to `tip_hash`; the block named is among them; the snapshot's coins hash to the proven ECMH and sum to the proven value; base block and network |
+| trusted | the image id M (rebuild it: `reproduce/`), RISC Zero's soundness, SHA-256 and SHA-256d collision resistance, the ECMH's collision resistance, the verifier's code, and the source used for the chain identity (`--expect`, your node, mempool.space) |
+| not trusted | the snapshot, the headers file and the tracked list: each is checked or can only cause a refusal |
+| not proven | that the proven chain is the network's (the identity check is the user's); anything above H |
+
+## 5. Measured (15.11.2026)
+
+Real data only: the GPU proof of mainnet 1..200 under `8888d59c` (`swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`,
+profile `0x71`) and Core v31.1.0 `dumptxoutset` files from hazync-coord's node (a throwaway node synced from it over
+P2P, §6). Laptop: WSL2, release build.
+
+| what | result |
+|---|---|
+| the snapshot at 200 (`rollback=200`, 14,270 bytes, sha256 `39a837ca…`) | 204 coins, 1,000,000,000,000 sat; ECMH = the proof's `live_hash` (x `55ea17b1…3d01`); `hash_serialized_3` `a51f51ae…9d67` = Core's own `txoutset_hash` for the same dump |
+| two dumps at 200 from two throwaway nodes | byte-identical (same sha256) |
+| `assume_ref.py` (independent, pure Python) on the same files | the same `live_hash` and `hash_serialized_3` |
+| BIP30-tracked live coins at 200 | 0 (`assume_inputs.py`); the match with an empty list agrees |
+| assumeutxo check at 200, laptop | 0.01 s (the CLI's own timer) |
+| throwaway node to 200 on hazync-coord | sync 28-31 s, `dumptxoutset rollback=200` 14-15 s |
+| WASM build | 1,295,563 bytes raw, 381,660 gzipped (main's README: 1,248,921 / 362,580; this branch's stage path differs, which README says moves the bytes by ~235) |
+
+MEASURED_LARGER
+
+**Tests** (15.11.2026, this branch): `cargo test --release` in `swiftsync-verify` (assume: 10 tests: the ECMH map and
+sum against a num-bigint reference, Core's amount and VARINT vectors, the MTP rule, the real snapshot, 16 tampered
+or reframed snapshots, other heights, headers, profiles, assumevalid), `swiftsync-verify/test-assume.sh` (27 CLI
+cases, `test-assume.out`), the C ABI's `cargo test` (2 assume tests) and `test.c` (5 assume cases, `test.out`),
+`swiftsync-verify-wasm/test-assume.mjs` (11 cases, `test-assume.out`). Every refusal case of the issue: a tampered
+snapshot (txid, amount, height, coinbase flag, vout, script, a coin dropped, duplicated, split, or added), a wrong
+height (199, 1003; the 199 coins relabelled as 200), a wrong chain (another network magic, another base block,
+another tip in `--expect`, a flipped receipt), wrong side inputs (headers short, one timestamp changed, not from
+genesis; a false tracked bit), and bad framing (count, trailing byte, truncation, version, magic).
+
+## 6. Reproduce against a real node
+
+```sh
+scripts/libzync/assume_check.sh <H> <receipt> <swiftsync-verify> "bitcoin-cli -datadir=<your node>"
+```
+
+On a box with Core ≥ 28 and an unpruned node: a throwaway node (its own datadir under `$WORK`) syncs blocks 0..H from
+your node over P2P (`-connect=127.0.0.1:8333 -stopatheight=H+1`), restarts offline, and dumps its UTXO set with
+`dumptxoutset … rollback=H`. Then the headers and the tracked list (`assume_inputs.py`), both checks against the
+receipt with `--bitcoin-cli` of your node for the identity, the independent reference, and a refusal (the snapshot at
+H−1). Your node is never rolled back: `rollback` on a node at the tip disconnects every block above H and back,
+which for H = 200 on hazync-coord's node (at 975,954 on 15.11.2026) is 975,754 blocks each way. Output at H = 200 on hazync-coord:
+`scripts/libzync/assume_check_200.out`.
+
+## 7. Open
+
+- **A proof at the snapshot height.** `live_hash` is committed at a proof's tip only, so a node needs a proof whose
+  tip is the snapshot's base block (for Core's own `m_assumeutxo_data` heights, a proof ending exactly there). The
+  board's tip proof moves on; keeping (or joining to) a proof at chosen heights is a board decision.
+- **The tracked list for mainnet.** 22 live coins at 974,111. Options: publish it with the proof, pin it in the
+  verifier per network (like Core's chainparams), or have prep write it. Only completeness depends on it.
+- **The large-H cost.** The check is one SHA-256, one hash-to-curve (a square root) and one point addition per coin,
+  streamed (memory: the header times, one coin); single-threaded. Only the rates in §5 are measured.
+- **Core integration.** Core loads a snapshot only at heights in its chainparams and checks its compiled hash. This
+  checker runs before `loadtxoutset` (or a patched node takes the `hash_serialized_3` it prints). Nothing in Core is
+  changed.

@@ -1,4 +1,4 @@
-throwaway node: sync 207 blocks 28 s; dumptxoutset rollback=200 14 s; headers + tracked list 3 s
+throwaway node: sync 203 blocks 31 s; dumptxoutset rollback=200 15 s; headers + tracked list 0 s
 Core: {"coins_written":204,"base_hash":"000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320","base_height":200,"path":"/root/assume-tmp/check200/utxo_200.dat","txoutset_hash":"a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67","nchaintx":206}
 tracked coins unspent at 200: 0
 == assumeutxo
@@ -8,7 +8,7 @@ tracked coins unspent at 200: 0
   [ok] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet)
   [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
   [ok] profile 0x71 == 0x71 (libzync, scripts checked, mainnet, coin log, counting trie, live-coin hash)
-  [ok] time-too-new: largest block time 1231753120 <= this clock 1794743811 + 7200 s
+  [ok] time-too-new: largest block time 1231753120 <= this clock 1794744548 + 7200 s
   [ok] block forest has one leaf per block (201 leaves at height 200)
   [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) stated)
   [ok] anchor_id is genesis
@@ -17,8 +17,8 @@ tracked coins unspent at 200: 0
   [ok] height 200 < the image's checkpoint height 970000 -- the pinned checkpoint is not reached: verdict at best DEMO
   [ok] your node's block 200 is the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (node: 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320)
   [ok] your node's chainwork at it equals the proven cum_work 000000000000000000000000000000000000000000000000000000c900c900c9 (node: 000000000000000000000000000000000000000000000000000000c900c900c9)
-  [ok] --headers: 201 headers, heights 0..200, linked, the last one the proven tip
-  [ok] assumeutxo: snapshot "/root/assume-tmp/check200/utxo_200.dat": 204 coins, 1000000000000 sat, base block 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 = the proven tip; its live-coin ECMH equals the proof's (0 coin(s) BIP30-tracked, of 0 listed; 0.01 s)
+  [ok] headers: 201 headers, heights 0..200, linked, the last one the proven tip
+  [ok] assumeutxo: snapshot of 204 coins, 1000000000000 sat, base block 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 = the proven tip; its live-coin ECMH equals the proof's (0 coin(s) BIP30-tracked, of 0 listed) ["/root/assume-tmp/check200/utxo_200.dat"; 0.01 s]
   chain: tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 at height 200, cum_work 0x000000000000000000000000000000000000000000000000000000c900c900c9
   block forest: no block's leaf commits its undo data (an image before the commitment)
   coin log: 209 coins ever appended, 1000000000000 sat live (COINLOG.md)
@@ -41,7 +41,7 @@ exit=2
 base 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320  height 200  coins 204  value 1000000000000
 hash_serialized_3 a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67
 live_hash x 55ea17b13729c536c0ae31f7f95b9bbf2d9f755f157065d1f6448eecc9863d01 y fd4c22f9288d986e7cf327f3792f8dd3261225db0b7b665422a508605ed26e06
-== the throwaway node's own UTXO set at 200 must not pass as another height's: the snapshot at 199
-  [FAIL] assumeutxo: "/root/assume-tmp/check200/utxo_199.dat": snapshot: base block 00000000b7691ccc084542565697eca256e56bb7f67e560b48789db27f0468eb is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200): the proof commits the live-coin hash at its tip only
+== refused: the snapshot at 199 against the proof at 200
+  [FAIL] assumeutxo: snapshot: base block 00000000b7691ccc084542565697eca256e56bb7f67e560b48789db27f0468eb is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200): the proof commits the live-coin hash at its tip only
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 (want 1)

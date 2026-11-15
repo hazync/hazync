@@ -476,7 +476,14 @@ fn read_script<R: Read>(s: &mut Src<R>) -> Result<Vec<u8>, String> {
 /// Reads a snapshot, calling `f` for every coin in file order. Refuses what Core's loadtxoutset refuses (magic,
 /// version, a coin above the base height is the caller's check), a count that disagrees with the coins present,
 /// and any byte after the last coin.
-pub fn read_snapshot<R: Read>(r: R, mut f: impl FnMut(&SnapCoin) -> Result<(), String>) -> Result<SnapshotMeta, String> {
+pub fn read_snapshot<R: Read>(r: R, f: impl FnMut(&SnapCoin) -> Result<(), String>) -> Result<SnapshotMeta, String> {
+    read_snapshot_with(r, |_| Ok(()), f)
+}
+
+/// [`read_snapshot`], with `meta` called on the header before any coin is read (to refuse a wrong base block or
+/// network without reading the whole file).
+pub fn read_snapshot_with<R: Read>(r: R, meta: impl FnOnce(&SnapshotMeta) -> Result<(), String>,
+                                   mut f: impl FnMut(&SnapCoin) -> Result<(), String>) -> Result<SnapshotMeta, String> {
     let mut s = Src { r, pos: 0 };
     let magic = s.bytes::<5>()?;
     if magic != SNAPSHOT_MAGIC {
@@ -489,7 +496,9 @@ pub fn read_snapshot<R: Read>(r: R, mut f: impl FnMut(&SnapCoin) -> Result<(), S
     let network_magic = s.bytes::<4>()?;
     let base_blockhash = s.bytes::<32>()?;
     let coins_count = u64::from_le_bytes(s.bytes()?);
-    let meta = SnapshotMeta { version, network_magic, base_blockhash, coins_count };
+    let m = SnapshotMeta { version, network_magic, base_blockhash, coins_count };
+    meta(&m)?;
+    let meta = m;
     let mut left = coins_count;
     while left > 0 {
         let txid = s.bytes::<32>()?;
@@ -584,11 +593,16 @@ pub struct SnapshotCheck {
 /// Hashes a snapshot into the live-coin ECMH and Core's hash_serialized_3, with no proof: the work of
 /// [`check_snapshot`] before its comparisons. `base_height` bounds the coins' heights.
 pub fn hash_snapshot<R: Read>(snap: R, headers: &HeaderChain, tracked: &Tracked, base_height: u32) -> Result<SnapshotCheck, String> {
+    hash_snapshot_with(snap, headers, tracked, base_height, |_| Ok(()))
+}
+
+fn hash_snapshot_with<R: Read>(snap: R, headers: &HeaderChain, tracked: &Tracked, base_height: u32,
+                               on_meta: impl FnOnce(&SnapshotMeta) -> Result<(), String>) -> Result<SnapshotCheck, String> {
     let mut acc = Ecmh::default();
     let mut h3 = HashSerialized3::default();
     let (mut value, mut tracked_used) = (0u64, 0usize);
     let mut mtp_cache: Vec<Option<u32>> = Vec::new();
-    let meta = read_snapshot(snap, |c| {
+    let meta = read_snapshot_with(snap, on_meta, |c| {
         if c.height == 0 || c.height > base_height {
             return Err(format!("snapshot: coin {}:{} at height {}, outside 1..{base_height}", display(&c.txid), c.vout, c.height));
         }
@@ -628,15 +642,18 @@ pub fn check_snapshot<R: Read>(cs: &ChainState, snap: R, headers: &HeaderChain, 
         return Err(format!("the headers must run from genesis to the proven tip at {} (given {}..{})", cs.height,
                            headers.first_height, headers.tip_height()));
     }
-    let r = hash_snapshot(snap, headers, tracked, cs.height)?;
-    if r.meta.network_magic != network_magic(cs.profile) {
-        return Err(format!("snapshot: network magic {} is not the proof's network ({})", hex(&r.meta.network_magic),
-                           hex(&network_magic(cs.profile))));
-    }
-    if r.meta.base_blockhash != cs.tip_hash {
-        return Err(format!("snapshot: base block {} is not the proven tip {} (height {}): the proof commits the live-coin hash at its tip only",
-                           display(&r.meta.base_blockhash), display(&cs.tip_hash), cs.height));
-    }
+    // the header first: a wrong network or base block is refused before the coins are read
+    let r = hash_snapshot_with(snap, headers, tracked, cs.height, |m| {
+        if m.network_magic != network_magic(cs.profile) {
+            return Err(format!("snapshot: network magic {} is not the proof's network ({})", hex(&m.network_magic),
+                               hex(&network_magic(cs.profile))));
+        }
+        if m.base_blockhash != cs.tip_hash {
+            return Err(format!("snapshot: base block {} is not the proven tip {} (height {}): the proof commits the live-coin hash at its tip only",
+                               display(&m.base_blockhash), display(&cs.tip_hash), cs.height));
+        }
+        Ok(())
+    })?;
     if r.value != cs.utxo_value {
         return Err(format!("snapshot: {} sat in {} coins; the proven live amount is {} sat", r.value, r.coins, cs.utxo_value));
     }
@@ -1005,7 +1022,11 @@ mod tests {
         let e = check(&cs, SNAP_199, &Tracked::new()).unwrap_err();
         assert!(e.contains("base block") && e.contains("tip only"), "{e}");
         let e = check(&cs, SNAP_1003, &Tracked::new()).unwrap_err();
-        assert!(e.contains("outside 1..200"), "{e}");
+        assert!(e.contains("base block"), "{e}");
+        // and with the base block relabelled, by its coins above 200
+        let (mut m, v) = coins(SNAP_1003);
+        m.base_blockhash = cs.tip_hash;
+        assert!(check(&cs, &write(&m, &v), &Tracked::new()).unwrap_err().contains("outside 1..200"));
         // and their coins, relabelled as the base at 200, do not hash to the proof's
         let (mut m, v) = coins(SNAP_199);
         m.base_blockhash = cs.tip_hash;
