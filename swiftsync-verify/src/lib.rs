@@ -221,6 +221,9 @@ pub struct ChainState {
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
 pub mod headers;
 
+/// The deposit-proof zyncAPP: a transaction in a fully validated block, buried under the header chain (DEPOSIT_ZAPP.md).
+pub mod deposit;
+
 /// The header-chain zyncAPP's Merkle Mountain Range of block hashes: the guest's own file (one source for the guest,
 /// this verifier and the zyncapp host's path builder).
 pub mod mmr {

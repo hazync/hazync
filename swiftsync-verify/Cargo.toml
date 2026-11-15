@@ -25,6 +25,10 @@ name = "zync-path"
 path = "src/zync_path.rs"
 
 [[bin]]
+name = "zync-deposit"
+path = "src/zync_deposit.rs"
+
+[[bin]]
 name = "zync-serve"
 path = "src/zync_serve.rs"
 

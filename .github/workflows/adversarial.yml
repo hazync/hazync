@@ -95,6 +95,9 @@ jobs:
           bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
           node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
           swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
+          # the deposit-proof zyncAPP (docs/libzync/DEPOSIT_ZAPP.md): bundles built and checked on the real receipts
+          cargo build --release --manifest-path swiftsync-verify/Cargo.toml --bin zync-deposit
+          bash experimental/libzync-bench/deposit/test_deposit.sh
 
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).

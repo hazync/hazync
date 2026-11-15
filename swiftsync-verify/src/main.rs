@@ -43,6 +43,7 @@ fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
     eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
+    eprintln!("       swiftsync-verify deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n>] [--allow-pow-only-block] [--expect <height>:<hash>] [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
     eprintln!("       swiftsync-verify headers [--image <hex>] [--expect <height>:<hash>] [--now <s>] [--include <height>:<hash> --path <file> [--tx <txid>:<tx.json>]] <receipt>...");
     exit(1);
 }
@@ -66,6 +67,9 @@ fn main() {
     }));
     if std::env::args().nth(1).as_deref() == Some("headers") {
         headers_main(std::env::args().skip(2).collect());
+    }
+    if std::env::args().nth(1).as_deref() == Some("deposit") {
+        deposit_main(std::env::args().skip(2).collect());
     }
     let mut args = std::env::args().skip(1);
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
@@ -414,6 +418,79 @@ fn headers_main(a: Vec<String>) -> ! {
             let what = format!("header chain from genesis to {} {} (chainwork {}, MMR root {}){shown}{ident}", s.height, s.hash_hex(), s.work_hex(), s.mmr_root_hex());
             if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
             println!("SWIFTSYNC_VERIFY_DEMO: a valid header chain below Core's minimum chain work: {what}"); exit(2)
+        }
+    }
+}
+
+/// `swiftsync-verify deposit --txid <txid> [...] <deposit.json>`: a deposit proof (docs/libzync/DEPOSIT_ZAPP.md). Every
+/// expectation is the CALLER's (the txid, the output, the depth); the bundle (from `zync-deposit`) carries no txid and no
+/// image id. Exit 0 OK, 2 DEMO (a valid statement on a chain below Core's minimum chain work), 1 FAIL. The verdict
+/// line states what was shown: the block, the depth as of the tip (height, hash, chainwork), how much of it is fully
+/// validated and how much proof of work only.
+fn deposit_main(a: Vec<String>) -> ! {
+    use swiftsync_verify::deposit::{disp, verify_deposit, DepositAsk, DepositBundle};
+    let mut ask = DepositAsk::default();
+    let (mut network, mut image_hex, mut himage, mut now, mut file, mut txid) =
+        ("mainnet".to_string(), None, swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string(), None, None, None);
+    let mut it = a.into_iter();
+    let num = |v: Option<String>, k: &str| -> u64 { v.and_then(|x| x.parse().ok()).unwrap_or_else(|| fail(&format!("{k}: not a number"))) };
+    let hexarg = |v: Option<String>, k: &str| -> Vec<u8> { v.and_then(|x| swiftsync_verify::unhex(&x)).unwrap_or_else(|| fail(&format!("{k}: not hex"))) };
+    while let Some(x) = it.next() {
+        match x.as_str() {
+            "--txid" => txid = it.next(),
+            "--vout" => ask.vout = Some(u32::try_from(num(it.next(), "--vout")).unwrap_or_else(|_| fail("--vout: too large"))),
+            "--amount" => ask.amount = Some(num(it.next(), "--amount")),
+            "--script" => ask.script = Some(hexarg(it.next(), "--script")),
+            "--op-return" => ask.op_return = Some(hexarg(it.next(), "--op-return")),
+            "--min-depth" => ask.min_depth = num(it.next(), "--min-depth"),
+            "--min-validated-depth" => ask.min_validated_depth = num(it.next(), "--min-validated-depth"),
+            "--allow-pow-only-block" => ask.allow_pow_only_block = true,
+            "--max-tip-age" => ask.max_tip_age = Some(num(it.next(), "--max-tip-age")),
+            "--expect" => {
+                let e = it.next().unwrap_or_else(|| usage());
+                let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
+                ask.expect_tip = Some((h.parse().unwrap_or_else(|_| fail("--expect: bad height")), x.to_string()));
+            }
+            "--now" => now = Some(num(it.next(), "--now")),
+            "--network" => network = it.next().unwrap_or_else(|| usage()),
+            "--image" => image_hex = it.next(),
+            "--headers-image" => himage = it.next().unwrap_or_else(|| usage()),
+            f if f.starts_with("--") => fail(&format!("deposit: unknown flag {}", esc(f))),
+            f if file.is_none() => file = Some(f.to_string()),
+            _ => usage(),
+        }
+    }
+    let txid = txid.unwrap_or_else(|| fail("deposit: --txid <txid> (the transaction YOU ask about) is required"));
+    let mut t = swiftsync_verify::hex32(&txid.to_lowercase()).unwrap_or_else(|| fail("--txid: not 64 hex digits"));
+    t.reverse();
+    ask.txid = t;
+    let file = file.unwrap_or_else(|| usage());
+    let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network:?}")));
+    if let Some(h) = &image_hex {
+        image = match Image::by_id(&network, h) {
+            Some(i) => i,
+            None => image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h:?}: not 64 hex digits"))),
+        };
+    }
+    let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
+    let b: DepositBundle = serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&file)))))
+        .unwrap_or_else(|e| fail(&format!("{}: not a deposit bundle ({e})", esc(&file))));
+    let rep = verify_deposit(&b, &ask, &network, image, &himage, now);
+    for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
+    match (&rep.verdict, &rep.statement) {
+        (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: deposit: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
+        (v, Some(s)) => {
+            let out = s.output.as_ref().map(|(n, v, spk)| format!(", output {n} = {v} sat to {}", hex(spk))).unwrap_or_default();
+            let ident = if ask.expect_tip.is_some() { "" } else { "; chain identity NOT checked (give --expect <height>:<hash> from a source you trust)" };
+            let what = format!("deposit: transaction {}{out} is in block {} {}, {} confirmation(s) as of tip {} {} (chainwork {}); \
+                                FULLY VALIDATED from genesis through block {} ({} of those confirmations){}{ident}",
+                disp(&s.txid), s.height, disp(&s.block_hash), s.confirmations, s.tip_height, disp(&s.tip_hash), disp(&s.tip_work),
+                s.validated_through, s.validated_confirmations,
+                if s.block_fully_validated { if s.confirmations > s.validated_confirmations { "; blocks above it: PROOF OF WORK ONLY" } else { "" } }
+                else { "; THE BLOCK ITSELF IS ABOVE THE FULLY VALIDATED TIP: PROOF OF WORK ONLY" });
+            if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
+            println!("SWIFTSYNC_VERIFY_DEMO: below Core's minimum chain work, not shown to be the network's chain: {what}"); exit(2)
         }
     }
 }
