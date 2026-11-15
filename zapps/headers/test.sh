@@ -5,10 +5,11 @@
 # glue (wasm/test-headers.mjs). The receipts are the experiment's (experimental/libzync-bench/headers).
 set -euo pipefail
 cd "$(dirname "$0")"
-T=${CARGO_TARGET_DIR:-$PWD/target}
+. ../../scripts/zapp-checks.sh
+T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 cargo test --release --manifest-path ./Cargo.toml
 cargo test --release --manifest-path ./wasm/Cargo.toml
-cargo build --release --manifest-path ./Cargo.toml --bin zapp-headers
+cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-headers
 bash test_headers_verify.sh "$T/release/zapp-headers"
 "$T/release/zapp-headers" --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 \
     ../../experimental/libzync-bench/headers/headers_0_tip.rcpt
@@ -25,6 +26,10 @@ set +e; "$T/release/zapp-headers" --bitcoin-cli "$T/nowork" $H/hdr_0_100.rcpt $H
 [ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node that gives no chainwork: exit $e, want 1"; exit 1; }
 set +e; "$T/release/zapp-headers" --bitcoin-cli "$T/badnode" $H/hdr_0_100.rcpt $H/hdr_101_200.rcpt > "$T/id.out"; e=$?; set -e
 [ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node naming another block: exit $e, want 1"; exit 1; }
+# RISC0_DEV_MODE never makes the verifier accept anything
+set +e; RISC0_DEV_MODE=1 "$T/release/zapp-headers" $H/hdr_0_100.rcpt $H/hdr_101_200.rcpt > "$T/id.out"; e=$?; set -e
+[ $e = 1 ] || { cat "$T/id.out"; echo "::error::RISC0_DEV_MODE set: exit $e, want 1"; exit 1; }
 ./wasm/build.sh
+wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_headers_wasm.wasm wasm/README.md
 node wasm/test-headers.mjs
 echo "ZAPP_HEADERS_TESTS OK"
