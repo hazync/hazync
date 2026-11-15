@@ -145,7 +145,7 @@ sys.exit(0 if 'txs' in w and 'tx_prevouts' in w else 1)" 2>/dev/null
     fi
 fi
 
-echo "== the libzync board (beside the original until the switch) runs the published libzync image =="
+echo "== the libzync board (the public board since the 11-12 switch) runs the published libzync image =="
 # The libzync board's units (hazync-lz-*, libzync-*) verify and prove against the published libzync image, not the
 # CORE id above, so they are checked here against reproduce/LIBZYNC_IDS. Absent units: a box without the libzync
 # board, said as a SKIP, not passed.
@@ -193,12 +193,12 @@ else
     for unit in hazync-lz-check-spine.service hazync-lz-offsite-proofs.service hazync-lz-offsite-proofs-b2.service \
                 hazync-lz-offsite-spine.service hazync-lz-offsite-spine-b2.service; do
         if ! systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q .; then
-            printf '  note %s is not installed\n' "$unit"; continue
+            skip "$unit is not installed — its image pin NOT checked"; continue
         fi
         pins=$( { systemctl show "$unit" -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^HAZYNC_METHOD_ID=//p'
                   systemctl show "$unit" -p ExecStart --value 2>/dev/null | grep -oE -- '--method-id [0-9a-f]{64}' | cut -d' ' -f2
                 } | sort -u | tr '\n' ' ' | sed 's/ $//')
-        if [ -z "$pins" ]; then printf '  note %s pins no image id\n' "$unit"
+        if [ -z "$pins" ]; then skip "$unit pins no image id (no HAZYNC_METHOD_ID, no --method-id) — NOT checked"
         elif [ "$pins" = "$LZ" ]; then ok "$unit pins the published image (${LZ:0:8}…)"
         else bad "$unit pins $pins — NOT the published libzync image (${LZ:0:8}…): reinstall it from coordinator/deploy/libzync/"; fi
     done
@@ -217,27 +217,39 @@ else
                                || bad "hazync-lz-zapp-follow runs $zh with guest ${zid:-unknown} — NOT the published libzync image (${LZ:0:8}…)"
         fi
     else
-        printf '  note hazync-lz-zapp-follow is not installed\n'
+        skip "hazync-lz-zapp-follow is not installed — the zyncAPP follower's host NOT checked"
     fi
     # LZ_HANDOVER_AT=H with a host that does not pin a handover at H is the "pre" era: claims stop below H (HANDOVER.md
     # §5). That is right only while the next image is on its way; a board left in it stops at H-1 for good, with every
     # unit healthy. 2026-11-14/15: zz-handover.conf (H=2000) held the board at frontier 1,999 for a day.
     cenv=$(systemctl show hazync-lz-coordinator.service -p Environment --value 2>/dev/null | tr ' ' '\n')
     ho=$(sed -n 's/^LZ_HANDOVER_AT=//p' <<<"$cenv" | tail -1)
-    if [ -n "$ho" ] && [ "$ho" != 0 ]; then
-        cport=$(sed -n 's/^COORD_PORT=//p' <<<"$cenv" | tail -1)
-        hm=$(curl -s --max-time 15 "http://127.0.0.1:${cport:-8899}/api/meta" 2>/dev/null | python3 -c '
+    case "$ho" in
+        ''|0) ;;                                   # no handover configured: nothing to cap
+        *[!0-9]*) bad "hazync-lz-coordinator: LZ_HANDOVER_AT=$ho is not a block height" ;;
+        *)
+            cport=$(sed -n 's/^COORD_PORT=//p' <<<"$cenv" | tail -1)
+            hm=$(curl -s --max-time 15 "http://127.0.0.1:${cport:-8899}/api/meta" 2>/dev/null | python3 -c '
 import json, sys
 try: m = json.load(sys.stdin)
 except ValueError: sys.exit(0)
 h = m.get("handover") or {}
-print(h.get("era") or "none", m.get("frontier") if isinstance(m.get("frontier"), int) else "")' 2>/dev/null)
-        era=${hm%% *}; fr=${hm#* }
-        printf '  note hazync-lz-coordinator: LZ_HANDOVER_AT=%s, era %s, frontier %s\n' "$ho" "${era:-unknown}" "${fr:-unknown}"
-        if [ "$era" = pre ] && [ -n "$fr" ] && [ "$fr" -ge $((ho - 1)) ]; then
-            bad "the board is capped at $fr by LZ_HANDOVER_AT=$ho (era pre): deploy the next image's host, or remove the drop-in if no handover is planned"
-        fi
-    fi
+f = m.get("frontier")
+print(h.get("era") or "none", f if isinstance(f, int) else "")' 2>/dev/null)
+            era=""; fr=""
+            [ -n "$hm" ] && { era=${hm%% *}; fr=${hm#* }; }
+            if [ -z "$era" ]; then
+                skip "LZ_HANDOVER_AT=$ho is set, but /api/meta on :${cport:-8899} could not be read — the handover era NOT checked"
+            elif [ "$era" = none ]; then
+                skip "LZ_HANDOVER_AT=$ho is in the unit, but the running coordinator reports no handover (not restarted since?) — NOT checked"
+            elif [ "$era" = pre ] && [ -n "$fr" ] && [ "$fr" -ge $((ho - 1)) ]; then
+                bad "the board is capped at $fr by LZ_HANDOVER_AT=$ho (era pre): deploy the next image's host, or remove the drop-in if no handover is planned"
+            elif [ "$era" = pre ]; then
+                skip "LZ_HANDOVER_AT=$ho, era pre: the board will STOP at block $((ho - 1)) (frontier ${fr:-unknown} now) unless the next image's host is deployed first; remove the drop-in if no handover is planned"
+            else
+                ok "LZ_HANDOVER_AT=$ho, era $era: this host pins the handover at $ho"
+            fi ;;
+    esac
 fi
 
 echo
