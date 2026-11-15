@@ -1,0 +1,28 @@
+Header-chain zyncAPP with the MMR state (image de54b94f): the whole mainnet header chain, genesis..975,278, re-proved
+in one receipt on ONE GPU (15.11.2026). Replaces the 2db34e12 headers_0_tip.rcpt (RESULT_risc0_3_1_gpu.txt).
+
+Image      de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07 (reproduce/LIBZYNC_IDS zyncapp-headers)
+Guest ELF  0401a2d7bf7eeb1f9c729057bc0725672c7283a91bde036fa82a818d82070cb8, from the reproducible container build,
+           hash-checked on upload; no guest was built on the pod (RISC0_SKIP_BUILD=1, --elf)
+Commit     0f64315c (feat/headers-mmr), zyncapp host built on the pod with --features cuda
+Card       1x NVIDIA RTX PRO 6000 Blackwell Workstation Edition, RunPod secure cloud, $2.79/hr (pod 9avubg2jpss4i2)
+Host       AMD EPYC 9355P, 64 threads
+
+Measured
+  execute              975,279 headers, 4,656,795,655 cycles, 4,739 segments, 50.1 s
+                       (2db34e12 without the MMR: 2,350,725,289 cycles, 2,437 segments)
+  prove (whole chain)  5,969.5 s (99.5 min) for the prover; wall 1:39:30 under /usr/bin/time; peak RSS 4.11 GiB
+  GPU busy             53.0 % average over 597 nvidia-smi samples
+  pod billed           07:32:33 .. 09:23:30 UTC = 111.0 min = $5.16 (setup + build + execute + the proof)
+  proof share only     99.5 min x $2.79/hr = $4.63
+  receipt              headers_0_tip.rcpt, 227,474 bytes, sha256 b44e4a743922d94eeb2d534384077362f59e64812f124edbeefd320176fc5038
+
+End state (identical to the full node on hazync-coord, getblockhash 975278)
+  hash       00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
+  chainwork  00000000000000000000000000000000000000015731592c05251d96d07f062f
+  MMR root   bb22154abf3cf886ebcb512fc0901401fb9ae8362b9f40e6c7b09711a8ceb29a
+
+Verified on the laptop
+  swiftsync-verify headers --expect 975278:<hash> headers_0_tip.rcpt  -> SWIFTSYNC_VERIFY_OK under de54b94f, exit 0
+  the same receipt with one bit flipped                               -> SWIFTSYNC_VERIFY_FAIL
+  test_headers_verify.sh -> HEADERS_VERIFY_TESTS_OK; test_headers_wasm.mjs -> WASM_HEADERS_OK
