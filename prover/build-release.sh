@@ -311,22 +311,26 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
     if $H method-id >/dev/null 2>&1; then
       echo "=== METHOD_ID ==="; $H method-id
       echo "=== seg-po2 ==="; $H seg-po2
-      # A host that runs must carry the published image AND accept a real proof of it: mainnet 1..200
+      # A host that runs must carry the published image AND accept a real proof of it: mainnet block 1
       # from genesis (below Core minimum chainwork, so the correct verdict is DEMO, exit 2). The CORE
       # smoke tests (regress, bundle-roundtrip-test) drove guest modes this image refuses (#676).
+      # The receipt must be by THIS image: a host accepts only journals its own image committed (an
+      # empty lineage from a re-baseline means no earlier image), so the v0.26.0 image 46666b6f refused
+      # the v0.24.0 receipt mainnet_1_200_8888d59c.rcpt with 2 FAILs. A re-baseline therefore needs a new
+      # fixture; mainnet_1_1_<id>.rcpt is a real CPU proof (942 s on 6 cores, no GPU needed).
       [ "$($H method-id | awk "NR==1{print \$NF}")" = "$WANT_ID" ] \
         || { echo "=== FAIL: this host does not carry the published libzync image $WANT_ID ===" >&2; exit 1; }
-      echo "=== smoke: libzync-verify on a real proof of mainnet 1..200 ==="
-      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt > /tmp/smoke.log 2>&1 || rc=$?
+      echo "=== smoke: libzync-verify on a real proof of mainnet block 1 ==="
+      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_1_46666b6f.rcpt > /tmp/smoke.log 2>&1 || rc=$?
       tail -1 /tmp/smoke.log
-      [ "$rc" = 2 ] && grep -q "^LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 200" /tmp/smoke.log \
+      [ "$rc" = 2 ] && grep -q "^LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 1," /tmp/smoke.log \
         || { echo "=== FAIL: the host did not accept a real proof of its own image (exit $rc) ===" >&2; exit 1; }
     else
       echo "=== NOT VERIFIED HERE: the binary cannot execute in this container ===" >&2
       echo "    Almost certainly no NVIDIA driver (libcuda.so.1) because --gpus all was unavailable." >&2
       echo "    The artifact is still produced and staged. Verify it where it can run:" >&2
       echo "      hazync-host-x86_64-linux-gnu-cuda method-id      # want $WANT_ID" >&2
-      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_200_8888d59c.rcpt   # DEMO, exit 2" >&2
+      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_1_46666b6f.rcpt   # DEMO, exit 2" >&2
       echo "    scripts/release.sh then needs HAZYNC_ATTEST_<artifact>=<id> from that run." >&2
     fi
     # Stage r0vm into the MOUNTED repo so it survives this --rm container. `host libzync-snark-wrap` shells
