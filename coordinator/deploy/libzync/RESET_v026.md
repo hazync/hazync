@@ -50,13 +50,13 @@ This page follows it wherever nothing has changed and says so.
   #733's unit changes change values only (`HAZYNC_METHOD_ID`, `--method-id`), which the drift check reports as a
   note, not drift, so installing them shows no false drift.
 
-## Decisions (defaults; the owner can override any of them)
+## Decisions (defaults; any of them can change)
 
 | | 11-12 precedent (SWITCH.md) | here |
 |---|---|---|
 | coordinator data | `VACUUM INTO /root/lz-863c9ce3.db`, `mv /var/lib/hazync-lz /var/lib/hazync-lz.863c9ce3`, a fresh directory with its subdirectories | the same, named after `8888d59c`. The old directory stays read-only as the record |
 | contributors | carried (`carry-contributors.py`): handle, key, first seen, last version; not block counts | **only contributors carry over**, from the `8888d59c` ledger |
-| sponsorships, payments | stayed in the old ledger | the same. Donations come from BTCPay, not the ledger, so `/api/donations` is unaffected. Any `paid`, `proving` or `invoiced` row counted in step 0.2 is the owner's call before step 6 |
+| sponsorships, payments | stayed in the old ledger | the same. Donations come from BTCPay, not the ledger, so `/api/donations` is unaffected. Any `paid`, `proving` or `invoiced` row counted in step 0.2 must be settled before step 6 |
 | offsite copies | new prefixes from the new id; the old ones kept, nothing deleted | `proofs-46666b6f/`, `spine-46666b6f/` (the units' `--method-id`); **the `8888d59c` prefixes, ledger and replica are kept as the record** |
 | Litestream | v2 ledger added as `coordinator-lz-server1` | the fresh ledger under a NEW replica path `coordinator-lz-46666b6f-server1`, so it never meets the `8888d59c` replica, which stays |
 | board pass | emptied (`rm`) and restarted from genesis | restarted from genesis; the old directories are **moved aside** (same filesystem, instant) **before the fresh coordinator first starts** (SWITCH.md step 0.4 before 0.6), so it never serves an old leaf or state. Re-foresting the pass is not possible: its leaves 2..998 are already pruned |
@@ -106,11 +106,11 @@ key names only.
    test ! -e /var/lib/hazync/sponsor-bot/.failed && echo no-latch
    sqlite3 "file:/var/lib/hazync-lz/coordinator.db?mode=ro" "SELECT status, count(*) FROM sponsorships GROUP BY status"
    ```
-   Check: both inactive; `stop-all` names no pod (one it names was left running: it is now terminated, say so to the
-   owner); `no-latch` (a latch written by this stop is the owner's to clear, after the pod check); the sponsorship
+   Check: both inactive; `stop-all` names no pod (one it names was left running: it is now terminated; note it in the
+   record); `no-latch` (a latch written by this stop is cleared by hand, after the pod check); the sponsorship
    counts written into the record table at the end. ⛔ A `paid` or `proving` row would be stranded in the old ledger
    (the fresh one has no sponsorships, so the bot's `/api/bot/queue` is empty), and an `invoiced` one could still be
-   paid into it: **stop and take it to the owner** before step 6. Rollback: `systemctl start hazync-sponsor-bot.timer`.
+   paid into it: **stop and settle it** before step 6. Rollback: `systemctl start hazync-sponsor-bot.timer`.
 3. **Release v0.26.0 is published** with the 13 assets of `scripts/release-assets.txt` and signed. Check on the laptop:
    `gh release view v0.26.0 -R hazync/hazync --json assets -q '.assets|length'` = 13. ⛔ `release.sh --from tag` can
    publish an EMPTY release and call it verified: count the assets.
@@ -134,7 +134,7 @@ key names only.
    Check: one `Good signature`; three `OK`; `new-host-ok`; `HANDOVER none`; the genesis tip; the three retiring ids
    are the survey's (board and zyncAPP the board's image, the paper prep its own) and all differ from `$N`. The wasm
    sha is what the site pins; `swiftsync-verify-wasm/README.md` says `12bbc9ae…` (#730) and #732 reports a local
-   `build.sh` gave `486ae6ed…`: a release asset that is neither is a question for the owner before step 11.
+   `build.sh` gave `486ae6ed…`: a release asset that is neither must be explained before step 11.
 5. **zync-serve from the release commit**, built where cargo is (hazync-coord), copied through the laptop with
    literal paths (the laptop's shell has no `$R`):
    ```bash
@@ -269,7 +269,7 @@ the checkout's. Rollback: the same deploy command with `e5ad283` and the same in
    sqlite3 "file:/root/lz-$o8.db?mode=ro" 'PRAGMA integrity_check; SELECT count(*) FROM contributors; SELECT count(*) FROM ranges; SELECT status, count(*) FROM sponsorships GROUP BY status'
    mv /var/lib/hazync-lz /var/lib/hazync-lz.$o8
    ```
-   Check: `ok`; the sponsorship counts are step 0.2's (if not, a payment landed meanwhile: owner); write the counts
+   Check: `ok`; the sponsorship counts are step 0.2's (if not, a payment landed meanwhile: settle it first); write the counts
    into the record table.
 3. **A fresh directory, with every subdirectory** (SWITCH.md 4c, a), and the zyncAPP directory **empty**: the old
    board's facts are about an old-image proof and are not copied back (step 8):
@@ -356,7 +356,7 @@ spine. **The default is to wait** for the board's first genesis spine: the follo
 and starts zync-serve itself. Until then `/api/zync/*` answers 502 and Coin check says the fact service is
 unreachable. On 11-12 the first spine reached block 344 in about 2.5 h with 4 pods (`RESULT_board_run_2026-11-12.txt`).
 
-Optional, if the owner wants Coin check up from the start: seed from #732's real receipt of mainnet block 1
+Optional, to have Coin check up from the start: seed from #732's real receipt of mainnet block 1
 (`experimental/libzync-bench/zapp/mainnet_1_1_46666b6f.rcpt`, sha256 `35f527be…e5fd`; in the checkout when #732 is in
 REF) by running the follower once on it. The follower's own test of a proof, `verify-any <it> 1` with the v0.26.0
 mainnet host, gives `RANGE-OK lo=1 hi=1 … anchored=1` on it (hazync-coord's build, 2026-11-15); the rest of this path
@@ -432,7 +432,7 @@ first receipts to land: `ls /var/lib/hazync-lz/proofs | head`, and after the fir
 - **Provers:** the v0.26.0 worker and host; older hosts are refused by `/api/meta`'s `method_id` pre-flight.
 - **Pods:** the sponsor bot (step 9) boots them from the release, once there is a sponsorship.
 
-## 13. Clean-up (after the new board has run for a while; the owner says when)
+## 13. Clean-up (after the new board has run for a while)
 
 Everything kept for a rollback, with where it lives (`du -sh` each first):
 
@@ -459,9 +459,9 @@ filesystem, `/` for both: check `df -h /` against those before and after.
 | new prep rate after the swap | |
 | first `46666b6f` spine | |
 
-## Defaults and open questions for the owner
+## Defaults and open questions
 
-**Defaults** (the reset follows these unless the owner says otherwise):
+**Defaults** (the reset follows these unless decided otherwise):
 
 1. Only contributors carry over (11-12 precedent); sponsorships and payments stay in the old ledger.
 2. The old offsite prefixes, the old ledger (directory and `VACUUM INTO` copy) and its Litestream replica are kept as
