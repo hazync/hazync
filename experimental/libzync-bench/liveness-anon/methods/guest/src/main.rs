@@ -1,4 +1,4 @@
-//! liveness-anon (EXPERIMENT, not a published zyncAPP; docs/libzync/LIVENESS_ZAPP.md §6): proves, from a verified core
+//! liveness-anon (EXPERIMENT, not a published zyncAPP; docs/libzync/LIVENESS_ZAPP.md §8): proves, from a verified core
 //! receipt, "I know a coin UNSPENT at the core tip, worth at least `min_value`, whose scriptPubKey satisfies `policy`",
 //! and commits neither the coin nor its amount nor its script.
 //!

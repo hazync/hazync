@@ -1,5 +1,5 @@
 //! liveanon: EXECUTES (no proof) the liveness-anon guest on the real mainnet 1..200 proof and prints its cycles
-//! (docs/libzync/LIVENESS_ZAPP.md §6).
+//! (docs/libzync/LIVENESS_ZAPP.md §8).
 //!
 //!   liveanon set <core receipt> <liveness proof hex> <set depth>   policy 0: the coin's script in a set of 2^depth
 //!   liveanon key                                                    policy 1's own work (sk·G + nullifier), alone

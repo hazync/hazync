@@ -64,8 +64,10 @@ The verifier (`zapp_liveness::check_liveness`, in the zAPP's own module `zapps/l
 WASM; ZYNCAPPS.md §9) runs only on a receipt that passed the core checks (`verify`: image, real proof, genesis anchor, profile, block forest, time). Then:
 
 1. **The question is the caller's.** The proof must name the outpoint and height the caller asked about. If the
-   caller gives an amount, script or claimed state, those must match the proof too. A true fact about another coin
-   or height is not an answer (ZYNCAPPS.md §8).
+   caller gives an amount, script, creation height (`created=`), coinbase flag or claimed state, those must match the
+   proof too. A true fact about another coin or height is not an answer (ZYNCAPPS.md §8). A question has one
+   spelling: lower-case hex, decimal numbers without a sign or leading zeros; the C ABI and WASM take the proof as
+   exact lower-case hex.
 2. `at ≤ tip`. At the tip, the journal's coin log roots are used. Below it, the opening's
    `utxo_state(leaves, value, roots)` and block hash must give H's leaf in the tip's block forest. The undo hash is
    needed exactly from the image's undo height on (UNDO.md).
@@ -87,9 +89,12 @@ Not proven, or left to the caller:
 - **Anything after the tip.** A coin unspent at H may have been spent since. Freshness comes from proving the tip
   again; the receipt shows only how old its tip is.
 - **The producer is not trusted.** zync-path and zync-serve hold no secret. A wrong proof is refused.
-- **A repeated outpoint.** The answer is about the coin created at the reported height. On mainnet the two BIP30
-  pairs have one leaf each (UTREEXO_FORMAT.md §3 rule 2). An outpoint created again over its own spent coin (possible
-  from 1,983,702) would get a second leaf. A bridge should pin the creation height it expects.
+- **A repeated outpoint: pin it with `created=`.** On mainnet the two BIP30 pairs have one leaf each
+  (UTREEXO_FORMAT.md §3 rule 2). An outpoint created again over its own spent coin (possible from 1,983,702) gets a
+  second leaf, so without a pin BOTH `=spent` (the old coin) and `=unspent` (the new one) verify, each true of its own
+  coin. Give `created=<h>` (and `coinbase=0|1` if you like): the check compares it before the answer. The producer,
+  asked by outpoint alone, gives the latest coin; `--height` picks another. I tested this on a synthetic chain
+  (`a_recreated_outpoint_is_pinned_by_created_and_the_producer_names_the_latest`); mainnet has no such coin yet.
 - **Coins with no leaf:** a coin created and spent in the same block, unspendable outputs and the genesis coinbase.
   None of them has a liveness proof.
 
@@ -100,7 +105,7 @@ Not proven, or left to the caller:
 zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>] > p.hex
 zapp-liveness serve <history.bin> <addr:port> --blocks <dir>                GET /live/<at|tip>/<txid>/<vout>, GET /tip
 # verifier: YOUR question, then the proof (the core receipt is verified by the core verifier's library)
-zapp-liveness [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>]' <receipt>
+zapp-liveness [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]' <receipt>
 ```
 
 In the C ABI (`zapp_liveness_verify`, `zapps/liveness/ffi/include/zapp_liveness.h`) and WASM (`verifyLiveness` in
@@ -166,7 +171,7 @@ receipts being zero-knowledge, which RISC Zero states for its proof system; that
 - under policy 1, the nullifier, which links every proof made for the same coin in the same context;
 - timing, and whatever the network layer reveals.
 
-The prover sees everything, so the coin's owner must prove on their own hardware. Under policy 0, the statement says
+The prover sees everything, so the coin's holder must prove on their own hardware. Under policy 0, the statement says
 nothing about who holds the coin.
 
 **Cycles** (execute mode, r0vm 3.1.0, 15.11.2026; real inputs: the 1..200 receipt, Hal's coin):
