@@ -123,11 +123,28 @@ and that run's `history.bin` (`zapps/liveness/vectors/`), 15.11.2026; all of it 
 | suite | result |
 |---|---|
 | libzync unit tests (`liveness::tests`) | 2/2 |
-| zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, every bit flipped, a dev-mode and a tampered receipt | 8/8 |
+| zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, a dev-mode and a tampered receipt, `created=` / `coinbase=`, a re-created outpoint, one spelling per question, the 0x05 undo leaf, regtest above block 200, every bit flipped | 12/12 |
 | `zapp-liveness serve` `/live` route | 1/1 |
-| CLI and producer, `vectors/run.sh` (with 3 chain-identity cases: a node that agrees, one that names another block, an --expect it contradicts) | 26/26 |
-| C ABI, `ffi/test_liveness.c` | 9/9 |
-| WASM, `wasm/test-liveness.mjs` | 13/13 |
+| CLI and producer, `vectors/run.sh` | 31/31 |
+| C ABI, `ffi/test_liveness.c` | 12/12 |
+| WASM, `wasm/test-liveness.mjs` | 16/16 (and the frame unit test, 1/1) |
+| `zapps/common` | 6/6 |
+
+I ran these on hazync-coord on 15.11.2026. Single-bit flips, each refused by the proof check alone: 18,904 on the five
+mainnet proofs, 27,760 on five 0x05 undo-leaf openings, 20,840 on six regtest proofs, and every bit of the two
+synthetic re-created-outpoint proofs.
+
+Beyond mainnet 1..200, three more sets of data:
+
+- **The 0x05 undo leaf** on real data: the mainnet 1..200 run of a development image with the undo commitment
+  (`vectors/undo_dev_1_200_*`), from hazync-coord, 14.11.2026. Its receipts are dev-mode, so the test takes the
+  host's chain state, not a verified receipt. A real v0.26.0 (`46666b6f`) proof with its history waits on the
+  board's first run.
+- **Above block 200:** the regtest base chain of the consensus rig, 0..232, Core 28.0 with
+  `-testactivationheight=bip34@110` (`vectors/regtest_*`), the proofs written by `zapp-liveness prove --bitcoin-cli`
+  against a copy of that node. It includes coins spent at 200 and 201, openings at 200 and 220, and two
+  **BIP30-tracked coins** (flag bit 1), which mainnet 1..200 does not have. These are execute-mode states too.
+- **A re-created outpoint:** synthetic, as above (§5).
 
 The real answers: block 9's coinbase (`0437cd7f…:0`) is UNSPENT after 169 and SPENT at 170 by transaction 1 input 0.
 The first payment's 10 BTC to Hal Finney (`f4184fc5…:0`) is UNSPENT at 200. Its 40 BTC change (`…:1`) is unspent
@@ -149,48 +166,51 @@ with an expected tip. The lineage is now the last chunk in both frames (PR #734,
 ## 8. Privacy variant (experiment, `experimental/libzync-bench/liveness-anon`)
 
 **Statement:** "I know a coin unspent at the core tip, worth at least X sat, whose script satisfies a policy."
-It is a small zyncAPP guest. It verifies the core receipt in the zkVM (`env::verify`) and runs the same coin check on
-private inputs. It commits the core statement, X, the policy and a context tag, never the coin.
+It is a small zyncAPP guest. It verifies the core receipt in the zkVM (`env::verify`), checks the core statement
+against the network's pinned genesis anchor, and runs the same coin check on private inputs. It commits the core
+statement, X, the policy (with the set's root and depth) and a context tag, never the coin.
 
-- **Policy 0, script set:** SHA-256(script) is in a Merkle tree whose root R is public, so R can commit "one of these
-  scripts". There is no ownership and no nullifier: anyone who knows such a coin can prove it, as often as they like.
-- **Policy 1, key:** the coin is P2TR, and the prover knows the secret of its output key (x(sk·G) equals the key in
-  the script). The guest commits `nullifier = SHA-256("lzlv-anon/nullifier" ‖ context ‖ sk ‖ txid ‖ vout)`: one per
-  coin and context. A gossip layer can then allow one announcement per nullifier. Without sk, the nullifier cannot be
-  matched to a coin by trying every outpoint.
+- **Policy 0, script set:** the script is a leaf of a Merkle tree whose root R and depth are public, so R can commit
+  "one of these scripts". Leaves are SHA-256(0x00 ‖ length ‖ script) and nodes SHA-256(0x01 ‖ L ‖ R), and the path
+  must be exactly the committed depth. My first version hashed the bare script and let the path be any length, so a
+  coin paying the 65-byte script 0x01 ‖ L ‖ R could stand in for an inner node (review, 15.11.2026). There is no
+  ownership and no nullifier: anyone who knows such a coin can prove it, as often as they like.
+- **Policy 1, key:** the coin is P2TR, and the prover knows the secret d of its output key (x(d·G) equals the key in
+  the script). An x-only key is met by d and n − d alike, so the guest first takes the one whose point has even Y
+  (as BIP340 does), then commits `nullifier = SHA-256("lzlv-anon/nullifier" ‖ context ‖ d_even ‖ txid ‖ vout)`: one
+  per coin and context. My first version hashed d itself, which gave two nullifiers per coin. Without the secret, the
+  nullifier cannot be matched to a coin by trying every outpoint.
 
-**What it hides:** which coin, its exact amount, its script or key and its position. This relies on RISC Zero
-receipts being zero-knowledge, which RISC Zero states for its proof system; that was not checked here.
+**What the verifier of such a receipt must check,** because the guest cannot: `core_id` is a core image it trusts
+(an allow-list) and `lineage` is that image's; `cum_work` reaches the network's minimum and `tip_hash` is the
+network's block at `height` (from a source it trusts); `max_time` is not in the future; X, the policy, R and its
+depth are the ones it asked for; and the `context` is its own, fixed in advance. A context the prover chooses makes
+the nullifier worthless.
+
+**What it hides:** which coin, its exact amount, its script or key, and its position. This relies on RISC Zero
+receipts being zero-knowledge, which RISC Zero states for its proof system; I have not checked that.
 
 **What it does not hide:**
 
 - that some coin worth at least X, meeting the policy, existed unspent at that tip;
-- the core tip and image, X, R and the context;
-- the anonymity set, which is every unspent coin worth at least X that meets the policy. A small set R, or a high X,
-  can leave one candidate;
-- under policy 1, the nullifier, which links every proof made for the same coin in the same context;
+- the core tip and image, X, R, the depth and the context;
+- the anonymity set: every unspent coin worth at least X that meets the policy. A small R or a high X can leave one
+  candidate;
+- **the execution length.** The cycle count grows with the script's length and with the coin's log-path length, and
+  the path length says which tree of the coin log holds the coin: a coarse range of its birth order. I did not pad
+  either, so assume a receipt leaks them until both are padded to fixed maxima;
+- under policy 1, the nullifier. It links every proof for the same coin in the same context, and it is the same at
+  every tip, so an observer sees the set of coins it could be shrink as coins are spent, and sees when it stops
+  appearing;
 - timing, and whatever the network layer reveals.
 
-The prover sees everything, so the coin's holder must prove on their own hardware. Under policy 0, the statement says
-nothing about who holds the coin.
+**Who can use policy 1.** The guest needs the raw tweaked secret as input. A hardware signer never releases it, and a
+MuSig2 or FROST key has no single secret, so policy 1 as built excludes both. Lightning funding outputs are
+multi-party (2-of-2) keys, so it does not serve Lightning gossip as it stands; that would need another design (a signature checked
+in the guest, and a nullifier that does not come from a single secret), which I have not built. The prover sees every input, so the coin's holder must prove on
+their own hardware. Under policy 0 the statement says nothing about who holds the coin.
 
-**Cycles** (execute mode, r0vm 3.1.0, 15.11.2026; real inputs: the 1..200 receipt, Hal's coin):
-
-| stage | cycles |
-|---|---|
-| reading the inputs (the 2,068-byte core journal, the coin, the paths; risc0 serde reads each byte as a word) | 291,067 (set of 1) – 383,702 (set of 2^20) |
-| the core statement (`env::verify` call, journal decode, `check_core_statement`) | 38,473 |
-| the coin: its leaf, its log path (6 levels at block 200), value ≥ X | 8,250 |
-| policy 0, set membership, 2^0 / 2^10 / 2^20 scripts | 2,434 / 15,078 / 27,693 |
-| **policy 0 in all**, set of 1 / 2^10 / 2^20 | **367,102 / 426,220 / 485,145** (one segment, 2^19 / 2^19 / 2^20 after padding) |
-| policy 1's own work, measured alone: sk·G (risc0's accelerated k256), the nullifier | 112,155 |
-
-Refusals executed: min_value above the coin's amount, and a script not in the set (both panic in the guest).
-Policy 1 was not run end to end on real data: no P2TR coin exists in blocks 1..200, and the key of a real coin is
-not ours. Its cost is the set path without the set stage plus the 112,155 cycles above. Reading the inputs dominates;
-reading the journal as raw words (`env::read_slice`) is the obvious next step and has not been measured. Not counted:
-resolving the core receipt (the assumption) at proving time, which is one fixed recursion step per zyncAPP receipt.
-Proving time was not measured (no GPU run). Raw output: `experimental/libzync-bench/liveness-anon/RESULT.txt`.
+CYCLES_PLACEHOLDER
 
 ## 9. Open
 
