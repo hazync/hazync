@@ -8,7 +8,7 @@
 //!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
 //!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
 //!   zyncapp headers-prove <headers file> <out receipt> [--after <previous headers receipt>] [--elf <guest>] [--execute]
-//!   zyncapp headers-mmr-path <headers file from 0> <height> [--tip <height>]   (the MMR path for swiftsync-verify headers --path)
+//!   zyncapp headers-mmr-path <headers file from 0> <height> [--tip <height>]   (the MMR path for zapp-headers --path)
 //!   zyncapp id
 //!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
 //!
@@ -196,7 +196,7 @@ fn main() {
             // succinct receipt. Without --after the file must start at genesis (height 0) and the run starts from the
             // empty state; with --after <receipt> the run starts from the exact state that receipt ended in, and takes
             // the file's headers above it, so new headers are a short run chained to the last one.
-            // --execute: execute only (cycles, no proof). Verify with `swiftsync-verify headers <receipt>...`.
+            // --execute: execute only (cycles, no proof). Verify with `zapp-headers <receipt>...`.
             // --elf <file>: prove with this guest ELF (the published one, reproduce/LIBZYNC_IDS) instead of the embedded
             // one, so a GPU box builds the host with RISC0_SKIP_BUILD=1 and needs no guest toolchain; its image id is printed.
             let elf: Vec<u8> = match a.iter().position(|x| x == "--elf").and_then(|i| a.get(i + 1)) {
@@ -205,7 +205,7 @@ fn main() {
             };
             if elf.is_empty() { die("no headers guest: built with RISC0_SKIP_BUILD, so give --elf <zyncapp-headers.bin>"); }
             let elf_id = risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}")));
-            use swiftsync_verify::headers::HeaderState;
+            use zapp_headers::HeaderState;
             let lines: Vec<(i64, Vec<u8>)> = std::fs::read_to_string(&a[1]).unwrap_or_else(|e| die(&e.to_string())).lines()
                 .filter(|l| !l.trim().is_empty()).map(|l| {
                     let mut f = l.split_whitespace();
@@ -230,16 +230,16 @@ fn main() {
                 if *h != st.height + 1 + k as i64 { die(&format!("the file is not consecutive from {}: found {h}", st.height + 1)); }
             }
             let words: Vec<u32> = run.iter().flat_map(|(_, h)| h.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>()).collect();
-            // the MMR the guest must end with, built natively by the same code (swiftsync_verify::mmr = the guest's
+            // the MMR the guest must end with, built natively by the same code (zapp_headers::mmr = the guest's
             // src/mmr.rs): a guest that disagrees is refused before anything is written
             let mut want_peaks = st.mmr_peaks.clone();
             for (k, (_, h)) in run.iter().enumerate() {
                 use sha2::Digest;
-                swiftsync_verify::mmr::append(&mut want_peaks, (st.height + 1) as u64 + k as u64, &sha2::Sha256::digest(sha2::Sha256::digest(h)).into());
+                zapp_headers::mmr::append(&mut want_peaks, (st.height + 1) as u64 + k as u64, &sha2::Sha256::digest(sha2::Sha256::digest(h)).into());
             }
             let mmr_check = |out: &HeaderState| if out.mmr_peaks != want_peaks {
                 die(&format!("the guest's MMR ({} peaks, root {}) is not the native one (root {})", out.mmr_peaks.len(), out.mmr_root_hex(),
-                             hex(&swiftsync_verify::mmr::root(&want_peaks))));
+                             hex(&zapp_headers::mmr::root(&want_peaks))));
             };
             let env = ExecutorEnv::builder().write(&st).unwrap().write(&(run.len() as u32)).unwrap().write_slice(&words).build().unwrap();
             let t = std::time::Instant::now();
@@ -264,7 +264,7 @@ fn main() {
             // The MMR inclusion path of block <height> in the header chain proved to the file's last header (or to
             // --tip <height>, the proven tip, when the file goes further): the file of "height hex80" lines must start
             // at genesis and be consecutive. Prints the path to stdout, one 64-hex hash per line, lowest first (raw byte
-            // order; nothing for a one-block peak), the form `swiftsync-verify headers --include <height>:<hash>
+            // order; nothing for a one-block peak), the form `zapp-headers --include <height>:<hash>
             // --path <file>` reads; the block, the leaf count and the MMR root go to stderr.
             let want: u64 = a[2].parse().unwrap_or_else(|_| die("headers-mmr-path <headers file> <height> [--tip <height>]"));
             let tip: Option<i64> = a.iter().position(|x| x == "--tip").and_then(|i| a.get(i + 1))
@@ -283,12 +283,12 @@ fn main() {
                 hashes.push(sha2::Sha256::digest(sha2::Sha256::digest(&b)).into());
             }
             if let Some(t) = tip { if hashes.len() as i64 != t + 1 { die(&format!("the file ends at {}, below --tip {t}", hashes.len() as i64 - 1)); } }
-            let path = swiftsync_verify::mmr::path(&hashes, want)
+            let path = zapp_headers::mmr::path(&hashes, want)
                 .unwrap_or_else(|| die(&format!("block {want} is not in 0..={}", hashes.len() as i64 - 1)));
             for p in &path { println!("{}", hex(p)); }
             let disp: String = hashes[want as usize].iter().rev().map(|x| format!("{x:02x}")).collect();
             eprintln!("MMR_PATH block {want} {disp}: {} hashes; {} leaves (tip {}), MMR root {}", path.len(), hashes.len(),
-                      hashes.len() - 1, hex(&swiftsync_verify::mmr::root(&swiftsync_verify::mmr::peaks_of(&hashes))));
+                      hashes.len() - 1, hex(&zapp_headers::mmr::root(&zapp_headers::mmr::peaks_of(&hashes))));
         }
         Some("bench-hash") => {
             // E1 calibration, execute mode (no proof): cycles per node hash for both hash shapes.

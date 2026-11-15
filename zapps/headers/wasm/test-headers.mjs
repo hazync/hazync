@@ -1,13 +1,16 @@
-// verifyHeaders (the header-chain zyncAPP) in the WebAssembly verifier, on the same real chained receipts as
-// test_headers_verify.sh, and its MMR inclusion cases. Usage: node test_headers_wasm.mjs <swiftsync-verify.js> <swiftsync_verify_wasm.wasm>
+// verifyHeaders in the header-chain zAPP's own WASM module (zapp-headers.js; until 15.11.2026 in the core verifier's),
+// on the same real chained receipts as ../test_headers_verify.sh, and its MMR inclusion cases. Usage: node
+// test-headers.mjs [<zapp-headers.js> <zapp_headers_wasm.wasm>] (default: this directory's glue and its build).
+// The receipts and paths are the experiment's (experimental/libzync-bench/headers).
 // HEADERS_IMAGE=<hex>: verify against this image id instead of the built-in one (receipts proved by a local build).
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-const [js, wasm] = process.argv.slice(2);
-const here = dirname(fileURLToPath(import.meta.url));
-const { loadVerifier } = await import(pathToFileURL(resolve(js)).href);
-const v0 = await loadVerifier(readFileSync(wasm));
+const own = dirname(fileURLToPath(import.meta.url));
+const [js = `${own}/zapp-headers.js`, wasm = `${own}/target/wasm32-unknown-unknown/release/zapp_headers_wasm.wasm`] = process.argv.slice(2);
+const here = resolve(own, '../../../experimental/libzync-bench/headers');
+const { loadHeaders } = await import(pathToFileURL(resolve(js)).href);
+const v0 = await loadHeaders(readFileSync(wasm));
 const imageHex = process.env.HEADERS_IMAGE || '';
 const v = { verifyHeaders: (args) => v0.verifyHeaders({ imageHex, ...args }) };
 const a = new Uint8Array(readFileSync(`${here}/hdr_0_100.rcpt`)), b = new Uint8Array(readFileSync(`${here}/hdr_101_200.rcpt`));
