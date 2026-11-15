@@ -93,7 +93,7 @@ fn run(a: Vec<String>) -> ! {
     if id.needs_lookup() {
         let pre = zapp_headers::verify_headers(&refs, &image, now, None, None);
         if let Some(st) = pre.state.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
-            let (x, c) = zapp_common::expect_at(&id, "mainnet", st.height as u32, &st.work);
+            let (x, c) = zapp_common::expect_at(&id, "mainnet", st.height as u32, Some(&st.work));
             expect = x;
             extra = c;
         }
