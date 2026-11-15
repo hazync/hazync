@@ -263,7 +263,7 @@ in the hints zAPP).
   is not the one the claimed spends imply"); a flipped coin state and a flipped undo hash (the block forest); a flipped
   nonce; a dropped and a swapped transaction (block 170); a core lineage, a pre-undo core image, another core id (no
   receipt to resolve), an assumevalid core; between runs, a flipped state byte and another image id for the previous
-  run; with T = 10,000 for H = 1,999, a flipped leaf above H. 15 of 15 refused.
+  run; with T = 10,000 for H = 1,999, a flipped leaf above H. 16 of 16 refused.
 - Unit tests of `libzync::utreexo_roots` (4).
 - **Real CPU proofs** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, the shared box; the core receipts are
   the published host's `46666b6f` proofs of mainnet 1..3 that the hints zAPP used): H = 3 in one run 149.5 s (225,514
