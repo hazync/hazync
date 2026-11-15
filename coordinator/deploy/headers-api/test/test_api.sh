@@ -1,7 +1,7 @@
 #!/bin/bash
 # hazync-headers-api against a fake bitcoind (fake-bitcoind-rpc) serving REAL mainnet headers 0..200 and real
 # transactions, with the follower's `published` file moved by hand. Usage: test_api.sh
-# Optional end to end: HEADERS_RECEIPTS=<0..100 rcpt>:<101..200 rcpt> HEADERS_IMAGE=<hex> VERIFY=<swiftsync-verify>
+# Optional end to end: HEADERS_RECEIPTS=<0..100 rcpt>:<101..200 rcpt> HEADERS_IMAGE=<hex> VERIFY=<zapp-headers>
 # also verifies the service's answers with the real verifier against real receipts of the MMR image.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); API=$HERE/../hazync-headers-api
@@ -135,17 +135,17 @@ if [ -n "${HEADERS_RECEIPTS:-}" ]; then
   # end to end: the service's answers, checked by the real verifier against real receipts of the MMR image
   IFS=: read -r R1 R2 <<< "$HEADERS_RECEIPTS"
   get "$B/path?h=37&tip=200" >/dev/null; js "'\n'.join(d['path'])" > "$W/p37"
-  "$VERIFY" headers --image "$HEADERS_IMAGE" --include 37:"$(hashat 37)" --path "$W/p37" "$R1" "$R2" > "$W/v1" 2>&1
+  "$VERIFY" --image "$HEADERS_IMAGE" --include 37:"$(hashat 37)" --path "$W/p37" "$R1" "$R2" > "$W/v1" 2>&1
   t "e2e: block 37 by the service's path: DEMO (valid, below minimum work)" 2 $?
-  "$VERIFY" headers --image "$HEADERS_IMAGE" --include 38:"$(hashat 37)" --path "$W/p37" "$R1" "$R2" > /dev/null 2>&1
+  "$VERIFY" --image "$HEADERS_IMAGE" --include 38:"$(hashat 37)" --path "$W/p37" "$R1" "$R2" > /dev/null 2>&1
   t "e2e: the same path at another height: FAIL" 1 $?
   python3 -c "import json;print('\n'.join(json.load(open('$W/tx.json'))['path']))" > "$W/p170"
-  "$VERIFY" headers --image "$HEADERS_IMAGE" --include 170:"$(hashat 170)" --path "$W/p170" --tx "$TX:$W/tx.json" "$R1" "$R2" > "$W/v2" 2>&1
+  "$VERIFY" --image "$HEADERS_IMAGE" --include 170:"$(hashat 170)" --path "$W/p170" --tx "$TX:$W/tx.json" "$R1" "$R2" > "$W/v2" 2>&1
   t "e2e: the service's /tx answer for the asked txid: DEMO" 2 $?
   t "  and the verdict line names the asked txid" 1 "$(grep -c "INCLUDED: block 170 $(hashat 170) .*with transaction $TX in it" "$W/v2")"
   # a lying service: asked about $TX, it answers with its (valid) answer for block 170's coinbase
   B=http://127.0.0.1:$AP2; get "$B/tx?txid=$CB170" >/dev/null; cp "$W/body" "$W/cb.json"
-  "$VERIFY" headers --image "$HEADERS_IMAGE" --include 170:"$(hashat 170)" --path "$W/p170" --tx "$TX:$W/cb.json" "$R1" "$R2" > "$W/v3" 2>&1
+  "$VERIFY" --image "$HEADERS_IMAGE" --include 170:"$(hashat 170)" --path "$W/p170" --tx "$TX:$W/cb.json" "$R1" "$R2" > "$W/v3" 2>&1
   t "e2e: the answer for ANOTHER transaction (the coinbase) under the asked txid: FAIL" 1 $?
   t "  refused as another transaction" 1 "$(grep -c 'not the transaction asked about' "$W/v3")"
 fi

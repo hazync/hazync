@@ -5,8 +5,8 @@ publishes (`../headers/`), so the Block check on hazync.org/headers/ can show th
 transaction in it, is on the proven chain from genesis.
 
 **It is untrusted by design.** The browser verifies the published receipts itself, then checks every answer against
-the MMR peaks those receipts commit to (`verifyHeaders({..., include})`, the same checks as `swiftsync-verify headers
---include ... --tx <txid>:<answer.json>`; swiftsync-verify `headers.rs`):
+the MMR peaks those receipts commit to (`verifyHeaders({..., include})`, the same checks as `zapp-headers
+--include ... --tx <txid>:<answer.json>`; the header-chain zAPP, `zapps/headers`):
 
 - **`/path`**: the hash the READER asked about (not the answer's `hash`), at the height asked, with the answer's
   `path`, must climb to the committed peak for that height; the path's length is fixed by the height and the tip.
@@ -32,7 +32,7 @@ transaction look included. It only saves the browser from holding a million bloc
 `tip` defaults to the published tip; any earlier tip works too (a page that verified an older `runs.json` asks for
 its own tip). Hashes are reversed hex as explorers print them, `path` entries raw-order hex (as `zyncapp
 headers-mmr-path` prints them), branches reversed hex (as Electrum's `blockchain.transaction.get_merkle`). The `/tx`
-answer is exactly what `swiftsync-verify headers --tx <txid>:<file>` and `include.tx` (with `include.txid`, the
+answer is exactly what `zapp-headers --tx <txid>:<file>` and `include.tx` (with `include.txid`, the
 transaction asked about) in the browser read.
 
 The MMR is at the tip the follower **published** (`$HEADERS_DIR/published`), never the node's newest block, so a path
@@ -123,6 +123,6 @@ The page's CSP is `connect-src 'self'`, so the service must be same-origin: **`h
 - a reorg during the fetch (an old-branch hash once, with a real-looking header): seen by the header linkage, the
   range fetched again, block 37's path (over the reorged 120) equal to the reference.
 
-With `HEADERS_RECEIPTS=<0..100>:<101..200> HEADERS_IMAGE=<id> VERIFY=<swiftsync-verify>` it also verifies the
+With `HEADERS_RECEIPTS=<0..100>:<101..200> HEADERS_IMAGE=<id> VERIFY=<zapp-headers>` it also verifies the
 service's answers with the real verifier against receipts of the MMR image, with `--tx <the asked txid>:<answer>`,
 and refuses the service's answer for block 170's coinbase given as the answer for the asked transaction.

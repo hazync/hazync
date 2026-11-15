@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# The header-chain verifier (swiftsync-verify headers) on two REAL chained receipts (CPU-proved, 11-10: genesis..100,
+# The header-chain zAPP's CLI (zapp-headers; was swiftsync-verify headers) on two REAL chained receipts (CPU-proved, 11-10: genesis..100,
 # then 101..200 started from the first one's end state) and every way of misusing them, and the MMR inclusion checks
-# (block 37's path to the tip 200, mmr_path_37_tip200.txt; transaction f4184fc5... of block 170 by tx/tx_170_1.json). Usage: test_headers_verify.sh <swiftsync-verify>
+# (block 37's path to the tip 200, mmr_path_37_tip200.txt; transaction f4184fc5... of block 170 by tx/tx_170_1.json). Usage: test_headers_verify.sh <zapp-headers>
+# The receipts and paths are the experiment's (experimental/libzync-bench/headers), where the prover writes them.
 # HEADERS_IMAGE=<hex>: verify against this image id instead of the built-in one (receipts proved by a local build).
 set -u
-V=${1:?swiftsync-verify binary}; D=$(cd "$(dirname "$0")" && pwd)
+V=${1:?zapp-headers binary}; D=$(cd "$(dirname "$0")/../../experimental/libzync-bench/headers" && pwd)
 IMG=(); [ -n "${HEADERS_IMAGE:-}" ] && IMG=(--image "$HEADERS_IMAGE")
 H=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320   # mainnet block 200
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 python3 -c "import sys;b=bytearray(open(sys.argv[1],'rb').read());b[len(b)//2]^=1;open(sys.argv[2],'wb').write(b)" "$D/hdr_101_200.rcpt" "$T/bad.rcpt"
 fails=0
-t() { local want=$1 name=$2; shift 2; "$V" headers "${IMG[@]}" "$@" >"$T/out" 2>&1; local rc=$?
+t() { local want=$1 name=$2; shift 2; "$V" "${IMG[@]}" "$@" >"$T/out" 2>&1; local rc=$?
       if [ "$rc" = "$want" ]; then echo "ok   $name (exit $rc)"; else echo "FAIL $name: exit $rc, want $want"; tail -3 "$T/out"; fails=$((fails+1)); fi; }
 t 2 "genesis..100 + 101..200, tip expected: DEMO (below minimum work)" --expect 200:$H "$D/hdr_0_100.rcpt" "$D/hdr_101_200.rcpt"
 t 2 "genesis..100 alone" "$D/hdr_0_100.rcpt"

@@ -15,7 +15,18 @@
 //! with the block's 80-byte header, the raw transaction and its merkle branch, and the block's raw coinbase and its
 //! branch (which pin the tree's depth), "is transaction T in a block on this chain" ([`verify_tx_in_header`]). The MMR root ([`HeaderState::mmr_root`]) is derived from the committed peaks, not
 //! stored: it is a short name for the peaks, to compare or publish.
-use crate::{receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
+//!
+//! A zAPP module of its own (docs/libzync/ZYNCAPPS.md §9): it uses the core verifier `swiftsync_verify` as a library
+//! (receipt checks, images, work) and is not part of it. Until 15.11.2026 this was `swiftsync_verify::headers` and the
+//! CLI's `swiftsync-verify headers`, the WASM's `verifyHeaders`; the checks are unchanged.
+
+/// The header-chain zyncAPP's Merkle Mountain Range of block hashes: the guest's own file (one source for the guest,
+/// this verifier and the zyncapp host's path builder).
+pub mod mmr {
+    include!("../../../prover/zyncapps/methods/headers/src/mmr.rs");
+}
+extern crate alloc;
+use swiftsync_verify::{receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
 use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -400,6 +411,15 @@ fn hex32(s: &str) -> Option<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The header-chain zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-headers` line).
+    #[test]
+    fn headers_image_matches_the_published_id() {
+        let f = include_str!("../../../reproduce/LIBZYNC_IDS");
+        let line = f.lines().find(|l| l.starts_with("zyncapp-headers mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-headers line");
+        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
+        assert_eq!(id, HEADERS_IMAGE_ID, "HEADERS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
+    }
+
     use crate::mmr;
     /// The empty state's digest must equal what the guest computes over the same serde words: pinned here so a
     /// change to HeaderState's layout (which would break every chain of runs) fails a test.
@@ -426,7 +446,7 @@ mod tests {
     fn unhex(x: &str) -> Vec<u8> { (0..x.len()).step_by(2).map(|i| u8::from_str_radix(&x[i..i + 2], 16).unwrap()).collect() }
     /// Mainnet blocks 0..=200 (the fixture the guest's receipts were proved on).
     fn mainnet_hashes() -> Vec<[u8; 32]> {
-        include_str!("../../experimental/libzync-bench/headers/h0_200.txt").lines().filter(|l| !l.trim().is_empty())
+        include_str!("../../../experimental/libzync-bench/headers/h0_200.txt").lines().filter(|l| !l.trim().is_empty())
             .map(|l| dsha(&unhex(l.split_whitespace().nth(1).unwrap()))).collect()
     }
     fn state_of(hashes: &[[u8; 32]]) -> HeaderState {
@@ -531,16 +551,16 @@ mod tests {
 
     fn fixture(name: &str) -> serde_json::Value {
         let t = match name {
-            "170_0" => include_str!("../../experimental/libzync-bench/headers/tx/tx_170_0.json"),
-            "170_1" => include_str!("../../experimental/libzync-bench/headers/tx/tx_170_1.json"),
-            "100003_0" => include_str!("../../experimental/libzync-bench/headers/tx/tx_100003_0.json"),
-            "seg" => include_str!("../../experimental/libzync-bench/headers/tx/tx_seg.json"),
+            "170_0" => include_str!("../../../experimental/libzync-bench/headers/tx/tx_170_0.json"),
+            "170_1" => include_str!("../../../experimental/libzync-bench/headers/tx/tx_170_1.json"),
+            "100003_0" => include_str!("../../../experimental/libzync-bench/headers/tx/tx_100003_0.json"),
+            "seg" => include_str!("../../../experimental/libzync-bench/headers/tx/tx_seg.json"),
             _ => unreachable!(),
         };
         serde_json::from_str(t).unwrap()
     }
     fn block_100002() -> Vec<serde_json::Value> {
-        include_str!("../../experimental/libzync-bench/headers/tx/tx_100002.jsonl").lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        include_str!("../../../experimental/libzync-bench/headers/tx/tx_100002.jsonl").lines().map(|l| serde_json::from_str(l).unwrap()).collect()
     }
     fn bhash(v: &serde_json::Value) -> [u8; 32] { let mut b = hex32(v["hash"].as_str().unwrap()).unwrap(); b.reverse(); b }
     /// The fixture's own transaction asked about (fixtures are a trusted node's answers; the asked txid is its "txid")
@@ -625,13 +645,13 @@ mod tests {
         assert!(Inclusion::parse(1, v["hash"].as_str().unwrap(), &["zz"], None).is_err());
     }
 
-    const HDR_0_100: &[u8] = include_bytes!("../../experimental/libzync-bench/headers/hdr_0_100.rcpt");
-    const HDR_101_200: &[u8] = include_bytes!("../../experimental/libzync-bench/headers/hdr_101_200.rcpt");
+    const HDR_0_100: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_0_100.rcpt");
+    const HDR_101_200: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_101_200.rcpt");
     const T170: &str = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"; // block 170, Satoshi to Hal Finney
     fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
     fn lines(t: &str) -> Vec<&str> { t.lines().map(str::trim).filter(|l| !l.is_empty()).collect() }
     fn include_170(asked: &str, answer: &serde_json::Value) -> Result<Inclusion, String> {
-        let p = lines(include_str!("../../experimental/libzync-bench/headers/mmr_path_170_tip200.txt"));
+        let p = lines(include_str!("../../../experimental/libzync-bench/headers/mmr_path_170_tip200.txt"));
         Inclusion::parse(170, answer["hash"].as_str().unwrap(), &p, Some(TxInclusion::from_json(asked, answer)?))
     }
 
