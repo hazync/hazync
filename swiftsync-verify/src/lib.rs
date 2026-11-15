@@ -220,6 +220,9 @@ pub struct ChainState {
 
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
 pub mod headers;
+/// The statement-of-balance zyncAPP (docs/libzync/STATEMENT_ZAPP.md).
+#[cfg(feature = "statement")]
+pub mod statement;
 
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");

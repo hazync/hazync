@@ -29,6 +29,11 @@
 //! `--trie <fact.json>` (repeat): a counting-trie fact at the tip (coin unspent / spent by / absent, a script's balance,
 //! its complete history), as `zync-path trie` writes it; checked against the verified state's trie root.
 //!
+//! `--statement <statement.json>` (repeat): a statement of balance (docs/libzync/STATEMENT_ZAPP.md): the scripts' balance
+//! facts at the tip and a BIP-322 signature by each script over the statement. `--purpose <text>` and `--nonce <text>`:
+//! the challenge you gave the holder; a statement must carry exactly these. Without both, the statement can be an old
+//! one shown again, and the verdict is at best DEMO.
+//!
 //! A proof whose chainwork is below Core's `nMinimumChainWork` for the network is at best DEMO (exit 2): a valid chain
 //! from genesis, but a low-work fork costs little to mine, so it is no evidence of the network's chain.
 //!
@@ -41,7 +46,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... [--statement <statement.json> [--purpose <text> --nonce <text>]]... <receipt|bundle.sspf>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
@@ -77,6 +82,9 @@ fn main() {
     let mut coin_facts: Vec<String> = Vec::new();
     let mut journeys: Vec<String> = Vec::new();
     let mut n_facts = 0usize;
+    let mut statements: Vec<String> = Vec::new();
+    let (mut purpose, mut nonce): (Option<String>, Option<String>) = (None, None);
+    let mut unchallenged = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -92,6 +100,9 @@ fn main() {
             "--mempool-url" => mempool = Some(args.next().unwrap_or_else(|| usage())),
             "--coin" => coin_facts.push(args.next().unwrap_or_else(|| usage())),
             "--journey" => journeys.push(args.next().unwrap_or_else(|| usage())),
+            "--statement" => statements.push(args.next().unwrap_or_else(|| usage())),
+            "--purpose" => purpose = Some(args.next().unwrap_or_else(|| usage())),
+            "--nonce" => nonce = Some(args.next().unwrap_or_else(|| usage())),
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
                 let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>[:<64 hex digits: the predecessor's RISC Zero verifier parameters, for a cross-version handover>]")) };
@@ -223,14 +234,27 @@ fn main() {
         let receipt_failed = rep.verdict == Verdict::Fail;
         // the block-leaf format by height (docs/libzync/UNDO.md): facts opening a block at or above it carry its undo hash
         let uf = rep.undo_from;
-        n_facts = coin_facts.len() + journeys.len() + trie_facts.len();
+        n_facts = coin_facts.len() + journeys.len() + trie_facts.len() + statements.len();
         if receipt_failed {
-            for p in coin_facts.iter().chain(journeys.iter()).chain(trie_facts.iter()) {
+            for p in coin_facts.iter().chain(journeys.iter()).chain(trie_facts.iter()).chain(statements.iter()) {
                 rep.checks.push((false, format!("{}: NOT checked: the receipt did not verify", esc(p))));
             }
             coin_facts.clear();
             journeys.clear();
             trie_facts.clear();
+            statements.clear();
+        }
+        let ch = swiftsync_verify::statement::Challenge { purpose: purpose.as_deref(), nonce: nonce.as_deref() };
+        for p in &statements {
+            let f: Result<swiftsync_verify::statement::Statement, String> = std::fs::read(p).map_err(|e| e.to_string())
+                .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
+            match f.and_then(|f| swiftsync_verify::statement::check_statement(cs, uf, &f, &ch)) {
+                Ok(c) => {
+                    unchallenged |= !c.challenged;
+                    rep.checks.push((true, format!("--statement {}: {}", esc(p), c.line)));
+                }
+                Err(e) => rep.checks.push((false, format!("--statement {}: {e}", esc(p)))),
+            }
         }
         for p in &trie_facts {
             let f: Result<swiftsync_verify::TrieFact, String> = std::fs::read(p).map_err(|e| e.to_string())
@@ -292,7 +316,8 @@ fn main() {
     // stale branch, and a transaction "in block h" of it may have been reorged out. So facts need step 7 for OK
     // (adversarial review, 11-03).
     let facts_unanchored = rep.verdict == Verdict::Ok && !tip_checked && n_facts > 0;
-    if facts_unanchored {
+    let statement_unchallenged = rep.verdict == Verdict::Ok && !facts_unanchored && unchallenged;
+    if facts_unanchored || statement_unchallenged {
         rep.verdict = Verdict::Demo;
     }
     let step7 = if tip_checked { String::new() } else {
@@ -304,6 +329,7 @@ fn main() {
     let avs = if av { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" };
     let what = "the chain and its coin log";
     match rep.verdict {
+        Verdict::Demo if statement_unchallenged => println!("SWIFTSYNC_VERIFY_DEMO: the chain and the statement check, but the statement was not compared with your challenge (--purpose and --nonce): it may be an old statement shown again"),
         Verdict::Demo if facts_unanchored => println!("SWIFTSYNC_VERIFY_DEMO: the chain and the facts check, but facts need the tip compared with the network (--mempool, --expect or --bitcoin-cli){step7}"),
         Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{step7}"),
         Verdict::Demo if rep.low_work && anchor_given => println!("SWIFTSYNC_VERIFY_DEMO: {what}: FROM THE GIVEN ANCHOR ONLY, and below Core's minimum chainwork or the pinned checkpoint{step7}"),
