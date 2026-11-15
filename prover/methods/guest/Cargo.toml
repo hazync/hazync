@@ -31,10 +31,11 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 # already uses (same version, already in the lock); the Poseidon2 call comes from the platform crate.
 risc0-zkp = { version = "=3.0.6", default-features = false }
 risc0-zkvm-platform = { version = "=2.2.3", default-features = false }
-# hazync#139 middle-path experiment ONLY. Optional so a default build neither compiles it nor
-# changes METHOD_ID. Enable with --features bigint2-ecdsa; see src/bigint2_ecmult.rs.
-risc0-crypto = { version = "0.1.0-rc.1", optional = true }
-# libzync experiment only (batch-ecdsa): direct coprocessor calls for the batch MSM.
+# The field and curve types of the batch signature check and the live-coin hash (batch-ecdsa, swiftsync: in the
+# libzync product profile), and of the hazync#139 bigint2-ecdsa experiment. Pinned exactly, as every other guest
+# dependency (review 11-14: a caret on a pre-release); the lock already held this version, so no id moved for it.
+risc0-crypto = { version = "=0.1.0-rc.1", optional = true }
+# batch-ecdsa (libzync product profile): direct coprocessor calls for the batch MSM.
 risc0-bigint2 = { version = "=1.4.14", optional = true }
 
 [build-dependencies]
@@ -69,9 +70,9 @@ liftx-hint = []
 # the scalar inverse WITHOUT G1 failed to link with `undefined symbol: hazync_scalar_inverse`.
 # They are independent patches (0008 vs 0007) and now have independent features.
 scalar-inv-accel = []
-# libzync EXPERIMENT: defer every libsecp ECDSA verify that a host hint marks valid into ONE batch
-# check per chunk (hinted R, Fiat-Shamir weights, one MSM). Not reviewed; moves METHOD_ID.
-# See src/batch_ecdsa.rs and experimental/libzync-bench/README.md.
+# libzync (product profile): defer every libsecp signature verify that a host hint marks valid into ONE batch
+# check per chunk (hinted R, Fiat-Shamir weights, one MSM). Reviewed in the libzync review rounds and the 11-14
+# soundness review. See src/batch_ecdsa.rs and experimental/libzync-bench/README.md.
 batch-ecdsa = ["dep:risc0-crypto", "dep:risc0-bigint2"]
 # libzync EXPERIMENT: one deserialise + one txid/wtxid hash per transaction per chunk instead of
 # three and two. Same outputs; Core's code untouched; moves METHOD_ID. Pair with HAZYNC_TX_ONCE.

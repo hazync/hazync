@@ -1,8 +1,8 @@
 # libzync: image handover and the block forest
 
-Status: in the frozen core c14 and so in every published image. v0.26.0 (risc0 3.1.0) is the first to pin one: mainnet
-`1ff5a129…`'s `lineage/mainnet_coinlog.rs` pins v0.24.0's `8888d59c…` at block 2000 (same RISC Zero); every other
-`lineage/*.rs` list is empty. The operational runbook, including the cross-RISC-Zero case, is
+Status: in the frozen core c14 and so in every published image. No published image pins a predecessor yet: v0.26.0's
+`lineage/*.rs` lists are all empty (the board re-proves from genesis so that every block carries the undo-data
+commitment, [UNDO.md](UNDO.md)). The machinery is tested in CI on test variants (§8, ../HANDOVER.md §4). The operational runbook, including the cross-RISC-Zero case, is
 [`../HANDOVER.md`](../HANDOVER.md). Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
 `aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
 implementation written from this document.
@@ -47,6 +47,8 @@ An append-only Utreexo forest with one leaf per block, genesis first, so leaf `i
 
 ```
 leaf(hash, height, state) = SHA-256( 0x02 ‖ block hash, internal byte order ‖ height u32 LE ‖ state )   69 bytes
+leaf_u(hash, height, state, undo)
+                          = SHA-256( 0x05 ‖ block hash ‖ height u32 LE ‖ state ‖ undo hash )           101 bytes
 state                     = SHA-256( 0x04 ‖ utxo_leaves u64 LE ‖ utxo_value u64 LE ‖ present utxo_roots,
                                      the highest level first )
 parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                                     as UTREEXO_FORMAT.md §5
@@ -54,6 +56,10 @@ parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                         
 
 - `state` is the coin commitment **after** the block: the `utxo_roots`, `utxo_leaves` and `utxo_value` the block's
   own proof commits. Since version 2 (2026-11-02). The leaf count fixes which roots are present.
+- **Which leaf (since v0.26.0):** `leaf_u`, committing the block's undo hash ([UNDO.md](UNDO.md)), for every block
+  proved by an image with the undo-data commitment; `leaf` for block 0 and for blocks proved by the pre-undo images
+  `8888d59c` / `d4210dae` (`handover_pin::PRE_UNDO_IMAGES`). The proving image of a height comes from the lineage, so a
+  verifier selects the format by height (`handover_pin::leaf_has_undo`).
 - The genesis state holds one leaf, for block 0: `block_roots = [Some(leaf(genesis hash, 0, SHA-256(0x04 ‖ 0 ‖ 0)))]`,
   `block_leaves = 1`.
 - Every aggregate requires `prev.block_leaves == prev.height + 1`, appends `leaf(this block, height, state)` and
@@ -66,10 +72,11 @@ parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                         
 - Trees run largest first: the forest of `n` leaves has a tree of height `h` for each set bit `h` of `n`, the highest
   bit holding the earliest leaves.
 - Height is in the leaf so a path cannot be moved to another position. Tag 0x02 separates it from coin leaves (0x00),
-  interior nodes (0x01), lineage steps (0x03), coin-state digests (0x04) and the BIP30 SMT's leaves (0x10) and nodes
+  interior nodes (0x01), lineage steps (0x03), coin-state digests (0x04), undo-committing block leaves (0x05) and the BIP30 SMT's leaves (0x10) and nodes
   (0x11). The coin log uses its own IVs, not tags.
 
-**Checking a block.** Given a verified state, a height, a block hash, its coin state and a path of sibling hashes, locate the leaf's
+**Checking a block.** Given a verified state, a height, a block hash, its coin state (and, for a `leaf_u` block, its
+undo hash) and a path of sibling hashes, locate the leaf's
 tree, require the path length to equal that tree's height, fold the leaf up the path and compare with `block_roots[h]`.
 This is `block_in_chain` in `swiftsync-verify`. It needs no node and no proving: the path comes from anyone, since the
 root in the proof decides. From the block hash, a Merkle branch against the header reaches any transaction.

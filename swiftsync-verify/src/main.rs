@@ -221,6 +221,8 @@ fn main() {
         // Facts are checked only against a state whose receipt verified: on a failed receipt the journal is the
         // prover's word, so a fact "holding" against it means nothing (review 11-03).
         let receipt_failed = rep.verdict == Verdict::Fail;
+        // the block-leaf format by height (docs/libzync/UNDO.md): facts opening a block at or above it carry its undo hash
+        let uf = rep.undo_from;
         n_facts = coin_facts.len() + journeys.len() + trie_facts.len();
         if receipt_failed {
             for p in coin_facts.iter().chain(journeys.iter()).chain(trie_facts.iter()) {
@@ -233,7 +235,7 @@ fn main() {
         for p in &trie_facts {
             let f: Result<swiftsync_verify::TrieFact, String> = std::fs::read(p).map_err(|e| e.to_string())
                 .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
-            match f.and_then(|f| swiftsync_verify::check_trie_fact(cs, &f)) {
+            match f.and_then(|f| swiftsync_verify::check_trie_fact(cs, uf, &f)) {
                 Ok(line) => rep.checks.push((true, format!("--trie {}: {line}", esc(p)))),
                 Err(e) => rep.checks.push((false, format!("--trie {}: {e}", esc(p)))),
             }
@@ -241,7 +243,7 @@ fn main() {
         for p in &coin_facts {
             let f: Result<swiftsync_verify::CoinFact, String> = std::fs::read(p).map_err(|e| e.to_string())
                 .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
-            match f.and_then(|f| swiftsync_verify::check_coin_fact(cs, &f)) {
+            match f.and_then(|f| swiftsync_verify::check_coin_fact(cs, uf, &f)) {
                 Ok(line) => rep.checks.push((true, format!("--coin {}: {line}", esc(p)))),
                 Err(e) => rep.checks.push((false, format!("--coin {}: {e}", esc(p)))),
             }
@@ -249,7 +251,7 @@ fn main() {
         for p in &journeys {
             let f: Result<swiftsync_verify::CoinJourney, String> = std::fs::read(p).map_err(|e| e.to_string())
                 .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
-            match f.and_then(|f| swiftsync_verify::check_coin_journey(cs, &f)) {
+            match f.and_then(|f| swiftsync_verify::check_coin_journey(cs, uf, &f)) {
                 Ok(line) => rep.checks.push((true, format!("--journey {}: {line}", esc(p)))),
                 Err(e) => rep.checks.push((false, format!("--journey {}: {e}", esc(p)))),
             }
@@ -265,6 +267,12 @@ fn main() {
     // Only a journal that passed: under FAIL its fields are the prover's word (review round 3).
     if let Some(cs) = rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
         println!("  chain: tip {} at height {}, cum_work 0x{}", display(&cs.tip_hash), cs.height, work_hex(&cs.cum_work));
+        // What a consumer reads from the block forest: which blocks' leaves commit their undo data (docs/libzync/UNDO.md).
+        println!("  block forest: {}", match rep.undo_from {
+            swiftsync_verify::pin::NO_UNDO => "no block's leaf commits its undo data (an image before the commitment)".to_string(),
+            1 => "every block's leaf (1 to the tip) commits its undo hash (docs/libzync/UNDO.md)".to_string(),
+            u => format!("leaves commit their undo hash from block {u} (the blocks below were proved by an image without it)"),
+        });
         // Described by the PROVEN profile (it passed: cs.profile == the image's), not by the flags: the published images
         // already are the product build, so without --product a v2 journal was summarised the v1 way ("UTXO set at H:
         // N coins (Utreexo roots)"), its verdict right and its description wrong (stranger test 11-12, ROADMAP O8).

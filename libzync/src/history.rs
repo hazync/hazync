@@ -9,18 +9,24 @@
 //!   ‖ (position u64 ‖ tx u32 ‖ vin u32) × n_flips ‖ leaf 32 × n_appends       all integers little-endian
 //! ```
 //!
+//! Since the undo-data commitment (#729, docs/libzync/UNDO.md): bit 31 of `n_appends` set means the record ends with the
+//! block's undo hash (32 bytes), and the block's leaf is the 0x05 one that commits it. A writer sets it exactly for the
+//! blocks whose leaf has the commitment (the image that proved them, `leaf_has_undo`); a file written before has none.
+//!
 //! A flip is a spend of the coin at `position` by input `vin` of the transaction at block position `tx`: the new leaf
 //! is `spent(original leaf, spender(height, tx, vin))` (COINLOG.md §2).
 //! ```text
 //! ```
 //!
 //! Height 0 is the genesis block with no flips and no appends (its outputs are unspendable). Replaying records 0..=h
-//! gives the coin log after h; the block leaf of h is `block_leaf(hash, h, utxo_state(n, value, roots))` (HANDOVER.md §3).
+//! gives the coin log after h; the block leaf of h is `block_leaf(hash, h, utxo_state(n, value, roots))` (HANDOVER.md §3),
+//! or with an undo hash `undo::block_leaf_undo(hash, h, utxo_state(..), undo)`.
 //! Mainnet's history is ~100 GB (every leaf ever, plus each flip): C1's disk-backed store will page it.
 
 use crate::coinlog::H;
 use crate::coinlog_forest::Store;
-use crate::facts::{block_leaf, utxo_state};
+use crate::facts::utxo_state;
+use crate::undo::block_leaf_any;
 use alloc::vec::Vec;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,7 +36,12 @@ pub struct Rec {
     pub value: u64,
     pub flips: Vec<(u64, u32, u32)>,
     pub appends: Vec<H>,
+    /// The block's undo hash, for a block whose leaf commits one (docs/libzync/UNDO.md); None for the 0x02 leaf.
+    pub undo: Option<H>,
 }
+
+/// Bit 31 of `n_appends`: an undo hash follows the record.
+const UNDO_FLAG: u32 = 1 << 31;
 
 impl Rec {
     pub fn encode(&self) -> Vec<u8> {
@@ -39,7 +50,8 @@ impl Rec {
         b.extend_from_slice(&self.hash);
         b.extend_from_slice(&self.value.to_le_bytes());
         b.extend_from_slice(&(self.flips.len() as u32).to_le_bytes());
-        b.extend_from_slice(&(self.appends.len() as u32).to_le_bytes());
+        assert!(self.appends.len() < UNDO_FLAG as usize, "history: too many appends for one record");
+        b.extend_from_slice(&(self.appends.len() as u32 | if self.undo.is_some() { UNDO_FLAG } else { 0 }).to_le_bytes());
         for (p, t, v) in &self.flips {
             b.extend_from_slice(&p.to_le_bytes());
             b.extend_from_slice(&t.to_le_bytes());
@@ -47,6 +59,9 @@ impl Rec {
         }
         for l in &self.appends {
             b.extend_from_slice(l);
+        }
+        if let Some(u) = &self.undo {
+            b.extend_from_slice(u);
         }
         b
     }
@@ -94,7 +109,8 @@ fn decode_one_inner(b: &[u8]) -> Option<(Rec, usize)> {
     let hash: H = take(&mut c, 32).ok()?.try_into().unwrap();
     let value = u64::from_le_bytes(take(&mut c, 8).ok()?.try_into().unwrap());
     let nf = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap()) as usize;
-    let na = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap()) as usize;
+    let na = u32::from_le_bytes(take(&mut c, 4).ok()?.try_into().unwrap());
+    let (na, has_undo) = ((na & !UNDO_FLAG) as usize, na & UNDO_FLAG != 0);
     let mut flips = Vec::with_capacity(nf.min(1 << 20));
     for _ in 0..nf {
         let p = u64::from_le_bytes(take(&mut c, 8).ok()?.try_into().unwrap());
@@ -106,7 +122,8 @@ fn decode_one_inner(b: &[u8]) -> Option<(Rec, usize)> {
     for _ in 0..na {
         appends.push(take(&mut c, 32).ok()?.try_into().unwrap());
     }
-    Some((Rec { height, hash, value, flips, appends }, b.len() - c.len()))
+    let undo = if has_undo { Some(take(&mut c, 32).ok()?.try_into().unwrap()) } else { None };
+    Some((Rec { height, hash, value, flips, appends, undo }, b.len() - c.len()))
 }
 
 /// Every record, checked contiguous from height 0.
@@ -117,7 +134,8 @@ pub fn decode_all(mut b: &[u8]) -> Result<Vec<Rec>, &'static str> {
         let hash: H = take(&mut b, 32)?.try_into().unwrap();
         let value = u64::from_le_bytes(take(&mut b, 8)?.try_into().unwrap());
         let nf = u32::from_le_bytes(take(&mut b, 4)?.try_into().unwrap()) as usize;
-        let na = u32::from_le_bytes(take(&mut b, 4)?.try_into().unwrap()) as usize;
+        let na = u32::from_le_bytes(take(&mut b, 4)?.try_into().unwrap());
+        let (na, has_undo) = ((na & !UNDO_FLAG) as usize, na & UNDO_FLAG != 0);
         let mut flips = Vec::with_capacity(nf.min(1 << 20));
         for _ in 0..nf {
             let p = u64::from_le_bytes(take(&mut b, 8)?.try_into().unwrap());
@@ -129,10 +147,11 @@ pub fn decode_all(mut b: &[u8]) -> Result<Vec<Rec>, &'static str> {
         for _ in 0..na {
             appends.push(take(&mut b, 32)?.try_into().unwrap());
         }
+        let undo = if has_undo { Some(take(&mut b, 32)?.try_into().unwrap()) } else { None };
         if height as usize != out.len() {
             return Err("history: heights are not contiguous from 0");
         }
-        out.push(Rec { height, hash, value, flips, appends });
+        out.push(Rec { height, hash, value, flips, appends, undo });
     }
     Ok(out)
 }
@@ -148,6 +167,8 @@ pub struct Replay {
     pub block_leaves: Vec<H>,
     /// The coin-state digest after each height 0..=tip (what each block leaf commits).
     pub states: Vec<H>,
+    /// Each height's undo hash, for a block whose leaf commits one (0..=tip).
+    pub undos: Vec<Option<H>>,
 }
 
 pub fn replay(recs: &[Rec], at: u32, tip: u32) -> Result<Replay, &'static str> {
@@ -160,6 +181,7 @@ pub fn replay(recs: &[Rec], at: u32, tip: u32) -> Result<Replay, &'static str> {
     let mut keep: Option<(Store, u64, alloc::collections::BTreeMap<u64, (u32, u32, u32)>)> = None;
     let mut leaves = Vec::with_capacity(tip as usize + 1);
     let mut states = Vec::with_capacity(tip as usize + 1);
+    let mut undos = Vec::with_capacity(tip as usize + 1);
     for r in &recs[..=tip as usize] {
         for (p, t, v) in &r.flips {
             if *p >= s.len() || by.contains_key(p) {
@@ -174,15 +196,16 @@ pub fn replay(recs: &[Rec], at: u32, tip: u32) -> Result<Replay, &'static str> {
         }
         let roots = s.roots();
         let st = utxo_state(s.len(), r.value, &roots);
-        leaves.push(block_leaf(&r.hash, r.height, &st));
+        leaves.push(block_leaf_any(&r.hash, r.height, &st, r.undo.as_ref()));
         states.push(st);
+        undos.push(r.undo);
         if r.height == at {
             keep = Some((s.clone(), r.value, by.clone()));
         }
     }
     let (log, value, spenders) = keep.expect("at <= tip");
     coins.truncate(log.len() as usize);
-    Ok(Replay { log, value, coins, spenders, block_leaves: leaves, states })
+    Ok(Replay { log, value, coins, spenders, block_leaves: leaves, states, undos })
 }
 
 /// A Merkle path in the block forest of `leaves` (bottom-up), with the forest's roots.
@@ -224,10 +247,10 @@ mod tests {
     #[test]
     fn replay_answers_facts() {
         // 0: genesis; 1: appends 3; 2: spends pos 1 (tx 1, vin 0), appends 2; 3: spends pos 0, appends 1
-        let mut recs = alloc::vec![Rec { height: 0, hash: h(1000), value: 0, flips: alloc::vec![], appends: alloc::vec![] }];
-        recs.push(Rec { height: 1, hash: h(1001), value: 30, flips: alloc::vec![], appends: alloc::vec![h(0), h(1), h(2)] });
-        recs.push(Rec { height: 2, hash: h(1002), value: 40, flips: alloc::vec![(1, 1, 0)], appends: alloc::vec![h(3), h(4)] });
-        recs.push(Rec { height: 3, hash: h(1003), value: 35, flips: alloc::vec![(0, 1, 2)], appends: alloc::vec![h(5)] });
+        let mut recs = alloc::vec![Rec { height: 0, hash: h(1000), value: 0, flips: alloc::vec![], appends: alloc::vec![], undo: None }];
+        recs.push(Rec { height: 1, hash: h(1001), value: 30, flips: alloc::vec![], appends: alloc::vec![h(0), h(1), h(2)], undo: None });
+        recs.push(Rec { height: 2, hash: h(1002), value: 40, flips: alloc::vec![(1, 1, 0)], appends: alloc::vec![h(3), h(4)], undo: Some(h(2002)) });
+        recs.push(Rec { height: 3, hash: h(1003), value: 35, flips: alloc::vec![(0, 1, 2)], appends: alloc::vec![h(5)], undo: Some(h(2003)) });
         let bytes: Vec<u8> = recs.iter().flat_map(|r| r.encode()).collect();
         let back = decode_all(&bytes).unwrap();
         assert_eq!(back, recs);
@@ -257,7 +280,19 @@ mod tests {
         assert!(coin_unspent(&r2, n2, 0, &h(0), &at2.log.path(0)));
         let st2 = utxo_state(n2, at2.value, &r2);
         let (bp, broots) = block_path(&tip.block_leaves, 2);
-        assert!(block_in_chain(&broots, 4, &h(1002), 2, &st2, &bp));
-        assert!(!block_in_chain(&broots, 4, &h(1002), 2, &utxo_state(n, tip.value, &roots), &bp));
+        // blocks 2 and 3 carry undo hashes (bit 31 of n_appends): their leaves are the 0x05 ones
+        use crate::undo::block_in_chain_any;
+        assert!(block_in_chain_any(&broots, 4, &h(1002), 2, &st2, Some(&h(2002)), &bp));
+        assert!(!block_in_chain_any(&broots, 4, &h(1002), 2, &st2, None, &bp), "a 0x05 leaf opened as 0x02");
+        assert!(!block_in_chain_any(&broots, 4, &h(1002), 2, &st2, Some(&h(2003)), &bp), "another block's undo hash");
+        assert!(!block_in_chain_any(&broots, 4, &h(1002), 2, &utxo_state(n, tip.value, &roots), Some(&h(2002)), &bp));
+        // block 1 has none: the 0x02 leaf
+        let at1 = replay(&back, 1, 3).unwrap();
+        let st1 = utxo_state(at1.log.len(), at1.value, &at1.log.roots());
+        let (bp1, _) = block_path(&tip.block_leaves, 1);
+        assert!(block_in_chain(&broots, 4, &h(1001), 1, &st1, &bp1));
+        // a record written before the flag existed (n_appends without bit 31) decodes as before
+        assert_eq!(recs[1].encode().len(), 52 + 3 * 32);
+        assert_eq!(recs[2].encode().len(), 52 + 16 + 2 * 32 + 32);
     }
 }

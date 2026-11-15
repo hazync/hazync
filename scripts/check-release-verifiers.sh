@@ -29,7 +29,7 @@ read -ra WRAP <<< "${CLI_WRAP:-}"
 RCPT=experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt
 RCPT_SHA=11f4f9ad57731b6d8b9be11efcaa91051918503b5e86ff649791fb271aee7c9b
 TIP200=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
-# The reference receipt's OWN image (v0.24.0's 8888d59c). From v0.26.0 the current image continues it at block 2000, and
+# The reference receipt's OWN image (v0.24.0's 8888d59c). From v0.26.0 it is an earlier built-in image, and
 # the verifier checks a receipt by an earlier built-in image of the chain as that image (swiftsync-verify verify()).
 RCPT_IMAGE=8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
 CANON=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)

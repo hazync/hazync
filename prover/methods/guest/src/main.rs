@@ -408,8 +408,10 @@ const HDR: usize = 16;
 #[no_mangle]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
     if size == 0 { return core::ptr::null_mut(); }
-    let total = size + HDR;
-    let p = ralloc(Layout::from_size_align(total, HDR).unwrap());
+    // C's malloc fails on a size it cannot represent (review 11-14: `size + HDR` wrapped to a tiny block)
+    let Some(total) = size.checked_add(HDR) else { return core::ptr::null_mut() };
+    let Ok(layout) = Layout::from_size_align(total, HDR) else { return core::ptr::null_mut() };
+    let p = ralloc(layout);
     if p.is_null() { return p; }
     *(p as *mut usize) = total;
     p.add(HDR)
@@ -441,11 +443,17 @@ pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
 #[no_mangle]
 pub extern "C" fn abort() -> ! { panic!("C abort()") }
 
-// Satisfy USE_EXTERNAL_DEFAULT_CALLBACKS without pulling in stdio/abort.
+// USE_EXTERNAL_DEFAULT_CALLBACKS without stdio. libsecp calls these on an illegal argument (an API misuse) or an
+// internal error, and its own defaults abort, as Bitcoin Core does with them. They were no-ops, so a misuse carried on
+// with whatever the function then returned (review 11-14). Both stop the guest: no receipt.
 #[no_mangle]
-pub extern "C" fn secp256k1_default_illegal_callback_fn(_msg: *const u8, _data: *mut core::ffi::c_void) {}
+pub extern "C" fn secp256k1_default_illegal_callback_fn(_msg: *const u8, _data: *mut core::ffi::c_void) {
+    panic!("libsecp256k1: illegal argument (API misuse)")
+}
 #[no_mangle]
-pub extern "C" fn secp256k1_default_error_callback_fn(_msg: *const u8, _data: *mut core::ffi::c_void) {}
+pub extern "C" fn secp256k1_default_error_callback_fn(_msg: *const u8, _data: *mut core::ffi::c_void) {
+    panic!("libsecp256k1: internal error")
+}
 
 // A 32-byte hash, and a vector of them, over risc0 serde's PACKED byte path instead of the default
 // one-word-per-byte. MEASURED on block 962,000 (docs/WITNESS_WIRE_PROFILE_2026-08-28.md): `[u8; 32]`
@@ -625,6 +633,7 @@ struct BlockResult {
     trie_root: [u8; 32],      // libzync: the counting trie's root after this block (zero without the trie)
     survivor_value: u64,      // libzync: satoshis appended to the coin forest / log by this block
     spent_value: u64,         // libzync coin log: satoshis of the earlier coins this block spends
+    undo_hash: [u8; 32],      // libzync (#729): the block's undo-data commitment (docs/libzync/UNDO.md); agg-lite only
 }
 
 /// ROADMAP H-B (review round 5): the digest that LINKS chain states, sha256d of the state's journal with `anchor_id`
@@ -1416,6 +1425,7 @@ fn validate_block_staged(w: &BlockWitness, mtp: u32, chunk: Option<(&Vec<[u8; 32
         trie_root: [0u8; 32], // the trie lives on the agg-lite path only
         survivor_value: 0,
         spent_value: 0,
+        undo_hash: [0u8; 32], // computed on the agg-lite path only (a libzync image proves no other way)
     }
 }
 
@@ -1980,7 +1990,7 @@ fn chunk_prove() {
         }
 
         let mut results = vec![0i32; k];
-        let mut leaves = vec![0u8; 32 * k];
+        let mut leaves = vec![0u8; k.checked_mul(32).expect("input leaf buffer size")];
         let mut seqbuf = vec![0u32; k];
         let mut verbuf = 0i32;
         let mut wt = [0u8; 32];
@@ -2348,7 +2358,9 @@ fn aggregate() {
         let mut f = utreexo::Stump::new(prev.block_roots.clone(), prev.block_leaves);
         let mut st: Vec<u8> = Vec::with_capacity(17 + 32 * r.root_next_roots.len());
         handover_pin::utxo_state_preimage(r.root_next_leaves, utxo_value, &r.root_next_roots, &mut |b: &[u8]| st.extend_from_slice(b));
-        f.add(sha256_guest(&handover_pin::block_leaf_preimage(&r.tip_hash, height, &sha256_guest(&st))));
+        // Every block this image proves gets the leaf with its undo-data commitment (tag 0x05, docs/libzync/UNDO.md). Blocks
+        // proved by a predecessor keep the leaf that image gave them (a pre-undo image's 0x02); block 0 is the anchor's.
+        f.add(sha256_guest(&handover_pin::block_leaf_undo_preimage(&r.tip_hash, height, &sha256_guest(&st), &r.undo_hash)));
         (normalize(f.roots), f.num_leaves)
     };
     #[cfg(not(feature = "libzync"))]
@@ -2368,6 +2380,17 @@ fn aggregate() {
 fn main() {
     // Run C++ static constructors ONCE (Core's global tagged-hash midstates) — fixed cost per run.
     unsafe { __libc_init_array() };
+    // The per-transaction caches in verify_input.cpp (cached_tx, cached_spent: keyed by buffer address and length) and
+    // Core's legacy sighash cache (patches/libzync/0101: keyed by the transaction's vector addresses) are sound
+    // because an address is never handed out twice: risc0's bump allocator never frees. Checked, not assumed: an
+    // allocator that gives a freed block back would let one address name two buffers (review 11-14).
+    unsafe {
+        let a = malloc(64);
+        free(a);
+        let b = malloc(64);
+        assert!(!a.is_null() && !b.is_null() && a != b, "the guest allocator reuses freed memory: the address-keyed caches need one that never does");
+        free(b);
+    }
     // Pin every Rust-side consensus literal to Core's own compiled value before doing any work.
     assert_core_constants();
     let mode: u32 = env::read();

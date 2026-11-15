@@ -27,4 +27,27 @@ step "2. negative tests on block 962,000"
 python3 "$Z/scripts/libzync/ci/negatives.py" "$H" "$Z/prover/block_962000.json" "$O/neg" > "$O/neg.log" 2>&1
 cat "$O/neg.log"
 want "$O/neg.log" "NEGATIVES_OK" "every negative refused, every control passed"
+
+step "3. the undo-data commitment (docs/libzync/UNDO.md): the guest's undo hash == undo_ref.py"
+# the edge blocks above and 962,000's control run (8,006 inputs); 185956 spends coins created in the same block
+for h in 2016 91842 91880 185956 227931 363725 364292 388381 419328 481824; do
+  f=$T/edge/block_$h.json; [ -f "$f" ] || f=$Z/prover/testdata/boundaries/block_$h.json
+  python3 "$Z/scripts/libzync/undo_ref.py" check "$O/edge_$h.log" "$f" > "$O/undo_$h.log" 2>&1 \
+    && pass "undo $h: $(cut -c1-120 "$O/undo_$h.log")" || fail "undo $h: $(cat "$O/undo_$h.log")"
+done
+python3 "$Z/scripts/libzync/undo_ref.py" check "$O/neg/base.agg.log" "$Z/prover/block_962000.json" > "$O/undo_962000.log" 2>&1 \
+  && pass "undo 962000: $(cut -c1-120 "$O/undo_962000.log")" || fail "undo 962000: $(cat "$O/undo_962000.log")"
+# the control: a reference that drops the coinbase flag must disagree on a block that spends a coinbase coin
+python3 - "$Z/scripts/libzync/undo_ref.py" "$O/edge_185956.log" "$T/edge/block_185956.json" > "$O/undo_control.log" 2>&1 <<'P'
+import importlib.util, json, re, sys
+s = importlib.util.spec_from_file_location("u", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+j = json.load(open(sys.argv[3]))
+assert any(p["coin_is_coinbase"] & 1 for t in j["txs"] for p in t["prevouts"]), "block spends no coinbase coin"
+for t in j["txs"]:
+    for p in t["prevouts"]: p["coin_is_coinbase"] = 0
+bad = m.undo_hash(j)[0].hex()
+got = re.search(r"undo: block 185956 inputs \d+ hash ([0-9a-f]{64})", open(sys.argv[2], errors="replace").read()).group(1)
+print("UNDO_CONTROL_OK" if bad != got else "UNDO_CONTROL_BLIND")
+P
+want "$O/undo_control.log" "UNDO_CONTROL_OK" "control: a reference without the coinbase flag disagrees with the guest on 185956"
 finish blocks

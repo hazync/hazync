@@ -62,8 +62,8 @@ systemctl --failed
 scripts/check-deployment.sh --local    # read the libzync section; its CORE section FAILs by design after the switch (open item)
 ```
 
-`method_id` is `8888d59c…` until the handover at block 2000 (`LZ_HANDOVER_AT`, the `pre` era) and `1ff5a129…` after it
-([`../../docs/HANDOVER.md`](../../docs/HANDOVER.md) §5).
+`method_id` is the host's image (`46666b6f…` for v0.26.0). A board handing over to a new image (`LZ_HANDOVER_AT`, the
+`pre` and `post` eras) is [`../../docs/HANDOVER.md`](../../docs/HANDOVER.md) §5; v0.26.0 does not hand over.
 
 The checks alert through `hazync-alert@` exactly as in [Alerts](#alerts) below. A stalled frontier with healthy units is
 usually a claim, not a fault: see the proving-fleet notes in [`docs/OPERATIONS.md`](../../docs/OPERATIONS.md#0-the-live-board-hazync-v2).

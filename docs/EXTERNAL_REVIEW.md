@@ -38,8 +38,8 @@ swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --m
     swiftsync-verify/vectors/mainnet_1_200_????????.rcpt
 ```
 
-The vector is a real proof of mainnet 1..200 by v0.24.0's image `8888d59c…`, which v0.26.0's `1ff5a129…` continues at
-block 2000: the verifier sees the receipt names that earlier built-in image and checks it as that image (first line of
+The vector is a real proof of mainnet 1..200 by v0.24.0's image `8888d59c…`, an earlier built-in
+image (v0.26.0's is `46666b6f…`): the verifier sees the receipt names that earlier built-in image and checks it as that image (first line of
 its output).
 
 The last command should answer **DEMO** (exit 2): valid from genesis, below Core's minimum chainwork and the
@@ -60,8 +60,8 @@ docker build -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .
 docker run --rm hazync-libzync-repro      # prints the ids and ELF hashes
 ```
 
-Compare with [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS) (mainnet `1ff5a129…`, which continues `8888d59c…` at block 2000; signet
-`28e39600…`; headers zyncAPP `2db34e12…`) and with the ids built into the verifier (`IMAGES` in `swiftsync-verify/src/lib.rs`; a
+Compare with [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS) (mainnet `46666b6f…`; signet
+`01a80f17…`; headers zyncAPP `2db34e12…`) and with the ids built into the verifier (`IMAGES` in `swiftsync-verify/src/lib.rs`; a
 unit test checks the two agree). The id depends on absolute build paths, so a laptop build differs by design: only
 the container's output counts. Also worth a look: what the container pins (base image digest, `provision-vps.sh`,
 `scripts/libzync-base.sh`, the patches) and what it does not.

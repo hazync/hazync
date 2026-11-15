@@ -42,13 +42,14 @@ A proof names the exact program that produced it. The published Hazync v2 images
 (release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0)), are
 
 ```
-mainnet  1ff5a129d1ebc2022262f1249c1b41a0c096b8d5d16f985d7fc018138c67c66a
-signet   28e396006e97a8075daeb9fb12ce3ef1b3a20e44eac935256a1c2e8c3d8d57f3
+mainnet  46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
+signet   01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7
 headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632   (the header-chain zyncAPP)
 ```
 
-The mainnet image continues v0.24.0's `8888d59c…` at block 2000 by a handover ([`docs/HANDOVER.md`](docs/HANDOVER.md)):
-the board's blocks below 2000 are that image's proofs, and the verifier keeps it.
+v0.26.0's images commit each block's undo data in its block-forest leaf ([`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)),
+and the board proves the chain again from genesis under them; the verifier keeps v0.24.0's `8888d59c…` so its receipts
+still verify.
 
 and the build is reproducible: [`reproduce/libzync.Dockerfile`](reproduce/libzync.Dockerfile) gives
 the same ids bit for bit ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), and CI rebuilds them on
@@ -64,8 +65,8 @@ the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench
 **Works today**
 
 - **The public board proves Hazync v2.** [hazync.org](https://hazync.org/) switched to it on 12 November 2026 and
-  restarted from genesis under `8888d59c` (continued from block 2000 by `1ff5a129`, a handover that keeps every
-  earlier proof, [`docs/HANDOVER.md`](docs/HANDOVER.md)): anyone with an NVIDIA card claims a block, proves it and submits it,
+  restarted from genesis under `8888d59c`, and restarts from genesis again under v0.26.0's `46666b6f` (the undo-data
+  commitment, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)): anyone with an NVIDIA card claims a block, proves it and submits it,
   and proved blocks are joined into one genesis-anchored proof ([`CONTRIBUTING.md`](CONTRIBUTING.md)). Its first
   proving run, on 4× RTX PRO 6000, proved 1,287 blocks in 2 h 32 min of proving (about 510 an hour), $27.13 in all,
   about $0.021 a block on these early, nearly empty blocks

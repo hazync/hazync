@@ -1,7 +1,7 @@
-//! libzync EXPERIMENT — batch ECDSA verification inside the chunk guest.
+//! libzync — batch signature verification inside the chunk guest (in the product profile).
 //!
-//! ⛔ Not reviewed, not consensus-safe, moves METHOD_ID. Exists to MEASURE what batching saves on a
-//! real block (see experimental/libzync-bench/README.md, which measured the primitive alone).
+//! Started as an experiment to measure what batching saves (experimental/libzync-bench/README.md); it is in every
+//! published libzync image and has been through the libzync review rounds and the 2026-11-14 soundness review.
 //!
 //! libsecp still parses the signature and key, checks r,s != 0 and computes u1 = e/s, u2 = r/s.
 //! The hook in ecdsa_impl.h then calls `hazync_batch_ecdsa`. Per call, the host supplies a hint:
@@ -43,11 +43,14 @@ static mut NEXT: usize = 0;
 static mut FALLBACK: u32 = 0;
 static mut SCHNORR_N: u32 = 0;
 static mut DEFERRED: Vec<Deferred> = Vec::new();
+/// The scheme of each deferred check (0 ECDSA, 1 BIP340, 3 / 4 BIP341 tweak), parallel to DEFERRED: in the transcript.
+static mut KINDS: Vec<u32> = Vec::new();
 
 pub fn install(collect: bool, hints: Vec<u8>) {
     unsafe {
         // One Deferred per hint at most: reserve once instead of growing (and copying) as it fills.
         DEFERRED = Vec::with_capacity(hints.len() / HINT_BYTES);
+        KINDS = Vec::with_capacity(hints.len() / HINT_BYTES);
         COLLECT = collect;
         HINTS = hints;
         NEXT = 0;
@@ -104,7 +107,9 @@ pub unsafe extern "C" fn hazync_batch_defer(
     let i = NEXT;
     NEXT += 1;
     let h = &*core::ptr::addr_of!(HINTS);
-    if (i + 1) * HINT_BYTES > h.len() || h[i * HINT_BYTES] == 0 {
+    // The VALID flag is the whole u32 (the host writes 0 or 1): only exactly 1 defers. It was its first byte (review
+    // 11-14); either way a wrong flag can only make the batch fail, never a bad signature pass.
+    if (i + 1) * HINT_BYTES > h.len() || u32::from_le_bytes(h[i * HINT_BYTES..i * HINT_BYTES + 4].try_into().unwrap()) != 1 {
         FALLBACK += 1;
         return 0;
     }
@@ -143,6 +148,7 @@ pub unsafe extern "C" fn hazync_batch_defer(
     rp[..8].copy_from_slice(&rx);
     rp[8..].copy_from_slice(&ry);
     (*core::ptr::addr_of_mut!(DEFERRED)).push(Deferred { u1, u2, q, r: rp });
+    (*core::ptr::addr_of_mut!(KINDS)).push(kind as u32);
     1
 }
 
@@ -156,8 +162,9 @@ pub unsafe extern "C" fn hazync_batch_defer(
 ///   That is the same sum regrouped, so it changes the cost and not the equation.
 pub fn finish() -> bool {
     let t0 = env::cycle_count();
-    let (collect, fallback, schnorr, deferred) = unsafe {
-        (COLLECT, FALLBACK, SCHNORR_N, core::mem::take(&mut *core::ptr::addr_of_mut!(DEFERRED)))
+    let (collect, fallback, schnorr, deferred, kinds) = unsafe {
+        (COLLECT, FALLBACK, SCHNORR_N, core::mem::take(&mut *core::ptr::addr_of_mut!(DEFERRED)),
+         core::mem::take(&mut *core::ptr::addr_of_mut!(KINDS)))
     };
     if collect {
         env::log("batch: collect mode, every verify ran in libsecp");
@@ -169,9 +176,14 @@ pub fn finish() -> bool {
         let bytes = unsafe {
             core::slice::from_raw_parts(deferred.as_ptr() as *const u8, n * core::mem::size_of::<Deferred>())
         };
+        // v2 (review 11-14): the transcript also binds the number of checks and each one's scheme, so it states
+        // everything the batch equation is about, not only the tuples.
+        assert!(kinds.len() == n, "batch: one scheme per deferred check");
         let mut h = Sha256::new();
-        h.update(b"libzync/batch-sig/v1");
+        h.update(b"libzync/batch-sig/v2");
+        h.update((n as u32).to_le_bytes());
         h.update(bytes);
+        for k in &kinds { h.update(k.to_le_bytes()); }
         h.finalize().into()
     };
     let t1 = env::cycle_count();

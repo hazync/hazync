@@ -242,10 +242,6 @@ fn main() {
     if lever("HAZYNC_TX_ONCE") {
         features.push("tx-once".to_string());
     }
-    println!("cargo:rerun-if-env-changed=HAZYNC_TLSF");
-    if lever("HAZYNC_TLSF") {
-        features.push("tlsf".to_string());
-    }
     println!("cargo:rerun-if-env-changed=HAZYNC_AGG_LITE");
     if lever("HAZYNC_AGG_LITE") {
         features.push("agg-lite".to_string());

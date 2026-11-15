@@ -208,14 +208,15 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
                     out.push(Err("facts NOT checked: the receipt did not verify".to_string()));
                 }
             } else if let Some(cs) = rep.state.as_ref() {
+                let uf = rep.undo_from; // the block-leaf format by height (docs/libzync/UNDO.md)
                 for c in &coins {
-                    out.push(swiftsync_verify::check_coin_fact(cs, c));
+                    out.push(swiftsync_verify::check_coin_fact(cs, uf, c));
                 }
                 for j in &journeys {
-                    out.push(swiftsync_verify::check_coin_journey(cs, j));
+                    out.push(swiftsync_verify::check_coin_journey(cs, uf, j));
                 }
                 for t in &tries {
-                    out.push(swiftsync_verify::check_trie_fact(cs, t));
+                    out.push(swiftsync_verify::check_trie_fact(cs, uf, t));
                 }
             } else if any {
                 out.push(Err("no verified state to check facts against".to_string()));
