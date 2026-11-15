@@ -5,8 +5,13 @@
 //!   zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>]
 //!                [--min-validated-depth <n>] [--allow-pow-only-block] [--expect <height>:<hash>] [--mempool | --mempool-url <base>]
 //!                [--bitcoin-cli "<cmd>"] [--max-tip-age <s>]
+//!                [--no-require-identity] [--allow-demo]
 //!                [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>
-//!       check a deposit proof against YOUR expectations. Exit 0 OK, 2 DEMO, 1 FAIL.
+//!       check a deposit proof against YOUR expectations. Exit 0 ACCEPTED (verdict OK: every check passed, the tip
+//!       proof has Core's minimum chain work, and the tip was compared with --expect / --mempool / --bitcoin-cli),
+//!       2 DEMO (valid, but below the minimum work or the core checkpoint, or the tip not compared: NOT a deposit to
+//!       credit; the statement is printed only with --allow-demo), 1 FAIL. --no-require-identity: OK without a tip
+//!       source (a caller that compares the tip by other means says so explicitly).
 //!   zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>]
 //!                --height <h> --txid <txid> (--block <raw block hex file> | --bitcoin-cli "<cmd>")
 //!                [--tip-path <file>] [--network mainnet|signet] -o <deposit.json>
@@ -27,7 +32,7 @@ use zapp_headers::{HeaderState, HEADERS_IMAGE_ID};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n>] [--allow-pow-only-block] {IDENTITY_USAGE} [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
+    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n>] [--allow-pow-only-block] {IDENTITY_USAGE} [--no-require-identity] [--allow-demo] [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
     eprintln!("       zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>] --height <h> --txid <txid> (--block <file> | --bitcoin-cli \"<cmd>\") [--tip-path <file>] [--network <name>] -o <deposit.json>");
     eprintln!("       zapp-deposit mmr-path <headers file> <tip height> <height>");
     exit(1);
@@ -148,7 +153,8 @@ fn build_main(a: Vec<String>) {
     // self-check with the verifier: the transaction at depth >= 1, a block above the core tip allowed (it is flagged)
     let img = Image::by_network(&network).unwrap_or_else(|| die("unknown network"));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let ask = DepositAsk { txid, min_depth: 1, allow_pow_only_block: true, ..Default::default() };
+    // (a self-check of the bundle's parts: the chain identity is the verifier's caller's, not the builder's)
+    let ask = DepositAsk { txid, min_depth: 1, allow_pow_only_block: true, require_identity: false, allow_demo: true, ..Default::default() };
     let rep = verify_deposit(&b, &ask, &network, img, HEADERS_IMAGE_ID, now);
     if rep.verdict == Verdict::Fail {
         for (_, w) in rep.checks.iter().filter(|c| !c.0) { eprintln!("  [FAIL] {w}"); }
@@ -187,6 +193,8 @@ fn verify_main(a: Vec<String>) -> ! {
             "--min-depth" => ask.min_depth = num(it.next(), "--min-depth"),
             "--min-validated-depth" => ask.min_validated_depth = num(it.next(), "--min-validated-depth"),
             "--allow-pow-only-block" => ask.allow_pow_only_block = true,
+            "--no-require-identity" => ask.require_identity = false,
+            "--allow-demo" => ask.allow_demo = true,
             "--max-tip-age" => ask.max_tip_age = Some(num(it.next(), "--max-tip-age")),
             "--now" => now = Some(num(it.next(), "--now")),
             "--network" => network = it.next().unwrap_or_else(|| usage()),
@@ -223,17 +231,25 @@ fn verify_main(a: Vec<String>) -> ! {
     let mut extra = Vec::new();
     ask.expect_tip = id.expect.as_deref().map(parse);
     if id.needs_lookup() {
-        let pre = verify_deposit(&b, &DepositAsk { expect_tip: None, ..ask.clone() }, &network, image, &himage, now);
+        // the tip to ask the sources about (read only for that: the statement is not used)
+        let pre = verify_deposit(&b, &DepositAsk { expect_tip: None, require_identity: false, allow_demo: true, ..ask.clone() },
+                                 &network, image, &himage, now);
         if let Some(s) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
-            let (x, c) = zapp_common::expect_at(&id, &network, s.tip_height as u32);
+            let (x, c) = zapp_common::expect_at(&id, &network, s.tip_height as u32, &s.tip_work);
             ask.expect_tip = x.as_deref().map(parse);
             extra = c;
         }
     }
     let mut rep = verify_deposit(&b, &ask, &network, image, &himage, now);
-    if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; }
+    if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; rep.accepted = false; rep.statement = None; }
     rep.checks.splice(0..0, extra);
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
+    if rep.verdict == Verdict::Demo && rep.statement.is_none() {
+        println!("SWIFTSYNC_VERIFY_DEMO: deposit NOT accepted: valid checks, but {}; the statement is withheld (--allow-demo shows it)",
+                 if rep.checks.iter().any(|c| c.1.starts_with("chain identity NOT checked")) { "the tip was not compared with a source you trust" }
+                 else { "the chain is below Core's minimum chain work or the core proof's checkpoint: a cheap fork can show this" });
+        exit(2)
+    }
     match (&rep.verdict, &rep.statement) {
         (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: deposit: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
         (v, Some(s)) => {
@@ -245,8 +261,8 @@ fn verify_main(a: Vec<String>) -> ! {
                 s.validated_through, s.validated_confirmations,
                 if s.block_fully_validated { if s.confirmations > s.validated_confirmations { "; blocks above it: PROOF OF WORK ONLY" } else { "" } }
                 else { "; THE BLOCK ITSELF IS ABOVE THE FULLY VALIDATED TIP: PROOF OF WORK ONLY" });
-            if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
-            println!("SWIFTSYNC_VERIFY_DEMO: below Core's minimum chain work, not shown to be the network's chain: {what}"); exit(2)
+            if rep.accepted && matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: ACCEPTED: {what}"); exit(0) }
+            println!("SWIFTSYNC_VERIFY_DEMO: NOT accepted (below Core's minimum chain work or the checkpoint, or the tip not compared): {what}"); exit(2)
         }
     }
 }

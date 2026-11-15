@@ -23,6 +23,11 @@ run 1 $Z build --core $CORE --history $D/history_0_200.bin --height 171 --block 
 V="$Z"
 run 2 $V --txid $T --vout 0 --amount 1000000000 --min-depth 31 $W/core.json
 run 2 $V --txid $T --min-depth 6 $W/h200.json
+# review (11-15): DEMO is never accepted and its statement is withheld unless asked for; without a tip source the
+# verdict is at best DEMO (require_identity) unless the caller turns that off
+run 2 $V --txid $T --vout 0 --amount 1000000000 --allow-demo $W/core.json
+run 2 $V --txid $T --min-depth 6 $W/tip.json
+run 0 $V --txid $T --min-depth 6 --no-require-identity $W/tip.json
 run 0 $V --txid $T --vout 0 --amount 1000000000 --min-depth 6 --expect $TIP $W/tip.json
 run 0 $V --txid $T --min-validated-depth 31 --expect $TIP $W/tip.json
 run 1 $V --txid $T --min-validated-depth 32 $W/tip.json
@@ -39,10 +44,15 @@ run 1 $V $W/core.json
 run 1 $V --txid $T /nonexistent.json
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names the header tip
 # as the bundle does (OK), one that names another block (FAIL)
-printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\nexit 0\n' "${TIP#*:}" > $W/node; chmod +x $W/node
+# (the node also gives the tip's chainwork; one that does not is a FAIL)
+printf '#!/bin/sh\ncase "$1" in getblockhash) echo %s;; getblockheader) echo '"'"'{"chainwork": "00000000000000000000000000000000000000015731592c05251d96d07f062f"}'"'"';; esac\n' "${TIP#*:}" > $W/node; chmod +x $W/node
+printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\nexit 0\n' "${TIP#*:}" > $W/nowork; chmod +x $W/nowork
+printf '#!/bin/sh\ncase "$1" in getblockhash) echo %s;; getblockheader) echo '"'"'{"chainwork": "00ff"}'"'"';; esac\n' "${TIP#*:}" > $W/otherwork; chmod +x $W/otherwork
 printf '#!/bin/sh\necho %064d\n' 1 > $W/badnode; chmod +x $W/badnode
 run 0 $V --txid $T --min-depth 6 --bitcoin-cli $W/node $W/tip.json
 run 1 $V --txid $T --min-depth 6 --bitcoin-cli $W/badnode $W/tip.json
+run 1 $V --txid $T --min-depth 6 --bitcoin-cli $W/nowork $W/tip.json
+run 1 $V --txid $T --min-depth 6 --bitcoin-cli $W/otherwork $W/tip.json
 head -c 500 /dev/urandom > $W/junk.json; run 1 $V --txid $T $W/junk.json
 echo "test_deposit.sh: $((N-BAD))/$N as expected"
 [ "$N" -gt 0 ] && [ "$BAD" = 0 ]

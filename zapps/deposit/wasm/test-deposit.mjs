@@ -23,20 +23,34 @@ make(`${w}/tip.json`, ['--headers', `${root}/experimental/libzync-bench/headers/
 const core = readFileSync(`${w}/core.json`, 'utf8'), tip = JSON.parse(readFileSync(`${w}/tip.json`, 'utf8'));
 rmSync(w, { recursive: true });
 let fails = 0;
-const t = (name, want, r) => { const ok = r.verdict === want && (want === 'fail') === (r.statement == null); if (!ok) fails++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${r.verdict}`); return r; };
-const r = t('core 0..200 alone, output 0 = 10 BTC (DEMO: below minimum work)', 'demo', v.verifyDeposit({ bundle: core, ask: { txid: T, vout: 0, amount: 1000000000, min_depth: 31 } }));
+// want: [verdict, accepted, statement present]
+const t = (name, [verdict, accepted, stmt], r) => {
+  const ok = r.verdict === verdict && r.accepted === accepted && (r.statement != null) === stmt;
+  if (!ok) fails++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${r.verdict} accepted=${r.accepted} statement=${r.statement != null}`);
+  return r;
+};
+const FAIL = ['fail', false, false];
+// review (11-15): a DEMO statement is withheld unless asked for, and never accepted
+t('core 0..200 alone (DEMO: below minimum work): statement withheld', ['demo', false, false], v.verifyDeposit({ bundle: core, ask: { txid: T, vout: 0, amount: 1000000000, expect: `200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320` } }));
+const r = t('core 0..200 alone, allow_demo: the statement, still not accepted', ['demo', false, true], v.verifyDeposit({ bundle: core, ask: { txid: T, vout: 0, amount: 1000000000, min_depth: 31, allow_demo: true } }));
 if (r.statement?.confirmations !== 31 || r.statement?.validated_through !== 200 || r.statement?.output?.amount !== 1000000000) { fails++; console.log('FAIL statement', r.statement); }
-const s = t('bound to the header chain 0..975,278, tip expected', 'ok', v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, min_depth: 6, expect: TIP } })).statement;
+const s = t('bound to the header chain 0..975,278, tip expected: accepted', ['ok', true, true], v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, min_depth: 6, expect: TIP } })).statement;
+if (!v.verifyDeposit({ bundle: tip, ask: { txid: T, expect: TIP } }).identity_checked) { fails++; console.log('FAIL identity_checked'); }
+// review (11-15): without a tip source the verdict is at best DEMO (require_identity, on by default)
+t('the same without expect: not accepted, statement withheld', ['demo', false, false], v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, min_depth: 6 } }));
+t('the same, require_identity: false (the caller says so)', ['ok', true, true], v.verifyDeposit({ bundle: tip, ask: { txid: T, require_identity: false } }));
+t('require_identity not a boolean', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, require_identity: 'no' } }));
 if (s?.confirmations !== 975109 || s?.validated_confirmations !== 31 || !s?.block_fully_validated || s?.tip_height !== 975278) { fails++; console.log('FAIL statement', s); }
-t('another txid asked', 'fail', v.verifyDeposit({ bundle: tip, ask: { txid: 'b1fea52486ce0c62bb442b530a3f0132b826c74e473d1f2c220bfa78111c5082' } }));
-t('wrong amount', 'fail', v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, amount: 1 } }));
-t('validated depth 32', 'fail', v.verifyDeposit({ bundle: tip, ask: { txid: T, min_validated_depth: 32 } }));
-t('depth 975,110', 'fail', v.verifyDeposit({ bundle: tip, ask: { txid: T, min_depth: 975110 } }));
+t('another txid asked', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: 'b1fea52486ce0c62bb442b530a3f0132b826c74e473d1f2c220bfa78111c5082' } }));
+t('wrong amount', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, amount: 1 } }));
+t('validated depth 32', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, min_validated_depth: 32 } }));
+t('depth 975,110', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, min_depth: 975110 } }));
 const bad = structuredClone(tip); bad.core_tip_mmr_path[0] = '00'.repeat(32);
-t('binding path tampered', 'fail', v.verifyDeposit({ bundle: bad, ask: { txid: T } }));
+t('binding path tampered', FAIL, v.verifyDeposit({ bundle: bad, ask: { txid: T } }));
 const bb = structuredClone(tip); bb.block.branch[0] = '11'.repeat(32);
-t('merkle branch tampered', 'fail', v.verifyDeposit({ bundle: bb, ask: { txid: T } }));
-t('no txid asked', 'fail', v.verifyDeposit({ bundle: tip, ask: {} }));
-t('not a bundle', 'fail', v.verifyDeposit({ bundle: '{"kind":1}', ask: { txid: T } }));
+t('merkle branch tampered', FAIL, v.verifyDeposit({ bundle: bb, ask: { txid: T } }));
+t('no txid asked', FAIL, v.verifyDeposit({ bundle: tip, ask: {} }));
+t('not a bundle', FAIL, v.verifyDeposit({ bundle: '{"kind":1}', ask: { txid: T } }));
 console.log(fails ? `test_deposit_wasm: ${fails} FAILED` : 'test_deposit_wasm: all as expected');
 process.exit(fails ? 1 : 0);

@@ -5,7 +5,8 @@
 //   import { loadDeposit } from './zapp-deposit.js';
 //   const z = await loadDeposit(fetch('./zapp-deposit.wasm'));
 //   const r = z.verifyDeposit({ bundle, ask: { txid, vout, amount, min_depth, expect } });
-//   r.verdict  // 'ok' | 'demo' | 'fail'; r.statement (null unless 'ok' or 'demo')
+//   r.accepted // THE field to gate on: verdict 'ok' and the tip compared with expect (require_identity, on by default)
+//   r.verdict  // 'ok' | 'demo' | 'fail'; r.statement (null unless 'ok', or 'demo' with ask.allow_demo)
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
@@ -23,8 +24,9 @@ export async function loadDeposit(source) {
   return {
     /** The deposit-proof zyncAPP (docs/libzync/DEPOSIT_ZAPP.md): bundle = the JSON zapp-deposit build writes (string or
      *  object); ask = { txid (the one YOU ask about), vout?, amount?, script?, op_return?, min_depth?,
-     *  min_validated_depth?, allow_pow_only_block?, expect?, max_tip_age?, network? }. statement is null unless the
-     *  verdict is 'ok' or 'demo'. `now` defaults to this device's clock. */
+     *  min_validated_depth?, allow_pow_only_block?, expect?, max_tip_age?, require_identity? (default true),
+     *  allow_demo? (default false), network? }. Gate on `accepted` only. statement is null unless the verdict is 'ok',
+     *  or 'demo' with allow_demo (a DEMO chain is cheap to forge). `now` defaults to this device's clock. */
     verifyDeposit({ bundle, ask, now }) {
       const enc = new TextEncoder();
       const parts = [enc.encode(typeof bundle === 'string' ? bundle : JSON.stringify(bundle)), enc.encode(JSON.stringify(ask))];

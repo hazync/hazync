@@ -74,8 +74,9 @@ pub struct ForestOpening {
     pub path: Vec<String>,
 }
 
-/// What the CALLER asks: never read from the bundle.
-#[derive(Clone, Debug, Default)]
+/// What the CALLER asks: never read from the bundle. `Default` requires the chain identity and withholds a DEMO
+/// statement (`require_identity` true, `allow_demo` false).
+#[derive(Clone, Debug)]
 pub struct DepositAsk {
     /// The transaction, internal byte order.
     pub txid: [u8; 32],
@@ -84,7 +85,8 @@ pub struct DepositAsk {
     pub amount: Option<u64>,
     pub script: Option<Vec<u8>>,
     /// An OP_RETURN output carrying exactly this payload (the data of its pushes, concatenated); at `vout` if given,
-    /// else at any output.
+    /// else at any output. The push boundaries are not compared (one push "abcd" and two pushes "ab" "cd" carry the
+    /// same payload): `script` compares the scriptPubKey byte for byte.
     pub op_return: Option<Vec<u8>>,
     /// Confirmations (the block itself counts 1), fully validated or proof of work only.
     pub min_depth: u64,
@@ -96,9 +98,24 @@ pub struct DepositAsk {
     pub expect_tip: Option<(i64, String)>,
     /// The tip's block time must be within this many seconds of `now` (a stale proof is refused).
     pub max_tip_age: Option<u64>,
+    /// The verdict can be Ok only when the tip was compared with a source the caller trusts (`expect_tip`). On by
+    /// default; off is an explicit choice of the caller's (for example, one that compares the tip by other means).
+    pub require_identity: bool,
+    /// Return the statement for a DEMO verdict too. A DEMO chain is below Core's minimum chain work (or, for a core
+    /// proof alone, below its pinned checkpoint): a difficulty-1 fork of it costs little to mine, so its statement is
+    /// cheap to forge and is withheld unless asked for.
+    pub allow_demo: bool,
 }
 
-/// What the bundle showed, set only when no check failed (read it with the verdict: Demo is below the minimum work).
+impl Default for DepositAsk {
+    fn default() -> Self {
+        DepositAsk { txid: [0; 32], vout: None, amount: None, script: None, op_return: None, min_depth: 0,
+                     min_validated_depth: 0, allow_pow_only_block: false, expect_tip: None, max_tip_age: None,
+                     require_identity: true, allow_demo: false }
+    }
+}
+
+/// What the bundle showed: set when the verdict is Ok, or Demo with `allow_demo` (never when a check failed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepositStatement {
     /// internal byte order
@@ -125,6 +142,11 @@ pub struct DepositStatement {
 pub struct DepositReport {
     pub checks: Vec<(bool, String)>,
     pub verdict: Verdict,
+    /// THE field to gate on: the verdict is Ok (every check passed, the tip proof has Core's minimum chain work) and
+    /// the tip was compared with a source the caller trusts, or the caller turned that requirement off.
+    pub accepted: bool,
+    /// Whether the tip was compared with the caller's source (`expect_tip`) and matched.
+    pub identity_checked: bool,
     pub statement: Option<DepositStatement>,
 }
 
@@ -147,7 +169,8 @@ fn hashes(v: &[String], what: &str) -> Result<Vec<[u8; 32]>, String> {
 
 /// The data an OP_RETURN scriptPubKey carries: OP_RETURN (0x6a) followed by data pushes only (OP_0, 1..75-byte pushes,
 /// OP_PUSHDATA1/2/4), their data concatenated. None for any other script (an OP_1..OP_16 or other opcode, a push that
-/// runs past the end).
+/// runs past the end). The push boundaries are lost in the concatenation, as is which push opcode carried each part:
+/// a caller that needs the exact script compares it byte for byte (`DepositAsk::script`).
 pub fn op_return_payload(spk: &[u8]) -> Option<Vec<u8>> {
     if spk.first() != Some(&0x6a) { return None; }
     let (mut i, mut out) = (1usize, Vec::new());
@@ -171,7 +194,7 @@ pub fn op_return_payload(spk: &[u8]) -> Option<Vec<u8>> {
 /// caller's (the bundle's own `network` must agree); `now` is the caller's clock (unix seconds).
 pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_image: &'static Image, headers_image: &str,
                       now: u64) -> DepositReport {
-    let mut rep = DepositReport { checks: Vec::new(), verdict: Verdict::Fail, statement: None };
+    let mut rep = DepositReport { checks: Vec::new(), verdict: Verdict::Fail, accepted: false, identity_checked: false, statement: None };
     if !rep.check(b.kind == BUNDLE_KIND && b.version == BUNDLE_VERSION,
                   format!("a deposit bundle, version {BUNDLE_VERSION} (kind {:?}, version {})", b.kind, b.version)) {
         return rep;
@@ -229,9 +252,11 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
     let Some(raw) = unhex(&d.tx) else { return rep.fail("tx: not hex") };
     let Some(coinbase) = unhex(&d.coinbase) else { return rep.fail("coinbase: not hex") };
     let block_hash = dsha(&header);
-    // refused before anything else reads the bytes: 64 bytes cannot be told apart from an inner merkle node
-    if !rep.check(raw.len() != 64, format!("the transaction is not exactly 64 bytes ({} bytes): a 64-byte one cannot be \
-                                            told apart from an inner merkle node (CVE-2012-2459's family; BIP 54)", raw.len())) {
+    // An early refusal of the plainest form only. What closes the 64-byte ambiguity (CVE-2012-2459's family; BIP 54) is
+    // in the inclusion checks below: the txid preimage (the serialisation WITHOUT witness) must not be 64 bytes, and the
+    // tree depth is pinned by the block's coinbase and its branch (libzync::facts::tx_in_block, verify_tx_in_header).
+    // A witness form of more than 64 bytes whose stripped form is 64 bytes passes this line and is refused there.
+    if !rep.check(raw.len() != 64, format!("the transaction as given is not exactly 64 bytes ({} bytes)", raw.len())) {
         return rep;
     }
     let full = d.height <= cs.height;
@@ -330,9 +355,10 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
                   format!("validated depth: {validated_confirmations} fully validated confirmation(s) >= {} asked",
                           ask.min_validated_depth));
     }
+    let mut identity = false;
     if let Some((h, x)) = &ask.expect_tip {
-        rep.check(*h == tip_height && disp(&tip_hash) == x.to_ascii_lowercase(),
-                  format!("chain identity: the tip is block {h} {x} (from a source the caller trusts)"));
+        identity = *h == tip_height && disp(&tip_hash) == x.to_ascii_lowercase();
+        rep.check(identity, format!("chain identity: the tip is block {h} {x} (from a source the caller trusts)"));
     }
     if let Some(age) = ask.max_tip_age {
         rep.check(tip_time.saturating_add(age) >= now, format!("the tip's block time {tip_time} is within {age} s of this clock {now}"));
@@ -342,21 +368,24 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
     // Ok: the TIP proof shows Core's minimum chain work (the header chain when given and bound, else the core proof,
     // whose Ok also needs its pinned checkpoint). Below it: Demo, a valid statement on a chain not shown to be the network's.
     let enough = if hs.is_some() { headers_ok } else { core_ok };
-    rep.verdict = if failed { Verdict::Fail } else if enough { Verdict::Ok } else { Verdict::Demo };
-    if !failed {
+    // Not a failed check: without the identity the chain may be valid, but is not shown to be the network's.
+    if !failed && enough && ask.require_identity && !identity {
+        rep.checks.push((true, "chain identity NOT checked: the verdict is at best DEMO (give the tip from a source you \
+                                trust, or turn require_identity off)".into()));
+    }
+    rep.verdict = if failed { Verdict::Fail }
+                  else if enough && (identity || !ask.require_identity) { Verdict::Ok }
+                  else { Verdict::Demo };
+    rep.identity_checked = !failed && identity;
+    rep.accepted = rep.verdict == Verdict::Ok;
+    if !failed && (rep.verdict == Verdict::Ok || ask.allow_demo) {
         rep.statement = Some(DepositStatement {
             txid: ask.txid, height: d.height, block_hash, output, tip_height, tip_hash, tip_work,
             validated_through: cs.height, confirmations, validated_confirmations, block_fully_validated: full,
-            core_image: core_image_used(&cr.checks, core_image), headers_image: hs.as_ref().map(|_| headers_image.to_string()),
+            core_image: cr.image.method_id_hex.to_string(), headers_image: hs.as_ref().map(|_| headers_image.to_string()),
         });
     }
     rep
-}
-
-/// The core image the receipt verified against: the asked one, or the earlier built-in one it names (swiftsync_verify::verify).
-fn core_image_used(checks: &[(bool, String)], asked: &Image) -> String {
-    checks.iter().find_map(|(_, w)| w.strip_prefix("the receipt names ").and_then(|r| r.get(..64)).map(str::to_string))
-        .unwrap_or_else(|| asked.method_id_hex.to_string())
 }
 
 /// Build a bundle for transaction `txid` (internal order) of `raw_block` (as `getblock <hash> 0` prints it, the block

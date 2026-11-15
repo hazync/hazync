@@ -218,7 +218,7 @@ pub fn verify_core(receipt: &[u8], image: &'static Image, anchor: Option<ChainSt
         match Bundle::decode(receipt) {
             Ok(b) => check_bundle(&b, image, anchor, now),
             Err(e) => Report { checks: vec![(false, format!("bundle: {e}"))], low_work: false, state: None, verdict: Verdict::Fail,
-                               undo_from: swiftsync_verify::pin::NO_UNDO },
+                               undo_from: swiftsync_verify::pin::NO_UNDO, image },
         }
     } else {
         verify(&Inputs { receipt, image, anchor, now })

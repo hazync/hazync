@@ -48,7 +48,9 @@ fn b_seg(coinbase: bool) -> (DepositBundle, [u8; 32]) {
     };
     (b, txid)
 }
-fn ask(txid: [u8; 32]) -> DepositAsk { DepositAsk { txid, min_depth: 1, ..Default::default() } }
+/// The checks' own tests read the statement of DEMO bundles and of OK ones without a tip source: the gating defaults
+/// (require_identity on, allow_demo off) are tested on their own (the_verdict_gates_and_accepted).
+fn ask(txid: [u8; 32]) -> DepositAsk { DepositAsk { txid, min_depth: 1, require_identity: false, allow_demo: true, ..Default::default() } }
 fn run(b: &DepositBundle, a: &DepositAsk) -> DepositReport {
     verify_deposit(b, a, "mainnet", Image::by_network("mainnet").unwrap(), HEADERS_IMAGE_ID, now())
 }
@@ -289,4 +291,63 @@ fn groth16_wrapped_receipts_give_the_same_statement() {
     let at = bad.len() / 3; bad[at] ^= 1;
     let mut x = b.clone(); x.core_receipt = hex(&bad);
     assert_eq!(run(&x, &a).verdict, Verdict::Fail);
+}
+
+/// Review (11-15): a DEMO chain is a cheap difficulty-1 fork, so its statement is withheld unless asked for and is never
+/// accepted; and an OK verdict needs the tip compared with a source the caller trusts unless the caller turns that off.
+#[test]
+fn the_verdict_gates_and_accepted() {
+    let base = DepositAsk { txid: id(T170), vout: Some(0), amount: Some(1_000_000_000), ..Default::default() };
+    assert!(base.require_identity && !base.allow_demo, "the defaults gate");
+    // the whole header chain, the tip expected: accepted
+    let r = run(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0, TIP.1.into())), ..base.clone() });
+    assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Ok, true, true, true));
+    // no tip source: DEMO, not accepted, no statement
+    let r = run(&b_tip(), &base);
+    assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Demo, false, false, false));
+    assert!(r.checks.iter().any(|c| c.0 && c.1.starts_with("chain identity NOT checked")));
+    // ...unless the caller turns the requirement off: OK and accepted, the identity not checked
+    let r = run(&b_tip(), &DepositAsk { require_identity: false, ..base.clone() });
+    assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Ok, true, false, true));
+    // the core proof alone (below the minimum work and the 970,000 checkpoint), its tip expected: DEMO, withheld
+    let h200 = (200, "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320".to_string());
+    let a = DepositAsk { expect_tip: Some(h200), ..base.clone() };
+    let r = run(&b_core(&id(T170)), &a);
+    assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Demo, false, true, false));
+    // allow_demo shows it, still not accepted
+    let r = run(&b_core(&id(T170)), &DepositAsk { allow_demo: true, ..a.clone() });
+    assert_eq!((r.verdict, r.accepted, r.statement.is_some()), (Verdict::Demo, false, true));
+    // a failed check: nothing, whatever the flags
+    let r = run(&b_tip(), &DepositAsk { allow_demo: true, require_identity: false, min_depth: 975_110, ..base.clone() });
+    assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Fail, false, false, false));
+    // a wrong tip is a failed check, not a missing identity
+    let r = run(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0, "00".repeat(32))), ..base.clone() });
+    assert_eq!((r.verdict, r.accepted), (Verdict::Fail, false));
+}
+
+/// Review (11-15): the fully validated path with the transaction in its witness serialisation (BIP 144: marker, flag,
+/// a witness stack per input). The txid is over the serialisation without the witness, so the same statement holds;
+/// the bytes after the witness are still bound (one appended byte is refused).
+#[test]
+fn a_witness_serialised_transaction_in_a_fully_validated_block() {
+    let good = b_core(&id(T170));
+    let raw = unhex(&good.block.tx).unwrap();
+    let v = libzync::facts::parse_tx(&raw, &mut 0).unwrap();
+    assert_eq!(v.stripped, raw, "the block's form has no witness");
+    // version || 00 01 || inputs and outputs || one witness item of 3 bytes for its one input || lock time
+    let mut w = raw[..4].to_vec();
+    w.extend_from_slice(&[0x00, 0x01]);
+    w.extend_from_slice(&raw[4..raw.len() - 4]);
+    assert_eq!(v.inputs.len(), 1);
+    w.extend_from_slice(&[0x01, 0x03, 0xaa, 0xbb, 0xcc]);
+    w.extend_from_slice(&raw[raw.len() - 4..]);
+    let mut b = good.clone();
+    b.block.tx = hex(&w);
+    let a = DepositAsk { vout: Some(0), amount: Some(1_000_000_000), ..ask(id(T170)) };
+    let r = run(&b, &a);
+    assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
+    assert_eq!(r.statement, run(&good, &a).statement, "the same statement as the block's own serialisation");
+    let mut x = w.clone(); x.push(0);
+    let mut b2 = good.clone(); b2.block.tx = hex(&x);
+    assert_eq!(run(&b2, &a).verdict, Verdict::Fail);
 }

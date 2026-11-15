@@ -24,7 +24,8 @@ fn ret(s: String) -> *const u8 {
 }
 
 fn fail(msg: String) -> *const u8 {
-    ret(serde_json::json!({"verdict": "fail", "checks": [{"ok": false, "what": msg}]}).to_string())
+    ret(serde_json::json!({"verdict": "fail", "accepted": false, "identity_checked": false, "statement": null,
+                           "checks": [{"ok": false, "what": msg}]}).to_string())
 }
 
 struct Frame<'a> {
@@ -49,10 +50,15 @@ impl<'a> Frame<'a> {
 /// the CLI `zapp-deposit` uses. Input frame (little-endian): `[u64 now][u32 n][bundle JSON, as zapp-deposit build
 /// writes it][u32 n][ask JSON]`. The ask is the CALLER's, never the bundle's: `{"txid" (as explorers print it), "vout"?,
 /// "amount"? (sat), "script"? (hex), "op_return"? (hex payload), "min_depth"?, "min_validated_depth"?,
-/// "allow_pow_only_block"?, "expect"? ("height:hash" from a source the page trusts), "max_tip_age"? (s), "network"?}`.
+/// "allow_pow_only_block"?, "expect"? ("height:hash" from a source the page trusts), "max_tip_age"? (s),
+/// "require_identity"? (default true: without "expect" the verdict is at best "demo"), "allow_demo"? (default false),
+/// "network"?}`.
 ///
-/// Output: `verdict` ("ok", "demo", "fail"), `checks`, and `statement` (null unless no check failed: read it with the
-/// verdict) with the block, the output checked, the tip, `validated_through` (the core tip), `confirmations`,
+/// Output: `accepted`, THE ONE FIELD TO GATE ON: true only when the verdict is "ok" (every check passed, the tip proof
+/// has Core's minimum chain work) and the tip was compared with "expect" (or the page set "require_identity": false).
+/// Beside it `verdict` ("ok", "demo", "fail"), `identity_checked`, `checks`, and `statement`: null unless the verdict
+/// is "ok", or "demo" with "allow_demo" (a DEMO chain is cheap to forge: a difficulty-1 fork shows the same checks),
+/// with the block, the output checked, the tip, `validated_through` (the core tip), `confirmations`,
 /// `validated_confirmations` and `block_fully_validated`.
 #[no_mangle]
 pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
@@ -68,6 +74,9 @@ pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
             match &v[k] { serde_json::Value::Null => Ok(None),
                           x => x.as_str().and_then(swiftsync_verify::unhex).map(Some).ok_or(format!("ask: {k} is not hex")) }
         };
+        let flag = |k: &str, d: bool| -> Result<bool, String> {
+            match &v[k] { serde_json::Value::Null => Ok(d), x => x.as_bool().ok_or(format!("ask: {k} is not true or false")) }
+        };
         let num = |k: &str| -> Result<Option<u64>, String> {
             match &v[k] { serde_json::Value::Null => Ok(None), x => x.as_u64().map(Some).ok_or(format!("ask: {k} is not a number")) }
         };
@@ -82,8 +91,9 @@ pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
         let vout = num("vout")?.map(|x| u32::try_from(x).map_err(|_| "ask: vout too large")).transpose()?;
         let ask = DepositAsk { txid, vout, amount: num("amount")?, script: hexv("script")?, op_return: hexv("op_return")?,
                                min_depth: num("min_depth")?.unwrap_or(1), min_validated_depth: num("min_validated_depth")?.unwrap_or(0),
-                               allow_pow_only_block: v["allow_pow_only_block"].as_bool().unwrap_or(false), expect_tip,
-                               max_tip_age: num("max_tip_age")? };
+                               allow_pow_only_block: flag("allow_pow_only_block", false)?, expect_tip,
+                               max_tip_age: num("max_tip_age")?,
+                               require_identity: flag("require_identity", true)?, allow_demo: flag("allow_demo", false)? };
         Ok((now, b, ask, v["network"].as_str().unwrap_or("mainnet").to_string()))
     })();
     let (now, b, ask, network) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
@@ -92,7 +102,8 @@ pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
     ret(serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
-        "identity_checked": rep.verdict != Verdict::Fail && ask.expect_tip.is_some(),
+        "accepted": rep.accepted,
+        "identity_checked": rep.identity_checked,
         "statement": rep.statement.as_ref().filter(|_| rep.verdict != Verdict::Fail).map(|s| serde_json::json!({
             "txid": disp(&s.txid), "height": s.height, "block_hash": disp(&s.block_hash),
             "output": s.output.as_ref().map(|(n, v, spk)| serde_json::json!({"vout": n, "amount": v, "script": hex(spk)})),
