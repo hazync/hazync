@@ -1,0 +1,76 @@
+//! C ABI for the coin-liveness zyncAPP (include/zapp_liveness.h), moved out of swiftsync-verify-ffi's facts JSON
+//! (`"liveness"`) on 15.11.2026: a zAPP module of its own (docs/libzync/ZYNCAPPS.md §9). One implementation of the
+//! check: this calls the same `zapp_liveness::verify_liveness` as the CLI and the WASM build. No panics cross the
+//! boundary.
+
+use std::ffi::{c_char, CStr};
+use swiftsync_verify::{ChainState, Verdict};
+use zapp_liveness::LivenessFact;
+
+const OK: i32 = 0;
+const FAIL: i32 = 1;
+const DEMO: i32 = 2;
+
+unsafe fn slice<'a>(p: *const u8, n: usize) -> &'a [u8] {
+    if p.is_null() || n == 0 { &[] } else { std::slice::from_raw_parts(p, n) }
+}
+
+unsafe fn write_msg(msg: *mut c_char, len: usize, s: &str) {
+    if msg.is_null() || len == 0 {
+        return;
+    }
+    let b = s.as_bytes();
+    let n = b.len().min(len - 1);
+    std::ptr::copy_nonoverlapping(b.as_ptr(), msg as *mut u8, n);
+    *msg.add(n) = 0;
+}
+
+unsafe fn text<'a>(p: *const c_char, what: &str) -> Result<Option<&'a str>, String> {
+    if p.is_null() { return Ok(None); }
+    CStr::from_ptr(p).to_str().map(Some).map_err(|_| format!("{what} is not UTF-8"))
+}
+
+/// See include/zapp_liveness.h.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn zapp_liveness_verify(receipt: *const u8, receipt_len: usize, network: u8, now: u64,
+                                              image_hex: *const c_char, anchor_json: *const c_char,
+                                              facts_json: *const c_char, expect: *const c_char,
+                                              msg: *mut c_char, msg_len: usize) -> i32 {
+    let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
+    let net = match network & !0x30 { 0 => "mainnet", 1 => "signet", _ => return fail("unknown network") };
+    let (image_hex, anchor_json, facts_json, expect) =
+        match (text(image_hex, "image id"), text(anchor_json, "anchor"), text(facts_json, "facts JSON"), text(expect, "expect")) {
+            (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+            (Err(e), ..) | (_, Err(e), ..) | (_, _, Err(e), _) | (.., Err(e)) => return fail(&e),
+        };
+    let image = match zapp_liveness::image_for(net, image_hex.unwrap_or(""), network & 0x10 != 0, network & 0x20 != 0) {
+        Ok(i) => i,
+        Err(e) => return fail(&e),
+    };
+    let anchor: Option<ChainState> = match anchor_json.map(serde_json::from_str) {
+        None => None,
+        Some(Ok(a)) => Some(a),
+        Some(Err(e)) => return fail(&format!("anchor is not a ChainState: {e}")),
+    };
+    // {"liveness": [{"proof": "<hex>", "ask": "<question>"}]}; an "expect" inside it is the fact server vouching for
+    // its own fork (cold review 11-06): refused, as in the core's facts JSON.
+    let v: serde_json::Value = match facts_json.map(serde_json::from_str) {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => return fail(&format!("facts JSON: {e}")),
+        None => return fail("no facts JSON: give {\"liveness\": [...]}"),
+    };
+    if v.get("expect").is_some() { return fail("\"expect\" inside the facts JSON is refused: the expected tip is the integrator's own trusted source, passed separately"); }
+    let facts: Vec<LivenessFact> = match serde_json::from_value(v.get("liveness").cloned().unwrap_or_else(|| serde_json::json!([]))) {
+        Ok(l) => l,
+        Err(e) => return fail(&format!("facts JSON liveness: {e}")),
+    };
+    if facts.is_empty() { return fail("no liveness facts"); }
+    let o = zapp_liveness::verify_liveness(slice(receipt, receipt_len), image, anchor, now, &facts, expect, true);
+    match o.report.verdict {
+        Verdict::Ok => { write_msg(msg, msg_len, "every liveness claim holds on the proven chain, its tip the block expect names"); OK }
+        Verdict::Demo => { write_msg(msg, msg_len, "the liveness claims hold, but the chain is not shown to be the network's (no matching expect, below minimum work, or from an anchor)"); DEMO }
+        Verdict::Fail => fail(o.report.checks.iter().filter(|(ok, _)| !ok).map(|(_, w)| w.as_str())
+            .chain(o.facts.iter().filter_map(|r| r.as_ref().err().map(|e| e.as_str()))).next().unwrap_or("failed")),
+    }
+}

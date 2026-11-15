@@ -42,7 +42,7 @@ pub unsafe extern "C" fn swiftsync_verify(receipt: *const u8, receipt_len: usize
 }
 
 /// As `swiftsync_verify`, plus zyncAPP facts (ZYNCAPPS.md §8): `facts_json` (NUL-terminated, may be NULL) is
-/// `{"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact], "liveness": [LivenessFact]}`, each checked against the verified state. Any fact that does not
+/// `{"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact], "expect": "h:hash"}`, each checked against the verified state. Any fact that does not
 /// hold is FAIL, with its reason in `msg`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
@@ -114,15 +114,11 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             Ok(t) => t,
             Err(e) => return fail(&format!("facts JSON tries: {e}")),
         };
-        let lives: Vec<swiftsync_verify::LivenessFact> = match serde_json::from_value(v.get("liveness").cloned().unwrap_or_else(|| serde_json::json!([]))) {
-            Ok(l) => l,
-            Err(e) => return fail(&format!("facts JSON liveness: {e}")),
-        };
         // Facts need the tip compared with the network (step 7): `expect` ("h:hash"), a SEPARATE argument from the
         // integrator's own trusted source. Inside the facts JSON it would be the fact server vouching for its own fork
         // (cold review 11-06), so it is refused there. Without a match the verdict is at most DEMO.
         if v.get("expect").is_some() { return fail("\"expect\" inside the facts JSON is refused: the expected tip is the integrator's own trusted source (its node, an explorer), passed separately, never the fact server's word"); }
-        let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty() || !lives.is_empty();
+        let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty();
         let uf = rep.undo_from; // the block-leaf format by height (docs/libzync/UNDO.md)
         match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
             Some(cs) => {
@@ -136,10 +132,6 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
                 }
                 for t in &tries {
                     let r = trie_check(cs, uf, t);
-                    rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
-                }
-                for l in &lives {
-                    let r = swiftsync_verify::check_liveness_fact(cs, uf, l, true);
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
             }

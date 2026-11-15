@@ -1,9 +1,10 @@
 #!/bin/bash
-# Liveness proofs through the CLI (docs/libzync/LIVENESS_ZAPP.md), against the real proof of mainnet 1..200 (8888d59c).
-# usage: run.sh <swiftsync-verify> [<zync-path>]     exit codes: 2 DEMO (honest: below minimum work), 1 FAIL
+# Liveness proofs through the liveness zAPP's CLI (docs/libzync/LIVENESS_ZAPP.md), against the real proof of mainnet
+# 1..200 (8888d59c, the core's swiftsync-verify/vectors), and its producer (zapp-liveness prove).
+# usage: run.sh <zapp-liveness>     exit codes: 2 DEMO (honest: below minimum work), 1 FAIL
 set -u
-V=${1:?swiftsync-verify}; ZP=${2:-}
-D=$(cd "$(dirname "$0")" && pwd); R=$D/../mainnet_1_200_8888d59c.rcpt
+V=${1:?zapp-liveness}
+D=$(cd "$(dirname "$0")" && pwd); C=$D/../../../swiftsync-verify/vectors; R=$C/mainnet_1_200_8888d59c.rcpt
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 IMG="--image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4"
 T9=0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9
@@ -45,16 +46,16 @@ tamper b9_0_at169.hex bpath.hex "b[-40]^=1"
 case_ "tampered witness (block path)"                 1 --liveness "$T/bpath.hex" "$T9:0@169" "$R"
 tamper b170_0_at200.hex trailing.hex "b.append(0)"
 case_ "a byte appended"                               1 --liveness "$T/trailing.hex" "$T170:0@200" "$R"
-case_ "dev-mode receipt (FakeReceipt)"                1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$D/../fake_block_2501.rcpt"
-case_ "a receipt with one seal bit flipped"           1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$D/../mainnet_1_200_8888d59c_flipped.rcpt"
-if [ -n "$ZP" ]; then
+case_ "dev-mode receipt (FakeReceipt)"                1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$C/fake_block_2501.rcpt"
+case_ "a receipt with one seal bit flipped"           1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$C/mainnet_1_200_8888d59c_flipped.rcpt"
+if true; then
   # the producer: the same bytes again, and no proof for an outpoint that never existed
   B=$D/../../../prover/testdata/libzync/mainnet
-  "$ZP" live "$D/mainnet_1_200_history.bin" 200 tip "$T9:0" --blocks "$B" > "$T/p.hex" 2>/dev/null
-  if cmp -s <(tr -d '\n' < "$T/p.hex") <(tr -d '\n' < "$D/b9_0_at200.hex"); then pass=$((pass+1)); echo "ok   zync-path live reproduces b9_0_at200.hex"
-  else fail=$((fail+1)); echo "FAIL zync-path live differs"; fi
-  if "$ZP" live "$D/mainnet_1_200_history.bin" 200 tip "$T170:2" --blocks "$B" > /dev/null 2>&1; then fail=$((fail+1)); echo "FAIL zync-path made a proof for a missing output"
-  else pass=$((pass+1)); echo "ok   zync-path refuses an output that does not exist"; fi
+  "$V" prove "$D/mainnet_1_200_history.bin" 200 tip "$T9:0" --blocks "$B" > "$T/p.hex" 2>/dev/null
+  if cmp -s <(tr -d '\n' < "$T/p.hex") <(tr -d '\n' < "$D/b9_0_at200.hex"); then pass=$((pass+1)); echo "ok   zapp-liveness prove reproduces b9_0_at200.hex"
+  else fail=$((fail+1)); echo "FAIL zapp-liveness prove differs"; fi
+  if "$V" prove "$D/mainnet_1_200_history.bin" 200 tip "$T170:2" --blocks "$B" > /dev/null 2>&1; then fail=$((fail+1)); echo "FAIL zapp-liveness prove made a proof for a missing output"
+  else pass=$((pass+1)); echo "ok   zapp-liveness prove refuses an output that does not exist"; fi
 fi
 echo "LIVENESS_CLI: $pass passed, $fail failed"
 [ "$fail" = 0 ]

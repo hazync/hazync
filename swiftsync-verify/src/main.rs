@@ -26,9 +26,6 @@
 //!
 //! `--coinlog`, `--product`: kept for old command lines. The published images already are the product build (coin log,
 //! counting trie, live-coin hash; profile bits 4-6), and the summary follows the proven profile, so neither is needed.
-//! `--liveness <proof> <question>` (repeat): an outpoint's state at a height (docs/libzync/LIVENESS_ZAPP.md), as
-//! `zync-path live` writes it, checked against the question YOU ask (`<txid>:<vout>@<h|tip>`, optionally
-//! `=unspent` / `=spent[:<h>[:<tx>:<vin>]]`, `,value=<sat>`, `,script=<hex>`).
 //! `--trie <fact.json>` (repeat): a counting-trie fact at the tip (coin unspent / spent by / absent, a script's balance,
 //! its complete history), as `zync-path trie` writes it; checked against the verified state's trie root.
 //!
@@ -44,7 +41,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... [--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>]]... <receipt|bundle.sspf>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
@@ -79,7 +76,6 @@ fn main() {
     let (mut expect, mut mempool): (Option<String>, Option<String>) = (None, None);
     let mut coin_facts: Vec<String> = Vec::new();
     let mut journeys: Vec<String> = Vec::new();
-    let mut liveness: Vec<(String, String)> = Vec::new();
     let mut n_facts = 0usize;
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -96,10 +92,6 @@ fn main() {
             "--mempool-url" => mempool = Some(args.next().unwrap_or_else(|| usage())),
             "--coin" => coin_facts.push(args.next().unwrap_or_else(|| usage())),
             "--journey" => journeys.push(args.next().unwrap_or_else(|| usage())),
-            "--liveness" => {
-                let f = args.next().unwrap_or_else(|| usage());
-                liveness.push((f, args.next().unwrap_or_else(|| usage())));
-            }
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
                 let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>[:<64 hex digits: the predecessor's RISC Zero verifier parameters, for a cross-version handover>]")) };
@@ -231,26 +223,14 @@ fn main() {
         let receipt_failed = rep.verdict == Verdict::Fail;
         // the block-leaf format by height (docs/libzync/UNDO.md): facts opening a block at or above it carry its undo hash
         let uf = rep.undo_from;
-        n_facts = coin_facts.len() + journeys.len() + trie_facts.len() + liveness.len();
+        n_facts = coin_facts.len() + journeys.len() + trie_facts.len();
         if receipt_failed {
-            for p in coin_facts.iter().chain(journeys.iter()).chain(trie_facts.iter()).chain(liveness.iter().map(|(p, _)| p)) {
+            for p in coin_facts.iter().chain(journeys.iter()).chain(trie_facts.iter()) {
                 rep.checks.push((false, format!("{}: NOT checked: the receipt did not verify", esc(p))));
             }
             coin_facts.clear();
             journeys.clear();
             trie_facts.clear();
-            liveness.clear();
-        }
-        // liveness proofs (docs/libzync/LIVENESS_ZAPP.md): the question is the caller's, the proof the server's
-        for (p, q) in &liveness {
-            let r = swiftsync_verify::LivenessAsk::parse(q).and_then(|ask| {
-                let b = std::fs::read(p).map_err(|e| e.to_string())?;
-                swiftsync_verify::check_liveness(cs, uf, &swiftsync_verify::liveness_bytes(&b)?, &ask)
-            });
-            match r {
-                Ok((token, line)) => rep.checks.push((true, format!("--liveness {}: {token}: {line}", esc(p)))),
-                Err(e) => rep.checks.push((false, format!("--liveness {}: {e}", esc(p)))),
-            }
         }
         for p in &trie_facts {
             let f: Result<swiftsync_verify::TrieFact, String> = std::fs::read(p).map_err(|e| e.to_string())

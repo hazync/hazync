@@ -19,6 +19,6 @@ ok   tampered witness (block path) (rc 1): liveness proof for 0437cd7f8525ceed23
 ok   a byte appended (rc 1): liveness proof: bytes after the end of the proof
 ok   dev-mode receipt (FakeReceipt) (rc 1)  [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
 ok   a receipt with one seal bit flipped (rc 1)  [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (main
-ok   zync-path live reproduces b9_0_at200.hex
-ok   zync-path refuses an output that does not exist
+ok   zapp-liveness prove reproduces b9_0_at200.hex
+ok   zapp-liveness prove refuses an output that does not exist
 LIVENESS_CLI: 23 passed, 0 failed

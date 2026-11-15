@@ -56,7 +56,7 @@ jobs:
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - name: libzync (coin log, counting trie, facts, wire)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,liveness
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
@@ -94,9 +94,29 @@ jobs:
           bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
           node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
           swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
-          # liveness proofs (docs/libzync/LIVENESS_ZAPP.md) on the CLI and WASM (the C cases are in test.c above)
-          bash swiftsync-verify/vectors/liveness/run.sh swiftsync-verify/target/release/swiftsync-verify
-          (cd swiftsync-verify-wasm && node test-liveness.mjs)
+
+  zapps:
+    # Every zAPP is a module of its own (zapps/<name>/: its check library and CLI, its WASM module and glue, its C ABI if
+    # it has one; docs/libzync/ZYNCAPPS.md §9), on the core verifier as a library and never part of it: adding one does
+    # not change the core verifier (its .wasm stays byte-identical). Each runs its own tests from its own directory.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/zapps-target   # one native target dir: the zAPPs share the core's dependencies
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - name: Every zAPP's tests, each from its own directory (zapps/*/test.sh)
+        run: |
+          n=0
+          for t in zapps/*/test.sh; do
+            echo "::group::$t"
+            (cd "$(dirname "$t")" && bash test.sh) || { echo "::error::$t failed"; exit 1; }
+            echo "::endgroup::"; n=$((n+1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::no zapps/*/test.sh: the zapps job ran nothing"; exit 1; }
+          echo "$n zAPP test suites passed"
 
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
@@ -1863,7 +1883,8 @@ jobs:
           # of the libzync verifier), and they are not part of the prover workspace. The CORE verifiers' lockfiles went
           # to history/ with them.
           for f in accumulator coinbase-smt libzync prover prover/methods/guest guest-pure-fuzz \
-                   swiftsync-verify swiftsync-verify-ffi swiftsync-verify-wasm; do
+                   swiftsync-verify swiftsync-verify-ffi swiftsync-verify-wasm \
+                   $(git ls-files 'zapps/*Cargo.lock' | xargs -rn1 dirname); do
             echo "== $f =="
             cargo audit --file "$f/Cargo.lock" $IGNORE || rc=1
           done

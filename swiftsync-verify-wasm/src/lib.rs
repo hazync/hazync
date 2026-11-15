@@ -172,7 +172,7 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
 }
 
 /// `verify_facts(ptr, len)`: the `verify_frame` input (network code | 0x10 for a coin-log image) followed by
-/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact], "liveness": [LivenessFact]}][u32 n][expect]`; expect
+/// `[u32 n][JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact]}][u32 n][expect]`; expect
 /// ("<height>:<hash>", empty for none) is the network's block at the proof's height from a source the PAGE trusts, kept
 /// out of the facts JSON so a fact server cannot vouch for its own fork (an "expect" key inside it is refused; cold
 /// review 11-06). Without it the verdict is at most DEMO (ZYNCAPPS.md §8). Returns `verify_frame`'s JSON plus `facts`: one {ok, what} per fact, checked
@@ -196,18 +196,16 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
             .map_err(|e| format!("facts JSON journeys: {e}"))?;
         let tries: Vec<swiftsync_verify::TrieFact> = serde_json::from_value(v.get("tries").cloned().unwrap_or_else(|| serde_json::json!([])))
             .map_err(|e| format!("facts JSON tries: {e}"))?;
-        let lives: Vec<swiftsync_verify::LivenessFact> = serde_json::from_value(v.get("liveness").cloned().unwrap_or_else(|| serde_json::json!([])))
-            .map_err(|e| format!("facts JSON liveness: {e}"))?;
         if v.get("expect").is_some() {
             return Err("\"expect\" inside the facts JSON is refused: pass the expected tip separately, from a source the page trusts".to_string());
         }
         let expect = Some(expect).filter(|e| !e.is_empty());
-        Ok((r, coins, journeys, tries, lives, expect))
+        Ok((r, coins, journeys, tries, expect))
     });
     match res {
         Err(e) => fail(e),
-        Ok(((mut rep, image), coins, journeys, tries, lives, expect)) => {
-            let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty() || !lives.is_empty();
+        Ok(((mut rep, image), coins, journeys, tries, expect)) => {
+            let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty();
             let mut out = Vec::new();
             // Facts need the tip compared with the network (step 7): the page passes "expect": "h:hash" from a source
             // it trusts. Without a match the verdict is at most DEMO (adversarial review, 11-03).
@@ -233,10 +231,6 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
                 }
                 for t in &tries {
                     out.push(swiftsync_verify::check_trie_fact(cs, uf, t));
-                }
-                // liveness (docs/libzync/LIVENESS_ZAPP.md): the page's own question, which must claim its answer
-                for l in &lives {
-                    out.push(swiftsync_verify::check_liveness_fact(cs, uf, l, true));
                 }
             } else if any {
                 out.push(Err("no verified state to check facts against".to_string()));

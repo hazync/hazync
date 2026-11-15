@@ -46,10 +46,7 @@ int swiftsync_verify(const uint8_t* receipt, size_t receipt_len,
  * tip: coin unspent / spent by / absent, a script's balance or complete history)}, or NULL. expect: NUL-terminated
  * "<height>:<hash>", the network's block at the proof's height from a source YOU trust (your node, an explorer), or
  * NULL; never take it from the fact server (an "expect" key inside facts_json is FAIL). A TrieFact that finds a coin
- * must carry its creating transaction ("origin", a TxFact; ZYNCAPPS.md). "liveness": [{"proof": "<hex>", "ask":
- * "<txid>:<vout>@<height|tip>=unspent|=spent[:<h>[:<tx>:<vin>]][,value=<sat>][,script=<hex>]"}]: one outpoint's state
- * after a height (docs/libzync/LIVENESS_ZAPP.md). The ask is YOURS: the proof must be about exactly that outpoint and
- * height, and the claimed state (required here), amount and script must be the proof's.
+ * must carry its creating transaction ("origin", a TxFact; ZYNCAPPS.md).
  * Each TrieFact must carry its claimed answer in its own "expect" ("absent", "unspent:<sat>",
  * "spent:<sat>:<height>:<tx>:<input>"; for balance / history "never" or "<count>:<sat>"): this result returns only
  * whether the claim holds, so a trie fact without one is FAIL. Any fact that does not hold is FAIL (1), with its

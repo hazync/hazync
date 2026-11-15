@@ -1,19 +1,27 @@
 //! Liveness proofs (docs/libzync/LIVENESS_ZAPP.md) against the REAL proof of mainnet 1..200 (image 8888d59c, risc0
-//! 3.1.0, vectors/mainnet_1_200_8888d59c.rcpt) and the history of that run (vectors/liveness/mainnet_1_200_history.bin).
-//! The proofs in vectors/liveness/ were written by `zync-path live ... --blocks prover/testdata/libzync/mainnet`.
+//! 3.1.0, the core's swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt) and the history of that run
+//! (vectors/mainnet_1_200_history.bin). The proofs in vectors/ were written by `zync-path live ... --blocks
+//! prover/testdata/libzync/mainnet`, now `zapp-liveness prove`.
 
 use libzync::liveness as lv;
 use swiftsync_verify::*;
+use zapp_liveness::*;
 
 const T9: &str = "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9";
 const T170: &str = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16";
 
+/// The core verifier's vectors (the receipts this zAPP is checked against).
 fn vec_path(f: &str) -> String {
+    format!("{}/../../swiftsync-verify/vectors/{f}", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// This zAPP's own vectors (liveness proofs, the run's history).
+fn zapp_path(f: &str) -> String {
     format!("{}/vectors/{f}", env!("CARGO_MANIFEST_DIR"))
 }
 
 fn proof(f: &str) -> Vec<u8> {
-    liveness_bytes(&std::fs::read(vec_path(&format!("liveness/{f}"))).unwrap()).unwrap()
+    liveness_bytes(&std::fs::read(zapp_path(f)).unwrap()).unwrap()
 }
 
 fn verified(rcpt: &str) -> Report {
@@ -44,7 +52,7 @@ const HONEST: [(&str, &str, &str); 5] = [
 #[test]
 fn honest_proofs_hold_and_the_producer_is_deterministic() {
     let (cs, uf) = state();
-    let recs = libzync::history::decode_all(&std::fs::read(vec_path("liveness/mainnet_1_200_history.bin")).unwrap()).unwrap();
+    let recs = libzync::history::decode_all(&std::fs::read(zapp_path("mainnet_1_200_history.bin")).unwrap()).unwrap();
     for (f, q, want) in HONEST {
         let b = proof(f);
         let (got, line) = check_liveness(&cs, uf, &b, &ask(q)).unwrap_or_else(|e| panic!("{f}: {e}"));
@@ -119,7 +127,7 @@ fn spent_claimed_unspent_and_unspent_claimed_spent_are_refused() {
 #[test]
 fn an_outpoint_that_never_existed_has_no_proof() {
     let (cs, uf) = state();
-    let recs = libzync::history::decode_all(&std::fs::read(vec_path("liveness/mainnet_1_200_history.bin")).unwrap()).unwrap();
+    let recs = libzync::history::decode_all(&std::fs::read(zapp_path("mainnet_1_200_history.bin")).unwrap()).unwrap();
     let p = lv::decode(&proof("b170_0_at200.hex")).unwrap();
     // vout 2 of the first payment (it has two outputs), and a made-up txid, on every position of the log
     for coin in [lv::Coin { vout: 2, ..p.coin.clone() }, lv::Coin { txid: [0x42; 32], ..p.coin.clone() }] {

@@ -60,8 +60,8 @@ every bit of the five real proofs (18,904 flips): every one is refused by the pr
 
 ## 4. The check
 
-The verifier (`swiftsync_verify::check_liveness`, shared by the CLI, C ABI and WASM) runs only on a receipt that
-passed the core checks (`verify`: image, real proof, genesis anchor, profile, block forest, time). Then:
+The verifier (`zapp_liveness::check_liveness`, in the zAPP's own module `zapps/liveness`, shared by its CLI, C ABI and
+WASM; ZYNCAPPS.md §9) runs only on a receipt that passed the core checks (`verify`: image, real proof, genesis anchor, profile, block forest, time). Then:
 
 1. **The question is the caller's.** The proof must name the outpoint and height the caller asked about. If the
    caller gives an amount, script or claimed state, those must match the proof too. A true fact about another coin
@@ -97,14 +97,14 @@ Not proven, or left to the caller:
 
 ```sh
 # producer: the history of a proving run, and the coin's fields from block files or your own node
-zync-path live <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>] > p.hex
-zync-serve <history.bin> <addr:port> [state_<tip>.trie] --blocks <dir>      GET /live/<at|tip>/<txid>/<vout>
-# verifier: YOUR question, then the proof
-swiftsync-verify --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>]' <receipt>
+zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>] > p.hex
+zapp-liveness serve <history.bin> <addr:port> --blocks <dir>                GET /live/<at|tip>/<txid>/<vout>, GET /tip
+# verifier: YOUR question, then the proof (the core receipt is verified by the core verifier's library)
+zapp-liveness [--expect <h>:<hash>] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>]' <receipt>
 ```
 
-In the C ABI (`swiftsync_verify_facts`) and WASM (`verifyFacts`), the facts JSON takes
-`"liveness": [{"proof": "<hex>", "ask": "<question>"}]`. There the question must claim its answer (`=unspent` or
+In the C ABI (`zapp_liveness_verify`, `zapps/liveness/ffi/include/zapp_liveness.h`) and WASM (`verifyLiveness` in
+`zapps/liveness/wasm/zapp-liveness.js`), the facts JSON is `{"liveness": [{"proof": "<hex>", "ask": "<question>"}]}`. There the question must claim its answer (`=unspent` or
 `=spent…`), because those calls return only whether a claim holds.
 
 The fields come from the creating block. A block does not show the BIP30 flag, so the producer tries both values and
@@ -113,16 +113,16 @@ keeps the leaf the log holds. With `--bitcoin-cli` and no `--height`, the node n
 ## 7. Tests and measured numbers
 
 All against the real proof of mainnet 1..200 (image `8888d59c`, `swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`)
-and that run's `history.bin` (`vectors/liveness/`), 15.11.2026:
+and that run's `history.bin` (`zapps/liveness/vectors/`), 15.11.2026; all of it run by `zapps/liveness/test.sh`:
 
 | suite | result |
 |---|---|
 | libzync unit tests (`liveness::tests`) | 2/2 |
-| swiftsync-verify `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, every bit flipped, a dev-mode and a tampered receipt | 8/8 |
-| zync-serve `/live` route | 1/1 |
-| CLI, `vectors/liveness/run.sh` | 23/23 |
-| C ABI, `swiftsync-verify-ffi/test.c` | 20/20 (7 liveness) |
-| WASM, `swiftsync-verify-wasm/test-liveness.mjs` | 13/13 |
+| zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, every bit flipped, a dev-mode and a tampered receipt | 8/8 |
+| `zapp-liveness serve` `/live` route | 1/1 |
+| CLI and producer, `vectors/run.sh` | 23/23 |
+| C ABI, `ffi/test_liveness.c` | 9/9 |
+| WASM, `wasm/test-liveness.mjs` | 13/13 |
 
 The real answers: block 9's coinbase (`0437cd7f…:0`) is UNSPENT after 169 and SPENT at 170 by transaction 1 input 0.
 The first payment's 10 BTC to Hal Finney (`f4184fc5…:0`) is UNSPENT at 200. Its 40 BTC change (`…:1`) is unspent
@@ -139,8 +139,7 @@ bytes per root and per block-path level.
 
 **WASM frame fix.** Since `f713e3a6` (13.11.2026), the WASM `verify_facts` read its optional lineage chunk before
 the facts, so it took the facts JSON for a lineage. Every `verifyFacts` call with facts failed, and so did `verify`
-with an expected tip. The lineage is now the last chunk in both frames, and `test-liveness.mjs` checks a trie fact
-and an expect.
+with an expected tip. The lineage is now the last chunk in both frames (PR #734, `swiftsync-verify-wasm/test-facts-frame.mjs`).
 
 ## 8. Privacy variant (experiment, `experimental/libzync-bench/liveness-anon`)
 

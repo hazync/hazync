@@ -1,0 +1,57 @@
+/* test_liveness.c: the liveness zAPP's C ABI (zapp_liveness_verify) on the real mainnet 1..200 proof (8888d59c,
+ * risc0 3.1.0; the core's ../../../swiftsync-verify/vectors) and this zAPP's proofs (../vectors). Honest claims are
+ * DEMO (below minimum work), refusals FAIL. Moved from swiftsync-verify-ffi/test.c's 7 liveness cases, 15.11.2026.
+ *   cc -O2 -Iinclude test_liveness.c target/release/libzapp_liveness_ffi.a -lpthread -ldl -lm -o test_liveness && ./test_liveness */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "zapp_liveness.h"
+
+static unsigned char* slurp(const char* p, size_t* n) {
+    FILE* f = fopen(p, "rb"); if (!f) { perror(p); exit(2); }
+    fseek(f, 0, SEEK_END); *n = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
+    unsigned char* b = malloc(*n); if (fread(b, 1, *n, f) != *n) exit(2); fclose(f); return b;
+}
+
+static int bad = 0, n = 0;
+static const char* IMG = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4";
+static const char* CORE = "../../../swiftsync-verify/vectors/";
+
+/* A liveness proof: `flip` >= 0 flips that hex digit. */
+static void live(const char* name, const char* rc, const char* proof, const char* ask, int flip, const char* expect, int want) {
+    size_t rn, pn; char msg[512], path[512];
+    snprintf(path, sizeof path, "%s%s", CORE, rc);
+    unsigned char* r = slurp(path, &rn);
+    snprintf(path, sizeof path, "../vectors/%s", proof);
+    unsigned char* p = slurp(path, &pn);
+    while (pn && (p[pn - 1] == '\n' || p[pn - 1] == '\r')) pn--;
+    if (flip >= 0) p[flip] = p[flip] == '0' ? '1' : '0';
+    char* facts = malloc(pn + strlen(ask) + 64);
+    sprintf(facts, "{\"liveness\": [{\"proof\": \"%.*s\", \"ask\": \"%s\"}]}", (int)pn, (const char*)p, ask);
+    int got = zapp_liveness_verify(r, rn, 0x20, (uint64_t)time(NULL), IMG, NULL, facts, expect, msg, sizeof msg);
+    printf("%s  %-24s verdict %d (want %d)  %.150s\n", got == want ? "PASS" : "WRONG", name, got, want, msg);
+    bad += got != want; n++; free(r); free(p); free(facts);
+}
+
+int main(void) {
+    const char* H = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0@200";
+    const char* R = "mainnet_1_200_8888d59c.rcpt";
+    const char* TIP = "200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
+    char q[256];
+    snprintf(q, sizeof q, "%s=unspent,value=1000000000", H);
+    live("liveness_unspent", R, "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_DEMO); /* low work: DEMO */
+    live("liveness_unspent_expect", R, "b170_0_at200.hex", q, -1, TIP, ZAPP_LIVENESS_DEMO); /* tip matches; still low work */
+    live("liveness_spent", R, "b9_0_at200.hex", "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0@200=spent:170:1:0", -1, NULL, ZAPP_LIVENESS_DEMO);
+    snprintf(q, sizeof q, "%s=spent", H);
+    live("liveness_false_claim", R, "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
+    live("liveness_no_claim", R, "b170_0_at200.hex", H, -1, NULL, ZAPP_LIVENESS_FAIL);
+    snprintf(q, sizeof q, "%s=unspent,value=999", H);
+    live("liveness_wrong_amount", R, "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
+    snprintf(q, sizeof q, "%s=unspent", H);
+    live("liveness_tampered", R, "b170_0_at200.hex", q, 200, NULL, ZAPP_LIVENESS_FAIL);
+    live("liveness_wrong_tip", R, "b170_0_at200.hex", q, -1, "200:0000000000000000000000000000000000000000000000000000000000000001", ZAPP_LIVENESS_FAIL);
+    live("liveness_fake_receipt", "fake_block_2501.rcpt", "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
+    printf("LIVENESS_C_ABI %d/%d %s\n", n - bad, n, bad ? "SOME CASES WRONG" : "all cases as expected");
+    return bad != 0;
+}

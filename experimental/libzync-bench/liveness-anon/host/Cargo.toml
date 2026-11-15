@@ -16,6 +16,6 @@ serde = { version = "1", features = ["derive"] }
 bincode = "1"
 sha2 = "0.10"
 k256 = { version = "0.13", features = ["arithmetic"] }
-libzync = { path = "../../../../libzync", default-features = false }
+libzync = { path = "../../../../libzync", default-features = false, features = ["liveness"] }
 
 [workspace]
