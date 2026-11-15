@@ -1318,14 +1318,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swiftsync-verify-wasm"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "swiftsync-verify",
-]
-
-[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1515,6 +1507,25 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "zapp-liveness"
+version = "0.1.0"
+dependencies = [
+ "libzync",
+ "serde",
+ "serde_json",
+ "swiftsync-verify",
+]
+
+[[package]]
+name = "zapp-liveness-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "swiftsync-verify",
+ "zapp-liveness",
+]
 
 [[package]]
 name = "zerocopy"

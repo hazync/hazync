@@ -46,8 +46,9 @@ struct Frame<'a> {
 
 impl<'a> Frame<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let out = self.b.get(self.i..self.i + n).ok_or("input frame truncated")?;
-        self.i += n;
+        let end = self.i.checked_add(n).ok_or("input frame truncated")?;
+        let out = self.b.get(self.i..end).ok_or("input frame truncated")?;
+        self.i = end;
         Ok(out)
     }
     fn chunk(&mut self) -> Result<&'a [u8], String> {
@@ -108,4 +109,19 @@ pub extern "C" fn verify_liveness(ptr: *mut u8, len: usize) -> *const u8 {
         "tip_checked": o.tip_checked,
         "facts": facts,
     }).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// Review finding 7 (feat/headers-mmr): `self.i + n` overflowed (a panic in a debug build) on a length near usize::MAX.
+    #[test]
+    fn frame_take_does_not_overflow() {
+        let b = [1u8, 2, 3];
+        let mut f = Frame { b: &b, i: 1 };
+        assert!(f.take(usize::MAX).is_err());
+        assert_eq!(f.i, 1);
+        assert_eq!(f.take(2).unwrap(), &[2, 3]);
+        assert!(f.take(1).is_err());
+    }
 }
