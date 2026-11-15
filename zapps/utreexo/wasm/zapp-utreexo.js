@@ -4,7 +4,8 @@
 //   import { loadUtreexo } from './zapp-utreexo.js';
 //   const u = await loadUtreexo(fetch('./zapp_utreexo_wasm.wasm'));
 //   const r = u.verify({ receipt, expectAt: '<H>:<hash>' });   // expectAt from YOUR header chain; expectTip when T > H
-//   r.verdict ('ok' | 'demo' | 'fail'), r.height, r.block_hash, r.leaves, r.roots
+//   r.verdict ('ok' | 'demo' | 'fail'), r.network, r.height, r.block_hash, r.leaves, r.roots
+//   (a root "empty" is rustreexo's Empty: load it as BitcoinNodeHash::Empty, never as the hash of 32 zero bytes)
 
 function readString(memory, ptr) {
   const len = new DataView(memory.buffer).getUint32(ptr, true);

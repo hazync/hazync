@@ -12,6 +12,7 @@ t('H=3 wrong hash', u.verify({ receipt: rd('mainnet-3.receipt'), expectAt: `3:${
 t('H=3 wrong height', u.verify({ receipt: rd('mainnet-3.receipt'), expectAt: `2:${H3}` }), 'fail');
 t('H=3 other image', u.verify({ receipt: rd('mainnet-3.receipt'), imageHex: 'ab'.repeat(32), expectAt: `3:${H3}` }), 'fail');
 t('H=2 under T=3', u.verify({ receipt: rd('mainnet-2.receipt'), expectAt: `2:${H2}`, expectTip: `3:${H3}` }), 'demo');
+t('H=3 tip given, T = H, wrong', u.verify({ receipt: rd('mainnet-3.receipt'), expectAt: `3:${H3}`, expectTip: `3:${H2}` }), 'fail');
 t('H=3 two runs', u.verify({ receipt: rd('mainnet-3-split.receipt'), expectAt: `3:${H3}` }), 'demo');
 console.log(`ZAPP_UTREEXO_WASM ${pass} passed, ${fail} failed; image ${u.imageId()}`);
 process.exit(fail ? 1 : 0);

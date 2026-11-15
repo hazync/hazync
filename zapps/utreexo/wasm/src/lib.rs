@@ -8,6 +8,8 @@
 //! ```
 //! Input frame (little-endian): `[u64 now][u32 n][receipt][u32 n][image id hex, n = 0 for the built-in]`
 //! `[u32 n]["H:hash" from the page's own source, n = 0 for none][u32 n]["T:hash" for the core tip, n = 0 for none]`.
+//! The JSON's `roots` write an Empty root as the string "empty" (rustreexo's Display); the journal holds 32 zero bytes
+//! for it. Either way a consumer must build `BitcoinNodeHash::Empty`, never the hash 00…00.
 use swiftsync_verify::Verdict;
 
 #[no_mangle]
@@ -83,6 +85,7 @@ pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
         "block_hash": z.map(|z| z.block_hash_hex()),
         "leaves": z.map(|z| z.leaves),
         "roots": z.map(|z| z.roots_hex()),
+        "network": z.map(|z| z.network_name()),
         "runs": z.map(|z| z.runs),
         "core_height": z.map(|z| z.core_height),
         "identity_checked": ok && rep.identity_checked,

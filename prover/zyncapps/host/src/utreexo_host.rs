@@ -190,7 +190,9 @@ pub fn replay(t: u32, signet: bool, mut get: impl FnMut(u32) -> Block) -> Replay
             let txid = b.txids[ti];
             let is_tracked = if ti == 0 {
                 let y = indicated_height(coinbase_script_sig(&tx.stripped));
-                (h < bip34 && (h as u64) < y && y < 100_000_000) || repeatable.get(&txid) == Some(&0)
+                // the two grandfathered overwrites (91,842 / 91,880) are never a repeat (prep's tracked.rs `coinbase_flags`)
+                let grandfathered = !signet && (h == 91_842 || h == 91_880);
+                (h < bip34 && (h as u64) < y && y < 100_000_000) || (!grandfathered && repeatable.get(&txid) == Some(&0))
             } else {
                 let mut all = true;
                 for (vin, (pt, pv)) in tx.inputs.iter().enumerate() {
@@ -228,7 +230,9 @@ pub fn replay(t: u32, signet: bool, mut get: impl FnMut(u32) -> Block) -> Replay
                 new.push((txid, v as u32));
                 live.insert((txid, v as u32), Coin { pos: None, ord, value: *val, spk: spk.clone(), height: h, cb: ti == 0, tracked: is_tracked, leaf });
             }
-            if ti == 0 && is_tracked {
+            // as prep (prep.rs `tracked_new`, `.filter(|t| t.1 > 0)`): a tracked coinbase with no spendable output never
+            // enters the BIP30 tree, so it is never REPEATABLE and a repeat of it is not tracked
+            if ti == 0 && is_tracked && counted > 0 {
                 repeatable.insert(txid, counted);
             }
         }

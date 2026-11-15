@@ -8,6 +8,7 @@ TOOLCHAIN=${HAZYNC_WASM_TOOLCHAIN:-1.99.0}
 rustup toolchain install "$TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown >/dev/null 2>&1 \
     || rustup target add --toolchain "$TOOLCHAIN" wasm32-unknown-unknown >/dev/null
 export RUSTUP_TOOLCHAIN="$TOOLCHAIN"
+unset CARGO_TARGET_DIR   # the stage's own target dir: the output path below, and the bytes, must not depend on the caller
 REPO=$(cd ../../.. && pwd)
 STAGE=${ZAPP_UTREEXO_WASM_STAGE:-/tmp/zapp-utreexo-wasm-build}
 rm -rf "$STAGE" && mkdir -p "$STAGE"

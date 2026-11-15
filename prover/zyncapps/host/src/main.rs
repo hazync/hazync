@@ -482,7 +482,10 @@ fn utreexo_prove(a: &[String]) {
     let t0 = std::time::Instant::now();
     let rp = utreexo_host::replay(cs.height, signet, |h| utreexo_host::read_block(dir, h));
     if rp.block_roots != ur::trimmed(&cs.block_roots) || rp.block_leaves != cs.block_leaves {
-        die("the native replay's block forest is not the core state's: other blocks, or a rule differs");
+        die(&format!("the native replay's block forest is not the core state's (T = {}): other blocks, or a rule differs. \
+                      If T >= 147,396 (mainnet's first BIP30-tracked coin), the likely cause is a core state written by a prep \
+                      from before the tracked-flag fix (fix/bip30-tracked-flag, PR #736: its state_<h>.flags marker is missing): \
+                      its coin log and block forest are not the guest's from 147,396 on. Use a state prepped after the fix", cs.height));
     }
     let tc = std::env::var("UTREEXO_TAMPER").ok();
     if tc.is_some() && !execute { die("UTREEXO_TAMPER is an execute-only negative test"); }

@@ -10,9 +10,27 @@ use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use swiftsync_verify::{hex, hex32, identity_matches, lineage_of, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
 
-/// The utreexo image id this checker trusts by default. ⚠ A local build (hazync-coord, 2026-11-15, the prototype on
+/// The utreexo image id this checker trusts by default. ⚠ A local build (hazync-coord, 15.11.2026, the prototype on
 /// feat/zapp-utreexo), NOT a reproducible build in reproduce/LIBZYNC_IDS: nobody should rely on it yet.
 pub const UTREEXO_IMAGE_ID: &str = "27bea7da7c9c2c528a0c9b6e6d22f5d06c5b2c87bcd9d58c360ffecaf5424fb9";
+/// How [`UTREEXO_IMAGE_ID`] is labelled wherever it is printed, until it is pinned.
+pub const UTREEXO_IMAGE_LABEL: &str = "local build, not reproducible, not published";
+
+/// The largest receipt this checker decodes. A succinct receipt here is about 225 kB; the limit bounds what a hostile
+/// file can make bincode reserve (bincode 1 reads a Vec length from the input and reserves before reading the items).
+/// ⚠ The core verifier's own decode (swiftsync-verify `verify`, `bincode::deserialize` at src/lib.rs:463) has no such
+/// bound; not changed here (core code).
+pub const MAX_RECEIPT_BYTES: usize = 16 << 20;
+
+/// `bincode::deserialize`'s encoding (fixed-width integers, trailing bytes allowed) with a byte limit.
+pub fn decode_receipt(receipt: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
+    use bincode::Options;
+    if receipt.len() > MAX_RECEIPT_BYTES {
+        return Err(format!("{} bytes, over the {MAX_RECEIPT_BYTES}-byte limit", receipt.len()));
+    }
+    bincode::DefaultOptions::new().with_fixint_encoding().allow_trailing_bytes().with_limit(MAX_RECEIPT_BYTES as u64)
+        .deserialize(receipt).map_err(|e| e.to_string())
+}
 
 /// The statement's kind word ('ZU', version 1), as libzync::utreexo_roots::KIND_UTREEXO.
 pub const KIND_UTREEXO: u32 = libzync::utreexo_roots::KIND_UTREEXO;
@@ -48,15 +66,31 @@ impl UtreexoStatement {
         disp(&self.block_hash)
     }
     /// The roots as rustreexo's Display and Floresta's `acchashes!` write them (the bytes in order); an Empty root as
-    /// "empty" (rustreexo's own Display).
+    /// "empty" (rustreexo's own Display). ⚠ In the journal (the raw statement) an Empty root is 32 zero bytes; a reader
+    /// must load those as `BitcoinNodeHash::Empty`, never as the hash 00…00 (a different root, a different Stump).
     pub fn roots_hex(&self) -> Vec<String> {
         self.roots.iter().map(|r| if *r == [0u8; 32] { "empty".to_string() } else { hex(r) }).collect()
     }
-    /// Floresta's `AssumeUtreexoValue` (floresta-chain src/pruned_utreexo/chainparams.rs) as Rust source.
+    /// Floresta's `AssumeUtreexoValue` (floresta-chain src/pruned_utreexo/chainparams.rs) as Rust source. Floresta's
+    /// `acchashes!` only takes hex literals (an "empty" literal does not parse), so with an Empty root the list is
+    /// written out with an explicit `BitcoinNodeHash::Empty` instead.
     pub fn floresta_rust(&self) -> String {
-        let roots: Vec<String> = self.roots_hex().iter().map(|r| format!("        \"{r}\",")).collect();
-        format!("AssumeUtreexoValue {{\n    height: {},\n    block_hash: bhash!(\"{}\"),\n    roots: acchashes![\n{}\n    ]\n    .to_vec(),\n    leaves: {},\n}}",
-                self.height, self.block_hash_hex(), roots.join("\n"), self.leaves)
+        let has_empty = self.roots.iter().any(|r| *r == [0u8; 32]);
+        let roots = if has_empty {
+            let items: Vec<String> = self.roots.iter().map(|r| if *r == [0u8; 32] { "        BitcoinNodeHash::Empty,".to_string() }
+                                                    else { format!("        \"{}\".parse::<BitcoinNodeHash>().unwrap(),", hex(r)) }).collect();
+            format!("vec![\n{}\n    ]", items.join("\n"))
+        } else {
+            let items: Vec<String> = self.roots_hex().iter().map(|r| format!("        \"{r}\",")).collect();
+            format!("acchashes![\n{}\n    ]\n    .to_vec()", items.join("\n"))
+        };
+        format!("AssumeUtreexoValue {{\n    height: {},\n    block_hash: bhash!(\"{}\"),\n    roots: {roots},\n    leaves: {},\n}}",
+                self.height, self.block_hash_hex(), self.leaves)
+    }
+
+    /// "mainnet" or "signet", from the statement's network word.
+    pub fn network_name(&self) -> &'static str {
+        if self.network == network_bits("signet") { "signet" } else { "mainnet" }
     }
 }
 
@@ -98,7 +132,7 @@ pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&s
         rep.check(false, format!("the receipt is a single succinct or Groth16 proof ({e})"));
         return rep;
     }
-    let r: risc0_zkvm::Receipt = match bincode::deserialize(receipt) {
+    let r: risc0_zkvm::Receipt = match decode_receipt(receipt) {
         Ok(r) => r,
         Err(e) => { rep.check(false, format!("the receipt decodes ({e})")); return rep; }
     };
@@ -133,11 +167,11 @@ pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&s
         rep.identity_checked = rep.check(identity_matches(h, &x.to_lowercase(), z.height, &z.block_hash),
                                          format!("block {h} is {x} (your header chain); the roots are for block {} {}", z.height, disp(&z.block_hash)));
     }
-    let tip_ok = if z.core_height == z.height { rep.identity_checked } else {
-        match expect_tip {
-            Some((h, x)) => rep.check(identity_matches(h, &x.to_lowercase(), z.core_height, &z.tip_hash), format!("the core tip is block {h} {x}")),
-            None => false,
-        }
+    // a given tip is always compared, also when T = H (then it must name block H too)
+    let tip_ok = match expect_tip {
+        Some((h, x)) => rep.check(identity_matches(h, &x.to_lowercase(), z.core_height, &z.tip_hash),
+                                  format!("the core tip is block {h} {x}; the core proof's tip is block {} {}", z.core_height, disp(&z.tip_hash))),
+        None => z.core_height == z.height && rep.identity_checked,
     };
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
     let enough = work_at_least(&z.cum_work, img.min_work_hex) && z.core_height >= img.checkpoint_height;
@@ -165,7 +199,19 @@ mod tests {
     fn floresta_source_form() {
         let z = UtreexoStatement { height: 3, leaves: 3, roots: vec![[1; 32], [0; 32]], ..Default::default() };
         assert_eq!(z.roots_hex()[1], "empty");
-        assert!(z.floresta_rust().contains("leaves: 3,"));
+        let f = z.floresta_rust();
+        assert!(f.contains("leaves: 3,") && f.contains("BitcoinNodeHash::Empty,") && !f.contains("acchashes!") && !f.contains("\"empty\""), "{f}");
+        let n = UtreexoStatement { height: 3, leaves: 3, roots: vec![[1; 32], [2; 32]], ..Default::default() };
+        assert!(n.floresta_rust().contains("acchashes![") && !n.floresta_rust().contains("Empty"));
+    }
+
+    #[test]
+    fn hostile_receipt_bytes() {
+        // a bincode Vec length of 2^60 at the front: refused by the limit, not reserved
+        let mut b = vec![0u8; 64];
+        b[..8].copy_from_slice(&(1u64 << 60).to_le_bytes());
+        assert!(decode_receipt(&b).is_err());
+        assert!(decode_receipt(&vec![0u8; MAX_RECEIPT_BYTES + 1]).unwrap_err().contains("limit"));
     }
 
     /// The real receipts (vectors/, proved on CPU): DEMO (3 blocks are below minimum work), and refused when the
@@ -179,6 +225,10 @@ mod tests {
         assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((2, H3)), None).verdict, Verdict::Fail);
         assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H2)), None).verdict, Verdict::Fail);
         assert_eq!(verify_utreexo(&r3, &"ab".repeat(32), None, now(), Some((3, H3)), None).verdict, Verdict::Fail);
+        // T = H: a given tip is still compared
+        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), Some((3, H3))).verdict, Verdict::Demo);
+        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), Some((3, H2))).verdict, Verdict::Fail);
+        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), Some((2, H2))).verdict, Verdict::Fail);
         let Some(r2) = rd("mainnet-2.receipt") else { panic!("vectors/mainnet-2.receipt missing") };
         assert_eq!(verify_utreexo(&r2, UTREEXO_IMAGE_ID, None, now(), Some((2, H2)), Some((3, H3))).verdict, Verdict::Demo);
         assert_eq!(verify_utreexo(&r2, UTREEXO_IMAGE_ID, None, now(), Some((2, H2)), Some((3, H2))).verdict, Verdict::Fail);
