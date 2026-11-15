@@ -1643,7 +1643,7 @@ class App(tk.Tk):
                 else:
                     self._feed(f"Not taking a block{' on ' + names.get(card['index'], '') if card else ''}: {why}")
             if not keep:
-                self._skip_until = self._window().ends_at(time.time())
+                self._skip_rest_of_window()
                 self._sync_buttons()
                 self._home_refresh()
                 return
@@ -1883,6 +1883,8 @@ class App(tk.Tk):
                 self._say("⛔ not restarting — and do not just press Start again: a box that cannot "
                           "prove claims blocks and abandons them, which holds up everyone else.",
                           "cuda-error")
+                # #725: nor may the schedule start it again when the next tick or window comes round
+                self._disarm("The schedule is off until this is looked at")
             else:
                 self._again(w, kind)
         # ⛔ str(), because ttk returns a Tcl_Obj that never compares equal to a string. Without it
@@ -1915,12 +1917,13 @@ class App(tk.Tk):
                 ok, why = self._may_take_block(w.card)
                 if not ok:
                     self._feed(f"Not taking another block: {why}")
-                    self._skip_until = window.ends_at(time.time())
+                    self._skip_rest_of_window()
                     return
         if w.extra and kind in ("done", "idle"):
             # a specific range: finished means finished. Starting it again would find every block proven and exit,
             # every two seconds, for ever.
             self._feed(f"Range {activity.pretty(w.extra[0])} finished", "good")
+            self._disarm("The schedule is off: the range is finished")
             return
         if kind == "done" and w.activity.waiting:
             # it exited cleanly with nothing to do ("nothing to fold", no block free): ask again in a minute, not
@@ -1929,6 +1932,8 @@ class App(tk.Tk):
         n = w.transients + 1 if kind == "transient" else 0
         if n > self.TRANSIENT_RETRIES:
             self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
+            if self._armed:
+                self._skip_rest_of_window()     # not again every tick: the next window tries afresh
             return
         key = object()
         self._respawns[key] = self.after(self.AGAIN_MS[kind], lambda: self._respawn(key, w, n))
@@ -1960,6 +1965,21 @@ class App(tk.Tk):
             return schedule.Window.from_config(self.sched)
         except (ValueError, TypeError):
             return None
+
+    def _disarm(self, why):
+        if self._armed:
+            self._armed = False
+            self._skip_until = None
+            self._feed(why, "bad")
+            self._apply_awake()
+            self._sync_buttons()
+
+    def _skip_rest_of_window(self):
+        """Take no more blocks until this window ends (always a moment in the future, so a tick cannot undo it)."""
+        now = time.time()
+        window = self._window()
+        end = window.ends_at(now) if window else None
+        self._skip_until = max(end or 0, now + 60)
 
     def _card_key(self, card):
         return cards.key(card) if card else "this-pc"
@@ -1999,8 +2019,11 @@ class App(tk.Tk):
                 if self._skip_until and now >= self._skip_until:
                     self._skip_until = None           # a new window: ask again
                 if (not self.workers and not self._respawns and not self._skip_until and self._setup_ok):
-                    self._feed("The proving window is open")
-                    self._launch()
+                    if self.mode.get() == "range" and not self.range_var.get().strip():
+                        self._disarm("The schedule is off: no range is entered")   # never a dialog per tick
+                    else:
+                        self._feed("The proving window is open")
+                        self._launch()
             else:
                 self._skip_until = None
                 if self._respawns:
@@ -2028,7 +2051,9 @@ class App(tk.Tk):
     def _apply_awake(self):
         """Keep the PC from sleeping while it proves on the schedule, and only then. This includes the block in
         hand when the window closes, which is still finishing: a PC that sleeps mid-proof loses the claim."""
-        want = bool(self._armed and self.sched.get("keep_awake") and self.workers)
+        # ⚠ The gaps between blocks count (a restart waits 2 s, or 60 s on an idle board): dropping the request there
+        # lets a PC whose idle timer ran out long ago sleep at once, for the rest of the night.
+        want = bool(self._armed and self.sched.get("keep_awake") and (self.workers or self._respawns))
         if want == self._awake:
             return
         applied = winpower.keep_awake(want)
@@ -2063,6 +2088,8 @@ class App(tk.Tk):
         block, rc, out = args
         ok, msg = supervisor.release_verdict(rc, out)
         self._say(f"[release {block}] {msg}")
+        if not ok and "not your claim" in msg:
+            return      # the worker handed it back itself on SIGTERM (Linux) before the app got to it: nothing to say
         self._feed(f"Handed block {activity.pretty(block)} back to the board" if ok else
                    f"Block {activity.pretty(block)}: {msg}", "good" if ok else "sys")
 

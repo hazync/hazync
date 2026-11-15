@@ -35,7 +35,8 @@ time.sleep(float(open(os.path.join(home, "secs")).read()))
 print(f"proved range [{b}..{b}] from bridge bundle in 1.0s -> range_{b}.hzk", flush=True)
 print(f"✓ range {b}: the coordinator re-verified your proof and put it on the board as 'x'.", flush=True)
 open(os.path.join(home, "finished"), "a").write(f"{b}\n")
-sys.exit(0)
+rcf = os.path.join(home, "rc")
+sys.exit(int(open(rcf).read()) if os.path.exists(rcf) else 0)
 '''
 
 
@@ -158,6 +159,32 @@ def main():
     check(app._armed, "the app waits for the next window instead")
     app._stop()
     spin(1, lambda: not app.workers)
+
+    print("== between blocks the PC is still kept awake ==")
+    clear()
+    open(files["secs"], "w").write("0.1")
+    set_window(time.time() + 3600)
+    app.block_times = {}
+    hazync_gui.App.AGAIN_MS = {"done": 1500, "idle": 1500, "transient": 1500}
+    app._start()
+    gap = spin(5, lambda: bool(app._respawns) and not app.workers)
+    spin(0.4, lambda: False)                         # at least two schedule ticks inside the gap
+    check(gap and app._awake, f"a restart is waiting and the keep-awake request stands (gap {gap}, awake {app._awake})")
+    app._stop()
+    spin(3, lambda: not app.workers)
+    check(not app._awake, "after Stop it is dropped")
+    hazync_gui.App.AGAIN_MS = {"done": 200, "idle": 400, "transient": 400}
+
+    print("== a box that cannot prove is not started again by the schedule ==")
+    clear()
+    open(os.path.join(tmp, "rc"), "w").write("78")
+    app._start()
+    spin(4, lambda: False)
+    check(len(lines("runs")) == 1, f"exit 78 inside the window: no restart, from the schedule either ({len(lines('runs'))} runs)")
+    check(not app._armed, "and the schedule switches itself off, saying why")
+    os.remove(os.path.join(tmp, "rc"))
+    app._stop()
+    spin(2, lambda: not app.workers)
 
     print("== Stop hands the claimed block back ==")
     clear()

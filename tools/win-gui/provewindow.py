@@ -119,7 +119,19 @@ class Window:
     def ends_at(self, ts, from_ts=local_from_ts, to_ts=ts_from_local):
         """Timestamp the window containing `ts` closes at, or None when `ts` is outside every window."""
         opened = self._opened(from_ts(ts))
-        return None if opened is None else to_ts(self._closes(opened))
+        if opened is None:
+            return None
+        end = to_ts(self._closes(opened))
+        if end <= ts:
+            # The hour the clocks go back happens twice. During its SECOND pass a closing time inside it converts to
+            # the first pass, already gone, while the wall clock still reads inside the window. Find the real close
+            # by asking the wall clock, a minute at a time (at most the repeated hour).
+            t = ts
+            for _ in range(180):
+                t += 60
+                if self._opened(from_ts(t)) is None:
+                    return t
+        return end
 
     def seconds_left(self, ts, from_ts=local_from_ts, to_ts=ts_from_local):
         end = self.ends_at(ts, from_ts, to_ts)

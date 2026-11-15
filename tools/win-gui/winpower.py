@@ -43,9 +43,11 @@ def keep_awake(on, _kernel32=None):
             import ctypes
             k32 = ctypes.windll.kernel32
         flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0)
-        # ⚠ The return value is the PREVIOUS state, which can legitimately be 0, so it is not a success test.
-        k32.SetThreadExecutionState(flags)
-        return True
+        # The return value is the PREVIOUS state, and 0 (NULL) on failure. A thread that never set one may also
+        # report 0, so a 0 is asked once more: the second answer is the state just set, never 0 when it worked.
+        if k32.SetThreadExecutionState(flags):
+            return True
+        return bool(k32.SetThreadExecutionState(flags))
     except Exception:          # noqa: BLE001 - power management must never stop the app from proving
         return False
 
@@ -138,8 +140,11 @@ def clear_wake_task(run=_run):
     """Remove the wake task if it exists. (ok, message). Removing one that is not there is fine."""
     if not IS_WINDOWS and run is _run:
         return True, "nothing to remove"
+    # ⚠ Ask whether it exists by EXIT CODE first: schtasks' "cannot find the file" is translated on a localised Windows
+    if run(["schtasks", "/Query", "/TN", TASK_NAME])[0] != 0:
+        return True, "the wake timer is off"
     rc, out = run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
-    if rc == 0 or "cannot find" in out.lower() or "does not exist" in out.lower():
+    if rc == 0:
         return True, "the wake timer is off"
     return False, f"Windows would not remove the wake timer: {out.strip()[-300:]}"
 

@@ -3984,11 +3984,11 @@ def release(body):
         return 400, {"error": "a release needs a nonce of 16 to 64 hex characters"}
     if isinstance(ts, bool) or not isinstance(ts, int):
         return 400, {"error": "ts must be INTEGER unix seconds (the signed message renders it as a whole number)"}
-    if abs(time.time() - ts) > BEAT_SKEW:
+    now = time.time()                 # one clock for the skew check and the nonce memory, so they cannot disagree
+    if abs(now - ts) > BEAT_SKEW:
         return 400, {"error": f"release timestamp outside +/-{BEAT_SKEW}s — check your clock"}
     if not verify_sig(pk, sig, f"release:{rid}:{nonce}:{ts}".encode()) and not _CONTROL_RELEASE_UNCHECKED:
         return 403, {"error": "the release signature does not verify for that pubkey"}
-    now = time.time()
     with _release_lock:
         for k in [k for k, v in _release_seen.items() if v[4] < now - 2 * BEAT_SKEW]:
             del _release_seen[k]

@@ -6,6 +6,8 @@ checked:
 - SIGTERM in the middle of a prove (run-workers.sh --stop, systemd, the app on Linux): the worker releases its
   claimed block, exits 128+15, and another key is offered that block straight away;
 - the prover child is killed with it, not left running in its own session holding the GPU;
+- a second SIGTERM during the hand-back, a SIGTERM while the claim request is still in flight, and Ctrl-C all
+  still end with the block handed back;
 - a prove that FAILS does not release: its claim lapses as before, so one bad block is not handed straight on;
 - `hazync release <n>` (what the Windows app runs after it ends a worker with taskkill, which no handler sees)
   releases a block this key holds, and says so plainly when there is nothing to release.
@@ -146,8 +148,76 @@ check(other_claim() == b, "another key is offered that block straight away")
 pid = int(open(pidfile).read().strip()) if os.path.exists(pidfile) else None
 time.sleep(0.3)
 check(pid is not None and not alive(pid), f"the prover child (pid {pid}) was killed, not left holding the GPU")
-check(signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None) or signal.getsignal(signal.SIGTERM) is not hz._raise_stop,
-      "the worker's SIGTERM handler is removed once run is over")
+check(signal.getsignal(signal.SIGTERM) is not hz._raise_stop and signal.getsignal(signal.SIGTERM) != signal.SIG_IGN,
+      f"the worker's SIGTERM handler is removed once run is over ({signal.getsignal(signal.SIGTERM)})")
+
+print("== a second SIGTERM while handing back does not stop the release ==")
+reset()
+_quick = hz._post_quick
+
+
+def quick_but_signalled(path, body):
+    os.kill(os.getpid(), signal.SIGTERM)       # systemd, or --stop run twice, while the release is in flight
+    time.sleep(0.2)
+    return _quick(path, body)
+
+
+hz._post_quick = quick_but_signalled
+hz.cmd_prove = prove_then_get_stopped
+rc = None
+try:
+    hz.cmd_run([])
+except SystemExit as e:
+    rc = e.code
+except BaseException as e:                      # noqa: BLE001 - the failure this checks for
+    rc = f"escaped: {type(e).__name__}"
+hz._post_quick = _quick
+b = seen.get("rng")
+check(rc == 128 + signal.SIGTERM and row(b) == ("open", PK),
+      f"the second signal is ignored and block {b} is still released (rc {rc}, {row(b)})")
+
+print("== SIGTERM while the claim request is in flight ==")
+reset()
+_post = hz.post
+
+
+def claim_but_signalled(path, body):
+    if path == "/api/claim":
+        os.kill(os.getpid(), signal.SIGTERM)   # lands before the answer: the worker does not know its block yet
+        time.sleep(0.2)
+    return _post(path, body)
+
+
+hz.post = claim_but_signalled
+proved = []
+hz.cmd_prove = lambda args, claimed=False, **kw: proved.append(args[0])
+rc = None
+try:
+    hz.cmd_run([])
+except SystemExit as e:
+    rc = e.code
+except BaseException as e:                      # noqa: BLE001
+    rc = f"escaped: {type(e).__name__}"
+hz.post = _post
+c = server.db()
+held = [(r["id"], r["status"]) for r in c.execute("SELECT id, status FROM ranges WHERE assignee=?", (PK,))]
+c.close()
+check(rc == 128 + signal.SIGTERM and not proved and held and all(st == "open" for _, st in held),
+      f"the claim completes, nothing is proved, and the block it was given is handed back (rc {rc}, {held})")
+
+print("== Ctrl-C mid-prove ==")
+reset()
+hz.cmd_prove = lambda args, claimed=False, **kw: (seen.update(rng=args[0]),
+                                                   os.kill(os.getpid(), signal.SIGINT), time.sleep(2))
+rc = None
+try:
+    hz.cmd_run([])
+except SystemExit as e:
+    rc = e.code
+except BaseException as e:                      # noqa: BLE001
+    rc = f"escaped: {type(e).__name__}"
+check(rc == 128 + signal.SIGINT and row(seen["rng"]) == ("open", PK), f"exits 130 and hands the block back (rc {rc})")
+check(signal.getsignal(signal.SIGINT) is signal.default_int_handler, "and Ctrl-C behaves normally again afterwards")
 
 print("== a prove that fails keeps its claim ==")
 reset()

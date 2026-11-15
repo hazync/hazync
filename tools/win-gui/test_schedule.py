@@ -122,6 +122,13 @@ check(autumn == 9 * H, f"Saturday 24.10.2026, it lasts 9 real hours, the clocks 
 late = night.seconds_left(at(2026, 3, 29, 3, 0), from_ts, to_ts)          # 03:00 BST, after the jump
 check(late == 4 * H, f"at 03:00 BST that morning, 4 h are left ({late / H if late is not None else None} h)")
 
+short = schedule.Window(schedule.parse_hhmm("23:00"), schedule.parse_hhmm("01:30"))
+second_pass = at(2026, 10, 25, 1, 15) + H      # 01:15 GMT: the second time the wall clock reads 01:15 that night
+check(from_ts(second_pass).hour == 1 and short.is_open(second_pass, from_ts), "the repeated 01:15 is inside 23:00 to 01:30")
+left = short.seconds_left(second_pass, from_ts, to_ts)
+check(left is not None and 0 < left <= 15 * 60,
+      f"and the time left then is the real 15 min, not zero or negative ({left / 60 if left is not None else None} min)")
+
 print("== can a block finish before the window ends ==")
 check(schedule.estimate([]) is None, "nothing measured: no estimate")
 est = schedule.estimate([600, 620, 5000, 610, 590])
@@ -184,18 +191,24 @@ print("== keeping awake, and the wake timer ==")
 
 
 class K32:
-    def __init__(self):
-        self.calls = []
+    """Answers as Windows does: the PREVIOUS state (0 for a thread that never set one), or 0 when it fails."""
+
+    def __init__(self, fails=False):
+        self.calls, self.state, self.fails = [], 0, fails
 
     def SetThreadExecutionState(self, flags):
         self.calls.append(flags)
-        return 0          # the PREVIOUS state; 0 is a real answer, not a failure
+        if self.fails:
+            return 0
+        prev, self.state = self.state, flags
+        return prev
 
 
 k = K32()
 check(winpower.keep_awake(True, _kernel32=k) and k.calls[-1] == 0x80000001,
       f"on: ES_CONTINUOUS | ES_SYSTEM_REQUIRED, and not the display ({hex(k.calls[-1])})")
 check(winpower.keep_awake(False, _kernel32=k) and k.calls[-1] == 0x80000000, f"off: ES_CONTINUOUS alone ({hex(k.calls[-1])})")
+check(not winpower.keep_awake(True, _kernel32=K32(fails=True)), "a call Windows refuses is reported as refused")
 xml = winpower.wake_task_xml(fri)
 root = ET.fromstring(xml.split("?>", 1)[1])
 ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
@@ -208,8 +221,11 @@ ran = []
 ok, _ = winpower.set_wake_task(fri, run=lambda c: (ran.append(c), (0, ""))[1])
 check(ok and ran and ran[0][:4] == ["schtasks", "/Create", "/TN", winpower.TASK_NAME] and "/XML" in ran[0],
       f"registered through schtasks /XML ({ran[0][:4] if ran else None})")
-ok, _ = winpower.clear_wake_task(run=lambda c: (1, "ERROR: The system cannot find the file specified."))
-check(ok, "removing a wake timer that is not there is fine")
+ok, _ = winpower.clear_wake_task(run=lambda c: (1, "FEHLER: Das System kann die angegebene Datei nicht finden."))
+check(ok, "removing a wake timer that is not there is fine, in any language (judged by schtasks /Query's exit code)")
+asked = []
+ok, _ = winpower.clear_wake_task(run=lambda c: (asked.append(c[1]), (0, ""))[1])
+check(ok and asked == ["/Query", "/Delete"], f"one that is there is deleted ({asked})")
 POWERCFG = """Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)
   Subgroup GUID: 238c9fa8-0aad-41ed-83f4-97be242c8f20  (Sleep)
     Power Setting GUID: bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d  (Allow wake timers)
