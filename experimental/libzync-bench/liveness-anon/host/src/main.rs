@@ -80,7 +80,7 @@ fn main() {
             let (root, path) = set_of(&p.coin.script_pubkey, depth, idx);
             let inp = input(&r, &p, 0, p.coin.value / 2, root, idx, path);
             let (u, t, n) = run(&inp, Some(&r)).unwrap();
-            println!("LIVEANON set depth {depth}: {u} user cycles, {n} segment(s), {t} total cycles (padded to 2^po2), log path {} hashes", p.path.len());
+            println!("LIVEANON set depth {depth}: {u} user cycles, {n} segment(s), {t} total cycles (padded to 2^po2), log path {} hashes, core journal {} bytes", p.path.len(), r.journal.bytes.len());
         }
         Some("key") => {
             let mut sk = [0u8; 32];

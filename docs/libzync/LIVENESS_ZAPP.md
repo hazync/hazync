@@ -172,7 +172,21 @@ nothing about who holds the coin.
 
 **Cycles** (execute mode, r0vm 3.1.0, 15.11.2026; real inputs: the 1..200 receipt, Hal's coin):
 
-RESULTS_PLACEHOLDER
+| stage | cycles |
+|---|---|
+| reading the inputs (the 2,068-byte core journal, the coin, the paths; risc0 serde reads each byte as a word) | 291,067 (set of 1) – 383,702 (set of 2^20) |
+| the core statement (`env::verify` call, journal decode, `check_core_statement`) | 38,473 |
+| the coin: its leaf, its log path (6 levels at block 200), value ≥ X | 8,250 |
+| policy 0, set membership, 2^0 / 2^10 / 2^20 scripts | 2,434 / 15,078 / 27,693 |
+| **policy 0 in all**, set of 1 / 2^10 / 2^20 | **367,102 / 426,220 / 485,145** (one segment, 2^19 / 2^19 / 2^20 after padding) |
+| policy 1's own work, measured alone: sk·G (risc0's accelerated k256), the nullifier | 112,155 |
+
+Refusals executed: min_value above the coin's amount, and a script not in the set (both panic in the guest).
+Policy 1 was not run end to end on real data: no P2TR coin exists in blocks 1..200, and the key of a real coin is
+not ours. Its cost is the set path without the set stage plus the 112,155 cycles above. Reading the inputs dominates;
+reading the journal as raw words (`env::read_slice`) is the obvious next step and has not been measured. Not counted:
+resolving the core receipt (the assumption) at proving time, which is one fixed recursion step per zyncAPP receipt.
+Proving time was not measured (no GPU run). Raw output: `experimental/libzync-bench/liveness-anon/RESULT.txt`.
 
 ## 9. Open
 
