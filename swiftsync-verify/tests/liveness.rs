@@ -210,3 +210,22 @@ fn questions_parse_strictly() {
     assert_eq!(liveness_bytes(&b).unwrap(), b);
     assert!(liveness_bytes(hex(&b).to_uppercase().as_bytes()).is_err());
 }
+
+/// Timing (run with --ignored --nocapture): the receipt check once, then each proof's check.
+#[test]
+#[ignore]
+fn timing() {
+    let t = std::time::Instant::now();
+    let (cs, uf) = state();
+    eprintln!("receipt verify: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    for (f, q, _) in HONEST {
+        let b = proof(f);
+        let a = ask(q);
+        let n = 20_000;
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            check_liveness(&cs, uf, &b, &a).unwrap();
+        }
+        eprintln!("{f}: {} bytes, {:.1} us per check", b.len(), t.elapsed().as_secs_f64() * 1e6 / n as f64);
+    }
+}
