@@ -48,6 +48,13 @@ tamper b170_0_at200.hex trailing.hex "b.append(0)"
 case_ "a byte appended"                               1 --liveness "$T/trailing.hex" "$T170:0@200" "$R"
 case_ "dev-mode receipt (FakeReceipt)"                1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$C/fake_block_2501.rcpt"
 case_ "a receipt with one seal bit flipped"           1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$C/mainnet_1_200_8888d59c_flipped.rcpt"
+# the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that agrees (hash and
+# chainwork), one that names another block, and an --expect it contradicts
+printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\n[ "$1" = getblockheader ] && echo "{\\"chainwork\\": \\"%s\\"}"\nexit 0\n' 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 "$(printf '%054d' 0)c900c900c9" > "$T/node"; chmod +x "$T/node"
+printf '#!/bin/sh\necho %064d\n' 1 > "$T/badnode"; chmod +x "$T/badnode"
+case_ "your node agrees (hash and chainwork)"         2 --bitcoin-cli "$T/node" --liveness "$D/b9_0_at200.hex" "$T9:0@200=spent:170:1:0" "$R"
+case_ "your node names another block"                 1 --bitcoin-cli "$T/badnode" --liveness "$D/b9_0_at200.hex" "$T9:0@200=spent:170:1:0" "$R"
+case_ "an --expect your node contradicts"             1 --bitcoin-cli "$T/node" --expect 200:$(printf '%064d' 0) --liveness "$D/b9_0_at200.hex" "$T9:0@200" "$R"
 if true; then
   # the producer: the same bytes again, and no proof for an outpoint that never existed
   B=$D/../../../prover/testdata/libzync/mainnet

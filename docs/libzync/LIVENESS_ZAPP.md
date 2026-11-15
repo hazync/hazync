@@ -100,7 +100,7 @@ Not proven, or left to the caller:
 zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>] > p.hex
 zapp-liveness serve <history.bin> <addr:port> --blocks <dir>                GET /live/<at|tip>/<txid>/<vout>, GET /tip
 # verifier: YOUR question, then the proof (the core receipt is verified by the core verifier's library)
-zapp-liveness [--expect <h>:<hash>] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>]' <receipt>
+zapp-liveness [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>]' <receipt>
 ```
 
 In the C ABI (`zapp_liveness_verify`, `zapps/liveness/ffi/include/zapp_liveness.h`) and WASM (`verifyLiveness` in
@@ -120,7 +120,7 @@ and that run's `history.bin` (`zapps/liveness/vectors/`), 15.11.2026; all of it 
 | libzync unit tests (`liveness::tests`) | 2/2 |
 | zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, every bit flipped, a dev-mode and a tampered receipt | 8/8 |
 | `zapp-liveness serve` `/live` route | 1/1 |
-| CLI and producer, `vectors/run.sh` | 23/23 |
+| CLI and producer, `vectors/run.sh` (with 3 chain-identity cases: a node that agrees, one that names another block, an --expect it contradicts) | 26/26 |
 | C ABI, `ffi/test_liveness.c` | 9/9 |
 | WASM, `wasm/test-liveness.mjs` | 13/13 |
 

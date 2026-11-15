@@ -4,11 +4,13 @@
 //!
 //! ```text
 //!   zapp-liveness [--network mainnet|signet] [--image <hex>] [--coinlog | --product] [--anchor state.json]
-//!                 [--now <unix seconds>] [--expect <height>:<hash>] (--liveness <proof> <question>)... <receipt|bundle.sspf>
+//!                 [--now <unix seconds>] [--expect <height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli "<cmd>"]
+//!                 (--liveness <proof> <question>)... <receipt|bundle.sspf>
 //!       check each liveness proof against the verified core proof and against YOUR question
 //!       (`<txid>:<vout>@<h|tip>`, optionally `=unspent` / `=spent[:<h>[:<tx>:<vin>]]`, `,value=<sat>`, `,script=<hex>`;
-//!       without a claim the answer is stated). `--expect` is the network's block at the proof's height from a source
-//!       YOU trust; without it the verdict is at most DEMO. Exit 0 OK, 2 DEMO, 1 FAIL.
+//!       without a claim the answer is stated). `--expect` (the network's block at the proof's height), `--mempool`
+//!       and `--bitcoin-cli` (your node; its chainwork is compared too) are the chain-identity sources every zAPP CLI
+//!       takes (zapp-common), as the core verifier's; without one the verdict is at most DEMO. Exit 0 OK, 2 DEMO, 1 FAIL.
 //!   zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>]
 //!       a liveness proof, hex: the outpoint unspent after <at>, or spent and by whom
 //!   zapp-liveness serve <history.bin> <addr:port> (--blocks <dir> | --bitcoin-cli "<cmd>")
@@ -21,11 +23,12 @@ use libzync::history::{decode_all, Rec};
 use std::io::{BufRead, BufReader, Write};
 use std::process::exit;
 use swiftsync_verify::{hex, ChainState, Verdict};
+use zapp_common::{Identity, IDENTITY_USAGE};
 use zapp_liveness::{coin_source, LivenessAsk, LivenessFact};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-liveness [--network mainnet|signet] [--image <hex>] [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] [--expect <height>:<hash>] (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>])... <receipt|bundle.sspf>");
+    eprintln!("usage: zapp-liveness [--network mainnet|signet] [--image <hex>] [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>])... <receipt|bundle.sspf>");
     eprintln!("       zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli \"<cmd>\") [--height <h>]");
     eprintln!("       zapp-liveness serve <history.bin> <addr:port> (--blocks <dir> | --bitcoin-cli \"<cmd>\")");
     exit(1);
@@ -75,7 +78,7 @@ fn main() {
 }
 
 fn check_main(a: Vec<String>) -> ! {
-    let (mut network, mut image_hex, mut anchor, mut now, mut expect) = ("mainnet".to_string(), String::new(), None, None, None);
+    let (mut network, mut image_hex, mut anchor, mut now, mut id) = ("mainnet".to_string(), String::new(), None, None, Identity::default());
     let (mut coinlog, mut product, mut liveness, mut files) = (false, false, Vec::<(String, String)>::new(), Vec::new());
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
@@ -84,7 +87,6 @@ fn check_main(a: Vec<String>) -> ! {
             "--image" => image_hex = it.next().unwrap_or_else(|| usage()),
             "--anchor" => anchor = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
-            "--expect" => expect = Some(it.next().unwrap_or_else(|| usage())),
             "--coinlog" => coinlog = true,
             "--product" => { coinlog = true; product = true }
             "--liveness" => {
@@ -92,6 +94,7 @@ fn check_main(a: Vec<String>) -> ! {
                 liveness.push((f, it.next().unwrap_or_else(|| usage())));
             }
             "-h" | "--help" => usage(),
+            f if id.take(f, &mut || it.next()).unwrap_or_else(|e| fail(&e)) => {}
             f if f.starts_with("--") => fail(&format!("unknown flag {}", esc(f))),
             f => files.push(f.to_string()),
         }
@@ -108,7 +111,19 @@ fn check_main(a: Vec<String>) -> ! {
         let b = zapp_liveness::liveness_bytes(&rd(p)).unwrap_or_else(|e| fail(&format!("--liveness {}: {e}", esc(p))));
         LivenessFact { proof: hex(&b), ask: q.clone() }
     }).collect();
-    let o = zapp_liveness::verify_liveness(&rd(&files[0]), image, anchor, now, &facts, expect.as_deref(), false);
+    let rb = rd(&files[0]);
+    // chain identity (zapp-common): --mempool / --bitcoin-cli are asked for the block at the proof's height, which the
+    // receipt gives, and their answer is checked as an --expect is
+    let (expect, extra) = match id.needs_lookup() {
+        true => match zapp_common::verify_core(&rb, image, anchor.clone(), now, None).report.state {
+            Some(cs) => zapp_common::expect_for_core(&id, image.network, &cs),
+            None => (id.expect.clone(), Vec::new()),
+        },
+        false => (id.expect.clone(), Vec::new()),
+    };
+    let mut o = zapp_liveness::verify_liveness(&rb, image, anchor, now, &facts, expect.as_deref(), false);
+    if extra.iter().any(|c| !c.0) { o.report.verdict = Verdict::Fail; }
+    o.report.checks.splice(0..0, extra);
     for (ok, what) in &o.report.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
     for ((p, _), r) in liveness.iter().zip(o.facts.iter().chain(std::iter::repeat(&Err(String::new())))) {
         match r {
@@ -120,8 +135,8 @@ fn check_main(a: Vec<String>) -> ! {
         if let Err(e) = r { println!("  [FAIL] {e}"); }
     }
     match o.report.verdict {
-        Verdict::Ok => { println!("SWIFTSYNC_VERIFY_OK: {} liveness proof(s) hold on the proven chain, its tip the block --expect names", facts.len()); exit(0) }
-        Verdict::Demo => { println!("SWIFTSYNC_VERIFY_DEMO: the liveness proof(s) hold, but the chain is not shown to be the network's (no matching --expect, below minimum work, or from an anchor)"); exit(2) }
+        Verdict::Ok => { println!("SWIFTSYNC_VERIFY_OK: {} liveness proof(s) hold on the proven chain, its tip the block your source names", facts.len()); exit(0) }
+        Verdict::Demo => { println!("SWIFTSYNC_VERIFY_DEMO: the liveness proof(s) hold, but the chain is not shown to be the network's (no --expect, --mempool or --bitcoin-cli, below minimum work, or from an anchor)"); exit(2) }
         Verdict::Fail => { println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", o.report.checks.iter().filter(|c| !c.0).count() + o.facts.iter().filter(|r| r.is_err()).count()); exit(1) }
     }
 }
