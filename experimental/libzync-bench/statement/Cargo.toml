@@ -1,0 +1,7 @@
+# Design-B prototype of the statement zyncAPP (docs/libzync/STATEMENT_ZAPP.md §3): execute-mode cycle counts, no proofs.
+[workspace]
+resolver = "2"
+members = ["host", "methods"]
+
+[profile.release]
+opt-level = 3

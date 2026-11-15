@@ -166,9 +166,29 @@ the purpose and the nonce. `bip322_lite.rs` is cross-checked natively against th
 (`statement-bench selftest`): every signature the crate makes verifies, and a changed message, key or signature does
 not; BIP-322's official P2WPKH and P2TR vectors verify.
 
-Execute mode on CPU (cycles; no proof was made), scripts alternating P2WPKH and P2TR:
+Execute mode on CPU, 15.11.2026 (user cycles, no paging or padding; no proof was made). Scripts alternate P2WPKH
+and P2TR. `real`: the real mainnet 1..200 receipt (`8888d59c`) as the guest's assumption and its real block-200 trie
+(zero balances: no key of ours is in it). `synth`: a trie built by the bench with 262,144 other scripts plus ours,
+two coins each, under the guest's bench flag (no `env::verify`; a measurement, never a statement).
+Raw lines: `experimental/libzync-bench/statement/RESULT_statement.txt`.
 
-MEASUREMENTS
+| run | scripts | user cycles | per script | signatures | balance facts | input read | segments |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| real | 1 | 716,836 | 716,836 | 318,236 | 11,975 | 264,240 | 1 |
+| real | 10 | 3,700,501 | 370,050 | 2,985,856 | 113,589 | 478,441 | 4 |
+| real | 100 | 33,732,103 | 337,321 | 29,877,041 | 1,107,530 | 2,624,973 | 35 |
+| synth | 1 | 729,830 | 729,830 | 314,328 | 23,897 | 277,459 | 1 |
+| synth | 10 | 3,926,478 | 392,648 | 2,994,883 | 221,200 | 596,268 | 5 |
+| synth | 100 | 36,113,714 | 361,137 | 29,911,816 | 2,254,968 | 3,832,556 | 38 |
+| synth, 1,048,576 others | 100 | 36,489,914 | 364,899 | 29,901,017 | 2,433,866 | 4,040,657 | 38 |
+
+Signatures (k256, P2WPKH and P2TR mixed) are about 300,000 cycles each: 76 % to 81 % of the total at 10 scripts,
+83 % to 89 % at 100. A balance fact is about 11,000 cycles on the real block-200 trie and about 22,000 to 24,000 on the
+synthetic ones; quadrupling the other scripts (262,144 to 1,048,576) added about 1,800 cycles per fact. The fixed part
+(the ChainState checks, the message, the commit) is under 120,000 cycles. "Input read" is risc0 serde reading the
+inputs word by word (the journal and every byte of the proofs and witnesses); `read_slice` would cut most of it, as it
+did for the core's aggregate. These are user cycles: resolving the core receipt (the `env::verify` assumption) is a
+recursion step at proving time, not counted here and not measured.
 
 What B would still need: the core's libsecp in place of k256 (ZYNCAPPS.md §7), P2PKH and multisig, a published image
 id from a reproducible build, a verifier entry point, and a decision on what the commitment hides: the number of
@@ -201,3 +221,7 @@ scripts is public, and without the salt a guessed script list can be tested agai
   (the coins themselves are signed for) but needs a coin fact with its creating transaction for every coin.
 - Whether the WASM build should carry the statement check by default: it doubles the .wasm (1,248,921 to 2,554,120
   bytes raw, measured).
+- The default WASM build (no `statement` feature) is no longer byte-identical to main's: `./build.sh` gives
+  `99984104…` on this branch against main's `12bbc9ae…` (both measured 15.11.2026, Rust 1.99.0), though it exports
+  nothing new. The cause (the new optional dependencies in the lock, or the feature table) is not isolated; a merge
+  moves the published sha either way.
