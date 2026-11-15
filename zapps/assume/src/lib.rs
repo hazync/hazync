@@ -289,7 +289,9 @@ impl HeaderChain {
             return Err(format!("headers: the last header hashes to {}, not the proven tip {}",
                                display(&hashes[n - 1]), display(tip_hash)));
         }
-        Ok(HeaderChain { first_height: tip_height + 1 - n as u32, hashes, times })
+        // n <= tip_height + 1 (checked above, in u64), so this cannot wrap even at tip_height = u32::MAX
+        let first_height = u32::try_from(tip_height as u64 + 1 - n as u64).map_err(|_| "headers: height out of range".to_string())?;
+        Ok(HeaderChain { first_height, hashes, times })
     }
 
     pub fn tip_height(&self) -> u32 {
@@ -459,6 +461,18 @@ impl<R: Read> Src<R> {
     }
 }
 
+/// Core's WriteVarInt (VarIntMode::DEFAULT) encoding of `n`: the bytes of the coins-database key's vout.
+pub fn varint_bytes(mut n: u64) -> Vec<u8> {
+    let mut t = Vec::with_capacity(10);
+    loop {
+        t.push((n & 0x7f) as u8 | if t.is_empty() { 0 } else { 0x80 });
+        if n <= 0x7f { break }
+        n = (n >> 7) - 1;
+    }
+    t.reverse();
+    t
+}
+
 /// Core's DecompressAmount.
 pub fn decompress_amount(mut x: u64) -> u64 {
     if x == 0 {
@@ -519,7 +533,8 @@ fn read_script<R: Read>(s: &mut Src<R>) -> Result<Vec<u8>, String> {
 
 /// Reads a snapshot, calling `f` for every coin in file order. Refuses what Core's loadtxoutset refuses (magic,
 /// version, a coin above the base height is the caller's check), a count that disagrees with the coins present,
-/// and any byte after the last coin.
+/// and any byte after the last coin; and, stricter than Core's loader, coins out of Core's database key order (the
+/// order `hash_serialized_3` is taken in), a special-type 4/5 key off the curve, and a raw script over 10,000 bytes.
 pub fn read_snapshot<R: Read>(r: R, f: impl FnMut(&SnapCoin) -> Result<(), String>) -> Result<SnapshotMeta, String> {
     read_snapshot_with(r, |_| Ok(()), f)
 }
@@ -544,17 +559,35 @@ pub fn read_snapshot_with<R: Read>(r: R, meta: impl FnOnce(&SnapshotMeta) -> Res
     meta(&m)?;
     let meta = m;
     let mut left = coins_count;
+    // Core writes the coins in its database's key order ('C' ‖ txid ‖ VARINT(vout), compared bytewise), one group per
+    // txid, and hash_serialized_3 is taken in that order. The ECMH does not depend on it, but the printed hash does, so
+    // the order is required: txids strictly ascending (which also makes each group the txid's only one), and within a
+    // group the ENCODED vouts strictly ascending (not numerically: 16,511 = ff7f sorts after 16,512 = 808000).
+    let mut last_txid: Option<[u8; 32]> = None;
     while left > 0 {
         let txid = s.bytes::<32>()?;
+        if let Some(p) = last_txid {
+            if txid <= p {
+                return Err(format!("snapshot: txid {} after {}: not Core's key order (txids ascending, one group each)",
+                                   display(&txid), display(&p)));
+            }
+        }
+        last_txid = Some(txid);
         let k = s.compact_size()?;
         if k == 0 || k > left {
             return Err(format!("snapshot: {k} coins for txid {} with {left} coins left", display(&txid)));
         }
+        let mut last_vout: Option<Vec<u8>> = None;
         for _ in 0..k {
             let vout = s.compact_size()?;
             if vout >= u32::MAX as u64 {
                 return Err(format!("snapshot: vout {vout} out of range"));
             }
+            let key = varint_bytes(vout);
+            if last_vout.as_ref().is_some_and(|p| key <= *p) {
+                return Err(format!("snapshot: txid {} vout {vout}: not Core's key order (encoded vouts ascending)", display(&txid)));
+            }
+            last_vout = Some(key);
             let code = s.varint(u32::MAX as u64)?;
             let value = decompress_amount(s.varint(u64::MAX)?);
             if value > MAX_MONEY {
@@ -650,6 +683,11 @@ fn hash_snapshot_with<R: Read>(snap: R, headers: &HeaderChain, tracked: &Tracked
         if c.height == 0 || c.height > base_height {
             return Err(format!("snapshot: coin {}:{} at height {}, outside 1..{base_height}", display(&c.txid), c.vout, c.height));
         }
+        // before the cache grows: a coin's height must be one the headers cover (no allocation driven by the file)
+        if c.height > headers.tip_height() {
+            return Err(format!("snapshot: coin {}:{} at height {}, above the headers' tip {}", display(&c.txid), c.vout, c.height,
+                               headers.tip_height()));
+        }
         let i = c.height as usize;
         if mtp_cache.len() <= i {
             mtp_cache.resize(i + 1, None);
@@ -700,9 +738,13 @@ impl PointSum {
             if n > 1 {
                 let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<[u8; 32]>>(2 * n);
                 let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
-                let workers = (0..n).map(|_| {
+                // Builder::spawn returns an error where thread::spawn panics (no threads, a resource limit): through
+                // the C ABI a panic would abort the host process. Any failure falls back to this thread, and the
+                // workers already started stop when the channel closes.
+                let mut workers = Vec::with_capacity(n);
+                for _ in 0..n {
                     let rx = rx.clone();
-                    std::thread::spawn(move || -> Result<Ecmh, String> {
+                    let w = std::thread::Builder::new().name("ecmh".into()).spawn(move || -> Result<Ecmh, String> {
                         let mut a = Ecmh::default();
                         loop {
                             let b = match rx.lock() { Ok(r) => r.recv(), Err(_) => return Err("ECMH worker: lock poisoned".into()) };
@@ -711,9 +753,14 @@ impl PointSum {
                                 a.add_leaf(l)?;
                             }
                         }
-                    })
-                }).collect();
-                return PointSum { par: Some(Par { tx: Some(tx), workers }), batch: Vec::with_capacity(BATCH), acc: Ecmh::default() };
+                    });
+                    match w { Ok(h) => workers.push(h), Err(_) => break }
+                }
+                if workers.len() == n {
+                    return PointSum { par: Some(Par { tx: Some(tx), workers }), batch: Vec::with_capacity(BATCH), acc: Ecmh::default() };
+                }
+                drop(tx);
+                for w in workers { let _ = w.join(); }
             }
         }
         PointSum {
@@ -765,6 +812,12 @@ impl PointSum {
 /// creation MTP of every coin); `tracked` names the coins with the BIP30 tracked bit. Call ONLY with the state of a
 /// receipt that verified.
 pub fn check_snapshot<R: Read>(cs: &ChainState, snap: R, headers: &HeaderChain, tracked: &Tracked) -> Result<SnapshotCheck, String> {
+    if cs.profile & PROFILE_LIBZYNC == 0 {
+        return Err(format!("profile 0x{:x} is not a libzync image", cs.profile));
+    }
+    if cs.profile & PROFILE_ASSUMEVALID != 0 {
+        return Err("the proving image SKIPPED scripts and signatures (profile bit 1): its coin set is not one a node may load".into());
+    }
     if cs.profile & PROFILE_UTXOHASH == 0 {
         return Err(format!("profile 0x{:x}: the proving image does not commit the live-coin hash (bit 6)", cs.profile));
     }
@@ -1088,6 +1141,14 @@ mod tests {
 
     /// A snapshot of `cs` (raw, uncompressed scripts; Core reads them the same), coins grouped by consecutive txid.
     fn write(m: &SnapshotMeta, cs: &[SnapCoin]) -> Vec<u8> {
+        // in Core's key order, so a tampered coin is refused by its hash, not by its position
+        let mut cs = cs.to_vec();
+        cs.sort_by(|a, b| (a.txid, varint_bytes(a.vout as u64)).cmp(&(b.txid, varint_bytes(b.vout as u64))));
+        write_as_is(m, &cs)
+    }
+
+    /// The coins exactly in the order given, grouped by consecutive txid.
+    fn write_as_is(m: &SnapshotMeta, cs: &[SnapCoin]) -> Vec<u8> {
         let mut v = SNAPSHOT_MAGIC.to_vec();
         v.extend(m.version.to_le_bytes());
         v.extend(m.network_magic);
@@ -1117,6 +1178,75 @@ mod tests {
     }
 
     #[test]
+    fn the_snapshot_must_be_in_cores_key_order() {
+        let cs = state();
+        let (m, v) = coins(SNAP_200);
+        let none = Tracked::new();
+        // the real file is in key order: re-sorting it changes nothing
+        assert_eq!(write(&m, &v), write_as_is(&m, &v));
+        // a txid with two live coins (block 170's transaction: 10 BTC to Hal, 40 BTC back)
+        let i = (1..v.len()).find(|&i| v[i].txid == v[i - 1].txid).expect("a txid with two coins at 200");
+        // permuted: two groups swapped. The same coins, so the same ECMH, but not Core's order (its hash_serialized_3
+        // would not be Core's): refused
+        let mut p = v.clone();
+        p.swap(0, 2);
+        let e = check(&cs, &write_as_is(&m, &p), &none).unwrap_err();
+        assert!(e.contains("key order"), "{e}");
+        // split: the txid's two coins in two consecutive groups
+        let mut b = SNAPSHOT_MAGIC.to_vec();
+        b.extend(m.version.to_le_bytes()); b.extend(m.network_magic); b.extend(m.base_blockhash); b.extend((v.len() as u64).to_le_bytes());
+        let one = |c: &SnapCoin, b: &mut Vec<u8>| {
+            b.extend(c.txid); w_compact(b, 1); w_compact(b, c.vout as u64);
+            w_varint(b, (c.height as u64) << 1 | c.coinbase as u64); w_varint(b, compress_amount(c.value));
+            w_varint(b, c.script_pubkey.len() as u64 + 6); b.extend(&c.script_pubkey);
+        };
+        for c in &v { one(c, &mut b) }
+        let e = check(&cs, &b, &none).unwrap_err();
+        assert!(e.contains("key order") && e.contains(&display(&v[i].txid)), "{e}");
+        // within a group, vouts out of order
+        let mut q = v.clone();
+        q.swap(i - 1, i);
+        let e = check(&cs, &write_as_is(&m, &q), &none).unwrap_err();
+        assert!(e.contains("encoded vouts ascending"), "{e}");
+    }
+
+    #[test]
+    fn vout_order_is_the_encoded_bytes() {
+        // 16,511 encodes as ff7f and 16,512 as 808000: bytewise, 16,512 comes FIRST (Core's database order)
+        assert_eq!(varint_bytes(16_511), vec![0xff, 0x7f]);
+        assert_eq!(varint_bytes(16_512), vec![0x80, 0x80, 0x00]);
+        let snap = |vouts: &[u64]| {
+            let mut b = SNAPSHOT_MAGIC.to_vec();
+            b.extend(SNAPSHOT_VERSION.to_le_bytes()); b.extend([0xf9, 0xbe, 0xb4, 0xd9]); b.extend([0u8; 32]);
+            b.extend((vouts.len() as u64).to_le_bytes()); b.extend([7u8; 32]); b.push(vouts.len() as u8);
+            for &o in vouts {
+                b.push(0xfd); b.extend((o as u16).to_le_bytes()); // CompactSize vout
+                w_varint(&mut b, 2); w_varint(&mut b, 0); w_varint(&mut b, 7); b.push(0x51); // height 1, 0 sat, script OP_1
+            }
+            b
+        };
+        assert!(read_snapshot(&snap(&[16_512, 16_511])[..], |_| Ok(())).is_ok());
+        assert!(read_snapshot(&snap(&[16_511, 16_512])[..], |_| Ok(())).unwrap_err().contains("encoded vouts ascending"));
+        assert!(read_snapshot(&snap(&[300, 300])[..], |_| Ok(())).is_err(), "a vout twice");
+    }
+
+    #[test]
+    fn scripts_skipped_images_and_heights_above_the_headers_are_refused() {
+        let cs = state();
+        let hc = HeaderChain::bind(HDRS, &cs.tip_hash, cs.height).unwrap();
+        let mut c = cs.clone(); c.profile |= PROFILE_ASSUMEVALID;
+        assert!(check_snapshot(&c, SNAP_200, &hc, &Tracked::new()).unwrap_err().contains("SKIPPED"));
+        let mut c = cs.clone(); c.profile &= !PROFILE_LIBZYNC;
+        assert!(check_snapshot(&c, SNAP_200, &hc, &Tracked::new()).unwrap_err().contains("not a libzync image"));
+        // hash_snapshot with a base above the headers' tip: refused before anything is sized by the coin's height
+        let part = HeaderChain::bind(&HDRS[..80 * 101], &hc.hashes[100], 100).unwrap();
+        assert!(hash_snapshot(SNAP_200, &part, &Tracked::new(), u32::MAX).unwrap_err().contains("above the headers' tip"));
+        // a tip height at u32::MAX does not wrap
+        let top = HeaderChain::bind(&HDRS[..80], &hc.hashes[0], u32::MAX).unwrap();
+        assert_eq!((top.first_height, top.tip_height()), (u32::MAX, u32::MAX));
+    }
+
+    #[test]
     fn the_real_snapshot_is_the_proven_utxo_set() {
         let cs = state();
         let r = check(&cs, SNAP_200, &Tracked::new()).unwrap();
@@ -1138,6 +1268,7 @@ mod tests {
         let refuse = |v: &[SnapCoin], m: &SnapshotMeta, what: &str| {
             let e = check(&cs, &write(m, v), &none).unwrap_err();
             assert!(e.contains("NOT the proven UTXO set") || e.contains("proven live amount") || e.contains("outside") || e.contains("base block")
+                    || e.contains("key order")
                     || e.contains("network magic"), "{what}: {e}");
         };
         let mut t = v.clone(); t[3].value += 1; t[4].value -= 1; refuse(&t, &m, "amounts moved, total kept");

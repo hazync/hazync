@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """assume_inputs.py <H> --datadir <dir> [--rpcport <port>] --headers <out.bin> [--tracked <out.txt>]
 
-The two side inputs of `swiftsync-verify assumeutxo` (docs/libzync/ASSUME_ZAPPS.md §3), from a node, over JSON-RPC
+The two side inputs of `zapp-assume assumeutxo` (docs/libzync/ASSUME_ZAPPS.md §3), from a node, over JSON-RPC
 batches (cookie auth from the datadir; the cookie is read, never printed):
 
   --headers  the raw 80-byte headers of blocks 0..H, oldest first (each coin's creation MTP; the verifier links them
