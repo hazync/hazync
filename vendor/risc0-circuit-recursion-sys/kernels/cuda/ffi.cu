@@ -20,6 +20,7 @@
 
 #include "vendor/nvtx3/nvtx3.hpp"
 
+#include <cstdlib>
 #include <cstring>
 #include <cuda/std/array>
 #include <cuda_runtime.h>
@@ -157,54 +158,82 @@ __global__ void parStepVerifyAccum(AccumContext* ctx) {
 }
 
 struct HostExecContext {
-  ExecContext* ctx;
+  // HAZYNC #727 CANDIDATE FIX, A/B under HAZYNC_727_DEVICE_CTX=1: ExecContext and its PreflightTrace are filled
+  // on the host and copied into ORDINARY device memory instead of living in cudaMallocManaged memory. The kernels
+  // read the same bytes. Without the variable this is the original managed path. (ExecContext declares a
+  // constructor, so its host mirror is raw aligned storage, exactly as cudaMallocManaged's memory was.)
+  ExecContext* ctx;   // what the kernels are given
+  alignas(ExecContext) unsigned char h_raw[sizeof(ExecContext)];
+  PreflightTrace h_trace;
+  ExecContext* host;     // host-writable view: managed memory itself, or the mirror
+  PreflightTrace* htrace;
+  bool dev;
   CudaStream stream;
   LaunchConfig cfg;
 
   HostExecContext(ExecBuffers* buffers, PreflightTrace* trace, size_t totalCycles)
       : cfg(getSimpleConfig(trace->numCycles)) {
-    CUDA_OK(cudaMallocManaged(&ctx, sizeof(ExecContext)));
-    ctx->buffers.ctrl = buffers->ctrl;
-    ctx->buffers.data = buffers->data;
-    ctx->buffers.global = buffers->global;
-    ctx->totalCycles = totalCycles;
+    dev = std::getenv("HAZYNC_727_DEVICE_CTX") != nullptr;
+    if (dev) {
+      std::memset(h_raw, 0, sizeof(h_raw));
+      std::memset(&h_trace, 0, sizeof(h_trace));
+      CUDA_OK(cudaMalloc(&ctx, sizeof(ExecContext)));
+      host = reinterpret_cast<ExecContext*>(h_raw);
+    } else {
+      CUDA_OK(cudaMallocManaged(&ctx, sizeof(ExecContext)));
+      host = ctx;
+    }
+    host->buffers.ctrl = buffers->ctrl;
+    host->buffers.data = buffers->data;
+    host->buffers.global = buffers->global;
+    host->totalCycles = totalCycles;
 
-    CUDA_OK(cudaMallocManaged(&ctx->trace, sizeof(PreflightTrace)));
-    ctx->trace->numWoms = trace->numWoms;
-    ctx->trace->numCycles = trace->numCycles;
-    ctx->trace->numIops = trace->numIops;
+    if (dev) {
+      CUDA_OK(cudaMalloc(&host->trace, sizeof(PreflightTrace)));
+      htrace = &h_trace;
+    } else {
+      CUDA_OK(cudaMallocManaged(&ctx->trace, sizeof(PreflightTrace)));
+      htrace = ctx->trace;
+    }
+    htrace->numWoms = trace->numWoms;
+    htrace->numCycles = trace->numCycles;
+    htrace->numIops = trace->numIops;
 
-    CUDA_OK(cudaMalloc(&ctx->trace->wom, trace->numWoms * sizeof(FpExt)));
+    CUDA_OK(cudaMalloc(&htrace->wom, trace->numWoms * sizeof(FpExt)));
     CUDA_OK(cudaMemcpy(
-        ctx->trace->wom, trace->wom, trace->numWoms * sizeof(FpExt), cudaMemcpyHostToDevice));
+        htrace->wom, trace->wom, trace->numWoms * sizeof(FpExt), cudaMemcpyHostToDevice));
 
-    CUDA_OK(cudaMalloc(&ctx->trace->cycles, trace->numCycles * sizeof(PreflightCycle)));
-    CUDA_OK(cudaMemcpy(ctx->trace->cycles,
+    CUDA_OK(cudaMalloc(&htrace->cycles, trace->numCycles * sizeof(PreflightCycle)));
+    CUDA_OK(cudaMemcpy(htrace->cycles,
                        trace->cycles,
                        trace->numCycles * sizeof(PreflightCycle),
                        cudaMemcpyHostToDevice));
 
-    CUDA_OK(cudaMalloc(&ctx->trace->iops, trace->numIops * sizeof(FpExt)));
+    CUDA_OK(cudaMalloc(&htrace->iops, trace->numIops * sizeof(FpExt)));
     CUDA_OK(cudaMemcpy(
-        ctx->trace->iops, trace->iops, trace->numIops * sizeof(FpExt), cudaMemcpyHostToDevice));
+        htrace->iops, trace->iops, trace->numIops * sizeof(FpExt), cudaMemcpyHostToDevice));
 
     CUDA_OK(
-        cudaMalloc(&ctx->womRows, trace->numCycles * kMaxWomRowsPerCycle * sizeof(WomArgumentRow)));
-    CUDA_OK(cudaMemset(ctx->womRows,
+        cudaMalloc(&host->womRows, trace->numCycles * kMaxWomRowsPerCycle * sizeof(WomArgumentRow)));
+    CUDA_OK(cudaMemset(host->womRows,
                        kInvalidPattern,
                        trace->numCycles * kMaxWomRowsPerCycle * sizeof(WomArgumentRow)));
 
-    CUDA_OK(cudaMalloc(&ctx->womIndex, trace->numCycles * sizeof(uint32_t)));
-    CUDA_OK(cudaMemset(ctx->womIndex, 0, trace->numCycles * sizeof(uint32_t)));
+    CUDA_OK(cudaMalloc(&host->womIndex, trace->numCycles * sizeof(uint32_t)));
+    CUDA_OK(cudaMemset(host->womIndex, 0, trace->numCycles * sizeof(uint32_t)));
+    if (dev) {
+      CUDA_OK(cudaMemcpy(host->trace, htrace, sizeof(PreflightTrace), cudaMemcpyHostToDevice));
+      CUDA_OK(cudaMemcpy(ctx, host, sizeof(ExecContext), cudaMemcpyHostToDevice));
+    }
   }
 
   ~HostExecContext() {
-    cudaFree(ctx->womIndex);
-    cudaFree(ctx->womRows);
-    cudaFree(ctx->trace->iops);
-    cudaFree(ctx->trace->cycles);
-    cudaFree(ctx->trace->wom);
-    cudaFree(ctx->trace);
+    cudaFree(host->womIndex);
+    cudaFree(host->womRows);
+    cudaFree(htrace->iops);
+    cudaFree(htrace->cycles);
+    cudaFree(htrace->wom);
+    cudaFree(host->trace);
     cudaFree(ctx);
   }
 
@@ -226,17 +255,17 @@ struct HostExecContext {
 
   void verifyWom(uint32_t mode) {
     nvtx3::scoped_range range("verifyWom");
-    uint32_t numCycles = ctx->trace->numCycles;
+    uint32_t numCycles = htrace->numCycles;
 
     {
       nvtx3::scoped_range range("sortWom");
-      thrust::sort(thrust::device, ctx->womRows, ctx->womRows + numCycles * kMaxWomRowsPerCycle);
+      thrust::sort(thrust::device, host->womRows, host->womRows + numCycles * kMaxWomRowsPerCycle);
     }
 
     {
       nvtx3::scoped_range range("scan");
       thrust::exclusive_scan(
-          thrust::device, ctx->womIndex, ctx->womIndex + numCycles, ctx->womIndex);
+          thrust::device, host->womIndex, host->womIndex + numCycles, host->womIndex);
     }
 
     {
@@ -254,29 +283,44 @@ struct HostExecContext {
 };
 
 struct HostAccumContext {
-  AccumContext* ctx;
+  // HAZYNC #727 CANDIDATE FIX: see HostExecContext.
+  AccumContext* ctx;   // what the kernels are given
+  AccumContext h_ctx;  // host mirror (device mode)
+  AccumContext* host;  // host-writable view: managed memory itself, or the mirror
+  bool dev;
   CudaStream stream;
   LaunchConfig cfg;
 
   HostAccumContext(AccumBuffers* buffers, size_t workCycles, size_t totalCycles)
       : cfg(getSimpleConfig(workCycles)) {
-    CUDA_OK(cudaMallocManaged(&ctx, sizeof(AccumContext)));
-    ctx->buffers.ctrl = buffers->ctrl;
-    ctx->buffers.global = buffers->global;
-    ctx->buffers.data = buffers->data;
-    ctx->buffers.mix = buffers->mix;
-    ctx->buffers.accum = buffers->accum;
-    ctx->totalCycles = totalCycles;
-    ctx->workCycles = workCycles;
+    dev = std::getenv("HAZYNC_727_DEVICE_CTX") != nullptr;
+    if (dev) {
+      std::memset(&h_ctx, 0, sizeof(h_ctx));
+      CUDA_OK(cudaMalloc(&ctx, sizeof(AccumContext)));
+      host = &h_ctx;
+    } else {
+      CUDA_OK(cudaMallocManaged(&ctx, sizeof(AccumContext)));
+      host = ctx;
+    }
+    host->buffers.ctrl = buffers->ctrl;
+    host->buffers.global = buffers->global;
+    host->buffers.data = buffers->data;
+    host->buffers.mix = buffers->mix;
+    host->buffers.accum = buffers->accum;
+    host->totalCycles = totalCycles;
+    host->workCycles = workCycles;
 
     std::vector<FpExt> accumInit(workCycles, FpExt(1));
-    CUDA_OK(cudaMalloc(&ctx->accum, workCycles * sizeof(FpExt)));
+    CUDA_OK(cudaMalloc(&host->accum, workCycles * sizeof(FpExt)));
     CUDA_OK(cudaMemcpy(
-        ctx->accum, accumInit.data(), workCycles * sizeof(FpExt), cudaMemcpyHostToDevice));
+        host->accum, accumInit.data(), workCycles * sizeof(FpExt), cudaMemcpyHostToDevice));
+    if (dev) {
+      CUDA_OK(cudaMemcpy(ctx, host, sizeof(AccumContext), cudaMemcpyHostToDevice));
+    }
   }
 
   ~HostAccumContext() {
-    cudaFree(ctx->accum);
+    cudaFree(host->accum);
     cudaFree(ctx);
   }
 
@@ -288,7 +332,7 @@ struct HostAccumContext {
 
   void calcPrefixProducts() {
     nvtx3::scoped_range range("calcPrefixProducts");
-    sppark::calcPrefixProducts(ctx->accum, ctx->workCycles);
+    sppark::calcPrefixProducts(host->accum, host->workCycles);
     CUDA_OK(cudaStreamSynchronize(stream));
   }
 

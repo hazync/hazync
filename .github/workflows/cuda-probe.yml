@@ -104,6 +104,32 @@ jobs:
             -o probe.exe tools\cuda-probe\probe.cu || exit /b 1
           dir probe.exe
 
+      # hazync#727 (diag branch): compile the three patched host-side ffi.cu files for sm_61 BEFORE spending a
+      # 2-hour windows-prove run on them. risc0-sys is not vendored, so fetch the exact crate Cargo.lock pins and
+      # check it against the lock's sha256.
+      - name: Fetch risc0-sys 1.5.1 (sha256 from prover/Cargo.lock)
+        shell: bash
+        run: |
+          set -euo pipefail
+          want=$(grep -A3 '^name = "risc0-sys"$' prover/Cargo.lock | sed -n 's/^checksum = "\(.*\)"/\1/p')
+          curl -sfL -o risc0-sys.crate https://static.crates.io/crates/risc0-sys/risc0-sys-1.5.1.crate
+          got=$(sha256sum risc0-sys.crate | cut -d' ' -f1)
+          [ "$got" = "$want" ] || { echo "risc0-sys sha $got != lock $want"; exit 1; }
+          tar xzf risc0-sys.crate
+          ls risc0-sys-1.5.1/kernels/zkp/cuda/cuda_util.h
+
+      - name: Compile the #727-patched ffi.cu files (sm_61, object only)
+        shell: cmd
+        run: |
+          @echo on
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSPATH=%%i
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set INC=-Irisc0-sys-1.5.1\kernels\zkp\cuda -Irisc0-sys-1.5.1\cxx -Ivendor\sppark\sppark
+          nvcc -c -std=c++17 -O1 -diag-suppress=177,550,2922 -gencode=arch=compute_61,code=sm_61 %INC% -o rv32im_ffi.obj vendor\risc0-circuit-rv32im-sys\kernels\cuda\ffi.cu || exit /b 1
+          nvcc -c -std=c++17 -O1 -diag-suppress=177,550,2922 -gencode=arch=compute_61,code=sm_61 %INC% -o keccak_ffi.obj vendor\risc0-circuit-keccak-sys\kernels\cuda\ffi.cu || exit /b 1
+          nvcc -c -std=c++17 -O1 -diag-suppress=177,550,2922 -DFEATURE_BABY_BEAR -gencode=arch=compute_61,code=sm_61 %INC% -o recursion_ffi.obj vendor\risc0-circuit-recursion-sys\kernels\cuda\ffi.cu || exit /b 1
+          dir *.obj
+
       - name: The exe must exist and be a real binary
         shell: bash
         run: |

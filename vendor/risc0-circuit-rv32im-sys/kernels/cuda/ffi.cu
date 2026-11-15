@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cuda/std/array>
 #include <string.h>
+#include <cstring>
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
 #include <cstdlib>
@@ -73,6 +74,40 @@ static inline void hz_trace_caps() {
   hz_trace_err("caps queries");
 }
 
+// HAZYNC #727 TRACE 3. The trace-2 pattern: every launch made while a cudaMallocManaged context is LIVE fails with
+// 801 (par_stepExec x2, stepAccum, Thrust's scan), and every launch made while none is live succeeds (212 sppark
+// LDE/NTT launches, risc0-sys's eltwise/hash kernels). hz_nop is a do-nothing kernel launched on the SAME stream just
+// before and just after the managed allocation, so the host itself shows whether the allocation alone flips a
+// trivial launch from OK to 801.
+__global__ void hz_nop(int* p) {
+  if (p && threadIdx.x == 0 && blockIdx.x == 0) *p = 1;
+}
+static inline void hz_trace_nop(const char* where, cudaStream_t s) {
+  if (!hz_trace_on()) return;
+  cudaGetLastError();
+  hz_nop<<<1, 32, 0, s>>>(nullptr);
+  cudaError_t launch = cudaGetLastError();
+  cudaError_t sync = cudaStreamSynchronize(s);
+  cudaGetLastError();
+  std::fprintf(stderr, "HAZYNC TRACE nop %s: launch=%d(%s) sync=%d(%s)\n", where, (int)launch,
+               cudaGetErrorName(launch), (int)sync, cudaGetErrorName(sync));
+  std::fflush(stderr);
+}
+static inline void hz_trace_mem(const char* where) {
+  if (!hz_trace_on()) return;
+  size_t fr = 0, tot = 0;
+  cudaError_t e = cudaMemGetInfo(&fr, &tot);
+  std::fprintf(stderr, "HAZYNC TRACE mem %s: free=%zu MiB total=%zu MiB (%d %s)\n", where, fr >> 20, tot >> 20,
+               (int)e, cudaGetErrorName(e));
+  std::fflush(stderr);
+  cudaGetLastError();
+}
+// HAZYNC #727 CANDIDATE FIX, A/B under HAZYNC_727_DEVICE_CTX=1: build the small kernel-argument context struct on
+// the host and copy it into ORDINARY device memory (cudaMalloc + cudaMemcpy) instead of cudaMallocManaged. The
+// kernels read exactly the same bytes; only where the struct lives changes. Without the variable, the original
+// managed path runs unchanged.
+static inline bool hz_device_ctx() { return std::getenv("HAZYNC_727_DEVICE_CTX") != nullptr; }
+
 namespace risc0::circuit::rv32im_v2::cuda {
 
 constexpr size_t kUserAccumSplit = kLayout_TopAccum.columns[0].col;
@@ -90,18 +125,27 @@ struct DeviceExecContext {
 };
 
 struct HostExecContext {
-  DeviceExecContext* ctx;
+  DeviceExecContext* ctx;   // what the kernels are given
+  DeviceExecContext h_ctx;  // host mirror (HAZYNC_727_DEVICE_CTX)
+  DeviceExecContext* host;  // what host code writes: ctx (managed) or &h_ctx
   PreflightTrace d_preflight;
   LookupTables d_tables;
 
   HostExecContext(ExecBuffers* buffers, PreflightTrace* preflight, size_t cycles) {
-    CUDA_OK(cudaMallocManaged(&ctx, sizeof(DeviceExecContext)));
+    if (hz_device_ctx()) {
+      CUDA_OK(cudaMalloc(&ctx, sizeof(DeviceExecContext)));
+      std::memset(&h_ctx, 0, sizeof(h_ctx));
+      host = &h_ctx;
+    } else {
+      CUDA_OK(cudaMallocManaged(&ctx, sizeof(DeviceExecContext)));
+      host = ctx;
+    }
 
-    CUDA_OK(cudaMalloc(&ctx->data, sizeof(Buffer)));
-    CUDA_OK(cudaMemcpy(ctx->data, &buffers->data, sizeof(Buffer), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->data, sizeof(Buffer)));
+    CUDA_OK(cudaMemcpy(host->data, &buffers->data, sizeof(Buffer), cudaMemcpyHostToDevice));
 
-    CUDA_OK(cudaMalloc(&ctx->global, sizeof(Buffer)));
-    CUDA_OK(cudaMemcpy(ctx->global, &buffers->global, sizeof(Buffer), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->global, sizeof(Buffer)));
+    CUDA_OK(cudaMemcpy(host->global, &buffers->global, sizeof(Buffer), cudaMemcpyHostToDevice));
 
     CUDA_OK(cudaMalloc(&d_preflight.cycles, cycles * sizeof(PreflightCycle)));
     CUDA_OK(cudaMemcpy(d_preflight.cycles,
@@ -125,9 +169,9 @@ struct HostExecContext {
     d_preflight.bigintBytesLen = preflight->bigintBytesLen;
     d_preflight.tableSplitCycle = preflight->tableSplitCycle;
 
-    CUDA_OK(cudaMalloc(&ctx->preflight, sizeof(PreflightTrace)));
+    CUDA_OK(cudaMalloc(&host->preflight, sizeof(PreflightTrace)));
     CUDA_OK(
-        cudaMemcpy(ctx->preflight, &d_preflight, sizeof(PreflightTrace), cudaMemcpyHostToDevice));
+        cudaMemcpy(host->preflight, &d_preflight, sizeof(PreflightTrace), cudaMemcpyHostToDevice));
 
     CUDA_OK(cudaMalloc(&d_tables.tableU8, (1 << 8) * sizeof(uint32_t)));
     CUDA_OK(cudaMemset(d_tables.tableU8, 0, (1 << 8) * sizeof(uint32_t)));
@@ -135,20 +179,23 @@ struct HostExecContext {
     CUDA_OK(cudaMalloc(&d_tables.tableU16, (1 << 16) * sizeof(uint32_t)));
     CUDA_OK(cudaMemset(d_tables.tableU16, 0, (1 << 16) * sizeof(uint32_t)));
 
-    CUDA_OK(cudaMalloc(&ctx->tables, sizeof(LookupTables)));
-    CUDA_OK(cudaMemcpy(ctx->tables, &d_tables, sizeof(LookupTables), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->tables, sizeof(LookupTables)));
+    CUDA_OK(cudaMemcpy(host->tables, &d_tables, sizeof(LookupTables), cudaMemcpyHostToDevice));
+    if (host != ctx) {
+      CUDA_OK(cudaMemcpy(ctx, host, sizeof(*host), cudaMemcpyHostToDevice));
+    }
   }
 
   ~HostExecContext() {
     cudaFree(d_tables.tableU16);
     cudaFree(d_tables.tableU8);
-    cudaFree(ctx->tables);
+    cudaFree(host->tables);
     cudaFree(d_preflight.bigintBytes);
     cudaFree(d_preflight.txns);
     cudaFree(d_preflight.cycles);
-    cudaFree(ctx->preflight);
-    cudaFree(ctx->global);
-    cudaFree(ctx->data);
+    cudaFree(host->preflight);
+    cudaFree(host->global);
+    cudaFree(host->data);
     cudaFree(ctx);
   }
 };
@@ -170,24 +217,33 @@ struct DeviceAccumContext {
 };
 
 struct HostAccumContext {
-  DeviceAccumContext* ctx;
+  DeviceAccumContext* ctx;   // what the kernels are given
+  DeviceAccumContext h_ctx;  // host mirror (HAZYNC_727_DEVICE_CTX)
+  DeviceAccumContext* host;  // what host code writes: ctx (managed) or &h_ctx
   PreflightTrace d_preflight;
   LookupTables d_tables;
 
   HostAccumContext(AccumBuffers* buffers, PreflightTrace* preflight, size_t cycles) {
-    CUDA_OK(cudaMallocManaged(&ctx, sizeof(DeviceAccumContext)));
+    if (hz_device_ctx()) {
+      CUDA_OK(cudaMalloc(&ctx, sizeof(DeviceAccumContext)));
+      std::memset(&h_ctx, 0, sizeof(h_ctx));
+      host = &h_ctx;
+    } else {
+      CUDA_OK(cudaMallocManaged(&ctx, sizeof(DeviceAccumContext)));
+      host = ctx;
+    }
 
-    CUDA_OK(cudaMalloc(&ctx->data, sizeof(Buffer)));
-    CUDA_OK(cudaMemcpy(ctx->data, &buffers->data, sizeof(Buffer), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->data, sizeof(Buffer)));
+    CUDA_OK(cudaMemcpy(host->data, &buffers->data, sizeof(Buffer), cudaMemcpyHostToDevice));
 
-    CUDA_OK(cudaMalloc(&ctx->accum, sizeof(Buffer)));
-    CUDA_OK(cudaMemcpy(ctx->accum, &buffers->accum, sizeof(Buffer), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->accum, sizeof(Buffer)));
+    CUDA_OK(cudaMemcpy(host->accum, &buffers->accum, sizeof(Buffer), cudaMemcpyHostToDevice));
 
-    CUDA_OK(cudaMalloc(&ctx->global, sizeof(Buffer)));
-    CUDA_OK(cudaMemcpy(ctx->global, &buffers->global, sizeof(Buffer), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->global, sizeof(Buffer)));
+    CUDA_OK(cudaMemcpy(host->global, &buffers->global, sizeof(Buffer), cudaMemcpyHostToDevice));
 
-    CUDA_OK(cudaMalloc(&ctx->mix, sizeof(Buffer)));
-    CUDA_OK(cudaMemcpy(ctx->mix, &buffers->mix, sizeof(Buffer), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->mix, sizeof(Buffer)));
+    CUDA_OK(cudaMemcpy(host->mix, &buffers->mix, sizeof(Buffer), cudaMemcpyHostToDevice));
 
     CUDA_OK(cudaMalloc(&d_preflight.cycles, cycles * sizeof(PreflightCycle)));
     CUDA_OK(cudaMemcpy(d_preflight.cycles,
@@ -204,9 +260,9 @@ struct HostAccumContext {
     d_preflight.txnsLen = preflight->txnsLen;
     d_preflight.tableSplitCycle = preflight->tableSplitCycle;
 
-    CUDA_OK(cudaMalloc(&ctx->preflight, sizeof(PreflightTrace)));
+    CUDA_OK(cudaMalloc(&host->preflight, sizeof(PreflightTrace)));
     CUDA_OK(
-        cudaMemcpy(ctx->preflight, &d_preflight, sizeof(PreflightTrace), cudaMemcpyHostToDevice));
+        cudaMemcpy(host->preflight, &d_preflight, sizeof(PreflightTrace), cudaMemcpyHostToDevice));
 
     CUDA_OK(cudaMalloc(&d_tables.tableU8, (1 << 8) * sizeof(uint32_t)));
     CUDA_OK(cudaMemset(d_tables.tableU8, 0, (1 << 8) * sizeof(uint32_t)));
@@ -214,21 +270,24 @@ struct HostAccumContext {
     CUDA_OK(cudaMalloc(&d_tables.tableU16, (1 << 16) * sizeof(uint32_t)));
     CUDA_OK(cudaMemset(d_tables.tableU16, 0, (1 << 16) * sizeof(uint32_t)));
 
-    CUDA_OK(cudaMalloc(&ctx->tables, sizeof(LookupTables)));
-    CUDA_OK(cudaMemcpy(ctx->tables, &d_tables, sizeof(LookupTables), cudaMemcpyHostToDevice));
+    CUDA_OK(cudaMalloc(&host->tables, sizeof(LookupTables)));
+    CUDA_OK(cudaMemcpy(host->tables, &d_tables, sizeof(LookupTables), cudaMemcpyHostToDevice));
+    if (host != ctx) {
+      CUDA_OK(cudaMemcpy(ctx, host, sizeof(*host), cudaMemcpyHostToDevice));
+    }
   }
 
   ~HostAccumContext() {
     cudaFree(d_tables.tableU16);
     cudaFree(d_tables.tableU8);
-    cudaFree(ctx->tables);
+    cudaFree(host->tables);
     cudaFree(d_preflight.txns);
     cudaFree(d_preflight.cycles);
-    cudaFree(ctx->preflight);
-    cudaFree(ctx->mix);
-    cudaFree(ctx->global);
-    cudaFree(ctx->accum);
-    cudaFree(ctx->data);
+    cudaFree(host->preflight);
+    cudaFree(host->mix);
+    cudaFree(host->global);
+    cudaFree(host->accum);
+    cudaFree(host->data);
     cudaFree(ctx);
   }
 };
@@ -459,6 +518,25 @@ __global__ void finalizeAccum(DeviceAccumContext* ctx, uint32_t lastCycle) {
   }
 }
 
+// HAZYNC #727 TRACE 3: what the driver says about a kernel, before it is launched. ptx/binary version show
+// which fatbin entry was picked (61 = native sm_61 SASS); localBytes x resident threads is the local-memory
+// reservation a launch needs.
+template <typename K> static inline void hz_trace_func(const char* name, K* k, dim3 grid, dim3 block) {
+  if (!hz_trace_on()) return;
+  cudaFuncAttributes fa{};
+  cudaError_t e = cudaFuncGetAttributes(&fa, (const void*)k);
+  size_t stack = 0;
+  cudaDeviceGetLimit(&stack, cudaLimitStackSize);
+  std::fprintf(stderr,
+               "HAZYNC TRACE func %s: attrs=%d(%s) ptx=%d binary=%d regs=%d localBytes=%zu sharedBytes=%zu "
+               "constBytes=%zu maxThreads=%d grid=%u block=%u stackLimit=%zu\n",
+               name, (int)e, cudaGetErrorName(e), fa.ptxVersion, fa.binaryVersion, fa.numRegs,
+               (size_t)fa.localSizeBytes, (size_t)fa.sharedSizeBytes, (size_t)fa.constSizeBytes,
+               fa.maxThreadsPerBlock, grid.x, block.x, stack);
+  std::fflush(stderr);
+  cudaGetLastError();
+}
+
 } // namespace risc0::circuit::rv32im_v2::cuda
 
 constexpr size_t kStepModeParallel = 0;
@@ -475,11 +553,20 @@ const char* risc0_circuit_rv32im_cuda_witgen(uint32_t mode,
                                              uint32_t lastCycle) {
   hz_trace_err("enter witgen (pending from earlier code)");
   hz_trace_caps();
+  if (hz_trace_on()) {
+    std::fprintf(stderr, "HAZYNC TRACE witgen: context in %s memory (HAZYNC_727_DEVICE_CTX %s)\n",
+                 hz_device_ctx() ? "DEVICE" : "MANAGED", hz_device_ctx() ? "set" : "unset");
+    CudaStream pre;
+    hz_trace_mem("witgen: before context");
+    hz_trace_nop("witgen: BEFORE the context exists", pre);
+  }
   try {
     HostExecContext ctx(buffers, preflight, lastCycle);
     hz_trace_err("witgen: HostExecContext");
     CudaStream stream;
     hz_trace_err("witgen: CudaStream");
+    hz_trace_mem("witgen: context live");
+    hz_trace_nop("witgen: WHILE the context is live", stream);
     size_t split = preflight->tableSplitCycle;
 
     switch (mode) {
@@ -490,6 +577,7 @@ const char* risc0_circuit_rv32im_cuda_witgen(uint32_t mode,
       auto cfg2 = getSimpleConfig(phase2Count);
       {
         nvtx3::scoped_range range("phase1");
+        hz_trace_func("par_stepExec", par_stepExec, cfg1.grid, cfg1.block);
         par_stepExec<<<cfg1.grid, cfg1.block, 0, stream>>>(ctx.ctx, 0, split);
         hz_trace_err("launch par_stepExec");
         CUDA_OK(cudaStreamSynchronize(stream));
@@ -525,15 +613,23 @@ const char* risc0_circuit_rv32im_cuda_accum(AccumBuffers* buffers,
                                             uint32_t lastCycle) {
   hz_trace_err("enter accum (pending from earlier code)");
   hz_trace_caps();
+  if (hz_trace_on()) {
+    CudaStream pre;
+    hz_trace_mem("accum: before context");
+    hz_trace_nop("accum: BEFORE the context exists", pre);
+  }
   try {
     HostAccumContext ctx(buffers, preflight, lastCycle);
     hz_trace_err("accum: HostAccumContext");
     CudaStream stream;
     hz_trace_err("accum: CudaStream");
+    hz_trace_mem("accum: context live");
+    hz_trace_nop("accum: WHILE the context is live", stream);
     auto cfg = getSimpleConfig(lastCycle);
 
     {
       nvtx3::scoped_range range("phase1");
+      hz_trace_func("stepAccum", stepAccum, cfg.grid, cfg.block);
       stepAccum<<<cfg.grid, cfg.block, 0, stream>>>(ctx.ctx, lastCycle);
       hz_trace_err("launch stepAccum");
       CUDA_OK(cudaStreamSynchronize(stream));

@@ -23,6 +23,8 @@
 #include <cstdio>
 #include <cuda/std/array>
 #include <string.h>
+#include <cstdlib>
+#include <cstring>
 
 using namespace risc0;
 
@@ -59,53 +61,90 @@ struct DeviceContext {
 };
 
 struct HostContext {
-  DeviceContext* ctx;
+  // HAZYNC #727 CANDIDATE FIX, A/B under HAZYNC_727_DEVICE_CTX=1: the three small structs below are filled on the
+  // host and copied into ORDINARY device memory instead of living in cudaMallocManaged memory. The kernels read the
+  // same bytes. Without the variable this is the original managed path.
+  DeviceContext* ctx;        // what the kernels are given
+  DeviceContext h_ctx;       // host mirrors (device mode)
+  Buffer h_data;
+  Buffer h_global;
+  PreflightTrace h_pre;
+  DeviceContext* host;       // host-writable views: managed memory itself, or the mirrors
+  Buffer* hdata;
+  Buffer* hglobal;
+  PreflightTrace* hpre;
 
   HostContext(ExecBuffers* buffers, PreflightTrace* preflight, size_t cycles) {
-    CUDA_OK(cudaMallocManaged(&ctx, sizeof(DeviceContext)));
+    const bool dev = std::getenv("HAZYNC_727_DEVICE_CTX") != nullptr;
+    if (dev) {
+      std::memset(&h_ctx, 0, sizeof(h_ctx));
+      std::memset(&h_data, 0, sizeof(h_data));
+      std::memset(&h_global, 0, sizeof(h_global));
+      std::memset(&h_pre, 0, sizeof(h_pre));
+      CUDA_OK(cudaMalloc(&ctx, sizeof(DeviceContext)));
+      host = &h_ctx;
+      CUDA_OK(cudaMalloc(&host->data, sizeof(Buffer)));
+      CUDA_OK(cudaMalloc(&host->global, sizeof(Buffer)));
+      CUDA_OK(cudaMalloc(&host->preflight, sizeof(PreflightTrace)));
+      hdata = &h_data;
+      hglobal = &h_global;
+      hpre = &h_pre;
+    } else {
+      CUDA_OK(cudaMallocManaged(&ctx, sizeof(DeviceContext)));
+      host = ctx;
+      CUDA_OK(cudaMallocManaged(&ctx->data, sizeof(Buffer)));
+      CUDA_OK(cudaMallocManaged(&ctx->global, sizeof(Buffer)));
+      CUDA_OK(cudaMallocManaged(&ctx->preflight, sizeof(PreflightTrace)));
+      hdata = ctx->data;
+      hglobal = ctx->global;
+      hpre = ctx->preflight;
+    }
 
-    CUDA_OK(cudaMallocManaged(&ctx->data, sizeof(Buffer)));
-    ctx->data->buf = buffers->data.buf;
-    ctx->data->rows = buffers->data.rows;
-    ctx->data->cols = buffers->data.cols;
-    ctx->data->checkedReads = buffers->data.checkedReads;
+    hdata->buf = buffers->data.buf;
+    hdata->rows = buffers->data.rows;
+    hdata->cols = buffers->data.cols;
+    hdata->checkedReads = buffers->data.checkedReads;
 
-    CUDA_OK(cudaMallocManaged(&ctx->global, sizeof(Buffer)));
-    ctx->global->buf = buffers->global.buf;
-    ctx->global->rows = buffers->global.rows;
-    ctx->global->cols = buffers->global.cols;
-    ctx->global->checkedReads = buffers->global.checkedReads;
+    hglobal->buf = buffers->global.buf;
+    hglobal->rows = buffers->global.rows;
+    hglobal->cols = buffers->global.cols;
+    hglobal->checkedReads = buffers->global.checkedReads;
 
-    CUDA_OK(cudaMallocManaged(&ctx->preflight, sizeof(PreflightTrace)));
-
-    CUDA_OK(cudaMalloc(&ctx->preflight->preimages, preflight->preimagesSize * sizeof(KeccakState)));
-    CUDA_OK(cudaMemcpy(ctx->preflight->preimages,
+    CUDA_OK(cudaMalloc(&hpre->preimages, preflight->preimagesSize * sizeof(KeccakState)));
+    CUDA_OK(cudaMemcpy(hpre->preimages,
                        preflight->preimages,
                        preflight->preimagesSize * sizeof(KeccakState),
                        cudaMemcpyHostToDevice));
 
-    ctx->preflight->preimagesSize = preflight->preimagesSize;
+    hpre->preimagesSize = preflight->preimagesSize;
 
-    CUDA_OK(cudaMalloc(&ctx->preflight->curPreimage, cycles * sizeof(uint32_t)));
-    CUDA_OK(cudaMemcpy(ctx->preflight->curPreimage,
+    CUDA_OK(cudaMalloc(&hpre->curPreimage, cycles * sizeof(uint32_t)));
+    CUDA_OK(cudaMemcpy(hpre->curPreimage,
                        preflight->curPreimage,
                        cycles * sizeof(uint32_t),
                        cudaMemcpyHostToDevice));
 
-    CUDA_OK(cudaMalloc(&ctx->preflight->runOrder, cycles * sizeof(uint32_t)));
-    CUDA_OK(cudaMemcpy(ctx->preflight->runOrder,
+    CUDA_OK(cudaMalloc(&hpre->runOrder, cycles * sizeof(uint32_t)));
+    CUDA_OK(cudaMemcpy(hpre->runOrder,
                        preflight->runOrder,
                        cycles * sizeof(uint32_t),
                        cudaMemcpyHostToDevice));
+
+    if (dev) {
+      CUDA_OK(cudaMemcpy(host->data, hdata, sizeof(Buffer), cudaMemcpyHostToDevice));
+      CUDA_OK(cudaMemcpy(host->global, hglobal, sizeof(Buffer), cudaMemcpyHostToDevice));
+      CUDA_OK(cudaMemcpy(host->preflight, hpre, sizeof(PreflightTrace), cudaMemcpyHostToDevice));
+      CUDA_OK(cudaMemcpy(ctx, host, sizeof(DeviceContext), cudaMemcpyHostToDevice));
+    }
   }
 
   ~HostContext() {
-    cudaFree(ctx->preflight->curPreimage);
-    cudaFree(ctx->preflight->preimages);
-    cudaFree(ctx->preflight->runOrder);
-    cudaFree(ctx->preflight);
-    cudaFree(ctx->global);
-    cudaFree(ctx->data);
+    cudaFree(hpre->curPreimage);
+    cudaFree(hpre->preimages);
+    cudaFree(hpre->runOrder);
+    cudaFree(host->preflight);
+    cudaFree(host->global);
+    cudaFree(host->data);
     cudaFree(ctx);
   }
 };
