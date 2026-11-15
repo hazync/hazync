@@ -54,11 +54,11 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --max-tip-age 60 <tmp>/tip.json (expect exit 1)
-  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794754012
+  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794758157
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == env RISC0_DEV_MODE=1 zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/core.json (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: panicked at /home/defenwycke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been dis
+SWIFTSYNC_VERIFY_FAIL: panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been disabled by fe
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --network signet <tmp>/core.json (expect exit 1)
   [FAIL] the bundle is for "mainnet", the network asked about "signet"
@@ -70,7 +70,14 @@ exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 /nonexistent.json (expect exit 1)
 SWIFTSYNC_VERIFY_FAIL: "/nonexistent.json": No such file or directory (os error 2)
 exit=1 PASS
-== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/junk.json (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 1 column 1)
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/node <tmp>/tip.json (expect exit 0)
+SWIFTSYNC_VERIFY_OK: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d951592f7a0
+exit=0 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/badnode <tmp>/tip.json (expect exit 1)
+  [FAIL] chain identity: the tip is block 975278 0000000000000000000000000000000000000000000000000000000000000001 (from a source the caller trusts)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
-test_deposit.sh: 22/22 as expected
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/junk.json (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 2 column 2)
+exit=1 PASS
+test_deposit.sh: 24/24 as expected

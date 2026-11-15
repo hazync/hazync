@@ -154,7 +154,7 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | Groth16 wrap of the header receipt 0..975,278 | 97.0 s; 227,474 -> 4,745 bytes; verify 6 ms |
 | WASM verifier with the deposit entry | 1,302,725 bytes (381,955 gzipped) |
 
-Tests: 16 unit tests (`deposit::tests`), `test_deposit.sh` 22/22, `wasm/test-deposit.mjs` 10/10. Refusals covered: the
+Tests: 16 unit tests (`deposit::tests`), `test_deposit.sh` 24/24 (2 chain-identity cases), `wasm/test-deposit.mjs` 10/10. Refusals covered: the
 wrong txid (both ways), the wrong output, amount or script, insufficient depth or validated depth, a block not in
 the chain (other height, tampered coin state, path or header), a tampered merkle or coinbase branch, the 64-byte
 transaction trick on block 170 (whose merkle root IS dsha(coinbase txid || T): the 64 bytes with an empty branch

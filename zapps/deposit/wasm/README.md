@@ -13,7 +13,7 @@ node test-deposit.mjs ../target/release/zapp-deposit             # 10 cases on b
 
 | | |
 |---|---|
-| size | 1,192,195 bytes raw, 340,387 gzipped |
-| sha256 (this commit, `./build.sh`) | `91157776966e30781b731503be523e3d6c1e44a2862877d91d9b94eba67af48b` (headers image `de54b94f`; Rust 1.99.0, 2026-11-15) |
+| size | 1,192,195 bytes raw, 340,306 gzipped |
+| sha256 (this commit, `./build.sh`) | `14ea6b1b116beced2a230174ad8d94b84e2d8bbe00798f83837b9f1acf65e88c` (headers image `de54b94f`; Rust 1.99.0, built on hazync-coord, 2026-11-15) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-deposit.mjs` 10/10, run by `../test.sh` in CI's zapps job |

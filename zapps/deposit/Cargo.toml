@@ -21,6 +21,8 @@ path = "src/main.rs"
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
 zapp-headers = { path = "../headers" }
+# The chain-identity flags every zAPP CLI takes (zapps/common)
+zapp-common = { path = "../common" }
 libzync = { path = "../../libzync", default-features = false }
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
 serde = { version = "1", features = ["derive"] }

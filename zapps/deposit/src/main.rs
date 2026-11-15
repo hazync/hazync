@@ -3,7 +3,8 @@
 //! flags, verdict lines and exit codes are unchanged.
 //!
 //!   zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>]
-//!                [--min-validated-depth <n>] [--allow-pow-only-block] [--expect <height>:<hash>] [--max-tip-age <s>]
+//!                [--min-validated-depth <n>] [--allow-pow-only-block] [--expect <height>:<hash>] [--mempool | --mempool-url <base>]
+//!                [--bitcoin-cli "<cmd>"] [--max-tip-age <s>]
 //!                [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>
 //!       check a deposit proof against YOUR expectations. Exit 0 OK, 2 DEMO, 1 FAIL.
 //!   zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>]
@@ -21,11 +22,12 @@
 use std::process::exit;
 use swiftsync_verify::{hex, hex32, Image, Verdict};
 use zapp_deposit::{core_state, make_bundle, verify_deposit, DepositAsk};
+use zapp_common::{Identity, IDENTITY_USAGE};
 use zapp_headers::{HeaderState, HEADERS_IMAGE_ID};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n>] [--allow-pow-only-block] [--expect <height>:<hash>] [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
+    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n>] [--allow-pow-only-block] {IDENTITY_USAGE} [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
     eprintln!("       zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>] --height <h> --txid <txid> (--block <file> | --bitcoin-cli \"<cmd>\") [--tip-path <file>] [--network <name>] -o <deposit.json>");
     eprintln!("       zapp-deposit mmr-path <headers file> <tip height> <height>");
     exit(1);
@@ -172,6 +174,7 @@ fn verify_main(a: Vec<String>) -> ! {
     let (mut network, mut image_hex, mut himage, mut now, mut file, mut txid) =
         ("mainnet".to_string(), None, zapp_headers::HEADERS_IMAGE_ID.to_string(), None, None, None);
     let mut it = a.into_iter();
+    let mut id = Identity::default();
     let num = |v: Option<String>, k: &str| -> u64 { v.and_then(|x| x.parse().ok()).unwrap_or_else(|| fail(&format!("{k}: not a number"))) };
     let hexarg = |v: Option<String>, k: &str| -> Vec<u8> { v.and_then(|x| swiftsync_verify::unhex(&x)).unwrap_or_else(|| fail(&format!("{k}: not hex"))) };
     while let Some(x) = it.next() {
@@ -185,15 +188,11 @@ fn verify_main(a: Vec<String>) -> ! {
             "--min-validated-depth" => ask.min_validated_depth = num(it.next(), "--min-validated-depth"),
             "--allow-pow-only-block" => ask.allow_pow_only_block = true,
             "--max-tip-age" => ask.max_tip_age = Some(num(it.next(), "--max-tip-age")),
-            "--expect" => {
-                let e = it.next().unwrap_or_else(|| usage());
-                let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
-                ask.expect_tip = Some((h.parse().unwrap_or_else(|_| fail("--expect: bad height")), x.to_string()));
-            }
             "--now" => now = Some(num(it.next(), "--now")),
             "--network" => network = it.next().unwrap_or_else(|| usage()),
             "--image" => image_hex = it.next(),
             "--headers-image" => himage = it.next().unwrap_or_else(|| usage()),
+            f if id.take(f, &mut || it.next()).unwrap_or_else(|e| fail(&e)) => {}
             f if f.starts_with("--") => fail(&format!("unknown flag {}", esc(f))),
             f if file.is_none() => file = Some(f.to_string()),
             _ => usage(),
@@ -215,13 +214,31 @@ fn verify_main(a: Vec<String>) -> ! {
     let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
     let b: DepositBundle = serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&file)))))
         .unwrap_or_else(|e| fail(&format!("{}: not a deposit bundle ({e})", esc(&file))));
-    let rep = verify_deposit(&b, &ask, &network, image, &himage, now);
+    // chain identity (zapp-common): --mempool / --bitcoin-cli are asked for the block at the tip the depth is counted to
+    // (the header chain's, or the core proof's), which the bundle gives, and their answer is checked as --expect is
+    let parse = |e: &str| -> (i64, String) {
+        let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
+        (h.parse().unwrap_or_else(|_| fail("--expect: bad height")), x.to_string())
+    };
+    let mut extra = Vec::new();
+    ask.expect_tip = id.expect.as_deref().map(parse);
+    if id.needs_lookup() {
+        let pre = verify_deposit(&b, &DepositAsk { expect_tip: None, ..ask.clone() }, &network, image, &himage, now);
+        if let Some(s) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
+            let (x, c) = zapp_common::expect_at(&id, &network, s.tip_height as u32);
+            ask.expect_tip = x.as_deref().map(parse);
+            extra = c;
+        }
+    }
+    let mut rep = verify_deposit(&b, &ask, &network, image, &himage, now);
+    if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; }
+    rep.checks.splice(0..0, extra);
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
     match (&rep.verdict, &rep.statement) {
         (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: deposit: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
         (v, Some(s)) => {
             let out = s.output.as_ref().map(|(n, v, spk)| format!(", output {n} = {v} sat to {}", hex(spk))).unwrap_or_default();
-            let ident = if ask.expect_tip.is_some() { "" } else { "; chain identity NOT checked (give --expect <height>:<hash> from a source you trust)" };
+            let ident = if ask.expect_tip.is_some() { "" } else { "; chain identity NOT checked (give --expect <height>:<hash>, --mempool or --bitcoin-cli: a source you trust)" };
             let what = format!("deposit: transaction {}{out} is in block {} {}, {} confirmation(s) as of tip {} {} (chainwork {}); \
                                 FULLY VALIDATED from genesis through block {} ({} of those confirmations){}{ident}",
                 disp(&s.txid), s.height, disp(&s.block_hash), s.confirmations, s.tip_height, disp(&s.tip_hash), disp(&s.tip_work),

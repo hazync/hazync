@@ -37,6 +37,12 @@ run 1 env RISC0_DEV_MODE=1 $V --txid $T $W/core.json
 run 1 $V --txid $T --network signet $W/core.json
 run 1 $V $W/core.json
 run 1 $V --txid $T /nonexistent.json
+# the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names the header tip
+# as the bundle does (OK), one that names another block (FAIL)
+printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\nexit 0\n' "${TIP#*:}" > $W/node; chmod +x $W/node
+printf '#!/bin/sh\necho %064d\n' 1 > $W/badnode; chmod +x $W/badnode
+run 0 $V --txid $T --min-depth 6 --bitcoin-cli $W/node $W/tip.json
+run 1 $V --txid $T --min-depth 6 --bitcoin-cli $W/badnode $W/tip.json
 head -c 500 /dev/urandom > $W/junk.json; run 1 $V --txid $T $W/junk.json
 echo "test_deposit.sh: $((N-BAD))/$N as expected"
 [ "$N" -gt 0 ] && [ "$BAD" = 0 ]
