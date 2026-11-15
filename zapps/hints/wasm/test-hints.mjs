@@ -1,9 +1,9 @@
 // node test-hints.mjs <dir with mainnet-3.{receipt,hints,undo} and mainnet-2.hints> <hash of block 3>: the WASM hints
 // verifier on a real receipt: the proven file is DEMO (a 3-block chain is below minimum work), tampered inputs FAIL.
 import fs from 'node:fs';
-import { loadVerifier } from './swiftsync-verify.js';
+import { loadHints } from './zapp-hints.js';
 const [d, h3] = process.argv.slice(2);
-const v = await loadVerifier(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm', import.meta.url)));
+const v = await loadHints(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_hints_wasm.wasm', import.meta.url)));
 const rd = (f) => new Uint8Array(fs.readFileSync(`${d}/${f}`));
 const receipt = rd('mainnet-3.receipt'), file = rd('mainnet-3.hints'), undo = rd('mainnet-3.undo');
 const flip = file.slice(); flip[flip.length - 1] ^= 1;

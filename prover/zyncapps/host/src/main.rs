@@ -435,8 +435,8 @@ fn hints_prove(a: &[String]) {
     };
     if elf.is_empty() { die("no hints guest: built with RISC0_SKIP_BUILD, so give --elf <zyncapp-hints.bin>"); }
     let elf_id = hex(risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))).as_bytes());
-    if elf_id != swiftsync_verify::hints::HINTS_IMAGE_ID {
-        println!("HINTS_ID_NOT_PUBLISHED this guest is {elf_id}, the published hints id is {}: its receipts will not verify under the published id", swiftsync_verify::hints::HINTS_IMAGE_ID);
+    if elf_id != zapp_hints::HINTS_IMAGE_ID {
+        println!("HINTS_ID_NOT_PUBLISHED this guest is {elf_id}, the published hints id is {}: its receipts will not verify under the published id", zapp_hints::HINTS_IMAGE_ID);
     }
     let (cs, journal, receipt): (ChainStateJ, Vec<u8>, Option<Receipt>) = if a[3].ends_with(".json") {
         if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
@@ -538,7 +538,7 @@ fn hints_prove(a: &[String]) {
     println!("HINTS_ID {elf_id}");
 }
 
-/// The verifier: the same `swiftsync_verify::hints::verify_hints` as `swiftsync-verify hints`, the WASM and the C ABI,
+/// The verifier: the same `zapp_hints::verify_hints` as `zapp-hints`, the WASM and the C ABI,
 /// against the published hints image id. Exit 0 OK, 2 DEMO, 1 FAIL.
 fn hints_verify(a: &[String]) {
     let fail = |m: String| -> ! { println!("ZYNCAPP_FAIL: {m}"); std::process::exit(1) };
@@ -550,7 +550,7 @@ fn hints_verify(a: &[String]) {
     let (e1, e2) = (pe("--expect"), pe("--expect-tip"));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     // the PUBLISHED hints id (reproduce/LIBZYNC_IDS), the same every tool trusts, not this build's (review H2)
-    let rep = swiftsync_verify::hints::verify_hints(&r, &f, u.as_deref(), swiftsync_verify::hints::HINTS_IMAGE_ID, flag(a, "--core-image").map(|x| x.as_str()), now,
+    let rep = zapp_hints::verify_hints(&r, &f, u.as_deref(), zapp_hints::HINTS_IMAGE_ID, flag(a, "--core-image").map(|x| x.as_str()), now,
                                                     e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
     let z = match (&rep.verdict, &rep.statement) {

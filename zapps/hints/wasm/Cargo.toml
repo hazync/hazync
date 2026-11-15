@@ -1,0 +1,25 @@
+[package]
+name = "zapp-hints-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "The SwiftSync hints zyncAPP in WebAssembly: check a hints proof in a browser, on the device"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# The zAPP's own library (one implementation of the check, as the CLI and the C ABI); raw ABI, no wasm-bindgen.
+[dependencies]
+zapp-hints = { path = ".." }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

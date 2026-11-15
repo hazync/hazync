@@ -1,4 +1,7 @@
 //! The SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md): what a node checks before it trusts a downloaded hints file.
+//! A zAPP module (docs/libzync/ZYNCAPPS.md §9): it uses the core verifier `swiftsync_verify` as a library and is not
+//! part of it.
+//!
 //!
 //! The receipt proves: the file whose SHA-256 is `hints_sha256` is the hints file (hintsfile.md, in `format`) for block
 //! `height` of the chain a core receipt `core_id` proved valid from genesis (scripts checked), and `undo_sha256` is the
@@ -6,7 +9,7 @@
 //! receipt's verification covers it; what the zyncAPP could not know (which core images to trust, the genesis anchor,
 //! the network's work and checkpoint, the clock, and that block `height` is the node's own) is checked here, as for a
 //! core proof.
-use crate::{hex, hex32, identity_matches, lineage_of, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
+use swiftsync_verify::{hex, hex32, identity_matches, lineage_of, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
 use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -67,7 +70,7 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
                     expect: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> HintsReport {
     let mut rep = HintsReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false };
     // as the core verify(): RISC0_DEV_MODE never makes this verifier accept anything (review H3)
-    if !rep.check(!crate::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
+    if !rep.check(!swiftsync_verify::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
         return rep;
     }
     let Some(id) = hex32(image_hex) else {
@@ -114,9 +117,9 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     if let Some(h) = core_image_hex {
         match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
     }
-    rep.check(crate::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
+    rep.check(swiftsync_verify::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
     // the whole profile, as the core verifier compares it (review H5): network, scripts checked, coin log, trie, live hash
-    rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, img.profile, crate::describe_profile(z.profile)));
+    rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));
     rep.check(z.lineage == [0u8; 32] || z.lineage == lineage_of(img.lineage), "the core lineage is the image's");
     rep.check(hex32(img.genesis_anchor_hex) == Some(z.anchor_id), format!("anchored at the {net} genesis"));
     rep.check(z.max_time as u64 <= now.saturating_add(MAX_FUTURE_BLOCK_TIME), "time-too-new: no core block more than 2 h ahead of this clock");
@@ -143,7 +146,7 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
 mod tests {
     use super::*;
     const H3: &str = "0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449";
-    fn rd(f: &str) -> Vec<u8> { std::fs::read(format!("{}/vectors/hints/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap() }
+    fn rd(f: &str) -> Vec<u8> { std::fs::read(format!("{}/vectors/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap() }
     fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
 
     /// The real receipts (proved on CPU, 2026-11-14, hints image dff7f87c over core 46666b6f blocks 1..3).
@@ -169,5 +172,21 @@ mod tests {
         let two = verify_hints(&r2, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((2, h2)), Some((3, H3)));
         assert_eq!(two.verdict, Verdict::Demo, "{:?}", two.checks);
         assert_eq!(verify_hints(&r2, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((2, h2)), Some((3, h2))).verdict, Verdict::Fail);
+    }
+
+    /// The hints zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-hints` line), and the
+    /// genesis anchors its guest pins are the core's table (review H2, H4).
+    #[test]
+    fn hints_image_matches_the_published_id() {
+        let f = include_str!("../../../reproduce/LIBZYNC_IDS");
+        let line = f.lines().find(|l| l.starts_with("zyncapp-hints mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-hints line");
+        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
+        assert_eq!(id, HINTS_IMAGE_ID, "HINTS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
+        let g = include_str!("../../../prover/zyncapps/methods/hints/src/main.rs");
+        for net in ["mainnet", "signet"] {
+            let a = Image::by_network(net).unwrap().genesis_anchor_hex;
+            let c = if net == "mainnet" { "MAINNET_ANCHOR" } else { "SIGNET_ANCHOR" };
+            assert!(g.contains(&format!("const {c}: [u8; 32] = hex32(\"{a}\");")), "the hints guest's {c} is not the {net} genesis anchor");
+        }
     }
 }

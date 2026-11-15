@@ -39,14 +39,14 @@ no "a receipt of another image" "$CORE" "$F" --expect "$H:$X"
 no "an untrusted core image" "$R" "$F" --expect "$H:$X" --core-image "$(printf 'ab%.0s' {1..32})"
 e=$(RISC0_DEV_MODE=1 "$ZA" hints-verify "$R" "$F" --expect "$H:$X" > "$O/last.log" 2>&1; echo $?)
 [ "$e" = 1 ] && grep -q 'RISC0_DEV_MODE' "$O/last.log" && { echo "PASS refused: RISC0_DEV_MODE set"; P=$((P+1)); } || { echo "FAIL dev mode not refused (exit $e)"; N=$((N+1)); }
-# the same library through the CLI a node runs: swiftsync-verify hints (SV=<binary>, optional)
+# the same library through the CLI a node runs: zapp-hints (zapps/hints; SV=<binary>, optional)
 if [ -n "${SV:-}" ]; then
-  "$SV" hints --expect "$H:$X" --undo "$U" "$R" "$F" > "$O/sv.log" 2>&1; e=$?
-  { [ $e = 0 ] || { [ $e = 2 ] && grep -q '^SWIFTSYNC_VERIFY_DEMO' "$O/sv.log"; }; } && { echo "PASS swiftsync-verify hints: the proven file (exit $e)"; P=$((P+1)); } || { echo "FAIL swiftsync-verify hints (exit $e)"; N=$((N+1)); }
-  "$SV" hints --expect "$H:$X" "$R" "$O/tiny.hints" > "$O/sv.log" 2>&1; e=$?
-  [ $e = 1 ] && grep -q '^SWIFTSYNC_VERIFY_FAIL' "$O/sv.log" && { echo "PASS swiftsync-verify hints refused: the 9-byte file"; P=$((P+1)); } || { echo "FAIL swiftsync-verify hints: the 9-byte file (exit $e)"; N=$((N+1)); }
-  RISC0_DEV_MODE=1 "$SV" hints --expect "$H:$X" "$R" "$F" > "$O/sv.log" 2>&1; e=$?
-  [ $e = 1 ] && grep -q 'RISC0_DEV_MODE' "$O/sv.log" && { echo "PASS swiftsync-verify hints refused: RISC0_DEV_MODE set"; P=$((P+1)); } || { echo "FAIL swiftsync-verify hints: dev mode (exit $e)"; N=$((N+1)); }
+  "$SV" --expect "$H:$X" --undo "$U" "$R" "$F" > "$O/sv.log" 2>&1; e=$?
+  { [ $e = 0 ] || { [ $e = 2 ] && grep -q '^SWIFTSYNC_VERIFY_DEMO' "$O/sv.log"; }; } && { echo "PASS zapp-hints: the proven file (exit $e)"; P=$((P+1)); } || { echo "FAIL zapp-hints (exit $e)"; N=$((N+1)); }
+  "$SV" --expect "$H:$X" "$R" "$O/tiny.hints" > "$O/sv.log" 2>&1; e=$?
+  [ $e = 1 ] && grep -q '^SWIFTSYNC_VERIFY_FAIL' "$O/sv.log" && { echo "PASS zapp-hints refused: the 9-byte file"; P=$((P+1)); } || { echo "FAIL zapp-hints: the 9-byte file (exit $e)"; N=$((N+1)); }
+  RISC0_DEV_MODE=1 "$SV" --expect "$H:$X" "$R" "$F" > "$O/sv.log" 2>&1; e=$?
+  [ $e = 1 ] && grep -q 'RISC0_DEV_MODE' "$O/sv.log" && { echo "PASS zapp-hints refused: RISC0_DEV_MODE set"; P=$((P+1)); } || { echo "FAIL zapp-hints: dev mode (exit $e)"; N=$((N+1)); }
 fi
 echo "HINTS_VERIFY_TEST $P passed, $N failed"
 [ $N = 0 ]

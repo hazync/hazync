@@ -161,3 +161,21 @@ these files. Limits:
 
   Coin check on hazync.org does all of these (`assets/zapp.js`: a fact about another script, kind or height is
   refused before the verifier runs).
+
+## 9. Where each zAPP lives: one module per zAPP (15.11.2026)
+
+The owner's rule: a zAPP is "a separate side check, not the core engine". The core verifier (`swiftsync-verify`,
+`swiftsync-verify-ffi`, `swiftsync-verify-wasm`; released as `hazync-verify-*` and `hazync-verify.wasm`) checks CORE
+chain proofs only, and adding a zAPP never changes it: its `.wasm` stays byte-identical (`./build.sh`, sha256 in
+`swiftsync-verify-wasm/README.md`). Every zAPP has the same layout:
+
+| path | what |
+|---|---|
+| `zapps/<name>/` | the check library (`zapp_<name>`) and its CLI `zapp-<name>`, on `swiftsync-verify` as a library (receipt verification, chain state, facts) |
+| `zapps/<name>/wasm/` | its own WASM module (`build.sh`: the core's flags, `scripts/wasm-build.sh`), JS glue `zapp-<name>.js`, README with its sha256 |
+| `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one |
+| `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6) |
+
+| zAPP | module | CLI | WASM glue | C ABI |
+|---|---|---|---|---|
+| SwiftSync hints (HINTS_ZAPP.md) | `zapps/hints` | `zapp-hints` | `zapp-hints.js` (`verifyHints`) | `zapps/hints/ffi` (`swiftsync_verify_hints`, `zapp_hints.h`) |

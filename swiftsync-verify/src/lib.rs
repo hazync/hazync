@@ -220,7 +220,6 @@ pub struct ChainState {
 
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
 pub mod headers;
-pub mod hints;
 
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");
@@ -1419,22 +1418,6 @@ mod tests {
         let line = f.lines().find(|l| l.starts_with("zyncapp-headers mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-headers line");
         let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
         assert_eq!(id, crate::headers::HEADERS_IMAGE_ID, "headers::HEADERS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
-    }
-
-    /// The hints zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-hints` line), and the
-    /// genesis anchors its guest pins are this table's (review H2, H4).
-    #[test]
-    fn hints_image_matches_the_published_id() {
-        let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        let line = f.lines().find(|l| l.starts_with("zyncapp-hints mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-hints line");
-        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-        assert_eq!(id, crate::hints::HINTS_IMAGE_ID, "hints::HINTS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
-        let g = include_str!("../../prover/zyncapps/methods/hints/src/main.rs");
-        for net in ["mainnet", "signet"] {
-            let a = Image::by_network(net).unwrap().genesis_anchor_hex;
-            let c = if net == "mainnet" { "MAINNET_ANCHOR" } else { "SIGNET_ANCHOR" };
-            assert!(g.contains(&format!("const {c}: [u8; 32] = hex32(\"{a}\");")), "the hints guest's {c} is not the {net} genesis anchor");
-        }
     }
 
     #[test]

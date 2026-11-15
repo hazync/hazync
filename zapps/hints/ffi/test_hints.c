@@ -1,11 +1,11 @@
 /* test_hints.c: the C ABI's swiftsync_verify_hints on a real hints receipt (H = 3) and refusals.
- *   cc -O2 -Iinclude test_hints.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o test_hints
+ *   cc -O2 -Iinclude test_hints.c target/release/libzapp_hints_ffi.a -lpthread -ldl -lm -o test_hints
  *   ./test_hints <dir with mainnet-3.{receipt,hints,undo}> <hash of block 3> */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "swiftsync_verify.h"
+#include "zapp_hints.h"
 
 static unsigned char* slurp(const char* d, const char* f, size_t* n) {
     char p[4096]; snprintf(p, sizeof p, "%s/%s", d, f);

@@ -156,11 +156,11 @@ wrap: no trusted setup, nodes verify with our library, CLI, WASM or C ABI). Serv
 - Host: `zyncapp hints-prove <block dir> <H> <core receipt> <out> [--format 1|2]` replays blocks 1..T natively from
   the block files (`fetch_block_rpc.py`), checks its block forest against the core state, writes the file and the undo
   file, runs the same derivation natively, then proves; the guest's statement must equal the native one.
-- CLI: `swiftsync-verify hints [--expect <H>:<hash>] [--expect-tip <T>:<hash>] [--undo <file>] <receipt> <file>` (and
+- CLI: `zapp-hints [--expect <H>:<hash>] [--expect-tip <T>:<hash>] [--undo <file>] <receipt> <file>` (and
   `zyncapp hints-verify`, the same library call); exit 0 OK, 2 DEMO, 1 FAIL.
 - WASM `verify_hints` / JS `verifyHints({receipt, file, undo, expect})` (the file is hashed on the device); C ABI
-  `swiftsync_verify_hints` (include/swiftsync_verify.h) for a node patch to call before `-utxohints`. One implementation,
-  `swiftsync_verify::hints::verify_hints`. Core itself is unchanged.
+  `swiftsync_verify_hints` (zapps/hints/ffi, include/zapp_hints.h) for a node patch to call before `-utxohints`. One implementation,
+  `zapp_hints::verify_hints`, in the zAPP's own module `zapps/hints` (CLI, `ffi/`, `wasm/` with `zapp-hints.js`; ZYNCAPPS.md §9), on the core verifier as a library: neither Core nor the core verifier changes.
 
 ## 8. Tests
 
@@ -219,7 +219,7 @@ modern blocks are not measured. No mainnet figure is given.
 **Measured: real CPU proofs** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, a shared box). The core
 receipt: the published host (`46666b6f`) proving blocks 1..3 from genesis, 1,061.5 / 980.3 / 943.3 s per block. The
 hints receipt by the published image for H = 3 (T = 3): 182.0 s; H = 2 (T = 3, one leaf above H): 184.3 s; 225,202
-bytes each (`swiftsync-verify/vectors/hints`; CI verifies them). Blocks 1..3
+bytes each (`zapps/hints/vectors`; CI verifies them, `zapps/hints/test.sh`). Blocks 1..3
 have no spends: the paths with spends, same-block spends and the BIP30 blocks are covered by the executions above, not
 by a proof. Proving the core further on CPU (~16 min a block here) was not attempted.
 

@@ -9,8 +9,6 @@
 //   r.verdict  // 'ok' | 'demo' | 'fail'
 //   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });   // the header-chain zyncAPP
 //   h.verdict, h.height, h.hash, h.chainwork
-//   const s = v.verifyHints({ receipt, file, undo, expect: '<H>:<hash from YOUR header chain>' });   // the SwiftSync hints zyncAPP
-//   s.verdict, s.height, s.hash, s.format, s.unspent
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
@@ -43,7 +41,7 @@ export async function loadVerifier(source) {
     typeof Response !== 'undefined' && resolved instanceof Response
       ? await WebAssembly.instantiateStreaming(resolved, {})
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
-  const { alloc, verify_frame, verify_facts, image_id, verify_headers, headers_image_id, verify_hints, hints_image_id, memory } = instance.exports;
+  const { alloc, verify_frame, verify_facts, image_id, verify_headers, headers_image_id, memory } = instance.exports;
   const call = (fn, args) => {
     const bytes = frame(args);
     const ptr = alloc(bytes.length);
@@ -74,24 +72,6 @@ export async function loadVerifier(source) {
       new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
       return JSON.parse(readString(memory, verify_headers(ptr, bytes.length)));
     },
-    /** The SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md): `file` is the hints file the receipt proves for block H;
-     *  `undo` (optional) the undo-hash file; `expect` ('<H>:<hash>') block H from YOUR node's header chain; `expectTip`
-     *  the core tip when it is above H. The file is checked here, on the device. */
-    verifyHints({ receipt, file, undo, now, imageHex, coreImageHex, expect, expectTip }) {
-      const enc = new TextEncoder();
-      const parts = [receipt, file, undo || new Uint8Array(0), enc.encode(imageHex || ''), enc.encode(coreImageHex || ''),
-        enc.encode(expect || ''), enc.encode(expectTip || '')];
-      const bytes = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
-      const view = new DataView(bytes.buffer);
-      view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);
-      let o = 8;
-      for (const p of parts) { view.setUint32(o, p.length, true); bytes.set(p, o + 4); o += 4 + p.length; }
-      const ptr = alloc(bytes.length);
-      new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
-      return JSON.parse(readString(memory, verify_hints(ptr, bytes.length)));
-    },
-    /** The built-in hints image id. */
-    hintsImageId() { return readString(memory, hints_image_id()); },
     /** The built-in header-chain image id. */
     headersImageId() { return readString(memory, headers_image_id()); },
     /** The built-in image id for 'mainnet' or 'signet'. */
