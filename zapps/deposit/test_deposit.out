@@ -14,16 +14,25 @@ exit=1 PASS
 zapp-deposit: the block is not the proven chain's at that height (history hash differs)
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 1000000000 --min-depth 31 <tmp>/core.json (expect exit 2)
-SWIFTSYNC_VERIFY_DEMO: below Core's minimum chain work, not shown to be the network's chain: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, output 0 = 1000000000 sat to 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374c
+SWIFTSYNC_VERIFY_DEMO: deposit NOT accepted: valid checks, but the chain is below Core's minimum chain work or the core proof's checkpoint: a cheap fork can show this; the statement is withheld (--allow-demo shows it)
 exit=2 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 <tmp>/h200.json (expect exit 2)
-SWIFTSYNC_VERIFY_DEMO: below Core's minimum chain work, not shown to be the network's chain: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee,
+SWIFTSYNC_VERIFY_DEMO: deposit NOT accepted: valid checks, but the chain is below Core's minimum chain work or the core proof's checkpoint: a cheap fork can show this; the statement is withheld (--allow-demo shows it)
 exit=2 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 1000000000 --allow-demo <tmp>/core.json (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: NOT accepted (below Core's minimum chain work or the checkpoint, or the tip not compared): deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, output 0 = 1000000000 sat to 4104ae1a62fe09c5f51b13905f07f0
+exit=2 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 <tmp>/tip.json (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: deposit NOT accepted: valid checks, but the tip was not compared with a source you trust; the statement is withheld (--allow-demo shows it)
+exit=2 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --no-require-identity <tmp>/tip.json (expect exit 0)
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d
+exit=0 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 1000000000 --min-depth 6 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/tip.json (expect exit 0)
-SWIFTSYNC_VERIFY_OK: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, output 0 = 1000000000 sat to 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, output 0 = 1000000000 sat to 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1bad
 exit=0 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-validated-depth 31 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/tip.json (expect exit 0)
-SWIFTSYNC_VERIFY_OK: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d951592f7a0
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d
 exit=0 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-validated-depth 32 <tmp>/tip.json (expect exit 1)
   [FAIL] validated depth: 31 fully validated confirmation(s) >= 32 asked
@@ -54,7 +63,7 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --max-tip-age 60 <tmp>/tip.json (expect exit 1)
-  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794758157
+  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794772829
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == env RISC0_DEV_MODE=1 zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/core.json (expect exit 1)
@@ -71,13 +80,22 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: "/nonexistent.json": No such file or directory (os error 2)
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/node <tmp>/tip.json (expect exit 0)
-SWIFTSYNC_VERIFY_OK: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d951592f7a0
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d
 exit=0 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/badnode <tmp>/tip.json (expect exit 1)
+  [FAIL] your node's chainwork at block 975278: getblockheader 0000000000000000000000000000000000000000000000000000000000000001: not JSON (invalid number at line 1 column 2)
   [FAIL] chain identity: the tip is block 975278 0000000000000000000000000000000000000000000000000000000000000001 (from a source the caller trusts)
+SWIFTSYNC_VERIFY_FAIL: deposit: 2 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/nowork <tmp>/tip.json (expect exit 1)
+  [FAIL] your node's chainwork at block 975278: getblockheader 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3: not JSON (EOF while parsing a value at line 1 column 0)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/otherwork <tmp>/tip.json (expect exit 1)
+  [FAIL] your node's chainwork at block 975278 equals the proven chainwork 00000000000000000000000000000000000000015731592c05251d96d07f062f (node: 00000000000000000000000000000000000000000000000000000000000000ff)
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/junk.json (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 2 column 2)
+SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 1 column 1)
 exit=1 PASS
-test_deposit.sh: 24/24 as expected
+test_deposit.sh: 29/29 as expected

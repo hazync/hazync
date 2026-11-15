@@ -351,3 +351,41 @@ fn a_witness_serialised_transaction_in_a_fully_validated_block() {
     let mut b2 = good.clone(); b2.block.tx = hex(&x);
     assert_eq!(run(&b2, &a).verdict, Verdict::Fail);
 }
+
+/// The v0.26.0 image (46666b6f), whose block leaves commit the undo hash (0x05 leaves, docs/libzync/UNDO.md), on its one
+/// real mainnet receipt in the repository (blocks 0..1, the release smoke test's): block 1's coinbase. Its forest
+/// opening is built from first principles (the genesis leaf, the tip's own coin state, the empty undo hash of a block
+/// with no spends), so this needs no history.bin. A receipt deep enough to put a spending block under the core tip
+/// waits on the first v0.26.0 board run.
+#[test]
+fn an_undo_leaf_block_of_the_v026_image() {
+    const CORE_V026: &[u8] = include_bytes!("../../../experimental/libzync-bench/zapp/mainnet_1_1_46666b6f.rcpt");
+    const BLOCK_1: &str = include_str!("../../../experimental/libzync-bench/deposit/block_1_raw.txt");
+    let cs = core_state(CORE_V026).unwrap();
+    assert_eq!(cs.height, 1);
+    let (header, txs) = libzync::facts::parse_block(&unhex(BLOCK_1.trim()).unwrap()).unwrap();
+    let cb = libzync::facts::txid(&txs[0]);
+    assert_eq!(disp(&cb), "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098");
+    let img = Image::by_network("mainnet").unwrap();
+    let g = swiftsync_verify::genesis_anchor(img);
+    let leaf0 = g.block_roots[0].unwrap();
+    let undo = swiftsync_verify::undo_hash(std::iter::empty());
+    let state = swiftsync_verify::utxo_state_of(&cs);
+    let b = DepositBundle {
+        kind: BUNDLE_KIND.into(), version: BUNDLE_VERSION, network: "mainnet".into(), core_receipt: hex(CORE_V026),
+        header_receipts: vec![], core_tip_mmr_path: vec![],
+        block: DepositBlock { height: 1, header: hex(&header), forest: Some(ForestOpening { state: hex(&state), undo: Some(hex(&undo)), path: vec![hex(&leaf0)] }),
+                              mmr_path: None, tx: hex(&txs[0].stripped), index: 0, branch: vec![], coinbase: hex(&txs[0].stripped), coinbase_branch: vec![] },
+    };
+    let a = DepositAsk { vout: Some(0), amount: Some(5_000_000_000), ..ask(cb) };
+    let r = run(&b, &a);
+    assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
+    let s = r.statement.unwrap();
+    assert_eq!((s.height, s.validated_through, s.confirmations, s.block_fully_validated), (1, 1, 1, true));
+    assert_eq!(s.core_image, "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c");
+    // the undo hash is part of the leaf: a wrong one, or none, is refused
+    let mut x = b.clone(); x.block.forest.as_mut().unwrap().undo = Some(hex(&[1; 32]));
+    refused(&x, &a, "not in the proof's block forest");
+    let mut x = b.clone(); x.block.forest.as_mut().unwrap().undo = None;
+    refused(&x, &a, "undo");
+}

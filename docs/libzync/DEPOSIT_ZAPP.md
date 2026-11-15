@@ -17,8 +17,22 @@ One file (a *deposit bundle*) that a bridge, rollup or other chain's operator ch
 
 The caller supplies T, v, the amount, the script or payload, the depths, the network and the image ids. The bundle
 carries no txid and no image id. The raw transaction must hash to the caller's T (the header zAPP review's rule:
-an answer that is a valid proof for another transaction is refused). A statement is returned only when every check
-passed. Verdicts as elsewhere: `OK` (0), `DEMO` (2: the tip proof is below Core's `nMinimumChainWork`), `FAIL` (1).
+an answer that is a valid proof for another transaction is refused).
+
+**What to gate on: `accepted`** (the CLI's exit 0, the WASM's `accepted`), and nothing else. It is true only when the
+verdict is `OK`: every check passed, the tip proof has Core's `nMinimumChainWork`, and the tip was compared with a
+source the caller trusts (`--expect`, `--mempool` or `--bitcoin-cli`; `require_identity`, on by default). The other
+verdicts:
+
+- `DEMO` (exit 2): the checks passed, but the chain is below the minimum chain work, or, for a core proof alone, below
+  the checkpoint its image pins (block 970,000), or the tip was not compared. **A DEMO statement is cheap to forge**:
+  anyone can mine a difficulty-1 fork from genesis and prove it, and it passes the same checks. So the statement is
+  withheld (null in WASM, not printed by the CLI) unless the caller asks for it (`--allow-demo`, `"allow_demo": true`),
+  and it is never `accepted`.
+- `FAIL` (exit 1): a check failed; no statement.
+
+A caller that compares the tip by other means can turn the identity requirement off (`--no-require-identity`,
+`"require_identity": false`); then `OK` and `accepted` need only the checks and the work, and saying so is its choice.
 
 ## 2. How the transaction is bound to a fully validated chain
 
@@ -31,17 +45,19 @@ Two proofs exist:
 - the **header-chain proof** (`de54b94f…`): proof of work and Core's header rules 0..Ht, with an MMR of every block
   hash. It follows the tip.
 
-Two ways to join them were considered.
+I considered two ways to join them.
 
-**(a) Composition in the verifier (chosen).** The verifier checks both receipts, then:
+**(a) Composition in the verifier (my choice).** The verifier checks both receipts, then:
 
 1. *binding*: the core tip hash is the header MMR's leaf at height Hc (one MMR path). Both are hash chains from
    genesis, so the header chain's blocks 0..Hc are exactly the core's (a difference would be a SHA-256d collision);
 2. *the block*: block h (h <= Hc) is a leaf of the core block forest (header, coin state, undo hash, path), so it is
    one of the fully validated blocks;
 3. *the transaction*: it is at position i of that block by its merkle branch, with the tree depth pinned by the
-   block's coinbase and its branch; a 64-byte transaction is refused (it cannot be told apart from an inner merkle
-   node; CVE-2012-2459's family; BIP 54 would forbid it). The outputs are parsed from the bytes that hash to T;
+   block's coinbase and its branch. What closes the 64-byte ambiguity (an inner merkle node is 64 bytes, so a 64-byte
+   transaction cannot be told apart from one; CVE-2012-2459's family; BIP 54 would forbid it) is the transaction's
+   serialisation WITHOUT witness (the txid preimage) not being 64 bytes, together with that coinbase depth pin; a
+   given form of exactly 64 bytes is also refused early. The outputs are parsed from the bytes that hash to T;
 4. *depth*: N = Ht - h + 1 (Hc - h + 1 without a header proof), of which Hc - h + 1 are fully validated.
 
 A block above Hc can be shown only by the header MMR: proof of work only. It is refused unless the caller passes
@@ -55,7 +71,7 @@ bytes, on the real bundle (core 0..200, header chain 0..975,278, block 170). Pro
 tampered branch makes the guest panic. Its image id (`184e81af…`, laptop build) is not reproducible as built: a
 published version would go through `reproduce/` like the others.
 
-**Why (a).** It adds no image id to review, reproduce and pin (the trust is the two images already published), no
+**Why I chose (a).** It adds no image id to review, reproduce and pin (the trust is the two images already published), no
 proving per deposit or per tip, and the verifier is a pure function that already runs in the CLI and in WASM (a
 browser). (b) is only needed when ONE receipt must carry the statement, that is when a contract checks it on chain
 (§6). (b) reads the same bundle, so it can be added later without changing anything a bridge already uses.
@@ -73,8 +89,14 @@ merkle branch reaches one of its headers:
 | blocks above Hc | proof of work | proof of work only (the same) |
 | the chain is the network's (most work) | the caller compares the tip | the caller compares the tip (`--expect`, `--max-tip-age`) |
 | no reorg after tip X | not known | not known |
+| the output is still unspent at tip X | not known | **not shown** either (below) |
 
 It does **not** add:
+
+- **that the output is still unspent.** The bundle shows the deposit was made (the output was created in block h); it
+  says nothing about whether it was spent later, at or before tip X. A bridge that needs "still unspent" uses the coin
+  liveness zAPP (`zapps/liveness`, branch `feat/zapp-liveness`), which answers it against the core proof's coin log.
+- **anything, at DEMO.** A DEMO statement can be shown by a cheap fork (§1); only `accepted` means something.
 
 - **finality or recency.** The statement is "as of tip X with work W". A reorg deeper than the burial after X makes
   it stale, and the proof cannot show that. A caller compares X with its own node or several sources (`--expect`) and
@@ -110,7 +132,10 @@ zapp-deposit --txid f4184fc5…9e16 --vout 0 --amount 1000000000 --script 4104ae
 
 `--op-return <hex>`: an output (at `--vout`, or any) that is OP_RETURN followed by data pushes only (OP_0, 1-75 byte
 pushes, OP_PUSHDATA1/2/4), their data concatenated equal to the payload. Any other script (OP_1..OP_16 included) does
-not match; `--script` checks a scriptPubKey byte for byte. `zapp-deposit build` checks what it built with the verifier and
+not match. The concatenation loses the push boundaries and which push opcode carried each part (one push `abcd` and
+two pushes `ab` `cd` carry the same payload); where that matters, I recommend `--script`, which checks the scriptPubKey
+byte for byte. `--allow-demo` prints a DEMO statement (never accepted); `--no-require-identity` drops the tip-source
+requirement (§1). `zapp-deposit build` checks what it built with the verifier and
 refuses to write a bundle that does not verify. `zapp-deposit mmr-path <headers file> <tip> <height>` prints an MMR path.
 
 The bundle (JSON, version 1): `core_receipt`, `header_receipts` (one or a chain of runs from genesis),
@@ -152,9 +177,13 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | composed receipt, Groth16-wrapped | 88.5 s; 3,129 bytes (seal 256 bytes); verify 9 ms |
 | Groth16 wrap of the core receipt 0..200 (hazync-coord CPU + Docker) | 94.4 s; 227,362 -> 4,633 bytes (seal 256 bytes); verify 5 ms |
 | Groth16 wrap of the header receipt 0..975,278 | 97.0 s; 227,474 -> 4,745 bytes; verify 6 ms |
-| WASM verifier with the deposit entry | 1,302,725 bytes (381,955 gzipped) |
+| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `82437c4c…`) | 1,193,023 bytes (340,484 gzipped) |
 
-Tests: 16 unit tests (`deposit::tests`), `test_deposit.sh` 24/24 (2 chain-identity cases), `wasm/test-deposit.mjs` 10/10. Refusals covered: the
+Tests: 19 unit tests (`zapps/deposit/src/tests.rs`), `test_deposit.sh` 29/29 (5 chain-identity cases: an agreeing node, one
+naming another block, one giving no chainwork, one giving another chainwork, and the tip given), `wasm/test-deposit.mjs`
+14/14. Also covered since the review of 15.11.2026: `accepted` and the verdict under each of `require_identity` and
+`allow_demo`, a DEMO statement withheld, a transaction in its witness serialisation in a fully validated block, and a
+block of the v0.26.0 image (`46666b6f`, whose leaves commit the undo hash) on its real receipt of blocks 0..1. Refusals covered: the
 wrong txid (both ways), the wrong output, amount or script, insufficient depth or validated depth, a block not in
 the chain (other height, tampered coin state, path or header), a tampered merkle or coinbase branch, the 64-byte
 transaction trick on block 170 (whose merkle root IS dsha(coinbase txid || T): the 64 bytes with an empty branch
@@ -164,12 +193,15 @@ below the core tip, the wrong network, tip identity and freshness, and an OP_RET
 
 The real receipts used: core proof of mainnet 0..200 (`8888d59c`, `swiftsync-verify/vectors/`, with its run's
 `history.bin`), header proofs 0..100 + 101..200 and 0..975,278 (`de54b94f`), block 170 (the coinbase and Satoshi to
-Hal Finney), block 800,000 (a segwit transaction; the coinbase's witness-commitment OP_RETURN). No v0.26.0
-(`46666b6f`) mainnet core receipt is in the repository yet; its block leaves add the undo hash, which `forest.undo` carries.
+Hal Finney), block 800,000 (a segwit transaction; the coinbase's witness-commitment OP_RETURN), and block 1 under the
+v0.26.0 image (`46666b6f`, `experimental/libzync-bench/zapp/mainnet_1_1_46666b6f.rcpt`: the undo-hash leaf, its opening
+made without a history.bin). A v0.26.0 receipt deep enough to put a block with spends under the core tip waits on the
+first v0.26.0 board run.
 
 ## 8. Open
 
-- A v0.26.0 core receipt: rerun the tests on one when the board has one, with its `history.bin`.
+- A deeper v0.26.0 core receipt (a block with spends, so a non-empty undo hash): rerun the tests on the board's first
+  v0.26.0 run, with its `history.bin`.
 - Where a bridge gets `history.bin`-derived openings at mainnet scale (a path service, like `zync-serve` for coins).
 - (b) as a published image, if a contract chain wants on-chain verification: review, a reproducible id, a chain of
   header runs (today one run from genesis), and a contract that reads its journal.
