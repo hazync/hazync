@@ -115,7 +115,7 @@ jobs:
           fi
       - name: It must accept a real libzync proof and refuse tampered ones
         # An embedded id is not a working verifier. Run the binary (under qemu) on the real mainnet
-        # 1..200 receipt in the tree, and on a flipped seal byte, a flipped journal byte, a wrong tip and
+        # block 1 receipt by this release's image (and v0.24.0's 1..200 one) in the tree, and on a flipped seal byte, a flipped journal byte, a wrong tip and
         # RISC0_DEV_MODE: the same CLI cases scripts/release.sh runs on the x86_64 verifier before publish.
         env:
           CLI_WRAP: qemu-aarch64 -L /usr/aarch64-linux-gnu
