@@ -4506,8 +4506,10 @@ class H(BaseHTTPRequestHandler):
         ua = self.headers.get("User-Agent") or ""
         if isinstance(body, dict) and ua.startswith("hazync-worker/"):
             body["_client_version"] = ua[len("hazync-worker/"):][:32]
-        if isinstance(body, dict) and p == "/api/sponsor":
-            body["_client_ip"] = self._client_ip()        # set here, always: a client cannot choose it
+        if isinstance(body, dict):
+            # set here, always, for every POST: a client cannot choose it. Before 15.11.2026 only /api/sponsor got it,
+            # so claim()'s CLAIM_NEW_IP_MAX read a value the CLIENT sent (real workers send none: the cap never applied).
+            body["_client_ip"] = self._client_ip()
         fn = {"/api/submit": submit, "/api/claim": claim, "/api/spine": submit_spine,
               "/api/beat": beat, "/api/rotate": rotate, "/api/sponsor": sponsor_request,
               "/api/foldclaim": fold_claim}[p]
