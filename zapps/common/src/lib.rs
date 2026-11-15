@@ -101,10 +101,17 @@ impl Identity {
             match node(cmd, &["getblockhash", &height.to_string()]) {
                 Ok(hash) if is_hash(&hash.to_lowercase()) => {
                     let hash = hash.to_lowercase();
-                    r.node_chainwork = node(cmd, &["getblockheader", &hash]).ok()
-                        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-                        .and_then(|v| v["chainwork"].as_str().map(|w| w.to_lowercase()));
                     r.checks.push((true, format!("your node's block {height} is {hash}")));
+                    // the node's chainwork is part of what --bitcoin-cli checks: a failed getblockheader or an answer
+                    // without a chainwork is a FAIL, never a check skipped
+                    match node(cmd, &["getblockheader", &hash]).and_then(|j| {
+                        serde_json::from_str::<serde_json::Value>(&j).map_err(|e| format!("not JSON ({e})"))?["chainwork"]
+                            .as_str().filter(|w| !w.is_empty() && w.len() <= 64 && w.bytes().all(|b| b.is_ascii_hexdigit()))
+                            .map(|w| format!("{:0>64}", w.to_lowercase())).ok_or_else(|| "no chainwork in the answer".to_string())
+                    }) {
+                        Ok(w) => r.node_chainwork = Some(w),
+                        Err(e) => r.checks.push((false, format!("your node's chainwork at block {height}: getblockheader {hash}: {e}"))),
+                    }
                     answers.push(("your node".into(), height, hash));
                 }
                 Ok(other) => r.checks.push((false, format!("your node's chain: getblockhash {height} gave {other:?}"))),
@@ -175,12 +182,19 @@ pub fn expect_for_core(id: &Identity, network: &str, cs: &ChainState) -> (Option
 
 /// For a zAPP that compares a block at `height` (not a core tip) with an `expect` string: the sources' answer as that
 /// string (the given `--expect` unchanged when there is no other source), and the source lines to add to its checks.
-pub fn expect_at(id: &Identity, network: &str, height: u32) -> (Option<String>, Vec<(bool, String)>) {
+/// `work`: the proof's chainwork at that block (little-endian, as the journals hold it); with `--bitcoin-cli` the
+/// node's chainwork there must equal it, as [`check_core_tip`] requires of a core tip.
+pub fn expect_at(id: &Identity, network: &str, height: u32, work: &[u8; 32]) -> (Option<String>, Vec<(bool, String)>) {
     if !id.needs_lookup() {
         return (id.expect.clone(), Vec::new());
     }
     let r = id.resolve(network, height);
-    (r.expect, r.checks)
+    let mut checks = r.checks;
+    if let Some(w) = &r.node_chainwork {
+        let pw = display_hex(work);
+        checks.push((*w == pw, format!("your node's chainwork at block {height} equals the proven chainwork {pw} (node: {w})")));
+    }
+    (r.expect, checks)
 }
 
 /// The image a caller names, as the core verifier's WASM resolves it: `network` "mainnet" or "signet"; `image_hex`
@@ -302,14 +316,34 @@ mod tests {
     fn node_answers_and_disagreement() {
         let d = std::env::temp_dir().join(format!("zapp-common-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
-        let cli = d.join("cli");
-        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00ab\"}}';; esac\n")).unwrap();
-        #[cfg(unix)]
-        { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap(); }
-        let c = cli.to_str().unwrap();
+        let script = |hdr: &str| format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) {hdr};; esac\n");
+        let mk = |name: &str, hdr: &str| -> String {
+            let p = d.join(name);
+            std::fs::write(&p, script(hdr)).unwrap();
+            #[cfg(unix)]
+            { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+            p.to_str().unwrap().to_string()
+        };
+        let c = &mk("cli", "echo '{\"chainwork\": \"00ab\"}'");
         let r = take_all(&["--bitcoin-cli", c]).unwrap().resolve("mainnet", 200);
         assert_eq!(r.expect.as_deref(), Some(format!("200:{H200}").as_str()));
-        assert_eq!(r.node_chainwork.as_deref(), Some("00ab"));
+        assert_eq!(r.node_chainwork.as_deref(), Some(format!("{:0>64}", "00ab").as_str()));
+        // review (11-15): a getblockheader that fails, or answers without a chainwork, is a FAIL, not a skipped check
+        for (name, hdr) in [("err", "echo boom >&2; exit 1"), ("nowork", "echo '{\"height\": 200}'"), ("junk", "echo 'not json'"),
+                            ("badwork", "echo '{\"chainwork\": \"zz\"}'")] {
+            let r = take_all(&["--bitcoin-cli", &mk(name, hdr)]).unwrap().resolve("mainnet", 200);
+            assert!(r.node_chainwork.is_none() && r.checks.iter().any(|c| !c.0 && c.1.contains("chainwork")), "{name}: {:?}", r.checks);
+        }
+        // expect_at compares the node's chainwork with the proof's at that block
+        let id = take_all(&["--bitcoin-cli", c]).unwrap();
+        let mut w = [0u8; 32]; w[0] = 0xab;
+        let (x, ch) = expect_at(&id, "mainnet", 200, &w);
+        assert_eq!(x.as_deref(), Some(format!("200:{H200}").as_str()));
+        assert!(ch.iter().all(|c| c.0), "{ch:?}");
+        w[0] = 0xac;
+        assert!(expect_at(&id, "mainnet", 200, &w).1.iter().any(|c| !c.0 && c.1.contains("chainwork")));
+        let (_, ch) = expect_at(&take_all(&["--bitcoin-cli", &mk("nowork2", "echo '{}'")]).unwrap(), "mainnet", 200, &w);
+        assert!(ch.iter().any(|c| !c.0), "a missing chainwork under expect_at: {ch:?}");
         assert!(r.checks.iter().all(|c| c.0), "{:?}", r.checks);
         let other = format!("200:{}1", &H200[..63]);
         let r = take_all(&["--bitcoin-cli", c, "--expect", &other]).unwrap().resolve("mainnet", 200);
@@ -338,7 +372,7 @@ mod tests {
         assert!(!check_core_tip(&Identity { expect: Some(format!("199:{H200}")), ..Default::default() }, "mainnet", &cs).1);
         assert_eq!(check_core_tip(&Identity::default(), "mainnet", &cs), (Vec::new(), false));
         assert_eq!(expect_for_core(&id, "mainnet", &cs), (id.expect.clone(), Vec::new()));
-        assert_eq!(expect_at(&id, "mainnet", 7), (id.expect.clone(), Vec::new()));
+        assert_eq!(expect_at(&id, "mainnet", 7, &cs.cum_work), (id.expect.clone(), Vec::new()));
         // block 200's chainwork: 201 blocks of difficulty 1, 0x100010001 each
         assert_eq!(display_hex(&cs.cum_work), format!("{:064x}", 201u128 * 0x1_0001_0001));
     }
