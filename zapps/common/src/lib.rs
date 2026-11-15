@@ -105,7 +105,7 @@ impl Identity {
                     // silently skipped comparison
                     match node(cmd, &["getblockheader", &hash]) {
                         Ok(j) => match serde_json::from_str::<serde_json::Value>(&j).ok().and_then(|v| v["chainwork"].as_str().map(|w| w.to_lowercase())) {
-                            Some(w) if is_hash(&w) => r.node_chainwork = Some(w),
+                            Some(w) if !w.is_empty() && w.bytes().all(|b| b.is_ascii_hexdigit()) => r.node_chainwork = Some(w),
                             _ => r.checks.push((false, format!("your node's getblockheader {hash} has no chainwork: the proven chainwork is not compared"))),
                         },
                         Err(e) => r.checks.push((false, format!("your node's getblockheader {hash} failed ({e}): the proven chainwork is not compared"))),

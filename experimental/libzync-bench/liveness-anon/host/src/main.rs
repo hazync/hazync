@@ -13,7 +13,7 @@ struct Coin { txid: [u8; 32], vout: u32, value: u64, script_pubkey: Vec<u8>, hei
 
 #[derive(Serialize)]
 struct Input {
-    core_id: [u32; 8], journal: Vec<u8>, signet: bool, policy: u32, min_value: u64, set_root: [u8; 32], context: [u8; 32],
+    core_id: [u32; 8], journal: Vec<u8>, signet: bool, policy: u32, min_value: u64, set_root: [u8; 32], set_depth: u32, context: [u8; 32],
     coin: Coin, pos: u64, path: Vec<[u8; 32]>, set_index: u64, set_path: Vec<[u8; 32]>, sk: [u8; 32], bench_key_only: bool,
 }
 
@@ -25,9 +25,18 @@ fn node(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// A set of 2^depth script hashes with `spk`'s at `index` (the others are SHA-256 of a counter): (root, path).
+/// A set leaf: SHA-256(0x00 ‖ len u32 LE ‖ spk).
+fn leaf(spk: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update([0u8]);
+    h.update((spk.len() as u32).to_le_bytes());
+    h.update(spk);
+    h.finalize().into()
+}
+
+/// A set of 2^depth scripts with `spk` at `index` (the others are a counter's bytes): (root, path).
 fn set_of(spk: &[u8], depth: u32, index: u64) -> ([u8; 32], Vec<[u8; 32]>) {
-    let mut level: Vec<[u8; 32]> = (0..1u64 << depth).map(|i| if i == index { Sha256::digest(spk).into() } else { Sha256::digest(i.to_le_bytes()).into() }).collect();
+    let mut level: Vec<[u8; 32]> = (0..1u64 << depth).map(|i| if i == index { leaf(spk) } else { leaf(&i.to_le_bytes()) }).collect();
     let mut path = Vec::new();
     let mut i = index as usize;
     while level.len() > 1 {
@@ -39,6 +48,10 @@ fn set_of(spk: &[u8], depth: u32, index: u64) -> ([u8; 32], Vec<[u8; 32]>) {
 }
 
 fn run(inp: &Input, assumption: Option<&Receipt>) -> Result<(u64, u64, usize), String> {
+    run_j(inp, assumption).map(|(c, t, n, _)| (c, t, n))
+}
+
+fn run_j(inp: &Input, assumption: Option<&Receipt>) -> Result<(u64, u64, usize, Vec<u8>), String> {
     let mut b = ExecutorEnv::builder();
     if let Some(r) = assumption {
         b.add_assumption(r.clone());
@@ -48,7 +61,7 @@ fn run(inp: &Input, assumption: Option<&Receipt>) -> Result<(u64, u64, usize), S
     let s = default_executor().execute(env, liveanon_methods::LIVEANON_ELF).map_err(|e| e.to_string())?;
     let total: u64 = s.segments.iter().map(|g| 1u64 << g.po2).sum();
     eprintln!("execute: {:.2} s wall", t.elapsed().as_secs_f64());
-    Ok((s.cycles(), total, s.segments.len()))
+    Ok((s.cycles(), total, s.segments.len(), s.journal.bytes.clone()))
 }
 
 fn main() {
@@ -65,8 +78,8 @@ fn main() {
         let b: Vec<u8> = (0..t.len()).step_by(2).map(|i| u8::from_str_radix(&t[i..i + 2], 16).unwrap()).collect();
         (r, libzync::liveness::decode(&b).unwrap())
     };
-    let input = |r: &Receipt, p: &libzync::liveness::Proof, policy: u32, min_value: u64, set_root, set_index, set_path| Input {
-        core_id, journal: r.journal.bytes.clone(), signet: false, policy, min_value, set_root, context: [7; 32],
+    let input = |r: &Receipt, p: &libzync::liveness::Proof, policy: u32, min_value: u64, set_root, set_index, set_path: Vec<[u8; 32]>| Input {
+        core_id, journal: r.journal.bytes.clone(), signet: false, policy, min_value, set_root, set_depth: set_path.len() as u32, context: [7; 32],
         coin: Coin { txid: p.coin.txid, vout: p.coin.vout, value: p.coin.value, script_pubkey: p.coin.script_pubkey.clone(), height: p.coin.height,
                      coinbase: p.coin.coinbase, tracked: p.coin.tracked, creation_mtp: p.coin.creation_mtp },
         pos: p.pos, path: p.path.clone(), set_index, set_path, sk: [0; 32], bench_key_only: false,
@@ -86,11 +99,18 @@ fn main() {
             let mut sk = [0u8; 32];
             sk[31] = 1;
             sk[0] = 0x3c;
-            let inp = Input { core_id, journal: vec![], signet: false, policy: 1, min_value: 0, set_root: [0; 32], context: [7; 32],
+            let mk = |sk: [u8; 32]| Input { core_id, journal: vec![], signet: false, policy: 1, min_value: 0, set_root: [0; 32], set_depth: 0, context: [7; 32],
                               coin: Coin { txid: [9; 32], vout: 0, value: 0, script_pubkey: vec![], height: 0, coinbase: false, tracked: false, creation_mtp: 0 },
                               pos: 0, path: vec![], set_index: 0, set_path: vec![], sk, bench_key_only: true };
-            let (u, t, n) = run(&inp, None).unwrap();
+            let (u, t, n, j1) = run_j(&mk(sk), None).unwrap();
             println!("LIVEANON key work alone: {u} user cycles, {n} segment(s), {t} total cycles");
+            // n − sk meets the same x-only key: the nullifier must not change (one per coin)
+            use k256::elliptic_curve::PrimeField;
+            let d = Option::<k256::Scalar>::from(k256::Scalar::from_repr(sk.into())).unwrap();
+            let neg: [u8; 32] = (-d).to_repr().into();
+            let (_, _, _, j2) = run_j(&mk(neg), None).unwrap();
+            if j1 == j2 { println!("LIVEANON key: sk and n-sk give the same x-only key and the same nullifier"); }
+            else { println!("LIVEANON key: sk and n-sk DIFFER (bad)"); std::process::exit(1) }
         }
         Some("wrong") => {
             let (r, p) = load(&a[1], &a[2]);
@@ -105,6 +125,22 @@ fn main() {
             match run(&inp, Some(&r)) {
                 Ok(_) => { println!("LIVEANON not-in-set: ACCEPTED (bad)"); std::process::exit(1) }
                 Err(e) => println!("LIVEANON not-in-set: refused ({})", e.lines().next().unwrap_or("")),
+            }
+            // the coin's script in the set, but the path one level shorter than the committed depth
+            let (root, path) = set_of(&p.coin.script_pubkey, 4, 5);
+            let mut inp = input(&r, &p, 0, 1, root, 5, path);
+            inp.set_path.pop();
+            match run(&inp, Some(&r)) {
+                Ok(_) => { println!("LIVEANON short-path: ACCEPTED (bad)"); std::process::exit(1) }
+                Err(e) => println!("LIVEANON short-path: refused ({})", e.lines().next().unwrap_or("")),
+            }
+            // another network's anchor: the mainnet receipt asked as signet is refused (profile and pinned anchor)
+            let (root, path) = set_of(&p.coin.script_pubkey, 4, 5);
+            let mut inp = input(&r, &p, 0, 1, root, 5, path);
+            inp.signet = true;
+            match run(&inp, Some(&r)) {
+                Ok(_) => { println!("LIVEANON as-signet: ACCEPTED (bad)"); std::process::exit(1) }
+                Err(e) => println!("LIVEANON as-signet: refused ({})", e.lines().next().unwrap_or("")),
             }
         }
         _ => { eprintln!("usage: see the source header"); std::process::exit(1) }

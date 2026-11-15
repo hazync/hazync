@@ -3,12 +3,22 @@
 //! and commits neither the coin nor its amount nor its script.
 //!
 //! Policies:
-//!   0 (set): SHA-256(scriptPubKey) is a leaf of the Merkle tree `set_root` (leaf = SHA-256(spk), parent =
-//!     SHA-256(0x01 ‖ L ‖ R), every leaf at the same depth). No ownership is shown: anyone who knows such a coin can
+//!   0 (set): the script is a leaf of the Merkle tree `set_root` of depth `set_depth` (both committed): leaf =
+//!     SHA-256(0x00 ‖ len u32 LE ‖ spk), node = SHA-256(0x01 ‖ L ‖ R), the path exactly `set_depth` long. The tags keep a
+//!     node from passing as a leaf, and the committed depth fixes the tree (review 15.11.2026: an untagged leaf and a
+//!     free path length let a node be presented as a "script"). No ownership is shown: anyone who knows such a coin can
 //!     prove it, and there is no nullifier.
-//!   1 (key): the coin is P2TR and the prover knows the secret key of its output key (x(sk·G) = the key in the script);
-//!     commits nullifier = SHA-256("lzlv-anon/nullifier" ‖ context ‖ sk ‖ txid ‖ vout): one per coin and context,
-//!     unlinkable to the coin without sk.
+//!   1 (key): the coin is P2TR and the prover knows the secret of its output key (x(d·G) = the key in the script). The
+//!     x-only key is met by d and n−d alike, so the secret is first normalised to the one whose point has even Y (as
+//!     BIP340 does); nullifier = SHA-256("lzlv-anon/nullifier" ‖ context ‖ d_even ‖ txid ‖ vout): one per coin and
+//!     context (review 15.11.2026: hashing d itself gave two), unlinkable to the coin without the secret.
+//!
+//! The core statement is checked against the network's PINNED genesis anchor (as every zAPP does). What the guest
+//! cannot know, its VERIFIER must check from the journal: `core_id` is a core image it trusts (an allow-list) and
+//! `lineage` is that image's; `cum_work` reaches the network's minimum chainwork and `tip_hash` is the network's block
+//! at `height` (chain identity, from a source the verifier trusts); `max_time` is not in the future; `context` is the
+//! one the verifier expects (its own, fixed in advance: a context the prover picks makes the nullifier worthless);
+//! `min_value`, `policy`, `set_root` / `set_depth` are the ones it asked for.
 //! `bench_key_only`: run the key policy's own work (sk·G, the nullifier) on its own and stop, for its cycle count.
 #![no_main]
 extern crate alloc;
@@ -46,6 +56,7 @@ struct Input {
     policy: u32,
     min_value: u64,
     set_root: [u8; 32],
+    set_depth: u32,
     context: [u8; 32],
     // private from here on: never committed
     coin: Coin,
@@ -71,7 +82,23 @@ struct AnonLive {
     policy: u32,
     min_value: u64,
     set_root: [u8; 32],
+    set_depth: u32,
     context: [u8; 32],
+    nullifier: [u8; 32],
+}
+
+/// The networks' genesis anchors (swiftsync-verify IMAGES `genesis_anchor_hex`, SOUNDNESS.md §3).
+const ANCHOR_MAINNET: &str = "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167";
+const ANCHOR_SIGNET: &str = "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827";
+
+fn anchor(hex: &str) -> [u8; 32] {
+    core::array::from_fn(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+}
+
+/// Key-bench output: the x-only key and the nullifier, so a host can check d and n−d agree.
+#[derive(Serialize)]
+struct KeyBench {
+    x: [u8; 32],
     nullifier: [u8; 32],
 }
 
@@ -91,10 +118,13 @@ fn key_work(sk: &[u8; 32], context: &[u8; 32], txid: &[u8; 32], vout: u32) -> ([
     assert!(!bool::from(k256::elliptic_curve::Field::is_zero(&d)), "sk is zero");
     let p = (k256::ProjectivePoint::GENERATOR * d).to_affine().to_encoded_point(true);
     let x: [u8; 32] = p.as_bytes()[1..33].try_into().unwrap();
+    // the even-Y secret: d if d·G has even Y (tag 0x02), else n − d. Both meet the same x-only key; only this one is hashed.
+    let d_even = if p.as_bytes()[0] == 0x02 { d } else { -d };
+    let d_even: [u8; 32] = d_even.to_repr().into();
     let mut h = Sha256::new();
     h.update(b"lzlv-anon/nullifier");
     h.update(context);
-    h.update(sk);
+    h.update(d_even);
     h.update(txid);
     h.update(vout.to_le_bytes());
     (x, h.finalize().into())
@@ -105,8 +135,9 @@ fn main() {
     let inp: Input = env::read();
     let mut t = mark("read", t0);
     if inp.bench_key_only {
-        let _ = key_work(&inp.sk, &inp.context, &inp.coin.txid, inp.coin.vout);
+        let (x, nullifier) = key_work(&inp.sk, &inp.context, &inp.coin.txid, inp.coin.vout);
         mark("key", t);
+        env::commit(&KeyBench { x, nullifier });
         return;
     }
     env::verify(inp.core_id, &inp.journal).expect("the core receipt does not verify under core_id");
@@ -114,8 +145,9 @@ fn main() {
     let words: Vec<u32> = inp.journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     let j: ChainState = risc0_zkvm::serde::from_slice(&words).expect("core journal is not a ChainState");
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
-    facts::check_core_statement(&st, &inp.core_id, 2, if inp.signet { facts::Network::Signet } else { facts::Network::Mainnet }, false, &j.anchor_id)
-        .unwrap_or_else(|e| panic!("core statement: {e}"));
+    // the network's PINNED genesis anchor (review 15.11.2026: comparing j.anchor_id with itself checked nothing)
+    let (net, pinned) = if inp.signet { (facts::Network::Signet, anchor(ANCHOR_SIGNET)) } else { (facts::Network::Mainnet, anchor(ANCHOR_MAINNET)) };
+    facts::check_core_statement(&st, &inp.core_id, 2, net, false, &pinned).unwrap_or_else(|e| panic!("core statement: {e}"));
     t = mark("core", t);
     let c = &inp.coin;
     let leaf = facts::coin_leaf(&c.txid, c.vout, c.value, &c.script_pubkey, c.height, c.coinbase, c.tracked, c.creation_mtp);
@@ -124,8 +156,13 @@ fn main() {
     t = mark("coin", t);
     let nullifier = match inp.policy {
         0 => {
-            let mut node: [u8; 32] = Sha256::digest(&c.script_pubkey).into();
-            assert!(inp.set_path.len() < 64 && inp.set_index >> inp.set_path.len() == 0, "set index past the tree");
+            let mut h = Sha256::new();
+            h.update([0u8]);
+            h.update((c.script_pubkey.len() as u32).to_le_bytes());
+            h.update(&c.script_pubkey);
+            let mut node: [u8; 32] = h.finalize().into();
+            assert!(inp.set_depth < 64 && inp.set_path.len() == inp.set_depth as usize, "the set path is not the committed depth");
+            assert!(inp.set_index >> inp.set_depth == 0, "set index past the tree");
             for (k, s) in inp.set_path.iter().enumerate() {
                 let mut h = Sha256::new();
                 h.update([1u8]);
@@ -149,6 +186,7 @@ fn main() {
     env::commit(&AnonLive {
         kind: KIND_ANON_LIVE, core_id: inp.core_id, lineage: j.lineage, anchor_id: j.anchor_id, height: j.height, tip_hash: j.tip_hash,
         cum_work: j.cum_work, max_time: j.max_time, profile: j.profile, policy: inp.policy, min_value: inp.min_value,
-        set_root: if inp.policy == 0 { inp.set_root } else { [0; 32] }, context: inp.context, nullifier,
+        set_root: if inp.policy == 0 { inp.set_root } else { [0; 32] }, set_depth: if inp.policy == 0 { inp.set_depth } else { 0 },
+        context: inp.context, nullifier,
     });
 }
