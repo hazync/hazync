@@ -66,7 +66,7 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("headers") {
         headers_main(std::env::args().skip(2).collect());
     }
-    let mut args = std::env::args().skip(1);
+    let mut args = assume_args(std::env::args().skip(1).collect()).into_iter();
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
     let mut now_arg: Option<String> = None;
     let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
@@ -77,6 +77,9 @@ fn main() {
     let mut coin_facts: Vec<String> = Vec::new();
     let mut journeys: Vec<String> = Vec::new();
     let mut n_facts = 0usize;
+    // assumevalid / assumeutxo (docs/libzync/ASSUME_ZAPPS.md)
+    let (mut assume_valid, mut snapshot, mut headers_file, mut tracked_file): (Option<String>, Option<String>, Option<String>, Option<String>) =
+        (None, None, None, None);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--network" => network = args.next().unwrap_or_else(|| usage()),
@@ -92,6 +95,10 @@ fn main() {
             "--mempool-url" => mempool = Some(args.next().unwrap_or_else(|| usage())),
             "--coin" => coin_facts.push(args.next().unwrap_or_else(|| usage())),
             "--journey" => journeys.push(args.next().unwrap_or_else(|| usage())),
+            "--assumevalid" => assume_valid = Some(args.next().unwrap_or_else(|| usage())),
+            "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| usage())),
+            "--headers" => headers_file = Some(args.next().unwrap_or_else(|| usage())),
+            "--tracked" => tracked_file = Some(args.next().unwrap_or_else(|| usage())),
             "--handover" => {
                 let v = args.next().unwrap_or_else(|| usage());
                 let bad = || -> ! { fail(&format!("--handover {v:?}: want <64 hex digits>:<height>[:<64 hex digits: the predecessor's RISC Zero verifier parameters, for a cross-version handover>]")) };
@@ -172,6 +179,7 @@ fn main() {
 
     // Step 7, against the user's own node.
     let mut tip_checked = false;
+    let mut assume_lines: Vec<String> = Vec::new();
     if let (Some(cmd), Some(cs)) = (&cli, &rep.state) {
         match node_tip(cmd, cs.height) {
             Err(e) => rep.checks.push((false, format!("your node's chain ({e})"))),
@@ -223,7 +231,16 @@ fn main() {
         let receipt_failed = rep.verdict == Verdict::Fail;
         // the block-leaf format by height (docs/libzync/UNDO.md): facts opening a block at or above it carry its undo hash
         let uf = rep.undo_from;
-        n_facts = coin_facts.len() + journeys.len() + trie_facts.len();
+        n_facts = coin_facts.len() + journeys.len() + trie_facts.len() + assume_valid.is_some() as usize + snapshot.is_some() as usize;
+        if receipt_failed && (assume_valid.is_some() || snapshot.is_some()) {
+            rep.checks.push((false, "assumevalid / assumeutxo: NOT checked: the receipt did not verify".into()));
+            assume_valid = None;
+            snapshot = None;
+        }
+        if assume_valid.is_some() || snapshot.is_some() {
+            assume_checks(cs, &mut rep.checks, &mut assume_lines, assume_valid.as_deref(), snapshot.as_deref(),
+                          headers_file.as_deref(), tracked_file.as_deref());
+        }
         if receipt_failed {
             for p in coin_facts.iter().chain(journeys.iter()).chain(trie_facts.iter()) {
                 rep.checks.push((false, format!("{}: NOT checked: the receipt did not verify", esc(p))));
@@ -287,6 +304,9 @@ fn main() {
         } else {
             println!("  UTXO set at H: {} coins (Utreexo roots, UTREEXO_FORMAT.md)", cs.utxo_leaves);
         }
+        for l in &assume_lines {
+            println!("  {l}");
+        }
     }
     // Facts about a chain whose tip nobody compared with the network: a valid chain with enough work can still be a
     // stale branch, and a transaction "in block h" of it may have been reorged out. So facts need step 7 for OK
@@ -304,10 +324,10 @@ fn main() {
     let avs = if av { " (ASSUMEVALID: scripts and signatures NOT checked)" } else { "" };
     let what = "the chain and its coin log";
     match rep.verdict {
-        Verdict::Demo if facts_unanchored => println!("SWIFTSYNC_VERIFY_DEMO: the chain and the facts check, but facts need the tip compared with the network (--mempool, --expect or --bitcoin-cli){step7}"),
-        Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{step7}"),
+        Verdict::Demo if facts_unanchored => println!("SWIFTSYNC_VERIFY_DEMO: the chain and the facts{} check, but facts need the tip compared with the network (--mempool, --expect or --bitcoin-cli){step7}", assume_what(&assume_lines)),
+        Verdict::Ok => println!("SWIFTSYNC_VERIFY_OK: the chain above and its coin log are proven at height {h}{avs}{}{step7}", assume_what(&assume_lines)),
         Verdict::Demo if rep.low_work && anchor_given => println!("SWIFTSYNC_VERIFY_DEMO: {what}: FROM THE GIVEN ANCHOR ONLY, and below Core's minimum chainwork or the pinned checkpoint{step7}"),
-        Verdict::Demo if rep.low_work => println!("SWIFTSYNC_VERIFY_DEMO: {what}: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for {}: not shown to be the network's chain{step7}", image.network),
+        Verdict::Demo if rep.low_work => println!("SWIFTSYNC_VERIFY_DEMO: {what}{}: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for {}: not shown to be the network's chain{step7}", assume_what(&assume_lines), image.network),
         Verdict::Demo => println!("SWIFTSYNC_VERIFY_DEMO: consistent with {what} FROM THE GIVEN ANCHOR ONLY -- not a proof{step7}"),
         Verdict::Fail => println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|(ok, _)| !ok).count()),
     }
@@ -377,6 +397,101 @@ fn headers_main(a: Vec<String>) -> ! {
             let what = format!("header chain from genesis to {} {} (chainwork {}){ident}", s.height, s.hash_hex(), s.work_hex());
             if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
             println!("SWIFTSYNC_VERIFY_DEMO: a valid header chain below Core's minimum chain work: {what}"); exit(2)
+        }
+    }
+}
+
+/// `assumevalid [--block <hash>] [flags] <receipt>` and `assumeutxo [flags] <receipt> <snapshot>` as the main command's
+/// `--assumevalid <hash|tip>` and `--snapshot <file>`, so they get its chain-identity checks (--expect, --mempool,
+/// --bitcoin-cli) and verdicts unchanged.
+fn assume_args(a: Vec<String>) -> Vec<String> {
+    let Some(sub) = a.first().cloned() else { return a };
+    if sub != "assumevalid" && sub != "assumeutxo" {
+        return a;
+    }
+    let takes_value = ["--network", "--anchor", "--bitcoin-cli", "--image", "--now", "--trie", "--expect", "--mempool-url",
+                       "--coin", "--journey", "--handover", "--headers", "--tracked", "--block"];
+    let (mut out, mut pos, mut block) = (Vec::new(), Vec::new(), None);
+    let mut it = a.into_iter().skip(1);
+    while let Some(x) = it.next() {
+        if x == "--block" {
+            block = Some(it.next().unwrap_or_else(|| usage()));
+        } else if x == "--assumevalid" || x == "--snapshot" {
+            fail(&format!("{sub}: {x} is given by the subcommand"));
+        } else if takes_value.contains(&x.as_str()) {
+            out.push(x);
+            out.push(it.next().unwrap_or_else(|| usage()));
+        } else if x.starts_with("--") {
+            out.push(x);
+        } else {
+            pos.push(x);
+        }
+    }
+    if sub == "assumevalid" {
+        let [receipt] = pos.as_slice() else { fail("usage: swiftsync-verify assumevalid [--block <hash>] [--headers <file>] [flags] <receipt>") };
+        out.extend(["--assumevalid".to_string(), block.unwrap_or_else(|| "tip".into()), receipt.clone()]);
+    } else {
+        if block.is_some() { fail("assumeutxo: --block is for assumevalid") }
+        let [receipt, snap] = pos.as_slice() else { fail("usage: swiftsync-verify assumeutxo --headers <file> [--tracked <file>] [flags] <receipt> <snapshot>") };
+        out.extend(["--snapshot".to_string(), snap.clone(), receipt.clone()]);
+    }
+    out
+}
+
+/// " ; <summary>" of the assume checks that passed, for the verdict line.
+fn assume_what(lines: &[String]) -> String {
+    let mut s = String::new();
+    if lines.iter().any(|l| l.starts_with("assumevalid:")) { s += "; -assumevalid block proven"; }
+    if lines.iter().any(|l| l.starts_with("assumeutxo:")) { s += "; the snapshot is the proven UTXO set"; }
+    s
+}
+
+/// The assumevalid / assumeutxo checks against a VERIFIED state.
+fn assume_checks(cs: &ChainState, checks: &mut Vec<(bool, String)>, lines: &mut Vec<String>, av: Option<&str>, snap: Option<&str>,
+                 headers: Option<&str>, tracked: Option<&str>) {
+    use swiftsync_verify::assume;
+    let hc = match headers.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", esc(p)))
+                                   .and_then(|b| assume::HeaderChain::bind(&b, &cs.tip_hash, cs.height))) {
+        None => None,
+        Some(Ok(h)) => {
+            checks.push((true, format!("--headers: {} headers, heights {}..{}, linked, the last one the proven tip", h.hashes.len(), h.first_height, h.tip_height())));
+            Some(h)
+        }
+        Some(Err(e)) => { checks.push((false, format!("--headers {}: {e}", esc(headers.unwrap())))); return }
+    };
+    if let Some(x) = av {
+        let block = if x == "tip" { Ok(None) } else { assume::parse_display_hash(x).map(Some).ok_or(format!("--block {x:?}: not 64 hex digits")) };
+        match block.and_then(|b| assume::assume_valid(cs, hc.as_ref(), b)) {
+            Ok(r) => {
+                checks.push((true, format!("assumevalid: block {} at height {} is in the proven chain (0..{}), whose every script and signature the proof checked",
+                                           assume::display(&r.block), r.height, r.proven_to)));
+                lines.push(format!("assumevalid: -assumevalid={} (height {}; scripts proven valid for blocks 0..{})", assume::display(&r.block), r.height, r.proven_to));
+            }
+            Err(e) => checks.push((false, format!("assumevalid: {e}"))),
+        }
+    }
+    if let Some(p) = snap {
+        let Some(hc) = hc.as_ref() else {
+            checks.push((false, "assumeutxo: --headers (genesis to the proven tip) is required: each coin's creation MTP comes from them".into()));
+            return;
+        };
+        let t = match tracked.map(|p| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", esc(p))).and_then(|s| assume::parse_tracked(&s))) {
+            None => assume::Tracked::new(),
+            Some(Ok(t)) => t,
+            Some(Err(e)) => { checks.push((false, format!("--tracked: {e}"))); return }
+        };
+        let t0 = std::time::Instant::now();
+        let r = std::fs::File::open(p).map_err(|e| format!("{}: {e}", esc(p)))
+            .and_then(|f| assume::check_snapshot(cs, std::io::BufReader::with_capacity(1 << 20, f), hc, &t));
+        match r {
+            Ok(r) => {
+                checks.push((true, format!("assumeutxo: snapshot {}: {} coins, {} sat, base block {} = the proven tip; its live-coin ECMH equals the proof's ({} coin(s) BIP30-tracked, of {} listed; {:.2} s)",
+                                           esc(p), r.coins, r.value, assume::display(&r.meta.base_blockhash), r.tracked_used, t.len(), t0.elapsed().as_secs_f64())));
+                lines.push(format!("assumeutxo: {} is the proven UTXO set at height {}; Core's hash_serialized_3 of it: {}", esc(p), cs.height, r.hash_serialized_3));
+                let (x, y) = assume::live_hash_hex(&r.live_hash);
+                lines.push(if r.live_set == 0 { "live_hash identity".into() } else { format!("live_hash x {x} y {y}") });
+            }
+            Err(e) => checks.push((false, format!("assumeutxo: {}: {e}", esc(p)))),
         }
     }
 }
