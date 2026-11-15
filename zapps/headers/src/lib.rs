@@ -111,6 +111,9 @@ impl HeadersReport {
 ///
 /// `include`: also check that a block (and optionally a transaction in it) is on the proven chain, against the last
 /// run's MMR peaks; a failed inclusion is a failed check (verdict `Fail`).
+/// The most chained runs [`verify_headers`] takes (as the WASM frame allows): a tip follower re-bases long before.
+pub const MAX_RUNS: usize = 4096;
+
 pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Option<(i64, &str)>,
                       include: Option<&Inclusion>) -> HeadersReport {
     let mut rep = HeadersReport { checks: Vec::new(), state: None, verdict: Verdict::Fail, included: None };
@@ -120,6 +123,8 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
     };
     let image = Digest::from_bytes(id);
     if !rep.check(!receipts.is_empty(), "at least one receipt") { return rep; }
+    // a cap on the runs, checked before any is verified: each costs a STARK verification
+    if !rep.check(receipts.len() <= MAX_RUNS, format!("at most {MAX_RUNS} chained runs ({} given)", receipts.len())) { return rep; }
     let mut want_in = HeaderState::empty().digest();
     let mut last: Option<HeaderState> = None;
     for (i, bytes) in receipts.iter().enumerate() {
@@ -147,12 +152,18 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
             Err(e) => { rep.check(false, format!("receipt {n}'s journal is (input digest, header state) ({e})")); return rep; }
         };
         let from = last.as_ref().map_or(-1, |s| s.height);
-        rep.check(din == want_in, if i == 0 {
+        // a broken link ends the check: nothing after it is on this chain, and the runs after it are not verified
+        // (N copies of one receipt would otherwise cost N verifications)
+        if !rep.check(din == want_in, if i == 0 {
             "the first run starts from genesis (its input is the empty state)".to_string()
         } else {
             format!("run {n} starts where run {i} ended (height {from})")
-        });
-        rep.check(out.height > from, format!("run {n} adds headers ({}..{})", from.saturating_add(1), out.height));
+        }) {
+            return rep;
+        }
+        if !rep.check(out.height > from, format!("run {n} adds headers ({}..{})", from.saturating_add(1), out.height)) {
+            return rep;
+        }
         want_in = out.digest();
         last = Some(out);
     }
@@ -726,5 +737,28 @@ mod tests {
         assert_eq!(rep.verdict, Verdict::Fail);
         assert!(rep.state.is_none());
         assert!(!rep.checks.last().unwrap().0, "the last check is the failed verify: {:?}", rep.checks.last());
+    }
+
+    /// Review (11-15): the run-chaining checks did not end the check, so N copies of one receipt were all verified
+    /// (N STARK verifications for one failed link). Now the first broken link returns, and the runs are capped.
+    #[test]
+    fn a_broken_link_stops_the_check_and_runs_are_capped() {
+        let verified = |r: &HeadersReport| r.checks.iter().filter(|c| c.0 && c.1.contains("verifies against the headers image")).count();
+        let rep = verify_headers(&[HDR_0_100, HDR_0_100, HDR_0_100, HDR_0_100], HEADERS_IMAGE_ID, now(), None, None);
+        assert_eq!(rep.verdict, Verdict::Fail);
+        assert_eq!(verified(&rep), 2, "copy 2's link fails, copies 3 and 4 are never verified: {:?}", rep.checks);
+        assert!(!rep.checks.last().unwrap().0 && rep.checks.last().unwrap().1.contains("run 2 starts where run 1 ended"));
+        assert!(rep.state.is_none());
+        // the first run not from genesis: one verification, then the end
+        let rep = verify_headers(&[HDR_101_200, HDR_0_100], HEADERS_IMAGE_ID, now(), None, None);
+        assert_eq!((rep.verdict, verified(&rep)), (Verdict::Fail, 1));
+        // more than MAX_RUNS: refused before any verification
+        let many = vec![HDR_0_100; MAX_RUNS + 1];
+        let rep = verify_headers(&many, HEADERS_IMAGE_ID, now(), None, None);
+        assert_eq!((rep.verdict, verified(&rep)), (Verdict::Fail, 0));
+        assert!(rep.checks.iter().any(|c| !c.0 && c.1.contains("at most 4096 chained runs")));
+        // the good chain still verifies both runs
+        let rep = verify_headers(&[HDR_0_100, HDR_101_200], HEADERS_IMAGE_ID, now(), None, None);
+        assert_eq!((rep.verdict, verified(&rep)), (Verdict::Demo, 2));
     }
 }
