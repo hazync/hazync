@@ -3943,6 +3943,97 @@ def beat(body):
         c.close()
     return 200, {"ok": True, "held_for": CLAIM_TTL}
 
+
+# ---- claim release (#725) ------------------------------------------------------------------------
+# A worker that stops (the Windows app closed, a proving window over, run-workers.sh --stop) used to
+# leave its claim to lapse: up to CLAIM_TTL with no beat, CLAIM_GRACE if it had never beaten. On
+# 14.11.2026 block 1807 sat that way, held by a stopped Windows app. POST /api/release hands the block
+# back at once.
+#
+#   body: {range, pubkey, nonce, ts, sig}    sig = ed25519 by pubkey over "release:<range>:<nonce>:<ts>"
+#
+# Only the key holding a LIVE claim on the block may release it. A lapsed, verified, parked or
+# someone else's claim is refused and left exactly as it is. ts is integer seconds within BEAT_SKEW,
+# as for a beat. The nonce makes a retry safe: the same signed release sent again (a lost response,
+# or a replay by someone who saw it) gets the first answer back and changes nothing, so a replay can
+# never release a claim the same key made on that block AFTER the release. Nonces are remembered in
+# memory for 2 x BEAT_SKEW, after which the timestamp alone refuses the message. ⚠ A coordinator
+# restart forgets them: a captured release replayed inside BEAT_SKEW of a restart, against a block
+# its key had re-taken in those two minutes, would release that claim. The cost is duplicate work,
+# never lost work (a claim is advisory and submit accepts any height), which is why that is accepted.
+#
+# The released row goes back to status 'open', as if never claimed: it is no longer listed among the
+# board's claims, claim() offers it to anyone (its releaser included) straight away, and it stops
+# counting against the releaser's CLAIM_OPEN_MAX. Each release prints one journal line.
+_release_seen = {}                # nonce -> (pubkey, range, code, body, at)
+# Set only by test_claim_release.py --control: any signed release frees any claim, whoever holds it.
+_CONTROL_RELEASE_UNCHECKED = False
+_release_lock = threading.Lock()
+
+
+def release(body):
+    """Give a claimed block back before its claim lapses (#725). See the block comment above."""
+    rid, pk = str(body.get("range") or ""), str(body.get("pubkey") or "")
+    sig, nonce, ts = str(body.get("sig") or ""), str(body.get("nonce") or ""), body.get("ts")
+    if not rid or not pk:
+        return 400, {"error": "range and pubkey required"}
+    if not is_hex(pk, 32) or not is_hex(sig, 64):
+        return 400, {"error": "a release must be signed: pubkey 32-byte hex, sig 64-byte hex (ed25519) over "
+                              "'release:<range>:<nonce>:<ts>'"}
+    if not re.fullmatch(r"[0-9a-fA-F]{16,64}", nonce):
+        return 400, {"error": "a release needs a nonce of 16 to 64 hex characters"}
+    if isinstance(ts, bool) or not isinstance(ts, int):
+        return 400, {"error": "ts must be INTEGER unix seconds (the signed message renders it as a whole number)"}
+    if abs(time.time() - ts) > BEAT_SKEW:
+        return 400, {"error": f"release timestamp outside +/-{BEAT_SKEW}s — check your clock"}
+    if not verify_sig(pk, sig, f"release:{rid}:{nonce}:{ts}".encode()) and not _CONTROL_RELEASE_UNCHECKED:
+        return 403, {"error": "the release signature does not verify for that pubkey"}
+    now = time.time()
+    with _release_lock:
+        for k in [k for k, v in _release_seen.items() if v[4] < now - 2 * BEAT_SKEW]:
+            del _release_seen[k]
+        seen = _release_seen.get(nonce)
+        if seen:
+            if seen[0] == pk and seen[1] == rid:
+                return seen[2], dict(seen[3], repeat=True)
+            return 409, {"error": "that nonce was already used: sign each release with a fresh one"}
+        # Still under _release_lock (always taken before _lock, and only here), so two copies of one release
+        # arriving together cannot both reach the table: the second waits and gets the first one's answer.
+        code, out = _release_row(rid, pk, now)
+        _release_seen[nonce] = (pk, rid, code, out, now)
+    return code, out
+
+
+def _release_row(rid, pk, now):
+    """The table half of release(): (code, body). Caller holds _release_lock."""
+    with _lock:
+        c = db()
+        try:
+            r = c.execute("SELECT status, assignee, handle, claimed_at FROM ranges WHERE id=?", (rid,)).fetchone()
+            live = r is not None and c.execute("SELECT 1 FROM ranges WHERE id=? AND " + LIVE_CLAIM_SQL,
+                                               (rid,) + _live_claim_args(now)).fetchone() is not None
+            if r is None:
+                code, out = 404, {"error": f"no claim on {rid} to release"}
+            elif r["status"] == "verified":
+                code, out = 409, {"error": f"{rid} is already proven: there is no claim left to release",
+                                  "status": "verified"}
+            elif r["status"] != "claimed" or ((r["assignee"] or "") != pk and not _CONTROL_RELEASE_UNCHECKED):
+                code, out = 409, {"error": f"not your claim: {rid} is not held by this key", "status": r["status"]}
+            elif not live:
+                code, out = 409, {"error": f"your claim on {rid} has already lapsed: the block is open to any "
+                                           f"prover", "status": "lapsed"}
+            else:
+                c.execute("UPDATE ranges SET status='open', last_beat=NULL, claim_nonce=NULL "
+                          "WHERE id=? AND status='claimed'", (rid,))
+                c.commit()
+                held = int(now - (r["claimed_at"] or now))
+                print(f"[release] block {rid} released by {r['handle'] or pk[:12]} after {held}s", flush=True)
+                code, out = 200, {"ok": True, "released": rid,
+                                  "note": f"{rid} is open to any prover again"}
+        finally:
+            c.close()
+    return code, out
+
 # ---- heartbeat rejection log ---------------------------------------------------------------------
 # The first third-party contributor (bip-448, 2026-09-11) sent 404 beats over ten hours and every one
 # was rejected 409 -- and nothing on this side recorded why. log_message() above silences the access
@@ -4493,7 +4584,8 @@ class H(BaseHTTPRequestHandler):
             return self._bot_request("POST", p)
         # Allocation endpoints are GONE (#37): no claim, no heartbeat, no release. Proving is
         # unallocated, so there is nothing to lease, keep alive, or hand back.
-        if p not in ("/api/submit", "/api/claim", "/api/spine", "/api/beat", "/api/rotate", "/api/sponsor", "/api/foldclaim"):
+        if p not in ("/api/submit", "/api/claim", "/api/spine", "/api/beat", "/api/rotate", "/api/sponsor", "/api/foldclaim",
+                     "/api/release"):
             return self._send(404, {"error": "not found"})
         if not rate_ok(self._client_ip()):
             return self._send(429, {"error": "rate limit — slow down"})
@@ -4510,7 +4602,7 @@ class H(BaseHTTPRequestHandler):
             body["_client_ip"] = self._client_ip()        # set here, always: a client cannot choose it
         fn = {"/api/submit": submit, "/api/claim": claim, "/api/spine": submit_spine,
               "/api/beat": beat, "/api/rotate": rotate, "/api/sponsor": sponsor_request,
-              "/api/foldclaim": fold_claim}[p]
+              "/api/foldclaim": fold_claim, "/api/release": release}[p]
         code, obj = fn(body)
         if p == "/api/beat" and code != 200:
             try:

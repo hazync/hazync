@@ -937,6 +937,27 @@ def stop_command(pid):
     return ["kill", "-TERM", str(pid)]
 
 
+def release_command(python_exe, worker_path, block):
+    """How to hand a claimed block back after its worker was stopped (#725).
+
+    ⚠ On Windows the worker is ended with `taskkill /F`, which no signal handler sees, so the worker cannot release
+    its own claim the way it does on SIGTERM. The app knows the block from the worker's "claimed block N" line and
+    asks the worker CLI to release it, signed with the same key."""
+    return worker_command(python_exe, worker_path, "release", (str(block),))
+
+
+def release_verdict(rc, out):
+    """(released, sentence for the feed) from `hazync-worker release`'s exit code and output."""
+    text = (out or "").strip()
+    if rc == 0:
+        return True, text.splitlines()[-1] if text else "handed the block back"
+    if "unknown command" in text:
+        return False, ("this worker is too old to hand a block back; the block reopens by itself within the hour "
+                       "(update Hazync to fix this)")
+    last = text.splitlines()[-1] if text else f"exit code {rc}"
+    return False, last[:240]
+
+
 def summarise(checks):
     """A one-line verdict, for a status bar or a CLI run."""
     bad = [c for c in checks if not c.ok]

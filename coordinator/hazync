@@ -8,6 +8,8 @@ hazync — Proof Party contributor CLI.
   hazync prove <id>         # prove that range on your GPU  -> a receipt .bin
   hazync submit <id>        # sign the receipt with your key and submit it for verification
   hazync run [id]           # claim + prove + submit (id optional: takes the earliest free block)
+                            # stopped with SIGTERM or Ctrl-C, it hands its claimed block back first (#725)
+  hazync release <id>       # hand a block you claimed back to the board now, instead of letting it lapse
   hazync run [id] --distributed [--workers=N|auto]
                             # prove ONE board block across MANY cards (mode 6). Serves the block and
                             # waits for `host seg-connect <this-box>:9110` workers to dial in; they may
@@ -888,6 +890,11 @@ def _prove_watched(argv, env, work, label, _beat_range=None, _beat_pk=None, _bea
                 break
             time.sleep(0.5)
         proc.wait()
+    except BaseException:
+        # #725: a stop (SIGTERM, Ctrl-C) lands here as an exception. The prover runs in its OWN session, so it
+        # would outlive this worker holding the GPU; take its whole group down before the claim is handed back.
+        _kill_group(proc.pid, signal.SIGKILL)
+        raise
     finally:
         done.set()
         for t in readers:
@@ -1561,6 +1568,63 @@ def _prove_distributed(rng, work, env, claimed, port, want_local):
                 pass
 
 
+class _StopRequested(BaseException):
+    """Raised in the main thread by SIGTERM / SIGBREAK (#725). A BaseException, so no `except Exception`
+    on the way up swallows it."""
+
+
+def _raise_stop(signum, _frame):
+    raise _StopRequested(signum)
+
+
+def _stop_signals():
+    sigs = [signal.SIGTERM]
+    if hasattr(signal, "SIGBREAK"):          # Windows: Ctrl-Break, and CTRL_BREAK_EVENT from a parent
+        sigs.append(signal.SIGBREAK)
+    return sigs
+
+
+def release_claim(rng, sk, pub, post_fn=None):
+    """Hand a claimed block back to the board now (#725). Returns (released, message). Never raises.
+
+    Signed over "release:<range>:<nonce>:<ts>". ONE nonce for this release and every retry of it, the same
+    rule as a claim (#268): the coordinator answers a repeat of a release it has already done with the first
+    answer, so a lost response retried is not refused as a replay."""
+    post_fn = post_fn or post
+    nonce, ts = os.urandom(16).hex(), int(time.time())
+    body = {"range": str(rng), "pubkey": pub, "nonce": nonce, "ts": ts,
+            "sig": sk.sign(f"release:{rng}:{nonce}:{ts}".encode()).hex()}
+    res = None
+    for k in range(3):
+        try:
+            res = post_fn("/api/release", body)
+            break
+        except SystemExit as e:              # post() gives up on an unreachable coordinator this way
+            res = {"error": str(e)}
+            if k == 2:
+                break
+            time.sleep(2 * (k + 1))
+        except Exception as e:               # noqa: BLE001 - a stop must never fail because the release did
+            res = {"error": str(e)}
+            break
+    res = res if isinstance(res, dict) else {"error": str(res)}
+    if res.get("ok"):
+        return True, f"released block {rng}: it is open to any prover again"
+    err = str(res.get("error") or res)
+    if "not found" in err:
+        err = "this coordinator has no release endpoint yet"
+    return False, f"block {rng} was not released ({err[:200]}); if it is still claimed, it reopens by itself"
+
+
+def cmd_release(args):
+    if len(args) != 1:
+        sys.exit("usage: hazync release <block>   (a block this key claimed)")
+    sk, pub, _ = identity()
+    ok, msg = release_claim(args[0], sk, pub)
+    print(msg, flush=True)
+    sys.exit(0 if ok else 1)
+
+
 def cmd_run(args):
     # FREE-RUNNING (#37). There is no claim, no lease, no heartbeat and nothing to hand back: proving
     # is unallocated, so a worker that dies mid-block leaves no state behind. That removes the entire
@@ -1660,9 +1724,36 @@ def cmd_run(args):
     # An explicit wide range submits its blocks as it proves them; a single block has nothing to send
     # first, and a claimed block is one block by construction.
     _lo2, _hi2 = parse_range(rng)
-    cmd_prove([rng], claimed=not args, submit_leaves=bool(args) and _hi2 > _lo2,
-              distributed=distributed, workers=resolve_workers(workers))
-    cmd_submit([rng])
+    # #725: a worker stopped while it holds a claim gives the block back instead of leaving it held for up to
+    # CLAIM_TTL. SIGTERM (run-workers.sh --stop, systemd, the app on Linux) and Ctrl-C both end up here. Only a
+    # STOP releases: a prove that fails keeps the old behaviour, its claim lapses on its own, so one bad block is
+    # not handed straight to the next worker (the 39,318 rule).
+    claimed = not args
+    _old = {}
+    if claimed and threading.current_thread() is threading.main_thread():
+        for _s in _stop_signals():
+            try:
+                _old[_s] = signal.signal(_s, _raise_stop)
+            except (ValueError, OSError):
+                pass
+    try:
+        cmd_prove([rng], claimed=claimed, submit_leaves=bool(args) and _hi2 > _lo2,
+                  distributed=distributed, workers=resolve_workers(workers))
+        cmd_submit([rng])
+    except (_StopRequested, KeyboardInterrupt) as e:
+        if not claimed:
+            raise
+        _sig = e.args[0] if isinstance(e, _StopRequested) and e.args else signal.SIGINT
+        print(f"stopping: handing block {rng} back to the board", flush=True)
+        _ok, _msg = release_claim(rng, sk, pub)
+        print(_msg, flush=True)
+        sys.exit(128 + int(_sig))
+    finally:
+        for _s, _h in _old.items():
+            try:
+                signal.signal(_s, _h)
+            except (ValueError, OSError):
+                pass
 
 _FOLD_CLAIMS_UNSUPPORTED = False   # set once a coordinator that predates #333 answers /api/foldclaim with 404
 
@@ -2046,17 +2137,16 @@ def _line_buffer_output():
 
 def main():
     _line_buffer_output()
-    # No signal handlers any more. They existed to hand a CLAIM back on SIGTERM, because Python's
-    # default SIGTERM kills the interpreter outright and an orphaned claim then stalled the board
-    # until a ~30 minute reap. Free-running proving has nothing to hand back: a worker that dies
-    # mid-block leaves no state at all, and the block is simply still unproven.
+    # No global signal handlers. `run` installs its own while it holds a claim, to hand the block back on
+    # SIGTERM (#725, POST /api/release): Python's default SIGTERM kills the interpreter outright, and the
+    # block then stayed held until its claim lapsed.
     argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__); sys.exit(0 if argv else 1)   # explicit --help succeeds; a bare invocation is an error
     c, a = argv[0], argv[1:]
     fn = {"id": cmd_id, "pick": cmd_pick, "prove": cmd_prove, "selftest": cmd_selftest,
           "submit": cmd_submit, "run": cmd_run, "spine": cmd_spine, "fold": cmd_fold,
-          "rotate": cmd_rotate, "notify": cmd_notify}.get(c)
+          "rotate": cmd_rotate, "notify": cmd_notify, "release": cmd_release}.get(c)
     if not fn:
         print(f"unknown command '{c}'\n"); print(__doc__); sys.exit(1)
     if c in ("claim", "prove", "submit") and not a:  # these require a range; don't traceback on a bare call

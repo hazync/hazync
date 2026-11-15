@@ -131,10 +131,44 @@ Worker count, `HAZYNC_SEG_PO2`, start/stop, and a log that colours only the line
 
 **Settings** — paths, your identity, coordinator URL, and the checks.
 
+**Schedule** — prove only inside a window you set, for example overnight (#725); below.
+
 ⛔ **There is no "pick any open block" button, on purpose.** The coordinator owns allocation: it
 hands out work and tracks claims, and `/api/blockstatus` deliberately excludes claims because "they
 change by the second". Letting someone choose an arbitrary open block would hand out work another
 prover already holds. `/api/pick` is the coordinator's own answer and the Dashboard shows it.
+
+## Proving on a schedule
+
+Under **Advanced → Schedule** you can tell the app to prove only inside a window, say 23:00 to 07:00, on the days
+you tick. Press Start as usual: the app waits for the window, proves while it is open, and stops taking blocks
+when it closes. The logic is in `provewindow.py` and `winpower.py`, tested by `test_schedule.py` (pure, with real
+daylight-saving nights) and `test_schedule_flow.py` (the real window and a stand-in worker).
+
+- **Drain, don't kill.** When the window closes, the block in hand is finished and put on the board; no new
+  block is taken. A long-running anchor job (which holds no claim) is stopped at the end of the window.
+- **Don't start what can't finish.** Before each block the app compares the time left in the window with how
+  long this card's recent blocks took, claim to board: the median of the last five, plus a quarter, plus two
+  minutes. With no block measured on the card yet, it starts one only with an hour or more left. The board proves
+  in height order, so the next block is a neighbour of the last ones; the margin covers it being a little bigger.
+- **Local wall-clock time.** The window is set in the PC's local time and the time left is real seconds, so on
+  the nights the clocks change a 23:00 to 07:00 window lasts 7 or 9 hours. The window belongs to the day it starts
+  on: ticking only Friday gives Friday night into Saturday morning.
+- **Keep awake.** While the app proves inside the window it asks Windows not to sleep
+  (`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`; the screen can still turn off). It keeps asking
+  while the last block finishes after the window closes, and stops asking when nothing is running or when you
+  press Stop. Off the schedule it never asks.
+- **Wake timer, off unless you tick it.** A task in Task Scheduler, `Hazync\Wake for proving`, with "wake the
+  computer" set, at the window's start. It runs nothing (`cmd /c exit 0`): the app has to be left open. It cannot
+  wake a PC that is shut down or hibernating, and does nothing when "Allow wake timers" is off in the power plan;
+  the app reads that setting with `powercfg` when you save, and says so. Unticking it removes the task.
+- **Handing a block back.** Stop (or closing the app) while a block is claimed hands it back to the board at once
+  with `hazync-worker release <n>`, signed by the same key, instead of leaving it held for up to an hour
+  (`POST /api/release`, docs/COORDINATOR_REFERENCE.md). On Windows the worker is ended with `taskkill /F`, which
+  it cannot see, so the app does the release for it. A worker from before this change has no `release` command;
+  the app says so and the block reopens by itself, as before.
+
+What it does not do yet: "only when plugged in" and "pause while the PC is in use" from #725 are not built.
 
 ## Testing this machine
 

@@ -382,6 +382,13 @@ jobs:
       - name: Auto-setup POSITIVE CONTROL (capability floor ignored — must send 6.1 to CUDA)
         run: cd tools/win-gui && python3 test_setup_auto.py --control
 
+      - name: the proving window and the can-it-finish rule (#725)
+        # Pure: midnight-crossing windows, the night-of-the-start rule for days, real Europe/London daylight-saving
+        # nights, the median block-time estimate, the wake-timer XML and powercfg reading.
+        run: |
+          cd tools/win-gui
+          python3 test_schedule.py
+          python3 test_schedule.py --control
       - name: the Home page reads the worker's real output
         # ⛔ A prove runs for minutes to most of an hour, and a window that only says "running"
         # reads as broken. This is the reader that turns the worker's own lines into which block,
@@ -431,6 +438,10 @@ jobs:
           # really given: a card chosen but never handed to the process would pass every check on
           # the decision while both workers piled onto one card.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_cards_flow.py
+          # ⭐ AND THE PROVING WINDOW (#725): it closes mid-proof (the block finishes, no other is taken), too little is
+          # left (nothing is claimed), and Stop hands the claimed block back.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py --control
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
@@ -845,6 +856,18 @@ jobs:
         run: |
           cd coordinator
           python3 test_claim_nonce.py --control
+      - name: A stopped worker hands its claimed block back (#725)
+        # POST /api/release: only the holder of a live claim, signed, once; the block is open to anyone at once. Then
+        # the real worker against the real handler: SIGTERM mid-prove releases the block and kills the prover child.
+        run: |
+          cd coordinator
+          python3 test_claim_release.py
+          python3 test_worker_release.py
+      - name: "Claim release POSITIVE CONTROL (ownership unchecked; worker never releases — must FAIL)"
+        run: |
+          cd coordinator
+          python3 test_claim_release.py --control
+          python3 test_worker_release.py --control
       - name: Heartbeat rejection log (bip-448, 2026-09-11)
         # Drives the real HTTP handler: every rejected /api/beat must be logged with the caller, the
         # reason, and -- for a 409 -- what the DB really holds for that range.
