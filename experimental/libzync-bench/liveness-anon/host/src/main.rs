@@ -64,6 +64,15 @@ fn run_j(inp: &Input, assumption: Option<&Receipt>) -> Result<(u64, u64, usize, 
     Ok((s.cycles(), total, s.segments.len(), s.journal.bytes.clone()))
 }
 
+/// A refusal counts only as the GUEST's own refusal for the stated reason (a host or r0vm error is not one).
+fn refuse(name: &str, r: Result<(u64, u64, usize), String>, want: &str) {
+    match r {
+        Ok(_) => { println!("LIVEANON {name}: ACCEPTED (bad)"); std::process::exit(1) }
+        Err(e) if e.contains("Guest panicked") && e.contains(want) => println!("LIVEANON {name}: refused ({})", e.lines().next().unwrap_or("")),
+        Err(e) => { println!("LIVEANON {name}: failed for another reason, not a refusal: {}", e.lines().next().unwrap_or("")); std::process::exit(1) }
+    }
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let core_id: [u32; 8] = {
@@ -116,32 +125,20 @@ fn main() {
             let (r, p) = load(&a[1], &a[2]);
             let (root, path) = set_of(&p.coin.script_pubkey, 4, 5);
             let inp = input(&r, &p, 0, p.coin.value + 1, root, 5, path);
-            match run(&inp, Some(&r)) {
-                Ok(_) => { println!("LIVEANON wrong: ACCEPTED (bad)"); std::process::exit(1) }
-                Err(e) => println!("LIVEANON wrong: refused ({})", e.lines().next().unwrap_or("")),
-            }
+            refuse("wrong", run(&inp, Some(&r)), "worth less than min_value");
             let (root, path) = set_of(b"another script", 4, 5);
             let inp = input(&r, &p, 0, 1, root, 5, path);
-            match run(&inp, Some(&r)) {
-                Ok(_) => { println!("LIVEANON not-in-set: ACCEPTED (bad)"); std::process::exit(1) }
-                Err(e) => println!("LIVEANON not-in-set: refused ({})", e.lines().next().unwrap_or("")),
-            }
+            refuse("not-in-set", run(&inp, Some(&r)), "not in the set");
             // the coin's script in the set, but the path one level shorter than the committed depth
             let (root, path) = set_of(&p.coin.script_pubkey, 4, 5);
             let mut inp = input(&r, &p, 0, 1, root, 5, path);
             inp.set_path.pop();
-            match run(&inp, Some(&r)) {
-                Ok(_) => { println!("LIVEANON short-path: ACCEPTED (bad)"); std::process::exit(1) }
-                Err(e) => println!("LIVEANON short-path: refused ({})", e.lines().next().unwrap_or("")),
-            }
+            refuse("short-path", run(&inp, Some(&r)), "not the committed depth");
             // another network's anchor: the mainnet receipt asked as signet is refused (profile and pinned anchor)
             let (root, path) = set_of(&p.coin.script_pubkey, 4, 5);
             let mut inp = input(&r, &p, 0, 1, root, 5, path);
             inp.signet = true;
-            match run(&inp, Some(&r)) {
-                Ok(_) => { println!("LIVEANON as-signet: ACCEPTED (bad)"); std::process::exit(1) }
-                Err(e) => println!("LIVEANON as-signet: refused ({})", e.lines().next().unwrap_or("")),
-            }
+            refuse("as-signet", run(&inp, Some(&r)), "core statement");
         }
         _ => { eprintln!("usage: see the source header"); std::process::exit(1) }
     }

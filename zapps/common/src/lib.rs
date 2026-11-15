@@ -50,6 +50,8 @@ impl Identity {
         let mut val = || next().ok_or_else(|| format!("{flag} needs a value"));
         match flag {
             "--expect" => self.expect = Some(val()?),
+            // one explorer: --mempool and --mempool-url together would silently keep whichever came last
+            "--mempool" | "--mempool-url" if self.mempool.is_some() => return Err("--mempool and --mempool-url: give one of them, once".into()),
             "--mempool" => self.mempool = Some(String::new()),
             "--mempool-url" => self.mempool = Some(val()?),
             "--bitcoin-cli" => self.bitcoin_cli = Some(val()?),
@@ -83,7 +85,8 @@ impl Identity {
             let base = if !base.is_empty() { base.trim_end_matches('/').to_string() }
                        else if network == "signet" { "https://mempool.space/signet/api".into() } else { "https://mempool.space/api".into() };
             let url = format!("{base}/block-height/{height}");
-            match Command::new("curl").args(["-sf", "--max-time", "30", &url]).output() {
+            // `--` ends curl's options (a base starting with '-' is a URL, not a flag); http(s) only, redirects included
+            match Command::new("curl").args(["-sf", "--max-time", "30", "--proto", "=https,http", "--proto-redir", "=https,http", "--", &url]).output() {
                 Ok(o) if o.status.success() => {
                     let got = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
                     if is_hash(&got) {
@@ -105,7 +108,7 @@ impl Identity {
                     // silently skipped comparison
                     match node(cmd, &["getblockheader", &hash]) {
                         Ok(j) => match serde_json::from_str::<serde_json::Value>(&j).ok().and_then(|v| v["chainwork"].as_str().map(|w| w.to_lowercase())) {
-                            Some(w) if !w.is_empty() && w.bytes().all(|b| b.is_ascii_hexdigit()) => r.node_chainwork = Some(w),
+                            Some(w) if is_hash(&w) => r.node_chainwork = Some(w),
                             _ => r.checks.push((false, format!("your node's getblockheader {hash} has no chainwork: the proven chainwork is not compared"))),
                         },
                         Err(e) => r.checks.push((false, format!("your node's getblockheader {hash} failed ({e}): the proven chainwork is not compared"))),
@@ -277,7 +280,8 @@ fn node(cmd: &str, extra: &[&str]) -> Result<String, String> {
     let prog = parts.next().ok_or("empty --bitcoin-cli")?;
     let out = Command::new(prog).args(parts).args(extra).output().map_err(|e| format!("{prog}: {e}"))?;
     if !out.status.success() {
-        return Err(format!("{cmd} {}: {}", extra.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+        // {:?}: the node's stderr escaped, so it cannot forge a line of this tool's own output
+        return Err(format!("{cmd} {}: {:?}", extra.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -294,6 +298,14 @@ mod tests {
             if !id.take(&f, &mut || it.next())? { return Err(format!("not an identity flag: {f}")); }
         }
         Ok(id)
+    }
+
+    #[test]
+    fn one_explorer_only() {
+        assert!(take_all(&["--mempool", "--mempool-url", "https://x"]).unwrap_err().contains("give one"));
+        assert!(take_all(&["--mempool-url", "https://x", "--mempool"]).is_err());
+        assert!(take_all(&["--mempool", "--mempool"]).is_err());
+        assert_eq!(take_all(&["--mempool-url", "https://x"]).unwrap().mempool.as_deref(), Some("https://x"));
     }
 
     #[test]
@@ -325,13 +337,13 @@ mod tests {
         let d = std::env::temp_dir().join(format!("zapp-common-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let cli = d.join("cli");
-        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00ab\"}}';; esac\n")).unwrap();
+        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00000000000000000000000000000000000000000000000000000000000000ab\"}}';; esac\n")).unwrap();
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap(); }
         let c = cli.to_str().unwrap();
         let r = take_all(&["--bitcoin-cli", c]).unwrap().resolve("mainnet", 200);
         assert_eq!(r.expect.as_deref(), Some(format!("200:{H200}").as_str()));
-        assert_eq!(r.node_chainwork.as_deref(), Some("00ab"));
+        assert_eq!(r.node_chainwork.as_deref(), Some("00000000000000000000000000000000000000000000000000000000000000ab"));
         assert!(r.checks.iter().all(|c| c.0), "{:?}", r.checks);
         let other = format!("200:{}1", &H200[..63]);
         let r = take_all(&["--bitcoin-cli", c, "--expect", &other]).unwrap().resolve("mainnet", 200);
