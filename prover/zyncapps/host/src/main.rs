@@ -8,6 +8,12 @@
 //!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
 //!   verifier's (trusted image, genesis anchor, minimum work and checkpoint -> else DEMO, time, chain identity)
 //!   zyncapp headers-prove <headers file> <out receipt> [--after <previous headers receipt>] [--elf <guest>] [--execute]
+//!   zyncapp utreexo-prove <block json dir> <H> <core receipt | state_<T>.json> <out dir> [--split N] [--signet] [--execute]
+//!       [--prof N] [--ref <utreexo-ref log>] [--elf <guest>]
+//!       Floresta's Utreexo accumulator after H (docs/libzync/UTREEXO_ZAPP.md), in runs of at most N blocks chained by
+//!       their state digest. A state JSON (prep's) instead of a receipt: execute only, the core receipt an unresolved
+//!       assumption. --ref: the roots must equal those utreexo-ref (Floresta's own code) printed for H.
+//!   zyncapp utreexo-verify <final run receipt> [--expect-at <H>:<hash>] [--expect <T>:<hash>] [--core-image <hex>] [--mempool]
 //!   zyncapp id
 //!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
 //!
@@ -15,7 +21,8 @@
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
-use zyncapp_methods::{ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
+mod utreexo_host;
+use zyncapp_methods::{ZYNCAPP_UTREEXO_ELF, ZYNCAPP_UTREEXO_ID, ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -139,7 +146,10 @@ fn main() {
             println!("ZYNCAPP_COIN_ID {}", id_hex(&ZYNCAPP_COIN_ID));
             println!("ZYNCAPP_ZEROCONF_ID {}", id_hex(&ZYNCAPP_ZEROCONF_ID));
             println!("ZYNCAPP_HEADERS_ID {}", id_hex(&ZYNCAPP_HEADERS_ID));
+            println!("ZYNCAPP_UTREEXO_ID {}", id_hex(&ZYNCAPP_UTREEXO_ID));
         }
+        Some("utreexo-prove") if a.len() >= 5 => utreexo_prove(&a),
+        Some("utreexo-verify") if a.len() >= 2 => utreexo_verify(&a),
         Some("headers-exec") if a.len() >= 2 => {
             // K1: the header-chain zAPP, EXECUTED (cycles, no proof) over a file of "height hex80" lines, as
             // fetched from a node. A file starting at 0 runs from genesis; otherwise its first 11 headers seed the state
@@ -379,4 +389,257 @@ fn main() {
         }
         _ => die("usage: zyncapp id | prove-coin <core.rcpt> <fact.json> <out.rcpt> [--signet] | verify-coin <zync.rcpt> | inspect-coin <zync.rcpt>"),
     }
+}
+
+/// The core ChainState with Serialize, to rebuild a journal from prep's state JSON (execute-only runs).
+#[derive(Serialize, Deserialize, Clone)]
+struct ChainStateJ {
+    kind: u32, #[serde(default)] version: u32, tip_hash: [u8; 32], utxo_roots: Vec<Option<[u8; 32]>>, utxo_leaves: u64,
+    #[serde(default)] utxo_value: u64, cum_work: [u8; 32], height: u32, prev_nbits: u32, prev_time: u32, epoch_start: u32,
+    recent_times: Vec<u32>, anchor_id: [u8; 32], self_id: [u32; 8], #[serde(alias = "ss_set")] live_set: u32,
+    #[serde(alias = "ss_acc")] live_hash: [u32; 16], #[serde(alias = "ss_hints")] trie_root: [u8; 32], smt_root: [u8; 32],
+    #[serde(default)] max_time: u32, #[serde(default)] profile: u32, #[serde(default)] block_roots: Vec<Option<[u8; 32]>>,
+    #[serde(default)] block_leaves: u64, #[serde(default)] lineage: [u8; 32],
+}
+
+/// The utreexo zyncAPP's statement (the guest's UtreexoStatement, field for field).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct UtreexoStatement {
+    kind: u32, self_id: [u32; 8], network: u32, height: u32, to: u32, runs: u32, state_out: [u8; 32], done: u32,
+    block_hash: [u8; 32], leaves: u64, roots: Vec<[u8; 32]>, n_live: u64, core_id: [u32; 8], lineage: [u8; 32],
+    anchor_id: [u8; 32], core_height: u32, tip_hash: [u8; 32], cum_work: [u8; 32], max_time: u32, profile: u32,
+}
+
+fn flag<'a>(a: &'a [String], f: &str) -> Option<&'a String> {
+    a.iter().position(|x| x == f).and_then(|i| a.get(i + 1))
+}
+
+fn disp(b: &[u8; 32]) -> String {
+    b.iter().rev().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Roots as Floresta's chainparams lists them (rustreexo's Display: the bytes in order; an Empty root as "empty").
+fn roots_str(r: &[[u8; 32]]) -> String {
+    r.iter().map(|x| if *x == [0u8; 32] { "empty".to_string() } else { hex(x) }).collect::<Vec<_>>().join(",")
+}
+
+fn utreexo_prove(a: &[String]) {
+    use libzync::utreexo_roots::{self as ur, Deriver};
+    let (dir, out) = (&a[1], &a[4]);
+    let stop: u32 = a[2].parse().unwrap_or_else(|_| die("H?"));
+    let prof: u32 = flag(a, "--prof").map(|x| x.parse().unwrap_or_else(|_| die("--prof N"))).unwrap_or(0);
+    let signet = a.iter().any(|x| x == "--signet");
+    let execute = a.iter().any(|x| x == "--execute");
+    let split: u32 = flag(a, "--split").map(|x| x.parse().unwrap_or_else(|_| die("--split N"))).unwrap_or(stop).max(1);
+    let elf: Vec<u8> = match flag(a, "--elf") {
+        Some(p) => std::fs::read(p).unwrap_or_else(|e| die(&format!("--elf: {e}"))),
+        None => ZYNCAPP_UTREEXO_ELF.to_vec(),
+    };
+    if elf.is_empty() { die("no utreexo guest: built with RISC0_SKIP_BUILD, so give --elf"); }
+    let self_id_d = risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}")));
+    let self_id: [u32; 8] = self_id_d.as_words().try_into().unwrap();
+    let (cs, journal, receipt): (ChainStateJ, Vec<u8>, Option<Receipt>) = if a[3].ends_with(".json") {
+        if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
+        let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
+            .unwrap_or_else(|e| die(&format!("{}: {e}", a[3])));
+        let j: Vec<u8> = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        (cs, j, None)
+    } else {
+        let r: Receipt = bincode::deserialize(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
+            .unwrap_or_else(|e| die(&format!("core receipt: {e}")));
+        if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) && !execute { die("a FakeReceipt core receipt is not a proof"); }
+        let cs: ChainStateJ = r.journal.decode().unwrap_or_else(|e| die(&format!("core journal: {e}")));
+        (cs, r.journal.bytes.clone(), Some(r))
+    };
+    if stop == 0 || stop > cs.height { die(&format!("H must be in 1..={} (the core height)", cs.height)); }
+    let t0 = std::time::Instant::now();
+    let rp = utreexo_host::replay(cs.height, signet, |h| utreexo_host::read_block(dir, h));
+    if rp.block_roots != ur::trimmed(&cs.block_roots) || rp.block_leaves != cs.block_leaves {
+        die("the native replay's block forest is not the core state's: other blocks, or a rule differs");
+    }
+    let tc = std::env::var("UTREEXO_TAMPER").ok();
+    if tc.is_some() && !execute { die("UTREEXO_TAMPER is an execute-only negative test"); }
+    let jcase = matches!(tc.as_deref(), Some("lineage" | "pre_undo" | "core_id" | "assumevalid" | "state_bytes" | "prev_id"));
+    let mut blocks = Vec::new();
+    let mut fr = Vec::with_capacity(stop as usize);
+    for h in 1..=stop {
+        let b = utreexo_host::read_block(dir, h);
+        fr.push(utreexo_host::frame(&rp, &b, stop));
+        if tc.is_some() { blocks.push(b); }
+    }
+    let mut tail: Vec<libzync::coinlog::H> = rp.blocks[stop as usize..].iter().map(|f| f.leaf).collect();
+    if let (Some(c), false) = (&tc, jcase) {
+        println!("UTREEXO_TAMPER {c}: {}", utreexo_host::tamper(c, &mut fr, &blocks, &mut tail).unwrap_or_else(|e| die(&e)));
+    }
+    // the native derivation, in the same runs as the guest (each run's state through encode/decode, as the guest gets it)
+    let ranges: Vec<(u32, u32)> = (0..stop.div_ceil(split)).map(|i| (i * split + 1, ((i + 1) * split).min(stop))).collect();
+    let mut states: Vec<Vec<u8>> = Vec::new(); // the state after each run but the last
+    let mut d = Deriver::new(stop, &utreexo_host::genesis(signet), !signet).unwrap_or_else(|e| die(e));
+    let mut native_err = None;
+    'runs: for (i, &(lo, hi)) in ranges.iter().enumerate() {
+        if i > 0 {
+            let e = states.last().unwrap();
+            d = Deriver::decode(e).unwrap_or_else(|e| die(e));
+        }
+        for h in lo..=hi {
+            let f = &fr[h as usize - 1];
+            if let Err(e) = d.block(&f.stripped, &f.tracked, &f.status, &f.state, &f.undo) {
+                native_err = Some(format!("native derivation, block {h}: {e}"));
+                break 'runs;
+            }
+        }
+        if hi < stop { states.push(d.encode()); }
+    }
+    let derived = if native_err.is_none() {
+        for l in &tail { if let Err(e) = d.tail_leaf(l) { native_err = Some(format!("native tail: {e}")); break; } }
+        if native_err.is_none() { Some(d.finish().unwrap_or_else(|e| die(e))) } else { None }
+    } else { None };
+    if let Some(e) = &native_err {
+        if tc.is_none() { die(e); }
+        println!("UTREEXO_NATIVE_REFUSED {e}");
+    }
+    if let Some(dv) = &derived {
+        if dv.block_roots != ur::trimmed(&cs.block_roots) || dv.block_leaves != cs.block_leaves {
+            if tc.is_none() { die("the native derivation's block forest is not the core state's"); }
+        }
+        let roots = dv.utreexo.roots();
+        println!("UTREEXO_NATIVE H={stop} T={} block={} leaves={} live={} roots={} ({:.1} s)", cs.height, disp(&dv.block_hash),
+                 dv.utreexo.leaves, dv.n_live, roots_str(&roots), t0.elapsed().as_secs_f64());
+        if let Some(rf) = flag(a, "--ref") {
+            let log = std::fs::read_to_string(rf).unwrap_or_else(|e| die(&format!("--ref: {e}")));
+            let key = format!("UTREEXO_REF height={stop} ");
+            let line = log.lines().find(|l| l.starts_with(&key)).unwrap_or_else(|| die(&format!("--ref: no line for height {stop}")));
+            let get = |k: &str| line.split_whitespace().find_map(|w| w.strip_prefix(k)).unwrap_or("").to_string();
+            let (rl, rr, rb) = (get("leaves="), get("roots="), get("block="));
+            if tc.is_none() {
+                if rl != dv.utreexo.leaves.to_string() || rr != roots_str(&roots) || rb != disp(&dv.block_hash) {
+                    die(&format!("NOT Floresta's: ref leaves={rl} roots={rr} block={rb}"));
+                }
+                println!("UTREEXO_REF_MATCH H={stop}: leaves and {} roots byte-identical to Floresta's update_acc", roots.len());
+            }
+        }
+    }
+    // journal tamper cases
+    let (mut cs, mut journal) = (cs, journal);
+    if let Some(c) = tc.as_deref().filter(|_| jcase) {
+        match c {
+            "lineage" => cs.lineage[0] ^= 1,
+            "pre_undo" => cs.self_id = [2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963],
+            "assumevalid" => cs.profile |= 2,
+            _ => {}
+        }
+        if receipt.is_some() { die("a journal tamper case needs a state JSON"); }
+        journal = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        println!("UTREEXO_TAMPER {c}: the core journal / run chain input changed");
+    }
+    let core_id_in: [u32; 8] = if tc.as_deref() == Some("core_id") { let mut c = cs.self_id; c[0] ^= 1; c } else { cs.self_id };
+    std::fs::create_dir_all(out).unwrap();
+    let words = utreexo_host::frame_words(&fr);
+    // word offset of each block's frame
+    let mut off = vec![0usize];
+    for f in &fr { off.push(off.last().unwrap() + 3 + f.stripped.len().div_ceil(4) + f.tracked.len() + f.status.len() + 16); }
+    let tail_w: Vec<u32> = tail.iter().flat_map(libzync::coinlog::w_of).collect();
+    let net = if signet { "signet" } else { "mainnet" };
+    let mut prev: Option<(Vec<u8>, Option<Receipt>)> = None; // previous run's journal bytes and receipt
+    let mut total = (0u64, 0u64, 0usize);
+    for (i, &(lo, hi)) in ranges.iter().enumerate() {
+        let last = hi == stop;
+        let mut b = ExecutorEnv::builder();
+        if last {
+            match &receipt {
+                Some(r) => { b.add_assumption(r.clone()); }
+                None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(cs.self_id), journal.clone())); }
+            }
+        }
+        let sid = if tc.as_deref() == Some("prev_id") && i > 0 { let mut x = self_id; x[0] ^= 1; x } else { self_id };
+        b.write(&sid).unwrap().write(&core_id_in).unwrap().write(&if last { journal.clone() } else { Vec::new() }).unwrap()
+            .write(&signet).unwrap().write(&stop).unwrap().write(&utreexo_host::genesis(signet).to_vec()).unwrap()
+            .write(&prof).unwrap().write(&hi).unwrap();
+        match &prev {
+            None => { b.write(&0u32).unwrap(); }
+            Some((pj, pr)) => {
+                let mut ps = states[i - 1].clone();
+                if tc.as_deref() == Some("state_bytes") { let n = ps.len(); ps[n - 1] ^= 1; }
+                match pr {
+                    Some(r) => { b.add_assumption(r.clone()); }
+                    None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(self_id), pj.clone())); }
+                }
+                b.write(&1u32).unwrap().write(pj).unwrap().write(&ps).unwrap();
+            }
+        }
+        b.write_slice(&words[off[lo as usize - 1]..off[hi as usize]]);
+        if last { b.write_slice(&[cs.height - stop]).write_slice(&tail_w); }
+        let env = b.build().unwrap();
+        let t1 = std::time::Instant::now();
+        let (jb, rc) = if execute {
+            let res = risc0_zkvm::default_executor().execute(env, &elf);
+            if let Some(c) = &tc {
+                match res {
+                    Err(e) => { println!("UTREEXO_GUEST_REFUSED {c}: run {} ({lo}..{hi}): {}", i + 1, e.to_string().lines().next().unwrap_or("")); std::process::exit(3) }
+                    Ok(info) => {
+                        if !last { prev = Some((info.journal.bytes.clone(), None)); continue; }
+                        println!("UTREEXO_GUEST_ACCEPTED {c} (a negative test that passed: a BUG)"); std::process::exit(1)
+                    }
+                }
+            }
+            let info = res.unwrap_or_else(|e| die(&format!("execute run {} ({lo}..{hi}): {e}", i + 1)));
+            let padded: u64 = info.segments.iter().map(|s| 1u64 << s.po2).sum();
+            total = (total.0 + info.cycles(), total.1 + padded, total.2 + info.segments.len());
+            println!("UTREEXO_EXEC run={} blocks={lo}..{hi} user_cycles={} padded_cycles={} segments={} executed in {:.1} s",
+                     i + 1, info.cycles(), padded, info.segments.len(), t1.elapsed().as_secs_f64());
+            (info.journal.bytes.clone(), None)
+        } else {
+            let r = default_prover().prove_with_opts(env, &elf, &risc0_zkvm::ProverOpts::succinct())
+                .unwrap_or_else(|e| die(&format!("prove run {}: {e}", i + 1))).receipt;
+            let p = format!("{out}/{net}-{stop}-run{}.receipt", i + 1);
+            std::fs::write(&p, bincode::serialize(&r).unwrap()).unwrap();
+            println!("UTREEXO_PROVED run={} blocks={lo}..{hi} -> {p} in {:.1} s ({} bytes)", i + 1, t1.elapsed().as_secs_f64(), std::fs::metadata(&p).unwrap().len());
+            (r.journal.bytes.clone(), Some(r))
+        };
+        let z: UtreexoStatement = risc0_zkvm::serde::from_slice(&jb.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<u32>>())
+            .unwrap_or_else(|e| die(&format!("journal: {e}")));
+        if !last {
+            let want: [u8; 32] = { use sha2::Digest; sha2::Sha256::digest(&states[i]).into() };
+            if z.state_out != want || z.done != 0 || z.to != hi { die(&format!("run {}: the guest's end state is not the native one", i + 1)); }
+            prev = Some((jb, rc));
+            continue;
+        }
+        let dv = derived.as_ref().unwrap();
+        if z.done != 1 || z.roots != dv.utreexo.roots() || z.leaves != dv.utreexo.leaves || z.block_hash != dv.block_hash || z.runs as usize != ranges.len() {
+            die("the guest's statement is not the native derivation's");
+        }
+        if execute && ranges.len() > 1 {
+            println!("UTREEXO_EXEC_TOTAL runs={} user_cycles={} padded_cycles={} segments={}", ranges.len(), total.0, total.1, total.2);
+        }
+        println!("UTREEXO_JOURNAL height={} block={} leaves={} live={} runs={} roots={} core={} core_height={}{}", z.height, disp(&z.block_hash),
+                 z.leaves, z.n_live, z.runs, roots_str(&z.roots), id_hex(&z.core_id), z.core_height,
+                 if receipt.is_none() { " [core receipt: unresolved assumption, journal from the state JSON]" } else { "" });
+        if !execute { std::fs::copy(format!("{out}/{net}-{stop}-run{}.receipt", i + 1), format!("{out}/{net}-{stop}.receipt")).unwrap(); }
+    }
+    println!("UTREEXO_ID {}", hex(self_id_d.as_bytes()));
+}
+
+/// The verifier for the final run's receipt: a real proof under the utreexo image, its whole chain of runs of the same
+/// image from genesis, then the core statement under the core verifier's policy (core_policy). Exit 0 OK, 2 DEMO, 1 FAIL.
+fn utreexo_verify(a: &[String]) {
+    let fail = |m: String| -> ! { println!("ZYNCAPP_FAIL: {m}"); std::process::exit(1) };
+    if std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0").unwrap_or(false) { fail("RISC0_DEV_MODE is set: unset it to verify".into()); }
+    let r: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| fail(format!("{}: {e}", a[1]))))
+        .unwrap_or_else(|e| fail(format!("receipt: {e}")));
+    if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { fail("a FakeReceipt is not a proof".into()); }
+    let id = flag(a, "--elf").map(|p| risc0_zkvm::compute_image_id(&std::fs::read(p).unwrap()).unwrap()).unwrap_or(risc0_zkvm::sha::Digest::from(ZYNCAPP_UTREEXO_ID));
+    r.verify(id).unwrap_or_else(|e| fail(format!("the receipt does not verify under the utreexo image {}: {e}", hex(id.as_bytes()))));
+    let z: UtreexoStatement = r.journal.decode().unwrap_or_else(|e| fail(format!("journal: {e}")));
+    let idw: [u32; 8] = id.as_words().try_into().unwrap();
+    if z.kind != libzync::utreexo_roots::KIND_UTREEXO || z.done != 1 { fail("not a final utreexo statement".into()); }
+    if z.self_id != idw { fail("its earlier runs claim another image".into()); }
+    if let Some(e) = flag(a, "--expect-at") {
+        let (h, x) = swiftsync_verify::parse_expect(e).unwrap_or_else(|| fail("--expect-at: want <height>:<64 hex digits>".into()));
+        if !swiftsync_verify::identity_matches(h, &x, z.height, &z.block_hash) { fail(format!("--expect-at: block {h} is {x}; the statement is for block {} {}", z.height, disp(&z.block_hash))); }
+    }
+    let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, lineage: &z.lineage, profile: z.profile, height: z.core_height,
+                   tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
+    let line = format!("ZYNCAPP_UTREEXO_OK: Floresta's Utreexo accumulator after block {} {} is leaves={} roots={} ({} runs; core tip {})",
+                       z.height, disp(&z.block_hash), z.leaves, roots_str(&z.roots), z.runs, z.core_height);
+    verdict(core_policy(&c, a), line);
 }

@@ -12,6 +12,7 @@ pub mod coinlog_forest;
 pub mod facts;
 pub mod history;
 pub mod undo;
+pub mod utreexo_roots;
 pub mod ttree;
 pub mod trie_model;
 pub mod trie_store;
