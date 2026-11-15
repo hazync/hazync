@@ -433,9 +433,9 @@ first receipts to land: `ls /var/lib/hazync-lz/proofs | head`, and after the fir
 
 Everything kept for a rollback, with where it lives (`du -sh` each first):
 
-| the old paper run | `/var/lib/libzync-fast/out.pre-v026`, `$P/{cl,trie,leaves,blocks}.pre-v026` (the coin log and trie are hundreds of GB) | `/` and `/srv/bulk` |
 | what | where | filesystem |
 |---|---|---|
+| the old paper run | `/var/lib/libzync-fast/out.pre-v026`, `$P/{cl,trie,leaves,blocks}.pre-v026` (the coin log and trie are hundreds of GB) | `/` and `/srv/bulk` |
 | the old hosts | `$P/bin/host_lz.$po8`, `/opt/hazync-lz/bin/{host,hazync-verify}.$o8`, `zync-serve.pre-v026`, `$B/bin/host_lz.$o8` | `/srv/bulk`, `/` |
 | the old board pass | `/var/lib/libzync-board/{out,cl,trie}.$o8`, `$B/leaves.$o8` | `/`, `/srv/bulk` |
 | the old zyncAPP follower | `/srv/bulk/libzync-zapp.$zo8` | `/srv/bulk` |
