@@ -165,10 +165,10 @@ these files. Limits:
 
 ## 9. Where each zAPP lives: one module per zAPP (15.11.2026)
 
-The owner's rule: a zAPP is "a separate side check, not the core engine". The core verifier (`swiftsync-verify`,
-`swiftsync-verify-ffi`, `swiftsync-verify-wasm`; released as `hazync-verify-*` and `hazync-verify.wasm`) checks CORE
-chain proofs only, and adding a zAPP never changes it: its `.wasm` stays byte-identical (`./build.sh`, sha256 in
-`swiftsync-verify-wasm/README.md`). Every zAPP has the same layout:
+A zAPP is a separate side check, not the core engine, so I keep each one in its own module. The core verifier
+(`swiftsync-verify`, `swiftsync-verify-ffi`, `swiftsync-verify-wasm`; released as `hazync-verify-*` and
+`hazync-verify.wasm`) checks core chain proofs only, and adding a zAPP never changes it: its `.wasm` stays
+byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Every zAPP has the same layout:
 
 | path | what |
 |---|---|
