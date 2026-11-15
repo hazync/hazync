@@ -76,8 +76,8 @@ fn read_base<'a>(f: &mut Frame<'a>) -> Result<Base<'a>, String> {
 }
 
 /// Optional, LAST in either frame: the image's lineage (docs/HANDOVER.md). In verify_facts' frame it follows the facts
-/// and expect chunks (before 15.11.2026 it was read right after the image id there too, so the facts JSON was taken for
-/// a lineage and every verifyFacts call with facts failed).
+/// and expect chunks. Before 15.11.2026 it was read right after the image id there too, so the facts JSON was taken
+/// for a lineage and every verifyFacts call (and every verify with an expected tip) failed.
 fn lineage_chunk<'a>(f: &mut Frame<'a>) -> Result<&'a [u8], String> {
     if f.i < f.b.len() { f.chunk() } else { Ok(&[][..]) }
 }
@@ -93,8 +93,8 @@ fn run_base(b: Base, lineage_txt: &[u8]) -> Result<(Report, &'static Image), Str
         1 => "signet",
         n => return Err(format!("unknown network code {n}")),
     };
-    // The image's lineage (docs/HANDOVER.md), for an image the built-in table does not list. Text, one handover per
-    // comma, oldest first: `<image hex>:<first height>[:<predecessor RISC Zero verifier digest hex>]`.
+    // Optional, last: the image's lineage (docs/HANDOVER.md), for an image the built-in table does not list. Text,
+    // one handover per comma, oldest first: `<image hex>:<first height>[:<predecessor RISC Zero verifier digest hex>]`.
     let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
     // A built-in image by id (an earlier or the current image of the chain, with its own lineage), else the
     // network's current image, re-pointed at the stated id.
