@@ -52,7 +52,7 @@ export async function loadVerifier(source) {
     typeof Response !== 'undefined' && resolved instanceof Response
       ? await WebAssembly.instantiateStreaming(resolved, {})
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
-  const { alloc, verify_frame, verify_facts, image_id, verify_headers, headers_image_id, memory } = instance.exports;
+  const { alloc, verify_frame, verify_facts, image_id, verify_headers, headers_image_id, verify_deposit, memory } = instance.exports;
   const call = (fn, args) => {
     const bytes = frame(args);
     const ptr = alloc(bytes.length);
@@ -86,6 +86,22 @@ export async function loadVerifier(source) {
       const ptr = alloc(bytes.length);
       new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
       return JSON.parse(readString(memory, verify_headers(ptr, bytes.length)));
+    },
+    /** The deposit-proof zyncAPP (docs/libzync/DEPOSIT_ZAPP.md): bundle = the JSON zync-deposit writes (string or
+     *  object); ask = { txid (the one YOU ask about), vout?, amount?, script?, op_return?, min_depth?,
+     *  min_validated_depth?, allow_pow_only_block?, expect?, max_tip_age?, network? }. statement is null unless the
+     *  verdict is 'ok' or 'demo'. `now` defaults to this device's clock. */
+    verifyDeposit({ bundle, ask, now }) {
+      const enc = new TextEncoder();
+      const parts = [enc.encode(typeof bundle === 'string' ? bundle : JSON.stringify(bundle)), enc.encode(JSON.stringify(ask))];
+      const bytes = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
+      const view = new DataView(bytes.buffer);
+      view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);
+      let o = 8;
+      for (const p of parts) { view.setUint32(o, p.length, true); bytes.set(p, o + 4); o += 4 + p.length; }
+      const ptr = alloc(bytes.length);
+      new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+      return JSON.parse(readString(memory, verify_deposit(ptr, bytes.length)));
     },
     /** The built-in header-chain image id. */
     headersImageId() { return readString(memory, headers_image_id()); },

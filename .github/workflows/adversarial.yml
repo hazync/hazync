@@ -98,6 +98,7 @@ jobs:
           # the deposit-proof zyncAPP (docs/libzync/DEPOSIT_ZAPP.md): bundles built and checked on the real receipts
           cargo build --release --manifest-path swiftsync-verify/Cargo.toml --bin zync-deposit
           bash experimental/libzync-bench/deposit/test_deposit.sh
+          node experimental/libzync-bench/deposit/test_deposit_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm swiftsync-verify/target/release/zync-deposit
 
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
