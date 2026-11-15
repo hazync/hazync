@@ -270,3 +270,23 @@ fn network_identity_and_freshness() {
     refused(&b_tip(), &DepositAsk { max_tip_age: Some(60), ..a.clone() }, "is within 60 s");
     assert_eq!(run(&b_tip(), &DepositAsk { max_tip_age: Some(100 * 365 * 86_400), ..a.clone() }).verdict, Verdict::Ok);
 }
+
+/// The same two proofs wrapped in RISC Zero's Groth16 (tools/groth16-wrap on hazync-coord, 15.11.2026): the verifier
+/// takes them unchanged (a chain proof is succinct or Groth16), and the bundle shrinks from ~913 KB to ~22 KB.
+#[test]
+fn groth16_wrapped_receipts_give_the_same_statement() {
+    const CORE_G16: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/mainnet_0_200_8888d59c_groth16.rcpt");
+    const HDR_G16: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/headers_0_975278_de54b94f_groth16.rcpt");
+    assert_eq!(crate::receipt_kind(CORE_G16), Ok("groth16"));
+    let b = make_bundle("mainnet", CORE_G16, &[HDR_G16.to_vec()], Some(HIST), &block_170(), 170, &id(T170), &lines(PATH_200), None).unwrap();
+    let a = DepositAsk { vout: Some(0), amount: Some(1_000_000_000), expect_tip: Some((TIP.0, TIP.1.into())), ..ask(id(T170)) };
+    let r = run(&b, &a);
+    assert_eq!(r.verdict, Verdict::Ok, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
+    assert_eq!(r.statement, run(&b_tip(), &a).statement);
+    assert!(serde_json::to_string(&b).unwrap().len() < 25_000);
+    // a Groth16 receipt with one byte flipped (past its 256-byte seal: the claim no longer matches it)
+    let mut bad = CORE_G16.to_vec();
+    let at = bad.len() / 3; bad[at] ^= 1;
+    let mut x = b.clone(); x.core_receipt = hex(&bad);
+    assert_eq!(run(&x, &a).verdict, Verdict::Fail);
+}
