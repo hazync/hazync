@@ -15,10 +15,14 @@ bash test_headers_verify.sh "$T/release/zapp-headers"
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names block 200 as the
 # receipts do (DEMO: valid, below minimum work), one that names another block (FAIL)
 H=../../experimental/libzync-bench/headers
-printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320\nexit 0\n' > "$T/node"; chmod +x "$T/node"
+# (block 200's chainwork: 201 blocks of difficulty 1, 0x100010001 each; a node without it is a FAIL)
+printf '#!/bin/sh\ncase "$1" in getblockhash) echo 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320;; getblockheader) echo '"'"'{"chainwork": "%064x"}'"'"';; esac\n' $((201 * 0x100010001)) > "$T/node"; chmod +x "$T/node"
+printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320\nexit 0\n' > "$T/nowork"; chmod +x "$T/nowork"
 printf '#!/bin/sh\necho %064d\n' 1 > "$T/badnode"; chmod +x "$T/badnode"
 set +e; "$T/release/zapp-headers" --bitcoin-cli "$T/node" $H/hdr_0_100.rcpt $H/hdr_101_200.rcpt > "$T/id.out"; e=$?; set -e
 [ $e = 2 ] && grep -q "your node's block 200 is" "$T/id.out" || { cat "$T/id.out"; echo "::error::--bitcoin-cli, an agreeing node: exit $e, want 2"; exit 1; }
+set +e; "$T/release/zapp-headers" --bitcoin-cli "$T/nowork" $H/hdr_0_100.rcpt $H/hdr_101_200.rcpt > "$T/id.out"; e=$?; set -e
+[ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node that gives no chainwork: exit $e, want 1"; exit 1; }
 set +e; "$T/release/zapp-headers" --bitcoin-cli "$T/badnode" $H/hdr_0_100.rcpt $H/hdr_101_200.rcpt > "$T/id.out"; e=$?; set -e
 [ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node naming another block: exit $e, want 1"; exit 1; }
 ./wasm/build.sh

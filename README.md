@@ -44,8 +44,11 @@ A proof names the exact program that produced it. The published Hazync v2 images
 ```
 mainnet  46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
 signet   01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7
-headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632   (the header-chain zyncAPP)
+headers  de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07   (the header-chain zyncAPP)
 ```
+
+The header-chain zyncAPP's image is `de54b94f` from the next release (its state carries an MMR of every block hash);
+v0.24.0 to v0.26.0 shipped `2db34e12`, which `reproduce/LIBZYNC_IDS` no longer pins.
 
 v0.26.0's images commit each block's undo data in its block-forest leaf ([`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)),
 and the board proves the chain again from genesis under them; the verifier keeps v0.24.0's `8888d59c…` so its receipts
@@ -71,9 +74,10 @@ the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench
   proving run, on 4× RTX PRO 6000, proved 1,287 blocks in 2 h 32 min of proving (about 510 an hour), $27.13 in all,
   about $0.021 a block on these early, nearly empty blocks
   ([`RESULT_board_run_2026-11-12.txt`](experimental/libzync-bench/RESULT_board_run_2026-11-12.txt))
-- **The whole header chain in one proof:** genesis to block 975,278 under the headers zyncAPP `2db34e12`, 59.4 min on
-  one RTX PRO 6000 (about $2.50), a 224 KB receipt that the WebAssembly verifier checks in 39 ms (on a laptop,
-  under Node). A follower on the board's server keeps it at the tip
+- **The whole header chain in one proof:** genesis to block 975,278 under the headers zyncAPP `de54b94f` (with the MMR
+  of every block hash), 99.5 min on one RTX PRO 6000, a 227 KB receipt (`2db34e12`, without the MMR: 59.4 min, about
+  $2.50, a 224 KB receipt the WebAssembly verifier checked in 39 ms on a laptop under Node). A follower on the board's
+  server keeps `2db34e12`'s at the tip
 - A real proof of mainnet from **genesis to block 200** by the published image: 3,074 s on one RTX PRO 6000 (RISC
   Zero 3.1.0), one 227 KB receipt that verifies in a browser
 - **zyncAPPs**, separate programs that answer one question from a core proof ([`docs/libzync/ZYNCAPPS.md`](docs/libzync/ZYNCAPPS.md)),
