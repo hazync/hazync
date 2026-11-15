@@ -58,16 +58,33 @@ impl<'a> Frame<'a> {
 
 fn run(input: &[u8]) -> Result<(Report, &'static Image), String> {
     let mut f = Frame { b: input, i: 0 };
-    let out = run_frame(&mut f)?;
+    let base = read_base(&mut f)?;
+    let lineage = lineage_chunk(&mut f)?;
     if f.i != input.len() {
         return Err("input frame has trailing bytes".into());
     }
-    Ok(out)
+    run_base(base, lineage)
 }
 
-fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
-    // Network code: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (COINLOG.md), whose proofs carry coin facts.
+/// The frame's fixed head: network code, now, receipt, anchor JSON, image id.
+struct Base<'a> { code: u8, now: u64, receipt: &'a [u8], anchor_json: &'a [u8], image_hex: &'a [u8] }
+
+fn read_base<'a>(f: &mut Frame<'a>) -> Result<Base<'a>, String> {
     let code = f.take(1)?[0];
+    let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
+    Ok(Base { code, now, receipt: f.chunk()?, anchor_json: f.chunk()?, image_hex: f.chunk()? })
+}
+
+/// Optional, LAST in either frame: the image's lineage (docs/HANDOVER.md). In verify_facts' frame it follows the facts
+/// and expect chunks. Before 15.11.2026 it was read right after the image id there too, so the facts JSON was taken
+/// for a lineage and every verifyFacts call (and every verify with an expected tip) failed.
+fn lineage_chunk<'a>(f: &mut Frame<'a>) -> Result<&'a [u8], String> {
+    if f.i < f.b.len() { f.chunk() } else { Ok(&[][..]) }
+}
+
+fn run_base(b: Base, lineage_txt: &[u8]) -> Result<(Report, &'static Image), String> {
+    let Base { code, now, receipt, anchor_json, image_hex } = b;
+    // Network code: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (COINLOG.md), whose proofs carry coin facts.
     // bit 0x20 = the product image (coin log, counting trie, live-coin hash), whose proofs carry trie facts.
     let coinlog = code & 0x10 != 0;
     let product = code & 0x20 != 0;
@@ -76,13 +93,8 @@ fn run_frame(f: &mut Frame) -> Result<(Report, &'static Image), String> {
         1 => "signet",
         n => return Err(format!("unknown network code {n}")),
     };
-    let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
-    let receipt = f.chunk()?;
-    let anchor_json = f.chunk()?;
-    let image_hex = f.chunk()?;
     // Optional, last: the image's lineage (docs/HANDOVER.md), for an image the built-in table does not list. Text,
     // one handover per comma, oldest first: `<image hex>:<first height>[:<predecessor RISC Zero verifier digest hex>]`.
-    let lineage_txt = if f.i < f.b.len() { f.chunk()? } else { &[][..] };
     let h = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?.trim().to_lowercase();
     // A built-in image by id (an earlier or the current image of the chain, with its own lineage), else the
     // network's current image, re-pointed at the stated id.
@@ -169,12 +181,14 @@ pub extern "C" fn verify_frame(ptr: *mut u8, len: usize) -> *const u8 {
 pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
     let input = unsafe { Vec::from_raw_parts(ptr, len, len) };
     let mut f = Frame { b: &input, i: 0 };
-    let res = run_frame(&mut f).and_then(|r| {
+    let res = read_base(&mut f).and_then(|base| {
         let facts = f.chunk()?;
         let expect = std::str::from_utf8(f.chunk()?).map_err(|_| "expect: not UTF-8".to_string())?.trim().to_string();
+        let lineage = lineage_chunk(&mut f)?;
         if f.i != input.len() {
             return Err("input frame has trailing bytes".to_string());
         }
+        let r = run_base(base, lineage)?;
         let v: serde_json::Value = serde_json::from_slice(facts).map_err(|e| format!("facts JSON: {e}"))?;
         let coins: Vec<swiftsync_verify::CoinFact> = serde_json::from_value(v.get("coins").cloned().unwrap_or_else(|| serde_json::json!([])))
             .map_err(|e| format!("facts JSON coins: {e}"))?;
