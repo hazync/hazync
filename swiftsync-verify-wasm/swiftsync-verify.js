@@ -10,9 +10,16 @@
 //   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });   // the header-chain zyncAPP
 //   h.verdict, h.height, h.hash, h.chainwork, h.mmr_root
 //   v.verifyHeaders({ receipts, include: { height, hash, path } })   // and block <hash> is at <height> on that chain
-//   (path: the lines `zyncapp headers-mmr-path` prints, or the path service's /path answer; optional tx: the path
-//   service's /tx answer { txid, pos, header, raw, branch, coinbase, coinbase_branch } for a transaction in that block:
-//   the raw coinbase and its branch pin the tree's depth). h.included: true / false / null
+//   (path: the lines `zyncapp headers-mmr-path` prints, or the path service's /path answer)
+//   v.verifyHeaders({ receipts, include: { height, hash, path, txid, tx } })   // and transaction <txid> is in it
+//   (txid: the transaction YOU ask about, never taken from the answer; tx: the path service's /tx answer
+//   { pos, header, raw, branch, coinbase, coinbase_branch }: the raw transaction must hash to txid, the raw coinbase
+//   and its branch pin the tree's depth. The answer's own txid is not read: an answer about another transaction fails.)
+//   READ included WITH THE VERDICT:
+//   h.included       true only when h.verdict === 'ok' and the block (and transaction) is on the chain; null if not asked
+//   h.included_demo  true when h.verdict === 'demo' (a valid chain BELOW Core's minimum work, which anyone can mine
+//                    on a cheap difficulty-1 fork: shown, not a claim about the network's chain) and the checks passed
+//   h.inclusion      { height, hash, txid } of what was shown, or null (non-null for 'ok' and 'demo' alike)
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
@@ -63,7 +70,9 @@ export async function loadVerifier(source) {
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },
     /** The header-chain zyncAPP: receipts = [first from genesis, then each run chained to the one before];
      *  expect ('<height>:<hash>') is the tip from a source you trust. `now` defaults to this device's clock.
-     *  include ({ height, hash, path, tx? }): also check that this block (and transaction) is on the proven chain. */
+     *  include ({ height, hash, path, txid?, tx? }): also check that this block (and transaction txid, the one asked
+     *  about, by the /tx answer tx) is on the proven chain. included is true only for verdict 'ok'; included_demo
+     *  for 'demo'; inclusion names what was shown. */
     verifyHeaders({ receipts, now, imageHex, expect, include }) {
       const enc = new TextEncoder();
       const parts = [...receipts, enc.encode(imageHex || ''), enc.encode(expect || ''),

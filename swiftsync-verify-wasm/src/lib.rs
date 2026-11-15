@@ -47,8 +47,9 @@ struct Frame<'a> {
 
 impl<'a> Frame<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let out = self.b.get(self.i..self.i + n).ok_or("input frame truncated")?;
-        self.i += n;
+        let end = self.i.checked_add(n).ok_or("input frame truncated")?;
+        let out = self.b.get(self.i..end).ok_or("input frame truncated")?;
+        self.i = end;
         Ok(out)
     }
     fn chunk(&mut self) -> Result<&'a [u8], String> {
@@ -264,8 +265,17 @@ pub extern "C" fn image_id(network: u32) -> *const u8 {
 /// `[u32 n][receipt]` (the first from genesis, each next one starting where the one before ended), then
 /// `[u32 n][image id hex, n = 0 for the built-in id][u32 n]["height:hash" from a source the page trusts, n = 0 for none]`,
 /// optionally followed by `[u32 n][include JSON, n = 0 for none]`: `{"height", "hash" (as explorers print it), "path"
-/// (MMR hashes as zyncapp headers-mmr-path prints them), "tx"?: the path service's /tx answer (txid, pos, header, raw,
-/// branch, coinbase, coinbase_branch; swiftsync_verify::headers::TxInclusion::from_json)}`.
+/// (MMR hashes as zyncapp headers-mmr-path prints them), "txid"? and "tx"?, both or neither: the transaction asked
+/// about (as explorers print it; the CALLER's, never the service's) and the path service's /tx answer (pos, header,
+/// raw, branch, coinbase, coinbase_branch; swiftsync_verify::headers::TxInclusion::from_json, which does not read the
+/// answer's own txid: the raw transaction must hash to the asked one)}`.
+///
+/// Output beside verdict, checks, height, hash, chainwork, max_time, mmr_root, identity_checked:
+///   `included`: null when nothing was asked; true ONLY when the verdict is "ok" and the block (and transaction) is on
+///   the chain. A DEMO chain (below Core's minimum work: anyone can mine a difficulty-1 fork) never gives true.
+///   `included_demo`: null when nothing was asked; true when the verdict is "demo" and the inclusion checks passed.
+///   `inclusion`: `{height, hash, txid}` of what was shown (txid null for a block alone), non-null only when no check
+///   failed (verdict "ok" or "demo": read it with the verdict, as `included` / `included_demo` do).
 #[no_mangle]
 pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
@@ -306,8 +316,13 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
         "max_time": s.map(|s| s.max_time),
         "mmr_root": s.map(|s| s.mmr_root_hex()),
         "identity_checked": ok && exp.is_some(),
-        // the block (and transaction) asked for is on the verified chain; null when none was asked
-        "included": include.as_ref().map(|_| ok),
+        // the block (and transaction) asked for is on a chain with Core's minimum work; null when none was asked
+        "included": include.as_ref().map(|_| rep.verdict == Verdict::Ok && rep.included.is_some()),
+        // ...on a valid chain BELOW it (a demo proof): shown, but not a claim about the network's chain
+        "included_demo": include.as_ref().map(|_| rep.verdict == Verdict::Demo && rep.included.is_some()),
+        "inclusion": rep.included.as_ref().filter(|_| ok).map(|i| serde_json::json!({
+            "height": i.height, "hash": i.hash_hex(), "txid": i.txid_hex(),
+        })),
     }).to_string())
 }
 
@@ -321,8 +336,13 @@ fn parse_include(j: &[u8]) -> Result<headers::Inclusion, String> {
     let hash = v["hash"].as_str().ok_or("include: hash is not a string")?;
     let path = strs(&v["path"], "path")?;
     let path: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
-    let tx = &v["tx"];
-    let tx = if tx.is_null() { None } else { Some(headers::TxInclusion::from_json(tx)?) };
+    let tx = match (&v["txid"], &v["tx"]) {
+        (serde_json::Value::Null, serde_json::Value::Null) => None,
+        (serde_json::Value::String(txid), tx) if tx.is_object() => Some(headers::TxInclusion::from_json(txid, tx)?),
+        (serde_json::Value::Null, _) => return Err("include: tx needs txid, the transaction asked about (never taken from the answer)".into()),
+        (_, serde_json::Value::Null) => return Err("include: txid needs tx, the path service's /tx answer".into()),
+        _ => return Err("include: txid is a string and tx an object".into()),
+    };
     headers::Inclusion::parse(height, hash, &path, tx)
 }
 
@@ -330,4 +350,28 @@ fn parse_include(j: &[u8]) -> Result<headers::Inclusion, String> {
 #[no_mangle]
 pub extern "C" fn headers_image_id() -> *const u8 {
     ret(swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// Review finding 7: `self.i + n` overflowed (a panic in a debug build) on a length near usize::MAX.
+    #[test]
+    fn frame_take_does_not_overflow() {
+        let b = [1u8, 2, 3];
+        let mut f = Frame { b: &b, i: 1 };
+        assert!(f.take(usize::MAX).is_err());
+        assert_eq!(f.i, 1);
+        assert_eq!(f.take(2).unwrap(), &[2, 3]);
+        assert!(f.take(1).is_err());
+    }
+    #[test]
+    fn include_txid_and_tx_go_together() {
+        let base = r#"{"height": 1, "hash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048", "path": []"#;
+        assert!(parse_include(format!("{base}}}").as_bytes()).is_ok());
+        let e = parse_include(format!(r#"{base}, "tx": {{}}}}"#).as_bytes()).unwrap_err();
+        assert!(e.contains("tx needs txid"), "{e}");
+        let e = parse_include(format!(r#"{base}, "txid": "00"}}"#).as_bytes()).unwrap_err();
+        assert!(e.contains("txid needs tx"), "{e}");
+    }
 }
