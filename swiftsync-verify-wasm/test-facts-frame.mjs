@@ -22,9 +22,12 @@ check('verifyFacts with the fact and the expected tip', r.verdict !== 'fail' && 
 r = v.verify({ ...base, expect: TIP });
 check('verify with an expected tip (the facts path, no facts)', r.verdict !== 'fail', `${r.verdict} ${r.error ?? ''}`);
 r = v.verify({ ...base, expect: '200:' + '00'.repeat(32) });
-check('a wrong expected tip is refused', r.verdict === 'fail', `${r.verdict}`);
+// the refusal must be the tip comparison itself, not a frame error (the old wasm also gave 'fail', for the wrong reason)
+check('a wrong expected tip is refused, by the tip check', r.verdict === 'fail' && r.facts?.some((f) => !f.ok && /not the proof's tip/.test(f.what)),
+  `${r.verdict} ${JSON.stringify(r.facts ?? r.error)}`);
 const bent = { ...fact, script_pubkey: fact.script_pubkey.replace(/.$/, (c) => (c === '0' ? '1' : '0')) };
 r = v.verifyFacts({ ...base, facts: { tries: [bent] } });
-check('a fact for another script is refused', r.facts?.[0]?.ok === false, `${JSON.stringify(r.facts ?? r.error)}`);
+// on a DEMO chain a fact that HOLDS also reports ok:false, so assert it does not hold
+check('a fact for another script is refused', r.facts?.length === 1 && r.facts[0].ok === false && !holds(r), `${JSON.stringify(r.facts ?? r.error)}`);
 console.log(bad ? `${bad} FAILED` : 'FACTS_FRAME_OK');
 process.exit(bad ? 1 : 0);
