@@ -1,0 +1,22 @@
+# liveness-anon, execute mode (r0vm 3.1.0), 15.11.2026, laptop (Ryzen 7 7730U); real core receipt mainnet 1..200 (8888d59c), Hal's coin f4184fc5...:0 (unspent at 200)
+# commands: liveanon set <rcpt> <b170_0_at200.hex> <depth> ; liveanon key ; liveanon wrong <rcpt> <hex>
+R0VM[292432] STAGE read 291067
+R0VM[330877] STAGE core 38473
+R0VM[339108] STAGE coin 8250
+R0VM[341414] STAGE set 2434
+LIVEANON set depth 0: 367102 user cycles, 1 segment(s), 524288 total cycles (padded to 2^po2), log path 6 hashes
+R0VM[338757] STAGE read 337392
+R0VM[377202] STAGE core 38473
+R0VM[385433] STAGE coin 8250
+R0VM[400532] STAGE set 15078
+LIVEANON set depth 10: 426220 user cycles, 1 segment(s), 524288 total cycles (padded to 2^po2), log path 6 hashes
+R0VM[385067] STAGE read 383702
+R0VM[423512] STAGE core 38473
+R0VM[431743] STAGE coin 8250
+R0VM[459457] STAGE set 27693
+LIVEANON set depth 20: 485145 user cycles, 1 segment(s), 1048576 total cycles (padded to 2^po2), log path 6 hashes
+R0VM[23281] STAGE read 21952
+R0VM[135458] STAGE key 112155
+LIVEANON key work alone: 138008 user cycles, 1 segment(s), 262144 total cycles
+LIVEANON wrong: refused (Guest panicked: the coin is worth less than min_value)
+LIVEANON not-in-set: refused (Guest panicked: the script is not in the set)
