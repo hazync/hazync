@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """A stand-in for bitcoind's JSON-RPC (batched, cookie auth) over REAL mainnet data:
   fake-bitcoind-rpc <port> <cookie file> <headers file "height hex80"> <control.json> <tx fixture>...
-Serves getblockhash, getblockheader (verbose / raw), getrawtransaction <txid> true (blockhash), getblock <hash> 2
-(txid + hex of each transaction, for the blocks the tx fixtures cover: experimental/libzync-bench/headers/tx/*.json).
+Serves getblockhash, getblockheader (verbose / raw), getrawtransaction <txid> true (blockhash, hex) and
+getrawtransaction <txid> false [<blockhash>] (hex), getblock <hash> 1 (the txids; for the blocks the tx fixtures cover:
+experimental/libzync-bench/headers/tx/*.json). getblock <hash> 2 is REFUSED: the service must not need a whole block.
 control.json is re-read on every request: {"tip": <h>, "lie": {"<h>": "<hash>"}} caps the tip and makes getblockhash
-lie at a height (a reorg)."""
-import base64, hashlib, http.server, json, sys
+lie at a height (a reorg); "lie_once": {"<h>": "<hash>"} lies at a height for the FIRST getblockhash of it only (a
+reorg during a fetch: the old branch, then the new one), and "headers": {"<hash>": "<hex80>"} serves extra headers
+(the old branch's); "slow_getblock": <s> makes each getblock take that long. FAKE_LOG=<file>: append each method."""
+import base64, hashlib, http.server, json, os, sys, threading, time
 port, cookie, hdrs, control, fixtures = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 d = lambda b: hashlib.sha256(hashlib.sha256(b).digest()).digest()
 raw = {}
@@ -23,16 +26,28 @@ for f in fixtures:
         b['tx'][0] = (d(cb)[::-1].hex(), t['coinbase'])   # the fixtures' coinbases are legacy (no witness)
         b['branches'] = b.get('branches', {}); b['branches'][t['pos']] = t['branch']
 tx_block = {txid: bh for bh, b in blocks.items() for txid, _ in b['tx'].values()}
+tx_hex = {txid: x for b in blocks.values() for txid, x in b['tx'].values()}
+lied, lied_lock = set(), threading.Lock()
+LOG = os.environ.get('FAKE_LOG')
 
 
 def call(m, p):
     c = json.load(open(control))
     tip, lie = c.get('tip', max(raw)), c.get('lie', {})
+    if LOG:
+        with open(LOG, 'a') as f: f.write(f'{m} {json.dumps(p)}\n')
     if m == 'getblockhash':
         h = int(p[0])
         if h > tip: raise KeyError('Block height out of range')
+        once = c.get('lie_once', {}).get(str(h))
+        if once:
+            with lied_lock:
+                if (h, once) not in lied:
+                    lied.add((h, once)); return once
         return lie.get(str(h), hash_of[h])
     if m == 'getblockheader':
+        if p[0] in c.get('headers', {}):
+            return c['headers'][p[0]] if len(p) > 1 and not p[1] else {'hash': p[0], 'confirmations': -1}
         h = height_of.get(p[0])
         if h is None and p[0] in blocks:   # a fixture block beyond the headers file (block 100,002): on the chain
             b = blocks[p[0]]
@@ -41,14 +56,16 @@ def call(m, p):
         return {'hash': p[0], 'height': h, 'confirmations': tip - h + 1} if (len(p) < 2 or p[1]) else raw[h]
     if m == 'getrawtransaction':
         bh = tx_block.get(p[0])
-        if bh is None: raise KeyError('No such mempool or blockchain transaction')
-        return {'txid': p[0], 'blockhash': bh}
+        if bh is None or (len(p) > 2 and p[2] != bh): raise KeyError('No such mempool or blockchain transaction')
+        return {'txid': p[0], 'blockhash': bh, 'hex': tx_hex[p[0]]} if len(p) > 1 and p[1] else tx_hex[p[0]]
     if m == 'getblock':
+        if c.get('slow_getblock'): time.sleep(c['slow_getblock'])
+        if len(p) < 2 or p[1] != 1: raise KeyError('the fake serves getblock <hash> 1 only (txids)')
         b = blocks[p[0]]
         if len(b['tx']) != b['ntx']:
             # a fixture holds some of a block's transactions: enough for the ones asked about, never a whole block
             raise KeyError('the fake holds only part of this block')
-        return {'hash': p[0], 'tx': [{'txid': b['tx'][i][0], 'hex': b['tx'][i][1]} for i in range(b['ntx'])]}
+        return {'hash': p[0], 'height': b['height'], 'tx': [b['tx'][i][0] for i in range(b['ntx'])]}
     raise KeyError('Method not found')
 
 

@@ -21,9 +21,15 @@ Environment=BIND=159.195.207.224
 Environment=PORT=8902
 Environment=RATE=5
 Environment=BURST=20
+# /tx costs the node a block's txids (getblock <hash> 1): limited harder, per client
+Environment=TX_RATE=0.2
+Environment=TX_BURST=5
 # X-Forwarded-For is believed only from the web box's nginx (per-client rate limit); 127.0.0.1 for local checks
 Environment=TRUSTED_PROXIES=152.53.86.216,127.0.0.1,::1
 ExecStart=/usr/bin/python3 /opt/hazync-headers/bin/hazync-headers-api
+# Restart=on-failure is also how a stale cookie is replaced: LoadCredential copies it only at start, so after
+# AUTH_FAILS (3) syncs in a row answered 401 the service exits 3 and is started again with a fresh copy. One cycle is
+# ~3 x POLL + RestartSec (~100 s), far below the default start limit (5 starts in 10 s).
 Restart=on-failure
 RestartSec=10
 Nice=10

@@ -1,14 +1,37 @@
 #!/usr/bin/env python3
 """MMR paths for the header-chain proof, for the Block check on hazync.org/headers/.
 
-UNTRUSTED BY DESIGN: the browser checks every path it gets from here against the MMR peaks of the proof it has
-just verified (verifyHeaders({..., include})), so a wrong, stale or lying answer is refused there, never believed.
-This service only saves the browser from holding a million block hashes.
+UNTRUSTED BY DESIGN: nothing it says is believed. The browser (or `swiftsync-verify headers`) first verifies the
+header-chain receipts itself, then checks each answer against the MMR peaks those receipts commit to
+(verifyHeaders({..., include}), swiftsync-verify headers.rs):
+  /path  the hash the READER asked about (never this service's `hash`), at the height asked, with this `path`, must
+         climb to the committed peak for that height (the path's length is fixed by the height and the tip), so a
+         wrong, stale or invented path, hash or height is refused;
+  /tx    the same for the transaction's block, and: the 80-byte `header` must hash to that block; the `raw`
+         transaction must parse, must not be 64 bytes, and must hash to the txid the READER asked about (this
+         service's `txid` field is not read); the raw `coinbase` must be a coinbase whose `coinbase_branch` reaches
+         the header's merkle root, which pins the tree's depth; and `branch`, exactly as deep, must lead from the
+         asked txid at `pos` to the same root.
+`leaves`, `mmr_root`, `tip_hash` and `hash` are for display and debugging only; the verifier derives what it needs.
+A lying service can refuse to answer or answer wrongly (the browser then says "refused"); it cannot make a block or a
+transaction look included. This service only saves the browser from holding a million block hashes.
 
 It keeps the MMR of block hashes 0..T in memory, where T is the tip the follower PUBLISHED (the first field of
 $HEADERS_DIR/published, written by hazync-headers-follow after the run verified), not the node's newest block, so a
 path leads to the peaks of the receipts the page reads. The hashes come from the node by batched JSON-RPC and are
 cached in $STATE_DIR/hashes.bin (32 bytes each, internal order); a restart reads the cache and fetches only new ones.
+New hashes are taken only with their headers, linked: each fetched header hashes to its hash and names the one before
+as its previous block, down to the last held hash (a reorg during the fetch would otherwise leave stale hashes in the
+middle for good); a break drops the fetch and fetches again.
+
+/tx needs the node to run with txindex=1 (getrawtransaction <txid> finds a confirmed transaction's block). It costs
+the node getblock <hash> 1 (the txids) and two raw lookups, cached for the last TX_CACHE blocks, on an RPC connection
+of its own: a slow /tx never holds up the sync. It is rate limited harder than /path (TX_RATE, TX_BURST), and at most
+one /tx at a time talks to the node (others wait up to 10 s, then 503).
+
+The node's cookie is read per call; under systemd that is the LoadCredential copy made at start, so a cookie that
+went stale (bitcoind restarted without this unit) is answered 401 for ever. After AUTH_FAILS syncs in a row get 401
+the service exits non-zero, and systemd (Restart=on-failure) starts it again with a fresh copy.
 
 The MMR is the header-chain guest's (hazync repo, prover/zyncapps/methods/headers/src/mmr.rs):
   leaf = SHA256(0x00 || block hash), node = SHA256(0x01 || l || r), root = peaks bagged right to left with
@@ -27,9 +50,10 @@ default; on hazync-proof its own address, firewalled to the web box: README.md).
 
 Environment: BIND (127.0.0.1), PORT (8902), HEADERS_DIR (/var/lib/hazync-headers), STATE_DIR (/var/lib/hazync-headers-api),
 RPC_URL (http://127.0.0.1:8332/), RPC_COOKIE (the node's .cookie; under systemd, $CREDENTIALS_DIRECTORY/cookie),
-POLL (30 s), RATE (requests per second per client, 5), BURST (20), TRUSTED_PROXIES (127.0.0.1,::1).
+POLL (30 s), RATE (requests per second per client, 5), BURST (20), TX_RATE (/tx per second per client, 0.2), TX_BURST
+(5), TX_CACHE (blocks, 16), AUTH_FAILS (3), TRUSTED_PROXIES (127.0.0.1,::1).
 """
-import base64, hashlib, http.client, http.server, json, os, re, sys, threading, time, urllib.parse
+import base64, collections, hashlib, http.client, http.server, json, os, re, sys, threading, time, urllib.parse
 
 env = os.environ.get
 BIND, PORT = env('BIND', '127.0.0.1'), int(env('PORT', '8902'))
@@ -39,6 +63,8 @@ RPC_URL = urllib.parse.urlsplit(env('RPC_URL', 'http://127.0.0.1:8332/'))
 _cred = env('CREDENTIALS_DIRECTORY')
 RPC_COOKIE = env('RPC_COOKIE', os.path.join(_cred, 'cookie') if _cred else '/var/lib/bitcoind/.cookie')
 POLL, RATE, BURST = float(env('POLL', '30')), float(env('RATE', '5')), float(env('BURST', '20'))
+TX_RATE, TX_BURST, TX_CACHE = float(env('TX_RATE', '0.2')), float(env('TX_BURST', '5')), int(env('TX_CACHE', '16'))
+AUTH_FAILS = int(env('AUTH_FAILS', '3'))
 TRUSTED = set(env('TRUSTED_PROXIES', '127.0.0.1,::1').split(','))
 BATCH = 2000
 
@@ -136,23 +162,41 @@ def disp(b):
     return b[::-1].hex()
 
 
+class AuthError(RuntimeError):
+    """The node refused the cookie (HTTP 401)."""
+
+
+class Busy(RuntimeError):
+    """Another caller held this connection's lock too long."""
+
+
 class RPC:
-    def __init__(self):
+    """One serialised JSON-RPC connection to the node. The sync and /tx each have their own, so a slow /tx (a big
+    block) never holds up the sync; `wait` bounds how long a caller queues for the lock (None: as long as it takes)."""
+
+    def __init__(self, timeout=120, wait=None):
         self.lock = threading.Lock()
+        self.timeout, self.wait = timeout, wait
 
     def call(self, calls):
         """A JSON-RPC batch; raises on any error. The cookie is read per call (it changes when bitcoind restarts)."""
         with open(RPC_COOKIE, 'rb') as f:
             auth = base64.b64encode(f.read().strip()).decode()
         body = json.dumps([{'jsonrpc': '1.0', 'id': i, 'method': m, 'params': p} for i, (m, p) in enumerate(calls)])
-        with self.lock:
-            c = http.client.HTTPConnection(RPC_URL.hostname, RPC_URL.port or 8332, timeout=120)
+        if not self.lock.acquire(timeout=-1 if self.wait is None else self.wait):
+            raise Busy('the node is busy with another request')
+        try:
+            c = http.client.HTTPConnection(RPC_URL.hostname, RPC_URL.port or 8332, timeout=self.timeout)
             try:
                 c.request('POST', RPC_URL.path or '/', body, {'Authorization': 'Basic ' + auth, 'Content-Type': 'application/json'})
                 r = c.getresponse()
                 data = r.read()
             finally:
                 c.close()
+        finally:
+            self.lock.release()
+        if r.status == 401:
+            raise AuthError('rpc: HTTP 401 (the node refused the cookie)')
         if r.status not in (200, 500):
             raise RuntimeError(f'rpc: HTTP {r.status}')
         out = sorted(json.loads(data), key=lambda x: x['id'])
@@ -172,7 +216,11 @@ class RPC:
 class State:
     def __init__(self):
         self.mmr = MMR()
-        self.rpc = RPC()
+        self.rpc = RPC()                          # the sync's
+        self.rpc_tx = RPC(timeout=20, wait=10)    # /tx's: never the sync's lock
+        self.blocks = collections.OrderedDict()   # block hash -> (height, raw header, txids, raw coinbase): an LRU
+        self.blocks_lock = threading.Lock()
+        self.auth_fails = 0
         self.lock = threading.RLock()
         self.tip = -1            # the published tip the MMR is at
         self.tip_hash = None
@@ -201,12 +249,27 @@ class State:
             f.write(self.mmr.hashes)
         os.replace(tmp, self.cache)
 
-    def fetch(self, lo, hi):
-        """Node hashes lo..hi (inclusive), internal order."""
+    def fetch(self, lo, hi, prev):
+        """Node hashes lo..hi (inclusive), internal order, LINKED: each comes with its 80-byte header, which must hash
+        to it and name the hash before it (`prev`, the held hash lo - 1, for the first; none below genesis). A reorg
+        while the batches are fetched shows as a break in that chain: None, and the caller fetches again. Without
+        it a reorg mid-fetch could leave old-branch hashes in the middle for good, under a correct top."""
         out = []
         for s in range(lo, hi + 1, BATCH):
-            res = self.rpc.ok([('getblockhash', [h]) for h in range(s, min(s + BATCH, hi + 1))])
-            out += [bytes.fromhex(x)[::-1] for x in res]
+            hs = self.rpc.ok([('getblockhash', [h]) for h in range(s, min(s + BATCH, hi + 1))])
+            try:
+                raws = self.rpc.ok([('getblockheader', [x, False]) for x in hs])
+            except AuthError:
+                raise
+            except RuntimeError:   # a hash the node no longer knows: it moved under us
+                return None
+            for x, r in zip(hs, raws):
+                b = bytes.fromhex(x)[::-1]
+                hdr = bytes.fromhex(r)
+                if len(hdr) != 80 or dsha(hdr) != b or (prev is not None and hdr[4:36] != prev):
+                    return None
+                out.append(b)
+                prev = b
         return out
 
     def sync(self):
@@ -222,7 +285,18 @@ class State:
         # where the held hashes stop agreeing with the node: check the top, step back on a mismatch
         while n > 0 and disp(self.mmr.hash(n - 1)) != self.rpc.one('getblockhash', n - 1):
             n = max(0, n - 100)
-        fresh = self.fetch(n, t) if n <= t else []
+        fresh = []
+        if n <= t:
+            for attempt in range(3):
+                fresh = self.fetch(n, t, self.mmr.hash(n - 1) if n > 0 else None)
+                if fresh is not None:
+                    break
+                log(f'the node\'s chain moved during the fetch of {n}..{t} (a reorg): fetching again')
+                # the held top may be on the old branch too: step back to where the node agrees again
+                while n > 0 and disp(self.mmr.hash(n - 1)) != self.rpc.one('getblockhash', n - 1):
+                    n = max(0, n - 100)
+            else:
+                raise RuntimeError(f'the node\'s chain kept moving during the fetch of {n}..{t}: trying again later')
         with self.lock:
             if n < len(self.mmr):
                 log(f'dropping {len(self.mmr) - n} held hashes above {n - 1} (a reorg, or a lower published tip)')
@@ -241,14 +315,28 @@ class State:
     def mmr_root(self, n):
         return bag(self.mmr.peaks(n))
 
+    def sync_once(self):
+        """One sync; an error is kept for /status. AUTH_FAILS 401s in a row: exit non-zero, for systemd to restart
+        the unit with a fresh copy of the cookie (LoadCredential copies it only at start)."""
+        try:
+            self.sync()
+            self.auth_fails = 0
+        except AuthError as e:
+            self.auth_fails += 1
+            self.error = str(e)
+            log('sync:', e, f'({self.auth_fails} in a row)')
+            if self.auth_fails >= AUTH_FAILS:
+                log(f'the node refused the cookie {self.auth_fails} times in a row: exiting for a restart with a fresh one')
+                os._exit(3)
+        except Exception as e:  # keep serving the last good tip; /status shows the error
+            self.auth_fails = 0
+            self.error = str(e)
+            log('sync:', e)
+
     def loop(self):
         while True:
-            try:
-                self.sync()
-            except Exception as e:  # keep serving the last good tip; /status shows the error
-                self.error = str(e)
-                log('sync:', e)
             time.sleep(POLL)
+            self.sync_once()
 
     # ---- answers -------------------------------------------------------------------------------------------
     def answer_path(self, h, tip):
@@ -264,29 +352,49 @@ class State:
             return 200, {'height': h, 'hash': disp(self.mmr.hash(h)), 'tip': t, 'tip_hash': disp(self.mmr.hash(t)),
                          'leaves': n, 'path': [p.hex() for p in self.mmr.path(h, n)], 'mmr_root': self.mmr_root(n).hex()}
 
+    def block(self, bh):
+        """(height, raw header hex, txids as hex, raw coinbase hex) of block bh, from the LRU or the node: getblock
+        <hash> 1 (txids only; verbosity 2 would send every transaction of the block), the raw header, and the raw
+        coinbase by its block (no txindex needed for that one). All of it is fixed by the block hash, so a cached
+        entry never goes stale; whether the block is on the held chain is checked per answer (answer_tx)."""
+        with self.blocks_lock:
+            if bh in self.blocks:
+                self.blocks.move_to_end(bh)
+                return self.blocks[bh]
+        blk, raw = self.rpc_tx.ok([('getblock', [bh, 1]), ('getblockheader', [bh, False])])
+        cb = self.rpc_tx.ok([('getrawtransaction', [blk['tx'][0], False, bh])])[0]
+        out = (blk['height'], raw, list(blk['tx']), cb)
+        with self.blocks_lock:
+            self.blocks[bh] = out
+            while len(self.blocks) > TX_CACHE:
+                self.blocks.popitem(last=False)
+        return out
+
     def answer_tx(self, txid, tip):
         try:
-            tx = self.rpc.one('getrawtransaction', txid, True)
+            tx = self.rpc_tx.one('getrawtransaction', txid, True)
+        except (AuthError, Busy):
+            raise
         except Exception:
-            return 404, {'error': f'transaction {txid} is not known to the node (or is unconfirmed)'}
+            return 404, {'error': f'transaction {txid} is not known to the node (or is unconfirmed; the node needs txindex=1)'}
         bh = tx.get('blockhash')
         if not bh:
             return 404, {'error': f'transaction {txid} is not in a block'}
-        hdr, blk, raw = self.rpc.ok([('getblockheader', [bh, True]), ('getblock', [bh, 2]), ('getblockheader', [bh, False])])
-        if hdr.get('confirmations', -1) < 1:
-            return 404, {'error': f'transaction {txid} is in block {bh}, which is not on the node\'s chain'}
-        ids = [t['txid'] for t in blk['tx']]
-        txids = [bytes.fromhex(x)[::-1] for x in ids]
+        height, raw, ids, coinbase = self.block(bh)
+        if txid not in ids:
+            return 502, {'error': f'the node puts transaction {txid} in block {bh}, which does not hold it'}
         pos = ids.index(txid)
-        code, ans = self.answer_path(hdr['height'], tip)
+        # on the held chain (which ends on the published tip): the hash held at that height IS this block
+        code, ans = self.answer_path(height, tip)
         if code != 200:
             return code, ans
         if ans['hash'] != bh:
-            return 409, {'error': f'block {bh} is not the held block at {hdr["height"]}'}
+            return 409, {'error': f'block {bh} is not the held block at {height}'}
+        txids = [bytes.fromhex(x)[::-1] for x in ids]
         # the raw transaction and the raw coinbase with its branch: the coinbase pins the tree's depth, so the verifier can
         # refuse an inner merkle node presented as a transaction (swiftsync-verify headers.rs, verify_tx_in_header)
-        return 200, {**ans, 'txid': txid, 'pos': pos, 'header': raw, 'raw': blk['tx'][pos]['hex'],
-                     'branch': [disp(b) for b in merkle_branch(txids, pos)], 'coinbase': blk['tx'][0]['hex'],
+        return 200, {**ans, 'txid': txid, 'pos': pos, 'header': raw, 'raw': tx['hex'],
+                     'branch': [disp(b) for b in merkle_branch(txids, pos)], 'coinbase': coinbase,
                      'coinbase_branch': [disp(b) for b in merkle_branch(txids, 0)]}
 
 
@@ -302,16 +410,17 @@ def merkle_branch(txids, pos):
 
 
 class Bucket:
-    def __init__(self):
+    def __init__(self, rate, burst):
         self.lock, self.b = threading.Lock(), {}
+        self.rate, self.burst = rate, burst
 
     def take(self, key):
         now = time.monotonic()
         with self.lock:
             if len(self.b) > 10000:
                 self.b = {k: v for k, v in self.b.items() if now - v[1] < 60}
-            tok, last = self.b.get(key, (BURST, now))
-            tok = min(BURST, tok + (now - last) * RATE)
+            tok, last = self.b.get(key, (self.burst, now))
+            tok = min(self.burst, tok + (now - last) * self.rate)
             if tok < 1:
                 self.b[key] = (tok, now)
                 return False
@@ -319,7 +428,7 @@ class Bucket:
             return True
 
 
-STATE, BUCKET = State(), Bucket()
+STATE, BUCKET, TX_BUCKET = State(), Bucket(RATE, BURST), Bucket(TX_RATE, TX_BURST)
 HEIGHT, HEX64 = re.compile(r'^[0-9]{1,9}$'), re.compile(r'^[0-9a-fA-F]{64}$')
 
 
@@ -367,7 +476,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if route == 'tx':
                 if not HEX64.match(q.get('txid', '')):
                     return self.send(400, {'error': 'txid: 64 hex characters'})
-                return self.send(*STATE.answer_tx(q['txid'].lower(), tip))
+                # each /tx costs the node a block's txids: limited harder than /path
+                if not TX_BUCKET.take(self.client()):
+                    return self.send(429, {'error': 'too many transaction requests'})
+                try:
+                    return self.send(*STATE.answer_tx(q['txid'].lower(), tip))
+                except Busy as e:
+                    return self.send(503, {'error': str(e)})
             if route == 'status':
                 with STATE.lock:
                     n = STATE.tip + 1
@@ -392,10 +507,7 @@ class Server(http.server.ThreadingHTTPServer):
 
 def main():
     STATE.load_cache()
-    try:
-        STATE.sync()
-    except Exception as e:
-        log('first sync:', e)
+    STATE.sync_once()
     threading.Thread(target=STATE.loop, daemon=True).start()
     srv = Server((BIND, PORT), Handler)
     log(f'listening on {BIND}:{PORT}')
