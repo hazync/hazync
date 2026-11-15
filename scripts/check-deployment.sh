@@ -187,6 +187,57 @@ else
     if [ -z "$newest" ]; then skip "no leaf bundles in ${LV:-the libzync coordinator HAZYNC_BRIDGE_OUT} — leaf format NOT checked"
     elif [ "$(head -c 8 "$newest")" = LZLEAF02 ]; then ok "newest leaf bundle $(basename "$newest") is LZLEAF02"
     else bad "$(basename "$newest") is not an LZLEAF02 leaf bundle — the board pass is emitting a stale format"; fi
+    # The image ids the installed units PIN. On 11-12 the new hosts said 8888d59c while the installed check-spine and
+    # offsite units still named 863c9ce3 (SWITCH.md 4c, d): the spine check judged against the old image, and the
+    # offsite copy files receipts under proofs-<its pin>/, append-only. Each pin must be the published image.
+    for unit in hazync-lz-check-spine.service hazync-lz-offsite-proofs.service hazync-lz-offsite-proofs-b2.service \
+                hazync-lz-offsite-spine.service hazync-lz-offsite-spine-b2.service; do
+        if ! systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q .; then
+            printf '  note %s is not installed\n' "$unit"; continue
+        fi
+        pins=$( { systemctl show "$unit" -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^HAZYNC_METHOD_ID=//p'
+                  systemctl show "$unit" -p ExecStart --value 2>/dev/null | grep -oE -- '--method-id [0-9a-f]{64}' | cut -d' ' -f2
+                } | sort -u | tr '\n' ' ' | sed 's/ $//')
+        if [ -z "$pins" ]; then printf '  note %s pins no image id\n' "$unit"
+        elif [ "$pins" = "$LZ" ]; then ok "$unit pins the published image (${LZ:0:8}…)"
+        else bad "$unit pins $pins — NOT the published libzync image (${LZ:0:8}…): reinstall it from coordinator/deploy/libzync/"; fi
+    done
+    # The zyncAPP follower preps the facts zync-serve publishes with its OWN host (ZAPP_HOST, else $ZAPP_ROOT/bin/host).
+    # A host of another image writes history for another block forest (from v0.26.0 the leaves commit undo hashes), so
+    # the page would refuse the facts against the board's proof.
+    if systemctl list-unit-files hazync-lz-zapp-follow.service --no-legend 2>/dev/null | grep -q .; then
+        zenv=$(systemctl show hazync-lz-zapp-follow.service -p Environment --value 2>/dev/null | tr ' ' '\n')
+        zh=$(sed -n 's/^ZAPP_HOST=//p' <<<"$zenv" | tail -1)
+        zr=$(sed -n 's/^ZAPP_ROOT=//p' <<<"$zenv" | tail -1)
+        [ -z "$zh" ] && zh="${zr:-/srv/bulk/libzync-zapp}/bin/host"
+        if [ ! -x "$zh" ]; then bad "hazync-lz-zapp-follow: no host at $zh (ZAPP_HOST, else \$ZAPP_ROOT/bin/host)"
+        else
+            zid=$("$zh" method-id 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)
+            [ "$zid" = "$LZ" ] && ok "hazync-lz-zapp-follow -> $zh is the published libzync image (${LZ:0:8}…)" \
+                               || bad "hazync-lz-zapp-follow runs $zh with guest ${zid:-unknown} — NOT the published libzync image (${LZ:0:8}…)"
+        fi
+    else
+        printf '  note hazync-lz-zapp-follow is not installed\n'
+    fi
+    # LZ_HANDOVER_AT=H with a host that does not pin a handover at H is the "pre" era: claims stop below H (HANDOVER.md
+    # §5). That is right only while the next image is on its way; a board left in it stops at H-1 for good, with every
+    # unit healthy. 2026-11-14/15: zz-handover.conf (H=2000) held the board at frontier 1,999 for a day.
+    cenv=$(systemctl show hazync-lz-coordinator.service -p Environment --value 2>/dev/null | tr ' ' '\n')
+    ho=$(sed -n 's/^LZ_HANDOVER_AT=//p' <<<"$cenv" | tail -1)
+    if [ -n "$ho" ] && [ "$ho" != 0 ]; then
+        cport=$(sed -n 's/^COORD_PORT=//p' <<<"$cenv" | tail -1)
+        hm=$(curl -s --max-time 15 "http://127.0.0.1:${cport:-8899}/api/meta" 2>/dev/null | python3 -c '
+import json, sys
+try: m = json.load(sys.stdin)
+except ValueError: sys.exit(0)
+h = m.get("handover") or {}
+print(h.get("era") or "none", m.get("frontier") if isinstance(m.get("frontier"), int) else "")' 2>/dev/null)
+        era=${hm%% *}; fr=${hm#* }
+        printf '  note hazync-lz-coordinator: LZ_HANDOVER_AT=%s, era %s, frontier %s\n' "$ho" "${era:-unknown}" "${fr:-unknown}"
+        if [ "$era" = pre ] && [ -n "$fr" ] && [ "$fr" -ge $((ho - 1)) ]; then
+            bad "the board is capped at $fr by LZ_HANDOVER_AT=$ho (era pre): deploy the next image's host, or remove the drop-in if no handover is planned"
+        fi
+    fi
 fi
 
 echo
