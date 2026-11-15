@@ -8,9 +8,11 @@ Shielded CSV is Jonas Nick, Liam Eagen and Robin Linus's protocol. This zAPP add
 product on a Hazync chain proof: *"after block H of the chain that the core receipt proves valid from genesis, the
 Shielded CSV nullifier accumulator has value v_H"*, so a light client can hold v_H without scanning blocks.
 
-**What I read.** The paper as the authors' GitHub release `shieldedcsv.pdf` (ShieldedCSV/ShieldedCSV, release
-`2024-09-20`, 32 pages, dated 20.09.2024; the ePrint 2025/068 PDF sits behind a browser challenge I could not pass from
-here, so section and page numbers below are the whitepaper's and need checking against the ePrint version); the
+**What I read.** The paper, IACR ePrint 2025/068 (32 pages, dated 20.09.2024). The ePrint PDF is byte-identical to
+the authors' GitHub release `shieldedcsv.pdf` (ShieldedCSV/ShieldedCSV, release `2024-09-20`): both have SHA-256
+`889acc42…37a6a96a`, 936,772 bytes, and the same PDF creation date (20.09.2024 15:44:58 UTC). So the ePrint changes
+nothing, and every section and page number below is the ePrint's and the whitepaper's alike; the slips listed in §1
+are in the ePrint as published. The
 pseudocode repository (ShieldedCSV/ShieldedCSV `main` `3a1c603b`, `src/node.rs`, `src/lib.rs`, `src/primitives.rs`;
 the `paper` branch differs only in the README); the bitcoindev thread (24.09.2024 onwards) and Jonas Nick's reply of
 26.09.2024 on light clients; Argo (idealgroup/argo `aa28ba8`, code only, not the ePrint 2026/2165 text); and, as a
@@ -292,6 +294,8 @@ and still holds for them. A bridge is the case where a wrap is needed at all.
 
 ## 6. Questions for the Shielded CSV authors
 
+0. **Is there a later specification** than ePrint 2025/068, which is the 20.09.2024 text unchanged? Questions 1-4 are
+   about what that text leaves open.
 1. **Carrier**: where is an aggregate nullifier in a Bitcoin transaction (OP_RETURN, witness, annex), how is it
    recognised, and what is its exact serialisation (R_i encoding, publisher address, several per transaction)?
 2. **Start height**: from which block does the canonical accumulator begin, and does every block (empty ones too)
@@ -301,9 +305,8 @@ and still holds for them. A bridge is the case where a wrap is needed at all.
 4. **Hashes and trees**: HSig (BIP-340's challenge?), HSigComm, the half-aggregation coefficients (the half-aggregation
    BIP draft?), the Merkle trees and the encodings of elements and `(i, v0, v1)`, and the location format (21 + 22 bits
    or 24 + 24).
-5. **Is the ePrint version different** from the 20.09.2024 whitepaper in any of the above?
-6. **Light client**: is "v_H at a proven H plus IsPrefix proofs from senders" what you had in mind for receiving, and is
+5. **Light client**: is "v_H at a proven H plus IsPrefix proofs from senders" what you had in mind for receiving, and is
    a full-validation binding wanted, or is proof of work enough for you (§3)?
-7. **Sending**: would per-block element files checked against v_H be acceptable, given what fetching one block reveals?
-8. **Bridge**: would a BitVM bridge want this statement on its own, or only combined with the PCD coin proof, and in
+6. **Sending**: would per-block element files checked against v_H be acceptable, given what fetching one block reveals?
+7. **Bridge**: would a BitVM bridge want this statement on its own, or only combined with the PCD coin proof, and in
    which proof system?
