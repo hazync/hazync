@@ -156,7 +156,7 @@ wrap: no trusted setup, nodes verify with our library, CLI, WASM or C ABI). Serv
 - Host: `zyncapp hints-prove <block dir> <H> <core receipt> <out> [--format 1|2]` replays blocks 1..T natively from
   the block files (`fetch_block_rpc.py`), checks its block forest against the core state, writes the file and the undo
   file, runs the same derivation natively, then proves; the guest's statement must equal the native one.
-- CLI: `zapp-hints [--expect <H>:<hash>] [--expect-tip <T>:<hash>] [--undo <file>] <receipt> <file>` (and
+- CLI: `zapp-hints [--expect <H>:<hash> | --mempool | --bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--undo <file>] <receipt> <file>` (and
   `zyncapp hints-verify`, the same library call); exit 0 OK, 2 DEMO, 1 FAIL.
 - WASM `verify_hints` / JS `verifyHints({receipt, file, undo, expect})` (the file is hashed on the device); C ABI
   `swiftsync_verify_hints` (zapps/hints/ffi, include/zapp_hints.h) for a node patch to call before `-utxohints`. One implementation,

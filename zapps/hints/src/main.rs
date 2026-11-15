@@ -3,11 +3,12 @@
 //! the flags, verdict lines and exit codes are unchanged.
 
 use std::process::exit;
-use swiftsync_verify::Verdict;
+use swiftsync_verify::{Verdict, PROFILE_SIGNET};
+use zapp_common::{Identity, IDENTITY_USAGE};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-hints [--image <hex>] [--core-image <hex>] [--expect <H>:<hash>] [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] <receipt> <hints file>");
+    eprintln!("usage: zapp-hints [--image <hex>] [--core-image <hex>] {IDENTITY_USAGE} [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] <receipt> <hints file>");
     exit(1);
 }
 
@@ -33,20 +34,21 @@ fn main() {
 
 /// `zapp-hints [--image <hex>] [--core-image <hex>] [--expect <H>:<hash>] [--expect-tip <T>:<hash>]
 /// [--undo <file>] [--now <unix seconds>] <receipt> <hints file>`: the SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md).
-/// `--expect` is block H from YOUR node's header chain. Exit 0 OK, 2 DEMO (below minimum work or the checkpoint, or the
+/// `--expect` is block H from YOUR node's header chain; `--mempool` / `--bitcoin-cli` (zapp-common, every zAPP CLI's
+/// chain-identity flags) are asked for block H, and for the core tip when it is above H and no `--expect-tip` is given. Exit 0 OK, 2 DEMO (below minimum work or the checkpoint, or the
 /// block at H / the core tip not compared), 1 FAIL.
 fn run(a: Vec<String>) -> ! {
-    let (mut image, mut core, mut expect, mut expect_tip, mut undo, mut now, mut files) =
-        (zapp_hints::HINTS_IMAGE_ID.to_string(), None, None, None, None, None, Vec::new());
+    let (mut image, mut core, mut id, mut expect_tip, mut undo, mut now, mut files) =
+        (zapp_hints::HINTS_IMAGE_ID.to_string(), None, Identity::default(), None, None, None, Vec::new());
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
             "--image" => image = it.next().unwrap_or_else(|| usage()),
             "--core-image" => core = Some(it.next().unwrap_or_else(|| usage())),
-            "--expect" => expect = Some(it.next().unwrap_or_else(|| usage())),
             "--expect-tip" => expect_tip = Some(it.next().unwrap_or_else(|| usage())),
             "--undo" => undo = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
+            f if id.take(f, &mut || it.next()).unwrap_or_else(|e| fail(&e)) => {}
             f if f.starts_with("--") => fail(&format!("unknown flag {}", esc(f))),
             f => files.push(f.to_string()),
         }
@@ -61,9 +63,28 @@ fn run(a: Vec<String>) -> ! {
         let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
         (h.parse::<u32>().unwrap_or_else(|_| fail("--expect: bad height")), x.to_string())
     });
+    // chain identity (zapp-common): --mempool / --bitcoin-cli are asked for block H (and for the core tip when it is
+    // above H and no --expect-tip is given), which the receipt names, and their answers are checked as --expect is
+    let (mut expect, mut extra) = (id.expect.clone(), Vec::new());
+    if id.needs_lookup() {
+        let pre = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, core.as_deref(), now, None, None);
+        if let Some(z) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
+            let net = if z.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
+            let (x, c) = zapp_common::expect_at(&id, net, z.height);
+            expect = x;
+            extra.extend(c);
+            if z.core_height > z.height && expect_tip.is_none() {
+                let (x, c) = zapp_common::expect_at(&Identity { expect: None, ..id.clone() }, net, z.core_height);
+                expect_tip = x;
+                extra.extend(c);
+            }
+        }
+    }
     let (e1, e2) = (pe(&expect), pe(&expect_tip));
-    let rep = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, core.as_deref(), now,
+    let mut rep = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, core.as_deref(), now,
                                                     e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
+    if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; }
+    rep.checks.splice(0..0, extra);
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
     match (&rep.verdict, &rep.statement) {
         (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
@@ -72,7 +93,7 @@ fn run(a: Vec<String>) -> ! {
             let what = format!("{} is the hints file (format {}) for block {} {h}: {} outputs indexed, {} unspent ({} sat)",
                                esc(&files[1]), z.format, z.height, z.n_counted, z.n_unspent, z.unspent_value);
             if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
-            let why = if !rep.identity_checked { "block H not compared with your header chain (--expect)" } else { "the core chain is below Core's minimum work or the checkpoint, or its tip was not compared (--expect-tip)" };
+            let why = if !rep.identity_checked { "block H not compared with your header chain (--expect, --mempool or --bitcoin-cli)" } else { "the core chain is below Core's minimum work or the checkpoint, or its tip was not compared (--expect-tip)" };
             println!("SWIFTSYNC_VERIFY_DEMO: {what} -- but {why}"); exit(2)
         }
     }

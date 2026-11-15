@@ -17,6 +17,14 @@ tiny=$(mktemp); trap 'rm -f "$tiny"' EXIT
 printf 'UTXO\0\377\377\377\377' > "$tiny"
 set +e; "$T/release/zapp-hints" --expect 3:$H3 $V/mainnet-3.receipt "$tiny"; e=$?; set -e
 [ $e = 1 ] || { echo "::error::a 9-byte file claiming H = 2^32 - 1: exit $e, want 1"; exit 1; }
+# the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names block 3 as the
+# proof does (DEMO: valid, below minimum work), one that names another block (FAIL)
+printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\nexit 0\n' $H3 > "$T/node"; chmod +x "$T/node"
+printf '#!/bin/sh\necho %064d\n' 1 > "$T/badnode"; chmod +x "$T/badnode"
+set +e; "$T/release/zapp-hints" --bitcoin-cli "$T/node" $V/mainnet-3.receipt $V/mainnet-3.hints > "$T/id.out"; e=$?; set -e
+[ $e = 2 ] && grep -q "your node's block 3 is $H3" "$T/id.out" || { cat "$T/id.out"; echo "::error::--bitcoin-cli, an agreeing node: exit $e, want 2"; exit 1; }
+set +e; "$T/release/zapp-hints" --bitcoin-cli "$T/badnode" $V/mainnet-3.receipt $V/mainnet-3.hints > "$T/id.out"; e=$?; set -e
+[ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node naming another block: exit $e, want 1"; exit 1; }
 cargo build --release --manifest-path ./ffi/Cargo.toml
 (cd ffi && cc -O2 -Iinclude test_hints.c "$FT/release/libzapp_hints_ffi.a" -lpthread -ldl -lm -o "$T/htest" && "$T/htest" "$V" $H3)
 ./wasm/build.sh
