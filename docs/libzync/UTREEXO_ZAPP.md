@@ -195,7 +195,7 @@ used as a library), `max_time <= now + 7200`; OK additionally needs **block H fr
 
 ## 6. Distribution (proposal)
 
-One file per (network, H): the final run's succinct receipt (~225 kB, as the hints receipts), plus the
+One file per (network, H): the final run's succinct receipt (225 kB at H = 3, §8), plus the
 `AssumeUtreexoValue` it proves, printed by `zapp-utreexo verify --floresta`. A node (or its packager) checks the receipt
 with the CLI, the WASM or a future Floresta-side verifier, and compares block H with its own headers. Heights: any H <= the
 core tip is valid, because each is proved; which ones to publish is the Floresta question Q2.
@@ -229,7 +229,7 @@ the overhead: 100,000 in 4 runs 5,272,138,959 against the profiled single run's 
 - An Empty add costs no hash. Parent hashes ≈ live leaves (71,884 for 71,890).
 - The rest (100,000: 2,344,802,000 cycles, the block walk, coin log and block forest) is close to the hints zAPP's whole
   run at the same H (2,389,822,475, HINTS_ZAPP.md §10), as expected: the same walk.
-- Real CPU proofs: §8.
+- Real CPU proofs (H = 2, 3): §8.
 
 **Modern blocks** (`zyncapp utreexo-count`, measured counts, not cycles): adds per block and leaf SHA-512 blocks if every
 add were live: 741,000: 387 / 406; 900,000: 2,571 / 3,170; 930,000: 9,353 / 10,020; 950,000: 1,213 / 1,295; 962,000:
@@ -265,7 +265,16 @@ in the hints zAPP).
   receipt to resolve), an assumevalid core; between runs, a flipped state byte and another image id for the previous
   run; with T = 10,000 for H = 1,999, a flipped leaf above H. 15 of 15 refused.
 - Unit tests of `libzync::utreexo_roots` (4).
-- Real CPU proofs and the checker: see the commit that adds `zapps/utreexo/vectors` (filled in below when run).
+- **Real CPU proofs** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, the shared box; the core receipts are
+  the published host's `46666b6f` proofs of mainnet 1..3 that the hints zAPP used): H = 3 in one run 149.5 s (225,514
+  bytes); H = 3 in two runs (1..2, then 3, the second verifying the first in the zkVM) 75.0 + 167.4 s; H = 2 under
+  T = 3 150.7 s. Roots: after 3, `5fcbe4f3…`, `1fb4d2cf…` (3 leaves), equal to `utreexo-ref`; one run and two runs give
+  the same statement roots. Blocks 1..3 have no spends: the spend, same-block and BIP30 paths are covered by the
+  executions above, not by a proof.
+- **The checker** (`zapps/utreexo`): `cargo test` 2/2 on those receipts (DEMO as expected below minimum work; refused: H
+  or block hash not the node's, another image id, H = 2 with a wrong core tip); `zapp-utreexo verify` prints the
+  `AssumeUtreexoValue`; the WASM build (`wasm/`, sha256 `48470907…`, reproduced by a second build) passes the same 6
+  cases in node.
 
 ## 9. Questions for the Floresta developers (the owner sends these)
 
