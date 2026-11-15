@@ -46,8 +46,8 @@ impl HeaderState {
         HeaderState { height: -1, hash: [0; 32], work: [0; 32], bits: 0, time: 0, epoch_first_time: 0,
                       recent_times: Vec::new(), max_time: 0, mmr_peaks: Vec::new() }
     }
-    /// The MMR's leaf count: blocks 0..=height.
-    pub fn leaves(&self) -> u64 { (self.height + 1).max(0) as u64 }
+    /// The MMR's leaf count: blocks 0..=height (0 below genesis). In u64, so even height i64::MAX does not overflow.
+    pub fn leaves(&self) -> u64 { if self.height < 0 { 0 } else { self.height as u64 + 1 } }
     /// The MMR root: the committed peaks bagged right to left (crate::mmr::root). Pair it with the height.
     pub fn mmr_root(&self) -> [u8; 32] { crate::mmr::root(&self.mmr_peaks) }
     pub fn mmr_root_hex(&self) -> String { self.mmr_root().iter().map(|b| format!("{b:02x}")).collect() }
@@ -66,7 +66,29 @@ pub struct HeadersReport {
     /// The state the last run ended in, when every receipt decoded.
     pub state: Option<HeaderState>,
     pub verdict: Verdict,
+    /// What an `include` showed, set only when NO check failed (verdict Ok or Demo: read it with the verdict): the
+    /// block's height and hash, and the txid of the transaction found in it. The txid is the one the CALLER asked about
+    /// (TxInclusion::txid) and the raw transaction hashed to it; nothing here comes from the path service's word.
+    pub included: Option<Included>,
 }
+
+/// A block (and optionally a transaction in it) shown to be on the verified chain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Included {
+    pub height: i64,
+    /// internal byte order
+    pub hash: [u8; 32],
+    /// internal byte order
+    pub txid: Option<[u8; 32]>,
+}
+
+impl Included {
+    pub fn hash_hex(&self) -> String { disp(&self.hash) }
+    pub fn txid_hex(&self) -> Option<String> { self.txid.as_ref().map(disp) }
+}
+
+/// A hash as explorers print it (reversed, hex).
+fn disp(b: &[u8; 32]) -> String { b.iter().rev().map(|x| format!("{x:02x}")).collect() }
 
 impl HeadersReport {
     fn check(&mut self, ok: bool, what: impl Into<String>) -> bool { self.checks.push((ok, what.into())); ok }
@@ -80,7 +102,7 @@ impl HeadersReport {
 /// run's MMR peaks; a failed inclusion is a failed check (verdict `Fail`).
 pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Option<(i64, &str)>,
                       include: Option<&Inclusion>) -> HeadersReport {
-    let mut rep = HeadersReport { checks: Vec::new(), state: None, verdict: Verdict::Fail };
+    let mut rep = HeadersReport { checks: Vec::new(), state: None, verdict: Verdict::Fail, included: None };
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the headers image id is 32 bytes of hex ({image_hex})"));
         return rep;
@@ -99,10 +121,16 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
             Ok(r) => r,
             Err(e) => { rep.check(false, format!("receipt {n} decodes ({e})")); return rep; }
         };
-        rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), format!("receipt {n} is a real proof"));
+        if !rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), format!("receipt {n} is a real proof")) {
+            return rep;
+        }
+        // An unverified journal is not read at all: nothing in it is known, and its numbers (a height of i64::MAX)
+        // must not reach the arithmetic below.
         let v = r.verify(image);
-        rep.check(v.is_ok(), format!("receipt {n} verifies against the headers image {image_hex}{}",
-                                     v.err().map(|e| format!(": {e}")).unwrap_or_default()));
+        if !rep.check(v.is_ok(), format!("receipt {n} verifies against the headers image {image_hex}{}",
+                                         v.err().map(|e| format!(": {e}")).unwrap_or_default())) {
+            return rep;
+        }
         let (din, out): ([u8; 32], HeaderState) = match r.journal.decode() {
             Ok(j) => j,
             Err(e) => { rep.check(false, format!("receipt {n}'s journal is (input digest, header state) ({e})")); return rep; }
@@ -113,7 +141,7 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
         } else {
             format!("run {n} starts where run {i} ended (height {from})")
         });
-        rep.check(out.height > from, format!("run {n} adds headers ({}..{})", from + 1, out.height));
+        rep.check(out.height > from, format!("run {n} adds headers ({}..{})", from.saturating_add(1), out.height));
         want_in = out.digest();
         last = Some(out);
     }
@@ -125,7 +153,6 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
                   format!("chain identity: the tip is block {h} {hash} (from a source this verifier trusts)"));
     }
     if let Some(inc) = include {
-        let disp = |b: &[u8; 32]| -> String { b.iter().rev().map(|x| format!("{x:02x}")).collect() };
         rep.check(verify_inclusion(&s, inc.height, &inc.hash, &inc.path),
                   format!("block {} {} is on this chain: its MMR path ({} hashes) leads to a committed peak (MMR root {})",
                           inc.height, disp(&inc.hash), inc.path.len(), s.mmr_root_hex()));
@@ -137,6 +164,9 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
         }
     }
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
+    if !failed {
+        rep.included = include.map(|inc| Included { height: inc.height, hash: inc.hash, txid: inc.tx.as_ref().map(|t| t.txid) });
+    }
     let mainnet = IMAGES.iter().find(|i| i.network == "mainnet").expect("IMAGES holds mainnet");
     let enough = work_at_least(&s.work, mainnet.min_work_hex);
     rep.checks.push((true, format!("chainwork {} {} Core's minimum {}", s.work_hex(),
@@ -159,11 +189,15 @@ pub struct Inclusion {
 
 /// A transaction in the included block, with what it takes to show it is a LEAF of the block's merkle tree:
 /// the block's 80-byte header; the transaction's raw bytes (as getrawtransaction prints them, with or without its
-/// witness), the txid it must hash to (internal order), its position and merkle branch; and the block's raw COINBASE
-/// transaction with its branch (position 0). Branches are internal order, lowest level first.
+/// witness), its position and merkle branch; and the block's raw COINBASE transaction with its branch (position 0).
+/// Branches are internal order, lowest level first.
+///
+/// `txid` is the transaction ASKED ABOUT, from the caller (internal order), never from the path service's answer:
+/// the raw bytes must hash to it. An answer that is a valid proof for ANOTHER confirmed transaction is refused.
 #[derive(Clone, Debug)]
 pub struct TxInclusion {
     pub header: [u8; 80],
+    /// the transaction asked about (internal order): the caller's, not the answer's
     pub txid: [u8; 32],
     pub raw: Vec<u8>,
     pub pos: u32,
@@ -173,11 +207,13 @@ pub struct TxInclusion {
 }
 
 impl TxInclusion {
-    /// From the JSON the path service's /tx answers (and `swiftsync-verify headers --tx <file>` reads):
-    /// `{"txid", "pos", "header", "raw", "branch", "coinbase", "coinbase_branch", ...}`. txid and branch entries are
-    /// reversed hex (as explorers and Electrum's blockchain.transaction.get_merkle print them); header, raw and
-    /// coinbase are plain hex of the bytes (getblockheader <hash> false, getrawtransaction <txid>). Other keys are ignored.
-    pub fn from_json(v: &serde_json::Value) -> Result<TxInclusion, String> {
+    /// `txid`: the transaction asked about, from the CALLER (as explorers print it). `v`: the JSON the path service's
+    /// /tx answers (and `swiftsync-verify headers --tx <txid>:<file>` reads): `{"pos", "header", "raw", "branch",
+    /// "coinbase", "coinbase_branch", ...}`. Branch entries are reversed hex (as explorers and Electrum's
+    /// blockchain.transaction.get_merkle print them); header, raw and coinbase are plain hex of the bytes
+    /// (getblockheader <hash> false, getrawtransaction <txid>). Other keys are ignored, the answer's own "txid"
+    /// among them: which transaction the raw bytes are is computed from them (verify_tx_in_header), never read.
+    pub fn from_json(txid: &str, v: &serde_json::Value) -> Result<TxInclusion, String> {
         let s = |k: &str| v[k].as_str().ok_or(format!("tx: {k} is not a string"));
         let list = |k: &str| -> Result<Vec<[u8; 32]>, String> {
             v[k].as_array().ok_or(format!("tx: {k} is not a list"))?.iter()
@@ -186,7 +222,7 @@ impl TxInclusion {
         };
         let header: [u8; 80] = unhex(s("header")?).filter(|h| h.len() == 80).and_then(|h| h.try_into().ok())
             .ok_or("tx: header is not 80 bytes of hex")?;
-        let mut txid = hex32(s("txid")?).ok_or("tx: txid is not 32 bytes of hex")?;
+        let mut txid = hex32(txid).ok_or(format!("tx: the txid asked about is not 32 bytes of hex ({txid})"))?;
         txid.reverse();
         let pos = v["pos"].as_u64().filter(|p| *p <= u32::MAX as u64).ok_or("tx: pos is not a position")? as u32;
         Ok(TxInclusion { header, txid, raw: unhex(s("raw")?).ok_or("tx: raw is not hex")?, pos, branch: list("branch")?,
@@ -194,8 +230,9 @@ impl TxInclusion {
     }
 }
 
+/// Plain hex, even length, digits only: u8::from_str_radix alone would also take a sign ("+f").
 fn unhex(x: &str) -> Option<Vec<u8>> {
-    if x.len() % 2 != 0 { return None; }
+    if x.len() % 2 != 0 || !x.bytes().all(|c| c.is_ascii_hexdigit()) { return None; }
     (0..x.len()).step_by(2).map(|i| u8::from_str_radix(x.get(i..i + 2)?, 16).ok()).collect()
 }
 
@@ -295,7 +332,8 @@ fn merkle_climb(leaf: &[u8; 32], pos: u32, branch: &[[u8; 32]]) -> Option<[u8; 3
 
 fn dsha(b: &[u8]) -> [u8; 32] { Sha256::digest(Sha256::digest(b)).into() }
 
-/// Is `tx` a transaction of the block `block_hash`? `Ok` with what was shown, or `Err` with why not.
+/// Is `tx` a transaction of the block `block_hash`, and the one asked about (`tx.txid`, the caller's)? `Ok` with
+/// what was shown, or `Err` with why not.
 ///
 /// THE ATTACK THIS CLOSES (the merkle tree weakness, CVE-2012-2459's family). Bitcoin's merkle tree hashes a leaf
 /// (a txid = dsha of a transaction) exactly as it hashes an inner node (dsha of the 64-byte concatenation of its two
@@ -328,7 +366,11 @@ pub fn verify_tx_in_header(block_hash: &[u8; 32], tx: &TxInclusion) -> Result<St
     if tx.raw.len() == 64 { return Err(format!("the transaction {SIXTY_FOUR}")); }
     let t = parse_tx(&tx.raw).map_err(|e| format!("the raw transaction does not parse: {e}"))?;
     if t.stripped.len() == 64 { return Err(format!("the transaction {SIXTY_FOUR}")); }
-    if dsha(&t.stripped) != tx.txid { return Err("the raw transaction does not hash to the txid".into()); }
+    // which transaction this is comes from its bytes: it must be the one the caller asked about
+    let txid = dsha(&t.stripped);
+    if txid != tx.txid {
+        return Err(format!("the raw transaction is {}, not the transaction asked about {}", disp(&txid), disp(&tx.txid)));
+    }
     if tx.coinbase.len() == 64 { return Err(format!("the coinbase {SIXTY_FOUR}")); }
     let c = parse_tx(&tx.coinbase).map_err(|e| format!("the raw coinbase does not parse: {e}"))?;
     let mut null = [0u8; 36];
@@ -342,14 +384,14 @@ pub fn verify_tx_in_header(block_hash: &[u8; 32], tx: &TxInclusion) -> Result<St
         return Err(format!("the transaction's branch is {} levels deep, the coinbase's (the tree's depth) {}",
                            tx.branch.len(), tx.coinbase_branch.len()));
     }
-    if merkle_climb(&tx.txid, tx.pos, &tx.branch) != Some(root) {
+    if merkle_climb(&txid, tx.pos, &tx.branch) != Some(root) {
         return Err(format!("the merkle branch from position {} does not lead to the header's merkle root", tx.pos));
     }
     Ok(format!("at position {} of {} levels, the tree's depth by the block's coinbase", tx.pos, tx.branch.len()))
 }
 
 fn hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 { return None; }
+    if s.len() != 64 || !s.bytes().all(|c| c.is_ascii_hexdigit()) { return None; }
     let mut o = [0u8; 32];
     for i in 0..32 { o[i] = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?; }
     Some(o)
@@ -501,7 +543,9 @@ mod tests {
         include_str!("../../experimental/libzync-bench/headers/tx/tx_100002.jsonl").lines().map(|l| serde_json::from_str(l).unwrap()).collect()
     }
     fn bhash(v: &serde_json::Value) -> [u8; 32] { let mut b = hex32(v["hash"].as_str().unwrap()).unwrap(); b.reverse(); b }
-    fn check(v: &serde_json::Value) -> Result<String, String> { verify_tx_in_header(&bhash(v), &TxInclusion::from_json(v)?) }
+    /// The fixture's own transaction asked about (fixtures are a trusted node's answers; the asked txid is its "txid")
+    fn tx_of(v: &serde_json::Value) -> Result<TxInclusion, String> { TxInclusion::from_json(v["txid"].as_str().unwrap_or(""), v) }
+    fn check(v: &serde_json::Value) -> Result<String, String> { verify_tx_in_header(&bhash(v), &tx_of(v)?) }
 
     /// Real transactions (fixtures from a mainnet node, experimental/libzync-bench/headers/tx/): every one of block
     /// 100,002's 9 (the odd-level rule at three levels, so several branches carry a duplicated node), both of block 170
@@ -521,7 +565,7 @@ mod tests {
         check(&fixture("170_1")).unwrap();
         let seg = fixture("seg");
         assert_eq!(check(&seg).unwrap(), "at position 1 of 12 levels, the tree's depth by the block's coinbase");
-        let mut tx = TxInclusion::from_json(&seg).unwrap();
+        let mut tx = tx_of(&seg).unwrap();
         let p = parse_tx(&tx.raw).unwrap();
         assert!(p.stripped.len() < tx.raw.len(), "the fixture carries a witness");
         tx.raw = p.stripped;
@@ -532,7 +576,7 @@ mod tests {
     fn transaction_refusals() {
         let b = block_100002();
         let v = &b[5];
-        let base = TxInclusion::from_json(v).unwrap();
+        let base = tx_of(v).unwrap();
         let bh = bhash(v);
         let refuse = |t: &TxInclusion, want: &str| {
             let e = verify_tx_in_header(&bh, t).unwrap_err();
@@ -542,19 +586,19 @@ mod tests {
         let mut t = base.clone(); t.pos = 4; refuse(&t, "does not lead to the header's merkle root");
         let mut t = base.clone(); t.pos += 16; refuse(&t, "does not lead to the header's merkle root");
         // raw bytes that are not the txid's (another transaction of the block), and a txid that is not the raw's
-        let mut t = base.clone(); t.raw = TxInclusion::from_json(&b[6]).unwrap().raw; refuse(&t, "does not hash to the txid");
-        let mut t = base.clone(); t.txid[0] ^= 1; refuse(&t, "does not hash to the txid");
+        let mut t = base.clone(); t.raw = tx_of(&b[6]).unwrap().raw; refuse(&t, "not the transaction asked about");
+        let mut t = base.clone(); t.txid[0] ^= 1; refuse(&t, "not the transaction asked about");
         // a raw transaction with a byte appended, or cut short
         let mut t = base.clone(); t.raw.push(0); refuse(&t, "does not parse");
         let mut t = base.clone(); t.raw.pop(); refuse(&t, "does not parse");
         // another block's header
-        let mut t = base.clone(); t.header = TxInclusion::from_json(&fixture("100003_0")).unwrap().header; refuse(&t, "does not hash to the block");
+        let mut t = base.clone(); t.header = tx_of(&fixture("100003_0")).unwrap().header; refuse(&t, "does not hash to the block");
 
         // THE 64-BYTE ATTACK, shorter: block 100,002's level-1 node over txs 0 and 1 is dsha(txid0 || txid1). Present
         // those 64 bytes as a "transaction" at position 0 with the rest of tx 0's branch: the txid check alone would pass
         // (the bytes DO hash to the node), and the branch DOES reach the merkle root.
-        let t0 = TxInclusion::from_json(&b[0]).unwrap();
-        let t1 = TxInclusion::from_json(&b[1]).unwrap();
+        let t0 = tx_of(&b[0]).unwrap();
+        let t1 = tx_of(&b[1]).unwrap();
         let mut inner = t0.txid.to_vec(); inner.extend_from_slice(&t1.txid);
         let node = dsha(&inner);
         assert_eq!(merkle_climb(&node, 0, &t0.branch[1..]), Some(base.header[36..68].try_into().unwrap()), "the forgery reaches the root");
@@ -568,16 +612,99 @@ mod tests {
         let mut t = base.clone(); t.branch.truncate(3); t.coinbase = inner.clone(); t.coinbase_branch = t0.branch[1..].to_vec();
         refuse(&t, "the coinbase is exactly 64 bytes");
         // a coinbase from another block (100,003's, with its own branch), and a non-coinbase given as the coinbase
-        let other = TxInclusion::from_json(&fixture("100003_0")).unwrap();
+        let other = tx_of(&fixture("100003_0")).unwrap();
         let mut t = base.clone(); t.coinbase = other.coinbase.clone(); t.coinbase_branch = other.coinbase_branch.clone();
         refuse(&t, "not this block's coinbase");
         let mut t = base.clone(); t.coinbase = t1.raw.clone(); refuse(&t, "not a coinbase");
         // the duplicated node claimed on the right-child side (tx 8 at position 9)
-        let mut t = TxInclusion::from_json(&b[8]).unwrap(); t.pos = 9; refuse(&t, "does not lead to the header's merkle root");
+        let mut t = tx_of(&b[8]).unwrap(); t.pos = 9; refuse(&t, "does not lead to the header's merkle root");
         // text that is not a transaction answer
-        assert!(TxInclusion::from_json(&serde_json::json!({"txid": "00"})).is_err());
-        let mut j = v.clone(); j["raw"] = serde_json::json!("0g"); assert!(TxInclusion::from_json(&j).is_err());
+        assert!(TxInclusion::from_json("00", &serde_json::json!({})).is_err());
+        let mut j = v.clone(); j["raw"] = serde_json::json!("0g"); assert!(tx_of(&j).is_err());
         assert!(Inclusion::parse(1, "00", &[], None).is_err());
         assert!(Inclusion::parse(1, v["hash"].as_str().unwrap(), &["zz"], None).is_err());
+    }
+
+    const HDR_0_100: &[u8] = include_bytes!("../../experimental/libzync-bench/headers/hdr_0_100.rcpt");
+    const HDR_101_200: &[u8] = include_bytes!("../../experimental/libzync-bench/headers/hdr_101_200.rcpt");
+    const T170: &str = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"; // block 170, Satoshi to Hal Finney
+    fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
+    fn lines(t: &str) -> Vec<&str> { t.lines().map(str::trim).filter(|l| !l.is_empty()).collect() }
+    fn include_170(asked: &str, answer: &serde_json::Value) -> Result<Inclusion, String> {
+        let p = lines(include_str!("../../experimental/libzync-bench/headers/mmr_path_170_tip200.txt"));
+        Inclusion::parse(170, answer["hash"].as_str().unwrap(), &p, Some(TxInclusion::from_json(asked, answer)?))
+    }
+
+    /// Review finding 1: a lying path service answers a question about T with a VALID proof for another confirmed
+    /// transaction T' (here block 170's coinbase). Before, the txid came from the answer, so that proof passed as
+    /// "a transaction is included"; now the txid is the caller's and the raw bytes must hash to it.
+    #[test]
+    fn an_answer_about_another_transaction_is_refused() {
+        let other = fixture("170_0"); // block 170's coinbase: a real, valid answer, for another transaction
+        assert_ne!(other["txid"].as_str().unwrap(), T170);
+        let e = verify_tx_in_header(&bhash(&other), &TxInclusion::from_json(T170, &other).unwrap()).unwrap_err();
+        assert!(e.contains("not the transaction asked about"), "{e}");
+        // ...also when the answer's own "txid" field claims the asked one: that field is not read
+        let mut lie = other.clone(); lie["txid"] = serde_json::json!(T170);
+        assert!(verify_tx_in_header(&bhash(&lie), &TxInclusion::from_json(T170, &lie).unwrap()).is_err());
+        // the right answer passes with its "txid" field gone or wrong: only the asked txid and the raw bytes count
+        let mut right = fixture("170_1"); right["txid"] = serde_json::json!("not read");
+        assert!(verify_tx_in_header(&bhash(&right), &TxInclusion::from_json(T170, &right).unwrap()).is_ok());
+        right.as_object_mut().unwrap().remove("txid");
+        assert!(verify_tx_in_header(&bhash(&right), &TxInclusion::from_json(T170, &right).unwrap()).is_ok());
+
+        // through verify_headers, on the real chained receipts: the lie is a FAIL with nothing reported as included;
+        // the right answer reports the block and the ASKED txid (the verdict is DEMO: 201 headers are below the
+        // minimum work, and `included` must be read with the verdict)
+        let rs = [HDR_0_100, HDR_101_200];
+        let r = verify_headers(&rs, HEADERS_IMAGE_ID, now(), None, Some(&include_170(T170, &other).unwrap()));
+        assert_eq!(r.verdict, Verdict::Fail);
+        assert!(r.included.is_none());
+        let r = verify_headers(&rs, HEADERS_IMAGE_ID, now(), None, Some(&include_170(T170, &fixture("170_1")).unwrap()));
+        assert_eq!(r.verdict, Verdict::Demo);
+        let inc = r.included.expect("included");
+        assert_eq!((inc.height, inc.hash_hex().as_str(), inc.txid_hex().as_deref()),
+                   (170, "00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee", Some(T170)));
+        // nothing included when nothing was asked, nor when another check failed (a wrong expected tip)
+        assert!(verify_headers(&rs, HEADERS_IMAGE_ID, now(), None, None).included.is_none());
+        let r = verify_headers(&rs, HEADERS_IMAGE_ID, now(), Some((199, "00")), Some(&include_170(T170, &fixture("170_1")).unwrap()));
+        assert_eq!((r.verdict, r.included.is_none()), (Verdict::Fail, true));
+    }
+
+    /// Review finding 7: hex with a sign. u8::from_str_radix takes "+f", so "+f" passed as a byte.
+    #[test]
+    fn hex_refuses_a_sign() {
+        let h = "+f".to_string() + &"0".repeat(62);
+        assert_eq!(h.len(), 64);
+        assert!(hex32(&h).is_none());
+        assert!(hex32(&"0f".repeat(32)).is_some());
+        assert!(super::unhex("+f").is_none());
+        assert!(super::unhex("-f").is_none());
+        assert_eq!(super::unhex("0fAB"), Some(vec![0x0f, 0xab]));
+        assert!(Inclusion::parse(1, &h, &[], None).is_err());
+        assert!(TxInclusion::from_json(&h, &fixture("170_1")).is_err());
+        let mut j = fixture("170_1"); j["raw"] = serde_json::json!(format!("+{}", &j["raw"].as_str().unwrap()[1..]));
+        assert!(TxInclusion::from_json(T170, &j).is_err());
+    }
+
+    /// Review finding 7: heights at i64::MAX. leaves() was (height + 1) in i64, and a run's "from + 1" was computed
+    /// from the journal of a receipt that had FAILED to verify; both overflow (a panic in a debug build).
+    #[test]
+    fn heights_at_i64_max_do_not_overflow() {
+        let mut s = HeaderState::empty();
+        assert_eq!(s.leaves(), 0);
+        s.height = i64::MAX;
+        assert_eq!(s.leaves(), 1u64 << 63);
+        // a real receipt with its journal's height set to i64::MAX: it no longer verifies, and the verifier must stop
+        // there rather than read the journal (twice, so the second run's "from" would be i64::MAX)
+        let mut r: risc0_zkvm::Receipt = bincode::deserialize(HDR_0_100).unwrap();
+        let (din, mut out): ([u8; 32], HeaderState) = r.journal.decode().unwrap();
+        out.height = i64::MAX;
+        r.journal.bytes = risc0_zkvm::serde::to_vec(&(din, out)).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        let forged = bincode::serialize(&r).unwrap();
+        let rep = verify_headers(&[&forged, &forged], HEADERS_IMAGE_ID, now(), None, None);
+        assert_eq!(rep.verdict, Verdict::Fail);
+        assert!(rep.state.is_none());
+        assert!(!rep.checks.last().unwrap().0, "the last check is the failed verify: {:?}", rep.checks.last());
     }
 }

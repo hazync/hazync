@@ -14,8 +14,8 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,264,547 bytes raw, 368,182 gzipped |
-| sha256 (this commit, `./build.sh`) | `448e039843f9af7c147898eec3e02d28b7d3b875c412459cdea3e2fc989f62f2` (v0.26.0 plus the header-chain MMR: `verifyHeaders({..., include})` checks a block, and a transaction in it, on the proven chain; headers `de54b94f`; mainnet `46666b6f`, signet `01a80f17`, and `8888d59c` / `d4210dae` by id; one build, Rust 1.99.0, 2026-11-15). v0.26.0 was `12bbc9ae…`, v0.24.0's release asset was `446fdaeb…` |
+| size | 1,265,962 bytes raw, 368,585 gzipped |
+| sha256 (this commit, `./build.sh`) | `3e670989f7a26a52d86f2063af7b7312f0209d4dc6a7dca0c7be45222f76b2cc` (v0.26.0 plus the header-chain MMR: `verifyHeaders({..., include})` checks a block, and a transaction in it (`include.txid`, the one asked about), on the proven chain; `included` is true only for verdict ok, `included_demo` for demo; headers `de54b94f`; mainnet `46666b6f`, signet `01a80f17`, and `8888d59c` / `d4210dae` by id; ONE local build, Rust 1.99.0, 2026-11-15, not yet reproduced on a second machine). The first MMR build was `448e0398…`, v0.26.0 `12bbc9ae…`, v0.24.0's release asset `446fdaeb…` |
 | reproduces | **only with the same host Rust**: 1.99.0 gave v0.24.0's `446fdaeb…`, 1.97.1 `a3a85b7f…`. The checkout path does not matter (the sources are staged), so use `RUSTUP_TOOLCHAIN=1.99.0`; the repo does not pin it yet. Also only at the default stage path: a `SWIFTSYNC_WASM_STAGE` override gave other bytes (`2ea330c0…`, +235 bytes) with no path in the strings |
 | vectors | 11/11 (`test-vectors.out`; the 2 CLI-only cases of the manifest are skipped) |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |

@@ -29,8 +29,15 @@ A run is published only after `swiftsync-verify headers --expect <tip>:<the node
 Since the MMR image (feat/headers-mmr) the state also carries the peaks of a Merkle Mountain Range of every block
 hash (`prover/zyncapps/methods/headers/src/mmr.rs`), so the published pair answers "is block X at height h on this
 chain": `zyncapp headers-mmr-path <headers file from 0> <h> --tip <tip> > path.txt`, then
-`swiftsync-verify headers --include <h>:<hash> --path path.txt <base> <run>` (add `--tx <txid>:<pos> --header <hex80>
---branch <file>` for a transaction in that block). The follower needs no change: `--after` reads the base's peaks
+`swiftsync-verify headers --include <h>:<hash> --path path.txt <base> <run>`. For a transaction in that block, add
+`--tx <txid>:<answer.json>`: `<txid>` is the transaction YOU ask about (as explorers print it) and `answer.json` is
+the path service's `/tx` answer (`../headers-api/`: the block's 80-byte header, the raw transaction and its merkle
+branch, the raw coinbase and its branch). The verifier checks that the header hashes to the included block, that the
+raw transaction parses, is not 64 bytes, and hashes to `<txid>` (the answer's own `txid` is not read, so an answer
+about another transaction is refused), that the coinbase is a coinbase whose branch reaches the header's merkle root
+and pins the tree's depth, and that the transaction's branch, as deep, reaches the same root. The verdict line names
+what was shown (`INCLUDED: block <h> <hash> ..., with transaction <txid> in it`); exit 0 only when the chain also has
+Core's minimum work (exit 2, DEMO, below it). The follower needs no change: `--after` reads the base's peaks
 from its journal. A base from an older image has no peaks: the first MMR base is re-proved from genesis.
 
 ## Where it runs

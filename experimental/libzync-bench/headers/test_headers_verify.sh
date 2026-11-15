@@ -37,6 +37,7 @@ t 1 "a block above the tip" --include 201:$H37 --path "$P" "${R[@]}"
 # a transaction in block 170 (Satoshi to Hal Finney), by the path service's /tx answer (tx/tx_170_1.json: the header,
 # the raw transaction and its branch, the raw coinbase and its branch, which pin the tree's depth), and forgeries of it
 H170=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee
+T170=f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16   # the transaction ASKED about (--tx <txid>:<file>)
 P170="$D/mmr_path_170_tip200.txt"; TXJ="$D/tx/tx_170_1.json"
 python3 - "$TXJ" "$D/tx/tx_100003_0.json" "$T" <<'PY'
 import json, sys, hashlib
@@ -54,12 +55,28 @@ inner = ids[0] + ids[1]
 assert d(inner) == bytes.fromhex(t['header'])[36:68]
 w('inner64', raw=inner.hex(), txid=d(inner)[::-1].hex(), pos=0, branch=[])
 w('inner64cb', raw=inner.hex(), txid=d(inner)[::-1].hex(), pos=0, branch=[], coinbase=inner.hex(), coinbase_branch=[])
+open(f'{out}/inner64.txid', 'w').write(d(inner)[::-1].hex())
+# a lying service: asked about f4184fc5..., it answers with a VALID proof of ANOTHER confirmed transaction (block 170's
+# coinbase), its own "txid" field naming that one, or naming the asked one
+c = json.load(open(sys.argv[1].replace('tx_170_1', 'tx_170_0')))
+json.dump(c, open(f'{out}/othertx.json', 'w'))
+json.dump({**c, 'txid': t['txid']}, open(f'{out}/othertx_claims.json', 'w'))
+# the right answer with its "txid" field wrong: that field is not read
+w('txidfield', txid='00' * 32)
 PY
-t 2 "tx f4184fc5... is in block 170 on the chain" --include 170:$H170 --path "$P170" --tx "$TXJ" "${R[@]}"
-t 1 "  at the wrong position" --include 170:$H170 --path "$P170" --tx "$T/pos0.json" "${R[@]}"
-t 1 "  raw bytes that are not the txid's" --include 170:$H170 --path "$P170" --tx "$T/rawother.json" "${R[@]}"
-t 1 "  a branch deeper than the coinbase's" --include 170:$H170 --path "$P170" --tx "$T/deeper.json" "${R[@]}"
-t 1 "  another block's coinbase" --include 170:$H170 --path "$P170" --tx "$T/cbother.json" "${R[@]}"
-t 1 "  a 64-byte inner node (the merkle root's preimage) as a transaction" --include 170:$H170 --path "$P170" --tx "$T/inner64.json" "${R[@]}"
-t 1 "  ...and as the coinbase too" --include 170:$H170 --path "$P170" --tx "$T/inner64cb.json" "${R[@]}"
+I64=$(cat "$T/inner64.txid")
+t 2 "tx f4184fc5... is in block 170 on the chain" --include 170:$H170 --path "$P170" --tx "$T170:$TXJ" "${R[@]}"
+if grep -q "INCLUDED: block 170 $H170 is at that height on this chain, with transaction $T170 in it" "$T/out"; then echo "ok     and the verdict line names the block and the ASKED txid"
+else echo "FAIL   the verdict line does not name block 170 and $T170"; tail -1 "$T/out"; fails=$((fails+1)); fi
+t 2 "  the answer's own txid field is not read (wrong, the right raw: still OK)" --include 170:$H170 --path "$P170" --tx "$T170:$T/txidfield.json" "${R[@]}"
+t 1 "  a lying service: a valid proof of ANOTHER transaction (block 170's coinbase)" --include 170:$H170 --path "$P170" --tx "$T170:$T/othertx.json" "${R[@]}"
+grep -q "not the transaction asked about" "$T/out" && echo "ok     refused as another transaction" || { echo "FAIL   not refused as another transaction"; fails=$((fails+1)); }
+t 1 "  ...its txid field claiming the asked one" --include 170:$H170 --path "$P170" --tx "$T170:$T/othertx_claims.json" "${R[@]}"
+t 1 "  --tx without the asked txid" --include 170:$H170 --path "$P170" --tx "$TXJ" "${R[@]}"
+t 1 "  at the wrong position" --include 170:$H170 --path "$P170" --tx "$T170:$T/pos0.json" "${R[@]}"
+t 1 "  raw bytes that are not the txid's" --include 170:$H170 --path "$P170" --tx "$T170:$T/rawother.json" "${R[@]}"
+t 1 "  a branch deeper than the coinbase's" --include 170:$H170 --path "$P170" --tx "$T170:$T/deeper.json" "${R[@]}"
+t 1 "  another block's coinbase" --include 170:$H170 --path "$P170" --tx "$T170:$T/cbother.json" "${R[@]}"
+t 1 "  a 64-byte inner node (the merkle root's preimage) as a transaction" --include 170:$H170 --path "$P170" --tx "$I64:$T/inner64.json" "${R[@]}"
+t 1 "  ...and as the coinbase too" --include 170:$H170 --path "$P170" --tx "$I64:$T/inner64cb.json" "${R[@]}"
 [ $fails = 0 ] && echo "HEADERS_VERIFY_TESTS_OK" || { echo "HEADERS_VERIFY_TESTS: $fails FAILED"; exit 1; }
