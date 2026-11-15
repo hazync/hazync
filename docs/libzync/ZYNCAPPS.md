@@ -162,16 +162,20 @@ these files. Limits:
   Coin check on hazync.org does all of these (`assets/zapp.js`: a fact about another script, kind or height is
   refused before the verifier runs).
 
-## 9. zAPPs and their modules
+## 9. Where each zAPP lives: one module per zAPP (15.11.2026)
 
-A zAPP's checker is its own module: a crate that uses `swiftsync-verify` as a library to verify the core receipt, its
-own CLI and, for the browser, its own WASM module, glue and sha256 line. The core verifier (`swiftsync-verify`,
-`swiftsync-verify-wasm`) carries no zAPP code. A zAPP that needs a guest has it under `prover/zyncapps/methods`.
+The owner's rule: a zAPP is "a separate side check, not the core engine". The core verifier (`swiftsync-verify`,
+`swiftsync-verify-ffi`, `swiftsync-verify-wasm`; released as `hazync-verify-*` and `hazync-verify.wasm`) checks CORE
+chain proofs only, and adding a zAPP never changes it: its `.wasm` stays byte-identical (`./build.sh`, sha256 in
+`swiftsync-verify-wasm/README.md`). Every zAPP has the same layout:
 
-| zAPP | module | guest | status |
-|---|---|---|---|
-| Header chain (K1) | checker in `swiftsync-verify` (`swiftsync-verify headers`, WASM `verifyHeaders`) | `prover/zyncapps/methods/headers` | published, image `2db34e12` |
-| Coin (coin v2) | `prover/zyncapps/host` (`zyncapp prove-coin`) | `prover/zyncapps/methods/guest` | built, laptop images only |
-| Zero-conf (D5) | `prover/zyncapps/host` | `prover/zyncapps/methods/zeroconf` | being built |
-| Coin check (trie facts) | `swiftsync-verify --trie`, WASM `verifyFacts`, hazync.org `/zapp/` | none | live |
-| Balance statement | `zapps/statement` (CLI `zapp-statement`, producer `zync-statement`; WASM `zapps/statement/wasm`) | none (a private form is prototyped in `experimental/libzync-bench/statement`) | built on `feat/zapp-statement` |
+| path | what |
+|---|---|
+| `zapps/<name>/` | the check library (`zapp_<name>`) and its CLI `zapp-<name>`, on `swiftsync-verify` as a library (receipt verification, chain state, facts) |
+| `zapps/<name>/wasm/` | its own WASM module (`build.sh`: the core's flags, `scripts/wasm-build.sh`), JS glue `zapp-<name>.js`, README with its sha256 |
+| `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one |
+| `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6) |
+
+| zAPP | module | CLI | WASM glue | C ABI |
+|---|---|---|---|---|
+| Balance statement (STATEMENT_ZAPP.md) | `zapps/statement` | `zapp-statement` (also `draft`, `message`, `sign`, `add-sig`, `test-key`) | `zapp-statement.js` (`verifyStatement`) | none |

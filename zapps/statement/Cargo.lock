@@ -253,21 +253,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "balance-statement"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bip322",
- "bitcoin",
- "libzync",
- "risc0-zkvm",
- "serde",
- "serde_json",
- "sha2",
- "swiftsync-verify",
-]
-
-[[package]]
 name = "base58ck"
 version = "0.1.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1708,6 +1693,30 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "zapp-common"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "swiftsync-verify",
+]
+
+[[package]]
+name = "zapp-statement"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bip322",
+ "bitcoin",
+ "libzync",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "swiftsync-verify",
+ "zapp-common",
+]
 
 [[package]]
 name = "zerocopy"

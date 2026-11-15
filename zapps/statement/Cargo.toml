@@ -1,5 +1,5 @@
 [package]
-name = "balance-statement"
+name = "zapp-statement"
 version = "0.1.0"
 edition = "2021"
 description = "Balance statement zyncAPP: the scripts' balances at a proven block H and a BIP-322 signature by each script"
@@ -10,20 +10,18 @@ publish = false
 # trie facts, and adds the statement and its signatures (docs/libzync/STATEMENT_ZAPP.md). Own workspace, as the verifier.
 
 [lib]
-name = "balance_statement"
+name = "zapp_statement"
 path = "src/lib.rs"
 
-# zapp-statement: the checker (a receipt and a statement in, a verdict out). zync-statement: the producer.
+# One CLI, zapp-statement: the checker, and the producer as subcommands (draft, message, sign, add-sig, test-key).
 [[bin]]
 name = "zapp-statement"
-path = "src/bin/zapp-statement.rs"
-
-[[bin]]
-name = "zync-statement"
-path = "src/bin/zync-statement.rs"
+path = "src/main.rs"
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
+# The chain-identity flags every zAPP CLI takes (zapps/common)
+zapp-common = { path = "../common" }
 libzync = { path = "../../libzync", default-features = false }
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
 # BIP-322 by the rust-bitcoin project's crate (CC0-1.0; its tests run BIP-322's official vectors), not code of our own.

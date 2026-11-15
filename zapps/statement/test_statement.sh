@@ -2,12 +2,13 @@
 # Balance statement zyncAPP (docs/libzync/STATEMENT_ZAPP.md), CLI end to end on the REAL mainnet 1..200 proof (image
 # 8888d59c) and its block-200 trie snapshot, with keys generated for the run (P2WPKH, P2TR, P2PK compressed and
 # uncompressed; never printed, deleted on exit). The 1..200 chain is below Core's minimum chainwork, so the best verdict
-# is DEMO (exit 2); every refusal is FAIL (1). Run from this directory after `cargo build --release`.
+# is DEMO (exit 2); every refusal is FAIL (1). Run from this directory after `cargo build --release` (or give the
+# binary: test_statement.sh [<zapp-statement>]); ../test.sh does both.
 # STATEMENT_WASM=<zapp-statement.wasm> also runs wasm/test-statement.mjs. Writes test_statement.out.
 cd "$(dirname "$0")" || exit 1
 exec > >(tee test_statement.out) 2>&1
 BAD=0; N=0
-V=target/release/zapp-statement; Z=target/release/zync-statement; X=../../swiftsync-verify/vectors
+V=${1:-target/release/zapp-statement}; Z=$V; X=../../swiftsync-verify/vectors
 R=$X/mainnet_1_200_8888d59c.rcpt; TRIE=vectors/mainnet_200_8888d59c.trie
 TIP=200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 P2PK9=410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac
@@ -46,12 +47,19 @@ edit $T/p.json "[e.update(format='full', signature='$OURS') for e in s['entries'
 edit $T/s.json "s['core_id']='46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c'" $T/t7.json; run 1 $V $A $C $R $T/t7.json
 # 8. the chain identity: another block at 200
 run 1 $V --expect 200:$(printf '%064d' 0) $C $R $T/s.json
+# 8b. the same check through the other identity sources (zapp-common, every zAPP CLI's flags): a node that agrees, one
+#     that names another block, and an --expect the node contradicts
+printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\n[ "$1" = getblockheader ] && echo "{\\"chainwork\\": \\"%s\\"}"\nexit 0\n' "${TIP#*:}" "$(printf '%054d' 0)c900c900c9" > $T/node; chmod +x $T/node
+printf '#!/bin/sh\necho %064d\n' 1 > $T/badnode; chmod +x $T/badnode
+run 2 $V --bitcoin-cli $T/node $C $R $T/s.json
+run 1 $V --bitcoin-cli $T/badnode $C $R $T/s.json
+run 1 $V --bitcoin-cli $T/node --expect 200:$(printf '%064d' 0) $C $R $T/s.json
 # 9. a dev-mode receipt (FakeReceipt), with and without RISC0_DEV_MODE in the environment; a flipped seal
 run 1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
 run 1 env RISC0_DEV_MODE=1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
 run 1 $V $A $C $X/mainnet_1_200_8888d59c_flipped.rcpt $T/s.json
 # 10. the producer refuses to file a signature that does not verify
-echo "== zync-statement add-sig with entry 1's signature for entry 0 (expect exit 1)"
+echo "== zapp-statement add-sig with entry 1's signature for entry 0 (expect exit 1)"
 S1=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][1]['signature'])")
 S0=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][0]['fact']['script_pubkey'])")
 F0=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][0]['format'])")

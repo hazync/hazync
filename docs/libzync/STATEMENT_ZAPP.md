@@ -1,8 +1,8 @@
 # Balance statement zyncAPP
 
 Status (15.11.2026): shape A is built and tested on branch `feat/zapp-statement` as its own zAPP module,
-`zapps/statement` (ZYNCAPPS.md §9): a library on top of the core verifier, the checker CLI `zapp-statement`, the
-producer `zync-statement`, and its own WASM module (`zapps/statement/wasm`). The core verifier (`swiftsync-verify`,
+`zapps/statement` (ZYNCAPPS.md §9): a library on top of the core verifier, one CLI `zapp-statement` (the checker, and
+the producer as subcommands `draft`, `message`, `sign`, `add-sig`, `test-key`), and its own WASM module (`zapps/statement/wasm`). The core verifier (`swiftsync-verify`,
 `swiftsync-verify-wasm`) carries no statement code. Shape B is a measured prototype in
 `experimental/libzync-bench/statement/`; no image id is published for it.
 
@@ -53,7 +53,7 @@ form; §8 gives its measured cost.
 
 ## 3. Encodings (A)
 
-**Statement** (JSON, `balance_statement::Statement`):
+**Statement** (JSON, `zapp_statement::Statement`):
 
 ```
 { "version": 1, "network": "mainnet", "core_id": "<64 hex: the image that proved the chain>",
@@ -79,7 +79,7 @@ nonce: <nonce>
 ```
 
 The script list hash is SHA-256 over the scripts in entry order, each as CompactSize(length) followed by its bytes
-(its serialisation inside a transaction). `zync-statement message` prints the text exactly.
+(its serialisation inside a transaction). `zapp-statement message` prints the text exactly.
 
 **Signature formats**: `simple` (a BIP-322 simple signature: the witness, base64), `full` (BIP-322 full: the to_sign
 transaction, base64; the only format for P2PK), `legacy` (P2PKH only: Bitcoin Core `signmessage`, the BIP-137 format). A BIP-322 proof is
@@ -128,9 +128,9 @@ be an old one shown again: the verdict is then at most DEMO and says why.
 ## 5. Using it
 
 ```sh
-zync-statement draft --receipt <core receipt> --trie state_<H>.trie --purpose "<asked>" --nonce "<asked>" <scriptPubKey hex>... > s.json
-zync-statement message s.json                      # the text to sign in another wallet
-zync-statement sign s.json --keys <WIF file>       # or: zync-statement add-sig s.json <spk> simple|full|legacy <base64>
+zapp-statement draft --receipt <core receipt> --trie state_<H>.trie --purpose "<asked>" --nonce "<asked>" <scriptPubKey hex>... > s.json
+zapp-statement message s.json                      # the text to sign in another wallet
+zapp-statement sign s.json --keys <WIF file>       # or: zapp-statement add-sig s.json <spk> simple|full|legacy <base64>
 zapp-statement --expect <H>:<hash> --purpose "<asked>" --nonce "<asked>" <core receipt> s.json
 ```
 
@@ -140,17 +140,17 @@ the line says which), 1 `ZAPP_STATEMENT_FAIL`. The checker is its own binary rat
 subcommand so that the core verifier carries no zAPP code; it verifies the receipt with the same library function.
 
 The checker chooses the purpose and nonce, gives them to the holder, and rejects any H further behind its own tip than
-its policy allows. `zync-statement` signs P2WPKH, P2SH-P2WPKH and P2TR (key path, no script tree) in BIP-322 simple
+its policy allows. `zapp-statement` signs P2WPKH, P2SH-P2WPKH and P2TR (key path, no script tree) in BIP-322 simple
 and P2PKH and P2PK (in the key's own form, compressed or uncompressed) in BIP-322 full, from WIF keys it never prints;
-`add-sig` refuses a signature that does not verify. `zync-statement test-key <file> [--uncompressed]` makes a fresh key
+`add-sig` refuses a signature that does not verify. `zapp-statement test-key <file> [--uncompressed]` makes a fresh key
 for tests.
 
 In a browser, the page loads `zapp-statement.wasm` with `zapp-statement.js` (`loadStatementVerifier`,
 `verifyStatement({ network, receipt, statement, expect, purpose, nonce })`); expect, purpose and nonce are the page's,
 never the sender's. Only the statement page loads it; the core `hazync-verify.wasm` is unchanged. Built
-byte-reproducibly by `zapps/statement/wasm/build.sh` (the core's flags: Rust 1.99.0, staged sources, remapped paths):
-2,473,954 bytes raw, sha256 `81a7a1ef11e514b4b668a9c7ec6078b1d2b7604dfe0826c9ccbda63d6c25d89c` (two builds,
-15.11.2026).
+byte-reproducibly by `zapps/statement/wasm/build.sh` (the core's flags, `scripts/wasm-build.sh`: Rust 1.99.0, staged
+sources, remapped paths): 2,473,562 bytes raw, sha256 `01408a2c3bcd621261e45ef7bd9fde083f635fb5c64eee89780413a324cfd27a`
+(15.11.2026, with the zAPP frame's overflow-safe take; the first module build was `81a7a1ef…`).
 
 The trie snapshot (`state_<H>.trie`) comes from a proving run at H; a mainnet holder needs a fact server that
 keeps one (ROADMAP C1, `zync-serve`). The statement holds no secret: anyone can check or forward it.
@@ -248,10 +248,11 @@ scripts is public, and without the salt a guessed script list can be tested agai
   another message; a fact relabelled to a script it does not prove; a duplicate or unsorted script; a history fact; a
   fact with no answer; a line break in the purpose; a wrong format; no entries; another version; a time-locked proof;
   the P2PK cases of §7; and a FakeReceipt.
-- `zapps/statement/test_statement.sh`: `zapp-statement` and `zync-statement` end to end on the real proof with fresh
-  P2WPKH, P2TR and P2PK (both forms) keys, 18 cases; 19 with `STATEMENT_WASM=<zapp-statement.wasm>`, which runs
-  `wasm/test-statement.mjs` (8 cases) through the zAPP's WASM module. Results: `test_statement.out`. CI runs both from
-  `zapps/statement` (adversarial.yml).
+- `zapps/statement/test_statement.sh`: `zapp-statement` (checker and producer) end to end on the real proof with fresh
+  P2WPKH, P2TR and P2PK (both forms) keys, 21 cases (with the chain-identity sources: a node that agrees, one that names
+  another block, an --expect the node contradicts); 22 with `STATEMENT_WASM=<zapp-statement.wasm>`, which runs
+  `wasm/test-statement.mjs` (8 cases) through the zAPP's WASM module. Results: `test_statement.out`. CI's zapps job runs
+  it all through `zapps/statement/test.sh`.
 - The `bip322` crate's own suite (77 tests, including BIP-322's official vectors) passes at 0.0.12.
 - The core `swiftsync-verify-wasm/build.sh` gives the same bytes as `fix/wasm-facts-frame` (#734), which this branch
   merges: sha256 `f16b5b98…`, 1,249,243 bytes (15.11.2026). Main before #734 gives `12bbc9ae…`; #734 moves it, this

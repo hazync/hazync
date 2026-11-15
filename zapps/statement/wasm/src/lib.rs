@@ -1,6 +1,6 @@
 //! `zapp-statement-wasm`: the balance statement zyncAPP's checker in a browser (docs/libzync/STATEMENT_ZAPP.md). The core
 //! receipt is verified by `swiftsync_verify::verify` (the core verifier as a library), the statement by
-//! `balance_statement::check_statement`. Local: nothing leaves the device.
+//! `zapp_statement::check_statement`. Local: nothing leaves the device.
 //!
 //! ```text
 //!   alloc(len) -> ptr                    reserve len bytes for the input frame
@@ -14,7 +14,7 @@
 //! the verdict is at most "demo". The JSON has `verdict` ("ok", "demo", "fail"), `checks`, `statement` {ok, what, total,
 //! scripts} and `demo_because`.
 
-use balance_statement::{check_statement, Challenge, Statement};
+use zapp_statement::{check_statement, Challenge, Statement};
 use swiftsync_verify::{identity_matches, parse_expect, verify, Image, Inputs, Verdict};
 
 #[no_mangle]
@@ -38,8 +38,9 @@ fn ret(s: String) -> *const u8 {
 struct Frame<'a> { b: &'a [u8], i: usize }
 impl<'a> Frame<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let out = self.b.get(self.i..self.i + n).ok_or("input frame truncated")?;
-        self.i += n;
+        let end = self.i.checked_add(n).ok_or("input frame truncated")?;
+        let out = self.b.get(self.i..end).ok_or("input frame truncated")?;
+        self.i = end;
         Ok(out)
     }
     fn chunk(&mut self) -> Result<&'a [u8], String> {
@@ -114,4 +115,19 @@ pub extern "C" fn verify_statement(ptr: *mut u8, len: usize) -> *const u8 {
         Ok(v) => v.to_string(),
         Err(e) => serde_json::json!({"verdict": "fail", "checks": [{"ok": false, "what": e}], "statement": {"ok": false, "what": e}}).to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// Review finding 7 (feat/headers-mmr): `self.i + n` overflowed (a panic in a debug build) on a length near usize::MAX.
+    #[test]
+    fn frame_take_does_not_overflow() {
+        let b = [1u8, 2, 3];
+        let mut f = Frame { b: &b, i: 1 };
+        assert!(f.take(usize::MAX).is_err());
+        assert_eq!(f.i, 1);
+        assert_eq!(f.take(2).unwrap(), &[2, 3]);
+        assert!(f.take(1).is_err());
+    }
 }
