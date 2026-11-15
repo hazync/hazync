@@ -13,7 +13,7 @@ node test-headers.mjs    # the real chained receipts and MMR / transaction inclu
 
 | | |
 |---|---|
-| size | 1,120,494 bytes raw, 314,450 gzipped |
-| sha256 (this commit, `./build.sh`) | `baefb6791977df0ca44eb6994600544091b5951b40837ba84469481be047545e` (headers image `de54b94f`; Rust 1.99.0, 2026-11-15) |
+| size | 1,120,493 bytes raw, 314,624 gzipped |
+| sha256 (this commit, `./build.sh`) | `9f1526185fde428963245c8251fa54d6211a9b4da1e81428f0cdeaa1c554bc87` (headers image `de54b94f`; Rust 1.99.0, built on hazync-coord, 2026-11-15) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-headers.mjs` (WASM_HEADERS_OK), run by `../test.sh` in CI's zapps job |
