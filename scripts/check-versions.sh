@@ -251,6 +251,26 @@ done < <(git ls-files '*.md' 2>/dev/null | grep -Ev "$HISTORY_RE" | while read -
          done)
 [ "$fail" -eq "$prev_fail" ] && note "ok   no superseded id is described as current in prose"
 
+# ── 9. the board's deploy units pin the published libzync image ───────────────────────────────────
+# The check-spine and offsite units name the board's image (HAZYNC_METHOD_ID, --method-id), and the offsite copies
+# file receipts under proofs-<that id's first 8>/, append-only. On 2026-11-12 the units on the box still named the
+# image before the one the new hosts ran (SWITCH.md 4c, d); a release that moves the image must move these with it.
+# GENESIS_TIP is a state digest, not an image id, so only these two spellings are read.
+# ⚠ ZERO PINS FOUND IS A FAILURE, not a pass: a renamed directory or a changed spelling would otherwise make this
+# check pass on nothing.
+prev_fail=$fail
+npins=0
+for f in coordinator/deploy/libzync/*.service coordinator/deploy/watchdog/*.service; do
+    [ -f "$f" ] || continue
+    while read -r id; do
+        [ -n "$id" ] || continue
+        npins=$((npins + 1))
+        [ "$id" = "${LZ_MAIN:-unset}" ] || bad "$f pins image ${id:0:8}, not the published libzync mainnet id ${LZ_MAIN:0:8} (reproduce/LIBZYNC_IDS)"
+    done < <(grep -vE '^\s*#' "$f" | grep -oE '(HAZYNC_METHOD_ID=|--method-id )[0-9a-f]{64}' | grep -oE '[0-9a-f]{64}')
+done
+[ "$npins" -gt 0 ] || bad "no image pin (HAZYNC_METHOD_ID= / --method-id) found in coordinator/deploy/{libzync,watchdog}/*.service: the check read nothing"
+[ "$fail" -eq "$prev_fail" ] && note "ok   the board's deploy units pin the published libzync mainnet id ${LZ_MAIN:0:8} ($npins pins)"
+
 if [ "$fail" -ne 0 ]; then
     echo
     echo "Version/id drift detected. If this was an intentional re-baseline, update reproduce/METHOD_ID"

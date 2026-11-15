@@ -121,6 +121,10 @@ WANT_SHA=$(echo "$LZ_LINE" | awk '{print $6}')
 CANON_FILE=$(grep -vE '^[[:space:]]*#' "$REPO/reproduce/METHOD_ID" | grep -oE '[0-9a-f]{64}' | head -1)
 [ "$CANON_FILE" = "$WANT_ID" ] \
     || { echo "reproduce/METHOD_ID (${CANON_FILE:0:8}) is not the published libzync mainnet id (${WANT_ID:0:8})" >&2; exit 1; }
+# The smoke test (below, in the container) needs a real proof by THIS image: fail now, not after the build.
+SMOKE_RCPT="experimental/libzync-bench/zapp/mainnet_1_1_${WANT_ID:0:8}.rcpt"
+[ -f "$REPO/$SMOKE_RCPT" ] \
+    || { echo "missing $SMOKE_RCPT: prove mainnet block 1 under ${WANT_ID:0:8} first (host libzync-prove-range 1 1 prover/testdata/libzync/mainnet genesis <out>, about 16 min on CPU)" >&2; exit 1; }
 
 # Staged inside the MOUNTED repo so the container can read it, under dist/ (git-ignored, so the tree
 # stays clean) in a dot-directory (so check-dist.sh and the release upload never see it). NOT under
@@ -256,6 +260,7 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
     -e HAZYNC_GUEST_ELF=/hazync-zkvm/dist/.libzync-guest/mainnet.bin \
     -e HAZYNC_GUEST_PIN_DIR=/hazync-zkvm/dist/.libzync-guest/pins \
     -e "WANT_ID=$WANT_ID" \
+    -e "SMOKE_RCPT=$SMOKE_RCPT" \
     ${CARGO_BUILD_JOBS:+-e "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"} \
     "${docker_args[@]}" "$IMAGE" bash -lc '
     set -e
@@ -311,22 +316,26 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
     if $H method-id >/dev/null 2>&1; then
       echo "=== METHOD_ID ==="; $H method-id
       echo "=== seg-po2 ==="; $H seg-po2
-      # A host that runs must carry the published image AND accept a real proof of it: mainnet 1..200
+      # A host that runs must carry the published image AND accept a real proof of it: mainnet block 1
       # from genesis (below Core minimum chainwork, so the correct verdict is DEMO, exit 2). The CORE
       # smoke tests (regress, bundle-roundtrip-test) drove guest modes this image refuses (#676).
+      # The receipt must be by THIS image: a host accepts only journals its own image committed (an
+      # empty lineage from a re-baseline means no earlier image), so the v0.26.0 image 46666b6f refused
+      # the v0.24.0 receipt mainnet_1_200_8888d59c.rcpt with 2 FAILs. A re-baseline therefore needs a new
+      # fixture; mainnet_1_1_<id>.rcpt is a real CPU proof (942 s on 6 cores, no GPU needed).
       [ "$($H method-id | awk "NR==1{print \$NF}")" = "$WANT_ID" ] \
         || { echo "=== FAIL: this host does not carry the published libzync image $WANT_ID ===" >&2; exit 1; }
-      echo "=== smoke: libzync-verify on a real proof of mainnet 1..200 ==="
-      rc=0; $H libzync-verify experimental/libzync-bench/zapp/mainnet_1_200_8888d59c.rcpt > /tmp/smoke.log 2>&1 || rc=$?
+      echo "=== smoke: libzync-verify on a real proof of mainnet block 1 ==="
+      rc=0; $H libzync-verify "$SMOKE_RCPT" > /tmp/smoke.log 2>&1 || rc=$?
       tail -1 /tmp/smoke.log
-      [ "$rc" = 2 ] && grep -q "^LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 200" /tmp/smoke.log \
+      [ "$rc" = 2 ] && grep -q "^LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 1," /tmp/smoke.log \
         || { echo "=== FAIL: the host did not accept a real proof of its own image (exit $rc) ===" >&2; exit 1; }
     else
       echo "=== NOT VERIFIED HERE: the binary cannot execute in this container ===" >&2
       echo "    Almost certainly no NVIDIA driver (libcuda.so.1) because --gpus all was unavailable." >&2
       echo "    The artifact is still produced and staged. Verify it where it can run:" >&2
       echo "      hazync-host-x86_64-linux-gnu-cuda method-id      # want $WANT_ID" >&2
-      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify mainnet_1_200_8888d59c.rcpt   # DEMO, exit 2" >&2
+      echo "      hazync-host-x86_64-linux-gnu-cuda libzync-verify $(basename "$SMOKE_RCPT")   # DEMO, exit 2" >&2
       echo "    scripts/release.sh then needs HAZYNC_ATTEST_<artifact>=<id> from that run." >&2
     fi
     # Stage r0vm into the MOUNTED repo so it survives this --rm container. `host libzync-snark-wrap` shells
