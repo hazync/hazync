@@ -125,9 +125,9 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSPATH=%%i
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set INC=-Irisc0-sys-1.5.1\kernels\zkp\cuda -Irisc0-sys-1.5.1\cxx -Ivendor\sppark\sppark -std=c++20 -Xcompiler -std:c++20 -include %CD%\prover\hazync_win_uint.h -Xcompiler /FI%CD%\prover\hazync_win_uint.h
-          nvcc -c -O1 -diag-suppress=177,550,2922 -gencode=arch=compute_61,code=sm_61 %INC% -o rv32im_ffi.obj vendor\risc0-circuit-rv32im-sys\kernels\cuda\ffi.cu || exit /b 1
-          nvcc -c -O1 -diag-suppress=177,550,2922 -gencode=arch=compute_61,code=sm_61 %INC% -o keccak_ffi.obj vendor\risc0-circuit-keccak-sys\kernels\cuda\ffi.cu || exit /b 1
-          nvcc -c -O1 -diag-suppress=177,550,2922 -DFEATURE_BABY_BEAR -gencode=arch=compute_61,code=sm_61 %INC% -o recursion_ffi.obj vendor\risc0-circuit-recursion-sys\kernels\cuda\ffi.cu || exit /b 1
+          nvcc -dc -O1 -diag-suppress=177,550,2922 -gencode=arch=compute_61,code=sm_61 %INC% -o rv32im_ffi.obj vendor\risc0-circuit-rv32im-sys\kernels\cuda\ffi.cu || exit /b 1
+          nvcc -dc -O1 -diag-suppress=177,550,2922 -gencode=arch=compute_61,code=sm_61 %INC% -o keccak_ffi.obj vendor\risc0-circuit-keccak-sys\kernels\cuda\ffi.cu || exit /b 1
+          nvcc -dc -O1 -diag-suppress=177,550,2922 -DFEATURE_BABY_BEAR -gencode=arch=compute_61,code=sm_61 %INC% -o recursion_ffi.obj vendor\risc0-circuit-recursion-sys\kernels\cuda\ffi.cu || exit /b 1
           dir *.obj
 
       - name: The exe must exist and be a real binary
