@@ -210,7 +210,25 @@ multi-party (2-of-2) keys, so it does not serve Lightning gossip as it stands; t
 in the guest, and a nullifier that does not come from a single secret), which I have not built. The prover sees every input, so the coin's holder must prove on
 their own hardware. Under policy 0 the statement says nothing about who holds the coin.
 
-CYCLES_PLACEHOLDER
+**Cycles.** Execute mode, r0vm 3.1.0, hazync-coord, 15.11.2026, after the fixes above. Real inputs: the 1..200 receipt
+and Hal's coin.
+
+| stage | cycles |
+|---|---|
+| reading the inputs (the 2,068-byte core journal, the coin, the paths; risc0 serde reads each byte as a word) | 291,188 (set of 1) – 383,823 (set of 2^20) |
+| the core statement (`env::verify` call, journal decode, `check_core_statement` with the pinned anchor) | 39,674 |
+| the coin: its leaf, its log path (6 levels at block 200), value ≥ X | 8,233 |
+| policy 0, set membership, 2^0 / 2^10 / 2^20 scripts | 2,580 / 15,224 / 27,839 |
+| **policy 0 in all**, set of 1 / 2^10 / 2^20 | **368,708 / 427,826 / 486,751** (one segment, 2^19 / 2^19 / 2^20 after padding) |
+| policy 1's own work, measured alone: d·G (risc0's accelerated k256), the even-Y secret, the nullifier | 112,303 (d) / 148,853 (n − d) |
+
+I ran these refusals, each one counted only when the guest panicked for the stated reason: min_value above the
+coin's amount, a script not in the set, a set path shorter than the committed depth, and the mainnet receipt asked as
+signet. d and n − d give the same key and the same nullifier. Policy 1 was not run end to end on real data: blocks
+1..200 have no P2TR coin, and no real coin's key is mine. Reading the inputs dominates the cost. Reading the journal
+as raw words (`env::read_slice`) is the obvious next step, and I have not measured it. Not counted: resolving the
+core receipt (the assumption) at proving time, one fixed recursion step per receipt. I did not measure proving time
+(no GPU run). Raw output: `experimental/libzync-bench/liveness-anon/RESULT.txt`.
 
 ## 9. Open
 
@@ -219,5 +237,6 @@ CYCLES_PLACEHOLDER
 - **Non-membership.** "This outpoint never existed" would need an outpoint-keyed commitment, which is a core change.
 - **A liveness zyncAPP receipt.** The `coin` guest (ZYNCAPPS.md) already proves the tip case as its own receipt.
   Whether a receipt that answers at H below the tip is worth publishing is undecided.
-- **Privacy variant:** whether to keep the key policy P2TR-only (P2WPKH would add RIPEMD-160), whether X should be
-  hidden too (a range), and proving cost on a user's own machine (not measured).
+- **Privacy variant:** a design that works with hardware and multi-party keys (Lightning); padding the execution
+  length; whether X should be hidden too (a range); P2WPKH (RIPEMD-160 in the guest); proving cost on a user's own
+  machine (not measured).
