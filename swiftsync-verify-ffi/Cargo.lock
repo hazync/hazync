@@ -1309,6 +1309,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "swiftsync-verify"
 version = "0.1.0"
 dependencies = [
+ "ark-ff",
  "bincode",
  "libzync",
  "risc0-zkvm",
@@ -1321,7 +1322,9 @@ dependencies = [
 name = "swiftsync-verify-ffi"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "libzync",
+ "risc0-zkvm",
  "serde_json",
  "swiftsync-verify",
 ]

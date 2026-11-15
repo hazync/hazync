@@ -446,52 +446,46 @@ fn assume_what(lines: &[String]) -> String {
     s
 }
 
-/// The assumevalid / assumeutxo checks against a VERIFIED state.
+/// The assumevalid / assumeutxo checks against a VERIFIED state (`assume::run_assume`, as the C ABI and WASM).
 fn assume_checks(cs: &ChainState, checks: &mut Vec<(bool, String)>, lines: &mut Vec<String>, av: Option<&str>, snap: Option<&str>,
                  headers: Option<&str>, tracked: Option<&str>) {
     use swiftsync_verify::assume;
-    let hc = match headers.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", esc(p)))
-                                   .and_then(|b| assume::HeaderChain::bind(&b, &cs.tip_hash, cs.height))) {
+    let read = |p: &str| std::fs::read(p).map_err(|e| format!("{}: {e}", esc(p)));
+    let headers = match headers.map(read) {
         None => None,
-        Some(Ok(h)) => {
-            checks.push((true, format!("--headers: {} headers, heights {}..{}, linked, the last one the proven tip", h.hashes.len(), h.first_height, h.tip_height())));
-            Some(h)
-        }
-        Some(Err(e)) => { checks.push((false, format!("--headers {}: {e}", esc(headers.unwrap())))); return }
+        Some(Ok(b)) => Some(b),
+        Some(Err(e)) => { checks.push((false, format!("--headers {e}"))); return }
     };
-    if let Some(x) = av {
-        let block = if x == "tip" { Ok(None) } else { assume::parse_display_hash(x).map(Some).ok_or(format!("--block {x:?}: not 64 hex digits")) };
-        match block.and_then(|b| assume::assume_valid(cs, hc.as_ref(), b)) {
-            Ok(r) => {
-                checks.push((true, format!("assumevalid: block {} at height {} is in the proven chain (0..{}), whose every script and signature the proof checked",
-                                           assume::display(&r.block), r.height, r.proven_to)));
-                lines.push(format!("assumevalid: -assumevalid={} (height {}; scripts proven valid for blocks 0..{})", assume::display(&r.block), r.height, r.proven_to));
-            }
-            Err(e) => checks.push((false, format!("assumevalid: {e}"))),
-        }
+    let tracked = match tracked.map(|p| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", esc(p)))) {
+        None => None,
+        Some(Ok(t)) => Some(t),
+        Some(Err(e)) => { checks.push((false, format!("--tracked {e}"))); return }
+    };
+    let assumevalid = match av {
+        None => None,
+        Some("tip") => Some(None),
+        Some(x) => match assume::parse_display_hash(x) {
+            Some(h) => Some(Some(h)),
+            None => { checks.push((false, format!("assumevalid: --block {x:?}: not 64 hex digits"))); return }
+        },
+    };
+    let snapshot = match snap.map(|p| std::fs::File::open(p).map_err(|e| format!("{}: {e}", esc(p)))) {
+        None => None,
+        Some(Ok(f)) => Some(std::io::BufReader::with_capacity(1 << 20, f)),
+        Some(Err(e)) => { checks.push((false, format!("assumeutxo: {e}"))); return }
+    };
+    let t0 = std::time::Instant::now();
+    let o = assume::run_assume(cs, assume::AssumeRequest { assumevalid, headers: headers.as_deref(), snapshot, tracked: tracked.as_deref() });
+    let secs = t0.elapsed().as_secs_f64();
+    for (ok, what) in o.checks {
+        checks.push((ok, if what.starts_with("assumeutxo: snapshot of") { format!("{what} [{}; {secs:.2} s]", esc(snap.unwrap_or(""))) } else { what }));
     }
-    if let Some(p) = snap {
-        let Some(hc) = hc.as_ref() else {
-            checks.push((false, "assumeutxo: --headers (genesis to the proven tip) is required: each coin's creation MTP comes from them".into()));
-            return;
-        };
-        let t = match tracked.map(|p| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", esc(p))).and_then(|s| assume::parse_tracked(&s))) {
-            None => assume::Tracked::new(),
-            Some(Ok(t)) => t,
-            Some(Err(e)) => { checks.push((false, format!("--tracked: {e}"))); return }
-        };
-        let t0 = std::time::Instant::now();
-        let r = std::fs::File::open(p).map_err(|e| format!("{}: {e}", esc(p)))
-            .and_then(|f| assume::check_snapshot(cs, std::io::BufReader::with_capacity(1 << 20, f), hc, &t));
-        match r {
-            Ok(r) => {
-                checks.push((true, format!("assumeutxo: snapshot {}: {} coins, {} sat, base block {} = the proven tip; its live-coin ECMH equals the proof's ({} coin(s) BIP30-tracked, of {} listed; {:.2} s)",
-                                           esc(p), r.coins, r.value, assume::display(&r.meta.base_blockhash), r.tracked_used, t.len(), t0.elapsed().as_secs_f64())));
-                lines.push(format!("assumeutxo: {} is the proven UTXO set at height {}; Core's hash_serialized_3 of it: {}", esc(p), cs.height, r.hash_serialized_3));
-                let (x, y) = assume::live_hash_hex(&r.live_hash);
-                lines.push(if r.live_set == 0 { "live_hash identity".into() } else { format!("live_hash x {x} y {y}") });
-            }
-            Err(e) => checks.push((false, format!("assumeutxo: {}: {e}", esc(p)))),
-        }
+    if let Some(r) = o.valid {
+        lines.push(format!("assumevalid: -assumevalid={} (height {}; scripts proven valid for blocks 0..{})", assume::display(&r.block), r.height, r.proven_to));
+    }
+    if let Some(r) = o.utxo {
+        lines.push(format!("assumeutxo: {} is the proven UTXO set at height {}; Core's hash_serialized_3 of it: {}", esc(snap.unwrap_or("")), cs.height, r.hash_serialized_3));
+        let (x, y) = assume::live_hash_hex(&r.live_hash);
+        lines.push(if r.live_set == 0 { "live_hash identity".into() } else { format!("live_hash x {x} y {y}") });
     }
 }

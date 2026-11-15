@@ -1,0 +1,12 @@
+PASS  assumeutxo_200     demo (want demo)  
+PASS  assumevalid_tip    demo (want demo)  
+PASS  assumevalid_170    demo (want demo)  
+PASS  tampered_snapshot  fail (want fail)  assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x 0f5e8049.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set (no coin 
+PASS  snapshot_199       fail (want fail)  assumeutxo: snapshot: base block 00000000b7691ccc084542565697eca256e56bb7f67e560b48789db27f0468eb is not the proven tip 000000008f1a7008320c
+PASS  snapshot_1003      fail (want fail)  assumeutxo: snapshot: coin 46e421bd0d33659cf4be11abfa1b864c25a0e5671a646ed6e7c81d3a69211700:0 at height 218, outside 1..200
+PASS  no_headers         fail (want fail)  assumeutxo: the headers (genesis to the proven tip) are required: each coin's creation MTP comes from them
+PASS  wrong_expect       fail (want fail)  expect "200:00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee": not the proof's tip
+PASS  flipped_receipt    fail (want fail)  receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): verification indicates proof is i
+PASS  tracked_false      fail (want fail)  assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x c210a27e.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set
+PASS  nothing_asked      fail (want fail)  neither an assumevalid block nor a snapshot was given
+11/11 cases as expected (wasm, assume)

@@ -159,6 +159,91 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
     }
 }
 
+/// The answers of `swiftsync_verify_assume` (include/swiftsync_verify.h).
+#[repr(C)]
+pub struct SwiftsyncAssumeResult {
+    pub assumevalid_block: [u8; 32],
+    pub assumevalid_height: u32,
+    pub snapshot_coins: u64,
+    pub snapshot_value: u64,
+    /// Core's hash_serialized_3 of the snapshot, 64 hex digits (display order) and a NUL
+    pub hash_serialized_3: [u8; 65],
+}
+
+/// See include/swiftsync_verify.h.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len: usize, network: u8, now: u64,
+                                                 image_hex: *const c_char, expect: *const c_char,
+                                                 assumevalid_block: *const u8, headers: *const u8, headers_len: usize,
+                                                 snapshot: *const u8, snapshot_len: usize, tracked: *const c_char,
+                                                 out: *mut SwiftsyncResult, aout: *mut SwiftsyncAssumeResult,
+                                                 msg: *mut c_char, msg_len: usize) -> i32 {
+    let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
+    // the receipt and the chain identity exactly as swiftsync_verify_facts checks them (no anchor: a node's shortcut
+    // must rest on a chain from genesis)
+    let mut base_msg = [0 as c_char; 512];
+    let mut res = std::mem::MaybeUninit::<SwiftsyncResult>::zeroed();
+    let rc = swiftsync_verify_facts(receipt, receipt_len, network, now, image_hex, std::ptr::null(), std::ptr::null(), expect,
+                                    res.as_mut_ptr(), base_msg.as_mut_ptr(), base_msg.len());
+    if rc == FAIL {
+        return fail(&CStr::from_ptr(base_msg.as_ptr()).to_string_lossy());
+    }
+    // the state again, from the same bytes that just verified
+    let Ok(r) = bincode::deserialize::<risc0_zkvm::Receipt>(slice(receipt, receipt_len)) else {
+        return fail("assume: a proof bundle is not accepted here: give the receipt");
+    };
+    let Ok(cs) = r.journal.decode::<ChainState>() else { return fail("journal is not a ChainState") };
+    // a non-matching expect already FAILed above; here it is only whether one was given and matched
+    let tip_checked = !expect.is_null() && CStr::from_ptr(expect).to_str().ok()
+        .and_then(|e| swiftsync_verify::parse_expect(e.trim()))
+        .is_some_and(|(h, x)| swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash));
+    let tracked_s = if tracked.is_null() { None } else {
+        match CStr::from_ptr(tracked).to_str() { Ok(t) => Some(t), Err(_) => return fail("tracked list is not UTF-8") }
+    };
+    let av = if assumevalid_block.is_null() { None } else {
+        let b: [u8; 32] = slice(assumevalid_block, 32).try_into().unwrap();
+        Some(if b == [0; 32] { None } else { Some(b) })
+    };
+    if av.is_none() && snapshot.is_null() {
+        return fail("assume: neither an assumevalid block nor a snapshot was given");
+    }
+    let o = swiftsync_verify::assume::run_assume(&cs, swiftsync_verify::assume::AssumeRequest {
+        assumevalid: av,
+        headers: if headers.is_null() { None } else { Some(slice(headers, headers_len)) },
+        snapshot: if snapshot.is_null() { None } else { Some(slice(snapshot, snapshot_len)) },
+        tracked: tracked_s,
+    });
+    if let Some((_, w)) = o.checks.iter().find(|(ok, _)| !ok) {
+        return fail(w);
+    }
+    if !out.is_null() {
+        *out = res.assume_init();
+    }
+    if !aout.is_null() {
+        let mut a = SwiftsyncAssumeResult { assumevalid_block: [0; 32], assumevalid_height: 0, snapshot_coins: 0, snapshot_value: 0,
+                                            hash_serialized_3: [0; 65] };
+        if let Some(v) = &o.valid {
+            a.assumevalid_block = v.block;
+            a.assumevalid_height = v.height;
+        }
+        if let Some(u) = &o.utxo {
+            a.snapshot_coins = u.coins;
+            a.snapshot_value = u.value;
+            a.hash_serialized_3[..64].copy_from_slice(u.hash_serialized_3.as_bytes());
+        }
+        *aout = a;
+    }
+    // as facts: OK only for a proof with enough work whose tip the caller matched with `expect`
+    if rc == OK && tip_checked {
+        write_msg(msg, msg_len, "proven from genesis, chain identity checked; the assumevalid block / snapshot is proven");
+        OK
+    } else {
+        write_msg(msg, msg_len, "the assumevalid block / snapshot matches the proof, but the chain is below minimum work or the checkpoint, or its tip was not matched with expect: not shown to be the network's");
+        DEMO
+    }
+}
+
 static IDS: [&str; 2] = [
     "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c\0",
     "01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7\0",
@@ -234,5 +319,53 @@ mod trie_tests {
         assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &l).is_err());
         let held = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(0)).unwrap();
         assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &held).unwrap_err().contains("origin"));
+    }
+}
+
+#[cfg(test)]
+mod assume_tests {
+    use super::*;
+    const RCPT: &[u8] = include_bytes!("../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
+    const FLIPPED: &[u8] = include_bytes!("../../swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt");
+    const SNAP: &[u8] = include_bytes!("../../swiftsync-verify/vectors/assume/utxo_200.dat");
+    const SNAP199: &[u8] = include_bytes!("../../swiftsync-verify/vectors/assume/utxo_199.dat");
+    const HDRS: &[u8] = include_bytes!("../../swiftsync-verify/vectors/assume/headers_0_200.bin");
+    const TIP: &str = "200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320\0";
+
+    fn call(rcpt: &[u8], av: Option<[u8; 32]>, snap: Option<&[u8]>, expect: Option<&str>) -> (i32, String, SwiftsyncAssumeResult) {
+        let mut out = std::mem::MaybeUninit::<SwiftsyncResult>::zeroed();
+        let mut a = std::mem::MaybeUninit::<SwiftsyncAssumeResult>::zeroed();
+        let mut msg = [0 as c_char; 512];
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let avb = av.map(|b| b.to_vec());
+        let rc = unsafe { swiftsync_verify_assume(rcpt.as_ptr(), rcpt.len(), 0, now, std::ptr::null(),
+            expect.map_or(std::ptr::null(), |e| e.as_ptr() as *const c_char), avb.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
+            HDRS.as_ptr(), HDRS.len(), snap.map_or(std::ptr::null(), |s| s.as_ptr()), snap.map_or(0, |s| s.len()), std::ptr::null(),
+            out.as_mut_ptr(), a.as_mut_ptr(), msg.as_mut_ptr(), msg.len()) };
+        (rc, unsafe { CStr::from_ptr(msg.as_ptr()) }.to_string_lossy().to_string(), unsafe { a.assume_init() })
+    }
+
+    #[test]
+    fn the_real_snapshot_and_assumevalid() {
+        let (rc, m, a) = call(RCPT, Some([0; 32]), Some(SNAP), Some(TIP));
+        assert_eq!(rc, DEMO, "{m}"); // 200 blocks: below minimum work
+        assert_eq!((a.snapshot_coins, a.snapshot_value, a.assumevalid_height), (204, 1_000_000_000_000, 200));
+        assert_eq!(&a.hash_serialized_3[..64], b"a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67");
+        let mut b170 = swiftsync_verify::hex32("00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee").unwrap();
+        b170.reverse();
+        let (rc, m, a) = call(RCPT, Some(b170), None, None);
+        assert_eq!((rc, a.assumevalid_height), (DEMO, 170), "{m}");
+    }
+
+    #[test]
+    fn refusals() {
+        let mut bad = SNAP.to_vec();
+        bad[51] ^= 1;
+        assert_eq!(call(RCPT, None, Some(&bad), None).0, FAIL);
+        assert!(call(RCPT, None, Some(SNAP199), None).1.contains("tip only"));
+        assert_eq!(call(FLIPPED, None, Some(SNAP), None).0, FAIL);
+        assert_eq!(call(RCPT, None, Some(SNAP), Some("200:00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee\0")).0, FAIL);
+        assert!(call(RCPT, Some([7; 32]), None, None).1.contains("not in the headers"));
+        assert!(call(RCPT, None, None, None).1.contains("neither"));
     }
 }

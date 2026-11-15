@@ -648,6 +648,80 @@ pub fn check_snapshot<R: Read>(cs: &ChainState, snap: R, headers: &HeaderChain, 
     Ok(r)
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// One entry for the CLI, the C ABI and WASM
+
+/// What to check against a verified state.
+pub struct AssumeRequest<'a, R: Read> {
+    /// None: no assumevalid check; Some(None): the tip; Some(Some(hash)): that block (internal order)
+    pub assumevalid: Option<Option<[u8; 32]>>,
+    /// raw 80-byte headers ending at the proven tip
+    pub headers: Option<&'a [u8]>,
+    /// a Core `dumptxoutset` file
+    pub snapshot: Option<R>,
+    /// the BIP30-tracked outpoints ([`parse_tracked`])
+    pub tracked: Option<&'a str>,
+}
+
+#[derive(Debug, Default)]
+pub struct AssumeOutcome {
+    /// (ok, what), one line per check made; any false is a FAIL
+    pub checks: Vec<(bool, String)>,
+    pub valid: Option<AssumeValid>,
+    pub utxo: Option<SnapshotCheck>,
+}
+
+/// The assumevalid and assumeutxo checks of `req` against `cs`, which must be the state of a receipt that VERIFIED
+/// (its verdict OK or DEMO): against any other journal the answers are the prover's word.
+pub fn run_assume<R: Read>(cs: &ChainState, req: AssumeRequest<R>) -> AssumeOutcome {
+    let mut o = AssumeOutcome::default();
+    let hc = match req.headers.map(|b| HeaderChain::bind(b, &cs.tip_hash, cs.height)) {
+        None => None,
+        Some(Ok(h)) => {
+            o.checks.push((true, format!("headers: {} headers, heights {}..{}, linked, the last one the proven tip", h.hashes.len(),
+                                         h.first_height, h.tip_height())));
+            Some(h)
+        }
+        Some(Err(e)) => {
+            o.checks.push((false, e));
+            return o;
+        }
+    };
+    if let Some(block) = req.assumevalid {
+        match assume_valid(cs, hc.as_ref(), block) {
+            Ok(r) => {
+                o.checks.push((true, format!("assumevalid: block {} at height {} is in the proven chain (0..{}), whose every script and signature the proof checked",
+                                             display(&r.block), r.height, r.proven_to)));
+                o.valid = Some(r);
+            }
+            Err(e) => o.checks.push((false, format!("assumevalid: {e}"))),
+        }
+    }
+    if let Some(snap) = req.snapshot {
+        let Some(hc) = hc.as_ref() else {
+            o.checks.push((false, "assumeutxo: the headers (genesis to the proven tip) are required: each coin's creation MTP comes from them".into()));
+            return o;
+        };
+        let t = match req.tracked.map(parse_tracked) {
+            None => Tracked::new(),
+            Some(Ok(t)) => t,
+            Some(Err(e)) => {
+                o.checks.push((false, format!("assumeutxo: {e}")));
+                return o;
+            }
+        };
+        match check_snapshot(cs, snap, hc, &t) {
+            Ok(r) => {
+                o.checks.push((true, format!("assumeutxo: snapshot of {} coins, {} sat, base block {} = the proven tip; its live-coin ECMH equals the proof's ({} coin(s) BIP30-tracked, of {} listed)",
+                                             r.coins, r.value, display(&r.meta.base_blockhash), r.tracked_used, t.len())));
+                o.utxo = Some(r);
+            }
+            Err(e) => o.checks.push((false, format!("assumeutxo: {e}"))),
+        }
+    }
+    o
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
