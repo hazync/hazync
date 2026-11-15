@@ -3763,8 +3763,6 @@ dependencies = [
 [[package]]
 name = "risc0-circuit-recursion-sys"
 version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77af839ca6a70e21558e13c4944570b9752bd788fccd09618683fc231f449d80"
 dependencies = [
  "glob",
  "risc0-build-kernel",

@@ -16,6 +16,10 @@ risc0-zkvm = { path = "../vendor/risc0-zkvm" }
 # HAZYNC_631_MSVC_FLAGS). The hazync#119 accum-pass fix we carried on 4.0.3 is upstream since 4.1.0.
 # Prover-only: METHOD_ID, circuit and verifier are unchanged.
 risc0-circuit-rv32im-sys = { path = "../vendor/risc0-circuit-rv32im-sys" }
+# hazync#727 (DIAG BRANCH): risc0-circuit-recursion-sys 4.1.0, vendored ONLY so its CUDA witgen can build its
+# kernel-argument context in device memory instead of cudaMallocManaged (kernels/cuda/ffi.cu, search
+# HAZYNC_727). Host-side CUDA only: the recursion circuit, its zkrs, control ids and METHOD_ID are unchanged.
+risc0-circuit-recursion-sys = { path = "../vendor/risc0-circuit-recursion-sys" }
 # hazync#616: risc0-circuit-keccak 4.1.0 with ONE fix, in build.rs (search
 # HAZYNC_WINDOWS_PATH_ESCAPE). generate_zkr_table() interpolated an ABSOLUTE PATH straight into a
 # Rust string literal; on Windows `canonicalize` returns `\\?\C:\Users\...` and every `\U`, `\r`,
