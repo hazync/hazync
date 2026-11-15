@@ -1,0 +1,14 @@
+PASS  spent at 170           demo (want demo)  holds on this chain, but the chain is not shown to be the network's: spent:170:1:0: coin 0437cd7f8525ceed23243
+PASS  unspent after 169      demo (want demo)  holds on this chain, but the chain is not shown to be the network's: unspent: coin 0437cd7f8525ceed2324359c2d0
+PASS  unspent at the tip     demo (want demo)  holds on this chain, but the chain is not shown to be the network's: unspent: coin f4184fc596403b9d638783cf57a
+PASS  spent at 181           demo (want demo)  holds on this chain, but the chain is not shown to be the network's: spent:181:1:0: coin f4184fc596403b9d63878
+PASS  false claim: unspent   fail (want fail)  the question claims unspent, the proof shows spent:170:1:0: coin 0437cd7f8525ceed2324359c2d0ba26006d92d856a9c2
+PASS  false claim: spent     fail (want fail)  the question claims spent, the proof shows unspent: coin f4184fc596403b9d638783cf57adfe4c75c605f6356fbc9133853
+PASS  no claim               fail (want fail)  liveness question "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0@200" claims no answer (=
+PASS  wrong amount           fail (want fail)  the coin holds 1000000000 sat, not the amount asked
+PASS  another height         fail (want fail)  the proof is about height 200, the question about 150
+PASS  tampered proof         fail (want fail)  liveness proof for f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0 at 200: the coin is not 
+PASS  dev-mode receipt       fail (want fail)  facts NOT checked: the receipt did not verify
+PASS  frame: a trie fact     demo (want demo, every check ok)
+PASS  frame: verify + expect demo (want demo, every check ok)
+13/13 liveness cases as expected (wasm)
