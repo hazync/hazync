@@ -3,13 +3,13 @@
 # (zapps/<name>/wasm/build.sh) go through here, so they all get the same flags. As ../history/verifier-wasm/build.sh
 # did: stage the crate and its path dependencies at one fixed location and remap every embedded path.
 #
-#   scripts/wasm-build.sh <crate dir> <stage dir> <wasm file> <path dependency dir>...   (dirs relative to the repo)
+#   scripts/wasm-build.sh <crate dir> <stage dir> <wasm file> <path dependency dir or included file>...   (relative to the repo)
 #
 # The .wasm is copied to <crate dir>/target/wasm32-unknown-unknown/release/<wasm file>.
 # ⚠ The bytes depend on the STAGE PATH (a SWIFTSYNC_WASM_STAGE override gave other bytes, +235, with no path in the
 # strings): each caller passes its own fixed default, and a published sha is for that default only.
 set -euo pipefail
-[ $# -ge 3 ] || { echo "usage: $0 <crate dir> <stage dir> <wasm file> <path dependency dir>..." >&2; exit 1; }
+[ $# -ge 3 ] || { echo "usage: $0 <crate dir> <stage dir> <wasm file> <path dependency dir or included file>..." >&2; exit 1; }
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 CRATE=$1 STAGE=$2 WASM=$3
 shift 3
@@ -22,6 +22,8 @@ rustup toolchain install "$TOOLCHAIN" --profile minimal --target wasm32-unknown-
 export RUSTUP_TOOLCHAIN="$TOOLCHAIN"
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 for c in "$CRATE" "$@"; do
+    # a file: one a crate include!s from outside itself (as swiftsync-verify the guest's handover pin, below)
+    if [ -f "$REPO/$c" ]; then mkdir -p "$STAGE/$(dirname "$c")" && cp "$REPO/$c" "$STAGE/$c"; continue; fi
     mkdir -p "$STAGE/$c"
     # ./wasm/target, ./ffi/target: a zAPP's own build dirs, under the zAPP crate that its wasm crate depends on
     (cd "$REPO/$c" && tar --exclude=./target --exclude=./vectors --exclude=./wasm/target --exclude=./ffi/target -cf - .) \

@@ -9,6 +9,7 @@ FT=${CARGO_TARGET_DIR:-$PWD/ffi/target}
 H3=0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449
 V=$PWD/vectors
 cargo test --release --manifest-path ./Cargo.toml
+cargo test --release --manifest-path ./wasm/Cargo.toml
 cargo build --release --manifest-path ./Cargo.toml --bin zapp-hints
 set +e; "$T/release/zapp-hints" --expect 3:$H3 --undo $V/mainnet-3.undo $V/mainnet-3.receipt $V/mainnet-3.hints; e=$?; set -e
 [ $e = 2 ] || { echo "::error::the proven hints file: exit $e, want 2 (DEMO)"; exit 1; }

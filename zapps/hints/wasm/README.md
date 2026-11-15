@@ -12,7 +12,7 @@ node test-hints.mjs ../vectors 0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742
 
 | | |
 |---|---|
-| size | 1,105,325 bytes raw, 307,935 gzipped |
-| sha256 (this commit, `./build.sh`) | `c96015d96d6ca2170213250bd740f92be13533aa9be3dc294b7af4e0916bb75f` (hints image `1894f12e`; Rust 1.99.0, 2026-11-15) |
+| size | 1,105,342 bytes raw, 307,939 gzipped |
+| sha256 (this commit, `./build.sh`) | `7c9c71074c3890fbda49d0017420033c77583744e99a755b96fc7ead57aa521e` (hints image `1894f12e`; Rust 1.99.0, 2026-11-15) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-hints.mjs` 6/6, run by `../test.sh` in CI's zapps job |
