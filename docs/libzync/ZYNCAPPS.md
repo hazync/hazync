@@ -110,7 +110,7 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 
 | zyncAPP | inputs | uses | answer |
 |---|---|---|---|
-| **zyncPOO** (proof of ownership) | coins with log paths; a challenge; a signature by each coin's key | `utxo_roots` | "these coins, worth X sat, are unspent at the tip (or at height h) and the holder signed the challenge". A private form commits only the total |
+| statement of balance (STATEMENT_ZAPP.md; built as a file checked by the verifier, no guest) | each script's balance fact; a purpose and nonce; a BIP-322 signature by each script | `trie_root` | "these scripts held X sat at the tip H, and each signed this statement". A private form (a guest, prototype measured) commits only the total |
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
