@@ -21,5 +21,31 @@ for (const [n, a, want] of cases) {
   bad += r.verdict !== want;
   console.log(`${r.verdict === want ? 'PASS' : 'WRONG'} ${n}: ${r.verdict}${r.verdict === 'fail' ? ' (' + r.checks.find((c) => !c.ok).what.slice(0, 90) + ')' : ' height ' + r.height + ' unspent ' + r.unspent}`);
 }
+// The frame itself, by hand (the raw exports, not the glue): the proven call's bytes pass, a byte past the end and a
+// frame cut short are refused before anything is verified.
+const ex = (await WebAssembly.instantiate(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_hints_wasm.wasm', import.meta.url)), {})).instance.exports;
+const raw = (bytes) => {
+  const p = ex.alloc(bytes.length);
+  new Uint8Array(ex.memory.buffer, p, bytes.length).set(bytes);
+  const r = ex.verify_hints(p, bytes.length);
+  const n = new DataView(ex.memory.buffer).getUint32(r, true);
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
+};
+const enc = new TextEncoder();
+const parts = [receipt, file, undo, new Uint8Array(0), new Uint8Array(0), enc.encode(`3:${h3}`), new Uint8Array(0)];
+const frame = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
+new DataView(frame.buffer).setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), true);
+let o = 8;
+for (const p of parts) { new DataView(frame.buffer).setUint32(o, p.length, true); frame.set(p, o + 4); o += 4 + p.length; }
+const trailing = new Uint8Array(frame.length + 1); trailing.set(frame);
+for (const [n, bytes, want, why] of [['the frame as the glue writes it', frame, 'demo', ''],
+                                     ['a byte past the end of the frame', trailing, 'fail', 'trailing'],
+                                     ['a frame cut short', frame.slice(0, frame.length - 1), 'fail', 'truncated']]) {
+  const r = raw(bytes);
+  const ok = r.verdict === want && (!why || r.checks.some((c) => !c.ok && c.what.includes(why)));
+  bad += !ok;
+  cases.push([n]);
+  console.log(`${ok ? 'PASS' : 'WRONG'} ${n}: ${r.verdict}${why ? ' (' + (r.checks.find((c) => !c.ok) || {}).what + ')' : ''}`);
+}
 console.log(`HINTS_WASM ${cases.length - bad}/${cases.length} (image ${v.hintsImageId()})`);
 process.exit(bad ? 1 : 0);

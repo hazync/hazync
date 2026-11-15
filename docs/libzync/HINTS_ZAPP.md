@@ -240,7 +240,7 @@ by a proof. Proving the core further on CPU (~16 min a block here) was not attem
 
 **Pinned** (review H2): `zyncapp-hints` `1894f12e…` from the reproducible build's steps on hazync-coord (the three
 existing ids reproduced unchanged), with CI's `reproducible-image-id` as the second build; every tool trusts that id
-(`swiftsync_verify::hints::HINTS_IMAGE_ID`; `zyncapp hints-verify` too).
+(`zapp_hints::HINTS_IMAGE_ID` in `zapps/hints`; `zyncapp hints-verify` too).
 
 **Not done.** A proof over a chain with spends; a cost for modern blocks; signet (the code takes `--signet`,
 untested); `hints_test.sh` in CI (it needs block data and a prep state).

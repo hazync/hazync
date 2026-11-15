@@ -1,6 +1,8 @@
 //! C ABI for the SwiftSync hints zyncAPP (include/zapp_hints.h), moved out of swiftsync-verify-ffi on 15.11.2026: a
 //! zAPP module of its own (docs/libzync/ZYNCAPPS.md §9). One implementation of the check: this calls the same
-//! `zapp_hints::verify_hints` as the CLI and the WASM build. No panics cross the boundary.
+//! `zapp_hints::verify_hints` as the CLI and the WASM build. Bad input is an error, never a panic; and since the crate
+//! is built with `panic = "abort"` (no unwinding, so no `catch_unwind`), a panic from a bug aborts the process rather
+//! than unwinding into C.
 
 use std::ffi::{c_char, CStr};
 use swiftsync_verify::Verdict;
@@ -33,7 +35,7 @@ pub struct SwiftsyncHints {
     pub unspent_value: u64,
 }
 
-/// See include/swiftsync_verify.h.
+/// See include/zapp_hints.h.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn swiftsync_verify_hints(receipt: *const u8, receipt_len: usize, file: *const u8, file_len: usize,

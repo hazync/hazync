@@ -1,5 +1,7 @@
 /* zapp_hints.h: the C ABI of the SwiftSync hints zyncAPP (zapps/hints, docs/libzync/ZYNCAPPS.md §9), a module of its
-   own on the core verifier. Link zapps/hints/ffi's libzapp_hints_ffi.a. */
+   own on the core verifier. Link zapps/hints/ffi's libzapp_hints_ffi.a (and -lpthread -ldl -lm) on its own; beside the
+   core verifier's libswiftsync_verify.a, link libzapp_hints_ffi.so instead: two Rust static archives in one binary each
+   carry a Rust std and clash at link time (multiple definitions). ffi/test_with_core.c, run by ../test.sh, does that. */
 #ifndef ZAPP_HINTS_H
 #define ZAPP_HINTS_H
 #include <stddef.h>

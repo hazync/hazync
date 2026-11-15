@@ -14,8 +14,8 @@ use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-/// The hints image id this verifier trusts by default. ⚠ A local build (hazync-coord, 2026-11-14), NOT yet a
-/// reproducible build in reproduce/LIBZYNC_IDS: publish it there before anyone relies on this default.
+/// The hints image id this verifier trusts by default: the `zyncapp-hints` line of reproduce/LIBZYNC_IDS (the
+/// reproducible build; reproduce/pin-libzync-ids.py sets it, and `hints_image_matches_the_published_id` checks it).
 pub const HINTS_IMAGE_ID: &str = "1894f12eaef5ea50e649b56d0e8fe6afd5b59deb99331e2a5ad49f1a52eb0e8a";
 
 /// The guest's statement, field for field and in order (risc0 serde).
@@ -149,7 +149,7 @@ mod tests {
     fn rd(f: &str) -> Vec<u8> { std::fs::read(format!("{}/vectors/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap() }
     fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
 
-    /// The real receipts (proved on CPU, 2026-11-14, hints image dff7f87c over core 46666b6f blocks 1..3).
+    /// The real receipts (proved on CPU, 2026-11-14, re-proved by the published hints image 1894f12e, over core 46666b6f blocks 1..3).
     #[test]
     fn real_receipts() {
         let (r, f, u) = (rd("mainnet-3.receipt"), rd("mainnet-3.hints"), rd("mainnet-3.undo"));

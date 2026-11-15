@@ -15,11 +15,15 @@
 //! [`check_core_tip`] does that against a verified core state (and compares the node's chainwork, as the core CLI);
 //! [`expect_for_core`] / [`expect_at`] turn the sources into the `--expect` string a zAPP's own check takes.
 //!
-//! **The core check.** [`image_for`] and [`verify_core`]: the image a caller names and the core receipt verified by the
-//! core verifier, for a zAPP (CLI, C ABI or WASM) resting on a core proof.
+//! CLIs only: no zAPP library, C ABI or WASM module depends on this crate (each zAPP's CLI is its own crate, `cli/`).
+//! The core receipt check a zAPP resting on a core proof makes is `zapps/corecheck`.
 
 use std::process::Command;
-use swiftsync_verify::{check_bundle, identity_matches, parse_expect, verify, Bundle, ChainState, Image, Inputs, Report, Verdict, BUNDLE_MAGIC};
+use swiftsync_verify::{identity_matches, parse_expect, ChainState};
+
+/// curl's arguments before the URL: fail on HTTP errors, quiet, 30 s, https only (redirects too), and `--` so the URL
+/// is never read as an option.
+const CURL: [&str; 8] = ["-sf", "--max-time", "30", "--proto", "=https", "--proto-redir", "=https", "--"];
 
 /// The identity flags, for a zAPP's usage line.
 pub const IDENTITY_USAGE: &str = "[--expect <height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<command>\"]";
@@ -50,8 +54,15 @@ impl Identity {
         let mut val = || next().ok_or_else(|| format!("{flag} needs a value"));
         match flag {
             "--expect" => self.expect = Some(val()?),
+            // one explorer: --mempool and --mempool-url together would silently keep whichever came last
+            "--mempool" | "--mempool-url" if self.mempool.is_some() => return Err("--mempool and --mempool-url: give one of them, once".into()),
             "--mempool" => self.mempool = Some(String::new()),
-            "--mempool-url" => self.mempool = Some(val()?),
+            // https only: the answer names the network's block, so it must come from the server asked, unaltered
+            "--mempool-url" => {
+                let u = val()?;
+                if !u.starts_with("https://") { return Err(format!("--mempool-url {u:?}: an https:// URL")); }
+                self.mempool = Some(u)
+            }
             "--bitcoin-cli" => self.bitcoin_cli = Some(val()?),
             _ => return Ok(false),
         }
@@ -83,7 +94,8 @@ impl Identity {
             let base = if !base.is_empty() { base.trim_end_matches('/').to_string() }
                        else if network == "signet" { "https://mempool.space/signet/api".into() } else { "https://mempool.space/api".into() };
             let url = format!("{base}/block-height/{height}");
-            match Command::new("curl").args(["-sf", "--max-time", "30", &url]).output() {
+            // `--` ends curl's options (a base starting with '-' is a URL, not a flag); https only, redirects included
+            match Command::new("curl").args(CURL).arg(&url).output() {
                 Ok(o) if o.status.success() => {
                     let got = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
                     if is_hash(&got) {
@@ -101,10 +113,17 @@ impl Identity {
             match node(cmd, &["getblockhash", &height.to_string()]) {
                 Ok(hash) if is_hash(&hash.to_lowercase()) => {
                     let hash = hash.to_lowercase();
-                    r.node_chainwork = node(cmd, &["getblockheader", &hash]).ok()
-                        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-                        .and_then(|v| v["chainwork"].as_str().map(|w| w.to_lowercase()));
                     r.checks.push((true, format!("your node's block {height} is {hash}")));
+                    // the node's chainwork is compared with the proven one; a node that cannot say is a FAIL, not a
+                    // silently skipped comparison. Any hex up to 64 digits, as getblockheader prints it, padded to 64.
+                    match node(cmd, &["getblockheader", &hash]) {
+                        Err(e) => r.checks.push((false, format!("your node's getblockheader {hash} failed ({e}): the proven chainwork is not compared"))),
+                        Ok(j) => match serde_json::from_str::<serde_json::Value>(&j).ok().and_then(|v| v["chainwork"].as_str().map(str::to_string))
+                            .filter(|w| !w.is_empty() && w.len() <= 64 && w.bytes().all(|b| b.is_ascii_hexdigit())) {
+                            Some(w) => r.node_chainwork = Some(format!("{:0>64}", w.to_lowercase())),
+                            None => r.checks.push((false, format!("your node's getblockheader {hash} has no chainwork: the proven chainwork is not compared"))),
+                        },
+                    }
                     answers.push(("your node".into(), height, hash));
                 }
                 Ok(other) => r.checks.push((false, format!("your node's chain: getblockhash {height} gave {other:?}"))),
@@ -113,18 +132,51 @@ impl Identity {
         }
         // Every answer about the same block must name the same hash; --expect at another height than the lookups'
         // would leave one of them unchecked, so it is refused rather than half used.
+        // Sources that disagree give NO answer: returning the first one's would let a caller that uses only `expect`
+        // (expect_for_core, expect_at) check against a hash another source contradicts.
         if let Some((s0, h0, x0)) = answers.first().cloned() {
+            let mut agree = true;
             for (s, h, x) in answers.iter().skip(1) {
                 if *h != h0 {
                     r.checks.push((false, format!("{s0} is about block {h0}, {s} about block {h}: give sources about the same block")));
+                    agree = false;
                 } else if *x != x0 {
                     r.checks.push((false, format!("{s} says block {h} is {x}, {s0} says {x0}: the sources disagree")));
+                    agree = false;
                 }
             }
-            r.expect = Some(format!("{h0}:{x0}"));
+            if agree {
+                r.expect = Some(format!("{h0}:{x0}"));
+            }
         }
         r
     }
+}
+
+/// The network's tip height from the sources that can give one (`--bitcoin-cli`: `getblockcount`; `--mempool`:
+/// `/blocks/tip/height`), for a recency check (`--max-age`). Every source asked must answer and agree; `--expect` gives
+/// no tip height. Err: none given, one failed, or they disagree.
+pub fn tip_height(id: &Identity, network: &str) -> Result<(u32, Vec<String>), String> {
+    let mut got: Vec<(String, u32)> = Vec::new();
+    if let Some(base) = &id.mempool {
+        let base = if !base.is_empty() { base.trim_end_matches('/').to_string() }
+                   else if network == "signet" { "https://mempool.space/signet/api".into() } else { "https://mempool.space/api".into() };
+        let url = format!("{base}/blocks/tip/height");
+        let o = Command::new("curl").args(CURL).arg(&url).output().map_err(|e| format!("curl {url}: {e}"))?;
+        let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        let h = t.parse::<u32>().ok().filter(|_| o.status.success()).ok_or_else(|| format!("{url}: no tip height ({:?})", t.chars().take(40).collect::<String>()))?;
+        got.push((url, h));
+    }
+    if let Some(cmd) = &id.bitcoin_cli {
+        let t = node(cmd, &["getblockcount"])?;
+        got.push(("your node".into(), t.parse().map_err(|_| format!("your node's getblockcount gave {t:?}"))?));
+    }
+    let (s0, h0) = got.first().cloned().ok_or("a recency check needs the network's tip: give --mempool, --mempool-url or --bitcoin-cli")?;
+    if let Some((s, h)) = got.iter().find(|(_, h)| *h != h0) {
+        // a tip one source has seen and another not yet is a real race, but the check cannot pick one
+        return Err(format!("{s} says the tip is {h}, {s0} says {h0}: ask again, or use one source"));
+    }
+    Ok((h0, got.into_iter().map(|(s, h)| format!("{s}: the network's tip is block {h}")).collect()))
 }
 
 /// Chain identity for a zAPP resting on a verified CORE state `cs`, as the core CLI checks it: every source asked for
@@ -175,69 +227,19 @@ pub fn expect_for_core(id: &Identity, network: &str, cs: &ChainState) -> (Option
 
 /// For a zAPP that compares a block at `height` (not a core tip) with an `expect` string: the sources' answer as that
 /// string (the given `--expect` unchanged when there is no other source), and the source lines to add to its checks.
-pub fn expect_at(id: &Identity, network: &str, height: u32) -> (Option<String>, Vec<(bool, String)>) {
+/// `work`: the proof's chainwork at that block (little-endian, as the journals hold it), when the proof gives one; with
+/// `--bitcoin-cli` the node's chainwork there must equal it, as [`check_core_tip`] requires of a core tip.
+pub fn expect_at(id: &Identity, network: &str, height: u32, work: Option<&[u8; 32]>) -> (Option<String>, Vec<(bool, String)>) {
     if !id.needs_lookup() {
         return (id.expect.clone(), Vec::new());
     }
     let r = id.resolve(network, height);
-    (r.expect, r.checks)
-}
-
-/// The image a caller names, as the core verifier's WASM resolves it: `network` "mainnet" or "signet"; `image_hex`
-/// empty for the network's built-in image, else a built-in image by id (with its own lineage) or the network's current
-/// image re-pointed at that id; `coinlog` / `product` as the core's network bits 0x10 / 0x20. (No lineage text: an image
-/// the built-in table does not list, with its own handovers, is checked by the core verifier.)
-pub fn image_for(network: &str, image_hex: &str, coinlog: bool, product: bool) -> Result<&'static Image, String> {
-    let h = image_hex.trim().to_lowercase();
-    let mut image = match Image::by_id(network, &h) {
-        Some(i) if !h.is_empty() => i,
-        _ => {
-            let i = Image::by_network(network).ok_or_else(|| format!("unknown network {network:?}"))?;
-            if h.is_empty() { i } else { i.with_method_id(&h).ok_or("image id is not 64 hex characters")? }
-        }
-    };
-    if coinlog {
-        image = image.with_coinlog();
+    let mut checks = r.checks;
+    if let (Some(w), Some(work)) = (&r.node_chainwork, work) {
+        let pw = display_hex(work);
+        checks.push((*w == pw, format!("your node's chainwork at block {height} equals the proven chainwork {pw} (node: {w})")));
     }
-    if product {
-        image = image.with_product();
-    }
-    Ok(image)
-}
-
-/// A core receipt (or .sspf bundle) verified by the core verifier, and its tip compared with `expect` ("<height>:<hash>",
-/// display order, from a source the CALLER trusts): what a zAPP resting on a core proof checks first. A wrong `expect`
-/// is a FAIL check; `tip_checked` says whether the tip was compared and matched.
-pub struct CoreCheck {
-    pub report: Report,
-    pub tip_checked: bool,
-}
-
-pub fn verify_core(receipt: &[u8], image: &'static Image, anchor: Option<ChainState>, now: u64, expect: Option<&str>) -> CoreCheck {
-    let mut report = if receipt.starts_with(BUNDLE_MAGIC) {
-        match Bundle::decode(receipt) {
-            Ok(b) => check_bundle(&b, image, anchor, now),
-            Err(e) => Report { checks: vec![(false, format!("bundle: {e}"))], low_work: false, state: None, verdict: Verdict::Fail,
-                               undo_from: swiftsync_verify::pin::NO_UNDO },
-        }
-    } else {
-        verify(&Inputs { receipt, image, anchor, now })
-    };
-    let tip_checked = match (expect.map(str::trim).filter(|e| !e.is_empty()), report.state.as_ref()) {
-        (Some(e), Some(cs)) => match parse_expect(e) {
-            Some((h, x)) if identity_matches(h, &x, cs.height, &cs.tip_hash) => {
-                report.checks.push((true, format!("block {h} is {x}: the proof's tip")));
-                true
-            }
-            _ => {
-                report.checks.push((false, format!("expect {e:?}: not the proof's tip (block {} {})", cs.height, display_hex(&cs.tip_hash))));
-                report.verdict = Verdict::Fail;
-                false
-            }
-        },
-        _ => false,
-    };
-    CoreCheck { report, tip_checked }
+    (r.expect, checks)
 }
 
 /// A hash in display order (as `getblockhash` prints it), from internal byte order.
@@ -255,7 +257,8 @@ fn node(cmd: &str, extra: &[&str]) -> Result<String, String> {
     let prog = parts.next().ok_or("empty --bitcoin-cli")?;
     let out = Command::new(prog).args(parts).args(extra).output().map_err(|e| format!("{prog}: {e}"))?;
     if !out.status.success() {
-        return Err(format!("{cmd} {}: {}", extra.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+        // {:?}: the node's stderr escaped, so it cannot forge a line of this tool's own output
+        return Err(format!("{cmd} {}: {:?}", extra.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -275,12 +278,22 @@ mod tests {
     }
 
     #[test]
+    fn one_explorer_only() {
+        assert!(take_all(&["--mempool", "--mempool-url", "https://x"]).unwrap_err().contains("give one"));
+        assert!(take_all(&["--mempool-url", "https://x", "--mempool"]).is_err());
+        assert!(take_all(&["--mempool", "--mempool"]).is_err());
+        assert_eq!(take_all(&["--mempool-url", "https://x"]).unwrap().mempool.as_deref(), Some("https://x"));
+    }
+
+    #[test]
     fn flags_parse_as_the_core_cli_does() {
         let id = take_all(&["--expect", &format!("200:{H200}"), "--mempool", "--bitcoin-cli", "bitcoin-cli -signet"]).unwrap();
         assert_eq!(id.expect.as_deref(), Some(format!("200:{H200}").as_str()));
         assert_eq!(id.mempool.as_deref(), Some(""));
         assert_eq!(id.bitcoin_cli.as_deref(), Some("bitcoin-cli -signet"));
-        assert_eq!(take_all(&["--mempool-url", "http://x/api"]).unwrap().mempool.as_deref(), Some("http://x/api"));
+        assert_eq!(take_all(&["--mempool-url", "https://x/api"]).unwrap().mempool.as_deref(), Some("https://x/api"));
+        assert!(take_all(&["--mempool-url", "http://x/api"]).is_err(), "not https");
+        assert!(take_all(&["--mempool-url", "-K/etc/passwd"]).is_err(), "an option, not a URL");
         assert!(take_all(&["--expect"]).is_err(), "a flag without its value");
         assert!(Identity::default().is_empty() && !Identity::default().needs_lookup());
         let mut id = Identity::default();
@@ -303,42 +316,83 @@ mod tests {
         let d = std::env::temp_dir().join(format!("zapp-common-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let cli = d.join("cli");
-        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00ab\"}}';; esac\n")).unwrap();
+        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00000000000000000000000000000000000000000000000000000000000000ab\"}}';; esac\n")).unwrap();
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap(); }
         let c = cli.to_str().unwrap();
         let r = take_all(&["--bitcoin-cli", c]).unwrap().resolve("mainnet", 200);
         assert_eq!(r.expect.as_deref(), Some(format!("200:{H200}").as_str()));
-        assert_eq!(r.node_chainwork.as_deref(), Some("00ab"));
+        assert_eq!(r.node_chainwork.as_deref(), Some("00000000000000000000000000000000000000000000000000000000000000ab"));
         assert!(r.checks.iter().all(|c| c.0), "{:?}", r.checks);
         let other = format!("200:{}1", &H200[..63]);
         let r = take_all(&["--bitcoin-cli", c, "--expect", &other]).unwrap().resolve("mainnet", 200);
         assert!(r.checks.iter().any(|c| !c.0 && c.1.contains("disagree")), "{:?}", r.checks);
+        assert!(r.expect.is_none(), "disagreeing sources give no answer");
         let r = take_all(&["--bitcoin-cli", c, "--expect", &format!("199:{H200}")]).unwrap().resolve("mainnet", 200);
         assert!(r.checks.iter().any(|c| !c.0 && c.1.contains("same block")), "{:?}", r.checks);
+        // a node whose getblockheader has no chainwork, or fails: a FAIL line, never a silent skip
+        let cli2 = d.join("cli2");
+        std::fs::write(&cli2, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{}}';; esac\n")).unwrap();
+        let cli3 = d.join("cli3");
+        std::fs::write(&cli3, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; *) exit 1;; esac\n")).unwrap();
+        #[cfg(unix)]
+        for f in [&cli2, &cli3] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+        for (f, want) in [(&cli2, "no chainwork"), (&cli3, "failed")] {
+            let r = take_all(&["--bitcoin-cli", f.to_str().unwrap()]).unwrap().resolve("mainnet", 200);
+            assert!(r.node_chainwork.is_none() && r.checks.iter().any(|c| !c.0 && c.1.contains(want)), "{:?}", r.checks);
+        }
         let r = take_all(&["--bitcoin-cli", "/nonexistent/cli"]).unwrap().resolve("mainnet", 200);
         assert!(r.expect.is_none() && r.checks.iter().any(|c| !c.0));
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    /// The real mainnet 1..200 proof (8888d59c): DEMO (low work); its tip expected, and another block, refused.
+
+    /// A short chainwork is padded as getblockheader's number; a malformed one is a FAIL; expect_at compares the
+    /// node's chainwork with the proof's when the proof gives one, and not when it does not.
     #[test]
-    fn verify_core_and_expect() {
+    fn node_chainwork_and_expect_at() {
+        let d = std::env::temp_dir().join(format!("zapp-common-test-cw-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let mk = |name: &str, hdr: &str| -> String {
+            let p = d.join(name);
+            std::fs::write(&p, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) {hdr};; esac\n")).unwrap();
+            #[cfg(unix)]
+            { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+            p.to_str().unwrap().to_string()
+        };
+        let c = mk("short", "echo '{\"chainwork\": \"00ab\"}'");
+        let r = take_all(&["--bitcoin-cli", &c]).unwrap().resolve("mainnet", 200);
+        assert_eq!(r.node_chainwork.as_deref(), Some(format!("{:0>64}", "ab").as_str()));
+        for (name, hdr) in [("junk", "echo 'not json'"), ("badwork", "echo '{\"chainwork\": \"zz\"}'")] {
+            let r = take_all(&["--bitcoin-cli", &mk(name, hdr)]).unwrap().resolve("mainnet", 200);
+            assert!(r.node_chainwork.is_none() && r.checks.iter().any(|c| !c.0 && c.1.contains("chainwork")), "{name}: {:?}", r.checks);
+        }
+        let id = take_all(&["--bitcoin-cli", &c]).unwrap();
+        let mut w = [0u8; 32];
+        w[0] = 0xab;
+        let (x, ch) = expect_at(&id, "mainnet", 200, Some(&w));
+        assert_eq!(x.as_deref(), Some(format!("200:{H200}").as_str()));
+        assert!(ch.iter().all(|c| c.0) && ch.iter().any(|c| c.1.contains("proven chainwork")), "{ch:?}");
+        w[0] = 0xac;
+        assert!(expect_at(&id, "mainnet", 200, Some(&w)).1.iter().any(|c| !c.0));
+        assert!(expect_at(&id, "mainnet", 200, None).1.iter().all(|c| c.0));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Against the real mainnet 1..200 proof's state (8888d59c, verified by the core verifier): its tip expected holds,
+    /// another height does not, no source gives no check.
+    #[test]
+    fn core_tip_against_a_real_state() {
+        use swiftsync_verify::{verify, Image, Inputs};
         let r = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt")).unwrap();
-        let img = image_for("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4", false, false).unwrap();
-        let ok = verify_core(&r, img, None, 1_800_000_000, Some(&format!("200:{H200}")));
-        assert_eq!((ok.report.verdict, ok.tip_checked), (Verdict::Demo, true), "{:?}", ok.report.checks);
-        let bad = verify_core(&r, img, None, 1_800_000_000, Some(&format!("200:{}1", &H200[..63])));
-        assert_eq!((bad.report.verdict, bad.tip_checked), (Verdict::Fail, false));
-        assert_eq!(verify_core(&r, img, None, 1_800_000_000, None).tip_checked, false);
-        assert!(image_for("mainnet", "xyz", false, false).is_err() && image_for("testnet", "", false, false).is_err());
-        let cs = ok.report.state.unwrap();
+        let img = Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap();
+        let cs = verify(&Inputs { receipt: &r, image: img, anchor: None, now: 1_800_000_000 }).state.unwrap();
         let id = Identity { expect: Some(format!("200:{H200}")), ..Default::default() };
         assert!(check_core_tip(&id, "mainnet", &cs).1);
         assert!(!check_core_tip(&Identity { expect: Some(format!("199:{H200}")), ..Default::default() }, "mainnet", &cs).1);
         assert_eq!(check_core_tip(&Identity::default(), "mainnet", &cs), (Vec::new(), false));
         assert_eq!(expect_for_core(&id, "mainnet", &cs), (id.expect.clone(), Vec::new()));
-        assert_eq!(expect_at(&id, "mainnet", 7), (id.expect.clone(), Vec::new()));
+        assert_eq!(expect_at(&id, "mainnet", 7, None), (id.expect.clone(), Vec::new()));
         // block 200's chainwork: 201 blocks of difficulty 1, 0x100010001 each
         assert_eq!(display_hex(&cs.cum_work), format!("{:064x}", 201u128 * 0x1_0001_0001));
     }

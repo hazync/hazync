@@ -5493,14 +5493,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zapp-common"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "swiftsync-verify",
-]
-
-[[package]]
 name = "zapp-hints"
 version = "0.1.0"
 dependencies = [
@@ -5510,7 +5502,6 @@ dependencies = [
  "serde",
  "sha2",
  "swiftsync-verify",
- "zapp-common",
 ]
 
 [[package]]

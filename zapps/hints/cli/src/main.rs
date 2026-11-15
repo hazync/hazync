@@ -70,11 +70,12 @@ fn run(a: Vec<String>) -> ! {
         let pre = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, core.as_deref(), now, None, None);
         if let Some(z) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
             let net = if z.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
-            let (x, c) = zapp_common::expect_at(&id, net, z.height);
+            // the proof's chainwork is the core tip's: it is block H's only when H is the tip
+            let (x, c) = zapp_common::expect_at(&id, net, z.height, (z.height == z.core_height).then_some(&z.cum_work));
             expect = x;
             extra.extend(c);
             if z.core_height > z.height && expect_tip.is_none() {
-                let (x, c) = zapp_common::expect_at(&Identity { expect: None, ..id.clone() }, net, z.core_height);
+                let (x, c) = zapp_common::expect_at(&Identity { expect: None, ..id.clone() }, net, z.core_height, Some(&z.cum_work));
                 expect_tip = x;
                 extra.extend(c);
             }
