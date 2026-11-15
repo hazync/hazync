@@ -68,7 +68,7 @@ open(sys.argv[2],'wb').write(d)" "$RCPT" "$1" "$2"; }
 flip "$T/seal.rcpt" 0.5
 flip "$T/tail.rcpt" 0.995
 
-echo "verifiers in $DIST against $RCPT (mainnet 1..$RCPT_HEIGHT, image ${CANON:0:8})"
+echo "verifiers in $DIST against $RCPT (mainnet from genesis to $RCPT_HEIGHT, image ${CANON:0:8})"
 
 # ---- the CLI ----------------------------------------------------------------------------------
 if [ -x "$V" ]; then
