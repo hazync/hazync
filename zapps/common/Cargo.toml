@@ -1,0 +1,27 @@
+[package]
+name = "zapp-common"
+version = "0.1.0"
+edition = "2021"
+description = "What every zAPP CLI shares: the chain-identity flags (--expect, --mempool, --bitcoin-cli), on the core verifier's identity helpers"
+license = "MIT"
+publish = false
+
+# Not a zAPP: the part of every zAPP's CLI that must be the same in each (docs/libzync/ZYNCAPPS.md §9). On swiftsync-verify
+# as a library (parse_expect, identity_matches); NOT part of the core verifier. Own workspace, as the core verifier's crates.
+
+[lib]
+name = "zapp_common"
+path = "src/lib.rs"
+
+[dependencies]
+swiftsync-verify = { path = "../../swiftsync-verify" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
