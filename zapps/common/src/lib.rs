@@ -12,6 +12,11 @@
 //! [`Identity::resolve`] asks each source given for the block at one height, requires them to agree, and returns the
 //! answer as an `--expect` string, which the zAPP then checks against its proof exactly as it checks a given
 //! `--expect` (the core library's `parse_expect` / `identity_matches`). A source that fails or disagrees is a FAIL check.
+//! [`check_core_tip`] does that against a verified core state (and compares the node's chainwork, as the core CLI);
+//! [`expect_for_core`] / [`expect_at`] turn the sources into the `--expect` string a zAPP's own check takes.
+//!
+//! **The core check.** [`image_for`] and [`verify_core`]: the image a caller names and the core receipt verified by the
+//! core verifier, for a zAPP (CLI, C ABI or WASM) resting on a core proof.
 
 use std::process::Command;
 use swiftsync_verify::{check_bundle, identity_matches, parse_expect, verify, Bundle, ChainState, Image, Inputs, Report, Verdict, BUNDLE_MAGIC};
@@ -150,6 +155,32 @@ pub fn check_core_tip(id: &Identity, network: &str, cs: &ChainState) -> (Vec<(bo
     }
     let ok = matched && checks.iter().all(|c| c.0);
     (checks, ok)
+}
+
+/// For a zAPP whose own check compares a core tip with an `expect` string (as its C ABI and WASM take it): the sources'
+/// answer for block `cs.height` as that string (the given `--expect` unchanged when there is no other source), and the
+/// source lines to add to its checks (with `--bitcoin-cli`, the node's chainwork compared with the proven one).
+pub fn expect_for_core(id: &Identity, network: &str, cs: &ChainState) -> (Option<String>, Vec<(bool, String)>) {
+    if !id.needs_lookup() {
+        return (id.expect.clone(), Vec::new());
+    }
+    let r = id.resolve(network, cs.height);
+    let mut checks = r.checks;
+    if let Some(w) = &r.node_chainwork {
+        let pw = display_hex(&cs.cum_work);
+        checks.push((*w == pw, format!("your node's chainwork at it equals the proven cum_work {pw} (node: {w})")));
+    }
+    (r.expect, checks)
+}
+
+/// For a zAPP that compares a block at `height` (not a core tip) with an `expect` string: the sources' answer as that
+/// string (the given `--expect` unchanged when there is no other source), and the source lines to add to its checks.
+pub fn expect_at(id: &Identity, network: &str, height: u32) -> (Option<String>, Vec<(bool, String)>) {
+    if !id.needs_lookup() {
+        return (id.expect.clone(), Vec::new());
+    }
+    let r = id.resolve(network, height);
+    (r.expect, r.checks)
 }
 
 /// The image a caller names, as the core verifier's WASM resolves it: `network` "mainnet" or "signet"; `image_hex`
@@ -306,6 +337,8 @@ mod tests {
         assert!(check_core_tip(&id, "mainnet", &cs).1);
         assert!(!check_core_tip(&Identity { expect: Some(format!("199:{H200}")), ..Default::default() }, "mainnet", &cs).1);
         assert_eq!(check_core_tip(&Identity::default(), "mainnet", &cs), (Vec::new(), false));
+        assert_eq!(expect_for_core(&id, "mainnet", &cs), (id.expect.clone(), Vec::new()));
+        assert_eq!(expect_at(&id, "mainnet", 7), (id.expect.clone(), Vec::new()));
         // block 200's chainwork: 201 blocks of difficulty 1, 0x100010001 each
         assert_eq!(display_hex(&cs.cum_work), format!("{:064x}", 201u128 * 0x1_0001_0001));
     }

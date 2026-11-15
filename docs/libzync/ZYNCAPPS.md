@@ -175,6 +175,7 @@ chain proofs only, and adding a zAPP never changes it: its `.wasm` stays byte-id
 | `zapps/<name>/wasm/` | its own WASM module (`build.sh`: the core's flags, `scripts/wasm-build.sh`), JS glue `zapp-<name>.js`, README with its sha256 |
 | `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one |
 | `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6) |
+| `zapps/common/` | not a zAPP: what every zAPP CLI shares, so each takes the same chain-identity flags as the core verifier (`--expect`, `--mempool` / `--mempool-url`, `--bitcoin-cli`), on the core library's `parse_expect` / `identity_matches`; and the core receipt check a zAPP on a core proof makes |
 
 | zAPP | module | CLI | WASM glue | C ABI |
 |---|---|---|---|---|
