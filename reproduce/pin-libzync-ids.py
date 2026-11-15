@@ -52,12 +52,12 @@ def main(argv):
     if hs2.count("pub const HEADERS_IMAGE_ID") != 1:
         sys.exit(f"{hp}: HEADERS_IMAGE_ID not found")
     hp.write_text(hs2)
-    # the SwiftSync hints zyncAPP's line (#722) likewise: swiftsync-verify's HINTS_IMAGE_ID set from it
+    # the SwiftSync hints zyncAPP's line (#722) likewise: zapp-hints' HINTS_IMAGE_ID set from it
     ZLINE = re.compile(r"^zyncapp-hints mainnet METHOD_ID ([0-9a-f]{64}) GUEST_ELF_SHA256 ([0-9a-f]{64})$")
     hints = [l.strip() for l in Path(argv[1]).read_text().splitlines() if l.strip().startswith("zyncapp-hints ")]
     if len(hints) != 1 or not ZLINE.match(hints[0]):
         sys.exit(f"want exactly one zyncapp-hints mainnet line, got {hints}")
-    zp = ROOT / "swiftsync-verify/src/hints.rs"
+    zp = ROOT / "zapps/hints/src/lib.rs"   # the hints zAPP module (docs/libzync/ZYNCAPPS.md §9)
     zs = zp.read_text()
     zs2, n = re.subn(r'pub const HINTS_IMAGE_ID: &str = "[0-9a-f]{64}";',
                      f'pub const HINTS_IMAGE_ID: &str = "{ZLINE.match(hints[0]).group(1)}";', zs)

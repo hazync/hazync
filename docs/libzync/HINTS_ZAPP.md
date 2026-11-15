@@ -189,7 +189,7 @@ and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as
 
 **Code.** `libzync/src/hints.rs` (the derivation and the Elias-Fano encoder/strict decoder, shared by guest and host),
 `prover/zyncapps/methods/hints` (the guest; published id `1894f12e…`, the `zyncapp-hints` line of `reproduce/LIBZYNC_IDS`),
-`prover/zyncapps/host/src/hints_host.rs` + `hints-prove` / `hints-verify`, `swiftsync-verify/src/hints.rs` (the
+`prover/zyncapps/host/src/hints_host.rs` + `hints-prove` / `hints-verify`, `zapps/hints/src/lib.rs` (the
 verifier for CLI, WASM, C ABI), `scripts/libzync/hints_ref.py` (an independent generator written from hintsfile.md),
 `prover/zyncapps/hints-crate-ref` (the `hintsfile` crate 0.2.0 as a second reference, test only).
 
