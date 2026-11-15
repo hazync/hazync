@@ -130,6 +130,28 @@ jobs:
           nvcc -dc -O1 -diag-suppress=177,550,2922 -DFEATURE_BABY_BEAR -gencode=arch=compute_61,code=sm_61 %INC% -o recursion_ffi.obj vendor\risc0-circuit-recursion-sys\kernels\cuda\ffi.cu || exit /b 1
           dir *.obj
 
+      # hazync#727 trace 4: the system-scope-atomic question, as two tiny exes (one module each), and the
+      # rv32im ffi.cu compiled to RELOCATABLE CUBINS with and without the tables.h fix, so the
+      # EIATTR_ATOM_SYS_INSTR_OFFSETS record can be read offline. The control copy restores the
+      # original `::cuda::atomic<uint32_t>` and MUST still show system-scope atomics; if it does not,
+      # the offline check is blind and proves nothing.
+      - name: "hazync#727: atom_scope exes and rv32im cubins (fixed + control)"
+        shell: cmd
+        run: |
+          @echo on
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSPATH=%%i
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set G=-gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 -gencode=arch=compute_75,code=sm_75
+          nvcc -O2 -std=c++17 %G% -DHZ_SCOPE=::cuda::thread_scope_system -o atom_sys.exe tools\cuda-probe\atom_scope.cu || exit /b 1
+          nvcc -O2 -std=c++17 %G% -DHZ_SCOPE=::cuda::thread_scope_device -o atom_dev.exe tools\cuda-probe\atom_scope.cu || exit /b 1
+          set INC=-Irisc0-sys-1.5.1\kernels\zkp\cuda -Irisc0-sys-1.5.1\cxx -Ivendor\sppark\sppark -std=c++20 -Xcompiler -std:c++20 -include %CD%\prover\hazync_win_uint.h -Xcompiler /FI%CD%\prover\hazync_win_uint.h
+          nvcc -cubin -rdc=true -O1 -diag-suppress=177,550,2922 -arch=sm_61 %INC% -o rv32im_ffi_fixed.cubin vendor\risc0-circuit-rv32im-sys\kernels\cuda\ffi.cu || exit /b 1
+          xcopy /E /I /Q vendor\risc0-circuit-rv32im-sys\kernels\cuda ctl_cuda || exit /b 1
+          powershell -NoProfile -Command "(Get-Content ctl_cuda\tables.h -Raw) -replace '::cuda::atomic<uint32_t, ::cuda::thread_scope_device>', '::cuda::atomic<uint32_t>' | Set-Content -NoNewline ctl_cuda\tables.h" || exit /b 1
+          findstr /C:"thread_scope_device>" ctl_cuda\tables.h && (echo control copy still has the fix & exit /b 1)
+          nvcc -cubin -rdc=true -O1 -diag-suppress=177,550,2922 -arch=sm_61 %INC% -o rv32im_ffi_control.cubin ctl_cuda\ffi.cu || exit /b 1
+          dir atom_*.exe *.cubin
+
       - name: The exe must exist and be a real binary
         shell: bash
         run: |
@@ -144,5 +166,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: hazync-cuda-probe
-          path: probe.exe
+          path: |
+            probe.exe
+            atom_sys.exe
+            atom_dev.exe
+            rv32im_ffi_fixed.cubin
+            rv32im_ffi_control.cubin
           retention-days: 14
