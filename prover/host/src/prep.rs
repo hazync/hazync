@@ -7,7 +7,8 @@
 //! Every field, after the guest (prover/methods/guest/src/main.rs `aggregate`, agg_lite.rs `validate_block_lite`):
 //!   - created coins: the coinbase's outputs (none at the BIP30-unspendable 91,722 / 91,812), then every other
 //!     transaction's, in block order, unspendable outputs (OP_RETURN, script over 10,000 bytes) skipped; the leaf
-//!     binds the parent's MTP and the coinbase / BIP30-tracked flags the block file carries (as the guest's witness);
+//!     binds the parent's MTP and the coinbase / BIP30-tracked flags, the latter derived as the guest does (tracked.rs:
+//!     the block files carry no tracked bit);
 //!   - a spend of a coin this block creates (same outpoint): in-block, never in the log; any other: external, a flip
 //!     in the coin log at the coin's position, spender (height, tx position, input index within the tx);
 //!   - appends: created coins not spent in the block; utxo_value += their values - the external coins' values;
