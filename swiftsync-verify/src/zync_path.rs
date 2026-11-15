@@ -8,11 +8,16 @@
 //!                                                            a counting-trie fact at h (swiftsync-verify --trie)
 //!   zync-path journey <history.bin> <tip> <position> --bitcoin-cli "<cmd>"
 //!                                                            created-by tx, state at the tip, spent-by tx
+//!   zync-path live <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>]
+//!                                                            a liveness proof, hex (docs/libzync/LIVENESS_ZAPP.md):
+//!                                                            the outpoint unspent after <at>, or spent and by whom
 //!
 //! ⚠ Replays the whole history in memory (C1's disk-backed store replaces this for mainnet).
 
 use libzync::history::{block_path, decode_all, replay};
 use swiftsync_verify::{hex, hex32, CoinFact};
+
+mod coin_source;
 
 fn die(m: &str) -> ! {
     eprintln!("zync-path: {m}");
@@ -59,6 +64,24 @@ fn main() {
             }
         }
         Some("journey") => journey(&a),
+        Some("live") => {
+            let tip = num(2) as u32;
+            let at = if a.get(3).map(|x| x.as_str()) == Some("tip") { tip } else { num(3) as u32 };
+            let src = coin_source::Source::from_args(&a).unwrap_or_else(|| die("live needs --blocks <dir> or --bitcoin-cli \"<cmd>\""));
+            let ask = swiftsync_verify::LivenessAsk::parse(&format!("{}@{at}", a.get(4).unwrap_or_else(|| die("live: <txid>:<vout>?"))))
+                .unwrap_or_else(|e| die(&e));
+            let height = a.iter().position(|x| x == "--height").and_then(|i| a.get(i + 1)).map(|h| h.parse().unwrap_or_else(|_| die("--height?")));
+            let recs = hist();
+            let coins = coin_source::candidates(&src, &ask.txid, ask.vout, height).unwrap_or_else(|e| die(&e));
+            let mut last = String::new();
+            for c in &coins {
+                match swiftsync_verify::make_liveness(&recs, tip, at, c) {
+                    Ok(p) => { println!("{}", hex(&p)); return; }
+                    Err(e) => last = e,
+                }
+            }
+            die(&last);
+        }
         // zync-path tx <history.bin> <tip> <height> <index> --bitcoin-cli "<cmd>": a TxFact for transaction <index> of
         // block <height> (what a trie coin fact needs as its `origin`)
         Some("tx") => {
@@ -88,7 +111,7 @@ fn main() {
             }
             println!("{}", serde_json::to_string_pretty(&f).unwrap());
         }
-        _ => die("usage: zync-path coin <history.bin> <tip> <at> <pos> | find <history.bin> <tip> <coin leaf hex> | journey ... | tx <history.bin> <tip> <height> <index> --bitcoin-cli \"<cmd>\" | trie coin|balance|history <state_h.trie> <spk hex> [<txid> <vout> [--origin <tx fact.json>]]"),
+        _ => die("usage: zync-path coin <history.bin> <tip> <at> <pos> | live <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli \"<cmd>\") [--height <h>] | find <history.bin> <tip> <coin leaf hex> | journey ... | tx <history.bin> <tip> <height> <index> --bitcoin-cli \"<cmd>\" | trie coin|balance|history <state_h.trie> <spk hex> [<txid> <vout> [--origin <tx fact.json>]]"),
     }
 }
 
