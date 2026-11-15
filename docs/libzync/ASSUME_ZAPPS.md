@@ -211,7 +211,7 @@ P2P, §6). Laptop: WSL2, release build.
 | BIP30-tracked live coins at 200 | 0 (`assume_inputs.py`); the match with an empty list agrees |
 | assumeutxo check at 200, laptop | 0.01 s (the CLI's own timer) |
 | throwaway node to 200 on hazync-coord | sync 28-31 s, `dumptxoutset rollback=200` 14-15 s |
-| WASM build | the zAPP's own module `zapps/assume/wasm` (no longer part of the core's `hazync-verify.wasm`): WASM_SIZE |
+| WASM build | the zAPP's own module `zapps/assume/wasm` (no longer part of the core's `hazync-verify.wasm`): 1,164,451 bytes raw, 330,920 gzipped (`zapps/assume/wasm/build.sh`, Rust 1.99.0, default stage path, hazync-coord, 15.11.2026) |
 
 **Beyond 200: against a prover run's state, not a proof.** No receipt in the repo reaches past 200, so the encoding
 was also checked against hazync-coord's `libzync-prep` run of 07.11.2026 (`state_<h>.json`, the host's native
@@ -238,11 +238,14 @@ commits, and its coin log does too; by the guest code the first block proved on 
 tracked coinbase, at or before 149,732) cannot join or spend cleanly. Not confirmed by a guest run here. The checker
 follows the guest; until a proof at such a height exists, the tracked bit is checked against the guest's code only.
 
-**Tests** (15.11.2026, this branch; all run by `zapps/assume/test.sh`, CI's zapps job): `cargo test --release` in `zapps/assume` (11 tests: the ECMH map and
+**Tests** (15.11.2026, this branch; all run by `zapps/assume/test.sh`, CI's zapps job): `cargo test --release` in `zapps/assume` (14 tests: the ECMH map and
 sum against a num-bigint reference, partial sums, Core's amount and VARINT vectors, the MTP rule, the real snapshot, 16 tampered
-or reframed snapshots, other heights, headers, profiles, assumevalid), `test-assume.sh` (30 CLI
-cases with 3 identity cases, `test-assume.out`), the C ABI's `cargo test` (2 tests) and `ffi/test_assume.c` (6 cases),
-`wasm/test-assume.mjs` (11 cases). Every refusal case of the issue: a tampered
+or reframed snapshots, Core's key order (a permuted file against the real proof; a split group and a within-group
+swap on Core's own dump at 1003; vouts 16,512 before 16,511), other heights, headers, profiles (scripts skipped, not
+libzync), a coin above the headers' tip, assumevalid), `test-assume.sh` (31 CLI
+cases with 3 identity cases and a permuted file, `test-assume.out`), the C ABI's `cargo test` (2 tests) and
+`ffi/test_assume.c` (6 cases), `wasm/test-assume.mjs` (11 cases), and zapps/common's 6 (one explorer flag; a node
+without chainwork is a FAIL). Run on hazync-coord, 15.11.2026: all pass. Every refusal case of the issue: a tampered
 snapshot (txid, amount, height, coinbase flag, vout, script, a coin dropped, duplicated, split, or added), a wrong
 height (199, 1003; the 199 coins relabelled as 200), a wrong chain (another network magic, another base block,
 another tip in `--expect`, a flipped receipt), wrong side inputs (headers short, one timestamp changed, not from

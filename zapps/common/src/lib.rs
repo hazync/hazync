@@ -337,13 +337,13 @@ mod tests {
         let d = std::env::temp_dir().join(format!("zapp-common-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let cli = d.join("cli");
-        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00ab\"}}';; esac\n")).unwrap();
+        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00000000000000000000000000000000000000000000000000000000000000ab\"}}';; esac\n")).unwrap();
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap(); }
         let c = cli.to_str().unwrap();
         let r = take_all(&["--bitcoin-cli", c]).unwrap().resolve("mainnet", 200);
         assert_eq!(r.expect.as_deref(), Some(format!("200:{H200}").as_str()));
-        assert_eq!(r.node_chainwork.as_deref(), Some("00ab"));
+        assert_eq!(r.node_chainwork.as_deref(), Some("00000000000000000000000000000000000000000000000000000000000000ab"));
         assert!(r.checks.iter().all(|c| c.0), "{:?}", r.checks);
         let other = format!("200:{}1", &H200[..63]);
         let r = take_all(&["--bitcoin-cli", c, "--expect", &other]).unwrap().resolve("mainnet", 200);

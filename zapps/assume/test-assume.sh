@@ -15,9 +15,9 @@ TIP=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 B170=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee
 B1003=$(python3 -c "import sys; print(open(sys.argv[1],'rb').read()[11:43][::-1].hex())" $A/utxo_1003.dat)
 T=$(mktemp -d); trap 'rm -rf $T' EXIT
-# corrupted copies: byte offsets of Core's snapshot header (magic 0-4, version 5-6, network 7-10, base 11-42, count 43-50, first txid 51-82)
+# corrupted copies: byte offsets of Core's snapshot header (magic 0-4, version 5-6, network 7-10, base 11-42, count 43-50, first txid 51-82); the txid flip is its LAST byte, so the order still holds and the hash refuses it
 flip() { python3 -c "import sys; b=bytearray(open(sys.argv[1],'rb').read()); b[int(sys.argv[2])]^=1; open(sys.argv[3],'wb').write(b)" "$@"; }
-flip $A/utxo_200.dat 51 $T/txid.dat; flip $A/utxo_200.dat 8 $T/net.dat; flip $A/utxo_200.dat 20 $T/base.dat
+flip $A/utxo_200.dat 82 $T/txid.dat; flip $A/utxo_200.dat 8 $T/net.dat; flip $A/utxo_200.dat 20 $T/base.dat
 flip $A/utxo_200.dat 200 $T/body.dat
 cp $A/utxo_200.dat $T/trail.dat; printf '\0' >> $T/trail.dat
 head -c 14269 $A/utxo_200.dat > $T/short.dat
@@ -35,6 +35,25 @@ run 2 "is the proven UTXO set" $U $R $A/utxo_200.dat
 run 1 "" $U --expect 200:$B170 $R $A/utxo_200.dat
 run 1 "" $U $F $A/utxo_200.dat
 run 1 "NOT the proven UTXO set" $U $R $T/txid.dat
+# the same coins in another order: the ECMH is the same, the order is not Core's (the printed hash would not be Core's)
+python3 - $A/utxo_200.dat $T/perm.dat <<'P'
+import sys
+b = open(sys.argv[1], "rb").read()
+# the first two groups of the real file are single coins: swap them byte for byte
+def group(i):
+    j = i + 32; n = b[j]; assert n == 1; j += 1
+    j += 1                                   # vout (CompactSize < 253)
+    def varint(j):
+        while b[j] & 0x80: j += 1
+        return j + 1
+    j = varint(j); j = varint(j)             # code, amount
+    k = b[j]; j = varint(j)                  # script size class (a VARINT)
+    size = {0: 20, 1: 20, 2: 32, 3: 32, 4: 32, 5: 32}.get(k, k - 6)
+    return j + size
+a = 51; m = group(a); e = group(m)
+open(sys.argv[2], "wb").write(b[:a] + b[m:e] + b[a:m] + b[e:])
+P
+run 1 "key order" $U $R $T/perm.dat
 run 1 "" $U $R $T/body.dat
 run 1 "network magic" $U $R $T/net.dat
 run 1 "is not the proven tip" $U $R $T/base.dat

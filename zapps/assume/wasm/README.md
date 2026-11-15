@@ -13,10 +13,15 @@ node test-assume.mjs   # 11 cases on the real mainnet 1..200 proof and Core v31.
 
 | | |
 |---|---|
-| size | 1,158,643 bytes raw, 328,398 gzipped |
-| sha256 (this commit, `./build.sh`) | `5be89ffcbef1df9072d753fb4db794d06d1a377476b7c0f0036209d85e358e93` (Rust 1.99.0, default stage path, built on hazync-coord, 2026-11-15) |
+| size | 1,164,451 bytes raw, 330,920 gzipped |
+| sha256 (this commit, `./build.sh`) | `d69abab3c9e22bd7fa71ae52ca5186d7800b9ada6403fb9ca86c5510306a01fd` (Rust 1.99.0, default stage path, built on hazync-coord, 15.11.2026) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-assume.mjs` 11/11, run by `../test.sh` in CI's zapps job |
+
+**Not for a mainnet snapshot.** The page passes the whole file in one frame: it is held twice (the page's copy and the
+module's), each chunk's length is a u32 (4 GiB at most), and a 32-bit WebAssembly memory is 4 GiB in all, while
+mainnet's snapshot is several GB. Use it for low heights and demonstrations; check a mainnet snapshot with the CLI or
+the C ABI, which stream it (docs/libzync/ASSUME_ZAPPS.md §1).
 
 The frame has no lineage chunk (the core's optional last one): an image the built-in table does not list, with its own
 handovers, is checked with the core verifier.

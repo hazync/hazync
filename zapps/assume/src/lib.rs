@@ -1182,32 +1182,34 @@ mod tests {
         let cs = state();
         let (m, v) = coins(SNAP_200);
         let none = Tracked::new();
-        // the real file is in key order: re-sorting it changes nothing
+        // the real files are in key order: re-sorting them changes nothing, and Core's own 1003 dump reads
         assert_eq!(write(&m, &v), write_as_is(&m, &v));
-        // a txid with two live coins (block 170's transaction: 10 BTC to Hal, 40 BTC back)
-        let i = (1..v.len()).find(|&i| v[i].txid == v[i - 1].txid).expect("a txid with two coins at 200");
+        let (m3, v3) = coins(SNAP_1003);
+        assert_eq!(write(&m3, &v3), write_as_is(&m3, &v3));
         // permuted: two groups swapped. The same coins, so the same ECMH, but not Core's order (its hash_serialized_3
-        // would not be Core's): refused
+        // would not be Core's): refused, against the real proof
         let mut p = v.clone();
         p.swap(0, 2);
         let e = check(&cs, &write_as_is(&m, &p), &none).unwrap_err();
         assert!(e.contains("key order"), "{e}");
+        // a txid with two coins (none is live at 200; Core's dump at 1003 has them)
+        let i = (1..v3.len()).find(|&i| v3[i].txid == v3[i - 1].txid).expect("a txid with two coins at 1003");
         // split: the txid's two coins in two consecutive groups
         let mut b = SNAPSHOT_MAGIC.to_vec();
-        b.extend(m.version.to_le_bytes()); b.extend(m.network_magic); b.extend(m.base_blockhash); b.extend((v.len() as u64).to_le_bytes());
-        let one = |c: &SnapCoin, b: &mut Vec<u8>| {
-            b.extend(c.txid); w_compact(b, 1); w_compact(b, c.vout as u64);
-            w_varint(b, (c.height as u64) << 1 | c.coinbase as u64); w_varint(b, compress_amount(c.value));
-            w_varint(b, c.script_pubkey.len() as u64 + 6); b.extend(&c.script_pubkey);
-        };
-        for c in &v { one(c, &mut b) }
-        let e = check(&cs, &b, &none).unwrap_err();
-        assert!(e.contains("key order") && e.contains(&display(&v[i].txid)), "{e}");
+        b.extend(m3.version.to_le_bytes()); b.extend(m3.network_magic); b.extend(m3.base_blockhash); b.extend((v3.len() as u64).to_le_bytes());
+        for c in &v3 {
+            b.extend(c.txid); w_compact(&mut b, 1); w_compact(&mut b, c.vout as u64);
+            w_varint(&mut b, (c.height as u64) << 1 | c.coinbase as u64); w_varint(&mut b, compress_amount(c.value));
+            w_varint(&mut b, c.script_pubkey.len() as u64 + 6); b.extend(&c.script_pubkey);
+        }
+        let e = read_snapshot(&b[..], |_| Ok(())).unwrap_err();
+        assert!(e.contains("key order") && e.contains(&display(&v3[i].txid)), "{e}");
         // within a group, vouts out of order
-        let mut q = v.clone();
+        let mut q = v3.clone();
         q.swap(i - 1, i);
-        let e = check(&cs, &write_as_is(&m, &q), &none).unwrap_err();
+        let e = read_snapshot(&write_as_is(&m3, &q)[..], |_| Ok(())).unwrap_err();
         assert!(e.contains("encoded vouts ascending"), "{e}");
+        assert!(read_snapshot(&write_as_is(&m3, &v3)[..], |_| Ok(())).is_ok());
     }
 
     #[test]
