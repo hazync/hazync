@@ -199,8 +199,11 @@ key names only.
    install -m 755 $R/hazync-host-x86_64-linux-gnu $P/bin/host_lz
    [ "$(id_of $P/bin/host_lz)" = "$N" ] && echo prep-host-ok
    ```
-   The v0.26.0 host derives the tracked flags itself (`prover/host/src/tracked.rs`) and refuses to continue a store
-   written by an older host, so the old run cannot be picked up by mistake.
+   The v0.26.0 host derives the tracked flags itself (`prover/host/src/tracked.rs`) and refuses to continue from (or
+   take a base step on) a saved state at or above mainnet 147,396, the first tracked coin, that lacks its
+   `state_<h>.flags` marker, which only this host writes; so the old run cannot be picked up there by mistake. Below
+   147,396 an older host's states are the same and are accepted. A leaf bundle at or above 147,396 whose block JSON has
+   no `coinbase_flags` (cut by an older host) is refused too.
 3. **Start the block source, then prep:**
    ```bash
    systemctl start libzync-fetch; sleep 60; ls $P/blocks | head -3            # block_1.json …
