@@ -13,12 +13,12 @@ TIP=975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
 W=$(mktemp -d); trap 'rm -rf $W' EXIT
 BAD=0; N=0
 run() { local want=$1; shift; echo "== ${*#$B/} (expect exit $want)" | sed "s#$W#<tmp>#g"; "$@" 2>&1 | grep -a 'VERIFY_\|\[FAIL\]\|zync-deposit:' | sed "s#$W#<tmp>#g" | cut -c1-260; local got=${PIPESTATUS[0]}; N=$((N+1)); if [ "$got" = "$want" ]; then echo "exit=$got PASS"; else echo "exit=$got WRONG"; BAD=$((BAD+1)); fi; }
-MK="$B/zync-deposit --core $CORE --history $D/history_0_200.bin --height 170 --block $D/block_170.hex"
+MK="$B/zync-deposit --core $CORE --history $D/history_0_200.bin --height 170 --block $D/block_170_raw.txt"
 run 0 $MK --txid $T -o $W/core.json
 run 0 $MK --txid $T --headers $H/hdr_0_100.rcpt --headers $H/hdr_101_200.rcpt --headers-file $H/h0_200.txt -o $W/h200.json
 run 0 $MK --txid $T --headers $H/headers_0_tip.rcpt --tip-path $D/mmr_path_200_tip975278.txt -o $W/tip.json
 run 1 $MK --txid 00${T:2} -o $W/none.json
-run 1 $B/zync-deposit --core $CORE --history $D/history_0_200.bin --height 171 --block $D/block_170.hex --txid $T -o $W/none.json
+run 1 $B/zync-deposit --core $CORE --history $D/history_0_200.bin --height 171 --block $D/block_170_raw.txt --txid $T -o $W/none.json
 V="$B/swiftsync-verify deposit"
 run 2 $V --txid $T --vout 0 --amount 1000000000 --min-depth 31 $W/core.json
 run 2 $V --txid $T --min-depth 6 $W/h200.json

@@ -1,16 +1,16 @@
-== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170.hex --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/core.json (expect exit 0)
+== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/core.json (expect exit 0)
 zync-deposit: wrote <tmp>/core.json (456550 bytes): tx at position 1 of block 170, 31 confirmation(s) as of tip 200 (31 fully validated through 200)
 exit=0 PASS
-== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170.hex --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers experimental/libzync-bench/headers/hdr_0_100.rcpt --headers experimental/libzync-bench/headers/hdr_101_200.rcpt --headers-file experimental/libzync-bench/headers/h0_200.txt -o <tmp>/h200.json (expect exit 0)
+== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers experimental/libzync-bench/headers/hdr_0_100.rcpt --headers experimental/libzync-bench/headers/hdr_101_200.rcpt --headers-file experimental/libzync-bench/headers/h0_200.txt -o <tmp>/h200.json (expect exit 0)
 zync-deposit: wrote <tmp>/h200.json (1357235 bytes): tx at position 1 of block 170, 31 confirmation(s) as of tip 200 (31 fully validated through 200)
 exit=0 PASS
-== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170.hex --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers experimental/libzync-bench/headers/headers_0_tip.rcpt --tip-path experimental/libzync-bench/deposit/mmr_path_200_tip975278.txt -o <tmp>/tip.json (expect exit 0)
+== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers experimental/libzync-bench/headers/headers_0_tip.rcpt --tip-path experimental/libzync-bench/deposit/mmr_path_200_tip975278.txt -o <tmp>/tip.json (expect exit 0)
 zync-deposit: wrote <tmp>/tip.json (912772 bytes): tx at position 1 of block 170, 975109 confirmation(s) as of tip 975278 (31 fully validated through 200)
 exit=0 PASS
-== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170.hex --txid 00184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/none.json (expect exit 1)
+== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid 00184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/none.json (expect exit 1)
 zync-deposit: the transaction is not in that block
 exit=1 PASS
-== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 171 --block experimental/libzync-bench/deposit/block_170.hex --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/none.json (expect exit 1)
+== zync-deposit --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 171 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/none.json (expect exit 1)
 zync-deposit: the block is not the proven chain's at that height (history hash differs)
 exit=1 PASS
 == swiftsync-verify deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 1000000000 --min-depth 31 <tmp>/core.json (expect exit 2)
@@ -54,7 +54,7 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == swiftsync-verify deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --max-tip-age 60 <tmp>/tip.json (expect exit 1)
-  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794743752
+  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794743807
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == env RISC0_DEV_MODE=1 swiftsync-verify deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/core.json (expect exit 1)
