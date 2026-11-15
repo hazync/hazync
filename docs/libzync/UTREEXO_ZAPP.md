@@ -2,8 +2,8 @@
 
 Status (15.11.2026): **prototype** on `feat/zapp-utreexo`, CPU only. Executed (no dev mode) from genesis to H = 1,999,
 10,000 and 100,000; the roots are byte-identical to Floresta's own code at every H tested; real CPU proofs at H = 2 and 3
-(§8). Not reviewed, not reproducible-built, no published id. The owner's rule stands: Utreexo is never in the core
-(02.11.2026); this zAPP sits on top of it (agreed 14.11.2026).
+(§8). Not reviewed, not reproducible-built, no published id. Utreexo stays out of the Hazync core; this zAPP sits on
+top of it, like every zAPP.
 
 Utreexo is Tadge Dryja's accumulator; Floresta (getfloresta/Floresta, formerly vinteumorg) is Davidson Souza's node
 and rustreexo its library. This zAPP adds nothing to either. It is an additive product on a Hazync chain proof:
@@ -93,7 +93,7 @@ roots }, block_hash)` (floresta-wire `src/p2p_wire/node/chain_selector_ctx.rs:64
 
 **Checked** (`prover/zyncapps/utreexo-ref`: floresta-chain at `8399792e` as a git dependency, rustreexo `=0.7.0`):
 per block it calls Floresta's `proof_util::get_block_adds` and `Consensus::update_acc` with a rustreexo `MemForest`
-proof for the deletions, checks our leaf data hashes to Floresta's adds, the MemForest roots equal the Stump's, and at
+proof for the deletions, checks my leaf data hashes to Floresta's adds, the MemForest roots equal the Stump's, and at
 every requested height the Empty fold above equals the Stump; at 91,842 / 91,880 the kept leaves hash to Floresta's
 two `UNSPENDABLE_BIP30_UTXO` constants.
 - Floresta's published mainnet value after block 169 (`stump_updater.rs:387`, 169 leaves, 4 roots `69482b79…`,
@@ -186,7 +186,7 @@ used as a library), `max_time <= now + 7200`; OK additionally needs **block H fr
   `utreexo_host.rs` so this branch stands on main), derives the roots natively in the same runs, compares them with
   `utreexo-ref`'s line for H, then executes or proves the runs; `UTREEXO_TAMPER=<case>` negative tests;
   `utreexo-count <block_h.json ...>` the per-block cost model counts.
-- `zapps/utreexo` (this zAPP's own module, owner's layout 15.11.2026): the check library `zapp_utreexo` and the CLI
+- `zapps/utreexo` (this zAPP's own module, the same layout as every zAPP): the check library `zapp_utreexo` and the CLI
   `zapp-utreexo verify <receipt> [--expect-at H:hash] [--expect-tip T:hash] [--json] [--floresta]`, using
   swiftsync-verify as a library (no Utreexo code in the core verifier crates). `zapps/utreexo/wasm`: the same checks as
   WebAssembly (raw ABI, `zapp-utreexo.js` glue, `build.sh` byte-reproducible with Rust 1.99.0 at a fixed stage path,
@@ -276,7 +276,7 @@ in the hints zAPP).
   `AssumeUtreexoValue`; the WASM build (`wasm/`, sha256 `48470907…`, reproduced by a second build) passes the same 6
   cases in node.
 
-## 9. Questions for the Floresta developers (the owner sends these)
+## 9. Questions for the Floresta developers
 
 1. **Would you use proven roots?** Floresta now trusts a compiled-in `AssumeUtreexoValue` and backfills. Would a
    node, or your release process, check a receipt for that value (a Rust library call, a CLI before release, or
@@ -285,10 +285,10 @@ in the hints zAPP).
    schedule? Any H can be proved once the chain proof reaches it.
 3. **Format pinning.** Is the leaf (`UTREEXO_TAG_V1`, SHA-512/256, the header code, TxOut serialisation) and the
    Stump's root order frozen for the life of `rustreexo 0.7` / Floresta's current release, or is a change planned
-   (for example a new tag)? A change means a new image of this zAPP; we would pin a statement version to your version.
-4. **Empty roots.** We commit an Empty root as 32 zero bytes (rustreexo's test encoding). Do you serialise or ship
+   (for example a new tag)? A change means a new image of this zAPP; I would pin a statement version to your version.
+4. **Empty roots.** I commit an Empty root as 32 zero bytes (rustreexo's test encoding). Do you serialise or ship
    Empty roots anywhere (they cannot occur in `acchashes!`), and is that encoding acceptable?
-5. **BIP30 leaves.** We add the coinbases of 91,722 and 91,812 as permanent live leaves, as `get_block_adds` does;
+5. **BIP30 leaves.** I add the coinbases of 91,722 and 91,812 as permanent live leaves, as `get_block_adds` does;
    please confirm that this is intended for every future version (utreexod does the same?).
 6. **Custom value.** florestad passes `assumeutreexo_value: None`, so a user cannot pass proven roots without a
    rebuild. Would you accept a flag or config entry for them, gated on a proof check?
