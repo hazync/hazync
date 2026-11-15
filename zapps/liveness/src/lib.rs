@@ -5,15 +5,18 @@
 //! WASM's facts JSON `"liveness"`); the checks are unchanged, the entry points are this module's own.
 
 use serde::{Deserialize, Serialize};
-use swiftsync_verify::{check_bundle, hex, hex32, unhex, verify, Bundle, ChainState, Image, Inputs, Report, Verdict, BUNDLE_MAGIC, PROFILE_COINLOG};
+use swiftsync_verify::{hex, hex32, unhex, ChainState, Image, Report, Verdict, PROFILE_COINLOG};
 
 /// Where a producer learns a coin's fields (block files or the user's node).
 pub mod coin_source;
 
 /// A liveness question (docs/libzync/LIVENESS_ZAPP.md), written by the CALLER, never taken from the fact server:
-/// `<txid>:<vout>@<height|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>]`, txid as explorers
-/// print it. The proof must be about exactly this outpoint at exactly this height; a given state, value or script must
-/// be the proof's. Without `=...` the check reports the answer (CLI); the C ABI and WASM require it (they return only
+/// `<txid>:<vout>@<height|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]`,
+/// txid as explorers print it, lower-case hex, numbers in decimal without a sign or leading zeros (one spelling per
+/// question). The proof must be about exactly this outpoint at exactly this height; a given state, value, script,
+/// creation height or coinbase flag must be the proof's. `created` pins WHICH coin: an outpoint created again over its
+/// own spent coin (possible on mainnet from 1,983,702) has two leaves, one spent and one unspent, and without it both
+/// `=spent` and `=unspent` can verify. Without `=...` the check reports the answer (CLI); the C ABI and WASM require it (they return only
 /// whether a claim holds).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LivenessAsk {
@@ -25,6 +28,20 @@ pub struct LivenessAsk {
     pub state: Option<AskState>,
     pub value: Option<u64>,
     pub script: Option<Vec<u8>>,
+    /// the creating block's height
+    pub created: Option<u32>,
+    pub coinbase: Option<bool>,
+}
+
+/// A decimal number as a question spells it: digits only, no leading zero unless it is 0.
+fn dec<T: std::str::FromStr>(x: &str) -> Option<T> {
+    let ok = !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()) && (x == "0" || !x.starts_with('0'));
+    if ok { x.parse().ok() } else { None }
+}
+
+/// Lower-case hex only.
+fn lower_hex(x: &str) -> Option<Vec<u8>> {
+    if x.bytes().any(|b| b.is_ascii_uppercase()) { None } else { unhex(x) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,16 +53,18 @@ pub enum AskState {
 
 impl LivenessAsk {
     pub fn parse(s: &str) -> Result<LivenessAsk, String> {
-        let bad = |w: &str| format!("liveness question {s:?}: {w} (want <txid>:<vout>@<height|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>])");
-        let mut parts = s.trim().split(',');
+        let bad = |w: &str| format!("liveness question {s:?}: {w} (want <txid>:<vout>@<height|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1])");
+        let mut parts = s.split(',');
         let head = parts.next().unwrap_or("");
         let (q, st) = match head.split_once('=') { Some((q, st)) => (q, Some(st)), None => (head, None) };
         let (op, at) = q.split_once('@').ok_or_else(|| bad("no @<height|tip>"))?;
         let (t, v) = op.split_once(':').ok_or_else(|| bad("no :<vout>"))?;
-        if t.len() != 64 || !t.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(bad("txid is not 64 hex digits")); }
-        let mut txid = hex32(&t.to_lowercase()).ok_or_else(|| bad("txid"))?;
+        if t.len() != 64 || !t.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            return Err(bad("txid is not 64 lower-case hex digits"));
+        }
+        let mut txid = hex32(t).ok_or_else(|| bad("txid"))?;
         txid.reverse();
-        let num = |x: &str| x.parse::<u32>().ok().filter(|_| !x.starts_with('+') && !x.is_empty());
+        let num = |x: &str| dec::<u32>(x);
         let vout = num(v).ok_or_else(|| bad("vout"))?;
         let at = if at == "tip" { None } else { Some(num(at).ok_or_else(|| bad("height"))?) };
         let state = match st {
@@ -63,15 +82,17 @@ impl LivenessAsk {
             }
             Some(_) => return Err(bad("state is unspent or spent")),
         };
-        let (mut value, mut script) = (None, None);
+        let (mut value, mut script, mut created, mut coinbase) = (None, None, None, None);
         for p in parts {
             match p.split_once('=') {
-                Some(("value", x)) if value.is_none() => value = Some(x.parse::<u64>().map_err(|_| bad("value"))?),
-                Some(("script", x)) if script.is_none() => script = Some(unhex(x).ok_or_else(|| bad("script is not hex"))?),
+                Some(("value", x)) if value.is_none() => value = Some(dec::<u64>(x).ok_or_else(|| bad("value"))?),
+                Some(("script", x)) if script.is_none() => script = Some(lower_hex(x).ok_or_else(|| bad("script is not lower-case hex"))?),
+                Some(("created", x)) if created.is_none() => created = Some(num(x).ok_or_else(|| bad("created"))?),
+                Some(("coinbase", x)) if coinbase.is_none() => coinbase = Some(match x { "0" => false, "1" => true, _ => return Err(bad("coinbase is 0 or 1")) }),
                 _ => return Err(bad("unknown or repeated option")),
             }
         }
-        Ok(LivenessAsk { txid, vout, at, state, value, script })
+        Ok(LivenessAsk { txid, vout, at, state, value, script, created, coinbase })
     }
 }
 
@@ -83,7 +104,15 @@ pub fn liveness_token(s: &libzync::liveness::State) -> String {
     }
 }
 
-/// A liveness proof's bytes from a file's contents: raw (starting "LZLV") or hex text.
+/// A liveness proof as the C ABI and WASM take it: lower-case hex, exactly (no whitespace, no other spelling).
+pub fn liveness_hex(s: &str) -> Result<Vec<u8>, String> {
+    if s.is_empty() || s.bytes().any(|b| !(b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+        return Err("liveness proof: not lower-case hex (one spelling per proof)".into());
+    }
+    unhex(s).ok_or_else(|| "liveness proof: not whole bytes of hex".into())
+}
+
+/// A liveness proof's bytes from a FILE's contents (the CLI): raw (starting "LZLV") or lower-case hex text.
 pub fn liveness_bytes(b: &[u8]) -> Result<Vec<u8>, String> {
     if b.starts_with(&libzync::liveness::MAGIC) { return Ok(b.to_vec()); }
     let t = std::str::from_utf8(b).map_err(|_| "liveness proof: neither raw (LZLV) nor hex text")?.trim();
@@ -116,6 +145,12 @@ pub fn check_liveness(cs: &ChainState, undo_from: u32, proof: &[u8], ask: &Liven
     }
     if ask.script.as_ref().is_some_and(|s| *s != p.coin.script_pubkey) {
         return Err("the coin pays another scriptPubKey than the one asked".into());
+    }
+    if ask.created.is_some_and(|h| h != p.coin.height) {
+        return Err(format!("the proof is about the coin created at height {}, not the one asked", p.coin.height));
+    }
+    if ask.coinbase.is_some_and(|c| c != p.coin.coinbase) {
+        return Err(format!("the coin {} created by a coinbase, not as asked", if p.coin.coinbase { "was" } else { "was not" }));
     }
     lv::check(&p, &chain).map_err(|e| format!("liveness proof for {}:{} at {}: {}", hex(&shown), p.coin.vout, p.at, e.text()))?;
     let got = liveness_token(&p.state);
@@ -159,7 +194,7 @@ pub fn check_liveness_fact(cs: &ChainState, undo_from: u32, f: &LivenessFact, ne
     if need_claim && ask.state.is_none() {
         return Err(format!("liveness question {:?} claims no answer (=unspent or =spent...): this interface returns only whether a claim holds", f.ask));
     }
-    let (token, line) = check_liveness(cs, undo_from, &liveness_bytes(f.proof.as_bytes())?, &ask)?;
+    let (token, line) = check_liveness(cs, undo_from, &liveness_hex(&f.proof)?, &ask)?;
     Ok(format!("{token}: {line}"))
 }
 
@@ -170,7 +205,8 @@ pub fn make_liveness(recs: &[libzync::history::Rec], tip: u32, at: u32, coin: &l
     use libzync::liveness as lv;
     let r = libzync::history::replay(recs, at, tip).map_err(|e| e.to_string())?;
     let leaf = coin.leaf();
-    let pos = r.coins.iter().position(|c| *c == leaf)
+    // the latest leaf (a leaf hashes its creation height, so two equal leaves cannot exist; rposition says which wins)
+    let pos = r.coins.iter().rposition(|c| *c == leaf)
         .ok_or("that coin is not in the coin log after that height (not yet created, never a leaf: unspendable, or created and spent in one block)")? as u64;
     let state = match r.spenders.get(&pos) {
         None => lv::State::Unspent,
@@ -187,26 +223,9 @@ pub fn make_liveness(recs: &[libzync::history::Rec], tip: u32, at: u32, coin: &l
     Ok(lv::encode(&lv::Proof { coin: coin.clone(), state, at, pos, path: r.log.path(pos), opening }))
 }
 
-/// The image a caller names, as the core verifier's WASM resolves it: `network` "mainnet" or "signet"; `image_hex`
-/// empty for the network's built-in image, else a built-in image by id (with its own lineage) or the network's current
-/// image re-pointed at that id; `coinlog` / `product` as the core's network bits 0x10 / 0x20. (No lineage text here:
-/// an image the built-in table does not list, with its own handovers, is checked by the core verifier.)
+/// The image a caller names (zapp_common::image_for, shared by every zAPP; cached, so a call leaks nothing new).
 pub fn image_for(network: &str, image_hex: &str, coinlog: bool, product: bool) -> Result<&'static Image, String> {
-    let h = image_hex.trim().to_lowercase();
-    let mut image = match Image::by_id(network, &h) {
-        Some(i) if !h.is_empty() => i,
-        _ => {
-            let i = Image::by_network(network).ok_or_else(|| format!("unknown network {network:?}"))?;
-            if h.is_empty() { i } else { i.with_method_id(&h).ok_or("image id is not 64 hex characters")? }
-        }
-    };
-    if coinlog {
-        image = image.with_coinlog();
-    }
-    if product {
-        image = image.with_product();
-    }
-    Ok(image)
+    zapp_common::image_for(network, image_hex, coinlog, product)
 }
 
 /// What [`verify_liveness`] found: the core report (its verdict now covering the liveness checks), whether the tip was
@@ -224,27 +243,16 @@ pub struct Outcome {
 /// `need_claim`: refuse a question that does not claim its answer (the C ABI and WASM return only whether claims hold).
 pub fn verify_liveness(receipt: &[u8], image: &'static Image, anchor: Option<ChainState>, now: u64, facts: &[LivenessFact],
                        expect: Option<&str>, need_claim: bool) -> Outcome {
-    let mut rep = if receipt.starts_with(BUNDLE_MAGIC) {
-        match Bundle::decode(receipt) {
-            Ok(b) => check_bundle(&b, image, anchor, now),
-            Err(e) => Report { checks: vec![(false, format!("bundle: {e}"))], low_work: false, state: None, verdict: Verdict::Fail,
-                               undo_from: swiftsync_verify::pin::NO_UNDO },
-        }
-    } else {
-        verify(&Inputs { receipt, image, anchor, now })
-    };
+    // the core receipt and the tip, as every zAPP checks them (zapp_common): a wrong `expect` is a FAIL line in the
+    // report's checks, not one of the facts
+    let core = zapp_common::verify_core(receipt, image, anchor, now, expect);
+    let (mut rep, tip_checked) = (core.report, core.tip_checked);
     let mut out = Vec::new();
-    let tip_checked = match (expect.map(str::trim).filter(|e| !e.is_empty()), rep.state.as_ref()) {
-        (Some(e), Some(cs)) => match swiftsync_verify::parse_expect(e) {
-            Some((h, x)) if swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash) => true,
-            _ => { out.push(Err(format!("expect {e:?}: not the proof's tip"))); false }
-        },
-        _ => false,
-    };
     if rep.verdict == Verdict::Fail {
-        // the journal of a receipt that did not verify is the prover's word: nothing is checked against it
+        // a receipt that did not verify (its journal is the prover's word), or a tip that is not the block the caller
+        // expects: nothing is checked against it
         for f in facts {
-            out.push(Err(format!("liveness {:?}: NOT checked: the receipt did not verify", f.ask)));
+            out.push(Err(format!("liveness {:?}: NOT checked: the core check failed (the receipt, or its tip against expect)", f.ask)));
         }
     } else if let Some(cs) = rep.state.as_ref() {
         for f in facts {
@@ -253,7 +261,7 @@ pub fn verify_liveness(receipt: &[u8], image: &'static Image, anchor: Option<Cha
     } else if !facts.is_empty() {
         out.push(Err("no verified state to check liveness facts against".to_string()));
     }
-    if out.iter().any(|r| r.is_err()) {
+    if out.iter().any(|r| r.is_err()) || rep.checks.iter().any(|c| !c.0) {
         rep.verdict = Verdict::Fail;
     }
     if rep.verdict == Verdict::Ok && !tip_checked && !facts.is_empty() {
@@ -266,7 +274,10 @@ pub fn verify_liveness(receipt: &[u8], image: &'static Image, anchor: Option<Cha
 /// `at`, from a run's history and a block source, trying each candidate coin the source gives.
 pub fn prove(recs: &[libzync::history::Rec], tip: u32, at: u32, src: &coin_source::Source, txid: &[u8; 32], vout: u32,
              height: Option<u32>) -> Result<Vec<u8>, String> {
-    let coins = coin_source::candidates(src, txid, vout, height)?;
+    let mut coins = coin_source::candidates(src, txid, vout, height)?;
+    // the LATEST coin first: an outpoint created again over its own spent coin names the live one by default; the
+    // caller pins an older one with --height (and the verifier's question with `created=`)
+    coins.sort_by(|a, b| b.height.cmp(&a.height));
     let mut last = "no candidate coin".to_string();
     for c in &coins {
         match make_liveness(recs, tip, at, c) {

@@ -67,3 +67,5 @@ key.hex
 # Live-dashboard run artefacts: the collector rewrites these every second.
 tools/live/frame.png
 tools/live/snapshot.json
+!zapps/*/vectors/*.hex
+zapps/*/vectors/key.hex

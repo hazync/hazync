@@ -101,9 +101,15 @@ impl Identity {
             match node(cmd, &["getblockhash", &height.to_string()]) {
                 Ok(hash) if is_hash(&hash.to_lowercase()) => {
                     let hash = hash.to_lowercase();
-                    r.node_chainwork = node(cmd, &["getblockheader", &hash]).ok()
-                        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-                        .and_then(|v| v["chainwork"].as_str().map(|w| w.to_lowercase()));
+                    // the node's chainwork is compared with the proven one; a node that cannot say is a FAIL, not a
+                    // silently skipped comparison
+                    match node(cmd, &["getblockheader", &hash]) {
+                        Ok(j) => match serde_json::from_str::<serde_json::Value>(&j).ok().and_then(|v| v["chainwork"].as_str().map(|w| w.to_lowercase())) {
+                            Some(w) if is_hash(&w) => r.node_chainwork = Some(w),
+                            _ => r.checks.push((false, format!("your node's getblockheader {hash} has no chainwork: the proven chainwork is not compared"))),
+                        },
+                        Err(e) => r.checks.push((false, format!("your node's getblockheader {hash} failed ({e}): the proven chainwork is not compared"))),
+                    }
                     r.checks.push((true, format!("your node's block {height} is {hash}")));
                     answers.push(("your node".into(), height, hash));
                 }
@@ -188,6 +194,22 @@ pub fn expect_at(id: &Identity, network: &str, height: u32) -> (Option<String>, 
 /// image re-pointed at that id; `coinlog` / `product` as the core's network bits 0x10 / 0x20. (No lineage text: an image
 /// the built-in table does not list, with its own handovers, is checked by the core verifier.)
 pub fn image_for(network: &str, image_hex: &str, coinlog: bool, product: bool) -> Result<&'static Image, String> {
+    // Image's with_* helpers leak a new Image per call; a long-lived caller (a server, a page verifying many times)
+    // would grow without bound. One leaked Image per distinct request, cached.
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<(String, String, bool, bool), &'static Image>>> = OnceLock::new();
+    let key = (network.to_string(), image_hex.trim().to_lowercase(), coinlog, product);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(i) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(i);
+    }
+    let i = image_for_uncached(network, image_hex, coinlog, product)?;
+    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(key, i);
+    Ok(i)
+}
+
+fn image_for_uncached(network: &str, image_hex: &str, coinlog: bool, product: bool) -> Result<&'static Image, String> {
     let h = image_hex.trim().to_lowercase();
     let mut image = match Image::by_id(network, &h) {
         Some(i) if !h.is_empty() => i,
@@ -316,6 +338,17 @@ mod tests {
         assert!(r.checks.iter().any(|c| !c.0 && c.1.contains("disagree")), "{:?}", r.checks);
         let r = take_all(&["--bitcoin-cli", c, "--expect", &format!("199:{H200}")]).unwrap().resolve("mainnet", 200);
         assert!(r.checks.iter().any(|c| !c.0 && c.1.contains("same block")), "{:?}", r.checks);
+        // a node whose getblockheader has no chainwork, or fails: a FAIL line, never a silent skip
+        let cli2 = d.join("cli2");
+        std::fs::write(&cli2, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{}}';; esac\n")).unwrap();
+        let cli3 = d.join("cli3");
+        std::fs::write(&cli3, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; *) exit 1;; esac\n")).unwrap();
+        #[cfg(unix)]
+        for f in [&cli2, &cli3] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+        for (f, want) in [(&cli2, "no chainwork"), (&cli3, "failed")] {
+            let r = take_all(&["--bitcoin-cli", f.to_str().unwrap()]).unwrap().resolve("mainnet", 200);
+            assert!(r.node_chainwork.is_none() && r.checks.iter().any(|c| !c.0 && c.1.contains(want)), "{:?}", r.checks);
+        }
         let r = take_all(&["--bitcoin-cli", "/nonexistent/cli"]).unwrap().resolve("mainnet", 200);
         assert!(r.expect.is_none() && r.checks.iter().any(|c| !c.0));
         std::fs::remove_dir_all(&d).unwrap();
@@ -332,6 +365,10 @@ mod tests {
         assert_eq!((bad.report.verdict, bad.tip_checked), (Verdict::Fail, false));
         assert_eq!(verify_core(&r, img, None, 1_800_000_000, None).tip_checked, false);
         assert!(image_for("mainnet", "xyz", false, false).is_err() && image_for("testnet", "", false, false).is_err());
+        // cached: the same request gives the same Image, so repeated calls leak nothing new
+        let a = image_for("mainnet", "", true, true).unwrap();
+        assert!(std::ptr::eq(a, image_for("mainnet", " ", true, true).unwrap()));
+        assert!(!std::ptr::eq(a, image_for("mainnet", "", true, false).unwrap()));
         let cs = ok.report.state.unwrap();
         let id = Identity { expect: Some(format!("200:{H200}")), ..Default::default() };
         assert!(check_core_tip(&id, "mainnet", &cs).1);

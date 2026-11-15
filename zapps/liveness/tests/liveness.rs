@@ -213,10 +213,197 @@ fn questions_parse_strictly() {
                 format!("{T170}:0@1=spent:1:2"), format!("{T170}:0@1,value=1,value=2"), format!("{T170}:0@1,colour=red"), format!("{T170}:+1@1")] {
         assert!(LivenessAsk::parse(&bad).is_err(), "{bad}");
     }
-    // the CLI reads a proof as raw bytes or LOWER-case hex only
+    // one spelling per question (review 15.11.2026): lower-case txid and script, no sign, no leading zeros
+    let a = ask(&format!("{T9}:0@200,created=9,coinbase=1"));
+    assert_eq!((a.created, a.coinbase), (Some(9), Some(true)));
+    for bad in [format!("{}:0@1", T170.to_uppercase()), format!("{T170}:01@1"), format!("{T170}:0@01"), format!("{T170}:0@+1"),
+                format!("{T170}:0@1,value=+5"), format!("{T170}:0@1,value=05"), format!("{T170}:0@1,script=0A"), format!("{T170}:0@1=spent:0170"),
+                format!("{T170}:0@1,created=09"), format!("{T170}:0@1,coinbase=2"), format!("{T170}:0@1,created=1,created=1"), format!(" {T170}:0@1")] {
+        assert!(LivenessAsk::parse(&bad).is_err(), "{bad}");
+    }
+    assert_eq!(ask(&format!("{T170}:0@0")).at, Some(0), "0 itself is fine");
+    // the CLI reads a proof FILE as raw bytes or LOWER-case hex; the C ABI / WASM take exact lower-case hex only
     let b = proof("b170_0_at200.hex");
     assert_eq!(liveness_bytes(&b).unwrap(), b);
     assert!(liveness_bytes(hex(&b).to_uppercase().as_bytes()).is_err());
+    assert_eq!(liveness_hex(&hex(&b)).unwrap(), b);
+    for bad in [format!("{}\n", hex(&b)), format!(" {}", hex(&b)), hex(&b).to_uppercase(), String::from_utf8_lossy(&b).to_string(), String::new()] {
+        assert!(liveness_hex(&bad).is_err());
+    }
+}
+
+/// Item 1 of the 15.11.2026 review: `created=` / `coinbase=` pin the coin, compared before the answer.
+#[test]
+fn created_and_coinbase_pin_the_coin() {
+    let (cs, uf) = state();
+    let b9 = proof("b9_0_at200.hex");
+    check_liveness(&cs, uf, &b9, &ask(&format!("{T9}:0@200=spent,created=9,coinbase=1"))).unwrap();
+    let e = check_liveness(&cs, uf, &b9, &ask(&format!("{T9}:0@200=spent,created=10"))).unwrap_err();
+    assert!(e.contains("created at height 9, not the one asked"), "{e}");
+    let e = check_liveness(&cs, uf, &b9, &ask(&format!("{T9}:0@200,coinbase=0"))).unwrap_err();
+    assert!(e.contains("coinbase"), "{e}");
+    check_liveness(&cs, uf, &proof("b170_0_at200.hex"), &ask(&format!("{T170}:0@200=unspent,created=170,coinbase=0"))).unwrap();
+}
+
+/// A synthetic chain: block 1's coinbase output (BIP30-TRACKED, flag bit 1) is spent at 2, and the SAME transaction
+/// is mined again at 3 (the shape possible on mainnet from 1,983,702). Two leaves, one outpoint.
+fn recreated() -> (tempdir::Dir, Vec<libzync::history::Rec>, ChainState, lv::Coin, lv::Coin) {
+    use libzync::history::Rec;
+    let blk = |h: u32| -> serde_json::Value { serde_json::from_slice(&std::fs::read(format!("{}/../../prover/testdata/libzync/mainnet/block_{h}.json", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap() };
+    let cb = blk(9)["coinbase_hex"].as_str().unwrap().to_string();
+    let raw = unhex(&cb).unwrap();
+    let mut o = 0;
+    let t = libzync::facts::parse_tx(&raw, &mut o).unwrap();
+    let txid = libzync::facts::txid(&t);
+    let d = tempdir::Dir::new("lv-recreated");
+    let times = [vec![1_231_006_505u32], vec![1_231_006_505, 1_231_469_665], vec![1_231_006_505, 1_231_469_665, 1_231_469_744]];
+    for (h, rt) in [(1u32, &times[0]), (3, &times[2])] {
+        let j = serde_json::json!({ "height": h, "coinbase_hex": cb, "txs": [], "recent_times": rt });
+        std::fs::write(d.0.join(format!("block_{h}.json")), j.to_string()).unwrap();
+    }
+    let coin = |h: u32, mtp: u32| lv::Coin { txid, vout: 0, value: t.outputs[0].0, script_pubkey: t.outputs[0].1.clone(), height: h,
+                                              coinbase: true, tracked: true, creation_mtp: mtp };
+    let (old, new) = (coin(1, 1_231_006_505), coin(3, 1_231_469_665));
+    let v = old.value;
+    let recs = vec![
+        Rec { height: 0, hash: [10; 32], value: 0, flips: vec![], appends: vec![], undo: None },
+        Rec { height: 1, hash: [11; 32], value: v, flips: vec![], appends: vec![old.leaf()], undo: None },
+        Rec { height: 2, hash: [12; 32], value: 0, flips: vec![(0, 1, 0)], appends: vec![], undo: None },
+        Rec { height: 3, hash: [13; 32], value: v, flips: vec![], appends: vec![new.leaf()], undo: None },
+    ];
+    let r = libzync::history::replay(&recs, 3, 3).unwrap();
+    let mut cs = genesis_anchor(Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap());
+    cs.profile |= PROFILE_COINLOG;
+    cs.height = 3;
+    cs.utxo_roots = r.log.roots();
+    cs.utxo_leaves = r.log.len();
+    cs.utxo_value = v;
+    cs.block_roots = libzync::history::block_path(&r.block_leaves, 0).1;
+    cs.block_leaves = r.block_leaves.len() as u64;
+    (d, recs, cs, old, new)
+}
+
+mod tempdir {
+    pub struct Dir(pub std::path::PathBuf);
+    impl Dir {
+        pub fn new(tag: &str) -> Dir {
+            let p = std::env::temp_dir().join(format!("{tag}-{}-{:?}", std::process::id(), std::thread::current().id()));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Dir(p)
+        }
+    }
+    impl Drop for Dir {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+}
+
+#[test]
+fn a_recreated_outpoint_is_pinned_by_created_and_the_producer_names_the_latest() {
+    let (d, recs, cs, old, new) = recreated();
+    let uf = swiftsync_verify::pin::NO_UNDO;
+    let mut shown = new.txid;
+    shown.reverse();
+    let op = hex(&shown);
+    // the producer, asked by outpoint only, gives the LATEST coin (unspent); pinned to 1, the old (spent) one
+    let src = coin_source::Source::Dir(d.0.clone());
+    let p_new = prove(&recs, 3, 3, &src, &new.txid, 0, None).unwrap();
+    assert_eq!(lv::decode(&p_new).unwrap().coin, new);
+    let p_old = prove(&recs, 3, 3, &src, &new.txid, 0, Some(1)).unwrap();
+    assert_eq!(lv::decode(&p_old).unwrap().coin, old);
+    assert!(new.tracked && lv::decode(&p_new).unwrap().coin.tracked, "the BIP30-tracked reading is the one the log holds");
+    // without created=, BOTH answers verify: the hole the review found
+    assert_eq!(check_liveness(&cs, uf, &p_new, &ask(&format!("{op}:0@3=unspent"))).unwrap().0, "unspent");
+    assert_eq!(check_liveness(&cs, uf, &p_old, &ask(&format!("{op}:0@3=spent"))).unwrap().0, "spent:2:1:0");
+    // with it, only the coin asked about
+    assert!(check_liveness(&cs, uf, &p_new, &ask(&format!("{op}:0@3=unspent,created=3"))).is_ok());
+    assert!(check_liveness(&cs, uf, &p_old, &ask(&format!("{op}:0@3=spent,created=3"))).unwrap_err().contains("not the one asked"));
+    assert!(check_liveness(&cs, uf, &p_old, &ask(&format!("{op}:0@3=spent,created=1"))).is_ok());
+    // tracked=true is bound like every other field: the same coin read untracked is another leaf
+    let mut w = lv::decode(&p_new).unwrap();
+    w.coin.tracked = false;
+    assert!(check_liveness(&cs, uf, &lv::encode(&w), &ask(&format!("{op}:0@3"))).unwrap_err().contains("not in the claimed state"));
+    let chain = lv::Chain { height: 3, utxo_roots: &cs.utxo_roots, utxo_leaves: cs.utxo_leaves, block_roots: &cs.block_roots,
+                            block_leaves: cs.block_leaves, undo_from: uf };
+    assert_eq!(flips_refused(&p_new, &chain) + flips_refused(&p_old, &chain), 8 * (p_new.len() + p_old.len()));
+    // below the tip: after block 2 the old coin is spent and the new one does not exist yet
+    let p2 = prove(&recs, 3, 2, &src, &new.txid, 0, None).unwrap();
+    assert_eq!(lv::decode(&p2).unwrap().coin, old, "the latest coin AFTER block 2 is the old one");
+    assert_eq!(check_liveness(&cs, uf, &p2, &ask(&format!("{op}:0@2=spent:2:1:0,created=1"))).unwrap().0, "spent:2:1:0");
+}
+
+/// Every single-bit flip of `b` refused by the proof check alone; returns how many were tried.
+fn flips_refused(b: &[u8], chain: &lv::Chain) -> usize {
+    assert!(lv::verify(b, chain).is_ok());
+    let mut n = 0;
+    for i in 0..b.len() {
+        for bit in 0..8 {
+            let mut x = b.to_vec();
+            x[i] ^= 1 << bit;
+            assert!(lv::verify(&x, chain).is_err(), "byte {i} bit {bit} accepted");
+            n += 1;
+        }
+    }
+    n
+}
+
+/// The 0x05 block leaf (with the undo hash, docs/libzync/UNDO.md) opened on REAL host data: a mainnet 1..200 run of a
+/// development image with the undo commitment (`vectors/undo_dev_1_200_*`, an execute-mode run on hazync-coord,
+/// 14.11.2026, its receipts dev-mode, so the chain state is the host's JSON, not a verified receipt). A v0.26.0
+/// (46666b6f) proof with history waits on the board's first run.
+#[test]
+fn undo_leaf_openings_on_host_data() {
+    let recs = libzync::history::decode_all(&std::fs::read(zapp_path("undo_dev_1_200_history.bin")).unwrap()).unwrap();
+    assert!(recs[1..].iter().all(|r| r.undo.is_some()) && recs[0].undo.is_none());
+    let cs: ChainState = serde_json::from_slice(&std::fs::read(zapp_path("undo_dev_1_200_state.json")).unwrap()).unwrap();
+    let uf = swiftsync_verify::undo_from_of(&cs.self_id, &[]);
+    assert_eq!((cs.height, uf), (200, 1));
+    let chain = lv::Chain { height: cs.height, utxo_roots: &cs.utxo_roots, utxo_leaves: cs.utxo_leaves, block_roots: &cs.block_roots,
+                            block_leaves: cs.block_leaves, undo_from: uf };
+    let mut n = 0;
+    for (f, at, want) in [("b9_0_at169.hex", 169, "unspent"), ("b9_0_at200.hex", 170, "spent:170:1:0"), ("b170_1_at170.hex", 170, "unspent"),
+                          ("b170_1_at200.hex", 181, "spent:181:1:0"), ("b170_0_at200.hex", 199, "unspent")] {
+        let coin = lv::decode(&proof(f)).unwrap().coin;
+        let b = make_liveness(&recs, 200, at, &coin).unwrap();
+        let p = lv::decode(&b).unwrap();
+        assert!(p.opening.as_ref().unwrap().undo.is_some(), "a 0x05 leaf is opened with its undo hash");
+        let mut shown = coin.txid;
+        shown.reverse();
+        assert_eq!(check_liveness(&cs, uf, &b, &ask(&format!("{}:{}@{at}", hex(&shown), coin.vout))).unwrap().0, want, "{f} at {at}");
+        // the same opening without its undo hash, or under a pre-undo rule, is refused
+        let mut w = p.clone();
+        w.opening.as_mut().unwrap().undo = None;
+        assert!(lv::verify(&lv::encode(&w), &chain).is_err());
+        assert!(lv::verify(&b, &lv::Chain { undo_from: swiftsync_verify::pin::NO_UNDO, ..chain_copy(&chain) }).is_err());
+        n += flips_refused(&b, &chain);
+    }
+    eprintln!("undo openings: {n} single-bit flips, all refused");
+}
+
+fn chain_copy<'a>(c: &lv::Chain<'a>) -> lv::Chain<'a> {
+    lv::Chain { height: c.height, utxo_roots: c.utxo_roots, utxo_leaves: c.utxo_leaves, block_roots: c.block_roots, block_leaves: c.block_leaves,
+                undo_from: c.undo_from }
+}
+
+/// Above block 200: the regtest base chain of the consensus rig (Core 28.0 regtest, -testactivationheight=bip34@110),
+/// 0..232, proved in execute mode on hazync-coord (15.11.2026) by a development image with the undo commitment; the
+/// proofs in vectors/regtest_* were written by `zapp-liveness prove ... --bitcoin-cli` against a copy of that node.
+#[test]
+fn above_block_200_on_regtest() {
+    let cs: ChainState = serde_json::from_slice(&std::fs::read(zapp_path("regtest_0_232_state.json")).unwrap()).unwrap();
+    let uf = swiftsync_verify::undo_from_of(&cs.self_id, &[]);
+    assert_eq!(cs.height, 232);
+    let chain = lv::Chain { height: cs.height, utxo_roots: &cs.utxo_roots, utxo_leaves: cs.utxo_leaves, block_roots: &cs.block_roots,
+                            block_leaves: cs.block_leaves, undo_from: uf };
+    let cases: Vec<(String, String, String)> = serde_json::from_slice(&std::fs::read(zapp_path("regtest_cases.json")).unwrap()).unwrap();
+    assert!(cases.len() >= 3);
+    let mut n = 0;
+    for (f, q, want) in &cases {
+        let b = proof(f);
+        assert_eq!(&check_liveness(&cs, uf, &b, &ask(q)).unwrap_or_else(|e| panic!("{f}: {e}")).0, want, "{f}");
+        n += flips_refused(&b, &chain);
+    }
+    eprintln!("regtest above 200: {} proofs, {n} single-bit flips, all refused", cases.len());
 }
 
 /// Timing (run with --ignored --nocapture): the receipt check once, then each proof's check.

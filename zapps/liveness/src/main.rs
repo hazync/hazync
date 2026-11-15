@@ -7,7 +7,7 @@
 //!                 [--now <unix seconds>] [--expect <height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli "<cmd>"]
 //!                 (--liveness <proof> <question>)... <receipt|bundle.sspf>
 //!       check each liveness proof against the verified core proof and against YOUR question
-//!       (`<txid>:<vout>@<h|tip>`, optionally `=unspent` / `=spent[:<h>[:<tx>:<vin>]]`, `,value=<sat>`, `,script=<hex>`;
+//!       (`<txid>:<vout>@<h|tip>`, optionally `=unspent` / `=spent[:<h>[:<tx>:<vin>]]`, `,value=<sat>`, `,script=<hex>`, `,created=<h>`, `,coinbase=0|1`;
 //!       without a claim the answer is stated). `--expect` (the network's block at the proof's height), `--mempool`
 //!       and `--bitcoin-cli` (your node; its chainwork is compared too) are the chain-identity sources every zAPP CLI
 //!       takes (zapp-common), as the core verifier's; without one the verdict is at most DEMO. Exit 0 OK, 2 DEMO, 1 FAIL.
@@ -28,7 +28,7 @@ use zapp_liveness::{coin_source, LivenessAsk, LivenessFact};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-liveness [--network mainnet|signet] [--image <hex>] [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>])... <receipt|bundle.sspf>");
+    eprintln!("usage: zapp-liveness [--network mainnet|signet] [--image <hex>] [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1])... <receipt|bundle.sspf>");
     eprintln!("       zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli \"<cmd>\") [--height <h>]");
     eprintln!("       zapp-liveness serve <history.bin> <addr:port> (--blocks <dir> | --bitcoin-cli \"<cmd>\")");
     exit(1);
