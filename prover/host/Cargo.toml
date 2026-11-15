@@ -22,8 +22,13 @@ num-bigint = "0.4"
 libzync = { path = "../../libzync" }
 # libzync laptop tools: build the guest memory image once per process (lz_execute). Already in the lock.
 risc0-binfmt = "=3.0.6"
+# Cross-version handover (guest src/xver): the old recursion circuits verify on risc0-zkp's own verifier. Already in the lock.
+risc0-zkp = { version = "=3.0.6", default-features = false, features = ["std"] }
 hazync-utreexo = { path = "../../accumulator" }
 hazync-coinbase-smt = { path = "../../coinbase-smt", features = ["std", "serde"] }
 
 [features]
 cuda = ["risc0-zkvm/cuda"]
+# Named only so the shared xver module's guest-side cfgs are known here: the host always carries every version.
+xver-v3_0_5 = []
+xver-v3_1_0 = []

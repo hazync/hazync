@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 /// the published image ids M of §5 step 1; a reader should rebuild them (§5 step 9) rather than take them
 /// from this file.
 pub const IMAGES: &[Image] = &[
+    // v0.23.0-v0.25.0 (RISC Zero 3.1.0): the board's image until the v0.26.0 re-baseline. Kept so its proofs verify by
+    // id. Its block leaves carry no undo hash (pin::PRE_UNDO_IMAGES).
     Image {
         network: "mainnet",
         method_id_hex: "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4",
@@ -27,13 +29,31 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_231_006_505,
         genesis_bits: 0x1d00_ffff,
         genesis_work: 4_295_032_833,
-        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (mainnet).
-        min_work_hex: "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (mainnet; assumevalid 966143).
+        min_work_hex: "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
         genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
         checkpoint_height: 970_000,
         lineage: &[],
     },
+    // v0.26.0 (pinned from ca482bf5): the per-block undo-data commitment (docs/libzync/UNDO.md), a new chain from genesis.
+    // The CURRENT mainnet image; the entry above stays so its proofs verify by id.
+    Image {
+        network: "mainnet",
+        method_id_hex: "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c",
+        profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+        genesis_time: 1_231_006_505,
+        genesis_bits: 0x1d00_ffff,
+        genesis_work: 4_295_032_833,
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (mainnet; assumevalid 966143).
+        min_work_hex: "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
+        genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
+        checkpoint_height: 970_000,
+        lineage: &[],
+    },
+    // v0.23.0-v0.25.0 signet. Kept so its proofs verify by id. No undo hash in its leaves (pin::PRE_UNDO_IMAGES).
     Image {
         network: "signet",
         method_id_hex: "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387",
@@ -42,8 +62,24 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_598_918_400,
         genesis_bits: 0x1e03_77ae,
         genesis_work: 4_838_420,
-        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (default signet).
-        min_work_hex: "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (default signet; assumevalid 321295).
+        min_work_hex: "00000000000000000000000000000000000000000000000000001090e9dc1520",
+        genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
+        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
+        checkpoint_height: 325_000,
+        lineage: &[],
+    },
+    // v0.26.0 signet (pinned from 63ab228a): the undo-data commitment, from genesis. The CURRENT signet image.
+    Image {
+        network: "signet",
+        method_id_hex: "01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7",
+        profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
+        genesis_time: 1_598_918_400,
+        genesis_bits: 0x1e03_77ae,
+        genesis_work: 4_838_420,
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (default signet; assumevalid 321295).
+        min_work_hex: "00000000000000000000000000000000000000000000000000001090e9dc1520",
         genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
         checkpoint_height: 325_000,
@@ -94,8 +130,15 @@ pub struct Image {
 }
 
 impl Image {
+    /// The network's CURRENT image: the last entry for it. After a handover the table lists the new image after the
+    /// one it continues (whose own proofs stay verifiable by id, [`Image::by_id`]).
     pub fn by_network(name: &str) -> Option<&'static Image> {
-        IMAGES.iter().find(|i| i.network == name)
+        IMAGES.iter().rev().find(|i| i.network == name)
+    }
+    /// A built-in image by its id (64 hex characters): a reader holding a proof by an earlier image of the chain.
+    pub fn by_id(network: &str, method_id_hex: &str) -> Option<&'static Image> {
+        let h = method_id_hex.to_lowercase();
+        IMAGES.iter().find(|i| i.network == network && i.method_id_hex == h)
     }
     /// The network's parameters with another image id: for a reader who rebuilt M themselves (§5 step 9), or
     /// an older image. Leaked so it can live in `Inputs` like the built-in table.
@@ -118,6 +161,17 @@ impl Image {
     pub fn method_id(&self) -> Digest {
         Digest::from_bytes(hex32(self.method_id_hex).expect("IMAGES holds valid hex"))
     }
+    /// The first height whose block leaf carries an undo hash (docs/libzync/UNDO.md) in a chain this image proved with
+    /// its whole lineage, or [`pin::NO_UNDO`]: from the image that proved each block (`pin::leaf_has_undo`). A proof by
+    /// this image with a ZERO lineage (it proved the chain from genesis alone) is [`undo_from_of`]`(id, &[])`.
+    pub fn undo_from(&self) -> u32 {
+        undo_from_of(&words(&self.method_id()), self.lineage)
+    }
+}
+
+/// [`pin::undo_from`] for a tip proof by `image` whose `lineage` field commits `list` (empty for a zero lineage).
+pub fn undo_from_of(image: &[u32; 8], list: &[Handover]) -> u32 {
+    pin::undo_from(image, list)
 }
 
 /// The libzync guest's committed state, field for field and in order (§3 of the proposal). The journal is
@@ -186,7 +240,7 @@ fn sha256(b: &[u8]) -> [u8; 32] {
 
 /// The lineage digest of a list of handovers, oldest first.
 pub fn lineage_of(list: &[Handover]) -> [u8; 32] {
-    list.iter().fold([0u8; 32], |l, h| sha256(&pin::lineage_preimage(&l, h)))
+    list.iter().fold([0u8; 32], |l, h| { let (p, n) = pin::lineage_step(&l, h); sha256(&p[..n]) })
 }
 
 /// A block's coin-state digest: the coin commitment (roots, leaf count, total value) after that block.
@@ -201,12 +255,31 @@ pub fn utxo_state_of(cs: &ChainState) -> [u8; 32] {
     utxo_state(cs.utxo_leaves, cs.utxo_value, &cs.utxo_roots)
 }
 
-/// One block as the block forest holds it: its hash (internal byte order) and its coin-state digest ([`utxo_state`]).
-pub type BlockEntry = ([u8; 32], [u8; 32]);
+/// One block as the block forest holds it: its hash (internal byte order), its coin-state digest ([`utxo_state`]) and,
+/// for a block whose leaf commits one, its undo hash (docs/libzync/UNDO.md).
+pub type BlockEntry = ([u8; 32], [u8; 32], Option<[u8; 32]>);
 
-/// A block's leaf in the block forest.
+/// A block's 0x02 leaf in the block forest (block 0, and every block a pre-undo image proved).
 pub fn block_leaf(hash: &[u8; 32], height: u32, state: &[u8; 32]) -> [u8; 32] {
     sha256(&pin::block_leaf_preimage(hash, height, state))
+}
+
+/// A block's 0x05 leaf, which commits its undo hash (every block an image with the commitment proved).
+pub fn block_leaf_undo(hash: &[u8; 32], height: u32, state: &[u8; 32], undo: &[u8; 32]) -> [u8; 32] {
+    sha256(&pin::block_leaf_undo_preimage(hash, height, state, undo))
+}
+
+/// The leaf of a [`BlockEntry`] at `height`: the 0x05 leaf when it has an undo hash, else the 0x02 one.
+pub fn entry_leaf(b: &BlockEntry, height: u32) -> [u8; 32] {
+    match &b.2 { Some(u) => block_leaf_undo(&b.0, height, &b.1, u), None => block_leaf(&b.0, height, &b.1) }
+}
+
+/// A block's undo hash from its spent coins, block order: (creation height, coinbase flag, amount, scriptPubKey) per
+/// input of every non-coinbase transaction, as Core's undo data (`CBlockUndo`) holds them.
+pub fn undo_hash<'a>(coins: impl IntoIterator<Item = (u32, bool, u64, &'a [u8])>) -> [u8; 32] {
+    let mut u = libzync::undo::UndoHasher::new();
+    for (h, cb, v, spk) in coins { u.coin(h, cb, v, spk); }
+    u.finish()
 }
 
 fn forest_parent(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
@@ -232,19 +305,37 @@ fn locate(leaves: u64, pos: u64) -> Option<(u32, u64)> {
     None
 }
 
-/// Does this proven state commit to block `hash` at `height`, with coin state `state` after it? `path` is the sibling
-/// hashes, lowest first. A proof of the tip checks any earlier block, and its coin state, this way, with no node and
-/// no per-block proving. `cs` must have passed [`verify`].
-pub fn block_in_chain(cs: &ChainState, height: u32, hash: &[u8; 32], state: &[u8; 32], path: &[[u8; 32]]) -> bool {
+/// Does this proven state commit to block `hash` at `height`, with coin state `state` after it (and, for a block whose
+/// leaf commits one, undo hash `undo`)? `path` is the sibling hashes, lowest first. A proof of the tip checks any
+/// earlier block, and its coin state and undo hash, this way, with no node and no per-block proving. `cs` must have
+/// passed [`verify`], and `undo_from` is that report's ([`Report::undo_from`]): the leaf format is selected by height,
+/// from the image that proved the block, so `undo` must be given exactly for heights at or above it. (The two formats
+/// differ in tag and length, so a wrong choice could never open a leaf anyway; the rule makes the answer definite.)
+pub fn block_in_chain(cs: &ChainState, undo_from: u32, height: u32, hash: &[u8; 32], state: &[u8; 32], undo: Option<&[u8; 32]>,
+                      path: &[[u8; 32]]) -> bool {
+    if (height >= undo_from) != undo.is_some() {
+        return false;
+    }
     // libzync's check, which also requires the roots present to match the leaf count's bits (review round 2).
-    libzync::facts::block_in_chain(&cs.block_roots, cs.block_leaves, hash, height, state, path)
+    libzync::undo::block_in_chain_any(&cs.block_roots, cs.block_leaves, hash, height, state, undo, path)
+}
+
+/// Why a block opening needs or refuses an undo hash, for an error message.
+fn undo_rule(undo_from: u32, height: u32) -> String {
+    if undo_from == pin::NO_UNDO {
+        "this chain's images have no undo-data commitment: give no undo hash".into()
+    } else if height >= undo_from {
+        format!("block {height}'s leaf commits its undo hash (from block {undo_from} on): give `undo`")
+    } else {
+        format!("block {height} was proved by an image without the undo-data commitment (it starts at {undo_from}): give no undo hash")
+    }
 }
 
 /// The block forest over `blocks` (index = height): the roots a proof at the last height commits.
 pub fn block_forest(hashes: &[BlockEntry]) -> (Vec<Option<[u8; 32]>>, u64) {
     let mut roots: Vec<Option<[u8; 32]>> = Vec::new();
     for (i, b) in hashes.iter().enumerate() {
-        let (mut node, mut h) = (block_leaf(&b.0, i as u32, &b.1), 0);
+        let (mut node, mut h) = (entry_leaf(b, i as u32), 0);
         while roots.get(h).copied().flatten().is_some() {
             node = forest_parent(&roots[h].take().unwrap(), &node);
             h += 1;
@@ -265,7 +356,7 @@ pub fn block_path(hashes: &[BlockEntry], height: u32) -> Option<Vec<[u8; 32]>> {
     let (tree, mut pos) = locate(hashes.len() as u64, height as u64)?;
     let start = height as u64 - pos;
     let mut level: Vec<[u8; 32]> = hashes[start as usize..(start + (1u64 << tree)) as usize].iter().enumerate()
-        .map(|(i, b)| block_leaf(&b.0, start as u32 + i as u32, &b.1)).collect();
+        .map(|(i, b)| entry_leaf(b, start as u32 + i as u32)).collect();
     let mut path = Vec::with_capacity(tree as usize);
     for _ in 0..tree {
         path.push(level[(pos ^ 1) as usize]);
@@ -300,6 +391,9 @@ pub struct Report {
     /// The decoded journal, when the receipt held one.
     pub state: Option<ChainState>,
     pub verdict: Verdict,
+    /// The first height whose block leaf commits an undo hash in the verified chain (docs/libzync/UNDO.md), from the
+    /// image that verified it and the lineage its proof commits; [`pin::NO_UNDO`] if none. Fact checks take it.
+    pub undo_from: u32,
 }
 
 impl Report {
@@ -337,8 +431,35 @@ pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
     }
 }
 
+/// The earlier built-in image a receipt names, when the caller asked for its network's CURRENT built-in image (by id): after a
+/// handover or a re-baseline the table keeps the earlier image (v0.26.0 keeps 8888d59c, the board before the reset), and that
+/// image's proofs (the chain below the handover) must keep verifying with no `--image`. Only images in the built-in
+/// table are ever substituted: an id the caller supplied, or one not in the table, is left to fail on its own.
+pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Image) -> Option<&'static Image> {
+    let current = Image::by_network(asked.network)?;
+    // By id, not by pointer: `--product` / `--coinlog` hand verify() a modified copy of the current image.
+    if asked.method_id_hex != current.method_id_hex {
+        return None;
+    }
+    use risc0_zkvm::sha::Digestible;
+    let claim = receipt.claim().ok()?;
+    let pre = claim.as_value().ok()?.pre.digest();
+    let hex: String = pre.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    IMAGES.iter().find(|i| i.network == asked.network && i.method_id_hex == hex && !std::ptr::eq(*i, current))
+}
+
 pub fn verify(inp: &Inputs) -> Report {
-    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false };
+    if receipt_kind(inp.receipt).is_ok() {
+        if let Ok(r) = bincode::deserialize::<risc0_zkvm::Receipt>(inp.receipt) {
+            if let Some(e) = earlier_image_named_by(&r, inp.image) {
+                let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
+                rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
+                                                     verified as that image", e.method_id_hex, e.network)));
+                return rep;
+            }
+        }
+    }
+    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
     let m = inp.image.method_id();
     if let Err(e) = receipt_kind(inp.receipt) {
         rep.check(false, format!("the receipt file is a single succinct or Groth16 proof ({e})"));
@@ -389,6 +510,8 @@ pub fn verify(inp: &Inputs) -> Report {
     let full = lineage_of(inp.image.lineage);
     rep.check(cs.lineage == [0; 32] || cs.lineage == full, format!("lineage {} is this image's ({} handover(s) stated)",
               hex(&cs.lineage), inp.image.lineage.len()));
+    // The block-leaf format by height: a zero lineage = this image proved every block; else its stated list.
+    rep.undo_from = undo_from_of(&words(&m), if cs.lineage == [0; 32] { &[] } else { inp.image.lineage });
 
     // Step 3: anchored at genesis (or at the supplied state, which can only ever give Demo).
     let (want, what) = match &inp.anchor {
@@ -525,6 +648,11 @@ pub fn words(d: &Digest) -> [u32; 8] {
     w
 }
 
+/// An image id as printed (32 bytes) in the guest's u32x8 form.
+pub fn image_words(id: [u8; 32]) -> [u32; 8] {
+    words(&Digest::from_bytes(id))
+}
+
 pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -577,6 +705,9 @@ pub struct CoinFact {
     pub log_roots: Vec<Option<String>>,
     /// When `at` is below the tip: the block at `at` (hash) and its path in the tip's block forest.
     pub block: Option<(String, Vec<String>)>,
+    /// With `block`, for a block whose leaf commits one: its undo hash, hex (docs/libzync/UNDO.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_undo: Option<String>,
     /// The coin `coin` is the leaf OF: its fields, from the caller's own coin or from the server (either is sound: a
     /// flipped leaf can never equal a coin leaf, so a lying preimage simply fails). Required for an UNSPENT answer: the check proves only that a 32-byte value is the log's leaf at `pos`,
     /// and once a coin is spent that leaf is its spent-leaf hash, which an UNSPENT check cannot tell from a coin leaf
@@ -610,7 +741,7 @@ fn hexes(v: &[String]) -> Option<Vec<[u8; 32]>> {
 
 /// Checks a coin fact against a state that passed [`verify`] (and must be a coin-log chain). Ok: one line saying what
 /// it proves.
-pub fn check_coin_fact(cs: &ChainState, f: &CoinFact) -> Result<String, String> {
+pub fn check_coin_fact(cs: &ChainState, undo_from: u32, f: &CoinFact) -> Result<String, String> {
     // the coin the leaf is of (round 11): required for UNSPENT, checked whenever given
     let coin = hex32(&f.coin.to_lowercase()).ok_or("coin: not 64 hex digits")?;
     let bound = match &f.preimage {
@@ -627,19 +758,19 @@ pub fn check_coin_fact(cs: &ChainState, f: &CoinFact) -> Result<String, String> 
     if f.spent_by.is_none() && !bound {
         return Err("an UNSPENT answer needs the coin it is about (`preimage`, from your own coin, or a journey): a spent coin's flipped leaf passes the position check too".into());
     }
-    coin_fact_position(cs, f)
+    coin_fact_position(cs, undo_from, f)
 }
 
 /// The position half of [`check_coin_fact`]: `coin` is the log's leaf at `pos` (unspent) or flipped by `spent_by`, in
 /// the state at `at`. It does NOT say `coin` is a coin's leaf; the caller binds that (preimage or journey).
-fn coin_fact_position(cs: &ChainState, f: &CoinFact) -> Result<String, String> {
+fn coin_fact_position(cs: &ChainState, undo_from: u32, f: &CoinFact) -> Result<String, String> {
     if cs.profile & PROFILE_COINLOG == 0 {
         return Err("the proof is not a coin-log chain: coin facts need the coin log".into());
     }
     let coin = hex32(&f.coin.to_lowercase()).ok_or("coin: not 64 hex digits")?;
     let path = hexes(&f.path).ok_or("path: not 64-hex-digit hashes")?;
     let (roots, n, block_line) = if f.at == cs.height {
-        if f.block.is_some() {
+        if f.block.is_some() || f.block_undo.is_some() {
             return Err("a fact at the tip carries no block opening".into());
         }
         (cs.utxo_roots.clone(), cs.utxo_leaves, String::new())
@@ -651,12 +782,18 @@ fn coin_fact_position(cs: &ChainState, f: &CoinFact) -> Result<String, String> {
         let bh = hex32(&bh.to_lowercase()).ok_or("block hash: not 64 hex digits")?;
         let bp = hexes(bp).ok_or("block path: not 64-hex-digit hashes")?;
         let state = utxo_state(f.log_leaves, f.log_value, &roots);
-        if !block_in_chain(cs, f.at, &bh, &state, &bp) {
-            return Err(format!("block {} with that coin state is not in the proof's block forest", f.at));
+        let undo = f.block_undo.as_ref().map(|u| hex32(&u.to_lowercase()).ok_or("block_undo: not 64 hex digits")).transpose()?;
+        if (f.at >= undo_from) != undo.is_some() {
+            return Err(undo_rule(undo_from, f.at));
+        }
+        if !block_in_chain(cs, undo_from, f.at, &bh, &state, undo.as_ref(), &bp) {
+            return Err(format!("block {} with that coin state{} is not in the proof's block forest", f.at,
+                               if undo.is_some() { " and undo hash" } else { "" }));
         }
         let mut d = bh;
         d.reverse();
-        (roots, f.log_leaves, format!(" (block {} {}, in the proof's chain to {})", f.at, hex(&d), cs.height))
+        (roots, f.log_leaves, format!(" (block {} {}{}, in the proof's chain to {})", f.at, hex(&d),
+                                      undo.map(|u| format!(", undo hash {}", hex(&u))).unwrap_or_default(), cs.height))
     } else {
         return Err(format!("at {} is above the proof's tip {}", f.at, cs.height));
     };
@@ -729,8 +866,8 @@ fn coin_state_line(s: &libzync::trie_fact::CoinState) -> String {
 
 /// Checks a trie fact against a state that passed [`verify`] (and is a trie chain): its proof holds and, when it claims
 /// an answer (`expect`), the proof gives that answer. Ok: what it proves.
-pub fn check_trie_fact(cs: &ChainState, f: &TrieFact) -> Result<String, String> {
-    let (got, line) = trie_verdict(cs, f)?;
+pub fn check_trie_fact(cs: &ChainState, undo_from: u32, f: &TrieFact) -> Result<String, String> {
+    let (got, line) = trie_verdict(cs, undo_from, f)?;
     match &f.expect {
         Some(want) if *want != got => Err(format!("the fact claims {want:?}, its proof gives {got:?}: {line}")),
         _ => Ok(line),
@@ -738,7 +875,7 @@ pub fn check_trie_fact(cs: &ChainState, f: &TrieFact) -> Result<String, String> 
 }
 
 /// The answer a trie fact's proof gives, as its token, and the line saying what it proves. Err: the proof does not hold.
-pub fn trie_verdict(cs: &ChainState, f: &TrieFact) -> Result<(String, String), String> {
+pub fn trie_verdict(cs: &ChainState, undo_from: u32, f: &TrieFact) -> Result<(String, String), String> {
     use libzync::trie_fact as tf;
     if cs.profile & PROFILE_TRIE == 0 {
         return Err("the proof is not a counting-trie chain".into());
@@ -765,7 +902,7 @@ pub fn trie_verdict(cs: &ChainState, f: &TrieFact) -> Result<(String, String), S
                                     tf::CoinState::Unspent { value } | tf::CoinState::Spent { value, .. } => Some(*value) };
             if let Some(value) = value {
                 let o = f.origin.as_ref().ok_or("coin: the trie holds a coin under this key, but which outpoint it is needs the creating transaction (`origin`, a tx fact)")?;
-                let (otxid, view) = check_tx_fact(cs, o).map_err(|x| format!("origin: {x}"))?;
+                let (otxid, view) = check_tx_fact(cs, undo_from, o).map_err(|x| format!("origin: {x}"))?;
                 if otxid != txid { return Err("origin: that transaction's txid is not this coin's".into()); }
                 match view.outputs.get(vout as usize) {
                     Some((v, script)) if *v == value && *script == spk => {}
@@ -848,6 +985,9 @@ pub struct TxFact {
     pub header: String,
     /// The coin-state digest after this block (`utxo_state`), hex.
     pub state: String,
+    /// For a block whose leaf commits one: the block's undo hash, hex (docs/libzync/UNDO.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<String>,
     pub block_path: Vec<String>,
     /// The transaction, hex, with or without witness.
     pub tx: String,
@@ -860,13 +1000,18 @@ pub struct TxFact {
 }
 
 /// Checks that the transaction is at `index` of the block at `height` of the proven chain. Ok: its txid and parse.
-pub fn check_tx_fact(cs: &ChainState, f: &TxFact) -> Result<([u8; 32], libzync::facts::TxView), String> {
+pub fn check_tx_fact(cs: &ChainState, undo_from: u32, f: &TxFact) -> Result<([u8; 32], libzync::facts::TxView), String> {
     let header: [u8; 80] = unhex(&f.header).and_then(|h| h.try_into().ok()).ok_or("header: not 80 bytes of hex")?;
     let state = hex32(&f.state.to_lowercase()).ok_or("state: not 64 hex digits")?;
     let bp = hexes(&f.block_path).ok_or("block_path: not 64-hex-digit hashes")?;
     let hash = libzync::facts::header_hash(&header);
-    if !block_in_chain(cs, f.height, &hash, &state, &bp) {
-        return Err(format!("block {} with that header and state is not in the proof's block forest", f.height));
+    let undo = f.undo.as_ref().map(|u| hex32(&u.to_lowercase()).ok_or("undo: not 64 hex digits")).transpose()?;
+    if (f.height >= undo_from) != undo.is_some() {
+        return Err(undo_rule(undo_from, f.height));
+    }
+    if !block_in_chain(cs, undo_from, f.height, &hash, &state, undo.as_ref(), &bp) {
+        return Err(format!("block {} with that header and state{} is not in the proof's block forest", f.height,
+                           if undo.is_some() { " and undo hash" } else { "" }));
     }
     let raw = unhex(&f.tx).ok_or("tx: not hex")?;
     let mut o = 0;
@@ -892,8 +1037,8 @@ pub struct CoinJourney {
     pub spend: Option<TxFact>,
 }
 
-pub fn check_coin_journey(cs: &ChainState, j: &CoinJourney) -> Result<String, String> {
-    let (txid, view) = check_tx_fact(cs, &j.origin).map_err(|e| format!("origin: {e}"))?;
+pub fn check_coin_journey(cs: &ChainState, undo_from: u32, j: &CoinJourney) -> Result<String, String> {
+    let (txid, view) = check_tx_fact(cs, undo_from, &j.origin).map_err(|e| format!("origin: {e}"))?;
     let (value, spk) = view.outputs.get(j.vout as usize).ok_or("origin: no such output")?;
     let leaf = libzync::facts::coin_leaf(&txid, j.vout, *value, spk, j.origin.height, j.origin.index == 0, j.tracked, j.creation_mtp);
     if hex(&leaf) != j.fact.coin.to_lowercase() {
@@ -901,14 +1046,14 @@ pub fn check_coin_journey(cs: &ChainState, j: &CoinJourney) -> Result<String, St
     }
     // the journey has already bound `coin` to the origin's output (the leaf recomputed from the transaction), so only
     // the position half is needed here (round 12: check_coin_fact's preimage rule refused every unspent journey)
-    let line = coin_fact_position(cs, &j.fact)?;
+    let line = coin_fact_position(cs, undo_from, &j.fact)?;
     let mut d = txid;
     d.reverse();
     let mut out = format!("{}:{} ({value} sat) created at height {} -- {line}", hex(&d), j.vout, j.origin.height);
     match (j.fact.spent_by, &j.spend) {
         (None, None) => {}
         (Some((h, t, v)), Some(sp)) => {
-            let (sid, sview) = check_tx_fact(cs, sp).map_err(|e| format!("spend: {e}"))?;
+            let (sid, sview) = check_tx_fact(cs, undo_from, sp).map_err(|e| format!("spend: {e}"))?;
             if sp.height != h || sp.index != t {
                 return Err("spend: not the transaction the log names".into());
             }
@@ -943,7 +1088,7 @@ mod tests {
         let st: ChainState = serde_json::from_slice(&std::fs::read(std::env::var("HAZYNC_TRIE_STATE").unwrap()).unwrap()).unwrap();
         for p in std::env::var("HAZYNC_TRIE_FACTS").unwrap().split(',') {
             let f: TrieFact = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
-            println!("{p}: {}", check_trie_fact(&st, &f).unwrap());
+            println!("{p}: {}", check_trie_fact(&st, pin::NO_UNDO, &f).unwrap());
         }
     }
 
@@ -966,34 +1111,34 @@ mod tests {
 
         let f = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(0)).unwrap();
         // a coin the trie HOLDS needs its creating transaction (TrieFact::origin; with one: coin_journey_end_to_end)
-        assert!(check_trie_fact(&cs, &f).unwrap_err().contains("origin"), "spent coin without an origin");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &f).unwrap_err().contains("origin"), "spent coin without an origin");
         let f1 = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(1)).unwrap();
-        assert!(check_trie_fact(&cs, &f1).unwrap_err().contains("origin"), "unspent coin without an origin");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &f1).unwrap_err().contains("origin"), "unspent coin without an origin");
         let f9 = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(9)).unwrap();
-        assert!(check_trie_fact(&cs, &f9).unwrap().contains("ABSENT"));
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &f9).unwrap().contains("ABSENT"));
         let b = make_trie_fact(&st, "balance", &a, None, None).unwrap();
-        assert!(check_trie_fact(&cs, &b).unwrap().contains("1 unspent coin(s), 70 sat"));
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &b).unwrap().contains("1 unspent coin(s), 70 sat"));
         let hst = make_trie_fact(&st, "history", &a, None, None).unwrap();
-        assert!(check_trie_fact(&cs, &hst).unwrap().contains("2 coin(s) ever paid, 1 spent"));
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &hst).unwrap().contains("2 coin(s) ever paid, 1 spent"));
         let n = make_trie_fact(&st, "balance", b"\x6a", None, None).unwrap();
-        assert!(check_trie_fact(&cs, &n).unwrap().contains("NEVER"));
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &n).unwrap().contains("NEVER"));
         // the fact's own claim (txid / vout / script) is what is checked, not the proof's: a swapped question fails
         let mut sw = f.clone();
         sw.vout = Some(1);
-        assert!(check_trie_fact(&cs, &sw).is_err(), "a coin proof answers only for its own coin");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &sw).is_err(), "a coin proof answers only for its own coin");
         // another root, another height, a chain without the trie: refused
         let mut c2 = cs.clone();
         c2.trie_root[0] ^= 1;
-        assert!(check_trie_fact(&c2, &f).is_err());
+        assert!(check_trie_fact(&c2, pin::NO_UNDO, &f).is_err());
         let mut c3 = cs.clone();
         c3.height = 3;
-        assert!(check_trie_fact(&c3, &f).is_err());
+        assert!(check_trie_fact(&c3, pin::NO_UNDO, &f).is_err());
         let mut c4 = cs.clone();
         c4.profile &= !PROFILE_TRIE;
-        assert!(check_trie_fact(&c4, &f).is_err());
+        assert!(check_trie_fact(&c4, pin::NO_UNDO, &f).is_err());
         let mut bad = f.clone();
         bad.proof.replace_range(8..10, if &bad.proof[8..10] == "00" { "01" } else { "00" });
-        assert!(check_trie_fact(&cs, &bad).is_err());
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &bad).is_err());
 
         // the producer writes the answer as the claim; a false claim is refused; no claim = a question (answered)
         assert_eq!(f.expect.as_deref(), Some("spent:500:2:1:0"));
@@ -1006,20 +1151,20 @@ mod tests {
         for lie in ["unspent:500", "spent:500:2:1:1", "spent:501:2:1:0"] {
             let mut l = f9.clone();
             l.expect = Some(lie.into());
-            assert!(check_trie_fact(&cs, &l).unwrap_err().contains("claims"), "{lie}");
+            assert!(check_trie_fact(&cs, pin::NO_UNDO, &l).unwrap_err().contains("claims"), "{lie}");
         }
         let mut l = f.clone();
         l.expect = Some("absent".into());
-        assert!(check_trie_fact(&cs, &l).is_err(), "a held coin claimed absent");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &l).is_err(), "a held coin claimed absent");
         let mut l = b.clone();
         l.expect = Some("1:71".into());
-        assert!(check_trie_fact(&cs, &l).is_err());
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &l).is_err());
         let mut l = n.clone();
         l.expect = Some("0:0".into());
-        assert!(check_trie_fact(&cs, &l).is_err(), "never-paid is not a zero balance claim");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &l).is_err(), "never-paid is not a zero balance claim");
         let mut q = f9.clone();
         q.expect = None;
-        assert!(check_trie_fact(&cs, &q).unwrap().contains("ABSENT"), "a question (no claim) is answered");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &q).unwrap().contains("ABSENT"), "a question (no claim) is answered");
         // the JSON without the field still reads (facts written before it)
         let mut j = serde_json::to_value(&q).unwrap();
         j.as_object_mut().unwrap().remove("expect");
@@ -1031,10 +1176,10 @@ mod tests {
         use libzync::history::{block_path, replay, Rec};
         let h = |i: u64| -> [u8; 32] { sha256(&i.to_le_bytes()) };
         let recs = vec![
-            Rec { height: 0, hash: h(1000), value: 0, flips: vec![], appends: vec![] },
-            Rec { height: 1, hash: h(1001), value: 30, flips: vec![], appends: vec![h(0), h(1), h(2)] },
-            Rec { height: 2, hash: h(1002), value: 40, flips: vec![(1, 1, 0)], appends: vec![h(3), h(4)] },
-            Rec { height: 3, hash: h(1003), value: 35, flips: vec![(0, 1, 2)], appends: vec![h(5)] },
+            Rec { height: 0, hash: h(1000), value: 0, flips: vec![], appends: vec![], undo: None },
+            Rec { height: 1, hash: h(1001), value: 30, flips: vec![], appends: vec![h(0), h(1), h(2)], undo: None },
+            Rec { height: 2, hash: h(1002), value: 40, flips: vec![(1, 1, 0)], appends: vec![h(3), h(4)], undo: None },
+            Rec { height: 3, hash: h(1003), value: 35, flips: vec![(0, 1, 2)], appends: vec![h(5)], undo: None },
         ];
         let tip = replay(&recs, 3, 3).unwrap();
         let mut cs = genesis_anchor(&IMAGES[0]);
@@ -1052,34 +1197,34 @@ mod tests {
                 path: r.log.path(pos).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
                 log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
                 block: (at < 3).then(|| (hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())),
-                preimage: None,
+                block_undo: None, preimage: None,
             }
         };
-        assert!(check_coin_fact(&cs, &fact(3, 0)).unwrap().contains("SPENT at height 3 by transaction 1 input 2"));
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &fact(3, 0)).unwrap().contains("SPENT at height 3 by transaction 1 input 2"));
         // an UNSPENT answer with no coin bound is refused (round 11); the position logic is checked below directly
-        assert!(check_coin_fact(&cs, &fact(3, 5)).unwrap_err().contains("preimage"));
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &fact(3, 5)).unwrap_err().contains("preimage"));
         let check_coin_fact = coin_fact_position; // these leaves are synthetic: no preimage exists for them
-        assert!(check_coin_fact(&cs, &fact(3, 5)).unwrap().contains("UNSPENT at height 3"));
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &fact(3, 5)).unwrap().contains("UNSPENT at height 3"));
         // coin 0 was still unspent after block 2
-        assert!(check_coin_fact(&cs, &fact(2, 0)).unwrap().contains("UNSPENT at height 2"));
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &fact(2, 0)).unwrap().contains("UNSPENT at height 2"));
         // lies: unspent at the tip, a wrong spender, a wrong block state, above the tip
         let mut f = fact(3, 0);
         f.spent_by = None;
-        assert!(check_coin_fact(&cs, &f).is_err());
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &f).is_err());
         let mut f = fact(3, 0);
         f.spent_by = Some((3, 1, 1));
-        assert!(check_coin_fact(&cs, &f).is_err());
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &f).is_err());
         let mut f = fact(2, 0);
         f.log_value += 1;
-        assert!(check_coin_fact(&cs, &f).is_err());
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &f).is_err());
         let mut f = fact(2, 0);
         f.at = 4;
-        assert!(check_coin_fact(&cs, &f).is_err());
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &f).is_err());
         let mut f = fact(3, 5);
         f.block = Some((hex(&h(1003)), vec![]));
-        assert!(check_coin_fact(&cs, &f).is_err());
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &f).is_err());
         cs.profile &= !PROFILE_COINLOG;
-        assert!(check_coin_fact(&cs, &fact(3, 5)).is_err());
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &fact(3, 5)).is_err());
     }
 
     #[test]
@@ -1126,9 +1271,9 @@ mod tests {
         let leaf_b = coin_leaf(&id_cb2, 0, 51, b"\x53", 2, true, false, 777);
         let leaf_c = coin_leaf(&id_sp, 0, 40, b"\x54\x55\x56", 2, false, false, 777);
         let recs = vec![
-            Rec { height: 0, hash: [7; 32], value: 0, flips: vec![], appends: vec![] },
-            Rec { height: 1, hash: header_hash(&h1), value: 50, flips: vec![], appends: vec![leaf_a] },
-            Rec { height: 2, hash: header_hash(&h2), value: 91, flips: vec![(0, 1, 0)], appends: vec![leaf_b, leaf_c] },
+            Rec { height: 0, hash: [7; 32], value: 0, flips: vec![], appends: vec![], undo: None },
+            Rec { height: 1, hash: header_hash(&h1), value: 50, flips: vec![], appends: vec![leaf_a], undo: None },
+            Rec { height: 2, hash: header_hash(&h2), value: 91, flips: vec![(0, 1, 0)], appends: vec![leaf_b, leaf_c], undo: None },
         ];
         let r = replay(&recs, 2, 2).unwrap();
         let mut cs = genesis_anchor(&IMAGES[0]);
@@ -1139,7 +1284,7 @@ mod tests {
         cs.block_roots = block_path(&r.block_leaves, 0).1;
         cs.block_leaves = 3;
         let txf = |h: u32, hdr: &[u8; 80], ids: &[[u8; 32]], raw: &[u8], index: usize, cb: &[u8]| TxFact {
-            height: h, header: hex(hdr), state: hex(&r.states[h as usize]),
+            height: h, header: hex(hdr), state: hex(&r.states[h as usize]), undo: None,
             block_path: block_path(&r.block_leaves, h as u64).0.iter().map(|x| hex(x)).collect(),
             tx: hex(raw), index: index as u32, branch: merkle_branch(ids, index).iter().map(|x| hex(x)).collect(),
             coinbase: hex(cb), coinbase_branch: merkle_branch(ids, 0).iter().map(|x| hex(x)).collect(),
@@ -1149,30 +1294,30 @@ mod tests {
             fact: CoinFact {
                 at: 2, pos: 0, coin: hex(&leaf_a), spent_by: r.spenders.get(&0).copied(),
                 path: r.log.path(0).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
-                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None, preimage: None },
+                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None, block_undo: None, preimage: None },
             spend: Some(txf(2, &h2, &[id_cb2, id_sp], &sp, 1, &cb2)),
         };
-        let ok = check_coin_journey(&cs, &j).unwrap();
+        let ok = check_coin_journey(&cs, pin::NO_UNDO, &j).unwrap();
         assert!(ok.contains("(50 sat) created at height 1") && ok.contains("SPENT at height 2 by transaction 1 input 0"), "{ok}");
         // refusals
         let mut b = j.clone();
         b.creation_mtp += 1;
-        assert!(check_coin_journey(&cs, &b).is_err(), "wrong mtp");
+        assert!(check_coin_journey(&cs, pin::NO_UNDO, &b).is_err(), "wrong mtp");
         let mut b = j.clone();
         b.spend = Some(txf(2, &h2, &[id_cb2, id_sp], &cb2, 0, &cb2));
-        assert!(check_coin_journey(&cs, &b).is_err(), "a spend tx that is not the one the log names");
+        assert!(check_coin_journey(&cs, pin::NO_UNDO, &b).is_err(), "a spend tx that is not the one the log names");
         let mut b = j.clone();
         b.spend = None;
-        assert!(check_coin_journey(&cs, &b).is_err(), "spent but no spend tx");
+        assert!(check_coin_journey(&cs, pin::NO_UNDO, &b).is_err(), "spent but no spend tx");
         let mut b = j.clone();
         b.origin.index = 1;
-        assert!(check_coin_journey(&cs, &b).is_err(), "wrong position in the block");
+        assert!(check_coin_journey(&cs, pin::NO_UNDO, &b).is_err(), "wrong position in the block");
         let mut b = j.clone();
         b.spend.as_mut().unwrap().coinbase_branch.clear();
-        assert!(check_coin_journey(&cs, &b).is_err(), "a coinbase branch of another depth");
+        assert!(check_coin_journey(&cs, pin::NO_UNDO, &b).is_err(), "a coinbase branch of another depth");
         let mut b = j.clone();
         b.origin.state = hex(&r.states[2]);
-        assert!(check_coin_journey(&cs, &b).is_err(), "wrong block state");
+        assert!(check_coin_journey(&cs, pin::NO_UNDO, &b).is_err(), "wrong block state");
 
         // An UNSPENT journey (round 12: the preimage rule had refused every one; the journey binds the coin itself):
         // block 2's coinbase output, unspent at the tip
@@ -1181,17 +1326,17 @@ mod tests {
             fact: CoinFact {
                 at: 2, pos: 1, coin: hex(&leaf_b), spent_by: None,
                 path: r.log.path(1).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
-                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None, preimage: None,
+                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(), block: None, block_undo: None, preimage: None,
             },
             spend: None,
         };
-        let ok = check_coin_journey(&cs, &uj).unwrap();
+        let ok = check_coin_journey(&cs, pin::NO_UNDO, &uj).unwrap();
         assert!(ok.contains("UNSPENT at height 2"), "{ok}");
         // ... and an unspent journey for the SPENT coin (its flipped leaf at the tip) still fails
         let mut bad = j.clone();
         bad.spend = None;
         bad.fact.spent_by = None;
-        assert!(check_coin_journey(&cs, &bad).is_err(), "a spent coin's journey claimed unspent");
+        assert!(check_coin_journey(&cs, pin::NO_UNDO, &bad).is_err(), "a spent coin's journey claimed unspent");
 
         // A standalone coin fact binds the coin by its preimage (round 11): with the coin's fields it holds; the
         // SPENT coin's flipped leaf presented as an unspent coin is refused, with or without the real preimage.
@@ -1202,20 +1347,20 @@ mod tests {
             at: 1, pos: 0, coin: hex(&leaf_a), spent_by: None, path: r1.log.path(0).iter().map(|x| hex(x)).collect(),
             log_leaves: r1.log.len(), log_value: r1.value, log_roots: r1.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
             block: Some((hex(&recs[1].hash), block_path(&r.block_leaves, 1).0.iter().map(|x| hex(x)).collect())),
-            preimage: Some(pre.clone()),
+            block_undo: None, preimage: Some(pre.clone()),
         };
-        assert!(check_coin_fact(&cs, &cf).unwrap().contains("UNSPENT at height 1"), "a bound unspent coin");
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &cf).unwrap().contains("UNSPENT at height 1"), "a bound unspent coin");
         cf.preimage = None;
-        assert!(check_coin_fact(&cs, &cf).is_err(), "unbound unspent");
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &cf).is_err(), "unbound unspent");
         // at the tip coin 0 is spent: its log leaf is the flipped one; offered as an "unspent coin" it is refused
         let tipf = |coin: [u8; 32], preimage: Option<CoinPreimage>| CoinFact {
             at: 2, pos: 0, coin: hex(&coin), spent_by: None, path: r.log.path(0).iter().map(|x| hex(x)).collect(),
-            log_leaves: r.log.len(), log_value: r.value, log_roots: vec![], block: None, preimage };
+            log_leaves: r.log.len(), log_value: r.value, log_roots: vec![], block: None, block_undo: None, preimage };
         let flipped = libzync::coinlog::spent(&leaf_a, &libzync::coinlog::spender(2, 1, 0)); // spent at 2 by tx 1 input 0
         assert_ne!(flipped, leaf_a);
-        assert!(check_coin_fact(&cs, &tipf(flipped, None)).is_err(), "the flipped leaf, unbound");
-        assert!(check_coin_fact(&cs, &tipf(flipped, Some(pre.clone()))).is_err(), "the flipped leaf with the real preimage");
-        assert!(coin_fact_position(&cs, &tipf(flipped, None)).is_ok(), "(the position check alone would have passed it)");
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &tipf(flipped, None)).is_err(), "the flipped leaf, unbound");
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &tipf(flipped, Some(pre.clone()))).is_err(), "the flipped leaf with the real preimage");
+        assert!(coin_fact_position(&cs, pin::NO_UNDO, &tipf(flipped, None)).is_ok(), "(the position check alone would have passed it)");
 
         // Trie coin facts (cold review 11-06): the trie key aliases (txid, vout) with (txid ^ d, vout ^ d); the
         // creating transaction, in a proven block, binds the outpoint.
@@ -1228,36 +1373,48 @@ mod tests {
         cs.trie_root = libzync::coinlog::h_of(&st.root());
         let disp = |t: &[u8; 32]| { let mut d = *t; d.reverse(); hex(&d) };
         let mut tf = make_trie_fact(&st, "coin", spk_a, Some(&disp(&id1)), Some(0)).unwrap();
-        assert!(check_trie_fact(&cs, &tf).unwrap_err().contains("origin"), "no origin");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &tf).unwrap_err().contains("origin"), "no origin");
         tf.origin = Some(txf(1, &h1, &[id1], &cb1, 0, &cb1));
-        assert!(check_trie_fact(&cs, &tf).unwrap().contains("UNSPENT, 50 sat"), "with its origin");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &tf).unwrap().contains("UNSPENT, 50 sat"), "with its origin");
         // the alias: same key, an outpoint that never existed; refused with or without the real coin's origin
         let mut alias = id1;
         alias[0] ^= 1;
         let mut al = make_trie_fact(&st, "coin", spk_a, Some(&disp(&alias)), Some(1)).unwrap();
         assert_eq!(coin_key(spk_a, &alias, 1), coin_key(spk_a, &id1, 0), "the key aliases");
-        assert!(check_trie_fact(&cs, &al).is_err(), "alias, no origin");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &al).is_err(), "alias, no origin");
         al.origin = Some(txf(1, &h1, &[id1], &cb1, 0, &cb1));
-        assert!(check_trie_fact(&cs, &al).unwrap_err().contains("txid"), "alias with the real coin's origin");
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &al).unwrap_err().contains("txid"), "alias with the real coin's origin");
         // an origin whose output does not pay this script or value
         let mut wrong = tf.clone();
         wrong.script_pubkey = hex(b"\x53");
-        assert!(check_trie_fact(&cs, &wrong).is_err());
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &wrong).is_err());
         // ABSENT needs no origin
         let ab = make_trie_fact(&st, "coin", spk_a, Some(&disp(&id1)), Some(7)).unwrap();
-        assert!(check_trie_fact(&cs, &ab).unwrap().contains("ABSENT"));
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &ab).unwrap().contains("ABSENT"));
     }
 
     /// The built-in table is the published one (reproduce/LIBZYNC_IDS, written with the table by
-    /// reproduce/pin-libzync-ids.py): a hand edit to either fails here.
+    /// reproduce/pin-libzync-ids.py): each network's CURRENT image (its last entry) is the published id, and every
+    /// earlier entry is an image the record says was published and superseded (reproduce/METHOD_ID for mainnet,
+    /// reproduce/LIBZYNC_IDS's history in git for signet: named in this file's comments). A hand edit fails here.
     #[test]
     fn images_match_the_published_ids() {
         let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        for img in IMAGES {
-            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(img.network))
-                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {} line", img.network));
+        let record = include_str!("../../reproduce/METHOD_ID");
+        let this = include_str!("lib.rs");
+        for net in ["mainnet", "signet"] {
+            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(net))
+                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {net} line"));
             let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-            assert_eq!(id, img.method_id_hex, "{}: IMAGES and reproduce/LIBZYNC_IDS disagree", img.network);
+            let cur = Image::by_network(net).unwrap();
+            assert_eq!(id, cur.method_id_hex, "{net}: the current image and reproduce/LIBZYNC_IDS disagree");
+            for old in IMAGES.iter().filter(|i| i.network == net && i.method_id_hex != id) {
+                let named = if net == "mainnet" { record.contains(&format!("Superseded {}", &old.method_id_hex[..8])) }
+                            else { this.contains(&format!("// v0.23.0-v0.25.0 {net}")) };
+                assert!(named, "{net}: earlier image {} is not in the superseded record", old.method_id_hex);
+            }
+            assert_eq!(IMAGES.iter().filter(|i| i.network == net && i.method_id_hex == id).count(), 1,
+                       "{net}: the published id is listed more than once");
         }
     }
 
@@ -1380,7 +1537,7 @@ mod tests {
         (0..n).map(|i| {
             let b: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
             let roots: Vec<Option<[u8; 32]>> = if i % 2 == 1 { vec![None, Some(Sha256::digest(b).into())] } else { vec![] };
-            (b, utxo_state(i as u64, 1000 * i as u64, &roots))
+            (b, utxo_state(i as u64, 1000 * i as u64, &roots), None)
         }).collect()
     }
 
@@ -1409,15 +1566,157 @@ mod tests {
         assert_eq!(p.iter().map(|h| hex(h)).collect::<Vec<_>>(), want);
     }
 
+    /// sample_hashes with the undo-data commitment from block `from` on: u_i = SHA-256("undo" ‖ i u32 LE), as in
+    /// block_forest_ref.py's vectors (a handover at 4 from a pre-undo image).
+    fn sample_undo(n: u32, from: u32) -> Vec<BlockEntry> {
+        sample_hashes(n).into_iter().enumerate().map(|(i, (b, st, _))| {
+            (b, st, (i as u32 >= from).then(|| sha256(&[&b"undo"[..], &(i as u32).to_le_bytes()].concat())))
+        }).collect()
+    }
+
+    #[test]
+    fn undo_leaf_vectors_and_the_guests_definition() {
+        // scripts/libzync/block_forest_ref.py vectors (independent of this file and of libzync::undo)
+        let hs = sample_undo(11, 4);
+        assert_eq!(hex(&entry_leaf(&hs[5], 5)), "8e9ba420b9b22eef7b406be86b684d2b34f46293581dceee5691c1d008a8fda2");
+        let (r, _) = block_forest(&hs);
+        let want = [Some("1846ea2ea925cf1e9178dbc7ab5388e5f7f4733d558c173e133863f1ecc7ea1d"),
+                    Some("6b5dbe508108845d3bc6e6d8bf73ba8bd1715cf4a68049be49e083abe956fece"), None,
+                    Some("6ed7f7b36cd2ea5ad09540e611491f6f2b2ef2be5490320a25833a7597be7692")];
+        assert_eq!(r.iter().map(|x| x.map(|h| hex(&h))).collect::<Vec<_>>(), want.map(|x| x.map(String::from)).to_vec());
+        let want = ["9042c1089ca33f0b4f495b133a22e09de575b1c0e74c0f2db34d615c6198fa9e",
+                    "5b17911c7fd26c020a76e277e8caff9ae6c34416185395fb399213a801545d5a",
+                    "a913976775b5350f893699512397084fab510b5bd3c19b81e26d6ad97b16cae2"];
+        assert_eq!(block_path(&hs, 5).unwrap().iter().map(|h| hex(h)).collect::<Vec<_>>(), want);
+        // the guest's preimages (handover_pin.rs) == libzync::undo's (written from docs/libzync/UNDO.md)
+        let (b, st, u) = (&hs[5].0, &hs[5].1, hs[5].2.unwrap());
+        assert_eq!(block_leaf_undo(b, 5, st, &u), libzync::undo::block_leaf_undo(b, 5, st, &u));
+        assert_eq!(block_leaf(b, 5, st), libzync::facts::block_leaf(b, 5, st));
+        assert_eq!(pin::TAG_BLOCK_LEAF_UNDO, libzync::undo::TAG_BLOCK_LEAF_UNDO);
+        let spk = [0x76u8, 0xa9, 0x14];
+        let mut rec = pin::undo_record_head(170, true, 5_000_000_000, 3).to_vec();
+        rec.extend_from_slice(&spk);
+        assert_eq!(sha256(&rec), libzync::undo::undo_digest(170, true, 5_000_000_000, &spk));
+        assert_eq!(&rec[..4], &(170u32 * 2 + 1).to_le_bytes());
+        // a block with no inputs: SHA-256 of nothing
+        assert_eq!(hex(&undo_hash([])), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        // block 170's one input: the genesis-era coinbase coin of block 9 (scripts/libzync/undo_ref.py on the block file)
+        let spk9 = unhex("410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac").unwrap();
+        assert_eq!(hex(&undo_hash([(9, true, 5_000_000_000, &spk9[..])])), "a6a3cc09468488789373a52864855eabc005ec179b29694133a6f9acd60673cc");
+    }
+
+    #[test]
+    fn the_leaf_format_is_selected_by_height_through_the_lineage() {
+        let old = image_words(hex32(IMAGES[0].method_id_hex).unwrap());
+        assert_eq!(IMAGES[0].undo_from(), pin::NO_UNDO, "8888d59c has no undo commitment");
+        assert_eq!(Image::by_id("signet", "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387").unwrap().undo_from(), pin::NO_UNDO);
+        let new = [7u32; 8];
+        assert_eq!(undo_from_of(&new, &[]), 1, "an image with an empty lineage: every block but genesis");
+        let at2000 = [Handover { image: old, first_height: 2000, verifier: pin::SAME_ZKVM }];
+        assert_eq!(undo_from_of(&new, &at2000), 2000, "continuing 8888d59c at 2000");
+        assert!(!pin::leaf_has_undo(&new, &at2000, 1999) && pin::leaf_has_undo(&new, &at2000, 2000));
+        assert!(!pin::leaf_has_undo(&new, &[], 0), "block 0 is the genesis anchor's 0x02 leaf");
+        // a later image continuing `new` keeps the format each block was proved with
+        let later = [Handover { image: old, first_height: 2000, verifier: pin::SAME_ZKVM },
+                     Handover { image: new, first_height: 5000, verifier: pin::SAME_ZKVM }];
+        assert_eq!(undo_from_of(&[8u32; 8], &later), 2000);
+        // the CI rehearsal: a test image with the commitment, pinned by another at 11: every block has it
+        assert_eq!(undo_from_of(&[8u32; 8], &[Handover { image: new, first_height: 11, verifier: pin::SAME_ZKVM }]), 1);
+        // the current images (the new ids) have the commitment from block 1
+        for net in ["mainnet", "signet"] {
+            let cur = Image::by_network(net).unwrap();
+            if !pin::PRE_UNDO_IMAGES.contains(&words(&cur.method_id())) {
+                assert_eq!(cur.undo_from(), if cur.lineage.is_empty() { 1 } else { cur.undo_from() });
+            }
+        }
+    }
+
+    #[test]
+    fn both_leaf_formats_across_a_handover_height() {
+        // blocks 0..3 by a pre-undo image, 4..n-1 with the commitment
+        for n in [5u32, 8, 11, 33] {
+            let hs = sample_undo(n, 4);
+            let cs = state_over(&hs);
+            let uf = 4;
+            for h in 0..n {
+                let p = block_path(&hs, h).unwrap();
+                let (b, st, u) = &hs[h as usize];
+                assert!(block_in_chain(&cs, uf, h, b, st, u.as_ref(), &p), "n {n} height {h}");
+                if let Some(u) = u {
+                    assert!(!block_in_chain(&cs, uf, h, b, st, None, &p), "a 0x05 leaf opened without its undo hash");
+                    assert!(!block_in_chain(&cs, pin::NO_UNDO, h, b, st, None, &p), "nor as a pre-undo chain's");
+                    let mut w = *u;
+                    w[31] ^= 1;
+                    assert!(!block_in_chain(&cs, uf, h, b, st, Some(&w), &p), "a wrong undo hash");
+                    assert!(!block_in_chain(&cs, uf, h, b, &[0xee; 32], Some(u), &p), "the right undo hash, a wrong state");
+                    assert!(!block_in_chain(&cs, h + 1, h, b, st, Some(u), &p), "undo given below undo_from is refused");
+                } else {
+                    assert!(!block_in_chain(&cs, uf, h, b, st, Some(&[1; 32]), &p), "an undo hash on a 0x02 leaf");
+                    assert!(!block_in_chain(&cs, 0, h, b, st, None, &p), "a height at undo_from with no undo hash");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coin_and_tx_facts_open_undo_leaves() {
+        use libzync::history::{block_path, replay, Rec};
+        let h = |i: u64| -> [u8; 32] { sha256(&i.to_le_bytes()) };
+        // the commitment from block 2 on
+        let recs = vec![
+            Rec { height: 0, hash: h(1000), value: 0, flips: vec![], appends: vec![], undo: None },
+            Rec { height: 1, hash: h(1001), value: 30, flips: vec![], appends: vec![h(0), h(1), h(2)], undo: None },
+            Rec { height: 2, hash: h(1002), value: 40, flips: vec![(1, 1, 0)], appends: vec![h(3), h(4)], undo: Some(h(2002)) },
+            Rec { height: 3, hash: h(1003), value: 35, flips: vec![(0, 1, 2)], appends: vec![h(5)], undo: Some(h(2003)) },
+            Rec { height: 4, hash: h(1004), value: 35, flips: vec![], appends: vec![], undo: Some(h(2004)) },
+        ];
+        let tip = replay(&recs, 4, 4).unwrap();
+        let mut cs = genesis_anchor(&IMAGES[0]);
+        cs.profile |= PROFILE_COINLOG;
+        cs.height = 4;
+        cs.utxo_roots = tip.log.roots();
+        cs.utxo_leaves = tip.log.len();
+        cs.block_roots = block_path(&tip.block_leaves, 0).1;
+        cs.block_leaves = 5;
+        let fact = |at: u32, pos: u64, undo: Option<[u8; 32]>| -> CoinFact {
+            let r = replay(&recs, at, 4).unwrap();
+            CoinFact {
+                at, pos, coin: hex(&r.coins[pos as usize]), spent_by: r.spenders.get(&pos).copied(),
+                path: r.log.path(pos).iter().map(|x| hex(x)).collect(), log_leaves: r.log.len(), log_value: r.value,
+                log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
+                block: Some((hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())),
+                block_undo: undo.map(|u| hex(&u)), preimage: None,
+            }
+        };
+        // block 3 (with the commitment): a spent coin at 3, opened with block 3's undo hash
+        let ok = check_coin_fact(&cs, 2, &fact(3, 0, Some(h(2003)))).unwrap();
+        assert!(ok.contains("SPENT at height 3") && ok.contains(&hex(&h(2003))), "{ok}");
+        let e = check_coin_fact(&cs, 2, &fact(3, 0, None)).unwrap_err();
+        assert!(e.contains("commits its undo hash"), "{e}");
+        assert!(check_coin_fact(&cs, 2, &fact(3, 0, Some(h(2002)))).is_err(), "another block's undo hash");
+        // block 1 (before the commitment): no undo hash
+        let check = coin_fact_position;
+        assert!(check(&cs, 2, &fact(1, 1, None)).unwrap().contains("UNSPENT at height 1"));
+        assert!(check(&cs, 2, &fact(1, 1, Some(h(2002)))).unwrap_err().contains("without the undo-data commitment"));
+        // the same leaves checked as a chain whose images have none at all: refused, the leaves at 2.. are 0x05
+        assert!(check_coin_fact(&cs, pin::NO_UNDO, &fact(3, 0, None)).is_err());
+    }
+
     #[test]
     fn lineage_vectors() {
         // scripts/libzync/block_forest_ref.py again.
-        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000 };
-        let b = Handover { image: [9; 8], first_height: 980_000 };
+        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000, verifier: pin::SAME_ZKVM };
+        let b = Handover { image: [9; 8], first_height: 980_000, verifier: pin::SAME_ZKVM };
         assert_eq!(lineage_of(&[]), [0; 32]);
-        let one = lineage_of(&[Handover { image: a.image, first_height: a.first_height }]);
+        let one = lineage_of(&[Handover { image: a.image, first_height: a.first_height, verifier: pin::SAME_ZKVM }]);
         assert_eq!(hex(&one), "de40f074a41c9244272b66f8ce15759e646186968f348bc0cd930898c6948458");
         assert_eq!(hex(&lineage_of(&[a, b])), "fd23e4cf05d16147bcf677535f1c8bc64d8608369c55cc2fd07839dcd12a178c");
+        // a cross-version hop commits the predecessor's RISC Zero (docs/HANDOVER.md §3); same-version digests unchanged
+        let mut v = [0u8; 32];
+        for (i, x) in v.iter_mut().enumerate() { *x = i as u8; }
+        let a = Handover { image: [1, 2, 3, 4, 5, 6, 7, 8], first_height: 974_000, verifier: pin::SAME_ZKVM };
+        let c = Handover { image: [9; 8], first_height: 980_000, verifier: v };
+        assert_eq!(hex(&lineage_of(&[a, c])), "60ce3fbb97ee9d5e2db5457d264dadb2857ef87e38b672a5aadd6e7601f9ed2f");
     }
 
     #[test]
@@ -1427,27 +1726,27 @@ mod tests {
             let cs = state_over(&hs);
             for h in 0..n {
                 let p = block_path(&hs, h).unwrap();
-                let (b, st) = &hs[h as usize];
-                assert!(block_in_chain(&cs, h, b, st, &p), "n {n} height {h}");
+                let (b, st, _) = &hs[h as usize];
+                assert!(block_in_chain(&cs, pin::NO_UNDO, h, b, st, None, &p), "n {n} height {h}");
                 // A different block, a different coin state, or the right block at the wrong height.
-                assert!(!block_in_chain(&cs, h, &[0xee; 32], st, &p));
-                assert!(!block_in_chain(&cs, h, b, &[0xee; 32], &p));
-                assert!(!block_in_chain(&cs, (h + 1) % n, b, st, &p) || n == 1);
+                assert!(!block_in_chain(&cs, pin::NO_UNDO, h, &[0xee; 32], st, None, &p));
+                assert!(!block_in_chain(&cs, pin::NO_UNDO, h, b, &[0xee; 32], None, &p));
+                assert!(!block_in_chain(&cs, pin::NO_UNDO, (h + 1) % n, b, st, None, &p) || n == 1);
                 // One flipped bit anywhere in the path.
                 for i in 0..p.len() {
                     let mut q = p.clone();
                     q[i][0] ^= 1;
-                    assert!(!block_in_chain(&cs, h, b, st, &q));
+                    assert!(!block_in_chain(&cs, pin::NO_UNDO, h, b, st, None, &q));
                 }
                 // A short path (an interior node posing as a leaf) and a long one.
                 if !p.is_empty() {
-                    assert!(!block_in_chain(&cs, h, b, st, &p[..p.len() - 1]));
+                    assert!(!block_in_chain(&cs, pin::NO_UNDO, h, b, st, None, &p[..p.len() - 1]));
                 }
                 let mut long = p.clone();
                 long.push([0; 32]);
-                assert!(!block_in_chain(&cs, h, b, st, &long));
+                assert!(!block_in_chain(&cs, pin::NO_UNDO, h, b, st, None, &long));
             }
-            assert!(!block_in_chain(&cs, n, &[0; 32], &[0; 32], &[]), "a height past the tip");
+            assert!(!block_in_chain(&cs, pin::NO_UNDO, n, &[0; 32], &[0; 32], None, &[]), "a height past the tip");
         }
     }
 }

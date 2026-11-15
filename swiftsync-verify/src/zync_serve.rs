@@ -31,7 +31,9 @@ fn fact(recs: &[Rec], tip: u32, at: u32, pos: u64) -> Result<String, String> {
         log_leaves: r.log.len(),
         log_value: r.value,
         log_roots: r.log.roots().iter().map(|x| x.map(|h| hex(&h))).collect(),
-        block: (at < tip).then(|| (hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())), preimage: None };
+        block: (at < tip).then(|| (hex(&recs[at as usize].hash), block_path(&r.block_leaves, at as u64).0.iter().map(|x| hex(x)).collect())),
+        block_undo: if at < tip { recs[at as usize].undo.map(|u| hex(&u)) } else { None },
+        preimage: None };
     Ok(serde_json::to_string(&f).unwrap())
 }
 
@@ -108,9 +110,9 @@ mod tests {
     fn answers() {
         let h = |i: u8| [i; 32];
         let recs = vec![
-            Rec { height: 0, hash: h(9), value: 0, flips: vec![], appends: vec![] },
-            Rec { height: 1, hash: h(8), value: 10, flips: vec![], appends: vec![h(1), h(2)] },
-            Rec { height: 2, hash: h(7), value: 5, flips: vec![(0, 1, 0)], appends: vec![] },
+            Rec { height: 0, hash: h(9), value: 0, flips: vec![], appends: vec![], undo: None },
+            Rec { height: 1, hash: h(8), value: 10, flips: vec![], appends: vec![h(1), h(2)], undo: None },
+            Rec { height: 2, hash: h(7), value: 5, flips: vec![(0, 1, 0)], appends: vec![], undo: None },
         ];
         let coins = replay(&recs, 2, 2).unwrap().coins;
         assert_eq!(answer(&recs, 2, &coins, None, "/tip").1, "{\"tip\":2}");

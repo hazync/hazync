@@ -1,5 +1,22 @@
 # Canonical Hazync guest image id (METHOD_ID): libzync's PUBLISHED MAINNET image.
 #
+# ── 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c ─ 2026-11-14 ─────────
+#
+# Release v0.26.0: the per-block undo-data commitment (format U0, #729, docs/libzync/UNDO.md). Every block's leaf in the
+# block forest commits the block's undo hash (tag 0x05); ChainState and the genesis anchor are unchanged. The lineage
+# (prover/methods/guest/src/lineage/mainnet_coinlog.rs) is EMPTY: the board resets and proves the chain again from
+# genesis under this image. The guest also carries the handover code (built and tested, not used by this image).
+# Also the 11-14 soundness review's low findings (hardening; docs/RELEASE_NOTES_v0.26.0.md). NO CONSENSUS-RULE CHANGE,
+# same RISC Zero 3.1.0. Pinned from two agreeing reproducible builds of ca482bf5 on hazync-coord (one with the
+# dependency stage cached, one with --no-cache), and rebuilt unchanged from 63ab228a (the round-2 fixes moved only
+# the signet image); CI's reproducible-image-id job rebuilds it on every push.
+# 8888d59c's proofs stay verifiable by id (swiftsync-verify keeps it in IMAGES, before this one).
+#
+# 1ff5a129… (2026-11-14, built for v0.26.0 with 8888d59c pinned at block 2000) and dc392f3d… (the undo commitment before
+# the review's fixes) were never released: replaced by this image before the release.
+#
+# Superseded 8888d59c… (2026-11-11, releases v0.24.0 and v0.25.0, risc0 3.1.0), whose note follows.
+#
 # ── 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 ─ 2026-11-11 ─────────
 #
 # RISC Zero 3.1.0 (released 2026-11-10) fixes soundness bugs in the rv32im and recursion circuits that every receipt
@@ -25,7 +42,7 @@
 # Superseded the CORE design's last canonical id 37987b85… (2026-09-07, release v0.22.1). The CORE lineage below is
 # the record: `reproduce/Dockerfile` built those images, and their notes are kept as written.
 
-8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
 
 # ════ THE CORE DESIGN'S LINEAGE (the record; each entry was true when written) ══════════════════════════════════════
 #

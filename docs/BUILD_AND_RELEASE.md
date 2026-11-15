@@ -457,8 +457,12 @@ new binaries (on a re-baseline, purge their bundle caches, §3.5).
 
 ### 3.5 Re-baseline (the guest id changed)
 
-**Hazync v2.** The ids live in `reproduce/LIBZYNC_IDS` and `reproduce/METHOD_ID`. Pin new ones from two agreeing
-`reproduce/libzync.Dockerfile` runs with `python3 reproduce/pin-libzync-ids.py <ids file> <source commit>`, which
+**Hazync v2.** The ids live in `reproduce/LIBZYNC_IDS` and `reproduce/METHOD_ID`. ⛔ **A pinned image comes only
+from the container, from a clean environment:** `reproduce/libzync-ids.sh` unsets every `HAZYNC_*` variable before it
+builds (a lever such as `HAZYNC_NO_SCRIPTS` or `HAZYNC_HASHWRITER_BUF` left set would change the image while the line
+printed still names the plain one), and the Core and secp trees are the ones `scripts/libzync-base.sh` makes from the
+pinned sources and `patches/`. A laptop or hand build gives another id by design (absolute paths) and is never pinned.
+Pin new ones from two agreeing `reproduce/libzync.Dockerfile` runs with `python3 reproduce/pin-libzync-ids.py <ids file> <source commit>`, which
 also rewrites the verifier tables in `swiftsync-verify` and `swiftsync-verify-ffi`; and `check-versions.sh` checks the documented sites.
 The v2 board restarts from genesis on an id change, because every leaf bundle is stamped with the image that
 prepared it: for v0.24.0 (`863c9ce3` → `8888d59c`) that was step 0 of

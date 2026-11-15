@@ -183,6 +183,11 @@ ENV = {
     "server:ZYNC_SERVE_URL": "The local `zync-serve` behind `/api/zync/*` (e.g. `http://127.0.0.1:8601`). Unset: no relay.",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
+    "server:LZ_HANDOVER_AT": "Handover height H: the first block the new image proves (docs/HANDOVER.md). With the old "
+                             "image's host the board is in the `pre` era (nothing reaches H); with a host whose lineage "
+                             "pins a handover at H it is `post` (claims start at H+1; block H arrives as the [1..H] spine). "
+                             "`0`: no handover.",
+    "server:LZ_HANDOVER_ERA": "`pre` or `post`: stands in for the host's lineage in mock mode (tests). Unset in production.",
     "server:COORD_BIND": "Listen address. Use `127.0.0.1` behind a reverse proxy; a non-loopback bind in an "
                          "insecure mode refuses to start (see `COORD_ALLOW_PUBLIC_INSECURE`).",
     "server:COORD_DB": "SQLite database path.",

@@ -2,8 +2,8 @@
 
 Bitcoin Core's own consensus code, executed inside a RISC Zero zkVM, so that a block's validity can be **proven once
 and verified by anyone** without re-executing it. **Hazync v2** is the libzync engine (`libzync/`, the guest in
-`prover/methods/guest`), on RISC Zero 3.1.0 since release v0.24.0: published images mainnet `8888d59c`, signet
-`d4210dae`, and the header-chain zyncAPP `2db34e12` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)). The
+`prover/methods/guest`), on RISC Zero 3.1.0 since release v0.24.0: published images (v0.26.0) mainnet `46666b6f`
+(a new chain from genesis whose block leaves commit each block's undo data, [`libzync/UNDO.md`](libzync/UNDO.md)), signet `01a80f17`, and the header-chain zyncAPP `2db34e12` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)). The
 public board has run it since 2026-11-12, from genesis.
 
 **Hazync v1**, the original per-signature CORE guest (`37987b85`, last release v0.22.1), is documented in

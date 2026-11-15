@@ -40,7 +40,8 @@ fn state_before(lo: u32) -> Result<ChainState, String> {
     if let Ok(d) = std::env::var("HAZYNC_LZ_STATE_DIR") {
         let sp = format!("{d}/state_{}.json", lo - 1);
         if let Ok(t) = std::fs::read_to_string(&sp) {
-            let st: ChainState = serde_json::from_str(&t).map_err(|e| format!("{sp}: {e}"))?;
+            let mut st: ChainState = serde_json::from_str(&t).map_err(|e| format!("{sp}: {e}"))?;
+            crate::stamp(&mut st); // by era, as leaf_read does (docs/HANDOVER.md §5)
             if st.height + 1 != lo { return Err(format!("{sp} is the state at {}, not before block {lo}", st.height)); }
             return Ok(st);
         }
@@ -93,10 +94,30 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
         if crate::verify::dev_mode_env() { return Err("RISC0_DEV_MODE is set in the verifier's environment: refusing to verify".into()); }
     }
     // MISMATCH: the coordinator reads it as a different guest build (the common contributor mistake), not a forgery
-    r.verify(METHOD_ID).map_err(|e| format!("does not verify against this coordinator's libzync image (METHOD_ID MISMATCH or invalid proof): {e}"))?;
+    // Which image proved it (docs/HANDOVER.md §6): this one, for the blocks from its last handover up, or a predecessor
+    // pinned in its lineage, for the blocks below where that predecessor handed over (its own RISC Zero's check, or the
+    // vendored one for an older RISC Zero). Anything else stays MISMATCH: the worker reads that word as another build.
     let st: ChainState = r.journal.decode().map_err(|e| format!("journal is not a ChainState: {e}"))?;
+    let lineage = crate::pinned_lineage();
+    let own = r.verify(METHOD_ID);
+    let (image, want_lineage, era_lo, era_hi) = match own {
+        Ok(()) => (METHOD_ID, crate::lineage_of(lineage), lineage.last().map_or(1, |e| e.first_height), u32::MAX),
+        Err(e) => {
+            let k = lineage.iter().position(|p| p.image == st.self_id && crate::verify_pred_receipt(&r, p).is_ok())
+                .ok_or_else(|| format!("does not verify against this coordinator's libzync image (METHOD_ID MISMATCH or invalid proof): {e}"))?;
+            let p = &lineage[k];
+            (p.image, crate::lineage_of(&lineage[..k]), if k == 0 { 1 } else { lineage[k - 1].first_height }, p.first_height - 1)
+        }
+    };
     if st.kind != KIND_CHAIN { return Err(format!("journal kind {:#x} is not a chain state", st.kind)); }
-    if st.self_id != METHOD_ID { return Err("the state's self_id is not this image".into()); }
+    if st.self_id != image { return Err("the state's self_id is not the image that verified it".into()); }
+    if st.lineage != want_lineage {
+        return Err(format!("lineage {} is not image {}'s ({}): a spliced or forged history", hex(&st.lineage), hex_id(&image), hex(&want_lineage)));
+    }
+    if st.height < era_lo || st.height > era_hi {
+        return Err(format!("image {} proves blocks {era_lo}..={era_hi} under this coordinator's lineage, not {} (MISMATCH: an image past its handover)",
+                           hex_id(&image), st.height));
+    }
     if st.profile != crate::lz::expected_profile() {
         return Err(format!("profile {:#x}, this coordinator's image commits {:#x}", st.profile, crate::lz::expected_profile()));
     }
@@ -120,8 +141,38 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
                                 not Bitcoin's chain", st.height, hex(&st.tip_hash), hex(&after.tip_hash)));
         }
     }
-    println!("RANGE-OK lo={lo} hi={} in_tip={} out_tip={} out_leaves={} range_work=0 in_bhash={} out_bhash={} anchored={}{}{}",
+    // A range of a later era must start inside it, or at genesis (the handover's [1..H]); a range that starts in a
+    // predecessor's era and ends in this one can only be a base step on a predecessor-stamped state, which the lineage
+    // check above already refuses. Stated anyway: the board keys eras on it.
+    if lo != 1 && lo < era_lo {
+        return Err(format!("range starts at {lo}, before image {}'s first block {era_lo}", hex_id(&image)));
+    }
+    // image= and lineage= sit BEFORE anchored=: hazync-lz-zapp-follow.sh matches a line ENDING in `anchored=1`
+    println!("RANGE-OK lo={lo} hi={} in_tip={} out_tip={} out_leaves={} range_work=0 in_bhash={} out_bhash={} image={} lineage={} anchored={}{}{}",
              st.height, hex(&st.anchor_id), hex(&link_digest(&st)), st.utxo_leaves, hex(&before.tip_hash), hex(&st.tip_hash),
-             (lo == 1) as u8, if check_end { " end=board" } else { "" }, if fake || test_fake { " fake=1" } else { "" });
+             hex_id(&image), hex(&st.lineage), (lo == 1) as u8, if check_end { " end=board" } else { "" }, if fake || test_fake { " fake=1" } else { "" });
     Ok(())
+}
+
+fn hex_id(w: &[u32; 8]) -> String {
+    w.iter().flat_map(|x| x.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
+}
+
+/// `libzync-handover <pred receipt> <leaf_H.bin> <out>`: block H, the first block this image proves, as the handover
+/// step on the predecessor's genesis-anchored receipt ending at H-1 (the board's spine). The bundle's witnesses were
+/// cut against S(H-1); that state must be exactly the receipt's journal, so the guest checks them against what the
+/// predecessor proved. Writes the [1..H] receipt to <out>.
+pub(crate) fn handover_cmd(pred: &str, bundle: &str, out: &str) {
+    let last = crate::pinned_lineage().last().expect("libzync-handover: this image pins no predecessor");
+    let h = last.first_height;
+    let b = crate::prep::leaf_read(bundle);
+    assert!(b.prev.height + 1 == h, "{bundle} is the bundle for block {}, the handover is at {h}", b.prev.height + 1);
+    std::env::set_var("HAZYNC_LEAF_BUNDLE", bundle);
+    std::env::set_var("HAZYNC_HANDOVER_RECEIPT", pred);
+    let dir = format!("lz_handover_{h}");
+    crate::lz::lz_prove_range_cmd(h, h, &dir, "handover", &dir);
+    let r = std::fs::read(format!("{dir}/block_{h}.rcpt")).unwrap();
+    crate::lz::write_atomic(out, &r);
+    let _ = std::fs::remove_dir_all(&dir);
+    println!("HANDOVER-OK block {h}: receipt of blocks 1..={h} under image {} -> {out}", crate::method_id_hex());
 }

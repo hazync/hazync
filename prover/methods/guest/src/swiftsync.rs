@@ -115,9 +115,18 @@ pub fn sub(leaf: &[u8; 32]) {
 /// Design B (HANDOVER_DESIGN.md): this block's total starts from the previous chain state's, which the
 /// aggregate verified recursively. Call once, after `install`. `set == 0` means the identity.
 pub fn start(set: u32, p: &Pt) {
-    if set != 0 {
-        unsafe { (*core::ptr::addr_of_mut!(ACC)).add(p) };
+    // The carried total is checked before it is used (review 11-14): from a recursive step it is a proven state's,
+    // but a base step's anchor is the prover's. `set` is a flag, the identity carries zeros, and a point must be a
+    // canonical curve point (coordinates below p, y^2 == x^3 + 7), as every point `add` and `sub` produce.
+    assert!(set <= 1, "ECMH: live_set {set} is neither 0 nor 1");
+    if set == 0 {
+        assert!(*p == [0u32; 16], "ECMH: the identity carries a nonzero point");
+        return;
     }
+    let x = Fq::from_bigint(BigInt(p[..8].try_into().unwrap())).expect("ECMH: carried x >= p");
+    let y = Fq::from_bigint(BigInt(p[8..].try_into().unwrap())).expect("ECMH: carried y >= p");
+    assert!(&y * &y == &(&(&x * &x) * &x) + &Fq::from_u32(7), "ECMH: the carried total is not on the curve");
+    unsafe { (*core::ptr::addr_of_mut!(ACC)).add(p) };
 }
 
 /// The running total to commit: (0, zeros) for the identity, else (1, point).

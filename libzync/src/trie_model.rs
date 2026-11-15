@@ -233,6 +233,10 @@ impl Rd<'_> {
     }
     fn word(&mut self) -> Option<u32> { Some(self.take(1)?[0]) }
     fn hash(&mut self) -> Option<W> { Some(self.take(8)?.try_into().unwrap()) }
+    /// A pruned subtree's hash. Never zero: zero is the EMPTY subtree's hash, which the encoder writes as tag 0, so a
+    /// pruned zero is a second encoding of an empty slot (review 11-14: it verified, with no false fact, but two byte
+    /// strings stood for one witness).
+    fn pruned(&mut self) -> Option<W> { let h = self.hash()?; (h != [0; 8]).then_some(h) }
     fn u64(&mut self) -> Option<u64> { let x = self.take(2)?; Some(x[0] as u64 | (x[1] as u64) << 32) }
 }
 
@@ -240,10 +244,10 @@ fn dec_sub(r: &mut Rd, d: u32) -> Option<Sub> {
     if d > 256 { return None; }
     Some(match r.word()? {
         0 => Sub::Empty,
-        1 => Sub::Pruned(r.hash()?),
+        1 => Sub::Pruned(r.pruned()?),
         2 => { let l = dec_sub(r, d + 1)?; Sub::Inner(Box::new(l), Box::new(dec_sub(r, d + 1)?)) }
-        5 => { let h = r.hash()?; Sub::Inner(Box::new(Sub::Pruned(h)), Box::new(dec_sub(r, d + 1)?)) }
-        6 => { let h = r.hash()?; Sub::Inner(Box::new(dec_sub(r, d + 1)?), Box::new(Sub::Pruned(h))) }
+        5 => { let h = r.pruned()?; Sub::Inner(Box::new(Sub::Pruned(h)), Box::new(dec_sub(r, d + 1)?)) }
+        6 => { let h = r.pruned()?; Sub::Inner(Box::new(dec_sub(r, d + 1)?), Box::new(Sub::Pruned(h))) }
         4 => {
             // a coin's leaf hash (ttree::coin_into) binds the spent flag and spender words 0-4 only, and an unspent coin
             // binds no spender at all: every word it does not bind must hold the encoder's value (zero), or two
@@ -266,10 +270,10 @@ fn dec_top(r: &mut Rd, d: u32) -> Option<Top> {
     if d > 256 { return None; }
     Some(match r.word()? {
         0 => Top::Empty,
-        1 => Top::Pruned(r.hash()?),
+        1 => Top::Pruned(r.pruned()?),
         2 => { let l = dec_top(r, d + 1)?; Top::Inner(Box::new(l), Box::new(dec_top(r, d + 1)?)) }
-        5 => { let h = r.hash()?; Top::Inner(Box::new(Top::Pruned(h)), Box::new(dec_top(r, d + 1)?)) }
-        6 => { let h = r.hash()?; Top::Inner(Box::new(dec_top(r, d + 1)?), Box::new(Top::Pruned(h))) }
+        5 => { let h = r.pruned()?; Top::Inner(Box::new(Top::Pruned(h)), Box::new(dec_top(r, d + 1)?)) }
+        6 => { let h = r.pruned()?; Top::Inner(Box::new(dec_top(r, d + 1)?), Box::new(Top::Pruned(h))) }
         3 => { let s = r.hash()?; let count = r.u64()?; let value = r.u64()?; Top::Addr { s, count, value, sub: Box::new(dec_sub(r, 0)?) } }
         _ => return None,
     })
@@ -467,6 +471,25 @@ mod tests {
                 assert!(apply_stream_perm(&w, &m, &i, Some(&rep)).is_err());
             }
             if round == 0 { assert!(w.iter().any(|&x| x == 5 || x == 6), "the witness uses one-sided tags"); }
+        }
+    }
+
+    #[test]
+    fn a_pruned_zero_hash_is_refused() {
+        // tag 1 / 5 / 6 with an all-zero hash: a second encoding of an empty slot (review 11-14), for Top and Sub
+        let z = [0u32; 8];
+        let nz = [7u32; 8];
+        for t in [Top::Pruned(z), Top::Inner(Box::new(Top::Pruned(z)), Box::new(Top::Empty)),
+                  Top::Inner(Box::new(Top::Empty), Box::new(Top::Pruned(z))),
+                  Top::Addr { s: nz, count: 1, value: 5, sub: Box::new(Sub::Pruned(z)) },
+                  Top::Addr { s: nz, count: 1, value: 5, sub: Box::new(Sub::Inner(Box::new(Sub::Pruned(z)), Box::new(Sub::Empty))) },
+                  Top::Addr { s: nz, count: 1, value: 5, sub: Box::new(Sub::Inner(Box::new(Sub::Empty), Box::new(Sub::Pruned(z)))) }] {
+            assert!(decode(&encode(true, &nz, &t)).is_none());
+        }
+        // the same shapes with a nonzero hash still decode (the control)
+        for t in [Top::Pruned(nz), Top::Inner(Box::new(Top::Pruned(nz)), Box::new(Top::Empty)),
+                  Top::Addr { s: nz, count: 1, value: 5, sub: Box::new(Sub::Pruned(nz)) }] {
+            assert!(decode(&encode(true, &nz, &t)).is_some());
         }
     }
 

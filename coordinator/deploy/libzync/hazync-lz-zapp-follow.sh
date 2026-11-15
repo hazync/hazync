@@ -66,7 +66,9 @@ n=$(python3 - "$Z/out/history.bin" <<'PY'
 import sys, struct
 b = open(sys.argv[1], "rb").read(); i = n = 0
 while i < len(b):
-    nf, na = struct.unpack_from("<II", b, i + 44); i += 52 + 16 * nf + 32 * na; n += 1
+    nf, na = struct.unpack_from("<II", b, i + 44)
+    u = na >> 31; na &= 0x7FFFFFFF   # bit 31: the record ends with the block's undo hash (libzync/src/history.rs)
+    i += 52 + 16 * nf + 32 * na + 32 * u; n += 1
 print(n if i == len(b) else -1)
 PY
 )

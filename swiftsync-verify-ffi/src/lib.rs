@@ -119,18 +119,19 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
         // (cold review 11-06), so it is refused there. Without a match the verdict is at most DEMO.
         if v.get("expect").is_some() { return fail("\"expect\" inside the facts JSON is refused: the expected tip is the integrator's own trusted source (its node, an explorer), passed separately, never the fact server's word"); }
         let any = !coins.is_empty() || !journeys.is_empty() || !tries.is_empty();
+        let uf = rep.undo_from; // the block-leaf format by height (docs/libzync/UNDO.md)
         match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
             Some(cs) => {
                 for c in &coins {
-                    let r = swiftsync_verify::check_coin_fact(cs, c);
+                    let r = swiftsync_verify::check_coin_fact(cs, uf, c);
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
                 for j in &journeys {
-                    let r = swiftsync_verify::check_coin_journey(cs, j);
+                    let r = swiftsync_verify::check_coin_journey(cs, uf, j);
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
                 for t in &tries {
-                    let r = trie_check(cs, t);
+                    let r = trie_check(cs, uf, t);
                     rep.checks.push((r.is_ok(), r.unwrap_or_else(|e| e)));
                 }
             }
@@ -159,8 +160,8 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
 }
 
 static IDS: [&str; 2] = [
-    "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4\0",
-    "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387\0",
+    "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c\0",
+    "01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7\0",
 ];
 
 /// See include/swiftsync_verify.h.
@@ -183,10 +184,10 @@ mod tests {
 }
 
 /// The C result carries no answer, so a trie fact must CLAIM one (its "expect") for OK to mean anything.
-fn trie_check(cs: &swiftsync_verify::ChainState, t: &swiftsync_verify::TrieFact) -> Result<String, String> {
+fn trie_check(cs: &swiftsync_verify::ChainState, undo_from: u32, t: &swiftsync_verify::TrieFact) -> Result<String, String> {
     match &t.expect {
         None => Err(format!("trie fact ({}) without \"expect\": the C ABI returns only whether a claim holds", t.kind)),
-        Some(_) => swiftsync_verify::check_trie_fact(cs, t),
+        Some(_) => swiftsync_verify::check_trie_fact(cs, undo_from, t),
     }
 }
 
@@ -224,14 +225,14 @@ mod trie_tests {
         cs.trie_root = libzync::coinlog::h_of(&st.root());
         // an ABSENT answer (vout 5) needs no creating transaction; one the trie holds does (TrieFact::origin)
         let f = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(5)).unwrap();
-        assert!(trie_check(&cs, &f).is_ok());
+        assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &f).is_ok());
         let mut q = f.clone();
         q.expect = None;
-        assert!(trie_check(&cs, &q).unwrap_err().contains("without"));
+        assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &q).unwrap_err().contains("without"));
         let mut l = f.clone();
         l.expect = Some("unspent:500".into());
-        assert!(trie_check(&cs, &l).is_err());
+        assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &l).is_err());
         let held = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(0)).unwrap();
-        assert!(trie_check(&cs, &held).unwrap_err().contains("origin"));
+        assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &held).unwrap_err().contains("origin"));
     }
 }

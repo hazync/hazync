@@ -1,8 +1,9 @@
 # libzync: image handover and the block forest
 
-Status: in the frozen core c14 and so in every published image (v0.24.0, risc0 3.1.0: mainnet `8888d59c…`, signet
-`d4210dae…`). No handover has been used yet: every `lineage/*.rs` list is empty, so published proofs carry a zero
-`lineage`. Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
+Status: in the frozen core c14 and so in every published image. No published image pins a predecessor yet: v0.26.0's
+`lineage/*.rs` lists are all empty (the board re-proves from genesis so that every block carries the undo-data
+commitment, [UNDO.md](UNDO.md)). The machinery is tested in CI on test variants (§8, ../HANDOVER.md §4). The operational runbook, including the cross-RISC-Zero case, is
+[`../HANDOVER.md`](../HANDOVER.md). Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
 `aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
 implementation written from this document.
 
@@ -46,6 +47,8 @@ An append-only Utreexo forest with one leaf per block, genesis first, so leaf `i
 
 ```
 leaf(hash, height, state) = SHA-256( 0x02 ‖ block hash, internal byte order ‖ height u32 LE ‖ state )   69 bytes
+leaf_u(hash, height, state, undo)
+                          = SHA-256( 0x05 ‖ block hash ‖ height u32 LE ‖ state ‖ undo hash )           101 bytes
 state                     = SHA-256( 0x04 ‖ utxo_leaves u64 LE ‖ utxo_value u64 LE ‖ present utxo_roots,
                                      the highest level first )
 parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                                     as UTREEXO_FORMAT.md §5
@@ -53,6 +56,10 @@ parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                         
 
 - `state` is the coin commitment **after** the block: the `utxo_roots`, `utxo_leaves` and `utxo_value` the block's
   own proof commits. Since version 2 (2026-11-02). The leaf count fixes which roots are present.
+- **Which leaf (since v0.26.0):** `leaf_u`, committing the block's undo hash ([UNDO.md](UNDO.md)), for every block
+  proved by an image with the undo-data commitment; `leaf` for block 0 and for blocks proved by the pre-undo images
+  `8888d59c` / `d4210dae` (`handover_pin::PRE_UNDO_IMAGES`). The proving image of a height comes from the lineage, so a
+  verifier selects the format by height (`handover_pin::leaf_has_undo`).
 - The genesis state holds one leaf, for block 0: `block_roots = [Some(leaf(genesis hash, 0, SHA-256(0x04 ‖ 0 ‖ 0)))]`,
   `block_leaves = 1`.
 - Every aggregate requires `prev.block_leaves == prev.height + 1`, appends `leaf(this block, height, state)` and
@@ -65,10 +72,11 @@ parent(L, R)              = SHA-256( 0x01 ‖ L ‖ R )                         
 - Trees run largest first: the forest of `n` leaves has a tree of height `h` for each set bit `h` of `n`, the highest
   bit holding the earliest leaves.
 - Height is in the leaf so a path cannot be moved to another position. Tag 0x02 separates it from coin leaves (0x00),
-  interior nodes (0x01), lineage steps (0x03), coin-state digests (0x04) and the BIP30 SMT's leaves (0x10) and nodes
+  interior nodes (0x01), lineage steps (0x03), coin-state digests (0x04), undo-committing block leaves (0x05) and the BIP30 SMT's leaves (0x10) and nodes
   (0x11). The coin log uses its own IVs, not tags.
 
-**Checking a block.** Given a verified state, a height, a block hash, its coin state and a path of sibling hashes, locate the leaf's
+**Checking a block.** Given a verified state, a height, a block hash, its coin state (and, for a `leaf_u` block, its
+undo hash) and a path of sibling hashes, locate the leaf's
 tree, require the path length to equal that tree's height, fold the leaf up the path and compare with `block_roots[h]`.
 This is `block_in_chain` in `swiftsync-verify`. It needs no node and no proving: the path comes from anyone, since the
 root in the proof decides. From the block hash, a Merkle branch against the header reaches any transaction.
@@ -84,7 +92,9 @@ forest's job. A proof at height H also says nothing after H.
 |---|---|
 | A consensus rule that starts at height H, such as a soft fork | **Yes** |
 | A cheaper prover, with the same statement | **Yes** |
+| A RISC Zero upgrade for speed or features (cross-version, below) | **Yes** |
 | **A soundness bug in the old image** | **NO.** The old proof may attest something false, and continuing inherits that. Re-prove from before the bug could matter, normally genesis. |
+| **A RISC Zero upgrade that fixes a soundness bug** in its circuit, verifier or recursion | **NO**, for the same reason: everything below `first_height` stays only as strong as the old version. |
 
 A handover takes the old image's claims on trust. The new image re-checks nothing before `first_height`, so it is
 only as sound as every image in its lineage.
@@ -98,7 +108,7 @@ An image's source lists what it continues, in `prover/methods/guest/src/lineage/
 variant (`mainnet`, `signet`, `regtest`, each also `_coinlog`; an assumevalid build shares its network's file):
 
 ```rust
-pub const LINEAGE: &[crate::handover_pin::Handover] = &[crate::handover_pin::Handover { image: OLD_ID, first_height: 974_000 }];
+pub const LINEAGE: &[crate::handover_pin::Handover] = &[crate::handover_pin::Handover { image: OLD_ID, first_height: 974_000, verifier: crate::handover_pin::SAME_ZKVM }];
 ```
 
 Only the variant's own file is compiled into it, so pinning one variant's predecessor does not change another
@@ -109,6 +119,7 @@ predecessor.
 The aggregate's `is_base` takes a third value. `2` = handover:
 
 1. `env::verify(pinned image, prev_journal)`. The id comes from the source, never from input, so `self_id` cannot widen it.
+   For a cross-version entry (`verifier` not `SAME_ZKVM`), the vendored old circuit instead (below).
 2. `prev.self_id` must be the pinned image.
 3. `prev.profile` must equal this image's. A chain cannot gain a claim at a handover: an assumevalid predecessor cannot
    become a scripts-checked chain, and networks cannot mix.
@@ -120,6 +131,28 @@ Everything else in the state is carried as in a recursive step: coins, work, Swi
 an empty list refuses `is_base = 2`.
 
 ⛔ **A new image that changes `ChainState` must decode the predecessor's format at step 2.** The guest marks the line.
+
+### Across a RISC Zero upgrade (2026-11-13)
+
+`env::verify` checks a receipt with THIS image's recursion circuit. Between RISC Zero 3.0.5 and 3.1.0 that circuit's
+constraints changed (`poly_ext.rs`, the taps and the control root all differ), so a 3.1.0 guest cannot check a 3.0.5
+receipt that way, even when told the old control root. The handover entry therefore names the predecessor's RISC Zero:
+`verifier` is that version's succinct verifier-parameter digest (`SAME_ZKVM`, zero, means the same RISC Zero).
+
+For a non-zero `verifier` the guest carries the old version's recursion circuit (`src/xver/v<version>/`: the generated
+`control_id.rs`, `info.rs`, `poly_ext.rs` and `taps.rs` copied verbatim from that `risc0-circuit-recursion`), and the
+handover step:
+
+1. reads the predecessor's succinct seal, control id and control inclusion path as input words;
+2. checks the seal with risc0-zkp's verifier against the OLD circuit, the control id's inclusion under the old
+   control root, and the control root the seal itself outputs: what that version's `verify_integrity` checks;
+3. requires the claim the seal outputs to equal `ReceiptClaim::ok(pinned image, prev_journal)`: the pinned image, exit
+   `Halted(0)`, no assumptions, exactly this journal. The claim is built by the guest, never read from input.
+
+Then steps 2-5 above, unchanged. An image pinning a version it does not carry does not build (a compile-time check in
+`main.rs`); the carried versions are guest features (`xver-v3_0_5`, `xver-v3_1_0`), switched on in the guest's
+`Cargo.toml` `default`, so the image id commits to them. `v3_0_5` is a test vector only (3.1.0 fixed soundness bugs in
+3.0.x). Measured 11-13 in the 3.1.0 executor on real 3.0.5 receipts: about 22 M cycles to verify one.
 
 ### Genesis anchor
 
@@ -142,8 +175,11 @@ handover from an image with the old rule until the host replays each range under
 
 ```
 L_0     = 32 zero bytes
-L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE )     69-byte preimage
+L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE )                 69-byte preimage
+L_(i+1) = SHA-256( 0x03 ‖ L_i ‖ image, as 8 u32 LE ‖ first_height u32 LE ‖ verifier )     101 bytes, cross-version
 ```
+
+The 32-byte `verifier` is appended only when it is not zero, so every same-version lineage digests exactly as before.
 
 `image, as 8 u32 LE` is the image id's 32 bytes exactly as risc0 prints the id in hex.
 
@@ -157,8 +193,8 @@ digest of its list. The verifier refuses any other value, and prints which one i
 Added to the steps in SWIFTSYNC_PROOFS.md §5:
 
 - `block_leaves == height + 1`, and `block_roots` has a root exactly at the set bits of `block_leaves`.
-- `lineage` is zero, or the digest of the image's stated list. `swiftsync-verify --handover <image>:<height>` states an
-  entry, oldest first.
+- `lineage` is zero, or the digest of the image's stated list. `swiftsync-verify --handover <image>:<height>[:<verifier>]`
+  states an entry, oldest first.
 - The image id pinned is still the **newest** one. It commits to its whole lineage, so a verifier needs nothing else to
   accept the chain. Deciding to trust that lineage is a decision about every image in it.
 
