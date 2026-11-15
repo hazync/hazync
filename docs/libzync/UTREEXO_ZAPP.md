@@ -29,13 +29,17 @@ UtreexoStatement {
   leaves      u64        Stump.leaves: every leaf ever added (Floresta's `numleaves`)
   roots       [[u8;32]]  Stump.roots in rustreexo's order (largest tree first, one per set bit of `leaves`);
                          an Empty root as 32 zero bytes
-  n_live      u64        non-Empty leaves (coins live at H, plus the two BIP30 leaves)
+  n_live      u64        non-Empty leaves (coins live at H, plus the two BIP30 leaves once H >= 91,812)
   core binding           core_id, lineage, anchor_id, core height T (H <= T), tip_hash, cum_work, max_time, profile
 }
 ```
 
 The Utreexo fields are exactly Floresta's `AssumeUtreexoValue` (block_hash, height, roots, leaves):
-`zapp-utreexo verify --floresta` prints that struct as Floresta's chainparams source writes it.
+`zapp-utreexo verify --floresta` prints that struct as Floresta's chainparams source writes it, for roots that are not
+Empty. ⚠ 32 zero bytes here MEANS `BitcoinNodeHash::Empty`. Loaded as the hash of zeros
+(`BitcoinNodeHash::from([0u8; 32])` or `from_str("00…00")` give `Some(zeros)`), it is not Empty to rustreexo, and the
+next add would give wrong roots. An Empty root can occur (a small tree whose leaves were all created before H and spent
+by H); a consumer must map zeros to `Empty`, and the `--floresta` output must say `Empty` explicitly.
 
 ## 2. Compatibility with Floresta (read at Floresta `8399792e`, rustreexo 0.7.0 `b73cbac1`, the version Floresta pins)
 
@@ -51,7 +55,7 @@ leaf = SHA-512/256( TAG ‖ TAG                          TAG = UTREEXO_TAG_V1, 6
 ```
 
 `TAG ‖ TAG` is one whole SHA-512 block, so its state is computed once (`utreexo_roots::tag_state`); a leaf then costs
-one compression for a script of up to 30 bytes (P2PKH, P2WPKH), two for P2PK, P2TR, P2WSH.
+one compression for a script of up to 29 bytes (P2PKH, P2WPKH), two for P2PK, P2TR, P2WSH.
 
 **Which outputs are leaves** (`udata.rs:383` `get_block_adds`): every output in block order (transactions in order,
 outputs in vout order) except (a) `Consensus::is_unspendable` (`consensus.rs:243`: OP_RETURN first byte, or a script over
@@ -65,9 +69,12 @@ the recreations at 91,880 / 91,842), and Floresta refuses ever to delete them (`
 So the zAPP adds each as a live leaf at its block; it is live at every H after.
 
 **Deletion** (`process_proof`, `udata.rs:509`): each input of a non-coinbase transaction that does not spend an output
-of the same block deletes the leaf of the coin it spends. rustreexo deletes without moving anything
-(`src/proof/mod.rs:524` `calculate_hashes_delete`, lines 584-589): the deleted leaf becomes **Empty**, and Empty is the
-identity of the parent rule (`parent(Empty, x) = x`, `parent(x, Empty) = x`, `parent(Empty, Empty) = Empty`). The add
+of the same block deletes the leaf of the coin it spends. In rustreexo positions do move on deletion: the sibling of a
+deleted leaf takes its parent's place (`src/util/mod.rs:57`, `src/stump/mod.rs:559`; `src/proof/mod.rs:524`
+`calculate_hashes_delete`). The hashes, though, are exactly those of a fold in which the deleted leaf becomes
+**Empty** and Empty is the identity of the parent rule (`parent(Empty, x) = x`, `parent(x, Empty) = x`,
+`parent(Empty, Empty) = Empty`; `src/proof/mod.rs:584-589`), because "the sibling takes the parent's place" gives the
+same hash as `parent(Empty, x) = x`. The add
 rule treats Empty the same way (`src/stump/mod.rs:518`), and parents are `SHA-512/256(left ‖ right)` with the older
 subtree on the left (`src/node_hash/mod.rs:268`).
 
