@@ -51,6 +51,11 @@ int main(void) {
     snprintf(q, sizeof q, "%s=unspent", H);
     live("liveness_tampered", R, "b170_0_at200.hex", q, 200, NULL, ZAPP_LIVENESS_FAIL);
     live("liveness_wrong_tip", R, "b170_0_at200.hex", q, -1, "200:0000000000000000000000000000000000000000000000000000000000000001", ZAPP_LIVENESS_FAIL);
+    snprintf(q, sizeof q, "%s=unspent,created=170,coinbase=0", H);
+    live("liveness_created_pinned", R, "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_DEMO);
+    snprintf(q, sizeof q, "%s=unspent,created=171", H);
+    live("liveness_wrong_created", R, "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
+    live("liveness_upper_case_txid", R, "b170_0_at200.hex", "F4184FC596403B9D638783CF57ADFE4C75C605F6356FBC91338530E9831E9E16:0@200=unspent", -1, NULL, ZAPP_LIVENESS_FAIL);
     live("liveness_fake_receipt", "fake_block_2501.rcpt", "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
     printf("LIVENESS_C_ABI %d/%d %s\n", n - bad, n, bad ? "SOME CASES WRONG" : "all cases as expected");
     return bad != 0;

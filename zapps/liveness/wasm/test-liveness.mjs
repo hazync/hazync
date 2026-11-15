@@ -26,11 +26,14 @@ const cases = [
   ['another height', 'b170_0_at200.hex', `${T170}:0@150=unspent`, 'fail'],
   ['tampered proof', ['b170_0_at200.hex', 300], `${T170}:0@200=unspent`, 'fail'],
   ['another tip expected', 'b170_0_at200.hex', `${T170}:0@200=unspent`, 'fail', undefined, `200:${'0'.repeat(63)}1`],
+  ['created pinned', 'b170_0_at200.hex', `${T170}:0@200=unspent,created=170,coinbase=0`, 'demo'],
+  ['wrong creation height', 'b170_0_at200.hex', `${T170}:0@200=unspent,created=171`, 'fail'],
+  ['proof hex with a newline', ['b170_0_at200.hex', 'nl'], `${T170}:0@200=unspent`, 'fail'],
   ['dev-mode receipt', 'b170_0_at200.hex', `${T170}:0@200=unspent`, 'fail', 'fake_block_2501.rcpt'],
 ];
 let bad = 0;
 for (const [name, f, ask, want, rc, expect] of cases) {
-  const proof = Array.isArray(f) ? flip(hex(f[0]), f[1]) : hex(f);
+  const proof = Array.isArray(f) ? (f[1] === 'nl' ? hex(f[0]) + '\n' : flip(hex(f[0]), f[1])) : hex(f);
   const r = v.verifyLiveness({ network: 'mainnet', image: 'product', imageHex: '8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4',
     receipt: rd(rc || 'mainnet_1_200_8888d59c.rcpt'), liveness: [{ proof, ask }], expect });
   const ok = r.verdict === want && (want !== 'demo' || ((r.checks || []).every((c) => c.ok) && r.facts.length === 1));
