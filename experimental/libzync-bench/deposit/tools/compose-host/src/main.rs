@@ -1,11 +1,11 @@
 //! `deposit-compose <deposit.json> [--prove <out.rcpt>]`: the composed deposit guest (DEPOSIT_ZAPP.md §2, option (b))
-//! on a deposit bundle from `zync-deposit` (one header receipt from genesis, a block at or below the core tip).
+//! on a deposit bundle from `zapp-deposit build` (one header receipt from genesis, a block at or below the core tip).
 //! Executes it through r0vm (cycles, segments), or with --prove proves it (succinct, on the CPU unless r0vm has a GPU),
 //! verifies the receipt against the guest's image id and prints the time and size. A measurement tool.
 use deposit_compose_methods::{DEPOSIT_COMPOSE_ELF, DEPOSIT_COMPOSE_ID};
 use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, Receipt};
 use serde::Serialize;
-use swiftsync_verify::deposit::DepositBundle;
+use zapp_deposit::DepositBundle;
 
 #[derive(Serialize)]
 struct Input {

@@ -1,19 +1,21 @@
-// verifyDeposit (the deposit-proof zyncAPP) in the WebAssembly verifier, on bundles zync-deposit builds from the real
-// receipts (as test_deposit.sh). Usage: node test_deposit_wasm.mjs <swiftsync-verify.js> <swiftsync_verify_wasm.wasm> <zync-deposit>
+// verifyDeposit in the deposit-proof zAPP's own WASM module (zapp-deposit.js; until 15.11.2026 in the core verifier's), on
+// bundles `zapp-deposit build` makes from the real receipts (as ../test_deposit.sh).
+// Usage: node test-deposit.mjs <zapp-deposit> [<zapp-deposit.js> <zapp_deposit_wasm.wasm>] (default: this directory's).
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-const [js, wasm, zd] = process.argv.slice(2);
-const here = dirname(fileURLToPath(import.meta.url));
-const root = resolve(here, '../../..');
-const { loadVerifier } = await import(pathToFileURL(resolve(js)).href);
-const v = await loadVerifier(readFileSync(wasm));
+const own = dirname(fileURLToPath(import.meta.url));
+const [zd, js = `${own}/zapp-deposit.js`, wasm = `${own}/target/wasm32-unknown-unknown/release/zapp_deposit_wasm.wasm`] = process.argv.slice(2);
+const root = resolve(own, '../../..');
+const here = `${root}/experimental/libzync-bench/deposit`;
+const { loadDeposit } = await import(pathToFileURL(resolve(js)).href);
+const v = await loadDeposit(readFileSync(wasm));
 const T = 'f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16';
 const TIP = '975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3';
 const w = mkdtempSync(join(tmpdir(), 'deposit-wasm-'));
-const make = (out, extra) => execFileSync(resolve(zd), ['--core', `${root}/swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`,
+const make = (out, extra) => execFileSync(resolve(zd), ['build', '--core', `${root}/swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`,
   '--history', `${here}/history_0_200.bin`, '--height', '170', '--block', `${here}/block_170_raw.txt`, '--txid', T, ...extra, '-o', out],
   { stdio: ['ignore', 'ignore', 'ignore'] });
 make(`${w}/core.json`, []);

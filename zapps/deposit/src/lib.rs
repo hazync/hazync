@@ -4,18 +4,22 @@
 //! validated, with total work W, as of tip X".
 //!
 //! It is verifier-side composition of two proofs that already exist (design (a) of DEPOSIT_ZAPP.md §2):
-//!   1. the CORE chain proof ([`crate::verify`]): every block 0..=Hc fully validated, and a block forest with one leaf
-//!      per block. The transaction's block is opened in that forest ([`crate::check_tx_fact`]), so it is one of the
+//!   1. the CORE chain proof ([`swiftsync_verify::verify`]): every block 0..=Hc fully validated, and a block forest with one leaf
+//!      per block. The transaction's block is opened in that forest ([`swiftsync_verify::check_tx_fact`]), so it is one of the
 //!      fully validated blocks;
-//!   2. optionally the HEADER-CHAIN proof ([`crate::headers::verify_headers`]): proof of work and Core's header rules
+//!   2. optionally the HEADER-CHAIN proof ([`zapp_headers::verify_headers`]): proof of work and Core's header rules
 //!      0..=Ht, and an MMR of every block hash. The core tip's hash must be the MMR's leaf at Hc (the BINDING): both
 //!      chains are hash chains from genesis, so the header chain's blocks 0..=Hc are the core's, and Hc+1..=Ht add
 //!      burial that is PROOF OF WORK ONLY.
 //!
 //! Rules kept from the header zAPP's review: the transaction asked about is the CALLER's ([`DepositAsk::txid`]); the
 //! bundle carries no txid, the raw bytes must hash to the asked one. A statement is returned only when no check failed.
-use crate::headers::{self, HeaderState, TxInclusion};
-use crate::{check_tx_fact, hex, hex32, unhex, verify, ChainState, Image, Inputs, TxFact, Verdict};
+//!
+//! A zAPP module of its own (docs/libzync/ZYNCAPPS.md §9), on the core verifier (`swiftsync_verify`) and the header-chain
+//! zAPP (`zapp_headers`) as libraries; not part of either. Until 15.11.2026 this was `swiftsync_verify::deposit`, the
+//! CLI's `swiftsync-verify deposit`, `zync-deposit` and the WASM's `verifyDeposit`; the checks are unchanged.
+use zapp_headers::{self as headers, HeaderState, TxInclusion};
+use swiftsync_verify::{check_tx_fact, hex, hex32, unhex, verify, ChainState, Image, Inputs, TxFact, Verdict};
 use serde::{Deserialize, Serialize};
 
 pub const BUNDLE_KIND: &str = "hazync-deposit";
@@ -349,7 +353,7 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
     rep
 }
 
-/// The core image the receipt verified against: the asked one, or the earlier built-in one it names (crate::verify).
+/// The core image the receipt verified against: the asked one, or the earlier built-in one it names (swiftsync_verify::verify).
 fn core_image_used(checks: &[(bool, String)], asked: &Image) -> String {
     checks.iter().find_map(|(_, w)| w.strip_prefix("the receipt names ").and_then(|r| r.get(..64)).map(str::to_string))
         .unwrap_or_else(|| asked.method_id_hex.to_string())
@@ -358,7 +362,7 @@ fn core_image_used(checks: &[(bool, String)], asked: &Image) -> String {
 /// Build a bundle for transaction `txid` (internal order) of `raw_block` (as `getblock <hash> 0` prints it, the block
 /// at `height`). `history`: the core proving run's history.bin, for a block at or below the core tip (its leaf in the
 /// block forest). `core_tip_mmr_path` (with header receipts) and `block_mmr_path` (a block above the core tip): MMR
-/// paths in the header chain's MMR ([`crate::mmr::path`]). Nothing here is trusted: [`verify_deposit`] checks it all.
+/// paths in the header chain's MMR ([`zapp_headers::mmr::path`]). Nothing here is trusted: [`verify_deposit`] checks it all.
 #[allow(clippy::too_many_arguments)]
 pub fn make_bundle(network: &str, core: &[u8], header_receipts: &[Vec<u8>], history: Option<&[u8]>, raw_block: &[u8],
                    height: u32, txid: &[u8; 32], core_tip_mmr_path: &[[u8; 32]], block_mmr_path: Option<&[[u8; 32]]>)

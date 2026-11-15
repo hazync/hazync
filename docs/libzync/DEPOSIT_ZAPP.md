@@ -1,9 +1,10 @@
 # The deposit-proof zyncAPP
 
 Status (15.11.2026): built on branch `feat/zapp-deposit`, tested on real receipts, not released. No new image id: it
-checks two proofs that already exist. Code: `swiftsync-verify/src/deposit.rs` (verifier), `swiftsync-verify deposit`
-(CLI), `verify_deposit` / `verifyDeposit` (WASM), `zync-deposit` (bundle builder). Tests: `swiftsync-verify/src/deposit/tests.rs`,
-`experimental/libzync-bench/deposit/test_deposit.sh` and `test_deposit_wasm.mjs`.
+checks two proofs that already exist. Code: the zAPP's own module `zapps/deposit` (ZYNCAPPS.md §9), on the core verifier
+and the header-chain zAPP (`zapps/headers`) as libraries: `src/lib.rs` (verifier), `zapp-deposit` (CLI), `wasm/`
+(`verify_deposit` / `verifyDeposit` in `zapp-deposit.js`), `zapp-deposit build` (bundle builder). Tests: `src/tests.rs`,
+`test_deposit.sh` and `wasm/test-deposit.mjs`, all run by `zapps/deposit/test.sh`.
 
 ## 1. The statement
 
@@ -100,17 +101,17 @@ It does **not** add:
 
 ```sh
 # build (any machine; the core run's history.bin for the block-forest leaf, a node or the raw block)
-zync-deposit --core core.rcpt --history history.bin --headers headers.rcpt --headers-file headers.txt \
+zapp-deposit build --core core.rcpt --history history.bin --headers headers.rcpt --headers-file headers.txt \
              --height 170 --txid f4184fc5…9e16 --bitcoin-cli "bitcoin-cli" -o deposit.json
 # check (the operator; every expectation is the caller's)
-swiftsync-verify deposit --txid f4184fc5…9e16 --vout 0 --amount 1000000000 --script 4104ae1a…ac \
+zapp-deposit --txid f4184fc5…9e16 --vout 0 --amount 1000000000 --script 4104ae1a…ac \
              --min-depth 6 --min-validated-depth 6 --expect <height>:<hash> --max-tip-age 7200 deposit.json
 ```
 
 `--op-return <hex>`: an output (at `--vout`, or any) that is OP_RETURN followed by data pushes only (OP_0, 1-75 byte
 pushes, OP_PUSHDATA1/2/4), their data concatenated equal to the payload. Any other script (OP_1..OP_16 included) does
-not match; `--script` checks a scriptPubKey byte for byte. `zync-deposit` checks what it built with the verifier and
-refuses to write a bundle that does not verify. `zync-deposit mmr-path <headers file> <tip> <height>` prints an MMR path.
+not match; `--script` checks a scriptPubKey byte for byte. `zapp-deposit build` checks what it built with the verifier and
+refuses to write a bundle that does not verify. `zapp-deposit mmr-path <headers file> <tip> <height>` prints an MMR path.
 
 The bundle (JSON, version 1): `core_receipt`, `header_receipts` (one or a chain of runs from genesis),
 `core_tip_mmr_path`, and `block`: `height`, `header`, `forest` (`state`, `undo`, `path`) for a block at or below Hc or
@@ -144,8 +145,8 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | bundle, core 0..200 only (STARK, hex) | 456,550 bytes |
 | bundle, core 0..200 + header chain 0..975,278 (STARK, hex) | 912,772 bytes |
 | bundle, the same two receipts Groth16-wrapped | 21,856 bytes |
-| `swiftsync-verify deposit`, core only / core + headers / Groth16 pair (laptop, wall) | 30 ms / 61 ms / 16 ms |
-| `zync-deposit`, reading 975,279 headers for the MMR path (laptop) | 2.7 s |
+| `zapp-deposit`, core only / core + headers / Groth16 pair (laptop, wall) | 30 ms / 61 ms / 16 ms |
+| `zapp-deposit build`, reading 975,279 headers for the MMR path (laptop) | 2.7 s |
 | composed guest (b), executed | 816,427 cycles, 1 segment, journal 1,316 bytes |
 | composed guest (b), proved succinct on hazync-coord's CPU | 293.4 s, 225,858 bytes |
 | composed receipt, Groth16-wrapped | 88.5 s; 3,129 bytes (seal 256 bytes); verify 9 ms |
@@ -153,7 +154,7 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | Groth16 wrap of the header receipt 0..975,278 | 97.0 s; 227,474 -> 4,745 bytes; verify 6 ms |
 | WASM verifier with the deposit entry | 1,302,725 bytes (381,955 gzipped) |
 
-Tests: 16 unit tests (`deposit::tests`), `test_deposit.sh` 22/22, `test_deposit_wasm.mjs` 10/10. Refusals covered: the
+Tests: 16 unit tests (`deposit::tests`), `test_deposit.sh` 22/22, `wasm/test-deposit.mjs` 10/10. Refusals covered: the
 wrong txid (both ways), the wrong output, amount or script, insufficient depth or validated depth, a block not in
 the chain (other height, tampered coin state, path or header), a tampered merkle or coinbase branch, the 64-byte
 transaction trick on block 170 (whose merkle root IS dsha(coinbase txid || T): the 64 bytes with an empty branch

@@ -1,0 +1,38 @@
+[package]
+name = "zapp-deposit"
+version = "0.1.0"
+edition = "2021"
+description = "The deposit-proof zyncAPP: a transaction in a fully validated block, buried under the header chain"
+license = "MIT"
+publish = false
+
+# A zAPP module (docs/libzync/ZYNCAPPS.md §9), NOT part of the core verifier: it uses swiftsync-verify (the core proof,
+# tx facts) and the header-chain zAPP (zapps/headers: the header chain, its MMR) as libraries. The core never changes
+# when a zAPP is added. Own workspace, as the core verifier's crates.
+
+[lib]
+name = "zapp_deposit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zapp-deposit"
+path = "src/main.rs"
+
+[dependencies]
+swiftsync-verify = { path = "../../swiftsync-verify" }
+zapp-headers = { path = "../headers" }
+libzync = { path = "../../libzync", default-features = false }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

@@ -3,11 +3,11 @@
 //! transactions (block 170: the coinbase and Satoshi to Hal Finney; block 800,000: a segwit transaction and the coinbase's
 //! OP_RETURN witness commitment).
 use super::*;
-use crate::headers::HEADERS_IMAGE_ID;
+use zapp_headers::HEADERS_IMAGE_ID;
 
-const CORE: &[u8] = include_bytes!("../../vectors/mainnet_1_200_8888d59c.rcpt");
-const CORE_FLIPPED: &[u8] = include_bytes!("../../vectors/mainnet_1_200_8888d59c_flipped.rcpt");
-const FAKE: &[u8] = include_bytes!("../../vectors/fake_block_2501.rcpt");
+const CORE: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
+const CORE_FLIPPED: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt");
+const FAKE: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/fake_block_2501.rcpt");
 const HIST: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/history_0_200.bin");
 const BLOCK_170: &str = include_str!("../../../experimental/libzync-bench/deposit/block_170_raw.txt");
 const HDR_TIP: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/headers_0_tip.rcpt");
@@ -277,7 +277,7 @@ fn network_identity_and_freshness() {
 fn groth16_wrapped_receipts_give_the_same_statement() {
     const CORE_G16: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/mainnet_0_200_8888d59c_groth16.rcpt");
     const HDR_G16: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/headers_0_975278_de54b94f_groth16.rcpt");
-    assert_eq!(crate::receipt_kind(CORE_G16), Ok("groth16"));
+    assert_eq!(swiftsync_verify::receipt_kind(CORE_G16), Ok("groth16"));
     let b = make_bundle("mainnet", CORE_G16, &[HDR_G16.to_vec()], Some(HIST), &block_170(), 170, &id(T170), &lines(PATH_200), None).unwrap();
     let a = DepositAsk { vout: Some(0), amount: Some(1_000_000_000), expect_tip: Some((TIP.0, TIP.1.into())), ..ask(id(T170)) };
     let r = run(&b, &a);

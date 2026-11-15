@@ -1,0 +1,76 @@
+== zapp-deposit build --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/core.json (expect exit 0)
+zapp-deposit build: wrote <tmp>/core.json (456550 bytes): tx at position 1 of block 170, 31 confirmation(s) as of tip 200 (31 fully validated through 200)
+exit=0 PASS
+== zapp-deposit build --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers experimental/libzync-bench/headers/hdr_0_100.rcpt --headers experimental/libzync-bench/headers/hdr_101_200.rcpt --headers-file experimental/libzync-bench/headers/h0_200.txt -o <tmp>/h200.json (expect exit 0)
+zapp-deposit build: wrote <tmp>/h200.json (1357235 bytes): tx at position 1 of block 170, 31 confirmation(s) as of tip 200 (31 fully validated through 200)
+exit=0 PASS
+== zapp-deposit build --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers experimental/libzync-bench/headers/headers_0_tip.rcpt --tip-path experimental/libzync-bench/deposit/mmr_path_200_tip975278.txt -o <tmp>/tip.json (expect exit 0)
+zapp-deposit build: wrote <tmp>/tip.json (912772 bytes): tx at position 1 of block 170, 975109 confirmation(s) as of tip 975278 (31 fully validated through 200)
+exit=0 PASS
+== zapp-deposit build --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid 00184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/none.json (expect exit 1)
+zapp-deposit: the transaction is not in that block
+exit=1 PASS
+== zapp-deposit build --core swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt --history experimental/libzync-bench/deposit/history_0_200.bin --height 171 --block experimental/libzync-bench/deposit/block_170_raw.txt --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 -o <tmp>/none.json (expect exit 1)
+zapp-deposit: the block is not the proven chain's at that height (history hash differs)
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 1000000000 --min-depth 31 <tmp>/core.json (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: below Core's minimum chain work, not shown to be the network's chain: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, output 0 = 1000000000 sat to 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374c
+exit=2 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 <tmp>/h200.json (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: below Core's minimum chain work, not shown to be the network's chain: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee,
+exit=2 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 1000000000 --min-depth 6 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/tip.json (expect exit 0)
+SWIFTSYNC_VERIFY_OK: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, output 0 = 1000000000 sat to 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704
+exit=0 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-validated-depth 31 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/tip.json (expect exit 0)
+SWIFTSYNC_VERIFY_OK: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d951592f7a0
+exit=0 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-validated-depth 32 <tmp>/tip.json (expect exit 1)
+  [FAIL] validated depth: 31 fully validated confirmation(s) >= 32 asked
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 32 <tmp>/core.json (expect exit 1)
+  [FAIL] depth: 31 confirmation(s) as of tip 200 >= 32 asked (31 fully validated, 0 proof of work only)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid b1fea52486ce0c62bb442b530a3f0132b826c74e473d1f2c220bfa78111c5082 <tmp>/core.json (expect exit 1)
+  [FAIL] the raw transaction is f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, the one asked about b1fea52486ce0c62bb442b530a3f0132b826c74e473d1f2c220bfa78111c5082
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 999999999 <tmp>/core.json (expect exit 1)
+  [FAIL] output 0 holds 999999999 sat (it holds 1000000000)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 1 --script 76a914 <tmp>/core.json (expect exit 1)
+  [FAIL] output 1's scriptPubKey is 76a914 (it is 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 9 <tmp>/core.json (expect exit 1)
+  [FAIL] output 9 exists (the transaction has 2)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/core.json (expect exit 1)
+  [FAIL] chain identity: the tip is block 975278 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 (from a source the caller trusts)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --max-tip-age 60 <tmp>/tip.json (expect exit 1)
+  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794754012
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== env RISC0_DEV_MODE=1 zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/core.json (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: panicked at /home/defenwycke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been dis
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --network signet <tmp>/core.json (expect exit 1)
+  [FAIL] the bundle is for "mainnet", the network asked about "signet"
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit <tmp>/core.json (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: --txid <txid> (the transaction YOU ask about) is required
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 /nonexistent.json (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: "/nonexistent.json": No such file or directory (os error 2)
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/junk.json (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 1 column 1)
+exit=1 PASS
+test_deposit.sh: 22/22 as expected

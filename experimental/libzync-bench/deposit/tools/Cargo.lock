@@ -644,6 +644,7 @@ dependencies = [
  "serde",
  "serde_json",
  "swiftsync-verify",
+ "zapp-deposit",
 ]
 
 [[package]]
@@ -2686,6 +2687,32 @@ dependencies = [
  "arraydeque",
  "encoding_rs",
  "hashlink",
+]
+
+[[package]]
+name = "zapp-deposit"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "libzync",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "swiftsync-verify",
+ "zapp-headers",
+]
+
+[[package]]
+name = "zapp-headers"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "swiftsync-verify",
 ]
 
 [[package]]

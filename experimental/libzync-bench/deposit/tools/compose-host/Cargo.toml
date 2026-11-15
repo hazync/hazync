@@ -12,6 +12,7 @@ path = "src/main.rs"
 deposit-compose-methods = { path = "../compose-methods" }
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["client"] }
 swiftsync-verify = { path = "../../../../../swiftsync-verify" }
+zapp-deposit = { path = "../../../../../zapps/deposit" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"

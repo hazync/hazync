@@ -179,3 +179,4 @@ chain proofs only, and adding a zAPP never changes it: its `.wasm` stays byte-id
 | zAPP | module | CLI | WASM glue | C ABI |
 |---|---|---|---|---|
 | Header chain (ROADMAP K1, N3; `coordinator/deploy/headers`) | `zapps/headers` | `zapp-headers` | `zapp-headers.js` (`verifyHeaders`, `headersImageId`) | none |
+| Deposit proof (DEPOSIT_ZAPP.md) | `zapps/deposit` (on `zapps/headers`) | `zapp-deposit` (also `build`, `mmr-path`) | `zapp-deposit.js` (`verifyDeposit`) | none |
