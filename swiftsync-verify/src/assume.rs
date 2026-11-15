@@ -50,10 +50,39 @@ fn fq_is_odd(x: &Fq) -> bool {
     x.into_bigint().is_odd()
 }
 
-/// y with y^2 = x^3 + 7 and the given parity, if x is on the curve.
+fn sq_n(mut a: Fq, n: u32) -> Fq {
+    for _ in 0..n {
+        a.square_in_place();
+    }
+    a
+}
+
+/// a^((p+1)/4), a square root of a whenever one exists (p = 3 mod 4), by libsecp256k1's addition chain
+/// (`secp256k1_fe_sqrt`: 253 squarings, 13 multiplications).
+fn sqrt_candidate(a: &Fq) -> Fq {
+    let x2 = a.square() * a;
+    let x3 = x2.square() * a;
+    let x6 = sq_n(x3, 3) * x3;
+    let x9 = sq_n(x6, 3) * x3;
+    let x11 = sq_n(x9, 2) * x2;
+    let x22 = sq_n(x11, 11) * x11;
+    let x44 = sq_n(x22, 22) * x22;
+    let x88 = sq_n(x44, 44) * x44;
+    let x176 = sq_n(x88, 88) * x88;
+    let x220 = sq_n(x176, 44) * x44;
+    let x223 = sq_n(x220, 3) * x3;
+    let t = sq_n(x223, 23) * x22;
+    let t = sq_n(t, 6) * x2;
+    sq_n(t, 2)
+}
+
+/// y with y^2 = x^3 + 7 and the given parity, if x is on the curve: the candidate root, then a check of it.
 fn lift_x(x: &Fq, odd: bool) -> Option<Fq> {
     let rhs = x.square() * x + Fq::from(7u64);
-    let y = rhs.sqrt()?;
+    let y = sqrt_candidate(&rhs);
+    if y.square() != rhs {
+        return None;
+    }
     Some(if fq_is_odd(&y) == odd { y } else { -y })
 }
 
@@ -138,6 +167,17 @@ impl Ecmh {
         self.z *= h;
         self.x = x3;
         self.y = y3;
+    }
+
+    /// Adds another sum (through its affine form; one inversion).
+    pub fn add_sum(&mut self, o: &Ecmh) {
+        let c = self.count + o.count;
+        if !o.z.is_zero() {
+            let zi = o.z.inverse().expect("z != 0");
+            let zi2 = zi.square();
+            self.add_affine(&(o.x * zi2), &(o.y * zi2 * zi));
+        }
+        self.count = c;
     }
 
     /// Adds a coin leaf's point.
@@ -598,10 +638,10 @@ pub fn hash_snapshot<R: Read>(snap: R, headers: &HeaderChain, tracked: &Tracked,
 
 fn hash_snapshot_with<R: Read>(snap: R, headers: &HeaderChain, tracked: &Tracked, base_height: u32,
                                on_meta: impl FnOnce(&SnapshotMeta) -> Result<(), String>) -> Result<SnapshotCheck, String> {
-    let mut acc = Ecmh::default();
     let mut h3 = HashSerialized3::default();
     let (mut value, mut tracked_used) = (0u64, 0usize);
     let mut mtp_cache: Vec<Option<u32>> = Vec::new();
+    let mut sum = PointSum::new();
     let meta = read_snapshot_with(snap, on_meta, |c| {
         if c.height == 0 || c.height > base_height {
             return Err(format!("snapshot: coin {}:{} at height {}, outside 1..{base_height}", display(&c.txid), c.vout, c.height));
@@ -620,13 +660,99 @@ fn hash_snapshot_with<R: Read>(snap: R, headers: &HeaderChain, tracked: &Tracked
         };
         let t = tracked.contains(&(c.txid, c.vout));
         tracked_used += t as usize;
-        acc.add_leaf(&coin_leaf(c, t, mtp))?;
+        sum.push(coin_leaf(c, t, mtp))?;
         h3.add(c);
         value = value.checked_add(c.value).ok_or("snapshot: total amount overflows")?;
         Ok(())
-    })?;
+    });
+    let acc = sum.finish()?; // joins the workers even when the read failed
+    let meta = meta?;
     let (live_set, live_hash) = acc.committed();
     Ok(SnapshotCheck { meta, coins: acc.count, value, hash_serialized_3: h3.finish(), tracked_used, live_set, live_hash })
+}
+
+/// The ECMH sum of a stream of leaves. The map to the curve (a square root per try) is the cost, and the sum
+/// commutes, so off WASM the leaves go in batches to one worker per core, each with its own partial sum.
+struct PointSum {
+    #[cfg(not(target_arch = "wasm32"))]
+    par: Option<Par>,
+    batch: Vec<[u8; 32]>,
+    acc: Ecmh,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct Par {
+    tx: Option<std::sync::mpsc::SyncSender<Vec<[u8; 32]>>>,
+    workers: Vec<std::thread::JoinHandle<Result<Ecmh, String>>>,
+}
+
+const BATCH: usize = 4096;
+
+impl PointSum {
+    fn new() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            if n > 1 {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<[u8; 32]>>(2 * n);
+                let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+                let workers = (0..n).map(|_| {
+                    let rx = rx.clone();
+                    std::thread::spawn(move || -> Result<Ecmh, String> {
+                        let mut a = Ecmh::default();
+                        loop {
+                            let b = match rx.lock() { Ok(r) => r.recv(), Err(_) => return Err("ECMH worker: lock poisoned".into()) };
+                            let Ok(b) = b else { return Ok(a) };
+                            for l in &b {
+                                a.add_leaf(l)?;
+                            }
+                        }
+                    })
+                }).collect();
+                return PointSum { par: Some(Par { tx: Some(tx), workers }), batch: Vec::with_capacity(BATCH), acc: Ecmh::default() };
+            }
+        }
+        PointSum {
+            #[cfg(not(target_arch = "wasm32"))]
+            par: None,
+            batch: Vec::new(),
+            acc: Ecmh::default(),
+        }
+    }
+
+    fn push(&mut self, leaf: [u8; 32]) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = &self.par {
+            self.batch.push(leaf);
+            if self.batch.len() == BATCH {
+                let b = std::mem::replace(&mut self.batch, Vec::with_capacity(BATCH));
+                p.tx.as_ref().expect("open").send(b).map_err(|_| "ECMH worker stopped".to_string())?;
+            }
+            return Ok(());
+        }
+        self.acc.add_leaf(&leaf)
+    }
+
+    fn finish(mut self) -> Result<Ecmh, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(mut p) = self.par.take() {
+            let tx = p.tx.take().expect("open");
+            let last = std::mem::take(&mut self.batch);
+            let sent = if last.is_empty() { Ok(()) } else { tx.send(last).map_err(|_| "ECMH worker stopped".to_string()) };
+            drop(tx);
+            let mut total = Ecmh::default();
+            let mut err = sent.err();
+            for w in p.workers {
+                match w.join() {
+                    Ok(Ok(a)) => total.add_sum(&a),
+                    Ok(Err(e)) => { err.get_or_insert(e); }
+                    Err(_) => { err.get_or_insert("ECMH worker panicked".into()); }
+                }
+            }
+            return match err { Some(e) => Err(e), None => Ok(total) };
+        }
+        Ok(self.acc)
+    }
 }
 
 /// Checks a Core `dumptxoutset` snapshot against a verified core state with the live-coin hash (profile bit 6): the
@@ -814,6 +940,27 @@ mod tests {
         let limbs = |v: &BigUint| { let d = v.to_u32_digits(); let mut o = [0u32; 8]; o[..d.len()].copy_from_slice(&d); o };
         assert_eq!(w[..8], limbs(&rx));
         assert_eq!(w[8..], limbs(&ry));
+    }
+
+    #[test]
+    fn partial_sums_add_up() {
+        let pts: Vec<(Fq, Fq)> = (0u32..40).map(|i| ecmh_point(&Sha256::digest(i.to_le_bytes()).into()).unwrap()).collect();
+        let mut one = Ecmh::default();
+        let (mut a, mut b) = (Ecmh::default(), Ecmh::default());
+        for (i, (x, y)) in pts.iter().enumerate() {
+            one.add_affine(x, y);
+            if i % 3 == 0 { a.add_affine(x, y) } else { b.add_affine(x, y) }
+        }
+        let mut c = Ecmh::default();
+        c.add_sum(&a);
+        c.add_sum(&b);
+        c.add_sum(&Ecmh::default());
+        assert_eq!((c.committed(), c.count), (one.committed(), 40));
+        // a sum and its negation cancel through add_sum
+        let mut n = Ecmh::default();
+        for (x, y) in &pts { n.add_affine(x, &(-*y)); }
+        c.add_sum(&n);
+        assert_eq!(c.committed(), (0, [0; 16]));
     }
 
     #[test]
