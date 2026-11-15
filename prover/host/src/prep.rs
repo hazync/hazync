@@ -184,7 +184,9 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     // The BIP30-tracked flags as the guest derives them (tracked.rs): the fetcher's files carry none. Everything below
     // reads them from the annotated JSON, and a leaf bundle carries that JSON, so the leaf prover's witness has them too.
     let grandfathered = methods::NETWORK == "mainnet" && (height == 91_842 || height == 91_880);
-    let (annotated, _) = crate::tracked::annotate(j, smt, net().bip34_height, grandfathered, &|_, _, l| crate::lz::cl_has(l));
+    let (annotated, tracked) = crate::tracked::annotate(j, smt, net().bip34_height, grandfathered, &|_, _, l| crate::lz::cl_has(l));
+    // every tracked transaction, for a diff against reproduce/libzync-tracked.json (173 on mainnet to 974,136)
+    for t in &tracked { let mut d = *t; d.reverse(); println!("PREP_TRACKED h={height} txid={}", crate::hex(&d)); }
     let j = &annotated;
     assert_eq!(height, prev.height + 1, "prep: block {height} after state {}", prev.height);
     let bits = j["bits"].as_u64().unwrap() as u32;
@@ -419,6 +421,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 undo-data commitment, which this host cannot continue. Carry the run over with libzync-reforest first \
                 (docs/libzync/UNDO.md §8)", forest_mark_path(anchor_path));
     }
+    // a state at or above the first tracked coin continues only if a host that derives the tracked flags wrote it
+    if anchor_path != "genesis" { crate::tracked::check_flags_mark(anchor_path, prev.height); }
     if cont {
         let was = (prev.self_id, prev.lineage, prev.profile);
         crate::stamp(&mut prev);
@@ -517,6 +521,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes());
             // right after the state, before the stores: every save point the runner takes as complete has it
             if crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), h) { write_forest_mark(&format!("{out}/state_{h}.json")); }
+            crate::lz::write_atomic(&crate::tracked::flags_mark_path(&format!("{out}/state_{h}.json")), crate::tracked::FLAGS_MARK.as_bytes());
         }
         else { std::fs::write(format!("{out}/state_{h}.json"), json).unwrap(); }
         phase(5, t);

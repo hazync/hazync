@@ -494,7 +494,12 @@ fn work_u128(w: &[u8; 32]) -> u128 {
 // Coins without coin_height/coinbase/mtp get benign values (maturity/BIP68 no-op).
 fn build_full() -> (ChainState, BlockWitness) {
     let path = std::env::var("HAZYNC_BLOCK").unwrap_or_else(|_| "block_full.json".into());
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    build_full_from(serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap())
+}
+
+/// [`build_full`] from a block JSON already in memory (prove-range and the BIP30 replay hand it the JSON with the
+/// tracked flags derived, tracked.rs).
+fn build_full_from(j: serde_json::Value) -> (ChainState, BlockWitness) {
     let height = j["height"].as_u64().unwrap() as u32;
     let bits = j["bits"].as_u64().unwrap() as u32;
     let time = j["time"].as_u64().unwrap() as u32;

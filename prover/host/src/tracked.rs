@@ -23,6 +23,41 @@ use bitcoin::hashes::Hash as _;
 use bitcoin::Transaction;
 use hazync_coinbase_smt::bip30::{REPEATABLE, REPEAT_HORIZON};
 
+/// The first block that creates a tracked coin: mainnet 147,396 (`cec2a159…`, reproduce/libzync-tracked.json, scanned
+/// 15.11.2026). Below it the flags the old host gave are the guest's; from it on they are not. Signet has none (BIP34
+/// from block 1, so no coinbase indicates a later height before it); regtest (the rig) may have one anywhere.
+pub(crate) fn first_tracked_height() -> u32 {
+    match methods::NETWORK { "signet" => u32::MAX, "regtest" => 1, _ => 147_396 }
+}
+
+/// The save-point marker of a prep that derives the tracked flags (`state_<h>.flags` beside `state_<h>.json`). A prep
+/// continues from a state at or above [`first_tracked_height`] only with it: a store written by a host that read the
+/// flags from the block files (before 15.11.2026) is wrong from there on, and nothing in its files says so otherwise.
+pub(crate) const FLAGS_MARK: &str = "T1\n";
+
+pub(crate) fn flags_mark_path(state_json: &str) -> String {
+    format!("{}.flags", state_json.strip_suffix(".json").unwrap_or(state_json))
+}
+
+/// Refuses to continue from `state_json` at `height` when it lacks the marker (see [`FLAGS_MARK`]).
+pub(crate) fn check_flags_mark(state_json: &str, height: u32) {
+    if height < first_tracked_height() { return; }
+    let m = std::fs::read_to_string(flags_mark_path(state_json)).unwrap_or_default();
+    assert!(m == FLAGS_MARK, "{state_json}: no tracked-flag marker ({}): this state is at {height}, at or above the first \
+            tracked coin ({}), and was written by a host that took the BIP30-tracked flag from the block files, so its coin \
+            log, live-coin hash and block forest are not the guest's. Prep again from below {} (from genesis)",
+            flags_mark_path(state_json), first_tracked_height(), first_tracked_height());
+}
+
+/// A leaf bundle's block JSON at or above [`first_tracked_height`] must carry the derived flags (`coinbase_flags`, which
+/// [`annotate`] always writes): a bundle cut by a prep that read them from the file cannot be proved by mistake.
+pub(crate) fn check_bundle_json(height: u32, block_json: &[u8]) {
+    if height < first_tracked_height() { return; }
+    let j: serde_json::Value = serde_json::from_slice(block_json).expect("leaf bundle: the block JSON does not parse");
+    assert!(j.get("coinbase_flags").is_some(), "leaf bundle for block {height}: its block JSON has no coinbase_flags, so it was \
+            cut by a prep that read the BIP30-tracked flag from the block files; its witnesses are not the guest's. Cut it again");
+}
+
 /// The network's BIP34 height (libzync/src/net.rs).
 pub(crate) fn bip34_height() -> u32 {
     match methods::NETWORK { "signet" => libzync::net::SIGNET.bip34_height, "regtest" => libzync::net::REGTEST.bip34_height,
@@ -93,7 +128,7 @@ pub(crate) fn annotate(j: &serde_json::Value, smt: &Smt, bip34_height: u32, gran
         for (inp, p) in tx.input.iter().zip(prevouts.iter_mut()) {
             let op = inp.previous_output;
             let ptxid = op.txid.to_byte_array();
-            let file = p["coin_is_coinbase"].as_u64().unwrap_or(0) as u32;
+            let file = p["coin_is_coinbase"].as_u64().expect("prevout coin_is_coinbase") as u32;
             let bit = if let Some(f) = created.get(&ptxid) {
                 f & 2
             } else if smt.get(&ptxid).is_some() {
@@ -118,6 +153,8 @@ pub(crate) fn annotate(j: &serde_json::Value, smt: &Smt, bip34_height: u32, gran
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CB_147396: &str = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0a04cd9a830002c3050105ffffffff044605f108000000001976a914f27b35cd5c2b18e326f1e3fcad8f9fa2184112c188ac7e645810000000001976a9146a61a4a4b25c46b819636ba236f648a09382fe9388acd141a54a000000001976a914c02052ef85d5c7144c6bcc32d047897840efbf2d88ac3b241ec6000000001976a914dd34473bf0607dcb0483e92e6b3422a86979300588ac00000000";
 
     fn cb_with(script_sig: &str) -> Transaction {
         // a coinbase: version 1, one null input with this scriptSig, one output
@@ -152,7 +189,7 @@ mod tests {
     #[test]
     fn annotate_sets_the_guests_flags() {
         use bitcoin::consensus::serialize;
-        let cb = cb_with("041f7e3201");
+        let cb: Transaction = deserialize(&crate::hx(CB_147396)).unwrap();
         let cb_txid = cb.compute_txid().to_byte_array();
         let (old_t, old_u) = ([0x11u8; 32], [0x22u8; 32]); // earlier coins: T tracked, U not
         let mut smt = Smt::new();
@@ -185,8 +222,35 @@ mod tests {
     }
 
     #[test]
+    fn old_states_and_bundles_are_refused_from_the_first_tracked_coin() {
+        if methods::NETWORK != "mainnet" { return; }
+        let d = std::env::temp_dir().join(format!("hz-tracked-mark-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = d.join("state_147396.json").to_string_lossy().to_string();
+        check_flags_mark(&st, 147_395); // below: no marker needed
+        assert!(std::panic::catch_unwind(|| check_flags_mark(&st, 147_396)).is_err(), "no marker at 147,396");
+        std::fs::write(flags_mark_path(&st), FLAGS_MARK).unwrap();
+        check_flags_mark(&st, 147_396);
+        std::fs::write(flags_mark_path(&st), "U0\n").unwrap();
+        assert!(std::panic::catch_unwind(|| check_flags_mark(&st, 600_000)).is_err(), "another marker");
+        let _ = std::fs::remove_dir_all(&d);
+        let old = br#"{"height": 147396, "txs": []}"#;
+        check_bundle_json(147_395, old);
+        assert!(std::panic::catch_unwind(|| check_bundle_json(147_396, old)).is_err());
+        check_bundle_json(147_396, br#"{"height": 147396, "coinbase_flags": 3, "txs": []}"#);
+    }
+
+    #[test]
     fn indicated_heights_as_the_guest() {
-        // mainnet 147,396's coinbase (cec2a159…): a push of 1f7e3201, 20,086,303: tracked (147,396 < it < 100M)
+        // mainnet 147,396's real coinbase, the first tracked coin: a 4-byte push cd9a8300 (the 0x00 is CScriptNum's sign
+        // pad), 8,624,845 > 147,396; txid cec2a159… (reproduce/libzync-tracked.json)
+        let real: Transaction = deserialize(&crate::hx(CB_147396)).unwrap();
+        let mut id = real.compute_txid().to_byte_array();
+        id.reverse();
+        assert_eq!(crate::hex(&id), "cec2a159481a406d84da03cf5de1cd4b8b9cedc4eef8e5b6e13eeaa34a023907");
+        assert_eq!(indicated_height(&real), 8_624_845);
+        assert_eq!(coinbase_flags(147_396, 227_931, &real, None, false), 3);
+        // another tracked one (a9f87755…, block ~170k): a push of 1f7e3201, 20,086,303
         assert_eq!(indicated_height(&cb_with("041f7e3201")), 20_086_303);
         // the common early form `04 ffff001d …` reads as 0x1d00ffff: not below the horizon
         assert_eq!(indicated_height(&cb_with("04ffff001d0104")), 0x1d00ffff);
