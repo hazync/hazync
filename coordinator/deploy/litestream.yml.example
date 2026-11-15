@@ -36,11 +36,13 @@ dbs:
       secret-access-key: <R2 secret access key>
   # Hazync v2 (2026-11-12): the libzync coordinator's ledger, replicated beside v1's. The unit needs write access to
   # its directory for the -litestream tracking files: dropins/litestream-zz-hazync-lz.conf.
+  # From the board reset to 46666b6f (libzync/RESET_v026.md, step 7) the fresh ledger replicates under a NEW path: a
+  # new database at the old path would meet the 8888d59c board's replica (coordinator-lz), which stays as the record.
   - path: /var/lib/hazync-lz/coordinator.db
     replica:
       type: s3
       bucket: hazync-ledger
-      path: coordinator-lz
+      path: coordinator-lz-46666b6f
       endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
       region: auto
       force-path-style: true

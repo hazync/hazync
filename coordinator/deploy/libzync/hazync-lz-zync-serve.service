@@ -4,11 +4,12 @@ After=network.target
 
 [Service]
 User=hazync
-# The demo zyncAPP (hazync.org/zapp/) checks facts against the real mainnet 1..200 proof (experimental/libzync-bench/zapp,
-# image 8888d59c): the coin-log history and the counting trie at block 200 that proof ends on. The service holds no
-# secrets and proves nothing: the page verifies the proof in the browser and checks every fact against it.
-# state.trie and proof.rcpt are kept at the board's spine by hazync-lz-zapp-follow (ROADMAP O2); before its first run,
-# install the 1..200 demo as history.bin + state.trie + proof.rcpt (experimental/libzync-bench/zapp).
+# The demo zyncAPP (hazync.org/zapp/) checks facts against a real genesis-anchored mainnet proof: the coin-log history
+# and the counting trie at the block that proof ends on. The service holds no secrets and proves nothing: the page
+# verifies the proof in the browser and checks every fact against it.
+# history.bin, state.trie and proof.rcpt are kept at the board's spine by hazync-lz-zapp-follow (ROADMAP O2). On a
+# fresh board (no spine yet) they come from a proof of the board's own image, never an older image's: the board's
+# first spine, or a seed receipt the follower is run on once (libzync/RESET_v026.md, step 9).
 ExecStart=/opt/hazync-lz/bin/zync-serve /var/lib/hazync-lz/zapp/history.bin 127.0.0.1:8601 /var/lib/hazync-lz/zapp/state.trie
 Restart=on-failure
 RestartSec=10

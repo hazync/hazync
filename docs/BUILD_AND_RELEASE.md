@@ -34,8 +34,12 @@ refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
 - **Gates before publishing:** every host that runs on the release box answers `method-id` with the published id;
   one that cannot (CUDA without a driver, Windows) is checked from its bytes, or, stronger, by
   `HAZYNC_ATTEST_<asset>=<id>` from an operator who ran it. `scripts/check-release-verifiers.sh` runs the staged
-  verifiers (CLI, WASM through its glue, runnable hosts) on the real mainnet 1..200 receipt (`DEMO`) and on tampered
-  copies (`FAIL`).
+  verifiers (CLI, WASM through its glue, runnable hosts) on a real receipt by the release's own image (mainnet block 1,
+  `experimental/libzync-bench/zapp/mainnet_1_1_<id>.rcpt`, `DEMO`), the CLI also on v0.24.0's 1..200 receipt by the
+  earlier image it keeps (`DEMO`), and on tampered copies (`FAIL`). A host accepts only journals its own image
+  committed, so **a re-baseline needs a new reference receipt**: a CPU proof of block 1 (`host libzync-prove-range 1 1
+  testdata/libzync/mainnet genesis <out>`, 942 s on 6 cores for `46666b6f`), also used by `prover/build-release.sh`'s
+  smoke test.
 
 The scripts are authoritative: `scripts/release.sh`, `scripts/package-release.sh`, `scripts/check-dist.sh`,
 `scripts/windows-host.sh`, `scripts/check-release-verifiers.sh`, `.github/workflows/release-sign.yml`,
@@ -347,8 +351,8 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    from its bytes** unless an operator passes `HAZYNC_ATTEST_hazync_host_x86_64_linux_gnu_cuda=<id measured on a
    GPU>` (preferred; the bytes must still agree). The Windows zip is checked from its bytes;
    `HAZYNC_ATTEST_hazync_host_x86_64_windows_cuda_zip=<id>` may be passed by an operator who ran it. Then
-   `scripts/check-release-verifiers.sh dist` runs the staged verifiers on the real mainnet 1..200 receipt and on
-   tampered copies.
+   `scripts/check-release-verifiers.sh dist` runs the staged verifiers on the real mainnet block 1 receipt by this
+   release's image (and the CLI on v0.24.0's 1..200 receipt) and on tampered copies.
 6. **Publish.** Annotated tag pushed, then `gh release create` with **all nine** assets in one call
    (`release-sign.yml` signs what is attached at publish and picks up nothing later); the release is read back
    and must carry exactly those nine, each the staged size.
