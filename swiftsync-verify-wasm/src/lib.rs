@@ -246,6 +246,63 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
     }
 }
 
+/// `verify_statement(ptr, len)` (feature `statement`, docs/libzync/STATEMENT_ZAPP.md): the `verify_frame` input followed by
+/// `[u32 n][statement JSON][u32 n][expect "<height>:<hash>"][u32 n][purpose][u32 n][nonce]`. expect, purpose and nonce
+/// come from the PAGE (what the reader asked for and the block it trusts), never from the statement's sender; each may
+/// be empty, and then the verdict is at most DEMO. Returns `verify_frame`'s JSON plus `statement`: {ok, what}.
+#[cfg(feature = "statement")]
+#[no_mangle]
+pub extern "C" fn verify_statement(ptr: *mut u8, len: usize) -> *const u8 {
+    let input = unsafe { Vec::from_raw_parts(ptr, len, len) };
+    let mut f = Frame { b: &input, i: 0 };
+    let res = run_frame(&mut f).and_then(|r| {
+        let st: swiftsync_verify::statement::Statement = serde_json::from_slice(f.chunk()?).map_err(|e| format!("statement JSON: {e}"))?;
+        let mut text = || -> Result<String, String> { Ok(std::str::from_utf8(f.chunk()?).map_err(|_| "not UTF-8".to_string())?.to_string()) };
+        let (expect, purpose, nonce) = (text()?, text()?, text()?);
+        if f.i != input.len() {
+            return Err("input frame has trailing bytes".to_string());
+        }
+        Ok((r, st, expect, purpose, nonce))
+    });
+    let ((mut rep, image), st, expect, purpose, nonce) = match res { Ok(x) => x, Err(e) => return fail(e) };
+    let verdict_ok = rep.verdict == Verdict::Ok;
+    let result: Result<swiftsync_verify::statement::Checked, String> = match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
+        None => Err("statement NOT checked: the receipt did not verify".into()),
+        Some(cs) => {
+            let tip = match swiftsync_verify::parse_expect(expect.trim()) {
+                Some((h, x)) => swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash),
+                None => false,
+            };
+            if !expect.trim().is_empty() && !tip {
+                Err(format!("expect {expect:?}: not the proof's tip"))
+            } else {
+                let ch = swiftsync_verify::statement::Challenge {
+                    purpose: Some(purpose.as_str()).filter(|p| !p.is_empty()),
+                    nonce: Some(nonce.as_str()).filter(|n| !n.is_empty()),
+                };
+                swiftsync_verify::statement::check_statement(cs, rep.undo_from, &st, &ch).map(|c| {
+                    if verdict_ok && (!tip || !c.challenged) { rep.verdict = Verdict::Demo; }
+                    c
+                })
+            }
+        }
+    };
+    if result.is_err() { rep.verdict = Verdict::Fail; }
+    let statement = match &result {
+        Ok(c) if rep.verdict == Verdict::Ok => serde_json::json!({"ok": true, "what": c.line, "total": c.total, "scripts": c.scripts}),
+        Ok(c) => serde_json::json!({"ok": false, "what": format!("holds, but the verdict is DEMO (chain identity, challenge or work): {}", c.line), "total": c.total, "scripts": c.scripts}),
+        Err(e) => serde_json::json!({"ok": false, "what": e}),
+    };
+    ret(serde_json::json!({
+        "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
+        "image": image.method_id_hex,
+        "network": image.network,
+        "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
+        "height": rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail).map(|c| c.height),
+        "statement": statement,
+    }).to_string())
+}
+
 /// The built-in image id for a network code (0 mainnet, 1 signet), for the page to display.
 #[no_mangle]
 pub extern "C" fn image_id(network: u32) -> *const u8 {

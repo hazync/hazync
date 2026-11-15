@@ -1,63 +1,63 @@
 zync-statement: signed 2 entries; 0 still unsigned
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
   [ok] --statement "<tmp>/s.json": statement: 2 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
   [ok] --statement "<tmp>/s.json": statement: 2 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (NOT compared with your challenge: give --purpose and --nonce)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose loan --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose loan --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/s.json": purpose "audit-15.11.2026" is not the one asked for ("loan")
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 0000 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 0000 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/s.json": nonce "5be1" is not the one asked for ("0000")
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/t1.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/t1.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/t1.json": the statement's total is 1 sat, its facts sum to 0 sat
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/t2.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/t2.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/t2.json": the statement is about block 199, the proof's tip is 200 (a statement is at the proof's tip)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/t3.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/t3.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/t3.json": the statement names block 0000000000000000000000000000000000000000000000000000000000000000 at 200, the proof's tip is 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/t4.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
-  [FAIL] --statement "<tmp>/t4.json": entry 0 (script 00147966b4c7f6837c29b40b2928ca9ae92ec6277b30): BIP-322 simple: Invalid witness
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/t4.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+  [FAIL] --statement "<tmp>/t4.json": entry 0 (script 001432ea5877ecf2442af5e282e93f4e3c165cc611e6): BIP-322 simple: Invalid witness
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/t5.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/t5.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/t5.json": entry 0: the trie proof does not hold against the proof's trie root (NotCovered)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
 zync-statement: signed 1 entry; 1 still unsigned
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/p.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/p.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/p.json": entry 1 (script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac): no signature
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/t7.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/t7.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --statement "<tmp>/t7.json": the statement names core image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c, the proof was made by 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] --expect: block 200 is 0000000000000000000000000000000000000000000000000000000000000000; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
   [ok] --statement "<tmp>/s.json": statement: 2 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/fake_block_2501.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/fake_block_2501.rcpt (expect exit 1)
   [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== env RISC0_DEV_MODE=1 swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/fake_block_2501.rcpt (expect exit 1)
+== env RISC0_DEV_MODE=1 swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/fake_block_2501.rcpt (expect exit 1)
   [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.u8QCjExXTY/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --statement /tmp/tmp.ACgD5nbVpD/s.json swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt (expect exit 1)
   [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): verification indicates proof is invalid
   [FAIL] "<tmp>/s.json": NOT checked: the receipt did not verify
 SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
@@ -65,4 +65,16 @@ exit=1 PASS
 == zync-statement add-sig with entry 1's signature for entry 0 (expect exit 1)
 zync-statement: BIP-322 simple: Invalid witness
 exit=1 PASS
-swiftsync-verify test_statement.sh: 16/16 as expected
+== node swiftsync-verify-wasm/test-statement.mjs (expect exit 0)
+PASS  holds (demo: below minimum work)   demo (want demo): holds, but the verdict is DEMO (chain identity, challenge or work): statement: 2 script(s), 0 unspent coin(s), 0 sat in total at block 200 00
+PASS  another purpose                    fail (want fail): purpose "audit-15.11.2026" is not the one asked for ("other")
+PASS  another nonce                      fail (want fail): nonce "5be1" is not the one asked for ("other")
+PASS  tampered total                     fail (want fail): the statement's total is 1 sat, its facts sum to 0 sat
+PASS  wrong height                       fail (want fail): the statement is about block 199, the proof's tip is 200 (a statement is at the proof's tip)
+PASS  another tip expected               fail (want fail): expect "200:0000000000000000000000000000000000000000000000000000000000000000": not the proof's tip
+PASS  swapped signatures                 fail (want fail): entry 0 (script 001432ea5877ecf2442af5e282e93f4e3c165cc611e6): BIP-322 simple: Invalid witness
+PASS  dev-mode FakeReceipt               fail (want fail)
+PASS  verifyFacts, block 9 balance       demo (want demo): holds on this chain, but the chain is not shown to be the network's: script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909
+9/9 as expected (wasm statement)
+exit=0 PASS
+swiftsync-verify test_statement.sh: 17/17 as expected

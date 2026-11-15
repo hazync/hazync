@@ -7,6 +7,8 @@
 //   const f = v.verifyFacts({ ...same, facts: { tries: [trieFact] }, expect: '<height>:<hash>' });
 //   (expect: the network's block at the proof's height from a source YOU trust, never from the fact server)
 //   r.verdict  // 'ok' | 'demo' | 'fail'
+//   const s = v.verifyStatement({ ...same, statement, expect, purpose, nonce });  // a build with feature `statement`
+//   (purpose, nonce: what YOU asked the holder for; s.statement = {ok, what, total, scripts})
 //   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });   // the header-chain zyncAPP
 //   h.verdict, h.height, h.hash, h.chainwork
 
@@ -17,10 +19,15 @@ function readString(memory, ptr) {
 }
 
 // image: 'product' (coin log + counting trie + live-coin hash), 'coinlog', or the built-in profile.
-function frame({ network, image, now, receipt, anchorJson, imageHex, facts, expect }) {
+function frame({ network, image, now, receipt, anchorJson, imageHex, lineage, facts, expect, statement, purpose, nonce }) {
   const enc = new TextEncoder();
   const parts = [receipt, enc.encode(anchorJson || ''), enc.encode(imageHex || '')];
+  // The lineage chunk is optional only when it is LAST: run_frame reads one whenever bytes follow the image id, so a
+  // call with facts or a statement must send it (empty = none), or the facts are read as the lineage (since f713e3a6).
+  if (lineage !== undefined || facts !== undefined || statement !== undefined) parts.push(enc.encode(lineage || ''));
   if (facts !== undefined) parts.push(enc.encode(JSON.stringify(facts)), enc.encode(expect || ''));
+  if (statement !== undefined) parts.push(enc.encode(typeof statement === 'string' ? statement : JSON.stringify(statement)),
+    enc.encode(expect || ''), enc.encode(purpose || ''), enc.encode(nonce || ''));
   const out = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
   const view = new DataView(out.buffer);
   out[0] = (network === 'signet' ? 1 : network === 'mainnet' ? 0 : 255)
@@ -41,7 +48,7 @@ export async function loadVerifier(source) {
     typeof Response !== 'undefined' && resolved instanceof Response
       ? await WebAssembly.instantiateStreaming(resolved, {})
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
-  const { alloc, verify_frame, verify_facts, image_id, verify_headers, headers_image_id, memory } = instance.exports;
+  const { alloc, verify_frame, verify_facts, verify_statement, image_id, verify_headers, headers_image_id, memory } = instance.exports;
   const call = (fn, args) => {
     const bytes = frame(args);
     const ptr = alloc(bytes.length);
@@ -57,6 +64,12 @@ export async function loadVerifier(source) {
     /** As verify, plus facts ({coins, journeys, tries}) checked against the verified state; `expect` ('<height>:<hash>')
      *  is the tip from a source you trust, passed beside the facts, never inside them. */
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },
+    /** A statement of balance (docs/libzync/STATEMENT_ZAPP.md), only in a build with feature `statement`: expect,
+     *  purpose and nonce are YOURS (the tip you trust, the challenge you gave the holder), never the sender's. */
+    verifyStatement(args) {
+      if (!verify_statement) throw new Error('this .wasm was built without the statement feature');
+      return call(verify_statement, { ...args, facts: undefined, statement: args.statement });
+    },
     /** The header-chain zyncAPP: receipts = [first from genesis, then each run chained to the one before];
      *  expect ('<height>:<hash>') is the tip from a source you trust. `now` defaults to this device's clock. */
     verifyHeaders({ receipts, now, imageHex, expect }) {

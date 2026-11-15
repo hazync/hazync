@@ -50,5 +50,11 @@ S1=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][1]['s
 S0SPK=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][0]['fact']['script_pubkey'])")
 cp $T/s.json $T/a.json; $Z add-sig $T/a.json $S0SPK simple "$S1" 2>&1 | sed "s#$T#<tmp>#g"; got=${PIPESTATUS[0]}
 N=$((N+1)); if [ "$got" = 1 ]; then echo "exit=$got PASS"; else echo "exit=$got WRONG"; BAD=$((BAD+1)); fi
+# 11. the same statement through the WASM build (feature `statement`), when one is given: STATEMENT_WASM=<.wasm>
+if [ -n "${STATEMENT_WASM:-}" ]; then
+    echo "== node swiftsync-verify-wasm/test-statement.mjs (expect exit 0)"
+    node swiftsync-verify-wasm/test-statement.mjs "$STATEMENT_WASM" $T/s.json audit-15.11.2026 5be1 | cut -c1-200; got=${PIPESTATUS[0]}
+    N=$((N+1)); if [ "$got" = 0 ]; then echo "exit=$got PASS"; else echo "exit=$got WRONG"; BAD=$((BAD+1)); fi
+fi
 echo "swiftsync-verify test_statement.sh: $((N-BAD))/$N as expected"
 [ "$N" -gt 0 ] && [ "$BAD" = 0 ]
