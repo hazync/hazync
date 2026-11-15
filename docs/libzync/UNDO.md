@@ -151,6 +151,9 @@ libzync-undo-hashes <lo> <hi> --bitcoin-cli "<cmd>" [--jobs N]      # each block
    the commitment without that marker: a run made before the commitment cannot be continued by mistake.
 5. **Board-prep** cuts its window of bundles again after the board resets (or is re-forested the same way).
 
+The board's own switch to v0.26.0, with this box's paths and commands, is
+[`coordinator/deploy/libzync/RESET_v026.md`](../../coordinator/deploy/libzync/RESET_v026.md).
+
 **Tested** (2026-11-14, hazync-coord, CPU, the node there; `accept.sh` of the PR):
 - prep 1..2,000 by the released v0.25.0 host (`8888d59c`), re-forested by the new host: **2,000 of 2,000
   `state_<h>.json` byte-identical** to prep 1..2,000 by the new host, and the three leaf bundles cut on the way (171,

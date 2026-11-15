@@ -10,3 +10,15 @@ proof: DEMO, genesis to 200, tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663
   history 4104ae1a62fe09c5...: DEMO - holds on this chain, but the chain is not shown to be the network's: script 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac: complete history at height 200: 1 coin(s) ever paid, 0 spent, 1 unspent holding 1000000000 sat
     tampered history: FAIL (want FAIL)
 CHECK_OK
+
+# mainnet_1_1_46666b6f.rcpt (2026-11-15): a REAL CPU proof (RISC0_DEV_MODE unset) of mainnet block 1 from genesis under
+# v0.26.0's published image 46666b6f, the release smoke test's and scripts/check-release-verifiers.sh's reference receipt.
+# v0.26.0's empty lineage means its host accepts only journals it committed itself, so it refuses the 8888d59c receipt
+# above (2 FAILs: "receipt verifies against METHOD_ID 46666b6f" and "journal is a ChainState v2 committed by this image").
+#   host libzync-prove-range 1 1 prover/testdata/libzync/mainnet genesis n1   (release build of main 1b4ac3db,
+#     method-id 46666b6f..., docker --cpuset-cpus 0-5 on hazync-coord, AMD EPYC 9645)
+#   LZ_STATS trie h=1 segments=1 total_cycles=262144; aggregate h=1 segments=3 total_cycles=3145728 user_cycles=2440445
+#   LZ_PROVE_RANGE_DONE 1..=1 in 942 s
+#   receipt 225,650 bytes, sha256 35f527be9846c5dd541a935971532100f8789df1ee343889c505f229ed78e5fd
+#   host libzync-verify: LIBZYNC_VERIFY_DEMO at height 1, exit 2; swiftsync-verify --network mainnet --product: DEMO, exit 2,
+#     tip 00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048 at height 1
