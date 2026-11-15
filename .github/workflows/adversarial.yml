@@ -77,9 +77,9 @@ jobs:
       - name: Release gate CONTROL - a verifier that accepts everything must fail it
         run: |
           mkdir -p bad && cp rel/* bad/
-          printf '#!/bin/sh\necho "receipt verifies against image %s (mainnet)"\necho "chain: tip %s at height 200"\necho SWIFTSYNC_VERIFY_DEMO\nexit 2\n' \
+          printf '#!/bin/sh\necho "receipt verifies against image %s (mainnet)"\necho "chain: tip %s at height 1, cum_work 0x0"\necho SWIFTSYNC_VERIFY_DEMO\nexit 2\n' \
             "$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)" \
-            000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 > bad/hazync-verify-x86_64-linux-gnu
+            00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048 > bad/hazync-verify-x86_64-linux-gnu
           chmod +x bad/hazync-verify-x86_64-linux-gnu
           if ./scripts/check-release-verifiers.sh bad; then
             echo "::error::the release gate passed a verifier that accepts tampered receipts"; exit 1
