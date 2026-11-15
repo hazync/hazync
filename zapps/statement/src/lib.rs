@@ -1,4 +1,4 @@
-//! Statement of balance (docs/libzync/STATEMENT_ZAPP.md): "the coins at these scripts held X sat in total at block H,
+//! Balance statement zyncAPP (docs/libzync/STATEMENT_ZAPP.md): "the coins at these scripts held X sat in total at block H,
 //! and the holder of each script signed this statement". A statement is the counting-trie BALANCE fact of each script at
 //! the proof's tip H, plus a BIP-322 signature by each script over one message that binds the statement: the network,
 //! the core image, H and its block hash, the script list, the total, a purpose and a nonce. No new guest: the facts are
@@ -8,14 +8,16 @@
 //! for each script at the time of signing signed this message. NOT that the signer controls the coins exclusively, nor
 //! that the coins are still unspent after H (STATEMENT_ZAPP.md §4).
 
-use crate::{check_trie_fact, hex, unhex, ChainState, TrieFact, PROFILE_SIGNET};
+pub mod p2pk;
+
+use swiftsync_verify::{check_trie_fact, hex, unhex, ChainState, TrieFact, PROFILE_SIGNET};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 /// The statement format this crate reads and writes.
 pub const STATEMENT_VERSION: u32 = 1;
 /// The first line of every statement message (domain separation from any other signed text).
-pub const MESSAGE_HEADER: &str = "Hazync statement of balance v1";
+pub const MESSAGE_HEADER: &str = "Hazync balance statement v1";
 /// Most scripts in one statement (each entry is a trie proof and a signature check).
 pub const MAX_ENTRIES: usize = 10_000;
 /// Longest purpose or nonce, in bytes.
@@ -154,9 +156,19 @@ pub fn check_signature(network: &str, script: &[u8], format: &str, sig: &str, ms
     if sig.is_empty() {
         return Err("no signature".into());
     }
-    // bip322 takes an address; scripts with no address form (P2PK, bare multisig, non-standard) cannot sign here
+    use base64::Engine;
+    // P2PK has no address, so the crate cannot take it: BIP-322 full, checked by p2pk.rs
+    if p2pk::p2pk_key(script).is_some() {
+        if format != "full" {
+            return Err(format!("format {format:?}: a P2PK script signs in BIP-322 full only"));
+        }
+        let b = base64::engine::general_purpose::STANDARD.decode(sig.strip_prefix(bip322::FULL_SIGNATURE_PREFIX).unwrap_or(sig))
+            .map_err(|_| "BIP-322 full: not base64".to_string())?;
+        return p2pk::verify(script, msg.as_bytes(), &b);
+    }
+    // bip322 takes an address; scripts with no address form (bare multisig, non-standard) cannot sign here
     let addr = Address::from_script(Script::from_bytes(script), net)
-        .map_err(|_| "this script has no address form (P2PK, bare multisig or non-standard): the bip322 crate cannot check a signature for it".to_string())?
+        .map_err(|_| "this script has no address form (bare multisig or non-standard): the bip322 crate cannot check a signature for it".to_string())?
         .to_string();
     let unconditional = |v: bip322::Verification| match v {
         bip322::Verification::Valid { time, age } if time == LockTime::ZERO && age == Sequence(0) => Ok(()),
@@ -171,7 +183,7 @@ pub fn check_signature(network: &str, script: &[u8], format: &str, sig: &str, ms
     }
 }
 
-/// Checks a statement against a chain state that passed [`crate::verify`]: it is about this proof's network, image, tip
+/// Checks a statement against a chain state that passed [`swiftsync_verify::verify`]: it is about this proof's network, image, tip
 /// height and block; the scripts are distinct; each fact is a balance fact for its script that holds against the
 /// state's trie root; the total is their sum; the purpose and nonce are the challenge's (when given); and each script
 /// signed the statement's message.
@@ -249,7 +261,7 @@ pub fn draft(cs: &ChainState, trie: &libzync::trie_store::TrieStore, scripts: &[
     let mut entries = Vec::new();
     let mut total = 0u64;
     for spk in &s {
-        let f = crate::make_trie_fact(trie, "balance", spk, None, None)?;
+        let f = swiftsync_verify::make_trie_fact(trie, "balance", spk, None, None)?;
         let (_, v) = balance_of(f.expect.as_deref().unwrap_or("never"))?;
         total = total.checked_add(v).ok_or("the values overflow")?;
         entries.push(Entry { fact: f, format: String::new(), signature: String::new() });
@@ -263,7 +275,8 @@ pub fn draft(cs: &ChainState, trie: &libzync::trie_store::TrieStore, scripts: &[
 }
 
 /// The scripts a private key can sign for with this crate's signer, and the format each uses: P2WPKH, P2SH-P2WPKH and
-/// P2TR (key path, BIP-86 tweak, no script tree) in BIP-322 simple, P2PKH in BIP-322 full.
+/// P2TR (key path, BIP-86 tweak, no script tree) in BIP-322 simple, P2PKH and P2PK (the key's own form) in BIP-322 full.
+/// Order: P2PKH, then (compressed keys only) P2SH-P2WPKH, P2WPKH, P2TR, then P2PK.
 pub fn scripts_for_key(key: &bitcoin::PrivateKey) -> Vec<(Vec<u8>, &'static str)> {
     use bitcoin::{key::Secp256k1, CompressedPublicKey, ScriptBuf};
     let secp = Secp256k1::new();
@@ -276,6 +289,7 @@ pub fn scripts_for_key(key: &bitcoin::PrivateKey) -> Vec<(Vec<u8>, &'static str)
         let (x, _) = pk.inner.x_only_public_key();
         out.push((ScriptBuf::new_p2tr(&secp, x, None).to_bytes(), "simple"));
     }
+    out.push((p2pk::p2pk_script(key), "full"));
     out
 }
 
@@ -289,15 +303,17 @@ pub fn sign(st: &mut Statement, keys: &[bitcoin::PrivateKey]) -> Result<usize, S
         let spk = unhex(&e.fact.script_pubkey).ok_or("script_pubkey: not hex")?;
         for k in keys {
             let Some((_, fmt)) = scripts_for_key(k).into_iter().find(|(s, _)| *s == spk) else { continue };
+            let sig = if p2pk::p2pk_key(&spk).is_some() { p2pk::sign(k, msg.as_bytes())? } else {
             let addr = Address::from_script(Script::from_bytes(&spk), net).map_err(|e| e.to_string())?;
-            let sig = match fmt {
+            match fmt {
                 "simple" => bip322::sign_simple(&addr, &msg, std::slice::from_ref(k), None).map(|w| {
                     let mut b = Vec::new();
                     bitcoin::consensus::Encodable::consensus_encode(&w, &mut b).expect("vec write");
                     b
                 }),
                 _ => bip322::sign_full(&addr, &msg, std::slice::from_ref(k), None, bip322::LockParams::default()).map(|t| bitcoin::consensus::serialize(&t)),
-            }.map_err(|e| format!("bip322 sign: {e}"))?;
+            }.map_err(|e| format!("bip322 sign: {e}"))?
+            };
             use base64::Engine;
             e.format = fmt.into();
             e.signature = base64::engine::general_purpose::STANDARD.encode(sig);
@@ -315,13 +331,15 @@ mod tests {
     //! positive cases on the real trie are zero balances; the non-zero cases use a trie built here with coins for our
     //! scripts under the real proof's state (its trie root replaced: a state no receipt proves, labelled as such).
     use super::*;
-    use crate::{verify, Image, Inputs, Verdict};
+    use swiftsync_verify::{verify, Image, Inputs, Verdict};
     use bitcoin::PrivateKey;
 
     const P2PK_BLOCK9: &str = "410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac";
 
     fn vector(name: &str) -> Vec<u8> {
-        std::fs::read(format!("{}/vectors/{name}", env!("CARGO_MANIFEST_DIR"))).expect(name)
+        let here = format!("{}/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
+        let core = format!("{}/../../swiftsync-verify/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read(&here).or_else(|_| std::fs::read(&core)).expect(name)
     }
 
     /// A fresh random key from the OS (never printed).
@@ -393,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn real_p2pk_coins_cannot_sign() {
+    fn real_p2pk_coin_without_its_key() {
         let (cs, uf) = real();
         let k = key();
         let mut st = draft(&cs, &real_trie(), &[unhex(P2PK_BLOCK9).unwrap(), script(&k, 2)], "audit", "n").unwrap();
@@ -407,7 +425,15 @@ mod tests {
         st.entries[i].format = our.format.clone();
         st.entries[i].signature = our.signature.clone();
         let e = check_statement(&cs, uf, &st, &Challenge::default()).unwrap_err();
-        assert!(e.contains("no address form"), "{e}");
+        assert!(e.contains("signs in BIP-322 full only"), "{e}");
+        // a BIP-322 full P2PK signature by a key of ours, filed under block 9's script: the real fact holds, the
+        // signature does not (no one here holds that key)
+        let msg = message(&st).unwrap();
+        use base64::Engine;
+        st.entries[i].format = "full".into();
+        st.entries[i].signature = base64::engine::general_purpose::STANDARD.encode(p2pk::sign(&key(), msg.as_bytes()).unwrap());
+        let e = check_statement(&cs, uf, &st, &Challenge::default()).unwrap_err();
+        assert!(e.contains("entry 1") && e.contains("P2PK: to_sign is not BIP-322's") || e.contains("does not verify"), "{e}");
     }
 
     #[test]
@@ -504,9 +530,99 @@ mod tests {
         // the signed text is part of the format: a change here breaks every statement signed before it
         let (cs, _) = real();
         let st = draft(&cs, &real_trie(), &[unhex(P2PK_BLOCK9).unwrap()], "audit", "n1").unwrap();
-        assert_eq!(message(&st).unwrap(), "Hazync statement of balance v1\nnetwork: mainnet\n\
+        assert_eq!(message(&st).unwrap(), "Hazync balance statement v1\nnetwork: mainnet\n\
             core image: 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4\n\
             block: 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320\n\
             scripts: 1 sha256 ".to_string() + &hex(&script_list_hash(&[unhex(P2PK_BLOCK9).unwrap()])) + "\ntotal: 2800000000 sat\npurpose: audit\nnonce: n1");
+    }
+
+    /// A key in its uncompressed form (P2PK coins of 2009 use one).
+    fn uncompressed() -> PrivateKey { let mut k = key(); k.compressed = false; k }
+
+    fn b64(b: &[u8]) -> String { use base64::Engine; base64::engine::general_purpose::STANDARD.encode(b) }
+    fn unb64(s: &str) -> Vec<u8> { use base64::Engine; base64::engine::general_purpose::STANDARD.decode(s).unwrap() }
+
+    #[test]
+    fn p2pk_to_spend_and_to_sign_are_the_crates() {
+        // p2pk.rs builds to_spend itself (the crate's takes an address): for every script the crate takes, the same txid,
+        // and the same to_sign
+        let k = key();
+        for (spk, _) in scripts_for_key(&k).into_iter().filter(|(s, _)| p2pk::p2pk_key(s).is_none()) {
+            let a = bitcoin::Address::from_script(bitcoin::Script::from_bytes(&spk), bitcoin::Network::Bitcoin).unwrap();
+            for m in ["", "Hello World", "Hazync balance statement v1\nnonce: x"] {
+                let c = bip322::create_to_spend(&a, m).unwrap();
+                assert_eq!(p2pk::to_spend(&spk, m.as_bytes()).compute_txid(), c.compute_txid(), "to_spend {a} {m:?}");
+                let cs = bip322::create_to_sign(&c, None, bip322::LockParams::default()).unwrap().unsigned_tx;
+                assert_eq!(p2pk::to_sign(&spk, m.as_bytes()).unwrap().compute_txid(), cs.compute_txid(), "to_sign {a} {m:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn p2pk_both_key_forms_and_the_refusals() {
+        let (kc, ku, kw) = (key(), uncompressed(), key());
+        let (pc, pu) = (p2pk::p2pk_script(&kc), p2pk::p2pk_script(&ku));
+        assert_eq!((pc.len(), pu.len()), (35, 67), "compressed and uncompressed P2PK");
+        let owned = vec![(pc.clone(), &[5_000_000_000u64][..]), (pu.clone(), &[50_000][..]), (script(&kw, 2), &[7][..])];
+        let (cs, uf, trie) = synthetic(&owned);
+        let st = signed(&cs, &trie, &[pc.clone(), pu.clone(), script(&kw, 2)], &[kc, ku, kw]);
+        let c = check_statement(&cs, uf, &st, &ASK).unwrap();
+        assert_eq!((c.total, c.scripts), (5_000_050_007, 3));
+        let msg = message(&st).unwrap();
+        let ip = |spk: &Vec<u8>| st.entries.iter().position(|e| unhex(&e.fact.script_pubkey).as_ref() == Some(spk)).unwrap();
+        for (spk, what) in [(&pc, "compressed"), (&pu, "uncompressed")] {
+            let i = ip(spk);
+            let tx_bytes = unb64(&st.entries[i].signature);
+            assert_eq!(p2pk::verify(spk, msg.as_bytes(), &tx_bytes), Ok(()), "{what}");
+            let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&tx_bytes).unwrap();
+            let sig = tx.input[0].script_sig.instructions().next().unwrap().unwrap().push_bytes().unwrap().as_bytes().to_vec();
+            let with_sig = |sig: &[u8]| -> Vec<u8> {
+                let mut t = tx.clone();
+                t.input[0].script_sig = bitcoin::script::Builder::new().push_slice(bitcoin::script::PushBytesBuf::try_from(sig.to_vec()).unwrap()).into_script();
+                bitcoin::consensus::serialize(&t)
+            };
+            let with = |f: &dyn Fn(&mut bitcoin::Transaction)| -> Vec<u8> { let mut t = tx.clone(); f(&mut t); bitcoin::consensus::serialize(&t) };
+            let refuse = |b: &[u8], m: &[u8], want: &str| {
+                let e = p2pk::verify(spk, m, b).expect_err(want);
+                assert!(e.contains(want), "{what}: want {want:?}, got {e:?}");
+            };
+            // a changed message, a changed signature byte, another sighash type
+            refuse(&tx_bytes, b"another message", "to_sign is not BIP-322's");
+            let mut s2 = sig.clone(); let n = s2.len(); s2[n - 3] ^= 1; refuse(&with_sig(&s2), msg.as_bytes(), "does not verify");
+            for ty in [0x02u8, 0x03, 0x81] { let mut s2 = sig.clone(); *s2.last_mut().unwrap() = ty; refuse(&with_sig(&s2), msg.as_bytes(), "SIGHASH_ALL"); }
+            // high S (n - s), the same signature otherwise: BIP-322 LOW_S
+            let der = &sig[..sig.len() - 1];
+            let mut compact = bitcoin::secp256k1::ecdsa::Signature::from_der(der).unwrap().serialize_compact();
+            const N: [u8; 32] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+                                 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41];
+            let mut borrow = 0i16;
+            for j in (0..32).rev() {
+                let d = N[j] as i16 - compact[32 + j] as i16 - borrow;
+                compact[32 + j] = d.rem_euclid(256) as u8;
+                borrow = (d < 0) as i16;
+            }
+            let high = bitcoin::secp256k1::ecdsa::Signature::from_compact(&compact).unwrap();
+            let mut hs = high.serialize_der().to_vec(); hs.push(1);
+            refuse(&with_sig(&hs), msg.as_bytes(), "high-S");
+            // not strictly DER (a padded length), a non-minimal push, two pushes, a witness, a lock time, version 2
+            let mut bad = sig.clone(); bad[1] = bad[1].wrapping_add(1); refuse(&with_sig(&bad), msg.as_bytes(), "DER");
+            let mut nm = vec![0x4c, sig.len() as u8]; nm.extend_from_slice(&sig);
+            refuse(&with(&|t| t.input[0].script_sig = bitcoin::ScriptBuf::from_bytes(nm.clone())), msg.as_bytes(), "MINIMALDATA");
+            refuse(&with(&|t| { let mut b = t.input[0].script_sig.to_bytes(); b.insert(0, 0x51); t.input[0].script_sig = bitcoin::ScriptBuf::from_bytes(b) }), msg.as_bytes(), "exactly one push");
+            refuse(&with(&|t| t.input[0].witness.push([1u8])), msg.as_bytes(), "to_sign is not BIP-322's");
+            refuse(&with(&|t| t.lock_time = bitcoin::absolute::LockTime::from_height(900_000).unwrap()), msg.as_bytes(), "to_sign is not BIP-322's");
+            refuse(&with(&|t| t.version = bitcoin::transaction::Version(2)), msg.as_bytes(), "version 2");
+            // another key's P2PK signature over the same message
+            refuse(&p2pk::sign(&key(), msg.as_bytes()).unwrap(), msg.as_bytes(), "to_sign is not BIP-322's");
+        }
+        // the key forms swapped: the compressed key's signature does not verify for the uncompressed script of another key
+        let e = check_statement(&cs, uf, &{ let mut t = st.clone(); let (a, b) = (ip(&pc), ip(&pu)); t.entries[a].signature = st.entries[b].signature.clone(); t }, &ASK).unwrap_err();
+        assert!(e.contains("P2PK"), "{e}");
+        // a hybrid key (0x06 / 0x07) fails STRICTENC; a P2PK entry in BIP-322 simple is refused
+        let mut hy = pu.clone(); hy[1] = 0x06;
+        assert!(p2pk::verify(&hy, msg.as_bytes(), &[]).unwrap_err().contains("STRICTENC"));
+        let mut t = st.clone(); let i = ip(&pc); t.entries[i].format = "simple".into();
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("full only"));
+        let _ = b64(&[]);
     }
 }

@@ -37,20 +37,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
 sha2 = "0.10"
-# The statement-of-balance zyncAPP (docs/libzync/STATEMENT_ZAPP.md): BIP-322 signatures, verified by the rust-bitcoin
-# project's bip322 crate (CC0-1.0, its tests run BIP-322's official vectors), not by code of our own.
-bip322 = { version = "=0.0.12", optional = true }
-bitcoin = { version = "0.32", optional = true }
-base64 = { version = "0.23", optional = true }
-
-[features]
-default = ["statement"]
-statement = ["dep:bip322", "dep:bitcoin", "dep:base64"]
-
-[[bin]]
-name = "zync-statement"
-path = "src/zync_statement.rs"
-required-features = ["statement"]
 
 [profile.release]
 opt-level = "z"

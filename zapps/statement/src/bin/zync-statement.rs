@@ -1,4 +1,4 @@
-//! `zync-statement`: makes a statement of balance (docs/libzync/STATEMENT_ZAPP.md) for `swiftsync-verify --statement`.
+//! `zync-statement`: makes a balance statement (docs/libzync/STATEMENT_ZAPP.md) for `zapp-statement`.
 //!
 //!   zync-statement draft --receipt <core receipt> --trie <state_<H>.trie> --purpose <text> --nonce <text>
 //!                        [--network mainnet|signet] <scriptPubKey hex>...      a statement with no signatures (stdout)
@@ -6,15 +6,16 @@
 //!   zync-statement sign <statement.json> --keys <file>                         signs the entries it holds keys for
 //!   zync-statement add-sig <statement.json> <scriptPubKey hex> simple|full|legacy <base64>
 //!                                                                              a signature made by another wallet
-//!   zync-statement test-key <file>                                             a NEW random key, for tests: its WIF to
+//!   zync-statement test-key <file> [--uncompressed]                                           a NEW random key, for tests: its WIF to
 //!                                                                              <file> (mode 0600), its scripts to stdout
 //!
 //! `--keys`: one WIF private key per line (# comments). Each key signs for its P2WPKH, P2SH-P2WPKH and P2TR (key path,
-//! no script tree) scripts in BIP-322 simple and its P2PKH script in BIP-322 full. Keys are never printed. A wallet
+//! no script tree) scripts in BIP-322 simple and its P2PKH and P2PK scripts in BIP-322 full (P2PK in the key's own form,
+//! compressed or uncompressed, as the WIF says). Keys are never printed. A wallet
 //! that signs BIP-322 messages itself (or Bitcoin Core `signmessage` for P2PKH: format legacy) signs the `message`
 //! text, and `add-sig` files its signature. `sign` and `add-sig` rewrite the statement file in place.
 
-use swiftsync_verify::statement::{self, Statement};
+use balance_statement::{self as statement, Statement};
 use swiftsync_verify::{unhex, verify, Image, Inputs, Verdict};
 
 fn die(m: &str) -> ! {
@@ -104,12 +105,16 @@ fn main() {
             let k = loop {
                 let mut b = [0u8; 32];
                 std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).unwrap_or_else(|e| die(&e.to_string()));
-                if let Ok(k) = bitcoin::secp256k1::SecretKey::from_slice(&b) { break bitcoin::PrivateKey::new(k, bitcoin::Network::Bitcoin) }
+                if let Ok(k) = bitcoin::secp256k1::SecretKey::from_slice(&b) {
+                    let mut k = bitcoin::PrivateKey::new(k, bitcoin::Network::Bitcoin);
+                    k.compressed = !a.iter().any(|x| x == "--uncompressed");
+                    break k
+                }
             };
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(p)
                 .unwrap_or_else(|e| die(&format!("{p}: {e} (test-key never overwrites a file)")));
             writeln!(f, "{}", k.to_wif()).unwrap_or_else(|e| die(&e.to_string()));
-            for ((s, _), name) in statement::scripts_for_key(&k).iter().zip(["p2pkh", "p2sh-p2wpkh", "p2wpkh", "p2tr"]) {
+            for ((s, _), name) in statement::scripts_for_key(&k).iter().zip(if k.compressed { &["p2pkh", "p2sh-p2wpkh", "p2wpkh", "p2tr", "p2pk"][..] } else { &["p2pkh", "p2pk"][..] }) {
                 println!("{name} {}", swiftsync_verify::hex(s));
             }
         }

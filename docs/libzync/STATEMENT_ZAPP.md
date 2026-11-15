@@ -1,11 +1,13 @@
-# Statement of balance zyncAPP
+# Balance statement zyncAPP
 
-Status (15.11.2026): shape A is built and tested on branch `feat/zapp-statement` (`swiftsync-verify --statement`,
-`zync-statement`, WASM export `verify_statement` behind a build feature). Shape B is a measured prototype in
+Status (15.11.2026): shape A is built and tested on branch `feat/zapp-statement` as its own zAPP module,
+`zapps/statement` (ZYNCAPPS.md §9): a library on top of the core verifier, the checker CLI `zapp-statement`, the
+producer `zync-statement`, and its own WASM module (`zapps/statement/wasm`). The core verifier (`swiftsync-verify`,
+`swiftsync-verify-wasm`) carries no statement code. Shape B is a measured prototype in
 `experimental/libzync-bench/statement/`; no image id is published for it.
 
 A person or a business shows: **the coins at these scripts held X sat in total at block H, and whoever holds each
-script signed this statement.** Anyone checks it with the statement file, the core proof and a verifier, offline
+script signed this statement.** Anyone checks it with the statement file, the core proof and the checker, offline
 except for the one step every Hazync fact needs: comparing block H's hash with a source the checker trusts.
 
 ## 1. What a statement shows, and what it does not
@@ -38,20 +40,20 @@ Not proven:
 |---|---|---|
 | new guest | none | one zyncAPP image |
 | what the checker sees | every script, its balance, each signature | the total, the number of scripts, a salted commitment to the script list, the purpose, the nonce |
-| verifier | `swiftsync-verify --statement`, WASM `verify_statement` | the zyncAPP receipt against its image id, then the same core checks as ZYNCAPPS.md §4 |
-| signature code | the rust-bitcoin project's `bip322` crate (CC0-1.0), outside the zkVM | in the guest (prototype: hand-written P2WPKH and P2TR, k256) |
-| script types | everything the `bip322` crate verifies (§6) | what the guest implements (prototype: P2WPKH, P2TR key path) |
-| cost to make | none: facts and signatures | a proof per statement (cycles in §7) |
+| checker | `zapp-statement`, WASM `zapp-statement.wasm` | the zyncAPP receipt against its image id, then the same core checks as ZYNCAPPS.md §4 |
+| signature code | the rust-bitcoin project's `bip322` crate (CC0-1.0), outside the zkVM; P2PK hand-written on top of it (§7) | in the guest (prototype: hand-written P2WPKH and P2TR, k256) |
+| script types | what the `bip322` crate verifies, and P2PK (§6, §7) | what the guest implements (prototype: P2WPKH, P2TR key path) |
+| cost to make | none: facts and signatures | a proof per statement (cycles in §8) |
 | new trust | none beyond the core proof and the crate | the zyncAPP's source and image id, its reproducible build |
 
 **Recommendation: A**, for now. It needs no new image, no proving and no new reviewed guest code; the signature checks
-come from a maintained crate instead of our own. B only adds privacy, and a statement's main readers (an auditor, a
+come from a maintained crate instead of our own (except P2PK, §7). B only adds privacy, and a statement's main readers (an auditor, a
 lender, a counterparty) usually want to see the scripts anyway. B is worth building when someone asks for the private
-form; §7 gives its measured cost.
+form; §8 gives its measured cost.
 
 ## 3. Encodings (A)
 
-**Statement** (JSON, `swiftsync_verify::statement::Statement`):
+**Statement** (JSON, `balance_statement::Statement`):
 
 ```
 { "version": 1, "network": "mainnet", "core_id": "<64 hex: the image that proved the chain>",
@@ -66,7 +68,7 @@ to 256 bytes with no control characters: a line break would let a purpose forge 
 **Message** (UTF-8, `\n` between lines, no trailing newline), what every script signs:
 
 ```
-Hazync statement of balance v1
+Hazync balance statement v1
 network: mainnet
 core image: <core_id, lower case>
 block: <H> <block hash, display order, lower case>
@@ -80,13 +82,14 @@ The script list hash is SHA-256 over the scripts in entry order, each as Compact
 (its serialisation inside a transaction). `zync-statement message` prints the text exactly.
 
 **Signature formats**: `simple` (a BIP-322 simple signature: the witness, base64), `full` (BIP-322 full: the to_sign
-transaction, base64), `legacy` (P2PKH only: Bitcoin Core `signmessage`, the BIP-137 format). A BIP-322 proof is
+transaction, base64; the only format for P2PK), `legacy` (P2PKH only: Bitcoin Core `signmessage`, the BIP-137 format). A BIP-322 proof is
 accepted only when it is valid with nLockTime 0 and nSequence 0 (BIP-322's "valid at time T and age S" for T = S = 0);
 a proof valid only from a later time or age, or one the crate calls inconclusive, is refused.
 
 ## 4. Checks and soundness
 
-`check_statement` (`swiftsync-verify/src/statement.rs`) runs only on a chain state whose receipt passed `verify`
+`check_statement` (`zapps/statement/src/lib.rs`) runs only on a chain state whose receipt passed
+`swiftsync_verify::verify`
 (real proof, not a FakeReceipt, `RISC0_DEV_MODE` unset, the image, profile, anchor, block forest, time-too-new). Then:
 
 1. `version` is 1; `network` is the proof's network (profile); `core_id` is the image that made the receipt
@@ -94,7 +97,7 @@ a proof valid only from a later time or age, or one the crate calls inconclusive
 2. Purpose and nonce are well formed and, when the checker gives `--purpose` and `--nonce`, equal to them.
 3. Entries: 1 to 10,000, scripts strictly increasing.
 4. Each fact is a `balance` fact with a stated answer, about its own script at H, and holds against the proof's trie
-   root (`check_trie_fact`, the same check as `--trie`). Its answer (`never` = 0, or `<count>:<sat>`) is what is
+   root (`swiftsync_verify::check_trie_fact`, the same check as `swiftsync-verify --trie`). Its answer (`never` = 0, or `<count>:<sat>`) is what is
    summed; the sum must not overflow and must equal `total`.
 5. The message is rebuilt from the statement's fields; each entry's signature must verify for its script over it.
 
@@ -115,8 +118,8 @@ H is final for that proof: there is no hints file or epoch to close. A statement
 proof's tip, and a proof of a later tip needs a new statement.
 
 **Block-hash binding and chain identity.** The proof shows a valid chain; that it is the network's chain is the tip
-hash at H compared with a source the checker trusts (`--expect`, `--mempool`, `--bitcoin-cli`, or the page's
-`expect`). Without it the verdict is at most DEMO, as for every fact.
+hash at H compared with a source the checker trusts (`zapp-statement --expect`, `--mempool`, `--bitcoin-cli`, or
+the page's `expect`). Without it the verdict is at most DEMO, as for every fact.
 
 **Replay.** A statement shown again under another purpose or nonce fails step 2. Rewriting the purpose to match
 breaks every signature. Without `--purpose` and `--nonce` the facts and signatures still hold, but the statement may
@@ -128,13 +131,26 @@ be an old one shown again: the verdict is then at most DEMO and says why.
 zync-statement draft --receipt <core receipt> --trie state_<H>.trie --purpose "<asked>" --nonce "<asked>" <scriptPubKey hex>... > s.json
 zync-statement message s.json                      # the text to sign in another wallet
 zync-statement sign s.json --keys <WIF file>       # or: zync-statement add-sig s.json <spk> simple|full|legacy <base64>
-swiftsync-verify --expect <H>:<hash> --purpose "<asked>" --nonce "<asked>" --statement s.json <core receipt>
+zapp-statement --expect <H>:<hash> --purpose "<asked>" --nonce "<asked>" <core receipt> s.json
 ```
 
+`zapp-statement` exits 0 `ZAPP_STATEMENT_OK`, 2 `ZAPP_STATEMENT_DEMO` (the statement holds, but the chain is below
+Core's minimum work, the tip was not compared with a source the checker trusts, or no purpose and nonce were given;
+the line says which), 1 `ZAPP_STATEMENT_FAIL`. The checker is its own binary rather than a `swiftsync-verify`
+subcommand so that the core verifier carries no zAPP code; it verifies the receipt with the same library function.
+
 The checker chooses the purpose and nonce, gives them to the holder, and rejects any H further behind its own tip than
-its policy allows (a lender might take 6 blocks, an annual audit a day). `zync-statement` signs P2WPKH, P2SH-P2WPKH
-and P2TR (key path, no script tree) in BIP-322 simple and P2PKH in BIP-322 full, from WIF keys it never prints;
-`add-sig` refuses a signature that does not verify. `zync-statement test-key <file>` makes a fresh key for tests.
+its policy allows. `zync-statement` signs P2WPKH, P2SH-P2WPKH and P2TR (key path, no script tree) in BIP-322 simple
+and P2PKH and P2PK (in the key's own form, compressed or uncompressed) in BIP-322 full, from WIF keys it never prints;
+`add-sig` refuses a signature that does not verify. `zync-statement test-key <file> [--uncompressed]` makes a fresh key
+for tests.
+
+In a browser, the page loads `zapp-statement.wasm` with `zapp-statement.js` (`loadStatementVerifier`,
+`verifyStatement({ network, receipt, statement, expect, purpose, nonce })`); expect, purpose and nonce are the page's,
+never the sender's. Only the statement page loads it; the core `hazync-verify.wasm` is unchanged. Built
+byte-reproducibly by `zapps/statement/wasm/build.sh` (the core's flags: Rust 1.99.0, staged sources, remapped paths):
+2,473,954 bytes raw, sha256 `81a7a1ef11e514b4b668a9c7ec6078b1d2b7604dfe0826c9ccbda63d6c25d89c` (two builds,
+15.11.2026).
 
 The trie snapshot (`state_<H>.trie`) comes from a proving run at H; a mainnet holder needs a fact server that
 keeps one (ROADMAP C1, `zync-serve`). The statement holds no secret: anyone can check or forward it.
@@ -142,24 +158,50 @@ keeps one (ROADMAP C1, `zync-serve`). The statement holds no secret: anyone can 
 ## 6. Coins that cannot sign
 
 The `bip322` crate (0.0.12) checks P2WPKH, P2SH-P2WPKH, P2TR key path, P2WSH and P2SH-P2WSH multisig, P2SH multisig
-(full format) and P2PKH (full format or legacy). It has no script interpreter, so it calls anything else inconclusive,
-and the statement refuses it:
+(full format) and P2PKH (full format or legacy). It has no script interpreter, so it calls anything else inconclusive.
+P2PK is checked by this zAPP's own code (§7). Refused:
 
-- **P2PK** (the early coinbases, including block 9's coin the tests use): no address form, so the crate cannot
-  take one. BIP-322's full format covers P2PK in principle (a scriptSig with one signature), with a verifier that
-  runs the script.
-- **Bare multisig** and non-standard scripts: the same.
+- **Bare multisig** and non-standard scripts: no address form, so the crate cannot take them.
 - **P2SH or P2WSH of any script other than multisig**, and **taproot script paths**: inconclusive.
 - **A P2SH coin whose redeem script the holder has lost** cannot sign at all, under any format.
+- **A P2PK coin whose key is lost** (most 2009 coinbases): the fact holds, no signature can be made.
 
 Such coins can still be shown to exist with a balance fact; they cannot be put in a statement. A holder can move them
 to a script that signs, at the cost of a transaction.
 
-## 7. Shape B: measured
+## 7. P2PK
+
+BIP-322 covers any script through its full format; the `bip322` crate takes only addresses, and P2PK has none. So
+P2PK (`<33- or 65-byte key> OP_CHECKSIG`) is checked by `zapps/statement/src/p2pk.rs`, the only hand-written signature
+code in this zAPP, kept to what the crate does not provide:
+
+- **to_spend** is BIP-322's with the P2PK script as the challenge. It is built here because the crate's builder takes
+  an address; a test checks that it gives the crate's txid, and that the crate's to_sign on it gives the crate's to_sign
+  txid, for every script the crate takes (P2PKH, P2SH-P2WPKH, P2WPKH, P2TR) and three messages.
+- **to_sign** is the crate's own `create_to_sign` on that to_spend. The signature must be exactly that transaction
+  (version 0, one input spending to_spend:0 with nSequence 0, nLockTime 0, no witness, one 0-sat OP_RETURN output)
+  with a scriptSig of exactly one push.
+- **The required rules of BIP-322** for this script: SIGHASH_ALL only; LOW_S; STRICTENC (strict DER; the key
+  compressed 0x02/0x03 or uncompressed 0x04, hybrid 0x06/0x07 refused); MINIMALDATA (the push minimally encoded);
+  CLEANSTACK (one push, nothing else). The signature is verified by libsecp (through the `bitcoin` crate) over the
+  legacy sighash of input 0, with the P2PK script as scriptCode (no OP_CODESEPARATOR can occur in it).
+- **Stricter than BIP-322 in one place:** a scriptSig that is not a single push (for example a NOP before the
+  signature) can still satisfy the script, but this checker has no interpreter and refuses it. BIP-322 lets a validator
+  without a full interpreter stop at "inconclusive"; a statement refuses both. A time-locked proof (version 2) is
+  refused, as for every format.
+
+What it trusts: libsecp's ECDSA and the `bitcoin` crate's legacy sighash and transaction encoding, both the same code
+the crate's P2PKH check uses; and the about 90 lines of p2pk.rs that assemble them, which need review before a release. Tests (§9)
+cover both key forms, a changed message, signature byte, sighash type (0x02, 0x03, 0x81), high S (n − s of a valid
+signature), padded DER, a non-minimal push, two pushes, a witness, a lock time, version 2, another key's signature,
+the two P2PK forms' signatures swapped, a hybrid key, and the real block-9 P2PK coin (its fact holds; a signature by
+our key filed under it is refused).
+
+## 8. Shape B: measured
 
 The prototype guest (`experimental/libzync-bench/statement/methods/guest`) verifies the core receipt (`env::verify`,
 an assumption), decodes the ChainState and makes the ZYNCAPPS.md §4 checks, checks each balance fact against
-`trie_root` with the shared `libzync::trie_fact` source, builds a message with a salted commitment
+`trie_root` with the shared `libzync::trie_fact` source, builds a message (header `Hazync private statement of balance v1`, the prototype's text when measured) with a salted commitment
 `sha256(salt || script list hash)` in place of the list hash, checks each BIP-322 simple signature
 (`bip322_lite.rs`, P2WPKH and P2TR), and commits the core fields, the total, the number of scripts, the commitment,
 the purpose and the nonce. `bip322_lite.rs` is cross-checked natively against the `bip322` crate
@@ -190,38 +232,34 @@ inputs word by word (the journal and every byte of the proofs and witnesses); `r
 did for the core's aggregate. These are user cycles: resolving the core receipt (the `env::verify` assumption) is a
 recursion step at proving time, not counted here and not measured.
 
-What B would still need: the core's libsecp in place of k256 (ZYNCAPPS.md §7), P2PKH and multisig, a published image
+What B would still need: the core's libsecp in place of k256 (ZYNCAPPS.md §7), P2PKH, P2PK and multisig, a published image
 id from a reproducible build, a verifier entry point, and a decision on what the commitment hides: the number of
 scripts is public, and without the salt a guessed script list can be tested against the commitment.
 
-## 8. Tests
+## 9. Tests
 
-- `cargo test --release statement` (swiftsync-verify): 6 tests on the real mainnet 1..200 proof (image `8888d59c`,
-  `vectors/mainnet_1_200_8888d59c.rcpt`) and its block-200 trie snapshot (`vectors/mainnet_200_8888d59c.trie`, root
-  equal to the proof's). No key of ours was paid in blocks 1..200, so the positive case on the real trie is a zero balance
-  for two fresh keys; non-zero cases (P2WPKH, P2TR, P2SH-P2WPKH, P2PKH full, P2PKH legacy) use a trie built in the test
-  under the real proof's state with its trie root replaced. Refusals: tampered total, tampered fact answer, wrong
-  height, block, core image and network, another purpose, another nonce, a purpose rewritten to match, another key's
-  signature, a signature over another message, a fact relabelled to a script it does not prove, a duplicate script,
-  unsorted scripts, a history fact, a fact with no answer, a line break in the purpose, a wrong format, no entries,
-  another version, a time-locked BIP-322 proof, block 9's real P2PK coin (no address form), and a FakeReceipt.
-- `swiftsync-verify/test_statement.sh`: the CLI end to end on the real proof, 16 cases (17 with
-  `STATEMENT_WASM=<.wasm>`, which runs `swiftsync-verify-wasm/test-statement.mjs`, 9 cases, through a WASM build
-  with feature `statement`). Results: `swiftsync-verify/test_statement.out`.
+- `cargo test --release` in `zapps/statement`: 8 tests on the real mainnet 1..200 proof (image `8888d59c`,
+  `swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`) and its block-200 trie snapshot
+  (`zapps/statement/vectors/mainnet_200_8888d59c.trie`, root equal to the proof's). No key of ours was paid in blocks
+  1..200, so the positive case on the real trie is a zero balance for fresh keys; non-zero cases (P2WPKH, P2TR,
+  P2SH-P2WPKH, P2PKH full and legacy, P2PK compressed and uncompressed) use a trie built in the test under the real
+  proof's state with its trie root replaced. Refusals: tampered total and fact answer; wrong height, block, core image
+  and network; another purpose or nonce; a purpose rewritten to match; another key's signature; a signature over
+  another message; a fact relabelled to a script it does not prove; a duplicate or unsorted script; a history fact; a
+  fact with no answer; a line break in the purpose; a wrong format; no entries; another version; a time-locked proof;
+  the P2PK cases of §7; and a FakeReceipt.
+- `zapps/statement/test_statement.sh`: `zapp-statement` and `zync-statement` end to end on the real proof with fresh
+  P2WPKH, P2TR and P2PK (both forms) keys, 18 cases; 19 with `STATEMENT_WASM=<zapp-statement.wasm>`, which runs
+  `wasm/test-statement.mjs` (8 cases) through the zAPP's WASM module. Results: `test_statement.out`. CI runs both from
+  `zapps/statement` (adversarial.yml).
 - The `bip322` crate's own suite (77 tests, including BIP-322's official vectors) passes at 0.0.12.
+- The core `swiftsync-verify-wasm/build.sh` gives the same bytes as `fix/wasm-facts-frame` (#734), which this branch
+  merges: sha256 `f16b5b98…`, 1,249,243 bytes (15.11.2026). Main before #734 gives `12bbc9ae…`; #734 moves it, this
+  branch does not.
 
-## 9. Open
+## 10. Open
 
-- The name. This document says "statement of balance"; the owner decides the product name.
-- P2PK: the early coins are the ones people most often want to show, and the crate cannot check them. A P2PK check
-  is a few lines on top of the crate's to_spend / to_sign (one ECDSA signature over the legacy sighash); hand-written,
-  so it needs review and BIP-322-style vectors of its own.
-- Freshness as a verifier flag (`--max-age <blocks>` against the checker's node or mempool.space), rather than policy.
+- Freshness as a checker flag (`--max-age <blocks>` against the checker's node or mempool.space), rather than policy.
 - Per-coin statements (BIP-322 "proof of funds", which signs the coins' outpoints) instead of per-script: stronger
   (the coins themselves are signed for) but needs a coin fact with its creating transaction for every coin.
-- Whether the WASM build should carry the statement check by default: it doubles the .wasm (1,248,921 to 2,554,120
-  bytes raw, measured).
-- The default WASM build (no `statement` feature) is no longer byte-identical to main's: `./build.sh` gives
-  `99984104…` on this branch against main's `12bbc9ae…` (both measured 15.11.2026, Rust 1.99.0), though it exports
-  nothing new. The cause (the new optional dependencies in the lock, or the feature table) is not isolated; a merge
-  moves the published sha either way.
+- A review of `p2pk.rs` before the module is released, and P2PK vectors of our own published with it.

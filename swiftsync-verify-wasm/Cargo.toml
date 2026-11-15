@@ -11,13 +11,8 @@ crate-type = ["cdylib"]
 
 # The same library as the CLI (one implementation of the checks); raw ABI, no wasm-bindgen, as ../history/verifier-wasm.
 [dependencies]
-# default-features = false: the statement check (bip322, secp256k1) stays out of the published .wasm unless asked for
-swiftsync-verify = { path = "../swiftsync-verify", default-features = false }
+swiftsync-verify = { path = "../swiftsync-verify" }
 serde_json = "1"
-
-# `statement`: the statement-of-balance check (docs/libzync/STATEMENT_ZAPP.md), export `verify_statement`. Off by default.
-[features]
-statement = ["swiftsync-verify/statement"]
 
 [profile.release]
 opt-level = "z"

@@ -13,7 +13,7 @@ mod bip322_lite;
 use bitcoin::{Address, Network, PrivateKey, Script};
 use risc0_zkvm::{default_executor, ExecutorEnv, Receipt};
 use statement_methods::{STATEMENT_GUEST_ELF, STATEMENT_GUEST_ID};
-use swiftsync_verify::statement::scripts_for_key;
+use balance_statement::scripts_for_key;
 
 const VEC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../swiftsync-verify/vectors/");
 

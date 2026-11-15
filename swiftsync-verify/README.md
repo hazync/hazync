@@ -37,10 +37,6 @@ swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --m
 from a prover run's trie snapshot; `zync-serve` serves them at `/trie/coin/<spk>/<txid>/<vout>`, `/trie/balance/<spk>`
 and `/trie/history/<spk>`. Each is checked against the verified state's trie root (`libzync::trie_fact`).
 
-**Statements of balance.** `--statement <s.json> --purpose <text> --nonce <text>`: "these scripts held X sat at the
-proof's tip, and each signed this statement" (BIP-322, via the `bip322` crate). `zync-statement draft|message|sign|add-sig`
-makes one. Design, encodings and limits: `docs/libzync/STATEMENT_ZAPP.md`; tests: `test_statement.sh`.
-
 **The header-chain zyncAPP.** `swiftsync-verify headers [--image <hex>] [--expect <h>:<hash>] [--now <t>]
 <receipt>...` checks a header-chain proof (`src/headers.rs`) against the `zyncapp-headers` image of
 `reproduce/LIBZYNC_IDS` (`2db34e12…` in v0.24.0). Without `--expect` the chain identity is not checked and the output

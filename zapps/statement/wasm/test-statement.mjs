@@ -1,24 +1,24 @@
-// node test-statement.mjs <wasm built with --features statement> <statement.json> <purpose> <nonce>: the statement of
-// balance through the WASM build, against the real mainnet 1..200 proof (8888d59c), with the right and wrong challenge.
-// The statement comes from ../swiftsync-verify/test_statement.sh's flow (zync-statement draft + sign). Exit 1 on any
+// node test-statement.mjs <zapp-statement.wasm> <statement.json> <purpose> <nonce>: the balance
+// statement through the zAPP's WASM module, against the real mainnet 1..200 proof (8888d59c), with the right and wrong challenge.
+// The statement comes from ../test_statement.sh's flow (zync-statement draft + sign). Exit 1 on any
 // unexpected verdict. 1..200 is below the minimum work, so the best verdict is demo.
 import fs from 'node:fs';
-import { loadVerifier } from './swiftsync-verify.js';
+import { loadStatementVerifier } from './zapp-statement.js';
 const [wasm, stFile, purpose, nonce] = process.argv.slice(2);
-const v = await loadVerifier(fs.readFileSync(wasm));
-const dir = new URL('../swiftsync-verify/vectors/', import.meta.url).pathname;
+const v = await loadStatementVerifier(fs.readFileSync(wasm));
+const dir = new URL('../../../swiftsync-verify/vectors/', import.meta.url).pathname;
 const receipt = fs.readFileSync(dir + 'mainnet_1_200_8888d59c.rcpt');
 const statement = JSON.parse(fs.readFileSync(stFile, 'utf8'));
 const expect = '200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320';
 const base = { network: 'mainnet', imageHex: '8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4', receipt, expect };
 const cases = [
-  ['holds (demo: below minimum work)', { statement, purpose, nonce }, 'demo', /^holds, but the verdict is DEMO/],
+  ['holds (demo: below minimum work)', { statement, purpose, nonce }, 'demo', /^statement: .* script\(s\)/],
   ['another purpose', { statement, purpose: 'other', nonce }, 'fail', /purpose .* is not the one asked for/],
   ['another nonce', { statement, purpose, nonce: 'other' }, 'fail', /nonce .* is not the one asked for/],
   ['tampered total', { statement: { ...statement, total: statement.total + 1 }, purpose, nonce }, 'fail', /facts sum to/],
   ['wrong height', { statement: { ...statement, height: 199 }, purpose, nonce }, 'fail', /about block 199/],
   ['another tip expected', { statement, purpose, nonce, expect: '200:' + '0'.repeat(64) }, 'fail', /not the proof's tip/],
-  ['swapped signatures', { statement: { ...statement, entries: statement.entries.map((e, i, a) => ({ ...e, signature: a[(i + 1) % a.length].signature })) }, purpose, nonce }, 'fail', /BIP-322/],
+  ['swapped signatures', { statement: { ...statement, entries: statement.entries.map((e, i, a) => ({ ...e, signature: a[(i + 1) % a.length].signature })) }, purpose, nonce }, 'fail', /BIP-322|P2PK/],
 ];
 let bad = 0;
 for (const [name, args, want, why] of cases) {
@@ -30,11 +30,5 @@ for (const [name, args, want, why] of cases) {
 const fake = v.verifyStatement({ ...base, receipt: fs.readFileSync(dir + 'fake_block_2501.rcpt'), statement, purpose, nonce });
 bad += fake.verdict !== 'fail';
 console.log(`${fake.verdict === 'fail' ? 'PASS' : 'WRONG'}  ${'dev-mode FakeReceipt'.padEnd(34)} ${fake.verdict} (want fail)`);
-// the Coin check path (verifyFacts with a trie fact): the glue's lineage chunk, needed since f713e3a6
-const fact = JSON.parse(fs.readFileSync(new URL('../experimental/libzync-bench/zapp/fact_balance_block9_200.json', import.meta.url).pathname, 'utf8'));
-const f = v.verifyFacts({ ...base, facts: { tries: [fact] } });
-const fok = f.verdict === 'demo' && /holds 1 unspent coin\(s\), 2800000000 sat/.test(f.facts?.[0]?.what ?? '');
-bad += !fok;
-console.log(`${fok ? 'PASS' : 'WRONG'}  ${'verifyFacts, block 9 balance'.padEnd(34)} ${f.verdict} (want demo): ${f.facts?.[0]?.what ?? f.checks?.[0]?.what}`);
-console.log(`${cases.length + 2 - bad}/${cases.length + 2} as expected (wasm statement)`);
+console.log(`${cases.length + 1 - bad}/${cases.length + 1} as expected (zapp-statement.wasm)`);
 process.exit(bad ? 1 : 0);

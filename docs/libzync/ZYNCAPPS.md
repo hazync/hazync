@@ -110,7 +110,7 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 
 | zyncAPP | inputs | uses | answer |
 |---|---|---|---|
-| statement of balance (STATEMENT_ZAPP.md; built as a file checked by the verifier, no guest) | each script's balance fact; a purpose and nonce; a BIP-322 signature by each script | `trie_root` | "these scripts held X sat at the tip H, and each signed this statement". A private form (a guest, prototype measured) commits only the total |
+| Balance statement (STATEMENT_ZAPP.md, `zapps/statement`; no guest) | each script's balance fact; a purpose and nonce; a BIP-322 signature by each script | `trie_root` | "these scripts held X sat at the tip H, and each signed this statement". A private form (a guest, prototype measured) commits only the total |
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
@@ -161,3 +161,17 @@ these files. Limits:
 
   Coin check on hazync.org does all of these (`assets/zapp.js`: a fact about another script, kind or height is
   refused before the verifier runs).
+
+## 9. zAPPs and their modules
+
+A zAPP's checker is its own module: a crate that uses `swiftsync-verify` as a library to verify the core receipt, its
+own CLI and, for the browser, its own WASM module, glue and sha256 line. The core verifier (`swiftsync-verify`,
+`swiftsync-verify-wasm`) carries no zAPP code. A zAPP that needs a guest has it under `prover/zyncapps/methods`.
+
+| zAPP | module | guest | status |
+|---|---|---|---|
+| Header chain (K1) | checker in `swiftsync-verify` (`swiftsync-verify headers`, WASM `verifyHeaders`) | `prover/zyncapps/methods/headers` | published, image `2db34e12` |
+| Coin (coin v2) | `prover/zyncapps/host` (`zyncapp prove-coin`) | `prover/zyncapps/methods/guest` | built, laptop images only |
+| Zero-conf (D5) | `prover/zyncapps/host` | `prover/zyncapps/methods/zeroconf` | being built |
+| Coin check (trie facts) | `swiftsync-verify --trie`, WASM `verifyFacts`, hazync.org `/zapp/` | none | live |
+| Balance statement | `zapps/statement` (CLI `zapp-statement`, producer `zync-statement`; WASM `zapps/statement/wasm`) | none (a private form is prototyped in `experimental/libzync-bench/statement`) | built on `feat/zapp-statement` |

@@ -94,6 +94,15 @@ jobs:
           bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
           node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
           swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
+      - name: zAPP Balance statement (zapps/statement, its own crate and WASM module)
+        # docs/libzync/STATEMENT_ZAPP.md: unit tests on the real mainnet 1..200 proof, the CLI end to end (fresh keys,
+        # P2WPKH, P2TR, P2PK both key forms, refusals), and the same statement through its own .wasm.
+        working-directory: zapps/statement
+        run: |
+          cargo test --release
+          cargo build --release
+          ./wasm/build.sh
+          STATEMENT_WASM=wasm/target/wasm32-unknown-unknown/release/zapp_statement_wasm.wasm ./test_statement.sh
 
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
@@ -1860,7 +1869,7 @@ jobs:
           # of the libzync verifier), and they are not part of the prover workspace. The CORE verifiers' lockfiles went
           # to history/ with them.
           for f in accumulator coinbase-smt libzync prover prover/methods/guest guest-pure-fuzz \
-                   swiftsync-verify swiftsync-verify-ffi swiftsync-verify-wasm; do
+                   swiftsync-verify swiftsync-verify-ffi swiftsync-verify-wasm zapps/statement zapps/statement/wasm; do
             echo "== $f =="
             cargo audit --file "$f/Cargo.lock" $IGNORE || rc=1
           done
