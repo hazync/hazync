@@ -89,6 +89,8 @@ From one verified proof at the tip, with a path from the host's copy of the log:
   branch), forwards through the spender record. A coin created and spent in the same block has no leaf: that hop
   is shown from the block itself (its Merkle branch), not from the log.
 
+An outpoint's liveness at any height, as one strict proof: LIVENESS_ZAPP.md.
+
 What it does **not** give: non-membership. The log is in birth order, not keyed by outpoint, so "outpoint X never
 existed" or "X is not live" has no short proof. A zyncAPP proves what a coin IS (by its position), not what is absent.
 
