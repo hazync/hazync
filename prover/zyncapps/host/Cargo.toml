@@ -18,4 +18,6 @@ serde_json = "1"
 sha2 = "0.10"
 bincode = "1"
 swiftsync-verify = { path = "../../../swiftsync-verify" }
+# The header-chain zAPP module (zapps/headers, docs/libzync/ZYNCAPPS.md §9): its state, MMR and verifier.
+zapp-headers = { path = "../../../zapps/headers" }
 libzync = { path = "../../../libzync", default-features = false }
