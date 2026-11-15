@@ -129,7 +129,7 @@ the journal. The steps: prove the composed receipt (§2 (b)), wrap it (`ProverOp
 and have the contract check the image id, the journal's txid, output, depths and tip. Groth16 needs a trusted setup:
 RISC Zero's is a ceremony for its one fixed STARK-verifier circuit, so it is universal across programs (one setup for
 every image id) and holds if at least one participant was honest. The wrap also moves the assumption from hashes to
-BN254 pairings (not post-quantum). The owner's default stays STARK; Groth16 is an add-on.
+BN254 pairings (not post-quantum). The default stays STARK, with no trusted setup; Groth16 is an add-on.
 
 Measured end to end on block 170 (§7): the composed receipt in 293.4 s on a shared CPU box, its Groth16 wrap in
 88.5 s, 3,129 bytes with a 256-byte seal. The wrap is not specific to this zyncAPP: the core repository already has
