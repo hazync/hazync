@@ -1,5 +1,5 @@
 #!/bin/bash
-# assume_check.sh <H> <receipt> <swiftsync-verify binary> [<bitcoin-cli of your node>]
+# assume_check.sh <H> <receipt> <zapp-assume binary (zapps/assume)> [<bitcoin-cli of your node>]
 #
 # The assumeutxo and assumevalid checks (docs/libzync/ASSUME_ZAPPS.md) end to end against a REAL Core `dumptxoutset`:
 # a throwaway node syncs blocks 0..H from your node over P2P (127.0.0.1:8333), goes offline, dumps its UTXO set at H

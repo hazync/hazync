@@ -1,11 +1,13 @@
-// node test-assume.mjs: the assumevalid / assumeutxo checks in the WASM build (docs/libzync/ASSUME_ZAPPS.md), on the
-// real mainnet 1..200 proof and Core v31.1.0's dumptxoutset files (../swiftsync-verify/vectors/assume/). Exit 1 on
+// node test-assume.mjs: the assumevalid / assumeutxo checks in the assume zAPP's own WASM module (zapp-assume.js;
+// docs/libzync/ASSUME_ZAPPS.md), on the real mainnet 1..200 proof (the core's swiftsync-verify/vectors) and Core
+// v31.1.0's dumptxoutset files (../vectors). Exit 1 on
 // any unexpected verdict. A proof at 200 is below minimum work: a passing check is "demo", never "ok".
 import fs from 'node:fs';
-import { loadVerifier } from './swiftsync-verify.js';
-const d = new URL('../swiftsync-verify/vectors/', import.meta.url).pathname;
-const v = await loadVerifier(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm', import.meta.url)));
-const rd = (f) => new Uint8Array(fs.readFileSync(d + f));
+import { loadAssume } from './zapp-assume.js';
+const d = new URL('../../../swiftsync-verify/vectors/', import.meta.url).pathname;
+const own = new URL('../vectors/', import.meta.url).pathname;
+const v = await loadAssume(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_assume_wasm.wasm', import.meta.url)));
+const rd = (f) => new Uint8Array(fs.readFileSync(f.startsWith('assume/') ? own + f.slice(7) : d + f));
 const receipt = rd('mainnet_1_200_8888d59c.rcpt'), flipped = rd('mainnet_1_200_8888d59c_flipped.rcpt');
 const headers = rd('assume/headers_0_200.bin'), snap = rd('assume/utxo_200.dat');
 const TIP = '000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320';

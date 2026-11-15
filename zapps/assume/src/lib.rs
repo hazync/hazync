@@ -11,8 +11,12 @@
 //!   equality of two multisets of leaves, and every snapshot field is in the leaf preimage.
 //!
 //! Every function here is total on hostile input: errors, never panics.
+//!
+//! A zAPP module of its own (docs/libzync/ZYNCAPPS.md §9), on the core verifier (`swiftsync_verify`) as a library and
+//! not part of it. Until 15.11.2026 this was `swiftsync_verify::assume`, the core CLI's `assumevalid` / `assumeutxo`, the
+//! C ABI's `swiftsync_verify_assume` and the WASM's `verifyAssume`; the checks are unchanged.
 
-use crate::{hex, ChainState, PROFILE_ASSUMEVALID, PROFILE_LIBZYNC, PROFILE_SIGNET, PROFILE_UTXOHASH};
+use swiftsync_verify::{hex, ChainState, PROFILE_ASSUMEVALID, PROFILE_LIBZYNC, PROFILE_SIGNET, PROFILE_UTXOHASH};
 use ark_ff::fields::{Fp256, MontBackend, MontConfig};
 use ark_ff::{AdditiveGroup, BigInt, BigInteger, Field, PrimeField, Zero};
 use sha2::{Digest as _, Sha256};
@@ -322,7 +326,7 @@ pub fn display(h: &[u8; 32]) -> String {
 
 /// A block hash in display order (as `getblockhash` prints it) to internal order.
 pub fn parse_display_hash(s: &str) -> Option<[u8; 32]> {
-    let mut h = crate::hex32(&s.trim().to_lowercase())?;
+    let mut h = swiftsync_verify::hex32(&s.trim().to_lowercase())?;
     h.reverse();
     Some(h)
 }
@@ -1038,18 +1042,18 @@ mod tests {
 
     // ---- the real vectors: mainnet 1..200 proved under 8888d59c (GPU), Core v31.1.0's dumptxoutset at 199, 200, 1003
 
-    const RCPT: &[u8] = include_bytes!("../vectors/mainnet_1_200_8888d59c.rcpt");
-    const SNAP_200: &[u8] = include_bytes!("../vectors/assume/utxo_200.dat");
-    const SNAP_199: &[u8] = include_bytes!("../vectors/assume/utxo_199.dat");
-    const SNAP_1003: &[u8] = include_bytes!("../vectors/assume/utxo_1003.dat");
-    const HDRS: &[u8] = include_bytes!("../vectors/assume/headers_0_200.bin");
+    const RCPT: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
+    const SNAP_200: &[u8] = include_bytes!("../vectors/utxo_200.dat");
+    const SNAP_199: &[u8] = include_bytes!("../vectors/utxo_199.dat");
+    const SNAP_1003: &[u8] = include_bytes!("../vectors/utxo_1003.dat");
+    const HDRS: &[u8] = include_bytes!("../vectors/headers_0_200.bin");
     /// `dumptxoutset … rollback=200` printed this txoutset_hash
     const CORE_HASH_200: &str = "a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67";
 
     fn state() -> ChainState {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        let rep = crate::verify(&crate::Inputs { receipt: RCPT, image: crate::Image::by_network("mainnet").unwrap(), anchor: None, now });
-        assert_eq!(rep.verdict, crate::Verdict::Demo, "{:?}", rep.checks); // low work: DEMO, every check passed
+        let rep = swiftsync_verify::verify(&swiftsync_verify::Inputs { receipt: RCPT, image: swiftsync_verify::Image::by_network("mainnet").unwrap(), anchor: None, now });
+        assert_eq!(rep.verdict, swiftsync_verify::Verdict::Demo, "{:?}", rep.checks); // low work: DEMO, every check passed
         rep.state.unwrap()
     }
 

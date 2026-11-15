@@ -37,13 +37,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
 sha2 = "0.10"
-# The assumeutxo checker's ECMH (src/assume.rs): secp256k1's base field. Already in the tree through risc0-groth16, so
-# no new crate; pure Rust, so it builds for WASM.
-ark-ff = { version = "=0.5.0", default-features = false }
-
-[dev-dependencies]
-# src/assume.rs tests: the ECMH map and sum against a num-bigint reference, as libzync/src/host.rs ecmh_hint computes it
-num-bigint = "0.4"
 
 [profile.release]
 opt-level = "z"

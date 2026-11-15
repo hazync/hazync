@@ -1,10 +1,10 @@
 //! `cargo run --release --example assume_state -- <state.json> <headers.bin> <tracked.txt|-> <snapshot>`
 //!
-//! TESTING ONLY: the assumeutxo check of `swiftsync-verify assumeutxo`, against a ChainState JSON (a prover run's
+//! TESTING ONLY: the assumeutxo check of `zapp-assume assumeutxo`, against a ChainState JSON (a prover run's
 //! `state_<h>.json`, the host's native state) instead of a verified receipt. It tests the snapshot encoding at heights
 //! no proof in the repo reaches (BIP30-tracked coins, the 91,842 / 91,880 overwrites) and measures the hashing; it
 //! proves nothing about the chain. Prints UNPROVEN-STATE-MATCH (exit 0) or UNPROVEN-STATE-MISMATCH (exit 1).
-use swiftsync_verify::assume;
+use zapp_assume as assume;
 use swiftsync_verify::ChainState;
 
 fn main() {

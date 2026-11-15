@@ -2,7 +2,7 @@
 
 Status: built on `feat/zapp-assume` (15.11.2026), not merged, not reviewed. No new guest and no change to any image:
 both are checks a verifier makes on a core chain proof it has already verified. Normative source:
-`swiftsync-verify/src/assume.rs`. `scripts/libzync/assume_ref.py` is an independent implementation of §3 written
+`zapps/assume/src/lib.rs`, the zAPPs' own module (`zapps/assume`, ZYNCAPPS.md §9), on the core verifier as a library. `scripts/libzync/assume_ref.py` is an independent implementation of §3 written
 from this document and Core's snapshot format.
 
 Bitcoin Core ships two shortcuts that rest on a value compiled into each release: **assumevalid** (skip script
@@ -15,8 +15,8 @@ fallback.
 ## 1. Commands
 
 ```sh
-swiftsync-verify assumevalid [--block <hash>] [--headers <file>] [--expect <h>:<hash> | --bitcoin-cli "<cmd>" | --mempool] <receipt>
-swiftsync-verify assumeutxo --headers <file> [--tracked <file>] [--expect … | --bitcoin-cli … | --mempool] <receipt> <snapshot>
+zapp-assume assumevalid [--block <hash>] [--headers <file>] [--expect <h>:<hash> | --bitcoin-cli "<cmd>" | --mempool] <receipt>
+zapp-assume assumeutxo --headers <file> [--tracked <file>] [--expect … | --bitcoin-cli … | --mempool] <receipt> <snapshot>
 ```
 
 Both run the full receipt verification first (SWIFTSYNC_PROOFS.md §5) and check nothing against a receipt that
@@ -30,9 +30,9 @@ assumeutxo: <snapshot> is the proven UTXO set at height <H>; Core's hash_seriali
 live_hash x <hex> y <hex>
 ```
 
-The same checks are in the C ABI (`swiftsync_verify_assume`, `swiftsync-verify-ffi/include/swiftsync_verify.h`) and
-the WASM build (`verify_assume`; `verifyAssume` in `swiftsync-verify.js`), all three through one library function,
-`assume::run_assume`. `scripts/libzync/assume_inputs.py` writes the two side inputs (`--headers`, `--tracked`) from a
+The same checks are in the zAPP's C ABI (`swiftsync_verify_assume`, `zapps/assume/ffi/include/zapp_assume.h`) and
+its WASM module (`verify_assume`; `verifyAssume` in `zapps/assume/wasm/zapp-assume.js`), all three through one library
+function, `zapp_assume::run_assume`. `scripts/libzync/assume_inputs.py` writes the two side inputs (`--headers`, `--tracked`) from a
 node; `scripts/libzync/assume_check.sh` runs the whole thing against a real `dumptxoutset` (§6).
 
 ## 2. assumevalid
@@ -206,11 +206,11 @@ commits, and its coin log does too; by the guest code the first block proved on 
 tracked coinbase, at or before 149,732) cannot join or spend cleanly. Not confirmed by a guest run here. The checker
 follows the guest; until a proof at such a height exists, the tracked bit is checked against the guest's code only.
 
-**Tests** (15.11.2026, this branch): `cargo test --release` in `swiftsync-verify` (assume: 11 tests: the ECMH map and
+**Tests** (15.11.2026, this branch; all run by `zapps/assume/test.sh`, CI's zapps job): `cargo test --release` in `zapps/assume` (11 tests: the ECMH map and
 sum against a num-bigint reference, partial sums, Core's amount and VARINT vectors, the MTP rule, the real snapshot, 16 tampered
-or reframed snapshots, other heights, headers, profiles, assumevalid), `swiftsync-verify/test-assume.sh` (27 CLI
-cases, `test-assume.out`), the C ABI's `cargo test` (2 assume tests) and `test.c` (5 assume cases, `test.out`),
-`swiftsync-verify-wasm/test-assume.mjs` (11 cases, `test-assume.out`). Every refusal case of the issue: a tampered
+or reframed snapshots, other heights, headers, profiles, assumevalid), `test-assume.sh` (30 CLI
+cases with 3 identity cases, `test-assume.out`), the C ABI's `cargo test` (2 tests) and `ffi/test_assume.c` (6 cases),
+`wasm/test-assume.mjs` (11 cases). Every refusal case of the issue: a tampered
 snapshot (txid, amount, height, coinbase flag, vout, script, a coin dropped, duplicated, split, or added), a wrong
 height (199, 1003; the 199 coins relabelled as 200), a wrong chain (another network magic, another base block,
 another tip in `--expect`, a flipped receipt), wrong side inputs (headers short, one timestamp changed, not from

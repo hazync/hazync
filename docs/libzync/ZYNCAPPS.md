@@ -114,8 +114,8 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
-| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). A verifier check, not a guest: `swiftsync-verify assumeutxo`, [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) (branch `feat/zapp-assume`, 15.11.2026) |
-| assumevalid | a block hash, the headers from it to the tip | `tip_hash`, `profile` bit 1 clear | "scripts of this block and all its ancestors passed Core's rules": `swiftsync-verify assumevalid`, [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) |
+| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). A verifier check, not a guest: `zapp-assume assumeutxo` (`zapps/assume`), [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) (branch `feat/zapp-assume`, 15.11.2026) |
+| assumevalid | a block hash, the headers from it to the tip | `tip_hash`, `profile` bit 1 clear | "scripts of this block and all its ancestors passed Core's rules": `zapp-assume assumevalid`, [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) |
 
 ## 7. Open
 
@@ -162,3 +162,22 @@ these files. Limits:
 
   Coin check on hazync.org does all of these (`assets/zapp.js`: a fact about another script, kind or height is
   refused before the verifier runs).
+
+## 9. Where each zAPP lives: one module per zAPP (15.11.2026)
+
+The owner's rule: a zAPP is "a separate side check, not the core engine". The core verifier (`swiftsync-verify`,
+`swiftsync-verify-ffi`, `swiftsync-verify-wasm`; released as `hazync-verify-*` and `hazync-verify.wasm`) checks CORE
+chain proofs only, and adding a zAPP never changes it: its `.wasm` stays byte-identical (`./build.sh`, sha256 in
+`swiftsync-verify-wasm/README.md`). Every zAPP has the same layout:
+
+| path | what |
+|---|---|
+| `zapps/<name>/` | the check library (`zapp_<name>`) and its CLI `zapp-<name>`, on `swiftsync-verify` as a library (receipt verification, chain state, facts) |
+| `zapps/<name>/wasm/` | its own WASM module (`build.sh`: the core's flags, `scripts/wasm-build.sh`), JS glue `zapp-<name>.js`, README with its sha256 |
+| `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one |
+| `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6) |
+| `zapps/common/` | not a zAPP: what every zAPP CLI shares, so each takes the same chain-identity flags as the core verifier (`--expect`, `--mempool` / `--mempool-url`, `--bitcoin-cli`), on the core library's `parse_expect` / `identity_matches`; and the core receipt check a zAPP on a core proof makes |
+
+| zAPP | module | CLI | WASM glue | C ABI |
+|---|---|---|---|---|
+| assumevalid / assumeutxo (ASSUME_ZAPPS.md) | `zapps/assume` | `zapp-assume` (`assumevalid`, `assumeutxo`) | `zapp-assume.js` (`verifyAssume`) | `zapps/assume/ffi` (`swiftsync_verify_assume`, `zapp_assume.h`) |

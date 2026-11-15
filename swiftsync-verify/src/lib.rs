@@ -221,9 +221,6 @@ pub struct ChainState {
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
 pub mod headers;
 
-/// The assumevalid and assumeutxo checkers (docs/libzync/ASSUME_ZAPPS.md).
-pub mod assume;
-
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");
 }

@@ -9,8 +9,6 @@
 //   r.verdict  // 'ok' | 'demo' | 'fail'
 //   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });   // the header-chain zyncAPP
 //   h.verdict, h.height, h.hash, h.chainwork
-//   const a = v.verifyAssume({ network: 'mainnet', receipt, assumevalid: 'tip', headers, snapshot, tracked, expect });
-//   a.verdict, a.assume.assumeutxo.hash_serialized_3   (docs/libzync/ASSUME_ZAPPS.md)
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
@@ -43,7 +41,7 @@ export async function loadVerifier(source) {
     typeof Response !== 'undefined' && resolved instanceof Response
       ? await WebAssembly.instantiateStreaming(resolved, {})
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
-  const { alloc, verify_frame, verify_facts, verify_assume, image_id, verify_headers, headers_image_id, memory } = instance.exports;
+  const { alloc, verify_frame, verify_facts, image_id, verify_headers, headers_image_id, memory } = instance.exports;
   const call = (fn, args) => {
     const bytes = frame(args);
     const ptr = alloc(bytes.length);
@@ -59,23 +57,6 @@ export async function loadVerifier(source) {
     /** As verify, plus facts ({coins, journeys, tries}) checked against the verified state; `expect` ('<height>:<hash>')
      *  is the tip from a source you trust, passed beside the facts, never inside them. */
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },
-    /** assumevalid / assumeutxo (docs/libzync/ASSUME_ZAPPS.md): assumevalid = 'tip' or a block hash (display order),
-     *  headers = raw 80-byte headers ending at the proven tip (from genesis for a snapshot), snapshot = a Core
-     *  dumptxoutset file (Uint8Array), tracked = the BIP30-tracked list text; expect as verifyFacts. */
-    verifyAssume(args) {
-      const enc = new TextEncoder();
-      const base = frame({ ...args, facts: undefined });
-      const parts = [enc.encode(''), enc.encode(args.expect || ''), enc.encode(args.assumevalid || ''),
-        args.headers || new Uint8Array(0), args.snapshot || new Uint8Array(0), enc.encode(args.tracked || '')];
-      const bytes = new Uint8Array(base.length + parts.reduce((n, p) => n + 4 + p.length, 0));
-      bytes.set(base, 0);
-      const view = new DataView(bytes.buffer);
-      let o = base.length;
-      for (const p of parts) { view.setUint32(o, p.length, true); bytes.set(p, o + 4); o += 4 + p.length; }
-      const ptr = alloc(bytes.length);
-      new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
-      return JSON.parse(readString(memory, verify_assume(ptr, bytes.length)));
-    },
     /** The header-chain zyncAPP: receipts = [first from genesis, then each run chained to the one before];
      *  expect ('<height>:<hash>') is the tip from a source you trust. `now` defaults to this device's clock. */
     verifyHeaders({ receipts, now, imageHex, expect }) {

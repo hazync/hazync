@@ -1,0 +1,25 @@
+[package]
+name = "zapp-assume-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI for the assumevalid and assumeutxo zyncAPPs (zapps/assume): check them from C or C++ (e.g. Bitcoin Core)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "zapp_assume_ffi"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+zapp-assume = { path = ".." }
+zapp-common = { path = "../../common" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

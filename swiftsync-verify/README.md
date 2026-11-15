@@ -42,13 +42,6 @@ and `/trie/history/<spk>`. Each is checked against the verified state's trie roo
 `reproduce/LIBZYNC_IDS` (`2db34e12…` in v0.24.0). Without `--expect` the chain identity is not checked and the output
 says so. The whole chain from genesis to 975,278 is one such proof (`docs/RELEASE_NOTES_v0.24.0.md`).
 
-**assumevalid and assumeutxo** ([`docs/libzync/ASSUME_ZAPPS.md`](../docs/libzync/ASSUME_ZAPPS.md)).
-`swiftsync-verify assumevalid [--block <hash> --headers <file>] <receipt>` names the block a node may give as
-`-assumevalid` (the proven tip, or an ancestor shown by headers ending at it). `swiftsync-verify assumeutxo --headers
-<genesis..tip> [--tracked <file>] <receipt> <snapshot>` checks a Core `dumptxoutset` file against the proof's live-coin
-hash and prints Core's `hash_serialized_3` of it. Both take `--expect` / `--bitcoin-cli` / `--mempool` as facts do.
-Tests: `bash swiftsync-verify/test-assume.sh` (`test-assume.out`) on Core v31.1.0 snapshots in `vectors/assume/`.
-
 **Proof bundles.** `swiftsync-verify [--network ...] bundle <receipt> <out.sspf>` writes one file holding the
 receipt and a header naming network, image, height, tip, work and trie root (`docs/libzync/PROOF_BUNDLE.md`, version
 2). A bundle is accepted wherever a receipt is; its header is checked against the verified result and never trusted.
