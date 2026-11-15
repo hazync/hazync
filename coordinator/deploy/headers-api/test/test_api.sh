@@ -91,13 +91,13 @@ except Exception: print(1)")"
 
 # rate limit: a burst of 3 per client; clients told apart by X-Forwarded-For from a trusted proxy (127.0.0.1)
 AP3=$(port); B3=http://127.0.0.1:$AP3; start "$AP3" RATE=0.01 BURST=3
-codes=$(for i in 1 2 3 4 5; do get -H 'X-Forwarded-For: 203.0.113.7' "$B3/path?h=1"; echo; done | tr '\n' ' ')
+codes=$(for _ in 1 2 3 4 5; do get -H 'X-Forwarded-For: 203.0.113.7' "$B3/path?h=1"; echo; done | tr '\n' ' ')
 t "rate limit: client A's 4th and 5th requests are refused" "200 200 429 429 " "$(echo "$codes" | cut -d' ' -f2-6)"
 t "  client B is not" 200 "$(get -H 'X-Forwarded-For: 198.51.100.9' "$B3/path?h=1")"
 
 t "  /tx has its own, tighter limit (TX_BURST=2): 3rd /tx refused, /path still served" "200 200 429 200" "$(AP5=$(port); start "$AP5" RATE=0.01 BURST=10 TX_RATE=0.01 TX_BURST=2 STATE_DIR="$W/state5"
   wait_tip_at () { for _ in $(seq 1 100); do [ "$(curl -s "http://127.0.0.1:$AP5/status" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tip"])')" = 200 ] && return 0; sleep 0.1; done; }
-  wait_tip_at; for u in tx tx tx; do get -H 'X-Forwarded-For: 203.0.113.8' "http://127.0.0.1:$AP5/tx?txid=$TX"; echo; done | tr '\n' ' '
+  wait_tip_at; for _ in 1 2 3; do get -H 'X-Forwarded-For: 203.0.113.8' "http://127.0.0.1:$AP5/tx?txid=$TX"; echo; done | tr '\n' ' '
   get -H 'X-Forwarded-For: 203.0.113.8' "http://127.0.0.1:$AP5/path?h=1")"
 
 # a slow /tx (getblock of a big block) must not hold up the sync: the sync has its own RPC connection
