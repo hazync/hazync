@@ -119,7 +119,7 @@ was therefore not built or measured.)
 - **The headers** are the node's own (a node syncs headers before it loads a snapshot), bound to the proof exactly
   as in §2 and required to run from genesis to the tip. 80·(H + 1) bytes: 16,080 at H = 200.
 - **The tracked list** is small: on mainnet to 974,111, 173 transactions are tracked and 22 of their outputs are
-  unspent (ROADMAP J4), 0 at H = 200 (measured, §5). It is derived from the blocks (`assume_inputs.py --tracked`:
+  unspent (ROADMAP J4); measured here (§5): 0 at 200 and at 100,000, 101 at 174,000. It is derived from the blocks (`assume_inputs.py --tracked`:
   utreexo_ref.py's own `Tracked` rule over every block 1..H). A node that loads a snapshot does not have the blocks,
   so for mainnet the list would have to come with the proof or be published (§7).
 
@@ -179,12 +179,35 @@ P2P, §6). Laptop: WSL2, release build.
 | BIP30-tracked live coins at 200 | 0 (`assume_inputs.py`); the match with an empty list agrees |
 | assumeutxo check at 200, laptop | 0.01 s (the CLI's own timer) |
 | throwaway node to 200 on hazync-coord | sync 28-31 s, `dumptxoutset rollback=200` 14-15 s |
-| WASM build | 1,295,563 bytes raw, 381,660 gzipped (main's README: 1,248,921 / 362,580; this branch's stage path differs, which README says moves the bytes by ~235) |
+| WASM build | 1,296,740 bytes raw, 381,998 gzipped (main's README: 1,248,921 / 362,580; built with a `SWIFTSYNC_WASM_STAGE` override, which the README says moves the bytes by ~235) |
 
-MEASURED_LARGER
+**Beyond 200: against a prover run's state, not a proof.** No receipt in the repo reaches past 200, so the encoding
+was also checked against hazync-coord's `libzync-prep` run of 07.11.2026 (`state_<h>.json`, the host's native
+`ChainState`, profile 113 = `0x71`; its `state_200.json` has the proof's `live_hash` at 200) with
+`cargo run --release --example assume_state` (testing only; it proves nothing about the chain). Snapshots by Core
+v31.1.0 from throwaway nodes synced from hazync-coord's node.
 
-**Tests** (15.11.2026, this branch): `cargo test --release` in `swiftsync-verify` (assume: 10 tests: the ECMH map and
-sum against a num-bigint reference, Core's amount and VARINT vectors, the MTP rule, the real snapshot, 16 tampered
+| height | coins | result | rate (laptop, 16 threads / 1 core) |
+|---|---|---|---|
+| 100,000 | 71,888 (73% P2PK uncompressed, special types 4/5) | ECMH = prep's; `hash_serialized_3` `c10e49b7…9a06` = Core's `txoutset_hash`; 0 tracked coins live | 7.4-7.9 µs/coin / 20-23 µs/coin |
+| 174,000 | 1,468,699 | ECMH = prep's **only with an EMPTY tracked list**; with the 101 tracked coins `assume_inputs.py` finds (73 coinbase, 28 not; created 149,732..172,561), and with either subset, it differs | 1.87-1.95 µs/coin / 15.8 µs/coin |
+
+At 100,000 the single-reader stage bounds the rate (each P2PK key is decompressed, a square root, before the hash);
+at 174,000 the map to the curve, run on every core, dominates. Earlier builds: 34-42 µs/coin at 100,000 with
+`Fq::sqrt` and one thread.
+
+**The 174,000 mismatch is the prover host's, not the checker's (finding, not fixed here).** The guest sets flag
+bit 1 itself for a coinbase mined before BIP34 that indicates a later height (`agg_lite.rs`, `root || repeat`), e.g.
+`a9f87755…6e10` (scriptSig `04 1f7e3201`, indicating 20,086,303). The host reads that flag from the block file
+(`prep.rs` / `main.rs`: `coinbase_flags`, default 1; prevouts' `coin_is_coinbase` bit 1), and
+`prover/fetch_block_rpc.py`, the deployed fetcher, writes neither (only `experimental/.../gpu/fleet/mkblock.py` and
+the core-rules rig do). So prep's leaves for tracked coins lack bit 1, its live hash differs from what the guest
+commits, and its coin log does too; by the guest code the first block proved on such a state (from the first
+tracked coinbase, at or before 149,732) cannot join or spend cleanly. Not confirmed by a guest run here. The checker
+follows the guest; until a proof at such a height exists, the tracked bit is checked against the guest's code only.
+
+**Tests** (15.11.2026, this branch): `cargo test --release` in `swiftsync-verify` (assume: 11 tests: the ECMH map and
+sum against a num-bigint reference, partial sums, Core's amount and VARINT vectors, the MTP rule, the real snapshot, 16 tampered
 or reframed snapshots, other heights, headers, profiles, assumevalid), `swiftsync-verify/test-assume.sh` (27 CLI
 cases, `test-assume.out`), the C ABI's `cargo test` (2 assume tests) and `test.c` (5 assume cases, `test.out`),
 `swiftsync-verify-wasm/test-assume.mjs` (11 cases, `test-assume.out`). Every refusal case of the issue: a tampered
@@ -216,6 +239,9 @@ which for H = 200 on hazync-coord's node (at 975,954 on 15.11.2026) is 975,754 b
   verifier per network (like Core's chainparams), or have prep write it. Only completeness depends on it.
 - **The large-H cost.** The check is one SHA-256, one hash-to-curve (a square root) and one point addition per coin,
   streamed (memory: the header times, one coin); single-threaded. Only the rates in §5 are measured.
+- **The host's tracked flag (§5).** `fetch_block_rpc.py` writes no `coinbase_flags` and no prevout bit 1, so the
+  prover host and prep give tracked coins no bit 1 while the guest does. By the code, the board's chain stops at the
+  first such block (at or before 149,732). Needs a guest execute run on that block to confirm, then a host fix.
 - **Core integration.** Core loads a snapshot only at heights in its chainparams and checks its compiled hash. This
   checker runs before `loadtxoutset` (or a patched node takes the `hash_serialized_3` it prints). Nothing in Core is
   changed.
