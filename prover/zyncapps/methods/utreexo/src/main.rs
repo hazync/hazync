@@ -182,8 +182,8 @@ fn main() {
         if prof > 0 && h % prof == 0 {
             let p = &d.prof;
             env::log(&alloc::format!(
-                "UTX_CYC h={h} cycles={} utreexo_cycles={} leaf_hashes={} parent_hashes={} empty_adds={} log_leaves={} outputs={} inputs={} txs={} bytes={}",
-                env::cycle_count(), p.utreexo_cycles, p.leaf_hashes, p.parent_hashes, p.empty_adds, p.log_leaves, p.outputs, p.inputs, p.txs, p.bytes
+                "UTX_CYC h={h} cycles={} utreexo_cycles={} leaf_hashes={} leaf_blocks={} parent_hashes={} empty_adds={} log_leaves={} outputs={} inputs={} txs={} bytes={}",
+                env::cycle_count(), p.utreexo_cycles, p.leaf_hashes, p.leaf_blocks, p.parent_hashes, p.empty_adds, p.log_leaves, p.outputs, p.inputs, p.txs, p.bytes
             ));
         }
     }

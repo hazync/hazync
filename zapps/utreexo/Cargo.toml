@@ -1,0 +1,37 @@
+[package]
+name = "zapp-utreexo"
+version = "0.1.0"
+edition = "2021"
+description = "Check a Utreexo roots zyncAPP proof: Floresta's accumulator after block H, from a Hazync chain proof"
+license = "MIT"
+publish = false
+
+# One module per zAPP (owner, 2026-11-15): the check library and the `zapp-utreexo` CLI here, the WASM build in wasm/,
+# the guest in prover/zyncapps/methods/utreexo. The core verifier (swiftsync-verify) is used as a library for the core
+# statement's policy (trusted images, genesis anchor, minimum work, clock, chain identity); it holds no Utreexo code.
+
+[lib]
+name = "zapp_utreexo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zapp-utreexo"
+path = "src/main.rs"
+
+[dependencies]
+swiftsync-verify = { path = "../../swiftsync-verify" }
+libzync = { path = "../../libzync", default-features = false }
+# disable-dev-mode: RISC0_DEV_MODE can never make this checker accept a fake receipt (as swiftsync-verify).
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

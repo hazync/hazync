@@ -131,6 +131,12 @@ pub fn utreexo_leaf(tag: &[u64; 8], block_hash: &H, txid: &H, vout: u32, height:
     finish512(*tag, 128, &m)
 }
 
+/// The SHA-512 blocks a leaf costs after the cached tag block: 81 fixed bytes, the CompactSize, the script, 17 of padding.
+pub fn leaf_blocks(spk_len: usize) -> u64 {
+    let cs = if spk_len < 0xfd { 1 } else { 3 };
+    (81 + cs + spk_len + 17).div_ceil(128) as u64
+}
+
 /// rustreexo's `parent_hash`: SHA-512/256(left ‖ right).
 pub fn utreexo_parent(l: &H, r: &H) -> H {
     let mut b = [0u8; 64];
@@ -346,6 +352,8 @@ pub struct Prof {
     /// cycles spent in Utreexo leaf hashing and the forest add (only with a clock)
     pub utreexo_cycles: u64,
     pub leaf_hashes: u64,
+    /// SHA-512 compressions in those leaf hashes, the tag block excluded (one per 128 bytes of the rest, padded)
+    pub leaf_blocks: u64,
     pub parent_hashes: u64,
     pub empty_adds: u64,
     pub log_leaves: u64,
@@ -401,6 +409,9 @@ impl Deriver {
     #[allow(clippy::type_complexity)]
     fn uadd(&mut self, c: Option<(&H, &H, u32, u32, bool, u64, &[u8])>) {
         let t0 = self.prof.clock.map(|f| f());
+        if let Some((.., spk)) = &c {
+            self.prof.leaf_blocks += leaf_blocks(spk.len());
+        }
         let leaf = c.map(|(bh, txid, v, h, cb, value, spk)| utreexo_leaf(&self.tag, bh, txid, v, h, cb, value, spk));
         if leaf.is_some() {
             self.n_live += 1;

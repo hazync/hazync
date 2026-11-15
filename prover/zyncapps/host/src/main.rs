@@ -13,7 +13,8 @@
 //!       Floresta's Utreexo accumulator after H (docs/libzync/UTREEXO_ZAPP.md), in runs of at most N blocks chained by
 //!       their state digest. A state JSON (prep's) instead of a receipt: execute only, the core receipt an unresolved
 //!       assumption. --ref: the roots must equal those utreexo-ref (Floresta's own code) printed for H.
-//!   zyncapp utreexo-verify <final run receipt> [--expect-at <H>:<hash>] [--expect <T>:<hash>] [--core-image <hex>] [--mempool]
+//!       The receipts are checked by zapps/utreexo (`zapp-utreexo verify`), the zAPP's own module.
+//!   zyncapp utreexo-count <block_<h>.json ...>   per block: Utreexo adds, leaf SHA-512 blocks, inputs (cost model)
 //!   zyncapp id
 //!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
 //!
@@ -149,7 +150,33 @@ fn main() {
             println!("ZYNCAPP_UTREEXO_ID {}", id_hex(&ZYNCAPP_UTREEXO_ID));
         }
         Some("utreexo-prove") if a.len() >= 5 => utreexo_prove(&a),
-        Some("utreexo-verify") if a.len() >= 2 => utreexo_verify(&a),
+        Some("utreexo-count") if a.len() >= 2 => {
+            // Per block (block_<h>.json files): what the Utreexo part of the walk would hash if every coin it adds were
+            // still live at H (an upper bound on its leaf work), and the inputs a replay-with-proofs design would delete.
+            for p in &a[1..] {
+                let (dir, file) = p.rsplit_once('/').unwrap_or((".", p));
+                let h: u32 = file.trim_start_matches("block_").trim_end_matches(".json").parse().unwrap_or_else(|_| die("block_<h>.json"));
+                let b = utreexo_host::read_block(dir, h);
+                let mut made = std::collections::HashSet::new();
+                let mut spent = std::collections::HashSet::new();
+                let (mut outs, mut unsp, mut adds, mut blocks, mut ins, mut ins_in_block) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+                for (ti, t) in b.txs.iter().enumerate() {
+                    if ti > 0 { for i in &t.inputs { ins += 1; if made.contains(i) { ins_in_block += 1; spent.insert(*i); } } }
+                    for v in 0..t.outputs.len() { made.insert((b.txids[ti], v as u32)); }
+                }
+                for (ti, t) in b.txs.iter().enumerate() {
+                    for (v, (_, spk)) in t.outputs.iter().enumerate() {
+                        outs += 1;
+                        if libzync::utreexo_roots::unspendable_script(spk) { unsp += 1; continue; }
+                        if spent.contains(&(b.txids[ti], v as u32)) { continue; }
+                        adds += 1;
+                        blocks += libzync::utreexo_roots::leaf_blocks(spk.len());
+                    }
+                }
+                println!("UTREEXO_COUNT height={h} txs={} bytes_stripped={} outputs={outs} unspendable={unsp} adds={adds} leaf_blocks_if_all_live={blocks} inputs={ins} inputs_spending_this_block={ins_in_block}",
+                         b.txs.len(), b.stripped.len());
+            }
+        }
         Some("headers-exec") if a.len() >= 2 => {
             // K1: the header-chain zAPP, EXECUTED (cycles, no proof) over a file of "height hex80" lines, as
             // fetched from a node. A file starting at 0 runs from genesis; otherwise its first 11 headers seed the state
@@ -617,29 +644,4 @@ fn utreexo_prove(a: &[String]) {
         if !execute { std::fs::copy(format!("{out}/{net}-{stop}-run{}.receipt", i + 1), format!("{out}/{net}-{stop}.receipt")).unwrap(); }
     }
     println!("UTREEXO_ID {}", hex(self_id_d.as_bytes()));
-}
-
-/// The verifier for the final run's receipt: a real proof under the utreexo image, its whole chain of runs of the same
-/// image from genesis, then the core statement under the core verifier's policy (core_policy). Exit 0 OK, 2 DEMO, 1 FAIL.
-fn utreexo_verify(a: &[String]) {
-    let fail = |m: String| -> ! { println!("ZYNCAPP_FAIL: {m}"); std::process::exit(1) };
-    if std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0").unwrap_or(false) { fail("RISC0_DEV_MODE is set: unset it to verify".into()); }
-    let r: Receipt = bincode::deserialize(&std::fs::read(&a[1]).unwrap_or_else(|e| fail(format!("{}: {e}", a[1]))))
-        .unwrap_or_else(|e| fail(format!("receipt: {e}")));
-    if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { fail("a FakeReceipt is not a proof".into()); }
-    let id = flag(a, "--elf").map(|p| risc0_zkvm::compute_image_id(&std::fs::read(p).unwrap()).unwrap()).unwrap_or(risc0_zkvm::sha::Digest::from(ZYNCAPP_UTREEXO_ID));
-    r.verify(id).unwrap_or_else(|e| fail(format!("the receipt does not verify under the utreexo image {}: {e}", hex(id.as_bytes()))));
-    let z: UtreexoStatement = r.journal.decode().unwrap_or_else(|e| fail(format!("journal: {e}")));
-    let idw: [u32; 8] = id.as_words().try_into().unwrap();
-    if z.kind != libzync::utreexo_roots::KIND_UTREEXO || z.done != 1 { fail("not a final utreexo statement".into()); }
-    if z.self_id != idw { fail("its earlier runs claim another image".into()); }
-    if let Some(e) = flag(a, "--expect-at") {
-        let (h, x) = swiftsync_verify::parse_expect(e).unwrap_or_else(|| fail("--expect-at: want <height>:<64 hex digits>".into()));
-        if !swiftsync_verify::identity_matches(h, &x, z.height, &z.block_hash) { fail(format!("--expect-at: block {h} is {x}; the statement is for block {} {}", z.height, disp(&z.block_hash))); }
-    }
-    let c = Core { core_id: &z.core_id, anchor_id: &z.anchor_id, lineage: &z.lineage, profile: z.profile, height: z.core_height,
-                   tip_hash: &z.tip_hash, cum_work: &z.cum_work, max_time: z.max_time };
-    let line = format!("ZYNCAPP_UTREEXO_OK: Floresta's Utreexo accumulator after block {} {} is leaves={} roots={} ({} runs; core tip {})",
-                       z.height, disp(&z.block_hash), z.leaves, roots_str(&z.roots), z.runs, z.core_height);
-    verdict(core_policy(&c, a), line);
 }
