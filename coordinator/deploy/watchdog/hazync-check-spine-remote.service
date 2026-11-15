@@ -8,9 +8,15 @@ Wants=network-online.target
 After=network-online.target
 OnFailure=hazync-alert@%n.service
 
+# Hazync v2: the public spine is a libzync receipt, checked with the libzync verifier (the release's
+# hazync-verify-x86_64-linux-gnu, installed beside the CORE one, which stays as the v1 record's verifier). The web box
+# has no checkout, so the image is named here; it must be the coordinator's (`/api/meta` method_id). Until 2026-11-15
+# this unit still ran the CORE verifier (guest 37987b85): 444 failed runs in a row, every 10 min since the 11-12 switch.
 [Service]
 Type=oneshot
-Environment=HAZYNC_VERIFY=/usr/local/bin/hazync-verify
+Environment=HAZYNC_LIBZYNC=1
+Environment=HAZYNC_VERIFY=/usr/local/bin/hazync-verify-lz
+Environment=HAZYNC_METHOD_ID=46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
 Environment=CHECK_FAILS_BEFORE_ALERT=2
 StateDirectory=hazync-checks
 ExecStart=/usr/local/sbin/hazync-run-check check-spine-remote /usr/local/sbin/hazync-check-spine --url https://api.hazync.org --reference https://mempool.space/api --reference https://blockstream.info/api

@@ -6,6 +6,9 @@
 > things the steps below had missed; each is now written into the step it belongs to, marked **Correction
 > (2026-11-12)**, so this page is right for anyone repeating it. They are summarised in section 4c. Day-to-day
 > operation of the v2 board is in [`../RUNBOOK.md`](../RUNBOOK.md) § "The live board: Hazync v2".
+>
+> **The next reset**, to image `46666b6f` (v0.26.0, the board restarts from genesis, the paper prep is re-forested):
+> [`RESET_v026.md`](RESET_v026.md). It follows step 0 and section 4c below.
 
 Before the switch, the libzync board ran beside the original one on the coordinator box:
 
