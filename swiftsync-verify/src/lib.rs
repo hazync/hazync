@@ -29,8 +29,8 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_231_006_505,
         genesis_bits: 0x1d00_ffff,
         genesis_work: 4_295_032_833,
-        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (mainnet).
-        min_work_hex: "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (mainnet; assumevalid 966143).
+        min_work_hex: "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
         genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
         checkpoint_height: 970_000,
@@ -46,8 +46,8 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_231_006_505,
         genesis_bits: 0x1d00_ffff,
         genesis_work: 4_295_032_833,
-        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (mainnet).
-        min_work_hex: "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (mainnet; assumevalid 966143).
+        min_work_hex: "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
         genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
         checkpoint_height: 970_000,
@@ -62,8 +62,8 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_598_918_400,
         genesis_bits: 0x1e03_77ae,
         genesis_work: 4_838_420,
-        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (default signet).
-        min_work_hex: "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (default signet; assumevalid 321295).
+        min_work_hex: "00000000000000000000000000000000000000000000000000001090e9dc1520",
         genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
         checkpoint_height: 325_000,
@@ -78,8 +78,8 @@ pub const IMAGES: &[Image] = &[
         genesis_time: 1_598_918_400,
         genesis_bits: 0x1e03_77ae,
         genesis_work: 4_838_420,
-        // Core v28 chainparams.cpp, consensus.nMinimumChainWork (default signet).
-        min_work_hex: "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (default signet; assumevalid 321295).
+        min_work_hex: "00000000000000000000000000000000000000000000000000001090e9dc1520",
         genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
         checkpoint_height: 325_000,

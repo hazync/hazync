@@ -85,8 +85,9 @@ below; step 7 needs a source you name (without one they print the tip hash to co
      alone. The values are PINNED (a chain keeps its anchor through every handover, HANDOVER.md §4): mainnet
      `852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167`, signet
      `3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827` (`swiftsync-verify` unit tests pin both).
-3a. **Minimum work.** `J.cum_work` must be at least Core v28's `nMinimumChainWork` for the network (mainnet
-   `0x…88e186b70e0862c193ec44d6`, signet `0x…25dbd66e58f`). Below it the proof is a valid chain from genesis but no
+3a. **Minimum work.** `J.cum_work` must be at least Bitcoin Core v32.1's `nMinimumChainWork` for the network (mainnet
+   `0x…0145ec036acc5ba740052af1a0`, at its assumevalid block 966,143; default signet `0x…1090e9dc1520`, block 321,295;
+   v0.26.0 on: before it, Core v28's `0x…88e186b70e0862c193ec44d6` / `0x…25dbd66e58f`). Below it the proof is a valid chain from genesis but no
    evidence it is the network's chain (a low-work fork costs little to mine): the verdict is DEMO (exit 2), not OK.
 3b. **Checkpoint.** A libzync image pins one block (`prover/methods/guest/src/checkpoint.rs`): mainnet 970,000 =
    `000000000000000000014e6a…f29b5a07`, signet 325,000 = `000000057a36…e306fcd4`; none on regtest. The guest refuses any

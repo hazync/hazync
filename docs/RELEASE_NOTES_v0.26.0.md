@@ -83,6 +83,14 @@ verified, and a changed receipt refused.
   by the verifier. The v0.25.0 board's prep carries over without re-running (`libzync-reforest`,
   [`libzync/UNDO.md`](libzync/UNDO.md) §8).
 
+- **The verifier's minimum chain work is Bitcoin Core v32.1's** (mainnet `…0145ec036acc5ba740052af1a0` at block
+  966,143, signet `…1090e9dc1520`; it was Core v28's). Below it a valid chain from genesis is reported DEMO, not OK.
+  Verifier and host only: the image does not carry it. Our comparison found no consensus change from Core v28.0 to
+  v32.1 in the code Hazync compiles (no verdict changes on Core's test vectors).
+- **The browser verifier's facts check works again.** Since 13.11.2026 (never in a release) `verify_facts` read its
+  optional lineage chunk before the facts, so every `verifyFacts` call with facts, and every `verify` with an expected
+  tip, failed. The lineage is now the last chunk in both frames; `test-facts-frame.mjs` (in CI) checks a real balance
+  fact and an expected tip against the real 1..200 receipt.
 - **The sponsor bot** (#728) skips a run while a fresh release is still being signed (no signed manifest yet), instead
   of latching off.
 - **The board's progress alarm** (#719) takes a lower proven count as a new board, not a stall. After the v2 switch it

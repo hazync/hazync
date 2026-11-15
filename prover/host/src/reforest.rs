@@ -43,13 +43,48 @@ fn node(cmd: &str, args: &[&str]) -> Result<Vec<u8>, String> {
     Ok(o.stdout)
 }
 
-/// Satoshis from the node's BTC amount. A JSON number with at most 8 decimals below 21e6 BTC: as an f64 its error is
-/// under 0.25 sat, so rounding is exact; checked anyway.
-fn sats(v: &serde_json::Value) -> u64 {
-    let f = v.as_f64().expect("getblock: prevout value is not a number");
+/// Satoshis from the node's BTC amount (a JSON number with at most 8 decimals, at most 21e6). As an f64 it carries under
+/// 0.19 sat of representation error (ulp(2^25) / 2 BTC) and the product under 0.13 sat more, so the rounded product is
+/// exactly the amount. The check: those satoshis, back in BTC, are the node's value to within 2 ulp; a value with more
+/// than 8 decimals is refused. (It was `|f * 1e8 - s| < 1e-3`, which refused real amounts: 175,815.27 BTC carries
+/// 0.003 sat of representation error. Found by the 11-14 pre-computation, block ~123,000.)
+fn sats_of(f: f64) -> Result<u64, String> {
+    if !(0.0..=21e6).contains(&f) { return Err(format!("prevout value {f} is not a bitcoin amount")); }
     let s = (f * 1e8).round();
-    assert!(s >= 0.0 && (f * 1e8 - s).abs() < 1e-3 && s <= 2.1e15, "getblock: prevout value {f} is not a satoshi amount");
-    s as u64
+    if (s / 1e8 - f).abs() > 2.0 * f64::EPSILON * f.max(1e-8) { return Err(format!("prevout value {f} is not a whole number of satoshis")); }
+    Ok(s as u64)
+}
+
+fn sats(v: &serde_json::Value) -> u64 {
+    sats_of(v.as_f64().expect("getblock: prevout value is not a number")).unwrap_or_else(|e| panic!("getblock: {e}"))
+}
+
+#[cfg(test)]
+mod sats_tests {
+    use super::sats_of;
+    #[test]
+    fn amounts_convert_exactly_and_others_are_refused() {
+        for (txt, want) in [("175815.27", 17_581_527_000_000u64), ("50", 5_000_000_000), ("0.00000001", 1), ("0", 0),
+                            ("20999999.9769", 2_099_999_997_690_000), ("12345678.12345678", 1_234_567_812_345_678),
+                            ("0.1", 10_000_000), ("21000000", 2_100_000_000_000_000), ("1234.56789012", 123_456_789_012)] {
+            let f: f64 = txt.parse().unwrap();
+            assert_eq!(sats_of(f), Ok(want), "{txt}");
+            // the JSON path the node's output takes
+            let v: serde_json::Value = serde_json::from_str(txt).unwrap();
+            assert_eq!(sats_of(v.as_f64().unwrap()), Ok(want), "{txt} via serde_json");
+        }
+        for txt in ["0.000000001", "1.123456789", "-1", "21000000.00000001", "1e20"] {
+            assert!(sats_of(txt.parse().unwrap()).is_err(), "{txt}");
+        }
+        // every amount of the form k / 100,000,000 BTC near the magnitudes the chain has, exactly
+        for base in [1u64, 123_456_789, 17_581_527_000_000, 2_099_999_997_690_000] {
+            for k in base.saturating_sub(500)..base + 500 {
+                let txt = format!("{}.{:08}", k / 100_000_000, k % 100_000_000);
+                let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+                assert_eq!(sats_of(v.as_f64().unwrap()), Ok(k), "{txt}");
+            }
+        }
+    }
 }
 
 /// Block `h` from the node: (block hash, display order; undo hash; inputs).
