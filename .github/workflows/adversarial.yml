@@ -92,6 +92,7 @@ jobs:
           cargo build --release --manifest-path swiftsync-verify-ffi/Cargo.toml
           (cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o vtest && ./vtest)
           (cd swiftsync-verify-wasm && node test-vectors.mjs target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm)
+          (cd swiftsync-verify-wasm && node test-facts-frame.mjs)
           bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
           node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
           swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
