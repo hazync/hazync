@@ -107,14 +107,28 @@ pub fn script_list_hash(scripts: &[Vec<u8>]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// A purpose or nonce: 1 to [`MAX_FIELD`] bytes, no control characters (a line break could forge a line of the message
-/// a wallet shows its user).
+/// A purpose or nonce: 1 to [`MAX_FIELD`] bytes of printable ASCII (0x20 to 0x7e), not starting or ending with a space.
+/// Printable ASCII, not "no control characters": Unicode line and paragraph separators, bidirectional and other format
+/// characters would let a purpose show a wallet's user one line while the message says another. Surrounding spaces are
+/// refused rather than trimmed, so every checker (CLI, WASM) compares the same bytes the signer signed.
 fn field_ok(what: &str, s: &str) -> Result<(), String> {
     if s.is_empty() || s.len() > MAX_FIELD {
         return Err(format!("{what}: 1 to {MAX_FIELD} bytes"));
     }
-    if s.chars().any(|c| c.is_control()) {
-        return Err(format!("{what}: no control characters (line breaks, tabs)"));
+    if !s.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+        return Err(format!("{what}: printable ASCII only (no line breaks, tabs, or non-ASCII characters)"));
+    }
+    if s.starts_with(' ') || s.ends_with(' ') {
+        return Err(format!("{what}: no leading or trailing spaces"));
+    }
+    Ok(())
+}
+
+/// 64 lower-case hex digits: how a statement writes the core image id and the block hash (checked before either is
+/// printed or compared).
+fn hex64_ok(what: &str, s: &str) -> Result<(), String> {
+    if s.len() != 64 || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Err(format!("{what}: want 64 lower-case hex digits, got {s:?}"));
     }
     Ok(())
 }
@@ -131,10 +145,15 @@ fn scripts_of(st: &Statement) -> Result<Vec<Vec<u8>>, String> {
 pub fn message(st: &Statement) -> Result<String, String> {
     field_ok("purpose", &st.purpose)?;
     field_ok("nonce", &st.nonce)?;
+    hex64_ok("core_id", &st.core_id)?;
+    hex64_ok("block_hash", &st.block_hash)?;
+    if st.entries.is_empty() || st.entries.len() > MAX_ENTRIES {
+        return Err(format!("1 to {MAX_ENTRIES} scripts"));
+    }
     let scripts = scripts_of(st)?;
     Ok(format!(
         "{MESSAGE_HEADER}\nnetwork: {}\ncore image: {}\nblock: {} {}\nscripts: {} sha256 {}\ntotal: {} sat\npurpose: {}\nnonce: {}",
-        st.network, st.core_id.to_lowercase(), st.height, st.block_hash.to_lowercase(), scripts.len(),
+        st.network, st.core_id, st.height, st.block_hash, scripts.len(),
         hex(&script_list_hash(&scripts)), st.total, st.purpose, st.nonce))
 }
 
@@ -170,6 +189,21 @@ pub fn check_signature(network: &str, script: &[u8], format: &str, sig: &str, ms
     let addr = Address::from_script(Script::from_bytes(script), net)
         .map_err(|_| "this script has no address form (bare multisig or non-standard): the bip322 crate cannot check a signature for it".to_string())?
         .to_string();
+    // BIP-341: a 65-byte key-path signature whose hash type byte is 0x00 is invalid (SIGHASH_DEFAULT is written only as a
+    // 64-byte signature); the crate reads 0x00 as DEFAULT and accepts it, so refuse it here first
+    if Script::from_bytes(script).is_p2tr() {
+        let wit = match format {
+            "simple" => base64::engine::general_purpose::STANDARD.decode(sig.strip_prefix(bip322::SIMPLE_SIGNATURE_PREFIX).unwrap_or(sig)).ok()
+                .and_then(|b| bitcoin::consensus::deserialize::<bitcoin::Witness>(&b).ok()),
+            "full" => base64::engine::general_purpose::STANDARD.decode(sig.strip_prefix(bip322::FULL_SIGNATURE_PREFIX).unwrap_or(sig)).ok()
+                .and_then(|b| bitcoin::consensus::deserialize::<bitcoin::Transaction>(&b).ok())
+                .and_then(|t| t.input.first().map(|i| i.witness.clone())),
+            _ => None,
+        };
+        if wit.as_ref().and_then(|w| w.nth(0)).map_or(false, |s0| s0.len() == 65 && s0[64] == 0x00) {
+            return Err("P2TR: a 65-byte signature with hash type 0x00 (invalid under BIP-341: DEFAULT is 64 bytes)".into());
+        }
+    }
     let unconditional = |v: bip322::Verification| match v {
         bip322::Verification::Valid { time, age } if time == LockTime::ZERO && age == Sequence(0) => Ok(()),
         bip322::Verification::Valid { .. } => Err("the BIP-322 proof is valid only from a time or age (nLockTime / nSequence set): refused".to_string()),
@@ -195,16 +229,22 @@ pub fn check_statement(cs: &ChainState, undo_from: u32, st: &Statement, ch: &Cha
     if st.network != net {
         return Err(format!("the statement is for {:?}, the proof is of {net}", st.network));
     }
+    hex64_ok("core_id", &st.core_id)?;
+    hex64_ok("block_hash", &st.block_hash)?;
     let core = core_id_of(cs);
-    if st.core_id.to_lowercase() != core {
-        return Err(format!("the statement names core image {}, the proof was made by {core}", st.core_id));
+    if st.core_id != core {
+        return Err(format!("the statement names core image {:?}, the proof was made by {core}", st.core_id));
     }
     if st.height != cs.height {
         return Err(format!("the statement is about block {}, the proof's tip is {} (a statement is at the proof's tip)", st.height, cs.height));
     }
     let tip = display_hash(&cs.tip_hash);
-    if st.block_hash.to_lowercase() != tip {
-        return Err(format!("the statement names block {} at {}, the proof's tip is {tip}", st.block_hash, st.height));
+    if st.block_hash != tip {
+        return Err(format!("the statement names block {:?} at {}, the proof's tip is {tip}", st.block_hash, st.height));
+    }
+    // before any per-entry work (hex decoding, the message's script list)
+    if st.entries.is_empty() || st.entries.len() > MAX_ENTRIES {
+        return Err(format!("1 to {MAX_ENTRIES} scripts"));
     }
     let msg = message(st)?;
     if let Some(p) = ch.purpose {
@@ -212,9 +252,6 @@ pub fn check_statement(cs: &ChainState, undo_from: u32, st: &Statement, ch: &Cha
     }
     if let Some(n) = ch.nonce {
         if n != st.nonce { return Err(format!("nonce {:?} is not the one asked for ({n:?})", st.nonce)); }
-    }
-    if st.entries.is_empty() || st.entries.len() > MAX_ENTRIES {
-        return Err(format!("1 to {MAX_ENTRIES} scripts"));
     }
     let scripts = scripts_of(st)?;
     if let Some(i) = scripts.windows(2).position(|w| w[0] >= w[1]) {
@@ -230,7 +267,7 @@ pub fn check_statement(cs: &ChainState, undo_from: u32, st: &Statement, ch: &Cha
         check_trie_fact(cs, undo_from, f).map_err(|x| format!("entry {i}: {x}"))?;
         let (c, v) = balance_of(want).map_err(|x| format!("entry {i}: expect {want:?}: {x}"))?;
         sum = sum.checked_add(v).ok_or("the values overflow")?;
-        coins += c;
+        coins = coins.checked_add(c).ok_or("the coin counts overflow")?;
     }
     if sum != st.total {
         return Err(format!("the statement's total is {} sat, its facts sum to {sum} sat", st.total));
@@ -246,6 +283,20 @@ pub fn check_statement(cs: &ChainState, undo_from: u32, st: &Statement, ch: &Cha
                       scripts.len(), st.height, st.purpose, st.nonce,
                       if challenged { " (as asked)" } else { " (NOT compared with your challenge: give --purpose and --nonce)" }),
     })
+}
+
+/// The recency check (`--max-age`): block `h` is at most `max_age` blocks behind the network's tip `tip` (from a source
+/// the checker trusts). A statement is about block H; its coins may have moved in any block since, so how old H may be
+/// is the checker's policy, and this is where it is applied. Ok: the line saying so.
+pub fn check_age(h: u32, tip: u32, max_age: u32) -> Result<String, String> {
+    if tip < h {
+        return Err(format!("the network's tip {tip} is below the statement's block {h}: that source is behind the proof"));
+    }
+    let age = tip - h;
+    if age > max_age {
+        return Err(format!("block {h} is {age} blocks behind the network's tip {tip}, more than the {max_age} allowed (--max-age)"));
+    }
+    Ok(format!("block {h} is {age} block(s) behind the network's tip {tip} (at most {max_age} allowed)"))
 }
 
 /// The producer side: a draft statement (no signatures) for `scripts` at the tip of a trie snapshot that matches the
@@ -486,7 +537,53 @@ mod tests {
         let mut t = st.clone(); t.entries[0].fact.kind = "history".into(); refuse(&t, &ASK, "want balance");
         let mut t = st.clone(); t.entries[0].fact.expect = None; refuse(&t, &ASK, "no answer");
         // a line break in the purpose would forge a line of the signed text
-        let mut t = st.clone(); t.purpose = "x\ntotal: 99 sat".into(); refuse(&t, &Challenge::default(), "control characters");
+        let mut t = st.clone(); t.purpose = "x\ntotal: 99 sat".into(); refuse(&t, &Challenge::default(), "printable ASCII");
+        // Unicode line / paragraph separators and bidi or other format characters, a tab, surrounding spaces
+        for bad in ["a\u{2028}total: 9 sat", "a\u{2029}b", "abc\u{202e}def", "zero\u{200b}width", "a\tb", "caf\u{e9}"] {
+            let mut t = st.clone(); t.purpose = bad.into(); refuse(&t, &Challenge::default(), "printable ASCII");
+            let mut t = st.clone(); t.nonce = bad.into(); refuse(&t, &Challenge::default(), "printable ASCII");
+        }
+        for bad in [" lead", "trail ", " "] {
+            let mut t = st.clone(); t.purpose = bad.into(); refuse(&t, &Challenge::default(), "leading or trailing|1 to");
+        }
+        // core_id / block_hash: 64 lower-case hex only, refused before they are compared or printed (a line break in
+        // either could forge a verdict line); the refusal prints them escaped
+        for bad in ["8888D59C4B8C699FD4CC3AFAF8168FF2BAA1F6511B1DCEA1C23F041B2B2315F4", "ZAPP_STATEMENT_OK\n", ""] {
+            let mut t = st.clone(); t.core_id = bad.into();
+            let e = check_statement(&cs, uf, &t, &ASK).unwrap_err();
+            assert!(e.contains("64 lower-case hex") && !e.contains('\n'), "{e:?}");
+            let mut t = st.clone(); t.block_hash = bad.into();
+            let e = check_statement(&cs, uf, &t, &ASK).unwrap_err();
+            assert!(e.contains("64 lower-case hex") && !e.contains('\n'), "{e:?}");
+        }
+        // too many entries: refused before any of them is decoded
+        let mut t = st.clone(); t.entries = vec![t.entries[0].clone(); MAX_ENTRIES + 1]; refuse(&t, &ASK, "1 to 10000 scripts");
+        // a P2TR key-path signature of 65 bytes ending 0x00 (BIP-341 invalid). The crate signs ALL (65 bytes, 0x01), so a
+        // SIGHASH_DEFAULT signature (64 bytes) is made here: valid as 64 bytes, and the crate alone also accepts it with
+        // 0x00 appended (it reads 0x00 as DEFAULT); check_signature refuses that
+        {
+            use base64::Engine;
+            use bitcoin::{hashes::Hash, key::TapTweak, sighash::{Prevouts, SighashCache, TapSighashType}};
+            let i = st.entries.iter().position(|e| unhex(&e.fact.script_pubkey).unwrap()[0] == 0x51).unwrap();
+            let spk = unhex(&st.entries[i].fact.script_pubkey).unwrap();
+            let addr = bitcoin::Address::from_script(bitcoin::Script::from_bytes(&spk), bitcoin::Network::Bitcoin).unwrap();
+            let msg = message(&st).unwrap();
+            let tx = bip322::create_to_sign(&bip322::create_to_spend(&addr, &msg).unwrap(), None, bip322::LockParams::default()).unwrap().unsigned_tx;
+            let prev = [bitcoin::TxOut { value: bitcoin::Amount::ZERO, script_pubkey: bitcoin::ScriptBuf::from_bytes(spk.clone()) }];
+            let h = SighashCache::new(&tx).taproot_key_spend_signature_hash(0, &Prevouts::All(&prev), TapSighashType::Default).unwrap();
+            let secp = bitcoin::secp256k1::Secp256k1::new();
+            let kp = bitcoin::key::Keypair::from_secret_key(&secp, &k2.inner).tap_tweak(&secp, None).to_keypair();
+            let sig = secp.sign_schnorr_no_aux_rand(&bitcoin::secp256k1::Message::from_digest(h.to_byte_array()), &kp);
+            let enc = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(bitcoin::consensus::serialize(&bitcoin::Witness::from_slice(&[b.to_vec()])));
+            let s64 = sig.as_ref().to_vec();
+            let mut s65 = s64.clone();
+            s65.push(0x00);
+            assert_eq!(check_signature("mainnet", &spk, "simple", &enc(&s64), &msg), Ok(()), "a 64-byte DEFAULT signature is valid");
+            assert!(bip322::verify_simple_encoded(&addr.to_string(), &msg, &enc(&s65)).is_ok(), "the crate alone takes 0x00 as DEFAULT");
+            let mut t = st.clone();
+            t.entries[i].signature = enc(&s65);
+            refuse(&t, &ASK, "hash type 0x00");
+        }
         // a format the entry's signature is not in; an empty statement; another version
         let mut t = st.clone(); t.entries[0].format = "full".into(); refuse(&t, &ASK, "entry 0");
         let mut t = st.clone(); t.entries.clear(); refuse(&t, &ASK, "scripts");
@@ -523,6 +620,14 @@ mod tests {
         let rep = verify(&Inputs { receipt: &r, image: Image::by_network("mainnet").unwrap(), anchor: None, now: 1_800_000_000 });
         assert_eq!(rep.verdict, Verdict::Fail);
         assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains("FakeReceipt")), "{:?}", rep.checks);
+    }
+
+    #[test]
+    fn recency() {
+        assert!(check_age(200, 200, 0).unwrap().contains("0 block(s) behind"));
+        assert!(check_age(200, 206, 6).is_ok());
+        assert!(check_age(200, 207, 6).unwrap_err().contains("7 blocks behind"));
+        assert!(check_age(200, 199, 6).unwrap_err().contains("behind the proof"));
     }
 
     #[test]

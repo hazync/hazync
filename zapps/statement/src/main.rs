@@ -3,13 +3,18 @@
 //! 15.11.2026 the separate `zync-statement`):
 //!
 //!   zapp-statement [--network mainnet|signet] [--image <hex>] [--expect <height>:<hash>] [--mempool | --mempool-url <base>]
-//!                  [--bitcoin-cli "<command>"] [--purpose <text> --nonce <text>] [--now <unix seconds>] <receipt> <statement.json>
+//!                  [--bitcoin-cli "<command>"] [--purpose <text> --nonce <text>] [--max-age <blocks>] [--now <unix seconds>]
+//!                  <receipt> <statement.json>
 //!
 //! The core receipt is verified by `swiftsync_verify::verify`, the same checks as `swiftsync-verify` (real proof, image,
 //! profile, anchor, block forest, time-too-new). Then the statement: its network, core image, height and block are the
 //! proof's; each balance fact holds against the proof's trie root; the total is their sum; each script's BIP-322
 //! signature verifies over the statement's message; purpose and nonce are the ones you give. The chain-identity flags
 //! are every zAPP CLI's (zapp-common).
+//!
+//! `--max-age <blocks>`: block H must be at most that many blocks behind the network's tip, as `--bitcoin-cli`
+//! (`getblockcount`) or `--mempool` (`/blocks/tip/height`) gives it (every source given must agree). Without it the OK
+//! line says H's age was not checked: the coins may have moved in any block after H.
 //!
 //! Exit 0 `ZAPP_STATEMENT_OK`, 2 `ZAPP_STATEMENT_DEMO` (everything holds, but the chain's work is below Core's minimum,
 //! the tip was not compared with a source you trust, or no --purpose / --nonce was given), 1 `ZAPP_STATEMENT_FAIL`.
@@ -52,8 +57,13 @@ fn read_statement(p: &str) -> Statement {
     serde_json::from_slice(&b).unwrap_or_else(|e| die(&format!("{p}: not a statement ({e})")))
 }
 
+/// Writes the statement atomically: a temporary file beside it, then a rename, so an interrupted `sign` never leaves a
+/// half-written statement in place of the draft.
 fn write_statement(p: &str, st: &Statement) {
-    std::fs::write(p, serde_json::to_string_pretty(st).unwrap() + "\n").unwrap_or_else(|e| die(&format!("{p}: {e}")));
+    let tmp = format!("{p}.tmp-{}", std::process::id());
+    std::fs::write(&tmp, serde_json::to_string_pretty(st).unwrap() + "\n")
+        .and_then(|_| std::fs::rename(&tmp, p))
+        .unwrap_or_else(|e| { let _ = std::fs::remove_file(&tmp); die(&format!("{p}: {e}")) });
 }
 
 fn main() {
@@ -108,14 +118,20 @@ fn produce(a: Vec<String>) {
         Some("sign") => {
             let p = a.get(1).unwrap_or_else(|| die("sign <statement.json> --keys <file>"));
             let kp = flag("--keys").unwrap_or_else(|| die("sign: --keys <file> is required"));
-            let text = std::fs::read_to_string(&kp).unwrap_or_else(|e| die(&format!("{kp}: {e}")));
-            let keys: Vec<bitcoin::PrivateKey> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'))
+            let mut text = std::fs::read_to_string(&kp).unwrap_or_else(|e| die(&format!("{kp}: {e}")));
+            let mut keys: Vec<bitcoin::PrivateKey> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .enumerate()
                 // the key itself is never echoed, only its line number
                 .map(|(i, l)| bitcoin::PrivateKey::from_wif(l).unwrap_or_else(|_| die(&format!("{kp}: key {} is not a WIF private key", i + 1))))
                 .collect();
             let mut st = read_statement(p);
             let n = statement::sign(&mut st, &keys).unwrap_or_else(|e| die(&e));
+            // the keys are not needed past here: overwrite them where that is cheap (the secp key and the file's text;
+            // copies the libraries made on the way are not reached)
+            for k in keys.iter_mut() { k.inner.non_secure_erase(); }
+            // SAFETY: zero bytes are valid UTF-8
+            unsafe { text.as_bytes_mut().fill(0) };
+            drop(text);
             write_statement(p, &st);
             let left = st.entries.iter().filter(|e| e.signature.is_empty()).count();
             eprintln!("zapp-statement: signed {n} entr{}; {left} still unsigned", if n == 1 { "y" } else { "ies" });
@@ -151,7 +167,10 @@ fn produce(a: Vec<String>) {
             };
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(p)
                 .unwrap_or_else(|e| die(&format!("{p}: {e} (test-key never overwrites a file)")));
-            writeln!(f, "{}", k.to_wif()).unwrap_or_else(|e| die(&e.to_string()));
+            let mut wif = k.to_wif();
+            writeln!(f, "{wif}").unwrap_or_else(|e| die(&e.to_string()));
+            // SAFETY: zero bytes are valid UTF-8
+            unsafe { wif.as_bytes_mut().fill(0) };
             for ((s, _), name) in statement::scripts_for_key(&k).iter().zip(if k.compressed { &["p2pkh", "p2sh-p2wpkh", "p2wpkh", "p2tr", "p2pk"][..] } else { &["p2pkh", "p2pk"][..] }) {
                 println!("{name} {}", swiftsync_verify::hex(s));
             }
@@ -165,6 +184,7 @@ fn check(a: Vec<String>) {
     let mut it = a.into_iter();
     let (mut network, mut image_hex, mut id) = ("mainnet".to_string(), None, Identity::default());
     let (mut purpose, mut nonce, mut now_arg, mut files) = (None, None, None, Vec::new());
+    let mut max_age: Option<u32> = None;
     let need = |it: &mut dyn Iterator<Item = String>, f: &str| it.next().unwrap_or_else(|| fail(&format!("{f} needs a value")));
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -173,6 +193,7 @@ fn check(a: Vec<String>) {
             "--purpose" => purpose = Some(need(&mut it, &a)),
             "--nonce" => nonce = Some(need(&mut it, &a)),
             "--now" => now_arg = Some(need(&mut it, &a)),
+            "--max-age" => max_age = Some(need(&mut it, &a).parse().unwrap_or_else(|_| fail("--max-age: a number of blocks"))),
             f if id.take(f, &mut || it.next()).unwrap_or_else(|e| fail(&e)) => {}
             f if f.starts_with("--") => fail(&format!("unknown flag {f:?} (see the source header)")),
             _ => files.push(a),
@@ -199,13 +220,23 @@ fn check(a: Vec<String>) {
     let mut rep = verify(&Inputs { receipt: &rb, image, anchor: None, now });
     let mut tip_checked = false;
     let mut challenged = false;
+    let mut age_line: Option<String> = None;
     if let Some(cs) = rep.state.clone().filter(|_| rep.verdict != Verdict::Fail) {
         // chain identity (zapp-common: the same flags as every zAPP CLI and the core verifier's): each source asked for
         // the block at the proof's height and compared with the proven tip (and, with --bitcoin-cli, its chainwork)
         if !id.is_empty() {
-            let (lines, _) = zapp_common::check_core_tip(&id, image.network, &cs);
+            let (lines, ok) = zapp_common::check_core_tip(&id, image.network, &cs);
             rep.checks.extend(lines);
-            tip_checked = true;
+            tip_checked = ok;
+        }
+        if let Some(m) = max_age {
+            match zapp_common::tip_height(&id, image.network).and_then(|(t, lines)| {
+                rep.checks.extend(lines.into_iter().map(|l| (true, l)));
+                statement::check_age(cs.height, t, m)
+            }) {
+                Ok(l) => { rep.checks.push((true, l.clone())); age_line = Some(l); }
+                Err(e) => rep.checks.push((false, format!("--max-age: {e}"))),
+            }
         }
         let ch = Challenge { purpose: purpose.as_deref(), nonce: nonce.as_deref() };
         match check_statement(&cs, rep.undo_from, &st, &ch) {
@@ -228,9 +259,13 @@ fn check(a: Vec<String>) {
     if !tip_checked { why.push("the tip was not compared with a source you trust (--expect, --mempool, --bitcoin-cli)"); }
     if !challenged { why.push("the statement was not compared with your challenge (--purpose and --nonce): it may be an old one shown again"); }
     if why.is_empty() {
-        println!("ZAPP_STATEMENT_OK: the statement holds at block {}", st.height);
+        match &age_line {
+            Some(l) => println!("ZAPP_STATEMENT_OK: the statement holds at block {}; {l}", st.height),
+            None => println!("ZAPP_STATEMENT_OK: the statement holds at block {}; its age is NOT checked (the coins may have moved since; give --max-age)", st.height),
+        }
         exit(0);
     }
-    println!("ZAPP_STATEMENT_DEMO: the statement holds, but {}", why.join("; "));
+    println!("ZAPP_STATEMENT_DEMO: the statement holds, but {}{}", why.join("; "),
+             if age_line.is_none() { "; its age is NOT checked (give --max-age)" } else { "" });
     exit(2);
 }

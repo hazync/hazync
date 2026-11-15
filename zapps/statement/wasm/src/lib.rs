@@ -9,10 +9,13 @@
 //!
 //! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet][u64 now, unix seconds][u32 n][receipt]`
 //! `[u32 n][image id hex, n = 0 for the network's built-in image][u32 n][statement JSON]`
-//! `[u32 n][expect "<height>:<hash>"][u32 n][purpose][u32 n][nonce]`. expect, purpose and nonce come from the PAGE (the
-//! block it trusts, the challenge it gave the holder), never from the statement's sender; each may be empty, and then
-//! the verdict is at most "demo". The JSON has `verdict` ("ok", "demo", "fail"), `checks`, `statement` {ok, what, total,
-//! scripts} and `demo_because`.
+//! `[u32 n][expect "<height>:<hash>"][u32 n][purpose][u32 n][nonce][u32 n][max age, blocks][u32 n][network tip height]`.
+//! expect, purpose, nonce, the max age and the tip height come from the PAGE (the block it trusts, the challenge it gave
+//! the holder, its recency policy and the tip it fetched), never from the statement's sender; each may be empty. Without
+//! expect or the challenge the verdict is at most "demo"; without a max age (and a tip) `age_checked` is false and
+//! `statement.what` says so. Purpose and nonce are passed as given (not trimmed): a statement with surrounding spaces is
+//! refused, as by the CLI. The JSON has `verdict` ("ok", "demo", "fail"), `checks`, `statement` {ok, what, total,
+//! scripts}, `age_checked` and `demo_because`.
 
 use zapp_statement::{check_statement, Challenge, Statement};
 use swiftsync_verify::{identity_matches, parse_expect, verify, Image, Inputs, Verdict};
@@ -48,7 +51,11 @@ impl<'a> Frame<'a> {
         self.take(n)
     }
     fn text(&mut self) -> Result<String, String> {
-        Ok(std::str::from_utf8(self.chunk()?).map_err(|_| "not UTF-8".to_string())?.trim().to_string())
+        Ok(self.raw()?.trim().to_string())
+    }
+    /// As given: for the purpose and nonce, which must be the signed bytes.
+    fn raw(&mut self) -> Result<String, String> {
+        Ok(std::str::from_utf8(self.chunk()?).map_err(|_| "not UTF-8".to_string())?.to_string())
     }
 }
 
@@ -59,7 +66,12 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
     let receipt = f.chunk()?;
     let image_hex = f.text()?.to_lowercase();
     let st: Statement = serde_json::from_slice(f.chunk()?).map_err(|e| format!("statement JSON: {e}"))?;
-    let (expect, purpose, nonce) = (f.text()?, f.text()?, f.text()?);
+    let (expect, purpose, nonce) = (f.text()?, f.raw()?, f.raw()?);
+    let num = |t: String, what: &str| -> Result<Option<u32>, String> {
+        if t.is_empty() { Ok(None) } else { t.parse().map(Some).map_err(|_| format!("{what}: not a number")) }
+    };
+    let max_age = num(f.text()?, "max age")?;
+    let tip_height = num(f.text()?, "tip height")?;
     if f.i != input.len() {
         return Err("input frame has trailing bytes".into());
     }
@@ -72,6 +84,7 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
     };
     let mut rep = verify(&Inputs { receipt, image, anchor: None, now });
     let mut why: Vec<&str> = Vec::new();
+    let mut age_checked = false;
     let statement = match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {
         None => Err("statement NOT checked: the receipt did not verify".to_string()),
         Some(cs) => {
@@ -81,7 +94,16 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
             } else {
                 let ch = Challenge { purpose: Some(purpose.as_str()).filter(|p| !p.is_empty()),
                                      nonce: Some(nonce.as_str()).filter(|n| !n.is_empty()) };
-                check_statement(cs, rep.undo_from, &st, &ch).map(|c| {
+                let age = match (max_age, tip_height) {
+                    (None, _) => Ok(None),
+                    (Some(_), None) => Err("max age given without the network's tip height".to_string()),
+                    (Some(m), Some(t)) => zapp_statement::check_age(cs.height, t, m).map(Some),
+                };
+                age.and_then(|age| check_statement(cs, rep.undo_from, &st, &ch).map(|c| (c, age))).map(|(mut c, age)| {
+                    match age {
+                        Some(l) => { c.line = format!("{}; {l}", c.line); age_checked = true; }
+                        None => c.line = format!("{}; its age is NOT checked (the coins may have moved since)", c.line),
+                    }
                     if rep.verdict == Verdict::Demo { why.push("the chain is below Core's minimum chainwork or the pinned checkpoint"); }
                     if !tip { why.push("the tip was not compared with a source you trust (expect)"); }
                     if !c.challenged { why.push("the statement was not compared with your challenge (purpose and nonce)"); }
@@ -104,6 +126,7 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
             Ok(c) => serde_json::json!({"ok": rep.verdict == Verdict::Ok, "what": c.line, "total": c.total, "scripts": c.scripts}),
             Err(e) => serde_json::json!({"ok": false, "what": e}),
         },
+        "age_checked": age_checked,
         "demo_because": why,
     }))
 }

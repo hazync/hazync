@@ -12,12 +12,16 @@ const statement = JSON.parse(fs.readFileSync(stFile, 'utf8'));
 const expect = '200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320';
 const base = { network: 'mainnet', imageHex: '8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4', receipt, expect };
 const cases = [
-  ['holds (demo: below minimum work)', { statement, purpose, nonce }, 'demo', /^statement: .* script\(s\)/],
+  ['holds (demo: below minimum work)', { statement, purpose, nonce }, 'demo', /^statement: .* script\(s\).*age is NOT checked/],
   ['another purpose', { statement, purpose: 'other', nonce }, 'fail', /purpose .* is not the one asked for/],
   ['another nonce', { statement, purpose, nonce: 'other' }, 'fail', /nonce .* is not the one asked for/],
   ['tampered total', { statement: { ...statement, total: statement.total + 1 }, purpose, nonce }, 'fail', /facts sum to/],
   ['wrong height', { statement: { ...statement, height: 199 }, purpose, nonce }, 'fail', /about block 199/],
   ['another tip expected', { statement, purpose, nonce, expect: '200:' + '0'.repeat(64) }, 'fail', /not the proof's tip/],
+  ['age checked (6 behind, 6 allowed)', { statement, purpose, nonce, maxAge: 6, tipHeight: 206 }, 'demo', /6 block\(s\) behind the network's tip 206/],
+  ['too old (7 behind, 6 allowed)', { statement, purpose, nonce, maxAge: 6, tipHeight: 207 }, 'fail', /7 blocks behind/],
+  ['max age without a tip', { statement, purpose, nonce, maxAge: 6 }, 'fail', /without the network's tip/],
+  ['a purpose with a trailing space', { statement: { ...statement, purpose: statement.purpose + ' ' }, purpose: purpose + ' ', nonce }, 'fail', /leading or trailing/],
   ['swapped signatures', { statement: { ...statement, entries: statement.entries.map((e, i, a) => ({ ...e, signature: a[(i + 1) % a.length].signature })) }, purpose, nonce }, 'fail', /BIP-322|P2PK/],
 ];
 let bad = 0;

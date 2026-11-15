@@ -12,7 +12,7 @@ node test-statement.mjs target/wasm32-unknown-unknown/release/zapp_statement_was
 
 | | |
 |---|---|
-| size | 2,473,562 bytes raw, 1,518,554 gzipped |
-| sha256 (this commit, `./build.sh`) | `01408a2c3bcd621261e45ef7bd9fde083f635fb5c64eee89780413a324cfd27a` (Rust 1.99.0, default stage path, built on hazync-coord, 15.11.2026; with the frame's overflow-safe take; the first module build was `81a7a1ef…`) |
+| size | 2,485,794 bytes raw, 1,522,618 gzipped |
+| sha256 (this commit, `./build.sh`) | `f3ceb7ccc946dbf5d70c23baea27695cc3d0038cb74e04e6c44d4c905f1e6334` (Rust 1.99.0, default stage path, two builds on hazync-coord, 15.11.2026; with `--max-age` (maxAge, tipHeight), untrimmed purpose and nonce, and the review fixes of 15.11.2026; before them `01408a2c…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
-| tests | `test-statement.mjs` 8/8 against the real mainnet 1..200 proof (`8888d59c`), run by `../test.sh` in CI's zapps job |
+| tests | `test-statement.mjs` 12/12 against the real mainnet 1..200 proof (`8888d59c`), run by `../test.sh` in CI's zapps job |

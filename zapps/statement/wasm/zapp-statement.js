@@ -3,20 +3,23 @@
 //
 //   import { loadStatementVerifier } from './zapp-statement.js';
 //   const v = await loadStatementVerifier(fetch('./zapp-statement.wasm'));
-//   const s = v.verifyStatement({ network: 'mainnet', receipt, statement, expect: '<height>:<hash>', purpose, nonce });
+//   const s = v.verifyStatement({ network: 'mainnet', receipt, statement, expect: '<height>:<hash>', purpose, nonce,
+//                                 maxAge: 6, tipHeight });   // tipHeight: the network's tip, fetched by the page
 //   s.verdict  // 'ok' | 'demo' | 'fail';  s.statement = {ok, what, total, scripts};  s.demo_because = [...]
-// expect, purpose and nonce are YOURS (the block you trust, the challenge you gave the holder), never the sender's.
+// expect, purpose, nonce, maxAge and tipHeight are YOURS (the block you trust, the challenge you gave the holder, your
+// recency policy, the tip you fetched), never the sender's. s.age_checked is false until maxAge and tipHeight are given.
 
 function readString(memory, ptr) {
   const len = new DataView(memory.buffer).getUint32(ptr, true);
   return new TextDecoder().decode(new Uint8Array(memory.buffer, ptr + 4, len));
 }
 
-function frame({ network, now, receipt, imageHex, statement, expect, purpose, nonce }) {
+function frame({ network, now, receipt, imageHex, statement, expect, purpose, nonce, maxAge, tipHeight }) {
   const enc = new TextEncoder();
   const parts = [receipt, enc.encode(imageHex || ''),
     enc.encode(typeof statement === 'string' ? statement : JSON.stringify(statement)),
-    enc.encode(expect || ''), enc.encode(purpose || ''), enc.encode(nonce || '')];
+    enc.encode(expect || ''), enc.encode(purpose || ''), enc.encode(nonce || ''),
+    enc.encode(maxAge == null ? '' : String(maxAge)), enc.encode(tipHeight == null ? '' : String(tipHeight))];
   const out = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
   const view = new DataView(out.buffer);
   out[0] = network === 'signet' ? 1 : network === 'mainnet' ? 0 : 255;

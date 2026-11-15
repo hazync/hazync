@@ -83,7 +83,8 @@ impl Identity {
             let base = if !base.is_empty() { base.trim_end_matches('/').to_string() }
                        else if network == "signet" { "https://mempool.space/signet/api".into() } else { "https://mempool.space/api".into() };
             let url = format!("{base}/block-height/{height}");
-            match Command::new("curl").args(["-sf", "--max-time", "30", &url]).output() {
+            // `--`: a URL from the command line is never read as a curl option
+            match Command::new("curl").args(["-sf", "--max-time", "30", "--", &url]).output() {
                 Ok(o) if o.status.success() => {
                     let got = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
                     if is_hash(&got) {
@@ -105,6 +106,11 @@ impl Identity {
                         .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
                         .and_then(|v| v["chainwork"].as_str().map(|w| w.to_lowercase()));
                     r.checks.push((true, format!("your node's block {height} is {hash}")));
+                    // the chainwork comparison is part of the node check: a node that does not give it is a failed
+                    // check, not a comparison quietly skipped
+                    if r.node_chainwork.is_none() {
+                        r.checks.push((false, format!("your node's chainwork at block {height}: getblockheader {hash} gave none")));
+                    }
                     answers.push(("your node".into(), height, hash));
                 }
                 Ok(other) => r.checks.push((false, format!("your node's chain: getblockhash {height} gave {other:?}"))),
@@ -113,18 +119,51 @@ impl Identity {
         }
         // Every answer about the same block must name the same hash; --expect at another height than the lookups'
         // would leave one of them unchecked, so it is refused rather than half used.
+        // Sources that disagree give NO answer: returning the first one's would let a caller that uses only `expect`
+        // (expect_for_core, expect_at) check against a hash another source contradicts.
         if let Some((s0, h0, x0)) = answers.first().cloned() {
+            let mut agree = true;
             for (s, h, x) in answers.iter().skip(1) {
                 if *h != h0 {
                     r.checks.push((false, format!("{s0} is about block {h0}, {s} about block {h}: give sources about the same block")));
+                    agree = false;
                 } else if *x != x0 {
                     r.checks.push((false, format!("{s} says block {h} is {x}, {s0} says {x0}: the sources disagree")));
+                    agree = false;
                 }
             }
-            r.expect = Some(format!("{h0}:{x0}"));
+            if agree {
+                r.expect = Some(format!("{h0}:{x0}"));
+            }
         }
         r
     }
+}
+
+/// The network's tip height from the sources that can give one (`--bitcoin-cli`: `getblockcount`; `--mempool`:
+/// `/blocks/tip/height`), for a recency check (`--max-age`). Every source asked must answer and agree; `--expect` gives
+/// no tip height. Err: none given, one failed, or they disagree.
+pub fn tip_height(id: &Identity, network: &str) -> Result<(u32, Vec<String>), String> {
+    let mut got: Vec<(String, u32)> = Vec::new();
+    if let Some(base) = &id.mempool {
+        let base = if !base.is_empty() { base.trim_end_matches('/').to_string() }
+                   else if network == "signet" { "https://mempool.space/signet/api".into() } else { "https://mempool.space/api".into() };
+        let url = format!("{base}/blocks/tip/height");
+        let o = Command::new("curl").args(["-sf", "--max-time", "30", "--", &url]).output().map_err(|e| format!("curl {url}: {e}"))?;
+        let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        let h = t.parse::<u32>().ok().filter(|_| o.status.success()).ok_or_else(|| format!("{url}: no tip height ({:?})", t.chars().take(40).collect::<String>()))?;
+        got.push((url, h));
+    }
+    if let Some(cmd) = &id.bitcoin_cli {
+        let t = node(cmd, &["getblockcount"])?;
+        got.push(("your node".into(), t.parse().map_err(|_| format!("your node's getblockcount gave {t:?}"))?));
+    }
+    let (s0, h0) = got.first().cloned().ok_or("a recency check needs the network's tip: give --mempool, --mempool-url or --bitcoin-cli")?;
+    if let Some((s, h)) = got.iter().find(|(_, h)| *h != h0) {
+        // a tip one source has seen and another not yet is a real race, but the check cannot pick one
+        return Err(format!("{s} says the tip is {h}, {s0} says {h0}: ask again, or use one source"));
+    }
+    Ok((h0, got.into_iter().map(|(s, h)| format!("{s}: the network's tip is block {h}")).collect()))
 }
 
 /// Chain identity for a zAPP resting on a verified CORE state `cs`, as the core CLI checks it: every source asked for
@@ -314,8 +353,19 @@ mod tests {
         let other = format!("200:{}1", &H200[..63]);
         let r = take_all(&["--bitcoin-cli", c, "--expect", &other]).unwrap().resolve("mainnet", 200);
         assert!(r.checks.iter().any(|c| !c.0 && c.1.contains("disagree")), "{:?}", r.checks);
+        assert_eq!(r.expect, None, "sources that disagree give no answer (not the first one's)");
         let r = take_all(&["--bitcoin-cli", c, "--expect", &format!("199:{H200}")]).unwrap().resolve("mainnet", 200);
         assert!(r.checks.iter().any(|c| !c.0 && c.1.contains("same block")), "{:?}", r.checks);
+        assert_eq!(r.expect, None);
+        let (e, lines) = expect_at(&take_all(&["--bitcoin-cli", c, "--expect", &other]).unwrap(), "mainnet", 200);
+        assert!(e.is_none() && lines.iter().any(|c| !c.0), "expect_at: no answer when the sources disagree");
+        // the tip height for --max-age
+        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockcount) echo 975400;; getblockheader) echo '{{}}';; esac\n")).unwrap();
+        assert_eq!(tip_height(&take_all(&["--bitcoin-cli", c]).unwrap(), "mainnet").unwrap().0, 975_400);
+        assert!(tip_height(&Identity { expect: Some(format!("200:{H200}")), ..Default::default() }, "mainnet").is_err(), "--expect gives no tip");
+        // a node that gives no chainwork: a failed check, not a skipped one
+        let r = take_all(&["--bitcoin-cli", c]).unwrap().resolve("mainnet", 200);
+        assert!(r.node_chainwork.is_none() && r.checks.iter().any(|c| !c.0 && c.1.contains("chainwork")), "{:?}", r.checks);
         let r = take_all(&["--bitcoin-cli", "/nonexistent/cli"]).unwrap().resolve("mainnet", 200);
         assert!(r.expect.is_none() && r.checks.iter().any(|c| !c.0));
         std::fs::remove_dir_all(&d).unwrap();

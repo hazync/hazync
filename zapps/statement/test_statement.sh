@@ -54,6 +54,18 @@ printf '#!/bin/sh\necho %064d\n' 1 > $T/badnode; chmod +x $T/badnode
 run 2 $V --bitcoin-cli $T/node $C $R $T/s.json
 run 1 $V --bitcoin-cli $T/badnode $C $R $T/s.json
 run 1 $V --bitcoin-cli $T/node --expect 200:$(printf '%064d' 0) $C $R $T/s.json
+# 8c. recency (--max-age) from the node's tip: 6 behind with 6 allowed holds (and says so), 7 behind fails, --max-age
+#     with no source of the tip fails; a node that gives no chainwork fails (zapp-common: never a skipped comparison)
+mknode() { printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\n[ "$1" = getblockheader ] && echo "{\\"chainwork\\": \\"%s\\"}"\n[ "$1" = getblockcount ] && echo %s\nexit 0\n' "${TIP#*:}" "$(printf '%054d' 0)c900c900c9" "$2" > $1; chmod +x $1; }
+mknode $T/node206 206; mknode $T/node207 207
+run 2 $V --bitcoin-cli $T/node206 --max-age 6 $C $R $T/s.json
+run 1 $V --bitcoin-cli $T/node207 --max-age 6 $C $R $T/s.json
+run 1 $V $A --max-age 6 $C $R $T/s.json
+printf '#!/bin/sh\n[ "$1" = getblockhash ] && echo %s\n[ "$1" = getblockheader ] && echo "{}"\nexit 0\n' "${TIP#*:}" > $T/nowork; chmod +x $T/nowork
+run 1 $V --bitcoin-cli $T/nowork $C $R $T/s.json
+# 8d. a purpose with a line separator (U+2028) or a trailing space, given and signed as such: refused, never trimmed
+edit $T/s.json "s['purpose']='audit\u20282026'" $T/u1.json; run 1 $V $A $R $T/u1.json
+edit $T/s.json "s['purpose']='audit-15.11.2026 '" $T/u2.json; run 1 $V $A --purpose 'audit-15.11.2026 ' --nonce 5be1 $R $T/u2.json
 # 9. a dev-mode receipt (FakeReceipt), with and without RISC0_DEV_MODE in the environment; a flipped seal
 run 1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
 run 1 env RISC0_DEV_MODE=1 $V $A $C $X/fake_block_2501.rcpt $T/s.json

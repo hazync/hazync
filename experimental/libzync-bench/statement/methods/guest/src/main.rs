@@ -5,7 +5,9 @@
 //! (scriptPubKey, counting-trie balance proof, BIP-322 simple witness). Checks: env::verify(core_id, journal) (skipped
 //! under the bench flag, for a trie built by the host: a measurement of the same work, never a statement), the
 //! ChainState checks of ZYNCAPPS.md §4, scripts strictly increasing, each balance proof against trie_root, the total,
-//! the message, each BIP-322 signature (bip322_lite.rs). Commits: core_id, lineage, anchor_id, height, tip_hash,
+//! the message, each BIP-322 signature (bip322_lite.rs). Commits: the bench flag FIRST (true = env::verify was skipped:
+//! the journal proves nothing about any chain, and no verifier may ever accept it; review 15.11.2026: before this the
+//! flag was not committed, so image 74698c86 could "prove" any total), core_id, lineage, anchor_id, height, tip_hash,
 //! cum_work, max_time, profile, total, the number of scripts, sha256(salt || script list hash), purpose, nonce.
 #![no_main]
 extern crate alloc;
@@ -51,7 +53,7 @@ struct Input {
 
 #[derive(Serialize)]
 struct Out {
-    kind: u32, core_id: [u32; 8], lineage: [u8; 32], anchor_id: [u8; 32], height: u32, tip_hash: [u8; 32],
+    kind: u32, bench: bool, core_id: [u32; 8], lineage: [u8; 32], anchor_id: [u8; 32], height: u32, tip_hash: [u8; 32],
     cum_work: [u8; 32], max_time: u32, profile: u32, total: u64, scripts: u32, commit: [u8; 32], purpose: String, nonce: String,
 }
 
@@ -108,7 +110,7 @@ fn main() {
     }
     let c5 = env::cycle_count();
     env::commit(&Out {
-        kind: 0x5A43_0003, core_id: inp.core_id, lineage: cs.lineage, anchor_id: cs.anchor_id, height: cs.height, tip_hash: cs.tip_hash,
+        kind: 0x5A43_0003, bench: inp.bench, core_id: inp.core_id, lineage: cs.lineage, anchor_id: cs.anchor_id, height: cs.height, tip_hash: cs.tip_hash,
         cum_work: cs.cum_work, max_time: cs.max_time, profile: cs.profile, total, scripts: inp.entries.len() as u32, commit,
         purpose: inp.purpose, nonce: inp.nonce,
     });

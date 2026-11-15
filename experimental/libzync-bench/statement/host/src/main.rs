@@ -13,7 +13,7 @@ mod bip322_lite;
 use bitcoin::{Address, Network, PrivateKey, Script};
 use risc0_zkvm::{default_executor, ExecutorEnv, Receipt};
 use statement_methods::{STATEMENT_GUEST_ELF, STATEMENT_GUEST_ID};
-use balance_statement::scripts_for_key;
+use zapp_statement::scripts_for_key;
 
 const VEC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../swiftsync-verify/vectors/");
 
@@ -92,6 +92,7 @@ struct Run { core_id: [u32; 8], journal: Vec<u8>, bench: bool, trie: libzync::tr
 
 fn execute(r: Run, label: &str) {
     let (purpose, nonce, salt) = ("audit 15.11.2026", "5be1c0de", [7u8; 32]);
+    let r_bench = r.bench;
     let mut keys = r.keys;
     keys.sort_by(|a, b| a.1.cmp(&b.1));
     let scripts: Vec<Vec<u8>> = keys.iter().map(|k| k.1.clone()).collect();
@@ -116,8 +117,11 @@ fn execute(r: Run, label: &str) {
     let t = std::time::Instant::now();
     let info = default_executor().execute(env, STATEMENT_GUEST_ELF).unwrap_or_else(|e| { eprintln!("execute: {e}"); std::process::exit(1) });
     let cycles = info.cycles();
+    // the bench flag is the journal's second word (after kind): a statement journal must carry false
+    let bench_word = info.journal.bytes.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    assert_eq!(bench_word, Some(r_bench as u32), "the journal commits the bench flag");
     // the journal: total and script count (fields 10 and 11 of Out, after kind, core_id[8], lineage, anchor_id, height, ...)
-    println!("{label} n={} total={total} sat, trie proof words {words}: {} user cycles ({:.0} per script), {} segments, executed in {:.1} s; image {}",
+    println!("{label} n={} bench_flag_committed={r_bench} total={total} sat, trie proof words {words}: {} user cycles ({:.0} per script), {} segments, executed in {:.1} s; image {}",
              scripts.len(), cycles, cycles as f64 / scripts.len() as f64, info.segments.len(), t.elapsed().as_secs_f64(),
              hex(&STATEMENT_GUEST_ID.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()));
 }
