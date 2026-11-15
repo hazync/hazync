@@ -188,7 +188,7 @@ and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as
 ## 10. Built (2026-11-14)
 
 **Code.** `libzync/src/hints.rs` (the derivation and the Elias-Fano encoder/strict decoder, shared by guest and host),
-`prover/zyncapps/methods/hints` (the guest; local build id `dff7f87c…`, NOT yet a reproducible published id),
+`prover/zyncapps/methods/hints` (the guest; published id `1894f12e…`, the `zyncapp-hints` line of `reproduce/LIBZYNC_IDS`),
 `prover/zyncapps/host/src/hints_host.rs` + `hints-prove` / `hints-verify`, `swiftsync-verify/src/hints.rs` (the
 verifier for CLI, WASM, C ABI), `scripts/libzync/hints_ref.py` (an independent generator written from hintsfile.md),
 `prover/zyncapps/hints-crate-ref` (the `hintsfile` crate 0.2.0 as a second reference, test only).
@@ -203,10 +203,12 @@ journal is the published host's `libzync-prep` state at T, the guest's every che
 
 | H (T) | user cycles | padded | segments | per block | per counted output | execute |
 |---|---|---|---|---|---|---|
-| 1,999 (1,999) | 27,432,748 | 30,932,992 | 30 | 13,723 | 13,447 | 0.6 s |
-| 1,999 (10,000) | 40,235,303 | 44,564,480 | 43 | | | 0.8 s |
-| 10,000 (10,000) | 135,059,849 | 152,043,520 | 145 | 13,506 | 13,347 | 2.9 s |
-| 100,000 (100,000) | 2,391,165,421 | 2,726,297,600 | 2,600 | 23,912 | 9,049 | 42.0 s |
+| 1,999 (1,999) | 27,422,130 | 30,932,992 | 30 | 13,718 | 13,442 | 0.8 s |
+| 10,000 (10,000) | 135,017,419 | 152,043,520 | 145 | 13,502 | 13,343 | 3.4 s |
+| 100,000 (100,000) | 2,389,822,475 | 2,724,724,736 | 2,599 | 23,898 | 9,044 | 52.8 s |
+
+(The published image `1894f12e`. The local build before the review fixes measured within 0.1% of these, and H = 1,999
+under T = 10,000 took 40,235,303.)
 
 Per 1,000-block window (`--prof 1000`, cumulative `env::cycle_count()`): about 13.4-14.0 M while blocks hold about one
 transaction (windows to 41,000); 22.3 M for the window ending 81,000 (1,856 transactions, 2,257 outputs, 2,224 inputs,
@@ -216,7 +218,8 @@ modern blocks are not measured. No mainnet figure is given.
 
 **Measured: real CPU proofs** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, a shared box). The core
 receipt: the published host (`46666b6f`) proving blocks 1..3 from genesis, 1,061.5 / 980.3 / 943.3 s per block. The
-hints receipt for H = 3 (T = 3): 147.8 s; H = 2 (T = 3, one leaf above H): 156.0 s; 225,202 bytes each. Blocks 1..3
+hints receipt by the published image for H = 3 (T = 3): 182.0 s; H = 2 (T = 3, one leaf above H): 184.3 s; 225,202
+bytes each (`swiftsync-verify/vectors/hints`; CI verifies them). Blocks 1..3
 have no spends: the paths with spends, same-block spends and the BIP30 blocks are covered by the executions above, not
 by a proof. Proving the core further on CPU (~16 min a block here) was not attempted.
 
@@ -235,5 +238,9 @@ by a proof. Proving the core further on CPU (~16 min a block here) was not attem
   a truncated file, a non-canonical re-encoding, the file for H = 2, a tampered undo file, another hash or height at H,
   a receipt of another image, an untrusted core image, `RISC0_DEV_MODE` set; H = 2 needs `--expect-tip` for T.
 
-**Not done.** A reproducible build and published id for the hints guest; a proof over a chain with spends; a cost for
-modern blocks; signet (the code takes `--signet`, untested); CI wiring.
+**Pinned** (review H2): `zyncapp-hints` `1894f12e…` from the reproducible build's steps on hazync-coord (the three
+existing ids reproduced unchanged), with CI's `reproducible-image-id` as the second build; every tool trusts that id
+(`swiftsync_verify::hints::HINTS_IMAGE_ID`; `zyncapp hints-verify` too).
+
+**Not done.** A proof over a chain with spends; a cost for modern blocks; signet (the code takes `--signet`,
+untested); `hints_test.sh` in CI (it needs block data and a prep state).
