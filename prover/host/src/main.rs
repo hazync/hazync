@@ -19,6 +19,7 @@ mod trie;
 mod seg;
 mod verify;
 mod prep;
+mod tracked;
 mod reforest;
 mod lz_coord;
 

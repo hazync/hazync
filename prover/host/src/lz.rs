@@ -795,12 +795,21 @@ pub(crate) fn lz_smt_rebind(w: &mut BlockWitness, smt: &mut Smt) {
 pub(crate) fn lz_smt_replay(dir: &str, upto: u32) -> (Smt, u32) {
     let mut smt = Smt::new();
     let mut max_time = 0u32;
+    // the replay runs from genesis, so it knows every tracked transaction itself (tracked.rs)
+    let mut tracked: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    let tmp = std::env::temp_dir().join(format!("hazync-smt-replay-{}.json", std::process::id()));
     for h in 1..=upto {
-        std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
+        let j = crate::read_block_json(dir, h);
+        let g = methods::NETWORK == "mainnet" && (h == 91_842 || h == 91_880);
+        let (a, new) = crate::tracked::annotate(&j, &smt, crate::tracked::bip34_height(), g, &|t, _, _| tracked.contains(t));
+        tracked.extend(new);
+        std::fs::write(&tmp, serde_json::to_vec(&a).unwrap()).unwrap();
+        std::env::set_var("HAZYNC_BLOCK", &tmp);
         let (_, mut w) = build_full();
         max_time = max_time.max(u32::from_le_bytes(w.header[68..72].try_into().unwrap()));
         lz_smt_rebind(&mut w, &mut smt);
     }
+    let _ = std::fs::remove_file(&tmp);
     (smt, max_time)
 }
 
@@ -1076,6 +1085,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     for h in first..=hi {
         let t0 = Instant::now();
         std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
+        if leaf.is_none() {
+            // the BIP30-tracked flags as the guest derives them (tracked.rs), from this run's BIP30 tree and coin log; a
+            // leaf bundle's JSON already carries them (prep wrote it)
+            let j = crate::read_block_json(dir, h);
+            let g = methods::NETWORK == "mainnet" && (h == 91_842 || h == 91_880);
+            let (a, _) = crate::tracked::annotate(&j, &smt, crate::tracked::bip34_height(), g, &|_, _, l| cl_has(l));
+            let p = format!("{out}/block_{h}.flags.json");
+            write_atomic(&p, &serde_json::to_vec(&a).unwrap());
+            std::env::set_var("HAZYNC_BLOCK", &p);
+        }
         std::env::remove_var("HAZYNC_LZ_HINTS");
         let (_, mut w) = build_full();
         assert_eq!(w.height, h);
@@ -1642,6 +1661,12 @@ pub(crate) fn cl_prefetch(spends: &[ClSpend]) {
         let pos: Vec<u64> = leaves.iter().filter_map(|l| h.pos.get(l)).collect();
         nodes.prefetch(&pos);
     }
+}
+
+/// Whether the host's coin log holds `leaf` as a coin (unspent): how the BIP30-tracked flag of an earlier coin is read
+/// back (tracked.rs).
+pub(crate) fn cl_has(leaf: &[u8; 32]) -> bool {
+    CL.lock().unwrap().as_ref().map_or(false, |h| h.pos.get(leaf).is_some())
 }
 
 pub(crate) fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {

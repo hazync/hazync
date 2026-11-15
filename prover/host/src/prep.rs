@@ -180,6 +180,11 @@ fn phase(i: usize, t: std::time::Instant) { PHASES.lock().unwrap()[i] += t.elaps
 pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt, ecmh: &mut Ecmh, leaf: bool) -> (ChainState, Option<LeafBundle>) {
     use crate::{arr, build_header_v, hx, median_u32, normalize_host, out_leaf_of, out_spendable, rev};
     let height = j["height"].as_u64().unwrap() as u32;
+    // The BIP30-tracked flags as the guest derives them (tracked.rs): the fetcher's files carry none. Everything below
+    // reads them from the annotated JSON, and a leaf bundle carries that JSON, so the leaf prover's witness has them too.
+    let grandfathered = methods::NETWORK == "mainnet" && (height == 91_842 || height == 91_880);
+    let (annotated, _) = crate::tracked::annotate(j, smt, net().bip34_height, grandfathered, &|_, _, l| crate::lz::cl_has(l));
+    let j = &annotated;
     assert_eq!(height, prev.height + 1, "prep: block {height} after state {}", prev.height);
     let bits = j["bits"].as_u64().unwrap() as u32;
     let time = j["time"].as_u64().unwrap() as u32;
@@ -293,7 +298,6 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     let tracked_new: Vec<([u8; 32], u32)> = ptxs.iter().filter(|p| tx_flags(p) != 0)
         .map(|p| (p.txid, p.tx.output.iter().filter(|o| out_spendable(o.script_pubkey.as_bytes())).count() as u32))
         .filter(|t| t.1 > 0).collect();
-    let grandfathered = methods::NETWORK == "mainnet" && (height == 91_842 || height == 91_880);
     let in_smt_root = smt.root();
     let smt_w = crate::smt_advance_ex(smt, cb_txid, crate::cb_spendable_outputs(&coinbase), &cb_spends, grandfathered, &spend_tracked, &tracked_new);
 
