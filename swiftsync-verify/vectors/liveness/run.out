@@ -1,0 +1,24 @@
+ok   block 9 coin: spent at 170 (at 200) (rc 2)
+ok   block 9 coin: unspent after 169 (opened) (rc 2)
+ok   first payment to Hal: unspent at the tip (rc 2)
+ok   first payment change: spent at 181 (rc 2)
+ok   first payment change: unspent after 170 (rc 2)
+ok   question without a claim (the CLI states it) (rc 2)
+ok   spent coin, question claims unspent (rc 1): the question claims unspent, the proof shows spent:170:1:0: coin 0437cd7f8525ceed2324359c2d0ba26006d92d856a9
+ok   unspent coin, question claims spent (rc 1): the question claims spent, the proof shows unspent: coin f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338
+ok   wrong amount asked (rc 1): the coin holds 1000000000 sat, not the amount asked
+ok   wrong script asked (rc 1): the coin pays another scriptPubKey than the one asked
+ok   another outpoint asked (rc 1): the proof is about f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0, not the outpoint aske
+ok   another height asked (rc 1): the proof is about height 200, the question about 199
+ok   spent coin re-encoded as unspent (rc 1): liveness proof for 0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0 at 200: the coin is no
+ok   amount changed in the proof (rc 1): liveness proof for f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0 at 200: the coin is no
+ok   an outpoint that never existed (txid changed) (rc 1): liveness proof for f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e96:0 at 200: the coin is no
+ok   a height above the proof's tip (rc 1): liveness proof for f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0 at 201: the height ask
+ok   tampered witness (log path) (rc 1): liveness proof for f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0 at 200: the coin is no
+ok   tampered witness (block path) (rc 1): liveness proof for 0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0 at 169: that block, wi
+ok   a byte appended (rc 1): liveness proof: bytes after the end of the proof
+ok   dev-mode receipt (FakeReceipt) (rc 1)  [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
+ok   a receipt with one seal bit flipped (rc 1)  [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (main
+ok   zync-path live reproduces b9_0_at200.hex
+ok   zync-path refuses an output that does not exist
+LIVENESS_CLI: 23 passed, 0 failed

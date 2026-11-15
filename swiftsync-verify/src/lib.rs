@@ -1196,6 +1196,26 @@ pub fn check_liveness(cs: &ChainState, undo_from: u32, proof: &[u8], ask: &Liven
     Ok((got, line))
 }
 
+/// A liveness proof with the CALLER's question, as the C ABI and WASM take it in their facts JSON (`"liveness"`):
+/// `{"proof": "<lower-case hex>", "ask": "<question>"}`. There the question must claim its answer (`=unspent` /
+/// `=spent...`): those interfaces return only whether a claim holds.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct LivenessFact {
+    pub proof: String,
+    pub ask: String,
+}
+
+/// [`check_liveness`] on a [`LivenessFact`]; `need_claim`: refuse a question that does not claim its answer.
+pub fn check_liveness_fact(cs: &ChainState, undo_from: u32, f: &LivenessFact, need_claim: bool) -> Result<String, String> {
+    let ask = LivenessAsk::parse(&f.ask)?;
+    if need_claim && ask.state.is_none() {
+        return Err(format!("liveness question {:?} claims no answer (=unspent or =spent...): this interface returns only whether a claim holds", f.ask));
+    }
+    let (token, line) = check_liveness(cs, undo_from, &liveness_bytes(f.proof.as_bytes())?, &ask)?;
+    Ok(format!("{token}: {line}"))
+}
+
 /// The producer side (zync-path live / zync-serve /live): the liveness proof for `coin` after height `at` from a run's
 /// history. The coin's fields come from a block source (the caller's node or block files) and are checked here: a
 /// coin whose leaf the log does not hold is refused. Holds no secret and proves nothing by itself.
