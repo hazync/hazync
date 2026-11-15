@@ -550,10 +550,18 @@ fn main() {
     // objects go to a scratch path and are thrown away, so the guest ELF and METHOD_ID are untouched.
     // Only OUR files are checked; Core and libsecp keep their `-w`.
     let out = std::env::var("OUT_DIR").expect("OUT_DIR");
-    for (compiler, src, lang) in [
-        (&gpp, "verify_input.cpp", &["-std=c++20", "-fexceptions", "-fno-rtti"][..]),
-        (&gcc, "cshims.c", &[][..]),
-    ] {
+    // The lever defines the real Core build compiled them with (review 11-14: without them every `#ifdef HAZYNC_*`
+    // branch of verify_input.cpp, the code that ships, went unchecked), and core_tx_rules.cpp / core_block_rules.cpp,
+    // which are ours too.
+    let lever_defines: Vec<String> = b.get_compiler().args().iter().map(|a| a.to_string_lossy().into_owned())
+        .filter(|a| a.starts_with("-DHAZYNC_")).collect();
+    let cxx = &["-std=c++20", "-fexceptions", "-fno-rtti"][..];
+    let mut ours: Vec<(&String, &str, &[&str])> = vec![(&gpp, "verify_input.cpp", cxx), (&gcc, "cshims.c", &[][..])];
+    if lz_env {
+        ours.push((&gpp, "core_tx_rules.cpp", cxx));
+        ours.push((&gpp, "core_block_rules.cpp", cxx));   // includes OUT_DIR/core_extract.inc
+    }
+    for (compiler, src, lang) in ours {
         let mut c = std::process::Command::new(compiler);
         c.args(["-march=rv32im", "-mabi=ilp32", "-O3", "-fno-strict-aliasing"]).args(lang)  // TIER 0: -O3
             // Only the classes that are UB or a silent miscompile, not a style sweep — a warning set
@@ -567,6 +575,8 @@ fn main() {
             .arg(format!("-DECMULT_GEN_KB={gen_kb}"))
             .args(["-DENABLE_MODULE_SCHNORRSIG=1", "-DENABLE_MODULE_EXTRAKEYS=1",
                    "-DUSE_EXTERNAL_DEFAULT_CALLBACKS=1"])
+            .args(&lever_defines)
+            .arg("-I").arg(&out)
             .args(["-c", src, "-o", &format!("{out}/warncheck.o")]);
         let st = c.status().expect("run the guest warning check");
         assert!(st.success(), "guest warning check FAILED on {src} (see the diagnostic above). This \

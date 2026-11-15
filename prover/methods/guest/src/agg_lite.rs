@@ -28,6 +28,10 @@
 //!   record: txid[8] wtxid[8] prevouts_hash[8] start count first
 //!     if first: has_witness n_vin fee[2] weight[2] sigops[2] [total_out[2] with coinlog] n_out (out_leaf[8] vout value[2])*n_out
 //!     per owned input: leaf[8] flags (bit0 coinbase coin, bit1 coin height == this block) [coinbase_txid[8] if bit0]
+//!       [coin key[8] script hash[8] with the trie] undo digest[8]
+//!   The undo digest is SHA-256 of the spent coin's undo record (handover_pin::undo_record_head, docs/libzync/UNDO.md),
+//!   from the same prevout, height and coinbase flag the coin leaf commits, so the coin log (or this block's created
+//!   set) that checks the leaf binds it too.
 
 use super::*;
 
@@ -46,7 +50,6 @@ pub fn set_trie_journal(w: Vec<u32>) { unsafe { TRIE_J = w } }
 /// trie: a CompactSize exactly as Core's ReadCompactSize reads it: the shortest encoding only, at most MAX_SIZE
 /// (0x02000000). The keys the trie files coins under come from these parsers while Core's C++ verifies the same bytes,
 /// so they must accept exactly what Core accepts (review round 2: a lenient reader could split the two readings).
-#[cfg(feature = "trie")]
 fn compact_size(b: &[u8], o: &mut usize) -> Option<usize> {
     let f = *b.get(*o)?;
     *o += 1;
@@ -85,16 +88,17 @@ fn tx_io(b: &[u8]) -> Option<(Vec<([u8; 32], u32)>, Vec<(usize, usize)>)> {
     Some((ins, outs))
 }
 
-/// trie: the scriptPubKey ranges of a serialized Vec<TxOut> (a run's prevouts).
-#[cfg(feature = "trie")]
-fn prevout_spks(b: &[u8]) -> Option<Vec<(usize, usize)>> {
+/// The (amount, scriptPubKey range) of each entry of a serialized Vec<TxOut> (a run's prevouts), read as Core reads it
+/// (the CompactSizes above): the undo records and, with the trie, the spent coins' script hashes.
+fn prevout_fields(b: &[u8]) -> Option<Vec<(u64, usize, usize)>> {
     let mut o = 0;
     let n = compact_size(b, &mut o)?;
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
+        let val = u64::from_le_bytes(b.get(o..o + 8)?.try_into().ok()?);
         o = o.checked_add(8)?;
         let l = compact_size(b, &mut o)?;
-        v.push((o, l));
+        v.push((val, o, l));
         o = o.checked_add(l)?;
         if o > b.len() { return None; }
     }
@@ -126,6 +130,15 @@ fn shash(spk: &[u8]) -> [u8; 32] {
     for (c, x) in o.chunks_exact_mut(4).zip(st) { c.copy_from_slice(&x.to_be_bytes()); }
     o
 }
+/// One spent coin's undo digest: SHA-256(code ‖ amount ‖ len(spk) ‖ spk), handover_pin::undo_record_head.
+fn undo_digest(height: u32, coinbase: bool, value: u64, spk: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(handover_pin::undo_record_head(height, coinbase, value, spk.len() as u32));
+    h.update(spk);
+    h.finalize().into()
+}
+
 fn hex32(h: &[u8; 32]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
 #[cfg(feature = "trie")]
 fn hex64(h: &[u8; 64]) -> alloc::string::String { h.iter().map(|b| alloc::format!("{b:02x}")).collect() }
@@ -134,8 +147,8 @@ extern "C" {
     /// Empty verify_input.cpp's per-transaction caches and bump hz_tx_generation (round 11).
     fn hz_cache_reset();
 }
-/// Called before every transaction a chunk processes. Required once the allocator can reuse
-/// addresses (HAZYNC_TLSF); harmless, and cheap, under the bump allocator.
+/// Called before every transaction a chunk processes: no cache entry outlives its transaction (the guest's allocator
+/// never reuses an address either, checked at start in main.rs; the caches rely on both).
 pub fn begin_tx() { unsafe { hz_cache_reset() } }
 
 /// A 32-byte hash as four u64 words: ordered and compared word by word instead of a byte-wise
@@ -147,8 +160,9 @@ fn key(h: &[u8; 32]) -> [u64; 4] {
 
 /// E2a batch 2: an open-addressing set of indices into a key array (32-byte keys as [u64; 4]), replacing sorts and
 /// binary searches over 40-byte rows. Capacity a power of two >= 2n. The slot is the key's first word mixed with a
-/// per-block salt (from the block hash, fixed before any transaction could be ground against it); it only places
-/// entries — every probe compares the FULL key, so a collision costs a probe, never a wrong answer.
+/// per-block salt (from the block hash); it only places entries — every probe compares the FULL key, so a collision
+/// costs a probe, never a wrong answer. The block hash commits to the transactions, so steering keys into one slot
+/// means a new valid proof of work per attempt; at worst a crafted block makes the walk slower, never wrong (review 11-14).
 struct KeyTab { slots: Vec<u32>, mask: usize, salt: u64 }
 impl KeyTab {
     fn new(n: usize, salt: u64) -> KeyTab {
@@ -219,9 +233,17 @@ impl ChunkCtx {
         use sha2::{Digest, Sha256};
         let mut ok = true;
         let k = idx.len();
+        // A transaction larger than a block is refused BEFORE any FFI call: below, `need` sizes the buffer that
+        // tx_out_leaves_mv writes, and on rv32 the old `(len / 8 + 1) * 32` wrapped at len >= 2^30 - 8 into a short
+        // buffer and an out-of-bounds write (review 11-14). Nothing over MAX_BLOCK_SERIALIZED_SIZE is in a valid block.
+        if raw_tx.len() > MAX_BLOCK_WEIGHT as usize {
+            env::log("core-reject: bad-blk-length");
+            return false;
+        }
         let (tp, tl) = (raw_tx.as_ptr(), raw_tx.len() as u32);
-        // txid (and the output leaves, used only when this run owns input 0).
-        let need = (raw_tx.len() / 8 + 1) * 32;
+        // txid (and the output leaves, used only when this run owns input 0). Each output is at least 9 bytes, so
+        // len / 8 + 1 leaves always suffice.
+        let need = (raw_tx.len() / 8 + 1).checked_mul(32).expect("output leaf buffer size");
         if self.out.len() < need { self.out.resize(need, 0); self.out_vout.resize(need / 32, 0); self.out_val.resize(need / 32, 0); }
         let mut txid = [0u8; 32];
         // A transaction can repeat only if all its inputs can (coinbase-smt/src/bip30.rs), so its outputs are tracked
@@ -260,12 +282,8 @@ impl ChunkCtx {
         // (core_tx_rules.cpp), on this run's inputs. The output arguments are set only when `first`.
         let lock_time = if self.height >= NET.csv_height { self.mtp } else { self.block_time };
         let (mut fee, mut weight, mut sigops) = (0i64, 0i64, 0i64);
-        // Sizes are 32-bit here and Core's weight arithmetic assumes they are not: a transaction past 2^30 bytes would wrap
-        // through CheckTransaction and GetTransactionWeight. None over MAX_BLOCK_SERIALIZED_SIZE can be in a valid block.
-        if raw_tx.len() > MAX_BLOCK_WEIGHT as usize {
-            env::log("core-reject: bad-blk-length");
-            ok = false;
-        }
+        // (A transaction over MAX_BLOCK_WEIGHT bytes was refused at the top, before any FFI call: Core's 32-bit size and
+        // weight arithmetic would wrap past 2^30 bytes.)
         if ok && k > 0 {
             let r = unsafe { hz_tx_rules_c(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, start, k as u32,
                                            ch.as_ptr(), cb.as_ptr(), cmtp.as_ptr(), self.height, self.mtp,
@@ -303,10 +321,14 @@ impl ChunkCtx {
                 }
             }
         }
+        // The prevouts as Core's reader parses them (C++ coin_leaf reads the same blob): the undo records, and the trie's
+        // script hashes. A blob this reader refuses fails the run.
+        let pf = prevout_fields(prevouts);
+        if pf.is_none() { ok = false; }
         #[cfg(feature = "trie")]
-        let (io_in, pspk) = (io.as_ref().map(|x| &x.0), prevout_spks(prevouts));
+        let io_in = io.as_ref().map(|x| &x.0);
         #[cfg(feature = "trie")]
-        if io_in.is_none() || pspk.is_none() { ok = false; }
+        if io_in.is_none() { ok = false; }
         for j in 0..k {
             if results[j] != 1 { ok = false; env::log("core-reject: script"); }
             push_hash(&mut self.words, &leaves[32 * j..32 * j + 32]);
@@ -326,9 +348,16 @@ impl ChunkCtx {
                 push_hash(&mut self.words, &okey(&t, v));
                 #[cfg(feature = "trie")]
                 {
-                    let (so, sl) = pspk.as_ref().and_then(|x| x.get(idx[j] as usize).copied()).unwrap_or((0, 0));
+                    let (_, so, sl) = pf.as_ref().and_then(|x| x.get(idx[j] as usize).copied()).unwrap_or((0, 0, 0));
                     push_hash(&mut self.words, &shash(prevouts.get(so..so + sl).unwrap_or(&[])));
                 }
+            }
+            // The spent coin's undo digest (#729): the amount and script of prevout idx[j] and the height and coinbase flag
+            // ch[j] / cb[j], exactly what the coin leaf above commits (C++ coin_leaf: spent[input_idx], coin_height,
+            // coin_is_coinbase), so the leaf's check in the aggregate binds this digest too.
+            {
+                let (val, so, sl) = pf.as_ref().and_then(|x| x.get(idx[j] as usize).copied()).unwrap_or((0, 0, 0));
+                push_hash(&mut self.words, &undo_digest(ch[j], cb[j] & 1 == 1, val, prevouts.get(so..so + sl).unwrap_or(&[])));
             }
         }
         self.n_records += 1;
@@ -368,6 +397,8 @@ impl Rd<'_> {
 /// aggregate derives the coin key from the txid and vout).
 const KEY_WORDS: usize = if cfg!(feature = "trie") { 16 } else { 0 };
 const OUT_KEY_WORDS: usize = if cfg!(feature = "trie") { 8 } else { 0 };
+/// Per input: the spent coin's undo digest (#729).
+const UNDO_WORDS: usize = 8;
 
 /// Advances `r` past one record (the layout `ChunkCtx::record` writes) without interpreting it.
 fn skip_record(r: &mut Rd) {
@@ -385,6 +416,7 @@ fn skip_record(r: &mut Rd) {
         r.i = r.i.saturating_add(8);
         if r.u() & 1 == 1 { r.i = r.i.saturating_add(8); }
         r.i = r.i.saturating_add(KEY_WORDS);
+        r.i = r.i.saturating_add(UNDO_WORDS);
     }
     if r.i > r.w.len() { r.bad = true; }
 }
@@ -418,10 +450,14 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut out_vout: Vec<u32> = Vec::with_capacity(words / 9);  // output index in its transaction, parallel
     let mut out_val: Vec<u64> = Vec::with_capacity(words / 9);   // amount, parallel
     let mut cb_txid = [0u8; 32];
+    // The coinbase sizes the output-leaf buffers below, so a coinbase larger than a block is refused first: on rv32
+    // `(len / 8 + 1) * 32` wrapped at len >= 2^30 - 8 into a short buffer that tx_out_leaves_mv overran (review 11-14).
+    assert!(w.coinbase_tx.len() <= MAX_BLOCK_WEIGHT as usize, "agg-lite: the coinbase is larger than a block");
     let cb_outputs = {
-        let mut buf = vec![0u8; (w.coinbase_tx.len() / 8 + 1) * 32];
-        let mut cb_vout = vec![0u32; w.coinbase_tx.len() / 8 + 1];
-        let mut cb_val = vec![0u64; w.coinbase_tx.len() / 8 + 1];
+        let n_max = w.coinbase_tx.len() / 8 + 1;
+        let mut buf = vec![0u8; n_max.checked_mul(32).expect("coinbase leaf buffer size")];
+        let mut cb_vout = vec![0u32; n_max];
+        let mut cb_val = vec![0u64; n_max];
         // Tracked: mined before BIP34 and indicating a later height, or the repeat of a tracked coinbase. A false claim
         // of `coinbase_prior` does not verify in apply_block.
         let indicated = unsafe { hz_indicated_height(w.coinbase_tx.as_ptr(), w.coinbase_tx.len() as u32) };
@@ -466,6 +502,8 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
     let mut total_weight: i64 = 0;
     let mut total_sigops: i64 = 0;
     let mut spends: Vec<([u8; 32], u32, bool, u32)> = Vec::with_capacity(words / 9);   // (leaf, spending tx position, claims this height, input index), block order
+    // #729: every input's undo digest, block order (the same walk as `spends`), hashed into the block's undo hash
+    let mut undo_parts: Vec<u8> = Vec::with_capacity(words);
     let mut cb_spends: Vec<([u8; 32], bool)> = Vec::new();
     // trie: (coin key, script hash) per spend and per indexed output, parallel to `spends` / `output_leaves`
     #[cfg(feature = "trie")]
@@ -591,6 +629,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                     debug_assert!(spend_keys.len() == spend_key_at);
                     spend_keys.push((ok_, sh));
                 }
+                undo_parts.extend_from_slice(&r.h());
             }
             if r.bad { all_ok = false; break; }
         }
@@ -854,6 +893,13 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
         trie_root,
         survivor_value,
         spent_value,
+        undo_hash: {
+            // The block's undo hash (#729, docs/libzync/UNDO.md): SHA-256 of the per-input digests in block order. Logged
+            // so the host checks its own computation (and a consumer can read it): `undo: block <h> inputs <n> hash <hex>`.
+            let u: [u8; 32] = { use sha2::{Digest, Sha256}; Sha256::digest(&undo_parts).into() };
+            env::log(&alloc::format!("undo: block {} inputs {} hash {}", w.height, undo_parts.len() / 32, hex32(&u)));
+            u
+        },
         ..Default::default()
     }
 }

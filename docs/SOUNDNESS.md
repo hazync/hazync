@@ -21,8 +21,10 @@ The images are pinned in [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS):
 
 | image | id |
 |---|---|
-| mainnet product | `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` |
-| signet product | `d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387` |
+| mainnet product (v0.26.0; from genesis, undo-data commitment) | `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` |
+| mainnet product (v0.24.0, v0.25.0; blocks 1..1999 of the board) | `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` |
+| signet product (v0.26.0) | `01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7` |
+| signet product (v0.24.0, v0.25.0) | `d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387` |
 | header-chain zyncAPP (mainnet) | `2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632` |
 
 How faithful "Core's rules as compiled into the image" is, rule by rule, is
@@ -58,7 +60,8 @@ A receipt means nothing until a verifier has made every check in
   text of §5 step 3 alone (`scripts/libzync/genesis_anchor_id.py`).
 - **Enough work, and the checkpoint.** The image pins one block (`prover/methods/guest/src/checkpoint.rs`: mainnet
   970,000, signet 325,000) and refuses any other block at that height. A proof at or above that height, with at
-  least Core v28's `nMinimumChainWork`, contains the real chain's checkpoint.
+  least Bitcoin Core v32.1's `nMinimumChainWork` (the verifier's figure since v0.26.0; the guest's consensus code is
+  Core v28.0's), contains the real chain's checkpoint.
 - **The block forest, the lineage, the profile** match what the image should commit. For the published product
   images the lineage list is empty (`prover/methods/guest/src/lineage/mainnet_coinlog.rs`): one image since genesis,
   so no predecessor image is trusted through a handover.

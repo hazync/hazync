@@ -95,11 +95,11 @@ pub(crate) fn pinned_genesis_anchor() -> Option<[u8; 32]> {
     Some(arr(hx(h)))
 }
 
-/// Core v28 consensus.nMinimumChainWork for this network, little-endian like cum_work (0 on regtest).
+/// Bitcoin Core v32.1's consensus.nMinimumChainWork for this network (src/kernel/chainparams.cpp at v32.1), little-endian like cum_work (0 on regtest).
 pub(crate) fn min_chain_work() -> [u8; 32] {
     let h = match methods::NETWORK {
-        "mainnet" => "000000000000000000000000000000000000000088e186b70e0862c193ec44d6",
-        "signet" => "0000000000000000000000000000000000000000000000000000025dbd66e58f",
+        "mainnet" => "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
+        "signet" => "00000000000000000000000000000000000000000000000000001090e9dc1520",
         _ => return [0; 32],
     };
     arr(rev(hx(h)))
@@ -218,7 +218,7 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         if let Some(p) = pinned_genesis_anchor() { want_anchor = p; }
     }
     check(cs.anchor_id == want_anchor, &format!("anchor_id is {what}"));
-    // Core's nMinimumChainWork (v28): below it, a valid chain from genesis is no evidence of the network's chain.
+    // Core's nMinimumChainWork (v32.1): below it, a valid chain from genesis is no evidence of the network's chain.
     let low_work = !work_at_least(&cs.cum_work, min_chain_work()) || cs.height < checkpoint_height();
     println!("  height {} {} the pinned checkpoint height {}", cs.height, if cs.height < checkpoint_height() { "<" } else { ">=" }, checkpoint_height());
     // The coin log (COINLOG.md) is sound at every block: nothing to close at H. The live-coin ECMH (instant IBD;
@@ -587,7 +587,9 @@ fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
 pub(crate) fn lock_run_dirs(out: &str) {
     static LOCKS: std::sync::Mutex<Vec<std::fs::File>> = std::sync::Mutex::new(Vec::new());
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-    for d in [Some(std::path::PathBuf::from(out)), cl_dir(), crate::trie::trie_dir()].into_iter().flatten() {
+    // the leaf bundle directory too (review 11-14, round 2): libzync-reforest rewrites bundles there and must not race prep
+    let leaves = std::env::var_os("HAZYNC_PREP_LEAF_BUNDLES").map(std::path::PathBuf::from);
+    for d in [Some(std::path::PathBuf::from(out)), cl_dir(), crate::trie::trie_dir(), leaves].into_iter().flatten() {
         std::fs::create_dir_all(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
         // compared as real paths: the same directory given twice or by another path (round 12)
         let c = std::fs::canonicalize(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
@@ -608,6 +610,19 @@ pub(crate) fn lock_run_dirs(out: &str) {
             Err(std::fs::TryLockError::WouldBlock) => panic!("{}: another run holds this directory (LOCK): one run per store", d.display()),
             Err(std::fs::TryLockError::Error(e)) => panic!("{}/LOCK: {e}", d.display()),
         }
+    }
+}
+
+/// Holds `<dir>/LOCK` for the rest of the process, as lock_run_dirs does: refused if another run holds it.
+pub(crate) fn lock_dir(d: &str) {
+    static LOCKS: std::sync::Mutex<Vec<std::fs::File>> = std::sync::Mutex::new(Vec::new());
+    std::fs::create_dir_all(d).unwrap_or_else(|e| panic!("{d}: {e}"));
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(format!("{d}/LOCK"))
+        .unwrap_or_else(|e| panic!("{d}/LOCK: {e}"));
+    match f.try_lock() {
+        Ok(()) => LOCKS.lock().unwrap().push(f),
+        Err(std::fs::TryLockError::WouldBlock) => panic!("{d}: another run holds this directory (LOCK): one run per store"),
+        Err(std::fs::TryLockError::Error(e)) => panic!("{d}/LOCK: {e}"),
     }
 }
 
@@ -881,7 +896,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let handover: Option<(Receipt, ChainState)> = std::env::var("HAZYNC_HANDOVER_RECEIPT").ok().map(|p| {
         let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
         let r: Receipt = bincode::deserialize(&std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
-        r.verify(last.image).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
+        // the same RISC Zero: Receipt::verify; an older one: its vendored circuit (src/xver), as the guest will
+        crate::verify_pred_receipt(&r, last).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
         let st: ChainState = r.journal.decode().expect("ChainState");
         let tamper = std::env::var("HAZYNC_TEST_HANDOVER").ok();
         if tamper.is_some() { assert!(dev_mode_env(), "HAZYNC_TEST_HANDOVER is a dev-mode test hook"); }
@@ -919,8 +935,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let leaf_check = std::env::var("HAZYNC_LEAF_CHECK").ok();
     if let Some(b) = &leaf {
         assert!(lo == hi && b.prev.height + 1 == lo, "HAZYNC_LEAF_BUNDLE: the bundle is for block {}; prove exactly that block", b.prev.height + 1);
-        assert!(handover.is_none() && std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no handover, no resume");
+        assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no resume");
         assert!(leaf_check.is_none(), "HAZYNC_LEAF_BUNDLE and HAZYNC_LEAF_CHECK: one or the other");
+        // A leaf-mode handover (the board's, docs/HANDOVER.md §5): the bundle's witnesses were cut against S(h-1), so
+        // that state must be exactly what the predecessor's receipt committed, byte for byte. No replay is needed: the
+        // bundle carries the BIP30, coin-log and trie witnesses, and the guest checks them against that state.
+        if let Some((r, _)) = &handover {
+            assert!(state_journal_bytes(&b.prev) == r.journal.bytes,
+                    "HAZYNC_LEAF_BUNDLE + HAZYNC_HANDOVER_RECEIPT: the bundle's S({}) is not the predecessor receipt's state \
+                     (prep's state differs from what the predecessor proved: a rule changed that is not keyed by height?)", b.prev.height);
+        }
     }
     // the bundle carries the block: written into the out dir, which then serves as the block dir
     let leaf_dir: String;
@@ -961,7 +985,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let replay = leaf.is_none() && (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists());
     // A handover continues a proved chain: its BIP30 tree must be replayed and equal the receipt's, never seeded (the
     // seeding path rewrites smt_root, and the state sent would no longer be the predecessor's journal).
-    assert!(replay || handover.is_none(), "a handover needs every block file 1..{} to replay the BIP30 tree", lo - 1);
+    assert!(replay || handover.is_none() || leaf.is_some(), "a handover needs every block file 1..{} to replay the BIP30 tree (or a leaf bundle)", lo - 1);
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
@@ -1103,14 +1127,27 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         libzync_agg_prep(&mut w);
         let is_base = prev_rcpt.is_none();
         let step = if handover_pending { 2 } else { is_base as u32 };
+        // A cross-version handover (src/xver): the predecessor's seal goes in as input words after the tail, not as an
+        // assumption (this RISC Zero's recursion cannot resolve an older one's receipt).
+        let foreign: Option<Vec<u32>> = match (handover_pending, pinned_lineage().last(), &prev_rcpt) {
+            (true, Some(e), Some(p)) if e.verifier != crate::handover_pin::SAME_ZKVM => match &p.inner {
+                risc0_zkvm::InnerReceipt::Succinct(s) => Some(crate::xver::encode(s)),
+                _ => panic!("a cross-version predecessor receipt must be succinct"),
+            },
+            _ => None,
+        };
         let env_for = |b: &mut risc0_zkvm::ExecutorEnvBuilder| {
             b.segment_limit_po2(seg_po2());
             if let Some(p) = &prev_rcpt {
                 // Negative test: a handover with the predecessor's journal and no receipt behind it.
-                if std::env::var("HAZYNC_TEST_HANDOVER").as_deref() != Ok("no_receipt") { b.add_assumption(p.clone()); }
+                if std::env::var("HAZYNC_TEST_HANDOVER").as_deref() != Ok("no_receipt") && foreign.is_none() { b.add_assumption(p.clone()); }
             }
             write_aggregate_env_ex(b, &chunks, &prev, prev_rcpt.as_ref().map(|p| p.journal.bytes.as_slice()), &w, step);
             libzync_agg_tail(b, &w);
+            if let Some(words) = &foreign {
+                b.write(&(words.len() as u32)).unwrap();
+                b.write_slice(words);
+            }
         };
         // collect pass: the leaves the ECMH hints are for (and, for a coin-log image, the log's spends and appends)
         CL_WIT.lock().unwrap().clear();
@@ -1128,6 +1165,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log)) {
             bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
         }
+        // The block's undo hash (#729): the guest's (logged by the collect aggregate) must be the host's own from the block
+        // file, so a disagreement between the two implementations stops here, not in a verifier.
+        let undo = crate::prep::undo_of_block_json(&read_block_json(dir, h));
+        match guest_undo_line(&String::from_utf8_lossy(&log), h) {
+            Some((n, u)) => assert!((n, u) == (undo.1, undo.0), "block {h}: the guest's undo hash ({n} inputs, {}) != the host's ({} inputs, {})",
+                                    crate::hex(&u), undo.1, crate::hex(&undo.0)),
+            None => panic!("block {h}: the collect aggregate logged no `undo: block {h}` line"),
+        }
+        // what a consumer reads: the block's undo-data commitment, checked guest == host (docs/libzync/UNDO.md)
+        println!("  undo: block {h} inputs {} hash {} (guest == host)", undo.1, crate::hex(&undo.0));
         let cl_lists = if methods::COINLOG { cl_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
         if methods::COINLOG {
             let wit = match &leaf { Some(b) => b.cl_wit.clone(), None => cl_prepare(&cl_lists.0) };
@@ -1160,9 +1207,10 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         if methods::COINLOG && leaf.is_none() {
             let flips = cl_commit(&cl_lists.0, &cl_lists.1, &st);
             if h == 1 && prev_is_genesis {
-                hist_append(&out, &libzync::history::Rec { height: 0, hash: genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![] });
+                hist_append(&out, &libzync::history::Rec { height: 0, hash: genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![], undo: None });
             }
-            hist_append(&out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends: cl_lists.1.clone() });
+            let undo = crate::handover_pin::leaf_has_undo(&METHOD_ID, pinned_lineage(), h).then_some(undo.0);
+            hist_append(&out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends: cl_lists.1.clone(), undo });
             // The log next to each receipt, so a run can resume after it (HAZYNC_RESUME) or be anchored on it. The last
             // two are kept (a checkpoint copier takes the second newest receipt, which may still be complete while
             // the newest is being written); HAZYNC_COINLOG_SAVE_EACH=1 keeps every one (tests). A mainnet-sized log
@@ -1660,6 +1708,17 @@ pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) ->
         h.store.push(*l);
     }
     (h.store.roots(), h.store.len(), flips)
+}
+
+/// The guest's `undo: block <h> inputs <n> hash <hex>` line (agg_lite.rs) for block `h`: (inputs, hash).
+pub(crate) fn guest_undo_line(log: &str, h: u32) -> Option<(u64, [u8; 32])> {
+    let want = format!("undo: block {h} inputs ");
+    log.lines().filter_map(|l| l.find(&want).map(|i| &l[i + want.len()..])).find_map(|rest| {
+        let (n, x) = rest.split_once(" hash ")?;
+        let x = x.trim();
+        if x.len() != 64 || !x.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+        Some((n.parse().ok()?, crate::hx(x).try_into().ok()?))
+    })
 }
 
 /// Records already in `<out>/history.bin` (libzync::history), counted once per run; None = the file does not run

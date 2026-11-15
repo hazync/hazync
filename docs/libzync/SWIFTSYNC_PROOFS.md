@@ -55,9 +55,10 @@ read a JSON written before E2.
 Given a receipt R and the network. Both verifiers (`swiftsync-verify`, `host libzync-verify`) make every check
 below; step 7 needs a source you name (without one they print the tip hash to compare).
 
-1. `R.verify(M)`, where M is the published libzync image id for that network (`reproduce/LIBZYNC_IDS`; since v0.24.0,
-   risc0 3.1.0: mainnet `8888d59c…`, signet `d4210dae…`). The built-in table (`IMAGES` in `swiftsync-verify/src/lib.rs`,
-   the C ABI's and the WASM build's) holds exactly these. Receipts of withdrawn images (v0.23.0's `863c9ce3…`, risc0
+1. `R.verify(M)`, where M is the published libzync image id for that network (`reproduce/LIBZYNC_IDS`; v0.26.0,
+   risc0 3.1.0: mainnet `46666b6f…`, signet `01a80f17…`). The built-in table (`IMAGES` in `swiftsync-verify/src/lib.rs`,
+   the C ABI's and the WASM build's) holds these as each network's current image, after the earlier images they
+   continue or replace (v0.24.0's `8888d59c…` / `d4210dae…`), which stay verifiable by id. Receipts of withdrawn images (v0.23.0's `863c9ce3…`, risc0
    3.0.5) are refused: 3.1.0's verifier parameters differ. Another image needs `--image <hex>` (with `--product` for
    profile bits 4-6, the coin log, trie and live-coin hash). `host libzync-verify` checks against the image it was
    built with.
@@ -84,8 +85,9 @@ below; step 7 needs a source you name (without one they print the tip hash to co
      alone. The values are PINNED (a chain keeps its anchor through every handover, HANDOVER.md §4): mainnet
      `852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167`, signet
      `3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827` (`swiftsync-verify` unit tests pin both).
-3a. **Minimum work.** `J.cum_work` must be at least Core v28's `nMinimumChainWork` for the network (mainnet
-   `0x…88e186b70e0862c193ec44d6`, signet `0x…25dbd66e58f`). Below it the proof is a valid chain from genesis but no
+3a. **Minimum work.** `J.cum_work` must be at least Bitcoin Core v32.1's `nMinimumChainWork` for the network (mainnet
+   `0x…0145ec036acc5ba740052af1a0`, at its assumevalid block 966,143; default signet `0x…1090e9dc1520`, block 321,295;
+   v0.26.0 on: before it, Core v28's `0x…88e186b70e0862c193ec44d6` / `0x…25dbd66e58f`). Below it the proof is a valid chain from genesis but no
    evidence it is the network's chain (a low-work fork costs little to mine): the verdict is DEMO (exit 2), not OK.
 3b. **Checkpoint.** A libzync image pins one block (`prover/methods/guest/src/checkpoint.rs`): mainnet 970,000 =
    `000000000000000000014e6a…f29b5a07`, signet 325,000 = `000000057a36…e306fcd4`; none on regtest. The guest refuses any

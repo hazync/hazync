@@ -151,6 +151,12 @@ def run_verify(verify, data):
         f.write(data)
         f.flush()
         argv = [verify, "--product", f.name] if LIBZYNC else [verify, "--json", f.name]
+        # After a handover (docs/HANDOVER.md §7) the spine is the NEW image's, with a lineage the verifier's built-in
+        # table may not list yet: HAZYNC_HANDOVER="<predecessor id>:<height>[:<verifier digest>],..." (oldest first)
+        # names it, and the image is HAZYNC_METHOD_ID. Unset: the built-in image, as before.
+        hand = [h.strip() for h in os.environ.get("HAZYNC_HANDOVER", "").split(",") if h.strip()]
+        if LIBZYNC and hand:
+            argv[1:1] = ["--image", os.environ.get("HAZYNC_METHOD_ID", "")] + [x for h in hand for x in ("--handover", h)]
         p = subprocess.run(argv, capture_output=True, text=True, timeout=180)
     if LIBZYNC:
         out = swiftsync_fields(p.stdout)

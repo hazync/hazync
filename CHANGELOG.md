@@ -13,6 +13,22 @@ Hazync v2's release notes are in [`docs/`](docs/README.md).
 Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
 v0.23.0 onwards are **Hazync v2** (the libzync engine).
 
+## v0.26.0 — 2026-11-14 — re-baseline `8888d59c` → `46666b6f` (the board proves again from genesis)
+A new image whose block leaves commit each block's **undo data** (#729): per input of every non-coinbase transaction,
+SHA-256 of the spent coin's (height, coinbase flag, amount, script), and per block SHA-256 of those, in a new `0x05`
+block leaf ([`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)); measured +0.35% to +2.46% of a block's executed cycles on
+11 real mainnet blocks. `ChainState` and the genesis anchors are unchanged. Mainnet `46666b6f` and signet `01a80f17` start
+their chains at genesis (empty lineages) and the board resets; the header-chain zyncAPP `2db34e12` is unchanged. No
+consensus-rule change; same RISC Zero 3.1.0. Also built and tested, not used by this release: the **handover**, so a
+later image can continue a chain without re-proving it, including across a RISC Zero upgrade by checking the previous
+version's spine with a vendored copy of its recursion circuit (its fast form cannot be proved because of a RISC Zero
+3.1.0 Poseidon2 bug, risc0#3427; with software hashing a cross-version handover was proved on a GPU in 280 s). Only
+upgrades that are not soundness fixes may be handed over ([`docs/HANDOVER.md`](docs/HANDOVER.md)). The verifier keeps
+`8888d59c` and checks a receipt by it as that image. The sponsor bot skips a release still being signed instead of
+latching off (#728). The verifier's minimum chain work is Bitcoin Core v32.1's.
+Notes: [`docs/RELEASE_NOTES_v0.26.0.md`](docs/RELEASE_NOTES_v0.26.0.md).
+<https://github.com/hazync/hazync/releases/tag/v0.26.0>
+
 ## v0.25.0 — 2026-11-14
 Hazync v2 with **a Windows installer**: `hazync-setup-x86_64-windows.exe`, built and signed with the release, so
 a release now has 13 assets. **The images are unchanged** (mainnet `8888d59c`, signet `d4210dae`, headers `2db34e12`),

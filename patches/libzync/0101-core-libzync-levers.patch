@@ -101,7 +101,7 @@ diff -ruN a/src/crypto/sha256.cpp b/src/crypto/sha256.cpp
 +   source; the destination is always the private `buf`, so the regions never overlap. */
 +inline void hz_copy(unsigned char* d, const unsigned char* s, size_t n)
 +{
-+    __builtin_memcpy(d, s, n);
++    if (n) __builtin_memcpy(d, s, n); /* Write(nullptr, 0) is legal; memcpy from null is not, even of 0 bytes */
 +}
 +inline void hz_init(uint32_t* s)
 +{
