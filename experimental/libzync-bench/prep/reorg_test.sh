@@ -29,8 +29,12 @@ prep $O/ref 1 200 genesis HAZYNC_PREP_UNDO_KEEP=60 > $O/ref.log 2>&1; rc=$?
 check "$([ $rc = 0 ] && echo 1)" "1. reference run 1..200 with J=60 (exit $rc)"
 prep $O/off 1 200 genesis HAZYNC_PREP_UNDO_KEEP=0 > $O/off.log 2>&1
 same=1; for h in $(seq 1 200); do cmp -s $O/ref/out/state_$h.json $O/off/out/state_$h.json || same=0; done
-for x in smt coinlog trie; do cmp -s $O/ref/out/state_200.$x $O/off/out/state_200.$x || same=0; done
-check "$same" "1. every state_<h>.json and the save point's .smt/.coinlog/.trie byte-identical with records off"
+for x in smt coinlog; do cmp -s $O/ref/out/state_200.$x $O/off/out/state_200.$x || same=0; done
+# the .trie marker names its store's directory, which differs: compared without it
+[ "$(sed 's#^HZTRIE-DISK [^ ]* ##' $O/ref/out/state_200.trie)" = "$(sed 's#^HZTRIE-DISK [^ ]* ##' $O/off/out/state_200.trie)" ] || same=0
+# and the stores themselves, file by file (the coin log, its index, the trie arena and meta)
+for s in cl trie; do for f in $(ls $O/ref/$s | grep -v '^LOCK$'); do cmp -s $O/ref/$s/$f $O/off/$s/$f || same=0; done; done
+check "$same" "1. every state_<h>.json, the save point's .smt/.coinlog/.trie and every store file byte-identical with records off"
 check "$([ ! -e $O/off/out/reorg ] || [ -z "$(ls -A $O/off/out/reorg)" ] && echo 1)" "1. J=0 writes no record"
 python3 - "$O/ref/out" 141 200 > $O/records.txt <<'PY'
 import hashlib, json, os, struct, sys
