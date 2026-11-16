@@ -169,6 +169,9 @@ pub struct DiskArena {
     freeing: u64,
     /// Z1: slots held back in `retain/` (not free, not live)
     retained: u64,
+    /// Z1: the highest freeing height ever released to the free list (review 16.11, N2): the root of h is intact iff
+    /// h >= this. Persisted in `trie/INTACT`.
+    released_hw: u64,
     /// Z1: this opening's generation (`GEN`, bumped at every open and rewind) and the open `roots.log`
     gen: u32,
     roots: Option<std::fs::File>,
@@ -242,7 +245,7 @@ impl DiskArena {
         let cap = file.metadata()?.len();
         let cache = core::cell::RefCell::new(RecCache::new(cache_mb));
         let mut a = DiskArena { dir: dir.to_path_buf(), file, map, cap, len: 0, free: Vec::new(), pending: Vec::new(), cache,
-                                pending_marks: Vec::new(), freeing: 0, retained: 0, gen: 0, roots: None };
+                                pending_marks: Vec::new(), freeing: 0, retained: 0, released_hw: 0, gen: 0, roots: None };
         let meta = match std::fs::read(dir.join("meta")) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e),
@@ -275,6 +278,10 @@ impl DiskArena {
     /// height `f` (the replay reuses the slots of the roots above it), drop `retain/` lists of blocks above `f` (a lost
     /// interval's: their slots are live in the flushed trie or past its length) and count the rest.
     fn open_z1(&mut self, f: u64) -> std::io::Result<()> {
+        // what was released: INTACT's intact_from (written before each meta), else (a store from before it) everything
+        // up to the flushed height
+        self.released_hw = std::fs::read_to_string(self.dir.join("INTACT")).ok()
+            .and_then(|x| x.split_whitespace().nth(1)?.parse().ok()).unwrap_or(f).max(0);
         let g = std::fs::read(self.dir.join("GEN")).ok().filter(|b| b.len() == 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
         self.gen = g.wrapping_add(1);
         self.write_gen()?;
@@ -291,10 +298,9 @@ impl DiskArena {
         if let Ok(r) = std::fs::read(&rel) {
             use sha2::Digest as _;
             let meta = std::fs::read(self.dir.join("meta")).unwrap_or_default();
-            if r.len() >= 32 && (r.len() - 32) % 8 == 0 && sha2::Sha256::digest(&meta)[..] == r[..32] {
-                for c in r[32..].chunks_exact(8) {
-                    let k = u64::from_le_bytes(c.try_into().unwrap());
-                    let _ = std::fs::remove_file(self.dir.join("retain").join(alloc::format!("r_{k}.bin")));
+            if r.len() >= 32 && sha2::Sha256::digest(&meta)[..] == r[..32] {
+                for n in alloc::string::String::from_utf8_lossy(&r[32..]).lines().filter(|n| n.starts_with("r_") && n.ends_with(".bin") && !n.contains('/')) {
+                    let _ = std::fs::remove_file(self.dir.join("retain").join(n));
                 }
             }
             std::fs::remove_file(&rel)?;
@@ -317,10 +323,12 @@ impl DiskArena {
     }
 
     /// `retain/r_<k>.bin`: (k, path), any order.
+    /// `retain/r_<k>.bin`, and `r_<k>_<j>.bin` (block j's list re-tagged to k by a rewind's flush, N1): (k, path).
     fn retain_files(&self) -> Vec<(u64, std::path::PathBuf)> {
         let Ok(it) = std::fs::read_dir(self.dir.join("retain")) else { return Vec::new() };
         it.flatten().filter_map(|e| {
-            let k = e.file_name().to_string_lossy().strip_prefix("r_")?.strip_suffix(".bin")?.parse().ok()?;
+            let n = e.file_name().to_string_lossy().into_owned();
+            let k = n.strip_prefix("r_")?.strip_suffix(".bin")?.split('_').next()?.parse().ok()?;
             Some((k, e.path()))
         }).collect()
     }
@@ -453,16 +461,32 @@ impl Arena for DiskArena {
         let release = pin.map_or(u64::MAX, |p| p.min(height).max(height.saturating_sub(retain_max)));
         let mut all: Vec<R> = self.free.clone();
         let mut keep: Vec<(u64, &[R])> = Vec::new();
+        let mut hw = self.released_hw;
         for (i, &(k, start)) in self.pending_marks.iter().enumerate() {
             let end = self.pending_marks.get(i + 1).map_or(self.pending.len(), |m| m.1);
-            if k <= release { all.extend_from_slice(&self.pending[start..end]); } else { keep.push((k, &self.pending[start..end])); }
+            if k <= release { all.extend_from_slice(&self.pending[start..end]); if end > start { hw = hw.max(k); } } else { keep.push((k, &self.pending[start..end])); }
         }
         if self.pending_marks.first().is_some_and(|m| m.1 > 0) { all.extend_from_slice(&self.pending[..self.pending_marks[0].1]); }
         // lists at or below the release come back; so do lists ABOVE the height flushed now, which only a rewind leaves
         // (blocks undone: what they freed is garbage, in no root since the rewind; an open would drop those lists and
         // lose the slots for good)
-        let back: Vec<(u64, std::path::PathBuf)> = self.retain_files().into_iter().filter(|(k, _)| *k <= release || *k > height).collect();
+        // Lists ABOVE the height flushed now exist only after a rewind (blocks undone). They hold what the orphaned blocks'
+        // FORWARD applies freed: nodes of older roots, a pinned one among them (review 16.11, N1: releasing them broke a
+        // root pinned below the fork). So they stay held, re-tagged to this height (`r_<height>_<k>.bin`, a rename: no
+        // slot is ever in two lists), and come back once the pin passes it; the next open keeps them (tag <= flushed).
+        let mut lists = self.retain_files();
+        if release != u64::MAX && lists.iter().any(|(k, _)| *k > height && *k > release) {
+            for (k, p) in lists.iter_mut().filter(|(k, _)| *k > height && *k > release) {
+                let old = p.file_name().unwrap().to_string_lossy().into_owned();
+                let to = self.dir.join("retain").join(alloc::format!("r_{height}_{}", old.strip_prefix("r_").unwrap()));
+                std::fs::rename(&*p, &to).map_err(e)?;
+                (*k, *p) = (height, to);
+            }
+            std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
+        }
+        let back: Vec<(u64, std::path::PathBuf)> = lists.into_iter().filter(|(k, _)| *k <= release).collect();
         let mut back_n = 0u64;
+        for (k, _) in &back { hw = hw.max(*k); }
         for (_, p) in &back {
             let b = std::fs::read(p).map_err(e)?;
             all.extend(b.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())));
@@ -503,11 +527,24 @@ impl Arena for DiskArena {
         if !back.is_empty() {
             use sha2::Digest as _;
             let mut r = sha2::Sha256::digest(&b).to_vec();
-            for (k, _) in &back { r.extend_from_slice(&k.to_le_bytes()); }
+            for (_, p) in &back { r.extend_from_slice(p.file_name().unwrap().to_string_lossy().as_bytes()); r.push(b'\n'); }
             let mut f = std::fs::File::create(&rel).map_err(e)?;
             f.write_all(&r).map_err(e)?;
             f.sync_data().map_err(e)?;
             std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
+        }
+        // INTACT (review 16.11, N2): the lowest height whose logged root is intact, i.e. the highest freeing height ever
+        // released, with this flush's releases counted. Written and synced BEFORE the meta, so after any crash it
+        // over-states what was released (safe for a reader), never under-states it. With roots.log made durable too.
+        if let Some(f) = &self.roots { f.sync_data().map_err(e)?; }
+        {
+            let msg = alloc::format!("intact_from {hw} gen {} flushed {height}\n", self.gen);
+            let t = self.dir.join("INTACT.tmp");
+            let mut f = std::fs::File::create(&t).map_err(e)?;
+            f.write_all(msg.as_bytes()).map_err(e)?;
+            f.sync_data().map_err(e)?;
+            std::fs::rename(&t, self.dir.join("INTACT")).map_err(e)?;
+            std::fs::File::open(&self.dir).and_then(|d| d.sync_all()).map_err(e)?;
         }
         let tmp = self.dir.join("meta.tmp");
         let mut f = std::fs::File::create(&tmp).map_err(e)?;
@@ -527,15 +564,7 @@ impl Arena for DiskArena {
             std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
         }
         self.retained = self.retained + kept_n - back_n;
-        // with a pin: the lowest height whose logged root is guaranteed intact until the next flush, for the reader
-        // (review 16.11, M4); and roots.log made durable with the flush. Without one, neither: Z1 stays inert.
-        if pin.is_some() {
-            if let Some(f) = &self.roots { f.sync_data().map_err(e)?; }
-            let msg = alloc::format!("intact_from {} gen {} flushed {height}\n", release.min(height), self.gen);
-            let t = self.dir.join("INTACT.tmp");
-            std::fs::write(&t, msg.as_bytes()).and_then(|_| std::fs::File::open(&t)?.sync_data()).map_err(e)?;
-            std::fs::rename(&t, self.dir.join("INTACT")).map_err(e)?;
-        }
+        self.released_hw = hw;
         if let Some(p) = pin.filter(|&p| p < release) {
             // the cap released a pinned height: the reader must know (ZAPP_FOLLOWER.md §4)
             let msg = alloc::format!("released_through {release} pin {p} height {height}\n");
@@ -1544,6 +1573,86 @@ mod tests {
         m.height = 15;
         assert_eq!(st.to_bytes(), m.to_bytes());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review 16.11 (N1, the reviewer's test): a root pinned BELOW a rewind's fork must survive the rewind and the blocks
+    /// after it: the lists the orphaned blocks' forward applies held are nodes of older roots, the pinned one among them.
+    #[cfg(feature = "std")]
+    #[test]
+    fn z1_a_root_pinned_below_a_rewinds_fork_survives_it() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-zz-review", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let blocks = z1_blocks(20, 0x51ed_270b_7f1a_c3e9);
+        let newb = z1_blocks(60, 0x1234_5678_9abc_def1);
+        let snap10 = { let mut m = TrieStore::new(true); for (mk, i) in &blocks[..10] { m.apply(mk, i).unwrap(); } m.height = 10; m.to_bytes() };
+        std::env::set_var("HAZYNC_TRIE_RETAIN_MAX", "1000");
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        for (n, (mk, i)) in blocks.iter().enumerate() {
+            st.apply(mk, i).unwrap(); st.height = n as u64 + 1; st.log_root();
+            if n + 1 == 10 { std::fs::write(dir.join("PIN"), b"10\n").unwrap(); }
+            if (n + 1) % 5 == 0 { st.flush().unwrap(); }
+        }
+        drop(st);
+        let b = std::fs::read(dir.join("roots.log")).unwrap();
+        let e = b.chunks_exact(ROOTS_REC).find(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) == 10).unwrap();
+        let r10 = u64::from_le_bytes(e[36..44].try_into().unwrap());
+        let view = |d: &std::path::Path| std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+            let mut v = TrieStore::open_dir(d, true).unwrap(); v.root = r10; v.height = 10; v.to_bytes() }));
+        assert!(view(&dir).is_ok_and(|b| b == snap10), "before the rewind the root of 10 is intact");
+        // the rewind, as rewind.rs: open, undo 20..16, cut, log F, flush at 15
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        for (mk, i) in blocks[15..].iter().rev() {
+            let km: Vec<Key> = mk.iter().map(|m| m.0).collect();
+            let ki: Vec<Key> = i.iter().map(|x| x.0).collect();
+            st.undo_recorded(&km, &ki, false).unwrap();
+        }
+        st.height = 15; st.log_root();
+        st.flush().unwrap();
+        std::eprintln!("INTACT after rewind: {}", std::fs::read_to_string(dir.join("INTACT")).unwrap());
+        assert!(view(&dir).is_ok_and(|b| b == snap10), "right after the rewind flush");
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        for (n, (mk, i)) in newb.iter().enumerate() {
+            st.apply(mk, i).unwrap(); st.height = 16 + n as u64; st.log_root();
+            if (n + 1) % 5 == 0 { st.flush().unwrap(); }
+        }
+        drop(st);
+        std::eprintln!("INTACT at the end: {}", std::fs::read_to_string(dir.join("INTACT")).unwrap());
+        let ok = view(&dir).is_ok_and(|b| b == snap10);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(ok, "PIN 10, fork 15: the root of 10 was overwritten after the rewind");
+    }
+
+    /// Review 16.11 (N2, the reviewer's test): INTACT reports what was RELEASED, not the current pin: a pin written at 42
+    /// for 20 comes after the flushes that released 20's slots.
+    #[cfg(feature = "std")]
+    #[test]
+    fn z1_intact_tells_the_truth_after_a_late_pin() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-zz-review2", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let blocks = z1_blocks(60, 0x51ed_270b_7f1a_c3e9);
+        let snap20 = { let mut m = TrieStore::new(true); for (mk, i) in &blocks[..20] { m.apply(mk, i).unwrap(); } m.height = 20; m.to_bytes() };
+        std::env::set_var("HAZYNC_TRIE_RETAIN_MAX", "1000");
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        for (n, (mk, i)) in blocks.iter().enumerate() {
+            st.apply(mk, i).unwrap(); st.height = n as u64 + 1; st.log_root();
+            if n + 1 == 42 { std::fs::write(dir.join("PIN"), b"20\n").unwrap(); }
+            if (n + 1) % 5 == 0 { st.flush().unwrap(); }
+        }
+        drop(st);
+        let b = std::fs::read(dir.join("roots.log")).unwrap();
+        let e = b.chunks_exact(ROOTS_REC).find(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) == 20).unwrap();
+        let r20 = u64::from_le_bytes(e[36..44].try_into().unwrap());
+        let intact = std::fs::read_to_string(dir.join("INTACT")).unwrap();
+        let view = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+            let mut v = TrieStore::open_dir(&dir, true).unwrap(); v.root = r20; v.height = 20; v.to_bytes() }));
+        let ok = view.is_ok_and(|b| b == snap20);
+        let rel = std::fs::read_to_string(dir.join("PIN.released")).ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        // INTACT may claim the root of 20 only if it reads as the trie of 20 (a pin written at 42 comes too late for it)
+        let from: u64 = intact.split_whitespace().nth(1).and_then(|x| x.parse().ok()).expect("INTACT: intact_from <h>");
+        assert!(from > 20 || ok, "INTACT says {intact:?} (PIN.released {rel:?}) but the root of 20 reads as the trie of 20: {ok}");
     }
 
     /// Z1: `GEN` is bumped (and synced) at every open and every `bump_gen` (a rewind); each `roots.log` entry carries the

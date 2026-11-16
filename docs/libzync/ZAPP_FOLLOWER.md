@@ -261,6 +261,17 @@ the file as before), `prover/host/src/prep.rs` and `trie.rs` (one call each).
   come back into the free list (deleted after the meta). **No `trie/PIN`: everything is released, exactly as before
   Z1.** When the cap releases a pinned height, `trie/PIN.released` says `released_through <h> pin <p> height <P>` and
   prep logs `TRIE_PIN_RELEASED`.
+- **Review of 16.11.2026.** A release is committed by `retain/RELEASE` (the hash of the meta that frees the lists'
+  slots and the lists' names, synced before that meta's rename; an open deletes the lists only if the meta on disk is
+  that one), so a crash between the rename and the unlinking frees nothing twice. A `PIN` that does not read is a pin
+  at 0. Slots an UNDO frees are released at the next flush (only the orphaned roots had them; the rewind's GEN bump
+  tells a reader first). The lists of the orphaned blocks' FORWARD applies hold nodes of older roots, a pinned one
+  among them: a rewind's flush at F keeps them, renamed `r_<F>_<k>.bin` (held until the pin passes F; an open keeps
+  them as tag F ≤ the flushed height). **`trie/INTACT`** (`intact_from <h> gen <g> flushed <P>`), written and synced
+  BEFORE each meta, at every flush with or without a pin: h is the highest freeing height ever released to the free
+  list, so the root of every height ≥ h is intact (a pin written late, lowered, or unreadable is reported as what
+  really happened, not as what it asks for). **`roots.log` holds a height more than once** after a rewind (F logged
+  again, in the new generation): the reader takes the NEWEST entry for a height.
 - **Not in Z1:** the read-only reader (`open_read`, `open_at`), `zync-serve` tip mode, the follower (Z2-Z5).
 
 **Tests** (`trie_store.rs`): a disk store pinned at 20 runs to 80 with a flush every 5 blocks and a reopen; the root
