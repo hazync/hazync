@@ -65,12 +65,19 @@ check_dir() {
     [ -f "$d/host.exe" ] || die "no host.exe"
     if [ "$KIND" = cuda ]; then
         ls "$d"/cudart64_*.dll >/dev/null 2>&1 || die "no cudart64_*.dll beside host.exe"
+        # reported, not refused: the CUDA host imports the Visual C++ runtime; the installer puts that runtime beside
+        # it (windows-installer.yml), and a hand download needs the VC++ redistributable
+        python3 scripts/pe_imports.py "$d/host.exe" --cuda 2>&1 | sed 's/^/       /' >&2 || true
     else
         ! ls "$d"/*.dll >/dev/null 2>&1 || die "the CPU host comes alone: no DLL belongs beside it"
         # PE import names are ASCII; a CPU host that imports the driver's DLL would refuse to start on a machine with
         # no NVIDIA driver, which is the machine it exists for.
         python3 -c "import sys;sys.exit(1 if b'nvcuda.dll' in open(sys.argv[1],'rb').read().lower() else 0)" "$d/host.exe" \
             || die "the CPU host.exe names nvcuda.dll: it is a CUDA build, not the CPU one"
+        # ⛔ and it needs no DLL Windows does not ship (review of a04038ce, M1): no Visual C++ runtime — the CPU host
+        # comes alone, for machines that may not have one (windows-prove builds it with +crt-static)
+        python3 scripts/pe_imports.py "$d/host.exe" --cpu > "$d/.imports.txt" 2>&1 \
+            || { sed 's/^/       /' "$d/.imports.txt" >&2; die "the CPU host.exe needs a DLL Windows does not have"; }
     fi
     python3 scripts/embedded_guest_sha.py "$d/host.exe" --pin "$WANT_SHA" --size "$size" > "$d/.guest.txt" 2>&1 \
         || { sed 's/^/       /' "$d/.guest.txt" >&2; die "host.exe does not embed the published mainnet guest"; }

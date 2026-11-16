@@ -221,6 +221,15 @@ runner (windows-prove run 42540389071, 2026-11-09); most blocks are bigger and t
 measured on a CPU, so nothing bigger is promised. The choice can be changed under Advanced → Options ("CPU build" /
 "GPU build"). A machine where `nvidia-smi` cannot be asked is not refused: unknown is not "no card".
 
+The processor is offered **for that session only**: the saved choice stays the graphics card, so installing the
+NVIDIA driver later needs no setting changed (Advanced → Options → CPU build makes it permanent). The same offer comes
+when the graphics card fails while proving and nothing else is running, and when the remembered prover file is gone.
+
+**No Visual C++ runtime needed.** The CPU `host.exe` is built with a static C runtime and imports only DLLs Windows
+ships (checked at release by `scripts/pe_imports.py --cpu`). The CUDA `host.exe` still imports `VCRUNTIME140.dll`,
+`VCRUNTIME140_1.dll` and `MSVCP140.dll`; the installer copies them beside it, so a PC without the Visual C++
+Redistributable runs it. Someone unzipping the CUDA release asset by hand needs that redistributable.
+
 ## More than one graphics card
 
 A machine with two or more cards that can prove gets **one worker on each**, started seeing only its

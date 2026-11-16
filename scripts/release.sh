@@ -59,7 +59,7 @@ run()  { [ "$DRY" = 1 ] && { echo "  (dry-run, would run) $*"; return 0; }; "$@"
 
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] \
     || die "usage: $0 vMAJOR.MINOR.PATCH [--dry-run|--verify-only]   (release-sign.yml refuses anything else)"
-[ "$(echo $BINS | wc -w)" -ge 9 ] || die "scripts/release-assets.txt lists only $(echo $BINS | wc -w) release asset(s)"
+[ "$(echo $BINS | wc -w)" -ge 10 ] || die "scripts/release-assets.txt lists only $(echo $BINS | wc -w) release asset(s)"
 
 # The id this release ships: the PUBLISHED libzync mainnet image, from its record. reproduce/METHOD_ID
 # names the same id since #676; if they disagree the repo contradicts itself, and nothing is shipped.

@@ -35,6 +35,13 @@ with open(os.path.join(os.environ["BUNDLE_DIR"], "env.json"), "w") as fh:
 def say(s):
     print(s, flush=True)
 block = 144263 + {"GPU-sml": 1, "1": 1}.get(os.environ.get("CUDA_VISIBLE_DEVICES") or "", 0)
+_vis = os.environ.get("CUDA_VISIBLE_DEVICES") or ""
+if os.environ.get("STAND_IN_NO_DEVICE") and _vis.startswith("GPU-"):
+    say('CUDA ERROR: cudaErrorNoDevice@sppark/util/all_gpus.cpp:43 failed: "no CUDA-capable device is detected"')
+    sys.exit(1)
+if os.environ.get("STAND_IN_GPU_FAIL"):
+    say('CUDA ERROR: cudaGetLastError()@sppark/ntt/ntt.cuh:97 failed: "operation not supported"')
+    sys.exit(1)
 if (os.environ.get("STAND_IN_DIE_ON") and os.environ.get("CUDA_VISIBLE_DEVICES") == os.environ["STAND_IN_DIE_ON"]
         and sys.argv[1:2] != ["fold"]):
     say("FATAL: guest id mismatch — every proof this worker makes will be REJECTED.")
@@ -86,6 +93,12 @@ def stop_all(app):
         except Exception:              # noqa: BLE001
             pass
     spin(app, 10, lambda: not app.workers)
+    # a killed stand-in reads as an unexplained exit and is scheduled to start again: cancel that, so the next case
+    # starts from a quiet window
+    for h in app._respawns.values():
+        app.after_cancel(h)
+    app._respawns.clear()
+    app._problem = ""
 
 
 def main():
@@ -273,10 +286,11 @@ def main():
         _info = lambda kind: {"kind": kind, "needs_driver": kind == "cuda", "driver_present": True,  # noqa: E731
                               "dlls": ["nvcuda.dll"] if kind == "cuda" else ["kernel32.dll"], "size": 2, "startable": True}
         supervisor.classify_host = lambda path: _info("cpu" if path == cpu_host else "cuda")
+        open(os.path.join(tmp, "cuda-host.exe"), "wb").write(b"MZ")
         app.host_var.set(os.path.join(tmp, "cuda-host.exe"))
         app.host_cpu_var.set("")
         _started(app)
-        check(not app.workers and errors and "5.2" in errors[-1] and "no CPU prover" in errors[-1],
+        check(not app.workers and errors and "GTX 970" in errors[-1] and "no processor (CPU) prover" in errors[-1],
               f"⛔ one compute 5.x card, opted in, no CPU prover: nothing starts, and it says why ({errors[-1:]})")
         app.host_cpu_var.set(cpu_host)
         _started(app)
@@ -289,23 +303,23 @@ def main():
             pass
         real_env = supervisor.worker_env
         seen = {}
-        supervisor.worker_env = lambda *a, **kw: (seen.update(kw) or real_env(*a, **kw))
+        supervisor.worker_env = lambda *a, **kw: (seen.update(kw, host=a[0]) or real_env(*a, **kw))
         try:
             _started(app)
             spin(app, 15, lambda: app.workers and (given(1) or {}).get("HAZYNC_GPU_LOCK"))
         finally:
             supervisor.worker_env = real_env
-        check(app.host_var.get() == cpu_host and len(app.workers) == 1 and app.workers[0].card is None,
-              f"accepted: it switches to the CPU prover and starts one unpinned worker ({app.host_var.get()})")
+        check(seen.get("host") == cpu_host and len(app.workers) == 1 and app.workers[0].card is None,
+              f"accepted: the session runs on the CPU prover, one unpinned worker ({seen.get('host')})")
+        check(app.host_var.get().endswith("cuda-host.exe"),
+              f"⛔ and the saved choice is NOT changed (review M2): {app.host_var.get()}")
         check(not seen.get("spark_min_major"), f"⛔ and never asks sppark for a floor below 6 ({seen.get('spark_min_major')})")
         check(any("processor" in t.lower() and "24 minutes" in t for _, t, _tag in app._events),
               "Home's feed says it is on the processor, and how slow that is, measured")
         stop_all(app)
-        supervisor.classify_host = real_classify
-        hazync_gui.messagebox.askyesno, hazync_gui.messagebox.showerror = real_ask, real_err
         app.force_gpu.set(False)
         machine["cards"] = TWO
-        app.host_var.set("")
+        app.host_cpu_var.set("")      # (the patched classify and dialogs stay until the end: see below)
 
         print("── 'try my old card anyway': the old card can be switched off too ──")
         old = {"index": 2, "uuid": "GPU-old", "name": "NVIDIA GeForce GTX 1060", "vram_mb": 6144,
@@ -340,7 +354,104 @@ def main():
         check(sorted(w.label for w in app.workers) == ["RTX 3060 Ti", "RTX 4090"],
               f"⛔ unticked, it gets no worker even while forced: {sorted(w.label for w in app.workers)}")
         stop_all(app)
+        app.force_gpu.set(False)
+        app.cards_off = set()
+        machine["cards"] = TWO
+
+        print("── a UUID pin the driver does not resolve: once more, by number (review L4) ──")
+        for i in (1, 2):
+            try:
+                os.remove(os.path.join(base, f"bundles_{i}", "env.json"))
+            except OSError:
+                pass
+        os.environ["STAND_IN_NO_DEVICE"] = "1"
+        try:
+            _started(app)
+            got = spin(app, 20, lambda: (given(1) or {}).get("CUDA_VISIBLE_DEVICES") == "0"
+                       and (given(2) or {}).get("CUDA_VISIBLE_DEVICES") == "1")
+        finally:
+            os.environ.pop("STAND_IN_NO_DEVICE", None)
+        check(got and len(app.workers) == 2 and all(w.card.get("by_index") for w in app.workers),
+              f"both workers saw no card by UUID and were started again by number ({[(given(i) or {}).get('CUDA_VISIBLE_DEVICES') for i in (1, 2)]})")
+        check(any("choosing the card by its number" in t for _, t, _tag in app._events), "and the feed says so")
+        stop_all(app)
+
+        print("── the graphics card fails WHILE proving: the processor is offered, as at Start (review L6) ──")
+        asked.clear()
+        answer["yes"] = False
+        hazync_gui.messagebox.askyesno = lambda title, msg, **kw: (asked.append(msg) or answer["yes"])
+        app.host_cpu_var.set(cpu_host)
+        os.environ["STAND_IN_GPU_FAIL"] = "1"
+        try:
+            _started(app)
+            got = spin(app, 20, lambda: not app.workers and asked)
+        finally:
+            os.environ.pop("STAND_IN_GPU_FAIL", None)
+        check(got and "while proving" in asked[-1] and "24 minutes" in asked[-1],
+              f"⛔ both cards stopped on a GPU error: the processor is offered ({(asked or [''])[-1][:70]!r})")
+        check(len(asked) == 1, f"once, not once per card ({len(asked)})")
+
+        print("── the remembered prover is gone: the one that fits is offered (review L7) ──")
+        asked.clear()
+        answer["yes"] = True
+        real_inst = supervisor.installed_provers
+        supervisor.installed_provers = lambda: {"cpu": cpu_host}
+        supervisor.gpu_cards = lambda: []
+        app.host_cpu_var.set("")
+        app.host_var.set(os.path.join(tmp, "deleted", "host.exe"))
+        try:
+            _started(app)
+            spin(app, 10, lambda: app.workers)
+        finally:
+            supervisor.installed_provers = real_inst
+            supervisor.gpu_cards = lambda: list(machine["cards"])
+        check(asked and "no longer there" in asked[0] and app.host_var.get() == cpu_host and app.workers,
+              f"⛔ a deleted prover on a PC with no card it can use: the CPU prover is offered, saved, started ({app.host_var.get()})")
+        stop_all(app)
+
+        print("── Start's checks have their own line on Home (review L8) ──")
+        real_pf = supervisor.preflight
+        supervisor.preflight = lambda *a, **kw: (time.sleep(1.5) or ([], []))
+        try:
+            app._start()
+            spin(app, 0.5)
+            head = app.v_head.get()
+            check(head == "Checking before starting…" and str(app.start_btn["state"]) == "disabled",
+                  f"while they run, Home says so and Start cannot be pressed twice ({head!r})")
+            spin(app, 5, lambda: not app._starting)
+        finally:
+            supervisor.preflight = real_pf
+        stop_all(app)
+        app.host_var.set(os.path.join(tmp, "cuda-host.exe"))
+
+        print("── closing: asked once, waits for the workers, nothing left behind (review L5, M3) ──")
+        _started(app)
+        spin(app, 10, lambda: len(app.workers) == 2)
+        pids = [w.popen.pid for w in app.workers]
+        oks, warns = [], []
+        hazync_gui.messagebox.askokcancel = lambda *a, **kw: (oks.append(1) or True)
+        hazync_gui.messagebox.showwarning = lambda *a, **kw: warns.append(a)
+        app._on_close()
+        app._on_close()
+        closed = False
+        end = time.time() + 30
+        while time.time() < end:
+            try:
+                app.update()
+                app.winfo_exists()     # ⚠ update() on a destroyed root does not raise; this does
+            except Exception:          # noqa: BLE001 - destroyed: the close finished
+                closed = True
+                break
+            time.sleep(0.05)
+        alive = [p for p in pids if os.path.exists(f"/proc/{p}") and "Z" not in open(f"/proc/{p}/stat").read().split()[2]]
+        check(closed and len(oks) == 1, f"a second close while closing does nothing (asked {len(oks)}x, closed={closed})")
+        check(not alive and not warns, f"⛔ every worker is gone when the window is ({alive}, warnings {warns})")
     finally:
+        try:
+            supervisor.classify_host = real_classify
+            hazync_gui.messagebox.askyesno, hazync_gui.messagebox.showerror = real_ask, real_err
+        except NameError:
+            pass
         for w in list(app.workers):
             try:
                 w.popen.kill()

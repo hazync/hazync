@@ -208,7 +208,8 @@ def status_checks():
     maxwell = cards.parse("0, GPU-m, NVIDIA GeForce GTX 970, 4096 MiB, 566.14, 5.2\n")
     pascal = cards.parse("0, GPU-p, NVIDIA GeForce GTX 1050 Ti, 4096 MiB, 566.14, 6.1\n")
     w = cards.cuda_unusable(maxwell, cards.OPT_IN_FLOOR)
-    check(bool(w) and "5.2" in w, f"⛔ one compute 5.x card, opt-in ticked: refused ({w})")
+    check(bool(w) and "GTX 970" in w and "older than the prover supports" in w and "#" not in w,
+          f"⛔ one compute 5.x card, opt-in ticked: refused, in plain words, no issue numbers ({w})")
     w = cards.cuda_unusable(pascal, cards.FLOOR)
     check(bool(w) and "Try my GPU" in w, f"one Pascal card, not opted in: refused, and the opt-in is named ({w[:60]}…)")
     check(cards.cuda_unusable(pascal, cards.OPT_IN_FLOOR) is None, "one Pascal card, opted in: allowed (#727)")
@@ -216,6 +217,8 @@ def status_checks():
     check(cards.cuda_unusable([], cards.FLOOR) is None, "nvidia-smi could not be asked: not refused (unknown is not 'no card')")
     w = cards.cuda_unusable(cards.parse(ONE), cards.FLOOR, driver_present=False)
     check(bool(w) and "driver" in w, "no NVIDIA driver: refused, whatever the list says")
+    pinned = cards.pin_env(dict(cards.parse(TWINS)[1], by_index=True))
+    check(pinned.get("CUDA_VISIBLE_DEVICES") == "1", "a card marked by_index is pinned by its number (the UUID fallback, L4)")
 
 
 def main():

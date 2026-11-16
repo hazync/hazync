@@ -172,7 +172,7 @@ def pin_env(card):
     # ⭐ BY UUID WHEN THE CARD HAS ONE (review L6). CUDA accepts nvidia-smi's "GPU-…" UUID in CUDA_VISIBLE_DEVICES, and
     # a UUID names the same card whatever order anything counts in; a worker started again later in the session keeps
     # its card even if the numbering changed. The index stays the fallback, with the PCI order made explicit.
-    uuid = str(card.get("uuid") or "")
+    uuid = "" if card.get("by_index") else str(card.get("uuid") or "")
     return {"CUDA_DEVICE_ORDER": "PCI_BUS_ID",
             "CUDA_VISIBLE_DEVICES": uuid if uuid.startswith("GPU-") else str(card["index"])}
 
@@ -233,15 +233,18 @@ def cuda_unusable(found, floor, driver_present=True):
     missing or failing), not "no card": then this says nothing and the prover is allowed to try.
     """
     if not driver_present:
-        return "no NVIDIA driver was found, so Windows cannot even load the graphics-card prover"
+        return "no NVIDIA graphics driver was found"
     if not found:
         return None
     if usable(found, floor):
         return None
     names = labels(found)
-    parts = [f"{names[c['index']]} is compute {c['cc_major']}.{c['cc_minor']}" for c in found]
-    why = "; ".join(parts) + f", and the prover needs {FLOOR}.0 or newer"
+    parts = [names[c["index"]] for c in found]
+    # ⚠ plain words (review of a04038ce, M2/L12): "compute capability" and issue numbers mean nothing to the people
+    # this is for; the card's name and its generation do
+    why = (f"{', '.join(parts)} {'is' if len(parts) == 1 else 'are'} older than the prover supports "
+           f"(it needs a GTX 16-series, RTX 20-series or newer NVIDIA card)")
     if floor > OPT_IN_FLOOR and any(c["cc_major"] == OPT_IN_FLOOR for c in found):
-        why += (f" (a compute {OPT_IN_FLOOR}.x card can be tried with \"Try my GPU even if it is below the supported "
-                "floor\" under Advanced; it needs a prover with hazync#727)")
+        why += (". A GTX 10-series card can be tried with \"Try my GPU even if it is below the supported floor\" "
+                "under Advanced, with a recent Hazync")
     return why

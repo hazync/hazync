@@ -56,6 +56,10 @@ UninstallDisplayName=Hazync
 UninstallDisplayIcon={app}\Hazync.exe
 ; the app (and its workers) must be closed before files are replaced
 CloseApplications=yes
+; ⛔ and before anything is DELETED ([InstallDelete] runs outside the Restart Manager's file list): the app holds this
+; mutex while it runs (hazync_gui.py, single_instance), so Setup asks for Hazync to be closed first. Closing the app
+; stops its workers and their host.exe (review of a04038ce, L12).
+AppMutex=HazyncAppRunning
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
@@ -64,9 +68,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#AppDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Worker}"; DestDir: "{app}"; DestName: "hazync-worker"; Flags: ignoreversion
 Source: "{#ProverDir}\host.exe"; DestDir: "{app}\prover"; Flags: ignoreversion
-Source: "{#ProverDir}\cudart64_*.dll"; DestDir: "{app}\prover"; Flags: ignoreversion
+; cudart64_*.dll, and the Visual C++ runtime DLLs the workflow put beside host.exe (app-local, review of a04038ce M1)
+Source: "{#ProverDir}\*.dll"; DestDir: "{app}\prover"; Flags: ignoreversion
 #ifdef ProverCpuDir
 Source: "{#ProverCpuDir}\host.exe"; DestDir: "{app}\prover-cpu"; Flags: ignoreversion
+Source: "{#ProverCpuDir}\*.dll"; DestDir: "{app}\prover-cpu"; Flags: ignoreversion skipifsourcedoesntexist
 #endif
 
 [Icons]
@@ -81,6 +87,8 @@ Filename: "{app}\Hazync.exe"; Description: "Open Hazync"; Flags: nowait postinst
 ; an upgrade must never leave an OLD prover behind (a stale image is rejected by the board): the CPU prover folder is
 ; cleared first, so an installer without one does not keep the previous release's
 Type: filesandordirs; Name: "{app}\prover-cpu"
+; and the CUDA prover's DLLs: a cudart64_*.dll or VC runtime from an older release must not linger beside a newer host.exe
+Type: files; Name: "{app}\prover\*.dll"
 
 [UninstallDelete]
 ; only what the app itself writes inside {app}; %USERPROFILE%\.hazync (the key) is never touched

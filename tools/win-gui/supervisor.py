@@ -231,6 +231,32 @@ def imported_dlls(path):
         return []
 
 
+# ⛔ DLLs every supported Windows (10 1809+/11) has, so a prover importing only these starts on a fresh office PC
+# (review of a04038ce, M1). The Universal CRT ships with Windows 10 (`api-ms-win-crt-*` resolve to ucrtbase.dll); the
+# Visual C++ runtime (VCRUNTIME140*.dll, MSVCP140.dll, VCOMP140.dll) does NOT, and is what a dynamically linked MSVC
+# build needs — present on CI runners, absent on plenty of real machines.
+SYSTEM_DLLS = frozenset(d.lower() for d in (
+    "kernel32.dll", "ntdll.dll", "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "ws2_32.dll", "mswsock.dll",
+    "user32.dll", "gdi32.dll", "shell32.dll", "shlwapi.dll", "ole32.dll", "oleaut32.dll", "combase.dll", "rpcrt4.dll",
+    "userenv.dll", "secur32.dll", "crypt32.dll", "ncrypt.dll", "dbghelp.dll", "psapi.dll", "iphlpapi.dll",
+    "powrprof.dll", "version.dll", "setupapi.dll", "cfgmgr32.dll", "winmm.dll", "ucrtbase.dll", "synchronization.dll"))
+# The CUDA host may also import the driver's DLL (it comes with the NVIDIA driver) and the CUDA runtime shipped beside it.
+CUDA_DLLS = ("nvcuda.dll", "cudart64_")
+
+
+def foreign_imports(dlls, cuda=False):
+    """The imported DLLs that are NOT part of Windows (nor, for the CUDA host, the driver's and the shipped cudart)."""
+    out = []
+    for d in dlls:
+        low = d.lower()
+        if low in SYSTEM_DLLS or low.startswith("api-ms-win-") or low.startswith("ext-ms-win-"):
+            continue
+        if cuda and (low == CUDA_DLLS[0] or low.startswith(CUDA_DLLS[1])):
+            continue
+        out.append(d)
+    return sorted(set(out), key=str.lower)
+
+
 def classify_host(path):
     """What kind of prover is this, and can it start here? A dict, never an exception.
 
@@ -1106,6 +1132,76 @@ def stop_command(pid):
     if IS_WINDOWS:
         return ["taskkill", "/PID", str(pid), "/T", "/F"]
     return ["kill", "-TERM", str(pid)]
+
+
+# ── stopping a worker AND everything under it, and saying what survived (review of a04038ce, M3) ───────────────
+def process_table():
+    """[(pid, ppid, name)] for every live process, or [] when it cannot be read. Zombies are left out."""
+    if IS_WINDOWS:
+        rc, out = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId),$($_.ParentProcessId),$($_.Name)\" }"],
+                       timeout=30)
+        rows = []
+        for line in (out or "").splitlines() if rc == 0 else []:
+            parts = line.strip().split(",", 2)
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        return rows
+    rc, out = _run(["ps", "-eo", "pid=,ppid=,stat=,comm="], timeout=30)
+    rows = []
+    for line in (out or "").splitlines() if rc == 0 else []:
+        parts = line.split(None, 3)
+        if len(parts) == 4 and parts[0].isdigit() and parts[1].isdigit() and not parts[2].startswith("Z"):
+            rows.append((int(parts[0]), int(parts[1]), parts[3]))
+    return rows
+
+
+def descendants(pid, table):
+    """[(pid, name)] of everything `pid` started, at any depth, from a process_table()."""
+    kids = {}
+    for p, pp, name in table:
+        kids.setdefault(pp, []).append((p, name))
+    out, todo, seen = [], [pid], {pid}
+    while todo:
+        for p, name in kids.get(todo.pop(), []):
+            if p not in seen:
+                seen.add(p)
+                out.append((p, name))
+                todo.append(p)
+    return out
+
+
+def stop_tree(popen, wait_s=10):
+    """Stop a worker and its children (the prover); return (survivors [(pid, name)], error text or "").
+
+    ⛔ The prover is the worker's CHILD, and a stop that only reaches the worker leaves host.exe holding the card behind
+    a closed window. So the tree is listed BEFORE stopping, and whatever of it is still alive afterwards is returned by
+    PID and name, for the window to name — whether or not taskkill said it succeeded."""
+    pid = popen.pid
+    before = descendants(pid, process_table())
+    err = ""
+    try:
+        r = subprocess.run(stop_command(pid), capture_output=True, text=True, timeout=30)
+        if r.returncode != 0 and popen.poll() is None:
+            err = f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[:200]}"
+    except Exception as e:     # noqa: BLE001
+        err = str(e)
+    if popen.poll() is None and err:
+        try:
+            popen.kill()
+        except Exception:      # noqa: BLE001
+            pass
+    try:
+        popen.wait(timeout=wait_s)
+    except Exception:          # noqa: BLE001
+        pass
+    if not before and popen.poll() is not None:
+        return [], err
+    live = {p for p, _, _ in process_table()}
+    survivors = [(p, n) for p, n in before if p in live]
+    if popen.poll() is None:
+        survivors.insert(0, (pid, "worker"))
+    return survivors, err
 
 
 def summarise(checks):

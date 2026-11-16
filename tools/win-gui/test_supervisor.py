@@ -142,10 +142,11 @@ def main():
             got, why = supervisor.board_image(url, deadline=5)
             check(got == want and says in why, f"board {code} {body[:28]!r}… -> {got and got[:8]} / {why[:60]!r}")
         reply.update(body=b"{}", code=200, sleep=4)
-        t0 = _time.time()
+        t0 = _time.monotonic()
         got, why = supervisor.board_image(url, deadline=1)
-        check(got is None and _time.time() - t0 < 3.5 and ("within" in why or "timed out" in why),
-              f"⛔ a board that stalls is given up on at the deadline ({_time.time() - t0:.1f} s: {why[:50]!r})")
+        took = _time.monotonic() - t0
+        check(got is None and took < 3.5 and ("within" in why or "timed out" in why),
+              f"⛔ a board that stalls is given up on at the deadline ({took:.1f} s: {why[:50]!r})")
         reply.update(sleep=0)
         check(supervisor.board_image("")[1] == "no board address set", "no coordinator: no question asked")
         check("not an http(s) address" in supervisor.board_image("file:///etc/passwd")[1],
@@ -170,6 +171,28 @@ def main():
         check(ok_ and "board's image unknown: HTTP 500" in v_, f"the method-id check carries the reason too ({v_})")
     finally:
         srv.shutdown()
+
+    print("── 1c. Stop names whatever of the worker's tree survived (review of a04038ce, M3) ──")
+    if not supervisor.IS_WINDOWS:
+        import subprocess as _sp
+        import time as _t2
+        p1 = _sp.Popen(["sleep", "30"])
+        surv, err = supervisor.stop_tree(p1, wait_s=5)
+        check(surv == [] and not err and p1.poll() is not None, f"a worker with no children: stopped, nothing left ({surv})")
+        # a "worker" whose child (the prover) outlives a stop that reaches only the parent — the orphan case
+        p2 = _sp.Popen(["bash", "-c", "sleep 30 & wait"])
+        _t2.sleep(0.5)
+        kids = supervisor.descendants(p2.pid, supervisor.process_table())
+        surv, err = supervisor.stop_tree(p2, wait_s=5)
+        check(kids and surv and surv[0][0] == kids[0][0] and "sleep" in surv[0][1],
+              f"⛔ the child that survived is named by PID and name ({surv}), not silently left holding the card")
+        for pid, _ in surv:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        check(supervisor.descendants(1, [(5, 1, "a"), (6, 5, "b"), (7, 6, "c"), (8, 2, "x")]) == [(5, "a"), (6, "b"), (7, "c")],
+              "descendants walks the whole tree, and only that tree")
 
     print("── 2. exit codes are three different things ──")
     for rc, kind in ((0, "done"), (supervisor.EX_CONFIG, "config"),

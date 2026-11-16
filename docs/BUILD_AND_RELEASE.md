@@ -342,7 +342,10 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    `build-cuda` job passed, checks that the zip holds only `host.exe` + `cudart64_*.dll`, that `host.exe` embeds the
    published guest byte for byte and carries the image id, and zips it as `hazync-host-x86_64-windows-cuda.zip`. The
    same for the CPU host: the `hazync-host-windows-x86_64-cpu` artifact of a run whose `prove` job passed, `host.exe`
-   alone and not importing `nvcuda.dll`, zipped as `hazync-host-x86_64-windows-cpu.zip`.
+   alone, importing only DLLs Windows ships (`scripts/pe_imports.py --cpu`: no `nvcuda.dll`, no Visual C++ runtime; the
+   job builds it with `-C target-feature=+crt-static`), zipped as `hazync-host-x86_64-windows-cpu.zip`. The CUDA host
+   still imports the Visual C++ runtime; the installer puts it beside `host.exe` (app-local), and a hand download
+   needs the Microsoft Visual C++ Redistributable (x64).
    Artifacts expire after 14 days, so dispatch the workflow close to the release.
 4. **Package** (`scripts/package-release.sh` with `TAG`): `hazync-worker` (`VERSION` stamped from the tag and
    asserted), `hazync-coordinator.py`, `hazync-run-workers.sh`, `hazync-verify.js` (from

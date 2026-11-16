@@ -202,7 +202,10 @@ jobs:
   # ── ⛔ THE QUESTION: does a native Windows host build and PROVE? ────────────────────────────────
   prove:
     needs: [guest]
-    runs-on: windows-latest
+    # ⛔ PINNED since its host.exe SHIPS (v0.26.1, hazync-host-x86_64-windows-cpu.zip): windows-latest moves under a
+    # release. windows-2022, the image build-cuda is pinned to (review of a04038ce, L11). It ran on windows-latest until
+    # then (run 36933650193, `PROVED in 2875.1s`); the prove below is what proves it here too.
+    runs-on: windows-2022
     # ⚠ The CPU prove takes ~48 min and is ALREADY ANSWERED (run 36933650193). When iterating on
     # the CUDA build there is no reason to pay for it again, so it can be skipped deliberately.
     # ⛔ Default is to RUN it: a regression test you have to remember to switch on is not one.
@@ -275,9 +278,20 @@ jobs:
           # cause. ⛔ RUST_MIN_STACK CANNOT FIX THE MAIN THREAD -- its stack is RESERVED IN THE PE
           # HEADER at link time, so it takes a linker flag and nothing else will do.
           # ⚠ A link flag is host-side and cannot move METHOD_ID; the id check downstream says so.
-          RUSTFLAGS: -C link-arg=/STACK:33554432
+          # ⛔⛔ +crt-static (review of a04038ce, M1): without it host.exe imports VCRUNTIME140.dll, VCRUNTIME140_1.dll and
+          # MSVCP140.dll (measured: the CPU artifact of run 42540389071), which a runner has and an ordinary office PC
+          # may not — exactly the machine the CPU prover exists for. Static CRT: Rust links libcmt, and the cc crate
+          # compiles the C++ kernels with /MT because it follows the crt-static target feature. Host-side only: the
+          # guest (and so the image id) is built in the container job and embedded as a file; the id check and the
+          # prove below run on this very binary. The import check after the build refuses anything non-system.
+          RUSTFLAGS: -C link-arg=/STACK:33554432 -C target-feature=+crt-static
         run: |
           set -o pipefail
+          # the toolchain is prover/rust-toolchain.toml's (the dtolnay step only installs rustup's default)
+          want=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          got=$(rustc -V | awk '{print $2}')
+          echo "rustc $got (prover/rust-toolchain.toml: $want)"
+          [ "$got" = "$want" ] || { echo "::error::rustc $got is not prover/rust-toolchain.toml's $want"; exit 1; }
           # ⛔ NO `--features cuda`. That is what keeps build_cuda_kernels() -- and every GCC-style
           # nvcc flag with it -- out of this build entirely.
           #
@@ -303,6 +317,10 @@ jobs:
               exit "$rc"
           fi
           tail -5 build.log
+
+      - name: ⛔ the CPU host.exe imports only DLLs every Windows has (no VC++ runtime, no CUDA)
+        shell: bash
+        run: python3 scripts/pe_imports.py prover/target/release/host.exe --cpu
 
       - name: ⛔ the binary must carry the CANONICAL id, or a proof from it is worthless
         shell: bash
