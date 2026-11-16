@@ -209,9 +209,18 @@ def state_hash(od, h):
         return None
 
 def complete_saves(od):
-    """prep's COMPLETE save points (as libzync-prep-run.sh): a stop during a save leaves a newer partial one."""
+    """prep's COMPLETE save points, by libzync-prep-run.sh's rule: state_<h>.json, .smt and .coinlog, and the trie's
+    marker OR the disk trie at h (its meta, in the run's trie/ beside out/: a crash between the trie's flush and its
+    marker; review 16.11, L3). A stop during a save leaves a newer partial one."""
+    if not od.exists(): return []
+    trie_h = None
+    try:
+        b = (od.parent / "trie" / "meta").read_bytes()
+        if b[:8] == b"HZTRIED1" and len(b) >= 25: trie_h = int.from_bytes(b[17:25], "little")
+    except OSError: pass
     return [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()
-            and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog", "trie"))] if od.exists() else []
+            and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog"))
+            and ((od / f"{q.name[:-4]}.trie").exists() or trie_h == int(q.name[6:-4]))]
 
 class CannotCheck(Exception):
     pass
