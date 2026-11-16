@@ -181,7 +181,7 @@ What the host supplies: the block bytes, the tracked positions, each coin's stat
 verifies under the trusted utreexo id, `done = 1`, `self_id` = that id, one root per set bit of `leaves`, zero
 lineage, the core image, profile, lineage and anchor are the network's trusted ones (swiftsync-verify's `Image` table,
 used as a library), `max_time <= now + 7200`; OK additionally needs **block H from the node's own header chain**
-(`--expect-at`), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H), and
+(`--expect`, or `--mempool` / `--bitcoin-cli` asked for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H), and
 minimum work plus the checkpoint; otherwise DEMO. The receipt is decoded with a 16 MiB bincode limit (the core
 verifier's own decode, swiftsync-verify `src/lib.rs:463`, has none; core code, not changed here).
 
@@ -204,10 +204,10 @@ label "local build, not reproducible, not published" until it is pinned.
   `utreexo-ref`'s line for H, then executes or proves the runs; `UTREEXO_TAMPER=<case>` negative tests;
   `utreexo-count <block_h.json ...>` the per-block cost model counts.
 - `zapps/utreexo` (this zAPP's own module, the same layout as every zAPP): the check library `zapp_utreexo` and the CLI
-  `zapp-utreexo verify <receipt> [--expect-at H:hash] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
+  `zapp-utreexo verify <receipt> [--expect H:hash] [--mempool | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
   swiftsync-verify as a library (no Utreexo code in the core verifier crates). `zapps/utreexo/wasm`: the same checks as
   WebAssembly (raw ABI, `zapp-utreexo.js` glue, `build.sh` byte-reproducible with Rust 1.99.0 at a fixed stage path,
-  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 14 CLI
+  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 18 CLI
   cases, the WASM build and its 7 cases, and the built WASM's sha256 against the line in `wasm/README.md`.
 - `prover/zyncapps/utreexo-ref`: the reference (Floresta's code), test only.
 
@@ -292,7 +292,7 @@ in the hints zAPP).
 - **The checker** (`zapps/utreexo/test.sh`, 15.11.2026, review fixes): `cargo test` 3/3 (the Floresta source form with
   and without an Empty root; a hostile receipt length refused by the decode limit; the real receipts: DEMO below
   minimum work, refused for H or block hash not the node's, another image id, a wrong tip given when T = H, H = 2 with a
-  wrong core tip); 14 CLI cases (exit codes, strict flags, a truncated receipt, `--json` silent on DEMO, `--allow-demo`
+  wrong core tip); 14 CLI cases on 15.11.2026, 18 since 16.11.2026 with the chain-identity flags of zapps/common (exit codes, strict flags, a truncated receipt, `--json` silent on DEMO, `--allow-demo`
   JSON marked `demo`, `--floresta` alone on stdout); the WASM build (`wasm/`, sha256 `a0279e99…`, reproduced by a second
   build) 7/7 in node.
 

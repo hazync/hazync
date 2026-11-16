@@ -161,3 +161,24 @@ these files. Limits:
 
   Coin check on hazync.org does all of these (`assets/zapp.js`: a fact about another script, kind or height is
   refused before the verifier runs).
+
+## 9. Where each zAPP lives: one module per zAPP (15.11.2026)
+
+A zAPP is a separate side check, not the core engine, so I keep each one in its own module. The core verifier
+(`swiftsync-verify`, `swiftsync-verify-ffi`, `swiftsync-verify-wasm`; released as `hazync-verify-*` and
+`hazync-verify.wasm`) checks core chain proofs only, and adding a zAPP never changes it: its `.wasm` stays
+byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Every zAPP has the same layout:
+
+| path | what |
+|---|---|
+| `zapps/<name>/` | the check library (`zapp_<name>`), on `swiftsync-verify` as a library (receipt verification, chain state, facts) |
+| `zapps/<name>/cli/` | its CLI `zapp-<name>`, a crate of its own: only it links `zapps/common`, so the library, C ABI and WASM module carry no CLI code |
+| `zapps/<name>/wasm/` | its own WASM module (`build.sh`: the core's flags, `scripts/wasm-build.sh`), JS glue `zapp-<name>.js`, README with its sha256 |
+| `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one; beside the core's `libswiftsync_verify.a`, link the zAPP's `.so` (two Rust static archives in one binary clash) |
+| `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6); it checks the built `.wasm` against the README's sha and links its C ABI beside the core's (`scripts/zapp-checks.sh`) |
+| `zapps/common/` | not a zAPP: what every zAPP CLI shares, so each takes the same chain-identity flags as the core verifier (`--expect`, `--mempool` / `--mempool-url`, `--bitcoin-cli`), on the core library's `parse_expect` / `identity_matches`. CLIs only |
+| `zapps/corecheck/` | not a zAPP: the core receipt check a zAPP resting on a core proof makes first (the image named, the receipt verified by the core verifier, its tip compared with the caller's `expect`); no CLI code, so a zAPP's library, C ABI and WASM module may use it |
+
+| zAPP | module | CLI | WASM glue | C ABI |
+|---|---|---|---|---|
+| Utreexo roots (UTREEXO_ZAPP.md) | `zapps/utreexo` | `zapp-utreexo` (`verify`, `id`) | `zapp-utreexo.js` (`verify`) | none |

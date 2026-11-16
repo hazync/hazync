@@ -14,5 +14,5 @@ The Utreexo roots zyncAPP's own module (design, soundness, measurements: `docs/l
 
 ```sh
 cargo test --release                        # the real receipts: DEMO (3 blocks are below minimum work), and refusals
-cargo run --release -- verify vectors/mainnet-3.receipt --expect-at 3:0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449 --floresta
+cargo run --release --manifest-path cli/Cargo.toml -- verify vectors/mainnet-3.receipt --expect 3:0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449 --floresta
 ```

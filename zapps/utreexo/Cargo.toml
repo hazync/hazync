@@ -6,17 +6,14 @@ description = "Check a Utreexo roots zyncAPP proof: Floresta's accumulator after
 license = "MIT"
 publish = false
 
-# One module per zAPP (owner, 2026-11-15): the check library and the `zapp-utreexo` CLI here, the WASM build in wasm/,
-# the guest in prover/zyncapps/methods/utreexo. The core verifier (swiftsync-verify) is used as a library for the core
+# One module per zAPP (owner, 2026-11-15; docs/libzync/ZYNCAPPS.md §9): the check library here, the `zapp-utreexo` CLI
+# in cli/ (a crate of its own: only it links zapps/common, curl and bitcoin-cli), the WASM build in wasm/, the guest in
+# prover/zyncapps/methods/utreexo. The core verifier (swiftsync-verify) is used as a library for the core
 # statement's policy (trusted images, genesis anchor, minimum work, clock, chain identity); it holds no Utreexo code.
 
 [lib]
 name = "zapp_utreexo"
 path = "src/lib.rs"
-
-[[bin]]
-name = "zapp-utreexo"
-path = "src/main.rs"
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }

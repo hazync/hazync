@@ -4,13 +4,16 @@
 # and the WASM's sha256 against the one wasm/README.md publishes.
 set -euo pipefail
 cd "$(dirname "$0")"
-T=${CARGO_TARGET_DIR:-$PWD/target}
+. ../../scripts/zapp-checks.sh
+T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 V=$PWD/vectors
 H3=0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449
 H2=000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd
 unset RISC0_DEV_MODE
 cargo test --release --manifest-path ./Cargo.toml
-cargo build --release --manifest-path ./Cargo.toml --bin zapp-utreexo
+cargo test --release --manifest-path ./wasm/Cargo.toml
+cargo test --release --manifest-path ./cli/Cargo.toml
+cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-utreexo
 Z="$T/release/zapp-utreexo"
 n=0
 want() { # want <exit> <what> -- <args>
@@ -19,28 +22,40 @@ want() { # want <exit> <what> -- <args>
     [ $e = "$w" ] || { cat "$T/out" "$T/err"; echo "::error::$what: exit $e, want $w"; exit 1; }
     n=$((n + 1))
 }
-want 2 "H = 3, block 3 named" -- verify $V/mainnet-3.receipt --expect-at 3:$H3
-want 2 "H = 3, two runs" -- verify $V/mainnet-3-split.receipt --expect-at 3:$H3
-want 1 "H = 3, another hash" -- verify $V/mainnet-3.receipt --expect-at 3:$H2
-want 1 "H = 3, T = H, a wrong tip given" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --expect-tip 3:$H2
-want 2 "H = 2 under T = 3, both named" -- verify $V/mainnet-2.receipt --expect-at 2:$H2 --expect-tip 3:$H3
-want 1 "H = 2 under T = 3, a wrong tip" -- verify $V/mainnet-2.receipt --expect-at 2:$H2 --expect-tip 3:$H2
-want 1 "another image id" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --image "$(printf 'ab%.0s' $(seq 32))"
-want 1 "an unknown flag" -- verify $V/mainnet-3.receipt --expect 3:$H3
+want 2 "H = 3, block 3 named" -- verify $V/mainnet-3.receipt --expect 3:$H3
+want 2 "H = 3, two runs" -- verify $V/mainnet-3-split.receipt --expect 3:$H3
+want 1 "H = 3, another hash" -- verify $V/mainnet-3.receipt --expect 3:$H2
+want 1 "H = 3, T = H, a wrong tip given" -- verify $V/mainnet-3.receipt --expect 3:$H3 --expect-tip 3:$H2
+want 2 "H = 2 under T = 3, both named" -- verify $V/mainnet-2.receipt --expect 2:$H2 --expect-tip 3:$H3
+want 1 "H = 2 under T = 3, a wrong tip" -- verify $V/mainnet-2.receipt --expect 2:$H2 --expect-tip 3:$H2
+want 1 "another image id" -- verify $V/mainnet-3.receipt --expect 3:$H3 --image "$(printf 'ab%.0s' $(seq 32))"
+want 1 "an unknown flag (--expect-at, until 16.11.2026)" -- verify $V/mainnet-3.receipt --expect-at 3:$H3
 want 1 "a flag without its value" -- verify $V/mainnet-3.receipt --expect-at
 want 1 "two receipts" -- verify $V/mainnet-3.receipt $V/mainnet-2.receipt
 want 1 "a truncated receipt" -- verify <(head -c 1000 $V/mainnet-3.receipt)
 # --json / --floresta: nothing on stdout on DEMO; with --allow-demo exactly the JSON, marked demo
-want 2 "--json on DEMO" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --json
+want 2 "--json on DEMO" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json
 [ ! -s "$T/out" ] || { cat "$T/out"; echo "::error::--json printed a DEMO value without --allow-demo"; exit 1; }
-want 2 "--json --allow-demo" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --json --allow-demo
+want 2 "--json --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json --allow-demo
 python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['verdict']=='demo' and j['network']=='mainnet' and j['identity_checked'] and j['leaves']==3, j" "$T/out"
-want 2 "--floresta --allow-demo" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --floresta --allow-demo
+want 2 "--floresta --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --floresta --allow-demo
 grep -q 'acchashes!\[' "$T/out" && grep -q 'leaves: 3,' "$T/out" && ! grep -q ZAPP_UTREEXO "$T/out" || { cat "$T/out"; echo "::error::--floresta output"; exit 1; }
+# the chain identity through the other sources (zapp-common, every zAPP CLI's flags). A fake node answers by height
+# (getblockhash <h>, and getblockheader with that block's chainwork: difficulty 1, 0x100010001 per block)
+mknode() { # mknode <file> <hash at 2> <hash at 3>
+    printf '#!/bin/sh\ncase "$1 $2" in\n "getblockhash 2") echo %s;;\n "getblockhash 3") echo %s;;\n "getblockheader %s") echo "{\\"chainwork\\": \\"%064x\\"}";;\n "getblockheader %s") echo "{\\"chainwork\\": \\"%064x\\"}";;\nesac\n' \
+        "$2" "$3" "$2" $((3 * 0x100010001)) "$3" $((4 * 0x100010001)) > "$1"; chmod +x "$1"
+}
+mknode "$T/node" $H2 $H3
+mknode "$T/wrong3" $H2 "$(printf '%064d' 1)"
+want 2 "--bitcoin-cli: block 3 as the proof says (DEMO)" -- verify $V/mainnet-3.receipt --bitcoin-cli "$T/node"
+grep -q "your node's block 3 is $H3" "$T/out" || { cat "$T/out"; echo "::error::the node's answer is not named"; exit 1; }
+want 1 "--bitcoin-cli: a node that names another block 3" -- verify $V/mainnet-3.receipt --bitcoin-cli "$T/wrong3"
+want 2 "--bitcoin-cli, H = 2 below the core tip 3: both blocks asked (DEMO)" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/node"
+grep -q "your node's block 2 is $H2" "$T/out" && grep -q "your node's block 3 is $H3" "$T/out" || { cat "$T/out"; echo "::error::blocks 2 and 3 were not both asked"; exit 1; }
+want 1 "--bitcoin-cli, H = 2: the node's block 3 is not the core tip" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/wrong3"
 echo "ZAPP_UTREEXO_CLI $n cases"
 ./wasm/build.sh
+wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_utreexo_wasm.wasm wasm/README.md
 node wasm/test.mjs
-want_sha=$(sed -n 's/^sha256 `\([0-9a-f]\{64\}\)`$/\1/p' wasm/README.md)
-got_sha=$(sha256sum wasm/target/wasm32-unknown-unknown/release/zapp_utreexo_wasm.wasm | cut -d' ' -f1)
-[ "$want_sha" = "$got_sha" ] || { echo "::error::wasm sha256 $got_sha, wasm/README.md says $want_sha"; exit 1; }
 echo "ZAPP_UTREEXO_TESTS OK"
