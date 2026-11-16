@@ -136,31 +136,67 @@ pub(crate) fn keep() -> u32 {
     }
 }
 
-/// Write block `r.height`'s record (tmp, then renamed; made durable at the next save point by `sync_since`), and
-/// remove the one that falls out of the window, `u_<h - keep>`.
-pub(crate) fn write(d: &std::path::Path, r: &UndoRecord, keep: u32) {
+/// Write block `r.height`'s record (tmp, then renamed; made durable at the next save point by `sync_since`). Nothing
+/// is pruned here: the window is cut only at save points (`prune_to`), so a crash never leaves fewer than J records
+/// below the save point a restart resumes from (review of P1, M3: pruning u_<h-J> per block left J - (c - A) after a
+/// crash at c and a restart from A).
+pub(crate) fn write(d: &std::path::Path, r: &UndoRecord) {
     let p = path(d, r.height);
     let tmp = d.join(format!("u_{}.bin.tmp", r.height));
     std::fs::write(&tmp, r.encode()).unwrap_or_else(|e| panic!("{}: {e}", tmp.display()));
     std::fs::rename(&tmp, &p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-    if let Some(old) = r.height.checked_sub(keep) {
-        match std::fs::remove_file(path(d, old)) {
+}
+
+/// Every record in (`from`, `to`] synced, then the directory: called at a save point before its state file is
+/// written, so a complete save point never has a torn record below it. Returns the highest height in the range whose
+/// record is MISSING (review L6: the window then starts above it; nothing is silently assumed), or None.
+pub(crate) fn sync_since(d: &std::path::Path, from: u32, to: u32) -> Option<u32> {
+    let mut missing = None;
+    for h in from.saturating_add(1)..=to {
+        match std::fs::File::open(path(d, h)) {
+            Ok(f) => f.sync_data().unwrap_or_else(|e| panic!("{}: {e}", path(d, h).display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => missing = Some(h),
+            Err(e) => panic!("{}: {e}", path(d, h).display()),
+        }
+    }
+    crate::lz::cl_sync_dir(d);
+    missing
+}
+
+/// At a save point: remove the records in (`from`, `to`], the ones that fell out of the window (to = save - J).
+pub(crate) fn prune_to(d: &std::path::Path, from: u32, to: u32) {
+    for h in from.saturating_add(1)..=to {
+        match std::fs::remove_file(path(d, h)) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("{}: {e}", path(d, old).display()),
+            Err(e) => panic!("{}: {e}", path(d, h).display()),
         }
     }
 }
 
-/// Every record in (`from`, `to`] synced, then the directory: called at a save point before its state file is
-/// written, so a complete save point never has a torn record below it.
-pub(crate) fn sync_since(d: &std::path::Path, from: u32, to: u32) {
-    for h in from.saturating_add(1)..=to {
-        if let Ok(f) = std::fs::File::open(path(d, h)) {
-            f.sync_data().unwrap_or_else(|e| panic!("{}: {e}", path(d, h).display()));
-        }
-    }
-    crate::lz::cl_sync_dir(d);
+/// The lowest height of the unbroken run of records ending at `anchor` (at most `keep` of them): the records reach a
+/// fork F when F + 1 >= this. `anchor + 1` when there is no record at the anchor (a run that wrote none yet, e.g. one
+/// started by a host from before P1: its records begin with its next block).
+pub(crate) fn undo_from(d: &std::path::Path, anchor: u32, keep: u32) -> u32 {
+    let mut k = anchor;
+    while k >= 1 && anchor - k < keep && path(d, k).exists() { k -= 1; }
+    k + 1
+}
+
+/// prep's real position, `<out>/PREP_TIP.json` (review of P2, M2): the height and hash of the newest block its STORES
+/// hold, J, and the lowest height whose undo record exists (`undo_from`; records reach heights undo_from..height).
+/// The highest state_<h>.json is not that: a crashed run leaves state files above the save point it restarts from.
+/// Written at the start (the anchor), after every block's state file, and durably at every save point; always by an
+/// atomic rename, so a reader sees one whole version. Only the fetcher reads it (fetch_block_rpc.py).
+pub(crate) fn write_tip(out: &str, height: u32, hash: &[u8; 32], keep: u32, undo_from: u32, durable: bool) {
+    let mut h = *hash;
+    h.reverse();
+    let body = format!("{{\"height\": {height}, \"hash\": \"{}\", \"undo_keep\": {keep}, \"undo_from\": {undo_from}}}\n", crate::hex(&h));
+    let p = format!("{out}/PREP_TIP.json");
+    if durable { crate::lz::write_atomic(&p, body.as_bytes()); return; }
+    let tmp = format!("{p}.tmp");
+    std::fs::write(&tmp, body.as_bytes()).unwrap_or_else(|e| panic!("{tmp}: {e}"));
+    std::fs::rename(&tmp, &p).unwrap_or_else(|e| panic!("{p}: {e}"));
 }
 
 /// At the start of a run from the state at `anchor`: keep exactly the records of (anchor - keep, anchor]. Records above
@@ -259,29 +295,63 @@ mod tests {
     }
 
     #[test]
-    fn the_window_keeps_exactly_the_last_j_records() {
+    fn the_window_is_cut_at_save_points_and_never_below_j() {
         let d = tmpdir("window");
         let keep = 5;
-        for h in 1..=12 { write(&d, &rec(h), keep); }
-        let mut have: Vec<u32> = std::fs::read_dir(&d).unwrap().flatten()
-            .filter_map(|e| e.file_name().to_string_lossy().strip_prefix("u_")?.strip_suffix(".bin")?.parse().ok()).collect();
-        have.sort();
-        assert_eq!(have, vec![8, 9, 10, 11, 12], "(h - J, h]");
+        let have = |d: &std::path::Path| -> Vec<u32> {
+            let mut v: Vec<u32> = std::fs::read_dir(d).unwrap().flatten()
+                .filter_map(|e| e.file_name().to_string_lossy().strip_prefix("u_")?.strip_suffix(".bin")?.parse().ok()).collect();
+            v.sort();
+            v
+        };
+        // save points every 4 blocks: at 4, 8, 12 the window is cut to (save - J, ...]; between them it grows
+        let mut pruned = 0;
+        for h in 1..=14 {
+            write(&d, &rec(h));
+            if h % 4 == 0 {
+                assert_eq!(sync_since(&d, h - 4, h), None);
+                let to = h.saturating_sub(keep);
+                prune_to(&d, pruned, to);
+                pruned = to;
+            }
+        }
+        assert_eq!(have(&d), (8..=14).collect::<Vec<_>>(), "(12 - J, 14]: cut at the save point 12 only");
         assert_eq!(UndoRecord::decode(&std::fs::read(d.join("u_10.bin")).unwrap()).unwrap(), rec(10));
-        sync_since(&d, 7, 12);
-        // a restart from the save point at 10: 11 and 12 (blocks the crash undid) go, and so does anything below the
-        // window, a stray from a larger J, and an unfinished write
-        write(&d, &rec(2), 100);
-        std::fs::write(d.join("u_13.bin.tmp"), b"x").unwrap();
+        // a crash at 14 and a restart from the save point 12: 13 and 14 (blocks the crash undid) go, and the window
+        // below 12 is still a whole J (M3: per-block pruning left only J - 2); a stray from a larger J goes too, and
+        // an unfinished write
+        write(&d, &rec(2));
+        std::fs::write(d.join("u_15.bin.tmp"), b"x").unwrap();
         std::fs::write(d.join("REWIND"), b"not ours").unwrap();
-        assert_eq!(prune_at_start(&d, 10, keep), 4);
-        let mut have: Vec<String> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        have.sort();
-        assert_eq!(have, vec!["REWIND", "u_10.bin", "u_8.bin", "u_9.bin"]);
+        assert_eq!(prune_at_start(&d, 12, keep), 4);
+        assert_eq!(have(&d), vec![8, 9, 10, 11, 12], "(12 - J, 12] after the restart: J records");
+        assert_eq!(undo_from(&d, 12, keep), 8);
+        // a hole in the window: sync_since names it, and undo_from starts above it
+        std::fs::remove_file(d.join("u_10.bin")).unwrap();
+        assert_eq!(sync_since(&d, 8, 12), Some(10));
+        assert_eq!(undo_from(&d, 12, keep), 11);
+        assert_eq!(undo_from(&d, 20, keep), 21, "no record at the anchor: none reach below the next block");
         // J = 0 (records off): every record goes
-        assert_eq!(prune_at_start(&d, 10, 0), 3);
+        assert_eq!(prune_at_start(&d, 12, 0), 4);
+        assert!(std::fs::read_dir(&d).unwrap().flatten().all(|e| e.file_name() == "REWIND"));
         // a missing directory is nothing to prune
         assert_eq!(prune_at_start(&d.join("none"), 10, keep), 0);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_tip_file_is_prep_position_in_display_order() {
+        let d = tmpdir("tip");
+        let out = d.to_str().unwrap();
+        let mut hash = [0u8; 32];
+        hash[0] = 0xab;
+        write_tip(out, 105, &hash, 2016, 90, false);
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(d.join("PREP_TIP.json")).unwrap()).unwrap();
+        assert_eq!((v["height"].as_u64(), v["undo_keep"].as_u64(), v["undo_from"].as_u64()), (Some(105), Some(2016), Some(90)));
+        assert_eq!(v["hash"].as_str().unwrap(), format!("{}ab", "00".repeat(31)), "display order, as getblockhash");
+        write_tip(out, 106, &hash, 2016, 90, true);
+        assert!(std::fs::read_to_string(d.join("PREP_TIP.json")).unwrap().contains("\"height\": 106"));
+        assert!(!d.join("PREP_TIP.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

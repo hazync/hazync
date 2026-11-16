@@ -76,13 +76,22 @@ class Node:
         tmp.write_text(json.dumps({"blocks": self.blocks, "active": self.active}))
         os.replace(tmp, self.path)
 
-def prep_states(od, node, top, save=None):
-    """prep's out dir: state_<h>.json for 1..top on the node's current chain, and a complete save point at `save`."""
+def prep_states(od, node, top, save=None, tip="top", keep=None, undo_from=1):
+    """prep's out dir: state_<h>.json for 1..top on the node's current chain, a complete save point at `save`, and
+    PREP_TIP.json (prep's real position, as reorg.rs write_tip writes it) at `tip` ("top" = top; None = no tip file, a
+    host from before it). `keep` = J in the tip file (default: the fetcher's env J)."""
     od.mkdir(parents=True, exist_ok=True)
     for h in range(1, top + 1):
         (od / f"state_{h}.json").write_text(json.dumps({"height": h, "tip_hash": list(bytes.fromhex(node.active[h])[::-1])}))
     if save:
         for x in ("smt", "coinlog", "trie"): (od / f"state_{save}.{x}").write_text("x")
+    write_tip(od, node, top if tip == "top" else tip, keep, undo_from)
+
+def write_tip(od, node, h, keep=None, undo_from=1):
+    if h is None: (od / "PREP_TIP.json").unlink(missing_ok=True); return
+    k = keep if keep is not None else int(os.environ.get("TEST_TIP_KEEP", "2016"))
+    (od / "PREP_TIP.json.tmp").write_text(json.dumps({"height": h, "hash": node.active[h], "undo_keep": k, "undo_from": undo_from}))
+    os.replace(od / "PREP_TIP.json.tmp", od / "PREP_TIP.json")
 
 fails, ran = [], []
 def check(ok, what):
@@ -110,14 +119,15 @@ def files_hashes(d):
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return {int(q.name[6:-5]): m.file_block(q)[1] for q in d.glob("block_*.json")}
 
-def case_below_tip(depth, W, J, n):
-    """prep at the node's tip n; the top `depth` blocks are replaced. Expect a marker and exit 4."""
+def case_below_tip(depth, W, J, n, tipfile=True):
+    """prep at the node's tip n; the top `depth` blocks are replaced. Expect a marker and exit 4. tipfile=False: prep
+    from before PREP_TIP.json (the fetcher finds its tip from the state files)."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="fetch-reorg-"))
     try:
         (root / "fakecli.py").write_text(FAKE)
         node = Node(root, n)
         od, d = root / "out", root / "blocks"
-        prep_states(od, node, n, save=n - (n % 50))
+        prep_states(od, node, n, save=n - (n % 50), keep=J, tip=n if tipfile else None)
         env = {"HAZYNC_REORG_AUTO_DEPTH": str(W), "HAZYNC_PREP_UNDO_KEEP": str(J)}
         p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od), "--jobs", "2"], env)
         time.sleep(1.0)
@@ -125,7 +135,7 @@ def case_below_tip(depth, W, J, n):
         node.reorg(depth, "b")
         try: rc = p.wait(timeout=30 + 0.2 * depth)
         except subprocess.TimeoutExpired: p.kill(); p.wait(); rc = "timeout"
-        tag = f"depth {depth} (W={W}, J={J})"
+        tag = f"depth {depth} (W={W}, J={J}{'' if tipfile else ', no tip file'})"
         if depth > J:
             m = d / "REORG_TOO_DEEP"
             body = json.loads(m.read_text()) if m.exists() else {}
@@ -156,7 +166,7 @@ def case_above_tip():
         n = 60
         node = Node(root, n)
         od, d = root / "out", root / "blocks"
-        prep_states(od, node, n - 6, save=50)
+        prep_states(od, node, n - 6, save=50, keep=40)
         p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od), "--jobs", "3"], {"HAZYNC_REORG_AUTO_DEPTH": "12", "HAZYNC_PREP_UNDO_KEEP": "40"})
         try:
             got = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(n - 5, n + 1)))
@@ -168,7 +178,7 @@ def case_above_tip():
                   f"fork above prep's tip: waiting files {n - 2}..{n} replaced, {n + 1}..{n + 2} fetched, no marker, still running")
             check(before[n - 4] == files_hashes(d)[n - 4], "a waiting file below the fork is kept, not fetched again")
             # prep then reaches the old tip on the NEW chain: still nothing to stop for
-            prep_states(od, node, n)
+            prep_states(od, node, n, keep=40)
             time.sleep(1.5)
             check(p.poll() is None and not (d / "REORG").exists(), "prep on the new chain: no marker")
         finally:
@@ -207,11 +217,124 @@ def case_stale_states():
         (root / "fakecli.py").write_text(FAKE)
         node = Node(root, 100)
         od, d = root / "out", root / "blocks"
-        prep_states(od, node, 90, save=50)                                # saved at 50, stale states up to 90
-        p = fetcher(root, ["range", "1", "100", str(d), "--after-saves", str(od), "--jobs", "2"], {})
+        for tipf in (50, None):                                          # prep restarted from 50; and an old host
+            shutil.rmtree(od, ignore_errors=True); shutil.rmtree(d, ignore_errors=True)
+            prep_states(od, node, 90, save=50, tip=tipf)                  # saved at 50, stale states up to 90
+            p = fetcher(root, ["range", "1", "100", str(d), "--after-saves", str(od), "--jobs", "2"], {})
+            try:
+                ok = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(51, 101)), 60)
+                check(ok and p.poll() is None and not (d / "REORG").exists(),
+                      f"stale states above the save point ({'tip file at 50' if tipf else 'no tip file'}): 51..100 fetched, no marker")
+            finally:
+                p.kill(); p.wait()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+def run_once(root, od, d, env=None, timeout=30):
+    """One fetcher run that should stop at once: (exit code or 'timeout', marker name or None, marker body)."""
+    p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od)], dict({"HAZYNC_REORG_AUTO_DEPTH": "12", "HAZYNC_PREP_UNDO_KEEP": "40"}, **(env or {})))
+    try: rc = p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired: p.kill(); p.wait(); rc = "timeout"
+    for m in ("REORG", "REORG_TOO_DEEP"):
+        if (d / m).exists(): return rc, m, json.loads((d / m).read_text())
+    return rc, None, {}
+
+def setup(n):
+    root = pathlib.Path(tempfile.mkdtemp(prefix="fetch-reorg-"))
+    (root / "fakecli.py").write_text(FAKE)
+    return root, Node(root, n), root / "out", root / "blocks"
+
+def case_review_findings():
+    """The 16.11.2026 review's cases, one each (M1, M2, M4, L1, L2)."""
+    # M1: no tip file (an old host); the three newest state files torn, the fork BELOW them: still a stop
+    root, node, od, d = setup(120)
+    try:
+        prep_states(od, node, 110, save=100, tip=None)
+        for h in (108, 109, 110): (od / f"state_{h}.json").write_text("")
+        node.active = node.active[:96]; node.extend("x", 25)              # fork at 95
+        rc, m, b = run_once(root, od, d)
+        check(rc == 4 and m == "REORG" and b.get("fork") == 95 and b.get("prep_tip") == 107,
+              f"M1: torn newest states, fork at 95: REORG fork {b.get('fork')} from prep's tip {b.get('prep_tip')} (rc={rc})")
+        shutil.rmtree(d)
+        for h in range(100, 111): (od / f"state_{h}.json").write_text("")
+        rc, m, b = run_once(root, od, d)
+        check(rc == 4 and m is None and "FETCH_STOPPED_CANNOT_CHECK" in (root / "fetch.log").read_text(),
+              f"M1: no state down to the save point reads: exit 4 'cannot check', never 'no reorg' (rc={rc}, marker {m})")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # M2: prep restarted from 100 and at 102 (its tip file); stale states to 110 from the crashed run; the node forks
+    # at 105, ABOVE prep's real tip: no stop, and the waiting files above 102 are the node's
+    root, node, od, d = setup(120)
+    try:
+        prep_states(od, node, 110, save=100, tip=102)
+        node.active = node.active[:106]; node.extend("y", 20)             # fork at 105
+        p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od)], {})
         try:
-            ok = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(51, 101)), 60)
-            check(ok and p.poll() is None and not (d / "REORG").exists(), "stale states above the save point: 51..100 fetched, no marker")
+            ok = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(103, 126)), 60)
+            fh = files_hashes(d)
+            check(ok and p.poll() is None and not (d / "REORG").exists() and all(fh[h] == node.active[h] for h in range(103, 126)),
+                  "M2: a fork above prep's real tip (102; stale states to 110): no marker, files 103..125 on the node's chain")
+        finally:
+            p.kill(); p.wait()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # M4: a state file missing inside the walk: 'cannot check', not a deeper fork
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40)
+        (od / "state_55.json").unlink()
+        node.reorg(10, "z")                                               # fork at 50
+        rc, m, b = run_once(root, od, d)
+        check(rc == 4 and m is None and "state_55.json is missing" in (root / "fetch.log").read_text(),
+              f"M4: a missing state inside the walk: exit 4 'cannot check', no marker with a wrong fork (rc={rc}, marker {m})")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # L1: the node BEHIND prep and on another branch: depth counted from prep's tip 60 (fork 15: 45 > J=40)
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40)
+        node.active = node.active[:16]; node.extend("w", 10)              # node at 25, forked at 15
+        rc, m, b = run_once(root, od, d)
+        check(rc == 4 and m == "REORG_TOO_DEEP", f"L1: node behind prep, fork 45 below prep's tip (J=40): REORG_TOO_DEEP, not manual (rc={rc}, {m})")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # L2: J and the records' reach from prep's tip file: records only from 55 (the host was upgraded at 54), fork at 50
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40, undo_from=55)
+        node.reorg(10, "v")
+        rc, m, b = run_once(root, od, d)
+        check(rc == 4 and m == "REORG_TOO_DEEP" and b.get("fork") == 50 and b.get("undo_from") == 55,
+              f"L2: a fork (50) below the lowest undo record (55): REORG_TOO_DEEP (rc={rc}, {m}, {b.get('why')})")
+        shutil.rmtree(d)
+        # the same fork with records from 45: reached, depth 10 <= W=12: REORG auto
+        t = json.loads((od / "PREP_TIP.json").read_text()); t["undo_from"] = 45
+        (od / "PREP_TIP.json").write_text(json.dumps(t))
+        rc, m, b = run_once(root, od, d)
+        check(rc == 4 and m == "REORG" and b.get("fork") == 50 and b.get("class") == "auto",
+              f"L2: the same fork with records from 45: REORG auto (rc={rc}, {m})")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+def case_new_file_same_best():
+    """L4: a waiting file from another branch appears while the node's best block is unchanged (the node went to that
+    branch and back between two polls): it is checked as a NEW file at the next poll, deleted and fetched again."""
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 50, save=50, keep=40)
+        p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od)], {})
+        try:
+            ok = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(51, 61)), 60)
+            time.sleep(1.0)
+            other = Node.__new__(Node); other.blocks = {}
+            hb = other.mk("u", 58, node.active[57])
+            b = other.blocks[hb]
+            (d / "block_58.json.x").write_text(json.dumps({"height": 58, "version": b["version"], "time": b["time"], "bits": b["bits"],
+                                                            "nonce": b["nonce"], "prev": b["prev"], "merkle": b["merkle"], "txs": []}))
+            os.replace(d / "block_58.json.x", d / "block_58.json")
+            back = wait_until(lambda: files_hashes(d).get(58) == node.active[58], 30)
+            check(ok and back and p.poll() is None and not (d / "REORG").exists(),
+                  "L4: a file from another branch with the best block unchanged: replaced by the node's block 58")
         finally:
             p.kill(); p.wait()
     finally:
@@ -223,7 +346,7 @@ def case_fork_point_deep():
         (root / "fakecli.py").write_text(FAKE)
         node = Node(root, 120)
         od = root / "out"
-        prep_states(od, node, 120)
+        prep_states(od, node, 120, keep=40)
         node.reorg(70, "d")
         env = dict(os.environ, HAZYNC_RPC_CLI=f"{sys.executable} {root / 'fakecli.py'} {root / 'world.json'}",
                    HAZYNC_PREP_UNDO_KEEP="40", HAZYNC_REORG_AUTO_DEPTH="12")
@@ -245,6 +368,12 @@ if __name__ == "__main__":
         case_node_behind_and_range_done()
         case_stale_states()
         case_fork_point_deep()
+        print("== the review's cases (16.11.2026)")
+        case_review_findings()
+        case_new_file_same_best()
+        print("== an old host without PREP_TIP.json")
+        for depth in (1, 13, 41):
+            case_below_tip(depth, 12, 40, 60, tipfile=False)
         print("== the shipped window (W=288, J=2016)")
         for depth in (288, 289, 2017):
             case_below_tip(depth, 288, 2016, 2030)

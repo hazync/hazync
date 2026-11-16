@@ -213,19 +213,39 @@ def complete_saves(od):
     return [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()
             and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog", "trie"))] if od.exists() else []
 
+class CannotCheck(Exception):
+    pass
+
 class PrepTip:
-    """prep's tip: its newest state_<h>.json that reads. Found by probing upward from the last one (a stat per height),
-    never by listing the out dir (632,587 files on the box)."""
+    """prep's tip. From <out>/PREP_TIP.json, which prep writes after every block and at its start (prover/host/src/
+    reorg.rs write_tip; review of P2, M2): the height its STORES are at, with J and the lowest height its undo records
+    reach. Without that file (a host from before it), the newest state_<h>.json that reads, probing upward by stat
+    (never listing the out dir: 632,587 files on the box) and, when the newest do not read, down to the newest
+    complete save point, whose state is synced (review M1: three unreadable files used to read as "no prep at all",
+    which turned detection off). States that exist but none of which read: CannotCheck."""
     def __init__(self, od):
         self.od, self.h = od, max(complete_saves(od), default=0)
+        self.keep, self.undo_from, self.source = None, None, None
     def get(self):
+        try:
+            t = json.loads((self.od / "PREP_TIP.json").read_text())
+            h, x = int(t["height"]), str(t["hash"])
+            if len(x) == 64:
+                self.h, self.keep, self.undo_from, self.source = h, int(t["undo_keep"]), int(t["undo_from"]), "PREP_TIP.json"
+                return h, x
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        self.keep, self.undo_from, self.source = None, None, "state files"
+        save = max(complete_saves(self.od), default=0)
         if self.h and not (self.od / f"state_{self.h}.json").exists():
-            self.h = max(complete_saves(self.od), default=0)          # moved away (a rewind, P3): start again
+            self.h = save                                              # moved away (a rewind, P3): start again
         while (self.od / f"state_{self.h + 1}.json").exists(): self.h += 1
-        for h in range(self.h, max(self.h - 3, 0), -1):               # the newest may be half written
+        for h in range(self.h, min(save, self.h) - 1, -1):            # the newest may be half written
+            if h == 0: break
             x = state_hash(self.od, h)
             if x: return h, x
-        return 0, None
+        if self.h == 0 and save == 0: return 0, None                  # no state file at all: a run not yet started
+        raise CannotCheck(f"state files up to {self.h} exist but none from there down to the save point {save} reads")
 
 def chain_info():
     i = rpc("getblockchaininfo")
@@ -233,7 +253,9 @@ def chain_info():
 
 def walk_back(od, top, limit):
     """The fork: the highest h in [top - limit, top] where prep's state and the node agree, and the deepest height
-    compared. Repeated if the node's best block moves during the walk, so every hash compared is from one chain."""
+    compared. Repeated if the node's best block moves during the walk, so every hash compared is from one chain. A
+    state that is missing or does not read is CannotCheck (review M4): skipping it would put the fork deeper than it
+    is, on a marker a person then acts on. (Prep syncs its states at every save point, so this means damage.)"""
     while True:
         _, best = chain_info()
         fork, deepest = None, top
@@ -241,7 +263,8 @@ def walk_back(od, top, limit):
             deepest = h
             if h == 0: fork = 0; break                                 # genesis: the same network's, always shared
             x = state_hash(od, h)
-            if x is not None and x == rpc("getblockhash", [h]): fork = h; break
+            if x is None: raise CannotCheck(f"state_{h}.json is missing or does not read, inside the fork walk")
+            if x == rpc("getblockhash", [h]): fork = h; break
         if chain_info()[1] == best: return fork, deepest
 
 def write_marker(d, name, body):
@@ -258,51 +281,76 @@ def refuse_if_marked(d):
                   f"prep's stores are on the active chain", flush=True)
             sys.exit(EXIT_REORG)
 
-def check_prep(d, od, tip, limit=None):
+def check_prep(d, od, tip):
     """The detection check against prep's tip. Returns prep's tip height, or None while the node is behind prep (a node
-    still syncing: nothing can be decided, and nothing is fetched). A fork below prep's tip writes the marker and exits."""
-    limit = J_KEEP if limit is None else limit
-    P, hp = tip.get()
+    still syncing: nothing can be decided, and nothing is fetched). A fork below prep's tip writes the marker and exits.
+    Depth is counted from PREP's tip (review L1), J and the records' reach are prep's own when PREP_TIP.json says them
+    (review L2): a fork the records do not reach (deeper than J, or below the height the records began at) is
+    REORG_TOO_DEEP. Unreadable prep state is a stop too (review M1), never "no reorg"."""
+    try:
+        P, hp = tip.get()
+    except CannotCheck as e:
+        print(f"FETCH_STOPPED_CANNOT_CHECK {e}: prep's chain cannot be compared with the node's; a person decides", flush=True)
+        sys.exit(EXIT_REORG)
     if P == 0: return 0
+    J = tip.keep if tip.keep is not None else J_KEEP
     node_h, best = chain_info()
     at = min(P, node_h)
     if at == P and rpc("getblockhash", [P]) == hp: return P
     if at < P and state_hash(od, at) == rpc("getblockhash", [at]):
         print(f"the node is at {node_h}, below prep's tip {P}, on prep's chain: waiting for it", flush=True)
         return None
-    fork, deepest = walk_back(od, at, limit)
+    try:
+        fork, deepest = walk_back(od, at, max(J - (P - at), 0)) if P - at <= J else (None, at)
+    except CannotCheck as e:
+        print(f"FETCH_STOPPED_CANNOT_CHECK {e}: the fork cannot be placed; a person decides", flush=True)
+        sys.exit(EXIT_REORG)
     if fork is not None and fork >= at:
         return P if at == P else None    # the node moved between the two looks and now agrees: nothing to stop for
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    if fork is None:
+    reach = tip.undo_from if tip.undo_from is not None else None
+    if fork is None or (reach is not None and fork + 1 < reach):
+        why = (f"no agreement with prep's states from {at} down to {deepest} (J={J})" if fork is None else
+               f"the fork at {fork} is below the lowest undo record ({reach}): the records cannot undo it")
         p = write_marker(d, "REORG_TOO_DEEP", {"prep_tip": P, "prep_tip_hash": hp, "node_tip": node_h, "node_best": best,
-                                               "deepest_compared": deepest, "J": J_KEEP, "at": now,
-                                               "next": "fetch_block_rpc.py fork-point <prep out> --deep; REORG.md §11"})
-        print(f"FETCH_STOPPED_REORG no agreement with prep's states from {at} down to {deepest} (J={J_KEEP}): {p}", flush=True)
+                                               "fork": fork, "depth": None if fork is None else P - fork,
+                                               "deepest_compared": deepest, "J": J, "undo_from": reach, "why": why,
+                                               "at": now, "next": "fetch_block_rpc.py fork-point <prep out> --deep; REORG.md §11"})
+        print(f"FETCH_STOPPED_REORG {why}: {p}", flush=True)
         sys.exit(EXIT_REORG)
     depth = P - fork
-    orphaned = [[h, state_hash(od, h)] for h in range(fork + 1, P + 1)]
+    orphaned = [[h, state_hash(od, h) if h < P else hp] for h in range(fork + 1, P + 1)]
     new = [[h, rpc("getblockhash", [h])] for h in range(fork + 1, min(P, node_h) + 1)]
     cls = "auto" if depth <= W_AUTO else "manual"
     p = write_marker(d, "REORG", {"fork": fork, "fork_hash": rpc("getblockhash", [fork]) if fork else None, "prep_tip": P,
-                                  "depth": depth, "class": cls, "W": W_AUTO, "J": J_KEEP, "node_tip": node_h,
-                                  "node_best": best, "orphaned": orphaned, "new": new, "at": now})
+                                  "depth": depth, "class": cls, "W": W_AUTO, "J": J, "undo_from": reach, "node_tip": node_h,
+                                  "node_best": best, "prep_tip_from": tip.source, "orphaned": orphaned, "new": new, "at": now})
     print(f"FETCH_STOPPED_REORG prep's tip {P} is not on the node's chain: fork at {fork}, depth {depth} ({cls}; "
-          f"W={W_AUTO}, J={J_KEEP}): {p}", flush=True)
+          f"W={W_AUTO}, J={J}): {p}", flush=True)
     sys.exit(EXIT_REORG)
 
-def scan_waiting(d, above, node_h):
+def scan_waiting(d, above, node_h, seen=None):
     """Deletes every waiting block file above `above` that is not the node's block at its height (or that cannot be
-    read). Called with no fetch worker running. Returns the heights deleted."""
+    read). With `seen` (name -> (mtime, size) of files already checked against the chain as it is now), only files new
+    or changed since are checked, and the checked ones are added: run every poll, this catches a file fetched while
+    the node was briefly on another branch even when its best block is back where it was by the next poll (review
+    L4). A full check (seen=None) is made with no fetch worker running, after the best block changed. Returns the
+    heights deleted."""
     gone = []
     for q in d.glob("block_*.json"):
         if not q.name[6:-5].isdigit(): continue
         h = int(q.name[6:-5])
         if h <= above: continue
+        try: stv = q.stat(); sig = (stv.st_mtime_ns, stv.st_size)
+        except OSError: continue
+        if seen is not None and seen.get(q.name) == sig: continue
         fb = file_block(q)
         if fb is None or fb[0] != h or h > node_h or fb[1] != rpc("getblockhash", [h]):
             q.unlink(missing_ok=True)
             gone.append(h)
+            if seen is not None: seen.pop(q.name, None)
+        elif seen is not None:
+            seen[q.name] = sig
     if gone: print(f"replaced: {len(gone)} waiting block file(s) not on the node's chain, from {min(gone)}", flush=True)
     return gone
 
@@ -326,7 +374,7 @@ def supervise(lo, hi, d, window, jobs, od, follow):
     import multiprocessing
     refuse_if_marked(d)
     tip = PrepTip(od)
-    batch, last_best, done_to, batch_top = [], None, lo - 1, None
+    batch, last_best, done_to, batch_top, seen = [], None, lo - 1, None, {}
     def stop_batch():
         for x in batch: x.terminate()
         for x in batch: x.join()
@@ -340,10 +388,13 @@ def supervise(lo, hi, d, window, jobs, od, follow):
                 # above prep's tip only: the files from its last save point up to it are on the chain just checked,
                 # and a restarted prep needs them
                 gone = scan_waiting(d, tip.h, node_h)
-                if gone: done_to = min(done_to, min(gone) - 1)
+                seen.clear()
                 last_best = best
             else:
                 P = check_prep(d, od, tip)
+                # the files written since the last poll, against the chain as it is now (review L4)
+                gone = scan_waiting(d, tip.h, node_h, seen)
+            if gone: done_to = min(done_to, min(gone) - 1)
             if P is not None:
                 # range: done once prep has SAVED hi (its last block is always a save point)
                 if not follow and all((od / f"state_{hi}.{x}").exists() for x in ("json", "smt", "coinlog", "trie")):
@@ -378,14 +429,20 @@ def main():
         # fork-point <prep out> [--deep]: where prep's chain and the node's part, without the J limit with --deep
         # (REORG.md §11 runbook step 2). Read-only.
         od = pathlib.Path(sys.argv[2])
-        P, hp = PrepTip(od).get()
+        tip = PrepTip(od)
+        P, hp = tip.get()
         node_h, best = chain_info()
         at = min(P, node_h)
         if P and at == P and rpc("getblockhash", [P]) == hp: fork, deepest = P, P
-        else: fork, deepest = walk_back(od, at, at if "--deep" in sys.argv else J_KEEP)
+        else:
+            J = tip.keep if tip.keep is not None else J_KEEP
+            fork, deepest = walk_back(od, at, at if "--deep" in sys.argv else max(J - (P - at), 0))
+        J = tip.keep if tip.keep is not None else J_KEEP
         depth = None if fork is None else P - fork
-        print(json.dumps({"prep_tip": P, "node_tip": node_h, "fork": fork, "depth": depth, "deepest_compared": deepest,
-                          "within_W": depth is not None and depth <= W_AUTO, "within_J": depth is not None and depth <= J_KEEP}))
+        reach = fork is not None and (tip.undo_from is None or fork + 1 >= tip.undo_from)
+        print(json.dumps({"prep_tip": P, "prep_tip_from": tip.source, "node_tip": node_h, "fork": fork, "depth": depth,
+                          "deepest_compared": deepest, "undo_from": tip.undo_from, "within_W": depth is not None and depth <= W_AUTO,
+                          "within_J": depth is not None and depth <= J and reach}))
         return
     if sys.argv[1] == "follow":
         # follow <lo> <dir> --after-saves <prep out> [--hi H]: as range, to the node's tip as it moves (REORG.md §4)

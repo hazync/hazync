@@ -878,8 +878,30 @@ impl TrieStore {
 
     /// Whether the last update applied in this session re-created a coin over its own spent record (BIP30, `s_ins`),
     /// which `undo` cannot restore; None when none is applied. Prep's reorg undo records keep it
-    /// (prover/host/src/reorg.rs).
+    /// (prover/host/src/reorg.rs). Host only (`std`): the WASM verifier compiles this file without it.
+    #[cfg(feature = "std")]
     pub fn last_apply_replaced(&self) -> Option<bool> { self.applied.last().copied() }
+
+    /// Undo one block from a RECORD of it (docs/libzync/REORG.md §6, prep's `reorg/u_<h>.bin`): the keys it marked and
+    /// inserted, and whether it re-created a coin over its spent record. Unlike `undo` this works for a block applied
+    /// in an EARLIER session (a store reopened from its last flush), because the record carries the `replaced` flag the
+    /// in-memory `applied` stack would: refused (`Missing`, the store unchanged) when it is set. Exact otherwise, as
+    /// `undo`: the trie's shape is a function of its key set. All or nothing. Host only (`std`).
+    #[cfg(feature = "std")]
+    pub fn undo_recorded(&mut self, marks: &[Key], inserts: &[Key], replaced: bool) -> Result<W, TErr> {
+        if replaced { return Err(TErr::Missing); }
+        // an update applied in this session is the one being undone (undo order is newest first): keep the stack true
+        if self.applied.last() == Some(&true) { return Err(TErr::Missing); }
+        let r = (|| {
+            let mut t = self.root;
+            for k in inserts.iter().rev() { let (s, o) = split(k); t = self.t_rm(t, &s, &o, 0)?; }
+            for k in marks.iter().rev() { let (s, o) = split(k); t = self.t_unmark(t, &s, &o, 0)?; }
+            Ok(t)
+        })();
+        let out = self.finish(r);
+        if out.is_ok() { self.applied.pop(); }
+        out
+    }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut o = Wr(Vec::new(), 0);
@@ -1032,6 +1054,81 @@ mod tests {
     fn disk_arena_record_cache_is_exact() {
         disk_arena_run(1, 7, "tinycache");
         disk_arena_run(64, 0, "bigcache");
+    }
+
+    /// REORG.md §6 (review of P1, M5): a block applied in an EARLIER session is undone from its record alone (keys +
+    /// replaced flag). A disk store is flushed at every block (so the slots each block replaced are freed and reused)
+    /// and reopened; each reopen undoes the newest block by `undo_recorded` and must equal, snapshot byte for byte, a
+    /// memory store built from the blocks below it. Undo then a flush and a reopen: still equal. A re-creating block
+    /// is refused, the store unchanged.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_block_from_an_earlier_session_undoes_from_its_record() {
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-undo-recorded", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        let mut disk = TrieStore::open_dir(&dir, true).unwrap();
+        let mut unspent: Vec<Key> = Vec::new();
+        let mut blocks: Vec<(Vec<(Key, W)>, Vec<(Key, Option<W>, u64)>)> = Vec::new();
+        for blk in 0..120u32 {
+            let mut marks = Vec::new();
+            for _ in 0..(rnd() % 5) {
+                if unspent.is_empty() { break; }
+                let k = unspent.swap_remove((rnd() % unspent.len() as u64) as usize);
+                marks.push((k, [blk, 3, 1, 0, 0, 0, 0, 0]));
+            }
+            let mut ins = Vec::new();
+            for _ in 0..(1 + rnd() % 8) {
+                let mut k = [0u8; 64];
+                for b in k.iter_mut() { *b = rnd() as u8; }
+                k[0] &= 0x07;
+                if rnd() % 3 == 0 { k[1..4].fill(0); }
+                let spent = rnd() % 5 == 0;
+                if !spent { unspent.push(k); }
+                ins.push((k, spent.then_some([blk, 4, 0, 0, 0, 0, 0, 0]), rnd() >> 30));
+            }
+            disk.apply(&marks, &ins).unwrap();
+            assert_eq!(disk.last_apply_replaced(), Some(false));
+            disk.height = blk as u64 + 1;
+            disk.flush().unwrap();
+            blocks.push((marks, ins));
+        }
+        let built = |n: usize| -> TrieStore {
+            let mut m = TrieStore::new(true);
+            for (mk, i) in &blocks[..n] { m.apply(mk, i).unwrap(); }
+            m.height = n as u64;
+            m
+        };
+        for n in (100..120usize).rev() {
+            drop(disk);
+            disk = TrieStore::open_dir(&dir, true).unwrap();
+            assert_eq!(disk.height, n as u64 + 1, "reopened at the last flush");
+            let (mk, i) = &blocks[n];
+            let keys_m: Vec<Key> = mk.iter().map(|m| m.0).collect();
+            let keys_i: Vec<Key> = i.iter().map(|x| x.0).collect();
+            // the in-session undo refuses: this block was applied in another session
+            assert_eq!(disk.undo(mk, i), Err(TErr::Missing), "undo knows nothing of an earlier session");
+            assert_eq!(disk.undo_recorded(&keys_m, &keys_i, true), Err(TErr::Missing), "a re-creating block is refused");
+            assert_eq!(disk.height, n as u64 + 1);
+            disk.undo_recorded(&keys_m, &keys_i, false).unwrap_or_else(|e| panic!("block {n}: {e:?}"));
+            disk.height = n as u64;
+            assert_eq!(disk.to_bytes(), built(n).to_bytes(), "block {n} undone from its record = the store below it");
+            disk.flush().unwrap();
+        }
+        drop(disk);
+        let back = TrieStore::open_dir(&dir, true).unwrap();
+        assert_eq!(back.to_bytes(), built(100).to_bytes(), "the undo is durable: reopened after the flush");
+        // and a re-created coin's record: refused, nothing changed
+        let mut st = TrieStore::new(true);
+        let c = key(4, 0, 1, 0);
+        st.apply(&[], &[(c, None, 50)]).unwrap();
+        st.apply(&[(c, [5, 0, 0, 0, 0, 0, 0, 0])], &[]).unwrap();
+        st.apply(&[], &[(c, None, 50)]).unwrap();
+        let r = st.root();
+        assert_eq!(st.undo_recorded(&[], &[c], false), Err(TErr::Missing), "in session, the stack's flag still refuses");
+        assert_eq!(st.root(), r);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(feature = "std")]
