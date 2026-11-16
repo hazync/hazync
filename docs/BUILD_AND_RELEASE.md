@@ -224,7 +224,10 @@ depends on the RISC Zero toolchain (3.0.5 → 3.1.0).
 The browser verifier is reproducible only with the same **host** Rust: `swiftsync-verify-wasm/build.sh` under Rust
 **1.99.0** gives the published `hazync-verify.wasm` (`446fdaeb…`); 1.97.1 gives other bytes. Build it with
 `swiftsync-verify-wasm/build.sh`, which pins Rust 1.99.0 itself since 2026-11-12 (installing it if missing), so the
-machine's default Rust no longer matters.
+machine's default Rust no longer matters. Since 16.11.2026 it builds inside the pinned container `reproduce/wasm.Dockerfile` (needs docker): the stage
+path had reached the bytes through cargo's `-C metadata` hash of the path dependencies (other stages gave `7d79f68c…`
+and `05754e5f…`), and a host C compiler reaches a zAPP module whose graph compiles C. In the container the stage path,
+the Rust toolchain and (where needed) clang are the same on every machine; `SWIFTSYNC_WASM_STAGE` is refused.
 
 **Hazync v1 (record).** The rest of this section describes the CORE images `reproduce/Dockerfile` built;
 the CORE id it names, `37987b85`, is superseded (v0.22.1 is the last v1 release, and v1 proofs still verify with
