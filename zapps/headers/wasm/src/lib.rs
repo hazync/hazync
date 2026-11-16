@@ -58,7 +58,8 @@ impl<'a> Frame<'a> {
 ///
 /// Output beside verdict, checks, height, hash, chainwork, max_time, mmr_root, identity_checked:
 ///   `included`: null when nothing was asked; true ONLY when the verdict is "ok" and the block (and transaction) is on
-///   the chain. A DEMO chain (below Core's minimum work: anyone can mine a difficulty-1 fork) never gives true.
+///   the chain. "ok" needs Core's minimum work AND `expect` matched (identity_checked); a DEMO chain (below the work, or
+///   its tip not compared with a source the caller trusts) never gives true.
 ///   `included_demo`: null when nothing was asked; true when the verdict is "demo" and the inclusion checks passed.
 ///   `inclusion`: `{height, hash, txid}` of what was shown (txid null for a block alone), non-null only when no check
 ///   failed (verdict "ok" or "demo": read it with the verdict, as `included` / `included_demo` do).
@@ -90,10 +91,13 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
         }
     };
     let rep = zapp_headers::verify_headers(&rs, &image, now, exp, include.as_ref());
-    let ok = rep.verdict != Verdict::Fail;
+    // "ok" needs the tip compared with `expect` (a source the caller trusts), as every zAPP (review 11-16): without it a
+    // chain with enough work is "demo", and `included` is never true
+    let verdict = rep.gated();
+    let ok = verdict != Verdict::Fail;
     let s = rep.state.as_ref().filter(|_| ok);
     ret(serde_json::json!({
-        "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
+        "verdict": match verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
         "image": image,
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
         "height": s.map(|s| s.height),
@@ -101,11 +105,11 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
         "chainwork": s.map(|s| s.work_hex()),
         "max_time": s.map(|s| s.max_time),
         "mmr_root": s.map(|s| s.mmr_root_hex()),
-        "identity_checked": ok && exp.is_some(),
+        "identity_checked": rep.tip_checked,
         // the block (and transaction) asked for is on a chain with Core's minimum work; null when none was asked
-        "included": include.as_ref().map(|_| rep.verdict == Verdict::Ok && rep.included.is_some()),
+        "included": include.as_ref().map(|_| verdict == Verdict::Ok && rep.included.is_some()),
         // ...on a valid chain BELOW it (a demo proof): shown, but not a claim about the network's chain
-        "included_demo": include.as_ref().map(|_| rep.verdict == Verdict::Demo && rep.included.is_some()),
+        "included_demo": include.as_ref().map(|_| verdict == Verdict::Demo && rep.included.is_some()),
         "inclusion": rep.included.as_ref().filter(|_| ok).map(|i| serde_json::json!({
             "height": i.height, "hash": i.hash_hex(), "txid": i.txid_hex(),
         })),

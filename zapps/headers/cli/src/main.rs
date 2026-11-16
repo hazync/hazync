@@ -106,15 +106,22 @@ fn run(a: Vec<String>) -> ! {
     if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; }
     rep.checks.splice(0..0, extra);
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
-    let ident = if expect.is_some() { "" } else { "; chain identity NOT checked (give --expect <height>:<hash>, --mempool or --bitcoin-cli: a source you trust)" };
-    match (&rep.verdict, &rep.state) {
+    let ident = if rep.tip_checked { "" } else { "; chain identity NOT checked (give --expect <height>:<hash>, --mempool or --bitcoin-cli: a source you trust)" };
+    // OK (exit 0) needs the tip compared with a source you trust, as every zAPP (review 11-16): a chain with enough work
+    // but no identity check is DEMO (exit 2), an inclusion on it too
+    match (&rep.gated(), &rep.state) {
         (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
         (v, Some(s)) => {
             let shown = rep.included.as_ref().map(|i| format!("; INCLUDED: block {} {} is at that height on this chain{}", i.height, i.hash_hex(),
                 i.txid_hex().map(|t| format!(", with transaction {t} in it")).unwrap_or_default())).unwrap_or_default();
             let what = format!("header chain from genesis to {} {} (chainwork {}, MMR root {}){shown}{ident}", s.height, s.hash_hex(), s.work_hex(), s.mmr_root_hex());
             if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
-            println!("SWIFTSYNC_VERIFY_DEMO: a valid header chain below Core's minimum chain work: {what}"); exit(2)
+            if rep.verdict == Verdict::Ok {
+                println!("SWIFTSYNC_VERIFY_DEMO: a valid header chain with Core's minimum chain work, but not shown to be the network's: {what}");
+            } else {
+                println!("SWIFTSYNC_VERIFY_DEMO: a valid header chain below Core's minimum chain work: {what}");
+            }
+            exit(2)
         }
     }
 }
