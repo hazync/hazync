@@ -836,9 +836,11 @@ check(refused and not api.deploys, "the bot refuses to rent anything when the co
 try:
     make_bot(api, FakeRunner(), trial=[9400], coord=sponsor_bot.Coord("http://127.0.0.1:9", _other, timeout=2)).run()
     refused = False
-except sponsor_bot.BotRefused:
+except sponsor_bot.TransientError:
+    # 11-16: an unreachable coordinator before anything is rented is TRANSIENT (skip, retry, latch only on a
+    # streak: test_sponsor_resilience.py §5), not BotRefused. It still rents nothing.
     refused = True
-check(refused and not api.deploys, "or when it cannot reach the coordinator at all")
+check(refused and not api.deploys, "or when it cannot reach the coordinator at all (a transient skip)")
 try:
     make_bot(FakeRunPod(), FakeRunner(), trial=[9400], identity_home=None).run()
     refused = False

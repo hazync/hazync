@@ -28,6 +28,7 @@ Two guards, and this checks both:
     python3 test_sponsor_resilience.py             # both guards present and correct
     python3 test_sponsor_resilience.py --control   # neither: one 500 kills the run, nothing latches
 """
+import json
 import os
 import sys
 import urllib.error
@@ -201,6 +202,222 @@ if not CONTROL:
     check(got == "exit 0", f"⛔ prepare() on a fresh unsigned release exits 0: no latch, nothing started ({got})")
     got = run_prepare(stale)
     check(got == "http 404", f"and on an OLD release with no manifest it still fails on the 404 ({got})")
+
+# ── 5. ⛔ A TRANSIENT pre-rental failure skips without latching, but a STREAK still latches (11-16) ────────
+# 05:46 on 11-16: /api/meta timed out 4x in ~30 s while the box was thrashing, and one run latched the bot off
+# although "nothing was started and nothing was spent". Real danger (money spent, pods possibly live) still latches.
+if not CONTROL:
+    import tempfile as _tf
+    sb = sponsor_bot
+
+    # 5a. classification: http_retry exhaustion is transient; a CoordError is transient only without an answer / on 5xx
+    try:
+        sb.http_retry(flaky(99, TimeoutError("timed out")), "GET http://127.0.0.1:8899/api/meta")
+        raised = None
+    except BaseException as e:                               # noqa: BLE001
+        raised = e
+    check(isinstance(raised, sb.TransientError), f"4 timeouts end as TransientError ({type(raised).__name__})")
+
+    class _K:                                                # a signing key that signs anything
+        def sign(self, m): return b"\0" * 64
+    def coord_err(exc):
+        c = sb.Coord.__new__(sb.Coord); c.url, c.timeout, c.sk = "http://c", 1, _K()
+        o = sb.urllib.request.urlopen
+        def boom(*a, **k): raise exc
+        sb.urllib.request.urlopen = boom
+        try:
+            c.queue(); return None
+        except sb.CoordError as e:
+            return e
+        finally:
+            sb.urllib.request.urlopen = o
+    check(coord_err(TimeoutError("timed out")).transient, "a coordinator timeout is transient")
+    check(coord_err(urllib.error.URLError(ConnectionRefusedError(111, "refused"))).transient,
+          "a refused connection is transient")
+    check(coord_err(http_error(503)).transient, "a coordinator 503 is transient")
+    check(not coord_err(http_error(403)).transient, "⛔ a 403 (key refused) is NOT transient: it latches")
+
+    # 5b. one transient run: exit 75, no latch; the unit counts 75 as success
+    home = _tf.mkdtemp()
+    t0 = 1_000_000.0
+    rc = sb.transient_exit("sponsor_bot: GET meta failed", home, now=t0)
+    check(rc == sb.TRANSIENT_EXIT == 75, f"one transient timeout → exit 75, skipped, no latch ({rc})")
+    _sec, _svc = None, []
+    for _ln in UNIT.splitlines():
+        _ln = _ln.strip()
+        if _ln.startswith("["):
+            _sec = _ln
+        elif _sec == "[Service]" and _ln.startswith("SuccessExitStatus="):
+            _svc += _ln.split("=", 1)[1].split()
+    check("75" in _svc, f"⛔ and the unit's [Service] counts 75 as success: no ExecStopPost latch, no OnFailure page ({_svc}). "
+          "⚠ a drop-in on the box could reset SuccessExitStatus=; check `systemctl show -p SuccessExitStatus` there")
+
+    # 5c. N in a row over M minutes: latch (SystemExit with a message ⇒ exit 1 ⇒ latch + OnFailure alert)
+    outs = []
+    for i in range(1, 12):
+        try:
+            outs.append(sb.transient_exit("sponsor_bot: GET meta failed", home, now=t0 + i * 330))
+        except SystemExit as e:
+            outs.append(e)
+            break
+    last = outs[-1]
+    check(isinstance(last, SystemExit) and isinstance(last.code, str) and "Latching" in last.code,
+          f"a streak latches ({type(last).__name__}: {str(getattr(last, 'code', last))[-60:]!r})")
+    runs = len(outs) + 1
+    check(runs == sb.TRANSIENT_LATCH_RUNS, f"after exactly {sb.TRANSIENT_LATCH_RUNS} runs in a row ({runs})")
+    # 6 fast runs are NOT enough on their own: the streak must also span TRANSIENT_LATCH_S
+    home2 = _tf.mkdtemp()
+    fast = [sb.transient_exit("x", home2, now=t0 + i) for i in range(10)]
+    check(all(r == 75 for r in fast), "10 runs inside a minute do not latch (the span bound holds too)")
+    # a run that gets past every pre-rental check clears the streak
+    sb.transient_clear(home)
+    check(sb.transient_exit("x", home, now=t0 + 99999) == 75, "a clean run resets the streak")
+    # fail closed: no state directory ⇒ latch at once
+    try:
+        sb.transient_exit("x", None); r = "no latch"
+    except SystemExit as e:
+        r = "latch"
+    check(r == "latch", f"⛔ with nowhere to count, it latches as before ({r})")
+
+    # 5d. state-file hygiene: reset on latch, stale streaks restart, clock stepping back, hard cap, junk file
+    h = _tf.mkdtemp(); st = os.path.join(h, sb.TRANSIENT_STATE)
+    for i in range(5):
+        sb.transient_exit("x", h, now=t0 + i * 330)
+    try:
+        sb.transient_exit("x", h, now=t0 + 5 * 330); r = "no latch"
+    except SystemExit:
+        r = "latch"
+    check(r == "latch" and not os.path.exists(st), f"latching removes transient.json ({r}, exists={os.path.exists(st)})")
+    check(sb.transient_exit("x", h, now=t0 + 6 * 330) == 75,
+          "⛔ so after a human clears .failed, the next blip starts a NEW streak instead of re-latching at once")
+    sb.transient_exit("x", h, now=t0 + 7 * 330)
+    check(sb.transient_exit("x", h, now=t0 + 7 * 330 + sb.TRANSIENT_STALE_S + 60) == 75
+          and json.load(open(st))["runs"] == 1, "a streak whose last failure is stale starts afresh")
+    h = _tf.mkdtemp()
+    for i in range(5):
+        sb.transient_exit("x", h, now=t0 + i * 330)
+    try:
+        sb.transient_exit("x", h, now=t0 - 86400); r = "no latch"
+    except SystemExit:
+        r = "latch"
+    check(r == "latch", f"⛔ a clock stepped backwards cannot hold off the latch ({r})")
+    h = _tf.mkdtemp(); outs = []
+    for i in range(20):
+        try:
+            outs.append(sb.transient_exit("x", h, now=t0 + i))
+        except SystemExit:
+            break
+    check(len(outs) + 1 == sb.TRANSIENT_LATCH_HARD, f"hard cap: {sb.TRANSIENT_LATCH_HARD} in a row latch whatever the span ({len(outs) + 1})")
+    for junk in ("[1,2]", "null", '{"first": NaN, "last": Infinity, "runs": 3}', '{"first": "a", "runs": true}', "{{{"):
+        h = _tf.mkdtemp(); open(os.path.join(h, sb.TRANSIENT_STATE), "w").write(junk)
+        try:
+            ok = sb.transient_exit("x", h, now=t0) == 75 and json.load(open(os.path.join(h, sb.TRANSIENT_STATE)))["runs"] == 1
+        except BaseException as e:                         # noqa: BLE001
+            ok = False
+        check(ok, f"a malformed transient.json ({junk}) is treated as no streak, not a crash")
+
+    # 5e. L4/L3: a LOCAL OSError (disk full) is not transient; an http.client protocol error is
+    try:
+        sb.http_retry(flaky(99, OSError(28, "No space left on device")), "download SHA256SUMS.txt"); r = None
+    except BaseException as e:                             # noqa: BLE001
+        r = e
+    check(type(r) is OSError, f"⛔ ENOSPC is not retried as transient: it propagates and latches ({type(r).__name__})")
+    import http.client as _hc
+    check(coord_err(_hc.RemoteDisconnected("gone")).transient, "a coordinator that hangs up mid-answer is transient")
+
+# ── 6. main() end to end: the wiring, the streak file, and ⛔ a post-rental failure latching ───────────────────
+if not CONTROL:
+    import json as _j
+    class FakeCoord:
+        fail_queue = False
+        def queue(self):
+            if FakeCoord.fail_queue:
+                raise sb.CoordError("the coordinator could not be reached for GET /api/bot/queue: timed out", transient=True)
+            return {"sponsorships": []}
+    class FakeRunner:
+        def __init__(self, home): self.home = home
+        def prepare(self): return self
+    class FakeApi:
+        def __init__(self): self.terminated = []
+        def pods(self): return []
+        def terminate(self, pid): self.terminated.append(pid)
+    api = FakeApi()
+    seed = {"pod": False}
+    class SeededBot(sb.Bot):
+        """A bot that has ALREADY rented one pod when its loop starts (the post-rental case)."""
+        def __init__(self, *a, **k):
+            k["sleep"] = lambda s: None
+            super().__init__(*a, **k)
+            if seed["pod"]:
+                self._n = 1
+                p = sb.Pod({"id": "pod-1", "name": self.prefix + "1", "cost_per_hr": 0.5}, time.time())
+                p.state = "idle"
+                self.pods.append(p)
+    import time
+    loop_reconcile = {"fail": False}
+    def fake_reconcile(coord):
+        if loop_reconcile["fail"]:
+            raise sb.CoordError("the coordinator could not be reached for POST /api/bot/reconcile: timed out", transient=True)
+        return []
+    saved = {k: getattr(sb, k) for k in ("Bot", "connect_path", "SshRunner", "RunPod", "install_signal_handlers",
+                                         "reconcile", "reconcile_work", "pending_work", "terminate_confirmed")}
+    saved_coord = sb.Coord.from_env
+    def main_run(home, argv=("run", "--live", "--max-pods", "1", "--max-usd", "5", "--max-usd-per-hour", "2", "--tick", "0")):
+        os.environ["SPONSOR_BOT_HOME"] = home
+        sb.Coord.from_env = classmethod(lambda cls: FakeCoord())
+        sb.Bot, sb.connect_path = SeededBot, lambda: os.path.join(home, "bot.db")
+        sb.SshRunner = type("SR", (), {"from_env": staticmethod(lambda: FakeRunner(home))})
+        sb.RunPod = type("RP", (), {"from_env": staticmethod(lambda: api)})
+        sb.install_signal_handlers = lambda: None
+        sb.reconcile, sb.reconcile_work, sb.pending_work = fake_reconcile, (lambda c, coord: 0), (lambda *a, **k: [])
+        try:
+            return sb.main(list(argv))
+        except SystemExit as e:
+            return e.code if isinstance(e.code, int) else 1     # python exits 1 for a message
+        finally:
+            sb.Coord.from_env = saved_coord
+            for k, v in saved.items():
+                setattr(sb, k, v)
+    home = _tf.mkdtemp(); st = os.path.join(home, sb.TRANSIENT_STATE)
+    FakeCoord.fail_queue = True
+    rc = main_run(home)
+    check(rc == 75 and os.path.exists(st) and _j.load(open(st))["runs"] == 1,
+          f"main(): a pre-rental coordinator timeout exits 75 and starts the streak (rc={rc})")
+    _j.dump({"first": time.time() - 30 * 60, "last": time.time() - 60, "runs": 5}, open(st, "w"))
+    rc = main_run(home)
+    check(rc == 1 and not os.path.exists(st), f"main(): the 6th in a row exits 1 (⇒ latch + alert) ({rc})")
+    sb.transient_exit("x", home)
+    FakeCoord.fail_queue = False
+    rc = main_run(home)
+    check(rc == 0 and not os.path.exists(st), f"main(): a clean run exits 0 and removes the streak file ({rc})")
+    sb.transient_exit("x", home)
+    FakeCoord.fail_queue = True
+    rc = main_run(home, ("trial", "--blocks", "5", "--live", "--max-pods", "1", "--max-usd", "5", "--max-usd-per-hour", "2"))
+    check(rc == 75 and _j.load(open(st))["runs"] == 1, f"a manual trial keeps its own streak, not the timer's ({rc})")
+
+    # ⛔ post-rental: a pod is live, the coordinator times out in the LOOP ⇒ pods terminated, NOT exit 75
+    home = _tf.mkdtemp(); FakeCoord.fail_queue = False; seed["pod"] = True; loop_reconcile["fail"] = True
+    api.terminated.clear()
+    rc = main_run(home)
+    check(rc == 6, f"⛔ a transient coordinator failure AFTER a pod was rented is the loop's own 'coordinator' stop "
+                   f"(exit 6 ⇒ latch), never a transient skip ({rc})")
+    check(api.terminated == ["pod-1"], f"⛔ and the rented pod was terminated ({api.terminated})")
+    check(not os.path.exists(os.path.join(home, sb.TRANSIENT_STATE)), "and it did not count as a transient streak")
+    # ⛔ M1, structural: even if a TransientError ever escaped the loop after a deploy (a future regression),
+    # main() must refuse exit 75 because this run rented something.
+    api.terminated.clear(); loop_reconcile["fail"] = False
+    def leak(self, c, now):
+        raise sb.TransientError("sponsor_bot: a transient error that leaked out of the loop")
+    o_obs = SeededBot._observe
+    SeededBot._observe = leak
+    try:
+        rc = main_run(_tf.mkdtemp())
+    finally:
+        SeededBot._observe = o_obs
+    check(rc == 1 and api.terminated == ["pod-1"],
+          f"⛔ a TransientError escaping AFTER a rental latches (exit 1) and the pod is terminated ({rc}, {api.terminated})")
+    seed["pod"] = False; loop_reconcile["fail"] = False
+    os.environ.pop("SPONSOR_BOT_HOME", None)
 
 print()
 if CONTROL:
