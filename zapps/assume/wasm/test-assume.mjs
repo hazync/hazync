@@ -26,6 +26,10 @@ const cases = [
   ['flipped_receipt', { receipt: flipped, headers, snapshot: snap }, 'fail'],
   ['tracked_false', { receipt, headers, snapshot: snap, tracked: '0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098:0' }, 'fail'],
   ['nothing_asked', { receipt }, 'fail'],
+  // review 11-16: an image id given is the only one the receipt may verify against; none given, the image that
+  // verified it (the earlier built-in 8888d59c the receipt names) is the one reported
+  ['image_pinned_current', { receipt, assumevalid: 'tip', imageHex: '46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c' }, 'fail'],
+  ['image_reported', { receipt, assumevalid: 'tip' }, 'demo', (r) => r.image === '8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4'],
 ];
 let bad = 0;
 for (const [name, args, want, extra] of cases) {

@@ -74,16 +74,20 @@ fn main() {
     let image = image_for(&network, &image_hex, false, false).unwrap_or_else(|e| fail(&e));
     if !image_hex.is_empty() { println!("  image id given on the command line: {}", image.method_id_hex); }
     let rb = std::fs::read(&receipt).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&receipt))));
-    let mut rep = verify_core(&rb, image, None, now, None).report;
+    // an --image given is the only image the receipt may verify against (zapp_corecheck::verify_core, pinned)
+    let core = verify_core(&rb, image, !image_hex.is_empty(), None, now, None);
+    let mut rep = core.report;
     let mut tip_checked = false;
     let mut lines = Vec::new();
     if let Some(cs) = rep.state.clone() {
-        let (idc, ok) = check_core_tip(&id, image.network, &cs);
-        rep.checks.extend(idc);
-        tip_checked = ok;
         if rep.verdict == Verdict::Fail {
+            // no source is asked about a height the receipt has not shown (review 11-16)
             rep.checks.push((false, "assumevalid / assumeutxo: NOT checked: the receipt did not verify".into()));
         } else {
+            println!("  the receipt verified against image {} ({})", core.image.method_id_hex, core.image.network);
+            let (idc, ok) = check_core_tip(&id, image.network, &cs);
+            rep.checks.extend(idc);
+            tip_checked = ok;
             assume_checks(&cs, &mut rep.checks, &mut lines, av.as_deref(), snap.as_deref(), headers.as_deref(), tracked.as_deref());
         }
     }

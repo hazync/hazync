@@ -15,6 +15,9 @@ path = "src/lib.rs"
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
+# image_used: the receipt decoded as the core verifier decodes it, to ask which image it names
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+bincode = "1"
 
 [profile.release]
 opt-level = "z"

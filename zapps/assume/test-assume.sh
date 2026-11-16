@@ -82,6 +82,11 @@ printf '#!/bin/sh\necho %064d\n' 1 > $T/badnode; chmod +x $T/badnode
 run 2 "is the proven UTXO set" $U --bitcoin-cli $T/node $R $A/utxo_200.dat
 run 1 "" $U --bitcoin-cli $T/badnode $R $A/utxo_200.dat
 run 2 "assumevalid=$TIP" $V assumevalid --bitcoin-cli $T/node $R
+# an --image given is the only image the receipt may verify against (review 11-16): the network's current id named
+# explicitly refuses this 8888d59c receipt, which the built-in default accepts as an earlier image of the chain
+run 1 "not the image given" $U --image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c $R $A/utxo_200.dat
+run 2 "verified against image 8888d59c" $U $R $A/utxo_200.dat
+run 2 "verified against image 8888d59c" $U --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 $R $A/utxo_200.dat
 # RISC0_DEV_MODE never makes the verifier accept anything; a dev-mode receipt (FakeReceipt) is refused
 run 1 "RISC0_DEV_MODE" env RISC0_DEV_MODE=1 $U $R $A/utxo_200.dat
 run 1 "" $V assumevalid swiftsync-verify/vectors/fake_block_2501.rcpt
@@ -89,7 +94,11 @@ run 1 "" $V assumevalid swiftsync-verify/vectors/fake_block_2501.rcpt
 echo "== assume_ref.py == the verifier's live_hash and hash_serialized_3"
 REF=$(python3 -I scripts/libzync/assume_ref.py $A/utxo_200.dat $A/headers_0_200.bin); echo "$REF"
 OUT=$($U $R $A/utxo_200.dat)
-N=$((N+1)); if [ -n "$REF" ] && echo "$OUT" | grep -aqF "$(echo "$REF" | grep live_hash)" && echo "$OUT" | grep -aqF "$(echo "$REF" | grep hash_serialized_3 | cut -d' ' -f2)" \
-   && echo "$REF" | grep -q "^hash_serialized_3 a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67$"; then echo "PASS"; else echo "WRONG"; BAD=$((BAD+1)); fi
+# each line the reference printed must be there, non-empty and in the expected shape: `grep -F ""` matches anything,
+# so a reference that printed no live_hash line passed vacuously before (review 11-16)
+LIVE=$(echo "$REF" | grep -E '^live_hash x [0-9a-f]{64} y [0-9a-f]{64}$' || true)
+HS3=$(echo "$REF" | grep -E '^hash_serialized_3 [0-9a-f]{64}$' | cut -d' ' -f2 || true)
+N=$((N+1)); if [ -n "$LIVE" ] && [ -n "$HS3" ] && echo "$OUT" | grep -aqF "$LIVE" && echo "$OUT" | grep -aqF "$HS3" \
+   && [ "$HS3" = a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67 ]; then echo "PASS"; else echo "WRONG"; BAD=$((BAD+1)); fi
 echo "zapp-assume test-assume.sh: $((N-BAD))/$N as expected"
 [ "$N" -gt 0 ] && [ "$BAD" = 0 ]

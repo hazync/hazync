@@ -1534,6 +1534,8 @@ dependencies = [
 name = "zapp-corecheck"
 version = "0.1.0"
 dependencies = [
+ "bincode",
+ "risc0-zkvm",
  "swiftsync-verify",
 ]
 

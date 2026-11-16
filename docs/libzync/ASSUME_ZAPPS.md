@@ -211,7 +211,7 @@ P2P, §6). Laptop: WSL2, release build.
 | BIP30-tracked live coins at 200 | 0 (`assume_inputs.py`); the match with an empty list agrees |
 | assumeutxo check at 200, laptop | 0.01 s (the CLI's own timer) |
 | throwaway node to 200 on hazync-coord | sync 28-31 s, `dumptxoutset rollback=200` 14-15 s |
-| WASM build | the zAPP's own module `zapps/assume/wasm` (no longer part of the core's `hazync-verify.wasm`): 1,163,787 bytes raw, 330,674 gzipped, sha256 `cbf31ea2…` (`zapps/assume/wasm/build.sh`, Rust 1.99.0, default stage path, 16.11.2026; it links zapps/corecheck, not zapps/common) |
+| WASM build | the zAPP's own module `zapps/assume/wasm` (no longer part of the core's `hazync-verify.wasm`): 1,165,029 bytes raw, 331,195 gzipped, sha256 `f5a4e5c7…` (`zapps/assume/wasm/build.sh`: Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`; laptop and hazync-coord, 16.11.2026) |
 
 **Beyond 200: against a prover run's state, not a proof.** No receipt in the repo reaches past 200, so the encoding
 was also checked against hazync-coord's `libzync-prep` run of 07.11.2026 (`state_<h>.json`, the host's native

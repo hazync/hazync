@@ -85,14 +85,15 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
         if av.is_none() && snapshot.is_empty() {
             return Err("neither an assumevalid block nor a snapshot was given".to_string());
         }
-        Ok((receipt, image, now, expect, av, headers, snapshot, tracked))
+        Ok((receipt, image, !image_hex.is_empty(), now, expect, av, headers, snapshot, tracked))
     })();
-    let (receipt, image, now, expect, av, headers, snapshot, tracked) = match res {
+    let (receipt, image, pinned, now, expect, av, headers, snapshot, tracked) = match res {
         Err(e) => return fail(e),
         Ok(x) => x,
     };
-    let core = zapp_corecheck::verify_core(receipt, image, None, now, Some(expect.as_str()).filter(|e| !e.is_empty()));
-    let (mut rep, tip_checked) = (core.report, core.tip_checked);
+    // an image id given is the only image the receipt may verify against (pinned)
+    let core = zapp_corecheck::verify_core(receipt, image, pinned, None, now, Some(expect.as_str()).filter(|e| !e.is_empty()));
+    let (mut rep, tip_checked, used) = (core.report, core.tip_checked, core.image);
     if rep.checks.iter().any(|(ok, _)| !ok) { rep.verdict = Verdict::Fail; }
     let mut assume = serde_json::json!(null);
     if rep.verdict == Verdict::Fail {
@@ -114,7 +115,8 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
     }
     ret(serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
-        "image": image.method_id_hex,
+        // the image the receipt verified against: the one given, or (none given) the earlier built-in image it names
+        "image": used.method_id_hex,
         "network": image.network,
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
         "height": rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail).map(|c| c.height),

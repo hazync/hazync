@@ -73,7 +73,8 @@ pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len
     if rb.starts_with(swiftsync_verify::BUNDLE_MAGIC) {
         return fail("assume: a proof bundle is not accepted here: give the receipt");
     }
-    let core = zapp_corecheck::verify_core(rb, image, None, now, expect_s.as_deref());
+    // an image id given is the only image the receipt may verify against (pinned)
+    let core = zapp_corecheck::verify_core(rb, image, !image_hex.is_empty(), None, now, expect_s.as_deref());
     let rep = core.report;
     let tip_checked = core.tip_checked;
     if rep.verdict == Verdict::Fail || rep.checks.iter().any(|(ok, _)| !ok) {

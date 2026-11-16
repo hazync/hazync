@@ -16,7 +16,8 @@ bash test-assume.sh "$T/release/zapp-assume" || { tail -20 test-assume.out; exit
 tail -1 test-assume.out
 cargo build --release --manifest-path ./ffi/Cargo.toml
 (cd ffi && cc -O2 -Iinclude test_assume.c "$FT/release/libzapp_assume_ffi.a" -lpthread -ldl -lm -o "$T/atest" && "$T/atest")
-c_with_core ffi/test_with_core.c ffi/include "$FT/release" zapp_assume_ffi "$T/both" && "$T/both"
+c_with_core ffi/test_with_core.c ffi/include "$FT/release" zapp_assume_ffi "$T/both"
+"$T/both"
 ./wasm/build.sh
 wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_assume_wasm.wasm wasm/README.md
 node wasm/test-assume.mjs
