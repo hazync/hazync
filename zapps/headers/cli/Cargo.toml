@@ -1,0 +1,29 @@
+[package]
+name = "zapp-headers-cli"
+version = "0.1.0"
+edition = "2021"
+description = "zapp-headers: the header-chain zyncAPP's command line (zapps/headers)"
+license = "MIT"
+publish = false
+
+# The CLI, apart from the library (..): it alone takes the chain-identity flags every zAPP CLI shares (zapps/common:
+# --expect, --mempool, --bitcoin-cli), so the library and WASM module carry none of that code.
+
+[[bin]]
+name = "zapp-headers"
+path = "src/main.rs"
+
+[dependencies]
+zapp-headers = { path = ".." }
+zapp-common = { path = "../../common" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

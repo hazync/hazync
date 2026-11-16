@@ -319,7 +319,9 @@ mod tests {
         std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) echo '{{\"chainwork\": \"00000000000000000000000000000000000000000000000000000000000000ab\"}}';; esac\n")).unwrap();
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap(); }
-        let c = cli.to_str().unwrap();
+        // each fake node runs as `sh <file>`, never exec'd itself: tests run on parallel threads, and a file another
+        // thread's fork still holds open for writing cannot be exec'd (ETXTBSY, "Text file busy": a flaky FAIL)
+        let c = &format!("sh {}", cli.to_str().unwrap());
         let r = take_all(&["--bitcoin-cli", c]).unwrap().resolve("mainnet", 200);
         assert_eq!(r.expect.as_deref(), Some(format!("200:{H200}").as_str()));
         assert_eq!(r.node_chainwork.as_deref(), Some("00000000000000000000000000000000000000000000000000000000000000ab"));
@@ -338,7 +340,7 @@ mod tests {
         #[cfg(unix)]
         for f in [&cli2, &cli3] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap(); }
         for (f, want) in [(&cli2, "no chainwork"), (&cli3, "failed")] {
-            let r = take_all(&["--bitcoin-cli", f.to_str().unwrap()]).unwrap().resolve("mainnet", 200);
+            let r = take_all(&["--bitcoin-cli", &format!("sh {}", f.to_str().unwrap())]).unwrap().resolve("mainnet", 200);
             assert!(r.node_chainwork.is_none() && r.checks.iter().any(|c| !c.0 && c.1.contains(want)), "{:?}", r.checks);
         }
         let r = take_all(&["--bitcoin-cli", "/nonexistent/cli"]).unwrap().resolve("mainnet", 200);
@@ -358,7 +360,7 @@ mod tests {
             std::fs::write(&p, format!("#!/bin/sh\ncase \"$1\" in getblockhash) echo {H200};; getblockheader) {hdr};; esac\n")).unwrap();
             #[cfg(unix)]
             { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap(); }
-            p.to_str().unwrap().to_string()
+            format!("sh {}", p.to_str().unwrap()) // run by sh, not exec'd: see node_answers_and_disagreement
         };
         let c = mk("short", "echo '{\"chainwork\": \"00ab\"}'");
         let r = take_all(&["--bitcoin-cli", &c]).unwrap().resolve("mainnet", 200);
