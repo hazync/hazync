@@ -387,7 +387,7 @@ const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 
 /// The network's message start, which the snapshot names.
 pub fn network_magic(profile: u32) -> [u8; 4] {
-    if profile & PROFILE_SIGNET != 0 { [0x0a, 0x03, 0xcf, 0x40] } else { [0xf9, 0xbe, 0xb4, 0xd9] }
+    if profile & PROFILE_SIGNET != 0 { [0x0a, 0x03, 0xcf, 0x40] } else { magic_not_signet(profile) }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1354,4 +1354,20 @@ mod tests {
         let mut c = cs.clone(); c.profile |= PROFILE_ASSUMEVALID;
         assert!(assume_valid(&c, None, None).unwrap_err().contains("SKIPPED"));
     }
+}
+
+// Kept at the end of the file: a line added above the code a WASM module is built from moves the panic locations it
+// embeds, and so its bytes (the published sha). Without the tests-only `regtest-test` feature this is mainnet's magic.
+#[cfg(all(feature = "regtest-test", not(debug_assertions)))]
+compile_error!("zapp-assume's `regtest-test` feature is for tests only: it never builds without debug assertions (a release build).");
+
+/// [`network_magic`] of a profile without the signet bit: mainnet's, or under the tests-only `regtest-test` feature
+/// (zapps/corecheck's regtest image, profile bit 3) Core's regtest pchMessageStart.
+#[inline(always)]
+fn magic_not_signet(_profile: u32) -> [u8; 4] {
+    #[cfg(feature = "regtest-test")]
+    if _profile & 8 != 0 {
+        return [0xfa, 0xbf, 0xb5, 0xda];
+    }
+    [0xf9, 0xbe, 0xb4, 0xd9]
 }

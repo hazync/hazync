@@ -19,6 +19,11 @@ zapp-common = { path = "../../common" }
 zapp-corecheck = { path = "../../corecheck" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 
+[features]
+# TESTS ONLY: `--network regtest`, the zAPP regtest harness's image (zapps/corecheck), for test.sh's OK-verdict tests on
+# real regtest proofs (test-regtest.sh). Dev profile only: a release build with it does not compile.
+regtest-test = ["zapp-assume/regtest-test", "zapp-common/regtest-test", "zapp-corecheck/regtest-test"]
+
 [profile.release]
 opt-level = "z"
 lto = true

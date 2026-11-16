@@ -29,6 +29,11 @@ ark-ff = { version = "=0.5.0", default-features = false }
 # the ECMH map and sum against a num-bigint reference, as libzync/src/host.rs ecmh_hint computes it
 num-bigint = "0.4"
 
+[features]
+# TESTS ONLY (zapps/corecheck's regtest-test, scripts/zapp-regtest): Core's regtest message start for a regtest proof's
+# snapshot. Never in a release or WASM build (compile_error! below, scripts/wasm-build.sh).
+regtest-test = []
+
 [profile.release]
 opt-level = "z"
 lto = true

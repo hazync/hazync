@@ -43,6 +43,10 @@ int main(void) {
     run_assume("assumeutxo_wrong_tip", R, "../vectors/utxo_200.dat", -1, NULL, "200:00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee", ZAPP_ASSUME_FAIL, NULL);
     const uint8_t NOT_IN[32] = {7};
     run_assume("assumevalid_not_in_chain", R, NULL, -1, NOT_IN, NULL, ZAPP_ASSUME_FAIL, NULL);
+    /* positive control: the zAPP regtest harness's real receipt (image eb2cd424, scripts/zapp-regtest) is refused */
+    run_assume("regtest_receipt_refused", "../../../scripts/zapp-regtest/receipts/a/block_112.rcpt",
+               "../../../scripts/zapp-regtest/oracle/utxo_a112.dat", -1, NULL,
+               "112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574", ZAPP_ASSUME_FAIL, NULL);
     printf("ASSUME_C_ABI %d/%d %s\n", n - bad, n, bad ? "SOME CASES WRONG" : "all cases as expected");
     return bad != 0;
 }

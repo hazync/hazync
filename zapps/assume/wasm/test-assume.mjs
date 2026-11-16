@@ -14,6 +14,8 @@ const TIP = '000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320';
 const B170 = '00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee';
 const H3 = 'a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67';
 const tampered = snap.slice(); tampered[51] ^= 1;
+const rt = new Uint8Array(fs.readFileSync(new URL('../../../scripts/zapp-regtest/receipts/a/block_112.rcpt', import.meta.url)));
+const A112 = '67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574';
 const cases = [
   ['assumeutxo_200', { receipt, headers, snapshot: snap, expect: `200:${TIP}` }, 'demo', (r) => r.assume.assumeutxo.hash_serialized_3 === H3 && r.assume.assumeutxo.coins === 204],
   ['assumevalid_tip', { receipt, assumevalid: 'tip' }, 'demo', (r) => r.assume.assumevalid.block === TIP],
@@ -30,6 +32,11 @@ const cases = [
   // verified it (the earlier built-in 8888d59c the receipt names) is the one reported
   ['image_pinned_current', { receipt, assumevalid: 'tip', imageHex: '46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c' }, 'fail'],
   ['image_reported', { receipt, assumevalid: 'tip' }, 'demo', (r) => r.image === '8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4'],
+  // positive control: the shipped module refuses the zAPP regtest harness's real receipt (image eb2cd424): against the
+  // mainnet and signet images it does not verify, and "regtest" is no network here (scripts/zapp-regtest)
+  ['regtest_receipt_mainnet', { receipt: rt, assumevalid: 'tip', expect: `112:${A112}` }, 'fail', (r) => r.checks.some((c) => !c.ok && c.what.startsWith('receipt verifies against image'))],
+  ['regtest_receipt_signet', { network: 'signet', receipt: rt, assumevalid: 'tip', expect: `112:${A112}` }, 'fail'],
+  ['regtest_receipt_regtest', { network: 'regtest', receipt: rt, assumevalid: 'tip', expect: `112:${A112}` }, 'fail'],
 ];
 let bad = 0;
 for (const [name, args, want, extra] of cases) {

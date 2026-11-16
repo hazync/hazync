@@ -1,0 +1,62 @@
+zAPP regtest GPU batch, real proofs (RISC0_DEV_MODE unset), MEASURED 16.11.2026
+
+Image      eb2cd424b94a4aa74f3458efc0d5edb1d3c35d46615eab8363696f1fa4b47ccd (regtest guest, CI host_reg, run 43835411815)
+Guest      regtest_eb2cd424.bin sha256 1c3d671a6c9e95eb15d064980cd89aa5f0c41766aae5a82338c0f8416529f79b
+Bundle     mkbundle.sh at 382725f9 (BUNDLE_OK, 100 MB); the pod built that commit's host
+GPU        1x NVIDIA RTX PRO 6000 Blackwell Server Edition, RunPod SECURE, $2.69/h (224 cores, driver 595.91.07)
+Toolchain  cargo 1.99.1, CUDA 12.8 (cuda_12.8.r12.8/compiler.35583870_0)
+Settings   HAZYNC_CHUNKS=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_COINLOG_SAVE_EACH=1 HAZYNC_RESUME=1 (pod/run.sh)
+
+Listing choice: the cheapest RTX PRO 6000 Server listing was COMMUNITY at $1.69/h; it was deployed first
+(pod jv92gbutjyxvcv) and never published an SSH port in 6 min, so it was terminated and the run went to SECURE
+at $2.69/h (pod xi438qhvla6tb8). The Workstation listing was $2.79 secure / $1.69 community.
+
+Timeline (UTC, gpu_run.log)
+  16:34:12  pod deployed            16:34:46  ssh up (34 s)
+  16:37:37  bundle on the pod       16:47:34  PREP_OK (setup + CUDA toolkit + host build; the build alone 521 s)
+  16:47:38  proving starts          17:26:26  RUN_DONE OK (38.8 min: A 2,228 s + B 85 s + both verifies)
+  17:27:52  harvest fetched (1st try, sha256 checked)   17:27:52  terminated; pod list empty after
+  pod lifetime 53.7 min: bring-up 13.4 min, proving + verify 38.8 min, harvest 1.4 min
+
+Proving (times.tsv; one prove-range try each, no GPU fault)
+  A 1..112 from genesis: 2,227.7 s
+    block 1 (base)                  25.8 s
+    100 coinbase-only blocks        18.8-19.0 s each, mean 18.83 s
+    11 blocks with transactions     28.5-31.7 s each, mean 29.00 s (102: 31.7 s)
+  B 111..113 resumed from A's 110:  85.0 s (111: 37.1 s incl. 7.8 s resume setup, 112: 18.9 s, 113: 29.0 s)
+  phases summed over A (+B): signatures 0.6 (7.9) s, chunk proofs 103.2 (19.2) s, collect + trie proof
+  862.7 (23.6) s, aggregate proof + saves 1,261.2 (34.3) s
+
+Work (LZ_STATS, po2 21) == the dev-mode execution exactly (execute/RESULT_execute_eb2cd424.txt)
+  115 block proofs, 243 receipts (A: 112 trie, 112 aggregate, 11 chunk; B: 3 trie, 3 aggregate, 2 chunk)
+  360 segments (A 349, B 11), 408,027,136 total cycles (A 393,871,360, B 14,155,776),
+  308,214,402 user cycles
+
+Verify (host libzync-verify on the pod, REAL_EXIT=0 both)
+  a 112: LIBZYNC_VERIFY_OK, real proof, METHOD_ID eb2cd424, anchor genesis, tip 67c1d2e7...0574 (= README's a 112),
+         113 forest leaves, coin log 200 coins / 559,999,999,000 sat, trie root 7b31d7fe...e0d7
+  b 113: LIBZYNC_VERIFY_OK, real proof, METHOD_ID eb2cd424, anchor genesis, tip 1b5db3da...f3d7 (= README's b 113),
+         114 forest leaves, coin log 198 coins / 564,999,999,000 sat, trie root 4d8761b8...d96d
+  (cosmetic: the verifier's profile line names "mainnet" for profile 0x79 although the image is regtest)
+
+Kept receipts (sha256)
+  a/block_104.rcpt  a4d340ad5a33ac116837c98148c12e4d6fdbab34d764a02cb4de69a3e0fa7a8f
+  a/block_105.rcpt  f436691df266de04e5a37482a4285a17bcff601cfb92cda30ce63e05a69018d2
+  a/block_110.rcpt  e7ff6e169d83ddf2a4aaa1d85030132890deb0cf202c12d21258a8bdd4ced320
+  a/block_112.rcpt  c61c7cf11484d5627cb0b037f8f925cdc916ec7495e49ecde88776740d1dc63a
+  b/block_113.rcpt  4a83ab68b4198ee673e3885014c47d5d627848cfef1f25252c4f704011da48e2
+  a/history.bin     7c9e91cfb9bb1eb50ca97dd40ac9d85483f2cd1ff854047320489089e34276e4
+  b/history.bin     0be6a2d6667048ed6e3bac98444bb3dbf7b5dc26681ade534bb1b4f13fe7e75b
+  (state_<h>.json/.coinlog/.trie at 104, 105, 110, 112 and b 113: SHA256SUMS in the keep/ artifact below)
+
+Artifacts (not in the repo)
+  full harvest out.tgz (51 MB, every receipt/state/coin log/trie of both runs, no leaf bundles)
+    sha256 101f5667ad5530ec0edeed86b8a53a7581586524b7ac13eb7288da97fd6f2f40
+  keep/ (1.4 MB: the receipts, states, coin logs and tries above + verify logs, SHA256SUMS)
+  at hazync-coord:/root/hz-regtest-work/results/ and laptop ~/hz-regtest-results/ (both checksum-verified)
+
+Cost (RunPod clientBalance, measured)
+  43.6293 before -> 43.4930 after the community dud ($0.14) -> 41.0505 after the run, unchanged an hour later
+  total $2.58: SECURE pod $2.44 (53.7 min at $2.69/h), community dud $0.14
+  ESTIMATE was 55-70 min / $2.30-2.90 at $2.49/h: pod time 53.7 min (under), price/h 8% higher than assumed;
+  empty blocks 18.8 s vs the assumed 15.1 s, bring-up 13 min vs the 25 min allowance
