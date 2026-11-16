@@ -95,7 +95,7 @@ for d in 1 2 12; do
     [ $CONTROL = 1 ] && python3 -c "import sys; p=sys.argv[1]; b=bytearray(open(p,'rb').read()); b[40] ^= 1; open(p,'wb').write(b)" $r/cl/L0.bin
     same_as_ref $r $q $hi $f "A depth $d"
 done
-[ $CONTROL = 1 ] && { [ $fails -gt 0 ] && { echo "CONTROL OK: $fails check(s) fail without the coin log undo"; exit 0; }; echo "CONTROL BROKEN: nothing failed"; exit 1; }
+[ $CONTROL = 1 ] && { [ $fails -gt 0 ] && { echo "CONTROL OK: $fails check(s) fail: the changed coin log was caught"; exit 0; }; echo "CONTROL BROKEN: nothing failed"; exit 1; }
 
 echo "== H. a stale journal (review 16.11, H1): prep died between the trie's flush at 200 and the journal's commit"
 # HAZYNC_TEST_PREP_CRASH_AT=200 (dev mode): exit right after the trie's flush at 200, before its marker; pending.bin still
