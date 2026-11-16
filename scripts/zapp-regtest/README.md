@@ -120,3 +120,55 @@ value below is measured on this chain (see "Execution").
 
 Also outside the core image: the hints and Utreexo guests take mainnet or signet only (regtest builds needed to execute
 them here, plan §3.2), and the header-chain guest is mainnet-only, so the deposit runs core-only on this chain.
+
+## Execution (dev mode, MEASURED 16.11.2026; `execute/RESULT_execute_eb2cd424.txt`)
+
+On hazync-coord with CI's `host_reg` (`eb2cd424…`, run 43835411815, main `797b777e`), `RISC0_DEV_MODE=1` (every
+guest executed and its claims checked, nothing proved), `HAZYNC_SEG_PO2=21` (the CUDA host's segment size, so the
+counts are the GPU's), `HAZYNC_CHUNKS=1 HAZYNC_PROFILE_LAYOUT=cost` (the GPU batch's settings):
+
+- **every block accepted**: 1..112 from genesis (A), and B 111..113 resumed (`HAZYNC_RESUME=1`) from A's output cut
+  back to 110, so the prover does accept other block files above k (plan §3.2's open question);
+- the control: B resumed on A's output still holding A's 112 is refused (`replayed BIP30 tree at 112 != the receipt's
+  smt_root`);
+- `anchor_id` of the chain = the spec's regtest genesis anchor `99509fc5…`;
+- per block (`execute/stats_*.tsv`, segments at po2 21): a coinbase-only block is 2 receipts (trie 1 segment,
+  aggregate 2), 3 segments, 3.3 M cycles; a block with transactions 3 receipts (+ 1 chunk), 4 segments (102: 6),
+  5.4-7.1 M cycles. The whole batch (base 1..101, A 102..112, B 111..113) is **115 block proofs, 243 receipts, 360
+  segments, 408,027,136 cycles** (308,214,402 user).
+- CPU execution time on that box (shared with a release build): 19-21 s per coinbase-only block, 31-44 s per block
+  with transactions; a first run with the default 2 chunks took 2,491 s for 1..112 and was accepted too.
+
+## GPU batch (prepared, NOT run; needs the user's go)
+
+**ESTIMATE: about 55-70 min of one RTX PRO 6000, about $2.30-2.90** (`gpu/estimate.py`): 115 block proofs at 15.1 s
+per coinbase-only block (MEASURED: mainnet 2..200 on one PRO 6000, risc0 3.1.0, `RESULT_risc0_3_1_gpu.txt`; block 1
+21.0 s), + 2.2 s per extra po2-21 segment (MEASURED: block 962,000's chunks, 12-14 segments in 27-31 s,
+`gpu/GPU_RESULTS.md`) + 3 s per extra receipt (an allowance) ≈ 30 min proving, ×1.5 for margin (the first board run
+measured ~22-27 s per early block on 4 cards, `docs/OPERATIONS.md`); + 25 min bring-up (CUDA toolkit, the CUDA host
+build, 381 s MEASURED on a 128-core PRO 6000 pod, a possible first-use sm_120 JIT); at $2.49/h (as billed 11-11). Well
+inside the approved < $10, so it can also carry the later hints/Utreexo receipts (plan §4.3, §4.8).
+
+What it needs, all prepared:
+
+1. **The image**: the regtest image is not published, so the guest comes from CI's `host_reg`:
+   `extract_guest.py host_reg regtest_eb2cd424.bin` → 70,197,404 bytes, sha256 `1c3d671a…f79b`. The extractor was
+   validated on `host_m` (all 6 embedded copies hash to the published mainnet `f7b87bf1…`), and
+   `risc0_binfmt::compute_image_id` (3.0.6, the prover's lock) of the extracted program is **`eb2cd424…`** (checked on
+   hazync-coord). On the pod, `prover/methods/build.rs` recomputes that id from the bytes again and refuses a mismatch.
+   The file is at `hazync-coord:/root/hz-regtest-work/regtest_eb2cd424.bin`.
+2. **The bundle**: `gpu/mkbundle.sh <guest> <dir>` (repo HEAD, the guest, pins `METHOD_ID eb2cd424…`,
+   `GUEST_ELF_SHA256 1c3d671a…`, `PROFILE libzync=1 assumevalid=0 network=regtest coinlog=1 trie=1 utxohash=1`, block
+   files `json_a/` 112 and `json_b/` 113). Dry run on hazync-coord: `BUNDLE_OK`, 100 MB. Rebuild it from the final
+   commit before the run (the pod builds git HEAD).
+3. **The run**: `gpu/gpu_run.sh <dir>` from the laptop (RunPod key and ssh key as the signet runs): deploys one RTX PRO
+   6000 (`lz-zapp-regtest`), `pod/prep.sh` builds `cargo build --release --features cuda -p host` with
+   `HAZYNC_GUEST_ELF/HAZYNC_GUEST_PIN_DIR/HAZYNC_LIBZYNC=1/HAZYNC_NETWORK=regtest` and asserts `method-id` =
+   `eb2cd424…`; `pod/run.sh` proves for real (`RISC0_DEV_MODE` unset): `libzync-prove-range 1 112 json_a genesis out/a`,
+   then `out/b` = `out/a` cut back to 110 and `HAZYNC_RESUME=1 libzync-prove-range 1 113 json_b genesis out/b`
+   (`HAZYNC_CHUNKS=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_COINLOG_SAVE_EACH=1`, five tries each on a GPU fault), then
+   `libzync-verify` on a 112 and b 113. A watcher harvests everything but the leaf bundles and only then terminates,
+   at the deadline (150 min) or a balance under $1.
+4. **What to keep** (plan §3.2): receipts a 104, 105, 110, 112 and b 113 (~225 kB each), each run's `history.bin`,
+   `state_*.json`, and the coin log + trie snapshot at those heights, committed beside the chain; the rest of the
+   harvest stays off the repo.
