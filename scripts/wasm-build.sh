@@ -20,6 +20,16 @@ shift 3
 # ⛔ THE BYTES DEPEND ON THE COMPILER. Same source, same paths: Rust 1.99.0 gives the published 446fdaeb…,
 # 1.97.1 gives a3a85b7f… (measured 2026-11-12, on the release box). So the toolchain is pinned (the block below);
 # a new pin means a new published sha (README, the site, deploy.sh).
+# The tests-only regtest image (zapps/corecheck's and zapps/common's `regtest-test` feature, scripts/zapp-regtest) is never
+# in a WASM module: refused here, on the host, before the container (the feature's compile_error! refuses any build
+# without debug assertions as well). zapps/common/test.sh holds the control.
+if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
+    RT=$(cargo metadata --format-version 1 --filter-platform wasm32-unknown-unknown --manifest-path "$REPO/$CRATE/Cargo.toml" \
+        | python3 -c 'import json, sys
+m = json.load(sys.stdin)
+print(" ".join(sorted(n["id"] for n in m["resolve"]["nodes"] if "regtest-test" in n.get("features", []))))')
+    [ -z "$RT" ] || { echo "$0: $CRATE's WASM graph enables the tests-only feature regtest-test ($RT): never in a WASM module" >&2; exit 1; }
+fi
 # ---- the pinned container: this block is identical in swiftsync-verify-wasm/build.sh and scripts/wasm-build.sh ----
 # ⛔ Outside reproduce/wasm.Dockerfile the bytes depended on the machine (that file says how, with the measurements):
 # the stage path reached them through cargo's -C metadata hash of path dependencies, and a host clang reached a C
