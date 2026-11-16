@@ -49,7 +49,7 @@ _SEG_FROM, _SEG_TO = 0.04, 0.86
 _ASSEMBLING, _ASSEMBLED, _PROVED = 0.88, 0.93, 0.96
 
 _RE = {
-    "claimed": re.compile(r"claimed block (\S+)"),
+    "claimed": re.compile(r"^claimed block (\S+)"),
     # the claim's id, on the same line since the release-by-claim change: "claimed block 1807 (claim 3fa1...; ...)"
     "claim_id": re.compile(r"\(claim ([0-9a-fA-F]{16,64})[;)]"),
     "released": re.compile(r"^released block (\S+?):"),
@@ -166,7 +166,7 @@ class Activity:
     def _prove(self, s):
         m = _RE["released"].search(s)
         if m:
-            self.holding = None
+            self.holding = self.holding_claim = None
             self._set("Stopped", f"Block {pretty(m.group(1))} was handed back for someone else to prove", None)
             return f"Handed block {pretty(m.group(1))} back to the board"
         m = _RE["claimed"].search(s)
@@ -216,7 +216,7 @@ class Activity:
             if self.holding == m.group(1) and self.claimed_at is not None and self._now:
                 self.last_block_s = self._now - self.claimed_at
             if self.holding == m.group(1):
-                self.holding = None
+                self.holding = self.holding_claim = None
             self._set(f"Block {pretty(m.group(1))} is on the board", "Checked and accepted. "
                       "Asking for the next one…", 1.0)
             return f"Block {pretty(m.group(1))} checked and accepted — it is on the board"
@@ -224,7 +224,7 @@ class Activity:
         if m:
             self._span_mark(m.group(1))
             if self.holding == m.group(1):
-                self.holding = None
+                self.holding = self.holding_claim = None
             self._set("Asking for a block to prove…", "", None)
             return f"Someone else finished block {pretty(m.group(1))} first — moving on"
         m = _RE["gpu_wait"].search(s)

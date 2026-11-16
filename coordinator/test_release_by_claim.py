@@ -123,6 +123,30 @@ code, r = server.release(release_body(b, first))
 check(code == 409 and row(b) == ("claimed", second),
       f"the lapsed claim's release does not free the re-claim ({code} {r.get('error')}, {row(b)})")
 
+print("== a re-claim that has itself lapsed reports the lapse, not a re-claim ==")
+reset()
+b, first = claim()
+server.release(release_body(b, first))
+b2, second = claim()
+c = server.db()
+c.execute("UPDATE ranges SET claimed_at=? WHERE id=?", (time.time() - GRACE - 60, b))
+c.commit()
+c.close()
+code, r = server.release(release_body(b, first))
+check(code == 409 and r.get("status") == "lapsed", f"the old claim's release on a lapsed re-claim: 'lapsed' ({code} {r})")
+
+print("== a claim's id has the shape a release can name ==")
+reset()
+nonce, ts = "retry-me", int(time.time())
+code, r = server.claim({"pubkey": PK, "handle": "a", "nonce": nonce, "ts": ts,
+                        "sig": SK.sign(f"claim:{nonce}:{ts}".encode()).hex()})
+check(code == 400 and "hex" in str(r.get("error")), f"a signed claim whose nonce is not 16-64 hex: 400 ({code} {r})")
+code, r = server.claim({"pubkey": PK, "handle": "a", "nonce": "n1"})          # unsigned: any nonce, as before
+check(code == 200, f"an unsigned claim is still taken ({code})")
+code, r2 = server.release(release_body(r.get("range"), os.urandom(16).hex()))
+check(code == 409 and r2.get("status") == "unreleasable" and row(r.get("range"))[0] == "claimed",
+      f"releasing an unsigned claim says it cannot be released, not 'reclaimed' ({code} {r2})")
+
 print("== the claim named is part of what is signed ==")
 reset()
 b, first = claim()

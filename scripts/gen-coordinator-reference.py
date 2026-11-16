@@ -130,7 +130,7 @@ ROUTES = {
         "a cover of it cannot seam (#281). A claim signed by its key over `claim:<nonce>:<ts>` (within "
         "`BEAT_SKEW`) speaks for that key: the per-key cap and the re-take wait count signed and unsigned claims "
         "apart, and a signature that does not verify is refused, not treated as unsigned (#310). Unsigned claims "
-        "are accepted unless `CLAIM_REQUIRE_SIG=1`. A `nonce` makes a retried claim return the same block (#268). "
+        "are accepted unless `CLAIM_REQUIRE_SIG=1`. A `nonce` makes a retried claim return the same block (#268); a signed claim's nonce must be 16-64 hex, since it is also the claim's id that `/api/release` names. "
         "Advisory: `submit` never requires it.",
     "POST /api/spine":
         "Submit a new spine head, signed over the receipt. `host verify-range` must pass (full genesis "
@@ -148,7 +148,8 @@ ROUTES = {
         "`BEAT_SKEW`. Only the assignee of a live claim may beat it, and not past `CLAIM_MAX`. Rejected "
         "beats are logged (`log_beat_rejection`).",
     "POST /api/release":
-        "Hand a claimed block back before its claim lapses (#725). Only the key holding a LIVE claim on `range` may release it, and only the claim the release names: `claim` is the `nonce` that claim was made with (16-64 hex), and a release naming another claim of the same key (a re-claim of the block) is `409` (not this claim), the re-claim untouched. The row goes back to `open` and `claim()` offers it to anyone at once. `ts` integer seconds within `BEAT_SKEW`, `nonce` 16-64 hex. The same signed release sent again gets the first answer and changes nothing (nonces kept in memory for 2 x `BEAT_SKEW`); a nonce reused for another block is `409`. A verified block, a lapsed claim and someone else's claim are `409`, a block with no row `404`. Used by `hazync run` on SIGTERM/Ctrl-C and by `hazync release <n> <claim>`.",
+        "Hand a claimed block back before its claim lapses (#725). A release gives back ONE claim: the key's LIVE claim on `range`, and only if it is the claim named by `claim` (the `nonce` that claim was made with; 16-64 hex, which a signed claim's nonce must be). The row goes back to `open` and `claim()` offers it to anyone at once. Signed over `release:<range>:<claim>:<nonce>:<ts>`; `ts` integer seconds within `BEAT_SKEW`; `nonce` 16-64 hex, fresh per release. The same signed release sent again gets the first answer and changes nothing (nonces kept in memory for 2 x `BEAT_SKEW`); a nonce reused for another block is `409`. `409` with a `status`: `verified` (already proven), `lapsed`, `unreleasable` (an unsigned claim, which has no id to name), `reclaimed` (the key holds the block under a later claim than the one named: that claim stays); someone else's claim is `409` too, a block with no row `404`. Used by `hazync run` on SIGTERM/Ctrl-C and by `hazync release <n> <claim>`. Deploy the coordinator before the worker and the app.",
+
     "POST /api/rotate":
         "Off by default: `410` unless `ROTATE_ENABLED=1` (#311). Key rotation (#113): both `old_pubkey` and "
         "`new_pubkey` sign `hazync-rotate-v1:<old>:<new>:<ts>` "

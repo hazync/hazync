@@ -3721,6 +3721,9 @@ def claim(body):
             return 400, {"error": "a signed claim needs an integer ts (unix seconds)"}
         if not nonce:
             return 400, {"error": "a signed claim needs a nonce"}
+        # the nonce is also the claim's id, which POST /api/release must name: the shape it accepts
+        if not re.fullmatch(r"[0-9a-fA-F]{16,64}", nonce):
+            return 400, {"error": "a signed claim's nonce must be 16 to 64 hex characters (it is the claim's id)"}
         if abs(time.time() - ts) > BEAT_SKEW:
             return 400, {"error": f"claim timestamp outside +/-{BEAT_SKEW}s — check your clock"}
         if not verify_sig(pk, str(body.get("sig") or ""), f"claim:{nonce}:{ts}".encode()):
@@ -3950,26 +3953,32 @@ def beat(body):
 # 14.11.2026 block 1807 sat that way, held by a stopped Windows app. POST /api/release hands the block
 # back at once.
 #
-#   body: {range, claim, pubkey, nonce, ts, sig}   sig = ed25519 by pubkey over "release:<range>:<claim>:<nonce>:<ts>"
+#   body: {range, claim, pubkey, nonce, ts, sig}
+#   sig = ed25519 by pubkey over "release:<range>:<claim>:<nonce>:<ts>"
 #
-# Only the key holding a LIVE claim on the block may release it, and only THAT claim: `claim` is the nonce the
-# claim was made with (POST /api/claim's `nonce`, kept on the row as claim_nonce), and a release naming any other
-# claim is refused with 409 "not this claim". Releasing by key + block alone let a release in flight for an OLD
-# claim free a block the same key had just claimed AGAIN: a worker's own SIGTERM release followed by a fresh claim
-# of the same block, then the Windows app's `hazync-worker release <n>` for the first one (a new release nonce, so
-# the replay memory below does not catch it), or a claim that lapsed and was re-taken before a slow release landed. A lapsed, verified, parked or
-# someone else's claim is refused and left exactly as it is. ts is integer seconds within BEAT_SKEW,
-# as for a beat. The nonce makes a retry safe: the same signed release sent again (a lost response,
-# or a replay by someone who saw it) gets the first answer back and changes nothing, so a replay can
-# never release a claim the same key made on that block AFTER the release (and the claim match refuses it anyway). Nonces are remembered in
-# memory for 2 x BEAT_SKEW, after which the timestamp alone refuses the message. ⚠ A coordinator
-# restart forgets them: a captured release replayed inside BEAT_SKEW of a restart, against a block
-# its key had re-taken in those two minutes, would release that claim. The cost is duplicate work,
-# never lost work (a claim is advisory and submit accepts any height), which is why that is accepted.
+# A release gives back ONE claim: the key's LIVE claim on the block, and only if it is the claim the
+# release names. `claim` is the nonce that claim was made with (POST /api/claim's `nonce`, kept on the
+# row as claim_nonce; a signed claim's nonce is 16 to 64 hex characters). Naming the block alone was
+# not enough: a release in flight for an OLD claim could free a block the same key had just claimed
+# AGAIN (the worker's own SIGTERM release, a fresh claim of the same block, then the Windows app's
+# `hazync-worker release` for the first claim, with a new release nonce; or a claim that lapsed and
+# was re-taken before a slow release landed). Such a release is refused with 409 "not this claim".
+# A lapsed, verified, parked or someone else's claim, and a claim made with no releasable id (an
+# unsigned claim), are refused too, each left exactly as it is. ts is integer seconds within
+# BEAT_SKEW, as for a beat.
+#
+# The release nonce makes a retry safe: the same signed release sent again (a lost response, or a
+# replay by someone who saw it) gets the first answer back and changes nothing. Nonces are remembered
+# in memory for 2 x BEAT_SKEW, after which the timestamp alone refuses the message. A restart forgets
+# them, which costs nothing now: a replayed release still names its own claim, never a later one.
 #
 # The released row goes back to status 'open', as if never claimed: it is no longer listed among the
 # board's claims, claim() offers it to anyone (its releaser included) straight away, and it stops
 # counting against the releaser's CLAIM_OPEN_MAX. Each release prints one journal line.
+#
+# ⚠ DEPLOY ORDER: the coordinator before the worker and the app. A worker that names its claim is
+# refused by a coordinator that predates this (its signature covers a different message), and the
+# claim then lapses by itself; a coordinator that requires the claim refuses a worker that sends none.
 _release_seen = {}                # nonce -> (pubkey, range, code, body, at, claim)
 # Set only by test_claim_release.py --control: any signed release frees any claim, whoever holds it.
 _CONTROL_RELEASE_UNCHECKED = False
@@ -4031,14 +4040,19 @@ def _release_row(rid, pk, claim_id, now):
                                   "status": "verified"}
             elif r["status"] != "claimed" or ((r["assignee"] or "") != pk and not _CONTROL_RELEASE_UNCHECKED):
                 code, out = 409, {"error": f"not your claim: {rid} is not held by this key", "status": r["status"]}
-            elif (r["claim_nonce"] or "").lower() != claim_id.lower() and not _CONTROL_RELEASE_ANY_CLAIM:
+            elif not live:
+                code, out = 409, {"error": f"your claim on {rid} has already lapsed: the block is open to any "
+                                           f"prover", "status": "lapsed"}
+            elif not re.fullmatch(r"[0-9a-fA-F]{16,64}", r["claim_nonce"] or "") and not _CONTROL_RELEASE_ANY_CLAIM:
+                # an unsigned claim (any nonce, or none): it has no id a release can name, so it lapses by itself
+                code, out = 409, {"error": f"your claim on {rid} was made without a claim id a release can name "
+                                           f"(an unsigned claim): it cannot be released, and lapses by itself",
+                                  "status": "unreleasable"}
+            elif r["claim_nonce"].lower() != claim_id.lower() and not _CONTROL_RELEASE_ANY_CLAIM:
                 # This key holds the block, but under a claim made after the one this release names (a re-claim):
                 # that claim is not the release's to give back, and it is left exactly as it is.
                 code, out = 409, {"error": f"not this claim: this key holds {rid} under a later claim than the one "
                                            f"this release names, and that claim stays", "status": "reclaimed"}
-            elif not live:
-                code, out = 409, {"error": f"your claim on {rid} has already lapsed: the block is open to any "
-                                           f"prover", "status": "lapsed"}
             else:
                 c.execute("UPDATE ranges SET status='open', last_beat=NULL, claim_nonce=NULL "
                           "WHERE id=? AND status='claimed'", (rid,))

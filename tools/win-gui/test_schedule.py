@@ -182,6 +182,18 @@ a.feed("claimed block 1809 (yours for 60 min)", now=1500.0)
 a.feed("block 1809 was not released (rate limit); if it is still claimed, it reopens by itself", now=1501.0)
 check(a.holding == "1809", "a release that failed does not count as one")
 
+print("== the claim id goes with the block, and only a real claim line sets them ==")
+a = activity.Activity("run")
+a.feed("claimed block 1900 (claim 0123456789abcdef0123456789abcdef; yours for 60 min)", now=1.0)
+a.feed("✓ range 1900: the coordinator re-verified your proof and put it on the board as 'x'.", now=2.0)
+check(a.holding is None and a.holding_claim is None, f"on the board: block and claim both cleared ({a.holding_claim})")
+a.feed("claimed block 1901 (claim 0123456789abcdef0123456789abcdee; yours for 60 min)", now=3.0)
+a.feed("released block 1901: it is open to any prover again", now=4.0)
+check(a.holding is None and a.holding_claim is None, f"handed back: block and claim both cleared ({a.holding_claim})")
+a.feed("  hint: an earlier worker claimed block 1902 (claim 0123456789abcdef0123456789abcded; ...)", now=5.0)
+check(a.holding is None and a.holding_claim is None,
+      f"a line that only mentions a claim is not one: nothing held ({a.holding}, {a.holding_claim})")
+
 print("== handing back a claim from the app ==")
 cmd = supervisor.release_command("py", "C:/Hazync/hazync-worker", 1807, "3fa1c0de3fa1c0de3fa1c0de3fa1c0de")
 check(cmd == ["py", "C:/Hazync/hazync-worker", "release", "1807", "3fa1c0de3fa1c0de3fa1c0de3fa1c0de"],
