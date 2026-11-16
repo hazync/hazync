@@ -25,7 +25,8 @@ version's spine with a vendored copy of its recursion circuit (its fast form can
 3.1.0 Poseidon2 bug, risc0#3427; with software hashing a cross-version handover was proved on a GPU in 280 s). Only
 upgrades that are not soundness fixes may be handed over ([`docs/HANDOVER.md`](docs/HANDOVER.md)). The verifier keeps
 `8888d59c` and checks a receipt by it as that image. The sponsor bot skips a release still being signed instead of
-latching off (#728). The verifier's minimum chain work is Bitcoin Core v32.1's.
+latching off (#728). The verifier's minimum chain work is Bitcoin Core v32.1's. The host derives the BIP30-tracked
+coin flag as the guest does (#736): the previous host left it unset from block 147,396, so prep restarts from genesis.
 Notes: [`docs/RELEASE_NOTES_v0.26.0.md`](docs/RELEASE_NOTES_v0.26.0.md).
 <https://github.com/hazync/hazync/releases/tag/v0.26.0>
 

@@ -147,6 +147,8 @@ ROUTES = {
         "Keep the caller's own claim alive. Signed over `<range>:<ts>` with `ts` as integer seconds within "
         "`BEAT_SKEW`. Only the assignee of a live claim may beat it, and not past `CLAIM_MAX`. Rejected "
         "beats are logged (`log_beat_rejection`).",
+    "POST /api/release":
+        "Hand a claimed block back before its claim lapses (#725). Only the key holding a LIVE claim on `range` may release it; the row goes back to `open` and `claim()` offers it to anyone at once. `ts` integer seconds within `BEAT_SKEW`, `nonce` 16-64 hex. The same signed release sent again gets the first answer and changes nothing (nonces kept in memory for 2 x `BEAT_SKEW`); a nonce reused for another block is `409`. A verified block, a lapsed claim and someone else's claim are `409`, a block with no row `404`. Used by `hazync run` on SIGTERM/Ctrl-C and by `hazync release <n>`.",
     "POST /api/rotate":
         "Off by default: `410` unless `ROTATE_ENABLED=1` (#311). Key rotation (#113): both `old_pubkey` and "
         "`new_pubkey` sign `hazync-rotate-v1:<old>:<new>:<ts>` "
@@ -496,17 +498,42 @@ def _comments(path):
     return out
 
 
-def _returned_codes(fn):
-    codes = set()
+def _int_choices(node):
+    """The int literals an expression can be: a constant, or either arm of a conditional."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+        return {node.value}
+    if isinstance(node, ast.IfExp):
+        return _int_choices(node.body) | _int_choices(node.orelse)
+    return set()
+
+
+def _returned_codes(fn, funcs=None, _seen=None):
+    """Status codes a handler can return: `return 409, {...}` directly, `code, out = 404, {...}` followed by
+    `return code, out`, and — when `funcs` is given — the same inside the module-level helpers it returns
+    the result of (`return _release_row(...)` / `code, out = _helper(...)`), followed transitively."""
+    _seen = set() if _seen is None else _seen
+    if fn.name in _seen:
+        return set()
+    _seen.add(fn.name)
+    codes, returned_names = set(), set()
     for n in ast.walk(fn):
         if isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple) and n.value.elts:
             first = n.value.elts[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, int):
-                codes.add(first.value)
-            elif isinstance(first, ast.IfExp):
-                for b in (first.body, first.orelse):
-                    if isinstance(b, ast.Constant) and isinstance(b.value, int):
-                        codes.add(b.value)
+            codes |= _int_choices(first)
+            if isinstance(first, ast.Name):
+                returned_names.add(first.id)
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Tuple) \
+                and n.targets[0].elts and isinstance(n.targets[0].elts[0], ast.Name) \
+                and n.targets[0].elts[0].id in returned_names:
+            if isinstance(n.value, ast.Tuple) and n.value.elts:
+                codes |= _int_choices(n.value.elts[0])
+            elif funcs and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) \
+                    and n.value.func.id in funcs:
+                codes |= _returned_codes(funcs[n.value.func.id], funcs, _seen)
+        if funcs and isinstance(n, ast.Return) and isinstance(n.value, ast.Call) \
+                and isinstance(n.value.func, ast.Name) and n.value.func.id in funcs:
+            codes |= _returned_codes(funcs[n.value.func.id], funcs, _seen)
     return codes
 
 
@@ -537,7 +564,7 @@ def server_routes(path):
                     if n.func.id in funcs:
                         if not n.func.id.startswith("_") and n.func.id not in names:
                             names.append(n.func.id)
-                        codes |= _returned_codes(funcs[n.func.id])
+                        codes |= _returned_codes(funcs[n.func.id], funcs)
                     if n.func.id == "_int" and n.args and isinstance(n.args[0], ast.Constant):
                         if n.args[0].value not in params:
                             params.append(n.args[0].value)
@@ -600,7 +627,7 @@ def server_routes(path):
         problems.append(f"do_POST allow-list {sorted(allowed)} and dispatch table {sorted(dispatch)} disagree")
     for p in allowed:
         fn = funcs.get(dispatch.get(p, ""))
-        codes = _returned_codes(fn) if fn else set()
+        codes = _returned_codes(fn, funcs) if fn else set()
         routes.append({"method": "POST", "path": p, "prefix": None,
                        "handlers": [dispatch[p]] if p in dispatch else [], "codes": codes, "params": [],
                        "auth": _sig_checks(fn) if fn else [],
