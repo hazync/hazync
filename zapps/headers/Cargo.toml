@@ -8,20 +8,15 @@ publish = false
 
 # A zAPP module (docs/libzync/ZYNCAPPS.md §9), NOT part of the core verifier: it uses swiftsync-verify as a library
 # (receipt checks, images, work) and adds the header-chain check. The core never changes when a zAPP is added.
-# Own workspace, as the core verifier's crates.
+# The library only: the CLI is its own crate (cli/), so the library and its WASM module never link the CLI's
+# chain-identity lookups (zapps/common: curl, bitcoin-cli). Own workspace, as the core verifier's crates.
 
 [lib]
 name = "zapp_headers"
 path = "src/lib.rs"
 
-[[bin]]
-name = "zapp-headers"
-path = "src/main.rs"
-
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
-# The chain-identity flags every zAPP CLI takes (zapps/common)
-zapp-common = { path = "../common" }
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

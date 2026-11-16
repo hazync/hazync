@@ -76,5 +76,32 @@ const root = TX.header.slice(72, 136);
 t('  a 64-byte inner node as a transaction', 'fail', v.verifyHeaders({ receipts: [a, b], include: { height: 170, hash: H170, path: P170, txid: rev(root), tx: { ...TX, raw: inner, pos: 0, branch: [] } } }));
 const none = v.verifyHeaders({ receipts: [a, b] });
 want('nothing asked: included, included_demo and inclusion are null', [none.included, none.included_demo, none.inclusion], [null, null, null]);
+// The frame itself, by hand (the raw exports, not the glue): the glue's bytes pass, a byte past the end and a frame
+// cut short are refused before anything is verified.
+const ex = (await WebAssembly.instantiate(readFileSync(wasm), {})).instance.exports;
+const raw = (bytes) => {
+  const p = ex.alloc(bytes.length);
+  new Uint8Array(ex.memory.buffer, p, bytes.length).set(bytes);
+  const r = ex.verify_headers(p, bytes.length);
+  const n = new DataView(ex.memory.buffer).getUint32(r, true);
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
+};
+const enc = new TextEncoder();
+const parts = [a, b, enc.encode(process.env.HEADERS_IMAGE || ''), enc.encode(`200:${H}`), enc.encode('')];
+const fr = new Uint8Array(12 + parts.reduce((n, p) => n + 4 + p.length, 0));
+const dv = new DataView(fr.buffer);
+dv.setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), true);
+dv.setUint32(8, 2, true);
+let o = 12;
+for (const p of parts) { dv.setUint32(o, p.length, true); fr.set(p, o + 4); o += 4 + p.length; }
+const trailing = new Uint8Array(fr.length + 1); trailing.set(fr);
+for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo', ''],
+                                        ['frame: a byte past the end', trailing, 'fail', 'trailing'],
+                                        ['frame: cut short', fr.slice(0, fr.length - 1), 'fail', 'truncated']]) {
+  const r = raw(bytes);
+  const ok = r.verdict === want && (!why || r.checks.some((c) => !c.ok && c.what.includes(why)));
+  if (!ok) fails++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${r.verdict}`);
+}
 console.log(fails ? `WASM_HEADERS: ${fails} FAILED` : 'WASM_HEADERS_OK');
 process.exit(fails ? 1 : 0);
