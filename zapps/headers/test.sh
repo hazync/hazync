@@ -13,6 +13,10 @@ cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-headers
 bash test_headers_verify.sh "$T/release/zapp-headers"
 "$T/release/zapp-headers" --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 \
     ../../experimental/libzync-bench/headers/headers_0_tip.rcpt
+# the same chain with no tip source: valid, with Core's minimum work, but not shown to be the network's: DEMO, exit 2
+# (review 11-16: OK needs the chain identity, as every zAPP)
+set +e; "$T/release/zapp-headers" ../../experimental/libzync-bench/headers/headers_0_tip.rcpt > "$T/id.out"; e=$?; set -e
+[ $e = 2 ] && grep -q 'chain identity NOT checked' "$T/id.out" || { cat "$T/id.out"; echo "::error::the whole chain without a tip source: exit $e, want 2"; exit 1; }
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names block 200 as the
 # receipts do (DEMO: valid, below minimum work), one that names another block (FAIL)
 H=../../experimental/libzync-bench/headers
