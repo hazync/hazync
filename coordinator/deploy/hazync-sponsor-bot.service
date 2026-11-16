@@ -72,7 +72,10 @@ Restart=no
 # (timeout, refused connection, 5xx): skipped, the next timer run retries". Counted as success, so it neither
 # latches nor pages. The bot itself turns a streak (6 runs over >= 25 min, sponsor_bot.TRANSIENT_LATCH_*) into
 # a real failure, so a coordinator or GitHub that stays down still latches and alerts. Anything after a pod
-# is rented never exits 75.
+# is rented never exits 75 (main() refuses 75 if the run rented anything). The streak is
+# /var/lib/hazync/sponsor-bot/transient.json; a clean run, a latch, or 15 min without a failure reset it,
+# so after clearing .failed there is nothing else to clear. 12 in a row latch regardless of the clock.
+# ⚠ A drop-in that sets SuccessExitStatus= resets this: check `systemctl show -p SuccessExitStatus`.
 SuccessExitStatus=75
 
 # Write the latch on any non-success exit. $SERVICE_RESULT is systemd's own verdict, so this catches
