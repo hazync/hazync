@@ -56,6 +56,13 @@ printf '#!/bin/sh\nRISC0_DEV_MODE=1 exec "%s" "$@"\n' "$V" > "$T/devmode"; chmod
 V0=$V; V=$T/devmode
 case_ "RISC0_DEV_MODE set (the real receipt)"         1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
 V=$V0
+# an --image given is the only image the receipt may verify against (review 11-16): the network's current id given
+# explicitly refuses this 8888d59c receipt (the built-in default would accept it as an earlier image of the chain)
+IMG0=$IMG; IMG="--image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c"
+case_ "--image the current id, a receipt of an earlier image" 1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
+IMG=""
+case_ "no --image: the earlier image the receipt names"      2 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
+IMG=$IMG0
 case_ "a receipt with one seal bit flipped"           1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$C/mainnet_1_200_8888d59c_flipped.rcpt"
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that agrees (hash and
 # chainwork), one that names another block, and an --expect it contradicts

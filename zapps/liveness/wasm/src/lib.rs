@@ -88,10 +88,11 @@ pub extern "C" fn verify_liveness(ptr: *mut u8, len: usize) -> *const u8 {
             return Err("no liveness facts".to_string());
         }
         let expect = std::str::from_utf8(expect).map_err(|_| "expect: not UTF-8".to_string())?.trim().to_string();
-        Ok((receipt, image, anchor, now, lives, expect))
+        Ok((receipt, image, !image_hex.trim().is_empty(), anchor, now, lives, expect))
     })();
-    let (receipt, image, anchor, now, lives, expect) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
-    let o = zapp_liveness::verify_liveness(receipt, image, anchor, now, &lives, Some(expect.as_str()).filter(|e| !e.is_empty()), true);
+    let (receipt, image, pinned, anchor, now, lives, expect) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    // an image id given is the only image the receipt may verify against (pinned)
+    let o = zapp_liveness::verify_liveness(receipt, image, pinned, anchor, now, &lives, Some(expect.as_str()).filter(|e| !e.is_empty()), true);
     let rep = &o.report;
     // A fact is "ok" only under an OK verdict: under DEMO it holds on a chain not shown to be the network's.
     let demo = rep.verdict != Verdict::Ok;
@@ -102,7 +103,8 @@ pub extern "C" fn verify_liveness(ptr: *mut u8, len: usize) -> *const u8 {
     }).collect();
     ret(serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
-        "image": image.method_id_hex,
+        // the image the receipt verified against: the one given, or (none given) the earlier built-in image it names
+        "image": o.image.method_id_hex,
         "network": image.network,
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
         "height": rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail).map(|c| c.height),

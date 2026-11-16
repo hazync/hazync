@@ -114,14 +114,22 @@ fn check_main(a: Vec<String>) -> ! {
     let rb = rd(&files[0]);
     // chain identity (zapp-common): --mempool / --bitcoin-cli are asked for the block at the proof's height, which the
     // receipt gives, and their answer is checked as an --expect is
+    // only about a height the receipt has SHOWN: a receipt that does not verify asks no source (review 11-16)
+    let pinned = !image_hex.is_empty();
     let (expect, extra) = match id.needs_lookup() {
-        true => match zapp_corecheck::verify_core(&rb, image, anchor.clone(), now, None).report.state {
-            Some(cs) => zapp_common::expect_for_core(&id, image.network, &cs),
-            None => (id.expect.clone(), Vec::new()),
-        },
+        true => {
+            let pre = zapp_corecheck::verify_core(&rb, image, pinned, anchor.clone(), now, None).report;
+            match pre.state.filter(|_| pre.verdict != Verdict::Fail) {
+                Some(cs) => zapp_common::expect_for_core(&id, image.network, &cs),
+                None => (id.expect.clone(), Vec::new()),
+            }
+        }
         false => (id.expect.clone(), Vec::new()),
     };
-    let mut o = zapp_liveness::verify_liveness(&rb, image, anchor, now, &facts, expect.as_deref(), false);
+    let mut o = zapp_liveness::verify_liveness(&rb, image, pinned, anchor, now, &facts, expect.as_deref(), false);
+    if o.report.verdict != Verdict::Fail {
+        println!("  the receipt verified against image {} ({})", o.image.method_id_hex, o.image.network);
+    }
     if extra.iter().any(|c| !c.0) { o.report.verdict = Verdict::Fail; }
     o.report.checks.splice(0..0, extra);
     for (ok, what) in &o.report.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }

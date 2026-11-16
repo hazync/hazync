@@ -233,6 +233,9 @@ pub fn image_for(network: &str, image_hex: &str, coinlog: bool, product: bool) -
 pub struct Outcome {
     pub report: Report,
     pub tip_checked: bool,
+    /// The image the receipt verified against (zapp_corecheck::CoreCheck::image): the one given, or (none given) the
+    /// earlier built-in image of the chain that the receipt names.
+    pub image: &'static Image,
     pub facts: Vec<Result<String, String>>,
 }
 
@@ -241,12 +244,13 @@ pub struct Outcome {
 /// trusts, never the fact server), then check each liveness fact against the verified state. A fact that does not hold,
 /// or a receipt that does not verify, is FAIL; facts on a chain whose tip was not compared are at most DEMO.
 /// `need_claim`: refuse a question that does not claim its answer (the C ABI and WASM return only whether claims hold).
-pub fn verify_liveness(receipt: &[u8], image: &'static Image, anchor: Option<ChainState>, now: u64, facts: &[LivenessFact],
-                       expect: Option<&str>, need_claim: bool) -> Outcome {
+/// `pinned`: the caller named the image (an image id given): the receipt may verify against that image only.
+pub fn verify_liveness(receipt: &[u8], image: &'static Image, pinned: bool, anchor: Option<ChainState>, now: u64,
+                       facts: &[LivenessFact], expect: Option<&str>, need_claim: bool) -> Outcome {
     // the core receipt and the tip, as every zAPP checks them (zapp_corecheck): a wrong `expect` is a FAIL line in the
     // report's checks, not one of the facts
-    let core = zapp_corecheck::verify_core(receipt, image, anchor, now, expect);
-    let (mut rep, tip_checked) = (core.report, core.tip_checked);
+    let core = zapp_corecheck::verify_core(receipt, image, pinned, anchor, now, expect);
+    let (mut rep, tip_checked, used) = (core.report, core.tip_checked, core.image);
     let mut out = Vec::new();
     if rep.verdict == Verdict::Fail {
         // a receipt that did not verify (its journal is the prover's word), or a tip that is not the block the caller
@@ -267,7 +271,7 @@ pub fn verify_liveness(receipt: &[u8], image: &'static Image, anchor: Option<Cha
     if rep.verdict == Verdict::Ok && !tip_checked && !facts.is_empty() {
         rep.verdict = Verdict::Demo;
     }
-    Outcome { report: rep, tip_checked, facts: out }
+    Outcome { report: rep, tip_checked, image: used, facts: out }
 }
 
 /// The producer side (`zapp-liveness prove` / `zapp-liveness serve`): the proof for the outpoint `txid:vout` after

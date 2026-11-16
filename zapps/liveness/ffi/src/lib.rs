@@ -67,7 +67,9 @@ pub unsafe extern "C" fn zapp_liveness_verify(receipt: *const u8, receipt_len: u
         Err(e) => return fail(&format!("facts JSON liveness: {e}")),
     };
     if facts.is_empty() { return fail("no liveness facts"); }
-    let o = zapp_liveness::verify_liveness(slice(receipt, receipt_len), image, anchor, now, &facts, expect, true);
+    // an image id given is the only image the receipt may verify against (pinned)
+    let pinned = image_hex.is_some_and(|h| !h.trim().is_empty());
+    let o = zapp_liveness::verify_liveness(slice(receipt, receipt_len), image, pinned, anchor, now, &facts, expect, true);
     match o.report.verdict {
         Verdict::Ok => { write_msg(msg, msg_len, "every liveness claim holds on the proven chain, its tip the block expect names"); OK }
         Verdict::Demo => { write_msg(msg, msg_len, "the liveness claims hold, but the chain is not shown to be the network's (no matching expect, below minimum work, or from an anchor)"); DEMO }

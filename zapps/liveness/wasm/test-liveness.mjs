@@ -41,6 +41,16 @@ for (const [name, f, ask, want, rc, expect] of cases) {
   const why = (r.facts || []).map((x) => x.what).concat((r.checks || []).filter((c) => !c.ok).map((c) => c.what))[0] || '';
   console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(22)} ${r.verdict} (want ${want})  ${why.slice(0, 110)}`);
 }
+// review 11-16: an image id given is the only one the receipt may verify against (the current mainnet id given refuses
+// this 8888d59c receipt); none given, the earlier built-in image the receipt names verifies it and is reported
+for (const [name, imageHex, want, img] of [['image pinned: current id', '46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c', 'fail'],
+                                            ['no image id: reported', '', 'demo', '8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4']]) {
+  const r = v.verifyLiveness({ network: 'mainnet', image: 'product', imageHex, receipt: rd('mainnet_1_200_8888d59c.rcpt'),
+    liveness: [{ proof: hex('b170_0_at200.hex'), ask: `${T170}:0@200=unspent` }] });
+  const ok = r.verdict === want && (!img || r.image === img);
+  bad += !ok; cases.push(name);
+  console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(22)} ${r.verdict} (want ${want}) image ${r.image}`);
+}
 // The frame itself, by hand (the raw exports, not the glue): the glue's bytes pass, a byte past the end and a frame
 // cut short are refused before anything is verified.
 const ex = (await WebAssembly.instantiate(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_liveness_wasm.wasm', import.meta.url)), {})).instance.exports;
