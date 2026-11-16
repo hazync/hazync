@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Hazync, for visitors from Ooga Booga Land</title>
+<meta name="description" content="Hazync proves Bitcoin's whole history follows the rules, so anyone can check it in a web browser. Check a proof, help prove blocks, or watch the board.">
+<meta name="theme-color" content="#e3e7ea">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Hazync">
+<meta property="og:title" content="Hazync, for visitors from Ooga Booga Land">
+<meta property="og:description" content="Hazync proves Bitcoin's whole history follows the rules, so anyone can check it in a web browser. Check a proof, help prove blocks, or watch the board.">
+<meta property="og:url" content="https://hazync.org/ooga/">
+<meta property="og:image" content="https://hazync.org/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Hazync: sync Bitcoin from a proof, not from trust.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="fonts/schibsted.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- Hazync's independent land for Ooga Booga Land (https://oogabooga.land/). Source: ooga-land/ in
+     github.com/hazync/hazync; served at https://hazync.org/ooga/. Contract (ooga-land/README.md):
+     a literal return link with no referrer, no scripts, nothing loaded from another origin, nothing
+     read from the query, the fragment or document.referrer. scripts/check-ooga-land.sh enforces it. -->
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="wordmark" href="/" aria-label="Hazync home">
+      <i class="wm-anchored" aria-hidden="true"></i><i class="wm-proven" aria-hidden="true"></i><span>hazync</span>
+    </a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="/explorer/">Explorer</a></li>
+        <li><a href="/block-map/">Block map</a></li>
+        <li><a href="/zapps/">zAPPs</a></li>
+        <li><a href="/how-it-works/">How it works</a></li>
+        <li><a href="/contribute/">Contribute</a></li>
+        <li><a href="/donate/">Donate</a></li>
+        <li><a href="/partners/">Partners</a></li>
+        <li><a href="/devs/">Developers</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="wrap page-intro">
+    <h1 class="page-title">Welcome to Hazync</h1>
+    <p class="lede">Hazync proves that Bitcoin's whole history follows the rules, block by block, from the
+      very first one. The proof is small enough that anyone can check it in a web browser, without downloading
+      the chain and without trusting us.</p>
+    <p class="src">The work is under way, not finished: the board restarted on a new engine on
+      12&nbsp;November&nbsp;2026 and is proving the chain again from the first block.</p>
+    <p class="src">This is an independent site, not part of the game. Nothing comes with you from Ooga Booga
+      Land: no account, no character, no inventory.</p>
+    <div class="actions">
+      <a class="btn quiet" href="https://oogabooga.land/" rel="noopener noreferrer" referrerpolicy="no-referrer">Return to Ooga Booga Land</a>
+    </div>
+  </section>
+
+  <div class="wrap section">
+
+    <section class="way" id="do" aria-labelledby="do-title">
+      <div>
+        <h2 id="do-title">Things to do here</h2>
+        <p class="need">Pick one. None of them needs an account.</p>
+      </div>
+      <div class="prose">
+        <div class="panel">
+          <h3>Check a proof yourself</h3>
+          <p>The explorer runs Hazync's verifier inside your browser. Press <em>Check it on this device</em> under
+            the genesis proof: it checks the proof on your own device and reads out the last block it reaches.</p>
+          <p class="actions"><a class="btn" href="/explorer/#genesis-title">Check a proof</a></p>
+        </div>
+        <div class="panel">
+          <h3>Help prove the chain</h3>
+          <p>If you have an NVIDIA graphics card, it can prove blocks for the board. On Windows, the Hazync app
+            does it with no terminal: install it, give the board a name to credit, and press Start. Your name goes on the board next to
+            every block you prove.</p>
+          <p class="actions">
+            <a class="btn" href="https://github.com/hazync/hazync/releases/latest" target="_blank" rel="noopener">Download for Windows</a>
+            <a class="btn quiet" href="/contribute/#compute">Requirements, and Linux</a>
+          </p>
+          <p class="src">The download is <code>hazync-setup-x86_64-windows.exe</code> on the release page. It is
+            unsigned, so Windows warns the first time; the release's signed <code>SHA256SUMS.txt</code> lists it.</p>
+        </div>
+        <div class="panel">
+          <h3>Watch the board</h3>
+          <p>Every block in Bitcoin's history is one square on the block map, filling in as it is proven. The
+            leaderboard shows who proved them.</p>
+          <p class="actions">
+            <a class="btn" href="/block-map/">Open the block map</a>
+            <a class="btn quiet" href="/explorer/#provers-title">See the leaderboard</a>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="way" id="more" aria-labelledby="more-title">
+      <div>
+        <h2 id="more-title">Read more, or go back</h2>
+        <p class="need">All of Hazync is open source.</p>
+      </div>
+      <div class="prose">
+        <p><a href="/how-it-works/">How it works</a> explains the proving in plain terms. The code, the releases
+          and the issues are all on
+          <a href="https://github.com/hazync/hazync" target="_blank" rel="noopener">GitHub</a>. This page's own
+          source is <a href="https://github.com/hazync/hazync/tree/main/ooga-land" target="_blank" rel="noopener">ooga-land/</a> there.</p>
+        <div class="actions">
+          <a class="btn quiet" href="https://oogabooga.land/" rel="noopener noreferrer" referrerpolicy="no-referrer">Return to Ooga Booga Land</a>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <p>Hazync is open source under the MIT licence.
+      <a href="https://github.com/hazync/hazync" target="_blank" rel="noopener">Source on GitHub</a>,
+      discussion on <a href="https://delvingbitcoin.org/t/running-cores-real-consensus-code-inside-a-zkvm/2811" target="_blank" rel="noopener">Delving Bitcoin</a>.</p>
+    <p><a href="/donate/">What this costs, and how to help pay for it</a></p>
+    <p>Report security issues to the maintainer's PGP key<br>
+      <a class="fingerprint" href="https://github.com/defenwycke.gpg" target="_blank" rel="noopener">777F E81F 8CC0 77FD 3D08 055E 852C 2B31 90F5 B928</a></p>
+  </div>
+</footer>
+</body>
+</html>
