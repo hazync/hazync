@@ -81,11 +81,13 @@ chmod +x "$OUT/hazync-run-workers.sh"
 # it is in the signed manifest too. The glue takes the module's bytes or a fetch() of any URL, so the
 # rename costs a page nothing.
 cp swiftsync-verify-wasm/swiftsync-verify.js "$OUT/hazync-verify.js"
-if command -v cargo >/dev/null && rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then
-    ./swiftsync-verify-wasm/build.sh >/dev/null
+# build.sh runs in the pinned container reproduce/wasm.Dockerfile: the host needs docker, cargo (>= 1.78, to read the
+# crate graph), python3 and git, and NO wasm32 target of its own (the container brings Rust and its target).
+if command -v docker >/dev/null && command -v cargo >/dev/null && command -v python3 >/dev/null && command -v git >/dev/null; then
+    HAZYNC_WASM_REQUIRE_CLEAN=1 ./swiftsync-verify-wasm/build.sh >/dev/null
     cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm "$OUT/hazync-verify.wasm"
 else
-    echo "! skipping hazync-verify.wasm — no wasm32 target installed (rustup target add wasm32-unknown-unknown)" >&2
+    echo "! skipping hazync-verify.wasm — swiftsync-verify-wasm/build.sh needs docker, cargo, python3 and git on this machine" >&2
 fi
 
 echo "packaged into $OUT:"

@@ -205,8 +205,8 @@ if printf '%s' "$PKG_ERR" | grep -q "skipping hazync-verify.wasm"; then
     if [ -f "$DIST/hazync-verify.wasm" ]; then
         echo "  !    wasm NOT built here -- the staged $DIST/hazync-verify.wasm ($(sha256sum "$DIST/hazync-verify.wasm" | cut -c1-16)) is from elsewhere; step 4 checks its guest"
     else
-        echo "  !    wasm NOT built here and none is staged -- build it where wasm32 exists (./swiftsync-verify-wasm/build.sh)"
-        echo "       and copy it to $DIST/hazync-verify.wasm, or: rustup target add wasm32-unknown-unknown"
+        echo "  !    wasm NOT built here and none is staged -- build it on a machine with docker, cargo, python3 and git"
+        echo "       (./swiftsync-verify-wasm/build.sh, the pinned container) and copy it to $DIST/hazync-verify.wasm"
     fi
 else
     ok "worker + wasm packaged"
