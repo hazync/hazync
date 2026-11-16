@@ -49,7 +49,8 @@ flag 0x2000) are decompressed here; an entry that cannot be decoded is a FAILURE
 ⇒ A module with neither an sm_6x image nor PTX (the Linux release: sm_80+ only) is BLIND to this
 and is reported as such. `--sass` closes that gap with NVIDIA's `nvdisasm` (toolkit required, and
 slow: minutes for a 30 MB rv32im image), refusing `ATOM/RED ... .SYS` in one sm_70+ image per
-module. 📏 On the pre-fix Linux v0.18.5 CUDA host it finds `2 ATOM.E.ADD.STRONG.SYS` in rv32im only.
+module. 📏 On a pre-fix Linux release CUDA host (sm_80..sm_100) it finds `2 ATOM.E.ADD.STRONG.SYS`
+in rv32im only, in 4 minutes.
 """
 import os
 import re
