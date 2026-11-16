@@ -1336,6 +1336,16 @@ jobs:
         run: |
           cd coordinator
           python3 test_claim_sybil.py --control
+      - name: The coordinator sets _client_ip itself on every POST (a client cannot choose it)
+        # 15.11.2026: only /api/sponsor got it server-side, so claim()'s CLAIM_NEW_IP_MAX read a client-sent value
+        # (real workers send none: the cap never applied). Drives the real HTTP handler.
+        run: cd coordinator && python3 test_client_ip.py
+      - name: _client_ip POSITIVE CONTROL (do_POST as before the fix — must FAIL)
+        run: |
+          cd coordinator
+          if python3 test_client_ip.py --control; then
+            echo "::error::test_client_ip.py passed with the pre-fix do_POST: it cannot detect the bug"; exit 1
+          fi
       - name: A replayed public proof is refused before any verification (review 11-12, board #6)
         # A signed replay of a served proof (another range id, or the spine) used to cost a full STARK verification
         # and hold a verify slot. Now a lookup by receipt sha refuses it first.
