@@ -318,13 +318,15 @@ def fetch_worker(k, lo, hi, jobs, d, window):
         print(f"block {height}: {len(out['txs'])} txs, {n_meta} prevouts", flush=True)
 
 def supervise(lo, hi, d, window, jobs, od, follow):
-    """range/follow with --after-saves: the fetch workers run as a batch over [lo, top], and between polls this checks
+    """range/follow with --after-saves: the fetch workers run as a batch over [start, top], and between polls this checks
     prep's chain (check_prep) and, when the node's best block changes, the waiting files (scan_waiting): the batch is
-    stopped first, so no file fetched from the old chain is written after the scan."""
+    stopped first, so no file fetched from the old chain is written after the scan. A batch starts after prep's newest
+    COMPLETE save point, as the fetch always has: the files at or below it were consumed (state files above prep's real
+    position, left by an older run, must not move where fetching starts)."""
     import multiprocessing
     refuse_if_marked(d)
     tip = PrepTip(od)
-    batch, last_best, done_to = [], None, lo - 1
+    batch, last_best, done_to, batch_top = [], None, lo - 1, None
     def stop_batch():
         for x in batch: x.terminate()
         for x in batch: x.join()
@@ -343,8 +345,9 @@ def supervise(lo, hi, d, window, jobs, od, follow):
             else:
                 P = check_prep(d, od, tip)
             if P is not None:
-                if not follow and P >= hi:
-                    print(f"prep is at {P} >= {hi}: done", flush=True)
+                # range: done once prep has SAVED hi (its last block is always a save point)
+                if not follow and all((od / f"state_{hi}.{x}").exists() for x in ("json", "smt", "coinlog", "trie")):
+                    print(f"prep has saved {hi}: done", flush=True)
                     return
                 top = node_h if hi is None else min(hi, node_h)
                 if batch and all(not x.is_alive() for x in batch):
@@ -352,8 +355,8 @@ def supervise(lo, hi, d, window, jobs, od, follow):
                     if bad: raise SystemExit(f"{len(bad)} fetch worker(s) failed: exit codes {bad}")
                     done_to = max(done_to, batch_top)
                     batch.clear()
-                start = max(lo, P + 1, done_to + 1)
-                if not batch and start <= top:
+                if not batch and done_to < top:
+                    start = max(lo, max(complete_saves(od), default=0) + 1)
                     for q in d.glob("block_*.json.tmp"): q.unlink(missing_ok=True)   # a stopped worker's unfinished write
                     batch_top = top
                     batch[:] = [multiprocessing.Process(target=fetch_worker, args=(k, start, top, jobs, d, window)) for k in range(jobs)]

@@ -162,7 +162,7 @@ def case_above_tip():
             got = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(n - 5, n + 1)))
             before = files_hashes(d)
             node.reorg(3, "c", extra=2)                                   # fork at n-3, new tip n+2
-            want = {h: node.active[h] for h in range(n - 5, n + 3)}
+            want = {h: node.active[h] for h in range(51, n + 3)}          # from prep's save point 50 to the new tip
             same = wait_until(lambda: files_hashes(d) == want, 60)
             check(got and same and p.poll() is None and not (d / "REORG").exists(),
                   f"fork above prep's tip: waiting files {n - 2}..{n} replaced, {n + 1}..{n + 2} fetched, no marker, still running")
@@ -193,9 +193,27 @@ def case_node_behind_and_range_done():
               "node behind prep on its chain: waits, fetches nothing, no marker")
         node.active = full; node.extend("a", 5)                           # caught up and moved on to 45
         ok = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(41, 46)), 60)
-        prep_states(od, node, 45)
+        prep_states(od, node, 45, save=45)
         rc = p.wait(timeout=60)
         check(ok and rc == 0, f"range: fetched 41..45, exited 0 once prep reached hi (rc={rc})")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+def case_stale_states():
+    """State files above prep's newest save point left by an older run (the same chain): fetching still starts right
+    after the save point, where prep resumes, not after the stale files."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="fetch-reorg-"))
+    try:
+        (root / "fakecli.py").write_text(FAKE)
+        node = Node(root, 100)
+        od, d = root / "out", root / "blocks"
+        prep_states(od, node, 90, save=50)                                # saved at 50, stale states up to 90
+        p = fetcher(root, ["range", "1", "100", str(d), "--after-saves", str(od), "--jobs", "2"], {})
+        try:
+            ok = wait_until(lambda: all((d / f"block_{h}.json").exists() for h in range(51, 101)), 60)
+            check(ok and p.poll() is None and not (d / "REORG").exists(), "stale states above the save point: 51..100 fetched, no marker")
+        finally:
+            p.kill(); p.wait()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -225,6 +243,7 @@ if __name__ == "__main__":
         print("== forks above prep's tip, a node behind, range mode, fork-point")
         case_above_tip()
         case_node_behind_and_range_done()
+        case_stale_states()
         case_fork_point_deep()
         print("== the shipped window (W=288, J=2016)")
         for depth in (288, 289, 2017):
