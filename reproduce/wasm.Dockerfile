@@ -1,5 +1,6 @@
-# The pinned build environment of every WASM module: the core verifier's (swiftsync-verify-wasm/build.sh) and every
-# zAPP's (scripts/wasm-build.sh). Both scripts re-run themselves in it, so the bytes depend on the source alone.
+# The pinned build environment of every WASM module: the core verifier's (swiftsync-verify-wasm/build.sh) and, where the
+# zAPP modules are, every zAPP's (scripts/wasm-build.sh). Both re-run themselves in it, so the bytes depend on the
+# source alone. linux/amd64 only: the scripts build and run it with --platform linux/amd64 (rustup-init is x86_64).
 #
 # Why a container (measured 16.11.2026):
 #   - the STAGE PATH reached the bytes despite --remap-path-prefix: the core built f16b5b98 staged at
@@ -49,3 +50,5 @@ RUN test -n "$RUST_TOOLCHAIN" \
 # The build runs as the caller's uid (its output lands in the caller's checkout); cargo's registry cache goes to a
 # writable CARGO_HOME of its own (remapped out of the bytes like any CARGO_HOME).
 ENV CARGO_HOME=/tmp/cargo-home HAZYNC_WASM_IN_CONTAINER=1 HAZYNC_WASM_WITH_C=${WITH_C}
+# The marker the build scripts require besides HAZYNC_WASM_IN_CONTAINER: the variable set on a host never skips the container.
+RUN echo 'reproduce/wasm.Dockerfile' > /etc/hazync-wasm-build-container
