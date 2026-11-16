@@ -284,18 +284,18 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     }
     // The coin log and the trie (the host's stores), the BIP30 tree.
     let t = std::time::Instant::now();
-    let (utxo_roots, utxo_leaves, flips) = crate::lz::cl_apply(&ext, &appends, height);
+    let (utxo_roots, utxo_leaves, flips, cl_undo) = crate::lz::cl_apply(&ext, &appends, height);
     let undo = undo_of_block_json(j).0;
     let mut leaf_undo = None;
     phase(1, t);
     let t = std::time::Instant::now();
-    let trie_root = {
+    let (trie_root, trie_replaced) = {
         let mut g = crate::trie::TS.lock().unwrap();
         let ts = g.as_mut().expect("trie store not initialised");
         let r = ts.apply(&marks, &ins).unwrap_or_else(|e| panic!("prep: block {height}: the trie store refused the update: {e:?}"));
         ts.height = height as u64;
         ts.hash = tip_hash;
-        libzync::coinlog::h_of(&r)
+        (libzync::coinlog::h_of(&r), ts.last_apply_replaced() == Some(true))
     };
     phase(2, t);
     let tracked_new: Vec<([u8; 32], u32)> = ptxs.iter().filter(|p| tx_flags(p) != 0)
@@ -303,6 +303,12 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
         .filter(|t| t.1 > 0).collect();
     let in_smt_root = smt.root();
     let smt_w = crate::smt_advance_ex(smt, cb_txid, crate::cb_spendable_outputs(&coinbase), &cb_spends, grandfathered, &spend_tracked, &tracked_new);
+    // What undoes this block in each store (REORG.md §6, P1): lz_prep_cmd writes it as <out>/reorg/u_<h>.bin.
+    *crate::reorg::LAST.lock().unwrap() = Some(crate::reorg::UndoRecord {
+        height, hash: tip_hash, prev: prev.tip_hash, cl: cl_undo, trie_replaced,
+        trie_marks: marks.iter().map(|m| m.0).collect(), trie_inserts: ins.iter().map(|i| i.0).collect(),
+        smt_prior: smt_w.1.clone(),
+    });
 
     let utxo_value = prev.utxo_value.saturating_add(survivor_value).checked_sub(spent_value)
         .unwrap_or_else(|| panic!("prep: block {height} spends more than the log holds"));
@@ -365,6 +371,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     assert!(methods::COINLOG && methods::TRIE, "libzync-prep needs the product image (coin log + trie)");
     std::fs::create_dir_all(out).unwrap();
     crate::lz::lock_run_dirs(out);
+    // a reorg marker from the fetcher (REORG.md §4): nothing is applied, nothing is opened, until a person removes it
+    if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop(&format!("at the start: {} is there", m.display())); }
     let mut prev: ChainState = if anchor_path == "genesis" { crate::genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };
@@ -459,6 +467,13 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     let every: u32 = if crate::lz::cl_dir().is_some() {
         std::env::var("HAZYNC_PREP_SAVE_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1000).max(1)
     } else { 0 };
+    // The reorg undo records (REORG.md §6, P1): u_<h>.bin for the last J blocks, J = HAZYNC_PREP_UNDO_KEEP.
+    let undo_keep = crate::reorg::keep();
+    let undo_dir = crate::reorg::dir(out);
+    if undo_keep > 0 { std::fs::create_dir_all(&undo_dir).unwrap_or_else(|e| panic!("{}: {e}", undo_dir.display())); }
+    let pruned = crate::reorg::prune_at_start(&undo_dir, lo - 1, undo_keep);
+    if pruned > 0 { println!("  prep: removed {pruned} reorg undo record(s) outside ({}, {}]", (lo - 1).saturating_sub(undo_keep), lo - 1); }
+    let mut undo_synced = lo - 1;
     let t0 = std::time::Instant::now();
     let consume = std::env::var("HAZYNC_PREP_CONSUME").as_deref() == Ok("1");
     let mut consumed_from = lo;
@@ -469,18 +484,46 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             let f = format!("{dir}/block_{h}.json");
             let t = std::time::Instant::now();
             while !std::path::Path::new(&f).exists() {
+                // the fetcher stops at a reorg (REORG.md §4): so does prep, at once, rather than at this timeout
+                if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop(&format!("before block {h}: {} is there", m.display())); }
                 assert!(t.elapsed().as_secs() < wait_s, "{f}: not there after {wait_s} s (HAZYNC_PREP_WAIT_S); is the producer running?");
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
+        if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop(&format!("before block {h}: {} is there", m.display())); }
         let t = std::time::Instant::now();
-        let j = crate::read_block_json(dir, h);
+        let mut j = crate::read_block_json(dir, h);
         phase(4, t);
+        // A block that does not extend the state's tip (REORG.md §4; this was prep_block's assert, a crash loop under
+        // systemd): either the file is from a branch the fetcher has not yet replaced (a fork at or above h-1: it
+        // deletes and fetches it again) or the state itself is on an orphaned branch (the fetcher writes a marker).
+        // Fed by the fetcher, wait for one or the other; with static block files nothing will change, so stop.
+        if crate::reorg::prev_of(&j) != Some(prev.tip_hash) {
+            let why = format!("block {h} ({}) does not extend the state at {}", j["prev"], prev.height);
+            if !consume { crate::reorg::stop(&format!("{why}: block files from another chain")); }
+            println!("  prep: {why}: a reorg? waiting for the fetcher to replace the file or write its marker");
+            let t = std::time::Instant::now();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop(&format!("{why}, and {} is there", m.display())); }
+                // a replaced file arrives by rename, never half written; it may be absent for a moment in between
+                let again = std::fs::read_to_string(format!("{dir}/block_{h}.json")).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok());
+                if let Some(x) = again.filter(|x| crate::reorg::prev_of(x) == Some(prev.tip_hash)) {
+                    println!("  prep: block {h} was replaced by one that extends the state: carrying on");
+                    j = x;
+                    break;
+                }
+                if t.elapsed().as_secs() >= wait_s { crate::reorg::stop(&format!("{why} after {wait_s} s (HAZYNC_PREP_WAIT_S), and the fetcher wrote no marker")); }
+            }
+        }
         let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
         let t = std::time::Instant::now();
         let inner0 = { let p = PHASES.lock().unwrap(); p[0] + p[1] + p[2] };
         let (mut st, bundle) = prep_block(&prev, &j, &mut smt, &mut ecmh, want_leaf);
         { let mut p = PHASES.lock().unwrap(); let inner = p[0] + p[1] + p[2] - inner0; p[3] += t.elapsed().as_secs_f64() - inner; }
+        let undo = crate::reorg::LAST.lock().unwrap().take().expect("prep_block leaves its undo record");
+        assert!(undo.height == h && undo.hash == st.tip_hash, "prep: the undo record is not block {h}'s");
+        if undo_keep > 0 { crate::reorg::write(&undo_dir, &undo, undo_keep); }
         // the leaf bundle carries prev = S(h-1) as this run commits it (anchor_id, self_id and profile included)
         if let (Some(d), Some(b)) = (&leaves, bundle) {
             if let Some(n) = leaf_window {
@@ -515,6 +558,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         let save = each || h == hi || (every > 0 && h % every == 0);
         // the leaf bundles' renames since the last save point made durable before the save point that covers them
         if save { if let Some(d) = &leaves { crate::lz::cl_sync_dir(std::path::Path::new(d)); } }
+        // and the undo records up to h: every record at or below a complete save point survives a power loss
+        if save && undo_keep > 0 { crate::reorg::sync_since(&undo_dir, undo_synced, h); undo_synced = h; }
         let t = std::time::Instant::now();
         let json = serde_json::to_string(&st).unwrap();
         if save {

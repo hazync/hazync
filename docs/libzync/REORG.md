@@ -1,8 +1,9 @@
 # Reorg handling for the libzync board (design)
 
-> **Design only, 16.11.2026.** Nothing here is built. I wrote it from the repo at `797b777e` (main) and a read-only
-> survey of `hazync-proof` the same day. **MEASURED** numbers come from that survey or the files named next to them.
-> **ESTIMATE** numbers are labelled. Open questions for the user are in §14.
+> **Design, 16.11.2026; P1 and P2 built the same day** (branch `feat/reorg-p1-p2`, §15). The rest (P3 to P6) is not
+> built. I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
+> **MEASURED** numbers come from that survey or the files named next to them. **ESTIMATE** numbers are labelled. The
+> user's decisions on the open questions are in §14; what building P1 and P2 corrected in this page is in §15.
 
 The board is about to follow the chain tip. When it does, some blocks it has fetched, prepped and proved will be
 orphaned by a reorg. This page covers how each stage notices that, how the board undoes the orphaned blocks on its
@@ -14,11 +15,12 @@ own within a window, and what happens past that window.
 |---|---|
 | automatic window **W** | **288 blocks** (Core's `MIN_BLOCKS_TO_KEEP`; the v1 bridge used the same, `bridge.rs` `HAZYNC_BRIDGE_UNDO_KEEP`) |
 | undo journal kept **J** | **2,016 blocks** (2 weeks). It costs about 1 MB per block (ESTIMATE, §6), so keeping more than W is cheap. A fork deeper than W but within J **stops and alerts**, and a person then recovers with **one command**, without restarting prep from genesis |
-| beyond J | stop and alert; the only sound recovery is prep from genesis (§11) |
+| beyond J | stop and alert; the only sound recovery is prep from genesis (§11). **Decided:** no cold copies of the stores |
+| the tip run | **decided:** the paper prep (`libzync-prep`, `LZ_ROOT=/srv/bulk/libzync-prep`) follows the tip (§3) |
 | source of truth | the **board's prep run**: its `state_<h>.json` files say which chain the board proves. The **block fetcher** is the only stage with RPC, so it **detects** the reorg; **prep** carries it out; the **coordinator** follows prep's reorg records |
 | prep rewind | **per-block undo records** for the coin log, the trie and the BIP30 tree (§6, option B). Every piece already exists in the code, except the trie's undo across sessions |
 | coordinator | orphaned rows and files are **moved aside as records, not deleted**; the spine falls back to a kept head; a hash check when a submission commits closes the in-flight race |
-| confirmation margin | **none by default**. A depth knob for claims exists if wanted (`TIP_CLAIM_DEPTH`, default 0). Offsite copies wait **6 blocks** (§9) |
+| confirmation margin | **none (decided)**. A depth knob for claims exists if wanted (`TIP_CLAIM_DEPTH`, default 0). Offsite copies wait **6 blocks** (§9, decided) |
 | image id | **unchanged.** No guest change. No change to any on-disk format a v0.26.0 prep run writes (§1) |
 
 ## 1. Does this change the image id?
@@ -89,7 +91,7 @@ A run with a static `LZ_HI` at least J below the tip needs no rewind. It still g
 turns a reorg deeper than its distance from the tip into a stop, never a silent wrong chain. **What I need decided:**
 does tip proving read bundles and states from the paper run (the coordinator then needs a second bridge and state
 directory above some height), or does the board pass switch to `follow` once it catches up? This page assumes "the
-tip run" is whichever one it is.
+tip run" is whichever one it is. **Decided (16.11.2026): the paper prep is the tip run** (§14).
 
 ## 4. Detection
 
@@ -151,9 +153,13 @@ truncate. **The coin log, the trie and the BIP30 tree are what make this hard.**
 
 **How B works**, per block h:
 
-- **Write the record before the stores change**, as `reorg/u_<h>.bin` (magic, h, block hash, prev hash, the
-  three bodies, SHA-256), and sync it, the same way `cl_journal_append` handles `pending.bin`. `pending.bin` stays the
-  crash journal, unchanged. After each block, delete `u_<h-J>.bin`.
+- **Write the record right after the block is applied** (corrected in P1, §15: the BIP30 priors and the trie's
+  `replaced` flag exist only then), as `reorg/u_<h>.bin` (magic, h, block hash, prev hash, the three bodies,
+  SHA-256). It is made durable at the next save point, before that save point's state file, so every record at or
+  below a complete save point survives a power loss. Records above the newest save point are only ever needed in the
+  process that wrote them: a crash undoes those blocks (`pending.bin`, the trie's last flush), and the restart deletes
+  the records above its anchor and writes them again. `pending.bin` stays the crash journal, unchanged. After each
+  block, delete `u_<h-J>.bin`.
 - **Coin log:** `cl_undo_to(body, n)` exactly as the crash path uses it today; the record's body is the same bytes.
 - **Trie:** undo needs only each mark's and insert's **key** (`t_rm`, `t_unmark`). New
   `TrieStore::undo_recorded(keys, replaced)` refuses when `replaced` is true (a BIP30 re-creation, impossible after
@@ -182,7 +188,7 @@ mid-rewind goes through `out/REWIND` (§5).
 | `ranges` | rows with hi > F copied into `ranges_orphaned`, then deleted (rows are created on demand at submission) | record |
 | claims in flight (`ranges` claimed, `_fold_claims`) | voided. The worker's next beat gets the existing 409 "not your claim" | — |
 | `submissions` | untouched (append-only audit); one note row per epoch | yes |
-| `contributors.blocks` | **proposal:** keep the credit. The contributor proved a real block we asked for; the network orphaned it. Shown as "n orphaned" next to the count. The board's `proven` count excludes orphaned blocks. **User's call** (§14) | — |
+| `contributors.blocks` | **proposal:** keep the credit. The contributor proved a real block we asked for; the network orphaned it. Shown as "n orphaned" next to the count. The board's `proven` count excludes orphaned blocks. **Decided: kept** (§14) | — |
 | sponsorships marked `proven` over heights > F | back to `proving`, and their hold resumes | — |
 | `proofs/proof_<rid>.bin` | moved to `proofs/orphaned/E/` (it **must** move first, or the new chain's proof with the same id overwrites it) | yes, served at `/api/proof/orphaned/E/<rid>` |
 | spine | every accepted head is kept as `spine/heads/spine_<hi>.{bin,json}` for hi > tip − J (229 KB each: **66 MB for W, 0.46 GB for J**). If `spine.hi` > F, the newest kept head with hi ≤ F becomes `spine.bin`/`spine.json`, and the orphaned heads move to `spine/orphaned/E/` | yes |
@@ -237,7 +243,7 @@ the same name forever, and `check` alarms on the size difference.
   `ZAPP_ROOT`"). It becomes: run `libzync-prep-rewind <spine hi>` on its own stores (same host, same records), cut
   `history.bin` to `hi + 1` records (the record walk the script already does), and republish the three files. ⚠ It
   keeps its trie in memory, with a full snapshot per run. That cannot reach the mainnet tip in any case (the trie is
-  290 GB at 632,000), so it will have to share the tip run's stores. That is a separate question (§14).
+  290 GB at 632,000), so it will have to share the tip run's stores. **Decided:** it reads the tip run's stores (§14).
 - **Header-chain follower** (`coordinator/deploy/headers/`): already proves its run again each time; a reorg above its
   base needs nothing. A reorg below the base it already refuses.
 - **Leaf pruner:** keyed on the frontier, which drops after a rewind, so nothing changes.
@@ -298,17 +304,60 @@ asking.
 Each phase goes through a code review before its PR, and P3/P4 through more than one round, as the prep crash work
 did.
 
-## 14. Open questions for the user
+## 14. Decisions (the user, 16.11.2026)
 
-1. **D1:** which run follows the tip: the paper prep (reaches it in weeks; the coordinator then needs a second bridge
-   and state directory above some height) or the board pass once it catches up (§3)?
-2. **J = 2,016:** keep undo records for two weeks (~2 GB) so a deep reorg is a one-command recovery instead of an
-   8-day genesis restart? W stays 288 for the automatic path.
-3. **Contributor credit for orphaned proofs:** keep it (my proposal, shown as "n orphaned") or take it away?
-4. **Offsite depth delay of 6 blocks:** fine, given the local copy is immediate?
-5. **Claims margin:** default 0, so tip blocks are proved at once and a 1-block reorg wastes one leaf proof. Or 1,
-   which adds 10 min and avoids most of that waste?
-6. **zAPP facts at the tip:** the follower cannot hold a mainnet trie in memory. Should it read the tip run's stores
-   (history mode on that run)? It is outside reorg handling, but it decides what P5 changes.
-7. **Deep-reorg insurance below J:** periodic cold copies of the stores (~345 GB each, ESTIMATE ~2.4 h of prep stopped
-   per copy), or accept a genesis restart as the answer for forks deeper than two weeks?
+Each open question was decided as recommended:
+
+1. **D1, the tip run:** the **paper prep** (`libzync-prep`, `LZ_ROOT=/srv/bulk/libzync-prep`) follows the tip. The
+   coordinator will need a second bridge and state directory above some height (P4/P5).
+2. **J = 2,016:** undo records are kept for 2,016 blocks, on top of automatic handling within W = 288. A fork deeper
+   than W but within J is a one-command recovery (P3's `libzync-prep-rewind --allow-deep`).
+3. **Contributor credit for orphaned proofs:** kept, shown as "n orphaned" next to the count. The board's `proven`
+   count excludes orphaned blocks.
+4. **Offsite depth delay:** 6 blocks. Offsite copies upload only proofs (and spine heads) at least 6 blocks deep.
+5. **Claims margin:** 0. Tip blocks are claimed at once (`TIP_CLAIM_DEPTH` default 0).
+6. **zAPP facts at the tip:** read from the tip run's stores (history mode on the paper prep), not the follower's own
+   in-memory trie.
+7. **Forks deeper than J:** accept a genesis restart. No periodic cold copies of the stores.
+
+## 15. Built: P1 and P2 (16.11.2026)
+
+**P1, undo records** (`prover/host/src/reorg.rs`, `prep.rs`, `lz.rs`; `libzync/src/trie_store.rs` gains one accessor,
+`last_apply_replaced`, host only). Every block prep applies leaves `<out>/reorg/u_<h>.bin`: magic `LZUNDO01`, height,
+block hash, prev hash, the coin log body (byte for byte `pending.bin`'s record body, `cl_undo_body`), the trie's
+`replaced` flag and the KEYS of its marks and inserts, the BIP30 tree's `(key, prior)` list, SHA-256. Kept for J =
+`HAZYNC_PREP_UNDO_KEEP` blocks (default 2,016 with on-disk stores, 0 = none; in-memory runs default to 0). Nothing reads
+them yet. Tests show each part is enough to undo its block: the coin log body undoes random blocks on a disk store
+back to any earlier block (`lz.rs`), the trie keys undo random blocks in the session (`reorg.rs`), the BIP30 priors
+undo inserts and tracked spends (`reorg.rs`); on mainnet 1..200 the records match the states, are byte-identical after a
+crash and restart, and leave every state byte-identical to a run without them
+(`experimental/libzync-bench/prep/reorg_test.sh`).
+
+**P2, detect and stop** (`prover/fetch_block_rpc.py`, `prep.rs`, the four prep and fetch units, four `alert.conf`
+drop-ins). With `--after-saves`, `range` (and the new `follow`) check prep's newest `state_<h>.json` against the node
+every poll (5 s) and, when the node's best block changes, every waiting block file (its header hashed from the file).
+**P2 stops for every fork below prep's tip**: `blocks/REORG` with `class` `auto` (depth ≤ W, P3 will handle it with no
+person) or `manual` (W < depth ≤ J), or `blocks/REORG_TOO_DEEP` (no agreement within J), and exit 4. A fork above
+prep's tip only replaces the waiting files. Prep exits 4 while a marker is there, and in place of the `prep.rs:197`
+assert it waits for the fetcher (the file replaced, or a marker) up to `HAZYNC_PREP_WAIT_S`, then exits 4. The units:
+`RestartPreventExitStatus=3 4` (prep) and `4` (fetch), `OnFailure=hazync-alert@%n.service`. `fetch_block_rpc.py
+fork-point <out> [--deep]` is the runbook's step 2. **P2 recovery, until P3:** a person checks the reorg (§11 step 1),
+recovers the stores, then removes the marker from the block directory and starts both units.
+
+**What building it corrected in this page:**
+
+- **§6 "write the record before the stores change"** cannot hold for the BIP30 priors and the trie's `replaced` flag,
+  which exist only after the block is applied, and is not needed (see §6 as corrected). What is needed and was missing:
+  the restart must **delete the records above its anchor**, or P3 would read records of blocks a crash undid.
+- **§4 and §11 disagreed** on when `REORG_TOO_DEEP` is written (§4: no agreement within J; §11: within W). Built: J.
+  Depth ≤ W or ≤ J is the `class` in `REORG`.
+- **A node behind prep** (still syncing, or a reorg to a shorter chain) was not covered: comparing prep's tip with a
+  height the node does not have would read as a reorg. Built: compare at the node's height; on prep's chain, wait.
+- **§11 "nothing above [the fork] can verify"** is wrong while only P1 and P2 are in: no state file moves, so
+  `verify-any --check-end` still accepts proofs of the **orphaned** blocks up to prep's tip, and the frontier can grow on
+  them, until a person acts. Sound (they cannot join the new chain, §8), but the board can credit work on the orphaned
+  branch for that time. Only P3/P4 (moving the states) close it.
+- **The coordinator's hash check at commit** (listed in P2) can never fire while no state file moves: it belongs with
+  P3/P4 and was left to them.
+- **Waiting block files carry no hash.** The fetcher hashes each file's header (the first 4 KB hold the header fields
+  in every writer's key order; else the whole file), checked against the 200 mainnet test blocks' hashes.

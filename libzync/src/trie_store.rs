@@ -876,6 +876,11 @@ impl TrieStore {
         out
     }
 
+    /// Whether the last update applied in this session re-created a coin over its own spent record (BIP30, `s_ins`),
+    /// which `undo` cannot restore; None when none is applied. Prep's reorg undo records keep it
+    /// (prover/host/src/reorg.rs).
+    pub fn last_apply_replaced(&self) -> Option<bool> { self.applied.last().copied() }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut o = Wr(Vec::new(), 0);
         o.0.extend_from_slice(b"HZTRIE01");
@@ -1189,15 +1194,19 @@ mod tests {
             st.apply(&[], &[(c, None, 50), (other, None, 7)]).unwrap();
             st.apply(&[(c, [5, 0, 0, 0, 0, 0, 0, 0])], &[]).unwrap();
             let before_a = st.root();
+            assert_eq!(st.last_apply_replaced(), Some(false));
             st.apply(&[], &[(c, None, 50)]).unwrap();              // A: re-creates c over its spent record
+            assert_eq!(st.last_apply_replaced(), Some(true), "A is reported as a re-creation");
             let after_a = st.root();
             st.apply(&[], &[(later, None, 3)]).unwrap();           // B: an ordinary block
+            assert_eq!(st.last_apply_replaced(), Some(false));
             assert_eq!(st.undo(&[], &[(later, None, 3)]), Ok(after_a), "B undoes");
             assert_eq!(st.undo(&[], &[(c, None, 50)]), Err(TErr::Missing), "A, now the last, is refused");
             assert_eq!(st.root(), after_a);
             assert_ne!(st.root(), before_a);
             // a store loaded from a snapshot knows nothing of how its updates were applied: undo refused
             let mut back = TrieStore::from_bytes(&st.to_bytes()).unwrap();
+            assert_eq!(back.last_apply_replaced(), None, "nothing applied in a loaded store's session");
             assert_eq!(back.undo(&[], &[(c, None, 50)]), Err(TErr::Missing), "loaded store");
         }
     }

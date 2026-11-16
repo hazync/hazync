@@ -1426,17 +1426,29 @@ fn cl_record_span(body: &[u8]) -> (u64, u64) {
     (rd(0), rd(0) + rd(16 + 40 * k))
 }
 
-/// Disk mode: append this block's undo record to pending.bin and sync it, BEFORE the block changes the store.
-fn cl_journal_append(d: &std::path::Path, height: u32, store_len: u64, spends: &[(u64, [u8; 32])], appends: &[[u8; 32]]) {
-    use std::io::Write as _;
-    let mut b = Vec::new();
-    b.extend_from_slice(CL_PEND_MAGIC);
-    b.extend_from_slice(&(height as u64).to_le_bytes());
+/// A block's undo body, as cl_undo_to reads it: the leaf count before the block, the spends' (position, unspent leaf),
+/// the appends. pending.bin's records carry it (cl_journal_append), and so do prep's reorg undo records (reorg.rs).
+pub(crate) fn cl_undo_body(store_len: u64, spends: &[(u64, [u8; 32])], appends: &[[u8; 32]]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(24 + 40 * spends.len() + 32 * appends.len());
     b.extend_from_slice(&store_len.to_le_bytes());
     b.extend_from_slice(&(spends.len() as u64).to_le_bytes());
     for (p, l) in spends { b.extend_from_slice(&p.to_le_bytes()); b.extend_from_slice(l); }
     b.extend_from_slice(&(appends.len() as u64).to_le_bytes());
     for l in appends { b.extend_from_slice(l); }
+    b
+}
+
+/// Disk mode: append this block's undo record to pending.bin and sync it, BEFORE the block changes the store.
+fn cl_journal_append(d: &std::path::Path, height: u32, store_len: u64, spends: &[(u64, [u8; 32])], appends: &[[u8; 32]]) {
+    cl_journal_append_body(d, height, &cl_undo_body(store_len, spends, appends));
+}
+
+fn cl_journal_append_body(d: &std::path::Path, height: u32, body: &[u8]) {
+    use std::io::Write as _;
+    let mut b = Vec::with_capacity(16 + body.len() + 32);
+    b.extend_from_slice(CL_PEND_MAGIC);
+    b.extend_from_slice(&(height as u64).to_le_bytes());
+    b.extend_from_slice(body);
     { use sha2::Digest as _; let sum = sha2::Sha256::digest(&b); b.extend_from_slice(&sum); }
     let p = d.join("pending.bin");
     std::fs::OpenOptions::new().create(true).append(true).open(&p).and_then(|mut f| { f.write_all(&b)?; f.sync_data() })
@@ -1711,14 +1723,17 @@ pub(crate) fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainStat
 /// count instead of checking them against a committed state. In memory (a disk store's undo journal is cl_commit's).
 /// Also returns the block's flips (position, tx, vin) in spend order, as cl_commit does: a history.bin record
 /// (HAZYNC_PREP_HISTORY) is the same bytes whichever of prep or a proving run wrote it.
-pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) -> (Vec<Option<[u8; 32]>>, u64, Vec<(u64, u32, u32)>) {
+/// Also returns the block's undo body (cl_undo_body), the same bytes its pending.bin record carries, for prep's reorg
+/// undo record.
+pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) -> (Vec<Option<[u8; 32]>>, u64, Vec<(u64, u32, u32)>, Vec<u8>) {
     let mut g = CL.lock().unwrap();
     let h = g.as_mut().expect("coin log not initialised");
+    let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
+    let body = cl_undo_body(h.store.len(), &sp, appends);
     // Disk mode: journal the block first, as cl_commit (prep advances the store in place and saves only at its save
     // points, so a crash mid-range is undone back to the last one).
     if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
-        let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
-        cl_journal_append(&d, height, h.store.len(), &sp, appends);
+        cl_journal_append_body(&d, height, &body);
     }
     let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
@@ -1730,7 +1745,7 @@ pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) ->
         h.pos.insert(*l, h.store.len());
         h.store.push(*l);
     }
-    (h.store.roots(), h.store.len(), flips)
+    (h.store.roots(), h.store.len(), flips, body)
 }
 
 /// The guest's `undo: block <h> inputs <n> hash <hex>` line (agg_lite.rs) for block `h`: (inputs, hash).
@@ -1914,6 +1929,56 @@ mod journal_tests {
         let mut old = u.clone();
         old[..8].copy_from_slice(b"LZPEND02");
         assert!(cl_journal_records(&old).is_err());
+        // the record body is cl_undo_body's bytes: the reorg undo records (reorg.rs) carry the same ones
+        assert_eq!(r[0].1, &cl_undo_body(10, &[(3, [7; 32])], &[[1; 32], [2; 32]])[..]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// REORG.md §6 (P1): the coin log body an undo record carries undoes its blocks on a DISK store, newest first, back
+    /// to any earlier block, after a save point (no pending.bin involved), as P3's rewind will use it.
+    #[test]
+    fn undo_record_bodies_undo_blocks_on_a_disk_store() {
+        use libzync::coinlog::{spender, spent};
+        let d = std::env::temp_dir().join(format!("lz-undo-body-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(libzync::host::DiskNodes::open(&d).unwrap()));
+        let mut pos = libzync::host::AnyIndex::Mem(std::collections::HashMap::new());
+        let leaf = |i: u32| -> [u8; 32] { let mut l = [0u8; 32]; l[..4].copy_from_slice(&i.to_le_bytes()); l[31] = 1; l };
+        let mut next = 0u32;
+        let mut states = Vec::new();   // (leaf count, roots) after each block
+        let mut bodies = Vec::new();   // each block's undo body, through an undo record's encode/decode
+        let mut x = 7u64;
+        let mut rnd = || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        for blk in 0..40u32 {
+            // spend up to 3 live coins, append up to 4
+            let live: Vec<([u8; 32], u64)> = (0..store.len()).filter_map(|p| { let l = store.leaf(p); (pos.get(&l) == Some(p)).then_some((l, p)) }).collect();
+            let mut sp: Vec<(u64, [u8; 32])> = Vec::new();
+            for _ in 0..(rnd() % 4) {
+                if live.is_empty() { break; }
+                let (l, p) = live[(rnd() % live.len() as u64) as usize];
+                if !sp.iter().any(|s| s.0 == p) { sp.push((p, l)); }
+            }
+            let ap: Vec<[u8; 32]> = (0..(rnd() % 5)).map(|_| { next += 1; leaf(next) }).collect();
+            let body = cl_undo_body(store.len(), &sp, &ap);
+            let rec = crate::reorg::UndoRecord { height: blk + 1, hash: [0; 32], prev: [0; 32], cl: body, trie_replaced: false,
+                                                 trie_marks: vec![], trie_inserts: vec![], smt_prior: vec![] };
+            bodies.push(crate::reorg::UndoRecord::decode(&rec.encode()).unwrap().cl);
+            for (p, l) in &sp {
+                pos.remove(l);
+                store.set(*p, spent(l, &spender(blk + 1, 1, 0)));
+            }
+            for l in &ap { pos.insert(*l, store.len()); store.push(*l); }
+            states.push((store.len(), store.roots()));
+        }
+        // undo 40..=26 back to the state after block 25, then 25..=11 back to the one after block 10
+        for (from, to) in [(40usize, 25usize), (25, 10)] {
+            let n = states[to - 1].0;
+            for b in bodies[to..from].iter().rev() { cl_undo_to(&mut store, &mut pos, b, n); }
+            assert_eq!((store.len(), store.roots()), states[to - 1].clone(), "undone back to block {to}");
+            // the index is the state's too: every live coin found at its position
+            for p in 0..store.len() { let l = store.leaf(p); if let Some(q) = pos.get(&l) { assert_eq!(q, p); } }
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 }

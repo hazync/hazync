@@ -5,6 +5,11 @@
 #
 #   usage: python3 fetch_block_rpc.py <height> <out.json>
 #          python3 fetch_block_rpc.py range <lo> <hi> <dir> [--window N] [--jobs N] [--after-saves <prep out>]     (HAZYNC_RPC_CLI="bitcoin-cli" or "ssh <host> bitcoin-cli" for RPC via the CLI)
+#          python3 fetch_block_rpc.py follow <lo> <dir> --after-saves <prep out> [--hi H] [--window N] [--jobs N]
+#          python3 fetch_block_rpc.py fork-point <prep out> [--deep]
+#
+# With --after-saves, `range` and `follow` also watch the chain prep is on (docs/libzync/REORG.md §4): a fork below prep's
+# tip writes <dir>/REORG (or REORG_TOO_DEEP) and exits 4; a fork above it replaces the waiting block files.
 #
 # Why: fetch_block.py talks to blockstream/mempool and needs roughly one request per unique funding tx
 # (thousands for a modern block). That is rate-limited into hours, and 429s make it unreliable. A full
@@ -150,6 +155,213 @@ def build(height):
 
     return out, n_meta
 
+# ── Reorg detection (docs/libzync/REORG.md §4; phase P2: detect and stop, no rewind yet) ─────────────────────────────
+#
+# ONE comparison catches a reorg of any depth: if the node's active chain has prep's tip hash at prep's tip height, every
+# block below it is on the active chain too (headers chain by hash). If not, the fork F is the highest height at or
+# below prep's tip where prep's state_<h>.json and the node agree. Prep's states are the source of truth: they say
+# which chain the board proves.
+#
+#   a fork above prep's tip      the waiting block files above it are deleted and fetched again; nothing else changes
+#   a fork below prep's tip      <dir>/REORG (F, depth, the orphaned and the new hashes), exit 4. P2 stops for EVERY
+#                                such fork; P3 will rewind those within W by itself. Depth <= W is marked "auto" (P3
+#                                handles it), W < depth <= J "manual" (one command, the undo records reach it)
+#   no agreement within J        <dir>/REORG_TOO_DEEP, exit 4 (the undo records cannot reach F: REORG.md §11)
+#
+# Exit 4 is the units' RestartPreventExitStatus: the unit fails and its OnFailure alert fires. While a marker is in
+# <dir>, this fetcher and libzync-prep refuse to start (exit 4 again); a person removes it (REORG.md §11).
+EXIT_REORG = 4
+MARKERS = ("REORG", "REORG_TOO_DEEP")
+POLL_S = float(os.environ.get("HAZYNC_FETCH_POLL_S", "5"))
+W_AUTO = int(os.environ.get("HAZYNC_REORG_AUTO_DEPTH", "288"))      # W: the automatic window (P3)
+J_KEEP = int(os.environ.get("HAZYNC_PREP_UNDO_KEEP", "2016"))       # J: prep's undo records (reorg.rs)
+
+import re, struct, hashlib, time
+_HEAD = {k: re.compile(rf'"{k}":\s*(-?\d+)') for k in ("height", "version", "time", "bits", "nonce")}
+_HEAD.update({k: re.compile(rf'"{k}":\s*"([0-9a-f]{{64}})"') for k in ("prev", "merkle")})
+
+def header_hash(f):
+    """A block's hash (display hex) from its header fields as a block file carries them."""
+    hdr = (struct.pack("<I", int(f["version"]) & 0xffffffff) + bytes.fromhex(f["prev"])[::-1] + bytes.fromhex(f["merkle"])[::-1]
+           + struct.pack("<III", int(f["time"]), int(f["bits"]), int(f["nonce"])))
+    return hashlib.sha256(hashlib.sha256(hdr).digest()).digest()[::-1].hex()
+
+def file_block(p):
+    """(height, hash) of a block file, or None if it cannot be read. The header fields come before the transactions in
+    every writer's key order, so the first 4 KB are read (a mainnet block file is MBs); else the whole file."""
+    try:
+        with open(p, "rb") as fh: head = fh.read(4096).decode("utf-8", "replace")
+        f = {k: m.group(1) for k, r in _HEAD.items() for m in [r.search(head)] if m}
+        if len(f) < len(_HEAD):
+            j = json.load(open(p))
+            f = {k: j[k] for k in _HEAD}
+        return int(f["height"]), header_hash(f)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+def state_hash(od, h):
+    """The block hash (display hex) of prep's state_<h>.json, or None (absent, or a write in progress: prep writes the
+    states between save points in place)."""
+    try:
+        t = json.load(open(od / f"state_{h}.json"))["tip_hash"]
+        return bytes(t)[::-1].hex() if len(t) == 32 else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+def complete_saves(od):
+    """prep's COMPLETE save points (as libzync-prep-run.sh): a stop during a save leaves a newer partial one."""
+    return [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()
+            and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog", "trie"))] if od.exists() else []
+
+class PrepTip:
+    """prep's tip: its newest state_<h>.json that reads. Found by probing upward from the last one (a stat per height),
+    never by listing the out dir (632,587 files on the box)."""
+    def __init__(self, od):
+        self.od, self.h = od, max(complete_saves(od), default=0)
+    def get(self):
+        if self.h and not (self.od / f"state_{self.h}.json").exists():
+            self.h = max(complete_saves(self.od), default=0)          # moved away (a rewind, P3): start again
+        while (self.od / f"state_{self.h + 1}.json").exists(): self.h += 1
+        for h in range(self.h, max(self.h - 3, 0), -1):               # the newest may be half written
+            x = state_hash(self.od, h)
+            if x: return h, x
+        return 0, None
+
+def chain_info():
+    i = rpc("getblockchaininfo")
+    return int(i["blocks"]), i["bestblockhash"]
+
+def walk_back(od, top, limit):
+    """The fork: the highest h in [top - limit, top] where prep's state and the node agree, and the deepest height
+    compared. Repeated if the node's best block moves during the walk, so every hash compared is from one chain."""
+    while True:
+        _, best = chain_info()
+        fork, deepest = None, top
+        for h in range(top, max(top - limit, 0) - 1, -1):
+            deepest = h
+            if h == 0: fork = 0; break                                 # genesis: the same network's, always shared
+            x = state_hash(od, h)
+            if x is not None and x == rpc("getblockhash", [h]): fork = h; break
+        if chain_info()[1] == best: return fork, deepest
+
+def write_marker(d, name, body):
+    p = d / name
+    tmp = d / f".{name}.tmp"
+    tmp.write_text(json.dumps(body, indent=1) + "\n")
+    os.replace(tmp, p)
+    return p
+
+def refuse_if_marked(d):
+    for m in MARKERS:
+        if (d / m).exists():
+            print(f"FETCH_STOPPED_REORG {d / m} is there: a person decides (docs/libzync/REORG.md §11); remove it once "
+                  f"prep's stores are on the active chain", flush=True)
+            sys.exit(EXIT_REORG)
+
+def check_prep(d, od, tip, limit=None):
+    """The detection check against prep's tip. Returns prep's tip height, or None while the node is behind prep (a node
+    still syncing: nothing can be decided, and nothing is fetched). A fork below prep's tip writes the marker and exits."""
+    limit = J_KEEP if limit is None else limit
+    P, hp = tip.get()
+    if P == 0: return 0
+    node_h, best = chain_info()
+    at = min(P, node_h)
+    if at == P and rpc("getblockhash", [P]) == hp: return P
+    if at < P and state_hash(od, at) == rpc("getblockhash", [at]):
+        print(f"the node is at {node_h}, below prep's tip {P}, on prep's chain: waiting for it", flush=True)
+        return None
+    fork, deepest = walk_back(od, at, limit)
+    if fork is not None and fork >= at:
+        return P if at == P else None    # the node moved between the two looks and now agrees: nothing to stop for
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if fork is None:
+        p = write_marker(d, "REORG_TOO_DEEP", {"prep_tip": P, "prep_tip_hash": hp, "node_tip": node_h, "node_best": best,
+                                               "deepest_compared": deepest, "J": J_KEEP, "at": now,
+                                               "next": "fetch_block_rpc.py fork-point <prep out> --deep; REORG.md §11"})
+        print(f"FETCH_STOPPED_REORG no agreement with prep's states from {at} down to {deepest} (J={J_KEEP}): {p}", flush=True)
+        sys.exit(EXIT_REORG)
+    depth = P - fork
+    orphaned = [[h, state_hash(od, h)] for h in range(fork + 1, P + 1)]
+    new = [[h, rpc("getblockhash", [h])] for h in range(fork + 1, min(P, node_h) + 1)]
+    cls = "auto" if depth <= W_AUTO else "manual"
+    p = write_marker(d, "REORG", {"fork": fork, "fork_hash": rpc("getblockhash", [fork]) if fork else None, "prep_tip": P,
+                                  "depth": depth, "class": cls, "W": W_AUTO, "J": J_KEEP, "node_tip": node_h,
+                                  "node_best": best, "orphaned": orphaned, "new": new, "at": now})
+    print(f"FETCH_STOPPED_REORG prep's tip {P} is not on the node's chain: fork at {fork}, depth {depth} ({cls}; "
+          f"W={W_AUTO}, J={J_KEEP}): {p}", flush=True)
+    sys.exit(EXIT_REORG)
+
+def scan_waiting(d, above, node_h):
+    """Deletes every waiting block file above `above` that is not the node's block at its height (or that cannot be
+    read). Called with no fetch worker running. Returns the heights deleted."""
+    gone = []
+    for q in d.glob("block_*.json"):
+        if not q.name[6:-5].isdigit(): continue
+        h = int(q.name[6:-5])
+        if h <= above: continue
+        fb = file_block(q)
+        if fb is None or fb[0] != h or h > node_h or fb[1] != rpc("getblockhash", [h]):
+            q.unlink(missing_ok=True)
+            gone.append(h)
+    if gone: print(f"replaced: {len(gone)} waiting block file(s) not on the node's chain, from {min(gone)}", flush=True)
+    return gone
+
+def fetch_worker(k, lo, hi, jobs, d, window):
+    for height in range(lo + k, hi + 1, jobs):
+        p = d / f"block_{height}.json"
+        if p.exists(): continue
+        # files waiting below this height: only those count, so the block prep needs next is never held back
+        while window and sum(1 for q in d.glob("block_*.json") if q.name[6:-5].isdigit() and int(q.name[6:-5]) < height) >= window:
+            time.sleep(1)
+        out, n_meta = build(height)
+        write(out, p)
+        print(f"block {height}: {len(out['txs'])} txs, {n_meta} prevouts", flush=True)
+
+def supervise(lo, hi, d, window, jobs, od, follow):
+    """range/follow with --after-saves: the fetch workers run as a batch over [lo, top], and between polls this checks
+    prep's chain (check_prep) and, when the node's best block changes, the waiting files (scan_waiting): the batch is
+    stopped first, so no file fetched from the old chain is written after the scan."""
+    import multiprocessing
+    refuse_if_marked(d)
+    tip = PrepTip(od)
+    batch, last_best, done_to = [], None, lo - 1
+    def stop_batch():
+        for x in batch: x.terminate()
+        for x in batch: x.join()
+        batch.clear()
+    try:
+        while True:
+            node_h, best = chain_info()
+            if best != last_best:
+                stop_batch()
+                P = check_prep(d, od, tip)
+                # above prep's tip only: the files from its last save point up to it are on the chain just checked,
+                # and a restarted prep needs them
+                gone = scan_waiting(d, tip.h, node_h)
+                if gone: done_to = min(done_to, min(gone) - 1)
+                last_best = best
+            else:
+                P = check_prep(d, od, tip)
+            if P is not None:
+                if not follow and P >= hi:
+                    print(f"prep is at {P} >= {hi}: done", flush=True)
+                    return
+                top = node_h if hi is None else min(hi, node_h)
+                if batch and all(not x.is_alive() for x in batch):
+                    bad = [x.exitcode for x in batch if x.exitcode != 0]
+                    if bad: raise SystemExit(f"{len(bad)} fetch worker(s) failed: exit codes {bad}")
+                    done_to = max(done_to, batch_top)
+                    batch.clear()
+                start = max(lo, P + 1, done_to + 1)
+                if not batch and start <= top:
+                    for q in d.glob("block_*.json.tmp"): q.unlink(missing_ok=True)   # a stopped worker's unfinished write
+                    batch_top = top
+                    batch[:] = [multiprocessing.Process(target=fetch_worker, args=(k, start, top, jobs, d, window)) for k in range(jobs)]
+                    for x in batch: x.start()
+            time.sleep(POLL_S)
+    finally:
+        stop_batch()
+
 def write(out, path):
     tmp = f"{path}.tmp"
     with open(tmp, "w") as f: json.dump(out, f)
@@ -159,8 +371,26 @@ def main():
     # range <lo> <hi> <dir> [--window N]: every block lo..hi into <dir>/block_<h>.json (existing files kept), waiting
     # while N block files are already waiting to be consumed (libzync-prep with HAZYNC_PREP_CONSUME=1 deletes each
     # after use), so a whole-chain prep never needs the whole chain's JSON on disk.
+    if sys.argv[1] == "fork-point":
+        # fork-point <prep out> [--deep]: where prep's chain and the node's part, without the J limit with --deep
+        # (REORG.md §11 runbook step 2). Read-only.
+        od = pathlib.Path(sys.argv[2])
+        P, hp = PrepTip(od).get()
+        node_h, best = chain_info()
+        at = min(P, node_h)
+        if P and at == P and rpc("getblockhash", [P]) == hp: fork, deepest = P, P
+        else: fork, deepest = walk_back(od, at, at if "--deep" in sys.argv else J_KEEP)
+        depth = None if fork is None else P - fork
+        print(json.dumps({"prep_tip": P, "node_tip": node_h, "fork": fork, "depth": depth, "deepest_compared": deepest,
+                          "within_W": depth is not None and depth <= W_AUTO, "within_J": depth is not None and depth <= J_KEEP}))
+        return
+    if sys.argv[1] == "follow":
+        # follow <lo> <dir> --after-saves <prep out> [--hi H]: as range, to the node's tip as it moves (REORG.md §4)
+        if "--after-saves" not in sys.argv: raise SystemExit("follow needs --after-saves <prep out>: it checks the chain prep is on")
+        sys.argv[1:4] = ["range", sys.argv[2], sys.argv[sys.argv.index("--hi") + 1] if "--hi" in sys.argv else "follow", sys.argv[3]]
     if sys.argv[1] == "range":
-        lo, hi, d = int(sys.argv[2]), int(sys.argv[3]), pathlib.Path(sys.argv[4])
+        follow = sys.argv[3] == "follow"
+        lo, hi, d = int(sys.argv[2]), None if follow else int(sys.argv[3]), pathlib.Path(sys.argv[4])
         window = int(sys.argv[sys.argv.index("--window") + 1]) if "--window" in sys.argv else 0
         # --jobs N: N processes, process k fetching heights lo+k, lo+k+N, ... (RPC and JSON decoding are the cost)
         jobs = int(sys.argv[sys.argv.index("--jobs") + 1]) if "--jobs" in sys.argv else 1
@@ -178,17 +408,10 @@ def main():
         d.mkdir(parents=True, exist_ok=True)
         # ⛔ prep with HAZYNC_PREP_CONSUME=1 deletes files only at its SAVE POINTS: the window must be larger than
         # HAZYNC_PREP_SAVE_EVERY, or the producer waits for a save that waits for the producer
-        def worker(k):
-            import time
-            for height in range(lo + k, hi + 1, jobs):
-                p = d / f"block_{height}.json"
-                if p.exists(): continue
-                # files waiting below this height: only those count, so the block prep needs next is never held back
-                while window and sum(1 for q in d.glob("block_*.json") if q.name[6:-5].isdigit() and int(q.name[6:-5]) < height) >= window:
-                    time.sleep(1)
-                out, n_meta = build(height)
-                write(out, p)
-                print(f"block {height}: {len(out['txs'])} txs, {n_meta} prevouts", flush=True)
+        if "--after-saves" in sys.argv:
+            supervise(lo, hi, d, window, jobs, od, follow)
+            return
+        def worker(k): fetch_worker(k, lo, hi, jobs, d, window)
         if jobs == 1:
             worker(0)
             return
