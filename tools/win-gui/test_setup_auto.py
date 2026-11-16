@@ -59,7 +59,7 @@ if CONTROL:
 else:
     check(r["build"] == "cpu", f"a 6.1 card is sent to the CPU build (got {r['build']})")
     check("7.0" in r["why"], "and the reason names the floor it fails")
-    check("hazync#631" in r["why"], "and points at the issue, not just a verdict")
+    check("hazync#727" in r["why"], "and points at the issue, not just a verdict")
 
 print("── 2. an eligible card gets CUDA and a segment size from its VRAM ──")
 for name, want_build in (("RTX 4090", "cuda"), ("RTX PRO 6000", "cuda")):
@@ -82,7 +82,8 @@ print("── 4. ⚠ an extrapolated number must SAY it is extrapolated ──")
 r = supervisor.recommend(CARDS["RTX 4090"])
 check("extrapolated" in r["why"], "the suggestion says where it came from")
 r = supervisor.recommend(CARDS["GTX 1050 Ti"])
-check("hazync#631" in r["why"], "and an unproven workaround is labelled unproven")
+check("hazync#727" in r["why"] and "unproven" in r["why"],
+      "and the workaround says what is proved (one card) and that the rest is unproven")
 
 print("── 5. ⛔⛔ importing a key must never destroy the one already there ──")
 d = tempfile.mkdtemp()

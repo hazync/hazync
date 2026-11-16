@@ -47,8 +47,10 @@ import cards  # noqa: E402
 import firstrun  # noqa: E402
 import gpuprep  # noqa: E402
 import hazync_api as api  # noqa: E402
+import provewindow as schedule  # noqa: E402  (not "schedule": a PyPI package of that name exists)
 import supervisor  # noqa: E402
 import theme  # noqa: E402
+import winpower  # noqa: E402
 
 POLL_MS = 150
 
@@ -65,6 +67,10 @@ SEG_CHOICES = [
     ("17", "17 — about 1.5 GB; smaller cards"),
 ]
 REFRESH_S = 60          # the website refreshes the map every minute; match it rather than hammer
+SCHEDULE_TICK_MS = 15000   # how often the proving window is looked at (#725); wall clock each time, so a sleep or a
+                           # clock change is caught on the next tick
+SCHEDULE_DEFAULT = {"on": False, "start": "23:00", "end": "07:00", "days": list(range(7)),
+                    "keep_awake": True, "wake": False}
 
 
 class Worker:
@@ -79,6 +85,7 @@ class Worker:
         self.stopping = False
         self.activity = activity.Activity(job)
         self.heard = time.time()         # when the prover last printed anything at all
+        self.env = None                  # the environment it runs in: a release after a stop needs the same key
 
 
 class App(tk.Tk):
@@ -113,8 +120,18 @@ class App(tk.Tk):
         self._events = []                # (clock time, sentence, tag) for the Home feed
         self._landed = {j: 0 for j in activity.JOBS}     # what has landed since the window opened
         self._diag_running = None
+        # #725: proving on a schedule. `_armed` is "Start was pressed with the schedule on": work starts when the
+        # window opens and drains when it closes, until Stop. `_skip_until` is the end of a window in which no
+        # block could finish in time, so it is not asked again every tick.
+        self.sched = dict(SCHEDULE_DEFAULT, **(self.cfg.get("schedule") or {}))
+        self.block_times = {k: list(v) for k, v in (self.cfg.get("block_times") or {}).items()}
+        self._armed = False
+        self._skip_until = None
+        self._awake = False
+        self._drain_said = False
         self._build()
         self.after(1000, self._home_tick)
+        self.after(SCHEDULE_TICK_MS, self._schedule_tick)
         self.after(POLL_MS, self._drain)
         self.after(400, self.refresh)
         self.after(700, self.rescan)
@@ -173,6 +190,7 @@ class App(tk.Tk):
         self._tab_run()
         self._tab_settings()
         self._tab_log()
+        self._tab_schedule()
         self.mode.trace_add("write", lambda *_: self._paint_tiles())
         self._paint_tiles()
         self._sync_buttons()
@@ -332,7 +350,7 @@ class App(tk.Tk):
         """Start and Stop say what they will do, and only one of them is ever live."""
         if not hasattr(self, "start_btn"):
             return
-        running = bool(self.workers) or bool(self._respawns)
+        running = bool(self.workers) or bool(self._respawns) or self._armed
         self.start_btn.configure(text=self.START_TEXT.get(self.mode.get(), "Start"),
                                  state="normal" if (self._setup_ok and not running) else "disabled")
         self.stop_btn.configure(state="normal" if running else "disabled")
@@ -443,7 +461,11 @@ class App(tk.Tk):
             self.v_meta.set(" · ".join(bits))
             return
         self.v_meta.set((self._session_line() + " this session") if self._session_line() else "")
-        if self._respawns:
+        if self._armed and not self._respawns:
+            self.v_head.set("Waiting for the proving window")
+            self.v_sub.set(self._waiting_sentence(now))
+            self._set_bar(None, busy=False)
+        elif self._respawns:
             # between two blocks (or two folds): the next start is scheduled, so this is not "ready when you are"
             self.v_head.set("Taking the next one…")
             self.v_sub.set("The last one finished; the next starts in a moment. Stop ends the session.")
@@ -774,7 +796,9 @@ class App(tk.Tk):
                 "force_gpu": bool(self.force_gpu.get()),
                 "cards_off": sorted(self.cards_off),
                 "also_fold": bool(self.also_fold.get()),
-                "gpu_prepared": sorted(set(self.cfg.get("gpu_prepared") or []))}
+                "gpu_prepared": sorted(set(self.cfg.get("gpu_prepared") or [])),
+                "schedule": dict(self.sched),
+                "block_times": {k: list(v) for k, v in self.block_times.items()}}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -1311,7 +1335,7 @@ class App(tk.Tk):
         ttk.Checkbutton(bi, variable=self.force_gpu,
                         command=lambda: self._show_cards(getattr(self, "_found_cards", [])),
                         text="Try my GPU even if it is below the supported floor "
-                             "\u2014 unproven, and known to fail on Pascal (hazync#631)"
+                             "\u2014 proved on one GTX 1050 Ti; other older cards unproven (hazync#727)"
                         ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
         bi.columnconfigure(1, weight=1)
         ttk.Button(build, text="Work it out for me", style="Accent.TButton",
@@ -1558,6 +1582,28 @@ class App(tk.Tk):
             self._open_advanced(2)
             return
         self._problem = ""
+        if self.mode.get() == "range" and not self.range_var.get().strip():
+            messagebox.showerror("No range", "Enter a range, or let the coordinator choose.")
+            return
+        if self.sched.get("on"):
+            window = self._window()
+            if window is None:
+                messagebox.showerror("Proving window", "The proving window under Advanced → Schedule is not "
+                                     "valid. Fix it there, or switch the schedule off.")
+                return
+            self._armed = True
+            self._skip_until = None
+            self._feed(f"Proving on a schedule: {window.describe()}")
+            if not window.is_open(time.time()):
+                self._feed(self._waiting_sentence(time.time()))
+                self._sync_buttons()
+                self._home_refresh()
+                self._apply_awake()
+                return
+        self._launch()
+
+    def _launch(self):
+        """Start the workers for the chosen job (the body of Start; the schedule calls it when a window opens)."""
         mode = self.mode.get()
         extra = ()
         job = "run"
@@ -1587,6 +1633,21 @@ class App(tk.Tk):
         plan = cards.plan(found, job, self.nworkers.get(), cuda_build=cuda,
                           skip=self.cards_off, floor=floor)
         names = cards.labels(cards.usable(found, floor))
+        if self._armed and job == "run" and not extra:
+            # #725: a card that could not finish a block before the window closes takes none
+            keep = []
+            for card in plan:
+                ok, why = self._may_take_block(card)
+                if ok:
+                    keep.append(card)
+                else:
+                    self._feed(f"Not taking a block{' on ' + names.get(card['index'], '') if card else ''}: {why}")
+            if not keep:
+                self._skip_rest_of_window()
+                self._sync_buttons()
+                self._home_refresh()
+                return
+            plan = keep
         for i, card in enumerate(plan, 1):
             self._spawn(i, base, job, extra, card=card,
                         label=names.get(card["index"], "") if card else "")
@@ -1694,11 +1755,16 @@ class App(tk.Tk):
             # ⚠ The card THIS worker was given when it was given one: the floor is lowered for the
             # card that needs it, not for a modern card that happens to sit beside an old one.
             g = card or supervisor.gpu_facts()
-            if g and g["cc_major"] < 7:
+            if g and 6 <= g["cc_major"] < 7:
                 floor = g["cc_major"]
                 self._say(f"[setup] trying your {g['name']} anyway — HAZYNC_SPPARK_MIN_MAJOR="
-                          f"{floor} lowers sppark's floor. This is unproven; if it fails, the CPU "
-                          f"build works.", "sys")
+                          f"{floor} lowers sppark's floor. Proved on one GTX 1050 Ti; other older "
+                          f"cards are unproven. If it fails, the CPU build works.", "sys")
+            elif g and g["cc_major"] < 6:
+                # ⚠ No build carries code below sm_61, and sppark refuses a floor under 6.
+                self._say(f"[setup] your {g['name']} is compute {g['cc_major']}.{g['cc_minor']}: "
+                          f"this build has no GPU code for it, so the opt-in cannot help. Use the "
+                          f"CPU build.", "sys")
         env = supervisor.worker_env(self.host_var.get(), self.worker_var.get(),
                                     self.ident_var.get() or None, bundle,
                                     coord_url=self.coord_var.get().strip() or None,
@@ -1714,6 +1780,7 @@ class App(tk.Tk):
         # ⛔ encoding="utf-8": the worker is told PYTHONIOENCODING=utf-8, and text=True alone decodes with the LOCALE's
         # (cp1252 on Windows), so its "✓" arrived as "âœ“" (Xesktop, 11-13). test_log_visible.py checks a ✓ survives.
         w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
+        w.env = env
         if job == "run" and extra:
             w.activity.set_range(extra[0])
         self.workers.append(w)
@@ -1763,7 +1830,13 @@ class App(tk.Tk):
         w, line = arg
         w.heard = time.time()
         before = w.activity.done
-        event = w.activity.feed(line)
+        event = w.activity.feed(line, now=w.heard)
+        if w.activity.last_block_s:
+            # #725: this card's time per block, claim to board, for "can a block finish before the window ends"
+            k = self._card_key(w.card)
+            self.block_times[k] = schedule.remember(self.block_times.get(k), w.activity.last_block_s)
+            w.activity.last_block_s = None
+            self._persist()
         if getattr(self, "_gpu_prep", None) and w.activity.pieces:
             self.cfg["gpu_prepared"] = sorted(set(self.cfg.get("gpu_prepared") or [])
                                               | {gpuprep.card_key(c) for c in self._gpu_prep})
@@ -1797,6 +1870,8 @@ class App(tk.Tk):
             if w.stopping:
                 self._say(f"[{w.job} {w.index}] stopped")
                 self._feed("Stopped")
+                if w.activity.holding:
+                    self._release(w)
                 continue
             kind, msg = supervisor.classify_exit(rc, saw_cuda_error=getattr(w, "saw_cuda_error", False))
             # ⛔ THE DEFAULT WAS "oom", so any exit this code did not recognise was presented as the
@@ -1813,6 +1888,8 @@ class App(tk.Tk):
                 self._say("⛔ not restarting — and do not just press Start again: a box that cannot "
                           "prove claims blocks and abandons them, which holds up everyone else.",
                           "cuda-error")
+                # #725: nor may the schedule start it again when the next tick or window comes round
+                self._disarm("The schedule is off until this is looked at")
             else:
                 self._again(w, kind)
         # ⛔ str(), because ttk returns a Tcl_Obj that never compares equal to a string. Without it
@@ -1834,10 +1911,24 @@ class App(tk.Tk):
     def _again(self, w, kind):
         if kind not in self.AGAIN_MS:
             return
+        if self._armed and kind in ("done", "idle", "transient") and not w.extra:
+            # #725: drain, don't kill. Past the window's end a worker that finished is not started again; inside
+            # it, a prover is started again only if a block can finish before the window closes.
+            window = self._window()
+            if window is None or not window.is_open(time.time()):
+                self._feed("The proving window has closed: no more blocks until it opens again")
+                return
+            if w.job == "run":
+                ok, why = self._may_take_block(w.card)
+                if not ok:
+                    self._feed(f"Not taking another block: {why}")
+                    self._skip_rest_of_window()
+                    return
         if w.extra and kind in ("done", "idle"):
             # a specific range: finished means finished. Starting it again would find every block proven and exit,
             # every two seconds, for ever.
             self._feed(f"Range {activity.pretty(w.extra[0])} finished", "good")
+            self._disarm("The schedule is off: the range is finished")
             return
         if kind == "done" and w.activity.waiting:
             # it exited cleanly with nothing to do ("nothing to fold", no block free): ask again in a minute, not
@@ -1846,6 +1937,8 @@ class App(tk.Tk):
         n = w.transients + 1 if kind == "transient" else 0
         if n > self.TRANSIENT_RETRIES:
             self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
+            if self._armed:
+                self._skip_rest_of_window()     # not again every tick: the next window tries afresh
             return
         key = object()
         self._respawns[key] = self.after(self.AGAIN_MS[kind], lambda: self._respawn(key, w, n))
@@ -1859,12 +1952,255 @@ class App(tk.Tk):
     def _respawn(self, key, w, n):
         if self._respawns.pop(key, None) is None:
             return                      # Stop cancelled it
+        if self._armed and not w.extra:
+            window = self._window()
+            if window is None or not window.is_open(time.time()):
+                self._sync_buttons()
+                self._home_refresh()
+                return                  # the window closed while it waited: drain, take nothing new
         self._spawn(w.index, w.base, w.job, w.extra, card=w.card, label=w.label)
         self.workers[-1].transients = n
         self._sync_buttons()
         self._home_refresh()
 
+    # ── the proving window (#725) ───────────────────────────────────────────────────────────────
+    def _window(self):
+        """The saved proving window, or None when it is not valid."""
+        try:
+            return schedule.Window.from_config(self.sched)
+        except (ValueError, TypeError):
+            return None
+
+    def _disarm(self, why):
+        if self._armed:
+            self._armed = False
+            self._skip_until = None
+            self._feed(why, "bad")
+            self._apply_awake()
+            self._sync_buttons()
+
+    def _skip_rest_of_window(self):
+        """Take no more blocks until this window ends (always a moment in the future, so a tick cannot undo it)."""
+        now = time.time()
+        window = self._window()
+        end = window.ends_at(now) if window else None
+        self._skip_until = max(end or 0, now + 60)
+
+    def _card_key(self, card):
+        return cards.key(card) if card else "this-pc"
+
+    def _may_take_block(self, card):
+        window = self._window()
+        if window is None:
+            return False, "the proving window is not valid"
+        return schedule.may_take_block(window, time.time(), self.block_times.get(self._card_key(card)))
+
+    def _waiting_sentence(self, now):
+        window = self._window()
+        if window is None:
+            return "The proving window is not valid: fix it under Advanced → Schedule."
+        nxt = window.next_start(now)
+        when = (f"It opens at {window.start:%H:%M}, in {schedule.clock(nxt - now)}." if nxt else
+                "It does not open in the next week.")
+        if self._skip_until and now < self._skip_until:
+            when = (f"There is not enough of this window left to finish a block, so I am waiting for the next one. "
+                    + when)
+        wake = (" The PC may sleep until then: I have set a wake timer for the start of the window."
+                if self.sched.get("wake") else " Leave the PC on, or set a wake timer under Advanced → Schedule.")
+        return f"{when} Leave this app open (it can be minimised).{wake} Stop switches the schedule off."
+
+    def _schedule_tick(self):
+        try:
+            self._schedule_step(time.time())
+        except Exception as e:                        # noqa: BLE001 - the schedule must never stop the window
+            self._say(f"[schedule] {e}")
+        self.after(SCHEDULE_TICK_MS, self._schedule_tick)
+
+    def _schedule_step(self, now):
+        """One look at the window, on the main thread. Wall clock every time, so sleep and clock changes are caught."""
+        window = self._window() if self._armed else None
+        if window is not None:
+            if window.is_open(now):
+                if self._skip_until and now >= self._skip_until:
+                    self._skip_until = None           # a new window: ask again
+                if (not self.workers and not self._respawns and not self._skip_until and self._setup_ok):
+                    if self.mode.get() == "range" and not self.range_var.get().strip():
+                        self._disarm("The schedule is off: no range is entered")   # never a dialog per tick
+                    else:
+                        self._feed("The proving window is open")
+                        self._launch()
+            else:
+                self._skip_until = None
+                if self._respawns:
+                    for h in self._respawns.values():
+                        self.after_cancel(h)
+                    self._respawns.clear()
+                    self._feed("The proving window has closed: no more blocks until it opens again")
+                for w in self.workers:
+                    # an anchor job runs for hours and holds no claim: it stops with the window
+                    if w.job == "spine" and not w.stopping:
+                        w.stopping = True
+                        try:
+                            subprocess.run(supervisor.stop_command(w.popen.pid), capture_output=True, timeout=30)
+                        except Exception as e:        # noqa: BLE001
+                            self._say(f"[spine {w.index}] could not stop: {e}")
+                if self.workers and not self._drain_said:
+                    self._drain_said = True
+                    self._feed("The proving window has closed: finishing the block in hand, then stopping")
+            if window.is_open(now):
+                self._drain_said = False
+        self._apply_awake()
+        self._sync_buttons()
+        self._home_refresh()
+
+    def _apply_awake(self):
+        """Keep the PC from sleeping while it proves on the schedule, and only then. This includes the block in
+        hand when the window closes, which is still finishing: a PC that sleeps mid-proof loses the claim."""
+        # ⚠ The gaps between blocks count (a restart waits 2 s, or 60 s on an idle board): dropping the request there
+        # lets a PC whose idle timer ran out long ago sleep at once, for the rest of the night.
+        want = bool(self._armed and self.sched.get("keep_awake") and (self.workers or self._respawns))
+        if want == self._awake:
+            return
+        applied = winpower.keep_awake(want)
+        self._awake = want
+        if supervisor.IS_WINDOWS:
+            self._feed("Keeping the PC awake while it proves" if want and applied else
+                       "The PC may sleep again" if not want else
+                       "Windows would not let me keep the PC awake: it may sleep in the middle of a block",
+                       "sys" if applied or not want else "bad")
+
+    def _release_args(self, w):
+        return (supervisor.release_command(sys.executable, self.worker_var.get(), w.activity.holding),
+                w.env, w.activity.holding)
+
+    def _release(self, w):
+        """Hand the block a stopped worker held back to the board, off the main thread (#725)."""
+        cmd, env, block = self._release_args(w)
+        w.activity.holding = None
+
+        def go():
+            rc, out = supervisor._run(cmd, env=env, timeout=90)
+            self.results.put((self._after_release, (block, rc, out)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _release_now(self, w):
+        """The same, waiting for it: the app is closing."""
+        cmd, env, block = self._release_args(w)
+        rc, out = supervisor._run(cmd, env=env, timeout=30)
+        self._say(f"[release {block}] {supervisor.release_verdict(rc, out)[1]}")
+
+    def _after_release(self, args):
+        block, rc, out = args
+        ok, msg = supervisor.release_verdict(rc, out)
+        self._say(f"[release {block}] {msg}")
+        if not ok and "not your claim" in msg:
+            return      # the worker handed it back itself on SIGTERM (Linux) before the app got to it: nothing to say
+        self._feed(f"Handed block {activity.pretty(block)} back to the board" if ok else
+                   f"Block {activity.pretty(block)}: {msg}", "good" if ok else "sys")
+
+    def _tab_schedule(self):
+        p = self.p
+        t = tk.Frame(self.adv, bg=p["fog"])
+        self.adv.add(t, text="  Schedule  ")
+        box = self._card(t, "PROVE ON A SCHEDULE")
+        box.pack(fill="x", padx=10, pady=10)
+        tk.Label(box, justify="left", wraplength=920, bg=p["mist"], fg=p["ink"], font=("Segoe UI", 9),
+                 text=("If you only want me to prove while you are not using this PC, overnight for example, set a "
+                       "window here and press Start as usual. I wait for the window to open, prove until it "
+                       "closes, and then stop taking blocks. The block I am working on when it closes is finished, "
+                       "not thrown away, and I do not start a block that this card cannot finish before the "
+                       "window ends: I judge that from how long its last few blocks took. Times are this PC's "
+                       "local time, so the window moves with the clocks.")
+                 ).pack(anchor="w", padx=12, pady=(4, 8))
+        g = tk.Frame(box, bg=p["mist"])
+        g.pack(fill="x", padx=12)
+        self.v_sched_on = tk.BooleanVar(value=bool(self.sched.get("on")))
+        ttk.Checkbutton(g, variable=self.v_sched_on, text="Prove only inside this window").grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        self.v_sched_start = tk.StringVar(value=self.sched.get("start") or "23:00")
+        self.v_sched_end = tk.StringVar(value=self.sched.get("end") or "07:00")
+        tk.Label(g, text="from", bg=p["mist"], fg=p["ink"]).grid(row=1, column=0, sticky="w")
+        ttk.Entry(g, textvariable=self.v_sched_start, width=7).grid(row=1, column=1, sticky="w", padx=6)
+        tk.Label(g, text="to", bg=p["mist"], fg=p["ink"]).grid(row=1, column=2, sticky="w")
+        ttk.Entry(g, textvariable=self.v_sched_end, width=7).grid(row=1, column=3, sticky="w", padx=6)
+        tk.Label(g, text="24-hour clock; a window that ends earlier than it starts runs past midnight",
+                 bg=p["mist"], fg=p["slate"], font=("Segoe UI", 8)).grid(row=1, column=4, sticky="w", padx=8)
+        dayrow = tk.Frame(box, bg=p["mist"])
+        dayrow.pack(anchor="w", padx=12, pady=(8, 2))
+        tk.Label(dayrow, text="starting on", bg=p["mist"], fg=p["ink"]).pack(side="left", padx=(0, 6))
+        have = set(self.sched.get("days") or range(7))
+        self.v_sched_days = []
+        for d, name in enumerate(schedule.DAYS):
+            v = tk.BooleanVar(value=d in have)
+            self.v_sched_days.append(v)
+            ttk.Checkbutton(dayrow, variable=v, text=name).pack(side="left", padx=2)
+        self.v_sched_awake = tk.BooleanVar(value=bool(self.sched.get("keep_awake", True)))
+        ttk.Checkbutton(box, variable=self.v_sched_awake,
+                        text="Keep the PC awake while I prove inside the window (the screen can still turn off)"
+                        ).pack(anchor="w", padx=12, pady=(10, 2))
+        self.v_sched_wake = tk.BooleanVar(value=bool(self.sched.get("wake")))
+        ttk.Checkbutton(box, variable=self.v_sched_wake,
+                        text="Wake the PC from sleep when the window opens (off unless you tick it)"
+                        ).pack(anchor="w", padx=12, pady=(2, 2))
+        tk.Label(box, justify="left", wraplength=900, bg=p["mist"], fg=p["slate"], font=("Segoe UI", 9),
+                 text=("This adds a task to Windows Task Scheduler, called “Hazync\\Wake for proving”, "
+                       "that wakes the PC at the window's start. It runs nothing itself: this app has to be left "
+                       "open (minimised is fine). It cannot wake a PC that is shut down or hibernating, and it "
+                       "does nothing if wake timers are switched off in the power plan; I check that when you "
+                       "save. Unticking this removes the task.")
+                 ).pack(anchor="w", padx=32, pady=(0, 8))
+        row = tk.Frame(box, bg=p["mist"])
+        row.pack(anchor="w", padx=12, pady=(2, 12))
+        ttk.Button(row, text="Save", style="Accent.TButton", command=self._save_schedule).pack(side="left")
+        self.v_sched_note = tk.StringVar(value=self._schedule_summary())
+        tk.Label(row, textvariable=self.v_sched_note, bg=p["mist"], fg=p["slate"], justify="left",
+                 wraplength=780, font=("Segoe UI", 9)).pack(side="left", padx=10)
+
+    def _schedule_summary(self):
+        if not self.sched.get("on"):
+            return "No schedule: Start proves straight away, until you press Stop."
+        w = self._window()
+        return f"Proving {w.describe()}." if w else "The saved window is not valid."
+
+    def _save_schedule(self):
+        cand = {"on": bool(self.v_sched_on.get()), "start": self.v_sched_start.get().strip(),
+                "end": self.v_sched_end.get().strip(),
+                "days": [d for d, v in enumerate(self.v_sched_days) if v.get()],
+                "keep_awake": bool(self.v_sched_awake.get()), "wake": bool(self.v_sched_wake.get())}
+        try:
+            window = schedule.Window.from_config(cand)
+        except ValueError as e:
+            self.v_sched_note.set(f"Not saved: {e}.")
+            return
+        self.sched = cand
+        self._persist()
+        note = self._schedule_summary()
+        if self.workers or self._armed:
+            note += " This applies from now on; press Stop and Start if you want it to take over at once."
+        self.v_sched_note.set(note)
+        want_wake = cand["on"] and cand["wake"]
+
+        def go():
+            if want_wake:
+                ok, msg = winpower.set_wake_task(window)
+                warn = winpower.wake_timer_warning(winpower.query_wake_timers()) if ok else ""
+            else:
+                ok, msg = winpower.clear_wake_task()
+                warn = ""
+            self.results.put((self._after_wake, (ok, msg, warn)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _after_wake(self, args):
+        ok, msg, warn = args
+        if not supervisor.IS_WINDOWS:
+            return
+        self.v_sched_note.set(self.v_sched_note.get() + f" Wake timer: {msg}." + (f" {warn}" if warn else ""))
+        self._say(f"[schedule] wake timer: {msg}" + (f" — {warn}" if warn else ""))
+
     def _stop(self):
+        if self._armed:
+            self._armed = False
+            self._feed("Schedule off until you press Start again")
         pending = self._respawns
         for h in pending.values():
             self.after_cancel(h)
@@ -1883,13 +2219,23 @@ class App(tk.Tk):
             self._feed("Stopping — letting the prover finish cleanly")
             self._home_refresh()
         self.status.configure(text="stopping…")
+        self._apply_awake()
 
     def _on_close(self):
         if self.workers and not messagebox.askokcancel(
                 "Quit", f"{len(self.workers)} worker(s) are still running. Stop them and quit?"):
             return
         self._persist()
+        held = [w for w in self.workers if w.activity.holding]
         self._stop()
+        # #725: hand claimed blocks back before the window goes. On Windows the workers were just ended with
+        # taskkill, which they cannot see, so the app releases for them; it waits for that, briefly.
+        if held:
+            self.status.configure(text="handing claimed blocks back…")
+            self.update_idletasks()
+            for w in held:
+                self._release_now(w)
+        winpower.keep_awake(False)
         self.destroy()
 
 
