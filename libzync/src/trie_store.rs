@@ -123,6 +123,9 @@ pub trait Arena {
     /// Z1: a new generation of the arena's history (a rewind): roots logged before it may name slots that are reused.
     #[cfg(feature = "std")]
     fn bump_gen(&mut self) {}
+    /// Z1/REORG P3: cut `roots.log` entries above `height` (a rewind's orphaned blocks); returns the bytes cut.
+    #[cfg(feature = "std")]
+    fn cut_roots_above(&mut self, _height: u64) -> Vec<u8> { Vec::new() }
 }
 
 #[derive(Default)]
@@ -367,6 +370,16 @@ impl Arena for DiskArena {
         }
         // no fsync: an entry above the flushed height is cut at the next open anyway
         self.roots.as_mut().unwrap().write_all(&b).unwrap_or_else(|e| panic!("trie arena {}/roots.log: {e}", self.dir.display()));
+    }
+    fn cut_roots_above(&mut self, height: u64) -> Vec<u8> {
+        self.roots = None;
+        let rl = self.dir.join("roots.log");
+        let Ok(b) = std::fs::read(&rl) else { return Vec::new() };
+        let mut n = b.len() / ROOTS_REC;
+        while n > 0 && u32::from_le_bytes(b[(n - 1) * ROOTS_REC..(n - 1) * ROOTS_REC + 4].try_into().unwrap()) as u64 > height { n -= 1; }
+        let f = std::fs::OpenOptions::new().write(true).open(&rl).unwrap_or_else(|e| panic!("{}: {e}", rl.display()));
+        f.set_len((n * ROOTS_REC) as u64).and_then(|_| f.sync_data()).unwrap_or_else(|e| panic!("{}: {e}", rl.display()));
+        b[n * ROOTS_REC..].to_vec()
     }
     fn bump_gen(&mut self) {
         self.gen = self.gen.wrapping_add(1);
@@ -1032,6 +1045,10 @@ impl TrieStore {
     /// Z1: a new generation (REORG's rewind, before it reuses any slot): a reader re-resolves its root. Host only.
     #[cfg(feature = "std")]
     pub fn bump_gen(&mut self) { self.a.bump_gen(); }
+
+    /// Z1/REORG P3: drop the logged roots above `height` (the orphaned blocks of a rewind); returns the entries cut.
+    #[cfg(feature = "std")]
+    pub fn cut_roots_above(&mut self, height: u64) -> Vec<u8> { self.a.cut_roots_above(height) }
 
     /// Undo one block from a RECORD of it (docs/libzync/REORG.md §6, prep's `reorg/u_<h>.bin`): the keys it marked and
     /// inserted, and whether it re-created a coin over its spent record. Unlike `undo` this works for a block applied

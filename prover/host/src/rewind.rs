@@ -126,8 +126,16 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool) {
     } else if let Some(st_a) = &st_a {
         // the trie (copy-on-write: the disk is unchanged until the save point's flush)
         let d = crate::trie::trie_dir().unwrap();
+        // opening the arena bumps its generation (ZAPP_FOLLOWER.md §4): a fact reader re-resolves its root before any
+        // slot this rewind frees can be reused; the logged roots of the orphaned blocks go, kept with the epoch's files
         let mut ts = libzync::trie_store::TrieStore::open_dir(&d, true).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
         assert!(ts.hash == st_a.tip_hash, "rewind: the disk trie at {a} is not state_{a}.json's block");
+        let cut = ts.cut_roots_above(fork as u64);
+        if !cut.is_empty() {
+            let od = std::path::PathBuf::from(format!("{out}/orphaned/{epoch}"));
+            std::fs::create_dir_all(&od).unwrap_or_else(|e| panic!("{}: {e}", od.display()));
+            crate::lz::write_atomic(&format!("{}/roots.log", od.display()), &cut);
+        }
         for r in recs.iter().rev() {
             ts.undo_recorded(&r.trie_marks, &r.trie_inserts, r.trie_replaced)
                 .unwrap_or_else(|e| panic!("rewind: the trie refused the undo of block {}: {e:?}", r.height));

@@ -48,6 +48,16 @@ same_as_ref() {  # same_as_ref <root> <ref root> <hi> <F> <tag>
     local dr dq; dr=$(digest $r $hi); dq=$(digest $q $hi)
     [ -n "$dr" ] && [ "$dr" = "$dq" ] || { ok=0; why="$why stores($(echo "$dr" | awk '{print $1}' | tr '\n' ' '))"; }
     [ ! -e $r/blocks/REORG ] && [ ! -e $r/out/REWIND ] || { ok=0; why="$why markers"; }
+    # trie/roots.log (ZAPP_FOLLOWER.md Z1): the same (height, block hash, root hash) for 1..hi (the slot references and
+    # generations differ: arena layout and opens), and no entry of an orphaned block
+    python3 - $r/trie/roots.log $q/trie/roots.log <<'PY' || { ok=0; why="$why roots.log"; }
+import sys
+def ents(p):
+    b = open(p, "rb").read()
+    return [(int.from_bytes(b[i:i + 4], "little"), b[i + 4:i + 36], b[i + 44:i + 76]) for i in range(0, len(b), 80)]
+a, q = ents(sys.argv[1]), ents(sys.argv[2])
+sys.exit(0 if a == q and [e[0] for e in a] == list(range(1, len(a) + 1)) else 1)
+PY
     local orph; orph=$(ls $r/out/orphaned/1/ 2>/dev/null | grep -c '^state_[0-9]*\.json$')
     check $ok "$t: states, save point, leaves, records, tip and store contents = a fresh prep of the new branch; $orph orphaned states moved${why:+ — differs:$why}"
 }

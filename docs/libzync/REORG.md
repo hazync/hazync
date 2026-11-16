@@ -407,3 +407,52 @@ absolute path, its build's `OUT_DIR` (`…/out/core_extract.inc`); the two ELFs 
   files above the save point (an older run's, or a crashed run's) would move the start past the blocks prep needs.
 - **Waiting block files carry no hash.** The fetcher hashes each file's header (the first 4 KB hold the header fields
   in every writer's key order; else the whole file), checked against the 200 mainnet test blocks' hashes.
+
+## 16. Built: P3, prep's rewind (16.11.2026)
+
+Branch `feat/reorg-p3` (on top of P1, P2, the review fixes and ZAPP_FOLLOWER Z1).
+
+**`host libzync-prep-rewind <out> <block dir> [--allow-deep]`** (`prover/host/src/rewind.rs`). The target is `out/REWIND`
+(an interrupted rewind) or the fetcher's `blocks/REORG`: class `auto` (depth ≤ W), or any fork within J with
+`--allow-deep` (§11 step 3). Everything is checked before anything changes, and a refusal (exit 4) leaves nothing
+behind: REORG_TOO_DEEP, depth beyond W without the flag, a missing or damaged record, records that do not chain from
+F's block to A's, a block that re-created a coin (`replaced`). Then `out/REWIND` (fork, epoch, the marker) is written
+durably, and from the newest complete save point A:
+
+1. the trie: opened (which bumps `trie/GEN`, Z1), its logged roots above F cut (kept as `out/orphaned/<E>/roots.log`),
+   each block undone from its record's keys newest first (`TrieStore::undo_recorded`), the root checked against
+   `state_F.json`'s `trie_root`; the disk is unchanged until the save point's flush;
+2. the coin log, in place (`lz::cl_rewind`): `pending.bin` (blocks after A) and then the records' bodies, newest first,
+   each by `cl_undo_to` to F's leaf count; roots and leaf count checked against `state_F.json`;
+3. the BIP30 tree from `state_A.smt`, each record's priors restored newest first, the root checked;
+4. a complete save point at F (`prep::save_stores`, the same code as prep's: markers, `.smt`, `.coinlog`, `.trie`,
+   the journal committed); `state_F.json` keeps its bytes;
+5. everything above F moved to `out/orphaned/<E>/`: every `state_<h>.*` (the save files first, so A stops being a
+   complete save point before its state goes), the leaf bundles (`leaves/`); the records above F deleted, and the block
+   files whose block is an orphaned one;
+6. `PREP_TIP.json` at F, then `out/REWIND` and the marker removed, last.
+
+Every step is idempotent, so a rewind that dies is run again from `out/REWIND`. If A ≤ F (prep stopped between save
+points with F above its last one) nothing is undone: the files above F move and prep resumes from A as after any
+crash. **The automatic path** (`HAZYNC_REORG_AUTO=1`, off by default until P4): the fetcher writes `REORG` class `auto`
+and waits instead of exiting; prep exits **5** (`PREP_STOPPED_FOR_REWIND`; not in `RestartPreventExitStatus`, so systemd
+restarts it); `libzync-prep-run.sh` runs the rewind before it picks the save point; the fetcher carries on after the
+marker goes. `host libzync-store-digest <out> <h>` prints the CONTENT of the stores (trie snapshot, coin log leaves,
+index entries, BIP30 snapshot) for comparing runs reached by different histories.
+
+**Where this differs from §5-§6.** (a) The rewind runs at a (re)start from the newest save point, not in-process in a
+follow-mode prep: one code path for the normal case and for a crash, at the cost of one restart (`RestartSec=30`) and
+replaying from A. (b) No coordinator steps (records, ack, §5 steps 4-6): that is P4, which is why automatic rewinds stay
+off. (c) Prep's follow mode (no static `LZ_HI`) is not built. (d) Of §12's crash hooks only `rewind-after-save` is
+built; the steps before it change only the coin log in place (idempotent) and nothing on disk else.
+
+**Tests.** `experimental/libzync-bench/prep/rewind_test.sh`, mainnet 1..200 (test data) as the old chain and a synthetic
+branch from F (`reorg_branch.py`: real header hashes, a coinbase per block, a spend of a shared-chain coinbase and an
+in-block spend) as the new one, W = 12, J = 60, saves every 50, through the deployed runner. After the rewind and the
+re-prep, every `state_<h>.json`, the save point's files, the leaf bundles, the undo records, `PREP_TIP.json`, the
+logged roots (height, hash, root hash) and the stores' CONTENT equal a FRESH prep of the new branch: depth 1, 2 and W
+from a save point at 200; depth 1 and W with prep stopped between save points (journal of 151..200); the automatic
+path end to end (exit 5, restart, rewind); a crash after the save point at F, finished from `out/REWIND`; depth W+1
+with `--allow-deep`; and three refusals that change nothing. `--control` skips the coin log undo and must fail.
+`prover/test_fetch_reorg.py`: the fetcher waits for an `auto` rewind and fetches the new branch after it; a fork beyond
+W still stops. `coordinator/test_reorg_units.py`: exit 5 restarts the prep units and does not alert.
