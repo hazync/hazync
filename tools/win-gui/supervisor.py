@@ -453,8 +453,9 @@ def recommend(gpu=None):
                 "why": f"{g['name']} is compute {g['cc_major']}.{g['cc_minor']}, and sppark keeps "
                        f"only cards at 7.0 or newer, so CUDA proving fails with \"no CUDA-capable "
                        f"device is detected\". The CPU build is the one that works here. "
-                       f"(HAZYNC_SPPARK_MIN_MAJOR={g['cc_major']} lifts that floor on a build from "
-                       f"2026-10-05 or later — unproven, see hazync#631.)"}
+                       f"(For compute 6.x, the Setup tab's \"Try my GPU even if it is below the "
+                       f"supported floor\" lifts that floor — proved on one GTX 1050 Ti; other "
+                       f"older cards unproven, hazync#727.)"}
     note = ""
     if g["vram_mb"] < 8000:
         note = (f" ⚠ {g['vram_mb']:,} MiB is below anything this project has proved with — the "
@@ -503,12 +504,12 @@ def check_gpu():
     # Windows added was only that the error was destroyed on its way out (#631's foreign-exception
     # abort), so a card-support question looked like a platform question for weeks.
     # ⚠ THE FLOOR CAN BE LOWERED, so this must not keep declaring failure once someone has done it.
-    # A build from 2026-10-05 or later honours HAZYNC_SPPARK_MIN_MAJOR; reporting "use the CPU
+    # A build with hazync#727 honours HAZYNC_SPPARK_MIN_MAJOR (6..99); reporting "use the CPU
     # build" to a person who has already overridden it would be telling them to undo the thing they
     # just did, which is how a check gets ignored.
     floor = 7
     override = os.environ.get("HAZYNC_SPPARK_MIN_MAJOR", "").strip()
-    if override.isdigit() and 1 <= int(override) <= 99:
+    if override.isdigit() and 6 <= int(override) <= 99:   # sppark refuses below 6 (hazync#727)
         floor = int(override)
 
     cc = re.search(r"(\d+)\.(\d+)\s*$", line)
@@ -516,17 +517,18 @@ def check_gpu():
         return CheckResult(
             "GPU", True,
             line + f"  ⚠ accepted only because HAZYNC_SPPARK_MIN_MAJOR={floor} lowers sppark's "
-                   "floor from 7. The kernels are built for sm_61, but whether Pascal computes "
-                   "these proofs CORRECTLY is unverified — the receipt is checked before anything "
-                   "is submitted, so a wrong result fails rather than reaching the board.")
+                   "floor from 7. Proved on one GTX 1050 Ti (hazync#727); other older cards are "
+                   "unproven — the receipt is checked before anything is submitted, so a wrong "
+                   "result fails rather than reaching the board.")
     if cc and int(cc.group(1)) < 7:
         return CheckResult(
             "GPU", False,
             line + f"  ⛔ compute capability {cc.group(1)}.{cc.group(2)} — sppark keeps only "
                    "cards with major >= 7 (Volta or newer), so this one is filtered out and CUDA "
                    "proving fails with 'no CUDA-capable device is detected' however much VRAM it "
-                   "has. Use the CPU build on this machine — or try a build from 2026-10-05 or "
-                   "later with HAZYNC_SPPARK_MIN_MAJOR=6, which lowers sppark's floor (hazync#631).",
+                   "has. Use the CPU build on this machine — or, for compute 6.x, tick \"Try my GPU "
+                   "even if it is below the supported floor\" on the Setup tab, which lowers "
+                   "sppark's floor (proved on one GTX 1050 Ti; hazync#727).",
             fatal=False)
 
     mb = re.search(r"(\d+)\s*MiB", line)
@@ -829,17 +831,17 @@ def explain(text):
                       "folding on CPU runs about 13x slower than a modern GPU, which is slower but "
                       "still a real contribution. (hazync#631)")
         elif "operation not supported" in low_err:
-            # ⛔ THE ERROR A PASCAL CARD ACTUALLY GETS ONCE THE FLOOR IS LOWERED, and the one that
-            # used to fall through to "that is the cause" -- true, and useless to act on.
-            # Measured 2026-10-07 on a GTX 1050 Ti: the card passes sppark's filter, and every
-            # capability it needs tests FINE in isolation (plain and cooperative launches, grid
-            # sync, memory pools, 1024-thread blocks, this very stream call) -- yet the prover
-            # cannot drive it. Unresolved; tracked as hazync#631.
-            advice = ("Your card was accepted but the prover could not drive it — hazync#631, seen "
-                      "on Pascal (compute 6.x). This is not your setup and not your driver: the "
-                      "same card passes every capability test on its own. Switch to the CPU build "
-                      "on the Setup tab; it works, and folding measures about 13x slower than a "
-                      "modern GPU — which still contributes.")
+            # ⛔ THE ERROR A PASCAL CARD GOT ONCE THE FLOOR WAS LOWERED. Cause found (hazync#727):
+            # rv32im used SYSTEM-scope atomics, and the Windows driver refuses to load such a
+            # module (801, "operation not supported") on a card without host-native atomics. Fixed
+            # in the build; a GTX 1050 Ti then proved. Seeing it now means an older build, or a card
+            # or driver nobody has measured.
+            advice = ("Your card was accepted but the prover could not drive it. On Pascal "
+                      "(compute 6.x) this was hazync#727, fixed in builds that include it — a GTX "
+                      "1050 Ti proves with one. If your host is older, update it; if it is current, "
+                      "your card or driver has not been measured: please report it on hazync#727. "
+                      "The CPU build works meanwhile — folding measures about 13x slower than a "
+                      "modern GPU, which still contributes.")
         elif "no kernel image" in low_err:
             advice = ("The binary has no code this GPU can run. Built for sm_61 plus forward PTX, "
                       "so this usually means the driver cannot compile the PTX.")
@@ -935,6 +937,27 @@ def stop_command(pid):
     if IS_WINDOWS:
         return ["taskkill", "/PID", str(pid), "/T", "/F"]
     return ["kill", "-TERM", str(pid)]
+
+
+def release_command(python_exe, worker_path, block):
+    """How to hand a claimed block back after its worker was stopped (#725).
+
+    ⚠ On Windows the worker is ended with `taskkill /F`, which no signal handler sees, so the worker cannot release
+    its own claim the way it does on SIGTERM. The app knows the block from the worker's "claimed block N" line and
+    asks the worker CLI to release it, signed with the same key."""
+    return worker_command(python_exe, worker_path, "release", (str(block),))
+
+
+def release_verdict(rc, out):
+    """(released, sentence for the feed) from `hazync-worker release`'s exit code and output."""
+    text = (out or "").strip()
+    if rc == 0:
+        return True, text.splitlines()[-1] if text else "handed the block back"
+    if "unknown command" in text:
+        return False, ("this worker is too old to hand a block back; the block reopens by itself within the hour "
+                       "(update Hazync to fix this)")
+    last = text.splitlines()[-1] if text else f"exit code {rc}"
+    return False, last[:240]
 
 
 def summarise(checks):

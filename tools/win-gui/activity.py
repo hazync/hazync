@@ -50,6 +50,7 @@ _ASSEMBLING, _ASSEMBLED, _PROVED = 0.88, 0.93, 0.96
 
 _RE = {
     "claimed": re.compile(r"claimed block (\S+)"),
+    "released": re.compile(r"^released block (\S+?):"),
     "nothing": re.compile(r"nothing to claim right now:\s*(.*)"),
     "executed": re.compile(r"executed, (\d+) segments"),
     "segment": re.compile(r"segment (\d+)/(\d+)\s+(\d+)s elapsed(?:, ~(\d+)s left)?"),
@@ -111,6 +112,12 @@ class Activity:
         self.pieces = False        # True once the proof has reported a piece (gpuprep: the GPU code is ready)
         self.span = None           # (lo, hi) when a specific range was asked for (set_range)
         self.span_done = set()     # the range's blocks now on the board, by this worker or someone else
+        # #725: the claimed block this worker still holds (None once it is on the board, taken by someone else or
+        # handed back), so stopping the worker can hand it back; and how long the last block took, claim to board.
+        self.holding = None
+        self.claimed_at = None
+        self.last_block_s = None
+        self._now = None
 
     def set_range(self, rng):
         """A specific range ('1342-2000' or '1342'): count its blocks as they land (range_progress)."""
@@ -137,24 +144,32 @@ class Activity:
     def _set(self, headline, detail="", fraction=None, waiting=False):
         self.headline, self.detail, self.fraction, self.waiting = headline, detail, fraction, waiting
 
-    def feed(self, line):
+    def feed(self, line, now=None):
         """Read one line of worker output. Returns a sentence for the feed, or None.
 
         ⚠ Only things that HAPPENED return a sentence. Progress within a step (segment 12 of 51)
         moves the bar and the detail line but is not an event, or the feed would be nothing else.
+        `now` (a timestamp) is when the line arrived: with it, a block's time from claim to board is measured.
         """
         s = line.strip()
         if not s:
             return None
+        self._now = now
         return (self._prove(s) if self.job == "run" else
                 self._fold(s) if self.job == "fold" else
                 self._spine(s))
 
     # ── proving ─────────────────────────────────────────────────────────────────────────────────
     def _prove(self, s):
+        m = _RE["released"].search(s)
+        if m:
+            self.holding = None
+            self._set("Stopped", f"Block {pretty(m.group(1))} was handed back for someone else to prove", None)
+            return f"Handed block {pretty(m.group(1))} back to the board"
         m = _RE["claimed"].search(s)
         if m:
             self.block = m.group(1)
+            self.holding, self.claimed_at = m.group(1), self._now
             self._set(f"Proving block {pretty(self.block)}", "Fetching the block's data…", 0.0)
             return f"Took block {pretty(self.block)} to prove"
         m = _RE["nothing"].search(s)
@@ -193,12 +208,18 @@ class Activity:
         if m:
             self.done += 1
             self._span_mark(m.group(1))
+            if self.holding == m.group(1) and self.claimed_at is not None and self._now:
+                self.last_block_s = self._now - self.claimed_at
+            if self.holding == m.group(1):
+                self.holding = None
             self._set(f"Block {pretty(m.group(1))} is on the board", "Checked and accepted. "
                       "Asking for the next one…", 1.0)
             return f"Block {pretty(m.group(1))} checked and accepted — it is on the board"
         m = _RE["taken"].search(s)
         if m:
             self._span_mark(m.group(1))
+            if self.holding == m.group(1):
+                self.holding = None
             self._set("Asking for a block to prove…", "", None)
             return f"Someone else finished block {pretty(m.group(1))} first — moving on"
         m = _RE["gpu_wait"].search(s)
