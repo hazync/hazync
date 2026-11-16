@@ -204,6 +204,25 @@ key names only.
    `state_<h>.flags` marker, which only this host writes; so the old run cannot be picked up there by mistake. Below
    147,396 an older host's states are the same and are accepted. A leaf bundle at or above 147,396 whose block JSON has
    no `coinbase_flags` (cut by an older host) is refused too.
+2b. **The prep memory settings** (docs/libzync/PREP_MEMORY.md on `docs/prep-memory`; agreed 16.11.2026), before the
+   fresh run's first block. From the checkout this reset installs (`/opt/hazync-lz`, or the
+   `deploy/prep-memory-settings` branch if it is not merged yet):
+   ```bash
+   D=/opt/hazync-lz/coordinator/deploy/dropins
+   install -d /etc/systemd/system/libzync-prep.service.d /etc/systemd/system/libzync-fetch.service.d
+   for f in run cache; do cp -p /etc/systemd/system/libzync-prep.service.d/$f.conf /root/libzync-prep-$f.conf.pre-v026; done
+   install -m 644 $D/libzync-prep-run.conf    /etc/systemd/system/libzync-prep.service.d/run.conf      # SAVE_EVERY 250
+   install -m 644 $D/libzync-prep-cache.conf  /etc/systemd/system/libzync-prep.service.d/cache.conf    # 12288 MB
+   install -m 644 $D/libzync-prep-memory.conf /etc/systemd/system/libzync-prep.service.d/memory.conf   # no cap, OOMScoreAdjust 500
+   install -m 644 $D/libzync-fetch-run.conf   /etc/systemd/system/libzync-fetch.service.d/run.conf     # unchanged
+   install -m 644 /opt/hazync-lz/coordinator/deploy/libzync/sysctl/90-libzync-prep.conf /etc/sysctl.d/   # unchanged
+   systemctl daemon-reload
+   systemctl show libzync-prep -p Environment --value | tr ' ' '\n' | grep -E 'SAVE_EVERY|TRIE_CACHE'   # 250, 12288
+   systemctl show libzync-prep -p OOMScoreAdjust -p MemoryMax --value                                   # 500, infinity
+   ```
+   The board pass's own unit (`libzync-board-prep.service`, SAVE_EVERY 250, OOMScoreAdjust 500) comes with step 5's
+   unit install. Rollback: the two `.pre-v026` copies back, `rm` memory.conf, `daemon-reload`.
+
 3. **Start the block source, then prep:**
    ```bash
    systemctl start libzync-fetch; sleep 60; ls $P/blocks | head -3            # block_1.json …

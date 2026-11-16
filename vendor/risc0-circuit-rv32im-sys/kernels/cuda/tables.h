@@ -23,9 +23,18 @@
 
 namespace risc0::circuit::rv32im_v2::cuda {
 
+// HAZYNC #727: DEVICE scope, not the default SYSTEM scope. `::cuda::atomic<T>` defaults to
+// thread_scope_system, which compiles to system-scope atomics (ATOM.SYS, recorded in the cubin as
+// EIATTR_ATOM_SYS_INSTR_OFFSETS for extern_lookupDelta). The Windows driver refuses to LOAD a module
+// containing those on a GPU without host-native atomics (Pascal: hostNativeAtomicSupported = 0), so
+// the whole rv32im module fails with cudaErrorNotSupported (801) -- every kernel in it, including
+// Thrust's scan (measured, GTX 1050 Ti, driver 566.14, trace 3). The same failure and fix:
+// JuliaGPU/CUDA.jl#3187 / #3268. These tables are cudaMalloc memory touched only by kernels on this
+// one device, so device scope is the correct scope; the layout (one uint32_t) and the counts are
+// unchanged. Host-side witness generation only: the circuit and every image id are untouched.
 struct LookupTables {
-  ::cuda::atomic<uint32_t>* tableU8;
-  ::cuda::atomic<uint32_t>* tableU16;
+  ::cuda::atomic<uint32_t, ::cuda::thread_scope_device>* tableU8;
+  ::cuda::atomic<uint32_t, ::cuda::thread_scope_device>* tableU16;
 
   __device__ void lookupDelta(Fp table, Fp index, Fp count) {
     uint32_t tableU32 = table.asUInt32();

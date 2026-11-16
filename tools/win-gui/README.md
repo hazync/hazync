@@ -86,8 +86,26 @@ both assumed the GPU had been accepted at all.
 ⇒ It was **untested, not broken**: it had never run on a card sppark accepts. It has since run on one: the
 libzync CUDA host proved mainnet blocks 170 and 400,000 on an RTX PRO 6000 under WDDM (2026-11-09, row above).
 
-With `HAZYNC_SPPARK_MIN_MAJOR=6` (a build from 2026-10-05 or later) the 1050 Ti IS accepted —
-`cooperativeLaunch=1`, so that second condition was never the obstacle — and then fails further in,
+⭐ **Resolved by hazync#727 — a GTX 1050 Ti proves.** With the fixes, the 1050 Ti proved mainnet
+block 1 on its GPU (197.7 s, receipt verified, driver 566.14, 15.11.2026). Three things were needed:
+
+1. **The floor.** `HAZYNC_SPPARK_MIN_MAJOR=6` lowers sppark's compute floor from 7 (`all_gpus.cpp`).
+   The app sets it for you only when **"Try my GPU even if it is below the supported floor"** is ticked
+   and the worker's card is compute 6.x; each worker is also pinned to its card with
+   `CUDA_VISIBLE_DEVICES`. Below 6 is refused: no build carries code for it.
+2. **The real "operation not supported".** rv32im's lookup tables used `::cuda::atomic<uint32_t>`,
+   which defaults to *system* scope. On Pascal that puts `EIATTR_ATOM_SYS_INSTR_OFFSETS` in the module
+   and the Windows driver refuses to load the whole module (error 801) on a card without host-native
+   atomics. They are now device-scope, and `scripts/gpu_code_archs.py` refuses any build that carries
+   a system-scope atomic.
+3. **Memory pools.** sppark now asks whether the device has memory pools before using
+   `cudaMallocAsync`, and falls back to `cudaMalloc`/`cudaFree` where it does not (the 1050 Ti's own
+   pools tested fine; this is defensive).
+
+Other cards below compute 7.0 remain **unproven**. The history below is what it looked like before.
+
+With `HAZYNC_SPPARK_MIN_MAJOR=6` on a build from before hazync#727, the 1050 Ti was accepted —
+`cooperativeLaunch=1`, so that second condition was never the obstacle — and then failed further in,
 in the NTT:
 
 ```
@@ -97,9 +115,8 @@ CUDA ERROR: cudaGetLastError()@sppark/ntt/ntt.cuh:97 failed: "operation not supp
 panicked at risc0-zkp-3.0.5/src/hal/cuda.rs:708: Failure during zk_shift
 ```
 
-⚠ Whether *that* is a Pascal limit or a Windows one is **not yet known** — `cudaGetLastError()` can
-report an error raised by an earlier asynchronous call, so the line number may not be the culprit.
-A run with `CUDA_LAUNCH_BLOCKING=1` is what settles it. See hazync#631.
+That error was raised earlier, by the refused rv32im module (point 2 above) — `cudaGetLastError()`
+reports an error left pending by an earlier call, so the line number was not the culprit. hazync#727.
 
 The original abort, for reference — this is what you get on a build older than 2026-10-04, where the
 real error was thrown away:
@@ -113,7 +130,7 @@ Two theories were tested and **killed**: it is not out of memory (`HAZYNC_SEG_PO
 instantly and identically on an idle 4 GB card) and not an arch mismatch (the card *is* the `sm_61`
 the binary embeds natively). Open: the build used CUDA 12.9.1 against a driver reporting 12.7.
 
-What this section left open (the Pascal NTT failure) is moot for the prover's floor of 7.0 and was not pursued.
+The Pascal NTT failure this section left open was resolved by hazync#727 (above).
 
 ## What is in the window
 
@@ -131,10 +148,44 @@ Worker count, `HAZYNC_SEG_PO2`, start/stop, and a log that colours only the line
 
 **Settings** — paths, your identity, coordinator URL, and the checks.
 
+**Schedule** — prove only inside a window you set, for example overnight (#725); below.
+
 ⛔ **There is no "pick any open block" button, on purpose.** The coordinator owns allocation: it
 hands out work and tracks claims, and `/api/blockstatus` deliberately excludes claims because "they
 change by the second". Letting someone choose an arbitrary open block would hand out work another
 prover already holds. `/api/pick` is the coordinator's own answer and the Dashboard shows it.
+
+## Proving on a schedule
+
+Under **Advanced → Schedule** you can tell the app to prove only inside a window, say 23:00 to 07:00, on the days
+you tick. Press Start as usual: the app waits for the window, proves while it is open, and stops taking blocks
+when it closes. The logic is in `provewindow.py` and `winpower.py`, tested by `test_schedule.py` (pure, with real
+daylight-saving nights) and `test_schedule_flow.py` (the real window and a stand-in worker).
+
+- **Drain, don't kill.** When the window closes, the block in hand is finished and put on the board; no new
+  block is taken. A long-running anchor job (which holds no claim) is stopped at the end of the window.
+- **Don't start what can't finish.** Before each block the app compares the time left in the window with how
+  long this card's recent blocks took, claim to board: the median of the last five, plus a quarter, plus two
+  minutes. With no block measured on the card yet, it starts one only with an hour or more left. The board proves
+  in height order, so the next block is a neighbour of the last ones; the margin covers it being a little bigger.
+- **Local wall-clock time.** The window is set in the PC's local time and the time left is real seconds, so on
+  the nights the clocks change a 23:00 to 07:00 window lasts 7 or 9 hours. The window belongs to the day it starts
+  on: ticking only Friday gives Friday night into Saturday morning.
+- **Keep awake.** While the app proves inside the window it asks Windows not to sleep
+  (`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`; the screen can still turn off). It keeps asking
+  while the last block finishes after the window closes, and stops asking when nothing is running or when you
+  press Stop. Off the schedule it never asks.
+- **Wake timer, off unless you tick it.** A task in Task Scheduler, `Hazync\Wake for proving`, with "wake the
+  computer" set, at the window's start. It runs nothing (`cmd /c exit 0`): the app has to be left open. It cannot
+  wake a PC that is shut down or hibernating, and does nothing when "Allow wake timers" is off in the power plan;
+  the app reads that setting with `powercfg` when you save, and says so. Unticking it removes the task.
+- **Handing a block back.** Stop (or closing the app) while a block is claimed hands it back to the board at once
+  with `hazync-worker release <n>`, signed by the same key, instead of leaving it held for up to an hour
+  (`POST /api/release`, docs/COORDINATOR_REFERENCE.md). On Windows the worker is ended with `taskkill /F`, which
+  it cannot see, so the app does the release for it. A worker from before this change has no `release` command;
+  the app says so and the block reopens by itself, as before.
+
+What it does not do yet: "only when plugged in" and "pause while the PC is in use" from #725 are not built.
 
 ## Testing this machine
 
