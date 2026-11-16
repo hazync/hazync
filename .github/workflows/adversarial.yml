@@ -1377,6 +1377,14 @@ jobs:
         run: |
           cd coordinator
           python3 test_replay_precheck.py --control
+      - name: A fresh board's spine is seeded with block 1's own proof (16.11.2026, v0.26.0 board)
+        # The replay pre-check refused /api/proof/1 as the spine seed ("already the verified proof of 1"), so an empty
+        # spine never started. A verified genesis range's proof may seed or advance the spine; true replays still 409.
+        run: cd coordinator && python3 test_spine_seed.py
+      - name: Spine seed POSITIVE CONTROL (seed exception taken out — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_spine_seed.py --control
       - name: G1 retention gate still detects a missing receipt (positive control)
         # check-retention.py is what separates "the board says this block is proven" from "we can
         # hand you the proof for it" — G1's actual content. It runs unattended on the coordinator, so

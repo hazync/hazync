@@ -1152,6 +1152,26 @@ def known_receipt(c, sha):
                   (sha,)).fetchone()
     return r["range_id"] if r else None
 
+def spine_seed_allowed(c, sha):
+    """True if a receipt known_receipt() refuses would still ADVANCE the spine: it is the verified proof of a range that
+    starts at genesis (lo 1; lo 0 is a legacy [0..hi] genesis-seed row) and ends above the spine's head (or there is no
+    spine yet).
+
+    Such a receipt is a genesis-anchored proof of [1..hi], so it is a valid head, and on a fresh board it is the only one
+    there is: the worker seeds an empty spine with /api/proof/1 (`hazync spine`), and the replay pre-check refused it as
+    "already the verified proof of 1", so the spine stayed empty for good (measured 16.11.2026 on the v0.26.0 board).
+    It is not a replay of anything the spine holds. The pre-check's cost bound still holds: each such receipt moves the
+    spine to its hi, after which the same lookup refuses it again, so the exception buys at most one verification per
+    genesis range (plus the submits racing for the same step, each held to a _verify_sem slot). A receipt that would not
+    advance the spine (its own replay, an older head, a range at or below the head) is refused as before."""
+    head = spine_head()
+    try:
+        cur = int(head.get("hi", 0)) if head else 0
+    except (TypeError, ValueError, AttributeError):
+        cur = 0
+    return c.execute("SELECT 1 FROM ranges WHERE receipt_sha=? AND status='verified' AND lo<=1 AND hi>? LIMIT 1",
+                     (sha, cur)).fetchone() is not None
+
 
 def verify_receipt(receipt: bytes, rng):
     """Verify a submitted range receipt on CPU — no folding, no GPU (the 'verify-only' coordinator).
@@ -1400,7 +1420,11 @@ def submit_spine(body):
         return 403, {"error": "signature invalid"}
     with _lock:
         c = db()
-        _known = known_receipt(c, hashlib.sha256(receipt).hexdigest())
+        _sha = hashlib.sha256(receipt).hexdigest()
+        _known = known_receipt(c, _sha)
+        # a genesis range's own proof may still seed or advance the spine (16.11.2026: an empty spine never started)
+        if _known and spine_seed_allowed(c, _sha):
+            _known = None
         c.close()
     if _known:
         return 409, {"error": f"this receipt is already the verified proof of {_known}: a replay does not advance the spine"}
