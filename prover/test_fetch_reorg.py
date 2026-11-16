@@ -22,10 +22,14 @@ FETCH = HERE / "fetch_block_rpc.py"
 CONTROL = "--control" in sys.argv
 if CONTROL:
     src = FETCH.read_text()
-    shipped = "            if x: return h, x\n"
-    assert src.count(shipped) == 1, "the control's patch no longer applies: update it with PrepTip.get"
+    # both ways PrepTip.get answers: from PREP_TIP.json, and from the state files (a host from before it)
+    patches = [("                return h, x\n", "                return h - 1, state_hash(self.od, h - 1)\n"),
+               ("            if x: return h, x\n", "            if x: return h - 1, state_hash(self.od, h - 1)\n")]
+    for a, b in patches:
+        assert src.count(a) == 1, "the control's patch no longer applies: update it with PrepTip.get"
+        src = src.replace(a, b)
     FETCH = pathlib.Path(tempfile.mkdtemp(prefix="fetch-control-")) / "fetch_block_rpc.py"
-    FETCH.write_text(src.replace(shipped, "            if x: return h - 1, state_hash(self.od, h - 1)\n"))
+    FETCH.write_text(src)
 FAKE = r'''
 import json, sys
 w = json.load(open(sys.argv[1])); m, a = sys.argv[2], sys.argv[3:]
