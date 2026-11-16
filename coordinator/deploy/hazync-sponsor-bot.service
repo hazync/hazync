@@ -68,6 +68,13 @@ ExecStart=/usr/bin/python3 /opt/hazync/coordinator/sponsor_bot.py run --live \
 # timer restarts it anyway. The ConditionPathExists latch above is what makes the sentence true.
 Restart=no
 
+# Exit 75 (EX_TEMPFAIL) = "a read-only check BEFORE anything was rented or started hit a transient error
+# (timeout, refused connection, 5xx): skipped, the next timer run retries". Counted as success, so it neither
+# latches nor pages. The bot itself turns a streak (6 runs over >= 25 min, sponsor_bot.TRANSIENT_LATCH_*) into
+# a real failure, so a coordinator or GitHub that stays down still latches and alerts. Anything after a pod
+# is rented never exits 75.
+SuccessExitStatus=75
+
 # Write the latch on any non-success exit. $SERVICE_RESULT is systemd's own verdict, so this catches
 # a signal or a timeout as well as a non-zero exit.
 # ⚠ `-` prefix: if the latch cannot be written, that must not itself fail the unit and page again.

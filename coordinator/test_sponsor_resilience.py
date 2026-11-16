@@ -202,6 +202,116 @@ if not CONTROL:
     got = run_prepare(stale)
     check(got == "http 404", f"and on an OLD release with no manifest it still fails on the 404 ({got})")
 
+# ── 5. ⛔ A TRANSIENT pre-rental failure skips without latching, but a STREAK still latches (11-16) ────────
+# 05:46 on 11-16: /api/meta timed out 4x in ~30 s while the box was thrashing, and one run latched the bot off
+# although "nothing was started and nothing was spent". Real danger (money spent, pods possibly live) still latches.
+if not CONTROL:
+    import tempfile as _tf
+    sb = sponsor_bot
+
+    # 5a. classification: http_retry exhaustion is transient; a CoordError is transient only without an answer / on 5xx
+    try:
+        sb.http_retry(flaky(99, TimeoutError("timed out")), "GET http://127.0.0.1:8899/api/meta")
+        raised = None
+    except BaseException as e:                               # noqa: BLE001
+        raised = e
+    check(isinstance(raised, sb.TransientError), f"4 timeouts end as TransientError ({type(raised).__name__})")
+
+    class _K:                                                # a signing key that signs anything
+        def sign(self, m): return b"\0" * 64
+    def coord_err(exc):
+        c = sb.Coord.__new__(sb.Coord); c.url, c.timeout, c.sk = "http://c", 1, _K()
+        o = sb.urllib.request.urlopen
+        def boom(*a, **k): raise exc
+        sb.urllib.request.urlopen = boom
+        try:
+            c.queue(); return None
+        except sb.CoordError as e:
+            return e
+        finally:
+            sb.urllib.request.urlopen = o
+    check(coord_err(TimeoutError("timed out")).transient, "a coordinator timeout is transient")
+    check(coord_err(urllib.error.URLError(ConnectionRefusedError(111, "refused"))).transient,
+          "a refused connection is transient")
+    check(coord_err(http_error(503)).transient, "a coordinator 503 is transient")
+    check(not coord_err(http_error(403)).transient, "⛔ a 403 (key refused) is NOT transient: it latches")
+
+    # 5b. one transient run: exit 75, no latch; the unit counts 75 as success
+    home = _tf.mkdtemp()
+    t0 = 1_000_000.0
+    rc = sb.transient_exit("sponsor_bot: GET meta failed", home, now=t0)
+    check(rc == sb.TRANSIENT_EXIT == 75, f"one transient timeout → exit 75, skipped, no latch ({rc})")
+    check("SuccessExitStatus=75" in UNIT, "⛔ and the unit counts 75 as success (no ExecStopPost latch, no OnFailure page)")
+
+    # 5c. N in a row over M minutes: latch (SystemExit with a message ⇒ exit 1 ⇒ latch + OnFailure alert)
+    outs = []
+    for i in range(1, 12):
+        try:
+            outs.append(sb.transient_exit("sponsor_bot: GET meta failed", home, now=t0 + i * 330))
+        except SystemExit as e:
+            outs.append(e)
+            break
+    last = outs[-1]
+    check(isinstance(last, SystemExit) and isinstance(last.code, str) and "Latching" in last.code,
+          f"a streak latches ({type(last).__name__}: {str(getattr(last, 'code', last))[-60:]!r})")
+    runs = len(outs) + 1
+    check(runs == sb.TRANSIENT_LATCH_RUNS, f"after exactly {sb.TRANSIENT_LATCH_RUNS} runs in a row ({runs})")
+    # 6 fast runs are NOT enough on their own: the streak must also span TRANSIENT_LATCH_S
+    home2 = _tf.mkdtemp()
+    fast = [sb.transient_exit("x", home2, now=t0 + i) for i in range(10)]
+    check(all(r == 75 for r in fast), "10 runs inside a minute do not latch (the span bound holds too)")
+    # a run that gets past every pre-rental check clears the streak
+    sb.transient_clear(home)
+    check(sb.transient_exit("x", home, now=t0 + 99999) == 75, "a clean run resets the streak")
+    # fail closed: no state directory ⇒ latch at once
+    try:
+        sb.transient_exit("x", None); r = "no latch"
+    except SystemExit as e:
+        r = "latch"
+    check(r == "latch", f"⛔ with nowhere to count, it latches as before ({r})")
+
+    # 5d. ⛔ a failure AFTER a pod is started latches as today: a coordinator timeout inside the run loop
+    # is never turned into TransientError, the pods are terminated and the run ends non-zero.
+    class Api:
+        def __init__(s): s.terminated = []
+        def deploy(s, name, ssh_pubkey, gpu_types=None):
+            return {"id": "pod1", "name": name, "costPerHr": 0.5, "desiredStatus": "RUNNING"}
+        def pods(s): return [] if s.terminated else [{"id": "pod1", "name": "x", "desiredStatus": "RUNNING"}]
+        def terminate(s, pid): s.terminated.append(pid)
+    class Runner:
+        home = None
+        def boot(s, pod): raise RuntimeError("ssh died after the pod was rented")
+    calls = {"n": 0}
+    class C:
+        def queue(s):
+            calls["n"] += 1
+            if calls["n"] == 1: return {"sponsorships": []}
+            raise sb.CoordError("timed out", transient=True)
+    home3 = _tf.mkdtemp()
+    bot = sb.Bot(os.path.join(home3, "bot.db"), Api(), Runner(), coord=C(), max_pods=1, max_usd=5,
+                 max_usd_per_hour=2, identity_home=home3, sleep=lambda s: None, log=lambda m: None)
+    started = {"pod": False}
+    def fake_launch(c, now):
+        started["pod"] = True
+        raise RuntimeError("ssh died after the pod was rented")
+    bot._launch = fake_launch
+    bot._assign = lambda c, now: None
+    bot._regen = lambda c, now: None
+    bot._observe = lambda c, now: None
+    o_pw, o_rec, o_rw = sb.pending_work, sb.reconcile, sb.reconcile_work
+    sb.pending_work = lambda *a, **k: [(1, 5)]
+    sb.reconcile = lambda coord: []
+    sb.reconcile_work = lambda c, coord: 0
+    try:
+        bot.run(); res = None
+    except BaseException as e:                               # noqa: BLE001
+        res = e
+    finally:
+        sb.pending_work, sb.reconcile, sb.reconcile_work = o_pw, o_rec, o_rw
+    check(started["pod"], "the scenario really reached the launch step")
+    check(res is not None and not isinstance(res, sb.TransientError),
+          f"⛔ a failure after a pod was started is NOT transient: it raises out and the run latches ({type(res).__name__})")
+
 print()
 if CONTROL:
     if fails:

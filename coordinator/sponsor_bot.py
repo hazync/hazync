@@ -101,7 +101,72 @@ _CONTROL_IGNORE_BUNDLES = False
 # ---------- the coordinator's bot API ----------
 
 class CoordError(RuntimeError):
-    """The coordinator's bot API could not be reached, or refused a request."""
+    """The coordinator's bot API could not be reached, or refused a request.
+
+    `transient` is True only for "no answer" (timeout, refused connection) and 5xx: a busy or restarting
+    coordinator. A 4xx (key refused, bad request) or an unreadable body is an ANSWER and is never transient."""
+
+    def __init__(self, msg, transient=False):
+        super().__init__(msg)
+        self.transient = transient
+
+
+class TransientError(SystemExit):
+    """A read-only step BEFORE anything was rented or started failed on a transient cause (timeout, refused
+    connection, 5xx). main() ends such a run as "skipped, will retry" (TRANSIENT_EXIT) instead of latching, until
+    the streak is long enough to mean "down", not "busy" (see transient_exit).
+
+    ⛔ A SystemExit subclass on purpose: anything that does not handle it explicitly still exits 1 and LATCHES,
+    which is the safe default. Raise it ONLY where provably nothing has been rented, started or spent."""
+
+
+# 📏 11-16 05:46: the coordinator answered /api/meta late four times in ~30 s while the box was under memory
+# pressure, and that one run latched the bot off ("nothing was started and nothing was spent"); 10-12 a GitHub 504
+# did the same. A transient pre-rental failure now exits TRANSIENT_EXIT (SuccessExitStatus= in the unit: no latch,
+# no page). The latch still fires once the streak is TRANSIENT_LATCH_RUNS runs in a row AND spans at least
+# TRANSIENT_LATCH_S, so a coordinator or GitHub that is really down still pages within about half an hour.
+TRANSIENT_EXIT = 75            # EX_TEMPFAIL
+TRANSIENT_LATCH_RUNS = 6
+TRANSIENT_LATCH_S = 25 * 60     # 6 runs on a 5-min timer span 5 gaps, ~26-28 min measured from first to last
+TRANSIENT_STATE = "transient.json"
+
+
+def transient_exit(msg, home, now=None):
+    """Record one transient pre-rental failure and return the exit code: TRANSIENT_EXIT (skip, retry next timer)
+    or, once the streak is long enough, raise SystemExit(msg) so the run fails and the unit latches + alerts.
+    ⛔ Fails CLOSED: no state directory, or a state file that cannot be written, latches as before."""
+    now = time.time() if now is None else now
+    if not home or not os.path.isdir(home):
+        raise SystemExit(f"{msg} (no SPONSOR_BOT_HOME to count transient failures in, so this latches)")
+    path = os.path.join(home, TRANSIENT_STATE)
+    st = {}
+    try:
+        with open(path) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        st = {}
+    first = st.get("first") if isinstance(st.get("first"), (int, float)) else now
+    runs = (st.get("runs") if isinstance(st.get("runs"), int) else 0) + 1
+    try:
+        _write_private(path, json.dumps({"first": first, "runs": runs, "last": now, "error": str(msg)[:300]}))
+    except OSError as e:
+        raise SystemExit(f"{msg} (could not record the transient streak: {e}, so this latches)")
+    span = now - first
+    if runs >= TRANSIENT_LATCH_RUNS and span >= TRANSIENT_LATCH_S:
+        raise SystemExit(f"{msg} — {runs} transient failures in a row over {span / 60:.0f} min: this is down, not "
+                         f"busy. Latching. Nothing was started and nothing was spent")
+    print(f"{msg}. Transient ({runs} in a row over {span / 60:.0f} min; latches at {TRANSIENT_LATCH_RUNS} runs over "
+          f"{TRANSIENT_LATCH_S // 60} min): skipped, the next timer run retries.", flush=True)
+    return TRANSIENT_EXIT
+
+
+def transient_clear(home):
+    """A run got past every pre-rental check: the streak is over."""
+    if home:
+        try:
+            os.remove(os.path.join(home, TRANSIENT_STATE))
+        except OSError:
+            pass
 
 
 COORD_ERRORS_MAX = 10     # ticks in a row the coordinator may fail before the run stops (every pod terminated)
@@ -154,9 +219,13 @@ class Coord:
                 detail = json.loads(e.read() or b"{}").get("error") or ""
             except ValueError:
                 detail = ""
-            raise CoordError(f"the coordinator answered {e.code} to {method} {path.split('?')[0]}: {detail}") from None
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise CoordError(f"the coordinator could not be reached for {method} {path.split('?')[0]}: {e}") from None
+            raise CoordError(f"the coordinator answered {e.code} to {method} {path.split('?')[0]}: {detail}",
+                             transient=e.code >= 500) from None
+        except (urllib.error.URLError, OSError) as e:
+            raise CoordError(f"the coordinator could not be reached for {method} {path.split('?')[0]}: {e}",
+                             transient=True) from None
+        except ValueError as e:
+            raise CoordError(f"the coordinator sent an unreadable answer to {method} {path.split('?')[0]}: {e}") from None
 
     def queue(self):
         return self._call("GET", "/api/bot/queue")["sponsorships"]
@@ -838,7 +907,7 @@ def http_retry(fn, what):
             print(f"sponsor_bot: {what} failed ({type(last).__name__}: {last}); "
                   f"retry {attempt + 2}/{HTTP_TRIES} in {wait}s", flush=True)
             time.sleep(wait)
-    raise SystemExit(f"sponsor_bot: {what} failed {HTTP_TRIES} times, last was {last} — "
+    raise TransientError(f"sponsor_bot: {what} failed {HTTP_TRIES} times, last was {last} — "
                      f"nothing was started and nothing was spent")
 
 
@@ -1135,6 +1204,9 @@ class Bot:
         try:
             self.coord.queue()
         except CoordError as e:
+            if e.transient:
+                raise TransientError(f"sponsor_bot: the coordinator's sponsor bot API did not answer before anything "
+                                     f"was rented: {e}")
             raise BotRefused(f"the coordinator's sponsor bot API is not usable: {e}")
         c = connect(self.db_path)
         ensure_tables(c)
@@ -1170,6 +1242,9 @@ class Bot:
                     raise BotRefused("; ".join(bad[:10]) + more)
         except CoordError as e:
             c.close()
+            if e.transient:
+                raise TransientError(f"sponsor_bot: the coordinator's sponsor bot API did not answer before "
+                                     f"anything was rented: {e}")
             raise BotRefused(f"the coordinator's sponsor bot API failed before anything was rented: {e}")
         except BotRefused:
             c.close()
@@ -1725,14 +1800,19 @@ def main(argv=None):
                   sleep_s=a.tick, trial=trial)
     except BotRefused as e:
         raise SystemExit(f"sponsor_bot: {e}")
-    bot.runner = SshRunner.from_env().prepare()
-    bot.api = RunPod.from_env()
-    bot.identity_home = bot.runner.home
-    install_signal_handlers()
+    home = os.environ.get("SPONSOR_BOT_HOME")
     try:
+        bot.runner = SshRunner.from_env().prepare()
+        bot.api = RunPod.from_env()
+        bot.identity_home = bot.runner.home
+        install_signal_handlers()
         reason = bot.run()
+    except TransientError as e:
+        # Only raised before anything is rented (prepare's http_retry, Bot.run's pre-rental coordinator checks).
+        return transient_exit(str(e.code), home)
     except BotRefused as e:
         raise SystemExit(f"sponsor_bot: {e}")
+    transient_clear(home)
     c = connect(bot.db_path, readonly=True)
     try:
         print(format_report(report(c)))
