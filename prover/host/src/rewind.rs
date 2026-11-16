@@ -25,10 +25,15 @@ fn read_state(out: &str, h: u32) -> Option<ChainState> {
     serde_json::from_str(&std::fs::read_to_string(format!("{out}/state_{h}.json")).ok()?).ok()
 }
 
-/// The disk trie's height (its meta), without loading anything else.
+/// The disk trie's flushed height, read from its meta (bytes 17..25, as libzync-prep-run.sh reads it) WITHOUT opening the
+/// arena: an open bumps `trie/GEN` (Z1), and a refused rewind must change nothing. 0 for a trie never flushed.
 fn trie_height() -> u64 {
     let d = crate::trie::trie_dir().expect("a rewind needs the on-disk trie (HAZYNC_TRIE_DIR)");
-    libzync::trie_store::TrieStore::open_dir(&d, true).unwrap_or_else(|e| panic!("{}: {e}", d.display())).height
+    match std::fs::read(d.join("meta")) {
+        Ok(b) if b.len() >= 25 && &b[..8] == b"HZTRIED1" => u64::from_le_bytes(b[17..25].try_into().unwrap()),
+        Ok(_) => panic!("{}/meta: not a trie arena meta", d.display()),
+        Err(_) => 0,
+    }
 }
 
 /// The newest COMPLETE save point, by libzync-prep-run.sh's rule: state_<h>.json (non-empty), .smt and .coinlog, and
@@ -213,7 +218,7 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool) {
 /// `libzync-store-digest <out> <h>`: the CONTENT of prep's on-disk stores at the save point h, for comparing two runs
 /// that reached the same state by different histories (a rewind and a fresh run): the trie's canonical snapshot, the
 /// coin log's leaves, the position index's live entries (its file differs: slots and tombstones depend on history),
-/// and the save point's BIP30 snapshot. Read-only.
+/// and the save point's BIP30 snapshot. Read-only, except that opening the arena bumps `trie/GEN` (Z1).
 pub(crate) fn digest_cmd(out: &str, h: u32) {
     use sha2::{Digest, Sha256};
     let hexs = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
