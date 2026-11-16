@@ -61,6 +61,8 @@ jobs:
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
+      - name: The WASM build scripts locate their checkout from any cwd (scripts/test-wasm-build-cwd.sh, and its control)
+        run: ./scripts/test-wasm-build-cwd.sh && ./scripts/test-wasm-build-cwd.sh --control
       - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
         # scripts/release.sh runs this on the staged assets before publishing (CLI, the wasm through its
         # JavaScript glue); run here on every push so the gate is known to pass before a release needs it.
