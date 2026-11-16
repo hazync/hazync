@@ -76,10 +76,30 @@ print(" ".join(sorted({pk[n["id"]]["name"] for n in m["resolve"]["nodes"]
                        if pk[n["id"]].get("links") or any(pk[d["pkg"]]["name"] in ("cc", "cmake") for d in n["deps"])})))') \
         || { echo "$0: cargo metadata --locked failed for $CRATE (Cargo.lock not up to date, or cargo older than 1.78)" >&2; exit 1; }
     WITH_C=0; [ -z "$C_CRATES" ] || WITH_C=1
-    IMG=hazync-wasm-build:$(cat "$REPO/reproduce/wasm.Dockerfile" <(echo "$TOOLCHAIN $WITH_C") | sha256sum | cut -c1-16)
-    docker image inspect "$IMG" >/dev/null 2>&1 || docker build --platform linux/amd64 --progress=plain -t "$IMG" \
-        --build-arg RUST_TOOLCHAIN="$TOOLCHAIN" --build-arg WITH_C="$WITH_C" -f "$REPO/reproduce/wasm.Dockerfile" "$REPO/reproduce" >&2
-    echo "building $CRATE in $IMG (reproduce/wasm.Dockerfile${C_CRATES:+; it compiles C: $C_CRATES})" >&2
+    # The image: the PUBLISHED one by digest when reproduce/wasm-image.digests has a line for its tag (pulled once, then
+    # used as long as the local tag still carries that digest); else reproduce/wasm.Dockerfile built here, said loudly.
+    # A release refuses a local build (HAZYNC_WASM_REQUIRE_PUBLISHED=1, package-release.sh) unless
+    # HAZYNC_WASM_ALLOW_LOCAL_IMAGE=1 says so explicitly.
+    TAG=$("$REPO/reproduce/wasm-image-tag.sh" "$TOOLCHAIN" "$WITH_C")
+    IMG=hazync-wasm-build:$TAG REMOTE=ghcr.io/hazync/hazync-wasm-build
+    DIGEST=$(awk -v t="$TAG" '$1 == t && $2 ~ /^sha256:[0-9a-f]{64}$/ { print $2 }' "$REPO/reproduce/wasm-image.digests" 2>/dev/null | head -1)
+    if [ -n "$DIGEST" ]; then
+        if ! docker image inspect --format '{{join .RepoDigests " "}}' "$IMG" 2>/dev/null | tr ' ' '\n' | grep -qxF "$REMOTE@$DIGEST"; then
+            docker pull --platform linux/amd64 "$REMOTE@$DIGEST" >&2 && docker tag "$REMOTE@$DIGEST" "$IMG" \
+                || { echo "$0: could not pull the published build image $REMOTE@$DIGEST" >&2; exit 1; }
+        fi
+        ORIGIN="the published image $REMOTE@$DIGEST"
+    else
+        if [ -n "${HAZYNC_WASM_REQUIRE_PUBLISHED:-}" ] && [ -z "${HAZYNC_WASM_ALLOW_LOCAL_IMAGE:-}" ]; then
+            echo "$0: no published build image for tag $TAG in reproduce/wasm-image.digests, and a release takes no local build (HAZYNC_WASM_REQUIRE_PUBLISHED; HAZYNC_WASM_ALLOW_LOCAL_IMAGE=1 overrides)" >&2
+            exit 1
+        fi
+        echo "⚠ no published build image for tag $TAG (reproduce/wasm-image.digests): building reproduce/wasm.Dockerfile LOCALLY" >&2
+        docker image inspect "$IMG" >/dev/null 2>&1 || docker build --platform linux/amd64 --progress=plain -t "$IMG" \
+            --build-arg RUST_TOOLCHAIN="$TOOLCHAIN" --build-arg WITH_C="$WITH_C" -f "$REPO/reproduce/wasm.Dockerfile" "$REPO/reproduce" >&2
+        ORIGIN="a LOCAL build of reproduce/wasm.Dockerfile, $IMG"
+    fi
+    echo "building $CRATE in $ORIGIN${C_CRATES:+ (it compiles C: $C_CRATES)}" >&2
     mkdir -p "$OUT"
     exec docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp -e HAZYNC_WASM_TOOLCHAIN="$TOOLCHAIN" \
         --mount "type=bind,src=$REPO,dst=/hazync-src,readonly" --mount "type=bind,src=$OUT,dst=/hazync-out" \

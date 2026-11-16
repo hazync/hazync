@@ -1,0 +1,97 @@
+name: publish-wasm-image
+
+# The WASM build image (reproduce/wasm.Dockerfile), published to ghcr.io/<owner>/hazync-wasm-build so every WASM build
+# (swiftsync-verify-wasm/build.sh, scripts/wasm-build.sh) pulls the SAME image by digest instead of rebuilding it from an
+# Ubuntu snapshot and a rustup download on every machine and every CI run (~10-15 min each). The digests this prints are
+# committed to reproduce/wasm-image.digests; the scripts pull by those, and a release refuses a locally built image.
+#
+# Two variants, one per value of the scripts' WITH_C (clang only where a WASM graph compiles C). Each tag is
+# reproduce/wasm-image-tag.sh's: a hash of the Dockerfile and the build args, the same lookup key the scripts use.
+#
+# Like publish-deps-image.yml: the run's own GITHUB_TOKEN with packages: write, no personal token anywhere.
+# ⚠ The image bytes are not reproducible (apt and file times); what is reproducible is the .wasm built in it. Anyone can
+# rebuild the image from the Dockerfile and compare the .wasm sha256s with the pinned ones.
+
+on:
+  workflow_dispatch:
+    inputs:
+      toolchain:
+        description: "Rust toolchain (the scripts' HAZYNC_WASM_TOOLCHAIN default)"
+        default: "1.99.0"
+
+permissions:
+  contents: read
+  packages: write        # the only reason this workflow can push
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr as this run
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ⛔ EVERY INPUT COMES THROUGH env, NOT THROUGH ${{ }} INSIDE THE SCRIPT (publish-deps-image.yml says why).
+      - name: Build and push both variants, print their digests
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ $TOOLCHAIN =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::toolchain $TOOLCHAIN: want x.y.z"; exit 1; }
+          : > digests.txt
+          for c in 0 1; do
+            tag=$(reproduce/wasm-image-tag.sh "$TOOLCHAIN" "$c")
+            ref="ghcr.io/$OWNER/hazync-wasm-build:$tag"
+            echo "::group::$ref (WITH_C=$c)"
+            docker buildx build --platform linux/amd64 --progress=plain --push \
+              --build-arg RUST_TOOLCHAIN="$TOOLCHAIN" --build-arg WITH_C="$c" \
+              --label "org.opencontainers.image.source=https://github.com/$REPOSITORY" \
+              --label "org.opencontainers.image.description=Hazync WASM build image (reproduce/wasm.Dockerfile, Rust $TOOLCHAIN, WITH_C=$c)" \
+              -t "$ref" -f reproduce/wasm.Dockerfile reproduce
+            d=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+            [[ $d =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::$ref: no digest ($d)"; exit 1; }
+            echo "$tag $d" >> digests.txt
+            echo "::endgroup::"
+          done
+          echo "Lines for reproduce/wasm-image.digests (commit them once the anonymous pull below passes):"
+          cat digests.txt
+          { echo '```'; cat digests.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # ⛔⛔ A PRIVATE PACKAGE PASSES THE STEP ABOVE AND IS USELESS (publish-deps-image.yml, 2026-09-27): ghcr creates a
+      # new package PRIVATE, and nobody outside the org can pull it. This step uses NO credential, and refuses to call
+      # the publish done until the package has been set public by hand, once, at
+      # https://github.com/orgs/<owner>/packages/container/hazync-wasm-build/settings.
+      - name: Anyone can pull each digest without a credential
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -uo pipefail
+          fail=0
+          while read -r tag d; do
+            tok=$(curl -sS --max-time 20 \
+                  "https://ghcr.io/token?scope=repository:$OWNER/hazync-wasm-build:pull&service=ghcr.io" \
+                  | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
+            if [ -z "$tok" ]; then
+              echo "::error::ghcr granted NO anonymous pull token for $OWNER/hazync-wasm-build: the package is PRIVATE. Set it public at https://github.com/orgs/$OWNER/packages/container/hazync-wasm-build/settings and re-run."
+              fail=1; break
+            fi
+            code=$(curl -sS --max-time 25 -o /dev/null -w '%{http_code}' \
+                   -H "Authorization: Bearer $tok" \
+                   -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+                   "https://ghcr.io/v2/$OWNER/hazync-wasm-build/manifests/$d")
+            if [ "$code" = 200 ]; then
+              echo "ok   $tag $d is anonymously pullable (HTTP $code)"
+            else
+              echo "::error::$tag $d is not anonymously pullable (HTTP $code)"; fail=1
+            fi
+          done < digests.txt
+          exit $fail

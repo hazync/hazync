@@ -63,6 +63,8 @@ jobs:
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
       - name: The WASM build scripts locate their checkout from any cwd (scripts/test-wasm-build-cwd.sh, and its control)
         run: ./scripts/test-wasm-build-cwd.sh && ./scripts/test-wasm-build-cwd.sh --control
+      - name: The WASM build scripts take the published build image by digest, else build it locally and say so (mock docker)
+        run: ./scripts/test-wasm-image-pull.sh
       - name: swiftsync-verify-wasm (its unit tests, run natively)
         run: cargo test --manifest-path swiftsync-verify-wasm/Cargo.toml --release
       - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
