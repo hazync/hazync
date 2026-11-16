@@ -50,7 +50,7 @@ same_as_ref() {  # same_as_ref <root> <ref root> <hi> <F> <tag> [noleaves]
     diff -rq $r/out/reorg $q/out/reorg >/dev/null || { ok=0; why="$why records"; }
     cmp -s $r/out/PREP_TIP.json $q/out/PREP_TIP.json || { ok=0; why="$why tip"; }
     local dr dq; dr=$(digest $r $hi); dq=$(digest $q $hi)
-    [ -n "$dr" ] && [ "$dr" = "$dq" ] || { ok=0; why="$why stores($(echo "$dr" | awk '{print $1}' | tr '\n' ' '))"; }
+    [ -n "$dr" ] && [ "$dr" = "$dq" ] || { ok=0; why="$why stores($(diff <(echo "$dr") <(echo "$dq") | sed -n 's/^< \([A-Z]*\) .*/\1/p' | tr '\n' ' '))"; }
     [ ! -e $r/blocks/REORG ] && [ ! -e $r/out/REWIND ] || { ok=0; why="$why markers"; }
     # trie/roots.log (ZAPP_FOLLOWER.md Z1): the same (height, block hash, root hash) for 1..hi (the slot references and
     # generations differ: arena layout and opens), and no entry of an orphaned block
@@ -77,6 +77,8 @@ reference() {  # reference <ref root> <F> <branch dir> <hi>: a fresh prep of mai
     run $1 $4
 }
 CONTROL=0; [ "${1:-}" = --control ] && CONTROL=1
+# every check's line also into $O/control.out (the control counts what failed)
+check() { local l; if [ "$1" = 1 ]; then l="  ok   $2"; else l="  FAIL $2"; fails=$((fails+1)); fi; echo "$l"; echo "$l" >> $O/control.out; }
 [ $CONTROL = 1 ] && echo "CONTROL: a byte of each rewound coin log is changed before the comparison"
 
 # the old chain once: prep 1..200, stores saved at 200, kept as a template
@@ -95,7 +97,13 @@ for d in 1 2 12; do
     [ $CONTROL = 1 ] && python3 -c "import sys; p=sys.argv[1]; b=bytearray(open(p,'rb').read()); b[40] ^= 1; open(p,'wb').write(b)" $r/cl/L0.bin
     same_as_ref $r $q $hi $f "A depth $d"
 done
-[ $CONTROL = 1 ] && { [ $fails -gt 0 ] && { echo "CONTROL OK: $fails check(s) fail: the changed coin log was caught"; exit 0; }; echo "CONTROL BROKEN: nothing failed"; exit 1; }
+if [ $CONTROL = 1 ]; then
+    # exactly the three comparisons fail, each on the coin log's content, and nothing else (review 16.11, N3): the
+    # rewinds themselves passed, so it is the comparison that caught the changed byte
+    nf=$(grep -c '^  FAIL ' $O/control.out || true); nc=$(grep '^  FAIL ' $O/control.out | grep -c 'stores(COINLOG' || true)
+    [ "$fails" = 3 ] && [ "$nf" = 3 ] && [ "$nc" = 3 ] && { echo "CONTROL OK: exactly the 3 comparisons failed, each on the coin log (stores(COINLOG))"; exit 0; }
+    echo "CONTROL BROKEN: $fails failure(s), $nc of them on the coin log's content"; exit 1
+fi
 
 echo "== H. a stale journal (review 16.11, H1): prep died between the trie's flush at 200 and the journal's commit"
 # HAZYNC_TEST_PREP_CRASH_AT=200 (dev mode): exit right after the trie's flush at 200, before its marker; pending.bin still
@@ -186,6 +194,18 @@ for fk in 145 150; do
     check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $fk" $r/run.log && echo 1)" "I fork $fk: rewound and re-prepped to $hi (exit $rc)"
     same_as_ref $r $q $hi $fk "I fork $fk"
 done
+
+echo "== J0. a run PINNED from the start (PIN 150: its trie holds every root from 150 on), rewound below nothing it pins"
+echo "   (fork 188) and run on: the root of 150 must still read as state_150's trie (review 16.11, N1)"
+d=12; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d
+r=$O/j0; root $r; mkdir -p $r/trie; echo "150 0" > $r/trie/PIN; cp $B/block_*.json $r/blocks/; run $r 200
+cp $br/block_*.json $r/blocks/; marker $r $f $d
+run $r $hi; rc=$?
+want=$(python3 -c "import json,sys; print(bytes(json.load(open(sys.argv[1]))['trie_root']).hex())" $r/out/state_150.json 2>/dev/null || python3 -c "import json,sys; print(bytes(json.load(open(sys.argv[1]))['trie_root']).hex())" $r/out/orphaned/1/state_150.json)
+got=$( (cd $r && HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie "$H" libzync-store-digest $r/out $hi --root-at 150 2>/dev/null) | awk '/^ROOT_AT/{print $3}')
+intact=$(awk '{print $2}' $r/trie/INTACT)
+check "$([ $rc = 0 ] && [ -n "$got" ] && [ "$got" = "$want" ] && [ "$intact" -le 150 ] && echo 1)" "J0: rewound and run on with PIN 150: the root of 150 reads whole as state_150's ($got), INTACT from $intact (exit $rc)"
+same_as_ref $r $q $hi $f "J0 pinned run"
 
 echo "== J. a rewind with a reader's PIN in the trie (ZAPP_FOLLOWER Z1), and a SECOND reorg on the new branch"
 d=12; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d

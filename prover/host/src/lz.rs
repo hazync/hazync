@@ -1530,6 +1530,16 @@ pub(crate) fn cl_rewind(fork: u32, bodies: &[Vec<u8>], st: &ChainState) {
     *CL.lock().unwrap() = Some(ClHost { store, pos });
 }
 
+/// The coin log's journal (pending.bin), checked as a rewind will read it: every record intact and with its height.
+/// Returns the number of records. For the rewind to refuse BEFORE it changes anything (review 16.11).
+pub(crate) fn cl_journal_check() -> Result<usize, String> {
+    let Some(d) = cl_dir() else { return Ok(0) };
+    let Ok(u) = std::fs::read(d.join("pending.bin")) else { return Ok(0) };
+    let r = cl_journal_records(&u)?;
+    if r.iter().any(|(h, _)| h.is_none()) { return Err("a record without its height (version 1): a rewind cannot place it".into()); }
+    Ok(r.len())
+}
+
 /// The position index: on disk in HAZYNC_COINLOG_DIR (index.bin), else in memory.
 pub(crate) fn cl_index() -> libzync::host::AnyIndex {
     match cl_dir() {

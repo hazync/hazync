@@ -462,9 +462,14 @@ re-prep, every `state_<h>.json`, the save point's files, the leaf bundles, the u
 logged roots (height, hash, root hash) and the stores' CONTENT equal a FRESH prep of the new branch: depth 1, 2 and W
 from a save point at 200; depth 1 and W with prep stopped between save points (journal of 151..200); the automatic
 path end to end (exit 5, restart, rewind); a crash after the save point at F, finished from `out/REWIND`; depth W+1
-with `--allow-deep`; and three refusals that change nothing. `--control` skips the coin log undo and must fail.
+with `--allow-deep`; and three refusals that change nothing. `--control` changes one byte of each rewound coin log after the rewind: exactly the three comparisons must fail, each
+on the coin log's content (the rewinds themselves pass).
 `prover/test_fetch_reorg.py`: the fetcher waits for an `auto` rewind and fetches the new branch after it; a fork beyond
 W still stops. `coordinator/test_reorg_units.py`: exit 5 restarts the prep units and does not alert.
+
+**Orphaned files are kept** (`out/orphaned/<epoch>/`, `leaves/orphaned/<epoch>/`) until a person removes them; nothing
+prunes them. Keep at least the epochs whose blocks are within J of the tip (P4 copies them off-box first). The epoch's
+directory is made with the intent, so epochs are unique even when a rewind moves nothing.
 
 **Review of 16.11.2026 (P3), fixed.** (H1) `cl_rewind` undid every `pending.bin` record, also those of blocks a save
 point already held (a crash between the trie's flush at A and the journal's commit leaves them): now only records above

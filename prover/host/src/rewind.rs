@@ -87,6 +87,9 @@ fn hook(name: &str) {
 }
 
 pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: bool) {
+    // any panic, from the first line on, is exit 4 (review 16.11, L1): a rerun that panics before its intent is read
+    // must not become systemd's silent 101 loop either
+    exit_4_on_panic();
     assert!(methods::COINLOG && methods::TRIE, "libzync-prep-rewind needs the product image (coin log + trie)");
     // the leaf bundles above F are the orphaned branch's and must move: a rewind that does not know where they are
     // would leave them for the coordinator to serve (review 16.11). Say where, or that there are none.
@@ -108,7 +111,7 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
                 refuse("the fetcher's marker is REORG_TOO_DEEP: the undo records cannot reach the fork");
             }
             let m: serde_json::Value = std::fs::read_to_string(std::path::Path::new(blocks).join("REORG")).ok()
-                .and_then(|x| serde_json::from_str(&x).ok()).unwrap_or_else(|| refuse(&format!("no {rw} and no readable {blocks}/REORG: nothing to rewind to")));
+                .and_then(|x| serde_json::from_str(&x).ok()).unwrap_or_else(|| refuse(&format!("nothing to rewind to: no {rw} (no rewind in progress) and no readable {blocks}/REORG (none asked for, or a rewind already finished and removed it)")));
             let fork = m["fork"].as_u64().unwrap_or_else(|| refuse("REORG has no fork")) as u32;
             let depth = m["depth"].as_u64().unwrap_or(u64::MAX);
             if m["class"].as_str() != Some("auto") && !allow_deep {
@@ -160,12 +163,16 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
             o.into_iter().map(|(h, x)| (h, crate::hex(&x))).collect()
         }
     };
+    // the coin log's journal must be readable, every record with its height, before anything changes (review 16.11:
+    // a damaged one used to panic only after the logged roots were cut)
+    if let Err(e) = crate::lz::cl_journal_check() { refuse(&format!("the coin log's journal: {e}")); }
     if let Some(m) = &marker {
+        // the epoch's directory is made with the intent, so the next rewind's epoch differs even if nothing moves (L5)
+        std::fs::create_dir_all(format!("{out}/orphaned/{epoch}")).unwrap_or_else(|e| panic!("{out}/orphaned/{epoch}: {e}"));
         let intent = serde_json::json!({"fork": fork, "epoch": epoch, "marker": m,
                                         "orphaned": orphaned.iter().map(|(h, x)| serde_json::json!([h, x])).collect::<Vec<_>>()});
         crate::lz::write_atomic(&rw, intent.to_string().as_bytes());
     }
-    exit_4_on_panic();
     // 2. the stores, from A back to F. The trie and the BIP30 tree are undone IN MEMORY and checked against F's state
     //    first (review 16.11, M1); only then is the coin log, the one store changed in place, touched.
     if trie_h == fork as u64 {
@@ -173,6 +180,12 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
         // Blocks prep applied after it are in the coin log's journal only: undone (idempotent), then the journal goes.
         if crate::lz::cl_dir().is_some_and(|d| d.join("pending.bin").exists()) { crate::lz::cl_rewind(fork, &[], &st_f); }
         crate::lz::cl_journal_commit();
+        // a crash between the trie's flush at F and its marker: the marker now (review 16.11, L3)
+        if !std::path::Path::new(&format!("{out}/state_{fork}.trie")).exists() {
+            let d = crate::trie::trie_dir().unwrap();
+            *crate::trie::TS.lock().unwrap() = Some(libzync::trie_store::TrieStore::open_dir(&d, true).unwrap_or_else(|e| panic!("{}: {e}", d.display())));
+            crate::trie::trie_save(&format!("{out}/state_{fork}.trie"));
+        }
         println!("  rewind: the stores are already at {fork}");
     } else if let Some(st_a) = &st_a {
         // the trie (copy-on-write: the disk is unchanged until the save point's flush). Opening the arena bumps its
@@ -196,13 +209,14 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
         // the logged roots of the orphaned blocks: archived with the epoch's files, then cut (review 16.11: archive first)
         let rl = d.join("roots.log");
         let above: Vec<u8> = std::fs::read(&rl).map(|b| b.chunks_exact(libzync::trie_store::ROOTS_REC)
-            .filter(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) > fork).flatten().copied().collect()).unwrap_or_default();
+            .filter(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) >= fork).flatten().copied().collect()).unwrap_or_default();
         if !above.is_empty() {
             let od = format!("{out}/orphaned/{epoch}");
             std::fs::create_dir_all(&od).unwrap_or_else(|e| panic!("{od}: {e}"));
             crate::lz::write_atomic(&format!("{od}/roots.log"), &above);
         }
-        ts.cut_roots_above(fork as u64);
+        // F's entry goes too and is logged again below, in the new generation (a rerun then leaves one entry for F)
+        ts.cut_roots_above((fork as u64).saturating_sub(1));
         (ts.height, ts.hash) = (fork as u64, st_f.tip_hash);
         ts.log_root(); // F's root as it is now (a new generation, new slots), for a reader (review 16.11, M4)
         *crate::trie::TS.lock().unwrap() = Some(ts);
@@ -278,13 +292,27 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
 /// that reached the same state by different histories (a rewind and a fresh run): the trie's canonical snapshot, the
 /// coin log's leaves, the position index's live entries (its file differs: slots and tombstones depend on history),
 /// and the save point's BIP30 snapshot. Read-only, except that opening the arena bumps `trie/GEN` (Z1).
-pub(crate) fn digest_cmd(out: &str, h: u32) {
+pub(crate) fn digest_cmd(out: &str, h: u32, root_at: Option<u32>) {
     use sha2::{Digest, Sha256};
     let hexs = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let td = crate::trie::trie_dir().expect("HAZYNC_TRIE_DIR");
     let ts = libzync::trie_store::TrieStore::open_dir(&td, true).unwrap_or_else(|e| panic!("{}: {e}", td.display()));
     assert_eq!(ts.height, h as u64, "the disk trie is at {}, not {h}", ts.height);
     println!("TRIE {}", hexs(&Sha256::digest(ts.to_bytes())));
+    // --root-at H: the NEWEST roots.log entry for H, walked whole and loaded again (every hash recomputed): its root hash,
+    // or BROKEN if a slot of it was reused (ZAPP_FOLLOWER Z1: a pinned root must survive)
+    if let Some(at) = root_at {
+        let b = std::fs::read(td.join("roots.log")).unwrap_or_default();
+        let e = b.chunks_exact(libzync::trie_store::ROOTS_REC).filter(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) == at).last()
+            .unwrap_or_else(|| panic!("no roots.log entry for {at}"));
+        let r = u64::from_le_bytes(e[36..44].try_into().unwrap());
+        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut v = libzync::trie_store::TrieStore::open_dir(&td, true).unwrap();
+            v.set_root_for_reading(r, at as u64);
+            libzync::trie_store::TrieStore::from_bytes(&v.to_bytes()).ok().map(|t| libzync::coinlog::h_of(&t.root()))
+        })).ok().flatten();
+        println!("ROOT_AT {at} {}", got.map_or("BROKEN".into(), |x| hexs(&x)));
+    }
     let cd = crate::lz::cl_dir().expect("HAZYNC_COINLOG_DIR");
     let store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
         libzync::host::DiskNodes::open(&cd).unwrap_or_else(|e| panic!("{}: {e}", cd.display()))));

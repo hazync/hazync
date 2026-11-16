@@ -1993,6 +1993,8 @@ jobs:
       # crashes, refusals, a second reorg and the automatic path end to end. Mainnet 1..200 test data, minutes, CPU.
       - name: Reorg undo records and the prep side of the stop (P1/P2)
         run: H=$PWD/hosts/host_m O=$PWD/out/reorg bash experimental/libzync-bench/prep/reorg_test.sh
+      - name: Reorg prep POSITIVE CONTROL (a block that extends the state passes, so the stop is the prev alone)
+        run: H=$PWD/hosts/host_m O=$PWD/out/reorgc bash experimental/libzync-bench/prep/reorg_test.sh --control
       - name: Reorg rewind (P3)
         run: H=$PWD/hosts/host_m O=$PWD/out/rewind bash experimental/libzync-bench/prep/rewind_test.sh
       - name: Reorg rewind POSITIVE CONTROL (a corrupted coin log after the rewind must be caught)

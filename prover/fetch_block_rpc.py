@@ -213,9 +213,18 @@ def state_hash(od, h):
         return None
 
 def complete_saves(od):
-    """prep's COMPLETE save points (as libzync-prep-run.sh): a stop during a save leaves a newer partial one."""
+    """prep's COMPLETE save points, by libzync-prep-run.sh's rule: state_<h>.json, .smt and .coinlog, and the trie's
+    marker OR the disk trie at h (its meta, in the run's trie/ beside out/: a crash between the trie's flush and its
+    marker; review 16.11, L3). A stop during a save leaves a newer partial one."""
+    if not od.exists(): return []
+    trie_h = None
+    try:
+        b = (od.parent / "trie" / "meta").read_bytes()
+        if b[:8] == b"HZTRIED1" and len(b) >= 25: trie_h = int.from_bytes(b[17:25], "little")
+    except OSError: pass
     return [int(q.name[6:-4]) for q in od.glob("state_*.smt") if q.name[6:-4].isdigit()
-            and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog", "trie"))] if od.exists() else []
+            and all((od / f"{q.name[:-4]}.{x}").exists() for x in ("json", "coinlog"))
+            and ((od / f"{q.name[:-4]}.trie").exists() or trie_h == int(q.name[6:-4]))]
 
 class CannotCheck(Exception):
     pass
@@ -292,11 +301,15 @@ def wait_for_rewind(d):
     limit = float(os.environ.get("HAZYNC_REWIND_WAIT_S", "3600"))
     t0 = time.time()
     print("waiting for prep's rewind (the REORG marker goes when it is done)", flush=True)
-    while (d / "REORG").exists():
+    while True:
+        # one read per look (review 16.11, L4): a marker removed between "exists" and "read" is a finished rewind
+        try: m = json.loads((d / "REORG").read_text())
+        except FileNotFoundError: break
+        except (OSError, ValueError): m = None                         # being written: look again
         if time.time() - t0 > limit:
             print(f"FETCH_STOPPED_REORG prep did not rewind within {limit:.0f} s (HAZYNC_REWIND_WAIT_S): a person decides", flush=True)
             sys.exit(EXIT_REORG)
-        if (d / "REORG_TOO_DEEP").exists() or not auto_marker(d):
+        if (d / "REORG_TOO_DEEP").exists() or (m is not None and m.get("class") != "auto"):
             print(f"FETCH_STOPPED_REORG the marker is no longer one prep rewinds by itself", flush=True)
             sys.exit(EXIT_REORG)
         time.sleep(POLL_S)

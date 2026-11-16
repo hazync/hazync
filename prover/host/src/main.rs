@@ -1326,7 +1326,8 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-store-digest") {
         let usage = "libzync-store-digest <out dir> <height>";
-        rewind::digest_cmd(args.get(p + 1).expect(usage), args.get(p + 2).and_then(|x| x.parse().ok()).expect(usage));
+        let root_at = args.iter().position(|a| a == "--root-at").and_then(|i| args.get(i + 1)).and_then(|x| x.parse().ok());
+        rewind::digest_cmd(args.get(p + 1).expect(usage), args.get(p + 2).and_then(|x| x.parse().ok()).expect(usage), root_at);
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-prep-rewind") {

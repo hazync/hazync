@@ -1144,6 +1144,11 @@ impl TrieStore {
     #[cfg(feature = "std")]
     pub fn bump_gen(&mut self) { self.a.bump_gen(); }
 
+    /// Point a store at a logged root (`roots.log`) to READ it, e.g. to check that a pinned root survived (prep's
+    /// `libzync-store-digest --root-at`). Never apply or flush through it. Host only.
+    #[cfg(feature = "std")]
+    pub fn set_root_for_reading(&mut self, root: u64, height: u64) { (self.root, self.height) = (root, height); }
+
     /// Z1/REORG P3: drop the logged roots above `height` (the orphaned blocks of a rewind); returns the entries cut.
     #[cfg(feature = "std")]
     pub fn cut_roots_above(&mut self, height: u64) -> Vec<u8> { self.a.cut_roots_above(height) }
@@ -1607,6 +1612,7 @@ mod tests {
             let ki: Vec<Key> = i.iter().map(|x| x.0).collect();
             st.undo_recorded(&km, &ki, false).unwrap();
         }
+        st.cut_roots_above(14);
         st.height = 15; st.log_root();
         st.flush().unwrap();
         std::eprintln!("INTACT after rewind: {}", std::fs::read_to_string(dir.join("INTACT")).unwrap());
