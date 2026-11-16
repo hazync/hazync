@@ -221,10 +221,11 @@ those bytes: `prover/methods/build.rs` refuses an ELF whose sha256 or image id i
 own build location does not move the id. v0.24.0 moved every id with no guest source change, because the image id
 depends on the RISC Zero toolchain (3.0.5 → 3.1.0).
 
-The browser verifier is reproducible only with the same **host** Rust: `swiftsync-verify-wasm/build.sh` under Rust
+The browser verifier is reproducible only with the same Rust (now pinned, in the container below): `swiftsync-verify-wasm/build.sh` under Rust
 **1.99.0** gives the published `hazync-verify.wasm` (`446fdaeb…`); 1.97.1 gives other bytes. Build it with
 `swiftsync-verify-wasm/build.sh`, which pins Rust 1.99.0 itself since 2026-11-12 (installing it if missing), so the
-machine's default Rust no longer matters. Since 16.11.2026 it builds inside the pinned container `reproduce/wasm.Dockerfile` (needs docker): the stage
+machine's default Rust no longer matters. Since 16.11.2026 it builds inside the pinned container `reproduce/wasm.Dockerfile`; the host needs docker, cargo >= 1.78
+(to read the v4 Cargo.lock), python3, git and the network, x86_64 only, and no wasm32 Rust of its own. The stage
 path had reached the bytes through cargo's `-C metadata` hash of the path dependencies (other stages gave `7d79f68c…`
 and `05754e5f…`), and a host C compiler reaches a zAPP module whose graph compiles C. In the container the stage path,
 the Rust toolchain and (where needed) clang are the same on every machine; `SWIFTSYNC_WASM_STAGE` is refused.
