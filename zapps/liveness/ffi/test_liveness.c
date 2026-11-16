@@ -57,6 +57,10 @@ int main(void) {
     live("liveness_wrong_created", R, "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
     live("liveness_upper_case_txid", R, "b170_0_at200.hex", "F4184FC596403B9D638783CF57ADFE4C75C605F6356FBC91338530E9831E9E16:0@200=unspent", -1, NULL, ZAPP_LIVENESS_FAIL);
     live("liveness_fake_receipt", "fake_block_2501.rcpt", "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
+    /* positive control: the zAPP regtest harness's real receipt (image eb2cd424) and its real liveness proof are refused */
+    live("regtest_receipt_refused", "../../scripts/zapp-regtest/receipts/a/block_112.rcpt", "regtest_x_spent_a112.hex",
+         "e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f:1@112=spent:111:2:0", -1,
+         "112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574", ZAPP_LIVENESS_FAIL);
     printf("LIVENESS_C_ABI %d/%d %s\n", n - bad, n, bad ? "SOME CASES WRONG" : "all cases as expected");
     return bad != 0;
 }

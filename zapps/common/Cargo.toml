@@ -17,6 +17,13 @@ path = "src/lib.rs"
 swiftsync-verify = { path = "../../swiftsync-verify" }
 serde_json = "1"
 
+[features]
+# TESTS ONLY, never a release: a zAPP CLI's `regtest-test` feature enables it with zapp-corecheck's (the regtest image of
+# scripts/zapp-regtest). It adds no lookup of its own (every lookup here is network-agnostic: `getblockhash` names the
+# node's ACTIVE chain, which after a reorg or `invalidateblock` is the other branch); it refuses to build without debug
+# assertions, as zapp-corecheck's.
+regtest-test = []
+
 [profile.release]
 opt-level = "z"
 lto = true

@@ -1,0 +1,19 @@
+  [ok] receipt is a real proof (not a dev-mode FakeReceipt)
+  [ok] RISC0_DEV_MODE is not set in this verifier's environment
+  [ok] receipt verifies against METHOD_ID eb2cd424b94a4aa74f3458efc0d5edb1d3c35d46615eab8363696f1fa4b47ccd (libzync guest, regtest, scripts checked)
+  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [ok] profile in the proof 0x79 == this verifier's 0x79 (libzync, scripts checked, mainnet, coin log), counting trie, live-coin hash
+  [ok] time-too-new: largest block time 1296755802 <= this clock 1794849972 + 7200 s
+  [ok] anchor_id is genesis
+  height 112 >= the pinned checkpoint height 0
+  [ok] live-coin hash unused in this image (live_set == 0)
+  [ok] trie root unused in this image (zero)
+  live-coin hash: x 07708f52..
+  trie root: 7b31d7fe1f048aa5851c92eeda5880df2e7466c67faa20d92dd3cef2c59ce0d7
+  [ok] block forest has one leaf per block (113 leaves at height 112)
+  [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) pinned)
+  chain: tip 740516b66df3fbfa66c7b22e70556b5e7fe22c0fa107fd4fba7b0618e7d2c167 (display order 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574), cum_work 0x00000000000000000000000000000000000000000000000000000000000000e2
+  coin log (every coin ever appended): 200 coins, 559999999000 sat, roots [None, None, None, Some("eb65efc9340325a5"), None, None, Some("e1efd31b01acd544"), Some("b9a649b6ae3930f7")]
+  cum_work 0x00000000000000000000000000000000000000000000000000000000000000e2 >= Core's nMinimumChainWork 0x0000000000000000000000000000000000000000000000000000000000000000
+LIBZYNC_VERIFY_OK: the chain and its coin log are proven at height 112 (chain identity NOT checked: compare block 112 = 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 with a source you trust, --bitcoin-cli, --mempool or --expect)
+REAL_EXIT=0

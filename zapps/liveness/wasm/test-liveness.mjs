@@ -51,6 +51,20 @@ for (const [name, imageHex, want, img] of [['image pinned: current id', '46666b6
   bad += !ok; cases.push(name);
   console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(22)} ${r.verdict} (want ${want}) image ${r.image}`);
 }
+// positive control: the shipped module refuses the zAPP regtest harness's real receipt (image eb2cd424) with its real
+// liveness proof (X spent at a 111, scripts/zapp-regtest): mainnet and signet images do not verify it, "regtest" is no
+// network here
+{
+  const rt = fs.readFileSync(new URL('../../../scripts/zapp-regtest/receipts/a/block_112.rcpt', import.meta.url));
+  const ask = 'e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f:1@112=spent:111:2:0';
+  for (const [network, image] of [['mainnet', 'product'], ['signet', 'product'], ['regtest', 'product']]) {
+    const r = v.verifyLiveness({ network, image, receipt: rt, liveness: [{ proof: hex('regtest_x_spent_a112.hex'), ask }],
+      expect: '112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574' });
+    const ok = r.verdict === 'fail';
+    bad += !ok; cases.push(`regtest receipt, ${network}`);
+    console.log(`${ok ? 'PASS' : 'WRONG'}  ${('regtest rcpt ' + network).padEnd(22)} ${r.verdict} (want fail)`);
+  }
+}
 // The frame itself, by hand (the raw exports, not the glue): the glue's bytes pass, a byte past the end and a frame
 // cut short are refused before anything is verified.
 const ex = (await WebAssembly.instantiate(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_liveness_wasm.wasm', import.meta.url)), {})).instance.exports;
