@@ -34,6 +34,9 @@ with open(os.path.join(os.environ["BUNDLE_DIR"], "env.json"), "w") as fh:
 def say(s):
     print(s, flush=True)
 block = 144263 + int(os.environ.get("CUDA_VISIBLE_DEVICES") or 0)
+if os.environ.get("STAND_IN_DIE_ON") and os.environ.get("CUDA_VISIBLE_DEVICES") == os.environ["STAND_IN_DIE_ON"]:
+    say("FATAL: guest id mismatch — every proof this worker makes will be REJECTED.")
+    sys.exit(78)
 say(f"claimed block {block} (yours for 60 min; if you stop, it reopens by itself)")
 say(f"range [{block}..{block}] (bridge): executed, 61 segments at po2 21 -- proving")
 say("    segment 30/61  101s elapsed, ~104s left")
@@ -207,6 +210,24 @@ def main():
               and "At least one" in app.v_cards_note.get(),
               "⛔ the last card cannot be unticked, and the page says why")
 
+        print("── one card stops on an error, the other keeps going: Home still shows both ──")
+        app.cards_off = set()
+        os.environ["STAND_IN_DIE_ON"] = "1"
+        try:
+            app._start()
+            got = spin(app, 15, lambda: len(app.workers) == 1 and "stopped" in app.v_sub.get())
+        finally:
+            os.environ.pop("STAND_IN_DIE_ON", None)
+        sub = app.v_sub.get()
+        check(got and "RTX 3060 Ti:  stopped" in sub and "RTX 4090:" in sub,
+              f"⛔ the stopped card keeps its line on Home and says it stopped: {sub!r}")
+        check(app.v_head.get().startswith("Proving on 1 graphics card") and "1 stopped" in app.v_head.get(),
+              f"and the headline counts it: {app.v_head.get()!r}")
+        check(any(t.startswith("RTX 3060 Ti: misconfigured") for _, t, _tag in app._events),
+              "the feed names the card that stopped")
+        check(len(app.workers) == 1 and app.workers[0].label == "RTX 4090", "only that card stopped")
+        stop_all(app)
+
         print("── 'try my old card anyway': the old card can be switched off too ──")
         old = {"index": 2, "uuid": "GPU-old", "name": "NVIDIA GeForce GTX 1060", "vram_mb": 6144,
                "driver": "566.14", "cc_major": 6, "cc_minor": 1}
@@ -223,6 +244,17 @@ def main():
         check(sorted(w.label for w in app.workers) == ["GTX 1060", "RTX 3060 Ti", "RTX 4090"],
               f"and Start agrees with the list: {sorted(w.label for w in app.workers)}")
         stop_all(app)
+        maxwell = {"index": 3, "uuid": "GPU-mxw", "name": "NVIDIA GeForce GTX 970", "vram_mb": 4096,
+                   "driver": "566.14", "cc_major": 5, "cc_minor": 2}
+        machine["cards"] = TWO + [old, maxwell]
+        app._show_cards(machine["cards"])
+        app._start()
+        check(sorted(w.label for w in app.workers) == ["GTX 1060", "RTX 3060 Ti", "RTX 4090"],
+              f"⛔ forced, a compute 5.x card still gets NO worker (no GPU code for it, #727): "
+              f"{sorted(w.label for w in app.workers)}")
+        stop_all(app)
+        machine["cards"] = TWO + [old]
+        app._show_cards(machine["cards"])
         app._card_vars["GPU-old"].set(False)
         app._toggle_card("GPU-old")
         app._start()

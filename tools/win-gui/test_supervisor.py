@@ -91,6 +91,49 @@ def main():
     noid = supervisor.check_host_binary(fake_host(d, "noid", "hello"))
     check((not noid.ok) and noid.fatal, "output with no image id at all is fatal, not 'probably fine'")
 
+    print("── 1b. the BOARD's image decides, when the board answers (/api/meta) ──")
+    OTHER = "88" * 32
+    rbm = supervisor.check_host_binary(fake_host(d, "old", f"METHOD_ID {OTHER}"), board_id=OTHER)
+    check(rbm.ok and "matches the board" in rbm.detail and "built for" in rbm.detail,
+          f"a prover matching the board passes though the app's pin differs, and says so ({rbm.detail[:70]})")
+    rnew = supervisor.check_host_binary(good, board_id=OTHER)
+    check((not rnew.ok) and rnew.fatal and "install the latest Hazync" in rnew.detail,
+          "the app's own image is FATAL when the board has moved on, and the fix is to update Hazync")
+    rboth = supervisor.check_host_binary(fake_host(d, "third", "METHOD_ID " + "ab" * 32), board_id=OTHER)
+    check((not rboth.ok) and rboth.fatal and "prover from the latest release" in rboth.detail,
+          "a prover matching neither is fatal and points at the release's prover")
+    check(supervisor.check_host_binary(good, board_id=None).ok, "board unknown: the app's pin stands in (unchanged)")
+    ok_, v_ = supervisor.diagnostic_verdict("method-id", 0, f"METHOD_ID {OTHER}", board_id=OTHER)
+    check(ok_ and "board" in v_, f"the method-id check reads the board's image too ({v_})")
+    ok_, v_ = supervisor.diagnostic_verdict("method-id", 0, f"METHOD_ID {CANON}", board_id=OTHER)
+    check(not ok_, "and fails the app's image when the board's differs")
+    import types as _types
+    _real_net = sys.modules.get("nethttp")
+    try:
+        for answer, want in (({"method_id": OTHER.upper()}, OTHER), ({"method_id": "nope"}, None),
+                             ({}, None), (RuntimeError("down"), None)):
+            fake = _types.ModuleType("nethttp")
+            def _gj(url, timeout=60, _a=answer):
+                if isinstance(_a, Exception):
+                    raise _a
+                assert url.endswith("/api/meta"), url
+                return _a
+            fake.get_json = _gj
+            sys.modules["nethttp"] = fake
+            got = supervisor.board_method_id("https://board.example/")
+            check(got == want, f"board_method_id({answer!r}) -> {got and got[:8]} (want {want and want[:8]})")
+        check(supervisor.board_method_id("") is None, "no coordinator: no question asked")
+        fake.get_json = lambda url, timeout=60: {"method_id": OTHER}
+        hostb = fake_host(d, "pfb", f"METHOD_ID {CANON}")
+        checks_, fatal_ = supervisor.preflight(hostb, fake_worker(d, "pfwb"), identity_dir=d, coord="https://b.example")
+        check(any(c.name == "host binary" for c in fatal_),
+              "preflight with a coordinator asks the board and stops a prover the board would reject")
+    finally:
+        if _real_net is not None:
+            sys.modules["nethttp"] = _real_net
+        else:
+            sys.modules.pop("nethttp", None)
+
     print("── 2. exit codes are three different things ──")
     for rc, kind in ((0, "done"), (supervisor.EX_CONFIG, "config"),
                      (supervisor.EX_TEMPFAIL, "idle"), (3, "transient")):

@@ -30,6 +30,12 @@ QUERY = "index,uuid,name,memory.total,driver_version,compute_cap"
 # sppark keeps cards at compute capability 7.0 and newer; see supervisor.check_gpu.
 FLOOR = 7
 
+# ⛔ THE LOWEST THE OPT-IN ("try my GPU even if it is below the supported floor") MAY GO. The builds carry no GPU code
+# below sm_61 and sppark refuses a floor under 6 (hazync#727), so a compute 5.x card given a worker could only fail.
+# Before this the opt-in lowered the floor to the OLDEST card present, and a Maxwell card beside a Pascal one got a
+# worker of its own.
+OPT_IN_FLOOR = 6
+
 # One measured prove at segment size 21 peaked near 22 GB; each step down roughly halves it. The
 # same table as supervisor._SEG_PO2_FOR_VRAM, kept there as the source and passed in by the caller.
 
@@ -169,3 +175,45 @@ def pin_env(card):
 def lock_name(card):
     """The lock file's name for a worker on `card`. One lock per card, shared by nothing else."""
     return "hazync-gpu.lock" if card is None else f"hazync-gpu-{card['index']}.lock"
+
+
+def session_labels(plan, names):
+    """The cards this session started on, in plan order, once each: what Home lists, one line a card.
+
+    ⚠ FROM THE PLAN, NOT FROM THE WORKERS RUNNING NOW. A card whose worker stopped on an error, or is
+    between two blocks, has no running worker; listing only running workers made that card vanish from
+    Home, and with one card left the page fell back to the one-card view, so a dead card read as
+    "nothing happened" — the opposite of "always show what is happening".
+    """
+    out = []
+    for c in plan:
+        lab = names.get(c["index"], "") if c else ""
+        if lab and lab not in out:
+            out.append(lab)
+    return out
+
+
+def status_lines(order, live, notes):
+    """One or more lines per card for Home. `order` is session_labels; `live` maps a label to the
+    lines of its running workers (a prover and a folder can share a card); `notes` maps a label with
+    no running worker to why not ("stopped — …", "nothing free; asking again in a minute")."""
+    out = []
+    for lab in order:
+        note = notes.get(lab) or ""
+        if live.get(lab):
+            out += [f"{lab}:  {line}" for line in live[lab]]
+            # a prover that stopped beside a folder that still runs on the same card: both are true
+            if note.startswith(STOPPED):
+                out.append(f"{lab}:  {note}")
+        else:
+            out.append(f"{lab}:  {note or 'waiting to start'}")
+    return out
+
+
+def stopped(order, notes, live=None):
+    """The cards with nothing left running for the session: stopped, and no worker still on them."""
+    live = live or {}
+    return [lab for lab in order if (notes.get(lab) or "").startswith(STOPPED) and not live.get(lab)]
+
+
+STOPPED = "stopped"

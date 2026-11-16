@@ -176,8 +176,36 @@ def control():
     return 0
 
 
+def status_checks():
+    """Home's per-card lines: every card of the session, including one with nothing running."""
+    print("── Home: one line per card of the session, even a stopped one ──")
+    two = cards.parse(BIG_SMALL)
+    names = cards.labels(two)
+    plan = cards.plan(two, "run", 1)
+    order = cards.session_labels(plan + plan, names)
+    check(order == ["RTX 4090", "RTX 3060 Ti"], f"each card once, in plan order ({order})")
+    check(cards.session_labels([None], names) == [], "a one-card (unpinned) session lists no cards")
+    live = {"RTX 4090": ["Proving block 1,000  ·  Piece 3 of 9"]}
+    notes = {"RTX 3060 Ti": f"{cards.STOPPED} — exit 78: misconfigured"}
+    lines = cards.status_lines(order, live, notes)
+    check(lines == ["RTX 4090:  Proving block 1,000  ·  Piece 3 of 9",
+                    "RTX 3060 Ti:  stopped — exit 78: misconfigured"],
+          f"⛔ the stopped card keeps its line and says why ({lines})")
+    check(cards.stopped(order, notes, live) == ["RTX 3060 Ti"], "and counts as stopped")
+    idle = cards.status_lines(order, live, {"RTX 3060 Ti": "nothing free; asking again in a minute"})
+    check(idle[1].endswith("asking again in a minute") and
+          cards.stopped(order, {"RTX 3060 Ti": "nothing free"}, live) == [],
+          "between blocks is shown, and is NOT stopped")
+    both = cards.status_lines(["RTX 4090"], {"RTX 4090": ["Folding"]}, {"RTX 4090": f"{cards.STOPPED} — gpu"})
+    check(len(both) == 2 and cards.stopped(["RTX 4090"], {"RTX 4090": "stopped — gpu"}, {"RTX 4090": ["x"]}) == [],
+          "a prover stopped beside a folder still running: both lines, and the card is not 'stopped'")
+    check(cards.status_lines(["A"], {}, {}) == ["A:  waiting to start"], "a card with neither says it is waiting")
+    check(cards.OPT_IN_FLOOR == 6, "the opt-in never reaches below compute 6 (no sm code below sm_61, #727)")
+
+
 def main():
     checks()
+    status_checks()
     print()
     if fails:
         print(f"FAIL {fails}")

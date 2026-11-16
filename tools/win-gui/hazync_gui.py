@@ -102,6 +102,10 @@ class App(tk.Tk):
         # it the reason goes only to the log pane, which _tab_run builds on a DIFFERENT TAB.
         self.fix_errors = {}
         self.workers = []
+        # ⭐ PER-CARD STATUS for the session: the cards Start gave a worker (cards.session_labels) and, for a card with
+        # no worker running right now, why not (cards.status_lines). Empty on a one-card machine.
+        self._session_cards = []
+        self._card_notes = {}
         self.runs, self.meta, self.prog = [], {}, {}
         self.claims = []                 # (lo, hi) a prover is holding right now, for the map
         self._explained = set()          # each known failure explained once, not every line
@@ -397,22 +401,22 @@ class App(tk.Tk):
             lead = next((w for w in self.workers if w.job == "run"), self.workers[0])
             a = lead.activity
             stopping = any(w.stopping for w in self.workers)
-            named = [w for w in self.workers if w.label]
             if stopping:
                 self.v_head.set("Stopping…")
                 self.v_sub.set("Letting the prover finish cleanly.")
                 self._set_bar(a.fraction, busy=not a.waiting)
-            elif len({w.label for w in named}) > 1:
+            elif len(self._session_cards) > 1:
                 # ⭐ SEVERAL CARDS, SO ONE LINE EACH. Showing only the first worker would leave a
                 # person watching one card and wondering whether the other was doing anything —
-                # which is the question this page exists to answer.
-                n = len({w.label for w in named})
+                # which is the question this page exists to answer. ⚠ Every card of the session,
+                # including one whose worker stopped or is between blocks (cards.session_labels).
+                order, live = self._session_cards, self._card_live()
+                dead = cards.stopped(order, self._card_notes, live)
+                n = len(order) - len(dead)
                 verb = {"run": "Proving", "fold": "Folding", "spine": "Anchoring"}[a.job]
-                self.v_head.set(f"{verb} on {n} graphics cards")
-                self.v_sub.set("\n".join(
-                    f"{w.label}:  {w.activity.headline}"
-                    + (f"  ·  {w.activity.detail}" if w.activity.detail else "")
-                    for w in self.workers))
+                self.v_head.set(f"{verb} on {n} graphics card{'' if n == 1 else 's'}"
+                                + (f"  ·  {len(dead)} stopped" if dead else ""))
+                self.v_sub.set("\n".join(cards.status_lines(order, live, self._card_notes)))
                 # ⚠ The bar is the cards' real positions averaged, and stays a moving bar when
                 # none of them has a measurable one. It is never a number made up to fill it.
                 fr = [w.activity.fraction for w in self.workers if w.activity.fraction is not None]
@@ -448,6 +452,8 @@ class App(tk.Tk):
             self.v_head.set("Taking the next one…")
             self.v_sub.set("The last one finished; the next starts in a moment. Stop ends the session.")
             self._set_bar(None, busy=True)
+            if len(self._session_cards) > 1:
+                self.v_sub.set("\n".join(cards.status_lines(self._session_cards, {}, self._card_notes)))
         elif self._diag_running:
             name, t0 = self._diag_running
             title = next((t for n, t, *_ in supervisor.DIAGNOSTICS if n == name), name)
@@ -1148,7 +1154,10 @@ class App(tk.Tk):
                 supervisor.diagnostic_command(host, name, self.worker_var.get().strip(), sys.executable),
                 env=env, timeout=timeout,
                 on_line=lambda l: self.results.put((self._diag_line, l)))
-            self.results.put((self._after_diag, (name, title, rc, out, then)))
+            # method-id is judged against the board's image when the board answers (supervisor.board_method_id)
+            board = (supervisor.board_method_id(self.coord_var.get().strip() or api.DEFAULT_COORD)
+                     if name == "method-id" else None)
+            self.results.put((self._after_diag, (name, title, rc, out, then, board)))
         threading.Thread(target=go, daemon=True).start()
 
     def _diag_line(self, line):
@@ -1170,10 +1179,10 @@ class App(tk.Tk):
         self.after(1000, self._tick_diag)
 
     def _after_diag(self, args):
-        name, title, rc, out, then = args
+        name, title, rc, out, then, board = args
         elapsed = int(time.time() - self._diag_running[1]) if getattr(self, "_diag_running", None) else 0
         self._diag_running = None
-        ok, verdict = supervisor.diagnostic_verdict(name, rc, out)
+        ok, verdict = supervisor.diagnostic_verdict(name, rc, out, board_id=board)
         verdict = f"{verdict}  ({elapsed // 60}m {elapsed % 60:02d}s)" if elapsed else verdict
         self.diag_vars[name].set(f"{'PASSED' if ok else 'FAILED'}: {verdict}")
         self.v_diag.set(f"{title}  —  {'PASSED' if ok else 'FAILED'}: {verdict}")
@@ -1465,11 +1474,12 @@ class App(tk.Tk):
         self.verdict.configure(text="checking…")
         host, worker = self.host_var.get(), self.worker_var.get()
         ident = self.ident_var.get() or None
-        threading.Thread(target=self._checks_thread, args=(host, worker, ident),
+        coord = self.coord_var.get().strip() or api.DEFAULT_COORD
+        threading.Thread(target=self._checks_thread, args=(host, worker, ident, coord),
                          daemon=True).start()
 
-    def _checks_thread(self, host, worker, ident):
-        checks, fatal = supervisor.preflight(host, worker, identity_dir=ident)
+    def _checks_thread(self, host, worker, ident, coord=None):
+        checks, fatal = supervisor.preflight(host, worker, identity_dir=ident, coord=coord)
         lines = [f"{'ok  ' if c.ok else 'FAIL'}  {c.name}: {c.detail}" for c in checks]
         self.results.put((lambda a: self._show_checks(*a),
                           (lines, supervisor.summarise(checks), bool(fatal))))
@@ -1549,8 +1559,10 @@ class App(tk.Tk):
     def _start(self):
         if not self._ask_name_first():
             return
+        # ⭐ the board's /api/meta decides which prover image is accepted (supervisor.board_method_id)
         checks, fatal = supervisor.preflight(self.host_var.get(), self.worker_var.get(),
-                                             identity_dir=self.ident_var.get() or None)
+                                             identity_dir=self.ident_var.get() or None,
+                                             coord=self.coord_var.get().strip() or api.DEFAULT_COORD)
         if fatal:
             messagebox.showerror("Cannot start", fatal[0].detail)
             self._show_checks([f"{'ok  ' if c.ok else 'FAIL'}  {c.name}: {c.detail}" for c in checks],
@@ -1587,6 +1599,8 @@ class App(tk.Tk):
         plan = cards.plan(found, job, self.nworkers.get(), cuda_build=cuda,
                           skip=self.cards_off, floor=floor)
         names = cards.labels(cards.usable(found, floor))
+        self._session_cards = cards.session_labels(plan, names)
+        self._card_notes = {}
         for i, card in enumerate(plan, 1):
             self._spawn(i, base, job, extra, card=card,
                         label=names.get(card["index"], "") if card else "")
@@ -1619,7 +1633,8 @@ class App(tk.Tk):
         tick boxes and Start — when they disagreed, "try my old card anyway" gave an old card a
         worker while its box stayed greyed out, so it could be started but not switched off."""
         if self.force_gpu.get() and found:
-            return min(cards.FLOOR, min(c["cc_major"] for c in found))
+            # ⚠ never below cards.OPT_IN_FLOOR: a card with no GPU code in the build must not get a worker
+            return max(cards.OPT_IN_FLOOR, min(cards.FLOOR, min(c["cc_major"] for c in found)))
         return cards.FLOOR
 
     def _load_cards(self):
@@ -1722,6 +1737,22 @@ class App(tk.Tk):
                      f"{env.get('HAZYNC_SEG_PO2', 'default')})" if card else ""))
         threading.Thread(target=self._pump, args=(w,), daemon=True).start()
 
+    def _card_live(self):
+        """{card label: one line per running worker on it}, for cards.status_lines."""
+        live = {}
+        for w in self.workers:
+            if w.label:
+                live.setdefault(w.label, []).append(
+                    w.activity.headline + (f"  ·  {w.activity.detail}" if w.activity.detail else ""))
+        return live
+
+    def _note_card(self, w, text):
+        """Why this worker's card has no running worker now, for Home's per-card lines."""
+        if w.label and w.label in self._session_cards:
+            # ⚠ a "stopped" note is not overwritten by the other worker on that card going idle
+            if not (self._card_notes.get(w.label) or "").startswith(cards.STOPPED) or text.startswith(cards.STOPPED):
+                self._card_notes[w.label] = text
+
     def _crew(self):
         """What is running, in words. ⚠ Not "2 at once" when one of the two is the folder (Xesktop, 11-13): that read
         as two blocks being proved. "1 proving, 1 folding"; only provers: "3 at once"."""
@@ -1806,7 +1837,11 @@ class App(tk.Tk):
             tag = {"config": "cuda-error", "gpu": "cuda-error",
                    "idle": "sys", "done": "proved"}.get(kind, "sys")
             self._say(f"[{w.job} {w.index}] {msg}", tag)
-            self._feed(msg, {"cuda-error": "bad", "proved": "good"}.get(tag, "sys"))
+            several = len(self._session_cards) > 1 and w.label
+            self._feed(f"{w.label}: {msg}" if several else msg, {"cuda-error": "bad", "proved": "good"}.get(tag, "sys"))
+            if kind in ("config", "gpu"):
+                # only THIS card stops; the others keep going, and Home keeps a line saying so
+                self._note_card(w, f"{cards.STOPPED} — {msg}")
             if kind in ("config", "gpu") and not self._problem:
                 self._problem = msg
             if kind in ("config", "gpu"):
@@ -1838,6 +1873,7 @@ class App(tk.Tk):
             # a specific range: finished means finished. Starting it again would find every block proven and exit,
             # every two seconds, for ever.
             self._feed(f"Range {activity.pretty(w.extra[0])} finished", "good")
+            self._note_card(w, "range finished")
             return
         if kind == "done" and w.activity.waiting:
             # it exited cleanly with nothing to do ("nothing to fold", no block free): ask again in a minute, not
@@ -1846,6 +1882,7 @@ class App(tk.Tk):
         n = w.transients + 1 if kind == "transient" else 0
         if n > self.TRANSIENT_RETRIES:
             self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
+            self._note_card(w, f"{cards.STOPPED} after {self.TRANSIENT_RETRIES} unexplained exits in a row")
             return
         key = object()
         self._respawns[key] = self.after(self.AGAIN_MS[kind], lambda: self._respawn(key, w, n))
@@ -1853,6 +1890,8 @@ class App(tk.Tk):
                 "fold": ("Folding the next pair", "Nothing to fold yet: looking again in a minute"),
                 "spine": ("Extending the chain proof again", "Nothing to anchor yet: looking again in a minute")}
         done_msg, idle_msg = said.get(w.job, said["run"])
+        self._note_card(w, {"done": done_msg + " in a moment", "idle": idle_msg[0].lower() + idle_msg[1:],
+                            "transient": f"trying again in a minute ({n} of {self.TRANSIENT_RETRIES})"}[kind])
         self._feed({"done": done_msg, "idle": idle_msg,
                     "transient": f"Trying again in a minute ({n} of {self.TRANSIENT_RETRIES})"}[kind])
 
@@ -1860,6 +1899,8 @@ class App(tk.Tk):
         if self._respawns.pop(key, None) is None:
             return                      # Stop cancelled it
         self._spawn(w.index, w.base, w.job, w.extra, card=w.card, label=w.label)
+        if not (self._card_notes.get(w.label) or "").startswith(cards.STOPPED):
+            self._card_notes.pop(w.label, None)
         self.workers[-1].transients = n
         self._sync_buttons()
         self._home_refresh()

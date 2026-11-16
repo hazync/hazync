@@ -142,7 +142,7 @@ The **Prove** tab has two buttons that run what you would otherwise type:
 
 | | |
 |---|---|
-| Is this prover genuine? | `method-id` — must print the canonical libzync id (`46666b6f…`) or proofs are rejected; runs at startup. ⚠ Where `method-id` cannot run (a CUDA `host.exe` on a machine with no NVIDIA driver), the fallback reads the embedded guest from the file, pinned by `GUEST_SHA256` and `GUEST_SIZE` in `supervisor.py` to the published mainnet guest of `reproduce/LIBZYNC_IDS` (`ded6f884…`, 70,191,408 bytes; it was the v1 guest until 2026-11-12 — checked against the v0.24.0 `host.exe`, which it now matches). A new image means updating both |
+| Is this prover genuine? | `method-id` — must print the image the **board** checks proofs against (its `/api/meta` `method_id`, asked at Start, in Checks and here), or proofs are rejected; only when the board cannot be reached does the image this app was built for (`CANONICAL_METHOD_ID`, `46666b6f…`) stand in. A prover the board accepts passes even if this app is older or newer than it; the app's own image fails once the board has moved, with "install the latest Hazync". Runs at startup. ⚠ Where `method-id` cannot run (a CUDA `host.exe` on a machine with no NVIDIA driver), the fallback reads the embedded guest from the file, pinned by `GUEST_SHA256` and `GUEST_SIZE` in `supervisor.py` to the published mainnet guest of `reproduce/LIBZYNC_IDS` (`ded6f884…`, 70,191,408 bytes; it was the v1 guest until 2026-11-12 — checked against the v0.24.0 `host.exe`, which it now matches). A new image means updating both |
 | Can it actually prove? | the client's `selftest` — checks the prover against the board, verifies a real board proof, then proves mainnet block 1 for real from the board's leaf bundle |
 
 ⭐ **No block is claimed and nothing is submitted.** The selftest fetches block 1's bundle and a board proof
@@ -227,6 +227,11 @@ shared one lock and none was told which card to use, so a second card sat idle. 
 - Advanced → Options lists the cards with a tick box each, all ticked to begin with. An unticked
   card is left alone; the choice is remembered by the card's UUID, so it follows the card if the
   cards are moved between slots. The last card cannot be unticked.
+- Home shows **one line per card of the session**, including a card whose worker stopped on an error
+  (`RTX 3060 Ti:  stopped — …`, and the headline counts it: "Proving on 1 graphics card · 1 stopped") or is
+  between two blocks. Only that card stops; the others keep going. Before, a stopped card simply vanished.
+- "Try my GPU even if it is below the supported floor" never reaches below compute 6: the builds carry no
+  GPU code under sm_61 (hazync#727), so a compute 5.x card gets no worker even when forced.
 
 ⛔ **Not yet run on a real two-card machine.** What is tested: the decision; that each real child
 process receives its own card and lock; and (2026-10-09, one A40 on Linux) that the real prover

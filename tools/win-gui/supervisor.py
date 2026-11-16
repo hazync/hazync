@@ -295,8 +295,34 @@ def verify_embedded_guest(path):
                    f"({hits} R0BF marker(s) checked)")
 
 
-def check_host_binary(host_path):
-    """⛔ THE CHECK THAT MATTERS: does this binary carry the canonical METHOD_ID?
+def board_method_id(coord, timeout=10):
+    """The image id the board checks proofs against right now (its /api/meta), or None.
+
+    ⭐ THE BOARD, NOT THIS FILE, DECIDES WHICH PROOFS LAND. CANONICAL_METHOD_ID is the image this app
+    was built for, and a re-baseline moves the board without moving any installed app: the window
+    then said "canonical" about a prover whose every proof the board would reject (the worker
+    finds out only on its first SUBMIT, an hour of GPU later), or refused a prover that matched the
+    board because the app was older than it. So Start asks the board first, and the pin is only the
+    answer when the board cannot be reached.
+    ⚠ None on ANY failure: an unreachable board must not stop a box that is otherwise fine.
+    """
+    if not coord:
+        return None
+    try:
+        import nethttp   # noqa: E402 - imported here so the headless checks need no network module
+        t = nethttp.get_json(coord.rstrip("/") + "/api/meta", timeout=timeout).get("method_id")
+    except Exception:    # noqa: BLE001 - see above: not knowing is not a failure
+        return None
+    t = t.lower() if isinstance(t, str) else ""
+    return t if HEX64.fullmatch(t) else None
+
+
+def check_host_binary(host_path, board_id=None):
+    """⛔ THE CHECK THAT MATTERS: does this binary carry the METHOD_ID the board accepts?
+
+    `board_id` is the board's own answer (board_method_id). When it is known it is the one compared
+    against; when it is None (board unreachable, or no coordinator given) the image this app was
+    built for (CANONICAL_METHOD_ID) stands in for it, as it always did.
 
     ⚠ Parsed as "the first 64-hex token in the output", because `host method-id` prints the digest
     AND a `u32x8` decomposition, and a looser match would pick up the words. Measured output:
@@ -333,6 +359,24 @@ def check_host_binary(host_path):
         return CheckResult("host binary", False, f"no image id in output: {out.strip()[:160]}",
                            fatal=True)
     got = m.group(0)
+    if board_id:
+        if got != board_id:
+            # ⚠ Which side moved decides what the person should do, so say which.
+            if got == CANONICAL_METHOD_ID:
+                fix = ("The board has moved to a new image since this copy of Hazync was made: "
+                       "install the latest Hazync from https://github.com/hazync/hazync/releases/latest "
+                       "(it carries the matching prover).")
+            else:
+                fix = ("Use the prover from the latest release "
+                       "(https://github.com/hazync/hazync/releases/latest), or install the latest Hazync.")
+            return CheckResult("host binary", False,
+                               f"this prover makes image {got[:16]}…, but the board checks proofs "
+                               f"against {board_id[:16]}…, so every proof would be rejected "
+                               f"(exit {EX_CONFIG}). {fix}", fatal=True)
+        note = ("" if got == CANONICAL_METHOD_ID else
+                f" (not the {CANONICAL_METHOD_ID[:8]}… this app was built for: the board's is the one that counts)")
+        return CheckResult("host binary", True,
+                           f"METHOD_ID {got[:16]}… matches the board{note} — {host_kind_sentence(info)}")
     if got != CANONICAL_METHOD_ID:
         return CheckResult("host binary", False,
                            f"METHOD_ID is {got}, NOT the canonical {CANONICAL_METHOD_ID}. "
@@ -888,16 +932,19 @@ def diagnostic_command(host, name, worker=None, python_exe=None):
     return [str(host), name]
 
 
-def diagnostic_verdict(name, rc, out):
-    """(ok, sentence) for a finished diagnostic. Reads the OUTPUT, not just the exit code."""
+def diagnostic_verdict(name, rc, out, board_id=None):
+    """(ok, sentence) for a finished diagnostic. Reads the OUTPUT, not just the exit code.
+    `board_id`: the board's image when known (board_method_id), which then decides method-id."""
     low = (out or "").lower()
     why = explain(out)
     if name == "method-id":
         m = HEX64.search(out or "")
-        if m and m.group(0) == CANONICAL_METHOD_ID:
-            return True, f"canonical: {m.group(0)[:16]}…"
+        want = board_id or CANONICAL_METHOD_ID
+        if m and m.group(0) == want:
+            return True, (f"matches the board: {want[:16]}…" if board_id else f"canonical: {want[:16]}…")
         if m:
-            return False, f"NOT canonical: {m.group(0)[:16]}… — proofs would be rejected"
+            return False, (f"{m.group(0)[:16]}… is NOT the board's {want[:16]}… — proofs would be rejected"
+                           if board_id else f"NOT canonical: {m.group(0)[:16]}… — proofs would be rejected")
         return False, (why or f"no id printed (exit {rc})")
     if name == "selftest":
         # ⛔ Both lines, not the exit code: "ALL GOOD" is printed only after every step, and the prove line only
@@ -909,10 +956,15 @@ def diagnostic_verdict(name, rc, out):
     return False, (why or f"no verdict for an unknown check {name!r} (exit {rc})")
 
 
-def preflight(host_path, worker_path, identity_dir=None, python_exe=None):
-    """Every check, in the order a person should read them. Fatal ones block starting."""
+def preflight(host_path, worker_path, identity_dir=None, python_exe=None, coord=None, board_id=None):
+    """Every check, in the order a person should read them. Fatal ones block starting.
+
+    `coord`: ask that board which image it accepts (board_method_id) and check the prover against it;
+    `board_id` gives the answer directly (tests, or a caller that already asked)."""
+    if board_id is None and coord:
+        board_id = board_method_id(coord)
     checks = [
-        check_host_binary(host_path),
+        check_host_binary(host_path, board_id=board_id),
         check_worker(worker_path, python_exe=python_exe),
         check_signing_library(python_exe=python_exe),
         check_gpu(),
