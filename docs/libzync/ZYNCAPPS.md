@@ -172,11 +172,13 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 
 | path | what |
 |---|---|
-| `zapps/<name>/` | the check library (`zapp_<name>`) and its CLI `zapp-<name>`, on `swiftsync-verify` as a library (receipt verification, chain state, facts) |
+| `zapps/<name>/` | the check library (`zapp_<name>`), on `swiftsync-verify` as a library (receipt verification, chain state, facts) |
+| `zapps/<name>/cli/` | its CLI `zapp-<name>`, a crate of its own: only it links `zapps/common`, so the library, C ABI and WASM module carry no CLI code |
 | `zapps/<name>/wasm/` | its own WASM module (`build.sh`: the core's flags, `scripts/wasm-build.sh`), JS glue `zapp-<name>.js`, README with its sha256 |
-| `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one |
-| `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6) |
-| `zapps/common/` | not a zAPP: what every zAPP CLI shares, so each takes the same chain-identity flags as the core verifier (`--expect`, `--mempool` / `--mempool-url`, `--bitcoin-cli`), on the core library's `parse_expect` / `identity_matches`; and the core receipt check a zAPP on a core proof makes |
+| `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one; beside the core's `libswiftsync_verify.a`, link the zAPP's `.so` (two Rust static archives in one binary clash) |
+| `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6); it checks the built `.wasm` against the README's sha and links its C ABI beside the core's (`scripts/zapp-checks.sh`) |
+| `zapps/common/` | not a zAPP: what every zAPP CLI shares, so each takes the same chain-identity flags as the core verifier (`--expect`, `--mempool` / `--mempool-url`, `--bitcoin-cli`), on the core library's `parse_expect` / `identity_matches`. CLIs only |
+| `zapps/corecheck/` | not a zAPP: the core receipt check a zAPP resting on a core proof makes first (the image named, the receipt verified by the core verifier, its tip compared with the caller's `expect`); no CLI code, so a zAPP's library, C ABI and WASM module may use it |
 
 | zAPP | module | CLI | WASM glue | C ABI |
 |---|---|---|---|---|

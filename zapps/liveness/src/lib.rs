@@ -223,9 +223,9 @@ pub fn make_liveness(recs: &[libzync::history::Rec], tip: u32, at: u32, coin: &l
     Ok(lv::encode(&lv::Proof { coin: coin.clone(), state, at, pos, path: r.log.path(pos), opening }))
 }
 
-/// The image a caller names (zapp_common::image_for, shared by every zAPP; cached, so a call leaks nothing new).
+/// The image a caller names (zapp_corecheck::image_for, shared by every zAPP; cached, so a call leaks nothing new).
 pub fn image_for(network: &str, image_hex: &str, coinlog: bool, product: bool) -> Result<&'static Image, String> {
-    zapp_common::image_for(network, image_hex, coinlog, product)
+    zapp_corecheck::image_for(network, image_hex, coinlog, product)
 }
 
 /// What [`verify_liveness`] found: the core report (its verdict now covering the liveness checks), whether the tip was
@@ -243,9 +243,9 @@ pub struct Outcome {
 /// `need_claim`: refuse a question that does not claim its answer (the C ABI and WASM return only whether claims hold).
 pub fn verify_liveness(receipt: &[u8], image: &'static Image, anchor: Option<ChainState>, now: u64, facts: &[LivenessFact],
                        expect: Option<&str>, need_claim: bool) -> Outcome {
-    // the core receipt and the tip, as every zAPP checks them (zapp_common): a wrong `expect` is a FAIL line in the
+    // the core receipt and the tip, as every zAPP checks them (zapp_corecheck): a wrong `expect` is a FAIL line in the
     // report's checks, not one of the facts
-    let core = zapp_common::verify_core(receipt, image, anchor, now, expect);
+    let core = zapp_corecheck::verify_core(receipt, image, anchor, now, expect);
     let (mut rep, tip_checked) = (core.report, core.tip_checked);
     let mut out = Vec::new();
     if rep.verdict == Verdict::Fail {

@@ -1,6 +1,8 @@
 /* zapp_liveness.h: the C ABI of the coin-liveness zyncAPP (zapps/liveness, docs/libzync/LIVENESS_ZAPP.md and
    ZYNCAPPS.md §9), a module of its own on the core verifier. Link zapps/liveness/ffi's libzapp_liveness_ffi.a
-   (and -lpthread -ldl -lm). Thread-safe; never aborts on bad input. */
+   (and -lpthread -ldl -lm) on its own; beside the core verifier's libswiftsync_verify.a, link libzapp_liveness_ffi.so
+   instead: two Rust static archives in one binary each carry a Rust std and clash at link time (multiple definitions).
+   ffi/test_with_core.c, run by ../test.sh, does that. Thread-safe; never aborts on bad input. */
 #ifndef ZAPP_LIVENESS_H
 #define ZAPP_LIVENESS_H
 #include <stddef.h>

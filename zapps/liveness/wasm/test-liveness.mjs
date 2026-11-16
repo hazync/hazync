@@ -41,5 +41,33 @@ for (const [name, f, ask, want, rc, expect] of cases) {
   const why = (r.facts || []).map((x) => x.what).concat((r.checks || []).filter((c) => !c.ok).map((c) => c.what))[0] || '';
   console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(22)} ${r.verdict} (want ${want})  ${why.slice(0, 110)}`);
 }
+// The frame itself, by hand (the raw exports, not the glue): the glue's bytes pass, a byte past the end and a frame
+// cut short are refused before anything is verified.
+const ex = (await WebAssembly.instantiate(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_liveness_wasm.wasm', import.meta.url)), {})).instance.exports;
+const raw = (bytes) => {
+  const p = ex.alloc(bytes.length);
+  new Uint8Array(ex.memory.buffer, p, bytes.length).set(bytes);
+  const r = ex.verify_liveness(p, bytes.length);
+  const n = new DataView(ex.memory.buffer).getUint32(r, true);
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
+};
+const enc = new TextEncoder();
+const parts = [rd('mainnet_1_200_8888d59c.rcpt'), enc.encode(''), enc.encode('8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4'),
+  enc.encode(JSON.stringify({ liveness: [{ proof: hex('b170_0_at200.hex'), ask: `${T170}:0@200=unspent` }] })), enc.encode(TIP)];
+const fr = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
+fr[0] = 0x20;
+const dv = new DataView(fr.buffer);
+dv.setBigUint64(1, BigInt(Math.floor(Date.now() / 1000)), true);
+let o = 9;
+for (const p of parts) { dv.setUint32(o, p.length, true); fr.set(p, o + 4); o += 4 + p.length; }
+const trailing = new Uint8Array(fr.length + 1); trailing.set(fr);
+for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo', ''], ['frame: a byte past the end', trailing, 'fail', 'trailing'],
+                                        ['frame: cut short', fr.slice(0, fr.length - 1), 'fail', 'truncated']]) {
+  const r = raw(bytes);
+  const ok = r.verdict === want && (!why || JSON.stringify(r).includes(why));
+  bad += !ok;
+  cases.push([name]);
+  console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(22)} ${r.verdict} (want ${want})`);
+}
 console.log(`LIVENESS_WASM ${cases.length - bad}/${cases.length} cases as expected`);
 process.exit(bad ? 1 : 0);

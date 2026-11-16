@@ -13,8 +13,8 @@ node test-liveness.mjs     # 13 cases on the real mainnet 1..200 proof (8888d59c
 
 | | |
 |---|---|
-| size | 1,189,211 bytes raw, 341,738 gzipped |
-| sha256 (this commit, `./build.sh`) | `2c33322a2a77b028c0b2ae5fb1eff2f6a2e795fba1d6c5ee201a8c882e70cc0c` (Rust 1.99.0, 2026-11-15) |
+| size | 1,195,062 bytes raw, 345,192 gzipped |
+| sha256 (this commit, `./build.sh`) | `232ea26d39ecbcc5171045bfaf4fb295d6a25a135ac78b3a730c45170fe4f693` (Rust 1.99.0, default stage path, 16.11.2026, on a box whose core build reproduces the core's published `f16b5b98…`; the module links zapps/corecheck, no longer zapps/common; before it `2c33322a…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-liveness.mjs` 13/13, run by `../test.sh` in CI's zapps job |
 

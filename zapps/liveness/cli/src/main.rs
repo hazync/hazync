@@ -115,7 +115,7 @@ fn check_main(a: Vec<String>) -> ! {
     // chain identity (zapp-common): --mempool / --bitcoin-cli are asked for the block at the proof's height, which the
     // receipt gives, and their answer is checked as an --expect is
     let (expect, extra) = match id.needs_lookup() {
-        true => match zapp_common::verify_core(&rb, image, anchor.clone(), now, None).report.state {
+        true => match zapp_corecheck::verify_core(&rb, image, anchor.clone(), now, None).report.state {
             Some(cs) => zapp_common::expect_for_core(&id, image.network, &cs),
             None => (id.expect.clone(), Vec::new()),
         },
@@ -215,15 +215,15 @@ mod live_tests {
     #[test]
     fn live_route() {
         let dir = env!("CARGO_MANIFEST_DIR");
-        let recs = decode_all(&std::fs::read(format!("{dir}/vectors/mainnet_1_200_history.bin")).unwrap()).unwrap();
-        let src = coin_source::Source::Dir(format!("{dir}/../../prover/testdata/libzync/mainnet").into());
+        let recs = decode_all(&std::fs::read(format!("{dir}/../vectors/mainnet_1_200_history.bin")).unwrap()).unwrap();
+        let src = coin_source::Source::Dir(format!("{dir}/../../../prover/testdata/libzync/mainnet").into());
         let t9 = "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9";
         assert_eq!(answer(&recs, 200, Some(&src), "/tip").1, "{\"tip\":200}");
         let (c, b) = answer(&recs, 200, Some(&src), &format!("/live/tip/{t9}/0"));
         assert_eq!(c, 200, "{b}");
         let v: serde_json::Value = serde_json::from_str(&b).unwrap();
         assert_eq!(v["answer"], "spent:170:1:0");
-        let want = std::fs::read_to_string(format!("{dir}/vectors/b9_0_at200.hex")).unwrap();
+        let want = std::fs::read_to_string(format!("{dir}/../vectors/b9_0_at200.hex")).unwrap();
         assert_eq!(v["proof"].as_str().unwrap(), want.trim());
         let (_, b) = answer(&recs, 200, Some(&src), &format!("/live/169/{t9}/0"));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&b).unwrap()["answer"], "unspent");

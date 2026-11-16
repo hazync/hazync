@@ -1,7 +1,8 @@
 //! C ABI for the coin-liveness zyncAPP (include/zapp_liveness.h), moved out of swiftsync-verify-ffi's facts JSON
 //! (`"liveness"`) on 15.11.2026: a zAPP module of its own (docs/libzync/ZYNCAPPS.md §9). One implementation of the
-//! check: this calls the same `zapp_liveness::verify_liveness` as the CLI and the WASM build. No panics cross the
-//! boundary.
+//! check: this calls the same `zapp_liveness::verify_liveness` as the CLI and the WASM build. Bad input is an error,
+//! never a panic; and since the crate is built with `panic = "abort"` (no unwinding, so no `catch_unwind`), a panic
+//! from a bug aborts the process rather than unwinding into C.
 
 use std::ffi::{c_char, CStr};
 use swiftsync_verify::{ChainState, Verdict};
