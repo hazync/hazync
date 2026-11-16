@@ -795,9 +795,14 @@ pub(crate) fn lz_smt_rebind(w: &mut BlockWitness, smt: &mut Smt) {
 pub(crate) fn lz_smt_replay(dir: &str, upto: u32) -> (Smt, u32) {
     let mut smt = Smt::new();
     let mut max_time = 0u32;
+    // the replay runs from genesis, so it knows every tracked transaction itself (tracked.rs)
+    let mut tracked: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for h in 1..=upto {
-        std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
-        let (_, mut w) = build_full();
+        let j = crate::read_block_json(dir, h);
+        let g = methods::NETWORK == "mainnet" && (h == 91_842 || h == 91_880);
+        let (a, new) = crate::tracked::annotate(&j, &smt, crate::tracked::bip34_height(), g, &|t, _, _| tracked.contains(t));
+        tracked.extend(new);
+        let (_, mut w) = crate::build_full_from(a);
         max_time = max_time.max(u32::from_le_bytes(w.header[68..72].try_into().unwrap()));
         lz_smt_rebind(&mut w, &mut smt);
     }
@@ -935,6 +940,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let leaf_check = std::env::var("HAZYNC_LEAF_CHECK").ok();
     if let Some(b) = &leaf {
         assert!(lo == hi && b.prev.height + 1 == lo, "HAZYNC_LEAF_BUNDLE: the bundle is for block {}; prove exactly that block", b.prev.height + 1);
+        crate::tracked::check_bundle_json(lo, &b.block_json);
         assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no resume");
         assert!(leaf_check.is_none(), "HAZYNC_LEAF_BUNDLE and HAZYNC_LEAF_CHECK: one or the other");
         // A leaf-mode handover (the board's, docs/HANDOVER.md §5): the bundle's witnesses were cut against S(h-1), so
@@ -995,6 +1001,10 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         assert_eq!(t.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
         t
     } else {
+        // A DEMONSTRATION anchor (anchor_effective.json; a verifier reports it as DEMO): the tree is seeded with the coinbase
+        // coins the range spends from before lo, read from the file's flags. With no history before lo, a tracked
+        // non-coinbase coin (bit 1 alone; the fetcher's files never carry it, tracked.rs) is not seeded and the guest
+        // refuses its spend. Not a production path: prep, leaf bundles and a replay from genesis derive the flags.
         let mut t = Smt::new();
         let mut counts: std::collections::BTreeMap<[u8; 32], u32> = std::collections::BTreeMap::new();
         for h in lo..=hi {
@@ -1077,7 +1087,14 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         let t0 = Instant::now();
         std::env::set_var("HAZYNC_BLOCK", format!("{dir}/block_{h}.json"));
         std::env::remove_var("HAZYNC_LZ_HINTS");
-        let (_, mut w) = build_full();
+        // the BIP30-tracked flags as the guest derives them (tracked.rs), from this run's BIP30 tree and coin log; a
+        // leaf bundle's JSON already carries them (prep wrote it; checked when the bundle was read)
+        let j = crate::read_block_json(dir, h);
+        let j = if leaf.is_none() {
+            let g = methods::NETWORK == "mainnet" && (h == 91_842 || h == 91_880);
+            crate::tracked::annotate(&j, &smt, crate::tracked::bip34_height(), g, &|_, _, l| cl_has(l)).0
+        } else { j };
+        let (_, mut w) = crate::build_full_from(j);
         assert_eq!(w.height, h);
         w.root_prev = WireStump { roots: prev.utxo_roots.clone(), num_leaves: prev.utxo_leaves };
         if let Some(b) = &leaf {
@@ -1642,6 +1659,12 @@ pub(crate) fn cl_prefetch(spends: &[ClSpend]) {
         let pos: Vec<u64> = leaves.iter().filter_map(|l| h.pos.get(l)).collect();
         nodes.prefetch(&pos);
     }
+}
+
+/// Whether the host's coin log holds `leaf` as a coin (unspent): how the BIP30-tracked flag of an earlier coin is read
+/// back (tracked.rs).
+pub(crate) fn cl_has(leaf: &[u8; 32]) -> bool {
+    CL.lock().unwrap().as_ref().expect("coin log not initialised (the tracked flag is read from it)").pos.get(leaf).is_some()
 }
 
 pub(crate) fn cl_prepare(spends: &[ClSpend]) -> Vec<u32> {

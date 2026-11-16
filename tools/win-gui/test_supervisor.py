@@ -341,16 +341,19 @@ def main():
         r = supervisor.check_gpu()
         check(not r.ok and "compute capability 6.1" in r.detail,
               "a 6.1 card fails by default, naming the capability")
-        check("HAZYNC_SPPARK_MIN_MAJOR" in r.detail, "and says what could change that")
+        check("below the supported floor" in r.detail,
+              "and says what could change that (the Setup tab's opt-in, by its label)")
 
         os.environ["HAZYNC_SPPARK_MIN_MAJOR"] = "6"
         r2 = supervisor.check_gpu()
         check(r2.ok, "with the floor lowered it is accepted")
-        check("unverified" in r2.detail,
-              "⛔ but says the result is UNVERIFIED — accepted by the filter is not known-correct")
+        check("unproven" in r2.detail and "1050 Ti" in r2.detail,
+              "⛔ but says what is proved (one GTX 1050 Ti, hazync#727) and that other cards are UNPROVEN")
 
         os.environ["HAZYNC_SPPARK_MIN_MAJOR"] = "7"
         check(not supervisor.check_gpu().ok, "an override that does not help still fails")
+        os.environ["HAZYNC_SPPARK_MIN_MAJOR"] = "5"
+        check(not supervisor.check_gpu().ok, "a floor below 6 is ignored, as sppark ignores it (hazync#727)")
         os.environ["HAZYNC_SPPARK_MIN_MAJOR"] = "nonsense"
         check(not supervisor.check_gpu().ok, "and a nonsense value is ignored, not trusted")
     finally:
@@ -533,7 +536,7 @@ def main():
         'CUDA ERROR: cudaStreamCreateWithFlags@gpu_t.cuh:62 failed: "operation not supported"') or ""
     check("cpu build" in said3.lower(), "a card the prover cannot drive is pointed at the CPU build")
     check("13x" in said3.lower(), "⭐ and told what that costs, from the measured figure")
-    check("631" in said3, "and the issue is named, so it is findable")
+    check("727" in said3, "and the issue is named, so it is findable (hazync#727, which resolved #631's Pascal failure)")
 
     check(supervisor.is_worker_hint("   if it mentions out of memory, retry with a lower HAZYNC_SEG_PO2)"),
           "the hint line is recognised as the worker's own boilerplate")

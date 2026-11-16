@@ -51,6 +51,12 @@ can ever repeat a txid (coinbase-smt/src/bip30.rs):
 
 On mainnet that is 173 transactions to height 940,000; signet (BIP34 from height 1) has none.
 
+**Who sets bit 1.** The guest derives it (a coinbase from its bytes and the BIP30 tree; a prevout's from the coin's
+leaf, which the coin log binds). The host must give the same bit, and the block files the deployed fetcher writes
+carry none, so the host derives it too (`prover/host/src/tracked.rs`: the coinbase as the guest does, an earlier coin's
+from the coin log's own leaf). Until 15.11.2026 it read it from the file; mainnet's first tracked coin is block
+147,396's coinbase (`cec2a159…`), first spent at 147,517, and the first tracked non-coinbase transaction is at 150,001.
+
 **The BIP30 tree counts tracked outputs only** (libzync images, since 11-03). Every coinbase txid is checked and
 inserted as before, but a spend updates the tree only when the spent coin has bit 1. A repeat of an untracked coinbase
 is refused whether its slot reads live or SPENT, so its count never decided anything, and a double spend is refused
