@@ -24,6 +24,7 @@ want() { # want <exit> <what> <command...>: the command's exit code is <exit>
 want 2 "the proven hints file (DEMO)" "$Z" --expect 3:$H3 --undo $V/mainnet-3.undo $V/mainnet-3.receipt $V/mainnet-3.hints
 printf 'UTXO\0\377\377\377\377' > "$W/tiny"
 want 1 "a 9-byte file claiming H = 2^32 - 1" "$Z" --expect 3:$H3 $V/mainnet-3.receipt "$W/tiny"
+want 1 "H = T = 3, a wrong --expect-tip (compared also when T = H)" "$Z" --expect 3:$H3 --expect-tip 3:$H2 $V/mainnet-3.receipt $V/mainnet-3.hints
 want 1 "RISC0_DEV_MODE set" env RISC0_DEV_MODE=1 "$Z" --expect 3:$H3 $V/mainnet-3.receipt $V/mainnet-3.hints
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags). A fake node answers by height:
 # getblockhash <h>, and getblockheader with that block's chainwork (difficulty 1: 0x100010001 per block).
@@ -42,7 +43,8 @@ grep -q "your node's block 2 is $H2" "$W/out" && grep -q "your node's block 3 is
 want 1 "--bitcoin-cli, H = 2: the node's block 3 is not the core tip" "$Z" --bitcoin-cli "$W/wrong3" $V/mainnet-2.receipt $V/mainnet-2.hints
 cargo build --release --manifest-path ./ffi/Cargo.toml
 (cd ffi && cc -O2 -Iinclude test_hints.c "$FT/release/libzapp_hints_ffi.a" -lpthread -ldl -lm -o "$W/htest" && "$W/htest" "$V" $H3)
-c_with_core ffi/test_with_core.c ffi/include "$FT/release" zapp_hints_ffi "$W/both" && "$W/both"
+c_with_core ffi/test_with_core.c ffi/include "$FT/release" zapp_hints_ffi "$W/both"
+"$W/both"
 ./wasm/build.sh
 wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_hints_wasm.wasm wasm/README.md
 node wasm/test-hints.mjs "$V" $H3

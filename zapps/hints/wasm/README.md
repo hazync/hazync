@@ -12,7 +12,7 @@ node test-hints.mjs ../vectors 0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742
 
 | | |
 |---|---|
-| size | 1,105,342 bytes raw, 307,939 gzipped |
-| sha256 (this commit, `./build.sh`) | `7c9c71074c3890fbda49d0017420033c77583744e99a755b96fc7ead57aa521e` (hints image `1894f12e`; Rust 1.99.0, built on hazync-coord, 2026-11-15; the library no longer links zapps/common) |
+| size | 1,105,338 bytes raw, 307,929 gzipped |
+| sha256 (this commit, `./build.sh`) | `33cf56a435c8c09eaa22109da99aa9def17132ac5acd9d826aa6bb74d2db6eff` (hints image `1894f12e`; Rust 1.99.0 in the pinned container reproduce/wasm.Dockerfile, fixed stage path; laptop and hazync-coord, 16.11.2026; with the review fix of 16.11.2026 (a core tip given is compared also when T = H); before it `7c9c7107…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-hints.mjs` 6/6, run by `../test.sh` in CI's zapps job |

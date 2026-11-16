@@ -64,7 +64,7 @@ fn disp(b: &[u8; 32]) -> String {
 /// Verifies a hints receipt and the file (and optionally the undo-hash file) it is for. `image_hex`: the hints image id
 /// (`HINTS_IMAGE_ID` by default); `core_image_hex`: a core image to trust instead of the network's built-in one;
 /// `now`: the verifier's clock; `expect`: (H, hash at H as `getblockhash` prints it) from the node's own header chain;
-/// `expect_tip`: the same for the core tip when it is above H.
+/// `expect_tip`: the same for the core tip; compared whenever given (also when the core tip is H).
 #[allow(clippy::too_many_arguments)]
 pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex: &str, core_image_hex: Option<&str>, now: u64,
                     expect: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> HintsReport {
@@ -127,12 +127,12 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
         rep.identity_checked = rep.check(identity_matches(h, &x.to_lowercase(), z.height, &z.block_hash),
                                          format!("block {h} is {x} (your header chain); the file is for block {} {}", z.height, disp(&z.block_hash)));
     }
-    let tip_ok = if z.core_height == z.height { rep.identity_checked } else {
-        match expect_tip {
-            Some((h, x)) => rep.check(identity_matches(h, &x.to_lowercase(), z.core_height, &z.tip_hash),
-                                      format!("the core tip is block {h} {x}")),
-            None => false,
-        }
+    // a core tip given is ALWAYS compared, also when the core tip is H itself (review 11-16: it was ignored then, so a
+    // wrong --expect-tip passed); when T = H the expect for H covers the tip if no tip is given
+    let tip_ok = match expect_tip {
+        Some((h, x)) => rep.check(identity_matches(h, &x.to_lowercase(), z.core_height, &z.tip_hash),
+                                  format!("the core tip is block {h} {x}")),
+        None => z.core_height == z.height && rep.identity_checked,
     };
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
     let enough = work_at_least(&z.cum_work, img.min_work_hex) && z.core_height >= img.checkpoint_height;
@@ -172,6 +172,9 @@ mod tests {
         let two = verify_hints(&r2, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((2, h2)), Some((3, H3)));
         assert_eq!(two.verdict, Verdict::Demo, "{:?}", two.checks);
         assert_eq!(verify_hints(&r2, &rd("mainnet-2.hints"), None, HINTS_IMAGE_ID, None, now(), Some((2, h2)), Some((3, h2))).verdict, Verdict::Fail);
+        // H = T = 3: a core tip given is compared too (review 11-16: it was ignored when T = H)
+        assert_eq!(verify_hints(&r, &f, None, HINTS_IMAGE_ID, None, now(), Some((3, H3)), Some((3, h2))).verdict, Verdict::Fail);
+        assert_eq!(verify_hints(&r, &f, None, HINTS_IMAGE_ID, None, now(), Some((3, H3)), Some((3, H3))).verdict, Verdict::Demo);
     }
 
     /// The hints zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-hints` line), and the

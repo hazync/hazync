@@ -21,9 +21,13 @@
 use std::process::Command;
 use swiftsync_verify::{identity_matches, parse_expect, ChainState};
 
-/// curl's arguments before the URL: fail on HTTP errors, quiet, 30 s, https only (redirects too), and `--` so the URL
+/// curl's arguments before the URL: `-q` first (no ~/.curlrc: a config file could add a proxy, -k or another URL),
+/// `-g` (no {}[] globbing in the URL), fail on HTTP errors, quiet, 30 s, https only (redirects too), and `--` so the URL
 /// is never read as an option.
-const CURL: [&str; 8] = ["-sf", "--max-time", "30", "--proto", "=https", "--proto-redir", "=https", "--"];
+const CURL: [&str; 10] = ["-q", "-g", "-sf", "--max-time", "30", "--proto", "=https", "--proto-redir", "=https", "--"];
+
+/// How long one `--bitcoin-cli` call may take before it is a failed check (a node that hangs must not hang the zAPP).
+const NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The identity flags, for a zAPP's usage line.
 pub const IDENTITY_USAGE: &str = "[--expect <height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<command>\"]";
@@ -53,6 +57,9 @@ impl Identity {
     pub fn take(&mut self, flag: &str, next: &mut dyn FnMut() -> Option<String>) -> Result<bool, String> {
         let mut val = || next().ok_or_else(|| format!("{flag} needs a value"));
         match flag {
+            // each source once: a repeated flag would silently keep whichever came last
+            "--expect" if self.expect.is_some() => return Err("--expect: give it once".into()),
+            "--bitcoin-cli" if self.bitcoin_cli.is_some() => return Err("--bitcoin-cli: give it once".into()),
             "--expect" => self.expect = Some(val()?),
             // one explorer: --mempool and --mempool-url together would silently keep whichever came last
             "--mempool" | "--mempool-url" if self.mempool.is_some() => return Err("--mempool and --mempool-url: give one of them, once".into()),
@@ -253,9 +260,33 @@ fn is_hash(s: &str) -> bool {
 
 /// One `bitcoin-cli` call: `cmd` is the command line (program and its own flags), `extra` the RPC and its arguments.
 fn node(cmd: &str, extra: &[&str]) -> Result<String, String> {
+    node_within(cmd, extra, NODE_TIMEOUT)
+}
+
+/// [`node`] with its time limit: past it the call is killed and is an error. Its output is read on threads of their own,
+/// which are left behind on a timeout (a grandchild the command started may keep the pipes open; the zAPP does not wait).
+fn node_within(cmd: &str, extra: &[&str], limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
     let mut parts = cmd.split_whitespace();
     let prog = parts.next().ok_or("empty --bitcoin-cli")?;
-    let out = Command::new(prog).args(parts).args(extra).output().map_err(|e| format!("{prog}: {e}"))?;
+    let mut child = Command::new(prog).args(parts).args(extra).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
+        .spawn().map_err(|e| format!("{prog}: {e}"))?;
+    let reader = |mut p: Box<dyn Read + Send>| std::thread::spawn(move || { let mut v = Vec::new(); let _ = p.read_to_end(&mut v); v });
+    let (o, e) = (reader(Box::new(child.stdout.take().unwrap())), reader(Box::new(child.stderr.take().unwrap())));
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait().map_err(|e| format!("{prog}: {e}"))? {
+            Some(s) => break s,
+            None if start.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{cmd} {}: no answer within {} s", extra.join(" "), limit.as_secs()));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    };
+    let out = std::process::Output { status, stdout: o.join().unwrap_or_default(), stderr: e.join().unwrap_or_default() };
     if !out.status.success() {
         // {:?}: the node's stderr escaped, so it cannot forge a line of this tool's own output
         return Err(format!("{cmd} {}: {:?}", extra.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
@@ -267,6 +298,16 @@ fn node(cmd: &str, extra: &[&str]) -> Result<String, String> {
 mod tests {
     use super::*;
     const H200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
+
+    /// A node that does not answer is a failed call within the limit, not a hang (review 11-16).
+    #[test]
+    fn a_hanging_node_times_out() {
+        let t = std::time::Instant::now();
+        let e = node_within("sleep", &["30"], std::time::Duration::from_millis(300)).unwrap_err();
+        assert!(e.contains("no answer within") && t.elapsed() < std::time::Duration::from_secs(5), "{e} after {:?}", t.elapsed());
+        assert_eq!(node_within("echo", &["hi"], std::time::Duration::from_secs(5)).unwrap(), "hi");
+        assert!(node_within("false", &[], std::time::Duration::from_secs(5)).is_err());
+    }
 
     fn take_all(args: &[&str]) -> Result<Identity, String> {
         let mut id = Identity::default();
@@ -282,6 +323,9 @@ mod tests {
         assert!(take_all(&["--mempool", "--mempool-url", "https://x"]).unwrap_err().contains("give one"));
         assert!(take_all(&["--mempool-url", "https://x", "--mempool"]).is_err());
         assert!(take_all(&["--mempool", "--mempool"]).is_err());
+        // review 11-16: --expect and --bitcoin-cli once each, as the explorer
+        assert!(take_all(&["--expect", "1:a", "--expect", "2:b"]).unwrap_err().contains("once"));
+        assert!(take_all(&["--bitcoin-cli", "a", "--bitcoin-cli", "b"]).unwrap_err().contains("once"));
         assert_eq!(take_all(&["--mempool-url", "https://x"]).unwrap().mempool.as_deref(), Some("https://x"));
     }
 
