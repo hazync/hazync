@@ -1,0 +1,6 @@
+# The published WASM build images (ghcr.io/hazync/hazync-wasm-build), by digest: one line per image,
+#   <tag> <sha256:digest>
+# <tag> is reproduce/wasm-image-tag.sh's for (Rust toolchain, with C). .github/workflows/publish-wasm-image.yml builds,
+# pushes and prints these lines; they are committed here after the package is public. The build scripts pull the image
+# by this digest when its tag has a line, and build reproduce/wasm.Dockerfile locally (saying so) when it has none; a
+# release refuses a locally built image (package-release.sh). Empty until the first publish.
