@@ -12,7 +12,8 @@ crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 zapp-assume = { path = ".." }
-zapp-common = { path = "../../common" }
+# the core receipt check (zapps/corecheck: no CLI code)
+zapp-corecheck = { path = "../../corecheck" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 
 [profile.release]

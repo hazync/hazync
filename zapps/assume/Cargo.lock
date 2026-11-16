@@ -1519,15 +1519,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "swiftsync-verify",
- "zapp-common",
-]
-
-[[package]]
-name = "zapp-common"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "swiftsync-verify",
 ]
 
 [[package]]

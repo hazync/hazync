@@ -1,131 +1,138 @@
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 2)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 2)
   assumeutxo: "zapps/assume/vectors/utxo_200.dat" is the proven UTXO set at height 200; Core's hash_serialized_3 of it: a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; the snapshot is the proven UTXO set: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 2)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 2)
   assumeutxo: "zapps/assume/vectors/utxo_200.dat" is the proven UTXO set at height 200; Core's hash_serialized_3 of it: a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; the snapshot is the proven UTXO set: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain; chain identity NOT checked: compare the tip with a source you trust (--mempool, --expect, --bitcoin-cli)
 exit=2 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --expect 200:00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --expect 200:00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] block 200 is 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
   assumeutxo: "zapps/assume/vectors/utxo_200.dat" is the proven UTXO set at height 200; Core's hash_serialized_3 of it: a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): verification indicates proof is invalid
   [FAIL] assumevalid / assumeutxo: NOT checked: the receipt did not verify
 SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.LWFh5It3mY/txid.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.14yq8PukMs/txid.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x e5fa5845.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set (no coin was marked BIP30-tracked; a chain with tracked live coins needs --tracked)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.LWFh5It3mY/perm.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.14yq8PukMs/perm.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: txid fe9ccc6c8b44c67ab170135d4148d6424e748f7549547d8174d59b5127df0102 after 202b784e7fcbb28b28906a80d0b65a97cea04db8e34d26596efa55f8806a9402: not Core's key order (txids ascending, one group each)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.LWFh5It3mY/body.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.14yq8PukMs/body.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x 3c409c60.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set (no coin was marked BIP30-tracked; a chain with tracked live coins needs --tracked)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.LWFh5It3mY/net.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.14yq8PukMs/net.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: network magic f9bfb4d9 is not the proof's network (f9beb4d9)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.LWFh5It3mY/base.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.14yq8PukMs/base.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: base block 000000008f1a7008320c16b8402b7f11e82951f44ca2673caf6860ab2eeef320 is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200): the proof commits the live-coin hash at its tip only
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.LWFh5It3mY/trail.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.14yq8PukMs/trail.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: bytes after the 204 coins the header names
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.LWFh5It3mY/short.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /tmp/tmp.14yq8PukMs/short.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: truncated at byte 14238 (failed to fill whole buffer)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_199.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_199.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: base block 00000000b7691ccc084542565697eca256e56bb7f67e560b48789db27f0468eb is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200): the proof commits the live-coin hash at its tip only
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_1003.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_1003.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: base block 000000002d5d8c3264d9c6e352b76430cda7a1edac661a515dd1445c15168de5 is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200): the proof commits the live-coin hash at its tip only
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --tracked /tmp/tmp.LWFh5It3mY/tracked.txt swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --tracked /tmp/tmp.14yq8PukMs/tracked.txt swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] assumeutxo: snapshot: its 204 coins hash to live-coin ECMH x c210a27e.. ; the proof commits x 55ea17b1.. : NOT the proven UTXO set
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] assumeutxo: the headers (genesis to the proven tip) are required: each coin's creation MTP comes from them
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers /tmp/tmp.LWFh5It3mY/hdr_short.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers /tmp/tmp.14yq8PukMs/hdr_short.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] headers: the last header hashes to 00000000b7691ccc084542565697eca256e56bb7f67e560b48789db27f0468eb, not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers /tmp/tmp.LWFh5It3mY/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers /tmp/tmp.14yq8PukMs/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] headers: header 151 (height 151) does not link to the one before it
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers /tmp/tmp.LWFh5It3mY/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers /tmp/tmp.14yq8PukMs/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] assumeutxo: the headers must run from genesis to the proven tip at 200 (given 150..200)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /nonexistent.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt /nonexistent.dat (expect exit 1)
   [FAIL] assumeutxo: "/nonexistent.dat": No such file or directory (os error 2)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
   assumevalid: -assumevalid=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200; scripts proven valid for blocks 0..200)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; -assumevalid block proven: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers zapps/assume/vectors/headers_0_200.bin --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers zapps/assume/vectors/headers_0_200.bin --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
   assumevalid: -assumevalid=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee (height 170; scripts proven valid for blocks 0..200)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; -assumevalid block proven: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.LWFh5It3mY/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.14yq8PukMs/hdr_150.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
   assumevalid: -assumevalid=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee (height 170; scripts proven valid for blocks 0..200)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; -assumevalid block proven: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain; chain identity NOT checked: compare the tip with a source you trust (--mempool, --expect, --bitcoin-cli)
 exit=2 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --block 000000002d5d8c3264d9c6e352b76430cda7a1edac661a515dd1445c15168de5 --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --block 000000002d5d8c3264d9c6e352b76430cda7a1edac661a515dd1445c15168de5 --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] assumevalid: block 000000002d5d8c3264d9c6e352b76430cda7a1edac661a515dd1445c15168de5 is not in the headers 0..200 that end at the proven tip
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] assumevalid: block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee is not the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320: give the headers from it to the tip
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt (expect exit 1)
   [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): verification indicates proof is invalid
   [FAIL] assumevalid / assumeutxo: NOT checked: the receipt did not verify
 SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --block xyz swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --block xyz swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] assumevalid: --block "xyz": not 64 hex digits
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.LWFh5It3mY/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee --headers /tmp/tmp.14yq8PukMs/hdr_time.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 1)
   [FAIL] headers: header 151 (height 151) does not link to the one before it
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --bitcoin-cli /tmp/tmp.LWFh5It3mY/node swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 2)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --bitcoin-cli /tmp/tmp.14yq8PukMs/node swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 2)
   assumeutxo: "zapps/assume/vectors/utxo_200.dat" is the proven UTXO set at height 200; Core's hash_serialized_3 of it: a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; the snapshot is the proven UTXO set: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --bitcoin-cli /tmp/tmp.LWFh5It3mY/badnode swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+== /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin --bitcoin-cli /tmp/tmp.14yq8PukMs/badnode swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
   [FAIL] your node's getblockheader 0000000000000000000000000000000000000000000000000000000000000001 has no chainwork: the proven chainwork is not compared
   [FAIL] block 200 is 0000000000000000000000000000000000000000000000000000000000000001; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
   assumeutxo: "zapps/assume/vectors/utxo_200.dat" is the proven UTXO set at height 200; Core's hash_serialized_3 of it: a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67
 SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
 exit=1 PASS
-== /root/trk/zsrc/zapps/assume/target/release/zapp-assume assumevalid --bitcoin-cli /tmp/tmp.LWFh5It3mY/node swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
+== /tmp/zapp-assume/release/zapp-assume assumevalid --bitcoin-cli /tmp/tmp.14yq8PukMs/node swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (expect exit 2)
   assumevalid: -assumevalid=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (height 200; scripts proven valid for blocks 0..200)
 SWIFTSYNC_VERIFY_DEMO: the chain and its coin log; -assumevalid block proven: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
 exit=2 PASS
+== env RISC0_DEV_MODE=1 /tmp/zapp-assume/release/zapp-assume assumeutxo --headers zapps/assume/vectors/headers_0_200.bin swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt zapps/assume/vectors/utxo_200.dat (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: panicked at ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been disabled by feature flag.
+exit=1 PASS
+== /tmp/zapp-assume/release/zapp-assume assumevalid swiftsync-verify/vectors/fake_block_2501.rcpt (expect exit 1)
+  [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
+SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+exit=1 PASS
 == assume_ref.py == the verifier's live_hash and hash_serialized_3
 base 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320  height 200  coins 204  value 1000000000000
 hash_serialized_3 a51f51aea7cf42fc9f1ab491532de766675e983fde7166fa6273a6d6a6439d67
 live_hash x 55ea17b13729c536c0ae31f7f95b9bbf2d9f755f157065d1f6448eecc9863d01 y fd4c22f9288d986e7cf327f3792f8dd3261225db0b7b665422a508605ed26e06
 PASS
-zapp-assume test-assume.sh: 31/31 as expected
+zapp-assume test-assume.sh: 33/33 as expected

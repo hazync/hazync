@@ -14,7 +14,8 @@
 
 use std::process::exit;
 use swiftsync_verify::{ChainState, Verdict};
-use zapp_common::{check_core_tip, image_for, verify_core, Identity, IDENTITY_USAGE};
+use zapp_common::{check_core_tip, Identity, IDENTITY_USAGE};
+use zapp_corecheck::{image_for, verify_core};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");

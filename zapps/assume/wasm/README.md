@@ -13,8 +13,8 @@ node test-assume.mjs   # 11 cases on the real mainnet 1..200 proof and Core v31.
 
 | | |
 |---|---|
-| size | 1,164,451 bytes raw, 330,920 gzipped |
-| sha256 (this commit, `./build.sh`) | `d69abab3c9e22bd7fa71ae52ca5186d7800b9ada6403fb9ca86c5510306a01fd` (Rust 1.99.0, default stage path, built on hazync-coord, 15.11.2026) |
+| size | 1,163,787 bytes raw, 330,674 gzipped |
+| sha256 (this commit, `./build.sh`) | `cbf31ea28b1078ef93516e6f92bdea531c9cb320bdc98553a7e7359e5c32d746` (Rust 1.99.0, default stage path, 16.11.2026, on a box whose core build reproduces the core's published `f16b5b98…`; the module links zapps/corecheck, no longer zapps/common; before it `d69abab3…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-assume.mjs` 11/11, run by `../test.sh` in CI's zapps job |
 

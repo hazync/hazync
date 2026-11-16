@@ -73,7 +73,7 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
             return Err("input frame has trailing bytes".to_string());
         }
         let network = match code & !0x30 { 0 => "mainnet", 1 => "signet", n => return Err(format!("unknown network code {n}")) };
-        let image = zapp_common::image_for(network, &image_hex, code & 0x10 != 0, code & 0x20 != 0)?;
+        let image = zapp_corecheck::image_for(network, &image_hex, code & 0x10 != 0, code & 0x20 != 0)?;
         if receipt.starts_with(swiftsync_verify::BUNDLE_MAGIC) {
             return Err("assume: a proof bundle is not accepted here: give the receipt".to_string());
         }
@@ -91,7 +91,7 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
         Err(e) => return fail(e),
         Ok(x) => x,
     };
-    let core = zapp_common::verify_core(receipt, image, None, now, Some(expect.as_str()).filter(|e| !e.is_empty()));
+    let core = zapp_corecheck::verify_core(receipt, image, None, now, Some(expect.as_str()).filter(|e| !e.is_empty()));
     let (mut rep, tip_checked) = (core.report, core.tip_checked);
     if rep.checks.iter().any(|(ok, _)| !ok) { rep.verdict = Verdict::Fail; }
     let mut assume = serde_json::json!(null);

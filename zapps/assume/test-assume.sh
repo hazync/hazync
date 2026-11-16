@@ -1,11 +1,11 @@
 #!/bin/bash
 # zapp-assume assumevalid / assumeutxo end-to-end (was swiftsync-verify assumevalid / assumeutxo) (docs/libzync/ASSUME_ZAPPS.md): the real GPU proof of mainnet
 # 1..200 (8888d59c), Core v31.1.0 dumptxoutset files at 199, 200 and 1003 and the headers 0..200 (vectors/assume/),
-# and corrupted copies. Usage: test-assume.sh [<zapp-assume>] (default target/release, after `cargo build --release` here).
+# and corrupted copies. Usage: test-assume.sh [<zapp-assume>] (default cli/target/release, after `cargo build --release --manifest-path cli/Cargo.toml`).
 # Writes zapps/assume/test-assume.out.
 # Every case prints its verdict line and exit code. A proof at 200 is below Core's minimum chainwork, so a passing
 # check is DEMO (exit 2), never OK; the line `... is the proven UTXO set` / `-assumevalid=` says the check itself held.
-V=$(realpath "${1:-$(dirname "$0")/target/release/zapp-assume}")
+V=$(realpath "${1:-$(dirname "$0")/cli/target/release/zapp-assume}")
 cd "$(dirname "$0")/../.." || exit 1
 exec > zapps/assume/test-assume.out 2>&1
 BAD=0; N=0
@@ -82,6 +82,9 @@ printf '#!/bin/sh\necho %064d\n' 1 > $T/badnode; chmod +x $T/badnode
 run 2 "is the proven UTXO set" $U --bitcoin-cli $T/node $R $A/utxo_200.dat
 run 1 "" $U --bitcoin-cli $T/badnode $R $A/utxo_200.dat
 run 2 "assumevalid=$TIP" $V assumevalid --bitcoin-cli $T/node $R
+# RISC0_DEV_MODE never makes the verifier accept anything; a dev-mode receipt (FakeReceipt) is refused
+run 1 "RISC0_DEV_MODE" env RISC0_DEV_MODE=1 $U $R $A/utxo_200.dat
+run 1 "" $V assumevalid swiftsync-verify/vectors/fake_block_2501.rcpt
 # the independent reference (scripts/libzync/assume_ref.py) must print the hash_serialized_3 and live hash the verifier printed
 echo "== assume_ref.py == the verifier's live_hash and hash_serialized_3"
 REF=$(python3 -I scripts/libzync/assume_ref.py $A/utxo_200.dat $A/headers_0_200.bin); echo "$REF"

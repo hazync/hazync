@@ -1,7 +1,8 @@
 //! C ABI for the assumevalid and assumeutxo zyncAPPs (include/zapp_assume.h), moved out of swiftsync-verify-ffi on
 //! 15.11.2026: a zAPP module of its own (docs/libzync/ZYNCAPPS.md §9). One implementation of the checks: this calls the
-//! same `zapp_assume::run_assume` as the CLI and the WASM build, after the core verifier's receipt checks. No panics
-//! cross the boundary.
+//! same `zapp_assume::run_assume` as the CLI and the WASM build, after the core verifier's receipt checks. Bad input
+//! is an error, never a panic; and since the crate is built with `panic = "abort"` (no unwinding, so no `catch_unwind`),
+//! a panic from a bug aborts the process rather than unwinding into C.
 
 use std::ffi::{c_char, CStr};
 use swiftsync_verify::{Image, Verdict};
@@ -55,13 +56,13 @@ pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len
                                                  out: *mut ZappAssumeChain, aout: *mut SwiftsyncAssumeResult,
                                                  msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
-    // the receipt and the chain identity as the core's swiftsync_verify_facts checks them (zapp_common::verify_core: the
+    // the receipt and the chain identity as the core's swiftsync_verify_facts checks them (zapp_corecheck::verify_core: the
     // core verifier's checks; no anchor: a node's shortcut must rest on a chain from genesis; a .rcpt, not a bundle)
     let Some(base) = Image::by_network(match network & !0x30 { 0 => "mainnet", 1 => "signet", _ => "" }) else { return fail("unknown network") };
     let image_hex = if image_hex.is_null() { String::new() } else {
         match CStr::from_ptr(image_hex).to_str() { Ok(h) => h.to_string(), Err(_) => return fail("image id is not UTF-8") }
     };
-    let image = match zapp_common::image_for(base.network, &image_hex, network & 0x10 != 0, network & 0x20 != 0) {
+    let image = match zapp_corecheck::image_for(base.network, &image_hex, network & 0x10 != 0, network & 0x20 != 0) {
         Ok(i) => i,
         Err(e) => return fail(&e),
     };
@@ -72,7 +73,7 @@ pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len
     if rb.starts_with(swiftsync_verify::BUNDLE_MAGIC) {
         return fail("assume: a proof bundle is not accepted here: give the receipt");
     }
-    let core = zapp_common::verify_core(rb, image, None, now, expect_s.as_deref());
+    let core = zapp_corecheck::verify_core(rb, image, None, now, expect_s.as_deref());
     let rep = core.report;
     let tip_checked = core.tip_checked;
     if rep.verdict == Verdict::Fail || rep.checks.iter().any(|(ok, _)| !ok) {

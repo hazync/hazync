@@ -1,6 +1,8 @@
 /* zapp_assume.h: the C ABI of the assumevalid and assumeutxo zyncAPPs (zapps/assume, docs/libzync/ASSUME_ZAPPS.md and
    ZYNCAPPS.md §9), a module of its own on the core verifier. Link zapps/assume/ffi's libzapp_assume_ffi.a (and
-   -lpthread -ldl -lm). Thread-safe; never aborts on bad input. */
+   -lpthread -ldl -lm) on its own; beside the core verifier's libswiftsync_verify.a, link libzapp_assume_ffi.so instead:
+   two Rust static archives in one binary each carry a Rust std and clash at link time (multiple definitions).
+   ffi/test_with_core.c, run by ../test.sh, does that. Thread-safe; never aborts on bad input. */
 #ifndef ZAPP_ASSUME_H
 #define ZAPP_ASSUME_H
 #include <stddef.h>
