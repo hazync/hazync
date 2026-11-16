@@ -61,7 +61,7 @@ def scratch_root(host_rc):
     return r
 
 print("== 2. libzync-prep-run.sh passes the host's exit status through")
-for rc in (0, 3, 4):
+for rc in (0, 3, 4, 5):
     r = scratch_root(rc)
     # output to a file, not a pipe: the script's background pruner (a `sleep 60` loop) keeps a pipe open after it exits
     with open(r / "run.log", "w") as log:
@@ -73,9 +73,10 @@ for rc in (0, 3, 4):
     shutil.rmtree(r, ignore_errors=True)
 
 def systemd_case(u, kind, tag):
-    """kind 'reorg': the host exits 4 (prep) / a REORG marker is in blocks/ (fetch). kind 'crash': exit 1."""
+    """kind 'reorg': the host exits 4 (prep) / a REORG marker is in blocks/ (fetch). kind 'crash': exit 1. kind 'rewind'
+    (prep, P3): exit 5, a stop FOR a rewind: restarted, no alert."""
     prep = u.endswith("prep")
-    r = scratch_root(4 if kind == "reorg" else 1)
+    r = scratch_root({"reorg": 4, "crash": 1, "rewind": 5}[kind])
     (r / "blocks").mkdir()
     if not prep and kind == "reorg": (r / "blocks" / "REORG").write_text("{}\n")
     ud = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")) / "systemd" / "user"
@@ -105,8 +106,9 @@ def systemd_case(u, kind, tag):
                   and alerts == [f"{name}.service"],
                   f"systemd {u}: a reorg stop FAILS the unit with status 4, no restart, one alert ({show}, alerts {alerts})")
         else:
-            check(show.get("SubState") == "auto-restart" and show.get("ExecMainStatus") == "1" and not alerts,
-                  f"systemd {u}: an ordinary failure (exit 1) still restarts, no alert ({show})")
+            st = "5" if kind == "rewind" else "1"
+            check(show.get("SubState") == "auto-restart" and show.get("ExecMainStatus") == st and not alerts,
+                  f"systemd {u}: {'a stop for a rewind (exit 5)' if kind == 'rewind' else 'an ordinary failure (exit 1)'} restarts, no alert ({show})")
     finally:
         sc("stop", f"{name}.service")
         sc("reset-failed", f"{name}.service")
@@ -124,6 +126,7 @@ if SYSTEMD:
         for u in UNITS:
             systemd_case(u, "reorg", tag)
             if not CONTROL: systemd_case(u, "crash", tag)
+            if not CONTROL and u.endswith("prep"): systemd_case(u, "rewind", tag)
 else:
     print("== 3. SKIPPED (--no-systemd): the units were NOT run under systemd")
 

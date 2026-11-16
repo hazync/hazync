@@ -344,6 +344,42 @@ def case_new_file_same_best():
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
+def case_auto_rewind():
+    """P3, HAZYNC_REORG_AUTO=1: a fork within W writes REORG (class auto) and the fetcher WAITS (no exit) while prep
+    rewinds; when the marker goes (prep's rewind: save point and tip at the fork, the states above moved), it fetches
+    the new branch from the fork. A fork beyond W still stops (exit 4)."""
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40)
+        p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od)], {"HAZYNC_REORG_AUTO": "1", "HAZYNC_REORG_AUTO_DEPTH": "12"})
+        try:
+            time.sleep(2.0)
+            node.reorg(3, "r")                                             # fork at 57, new tip 61
+            marked = wait_until(lambda: (d / "REORG").exists(), 30)
+            body = json.loads((d / "REORG").read_text()) if marked else {}
+            time.sleep(1.5)
+            waiting = p.poll() is None and "waiting for prep's rewind" in (root / "fetch.log").read_text()
+            # prep's rewind, as libzync-prep-rewind leaves it
+            for h in (58, 59, 60): (od / f"state_{h}.json").unlink()
+            for x in ("smt", "coinlog", "trie"): (od / f"state_57.{x}").write_text("x")
+            write_tip(od, node, 57, keep=40)
+            (d / "REORG").unlink()
+            fetched = wait_until(lambda: all(files_hashes(d).get(h) == node.active[h] for h in range(58, 62)), 60)
+            check(marked and body.get("class") == "auto" and body.get("fork") == 57 and waiting and fetched and p.poll() is None,
+                  f"AUTO: a fork within W: REORG auto, the fetcher waits (no exit), then fetches 58..61 of the new branch (rc={p.poll()})")
+        finally:
+            p.kill(); p.wait()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40)
+        node.reorg(13, "s")
+        rc, m, b = run_once(root, od, d, {"HAZYNC_REORG_AUTO": "1"})
+        check(rc == 4 and m == "REORG" and b.get("class") == "manual", f"AUTO: a fork beyond W (13) still stops: exit 4, class manual (rc={rc})")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
 def case_fork_point_deep():
     root = pathlib.Path(tempfile.mkdtemp(prefix="fetch-reorg-"))
     try:
@@ -375,6 +411,8 @@ if __name__ == "__main__":
         print("== the review's cases (16.11.2026)")
         case_review_findings()
         case_new_file_same_best()
+        print("== P3: automatic rewinds")
+        case_auto_rewind()
         print("== an old host without PREP_TIP.json")
         for depth in (1, 13, 41):
             case_below_tip(depth, 12, 40, 60, tipfile=False)

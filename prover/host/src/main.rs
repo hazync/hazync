@@ -23,6 +23,7 @@ mod tracked;
 mod reforest;
 mod lz_coord;
 mod reorg;
+mod rewind;
 
 use bench::{chunk_profile, exec_time_cmd, segment_mem_cmd, segment_size_cmd, test_locks_cmd, test_merkle_cmd};
 use bridge::{cmd_bridge, cmd_dump_snapshot, snapshot_emit_cmd};
@@ -1321,6 +1322,16 @@ fn main() {
         let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).unwrap_or_else(|e| panic!("{f}: {e}"))).expect("receipt");
         r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{f} does not verify against this image: {e}"));
         println!("JOURNAL_SHA256 {}", lz::journal_sha(&r));
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-store-digest") {
+        let usage = "libzync-store-digest <out dir> <height>";
+        rewind::digest_cmd(args.get(p + 1).expect(usage), args.get(p + 2).and_then(|x| x.parse().ok()).expect(usage));
+        return;
+    }
+    if let Some(p) = args.iter().position(|a| a == "libzync-prep-rewind") {
+        let usage = "libzync-prep-rewind <out dir> <block dir> [--allow-deep]";
+        rewind::rewind_cmd(args.get(p + 1).expect(usage), args.get(p + 2).expect(usage), args.iter().any(|a| a == "--allow-deep"));
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-prep") {

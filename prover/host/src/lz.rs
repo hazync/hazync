@@ -1488,6 +1488,33 @@ fn cl_undo_to(store: &mut libzync::coinlog_forest::NodeStore<libzync::host::AnyN
     }
 }
 
+/// REORG.md §6 (P3): the on-disk coin log undone IN PLACE to the state `st` (the fork F), from the journal pending.bin
+/// (blocks after the last save point, if prep stopped between save points) and then `bodies`, the undo records' coin
+/// log bodies of the blocks F+1..A newest first (A = the last save point). Every step is cl_undo_to with F's leaf
+/// count, which is idempotent and independent of how much of any block, or of an earlier interrupted rewind, reached
+/// the disk: a rewind that died part-way is simply run again. Checked against `st` at the end; pending.bin is left
+/// for the save point at F to commit (cl_journal_commit).
+pub(crate) fn cl_rewind(bodies: &[Vec<u8>], st: &ChainState) {
+    let d = cl_dir().expect("a rewind needs the on-disk coin log (HAZYNC_COINLOG_DIR)");
+    let mut store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
+        libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
+    let mut pos = cl_index();
+    let n = st.utxo_leaves;
+    let pend = d.join("pending.bin");
+    let journal: Vec<Vec<u8>> = match std::fs::read(&pend) {
+        Ok(u) => cl_journal_records(&u).unwrap_or_else(|e| panic!("{}: {e}: the journal cannot be trusted; nothing undone", pend.display()))
+                     .into_iter().map(|(_, b)| b.to_vec()).collect(),
+        Err(_) => Vec::new(),
+    };
+    for b in journal.iter().rev().chain(bodies.iter()) { cl_undo_to(&mut store, &mut pos, b, n); }
+    if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { dn.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}")); }
+    if let libzync::host::AnyIndex::Disk(ix) = &pos { ix.sync().unwrap_or_else(|e| panic!("index sync: {e}")); }
+    assert!(store.len() == n && normalize_host(store.roots()) == normalize_host(st.utxo_roots.clone()),
+            "rewind: the coin log undone to {} leaves does not have the fork state's roots (records not of this store?)", n);
+    eprintln!("  coin log store: rewound to {n} leaves ({} journaled and {} recorded block(s) undone)", journal.len(), bodies.len());
+    *CL.lock().unwrap() = Some(ClHost { store, pos });
+}
+
 /// The position index: on disk in HAZYNC_COINLOG_DIR (index.bin), else in memory.
 pub(crate) fn cl_index() -> libzync::host::AnyIndex {
     match cl_dir() {

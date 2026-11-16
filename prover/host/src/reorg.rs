@@ -236,6 +236,32 @@ pub(crate) fn stop(why: &str) -> ! {
     std::process::exit(EXIT_REORG);
 }
 
+/// The exit code of a stop FOR a rewind (P3, HAZYNC_REORG_AUTO=1, a fork within W): not in the units'
+/// RestartPreventExitStatus, so systemd starts prep again, and libzync-prep-run.sh runs the rewind before it does.
+pub(crate) const EXIT_REWIND: i32 = 5;
+
+/// Automatic rewinds (P3) on: HAZYNC_REORG_AUTO=1. Off by default: REORG.md §13 turns them on with the coordinator's
+/// side (P4), so until then every fork below prep's tip stays a stop for a person, as in P2.
+pub(crate) fn auto() -> bool { std::env::var("HAZYNC_REORG_AUTO").as_deref() == Ok("1") }
+
+/// The fork of a `REORG` marker the fetcher classed `auto` (depth within W, the records reaching it), else None.
+pub(crate) fn auto_fork(blocks_dir: &str) -> Option<u32> {
+    let m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::path::Path::new(blocks_dir).join("REORG")).ok()?).ok()?;
+    (m["class"].as_str() == Some("auto")).then(|| m["fork"].as_u64().map(|f| f as u32)).flatten()
+}
+
+/// A marker while prep runs: with automatic rewinds on and a fork the fetcher classed `auto`, exit EXIT_REWIND (the
+/// stores are journaled; libzync-prep-run.sh rewinds them to the fork before prep starts again); else stop (exit 4).
+pub(crate) fn stop_or_rewind(blocks_dir: &str, why: &str) -> ! {
+    if auto() {
+        if let Some(f) = auto_fork(blocks_dir) {
+            println!("PREP_STOPPED_FOR_REWIND {why}: the fork at {f} is within W; the restart rewinds the stores to it (REORG.md §6)");
+            std::process::exit(EXIT_REWIND);
+        }
+    }
+    stop(why)
+}
+
 /// A block file's `prev` (display hex) as the state's tip_hash byte order.
 pub(crate) fn prev_of(j: &serde_json::Value) -> Option<[u8; 32]> {
     let x = j["prev"].as_str()?;

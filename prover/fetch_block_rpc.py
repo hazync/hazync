@@ -175,6 +175,10 @@ MARKERS = ("REORG", "REORG_TOO_DEEP")
 POLL_S = float(os.environ.get("HAZYNC_FETCH_POLL_S", "5"))
 W_AUTO = int(os.environ.get("HAZYNC_REORG_AUTO_DEPTH", "288"))      # W: the automatic window (P3)
 J_KEEP = int(os.environ.get("HAZYNC_PREP_UNDO_KEEP", "2016"))       # J: prep's undo records (reorg.rs)
+# P3: with HAZYNC_REORG_AUTO=1 a fork classed `auto` is not a stop: the REORG marker is written, prep exits 5, its
+# restart rewinds the stores to the fork (libzync-prep-rewind) and removes the marker, and this fetcher waits for that,
+# then carries on from the fork. Off by default (REORG.md §13: on together with the coordinator's side, P4).
+AUTO = os.environ.get("HAZYNC_REORG_AUTO") == "1"
 
 import re, struct, hashlib, time
 _HEAD = {k: re.compile(rf'"{k}":\s*(-?\d+)') for k in ("height", "version", "time", "bits", "nonce")}
@@ -274,7 +278,26 @@ def write_marker(d, name, body):
     os.replace(tmp, p)
     return p
 
+class Rewinding(Exception):
+    pass
+
+def auto_marker(d):
+    try: return json.loads((d / "REORG").read_text()).get("class") == "auto"
+    except (OSError, ValueError): return False
+
+def wait_for_rewind(d):
+    """AUTO: wait while prep rewinds (the REORG marker is removed by libzync-prep-rewind when it is done)."""
+    print("waiting for prep's rewind (the REORG marker goes when it is done)", flush=True)
+    while (d / "REORG").exists():
+        if (d / "REORG_TOO_DEEP").exists() or not auto_marker(d):
+            print(f"FETCH_STOPPED_REORG the marker is no longer one prep rewinds by itself", flush=True)
+            sys.exit(EXIT_REORG)
+        time.sleep(POLL_S)
+    print("prep's rewind is done: carrying on from its save point", flush=True)
+
 def refuse_if_marked(d):
+    if AUTO and not (d / "REORG_TOO_DEEP").exists() and auto_marker(d):
+        wait_for_rewind(d)
     for m in MARKERS:
         if (d / m).exists():
             print(f"FETCH_STOPPED_REORG {d / m} is there: a person decides (docs/libzync/REORG.md §11); remove it once "
@@ -325,6 +348,10 @@ def check_prep(d, od, tip):
     p = write_marker(d, "REORG", {"fork": fork, "fork_hash": rpc("getblockhash", [fork]) if fork else None, "prep_tip": P,
                                   "depth": depth, "class": cls, "W": W_AUTO, "J": J, "undo_from": reach, "node_tip": node_h,
                                   "node_best": best, "prep_tip_from": tip.source, "orphaned": orphaned, "new": new, "at": now})
+    if AUTO and cls == "auto":
+        print(f"FETCH_REORG_AUTO prep's tip {P} is not on the node's chain: fork at {fork}, depth {depth} (W={W_AUTO}): "
+              f"{p}; prep rewinds to the fork", flush=True)
+        raise Rewinding()
     print(f"FETCH_STOPPED_REORG prep's tip {P} is not on the node's chain: fork at {fork}, depth {depth} ({cls}; "
           f"W={W_AUTO}, J={J}): {p}", flush=True)
     sys.exit(EXIT_REORG)
@@ -382,18 +409,29 @@ def supervise(lo, hi, d, window, jobs, od, follow):
     try:
         while True:
             node_h, best = chain_info()
-            if best != last_best:
+            try:
+                if best != last_best:
+                    stop_batch()
+                    P = check_prep(d, od, tip)
+                    # above prep's tip only: the files from its last save point up to it are on the chain just checked,
+                    # and a restarted prep needs them
+                    gone = scan_waiting(d, tip.h, node_h)
+                    seen.clear()
+                    last_best = best
+                else:
+                    P = check_prep(d, od, tip)
+                    # the files written since the last poll, against the chain as it is now (review L4)
+                    gone = scan_waiting(d, tip.h, node_h, seen)
+            except Rewinding:
+                # AUTO (P3): prep rewinds to the fork; nothing is fetched until it is done, then all is looked at afresh
                 stop_batch()
-                P = check_prep(d, od, tip)
-                # above prep's tip only: the files from its last save point up to it are on the chain just checked,
-                # and a restarted prep needs them
-                gone = scan_waiting(d, tip.h, node_h)
+                wait_for_rewind(d)
+                # fetching starts again after prep's newest save point, which the rewind put AT the fork (it can be
+                # below where this fetcher started)
+                lo = max(complete_saves(od), default=0) + 1
+                tip, last_best, done_to = PrepTip(od), None, lo - 1
                 seen.clear()
-                last_best = best
-            else:
-                P = check_prep(d, od, tip)
-                # the files written since the last poll, against the chain as it is now (review L4)
-                gone = scan_waiting(d, tip.h, node_h, seen)
+                continue
             if gone: done_to = min(done_to, min(gone) - 1)
             if P is not None:
                 # range: done once prep has SAVED hi (its last block is always a save point)

@@ -494,7 +494,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         let t = std::time::Instant::now();
         let mut j = loop {
             // the fetcher stops at a reorg (REORG.md §4): so does prep, at once, rather than at a timeout
-            if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop(&format!("before block {h}: {} is there", m.display())); }
+            if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop_or_rewind(dir, &format!("before block {h}: {} is there", m.display())); }
             if !consume { break crate::read_block_json(dir, h); }
             if let Some(v) = std::fs::read_to_string(&f).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok()) { break v; }
             assert!(t.elapsed().as_secs() < wait_s, "{f}: not there (or not readable) after {wait_s} s (HAZYNC_PREP_WAIT_S); is the producer running?");
@@ -512,7 +512,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             let t = std::time::Instant::now();
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop(&format!("{why}, and {} is there", m.display())); }
+                if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop_or_rewind(dir, &format!("{why}, and {} is there", m.display())); }
                 // a replaced file arrives by rename, never half written; it may be absent for a moment in between
                 let again = std::fs::read_to_string(format!("{dir}/block_{h}.json")).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok());
                 if let Some(x) = again.filter(|x| crate::reorg::prev_of(x) == Some(prev.tip_hash)) {
@@ -583,12 +583,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         }
         let t = std::time::Instant::now();
         let json = serde_json::to_string(&st).unwrap();
-        if save {
-            crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes());
-            // right after the state, before the stores: every save point the runner takes as complete has it
-            if crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), h) { write_forest_mark(&format!("{out}/state_{h}.json")); }
-            crate::lz::write_atomic(&crate::tracked::flags_mark_path(&format!("{out}/state_{h}.json")), crate::tracked::FLAGS_MARK.as_bytes());
-        }
+        if save { crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes()); }
         else {
             let p = format!("{out}/state_{h}.json");
             std::fs::write(format!("{p}.tmp"), json).unwrap_or_else(|e| panic!("{p}.tmp: {e}"));
@@ -597,12 +592,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         phase(5, t);
         let t = std::time::Instant::now();
         if save {
-            crate::lz::write_atomic(&format!("{out}/state_{h}.smt"), &smt_to_bytes(&smt));
-            crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);
-            crate::trie::trie_save(&format!("{out}/state_{h}.trie"));
-            // both stores saved at h: the journal of the blocks since the last save can go (crash before: a resume
-            // from the last saved state undoes them; the disk trie falls back to its last flush by itself)
-            crate::lz::cl_journal_commit();
+            save_stores(out, h, &smt);
             // HAZYNC_PREP_CONSUME=1: the block files this save point covers are no longer needed (a restart starts
             // here, its BIP30 tree from state_<h>.smt), so a whole-chain prep fed by fetch_block_rpc.py range
             // --window keeps only a window of blocks on disk
@@ -664,6 +654,21 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
              if check.is_some() { "; every state's journal byte-identical to the proved run" } else { "" });
 }
 
+/// A save point at h, after its state_<h>.json is written: the forest and tracked-flags markers, the BIP30 tree's
+/// snapshot, the coin log's and the trie's markers (each store synced), then the journal goes. Shared by prep's loop
+/// and the reorg rewind (rewind.rs), which ends with a save point at the fork.
+pub(crate) fn save_stores(out: &str, h: u32, smt: &Smt) {
+    // right after the state, before the stores: every save point the runner takes as complete has them
+    if crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), h) { write_forest_mark(&format!("{out}/state_{h}.json")); }
+    crate::lz::write_atomic(&crate::tracked::flags_mark_path(&format!("{out}/state_{h}.json")), crate::tracked::FLAGS_MARK.as_bytes());
+    crate::lz::write_atomic(&format!("{out}/state_{h}.smt"), &smt_to_bytes(smt));
+    crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);
+    crate::trie::trie_save(&format!("{out}/state_{h}.trie"));
+    // both stores saved at h: the journal of the blocks since the last save can go (crash before: a resume
+    // from the last saved state undoes them; the disk trie falls back to its last flush by itself)
+    crate::lz::cl_journal_commit();
+}
+
 /// Bytes in a directory's files (one level: the stores keep their files flat).
 fn dir_bytes(d: &std::path::Path) -> u64 {
     std::fs::read_dir(d).map(|it| it.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| {
@@ -700,7 +705,7 @@ fn smt_to_bytes(smt: &Smt) -> Vec<u8> {
     b
 }
 
-fn smt_from_bytes(b: &[u8]) -> Result<Smt, String> {
+pub(crate) fn smt_from_bytes(b: &[u8]) -> Result<Smt, String> {
     if b.len() < 16 || &b[..8] != b"LZSMT001" { return Err("not a BIP30 tree snapshot".into()); }
     let n = u64::from_le_bytes(b[8..16].try_into().unwrap()) as usize;
     if b.len() != 16 + 36 * n { return Err(format!("{} bytes for {n} leaves", b.len())); }

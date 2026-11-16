@@ -10,6 +10,12 @@ R="${LZ_ROOT:-/var/lib/libzync-prep}"
 HI="${LZ_HI:?set LZ_HI}"
 mkdir -p "$R/blocks" "$R/cl" "$R/trie" "$R/out" "$R/leaves"
 export HAZYNC_COINLOG_DIR="$R/cl" HAZYNC_TRIE_DIR="$R/trie" HAZYNC_PREP_CONSUME=1 HAZYNC_PREP_LEAF_BUNDLES="$R/leaves"
+# A reorg rewind first (docs/libzync/REORG.md §5-§6, P3): an interrupted one (out/REWIND), or the fetcher's REORG marker
+# when automatic rewinds are on (HAZYNC_REORG_AUTO=1; prep exits 5 for it). It leaves a complete save point at the fork,
+# which the rule below then takes. A refusal (exit 4: beyond W, records missing) stops here: set -e passes the 4 on.
+if [ -e "$R/out/REWIND" ] || { [ "${HAZYNC_REORG_AUTO:-0}" = 1 ] && [ -e "$R/blocks/REORG" ]; }; then
+    "$R/bin/host_lz" libzync-prep-rewind "$R/out" "$R/blocks"
+fi
 # the newest COMPLETE save point: a crash between its writes (state, .smt, .coinlog, .trie) leaves a newer partial one.
 # The disk trie is advanced in place and its own meta says its height (bytes 17..25, little-endian): a crash after its
 # flush but before the state_<h>.trie marker leaves the trie AT h, so h is the save point, not the one before it, which
