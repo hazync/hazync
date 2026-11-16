@@ -25,7 +25,7 @@ want 1 "H = 3, another hash" -- verify $V/mainnet-3.receipt --expect-at 3:$H2
 want 1 "H = 3, T = H, a wrong tip given" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --expect-tip 3:$H2
 want 2 "H = 2 under T = 3, both named" -- verify $V/mainnet-2.receipt --expect-at 2:$H2 --expect-tip 3:$H3
 want 1 "H = 2 under T = 3, a wrong tip" -- verify $V/mainnet-2.receipt --expect-at 2:$H2 --expect-tip 3:$H2
-want 1 "another image id" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --image $(printf 'ab%.0s' $(seq 32))
+want 1 "another image id" -- verify $V/mainnet-3.receipt --expect-at 3:$H3 --image "$(printf 'ab%.0s' $(seq 32))"
 want 1 "an unknown flag" -- verify $V/mainnet-3.receipt --expect 3:$H3
 want 1 "a flag without its value" -- verify $V/mainnet-3.receipt --expect-at
 want 1 "two receipts" -- verify $V/mainnet-3.receipt $V/mainnet-2.receipt
