@@ -80,8 +80,9 @@ alert() {
 # submit; then fall through to --stop. Killing a loop does not touch its child: the child finishes its block alone.
 # --stop on its own abandons every block in flight, and those claims hold their blocks until they lapse. Measured
 # 2026-11-12 (the stranger test): two workers stopped mid-prove left 1,337 and 1,338 claimed, and 1,337 was the
-# frontier, so the board's frontier sat on a dead claim. There is no release endpoint for a block claim, so the
-# fix is not to abandon it.
+# frontier, so the board's frontier sat on a dead claim. Since #725 a worker that gets SIGTERM (which --stop sends)
+# hands its claimed block back through POST /api/release before it exits, so --stop no longer strands the block;
+# but it still throws the proof away, and --drain does not.
 if [ "$STOP" = "--drain" ]; then
     for _pat in 'hazync-worker-loop' 'hazync-distributed-loop' 'hazync-fold-loop' 'hazync-spine-loop'; do
         pkill -f "$_pat" 2>/dev/null

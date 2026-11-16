@@ -46,8 +46,11 @@ struct Frame<'a> {
 
 impl<'a> Frame<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let out = self.b.get(self.i..self.i + n).ok_or("input frame truncated")?;
-        self.i += n;
+        // checked: on wasm32 a crafted chunk length near u32::MAX would wrap `i + n` (the wrapped range was refused by
+        // `get` only by accident, and a debug build panicked); review of #724, finding 7
+        let end = self.i.checked_add(n).ok_or("input frame truncated")?;
+        let out = self.b.get(self.i..end).ok_or("input frame truncated")?;
+        self.i = end;
         Ok(out)
     }
     fn chunk(&mut self) -> Result<&'a [u8], String> {
@@ -318,4 +321,21 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
 #[no_mangle]
 pub extern "C" fn headers_image_id() -> *const u8 {
     ret(swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string())
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::Frame;
+
+    #[test]
+    fn take_refuses_a_length_that_would_wrap() {
+        let b = [0u8; 8];
+        let mut f = Frame { b: &b, i: usize::MAX - 2 };
+        assert!(f.take(4).is_err());
+        let mut f = Frame { b: &b, i: 4 };
+        assert!(f.take(usize::MAX).is_err());
+        let mut f = Frame { b: &b, i: 0 };
+        assert_eq!(f.take(8).unwrap().len(), 8);
+        assert!(f.take(1).is_err());
+    }
 }
