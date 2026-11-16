@@ -38,7 +38,7 @@
 
 
 use std::process::exit;
-use swiftsync_verify::{unhex, verify, Image, Inputs, Verdict};
+use swiftsync_verify::{unhex, verify, Inputs, Verdict};
 use zapp_common::Identity;
 use zapp_statement::{self as statement, check_statement, Challenge, Statement};
 
@@ -97,7 +97,8 @@ fn produce(a: Vec<String>) {
                 i += 1;
             }
             if scripts.is_empty() { die("draft: give at least one scriptPubKey"); }
-            let image = Image::by_network(&network).unwrap_or_else(|| die(&format!("unknown network {network:?}")));
+            // as every zAPP resolves it (zapp_corecheck::image_for; "regtest" only under the tests-only regtest-test feature)
+            let image = zapp_corecheck::image_for(&network, "", false, false).unwrap_or_else(|e| die(&e));
             let receipt = std::fs::read(&rp).unwrap_or_else(|e| die(&format!("{rp}: {e}")));
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
             let rep = verify(&Inputs { receipt: &receipt, image, anchor: None, now });

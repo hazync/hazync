@@ -1,0 +1,426 @@
+{
+ "bitcoind_args": "-regtest -testactivationheight=bip34@110",
+ "core": "/Satoshi:28.0.0/",
+ "keys": {
+  "ALICE": {
+   "p2pk_c": {
+    "pub_compressed": "035fff0a52ff6775b755aa2861a6ac689aaa2225cbec232bd4504983839bf2dc41",
+    "pub_uncompressed": "045fff0a52ff6775b755aa2861a6ac689aaa2225cbec232bd4504983839bf2dc4199a625737d37cf75bb35479c46ffed9636e127f885acabf83b3fc94d4b9b8171",
+    "scripts": {
+     "p2pk_c": {
+      "address": null,
+      "spk": "21035fff0a52ff6775b755aa2861a6ac689aaa2225cbec232bd4504983839bf2dc41ac"
+     }
+    },
+    "secret": "a371c89325a6cfffe7a9f708f0c15ea396caa233af7040a63452fc3b170a0a34",
+    "taproot_output_key": "b39eec5326e9df97b7362b411edd27afce88fb0b4dd0820fbb01fa6e43bcfea9",
+    "xonly_internal": "5fff0a52ff6775b755aa2861a6ac689aaa2225cbec232bd4504983839bf2dc41"
+   },
+   "p2pk_u": {
+    "pub_compressed": "0350047f41ba813c75a2f434c397c4b6cb8fb09fce374988c013e3c077bc170d49",
+    "pub_uncompressed": "0450047f41ba813c75a2f434c397c4b6cb8fb09fce374988c013e3c077bc170d49b4c600c0681c25cdb204b2746ee84c36e3bd1f0b94dd51df25f7974ccaac2c85",
+    "scripts": {
+     "p2pk_u": {
+      "address": null,
+      "spk": "410450047f41ba813c75a2f434c397c4b6cb8fb09fce374988c013e3c077bc170d49b4c600c0681c25cdb204b2746ee84c36e3bd1f0b94dd51df25f7974ccaac2c85ac"
+     }
+    },
+    "secret": "ed3862c8230d2d6b6f390b22962ee12da61ebc4a29e1bfddc28237df6eac4d2d",
+    "taproot_output_key": "9bdc92692c4f77f317dd6c9558ff2a3b02cac4ca41268a8d219c9dbf002389e8",
+    "xonly_internal": "50047f41ba813c75a2f434c397c4b6cb8fb09fce374988c013e3c077bc170d49"
+   },
+   "p2pkh": {
+    "pub_compressed": "02554cff8a45d0b3b18da5b7e96101fc888724a9dc07922599991069ed65186374",
+    "pub_uncompressed": "04554cff8a45d0b3b18da5b7e96101fc888724a9dc07922599991069ed65186374015e02af2495eb1719c614d22ee27bac35a383e3adf3aec7b8b0b050e6efa92e",
+    "scripts": {
+     "p2pkh": {
+      "address": "mm2PPw73Ghyny69GQLfDE5j3oY1pigEG7s",
+      "spk": "76a9143c69a537bacffa858b4e2f9f3d279ba7f9db608888ac"
+     }
+    },
+    "secret": "a1456d2d49c10d77c3c91b1c8e5404a0154ae4fcbe8b3ecbfc65b0f33682e3a3",
+    "taproot_output_key": "92bf573d435d4c538a27904bc0a1682f041d5027f2b756380bc9b28c05db377a",
+    "xonly_internal": "554cff8a45d0b3b18da5b7e96101fc888724a9dc07922599991069ed65186374"
+   },
+   "p2sh_p2wpkh": {
+    "pub_compressed": "0376d2cecf2b703e842355a50dda640b0c81c886f24267752074b3b41d9d18a10c",
+    "pub_uncompressed": "0476d2cecf2b703e842355a50dda640b0c81c886f24267752074b3b41d9d18a10c4f6bd8dc3866fe58e89b6064c682ede62d6626d283fbb9c0c4a2723581a6aadd",
+    "scripts": {
+     "p2sh_p2wpkh": {
+      "address": "2MsJW1fkv7NPPQ4Fosg4854UUNoWUTGjJyL",
+      "spk": "a914009e9fbb0646105d67d4fe71f7a2cc639ee3f11687"
+     }
+    },
+    "secret": "dab931d0d7a0937ab88d3461222b3e1dbe4df2e6e2f3e0fe9c8595009a68457f",
+    "taproot_output_key": "377e153df3e24bd0a5e3c6dc716367723101894b1fc3f55c193ca463ef2b2b00",
+    "xonly_internal": "76d2cecf2b703e842355a50dda640b0c81c886f24267752074b3b41d9d18a10c"
+   },
+   "p2tr": {
+    "pub_compressed": "037d46f8e2618198b273b4eee6a4fd413083bf2ffc2dfeb534c96cd9371470f78b",
+    "pub_uncompressed": "047d46f8e2618198b273b4eee6a4fd413083bf2ffc2dfeb534c96cd9371470f78b8cd23d166dcde882a6986e7db2d1a6a65e539cb2b04d8b1eec13607169e2266f",
+    "scripts": {
+     "p2tr": {
+      "address": "bcrt1pufk4psw7glu9n0a9jnhwkwts5853sstwjleylfv9xqca5ec0ukwskl4u7e",
+      "spk": "5120e26d50c1de47f859bfa594eeeb3970a1e918416e97f24fa5853031da670fe59d"
+     }
+    },
+    "secret": "df936c1159a91d9d004181cf9e7759a3b815c14a9381d46689e22ae298254f64",
+    "taproot_output_key": "e26d50c1de47f859bfa594eeeb3970a1e918416e97f24fa5853031da670fe59d",
+    "xonly_internal": "7d46f8e2618198b273b4eee6a4fd413083bf2ffc2dfeb534c96cd9371470f78b"
+   },
+   "p2wpkh": {
+    "pub_compressed": "0239dda20c59d4f334a7fd3e685207ca97926219709cdcbeaa97847cc62948c513",
+    "pub_uncompressed": "0439dda20c59d4f334a7fd3e685207ca97926219709cdcbeaa97847cc62948c513526043b6d0f2b9ad4a00e81735e7629f0e48cb6186b0cdf9a5b83b411b146d48",
+    "scripts": {
+     "p2wpkh": {
+      "address": "bcrt1qpnfkv9ndpf6ezqps729rzx275cav07qy4qq9mu",
+      "spk": "00140cd366166d0a75910030f28a31195ea63ac7f804"
+     }
+    },
+    "secret": "3394d83583600c9359811506d75ee8ca6e8170df6f99937cb4819ef1498a92a3",
+    "taproot_output_key": "ae1c27ab24b4635fdfefc78c8952c0449edebc0abd32da026e620a92beb1949b",
+    "xonly_internal": "39dda20c59d4f334a7fd3e685207ca97926219709cdcbeaa97847cc62948c513"
+   }
+  },
+  "ANYONE": {
+   "note": "OP_TRUE",
+   "spk": "51"
+  },
+  "CHANGE": {
+   "pub_compressed": "03a86d227cff6af7ac62147076cd9c41c582230b730d820589d781a4edf93c9d5f",
+   "pub_uncompressed": "04a86d227cff6af7ac62147076cd9c41c582230b730d820589d781a4edf93c9d5f56967cce67d9d47a16a81f69fd587d248aa49ce8039201f736fcf5f4526ce21f",
+   "scripts": {
+    "p2wpkh": {
+     "address": "bcrt1q69vreckya0dvftfjagzf3dsx4cfj5zx7edwzyf",
+     "spk": "0014d1583ce2c4ebdac4ad32ea0498b606ae132a08de"
+    }
+   },
+   "secret": "c5450e9c7e57b57e3a7b183b09eb23d06221f814de4c21dde9820a218667081e",
+   "taproot_output_key": "76f3d35322e19beb017f060e966fe16eaac76938defcfa869f5a3c99f0b4395a",
+   "xonly_internal": "a86d227cff6af7ac62147076cd9c41c582230b730d820589d781a4edf93c9d5f"
+  },
+  "DEPOSIT": {
+   "pub_compressed": "02c5f571d381e0185cba9aadcf99a56a840711b9643c3f8c2d43663394d0ac56ff",
+   "pub_uncompressed": "04c5f571d381e0185cba9aadcf99a56a840711b9643c3f8c2d43663394d0ac56ff2eebec8267ef646b3da72e8c9d903f3dcca297ba03cbb86801539152a84f142a",
+   "scripts": {
+    "p2wpkh": {
+     "address": "bcrt1qagr4lmj72a4dlysvfm4qxqpx0h22gxv0rsz265",
+     "spk": "0014ea075fee5e576adf920c4eea0300267dd4a4198f"
+    }
+   },
+   "secret": "f8c244752d9844cc3befb6b728a828ca3eea57ba24636a05bfc92af1ad883dcd",
+   "taproot_output_key": "454f0476ca746f40d1ea104aaf96acce94625fc96c9378f851cb81956b7bdc7b",
+   "xonly_internal": "c5f571d381e0185cba9aadcf99a56a840711b9643c3f8c2d43663394d0ac56ff"
+  },
+  "MINER": {
+   "p2pk_c": {
+    "pub_compressed": "031b997ffaede2274e31883faab460a2d5136a4c6923ee0317a507b2fc94f0b1e5",
+    "pub_uncompressed": "041b997ffaede2274e31883faab460a2d5136a4c6923ee0317a507b2fc94f0b1e5eac9687e3d33abc35aa2872b6368c3eb0e367cbccb27080fcc40ca466f2ded4d",
+    "scripts": {
+     "p2pk_c": {
+      "address": null,
+      "spk": "21031b997ffaede2274e31883faab460a2d5136a4c6923ee0317a507b2fc94f0b1e5ac"
+     }
+    },
+    "secret": "c1f0ad808326edc4a1066b32cc77ddf282ebe9f1adc23494b19c6f114b69d77f",
+    "taproot_output_key": "483edab0a57b6d89e29613a5bddb05886111f41ab67dc355fca6ea2397dd1848",
+    "xonly_internal": "1b997ffaede2274e31883faab460a2d5136a4c6923ee0317a507b2fc94f0b1e5"
+   },
+   "p2pk_u": {
+    "pub_compressed": "02717606b820b9cfc9fa8f34b1515651a117fbcc5fd4b0a15d3605c3b12a4f44b9",
+    "pub_uncompressed": "04717606b820b9cfc9fa8f34b1515651a117fbcc5fd4b0a15d3605c3b12a4f44b9780a903e3b025c8fa8e0d7ceaee863b48947ed6298db334b4bda4364675c9b6a",
+    "scripts": {
+     "p2pk_u": {
+      "address": null,
+      "spk": "4104717606b820b9cfc9fa8f34b1515651a117fbcc5fd4b0a15d3605c3b12a4f44b9780a903e3b025c8fa8e0d7ceaee863b48947ed6298db334b4bda4364675c9b6aac"
+     }
+    },
+    "secret": "fade4b61cdef41b264cac4a7f3de951304fcd8885cedfa7e7c44e7a630aa494d",
+    "taproot_output_key": "f73aeda64afead4a21f412ba21a3d4a23906e0ff4944122d9f276a720566a971",
+    "xonly_internal": "717606b820b9cfc9fa8f34b1515651a117fbcc5fd4b0a15d3605c3b12a4f44b9"
+   },
+   "p2pkh": {
+    "pub_compressed": "02d85e91ff92f307a4db08349d2a3413999d72790cd6cc0a6d9a2c09708322d149",
+    "pub_uncompressed": "04d85e91ff92f307a4db08349d2a3413999d72790cd6cc0a6d9a2c09708322d149bb24e5026bd24043eb827f6fbc7d87a7ac00657a591c21b702eba1cea34ba90a",
+    "scripts": {
+     "p2pkh": {
+      "address": "mn2LkRA4JKWtZ9iZBoqwkvM8mQAjaB8rct",
+      "spk": "76a914475f8fcb92e1ea2cdcafa7dcd8e0950faabe4eb788ac"
+     }
+    },
+    "secret": "1ccd512aeb35c4693769a380bfddee85e3f2db844b43daf8bc01c2624773f094",
+    "taproot_output_key": "3c36cc54c7508a8f60836372df4b6360ba4e46a306fdca3ba86048971337d68b",
+    "xonly_internal": "d85e91ff92f307a4db08349d2a3413999d72790cd6cc0a6d9a2c09708322d149"
+   },
+   "p2sh_p2wpkh": {
+    "pub_compressed": "03ce0e70eaeba594cc6ccce7a34e42d902c5daa130cdb93d540b2fa32b015a8a46",
+    "pub_uncompressed": "04ce0e70eaeba594cc6ccce7a34e42d902c5daa130cdb93d540b2fa32b015a8a4693c90a8db89768a3e05400856afb237bbc94f847558782ee72ea25961e9a149b",
+    "scripts": {
+     "p2sh_p2wpkh": {
+      "address": "2Mv5UNFxqorCT5kAeErp5ejGKzijQqL3QGF",
+      "spk": "a9141f10387a3c6be23adb4ae2661ebea2e94475a3da87"
+     }
+    },
+    "secret": "aebb1ccd12fe56f1222e163c7874848a23e73b608f32a489301601b335760359",
+    "taproot_output_key": "ba1e5ed9b50dd0da39f09fbde9e4eeabcd23262e4f4e01ccb5c44a16b194d4ed",
+    "xonly_internal": "ce0e70eaeba594cc6ccce7a34e42d902c5daa130cdb93d540b2fa32b015a8a46"
+   },
+   "p2tr": {
+    "pub_compressed": "02a23ac97aabb8465c1beb345c39dbe917f2ded5b9bfd193c520ca0567facba520",
+    "pub_uncompressed": "04a23ac97aabb8465c1beb345c39dbe917f2ded5b9bfd193c520ca0567facba5208f5d6de87b1c3fd2e9f3ee264a69172a8590e184c7123f24fda53ddc2319d3c6",
+    "scripts": {
+     "p2tr": {
+      "address": "bcrt1pswvzy420esp68yekvxe06v0pgtsal9ykwq2j8yft59hz3nmf2jpsxsphfy",
+      "spk": "5120839822554fcc03a3933661b2fd31e142e1df9496701523912ba16e28cf695483"
+     }
+    },
+    "secret": "f557754bef0e3631d125e3e5c60086db3ade654f2fbcce742b9682a59b17a046",
+    "taproot_output_key": "839822554fcc03a3933661b2fd31e142e1df9496701523912ba16e28cf695483",
+    "xonly_internal": "a23ac97aabb8465c1beb345c39dbe917f2ded5b9bfd193c520ca0567facba520"
+   },
+   "p2wpkh": {
+    "pub_compressed": "039074a463116179fb11cf8965e35b7ec337af64d9272859479a1dd79647bc1030",
+    "pub_uncompressed": "049074a463116179fb11cf8965e35b7ec337af64d9272859479a1dd79647bc103077037a725ae7bd1924a3043d181eae4900d690e39f97e3613eeb201e0a49f171",
+    "scripts": {
+     "p2wpkh": {
+      "address": "bcrt1qwqmtkudrnj50j7utslt7rhmxuxw6wyp3c6n8va",
+      "spk": "00147036bb71a39ca8f97b8b87d7e1df66e19da71031"
+     }
+    },
+    "secret": "83bdc8ecc6b95268531a8a819535bfe42609b240249ff7e5eea5049f36697471",
+    "taproot_output_key": "5966137b3b309119af2df49b632ceceb819590f4a7baacbf8cc5851db260754c",
+    "xonly_internal": "9074a463116179fb11cf8965e35b7ec337af64d9272859479a1dd79647bc1030"
+   }
+  }
+ },
+ "note": "keys are sha256(\"hazync zapp-regtest key \" + name) mod n, published on purpose (regtest only)",
+ "scenarios": {
+  "coinbase_types": {
+   "heights": "1..101",
+   "rule": "coinbase h pays MINER[TYPES[(h-1) % 6]]",
+   "types": [
+    "p2pk_c",
+    "p2pk_u",
+    "p2pkh",
+    "p2wpkh",
+    "p2sh_p2wpkh",
+    "p2tr"
+   ]
+  },
+  "deposit_102": {
+   "amount": 123456789,
+   "height": 102,
+   "inputs": [
+    "7382122530773bdf21b12fceb8478c7b8f4d48b47e8ec6689d5bd6e0f5021967:0 (the tracked block-2 coinbase, P2PK uncompressed)",
+    "bffc2f43cbf691028de7155a4c84e5e83be35dee221d20136b2b5e68f01434dc:7 (same-block, OP_TRUE)"
+   ],
+   "op_return_payload": "68617a796e632d6465706f7369742d30313032",
+   "op_return_vout": 1,
+   "script": "0014ea075fee5e576adf920c4eea0300267dd4a4198f",
+   "txid": "e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9",
+   "vout": 0
+  },
+  "legacy_spends_105": {
+   "height": 105,
+   "p2pk_c": "aa970d975d882c16a9bf7bd8d552f345242cfad2bf54b899370eb3083cc4e125",
+   "p2pkh": "db0287501cb100eb69cad7c2925557f6ee5ad0feb9fd3c1994224dc87fb4ba5a"
+  },
+  "odd_count_104": {
+   "children": [
+    "9a1ead80997d7c31e856e8e58ae673e61a3385d52dc53edd6f6932931c614955",
+    "3560d7521a43dec3a794090fe0af5e4160058617f7d26187673879aaa2a7cffc",
+    "2fe18326209ba4fc7b326febba66b223f5238e27f3228d86afc41f15e441a991",
+    "424f29494bfe0e2c4ce8346400ea39ae70f1963db97dc0908754676bbfe365bf",
+    "89fc3c069f82e637e2c0134823a79014b784143934c65ae3fa3b8fd0e9c818bb",
+    "44faf2c0be5d3ef74ab60f9c290dc861d1645e4b7052328507abbe9e56e3b2d3",
+    "4c5b237596451903b534d8237f67e78fa55aff3f71f0ffd105a091e81cf22646",
+    "b608d766d3da2c6521c269dffbc0aa9f7fda66231216cbe2c25235afd7224c4a",
+    "bb0ee03406f5c02b5723fd55eb2cf7de5e81f12b7d0430e6d55faa8f7be85514",
+    "430054fb538469766d2d5ff7081228c30901b2014fec5c2a54932101c93f8d8f",
+    "619bc34b6ac356fb2f760876b7d3440f492384d6251765234afb9d6ececcdbed",
+    "66b0c8a1b86cd344fb15513bdaa6cfce4ef44fa847e368e744b174b760268ac0",
+    "dbb2bc532399242fc4f15f26a4502d24ec2d73471d4a6e954004a939ee0c0c2e",
+    "64ef5f3c4e416489d744fbc44a1c0bdfc65879b6693b84763e45e8feeeb02033",
+    "2185368796a46ab780be117ea7c922b810045466a6a9faf6b3b6c02949bb46a4"
+   ],
+   "fanout": "90b6708bb6907b52879a4ae0fdf76c8f21b095755026aab7027a2b34174cf35b",
+   "fanout_outputs": 40,
+   "fanout_spends": "a8b6aaff7b78f6efdc572d9defc5d2d38303964efd5932b1845a65cf529c619d:0 (P2WPKH coinbase)",
+   "height": 104,
+   "last_tx": "2185368796a46ab780be117ea7c922b810045466a6a9faf6b3b6c02949bb46a4",
+   "n_tx": 17
+  },
+  "op_return_forms_102": {
+   "height": 102,
+   "note": "payload = the push data concatenated; op_1_not_data is not data-only; bare has no push at all",
+   "outputs": {
+    "0": "op_0",
+    "1": "push75",
+    "2": "pushdata1_80",
+    "3": "pushdata2_300",
+    "4": "pushdata4_5",
+    "5": "two_pushes_ab_cd",
+    "6": "op_1_not_data",
+    "7": "bare"
+   },
+   "payloads": {
+    "bare": "",
+    "op_0": "",
+    "op_1_not_data": null,
+    "push75": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a",
+    "pushdata1_80": "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef501080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6020910171e252c33",
+    "pushdata2_300": "000d1a2734414e5b6875828f9ca9b6c3d0ddeaf7091623303d4a5764717e8b98a5b2bfccd9e6f305121f2c394653606d7a8794a1aebbc8d5e2ef010e1b2835424f5c697683909daab7c4d1deebf80a1724313e4b5865727f8c99a6b3c0cddae7f40613202d3a4754616e7b8895a2afbcc9d6e3f0020f1c293643505d6a7784919eabb8c5d2dfecf90b1825323f4c596673808d9aa7b4c1cedbe8f50714212e3b4855626f7c8996a3b0bdcad7e4f103101d2a3744515e6b7885929facb9c6d3e0edfa0c192633404d5a6774818e9ba8b5c2cfdce9f60815222f3c495663707d8a97a4b1becbd8e5f204111e2b3845525f6c798693a0adbac7d4e1ee000d1a2734414e5b6875828f9ca9b6c3d0ddeaf7091623303d4a5764717e8b98a5b2bfccd9e6f305121f2c394653606d7a",
+    "pushdata4_5": "68656c6c6f",
+    "two_pushes_ab_cd": "61626364"
+   },
+   "txid": "c3b9b9fd0372b2200e7d11c9cce99736a68474b7dcb57288931dfbbc06960857"
+  },
+  "reorg": {
+   "D": {
+    "amount": 250000000,
+    "block": "a 111",
+    "in_b": false,
+    "op_return_payload": "68617a796e632d6465706f7369742d41313131",
+    "op_return_vout": 1,
+    "script": "0014ea075fee5e576adf920c4eea0300267dd4a4198f",
+    "txid": "29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a",
+    "vout": 0
+   },
+   "X": {
+    "created": 109,
+    "in_b": "unspent",
+    "outpoint": "e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f:1",
+    "spent_in_a": {
+     "height": 111,
+     "txid": "83c0dcf5654ecdab68d7600aa6c94680d07f04e49f563f3d94a6e0faa3e5dfdc"
+    }
+   },
+   "Y": {
+    "created": 104,
+    "in_a": "unspent",
+    "outpoint": "90b6708bb6907b52879a4ae0fdf76c8f21b095755026aab7027a2b34174cf35b:0",
+    "spent_in_b": {
+     "height": 111,
+     "txid": "d3ad698cbf6a884c4db95f723d1b8e294039101999bf1e85190d394f723f4701"
+    }
+   },
+   "a": {
+    "111": "004be0242da1bd606f0beda81629572e837dc1ba6e38ffc3b7904db8ef6bec29",
+    "112": "67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574"
+   },
+   "a112_tx": "0218b4687dd615fe8d37d5781829e54df4ed0c15c14c3d4cb76fe3d8421485e0",
+   "b": {
+    "111": "0f0349c9e9e53255beb78bb0b21d8ba599a3c92cc2cf493d889a3c23f865bbf8",
+    "112": "4395baa44c0364ae2f6f415e439b4ce82a5d9e77cb9ad80bdf51eebb2406ce16",
+    "113": "1b5db3dac39b651ab1186418ddefa6746d524e9601666ad9826ab969476bf3d7"
+   },
+   "b113_tx": "079e863713bf649d4c36270300bb96c6a9888708673d3199114e2302e6c5eaa4",
+   "fork_hash": "2d5cc9c833f072d2744d26a9354e94111e77d05669b5004f7d68641c42ae9d53",
+   "fork_height": 110
+  },
+  "repeated_coinbase_105": {
+   "first_height": 2,
+   "first_spent_at": 102,
+   "height": 105,
+   "live_coin": "7382122530773bdf21b12fceb8478c7b8f4d48b47e8ec6689d5bd6e0f5021967:0",
+   "note": "gettxout sees one coin (105's); the first was spent at 102",
+   "tracked": true,
+   "txid": "7382122530773bdf21b12fceb8478c7b8f4d48b47e8ec6689d5bd6e0f5021967"
+  },
+  "same_block_103": {
+   "created_and_spent_in_block": [
+    "474b2e341b639fd4434119fc46a57e8a25048c62cce29bdba54edea9f27d1de4:0",
+    "474b2e341b639fd4434119fc46a57e8a25048c62cce29bdba54edea9f27d1de4:1",
+    "8b19a039ff05f0ca2838e658bc1872aaf9ff8cd562337be1569dec3171afe6c4:0",
+    "6ac0b82957d00e6e835adb094bcb690c27036d3f7c7c3cf4065fdd8628708296:0"
+   ],
+   "height": 103,
+   "one_hop": [
+    "6a122bb839ad335ba365b11efe507e4142f4ea6fb27f3e6d801aa5f31fbf652e"
+   ],
+   "root": "474b2e341b639fd4434119fc46a57e8a25048c62cce29bdba54edea9f27d1de4",
+   "root_spends": "a055268414f832a81fa027494fd0bede145e429cadf76a990a56a8737f4cb44f:0 (P2PKH coinbase)",
+   "three_hops": [
+    "8b19a039ff05f0ca2838e658bc1872aaf9ff8cd562337be1569dec3171afe6c4",
+    "6ac0b82957d00e6e835adb094bcb690c27036d3f7c7c3cf4065fdd8628708296",
+    "204328df56593d10248a1ac2f37ebbd3950cf804514685e3fe3c0a81ba8c0d8e"
+   ]
+  },
+  "spend_types_102": {
+   "height": 102,
+   "outputs": {
+    "0..5": "ALICE p2pk_c, p2pk_u, p2pkh, p2wpkh, p2sh_p2wpkh, p2tr (1.0..1.5 BTC)",
+    "10": "change (CHANGE P2WPKH), spent in the same block",
+    "6": "OP_TRUE 0.5 BTC (spent by the 64-byte tx at 105)",
+    "7": "OP_TRUE 0.25 BTC (spent by the deposit tx in the same block)",
+    "8": "zero-value P2WPKH (CHANGE)",
+    "9": "10,001-byte script, 1,000 sat: unspendable by size, never in the UTXO set"
+   },
+   "spends": "19ddf91e89360c4b911811eedb840bb62f965ab9d79e55b687cdf8759f31d6f1:0 (P2PK compressed coinbase)",
+   "txid": "bffc2f43cbf691028de7155a4c84e5e83be35dee221d20136b2b5e68f01434dc"
+  },
+  "tracked_coinbase": {
+   "height": 2,
+   "indicates": 105,
+   "repeated_at": 105,
+   "script_sig": "0169",
+   "spent_at": 102,
+   "txid": "7382122530773bdf21b12fceb8478c7b8f4d48b47e8ec6689d5bd6e0f5021967",
+   "why": "pre-BIP34 coinbase indicating a later height: tracked, repeatable at 105"
+  },
+  "tx_64_bytes_105": {
+   "height": 105,
+   "n_tx": 4,
+   "output_spk": "51515151",
+   "position": 1,
+   "raw": "0200000001dc3414f0685e2b6b13201d22ee5de33be8e5844c5a15e78d0291f6cb432ffcbf0600000000ffffffff0180f0fa0200000000045151515100000000",
+   "spends": "bffc2f43cbf691028de7155a4c84e5e83be35dee221d20136b2b5e68f01434dc:6",
+   "txid": "5c692392a29e41b7cfcea1d705dca6aff47ecbbf7fe1ea9c559a792a88ac18fc"
+  },
+  "varied_106_110": {
+   "L1": {
+    "created": 106,
+    "outpoint": "eaf81ee58eef6c8ca82d42bc0027d72e0323e6dd2fb66647e04ce30b429c19ad:0",
+    "spent": 107
+   },
+   "L2": {
+    "created": 107,
+    "outpoint": "b86b13dafa97265c7361a51213e5f4b50d127d34cdbfd3172dbe3115a3e30330:0",
+    "spent": 108
+   },
+   "L3": {
+    "created": 109,
+    "outpoint": "e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f:0",
+    "spent": 110
+   },
+   "L4": {
+    "created": 109,
+    "note": "X of the reorg",
+    "outpoint": "e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f:1"
+   },
+   "spends": {
+    "106": [
+     "eaf81ee58eef6c8ca82d42bc0027d72e0323e6dd2fb66647e04ce30b429c19ad",
+     "cb5 P2SH-P2WPKH + cb6 P2TR + ALICE P2SH-P2WPKH (102:4)"
+    ],
+    "107": [
+     "b86b13dafa97265c7361a51213e5f4b50d127d34cdbfd3172dbe3115a3e30330",
+     "L1 + cb7 P2PK compressed"
+    ],
+    "108": [
+     "29baad95b2ad746b2fa878886545057975961b3825a3786e7532635a37d63dae",
+     "5f8c1f9b6ad013ef7eaa3c4388905f949e1aa5eb4130db9275904f4882b3eeb3",
+     "L2 (OP_TRUE); ALICE P2TR key path (102:5)"
+    ],
+    "109": [
+     "e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f",
+     "cb9 P2PKH"
+    ],
+    "110": [
+     "03f8cc2b8de1582b2f5d91e5c64b3f76b92e8612c9479fcf8a93783785900ee8",
+     "L3"
+    ]
+   }
+  }
+ }
+}
