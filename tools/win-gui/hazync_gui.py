@@ -337,8 +337,9 @@ class App(tk.Tk):
         if not hasattr(self, "start_btn"):
             return
         running = bool(self.workers) or bool(self._respawns)
+        starting = bool(getattr(self, "_starting", False))
         self.start_btn.configure(text=self.START_TEXT.get(self.mode.get(), "Start"),
-                                 state="normal" if (self._setup_ok and not running) else "disabled")
+                                 state="normal" if (self._setup_ok and not running and not starting) else "disabled")
         self.stop_btn.configure(state="normal" if running else "disabled")
         if running and not self.stop_btn.winfo_manager():
             self.start_btn.pack_forget()
@@ -466,7 +467,10 @@ class App(tk.Tk):
             self._set_bar(None, busy=True)
         elif self._problem:
             self.v_head.set("Stopped — this needs a look")
-            self.v_sub.set(self._problem)
+            # review L6: with several cards, keep a line per card under the reason, so which card stopped and why
+            # does not vanish when the last one stops
+            self.v_sub.set(self._problem + ("\n" + "\n".join(cards.status_lines(self._session_cards, {}, self._card_notes))
+                                            if len(self._session_cards) > 1 else ""))
             self._set_bar(None, busy=False)
         elif not self._steps:
             self.v_head.set("Getting ready…")
@@ -1137,6 +1141,8 @@ class App(tk.Tk):
         self._home_refresh()
         self._tick_diag()
 
+        coord = self.coord_var.get().strip() or api.DEFAULT_COORD   # read here: a Tk variable is not read off-thread
+
         def go():
             env = dict(os.environ)
             if name == "selftest":
@@ -1155,8 +1161,7 @@ class App(tk.Tk):
                 env=env, timeout=timeout,
                 on_line=lambda l: self.results.put((self._diag_line, l)))
             # method-id is judged against the board's image when the board answers (supervisor.board_method_id)
-            board = (supervisor.board_method_id(self.coord_var.get().strip() or api.DEFAULT_COORD)
-                     if name == "method-id" else None)
+            board = (supervisor.board_image(coord) if name == "method-id" else (None, ""))
             self.results.put((self._after_diag, (name, title, rc, out, then, board)))
         threading.Thread(target=go, daemon=True).start()
 
@@ -1182,7 +1187,7 @@ class App(tk.Tk):
         name, title, rc, out, then, board = args
         elapsed = int(time.time() - self._diag_running[1]) if getattr(self, "_diag_running", None) else 0
         self._diag_running = None
-        ok, verdict = supervisor.diagnostic_verdict(name, rc, out, board_id=board)
+        ok, verdict = supervisor.diagnostic_verdict(name, rc, out, board_id=board[0], board_why=board[1])
         verdict = f"{verdict}  ({elapsed // 60}m {elapsed % 60:02d}s)" if elapsed else verdict
         self.diag_vars[name].set(f"{'PASSED' if ok else 'FAILED'}: {verdict}")
         self.v_diag.set(f"{title}  —  {'PASSED' if ok else 'FAILED'}: {verdict}")
@@ -1559,16 +1564,101 @@ class App(tk.Tk):
     def _start(self):
         if not self._ask_name_first():
             return
-        # ⭐ the board's /api/meta decides which prover image is accepted (supervisor.board_method_id)
-        checks, fatal = supervisor.preflight(self.host_var.get(), self.worker_var.get(),
-                                             identity_dir=self.ident_var.get() or None,
-                                             coord=self.coord_var.get().strip() or api.DEFAULT_COORD)
+        if getattr(self, "_starting", False):
+            return
+        # ⛔ OFF THE WINDOW'S THREAD (review of c881d582, M2). The checks run the prover (`method-id`, up to 120 s),
+        # nvidia-smi (30 s) and ask the board (supervisor.BOARD_DEADLINE_S); on the Tk thread a slow one froze the
+        # window, which reads as "it crashed". The answer comes back through self.results to _start_checked.
+        self._starting = True
+        self._fixing = "Checking the prover and the board before starting…"
+        self._sync_buttons()
+        self._home_refresh()
+        host, worker = self.host_var.get(), self.worker_var.get()
+        ident = self.ident_var.get() or None
+        coord = self.coord_var.get().strip() or api.DEFAULT_COORD
+
+        def go():
+            out = {"host": host}
+            try:
+                out["info"] = supervisor.classify_host(host)
+                # ⚠ "not known to be the CPU build", so a prover this cannot classify is still given cards.
+                out["cuda"] = out["info"].get("kind") != "cpu"
+                out["found"] = supervisor.gpu_cards() if out["cuda"] else []
+                out["checks"], out["fatal"] = supervisor.preflight(host, worker, identity_dir=ident, coord=coord)
+            except Exception as e:     # noqa: BLE001 - a crash here must still give Start back
+                out["error"] = f"{type(e).__name__}: {e}"
+            self.results.put((self._start_checked, out))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _cpu_host(self):
+        """The CPU prover's path, when one is known and on disk (the installer ships it from v0.26.1), else ""."""
+        p = self.host_cpu_var.get().strip()
+        if not p:
+            p = supervisor.installed_provers().get("cpu", "")
+        return p if p and Path(p).is_file() else ""
+
+    def _switch_to(self, kind, path):
+        (self.host_cpu_var if kind == "cpu" else self.host_cuda_var).set(path)
+        self.build_kind.set(kind)
+        self._use_build()
+
+    def _start_checked(self, out):
+        """Start, on the window's thread, once _start's checks are back."""
+        self._starting = False
+        self._fixing = ""
+        self._sync_buttons()
+        self._home_refresh()
+        if out.get("error"):
+            messagebox.showerror("Cannot start", "The checks before starting failed: " + out["error"])
+            return
+        if out["host"] != self.host_var.get():
+            return      # the prover was changed while it was being checked: those answers are about another file
+        info, cuda, found = out["info"], out["cuda"], out["found"]
+        # ⛔ A CUDA BUILD WITH NO CARD IT CAN USE (review M1; owner 16.11: ship the CPU prover). Before, a machine whose
+        # only card is below the floor still got a worker, which failed on the GPU — or, opted in on a compute 5.x
+        # card, was told to try a floor sppark refuses. Now it is said BEFORE anything is claimed, and the CPU prover
+        # is offered when there is one.
+        # ⚠ the driver matters only to a build KNOWN to need it (it imports nvcuda.dll); an unclassified one may try
+        loadable = not info.get("needs_driver") or info.get("driver_present", True)
+        why = cards.cuda_unusable(found, self._card_floor(found), loadable) if cuda else None
+        if why:
+            cpu = self._cpu_host()
+            if cpu:
+                if messagebox.askyesno("Use the processor instead?",
+                                       f"The graphics card cannot run the prover here: {why}\n\n"
+                                       f"Prove on the processor (CPU) instead?\n\n{supervisor.CPU_SENTENCE}"):
+                    self._switch_to("cpu", cpu)
+                    self._feed("Switched to the processor (CPU) prover: " + why)
+                    self._start()
+                return
+            messagebox.showerror("Cannot start", f"The graphics card cannot run the prover here: {why}\n\n"
+                                 "This copy of Hazync has no CPU prover. Install the latest Hazync, which "
+                                 "carries one (slower, but it works without a supported NVIDIA card).")
+            return
+        checks, fatal = out["checks"], out["fatal"]
         if fatal:
+            # ⚠ (review M4) a remembered prover that the board rejects, with a different one installed beside the app:
+            # offer the installed one, or "install the latest Hazync" loops on the old path.
+            if fatal[0].name == "host binary":
+                kind = "cpu" if info.get("kind") == "cpu" else "cuda"
+                inst = supervisor.installed_provers().get(kind, "")
+                if inst and Path(inst).resolve() != Path(out["host"]).resolve():
+                    if messagebox.askyesno("Use the installed prover?",
+                                           f"{fatal[0].detail}\n\nUse the prover installed with Hazync instead?\n{inst}"):
+                        self._switch_to(kind, inst)
+                        self._start()
+                    return
             messagebox.showerror("Cannot start", fatal[0].detail)
             self._show_checks([f"{'ok  ' if c.ok else 'FAIL'}  {c.name}: {c.detail}" for c in checks],
                               supervisor.summarise(checks), True)
             self._open_advanced(2)
             return
+        for c in checks:
+            if c.name == "board" and not c.ok:
+                self._feed("Board check: " + c.detail)
+        self._launch(info, cuda, found)
+
+    def _launch(self, info, cuda, found):
         self._problem = ""
         mode = self.mode.get()
         extra = ()
@@ -1591,10 +1681,6 @@ class App(tk.Tk):
         base.mkdir(parents=True, exist_ok=True)
         # ⭐ ONE WORKER PER CARD on a machine with several; see cards.py. On a machine with one
         # usable card every entry is None and this is exactly the loop it always was.
-        info = supervisor.classify_host(self.host_var.get())
-        # ⚠ "not known to be the CPU build", so a prover this cannot classify is still given cards.
-        cuda = info.get("kind") != "cpu"
-        found = supervisor.gpu_cards() if cuda else []
         floor = self._card_floor(found)
         plan = cards.plan(found, job, self.nworkers.get(), cuda_build=cuda,
                           skip=self.cards_off, floor=floor)
@@ -1614,6 +1700,10 @@ class App(tk.Tk):
         self._feed(f"Started — {activity.JOB_NAMES[job].lower()}"
                    + (f" on {len(on)} graphics cards: {', '.join(on)}" if len(on) > 1 else
                       f", {self._crew()}" if len(self.workers) > 1 else ""))
+        self._on_cpu = not cuda
+        if not cuda:
+            # ⭐ HONEST ABOUT SPEED (owner, 16.11): the CPU prover works anywhere, and it is slow; say how slow, measured
+            self._feed("On the processor (CPU): " + supervisor.CPU_SENTENCE)
         if any(plan):
             every = cards.labels(found)
             idle = [c for c in found if c["cc_major"] < floor]
@@ -1709,7 +1799,9 @@ class App(tk.Tk):
             # ⚠ The card THIS worker was given when it was given one: the floor is lowered for the
             # card that needs it, not for a modern card that happens to sit beside an old one.
             g = card or supervisor.gpu_facts()
-            if g and g["cc_major"] < 7:
+            # ⛔ never below cards.OPT_IN_FLOOR (review M1): the builds have no GPU code under sm_61 and sppark refuses a
+            # lower floor (#727), so setting it would only turn a clear refusal into a GPU failure
+            if g and cards.OPT_IN_FLOOR <= g["cc_major"] < cards.FLOOR:
                 floor = g["cc_major"]
                 self._say(f"[setup] trying your {g['name']} anyway — HAZYNC_SPPARK_MIN_MAJOR="
                           f"{floor} lowers sppark's floor. This is unproven; if it fails, the CPU "
@@ -1842,6 +1934,13 @@ class App(tk.Tk):
             if kind in ("config", "gpu"):
                 # only THIS card stops; the others keep going, and Home keeps a line saying so
                 self._note_card(w, f"{cards.STOPPED} — {msg}")
+                # ⚠ and whatever else runs on THAT card (the folder beside a prover, review): a card that cannot prove,
+                # or a prover the board rejects, makes its folder's work just as useless
+                for o in self.workers:
+                    if o is not w and not o.stopping and self._same_card(o.card, w.card):
+                        o.stopping = True
+                        self._say(f"[{o.job} {o.index}] stopped too: it shares the card that just stopped", "sys")
+                        self._kill(o)
             if kind in ("config", "gpu") and not self._problem:
                 self._problem = msg
             if kind in ("config", "gpu"):
@@ -1883,6 +1982,10 @@ class App(tk.Tk):
         if n > self.TRANSIENT_RETRIES:
             self._feed(f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row — see Advanced → log", "bad")
             self._note_card(w, f"{cards.STOPPED} after {self.TRANSIENT_RETRIES} unexplained exits in a row")
+            if not self._problem:
+                # review L6: when this was the last thing running, Home must say why it stopped, not "ready"
+                self._problem = (f"Stopped after {self.TRANSIENT_RETRIES} unexplained exits in a row. "
+                                 "Advanced → log has the worker's own words.")
             return
         key = object()
         self._respawns[key] = self.after(self.AGAIN_MS[kind], lambda: self._respawn(key, w, n))
@@ -1905,6 +2008,29 @@ class App(tk.Tk):
         self._sync_buttons()
         self._home_refresh()
 
+    @staticmethod
+    def _same_card(a, b):
+        if a is None or b is None:
+            return a is None and b is None
+        return cards.key(a) == cards.key(b)
+
+    def _kill(self, w):
+        """Stop one worker and everything it started. ⚠ The result is CHECKED (review): a taskkill that failed used to
+        be logged and forgotten, and the prover under it went on holding the card after the window closed."""
+        try:
+            r = subprocess.run(supervisor.stop_command(w.popen.pid), capture_output=True, text=True, timeout=30)
+            if r.returncode == 0 or w.popen.poll() is not None:
+                return True
+            self._say(f"[{w.job} {w.index}] stopping it failed (exit {r.returncode}): "
+                      f"{(r.stdout + r.stderr).strip()[:200]}", "cuda-error")
+        except Exception as e:     # noqa: BLE001
+            self._say(f"[{w.job} {w.index}] could not stop cleanly: {e}", "cuda-error")
+        try:
+            w.popen.kill()          # the worker at least; its prover child is named on close if it survives
+        except Exception:           # noqa: BLE001
+            pass
+        return False
+
     def _stop(self):
         pending = self._respawns
         for h in pending.values():
@@ -1916,10 +2042,7 @@ class App(tk.Tk):
             self._home_refresh()
         for w in self.workers:
             w.stopping = True
-            try:
-                subprocess.run(supervisor.stop_command(w.popen.pid), capture_output=True, timeout=30)
-            except Exception as e:
-                self._say(f"[{w.job} {w.index}] could not stop cleanly: {e}")
+            self._kill(w)
         if self.workers:
             self._feed("Stopping — letting the prover finish cleanly")
             self._home_refresh()
@@ -1930,7 +2053,23 @@ class App(tk.Tk):
                 "Quit", f"{len(self.workers)} worker(s) are still running. Stop them and quit?"):
             return
         self._persist()
+        running = list(self.workers)
         self._stop()
+        # ⛔ DO NOT CLOSE ON TOP OF A RUNNING PROVER (review): wait for the workers to be gone, a bounded time, and if
+        # one is not, say so with its PID rather than leave it holding the card behind a closed window.
+        end = time.time() + 15
+        while time.time() < end and any(w.popen.poll() is None for w in running):
+            self.update()
+            time.sleep(0.1)
+        left = [w for w in running if w.popen.poll() is None]
+        if left:
+            for w in left:
+                self._kill(w)
+            left = [w for w in left if w.popen.poll() is None]
+        if left:
+            messagebox.showwarning("Still running",
+                                   "These workers did not stop: PID " + ", ".join(str(w.popen.pid) for w in left)
+                                   + ". End them in Task Manager (and any host.exe under them).")
         self.destroy()
 
 

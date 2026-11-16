@@ -31,10 +31,12 @@ import json, os, sys, time
 keep = ("CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER", "HAZYNC_GPU_LOCK", "HAZYNC_SEG_PO2")
 with open(os.path.join(os.environ["BUNDLE_DIR"], "env.json"), "w") as fh:
     json.dump({k: os.environ.get(k) for k in keep}, fh)
+
 def say(s):
     print(s, flush=True)
-block = 144263 + int(os.environ.get("CUDA_VISIBLE_DEVICES") or 0)
-if os.environ.get("STAND_IN_DIE_ON") and os.environ.get("CUDA_VISIBLE_DEVICES") == os.environ["STAND_IN_DIE_ON"]:
+block = 144263 + {"GPU-sml": 1, "1": 1}.get(os.environ.get("CUDA_VISIBLE_DEVICES") or "", 0)
+if (os.environ.get("STAND_IN_DIE_ON") and os.environ.get("CUDA_VISIBLE_DEVICES") == os.environ["STAND_IN_DIE_ON"]
+        and sys.argv[1:2] != ["fold"]):
     say("FATAL: guest id mismatch — every proof this worker makes will be REJECTED.")
     sys.exit(78)
 say(f"claimed block {block} (yours for 60 min; if you stop, it reopens by itself)")
@@ -50,6 +52,16 @@ TWO = [{"index": 0, "uuid": "GPU-big", "name": "NVIDIA GeForce RTX 4090", "vram_
        {"index": 1, "uuid": "GPU-sml", "name": "NVIDIA GeForce RTX 3060 Ti", "vram_mb": 8192,
         "driver": "566.14", "cc_major": 8, "cc_minor": 6}]
 
+
+
+def _started(app, secs=30):
+    """Press Start and wait for its checks, which run off the window's thread (review of c881d582, M2)."""
+    import time as _t
+    app._start()
+    end = _t.time() + secs
+    while getattr(app, "_starting", False) and _t.time() < end:
+        app.update()
+        _t.sleep(0.02)
 
 def check(ok, what):
     print(("  ok   " if ok else "  FAIL ") + what)
@@ -124,12 +136,12 @@ def main():
         app._setup_ok, app._steps = True, [object()]
 
         print("── two cards, one worker asked for ──")
-        app._start()
+        _started(app)
         check(len(app.workers) == 2, f"Start launched one worker per card (got {len(app.workers)})")
         got = spin(app, 15, lambda: given(1) and given(2))
         check(bool(got), "both children started and reported what they were given")
         e1, e2 = given(1) or {}, given(2) or {}
-        check((e1.get("CUDA_VISIBLE_DEVICES"), e2.get("CUDA_VISIBLE_DEVICES")) == ("0", "1"),
+        check((e1.get("CUDA_VISIBLE_DEVICES"), e2.get("CUDA_VISIBLE_DEVICES")) == ("GPU-big", "GPU-sml"),
               f"⛔ each CHILD PROCESS sees its own card: {e1.get('CUDA_VISIBLE_DEVICES')!r} "
               f"and {e2.get('CUDA_VISIBLE_DEVICES')!r}")
         check(e1.get("CUDA_DEVICE_ORDER") == e2.get("CUDA_DEVICE_ORDER") == "PCI_BUS_ID",
@@ -165,7 +177,7 @@ def main():
                 os.remove(os.path.join(base, f"bundles_{i}", "env.json"))
             except OSError:
                 pass
-        app._start()
+        _started(app)
         check(len(app.workers) == 1, f"one worker (got {len(app.workers)})")
         spin(app, 15, lambda: given(1))
         e1 = given(1) or {}
@@ -194,12 +206,12 @@ def main():
         check(app.cards_off == {"GPU-big"}, "unticking the 4090 is remembered")
         import firstrun
         check(firstrun.load_config().get("cards_off") == ["GPU-big"], "and saved, so it survives a restart")
-        app._start()
+        _started(app)
         check(len(app.workers) == 1 and app.workers[0].label == "RTX 3060 Ti",
               f"Start launches one worker, on the card still ticked ({[w.label for w in app.workers]})")
         spin(app, 15, lambda: given(1))
         e1 = given(1) or {}
-        check(e1.get("CUDA_VISIBLE_DEVICES") == "1" and e1.get("HAZYNC_SEG_PO2") == "18",
+        check(e1.get("CUDA_VISIBLE_DEVICES") == "GPU-sml" and e1.get("HAZYNC_SEG_PO2") == "18",
               f"⛔ the CHILD PROCESS sees only the 3060 Ti: {e1.get('CUDA_VISIBLE_DEVICES')!r}")
         check("Left alone, as you chose: RTX 4090" in app.feed.get("1.0", "end"),
               "and the feed says which card was left alone")
@@ -212,9 +224,9 @@ def main():
 
         print("── one card stops on an error, the other keeps going: Home still shows both ──")
         app.cards_off = set()
-        os.environ["STAND_IN_DIE_ON"] = "1"
+        os.environ["STAND_IN_DIE_ON"] = "GPU-sml"
         try:
-            app._start()
+            _started(app)
             got = spin(app, 15, lambda: len(app.workers) == 1 and "stopped" in app.v_sub.get())
         finally:
             os.environ.pop("STAND_IN_DIE_ON", None)
@@ -228,6 +240,73 @@ def main():
         check(len(app.workers) == 1 and app.workers[0].label == "RTX 4090", "only that card stopped")
         stop_all(app)
 
+        print("── the folder beside a prover stops with it when its card stops ──")
+        app.also_fold.set(True)
+        os.environ["STAND_IN_DIE_ON"] = "GPU-sml"
+        try:
+            _started(app)
+            got = spin(app, 15, lambda: "stopped" in app.v_sub.get()
+                       and not any(w.label == "RTX 3060 Ti" for w in app.workers))
+        finally:
+            os.environ.pop("STAND_IN_DIE_ON", None)
+            app.also_fold.set(False)
+        check(got and {w.label for w in app.workers} == {"RTX 4090"},
+              f"⛔ the 3060 Ti's folder was stopped with its prover; the 4090's pair runs on "
+              f"({sorted((w.label, w.job) for w in app.workers)})")
+        stop_all(app)
+
+        print("── a CUDA prover and only a card it cannot use: refused before anything starts (M1) ──")
+        from tkinter import messagebox as _mb
+        asked, errors = [], []
+        real_ask, real_err = hazync_gui.messagebox.askyesno, hazync_gui.messagebox.showerror
+        hazync_gui.messagebox.askyesno = lambda title, msg, **kw: (asked.append(msg) or answer["yes"])
+        hazync_gui.messagebox.showerror = lambda title, msg, **kw: errors.append(msg)
+        answer = {"yes": False}
+        maxwell_only = [{"index": 0, "uuid": "GPU-mxw", "name": "NVIDIA GeForce GTX 970", "vram_mb": 4096,
+                         "driver": "566.14", "cc_major": 5, "cc_minor": 2}]
+        machine["cards"] = maxwell_only
+        app.force_gpu.set(True)
+        cpu_host = os.path.join(tmp, "cpu", "host.exe")
+        os.makedirs(os.path.dirname(cpu_host), exist_ok=True)
+        open(cpu_host, "wb").write(b"MZ")
+        real_classify = supervisor.classify_host
+        _info = lambda kind: {"kind": kind, "needs_driver": kind == "cuda", "driver_present": True,  # noqa: E731
+                              "dlls": ["nvcuda.dll"] if kind == "cuda" else ["kernel32.dll"], "size": 2, "startable": True}
+        supervisor.classify_host = lambda path: _info("cpu" if path == cpu_host else "cuda")
+        app.host_var.set(os.path.join(tmp, "cuda-host.exe"))
+        app.host_cpu_var.set("")
+        _started(app)
+        check(not app.workers and errors and "5.2" in errors[-1] and "no CPU prover" in errors[-1],
+              f"⛔ one compute 5.x card, opted in, no CPU prover: nothing starts, and it says why ({errors[-1:]})")
+        app.host_cpu_var.set(cpu_host)
+        _started(app)
+        check(not app.workers and asked and "processor" in asked[-1].lower() and "24 minutes" in asked[-1],
+              "with a CPU prover: it is OFFERED, with the measured cost; declined, nothing starts")
+        answer["yes"] = True
+        try:
+            os.remove(os.path.join(base, "bundles_1", "env.json"))
+        except OSError:
+            pass
+        real_env = supervisor.worker_env
+        seen = {}
+        supervisor.worker_env = lambda *a, **kw: (seen.update(kw) or real_env(*a, **kw))
+        try:
+            _started(app)
+            spin(app, 15, lambda: app.workers and (given(1) or {}).get("HAZYNC_GPU_LOCK"))
+        finally:
+            supervisor.worker_env = real_env
+        check(app.host_var.get() == cpu_host and len(app.workers) == 1 and app.workers[0].card is None,
+              f"accepted: it switches to the CPU prover and starts one unpinned worker ({app.host_var.get()})")
+        check(not seen.get("spark_min_major"), f"⛔ and never asks sppark for a floor below 6 ({seen.get('spark_min_major')})")
+        check(any("processor" in t.lower() and "24 minutes" in t for _, t, _tag in app._events),
+              "Home's feed says it is on the processor, and how slow that is, measured")
+        stop_all(app)
+        supervisor.classify_host = real_classify
+        hazync_gui.messagebox.askyesno, hazync_gui.messagebox.showerror = real_ask, real_err
+        app.force_gpu.set(False)
+        machine["cards"] = TWO
+        app.host_var.set("")
+
         print("── 'try my old card anyway': the old card can be switched off too ──")
         old = {"index": 2, "uuid": "GPU-old", "name": "NVIDIA GeForce GTX 1060", "vram_mb": 6144,
                "driver": "566.14", "cc_major": 6, "cc_minor": 1}
@@ -240,7 +319,7 @@ def main():
         app._show_cards(machine["cards"])
         check("GPU-old" in app._card_vars and app._card_vars["GPU-old"].get(),
               "⛔ forced: the old card is in the list with a LIVE box — it is about to get a worker")
-        app._start()
+        _started(app)
         check(sorted(w.label for w in app.workers) == ["GTX 1060", "RTX 3060 Ti", "RTX 4090"],
               f"and Start agrees with the list: {sorted(w.label for w in app.workers)}")
         stop_all(app)
@@ -248,7 +327,7 @@ def main():
                    "driver": "566.14", "cc_major": 5, "cc_minor": 2}
         machine["cards"] = TWO + [old, maxwell]
         app._show_cards(machine["cards"])
-        app._start()
+        _started(app)
         check(sorted(w.label for w in app.workers) == ["GTX 1060", "RTX 3060 Ti", "RTX 4090"],
               f"⛔ forced, a compute 5.x card still gets NO worker (no GPU code for it, #727): "
               f"{sorted(w.label for w in app.workers)}")
@@ -257,7 +336,7 @@ def main():
         app._show_cards(machine["cards"])
         app._card_vars["GPU-old"].set(False)
         app._toggle_card("GPU-old")
-        app._start()
+        _started(app)
         check(sorted(w.label for w in app.workers) == ["RTX 3060 Ti", "RTX 4090"],
               f"⛔ unticked, it gets no worker even while forced: {sorted(w.label for w in app.workers)}")
         stop_all(app)

@@ -9,6 +9,8 @@
 ;   {app}\Hazync.exe + _internal\      the app (PyInstaller one-folder build of hazync_gui.py)
 ;   {app}\hazync-worker                the client the app runs (firstrun.install_dir() finds it)
 ;   {app}\prover\host.exe, cudart*.dll the release's Windows CUDA prover (found first by firstrun.candidate_dirs())
+;   {app}\prover-cpu\host.exe          the release's Windows CPU prover (from v0.26.1, when /DProverCpuDir is given):
+;                                      for a machine with no NVIDIA card the prover supports; slower, and the app says so
 ;
 ; ⛔ THE SIGNING KEY IS NEVER TOUCHED. It lives in %USERPROFILE%\.hazync (the only thing that ties proven blocks to
 ; a name); this installs and uninstalls only {app}. Settings live there too, so they survive an upgrade.
@@ -63,6 +65,9 @@ Source: "{#AppDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cre
 Source: "{#Worker}"; DestDir: "{app}"; DestName: "hazync-worker"; Flags: ignoreversion
 Source: "{#ProverDir}\host.exe"; DestDir: "{app}\prover"; Flags: ignoreversion
 Source: "{#ProverDir}\cudart64_*.dll"; DestDir: "{app}\prover"; Flags: ignoreversion
+#ifdef ProverCpuDir
+Source: "{#ProverCpuDir}\host.exe"; DestDir: "{app}\prover-cpu"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{group}\Hazync"; Filename: "{app}\Hazync.exe"
@@ -71,6 +76,11 @@ Name: "{userdesktop}\Hazync"; Filename: "{app}\Hazync.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Hazync.exe"; Description: "Open Hazync"; Flags: nowait postinstall skipifsilent
+
+[InstallDelete]
+; an upgrade must never leave an OLD prover behind (a stale image is rejected by the board): the CPU prover folder is
+; cleared first, so an installer without one does not keep the previous release's
+Type: filesandordirs; Name: "{app}\prover-cpu"
 
 [UninstallDelete]
 ; only what the app itself writes inside {app}; %USERPROFILE%\.hazync (the key) is never touched

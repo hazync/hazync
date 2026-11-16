@@ -47,6 +47,7 @@ DIST="${DIST:-dist}"
 BINS=$(awk '$1=="release" {print $2}' scripts/release-assets.txt | xargs)
 SIGNED_EXTRA=$(awk '$1=="sign" {print $2}' scripts/release-assets.txt | xargs)
 WIN=hazync-host-x86_64-windows-cuda.zip
+WIN_CPU=hazync-host-x86_64-windows-cpu.zip
 # The published mainnet guest ELF, staged by prover/build-release.sh. The Windows host is checked
 # against it (scripts/windows-host.sh), and it is where a host build finds it again on a resumed run.
 LZ_ELF=dist/.libzync-guest/mainnet.bin
@@ -177,7 +178,7 @@ for mode in cpu cuda; do
     fi
 done
 
-step "2b. the Windows CUDA host (built by windows-prove.yml on GitHub's Windows runners)"
+step "2b. the Windows hosts, CUDA and CPU (built by windows-prove.yml on GitHub's Windows runners)"
 # Not built here: it needs MSVC and the Windows CUDA toolkit. scripts/windows-host.sh takes the
 # `hazync-host-windows-x86_64-cuda` artifact of a windows-prove run OF THIS COMMIT whose build-cuda job
 # passed, checks host.exe embeds the published guest and id, and zips it with cudart64_12.dll.
@@ -187,12 +188,15 @@ if [ ! -f "$LZ_ELF" ] && [ -n "${HAZYNC_GUEST_ELF:-}" ]; then
 fi
 [ "$(sha256sum "$LZ_ELF" 2>/dev/null | cut -c1-64)" = "$CANON_SHA" ] || [ "$DRY" = 1 ] \
     || die "$LZ_ELF is not the published mainnet ELF (prover/build-release.sh stages it; or set HAZYNC_GUEST_ELF)"
-if [ "$(cut -d' ' -f2 "$DIST/.$WIN.run" 2>/dev/null)" = "$SRC_REV" ] \
-   && ./scripts/windows-host.sh check "$DIST/$WIN" "$LZ_ELF" >/dev/null 2>&1; then
-    ok "$WIN already fetched for this commit (windows-prove run $(cut -d' ' -f1 "$DIST/.$WIN.run"))"
-else
-    run ./scripts/windows-host.sh fetch "$SRC_REV" "$DIST/$WIN" "$LZ_ELF" || die "could not obtain the Windows host"
-fi
+# The CPU host (WIN_CPU) comes from the same RELEASE BUILD run's `prove` job, so that run must not skip it.
+for w in "$WIN" "$WIN_CPU"; do
+    if [ "$(cut -d' ' -f2 "$DIST/.$w.run" 2>/dev/null)" = "$SRC_REV" ] \
+       && ./scripts/windows-host.sh check "$DIST/$w" "$LZ_ELF" >/dev/null 2>&1; then
+        ok "$w already fetched for this commit (windows-prove run $(cut -d' ' -f1 "$DIST/.$w.run"))"
+    else
+        run ./scripts/windows-host.sh fetch "$SRC_REV" "$DIST/$w" "$LZ_ELF" || die "could not obtain $w"
+    fi
+done
 
 step "3. package worker, wasm + glue and the x86_64 verifier"
 # #247: package-release.sh SKIPS the wasm (stderr warning, exit 0) when this box has no wasm32

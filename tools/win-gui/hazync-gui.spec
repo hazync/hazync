@@ -54,6 +54,9 @@ a = Analysis(
         "supervisor", "hazync_api", "brand", "firstrun", "frozenpy", "gpuprep", "winquiet",
         # the worker signs with ed25519; collected so a frozen build can satisfy it
         "cryptography", "cryptography.hazmat.primitives.asymmetric.ed25519",
+        # a CA bundle for nethttp's third rung (its cacert.pem is collected by PyInstaller's certifi hook): the frozen
+        # app cannot pip-install one, and a stock Windows trust store that cannot supply an issuer is a measured case
+        "certifi",
     ] + sorted(_worker_imports),
     hookspath=[],
     runtime_hooks=[],

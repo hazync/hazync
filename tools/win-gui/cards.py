@@ -169,7 +169,12 @@ def pin_env(card):
     """
     if card is None:
         return {}
-    return {"CUDA_DEVICE_ORDER": "PCI_BUS_ID", "CUDA_VISIBLE_DEVICES": str(card["index"])}
+    # ⭐ BY UUID WHEN THE CARD HAS ONE (review L6). CUDA accepts nvidia-smi's "GPU-…" UUID in CUDA_VISIBLE_DEVICES, and
+    # a UUID names the same card whatever order anything counts in; a worker started again later in the session keeps
+    # its card even if the numbering changed. The index stays the fallback, with the PCI order made explicit.
+    uuid = str(card.get("uuid") or "")
+    return {"CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "CUDA_VISIBLE_DEVICES": uuid if uuid.startswith("GPU-") else str(card["index"])}
 
 
 def lock_name(card):
@@ -217,3 +222,26 @@ def stopped(order, notes, live=None):
 
 
 STOPPED = "stopped"
+
+
+def cuda_unusable(found, floor, driver_present=True):
+    """Why a CUDA prover cannot prove on this machine, or None when it can (or when that cannot be told).
+
+    ⛔ Asked BEFORE Start launches anything (review of c881d582, M1): a machine whose only cards are below the floor
+    used to get an unpinned worker that failed on the GPU — or, with the opt-in ticked on a compute 5.x card, one
+    told to lower sppark's floor to a value sppark refuses (#727). ⚠ An EMPTY list is "could not ask" (nvidia-smi
+    missing or failing), not "no card": then this says nothing and the prover is allowed to try.
+    """
+    if not driver_present:
+        return "no NVIDIA driver was found, so Windows cannot even load the graphics-card prover"
+    if not found:
+        return None
+    if usable(found, floor):
+        return None
+    names = labels(found)
+    parts = [f"{names[c['index']]} is compute {c['cc_major']}.{c['cc_minor']}" for c in found]
+    why = "; ".join(parts) + f", and the prover needs {FLOOR}.0 or newer"
+    if floor > OPT_IN_FLOOR and any(c["cc_major"] == OPT_IN_FLOOR for c in found):
+        why += (f" (a compute {OPT_IN_FLOOR}.x card can be tried with \"Try my GPU even if it is below the supported "
+                "floor\" under Advanced; it needs a prover with hazync#727)")
+    return why

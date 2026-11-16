@@ -107,32 +107,69 @@ def main():
     check(ok_ and "board" in v_, f"the method-id check reads the board's image too ({v_})")
     ok_, v_ = supervisor.diagnostic_verdict("method-id", 0, f"METHOD_ID {CANON}", board_id=OTHER)
     check(not ok_, "and fails the app's image when the board's differs")
-    import types as _types
-    _real_net = sys.modules.get("nethttp")
+    # ⭐ a REAL board on this machine: the same urllib path, deadline and size cap the window uses
+    import http.server as _hs
+    import threading as _th
+    import time as _time
+    reply = {"body": b"", "code": 200, "sleep": 0}
+
+    class _H(_hs.BaseHTTPRequestHandler):
+        def do_GET(self):
+            _time.sleep(reply["sleep"])
+            self.send_response(reply["code"])
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            try:
+                self.wfile.write(reply["body"])
+            except OSError:
+                pass
+
+        def log_message(self, *a):
+            pass
+    srv = _hs.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    srv.daemon_threads = True
+    _th.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
     try:
-        for answer, want in (({"method_id": OTHER.upper()}, OTHER), ({"method_id": "nope"}, None),
-                             ({}, None), (RuntimeError("down"), None)):
-            fake = _types.ModuleType("nethttp")
-            def _gj(url, timeout=60, _a=answer):
-                if isinstance(_a, Exception):
-                    raise _a
-                assert url.endswith("/api/meta"), url
-                return _a
-            fake.get_json = _gj
-            sys.modules["nethttp"] = fake
-            got = supervisor.board_method_id("https://board.example/")
-            check(got == want, f"board_method_id({answer!r}) -> {got and got[:8]} (want {want and want[:8]})")
-        check(supervisor.board_method_id("") is None, "no coordinator: no question asked")
-        fake.get_json = lambda url, timeout=60: {"method_id": OTHER}
+        import json as _json
+        for body, code, want, says in (
+                (_json.dumps({"method_id": OTHER.upper()}).encode(), 200, OTHER, ""),
+                (b'{"method_id": "nope"}', 200, None, "without a valid method_id"),
+                (b"<html>busy</html>", 200, None, "not with JSON"),
+                (b"{}", 503, None, "HTTP 503"),
+                (b'{"pad": "' + b"x" * (supervisor.BOARD_BODY_CAP + 10) + b'"}', 200, None, "was not read")):
+            reply.update(body=body, code=code, sleep=0)
+            got, why = supervisor.board_image(url, deadline=5)
+            check(got == want and says in why, f"board {code} {body[:28]!r}… -> {got and got[:8]} / {why[:60]!r}")
+        reply.update(body=b"{}", code=200, sleep=4)
+        t0 = _time.time()
+        got, why = supervisor.board_image(url, deadline=1)
+        check(got is None and _time.time() - t0 < 3.5 and ("within" in why or "timed out" in why),
+              f"⛔ a board that stalls is given up on at the deadline ({_time.time() - t0:.1f} s: {why[:50]!r})")
+        reply.update(sleep=0)
+        check(supervisor.board_image("")[1] == "no board address set", "no coordinator: no question asked")
+        check("not an http(s) address" in supervisor.board_image("file:///etc/passwd")[1],
+              "⛔ only http(s) is ever asked (review L2)")
+        check("plain http" in (supervisor.board_address_problem("http://board.example") or "")
+              and supervisor.board_address_problem(url) is None
+              and supervisor.board_address_problem("https://api.hazync.org") is None,
+              "plain http to another machine is flagged; this machine and https are not")
+        reply.update(body=_json.dumps({"method_id": OTHER}).encode(), code=200)
         hostb = fake_host(d, "pfb", f"METHOD_ID {CANON}")
-        checks_, fatal_ = supervisor.preflight(hostb, fake_worker(d, "pfwb"), identity_dir=d, coord="https://b.example")
-        check(any(c.name == "host binary" for c in fatal_),
-              "preflight with a coordinator asks the board and stops a prover the board would reject")
+        checks_, fatal_ = supervisor.preflight(hostb, fake_worker(d, "pfwb"), identity_dir=d, coord=url)
+        check(any(c.name == "host binary" for c in fatal_) and str(hostb) in fatal_[0].detail,
+              "preflight with a coordinator asks the board, stops a prover the board would reject, and names its path")
+        reply.update(code=500)
+        checks_, fatal_ = supervisor.preflight(hostb, fake_worker(d, "pfwb"), identity_dir=d, coord=url)
+        hb = [c for c in checks_ if c.name == "host binary"][0]
+        bw = [c for c in checks_ if c.name == "board"]
+        check(hb.ok and "board's image is unknown" in hb.detail and "HTTP 500" in hb.detail,
+              f"⛔ board unreachable: the pin stands in, and the detail says WHY (review M3): {hb.detail[:90]!r}")
+        check(bw and not bw[0].ok and not bw[0].fatal, "and a non-fatal 'board' warning row says so")
+        ok_, v_ = supervisor.diagnostic_verdict("method-id", 0, f"METHOD_ID {CANON}", board_why="HTTP 500")
+        check(ok_ and "board's image unknown: HTTP 500" in v_, f"the method-id check carries the reason too ({v_})")
     finally:
-        if _real_net is not None:
-            sys.modules["nethttp"] = _real_net
-        else:
-            sys.modules.pop("nethttp", None)
+        srv.shutdown()
 
     print("── 2. exit codes are three different things ──")
     for rc, kind in ((0, "done"), (supervisor.EX_CONFIG, "config"),
