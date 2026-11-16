@@ -1080,6 +1080,42 @@ jobs:
               exit 1
           fi
 
+      - name: ⛔ the atomics check must see THIS nvcc's output (live control, hazync#727)
+        shell: bash
+        working-directory: prover
+        env:
+          # Paths below are given in Windows form, so Git Bash must not rewrite any argument.
+          MSYS_NO_PATHCONV: '1'
+          MSYS2_ARG_CONV_EXCL: '*'
+        run: |
+          set -euo pipefail
+          # ⛔⛔ THE NEXT STEP'S "no system-scope atomics" IS ONLY AS GOOD AS ITS READER. The record
+          # it looks for (EIATTR_ATOM_SYS_INSTR_OFFSETS, 0x27) was measured on nvcc 12.9.86 and
+          # 12.6.85 on Linux; this job may use either, on Windows. So compile the same kernel at
+          # SYSTEM and at DEVICE scope with THIS job's nvcc and host compiler, and require the
+          # checker to REFUSE the first and PASS the second before its verdict on host.exe counts.
+          # A toolkit that renumbered the record would fail here, not wave host.exe through.
+          T="$RUNNER_TEMP\\atom-scope-live"
+          mkdir -p "$(cygpath -u "$T")"
+          SRC="$(cygpath -w "$(pwd)/../scripts/testdata/atom-scope/atom_scope.cu")"
+          X=""
+          [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ] || X="-allow-unsupported-compiler"
+          nvcc --version | tail -2
+          for sc in SYSTEM DEVICE; do
+              nvcc -fatbin $X -Wno-deprecated-gpu-targets -O2 -std=c++17 \
+                   -gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 \
+                   -DHZ_SCOPE_$sc -o "$T\\$sc.fatbin" "$SRC"
+          done
+          rc=0; out=$(python3 ../scripts/gpu_code_archs.py "$T\\SYSTEM.fatbin" --require 61) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" != 1 ] || ! printf '%s\n' "$out" | grep -q 'SYSTEM-SCOPE ATOMICS'; then
+              echo "⛔ the checker did NOT refuse a system-scope kernel built by this nvcc (exit $rc) -- it is blind here"
+              exit 1
+          fi
+          python3 ../scripts/gpu_code_archs.py "$T\\DEVICE.fatbin" --require 61 \
+              || { echo "⛔ the checker refused a DEVICE-scope kernel built by this nvcc"; exit 1; }
+          echo "✅ live control: this nvcc's system-scope kernel is refused and its device-scope one passes"
+
       - name: ⛔ the CUDA binary must hold code for every card generation it was built for, and no system-scope atomics
         shell: bash
         working-directory: prover

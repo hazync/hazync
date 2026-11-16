@@ -1,4 +1,5 @@
 #include "gpu_t.cuh"
+#include <cstdio>
 #include <cstdlib>
 
 #if defined(__NVCC__)
@@ -14,8 +15,13 @@
 // raises a synthetic cudaErrorNoDevice on a machine that plainly has one. The Windows build carries
 // sm_61 code for exactly that card. HAZYNC_SPPARK_MIN_MAJOR lowers the floor -- the Windows app sets it
 // only when its "try my GPU even if it is below the supported floor" box is ticked AND the worker's
-// card is below 7 (tools/win-gui/hazync_gui.py, _spawn). Unset, or anything outside 1..99, keeps 7:
+// card is below 7 (tools/win-gui/hazync_gui.py, _spawn). Unset, or anything outside 6..99, keeps 7:
 // every existing machine behaves exactly as before. The cooperativeLaunch requirement is unchanged.
+// ⚠ The floor is PROCESS-WIDE: on a machine with an old and a new card it admits both, so pair it with
+// CUDA_VISIBLE_DEVICES naming the old card -- the app does (one worker per card, supervisor.worker_env).
+// ⚠ Below 6 is REFUSED, not honoured: the oldest code any build carries is sm_61 + compute_61 PTX,
+// so a 5.x card would be admitted only to fail with "no kernel image". (6 admits a 6.0 card, which
+// has no image either; the env var carries a major version only, and the app sets it to the card's.)
 // A receipt from a lowered floor is not trusted blind: the host verifies what it proves and the
 // coordinator re-verifies every submission.
 static int hazync_min_major()
@@ -24,8 +30,11 @@ static int hazync_min_major()
     if (const char* s = std::getenv("HAZYNC_SPPARK_MIN_MAJOR")) {
         char* end = nullptr;
         long v = std::strtol(s, &end, 10);
-        if (end != s && *end == '\0' && v >= 1 && v <= 99)
+        if (end != s && *end == '\0' && v >= 6 && v <= 99)
             floor = (int)v;
+        else
+            std::fprintf(stderr, "sppark: HAZYNC_SPPARK_MIN_MAJOR=%s ignored (want 6..99); "
+                                 "keeping %d (hazync#727)\n", s, floor);
     }
     return floor;
 }

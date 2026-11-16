@@ -9,7 +9,19 @@
 //   nvcc $F $BOTH -Xfatbin -compress-all $DEV -o dev.fatbin      atom_scope.cu  # must PASS
 //   nvcc $F -gencode=arch=compute_61,code=sm_61 -Xfatbin -compress=false $SYS -o sys_raw.fatbin atom_scope.cu
 //   nvcc $F -gencode=arch=compute_61,code=compute_61 -Xfatbin -compress-all $SYS -o sys_ptx.fatbin atom_scope.cu
+//   nvcc $F -gencode=arch=compute_61,code=sm_61 -Xfatbin -compress=false $DEV -o dev_raw.fatbin atom_scope.cu
+//   nvcc $F -gencode=arch=compute_80,code=sm_80 -Xfatbin -compress=false $DEV -o dev80.fatbin  atom_scope.cu
+//
+// dev_raw is the CLEAN module --control corrupts (so a failure can only come from the corruption);
+// dev80 has no sm_6x image and no PTX, which the record check cannot see into (it must FAIL).
 //
 // `cuobjdump -elf sys.fatbin` shows EIATTR_ATOM_SYS_INSTR_OFFSETS for `count`; dev.fatbin has none.
 #include <cuda/atomic>
+// HZ_SCOPE_SYSTEM / HZ_SCOPE_DEVICE: the same choice without `::` on the command line, for
+// windows-prove.yml's live control (Git Bash on Windows may rewrite a colon-bearing argument).
+#if defined(HZ_SCOPE_SYSTEM)
+# define HZ_SCOPE ::cuda::thread_scope_system
+#elif defined(HZ_SCOPE_DEVICE)
+# define HZ_SCOPE ::cuda::thread_scope_device
+#endif
 __global__ void count(::cuda::atomic<unsigned, HZ_SCOPE>* c) { (*c)++; }

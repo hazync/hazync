@@ -60,7 +60,8 @@ check_dir() {
     echo "  ok   host.exe embeds the published guest (${WANT_SHA:0:16}…, $size bytes) and image id ${WANT_ID:0:8} (${n}x)"
     # hazync#727: no system-scope atomics in any GPU module. The Windows driver refuses to LOAD a module
     # whose sm_61 image carries them on a card without host-native atomics (GTX 1050 Ti: error 801).
-    python3 scripts/gpu_code_archs.py "$d/host.exe" > "$d/.gpu.txt" 2>&1 \
+    # --require 61: the marker lives in the sm_61 image, so every module must have one to be seen into.
+    python3 scripts/gpu_code_archs.py "$d/host.exe" --require 61 > "$d/.gpu.txt" 2>&1 \
         || { sed 's/^/       /' "$d/.gpu.txt" >&2; die "host.exe fails the GPU-module check (system-scope atomics, hazync#727)"; }
     echo "  ok   host.exe's GPU modules carry no system-scope atomics (hazync#727)"
 }

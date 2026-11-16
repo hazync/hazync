@@ -1311,7 +1311,7 @@ class App(tk.Tk):
         ttk.Checkbutton(bi, variable=self.force_gpu,
                         command=lambda: self._show_cards(getattr(self, "_found_cards", [])),
                         text="Try my GPU even if it is below the supported floor "
-                             "\u2014 proved on one GTX 1050 Ti, unproven on other older cards (hazync#727)"
+                             "\u2014 proved on one GTX 1050 Ti; other older cards unproven (hazync#727)"
                         ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
         bi.columnconfigure(1, weight=1)
         ttk.Button(build, text="Work it out for me", style="Accent.TButton",
@@ -1694,11 +1694,16 @@ class App(tk.Tk):
             # ⚠ The card THIS worker was given when it was given one: the floor is lowered for the
             # card that needs it, not for a modern card that happens to sit beside an old one.
             g = card or supervisor.gpu_facts()
-            if g and g["cc_major"] < 7:
+            if g and 6 <= g["cc_major"] < 7:
                 floor = g["cc_major"]
                 self._say(f"[setup] trying your {g['name']} anyway — HAZYNC_SPPARK_MIN_MAJOR="
-                          f"{floor} lowers sppark's floor. This is unproven; if it fails, the CPU "
-                          f"build works.", "sys")
+                          f"{floor} lowers sppark's floor. Proved on one GTX 1050 Ti; other older "
+                          f"cards are unproven. If it fails, the CPU build works.", "sys")
+            elif g and g["cc_major"] < 6:
+                # ⚠ No build carries code below sm_61, and sppark refuses a floor under 6.
+                self._say(f"[setup] your {g['name']} is compute {g['cc_major']}.{g['cc_minor']}: "
+                          f"this build has no GPU code for it, so the opt-in cannot help. Use the "
+                          f"CPU build.", "sys")
         env = supervisor.worker_env(self.host_var.get(), self.worker_var.get(),
                                     self.ident_var.get() or None, bundle,
                                     coord_url=self.coord_var.get().strip() or None,

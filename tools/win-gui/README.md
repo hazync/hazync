@@ -86,8 +86,26 @@ both assumed the GPU had been accepted at all.
 ⇒ It was **untested, not broken**: it had never run on a card sppark accepts. It has since run on one: the
 libzync CUDA host proved mainnet blocks 170 and 400,000 on an RTX PRO 6000 under WDDM (2026-11-09, row above).
 
-With `HAZYNC_SPPARK_MIN_MAJOR=6` (a build from 2026-10-05 or later) the 1050 Ti IS accepted —
-`cooperativeLaunch=1`, so that second condition was never the obstacle — and then fails further in,
+⭐ **Resolved by hazync#727 — a GTX 1050 Ti proves.** With the fixes, the 1050 Ti proved mainnet
+block 1 on its GPU (197.7 s, receipt verified, driver 566.14, 15.11.2026). Three things were needed:
+
+1. **The floor.** `HAZYNC_SPPARK_MIN_MAJOR=6` lowers sppark's compute floor from 7 (`all_gpus.cpp`).
+   The app sets it for you only when **"Try my GPU even if it is below the supported floor"** is ticked
+   and the worker's card is compute 6.x; each worker is also pinned to its card with
+   `CUDA_VISIBLE_DEVICES`. Below 6 is refused: no build carries code for it.
+2. **The real "operation not supported".** rv32im's lookup tables used `::cuda::atomic<uint32_t>`,
+   which defaults to *system* scope. On Pascal that puts `EIATTR_ATOM_SYS_INSTR_OFFSETS` in the module
+   and the Windows driver refuses to load the whole module (error 801) on a card without host-native
+   atomics. They are now device-scope, and `scripts/gpu_code_archs.py` refuses any build that carries
+   a system-scope atomic.
+3. **Memory pools.** sppark now asks whether the device has memory pools before using
+   `cudaMallocAsync`, and falls back to `cudaMalloc`/`cudaFree` where it does not (the 1050 Ti's own
+   pools tested fine; this is defensive).
+
+Other cards below compute 7.0 remain **unproven**. The history below is what it looked like before.
+
+With `HAZYNC_SPPARK_MIN_MAJOR=6` on a build from before hazync#727, the 1050 Ti was accepted —
+`cooperativeLaunch=1`, so that second condition was never the obstacle — and then failed further in,
 in the NTT:
 
 ```
@@ -97,9 +115,8 @@ CUDA ERROR: cudaGetLastError()@sppark/ntt/ntt.cuh:97 failed: "operation not supp
 panicked at risc0-zkp-3.0.5/src/hal/cuda.rs:708: Failure during zk_shift
 ```
 
-⚠ Whether *that* is a Pascal limit or a Windows one is **not yet known** — `cudaGetLastError()` can
-report an error raised by an earlier asynchronous call, so the line number may not be the culprit.
-A run with `CUDA_LAUNCH_BLOCKING=1` is what settles it. See hazync#631.
+That error was raised earlier, by the refused rv32im module (point 2 above) — `cudaGetLastError()`
+reports an error left pending by an earlier call, so the line number was not the culprit. hazync#727.
 
 The original abort, for reference — this is what you get on a build older than 2026-10-04, where the
 real error was thrown away:
@@ -113,7 +130,7 @@ Two theories were tested and **killed**: it is not out of memory (`HAZYNC_SEG_PO
 instantly and identically on an idle 4 GB card) and not an arch mismatch (the card *is* the `sm_61`
 the binary embeds natively). Open: the build used CUDA 12.9.1 against a driver reporting 12.7.
 
-What this section left open (the Pascal NTT failure) is moot for the prover's floor of 7.0 and was not pursued.
+The Pascal NTT failure this section left open was resolved by hazync#727 (above).
 
 ## What is in the window
 
