@@ -70,6 +70,10 @@ edit $T/s.json "s['purpose']='audit-15.11.2026 '" $T/u2.json; run 1 $V $A --purp
 run 1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
 run 1 env RISC0_DEV_MODE=1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
 run 1 env RISC0_DEV_MODE=1 $V $A $C $R $T/s.json
+# an --image given is the only image the receipt may verify against (review 11-16): the current mainnet id given
+# explicitly refuses this 8888d59c receipt; its own id verifies it
+run 1 $V $A $C --image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c $R $T/s.json
+run 2 $V $A $C --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 $R $T/s.json
 run 1 $V $A $C $X/mainnet_1_200_8888d59c_flipped.rcpt $T/s.json
 # 10. the producer refuses to file a signature that does not verify
 echo "== zapp-statement add-sig with entry 1's signature for entry 0 (expect exit 1)"

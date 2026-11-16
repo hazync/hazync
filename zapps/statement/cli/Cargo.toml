@@ -17,6 +17,8 @@ path = "src/main.rs"
 zapp-statement = { path = ".." }
 zapp-common = { path = "../../common" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
+# the core receipt check and image resolution every zAPP shares (zapps/corecheck: no CLI code)
+zapp-corecheck = { path = "../../corecheck" }
 libzync = { path = "../../../libzync", default-features = false }
 bitcoin = "0.32"
 serde_json = "1"

@@ -18,7 +18,7 @@
 //! scripts}, `age_checked` and `demo_because`.
 
 use zapp_statement::{check_statement, Challenge, Statement};
-use swiftsync_verify::{identity_matches, parse_expect, verify, Image, Inputs, Verdict};
+use swiftsync_verify::{identity_matches, parse_expect, Verdict};
 
 #[no_mangle]
 pub extern "C" fn alloc(len: usize) -> *mut u8 {
@@ -75,14 +75,9 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
     if f.i != input.len() {
         return Err("input frame has trailing bytes".into());
     }
-    let image = match Image::by_id(network, &image_hex) {
-        Some(i) if !image_hex.is_empty() => i,
-        _ => {
-            let i = Image::by_network(network).ok_or("no built-in image")?;
-            if image_hex.is_empty() { i } else { i.with_method_id(&image_hex).ok_or("image id is not 64 hex characters")? }
-        }
-    };
-    let mut rep = verify(&Inputs { receipt, image, anchor: None, now });
+    // the image as every zAPP resolves it; an image id given is the only image the receipt may verify against (pinned)
+    let image = zapp_corecheck::image_for(network, &image_hex, false, false)?;
+    let mut rep = zapp_corecheck::verify_core(receipt, image, !image_hex.trim().is_empty(), None, now, None).report;
     let mut why: Vec<&str> = Vec::new();
     let mut age_checked = false;
     let statement = match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {

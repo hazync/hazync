@@ -12,7 +12,7 @@ node test-statement.mjs target/wasm32-unknown-unknown/release/zapp_statement_was
 
 | | |
 |---|---|
-| size | 2,485,794 bytes raw, 1,522,758 gzipped |
-| sha256 (this commit, `./build.sh`) | `5a284b26d11d1b6c2e9c95243dc63c8c816bc4530324a979225af291b64e61be` (Rust 1.99.0, clang 18.1.3 in `reproduce/wasm.Dockerfile`, default stage path; the same on a laptop and on hazync-coord, 16.11.2026. This module compiles C (secp256k1-sys, through bitcoin), so `scripts/wasm-build.sh` builds it in that pinned container: with the host's clang it was `510c205b…` under clang 14.0.0 and `5a284b26…` under 18.1.3) |
+| size | 2,493,761 bytes raw, 1,526,679 gzipped |
+| sha256 (this commit, `./build.sh`) | `b14ce3a0c1620a7e86cd4a7f534e273d4453e57de25d0170abbfb40088badaa8` (Rust 1.99.0 and clang 18.1.3 in the pinned container `reproduce/wasm.Dockerfile` (this module compiles C: secp256k1-sys), fixed stage path; laptop and hazync-coord, 16.11.2026; with the review fixes of 16.11.2026 (the image resolved by zapps/corecheck, an --image pinned exactly); before them `5a284b26…`, and with a host clang 14 `510c205b…`) |
 | reproduces | through `./build.sh` on any machine with docker (it builds in `reproduce/wasm.Dockerfile`: Rust 1.99.0, clang 18.1.3 from a pinned Ubuntu snapshot), at the default stage path |
-| tests | `test-statement.mjs` 15/15 against the real mainnet 1..200 proof (`8888d59c`), run by `../test.sh` in CI's zapps job |
+| tests | `test-statement.mjs` 17/17 against the real mainnet 1..200 proof (`8888d59c`), run by `../test.sh` in CI's zapps job |

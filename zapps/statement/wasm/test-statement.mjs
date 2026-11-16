@@ -22,6 +22,10 @@ const cases = [
   ['too old (7 behind, 6 allowed)', { statement, purpose, nonce, maxAge: 6, tipHeight: 207 }, 'fail', /7 blocks behind/],
   ['max age without a tip', { statement, purpose, nonce, maxAge: 6 }, 'fail', /without the network's tip/],
   ['a purpose with a trailing space', { statement: { ...statement, purpose: statement.purpose + ' ' }, purpose: purpose + ' ', nonce }, 'fail', /leading or trailing/],
+  // review 11-16: an image id given is the only image the receipt may verify against (the current mainnet id refuses
+  // this 8888d59c receipt); none given, the earlier built-in image it names verifies it
+  ['image pinned: the current id', { statement, purpose, nonce, imageHex: '46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c' }, 'fail', /the receipt did not verify/],
+  ['no image id: the image it names', { statement, purpose, nonce, imageHex: '' }, 'demo', /^statement: /],
   ['swapped signatures', { statement: { ...statement, entries: statement.entries.map((e, i, a) => ({ ...e, signature: a[(i + 1) % a.length].signature })) }, purpose, nonce }, 'fail', /BIP-322|P2PK/],
 ];
 let bad = 0;

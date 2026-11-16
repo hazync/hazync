@@ -200,13 +200,11 @@ fn check(a: Vec<String>) {
         }
     }
     let [receipt, stf] = files.as_slice() else { fail("give <receipt> <statement.json>") };
-    let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network:?}")));
-    if let Some(h) = &image_hex {
-        image = match Image::by_id(&network, h) {
-            Some(i) => i,
-            None => image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail("--image: not 64 hex digits")),
-        };
-    }
+    // the image as every zAPP resolves it (zapp_corecheck::image_for); a given --image is the only image the receipt may
+    // verify against (zapp_corecheck::verify_core, pinned; review 11-16)
+    let image = zapp_corecheck::image_for(&network, image_hex.as_deref().unwrap_or(""), false, false)
+        .unwrap_or_else(|e| fail(&format!("--image: {e}")));
+    let pinned = image_hex.as_deref().is_some_and(|h| !h.trim().is_empty());
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
     let now = match now_arg.map(|v| v.parse::<u64>()) {
         None => clock,
@@ -217,7 +215,7 @@ fn check(a: Vec<String>) {
     let st: Statement = std::fs::read(stf).map_err(|e| e.to_string())
         .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
         .unwrap_or_else(|e| fail(&format!("{stf:?}: not a balance statement ({e})")));
-    let mut rep = verify(&Inputs { receipt: &rb, image, anchor: None, now });
+    let mut rep = zapp_corecheck::verify_core(&rb, image, pinned, None, now, None).report;
     let mut tip_checked = false;
     let mut challenged = false;
     let mut age_line: Option<String> = None;
