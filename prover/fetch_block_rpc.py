@@ -320,7 +320,8 @@ def check_prep(d, od, tip):
     node_h, best = chain_info()
     at = min(P, node_h)
     if at == P and rpc("getblockhash", [P]) == hp: return P
-    if at < P and state_hash(od, at) == rpc("getblockhash", [at]):
+    # a node behind prep on prep's chain, or one at genesis (reindexing from scratch): nothing to decide yet
+    if at < P and (at == 0 or state_hash(od, at) == rpc("getblockhash", [at])):
         print(f"the node is at {node_h}, below prep's tip {P}, on prep's chain: waiting for it", flush=True)
         return None
     try:

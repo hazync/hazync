@@ -380,6 +380,20 @@ def case_auto_rewind():
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
+def case_node_reindexing():
+    """Review 16.11 (low): a node reindexing from scratch (at genesis) is a node behind prep: wait, no REORG_TOO_DEEP."""
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40)
+        full = list(node.active); node.active = full[:1]; node.save()
+        p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od)], {})
+        time.sleep(2.0)
+        check(p.poll() is None and not (d / "REORG_TOO_DEEP").exists() and not (d / "REORG").exists(),
+              "a node at genesis (reindexing): waits, no marker")
+        p.kill(); p.wait()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
 def case_fork_point_deep():
     root = pathlib.Path(tempfile.mkdtemp(prefix="fetch-reorg-"))
     try:
@@ -411,6 +425,7 @@ if __name__ == "__main__":
         print("== the review's cases (16.11.2026)")
         case_review_findings()
         case_new_file_same_best()
+        case_node_reindexing()
         print("== P3: automatic rewinds")
         case_auto_rewind()
         print("== an old host without PREP_TIP.json")

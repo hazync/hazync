@@ -41,6 +41,14 @@ pub enum Node {
 }
 
 pub const RECORD: usize = 64;
+/// Tests that open disk arenas take this: each maps 16 TiB of address space (DiskArena::VIRT), and more than a few at
+/// once in parallel tests run out of it (ENOMEM from mmap, seen when the Z1 tests were added).
+#[cfg(all(test, feature = "std"))]
+static DISK_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(all(test, feature = "std"))]
+static TEST_CRASH_AFTER_META: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// One `trie/roots.log` entry (Z1): height u32 | block hash 32 | root reference u64 | root hash 32 | gen u32.
 #[cfg(feature = "std")]
 pub const ROOTS_REC: usize = 80;
@@ -278,6 +286,20 @@ impl DiskArena {
                 std::fs::OpenOptions::new().write(true).open(&rl)?.set_len((n * ROOTS_REC) as u64)?;
             }
         }
+        // a release a crash interrupted (durable): committed if the meta on disk is the one it names
+        let rel = self.dir.join("retain").join("RELEASE");
+        if let Ok(r) = std::fs::read(&rel) {
+            use sha2::Digest as _;
+            let meta = std::fs::read(self.dir.join("meta")).unwrap_or_default();
+            if r.len() >= 32 && (r.len() - 32) % 8 == 0 && sha2::Sha256::digest(&meta)[..] == r[..32] {
+                for c in r[32..].chunks_exact(8) {
+                    let k = u64::from_le_bytes(c.try_into().unwrap());
+                    let _ = std::fs::remove_file(self.dir.join("retain").join(alloc::format!("r_{k}.bin")));
+                }
+            }
+            std::fs::remove_file(&rel)?;
+            std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all())?;
+        }
         for (k, p) in self.retain_files() {
             if k > f { std::fs::remove_file(&p)?; } else { self.retained += std::fs::metadata(&p)?.len() / 8; }
         }
@@ -303,9 +325,17 @@ impl DiskArena {
         }).collect()
     }
 
-    /// The pinned height (`trie/PIN`: the height, then anything), if a reader pins one.
+    /// The pinned height (`trie/PIN`: the height, then anything), if a reader pins one. A PIN file that is there but
+    /// does not read as a height is a pin at 0 (review 16.11, M4): hold everything up to HAZYNC_TRIE_RETAIN_MAX, and
+    /// say so, rather than release what a reader may be walking.
     fn pin(&self) -> Option<u64> {
-        std::fs::read_to_string(self.dir.join("PIN")).ok()?.split_whitespace().next()?.parse().ok()
+        match std::fs::read_to_string(self.dir.join("PIN")) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            r => Some(r.ok().and_then(|x| x.split_whitespace().next()?.parse().ok()).unwrap_or_else(|| {
+                std::eprintln!("TRIE_PIN_UNREADABLE {}/PIN does not read as a height: held as a pin at 0", self.dir.display());
+                0
+            })),
+        }
     }
 
     fn grow(&mut self) {
@@ -428,7 +458,10 @@ impl Arena for DiskArena {
             if k <= release { all.extend_from_slice(&self.pending[start..end]); } else { keep.push((k, &self.pending[start..end])); }
         }
         if self.pending_marks.first().is_some_and(|m| m.1 > 0) { all.extend_from_slice(&self.pending[..self.pending_marks[0].1]); }
-        let back: Vec<(u64, std::path::PathBuf)> = self.retain_files().into_iter().filter(|(k, _)| *k <= release).collect();
+        // lists at or below the release come back; so do lists ABOVE the height flushed now, which only a rewind leaves
+        // (blocks undone: what they freed is garbage, in no root since the rewind; an open would drop those lists and
+        // lose the slots for good)
+        let back: Vec<(u64, std::path::PathBuf)> = self.retain_files().into_iter().filter(|(k, _)| *k <= release || *k > height).collect();
         let mut back_n = 0u64;
         for (_, p) in &back {
             let b = std::fs::read(p).map_err(e)?;
@@ -462,15 +495,47 @@ impl Arena for DiskArena {
         b.extend_from_slice(&self.len.to_le_bytes());
         b.extend_from_slice(&(all.len() as u64).to_le_bytes());
         for r in &all { b.extend_from_slice(&r.to_le_bytes()); }
+        // a release is committed by the meta (review 16.11, H2): retain/RELEASE names the lists it frees and the hash of
+        // the meta that holds their slots, synced BEFORE that meta's rename. An open that finds it deletes the lists if
+        // the meta on disk is that one (the rename happened) and keeps them otherwise, so a crash anywhere in between
+        // frees nothing twice and loses nothing.
+        let rel = self.dir.join("retain").join("RELEASE");
+        if !back.is_empty() {
+            use sha2::Digest as _;
+            let mut r = sha2::Sha256::digest(&b).to_vec();
+            for (k, _) in &back { r.extend_from_slice(&k.to_le_bytes()); }
+            let mut f = std::fs::File::create(&rel).map_err(e)?;
+            f.write_all(&r).map_err(e)?;
+            f.sync_data().map_err(e)?;
+            std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
+        }
         let tmp = self.dir.join("meta.tmp");
         let mut f = std::fs::File::create(&tmp).map_err(e)?;
         f.write_all(&b).map_err(e)?;
         f.sync_data().map_err(e)?;
         std::fs::rename(&tmp, self.dir.join("meta")).map_err(e)?;
         std::fs::File::open(&self.dir).and_then(|d| d.sync_all()).map_err(e)?;
+        // test hook: a crash right after the meta's rename, before the released lists are unlinked (review 16.11, H2)
+        #[cfg(test)]
+        if TEST_CRASH_AFTER_META.load(core::sync::atomic::Ordering::SeqCst) && self.dir.to_string_lossy().ends_with("-z1-h2") {
+            return Err("test: crashed after the meta rename".into());
+        }
         // the released lists' slots are in the meta's free list now
         for (_, p) in &back { std::fs::remove_file(p).map_err(e)?; }
+        if !back.is_empty() {
+            std::fs::remove_file(&rel).map_err(e)?;
+            std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
+        }
         self.retained = self.retained + kept_n - back_n;
+        // with a pin: the lowest height whose logged root is guaranteed intact until the next flush, for the reader
+        // (review 16.11, M4); and roots.log made durable with the flush. Without one, neither: Z1 stays inert.
+        if pin.is_some() {
+            if let Some(f) = &self.roots { f.sync_data().map_err(e)?; }
+            let msg = alloc::format!("intact_from {} gen {} flushed {height}\n", release.min(height), self.gen);
+            let t = self.dir.join("INTACT.tmp");
+            std::fs::write(&t, msg.as_bytes()).and_then(|_| std::fs::File::open(&t)?.sync_data()).map_err(e)?;
+            std::fs::rename(&t, self.dir.join("INTACT")).map_err(e)?;
+        }
         if let Some(p) = pin.filter(|&p| p < release) {
             // the cap released a pinned height: the reader must know (ZAPP_FOLLOWER.md §4)
             let msg = alloc::format!("released_through {release} pin {p} height {height}\n");
@@ -973,11 +1038,15 @@ impl TrieStore {
 
     /// The end of an update: refused, its new nodes go back; accepted, the root moves and the replaced nodes are freed
     /// (the arena reuses a slot only once no flushed trie can refer to it).
-    fn finish(&mut self, r: Result<R, TErr>) -> Result<W, TErr> {
-        // Z1: the slots this update frees were last in the root of `height` (the block being applied is height + 1;
-        // an undo's frees are tagged the same way, conservatively)
+    fn finish(&mut self, r: Result<R, TErr>, freeing: u64) -> Result<W, TErr> {
+        // Z1: the slots an APPLY frees were last in the root of `height` (the block being applied is height + 1). An
+        // undo frees slots of the orphaned roots only, tagged 0: released at the next flush whatever the pin (review
+        // 16.11: tagged above the flush they were dropped from retain/ at the next open and never freed again). A
+        // reader is told by the rewind's GEN bump before any of them can be reused.
         #[cfg(feature = "std")]
-        self.a.set_freeing_height(self.height + 1);
+        self.a.set_freeing_height(freeing);
+        #[cfg(not(feature = "std"))]
+        let _ = freeing;
         match r {
             Err(e) => {
                 for x in core::mem::take(&mut self.fresh) { self.a.free(x); }
@@ -1006,7 +1075,7 @@ impl TrieStore {
             for (k, sp, v) in inserts { let (s, o) = split(k); t = self.t_ins(t, &s, &o, sp, *v, 0)?; }
             Ok(t)
         })();
-        let out = self.finish(r);
+        let out = self.finish(r, self.height + 1);
         if out.is_ok() { self.applied.push(self.replaced); }
         out
     }
@@ -1023,7 +1092,7 @@ impl TrieStore {
             for (k, _) in marks.iter().rev() { let (s, o) = split(k); t = self.t_unmark(t, &s, &o, 0)?; }
             Ok(t)
         })();
-        let out = self.finish(r);
+        let out = self.finish(r, 0);
         if out.is_ok() { self.applied.pop(); }
         out
     }
@@ -1066,7 +1135,7 @@ impl TrieStore {
             for k in marks.iter().rev() { let (s, o) = split(k); t = self.t_unmark(t, &s, &o, 0)?; }
             Ok(t)
         })();
-        let out = self.finish(r);
+        let out = self.finish(r, 0);
         if out.is_ok() { self.applied.pop(); }
         out
     }
@@ -1232,6 +1301,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn a_block_from_an_earlier_session_undoes_from_its_record() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-undo-recorded", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut x = 0x2545_f491_4f6c_dd1du64;
@@ -1331,6 +1401,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn z1_a_pinned_root_survives_later_blocks_and_slot_reuse() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let blocks = z1_blocks(90, 0x51ed_270b_7f1a_c3e9);
         let snap_at = |h: usize| { let mut m = TrieStore::new(true); for (mk, i) in &blocks[..h] { m.apply(mk, i).unwrap(); } m.height = h as u64; m.to_bytes() };
         let root_of = |d: &std::path::Path, h: u32| -> (R, [u8; 32], u32) {
@@ -1392,12 +1463,96 @@ mod tests {
         assert_eq!(results, alloc::vec![true, false], "pinned: the root of 20 intact; unpinned (the control): its slots were reused");
     }
 
+    /// Review 16.11, H2: a crash between the meta's rename (the released lists' slots now in its free list) and the
+    /// lists' unlinking must not hand those slots out twice. Pinned at 10, 30 blocks with flushes; then the pin goes and
+    /// the flush that releases everything "crashes" right after the meta rename; reopen, flush again, then 30 more
+    /// blocks: the free list never holds a slot twice and the trie stays exact.
+    #[cfg(feature = "std")]
+    #[test]
+    fn z1_a_crash_after_releasing_retained_slots_frees_nothing_twice() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-z1-h2", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let blocks = z1_blocks(60, 0x3c6e_f372_fe94_f82b);
+        let free_list = |d: &std::path::Path| -> Vec<u64> {
+            let b = std::fs::read(d.join("meta")).unwrap();
+            let n = u64::from_le_bytes(b[65..73].try_into().unwrap()) as usize;
+            (0..n).map(|i| u64::from_le_bytes(b[73 + 8 * i..81 + 8 * i].try_into().unwrap())).collect()
+        };
+        let dups = |v: &[u64]| { let mut w = v.to_vec(); w.sort_unstable(); w.windows(2).filter(|x| x[0] == x[1]).count() };
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        std::fs::write(dir.join("PIN"), b"10\n").unwrap();
+        for (n, (mk, i)) in blocks[..30].iter().enumerate() {
+            st.apply(mk, i).unwrap(); st.height = n as u64 + 1; st.log_root();
+            if (n + 1) % 5 == 0 { st.flush().unwrap(); }
+        }
+        assert!(std::fs::read_dir(dir.join("retain")).unwrap().count() > 0, "lists held under the pin");
+        std::fs::remove_file(dir.join("PIN")).unwrap();
+        TEST_CRASH_AFTER_META.store(true, core::sync::atomic::Ordering::SeqCst);
+        assert!(st.flush().is_err(), "the simulated crash");
+        TEST_CRASH_AFTER_META.store(false, core::sync::atomic::Ordering::SeqCst);
+        drop(st);
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        st.flush().unwrap();
+        let fl = free_list(&dir);
+        assert_eq!(dups(&fl), 0, "a slot twice in the free list ({} of {})", dups(&fl), fl.len());
+        for (n, (mk, i)) in blocks[30..].iter().enumerate() {
+            st.apply(mk, i).unwrap_or_else(|e| panic!("block {}: {e:?} (a slot handed out twice)", 31 + n));
+            st.height = 31 + n as u64;
+            if (n + 1) % 5 == 0 { st.flush().unwrap(); }
+        }
+        let mut m = TrieStore::new(true);
+        for (mk, i) in &blocks { m.apply(mk, i).unwrap(); }
+        m.height = 60;
+        assert_eq!(st.to_bytes(), m.to_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review 16.11, M4 and the rewind leak: a PIN that does not read is a pin at 0 (held, not released); a pin writes
+    /// INTACT (the lowest height whose root is intact) at each flush; an UNDO's freed slots are released at the next flush
+    /// whatever the pin (they were tagged above the flush, and the next open dropped their list: never freed again).
+    #[cfg(feature = "std")]
+    #[test]
+    fn z1_an_unreadable_pin_holds_and_an_undo_leaks_nothing() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-z1-m4", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let blocks = z1_blocks(20, 0x2b99_2ddf_a232_49d6);
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        std::fs::write(dir.join("PIN"), b"not a height").unwrap();
+        for (n, (mk, i)) in blocks.iter().enumerate() {
+            st.apply(mk, i).unwrap(); st.height = n as u64 + 1; st.log_root();
+            if (n + 1) % 5 == 0 { st.flush().unwrap(); }
+        }
+        let lists = |d: &std::path::Path| -> Vec<u64> { let mut v: Vec<u64> = std::fs::read_dir(d.join("retain")).map(|it| it.flatten()
+            .filter_map(|e| e.file_name().to_string_lossy().strip_prefix("r_")?.strip_suffix(".bin")?.parse().ok()).collect()).unwrap_or_default(); v.sort(); v };
+        assert_eq!(lists(&dir).len(), 20, "an unreadable PIN holds every block's freed slots (within the cap)");
+        assert!(std::fs::read_to_string(dir.join("INTACT")).unwrap().starts_with("intact_from 0 "));
+        // undo the last 5 blocks from their keys (a rewind to 15) and flush there
+        for (mk, i) in blocks[15..].iter().rev() {
+            let km: Vec<Key> = mk.iter().map(|m| m.0).collect();
+            let ki: Vec<Key> = i.iter().map(|x| x.0).collect();
+            st.undo_recorded(&km, &ki, false).unwrap();
+        }
+        st.height = 15;
+        st.flush().unwrap();
+        assert!(lists(&dir).iter().all(|&k| k <= 15), "no list above the flushed height (it would be dropped, its slots lost): {:?}", lists(&dir));
+        drop(st);
+        let st = TrieStore::open_dir(&dir, true).unwrap();
+        let mut m = TrieStore::new(true);
+        for (mk, i) in &blocks[..15] { m.apply(mk, i).unwrap(); }
+        m.height = 15;
+        assert_eq!(st.to_bytes(), m.to_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Z1: `GEN` is bumped (and synced) at every open and every `bump_gen` (a rewind); each `roots.log` entry carries the
     /// generation it was written in. A crash after the flush at 10: the entries of 11..15 are cut at the next open (the
     /// replay reuses their slots), and a `retain/` list of a lost block is dropped.
     #[cfg(feature = "std")]
     #[test]
     fn z1_gen_counts_opens_and_rewinds_and_a_crash_cuts_the_log() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-z1-gen", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let gen = |d: &std::path::Path| u32::from_le_bytes(std::fs::read(d.join("GEN")).unwrap().try_into().unwrap());
@@ -1435,6 +1590,7 @@ mod tests {
 
     #[cfg(feature = "std")]
     fn disk_arena_run(cache_mb: u64, flush_every: u32, tag: &str) {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         // cache_mb 1 means a tiny cache of 64 slots (below what a MiB gives), so nearly every insert collides
         let mb = if cache_mb == 1 { 0 } else { cache_mb };
         let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-{tag}", std::process::id()));
