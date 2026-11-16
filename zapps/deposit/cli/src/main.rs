@@ -213,13 +213,11 @@ fn verify_main(a: Vec<String>) -> ! {
     t.reverse();
     ask.txid = t;
     let file = file.unwrap_or_else(|| usage());
-    let mut image = Image::by_network(&network).unwrap_or_else(|| fail(&format!("unknown network {network:?}")));
-    if let Some(h) = &image_hex {
-        image = match Image::by_id(&network, h) {
-            Some(i) => i,
-            None => image.with_method_id(&h.to_lowercase()).unwrap_or_else(|| fail(&format!("--image {h:?}: not 64 hex digits"))),
-        };
-    }
+    // the image as every zAPP resolves it (zapp_corecheck::image_for); a given --image is the only one the core receipt
+    // may verify against (review 11-16)
+    let image = zapp_corecheck::image_for(&network, image_hex.as_deref().unwrap_or(""), false, false)
+        .unwrap_or_else(|e| fail(&format!("--image: {e}")));
+    ask.pin_core_image = image_hex.as_deref().is_some_and(|h| !h.trim().is_empty());
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
     let b: DepositBundle = serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&file)))))

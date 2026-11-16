@@ -1517,6 +1517,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zapp-corecheck"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "risc0-zkvm",
+ "swiftsync-verify",
+]
+
+[[package]]
 name = "zapp-deposit"
 version = "0.1.0"
 dependencies = [
@@ -1527,6 +1536,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "swiftsync-verify",
+ "zapp-corecheck",
  "zapp-headers",
 ]
 
@@ -1540,6 +1550,7 @@ dependencies = [
  "serde_json",
  "swiftsync-verify",
  "zapp-common",
+ "zapp-corecheck",
  "zapp-deposit",
  "zapp-headers",
 ]

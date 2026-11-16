@@ -19,7 +19,7 @@
 //! zAPP (`zapp_headers`) as libraries; not part of either. Until 15.11.2026 this was `swiftsync_verify::deposit`, the
 //! CLI's `swiftsync-verify deposit`, `zync-deposit` and the WASM's `verifyDeposit`; the checks are unchanged.
 use zapp_headers::{self as headers, HeaderState, TxInclusion};
-use swiftsync_verify::{check_tx_fact, hex, hex32, unhex, verify, ChainState, Image, Inputs, TxFact, Verdict};
+use swiftsync_verify::{check_tx_fact, hex, hex32, unhex, ChainState, Image, TxFact, Verdict};
 use serde::{Deserialize, Serialize};
 
 pub const BUNDLE_KIND: &str = "hazync-deposit";
@@ -100,6 +100,9 @@ pub struct DepositAsk {
     pub allow_pow_only_block: bool,
     /// The tip (height, hash as explorers print it) from a source the caller trusts.
     pub expect_tip: Option<(i64, String)>,
+    /// The core image was named by the caller (`--image`): the core receipt may verify against that image only, not
+    /// against an earlier built-in image of the chain it names (zapp_corecheck::verify_core, pinned; review 11-16).
+    pub pin_core_image: bool,
     /// The tip's block time must be within this many seconds of `now` (a stale proof is refused).
     pub max_tip_age: Option<u64>,
     /// The verdict can be Ok only when the tip was compared with a source the caller trusts (`expect_tip`). On by
@@ -115,7 +118,7 @@ impl Default for DepositAsk {
     fn default() -> Self {
         DepositAsk { txid: [0; 32], vout: None, amount: None, script: None, op_return: None, min_depth: 0,
                      min_validated_depth: 1, allow_pow_only_block: false, expect_tip: None, max_tip_age: None,
-                     require_identity: true, allow_demo: false }
+                     require_identity: true, allow_demo: false, pin_core_image: false }
     }
 }
 
@@ -210,7 +213,8 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
 
     // 1. The core chain proof: full validation 0..=Hc.
     let Some(core_bytes) = unhex(&b.core_receipt) else { return rep.fail("core receipt: not hex") };
-    let cr = verify(&Inputs { receipt: &core_bytes, image: core_image, anchor: None, now });
+    let core = zapp_corecheck::verify_core(&core_bytes, core_image, ask.pin_core_image, None, now, None);
+    let (cr, core_used) = (core.report, core.image);
     for (ok, w) in &cr.checks { rep.checks.push((*ok, format!("core: {w}"))); }
     let (cs, undo_from) = match (&cr.verdict, &cr.state) {
         (Verdict::Fail, _) | (_, None) => return rep.fail("the core chain proof verifies (see the core: checks)"),
@@ -388,23 +392,10 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
         rep.statement = Some(DepositStatement {
             txid: ask.txid, height: d.height, block_hash, output, tip_height, tip_hash, tip_work,
             validated_through: cs.height, confirmations, validated_confirmations, block_fully_validated: full,
-            core_image: core_image_used(&core_bytes, core_image).method_id_hex.to_string(), headers_image: hs.as_ref().map(|_| headers_image.to_string()),
+            core_image: core_used.method_id_hex.to_string(), headers_image: hs.as_ref().map(|_| headers_image.to_string()),
         });
     }
     rep
-}
-
-/// The core image the receipt was checked against: the one asked for, or the earlier built-in image of its chain that the
-/// receipt names. The same substitution `swiftsync_verify::verify` makes (it asks `earlier_image_named_by` under the same
-/// receipt_kind gate), asked of the core library here rather than read back from a check string, so the core's Report
-/// stays as it is (a zAPP never changes the core verifier).
-fn core_image_used(receipt: &[u8], asked: &'static Image) -> &'static Image {
-    if swiftsync_verify::receipt_kind(receipt).is_err() {
-        return asked;
-    }
-    bincode::deserialize::<risc0_zkvm::Receipt>(receipt).ok()
-        .and_then(|r| swiftsync_verify::earlier_image_named_by(&r, asked))
-        .unwrap_or(asked)
 }
 
 /// Build a bundle for transaction `txid` (internal order) of `raw_block` (as `getblock <hash> 0` prints it, the block

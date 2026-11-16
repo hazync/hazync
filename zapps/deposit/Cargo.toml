@@ -17,6 +17,8 @@ path = "src/lib.rs"
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
+# the core receipt check and image resolution every zAPP shares (zapps/corecheck: no CLI code)
+zapp-corecheck = { path = "../corecheck" }
 zapp-headers = { path = "../headers" }
 libzync = { path = "../../libzync", default-features = false }
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }

@@ -41,6 +41,10 @@ run 1 $V --txid $T --vout 9 $W/core.json
 run 1 $V --txid $T --expect 975278:${TIP#*:} $W/core.json
 run 1 $V --txid $T --max-tip-age 60 $W/tip.json
 run 1 env RISC0_DEV_MODE=1 $V --txid $T $W/core.json
+# an --image given is the only image the core receipt may verify against (review 11-16): the current mainnet id given
+# explicitly refuses the 8888d59c core receipt, which the built-in default takes as an earlier image of the chain
+run 1 $V --txid $T --allow-demo --no-require-identity --image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c $W/core.json
+run 2 $V --txid $T --allow-demo --no-require-identity --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 $W/core.json
 run 1 $V --txid $T --network signet $W/core.json
 run 1 $V $W/core.json
 run 1 $V --txid $T /nonexistent.json

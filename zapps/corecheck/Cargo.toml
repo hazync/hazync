@@ -1,0 +1,29 @@
+[package]
+name = "zapp-corecheck"
+version = "0.1.0"
+edition = "2021"
+description = "The core receipt check every zAPP resting on a core proof makes first: the image named, the receipt verified, its tip compared"
+license = "MIT"
+publish = false
+
+# Not a zAPP and not part of the core verifier: on swiftsync-verify as a library, no CLI code, so a zAPP's library, C ABI
+# and WASM module may use it (docs/libzync/ZYNCAPPS.md §9). Own workspace, as the core verifier's crates.
+
+[lib]
+name = "zapp_corecheck"
+path = "src/lib.rs"
+
+[dependencies]
+swiftsync-verify = { path = "../../swiftsync-verify" }
+# image_used: the receipt decoded as the core verifier decodes it, to ask which image it names
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+bincode = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

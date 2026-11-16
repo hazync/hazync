@@ -93,7 +93,9 @@ pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
                                min_depth: num("min_depth")?.unwrap_or(1), min_validated_depth: num("min_validated_depth")?.unwrap_or(1),
                                allow_pow_only_block: flag("allow_pow_only_block", false)?, expect_tip,
                                max_tip_age: num("max_tip_age")?,
-                               require_identity: flag("require_identity", true)?, allow_demo: flag("allow_demo", false)? };
+                               require_identity: flag("require_identity", true)?, allow_demo: flag("allow_demo", false)?,
+                               // the WASM takes no image id: the network's built-in image, never pinned
+                               pin_core_image: false };
         Ok((now, b, ask, v["network"].as_str().unwrap_or("mainnet").to_string()))
     })();
     let (now, b, ask, network) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
