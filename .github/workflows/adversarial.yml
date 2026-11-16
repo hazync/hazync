@@ -71,6 +71,10 @@ jobs:
         run: |
           cargo build --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify
           ./swiftsync-verify-wasm/build.sh
+          # the built core wasm is the one its README pins (a pin went stale after #735's Frame::take fix, 16.11.2026)
+          want=$(grep -o 'sha256 (this commit, `./build.sh`) | `[0-9a-f]\{64\}`' swiftsync-verify-wasm/README.md | grep -o '[0-9a-f]\{64\}' || true)
+          got=$(sha256sum swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm | cut -c1-64)
+          [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::the core wasm built is $got, swiftsync-verify-wasm/README.md pins ${want:-nothing}"; exit 1; }
           mkdir -p rel
           cp swiftsync-verify/target/release/swiftsync-verify rel/hazync-verify-x86_64-linux-gnu
           cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm rel/hazync-verify.wasm
