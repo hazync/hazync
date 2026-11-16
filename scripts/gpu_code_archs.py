@@ -3,7 +3,10 @@
 
     gpu_code_archs.py host.exe                    # list them
     gpu_code_archs.py host.exe --require 61,70,80 # ...and exit 1 unless EVERY module has each
+    gpu_code_archs.py host --sass                 # ...and disassemble sm_70+ images (needs nvdisasm)
     gpu_code_archs.py --control                   # self-test, no binary needed
+
+⛔ EVERY RUN ALSO REFUSES SYSTEM-SCOPE ATOMICS (hazync#727), with or without --require. See below.
 
 ⛔⛔ WHY THIS EXISTS. The Windows prover was built with `-gencode=arch=compute_61,code=sm_61` and
 nothing else, for the one card it was being debugged on. A compiled GPU image runs only on its own
@@ -25,9 +28,36 @@ those were linked from, in a section of their own, and are not what a card loads
 ⚠ The entry table's layout is not a documented interface. It is corroborated rather than assumed:
 this lists exactly what NVIDIA's own `cuobjdump` reported for the same Windows binary (five
 modules, all sm_61, one with PTX), and the Linux release's list matches the flags it was built with.
+
+⛔⛔ SYSTEM-SCOPE ATOMICS (hazync#727). `::cuda::atomic<T>` defaults to thread_scope_system. For a
+Pascal image ptxas records every such instruction in the cubin's `.nv.info.<kernel>` section as
+EIATTR_ATOM_SYS_INSTR_OFFSETS, and the Windows driver REFUSES TO LOAD the whole module on a GPU
+without host-native atomics (cudaErrorNotSupported, 801) -- every kernel in it, the ones with no
+atomics included. Measured on a GTX 1050 Ti (driver 566.14): rv32im's LookupTables did exactly
+this and nothing on a build box could see it. ⇒ Every image's `.nv.info` records are read, and
+every PTX entry's text, and ANY system-scope atomic fails the run.
+
+⚠ WHAT IT CAN AND CANNOT SEE. The record is the driver's own marker, so it is the thing checked.
+📏 nvcc 12.9 writes it for sm_61 only: sm_70/75/80/120 images of the same kernel carry
+`ATOM.E.ADD.STRONG.SYS` in their SASS and NO record, while the sm_61 SASS shows a plain
+`RED.E.ADD` for both scopes -- so a SASS grep of the Pascal image misses it, and the record
+check misses a Volta+-only build. The default check therefore relies on an sm_61 image (the
+Windows build's --require has 61) and
+on PTX, where the scope is spelled out (`atom.add.sys.u32` vs `atom.add.gpu.u32`) and a driver
+JIT for a Pascal card would produce the same refused image. Compressed entries (LZ4 block format,
+flag 0x2000) are decompressed here; an entry that cannot be decoded is a FAILURE, never a skip.
+⇒ A module with neither an sm_6x image nor PTX (the Linux release: sm_80+ only) is BLIND to this
+and is reported as such. `--sass` closes that gap with NVIDIA's `nvdisasm` (toolkit required, and
+slow: minutes for a 30 MB rv32im image), refusing `ATOM/RED ... .SYS` in one sm_70+ image per
+module. 📏 On the pre-fix Linux v0.18.5 CUDA host it finds `2 ATOM.E.ADD.STRONG.SYS` in rv32im only.
 """
+import os
+import re
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 
 FAT_MAGIC = 0xBA55ED50
 FAT_HDR = struct.Struct("<IHHQ")                    # magic, version, header_size, payload size
@@ -76,12 +106,14 @@ def modules(b):
         if magic != FAT_MAGIC or ver != 1 or hs != FAT_HDR.size or size < ENTRY.size or i + hs + size > hi:
             i += 4
             continue
-        m = {"offset": i, "size": hs + size, "images": [], "ptx": [], "compressed": False}
+        m = {"offset": i, "size": hs + size, "images": [], "ptx": [], "compressed": False, "entries": []}
         off, end = i + hs, i + hs + size
         while off + ENTRY.size <= end:
-            kind, _, ehs, esz, _, _, _, _, arch, _, _, flags, _, _ = ENTRY.unpack_from(b, off)
+            kind, _, ehs, esz, zsz, _, _, _, arch, _, _, flags, _, rawsz = ENTRY.unpack_from(b, off)
             if ehs < ENTRY.size or ehs > 4096 or esz == 0 or off + ehs + esz > end:
                 break
+            m["entries"].append({"kind": kind, "arch": arch, "at": off + ehs, "size": esz,
+                                 "zsize": zsz, "rawsize": rawsz, "compressed": bool(flags & COMPRESSED)})
             if kind == KIND_IMAGE:
                 m["images"].append(arch)
                 m["compressed"] |= bool(flags & COMPRESSED)
@@ -99,7 +131,168 @@ def missing(mods, required):
             for a in required if any(a not in m["images"] for m in mods)}
 
 
-def report(path, required):
+# ── system-scope atomics (hazync#727) ────────────────────────────────────────────────────────────
+SHT_CUDA_INFO = 0x70000000
+EIFMT_NVAL, EIFMT_BVAL, EIFMT_HVAL, EIFMT_SVAL = 1, 2, 3, 4
+# 📏 0x27, read from nvcc 12.9 output: the one .nv.info record a system-scope kernel has and the
+# same kernel at device scope does not, and the one `cuobjdump -elf` names EIATTR_ATOM_SYS_INSTR_OFFSETS.
+EIATTR_ATOM_SYS_INSTR_OFFSETS = 0x27
+# PTX ISA: atom{.sem}{.scope}{.space}.op.type and red{...}; scope .sys. A `.sys` FENCE is not an
+# atomic and is not refused -- only atom/red, which is what the driver's marker records.
+PTX_SYS_ATOMIC = re.compile(rb"^\s*(?:@!?%\w+\s+)?(?:atom|red)(?:\.\w+)*?\.sys(?:\.\w+)*\s", re.M)
+
+
+def lz4_block(src, rawsize):
+    """Decode one LZ4 *block* (no frame) -- the format nvcc uses for a compressed fatbin entry."""
+    out, i, n = bytearray(), 0, len(src)
+    while i < n:
+        tok = src[i]
+        i += 1
+        lit = tok >> 4
+        if lit == 15:
+            while True:
+                x = src[i]
+                i += 1
+                lit += x
+                if x != 255:
+                    break
+        out += src[i:i + lit]
+        i += lit
+        if i >= n or len(out) >= rawsize:
+            break                                 # the last sequence is literals only
+        dist = src[i] | src[i + 1] << 8
+        i += 2
+        mlen = tok & 15
+        if mlen == 15:
+            while True:
+                x = src[i]
+                i += 1
+                mlen += x
+                if x != 255:
+                    break
+        mlen += 4
+        if dist == 0 or dist > len(out):
+            raise ValueError(f"LZ4 back-reference {dist} beyond the {len(out)} bytes decoded")
+        start = len(out) - dist
+        if dist >= mlen:
+            out += out[start:start + mlen]
+        else:                                     # overlapping copy: the pattern repeats
+            chunk = out[start:]
+            out += (chunk * (mlen // dist + 1))[:mlen]
+    if len(out) != rawsize:
+        raise ValueError(f"LZ4 block decoded to {len(out)} bytes, the entry says {rawsize}")
+    return bytes(out)
+
+
+def payload(b, e):
+    """The entry's bytes, decompressed. Raises on anything it cannot decode -- never guesses."""
+    data = b[e["at"]:e["at"] + e["size"]]
+    if not e["compressed"]:
+        return data
+    zsz = e["zsize"] or e["size"]
+    if not 0 < zsz <= e["size"] or not e["rawsize"]:
+        raise ValueError(f"compressed entry with sizes {zsz}/{e['size']}/{e['rawsize']}")
+    return lz4_block(data[:zsz], e["rawsize"])
+
+
+def cubin_sys_atomics(c):
+    """[(kernel, number of system-scope atomic instructions)] from a cubin's .nv.info records."""
+    if c[:4] != b"\x7fELF" or c[4] != 2:
+        raise ValueError("an image entry that is not a 64-bit ELF cubin")
+    shoff, = struct.unpack_from("<Q", c, 0x28)
+    entsz, num, strndx = struct.unpack_from("<HHH", c, 0x3A)
+    if not shoff or entsz < 64 or strndx >= num or shoff + num * entsz > len(c):
+        raise ValueError("a cubin with an unreadable section table")
+    stroff, = struct.unpack_from("<Q", c, shoff + strndx * entsz + 0x18)
+    found, infos = [], 0
+    for k in range(num):
+        sh = shoff + k * entsz
+        name_off, typ = struct.unpack_from("<II", c, sh)
+        off, size = struct.unpack_from("<QQ", c, sh + 0x18)
+        if typ != SHT_CUDA_INFO:
+            continue
+        name = c[stroff + name_off:c.index(b"\0", stroff + name_off)].decode("utf-8", "replace")
+        if not name.startswith(".nv.info"):
+            continue
+        infos += 1
+        p, end, hits = off, off + size, 0
+        while p + 4 <= end:
+            fmt, attr = c[p], c[p + 1]
+            if fmt == EIFMT_SVAL:
+                ln, = struct.unpack_from("<H", c, p + 2)
+                if attr == EIATTR_ATOM_SYS_INSTR_OFFSETS:
+                    hits += max(1, ln // 4)
+                p += 4 + ln
+            elif fmt in (EIFMT_NVAL, EIFMT_BVAL, EIFMT_HVAL):
+                p += 4
+            else:
+                raise ValueError(f"unknown .nv.info record format {fmt} in {name}")
+        if hits:
+            found.append((name[len(".nv.info."):] or "(module)", hits))
+    if not infos:
+        raise ValueError("a cubin with no .nv.info section -- nothing was checked")
+    return found
+
+
+def sys_atomics(b, mods):
+    """[(module, 'sm_61'|'PTX 61', what)] for every system-scope atomic, or an undecodable entry."""
+    bad = []
+    for k, m in enumerate(mods):
+        for e in m["entries"]:
+            if e["kind"] not in (KIND_IMAGE, KIND_PTX):
+                continue
+            where = f"sm_{e['arch']}" if e["kind"] == KIND_IMAGE else f"PTX {e['arch']}"
+            try:
+                data = payload(b, e)
+                if e["kind"] == KIND_IMAGE:
+                    for fn, n in cubin_sys_atomics(data):
+                        bad.append((k, where, f"{n} system-scope atomic(s) in {fn}"))
+                else:
+                    n = len(PTX_SYS_ATOMIC.findall(data))
+                    if n:
+                        bad.append((k, where, f"{n} atom/red .sys instruction(s) in the PTX"))
+            except (ValueError, IndexError, struct.error) as err:
+                bad.append((k, where, f"UNREADABLE, so unchecked: {err}"))
+    return bad
+
+
+
+SASS_SYS_ATOMIC = re.compile(r"\b(?:ATOM|ATOMG|RED|REDG)\.[A-Z0-9_.]*?\bSYS\b")
+
+
+def blind_modules(mods):
+    """Modules where the record-and-PTX check cannot see a system-scope atomic: no sm_6x image, no PTX."""
+    return [k for k, m in enumerate(mods)
+            if not m["ptx"] and not any(60 <= a < 70 for a in m["images"])]
+
+
+def sass_sys_atomics(b, mods, nvdisasm):
+    """[(module, 'sm_NN SASS', what)] from disassembling ONE sm_70+ image per module."""
+    bad = []
+    with tempfile.TemporaryDirectory() as td:
+        for k, m in enumerate(mods):
+            imgs = [e for e in m["entries"] if e["kind"] == KIND_IMAGE and e["arch"] >= 70]
+            if not imgs:
+                continue
+            e = imgs[0]
+            where = f"sm_{e['arch']} SASS"
+            try:
+                path = os.path.join(td, f"m{k}.cubin")
+                with open(path, "wb") as f:
+                    f.write(payload(b, e))
+                r = subprocess.run([nvdisasm, path], capture_output=True, text=True)
+                if r.returncode != 0 or not r.stdout.strip():
+                    raise ValueError(f"nvdisasm exit {r.returncode}: {r.stderr.strip()[:200]}")
+                hits = SASS_SYS_ATOMIC.findall(r.stdout)
+                if hits:
+                    bad.append((k, where, f"{len(hits)} system-scope instruction(s): "
+                                          f"{', '.join(sorted(set(hits)))}"))
+            except (ValueError, OSError) as err:
+                bad.append((k, where, f"UNREADABLE, so unchecked: {err}"))
+    return bad
+
+
+def report(path, required, sass=False):
     b = open(path, "rb").read()
     mods = modules(b)
     if mods is None:
@@ -115,8 +308,31 @@ def report(path, required):
               f"{', '.join(f'sm_{a}' for a in m['images']) or '(none)'}"
               f"{'  +PTX ' + ','.join(str(a) for a in m['ptx']) if m['ptx'] else ''}"
               f"{'  (compressed)' if m['compressed'] else ''}")
+    rc = 0
+    bad = sys_atomics(b, mods)
+    if sass:
+        nvdisasm = shutil.which("nvdisasm")
+        if not nvdisasm:
+            print("⛔ --sass needs NVIDIA's nvdisasm on PATH (CUDA toolkit) — refusing to report a check it did not run")
+            return 1
+        bad += sass_sys_atomics(b, mods, nvdisasm)
+    if bad:
+        for k, where, what in bad:
+            print(f"⛔ module {k} {where}: {what}")
+        print("⛔ SYSTEM-SCOPE ATOMICS (hazync#727): the Windows driver refuses to load such a module on a "
+              "GPU without host-native atomics (Pascal), error 801 -- use ::cuda::thread_scope_device")
+        rc = 1
+    blind = [] if sass else blind_modules(mods)
+    if blind:
+        # ⛔ NOT a ✅: "none found" over modules this cannot see would be the flattering reading.
+        print(f"⚠ module(s) {blind} hold no sm_6x image and no PTX: the record check CANNOT SEE a "
+              f"system-scope atomic there (sm_70+ write none). Run with --sass for those.")
+    elif not bad:
+        n = sum(len(m["entries"]) for m in mods)
+        print(f"✅ no system-scope atomics in any of the {n} images/PTX entries"
+              f"{' or the sm_70+ SASS' if sass else ''} (hazync#727)")
     if not required:
-        return 0
+        return rc
     gone = missing(mods, required)
     if gone:
         for a, where in gone.items():
@@ -125,7 +341,7 @@ def report(path, required):
         return 1
     print(f"✅ every one of the {len(mods)} modules holds an image for each of: "
           f"{', '.join(f'sm_{a}' for a in required)}")
-    return 0
+    return rc
 
 
 # ── self-test ────────────────────────────────────────────────────────────────────────────────────
@@ -184,6 +400,57 @@ def control():
           "a binary with no GPU section is reported as such, not as zero problems")
     check(modules(_pe(b".nv_fatb", bytes(256))) == [],
           "a GPU section with nothing readable in it is an empty list — which report() refuses")
+
+    # ⛔⛔ hazync#727: SYSTEM-SCOPE ATOMICS. Real nvcc output (scripts/testdata/atom-scope/, built
+    # from the atom_scope.cu there), wrapped in a PE exactly as the linker leaves it in host.exe.
+    td = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata", "atom-scope")
+
+    def scan(*names):
+        fats = []
+        for n in names:
+            with open(os.path.join(td, n), "rb") as f:
+                fats.append(f.read())
+        exe = _pe(b".nv_fatb", b"".join(fats))
+        return sys_atomics(exe, modules(exe))
+
+    dev = scan("dev.fatbin")
+    check(dev == [], "a device-scope atomic module (compressed sm_61 + PTX) passes")
+    sys_ = scan("sys.fatbin")
+    check(any(w == "sm_61" and "count" in what for _, w, what in sys_)
+          and any(w == "PTX 61" for _, w, _ in sys_),
+          "⛔ the same module at SYSTEM scope is refused, in its compressed image AND its PTX")
+    raw = scan("sys_raw.fatbin")
+    check([w for _, w, _ in raw] == ["sm_61"], "⛔ an uncompressed sm_61 image alone is refused")
+    ptx = scan("sys_ptx.fatbin")
+    check([w for _, w, _ in ptx] == ["PTX 61"], "⛔ PTX alone (what a driver JIT would compile) is refused")
+    mixed = scan("dev.fatbin", "dev.fatbin", "sys_raw.fatbin")
+    check([k for k, _, _ in mixed] == [2], "⛔ one bad module among clean ones is caught and named")
+    check(PTX_SYS_ATOMIC.search(b"\tatom.relaxed.sys.global.add.u32 %r1, [%rd1], 1;\n")
+          and PTX_SYS_ATOMIC.search(b"\t@%p1 red.sys.global.add.u32 [%rd1], 1;\n")
+          and not PTX_SYS_ATOMIC.search(b"\tatom.add.gpu.u32 %r1,[%rd1],%r2;\n")
+          and not PTX_SYS_ATOMIC.search(b"\tfence.sc.sys;\n"),
+          "the PTX pattern takes every scope spelling, and not a .sys fence or a .gpu atomic")
+    # ⛔ An entry this cannot read must be a FAILURE, never "no atomics found".
+    with open(os.path.join(td, "sys.fatbin"), "rb") as f:
+        corrupt = bytearray(f.read())
+    # The PTX entry's header starts at 16; its uncompressed size is the last field (offset 56).
+    # One byte more than the stream really holds: an LZ4 block has no checksum, so the length is
+    # the only consistency a decoder can hold it to, and a mismatch must not pass as "clean".
+    raw, = struct.unpack_from("<Q", corrupt, 16 + 56)
+    struct.pack_into("<Q", corrupt, 16 + 56, raw + 1)
+    exe = _pe(b".nv_fatb", bytes(corrupt))
+    check(any("UNREADABLE" in what for _, _, what in sys_atomics(exe, modules(exe))),
+          "⛔ a compressed entry that does not decode to its stated size is UNREADABLE, not clean")
+    check(blind_modules(modules(_pe(b".nv_fatb", _fat([80, 90]) + _fat([61, 80]) + _fat([80], ptx=[80])))) == [0],
+          "⚠ a module with no sm_6x image and no PTX is reported as BLIND, the others are not")
+    check(SASS_SYS_ATOMIC.search("@P0 ATOM.E.ADD.STRONG.SYS PT, R3, [R2.64], R5 ;")
+          and SASS_SYS_ATOMIC.search("RED.E.ADD.STRONG.SYS [R2.64], R5 ;")
+          and not SASS_SYS_ATOMIC.search("@P0 ATOM.E.ADD.STRONG.GPU PT, R3, [R2.64], R5 ;")
+          and not SASS_SYS_ATOMIC.search("MEMBAR.SC.SYS ;"),
+          "the SASS pattern (--sass) takes ATOM/RED .SYS, and not .GPU or a .SYS barrier")
+    noinfo = _pe(b".nv_fatb", _fat([61]))             # an "image" that is not a cubin at all
+    check(any("UNREADABLE" in what for _, _, what in sys_atomics(noinfo, modules(noinfo))),
+          "⛔ an image that is not a readable cubin is reported, not skipped")
     print()
     if fails:
         print(f"FAIL {fails}")
@@ -204,6 +471,7 @@ def main(argv):
             pass
     if "--control" in argv:
         return control()
+    sass = "--sass" in argv
     args = [a for a in argv if not a.startswith("--")]
     if not args:
         print(__doc__)
@@ -220,7 +488,7 @@ def main(argv):
         if not required:
             print("⛔ --require was given no generations — refusing to check nothing")
             return 2
-    return report(args[0], required)
+    return report(args[0], required, sass)
 
 
 if __name__ == "__main__":

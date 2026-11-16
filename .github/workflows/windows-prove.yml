@@ -1080,7 +1080,7 @@ jobs:
               exit 1
           fi
 
-      - name: ⛔ the CUDA binary must hold code for every card generation it was built for
+      - name: ⛔ the CUDA binary must hold code for every card generation it was built for, and no system-scope atomics
         shell: bash
         working-directory: prover
         run: |
@@ -1089,6 +1089,12 @@ jobs:
           # exe held Pascal code only -- a cached library is not rebuilt when a flag changes. This
           # reads the fat binaries inside host.exe and fails unless EVERY finished GPU module
           # carries an image for each generation the build step said it was building.
+          #
+          # ⛔⛔ hazync#727: the same read also refuses SYSTEM-SCOPE ATOMICS. One `::cuda::atomic<T>`
+          # (default scope: system) in rv32im's lookup tables put EIATTR_ATOM_SYS_INSTR_OFFSETS in
+          # the sm_61 image, and the Windows driver then refused to LOAD the whole module on a GTX
+          # 1050 Ti (error 801, every kernel in it). sm_61 is in the --require list, and that image
+          # is the one that carries the marker -- sm_70+ images do not -- so it is checked here.
           [ -n "${GPU_ARCHS_BUILT:-}" ] || { echo "⛔ the build step recorded no generation list"; exit 1; }
           python3 ../scripts/gpu_code_archs.py target/release/host.exe --require "$GPU_ARCHS_BUILT"
 
