@@ -272,6 +272,16 @@ the file as before), `prover/host/src/prep.rs` and `trie.rs` (one call each).
   list, so the root of every height ≥ h is intact (a pin written late, lowered, or unreadable is reported as what
   really happened, not as what it asks for). **`roots.log` holds a height more than once** after a rewind (F logged
   again, in the new generation): the reader takes the NEWEST entry for a height.
+- **Re-review of 16.11.2026.** A rewind's re-tagged lists are named `r_<F>_<k>_<gen>.bin` (GEN makes them unique: two
+  rewinds to the same height no longer rename onto each other), and pending runs freed by blocks above the flushed
+  height (an apply and an undo in one session) are written the same way. Every re-tag is journaled first in
+  `retain/RETAG`; an open whose meta did not reach F renames them back and drops the new ones. A rewind's cut of
+  `roots.log` is journaled in `trie/ROOTS_CUT` (synced before the meta) and applied at the commit, or at the next open
+  if the meta reached its height; a crash before keeps the old branch's roots. A store with Z1's files but no `INTACT`
+  takes the highest height it ever logged or held as released (never claims more than it knows). After a rewind with
+  no pin, or a pin above F, INTACT over-states what was released (its high-water mark stays at the old branch's
+  height): safe for a reader, which then serves fewer heights until the chain passes it. `retain/RELEASE` changed format
+  at `e29e9d03` → `73e436d3` (list names instead of heights); no store ran `e29e9d03` (Z1 was never deployed).
 - **Not in Z1:** the read-only reader (`open_read`, `open_at`), `zync-serve` tip mode, the follower (Z2-Z5).
 
 **Tests** (`trie_store.rs`): a disk store pinned at 20 runs to 80 with a flush every 5 blocks and a reopen; the root
