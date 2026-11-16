@@ -21,6 +21,21 @@
 use std::process::Command;
 use swiftsync_verify::{identity_matches, parse_expect, ChainState};
 
+#[cfg(all(feature = "regtest-test", not(debug_assertions)))]
+compile_error!("zapp-common's `regtest-test` feature is for tests only: it never builds without debug assertions (a release build).");
+
+/// The explorer API for `--mempool` (`given` empty: mempool.space's for the network) or `--mempool-url <base>`. A network
+/// mempool.space does not serve (regtest, under a zAPP's tests-only `regtest-test` feature) has no default: asking
+/// mainnet's API about another chain would compare its block with the wrong network's.
+fn explorer_base(given: &str, network: &str) -> Result<String, String> {
+    match (given.is_empty(), network) {
+        (false, _) => Ok(given.trim_end_matches('/').to_string()),
+        (true, "mainnet") => Ok("https://mempool.space/api".into()),
+        (true, "signet") => Ok("https://mempool.space/signet/api".into()),
+        (true, n) => Err(format!("--mempool: mempool.space serves no {n:?} chain: give --bitcoin-cli (your node) or --mempool-url")),
+    }
+}
+
 /// curl's arguments before the URL: `-q` first (no ~/.curlrc: a config file could add a proxy, -k or another URL),
 /// `-g` (no {}[] globbing in the URL), fail on HTTP errors, quiet, 30 s, https only (redirects too), and `--` so the URL
 /// is never read as an option.
@@ -86,7 +101,11 @@ impl Identity {
         self.mempool.is_some() || self.bitcoin_cli.is_some()
     }
 
-    /// Asks every source given for the block at `height` of `network` ("mainnet" / "signet").
+    /// Asks every source given for the block at `height` of `network` ("mainnet" / "signet"; "regtest" under the tests-only
+    /// `regtest-test` feature, where `--mempool` has no default API and `--bitcoin-cli "bitcoin-cli -regtest ..."` is the
+    /// source). Nothing here asks a node `gettxout`; a lookup that does must pass `include_mempool=false`, or after a reorg
+    /// a coin the active chain holds unspent reads as spent by the disconnected branch's pooled transaction
+    /// (scripts/zapp-regtest/README.md).
     pub fn resolve(&self, network: &str, height: u32) -> Resolved {
         let mut r = Resolved::default();
         // (what said it, the height it is about, the hash)
@@ -97,9 +116,11 @@ impl Identity {
                 None => r.checks.push((false, format!("--expect {e:?}: want <height>:<64 hex digits>"))),
             }
         }
-        if let Some(base) = &self.mempool {
-            let base = if !base.is_empty() { base.trim_end_matches('/').to_string() }
-                       else if network == "signet" { "https://mempool.space/signet/api".into() } else { "https://mempool.space/api".into() };
+        let base = self.mempool.as_deref().map(|b| explorer_base(b, network));
+        if let Some(Err(e)) = &base {
+            r.checks.push((false, format!("{e}: chain identity not checked")));
+        }
+        if let Some(Ok(base)) = base {
             let url = format!("{base}/block-height/{height}");
             // `--` ends curl's options (a base starting with '-' is a URL, not a flag); https only, redirects included
             match Command::new("curl").args(CURL).arg(&url).output() {
@@ -166,8 +187,7 @@ impl Identity {
 pub fn tip_height(id: &Identity, network: &str) -> Result<(u32, Vec<String>), String> {
     let mut got: Vec<(String, u32)> = Vec::new();
     if let Some(base) = &id.mempool {
-        let base = if !base.is_empty() { base.trim_end_matches('/').to_string() }
-                   else if network == "signet" { "https://mempool.space/signet/api".into() } else { "https://mempool.space/api".into() };
+        let base = explorer_base(base, network)?;
         let url = format!("{base}/blocks/tip/height");
         let o = Command::new("curl").args(CURL).arg(&url).output().map_err(|e| format!("curl {url}: {e}"))?;
         let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -441,6 +461,40 @@ mod tests {
         assert_eq!(expect_at(&id, "mainnet", 7, None), (id.expect.clone(), Vec::new()));
         // block 200's chainwork: 201 blocks of difficulty 1, 0x100010001 each
         assert_eq!(display_hex(&cs.cum_work), format!("{:064x}", 201u128 * 0x1_0001_0001));
+    }
+
+    /// No explorer default for a network mempool.space does not serve: a FAIL line (resolve), an error (tip_height),
+    /// never mainnet's API asked about another chain. mainnet / signet and a given base are unchanged.
+    #[test]
+    fn no_explorer_default_for_regtest() {
+        assert_eq!(explorer_base("", "mainnet").unwrap(), "https://mempool.space/api");
+        assert_eq!(explorer_base("", "signet").unwrap(), "https://mempool.space/signet/api");
+        assert_eq!(explorer_base("https://x/api/", "regtest").unwrap(), "https://x/api");
+        let id = take_all(&["--mempool"]).unwrap();
+        let r = id.resolve("regtest", 112);
+        assert!(r.expect.is_none() && r.checks.len() == 1 && !r.checks[0].0 && r.checks[0].1.contains("serves no \"regtest\""), "{:?}", r.checks);
+        assert!(tip_height(&id, "regtest").unwrap_err().contains("serves no"));
+    }
+
+    /// A regtest node after the harness's reorg (scripts/zapp-regtest: b 113 the active tip, a 112 disconnected), as
+    /// `bitcoin-cli -regtest` answers: getblockhash 112 names b's block, so a's tip expected disagrees. The hashes are
+    /// Core's (scripts/zapp-regtest/oracle/snap_a112.json, blocks_b.json); this crate is on branches without that
+    /// directory, so they are written here and each zAPP's test-regtest.sh reads them from the oracle.
+    #[test]
+    fn regtest_node_names_the_active_chain() {
+        const A112: &str = "67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574";
+        const B112: &str = "4395baa44c0364ae2f6f415e439b4ce82a5d9e77cb9ad80bdf51eebb2406ce16";
+        let d = std::env::temp_dir().join(format!("zapp-common-test-rt-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let cli = d.join("cli");
+        std::fs::write(&cli, format!("#!/bin/sh\ncase \"$1\" in -regtest) shift;; esac\ncase \"$1\" in getblockhash) echo {B112};; \
+            getblockheader) echo '{{\"chainwork\": \"00000000000000000000000000000000000000000000000000000000000000e3\"}}';; esac\n")).unwrap();
+        let c = format!("sh {} -regtest", cli.to_str().unwrap());
+        let r = take_all(&["--bitcoin-cli", &c]).unwrap().resolve("regtest", 112);
+        assert_eq!(r.expect.as_deref(), Some(format!("112:{B112}").as_str()), "{:?}", r.checks);
+        let r = take_all(&["--bitcoin-cli", &c, "--expect", &format!("112:{A112}")]).unwrap().resolve("regtest", 112);
+        assert!(r.expect.is_none() && r.checks.iter().any(|c| !c.0 && c.1.contains("disagree")), "{:?}", r.checks);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
