@@ -210,7 +210,8 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
         let rl = d.join("roots.log");
         let above: Vec<u8> = std::fs::read(&rl).map(|b| b.chunks_exact(libzync::trie_store::ROOTS_REC)
             .filter(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) >= fork).flatten().copied().collect()).unwrap_or_default();
-        if !above.is_empty() {
+        // (a rerun keeps the first archive: by then the file may hold the new F entry too; re-review 16.11, L-c)
+        if !above.is_empty() && !std::path::Path::new(&format!("{out}/orphaned/{epoch}/roots.log")).exists() {
             let od = format!("{out}/orphaned/{epoch}");
             std::fs::create_dir_all(&od).unwrap_or_else(|e| panic!("{od}: {e}"));
             crate::lz::write_atomic(&format!("{od}/roots.log"), &above);

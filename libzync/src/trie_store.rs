@@ -47,6 +47,9 @@ pub const RECORD: usize = 64;
 static DISK_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(all(test, feature = "std"))]
+static TEST_CRASH_BEFORE_META: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "std"))]
 static TEST_CRASH_AFTER_META: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// One `trie/roots.log` entry (Z1): height u32 | block hash 32 | root reference u64 | root hash 32 | gen u32.
@@ -175,6 +178,9 @@ pub struct DiskArena {
     /// Z1: this opening's generation (`GEN`, bumped at every open and rewind) and the open `roots.log`
     gen: u32,
     roots: Option<std::fs::File>,
+    /// Z1: a cut of `roots.log` (a rewind's), applied at the next flush's commit with the entries logged after it
+    /// (re-review 16.11: a cut before the commit, then a crash, lost the old branch's roots)
+    cut: Option<(usize, Vec<[u8; ROOTS_REC]>)>,
 }
 
 /// A direct-mapped cache, in RAM, of the address trie's inner records (HAZYNC_TRIE_CACHE_MB, default 0: off).
@@ -245,7 +251,7 @@ impl DiskArena {
         let cap = file.metadata()?.len();
         let cache = core::cell::RefCell::new(RecCache::new(cache_mb));
         let mut a = DiskArena { dir: dir.to_path_buf(), file, map, cap, len: 0, free: Vec::new(), pending: Vec::new(), cache,
-                                pending_marks: Vec::new(), freeing: 0, retained: 0, released_hw: 0, gen: 0, roots: None };
+                                pending_marks: Vec::new(), freeing: 0, retained: 0, released_hw: 0, gen: 0, roots: None, cut: None };
         let meta = match std::fs::read(dir.join("meta")) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e),
@@ -280,11 +286,26 @@ impl DiskArena {
     fn open_z1(&mut self, f: u64) -> std::io::Result<()> {
         // what was released: INTACT's intact_from (written before each meta), else (a store from before it) everything
         // up to the flushed height
-        self.released_hw = std::fs::read_to_string(self.dir.join("INTACT")).ok()
-            .and_then(|x| x.split_whitespace().nth(1)?.parse().ok()).unwrap_or(f).max(0);
+        // A store without INTACT: before Z1 every flush released everything up to its height, so f. One that has Z1's
+        // files but lost INTACT cannot know: the highest height it ever logged or held a list for, which no release
+        // can have passed (re-review 16.11, L-d: never claim more than is known).
+        self.released_hw = match std::fs::read_to_string(self.dir.join("INTACT")).ok().and_then(|x| x.split_whitespace().nth(1)?.parse().ok()) {
+            Some(h) => h,
+            None => {
+                let logged = std::fs::read(self.dir.join("roots.log")).map(|b| b.chunks_exact(ROOTS_REC)
+                    .map(|c| u32::from_le_bytes(c[..4].try_into().unwrap()) as u64).max().unwrap_or(0)).unwrap_or(0);
+                let held = self.retain_files().iter().map(|(k, _)| *k).max().unwrap_or(0);
+                f.max(logged).max(held)
+            }
+        };
         let g = std::fs::read(self.dir.join("GEN")).ok().filter(|b| b.len() == 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
         self.gen = g.wrapping_add(1);
         self.write_gen()?;
+        // a rewind's cut of roots.log: applied if its flush committed (the meta at its height), else dropped
+        if let Ok(j) = std::fs::read(self.dir.join("ROOTS_CUT")) {
+            if j.len() >= 8 && u64::from_le_bytes(j[..8].try_into().unwrap()) == f { self.apply_roots_cut()?; }
+            else { std::fs::remove_file(self.dir.join("ROOTS_CUT"))?; }
+        }
         let rl = self.dir.join("roots.log");
         if let Ok(b) = std::fs::read(&rl) {
             let mut n = b.len() / ROOTS_REC;                          // a torn last entry goes too
@@ -306,10 +327,48 @@ impl DiskArena {
             std::fs::remove_file(&rel)?;
             std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all())?;
         }
+        // re-tags a crash left uncommitted (the meta never reached their height): undone, so the lists keep their own
+        // freeing heights and the slots of the lost interval are not held under a lower one (re-review 16.11, L-a)
+        let rt = self.dir.join("retain").join("RETAG");
+        if let Ok(t) = std::fs::read_to_string(&rt) {
+            let mut lines = t.lines();
+            let at: Option<u64> = lines.next().and_then(|l| l.split_whitespace().next()?.parse().ok());
+            if at != Some(f) {
+                let rdir = self.dir.join("retain");
+                let ok = |n: &str| n.starts_with("r_") && n.ends_with(".bin") && !n.contains('/');
+                for l in lines {
+                    let w: Vec<&str> = l.split_whitespace().collect();
+                    match w.as_slice() {
+                        ["rename", old, new] if ok(old) && ok(new) => { if rdir.join(new).exists() { std::fs::rename(rdir.join(new), rdir.join(old))?; } }
+                        ["created", new] if ok(new) => { let _ = std::fs::remove_file(rdir.join(new)); }
+                        _ => {}
+                    }
+                }
+            }
+            std::fs::remove_file(&rt)?;
+            std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all())?;
+        }
         for (k, p) in self.retain_files() {
             if k > f { std::fs::remove_file(&p)?; } else { self.retained += std::fs::metadata(&p)?.len() / 8; }
         }
         Ok(())
+    }
+
+    /// Apply `trie/ROOTS_CUT` (a committed rewind's cut of roots.log) and remove it.
+    fn apply_roots_cut(&self) -> std::io::Result<()> {
+        use std::io::Write as _;
+        let j = std::fs::read(self.dir.join("ROOTS_CUT"))?;
+        if j.len() >= 16 && (j.len() - 16) % ROOTS_REC == 0 {
+            let n = u64::from_le_bytes(j[8..16].try_into().unwrap());
+            let rl = self.dir.join("roots.log");
+            let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&rl)?;
+            f.set_len(n)?;
+            std::io::Seek::seek(&mut f, std::io::SeekFrom::End(0))?;
+            f.write_all(&j[16..])?;
+            f.sync_data()?;
+        }
+        std::fs::remove_file(self.dir.join("ROOTS_CUT"))?;
+        std::fs::File::open(&self.dir).and_then(|d| d.sync_all())
     }
 
     fn write_gen(&self) -> std::io::Result<()> {
@@ -402,6 +461,7 @@ impl Arena for DiskArena {
         b[36..44].copy_from_slice(&root.to_le_bytes());
         b[44..76].copy_from_slice(root_hash);
         b[76..80].copy_from_slice(&self.gen.to_le_bytes());
+        if let Some((_, after)) = &mut self.cut { after.push(b); return; }
         if self.roots.is_none() {
             self.roots = Some(std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("roots.log"))
                 .unwrap_or_else(|e| panic!("trie arena {}/roots.log: {e}", self.dir.display())));
@@ -410,6 +470,7 @@ impl Arena for DiskArena {
         self.roots.as_mut().unwrap().write_all(&b).unwrap_or_else(|e| panic!("trie arena {}/roots.log: {e}", self.dir.display()));
     }
     fn cut_roots_above(&mut self, height: u64) -> Vec<u8> {
+<<<<<<< HEAD
         self.roots = None;
         let rl = self.dir.join("roots.log");
         let Ok(b) = std::fs::read(&rl) else { return Vec::new() };
@@ -418,6 +479,16 @@ impl Arena for DiskArena {
         let f = std::fs::OpenOptions::new().write(true).open(&rl).unwrap_or_else(|e| panic!("{}: {e}", rl.display()));
         f.set_len((n * ROOTS_REC) as u64).and_then(|_| f.sync_data()).unwrap_or_else(|e| panic!("{}: {e}", rl.display()));
         b[n * ROOTS_REC..].to_vec()
+=======
+        // nothing changes on disk until the next flush commits (then the file is cut and the entries logged since are
+        // appended); a crash before keeps the old branch's roots, as the old meta keeps its trie
+        self.roots = None;
+        let b = std::fs::read(self.dir.join("roots.log")).unwrap_or_default();
+        let mut n = b.len() / ROOTS_REC;
+        while n > 0 && u32::from_le_bytes(b[(n - 1) * ROOTS_REC..(n - 1) * ROOTS_REC + 4].try_into().unwrap()) as u64 > height { n -= 1; }
+        self.cut = Some((n * ROOTS_REC, Vec::new()));
+        b[n * ROOTS_REC..b.len() / ROOTS_REC * ROOTS_REC].to_vec()
+>>>>>>> feat/reorg-p1-p2
     }
     fn bump_gen(&mut self) {
         self.gen = self.gen.wrapping_add(1);
@@ -474,15 +545,34 @@ impl Arena for DiskArena {
         // FORWARD applies freed: nodes of older roots, a pinned one among them (review 16.11, N1: releasing them broke a
         // root pinned below the fork). So they stay held, re-tagged to this height (`r_<height>_<k>.bin`, a rename: no
         // slot is ever in two lists), and come back once the pin passes it; the next open keeps them (tag <= flushed).
+        // The new names carry this opening's GEN, so a second rewind to the same height never renames onto the first's
+        // (re-review 16.11, M1). Pending runs freed by blocks above the height (an apply and an undo in one session,
+        // L-b) are written under such a name too. All of it is journaled in retain/RETAG first: an open whose meta did
+        // not reach this height (the flush never committed) renames them back and drops the new ones (L-a).
+        let rd = self.dir.join("retain");
         let mut lists = self.retain_files();
-        if release != u64::MAX && lists.iter().any(|(k, _)| *k > height && *k > release) {
-            for (k, p) in lists.iter_mut().filter(|(k, _)| *k > height && *k > release) {
-                let old = p.file_name().unwrap().to_string_lossy().into_owned();
-                let to = self.dir.join("retain").join(alloc::format!("r_{height}_{}", old.strip_prefix("r_").unwrap()));
-                std::fs::rename(&*p, &to).map_err(e)?;
-                (*k, *p) = (height, to);
+        let retag_lists: Vec<usize> = if release != u64::MAX { (0..lists.len()).filter(|&i| lists[i].0 > height && lists[i].0 > release).collect() } else { Vec::new() };
+        let retag_pending = keep.iter().any(|(k, _)| *k > height);
+        let mut retag = alloc::format!("{height} {}\n", self.gen);
+        if !retag_lists.is_empty() || retag_pending {
+            std::fs::create_dir_all(&rd).map_err(e)?;
+            for &i in &retag_lists {
+                let old = lists[i].1.file_name().unwrap().to_string_lossy().into_owned();
+                let new = alloc::format!("r_{height}_{}_{}.bin", old.strip_prefix("r_").unwrap().strip_suffix(".bin").unwrap(), self.gen);
+                retag.push_str(&alloc::format!("rename {old} {new}\n"));
             }
-            std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
+            for (k, _) in keep.iter().filter(|(k, _)| *k > height) { retag.push_str(&alloc::format!("created r_{height}_{k}_{}.bin\n", self.gen)); }
+            let mut f = std::fs::File::create(rd.join("RETAG")).map_err(e)?;
+            f.write_all(retag.as_bytes()).map_err(e)?;
+            f.sync_data().map_err(e)?;
+            std::fs::File::open(&rd).and_then(|d| d.sync_all()).map_err(e)?;
+            for &i in &retag_lists {
+                let old = lists[i].1.file_name().unwrap().to_string_lossy().into_owned();
+                let to = rd.join(alloc::format!("r_{height}_{}_{}.bin", old.strip_prefix("r_").unwrap().strip_suffix(".bin").unwrap(), self.gen));
+                std::fs::rename(&lists[i].1, &to).map_err(e)?;
+                lists[i] = (height, to);
+            }
+            std::fs::File::open(&rd).and_then(|d| d.sync_all()).map_err(e)?;
         }
         let back: Vec<(u64, std::path::PathBuf)> = lists.into_iter().filter(|(k, _)| *k <= release).collect();
         let mut back_n = 0u64;
@@ -497,7 +587,8 @@ impl Arena for DiskArena {
             let rd = self.dir.join("retain");
             std::fs::create_dir_all(&rd).map_err(e)?;
             for (k, slots) in &keep {
-                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(rd.join(alloc::format!("r_{k}.bin"))).map_err(e)?;
+                let name = if *k > height { alloc::format!("r_{height}_{k}_{}.bin", self.gen) } else { alloc::format!("r_{k}.bin") };
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(rd.join(name)).map_err(e)?;
                 let mut b = Vec::with_capacity(8 * slots.len());
                 for r in slots.iter() { b.extend_from_slice(&r.to_le_bytes()); }
                 f.write_all(&b).map_err(e)?;
@@ -546,6 +637,25 @@ impl Arena for DiskArena {
             std::fs::rename(&t, self.dir.join("INTACT")).map_err(e)?;
             std::fs::File::open(&self.dir).and_then(|d| d.sync_all()).map_err(e)?;
         }
+        // a pending roots.log cut, journaled in trie/ROOTS_CUT (height, kept length, the entries to append) before the
+        // meta: an open applies it iff the meta reached that height (the cut is part of this flush's commit)
+        if let Some((n, after)) = &self.cut {
+            let mut j = Vec::with_capacity(16 + ROOTS_REC * after.len());
+            j.extend_from_slice(&height.to_le_bytes());
+            j.extend_from_slice(&(*n as u64).to_le_bytes());
+            for b in after { j.extend_from_slice(b); }
+            let t = self.dir.join("ROOTS_CUT.tmp");
+            let mut f = std::fs::File::create(&t).map_err(e)?;
+            f.write_all(&j).map_err(e)?;
+            f.sync_data().map_err(e)?;
+            std::fs::rename(&t, self.dir.join("ROOTS_CUT")).map_err(e)?;
+            std::fs::File::open(&self.dir).and_then(|d| d.sync_all()).map_err(e)?;
+        }
+        // test hook: a crash after the re-tags and the lists, before the meta (re-review 16.11, L-a)
+        #[cfg(test)]
+        if TEST_CRASH_BEFORE_META.load(core::sync::atomic::Ordering::SeqCst) && self.dir.to_string_lossy().ends_with("-abandon") {
+            return Err("test: crashed before the meta".into());
+        }
         let tmp = self.dir.join("meta.tmp");
         let mut f = std::fs::File::create(&tmp).map_err(e)?;
         f.write_all(&b).map_err(e)?;
@@ -562,6 +672,16 @@ impl Arena for DiskArena {
         if !back.is_empty() {
             std::fs::remove_file(&rel).map_err(e)?;
             std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
+        }
+        // a pending cut of roots.log, committed with the meta: applied, then its journal goes
+        if self.cut.take().is_some() {
+            self.apply_roots_cut().map_err(e)?;
+            self.roots = None;
+        }
+        // the re-tags are committed by the meta just renamed
+        if rd.join("RETAG").exists() {
+            std::fs::remove_file(rd.join("RETAG")).map_err(e)?;
+            std::fs::File::open(&rd).and_then(|d| d.sync_all()).map_err(e)?;
         }
         self.retained = self.retained + kept_n - back_n;
         self.released_hw = hw;
@@ -1976,5 +2096,242 @@ mod tests {
             bad[i] ^= 0x01;
             assert!(TrieStore::from_bytes(&bad).is_err(), "byte {i} accepted");
         }
+    }
+}
+
+/// The 16.11 re-review's adversarial tests (rewinds, pins, crashes), kept as regression tests.
+
+#[cfg(all(test, feature = "std"))]
+mod adv {
+    use super::*;
+    use alloc::vec::Vec;
+    type Blk = (Vec<(Key, W)>, Vec<(Key, Option<W>, u64)>);
+    fn blocks(n: u32, seed: u64) -> Vec<Blk> {
+        let mut x = seed;
+        let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        let mut unspent: Vec<Key> = Vec::new();
+        (0..n).map(|blk| {
+            let mut marks = Vec::new();
+            for _ in 0..(rnd() % 6) {
+                if unspent.is_empty() { break; }
+                let k = unspent.swap_remove((rnd() % unspent.len() as u64) as usize);
+                marks.push((k, [blk, 1, 0, 0, 0, 0, 0, 0]));
+            }
+            let mut ins = Vec::new();
+            for _ in 0..(1 + rnd() % 8) {
+                let mut k = [0u8; 64];
+                for b in k.iter_mut() { *b = rnd() as u8; }
+                k[0] &= 0x07;
+                unspent.push(k);
+                ins.push((k, None, rnd() >> 30));
+            }
+            (marks, ins)
+        }).collect()
+    }
+    struct Sim { dir: std::path::PathBuf, chain: Vec<Blk>, flushed: usize, log: Vec<alloc::string::String> }
+    impl Sim {
+        fn new(tag: &str) -> Sim {
+            let dir = std::env::temp_dir().join(alloc::format!("hztrie-adv-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::env::set_var("HAZYNC_TRIE_RETAIN_MAX", "1000");
+            Sim { dir, chain: Vec::new(), flushed: 0, log: Vec::new() }
+        }
+        fn pin(&self, p: Option<u64>) { match p { Some(p) => std::fs::write(self.dir.join("PIN"), alloc::format!("{p}\n")).unwrap(), None => { let _ = std::fs::remove_file(self.dir.join("PIN")); } } }
+        fn snap(&self, h: usize) -> Vec<u8> { let mut m = TrieStore::new(true); for (mk, i) in &self.chain[..h] { m.apply(mk, i).unwrap(); } m.height = h as u64; m.to_bytes() }
+        fn model_nodes(&self, h: usize) -> u64 { let mut m = TrieStore::new(true); for (mk, i) in &self.chain[..h] { m.apply(mk, i).unwrap(); } m.nodes() }
+        /// one session: open, apply, flush every `every` (and at the end)
+        fn fwd(&mut self, bl: &[Blk], every: usize) {
+            let mut st = TrieStore::open_dir(&self.dir, true).unwrap();
+            assert_eq!(st.height as usize, self.chain.len());
+            for (n, (mk, i)) in bl.iter().enumerate() {
+                st.apply(mk, i).unwrap(); self.chain.push((mk.clone(), i.clone())); st.height = self.chain.len() as u64; st.log_root();
+                if (n + 1) % every == 0 || n + 1 == bl.len() { st.flush().unwrap(); self.flushed = self.chain.len(); }
+            }
+        }
+        /// as rewind.rs
+        fn rewind(&mut self, f: usize) -> Result<(), alloc::string::String> {
+            let mut st = TrieStore::open_dir(&self.dir, true).unwrap();
+            for (mk, i) in self.chain[f..].iter().rev() {
+                let km: Vec<Key> = mk.iter().map(|m| m.0).collect();
+                let ki: Vec<Key> = i.iter().map(|x| x.0).collect();
+                st.undo_recorded(&km, &ki, false).unwrap();
+            }
+            st.cut_roots_above(f as u64 - 1);
+            st.height = f as u64; st.log_root();
+            st.flush()?;
+            self.chain.truncate(f); self.flushed = f;
+            Ok(())
+        }
+        fn lists(&self) -> Vec<alloc::string::String> { let mut v: Vec<_> = std::fs::read_dir(self.dir.join("retain")).map(|it| it.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default(); v.sort(); v }
+        fn intact(&self) -> u64 { std::fs::read_to_string(self.dir.join("INTACT")).unwrap().split_whitespace().nth(1).unwrap().parse().unwrap() }
+        fn root_ok(&self, h: usize) -> bool {
+            let b = std::fs::read(self.dir.join("roots.log")).unwrap();
+            let Some(e) = b.chunks_exact(ROOTS_REC).filter(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) == h as u32).last() else { return false };
+            let r = u64::from_le_bytes(e[36..44].try_into().unwrap());
+            let want = self.snap(h);
+            let d = self.dir.clone();
+            std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| { let mut v = TrieStore::open_dir(&d, true).unwrap(); v.root = r; v.height = h as u64; v.to_bytes() })).is_ok_and(|b| b == want)
+        }
+        /// every height INTACT claims (>= intact_from, <= flushed) reads as the model's trie; returns the broken ones
+        fn check(&mut self, what: &str) -> Vec<usize> {
+            let from = self.intact() as usize;
+            let bad: Vec<usize> = (from.max(1)..=self.flushed).filter(|&h| !self.root_ok(h)).collect();
+            self.log.push(alloc::format!("{what}: INTACT {from} flushed {} lists {:?} broken {:?}", self.flushed, self.lists(), bad));
+            std::eprintln!("{}", self.log.last().unwrap());
+            bad
+        }
+        /// no pin, one more flush: nothing held, and the disk store has exactly the model's nodes (no leak, no double free)
+        fn leak(&mut self, extra: &[Blk]) -> (u64, u64, Vec<alloc::string::String>) {
+            self.pin(None);
+            self.fwd(extra, 1);
+            let st = TrieStore::open_dir(&self.dir, true).unwrap();
+            assert_eq!(st.to_bytes(), self.snap(self.chain.len()), "final content");
+            (st.nodes(), self.model_nodes(self.chain.len()), self.lists())
+        }
+    }
+    fn serial() -> std::sync::MutexGuard<'static, ()> { super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner()) }
+
+    /// two rewinds before the pin passes either: 20 -> 15, on to 25, -> 12, on; pin 10 throughout; then the pin moves on
+    #[test]
+    fn adv_two_rewinds_second_below_first() {
+        let _s = serial();
+        let mut s = Sim::new("two");
+        let a = blocks(20, 1); let b = blocks(10, 2); let c = blocks(30, 3); let d = blocks(3, 4);
+        s.fwd(&a[..10], 5); s.pin(Some(10)); s.fwd(&a[10..], 5);
+        assert!(s.check("at 20").is_empty());
+        s.rewind(15).unwrap(); assert!(s.check("rewound 15").is_empty()); assert!(s.root_ok(10));
+        s.fwd(&b, 5); assert!(s.check("at 25").is_empty()); assert!(s.root_ok(10));
+        s.rewind(12).unwrap(); assert!(s.check("rewound 12").is_empty()); assert!(s.root_ok(10));
+        s.fwd(&c[..10], 3); assert!(s.check("at 22").is_empty()); assert!(s.root_ok(10) && s.root_ok(11) && s.root_ok(12));
+        s.pin(Some(11)); s.fwd(&c[10..12], 1); assert!(s.check("pin 11").is_empty()); assert!(s.root_ok(11));
+        s.pin(Some(13)); s.fwd(&c[12..14], 1); assert!(s.check("pin 13").is_empty()); assert!(s.root_ok(13));
+        s.pin(Some(20)); s.fwd(&c[14..], 4); assert!(s.check("pin 20").is_empty()); assert!(s.root_ok(20));
+        let (disk, model, lists) = s.leak(&d);
+        assert_eq!((disk, lists.len()), (model, 0), "leak: disk {disk} model {model} lists {lists:?}");
+    }
+
+    /// the SAME fork height twice (a tip that flaps): the second rewind's r_<F>_<k> names collide with the first's
+    #[test]
+    fn adv_same_fork_twice() {
+        let _s = serial();
+        let mut s = Sim::new("same");
+        let a = blocks(20, 1); let b = blocks(5, 2); let c = blocks(20, 3); let d = blocks(3, 4);
+        s.fwd(&a[..10], 5); s.pin(Some(10)); s.fwd(&a[10..], 5);
+        s.rewind(15).unwrap(); let l1 = s.lists();
+        let sz1: u64 = l1.iter().map(|n| std::fs::metadata(s.dir.join("retain").join(n)).unwrap().len()).sum();
+        s.fwd(&b, 5);
+        let before: u64 = s.lists().iter().map(|n| std::fs::metadata(s.dir.join("retain").join(n)).unwrap().len()).sum();
+        s.rewind(15).unwrap();
+        let after: u64 = s.lists().iter().map(|n| std::fs::metadata(s.dir.join("retain").join(n)).unwrap().len()).sum();
+        std::eprintln!("same fork twice: lists after 1st {l1:?} ({sz1} B); before 2nd rewind {before} B, after {after} B; {:?}", s.lists());
+        assert!(s.check("rewound 15 twice").is_empty()); assert!(s.root_ok(10));
+        s.fwd(&c, 5); assert!(s.check("on").is_empty()); assert!(s.root_ok(10));
+        let (disk, model, lists) = s.leak(&d);
+        assert_eq!(before, after, "held slots lost by the rename ({} slots)", (before - after) / 8);
+        assert_eq!((disk, lists.len()), (model, 0), "leak: disk {disk} model {model} lists {lists:?}");
+    }
+
+    /// pin AT the fork, and pin between the fork and the old tip
+    #[test]
+    fn adv_pin_at_or_above_fork() {
+        let _s = serial();
+        for pin in [15u64, 18] {
+            let mut s = Sim::new("pinF");
+            let a = blocks(20, 1); let b = blocks(20, 2); let d = blocks(3, 4);
+            s.fwd(&a[..10], 5); s.pin(Some(pin)); s.fwd(&a[10..], 5);
+            s.rewind(15).unwrap(); assert!(s.check("rewound 15").is_empty(), "pin {pin}"); assert!(s.root_ok(15));
+            s.fwd(&b, 5); assert!(s.check("on").is_empty(), "pin {pin}");
+            if pin == 15 { assert!(s.root_ok(15), "pin 15: the new root of 15"); }
+            let (disk, model, lists) = s.leak(&d);
+            assert_eq!((disk, lists.len()), (model, 0), "pin {pin} leak: disk {disk} model {model} lists {lists:?}");
+        }
+    }
+
+    /// a crash mid-rename at the rewind's flush (some r_<k> already r_<F>_<k>, the meta still at A), then the rewind reruns
+    #[test]
+    fn adv_crash_mid_rename_then_rerun() {
+        let _s = serial();
+        let mut s = Sim::new("midren");
+        let a = blocks(20, 1); let b = blocks(20, 2); let d = blocks(3, 4);
+        s.fwd(&a[..10], 5); s.pin(Some(10)); s.fwd(&a[10..], 5);
+        for k in [16, 18, 20] { let _ = std::fs::rename(s.dir.join(alloc::format!("retain/r_{k}.bin")), s.dir.join(alloc::format!("retain/r_15_{k}.bin"))); }
+        s.rewind(15).unwrap(); assert!(s.check("rerun").is_empty()); assert!(s.root_ok(10));
+        s.fwd(&b, 5); assert!(s.check("on").is_empty()); assert!(s.root_ok(10));
+        let (disk, model, lists) = s.leak(&d);
+        assert_eq!((disk, lists.len()), (model, 0), "leak: disk {disk} model {model} lists {lists:?}");
+    }
+
+    /// the same crash, but the rewind is NOT rerun (abandoned: the old branch won after all) and the pin moves to 17
+    #[test]
+    fn adv_crash_mid_rename_then_abandoned() {
+        let _s = serial();
+        let mut s = Sim::new("abandon");
+        let a = blocks(20, 1); let b = blocks(20, 2);
+        s.fwd(&a[..10], 5); s.pin(Some(10)); s.fwd(&a[10..], 5);
+        // the crash, as it happens now: the rewind's flush re-tags its lists (journaled in retain/RETAG) and dies before the
+        // meta. (The reviewer's version renamed r_<k> by hand, as the pre-RETAG code left it.)
+        TEST_CRASH_BEFORE_META.store(true, core::sync::atomic::Ordering::SeqCst);
+        let saved = s.chain.clone();
+        let r = s.rewind(15);
+        TEST_CRASH_BEFORE_META.store(false, core::sync::atomic::Ordering::SeqCst);
+        assert!(r.is_err() && s.dir.join("retain/RETAG").exists(), "the simulated crash, with its journal");
+        s.chain = saved; s.flushed = 20;                         // the rewind is abandoned: the old branch stays
+        s.pin(Some(17));
+        s.fwd(&b, 5);
+        let bad = s.check("abandoned, pin 17");
+        assert!(bad.is_empty() && s.root_ok(17), "INTACT {} but broken {bad:?}; root 17 ok {}", s.intact(), s.root_ok(17));
+    }
+
+    /// a crash right after the meta's rename at a rewind's flush that releases the re-tagged lists (pin at the fork)
+    #[test]
+    fn adv_crash_after_meta_at_rewind_release() {
+        let _s = serial();
+        let mut s = Sim::new("x-z1-h2");
+        let a = blocks(20, 1); let b = blocks(20, 2); let d = blocks(3, 4);
+        s.fwd(&a[..10], 5); s.pin(Some(15)); s.fwd(&a[10..], 5);
+        TEST_CRASH_AFTER_META.store(true, core::sync::atomic::Ordering::SeqCst);
+        let r = s.rewind(15);
+        TEST_CRASH_AFTER_META.store(false, core::sync::atomic::Ordering::SeqCst);
+        assert!(r.is_err());
+        std::eprintln!("after the crash: {:?}", s.lists());
+        s.chain.truncate(15); s.flushed = 15;
+        s.fwd(&b, 5); assert!(s.check("on").is_empty());
+        let (disk, model, lists) = s.leak(&d);
+        assert_eq!((disk, lists.len()), (model, 0), "leak: disk {disk} model {model} lists {lists:?}");
+    }
+
+    /// apply and undo in ONE session (no flush between), flush at the fork, reopen
+    #[test]
+    fn adv_apply_and_undo_in_one_session() {
+        let _s = serial();
+        let mut s = Sim::new("insess");
+        let a = blocks(20, 1); let b = blocks(20, 2); let d = blocks(3, 4);
+        s.fwd(&a[..10], 5); s.pin(Some(10)); s.fwd(&a[10..15], 5);
+        {
+            let mut st = TrieStore::open_dir(&s.dir, true).unwrap();
+            for (n, (mk, i)) in a[15..].iter().enumerate() { st.apply(mk, i).unwrap(); st.height = 16 + n as u64; st.log_root(); }
+            for (mk, i) in a[15..].iter().rev() { st.undo(mk, i).unwrap(); }
+            st.cut_roots_above(14); st.height = 15; st.log_root(); st.flush().unwrap();
+        }
+        std::eprintln!("in-session: lists {:?}", s.lists());
+        assert!(s.check("in-session undo").is_empty()); assert!(s.root_ok(10));
+        s.fwd(&b, 5); assert!(s.check("on").is_empty()); assert!(s.root_ok(10));
+        let (disk, model, lists) = s.leak(&d);
+        assert_eq!((disk, lists.len()), (model, 0), "leak: disk {disk} model {model} lists {lists:?}");
+    }
+
+    /// the pin removed just before a rewind: INTACT afterwards
+    #[test]
+    fn adv_no_pin_at_rewind_intact() {
+        let _s = serial();
+        let mut s = Sim::new("nopin");
+        let a = blocks(20, 1); let b = blocks(20, 2);
+        s.fwd(&a[..10], 5); s.pin(Some(10)); s.fwd(&a[10..], 5);
+        s.pin(None);
+        s.rewind(15).unwrap(); s.check("no pin, rewound 15");
+        let i = s.intact();
+        s.pin(Some(16)); s.fwd(&b[..3], 1); let bad = s.check("pin 16 at 18");
+        std::eprintln!("INTACT after a pin-less rewind to 15: {i}; later {} ; root 16 ok {} broken {bad:?}", s.intact(), s.root_ok(16));
+        assert!(bad.is_empty());
     }
 }
