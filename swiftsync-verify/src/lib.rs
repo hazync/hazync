@@ -385,9 +385,6 @@ pub struct Report {
     /// The first height whose block leaf commits an undo hash in the verified chain (docs/libzync/UNDO.md), from the
     /// image that verified it and the lineage its proof commits; [`pin::NO_UNDO`] if none. Fact checks take it.
     pub undo_from: u32,
-    /// The image the receipt was checked against: the one asked for, or the earlier built-in image of its chain that the
-    /// receipt names ([`earlier_image_named_by`]). A caller that reports which image proved a chain reads it here.
-    pub image: &'static Image,
 }
 
 impl Report {
@@ -453,8 +450,7 @@ pub fn verify(inp: &Inputs) -> Report {
             }
         }
     }
-    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO,
-                           image: inp.image };
+    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
     let m = inp.image.method_id();
     if let Err(e) = receipt_kind(inp.receipt) {
         rep.check(false, format!("the receipt file is a single succinct or Groth16 proof ({e})"));

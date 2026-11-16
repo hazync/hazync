@@ -382,10 +382,23 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
         rep.statement = Some(DepositStatement {
             txid: ask.txid, height: d.height, block_hash, output, tip_height, tip_hash, tip_work,
             validated_through: cs.height, confirmations, validated_confirmations, block_fully_validated: full,
-            core_image: cr.image.method_id_hex.to_string(), headers_image: hs.as_ref().map(|_| headers_image.to_string()),
+            core_image: core_image_used(&core_bytes, core_image).method_id_hex.to_string(), headers_image: hs.as_ref().map(|_| headers_image.to_string()),
         });
     }
     rep
+}
+
+/// The core image the receipt was checked against: the one asked for, or the earlier built-in image of its chain that the
+/// receipt names. The same substitution `swiftsync_verify::verify` makes (it asks `earlier_image_named_by` under the same
+/// receipt_kind gate), asked of the core library here rather than read back from a check string, so the core's Report
+/// stays as it is (a zAPP never changes the core verifier).
+fn core_image_used(receipt: &[u8], asked: &'static Image) -> &'static Image {
+    if swiftsync_verify::receipt_kind(receipt).is_err() {
+        return asked;
+    }
+    bincode::deserialize::<risc0_zkvm::Receipt>(receipt).ok()
+        .and_then(|r| swiftsync_verify::earlier_image_named_by(&r, asked))
+        .unwrap_or(asked)
 }
 
 /// Build a bundle for transaction `txid` (internal order) of `raw_block` (as `getblock <hash> 0` prints it, the block
