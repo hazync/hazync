@@ -13,7 +13,7 @@ node test-deposit.mjs ../target/release/zapp-deposit             # 14 cases on b
 
 | | |
 |---|---|
-| size | 1,193,703 bytes raw, 340,904 gzipped |
-| sha256 (this commit, `./build.sh`) | `b574ef4e442c8c03e5d300d4096ef0d563263505c11493a022906409ba22201b` (headers image `de54b94f`; Rust 1.99.0, default stage path, 16.11.2026, on a box whose build reproduces the core's `622ce430…`; `min_validated_depth` defaults to 1, the deposit's own block fully validated; before it `b2fd059f…`, the module no longer linking zapps/common) |
+| size | 1,196,407 bytes raw, 342,384 gzipped |
+| sha256 (this commit, `./build.sh`) | `5017298f7e5bb8c456282a7703a7432c6e176a335ca766abf1cb139c93c008d9` (headers image `de54b94f`; Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, fixed stage path; laptop and hazync-coord, 16.11.2026; with the review fixes of 16.11.2026 (zapps/corecheck's core check, the headers zAPP's gated verdict); before them `b574ef4e…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-deposit.mjs` 14/14, run by `../test.sh` in CI's zapps job |
