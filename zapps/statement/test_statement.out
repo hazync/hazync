@@ -28,11 +28,11 @@ exit=1 PASS
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == /tmp/zapp-statement-target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t4.json (expect exit 1)
-  [FAIL] statement: entry 0 (script 00143fdfd78f6b0d417ea2adf917bdbe90c477dc3e87): BIP-322 simple: Witness empty
+  [FAIL] statement: entry 0 (script 001491f9c85f8fccd18ad8ca97da7706a443b8020376): BIP-322 simple: Witness empty
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == /tmp/zapp-statement-target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t4b.json (expect exit 1)
-  [FAIL] statement: entry 1 (script 2103b03fb664eae59656e07fb9c50daae8d5e78608991318c907c49cb6bd16b3f62fac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
+  [FAIL] statement: entry 1 (script 2102e30b5ab5f24250e698caf4383085cf8cff9d9ea052e5b4a82bd8fef9982da436ac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == /tmp/zapp-statement-target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t5.json (expect exit 1)
@@ -110,7 +110,7 @@ exit=1 PASS
 ZAPP_STATEMENT_FAIL: 2 check(s) failed
 exit=1 PASS
 == env RISC0_DEV_MODE=1 /tmp/zapp-statement-target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
-ZAPP_STATEMENT_FAIL: panicked at ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been disabled by feature flag.
+ZAPP_STATEMENT_FAIL: panicked at /home/defenwycke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been disabled by feature flag.
 exit=1 PASS
 == /tmp/zapp-statement-target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c_flipped.rcpt <tmp>/s.json (expect exit 1)
   [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): verification indicates proof is invalid
@@ -131,7 +131,7 @@ PASS  age checked (6 behind, 6 allowed)  demo (want demo): statement: 4 script(s
 PASS  too old (7 behind, 6 allowed)      fail (want fail): block 200 is 7 blocks behind the network's tip 207, more than the 6 allowed (--max-age)
 PASS  max age without a tip              fail (want fail): max age given without the network's tip height
 PASS  a purpose with a trailing space    fail (want fail): purpose: no leading or trailing spaces
-PASS  swapped signatures                 fail (want fail): entry 0 (script 00143fdfd78f6b0d417ea2adf917bdbe90c477dc3e87): BIP-322 simple: Witness empty
+PASS  swapped signatures                 fail (want fail): entry 0 (script 001491f9c85f8fccd18ad8ca97da7706a443b8020376): BIP-322 simple: Witness empty
 PASS  dev-mode FakeReceipt               fail (want fail)
 PASS  frame: the glue's bytes            demo (want demo)
 PASS  frame: a byte past the end         fail (want fail)

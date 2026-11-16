@@ -174,9 +174,9 @@ In a browser, the page loads `zapp-statement.wasm` with `zapp-statement.js` (`lo
 receipt and statement are the page's, never the sender's (tipHeight: the network's tip as the page fetched it).
 `age_checked` in the answer is false until maxAge and tipHeight are given. Only the statement page loads it; the core `hazync-verify.wasm` is unchanged. Built
 byte-reproducibly by `zapps/statement/wasm/build.sh` (the core's flags, `scripts/wasm-build.sh`: Rust 1.99.0, staged
-sources, remapped paths): 2,486,202 bytes raw, sha256
-`510c205bae7f23fa043bbf5abc43805bbcbd06927570fc16c88d98b3ccb96f15` (two builds equal, 16.11.2026; the module no longer
-links zapps/common, its CLI is the crate `zapps/statement/cli`; the sha `zapps/statement/test.sh` checks is the one in
+sources, remapped paths; it compiles C, secp256k1-sys, so in the pinned container `reproduce/wasm.Dockerfile`, clang
+18.1.3): 2,485,794 bytes raw, sha256 `5a284b26d11d1b6c2e9c95243dc63c8c816bc4530324a979225af291b64e61be` (the same on a
+laptop and on hazync-coord, 16.11.2026; with a host clang 14 it was `510c205b…`; the module no longer links zapps/common, its CLI is the crate `zapps/statement/cli`; the sha `zapps/statement/test.sh` checks is the one in
 `wasm/README.md`; before the review fixes of 15.11.2026 `01408a2c…`).
 
 The trie snapshot (`state_<H>.trie`) comes from a proving run at H; a mainnet holder needs a fact server that
