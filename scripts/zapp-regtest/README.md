@@ -79,6 +79,15 @@ output). At 105 the repeated coinbase is one coin in Core's set (`gettxout` heig
 the committed chain and reproduces all 115 block files and 16 oracle files byte for byte; its control (one oracle value
 changed by 1 sat, SHA256SUMS updated so only the replay can catch it) fails.
 
+## Receipts (`receipts/`, the GPU batch's keep set, MEASURED 16.11.2026)
+
+The real proofs of `gpu/RESULT_gpu_eb2cd424.txt` (RISC0_DEV_MODE unset, one RTX PRO 6000), as plan §3.2 keeps them,
+1.4 MB, every file in `receipts/SHA256SUMS` (`cd receipts && sha256sum -c SHA256SUMS`): `a/block_<104|105|110|112>.rcpt`
+and `b/block_113.rcpt` (succinct core receipts, image `eb2cd424…`), each run's `history.bin`, and `state_<h>.json` /
+`.coinlog` / `.trie` at those heights; `verify_a.log` / `verify_b.log` (the host's `libzync-verify`, LIBZYNC_VERIFY_OK
+both), `times.tsv`, `anchor_effective.json`, `card.txt`, `method_id.txt`. The zAPPs' OK-verdict tests read them with the
+oracle snapshots above as the independent answer (each zAPP's `test.sh`, the `regtest-test` feature below).
+
 ## What the `regtest-test` feature in `zapps/corecheck` must do (not built here)
 
 `zapps/corecheck` and `zapps/common` are being changed elsewhere, so this is the specification, not the code. Every
