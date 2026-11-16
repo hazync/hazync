@@ -9,6 +9,10 @@
 # include <cuda_runtime.h>
 #endif
 
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+
 #include "thread_pool_t.hpp"
 #include "exception.cuh"
 #include "slice_t.hpp"
@@ -54,27 +58,118 @@ struct launch_params_t {
 
 };
 
+// HAZYNC_727_NOPOOL — hazync#631 / #727. sppark allocates with the stream-ordered allocator
+// (cudaMallocAsync/cudaFreeAsync) without asking whether the device offers memory pools; where it
+// does not, both return cudaErrorNotSupported. The answer is asked ONCE PER CUDA DEVICE and cached,
+// so an allocation and its free can never disagree about which allocator made the pointer. Where
+// pools exist (every Volta+ card the fleet runs) the calls are exactly the original ones.
+// HAZYNC_NO_MEMPOOL=1 forces the synchronous fallback, so it can be exercised on a card with pools.
+// ⚠ A FAILED QUERY IS NOT "NO POOLS" (review, 11-16): it keeps the stream-ordered allocator, which is
+// what upstream always used, and says so loudly. Reading a failed query as "no pools" would silently
+// move a Volta+ card off the allocator it has always run on.
+inline bool hazync_pools_supported(int cuda_dev)
+{
+    static std::atomic<int> cache[64];             // 0 unknown, 1 pools, 2 no pools
+    const bool cacheable = cuda_dev >= 0 && cuda_dev < 64;
+    if (cacheable) {
+        int c = cache[cuda_dev].load(std::memory_order_relaxed);
+        if (c) return c == 1;
+    }
+    int v = 0;
+    cudaError_t q = cudaDeviceGetAttribute(&v, cudaDevAttrMemoryPoolsSupported, cuda_dev);
+    if (q != cudaSuccess) {
+        (void)cudaGetLastError();                  // do not leave the failed query pending
+        std::fprintf(stderr, "sppark: could not ask CUDA device %d whether it has memory pools (%s); "
+                             "keeping the stream-ordered allocator (hazync#727)\n",
+                     cuda_dev, cudaGetErrorString(q));
+        v = 1;
+    }
+    bool forced = false;
+    if (const char* s = std::getenv("HAZYNC_NO_MEMPOOL"))
+        if (s[0] && s[0] != '0') { v = 0; forced = true; }
+    int want = v ? 1 : 2;
+    if (!cacheable)
+        return want == 1;
+    int expected = 0;
+    if (!cache[cuda_dev].compare_exchange_strong(expected, want))
+        return expected == 1;                      // another thread answered first: use its answer
+    if (want == 2)
+        std::fprintf(stderr, "sppark: CUDA device %d %s; using synchronous cudaMalloc/cudaFree "
+                             "(hazync#727)\n", cuda_dev,
+                     forced ? "told HAZYNC_NO_MEMPOOL" : "has no memory pools");
+    return want == 1;
+}
+
+// The fallback's free (hazync#727): on the pointer's OWN device, after a DEVICE-wide sync.
+// ⚠ Device-wide, not this stream: sppark hands one buffer to several streams of a device (the
+// flipflop streams), and on an exception path a dev_ptr_t is destroyed before the gpu.sync() that
+// would have waited for them -- cudaFree must not release memory another stream is still using.
+// Only the no-pools fallback comes here; the pooled path is cudaFreeAsync, exactly as upstream.
+inline cudaError_t hazync_sync_free(int cuda_dev, void* d_ptr) noexcept
+{
+    int cur = cuda_dev;
+    (void)cudaGetDevice(&cur);
+    if (cur != cuda_dev) (void)cudaSetDevice(cuda_dev);
+    cudaError_t e = cudaDeviceSynchronize();
+    cudaError_t f = cudaFree(d_ptr);
+    if (cur != cuda_dev) (void)cudaSetDevice(cur);
+    return e != cudaSuccess ? e : f;
+}
+
 class stream_t {
     cudaStream_t stream;
     const int gpu_id;
+    int cuda_dev = 0;   // the CUDA device this stream belongs to (current at creation)
+    bool pooled = true; // hazync#727: whether Dmalloc/Dfree use the stream-ordered allocator
 public:
     stream_t(int id) : gpu_id(id)
-    {   CUDA_OK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));   }
+    {   CUDA_OK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        // ⚠ gpu_id is sppark's INDEX into its list of accepted cards, not a CUDA ordinal; a
+        // stream belongs to the device current when it was created (gpus_t sets it first).
+        CUDA_OK(cudaGetDevice(&cuda_dev));
+        pooled = hazync_pools_supported(cuda_dev);
+    }
     ~stream_t()
     {   (void)cudaStreamDestroy(stream);   }
     inline operator decltype(stream)() const    { return stream; }
     inline int id() const                       { return gpu_id; }
     inline operator int() const                 { return gpu_id; }
+    inline bool pools() const                   { return pooled; }
+    inline int device() const                   { return cuda_dev; }
     inline int sm_count() const
     {   return gpu_props(gpu_id).multiProcessorCount;   }
 
     inline void* Dmalloc(size_t sz) const
     {   void *d_ptr;
-        CUDA_OK(cudaMallocAsync(&d_ptr, sz, stream));
+        if (pooled) {
+            CUDA_OK(cudaMallocAsync(&d_ptr, sz, stream));
+        } else {
+            // Not stream-ordered: wait for queued work, and allocate on THIS stream's device.
+            CUDA_OK(cudaStreamSynchronize(stream));
+            int cur;
+            CUDA_OK(cudaGetDevice(&cur));
+            if (cur != cuda_dev) CUDA_OK(cudaSetDevice(cuda_dev));
+            cudaError_t e = cudaMalloc(&d_ptr, sz);
+            if (cur != cuda_dev) (void)cudaSetDevice(cur);
+            CUDA_OK(e);
+        }
         return d_ptr;
     }
     inline void Dfree(void* d_ptr) const
-    {   CUDA_OK(cudaFreeAsync(d_ptr, stream));   }
+    {   if (pooled) {
+            CUDA_OK(cudaFreeAsync(d_ptr, stream));
+        } else {
+            CUDA_OK(hazync_sync_free(cuda_dev, d_ptr));
+        }
+    }
+    // The same pairing for destructors, which must not throw.
+    inline void Dfree_nothrow(void* d_ptr) const
+    {   if (pooled) {
+            (void)cudaFreeAsync(d_ptr, stream);
+        } else {
+            (void)hazync_sync_free(cuda_dev, d_ptr);
+        }
+    }
 
     template<typename T>
     inline void bzero(T* dst, size_t nelems) const
@@ -323,6 +418,10 @@ template<typename T> class dev_ptr_t {
     T* d_ptr;
     size_t d_len_owned;
     cudaStream_t stream;
+    // hazync#727: which allocator made d_ptr. The destructor used to choose by `stream` alone,
+    // which was right only while every streamed allocation came from cudaMallocAsync.
+    bool d_pooled = false;
+    int d_dev = -1;     // the stream's CUDA device, for the fallback's free
 public:
     dev_ptr_t(size_t nelems) : d_ptr(nullptr), d_len_owned(0), stream(nullptr)
     {
@@ -336,7 +435,9 @@ public:
     {
         if (nelems) {
             size_t n = (nelems+WARP_SZ-1) & ((size_t)0-WARP_SZ);
-            CUDA_OK(cudaMallocAsync(&d_ptr, n * sizeof(T), s));
+            d_pooled = s.pools();
+            d_dev = s.device();
+            d_ptr = static_cast<T*>(s.Dmalloc(n * sizeof(T)));
             d_len_owned = (nelems << 1) | 1;
         }
     }
@@ -348,8 +449,9 @@ public:
     ~dev_ptr_t()
     {
         if (d_ptr != nullptr && (d_len_owned&1)) {
-            if (stream) (void)cudaFreeAsync((void*)d_ptr, stream);
-            else        (void)cudaFree((void*)d_ptr);
+            if (stream && d_pooled) (void)cudaFreeAsync((void*)d_ptr, stream);
+            else if (stream)        (void)hazync_sync_free(d_dev, (void*)d_ptr);
+            else                    (void)cudaFree((void*)d_ptr);   // upstream's stream-less path
         }
     }
 

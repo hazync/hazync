@@ -6,7 +6,7 @@ Wants=libzync-board-fetch.service
 [Service]
 Type=simple
 Environment=LZ_ROOT=/srv/bulk/libzync-board LZ_HI=974936
-Environment=HAZYNC_PREP_SAVE_EVERY=1000 HAZYNC_PREP_REPORT_EVERY=10000 HAZYNC_PREP_MIN_FREE_GB=250
+Environment=HAZYNC_PREP_SAVE_EVERY=250 HAZYNC_PREP_REPORT_EVERY=10000 HAZYNC_PREP_MIN_FREE_GB=250
 # at most this many leaf bundles waiting to be proved: the pass pauses until the board's pruner removes proven ones
 Environment=HAZYNC_PREP_LEAF_WINDOW=5000
 ExecStart=/bin/sh -c 'exec "$LZ_ROOT/bin/libzync-prep-run.sh"'
@@ -17,8 +17,12 @@ RestartSec=30
 # the main (paper) prep run on this box comes first
 Nice=19
 IOSchedulingClass=idle
+# ⚠ The free-slot lists grow with height (docs/libzync/PREP_MEMORY.md): even at SAVE_EVERY 250 this cap needs
+# raising before the pass nears ~640k (ESTIMATE), or prep is killed at every save point for ever.
 MemoryHigh=10G
 MemoryMax=14G
+# if the box runs out, kill the pass first: it resumes from its newest save point by itself
+OOMScoreAdjust=500
 
 [Install]
 WantedBy=multi-user.target
