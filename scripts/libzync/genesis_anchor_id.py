@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""genesis_anchor_id.py <mainnet|signet> <METHOD_ID hex> [state.json] -- the anchor_id a genesis-anchored libzync
+"""genesis_anchor_id.py <mainnet|signet|regtest> <METHOD_ID hex> [state.json] -- the anchor_id a genesis-anchored libzync
 proof must commit (SWIFTSYNC_PROOFS.md §5 step 3), computed from the spec text alone: the genesis ChainState's
 field values, risc0's serde word encoding, then double SHA-256.
 
@@ -14,6 +14,8 @@ SMT_DEPTH = 256
 NETS = {  # genesis hash (display order), time, nBits
     "mainnet": ("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", 1231006505, 0x1D00FFFF),
     "signet": ("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6", 1598918400, 0x1E0377AE),
+    # Core's regtest genesis (chainparams.cpp CRegTestParams); the zAPP regtest harness (scripts/zapp-regtest)
+    "regtest": ("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", 1296688602, 0x207FFFFF),
 }
 
 
