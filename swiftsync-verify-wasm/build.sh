@@ -26,9 +26,9 @@ STAGE=/tmp/swiftsync-wasm-build
 # the stage path reached them through cargo's -C metadata hash of path dependencies, and a host clang reached a C
 # graph's. So the build always runs in that container, at this script's FIXED stage path, as the caller's uid: the
 # checkout mounted READ-ONLY (a build script or proc-macro cannot write into it), the output directory writable.
-# The host needs docker, cargo >= 1.78 (it reads the v4 Cargo.lock to see whether the graph compiles C), python3, git
-# and the network (the image's first build; cargo's registry in the container). Not a wasm32 Rust toolchain: the
-# container has its own. x86_64 only (the image and its rustup are linux/amd64).
+# The host needs docker, cargo >= 1.78 (it reads the v4 Cargo.lock to see whether the graph compiles C), python3 and
+# the network (the image's first build; cargo's registry in the container); git, in a git checkout, compares the staged
+# files with the commit. Not a wasm32 Rust toolchain: the container has its own. x86_64 only (linux/amd64).
 TOOLCHAIN=${HAZYNC_WASM_TOOLCHAIN:-1.99.0}
 OUT=$REPO/$CRATE/target/wasm32-unknown-unknown/release
 if [ -n "${HAZYNC_WASM_IN_CONTAINER:-}" ] && [ ! -f /etc/hazync-wasm-build-container ]; then
@@ -46,13 +46,20 @@ if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
         # scripts/test-wasm-build-cwd.sh: how the script finds itself and its checkout, from any cwd; nothing is built
         echo "dry run: $CRATE in $REPO, re-run in the container as bash $SELF"; exit 0
     fi
-    for t in docker cargo python3 git; do
-        command -v "$t" >/dev/null || { echo "$0: the WASM build needs $t on this machine (docker runs the pinned container; cargo >= 1.78 and python3 read the crate graph; git checks the tree), and it is not installed" >&2; exit 1; }
+    for t in docker cargo python3; do
+        command -v "$t" >/dev/null || { echo "$0: the WASM build needs $t on this machine (docker runs the pinned container; cargo >= 1.78 and python3 read the crate graph), and it is not installed" >&2; exit 1; }
     done
     # The bytes are those of the files staged: a README pins "this commit", so say loudly when they are not the commit's
     # (HAZYNC_WASM_REQUIRE_CLEAN=1 refuses instead).
-    # shellcheck disable=SC2086 # STAGED is a list of repo paths
-    DIRTY=$(git -C "$REPO" status --porcelain --untracked-files=all -- $STAGED)
+    if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        # a source tarball: nothing to compare the staged files with
+        [ -z "${HAZYNC_WASM_REQUIRE_CLEAN:-}" ] || { echo "$0: $REPO is not a git checkout (HAZYNC_WASM_REQUIRE_CLEAN): cannot check the sources" >&2; exit 1; }
+        echo "⚠ $CRATE: $REPO is not a git checkout; the .wasm is of these files, whatever commit they came from" >&2
+        DIRTY=
+    else
+        # shellcheck disable=SC2086 # STAGED is a list of repo paths
+        DIRTY=$(git -C "$REPO" status --porcelain --untracked-files=all -- $STAGED)
+    fi
     if [ -n "$DIRTY" ]; then
         [ -z "${HAZYNC_WASM_REQUIRE_CLEAN:-}" ] || { echo "$0: the staged sources differ from the commit (HAZYNC_WASM_REQUIRE_CLEAN):" >&2; echo "$DIRTY" >&2; exit 1; }
         echo "⚠ $CRATE: the staged sources differ from commit $(git -C "$REPO" rev-parse --short HEAD); the .wasm is of THESE files, not of the commit a README pins:" >&2

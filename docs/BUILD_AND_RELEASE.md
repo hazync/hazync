@@ -225,7 +225,7 @@ The browser verifier is reproducible only with the same Rust (now pinned, in the
 **1.99.0** gives the published `hazync-verify.wasm` (`446fdaeb…`); 1.97.1 gives other bytes. Build it with
 `swiftsync-verify-wasm/build.sh`, which pins Rust 1.99.0 itself since 2026-11-12 (installing it if missing), so the
 machine's default Rust no longer matters. Since 16.11.2026 it builds inside the pinned container `reproduce/wasm.Dockerfile`; the host needs docker, cargo >= 1.78
-(to read the v4 Cargo.lock), python3, git and the network, x86_64 only, and no wasm32 Rust of its own. The stage
+(to read the v4 Cargo.lock), python3 and the network, x86_64 only, and no wasm32 Rust of its own. The stage
 path had reached the bytes through cargo's `-C metadata` hash of the path dependencies (other stages gave `7d79f68c…`
 and `05754e5f…`), and a host C compiler reaches a zAPP module whose graph compiles C. In the container the stage path,
 the Rust toolchain and (where needed) clang are the same on every machine; `SWIFTSYNC_WASM_STAGE` is refused.
