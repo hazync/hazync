@@ -7,7 +7,8 @@
 //! Every field, after the guest (prover/methods/guest/src/main.rs `aggregate`, agg_lite.rs `validate_block_lite`):
 //!   - created coins: the coinbase's outputs (none at the BIP30-unspendable 91,722 / 91,812), then every other
 //!     transaction's, in block order, unspendable outputs (OP_RETURN, script over 10,000 bytes) skipped; the leaf
-//!     binds the parent's MTP and the coinbase / BIP30-tracked flags the block file carries (as the guest's witness);
+//!     binds the parent's MTP and the coinbase / BIP30-tracked flags, the latter derived as the guest does (tracked.rs:
+//!     the block files carry no tracked bit);
 //!   - a spend of a coin this block creates (same outpoint): in-block, never in the log; any other: external, a flip
 //!     in the coin log at the coin's position, spender (height, tx position, input index within the tx);
 //!   - appends: created coins not spent in the block; utxo_value += their values - the external coins' values;
@@ -180,6 +181,13 @@ fn phase(i: usize, t: std::time::Instant) { PHASES.lock().unwrap()[i] += t.elaps
 pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt, ecmh: &mut Ecmh, leaf: bool) -> (ChainState, Option<LeafBundle>) {
     use crate::{arr, build_header_v, hx, median_u32, normalize_host, out_leaf_of, out_spendable, rev};
     let height = j["height"].as_u64().unwrap() as u32;
+    // The BIP30-tracked flags as the guest derives them (tracked.rs): the fetcher's files carry none. Everything below
+    // reads them from the annotated JSON, and a leaf bundle carries that JSON, so the leaf prover's witness has them too.
+    let grandfathered = methods::NETWORK == "mainnet" && (height == 91_842 || height == 91_880);
+    let (annotated, tracked) = crate::tracked::annotate(j, smt, net().bip34_height, grandfathered, &|_, _, l| crate::lz::cl_has(l));
+    // every tracked transaction, for a diff against reproduce/libzync-tracked.json (173 on mainnet to 974,136)
+    for t in &tracked { let mut d = *t; d.reverse(); println!("PREP_TRACKED h={height} txid={}", crate::hex(&d)); }
+    let j = &annotated;
     assert_eq!(height, prev.height + 1, "prep: block {height} after state {}", prev.height);
     let bits = j["bits"].as_u64().unwrap() as u32;
     let time = j["time"].as_u64().unwrap() as u32;
@@ -293,7 +301,6 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
     let tracked_new: Vec<([u8; 32], u32)> = ptxs.iter().filter(|p| tx_flags(p) != 0)
         .map(|p| (p.txid, p.tx.output.iter().filter(|o| out_spendable(o.script_pubkey.as_bytes())).count() as u32))
         .filter(|t| t.1 > 0).collect();
-    let grandfathered = methods::NETWORK == "mainnet" && (height == 91_842 || height == 91_880);
     let in_smt_root = smt.root();
     let smt_w = crate::smt_advance_ex(smt, cb_txid, crate::cb_spendable_outputs(&coinbase), &cb_spends, grandfathered, &spend_tracked, &tracked_new);
 
@@ -414,6 +421,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 undo-data commitment, which this host cannot continue. Carry the run over with libzync-reforest first \
                 (docs/libzync/UNDO.md §8)", forest_mark_path(anchor_path));
     }
+    // a state at or above the first tracked coin continues only if a host that derives the tracked flags wrote it
+    if anchor_path != "genesis" { crate::tracked::check_flags_mark(anchor_path, prev.height); }
     if cont {
         let was = (prev.self_id, prev.lineage, prev.profile);
         crate::stamp(&mut prev);
@@ -512,6 +521,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             crate::lz::write_atomic(&format!("{out}/state_{h}.json"), json.as_bytes());
             // right after the state, before the stores: every save point the runner takes as complete has it
             if crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), h) { write_forest_mark(&format!("{out}/state_{h}.json")); }
+            crate::lz::write_atomic(&crate::tracked::flags_mark_path(&format!("{out}/state_{h}.json")), crate::tracked::FLAGS_MARK.as_bytes());
         }
         else { std::fs::write(format!("{out}/state_{h}.json"), json).unwrap(); }
         phase(5, t);

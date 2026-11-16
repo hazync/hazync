@@ -501,6 +501,10 @@ systemctl enable --now hazync-check-board-progress.timer
 # assets were serving HTTP 200 again long before anyone noticed; the only thing still holding the bot
 # down was the file. This check reports the file and deliberately never clears it: clearing the
 # sponsor bot's breaker resumes real spending, which is a human's call.
+# Since 11-16 a TRANSIENT failure before anything is rented (timeout, refused connection, 5xx) exits 75
+# and does NOT latch; it is counted in /var/lib/hazync/sponsor-bot/transient.json and latches only after
+# 6 runs in a row over >= 25 min (or 12 regardless). A clean run, the latch itself, or 15 min without a
+# failure reset that file, so clearing .failed is still the only manual step.
 install -m 755 coordinator/deploy/hazync-check-breakers.sh /usr/local/sbin/hazync-check-breakers
 install -m 644 coordinator/deploy/hazync-check-breakers.{service,timer} /etc/systemd/system/
 systemctl daemon-reload
