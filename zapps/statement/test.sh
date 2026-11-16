@@ -5,10 +5,12 @@
 # statement through its own .wasm (wasm/test-statement.mjs, from test_statement.sh).
 set -euo pipefail
 cd "$(dirname "$0")"
-T=${CARGO_TARGET_DIR:-$PWD/target}
+. ../../scripts/zapp-checks.sh
+T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 cargo test --release --manifest-path ./Cargo.toml
 cargo test --release --manifest-path ./wasm/Cargo.toml
-cargo build --release --manifest-path ./Cargo.toml --bin zapp-statement
+cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-statement
 ./wasm/build.sh
+wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_statement_wasm.wasm wasm/README.md
 STATEMENT_WASM=wasm/target/wasm32-unknown-unknown/release/zapp_statement_wasm.wasm ./test_statement.sh "$T/release/zapp-statement"
 echo "ZAPP_STATEMENT_TESTS OK"

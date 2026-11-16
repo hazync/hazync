@@ -3,4 +3,4 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 exec ../../../scripts/wasm-build.sh zapps/statement/wasm "${ZAPP_STATEMENT_WASM_STAGE:-/tmp/zapp-statement-wasm-build}" zapp_statement_wasm.wasm \
-    zapps/statement zapps/common swiftsync-verify libzync
+    zapps/statement swiftsync-verify libzync
