@@ -354,10 +354,11 @@ class App(tk.Tk):
         """Start and Stop say what they will do, and only one of them is ever live."""
         if not hasattr(self, "start_btn"):
             return
-        running = bool(self.workers) or bool(self._respawns) or self._armed
         starting = bool(getattr(self, "_starting", False))
+        # review L4: while Start's checks run, Stop is shown and cancels them
+        running = bool(self.workers) or bool(self._respawns) or self._armed or starting
         self.start_btn.configure(text=self.START_TEXT.get(self.mode.get(), "Start"),
-                                 state="normal" if (self._setup_ok and not running and not starting) else "disabled")
+                                 state="normal" if (self._setup_ok and not running) else "disabled")
         self.stop_btn.configure(state="normal" if running else "disabled")
         if running and not self.stop_btn.winfo_manager():
             self.start_btn.pack_forget()
@@ -1590,13 +1591,15 @@ class App(tk.Tk):
         self.v_who.set(self._who)
         return True
 
-    def _start(self, host=None):
-        """Start. `host`: a prover for THIS session only (the CPU fallback), leaving the saved choice alone."""
-        if getattr(self, "_closing", False) or not self._ask_name_first():
+    def _start(self, host=None, scheduled=False):
+        """Start. `host`: a prover for THIS session only (the CPU fallback), leaving the saved choice alone.
+        `scheduled`: the proving window just opened (#725) — the same checks, off this thread, but no dialogs: nobody
+        is at the PC, so a problem switches the schedule off and says why in the feed (review of 59575b40, M2)."""
+        if getattr(self, "_closing", False) or getattr(self, "_starting", False):
             return
-        if getattr(self, "_starting", False):
+        if not scheduled and not self._ask_name_first():
             return
-        if self.mode.get() == "range" and not self.range_var.get().strip():
+        if not scheduled and self.mode.get() == "range" and not self.range_var.get().strip():
             messagebox.showerror("No range", "Enter a range, or let the coordinator choose.")
             return
         # ⛔ OFF THE WINDOW'S THREAD (review of c881d582, M2). The checks run the prover (`method-id`, up to 120 s),
@@ -1610,9 +1613,10 @@ class App(tk.Tk):
         ident = self.ident_var.get() or None
         coord = self.coord_var.get().strip() or api.DEFAULT_COORD
         self._start_host = host
+        token = self._start_token = object()
 
         def go():
-            out = {"host": host}
+            out = {"host": host, "token": token, "scheduled": scheduled}
             try:
                 out["info"] = supervisor.classify_host(host)
                 # ⚠ "not known to be the CPU build", so a prover this cannot classify is still given cards.
@@ -1643,6 +1647,8 @@ class App(tk.Tk):
         """Offer the processor for this session, in plain words (review of a04038ce, M2). True if accepted and
         started. ⚠ NOT saved: a person who installs the driver tomorrow gets the graphics card back without
         having to find a setting; Advanced → Options makes the CPU build permanent for those who want it."""
+        if getattr(self, "_closing", False):
+            return False        # review L3: scheduled with after(0); the window may be closing by then
         cpu = self._cpu_host()
         if no_driver:
             head = ("No NVIDIA graphics driver was found on this PC.\n\n"
@@ -1665,18 +1671,40 @@ class App(tk.Tk):
 
     def _start_checked(self, out):
         """Start, on the window's thread, once _start's checks are back."""
+        if out.get("token") in getattr(self, "_cancelled_starts", set()):
+            self._cancelled_starts.discard(out["token"])
+            return      # Stop was pressed while these checks ran (review L4)
+        if out.get("token") is not getattr(self, "_start_token", None):
+            return      # a later Start's checks are the ones that count
         self._starting = False
+        scheduled = out.get("scheduled", False)
         self._sync_buttons()
         self._home_refresh()
         if getattr(self, "_closing", False):
             return      # review L9: the window is closing; nothing starts behind it
         if out.get("error"):
+            if scheduled:
+                self._disarm("The schedule is off: the checks before proving failed: " + out["error"])
+                return
             messagebox.showerror("Cannot start", "The checks before starting failed: " + out["error"])
             return
-        if out["host"] != getattr(self, "_start_host", out["host"]):
-            return      # another Start began meanwhile: these answers are about another file
         host = out["host"]
         info, cuda, found = out["info"], out["cuda"], out["found"]
+        if found:
+            self._last_cards = list(found)      # what this PC had the last time anyone could ask (_launch)
+        if scheduled:
+            # nobody at the PC: a problem switches the schedule off and is said in the feed, never a dialog
+            loadable = not info.get("needs_driver") or info.get("driver_present", True)
+            why = cards.cuda_unusable(found, self._card_floor(found), loadable) if cuda else None
+            problem = ("the prover is no longer there: " + host if not Path(host).is_file() else
+                       "the graphics card cannot run the prover: " + why if why else
+                       out["fatal"][0].detail if out["fatal"] else "")
+            if problem:
+                self._disarm("The schedule is off: " + problem)
+                return
+            self._run_kind = info.get("kind")
+            self._launch(info, cuda, found)
+            return
         # ⛔ THE REMEMBERED PROVER IS GONE (review L7): a deleted download folder, an uninstalled copy. Offer the one
         # that fits this machine instead of failing on "no such file".
         if not Path(host).is_file():
@@ -1719,6 +1747,7 @@ class App(tk.Tk):
             if c.name == "board" and not c.ok:
                 self._feed("Board check: " + c.detail)
         self._run_host = host
+        self._run_kind = info.get("kind")
         self._cpu_offered = False
         self._arm_or_launch(info, cuda, found)
 
@@ -1755,6 +1784,15 @@ class App(tk.Tk):
             # ⚠ "not known to be the CPU build", so a prover this cannot classify is still given cards.
             cuda = info.get("kind") != "cpu"
             found = supervisor.gpu_cards() if cuda else []
+        last = getattr(self, "_last_cards", [])
+        if cuda and not found and len(cards.usable(last, self._card_floor(last))) >= 2:
+            # ⚠ review M2: nvidia-smi did not answer this time on a PC known to have several cards. One unpinned worker
+            # would ignore the cards switched off and leave the rest idle, so ask again instead.
+            self._feed("Could not ask which graphics cards this PC has (nvidia-smi did not answer): "
+                       + ("trying again in a moment" if self._armed else "press Start again"), "bad")
+            self._sync_buttons()
+            self._home_refresh()
+            return
         mode = self.mode.get()
         extra = ()
         job = "run"
@@ -1860,6 +1898,8 @@ class App(tk.Tk):
             child.destroy()
         self._card_vars = {}
         self._found_cards = list(found or [])
+        if found:
+            self._last_cards = list(found)
         floor = self._card_floor(found)
         ok = cards.usable(found, floor)
         if len(ok) < 2:
@@ -1944,6 +1984,7 @@ class App(tk.Tk):
         self._say(f"[{job} {i}] started (pid {p.pid}) — log {log_path}"
                   + (f" — on {label} (card {card['index']}, segment size "
                      f"{env.get('HAZYNC_SEG_PO2', 'default')})" if card else ""))
+        w.drained = False
         threading.Thread(target=self._pump, args=(w,), daemon=True).start()
 
     def _card_live(self):
@@ -1999,6 +2040,13 @@ class App(tk.Tk):
                                 self.q.put(("sys", f"  ⇒ {why}"))
         except Exception as e:
             self.q.put(("sys", f"[{w.job} {w.index}] stopped reading output: {e}"))
+        finally:
+            # review of 59575b40, L2: results are FIFO, so when this arrives every line before it has been applied —
+            # including "claimed block N", which decides whether a stopped worker's block is handed back
+            self.results.put((self._pump_done, w))
+
+    def _pump_done(self, w):
+        w.drained = True
 
     def _on_worker_line(self, arg):
         """One line from a prover, on the main thread: keep the Home page current."""
@@ -2036,12 +2084,20 @@ class App(tk.Tk):
                 self._feed(why, "bad")
         self._home_refresh()
 
+    # an exited worker is reaped once its output is all applied (_pump_done), or this long after it exited if a child
+    # still holds its stdout open (a prover that outlived it) — never left unreaped
+    DRAIN_WAIT_S = 5
+
     def _reap(self):
         gpu_failed = False
         for w in list(self.workers):
             rc = w.popen.poll()
             if rc is None:
                 continue
+            if not getattr(w, "drained", True):
+                w.exited_at = getattr(w, "exited_at", None) or time.time()
+                if time.time() - w.exited_at < self.DRAIN_WAIT_S:
+                    continue
             self.workers.remove(w)
             if w.stopping:
                 self._say(f"[{w.job} {w.index}] stopped")
@@ -2085,15 +2141,19 @@ class App(tk.Tk):
                 self._say("⛔ not restarting — and do not just press Start again: a box that cannot "
                           "prove claims blocks and abandons them, which holds up everyone else.",
                           "cuda-error")
-                # #725: nor may the schedule start it again when the next tick or window comes round
-                self._disarm("The schedule is off until this is looked at")
+                # #725: nor may the schedule start it again when the next tick or window comes round.
+                # ⚠ review of 59575b40, M3: only once NOTHING else runs. Other cards still proving keep the window's
+                # gate (no new block past its end) and keep-awake; disarming under them let them prove past the
+                # window for ever and let the PC sleep mid-block. The stopped card is not started again either way.
+                if not any(not o.stopping for o in self.workers):
+                    self._disarm("The schedule is off until this is looked at")
             else:
                 self._again(w, kind)
         # ⛔ str(), because ttk returns a Tcl_Obj that never compares equal to a string. Without it
         # this condition silently never fires and Start never comes back. tk returns a plain str,
         # which is why the mistake is invisible in a quick test.
         if (gpu_failed and not self.workers and not self._respawns and not getattr(self, "_cpu_offered", False)
-                and supervisor.classify_host(getattr(self, "_run_host", "") or self.host_var.get()).get("kind") != "cpu"
+                and getattr(self, "_run_kind", "") != "cpu"
                 and self._cpu_host()):
             # review L6: the graphics card failed WHILE proving and nothing else runs: offer the processor, as Start does
             self._cpu_offered = True
@@ -2268,12 +2328,15 @@ class App(tk.Tk):
             if window.is_open(now):
                 if self._skip_until and now >= self._skip_until:
                     self._skip_until = None           # a new window: ask again
-                if (not self.workers and not self._respawns and not self._skip_until and self._setup_ok):
+                if (not self.workers and not self._respawns and not self._skip_until and self._setup_ok
+                        and not getattr(self, "_starting", False)):
                     if self.mode.get() == "range" and not self.range_var.get().strip():
                         self._disarm("The schedule is off: no range is entered")   # never a dialog per tick
                     else:
                         self._feed("The proving window is open")
-                        self._launch()
+                        # ⛔ review of 59575b40, M2: the same off-thread checks as Start (classify, nvidia-smi, the
+                        # board, the card verdict), on the prover THIS session runs, not _launch on the Tk thread
+                        self._start(host=getattr(self, "_run_host", "") or None, scheduled=True)
             else:
                 self._skip_until = None
                 if self._respawns:
@@ -2319,7 +2382,16 @@ class App(tk.Tk):
         """Hand the block a stopped worker held back to the board, off the main thread (#725)."""
         cmd, env, block = self._release_args(w)
         w.activity.holding = None
+        # ⚠ review of 59575b40, L1: the board releases by key and block, not by claim, so a release sent after a worker
+        # of this same key has taken the block again (Start pressed straight after Stop: the board hands a key its own
+        # claim back) would free THAT live claim. Never release a block another of our workers holds now.
+        if any(o is not w and str(o.activity.holding) == str(block) for o in self.workers):
+            self._say(f"[release {block}] not sent: another worker here holds that block again")
+            return
         self._releases = getattr(self, "_releases", 0) + 1      # closing waits for these (_close_poll)
+        # review of 59575b40, M1: each release in flight gets its OWN time (the worker's release call allows 90 s),
+        # counted from when it was sent, not from the moment the window began closing
+        self._releasing = dict(getattr(self, "_releasing", {}), **{str(block): time.time() + self.RELEASE_WAIT_S})
 
         def go():
             rc, out = supervisor._run(cmd, env=env, timeout=90)
@@ -2329,6 +2401,7 @@ class App(tk.Tk):
     def _after_release(self, args):
         self._releases = max(0, getattr(self, "_releases", 1) - 1)
         block, rc, out = args
+        getattr(self, "_releasing", {}).pop(str(block), None)
         ok, msg = supervisor.release_verdict(rc, out)
         self._say(f"[release {block}] {msg}")
         if not ok and "not your claim" in msg:
@@ -2436,6 +2509,10 @@ class App(tk.Tk):
         self._say(f"[schedule] wake timer: {msg}" + (f" — {warn}" if warn else ""))
 
     def _stop(self):
+        if getattr(self, "_starting", False):
+            self._cancelled_starts = getattr(self, "_cancelled_starts", set()) | {self._start_token}
+            self._starting = False
+            self._feed("Start cancelled")
         if self._armed:
             self._armed = False
             self._feed("Schedule off until you press Start again")
@@ -2457,7 +2534,8 @@ class App(tk.Tk):
         self.status.configure(text="stopping…")
         self._apply_awake()
 
-    CLOSE_WAIT_S = 20
+    CLOSE_WAIT_S = 20       # for the workers to stop (stop_tree: list the tree, taskkill, wait)
+    RELEASE_WAIT_S = 95     # for each block hand-back, from when it is sent (the release call's own timeout is 90 s)
 
     def _on_close(self):
         if getattr(self, "_closing", False):
@@ -2478,19 +2556,29 @@ class App(tk.Tk):
     def _close_poll(self):
         # ⚠ self.workers, not "still running": an exited worker not yet REAPED has not had its block released yet
         busy = getattr(self, "_kills", 0) > 0 or bool(self.workers) or getattr(self, "_releases", 0) > 0
-        if not busy or time.time() >= self._close_until:
+        # the stop budget, extended while a hand-back is in flight (each release has its own, bounded, RELEASE_WAIT_S)
+        until = max([self._close_until] + list(getattr(self, "_releasing", {}).values()))
+        if not busy or time.time() >= until:
             self.status.configure(text="closing…")
         else:
             self.status.configure(text="handing claimed blocks back and stopping…")
-        if busy and time.time() < self._close_until:
+        if busy and time.time() < until:
             self.after(200, self._close_poll)
             return
         left = list(getattr(self, "_survivors", []))
         left += [(w.popen.pid, f"{w.job} worker") for w in self.workers if w.popen.poll() is None]
+        # review M1: name every block not handed back — its release still running, or its worker never reaped
+        unreleased = sorted(set(getattr(self, "_releasing", {}))
+                            | {str(w.activity.holding) for w in self.workers if w.activity.holding})
+        msg = []
         if left:
-            messagebox.showwarning("Still running",
-                                   "These did not stop: " + ", ".join(f"{n} (PID {p})" for p, n in left)
-                                   + ". End them in Task Manager.")
+            msg.append("These did not stop: " + ", ".join(f"{n} (PID {p})" for p, n in left)
+                       + ". End them in Task Manager.")
+        if unreleased:
+            msg.append("Not handed back to the board yet: block " + ", ".join(activity.pretty(str(b)) for b in unreleased)
+                       + ". The board gives a block nobody is proving to someone else within the hour.")
+        if msg:
+            messagebox.showwarning("Still running", "\n\n".join(msg))
         winpower.keep_awake(False)
         self.destroy()
 

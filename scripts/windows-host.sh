@@ -15,20 +15,27 @@
 # WHERE IT COMES FROM. A Windows CUDA host can only be built on Windows (MSVC + the CUDA toolkit);
 # `.github/workflows/windows-prove.yml`'s `build-cuda` job does that on windows-2022, embedding the
 # published libzync guest that the same run's `guest` job built in reproduce/libzync.Dockerfile, and
-# uploads `host.exe` + `cudart64_12.dll` as the artifact `hazync-host-windows-x86_64-cuda`. `fetch`
-# takes that artifact from a run of THE RELEASE COMMIT whose `build-cuda` job succeeded. Dispatch it
-# before releasing (artifacts expire after 14 days):
+# uploads `host.exe` + `cudart64_12.dll` as the artifact `hazync-host-windows-x86_64-cuda`; its `prove` job
+# (windows-2022, +crt-static) builds the CPU host.exe, runs it, and uploads `hazync-host-windows-x86_64-cpu`.
+# `fetch` takes each artifact from a RELEASE BUILD run of THE RELEASE COMMIT whose job for that kind (`build-cuda`
+# or `prove`) succeeded. Dispatch it before releasing, without skip_cpu_prove (artifacts expire after 14 days):
 #
 #     gh workflow run windows-prove.yml --ref main -f release_build=true
 #
 # WHAT IS CHECKED, with no GPU and no Windows (a CUDA-linked exe imports nvcuda.dll, so it cannot even
 # load without an NVIDIA driver; scripts/embedded_guest_sha.py explains):
-#   * the zip holds exactly host.exe and the cudart64_*.dll runtime, flat, nothing else;
-#   * host.exe embeds the published mainnet guest byte for byte (sha256 against reproduce/LIBZYNC_IDS,
-#     the size taken from <guest-elf>, itself checked against the same pin);
-#   * host.exe carries the published image id ([u32;8] little-endian, as on Linux; MSVC keeps 2 copies).
-# What it CANNOT check is `host.exe method-id`: scripts/release.sh requires that from an operator who
-# ran it on a Windows NVIDIA machine (HAZYNC_ATTEST_hazync_host_x86_64_windows_cuda_zip=<id>).
+#   * CUDA: the zip holds exactly host.exe and the cudart64_*.dll runtime, flat, nothing else; its imports are
+#     reported (it needs the Visual C++ runtime, which the installer puts beside it); and its GPU modules carry no
+#     system-scope atomics (scripts/gpu_code_archs.py --require 61, hazync#727: the Windows driver refuses to load
+#     such a module on a Pascal card);
+#   * CPU: the zip holds host.exe alone; it names no nvcuda.dll and imports only DLLs Windows ships
+#     (scripts/pe_imports.py --cpu: no Visual C++ runtime); it has no GPU modules, so the #727 check does not apply;
+#   * both: host.exe embeds the published mainnet guest byte for byte (sha256 against reproduce/LIBZYNC_IDS,
+#     the size taken from <guest-elf>, itself checked against the same pin), and carries the published image id
+#     ([u32;8] little-endian, as on Linux; MSVC keeps 2 copies).
+# What it CANNOT check is `host.exe method-id` here. For the CPU host the `prove` job ran it on Windows; for the CUDA
+# host scripts/release.sh reports the bytes check and prefers an operator's attestation from a Windows NVIDIA
+# machine (HAZYNC_ATTEST_hazync_host_x86_64_windows_cuda_zip=<id>).
 #
 # THE ZIP. host.exe and the DLL keep their own names (Windows finds a DLL beside an exe by name), and
 # they sit at the top level so "Extract All" gives a folder the Windows GUI searches for host.exe.
@@ -105,9 +112,9 @@ case "${1:-}" in
     SHA="${2:?usage: $0 fetch <commit-sha> <out.zip> <guest-elf>}"; OUT="${3:?out.zip}"; ELF="${4:?guest-elf}"
     [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || die "want a full 40-hex commit sha, got '$SHA'"
     kind_of "$OUT"
-    # Newest first. A run counts only when ITS build-cuda job succeeded and the artifact is unexpired;
-    # the run's own conclusion is not enough (a failed CPU prove job would hide a good CUDA build, and
-    # the artifact is uploaded `if: always()`, so it can exist for a failed build).
+    # Newest first. A run counts only when the job for THIS kind ($JOB: build-cuda or prove) succeeded and the
+    # artifact is unexpired; the run's own conclusion is not enough (a failed job of the other kind would hide a good
+    # build, and the artifacts are uploaded `if: always()`, so one can exist for a failed build).
     run_id=""
     for r in $(gh run list -R "$REPO_SLUG" --workflow windows-prove.yml --limit 50 --json databaseId,headSha \
                  --jq "[.[]|select(.headSha==\"$SHA\")|.databaseId][]" 2>/dev/null); do

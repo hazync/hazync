@@ -446,6 +446,11 @@ jobs:
           # left (nothing is claimed), and Stop hands the claimed block back.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py --control
+          # ⭐ AND WHERE THE TWO MEET (review of 59575b40): a window opening after the CPU fallback (checked off the Tk
+          # thread), closing that waits for a slow block hand-back and names one it could not do, one card's error not
+          # disarming the others, Stop during Start's checks, and no unpinned worker when nvidia-smi is silent once.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py --control
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
