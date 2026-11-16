@@ -35,11 +35,13 @@ UtreexoStatement {
 ```
 
 The Utreexo fields are exactly Floresta's `AssumeUtreexoValue` (block_hash, height, roots, leaves):
-`zapp-utreexo verify --floresta` prints that struct as Floresta's chainparams source writes it, for roots that are not
-Empty. ⚠ 32 zero bytes here MEANS `BitcoinNodeHash::Empty`. Loaded as the hash of zeros
+`zapp-utreexo verify --floresta` prints that struct as Floresta's chainparams source writes it (`acchashes![…]`), and
+with an Empty root an explicit `vec![…, BitcoinNodeHash::Empty, …]` instead (`acchashes!` takes hex literals only).
+The CLI's `--json` and the WASM's JSON write an Empty root as the string `"empty"` (rustreexo's Display). ⚠ 32 zero
+bytes here MEANS `BitcoinNodeHash::Empty`. Loaded as the hash of zeros
 (`BitcoinNodeHash::from([0u8; 32])` or `from_str("00…00")` give `Some(zeros)`), it is not Empty to rustreexo, and the
 next add would give wrong roots. An Empty root can occur (a small tree whose leaves were all created before H and spent
-by H); a consumer must map zeros to `Empty`, and the `--floresta` output must say `Empty` explicitly.
+by H); a consumer must map zeros (and `"empty"`) to `Empty`.
 
 ## 2. Compatibility with Floresta (read at Floresta `8399792e`, rustreexo 0.7.0 `b73cbac1`, the version Floresta pins)
 
@@ -179,7 +181,15 @@ What the host supplies: the block bytes, the tracked positions, each coin's stat
 verifies under the trusted utreexo id, `done = 1`, `self_id` = that id, one root per set bit of `leaves`, zero
 lineage, the core image, profile, lineage and anchor are the network's trusted ones (swiftsync-verify's `Image` table,
 used as a library), `max_time <= now + 7200`; OK additionally needs **block H from the node's own header chain**
-(`--expect-at`), the core tip too when T > H (`--expect-tip`), and minimum work plus the checkpoint; otherwise DEMO.
+(`--expect-at`), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H), and
+minimum work plus the checkpoint; otherwise DEMO. The receipt is decoded with a 16 MiB bincode limit (the core
+verifier's own decode, swiftsync-verify `src/lib.rs:463`, has none; core code, not changed here).
+
+**The CLI's output.** Check lines and the verdict line on stdout, exit 0 OK, 2 DEMO, 1 FAIL or a usage error (an
+unknown flag, a flag without its value, not exactly one receipt). With `--json` or `--floresta`, stdout carries only
+that output (the checks go to stderr; `---` between the two when both are asked), and only on OK, or on DEMO with
+`--allow-demo`; the JSON has `verdict`, `network` and `identity_checked`. The built-in image id is printed with the
+label "local build, not reproducible, not published" until it is pinned.
 
 ## 5. Host and module layout
 
@@ -194,10 +204,11 @@ used as a library), `max_time <= now + 7200`; OK additionally needs **block H fr
   `utreexo-ref`'s line for H, then executes or proves the runs; `UTREEXO_TAMPER=<case>` negative tests;
   `utreexo-count <block_h.json ...>` the per-block cost model counts.
 - `zapps/utreexo` (this zAPP's own module, the same layout as every zAPP): the check library `zapp_utreexo` and the CLI
-  `zapp-utreexo verify <receipt> [--expect-at H:hash] [--expect-tip T:hash] [--json] [--floresta]`, using
+  `zapp-utreexo verify <receipt> [--expect-at H:hash] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
   swiftsync-verify as a library (no Utreexo code in the core verifier crates). `zapps/utreexo/wasm`: the same checks as
   WebAssembly (raw ABI, `zapp-utreexo.js` glue, `build.sh` byte-reproducible with Rust 1.99.0 at a fixed stage path,
-  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8.
+  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 14 CLI
+  cases, the WASM build and its 7 cases, and the built WASM's sha256 against the line in `wasm/README.md`.
 - `prover/zyncapps/utreexo-ref`: the reference (Floresta's code), test only.
 
 ## 6. Distribution (proposal)
@@ -278,10 +289,12 @@ in the hints zAPP).
   T = 3 150.7 s. Roots: after 3, `5fcbe4f3…`, `1fb4d2cf…` (3 leaves), equal to `utreexo-ref`; one run and two runs give
   the same statement roots. Blocks 1..3 have no spends: the spend, same-block and BIP30 paths are covered by the
   executions above, not by a proof.
-- **The checker** (`zapps/utreexo`): `cargo test` 2/2 on those receipts (DEMO as expected below minimum work; refused: H
-  or block hash not the node's, another image id, H = 2 with a wrong core tip); `zapp-utreexo verify` prints the
-  `AssumeUtreexoValue`; the WASM build (`wasm/`, sha256 `48470907…`, reproduced by a second build) passes the same 6
-  cases in node.
+- **The checker** (`zapps/utreexo/test.sh`, 15.11.2026, review fixes): `cargo test` 3/3 (the Floresta source form with
+  and without an Empty root; a hostile receipt length refused by the decode limit; the real receipts: DEMO below
+  minimum work, refused for H or block hash not the node's, another image id, a wrong tip given when T = H, H = 2 with a
+  wrong core tip); 14 CLI cases (exit codes, strict flags, a truncated receipt, `--json` silent on DEMO, `--allow-demo`
+  JSON marked `demo`, `--floresta` alone on stdout); the WASM build (`wasm/`, sha256 `a0279e99…`, reproduced by a second
+  build) 7/7 in node.
 
 ## 9. Questions for the Floresta developers
 
