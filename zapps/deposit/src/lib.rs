@@ -90,9 +90,13 @@ pub struct DepositAsk {
     pub op_return: Option<Vec<u8>>,
     /// Confirmations (the block itself counts 1), fully validated or proof of work only.
     pub min_depth: u64,
-    /// Confirmations within the fully validated part (blocks at or below the core tip).
+    /// Confirmations within the fully validated part (blocks at or below the core tip). Default 1: the deposit's own
+    /// block is fully validated, its burial may be proof of work only (a valid block on top costs a miner the same work
+    /// as an invalid one, so validating the burial adds next to nothing; validation's job is to rule out a fake deposit
+    /// in an invalid block). 0 drops the check; on its own it changes nothing, since a block above the core tip is
+    /// refused unless `allow_pow_only_block` (accepting one takes both: allow_pow_only_block and 0).
     pub min_validated_depth: u64,
-    /// Accept a block ABOVE the core tip (proof of work only). Off by default.
+    /// Accept a block ABOVE the core tip (proof of work only). Off by default; needs `min_validated_depth` 0 too.
     pub allow_pow_only_block: bool,
     /// The tip (height, hash as explorers print it) from a source the caller trusts.
     pub expect_tip: Option<(i64, String)>,
@@ -110,7 +114,7 @@ pub struct DepositAsk {
 impl Default for DepositAsk {
     fn default() -> Self {
         DepositAsk { txid: [0; 32], vout: None, amount: None, script: None, op_return: None, min_depth: 0,
-                     min_validated_depth: 0, allow_pow_only_block: false, expect_tip: None, max_tip_age: None,
+                     min_validated_depth: 1, allow_pow_only_block: false, expect_tip: None, max_tip_age: None,
                      require_identity: true, allow_demo: false }
     }
 }
@@ -352,8 +356,10 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
                        fully validated, {} proof of work only)", ask.min_depth.max(1), confirmations - validated_confirmations));
     if ask.min_validated_depth > 0 {
         rep.check(validated_confirmations >= ask.min_validated_depth,
-                  format!("validated depth: {validated_confirmations} fully validated confirmation(s) >= {} asked",
-                          ask.min_validated_depth));
+                  format!("validated depth: {validated_confirmations} fully validated confirmation(s) >= {} asked{}",
+                          ask.min_validated_depth,
+                          if full { "" } else { " (the block itself is above the core tip: accepting it takes \
+                                                 allow_pow_only_block AND min_validated_depth 0)" }));
     }
     let mut identity = false;
     if let Some((h, x)) = &ask.expect_tip {

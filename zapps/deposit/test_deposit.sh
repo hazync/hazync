@@ -31,6 +31,8 @@ run 0 $V --txid $T --min-depth 6 --no-require-identity $W/tip.json
 run 0 $V --txid $T --vout 0 --amount 1000000000 --min-depth 6 --expect $TIP $W/tip.json
 run 0 $V --txid $T --min-validated-depth 31 --expect $TIP $W/tip.json
 run 1 $V --txid $T --min-validated-depth 32 $W/tip.json
+# --min-validated-depth defaults to 1 (block 170 is fully validated: OK without it); an explicit 0 is still taken
+run 0 $V --txid $T --min-validated-depth 0 --expect $TIP $W/tip.json
 run 1 $V --txid $T --min-depth 32 $W/core.json
 run 1 $V --txid $CB $W/core.json
 run 1 $V --txid $T --vout 0 --amount 999999999 $W/core.json

@@ -38,6 +38,9 @@ exit=0 PASS
   [FAIL] validated depth: 31 fully validated confirmation(s) >= 32 asked
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-validated-depth 0 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/tip.json (expect exit 0)
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d
+exit=0 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 32 <tmp>/core.json (expect exit 1)
   [FAIL] depth: 31 confirmation(s) as of tip 200 >= 32 asked (31 fully validated, 0 proof of work only)
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
@@ -63,11 +66,11 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --max-tip-age 60 <tmp>/tip.json (expect exit 1)
-  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794772829
+  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794822328
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == env RISC0_DEV_MODE=1 zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/core.json (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been disabled by fe
+SWIFTSYNC_VERIFY_FAIL: panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been dis
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --network signet <tmp>/core.json (expect exit 1)
   [FAIL] the bundle is for "mainnet", the network asked about "signet"
@@ -83,12 +86,12 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d
 exit=0 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/badnode <tmp>/tip.json (expect exit 1)
-  [FAIL] your node's chainwork at block 975278: getblockheader 0000000000000000000000000000000000000000000000000000000000000001: not JSON (invalid number at line 1 column 2)
+  [FAIL] your node's getblockheader 0000000000000000000000000000000000000000000000000000000000000001 has no chainwork: the proven chainwork is not compared
   [FAIL] chain identity: the tip is block 975278 0000000000000000000000000000000000000000000000000000000000000001 (from a source the caller trusts)
 SWIFTSYNC_VERIFY_FAIL: deposit: 2 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/nowork <tmp>/tip.json (expect exit 1)
-  [FAIL] your node's chainwork at block 975278: getblockheader 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3: not JSON (EOF while parsing a value at line 1 column 0)
+  [FAIL] your node's getblockheader 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 has no chainwork: the proven chainwork is not compared
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --bitcoin-cli <tmp>/otherwork <tmp>/tip.json (expect exit 1)
@@ -98,4 +101,4 @@ exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/junk.json (expect exit 1)
 SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 1 column 1)
 exit=1 PASS
-test_deposit.sh: 29/29 as expected
+test_deposit.sh: 30/30 as expected

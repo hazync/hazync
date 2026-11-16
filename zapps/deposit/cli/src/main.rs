@@ -11,7 +11,9 @@
 //!       proof has Core's minimum chain work, and the tip was compared with --expect / --mempool / --bitcoin-cli),
 //!       2 DEMO (valid, but below the minimum work or the core checkpoint, or the tip not compared: NOT a deposit to
 //!       credit; the statement is printed only with --allow-demo), 1 FAIL. --no-require-identity: OK without a tip
-//!       source (a caller that compares the tip by other means says so explicitly).
+//!       source (a caller that compares the tip by other means says so explicitly). --min-validated-depth: default 1 (the
+//!       deposit's own block fully validated, its burial may be proof of work only); a block above the core tip takes
+//!       --allow-pow-only-block AND --min-validated-depth 0.
 //!   zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>]
 //!                --height <h> --txid <txid> (--block <raw block hex file> | --bitcoin-cli "<cmd>")
 //!                [--tip-path <file>] [--network mainnet|signet] -o <deposit.json>
@@ -32,7 +34,7 @@ use zapp_headers::{HeaderState, HEADERS_IMAGE_ID};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n>] [--allow-pow-only-block] {IDENTITY_USAGE} [--no-require-identity] [--allow-demo] [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
+    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n> (default 1)] [--allow-pow-only-block (needs --min-validated-depth 0)] {IDENTITY_USAGE} [--no-require-identity] [--allow-demo] [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
     eprintln!("       zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>] --height <h> --txid <txid> (--block <file> | --bitcoin-cli \"<cmd>\") [--tip-path <file>] [--network <name>] -o <deposit.json>");
     eprintln!("       zapp-deposit mmr-path <headers file> <tip height> <height>");
     exit(1);
@@ -154,7 +156,7 @@ fn build_main(a: Vec<String>) {
     let img = Image::by_network(&network).unwrap_or_else(|| die("unknown network"));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     // (a self-check of the bundle's parts: the chain identity is the verifier's caller's, not the builder's)
-    let ask = DepositAsk { txid, min_depth: 1, allow_pow_only_block: true, require_identity: false, allow_demo: true, ..Default::default() };
+    let ask = DepositAsk { txid, min_depth: 1, min_validated_depth: 0, allow_pow_only_block: true, require_identity: false, allow_demo: true, ..Default::default() };
     let rep = verify_deposit(&b, &ask, &network, img, HEADERS_IMAGE_ID, now);
     if rep.verdict == Verdict::Fail {
         for (_, w) in rep.checks.iter().filter(|c| !c.0) { eprintln!("  [FAIL] {w}"); }

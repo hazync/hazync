@@ -182,14 +182,20 @@ fn the_64_byte_transaction_trick() {
     // and above the core tip (the header path) the same
     let (mut b, _) = b_seg(false);
     b.block.tx = hex(&inner);
-    refused(&b, &DepositAsk { allow_pow_only_block: true, ..ask(fake_txid) }, "not exactly 64 bytes");
+    refused(&b, &DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, ..ask(fake_txid) }, "not exactly 64 bytes");
 }
 
 #[test]
 fn a_block_above_the_core_tip_is_proof_of_work_only_and_flagged() {
     let (b, t) = b_seg(false);
+    // the defaults refuse it: allow_pow_only_block off, min_validated_depth 1 (the deposit's own block fully validated)
+    assert_eq!(DepositAsk::default().min_validated_depth, 1);
     refused(&b, &ask(t), "PROOF OF WORK ONLY");
-    let a = DepositAsk { allow_pow_only_block: true, min_depth: 6, ..ask(t) };
+    // allow_pow_only_block alone is not enough: the block has 0 fully validated confirmations, the default asks 1
+    refused(&b, &DepositAsk { allow_pow_only_block: true, min_depth: 6, ..ask(t) }, "validated depth: 0");
+    // ... and min_validated_depth 0 alone is not either: the block above the core tip is refused as before
+    refused(&b, &DepositAsk { min_validated_depth: 0, min_depth: 6, ..ask(t) }, "PROOF OF WORK ONLY");
+    let a = DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, min_depth: 6, ..ask(t) };
     let r = run(&b, &a);
     assert_eq!(r.verdict, Verdict::Ok, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
     let s = r.statement.unwrap();
@@ -210,7 +216,7 @@ fn an_op_return_payload() {
     let cb = unhex(v["coinbase"].as_str().unwrap()).unwrap();
     let at = cb.windows(6).position(|w| w == [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]).unwrap();
     let payload = cb[at + 2..at + 38].to_vec();
-    let a = DepositAsk { allow_pow_only_block: true, op_return: Some(payload.clone()), ..ask(t) };
+    let a = DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, op_return: Some(payload.clone()), ..ask(t) };
     let r = run(&b, &a);
     assert_eq!(r.verdict, Verdict::Ok, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
     let (vout, value, spk) = r.statement.unwrap().output.unwrap();
@@ -382,6 +388,10 @@ fn an_undo_leaf_block_of_the_v026_image() {
     assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
     let s = r.statement.unwrap();
     assert_eq!((s.height, s.validated_through, s.confirmations, s.block_fully_validated), (1, 1, 1, true));
+    // the boundary h == Hc: one fully validated confirmation meets the default min_validated_depth 1 (above, through
+    // ask's ..Default::default()); asking 2 when Hc - h + 1 == 1 is refused
+    assert_eq!((a.min_validated_depth, s.validated_confirmations), (1, 1));
+    refused(&b, &DepositAsk { min_validated_depth: 2, ..a.clone() }, "validated depth: 1");
     assert_eq!(s.core_image, "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c");
     // the undo hash is part of the leaf: a wrong one, or none, is refused
     let mut x = b.clone(); x.block.forest.as_mut().unwrap().undo = Some(hex(&[1; 32]));

@@ -61,7 +61,15 @@ I considered two ways to join them.
 4. *depth*: N = Ht - h + 1 (Hc - h + 1 without a header proof), of which Hc - h + 1 are fully validated.
 
 A block above Hc can be shown only by the header MMR: proof of work only. It is refused unless the caller passes
-`--allow-pow-only-block`, and the statement then says so.
+`--allow-pow-only-block` AND `--min-validated-depth 0`, and the statement then says so.
+
+`--min-validated-depth` defaults to **1**: the deposit's own block h is fully validated (h <= Hc); its burial may be
+proof of work only. Validating the burial adds next to nothing: a valid (say, empty) block on top costs a miner the
+same work as an invalid one, so burial blocks are bought with work either way. Full validation's job is to rule out a
+fake deposit, a transaction in an invalid block (spending coins that do not exist, a bad signature), and that needs
+block h itself, not the blocks above it. A caller may still ask for more than 1. An explicit 0 is accepted: on its own
+it changes nothing (a block above Hc is still refused unless `--allow-pow-only-block`); it is the second of the two
+explicit choices that accept a proof-of-work-only deposit block.
 
 **(b) A composed receipt.** A small guest verifies the core and header receipts as assumptions (`env::verify`),
 makes the same four checks and commits one statement. Built to measure it
@@ -102,7 +110,7 @@ It does **not** add:
   it stale, and the proof cannot show that. A caller compares X with its own node or several sources (`--expect`) and
   requires a fresh tip (`--max-tip-age`, the tip's block time against the caller's clock).
 - **validation above Hc.** Confirmations above the core tip are proof of work only; `--min-validated-depth` sets how
-  many must be fully validated. Until the core proof reaches the tip, a new deposit's block is above Hc.
+  many must be fully validated (default 1: the deposit's block itself, §2). Until the core proof reaches the tip, a new deposit's block is above Hc.
 - **an independent check of Bitcoin Core.** The rules are Core v28.0's code in the guest (CONSENSUS_RULES.md: 59
   rules the same, 3 stricter, 0 weaker); a consensus bug in that code is in the proof too.
 - **trust-free cryptography.** It rests on RISC Zero 3.1.0's soundness and on the image ids being the reviewed source
@@ -177,14 +185,14 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | composed receipt, Groth16-wrapped | 88.5 s; 3,129 bytes (seal 256 bytes); verify 9 ms |
 | Groth16 wrap of the core receipt 0..200 (hazync-coord CPU + Docker) | 94.4 s; 227,362 -> 4,633 bytes (seal 256 bytes); verify 5 ms |
 | Groth16 wrap of the header receipt 0..975,278 | 97.0 s; 227,474 -> 4,745 bytes; verify 6 ms |
-| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `b2fd059f…`; its CLI is the crate `zapps/deposit/cli`, the only one linking zapps/common) | 1,193,536 bytes (340,766 gzipped) |
+| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `b574ef4e…`; its CLI is the crate `zapps/deposit/cli`, the only one linking zapps/common) | 1,193,703 bytes (340,904 gzipped) |
 
-Tests: 19 unit tests (`zapps/deposit/src/tests.rs`), `test_deposit.sh` 29/29 (5 chain-identity cases: an agreeing node, one
+Tests: 19 unit tests (`zapps/deposit/src/tests.rs`), `test_deposit.sh` 30/30 (5 chain-identity cases: an agreeing node, one
 naming another block, one giving no chainwork, one giving another chainwork, and the tip given), `wasm/test-deposit.mjs`
-14/14. Also covered since the review of 15.11.2026: `accepted` and the verdict under each of `require_identity` and
+15/15. Also covered since the review of 15.11.2026: `accepted` and the verdict under each of `require_identity` and
 `allow_demo`, a DEMO statement withheld, a transaction in its witness serialisation in a fully validated block, and a
 block of the v0.26.0 image (`46666b6f`, whose leaves commit the undo hash) on its real receipt of blocks 0..1. Refusals covered: the
-wrong txid (both ways), the wrong output, amount or script, insufficient depth or validated depth, a block not in
+wrong txid (both ways), the wrong output, amount or script, insufficient depth or validated depth (the default 1 on a block above the core tip, 2 at h == Hc), a block not in
 the chain (other height, tampered coin state, path or header), a tampered merkle or coinbase branch, the 64-byte
 transaction trick on block 170 (whose merkle root IS dsha(coinbase txid || T): the 64 bytes with an empty branch
 reach the root), a block above the core tip (refused by default, flagged when allowed), a dev-mode receipt (in the
@@ -205,5 +213,3 @@ first v0.26.0 board run.
 - Where a bridge gets `history.bin`-derived openings at mainnet scale (a path service, like `zync-serve` for coins).
 - (b) as a published image, if a contract chain wants on-chain verification: review, a reproducible id, a chain of
   header runs (today one run from genesis), and a contract that reads its journal.
-- The default policy for `--min-validated-depth` (today 0: the deposit's block itself must be fully validated, its
-  burial may be proof of work only).

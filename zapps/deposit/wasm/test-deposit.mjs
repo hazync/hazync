@@ -44,6 +44,7 @@ t('require_identity not a boolean', FAIL, v.verifyDeposit({ bundle: tip, ask: { 
 if (s?.confirmations !== 975109 || s?.validated_confirmations !== 31 || !s?.block_fully_validated || s?.tip_height !== 975278) { fails++; console.log('FAIL statement', s); }
 t('another txid asked', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: 'b1fea52486ce0c62bb442b530a3f0132b826c74e473d1f2c220bfa78111c5082' } }));
 t('wrong amount', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, amount: 1 } }));
+t('validated depth 0, explicit (the block is fully validated)', ['ok', true, true], v.verifyDeposit({ bundle: tip, ask: { txid: T, min_validated_depth: 0, expect: TIP } }));
 t('validated depth 32', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, min_validated_depth: 32 } }));
 t('depth 975,110', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, min_depth: 975110 } }));
 const bad = structuredClone(tip); bad.core_tip_mmr_path[0] = '00'.repeat(32);

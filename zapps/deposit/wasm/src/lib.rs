@@ -49,8 +49,8 @@ impl<'a> Frame<'a> {
 /// The deposit-proof zyncAPP (docs/libzync/DEPOSIT_ZAPP.md), by the same `zapp_deposit::verify_deposit`
 /// the CLI `zapp-deposit` uses. Input frame (little-endian): `[u64 now][u32 n][bundle JSON, as zapp-deposit build
 /// writes it][u32 n][ask JSON]`. The ask is the CALLER's, never the bundle's: `{"txid" (as explorers print it), "vout"?,
-/// "amount"? (sat), "script"? (hex), "op_return"? (hex payload), "min_depth"?, "min_validated_depth"?,
-/// "allow_pow_only_block"?, "expect"? ("height:hash" from a source the page trusts), "max_tip_age"? (s),
+/// "amount"? (sat), "script"? (hex), "op_return"? (hex payload), "min_depth"?, "min_validated_depth"? (default 1: the
+/// deposit's own block fully validated), "allow_pow_only_block"? (needs "min_validated_depth": 0), "expect"? ("height:hash" from a source the page trusts), "max_tip_age"? (s),
 /// "require_identity"? (default true: without "expect" the verdict is at best "demo"), "allow_demo"? (default false),
 /// "network"?}`.
 ///
@@ -90,7 +90,7 @@ pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
         };
         let vout = num("vout")?.map(|x| u32::try_from(x).map_err(|_| "ask: vout too large")).transpose()?;
         let ask = DepositAsk { txid, vout, amount: num("amount")?, script: hexv("script")?, op_return: hexv("op_return")?,
-                               min_depth: num("min_depth")?.unwrap_or(1), min_validated_depth: num("min_validated_depth")?.unwrap_or(0),
+                               min_depth: num("min_depth")?.unwrap_or(1), min_validated_depth: num("min_validated_depth")?.unwrap_or(1),
                                allow_pow_only_block: flag("allow_pow_only_block", false)?, expect_tip,
                                max_tip_age: num("max_tip_age")?,
                                require_identity: flag("require_identity", true)?, allow_demo: flag("allow_demo", false)? };
