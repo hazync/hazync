@@ -6,7 +6,6 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 . ../../scripts/zapp-checks.sh
-T=${CARGO_TARGET_DIR:-$PWD/target}
 CT=${CARGO_TARGET_DIR:-$PWD/cli/target}
 FT=${CARGO_TARGET_DIR:-$PWD/ffi/target}
 H2=000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd
