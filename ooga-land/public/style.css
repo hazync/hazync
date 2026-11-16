@@ -1,0 +1,270 @@
+/* Hazync's land for Ooga Booga Land: the hazync.org look, cut down to what this one page uses.
+ * Ported from the site's stylesheet (fog and ink; the one warm colour, the lamp, marks the proven edge
+ * of the wordmark and focus). Light only: the site's dark theme is a button that needs a script, and
+ * this page has none. Fonts are local copies (fonts/, SIL OFL 1.1, see fonts/OFL.txt). */
+
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("fonts/schibsted.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("fonts/schibsted-italic.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Spline Sans Mono";
+  src: url("fonts/spline-mono.woff2") format("woff2");
+  font-weight: 400 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --fog: #e3e7ea;      /* page ground */
+  --mist: #f0f2f4;     /* raised surfaces */
+  --ink: #16212b;      /* text */
+  --slate: #52606b;    /* secondary text */
+  --haze: #c3cbd2;     /* rules */
+  --lamp: #c46a0c;     /* the proven edge, and focus */
+
+  --sans: "Schibsted Grotesk", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --mono: "Spline Sans Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --measure: 66ch;
+  --wide: 76rem;
+  --gutter: clamp(1rem, 4vw, 2.5rem);
+
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--fog);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  text-decoration-color: var(--slate);
+}
+a:hover { text-decoration-color: currentColor; text-decoration-thickness: 2px; }
+
+:focus-visible {
+  outline: 2px solid var(--lamp);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  font-variant-ligatures: none;
+}
+
+/* ---------- frame ---------- */
+
+.wrap {
+  max-width: var(--wide);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.skip {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: var(--ink);
+  color: var(--fog);
+  padding: 0.5rem 1rem;
+  z-index: 10;
+}
+.skip:focus { left: 1rem; }
+
+.site-head { padding-block: 1.25rem; }
+.site-head .wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem 2rem;
+}
+
+/* The wordmark: the anchored run, the proven run past it, then the grey still unproven. */
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  height: 1.9rem;
+  background: var(--haze);
+  font-weight: 800;
+  font-size: 1.35rem;
+  letter-spacing: -0.03em;
+  text-decoration: none;
+  overflow: hidden;
+}
+.wordmark .wm-anchored,
+.wordmark .wm-proven { display: block; align-self: stretch; flex: none; }
+.wordmark .wm-anchored { width: 1.6rem; background: currentColor; }
+.wordmark .wm-proven   { width: 0.5rem; background: var(--lamp); }
+.wordmark span { padding: 0 0.7rem; line-height: 1; }
+
+.site-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.97rem;
+}
+.site-nav a { text-decoration: none; color: var(--slate); }
+.site-nav a:hover { color: var(--ink); }
+.site-nav { margin-left: auto; }
+@media (min-width: 48.01rem) {
+  .site-nav { flex: 1 1 0; min-width: 0; }
+  .site-nav ul { justify-content: flex-end; }
+}
+@media (max-width: 48rem) {
+  .site-nav { flex-basis: 100%; margin-left: 0; }
+}
+@media (max-width: 30rem) {
+  .site-nav ul { gap: 0.25rem 1rem; font-size: 0.92rem; }
+}
+
+main { display: block; }
+
+.site-foot {
+  margin-top: clamp(4rem, 10vw, 8rem);
+  padding-block: 2.5rem 3rem;
+  border-top: 1px solid var(--haze);
+  color: var(--slate);
+  font-size: 0.93rem;
+}
+.site-foot .wrap {
+  display: grid;
+  gap: 0.6rem 3rem;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+.site-foot p { margin: 0; max-width: 44ch; }
+@media (min-width: 62rem) {
+  .site-foot .wrap { display: flex; justify-content: space-between; align-items: flex-start; }
+}
+.fingerprint { font-family: var(--mono); font-size: 0.82rem; word-spacing: 0.1em; }
+
+/* ---------- type ---------- */
+
+h1, h2, h3 {
+  font-weight: 750;
+  letter-spacing: -0.022em;
+  line-height: 1.08;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.page-title {
+  font-size: clamp(2.1rem, 5vw, 3.6rem);
+  letter-spacing: -0.032em;
+  line-height: 1;
+  max-width: 20ch;
+}
+
+h3 {
+  font-size: 1.2rem;
+  letter-spacing: -0.012em;
+  line-height: 1.25;
+}
+
+.lede {
+  font-size: clamp(1.12rem, 1.8vw, 1.3rem);
+  line-height: 1.5;
+  max-width: 56ch;
+  margin: 1.5rem 0 0;
+}
+
+.prose { max-width: var(--measure); }
+.prose p { margin: 0 0 1rem; }
+.prose > :last-child { margin-bottom: 0; }
+
+.src {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--slate);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+/* ---------- sections ---------- */
+
+.section { margin-top: clamp(4rem, 9vw, 7rem); }
+
+.page-intro { padding-top: clamp(2.5rem, 7vw, 5rem); }
+.page-intro .lede { color: var(--ink); }
+
+.way {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem 3rem;
+  padding-block: clamp(2rem, 5vw, 3rem);
+  border-top: 1px solid var(--haze);
+}
+@media (min-width: 62rem) {
+  .way { grid-template-columns: 17rem minmax(0, 1fr); }
+}
+.way h2 { font-size: clamp(1.4rem, 2.6vw, 1.85rem); }
+.way .need { margin: 0.6rem 0 0; color: var(--slate); font-size: 0.95rem; max-width: 30ch; }
+
+.panel {
+  background: var(--mist);
+  padding: clamp(1.1rem, 3vw, 1.75rem);
+}
+.way .panel + .panel { margin-top: 1rem; }
+.way .panel h3 { margin: 0 0 0.4rem; }
+
+/* ---------- buttons ---------- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.9rem;
+  padding: 0.6rem 1.25rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--fog);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.98rem;
+  text-decoration: none;
+}
+.btn:hover { background: transparent; color: var(--ink); }
+.btn.quiet { background: transparent; color: var(--ink); }
+.btn.quiet:hover { background: var(--ink); color: var(--fog); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
