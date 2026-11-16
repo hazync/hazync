@@ -470,16 +470,6 @@ impl Arena for DiskArena {
         self.roots.as_mut().unwrap().write_all(&b).unwrap_or_else(|e| panic!("trie arena {}/roots.log: {e}", self.dir.display()));
     }
     fn cut_roots_above(&mut self, height: u64) -> Vec<u8> {
-<<<<<<< HEAD
-        self.roots = None;
-        let rl = self.dir.join("roots.log");
-        let Ok(b) = std::fs::read(&rl) else { return Vec::new() };
-        let mut n = b.len() / ROOTS_REC;
-        while n > 0 && u32::from_le_bytes(b[(n - 1) * ROOTS_REC..(n - 1) * ROOTS_REC + 4].try_into().unwrap()) as u64 > height { n -= 1; }
-        let f = std::fs::OpenOptions::new().write(true).open(&rl).unwrap_or_else(|e| panic!("{}: {e}", rl.display()));
-        f.set_len((n * ROOTS_REC) as u64).and_then(|_| f.sync_data()).unwrap_or_else(|e| panic!("{}: {e}", rl.display()));
-        b[n * ROOTS_REC..].to_vec()
-=======
         // nothing changes on disk until the next flush commits (then the file is cut and the entries logged since are
         // appended); a crash before keeps the old branch's roots, as the old meta keeps its trie
         self.roots = None;
@@ -488,7 +478,6 @@ impl Arena for DiskArena {
         while n > 0 && u32::from_le_bytes(b[(n - 1) * ROOTS_REC..(n - 1) * ROOTS_REC + 4].try_into().unwrap()) as u64 > height { n -= 1; }
         self.cut = Some((n * ROOTS_REC, Vec::new()));
         b[n * ROOTS_REC..b.len() / ROOTS_REC * ROOTS_REC].to_vec()
->>>>>>> feat/reorg-p1-p2
     }
     fn bump_gen(&mut self) {
         self.gen = self.gen.wrapping_add(1);
