@@ -12,6 +12,8 @@
 set -euo pipefail
 [ $# -ge 3 ] || { echo "usage: $0 <crate dir> <stage dir> <wasm file> <path dependency dir or included file>..." >&2; exit 1; }
 ARGS=("$@")
+# this script's absolute path, taken before any cd (the container block below re-runs it by its path in the checkout)
+SELF_ABS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 CRATE=$1 STAGE=$2 WASM=$3
 shift 3
@@ -35,6 +37,16 @@ fi
 # checkout mounted; the host needs docker (and cargo, to see whether the graph compiles C), not a Rust toolchain.
 TOOLCHAIN=${HAZYNC_WASM_TOOLCHAIN:-1.99.0}
 if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
+    # this script, relative to the checkout (mounted at /hazync-src in the container). SELF_ABS is set at the very top of
+    # the script, before any cd: BASH_SOURCE may be relative to the caller's cwd (CI ran ./swiftsync-verify-wasm/build.sh
+    # from the repo root, and after the script's own cd that path named nothing: 16.11.2026)
+    [ -n "${SELF_ABS:-}" ] && [ -f "$SELF_ABS" ] || { echo "$0: SELF_ABS (this script's absolute path) is not set" >&2; exit 1; }
+    SELF=$(realpath --relative-to="$REPO" "$SELF_ABS")
+    [ -f "$REPO/$SELF" ] && [ "${SELF#../}" = "$SELF" ] || { echo "$0: $SELF_ABS is not inside the checkout $REPO" >&2; exit 1; }
+    if [ -n "${HAZYNC_WASM_DRY_RUN:-}" ]; then
+        # scripts/test-wasm-build-cwd.sh: how the script finds itself and its checkout, from any cwd; nothing is built
+        echo "dry run: $CRATE in $REPO, re-run in the container as bash $SELF"; exit 0
+    fi
     command -v docker >/dev/null || { echo "$0: the WASM build runs in reproduce/wasm.Dockerfile, and docker is not installed" >&2; exit 1; }
     # a crate in the wasm32 graph that declares `links` (a native library) or has cc / cmake as a dependency compiles C:
     # then the image carries the pinned clang
@@ -50,7 +62,6 @@ print(" ".join(sorted({pk[n["id"]]["name"] for n in m["resolve"]["nodes"]
     docker image inspect "$IMG" >/dev/null 2>&1 || docker build -q -t "$IMG" --build-arg RUST_TOOLCHAIN="$TOOLCHAIN" \
         --build-arg WITH_C="$WITH_C" -f "$REPO/reproduce/wasm.Dockerfile" "$REPO/reproduce" >&2
     echo "building $CRATE in $IMG (reproduce/wasm.Dockerfile${C_CRATES:+; it compiles C: $C_CRATES})" >&2
-    SELF=$(realpath --relative-to="$REPO" "${BASH_SOURCE[0]}")
     exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e HAZYNC_WASM_TOOLCHAIN="$TOOLCHAIN" \
         -v "$REPO:/hazync-src" -w /hazync-src "$IMG" bash "$SELF" "${ARGS[@]}"
 fi
