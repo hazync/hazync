@@ -295,6 +295,8 @@ pub(crate) fn prep_block(prev: &ChainState, j: &serde_json::Value, smt: &mut Smt
         let r = ts.apply(&marks, &ins).unwrap_or_else(|e| panic!("prep: block {height}: the trie store refused the update: {e:?}"));
         ts.height = height as u64;
         ts.hash = tip_hash;
+        // Z1 (docs/libzync/ZAPP_FOLLOWER.md §4): this block's root in trie/roots.log, for a fact reader at this height
+        ts.log_root();
         (libzync::coinlog::h_of(&r), ts.last_apply_replaced() == Some(true))
     };
     phase(2, t);
