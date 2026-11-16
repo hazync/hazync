@@ -355,6 +355,15 @@ layout: external spends, created and appended coins, as prep counts them), not f
 So W = 288 blocks at the tip is **302 MB (MEASURED)** and J = 2,016 about **2.1 GB** (ESTIMATE, 2,016 x the tip mean).
 The trie keys are about two thirds of a record at the tip (64 bytes for each of ~4,100 spends and ~7,700 new coins).
 
+**Image id, MEASURED.** No guest input changed (`git diff` against `797b777e`: nothing under `prover/methods/`, none
+of the `#[path]` files, no manifest, lock or toolchain file; `scripts/check-guest-inputs.sh` passes). Built from source
+on `hazync-coord` as `reproduce/libzync-ids.sh` builds it (rustc 1.99.1 from `prover/rust-toolchain.toml`, the base
+from `scripts/libzync-base.sh`), with the container's paths (the checkout bind-mounted at `/hazync-zkvm` and the base
+at `/root/hazync-libzync-base`, in a private mount namespace): `host method-id` = **`46666b6f…43c1c`**, guest ELF
+sha256 **`f7b87bf1…08a27`**, both exactly `reproduce/LIBZYNC_IDS`. ⚠ The same build from another checkout path gives
+another id (`c4556aaf` for this branch, `b021c7f3` for `797b777e` itself, each from its own path): the ELF embeds one
+absolute path, its build's `OUT_DIR` (`…/out/core_extract.inc`); the two ELFs differed in that string only.
+
 **What building it corrected in this page:**
 
 - **§6 "write the record before the stores change"** cannot hold for the BIP30 priors and the trie's `replaced` flag,
