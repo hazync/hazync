@@ -1,5 +1,5 @@
 [Unit]
-Description=Hazync libzync board: copy the genesis-anchored spine to Backblaze B2 (second copy) under spine-8888d59c/ (verified first, never overwritten)
+Description=Hazync libzync board: copy the genesis-anchored spine to Backblaze B2 (second copy) under spine-46666b6f/ (verified first, never overwritten)
 After=network-online.target hazync-lz-coordinator.service
 Wants=network-online.target
 OnFailure=hazync-alert@%n.service
@@ -7,7 +7,7 @@ OnFailure=hazync-alert@%n.service
 [Service]
 Type=oneshot
 # Root only for reading the root-only key file. The copy is verified with the libzync host (genesis-anchored) first.
-ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py spine --keys /etc/hazync/backup/b2.keys --bucket hazync-backup --spine /var/lib/hazync-lz/spine --method-id 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 --verify /usr/local/sbin/hazync-lz-verify-spine
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py spine --keys /etc/hazync/backup/b2.keys --bucket hazync-backup --spine /var/lib/hazync-lz/spine --method-id 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c --verify /usr/local/sbin/hazync-lz-verify-spine
 TimeoutStartSec=5min
 Nice=10
 NoNewPrivileges=true

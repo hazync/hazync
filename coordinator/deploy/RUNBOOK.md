@@ -1,6 +1,8 @@
 # Hazync Proof Party — coordinator deploy runbook
 
-> **Since 2026-11-12 the public board is Hazync v2** (the libzync engine, image `8888d59c`, release v0.24.0). The
+> **Since 2026-11-12 the public board is Hazync v2** (the libzync engine; image `8888d59c` from release v0.24.0, and
+> `46666b6f` from release v0.26.0, whose board restarts from genesis: [`libzync/RESET_v026.md`](libzync/RESET_v026.md)).
+> The repo's units name `46666b6f`; until that reset is done on the box, the box still runs `8888d59c`. The
 > next section is how that board runs. **Everything after it describes the Hazync v1 (CORE) board** — the archive
 > bridge, `hazync-coordinator`, the `/var/lib/hazync` paths — and is kept because several of its units still run
 > (retargeted at the v2 board) and because it is the record of how the v1 board was built. The switch itself, and
@@ -21,7 +23,7 @@ leaf bundle per block, paced by proving. Following the tip with libzync is **not
 | `hazync-lz-prune-leaves.timer` | deletes proven leaves below the frontier so the pass can continue; keeps `leaf_1.bin` (selftest and the pods' GPU smoke use it). Points at `COORD=http://127.0.0.1:8899` (the repo unit since 2026-11-12; the box also carries it as a `zz-libzync.conf` drop-in) |
 | `hazync-lz-check-proofs.timer`, `hazync-lz-check-spine.timer` | the integrity checks, retargeted at v2 (they replace the CORE `hazync-check-proofs` / `hazync-check-spine`) |
 | `libzync-xcheck.timer` | the board pass and the paper prep run (`libzync-prep`, kept until it reaches the tip) agree on the chain state |
-| `hazync-lz-offsite-proofs{,-b2}.timer`, `hazync-lz-offsite-spine{,-b2}.timer` | receipts and the spine to R2 (`hazync-proofs`) and B2 (`hazync-backup`) under `proofs-8888d59c/` and `spine-8888d59c/`. The spine copies fail while the spine is empty |
+| `hazync-lz-offsite-proofs{,-b2}.timer`, `hazync-lz-offsite-spine{,-b2}.timer` | receipts and the spine to R2 (`hazync-proofs`) and B2 (`hazync-backup`) under `proofs-46666b6f/` and `spine-46666b6f/` (the `8888d59c` board's copies stay under `proofs-8888d59c/`, `spine-8888d59c/` as its record). The spine copies fail while the spine is empty |
 | `hazync-headers-follow.timer` | the header-chain zyncAPP at the tip ([`headers/README.md`](headers/README.md)) |
 | `hazync-sponsor-bot` | on again since 2026-11-12, retargeted at the leaves (`HAZYNC_LIBZYNC=1`); caps $50/run, $10/hr, 4 pods, pods under $1/hr |
 
@@ -47,10 +49,11 @@ leaf bundle per block, paced by proving. Following the tip with libzync is **not
 | zyncAPP data for zync-serve | `/var/lib/hazync-lz/zapp` |
 | leaf bundles | `/srv/bulk/libzync-board/leaves` |
 | prep state | `/var/lib/libzync-board/{out,cl,trie}`; `/srv/bulk/libzync-board/{out,cl,trie}` are symlinks to them |
-| hosts | `/opt/hazync-lz/bin/host` (coordinator, checks) and `/srv/bulk/libzync-board/bin/host_lz` (the pass); both must print `8888d59c…` for `method-id` |
+| hosts | `/opt/hazync-lz/bin/host` (coordinator, checks), `/srv/bulk/libzync-board/bin/host_lz` (the pass) and `/srv/bulk/libzync-zapp/bin/host` (the zyncAPP follower); all must print the board's image for `method-id` (`46666b6f…` after the v0.26.0 reset) |
 | code | the checkout at `/opt/hazync-lz` |
 | local backups | `/srv/bulk/hazync/backups-lz` |
 | the v1 record, read-only | `/var/lib/hazync`, and `proofs-37987b85/`, `spine-37987b85/` in R2 and B2 |
+| the `8888d59c` board's record, after the v0.26.0 reset | `/var/lib/hazync-lz.8888d59c`, `/root/lz-8888d59c.db`, and `proofs-8888d59c/`, `spine-8888d59c/` in R2 and B2 ([`libzync/RESET_v026.md`](libzync/RESET_v026.md)) |
 
 **Is it healthy?**
 
@@ -74,7 +77,9 @@ Updating the coordinator code is §1a with the v2 unit:
 `127.0.0.1:${COORD_PORT:-8899}` afterwards). A new **host with the same image id** is installed as both hosts above. A
 release that **changes the image id** also needs the board pass restarted, because every leaf is stamped with the
 image that prepared it: follow [`libzync/SWITCH.md`](libzync/SWITCH.md) step 0, including reinstalling the `lz` units
-(they carry the id in `--method-id` / `HAZYNC_METHOD_ID`).
+(they carry the id in `--method-id` / `HAZYNC_METHOD_ID`; `scripts/check-versions.sh` fails a repo whose units name
+another image than `reproduce/LIBZYNC_IDS`, and `check-deployment.sh --local` a box whose installed units do). A
+release whose board **restarts from genesis** is [`libzync/RESET_v026.md`](libzync/RESET_v026.md) (v0.26.0).
 
 ---
 

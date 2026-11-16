@@ -11,7 +11,7 @@ Environment=HAZYNC_LIBZYNC=1
 Environment=COORD_SPINE=/var/lib/hazync-lz/spine
 Environment=COORD_DB=/var/lib/hazync-lz/coordinator.db
 Environment=HAZYNC_VERIFY=/opt/hazync-lz/bin/hazync-verify
-Environment=HAZYNC_METHOD_ID=8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+Environment=HAZYNC_METHOD_ID=46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
 Environment=HAZYNC_BITCOIN_DATADIR=/var/lib/hazync/bitcoin-client
 ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/check-spine.py
 Nice=10

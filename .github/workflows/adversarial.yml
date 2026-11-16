@@ -75,9 +75,9 @@ jobs:
       - name: Release gate CONTROL - a verifier that accepts everything must fail it
         run: |
           mkdir -p bad && cp rel/* bad/
-          printf '#!/bin/sh\necho "receipt verifies against image %s (mainnet)"\necho "chain: tip %s at height 200"\necho SWIFTSYNC_VERIFY_DEMO\nexit 2\n' \
+          printf '#!/bin/sh\necho "receipt verifies against image %s (mainnet)"\necho "chain: tip %s at height 1, cum_work 0x0"\necho SWIFTSYNC_VERIFY_DEMO\nexit 2\n' \
             "$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)" \
-            000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 > bad/hazync-verify-x86_64-linux-gnu
+            00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048 > bad/hazync-verify-x86_64-linux-gnu
           chmod +x bad/hazync-verify-x86_64-linux-gnu
           if ./scripts/check-release-verifiers.sh bad; then
             echo "::error::the release gate passed a verifier that accepts tampered receipts"; exit 1
@@ -90,6 +90,7 @@ jobs:
           cargo build --release --manifest-path swiftsync-verify-ffi/Cargo.toml
           (cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o vtest && ./vtest)
           (cd swiftsync-verify-wasm && node test-vectors.mjs target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm)
+          (cd swiftsync-verify-wasm && node test-facts-frame.mjs)
           bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
           node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
           swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
