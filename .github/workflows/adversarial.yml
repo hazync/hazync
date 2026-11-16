@@ -61,6 +61,8 @@ jobs:
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
+      - name: swiftsync-verify-wasm (its unit tests, run natively)
+        run: cargo test --manifest-path swiftsync-verify-wasm/Cargo.toml --release
       - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
         # scripts/release.sh runs this on the staged assets before publishing (CLI, the wasm through its
         # JavaScript glue); run here on every push so the gate is known to pass before a release needs it.
@@ -318,7 +320,9 @@ jobs:
         # runs only on its own card generation, and a build FLAG is not evidence about a binary.
         # This is the reader windows-prove.yml runs on its own output; here it must catch a
         # Pascal-only build, one module missing one generation, and an image that exists only in a
-        # relocatable part.
+        # relocatable part. ⛔ hazync#727: and it must REFUSE system-scope atomics in real nvcc output
+        # (scripts/testdata/atom-scope/: compressed image, raw image, PTX alone), pass the same
+        # kernel at device scope, and call an undecodable entry UNREADABLE rather than clean.
         run: |
           python3 scripts/gpu_code_archs.py --control
           # ⛔ AND AS A WINDOWS RUNNER SEES IT. Its stdout is cp1252, which cannot encode the marks
@@ -382,6 +386,13 @@ jobs:
       - name: Auto-setup POSITIVE CONTROL (capability floor ignored — must send 6.1 to CUDA)
         run: cd tools/win-gui && python3 test_setup_auto.py --control
 
+      - name: the proving window and the can-it-finish rule (#725)
+        # Pure: midnight-crossing windows, the night-of-the-start rule for days, real Europe/London daylight-saving
+        # nights, the median block-time estimate, the wake-timer XML and powercfg reading.
+        run: |
+          cd tools/win-gui
+          python3 test_schedule.py
+          python3 test_schedule.py --control
       - name: the Home page reads the worker's real output
         # ⛔ A prove runs for minutes to most of an hour, and a window that only says "running"
         # reads as broken. This is the reader that turns the worker's own lines into which block,
@@ -431,6 +442,10 @@ jobs:
           # really given: a card chosen but never handed to the process would pass every check on
           # the decision while both workers piled onto one card.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_cards_flow.py
+          # ⭐ AND THE PROVING WINDOW (#725): it closes mid-proof (the block finishes, no other is taken), too little is
+          # left (nothing is claimed), and Stop hands the claimed block back.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py --control
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
@@ -845,6 +860,18 @@ jobs:
         run: |
           cd coordinator
           python3 test_claim_nonce.py --control
+      - name: A stopped worker hands its claimed block back (#725)
+        # POST /api/release: only the holder of a live claim, signed, once; the block is open to anyone at once. Then
+        # the real worker against the real handler: SIGTERM mid-prove releases the block and kills the prover child.
+        run: |
+          cd coordinator
+          python3 test_claim_release.py
+          python3 test_worker_release.py
+      - name: "Claim release POSITIVE CONTROL (ownership unchecked; worker never releases — must FAIL)"
+        run: |
+          cd coordinator
+          python3 test_claim_release.py --control
+          python3 test_worker_release.py --control
       - name: Heartbeat rejection log (bip-448, 2026-09-11)
         # Drives the real HTTP handler: every rejected /api/beat must be logged with the caller, the
         # reason, and -- for a 409 -- what the DB really holds for that range.
@@ -1332,6 +1359,16 @@ jobs:
         run: |
           cd coordinator
           python3 test_claim_sybil.py --control
+      - name: The coordinator sets _client_ip itself on every POST (a client cannot choose it)
+        # 15.11.2026: only /api/sponsor got it server-side, so claim()'s CLAIM_NEW_IP_MAX read a client-sent value
+        # (real workers send none: the cap never applied). Drives the real HTTP handler.
+        run: cd coordinator && python3 test_client_ip.py
+      - name: _client_ip POSITIVE CONTROL (do_POST as before the fix — must FAIL)
+        run: |
+          cd coordinator
+          if python3 test_client_ip.py --control; then
+            echo "::error::test_client_ip.py passed with the pre-fix do_POST: it cannot detect the bug"; exit 1
+          fi
       - name: A replayed public proof is refused before any verification (review 11-12, board #6)
         # A signed replay of a served proof (another range id, or the spine) used to cost a full STARK verification
         # and hold a verify slot. Now a lookup by receipt sha refuses it first.

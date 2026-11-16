@@ -97,6 +97,10 @@ jobs:
           python test_log_visible.py
           python test_log_visible.py --control
           python test_home_flow.py
+          python test_schedule.py
+          python test_schedule.py --control
+          python test_schedule_flow.py
+          python test_schedule_flow.py --control
 
       - name: The prover and the worker, from the release, checked against its SHA256SUMS
         env:
