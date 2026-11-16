@@ -25,6 +25,17 @@ t('a run that does not start from genesis', 'fail', v.verifyHeaders({ receipts: 
 const bad = b.slice(); bad[bad.length >> 1] ^= 1;
 t('one bit flipped', 'fail', v.verifyHeaders({ receipts: [a, bad] }));
 t('wrong expected tip', 'fail', v.verifyHeaders({ receipts: [a, b], expect: `200:${H.slice(0, -1)}1` }));
+// the whole chain 0..975,278 (Core's minimum work): 'ok' only with its tip expected; without, 'demo' (review 11-16)
+{
+  const tipR = new Uint8Array(readFileSync(`${here}/headers_0_tip.rcpt`));
+  const TIP = '975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3';
+  const w = v.verifyHeaders({ receipts: [tipR], expect: TIP });
+  t('the whole chain, tip expected', 'ok', w);
+  if (!w.identity_checked) { fails++; console.log('FAIL identity_checked on the whole chain'); }
+  const n = v.verifyHeaders({ receipts: [tipR] });
+  t('the whole chain, no expect: not shown to be the network\'s', 'demo', n);
+  if (n.identity_checked) { fails++; console.log('FAIL identity_checked without expect'); }
+}
 // MMR inclusion: block 37 by its path to the tip 200; a transaction of block 170 by its header and merkle branch
 const lines = (f) => readFileSync(`${here}/${f}`, 'utf8').split('\n').filter((l) => l.trim());
 const P37 = lines('mmr_path_37_tip200.txt'), P170 = lines('mmr_path_170_tip200.txt');

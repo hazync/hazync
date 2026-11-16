@@ -15,7 +15,10 @@
 //   READ included WITH THE VERDICT:
 //   h.included       true only when h.verdict === 'ok' and the block (and transaction) is on the chain; null if not asked
 //   h.included_demo  true when h.verdict === 'demo' (a valid chain BELOW Core's minimum work, which anyone can mine
-//                    on a cheap difficulty-1 fork: shown, not a claim about the network's chain) and the checks passed
+//                    on a cheap difficulty-1 fork, or one whose tip was not compared with a source you trust: shown,
+//                    not a claim about the network's chain) and the checks passed
+//   'ok' needs BOTH Core's minimum work and expect matched (h.identity_checked): without an expect, even the whole
+//   mainnet header chain is 'demo' (since 16.11.2026; give the tip from a source you trust, e.g. an explorer)
 //   h.inclusion      { height, hash, txid } of what was shown, or null (non-null for 'ok' and 'demo' alike)
 
 function readString(memory, ptr) {

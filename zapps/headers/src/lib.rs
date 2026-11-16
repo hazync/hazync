@@ -81,6 +81,20 @@ pub struct HeadersReport {
     /// block's height and hash, and the txid of the transaction found in it. The txid is the one the CALLER asked about
     /// (TxInclusion::txid) and the raw transaction hashed to it; nothing here comes from the path service's word.
     pub included: Option<Included>,
+    /// The tip was compared with an `expect` (from a source the caller trusts) and matched, in a report that is not a
+    /// FAIL. The verdict is about the PROOF (valid, and enough work for Ok); a caller that says "the network's chain"
+    /// must also require this, as every zAPP's CLI and WASM output does (an Ok without it is shown as DEMO there:
+    /// [`HeadersReport::gated`]).
+    pub tip_checked: bool,
+}
+
+impl HeadersReport {
+    /// The verdict a caller shows: Ok only when the tip was also compared with a trusted source; a valid chain with
+    /// enough work whose identity was NOT checked is Demo (a different chain with as much work is not ruled out), as in
+    /// every other zAPP (review 11-16).
+    pub fn gated(&self) -> Verdict {
+        match self.verdict { Verdict::Ok if !self.tip_checked => Verdict::Demo, v => v }
+    }
 }
 
 /// A block (and optionally a transaction in it) shown to be on the verified chain.
@@ -116,7 +130,7 @@ pub const MAX_RUNS: usize = 4096;
 
 pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Option<(i64, &str)>,
                       include: Option<&Inclusion>) -> HeadersReport {
-    let mut rep = HeadersReport { checks: Vec::new(), state: None, verdict: Verdict::Fail, included: None };
+    let mut rep = HeadersReport { checks: Vec::new(), state: None, verdict: Verdict::Fail, included: None, tip_checked: false };
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the headers image id is 32 bytes of hex ({image_hex})"));
         return rep;
@@ -170,9 +184,10 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
     let s = last.expect("at least one receipt decoded");
     rep.check(s.max_time as u64 <= now.saturating_add(MAX_FUTURE_BLOCK_TIME),
               format!("time-too-new: largest header time {} <= this clock {} + {} s", s.max_time, now, MAX_FUTURE_BLOCK_TIME));
+    let mut tip_match = false;
     if let Some((h, hash)) = expect {
-        rep.check(s.height == h && s.hash_hex() == hash.to_ascii_lowercase(),
-                  format!("chain identity: the tip is block {h} {hash} (from a source this verifier trusts)"));
+        tip_match = s.height == h && s.hash_hex() == hash.to_ascii_lowercase();
+        rep.check(tip_match, format!("chain identity: the tip is block {h} {hash} (from a source this verifier trusts)"));
     }
     if let Some(inc) = include {
         rep.check(verify_inclusion(&s, inc.height, &inc.hash, &inc.path),
@@ -194,6 +209,7 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
     rep.checks.push((true, format!("chainwork {} {} Core's minimum {}", s.work_hex(),
                                    if enough { ">=" } else { "<" }, mainnet.min_work_hex)));
     rep.verdict = if failed { Verdict::Fail } else if enough { Verdict::Ok } else { Verdict::Demo };
+    rep.tip_checked = tip_match && !failed;
     rep.state = Some(s);
     rep
 }
