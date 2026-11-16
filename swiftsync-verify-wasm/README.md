@@ -15,8 +15,8 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,236,767 bytes raw, 358,689 gzipped |
-| sha256 (this commit, `./build.sh`) | `622ce4306960ec5dcf4b47b2e2fe38e58eb2ebc516016a818b8715413bc98849` (v0.26.0's verifier with the verify_facts frame fix of 15.11.2026, and WITHOUT the header-chain zyncAPP, now `../zapps/headers`; risc0 3.1.0; mainnet `46666b6f`, signet `01a80f17`, and `8888d59c` / `d4210dae` by id; Rust 1.99.0, 2026-11-15). With the zyncAPP still in it, the same source was `f16b5b98…`; 2026-11-14's `12bbc9ae…` had the frame bug; v0.24.0's release asset was `446fdaeb…` |
+| size | 1,236,784 bytes raw, 358,689 gzipped |
+| sha256 (this commit, `./build.sh`) | `aa33d1a945e382962066a63de4b5701e07143d9a8a51b620b69ff75fa6083617` (v0.26.0's verifier with the verify_facts frame fix of 15.11.2026 and main's Frame::take checked_add (6d459c15, 16.11.2026), WITHOUT the header-chain zyncAPP, now `../zapps/headers`; risc0 3.1.0; mainnet `46666b6f`, signet `01a80f17`, and `8888d59c` / `d4210dae` by id; Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, laptop and hazync-coord). Before the checked_add `622ce430…`; with the zyncAPP still in it, the source before the checked_add was `f16b5b98…`; 2026-11-14's `12bbc9ae…` had the frame bug; v0.24.0's release asset was `446fdaeb…` |
 | reproduces | **only with the same host Rust**: 1.99.0 gave v0.24.0's `446fdaeb…`, 1.97.1 `a3a85b7f…`. The checkout path does not matter (the sources are staged), so use `RUSTUP_TOOLCHAIN=1.99.0`; the repo does not pin it yet. Also only at the default stage path: a `SWIFTSYNC_WASM_STAGE` override gave other bytes (`2ea330c0…`, +235 bytes) with no path in the strings |
 | vectors | 11/11 (`test-vectors.out`; the 2 CLI-only cases of the manifest are skipped) |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |
