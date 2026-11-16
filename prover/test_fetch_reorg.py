@@ -380,6 +380,40 @@ def case_auto_rewind():
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
+def case_started_under_a_marker():
+    """Review 16.11, M2: a fetcher STARTED while an `auto` REORG is there (it restarted during prep's rewind) waits, then
+    fetches from the fork, BELOW the save point it saw at its start (it used to keep that start: F+1..A never came)."""
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40)
+        node.reorg(15, "m")                                               # fork at 45, below the save point 50
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "REORG").write_text(json.dumps({"fork": 45, "depth": 15, "class": "auto"}))
+        p = fetcher(root, ["follow", "1", str(d), "--after-saves", str(od)], {"HAZYNC_REORG_AUTO": "1", "HAZYNC_REORG_AUTO_DEPTH": "20"})
+        try:
+            time.sleep(1.5)
+            waiting = p.poll() is None and "waiting for prep's rewind" in (root / "fetch.log").read_text()
+            for h in range(46, 61): (od / f"state_{h}.json").unlink()
+            for x in ("smt", "coinlog", "trie"): (od / f"state_50.{x}").unlink(); (od / f"state_45.{x}").write_text("x")
+            write_tip(od, node, 45, keep=40)
+            (d / "REORG").unlink()
+            ok = wait_until(lambda: all(files_hashes(d).get(h) == node.active[h] for h in range(46, 61)), 60)
+            check(waiting and ok and p.poll() is None, "M2: started under an auto marker: waits, then fetches 46..60 from the fork (below its first save point)")
+        finally:
+            p.kill(); p.wait()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # the bound: no rewind within HAZYNC_REWIND_WAIT_S is a stop
+    root, node, od, d = setup(60)
+    try:
+        prep_states(od, node, 60, save=50, keep=40)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "REORG").write_text(json.dumps({"fork": 55, "depth": 5, "class": "auto"}))
+        rc, m, b = run_once(root, od, d, {"HAZYNC_REORG_AUTO": "1", "HAZYNC_REWIND_WAIT_S": "2"})
+        check(rc == 4 and "did not rewind within" in (root / "fetch.log").read_text(), f"a rewind that never comes: exit 4 after HAZYNC_REWIND_WAIT_S (rc={rc})")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
 def case_node_reindexing():
     """Review 16.11 (low): a node reindexing from scratch (at genesis) is a node behind prep: wait, no REORG_TOO_DEEP."""
     root, node, od, d = setup(60)
@@ -428,6 +462,7 @@ if __name__ == "__main__":
         case_node_reindexing()
         print("== P3: automatic rewinds")
         case_auto_rewind()
+        case_started_under_a_marker()
         print("== an old host without PREP_TIP.json")
         for depth in (1, 13, 41):
             case_below_tip(depth, 12, 40, 60, tipfile=False)

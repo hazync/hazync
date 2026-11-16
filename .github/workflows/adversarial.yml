@@ -1988,6 +1988,15 @@ jobs:
         with: { name: libzync-hosts, path: hosts }
       - name: Edge blocks, negative tests
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/blocks.sh hosts/host_m out
+      # Reorg handling (docs/libzync/REORG.md §12): the undo records, prep's stop and wait (P1/P2), and prep's rewind (P3):
+      # after a rewind and the re-prep of a synthetic branch, states and stores equal a fresh prep of that branch, through
+      # crashes, refusals, a second reorg and the automatic path end to end. Mainnet 1..200 test data, minutes, CPU.
+      - name: Reorg undo records and the prep side of the stop (P1/P2)
+        run: H=$PWD/hosts/host_m O=$PWD/out/reorg bash experimental/libzync-bench/prep/reorg_test.sh
+      - name: Reorg rewind (P3)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewind bash experimental/libzync-bench/prep/rewind_test.sh
+      - name: Reorg rewind POSITIVE CONTROL (a corrupted coin log after the rewind must be caught)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewindc bash experimental/libzync-bench/prep/rewind_test.sh --control
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }

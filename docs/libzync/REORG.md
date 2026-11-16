@@ -268,9 +268,18 @@ person acts.
    units again; nothing needs undoing.
 2. Find F: `fetch_block_rpc.py fork-point --deep <out>` walks back without the W limit and prints F and whether
    F ≥ tip − J (the undo records still reach it).
-3. **F within J** (the expected case): `libzync-prep-rewind F --allow-deep <out>`, the same code as the automatic
-   path behind an override flag. It writes the record, waits for the coordinator's ack, and undoes the stores. Then
-   start the units.
+3. **F within J** (the expected case), as built in P3: with both units stopped and the fetcher's `blocks/REORG` naming
+   F (edit `fork` if `fork-point --deep` found it),
+
+   ```bash
+   cd "$LZ_ROOT" && HAZYNC_COINLOG_DIR=$LZ_ROOT/cl HAZYNC_TRIE_DIR=$LZ_ROOT/trie HAZYNC_PREP_LEAF_BUNDLES=$LZ_ROOT/leaves \
+     HAZYNC_PREP_UNDO_KEEP=<J of the run> bin/host_lz libzync-prep-rewind $LZ_ROOT/out $LZ_ROOT/blocks --allow-deep
+   ```
+
+   It refuses (exit 4, nothing changed) without the three directories (`--no-leaf-bundles` for a run that writes no
+   bundles), or when the records do not reach F. It undoes the stores to F, writes a save point there, moves everything
+   above F to `out/orphaned/<epoch>/` (the bundles to `leaves/orphaned/<epoch>/`) and removes the marker. Then start
+   the units. The coordinator's ack (§5) comes with P4.
 4. **F below J:** the stores cannot be undone. Rewind the coordinator to F with `server.py --reorg-to F` (works at any
    depth: it only touches rows and files). Then restart prep from genesis under a fresh `LZ_ROOT`, moving the old one
    aside, as the v0.26 reset does. ESTIMATE about 8 days to 611,000 (MEASURED on the old run, `RESET_v026.md`), then
@@ -456,3 +465,15 @@ path end to end (exit 5, restart, rewind); a crash after the save point at F, fi
 with `--allow-deep`; and three refusals that change nothing. `--control` skips the coin log undo and must fail.
 `prover/test_fetch_reorg.py`: the fetcher waits for an `auto` rewind and fetches the new branch after it; a fork beyond
 W still stops. `coordinator/test_reorg_units.py`: exit 5 restarts the prep units and does not alert.
+
+**Review of 16.11.2026 (P3), fixed.** (H1) `cl_rewind` undid every `pending.bin` record, also those of blocks a save
+point already held (a crash between the trie's flush at A and the journal's commit leaves them): now only records above
+F, and a record without its height is refused. (M1) The trie and the BIP30 tree are undone in memory and checked
+before the coin log, the one store changed in place, is touched; after the intent any failure exits 4 (the unit fails
+and alerts) instead of a panic's 101 that systemd restarts in silence; leaf bundles move within their own filesystem
+(`leaves/orphaned/<epoch>/`); the rewind refuses to run without `HAZYNC_COINLOG_DIR`, `HAZYNC_TRIE_DIR` and
+`HAZYNC_PREP_LEAF_BUNDLES` (or `--no-leaf-bundles`). (M2) A fetcher started while an `auto` marker is there finds where
+to fetch again after the rewind; it waits at most `HAZYNC_REWIND_WAIT_S` (3600) and then exits 4. (M3) The orphaned
+blocks (height, hash) are recorded in `out/REWIND`, so a rerun after a crash during the moves still finds every
+orphaned block file. (M4, Z1) The logged roots above F are archived before they are cut, and F's new root is logged in
+the new generation. Prep started with an `auto` marker exits 5 (for the runner) instead of 4.

@@ -1494,19 +1494,34 @@ fn cl_undo_to(store: &mut libzync::coinlog_forest::NodeStore<libzync::host::AnyN
 /// count, which is idempotent and independent of how much of any block, or of an earlier interrupted rewind, reached
 /// the disk: a rewind that died part-way is simply run again. Checked against `st` at the end; pending.bin is left
 /// for the save point at F to commit (cl_journal_commit).
-pub(crate) fn cl_rewind(bodies: &[Vec<u8>], st: &ChainState) {
+pub(crate) fn cl_rewind(fork: u32, bodies: &[Vec<u8>], st: &ChainState) {
     let d = cl_dir().expect("a rewind needs the on-disk coin log (HAZYNC_COINLOG_DIR)");
     let mut store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
         libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
     let mut pos = cl_index();
     let n = st.utxo_leaves;
     let pend = d.join("pending.bin");
+    // only the journal's blocks ABOVE the fork, as cl_load takes only those above its state (review 16.11, H1): a crash
+    // between the trie's flush at a save point and the journal's commit leaves the records of the blocks the save point
+    // already holds, and undoing those to F's leaf count would unspend coins F's state spent. A record without its
+    // height (the version-1 format) cannot be placed: refused.
     let journal: Vec<Vec<u8>> = match std::fs::read(&pend) {
         Ok(u) => cl_journal_records(&u).unwrap_or_else(|e| panic!("{}: {e}: the journal cannot be trusted; nothing undone", pend.display()))
-                     .into_iter().map(|(_, b)| b.to_vec()).collect(),
+                     .into_iter().filter_map(|(h, b)| match h {
+                         Some(h) => (h > fork as u64).then(|| b.to_vec()),
+                         None => panic!("{}: a journal record without its height (version 1): a rewind cannot place it", pend.display()),
+                     }).collect(),
         Err(_) => Vec::new(),
     };
-    for b in journal.iter().rev().chain(bodies.iter()) { cl_undo_to(&mut store, &mut pos, b, n); }
+    for (i, b) in journal.iter().rev().chain(bodies.iter()).enumerate() {
+        cl_undo_to(&mut store, &mut pos, b, n);
+        // test hook: die part-way through the undo, its first block's changes synced (rewind_test.sh case G)
+        if i == 0 && std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok("rewind-mid-coinlog") {
+            if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { let _ = dn.sync(); }
+            if let libzync::host::AnyIndex::Disk(ix) = &pos { let _ = ix.sync(); }
+            std::process::exit(9);
+        }
+    }
     if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { dn.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}")); }
     if let libzync::host::AnyIndex::Disk(ix) = &pos { ix.sync().unwrap_or_else(|e| panic!("index sync: {e}")); }
     assert!(store.len() == n && normalize_host(store.roots()) == normalize_host(st.utxo_roots.clone()),

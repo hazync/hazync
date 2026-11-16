@@ -374,7 +374,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     std::fs::create_dir_all(out).unwrap();
     crate::lz::lock_run_dirs(out);
     // a reorg marker from the fetcher (REORG.md §4): nothing is applied, nothing is opened, until a person removes it
-    if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop(&format!("at the start: {} is there", m.display())); }
+    if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop_or_rewind(dir, &format!("at the start: {} is there", m.display())); }
     let mut prev: ChainState = if anchor_path == "genesis" { crate::genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };

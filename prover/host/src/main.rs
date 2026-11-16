@@ -1330,8 +1330,9 @@ fn main() {
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-prep-rewind") {
-        let usage = "libzync-prep-rewind <out dir> <block dir> [--allow-deep]";
-        rewind::rewind_cmd(args.get(p + 1).expect(usage), args.get(p + 2).expect(usage), args.iter().any(|a| a == "--allow-deep"));
+        let usage = "libzync-prep-rewind <out dir> <block dir> [--allow-deep] [--no-leaf-bundles]";
+        rewind::rewind_cmd(args.get(p + 1).expect(usage), args.get(p + 2).expect(usage), args.iter().any(|a| a == "--allow-deep"),
+                           args.iter().any(|a| a == "--no-leaf-bundles"));
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-prep") {

@@ -18,7 +18,8 @@
 #        D. refusals, nothing changed: depth W+1 without --allow-deep; a missing record; REORG_TOO_DEEP;
 #        E. a crash in the middle of a rewind (after the save point at F, before the moves): run again, same result;
 #           and --allow-deep for depth W+1.
-#   --control: the rewind's coin log undo skipped (records ignored): case A must FAIL.
+#   --control: one byte of the rewound run's coin log changed after case A's rewinds: the comparison (the stores'
+#   CONTENT digest) must catch it, so case A must FAIL.
 set -u
 H=${H:?the host: H=<path to host>}; HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../.." && pwd)
 B=${B:-$REPO/prover/testdata/libzync/mainnet}; O=${O:-/tmp/rewind-test}; RUN=$REPO/coordinator/deploy/libzync/libzync-prep-run.sh
@@ -37,12 +38,15 @@ marker() {  # marker <root> <fork> <depth> [class]
     printf '{"fork": %d, "depth": %d, "class": "%s", "prep_tip": 200}\n' $2 $3 "${4:-auto}" > $1/blocks/REORG
 }
 digest() { (cd $1 && HAZYNC_COINLOG_DIR=$1/cl HAZYNC_TRIE_DIR=$1/trie "$H" libzync-store-digest $1/out $2 2>/dev/null); }
-same_as_ref() {  # same_as_ref <root> <ref root> <hi> <F> <tag>
+same_as_ref() {  # same_as_ref <root> <ref root> <hi> <F> <tag> [noleaves]
     local r=$1 q=$2 hi=$3 f=$4 t=$5 ok=1 why=""
     for h in $(seq 1 $hi); do cmp -s $r/out/state_$h.json $q/out/state_$h.json || { ok=0; why="$why state_$h"; break; }; done
     for x in smt coinlog flags forest; do [ ! -e $q/out/state_$hi.$x ] || cmp -s $r/out/state_$hi.$x $q/out/state_$hi.$x || { ok=0; why="$why .$x"; }; done
     [ "$(sed 's#^HZTRIE-DISK [^ ]* ##' $r/out/state_$hi.trie)" = "$(sed 's#^HZTRIE-DISK [^ ]* ##' $q/out/state_$hi.trie)" ] || { ok=0; why="$why .trie"; }
-    diff -rq $r/leaves $q/leaves >/dev/null || { ok=0; why="$why leaves"; }
+    # (case F: a bundle carries its block's JSON as the FETCHER built it, with fields the test data files lack; the
+    #  bundles above F must still have moved, and the states and stores are compared in full)
+    if [ "${6:-}" = noleaves ]; then [ -z "$(ls $r/leaves/orphaned/1 2>/dev/null | sed -n 's/^leaf_\([0-9]*\)\.bin$/\1/p' | awk -v f=$f '$1<=f')" ] || { ok=0; why="$why leaves"; }
+    else diff -rq --exclude=orphaned $r/leaves $q/leaves >/dev/null || { ok=0; why="$why leaves"; }; fi
     diff -rq $r/out/reorg $q/out/reorg >/dev/null || { ok=0; why="$why records"; }
     cmp -s $r/out/PREP_TIP.json $q/out/PREP_TIP.json || { ok=0; why="$why tip"; }
     local dr dq; dr=$(digest $r $hi); dq=$(digest $q $hi)
@@ -55,7 +59,12 @@ import sys
 def ents(p):
     b = open(p, "rb").read()
     return [(int.from_bytes(b[i:i + 4], "little"), b[i + 4:i + 36], b[i + 44:i + 76]) for i in range(0, len(b), 80)]
-a, q = ents(sys.argv[1]), ents(sys.argv[2])
+def newest(e):
+    # a height logged twice (a rewind logs F's root again, in its new generation): the newest entry is the one that counts
+    d = {}
+    for x in e: d[x[0]] = x
+    return [d[h] for h in sorted(d)]
+a, q = newest(ents(sys.argv[1])), newest(ents(sys.argv[2]))
 sys.exit(0 if a == q and [e[0] for e in a] == list(range(1, len(a) + 1)) else 1)
 PY
     local orph; orph=$(ls $r/out/orphaned/1/ 2>/dev/null | grep -c '^state_[0-9]*\.json$')
@@ -68,7 +77,7 @@ reference() {  # reference <ref root> <F> <branch dir> <hi>: a fresh prep of mai
     run $1 $4
 }
 CONTROL=0; [ "${1:-}" = --control ] && CONTROL=1
-if [ $CONTROL = 1 ]; then export HAZYNC_TEST_REWIND_SKIP_COINLOG=1; echo "CONTROL: the rewind's coin log undo is skipped"; fi
+[ $CONTROL = 1 ] && echo "CONTROL: a byte of each rewound coin log is changed before the comparison"
 
 # the old chain once: prep 1..200, stores saved at 200, kept as a template
 T=$O/template; root $T; cp $B/block_*.json $T/blocks/; run $T 200; rc=$?
@@ -83,9 +92,26 @@ for d in 1 2 12; do
     r=$O/a$d; copy_template $r; cp $br/block_*.json $r/blocks/; marker $r $f $d
     run $r $hi; rc=$?
     check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $f (epoch 1)" $r/run.log && grep -aq "$d block(s) undone" $r/run.log && echo 1)" "A depth $d: rewound to $f and re-prepped to $hi (exit $rc)"
+    [ $CONTROL = 1 ] && python3 -c "import sys; p=sys.argv[1]; b=bytearray(open(p,'rb').read()); b[40] ^= 1; open(p,'wb').write(b)" $r/cl/L0.bin
     same_as_ref $r $q $hi $f "A depth $d"
 done
 [ $CONTROL = 1 ] && { [ $fails -gt 0 ] && { echo "CONTROL OK: $fails check(s) fail without the coin log undo"; exit 0; }; echo "CONTROL BROKEN: nothing failed"; exit 1; }
+
+echo "== H. a stale journal (review 16.11, H1): prep died between the trie's flush at 200 and the journal's commit"
+# HAZYNC_TEST_PREP_CRASH_AT=200 (dev mode): exit right after the trie's flush at 200, before its marker; pending.bin still
+# holds 151..200 and the runner takes 200 as the save point (the trie is at 200). A rewind must undo only the journal's
+# blocks ABOVE the fork, as a load does.
+for fk in 198 200; do
+    d=$((200 - fk)); hi=$((fk + 2)); br=$O/hbranch$fk
+    python3 $HERE/reorg_branch.py $B $fk 2 h$fk $br > /dev/null
+    q=$O/href$fk; reference $q $fk $br $hi
+    r=$O/h$fk; root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_TEST_PREP_CRASH_AT=200
+    check "$([ -e $r/out/state_200.coinlog ] && [ ! -e $r/out/state_200.trie ] && [ -s $r/cl/pending.bin ] && echo 1)" "H fork $fk: prep died after the trie's flush at 200, the journal (151..200) left"
+    rm -f $r/blocks/block_*.json; cp $br/block_*.json $r/blocks/; marker $r $fk $d
+    run $r $hi; rc=$?
+    check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $fk" $r/run.log && echo 1)" "H fork $fk: rewound and re-prepped (exit $rc)"
+    same_as_ref $r $q $hi $fk "H fork $fk"
+done
 
 echo "== B. prep stopped between save points (its journal holds 151..200)"
 for d in 1 12; do
@@ -110,6 +136,72 @@ run $r $hi; rc=$?
 check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $f" $r/run.log && echo 1)" "C: the runner, started again, rewound and prep finished (exit $rc)"
 same_as_ref $r $q $hi $f "C"
 
+echo "== F. end to end, nothing faked but the node: the fetcher (follow, AUTO) from a fake bitcoin-cli serving real blocks,"
+echo "   prep through the runner restarted as systemd would; the node reorgs at depth 2 while prep waits for block 201"
+d=2; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d
+r=$O/f$d; root $r; cp $REPO/prover/fetch_block_rpc.py $r/bin/
+python3 - $B $br $f $r/world.json <<'PY'
+import json, sys
+b, br, f, w = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+json.dump({"chain": [f"{b}/block_{h}.json" for h in range(1, 201)]}, open(w, "w"))
+json.dump({"chain": [f"{b}/block_{h}.json" for h in range(1, f + 1)] + [f"{br}/block_{h}.json" for h in range(f + 1, f + 5)]}, open(w + ".new", "w"))
+PY
+export HAZYNC_RPC_CLI="python3 $HERE/reorg_fake_node.py $r/world.json"
+( env HAZYNC_REORG_AUTO=1 HAZYNC_FETCH_POLL_S=0.3 python3 $r/bin/fetch_block_rpc.py follow 1 $r/blocks --window 300 --jobs 2 --after-saves $r/out > $r/fetch.log 2>&1 ) & FP=$!
+( while true; do run $r $hi; rc=$?; echo "runner exit $rc" >> $r/runs.log; [ $rc = 5 ] || exit $rc; sleep 1; done ) & RP=$!
+for _ in $(seq 1 600); do grep -q '"height": 200' $r/out/PREP_TIP.json 2>/dev/null && break; sleep 0.2; done
+sleep 1; mv $r/world.json.new $r/world.json                     # the node reorgs: 199..202 of the branch
+wait $RP; rc=$?
+kill $FP 2>/dev/null; wait $FP 2>/dev/null
+unset HAZYNC_RPC_CLI
+check "$([ $rc = 0 ] && grep -q 'FETCH_REORG_AUTO .*fork at 198, depth 2' $r/fetch.log && grep -q "prep's rewind is done" $r/fetch.log \
+       && grep -q 'runner exit 5' $r/runs.log && grep -aq 'PREP_REWOUND to 198' $r/run.log && echo 1)" \
+      "F: the fetcher saw the reorg (auto), prep exited 5, the runner rewound, the fetcher carried on, prep reached $hi (exit $rc)"
+same_as_ref $r $q $hi $f "F (end to end)" noleaves
+
+echo "== G. crashes inside a rewind (each run again by the runner from out/REWIND): during the coin log's undo, between"
+echo "   the trie's flush at F and its marker, half way through the moves, between removing REWIND and the marker"
+d=12; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d
+for hook in rewind-mid-coinlog trie-flush rewind-mid-moves rewind-before-marker; do
+    r=$O/g-$hook; copy_template $r; cp $br/block_*.json $r/blocks/; marker $r $f $d
+    if [ $hook = trie-flush ]; then env="HAZYNC_TEST_PREP_CRASH_AT=$f"; else env="HAZYNC_CRASH_AT=$hook"; fi
+    (cd $r && env HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie HAZYNC_PREP_LEAF_BUNDLES=$r/leaves $env \
+         $r/bin/host_lz libzync-prep-rewind $r/out $r/blocks >> $r/run.log 2>&1); rc=$?
+    run $r $hi; rc2=$?
+    check "$([ $rc != 0 ] && [ $rc != 4 ] && [ $rc2 = 0 ] && echo 1)" "G $hook: the rewind died (exit $rc), the runner finished it and prep (exit $rc2)"
+    same_as_ref $r $q $hi $f "G $hook"
+done
+
+echo "== I. the journal and the fork against the save point: T > A > F (prep at 199, saved at 150, fork 145),"
+echo "   and F exactly AT the save point with a journal above it (fork 150)"
+for fk in 145 150; do
+    hi=$((fk + 6)); br=$O/ibranch$fk
+    python3 $HERE/reorg_branch.py $B $fk 6 i$fk $br > /dev/null
+    q=$O/iref$fk; reference $q $fk $br $hi
+    r=$O/i$fk; root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
+    check "$([ -e $r/out/state_150.coinlog ] && [ -s $r/cl/pending.bin ] && echo 1)" "I fork $fk: prep died after 199, saved at 150, the journal holds 151..199"
+    for h in $(seq $((fk + 1)) 200); do rm -f $r/blocks/block_$h.json; done; cp $br/block_*.json $r/blocks/
+    marker $r $fk $((199 - fk))
+    run $r $hi HAZYNC_REORG_AUTO_DEPTH=60; rc=$?
+    check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $fk" $r/run.log && echo 1)" "I fork $fk: rewound and re-prepped to $hi (exit $rc)"
+    same_as_ref $r $q $hi $fk "I fork $fk"
+done
+
+echo "== J. a rewind with a reader's PIN in the trie (ZAPP_FOLLOWER Z1), and a SECOND reorg on the new branch"
+d=12; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d
+r=$O/j; copy_template $r; echo "150 0" > $r/trie/PIN; cp $br/block_*.json $r/blocks/; marker $r $f $d
+run $r $hi; rc=$?
+check "$([ $rc = 0 ] && [ -n "$(ls $r/trie/retain 2>/dev/null)" ] && echo 1)" "J: rewound with a PIN at 150 (slots held in retain/) (exit $rc)"
+same_as_ref $r $q $hi $f "J with a PIN"
+# the second reorg: one block deep on the branch, at 201
+s2=$O/src2; mkdir -p $s2; for h in $(seq 1 $f); do cp $B/block_$h.json $s2/; done; cp $br/block_*.json $s2/
+br2=$O/branch-second; python3 $HERE/reorg_branch.py $s2 201 3 second $br2 > /dev/null
+q2=$O/ref2; root $q2; for h in $(seq 1 201); do cp $s2/block_$h.json $q2/blocks/; done; cp $br2/block_*.json $q2/blocks/; run $q2 204
+cp $br2/block_*.json $r/blocks/; marker $r 201 1
+run $r 204; rc=$?
+check "$([ $rc = 0 ] && grep -aq 'PREP_REWOUND to 201 (epoch 2)' $r/run.log && [ -e $r/out/orphaned/2/state_202.json ] && echo 1)" "J: a second reorg (fork 201, epoch 2) (exit $rc)"
+same_as_ref $r $q2 204 201 "J second reorg"
+
 echo "== D. refusals: nothing changed"
 fp() { (cd $1 && find cl trie out -type f ! -name LOCK -printf '%p %s %T@\n' | sort | sha256sum); }
 r=$O/d1; copy_template $r; marker $r 187 13 manual; before=$(fp $r)
@@ -119,8 +211,12 @@ r=$O/d2; copy_template $r; marker $r 195 5; rm $r/out/reorg/u_197.bin; before=$(
 run $r 210; rc=$?
 check "$([ $rc = 4 ] && grep -aq 'u_197.bin.*the records do not reach the fork' $r/run.log && [ "$(fp $r)" = "$before" ] && echo 1)" "D: a missing record: exit 4, the stores unchanged"
 r=$O/d3; copy_template $r; echo '{}' > $r/blocks/REORG_TOO_DEEP; before=$(fp $r)
-env LZ_ROOT=$r HAZYNC_REORG_AUTO=1 $r/bin/host_lz libzync-prep-rewind $r/out $r/blocks >> $r/run.log 2>&1; rc=$?
+(cd $r && env HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie HAZYNC_PREP_LEAF_BUNDLES=$r/leaves $r/bin/host_lz libzync-prep-rewind $r/out $r/blocks >> $r/run.log 2>&1); rc=$?
 check "$([ $rc = 4 ] && grep -aq 'REORG_TOO_DEEP' $r/run.log && [ "$(fp $r)" = "$before" ] && echo 1)" "D: REORG_TOO_DEEP: exit 4, nothing changed"
+
+r=$O/d4; copy_template $r; marker $r 195 5; before=$(fp $r)
+(cd $r && env HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie $r/bin/host_lz libzync-prep-rewind $r/out $r/blocks >> $r/run.log 2>&1); rc=$?
+check "$([ $rc = 4 ] && grep -aq 'HAZYNC_PREP_LEAF_BUNDLES is not set' $r/run.log && [ "$(fp $r)" = "$before" ] && echo 1)" "D: the leaf bundles' directory not said: exit 4, nothing changed"
 
 echo "== E. a crash in the middle of a rewind, and --allow-deep"
 d=12; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d

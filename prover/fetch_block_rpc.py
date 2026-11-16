@@ -286,9 +286,16 @@ def auto_marker(d):
     except (OSError, ValueError): return False
 
 def wait_for_rewind(d):
-    """AUTO: wait while prep rewinds (the REORG marker is removed by libzync-prep-rewind when it is done)."""
+    """AUTO: wait while prep rewinds (the REORG marker is removed by libzync-prep-rewind when it is done), at most
+    HAZYNC_REWIND_WAIT_S (default 3600): a rewind that never comes is a stop for a person (exit 4: the unit fails and
+    alerts), not a fetcher waiting for ever."""
+    limit = float(os.environ.get("HAZYNC_REWIND_WAIT_S", "3600"))
+    t0 = time.time()
     print("waiting for prep's rewind (the REORG marker goes when it is done)", flush=True)
     while (d / "REORG").exists():
+        if time.time() - t0 > limit:
+            print(f"FETCH_STOPPED_REORG prep did not rewind within {limit:.0f} s (HAZYNC_REWIND_WAIT_S): a person decides", flush=True)
+            sys.exit(EXIT_REORG)
         if (d / "REORG_TOO_DEEP").exists() or not auto_marker(d):
             print(f"FETCH_STOPPED_REORG the marker is no longer one prep rewinds by itself", flush=True)
             sys.exit(EXIT_REORG)
@@ -296,13 +303,17 @@ def wait_for_rewind(d):
     print("prep's rewind is done: carrying on from its save point", flush=True)
 
 def refuse_if_marked(d):
+    """Exit 4 while a marker is there; with AUTO and an `auto` one, wait for prep's rewind instead. Returns whether it
+    waited (prep's save points then moved: where fetching starts must be found again, review 16.11 M2)."""
     if AUTO and not (d / "REORG_TOO_DEEP").exists() and auto_marker(d):
         wait_for_rewind(d)
+        return True
     for m in MARKERS:
         if (d / m).exists():
             print(f"FETCH_STOPPED_REORG {d / m} is there: a person decides (docs/libzync/REORG.md §11); remove it once "
                   f"prep's stores are on the active chain", flush=True)
             sys.exit(EXIT_REORG)
+    return False
 
 def check_prep(d, od, tip):
     """The detection check against prep's tip. Returns prep's tip height, or None while the node is behind prep (a node
@@ -400,7 +411,8 @@ def supervise(lo, hi, d, window, jobs, od, follow):
     COMPLETE save point, as the fetch always has: the files at or below it were consumed (state files above prep's real
     position, left by an older run, must not move where fetching starts)."""
     import multiprocessing
-    refuse_if_marked(d)
+    if refuse_if_marked(d):
+        lo = max(complete_saves(od), default=0) + 1                     # the rewind put prep's save point at the fork
     tip = PrepTip(od)
     batch, last_best, done_to, batch_top, seen = [], None, lo - 1, None, {}
     def stop_batch():
