@@ -177,7 +177,7 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | composed receipt, Groth16-wrapped | 88.5 s; 3,129 bytes (seal 256 bytes); verify 9 ms |
 | Groth16 wrap of the core receipt 0..200 (hazync-coord CPU + Docker) | 94.4 s; 227,362 -> 4,633 bytes (seal 256 bytes); verify 5 ms |
 | Groth16 wrap of the header receipt 0..975,278 | 97.0 s; 227,474 -> 4,745 bytes; verify 6 ms |
-| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `82437c4c…`) | 1,193,023 bytes (340,484 gzipped) |
+| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `0085c412…`; its CLI is the crate `zapps/deposit/cli`, the only one linking zapps/common) | 1,193,024 bytes (340,580 gzipped) |
 
 Tests: 19 unit tests (`zapps/deposit/src/tests.rs`), `test_deposit.sh` 29/29 (5 chain-identity cases: an agreeing node, one
 naming another block, one giving no chainwork, one giving another chainwork, and the tip given), `wasm/test-deposit.mjs`

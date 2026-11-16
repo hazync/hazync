@@ -235,7 +235,7 @@ fn verify_main(a: Vec<String>) -> ! {
         let pre = verify_deposit(&b, &DepositAsk { expect_tip: None, require_identity: false, allow_demo: true, ..ask.clone() },
                                  &network, image, &himage, now);
         if let Some(s) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
-            let (x, c) = zapp_common::expect_at(&id, &network, s.tip_height as u32, &s.tip_work);
+            let (x, c) = zapp_common::expect_at(&id, &network, s.tip_height as u32, Some(&s.tip_work));
             ask.expect_tip = x.as_deref().map(parse);
             extra = c;
         }

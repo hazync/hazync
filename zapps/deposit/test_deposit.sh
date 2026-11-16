@@ -2,9 +2,9 @@
 # End-to-end test of the deposit-proof zyncAPP CLI zapp-deposit (docs/libzync/DEPOSIT_ZAPP.md) on real receipts: `zapp-deposit build` (was zync-deposit) builds
 # bundles for block 170's Satoshi-to-Hal transaction against the core proof of mainnet 0..200 (8888d59c), alone, bound to
 # the header chain 0..200 and to the whole header chain 0..975,278 (de54b94f); `zapp-deposit` (was swiftsync-verify deposit) checks them with
-# the caller's expectations. Usage: test_deposit.sh [<zapp-deposit>] (default: target/release, after `cargo build --release` here). Prints every
+# the caller's expectations. Usage: test_deposit.sh [<zapp-deposit>] (default: cli/target/release, after `cargo build --release --manifest-path cli/Cargo.toml`). Prints every
 # verdict line and exit code; the unit tests (src/tests.rs) hold the finer refusals.
-Z=$(realpath "${1:-$(dirname "$0")/target/release/zapp-deposit}")
+Z=$(realpath "${1:-$(dirname "$0")/cli/target/release/zapp-deposit}")
 cd "$(dirname "$0")/../.." || exit 1
 B=$(dirname "$Z"); D=experimental/libzync-bench/deposit; H=experimental/libzync-bench/headers
 CORE=swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt
