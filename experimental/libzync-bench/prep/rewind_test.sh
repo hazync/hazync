@@ -198,7 +198,8 @@ done
 echo "== J0. a run PINNED from the start (PIN 150: its trie holds every root from 150 on), rewound below nothing it pins"
 echo "   (fork 188) and run on: the root of 150 must still read as state_150's trie (review 16.11, N1)"
 d=12; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d
-r=$O/j0; root $r; mkdir -p $r/trie; echo "150 0" > $r/trie/PIN; cp $B/block_*.json $r/blocks/; run $r 200
+# (the PIN goes in after the first save point: the runner clears the stores of a run with none, PIN included)
+r=$O/j0; root $r; cp $B/block_*.json $r/blocks/; run $r 100; echo "150 0" > $r/trie/PIN; run $r 200
 cp $br/block_*.json $r/blocks/; marker $r $f $d
 run $r $hi; rc=$?
 want=$(python3 -c "import json,sys; print(bytes(json.load(open(sys.argv[1]))['trie_root']).hex())" $r/out/state_150.json 2>/dev/null || python3 -c "import json,sys; print(bytes(json.load(open(sys.argv[1]))['trie_root']).hex())" $r/out/orphaned/1/state_150.json)
