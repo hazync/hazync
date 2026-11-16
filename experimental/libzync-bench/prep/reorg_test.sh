@@ -8,7 +8,9 @@
 #   3. a REORG marker in the block directory: exit 4 before anything is opened, no state written;
 #   4. a block whose prev is not the state's tip, static files: exit 4 at that block (was a panic, a restart loop);
 #   5. the same fed by the fetcher (HAZYNC_PREP_CONSUME=1): prep waits; the file replaced by one that extends the state,
-#      it carries on and ends byte-identical; a marker written instead: exit 4; neither within HAZYNC_PREP_WAIT_S: exit 4.
+#      it carries on and ends byte-identical; a marker written instead: exit 4; neither within HAZYNC_PREP_WAIT_S: exit 4;
+#   6. a run that wrote no records (J=0: byte-identical stores and states to a host from before P1, case 1) continues
+#      from its save point with records on: they start at the anchor + 1, and the states end byte-identical.
 #   --control: prep_block's assert path (records off, no prev check) is NOT what is tested: the control runs case 4
 #   with the block's prev intact and must then PASS that block, proving case 4 fails for the prev and nothing else.
 set -u
@@ -108,6 +110,14 @@ check "$([ $rc = 4 ] && grep -aq 'PREP_STOPPED_REORG block 171 .*, and .*REORG i
 consume $O/c3 HAZYNC_PREP_WAIT_S=3
 wait $PID; rc=$?
 check "$([ $rc = 4 ] && grep -aq 'after 3 s (HAZYNC_PREP_WAIT_S), and the fetcher wrote no marker' $O/c3/run.log && echo 1)" "5c. consume: no verdict within HAZYNC_PREP_WAIT_S: exit 4 (exit $rc)"
+
+# 6. a run without records (as the v0.26.0 host leaves it) continued by this host
+prep $O/old 1 150 genesis HAZYNC_PREP_UNDO_KEEP=0 > $O/old.log 2>&1
+prep $O/old 151 200 $O/old/out/state_150.json HAZYNC_PREP_CONTINUE=1 > $O/old2.log 2>&1; rc=$?
+same=1; for h in $(seq 151 200); do cmp -s $O/ref/out/state_$h.json $O/old/out/state_$h.json || same=0; done
+recs=$(ls $O/old/out/reorg 2>/dev/null | sort -t_ -k2 -n | sed -n '1p;$p' | tr '\n' ' ')
+check "$([ $rc = 0 ] && [ "$same" = 1 ] && [ "$recs" = "u_151.bin u_200.bin " ] && [ $(ls $O/old/out/reorg | wc -l) = 50 ] && echo 1)" \
+      "6. a run without records continues (default J, disk stores): records u_151..u_200, states 151..200 byte-identical (exit $rc)"
 
 echo
 [ $fails = 0 ] && { echo "all reorg prep checks passed"; exit 0; }
