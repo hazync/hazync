@@ -146,7 +146,7 @@ truncate. **The coin log, the trie and the BIP30 tree are what make this hard.**
 | option | how | disk | time for a depth-d rewind | code | verdict |
 |---|---|---|---|---|---|
 | A. rolling full save points in the last W | copy the stores at each save | 345 GB per copy (55 + 290, MEASURED) | copying alone takes hours (ESTIMATE: about 2.4 h at the ~40 MB/s `/srv/bulk` write cap) | small | **no**: the stores are changed in place, so a save point is a marker, not a copy |
-| **B. per-block undo records, kept for J** | before each block, write what undoes it: the coin log record (the `pending.bin` body, as today), the trie keys it marks and inserts with its `replaced` flag, and the BIP30 tree's `(key, prior)` list | ESTIMATE **~1 MB/block**: 366 KB coin log (MEASURED) + ~0.6 MB of trie keys (64 B per mark or insert, about 2x the coin-log body) + a few KB for the BIP30 tree. **W ≈ 0.3 GB, J ≈ 2 GB** | ESTIMATE about the apply cost, ~4 s/block: depth 1 ≈ 10 s, depth 6 ≈ 30 s, depth 288 ≈ 20 min, then re-prep of the new branch at the same rate | ~400 lines Rust | **chosen** |
+| **B. per-block undo records, kept for J** | before each block, write what undoes it: the coin log record (the `pending.bin` body, as today), the trie keys it marks and inserts with its `replaced` flag, and the BIP30 tree's `(key, prior)` list | ESTIMATE **~1 MB/block**: 366 KB coin log (MEASURED) + ~0.6 MB of trie keys (64 B per mark or insert, about 2x the coin-log body) + a few KB for the BIP30 tree. **W ≈ 0.3 GB, J ≈ 2 GB**. MEASURED since: 1.05 MB per block at the tip, W = 302 MB (§15) | ESTIMATE about the apply cost, ~4 s/block: depth 1 ≈ 10 s, depth 6 ≈ 30 s, depth 288 ≈ 20 min, then re-prep of the new branch at the same rate | ~400 lines Rust | **chosen** |
 | C. keep prep K blocks behind the tip | never see reorgs ≤ K | none | adds K × 10 min latency to every block | tiny | **no** as the only defence (user requirement); and it still needs B for reorgs deeper than K |
 | D. replay from the newest save point ≤ F | restart from an older save | — | — | — | **impossible**: the stores cannot go back to a save point below their height (`RESET_v026.md`); this is why the v0.26 reset restarts from genesis |
 | B′. trie variant: keep freed trie slots for J flushes, rewind = point the root back | retain old versions | ESTIMATE ~20 MB/block of replaced nodes, so ~6 GB for W | instant for the trie | medium | not needed: B's trie undo is exact, and B′ needs a flush per block; kept as a fallback if trie undo turns out slow |
@@ -344,6 +344,17 @@ assert it waits for the fetcher (the file replaced, or a marker) up to `HAZYNC_P
 fork-point <out> [--deep]` is the runbook's step 2. **P2 recovery, until P3:** a person checks the reorg (§11 step 1),
 recovers the stores, then removes the marker from the block directory and starts both units.
 
+**Record size, MEASURED** from the blocks (the node, read-only RPC; each block's counts put through the record's exact
+layout: external spends, created and appended coins, as prep counts them), not from a prep run at those heights:
+
+| blocks | mean | median | max | coin log part (mean) |
+|---|---|---|---|---|
+| 632,001..632,587 (the 587 blocks of §2's `pending.bin`) | 1.04 MB | 1.10 MB | 1.71 MB | 365 KB (`pending.bin`: 366 KB, §2) |
+| 975,818..976,105 (the last 288 at the time) | 1.05 MB | 0.98 MB | 1.95 MB | 292 KB |
+
+So W = 288 blocks at the tip is **302 MB (MEASURED)** and J = 2,016 about **2.1 GB** (ESTIMATE, 2,016 x the tip mean).
+The trie keys are about two thirds of a record at the tip (64 bytes for each of ~4,100 spends and ~7,700 new coins).
+
 **What building it corrected in this page:**
 
 - **§6 "write the record before the stores change"** cannot hold for the BIP30 priors and the trie's `replaced` flag,
@@ -359,5 +370,7 @@ recovers the stores, then removes the marker from the block directory and starts
   branch for that time. Only P3/P4 (moving the states) close it.
 - **The coordinator's hash check at commit** (listed in P2) can never fire while no state file moves: it belongs with
   P3/P4 and was left to them.
+- **Where fetching starts** must stay prep's newest complete save point + 1, never prep's newest state file + 1: state
+  files above the save point (an older run's, or a crashed run's) would move the start past the blocks prep needs.
 - **Waiting block files carry no hash.** The fetcher hashes each file's header (the first 4 KB hold the header fields
   in every writer's key order; else the whole file), checked against the 200 mainnet test blocks' hashes.
