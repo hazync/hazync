@@ -8,7 +8,19 @@ set -euo pipefail
 cd "$(dirname "$0")"
 . ../../scripts/zapp-checks.sh
 cargo test --release --manifest-path ./Cargo.toml
+# the tests-only regtest-test feature (dev profile), and its controls: no release build with it, no WASM module with it
+cargo test --features regtest-test --manifest-path ./Cargo.toml
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+if cargo build --release --features regtest-test --manifest-path ./Cargo.toml > "$W/log" 2>&1; then
+    echo "::error::control: a release build of zapp-common with regtest-test compiled"; exit 1; fi
+grep -q "regtest-test. feature is for tests only" "$W/log" || { tail -20 "$W/log"; echo "::error::control: not refused by the feature's compile_error"; exit 1; }
+REPO=$(cd ../.. && pwd)
+mkdir -p "$W/rt/src" && : > "$W/rt/src/lib.rs"
+printf '[package]\nname = "rt"\nversion = "0.1.0"\nedition = "2021"\n[lib]\ncrate-type = ["cdylib"]\n[dependencies]\nzapp-common = { path = "%s/zapps/common", features = ["regtest-test"] }\n[workspace]\n' "$REPO" > "$W/rt/Cargo.toml"
+if ../../scripts/wasm-build.sh "$(realpath --relative-to="$REPO" "$W/rt")" "$W/stage" rt.wasm > "$W/log" 2>&1; then
+    echo "::error::control: scripts/wasm-build.sh built a WASM graph with regtest-test"; exit 1; fi
+grep -q "enables the tests-only feature regtest-test" "$W/log" || { tail -20 "$W/log"; echo "::error::control: wasm-build.sh failed, but not on the regtest-test check"; exit 1; }
+echo "control: regtest-test is refused in a release build and in a WASM build"
 # a stand-in zAPP shared library, and two programs: one that links beside the core's archive, one that calls a symbol
 # nothing defines
 printf 'int zc_dummy(void) { return 0; }\n' > "$W/d.c"; cc -shared -fPIC -o "$W/libzc_dummy.so" "$W/d.c"

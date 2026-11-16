@@ -27,7 +27,7 @@
 //! as `getblock <hash> 0` prints it; `--bitcoin-cli` asks a node for it instead.
 
 use std::process::exit;
-use swiftsync_verify::{hex, hex32, Image, Verdict};
+use swiftsync_verify::{hex, hex32, Verdict};
 use zapp_deposit::{core_state, make_bundle, verify_deposit, DepositAsk};
 use zapp_common::{Identity, IDENTITY_USAGE};
 use zapp_headers::{HeaderState, HEADERS_IMAGE_ID};
@@ -153,7 +153,8 @@ fn build_main(a: Vec<String>) {
     let b = make_bundle(&network, &core, &headers, history.as_deref(), &raw_block, height, &txid, &tip_path, block_path.as_deref())
         .unwrap_or_else(|e| die(&e));
     // self-check with the verifier: the transaction at depth >= 1, a block above the core tip allowed (it is flagged)
-    let img = Image::by_network(&network).unwrap_or_else(|| die("unknown network"));
+    // as every zAPP resolves it (zapp_corecheck::image_for; "regtest" only under the tests-only regtest-test feature)
+    let img = zapp_corecheck::image_for(&network, "", false, false).unwrap_or_else(|e| die(&e));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     // (a self-check of the bundle's parts: the chain identity is the verifier's caller's, not the builder's)
     let ask = DepositAsk { txid, min_depth: 1, min_validated_depth: 0, allow_pow_only_block: true, require_identity: false, allow_demo: true, ..Default::default() };
@@ -243,6 +244,13 @@ fn verify_main(a: Vec<String>) -> ! {
     let mut rep = verify_deposit(&b, &ask, &network, image, &himage, now);
     if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; rep.accepted = false; rep.statement = None; }
     rep.checks.splice(0..0, extra);
+    // a report on the tests-only regtest image says so on its FIRST line (zapps/corecheck's TEST_IMAGE_LINE, which the
+    // core check puts first of its own lines, after the bundle's)
+    #[cfg(feature = "regtest-test")]
+    if let Some(i) = rep.checks.iter().position(|c| c.1 == format!("core: {}", zapp_corecheck::TEST_IMAGE_LINE)) {
+        let c = rep.checks.remove(i);
+        rep.checks.insert(0, c);
+    }
     for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
     if rep.verdict == Verdict::Demo && rep.statement.is_none() {
         println!("SWIFTSYNC_VERIFY_DEMO: deposit NOT accepted: valid checks, but {}; the statement is withheld (--allow-demo shows it)",
