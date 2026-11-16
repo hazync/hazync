@@ -87,6 +87,13 @@ verified, and a changed receipt refused.
   966,143, signet `…1090e9dc1520`; it was Core v28's). Below it a valid chain from genesis is reported DEMO, not OK.
   Verifier and host only: the image does not carry it. Our comparison found no consensus change from Core v28.0 to
   v32.1 in the code Hazync compiles (no verdict changes on Core's test vectors).
+- **Prep derives the BIP30-tracked flag as the guest does** (#736, host only; the image is unchanged). The host before
+  this one read coin-leaf flag bit 1 from the block file, and the block fetcher never wrote it, so every prep state from
+  mainnet block 147,396 (the first tracked coinbase, `cec2a159…`) on disagreed with what the guest commits, and the
+  board would have stalled joining 147,396 to 147,397. The host now derives the flag itself
+  (`prover/host/src/tracked.rs`); measured on 134 heights around 147,396 and 150,000, prep's state equals the guest's.
+  Prep writes a `state_<h>.flags` marker and refuses to continue from an older host's state, or a leaf bundle, at or
+  above the first tracked height. Board operators: the paper prep restarts from genesis under this host.
 - **The browser verifier's facts check works again.** Since 13.11.2026 (never in a release) `verify_facts` read its
   optional lineage chunk before the facts, so every `verifyFacts` call with facts, and every `verify` with an expected
   tip, failed. The lineage is now the last chunk in both frames; `test-facts-frame.mjs` (in CI) checks a real balance
