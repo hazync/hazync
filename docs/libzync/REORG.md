@@ -158,8 +158,11 @@ truncate. **The coin log, the trie and the BIP30 tree are what make this hard.**
   SHA-256). It is made durable at the next save point, before that save point's state file, so every record at or
   below a complete save point survives a power loss. Records above the newest save point are only ever needed in the
   process that wrote them: a crash undoes those blocks (`pending.bin`, the trie's last flush), and the restart deletes
-  the records above its anchor and writes them again. `pending.bin` stays the crash journal, unchanged. After each
-  block, delete `u_<h-J>.bin`.
+  the records above its anchor and writes them again. `pending.bin` stays the crash journal, unchanged. The window is
+  cut **only at save points** (at save s, every record ≤ s − J goes; review, M3): cut per block, a crash at c and a
+  restart from the save point A left only J − (c − A) records below A. So at every moment the records reach at least J
+  blocks below prep's position, and below every save point a restart can take; no relation between
+  `HAZYNC_PREP_SAVE_EVERY` and J or W is needed (between save points the window holds up to J + SAVE_EVERY records).
 - **Coin log:** `cl_undo_to(body, n)` exactly as the crash path uses it today; the record's body is the same bytes.
 - **Trie:** undo needs only each mark's and insert's **key** (`t_rm`, `t_unmark`). New
   `TrieStore::undo_recorded(keys, replaced)` refuses when `replaced` is true (a BIP30 re-creation, impossible after
@@ -328,21 +331,42 @@ block hash, prev hash, the coin log body (byte for byte `pending.bin`'s record b
 `replaced` flag and the KEYS of its marks and inserts, the BIP30 tree's `(key, prior)` list, SHA-256. Kept for J =
 `HAZYNC_PREP_UNDO_KEEP` blocks (default 2,016 with on-disk stores, 0 = none; in-memory runs default to 0). Nothing reads
 them yet. Tests show each part is enough to undo its block: the coin log body undoes random blocks on a disk store
-back to any earlier block (`lz.rs`), the trie keys undo random blocks in the session (`reorg.rs`), the BIP30 priors
+back to any earlier block (`lz.rs`), the trie keys undo random blocks in the session (`reorg.rs`) and, through the new
+`TrieStore::undo_recorded` (host only, `std`; review M5), blocks applied in an EARLIER session: a disk trie reopened
+from its last flush, each block undone from its keys alone, equals snapshot byte for byte the trie of the blocks below
+it, and stays equal after a flush and a reopen (`trie_store.rs`). P3 builds on that function. The BIP30 priors
 undo inserts and tracked spends (`reorg.rs`); on mainnet 1..200 the records match the states, are byte-identical after a
 crash and restart, and leave every state byte-identical to a run without them
 (`experimental/libzync-bench/prep/reorg_test.sh`).
 
 **P2, detect and stop** (`prover/fetch_block_rpc.py`, `prep.rs`, the four prep and fetch units, four `alert.conf`
-drop-ins). With `--after-saves`, `range` (and the new `follow`) check prep's newest `state_<h>.json` against the node
-every poll (5 s) and, when the node's best block changes, every waiting block file (its header hashed from the file).
+drop-ins). With `--after-saves`, `range` (and the new `follow`) check **prep's tip** against the node every poll (5 s),
+every waiting block file when the node's best block changes (its header hashed from the file), and every waiting file
+that is new since the last poll. Prep's tip is `<out>/PREP_TIP.json`, which prep writes at its start and after every
+block (atomically; synced at save points): the height its STORES are at, that block's hash, J, and `undo_from`, the
+lowest height whose undo record exists. Not the highest `state_<h>.json`: a crashed run leaves state files above the save
+point its restart takes (review, M2). A host from before the file is read from its state files, down to its newest
+complete save point; state files that exist but do not read stop the fetcher ("cannot check", exit 4), never read as
+"no reorg" (M1), and so does a missing or unreadable state inside the fork walk (M4). Depth is counted from prep's tip
+(L1); J and the records' reach come from the tip file (L2): a fork the records cannot undo (deeper than J, or below
+`undo_from`, e.g. older than the upgrade to this host) is `REORG_TOO_DEEP`. Prep's state files between save points are
+written by rename and synced at the next save point (M4; the bytes are unchanged), and a block file that is there but
+does not read is waited for in consume mode (L3).
 **P2 stops for every fork below prep's tip**: `blocks/REORG` with `class` `auto` (depth ≤ W, P3 will handle it with no
 person) or `manual` (W < depth ≤ J), or `blocks/REORG_TOO_DEEP` (no agreement within J), and exit 4. A fork above
 prep's tip only replaces the waiting files. Prep exits 4 while a marker is there, and in place of the `prep.rs:197`
 assert it waits for the fetcher (the file replaced, or a marker) up to `HAZYNC_PREP_WAIT_S`, then exits 4. The units:
 `RestartPreventExitStatus=3 4` (prep) and `4` (fetch), `OnFailure=hazync-alert@%n.service`. `fetch_block_rpc.py
-fork-point <out> [--deep]` is the runbook's step 2. **P2 recovery, until P3:** a person checks the reorg (§11 step 1),
-recovers the stores, then removes the marker from the block directory and starts both units.
+fork-point <out> [--deep]` is the runbook's step 2. **P2 recovery, until P3:** a person checks the reorg (§11 step 1)
+and recovers the stores (until P3's `libzync-prep-rewind`, that is §11 step 4: prep from genesis under a fresh
+`LZ_ROOT`); in a kept `out/`, moves aside every `state_<h>.json` (and its markers) ABOVE the stores' height in
+`PREP_TIP.json`: they are the orphaned branch's, the coordinator serves them, and the fetcher compares them. Then the
+marker in the block directory goes, and both units start. **Install:** the unit files AND the four `alert.conf`
+drop-ins (`coordinator/deploy/RUNBOOK.md`, alerting); `scripts/check-unit-drift.sh` now checks the `libzync-*` units
+too and reports a running or enabled unit without a drop-in the repo declares for it (M6). ⚠ On `hazync-proof` its
+first run will also report `libzync-prep`'s `run.conf` and `cache.conf` and `libzync-fetch`'s `run.conf`, drop-ins
+that exist only on the box (keys `LZ_ROOT`, `LZ_HI`, `HAZYNC_PREP_*`, `HAZYNC_TRIE_CACHE_MB`, `HAZYNC_RPC_COOKIE`):
+commit them or allow-list their keys.
 
 **Record size, MEASURED** from the blocks (the node, read-only RPC; each block's counts put through the record's exact
 layout: external spends, created and appended coins, as prep counts them), not from a prep run at those heights:

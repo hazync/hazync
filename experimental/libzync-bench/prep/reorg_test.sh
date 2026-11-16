@@ -9,6 +9,8 @@
 #   4. a block whose prev is not the state's tip, static files: exit 4 at that block (was a panic, a restart loop);
 #   5. the same fed by the fetcher (HAZYNC_PREP_CONSUME=1): prep waits; the file replaced by one that extends the state,
 #      it carries on and ends byte-identical; a marker written instead: exit 4; neither within HAZYNC_PREP_WAIT_S: exit 4;
+#   7. (review 16.11) PREP_TIP.json says the stores' height, hash, J and the records' reach; no state_*.json.tmp is
+#      left; the window is cut at save points only (after the crash at 170: 91..170, then J=60 below the save point);
 #   6. a run that wrote no records (J=0: byte-identical stores and states to a host from before P1, case 1) continues
 #      from its save point with records on: they start at the anchor + 1, and the states end byte-identical.
 #   --control: prep_block's assert path (records off, no prev check) is NOT what is tested: the control runs case 4
@@ -66,13 +68,28 @@ print(f"RECORDS_OK {len(have)} records {lo}..{hi}, {sum(sizes)} bytes, {min(size
 PY
 rc=$?
 check "$([ $rc = 0 ] && echo 1)" "1. exactly u_141..u_200, each matching the states: $(tail -1 $O/records.txt)"
+tipchk() {  # tipchk <out> <height> <undo_keep> <undo_from>: PREP_TIP.json is that, its hash state_<height>'s (display order)
+    python3 - "$@" <<'PY'
+import json, sys
+out, h, k, f = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+t = json.load(open(f"{out}/PREP_TIP.json"))
+want = bytes(json.load(open(f"{out}/state_{h}.json"))["tip_hash"])[::-1].hex()
+sys.exit(0 if (t["height"], t["hash"], t["undo_keep"], t["undo_from"]) == (h, want, k, f) else 1)
+PY
+}
+tipchk $O/ref/out 200 60 141; rc=$?
+check "$([ $rc = 0 ] && [ -z "$(ls $O/ref/out | grep '\.tmp$')" ] && echo 1)" "7. PREP_TIP.json: height 200, state_200's hash, J 60, records from 141; no .tmp left"
 
 # 2. crash after block 170 (save points at 50, 100, 150), restart from 150
 prep $O/cr 1 200 genesis HAZYNC_PREP_UNDO_KEEP=60 HAZYNC_CRASH_AT=prep-after:170 > $O/crash.log 2>&1; rc=$?
 check "$([ $rc = 9 ] && [ -e $O/cr/out/reorg/u_170.bin ] && [ ! -e $O/cr/out/reorg/u_171.bin ] && echo 1)" "2. died after block 170 (exit $rc), its record written"
+n_cr=$(ls $O/cr/out/reorg | grep -c '^u_.*\.bin$'); lo_cr=$(ls $O/cr/out/reorg | sed -n 's/^u_\([0-9]*\)\.bin$/\1/p' | sort -n | head -1)
+tipchk $O/cr/out 169 60 91; trc=$?
+check "$([ "$n_cr" = 80 ] && [ "$lo_cr" = 91 ] && [ $trc = 0 ] && echo 1)" "7. after the crash: records 91..170 ($n_cr from $lo_cr; cut only at the save point 150), tip file at 169 (the last state written)"
 prep $O/cr 151 200 $O/cr/out/state_150.json HAZYNC_PREP_UNDO_KEEP=60 HAZYNC_PREP_CONTINUE=1 > $O/resume.log 2>&1; rc=$?
 same=1; for h in $(seq 141 200); do cmp -s $O/ref/out/reorg/u_$h.bin $O/cr/out/reorg/u_$h.bin || same=0; done
-check "$([ $rc = 0 ] && grep -aq 'removed 20 reorg undo record(s) outside (90, 150]' $O/resume.log && [ "$same" = 1 ] && [ $(ls $O/cr/out/reorg | wc -l) = 60 ] && echo 1)" \
+tipchk $O/cr/out 200 60 141; trc=$?
+check "$([ $rc = 0 ] && grep -aq 'removed 20 reorg undo record(s) outside (90, 150]' $O/resume.log && [ "$same" = 1 ] && [ $(ls $O/cr/out/reorg | wc -l) = 60 ] && [ $trc = 0 ] && echo 1)" \
       "2. the restart removed the 20 records above 150 and wrote them again: all 60 byte-identical to the reference (exit $rc)"
 
 # 3. a REORG marker: exit 4 before anything is opened
@@ -120,7 +137,8 @@ prep $O/old 1 150 genesis HAZYNC_PREP_UNDO_KEEP=0 > $O/old.log 2>&1
 prep $O/old 151 200 $O/old/out/state_150.json HAZYNC_PREP_CONTINUE=1 > $O/old2.log 2>&1; rc=$?
 same=1; for h in $(seq 151 200); do cmp -s $O/ref/out/state_$h.json $O/old/out/state_$h.json || same=0; done
 recs=$(ls $O/old/out/reorg 2>/dev/null | sort -t_ -k2 -n | sed -n '1p;$p' | tr '\n' ' ')
-check "$([ $rc = 0 ] && [ "$same" = 1 ] && [ "$recs" = "u_151.bin u_200.bin " ] && [ $(ls $O/old/out/reorg | wc -l) = 50 ] && echo 1)" \
+tipchk $O/old/out 200 2016 151; trc=$?
+check "$([ $rc = 0 ] && [ "$same" = 1 ] && [ "$recs" = "u_151.bin u_200.bin " ] && [ $(ls $O/old/out/reorg | wc -l) = 50 ] && [ $trc = 0 ] && echo 1)" \
       "6. a run without records continues (default J, disk stores): records u_151..u_200, states 151..200 byte-identical (exit $rc)"
 
 echo

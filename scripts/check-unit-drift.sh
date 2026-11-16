@@ -50,8 +50,11 @@ repo_unit() {
 # ⚠ The discovery runs ON THE HOST, because that is the only side that knows what is installed. A
 # repo-side list would miss exactly the case this check exists for: a unit live on the box and
 # absent from the repo.
+# The Hazync v2 prep and fetch units are named libzync-* (coordinator/deploy/libzync/): discovered too (review of the
+# reorg P2 work, 16.11.2026: their alert.conf drop-ins are what makes a reorg stop reach a phone, and nothing checked
+# that they were installed).
 discover_units() {
-    local probe='systemctl list-unit-files "hazync-*.service" --no-pager --plain 2>/dev/null | awk "/\\.service/{sub(/\\.service\$/,\"\",\$1); print \$1}"'
+    local probe='systemctl list-unit-files "hazync-*.service" "libzync-*.service" --no-pager --plain 2>/dev/null | awk "/\\.service/{sub(/\\.service\$/,\"\",\$1); print \$1}"'
     if [ "$HOST" = localhost ]; then bash -c "$probe" 2>/dev/null
     else ssh -n -o ConnectTimeout=15 "$HOST" "$probe" 2>/dev/null; fi
 }
@@ -88,6 +91,33 @@ declared_dropin_bodies() {
         done
         [ "$skip" = no ] && cat "$f"
     done
+}
+
+# The live names (`alert.conf` for dropins/<unit>-alert.conf) of the drop-ins this repo declares for unit $1, by the same
+# attribution as declared_dropin_bodies (a longer unit's files are not this one's).
+declared_dropin_names() {
+    local u="$1" f base other skip
+    for f in "$DROPINS_DIR/$u-"*.conf; do
+        [ -f "$f" ] || continue
+        base=$(basename "$f")
+        skip=no
+        for other in $UNITS; do
+            [ "$other" = "$u" ] && continue
+            case "$other" in "$u"-*) ;; *) continue ;; esac
+            case "$base" in "$other"-*) skip=yes; break ;; esac
+        done
+        [ "$skip" = no ] && echo "${base#"$u"-}"
+    done
+}
+
+# Declared drop-ins that are NOT installed for unit $1, given the probe's output in $2 (DROPIN lines). A unit that is
+# running or enabled without one runs config this repo says it must not (an alert that never fires, a cap never set).
+missing_declared_dropins() {
+    local u="$1" remote="$2" n
+    while read -r n; do
+        [ -n "$n" ] || continue
+        printf '%s\n' "$remote" | grep -qx "DROPIN $n" || echo "$n"
+    done < <(declared_dropin_names "$u")
 }
 
 note() { echo "  $*"; }
@@ -144,6 +174,8 @@ for u in $UNITS; do
     # coordinator was never checking its root filesystem at all.
     probe="
         echo \"STATE \$(systemctl show $u -p LoadState --value 2>/dev/null)\"
+        echo \"ACTIVE \$(systemctl show $u -p ActiveState --value 2>/dev/null)\"
+        echo \"FILESTATE \$(systemctl show $u -p UnitFileState --value 2>/dev/null)\"
         systemctl show $u -p Environment --value | xargs -n1 2>/dev/null | grep -v '^\$' | sed 's/^/ENV /'
         systemctl show $u -p ExecStart --value | grep -oE 'argv\[\]=[^;]*' | sed 's/^/EXEC /'
         systemctl show $u -p User --value | sed 's/^/USER /'
@@ -219,6 +251,18 @@ for u in $UNITS; do
             bad "$u: drop-in '$f' is on the box but NOT in $DROPINS_DIR/$u-$f"
         fi
     done < <(printf '%s\n' "$remote" | grep '^DROPIN ')
+
+    # --- 1a. drop-ins the repo declares that are NOT on the box ---------------------------------
+    # The other direction: a running or enabled unit without a drop-in this repo ships for it (the libzync-* alert.conf
+    # files: without one a reorg stop fails the unit and nobody hears). A stopped, disabled unit is noted only: it runs
+    # nothing (the v1 hazync-bridge on the board box).
+    live=no
+    printf '%s\n' "$remote" | grep -qxE 'ACTIVE (active|activating|reloading)|FILESTATE enabled' && live=yes
+    while read -r n; do
+        [ -n "$n" ] || continue
+        if [ "$live" = yes ]; then bad "$u: the repo declares drop-in '$n' ($DROPINS_DIR/$u-$n) and it is NOT installed"
+        else note "note declared drop-in $n is not installed (the unit is stopped and not enabled)"; fi
+    done < <(missing_declared_dropins "$u" "$remote")
 
     # --- 1b. GUARDED directives: the VALUE must match, not merely the key ------------------------
     # ⛔ A DIFFERING VALUE HERE IS A FAILURE, NOT A NOTE. For Environment (below) a per-box value is

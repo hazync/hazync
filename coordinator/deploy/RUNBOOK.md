@@ -405,6 +405,14 @@ for u in hazync-coordinator hazync-bridge hazync-coordinator-backup hazync-reten
   install -D -m 0644 coordinator/deploy/dropins/$u-alert.conf /etc/systemd/system/$u.service.d/alert.conf
 done
 systemctl daemon-reload                      # no restart needed; ExecStopPost= applies to the next stop
+# the board box (Hazync v2): the prep and fetch units stop with exit 4 at a reorg (docs/libzync/REORG.md §11) and must
+# FAIL and alert, which needs both their unit files (RestartPreventExitStatus=) and these drop-ins (OnFailure=)
+for u in libzync-prep libzync-fetch libzync-board-prep libzync-board-fetch; do
+  install -m 0644 coordinator/deploy/libzync/$u.service /etc/systemd/system/
+  install -D -m 0644 coordinator/deploy/dropins/$u-alert.conf /etc/systemd/system/$u.service.d/alert.conf
+done
+systemctl daemon-reload                      # takes effect at each unit's next start; scripts/check-unit-drift.sh
+                                             # reports a running or enabled unit without its declared drop-in
 # web box
 sudo install -m 0755 coordinator/deploy/hazync-alert.sh coordinator/deploy/watchdog/hazync-watchdog.sh /usr/local/bin/
 sudo install -m 0644 coordinator/deploy/watchdog/hazync-watchdog.{service,timer} /etc/systemd/system/
