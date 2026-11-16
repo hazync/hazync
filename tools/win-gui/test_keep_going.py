@@ -17,6 +17,8 @@ fails = 0
 
 STAND_IN = r'''
 import os, sys
+if sys.argv[1:2] == ["release"]:      # Stop hands a claimed block back (#725): not a run
+    sys.exit(0)
 runs = os.path.join(os.environ["HAZYNC_HOME"], "runs")
 n = len(open(runs).read().split()) if os.path.exists(runs) else 0
 open(runs, "a").write("x\n")
