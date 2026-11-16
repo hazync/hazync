@@ -84,7 +84,9 @@ cp swiftsync-verify-wasm/swiftsync-verify.js "$OUT/hazync-verify.js"
 # build.sh runs in the pinned container reproduce/wasm.Dockerfile: the host needs docker, cargo (>= 1.78, to read the
 # crate graph), python3 and git, and NO wasm32 target of its own (the container brings Rust and its target).
 if command -v docker >/dev/null && command -v cargo >/dev/null && command -v python3 >/dev/null && command -v git >/dev/null; then
-    HAZYNC_WASM_REQUIRE_CLEAN=1 ./swiftsync-verify-wasm/build.sh >/dev/null
+    # a release builds from the committed sources in the PUBLISHED build image only (reproduce/wasm-image.digests);
+    # HAZYNC_WASM_ALLOW_LOCAL_IMAGE=1 in the environment is the explicit override for a locally built image
+    HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1 ./swiftsync-verify-wasm/build.sh >/dev/null
     cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm "$OUT/hazync-verify.wasm"
 else
     echo "! skipping hazync-verify.wasm — swiftsync-verify-wasm/build.sh needs docker, cargo, python3 and git on this machine" >&2
