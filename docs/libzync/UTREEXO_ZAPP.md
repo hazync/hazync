@@ -293,7 +293,7 @@ in the hints zAPP).
   and without an Empty root; a hostile receipt length refused by the decode limit; the real receipts: DEMO below
   minimum work, refused for H or block hash not the node's, another image id, a wrong tip given when T = H, H = 2 with a
   wrong core tip); 14 CLI cases on 15.11.2026, 18 since 16.11.2026 with the chain-identity flags of zapps/common (exit codes, strict flags, a truncated receipt, `--json` silent on DEMO, `--allow-demo`
-  JSON marked `demo`, `--floresta` alone on stdout); the WASM build (`wasm/`, sha256 `a0279e99…`, reproduced by a second
+  JSON marked `demo`, `--floresta` alone on stdout); the WASM build (`wasm/`, sha256 `a0279e99…` then; `515e020a…` since 16.11.2026, libzync's `utreexo` feature; reproduced by a second
   build) 7/7 in node.
 
 ## 9. Questions for the Floresta developers

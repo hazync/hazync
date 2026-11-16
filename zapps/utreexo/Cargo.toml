@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
-libzync = { path = "../../libzync", default-features = false }
+libzync = { path = "../../libzync", default-features = false, features = ["utreexo"] }
 # disable-dev-mode: RISC0_DEV_MODE can never make this checker accept a fake receipt (as swiftsync-verify).
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
 serde = { version = "1", features = ["derive"] }

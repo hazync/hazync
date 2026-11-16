@@ -55,8 +55,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
-      - name: libzync (coin log, counting trie, facts, wire)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std
+      - name: libzync (coin log, counting trie, facts, wire; and the utreexo zyncAPP's derivation, feature utreexo)
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,utreexo
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)

@@ -10,8 +10,8 @@ node test.mjs       # the real receipts of ../vectors through the WASM: 7 cases
 
 | | |
 |---|---|
-| size | 1,100,680 bytes raw, 305,171 gzipped |
-| sha256 (this commit, `./build.sh`) | `a0279e993347e74be14ff932127cc96b79934609d68185d8d8fc76739db82fc7` (Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, fixed stage path; laptop and hazync-coord, 16.11.2026: the same bytes as the native builds of 15.11.2026 on hazync-coord; built-in utreexo image `27bea7da…`, a local build, not reproducible, not published) |
+| size | 1,101,030 bytes raw, 305,051 gzipped |
+| sha256 (this commit, `./build.sh`) | `515e020a9bb6d01df9d7c5f03b50f28a8e0e5cf3240cccaa3576d16115f6596a` (Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, fixed stage path; laptop and hazync-coord, 16.11.2026; since libzync's `utreexo_roots` sits behind the feature `utreexo` (so the core .wasm no longer carries it); before it `a0279e99…`; built-in utreexo image `27bea7da…`, a local build, not reproducible, not published) |
 | tests | 7/7 (`node test.mjs`); `../test.sh` checks the built file's sha256 against this table (scripts/zapp-checks.sh) |
 
 

@@ -20,6 +20,9 @@ publish = false
 default = ["std"]
 # Host side: the hint PRODUCERS (libsecp for R, num-bigint for ECMH) and the per-block bundle file.
 std = ["dep:secp256k1", "dep:num-bigint", "dep:memmap2"]
+# The Utreexo roots zyncAPP's derivation (src/utreexo_roots.rs): for prover/zyncapps/host and zapps/utreexo only, never
+# the core verifier (its .wasm must not change when a zAPP is added). Its guest #[path]-includes the file.
+utreexo = []
 
 [dependencies]
 sha2 = { version = "0.10", default-features = false, features = ["compress"] }
