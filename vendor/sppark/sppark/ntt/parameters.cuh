@@ -331,13 +331,15 @@ public:
         if (cudaGetDevice(&current_id) != cudaSuccess) {
             gpu.select();
 
-            (void)cudaFreeAsync(partial_twiddles, gpu[2]);
+            // hazync#727: freed by the counterpart of the Dmalloc that made them, which is
+            // cudaFreeAsync wherever memory pools exist (unchanged) and cudaFree where they do not.
+            gpu[2].Dfree_nothrow(partial_twiddles);
 #if !defined(FEATURE_BABY_BEAR) && !defined(FEATURE_GOLDILOCKS)
-            (void)cudaFreeAsync(stageX_twiddles, gpu[1]);
+            gpu[1].Dfree_nothrow(stageX_twiddles);
 #else
-            (void)cudaFreeAsync(plus_one_twiddles, gpu[1]);
+            gpu[1].Dfree_nothrow(plus_one_twiddles);
 #endif
-            (void)cudaFreeAsync(inner_twiddles, gpu[0]);
+            gpu[0].Dfree_nothrow(inner_twiddles);
 
             (void)cudaSetDevice(current_id);
         }

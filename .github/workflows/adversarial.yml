@@ -318,7 +318,9 @@ jobs:
         # runs only on its own card generation, and a build FLAG is not evidence about a binary.
         # This is the reader windows-prove.yml runs on its own output; here it must catch a
         # Pascal-only build, one module missing one generation, and an image that exists only in a
-        # relocatable part.
+        # relocatable part. ⛔ hazync#727: and it must REFUSE system-scope atomics in real nvcc output
+        # (scripts/testdata/atom-scope/: compressed image, raw image, PTX alone), pass the same
+        # kernel at device scope, and call an undecodable entry UNREADABLE rather than clean.
         run: |
           python3 scripts/gpu_code_archs.py --control
           # ⛔ AND AS A WINDOWS RUNNER SEES IT. Its stdout is cp1252, which cannot encode the marks
