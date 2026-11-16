@@ -25,8 +25,9 @@ for c in "$CRATE" "$@"; do
     # a file: one a crate include!s from outside itself (as swiftsync-verify the guest's handover pin, below)
     if [ -f "$REPO/$c" ]; then mkdir -p "$STAGE/$(dirname "$c")" && cp "$REPO/$c" "$STAGE/$c"; continue; fi
     mkdir -p "$STAGE/$c"
-    # ./wasm/target, ./ffi/target: a zAPP's own build dirs, under the zAPP crate that its wasm crate depends on
-    (cd "$REPO/$c" && tar --exclude=./target --exclude=./vectors --exclude=./wasm/target --exclude=./ffi/target -cf - .) \
+    # every target/ dir at any depth (a crate's own, a zAPP's wasm/, ffi/ and cli/ build dirs): build output, never
+    # source (no tracked path has a component named target), and a CLI's can be gigabytes
+    (cd "$REPO/$c" && tar --exclude=target --exclude=./vectors -cf - .) \
         | (cd "$STAGE/$c" && tar -xf -)
 done
 # swiftsync-verify include!s the guest's handover pin (one source for the pinned receipt ids)
