@@ -15,6 +15,7 @@ is a later step: it needs the `regtest-test` image in `zapps/corecheck` (below).
 | `check.sh` | **the CI path**: replay, every block file and oracle file must equal the committed one (sha-pinned Core 28.0 tarball) | `bitcoind`, Python 3 |
 | `execute.sh` | the chain through a regtest host in dev mode, staged as the GPU batch (A, a refused control, B) | a regtest host |
 | `extract_guest.py` | the regtest guest program out of CI's `host_reg` (the regtest image is not published) | the host binary |
+| `oracle_node.py` | a stand-in `bitcoin-cli -regtest` for the zAPP tests: Core's answers on branch a or b, from `blocks/` and `oracle/` only; `gettxout` without `include_mempool=false` refused | Python 3 |
 | `gpu/` | the GPU batch: `mkbundle.sh`, `gpu_run.sh` (⚠ spends money), `pod/` | see "GPU batch" |
 
 Core is 28.0, as the CI rig (`adversarial.yml` libzync-rig: tarball sha256 `7fe294b0…`, `test_framework` from tag
