@@ -482,3 +482,6 @@ to fetch again after the rewind; it waits at most `HAZYNC_REWIND_WAIT_S` (3600) 
 blocks (height, hash) are recorded in `out/REWIND`, so a rerun after a crash during the moves still finds every
 orphaned block file. (M4, Z1) The logged roots above F are archived before they are cut, and F's new root is logged in
 the new generation. Prep started with an `auto` marker exits 5 (for the runner) instead of 4.
+
+**Merging P3.** `feat/reorg-p3` holds one commit that does not build (`fbb6e8f6`, a merge committed with conflict
+markers, repaired by the next commit `69a5d934`): squash-merge the branch, and say so in the PR text.

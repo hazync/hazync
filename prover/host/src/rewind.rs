@@ -292,7 +292,8 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
 /// `libzync-store-digest <out> <h>`: the CONTENT of prep's on-disk stores at the save point h, for comparing two runs
 /// that reached the same state by different histories (a rewind and a fresh run): the trie's canonical snapshot, the
 /// coin log's leaves, the position index's live entries (its file differs: slots and tombstones depend on history),
-/// and the save point's BIP30 snapshot. Read-only, except that opening the arena bumps `trie/GEN` (Z1).
+/// and the save point's BIP30 snapshot. Read-only: it opens the arena as its WRITER only if nothing else holds it
+/// (`ARENA.LOCK`), and then just bumps `trie/GEN` (Z1); beside a running prep it is a reader.
 pub(crate) fn digest_cmd(out: &str, h: u32, root_at: Option<u32>) {
     use sha2::{Digest, Sha256};
     let hexs = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
