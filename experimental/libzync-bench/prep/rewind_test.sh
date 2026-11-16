@@ -157,15 +157,39 @@ PY
 export HAZYNC_RPC_CLI="python3 $HERE/reorg_fake_node.py $r/world.json"
 ( env HAZYNC_REORG_AUTO=1 HAZYNC_FETCH_POLL_S=0.3 python3 $r/bin/fetch_block_rpc.py follow 1 $r/blocks --window 300 --jobs 2 --after-saves $r/out > $r/fetch.log 2>&1 ) & FP=$!
 ( while true; do run $r $hi; rc=$?; echo "runner exit $rc" >> $r/runs.log; [ $rc = 5 ] || exit $rc; sleep 1; done ) & RP=$!
-for _ in $(seq 1 600); do grep -q '"height": 200' $r/out/PREP_TIP.json 2>/dev/null && break; sleep 0.2; done
-sleep 1; mv $r/world.json.new $r/world.json                     # the node reorgs: 199..202 of the branch
-wait $RP; rc=$?
-kill $FP 2>/dev/null; wait $FP 2>/dev/null
+# Bounded, and LOUD when a bound runs out (a loaded machine must not turn this into a non-test in which the node reorgs
+# above prep's tip and nothing is rewound): HAZYNC_TEST_F_WAIT_S (default 1800) for prep to reach 200, and again for it
+# to finish after the reorg.
+F_WAIT=${HAZYNC_TEST_F_WAIT_S:-1800}
+killtree() { local c; for c in $(pgrep -P $1 2>/dev/null); do killtree $c; done; kill $1 2>/dev/null; }
+waited() {  # waited <condition command...>: 0 once it holds, 1 when F_WAIT runs out or the runner died first
+    local t0; t0=$(date +%s)
+    until "$@"; do
+        [ $(( $(date +%s) - t0 )) -ge $F_WAIT ] && return 1
+        kill -0 $RP 2>/dev/null || { "$@"; return; }
+        sleep 0.2
+    done
+}
+at200() { grep -q '"height": 200' $r/out/PREP_TIP.json 2>/dev/null; }
+runner_done() { ! kill -0 $RP 2>/dev/null; }
+if ! waited at200; then
+    check 0 "F: prep did not reach 200 within $F_WAIT s (HAZYNC_TEST_F_WAIT_S), or its runner died: the end-to-end case did NOT run (see $r/run.log)"
+    killtree $RP; killtree $FP; wait $RP $FP 2>/dev/null
+else
+    sleep 1; mv $r/world.json.new $r/world.json                 # the node reorgs: 199..202 of the branch
+    if ! waited runner_done; then
+        check 0 "F: after the reorg prep did not finish within $F_WAIT s (HAZYNC_TEST_F_WAIT_S) (see $r/run.log, $r/fetch.log)"
+        killtree $RP; rc=timeout
+    else
+        wait $RP; rc=$?
+    fi
+    killtree $FP; wait $FP 2>/dev/null
+    check "$([ "$rc" = 0 ] && grep -q 'FETCH_REORG_AUTO .*fork at 198, depth 2' $r/fetch.log && grep -q "prep's rewind is done" $r/fetch.log \
+           && grep -q 'runner exit 5' $r/runs.log && grep -aq 'PREP_REWOUND to 198' $r/run.log && echo 1)" \
+          "F: the fetcher saw the reorg (auto), prep exited 5, the runner rewound, the fetcher carried on, prep reached $hi (exit $rc)"
+    same_as_ref $r $q $hi $f "F (end to end)" noleaves
+fi
 unset HAZYNC_RPC_CLI
-check "$([ $rc = 0 ] && grep -q 'FETCH_REORG_AUTO .*fork at 198, depth 2' $r/fetch.log && grep -q "prep's rewind is done" $r/fetch.log \
-       && grep -q 'runner exit 5' $r/runs.log && grep -aq 'PREP_REWOUND to 198' $r/run.log && echo 1)" \
-      "F: the fetcher saw the reorg (auto), prep exited 5, the runner rewound, the fetcher carried on, prep reached $hi (exit $rc)"
-same_as_ref $r $q $hi $f "F (end to end)" noleaves
 
 echo "== G. crashes inside a rewind (each run again by the runner from out/REWIND): during the coin log's undo, between"
 echo "   the trie's flush at F and its marker, half way through the moves, between removing REWIND and the marker"
