@@ -1137,7 +1137,9 @@ jobs:
               echo "  only thing that would settle it. Treat a compile alone as the weaker claim."
           fi
           echo "⛔ THIS RUNNER HAS NO GPU, so nothing here shows that it PROVES. That needs hardware."
-          echo "⚠ Supported cards: compute capability 7.0+ (RTX 20-series and newer); Pascal is refused by name (#631)."
+          echo "⚠ Supported cards: compute capability 7.0+ (RTX 20-series and newer) by default. Pascal (6.x)"
+          echo "  is used only when HAZYNC_SPPARK_MIN_MAJOR lowers sppark's floor -- the Windows app's opt-in --"
+          echo "  measured once: a GTX 1050 Ti proved mainnet block 1 with the #727 fixes."
 
       # ⛔⛔ host.exe ALONE WOULD NOT START ON THE TEST MACHINE. The NVIDIA driver supplies
       # `nvcuda.dll` (the driver API) but NOT `cudart64_*.dll` (the CUDA runtime) — that ships with

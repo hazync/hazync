@@ -1,4 +1,5 @@
 #include "gpu_t.cuh"
+#include <cstdlib>
 
 #if defined(__NVCC__)
 # define PROP_MAJOR_MIN 7   // Volta and forward
@@ -8,6 +9,27 @@
 # error "unknown platform"
 #endif
 
+// HAZYNC_727_FLOOR — hazync#631 / #727. sppark keeps only cards with major >= PROP_MAJOR_MIN (7:
+// Volta and forward), so a Pascal card (GTX 10-series, compute 6.1) is dropped here and select_gpu
+// raises a synthetic cudaErrorNoDevice on a machine that plainly has one. The Windows build carries
+// sm_61 code for exactly that card. HAZYNC_SPPARK_MIN_MAJOR lowers the floor -- the Windows app sets it
+// only when its "try my GPU even if it is below the supported floor" box is ticked AND the worker's
+// card is below 7 (tools/win-gui/hazync_gui.py, _spawn). Unset, or anything outside 1..99, keeps 7:
+// every existing machine behaves exactly as before. The cooperativeLaunch requirement is unchanged.
+// A receipt from a lowered floor is not trusted blind: the host verifies what it proves and the
+// coordinator re-verifies every submission.
+static int hazync_min_major()
+{
+    int floor = PROP_MAJOR_MIN;
+    if (const char* s = std::getenv("HAZYNC_SPPARK_MIN_MAJOR")) {
+        char* end = nullptr;
+        long v = std::strtol(s, &end, 10);
+        if (end != s && *end == '\0' && v >= 1 && v <= 99)
+            floor = (int)v;
+    }
+    return floor;
+}
+
 class gpus_t {
     std::vector<const gpu_t*> gpus;
 public:
@@ -16,10 +38,11 @@ public:
         int n;
         if (cudaGetDeviceCount(&n) != cudaSuccess)
             return;
+        const int min_major = hazync_min_major();
         for (int id = 0; id < n; id++) {
             cudaDeviceProp prop;
             if (cudaGetDeviceProperties(&prop, id) == cudaSuccess &&
-                prop.major >= PROP_MAJOR_MIN && prop.cooperativeLaunch) {
+                prop.major >= min_major && prop.cooperativeLaunch) {
                 (void)cudaSetDevice(id);
                 gpus.push_back(new gpu_t(gpus.size(), id, prop));
             }

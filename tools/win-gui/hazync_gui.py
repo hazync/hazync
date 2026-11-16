@@ -1311,7 +1311,7 @@ class App(tk.Tk):
         ttk.Checkbutton(bi, variable=self.force_gpu,
                         command=lambda: self._show_cards(getattr(self, "_found_cards", [])),
                         text="Try my GPU even if it is below the supported floor "
-                             "\u2014 unproven, and known to fail on Pascal (hazync#631)"
+                             "\u2014 proved on one GTX 1050 Ti, unproven on other older cards (hazync#727)"
                         ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
         bi.columnconfigure(1, weight=1)
         ttk.Button(build, text="Work it out for me", style="Accent.TButton",
