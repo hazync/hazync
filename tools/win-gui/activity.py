@@ -50,6 +50,8 @@ _ASSEMBLING, _ASSEMBLED, _PROVED = 0.88, 0.93, 0.96
 
 _RE = {
     "claimed": re.compile(r"claimed block (\S+)"),
+    # the claim's id, on the same line since the release-by-claim change: "claimed block 1807 (claim 3fa1...; ...)"
+    "claim_id": re.compile(r"\(claim ([0-9a-fA-F]{16,64})[;)]"),
     "released": re.compile(r"^released block (\S+?):"),
     "nothing": re.compile(r"nothing to claim right now:\s*(.*)"),
     "executed": re.compile(r"executed, (\d+) segments"),
@@ -115,6 +117,7 @@ class Activity:
         # #725: the claimed block this worker still holds (None once it is on the board, taken by someone else or
         # handed back), so stopping the worker can hand it back; and how long the last block took, claim to board.
         self.holding = None
+        self.holding_claim = None  # that claim's id, which a release must name (None from a worker too old to print it)
         self.claimed_at = None
         self.last_block_s = None
         self._now = None
@@ -170,6 +173,8 @@ class Activity:
         if m:
             self.block = m.group(1)
             self.holding, self.claimed_at = m.group(1), self._now
+            c = _RE["claim_id"].search(s)
+            self.holding_claim = c.group(1) if c else None
             self._set(f"Proving block {pretty(self.block)}", "Fetching the block's data…", 0.0)
             return f"Took block {pretty(self.block)} to prove"
         m = _RE["nothing"].search(s)

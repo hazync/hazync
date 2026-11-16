@@ -164,14 +164,18 @@ check(night.describe() == "23:00 to 07:00 (next morning), every day", night.desc
 
 print("== the claimed block is tracked, so a stop can hand it back ==")
 a = activity.Activity("run")
-a.feed("claimed block 1807 (yours for 60 min; if you stop, it reopens by itself)", now=1000.0)
+a.feed("claimed block 1807 (claim 3fa1c0de3fa1c0de3fa1c0de3fa1c0de; yours for 60 min; if you stop, it reopens by itself)",
+       now=1000.0)
 check(a.holding == "1807", f"after the claim line the worker holds 1807 ({a.holding})")
+check(a.holding_claim == "3fa1c0de3fa1c0de3fa1c0de3fa1c0de", f"and knows which claim, to release only that ({a.holding_claim})")
 a.feed("proved range [1807..1807] from bridge bundle in 263.0s -> range_1807.hzk", now=1263.0)
 check(a.holding == "1807", "still holding once proved: it is not on the board yet")
 a.feed("✓ range 1807: the coordinator re-verified your proof and put it on the board as 'x'.", now=1300.0)
 check(a.holding is None and a.last_block_s == 300.0,
       f"on the board: nothing to hand back, and the block took 300 s claim to board ({a.holding}, {a.last_block_s})")
 a.feed("claimed block 1808 (yours for 60 min)", now=1400.0)
+check(a.holding == "1808" and a.holding_claim is None,
+      f"a worker too old to name its claim: the block is tracked, the claim is unknown ({a.holding_claim})")
 ev = a.feed("released block 1808: it is open to any prover again", now=1401.0)
 check(a.holding is None and ev and "back" in ev, f"the worker's own release clears it ({a.holding}, {ev})")
 a.feed("claimed block 1809 (yours for 60 min)", now=1500.0)
@@ -179,11 +183,19 @@ a.feed("block 1809 was not released (rate limit); if it is still claimed, it reo
 check(a.holding == "1809", "a release that failed does not count as one")
 
 print("== handing back a claim from the app ==")
-cmd = supervisor.release_command("py", "C:/Hazync/hazync-worker", 1807)
-check(cmd == ["py", "C:/Hazync/hazync-worker", "release", "1807"], f"the command ({cmd})")
+cmd = supervisor.release_command("py", "C:/Hazync/hazync-worker", 1807, "3fa1c0de3fa1c0de3fa1c0de3fa1c0de")
+check(cmd == ["py", "C:/Hazync/hazync-worker", "release", "1807", "3fa1c0de3fa1c0de3fa1c0de3fa1c0de"],
+      f"the command names the claim ({cmd})")
+check(supervisor.release_command("py", "C:/Hazync/hazync-worker", 1807, None) is None,
+      "no claim id: no release (the block reopens by itself), never a release that could free a later claim")
 check(supervisor.release_verdict(0, "released block 1807: it is open to any prover again\n")[0], "exit 0: released")
 ok, msg = supervisor.release_verdict(1, "unknown command 'release'\n\nhazync — Proof Party contributor CLI.\n")
 check(not ok and "too old" in msg, f"an older worker without the command is named as such ({msg})")
+ok, msg = supervisor.release_verdict(1, "block 1807 was not released (not your claim)")
+check(not ok and "not your claim" in msg, f"a refusal says why ({msg})")
+ok, msg = supervisor.release_verdict(1, "block 1807 was not released (not this claim: this key holds 1807 under a later "
+                                        "claim than the one this release names, and that claim stays)")
+check(not ok and "not this claim" in msg, f"a re-claim left alone is not a release ({msg[:60]})")
 ok, msg = supervisor.release_verdict(1, "block 1807 was not released (not your claim)")
 check(not ok and "not your claim" in msg, f"a refusal says why ({msg})")
 

@@ -3950,13 +3950,18 @@ def beat(body):
 # 14.11.2026 block 1807 sat that way, held by a stopped Windows app. POST /api/release hands the block
 # back at once.
 #
-#   body: {range, pubkey, nonce, ts, sig}    sig = ed25519 by pubkey over "release:<range>:<nonce>:<ts>"
+#   body: {range, claim, pubkey, nonce, ts, sig}   sig = ed25519 by pubkey over "release:<range>:<claim>:<nonce>:<ts>"
 #
-# Only the key holding a LIVE claim on the block may release it. A lapsed, verified, parked or
+# Only the key holding a LIVE claim on the block may release it, and only THAT claim: `claim` is the nonce the
+# claim was made with (POST /api/claim's `nonce`, kept on the row as claim_nonce), and a release naming any other
+# claim is refused with 409 "not this claim". Releasing by key + block alone let a release in flight for an OLD
+# claim free a block the same key had just claimed AGAIN: a worker's own SIGTERM release followed by a fresh claim
+# of the same block, then the Windows app's `hazync-worker release <n>` for the first one (a new release nonce, so
+# the replay memory below does not catch it), or a claim that lapsed and was re-taken before a slow release landed. A lapsed, verified, parked or
 # someone else's claim is refused and left exactly as it is. ts is integer seconds within BEAT_SKEW,
 # as for a beat. The nonce makes a retry safe: the same signed release sent again (a lost response,
 # or a replay by someone who saw it) gets the first answer back and changes nothing, so a replay can
-# never release a claim the same key made on that block AFTER the release. Nonces are remembered in
+# never release a claim the same key made on that block AFTER the release (and the claim match refuses it anyway). Nonces are remembered in
 # memory for 2 x BEAT_SKEW, after which the timestamp alone refuses the message. ⚠ A coordinator
 # restart forgets them: a captured release replayed inside BEAT_SKEW of a restart, against a block
 # its key had re-taken in those two minutes, would release that claim. The cost is duplicate work,
@@ -3965,9 +3970,11 @@ def beat(body):
 # The released row goes back to status 'open', as if never claimed: it is no longer listed among the
 # board's claims, claim() offers it to anyone (its releaser included) straight away, and it stops
 # counting against the releaser's CLAIM_OPEN_MAX. Each release prints one journal line.
-_release_seen = {}                # nonce -> (pubkey, range, code, body, at)
+_release_seen = {}                # nonce -> (pubkey, range, code, body, at, claim)
 # Set only by test_claim_release.py --control: any signed release frees any claim, whoever holds it.
 _CONTROL_RELEASE_UNCHECKED = False
+# Set only by test_release_by_claim.py --control: a release frees the key's claim whichever claim it names.
+_CONTROL_RELEASE_ANY_CLAIM = False
 _release_lock = threading.Lock()
 
 
@@ -3975,11 +3982,15 @@ def release(body):
     """Give a claimed block back before its claim lapses (#725). See the block comment above."""
     rid, pk = str(body.get("range") or ""), str(body.get("pubkey") or "")
     sig, nonce, ts = str(body.get("sig") or ""), str(body.get("nonce") or ""), body.get("ts")
+    claim_id = str(body.get("claim") or "")
     if not rid or not pk:
         return 400, {"error": "range and pubkey required"}
     if not is_hex(pk, 32) or not is_hex(sig, 64):
         return 400, {"error": "a release must be signed: pubkey 32-byte hex, sig 64-byte hex (ed25519) over "
-                              "'release:<range>:<nonce>:<ts>'"}
+                              "'release:<range>:<claim>:<nonce>:<ts>'"}
+    if not re.fullmatch(r"[0-9a-fA-F]{16,64}", claim_id):
+        return 400, {"error": "a release must name the claim it gives back: `claim` = the nonce that claim was made "
+                              "with (16 to 64 hex characters; `hazync run` prints it on its 'claimed block' line)"}
     if not re.fullmatch(r"[0-9a-fA-F]{16,64}", nonce):
         return 400, {"error": "a release needs a nonce of 16 to 64 hex characters"}
     if isinstance(ts, bool) or not isinstance(ts, int):
@@ -3987,29 +3998,30 @@ def release(body):
     now = time.time()                 # one clock for the skew check and the nonce memory, so they cannot disagree
     if abs(now - ts) > BEAT_SKEW:
         return 400, {"error": f"release timestamp outside +/-{BEAT_SKEW}s — check your clock"}
-    if not verify_sig(pk, sig, f"release:{rid}:{nonce}:{ts}".encode()) and not _CONTROL_RELEASE_UNCHECKED:
+    if not verify_sig(pk, sig, f"release:{rid}:{claim_id}:{nonce}:{ts}".encode()) and not _CONTROL_RELEASE_UNCHECKED:
         return 403, {"error": "the release signature does not verify for that pubkey"}
     with _release_lock:
         for k in [k for k, v in _release_seen.items() if v[4] < now - 2 * BEAT_SKEW]:
             del _release_seen[k]
         seen = _release_seen.get(nonce)
         if seen:
-            if seen[0] == pk and seen[1] == rid:
+            if seen[0] == pk and seen[1] == rid and seen[5] == claim_id:
                 return seen[2], dict(seen[3], repeat=True)
             return 409, {"error": "that nonce was already used: sign each release with a fresh one"}
         # Still under _release_lock (always taken before _lock, and only here), so two copies of one release
         # arriving together cannot both reach the table: the second waits and gets the first one's answer.
-        code, out = _release_row(rid, pk, now)
-        _release_seen[nonce] = (pk, rid, code, out, now)
+        code, out = _release_row(rid, pk, claim_id, now)
+        _release_seen[nonce] = (pk, rid, code, out, now, claim_id)
     return code, out
 
 
-def _release_row(rid, pk, now):
+def _release_row(rid, pk, claim_id, now):
     """The table half of release(): (code, body). Caller holds _release_lock."""
     with _lock:
         c = db()
         try:
-            r = c.execute("SELECT status, assignee, handle, claimed_at FROM ranges WHERE id=?", (rid,)).fetchone()
+            r = c.execute("SELECT status, assignee, handle, claimed_at, claim_nonce FROM ranges WHERE id=?",
+                          (rid,)).fetchone()
             live = r is not None and c.execute("SELECT 1 FROM ranges WHERE id=? AND " + LIVE_CLAIM_SQL,
                                                (rid,) + _live_claim_args(now)).fetchone() is not None
             if r is None:
@@ -4019,6 +4031,11 @@ def _release_row(rid, pk, now):
                                   "status": "verified"}
             elif r["status"] != "claimed" or ((r["assignee"] or "") != pk and not _CONTROL_RELEASE_UNCHECKED):
                 code, out = 409, {"error": f"not your claim: {rid} is not held by this key", "status": r["status"]}
+            elif (r["claim_nonce"] or "").lower() != claim_id.lower() and not _CONTROL_RELEASE_ANY_CLAIM:
+                # This key holds the block, but under a claim made after the one this release names (a re-claim):
+                # that claim is not the release's to give back, and it is left exactly as it is.
+                code, out = 409, {"error": f"not this claim: this key holds {rid} under a later claim than the one "
+                                           f"this release names, and that claim stays", "status": "reclaimed"}
             elif not live:
                 code, out = 409, {"error": f"your claim on {rid} has already lapsed: the block is open to any "
                                            f"prover", "status": "lapsed"}
