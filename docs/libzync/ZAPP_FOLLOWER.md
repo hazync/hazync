@@ -282,6 +282,14 @@ the file as before), `prover/host/src/prep.rs` and `trie.rs` (one call each).
   no pin, or a pin above F, INTACT over-states what was released (its high-water mark stays at the old branch's
   height): safe for a reader, which then serves fewer heights until the chain passes it. `retain/RELEASE` changed format
   at `e29e9d03` → `73e436d3` (list names instead of heights); no store ran `e29e9d03` (Z1 was never deployed).
+- **Third review (16.11.2026).** `RETAG` and `ROOTS_CUT` journal the hash of the meta they were written against and
+  count as committed only if the meta on disk differs from it (as `RELEASE` binds to a meta hash): "the meta is at F" was
+  ambiguous when it already was. Re-tag names carry GEN and a per-flush count (`r_<F>_<k>_<gen>x<n>.bin`, a created run
+  `..._c<gen>x<n>.bin`) and never rename or write onto an existing list. A torn RETAG is rolled back and removed. A
+  second cut before a flush keeps the entries logged since the first. **One writer per arena**: the first opener holds
+  `trie/ARENA.LOCK` and runs the recovery; another opener is a reader (no GEN bump, no recovery; it cannot write or
+  flush). The crash-point grid (576 cases) and 60 random histories are `#[ignore]`d tests (`-- --ignored x_`, ~2 min in
+  release).
 - **Not in Z1:** the read-only reader (`open_read`, `open_at`), `zync-serve` tip mode, the follower (Z2-Z5).
 
 **Tests** (`trie_store.rs`): a disk store pinned at 20 runs to 80 with a flush every 5 blocks and a reopen; the root

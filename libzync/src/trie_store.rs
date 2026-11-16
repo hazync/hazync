@@ -50,6 +50,12 @@ static DISK_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static TEST_CRASH_BEFORE_META: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 #[cfg(all(test, feature = "std"))]
+static CRASH_AT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "std")]
+macro_rules! cp { ($n:expr) => { #[cfg(test)] if CRASH_AT.load(core::sync::atomic::Ordering::SeqCst) == $n { return Err(alloc::format!("test crash point {}", $n)); } } }
+#[cfg(feature = "std")]
+macro_rules! cpio { ($n:expr) => { #[cfg(test)] if CRASH_AT.load(core::sync::atomic::Ordering::SeqCst) == $n { return Err(std::io::Error::new(std::io::ErrorKind::Other, alloc::format!("test crash point {}", $n))); } } }
+#[cfg(all(test, feature = "std"))]
 static TEST_CRASH_AFTER_META: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// One `trie/roots.log` entry (Z1): height u32 | block hash 32 | root reference u64 | root hash 32 | gen u32.
@@ -181,6 +187,11 @@ pub struct DiskArena {
     /// Z1: a cut of `roots.log` (a rewind's), applied at the next flush's commit with the entries logged after it
     /// (re-review 16.11: a cut before the commit, then a crash, lost the old branch's roots)
     cut: Option<(usize, Vec<[u8; ROOTS_REC]>)>,
+    /// Z1: flushes in this opening; with GEN it makes every re-tag name unique (two re-tagging flushes at one height in
+    /// one session used to collide, re-review 16.11 M-2)
+    flushes: u32,
+    /// the writer's lock (`ARENA.LOCK`); None: a reader
+    lock: Option<std::fs::File>,
 }
 
 /// A direct-mapped cache, in RAM, of the address trie's inner records (HAZYNC_TRIE_CACHE_MB, default 0: off).
@@ -251,7 +262,7 @@ impl DiskArena {
         let cap = file.metadata()?.len();
         let cache = core::cell::RefCell::new(RecCache::new(cache_mb));
         let mut a = DiskArena { dir: dir.to_path_buf(), file, map, cap, len: 0, free: Vec::new(), pending: Vec::new(), cache,
-                                pending_marks: Vec::new(), freeing: 0, retained: 0, released_hw: 0, gen: 0, roots: None, cut: None };
+                                pending_marks: Vec::new(), freeing: 0, retained: 0, released_hw: 0, gen: 0, roots: None, cut: None, flushes: 0, lock: None };
         let meta = match std::fs::read(dir.join("meta")) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e),
@@ -276,7 +287,16 @@ impl DiskArena {
                 Some((root, counts, height, hash))
             }
         };
-        a.open_z1(meta.map_or(0, |m| m.2))?;
+        // one WRITER per arena (re-review 16.11, L-1): the first opener takes `ARENA.LOCK` and runs the Z1 recovery
+        // (GEN bump, journals, cuts). A second opener, in this process or another, is a READER: no recovery, no
+        // writes (put and flush refuse), so it can never undo what a live writer is doing.
+        let lk = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("ARENA.LOCK"))?;
+        if lk.try_lock().is_ok() {
+            a.lock = Some(lk);
+            a.open_z1(meta.map_or(0, |m| m.2))?;
+        } else {
+            a.gen = std::fs::read(dir.join("GEN")).ok().filter(|b| b.len() == 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
+        }
         Ok((a, meta))
     }
 
@@ -303,7 +323,8 @@ impl DiskArena {
         self.write_gen()?;
         // a rewind's cut of roots.log: applied if its flush committed (the meta at its height), else dropped
         if let Ok(j) = std::fs::read(self.dir.join("ROOTS_CUT")) {
-            if j.len() >= 8 && u64::from_le_bytes(j[..8].try_into().unwrap()) == f { self.apply_roots_cut()?; }
+            let now = { use sha2::Digest as _; sha2::Sha256::digest(std::fs::read(self.dir.join("meta")).unwrap_or_default()) };
+            if j.len() >= 48 && j[16..48] != now[..] { self.apply_roots_cut()?; }
             else { std::fs::remove_file(self.dir.join("ROOTS_CUT"))?; }
         }
         let rl = self.dir.join("roots.log");
@@ -322,6 +343,7 @@ impl DiskArena {
             if r.len() >= 32 && sha2::Sha256::digest(&meta)[..] == r[..32] {
                 for n in alloc::string::String::from_utf8_lossy(&r[32..]).lines().filter(|n| n.starts_with("r_") && n.ends_with(".bin") && !n.contains('/')) {
                     let _ = std::fs::remove_file(self.dir.join("retain").join(n));
+                    cpio!(32);
                 }
             }
             std::fs::remove_file(&rel)?;
@@ -330,21 +352,26 @@ impl DiskArena {
         // re-tags a crash left uncommitted (the meta never reached their height): undone, so the lists keep their own
         // freeing heights and the slots of the lost interval are not held under a lower one (re-review 16.11, L-a)
         let rt = self.dir.join("retain").join("RETAG");
-        if let Ok(t) = std::fs::read_to_string(&rt) {
+        if let Ok(tb) = std::fs::read(&rt) {
+            // read lossily: a torn journal (not UTF-8, no meta hash) is rolled back and removed, never left (L-2)
+            let t = alloc::string::String::from_utf8_lossy(&tb).into_owned();
             let mut lines = t.lines();
-            let at: Option<u64> = lines.next().and_then(|l| l.split_whitespace().next()?.parse().ok());
-            if at != Some(f) {
+            let was: Option<alloc::string::String> = lines.next().and_then(|l| Some(l.split_whitespace().nth(2)?.into()));
+            let now: alloc::string::String = { use sha2::Digest as _; sha2::Sha256::digest(std::fs::read(self.dir.join("meta")).unwrap_or_default()).iter().map(|x| alloc::format!("{x:02x}")).collect() };
+            let _ = f;
+            if was.as_deref() == Some(now.as_str()) || was.is_none() {
                 let rdir = self.dir.join("retain");
                 let ok = |n: &str| n.starts_with("r_") && n.ends_with(".bin") && !n.contains('/');
                 for l in lines {
                     let w: Vec<&str> = l.split_whitespace().collect();
                     match w.as_slice() {
-                        ["rename", old, new] if ok(old) && ok(new) => { if rdir.join(new).exists() { std::fs::rename(rdir.join(new), rdir.join(old))?; } }
+                        ["rename", old, new] if ok(old) && ok(new) => { if rdir.join(new).exists() { std::fs::rename(rdir.join(new), rdir.join(old))?; cpio!(30); } }
                         ["created", new] if ok(new) => { let _ = std::fs::remove_file(rdir.join(new)); }
                         _ => {}
                     }
                 }
             }
+            cpio!(31);
             std::fs::remove_file(&rt)?;
             std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all())?;
         }
@@ -358,15 +385,17 @@ impl DiskArena {
     fn apply_roots_cut(&self) -> std::io::Result<()> {
         use std::io::Write as _;
         let j = std::fs::read(self.dir.join("ROOTS_CUT"))?;
-        if j.len() >= 16 && (j.len() - 16) % ROOTS_REC == 0 {
+        if j.len() >= 48 && (j.len() - 48) % ROOTS_REC == 0 {
             let n = u64::from_le_bytes(j[8..16].try_into().unwrap());
             let rl = self.dir.join("roots.log");
             let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&rl)?;
             f.set_len(n)?;
+            cpio!(20);
             std::io::Seek::seek(&mut f, std::io::SeekFrom::End(0))?;
-            f.write_all(&j[16..])?;
+            f.write_all(&j[48..])?;
             f.sync_data()?;
         }
+        cpio!(21);
         std::fs::remove_file(self.dir.join("ROOTS_CUT"))?;
         std::fs::File::open(&self.dir).and_then(|d| d.sync_all())
     }
@@ -429,6 +458,7 @@ impl Arena for DiskArena {
         Node::dec(b)
     }
     fn put(&mut self, n: Node) -> R {
+        assert!(self.lock.is_some(), "trie arena {}: a reader cannot write (another opener holds ARENA.LOCK)", self.dir.display());
         let r = match self.free.pop() {
             Some(r) => r,
             None => {
@@ -474,10 +504,17 @@ impl Arena for DiskArena {
         // appended); a crash before keeps the old branch's roots, as the old meta keeps its trie
         self.roots = None;
         let b = std::fs::read(self.dir.join("roots.log")).unwrap_or_default();
-        let mut n = b.len() / ROOTS_REC;
-        while n > 0 && u32::from_le_bytes(b[(n - 1) * ROOTS_REC..(n - 1) * ROOTS_REC + 4].try_into().unwrap()) as u64 > height { n -= 1; }
-        self.cut = Some((n * ROOTS_REC, Vec::new()));
-        b[n * ROOTS_REC..b.len() / ROOTS_REC * ROOTS_REC].to_vec()
+        let hi = |e: &[u8]| u32::from_le_bytes(e[..4].try_into().unwrap()) as u64;
+        // a second cut before the flush works on the log as the first left it: the file's kept prefix and the entries
+        // logged since, of which those at or below `height` stay (re-review 16.11, L-3)
+        let (mut n, after) = match self.cut.take() {
+            Some((n, mut after)) => { after.retain(|e| hi(e) <= height); (n / ROOTS_REC, after) }
+            None => (b.len() / ROOTS_REC, Vec::new()),
+        };
+        let full = n;
+        while n > 0 && hi(&b[(n - 1) * ROOTS_REC..n * ROOTS_REC]) > height { n -= 1; }
+        self.cut = Some((n * ROOTS_REC, after));
+        b[n * ROOTS_REC..full * ROOTS_REC].to_vec()
     }
     fn bump_gen(&mut self) {
         self.gen = self.gen.wrapping_add(1);
@@ -510,6 +547,7 @@ impl Arena for DiskArena {
     }
     fn durable(&mut self, root: R, counts: bool, height: u64, hash: &[u8; 32]) -> Result<(), alloc::string::String> {
         use std::io::Write as _;
+        if self.lock.is_none() { return Err(alloc::format!("trie arena {}: a reader cannot flush (another opener holds ARENA.LOCK)", self.dir.display())); }
         let e = |x: std::io::Error| alloc::format!("trie arena {}: {x}", self.dir.display());
         self.map.flush_range(0, self.cap as usize).map_err(e)?;
         self.file.sync_all().map_err(e)?; // the file's size after a grow, not only its pages
@@ -542,26 +580,34 @@ impl Arena for DiskArena {
         let mut lists = self.retain_files();
         let retag_lists: Vec<usize> = if release != u64::MAX { (0..lists.len()).filter(|&i| lists[i].0 > height && lists[i].0 > release).collect() } else { Vec::new() };
         let retag_pending = keep.iter().any(|(k, _)| *k > height);
-        let mut retag = alloc::format!("{height} {}\n", self.gen);
+        let old_meta: alloc::string::String = { use sha2::Digest as _; sha2::Sha256::digest(std::fs::read(self.dir.join("meta")).unwrap_or_default()).iter().map(|x| alloc::format!("{x:02x}")).collect() };
+        self.flushes += 1;
+        let tag = alloc::format!("{}x{}", self.gen, self.flushes);
+        let mut retag = alloc::format!("{height} {} {old_meta}\n", self.gen);
         if !retag_lists.is_empty() || retag_pending {
             std::fs::create_dir_all(&rd).map_err(e)?;
             for &i in &retag_lists {
                 let old = lists[i].1.file_name().unwrap().to_string_lossy().into_owned();
-                let new = alloc::format!("r_{height}_{}_{}.bin", old.strip_prefix("r_").unwrap().strip_suffix(".bin").unwrap(), self.gen);
+                let new = alloc::format!("r_{height}_{}_{tag}.bin", old.strip_prefix("r_").unwrap().strip_suffix(".bin").unwrap());
                 retag.push_str(&alloc::format!("rename {old} {new}\n"));
             }
-            for (k, _) in keep.iter().filter(|(k, _)| *k > height) { retag.push_str(&alloc::format!("created r_{height}_{k}_{}.bin\n", self.gen)); }
+            for (k, _) in keep.iter().filter(|(k, _)| *k > height) { retag.push_str(&alloc::format!("created r_{height}_{k}_c{tag}.bin\n")); }
             let mut f = std::fs::File::create(rd.join("RETAG")).map_err(e)?;
             f.write_all(retag.as_bytes()).map_err(e)?;
             f.sync_data().map_err(e)?;
             std::fs::File::open(&rd).and_then(|d| d.sync_all()).map_err(e)?;
+            cp!(1);
             for &i in &retag_lists {
                 let old = lists[i].1.file_name().unwrap().to_string_lossy().into_owned();
-                let to = rd.join(alloc::format!("r_{height}_{}_{}.bin", old.strip_prefix("r_").unwrap().strip_suffix(".bin").unwrap(), self.gen));
+                let to = rd.join(alloc::format!("r_{height}_{}_{tag}.bin", old.strip_prefix("r_").unwrap().strip_suffix(".bin").unwrap()));
+                // never onto an existing list: a rename would drop its slots for good
+                if to.exists() { return Err(alloc::format!("trie arena {}: re-tag target {} exists", self.dir.display(), to.display())); }
                 std::fs::rename(&lists[i].1, &to).map_err(e)?;
+                cp!(2);
                 lists[i] = (height, to);
             }
             std::fs::File::open(&rd).and_then(|d| d.sync_all()).map_err(e)?;
+            cp!(3);
         }
         let back: Vec<(u64, std::path::PathBuf)> = lists.into_iter().filter(|(k, _)| *k <= release).collect();
         let mut back_n = 0u64;
@@ -576,8 +622,11 @@ impl Arena for DiskArena {
             let rd = self.dir.join("retain");
             std::fs::create_dir_all(&rd).map_err(e)?;
             for (k, slots) in &keep {
-                let name = if *k > height { alloc::format!("r_{height}_{k}_{}.bin", self.gen) } else { alloc::format!("r_{k}.bin") };
-                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(rd.join(name)).map_err(e)?;
+                // a re-tagged run gets a new file of its own (never appended to another); an ordinary one is appended to
+                // its block's list (all of which belong to this interval: an open drops them if the flush fails)
+                let (name, fresh) = if *k > height { (alloc::format!("r_{height}_{k}_c{tag}.bin"), true) } else { (alloc::format!("r_{k}.bin"), false) };
+                let mut f = if fresh { std::fs::OpenOptions::new().write(true).create_new(true).open(rd.join(&name)) }
+                            else { std::fs::OpenOptions::new().create(true).append(true).open(rd.join(&name)) }.map_err(e)?;
                 let mut b = Vec::with_capacity(8 * slots.len());
                 for r in slots.iter() { b.extend_from_slice(&r.to_le_bytes()); }
                 f.write_all(&b).map_err(e)?;
@@ -586,6 +635,7 @@ impl Arena for DiskArena {
             }
             std::fs::File::open(&rd).and_then(|d| d.sync_all()).map_err(e)?;
         }
+        cp!(4);
         // reuse slots in ascending address order (put() pops from the end; the meta keeps the order for a restart):
         // the next interval's writes then walk the file forwards, several to a page, instead of one 64-byte record per
         // 4 KiB page at random (11-08: past RAM, prep spent half its time throttled on dirty pages). Layout only.
@@ -616,6 +666,7 @@ impl Arena for DiskArena {
         // INTACT (review 16.11, N2): the lowest height whose logged root is intact, i.e. the highest freeing height ever
         // released, with this flush's releases counted. Written and synced BEFORE the meta, so after any crash it
         // over-states what was released (safe for a reader), never under-states it. With roots.log made durable too.
+        cp!(5);
         if let Some(f) = &self.roots { f.sync_data().map_err(e)?; }
         {
             let msg = alloc::format!("intact_from {hw} gen {} flushed {height}\n", self.gen);
@@ -626,12 +677,14 @@ impl Arena for DiskArena {
             std::fs::rename(&t, self.dir.join("INTACT")).map_err(e)?;
             std::fs::File::open(&self.dir).and_then(|d| d.sync_all()).map_err(e)?;
         }
+        cp!(6);
         // a pending roots.log cut, journaled in trie/ROOTS_CUT (height, kept length, the entries to append) before the
         // meta: an open applies it iff the meta reached that height (the cut is part of this flush's commit)
         if let Some((n, after)) = &self.cut {
-            let mut j = Vec::with_capacity(16 + ROOTS_REC * after.len());
+            let mut j = Vec::with_capacity(48 + ROOTS_REC * after.len());
             j.extend_from_slice(&height.to_le_bytes());
             j.extend_from_slice(&(*n as u64).to_le_bytes());
+            { use sha2::Digest as _; j.extend_from_slice(&sha2::Sha256::digest(std::fs::read(self.dir.join("meta")).unwrap_or_default())); }
             for b in after { j.extend_from_slice(b); }
             let t = self.dir.join("ROOTS_CUT.tmp");
             let mut f = std::fs::File::create(&t).map_err(e)?;
@@ -645,6 +698,7 @@ impl Arena for DiskArena {
         if TEST_CRASH_BEFORE_META.load(core::sync::atomic::Ordering::SeqCst) && self.dir.to_string_lossy().ends_with("-abandon") {
             return Err("test: crashed before the meta".into());
         }
+        cp!(7);
         let tmp = self.dir.join("meta.tmp");
         let mut f = std::fs::File::create(&tmp).map_err(e)?;
         f.write_all(&b).map_err(e)?;
@@ -656,17 +710,20 @@ impl Arena for DiskArena {
         if TEST_CRASH_AFTER_META.load(core::sync::atomic::Ordering::SeqCst) && self.dir.to_string_lossy().ends_with("-z1-h2") {
             return Err("test: crashed after the meta rename".into());
         }
+        cp!(8);
         // the released lists' slots are in the meta's free list now
         for (_, p) in &back { std::fs::remove_file(p).map_err(e)?; }
         if !back.is_empty() {
             std::fs::remove_file(&rel).map_err(e)?;
             std::fs::File::open(self.dir.join("retain")).and_then(|d| d.sync_all()).map_err(e)?;
         }
+        cp!(9);
         // a pending cut of roots.log, committed with the meta: applied, then its journal goes
         if self.cut.take().is_some() {
             self.apply_roots_cut().map_err(e)?;
             self.roots = None;
         }
+        cp!(10);
         // the re-tags are committed by the meta just renamed
         if rd.join("RETAG").exists() {
             std::fs::remove_file(rd.join("RETAG")).map_err(e)?;
@@ -1726,6 +1783,7 @@ mod tests {
         st.flush().unwrap();
         std::eprintln!("INTACT after rewind: {}", std::fs::read_to_string(dir.join("INTACT")).unwrap());
         assert!(view(&dir).is_ok_and(|b| b == snap10), "right after the rewind flush");
+        drop(st); // (one writer per arena: ARENA.LOCK)
         let mut st = TrieStore::open_dir(&dir, true).unwrap();
         for (n, (mk, i)) in newb.iter().enumerate() {
             st.apply(mk, i).unwrap(); st.height = 16 + n as u64; st.log_root();
@@ -1768,6 +1826,43 @@ mod tests {
         // INTACT may claim the root of 20 only if it reads as the trie of 20 (a pin written at 42 comes too late for it)
         let from: u64 = intact.split_whitespace().nth(1).and_then(|x| x.parse().ok()).expect("INTACT: intact_from <h>");
         assert!(from > 20 || ok, "INTACT says {intact:?} (PIN.released {rel:?}) but the root of 20 reads as the trie of 20: {ok}");
+    }
+
+    /// Re-review 16.11 lows: (L-1) a second opener is a READER (no recovery, it cannot write or flush); (L-3) a second
+    /// cut before the flush keeps the entries logged since the first; (L-2) a RETAG that is not UTF-8 is rolled back and
+    /// removed at open, never left.
+    #[cfg(feature = "std")]
+    #[test]
+    fn z1_one_writer_cumulative_cuts_and_a_torn_retag() {
+        let _serial = super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-z1-lows", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let blocks = z1_blocks(12, 0x0bad_cafe_1234_5678);
+        let mut st = TrieStore::open_dir(&dir, true).unwrap();
+        for (n, (mk, i)) in blocks[..10].iter().enumerate() { st.apply(mk, i).unwrap(); st.height = n as u64 + 1; st.log_root(); }
+        st.flush().unwrap();
+        let gen = std::fs::read(dir.join("GEN")).unwrap();
+        {
+            let mut rd = TrieStore::open_dir(&dir, true).unwrap();
+            assert_eq!(std::fs::read(dir.join("GEN")).unwrap(), gen, "a reader runs no recovery (no GEN bump)");
+            assert!(rd.flush().is_err(), "a reader cannot flush");
+            assert!(std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| rd.apply(&blocks[10].0, &blocks[10].1))).is_err(), "nor write");
+        }
+        // two cuts before one flush: log 10' after the first, then cut at 10 again: 10' stays
+        st.cut_roots_above(8);
+        st.height = 9; st.log_root();
+        st.height = 10; st.log_root();
+        st.cut_roots_above(9);
+        st.flush().unwrap();
+        let rl = std::fs::read(dir.join("roots.log")).unwrap();
+        let hs: Vec<u32> = rl.chunks_exact(ROOTS_REC).map(|e| u32::from_le_bytes(e[..4].try_into().unwrap())).collect();
+        assert_eq!(hs, (1..=9).collect::<Vec<u32>>(), "1..8 kept, 9 logged after the first cut kept, 10 cut by the second");
+        drop(st);
+        std::fs::create_dir_all(dir.join("retain")).unwrap();
+        std::fs::write(dir.join("retain/RETAG"), [0xffu8, 0xfe, 0x00, 0x80]).unwrap();
+        let _st = TrieStore::open_dir(&dir, true).unwrap();
+        assert!(!dir.join("retain/RETAG").exists(), "a torn RETAG is removed at open");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Z1: `GEN` is bumped (and synced) at every open and every `bump_gen` (a rewind); each `roots.log` entry carries the
@@ -2322,5 +2417,274 @@ mod adv {
         s.pin(Some(16)); s.fwd(&b[..3], 1); let bad = s.check("pin 16 at 18");
         std::eprintln!("INTACT after a pin-less rewind to 15: {i}; later {} ; root 16 ok {} broken {bad:?}", s.intact(), s.root_ok(16));
         assert!(bad.is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod adv2 {
+    use super::*;
+    use alloc::vec::Vec;
+    use alloc::string::String;
+    use core::sync::atomic::Ordering::SeqCst;
+    type Blk = (Vec<(Key, W)>, Vec<(Key, Option<W>, u64)>);
+    fn blocks(n: u32, seed: u64) -> Vec<Blk> {
+        let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        let mut unspent: Vec<Key> = Vec::new();
+        (0..n).map(|blk| {
+            let mut marks = Vec::new();
+            for _ in 0..(rnd() % 6) {
+                if unspent.is_empty() { break; }
+                let k = unspent.swap_remove((rnd() % unspent.len() as u64) as usize);
+                marks.push((k, [blk, 1, 0, 0, 0, 0, 0, 0]));
+            }
+            let mut ins = Vec::new();
+            for _ in 0..(1 + rnd() % 8) {
+                let mut k = [0u8; 64];
+                for b in k.iter_mut() { *b = rnd() as u8; }
+                k[0] &= 0x07;
+                unspent.push(k);
+                ins.push((k, None, rnd() >> 30));
+            }
+            (marks, ins)
+        }).collect()
+    }
+    pub struct Sim { pub dir: std::path::PathBuf, pub chain: Vec<Blk>, pub flushed: usize, pub pin: Option<u64>, pub trace: Vec<String> }
+    impl Sim {
+        pub fn new(tag: &str) -> Sim {
+            let dir = std::env::temp_dir().join(alloc::format!("hztrie-adv2-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::env::set_var("HAZYNC_TRIE_RETAIN_MAX", "1000");
+            Sim { dir, chain: Vec::new(), flushed: 0, pin: None, trace: Vec::new() }
+        }
+        fn t(&mut self, s: String) { self.trace.push(s); }
+        fn set_pin(&mut self, p: Option<u64>) { self.pin = p; match p { Some(p) => std::fs::write(self.dir.join("PIN"), alloc::format!("{p}\n")).unwrap(), None => { let _ = std::fs::remove_file(self.dir.join("PIN")); } } }
+        fn model(&self, h: usize) -> TrieStore { let mut m = TrieStore::new(true); for (mk, i) in &self.chain[..h] { m.apply(mk, i).unwrap(); } m.height = h as u64; m }
+        fn meta_h(&self) -> usize { std::fs::read(self.dir.join("meta")).map(|b| u64::from_le_bytes(b[17..25].try_into().unwrap()) as usize).unwrap_or(0) }
+        fn fwd(&mut self, bl: &[Blk], every: usize) {
+            let mut st = TrieStore::open_dir(&self.dir, true).unwrap();
+            assert_eq!(st.height as usize, self.chain.len(), "fwd: store height");
+            for (n, (mk, i)) in bl.iter().enumerate() {
+                st.apply(mk, i).unwrap(); self.chain.push((mk.clone(), i.clone())); st.height = self.chain.len() as u64; st.log_root();
+                if (n + 1) % every == 0 || n + 1 == bl.len() { st.flush().unwrap(); self.flushed = self.chain.len(); }
+            }
+        }
+        /// as rewind.rs, with a crash point in the flush; true if the rewind committed (the meta reached f)
+        fn rewind(&mut self, f: usize, cp: u32) -> bool {
+            {
+                let mut st = TrieStore::open_dir(&self.dir, true).unwrap();
+                assert_eq!(st.height as usize, self.chain.len());
+                for (mk, i) in self.chain[f..].iter().rev() {
+                    let km: Vec<Key> = mk.iter().map(|m| m.0).collect();
+                    let ki: Vec<Key> = i.iter().map(|x| x.0).collect();
+                    st.undo_recorded(&km, &ki, false).unwrap();
+                }
+                st.cut_roots_above(f as u64 - 1);
+                st.height = f as u64; st.log_root();
+                CRASH_AT.store(cp, SeqCst);
+                let r = st.flush();
+                CRASH_AT.store(0, SeqCst);
+                if cp == 0 { r.unwrap(); }
+            }
+            let done = self.meta_h() == f;
+            if done { self.chain.truncate(f); self.flushed = f; }
+            done
+        }
+        fn open_crash(&self, cp: u32) -> bool { CRASH_AT.store(cp, SeqCst); let r = TrieStore::open_dir(&self.dir, true).is_err(); CRASH_AT.store(0, SeqCst); r }
+        fn lists(&self) -> Vec<String> { let mut v: Vec<_> = std::fs::read_dir(self.dir.join("retain")).map(|it| it.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default(); v.sort(); v }
+        fn intact(&self) -> u64 { std::fs::read_to_string(self.dir.join("INTACT")).ok().and_then(|x| x.split_whitespace().nth(1)?.parse().ok()).unwrap_or(0) }
+        fn root_ok(&self, h: usize) -> bool {
+            let b = std::fs::read(self.dir.join("roots.log")).unwrap_or_default();
+            let Some(e) = b.chunks_exact(ROOTS_REC).filter(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) == h as u32).last() else { return false };
+            let r = u64::from_le_bytes(e[36..44].try_into().unwrap());
+            let want = self.model(h).to_bytes();
+            let d = self.dir.clone();
+            std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| { let mut v = TrieStore::open_dir(&d, true).unwrap(); v.root = r; v.height = h as u64; v.to_bytes() })).is_ok_and(|b| b == want)
+        }
+        /// every height INTACT claims reads as the model; the pinned root too; the flushed trie is the model's
+        fn check(&mut self, what: &str) -> Result<(), String> {
+            { let st = TrieStore::open_dir(&self.dir, true).map_err(|e| alloc::format!("{what}: open {e}"))?;
+              if st.height as usize != self.flushed { return Err(alloc::format!("{what}: store at {} expected {}", st.height, self.flushed)); }
+              let ok = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| st.to_bytes())).is_ok_and(|b| b == self.model(self.flushed).to_bytes());
+              if !ok { return Err(alloc::format!("{what}: the FLUSHED trie at {} is not the model's (live nodes corrupted)", self.flushed)); } }
+            for j in ["RETAG", "RELEASE"] { if self.dir.join("retain").join(j).exists() { return Err(alloc::format!("{what}: retain/{j} left after an open")); } }
+            if self.dir.join("ROOTS_CUT").exists() { return Err(alloc::format!("{what}: ROOTS_CUT left after an open")); }
+            let from = (self.intact() as usize).max(1);
+            let bad: Vec<usize> = (from..=self.flushed).filter(|&h| !self.root_ok(h)).collect();
+            if !bad.is_empty() { return Err(alloc::format!("{what}: INTACT {from} flushed {} but roots {bad:?} broken; lists {:?}", self.flushed, self.lists())); }
+            if let Some(p) = self.pin { if p as usize >= 1 && p as usize <= self.flushed && !self.root_ok(p as usize) { return Err(alloc::format!("{what}: PINNED root {p} broken (INTACT {from}, flushed {})", self.flushed)); } }
+            Ok(())
+        }
+        fn leak(&mut self) -> Result<(), String> {
+            self.set_pin(None);
+            let extra = blocks(3, 0xdead_0000 + self.chain.len() as u64);
+            self.fwd(&extra, 1);
+            let st = TrieStore::open_dir(&self.dir, true).unwrap();
+            let ok = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| st.to_bytes())).is_ok_and(|b| b == self.model(self.chain.len()).to_bytes());
+            if !ok { return Err("final content differs from the model (corruption)".into()); }
+            let (disk, model, lists) = (st.nodes(), self.model(self.chain.len()).nodes(), self.lists());
+            if disk != model || !lists.is_empty() { return Err(alloc::format!("LEAK/DOUBLE-FREE: disk {disk} model {model} lists {lists:?}")); }
+            Ok(())
+        }
+    }
+    fn serial() -> std::sync::MutexGuard<'static, ()> { super::DISK_TESTS.lock().unwrap_or_else(|e| e.into_inner()) }
+
+    /// every crash point of a rewind's flush x {rerun, abandon} x pin {below fork, at fork, above fork, none},
+    /// optionally with a crash inside the open-time recovery, then run on and check for leaks
+    /// ~2 min in release, more in debug (576 crash cases): run on purpose, TMPDIR on a tmpfs for speed:
+    /// `TMPDIR=/dev/shm cargo test --release -p libzync -- --ignored x_`
+    #[test]
+    #[ignore]
+    fn x_every_crash_point_of_a_rewind() {
+        let _s = serial();
+        let mut fails: Vec<String> = Vec::new();
+        let mut n = 0;
+        for pin in [Some(10u64), Some(15), Some(18), None] {
+            for cp in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21] {
+                for ocp in [0u32, 30, 31, 32, 20, 21] {
+                    for rerun in [true, false] {
+                        n += 1;
+                        let what = alloc::format!("pin {pin:?} cp {cp} open-cp {ocp} rerun {rerun}");
+                        let mut s = Sim::new("grid");
+                        let a = blocks(20, 1); let b = blocks(12, 2);
+                        s.fwd(&a[..10], 5); s.set_pin(pin); s.fwd(&a[10..], 5);
+                        let r: Result<(), String> = (|| {
+                            let mut done = s.rewind(15, cp);
+                            if ocp != 0 { let _ = s.open_crash(ocp); }
+                            // recovery twice
+                            drop(TrieStore::open_dir(&s.dir, true).map_err(|e| alloc::format!("open: {e}"))?);
+                            s.check("after crash")?;
+                            if !done && rerun { done = s.rewind(15, 0); if !done { return Err("rerun did not commit".into()); } s.check("after rerun")?; }
+                            let _ = done;
+                            s.fwd(&b[..6], 3); s.check("on 6")?;
+                            if let Some(p) = s.pin { let np = (p + 4).min(s.flushed as u64); s.set_pin(Some(np)); }
+                            s.fwd(&b[6..], 2); s.check("on 12")?;
+                            s.leak()
+                        })();
+                        if let Err(e) = r { fails.push(alloc::format!("{what}: {e}")); }
+                        let _ = std::fs::remove_dir_all(&s.dir);
+                    }
+                }
+            }
+        }
+        for f in &fails { std::eprintln!("GRID FAIL {f}"); }
+        std::eprintln!("grid: {n} cases, {} failed", fails.len());
+        assert!(fails.is_empty());
+    }
+
+    /// random histories: forward runs, pin moves, rewinds (same fork again, nested), crashes at random points, reruns
+    /// and abandons
+    /// (with the crash grid above: `-- --ignored x_`)
+    #[test]
+    #[ignore]
+    fn x_random_histories() {
+        let _s = serial();
+        let seeds: u64 = std::env::var("ADV_SEEDS").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+        let mut fails: Vec<String> = Vec::new();
+        for seed in 1..=seeds {
+            let mut x = seed.wrapping_mul(0xD6E8_FEB8_6659_FD93) | 1;
+            let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+            let mut s = Sim::new("rand");
+            let mut bseed = seed * 1000;
+            let mut last_fork = 0usize;
+            let r: Result<(), String> = (|| {
+                let a = blocks(12, bseed); bseed += 1;
+                s.fwd(&a, 4); s.t("fwd 12".into());
+                for step in 0..14 {
+                    match rnd() % 10 {
+                        0..=2 => { let n = 1 + (rnd() % 7) as u32; let ev = 1 + (rnd() % 4) as usize; let b = blocks(n, bseed); bseed += 1; s.fwd(&b, ev); s.t(alloc::format!("fwd {n} every {ev} -> {}", s.flushed)); }
+                        3..=4 => {
+                            let lo = (s.intact() as usize).max(s.pin.unwrap_or(0) as usize).max(1);
+                            if rnd() % 6 == 0 { s.set_pin(None); s.t("pin None".into()); }
+                            else if lo <= s.flushed { let p = lo + (rnd() as usize) % (s.flushed - lo + 1); s.set_pin(Some(p as u64)); s.t(alloc::format!("pin {p}")); }
+                        }
+                        _ => {
+                            if s.flushed < 4 { continue; }
+                            let depth = 1 + (rnd() as usize) % 8.min(s.flushed - 2);
+                            let mut f = s.flushed - depth;
+                            if last_fork != 0 && last_fork < s.flushed && rnd() % 3 == 0 { f = last_fork; }
+                            let cps = [0u32, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21];
+                            let cp = cps[(rnd() % cps.len() as u64) as usize];
+                            let from = s.flushed;
+                            let mut done = s.rewind(f, cp);
+                            let mut note = alloc::format!("rewind {from}->{f} cp {cp} done {done}");
+                            if cp != 0 && rnd() % 2 == 0 { let ocps = [30u32, 31, 32, 20, 21]; let o = ocps[(rnd() % 5) as usize]; let c = s.open_crash(o); note.push_str(&alloc::format!(" open-cp {o} hit {c}")); }
+                            if !done && rnd() % 2 == 0 { done = s.rewind(f, 0); note.push_str(" rerun"); if !done { return Err("rerun did not commit".into()); } }
+                            if done { last_fork = f; }
+                            s.t(note);
+                        }
+                    }
+                    s.check(&alloc::format!("step {step}"))?;
+                }
+                s.leak()
+            })();
+            if let Err(e) = r { fails.push(alloc::format!("seed {seed}: {e}\n    trace: {:?}", s.trace)); }
+            let _ = std::fs::remove_dir_all(&s.dir);
+        }
+        for f in &fails { std::eprintln!("RAND FAIL {f}"); }
+        std::eprintln!("random: {seeds} seeds, {} failed", fails.len());
+        assert!(fails.is_empty());
+    }
+
+    /// LIBRARY-LEVEL (not rewind.rs): the meta is ALREADY at F; apply and undo in one session, the flush at F crashes
+    /// before the meta. RETAG's and ROOTS_CUT's commit test is "the meta is at F": true here though nothing committed.
+    #[test]
+    fn x_in_session_undo_crash_before_meta_same_height() {
+        let _s = serial();
+        let mut s = Sim::new("insess-crash");
+        let a = blocks(20, 1); let b = blocks(12, 2);
+        s.fwd(&a[..10], 5); s.set_pin(Some(10)); s.fwd(&a[10..15], 5);
+        {
+            let mut st = TrieStore::open_dir(&s.dir, true).unwrap();
+            for (n, (mk, i)) in a[15..].iter().enumerate() { st.apply(mk, i).unwrap(); st.height = 16 + n as u64; st.log_root(); }
+            for (mk, i) in a[15..].iter().rev() { st.undo(mk, i).unwrap(); }
+            st.cut_roots_above(14); st.height = 15; st.log_root();
+            CRASH_AT.store(7, SeqCst); let r = st.flush(); CRASH_AT.store(0, SeqCst);
+            assert!(r.is_err());
+        }
+        std::eprintln!("in-session crash: lists {:?} RETAG {} ROOTS_CUT {}", s.lists(), s.dir.join("retain/RETAG").exists(), s.dir.join("ROOTS_CUT").exists());
+        let mut out: Vec<String> = Vec::new();
+        if let Err(e) = s.check("after the crash") { out.push(e); }
+        std::eprintln!("after open: lists {:?}", s.lists());
+        let r: Result<(), String> = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| -> Result<(), String> {
+            s.fwd(&b[..6], 3); s.check("on 6")?;
+            s.set_pin(Some(18)); s.fwd(&b[6..], 2); s.check("on 12, pin 18")?;
+            s.leak()
+        })).unwrap_or_else(|_| Err("PANIC while running on".into()));
+        if let Err(e) = r { out.push(e); }
+        for o in &out { std::eprintln!("INSESS FAIL {o}"); }
+        assert!(out.is_empty());
+    }
+
+    /// LIBRARY-LEVEL: two flushes at the same height in ONE session (one GEN), each re-tagging a list of the same block
+    #[test]
+    fn x_same_session_two_retags_one_gen() {
+        let _s = serial();
+        let mut s = Sim::new("onegen");
+        let a = blocks(20, 1); let b = blocks(5, 2); let c = blocks(12, 3);
+        s.fwd(&a[..10], 5); s.set_pin(Some(10)); s.fwd(&a[10..], 1);
+        let sz = |s: &Sim| -> u64 { s.lists().iter().map(|n| std::fs::metadata(s.dir.join("retain").join(n)).unwrap().len()).sum() };
+        {
+            let mut st = TrieStore::open_dir(&s.dir, true).unwrap();
+            for (mk, i) in s.chain[15..].iter().rev() {
+                let km: Vec<Key> = mk.iter().map(|m| m.0).collect(); let ki: Vec<Key> = i.iter().map(|x| x.0).collect();
+                st.undo_recorded(&km, &ki, false).unwrap();
+            }
+            st.cut_roots_above(14); st.height = 15; st.log_root(); st.flush().unwrap();
+            s.chain.truncate(15);
+            for (mk, i) in b.iter() { st.apply(mk, i).unwrap(); s.chain.push((mk.clone(), i.clone())); st.height = s.chain.len() as u64; st.log_root(); st.flush().unwrap(); }
+            let before = sz(&s);
+            std::eprintln!("one gen: before the 2nd undo {:?}", s.lists());
+            for (mk, i) in b.iter().rev() { st.undo(mk, i).unwrap(); }
+            s.chain.truncate(15);
+            st.cut_roots_above(14); st.height = 15; st.log_root(); st.flush().unwrap();
+            s.flushed = 15;
+            let after = sz(&s);
+            std::eprintln!("one gen: after {:?}; held bytes {before} -> {after}", s.lists());
+            assert_eq!(before, after, "held slots lost by a rename onto an existing list ({} slots)", (before - after) / 8);
+        }
+        s.check("after").unwrap();
+        s.fwd(&c, 3); s.check("on").unwrap();
+        s.leak().unwrap();
     }
 }
