@@ -16,7 +16,7 @@ if cargo build --release --features regtest-test --manifest-path ./Cargo.toml > 
 grep -q "regtest-test. feature is for tests only" "$W/log" || { tail -20 "$W/log"; echo "::error::control: not refused by the feature's compile_error"; exit 1; }
 REPO=$(cd ../.. && pwd)
 mkdir -p "$W/rt/src" && : > "$W/rt/src/lib.rs"
-printf '[package]\nname = "rt"\nversion = "0.1.0"\nedition = "2021"\n[lib]\ncrate-type = ["cdylib"]\n[dependencies]\nzapp-corecheck = { path = "%s/zapps/corecheck", features = ["regtest-test"] }\n[workspace]\n' "$REPO" > "$W/rt/Cargo.toml"
+printf '[package]\nname = "rt"\nversion = "0.1.0"\nedition = "2021"\n[lib]\ncrate-type = ["cdylib"]\n[dependencies]\nzapp-common = { path = "%s/zapps/common", features = ["regtest-test"] }\n[workspace]\n' "$REPO" > "$W/rt/Cargo.toml"
 if ../../scripts/wasm-build.sh "$(realpath --relative-to="$REPO" "$W/rt")" "$W/stage" rt.wasm > "$W/log" 2>&1; then
     echo "::error::control: scripts/wasm-build.sh built a WASM graph with regtest-test"; exit 1; fi
 grep -q "enables the tests-only feature regtest-test" "$W/log" || { tail -20 "$W/log"; echo "::error::control: wasm-build.sh failed, but not on the regtest-test check"; exit 1; }
