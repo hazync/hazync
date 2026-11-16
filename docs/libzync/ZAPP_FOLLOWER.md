@@ -1,9 +1,9 @@
 # Following the tip with zAPP facts (design)
 
-> **Design only, 16.11.2026.** Nothing here is built. I wrote it from the repo at `797b777e` (main), the reorg design on
+> **Design, 16.11.2026; Z1 built the same day** (branch `feat/reorg-p1-p2`, with REORG P1; §13). The rest is not built. I wrote it from the repo at `797b777e` (main), the reorg design on
 > `design/reorg-handling` (`docs/libzync/REORG.md`, cited as REORG §n) and a read-only survey of `hazync-proof` the
 > same day. **MEASURED** numbers come from that survey or the files named next to them; **ESTIMATE** numbers are
-> labelled. Open questions for the user are in §12.
+> labelled. The user's decisions on the open questions are in §12.
 
 The user decided (REORG §14, questions 1 and 6): the **paper prep** (`libzync-prep`, `LZ_ROOT=/srv/bulk/libzync-prep`)
 is the run that follows the tip, and zAPP facts at the tip read **that run's stores**. This page covers how the fact
@@ -233,14 +233,39 @@ the box; no Actions run without asking.
 8. **`zync-serve` restarts** stay as today (a few ms of refused connections per new height); with nothing to load,
    they are instant.
 
-## 12. Open questions for the user
+## 12. Decisions (the user, 16.11.2026)
 
-1. **Catch-up:** serve the spine's height from the **board pass's** live stores with retention (§6: up to ~130 GB on vda
-   at deep heights, ESTIMATE, or less with a smaller leaf window), or **freeze** Coin check at ~140,000 when today's
-   path stops, until the tip run takes over at X?
-2. **Retention at the tip:** W = 288 blocks (ESTIMATE ~7 GB), so facts survive any reorg the automatic path handles, or
-   just the two served heights (ESTIMATE ~0.1 GB) and a pause on any reorg deeper than the proving lag?
-3. **Coin-log facts at the tip:** drop `/coin` and `/find` there (the trie coin fact answers the same question), or keep
-   them (a history from genesis for the tip run, Z6)?
-4. **History-fact cap:** what size of answer may one request walk (proposed: refuse past ~100,000 nodes)?
-5. **Release:** ship Z1 in the same host release as REORG P1, so each prep run restarts once?
+1. **Catch-up:** facts come from the **board pass's** live stores with retention (§6), not a freeze at ~140,000.
+2. **Retention at the tip:** W = 288 blocks (ESTIMATE ~7 GB), so facts survive any reorg the automatic path handles.
+   `HAZYNC_TRIE_RETAIN_MAX` defaults to 288.
+3. **Coin-log facts at the tip:** `/coin` and `/find` are dropped in tip mode (the trie coin fact answers the same
+   question). Z6 is not planned.
+4. **History-fact cap:** a history-fact walk is refused past ~100,000 nodes (Z2).
+5. **Release:** Z1 ships in the same host release as REORG P1, so each prep run restarts once.
+
+## 13. Built: Z1 (16.11.2026)
+
+`libzync/src/trie_store.rs` (host only: every addition is `#[cfg(feature = "std")]`, so the WASM verifier compiles
+the file as before), `prover/host/src/prep.rs` and `trie.rs` (one call each).
+
+- **`trie/roots.log`**: `TrieStore::log_root` after every accepted apply (prep and the proving path's `trie_commit`):
+  80 bytes, `height u32 | block hash 32 | root reference u64 | root hash 32 (the state's trie_root bytes) | gen u32`,
+  appended, no fsync.
+- **`trie/GEN`** (u32, synced): bumped at every open of the arena (before any write) and by `TrieStore::bump_gen` (REORG
+  P3's rewind will call it). At open, `roots.log` is cut back to the flushed height (a torn last entry too), and
+  `retain/` lists of blocks above it are dropped.
+- **Retention**: each freed slot is tagged with the height of the block whose update freed it (the root of tag − 1 is
+  the last that holds it; held in `pending` as runs, one entry per block, not per slot). At a flush,
+  `release = max(min(PIN, P), P − HAZYNC_TRIE_RETAIN_MAX)` (default 288): slots tagged ≤ release go to the free list
+  as before, the rest to `trie/retain/r_<tag>.bin` (8 bytes per slot, synced before the meta), and lists ≤ release
+  come back into the free list (deleted after the meta). **No `trie/PIN`: everything is released, exactly as before
+  Z1.** When the cap releases a pinned height, `trie/PIN.released` says `released_through <h> pin <p> height <P>` and
+  prep logs `TRIE_PIN_RELEASED`.
+- **Not in Z1:** the read-only reader (`open_read`, `open_at`), `zync-serve` tip mode, the follower (Z2-Z5).
+
+**Tests** (`trie_store.rs`): a disk store pinned at 20 runs to 80 with a flush every 5 blocks and a reopen; the root
+of 20 from `roots.log` still reads as the trie of 20, snapshot byte for byte; the same run WITHOUT the pin (the
+positive control) reuses its slots and the root of 20 no longer reads as that trie. Removing the pin returns every held
+slot at the next flush; a cap of 2 releases a pin at 82 at the flush of 90 and writes `PIN.released`; the live trie
+stays exact throughout. `GEN` counts opens and bumps, entries carry their generation, and after a crash past the flush
+at 10 the entries of 11..15 and a lost block's `retain/` list are gone at the reopen.
