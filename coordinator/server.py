@@ -18,6 +18,7 @@ The full submit→verify→credit loop is real; VERIFY_MODE=mock only stubs the 
 can be tested without a GPU.
 """
 import os, sys, json, sqlite3, hashlib, subprocess, base64, time, threading, tarfile, io, re, unicodedata, secrets, bisect, math
+import collections
 from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.request
@@ -1152,6 +1153,48 @@ def known_receipt(c, sha):
                   (sha,)).fetchone()
     return r["range_id"] if r else None
 
+def _spine_hi(head):
+    """The spine head's hi as an int (0 for no spine, or a head this cannot read)."""
+    try:
+        return int(head.get("hi", 0)) if head else 0
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
+def spine_seed_row(c, sha):
+    """The verified range a receipt known_receipt() refuses is the proof of, if submitting it as the spine would still
+    ADVANCE the spine, else None: a range that starts at genesis (lo 1; lo 0 is a legacy [0..hi] genesis-seed row) and
+    ends above the spine's head (or there is no spine yet). Returns {id, hi, pubkey, handle, sig}: the range, and the
+    key that PROVED it with its signature over these same receipt bytes, from its submission row.
+
+    Such a receipt is a genesis-anchored proof of [1..hi], so it is a valid head, and on a fresh board it is the only one
+    there is: the worker seeds an empty spine with /api/proof/1 (`hazync spine`), and the replay pre-check refused it as
+    "already the verified proof of 1", so the spine stayed empty for good (measured 16.11.2026 on the v0.26.0 board).
+    It is not a replay of anything the spine holds. A receipt that would not advance the spine (its own replay, an older
+    head, a range at or below the head) is refused as before. submit_spine bounds what the exception can cost: one
+    verification of a given receipt at a time (_spine_seed_inflight), none once the head has reached it, and none again
+    after it FAILED as the spine until the head moves (_spine_seed_failed)."""
+    r = c.execute("SELECT id, hi FROM ranges WHERE receipt_sha=? AND status='verified' AND lo<=1 AND hi>? "
+                  "ORDER BY hi DESC LIMIT 1", (sha, _spine_hi(spine_head()))).fetchone()
+    if not r:
+        return None
+    w = c.execute("SELECT pubkey, handle, sig FROM submissions WHERE range_id=? AND receipt_sha=? AND verified=1 "
+                  "ORDER BY id LIMIT 1", (r["id"], sha)).fetchone()
+    return {"id": r["id"], "hi": int(r["hi"]), "pubkey": w["pubkey"] if w else None,
+            "handle": w["handle"] if w else None, "sig": w["sig"] if w else None}
+
+
+# A known genesis range's proof let through to verify_spine (spine_seed_row) must not reopen what the replay pre-check
+# closed (review 11-12, board #6): unbounded STARK verifications of a public receipt.
+#   _spine_seed_inflight  shas being verified as the spine now: a concurrent submit of the same bytes is refused, so N
+#                         racing copies cost ONE verification, not N
+#   _spine_seed_failed    sha -> the head's hi when it FAILED verification as the spine (an older image's row, a 180 s
+#                         timeout, a stricter verifier): refused again, with no verification, until the head moves.
+#                         Bounded (oldest dropped); in memory, so a restart costs at most one more try per receipt.
+_spine_seed_inflight = set()
+_spine_seed_failed = collections.OrderedDict()
+_SPINE_SEED_FAILED_MAX = 1024
+
 
 def verify_receipt(receipt: bytes, rng):
     """Verify a submitted range receipt on CPU — no folding, no GPU (the 'verify-only' coordinator).
@@ -1398,18 +1441,56 @@ def submit_spine(body):
     except Exception: return 400, {"error": "receipt must be base64"}
     if not verify_sig(pk, sig, receipt):
         return 403, {"error": "signature invalid"}
+    _sha = hashlib.sha256(receipt).hexdigest()
+    _seed = None
     with _lock:
         c = db()
-        _known = known_receipt(c, hashlib.sha256(receipt).hexdigest())
+        _known = known_receipt(c, _sha)
+        # a genesis range's own proof may still seed or advance the spine (16.11.2026: an empty spine never started)
+        _row = spine_seed_row(c, _sha) if _known else None
         c.close()
+        if _row is not None:
+            if _spine_seed_failed.get(_sha) == _spine_hi(spine_head()):
+                return 409, {"error": f"this receipt (the proof of {_known}) already failed verification as the spine "
+                                      f"at this head; it is not verified again until the spine moves"}
+            if _sha in _spine_seed_inflight:
+                return 409, {"error": f"this receipt (the proof of {_known}) is being verified as the spine right now"}
+            _spine_seed_inflight.add(_sha)
+            _seed, _known = _row, None
     if _known:
         return 409, {"error": f"this receipt is already the verified proof of {_known}: a replay does not advance the spine"}
+    try:
+        return _submit_spine_verified(receipt, _sha, _seed, pk, sig, handle)
+    finally:
+        if _seed is not None:
+            with _lock:
+                _spine_seed_inflight.discard(_sha)
 
-    cur = spine_head()
+
+def _submit_spine_verified(receipt, sha, seed, pk, sig, handle):
+    """submit_spine past the replay pre-check: verify, then advance the head. `seed` is spine_seed_row's row when the
+    receipt is a known genesis range's own proof (else None)."""
     with _verify_sem:
+        if seed is not None:
+            # the slot may have been a long wait: if the head has reached this range meanwhile, it cannot advance it,
+            # and refusing here costs a file read, not a STARK verification
+            _now = _spine_hi(spine_head())
+            if _now >= seed["hi"]:
+                return 409, {"error": f"spine already at [1..{_now}]; the proof of {seed['id']} does not advance it"}
         ok, note, meta = verify_spine(receipt)
     if not ok:
+        if seed is not None:
+            with _lock:
+                _spine_seed_failed[sha] = _spine_hi(spine_head())
+                _spine_seed_failed.move_to_end(sha)
+                while len(_spine_seed_failed) > _SPINE_SEED_FAILED_MAX:
+                    _spine_seed_failed.popitem(last=False)
         return 400, {"error": note}
+    if seed is not None and seed["pubkey"]:
+        # The proof is the range's prover's, not the submitter's: the head, its submission row (the spine's credit,
+        # spine_segments) and its signature are theirs. The prover signed these same receipt bytes when submitting
+        # the range, so the recorded sig still verifies against the recorded key. (review of #752, L1)
+        pk, sig, handle = seed["pubkey"], seed["sig"], seed["handle"]
 
     # Monotonic under the lock. Two workers may extend concurrently (duplicate spine work is harmless
     # by design); the shorter result must not overwrite the longer one.
@@ -1429,7 +1510,9 @@ def submit_spine(body):
         _hand = (handover_era() == "post" and meta["hi"] == LZ_HANDOVER_AT and meta.get("in_bhash"))
         if _hand:
             c = db()
-            c.execute("INSERT OR REPLACE INTO vranges(id,lo,hi,in_tip,out_tip,pubkey,handle,ts,out_leaves,range_work,"
+            # a known range's own proof (seed) keeps whatever row its range already recorded, and who proved it
+            c.execute(("INSERT OR IGNORE" if seed is not None else "INSERT OR REPLACE")
+                      + " INTO vranges(id,lo,hi,in_tip,out_tip,pubkey,handle,ts,out_leaves,range_work,"
                       "in_bhash,out_bhash,image) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (f"1-{meta['hi']}", 1, meta["hi"], GENESIS_TIP, meta["out_tip"], pk, handle, time.time(),
                        meta.get("out_leaves", 0), str(meta.get("range_work", "0")),
