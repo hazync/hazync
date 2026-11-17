@@ -301,3 +301,23 @@ fn run_assume_end_to_end() {
     let o = run_assume(&cs, req(Some(Some([7; 32])), Some(HDRS), Some(SNAP_200), None));
     assert!(!o.checks[1].0 && o.checks[2].0 && o.valid.is_none() && o.utxo.is_some(), "{:?}", o.checks);
 }
+
+/// The byte a truncation names counts the bytes of every raw script read before it.
+#[test]
+fn truncation_after_a_raw_script() {
+    let g1 = group([1; 32], &[0], 2, 0, &raw_script(5));
+    let e = read_snapshot(&snap(2, &[&g1[..], &[2u8; 10]].concat())[..], |_| Ok(())).unwrap_err();
+    assert!(e.contains(&format!("truncated at byte {} ", 51 + g1.len())), "{e}");
+}
+
+/// The network a snapshot must name: mainnet's message start, signet's, and under the tests-only regtest-test feature
+/// (zapps/corecheck's regtest image, profile bit 3) Core's regtest pchMessageStart.
+#[test]
+fn network_magic_by_profile() {
+    assert_eq!(network_magic(0x71), MAINNET);
+    assert_eq!(network_magic(0x71 | swiftsync_verify::PROFILE_SIGNET), [0x0a, 0x03, 0xcf, 0x40]);
+    #[cfg(feature = "regtest-test")]
+    assert_eq!(network_magic(0x79), [0xfa, 0xbf, 0xb5, 0xda]);
+    #[cfg(not(feature = "regtest-test"))]
+    assert_eq!(network_magic(0x79), MAINNET, "no regtest without the tests-only feature");
+}
