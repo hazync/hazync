@@ -9,7 +9,7 @@ hazync — Proof Party contributor CLI.
   hazync submit <id>        # sign the receipt with your key and submit it for verification
   hazync run [id]           # claim + prove + submit (id optional: takes the earliest free block)
                             # stopped with SIGTERM or Ctrl-C, it hands its claimed block back first (#725)
-  hazync release <id>       # hand a block you claimed back to the board now, instead of letting it lapse
+  hazync release <id> <claim>  # hand a block you claimed back to the board now (claim = the id on its 'claimed block' line)
   hazync run [id] --distributed [--workers=N|auto]
                             # prove ONE board block across MANY cards (mode 6). Serves the block and
                             # waits for `host seg-connect <this-box>:9110` workers to dial in; they may
@@ -1643,16 +1643,18 @@ def _post_quick(path, body):
             return {"error": f"coordinator error {e.code}: {e.reason}"}
 
 
-def release_claim(rng, sk, pub, post_fn=None):
+def release_claim(rng, claim, sk, pub, post_fn=None):
     """Hand a claimed block back to the board now (#725). Returns (released, message). Never raises.
 
-    Signed over "release:<range>:<nonce>:<ts>". ONE nonce for this release and every retry of it, the same
+    `claim` names WHICH claim: the nonce it was made with. The coordinator releases only that claim, so a release
+    still in flight for an old claim cannot free the block this key has since claimed again.
+    Signed over "release:<range>:<claim>:<nonce>:<ts>". ONE nonce for this release and every retry of it, the same
     rule as a claim (#268): the coordinator answers a repeat of a release it has already done with the first
     answer, so a lost response retried is not refused as a replay."""
     post_fn = post_fn or _post_quick
     nonce, ts = os.urandom(16).hex(), int(time.time())
-    body = {"range": str(rng), "pubkey": pub, "nonce": nonce, "ts": ts,
-            "sig": sk.sign(f"release:{rng}:{nonce}:{ts}".encode()).hex()}
+    body = {"range": str(rng), "claim": str(claim), "pubkey": pub, "nonce": nonce, "ts": ts,
+            "sig": sk.sign(f"release:{rng}:{claim}:{nonce}:{ts}".encode()).hex()}
     res = None
     for k in range(2):
         try:
@@ -1676,10 +1678,11 @@ def release_claim(rng, sk, pub, post_fn=None):
 
 
 def cmd_release(args):
-    if len(args) != 1:
-        sys.exit("usage: hazync release <block>   (a block this key claimed)")
+    if len(args) != 2:
+        sys.exit("usage: hazync release <block> <claim>   (a block this key claimed; <claim> is the id `hazync run`\n"
+                 "  printed on its 'claimed block <block> (claim <claim>; ...)' line: only that claim is released)")
     sk, pub, _ = identity()
-    ok, msg = release_claim(args[0], sk, pub)
+    ok, msg = release_claim(args[0], args[1], sk, pub)
     print(msg, flush=True)
     sys.exit(0 if ok else 1)
 
@@ -1789,7 +1792,9 @@ def cmd_run(args):
             notify("claim refused", f"The coordinator refused this worker's claim:\n{err[:1500]}", key="claim-refused")
             sys.exit(f"nothing to claim: {err}")
         rng = res["range"]
-        print(f"claimed block {rng} (yours for {int(res.get('ttl', 3600) / 60)} min; "
+        # The claim id (its nonce) is printed so whatever stops this worker from outside (the Windows app, which
+        # ends it with taskkill) can release THIS claim and no later one: `hazync release <block> <claim>`.
+        print(f"claimed block {rng} (claim {nonce}; yours for {int(res.get('ttl', 3600) / 60)} min; "
               f"if you stop, it reopens by itself)")
     # An explicit wide range submits its blocks as it proves them; a single block has nothing to send
     # first, and a claimed block is one block by construction.
@@ -1807,7 +1812,7 @@ def cmd_run(args):
         if _STOP["pending"] is not None:      # stopped while the claim was in flight: give it straight back
             _ignore_stops()
             print(f"stopping: handing block {rng} back to the board", flush=True)
-            print(release_claim(rng, sk, pub)[1], flush=True)
+            print(release_claim(rng, nonce, sk, pub)[1], flush=True)
             _restore_handlers(_old)
             sys.exit(128 + int(_STOP["pending"]))
     try:
@@ -1820,7 +1825,7 @@ def cmd_run(args):
         _ignore_stops()
         _sig = e.args[0] if isinstance(e, _StopRequested) and e.args else signal.SIGINT
         print(f"stopping: handing block {rng} back to the board", flush=True)
-        _ok, _msg = release_claim(rng, sk, pub)
+        _ok, _msg = release_claim(rng, nonce, sk, pub)
         print(_msg, flush=True)
         sys.exit(128 + int(_sig))
     finally:
