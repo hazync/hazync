@@ -61,3 +61,40 @@ fn errors_say_what_failed() {
     assert!(Error::AboveTip.text().contains("above the proof's tip"));
     assert_eq!(Error::Decode("truncated").text(), "truncated");
 }
+
+/// A scriptPubKey of up to 10,000 bytes (Core's MAX_SCRIPT_SIZE) is read; one byte more is refused by the length check.
+#[test]
+fn scripts_up_to_10000_bytes() {
+    let mut p = proof(false, false, 2, false);
+    p.coin.script_pubkey = vec![0x51; 10_000];
+    assert_eq!(decode(&encode(&p)), Ok(p.clone()));
+    p.coin.script_pubkey.push(0x51);
+    assert_eq!(decode(&encode(&p)), Err(Error::Decode("scriptPubKey over 10,000 bytes (unspendable, never a coin)")));
+}
+
+/// An opening below the tip on the REAL mainnet 1..200 run (zapps/liveness/vectors: the history of the run the 8888d59c
+/// proof made, and its proof of block 9's coin after block 169, unspent then): the tip's block forest opens the coin log
+/// at 169. Refused: an undo hash for a leaf that has none (8888d59c's leaves carry none: undo_from u32::MAX), none where
+/// the image's leaves carry one (undo_from 100), another block hash.
+#[test]
+fn an_opening_below_the_tip_on_the_real_run() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../zapps/liveness/vectors/");
+    let recs = libzync::history::decode_all(&std::fs::read(format!("{dir}mainnet_1_200_history.bin")).unwrap()).unwrap();
+    let t = libzync::history::replay(&recs, 200, 200).unwrap();
+    let utxo_roots = t.log.roots();
+    let (_, block_roots) = libzync::history::block_path(&t.block_leaves, 0);
+    let chain = |undo_from: u32| Chain { height: 200, utxo_roots: &utxo_roots, utxo_leaves: t.log.len(), block_roots: &block_roots,
+                                         block_leaves: t.block_leaves.len() as u64, undo_from };
+    let text = std::fs::read_to_string(format!("{dir}b9_0_at169.hex")).unwrap();
+    let text = text.trim();
+    let b: Vec<u8> = (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect();
+    let p = verify(&b, &chain(u32::MAX)).unwrap();
+    assert!(p.at == 169 && p.state == State::Unspent && p.opening.as_ref().is_some_and(|o| o.undo.is_none()), "{p:?}");
+    assert_eq!(check(&p, &chain(100)), Err(Error::Undo));
+    let mut w = p.clone();
+    w.opening.as_mut().unwrap().undo = Some([0; 32]);
+    assert_eq!(check(&w, &chain(u32::MAX)), Err(Error::Undo));
+    let mut w = p.clone();
+    w.opening.as_mut().unwrap().block_hash[0] ^= 1;
+    assert_eq!(check(&w, &chain(u32::MAX)), Err(Error::Block));
+}
