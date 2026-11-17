@@ -177,7 +177,7 @@ byte-reproducibly by `zapps/statement/wasm/build.sh` (the core's flags, `scripts
 sources, remapped paths; it compiles C, secp256k1-sys, so in the pinned container `reproduce/wasm.Dockerfile`, clang
 18.1.3): 2,493,761 bytes raw, sha256 `b14ce3a0c1620a7e86cd4a7f534e273d4453e57de25d0170abbfb40088badaa8` (the same on a
 laptop and on hazync-coord, 16.11.2026, with the review fixes of that day: the image resolved by zapps/corecheck and an
-image id given pinned exactly; before them `5a284b26…`, and with a host clang 14 `510c205b…`; the module no longer links zapps/common, its CLI is the crate `zapps/statement/cli`; the sha `zapps/statement/test.sh` checks is the one in
+exact image pin; before them `5a284b26…`, and with a host clang 14 `510c205b…`; the module no longer links zapps/common, its CLI is the crate `zapps/statement/cli`; the sha `zapps/statement/test.sh` checks is the one in
 `wasm/README.md`; before the review fixes of 15.11.2026 `01408a2c…`).
 
 The trie snapshot (`state_<H>.trie`) comes from a proving run at H; a mainnet holder needs a fact server that
