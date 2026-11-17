@@ -26,8 +26,10 @@ STAGED="$CRATE $* prover/methods/guest/src/handover_pin.rs"
 # in a WASM module: refused here, on the host, before the container (the feature's compile_error! refuses any build
 # without debug assertions as well). zapps/common/test.sh holds the control.
 if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
-    RT=$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown --manifest-path "$REPO/$CRATE/Cargo.toml" \
-        | python3 -c 'import json, sys
+    # --locked: never rewrite the crate's Cargo.lock; a crate without one is refused here, with cargo's own message
+    META=$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown --manifest-path "$REPO/$CRATE/Cargo.toml") \
+        || { echo "$0: cargo metadata --locked failed for $CRATE (above): its Cargo.lock is missing or not up to date" >&2; exit 1; }
+    RT=$(printf '%s' "$META" | python3 -c 'import json, sys
 m = json.load(sys.stdin)
 print(" ".join(sorted(n["id"] for n in m["resolve"]["nodes"] if "regtest-test" in n.get("features", []))))')
     [ -z "$RT" ] || { echo "$0: $CRATE's WASM graph enables the tests-only feature regtest-test ($RT): never in a WASM module" >&2; exit 1; }
