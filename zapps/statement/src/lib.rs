@@ -730,4 +730,108 @@ mod tests {
         assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("full only"));
         let _ = b64(&[]);
     }
+
+    // ---- verdict paths (docs/libzync/ZAPP_TESTING.md §3.5, the cargo-mutants pass of 17.11.2026): each test holds a
+    // check in place that no test above reached
+
+    /// script_list_hash is SHA-256 over each script as CompactSize(length) || bytes, its three length forms included:
+    /// the preimage is written out here byte by byte, not through the function.
+    #[test]
+    fn script_list_hash_is_the_serialisation() {
+        let sha = |b: &[u8]| -> [u8; 32] { Sha256::digest(b).into() };
+        assert_eq!(script_list_hash(&[]), sha(&[]));
+        let (a, b, c, d) = (vec![0x51u8], vec![7u8; 0xfc], vec![8u8; 0xfd], vec![9u8; 0x1_0000]);
+        assert_eq!(script_list_hash(&[a.clone()]), sha(&[0x01, 0x51]));
+        assert_eq!(script_list_hash(&[b.clone()]), sha(&[&[0xfc][..], &b].concat()));
+        assert_eq!(script_list_hash(&[c.clone()]), sha(&[&[0xfd, 0xfd, 0x00][..], &c].concat()));
+        assert_eq!(script_list_hash(&[d.clone()]), sha(&[&[0xfe, 0x00, 0x00, 0x01, 0x00][..], &d].concat()));
+        assert_eq!(script_list_hash(&[a.clone(), c.clone()]), sha(&[&[0x01, 0x51, 0xfd, 0xfd, 0x00][..], &c].concat()));
+        // so two script lists sign two messages
+        assert_ne!(script_list_hash(&[a]), script_list_hash(&[vec![0x52]]));
+    }
+
+    /// purpose and nonce: 1 to MAX_FIELD bytes, both ends of the range; the script count: 1 to MAX_ENTRIES, both ends.
+    #[test]
+    fn message_field_and_entry_bounds() {
+        let (cs, _) = real();
+        let st = draft(&cs, &real_trie(), &[unhex(P2PK_BLOCK9).unwrap()], "audit", "n1").unwrap();
+        for f in [0, 1] {
+            let set = |v: String| { let mut t = st.clone(); if f == 0 { t.purpose = v } else { t.nonce = v } t };
+            assert!(message(&set(String::new())).unwrap_err().contains("1 to 256 bytes"));
+            assert!(message(&set("a".into())).is_ok());
+            assert!(message(&set("a".repeat(MAX_FIELD))).is_ok());
+            assert!(message(&set("a".repeat(MAX_FIELD + 1))).unwrap_err().contains("1 to 256 bytes"));
+            assert!(message(&set("a".repeat(MAX_FIELD + 50))).is_err());
+        }
+        let with = |n: usize| { let mut t = st.clone(); t.entries = vec![st.entries[0].clone(); n]; t };
+        assert!(message(&with(0)).unwrap_err().contains("1 to 10000 scripts"));
+        assert!(message(&with(MAX_ENTRIES)).is_ok());
+        assert!(message(&with(MAX_ENTRIES + 1)).unwrap_err().contains("1 to 10000 scripts"));
+    }
+
+    /// check_statement refuses a bad script count BEFORE any per-entry work (the message's own field checks included):
+    /// with a bad purpose too, the count is the refusal; at exactly MAX_ENTRIES the count passes and the purpose is.
+    #[test]
+    fn the_script_count_is_refused_first() {
+        let (cs, uf) = real();
+        let st = draft(&cs, &real_trie(), &[unhex(P2PK_BLOCK9).unwrap()], "audit", "n1").unwrap();
+        let with = |n: usize| { let mut t = st.clone(); t.purpose = String::new(); t.entries = vec![st.entries[0].clone(); n]; t };
+        for n in [0, MAX_ENTRIES + 1] {
+            let e = check_statement(&cs, uf, &with(n), &Challenge::default()).unwrap_err();
+            assert!(e.contains("1 to 10000 scripts"), "{n}: {e}");
+        }
+        let e = check_statement(&cs, uf, &with(MAX_ENTRIES), &Challenge::default()).unwrap_err();
+        assert!(e.contains("purpose"), "{e}");
+    }
+
+    /// `challenged` only when BOTH purpose and nonce were compared.
+    #[test]
+    fn challenged_needs_purpose_and_nonce() {
+        let (cs, uf) = real();
+        let k = key();
+        let st = signed(&cs, &real_trie(), &[script(&k, 2)], &[k]);
+        assert!(check_statement(&cs, uf, &st, &ASK).unwrap().challenged);
+        assert!(!check_statement(&cs, uf, &st, &Challenge { purpose: ASK.purpose, nonce: None }).unwrap().challenged);
+        assert!(!check_statement(&cs, uf, &st, &Challenge { purpose: None, nonce: ASK.nonce }).unwrap().challenged);
+    }
+
+    /// The BIP-341 0x00 refusal in BIP-322 FULL format as well as simple: the same 65-byte key-path signature ending 0x00
+    /// as the witness of a to_sign transaction. The crate alone accepts it (it reads 0x00 as DEFAULT); check_signature
+    /// does not. The 64-byte form of the same signature passes, so the refusal is the hash type's.
+    #[test]
+    fn p2tr_hash_type_zero_refused_in_full_format() {
+        use base64::Engine;
+        use bitcoin::{hashes::Hash, key::TapTweak, sighash::{Prevouts, SighashCache, TapSighashType}};
+        let k = key();
+        let spk = script(&k, 3);
+        let addr = bitcoin::Address::from_script(bitcoin::Script::from_bytes(&spk), bitcoin::Network::Bitcoin).unwrap();
+        let msg = "Hazync balance statement v1\nnonce: full-format";
+        let mut tx = bip322::create_to_sign(&bip322::create_to_spend(&addr, msg).unwrap(), None, bip322::LockParams::default()).unwrap().unsigned_tx;
+        let prev = [bitcoin::TxOut { value: bitcoin::Amount::ZERO, script_pubkey: bitcoin::ScriptBuf::from_bytes(spk.clone()) }];
+        let h = SighashCache::new(&tx).taproot_key_spend_signature_hash(0, &Prevouts::All(&prev), TapSighashType::Default).unwrap();
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let kp = bitcoin::key::Keypair::from_secret_key(&secp, &k.inner).tap_tweak(&secp, None).to_keypair();
+        let s64 = secp.sign_schnorr_no_aux_rand(&bitcoin::secp256k1::Message::from_digest(h.to_byte_array()), &kp).as_ref().to_vec();
+        let mut s65 = s64.clone();
+        s65.push(0x00);
+        let mut full = |s: &[u8]| {
+            tx.input[0].witness = bitcoin::Witness::from_slice(&[s.to_vec()]);
+            base64::engine::general_purpose::STANDARD.encode(bitcoin::consensus::serialize(&tx))
+        };
+        let (f64, f65) = (full(&s64), full(&s65));
+        assert_eq!(check_signature("mainnet", &spk, "full", &f64, msg), Ok(()), "the 64-byte DEFAULT signature, full format");
+        assert!(bip322::verify_full_encoded(&addr.to_string(), msg, &f65).is_ok(), "the crate alone takes 0x00 as DEFAULT");
+        assert!(check_signature("mainnet", &spk, "full", &f65, msg).unwrap_err().contains("hash type 0x00"));
+    }
+
+    /// p2pk_key: a 0x21 / 0x41 push of the WRONG length before OP_CHECKSIG is not P2PK.
+    #[test]
+    fn p2pk_key_needs_the_exact_key_length() {
+        let s = |push: u8, n: usize| [&[push][..], &vec![2u8; n], &[0xac]].concat();
+        assert_eq!(p2pk::p2pk_key(&s(0x21, 33)).map(|k| k.len()), Some(33));
+        assert_eq!(p2pk::p2pk_key(&s(0x41, 65)).map(|k| k.len()), Some(65));
+        for (push, n) in [(0x21, 32), (0x21, 34), (0x21, 65), (0x41, 64), (0x41, 66), (0x41, 33)] {
+            assert_eq!(p2pk::p2pk_key(&s(push, n)), None, "push 0x{push:02x} of {n} bytes");
+        }
+    }
 }
