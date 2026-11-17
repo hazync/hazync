@@ -899,6 +899,14 @@ jobs:
           cd coordinator
           python3 test_claim_release.py --control
           python3 test_worker_release.py --control
+      - name: A release frees only the claim it names, never the same key's re-claim (release by claim)
+        # #725 released by key + block, so a release in flight for an OLD claim freed a block the same key had just
+        # claimed again. The release now names its claim (signed); a different claim is 409 "not this claim".
+        run: cd coordinator && python3 test_release_by_claim.py
+      - name: Release by claim POSITIVE CONTROL (claim named not checked — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_release_by_claim.py --control
       - name: Heartbeat rejection log (bip-448, 2026-09-11)
         # Drives the real HTTP handler: every rejected /api/beat must be logged with the caller, the
         # reason, and -- for a 409 -- what the DB really holds for that range.
@@ -1404,6 +1412,19 @@ jobs:
         run: |
           cd coordinator
           python3 test_replay_precheck.py --control
+      - name: A fresh board's spine is seeded with block 1's own proof (16.11.2026, v0.26.0 board)
+        # The replay pre-check refused /api/proof/1 as the spine seed ("already the verified proof of 1"), so an empty
+        # spine never started. A verified genesis range's proof may seed or advance the spine; true replays still 409.
+        # Bounded: racing copies cost one verification, a failed one is not retried at the same head, and the
+        # spine is credited to the range's prover, not the re-submitter (review of #752: M1, M2, L1).
+        run: cd coordinator && python3 test_spine_seed.py
+      - name: Spine seed POSITIVE CONTROLS (seed exception out; no in-flight guard; no failure memory; submitter credited — each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_spine_seed.py --control
+          python3 test_spine_seed.py --control-race
+          python3 test_spine_seed.py --control-failed
+          python3 test_spine_seed.py --control-credit
       - name: G1 retention gate still detects a missing receipt (positive control)
         # check-retention.py is what separates "the board says this block is proven" from "we can
         # hand you the proof for it" — G1's actual content. It runs unattended on the coordinator, so
@@ -1860,6 +1881,12 @@ jobs:
         run: ./scripts/test-lineage.sh --control
       - name: Test surfaces are connected (no test that reports green while measuring nothing)
         run: ./scripts/check-test-surfaces.sh
+      - name: Ooga Booga Land page keeps its connection contract (literal return link, no referrer, no scripts, nothing from another origin)
+        # ooga-land/ is served at https://hazync.org/ooga/ and listed in Ooga Booga Land's directory on the strength of
+        # these properties (ooga-land/README.md). Python only, a second or two.
+        run: ./scripts/check-ooga-land.sh
+      - name: Ooga land check POSITIVE CONTROL (broken copies of the page — every one must be caught)
+        run: ./scripts/check-ooga-land.sh --control
       - name: Drop-in attribution when one unit name extends another
         # `dropins/$u-*.conf` also matched a LONGER unit's files, so hazync-coordinator was credited
         # with hazync-coordinator-backup's BACKUP_DIR. A wider declared set can only HIDE drift, so it

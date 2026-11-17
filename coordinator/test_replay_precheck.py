@@ -28,7 +28,7 @@ if CONTROL:
     a = "        _known = known_receipt(c, sha)\n"
     assert src.count(a) == 1
     src = src.replace(a, "        _known = None\n")
-    a = "        _known = known_receipt(c, hashlib.sha256(receipt).hexdigest())\n"
+    a = "        _known = known_receipt(c, _sha)\n"
     assert src.count(a) == 1
     src = src.replace(a, "        _known = None\n")
     print("CONTROL: the replay pre-check taken out -- the checks below MUST fail")
