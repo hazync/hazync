@@ -76,7 +76,7 @@ makes the same four checks and commits one statement. Built to measure it
 (`experimental/libzync-bench/deposit/tools/`, not a published image; raw output in `RESULT_measured.txt`): **816,427 cycles, one segment**, journal 1,316
 bytes, on the real bundle (core 0..200, header chain 0..975,278, block 170). Proved on hazync-coord's CPU through r0vm
 3.1.0 in 293.4 s (a 225,858-byte succinct receipt), wrapped in Groth16 in a further 88.5 s (3,129 bytes). A
-tampered branch makes the guest panic. Its image id (`184e81af…`, laptop build) is not reproducible as built: a
+tampered branch makes the guest panic. Its guest (laptop build, `184e81af…`) is not reproducible as built: a
 published version would go through `reproduce/` like the others.
 
 **Why I chose (a).** It adds no image id to review, reproduce and pin (the trust is the two images already published), no
