@@ -125,7 +125,7 @@ and that run's `history.bin` (`zapps/liveness/vectors/`), 15.11.2026; all of it 
 | libzync unit tests (`liveness::tests`) | 2/2 |
 | zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, a dev-mode and a tampered receipt, `created=` / `coinbase=`, a re-created outpoint, one spelling per question, the 0x05 undo leaf, regtest above block 200, every bit flipped | 12/12 |
 | `zapp-liveness serve` `/live` route | 1/1 |
-| CLI and producer, `vectors/run.sh` | 34/34 (16.11.2026: RISC0_DEV_MODE set on the real receipt, refused; `--image` the current id refuses the 8888d59c receipt, none given verifies it as 8888d59c) |
+| CLI and producer, `vectors/run.sh` | 34/34 (16.11.2026: RISC0_DEV_MODE set on the real receipt, refused; `--image 46666b6f` refuses the receipt of superseded image 8888d59c; with none given it verifies as that superseded image) |
 | C ABI, `ffi/test_liveness.c` | 12/12 |
 | WASM, `wasm/test-liveness.mjs` | 21/21 since 16.11.2026 (the image id pinned exactly and the image that verified reported; the raw frame: the glue's bytes, a trailing byte, cut short) (and the frame unit test, 1/1) |
 | C ABI beside the core's in one program, `ffi/test_with_core.c` | OK (16.11.2026) |

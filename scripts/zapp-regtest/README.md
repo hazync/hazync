@@ -167,7 +167,7 @@ What it needs, all prepared:
    `risc0_binfmt::compute_image_id` (3.0.6, the prover's lock) of the extracted program is **`eb2cd424…`** (checked on
    hazync-coord). On the pod, `prover/methods/build.rs` recomputes that id from the bytes again and refuses a mismatch.
    The file is at `hazync-coord:/root/hz-regtest-work/regtest_eb2cd424.bin`.
-2. **The bundle**: `gpu/mkbundle.sh <guest> <dir>` (repo HEAD, the guest, pins `METHOD_ID eb2cd424…`,
+2. **The bundle**: `gpu/mkbundle.sh <guest> <dir>` (repo HEAD, the guest, pins the regtest test image `eb2cd424…` (not a release id),
    `GUEST_ELF_SHA256 1c3d671a…`, `PROFILE libzync=1 assumevalid=0 network=regtest coinlog=1 trie=1 utxohash=1`, block
    files `json_a/` 112 and `json_b/` 113). Dry run on hazync-coord: `BUNDLE_OK`, 100 MB. Rebuild it from the final
    commit before the run (the pod builds git HEAD).
