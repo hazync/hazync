@@ -9,8 +9,10 @@ checked:
 - a second SIGTERM during the hand-back, a SIGTERM while the claim request is still in flight, and Ctrl-C all
   still end with the block handed back;
 - a prove that FAILS does not release: its claim lapses as before, so one bad block is not handed straight on;
-- `hazync release <n>` (what the Windows app runs after it ends a worker with taskkill, which no handler sees)
-  releases a block this key holds, and says so plainly when there is nothing to release.
+- `hazync release <n> <claim>` (what the Windows app runs after it ends a worker with taskkill, which no handler
+  sees) releases a block this key holds under that claim, says so plainly when there is nothing to release, and
+  leaves a LATER claim of the same block by the same key alone;
+- `hazync run` prints the claim's id on its "claimed block" line, which is where the app reads it from.
 
   python3 test_worker_release.py            # must PASS
   python3 test_worker_release.py --control  # the worker never releases; MUST FAIL
@@ -66,7 +68,7 @@ OTHER_SK, OTHER = key()
 hz.identity = lambda: (SK, PK, "tester")
 hz.cmd_submit = lambda args: None
 if CONTROL:
-    hz.release_claim = lambda rng, sk, pub, post_fn=None: (False, "control: not released")
+    hz.release_claim = lambda rng, claim, sk, pub, post_fn=None: (False, "control: not released")
     print("CONTROL: the worker never releases -- the checks below MUST fail")
 
 fails = 0
@@ -235,11 +237,17 @@ except SystemExit:
     pass
 check(row(seen["rng"]) == ("claimed", PK), f"a failed prove does not release block {seen['rng']} ({row(seen['rng'])})")
 
-print("== hazync release <n> ==")
+print("== hazync release <n> <claim> ==")
 reset()
-nonce, ts = os.urandom(8).hex(), int(time.time())
-b = server.claim({"pubkey": PK, "handle": "tester", "nonce": nonce, "ts": ts,
-                  "sig": SK.sign(f"claim:{nonce}:{ts}".encode()).hex()})[1]["range"]
+
+
+def my_claim():
+    nonce, ts = os.urandom(16).hex(), int(time.time())
+    return server.claim({"pubkey": PK, "handle": "tester", "nonce": nonce, "ts": ts,
+                         "sig": SK.sign(f"claim:{nonce}:{ts}".encode()).hex()})[1]["range"], nonce
+
+
+b, first = my_claim()
 out = []
 _print = print
 
@@ -248,21 +256,44 @@ def capture(*a, **k):
     out.append(" ".join(str(x) for x in a))
 
 
+def release_cli(args):
+    try:
+        hz.cmd_release(args)
+        return 0
+    except SystemExit as e:
+        return e.code
+
+
 hz.print = capture
-try:
-    hz.cmd_release([b])
-    rc = 0
-except SystemExit as e:
-    rc = e.code
+rc = release_cli([b, first])
 check(rc == 0 and row(b) == ("open", PK), f"releases a block this key holds (rc {rc}, {row(b)}, {out[-1:]})")
-try:
-    hz.cmd_release([b])
-    rc = 0
-except SystemExit as e:
-    rc = e.code
+rc = release_cli([b, first])
 check(rc == 1 and "not released" in (out[-1] if out else ""),
       f"says so when there is nothing left to release (rc {rc}: {out[-1:] })")
+b2, second = my_claim()
+rc = release_cli([b, first])
+check(b2 == b and rc == 1 and row(b) == ("claimed", PK) and "not this claim" in (out[-1] if out else ""),
+      f"a late release of the first claim leaves the same key's re-claim of {b} alone (rc {rc}, {row(b)}, {out[-1:]})")
+rc = release_cli([b])
+check(rc not in (0, None) and row(b) == ("claimed", PK), f"a release that names no claim is a usage error (rc {str(rc)[:60]})")
 hz.print = _print
+
+print("== the claim's id is on the 'claimed block' line ==")
+reset()
+lines = []
+hz.print = lambda *a, **k: lines.append(" ".join(str(x) for x in a))
+hz.cmd_prove = lambda args, claimed=False, **kw: seen.update(rng=args[0])
+try:
+    hz.cmd_run([])
+except SystemExit:
+    pass
+hz.print = _print
+c = server.db()
+nonce_row = c.execute("SELECT claim_nonce FROM ranges WHERE id=?", (str(seen["rng"]),)).fetchone()
+c.close()
+said = next((l for l in lines if l.startswith("claimed block")), "")
+check(nonce_row is not None and f"claimed block {seen['rng']} (claim {nonce_row['claim_nonce']};" in said,
+      f"`hazync run` names its claim ({said[:90]})")
 
 httpd.shutdown()
 print(f"{'CONTROL: ' if CONTROL else ''}{fails} failure(s)")
