@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - name: libzync (coin log, counting trie, facts, wire)
@@ -114,7 +114,7 @@ jobs:
     # 2026-10-05; 30 leaves room for a slow runner while still turning a stall into a verdict.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Tags are needed by check-versions.sh to compare the documented "current release" against the
           # newest tag. The default shallow checkout has none, and the check would silently skip.
@@ -1926,7 +1926,7 @@ jobs:
     #                      archive. Accepted for the same reason as 0367-0369.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit every lockfile
@@ -1950,7 +1950,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the libzync reproducible container (guest at fixed paths)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1959,7 +1959,7 @@ jobs:
         run: |
           mkdir -p elf && docker run --rm -v "$PWD/elf:/out" hazync-libzync-repro cp /root/libzync-elf/zyncapp-headers.bin /out/
           sudo chown -R "$(id -u):$(id -g)" elf && sha256sum elf/zyncapp-headers.bin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: zyncapp-headers-elf
           path: elf/zyncapp-headers.bin
@@ -1985,7 +1985,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the libzync reproducible container
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2000,7 +2000,7 @@ jobs:
             [ -s "hosts/$n" ] || { echo "::error::hosts/$n was not built"; exit 1; }
           done
           grep -q '^HOST_UNIT_OK .*, 0 failed$' hosts/ids.txt || { echo "::error::host unit tests (libzync mode) failed"; tail -40 hosts/host_unit.log; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libzync-hosts
           path: |
@@ -2015,7 +2015,7 @@ jobs:
       # The mainnet TEST VARIANTS (lineage/test.rs instead of the published lineage; ids in no pin table, the host prints
       # TEST_VARIANT), a separate artifact so no job takes one for the published host by accident. Only libzync-chain
       # uses them: the published image pins its predecessor below its handover height and never proves from genesis.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libzync-hosts-test-variant
           path: |
@@ -2033,13 +2033,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts-test-variant, path: hosts }
       - name: Chain from genesis and everything built on it, board handover rehearsal
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 P=4 bash scripts/libzync/ci/chain.sh hosts/host_m0 hosts/host_mN out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-chain-logs, path: "out/**/*.log", retention-days: 7 }
 
   libzync-blocks:
@@ -2048,13 +2048,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Edge blocks, negative tests
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/blocks.sh hosts/host_m out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }
 
   libzync-vectors:
@@ -2068,14 +2068,14 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Core's vectors, one shard of 8
         env: { SHARD: "${{ matrix.shard }}" }
         run: chmod +x hosts/host_*; bash scripts/libzync/ci/vectors.sh hosts/host_m hosts/core_vectors.json hosts/core_vectors_base.json out "$SHARD" 8
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: "libzync-vectors-logs-${{ matrix.shard }}", path: "out/**/*.log", retention-days: 7 }
 
   libzync-rig:
@@ -2084,8 +2084,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Bitcoin Core 28.0 (release binary, sha256 pinned) and its source (test_framework, pinned commit)
         run: |
@@ -2097,7 +2097,7 @@ jobs:
       - name: Rig vs Core, handover
         run: chmod +x hosts/host_*; bash scripts/libzync/ci/rig.sh hosts/host_reg hosts/host_regN bitcoin-28.0/bin/bitcoind core-src out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-rig-logs, path: "out/**/*.log", retention-days: 7 }
 
   libzync-signet:
@@ -2106,13 +2106,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Signet from genesis
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/signet.sh hosts/host_sig out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-signet-logs, path: "out/**/*.log", retention-days: 7 }
 
   soundness-suite:
@@ -2142,8 +2142,8 @@ jobs:
               sys.exit(1)
           print("ALL_LIBZYNC_JOBS_OK")
           PY
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Core's source tree, as the libzync guest compiles it (pinned upstream + this repo's patches)
         run: bash scripts/libzync-base.sh "$HOME/lzbase"

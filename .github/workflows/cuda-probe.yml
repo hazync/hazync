@@ -35,7 +35,7 @@ jobs:
     # (inclusive) are supported". windows-2022 is the lever that made the kernels compile at all.
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install CUDA (nvcc + cudart + cccl), pinned and sha256-verified
         shell: pwsh
@@ -115,7 +115,7 @@ jobs:
           [ "$n" -gt 100000 ] || { echo "implausibly small ($n bytes)"; exit 1; }
           head -c 2 probe.exe | grep -q 'MZ' || { echo "not a PE executable"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hazync-cuda-probe
           path: probe.exe
