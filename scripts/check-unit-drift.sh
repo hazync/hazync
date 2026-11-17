@@ -116,10 +116,13 @@ missing_declared_dropins() {
     local u="$1" remote="$2" n
     while read -r n; do
         [ -n "$n" ] || continue
-        printf '%s\n' "$remote" | grep -qx "DROPIN $n" || echo "$n"
+        grep -qx "DROPIN $n" <<< "$remote" || echo "$n"
     done < <(declared_dropin_names "$u")
 }
 
+# ⛔ `printf … | grep -q` IS WRONG UNDER pipefail: grep -q exits at its first match, the writer then gets EPIPE, and
+# the pipeline FAILS although the line is there (PR #754's CI: "libzync-prep declares no alert.conf" once a unit had four
+# drop-ins). Every such test here reads a here-string instead.
 note() { echo "  $*"; }
 bad()  { echo "DRIFT $*"; fail=1; }
 # ⛔ "could not read" IS NOT "no drift", AND IT IS NOT DRIFT EITHER. Until 2026-09-18 an unreadable
@@ -202,7 +205,7 @@ for u in $UNITS; do
     fi
     if [ -z "$remote" ]; then cant "$u: no unit state from $HOST (unreachable, unit absent, or ssh refused)"; continue; fi
 
-    if printf '%s\n' "$remote" | grep -qx 'STATE masked'; then
+    if grep -qx 'STATE masked' <<< "$remote"; then
         note "skip $u is MASKED on $HOST — retired, not drifted"
         continue
     fi
@@ -211,7 +214,7 @@ for u in $UNITS; do
     # cant() never fires. Caught by this script's own control (HAZYNC_UNITS=hazync-does-not-exist),
     # which reported "no drift: 1 unit(s) checked, all declared" and exited 0. A check that passes
     # on a unit it cannot see would pass on a whole box named wrongly.
-    if printf '%s\n' "$remote" | grep -qx 'STATE not-found'; then
+    if grep -qx 'STATE not-found' <<< "$remote"; then
         cant "$u: not installed on $HOST (LoadState=not-found)"
         continue
     fi
@@ -257,7 +260,7 @@ for u in $UNITS; do
     # files: without one a reorg stop fails the unit and nobody hears). A stopped, disabled unit is noted only: it runs
     # nothing (the v1 hazync-bridge on the board box).
     live=no
-    printf '%s\n' "$remote" | grep -qxE 'ACTIVE (active|activating|reloading)|FILESTATE enabled' && live=yes
+    grep -qxE 'ACTIVE (active|activating|reloading)|FILESTATE enabled' <<< "$remote" && live=yes
     while read -r n; do
         [ -n "$n" ] || continue
         if [ "$live" = yes ]; then bad "$u: the repo declares drop-in '$n' ($DROPINS_DIR/$u-$n) and it is NOT installed"
@@ -349,9 +352,9 @@ for u in $UNITS; do
     while read -r _ kv; do
         [ -n "${kv:-}" ] || continue
         k="${kv%%=*}"
-        if printf '%s\n' "$declared" | grep -qxF "$kv"; then
+        if grep -qxF "$kv" <<< "$declared"; then
             continue                                   # exact key=value is in the repo
-        elif printf '%s\n' "$declared" | grep -q "^$k="; then
+        elif grep -q "^$k=" <<< "$declared"; then
             note "note $k differs from every declared value (per-box override)"
         elif [ -f "$ALLOW" ] && grep -qxF "$k" "$ALLOW"; then
             note "ok   $k is an accepted per-box setting (see $(basename "$ALLOW"))"
