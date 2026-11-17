@@ -71,19 +71,25 @@ A_SK, A = key()
 B_SK, B = key()
 
 
+CLAIM_OF = {}                            # block -> the nonce of the latest claim made on it here
+
+
 def claim(sk, pk, handle="a"):
     nonce, ts = os.urandom(8).hex(), int(time.time())
     code, r = server.claim({"pubkey": pk, "handle": handle, "nonce": nonce, "ts": ts,
                             "sig": sk.sign(f"claim:{nonce}:{ts}".encode()).hex()})
     assert code == 200, (code, r)
+    CLAIM_OF[str(r["range"])] = nonce
     return r["range"]
 
 
-def release_body(sk, pk, rng, nonce=None, ts=None):
+def release_body(sk, pk, rng, nonce=None, ts=None, claim_id=None):
+    """A release of the latest claim on rng (or of claim_id), as the worker signs it."""
     nonce = nonce or os.urandom(16).hex()
     ts = int(time.time()) if ts is None else ts
-    return {"range": str(rng), "pubkey": pk, "nonce": nonce, "ts": ts,
-            "sig": sk.sign(f"release:{rng}:{nonce}:{ts}".encode()).hex()}
+    claim_id = claim_id or CLAIM_OF.get(str(rng)) or os.urandom(8).hex()
+    return {"range": str(rng), "claim": claim_id, "pubkey": pk, "nonce": nonce, "ts": ts,
+            "sig": sk.sign(f"release:{rng}:{claim_id}:{nonce}:{ts}".encode()).hex()}
 
 
 def q(sql, args=()):
@@ -177,6 +183,7 @@ code, r = server.release(release_body(A_SK, A, b, ts=int(time.time()) - SKEW - 6
 check(code == 400 and holder(b) == ("claimed", A), f"a stale timestamp: refused ({code} {r.get('error')})")
 for what, mangle in (("no signature", lambda d: d.pop("sig")),
                      ("no nonce", lambda d: d.pop("nonce")),
+                     ("no claim named", lambda d: d.pop("claim")),
                      ("a float timestamp", lambda d: d.update(ts=float(d["ts"]))),
                      ("no range", lambda d: d.pop("range"))):
     d = release_body(A_SK, A, b)
