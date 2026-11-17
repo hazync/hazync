@@ -61,6 +61,10 @@ jobs:
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
+      - name: The WASM build scripts locate their checkout from any cwd (scripts/test-wasm-build-cwd.sh, and its control)
+        run: ./scripts/test-wasm-build-cwd.sh && ./scripts/test-wasm-build-cwd.sh --control
+      - name: The WASM build scripts take the published build image by digest, else build it locally and say so (mock docker)
+        run: ./scripts/test-wasm-image-pull.sh
       - name: swiftsync-verify-wasm (its unit tests, run natively)
         run: cargo test --manifest-path swiftsync-verify-wasm/Cargo.toml --release
       - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
@@ -69,6 +73,10 @@ jobs:
         run: |
           cargo build --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify
           ./swiftsync-verify-wasm/build.sh
+          # the built core wasm is the one its README pins (a pin went stale after #735's Frame::take fix, 16.11.2026)
+          want=$(grep -o 'sha256 (this commit, `./build.sh`) | `[0-9a-f]\{64\}`' swiftsync-verify-wasm/README.md | grep -o '[0-9a-f]\{64\}' || true)
+          got=$(sha256sum swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm | cut -c1-64)
+          [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::the core wasm built is $got, swiftsync-verify-wasm/README.md pins ${want:-nothing}"; exit 1; }
           mkdir -p rel
           cp swiftsync-verify/target/release/swiftsync-verify rel/hazync-verify-x86_64-linux-gnu
           cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm rel/hazync-verify.wasm
