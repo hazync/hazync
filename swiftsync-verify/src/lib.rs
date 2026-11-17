@@ -219,8 +219,6 @@ pub struct ChainState {
 }
 
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
-pub mod headers;
-
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");
 }
@@ -1409,15 +1407,6 @@ mod tests {
             assert_eq!(IMAGES.iter().filter(|i| i.network == net && i.method_id_hex == id).count(), 1,
                        "{net}: the published id is listed more than once");
         }
-    }
-
-    /// The header-chain zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-headers` line).
-    #[test]
-    fn headers_image_matches_the_published_id() {
-        let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        let line = f.lines().find(|l| l.starts_with("zyncapp-headers mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-headers line");
-        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-        assert_eq!(id, crate::headers::HEADERS_IMAGE_ID, "headers::HEADERS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
     }
 
     #[test]
