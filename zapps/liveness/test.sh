@@ -15,6 +15,8 @@ cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-liveness
 bash vectors/run.sh "$T/release/zapp-liveness"
 # the OK verdict on real proofs: the regtest harness's receipts and histories, under the tests-only regtest-test feature
 # (dev profile: it does not compile without debug assertions), against Core's oracle; the shipped CLI refusing them
+# the library verdict paths on that receipt (tests/verdict_paths.rs: OK only with the tip compared)
+cargo test --features regtest-test --manifest-path ./Cargo.toml --test verdict_paths
 cargo build --features regtest-test --manifest-path ./cli/Cargo.toml --bin zapp-liveness
 bash test-regtest.sh "$T/debug/zapp-liveness" "$T/release/zapp-liveness" || { grep -B3 WRONG test-regtest.out; tail -1 test-regtest.out; exit 1; }
 tail -1 test-regtest.out
