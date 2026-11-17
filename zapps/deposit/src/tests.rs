@@ -399,3 +399,36 @@ fn an_undo_leaf_block_of_the_v026_image() {
     let mut x = b.clone(); x.block.forest.as_mut().unwrap().undo = None;
     refused(&x, &a, "undo");
 }
+
+// ---- verdict paths (docs/libzync/ZAPP_TESTING.md §3.5, the cargo-mutants pass of 17.11.2026)
+
+/// The "chain identity NOT checked" line appears only where it applies: a chain with the minimum work, no failed
+/// check, the requirement on and no identity. Below the minimum work (the core proof alone) the DEMO is the work's,
+/// and there is no such line. The validated-depth line appears only when a validated depth is asked (default 1).
+#[test]
+fn identity_and_validated_depth_lines_only_where_they_apply() {
+    let base = DepositAsk { txid: id(T170), ..Default::default() };
+    let note = |r: &DepositReport| r.checks.iter().any(|c| c.1.starts_with("chain identity NOT checked"));
+    assert!(note(&run(&b_tip(), &base)));
+    let r = run(&b_core(&id(T170)), &base);
+    assert_eq!(r.verdict, Verdict::Demo);
+    assert!(!note(&r), "{:?}", r.checks);
+    assert!(!note(&run(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0, TIP.1.into())), ..base.clone() })));
+    assert!(!note(&run(&b_tip(), &DepositAsk { require_identity: false, ..base.clone() })));
+    let r = run(&b_tip(), &DepositAsk { min_depth: 975_110, ..base.clone() });
+    assert_eq!(r.verdict, Verdict::Fail);
+    assert!(!note(&r), "{:?}", r.checks);
+    let vd = |r: &DepositReport| r.checks.iter().filter(|c| c.1.starts_with("validated depth")).count();
+    assert_eq!(vd(&run(&b_core(&id(T170)), &base)), 1);
+    assert_eq!(vd(&run(&b_core(&id(T170)), &DepositAsk { min_validated_depth: 0, ..base.clone() })), 0);
+}
+
+/// OP_PUSHDATA1 / 2 / 4 after another push (not at byte 1): the length and the data are read where they are.
+#[test]
+fn op_return_pushdata_after_another_push() {
+    assert_eq!(op_return_payload(&[0x6a, 0x01, 7, 0x4d, 0x02, 0x00, 8, 9]), Some(vec![7, 8, 9]));
+    assert_eq!(op_return_payload(&[0x6a, 0x02, 5, 6, 0x4d, 0x01, 0x00, 9, 0x01, 4]), Some(vec![5, 6, 9, 4]));
+    assert_eq!(op_return_payload(&[0x6a, 0x01, 7, 0x4e, 0x01, 0, 0, 0, 9]), Some(vec![7, 9]));
+    assert_eq!(op_return_payload(&[0x6a, 0x01, 7, 0x4c, 0x01, 9, 0x00]), Some(vec![7, 9]));
+    assert_eq!(op_return_payload(&[0x6a, 0x01, 7, 0x4d, 0x03, 0x00, 8, 9]), None, "a PUSHDATA2 past the end");
+}
