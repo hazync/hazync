@@ -56,7 +56,7 @@ jobs:
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - name: libzync (coin log, counting trie, facts, wire)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
@@ -101,6 +101,28 @@ jobs:
           (cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o vtest && ./vtest)
           (cd swiftsync-verify-wasm && node test-vectors.mjs target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm)
           (cd swiftsync-verify-wasm && node test-facts-frame.mjs)
+
+  zapps:
+    # Every zAPP is a module of its own (zapps/<name>/: its check library and CLI, its WASM module and glue, its C ABI if
+    # it has one; docs/libzync/ZYNCAPPS.md §9), on the core verifier as a library and never part of it: adding one does
+    # not change the core verifier (its .wasm stays byte-identical). Each runs its own tests from its own directory.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - name: Every zAPP's tests, each from its own directory (zapps/*/test.sh)
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/zapps-target"   # one native target dir: the zAPPs share the core's dependencies
+          n=0
+          for t in zapps/*/test.sh; do
+            echo "::group::$t"
+            (cd "$(dirname "$t")" && bash test.sh) || { echo "::error::$t failed"; exit 1; }
+            echo "::endgroup::"; n=$((n+1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::no zapps/*/test.sh: the zapps job ran nothing"; exit 1; }
+          echo "$n zAPP test suites passed"
 
   zapps:
     # Every zAPP is a module of its own (zapps/<name>/: its check library and CLI, its WASM module and glue, its C ABI if
@@ -1985,8 +2007,8 @@ jobs:
           path: elf/zyncapp-headers.bin
       - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers) ' > built.txt
-          grep -E '^(libzync-product|zyncapp-headers) ' reproduce/LIBZYNC_IDS > pinned.txt
+          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers|zyncapp-hints) ' > built.txt
+          grep -E '^(libzync-product|zyncapp-headers|zyncapp-hints) ' reproduce/LIBZYNC_IDS > pinned.txt
           echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
           if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
             echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"
