@@ -61,6 +61,10 @@ jobs:
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
+      - name: The WASM build scripts locate their checkout from any cwd (scripts/test-wasm-build-cwd.sh, and its control)
+        run: ./scripts/test-wasm-build-cwd.sh && ./scripts/test-wasm-build-cwd.sh --control
+      - name: The WASM build scripts take the published build image by digest, else build it locally and say so (mock docker)
+        run: ./scripts/test-wasm-image-pull.sh
       - name: swiftsync-verify-wasm (its unit tests, run natively)
         run: cargo test --manifest-path swiftsync-verify-wasm/Cargo.toml --release
       - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
@@ -69,6 +73,10 @@ jobs:
         run: |
           cargo build --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify
           ./swiftsync-verify-wasm/build.sh
+          # the built core wasm is the one its README pins (a pin went stale after #735's Frame::take fix, 16.11.2026)
+          want=$(grep -o 'sha256 (this commit, `./build.sh`) | `[0-9a-f]\{64\}`' swiftsync-verify-wasm/README.md | grep -o '[0-9a-f]\{64\}' || true)
+          got=$(sha256sum swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm | cut -c1-64)
+          [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::the core wasm built is $got, swiftsync-verify-wasm/README.md pins ${want:-nothing}"; exit 1; }
           mkdir -p rel
           cp swiftsync-verify/target/release/swiftsync-verify rel/hazync-verify-x86_64-linux-gnu
           cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm rel/hazync-verify.wasm
@@ -884,6 +892,14 @@ jobs:
           cd coordinator
           python3 test_claim_release.py --control
           python3 test_worker_release.py --control
+      - name: A release frees only the claim it names, never the same key's re-claim (release by claim)
+        # #725 released by key + block, so a release in flight for an OLD claim freed a block the same key had just
+        # claimed again. The release now names its claim (signed); a different claim is 409 "not this claim".
+        run: cd coordinator && python3 test_release_by_claim.py
+      - name: Release by claim POSITIVE CONTROL (claim named not checked — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_release_by_claim.py --control
       - name: Heartbeat rejection log (bip-448, 2026-09-11)
         # Drives the real HTTP handler: every rejected /api/beat must be logged with the caller, the
         # reason, and -- for a 409 -- what the DB really holds for that range.
@@ -1389,6 +1405,19 @@ jobs:
         run: |
           cd coordinator
           python3 test_replay_precheck.py --control
+      - name: A fresh board's spine is seeded with block 1's own proof (16.11.2026, v0.26.0 board)
+        # The replay pre-check refused /api/proof/1 as the spine seed ("already the verified proof of 1"), so an empty
+        # spine never started. A verified genesis range's proof may seed or advance the spine; true replays still 409.
+        # Bounded: racing copies cost one verification, a failed one is not retried at the same head, and the
+        # spine is credited to the range's prover, not the re-submitter (review of #752: M1, M2, L1).
+        run: cd coordinator && python3 test_spine_seed.py
+      - name: Spine seed POSITIVE CONTROLS (seed exception out; no in-flight guard; no failure memory; submitter credited — each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_spine_seed.py --control
+          python3 test_spine_seed.py --control-race
+          python3 test_spine_seed.py --control-failed
+          python3 test_spine_seed.py --control-credit
       - name: G1 retention gate still detects a missing receipt (positive control)
         # check-retention.py is what separates "the board says this block is proven" from "we can
         # hand you the proof for it" — G1's actual content. It runs unattended on the coordinator, so
