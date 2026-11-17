@@ -17,6 +17,8 @@ grep -q "regtest-test. feature is for tests only" "$W/log" || { tail -20 "$W/log
 REPO=$(cd ../.. && pwd)
 mkdir -p "$W/rt/src" && : > "$W/rt/src/lib.rs"
 printf '[package]\nname = "rt"\nversion = "0.1.0"\nedition = "2021"\n[lib]\ncrate-type = ["cdylib"]\n[dependencies]\nzapp-common = { path = "%s/zapps/common", features = ["regtest-test"] }\n[workspace]\n' "$REPO" > "$W/rt/Cargo.toml"
+# a Cargo.lock, as every real crate has (the guard reads the graph --locked and refuses a crate without one)
+cargo generate-lockfile --manifest-path "$W/rt/Cargo.toml" > "$W/log" 2>&1 || { cat "$W/log"; echo "::error::control: no Cargo.lock for the stand-in crate"; exit 1; }
 if ../../scripts/wasm-build.sh "$(realpath --relative-to="$REPO" "$W/rt")" "$W/stage" rt.wasm > "$W/log" 2>&1; then
     echo "::error::control: scripts/wasm-build.sh built a WASM graph with regtest-test"; exit 1; fi
 grep -q "enables the tests-only feature regtest-test" "$W/log" || { tail -20 "$W/log"; echo "::error::control: wasm-build.sh failed, but not on the regtest-test check"; exit 1; }
