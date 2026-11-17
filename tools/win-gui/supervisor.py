@@ -1206,13 +1206,17 @@ def stop_tree(popen, wait_s=10):
     return survivors, err
 
 
-def release_command(python_exe, worker_path, block):
-    """How to hand a claimed block back after its worker was stopped (#725).
+def release_command(python_exe, worker_path, block, claim):
+    """How to hand a claimed block back after its worker was stopped (#725), or None when it cannot be done safely.
 
     ⚠ On Windows the worker is ended with `taskkill /F`, which no signal handler sees, so the worker cannot release
-    its own claim the way it does on SIGTERM. The app knows the block from the worker's "claimed block N" line and
-    asks the worker CLI to release it, signed with the same key."""
-    return worker_command(python_exe, worker_path, "release", (str(block),))
+    its own claim the way it does on SIGTERM. The app knows the block and the claim's id from the worker's
+    "claimed block N (claim <id>; ...)" line and asks the worker CLI to release THAT claim, signed with the same key.
+    Naming the claim is what keeps a release that lands late from freeing a block the same key has claimed again
+    since. A worker too old to print the id gets no release (None): its block reopens by itself, as before #725."""
+    if not claim:
+        return None
+    return worker_command(python_exe, worker_path, "release", (str(block), str(claim)))
 
 
 def release_verdict(rc, out):

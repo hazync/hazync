@@ -1,0 +1,8 @@
+{
+  "id": "hazync",
+  "name": "Hazync",
+  "description": "Proving Bitcoin's whole history is valid, so anyone can check it in a web browser. Check a proof, help prove blocks, or watch the board.",
+  "repository": "hazync/hazync",
+  "url": "https://hazync.org/ooga/",
+  "status": "open"
+}

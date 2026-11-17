@@ -2375,13 +2375,21 @@ class App(tk.Tk):
                        "sys" if applied or not want else "bad")
 
     def _release_args(self, w):
-        return (supervisor.release_command(sys.executable, self.worker_var.get(), w.activity.holding),
+        return (supervisor.release_command(sys.executable, self.worker_var.get(), w.activity.holding,
+                                           w.activity.holding_claim),
                 w.env, w.activity.holding)
+
+    _NO_CLAIM_ID = ("this worker did not say which claim it held, so it is not handed back; it reopens by itself "
+                    "within the hour (update Hazync to fix this)")
 
     def _release(self, w):
         """Hand the block a stopped worker held back to the board, off the main thread (#725)."""
         cmd, env, block = self._release_args(w)
-        w.activity.holding = None
+        w.activity.holding = w.activity.holding_claim = None
+        if cmd is None:
+            self._say(f"[release {block}] {self._NO_CLAIM_ID}")
+            self._feed(f"Block {activity.pretty(block)}: {self._NO_CLAIM_ID}", "sys")
+            return
         # ⚠ review of 59575b40, L1: the board releases by key and block, not by claim, so a release sent after a worker
         # of this same key has taken the block again (Start pressed straight after Stop: the board hands a key its own
         # claim back) would free THAT live claim. Never release a block another of our workers holds now.
@@ -2404,8 +2412,13 @@ class App(tk.Tk):
         getattr(self, "_releasing", {}).pop(str(block), None)
         ok, msg = supervisor.release_verdict(rc, out)
         self._say(f"[release {block}] {msg}")
-        if not ok and "not your claim" in msg:
-            return      # the worker handed it back itself on SIGTERM (Linux) before the app got to it: nothing to say
+        # #753: "not this claim" (status reclaimed) and an unsigned claim nobody can name (status unreleasable, "cannot
+        # be released") are as silent as "not your claim": nothing went wrong, and the block reopens or stays as it is
+        if not ok and any(k in msg for k in ("not your claim", "not this claim", "cannot be released",
+                                             "unreleasable", "reclaimed")):
+            # the worker handed it back itself on SIGTERM (Linux) before the app got to it, or the key has claimed the
+            # block again since and that later claim is not this release's to free: nothing to say
+            return
         self._feed(f"Handed block {activity.pretty(block)} back to the board" if ok else
                    f"Block {activity.pretty(block)}: {msg}", "good" if ok else "sys")
 

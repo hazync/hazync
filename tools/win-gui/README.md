@@ -181,7 +181,9 @@ daylight-saving nights) and `test_schedule_flow.py` (the real window and a stand
   wake a PC that is shut down or hibernating, and does nothing when "Allow wake timers" is off in the power plan;
   the app reads that setting with `powercfg` when you save, and says so. Unticking it removes the task.
 - **Handing a block back.** Stop (or closing the app) while a block is claimed hands it back to the board at once
-  with `hazync-worker release <n>`, signed by the same key, instead of leaving it held for up to an hour
+  with `hazync-worker release <n> <claim>`, signed by the same key, instead of leaving it held for up to an hour. The
+  claim is the id the worker printed on its `claimed block` line: only that claim is released, so a release that
+  lands late cannot free the block the same key has claimed again since
   (`POST /api/release`, docs/COORDINATOR_REFERENCE.md). On Windows the worker is ended with `taskkill /F`, which
   it cannot see, so the app does the release for it. A worker from before this change has no `release` command;
   the app says so and the block reopens by itself, as before.

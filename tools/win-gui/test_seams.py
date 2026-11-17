@@ -31,6 +31,9 @@ STAND_IN = r'''
 import os, sys, time
 home = os.environ["HAZYNC_HOME"]
 if sys.argv[1:2] == ["release"]:
+    if sys.argv[3:4] != ["c1a1000000001807"]:     # #753: a release must name the claim the run printed
+        print("usage: hazync release <block> <claim>", flush=True)
+        sys.exit(2)
     time.sleep(float(os.environ.get("REL_SLEEP", "0")))
     open(os.path.join(home, "released"), "a").write(sys.argv[2] + "\n")
     print(f"released block {sys.argv[2]}", flush=True)
@@ -41,7 +44,7 @@ die_on = os.environ.get("STAND_IN_DIE_ON")
 if die_on and os.environ.get("CUDA_VISIBLE_DEVICES") == die_on:
     print("FATAL: guest id mismatch", flush=True)
     sys.exit(78)
-print("claimed block 1807 (yours for 60 min; if you stop, it reopens by itself)", flush=True)
+print("claimed block 1807 (claim c1a1000000001807; yours for 60 min; if you stop, it reopens by itself)", flush=True)
 if os.environ.get("EXIT_AFTER_CLAIM"):
     sys.exit(3)
 time.sleep(60)
@@ -207,7 +210,16 @@ def main():
         check(getattr(app, "_releases", 0) == sent_before and w0.activity.holding is None,
               "⛔ not sent while another worker here holds that block")
         app.workers.remove(twin)
-        w0.activity.holding = "1807"
+        w0.activity.holding, w0.activity.holding_claim = "1807", "c1a1000000001807"
+
+        print("── #753: a release whose claim id is unknown is not sent, and closing never waits on it ──")
+        w0.activity.holding_claim = None
+        before = dict(getattr(app, "_releasing", {}))
+        app._release(w0)
+        check(getattr(app, "_releasing", {}) == before and getattr(app, "_releases", 0) == sent_before,
+              "⛔ not counted among the releases Close waits for")
+        check(any("1,807" in t or "1807" in t for _, t, _tag in app._events[-2:]), "and the feed says so")
+        w0.activity.holding, w0.activity.holding_claim = "1807", "c1a1000000001807"
 
         print("── Stop while Start's checks run cancels the start (L4) ──")
         quiet()
