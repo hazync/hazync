@@ -16,6 +16,7 @@ for l in open(hdrs):
     h, x = l.split(); raw[int(h)] = x
 hash_of = {h: d(bytes.fromhex(x))[::-1].hex() for h, x in raw.items()}
 height_of = {v: k for k, v in hash_of.items()}
+TOP = max(raw)   # once: computing it per call was O(heights) per request, quadratic over a whole-chain sync
 blocks = {}   # block hash -> {pos: (txid, hex)}
 for f in fixtures:
     for line in open(f):
@@ -33,7 +34,7 @@ LOG = os.environ.get('FAKE_LOG')
 
 def call(m, p):
     c = json.load(open(control))
-    tip, lie = c.get('tip', max(raw)), c.get('lie', {})
+    tip, lie = c.get('tip', TOP), c.get('lie', {})
     if LOG:
         with open(LOG, 'a') as f: f.write(f'{m} {json.dumps(p)}\n')
     if m == 'getblockhash':
