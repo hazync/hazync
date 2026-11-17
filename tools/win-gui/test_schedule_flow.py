@@ -23,6 +23,9 @@ STAND_IN = r'''
 import os, sys, time
 home = os.environ["HAZYNC_HOME"]
 if sys.argv[1:2] == ["release"]:
+    if sys.argv[3:4] != [f"c1a1{sys.argv[2]:0>12}"]:  # a release must name the claim the run printed
+        print("usage: hazync release <block> <claim>", flush=True)
+        sys.exit(1)
     open(os.path.join(home, "released"), "a").write(sys.argv[2] + "\n")
     print(f"released block {sys.argv[2]}: it is open to any prover again", flush=True)
     sys.exit(0)
@@ -30,7 +33,7 @@ runs = os.path.join(home, "runs")
 n = len(open(runs).read().split()) if os.path.exists(runs) else 0
 open(runs, "a").write("x\n")
 b = 1807 + n
-print(f"claimed block {b} (yours for 60 min; if you stop, it reopens by itself)", flush=True)
+print(f"claimed block {b} (claim c1a1{b:0>12}; yours for 60 min; if you stop, it reopens by itself)", flush=True)
 time.sleep(float(open(os.path.join(home, "secs")).read()))
 print(f"proved range [{b}..{b}] from bridge bundle in 1.0s -> range_{b}.hzk", flush=True)
 print(f"✓ range {b}: the coordinator re-verified your proof and put it on the board as 'x'.", flush=True)
