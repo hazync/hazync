@@ -4,9 +4,9 @@
 # Adapted from experimental/libzync-bench/signet/genesis/gpu_run.sh (same pod image, keys, watcher), without its
 # mid-run checkpoints: the whole batch is ESTIMATED at about an hour (README.md "GPU batch").
 # A watcher harvests and then terminates at the deadline, or when the balance falls under $1 (harvest BEFORE release).
-# Env: DEADLINE_MIN (default 150), GPU (default the RTX PRO 6000 Blackwell Server Edition), CLOUD (SECURE default;
-# COMMUNITY is cheaper but its listings often never start: no port within PORT_TRIES x 10 s, default 60, ends the run
-# after a terminate). The harvest retries 6x and checks the tarball sha256 against the pod's; if it still fails on the normal
+# Env: DEADLINE_MIN (default 150), GPU (default the RTX PRO 6000 Blackwell Server Edition). Hosts are
+# always SECURE (hazync#523: community listings often never start); no port within PORT_TRIES x 10 s, default 60, ends
+# the run after a terminate. The harvest retries 6x and checks the tarball sha256 against the pod's; if it still fails on the normal
 # path the pod is LEFT RUNNING for a manual harvest (the deadline path terminates regardless: the cost cap wins).
 DEADLINE_MIN=${DEADLINE_MIN:-150}; HERE=$(cd "$(dirname "$0")" && pwd)
 W=$(readlink -f "${1:?bundle dir (the out dir of mkbundle.sh)}"); [ -f "$W/sb/sb.tgz" ] || { echo "run mkbundle.sh first"; exit 1; }
@@ -16,8 +16,8 @@ K="-n -i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnow
 KS="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
 gql(){ curl -s -X POST -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" -d "$1" https://api.runpod.io/graphql; }
 say(){ echo "[$(date +%T)] $*"; }
-GPU="${GPU:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"; CLOUD=${CLOUD:-SECURE}; PORT_TRIES=${PORT_TRIES:-60}
-Q=$(python3 -c "import json,sys; print(json.dumps({'query': 'mutation { podFindAndDeployOnDemand(input: { cloudType: %s, gpuCount: 1, volumeInGb: 0, containerDiskInGb: 80, gpuTypeId: \"%s\", name: \"lz-zapp-regtest\", imageName: \"runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04\", ports: \"22/tcp\", env: [{key: \"PUBLIC_KEY\", value: \"%s\"}] }) { id costPerHr } }' % (sys.argv[3], sys.argv[2], sys.argv[1])}))" "$PUB" "$GPU" "$CLOUD")
+GPU="${GPU:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"; PORT_TRIES=${PORT_TRIES:-60}
+Q=$(python3 -c "import json,sys; print(json.dumps({'query': 'mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, volumeInGb: 0, containerDiskInGb: 80, gpuTypeId: \"%s\", name: \"lz-zapp-regtest\", imageName: \"runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04\", ports: \"22/tcp\", env: [{key: \"PUBLIC_KEY\", value: \"%s\"}] }) { id costPerHr } }' % (sys.argv[2], sys.argv[1])}))" "$PUB" "$GPU")
 R=$(gql "$Q"); ID=$(echo "$R" | python3 -c 'import json,sys; p=(json.load(sys.stdin).get("data") or {}).get("podFindAndDeployOnDemand"); print(p["id"] if p else "")')
 [ -n "$ID" ] || { say "deploy failed: $R"; exit 1; }
 echo $ID > pod_id.txt; say "pod $ID deployed ($GPU): $R"
