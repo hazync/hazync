@@ -14,7 +14,7 @@ name = "zapp-utreexo"
 path = "src/main.rs"
 
 [dependencies]
-zapp-utreexo = { path = ".." }
+zapp-utreexo = { path = "..", features = ["tip"] }
 zapp-common = { path = "../../common" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 serde_json = "1"

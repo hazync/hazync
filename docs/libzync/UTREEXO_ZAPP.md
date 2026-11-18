@@ -329,3 +329,186 @@ in the hints zAPP).
 7. **SwiftSync.** Your SwiftSync mode builds the accumulator from hints with Empty adds. A proven hints file (the hints
    zAPP, HINTS_ZAPP.md) would let a node build the roots itself while syncing; proven roots let it skip that. Which of
    the two is more useful to you?
+
+## 10. Tip mode: the newest roots, a few blocks below the tip (design and prototype, 18.11.2026)
+
+Floresta's answer to the questions above (getfloresta/Floresta discussion #1472, Davidson Souza, 16.11.2026): **the
+latest height, or a few blocks below the tip for a reorg margin, is what they want**; no static per-release commitment
+("proofs are easy to check and not trusted. If someone is serving them, just download the latest proof and try
+ingesting them"); no change planned to the leaf format or the root order in rustreexo 0.7; Empty roots are implicit for
+them and they parse ours after the check; the BIP30 leaves stay permanent (utreexod the same); proven **roots** over a
+hints file. This section is the design and the built prototype for that: branch `feat/utreexo-tip` (from
+`feat/zapp-utreexo`). Status: CPU only, low heights, nothing deployed, not reviewed.
+
+### 10.1 Why the walk of §3 cannot follow the tip, and what does
+
+The walk adds every coin spent by H as Empty. "Spent by H" depends on H: moving H from P to P+1 turns every leaf whose
+coin block P+1 spends from live to Empty, wherever it sits in the forest, so the walk's state after block k < P is not
+reusable for a later H. A walk to every new H is a walk from genesis (§7: of the order of 10^12 cycles or more at the
+tip). So tip mode has two parts:
+
+- **The base**: one walk of §3 to some height B (any B ≤ the core proof's height), proved once. Its roots are exactly
+  Floresta's after B (§2).
+- **Steps**: each one starts from the roots a previous receipt proves (the base, or the previous step) and applies
+  blocks P+1..H **as a Floresta node does**: `Stump::modify(adds, dels, proof)` of rustreexo 0.7.0 (the crate itself,
+  as a guest dependency), with the adds of floresta-chain `get_block_adds` and the deletions of its `process_proof`,
+  one block at a time. This is the "replay design" of §4 / §7, but only for the blocks after the base: at the tip, a
+  step covers the blocks since the last one.
+
+A step's receipt verifies the previous receipt inside the zkVM, so the **newest receipt alone** proves the whole chain
+(base walk + every step); it is one succinct receipt of constant size, whatever the number of steps. A new step
+**replaces** the last as the thing served; the last few are kept for reorgs (§10.6).
+
+### 10.2 The step statement ('ZU' version 2)
+
+```
+TipStatement {
+  kind          u32        'ZU' 2 (0x5A550002)
+  self_id       [u32; 8]   the tip image every step of the chain was verified under (the checker requires its own id)
+  base_id       [u32; 8]   the base image (§3) the chain starts from (the checker requires the trusted one)
+  network       u32
+  base_height   u32        B, the base's H
+  base_core_id  [u32; 8]   the core image the base's walk rested on (its coin-state claims are bound by it)
+  steps         u32        steps since the base (1 for a step from the base)
+  from          u32        P, the height this step started from
+  height        u32        H
+  block_hash    [u8; 32]   block H, internal byte order
+  leaves        u64        Stump.leaves        } Floresta's AssumeUtreexoValue,
+  roots         [[u8;32]]  Stump.roots          } the same encoding as §1 (an Empty root = 32 zero bytes)
+  core binding             core_id, lineage, anchor_id, core height T (H <= T), tip_hash, cum_work, max_time, profile:
+                           THIS step's core receipt
+}
+```
+
+`n_live` (§1) is not tracked in tip mode: the Stump does not know it, and nothing Floresta loads needs it.
+
+### 10.3 The step guest (`prover/zyncapps/methods/utreexo-tip`, shared code `src/step.rs`)
+
+Input: `self_id`, `base_id`, `core_id`, the core journal, the network, H, the previous receipt's kind and journal; per
+block P+1..H a frame `[L, S, Q]` ‖ the block without witness (L bytes) ‖ the spent coins (S bytes) ‖ the batch proof
+of its deletions (Q bytes); then the T − H headers from H+1 to the core tip. Per block:
+
+1. hash the header; it must follow the previous block (the first: the previous statement's `block_hash`); parse the
+   transactions without witness; rebuild the Merkle root (CVE-2012-2459 refused; only transaction 0 a coinbase);
+2. **adds** (`get_block_adds`): every output in block order that is not `is_unspendable` (OP_RETURN, or a script over
+   10,000 bytes) and whose outpoint no input of the block spends (every input, as Floresta's `get_input_outpoints`),
+   each as Floresta's leaf (§2, `utreexo_roots::utreexo_leaf`, the same function the base uses);
+3. **deletions** (`process_proof`): every input of a non-coinbase transaction, in input order, except one whose txid
+   is a transaction of this block with vout below its output count; an outpoint twice is refused. Each deleted leaf
+   is rebuilt from the input's outpoint (from the bound block) and the host's data of the spent coin: the creating
+   block's hash, the header code (height·2 + coinbase), value and script. Floresta's `process_proof` gets the same
+   data from its peers (CompactLeafData) and the block hash from its own header chain by height. A leaf equal to
+   either of Floresta's `UNSPENDABLE_BIP30_UTXO_*` is refused, as `update_acc` refuses it;
+4. `Stump::modify(adds, dels, proof)`: rustreexo recomputes the old roots from the deleted leaves and the proof and
+   refuses the proof unless every one is a current root, then folds the adds in. The guest runs this code unchanged.
+
+After H: `env::verify(core_id, journal)`, `check_core_statement` (as the base: KIND_CHAIN, version >= 2, the
+network's pinned genesis anchor, scripts checked, no assumevalid), H <= T, and the T − H headers must chain from block
+H to the core journal's `tip_hash`.
+
+The previous receipt: kind 1 (a base): `env::verify(base_id, journal)`, a final run (`done = 1`, `to = H`), its
+`self_id = base_id`, the same network; kind 2 (a step): `env::verify(self_id, journal)`, its `self_id` and `base_id`
+equal to this step's, the same network. `base_height` and `base_core_id` are carried forward from the base.
+
+### 10.4 Soundness: why the host cannot change the roots
+
+What the host supplies: the blocks, the spent coins' data, the batch proofs, the link headers, the previous receipt
+and the core receipt.
+
+- **The blocks are the chain's.** Block P is the previous statement's (bound by its own proof). Each block follows the
+  previous by hash, and the link headers continue that hash chain to the core proof's tip T, which the core receipt
+  proves to be the tip of a valid chain from genesis (scripts checked, the network's anchor). A different block at any
+  height between P and T would need a SHA-256d collision. The transactions are bound to their header by the Merkle
+  root. So blocks P+1..H are the core-proven chain's, and so is block P (an ancestor of H on it). This is the same
+  binding the header-chain zAPP gives (a hash chain to a proven tip); I bind to the core receipt's `tip_hash` directly
+  rather than through the header MMR (one fewer receipt, and the core receipt is needed anyway for validity).
+- **Adds and the set of deletions are the block's.** The guest takes them from the bound block, never from the host:
+  the host cannot drop a deletion (a missing spent-coin record fails the parse, an extra one is refused), add one,
+  or reorder adds.
+- **Each deleted leaf is the coin really spent.** The leaf is rebuilt from the input's outpoint and the host's coin
+  data; rustreexo's `modify` accepts it only if it opens against the roots the guest holds. A wrong value, script,
+  height, coinbase flag or creating block gives a leaf that is not in the accumulator (a SHA-512/256 collision
+  otherwise). Outpoints are unique among live leaves except the two BIP30 coinbases, whose leaves are refused.
+- **The starting roots are Floresta's after P.** For the base, §4. For a step, by induction: the previous step was
+  verified in the zkVM under this same image (`self_id`, which the checker pins).
+- **The base's trust carries.** `base_id` and `base_core_id` are committed by every step; the checker requires both to
+  be trusted (the base's spent/unspent claims rest on its core receipt).
+- **Core handovers.** A step needs no undo commitment, so, unlike the base (§4: zero lineage), a step accepts the core
+  verifier's own lineage rule (zero, or exactly the core image's pinned lineage). A chain of steps can continue across
+  a core image upgrade; the base must still have been walked under a trusted core image (open: a base under the
+  previous image after a handover, Q-T4 below).
+- Everything else (which images to trust, minimum work, the clock, that block H is the node's) is the checker's (§10.7).
+
+### 10.5 Which H, and where the witness comes from
+
+`hazync-utreexo-follow` (coordinator/deploy/utreexo/) takes **H = min(node tip − MARGIN, T, P + MAX_STEP)**, MARGIN = 6
+by default, T the core receipt's height (`zyncapp core-info`), MAX_STEP = 2,016 (a long catch-up takes several runs).
+⚠ **Today T bounds H, not the margin.** The genesis-anchored core proof (the spine) was at **3,836** on 18.11.2026
+(MEASURED, hazync-proof `spine.json`), so the tip mode can follow the core proof but cannot be near Bitcoin's tip
+until the core proof is. Nothing here needs the core proof to be at the tip; the same code serves "T − 0" while the
+spine climbs and "tip − 6" once it is there.
+
+**The witness** (spent coins and batch proofs per block) is the hard part at the tip, not the proof. The prototype's
+host (`zyncapp utreexo-tip-prove`, `prover/zyncapps/host/src/utreexo_tip_host.rs`) replays Floresta's rules natively
+from genesis with rustreexo's `MemForest` (every live leaf in memory) and a map of live coins, and caches both at the
+last proven height (`--cache`, `HZUTIP01`). It runs every block through the same `step.rs` and the same
+`Stump::modify` the guest runs, and compares the result with the previous statement, before proving. That is fine for
+tests and low heights; it is **not** a mainnet-tip source (the forest of ~10^8 live leaves in memory: not measured
+here). The production source is either (a) a Utreexo bridge node: utreexod with its proof index serves exactly this
+per block (the same udata Floresta itself syncs from: leaf data + batch proof), or (b) a disk-backed forest kept by
+Hazync's tip prep run. Neither is built (open: Q-T2). Because the guest checks every proof, the source is never
+trusted, so (a) needs no trust in the bridge.
+
+### 10.6 What is served, where, and reorgs
+
+**Served** (proposal; not deployed): a folder like the headers zAPP's (`/headers-live/`), e.g.
+`https://hazync.org/utreexo-live/`, rsynced from the proving box with a key pinned to `rrsync -wo`:
+
+| file | what |
+|---|---|
+| `latest.json` | `network`, `height` H, `block_hash`, `leaves`, `roots` (hex, an Empty root as "empty"), `core_height` T, `mode` ("tip" or "base"), `steps`, `base_height`, `receipt` (file name), `sha256`, `bytes`, `verdict_here` (the follower's own check: ok or demo), `proved_at`, `prove_seconds`. Written last (rename) |
+| `latest.rcpt` | the newest receipt (the stable name to poll) |
+| `utreexo-<H>.rcpt` | the same receipt under an immutable name; the last 3 kept |
+
+Floresta polls `latest.json` (it is a hint, not trusted), downloads the receipt by name, checks its sha256 and then the
+receipt itself (§10.7). Every value in the JSON is also in the receipt's journal; a node must take them from there.
+
+**Replacing.** A step is published only after `zapp-utreexo verify` says OK with the node's own hashes at H and at T
+(DEMO is accepted only with `ALLOW_DEMO=1`, as long as every proof is DEMO: unpinned images, below minimum work).
+The previous receipt goes to `hist/` (the last `KEEP` = 12), the new one becomes `latest`; a failed step, a step that
+does not verify, or a wrong ELF leaves the published folder untouched.
+
+**Reorgs** (REORG.md §8, §10; ZAPP_FOLLOWER.md §7):
+
+| case | what happens |
+|---|---|
+| depth < MARGIN | nothing: H trails the node's tip by MARGIN, so no published height is touched. At the tip this covers every ordinary reorg (depth 1-2) |
+| the node's block at the published H changed | the follower falls back to the newest kept receipt (`hist/`, then the base) whose block is still the node's, drops the cache (the native forest is at the old branch) and steps forward on the node's branch. The published folder keeps the old receipt until the new one verifies |
+| the core proof's tip T is not the node's block T | the follower stops for this run ("wait for the next core proof"): the core receipt names an orphaned tip, so no step can link to it. REORG P4 sets the spine back to a kept head on the new branch; the next run uses it |
+| below the base | stop with an error: a new base must be walked and installed (`--set-base`) |
+| receipts already served about orphaned blocks | nothing to retract: each is a true statement about a valid chain whose block H it names. A Floresta node that compares block H with its own header chain (§10.7) refuses it, as it must |
+
+### 10.7 What a Floresta node checks
+
+`zapp_utreexo::verify_utreexo_tip_on` (Rust library; the CLI `zapp-utreexo verify` routes a tip receipt there by its
+journal's kind word):
+
+1. the receipt decodes (16 MiB limit, no trailing bytes), is a real succinct or Groth16 receipt (not a FakeReceipt,
+   `RISC0_DEV_MODE` unset), and **verifies under the pinned tip image id**;
+2. kind 'ZU' 2; `self_id` = that id (every step was this image); `base_id` = the pinned base image id; `steps >= 1`,
+   `base_height <= from < height`; one root per set bit of `leaves`; the network the CALLER names;
+3. `core_id` and `base_core_id` = the network's trusted core image; the core profile and the genesis anchor are that
+   image's; the core lineage zero or the image's own; `max_time` not more than 2 h ahead of the node's clock;
+4. **block H's hash = the node's own header chain's** at H (`--expect`, or `--bitcoin-cli` / `--mempool`), and the core
+   tip T (> H) the node's too (`--expect-tip`); Core's minimum work and checkpoint at T;
+5. the node's own freshness rule (Floresta's: H a few blocks below its tip; not the checker's business);
+6. then load: `Stump { leaves, roots }` with every 32-zero-byte root as `BitcoinNodeHash::Empty` (§1), and
+   `mark_chain_as_assumed(stump, block_hash)` as for a compiled-in `AssumeUtreexoValue` (§2).
+
+OK needs 1-4 and both images pinned; with a built-in image that is not yet a reproducible build (both, today) the
+verdict is at most DEMO. `--json` adds `mode: "tip"`, `steps`, `from`, `base_height`, `base_image`; `--floresta`
+prints the same `AssumeUtreexoValue` source as for a base.
+
+### 10.8 Measured and tested
+
+See §10.9 (filled in with the runs of 18.11.2026).

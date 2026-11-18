@@ -15,6 +15,11 @@ publish = false
 name = "zapp_utreexo"
 path = "src/lib.rs"
 
+[features]
+# Tip mode (docs/libzync/UTREEXO_ZAPP.md §10): the step statement's checks. Off by default so the WASM build (which does
+# not check tip receipts yet) stays byte-identical; the CLI enables it.
+tip = []
+
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
 libzync = { path = "../../libzync", default-features = false, features = ["utreexo"] }

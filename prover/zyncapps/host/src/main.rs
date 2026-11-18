@@ -14,6 +14,14 @@
 //!       their state digest. A state JSON (prep's) instead of a receipt: execute only, the core receipt an unresolved
 //!       assumption. --ref: the roots must equal those utreexo-ref (Floresta's own code) printed for H.
 //!       The receipts are checked by zapps/utreexo (`zapp-utreexo verify`), the zAPP's own module.
+//!   zyncapp utreexo-tip-prove <block json dir> <previous receipt | previous .journal> <H> <core receipt | state_<T>.json>
+//!       <out receipt> [--signet] [--execute] [--prof N] [--elf <tip guest>] [--base-id <hex>] [--cache <file>] [--ref <log>]
+//!       One STEP of the tip mode (UTREEXO_ZAPP.md §10): from the roots the previous receipt proves (a base receipt of
+//!       utreexo-prove, or an earlier step) to the roots after H, block by block as Floresta does (rustreexo
+//!       Stump::modify with batch proofs from a native MemForest), linked by headers H+1..T to the core tip. A
+//!       .journal file (written by --execute) instead of a receipt: execute only, an unresolved assumption. --cache: the
+//!       native replay's state (MemForest and live coins) at the previous height, read if it matches, written at H.
+//!   zyncapp core-info <core receipt | state_<T>.json>     the core statement's height, tip hash and image (unchecked)
 //!   zyncapp utreexo-count <block_<h>.json ...>   per block: Utreexo adds, leaf SHA-512 blocks, inputs (cost model)
 //!   zyncapp id
 //!   zyncapp bench-trie <dump file>                                          (E1 split: the trie update in its own receipt)
@@ -22,8 +30,16 @@
 //! covers the core proof. The verifier still pins the committed core image id and anchor (policy).
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
 use serde::{Deserialize, Serialize};
+extern crate alloc;
 mod utreexo_host;
-use zyncapp_methods::{ZYNCAPP_UTREEXO_ELF, ZYNCAPP_UTREEXO_ID, ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
+mod utreexo_tip_host;
+/// The base derivation (libzync), under the name the shared tip step (#[path] below) uses for it.
+mod utreexo_roots {
+    pub use libzync::utreexo_roots::*;
+}
+#[path = "../../methods/utreexo-tip/src/step.rs"]
+mod utreexo_tip_step;
+use zyncapp_methods::{ZYNCAPP_UTREEXO_TIP_ELF, ZYNCAPP_UTREEXO_TIP_ID, ZYNCAPP_UTREEXO_ELF, ZYNCAPP_UTREEXO_ID, ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ZeroConf {
@@ -148,8 +164,16 @@ fn main() {
             println!("ZYNCAPP_ZEROCONF_ID {}", id_hex(&ZYNCAPP_ZEROCONF_ID));
             println!("ZYNCAPP_HEADERS_ID {}", id_hex(&ZYNCAPP_HEADERS_ID));
             println!("ZYNCAPP_UTREEXO_ID {}", id_hex(&ZYNCAPP_UTREEXO_ID));
+            println!("ZYNCAPP_UTREEXO_TIP_ID {}", id_hex(&ZYNCAPP_UTREEXO_TIP_ID));
         }
         Some("utreexo-prove") if a.len() >= 5 => utreexo_prove(&a),
+        Some("utreexo-tip-prove") if a.len() >= 6 => utreexo_tip_prove(&a),
+        Some("core-info") if a.len() == 2 => {
+            // the core statement's height and tip (for a follower choosing H), from a receipt or a state JSON; not a check
+            let (cs, _, r) = load_core(&a[1], true);
+            println!("CORE height={} tip={} image={}{}", cs.height, disp(&cs.tip_hash), id_hex(&cs.self_id),
+                     if r.is_none() { " (a state JSON)" } else { "" });
+        }
         Some("utreexo-count") if a.len() >= 2 => {
             // Per block (block_<h>.json files): what the Utreexo part of the walk would hash if every coin it adds were
             // still live at H (an upper bound on its leaf work), and the inputs a replay-with-proofs design would delete.
@@ -645,6 +669,188 @@ fn utreexo_prove(a: &[String]) {
                  z.leaves, z.n_live, z.runs, roots_str(&z.roots), id_hex(&z.core_id), z.core_height,
                  if receipt.is_none() { " [core receipt: unresolved assumption, journal from the state JSON]" } else { "" });
         if !execute { std::fs::copy(format!("{out}/{net}-{stop}-run{}.receipt", i + 1), format!("{out}/{net}-{stop}.receipt")).unwrap(); }
+        else { std::fs::write(format!("{out}/{net}-{stop}.journal"), &jb).unwrap(); } // a tip step's execute-only start (utreexo-tip-prove)
     }
     println!("UTREEXO_ID {}", hex(self_id_d.as_bytes()));
+}
+
+/// The utreexo tip statement (the tip guest's TipStatement, field for field).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct TipStatement {
+    kind: u32, self_id: [u32; 8], base_id: [u32; 8], network: u32, base_height: u32, base_core_id: [u32; 8], steps: u32,
+    from: u32, height: u32, block_hash: [u8; 32], leaves: u64, roots: Vec<[u8; 32]>, core_id: [u32; 8], lineage: [u8; 32],
+    anchor_id: [u8; 32], core_height: u32, tip_hash: [u8; 32], cum_work: [u8; 32], max_time: u32, profile: u32,
+}
+
+fn jwords(b: &[u8]) -> Vec<u32> { b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect() }
+
+/// The core state a step rests on: a receipt (proving) or prep's state JSON (execute only, an unresolved assumption).
+fn load_core(path: &str, execute: bool) -> (ChainStateJ, Vec<u8>, Option<Receipt>) {
+    if path.ends_with(".json") {
+        if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
+        let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| die(&e.to_string())))
+            .unwrap_or_else(|e| die(&format!("{path}: {e}")));
+        let j: Vec<u8> = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        (cs, j, None)
+    } else {
+        let r: Receipt = bincode::deserialize(&std::fs::read(path).unwrap_or_else(|e| die(&e.to_string())))
+            .unwrap_or_else(|e| die(&format!("core receipt: {e}")));
+        if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) && !execute { die("a FakeReceipt core receipt is not a proof"); }
+        let cs: ChainStateJ = r.journal.decode().unwrap_or_else(|e| die(&format!("core journal: {e}")));
+        (cs, r.journal.bytes.clone(), Some(r))
+    }
+}
+
+fn utreexo_tip_prove(a: &[String]) {
+    use utreexo_tip_host::{Native, TipFrame};
+    use utreexo_tip_step as step;
+    let (dir, prev_path, core_path, out) = (&a[1], &a[2], &a[4], &a[5]);
+    let stop: u32 = a[3].parse().unwrap_or_else(|_| die("H?"));
+    let signet = a.iter().any(|x| x == "--signet");
+    let execute = a.iter().any(|x| x == "--execute");
+    let prof: u32 = flag(a, "--prof").map(|x| x.parse().unwrap_or_else(|_| die("--prof N"))).unwrap_or(0);
+    let elf: Vec<u8> = match flag(a, "--elf") {
+        Some(p) => std::fs::read(p).unwrap_or_else(|e| die(&format!("--elf: {e}"))),
+        None => ZYNCAPP_UTREEXO_TIP_ELF.to_vec(),
+    };
+    if elf.is_empty() { die("no utreexo-tip guest: built with RISC0_SKIP_BUILD, so give --elf"); }
+    let self_id_d = risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}")));
+    let self_id: [u32; 8] = self_id_d.as_words().try_into().unwrap();
+    let base_id: [u32; 8] = match flag(a, "--base-id") {
+        Some(x) => swiftsync_verify::words(&risc0_zkvm::sha::Digest::from_bytes(h32(x))),
+        None => ZYNCAPP_UTREEXO_ID,
+    };
+    let tc = std::env::var("UTREEXO_TIP_TAMPER").ok();
+    if tc.is_some() && !execute { die("UTREEXO_TIP_TAMPER is an execute-only negative test"); }
+
+    // the previous statement: a base (kind 'ZU' 1) or a step ('ZU' 2), from a receipt or (execute only) a journal file
+    let (pj, prev_receipt): (Vec<u8>, Option<Receipt>) = if prev_path.ends_with(".journal") {
+        if !execute { die("a .journal is not a proof: give the previous receipt, or --execute"); }
+        (std::fs::read(prev_path).unwrap_or_else(|e| die(&format!("{prev_path}: {e}"))), None)
+    } else {
+        let r: Receipt = bincode::deserialize(&std::fs::read(prev_path).unwrap_or_else(|e| die(&format!("{prev_path}: {e}"))))
+            .unwrap_or_else(|e| die(&format!("previous receipt: {e}")));
+        (r.journal.bytes.clone(), Some(r))
+    };
+    let pw = jwords(&pj);
+    let kind = *pw.first().unwrap_or_else(|| die("the previous journal is empty"));
+    let (prev_kind, prev_id, p_height, p_hash, p_leaves, p_roots) = if kind == libzync::utreexo_roots::KIND_UTREEXO {
+        let z: UtreexoStatement = risc0_zkvm::serde::from_slice(&pw).unwrap_or_else(|e| die(&format!("base journal: {e}")));
+        if z.done != 1 { die("the previous receipt is not a base's final run"); }
+        (1u32, base_id, z.height, z.block_hash, z.leaves, z.roots)
+    } else if kind == step::KIND_UTREEXO_TIP {
+        let z: TipStatement = risc0_zkvm::serde::from_slice(&pw).unwrap_or_else(|e| die(&format!("step journal: {e}")));
+        if z.base_id != base_id { die(&format!("the previous step is from base image {}, not {}", id_hex(&z.base_id), id_hex(&base_id))); }
+        (2u32, self_id, z.height, z.block_hash, z.leaves, z.roots)
+    } else {
+        die(&format!("the previous journal's kind 0x{kind:08x} is neither a utreexo base nor a step"))
+    };
+    if let Some(r) = &prev_receipt {
+        if !matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) {
+            r.verify(risc0_zkvm::sha::Digest::from(prev_id)).unwrap_or_else(|e| die(&format!("the previous receipt does not verify under {}: {e}", id_hex(&prev_id))));
+        }
+    }
+    let (cs, journal, core_receipt) = load_core(core_path, execute);
+    if stop <= p_height || stop > cs.height { die(&format!("H must be in {}..={} (above the previous step, at most the core height)", p_height + 1, cs.height)); }
+
+    // the native replay to the previous height (or the cache of one), then the step's blocks
+    let t0 = std::time::Instant::now();
+    let cache = flag(a, "--cache");
+    let mut nat = match cache.map(|c| Native::load(c)) {
+        Some(Ok(n)) if n.height == p_height && n.last == p_hash => { println!("UTREEXO_TIP_CACHE hit at {p_height}"); n }
+        Some(Ok(n)) => { println!("UTREEXO_TIP_CACHE at {} {}, not the previous step's {p_height}: replaying from genesis", n.height, utreexo_tip_host::disp(&n.last)); Native::genesis(signet) }
+        Some(Err(e)) => { println!("UTREEXO_TIP_CACHE unusable ({e}): replaying from genesis"); Native::genesis(signet) }
+        None => Native::genesis(signet),
+    };
+    while nat.height < p_height {
+        let b = utreexo_host::read_block(dir, nat.height + 1);
+        nat.block(&b.stripped).unwrap_or_else(|e| die(&format!("native replay: {e}")));
+    }
+    if nat.last != p_hash { die(&format!("block {p_height} of the block files is {}, the previous statement's is {}", utreexo_tip_host::disp(&nat.last), disp(&p_hash))); }
+    if nat.stump.leaves != p_leaves || nat.roots() != p_roots {
+        die(&format!("the native accumulator after {p_height} (leaves {}, roots {}) is not the previous statement's (leaves {p_leaves}, roots {})",
+                     nat.stump.leaves, roots_str(&nat.roots()), roots_str(&p_roots)));
+    }
+    nat.counts = Default::default();
+    let mut fr: Vec<TipFrame> = Vec::new();
+    for h in p_height + 1..=stop {
+        let b = utreexo_host::read_block(dir, h);
+        fr.push(nat.block(&b.stripped).unwrap_or_else(|e| die(&format!("native step: {e}"))));
+    }
+    let mut link: Vec<[u8; 80]> = (stop + 1..=cs.height).map(|h| utreexo_host::read_block(dir, h).header).collect();
+    let mut tip = nat.last;
+    for l in &link { tip = step::link_header(l, &tip).unwrap_or_else(|e| die(e)); }
+    if tip != cs.tip_hash { die(&format!("the block files' block {} is {}, the core tip is {}", cs.height, utreexo_tip_host::disp(&tip), disp(&cs.tip_hash))); }
+    let c = &nat.counts;
+    println!("UTREEXO_TIP_NATIVE from={p_height} H={stop} T={} block={} leaves={} roots={} blocks={} adds={} dels={} proof_hashes={} forest_agrees={} ({:.1} s)",
+             cs.height, utreexo_tip_host::disp(&nat.last), nat.stump.leaves, roots_str(&nat.roots()), c.blocks, c.adds, c.dels, c.proof_hashes,
+             nat.forest_agrees(), t0.elapsed().as_secs_f64());
+    if let Some(rf) = flag(a, "--ref") {
+        let log = std::fs::read_to_string(rf).unwrap_or_else(|e| die(&format!("--ref: {e}")));
+        let key = format!("UTREEXO_REF height={stop} ");
+        let line = log.lines().find(|l| l.starts_with(&key)).unwrap_or_else(|| die(&format!("--ref: no line for height {stop}")));
+        let get = |k: &str| line.split_whitespace().find_map(|w| w.strip_prefix(k)).unwrap_or("").to_string();
+        if get("leaves=") != nat.stump.leaves.to_string() || get("roots=") != roots_str(&nat.roots()) || get("block=") != utreexo_tip_host::disp(&nat.last) {
+            die(&format!("NOT Floresta's: ref {line}"));
+        }
+        println!("UTREEXO_REF_MATCH H={stop}: leaves and roots byte-identical to Floresta's update_acc");
+    }
+    if let Some(c) = &tc {
+        if c == "link_drop" { link.pop(); }
+        println!("UTREEXO_TIP_TAMPER {c}: {}", utreexo_tip_host::tamper(c, &mut fr, &mut link).unwrap_or_else(|e| die(&e)));
+    }
+    // a journal-level tamper: the previous statement's roots (its receipt then does not match: no assumption resolves it)
+    let mut pj_in = pj.clone();
+    if tc.as_deref() == Some("prev_roots") {
+        let n = pj_in.len();
+        pj_in[n - 200] ^= 1;
+    }
+    let prev_kind_in = if tc.as_deref() == Some("prev_kind") { 3 - prev_kind } else { prev_kind };
+
+    let words = utreexo_tip_host::frame_words(&fr);
+    let link_w: Vec<u32> = link.iter().flat_map(|l| l.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()))).collect();
+    let mut b = ExecutorEnv::builder();
+    match &core_receipt {
+        Some(r) => { b.add_assumption(r.clone()); }
+        None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(cs.self_id), journal.clone())); }
+    }
+    match &prev_receipt {
+        Some(r) => { b.add_assumption(r.clone()); }
+        None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(prev_id), pj.clone())); }
+    }
+    b.write(&self_id).unwrap().write(&base_id).unwrap().write(&cs.self_id).unwrap().write(&journal).unwrap()
+        .write(&signet).unwrap().write(&prof).unwrap().write(&stop).unwrap().write(&prev_kind_in).unwrap().write(&pj_in).unwrap();
+    b.write_slice(&words);
+    b.write_slice(&[link.len() as u32]).write_slice(&link_w);
+    let env = b.build().unwrap();
+    let t1 = std::time::Instant::now();
+    let jb = if execute {
+        let res = risc0_zkvm::default_executor().execute(env, &elf);
+        if let Some(c) = &tc {
+            match res {
+                Err(e) => { println!("UTREEXO_TIP_GUEST_REFUSED {c}: {}", e.to_string().lines().next().unwrap_or("")); std::process::exit(3) }
+                Ok(_) => { println!("UTREEXO_TIP_GUEST_ACCEPTED {c} (a negative test that passed: a BUG)"); std::process::exit(1) }
+            }
+        }
+        let info = res.unwrap_or_else(|e| die(&format!("execute: {e}")));
+        let padded: u64 = info.segments.iter().map(|s| 1u64 << s.po2).sum();
+        println!("UTREEXO_TIP_EXEC blocks={}..{stop} link={} user_cycles={} padded_cycles={} segments={} per_block={} executed in {:.1} s",
+                 p_height + 1, link.len(), info.cycles(), padded, info.segments.len(), info.cycles() / (stop - p_height) as u64, t1.elapsed().as_secs_f64());
+        std::fs::write(format!("{out}.journal"), &info.journal.bytes).unwrap();
+        info.journal.bytes.clone()
+    } else {
+        let r = default_prover().prove_with_opts(env, &elf, &risc0_zkvm::ProverOpts::succinct()).unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
+        std::fs::write(out, bincode::serialize(&r).unwrap()).unwrap();
+        println!("UTREEXO_TIP_PROVED blocks={}..{stop} -> {out} in {:.1} s ({} bytes)", p_height + 1, t1.elapsed().as_secs_f64(), std::fs::metadata(out).unwrap().len());
+        r.journal.bytes.clone()
+    };
+    let z: TipStatement = risc0_zkvm::serde::from_slice(&jwords(&jb)).unwrap_or_else(|e| die(&format!("journal: {e}")));
+    if z.roots != nat.roots() || z.leaves != nat.stump.leaves || z.block_hash != nat.last || z.height != stop || z.from != p_height {
+        die("the guest's statement is not the native replay's");
+    }
+    if let Some(c) = cache { nat.save(c).unwrap_or_else(|e| die(&format!("--cache: {e}"))); }
+    println!("UTREEXO_TIP_JOURNAL height={} block={} leaves={} steps={} base_height={} from={} roots={} core={} core_height={}{}", z.height, disp(&z.block_hash),
+             z.leaves, z.steps, z.base_height, z.from, roots_str(&z.roots), id_hex(&z.core_id), z.core_height,
+             if core_receipt.is_none() || prev_receipt.is_none() { " [unresolved assumptions: execute only]" } else { "" });
+    println!("UTREEXO_TIP_ID {}", hex(self_id_d.as_bytes()));
 }

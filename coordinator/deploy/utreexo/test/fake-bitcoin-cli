@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+# A stand-in for bitcoin-cli over a directory of block_<h>.json files (prover/fetch_block_rpc.py's): getblockcount,
+# getblockhash <h>. FAKE_BLOCKS = the directory; FAKE_TIP caps the tip; FAKE_HASH_AT=<h>:<hash>[,<h>:<hash>...] makes
+# getblockhash answer another hash at those heights (the node is on another branch there: a reorg).
+import sys, os, json, hashlib, struct
+d, tip = os.environ['FAKE_BLOCKS'], int(os.environ['FAKE_TIP'])
+lie = dict(x.split(':') for x in os.environ.get('FAKE_HASH_AT', '').split(',') if x)
+def bhash(h):
+    v = json.load(open(f'{d}/block_{h}.json'))
+    hdr = struct.pack('<i', v['version']) + bytes.fromhex(v['prev'])[::-1] + bytes.fromhex(v['merkle'])[::-1] + struct.pack('<III', v['time'], v['bits'], v['nonce'])
+    return hashlib.sha256(hashlib.sha256(hdr).digest()).digest()[::-1].hex()
+a = sys.argv[1:]
+if a[0] == 'getblockcount': print(tip)
+elif a[0] == 'getblockhash':
+    h = int(a[1])
+    if h > tip: sys.exit('Block height out of range')
+    print(lie.get(str(h)) or bhash(h))
+else: sys.exit('unsupported ' + a[0])

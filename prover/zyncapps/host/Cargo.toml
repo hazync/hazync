@@ -19,3 +19,5 @@ sha2 = "0.10"
 bincode = "1"
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 libzync = { path = "../../../libzync", default-features = false, features = ["utreexo"] }
+# the utreexo tip step runs natively before proving (#[path] methods/utreexo-tip/src/step.rs): Floresta's accumulator code
+rustreexo = "=0.7.0"

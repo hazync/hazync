@@ -10,6 +10,12 @@ use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use swiftsync_verify::{hex, hex32, identity_matches, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME};
 
+/// Tip mode (UTREEXO_ZAPP.md §10): the newest roots a few blocks below the tip, a chain of steps from a base.
+#[cfg(feature = "tip")]
+mod tip;
+#[cfg(feature = "tip")]
+pub use tip::*;
+
 /// The utreexo image id this checker trusts by default. ⚠ A local build (hazync-coord, 15.11.2026, the prototype on
 /// feat/zapp-utreexo), NOT a reproducible build in reproduce/LIBZYNC_IDS: nobody should rely on it yet.
 pub const UTREEXO_IMAGE_ID: &str = "27bea7da7c9c2c528a0c9b6e6d22f5d06c5b2c87bcd9d58c360ffecaf5424fb9";
@@ -117,7 +123,7 @@ impl UtreexoStatement {
     }
 }
 
-fn disp(b: &[u8; 32]) -> String {
+pub(crate) fn disp(b: &[u8; 32]) -> String {
     b.iter().rev().map(|x| format!("{x:02x}")).collect()
 }
 
@@ -256,7 +262,7 @@ pub fn judge_verified_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image,
 
 /// libzync::facts::Network::bits for the network's name (the statement's `network` word); None for a network this
 /// checker has no image for.
-fn network_bits(net: &str) -> Option<u32> {
+pub(crate) fn network_bits(net: &str) -> Option<u32> {
     match net {
         "mainnet" => Some(libzync::facts::Network::Mainnet.bits()),
         "signet" => Some(libzync::facts::Network::Signet.bits()),
