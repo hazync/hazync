@@ -28,15 +28,15 @@ exit=1 PASS
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t4.json (expect exit 1)
-  [FAIL] statement: entry 0 (script 00145b35494694f0e6cb77f54bf2f1f0227ff468ff3a): BIP-322 simple: the signature is not exactly one base64 witness
+  [FAIL] statement: entry 0 (script 001442f84cef9988a83097b9713e6cb11bbc5fe84ec2): BIP-322 simple: the signature is not exactly one base64 witness
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t4b.json (expect exit 1)
-  [FAIL] statement: entry 1 (script 21035411881ebb8ede96206a1e2a0fe64467cfc25210df40db10f1f086e4a059d38bac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
+  [FAIL] statement: entry 1 (script 21031459e7cce44070988211e4a0c30e403ee40bb918e1fe494a3e8864f87b201a0fac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t5.json (expect exit 1)
-  [FAIL] statement: entry 1: the trie proof does not hold against the proof's trie root (NotCovered)
+  [FAIL] statement: entry 2: the trie proof does not hold against the proof's trie root (NotCovered)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 zapp-statement: signed 1 entry; 1 still unsigned
@@ -100,12 +100,12 @@ exit=1 PASS
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/inj.json (expect exit 1)
-  [FAIL] statement: entry 0 (script 00145b35494694f0e6cb77f54bf2f1f0227ff468ff3a): legacy (BIP-137): Decode error for signature `!\n  [ok] statement: 1 script(s)\nZAPP_STATEMENT_OK: the statement holds at block 200`
+  [FAIL] statement: entry 0 (script 001442f84cef9988a83097b9713e6cb11bbc5fe84ec2): legacy (BIP-137): Decode error for signature `!\n  [ok] statement: 1 script(s)\nZAPP_STATEMENT_OK: the statement holds at block 200`
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == no forged ZAPP_STATEMENT_OK line from a signature's text (expect 0 lines starting with it, at least 1 holding it)
 starting=0 holding=1 PASS
-== cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --purpose loan mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+== cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --purpose audit-15.11.2026 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
 ZAPP_STATEMENT_FAIL: --purpose: give it once
 exit=1 PASS
 == cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
@@ -154,6 +154,11 @@ exit=1 PASS
 == zapp-statement add-sig with entry 1's signature for entry 0 (expect exit 1)
 zapp-statement: BIP-322 simple: the signature is not exactly one base64 witness
 exit=1 PASS
+== zapp-statement draft --purpose --nonce --nonce 5be1 (expect exit 0, purpose "--nonce")
+exit=0 purpose=--nonce PASS
+== zapp-statement draft --purpose audit-15.11.2026 --nonce 5be1 --purpose audit-15.11.2026 (expect exit 1)
+zapp-statement: --purpose: give it once
+exit=1 PASS
 == node wasm/test-statement.mjs (expect exit 0)
 PASS  holds (demo: below minimum work)   demo (want demo): statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each
 PASS  another purpose                    fail (want fail): purpose "audit-15.11.2026" is not the one asked for ("other")
@@ -167,7 +172,7 @@ PASS  max age without a tip              fail (want fail): max age given without
 PASS  a purpose with a trailing space    fail (want fail): purpose: no leading or trailing spaces
 PASS  image pinned: the current id       fail (want fail): statement NOT checked: the receipt did not verify
 PASS  no image id: the image it names    demo (want demo): statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each
-PASS  swapped signatures                 fail (want fail): entry 0 (script 00145b35494694f0e6cb77f54bf2f1f0227ff468ff3a): BIP-322 simple: the signature is not exactly one base64 witness
+PASS  swapped signatures                 fail (want fail): entry 0 (script 001442f84cef9988a83097b9713e6cb11bbc5fe84ec2): BIP-322 simple: the signature is not exactly one base64 witness
 PASS  dev-mode FakeReceipt               fail (want fail)
 PASS  no image id: reports 8888d59c      8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
 PASS  frame: the glue's bytes            demo (want demo)
@@ -175,4 +180,4 @@ PASS  frame: a byte past the end         fail (want fail)
 PASS  frame: cut short                   fail (want fail)
 18/18 as expected (zapp-statement.wasm)
 exit=0 PASS
-zapps/statement test_statement.sh: 39/39 as expected
+zapps/statement test_statement.sh: 41/41 as expected
