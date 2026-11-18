@@ -109,7 +109,7 @@ zapp-liveness [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --livene
 ```
 
 In the C ABI (`zapp_liveness_verify`, `zapps/liveness/ffi/include/zapp_liveness.h`) and WASM (`verifyLiveness` in
-`zapps/liveness/wasm/zapp-liveness.js`), the facts JSON is `{"liveness": [{"proof": "<hex>", "ask": "<question>"}]}`. There the question must claim its answer (`=unspent` or
+`zapps/liveness/wasm/zapp-liveness.js`), the facts JSON is `{"liveness": [{"proof": "<hex>", "ask": "<question>"}]}`, those keys only: any other key at either level, a key given twice, or a top level or fact that is not an object is refused (`zapp_liveness::facts_from_json`, review 18.11.2026). There the question must claim its answer (`=unspent` or
 `=spent…`), because those calls return only whether a claim holds.
 
 The fields come from the creating block. A block does not show the BIP30 flag, so the producer tries both values and
@@ -123,11 +123,11 @@ and that run's `history.bin` (`zapps/liveness/vectors/`), 15.11.2026; all of it 
 | suite | result |
 |---|---|
 | libzync unit tests (`liveness::tests`) | 2/2 |
-| zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, a dev-mode and a tampered receipt, `created=` / `coinbase=`, a re-created outpoint, one spelling per question, the 0x05 undo leaf, regtest above block 200, every bit flipped | 12/12 |
+| zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, a dev-mode and a tampered receipt, `created=` / `coinbase=`, a re-created outpoint, one spelling per question, the 0x05 undo leaf, regtest above block 200, every bit flipped, the facts JSON's keys (18.11.2026) | 13/13 (1 timing test ignored) |
 | `zapp-liveness serve` `/live` route | 1/1 |
 | CLI and producer, `vectors/run.sh` | 34/34 (16.11.2026: RISC0_DEV_MODE set on the real receipt, refused; `--image 46666b6f` refuses the receipt of superseded image 8888d59c; with none given it verifies as that superseded image) |
-| C ABI, `ffi/test_liveness.c` | 12/12 |
-| WASM, `wasm/test-liveness.mjs` | 21/21 since 16.11.2026 (the image id pinned exactly and the image that verified reported; the raw frame: the glue's bytes, a trailing byte, cut short) (and the frame unit test, 1/1) |
+| C ABI, `ffi/test_liveness.c` | 20/20 (18.11.2026: 7 cases on the facts JSON's keys: a misspelt key beside and alone, the key twice, `expect` inside, not an object, an unknown fact field) |
+| WASM, `wasm/test-liveness.mjs` | 31/31 since 18.11.2026 (the image id pinned exactly and the image that verified reported; the raw frame: the glue's bytes, a trailing byte, cut short; the facts JSON's keys, the C ABI's 7 cases) (and the frame unit test, 1/1) |
 | C ABI beside the core's in one program, `ffi/test_with_core.c` | OK (16.11.2026) |
 | `zapps/common` | 8/8 and the zapp-checks.sh controls; `zapps/corecheck` 2/2 (16.11.2026) |
 

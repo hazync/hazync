@@ -19,7 +19,8 @@ extern "C" {
  * network: 0 mainnet, 1 signet; | 0x10 a coin-log image, | 0x20 the product image (as swiftsync_verify_facts).
  * image_hex: NULL for the built-in image, else 64 hex digits. anchor_json: a ChainState, or NULL for genesis.
  * facts_json: {"liveness": [{"proof": "<lower-case hex>", "ask": "<txid>:<vout>@<height|tip>=unspent|=spent[:<h>[:<tx>:<vin>]]
- *   [,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]"}]}: one outpoint's state after a height each. The ask is
+ *   [,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]"}]}, that key only (any other, or one given twice, is
+ *   refused): one outpoint's state after a height each. The ask is
  *   YOURS and must claim its answer: the proof must be about exactly that outpoint and height, and the claimed state,
  *   amount, script, creation height and coinbase flag must be the proof's. Give created=: an outpoint created again over
  *   its own spent coin has two coins, and without it a true answer about the other one passes. Lower-case hex, decimal
