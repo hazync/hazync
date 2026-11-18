@@ -795,6 +795,7 @@ jobs:
           python3 test_reorg.py --control-m2
           python3 test_reorg.py --control-m3
           python3 test_reorg.py --control-h1
+          python3 test_reorg.py --control-latch
       - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
         run: cd coordinator && python3 test_offsite_reorg.py
       - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)
