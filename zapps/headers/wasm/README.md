@@ -13,7 +13,7 @@ node test-headers.mjs    # the real chained receipts and MMR / transaction inclu
 
 | | |
 |---|---|
-| size | 1,139,635 bytes raw, 321,541 gzipped |
-| sha256 (this commit, `./build.sh`) | `9217726d436912bf98d4caf2de27264f996ca614b44f3f73e45b517119620caa` (headers image `de54b94f`; Rust 1.99.0 in the published image ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…, HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1, fixed stage path; laptop and a fresh clone on hazync-coord, 18.11.2026; with the review fix of 18.11.2026 (the include JSON and its /tx answer take only their documented keys, each once); before it `89544a8e…`, before 16.11.2026's `8eb3cfe9…`) |
+| size | 1,139,873 bytes raw, 321,692 gzipped |
+| sha256 (this commit, `./build.sh`) | `46413ab21b3fc9fe1162ff026832e669f1e9cc0e14680f60f2c08f8dc4d3e248` (headers image `de54b94f`; Rust 1.99.0 in the published image ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…, HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1, fixed stage path; laptop and a fresh clone on hazync-coord, 18.11.2026; with the review fix of 18.11.2026 (the include JSON and its /tx answer take only their documented keys, each once; an explicit null txid or tx refused); before it `89544a8e…`, before 16.11.2026's `8eb3cfe9…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-headers.mjs` (WASM_HEADERS_OK), run by `../test.sh` in CI's zapps job |
