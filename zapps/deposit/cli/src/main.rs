@@ -133,8 +133,8 @@ fn build_main(a: Vec<String>) {
     };
     // the header chain's tip, from its last receipt's journal (the verifier checks the receipts)
     let htip: Option<HeaderState> = headers.last().map(|b| {
-        let r: risc0_zkvm::Receipt = bincode::deserialize(b).unwrap_or_else(|e| die(&format!("header receipt: {e}")));
-        r.journal.decode::<([u8; 32], HeaderState)>().unwrap_or_else(|e| die(&format!("header journal: {e}"))).1
+        let r = swiftsync_verify::decode_receipt(b).unwrap_or_else(|e| die(&format!("header receipt: {e}")));
+        swiftsync_verify::decode_journal::<([u8; 32], HeaderState)>(&r.journal).unwrap_or_else(|e| die(&format!("header journal: {e}"))).1
     });
     // --tip-path <file>: the core tip's MMR path, already made (`mmr-path`), instead of reading the headers file
     let read_path = |f: &str| -> Vec<[u8; 32]> {

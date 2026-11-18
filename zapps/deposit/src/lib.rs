@@ -459,8 +459,9 @@ pub fn make_bundle(network: &str, core: &[u8], header_receipts: &[Vec<u8>], hist
 
 /// The core tip's state, for a tool that builds a bundle (it must already have verified the receipt).
 pub fn core_state(receipt: &[u8]) -> Result<ChainState, String> {
-    let r: risc0_zkvm::Receipt = bincode::deserialize(receipt).map_err(|e| format!("core receipt: {e}"))?;
-    r.journal.decode().map_err(|e| format!("core journal: {e}"))
+    // the core's strict decoders (#758): no trailing bytes, no word risc0 asserts on, a journal of whole words
+    let r = swiftsync_verify::decode_receipt(receipt).map_err(|e| format!("core receipt: {e}"))?;
+    swiftsync_verify::decode_journal(&r.journal).map_err(|e| format!("core journal: {e}"))
 }
 
 #[cfg(test)]
