@@ -46,12 +46,20 @@ def check(ok, what):
         fails.append(what)
 
 
+import ipaddress   # noqa: E402
+
+OLD_PUBLIC_RULE = "(not ipaddress.ip_address(ip).is_private)"      # review H1: 100.65.x.x passes it
+
 if CONTROL:
     # ⚠ THE CONTROLS MUTATE THE SHIPPED CLIENT, one v2 difference each.
     sb.NO_CAPACITY_STATUS = None                      # a 400 read as a refusal, as a naive port would
-    sb._public_ip = lambda ip: True                   # isIpPublic dropped: a 10.x entry is taken for SSH
+    sb._public_ip = lambda ip: not ipaddress.ip_address(str(ip)).is_private   # H1: "not private" is not "public"
     sb.RATE_LIMIT_RETRIES = 0                         # a 429 surfaces as a refusal
     sb.RunPod.ssh_of = lambda self, pod_id: None      # only the listing is read for SSH
+    sb.REQUEST_REFUSALS = ()                          # M1: a 401/402/422 hidden behind another type's 400
+    sb.RunPod._stocked = lambda self, types: set()    # M1: an all-400 is always "no capacity"
+    sb.RATE_LIMITED = -1                              # M2: a 429 counted as a refusal / ends the terminate tries
+    sb.Bot._price_ok = lambda self, c, p, info: True  # L2: a price unknown at deploy is never checked again
 
 
 PUBLIC_IP = "45.23.12.1"         # RunPod's documentation example; nothing here dials it
@@ -68,6 +76,8 @@ class FakeV2:
         self.page_size = 1000
         self.rate_limit = 0                              # answer this many requests 429 first
         self.delete_status = {}                          # pod id -> forced status for DELETE
+        self.create_cost = 0.74                          # what a new pod's `cost` reads at first
+        self.cost_after = 0.74                           # ... and on every later GET
         self.catalog = [
             {"id": "NVIDIA GeForce RTX 4090", "name": "RTX 4090", "memory": 24, "secure": True, "community": True,
              "manufacturer": "NVIDIA", "price": {"secure": 0.89, "community": 0.34}, "availability": "LOW"},
@@ -89,12 +99,13 @@ class FakeV2:
                 q = dict(urllib.parse.parse_qsl(u.query))
                 fake.reqs.append((method, u.path, q, body, dict(self.headers)))
                 code, obj, hdrs = fake.answer(method, u.path, q, body)
-                out = b"" if obj is None else json.dumps(obj).encode()
+                out = b"" if obj is None else (obj if isinstance(obj, bytes) else json.dumps(obj).encode())
                 self.send_response(code)
                 for k, v in hdrs:
                     self.send_header(k, v)
                 if out:
-                    self.send_header("Content-Type", "application/problem+json" if code >= 400 else "application/json")
+                    self.send_header("Content-Type", "text/plain" if isinstance(obj, bytes) else
+                                     "application/problem+json" if code >= 400 else "application/json")
                 self.send_header("Content-Length", str(len(out)))
                 self.end_headers()
                 if out:
@@ -135,9 +146,11 @@ class FakeV2:
                 if code != 201:
                     return code, obj, ()
             pid = f"pod{len(self.pods) + 1}"
-            self.pods[pid] = {"name": body["name"], "gpu": body["gpu"]["id"], "cost": 0.74, "dc": None,
+            self.pods[pid] = {"name": body["name"], "gpu": body["gpu"]["id"], "cost": self.create_cost, "dc": None,
                               "ports": [{"private": 22, "public": 40022, "type": "tcp", "ip": PUBLIC_IP}]}
-            return 201, self.pod_obj(pid), ()
+            obj = self.pod_obj(pid)
+            self.pods[pid]["cost"] = self.cost_after
+            return 201, obj, ()
         if method == "GET" and path == "/v2/pods":
             ids = sorted(self.pods)
             start = int(q.get("cursor") or 0)
@@ -157,6 +170,8 @@ class FakeV2:
             if method == "DELETE":
                 del self.pods[pid]
                 return 204, None, ()
+        if method == "GET" and path == "/v2/catalog/gpus" and self.catalog is None:
+            return self.problem(500, "catalogue down")
         if method == "GET" and path == "/v2/catalog/gpus":
             stock = q.get("include") == "AVAILABILITY"
             return 200, {"gpus": [dict(g) if stock else {k: v for k, v in g.items() if k != "availability"}
@@ -194,6 +209,7 @@ check(got is not None and got["gpu_type"] == A40,
       f"a 400 on the first type moves on to the next, like GraphQL's null answer did ({got})")
 f = FakeV2()
 f.create_answers = [(400, {"status": 400, "detail": "no capacity"})] * 2
+f.catalog[0]["availability"] = "NONE"             # the catalogue agrees: no SECURE stock for either type
 try:
     got, raised = client(f).deploy("hz-sponsor-1-3", PUB, gpu_types=(R4090, A40)), None
 except sb.RunPodError as e:
@@ -218,7 +234,49 @@ try:
 except sb.RunPodError as e:
     got, raised = None, e
 check(raised is None and got is None,
-      "a refusal on one type and a capacity miss on the next is an ANSWER (None), as with GraphQL")
+      "RunPod's own 403 ('no access to this pool') skips that type; a 400 on the next is an ANSWER (None)")
+f = FakeV2()
+f.create_answers = [(403, b"error code: 1010\n"), (201, None)]
+try:
+    got, raised = client(f).deploy("hz-sponsor-1-5b", PUB, gpu_types=(R4090, A40)), None
+except sb.RunPodError as e:
+    got, raised = None, e
+check(raised is not None and raised.status == 403 and sum(1 for r in f.reqs if r[0] == "POST") == 1,
+      f"a Cloudflare 403 (not RunPod's answer) is raised at once -- it refuses every type ({raised})")
+
+# ── 2b. ⛔ review M1: request refusals are never masked, and an all-400 with stock is a refusal ─────────
+print("== M1: a 401/402/422 is never hidden by another type's 400 ==")
+for code in (401, 402, 422):
+    for order in ("first", "second"):
+        f = FakeV2()
+        ans = [(code, {"status": code, "detail": f"simulated {code}"}), (400, {"status": 400, "detail": "none"})]
+        f.create_answers = ans if order == "first" else ans[::-1]
+        try:
+            got, raised = client(f).deploy("hz-sponsor-m1", PUB, gpu_types=(R4090, A40)), None
+        except sb.RunPodError as e:
+            got, raised = None, e
+        check(raised is not None and raised.status == code,
+              f"M1: HTTP {code} on the {order} type is a refusal even when another type answered 400 ({raised})")
+f = FakeV2()
+f.create_answers = [(400, {"status": 400, "detail": "env.PUBLIC_KEY: too long"})] * 2
+api = client(f)
+try:
+    got, raised = api.deploy("hz-sponsor-m1b", PUB, gpu_types=(R4090, A40)), None
+except sb.RunPodError as e:
+    got, raised = None, e
+check(raised is not None and raised.status == 400 and "PUBLIC_KEY: too long" in str(raised) and "RTX 4090" in str(raised),
+      f"M1: 400 on every type while the catalogue shows stock for one is a REFUSAL naming the detail ({raised})")
+check(api.last_misses == [(R4090, "env.PUBLIC_KEY: too long"), (A40, "env.PUBLIC_KEY: too long")],
+      f"M1: every 400's detail is kept for the log ({api.last_misses})")
+f = FakeV2()
+f.create_answers = [(400, {"status": 400, "detail": "none"})] * 2
+f.catalog = None                                    # the catalogue cannot be read
+try:
+    got, raised = client(f).deploy("hz-sponsor-m1c", PUB, gpu_types=(R4090, A40)), None
+except sb.RunPodError as e:
+    got, raised = None, e
+check(raised is None and got is None,
+      "M1: when the catalogue cannot be read an all-400 stays a capacity miss -- a failed READ never latches")
 
 # ── 3. ⛔ 429 is retried after Retry-After ───────────────────────────────────────────────────────────
 print("== the per-user quota ==")
@@ -345,6 +403,224 @@ check(body["ports"] == ["22/tcp", "9110/tcp"] and body["cloud"] == "SECURE" and 
 check(p and p["gpu_type"] == A40 and p["price"] == 0.74 and set(p) == {"id", "name", "gpu_type", "price", "dc"},
       f"it walks past a capacity miss and keeps its GraphQL-era result shape ({p})")
 
+# ── H1. ⛔ RunPod's internal 100.65.x.x is NOT public, whatever its order ─────────────────────────────
+print("== H1: carrier-grade NAT (100.64.0.0/10) is not a public address ==")
+CGNAT = "100.65.12.34"           # the shape ~/libzync-gpu/live/fleet.txt recorded as isIpPublic:false
+f = FakeV2()
+for pid, order in (("first", [CGNAT, PUBLIC_IP]), ("last", [PUBLIC_IP, CGNAT])):
+    f.pods[pid] = {"name": pid, "gpu": A40, "cost": 1,
+                   "ports": [{"private": 22, "public": 50000 + i, "type": "tcp", "ip": ip} for i, ip in enumerate(order)]
+                   + [{"private": 9110, "public": 51000 + i, "type": "tcp", "ip": ip} for i, ip in enumerate(order)]}
+f.pods["only"] = {"name": "only", "gpu": A40, "cost": 1,
+                  "ports": [{"private": 22, "public": 52000, "type": "tcp", "ip": CGNAT}],
+                  "direct": {"host": CGNAT, "port": 52000, "username": "root", "command": "ssh"}}
+api = client(f)
+p22 = lambda pid: api.ports_of(pid).get(22)      # noqa: E731  (ports_of, not ssh_of: one mutation per check)
+check(p22("first") == (PUBLIC_IP, 50001) and p22("last") == (PUBLIC_IP, 50000),
+      f"H1: the GLOBAL 22 mapping wins whether the 100.65 entry comes first or last "
+      f"({p22('first')}, {p22('last')})")
+check(api.ports_of("first")[9110][0] == PUBLIC_IP and api.ports_of("last")[9110][0] == PUBLIC_IP,
+      "H1: and the same for 9110")
+check(p22("only") is None, f"H1: a pod with only a 100.65 address (runtime or ssh.direct) has NO public SSH ({p22('only')})")
+f.pods["two"] = {"name": "two", "gpu": A40, "cost": 1, "ports": [
+    {"private": 22, "public": 53000, "type": "tcp", "ip": PUBLIC_IP},
+    {"private": 22, "public": 53001, "type": "tcp", "ip": "45.23.12.2"}]}
+check(p22("two") == (PUBLIC_IP, 53000), "H1: between two global entries the FIRST is kept (deterministic)")
+
+# The shell pickers (experimental bench scripts) run the same rule in an inline python3 -c. Run each one.
+print("== H1: the shell scripts' port pickers ==")
+import subprocess   # noqa: E402
+ROOT = pathlib.Path(HERE).parent
+BENCH = ROOT / "experimental" / "libzync-bench"
+PICK = re.compile(r"python3 -c '\n?(import ipaddress,json,sys\n.*?)'", re.S)
+sample = {"id": "p", "runtime": {"ports": [
+    {"private": 22, "public": 40001, "type": "tcp", "ip": CGNAT},
+    {"private": 9110, "public": 40002, "type": "tcp", "ip": CGNAT},
+    {"private": 22, "public": 40003, "type": "tcp", "ip": PUBLIC_IP},
+    {"private": 9110, "public": 40004, "type": "tcp", "ip": PUBLIC_IP},
+    {"private": 22, "public": 40005, "type": "tcp", "ip": "45.23.12.2"},
+    {"private": 9110, "public": 40006, "type": "tcp", "ip": "45.23.12.2"}]}}
+pickers = []
+for sh in sorted(BENCH.rglob("*.sh")):
+    for m in PICK.finditer(sh.read_text()):
+        pickers.append((sh.relative_to(ROOT), m.group(1)))
+check(len(pickers) >= 9, f"H1: found the scripts' port pickers ({len(pickers)})")
+for rel, code in pickers:
+    if CONTROL:
+        code = code.replace("ipaddress.ip_address(ip).is_global", OLD_PUBLIC_RULE)
+    out = subprocess.run([sys.executable, "-c", code, "NAME"], input=json.dumps(sample),
+                         capture_output=True, text=True).stdout.split()
+    ok = (out[:2] == [PUBLIC_IP, "40003"] or out[:5] == ["NAME", PUBLIC_IP, "40003", PUBLIC_IP, "40004"])
+    check(ok, f"H1: {rel} picks the first GLOBAL mapping, not 100.65 or a later one ({out[:6]})")
+    if out[:1] == ["NAME"]:
+        check(out[5:6] == [CGNAT], f"H1: {rel} records the internal 100.65 address as the private one ({out[5:6]})")
+    err = subprocess.run([sys.executable, "-c", code, "NAME"], input=json.dumps({"status": 429, "title": "x"}),
+                         capture_output=True, text=True).stdout.split()
+    check(err in ([], ["ERR", "429"]),
+          f"H1/M2: {rel} reads a 429 body as no mapping or as ERR 429, never as ports ({err})")
+check(any(err == ["ERR", "429"] for err in
+          [subprocess.run([sys.executable, "-c", c, "N"], input='{"status": 429}', capture_output=True,
+                          text=True).stdout.split() for r, c in pickers if "podup" in str(r)]),
+      "M2: podup.sh tells a 429 apart from 'no ports' (ERR 429), so it waits instead of giving up")
+
+# ── M2. the shared quota: a 429 is waited out, never a refusal, never 'no ports' ─────────────────────
+print("== M2: the quota ==")
+
+
+class QuotaAPI:
+    def __init__(self, limited):
+        self.limited, self.listed, self.terminated = limited, 0, 0
+        self.gone = False
+
+    def terminate(self, pid):
+        if self.limited > 0:
+            self.limited -= 1
+            raise sb.RunPodError("HTTP 429", status=429)
+        self.terminated += 1
+        self.gone = True
+
+    def pods(self):
+        self.listed += 1
+        return [] if self.gone else [{"id": "pX"}]
+
+
+qa = QuotaAPI(limited=20)
+waits = []
+ok = sb.terminate_confirmed(qa, "pX", sleep=waits.append, tries=6, wait_s=5)
+check(ok and qa.terminated == 1,
+      f"M2: twenty 429'd DELETEs do not use up terminate_confirmed's 6 tries -- the pod is still released "
+      f"({ok}, waited {sum(waits):.0f}s)")
+qa = QuotaAPI(limited=10 ** 6)
+ok = sb.terminate_confirmed(qa, "pX", sleep=lambda s: None, tries=6, wait_s=5)
+check(not ok, "M2: but a quota that NEVER clears ends in 'unconfirmed' (loud), not a hang")
+
+
+class RL:
+    ssh_pubkey = PUB
+
+
+def launch_once(exc):
+    class A:
+        last_misses = []
+
+        def deploy(self, name, pub):
+            raise exc
+    with tempfile.TemporaryDirectory() as d:
+        logs = []
+        bot = sb.Bot(os.path.join(d, "bot.db"), A(), RL(), max_pods=2, max_usd=10, max_usd_per_hour=5,
+                     capacity_backoff_s=0, log=logs.append)
+        real = sb.pending_work
+        sb.pending_work = lambda *a, **k: [1]
+        try:
+            bot._launch(None, 1.0)
+        finally:
+            sb.pending_work = real
+        return bot, logs
+
+
+bot, logs = launch_once(sb.RunPodError("HTTP 429 Too Many Requests: minute window exceeded", status=429))
+check(bot._refusals == 0 and bot.stop_reason is None,
+      f"M2: a 429 on deploy is NOT a refusal -- it never moves the latch ({bot._refusals}, {logs[-1:]})")
+bot, logs = launch_once(sb.RunPodError("HTTP 402 Payment Required: insufficient balance", status=402))
+check(bot._refusals == 1, "a 402 on deploy still IS a refusal")
+
+
+class SlowPorts:
+    def __init__(self):
+        self.n = 0
+
+    def ports_of(self, pid):
+        self.n += 1
+        if self.n <= 2:
+            raise sb.RunPodError("HTTP 429", status=429)
+        return {22: (PUBLIC_IP, 40022)}
+
+
+class Ready:
+    def run(self, card, cmd):
+        return "READY"
+
+
+if CONTROL:
+    tip_smoke._ports_or_none = lambda api, pod_id: api.ports_of(pod_id)        # M2: an error ends the wait
+real_sleep, slept = tip_smoke.time.sleep, []
+tip_smoke.time.sleep = slept.append
+try:
+    ready, _ = tip_smoke.wait_for_ssh(SlowPorts(), [{"id": "a", "name": "c1"}], Ready(), timeout_s=60)
+    raised = None
+except Exception as e:      # noqa: BLE001
+    ready, raised = {}, e
+finally:
+    tip_smoke.time.sleep = real_sleep
+check(raised is None and "c1" in ready,
+      f"M2: wait_for_ssh survives 429s from ports_of and still brings the card up ({raised!r}, {sorted(ready)})")
+check(slept[:2] == [20, 40], f"M2: and it BACKS OFF while RunPod refuses (slept {slept[:3]})")
+
+# ── L2. a price of 0 is unknown, not free ───────────────────────────────────────────────────────────
+print("== L2: cost 0 while PROVISIONING ==")
+for later, want_state in ((0.9, "terminated"), (0.3, "booting")):
+    f = FakeV2()
+    f.create_cost, f.cost_after = 0, later
+    api = client(f)
+    info = api.deploy("hz-sponsor-l2", PUB, gpu_types=(A40,))
+    with tempfile.TemporaryDirectory() as d:
+        bot = sb.Bot(os.path.join(d, "bot.db"), api, None, max_pods=1, max_usd=10, max_usd_per_hour=1,
+                     pod_price_ceiling=0.5, log=lambda m: None)
+        pod = sb.Pod(info, 0.0)
+        bot._live = lambda: [pod]
+        bot._boot = lambda p: None
+        bot._terminate = lambda c, p, why: setattr(p, "state", "terminated")
+        bot.ssh_timeout_s = 10 ** 9
+        bot._observe(None, 1.0)
+    check(info["cost_per_hr"] == 0 and pod.state == want_state and pod.cost_per_hr == later,
+          f"L2: a pod deployed at cost 0 whose price turns out ${later}/h against a $0.50 ceiling is "
+          f"{want_state} before it boots ({pod.state}, ${pod.cost_per_hr})")
+f = FakeV2()
+f.create_cost, f.cost_after = 0, 0.61
+p = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10).deploy_listening("hz-smoke-l2", PUB, gpu_types=(A40,))
+check(p["price"] == 0.61, f"L2: tip_smoke reads the price again when the create answered 0 ({p['price']})")
+
+# ── M3 / L1. the bench scripts: bounded calls, loud unknowns ─────────────────────────────────────────
+print("== M3 / L1: the bench scripts ==")
+defs = []
+for sh in sorted(BENCH.rglob("*.sh")):
+    for n, line in enumerate(sh.read_text().split("\n"), 1):
+        if re.match(r"\s*(rp|gqlbal) ?\(\)", line):
+            if CONTROL and "pre970" in str(sh):
+                line = line.replace("--max-time 20 ", "")
+            defs.append((f"{sh.relative_to(ROOT)}:{n}", "--max-time" in line))
+check(len(defs) >= 15 and all(ok for _, ok in defs),
+      f"M3: every rp/gqlbal curl has --max-time ({[w for w, ok in defs if not ok][:4]}, {len(defs)} defs)")
+bal = [str(sh.relative_to(ROOT)) for sh in BENCH.rglob("*.sh") if "|| echo 99" in sh.read_text()]
+check(not bal, f"M3: no script turns an unreadable balance into a silent $99 ({bal})")
+unread = [str(sh.relative_to(ROOT)) for sh in BENCH.rglob("*.sh")
+          if "clientBalance" in sh.read_text() and "UNREADABLE" not in sh.read_text() and sh.name != "pod.sh"]
+check(not unread, f"M3: every balance guard says UNREADABLE when it cannot read the balance ({unread})")
+
+with tempfile.TemporaryDirectory() as home:
+    os.makedirs(os.path.join(home, ".hazync"))
+    open(os.path.join(home, ".hazync", "runpod.key"), "w").write("k-test")
+    script = (BENCH / "gpu" / "fleet" / "pod.sh").read_text()
+    if CONTROL:
+        script = re.sub(r'\|\| \{ echo "pod.sh status: RunPod did not list pods.*?exit 1; \}', "|| true", script, flags=re.S)
+        script = script.replace('lst["pods"]', '(lst.get("pods") or [])')      # the first version's reading
+    path = os.path.join(home, "pod.sh")
+    open(path, "w").write(script)
+    f = FakeV2()
+    f.pods["q1"] = {"name": "hz-q1", "gpu": A40, "cost": 1,
+                    "ports": [{"private": 22, "public": 40022, "type": "tcp", "ip": PUBLIC_IP}]}
+    env = dict(os.environ, HOME=home, RUNPOD_API=f.url, RUNPOD_GQL=f.url + "/no-graphql")
+    r = subprocess.run(["bash", path, "status"], env=env, capture_output=True, text=True, timeout=60)
+    good = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else {}
+    check([p["id"] for p in good.get("pods", [])] == ["q1"] and good["pods"][0].get("runtime")
+          and good.get("balance") is None,
+          f"L1: pod.sh status lists the pods with their runtime filled in, balance null when unreadable "
+          f"(rc {r.returncode})")
+    f.rate_limit = 1
+    r = subprocess.run(["bash", path, "status"], env=env, capture_output=True, text=True, timeout=60)
+    check(r.returncode != 0 and not r.stdout.strip(),
+          f"L1: a 429 listing makes pod.sh status FAIL, not print 'no pods' (rc {r.returncode}, {r.stdout[:60]!r})")
+
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
 ROOT = pathlib.Path(HERE).parent
@@ -371,14 +647,42 @@ for p in ROOT.rglob("*"):
 check(not left, f"no code calls RunPod GraphQL outside the balance gap ({left[:6]}{' ...' if len(left) > 6 else ''})")
 
 print()
+# ⚠ NAME EVERY ONE AND COUNT THEM: each is the consequence of one mutation above (some share a cause).
 EXPECTED_CONTROL = {
-    "400 for every type is 'no capacity' (None), NOT a refusal",
-    "a refusal on one type and a capacity miss on the next is an ANSWER",
-    "two 429s are waited out for Retry-After",
-    "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping",
-    "ports_of keeps exactly the public mappings",
-    "when the listing does carry runtime, its public mapping is used directly",
+    "400 for every type is 'no capacity'",
+    "H1: a pod with only a 100.65 address",
+    "H1: and the same for 9110",
+    "H1: experimental/libzync-bench/gpu/fleet/live/grab2.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/gpu/fleet/live/grab2.sh records the internal 100.65 address as the private one",
+    "H1: experimental/libzync-bench/gpu/fleet/live/podup.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/gpu/fleet/live/podup.sh records the internal 100.65 address as the private one",
+    "H1: experimental/libzync-bench/gpu/fleet/podup.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/gpu/fleet/podup.sh records the internal 100.65 address as the private one",
+    "H1: experimental/libzync-bench/gpu/run_c14_pod.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/gpu/run_paper_pod.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/headers/run_headers_pod.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/pre970/gpu_run.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/signet/genesis/gpu_run.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: experimental/libzync-bench/signet/gpu_r4/gpu_run2.sh picks the first GLOBAL mapping, not 100.65 or a later one",
+    "H1: the GLOBAL 22 mapping wins whether the 100.65 entry comes first or last",
+    "L1: a 429 listing makes pod.sh status FAIL, not print 'no pods'",
+    "L2: a pod deployed at cost 0 whose price turns out $0.3/h against a $0.50 ceiling is booting before it boots",
+    "L2: a pod deployed at cost 0 whose price turns out $0.9/h against a $0.50 ceiling is terminated before it boots",
+    "M1: 400 on every type while the catalogue shows stock for one is a REFUSAL naming the detail",
+    "M1: HTTP 401 on the first type is a refusal even when another type answered 400",
+    "M1: HTTP 402 on the first type is a refusal even when another type answered 400",
+    "M1: HTTP 422 on the first type is a refusal even when another type answered 400",
+    "M1: every 400's detail is kept for the log",
+    "M1: when the catalogue cannot be read an all-400 stays a capacity miss -- a failed READ never latches",
+    "M2: a 429 on deploy is NOT a refusal -- it never moves the latch",
+    "M2: and it BACKS OFF while RunPod refuses",
+    "M2: twenty 429'd DELETEs do not use up terminate_confirmed's 6 tries -- the pod is still released",
+    "M2: wait_for_ssh survives 429s from ports_of and still brings the card up",
+    "M3: every rp/gqlbal curl has --max-time",
+    "RunPod's own 403",
     "a pod whose listing has no runtime still gets its SSH and boots",
+    "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",
+    "two 429s are waited out for Retry-After and the create then lands",
     "with no runtime ports, RunPod's own ssh.direct is used",
 }
 if CONTROL:
@@ -392,7 +696,7 @@ if CONTROL:
         for x in extra:
             print(f"  unexpected failure: {x}")
         sys.exit(1)
-    print(f"CONTROL OK — all {len(EXPECTED_CONTROL)} wrong v2 mappings were caught")
+    print(f"CONTROL OK — all {len(EXPECTED_CONTROL)} expected failures appeared, and nothing else failed")
     sys.exit(0)
 if fails:
     print(f"⛔ {len(fails)} check(s) FAILED")

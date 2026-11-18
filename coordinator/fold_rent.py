@@ -291,6 +291,17 @@ def main(argv=None):
         pod_id = info["id"]
         pod = sb.Pod(info, time.time())
         rate = pod.cost_per_hr
+        # ⚠ RunPod v2 can answer a PROVISIONING pod with cost 0. That is an UNKNOWN price, not a free one: ask
+        # the pod itself for a minute before refusing to run unbounded (the refusal below still stands).
+        for _ in range(6):
+            if rate > 0:
+                break
+            time.sleep(10)
+            try:
+                rate = float((api.pod(pod_id) or {}).get("cost_per_hr") or 0)
+            except Exception as e:
+                print(f"  could not read the pod's price: {e}")
+        pod.cost_per_hr = rate
         budget_s = seconds_for_budget(a.budget_usd, rate)
         capped_s = min(budget_s, a.minutes * 60) if budget_s else 0
         if budget_s and capped_s < budget_s:

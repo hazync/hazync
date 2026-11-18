@@ -16,7 +16,7 @@ DEADLINE=$(( $(date +%s) + ${DEADLINE_MIN:-120} * 60 ))
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 -o ServerAliveInterval=30"
 log () { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/driver.log"; }
-rp (){ curl -s -X "$1" -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" ${3:+-d "$3"} "https://api.runpod.io/v2$2"; }
+rp (){ curl -s --max-time 20 -X "$1" -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" ${3:+-d "$3"} "https://api.runpod.io/v2$2"; }
 ID=""; HOST=""; PORT=""
 term () {
   [ -n "$ID" ] || return 0
@@ -51,9 +51,9 @@ done
 for i in $(seq 1 60); do
   read HOST PORT < <(rp GET "/pods/$ID" | python3 -c '
 import ipaddress,json,sys
-p=json.load(sys.stdin)
-for x in ((p.get("runtime") or {}).get("ports") or []):
-  if x.get("private")==22 and x.get("public") and x.get("ip") and not ipaddress.ip_address(x["ip"]).is_private: print(x["ip"], x["public"])')
+p=json.load(sys.stdin); g=lambda ip: bool(ip) and ipaddress.ip_address(ip).is_global
+m=[x for x in ((p.get("runtime") or {}).get("ports") or []) if x.get("private")==22 and x.get("public") and g(x.get("ip"))]
+if m: print(m[0]["ip"], m[0]["public"])')
   [ -n "${HOST:-}" ] && ssh $K -p "$PORT" root@"$HOST" true 2>/dev/null && break
   HOST=""; sleep 15
 done

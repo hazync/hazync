@@ -92,25 +92,47 @@ class SmokeRunPod(sponsor_bot.RunPod):
         # In mode 6 the coordinator PUSHES segments over the network to every worker, so RTT
         # plausibly reaches per-card throughput. Whether it does is unmeasured -- which is
         # exactly why it must be written down before anyone compares two fleets again.
-        dc = p.get("dataCenterId")
-        if not dc:
+        dc, price = p.get("dataCenterId"), float(p.get("cost") or 0)
+        # ⚠ v2 can answer a PROVISIONING pod with no data centre and cost 0 (unknown, not free): ask the pod.
+        if not dc or price <= 0:
             try:
-                dc = (self.pod_raw(p["id"]) or {}).get("dataCenterId")
+                again = self.pod_raw(p["id"]) or {}
+                dc = dc or again.get("dataCenterId")
+                price = price if price > 0 else float(again.get("cost") or 0)
             except Exception:
                 pass          # never fail a rental over a label
-        return {"id": p["id"], "name": name, "gpu_type": gt,
-                "price": float(p.get("cost") or 0), "dc": dc}
+        return {"id": p["id"], "name": name, "gpu_type": gt, "price": price, "dc": dc}
+
+
+# ⛔ ONE GET PER POD PER ROUND, ON A QUOTA SHARED BY EVERY PROCESS ON THE KEY (180/min, read from
+# RateLimit-Policy 2026-11-18). A 40-card fleet polled every 10 s is 240/min on its own. A 429 (or any read
+# error) is NOT "no port yet" and must not end the wait: the round stops, the wait backs off, and it goes on.
+PORTS_BACKOFF_S = (10, 20, 40, 60)
+
+
+def _ports_or_none(api, pod_id):
+    """api.ports_of, or None when RunPod did not answer (429, 5xx, no answer) -- never {} for an error."""
+    try:
+        return api.ports_of(pod_id)
+    except Exception as e:                                         # noqa: BLE001
+        log(f"  ⚠ could not read ports of {pod_id}: {str(e)[:90]}")
+        return None
 
 
 def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
     """Poll RunPod for the mapped ports, then prove the card answers. Returns {name: Card}."""
     t0, ready, portmap = time.time(), {}, {}
     target = need or len(pods)
+    errors = 0
     while time.time() - t0 < timeout_s and len(ready) < target:
+        failed = False
         for p in pods:
             if p["name"] in ready:
                 continue
-            ports = api.ports_of(p["id"])
+            ports = _ports_or_none(api, p["id"])
+            if ports is None:
+                failed = True
+                break                       # stop this round: the quota is shared, do not spend the rest of it
             if 22 not in ports:
                 continue
             ip, port = ports[22]
@@ -128,7 +150,8 @@ def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
                 log(f"  {p['name']} up at {ip}:{port}"
                     + (f"  (9110 -> {ports[9110][1]})" if 9110 in ports else "  ⛔ NO 9110 MAPPING"))
         if len(ready) < target:
-            time.sleep(10)
+            errors = errors + 1 if failed else 0
+            time.sleep(PORTS_BACKOFF_S[min(errors, len(PORTS_BACKOFF_S) - 1)])
     # ⚠ "only 1/2 came up" is not actionable. Say how far each one got: no mapping at all is a pod
     # RunPod never started, a mapping with no ssh is a pod that is booting or broken.
     # ⚠ REPORT THE TIME ACTUALLY WAITED, NOT THE BUDGET. Once `need` cards are up the loop exits
@@ -138,8 +161,9 @@ def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
     waited = time.time() - t0
     for p in pods:
         if p["name"] not in ready:
-            got = api.ports_of(p["id"])
-            why = ("RunPod never published a port for it (the pod did not start)" if not got
+            got = _ports_or_none(api, p["id"])
+            why = ("RunPod did not answer for its ports (quota or fault) -- state unknown" if got is None
+                   else "RunPod never published a port for it (the pod did not start)" if not got
                    else f"ports {sorted(got)} were published but ssh never answered")
             enough = "" if waited >= timeout_s - 1 else " (the run had enough cards and stopped waiting)"
             log(f"  ⚠ {p['name']} had not answered after {waited:.0f}s{enough} — {why}")

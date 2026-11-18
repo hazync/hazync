@@ -722,15 +722,25 @@ def trial_refusals(coord, heights):
 #     RUNPOD_REFUSALS_MAX and never reports it as "no GPU capacity".
 #   * `cloud` takes only SECURE or COMMUNITY (`ALL` is gone). We always send SECURE (test_pod_cloud_type.py).
 #   * There is no `isIpPublic` on a port. A mapping is public when it has a `public` port and its `ip` is a
-#     global address -- the same entries GraphQL flagged isIpPublic.
+#     GLOBAL address. ⛔ Not "not private": RunPod's internal addresses are 100.65.x.x, carrier-grade NAT
+#     space (100.64.0.0/10), which Python does not call private -- exactly the entries GraphQL flagged
+#     isIpPublic:false (~/libzync-gpu/live/fleet.txt recorded them). `is_global` excludes both.
 #   * GET /v2/pods may leave out the live mapping (RunPod documents `ssh.direct` as null in the listing and
 #     says to fetch the pod by id for it), so a caller that needs SSH asks ports_of(pod_id) for the pods it is
 #     waiting on, never every pod on every look.
 REST_URL = "https://api.runpod.io/v2"
 POD_CLOUD = "SECURE"
-# 400 is RunPod's "this GPU could not be placed" (and also a deterministic rule breach; if EVERY type answers
-# 400 the bot sees None, as it did when GraphQL answered null for every type).
+# 400 is RunPod's "this GPU could not be placed" -- and ALSO a deterministic rule breach: RunPod's create docs
+# say that if EVERY candidate answers 400, read it as a problem with the request. So an all-400 deploy is a
+# capacity miss only when the catalogue agrees there is no SECURE stock for any type tried; when it shows stock,
+# it is a refusal (counted toward RUNPOD_REFUSALS_MAX, so a broken request latches instead of looping for ever).
 NO_CAPACITY_STATUS = 400
+# Statuses that say nothing about ONE type: the key (401), the balance (402), the request contract (422). Each is
+# a refusal however the other types answered -- trying the next type cannot fix it, and a 400 on that next type
+# must not hide it.
+REQUEST_REFUSALS = (401, 402, 422)
+# The per-user quota answered 429 through every retry: neither a refusal nor a capacity miss. The bot backs off.
+RATE_LIMITED = 429
 # RunPod's v2 quota is per user (180/min on our key, read from RateLimit-Policy 2026-11-18). A 429 was never
 # processed, so even a create is safe to retry once the window says so.
 RATE_LIMIT_RETRIES = 2
@@ -738,24 +748,27 @@ RATE_LIMIT_WAIT_MAX_S = 60.0
 
 
 class RunPodError(RuntimeError):
-    """RunPod refused a request, or did not answer. `status` is the HTTP status (None: no answer at all)."""
+    """RunPod refused a request, or did not answer. `status` is the HTTP status (None: no answer at all);
+    `detail` is RunPod's problem+json detail; `problem` is False for a body that was not RunPod's own (a
+    Cloudflare `error code: 1010` page, which refuses EVERY request, whatever the type)."""
 
-    def __init__(self, msg, status=None):
+    def __init__(self, msg, status=None, detail="", problem=False):
         super().__init__(msg)
-        self.status = status
+        self.status, self.detail, self.problem = status, detail, problem
 
 
 def _public_ip(ip):
     import ipaddress
     try:
-        a = ipaddress.ip_address(str(ip))
+        return ipaddress.ip_address(str(ip)).is_global       # ⛔ not `not is_private`: 100.65.x.x is RunPod-internal
     except ValueError:
         return False
-    return not (a.is_private or a.is_loopback or a.is_link_local or a.is_unspecified or a.is_multicast)
 
 
 def pod_ports(pod):
-    """{private port: (public ip, public port)} from a v2 pod object: the mapping GraphQL flagged isIpPublic."""
+    """{private port: (public ip, public port)} from a v2 pod object: the mapping GraphQL flagged isIpPublic.
+    Only GLOBAL addresses qualify, so an internal entry can never win whatever its order; among several global
+    entries for one port the FIRST is kept (deterministic, and the same rule the shell scripts use)."""
     out = {}
     for x in (((pod or {}).get("runtime") or {}).get("ports")) or []:
         try:
@@ -777,6 +790,7 @@ class RunPod:
 
     def __init__(self, key, url=REST_URL, timeout=60, sleep=time.sleep):
         self.key, self.url, self.timeout, self._sleep = key, url.rstrip("/"), timeout, sleep
+        self.last_misses = []                # [(type, 400 detail)] from the last deploy
 
     @staticmethod
     def key_path():
@@ -831,13 +845,16 @@ class RunPod:
                     self._sleep(min(max(wait, 1.0), RATE_LIMIT_WAIT_MAX_S))
                     continue
                 # RunPod answers application/problem+json {title, status, detail, errors[]}: say the detail.
+                problem = False
                 try:
                     prob = json.loads(text)
+                    problem = isinstance(prob, dict)
                     text = "; ".join([str(prob.get("detail") or prob.get("title") or "")]
                                      + [str(x) for x in (prob.get("errors") or [])][:3]).strip("; ")
                 except Exception:
                     pass
-                raise RunPodError(f"HTTP {e.code} {e.reason}: {text[:200]}", status=e.code) from e
+                raise RunPodError(f"HTTP {e.code} {e.reason}: {text[:200]}", status=e.code, detail=text[:200],
+                                  problem=problem) from e
             except Exception as e:
                 raise RunPodError(f"{type(e).__name__}: {e}") from e
 
@@ -858,24 +875,52 @@ class RunPod:
 
     def _deploy_first(self, name, ssh_pubkey, gpu_types, ports, disk_gb=40):
         """Walk gpu_types in order: (v2 pod, type) for the first RunPod placed. None when RunPod answered and no
-        type had capacity. RunPodError when RunPod refused the request for every type: that is not a capacity
-        miss, and treating it as one hid a Cloudflare 403 behind "no GPU capacity" on the first trial."""
+        type had capacity. RunPodError when RunPod refused the request: that is not a capacity miss, and
+        treating it as one hid a Cloudflare 403 behind "no GPU capacity" on the first trial.
+
+        * 401/402/422, or a 403 that is not RunPod's own answer (Cloudflare): raised at once -- no other type
+          can fix the key, the balance, the request or the client.
+        * 403 from RunPod itself ("cannot access this pool") and 5xx: that type is skipped; raised only if no
+          type answered at all (as before).
+        * 400 on EVERY type: see NO_CAPACITY_STATUS -- a refusal when the catalogue shows stock.
+        `self.last_misses` keeps [(type, RunPod's 400 detail)] so the caller can log WHY there was no pod."""
         refused = None
         answered = False
+        misses = []
+        self.last_misses = misses
         for gt in gpu_types:
             try:
                 p = self.create_pod(name, gt, ssh_pubkey, ports=ports, disk_gb=disk_gb)
                 answered = True
             except RunPodError as e:
+                if e.status in REQUEST_REFUSALS or (e.status == 403 and not e.problem):
+                    raise
                 if e.status == NO_CAPACITY_STATUS:
                     answered, p = True, None
+                    misses.append((gt, e.detail))
                 else:
                     refused, p = e, None
             if p and p.get("id"):
                 return p, gt
         if refused is not None and not answered:
             raise refused
+        if misses and len(misses) == len(tuple(gpu_types)):
+            stocked = self._stocked([gt for gt, _ in misses])
+            if stocked:
+                raise RunPodError(
+                    f"every type answered 400 although the catalogue shows SECURE stock for {sorted(stocked)} -- "
+                    f"RunPod's rule for an all-400 is a problem with the REQUEST: {misses[-1][1]}",
+                    status=NO_CAPACITY_STATUS, detail=misses[-1][1], problem=True)
         return None
+
+    def _stocked(self, types):
+        """The tried types the catalogue shows SECURE stock for. Empty when it cannot be read: then the 400s
+        stand as capacity misses -- a failed READ must never latch the bot."""
+        try:
+            return {g["id"] for g in self.gpu_catalog(stock=True)
+                    if g.get("id") in types and g.get("availability") not in (None, "NONE")}
+        except Exception:
+            return set()
 
     def deploy(self, name, ssh_pubkey, gpu_types=GPU_TYPES):
         """One on-demand 1-GPU pod, trying each GPU type in turn. None when RunPod answered and no type had
@@ -954,18 +999,35 @@ class RunPod:
         return {g["id"] for g in self.gpu_catalog() if g.get("id")}
 
 
-def terminate_confirmed(api, pod_id, sleep=time.sleep, tries=6, wait_s=5.0):
+# ⛔ A pod that is not confirmed gone keeps BILLING. A 429 is the shared quota (180/min, every process on the key),
+# not an answer about the pod, so it never uses up a try: it is waited out, for up to this long in all.
+TERMINATE_429_BUDGET_S = 15 * 60
+TERMINATE_429_WAIT_S = 30.0
+
+
+def terminate_confirmed(api, pod_id, sleep=time.sleep, tries=6, wait_s=5.0, rate_budget_s=None, rate_wait_s=None):
     """terminate until RunPod no longer lists the pod. False if it still does after every try."""
-    for _ in range(tries):
+    rate_budget_s = TERMINATE_429_BUDGET_S if rate_budget_s is None else rate_budget_s
+    rate_wait_s = TERMINATE_429_WAIT_S if rate_wait_s is None else rate_wait_s
+    used = 0
+    limited_s = 0.0
+    while used < tries:
+        limited = False
         try:
             api.terminate(pod_id)
-        except Exception:
-            pass
-        try:
-            if pod_id not in {p["id"] for p in api.pods()}:
-                return True
-        except Exception:
-            pass
+        except Exception as e:
+            limited = getattr(e, "status", None) == RATE_LIMITED
+        if not limited:
+            try:
+                if pod_id not in {p["id"] for p in api.pods()}:
+                    return True
+            except Exception as e:
+                limited = getattr(e, "status", None) == RATE_LIMITED
+        if limited and limited_s < rate_budget_s:
+            sleep(rate_wait_s)
+            limited_s += rate_wait_s
+            continue
+        used += 1
         sleep(wait_s)
     return False
 
@@ -1568,6 +1630,8 @@ class Bot:
                         ssh = self.api.ssh_of(p.id)
                     except Exception as e:
                         self.log(f"could not read {p.name}'s ports: {e}")
+                if ssh and not self._price_ok(c, p, info):
+                    continue
                 if ssh:
                     p.ssh, p.state = ssh, "booting"
                     threading.Thread(target=self._boot, args=(p,), daemon=True).start()
@@ -1585,6 +1649,29 @@ class Bot:
                 self._terminate(c, p, "boot timed out")
         for p in [p for p in live if p.live and p.state == "working"]:
             self._progress(c, p, now)
+
+    def _price_ok(self, c, p, info):
+        """A pod whose price was unknown at deploy (cost 0, as v2 can answer while PROVISIONING) gets it read
+        now, before it boots; one over the ceiling is terminated here. False when it was terminated. A price
+        that is still unknown boots as before and keeps counting as the ceiling in the spend math (Pod.rate)."""
+        if p.cost_per_hr > 0:
+            return True
+        cost = (info or {}).get("cost_per_hr") or 0
+        if cost <= 0:
+            try:
+                cost = (self.api.pod(p.id) or {}).get("cost_per_hr") or 0
+            except Exception as e:
+                self.log(f"could not read {p.name}'s price: {e}")
+        if cost <= 0:
+            return True
+        p.cost_per_hr = float(cost)
+        if c is not None:
+            c.execute("UPDATE sponsor_pods SET cost_per_hr=? WHERE pod_id=?", (p.cost_per_hr, p.id))
+            c.commit()
+        if p.cost_per_hr > self.ceiling:
+            self._terminate(c, p, f"its price, ${p.cost_per_hr:.2f}/h, is over the ${self.ceiling:.2f}/h ceiling")
+            return False
+        return True
 
     def _boot(self, pod):
         try:
@@ -1690,8 +1777,13 @@ class Bot:
             try:
                 info = self.api.deploy(f"{self.prefix}{self._n}", self.runner.ssh_pubkey)
             except RunPodError as e:
-                self._refusals += 1
                 self._capacity_at = now + self.capacity_backoff_s
+                if e.status == RATE_LIMITED:
+                    # The shared quota, not a refusal: it says nothing about the request, so it never counts
+                    # toward the latch. Back off like a capacity miss.
+                    self.log(f"RunPod's request quota is exhausted ({e}); not a refusal, trying again later")
+                    break
+                self._refusals += 1
                 if self._refusals >= RUNPOD_REFUSALS_MAX:
                     self.stop_reason = "runpod"
                     self.log(f"RunPod refused the deploy request {self._refusals} times in a row ({e}): stopping")
@@ -1701,7 +1793,8 @@ class Bot:
             self._refusals = 0
             if not info:
                 self._capacity_at = now + self.capacity_backoff_s
-                self.log("no GPU capacity on RunPod; trying again later")
+                why = "; ".join(f"{gt}: {d}" for gt, d in (getattr(self.api, "last_misses", None) or []) if d)
+                self.log("no GPU capacity on RunPod; trying again later" + (f" ({why})" if why else ""))
                 break
             p = Pod(info, self.clock())
             self.pods.append(p)
@@ -1713,6 +1806,9 @@ class Bot:
                 self._terminate(c, p, f"its price, ${p.cost_per_hr:.2f}/h, is over the ${self.ceiling:.2f}/h ceiling")
                 self._capacity_at = now + self.capacity_backoff_s
                 break
+            # ⚠ A price of 0 is UNKNOWN, not free (v2 can answer a PROVISIONING pod with cost 0). The spend
+            # math already counts it as the ceiling (Pod.rate); the ceiling check runs again once it is
+            # known (_observe, when the pod has SSH), and a pod over the ceiling is terminated then.
             want -= 1
 
     # --- stopping pods ---
