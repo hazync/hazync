@@ -27,6 +27,16 @@ sys.exit(int(open(os.path.join(os.environ["HAZYNC_HOME"], "rc")).read()))
 '''
 
 
+
+def _started(app, secs=30):
+    """Press Start and wait for its checks, which run off the window's thread (review of c881d582, M2)."""
+    import time as _t
+    app._start()
+    end = _t.time() + secs
+    while getattr(app, "_starting", False) and _t.time() < end:
+        app.update()
+        _t.sleep(0.02)
+
 def check(ok, what):
     global fails
     print(("  ok   " if ok else "  FAIL ") + what)
@@ -80,7 +90,7 @@ def main():
         return until()
 
     open(rcf, "w").write("0")
-    app._start()
+    _started(app)
     check(spin(15, lambda: count() >= 3), f"a block landed (exit 0): it takes the next, and the next ({count()} runs)")
     check(str(app.stop_btn["state"]) == "normal", "Stop stays live between blocks")
     app._stop()
@@ -92,14 +102,14 @@ def main():
 
     os.remove(runs)
     open(rcf, "w").write("75")
-    app._start()
+    _started(app)
     check(spin(15, lambda: count() >= 2), f"nothing free (exit 75): it asks again ({count()} runs)")
     app._stop()
     spin(5, lambda: not app.workers and not app._respawns)
 
     os.remove(runs)
     open(rcf, "w").write("78")
-    app._start()
+    _started(app)
     spin(3, lambda: False)
     check(count() == 1, f"misconfigured (exit 78): never restarted ({count()} run)")
     app._stop()

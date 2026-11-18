@@ -223,6 +223,20 @@ key names only.
    The board pass's own unit (`libzync-board-prep.service`, SAVE_EVERY 250, OOMScoreAdjust 500) comes with step 5's
    unit install. Rollback: the two `.pre-v026` copies back, `rm` memory.conf, `daemon-reload`.
 
+2c. **The reference check needs a proof by the NEW image.** `HAZYNC_PREP_CHECK=$P/ref` compares prep's first states with a
+   proved run's `state_<h>.json`, byte for byte, and skips heights it has no file for (`prep.rs`, `want_path`). The
+   `ref` on the box was proved by the retiring image, so the new prep stops at once with `PREP_MISMATCH at 1: fields
+   ["block_roots", "self_id"]` and restarts every 30 s (found on 16.11.2026). Before step 3, prove block 1 under the
+   new image and use its state as the reference (529 s on hazync-proof's CPU, measured 16.11.2026):
+   ```bash
+   W=/root/v026/ref-proof; mkdir -p $W/json && cp $P/blocks/block_1.json $W/json/   # or fetch block 1 first
+   (unset RISC0_DEV_MODE; $R/hazync-host-x86_64-linux-gnu libzync-prove-range 1 1 $W/json genesis $W/out)
+   $R/hazync-verify-x86_64-linux-gnu $W/out/block_1.rcpt          # SWIFTSYNC_VERIFY_DEMO for block 1 is expected
+   mv $P/ref $P/ref.$po8 && install -d -o 1000 -g 1000 $P/ref && cp -p $W/out/state_1.json $W/out/block_1.rcpt $P/ref/
+   ```
+   Cross-check: once the board pass has written `/var/lib/libzync-board/out/state_1.json`, it is byte-identical to
+   `$W/out/state_1.json` (both are the new image's state at 1; it was on 16.11.2026).
+
 3. **Start the block source, then prep:**
    ```bash
    systemctl start libzync-fetch; sleep 60; ls $P/blocks | head -3            # block_1.json …
@@ -468,15 +482,20 @@ Everything kept for a rollback, with where it lives (`du -sh` each first):
 The board pass stops at its free-space floor `HAZYNC_PREP_MIN_FREE_GB=250` (the paper run's is 200) on the coin log's
 filesystem, `/` for both: check `df -h /` against those before and after.
 
-## Record of the reset (fill in on the day)
+## Record of the reset (16.11.2026)
 
 | | |
 |---|---|
-| sponsorships by status in the old ledger (step 0.2 / 6.2) | |
-| paper prep restart: time from genesis to 147,396, and the tracked coins it flagged (vs `reproduce/libzync-tracked.json`) | |
-| the old board at the reset: frontier, receipts, ranges rows, contributors carried | |
-| new prep rate after the swap | |
-| first `46666b6f` spine | |
+| release | v0.26.0 published 17:12 UTC, signed 17:39 (13 assets, PGP good), `release.sh --verify-only` passed; `/opt/hazync-lz` deployed at `11d406a9` (the merge commit after the tag: #745 notes, #747 prep settings), `server.py` unchanged, no coordinator restart |
+| sponsorships by status in the old ledger (step 0.2 / 6.2) | none (0 rows) |
+| the old board at the reset: frontier, receipts, ranges rows, contributors carried | frontier 1,999; 3,206 ranges rows; 16 contributors carried; old ledger `/root/lz-8888d59c.db` (integrity ok); spine `spine-8888d59c/spine_1-1999` copied to R2 and B2 (its first offsite copy) |
+| paper prep: the old run | stopped at its 641,000 save point; moved aside as `*.pre-v026` |
+| paper prep restart: time from genesis to 147,396, and the tracked coins it flagged (vs `reproduce/libzync-tracked.json`) | started 20:42 UTC; 147,396 (`cec2a159…`, the first tracked coinbase) after 18.2 min; 30 tracked txs to 163,698, `tracked_diff.py` MATCH |
+| reference check (step 2c, new) | block 1 proved under `46666b6f` in 529 s (CPU); receipt `2c2edb64…`; its `state_1.json` byte-identical to the board pass's |
+| prep settings (step 2b) | SAVE_EVERY 250, trie cache 12288 MB, OOMScoreAdjust 500, no memory cap; ~350 blocks/s early (MEASURED, PREP_PROGRESS) |
+| board after the reset | `/api/meta`: `46666b6f`, frontier 0, handover null; board pass `state_1` stamped `46666b6f`, `LZLEAF02`, 5,000 leaf bundles waiting for provers |
+| website | hazync-web #57 (with #56, #58) deployed; live wasm `f16b5b98` |
+| first `46666b6f` spine | (pending: needs provers) |
 
 ## Defaults and open questions
 

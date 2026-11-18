@@ -10,8 +10,9 @@ Environment=HAZYNC_PREP_SAVE_EVERY=250 HAZYNC_PREP_REPORT_EVERY=10000 HAZYNC_PRE
 # at most this many leaf bundles waiting to be proved: the pass pauses until the board's pruner removes proven ones
 Environment=HAZYNC_PREP_LEAF_WINDOW=5000
 ExecStart=/bin/sh -c 'exec "$LZ_ROOT/bin/libzync-prep-run.sh"'
+# exit 3 = the free-space floor, exit 4 = a reorg (docs/libzync/REORG.md §11): no restart, the unit fails and alerts
 Restart=on-failure
-RestartPreventExitStatus=3
+RestartPreventExitStatus=3 4
 RestartSec=30
 # the main (paper) prep run on this box comes first
 Nice=19

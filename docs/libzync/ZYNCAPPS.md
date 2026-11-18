@@ -182,4 +182,6 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 
 | zAPP | module | CLI | WASM glue | C ABI |
 |---|---|---|---|---|
+| Header chain (ROADMAP K1, N3; `coordinator/deploy/headers`) | `zapps/headers` | `zapp-headers` | `zapp-headers.js` (`verifyHeaders`, `headersImageId`) | none |
+| SwiftSync hints (HINTS_ZAPP.md) | `zapps/hints` | `zapp-hints` | `zapp-hints.js` (`verifyHints`) | `zapps/hints/ffi` (`swiftsync_verify_hints`, `zapp_hints.h`) |
 | assumevalid / assumeutxo (ASSUME_ZAPPS.md) | `zapps/assume` | `zapp-assume` (`assumevalid`, `assumeutxo`) | `zapp-assume.js` (`verifyAssume`) | `zapps/assume/ffi` (`swiftsync_verify_assume`, `zapp_assume.h`) |
