@@ -79,7 +79,7 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
             rep.check(false, format!("receipt {n} is a single succinct or Groth16 proof ({e})"));
             return rep;
         }
-        let r: risc0_zkvm::Receipt = match bincode::deserialize(bytes) {
+        let r: risc0_zkvm::Receipt = match crate::decode_receipt(bytes) {
             Ok(r) => r,
             Err(e) => { rep.check(false, format!("receipt {n} decodes ({e})")); return rep; }
         };
@@ -87,7 +87,7 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
         let v = r.verify(image);
         rep.check(v.is_ok(), format!("receipt {n} verifies against the headers image {image_hex}{}",
                                      v.err().map(|e| format!(": {e}")).unwrap_or_default()));
-        let (din, out): ([u8; 32], HeaderState) = match r.journal.decode() {
+        let (din, out): ([u8; 32], HeaderState) = match crate::decode_journal(&r.journal) {
             Ok(j) => j,
             Err(e) => { rep.check(false, format!("receipt {n}'s journal is (input digest, header state) ({e})")); return rep; }
         };
