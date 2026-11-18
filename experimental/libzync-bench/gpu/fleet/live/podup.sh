@@ -1,30 +1,17 @@
 #!/bin/bash
-# podup.sh <name> [<pod id>]: wait for the pod's ports, record them in fleet.txt, push files, start prep, upload bundle.
-cd ~/libzync-gpu/live; N=$1; ID=${2:-}
-# ⛔ ONE pod per poll (`pod.sh get <id>`, 1 call), never `pod.sh status` (1 + N calls each, for every podup at
-# once: N(N+1) on a 180/min quota). A 429 or any non-pod answer is NOT "no ports": it waits longer and does not
-# count toward the 40 polls.
-[ -n "$ID" ] || ID=$(./pod.sh status | python3 -c 'import json,sys; [print(p["id"]) for p in json.load(sys.stdin)["pods"] if p["name"]==sys.argv[1]]' "$N" | head -1)
-[ -n "$ID" ] || { echo "$N: no such pod"; exit 1; }
-i=0; e=0; L=""
-while [ $i -lt 40 ] && [ $e -lt 30 ]; do
-  L=$(./pod.sh get "$ID" | python3 -c 'import ipaddress,json,sys
-p=json.load(sys.stdin)
-if not p.get("id"): print("ERR", p.get("status", "?")); sys.exit()
-g=lambda ip: bool(ip) and ipaddress.ip_address(ip).is_global
-ports={}; priv=[]
-for x in ((p.get("runtime") or {}).get("ports") or []):
-  if x.get("public") and g(x.get("ip")): ports.setdefault(x["private"], (x["ip"], x["public"]))
-  elif x.get("ip") and not g(x["ip"]): priv.append(x["ip"])
-if 22 in ports and 9110 in ports: print(sys.argv[1], ports[22][0], ports[22][1], ports[9110][0], ports[9110][1], (priv or ["-"])[0])' "$N" 2>/dev/null)
-  case "$L" in
-    "ERR 404") echo "$N: RunPod no longer has pod $ID"; exit 1 ;;
-    ERR*) echo "[$(date +%T)] $N: RunPod answered ${L#ERR } for $ID; waiting"; L=""; e=$((e+1)); sleep 30 ;;
-    "") i=$((i+1)); sleep 10 ;;
-    *) break ;;
-  esac
-done
-[ -n "$L" ] || { [ $e -ge 30 ] && echo "$N: RunPod kept refusing to answer for $ID (state UNKNOWN, not 'no ports')" || echo "$N NO PORTS"; exit 1; }
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
+# podup.sh <name>: wait for the pod's ports, record them in fleet.txt, push files, start prep, upload bundle.
+cd ~/libzync-gpu/live; N=$1
+for i in $(seq 1 40); do
+  L=$(./pod.sh status | python3 -c '
+import json,sys
+for p in json.load(sys.stdin)["data"]["myself"]["pods"]:
+  if p["name"]!=sys.argv[1]: continue
+  r=p.get("runtime") or {}; ports={x["privatePort"]:(x["ip"],x["publicPort"]) for x in (r.get("ports") or []) if x["isIpPublic"]}
+  priv=[x["ip"] for x in (r.get("ports") or []) if not x["isIpPublic"]]
+  if 22 in ports and 9110 in ports: print(sys.argv[1], ports[22][0], ports[22][1], ports[9110][0], ports[9110][1], (priv or ["-"])[0])' "$N")
+  [ -n "$L" ] && break; sleep 10; done
+[ -n "$L" ] || { echo "$N NO PORTS"; exit 1; }
 grep -v "^$N " fleet.txt 2>/dev/null > fleet.tmp; echo "$L" >> fleet.tmp; mv fleet.tmp fleet.txt
 set -- $L; K="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15"
 for t in $(seq 1 12); do ssh $K -p $3 root@$2 true && break; sleep 10; done

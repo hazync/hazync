@@ -45,6 +45,31 @@ POLL_S = 20
 BUDGET_MARGIN = 0.85
 
 
+def release_fold(api, name, pod_id):
+    """Terminate `pod_id` and every pod on the account named `name`. Loud when that cannot be confirmed. Returns the
+    ids still there (None: the account could not be listed)."""
+    ids = [pod_id] if pod_id else []
+    try:
+        ids += [x["id"] for x in api.pods() if x["name"] == name and x["id"] not in ids
+                and (x.get("status") or "") != "TERMINATED"]
+    except Exception as e:                                          # noqa: BLE001
+        print(f"  ⛔ could not list the account ({e}): a pod named {name} MAY STILL BE BILLING — check by hand")
+        if not ids:
+            return None
+    if not ids:
+        return []
+    print("terminating…", ids)
+    try:
+        _, left = sb.terminate_many(api, ids)
+    except Exception as e:                                          # noqa: BLE001
+        left = ids
+        print(f"  ⛔⛔ TERMINATE FAILED: {e}")
+    if left:
+        # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
+        print(f"  ⛔⛔ NOT CONFIRMED GONE: {left} — TERMINATE IT BY HAND")
+    return left
+
+
 def seconds_for_budget(budget_usd, cost_per_hr):
     """How long we may run, from the pod's OWN price. (0 when the price is unknown.)
 
@@ -278,26 +303,14 @@ def main(argv=None):
     # attempt terminated via the pod OBJECT, so when a later line raised (deploy returns a DICT, not
     # a Pod) the finally clause raised too and left a rented GPU billing at $0.74/hr. A teardown that
     # depends on anything built after the rental is not a teardown.
+    name = f"hazync-fold-{int(time.time())}"     # unique to this run: the teardown releases it by name
     pod_id = None
     pod = None
     started = None
     rate = 0.0
     log = ""
     try:
-        name = f"hazync-fold-{int(time.time())}"
-        try:
-            info = api.deploy(name, runner.ssh_pubkey)
-        except sb.LostCreate:
-            # ⛔ The create got no answer: the pod may exist. Its name is unique to this run, so release whatever
-            # carries it, and stop -- loudly if that cannot be confirmed.
-            try:
-                ids = [x["id"] for x in api.pods() if x["name"] == name]
-            except sb.RunPodError as e:
-                raise SystemExit(f"fold_rent: the create got no answer and RunPod could not be listed ({e}): "
-                                 f"⛔ A POD NAMED {name} MAY BE BILLING — check RunPod by hand")
-            left = sb.terminate_many(api, ids)[1] if ids else []
-            raise SystemExit(f"fold_rent: the create got no answer; {len(ids)} pod(s) named {name} found, "
-                             + (f"⛔ NOT CONFIRMED GONE: {left} — TERMINATE BY HAND" if left else "released"))
+        info = api.deploy(name, runner.ssh_pubkey)
         if info is None:
             print("fold_rent: no GPU capacity in any configured type — nothing rented, nothing spent")
             return 0
@@ -367,13 +380,9 @@ def main(argv=None):
                 print(f"log saved: {out}")
             except OSError as e:
                 print(f"could not save the log: {e}")
-        if pod_id:
-            print("terminating…", pod_id)
-            try:
-                print("  ", sb.terminate_confirmed(api, pod_id))
-            except Exception as e:                                  # noqa: BLE001
-                # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
-                print(f"  ⛔⛔ TERMINATE FAILED for {pod_id}: {e} — TERMINATE IT BY HAND")
+        # ⛔ RELEASE BY NAME AS WELL AS BY ID: the name is unique to this run, so a pod whose create answer was lost
+        # (no pod_id ever came back) is released too, however late it appeared.
+        release_fold(api, name, pod_id)
 
     if a.compare:
         print()

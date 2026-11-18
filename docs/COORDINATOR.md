@@ -371,11 +371,13 @@ caught: look-alike letters from other scripts (Cyrillic `о`). Also refused: ord
   lists the pod, and sweeps pods with the run's name prefix. ⚠ An unconfirmed pod is printed loudly, exit
   `4`: **terminate it by hand**. `stop-all` terminates every `hz-sponsor-*` pod.
 - ⚠ RunPod's Cloudflare refuses Python's default `Python-urllib` User-Agent (`403`, `error code: 1010`); the
-  bot sends its own. After 3 refused deploys in a row it exits `5` (a pod back over the price ceiling counts as
-  a refusal). A 400 (no capacity) is never a refusal; the same 400 detail on every type for 6 h stops it with `5`
-  (latch + page). A 429 is never a refusal either. A create whose answer is lost is swept by the run's unique
-  name prefix at once; if that cannot be confirmed the run stops with `5` saying a pod may be billing. A pod whose termination is not confirmed stays counted as live, and the next run's start
-  terminates it before renting (under a run lock; `TimeoutStopSec=1500` fits the bounded cleanup).
+  bot sends its own. After 3 refused deploys in a row it exits `5`. A 400 (no capacity) and a 429 are never
+  refusals; but 6 h of deploy attempts with nothing landing, whatever the reason (400, 429, 5xx, every pod over
+  the price ceiling), stops it with `5` (latch + page). Every pod a run creates is named with that run's unique
+  prefix, and the bot lists and terminates any pod with its prefix it does not track, every look: a create whose
+  answer was lost is released whenever it appears. A pod whose termination is not confirmed stays counted as live,
+  and the next run's start terminates it before renting (under a run lock; `TimeoutStopSec=1500` fits the bounded
+  cleanup).
 - Work starts with `setsid -f bash sponsor-run.sh >> sponsor-run.log 2>&1 < /dev/null` so ssh returns; a
   timed-out ssh/scp fails the pod (blocks logged `failed`, handed to the next pod).
 

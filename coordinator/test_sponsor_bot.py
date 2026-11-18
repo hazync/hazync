@@ -214,7 +214,8 @@ class FakeRunPod:
                                   "cloud": body.get("cloud"), "image": body["image"], "ports": body.get("ports")}
                 self.deploys.append((pid, body["name"], gt))
                 self.max_live = max(self.max_live, len(self.live()))
-                return 201, self.pod_obj(pid), ()
+                # RunPod's real create answer: PROVISIONING, no runtime yet.
+                return 201, dict(self.pod_obj(pid, runtime=False), status="PROVISIONING"), ()
             if method == "GET" and u.path == "/v2/pods":
                 ids = [i for i, p in self.pods.items() if p["alive"]]
                 start = int(q.get("cursor") or 0)
@@ -980,9 +981,9 @@ finally:
             os.environ[k] = v
 
 # ---------- the capacity streak, end to end through Bot.run() ----------
-# ⛔ A normal drought never stops the bot; the SAME 400 on every type for CAPACITY_LATCH_S does: run() stops as
-# "runpod" (exit 5: the unit latches and OnFailure= pages). Drives the real loop on the fast clock, against the fake
-# v2 server with no capacity anywhere.
+# ⛔ A short drought never stops the bot; CAPACITY_LATCH_S of deploy attempts with nothing landing does: run() stops
+# as "runpod" (exit 5: the unit latches and OnFailure= pages). Drives the real loop on the fast clock, against the
+# fake v2 server with no capacity anywhere.
 print("== the capacity streak, through Bot.run() ==")
 reset()
 api = FakeRunPod()
@@ -1003,8 +1004,8 @@ if CONTROL:                                      # stop the loop the control lef
     sponsor_bot.CAPACITY_LATCH_S = _saved_latch
     streak_bot.stop_reason = "runpod"
     th.join(30)
-check(outcome == "runpod" and not api.deploys and any("SAME 400" in m for m in logs),
-      f"a drought of one identical 400 runs on until CAPACITY_LATCH_S, then stops the run as 'runpod' "
+check(outcome == "runpod" and not api.deploys and any("no pod has landed" in m for m in logs),
+      f"a drought runs on until CAPACITY_LATCH_S, then stops the run as 'runpod' "
       f"(after ~{span_h:.1f} bot-hours: {outcome})")
 check(sponsor_bot.CAPACITY_LATCH_S / 3600 <= span_h,
       f"and not before {sponsor_bot.CAPACITY_LATCH_S // 3600} h of misses ({span_h:.1f} h)")

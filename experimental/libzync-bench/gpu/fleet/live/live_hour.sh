@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # One hour of live tip following, then harvest, then terminate EVERY pod. Unattended (user asleep).
 cd ~/libzync-gpu/live
 ./tiplive.sh 3600 > live_hour.out 2>&1
@@ -13,8 +14,8 @@ while read -r nm ip p _; do
   done
 done < fleet.txt
 ls -la harvest >> live_hour.out
-# every DELETE first, then each confirmed (pod.sh term = rp_term); only THIS run's pods
-IDS=$(./pod.sh ours 2>> live_hour.out | sort -u | tr '\n' ' ')
-[ -z "${IDS// /}" ] || ./pod.sh term $IDS 2>> live_hour.out || echo "[$(date +%T)] ⛔ NOT ALL CONFIRMED GONE -- see above" >> live_hour.out
+for id in $(awk '{print $1}' fleet_ids.txt); do ./pod.sh term $id > /dev/null; done
+sleep 8
+echo "[$(date +%T)] pods left: $(./pod.sh status | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["myself"]["pods"]))')" >> live_hour.out
 ssh hazync-coord 'shred -u /tmp/lz_eph 2>/dev/null; rm -f /tmp/lz_*.json'
 echo LIVE_HOUR_DONE >> live_hour.out

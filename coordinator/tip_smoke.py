@@ -44,6 +44,29 @@ import tip_session                      # noqa: E402
 
 PREFIX = "hz-smoke-"
 
+
+def run_prefix(rundir, now=None):
+    """⛔ THE ONE RULE FOR LOST CREATES: every pod a run creates is named <run prefix><n>, and the run's teardown (or
+    --cleanup) terminates EVERY pod on the account whose name starts with it, found by LISTING -- so a pod whose create
+    answer was lost is released however late it appears, with no lookup and no bookkeeping. The prefix is unique per
+    run (hz-smoke-<base36 seconds>-) and written to <rundir>/run_prefix.txt for --cleanup."""
+    t, n = int(now if now is not None else time.time()), ""
+    while t:
+        t, r = divmod(t, 36)
+        n = "0123456789abcdefghijklmnopqrstuvwxyz"[r] + n
+    pre = f"{PREFIX}{n}-"
+    with open(os.path.join(rundir, "run_prefix.txt"), "w") as fh:
+        fh.write(pre + "\n")
+    return pre
+
+
+def read_run_prefix(rundir):
+    try:
+        pre = open(os.path.join(rundir, "run_prefix.txt")).read().strip()
+    except OSError:
+        return None
+    return pre if pre.startswith(PREFIX) and len(pre) > len(PREFIX) + 1 else None
+
 # Heights at or above this come from the TIP bridge; below it, from the coordinator's bundle set.
 # Mirrors HAZYNC_BRIDGE_EMIT_FROM on the bridge host — if that moves, this moves with it.
 TIP_FROM = int(os.environ.get("HAZYNC_TIP_FROM", "967500"))
@@ -66,41 +89,6 @@ class SmokeRunPod(sponsor_bot.RunPod):
     worker sits in its 600-second retry loop looking armed and contributing nothing.
     """
 
-    def __init__(self, *a, **k):
-        super().__init__(*a, **k)
-        self._before = None        # pod ids on the account before the first create of this run
-        self._mine = set()         # ids this client handed back as rented
-        self.extra = []            # more pods found under one lost name: not the fleet, but billing -- teardown
-        self.maybe_names = set()   # lost creates nobody could find: the teardown looks again by name
-
-    def _find_lost(self, name, gpu_types):
-        """A create of `name` got no answer. ⛔ Only a pod NEW since this run started (not in _before), not handed back
-        already, not TERMINATED, with exactly this name, can be it -- names repeat across runs and across the types
-        rent_uniform tries. Two such pods: the first is returned, the rest go to `extra` for the teardown. The listing
-        failing three times: the name goes to `maybe_names` and LostCreate stops the rent."""
-        for attempt in range(3):
-            try:
-                hits = [x for x in self.pods() if x["name"] == name and x["id"] not in self._before
-                        and x["id"] not in self._mine and (x.get("status") or "") != "TERMINATED"]
-                break
-            except sponsor_bot.RunPodError:
-                time.sleep(5)
-        else:
-            self.maybe_names.add(name)
-            raise sponsor_bot.LostCreate(f"the create of {name} got no answer and RunPod could not be listed: "
-                                         f"a pod named {name} MAY BE BILLING", name=name)
-        if not hits:
-            log(f"  the create of {name} got no answer; RunPod lists no new pod of that name")
-            return None
-        for x in hits[1:]:
-            self._mine.add(x["id"])
-            self.extra.append({"id": x["id"], "name": name, "gpu_type": x.get("gpu_type") or "?", "price": 0.0})
-            log(f"  ⛔ a SECOND pod named {name} ({x['id']}) -- tracked for the teardown")
-        log(f"  the create of {name} got no answer; found it by name: {hits[0]['id']}")
-        raw = self.pod_raw(hits[0]["id"]) or {"id": hits[0]["id"], "cost": hits[0]["cost_per_hr"]}
-        return raw, ((hits[0].get("gpu_type") if hits[0].get("gpu_type") in tuple(gpu_types) else None)
-                     or gpu_types[0])
-
     def deploy_listening(self, name, ssh_pubkey, gpu_types=sponsor_bot.GPU_TYPES):
         # ⛔ SECURE, NOT COMMUNITY. Community hosts mostly never start at all -- RunPod never publishes a
         # port for them, so the run waits out its full SSH timeout and then gives up having paid for pods
@@ -112,17 +100,12 @@ class SmokeRunPod(sponsor_bot.RunPod):
         #     $0.74/hr  14 of 14 started  (100%)
         # A 4-card run died outright on it: three of five never started, so only two came up and
         # the run could not reach its minimum. The cheap listing is not cheaper, it is absent.
-        if self._before is None:
-            # The account BEFORE this run rented anything: a lost create's pod is a NEW id with its name.
-            self._before = {x["id"] for x in self.pods()}
-        try:
-            got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp", "9110/tcp"), disk_gb=40)
-        except sponsor_bot.LostCreate:
-            got = self._find_lost(name, gpu_types)
+        # ⚠ A create whose answer is lost is not looked for here: `name` carries the run's prefix, and the
+        # teardown terminates every pod with that prefix by LISTING (release_recorded / cleanup).
+        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp", "9110/tcp"), disk_gb=40)
         if not got:
             return None
         p, gt = got
-        self._mine.add(p["id"])
         # ⛔ RECORD WHERE THE CARD IS. Geography is the one term in a fleet's throughput that
         # has never been controlled for here, and it has already caused a published error
         # once: 142 s of spread was attributed to geography when it was CARD TYPE
@@ -181,49 +164,63 @@ def release_short(api, gt, got, rented_path, unreleased):
         json.dump(unreleased, fh, indent=1)
 
 
-def release_recorded(api, rented_path, created, unreleased):
-    """The teardown's release. ⛔ RELEASE WHAT WAS RECORDED, NOT ONLY WHAT IS IN `created`: a pod can be in
-    rented.json and not in `created` (a rent that raised half way, a short type left unconfirmed). The account is
-    checked against EVERY recorded id, and rented.json is removed only when that check COULD BE MADE and found
-    none of them. Returns the ids still listed (None: the check could not be made)."""
+def release_recorded(api, rented_path, created, unreleased, prefix=None, keep_ids=(), rounds=4, wait_s=10.0,
+                     sleep=time.sleep):
+    """The teardown's release. Terminates (1) every pod on the account whose name starts with this run's `prefix`,
+    found by LISTING -- a lost create, a rent that raised half way, a recruit caught mid-gate -- and (2) every id in
+    rented.json, `created` and `unreleased` (an ADOPTED fleet carries another run's prefix), except `keep_ids`
+    (--keep / --adopt). A lost create can appear in the listing LATE, so it lists again (wait_s apart) until TWO
+    listings in a row show none of them, up to `rounds` listings. (Later than that: --cleanup sweeps the prefix.) rented.json is removed only when nothing is kept and the last
+    listing showed none. Returns the ids still listed (None: the account could not be listed)."""
     recorded = []
     try:
         with open(rented_path) as fh:
             recorded = [str(p["id"]) for p in json.load(fh) if p.get("id")]
     except (OSError, ValueError, TypeError, AttributeError):
         pass
-    keep = False
-    extra = [str(p["id"]) for p in getattr(api, "extra", [])]
-    maybe = sorted(getattr(api, "maybe_names", ()) or ())
-    if maybe:
-        # Lost creates nobody could find during the rent: look again now, by name, among pods new since the run began.
+    keep = {str(i) for i in keep_ids}
+    named = [str(p["id"]) for p in created] + [str(p["id"]) for p in unreleased] + recorded
+    left, clean = None, 0
+    for r in range(rounds):
+        if r:
+            sleep(wait_s)
         try:
-            before = getattr(api, "_before", None) or set()
-            extra += [str(x["id"]) for x in api.pods() if x["name"] in maybe and x["id"] not in before
-                      and (x.get("status") or "") != "TERMINATED"]
+            listed = {str(x["id"]): x for x in api.pods() if (x.get("status") or "") != "TERMINATED"}
         except Exception as e:                                     # noqa: BLE001
-            log(f"⛔ could not look for {maybe} ({str(e)[:80]}) — A POD MAY BE BILLING under those names; "
-                f"{rented_path} KEPT")
-            keep = True
-    mine = list(dict.fromkeys([str(p["id"]) for p in created] + [str(p["id"]) for p in unreleased] + recorded
-                              + extra))
-    verdict = tip_session.terminable(mine, mine)
-    log(f"terminating {verdict['terminate']}  (protected={verdict['protected']} not-ours={verdict['not_ours']})")
-    done, _ = sponsor_bot.terminate_many(api, verdict["terminate"]) if verdict["terminate"] else ([], [])
-    for pid in verdict["terminate"]:
-        log(f"  {pid}: {'gone' if pid in done else '⛔ STILL LISTED — TERMINATE BY HAND'}")
-    try:
-        listed = {str(p["id"]) for p in api.pods() if (p.get("status") or "") != "TERMINATED"}
-    except Exception as e:                                         # noqa: BLE001
-        log(f"⛔ account check FAILED ({str(e)[:90]}) — {rented_path} KEPT: run --cleanup when RunPod answers")
-        return None
-    left = [i for i in verdict["terminate"] if i in listed]
-    log(f"account check: {'clean' if not left else '⛔ STILL PRESENT: ' + str(left)}")
-    if keep:
-        return None
-    if not left:
+            log(f"⛔ could not list the account ({str(e)[:90]}) — this run's prefix {prefix} cannot be swept now; "
+                f"{rented_path} KEPT: run --cleanup when RunPod answers")
+            if left is None:            # nothing could be listed at all: still release what the record names
+                v = tip_session.terminable([i for i in dict.fromkeys(named) if i not in keep],
+                                           [i for i in dict.fromkeys(named) if i not in keep])
+                if v["terminate"]:
+                    sponsor_bot.terminate_many(api, v["terminate"])
+            return None
+        mine = [i for i in dict.fromkeys(named + [i for i, x in listed.items()
+                                                  if prefix and x["name"].startswith(prefix)])
+                if i not in keep and i in listed]
+        verdict = tip_session.terminable(mine, mine)
+        left = verdict["terminate"]
+        log(f"account check: {'clean' if not left else 'releasing ' + str(left)}  (protected={verdict['protected']}"
+            f" not-ours={verdict['not_ours']}" + (f", kept={sorted(keep)}" if keep else "") + ")")
+        if not left:
+            clean += 1
+            if clean >= 2:
+                break
+            continue
+        clean = 0
+        done, _ = sponsor_bot.terminate_many(api, left)
+        for pid in left:
+            log(f"  {pid}: {'gone' if pid in done else '⛔ STILL LISTED'}")
+        named += left
+    if left or clean < 2:
+        left = left or []
+        log(f"⛔ NOT CONFIRMED CLEAN after {rounds} listings: {left} — run --cleanup, or terminate by hand"
+            if left else f"⚠ the account was not seen clean twice in {rounds} listings; {rented_path} KEPT — run --cleanup")
+        if not left:
+            return None
+    elif not keep:
         try:
-            os.unlink(rented_path)     # every recorded pod is gone; the record would only mislead
+            os.unlink(rented_path)     # every pod of this run is gone; the record would only mislead
         except OSError:
             pass
     return left
@@ -1079,8 +1076,15 @@ def cleanup(api, rented_path):
                         sources.setdefault(p["id"], what)
         except (OSError, ValueError):
             log(f"  (no usable {what})")
+    # ⛔ AND THE RUN'S PREFIX, BY LISTING: a pod whose create answer was lost is in no record, but carries the prefix.
+    prefix = read_run_prefix(os.path.dirname(rented_path))
+    if prefix:
+        for x in api.pods():           # an unlistable account raises: nothing can be shown clean then
+            if x["name"].startswith(prefix) and (x.get("status") or "") != "TERMINATED":
+                pods.setdefault(x["id"], {"id": x["id"], "name": x["name"]})
+                sources.setdefault(x["id"], f"the run prefix {prefix}")
     if not pods:
-        log(f"no rental record at {rented_path} or {rec_path} — nothing to clean up")
+        log(f"no rental record at {rented_path} or {rec_path}, and no pod with the run's prefix — nothing to clean up")
         return 0
     only_rec = [i for i, s in sources.items() if s == "recruited.json"]
     log(f"cleanup: {len(pods)} pod(s) across both records"
@@ -1096,6 +1100,7 @@ def cleanup(api, rented_path):
     # failure it exists to catch, and comparing only against `pods` can never see one.
     live = {p["id"]: p.get("name") for p in api.pods()}
     left = [pods[i].get("name") or i for i in pods if i in live]
+    left += [n for i, n in live.items() if prefix and (n or "").startswith(prefix) and i not in pods]
     unknown = [n for i, n in live.items() if i not in pods and not tip_session.is_protected(i)]
     log(f"account check: {'clean' if not left else '⛔ STILL PRESENT: ' + str(left)}")
     if unknown:
@@ -1398,6 +1403,7 @@ def main():
 
     if a.cleanup:
         return cleanup(api, rented_path)
+    rpre = run_prefix(a.rundir)          # every pod this run creates is named rpre + n (the teardown sweeps it)
 
     # ⛔ SIGTERM MUST REACH THE finally. Python does not run finally blocks on a default SIGTERM --
     # the process simply dies, and the cards go on billing. Turning it into an exception is what
@@ -1504,7 +1510,7 @@ def main():
             rented = a.cards + a.spares
             want = rented
             for i in range(want):
-                name = f"{PREFIX}{i+1}"
+                name = f"{rpre}{i+1}"
                 if name in existing:
                     raise SystemExit(f"refusing: {name} already exists")
 
@@ -1520,7 +1526,7 @@ def main():
             # mixed fleet costs 40% of the run. Only when NO single type can field the minimum do we mix
             # — deliberately, and labelled.
             for gt in gpu_types:
-                got = rent_uniform(api, gt, want, pub, rented_path, created, unreleased)
+                got = rent_uniform(api, gt, want, pub, rented_path, created, unreleased, prefix=rpre)
                 # ⛔ TARGET, NOT FLOOR: a type that can field only the floor should not stop us
                 # trying the next one, which might field the target. The final gate check is what
                 # accepts a short fleet, after the gates have had their say.
@@ -1547,7 +1553,7 @@ def main():
                 log(f"⚠ NO SINGLE TYPE can field {a.cards} cards — falling back to a MIXED fleet across "
                     f"{len(gpu_types)} types. Its wall-clock is NOT comparable with a uniform run.")
             for i in range(len(created), want if mixed_fallback else len(created)):
-                name = f"{PREFIX}{i+1}"
+                name = f"{rpre}{i+1}"
                 p = api.deploy_listening(name, pub, gpu_types=gpu_types)
                 if not p:
                     # ⛔ SPARES ARE OPTIONAL BY DEFINITION — THAT IS WHAT MAKES THEM SPARES. This used to
@@ -2600,7 +2606,7 @@ def main():
                 by the main thread; a second writer would race it and the loser is a pod nobody can
                 release. There is no budget cap by decision, so an unrecorded pod bills until an
                 invoice says so."""
-                pod = api.deploy_listening(f"hz-grow-{len(recruited) + 1}", pub, gpu_types=gpu_types)
+                pod = api.deploy_listening(f"{rpre}grow-{len(recruited) + 1}", pub, gpu_types=gpu_types)
                 if pod:
                     recruited.append(pod)
                     with open(recruited_path, "w") as fh:
@@ -2986,8 +2992,10 @@ def main():
             log("  release them with:  python3 tip_smoke.py --cleanup --rundir " + a.rundir)
             for p in created:
                 log(f"    {p['name']}  {p['id']}  ${float(p.get('price') or 0):.3f}/hr")
+            # ⛔ KEPT IS ONLY THE FLEET. Whatever else carries this run's prefix (a lost create, a spare) is released.
+            release_recorded(api, rented_path, created, unreleased, prefix=rpre, keep_ids=[p["id"] for p in created])
         else:
-            release_recorded(api, rented_path, created, unreleased)
+            release_recorded(api, rented_path, created, unreleased, prefix=rpre)
 
 
 if __name__ == "__main__":

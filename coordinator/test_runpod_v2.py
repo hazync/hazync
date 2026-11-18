@@ -16,13 +16,15 @@ differ in ways that fail QUIETLY rather than loudly:
   * a 429 is a per-user quota (180/min) that GraphQL never hit the same way.
 
 The client runs against a fake v2 server over real HTTP, as test_sponsor_bot.py does for the whole bot.
-The final section sweeps the repo: no code may still call GraphQL, except the one documented v2 gap
-(account balance, `clientBalance`, behind `gqlbal`).
+The final section sweeps the repo: no live code may still call GraphQL. experimental/libzync-bench/ is exempt: those
+are historical run scripts, kept on GraphQL and marked "port before reuse".
 
   python3 test_runpod_v2.py            # must PASS
   python3 test_runpod_v2.py --control  # the v2 mapping put back wrong; the named checks MUST fail
 """
 import http.server
+import subprocess
+import time
 import json
 import os
 import pathlib
@@ -58,8 +60,7 @@ if CONTROL:
     sb.RunPod.ssh_of = lambda self, pod_id: None      # only the listing is read for SSH
     sb.REQUEST_REFUSALS = ()                          # M1: a 401/402/422 hidden behind another type's 400
     sb.CAPACITY_LATCH_S = 0                           # H1(r2): a drought latches on the first miss
-    sb.Bot._lost_create = lambda self, c, e: None      # M4(r3): a lost create is shrugged off
-    sb.RUNPOD_REFUSALS_MAX = 10 ** 6                  # M1(r3): an over-ceiling pod never adds up to a latch
+    sb.Bot._sweep_strays = lambda self: None          # r4: a lost create's pod is never swept during the run
     sb.Bot._settle = lambda self, c, p, ok, note: setattr(p, "terminated", 1.0)   # M3(r2): unconfirmed = gone
     sb.Bot._sweep_leftovers = lambda self, c: None    # M2(r2): an earlier run's pods are never swept
 
@@ -103,6 +104,7 @@ class FakeV2:
         self.rate_limit = 0                              # answer this many requests 429 first
         self.delete_status = {}                          # pod id -> forced status for DELETE
         self.create_then_fail = 0                        # creates that make the pod but answer 500 (lost answer)
+        self.late = 0                                    # a lost create's pod is missing from this many listings
         self.bad_listing = False                         # GET /v2/pods answers 200 without a listing
         self.create_cost = 0.74                          # what a new pod's `cost` reads at first
         self.cost_after = 0.74                           # ... and on every later GET
@@ -176,16 +178,23 @@ class FakeV2:
             pid = f"pod{len(self.pods) + 1}"
             self.pods[pid] = {"name": body["name"], "gpu": body["gpu"]["id"], "cost": self.create_cost, "dc": None,
                               "ports": [{"private": 22, "public": 40022, "type": "tcp", "ip": PUBLIC_IP}]}
-            obj = self.pod_obj(pid)
+            # RunPod's real create answer: PROVISIONING, no runtime yet, no data centre.
+            obj = dict(self.pod_obj(pid, runtime=False), status="PROVISIONING", dataCenterId=None)
             self.pods[pid]["cost"] = self.cost_after
             if self.create_then_fail > 0:
                 self.create_then_fail -= 1
+                self.pods[pid]["hidden"] = self.late
                 return self.problem(500, "upstream timeout")
             return 201, obj, ()
         if method == "GET" and path == "/v2/pods" and self.bad_listing:
             return 200, {"message": "ok"}, ()
         if method == "GET" and path == "/v2/pods":
-            ids = sorted(self.pods)
+            ids = []
+            for i in sorted(self.pods):
+                if self.pods[i].get("hidden", 0) > 0:      # not listed yet (eventual consistency)
+                    self.pods[i]["hidden"] -= 1
+                    continue
+                ids.append(i)
             start = int(q.get("cursor") or 0)
             page = ids[start:start + self.page_size]
             more = start + self.page_size < len(ids)
@@ -454,41 +463,8 @@ f.pods["two"] = {"name": "two", "gpu": A40, "cost": 1, "ports": [
     {"private": 22, "public": 53001, "type": "tcp", "ip": "45.23.12.2"}]}
 check(p22("two") == (PUBLIC_IP, 53000), "H1: between two global entries the FIRST is kept (deterministic)")
 
-# The shell pickers (experimental bench scripts) run the same rule in an inline python3 -c. Run each one.
-print("== H1: the shell scripts' port pickers ==")
-import subprocess   # noqa: E402
 ROOT = pathlib.Path(HERE).parent
-BENCH = ROOT / "experimental" / "libzync-bench"
-PICK = re.compile(r"python3 -c '\n?(import ipaddress,json,sys\n.*?)'", re.S)
-sample = {"id": "p", "runtime": {"ports": [
-    {"private": 22, "public": 40001, "type": "tcp", "ip": CGNAT},
-    {"private": 9110, "public": 40002, "type": "tcp", "ip": CGNAT},
-    {"private": 22, "public": 40003, "type": "tcp", "ip": PUBLIC_IP},
-    {"private": 9110, "public": 40004, "type": "tcp", "ip": PUBLIC_IP},
-    {"private": 22, "public": 40005, "type": "tcp", "ip": "45.23.12.2"},
-    {"private": 9110, "public": 40006, "type": "tcp", "ip": "45.23.12.2"}]}}
-pickers = []
-for sh in sorted(BENCH.rglob("*.sh")):
-    for m in PICK.finditer(sh.read_text()):
-        pickers.append((sh.relative_to(ROOT), m.group(1)))
-check(len(pickers) >= 9, f"H1: found the scripts' port pickers ({len(pickers)})")
-for rel, code in pickers:
-    if CONTROL:
-        code = code.replace("ipaddress.ip_address(ip).is_global", OLD_PUBLIC_RULE)
-    out = subprocess.run([sys.executable, "-c", code, "NAME"], input=json.dumps(sample),
-                         capture_output=True, text=True).stdout.split()
-    ok = (out[:2] == [PUBLIC_IP, "40003"] or out[:5] == ["NAME", PUBLIC_IP, "40003", PUBLIC_IP, "40004"])
-    check(ok, f"H1: {rel} picks the first GLOBAL mapping, not 100.65 or a later one ({out[:6]})")
-    if out[:1] == ["NAME"]:
-        check(out[5:6] == [CGNAT], f"H1: {rel} records the internal 100.65 address as the private one ({out[5:6]})")
-    err = subprocess.run([sys.executable, "-c", code, "NAME"], input=json.dumps({"status": 429, "title": "x"}),
-                         capture_output=True, text=True).stdout.split()
-    check(err in ([], ["ERR", "429"]),
-          f"H1/M2: {rel} reads a 429 body as no mapping or as ERR 429, never as ports ({err})")
-check(any(err == ["ERR", "429"] for err in
-          [subprocess.run([sys.executable, "-c", c, "N"], input='{"status": 429}', capture_output=True,
-                          text=True).stdout.split() for r, c in pickers if "podup" in str(r)]),
-      "M2: podup.sh tells a 429 apart from 'no ports' (ERR 429), so it waits instead of giving up")
+
 
 # ── M2. the shared quota: a 429 is waited out, never a refusal, never 'no ports' ─────────────────────
 print("== M2: the quota ==")
@@ -663,62 +639,33 @@ f.create_cost, f.cost_after = 0, 0.61
 p = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10).deploy_listening("hz-smoke-l2", PUB, gpu_types=(A40,))
 check(p["price"] == 0.61, f"L2: tip_smoke reads the price again when the create answered 0 ({p['price']})")
 
-# ── M3 / L1. the bench scripts: bounded calls, loud unknowns ─────────────────────────────────────────
-print("== M3 / L1: the bench scripts ==")
-defs = []
-for sh in sorted(BENCH.rglob("*.sh")):
-    for n, line in enumerate(sh.read_text().split("\n"), 1):
-        if re.match(r"\s*(rp|gqlbal) ?\(\)", line):
-            if CONTROL and "pre970" in str(sh):
-                line = line.replace("--max-time 20 ", "")
-            defs.append((f"{sh.relative_to(ROOT)}:{n}", "--max-time" in line))
-check(len(defs) >= 15 and all(ok for _, ok in defs),
-      f"M3: every rp/gqlbal curl has --max-time ({[w for w, ok in defs if not ok][:4]}, {len(defs)} defs)")
-bal = [str(sh.relative_to(ROOT)) for sh in BENCH.rglob("*.sh") if "|| echo 99" in sh.read_text()]
-check(not bal, f"M3: no script turns an unreadable balance into a silent $99 ({bal})")
-unread = [str(sh.relative_to(ROOT)) for sh in BENCH.rglob("*.sh")
-          if "clientBalance" in sh.read_text() and "UNREADABLE" not in sh.read_text() and sh.name != "pod.sh"]
-check(not unread, f"M3: every balance guard says UNREADABLE when it cannot read the balance ({unread})")
-
-with tempfile.TemporaryDirectory() as home:
-    os.makedirs(os.path.join(home, ".hazync"))
-    open(os.path.join(home, ".hazync", "runpod.key"), "w").write("k-test")
-    script = (BENCH / "gpu" / "fleet" / "pod.sh").read_text()
-    if CONTROL:
-        script = re.sub(r'\|\| \{ echo "pod.sh status: RunPod did not list pods.*?exit 1; \}', "|| true", script, flags=re.S)
-        script = script.replace('lst["pods"]', '(lst.get("pods") or [])')      # the first version's reading
-    path = os.path.join(home, "pod.sh")
-    open(path, "w").write(script)
-    f = FakeV2()
-    f.pods["q1"] = {"name": "hz-q1", "gpu": A40, "cost": 1,
-                    "ports": [{"private": 22, "public": 40022, "type": "tcp", "ip": PUBLIC_IP}]}
-    env = dict(os.environ, HOME=home, RUNPOD_API=f.url, RUNPOD_GQL=f.url + "/no-graphql")
-    r = subprocess.run(["bash", path, "status"], env=env, capture_output=True, text=True, timeout=60)
-    good = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else {}
-    check([p["id"] for p in good.get("pods", [])] == ["q1"] and good["pods"][0].get("runtime")
-          and good.get("balance") is None,
-          f"L1: pod.sh status lists the pods with their runtime filled in, balance null when unreadable "
-          f"(rc {r.returncode})")
-    f.rate_limit = 1
-    r = subprocess.run(["bash", path, "status"], env=env, capture_output=True, text=True, timeout=60)
-    check(r.returncode != 0 and not r.stdout.strip(),
-          f"L1: a 429 listing makes pod.sh status FAIL, not print 'no pods' (rc {r.returncode}, {r.stdout[:60]!r})")
-
-# ── r3 H1. a drought never latches; one identical 400 for CAPACITY_LATCH_S latches (exit 5 pages) ──────
-print("== H1(r3): the capacity streak ==")
-D1 = "There are no instances currently available"
+# ── r4. ONE drought rule: N hours of attempts with nothing landing, whatever the reason, latches ─────────
+print("== drought(r4): the capacity streak ==")
 with tempfile.TemporaryDirectory() as home:
     t0 = 1_000_000.0
-    seen = {h / 2: sb.capacity_note(home, D1, t0 + h * 1800) for h in range(0, 15)}    # every 30 min, 0..7 h
+    seen = {h / 2: sb.capacity_note(home, t0 + h * 1800) for h in range(0, 15)}    # an attempt every 30 min
     first = min((h for h, v in seen.items() if v), default=None)
-    check(first == 6.0,
-          f"H1(r3): one identical 400, seen every 30 min, latches at {sb.CAPACITY_LATCH_S // 3600} h, not before "
-          f"(first latch at {first} h)")
-    check(sb.capacity_note(home, "a different detail", t0 + 7.1 * 3600) is False,
-          "H1(r2): a different detail starts a new streak")
-    sb.capacity_note(home, D1, t0)
-    check(sb.capacity_note(home, D1, t0 + 5 * 3600) is False,
-          "H1(r2): a gap of over 2 h without a miss ends the streak (the stock came back, or nothing waited)")
+    check(first == 6.0, f"drought(r4): attempts every 30 min with nothing landing latch at 6 h, not before ({first} h)")
+    sb.capacity_note(home, t0)
+    check(sb.capacity_note(home, t0 + 5 * 3600) is False,
+          "drought(r4): a gap of over 2 h without an attempt ends the streak (nothing was waiting)")
+    for junk in ('{"first": "x"}', "not json", '[]', '{"first": 5, "last": 1}', '{"first": 1e30, "last": 1e30}'):
+        open(os.path.join(home, sb.CAPACITY_STATE), "w").write(junk)
+        try:
+            v = sb.capacity_note(home, t0)
+        except Exception as e:      # noqa: BLE001
+            v = e
+        check(v is False, f"drought(r4): a malformed capacity.json ({junk!r}) starts afresh, never raises ({v!r})")
+
+
+D1 = "There are no instances currently available"
+
+
+class LimitedAPI:
+    last_misses = []
+
+    def deploy(self, name, pub):
+        raise sb.RunPodError("HTTP 429 Too Many Requests", status=429)
 
 
 class MissAPI:
@@ -751,25 +698,22 @@ def looks(api, n, home=None, clock=None):
 import time   # noqa: E402
 bot, logs = looks(MissAPI([D1, D1]), 3)
 check(bot.stop_reason is None and bot._refusals == 0,
-      f"H1(r2): three looks of a normal drought (LOW stock, all-400) neither latch nor page "
+      f"drought(r4): three looks of a normal drought (LOW stock, all-400) neither latch nor page "
       f"({bot.stop_reason}, {bot._refusals})")
 check(any(D1 in m for m in logs), "H1(r2): and the log says RunPod's own words for the miss")
 with tempfile.TemporaryDirectory() as home:
     now = time.time()
-    json.dump({"detail": D1, "first": now - 5 * 3600, "last": now - 300},
-              open(os.path.join(home, sb.CAPACITY_STATE), "w"))
+    json.dump({"first": now - 5 * 3600, "last": now - 300}, open(os.path.join(home, sb.CAPACITY_STATE), "w"))
     bot, logs = looks(MissAPI([D1, D1]), 1, home=home)
-    check(bot.stop_reason is None, f"H1(r3): 5 h of the same 400 does not stop the bot yet ({bot.stop_reason})")
-    json.dump({"detail": D1, "first": now - 6.1 * 3600, "last": now - 300},
-              open(os.path.join(home, sb.CAPACITY_STATE), "w"))
-    bot, logs = looks(MissAPI([D1, D1]), 1, home=home)
-    check(bot.stop_reason == "runpod" and any("SAME 400" in m for m in logs),
-          f"H1(r3): 6 h of the same 400 stops it as 'runpod' -- exit 5, which latches and pages ({bot.stop_reason})")
-    json.dump({"detail": D1, "first": now - 13 * 3600, "last": now - 300},
-              open(os.path.join(home, sb.CAPACITY_STATE), "w"))
+    check(bot.stop_reason is None, f"drought(r4): 5 h with nothing landing does not stop the bot yet ({bot.stop_reason})")
+    json.dump({"first": now - 6.1 * 3600, "last": now - 300}, open(os.path.join(home, sb.CAPACITY_STATE), "w"))
     bot, logs = looks(MissAPI([D1, "another reason"]), 1, home=home)
-    check(bot.stop_reason is None and not os.path.exists(os.path.join(home, sb.CAPACITY_STATE)),
-          "H1(r2): misses whose details DIFFER between types end the streak (that is capacity, not a request)")
+    check(bot.stop_reason == "runpod" and not os.path.exists(os.path.join(home, sb.CAPACITY_STATE)),
+          f"drought(r4): 6 h with nothing landing stops it as 'runpod' (exit 5), whatever the 400s said, and the "
+          f"streak is cleared ({bot.stop_reason})")
+    json.dump({"first": now - 6.1 * 3600, "last": now - 300}, open(os.path.join(home, sb.CAPACITY_STATE), "w"))
+    bot, logs = looks(LimitedAPI(), 1, home=home)
+    check(bot.stop_reason == "runpod", f"drought(r4): a 429 counts toward the drought too ({bot.stop_reason})")
 
 # ── r2 M3. an unconfirmed termination is not a termination ────────────────────────────────────────────
 print("== M3(r2): unconfirmed pods stay live ==")
@@ -838,61 +782,48 @@ with tempfile.TemporaryDirectory() as d:
 check(refused is not None and "s1" in str(refused),
       f"M2(r2): the next start finds the earlier run's unconfirmed pod, cannot stop it, and REFUSES to rent ({refused})")
 
-# ── r3 L1/M2/M4. a create whose answer was lost ───────────────────────────────────────────────────
-print("== L1/M4(r3): a create whose answer was lost ==")
+# ── r4. a create whose answer was lost is found by the run's PREFIX SWEEP, however late it appears ──────
+print("== lost create (r4): the prefix sweep ==")
 f = FakeV2()
-f.create_then_fail = 1
+f.create_then_fail, f.late = 1, 1
 try:
-    client(f).deploy("hz-sponsor-l1", PUB, gpu_types=(R4090, A40))
-    lost = None
-except sb.LostCreate as e:
-    lost = e
-posts = [r for r in f.reqs if r[0] == "POST"]
-check(lost is not None and lost.name == "hz-sponsor-l1" and len(posts) == 1,
-      f"L1(r3): a 500 on create raises LostCreate naming the pod, and NO second type is rented ({lost}, {len(posts)} creates)")
+    got = client(f).deploy("hz-sponsor-l1", PUB, gpu_types=(R4090,))
+    raised = None
+except sb.RunPodError as e:
+    got, raised = None, e
+check(raised is not None and len(f.pods) == 1 and not client(f).pods(),
+      f"r4: a create that made the pod but answered 500 is just 'no answer'; the pod is NOT listed yet ({raised})")
 
 
-class LostAPI:
-    """Every deploy's answer is lost; the pod exists under the run's prefix (or the listing fails)."""
-    def __init__(self, listing_ok=True):
-        self.listing_ok, self.live, self.last_misses = listing_ok, {}, []
-
-    def deploy(self, name, pub):
-        self.live[f"L{len(self.live) + 1}"] = name
-        raise sb.LostCreate(f"the create of {name} got no answer", status=None, name=name)
-
-    def pods(self):
-        if not self.listing_ok:
-            raise sb.RunPodError("HTTP 503", status=503)
-        return [{"id": i, "name": n, "status": "RUNNING"} for i, n in self.live.items()]
-
-    def terminate(self, pid):
-        self.live.pop(pid, None)
+class SweepAPI(sb.RunPod):
+    pass
 
 
-for ok_ in (True, False):
-    la = LostAPI(listing_ok=ok_)
-    with tempfile.TemporaryDirectory() as d:
-        logs = []
-        bot = sb.Bot(os.path.join(d, "bot.db"), la, RL(), max_pods=2, max_usd=10, max_usd_per_hour=5,
-                     capacity_backoff_s=0, log=logs.append, sleep=lambda x: None, confirm_wait_s=0)
-        real = sb.pending_work
-        sb.pending_work = lambda *a, **k: [1]
-        try:
-            bot._launch(None, bot.clock())
-        finally:
-            sb.pending_work = real
-    if ok_:
-        check(not la.live and bot.stop_reason is None and bot._refusals == 0,
-              f"M4(r3): the pod a lost create made under the run's own prefix is found and released at once "
-              f"({la.live}, {bot.stop_reason})")
-    else:
-        check(bot.stop_reason == "runpod" and bot.maybe_billing and any("MAY BE BILLING" in m for m in logs),
-              f"M4(r3): when it cannot be confirmed the run STOPS (exit 5) saying a pod may be billing "
-              f"({bot.stop_reason}, {bot.maybe_billing})")
+f = FakeV2()
+f.create_then_fail, f.late = 1, 2                     # missing from the first TWO listings
+api = sb.RunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+with tempfile.TemporaryDirectory() as d:
+    logs = []
+    bot = sb.Bot(os.path.join(d, "bot.db"), api, RL(), max_pods=2, max_usd=10, max_usd_per_hour=5,
+                 capacity_backoff_s=0, log=logs.append, sleep=lambda x: None, confirm_wait_s=0)
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    real = sb.pending_work
+    sb.pending_work = lambda *a, **k: [1]
+    try:
+        bot._launch(c, bot.clock())                  # type 1's answer is lost (its pod exists); type 2 lands
+        lost = [i for i in f.pods if i not in {p_.id for p_ in bot.pods}]
+        for _ in range(4):                           # four looks: the lost pod appears on the third listing
+            bot._sweep_strays()
+    finally:
+        sb.pending_work = real
+        c.close()
+check(len(lost) == 1 and lost[0] not in f.pods and len(f.pods) == 1 and any("not tracked" in m for m in logs),
+      f"r4: the bot's per-look prefix sweep releases the lost create's pod once it appears, LATE, and keeps the one "
+      f"it tracks ({lost}, left {list(f.pods)})")
 
-# ── r3 M1. a pod over the price ceiling is a refusal toward the latch ─────────────────────────────────
-print("== M1(r3): over the price ceiling ==")
+# ── r4. pods over the price ceiling, look after look, are a drought ──────────────────────────────────
+print("== drought(r4): over the price ceiling ==")
 
 
 class DearAPI:
@@ -915,23 +846,26 @@ class DearAPI:
 
 
 da = DearAPI()
+clk = Clock()
+clk.t = 1_000_000.0
 with tempfile.TemporaryDirectory() as d:
     bot = sb.Bot(os.path.join(d, "bot.db"), da, RL(), max_pods=2, max_usd=100, max_usd_per_hour=5,
-                 capacity_backoff_s=0, log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0)
+                 capacity_backoff_s=0, log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0, clock=clk)
     c = sb.connect(bot.db_path)
     sb.ensure_tables(c)
     real = sb.pending_work
     sb.pending_work = lambda *a, **k: [1]
     try:
-        for _ in range(5):
+        for _ in range(20):
             if bot.stop_reason:
                 break
             bot._launch(c, bot.clock())
+            clk.t += 1800
     finally:
         sb.pending_work = real
     c.close()
-check(bot.stop_reason == "runpod" and da.n == sb.RUNPOD_REFUSALS_MAX,
-      f"M1(r3): a pod over the ceiling, again and again, latches after RUNPOD_REFUSALS_MAX ({da.n} rented, "
+check(bot.stop_reason == "runpod" and 12 <= da.n <= 14,
+      f"drought(r4): every pod back over the price ceiling for 6 h stops the bot as 'runpod' ({da.n} pods, "
       f"{bot.stop_reason})")
 
 print("== M5(r3): the run lock ==")
@@ -963,19 +897,45 @@ clk = Clock()
 check(not sb.terminate_confirmed(client(f), "z1", sleep=clk.sleep, clock=clk),
       "L3(r2): so a termination is never 'confirmed' by a listing that was not one")
 
-# ── r3 M2. tip_smoke: a lost create is found by name only among pods NEW since the run began ──────────
-print("== M2(r3): tip_smoke's lost create ==")
+# ── r4. tip_smoke: the teardown sweeps the run's prefix by listing, so a LATE lost create goes too ──────
+print("== lost create (r4): tip_smoke's prefix sweep ==")
 if CONTROL:
-    tip_smoke.SmokeRunPod._find_lost = lambda self, name, gpu_types: None
+    _real_release = tip_smoke.release_recorded
+    tip_smoke.release_recorded = lambda api, rp, cr, un, prefix=None, **kw: _real_release(api, rp, cr, un, None, **kw)
+with tempfile.TemporaryDirectory() as d:
+    f = FakeV2()
+    f.pods["old1"] = {"name": "hz-smoke-1", "gpu": A40, "cost": 1}          # another run's pod, old naming
+    api = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+    pre = tip_smoke.run_prefix(d)
+    f.create_then_fail, f.late = 1, 1
+    try:
+        api.deploy_listening(f"{pre}1", PUB, gpu_types=(A40,))
+    except sb.RunPodError:
+        pass
+    kept = api.deploy_listening(f"{pre}2", PUB, gpu_types=(A40,))
+    left = tip_smoke.release_recorded(api, os.path.join(d, "rented.json"), [kept], [], prefix=pre,
+                                      keep_ids=[kept["id"]], sleep=lambda x: None)
+    names = sorted(x["name"] for x in f.pods.values())
+check(pre.startswith("hz-smoke-") and len(pre) > len("hz-smoke-") + 1 and tip_smoke.run_prefix(tempfile.mkdtemp(), now=1) != pre,
+      f"r4: the run prefix is unique per run ({pre})")
+check(names == sorted(["hz-smoke-1", f"{pre}2"]),
+      f"r4: --keep keeps the fleet, the teardown still releases the LATE lost create under the run's prefix, and "
+      f"never another run's pod ({names})")
+
+# ── r4. fold_rent: released by its unique NAME too ────────────────────────────────────────────────────
+print("== lost create (r4): fold_rent ==")
+import fold_rent   # noqa: E402
+if CONTROL:
+    fold_rent.release_fold = lambda api, name, pod_id: sb.terminate_many(api, [pod_id] if pod_id else [])[1]
 f = FakeV2()
-f.pods["old1"] = {"name": "hz-smoke-1", "gpu": A40, "cost": 1}          # an earlier run's pod of the same name
-api = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10)
-f.create_then_fail = 1
-pp = api.deploy_listening("hz-smoke-1", PUB, gpu_types=(R4090, A40))
-posts = [r for r in f.reqs if r[0] == "POST"]
-check(pp is not None and pp["id"] != "old1" and len(posts) == 1,
-      f"M2(r3): the lost create's NEW pod is found, never the earlier run's pod of the same name ({pp}, "
-      f"{len(posts)} creates)")
+f.create_then_fail, f.late = 1, 0
+api = sb.RunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+try:
+    api.deploy("hazync-fold-123", PUB, gpu_types=(A40,))
+except sb.RunPodError:
+    pass
+fold_rent.release_fold(api, "hazync-fold-123", None)
+check(not f.pods, f"r4: fold_rent's teardown releases a lost create by its unique name, with no pod id ({list(f.pods)})")
 
 # ── r2 C1. a rent that stops half way: every pod tracked, released, and the record kept until the account agrees
 print("== C1(r2): rent_uniform and the teardown ==")
@@ -1016,7 +976,7 @@ if CONTROL:
         return got
     tip_smoke.rent_uniform = _old_rent
 
-    def _old_release(api, rented_path, created, unreleased):      # C1(r2): release `created`, check `created`
+    def _old_release(api, rented_path, created, unreleased, prefix=None, keep_ids=(), **kw):   # C1(r2): `created` only
         for x in created:
             api.terminate(x["id"])
         left = [x["id"] for x in created if x["id"] in {y["id"] for y in api.pods()}]
@@ -1035,7 +995,7 @@ with tempfile.TemporaryDirectory() as d:
         raised = e
     check(raised is not None and sorted(p["id"] for p in created) == ["r1", "r2", "r3"],
           f"C1(r2): 3 rented then a 402: all 3 are handed to the tracked set ({[p['id'] for p in created]})")
-    left = tip_smoke.release_recorded(ra, rp_, [], [])
+    left = tip_smoke.release_recorded(ra, rp_, [], [], sleep=lambda x: None)
     check(left == [] and not ra.live and not os.path.exists(rp_),
           f"C1(r2): the teardown releases them FROM THE RECORD even when `created` is empty, then drops the record "
           f"({left}, live {sorted(ra.live)})")
@@ -1046,110 +1006,9 @@ with tempfile.TemporaryDirectory() as d:
     got = tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased)
     check(len(got) == 3, f"C1(r2): 3 rented then a 400 (a miss) returns the 3 -- no exception, nothing lost ({len(got)})")
     ra.listing_fails = True
-    left = tip_smoke.release_recorded(ra, rp_, [], [])
+    left = tip_smoke.release_recorded(ra, rp_, [], [], sleep=lambda x: None)
     check(left is None and os.path.exists(rp_),
           "C1(r2): when the account cannot be listed the record is KEPT (never 'account check: clean')")
-
-# ── r2 L1 / M4. the bench scripts' create and terminate helpers, against a stub `rp` ─────────────────
-print("== L1/M4(r2): rp_create and rp_term in the bench scripts ==")
-HELP = re.compile(r"(rp_create\(\)\{.*?\n  printf '%s\\n' \"\$ID\"; \}\n.*?rp_term\(\)\{.*?\n  return 1; \})", re.S)
-helper_texts = {}
-for sh in sorted(BENCH.rglob("*.sh")):
-    t = sh.read_text()
-    if "rp_create(){" in t or "rp_term(){" in t:
-        m = HELP.search(t)
-        helper_texts[str(sh.relative_to(ROOT))] = m.group(1) if m else None
-check(len(helper_texts) >= 11 and len(set(helper_texts.values())) == 1 and None not in helper_texts.values(),
-      f"M4(r2): every bench script carries the SAME rp_create/rp_term ({len(helper_texts)} scripts, "
-      f"{len(set(helper_texts.values()))} versions)")
-raw_calls = []
-for sh in sorted(BENCH.rglob("*.sh")):
-    for n, line in enumerate(sh.read_text().split("\n"), 1):
-        if re.search(r"\brp (POST /pods|DELETE )", line) and "rp_create(){" not in line:
-            raw_calls.append(f"{sh.relative_to(ROOT)}:{n}")
-inside = {k for k in raw_calls}
-check(len(raw_calls) == 2 * len(helper_texts),
-      f"M4(r2): no script creates or deletes a pod except through rp_create / rp_term ({len(raw_calls)} raw calls, "
-      f"expected {2 * len(helper_texts)}, the helpers' own)")
-helpers = next(iter(helper_texts.values()))
-if CONTROL:
-    helpers = helpers.replace("ID=$(rp GET '/pods?limit=1000'", "ID=-; : $(rp GET '/pods?limit=1000'")   # L1: no lookup
-    helpers = helpers.replace("for t in $(seq 1 20); do", "for t in 1; do")               # M4: single-shot
-    helpers = helpers.replace('    for id in $left; do rp DELETE "/pods/$id" > /dev/null; done\n', "")   # H3: serial
-    helpers = helpers.replace('    still=""\n    for id in $left; do\n',
-                              '    still=""\n    for id in $left; do rp DELETE "/pods/$id" > /dev/null\n')
-    helpers = helpers.replace('case "$R" in *"error code: 10"*)', 'case "$R" in *"NEVER"*)')   # L: Cloudflare not fatal
-    helpers = helpers.replace('"") echo "⛔ create of $2: no answer', '"") return 1; echo "x')       # M3: unknown = miss
-
-
-def bash_with(stub, body, timeout=30):
-    script = "sleep(){ :; }\n" + stub + "\n" + helpers + "\n" + body
-    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=timeout)
-    return r.returncode, r.stdout.strip(), r.stderr
-
-
-STUB = r"""rp(){ case "$1 $2" in
-  "POST /pods") cat "$T/post" ;;
-  "GET /pods?limit=1000") cat "$T/list" ;;
-  "DELETE "*) echo "" ;;
-  "GET /pods/"*) n=$(cat "$T/n" 2>/dev/null || echo 0); echo $((n+1)) > "$T/n"
-                 if [ $n -ge $(cat "$T/gone_after") ]; then echo '{"title":"Not Found","status":404,"detail":"pod not found"}'
-                 else echo '{"id":"x","status":"RUNNING"}'; fi ;;
-esac; }"""
-with tempfile.TemporaryDirectory() as T:
-    os.environ["T"] = T
-
-    def setup(post, listing='{"pods":[],"pagination":{"hasNextPage":false,"nextCursor":null}}', gone_after=0):
-        open(os.path.join(T, "post"), "w").write(post)
-        open(os.path.join(T, "list"), "w").write(listing)
-        open(os.path.join(T, "gone_after"), "w").write(str(gone_after))
-        if os.path.exists(os.path.join(T, "n")):
-            os.unlink(os.path.join(T, "n"))
-
-    setup('{"id":"pod123","name":"lz-x","status":"PROVISIONING","cost":0.5}')
-    check(bash_with(STUB, 'rp_create "{}" lz-x')[:2] == (0, "pod123"), "L1(r2): rp_create prints a created pod's id")
-    setup('{"title":"Internal Server Error","status":500,"detail":"upstream timeout"}',
-          '{"pods":[{"id":"podLOST","name":"lz-x","status":"PROVISIONING"}],"pagination":{"hasNextPage":false}}')
-    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
-    check((rc, out) == (0, "podLOST"), f"L1(r2): a 500 on create looks the pod up BY NAME and returns it ({rc}, {out!r})")
-    setup("")
-    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
-    check(rc == 1 and out == "", f"L1(r2): no answer and no such pod is 'no pod' (rc 1) ({rc}, {out!r})")
-    for code, want in ((400, 1), (402, 2), (401, 2), (422, 2), (429, 3)):
-        setup('{"title":"x","status":%d,"detail":"d"}' % code)
-        rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
-        check(rc == want and out == "", f"L4(r2): HTTP {code} on create exits {want} ({rc})")
-    setup("error code: 1010")
-    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
-    check(rc == 2 and out == "", f"L(r3): a Cloudflare page is FATAL (2), not 'no capacity' ({rc})")
-    setup('{"title":"x","status":502,"detail":"bad gateway"}', '{"message": "not a listing"}')
-    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
-    check(rc == 4 and "MAY BE BILLING" in err,
-          f"M3(r3): a lost answer whose follow-up listing FAILS exits 4 (may be billing), not 1 ({rc})")
-    setup('{"title":"x","status":500,"detail":"y"}',
-          '{"pods":[{"id":"pA","name":"lz-x","status":"RUNNING"},{"id":"pB","name":"lz-x","status":"RUNNING"},'
-          '{"id":"pC","name":"lz-x","status":"TERMINATED"}],"pagination":{"hasNextPage":false}}')
-    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
-    check(rc == 0 and out == "pA" and "releasing the rest" in err,
-          f"M2(r3): two live pods under one lost name: the first is kept, the other RELEASED, a TERMINATED one ignored "
-          f"({rc}, {out!r})")
-    setup("", gone_after=2)
-    rc, out, err = bash_with(STUB, 'rp_term pod9')
-    check(rc == 0 and "confirmed gone" in err, f"M4(r2): rp_term retries until RunPod answers 404 ({rc})")
-    setup("", gone_after=10 ** 6)
-    rc, out, err = bash_with(STUB, 'rp_term pod9')
-    check(rc == 1 and "NOT CONFIRMED" in err, f"M4(r2): and is LOUD (exit 1) when the pod never goes ({rc})")
-    rc, out, err = bash_with(STUB, 'rp_term ""')
-    check(rc == 2 and "no pod id" in err, f"L(r3): rp_term with an empty id refuses (2) instead of DELETE /pods/ ({rc})")
-    ORDER = STUB.replace('rp(){ case "$1 $2" in', 'rp(){ echo "$1 $2" >> "$T/order"; case "$1 $2" in')
-    setup("", gone_after=0)
-    if os.path.exists(os.path.join(T, "order")):
-        os.unlink(os.path.join(T, "order"))
-    rc, out, err = bash_with(ORDER, 'rp_term a b c')
-    order = open(os.path.join(T, "order")).read().split("\n")[:4]
-    check(rc == 0 and order[:3] == ["DELETE /pods/a", "DELETE /pods/b", "DELETE /pods/c"],
-          f"H3(r3): rp_term a b c sends EVERY DELETE first, then confirms ({order})")
-    del os.environ["T"]
 
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
@@ -1167,6 +1026,8 @@ for p in ROOT.rglob("*"):
         continue
     if any(part in SKIP for part in p.parts):
         continue
+    if p.relative_to(ROOT).parts[:2] == ("experimental", "libzync-bench"):
+        continue            # historical run scripts: GraphQL on purpose, each marked "port before reuse"
     for n, line in enumerate(p.read_text(errors="ignore").split("\n"), 1):
         # The ONE allowed GraphQL call: the account balance, which v2 does not offer (`gqlbal`).
         # Comments that NAME the old operations (the client's GraphQL->v2 mapping table) call nothing.
@@ -1184,43 +1045,19 @@ EXPECTED_CONTROL = {
     "C1(r2): the teardown releases them FROM THE RECORD even when `created` is empty, then drops the record",
     "C1(r2): when the account cannot be listed the record is KEPT",
     "H1(r2): 400 on every type is a CAPACITY MISS even though the catalogue shows LOW stock",
-    "H1(r2): a different detail starts a new streak",
-    "H1(r2): a gap of over 2 h without a miss ends the streak",
     "H1(r2): every 400's detail is kept for the log and the streak",
-    "H1(r2): three looks of a normal drought",
-    "H1(r3): 5 h of the same 400 does not stop the bot yet",
-    "H1(r3): one identical 400, seen every 30 min, latches at 0 h, not before",
     "H1: a pod with only a 100.65 address",
     "H1: and the same for 9110",
-    "H1: experimental/libzync-bench/gpu/fleet/live/grab2.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/gpu/fleet/live/grab2.sh records the internal 100.65 address as the private one",
-    "H1: experimental/libzync-bench/gpu/fleet/live/podup.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/gpu/fleet/live/podup.sh records the internal 100.65 address as the private one",
-    "H1: experimental/libzync-bench/gpu/fleet/podup.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/gpu/fleet/podup.sh records the internal 100.65 address as the private one",
-    "H1: experimental/libzync-bench/gpu/run_c14_pod.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/gpu/run_paper_pod.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/headers/run_headers_pod.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/pre970/gpu_run.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/signet/genesis/gpu_run.sh picks the first GLOBAL mapping, not 100.65 or a later one",
-    "H1: experimental/libzync-bench/signet/gpu_r4/gpu_run2.sh picks the first GLOBAL mapping, not 100.65 or a later one",
     "H1: the GLOBAL 22 mapping wins whether the 100.65 entry comes first or last",
-    "H3(r3): rp_term a b c sends EVERY DELETE first, then confirms",
-    "L(r3): a Cloudflare page is FATAL",
-    "L1(r2): a 500 on create looks the pod up BY NAME and returns it",
-    "L1: a 429 listing makes pod.sh status FAIL, not print 'no pods'",
     "L2: a pod deployed at cost 0 whose price turns out $0.3/h against a $0.50 ceiling is booting before it boots",
     "L2: a pod deployed at cost 0 whose price turns out $0.9/h against a $0.50 ceiling is terminated before it boots",
     "L3(r2): GET /v2/pods answering 200 without `pods`/`pagination` RAISES",
     "M1(r2): a 429's Retry-After",
     "M1(r2): every DELETE goes out FIRST, then one listing confirms them all",
-    "M1(r3): a pod over the ceiling, again and again, latches after RUNPOD_REFUSALS_MAX",
     "M1: HTTP 401 on the first type is a refusal even when another type answered 400",
     "M1: HTTP 402 on the first type is a refusal even when another type answered 400",
     "M1: HTTP 422 on the first type is a refusal even when another type answered 400",
     "M2(r2): the next start finds the earlier run's unconfirmed pod, cannot stop it, and REFUSES to rent",
-    "M2(r3): the lost create's NEW pod is found, never the earlier run's pod of the same name",
-    "M2(r3): two live pods under one lost name: the first is kept, the other RELEASED, a TERMINATED one ignored",
     "M2: a 429 on deploy is NOT a refusal -- it never moves the latch",
     "M2: and it BACKS OFF while RunPod refuses",
     "M2: twenty 429'd DELETEs do not use up terminate_confirmed's 6 tries -- the pod is still released",
@@ -1229,13 +1066,17 @@ EXPECTED_CONTROL = {
     "M3(r2): and every poll is PACED for the 120/min sustained quota",
     "M3(r2): and no replacement is rented on top of it at --max-pods 1",
     "M3(r2): its spend keeps counting",
-    "M3(r3): a lost answer whose follow-up listing FAILS exits 4",
-    "M3: every rp/gqlbal curl has --max-time",
-    "M4(r2): rp_term retries until RunPod answers 404",
-    "M4(r3): the pod a lost create made under the run's own prefix is found and released at once",
-    "M4(r3): when it cannot be confirmed the run STOPS",
     "RunPod's own 403",
     "a pod whose listing has no runtime still gets its SSH and boots",
+    "drought(r4): 5 h with nothing landing does not stop the bot yet",
+    "drought(r4): a gap of over 2 h without an attempt ends the streak",
+    "drought(r4): a malformed capacity.json",
+    "drought(r4): attempts every 30 min with nothing landing latch at 6 h, not before",
+    "drought(r4): every pod back over the price ceiling for 6 h stops the bot as 'runpod'",
+    "drought(r4): three looks of a normal drought",
+    "r4: --keep keeps the fleet, the teardown still releases the LATE lost create under the run's prefix, and never another run's pod",
+    "r4: fold_rent's teardown releases a lost create by its unique name, with no pod id",
+    "r4: the bot's per-look prefix sweep releases the lost create's pod once it appears, LATE, and keeps the one it tracks",
     "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",
     "two 429s are waited out for Retry-After and the create then lands",
     "with no runtime ports, RunPod's own ssh.direct is used",
