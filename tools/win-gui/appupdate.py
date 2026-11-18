@@ -19,8 +19,11 @@ signature to check; the PGP-signed manifest is the trust anchor, exactly as SECU
 import base64
 import hashlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 REPO = "hazync/hazync"
@@ -28,7 +31,11 @@ INSTALLER = "hazync-setup-x86_64-windows.exe"
 MANIFEST = "SHA256SUMS.txt"
 VERSION_FILE = "version.ini"        # written into {app} by installer/hazync.iss
 CHECK_EVERY_S = 6 * 3600
-TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")     # used with fullmatch (review L3)
+# size caps for the update's downloads (review L6): streamed, and abandoned past these
+MAX_INSTALLER = 600 * 1024 * 1024
+MAX_SMALL = 1024 * 1024
+UPDATE_PREFIX = "hazync-update-"
 
 # The maintainer's OpenPGP v4 public-key packet body (SECURITY.md: "defenwycke <defenwycke@icloud.com>",
 # 777FE81F 8CC077FD 3D08055E 852C2B31 90F5B928, Ed25519, created 2026-04-26, expires 2028-04-25), exported from
@@ -36,6 +43,12 @@ TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 MAINTAINER_KEY_PACKET = bytes.fromhex(
     "0469ee64fc16092b06010401da470f01010740b6803d72aab084f6a8128ccf6ba9573994c1f4fc4227a584e978adb8df919833")
 _ED25519_OID = bytes.fromhex("2b06010401da470f01")
+# The key's expiry, from its self-signature (subpacket 9: 63,072,000 s after creation 1777231100 = 2028-04-25 19:18:20
+# UTC). Pinned as a number: the self-signature itself is not carried or verified here. A signature made after this is
+# refused; one made before still verifies (SECURITY.md). After it, a new key means a manual reinstall (fails closed).
+KEY_EXPIRES = 1777231100 + 63072000
+CLOCK_SKEW_S = 24 * 3600                 # a signature dated further in the future than this is refused
+_KNOWN_SUBPACKETS = {2, 3, 16, 33}       # creation time, signature expiry, issuer key id, issuer fingerprint
 
 
 def key_fingerprint(packet=MAINTAINER_KEY_PACKET):
@@ -91,7 +104,7 @@ def latest_tag(get_json, timeout=20):
     d = get_json(f"https://api.github.com/repos/{REPO}/releases/latest",
                  timeout=timeout, headers={"Accept": "application/vnd.github+json"})
     tag = (d or {}).get("tag_name") or ""
-    if not TAG_RE.match(tag):
+    if not TAG_RE.fullmatch(tag):
         raise ValueError(f"GitHub named no usable latest release ({tag!r})")
     return tag
 
@@ -168,16 +181,18 @@ def _subpackets(buf):
             n, i = int.from_bytes(buf[i + 1:i + 5], "big"), i + 5
         if n < 1 or i + n > len(buf):
             raise ValueError("bad subpacket")
-        out.append((buf[i] & 0x7F, buf[i + 1:i + n]))
+        out.append((buf[i] & 0x7F, bool(buf[i] & 0x80), buf[i + 1:i + n]))
         i += n
     return out
 
 
-def verify_signature(data, armored, key_packet=MAINTAINER_KEY_PACKET):
+def verify_signature(data, armored, key_packet=MAINTAINER_KEY_PACKET, now=None):
     """(ok, why): is `armored` a good detached OpenPGP signature over `data` (bytes) by the pinned key?
 
     Only what release-sign.yml produces is accepted: one v4 signature packet, binary document (class 0x00), EdDSA
-    (22), SHA-256/384/512, issued by the pinned key. Anything else is refused, never guessed at."""
+    (22), SHA-256/384/512, issued by the pinned key, with a creation time that is not in the future and not after the
+    key's expiry, not itself expired, and no critical subpacket this does not understand. Anything else is refused."""
+    now = time.time() if now is None else now
     try:
         pk = _ed25519_raw(key_packet)
         fpr = key_fingerprint(key_packet)
@@ -208,14 +223,34 @@ def verify_signature(data, armored, key_packet=MAINTAINER_KEY_PACKET):
         left16 = s[at:at + 2]
         r, at = _mpi(s, at + 2)
         sv, at = _mpi(s, at)
-        issuers = set()
-        for t, v in _subpackets(hashed) + _subpackets(unhashed):
-            if t == 33 and len(v) == 21 and v[0] == 4:
-                issuers.add(v[1:].hex().upper())
-            elif t == 16 and len(v) == 8:
-                issuers.add(v.hex().upper())
-        if issuers and not all(fpr.endswith(x) for x in issuers):
+        if at != len(s):
+            return False, f"{len(s) - at} unexpected byte(s) after the signature"
+        issuers, created, expires_after = set(), None, 0
+        hashed_sub = _subpackets(hashed)
+        for where, subs in (("hashed", hashed_sub), ("unhashed", _subpackets(unhashed))):
+            for t, critical, v in subs:
+                if critical and t not in _KNOWN_SUBPACKETS:
+                    return False, f"a critical {where} subpacket of type {t} is not understood"
+                if t == 33 and len(v) == 21 and v[0] == 4:
+                    issuers.add(v[1:].hex().upper())
+                elif t == 16 and len(v) == 8:
+                    issuers.add(v.hex().upper())
+                elif t == 2 and where == "hashed" and len(v) == 4:
+                    created = int.from_bytes(v, "big")
+                elif t == 3 and where == "hashed" and len(v) == 4:
+                    expires_after = int.from_bytes(v, "big")
+        if not issuers:
+            return False, "the signature names no issuer"
+        if not all(fpr.endswith(x) for x in issuers):
             return False, f"signed by another key ({', '.join(sorted(issuers))}), not {fpr}"
+        if created is None:
+            return False, "the signature carries no creation time"
+        if created > now + CLOCK_SKEW_S:
+            return False, f"the signature is dated in the future ({time.strftime('%Y-%m-%d', time.gmtime(created))})"
+        if created > KEY_EXPIRES:
+            return False, "the signature was made after the maintainer key expired (2028-04-25)"
+        if expires_after and created + expires_after < now:
+            return False, "the signature has expired"
         trailer = s[:6 + hlen]
         h = hashlib.new(hname, data + trailer + b"\x04\xff" + len(trailer).to_bytes(4, "big")).digest()
         if h[:2] != left16:
@@ -253,10 +288,10 @@ def manifest_tag(manifest_text):
     return m.group(1) if m else ""
 
 
-def check_download(tag, manifest, asc, installer, key_packet=MAINTAINER_KEY_PACKET):
+def check_download(tag, manifest, asc, installer, key_packet=MAINTAINER_KEY_PACKET, verify=None):
     """(ok, why) for three downloaded byte strings: signature, then the tag line, then the installer's hash."""
-    ok, why = verify_signature(manifest, asc.decode("ascii", "replace") if isinstance(asc, bytes) else asc,
-                               key_packet=key_packet)
+    ok, why = (verify or verify_signature)(manifest, asc.decode("ascii", "replace") if isinstance(asc, bytes) else asc,
+                                           key_packet=key_packet)
     if not ok:
         return False, why
     text = manifest.decode("utf-8", "replace")
@@ -271,27 +306,48 @@ def check_download(tag, manifest, asc, installer, key_packet=MAINTAINER_KEY_PACK
     return True, f"{why}; {INSTALLER} sha256 {got[:16]}... matches {tag}'s signed manifest"
 
 
-def download_verified(tag, dest_dir, get, timeout=600, key_packet=MAINTAINER_KEY_PACKET):
-    """Fetch the release's installer + manifest + signature, verify them, and only then write the installer.
-    (ok, path_or_why). `get` is nethttp.get (url, timeout=) -> bytes."""
-    if not TAG_RE.match(tag or ""):
-        return False, f"not a release tag: {tag!r}"
+def download_verified(tag, current, get, timeout=600, key_packet=MAINTAINER_KEY_PACKET, tmp_root=None):
+    """Fetch the release's installer + manifest + signature, verify them, and only then write the installer, into a
+    fresh private folder (review L5). (ok, path_or_why, sha256). `get` is nethttp.get (url, timeout=, max_bytes=).
+
+    ⛔ (review M1) refused unless `tag` is strictly newer than `current`, this app's version: whatever releases/latest
+    names is otherwise installed, so a signed OLDER release marked latest would downgrade the app, and an "update" to
+    the same version would loop. A copy with no version (from source) never updates itself."""
+    if not TAG_RE.fullmatch(tag or ""):
+        return False, f"not a release tag: {tag!r}", ""
+    if not parse_version(current):
+        return False, "this copy of Hazync has no version (it runs from source), so it does not update itself", ""
+    if not is_newer(tag, current):
+        return False, f"{tag} is not newer than this Hazync (v{current}): there is no newer release to install yet", ""
     try:
-        manifest = get(asset_url(tag, MANIFEST), timeout=60)
-        asc = get(asset_url(tag, MANIFEST + ".asc"), timeout=60)
-        installer = get(asset_url(tag, INSTALLER), timeout=timeout)
+        manifest = get(asset_url(tag, MANIFEST), timeout=60, max_bytes=MAX_SMALL)
+        asc = get(asset_url(tag, MANIFEST + ".asc"), timeout=60, max_bytes=MAX_SMALL)
+        installer = get(asset_url(tag, INSTALLER), timeout=timeout, max_bytes=MAX_INSTALLER)
     except Exception as e:     # noqa: BLE001 - nethttp.NetError and friends: say it, do not run anything
-        return False, f"could not download {tag}: {e}"
+        return False, f"could not download {tag}: {e}", ""
+    if len(manifest) > MAX_SMALL or len(asc) > MAX_SMALL or len(installer) > MAX_INSTALLER:
+        return False, f"a download of {tag} is larger than any release file should be", ""
     ok, why = check_download(tag, manifest, asc, installer, key_packet=key_packet)
     if not ok:
-        return False, why
-    dest = Path(dest_dir) / f"hazync-setup-{tag}.exe"
+        return False, why, ""
+    root = Path(tmp_root or tempfile.gettempdir())
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        d = Path(tempfile.mkdtemp(prefix=UPDATE_PREFIX, dir=root))
+        dest = d / f"hazync-setup-{tag}.exe"
         dest.write_bytes(installer)
     except OSError as e:
-        return False, f"verified, but could not save it to {dest}: {e}"
-    return True, str(dest)
+        return False, f"verified, but could not save it: {e}", ""
+    remove_old_installers(root, keep=d)
+    return True, str(dest), hashlib.sha256(installer).hexdigest()
+
+
+def remove_old_installers(root, keep=None):
+    """Delete earlier updates' folders (hazync-update-*) under `root`, except `keep`. Best effort."""
+    for p in Path(root).glob(UPDATE_PREFIX + "*"):
+        if keep is not None and p.resolve() == Path(keep).resolve():
+            continue
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
 
 
 def installer_command(path):
@@ -299,8 +355,12 @@ def installer_command(path):
     return [str(path)]
 
 
-def launch_installer(path):
-    """Start the installer detached, so it outlives this app (which must close for its files to be replaced)."""
+def launch_installer(path, sha256):
+    """Start the installer detached, so it outlives this app (which must close for its files to be replaced).
+
+    The file is read and hashed again right before it is started (review L5): what runs is what was verified."""
+    if hashlib.sha256(Path(path).read_bytes()).hexdigest() != sha256:
+        raise OSError(f"{path} changed after it was verified; not started")
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

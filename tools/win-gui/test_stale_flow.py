@@ -161,19 +161,26 @@ def main():
         check(bool(app.update_bar.winfo_manager()) and "v0.27.0 is available" in app.v_update.get(),
               f"the banner: {app.v_update.get()!r}")
         ran, closed = [], []
-        appupdate.launch_installer = lambda p: ran.append(p)
+        appupdate.launch_installer = lambda p, sha: ran.append((p, sha))
         app._on_close = lambda: closed.append(1)
         hazync_gui.messagebox.askyesno = lambda *a, **k: True
-        appupdate.download_verified = lambda tag, dest, get, **k: (False, "BAD signature: not the maintainer key")
+        appupdate.download_verified = lambda tag, cur, get, **k: (False, "BAD signature: not the maintainer key", "")
         app.update_btn.invoke()
         spin(5, lambda: not app._update_busy and errors)
         check(not ran and not closed and "BAD signature" in str(errors[-1:]),
               f"a refused download is said and nothing runs: {errors[-1:]}")
         inst = os.path.join(tmp, "hazync-setup-v0.27.0.exe")
-        appupdate.download_verified = lambda tag, dest, get, **k: (True, inst)
+        seen = []
+        appupdate.download_verified = lambda tag, cur, get, **k: (seen.append(cur) or (True, inst, "ab" * 32))
+        # review L7: work that starts while it downloads stops the launch
+        app._armed = True
+        app._update_downloaded((True, inst, "v0.27.0", "ab" * 32))
+        app._armed = False
+        check(not ran and not closed, "work started meanwhile: the installer is not run, the app stays open")
         app.update_btn.invoke()
         spin(5, lambda: closed)
-        check(ran == [inst] and closed, f"a verified installer is run and the app closes: {ran}")
+        check(ran == [(inst, "ab" * 32)] and closed, f"a verified installer is run and the app closes: {ran}")
+        check(seen == ["0.26.1"], f"the app's own version is passed, so an older 'latest' is refused (M1): {seen}")
 
         print("── the first start of a new version: old prover and worker are replaced ──")
         app.host_cuda_var.set(old_host)

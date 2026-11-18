@@ -93,6 +93,11 @@ msg, _ = attempt(9, 9)
 check(msg is not None and "cannot read the board's input files" in msg and "update Hazync" in msg,
       f"it says update Hazync: {msg!r}")
 
+print("== a libzync board serving bytes that are not JSON and not LZLEAF ==")
+w.get, asked = board(True, lambda h: b"\x00\x01binary")
+msg, _ = attempt(10, 10)
+check(msg is not None and "cannot read the board's input files" in msg, f"it says update Hazync: {msg!r}")
+
 print("== an LZLEAF file is still taken (the normal path) ==")
 w.get, asked = board(True, lambda h: b"LZLEAF" + bytes(10))
 msg, _ = attempt(11, 11)

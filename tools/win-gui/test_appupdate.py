@@ -14,7 +14,7 @@ What is pinned:
   * after an upgrade, a remembered prover/worker that is an old copy is replaced by the installed one, and one that is
     fine (or better) is left alone.
 
-The controls: a check that trusts the sha256 alone (no signature) installs a forged release; an upgrade reset that
+The controls: check_download with the signature check stubbed out accepts a forged release whose hashes all match; an upgrade reset that
 replaces every non-installed prover throws away a good one the person chose.
 """
 import os as _os, sys as _sys
@@ -87,18 +87,33 @@ def _mpi(b):
     return (b[0].bit_length() + 8 * (len(b) - 1)).to_bytes(2, "big") + b
 
 
-def sign(sk, packet, data):
+def sign_packet(sk, packet, data, sigclass=0x00, halgo=10, created=None, extra_hashed=b"", issuer=True,
+                trailing=b"", text_canon=False):
+    """One v4 EdDSA signature packet body over `data`, the way gpg makes them, with knobs to make it wrong."""
     fpr = bytes.fromhex(appupdate.key_fingerprint(packet))
-    hashed = bytes([22, 33, 4]) + fpr + bytes([5, 2]) + int(time.time()).to_bytes(4, "big")
-    trailer = bytes([4, 0x00, 22, 10]) + len(hashed).to_bytes(2, "big") + hashed
-    digest = hashlib.sha512(data + trailer + b"\x04\xff" + len(trailer).to_bytes(4, "big")).digest()
+    created = int(time.time()) if created is None else created
+    hashed = (bytes([22, 33, 4]) + fpr if issuer else b"") + bytes([5, 2]) + created.to_bytes(4, "big") + extra_hashed
+    trailer = bytes([4, sigclass, 22, halgo]) + len(hashed).to_bytes(2, "big") + hashed
+    hname = {2: "sha1", 8: "sha256", 10: "sha512"}[halgo]
+    body_data = data.replace(b"\n", b"\r\n") if text_canon else data
+    digest = hashlib.new(hname, body_data + trailer + b"\x04\xff" + len(trailer).to_bytes(4, "big")).digest()
     sig = sk.sign(digest)
-    unhashed = bytes([9, 16]) + fpr[-8:]
-    body = trailer + len(unhashed).to_bytes(2, "big") + unhashed + digest[:2] + _mpi(sig[:32]) + _mpi(sig[32:])
-    pkt = bytes([0xC2, len(body)]) + body
+    unhashed = (bytes([9, 16]) + fpr[-8:]) if issuer else b""
+    return trailer + len(unhashed).to_bytes(2, "big") + unhashed + digest[:2] + _mpi(sig[:32]) + _mpi(sig[32:]) + trailing
+
+
+def armor(pkt):
     b64 = base64.b64encode(pkt).decode()
     return ("-----BEGIN PGP SIGNATURE-----\n\n" + "\n".join(b64[i:i + 64] for i in range(0, len(b64), 64))
             + "\n=AAAA\n-----END PGP SIGNATURE-----\n")
+
+
+def new_hdr(body):
+    return bytes([0xC2, len(body)]) + body
+
+
+def sign(sk, packet, data, **kw):
+    return armor(new_hdr(sign_packet(sk, packet, data, **kw)))
 
 
 def release(tag, installer, sk, packet, manifest_tag=None):
@@ -109,10 +124,14 @@ def release(tag, installer, sk, packet, manifest_tag=None):
             appupdate.asset_url(tag, appupdate.INSTALLER): installer}
 
 
-def getter(files):
-    def get(url, timeout=60):
+def getter(files, asked=None):
+    def get(url, timeout=60, max_bytes=None):
+        if asked is not None:
+            asked.append(url)
         if url not in files:
             raise OSError(f"404 {url}")
+        if max_bytes and len(files[url]) > max_bytes:
+            raise OSError(f"{url} is over {max_bytes} bytes")
         return files[url]
     return get
 
@@ -136,34 +155,117 @@ def main():
     check(appupdate.manifest_hash(REAL_MANIFEST.decode(), appupdate.INSTALLER).startswith("ef4210f1"),
           "the installer's hash is read from the manifest")
 
-    print("── download_verified: nothing unverified reaches the disk ──")
+    print("── the signature's own rules (review L1, L2, L10) ──")
     sk, pkt = test_key()
+    data = b"# hazync v0.27.0 commit x\nabc  file\n"
+    V = lambda asc, **k: appupdate.verify_signature(data, asc, key_packet=pkt, **k)   # noqa: E731
+    ok, why = V(sign(sk, pkt, data))
+    check(ok, f"a well-formed signature by the key verifies: {why}")
+    for label, asc in (
+            ("text mode (class 0x01)", sign(sk, pkt, data, sigclass=0x01, text_canon=True)),
+            ("SHA-1", sign(sk, pkt, data, halgo=2)),
+            ("an unknown critical subpacket", sign(sk, pkt, data, extra_hashed=bytes([2, 0x80 | 25, 1]))),
+            ("an expired signature (type 3)", sign(sk, pkt, data, created=int(time.time()) - 7200,
+                                                    extra_hashed=bytes([5, 3]) + (60).to_bytes(4, "big"))),
+            ("one dated next week", sign(sk, pkt, data, created=int(time.time()) + 7 * 86400)),
+            ("one made after the key expired", sign(sk, pkt, data, created=appupdate.KEY_EXPIRES + 1)),
+            ("no issuer", sign(sk, pkt, data, issuer=False)),
+            ("bytes after the S value", sign(sk, pkt, data, trailing=b"\x00")),
+            ("two signature packets", armor(new_hdr(sign_packet(sk, pkt, data)) * 2)),
+            ("a partial-length packet", armor(bytes([0xC2, 0xE5]) + sign_packet(sk, pkt, data)))):
+        ok, why = V(asc, now=appupdate.KEY_EXPIRES + 10 if "after the key" in label else None)
+        check(not ok, f"{label} is refused: {why}")
+    ok, why = V(sign(sk, pkt, data, extra_hashed=bytes([2, 25, 1])))
+    check(ok, f"an unknown NON-critical subpacket is ignored, as OpenPGP says: {why}")
+
+    print("── download_verified: nothing unverified reaches the disk ──")
     inst = b"MZ" + os.urandom(4096)
     tmp = Path(tempfile.mkdtemp())
     files = release("v0.27.0", inst, sk, pkt)
-    ok, path = appupdate.download_verified("v0.27.0", tmp / "good", getter(files), key_packet=pkt)
-    check(ok and Path(path).read_bytes() == inst, f"a signed release is saved: {path}")
-    ok, why = appupdate.download_verified("v0.27.0", tmp / "forged", getter(files))
-    check(not ok and not (tmp / "forged").exists(),
-          f"signed by another key (not the maintainer's): refused, nothing saved: {why}")
+    stale = tmp / (appupdate.UPDATE_PREFIX + "old")
+    stale.mkdir()
+    (stale / "hazync-setup-v0.26.0.exe").write_bytes(b"old")
+    ok, path, sha = appupdate.download_verified("v0.27.0", "0.26.1", getter(files), key_packet=pkt, tmp_root=tmp)
+    check(ok and Path(path).read_bytes() == inst and sha == hashlib.sha256(inst).hexdigest(),
+          f"a signed release is saved: {path}")
+    check(Path(path).parent.name.startswith(appupdate.UPDATE_PREFIX) and Path(path).parent != stale
+          and not stale.exists(), "into a fresh folder, and an earlier update's installer is deleted (L5)")
+    ran = []
+    real_popen = appupdate.subprocess.Popen
+    appupdate.subprocess.Popen = lambda *a, **k: ran.append(a[0])
+    try:
+        appupdate.launch_installer(path, sha)
+        check(ran == [[path]], "the verified file is started")
+        Path(path).write_bytes(inst + b"swapped")
+        try:
+            appupdate.launch_installer(path, sha)
+            check(False, "a file changed after verification is not started")
+        except OSError as e:
+            check(len(ran) == 1, f"a file changed after verification is not started: {e}")
+    finally:
+        appupdate.subprocess.Popen = real_popen
+
+    def refused(label, tag, current, get, key=pkt, want=""):
+        before = set(tmp.iterdir())
+        ok, why, _ = appupdate.download_verified(tag, current, get, key_packet=key, tmp_root=tmp)
+        check(not ok and set(tmp.iterdir()) == before and want in why, f"{label}: refused, nothing saved: {why}")
+
+    refused("signed by another key (not the maintainer's)", "v0.27.0", "0.26.1", getter(files),
+            key=appupdate.MAINTAINER_KEY_PACKET)
     other_sk, _ = test_key()
     forged = dict(files)
     forged[appupdate.asset_url("v0.27.0", appupdate.MANIFEST + ".asc")] = sign(
         other_sk, pkt, files[appupdate.asset_url("v0.27.0", appupdate.MANIFEST)]).encode()
-    ok, why = appupdate.download_verified("v0.27.0", tmp / "forged2", getter(forged), key_packet=pkt)
-    check(not ok and not (tmp / "forged2").exists(), f"a signature by the right key id but a wrong secret: {why}")
+    refused("the right key id but a wrong secret", "v0.27.0", "0.26.1", getter(forged))
     swapped = dict(files)
     swapped[appupdate.asset_url("v0.27.0", appupdate.INSTALLER)] = inst + b"x"
-    ok, why = appupdate.download_verified("v0.27.0", tmp / "swapped", getter(swapped), key_packet=pkt)
-    check(not ok and not (tmp / "swapped").exists(), f"an installer that is not the signed one: {why}")
+    refused("an installer that is not the signed one", "v0.27.0", "0.26.1", getter(swapped))
     old = release("v0.26.0", inst, sk, pkt)
     replay = {u.replace("v0.26.0", "v0.27.0"): d for u, d in old.items()}
-    ok, why = appupdate.download_verified("v0.27.0", tmp / "replay", getter(replay), key_packet=pkt)
-    check(not ok and "v0.26.0" in why, f"an older signed manifest under a newer tag: {why}")
-    ok, why = appupdate.download_verified("v0.27.0", tmp / "down", getter({}), key_packet=pkt)
-    check(not ok and not (tmp / "down").exists(), f"a failed download: {why}")
-    ok, why = appupdate.download_verified("../x", tmp / "tag", getter(files), key_packet=pkt)
-    check(not ok, f"a tag that is not vX.Y.Z is refused before any request: {why}")
+    refused("an older signed manifest under a newer tag", "v0.27.0", "0.26.1", getter(replay), want="v0.26.0")
+    refused("a failed download", "v0.27.0", "0.26.1", getter({}))
+    refused("a tag that is not vX.Y.Z", "../x", "0.26.1", getter(files))
+    refused("a tag with a trailing newline (fullmatch, L3)", "v0.27.0\n", "0.26.1", getter(files))
+
+    print("── never a downgrade, never a loop (review M1) ──")
+    for tag, current, label in (("v0.26.0", "0.26.1", "an older signed release marked latest"),
+                                ("v0.26.1", "0.26.1", "the same version (a reinstall loop)"),
+                                ("v0.27.0", "", "a copy with no version (from source)")):
+        asked = []
+        files_t = release(tag, inst, sk, pkt)
+        refused(label, tag, current, getter(files_t, asked))
+        check(not asked, f"...without downloading anything ({len(asked)} requests)")
+
+    print("── download size caps (review L6) ──")
+    big = dict(files)
+    big[appupdate.asset_url("v0.27.0", appupdate.MANIFEST + ".asc")] = b"x" * (appupdate.MAX_SMALL + 1)
+    refused("a signature file over 1 MB", "v0.27.0", "0.26.1", getter(big))
+    import http.server
+    import threading
+    import nethttp
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            try:
+                for _ in range(64):
+                    self.wfile.write(b"x" * 65536)
+            except OSError:
+                pass
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/big"
+    try:
+        nethttp.get(url, timeout=10, max_bytes=1 << 20)
+        check(False, "nethttp.get stops reading past max_bytes")
+    except nethttp.TooLarge as e:
+        check(True, f"nethttp.get stops reading past max_bytes: {e}")
+    check(len(nethttp.get(url, timeout=10)) == 64 * 65536, "without a cap it reads everything, as before")
+    srv.shutdown()
 
     print("── versions ──")
     check(appupdate.is_newer("v0.27.0", "0.26.1"), "v0.27.0 is newer than 0.26.1")
@@ -221,13 +323,13 @@ def main():
     check(appupdate.worker_reset(str(d / "inst"), str(d / "old"), f) == "",
           "never swapped for an installed one that cannot read the board's files")
 
-    if CONTROL:
-        # the naive installer check: sha256 against the manifest, no signature
-        sha_only = lambda m, inst: appupdate.manifest_hash(m.decode(), appupdate.INSTALLER) == \
-            hashlib.sha256(inst).hexdigest()   # noqa: E731
-        evil = b"MZ evil"
-        m = f"# hazync v0.27.0 x\n{hashlib.sha256(evil).hexdigest()}  {appupdate.INSTALLER}\n".encode()
-        check(not sha_only(m, evil), "control: a sha256-only check refuses an unsigned forged release")
+    print("── the signature is what refuses a forged release (review L9) ──")
+    evil = b"MZ evil"
+    m = f"# hazync v0.27.0 x\n{hashlib.sha256(evil).hexdigest()}  {appupdate.INSTALLER}\n".encode()
+    verify = (lambda *a, **k: (True, "stubbed")) if CONTROL else None
+    ok, why = appupdate.check_download("v0.27.0", m, "not a signature", evil, verify=verify)
+    check(not ok, f"an unsigned release whose hashes all match is refused: {why}")
+
     print()
     if CONTROL:
         print("CONTROL:", "FAILED as it must" if fails else "PASSED (the test is inert!)")

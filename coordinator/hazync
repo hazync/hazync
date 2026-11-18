@@ -424,7 +424,7 @@ def no_replay_on_libzync(lo, hi):
     else, so the replay path would fetch witnesses from block 1 and die on a 404 at block 2 (11-18, a laptop running
     an old worker beside v0.26.1). Exit saying what is wrong instead."""
     if board_is_libzync():
-        if "cannot read" in BUNDLE_MISS:
+        if BUNDLE_UNREADABLE:
             sys.exit(f"cannot prove blocks {lo}..{hi}: this worker cannot read the board's input files ({BUNDLE_MISS}): "
                      f"update Hazync.")
         sys.exit(f"cannot prove blocks {lo}..{hi}: the board did not serve an input file ({BUNDLE_MISS or 'no reason given'}). "
@@ -452,13 +452,14 @@ def bundle_name(data, h):
     return f"leaf_{h}.bin" if data[:6] == b"LZLEAF" else f"bundle_{h}.json"
 
 BUNDLE_MISS = ""      # why fetch_bundles last returned False, for the message when there is no replay to fall back to
+BUNDLE_UNREADABLE = False   # ...and whether that was a file the board served that this worker cannot read
 
 def fetch_bundles(lo, hi):
     # Fetch an archive-node bundle for every block in [lo..hi]. Returns True iff all are available (the
     # bridge path — prove with NO replay); False if any block is missing or only a legacy per-block witness
     # exists, in which case the caller falls back to the replay path. A bundle carries in_roots + witness.
-    global BUNDLE_MISS
-    BUNDLE_MISS = ""
+    global BUNDLE_MISS, BUNDLE_UNREADABLE
+    BUNDLE_MISS, BUNDLE_UNREADABLE = "", False
     os.makedirs(BUNDLES, exist_ok=True)
     for h in range(lo, hi + 1):
         bf = os.path.join(BUNDLES, f"bundle_{h}.json")
@@ -473,12 +474,16 @@ def fetch_bundles(lo, hi):
                     fh.write(data)
                 os.replace(lf + ".tmp", lf)
                 continue
-            j = json.loads(data)
         except Exception as e:
             BUNDLE_MISS = f"block {h}: {e}"
             return False
+        try:
+            j = json.loads(data)
+        except ValueError:
+            BUNDLE_MISS, BUNDLE_UNREADABLE = f"block {h}: the board served a file this worker cannot read", True
+            return False
         if "in_roots" not in j or "witness" not in j:
-            BUNDLE_MISS = f"block {h}: the board served a file this worker cannot read"
+            BUNDLE_MISS, BUNDLE_UNREADABLE = f"block {h}: the board served a file this worker cannot read", True
             return False                       # legacy per-block witness, not a bridge bundle
         with open(bf, "wb") as fh:
             fh.write(data)

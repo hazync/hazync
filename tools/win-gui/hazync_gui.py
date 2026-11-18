@@ -1824,20 +1824,21 @@ class App(tk.Tk):
         self._render_update_bar()
         self._home_refresh()
         self._feed(f"Downloading Hazync {tag or '(latest)'} and checking its signature...")
-        dest = Path(os.environ.get("TEMP") or os.environ.get("TMP") or firstrun.hazync_home()) / "hazync-update"
+        current = self._app_version
 
         def go():
             t = tag
             try:
                 t = t or appupdate.latest_tag(nethttp.get_json)
-                ok, detail = appupdate.download_verified(t, dest, nethttp.get)
+                # refused unless strictly newer than this app (review M1), so "latest" can never downgrade it
+                ok, detail, sha = appupdate.download_verified(t, current, nethttp.get)
             except Exception as e:     # noqa: BLE001
-                ok, detail = False, f"{type(e).__name__}: {e}"
-            self.results.put((self._update_downloaded, (ok, detail, t)))
+                ok, detail, sha = False, f"{type(e).__name__}: {e}", ""
+            self.results.put((self._update_downloaded, (ok, detail, t, sha)))
         threading.Thread(target=go, daemon=True).start()
 
     def _update_downloaded(self, args):
-        ok, detail, tag = args
+        ok, detail, tag, sha = args
         self._update_busy = False
         self._render_update_bar()
         self._home_refresh()
@@ -1846,9 +1847,14 @@ class App(tk.Tk):
             self._say(f"[update] NOT installed: {detail}", "cuda-error")
             messagebox.showerror("Update Hazync", f"The update was not installed:\n\n{detail}")
             return
+        # review L7: work may have started while it downloaded (a proving window opening); never close on top of it
+        if self.workers or self._respawns or self._armed or getattr(self, "_starting", False):
+            self._feed(f"Hazync {tag} is downloaded and verified, but work started meanwhile: press Stop, then Update.")
+            messagebox.showinfo("Update Hazync", "Work started while the update downloaded. Press Stop, then Update.")
+            return
         self._say(f"[update] {tag}: signature and sha256 verified; running {detail}", "sys")
         try:
-            appupdate.launch_installer(detail)
+            appupdate.launch_installer(detail, sha)
         except OSError as e:
             messagebox.showerror("Update Hazync", f"Verified, but the installer could not be started:\n{detail}\n\n{e}")
             return
