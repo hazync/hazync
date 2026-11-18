@@ -28,6 +28,7 @@ spent ten days blaming "nobody ran it". Evidence before teardown, always.
 import argparse
 import os
 import sys
+import secrets
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -45,34 +46,23 @@ POLL_S = 20
 BUDGET_MARGIN = 0.85
 
 
-def release_fold(api, name, pod_id, sleep=time.sleep):
-    """Terminate `pod_id` and every pod on the account named `name` (unique to this run). Lists twice, 5 s apart, so a
-    lost create that appears late is caught too. Loud when that cannot be confirmed. Returns the ids still there
-    (None: the account could not be listed)."""
-    ids, done, left = [pod_id] if pod_id else [], [], []
-    for r in range(2):
-        if r:
-            sleep(5)
-        try:
-            ids += [x["id"] for x in api.pods() if x["name"] == name and x["id"] not in ids
-                    and (x.get("status") or "") != "TERMINATED"]
-        except Exception as e:                                      # noqa: BLE001
-            print(f"  ⛔ could not list the account ({e}): a pod named {name} MAY STILL BE BILLING — check by hand")
-            if not ids:
-                return None
-        todo = [i for i in ids if i not in done]
-        if todo:
-            print("terminating…", todo)
-            try:
-                d_, left = sb.terminate_many(api, todo)
-                done += d_
-            except Exception as e:                                  # noqa: BLE001
-                left = todo
-                print(f"  ⛔⛔ TERMINATE FAILED: {e}")
-    if left:
+def release_fold(api, name, pod_id, sleep=time.sleep, clock=time.monotonic):
+    """Terminate `pod_id` and every pod on the account named `name` (unique to this run, so a lost create is found
+    too, however late), through sb.release_until_clean. Loud when that cannot be confirmed. Returns the ids still
+    there (None: never seen clean)."""
+    try:
+        done, left, clean = sb.release_until_clean(api, [pod_id] if pod_id else [], match=lambda n: n == name,
+                                                   sleep=sleep, clock=clock)
+    except Exception as e:                                          # noqa: BLE001
+        print(f"  ⛔⛔ could not release {name}: {e} — CHECK RUNPOD BY HAND")
+        return None
+    if done:
+        print(f"terminated {done}")
+    if left or not clean:
         # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
-        print(f"  ⛔⛔ NOT CONFIRMED GONE: {left} — TERMINATE IT BY HAND")
-    return left
+        print(f"  ⛔⛔ NOT CONFIRMED GONE: {left or name} — TERMINATE IT BY HAND")
+        return left or None
+    return []
 
 
 def seconds_for_budget(budget_usd, cost_per_hr):
@@ -308,7 +298,7 @@ def main(argv=None):
     # attempt terminated via the pod OBJECT, so when a later line raised (deploy returns a DICT, not
     # a Pod) the finally clause raised too and left a rented GPU billing at $0.74/hr. A teardown that
     # depends on anything built after the rental is not a teardown.
-    name = f"hazync-fold-{int(time.time())}"     # unique to this run: the teardown releases it by name
+    name = f"hazync-fold-{int(time.time())}-{secrets.token_hex(2)}"   # unique to this run: released by name
     pod_id = None
     pod = None
     started = None

@@ -794,9 +794,9 @@ def trial_refusals(coord, heights):
 # ⚠ What changed underneath, and what the client does about it:
 #   * A capacity miss is HTTP 400 with only a human `detail` (no machine-readable code). GraphQL answered it
 #     with `data: {podFindAndDeployOnDemand: null}`. Both are "RunPod answered, this type had no capacity".
-#   * Every other refusal (401 key, 402 balance, 403 Cloudflare or pool access, 422 contract, 429, 5xx, no
-#     answer at all) is a REFUSAL, exactly as a GraphQL HTTP error was: the bot counts it toward
-#     RUNPOD_REFUSALS_MAX and never reports it as "no GPU capacity".
+#   * A refusal (401 key, 402 balance, 403 Cloudflare or pool access, 422 contract) is never reported as "no GPU
+#     capacity": it counts toward RUNPOD_REFUSALS_MAX. A 429, a 5xx or no answer is neither -- it counts toward
+#     the drought rule only (CAPACITY_*).
 #   * `cloud` takes only SECURE or COMMUNITY (`ALL` is gone). We always send SECURE (test_pod_cloud_type.py).
 #   * There is no `isIpPublic` on a port. A mapping is public when it has a `public` port and its `ip` is a
 #     GLOBAL address. ⛔ Not "not private": RunPod's internal addresses are 100.65.x.x, carrier-grade NAT
@@ -1080,6 +1080,7 @@ class RunPod:
 # together with everything else terminate_all does, or systemd SIGKILLs the cleanup with pods billing.
 TERMINATE_BUDGET_S = 6 * 60
 TERMINATE_429_WAIT_S = 30.0
+_ACCEPT_UNACKED_ABSENCE = False   # test_runpod_v2.py --control only
 
 
 def _wait_hint(e):
@@ -1097,20 +1098,25 @@ def terminate_many(api, pod_ids, sleep=time.sleep, tries=6, wait_s=5.0, budget_s
     budget_s = TERMINATE_BUDGET_S if budget_s is None else budget_s
     end = clock() + budget_s
     pending = list(dict.fromkeys(str(i) for i in pod_ids))
-    done, used = [], 0
+    done, used, acked = [], 0, set()
     while pending:
         hint = 0.0
         for pid in pending:
             if used and clock() >= end:
                 break                  # past the budget: no new call can start (each one can take minutes)
             try:
-                api.terminate(pid)
+                api.terminate(pid)     # returns on 204, and on 404 (already gone): an ANSWERED delete
+                acked.add(pid)
             except Exception as e:
                 hint = max(hint, _wait_hint(e))
         try:
-            listed = {str(p["id"]) for p in api.pods() if (p.get("status") or "") != "TERMINATED"}
-            done += [i for i in pending if i not in listed]
-            pending = [i for i in pending if i in listed]
+            rows = api.pods()
+            listed = {str(p["id"]) for p in rows if (p.get("status") or "") != "TERMINATED"}
+            # ⛔ ABSENCE IS ONLY BELIEVED AFTER AN ANSWERED DELETE. A listing can lag; a pod whose DELETE errored and
+            # that one listing happens to omit is NOT gone -- the next round deletes it again.
+            gone = [i for i in pending if i not in listed and (i in acked or _ACCEPT_UNACKED_ABSENCE)]
+            done += gone
+            pending = [i for i in pending if i not in gone]
         except Exception as e:
             hint = max(hint, _wait_hint(e))
             if not hint:
@@ -1125,6 +1131,52 @@ def terminate_many(api, pod_ids, sleep=time.sleep, tries=6, wait_s=5.0, budget_s
             break
         sleep(min(max(wait_s, hint), left))
     return done, pending
+
+
+def release_until_clean(api, ids, match=None, skip=None, sleep=time.sleep, clock=time.monotonic, budget_s=None,
+                        wait_s=5.0, gap_s=5.0, on_done=None):
+    """THE one way a run releases its pods. DELETE every known id at once (before any listing), then LIST: every
+    listed pod whose name `match`es (the run's prefix) -- a lost create, however late it appears -- joins, and is
+    released too; repeat until TWO listings `gap_s` apart show nothing of ours. All of it inside ONE wall-clock
+    budget. `skip(id)` keeps a pod out (kept, protected). `on_done(ids)` is called as soon as ids are confirmed gone
+    (so a caller can stop their spend clock without waiting for the second listing).
+    Returns (confirmed ids, still-listed ids, clean): clean is False when two clean listings were never seen."""
+    budget_s = TERMINATE_BUDGET_S if budget_s is None else budget_s
+    end = clock() + budget_s
+    skip = skip or (lambda i: False)
+    want = [str(i) for i in dict.fromkeys(ids) if not skip(str(i))]
+    done, left, clean = [], [], 0
+    while True:
+        todo = [i for i in want if i not in done]
+        if todo:
+            d_, left = terminate_many(api, todo, sleep, wait_s=wait_s, budget_s=max(0.0, end - clock()), clock=clock)
+            done += d_
+            if on_done and d_:
+                on_done(d_)
+        if clock() >= end:
+            break
+        try:
+            listed = {str(x["id"]): x for x in api.pods() if (x.get("status") or "") != "TERMINATED"}
+        except Exception:
+            listed = None
+        if listed is not None:
+            ours = [i for i, x in listed.items() if not skip(i) and (i in want or (match and match(x.get("name") or "")))]
+            done = [i for i in done if i not in ours]              # still listed: not gone after all
+            new = [i for i in ours if i not in want]
+            want += new
+            left = ours
+            if not ours:
+                clean += 1
+                if clean >= 2:
+                    return done, [], True
+            else:
+                clean = 0
+        else:
+            clean = 0
+        if clock() + gap_s >= end:
+            break
+        sleep(gap_s)
+    return done, left, False
 
 
 def terminate_confirmed(api, pod_id, sleep=time.sleep, tries=6, wait_s=5.0, budget_s=None, clock=time.monotonic):
@@ -1511,6 +1563,7 @@ class Bot:
         self._regen_waits = 0
         self.state_home = None             # SPONSOR_BOT_HOME in main(): the capacity streak, the run lock
         self._capacity_mem = {}            # the streak when there is no state_home (tests)
+        self._leftovers_done = False       # release_leftovers() ran (main() runs it first)
 
     # --- money ---
     def _live(self):
@@ -1541,7 +1594,7 @@ class Bot:
         self._leftovers_done = True
 
     def run(self):
-        if not getattr(self, "_leftovers_done", False):
+        if not self._leftovers_done:
             self.release_leftovers()
         if not self.identity_home:
             raise BotRefused("no identity home (SPONSOR_BOT_HOME): the bot keeps one key per sponsorship there")
@@ -1603,12 +1656,13 @@ class Bot:
                 now = self.clock()
                 # The coordinator going away for a moment (a restart) is not a reason to throw away every pod; one
                 # that stays away is. Money is checked every look regardless, from the bot's own figures.
+                # RunPod first: these need no coordinator, so a coordinator outage cannot stop pods being released.
+                self._retry_unconfirmed(c)
+                self._sweep_strays(c)
                 try:
                     if self.trial is None:
                         for sid in reconcile(self.coord):
                             self.log(f"sponsorship #{sid} is proven")
-                    self._retry_unconfirmed(c)
-                    self._sweep_strays(c)
                     self._observe(c, now)
                     coord_ok = True
                 except CoordError as e:
@@ -1666,9 +1720,10 @@ class Bot:
         was SIGKILLed, or RunPod would not confirm). Those still listed are terminated now; a lost create answer is
         caught by the name prefix of earlier runs. Only one bot runs at a time (main() holds the run lock), so
         nothing here can belong to a live run. A pod that will not go refuses the run: renting more on top of pods
-        we cannot stop is how a cap is spent twice."""
+        we cannot stop is how a cap is spent twice. ⚠ After a LATCH no run starts, so this sweep waits for a human to
+        clear the latch -- who should check RunPod for hz-sponsor-* pods first (`sponsor_bot.py stop-all`)."""
         rows = {r[0]: r[1] for r in c.execute("SELECT pod_id, name FROM sponsor_pods WHERE terminated_at IS NULL")}
-        listed = {p["id"]: p for p in self.api.pods()}
+        listed = {p["id"]: p for p in self.api.pods() if (p.get("status") or "") != "TERMINATED"}
         ids = [i for i in rows if i in listed]
         ids += [i for i, p in listed.items() if p["name"].startswith(POD_PREFIX) and not
                 p["name"].startswith(self.prefix) and i not in ids]
@@ -1711,14 +1766,16 @@ class Bot:
                      f"A drought this long is rare; a request RunPod cannot place looks exactly like this -- check "
                      f"the deploy request. Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before clearing the latch.")
 
-    def _refused(self, why, what="RunPod refused the deploy request"):
-        """One refusal toward RUNPOD_REFUSALS_MAX (reset when a deploy is answered with a pod)."""
+    def _refused(self, why):
+        """One refusal toward RUNPOD_REFUSALS_MAX: that many refusals without a pod landing in between stop the run."""
         self._refusals += 1
         if self._refusals >= RUNPOD_REFUSALS_MAX:
             self.stop_reason = "runpod"
-            self.log(f"{what} {self._refusals} times in a row ({why}): stopping. Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before clearing the latch.")
+            self.log(f"RunPod refused the deploy request {self._refusals} times without a pod landing ({why}): "
+                     f"stopping. Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before "
+                     f"clearing the latch.")
         else:
-            self.log(f"{what} ({why}); trying again later")
+            self.log(f"RunPod refused the deploy request ({why}); trying again later")
 
     def _sweep_strays(self, c):
         """⛔ THE ONE RULE FOR LOST CREATES. Every pod this run creates is named self.prefix + n, so any pod on the
@@ -1731,11 +1788,25 @@ class Bot:
         ceiling is terminated at once, without waiting for SSH."""
         tracked = {p.id: p for p in self.pods}
         try:
-            rows = [x for x in self.api.pods() if x["name"].startswith(self.prefix)]
+            rows = [x for x in self.api.pods() if x["name"].startswith(self.prefix)
+                    and (x.get("status") or "") != "TERMINATED"]
         except RunPodError as e:
             self.log(f"could not list pods for this run's strays (next look tries again): {e}")
             return
+        # ⛔ A pod we wrote off as terminated but RunPod still lists is BILLING: it is revived as unconfirmed (spend counts
+        # again, every look retries it, its row is reopened for the next start).
         for x in rows:
+            p = tracked.get(x["id"])
+            if p is not None and not p.live:
+                self.log(f"⛔ {p.name} was taken for terminated but RunPod still lists it: tracking it again")
+                p.terminated, p.state = None, "unconfirmed"
+                if p.id not in self.unconfirmed:
+                    self.unconfirmed.append(p.id)
+                if c is not None:
+                    c.execute("UPDATE sponsor_pods SET terminated_at=NULL, note=COALESCE(note,'') || ' (still listed: "
+                              "revived)' WHERE pod_id=?", (p.id,))
+                    c.commit()
+        for x in rows:                      # prices learnt from the listing (after the revive above)
             p = tracked.get(x["id"])
             if p is not None and p.live and p.state != "unconfirmed" and p.cost_per_hr <= 0 and x.get("cost_per_hr"):
                 self._price_ok(c, p, x)
@@ -2043,11 +2114,11 @@ class Bot:
             want -= 1
 
     # --- stopping pods ---
-    def _terminate(self, c, p, note, outcome="cancelled", budget_s=None):
+    def _terminate(self, c, p, note, outcome="cancelled"):
         if not p.live:
             return
         self._terminate_books(c, p, outcome)
-        confirmed = terminate_confirmed(self.api, p.id, self.sleep, wait_s=self.confirm_wait_s, budget_s=budget_s)
+        confirmed = terminate_confirmed(self.api, p.id, self.sleep, wait_s=self.confirm_wait_s)
         self._settle(c, p, confirmed, note)
 
     def _terminate_books(self, c, p, outcome="cancelled"):
@@ -2101,40 +2172,40 @@ class Bot:
                 self._settle(c, p, True, "terminated (confirmed on a later look)")
 
     def terminate_all(self, c, reason):
-        """Every live pod and every stray of this run, released together inside TERMINATE_BUDGET_S of wall clock:
-        the DELETEs go out FIRST (before the coordinator is asked which blocks landed -- a block that lands after
-        the DELETE has still landed), then one confirmation loop. The run's prefix is listed again a few seconds later,
-        so a lost create that appears late is caught too. Fits the unit's TimeoutStopSec; what is still unconfirmed
-        keeps its row open for the next run's start to sweep."""
+        """Every live pod and every pod with this run's prefix (a lost create), released by release_until_clean inside
+        TERMINATE_BUDGET_S: the DELETEs for the live pods go out before any listing or coordinator question, each pod
+        is settled the moment RunPod confirms it (the spend clock stops then), and the prefix is listed until clean.
+        What is still unconfirmed keeps its row open for the next run's start to sweep -- if the run did not latch:
+        a LATCHED bot does not start again until a human clears it, and then sweeps."""
         live = self._live()
-        done, left = [], []
-        ids = [p.id for p in live]
-        for r in range(2):
-            if r:
-                self.sleep(5)          # the second listing: a lost create that appears late
-            try:
-                ids += [x["id"] for x in self.api.pods() if x["name"].startswith(self.prefix) and x["id"] not in ids]
-            except Exception as e:
-                self.log(f"could not list pods to check for strays: {e}")
-            todo = [i for i in dict.fromkeys(ids) if i not in done]
-            if todo:
-                d_, left = terminate_many(self.api, todo, self.sleep, wait_s=self.confirm_wait_s)
-                done += d_
-            if r == 0:
-                for p in live:         # settle at once: the spend clock stops when RunPod confirms, not later
+        by_id = {p.id: p for p in live}
+
+        def settle(ids):
+            for i in ids:
+                p = by_id.get(i)
+                if p is not None and p.terminated is None:
                     self._terminate_books(c, p)
-                    self._settle(c, p, p.id in done, reason)
-        for p in live:                 # confirmed only on the second pass
-            if p.state == "unconfirmed" and p.id in done:
-                self._settle(c, p, True, reason)
-        left = [i for i in left if i not in done]
+                    self._settle(c, p, True, reason)
+
+        try:
+            done, left, clean = release_until_clean(
+                self.api, list(by_id), match=lambda n: n.startswith(self.prefix), sleep=self.sleep,
+                wait_s=self.confirm_wait_s, on_done=settle)
+        except Exception as e:                                     # noqa: BLE001
+            self.log(f"could not release this run's pods: {e}")
+            done, left = [], list(by_id)
+        for p in live:
+            if p.terminated is None:
+                self._terminate_books(c, p)
+                self._settle(c, p, False, reason)
         for i in left:
             if i not in self.unconfirmed:
                 self.unconfirmed.append(i)
         if self.unconfirmed:
             self.log("TERMINATION NOT CONFIRMED for pod(s) " + ", ".join(self.unconfirmed)
-                     + ": terminate them by hand in RunPod, they may still be charging (the next run's start will "
-                       "try again before it rents anything). Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before clearing the latch.")
+                     + ": terminate them by hand in RunPod, they may still be charging (`sponsor_bot.py stop-all` "
+                       "releases every hz-sponsor-* pod). The next run's start tries again before renting -- but a "
+                       "latched bot does not start until a human clears the latch.")
 
     @staticmethod
     def _ignore_signals():
@@ -2357,6 +2428,10 @@ def main(argv=None):
     # ⛔ ONE BOT AT A TIME. The start sweep releases every unconfirmed hz-sponsor-* pod it finds; a second bot (a
     # manual `trial` while the timer runs) would have its pods swept. The lock is held until the process exits.
     lock = acquire_run_lock(home)
+    if lock is None:
+        # ⛔ Before anything touches RunPod: the start sweep releases every unconfirmed hz-sponsor-* pod on the key,
+        # which is only safe under the run lock -- and there is no lock without SPONSOR_BOT_HOME.
+        raise SystemExit("sponsor_bot: --live needs SPONSOR_BOT_HOME (the run lock that makes the start sweep safe)")
     if lock is False:
         print("sponsor_bot: another sponsor bot run holds the lock; skipped (nothing rented)", flush=True)
         return TRANSIENT_EXIT

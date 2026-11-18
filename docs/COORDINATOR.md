@@ -378,7 +378,8 @@ caught: look-alike letters from other scripts (Cyrillic `о`). Also refused: ord
   prefix, and the bot lists and terminates any pod with its prefix it does not track, every look: a create whose
   answer was lost is released whenever it appears. A pod whose termination is not confirmed stays counted as live,
   and the next run's start terminates it before renting (under a run lock; `TimeoutStopSec=1500` fits the bounded
-  cleanup).
+  cleanup). ⚠ A LATCHED bot does not start, so nothing sweeps until a human clears the latch: check RunPod for
+  `hz-sponsor-*` pods first (`sponsor_bot.py stop-all`). `--live` needs `SPONSOR_BOT_HOME` (the run lock).
 - Work starts with `setsid -f bash sponsor-run.sh >> sponsor-run.log 2>&1 < /dev/null` so ssh returns; a
   timed-out ssh/scp fails the pod (blocks logged `failed`, handed to the next pod).
 

@@ -187,14 +187,13 @@ def release_short(api, gt, got, rented_path, unreleased):
         json.dump(unreleased, fh, indent=1)
 
 
-def release_recorded(api, rented_path, created, unreleased, prefix=None, keep_ids=(), rounds=4, wait_s=10.0,
-                     sleep=time.sleep):
-    """The teardown's release. Terminates (1) every pod on the account whose name starts with this run's `prefix`,
-    found by LISTING -- a lost create, a rent that raised half way, a recruit caught mid-gate -- and (2) every id in
-    rented.json, `created` and `unreleased` (an ADOPTED fleet carries another run's prefix), except `keep_ids`
-    (--keep / --adopt). A lost create can appear in the listing LATE, so it lists again (wait_s apart) until TWO
-    listings in a row show none of them, up to `rounds` listings. (Later than that: --cleanup sweeps the prefix.) rented.json is removed only when nothing is kept and the last
-    listing showed none. Returns the ids still listed (None: the account could not be listed)."""
+def release_recorded(api, rented_path, created, unreleased, prefix=None, keep_ids=(), sleep=time.sleep,
+                     clock=time.monotonic, budget_s=None):
+    """The teardown's release, through sponsor_bot.release_until_clean: every id in rented.json, `created` and
+    `unreleased` (an ADOPTED fleet carries another run's prefix) is DELETEd first, then the account is listed until
+    two listings show no pod with this run's `prefix` -- a lost create, however late it appears. `keep_ids` (--keep /
+    --adopt) and protected pods are never touched. rented.json is removed only when nothing is kept and the account
+    was seen clean. Returns the ids still listed (None: the account was never seen clean)."""
     recorded = []
     try:
         with open(rented_path) as fh:
@@ -203,49 +202,24 @@ def release_recorded(api, rented_path, created, unreleased, prefix=None, keep_id
         pass
     keep = {str(i) for i in keep_ids}
     named = [str(p["id"]) for p in created] + [str(p["id"]) for p in unreleased] + recorded
-    left, clean = None, 0
-    for r in range(rounds):
-        if r:
-            sleep(wait_s)
-        try:
-            listed = {str(x["id"]): x for x in api.pods() if (x.get("status") or "") != "TERMINATED"}
-        except Exception as e:                                     # noqa: BLE001
-            log(f"⛔ could not list the account ({str(e)[:90]}) — this run's prefix {prefix} cannot be swept now; "
-                f"{rented_path} KEPT: run --cleanup when RunPod answers")
-            if left is None:            # nothing could be listed at all: still release what the record names
-                v = tip_session.terminable([i for i in dict.fromkeys(named) if i not in keep],
-                                           [i for i in dict.fromkeys(named) if i not in keep])
-                if v["terminate"]:
-                    sponsor_bot.terminate_many(api, v["terminate"])
-            return None
-        mine = [i for i in dict.fromkeys(named + [i for i, x in listed.items()
-                                                  if prefix and x["name"].startswith(prefix)])
-                if i not in keep and i in listed]
-        verdict = tip_session.terminable(mine, mine)
-        left = verdict["terminate"]
-        log(f"account check: {'clean' if not left else 'releasing ' + str(left)}  (protected={verdict['protected']}"
-            f" not-ours={verdict['not_ours']}" + (f", kept={sorted(keep)}" if keep else "") + ")")
-        if not left:
-            clean += 1
-            if clean >= 2:
-                break
-            continue
-        clean = 0
-        done, _ = sponsor_bot.terminate_many(api, left)
-        for pid in left:
-            log(f"  {pid}: {'gone' if pid in done else '⛔ STILL LISTED'}")
-        named += left
-    if left or clean < 2:
-        left = left or []
-        log(f"⛔ NOT CONFIRMED CLEAN after {rounds} listings: {left} — run --cleanup, or terminate by hand"
-            if left else f"⚠ the account was not seen clean twice in {rounds} listings; {rented_path} KEPT — run --cleanup")
-        if not left:
-            return None
-    elif not keep:
-        try:
-            os.unlink(rented_path)     # every pod of this run is gone; the record would only mislead
-        except OSError:
-            pass
+    done, left, clean = sponsor_bot.release_until_clean(
+        api, named, match=(lambda n: n.startswith(prefix)) if prefix else None,
+        skip=lambda i: i in keep or tip_session.is_protected(i), sleep=sleep, clock=clock, budget_s=budget_s)
+    for pid in done:
+        log(f"  {pid}: gone")
+    if left:
+        log(f"⛔ STILL PRESENT: {left} — run --cleanup, or terminate by hand")
+        return None if not clean else left
+    if not clean:
+        log(f"⚠ the account was never seen clean twice; {rented_path} KEPT — run --cleanup")
+        return None
+    else:
+        log("account check: clean" + (f" (kept {sorted(keep)})" if keep else ""))
+        if not keep:
+            try:
+                os.unlink(rented_path)     # every pod of this run is gone; the record would only mislead
+            except OSError:
+                pass
     return left
 
 
@@ -1340,6 +1314,13 @@ def main():
     # says so clearly in its own run.log -- but the run itself only sees cards that produce no
     # receipt, restarts them, and burns the fleet doing it. Measured: two RTX 4090s idle at 0% GPU
     # for five minutes while the tick planner dutifully relaunched them.
+    key_file = os.environ.get("RUNPOD_API_KEY_FILE", "/root/.hazync/runpod.key")
+    with open(key_file) as fh:
+        api = SmokeRunPod(fh.read().strip())
+    # ⛔ BEFORE THE CLAIM: a rundir whose last run still has pods is refused before anything is claimed or fetched.
+    if not a.cleanup and not a.adopt:
+        os.makedirs(a.rundir, exist_ok=True)
+        refuse_rerun(api, a.rundir, os.path.join(a.rundir, "rented.json"))
     # ── claim FIRST, before spending anything (#367) ──────────────────────────────────────────────
     # ⛔ THE ORDER MATTERS. Renting takes ~2 minutes and costs money; a claim costs a POST. If the
     # board has nothing free -- or this key is at its 4-unfinished cap -- the right answer is to exit
@@ -1410,9 +1391,6 @@ def main():
                              f"The claim reopens by itself; nothing was rented.")
         log(f"bundle for {a.block}: {os.path.getsize(bundle_path)} bytes -> {bundle_path}")
 
-    key_file = os.environ.get("RUNPOD_API_KEY_FILE", "/root/.hazync/runpod.key")
-    with open(key_file) as fh:
-        api = SmokeRunPod(fh.read().strip())
     pub = open(a.key + ".pub").read().strip()
 
     ssh = tip_driver.SSHRunner(a.key)
@@ -1426,9 +1404,9 @@ def main():
 
     if a.cleanup:
         return cleanup(api, rented_path)
-    if not a.adopt:
-        refuse_rerun(api, a.rundir, rented_path)   # before run_prefix() overwrites the last run's record
-    rpre = run_prefix(a.rundir)          # every pod this run creates is named rpre + n (the teardown sweeps it)
+    # Every pod this run creates is named rpre + n (the teardown sweeps it). --adopt keeps the adopted run's prefix:
+    # rotating it would leave the adopted fleet's lost creates under a prefix nothing sweeps any more.
+    rpre = (a.adopt and read_run_prefix(a.rundir)) or run_prefix(a.rundir)
 
     # ⛔ SIGTERM MUST REACH THE finally. Python does not run finally blocks on a default SIGTERM --
     # the process simply dies, and the cards go on billing. Turning it into an exception is what

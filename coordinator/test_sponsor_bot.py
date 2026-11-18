@@ -102,6 +102,7 @@ class FakeRunPod:
         self.prices = {"NVIDIA GeForce RTX 4090": 0.34, "NVIDIA A40": 0.49}
         self.capacity = {"NVIDIA GeForce RTX 4090": True, "NVIDIA A40": True}
         self.deploys, self.terminations = [], []
+        self.lost = []                      # pods whose create answer was lost
         self.bodies = []                    # every create body, as sent
         self.agents = []                    # the User-Agent of every request
         self.refuse_deploy = False          # answer deploys with an API error (403) instead of a pod
@@ -109,6 +110,8 @@ class FakeRunPod:
         self.list_runtime = False           # include the live port mapping in GET /v2/pods
         self.page_size = None               # paginate GET /v2/pods this many to a page
         self.rate_limit_next = 0            # answer this many requests 429 first
+        self.lose_next = 0                  # creates that make the pod but answer 500 (a lost answer)
+        self.late = 0                       # ... whose pod is missing from this many listings
         self.max_live, self.n = 0, 0
         self.lock = threading.Lock()
         fake = self
@@ -215,9 +218,19 @@ class FakeRunPod:
                 self.deploys.append((pid, body["name"], gt))
                 self.max_live = max(self.max_live, len(self.live()))
                 # RunPod's real create answer: PROVISIONING, no runtime yet.
+                if self.lose_next > 0:
+                    self.lose_next -= 1
+                    self.pods[pid]["hidden"] = self.late
+                    self.lost.append(pid)
+                    return self.problem(500, "upstream timeout")
                 return 201, dict(self.pod_obj(pid, runtime=False), status="PROVISIONING"), ()
             if method == "GET" and u.path == "/v2/pods":
-                ids = [i for i, p in self.pods.items() if p["alive"]]
+                ids = []
+                for i, p in self.pods.items():
+                    if p["alive"] and p.get("hidden", 0) > 0:
+                        p["hidden"] -= 1            # not listed yet (eventual consistency)
+                    elif p["alive"]:
+                        ids.append(i)
                 start = int(q.get("cursor") or 0)
                 size = self.page_size or int(q.get("limit") or 1000)
                 page = ids[start:start + size]
@@ -1009,6 +1022,21 @@ check(outcome == "runpod" and not api.deploys and any("no pod has landed" in m f
       f"(after ~{span_h:.1f} bot-hours: {outcome})")
 check(sponsor_bot.CAPACITY_LATCH_S / 3600 <= span_h,
       f"and not before {sponsor_bot.CAPACITY_LATCH_S // 3600} h of misses ({span_h:.1f} h)")
+
+# ---------- a lost create, through Bot.run(): the per-look sweep and _observe together ----------
+print("== a lost create, through Bot.run() ==")
+reset()
+api = FakeRunPod()
+api.lose_next, api.late = 1, 2              # the first create's answer is lost; its pod is missing from two listings
+logs = []
+lost_bot = make_bot(api, FakeRunner(), trial=[9810], log=logs.append)
+if CONTROL:
+    lost_bot._sweep_strays = lambda c: None
+res = lost_bot.run()
+check(api.lost and api.lost[0] in api.terminations and res == "done" and not api.live()
+      and any("not tracked" in m for m in logs),
+      f"a pod whose create answer was lost is released by the run's own prefix sweep while another pod proves the "
+      f"block, and nothing is left on RunPod (lost {api.lost}, {res}, live {api.live()})")
 
 # ---------- stop-all ----------
 print("== stop-all ==")

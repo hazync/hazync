@@ -52,6 +52,8 @@ import ipaddress   # noqa: E402
 
 OLD_PUBLIC_RULE = "(not ipaddress.ip_address(ip).is_private)"      # review H1: 100.65.x.x passes it
 
+_TM = sb.terminate_many           # the real one, for the tests that must reach it whatever the controls replace
+
 if CONTROL:
     # ⚠ THE CONTROLS MUTATE THE SHIPPED CLIENT, one v2 difference each.
     sb.NO_CAPACITY_STATUS = None                      # a 400 read as a refusal, as a naive port would
@@ -61,6 +63,11 @@ if CONTROL:
     sb.REQUEST_REFUSALS = ()                          # M1: a 401/402/422 hidden behind another type's 400
     sb.CAPACITY_LATCH_S = 0                           # H1(r2): a drought latches on the first miss
     sb.Bot._sweep_strays = lambda self, c=None: None  # r4: a lost create's pod is never swept during the run
+    sb._ACCEPT_UNACKED_ABSENCE = True                 # r6 M-1: one listing's absence taken for "gone"
+    sb.release_until_clean = (lambda api, ids, match=None, skip=None, sleep=None, clock=None, budget_s=None,  # r6: one pass
+                              wait_s=5.0, gap_s=5.0, on_done=None:
+                              (lambda d, l: (on_done and d and on_done(d)) or (d, l, not l))(
+                                  *_TM(api, list(ids), lambda x: None, 1, 0, 0)))
     sb.Bot._landed = lambda self, p: False            # r5 H1: a working pod does not end the drought
     sb.Bot._settle = lambda self, c, p, ok, note: setattr(p, "terminated", 1.0)   # M3(r2): unconfirmed = gone
     sb.Bot._sweep_leftovers = lambda self, c: None    # M2(r2): an earlier run's pods are never swept
@@ -161,7 +168,7 @@ class FakeV2:
 
     def pod_obj(self, pid, runtime=True):
         p = self.pods[pid]
-        return {"id": pid, "name": p["name"], "status": "RUNNING", "cost": p["cost"], "cloud": "SECURE",
+        return {"id": pid, "name": p["name"], "status": p.get("status", "RUNNING"), "cost": p["cost"], "cloud": "SECURE",
                 "gpu": {"id": p["gpu"], "count": 1}, "dataCenterId": p.get("dc"),
                 "ssh": {"proxy": None, "direct": p.get("direct")},
                 "runtime": ({"uptime": 120, "ports": p.get("ports", [])} if runtime else None)}
@@ -752,7 +759,7 @@ with tempfile.TemporaryDirectory() as d:
     try:
         bot._launch(c, clk())
         p1 = bot.pods[0]
-        bot._terminate(c, p1, "test", budget_s=10)
+        bot._terminate(c, p1, "test")
         s1 = bot.spend(clk() + 3600)
         bot._launch(c, clk())
     finally:
@@ -915,7 +922,7 @@ with tempfile.TemporaryDirectory() as d:
         pass
     kept = api.deploy_listening(f"{pre}2", PUB, gpu_types=(A40,))
     left = tip_smoke.release_recorded(api, os.path.join(d, "rented.json"), [kept], [], prefix=pre,
-                                      keep_ids=[kept["id"]], sleep=lambda x: None)
+                                      keep_ids=[kept["id"]], sleep=(_c := Clock()).sleep, clock=_c)
     names = sorted(x["name"] for x in f.pods.values())
 check(pre.startswith("hz-smoke-") and len(pre) > len("hz-smoke-") + 1 and tip_smoke.run_prefix(tempfile.mkdtemp(), now=1) != pre,
       f"r4: the run prefix is unique per run ({pre})")
@@ -927,7 +934,7 @@ check(names == sorted(["hz-smoke-1", f"{pre}2"]),
 print("== lost create (r4): fold_rent ==")
 import fold_rent   # noqa: E402
 if CONTROL:
-    fold_rent.release_fold = lambda api, name, pod_id: sb.terminate_many(api, [pod_id] if pod_id else [])[1]
+    fold_rent.release_fold = lambda api, name, pod_id, **kw: sb.terminate_many(api, [pod_id] if pod_id else [])[1]
 f = FakeV2()
 f.create_then_fail, f.late = 1, 0
 api = sb.RunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
@@ -935,7 +942,7 @@ try:
     api.deploy("hazync-fold-123", PUB, gpu_types=(A40,))
 except sb.RunPodError:
     pass
-fold_rent.release_fold(api, "hazync-fold-123", None)
+fold_rent.release_fold(api, "hazync-fold-123", None, sleep=(_c := Clock()).sleep, clock=_c)
 check(not f.pods, f"r4: fold_rent's teardown releases a lost create by its unique name, with no pod id ({list(f.pods)})")
 
 # ── r2 C1. a rent that stops half way: every pod tracked, released, and the record kept until the account agrees
@@ -996,7 +1003,7 @@ with tempfile.TemporaryDirectory() as d:
         raised = e
     check(raised is not None and sorted(p["id"] for p in created) == ["r1", "r2", "r3"],
           f"C1(r2): 3 rented then a 402: all 3 are handed to the tracked set ({[p['id'] for p in created]})")
-    left = tip_smoke.release_recorded(ra, rp_, [], [], sleep=lambda x: None)
+    left = tip_smoke.release_recorded(ra, rp_, [], [], sleep=(_c := Clock()).sleep, clock=_c)
     check(left == [] and not ra.live and not os.path.exists(rp_),
           f"C1(r2): the teardown releases them FROM THE RECORD even when `created` is empty, then drops the record "
           f"({left}, live {sorted(ra.live)})")
@@ -1007,7 +1014,7 @@ with tempfile.TemporaryDirectory() as d:
     got = tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased, "hz-smoke-t-")
     check(len(got) == 3, f"C1(r2): 3 rented then a 400 (a miss) returns the 3 -- no exception, nothing lost ({len(got)})")
     ra.listing_fails = True
-    left = tip_smoke.release_recorded(ra, rp_, [], [], sleep=lambda x: None)
+    left = tip_smoke.release_recorded(ra, rp_, [], [], sleep=(_c := Clock()).sleep, clock=_c)
     check(left is None and os.path.exists(rp_),
           "C1(r2): when the account cannot be listed the record is KEPT (never 'account check: clean')")
 
@@ -1138,6 +1145,232 @@ check(r1 and "refusing" in r1, f"r5 H2: a pod with the last run's prefix still l
 check(r2 and "refusing" in r2, f"r5 H2: so does a still-listed rented.json id ({r2})")
 check(r3 is None, f"r5 H2: and nothing listed lets the run start ({r3})")
 
+# ── r6 M-1. absence is believed only after an ANSWERED delete; a written-off pod still listed is revived ─────────
+print("== r6: confirmations ==")
+
+
+class OmitAPI:
+    """DELETE errors (500) while the listing happens to omit the pod."""
+    def __init__(self):
+        self.deletes = 0
+
+    def terminate(self, pid):
+        self.deletes += 1
+        raise sb.RunPodError("HTTP 500", status=500)
+
+    def pods(self):
+        return []
+
+
+clk = Clock()
+oa = OmitAPI()
+done, left = _TM(oa, ["x1"], sleep=clk.sleep, clock=clk, tries=2, wait_s=1)
+check(left == ["x1"] and not done,
+      f"r6 M-1: a DELETE that errored is not 'gone' because one listing omits the pod ({done}, {left})")
+
+
+class LagAPI:
+    last_misses = []
+
+    def __init__(self):
+        self.listed, self.fail_delete, self.deletes = False, True, 0
+
+    def deploy(self, name, pub):
+        self.name = name
+        return {"id": "d1", "name": name, "gpu_type": A40, "cost_per_hr": 3.0}
+
+    def terminate(self, pid):
+        self.deletes += 1
+        if self.fail_delete:
+            raise sb.RunPodError("HTTP 500", status=500)
+        self.listed = False
+
+    def pods(self):
+        return [{"id": "d1", "name": self.name, "status": "RUNNING", "cost_per_hr": 3.0}] if self.listed else []
+
+    def pod(self, pid):
+        return None
+
+
+if CONTROL:
+    sb.Bot._sweep_strays = lambda self, c=None: None
+clk = Clock()
+with tempfile.TemporaryDirectory() as d:
+    la = LagAPI()
+    bot = sb.Bot(os.path.join(d, "bot.db"), la, RL(), max_pods=1, max_usd=100, max_usd_per_hour=5, capacity_backoff_s=0,
+                 log=lambda m: None, clock=clk, sleep=clk.sleep, confirm_wait_s=0)
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    real = sb.pending_work
+    sb.pending_work = lambda *a, **k: [1]
+    try:
+        bot._launch(c, clk())                           # over the ceiling: DELETE errors, the listing lags
+        written_off = bot.pods[0].terminated is not None
+        la.listed, la.fail_delete = True, False         # RunPod now lists it, and a DELETE would work
+        for _ in range(3):
+            bot._retry_unconfirmed(c)
+            bot._sweep_strays(c)
+            clk.t += 30
+    finally:
+        sb.pending_work = real
+        c.close()
+check(not la.listed, f"r6 M-1: a pod RunPod still lists after it was taken for gone is swept again and released "
+      f"(written off at first: {written_off}, still listed: {la.listed})")
+
+clk = Clock()
+with tempfile.TemporaryDirectory() as d:
+    la = LagAPI()
+    la.fail_delete = False                              # the DELETE is answered, the listing lags: written off
+    bot = sb.Bot(os.path.join(d, "bot.db"), la, RL(), max_pods=1, max_usd=100, max_usd_per_hour=5, capacity_backoff_s=0,
+                 log=lambda m: None, clock=clk, sleep=clk.sleep, confirm_wait_s=0)
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    real = sb.pending_work
+    sb.pending_work = lambda *a, **k: [1]
+    try:
+        bot._launch(c, clk())
+        written_off = bot.pods[0].terminated is not None
+        la.listed = True                                # ...and then RunPod lists it after all
+        d0 = la.deletes
+        for _ in range(3):
+            bot._sweep_strays(c)
+            bot._retry_unconfirmed(c)
+            clk.t += 30
+    finally:
+        sb.pending_work = real
+        c.close()
+check(written_off and la.deletes > d0 and not la.listed,
+      f"r6 M-1: a pod written off as gone that RunPod lists again is revived and released "
+      f"(written off {written_off}, {la.deletes - d0} more DELETEs, still listed {la.listed})")
+
+# ── r6. a pod listed as TERMINATED is gone, and never a stray ───────────────────────────────────────────────
+f = FakeV2()
+api = sb.RunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+with tempfile.TemporaryDirectory() as d:
+    bot = sb.Bot(os.path.join(d, "bot.db"), api, RL(), max_pods=1, max_usd=10, max_usd_per_hour=5,
+                 log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0)
+    f.pods["t1"] = {"name": bot.prefix + "9", "gpu": A40, "cost": 1, "status": "TERMINATED"}
+    bot._sweep_strays(None)
+check(not any(r[0] == "DELETE" for r in f.reqs), "r6: a pod RunPod lists as TERMINATED is not taken for a stray")
+
+# ── r6. a stray that will not go is tracked: spend, --max-pods, retried ─────────────────────────────────────
+class StuckStray:
+    last_misses = []
+
+    def __init__(self, name):
+        self.name, self.n = name, 0
+
+    def deploy(self, name, pub):
+        self.n += 1
+        return {"id": f"n{self.n}", "name": name, "gpu_type": A40, "cost_per_hr": 0.4}
+
+    def terminate(self, pid):
+        pass
+
+    def pods(self):
+        return [{"id": "s9", "name": self.name, "status": "RUNNING", "cost_per_hr": 0.5}]
+
+
+with tempfile.TemporaryDirectory() as d:
+    bot = sb.Bot(os.path.join(d, "bot.db"), None, RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
+                 capacity_backoff_s=0, log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0)
+    bot.api = StuckStray(bot.prefix + "7")
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    bot._sweep_strays(c)
+    real = sb.pending_work
+    sb.pending_work = lambda *a, **k: [1]
+    try:
+        bot._launch(c, bot.clock())
+    finally:
+        sb.pending_work = real
+    row = c.execute("SELECT terminated_at FROM sponsor_pods WHERE pod_id='s9'").fetchone()
+    c.close()
+check([p.id for p in bot._live()] == ["s9"] and bot.pods[0].state == "unconfirmed" and "s9" in bot.unconfirmed
+      and row is not None and row[0] is None and bot.api.n == 0,
+      f"r6: a stray that will not terminate is tracked (live, unconfirmed, a row for the next start) and holds its "
+      f"--max-pods slot: nothing else is rented ({[p.id for p in bot._live()]}, {bot.api.n} deploys)")
+
+# ── r6. terminate_all: a pod still listed after the first pass is confirmed on the second ───────────────────
+class TwoPass:
+    def __init__(self):
+        self.listings, self.deleted = 0, False
+
+    def terminate(self, pid):
+        self.deleted = True
+
+    def pods(self):
+        self.listings += 1
+        return [{"id": "p1", "name": "x", "status": "RUNNING"}] if self.listings <= 3 else []
+
+
+clk = Clock()
+with tempfile.TemporaryDirectory() as d:
+    tp = TwoPass()
+    bot = sb.Bot(os.path.join(d, "bot.db"), tp, RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
+                 log=lambda m: None, clock=clk, sleep=clk.sleep, confirm_wait_s=1)
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    p_ = sb.Pod({"id": "p1", "name": bot.prefix + "1", "gpu_type": A40, "cost_per_hr": 0.5}, clk())
+    bot.pods.append(p_)
+    c.execute("INSERT INTO sponsor_pods(pod_id, name, created_at) VALUES('p1','n',?)", (clk(),))
+    c.commit()
+    bot.terminate_all(c, "test")
+    row = c.execute("SELECT terminated_at FROM sponsor_pods WHERE pod_id='p1'").fetchone()
+    c.close()
+check(p_.state == "terminated" and not bot.unconfirmed and row[0] is not None,
+      f"r6: terminate_all confirms a pod that RunPod still listed on the first pass ({p_.state}, {bot.unconfirmed})")
+
+# ── r6. main(): no SPONSOR_BOT_HOME refuses --live before RunPod is touched; the sweep runs before prepare() ─────
+print("== r6: main() ordering ==")
+order = []
+saved = (sb.Coord.from_env, sb.RunPod.from_env, sb.SshRunner.from_env, sb.Bot.release_leftovers, sb.connect_path,
+         os.environ.get("SPONSOR_BOT_HOME"))
+with tempfile.TemporaryDirectory() as d:
+    sb.Coord.from_env = classmethod(lambda cls: object())
+    sb.connect_path = lambda: os.path.join(d, "bot.db")
+    sb.RunPod.from_env = classmethod(lambda cls: order.append("runpod") or StuckStray("x"))
+
+    class _R:
+        def prepare(self):
+            order.append("prepare")
+            raise SystemExit("stop here")
+    sb.SshRunner.from_env = classmethod(lambda cls: _R())
+    sb.Bot.release_leftovers = lambda self: order.append("sweep")
+    argv = ["run", "--live", "--max-pods", "1", "--max-usd", "1", "--max-usd-per-hour", "1"]
+    os.environ.pop("SPONSOR_BOT_HOME", None)
+    try:
+        sb.main(argv)
+        r1 = None
+    except SystemExit as e:
+        r1 = str(e)
+    o1, order[:] = list(order), []
+    os.environ["SPONSOR_BOT_HOME"] = d
+    try:
+        sb.main(argv)
+    except SystemExit:
+        pass
+    o2 = list(order)
+(sb.Coord.from_env, sb.RunPod.from_env, sb.SshRunner.from_env, sb.Bot.release_leftovers, sb.connect_path) = saved[:5]
+if saved[5] is None:
+    os.environ.pop("SPONSOR_BOT_HOME", None)
+else:
+    os.environ["SPONSOR_BOT_HOME"] = saved[5]
+check(r1 and "SPONSOR_BOT_HOME" in r1 and o1 == [],
+      f"r6 M-2: without SPONSOR_BOT_HOME --live is refused before RunPod is touched ({r1}, {o1})")
+check(o2[:3] == ["runpod", "sweep", "prepare"], f"r6 M-1: the start sweep runs before SshRunner.prepare() ({o2})")
+
+# ── r6. fold_rent's release lists again: a lost create that appears late goes too ───────────────────────────
+f = FakeV2()
+f.create_then_fail, f.late = 1, 1
+api = sb.RunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+try:
+    api.deploy("hazync-fold-late", PUB, gpu_types=(A40,))
+except sb.RunPodError:
+    pass
+fold_rent.release_fold(api, "hazync-fold-late", None, sleep=(_c := Clock()).sleep, clock=_c)
+check(not f.pods, f"r6: fold_rent's release catches a lost create that only appears on the second listing ({list(f.pods)})")
+
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
 ROOT = pathlib.Path(HERE).parent
@@ -1209,6 +1442,12 @@ EXPECTED_CONTROL = {
     "r5 H2: a pod with the last run's prefix still listed refuses a new run",
     "r5 H2: so does a still-listed rented.json id",
     "r5 M3: once the listing shows it at $3.00/h over the $1.00 ceiling it is terminated -- without waiting for SSH",
+    "r6 M-1: a DELETE that errored is not 'gone' because one listing omits the pod",
+    "r6 M-1: a pod RunPod still lists after it was taken for gone is swept again and released",
+    "r6 M-1: a pod written off as gone that RunPod lists again is revived and released",
+    "r6: a stray that will not terminate is tracked",
+    "r6: fold_rent's release catches a lost create that only appears on the second listing",
+    "r6: terminate_all confirms a pod that RunPod still listed on the first pass",
     "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",
     "two 429s are waited out for Retry-After and the create then lands",
     "with no runtime ports, RunPod's own ssh.direct is used",
