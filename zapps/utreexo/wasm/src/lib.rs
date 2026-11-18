@@ -7,7 +7,12 @@
 //!   image_id() -> p                the built-in utreexo image id, same encoding
 //! ```
 //! Input frame (little-endian): `[u64 now][u32 n][receipt][u32 n][image id hex, n = 0 for the built-in]`
-//! `[u32 n]["H:hash" from the page's own source, n = 0 for none][u32 n]["T:hash" for the core tip, n = 0 for none]`.
+//! `[u32 n]["H:hash" from the page's own source, n = 0 for none][u32 n]["T:hash" for the core tip, n = 0 for none]`
+//! `[u32 n][network: "mainnet" or "signet", n = 0 for mainnet]`. The network is the caller's: a proof of another
+//! network is FAIL. (Until 18.11.2026 the frame had no network and the proof's own profile picked it; such a frame is
+//! now refused as truncated.)
+//! The JSON's `network` is the one checked; `image_pinned` false (with `image_label`) is the unpinned built-in utreexo
+//! image, under which the verdict is at most `demo`.
 //! The JSON's `roots` write an Empty root as the string "empty" (rustreexo's Display); the journal holds 32 zero bytes
 //! for it. Either way a consumer must build `BitcoinNodeHash::Empty`, never the hash 00…00.
 use swiftsync_verify::Verdict;
@@ -62,30 +67,34 @@ fn expect(s: &str, what: &str) -> Result<Option<(u32, String)>, String> {
 #[no_mangle]
 pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let parsed = (|| -> Result<(u64, &[u8], String, Option<(u32, String)>, Option<(u32, String)>), String> {
+    let parsed = (|| -> Result<(u64, &[u8], String, Option<(u32, String)>, Option<(u32, String)>, String), String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
         let r = f.chunk()?;
         let image = f.text("image id")?;
         let at = expect(&f.text("expect-at")?, "expect-at")?;
         let tip = expect(&f.text("expect-tip")?, "expect-tip")?;
+        let network = f.text("network")?;
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
-        Ok((now, r, image, at, tip))
+        Ok((now, r, image, at, tip, network))
     })();
-    let (now, r, image, at, tip) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    let (now, r, image, at, tip, network) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    let network = if network.is_empty() { "mainnet".to_string() } else { network };
     let image = if image.is_empty() { zapp_utreexo::UTREEXO_IMAGE_ID.to_string() } else { image };
-    let rep = zapp_utreexo::verify_utreexo(r, &image, None, now, at.as_ref().map(|(h, x)| (*h, x.as_str())), tip.as_ref().map(|(h, x)| (*h, x.as_str())));
+    let rep = zapp_utreexo::verify_utreexo_on(&network, r, &image, None, now, at.as_ref().map(|(h, x)| (*h, x.as_str())), tip.as_ref().map(|(h, x)| (*h, x.as_str())));
     let ok = rep.verdict != Verdict::Fail;
     let z = rep.statement.as_ref().filter(|_| ok);
     ret(serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
-        "image": image,
+        "image": image.to_lowercase(),
+        "image_pinned": rep.image_pinned,
+        "image_label": (!rep.image_pinned).then_some(zapp_utreexo::UTREEXO_IMAGE_LABEL),
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
         "height": z.map(|z| z.height),
         "block_hash": z.map(|z| z.block_hash_hex()),
         "leaves": z.map(|z| z.leaves),
         "roots": z.map(|z| z.roots_hex()),
-        "network": z.map(|z| z.network_name()),
+        "network": rep.network,
         "runs": z.map(|z| z.runs),
         "core_height": z.map(|z| z.core_height),
         "identity_checked": ok && rep.identity_checked,

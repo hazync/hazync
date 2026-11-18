@@ -8,13 +8,27 @@
 //! `height` is the node's own) is checked here, with the core verifier's own tables (swiftsync-verify as a library).
 use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
-use swiftsync_verify::{hex, hex32, identity_matches, lineage_of, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
+use swiftsync_verify::{hex, hex32, identity_matches, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME};
 
 /// The utreexo image id this checker trusts by default. ⚠ A local build (hazync-coord, 15.11.2026, the prototype on
 /// feat/zapp-utreexo), NOT a reproducible build in reproduce/LIBZYNC_IDS: nobody should rely on it yet.
 pub const UTREEXO_IMAGE_ID: &str = "27bea7da7c9c2c528a0c9b6e6d22f5d06c5b2c87bcd9d58c360ffecaf5424fb9";
 /// How [`UTREEXO_IMAGE_ID`] is labelled wherever it is printed, until it is pinned.
 pub const UTREEXO_IMAGE_LABEL: &str = "local build, not reproducible, not published";
+/// Whether [`UTREEXO_IMAGE_ID`] is a reproducible build pinned in reproduce/LIBZYNC_IDS. While it is not, nobody can
+/// check which code the id stands for, so a proof under it is at most DEMO ([`image_pinned`]), whether the id came by
+/// default or was named with `--image`. Pinning it (a container build of the guest, the vectors re-proved under the new
+/// id) sets this to true.
+pub const UTREEXO_IMAGE_PINNED: bool = false;
+
+/// The networks a caller can name (the core verifier's `Image` table has these two).
+pub const NETWORKS: [&str; 2] = ["mainnet", "signet"];
+
+/// Whether a proof under the utreexo image `id` may reach OK: every id but the unpinned built-in one (another id is
+/// the caller's own choice, e.g. one they rebuilt themselves).
+pub fn image_pinned(id: &[u8; 32]) -> bool {
+    UTREEXO_IMAGE_PINNED || hex32(UTREEXO_IMAGE_ID).as_ref() != Some(id)
+}
 
 /// The largest receipt this checker decodes. A succinct receipt here is about 225 kB; the limit bounds what a hostile
 /// file can make bincode reserve (bincode 1 reads a Vec length from the input and reserves before reading the items).
@@ -22,13 +36,15 @@ pub const UTREEXO_IMAGE_LABEL: &str = "local build, not reproducible, not publis
 /// bound; not changed here (core code).
 pub const MAX_RECEIPT_BYTES: usize = 16 << 20;
 
-/// `bincode::deserialize`'s encoding (fixed-width integers, trailing bytes allowed) with a byte limit.
+/// `bincode::deserialize`'s encoding (fixed-width integers) with a byte limit, and NO trailing bytes: a receipt file is
+/// exactly one receipt, so one proof has one byte string (bytes appended to a genuine receipt would otherwise pass as a
+/// different file with the same verdict).
 pub fn decode_receipt(receipt: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
     use bincode::Options;
     if receipt.len() > MAX_RECEIPT_BYTES {
         return Err(format!("{} bytes, over the {MAX_RECEIPT_BYTES}-byte limit", receipt.len()));
     }
-    bincode::DefaultOptions::new().with_fixint_encoding().allow_trailing_bytes().with_limit(MAX_RECEIPT_BYTES as u64)
+    bincode::DefaultOptions::new().with_fixint_encoding().reject_trailing_bytes().with_limit(MAX_RECEIPT_BYTES as u64)
         .deserialize(receipt).map_err(|e| e.to_string())
 }
 
@@ -71,10 +87,11 @@ impl UtreexoStatement {
     pub fn roots_hex(&self) -> Vec<String> {
         self.roots.iter().map(|r| if *r == [0u8; 32] { "empty".to_string() } else { hex(r) }).collect()
     }
-    /// Floresta's `AssumeUtreexoValue` (floresta-chain src/pruned_utreexo/chainparams.rs) as Rust source. Floresta's
-    /// `acchashes!` only takes hex literals (an "empty" literal does not parse), so with an Empty root the list is
-    /// written out with an explicit `BitcoinNodeHash::Empty` instead.
-    pub fn floresta_rust(&self) -> String {
+    /// Floresta's `AssumeUtreexoValue` (floresta-chain src/pruned_utreexo/chainparams.rs) as Rust source, under a comment
+    /// line naming the network it is for (the struct has no network field; a value is only ever valid for one network's
+    /// chainparams). Floresta's `acchashes!` only takes hex literals (an "empty" literal does not parse), so with an
+    /// Empty root the list is written out with an explicit `BitcoinNodeHash::Empty` instead.
+    pub fn floresta_rust(&self, network: &str) -> String {
         let has_empty = self.roots.iter().any(|r| *r == [0u8; 32]);
         let roots = if has_empty {
             let items: Vec<String> = self.roots.iter().map(|r| if *r == [0u8; 32] { "        BitcoinNodeHash::Empty,".to_string() }
@@ -84,13 +101,8 @@ impl UtreexoStatement {
             let items: Vec<String> = self.roots_hex().iter().map(|r| format!("        \"{r}\",")).collect();
             format!("acchashes![\n{}\n    ]\n    .to_vec()", items.join("\n"))
         };
-        format!("AssumeUtreexoValue {{\n    height: {},\n    block_hash: bhash!(\"{}\"),\n    roots: {roots},\n    leaves: {},\n}}",
-                self.height, self.block_hash_hex(), self.leaves)
-    }
-
-    /// "mainnet" or "signet", from the statement's network word.
-    pub fn network_name(&self) -> &'static str {
-        if self.network == network_bits("signet") { "signet" } else { "mainnet" }
+        format!("// {network}: the accumulator after block {}\nAssumeUtreexoValue {{\n    height: {},\n    block_hash: bhash!(\"{}\"),\n    roots: {roots},\n    leaves: {},\n}}",
+                self.height, self.height, self.block_hash_hex(), self.leaves)
     }
 }
 
@@ -104,6 +116,10 @@ pub struct UtreexoReport {
     pub verdict: Verdict,
     /// `expect_at` was given and matched: block `height` is the node's
     pub identity_checked: bool,
+    /// The network the CALLER named (the one checked), never read from the proof.
+    pub network: String,
+    /// [`image_pinned`] for the utreexo image checked against: false caps the verdict at DEMO.
+    pub image_pinned: bool,
 }
 
 impl UtreexoReport {
@@ -113,16 +129,32 @@ impl UtreexoReport {
     }
 }
 
-/// Verifies the final run's receipt. `image_hex`: the utreexo image id ([`UTREEXO_IMAGE_ID`] by default);
-/// `core_image_hex`: a core image to trust instead of the network's built-in one; `now`: the checker's clock;
-/// `expect_at`: (H, hash at H as `getblockhash` prints it) from the node's own header chain; `expect_tip`: the same for
-/// the core tip when it is above H. OK needs `expect_at` (and `expect_tip` when T > H), minimum work and the checkpoint;
-/// without them a valid proof is DEMO.
+/// Verifies the final run's receipt on mainnet: [`verify_utreexo_on`]`("mainnet", ..)`, the default every zAPP takes
+/// when the caller names no network.
 pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&str>, now: u64, expect_at: Option<(u32, &str)>,
                       expect_tip: Option<(u32, &str)>) -> UtreexoReport {
-    let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false };
+    verify_utreexo_on("mainnet", receipt, image_hex, core_image_hex, now, expect_at, expect_tip)
+}
+
+/// Verifies the final run's receipt for the network the CALLER names (`network`: "mainnet" or "signet"; a proof of
+/// another network is FAIL, the proof never picks the network). `image_hex`: the utreexo image id
+/// ([`UTREEXO_IMAGE_ID`] by default); `core_image_hex`: a core image to trust instead of the network's built-in one;
+/// `now`: the checker's clock; `expect_at`: (H, hash at H as `getblockhash` prints it) from the node's own header
+/// chain; `expect_tip`: the same for the core tip when it is above H. The receipt checks are here; everything after
+/// the journal is decoded is [`verify_statement`].
+pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_image_hex: Option<&str>, now: u64,
+                         expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> UtreexoReport {
+    let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
+                                  network: network.to_string(), image_pinned: false };
     if !rep.check(!swiftsync_verify::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
         return rep;
+    }
+    let Some(mut img) = NETWORKS.contains(&network).then(|| Image::by_network(network)).flatten() else {
+        rep.check(false, format!("the network is mainnet or signet ({network:?})"));
+        return rep;
+    };
+    if let Some(h) = core_image_hex {
+        match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
     }
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the utreexo image id is 32 bytes of hex ({image_hex})"));
@@ -143,24 +175,41 @@ pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&s
         Ok(z) => z,
         Err(e) => { rep.check(false, format!("the journal is a utreexo statement ({e})")); return rep; }
     };
+    let receipt_ok = rep.checks.iter().all(|c| c.0);
+    let mut s = verify_statement(z, &id, img, now, expect_at, expect_tip);
+    s.checks.splice(0..0, rep.checks);
+    if !receipt_ok {
+        s.verdict = Verdict::Fail;
+    }
+    s
+}
+
+/// The verdict on a decoded statement, a pure function of it: `id` the utreexo image its receipt verified under, `img`
+/// the trusted core image of the caller's network (its `network` is the one checked), `now`, `expect_at`, `expect_tip`
+/// as in [`verify_utreexo_on`]. FAIL if any check fails; OK needs `expect_at` matched, the core tip matched (by
+/// `expect_tip`, or T = H), Core's minimum work and the checkpoint, and a pinned utreexo image ([`image_pinned`]);
+/// otherwise DEMO. A caller must have verified the receipt under `id` first: this sees only the journal.
+pub fn verify_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image, now: u64, expect_at: Option<(u32, &str)>,
+                        expect_tip: Option<(u32, &str)>) -> UtreexoReport {
+    let net = img.network;
+    let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
+                                  network: net.to_string(), image_pinned: image_pinned(id) };
     rep.check(z.kind == KIND_UTREEXO, "a utreexo statement (kind 'ZU' 1)");
     rep.check(z.done == 1 && z.to == z.height, "the final run: it ended at H and checked the core receipt");
     // every earlier run was verified, inside the zkVM, under the id this statement commits: it must be this image
-    rep.check(z.self_id == swiftsync_verify::words(&Digest::from_bytes(id)), "every run of the chain is this image (self_id)");
+    rep.check(z.self_id == swiftsync_verify::words(&Digest::from_bytes(*id)), "every run of the chain is this image (self_id)");
     rep.check(z.roots.len() as u32 == z.leaves.count_ones(), format!("{} roots for {} leaves (one per set bit)", z.roots.len(), z.leaves));
+    // The one lineage check. A zero lineage: the core image proved 1..T alone, so every block carries its undo
+    // commitment. A non-zero one (a handover, HANDOVER.md) is refused even when it is the image's own lineage
+    // (`lineage_of(img.lineage)`): blocks before the handover were proved by another image. (Until 18.11.2026 a second
+    // line also accepted the image's lineage; this check refused it first, so that line never decided anything.)
     rep.check(z.lineage == [0u8; 32], "one core image since genesis (every block 1..T carries the undo commitment)");
-    let net = if z.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
-    rep.check(z.network == network_bits(net), format!("the statement's network is the core's ({net})"));
-    let Some(mut img) = Image::by_network(net) else {
-        rep.check(false, "a built-in image for this network");
-        return rep;
+    match network_bits(net) {
+        Some(b) => rep.check(z.network == b, format!("the proof is for {net}, the network asked for (its network word {}, {net}'s {b})", z.network)),
+        None => rep.check(false, format!("the network is mainnet or signet ({net:?})")),
     };
-    if let Some(h) = core_image_hex {
-        match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
-    }
     rep.check(swiftsync_verify::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
-    rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));
-    rep.check(z.lineage == [0u8; 32] || z.lineage == lineage_of(img.lineage), "the core lineage is the image's");
+    rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the {net} image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));
     rep.check(hex32(img.genesis_anchor_hex) == Some(z.anchor_id), format!("anchored at the {net} genesis"));
     rep.check(z.max_time as u64 <= now.saturating_add(MAX_FUTURE_BLOCK_TIME), "time-too-new: no core block more than 2 h ahead of this clock");
     if let Some((h, x)) = expect_at {
@@ -176,14 +225,22 @@ pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&s
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
     let enough = work_at_least(&z.cum_work, img.min_work_hex) && z.core_height >= img.checkpoint_height;
     rep.checks.push((true, (if enough { "the core chain reaches Core's minimum work and the checkpoint" } else { "the core chain is below Core's minimum work or the checkpoint" }).to_string()));
-    rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok { Verdict::Ok } else { Verdict::Demo };
+    if !rep.image_pinned {
+        rep.checks.push((true, format!("the utreexo image {} is the built-in one ({UTREEXO_IMAGE_LABEL}): at most DEMO", hex(id))));
+    }
+    rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok && rep.image_pinned { Verdict::Ok } else { Verdict::Demo };
     rep.statement = Some(z);
     rep
 }
 
-/// libzync::facts::Network::bits for the network's name (the statement's `network` word).
-fn network_bits(net: &str) -> u32 {
-    if net == "signet" { libzync::facts::Network::Signet.bits() } else { libzync::facts::Network::Mainnet.bits() }
+/// libzync::facts::Network::bits for the network's name (the statement's `network` word); None for a network this
+/// checker has no image for.
+fn network_bits(net: &str) -> Option<u32> {
+    match net {
+        "mainnet" => Some(libzync::facts::Network::Mainnet.bits()),
+        "signet" => Some(libzync::facts::Network::Signet.bits()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -199,10 +256,10 @@ mod tests {
     fn floresta_source_form() {
         let z = UtreexoStatement { height: 3, leaves: 3, roots: vec![[1; 32], [0; 32]], ..Default::default() };
         assert_eq!(z.roots_hex()[1], "empty");
-        let f = z.floresta_rust();
+        let f = z.floresta_rust("mainnet");
         assert!(f.contains("leaves: 3,") && f.contains("BitcoinNodeHash::Empty,") && !f.contains("acchashes!") && !f.contains("\"empty\""), "{f}");
         let n = UtreexoStatement { height: 3, leaves: 3, roots: vec![[1; 32], [2; 32]], ..Default::default() };
-        assert!(n.floresta_rust().contains("acchashes![") && !n.floresta_rust().contains("Empty"));
+        assert!(n.floresta_rust("signet").contains("acchashes![") && !n.floresta_rust("signet").contains("Empty"));
     }
 
     #[test]

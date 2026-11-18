@@ -3,8 +3,9 @@
 //
 //   import { loadUtreexo } from './zapp-utreexo.js';
 //   const u = await loadUtreexo(fetch('./zapp_utreexo_wasm.wasm'));
-//   const r = u.verify({ receipt, expectAt: '<H>:<hash>' });   // expectAt from YOUR header chain; expectTip when T > H
-//   r.verdict ('ok' | 'demo' | 'fail'), r.network, r.height, r.block_hash, r.leaves, r.roots
+//   const r = u.verify({ receipt, network: 'mainnet', expectAt: '<H>:<hash>' });   // expectAt from YOUR header chain; expectTip when T > H
+//   r.verdict ('ok' | 'demo' | 'fail'), r.network, r.height, r.block_hash, r.leaves, r.roots, r.image_pinned
+//   (network: the one the proof must be for, 'mainnet' (the default) or 'signet'; a proof of another network is 'fail')
 //   (a root "empty" is rustreexo's Empty: load it as BitcoinNodeHash::Empty, never as the hash of 32 zero bytes)
 
 function readString(memory, ptr) {
@@ -20,10 +21,11 @@ export async function loadUtreexo(source) {
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
   const { alloc, verify_utreexo, image_id, memory } = instance.exports;
   return {
-    /** Verify the final run's receipt. `now` defaults to this device's clock. */
-    verify({ receipt, now, imageHex, expectAt, expectTip }) {
+    /** Verify the final run's receipt for `network` (default 'mainnet'). `now` defaults to this device's clock. */
+    verify({ receipt, now, imageHex, expectAt, expectTip, network }) {
       const enc = new TextEncoder();
-      const parts = [receipt, enc.encode(imageHex || ''), enc.encode(expectAt || ''), enc.encode(expectTip || '')];
+      const parts = [receipt, enc.encode(imageHex || ''), enc.encode(expectAt || ''), enc.encode(expectTip || ''),
+                     enc.encode(network || 'mainnet')];
       const bytes = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(bytes.buffer);
       view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);

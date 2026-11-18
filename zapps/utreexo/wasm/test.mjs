@@ -14,5 +14,14 @@ t('H=3 other image', u.verify({ receipt: rd('mainnet-3.receipt'), imageHex: 'ab'
 t('H=2 under T=3', u.verify({ receipt: rd('mainnet-2.receipt'), expectAt: `2:${H2}`, expectTip: `3:${H3}` }), 'demo');
 t('H=3 tip given, T = H, wrong', u.verify({ receipt: rd('mainnet-3.receipt'), expectAt: `3:${H3}`, expectTip: `3:${H2}` }), 'fail');
 t('H=3 two runs', u.verify({ receipt: rd('mainnet-3-split.receipt'), expectAt: `3:${H3}` }), 'demo');
+t('H=3 named mainnet', u.verify({ receipt: rd('mainnet-3.receipt'), network: 'mainnet', expectAt: `3:${H3}` }), 'demo');
+t('H=3 checked as signet', u.verify({ receipt: rd('mainnet-3.receipt'), network: 'signet', expectAt: `3:${H3}` }), 'fail');
+t('H=3 an unknown network', u.verify({ receipt: rd('mainnet-3.receipt'), network: 'regtest', expectAt: `3:${H3}` }), 'fail');
+t('H=3 a receipt with a trailing byte', u.verify({ receipt: new Uint8Array([...rd('mainnet-3.receipt'), 0]), expectAt: `3:${H3}` }), 'fail');
+{
+  const r = u.verify({ receipt: rd('mainnet-3.receipt'), expectAt: `3:${H3}` });
+  if (r.network === 'mainnet' && r.image_pinned === false && typeof r.image_label === 'string') pass++;
+  else { fail++; console.log('FAIL network / image_pinned fields', r.network, r.image_pinned, r.image_label); }
+}
 console.log(`ZAPP_UTREEXO_WASM ${pass} passed, ${fail} failed; image ${u.imageId()}`);
 process.exit(fail ? 1 : 0);

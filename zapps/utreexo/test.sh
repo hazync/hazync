@@ -33,27 +33,41 @@ want 1 "an unknown flag (--expect-at, until 16.11.2026)" -- verify $V/mainnet-3.
 want 1 "a flag without its value" -- verify $V/mainnet-3.receipt --expect-at
 want 1 "two receipts" -- verify $V/mainnet-3.receipt $V/mainnet-2.receipt
 want 1 "a truncated receipt" -- verify <(head -c 1000 $V/mainnet-3.receipt)
+want 1 "a receipt with a trailing byte" -- verify <(cat $V/mainnet-3.receipt; printf '\0') --expect 3:$H3
+# the caller names the network (default mainnet); a proof of another is FAIL
+want 2 "--network mainnet, named" -- verify $V/mainnet-3.receipt --network mainnet --expect 3:$H3
+want 1 "a mainnet proof checked as signet" -- verify $V/mainnet-3.receipt --network signet --expect 3:$H3
+grep -q "FAIL.*the proof is for signet" "$T/out" || { cat "$T/out"; echo "::error::the network mismatch is not the failed check"; exit 1; }
+want 1 "--network regtest (no image)" -- verify $V/mainnet-3.receipt --network regtest --expect 3:$H3
+want 1 "--network twice" -- verify $V/mainnet-3.receipt --network mainnet --network signet --expect 3:$H3
 # --json / --floresta: nothing on stdout on DEMO; with --allow-demo exactly the JSON, marked demo
 want 2 "--json on DEMO" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json
 [ ! -s "$T/out" ] || { cat "$T/out"; echo "::error::--json printed a DEMO value without --allow-demo"; exit 1; }
 want 2 "--json --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json --allow-demo
-python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['verdict']=='demo' and j['network']=='mainnet' and j['identity_checked'] and j['leaves']==3, j" "$T/out"
+python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['verdict']=='demo' and j['network']=='mainnet' and j['identity_checked'] and j['leaves']==3 and j['image_pinned'] is False and j['image_label'], j" "$T/out"
 want 2 "--floresta --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --floresta --allow-demo
-grep -q 'acchashes!\[' "$T/out" && grep -q 'leaves: 3,' "$T/out" && ! grep -q ZAPP_UTREEXO "$T/out" || { cat "$T/out"; echo "::error::--floresta output"; exit 1; }
+grep -q 'acchashes!\[' "$T/out" && grep -q 'leaves: 3,' "$T/out" && head -1 "$T/out" | grep -q '^// mainnet:' && ! grep -q ZAPP_UTREEXO "$T/out" || { cat "$T/out"; echo "::error::--floresta output"; exit 1; }
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags). A fake node answers by height
 # (getblockhash <h>, and getblockheader with that block's chainwork: difficulty 1, 0x100010001 per block)
-mknode() { # mknode <file> <hash at 2> <hash at 3>
+mknode() { # mknode <file> <hash at 2> <hash at 3> [the blocks of work it claims at 3, default 4 (genesis + 3)]
     printf '#!/bin/sh\ncase "$1 $2" in\n "getblockhash 2") echo %s;;\n "getblockhash 3") echo %s;;\n "getblockheader %s") echo "{\\"chainwork\\": \\"%064x\\"}";;\n "getblockheader %s") echo "{\\"chainwork\\": \\"%064x\\"}";;\nesac\n' \
-        "$2" "$3" "$2" $((3 * 0x100010001)) "$3" $((4 * 0x100010001)) > "$1"; chmod +x "$1"
+        "$2" "$3" "$2" $((3 * 0x100010001)) "$3" $((${4:-4} * 0x100010001)) > "$1"; chmod +x "$1"
 }
 mknode "$T/node" $H2 $H3
 mknode "$T/wrong3" $H2 "$(printf '%064d' 1)"
+mknode "$T/badwork3" $H2 $H3 5
 want 2 "--bitcoin-cli: block 3 as the proof says (DEMO)" -- verify $V/mainnet-3.receipt --bitcoin-cli "$T/node"
 grep -q "your node's block 3 is $H3" "$T/out" || { cat "$T/out"; echo "::error::the node's answer is not named"; exit 1; }
 want 1 "--bitcoin-cli: a node that names another block 3" -- verify $V/mainnet-3.receipt --bitcoin-cli "$T/wrong3"
 want 2 "--bitcoin-cli, H = 2 below the core tip 3: both blocks asked (DEMO)" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/node"
 grep -q "your node's block 2 is $H2" "$T/out" && grep -q "your node's block 3 is $H3" "$T/out" || { cat "$T/out"; echo "::error::blocks 2 and 3 were not both asked"; exit 1; }
 want 1 "--bitcoin-cli, H = 2: the node's block 3 is not the core tip" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/wrong3"
+want 1 "--bitcoin-cli, H = 2: the node's chainwork at block 3 is not the proven one" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/badwork3"
+# --expect-tip given with a lookup source: block T is still asked, must agree with it, and its chainwork is compared
+want 2 "--bitcoin-cli and --expect-tip, H = 2 under T = 3 (DEMO)" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/node" --expect-tip 3:$H3
+grep -q "chainwork at block 3 equals the proven" "$T/out" || { cat "$T/out"; echo "::error::the node's chainwork at T was not compared"; exit 1; }
+want 1 "--bitcoin-cli and --expect-tip: the node's chainwork at block 3 is not the proven one" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/badwork3" --expect-tip 3:$H3
+want 1 "--bitcoin-cli and --expect-tip: the node disagrees with the tip given" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/wrong3" --expect-tip 3:$H3
 echo "ZAPP_UTREEXO_CLI $n cases"
 ./wasm/build.sh
 wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_utreexo_wasm.wasm wasm/README.md

@@ -177,19 +177,28 @@ What the host supplies: the block bytes, the tracked positions, each coin's stat
    binding of the spent coins' fields (U0 omits the outpoint and the creating block's hash, so it could not replace
    the leaf check either).
 
-**What the checker adds** (`zapps/utreexo`, `verify_utreexo`): not a FakeReceipt, `RISC0_DEV_MODE` unset, the receipt
-verifies under the trusted utreexo id, `done = 1`, `self_id` = that id, one root per set bit of `leaves`, zero
-lineage, the core image, profile, lineage and anchor are the network's trusted ones (swiftsync-verify's `Image` table,
-used as a library), `max_time <= now + 7200`; OK additionally needs **block H from the node's own header chain**
-(`--expect`, or `--mempool` / `--bitcoin-cli` asked for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H), and
-minimum work plus the checkpoint; otherwise DEMO. The receipt is decoded with a 16 MiB bincode limit (the core
-verifier's own decode, swiftsync-verify `src/lib.rs:463`, has none; core code, not changed here).
+**What the checker adds** (`zapps/utreexo`, `verify_utreexo_on`; the verdict on the decoded statement is the pure
+function `verify_statement`): the **caller names the network** (`--network`, default mainnet, as every zAPP; the
+WASM frame's network field), never the proof, and a proof of another network is FAIL (its network word and core
+profile must be that network's); not a FakeReceipt, `RISC0_DEV_MODE` unset, the receipt verifies under the trusted
+utreexo id, `done = 1` and `to = H`, `self_id` = that id, one root per set bit of `leaves`, zero lineage (one core
+image since genesis: a handover lineage is refused, even the image's own), the core image, profile and anchor are
+that network's trusted ones (swiftsync-verify's `Image` table, used as a library), `max_time <= now + 7200`; OK
+additionally needs **block H from the node's own header chain** (`--expect`, or `--mempool` / `--bitcoin-cli` asked
+for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H; with
+`--mempool` / `--bitcoin-cli` block T is asked as well, must agree with a given `--expect-tip`, and the node's
+chainwork at T is compared with the proven one), minimum work plus the checkpoint, and a **pinned utreexo image**:
+the built-in id `27bea7da…` is a local build, not reproducible, so a proof under it is at most DEMO until it is pinned
+in reproduce/LIBZYNC_IDS (`UTREEXO_IMAGE_PINNED`); otherwise DEMO. The receipt is decoded with a 16 MiB bincode
+limit and no trailing bytes (the core verifier's own decode, swiftsync-verify `src/lib.rs:463`, has no limit; core
+code, not changed here).
 
 **The CLI's output.** Check lines and the verdict line on stdout, exit 0 OK, 2 DEMO, 1 FAIL or a usage error (an
 unknown flag, a flag without its value, not exactly one receipt). With `--json` or `--floresta`, stdout carries only
 that output (the checks go to stderr; `---` between the two when both are asked), and only on OK, or on DEMO with
-`--allow-demo`; the JSON has `verdict`, `network` and `identity_checked`. The built-in image id is printed with the
-label "local build, not reproducible, not published" until it is pinned.
+`--allow-demo`; the JSON has `verdict`, `network` (the one checked), `identity_checked` and `image_pinned` (with
+`image_label` when false), and the `--floresta` source starts with a comment line naming the network. The built-in
+image id is printed with the label "local build, not reproducible, not published" until it is pinned.
 
 ## 5. Host and module layout
 
@@ -204,11 +213,11 @@ label "local build, not reproducible, not published" until it is pinned.
   `utreexo-ref`'s line for H, then executes or proves the runs; `UTREEXO_TAMPER=<case>` negative tests;
   `utreexo-count <block_h.json ...>` the per-block cost model counts.
 - `zapps/utreexo` (this zAPP's own module, the same layout as every zAPP): the check library `zapp_utreexo` and the CLI
-  `zapp-utreexo verify <receipt> [--expect H:hash] [--mempool | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
+  `zapp-utreexo verify <receipt> [--network mainnet|signet] [--expect H:hash] [--mempool | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
   swiftsync-verify as a library (no Utreexo code in the core verifier crates). `zapps/utreexo/wasm`: the same checks as
   WebAssembly (raw ABI, `zapp-utreexo.js` glue, `build.sh` byte-reproducible with Rust 1.99.0 at a fixed stage path,
-  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 18 CLI
-  cases, the WASM build and its 7 cases, and the built WASM's sha256 against the line in `wasm/README.md`.
+  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 27 CLI
+  cases, the WASM build and its 12 cases, and the built WASM's sha256 against the line in `wasm/README.md`.
 - `prover/zyncapps/utreexo-ref`: the reference (Floresta's code), test only.
 
 ## 6. Distribution (proposal)
@@ -294,7 +303,10 @@ in the hints zAPP).
   minimum work, refused for H or block hash not the node's, another image id, a wrong tip given when T = H, H = 2 with a
   wrong core tip); 14 CLI cases on 15.11.2026, 18 since 16.11.2026 with the chain-identity flags of zapps/common (exit codes, strict flags, a truncated receipt, `--json` silent on DEMO, `--allow-demo`
   JSON marked `demo`, `--floresta` alone on stdout); the WASM build (`wasm/`, sha256 `a0279e99…` then; `515e020a…` since 16.11.2026, libzync's `utreexo` feature; reproduced by a second
-  build) 7/7 in node.
+  build) 7/7 in node. Since 18.11.2026 (the review's network, image-pin, chainwork and trailing-bytes findings, and
+  the cargo-mutants pass): `tests/verdict_paths.rs` builds statements that reach OK and every FAIL and DEMO branch of
+  `verify_statement` on both networks; 27 CLI cases (`--network`, a mainnet proof checked as signet, a trailing byte,
+  the node's chainwork at T with `--expect-tip`); the WASM `106feaf9…`, 12/12.
 
 ## 9. Questions for the Floresta developers
 
