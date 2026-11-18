@@ -509,9 +509,60 @@ OK needs 1-4 and both images pinned; with a built-in image that is not yet a rep
 verdict is at most DEMO. `--json` adds `mode: "tip"`, `steps`, `from`, `base_height`, `base_image`; `--floresta`
 prints the same `AssumeUtreexoValue` source as for a base.
 
-### 10.8 Measured and tested
+### 10.8 Measured (18.11.2026, hazync-coord, CPU, risc0 3.1.0 executor, no dev mode)
 
-See §10.9 (filled in with the runs of 18.11.2026).
+Image `ab6f7a26…` (the tip guest, a local build on hazync-coord; the same build gave the base `27bea7da…` and the
+headers `2db34e12…` again, so neither moved). Executed with the previous statement and the core state as unresolved
+assumptions (the published host's prep states at 10,000 and 100,000), `--prof 1000` (`env::cycle_count()` around the
+block rules and around `modify`). A chain: the base walk to 1,999, then steps to 10,000, 20,000, 50,000, 91,722,
+91,812, 91,842, 91,880 and 100,000, each step starting from the previous step's journal. Columns from the guest's own
+counters over the step's blocks (the link headers to the core tip excluded, listed apart):
+
+| step | blocks | adds | dels | proof hashes | parse + leaves | modify | (parse + modify) per block | link headers (cycles) |
+|---|---|---|---|---|---|---|---|---|
+| 1,999 → 10,000 | 8,001 | 8,065 | 500 | 2,351 | 302,350,171 | 292,312,162 | 74,324 | 0 |
+| 10,000 → 20,000 | 10,000 | 10,058 | 529 | 2,393 | 374,198,799 | 365,199,346 | 73,940 | 80,000 (161,823,170) |
+| 20,000 → 50,000 | 30,000 | 30,752 | 8,244 | 34,678 | 1,339,543,699 | 2,115,662,799 | 115,174 | 50,000 (101,179,851) |
+| 50,000 → 91,722 | 41,722 | 99,370 | 77,506 | 379,089 | 4,443,054,055 | 14,431,764,839 | 452,395 | 8,278 |
+| 91,880 → 100,000 | 8,120 | 46,850 | 38,151 | 140,997 | 2,026,101,516 | 5,552,670,202 | 933,346 | 0 |
+
+(The three short steps over the BIP30 heights: 90, 30 and 38 blocks, 51.7 M, 11.4 M and 51.2 M cycles.) A link header
+costs about **2,020 cycles** (161,823,170 / 80,000: the cycles after the last block, so the core checks are in it too). Totals with the link: 602,320,636 user cycles for 2,000..10,000
+(14.3 s), 7,651,274,090 for 91,881..100,000 (141.1 s, 8,054 segments).
+
+- **Same roots as Floresta's code**: every step's roots and leaf count are byte-identical to `utreexo-ref`
+  (floresta-chain `update_acc`) at 10,000, 20,000, 50,000, 91,722, 91,812, 91,842, 91,880 and 100,000
+  (`UTREEXO_REF_MATCH`), across the BIP30 heights.
+- **Same roots as the walk**: the base walk straight to 10,000 and base(1,999) + step(10,000) commit the same roots:
+  the two designs (Empty adds vs real deletions) give one accumulator, as §2 says they must.
+- **Where the cycles go**: `modify` per deletion, with the adds' parent hashes in it, 145,543 cycles at
+  91,880..100,000 (5,552,670,202 / 38,151; the forest has ~200,000 leaves there, trees up to 2^17); parse + leaf
+  hashes ~23,800 cycles per add-or-delete there (2,026,101,516 / 85,001; each leaf is about 2 SHA-512 compressions:
+  99,767 leaf blocks for 85,001 leaves).
+
+**ESTIMATE at the tip (not measured).** Deletions per block, MEASURED with `utreexo-count` (§7: inputs − same-block
+spends): 900,000: 3,694; 930,000: 7,078; 950,000: 835; 962,000: 2,542; 964,500: 2,105; 965,978: 5,688. A deletion's
+path is ~31 levels at the tip instead of ~17 here, so ~1.8x the 145,543 → **~260,000 cycles per deletion** if batching
+saved nothing more than it does here (it saves more in big blocks: shared paths). Then a modern block is
+dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 × 23.8 k ≈ **2.2 × 10^9 cycles**; 962,000 ≈
+2,542 × 260 k + 4,324 × 23.8 k ≈ **0.76 × 10^9**. The block parse of a modern block is not separated here (blocks to
+100,000 are small). At ~6 blocks an hour that is of the order of 10^10 cycles an hour (its proving time is not measured), against
+~10^12 or more for one walk from genesis (§7): this is why tip mode steps rather than re-walks.
+
+### 10.9 Tested (18.11.2026)
+
+- `zapps/utreexo/tip-exec-tests.sh` (executed on hazync-coord, the numbers above): the chain base → 8 steps, each
+  equal to Floresta's `update_acc`; walk(10,000) == walk(1,999) + step(10,000); then a control (the untampered step
+  1,999 → 9,000 under the core state at 10,000 passes) and **15 refusals by the guest** on that step: a spent coin's
+  value, creating block hash, height, coinbase flag (each: "the deletions do not open in the accumulator"), the spent
+  coins of a block dropped or doubled, a proof hash, a proof target, an empty proof, two transactions swapped (Merkle
+  root), a link header changed or dropped, the previous journal changed (no receipt matches it), the previous statement
+  given as the other kind, another core image id.
+- `zapps/utreexo` `tests/tip_verdict_paths.rs` (feature `tip`): OK reachable on both networks from a built statement;
+  each of 14 checks fails alone; DEMO below minimum work, with T > H and no tip named, with block H not named, with the
+  unpinned base image; the `AssumeUtreexoValue` source of a tip statement.
+- The WASM is unchanged (`d240082b…`, rebuilt in the pinned container and compared; the tip checks are behind the
+  feature so it does not carry them).
 
 ### 10.10 Layout (tip mode)
 
