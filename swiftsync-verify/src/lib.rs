@@ -219,8 +219,6 @@ pub struct ChainState {
 }
 
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
-pub mod headers;
-
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");
 }
@@ -1486,15 +1484,6 @@ mod tests {
         }
     }
 
-    /// The header-chain zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-headers` line).
-    #[test]
-    fn headers_image_matches_the_published_id() {
-        let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        let line = f.lines().find(|l| l.starts_with("zyncapp-headers mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-headers line");
-        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-        assert_eq!(id, crate::headers::HEADERS_IMAGE_ID, "headers::HEADERS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
-    }
-
     #[test]
     fn checkpoint_heights_match_the_guest() {
         let g = include_str!("../../prover/methods/guest/src/checkpoint.rs");
@@ -2058,29 +2047,9 @@ mod receipt_hardening_tests {
         }
     }
 
-    /// The header-chain zyncAPP reads receipts with the same decoder and the same journal guard.
-    #[test]
-    fn header_chain_reader_refuses_the_same_inputs() {
-        let id = "2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632";
-        let ctrl = mutated(|s| {
-            let mut words: [u32; 8] = s.control_inclusion_proof.digests[0].as_words().try_into().unwrap();
-            words[0] = 0xffff_ffff;
-            s.control_inclusion_proof.digests[0] = words.into();
-        });
-        let mut trailing = RCPT.to_vec();
-        trailing.push(0);
-        let mut r: Receipt = bincode::deserialize(RCPT).unwrap();
-        r.journal.bytes.push(0);
-        let journal = bincode::serialize(&r).unwrap();
-        for (b, want) in [(&ctrl, "malformed receipt"), (&trailing, "not a receipt"), (&journal, "not whole words")] {
-            let rep = headers::verify_headers(&[b], id, 1_800_000_000, None);
-            assert_eq!(rep.verdict, Verdict::Fail);
-            assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains(want)), "{want}: {:?}", rep.checks);
-        }
-    }
 
-    /// Review 11-18: a bundle's length field near u32::MAX is refused (it wrapped on wasm32), the header-chain reader
-    /// takes the image id through the checked hex32 (a '+' digit is not hex), and an `expect` height is canonical.
+    /// Review 11-18: a bundle's length field near u32::MAX is refused (it wrapped on wasm32), and an `expect` height is
+    /// canonical. (The header-chain reader's checked hex32 is tested in zapps/headers.)
     #[test]
     fn review_edges() {
         let b = Bundle { network: 0, image: [0; 32], stop_height: 0, tip_hash: [0; 32], cum_work: [0; 32],
@@ -2089,9 +2058,6 @@ mod receipt_hardening_tests {
         let at = e.len() - 4;
         e[at..].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(Bundle::decode(&e).is_err());
-        let plus = format!("+a{}", &headers::HEADERS_IMAGE_ID[2..]);
-        let rep = headers::verify_headers(&[RCPT], &plus, 1_800_000_000, None);
-        assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains("32 bytes of hex")), "{:?}", rep.checks);
         for (h, ok) in [("0", true), ("200", true), ("+200", false), ("0200", false), ("", false), ("-1", false), ("2 0", false)] {
             assert_eq!(canonical_decimal(h), ok, "{h:?}");
         }
