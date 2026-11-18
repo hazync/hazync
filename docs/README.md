@@ -3,7 +3,7 @@
 Bitcoin Core's own consensus code, executed inside a RISC Zero zkVM, so that a block's validity can be **proven once
 and verified by anyone** without re-executing it. **Hazync v2** is the libzync engine (`libzync/`, the guest in
 `prover/methods/guest`), on RISC Zero 3.1.0 since release v0.24.0: published images (v0.26.0) mainnet `46666b6f`
-(a new chain from genesis whose block leaves commit each block's undo data, [`libzync/UNDO.md`](libzync/UNDO.md)), signet `01a80f17`, and the header-chain zyncAPP `2db34e12` ([`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)). The
+(a new chain from genesis whose block leaves commit each block's undo data, [`libzync/UNDO.md`](libzync/UNDO.md)), signet `01a80f17`, and the header-chain zyncAPP `2db34e12` (`de54b94f` after v0.26.0, with the MMR: [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)). The
 public board has run it since 2026-11-12, from genesis.
 
 **Hazync v1**, the original per-signature CORE guest (`37987b85`, last release v0.22.1), is documented in
@@ -17,7 +17,9 @@ of the past and are not kept current.
 | [`../README.md`](../README.md) | what Hazync is and where it stands |
 | [`EXPLAINER.md`](EXPLAINER.md) | Hazync v2 in plain words |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | prove blocks on your GPU (Linux, Windows natively or via WSL2), verify a proof |
-| [`RELEASE_NOTES_v0.25.0.md`](RELEASE_NOTES_v0.25.0.md) | the current release: the Windows installer; images unchanged |
+| [`RELEASE_NOTES_v0.26.1.md`](RELEASE_NOTES_v0.26.1.md) | the current release: the Windows CPU prover, Pascal cards, coordinator fixes; image unchanged |
+| [`RELEASE_NOTES_v0.26.0.md`](RELEASE_NOTES_v0.26.0.md) | undo data in every block's proof, image `46666b6f`; the board proves again from genesis |
+| [`RELEASE_NOTES_v0.25.0.md`](RELEASE_NOTES_v0.25.0.md) | the Windows installer; images unchanged |
 | [`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md) | RISC Zero 3.1.0, the new image ids, the header chain in one proof |
 | [`RELEASE_NOTES_v0.23.0.md`](RELEASE_NOTES_v0.23.0.md) | the first Hazync v2 release, **withdrawn** (RISC Zero 3.0.5); kept for what it says about the switch |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | every release, newest first |

@@ -138,6 +138,38 @@ else
         || bad "quoted key(s) exempted by the allow list instead of parsed:$papered"
 fi
 
+# 7. A DECLARED DROP-IN THAT IS NOT INSTALLED IS REPORTED (the libzync-* alert.conf files: without one, a reorg stop
+#    fails its unit and nothing is sent). Attribution as in 2: svc's missing file is svc's, never svc-backup's.
+fns=$(sed -n '/^declared_dropin_names()/,/^}/p;/^missing_declared_dropins()/,/^}/p' scripts/check-unit-drift.sh)
+if ! printf '%s\n' "$fns" | grep -q 'missing_declared_dropins()'; then
+    bad "could not extract missing_declared_dropins from scripts/check-unit-drift.sh"
+else
+    # shellcheck disable=SC1090
+    source <(printf '%s\n' "$fns")
+    printf '[Unit]\nOnFailure=x@%%n.service\n' > "$DROPINS_DIR/svc-alert.conf"
+    m=$(missing_declared_dropins svc "$(printf 'STATE loaded\nDROPIN paths.conf\n')")
+    [ "$m" = alert.conf ] && ok "svc without its alert.conf: reported" || bad "svc's missing alert.conf: got '$m'"
+    m=$(missing_declared_dropins svc "$(printf 'DROPIN paths.conf\nDROPIN alert.conf\n')")
+    [ -z "$m" ] && ok "svc with both drop-ins: nothing missing" || bad "nothing should be missing: got '$m'"
+    m=$(missing_declared_dropins svc-backup "$(printf 'DROPIN paths.conf\n')")
+    [ -z "$m" ] && ok "svc-backup is not charged with svc's alert.conf" || bad "svc-backup charged with: '$m'"
+    # several declared drop-ins per unit and a remote far larger than a pipe's buffer: every one found, no false miss
+    # (a `printf | grep -q` pipeline under pipefail reported present ones as missing; PR #754)
+    for x in a b c d; do printf '[Service]\n' > "$DROPINS_DIR/svc-$x.conf"; done
+    big=$(printf 'DROPIN %s.conf\n' alert a b c d paths; head -c 200000 /dev/zero | tr '\0' 'x'; echo)
+    m=$(missing_declared_dropins svc "$big")
+    [ -z "$m" ] && ok "six declared drop-ins, a 200 KB remote: none falsely missing" || bad "falsely missing: '$m'"
+    m=$(missing_declared_dropins svc "$(printf 'DROPIN alert.conf\nDROPIN a.conf\nDROPIN paths.conf\n')")
+    [ "$(echo $m)" = "b.conf c.conf d.conf" ] && ok "and the three really missing ones are named" || bad "missing should be b, c, d: '$m'"
+    rm -f "$DROPINS_DIR/svc-"[abcd].conf
+    rm -f "$DROPINS_DIR/svc-alert.conf"
+fi
+# and the real repo: each libzync prep/fetch unit declares its alert.conf
+for u in libzync-prep libzync-fetch libzync-board-prep libzync-board-fetch; do
+    UNITS="$u" DROPINS_DIR=coordinator/deploy/dropins grep -qx alert.conf <<< "$(UNITS="$u" DROPINS_DIR=coordinator/deploy/dropins declared_dropin_names "$u")" \
+        && ok "$u declares alert.conf" || bad "$u declares no alert.conf"
+done
+
 echo
 if [ "$fails" = 0 ]; then echo "PASS ($([ "$CONTROL" = yes ] && echo control || echo real))"; exit 0; fi
 echo "FAIL: $fails assertion(s)"; exit 1
