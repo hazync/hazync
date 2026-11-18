@@ -46,7 +46,7 @@ says so. The whole chain from genesis to 975,278 is one such proof (`docs/RELEAS
 receipt and a header naming network, image, height, tip, work and trie root (`docs/libzync/PROOF_BUNDLE.md`, version
 2). A bundle is accepted wherever a receipt is; its header is checked against the verified result and never trusted.
 
-**Test vectors** for this or any other verifier: `vectors/` (13 cases, among them a real GPU proof of mainnet
+**Test vectors** for this or any other verifier: `vectors/` (16 cases, among them a real GPU proof of mainnet
 1..200 under `8888d59c`; `python3 vectors/run_vectors.py <verifier>`).
 
 **The image id is the trust root.** The built-in ids (`src/lib.rs`, `IMAGES`) are the published ones of

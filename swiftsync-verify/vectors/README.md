@@ -8,7 +8,7 @@ risc0 3.0.5 proof of the same blocks: refused even against its own image, becaus
 design-B signet image (`c3501ac9…`): its journal predates ChainState version 2 and its image kept no coin log, so
 every one must FAIL. E2 (11-05) removed the SwiftSync hints file from every proof; the hints-file cases went with it.
 
-`manifest.json` lists 13 cases: verifier arguments (in `swiftsync-verify` syntax), the exit code a correct verifier must
+`manifest.json` lists 16 cases: verifier arguments (in `swiftsync-verify` syntax), the exit code a correct verifier must
 give (0 OK, 2 DEMO, 1 FAIL), and what each one breaks. `cli_only` cases test the CLI's own argument handling (a
 hints-file or `-` argument is refused, not ignored); the C and WASM harnesses skip them. It also lists reference
 values a second implementation should reproduce: genesis `anchor_id`s per network, the empty coinbase-SMT root, and
@@ -18,7 +18,12 @@ the Utreexo roots at mainnet height 200.
 python3 run_vectors.py ../target/release/swiftsync-verify     # or any verifier taking the same arguments
 ```
 
-`run_vectors.out` is the result for `swiftsync-verify` at this commit: 13/13 (the WASM harness, which skips the 2 `cli_only` cases: 11/11, `../../swiftsync-verify-wasm/test-vectors.out`).
+`run_vectors.out` is the result for `swiftsync-verify` at this commit: 16/16 (the WASM harness, which skips the 2 `cli_only` cases: 14/14, `../../swiftsync-verify-wasm/test-vectors.out`).
+
+The `mainnet_1_200_8888d59c_{ctrl_unreduced,trailing_byte,journal_5_bytes}.rcpt` receipts are that proof with one
+change each (fuzz round 11-17): a control-inclusion-proof word that is not a BabyBear field element, one byte appended
+to the file, one byte appended to the journal. risc0 PANICS on the first and the third (an abort under panic = "abort");
+the second verified DEMO before decoding was strict. All three must FAIL, with no panic, in every harness.
 
 `fake_block_2501.rcpt` is a dev-mode FakeReceipt. `bad_bundle_header.sspf` and `r4_2600.sspf` are version-1 bundles
 (they carried a hints-file hash), refused by today's version-2 reader. `signet2600.hints` is kept only as the argument

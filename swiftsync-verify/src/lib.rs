@@ -2081,11 +2081,18 @@ mod receipt_hardening_tests {
             let inner = if b.starts_with(BUNDLE_MAGIC) { match Bundle::decode(&b) { Ok(x) => x.receipt, Err(_) => continue } } else { b };
             if receipt_kind(&inner).is_err() { continue; }
             let name = p.display().to_string();
-            if name.ends_with("_flipped.rcpt") { continue; } // one bit flipped in its seal: well-formed or not by chance
+            // malformed on purpose: one bit flipped in the seal; an unreduced word; a byte appended
+            if ["_flipped.rcpt", "_ctrl_unreduced.rcpt", "_trailing_byte.rcpt"].iter().any(|s| name.ends_with(s)) { continue; }
             let r = decode_receipt(&inner).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(bincode::serialize(&r).unwrap(), inner, "{name}");
             n += 1;
         }
-        assert!(n >= 3, "{n} receipt vectors");
+        assert!(n >= 4, "{n} receipt vectors");
+        // and the ones malformed on purpose are refused by the decoder, not by risc0
+        for (f, want) in [("mainnet_1_200_8888d59c_ctrl_unreduced.rcpt", "malformed receipt: control inclusion proof"),
+                          ("mainnet_1_200_8888d59c_trailing_byte.rcpt", "bytes remaining")] {
+            let e = decode_receipt(&std::fs::read(format!("{dir}/{f}")).unwrap()).unwrap_err();
+            assert!(e.contains(want), "{f}: {e}");
+        }
     }
 }
