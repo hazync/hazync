@@ -24,6 +24,8 @@
 # below the base it stops with an error (a new base is needed). H trails the node's tip by MARGIN, so a reorg shallower
 # than MARGIN never touches a published height.
 set -euo pipefail
+# errexit also inside $(…) (bash clears it there otherwise: a failed cp inside new_state went on, review of f99c301 M1)
+shopt -s inherit_errexit
 
 D=${UTREEXO_DIR:-/var/lib/hazync-utreexo}
 BIN=${UTREEXO_BIN:-/opt/hazync-utreexo/bin}
@@ -58,7 +60,8 @@ NETWORK=${NETWORK:-mainnet}
 PUBLISH=${PUBLISH:-}
 PUBLISH_KEY=${PUBLISH_KEY:-/root/.ssh/hazync_utreexo_publish}
 
-log () { echo "[$(date -u +%FT%TZ)] $*"; }
+# log and die write to STDERR: a message from inside $(…) must never become the captured value (review L1)
+log () { echo "[$(date -u +%FT%TZ)] $*" >&2; }
 die () { log "ERROR: $*"; exit 1; }
 cli () { $BITCOIN_CLI "$@"; }
 # the node's hash at h; an RPC failure (warm-up, timeout, h above its tip) is an ERROR, never "another hash" (review M1)
@@ -76,21 +79,38 @@ if [ -n "$ELF" ] && [ -n "$WANT_ELF" ]; then
 fi
 NETFLAG=(); [ "$NETWORK" = signet ] && NETFLAG=(--signet)
 
-# new_state <receipt> <H> <hash>: a state directory (written, then synced); prints its name
+# new_state <receipt> <H> <hash>: a state directory (written, synced, then renamed into place); prints its name. Every
+# step is checked: a half-written state is never installed (review M1)
 new_state () {
   local n="$2-$3" t="$D/state/.$2-$3.tmp"
-  rm -rf "$t" && mkdir "$t" && cp "$1" "$t/rcpt" && printf '%s %s\n' "$2" "$3" > "$t/meta" && sync "$t/rcpt" "$t/meta"
-  rm -rf "${D:?}/state/$n" && mv "$t" "$D/state/$n"
+  rm -rf "$t" || return 1
+  mkdir "$t" || return 1
+  cp "$1" "$t/rcpt" || return 1
+  printf '%s %s\n' "$2" "$3" > "$t/meta" || return 1
+  [ -s "$t/rcpt" ] && cmp -s "$1" "$t/rcpt" || return 1
+  sync "$t/rcpt" "$t/meta" "$t" || return 1
+  rm -rf "${D:?}/state/$n" || return 1
+  mv "$t" "$D/state/$n" || return 1
+  sync "$D/state" || return 1
   echo "$n"
 }
-# point <link> <state name>: switch $D/<link> to it in one rename
-point () { ln -sfn "state/$2" "$D/.$1.tmp" && mv -T "$D/.$1.tmp" "$D/$1"; }
+# point <link> <state name>: switch $D/<link> to it in one rename (only to a complete state), then sync the directory
+point () {
+  [ -s "$D/state/$2/rcpt" ] && [ -s "$D/state/$2/meta" ] || die "refusing to point $1 at an incomplete state $2"
+  ln -sfn "state/$2" "$D/.$1.tmp" || die "ln $1"
+  mv -T "$D/.$1.tmp" "$D/$1" || die "mv $1"
+  sync "$D" || die "sync $D"
+}
 
 # checker <receipt> <H> <hash> [json]: verify with the node's hash at H and at the receipt's OWN core tip T (read from
 # the receipt itself and then checked against the node: review L1). Prints "OK|DEMO T TX" (or the JSON when asked).
 checker () {
   local r=$1 h=$2 x=$3 base=() out t tx
-  [ "$h" -gt "${B:-0}" ] && { [ -n "$TIP_IMAGE" ] && base+=(--image "$TIP_IMAGE"); [ -n "$BASE_ID" ] && base+=(--base-image "$BASE_ID"); }
+  if [ "$h" -gt "${B:-0}" ]; then
+    [ -n "$TIP_IMAGE" ] && base+=(--image "$TIP_IMAGE"); [ -n "$BASE_ID" ] && base+=(--base-image "$BASE_ID")
+  else
+    [ -n "$BASE_ID" ] && base+=(--image "$BASE_ID")   # a base receipt: the base image is ITS image (review L4)
+  fi
   out=$("$VERIFY" verify "$r" --network "$NETWORK" --expect "$h:$x" "${base[@]}" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || return 1
   t=$(echo "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["core_height"])') || return 1
   tx=$(node_hash "$t")
@@ -108,14 +128,15 @@ if [ "${1:-}" = "--set-base" ]; then
   R=${2:?receipt}; H=${3:?height}; X=${4:?hash}
   NX=$(node_hash "$H"); [ "$NX" = "$X" ] || die "the node's hash at $H is not $X"
   B=$H
-  out=$("$VERIFY" verify "$R" --network "$NETWORK" --expect "$H:$X" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || die "the base does not verify as block $H $X"
+  bimg=(); [ -n "$BASE_ID" ] && bimg=(--image "$BASE_ID")
+  out=$("$VERIFY" verify "$R" --network "$NETWORK" --expect "$H:$X" "${bimg[@]}" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || die "the base does not verify as block $H $X"
   echo "$out" | python3 -c 'import json,sys; assert "mode" not in json.load(sys.stdin)' || die "not a base receipt (a tip receipt?)"
   V=$(checker "$R" "$H" "$X") || die "the base is not OK$([ "$ALLOW_DEMO" = 1 ] && echo ' or DEMO') for block $H $X with the node's chain"
-  # the states of the previous base move aside (kept, not deleted)
-  O=$D/orphaned/base-$(date +%s); mkdir -p "$O"
-  for d in "$D"/state/[0-9]*-*; do [ -e "$d" ] && mv "$d" "$O/"; done
-  n=$(new_state "$R" "$H" "$X")
+  # the new base's state first, both links to it, THEN the previous base's states move aside (kept, not deleted)
+  n=$(new_state "$R" "$H" "$X") || die "cannot write the base's state"
   point base "$n"; point latest "$n"
+  O=$D/orphaned/base-$(date +%s); mkdir -p "$O"
+  for d in "$D"/state/[0-9]*-*; do [ -e "$d" ] && [ "$(basename "$d")" != "$n" ] && { mv "$d" "$O/" || die "mv $d"; }; done
   rm -f "$D/forest.bin" "$D/published"
   log "base installed: block $H $X ($V)"
   exit 0
@@ -139,15 +160,20 @@ if [ "$NPX_" != "$PX" ]; then
     read -r h x < "$D/state/$d/meta"
     if [ "$h" -lt "$P" ] && [ "$h" -gt "$NP" ]; then nx=$(node_hash "$h"); [ "$nx" = "$x" ] && { NP=$h; NPX=$x; NS=$d; }; fi
   done
-  O=$D/orphaned/reorg-$P-$(date +%s); mkdir -p "$O/pub"
+  # latest first (review L2), then what belongs to the orphaned branch moves aside: states, published receipts, the
+  # cache, and the block files above the fork, which are the OLD branch's blocks (review M3)
+  point latest "$NS"
+  O=$D/orphaned/reorg-$P-$(date +%s); mkdir -p "$O/pub" "$O/blocks"
   for d in $(cd "$D/state" && ls -d [0-9]*-* 2>/dev/null); do
-    h=${d%%-*}; [ "$h" -gt "$NP" ] && mv "$D/state/$d" "$O/"
+    h=${d%%-*}; if [ "$h" -gt "$NP" ]; then mv "$D/state/$d" "$O/" || die "mv state $d"; fi
   done
   for f in $(cd "$D/pub" && ls utreexo-*.rcpt 2>/dev/null); do
-    h=${f#utreexo-}; h=${h%.rcpt}; [ "$h" -gt "$NP" ] && mv "$D/pub/$f" "$O/pub/"
+    h=${f#utreexo-}; h=${h%.rcpt}; if [ "$h" -gt "$NP" ]; then mv "$D/pub/$f" "$O/pub/" || die "mv $f"; fi
   done
-  point latest "$NS"
-  [ -f "$D/forest.bin" ] && mv "$D/forest.bin" "$O/"
+  for f in $(cd "$BLOCKS" && ls block_*.json 2>/dev/null); do
+    h=${f#block_}; h=${h%.json}; if [ "$h" -gt "$NP" ]; then mv "$BLOCKS/$f" "$O/blocks/" || die "mv $f"; fi
+  done
+  if [ -f "$D/forest.bin" ]; then mv "$D/forest.bin" "$O/" || die "mv forest.bin"; fi
   log "fell back to the kept proof of block $NP $NPX (orphaned states and receipts moved to $O); stepping forward on the node's branch"
   P=$NP; PX=$NPX
 fi
@@ -187,11 +213,16 @@ if [ "$H" -gt "$P" ]; then
   [ -n "$BASE_ID" ] && args+=(--base-id "$BASE_ID")
   log "step $P -> $H (node tip $NT, core tip $T)"
   S=$(date +%s)
-  "$ZYNCAPP" "${args[@]}" > "$D/work/prove.log" 2>&1 || { tail -5 "$D/work/prove.log"; die "prove failed"; }
+  # the host saves its forest cache at H as it finishes; until latest points at H, a failure must drop that cache, or the
+  # next run (latest still at P) would take it for P and fetch only P+1..H (review M2)
+  trap 'rm -f "$D/forest.bin"' EXIT
+  "$ZYNCAPP" "${args[@]}" > "$D/work/prove.log" 2>&1 || { tail -5 "$D/work/prove.log" >&2; die "prove failed"; }
   SECS=$(( $(date +%s) - S ))
   V=$(checker "$OUT" "$H" "$HX") || die "the new step does not verify to the node's block $H $HX"
   log "proved and verified $((P + 1))..$H in $SECS s (${V%% *})"
-  point latest "$(new_state "$OUT" "$H" "$HX")"
+  n=$(new_state "$OUT" "$H" "$HX") || die "cannot write the state of $H (disk full?): latest stays at $P"
+  point latest "$n"
+  trap - EXIT
   # keep the KEEP newest states below latest, the base and latest itself
   keep_b=$(basename "$(readlink "$D/base")"); keep_l=$(basename "$(readlink "$D/latest")")
   old=(); for d in $(cd "$D/state" && ls -d [0-9]*-* | sort -n); do [ "$d" != "$keep_b" ] && [ "$d" != "$keep_l" ] && old+=("$d"); done
@@ -208,8 +239,10 @@ fi
 # the published folder: utreexo-<H>.rcpt (immutable name), latest.rcpt (the stable name), latest.json (written last)
 PUB=$D/pub
 NAME=utreexo-$H.rcpt
-cp "$D/latest/rcpt" "$PUB/$NAME.new" && mv "$PUB/$NAME.new" "$PUB/$NAME"
-cp "$D/latest/rcpt" "$PUB/latest.rcpt.new" && mv "$PUB/latest.rcpt.new" "$PUB/latest.rcpt"
+cp "$D/latest/rcpt" "$PUB/$NAME.new" || die "cp $NAME"
+mv "$PUB/$NAME.new" "$PUB/$NAME" || die "mv $NAME"
+cp "$D/latest/rcpt" "$PUB/latest.rcpt.new" || die "cp latest.rcpt"
+mv "$PUB/latest.rcpt.new" "$PUB/latest.rcpt" || die "mv latest.rcpt"
 VJ=$(checker "$PUB/$NAME" "$H" "$HX" json) || die "the published receipt does not verify"
 # the checker's JSON goes in through the environment, never into the program text (it holds escaped quotes)
 VJ="$VJ" python3 - "$PUB" "$NAME" "$SECS" "$NETWORK" "${V%% *}" <<'PY'

@@ -41,6 +41,8 @@ eh, ex = opt('--expect').split(':')
 ok = int(eh) == h and ex == x
 tip = opt('--expect-tip')
 if tip: ok = ok and int(tip.split(':')[0]) == t
+import os
+if os.path.exists(os.environ['W'] + '/vfail') and str(h) == open(os.environ['W'] + '/vfail').read().strip(): ok = False
 if not ok: print('ZAPP_UTREEXO_FAIL: stub'); sys.exit(1)
 if '--json' in a:
     j = {'height': h, 'block_hash': x, 'leaves': h, 'roots': [], 'core_height': t}
@@ -90,6 +92,8 @@ t "  latest is 90" 90 "$(cut -d' ' -f1 "$W/d/latest/meta")"
 t "  the orphaned receipt 100 is no longer published" "utreexo-50.rcpt utreexo-80.rcpt utreexo-90.rcpt" "$(cd "$W/d/pub" && ls utreexo-*.rcpt | sort | tr '\n' ' ' | sed 's/ $//')"
 t "  and is kept aside, with its state" "2" "$(find "$W/d/orphaned" \( -name 'utreexo-100.rcpt' -o -name '100-*' \) | wc -l)"
 t "  the cache moved aside too (the replay restarts from genesis)" 1 "$(find "$W/d/orphaned" -name forest.bin | wc -l)"
+t "  the old branch's block files above 80 moved aside (M3)" 20 "$(find "$W/d/orphaned" -path '*/blocks/block_*.json' | wc -l)"
+t "  so the new branch's 81..90 are fetched (M3)" "81 90" "$(tail -1 "$W/fetch.log")"
 
 # retention by publish order, never the current one
 sleep 1; MAX_STEP=5 PUBLISHED_KEEP=2 "$F" > "$W/7.log" 2>&1; t "step 90 -> 95 with PUBLISHED_KEEP=2" 0 $?
@@ -103,5 +107,27 @@ rm -f "$W/d/published"; STUB_T=296 MAX_STEP=0 "$F" > "$W/9.log" 2>&1; t "a repub
 # PRUNE_BLOCKS: the bodies at or below H go once the cache is there
 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/10.log" 2>&1; t "step 95 -> 100 with PRUNE_BLOCKS=1" 0 $?
 t "  no body at or below 100 is left" 0 "$(find "$W/blocks" -name 'block_*.json' | sed 's/.*block_\([0-9]*\)\.json/\1/' | awk '$1 <= 100' | wc -l)"
+
+# review of f99c301 M2: a step that fails after the prove (here: its receipt does not verify) with PRUNE_BLOCKS=1 must not
+# leave the host's forest cache (saved at H) behind while latest stays at P
+echo 105 > "$W/vfail"
+PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/11.log" 2>&1; t "a step that fails after the prove (M2)" 1 $?
+t "  drops the forest cache, latest stays 100" "no 100" "$([ -e "$W/d/forest.bin" ] && echo yes || echo no) $(cut -d' ' -f1 "$W/d/latest/meta")"
+rm -f "$W/vfail"
+PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/12.log" 2>&1; t "  the next run recovers" 0 $?
+t "  replaying from genesis: bodies 1..105 fetched again" "1 105" "$(tail -1 "$W/fetch.log")"
+
+# M1: a state that cannot be written (disk full) is never installed; latest stays complete; the next run recovers
+mkdir -p "$W/shim"; printf '#!/bin/bash\ncase "$*" in *"/state/."*) echo "cp: write error: No space left on device" >&2; exit 1;; esac\nexec /usr/bin/cp "$@"\n' > "$W/shim/cp"; chmod +x "$W/shim/cp"
+before=$(readlink "$W/d/latest")
+PATH=$W/shim:$PATH MAX_STEP=3 "$F" > "$W/13.log" 2>&1; t "a state write that fails (M1)" 1 $?
+t "  latest unchanged and complete" "$before yes" "$(readlink "$W/d/latest") $([ -s "$W/d/latest/rcpt" ] && [ -s "$W/d/latest/meta" ] && echo yes)"
+MAX_STEP=3 "$F" > "$W/14.log" 2>&1; t "  the next run recovers" 0 $?
+t "  latest is 108" 108 "$(cut -d' ' -f1 "$W/d/latest/meta")"
+
+# L1: a getblockhash failure (getblockcount fine) is logged, not silent
+printf '#!/bin/bash\n[ "$1" = getblockhash ] && { echo "error code: -28" >&2; exit 28; }\nexec %q "$@"\n' "$HERE/fake-bitcoin-cli" > "$W/bin/cli1"; chmod +x "$W/bin/cli1"
+BITCOIN_CLI=$W/bin/cli1 MAX_STEP=3 "$F" > "$W/15.log" 2>&1; t "a getblockhash failure is an error (L1)" 1 $?
+t "  and says so" 1 "$(grep -c 'did not answer getblockhash' "$W/15.log")"
 
 [ "$fails" -eq 0 ] && echo UTREEXO_FOLLOW_LOGIC_OK || { echo "UTREEXO_FOLLOW_LOGIC_FAILED ($fails)"; exit 1; }

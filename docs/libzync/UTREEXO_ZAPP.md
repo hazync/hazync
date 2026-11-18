@@ -514,6 +514,13 @@ does not verify, or a wrong ELF leaves the published folder untouched.
 | below the base | stop with an error: a new base must be walked and installed (`--set-base`) |
 | receipts already served about orphaned blocks | nothing to retract: each is a true statement about a valid chain whose block H it names. A Floresta node that compares block H with its own header chain (§10.7) refuses it, as it must |
 
+**Known limits of the follower (documented, not fixed):** the two-pass upload (receipts, then `latest.json`) is
+ordered but not atomic across files: a reader can briefly see a new receipt next to the previous `latest.json`, which
+still names a receipt that is there. A fall-back, or a failed step after the prove, drops the forest cache, so the
+test-scale witness source replays from genesis (and, with `PRUNE_BLOCKS=1`, fetches every body again); the production
+source (§10.5.1) would not. One run at a time (`flock`); a crash between a state's rename and the `latest` switch
+leaves an unused state directory, which the retention removes.
+
 ### 10.7 What a Floresta node checks
 
 `zapp_utreexo::verify_utreexo_tip_on` (Rust library; the CLI `zapp-utreexo verify` routes a tip receipt there by its
@@ -641,6 +648,14 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   Controls: the script with M1's check removed fails 4 checks, with M2's move removed 2. The run also found a real
   bug, fixed: `missing=$(… | head -1)` died of SIGPIPE under `pipefail` (exit 141) whenever more than one block file
   was missing.
+  After the re-review of `f99c301` (42 checks): a state that cannot be written (a failing `cp`, disk full) is never
+  installed and the next run recovers (bash clears errexit inside `$(…)`: the script now sets `inherit_errexit`, and
+  `new_state` checks every step and verifies the copy); a step that fails after the prove drops the host's forest
+  cache (saved at H while `latest` stays at P), so the next run replays from genesis instead of wedging under
+  `PRUNE_BLOCKS`; a fall-back moves the old branch's block files above the fork aside, so the new branch's bodies are
+  fetched; a `getblockhash` failure is logged (log and die write to stderr, never into a captured value); `latest` is
+  switched before anything is moved aside, and directories are synced; `--set-base` honours `BASE_ID`. Controls: the
+  script with the old `new_state` fails 4 checks, without the cache drop 2, without the block-file move 2.
 - **Review H1**: `journal_kind` decoded the receipt before `receipt_kind` refused composites; a composite nested
   300,000 deep (6 MB) overflowed the CLI's stack (exit 134). Now refused first: a library test (it aborts with a stack
   overflow without the fix), a CLI case in `test.sh` and a WASM case in `test.mjs`, each generating the file.

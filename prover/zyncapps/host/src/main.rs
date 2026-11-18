@@ -785,7 +785,9 @@ fn utreexo_tip_prove(a: &[String]) {
             let txt = std::fs::read_to_string(f).unwrap_or_else(|e| die(&format!("--headers: {e}")));
             let rows: Vec<(u32, [u8; 80])> = txt.lines().filter(|l| !l.trim().is_empty()).map(|l| {
                 let (h, x) = l.trim().split_once(' ').unwrap_or_else(|| die("--headers: want '<height> <hex>' lines"));
-                let b: [u8; 80] = utreexo_host::unhex(x.trim()).try_into().unwrap_or_else(|_| die("--headers: a header is not 80 bytes"));
+                let x = x.trim();
+                if x.len() != 160 || !x.bytes().all(|c| c.is_ascii_hexdigit()) { die(&format!("--headers: line for {h}: want 160 hex digits (an 80-byte header)")); }
+                let b: [u8; 80] = utreexo_host::unhex(x).try_into().unwrap_or_else(|_| die("--headers: a header is not 80 bytes"));
                 (h.parse().unwrap_or_else(|_| die("--headers: height?")), b)
             }).collect();
             if rows.iter().map(|r| r.0).ne(stop + 1..=cs.height) { die(&format!("--headers: want heights {}..={} in order", stop + 1, cs.height)); }

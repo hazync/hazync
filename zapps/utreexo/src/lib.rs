@@ -61,6 +61,9 @@ pub fn decode_receipt(receipt: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
     if receipt.len() > MAX_RECEIPT_BYTES {
         return Err(format!("{} bytes, over the {MAX_RECEIPT_BYTES}-byte limit", receipt.len()));
     }
+    // a composite (or fake, or unknown) receipt is refused BEFORE bincode reads it: composites nest without bound and the
+    // recursive decode overflows the stack on a deep one (reviews of b127747 H1 / f99c301 L6: every caller is covered)
+    receipt_kind(receipt)?;
     bincode::DefaultOptions::new().with_fixint_encoding().reject_trailing_bytes().with_limit(MAX_RECEIPT_BYTES as u64)
         .deserialize(receipt).map_err(|e| e.to_string())
 }
