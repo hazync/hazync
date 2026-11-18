@@ -59,7 +59,10 @@ def main(argv):
     (ROOT / "reproduce/LIBZYNC_IDS").write_text(
         f"# Published libzync image ids (frozen core c14, commit {commit} source): reproduce/libzync.Dockerfile output,\n"
         f"# verbatim below, reproduced by two builds. Product profile: coin log, counting trie, live-coin hash.\n"
-        + "\n".join(lines) + "\n" + "".join(l + "\n" for l in headers))
+        + "\n".join(lines) + "\n" + "".join(l + "\n" for l in headers)
+        # the other zyncAPP images (the utreexo base and tip), verbatim
+        + "".join(l.strip() + "\n" for l in Path(argv[1]).read_text().splitlines()
+                  if re.match(r"^zyncapp-utreexo(-tip)? mainnet METHOD_ID [0-9a-f]{64} GUEST_ELF_SHA256 [0-9a-f]{64}$", l.strip())))
 
     p = ROOT / "swiftsync-verify/src/lib.rs"
     s = p.read_text()
