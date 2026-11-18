@@ -10,7 +10,9 @@ so its txid is new), and every block but the first spends one coinbase output of
 unspent at F (as one input of a transaction with two outputs), and spends that transaction's first output again in
 the same block (an in-block spend). So the branch exercises the coin log's flips and appends, the trie's marks and
 inserts and the BIP30 tree's coinbase counts, as a real block does. Headers chain by their real hashes, the times
-step 600 s from F's, the bits are F's.
+step 600 s from F's, the bits are F's. A branch longer than the shared chain's unspent coinbases (the end-to-end test's
+W = 288, reorg_e2e.py) spends the branch's OWN earlier coinbases once those run out (immature: prep does not check
+maturity), so any length works. The base directory may hold synthetic blocks too (a branch of a branch).
 """
 import hashlib, json, pathlib, struct, sys
 
@@ -63,14 +65,18 @@ def main():
         return ts[len(ts) // 2]
     prev, t = header_hash(base[F]), base[F]["time"]
     bits = base[F]["bits"]
+    own = []                                                          # this branch's coinbases, oldest first
     for i in range(1, L + 1):
         h = F + i
         t += 600
         cbraw = tx([("00" * 32, 0xffffffff, push(f"{tag}-{h}".encode()))], [(50 * 10**8, p2pkh(f"{tag}-cb-{h}"))])
         txs = []
         if i > 1:
-            ch, cid, cv, cspk = unspent[(i * 7 + len(tag)) % len(unspent)]
-            unspent.remove((ch, cid, cv, cspk))
+            if unspent:
+                ch, cid, cv, cspk = unspent[(i * 7 + len(tag)) % len(unspent)]
+                unspent.remove((ch, cid, cv, cspk))
+            else:
+                ch, cid, cv, cspk = own.pop(0)
             a = tx([(cid, 0, push(f"{tag}-sig-{h}".encode()))], [(cv - 10**8, p2pkh(f"{tag}-a-{h}")), (10**8, p2pkh(f"{tag}-b-{h}"))])
             b = tx([(txid(a), 0, push(f"{tag}-sig2-{h}".encode()))], [(cv - 2 * 10**8, p2pkh(f"{tag}-c-{h}"))])
             txs = [{"raw": a.hex(), "prevouts": [{"value": cv, "spk": cspk.hex(), "coin_height": ch, "coin_is_coinbase": 1, "coin_mtp": mtp(ch - 1)}]},
@@ -81,6 +87,7 @@ def main():
              "prev_time": times[h - 1], "prev_bits": bits, "txs": txs}
         times[h] = t
         prev = header_hash(j)
+        own.append((h, txid(cbraw), 50 * 10**8, p2pkh(f"{tag}-cb-{h}")))
         json.dump(j, open(out / f"block_{h}.json", "w"))
     print(f"branch {tag}: blocks {F + 1}..{F + L} from mainnet {F}, tip {prev}")
 

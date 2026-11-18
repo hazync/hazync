@@ -20,6 +20,9 @@ Environment=HAZYNC_HOST=/opt/hazync-lz/bin/host
 Environment=GENESIS_TIP=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167
 Environment=VERIFY_MODE=real
 Environment=SEED_RANGES=0
+# REORG.md §5, P4: the acks of prep's reorg records (read from $HAZYNC_LZ_STATE_DIR/reorg/records) go here; the board
+# pass (libzync-board-prep, HAZYNC_REORG_ACK_DIR) waits for them
+Environment=HAZYNC_LZ_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks
 ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/server.py
 Restart=on-failure
 RestartSec=10
