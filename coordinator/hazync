@@ -410,6 +410,27 @@ def witness_in_window(blk):
     except urllib.error.HTTPError:
         return False
 
+def board_is_libzync():
+    """True when the board's /api/meta says libzync. Unknown (unreachable, old board): False."""
+    try:
+        return bool(json.loads(get("/api/meta")).get("libzync"))
+    except SystemExit:
+        raise
+    except Exception:
+        return False
+
+def no_replay_on_libzync(lo, hi):
+    """⛔ A libzync board proves only from its own input files (LZLEAF leaf bundles). Its /api/witness serves nothing
+    else, so the replay path would fetch witnesses from block 1 and die on a 404 at block 2 (11-18, a laptop running
+    an old worker beside v0.26.1). Exit saying what is wrong instead."""
+    if board_is_libzync():
+        if "cannot read" in BUNDLE_MISS:
+            sys.exit(f"cannot prove blocks {lo}..{hi}: this worker cannot read the board's input files ({BUNDLE_MISS}): "
+                     f"update Hazync.")
+        sys.exit(f"cannot prove blocks {lo}..{hi}: the board did not serve an input file ({BUNDLE_MISS or 'no reason given'}). "
+                 f"A libzync board proves only from its own input files, so this worker does not replay from block 1. "
+                 f"Try again later; if it persists, update Hazync.")
+
 def fetch_witnesses(lo, hi):
     # the prover replays blocks 1..hi to rebuild the accumulator, so it needs every witness up to hi.
     # pull any we don't already have from the coordinator's rolling window.
@@ -430,10 +451,14 @@ def bundle_name(data, h):
     magic) as leaf_<h>.bin; the original bridge's JSON bundle is bundle_<h>.json."""
     return f"leaf_{h}.bin" if data[:6] == b"LZLEAF" else f"bundle_{h}.json"
 
+BUNDLE_MISS = ""      # why fetch_bundles last returned False, for the message when there is no replay to fall back to
+
 def fetch_bundles(lo, hi):
     # Fetch an archive-node bundle for every block in [lo..hi]. Returns True iff all are available (the
     # bridge path — prove with NO replay); False if any block is missing or only a legacy per-block witness
     # exists, in which case the caller falls back to the replay path. A bundle carries in_roots + witness.
+    global BUNDLE_MISS
+    BUNDLE_MISS = ""
     os.makedirs(BUNDLES, exist_ok=True)
     for h in range(lo, hi + 1):
         bf = os.path.join(BUNDLES, f"bundle_{h}.json")
@@ -449,9 +474,11 @@ def fetch_bundles(lo, hi):
                 os.replace(lf + ".tmp", lf)
                 continue
             j = json.loads(data)
-        except Exception:
+        except Exception as e:
+            BUNDLE_MISS = f"block {h}: {e}"
             return False
         if "in_roots" not in j or "witness" not in j:
+            BUNDLE_MISS = f"block {h}: the board served a file this worker cannot read"
             return False                       # legacy per-block witness, not a bridge bundle
         with open(bf, "wb") as fh:
             fh.write(data)
@@ -994,6 +1021,7 @@ def cmd_prove(args, claimed=False, submit_leaves=False, distributed=False, worke
         prove_cmd = "prove-range-bridge"
         print(f"using the board's prepared block inputs for blocks {start}..{hi}")
     else:
+        no_replay_on_libzync(start, hi)               # a libzync board has no replay path: say so, do not fetch 1..hi
         fetch_witnesses(start, hi)                    # pull any witnesses we're missing from the coordinator
         env = dict(os.environ, HAZYNC_WITNESS_DIR=WITNESS)
         prove_cmd = "prove-range"
