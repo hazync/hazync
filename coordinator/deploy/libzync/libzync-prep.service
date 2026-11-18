@@ -9,8 +9,11 @@ Type=simple
 Environment=LZ_ROOT=/var/lib/libzync-prep
 ExecStart=/bin/sh -c 'exec "$LZ_ROOT/bin/libzync-prep-run.sh"'
 # exit 3 = stopped at the free-space floor (HAZYNC_PREP_MIN_FREE_GB): do not restart into a full disk
+# exit 4 = stopped for a reorg (docs/libzync/REORG.md §4, §11: the fetcher's REORG / REORG_TOO_DEEP marker, or a block
+# that never came to extend the state): a person decides. Either way the unit FAILS, so the alert.conf drop-in's
+# OnFailure= fires (a unit restarting for ever never fails, and never alerts)
 Restart=on-failure
-RestartPreventExitStatus=3
+RestartPreventExitStatus=3 4
 RestartSec=30
 # prep yields to whatever else the box runs (bitcoind, the coordinator, the original bridge); a box with RAM to spare
 # raises the memory caps in its drop-in (the trie is read through the page cache)
