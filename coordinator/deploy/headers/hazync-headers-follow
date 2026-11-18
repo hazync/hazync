@@ -15,7 +15,8 @@ set -euo pipefail
 D=${HEADERS_DIR:-/var/lib/hazync-headers}
 BIN=${HEADERS_BIN:-/opt/hazync-headers/bin}
 ZYNCAPP=${ZYNCAPP:-$BIN/zyncapp}
-VERIFY=${VERIFY:-$BIN/swiftsync-verify}
+# The header-chain zAPP's CLI (zapps/headers; was `swiftsync-verify headers` until 15.11.2026)
+VERIFY=${VERIFY:-$BIN/zapp-headers}
 ELF=${ELF:-$BIN/zyncapp-headers.bin}
 # The published headers ELF (reproduce/LIBZYNC_IDS, zyncapp-headers line): prove with nothing else.
 WANT_ELF=${WANT_ELF:-5bd8011d37a1751b46d3411a82f272dc7aaf1acd830aa3ba92e8f7afeb955afc}
@@ -38,7 +39,7 @@ exec 9>"$D/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
 
 verify_ok () {  # verify_ok <height> <hash> <receipt>... : POSITIVE check, the OK line and exit 0
   local h=$1 x=$2; shift 2
-  local out; out=$("$VERIFY" headers --expect "$h:$x" "$@" 2>&1) || { echo "$out" | tail -3; return 1; }
+  local out; out=$("$VERIFY" --expect "$h:$x" "$@" 2>&1) || { echo "$out" | tail -3; return 1; }
   echo "$out" | grep -q "^SWIFTSYNC_VERIFY_OK: header chain from genesis to $h $x " || { echo "$out" | tail -3; return 1; }
 }
 

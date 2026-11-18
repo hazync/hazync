@@ -1,0 +1,13 @@
+# Test-only: the `hintsfile` crate (rustaceanrob, the BIP author's reference) as a second, independent writer and reader
+# of hints files, for the hints zyncAPP's byte-for-byte test (docs/libzync/HINTS_ZAPP.md §8). Not part of any image.
+[package]
+name = "hints-crate-ref"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hintsfile = "=0.2.0"
+serde_json = "1"
+
+[workspace]

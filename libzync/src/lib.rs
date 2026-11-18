@@ -12,6 +12,11 @@ pub mod coinlog_forest;
 pub mod facts;
 pub mod history;
 pub mod undo;
+/// The SwiftSync hints zyncAPP's derivation (docs/libzync/HINTS_ZAPP.md): behind the `hints` feature, so the core
+/// verifier, which never enables it, does not build it (its WASM is byte-identical without the zAPP). The hints guest
+/// #[path]-includes the file itself.
+#[cfg(feature = "hints")]
+pub mod hints;
 pub mod ttree;
 pub mod trie_model;
 pub mod trie_store;
