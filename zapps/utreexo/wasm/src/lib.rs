@@ -5,12 +5,16 @@
 //!   alloc(len) -> ptr              reserve len bytes for the caller to write the input frame into
 //!   verify_utreexo(ptr, len) -> p  returns a pointer to [u32 LE length][UTF-8 JSON]
 //!   image_id() -> p                the built-in utreexo image id, same encoding
+//!   tip_image_id() -> p            the built-in utreexo TIP image id (UTREEXO_ZAPP.md §10), same encoding
 //! ```
 //! Input frame (little-endian): `[u64 now][u32 n][receipt][u32 n][image id hex, n = 0 for the built-in]`
 //! `[u32 n]["H:hash" from the page's own source, n = 0 for none][u32 n]["T:hash" for the core tip, n = 0 for none]`
 //! `[u32 n][network: "mainnet" or "signet", n = 0 for mainnet]`. The network is the caller's: a proof of another
 //! network is FAIL. (Until 18.11.2026 the frame had no network and the proof's own profile picked it; such a frame is
-//! now refused as truncated.)
+//! now refused as truncated.) Optional last field, since tip mode: `[u32 n][base image id hex, n = 0 for the built-in]`.
+//! A TIP receipt (the journal's kind word 'ZU' 2) is checked as a tip statement: the image id is then the tip image's,
+//! the base image the built-in one unless named; its JSON adds `mode: "tip"`, `steps`, `from`, `base_height`,
+//! `base_image`, and `n_live` is not reported.
 //! The JSON's `network` is the one checked; `image_source` is "builtin-unpinned" (with `image_label`: the verdict is at
 //! most `demo`), "builtin-pinned", or "caller" (an image id the page named: this checker does not know its code).
 //! The JSON's `roots` write an Empty root as the string "empty" (rustreexo's Display); the journal holds 32 zero bytes
@@ -67,7 +71,8 @@ fn expect(s: &str, what: &str) -> Result<Option<(u32, String)>, String> {
 #[no_mangle]
 pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let parsed = (|| -> Result<(u64, &[u8], String, Option<(u32, String)>, Option<(u32, String)>, String), String> {
+    #[allow(clippy::type_complexity)]
+    let parsed = (|| -> Result<(u64, &[u8], String, Option<(u32, String)>, Option<(u32, String)>, String, String), String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
         let r = f.chunk()?;
@@ -75,16 +80,27 @@ pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
         let at = expect(&f.text("expect-at")?, "expect-at")?;
         let tip = expect(&f.text("expect-tip")?, "expect-tip")?;
         let network = f.text("network")?;
+        let base = if f.i < input.len() { f.text("base image id")? } else { String::new() };
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
-        Ok((now, r, image, at, tip, network))
+        Ok((now, r, image, at, tip, network, base))
     })();
-    let (now, r, image, at, tip, network) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    let (now, r, image, at, tip, network, base) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
     let network = if network.is_empty() { "mainnet".to_string() } else { network };
-    let image = if image.is_empty() { zapp_utreexo::UTREEXO_IMAGE_ID.to_string() } else { image };
-    let rep = zapp_utreexo::verify_utreexo_on(&network, r, &image, None, now, at.as_ref().map(|(h, x)| (*h, x.as_str())), tip.as_ref().map(|(h, x)| (*h, x.as_str())));
+    let is_tip = zapp_utreexo::journal_kind(r) == Some(zapp_utreexo::KIND_UTREEXO_TIP);
+    if !is_tip && !base.is_empty() { return fail("a base image id is only for a tip receipt".into()); }
+    let image = if !image.is_empty() { image } else if is_tip { zapp_utreexo::UTREEXO_TIP_IMAGE_ID.to_string() } else { zapp_utreexo::UTREEXO_IMAGE_ID.to_string() };
+    let base = if base.is_empty() { zapp_utreexo::UTREEXO_IMAGE_ID.to_string() } else { base };
+    let (at, tip) = (at.as_ref().map(|(h, x)| (*h, x.as_str())), tip.as_ref().map(|(h, x)| (*h, x.as_str())));
+    let (rep, tz) = if is_tip {
+        let t = zapp_utreexo::verify_utreexo_tip_on(&network, r, &image, &base, None, now, at, tip);
+        (t.report, t.tip)
+    } else {
+        (zapp_utreexo::verify_utreexo_on(&network, r, &image, None, now, at, tip), None)
+    };
     let ok = rep.verdict != Verdict::Fail;
     let z = rep.statement.as_ref().filter(|_| ok);
-    ret(serde_json::json!({
+    let tz = tz.as_ref().filter(|_| ok);
+    let mut j = serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
         "image": image.to_lowercase(),
         "image_source": rep.image_source,
@@ -98,10 +114,23 @@ pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
         "runs": z.map(|z| z.runs),
         "core_height": z.map(|z| z.core_height),
         "identity_checked": ok && rep.identity_checked,
-    }).to_string())
+    });
+    if is_tip {
+        j["mode"] = "tip".into();
+        j["steps"] = tz.map(|t| t.steps).into();
+        j["from"] = tz.map(|t| t.from).into();
+        j["base_height"] = tz.map(|t| t.base_height).into();
+        j["base_image"] = base.to_lowercase().into();
+    }
+    ret(j.to_string())
 }
 
 #[no_mangle]
 pub extern "C" fn image_id() -> *const u8 {
     ret(zapp_utreexo::UTREEXO_IMAGE_ID.to_string())
+}
+
+#[no_mangle]
+pub extern "C" fn tip_image_id() -> *const u8 {
+    ret(zapp_utreexo::UTREEXO_TIP_IMAGE_ID.to_string())
 }

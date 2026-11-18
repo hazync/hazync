@@ -5,14 +5,14 @@ raw ABI and hand-written glue (`zapp-utreexo.js`), as `swiftsync-verify-wasm`. T
 
 ```sh
 ./build.sh          # byte-reproducible: scripts/wasm-build.sh, in the pinned container reproduce/wasm.Dockerfile
-node test.mjs       # the real receipts of ../vectors through the WASM: 13 cases
+node test.mjs       # the real receipts of ../vectors through the WASM: 22 cases (9 on a tip receipt)
 ```
 
 | | |
 |---|---|
 | size | 1,102,421 bytes raw, 305,662 gzipped |
-| sha256 (this commit, `./build.sh`) | `d240082be75720eb2de3b9a44b625f9d995da2a865a8f3857dc1ced934f296b3` (Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, fixed stage path; hazync-coord, 18.11.2026, the same bytes from a local build of the Dockerfile and from the published image `ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…` (main's reproduce/wasm-image.digests); since the caller names the network (the frame's last field), trailing receipt bytes are refused and the unpinned built-in image caps the verdict at `demo`; the review fixes (`image_source`, a FAIL carries no statement) on top of `106feaf9…`; before it `515e020a…` (16.11.2026), since libzync's `utreexo_roots` sits behind the feature `utreexo` (so the core .wasm no longer carries it); before it `a0279e99…`; built-in utreexo image `27bea7da…`, a local build, not reproducible, not published) |
-| tests | 13/13 (`node test.mjs`); `../test.sh` checks the built file's sha256 against this table (scripts/zapp-checks.sh) |
+| sha256 (this commit, `./build.sh`) | `42df910a9287522ad851342e7857378eeecd1b46337b9a76c84a9d6e2190ddb6` (tip receipts too, UTREEXO_ZAPP.md §10: the crate feature `tip`, an optional base-image field at the frame's end, `tip_image_id()`; before it `d240082b…`, Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, fixed stage path; hazync-coord, 18.11.2026, the same bytes from a local build of the Dockerfile and from the published image `ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…` (main's reproduce/wasm-image.digests); since the caller names the network (the frame's last field), trailing receipt bytes are refused and the unpinned built-in image caps the verdict at `demo`; the review fixes (`image_source`, a FAIL carries no statement) on top of `106feaf9…`; before it `515e020a…` (16.11.2026), since libzync's `utreexo_roots` sits behind the feature `utreexo` (so the core .wasm no longer carries it); before it `a0279e99…`; built-in utreexo image `27bea7da…`, a local build, not reproducible, not published) |
+| tests | 22/22 (`node test.mjs`); `../test.sh` checks the built file's sha256 against this table (scripts/zapp-checks.sh) |
 
 
 The JSON's `roots` write an Empty root as "empty" (in the journal: 32 zero bytes); load it as `BitcoinNodeHash::Empty`,

@@ -45,5 +45,22 @@ t('H=3 an unknown network', u.verify({ receipt: rd('mainnet-3.receipt'), network
   if (r.network === 'mainnet' && r.image_source === 'builtin-unpinned' && typeof r.image_label === 'string') pass++;
   else { fail++; console.log('FAIL network / image_source fields', r.network, r.image_source, r.image_label); }
 }
+// tip mode: the real step 3 -> 103 on the core proof 1..3,836
+{
+  const H103 = '000000002109057cb846ff7d1d96bc77f9f65cb547938efe1961760a8bbb3f75';
+  const T = '00000000e26d786351dd5c6926f1b04a54e8f7fd4a7c81cec40db01505b143ee';
+  const R = rd('mainnet-tip-103.receipt');
+  const r = u.verify({ receipt: R, expectAt: `103:${H103}`, expectTip: `3836:${T}` });
+  t('tip 103 demo', r, 'demo');
+  if (r.mode === 'tip' && r.steps === 1 && r.from === 3 && r.base_height === 3 && r.height === 103 && r.leaves === 103 && r.core_height === 3836) pass++;
+  else { fail++; console.log('FAIL tip fields', JSON.stringify(r)); }
+  t('tip 103 wrong block', u.verify({ receipt: R, expectAt: `103:${H3}` }), 'fail');
+  t('tip 103 wrong core tip', u.verify({ receipt: R, expectAt: `103:${H103}`, expectTip: `3836:${H103}` }), 'fail');
+  t('tip 103 other tip image', u.verify({ receipt: R, imageHex: 'ab'.repeat(32), expectAt: `103:${H103}` }), 'fail');
+  t('tip 103 other base image', u.verify({ receipt: R, baseImageHex: 'ab'.repeat(32), expectAt: `103:${H103}` }), 'fail');
+  t('tip 103 checked as signet', u.verify({ receipt: R, network: 'signet', expectAt: `103:${H103}` }), 'fail');
+  t('a base image id on a base receipt', u.verify({ receipt: rd('mainnet-3.receipt'), baseImageHex: 'ab'.repeat(32), expectAt: `3:${H3}` }), 'fail');
+  if (/^[0-9a-f]{64}$/.test(u.tipImageId())) pass++; else { fail++; console.log('FAIL tipImageId', u.tipImageId()); }
+}
 console.log(`ZAPP_UTREEXO_WASM ${pass} passed, ${fail} failed; image ${u.imageId()}`);
 process.exit(fail ? 1 : 0);
