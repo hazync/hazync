@@ -26,8 +26,11 @@ pub const BUNDLE_KIND: &str = "hazync-deposit";
 pub const BUNDLE_VERSION: u32 = 1;
 
 /// The deposit proof object (JSON). Hashes are hex of their INTERNAL byte order (as the block forest and the MMR use
-/// them), raw data is plain hex. It carries no txid and no image ids: both come from the verifier's caller.
+/// them), raw data is plain hex. It carries no txid and no image ids: both come from the verifier's caller. A field the
+/// format does not name is refused, here and in `DepositBlock` and `ForestOpening` (review 11-18: a bundle is not
+/// malleable by extra fields, and a misspelt optional field is an error, not silently absent).
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct DepositBundle {
     pub kind: String,
     pub version: u32,
@@ -45,8 +48,10 @@ pub struct DepositBundle {
 }
 
 /// The deposit's block and transaction. A block at or below the core tip is opened in the core proof's block forest
-/// (`forest`); one above it only in the header MMR (`mmr_path`), and then it is PROOF OF WORK ONLY.
+/// (`forest`); one above it only in the header MMR (`mmr_path`), and then it is PROOF OF WORK ONLY. Exactly the one
+/// opening its height takes: the other is refused, not ignored ([`verify_deposit`]).
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct DepositBlock {
     pub height: u32,
     /// The 80-byte header, hex.
@@ -67,6 +72,7 @@ pub struct DepositBlock {
 /// The block's leaf in the core proof's block forest: its coin-state digest after the block, its undo hash (for a
 /// block whose leaf commits one, docs/libzync/UNDO.md) and its path.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct ForestOpening {
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -270,6 +276,10 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
     let full = d.height <= cs.height;
     let view = if full {
         let Some(fo) = &d.forest else { return rep.fail(format!("block {} is at or below the core tip {}: give its block-forest opening", d.height, cs.height)) };
+        if d.mmr_path.is_some() {
+            return rep.fail(format!("block {} is at or below the core tip {}: it is opened in the block forest, an mmr_path \
+                                     is not part of such a bundle", d.height, cs.height));
+        }
         let f = TxFact { height: d.height, header: d.header.clone(), state: fo.state.clone(), undo: fo.undo.clone(),
                          block_path: fo.path.clone(), tx: d.tx.clone(), index: d.index, branch: d.branch.clone(),
                          coinbase: d.coinbase.clone(), coinbase_branch: d.coinbase_branch.clone() };
@@ -295,6 +305,10 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
             return rep;
         }
         let Some(mp) = &d.mmr_path else { return rep.fail("a block above the core tip needs its MMR path") };
+        if d.forest.is_some() {
+            return rep.fail(format!("block {} is above the core tip {}: it has no block-forest leaf, a forest opening is \
+                                     not part of such a bundle", d.height, cs.height));
+        }
         let mp = match hashes(mp, "mmr_path") { Ok(p) => p, Err(e) => return rep.fail(e) };
         if !rep.check(headers::verify_inclusion(s, d.height as i64, &block_hash, &mp),
                       format!("block {} {} is on the header chain (MMR path, {} hashes): PROOF OF WORK ONLY",
@@ -310,11 +324,18 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
         }
         rep.check(true, format!("transaction {} is at position {} of block {} (tree depth {} by the block's coinbase)",
                                 disp(&ask.txid), d.index, d.height, d.branch.len()));
+        // The outputs are read with libzync's parser, the one the fully validated path uses (check_tx_fact), and are
+        // bound to the txid by THAT parser's own stripped form: the binding does not rest on the header zAPP's parser
+        // above agreeing with it (review 11-18; the two agree today, tests pin it).
         let mut o = 0;
-        match libzync::facts::parse_tx(&raw, &mut o).filter(|_| o == raw.len()) {
-            Some(v) => v,
-            None => return rep.fail("tx: not one transaction"),
+        let Some(v) = libzync::facts::parse_tx(&raw, &mut o).filter(|_| o == raw.len()) else {
+            return rep.fail("tx: not one transaction");
+        };
+        if !rep.check(libzync::facts::txid(&v) == ask.txid,
+                      format!("the outputs are read from transaction {} (the bytes the inclusion checked)", disp(&ask.txid))) {
+            return rep;
         }
+        v
     };
 
     // 4. The output asked about. The outputs are parsed from the bytes that hash to the txid, so they are bound.

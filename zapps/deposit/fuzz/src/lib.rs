@@ -133,7 +133,7 @@ fn run(data: &[u8]) -> Option<bool> {
     assert!(rep.statement.is_none() || rep.verdict != Verdict::Fail, "a statement with a FAIL verdict");
     assert!(!rep.accepted || rep.verdict == Verdict::Ok, "accepted without an OK verdict");
     if rep.statement.is_some() || rep.accepted {
-        // compare what was parsed (unknown fields dropped, defaults filled), with the receipts as placeholders again
+        // compare what was parsed (defaults filled; an unknown field is refused by the parse), with the receipts as placeholders again
         let got = lower(&placeholders(&b));
         let core_ok = b.core_receipt == hex(CORE);
         let hdr_ok = b.header_receipts.iter().all(|x| *x == hex(HDR_TIP));

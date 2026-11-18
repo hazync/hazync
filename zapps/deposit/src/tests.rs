@@ -432,3 +432,55 @@ fn op_return_pushdata_after_another_push() {
     assert_eq!(op_return_payload(&[0x6a, 0x01, 7, 0x4c, 0x01, 9, 0x00]), Some(vec![7, 9]));
     assert_eq!(op_return_payload(&[0x6a, 0x01, 7, 0x4d, 0x03, 0x00, 8, 9]), None, "a PUSHDATA2 past the end");
 }
+
+/// Review 11-18: a field the bundle format does not name is refused (top level, block, forest opening), and a block
+/// carries exactly the opening its height takes (a forest opening at or below the core tip, an MMR path above it).
+#[test]
+fn unknown_fields_and_the_other_opening_are_refused() {
+    let good = serde_json::to_value(b_core(&id(T170))).unwrap();
+    assert!(serde_json::from_value::<DepositBundle>(good.clone()).is_ok());
+    for (at, key) in [("", "extra"), ("block", "extra"), ("forest", "extra"), ("block", "mmr_pathh"), ("", "header_receipt")] {
+        let mut v = good.clone();
+        let o = match at { "" => &mut v, "block" => &mut v["block"], _ => &mut v["block"]["forest"] };
+        o.as_object_mut().unwrap().insert(key.into(), serde_json::json!([]));
+        let e = serde_json::from_value::<DepositBundle>(v).expect_err(&format!("{at}.{key} accepted"));
+        assert!(e.to_string().contains("unknown field"), "{at}.{key}: {e}");
+    }
+    // a block at or below the core tip with an MMR path besides its forest opening
+    let a = ask(id(T170));
+    let mut b = b_tip(); b.block.mmr_path = Some(vec![hex(&[1; 32])]); refused(&b, &a, "an mmr_path is not part of such a bundle");
+    let mut b = b_core(&id(T170)); b.block.mmr_path = Some(vec![]); refused(&b, &a, "an mmr_path is not part of such a bundle");
+    // a block above the core tip with a forest opening besides its MMR path
+    let (mut b, t) = b_seg(false);
+    b.block.forest = Some(ForestOpening { state: hex(&[2; 32]), undo: None, path: vec![] });
+    refused(&b, &DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, ..ask(t) }, "a forest opening is not part of such a bundle");
+}
+
+/// Review 11-18: above the core tip, inclusion is checked by the header zAPP's transaction parser and the outputs are
+/// read by libzync's. The deposit binds the outputs with libzync's own stripped form, so a disagreement FAILS rather
+/// than reading another transaction's outputs; this pins that the two agree on every real transaction here, in both
+/// serialisations (the stripped form each derives hashes to the same txid).
+#[test]
+fn the_two_transaction_parsers_agree() {
+    let v: serde_json::Value = serde_json::from_str(SEG).unwrap();
+    let t = TxInclusion::from_json(v["txid"].as_str().unwrap(), &v).unwrap();
+    let mut cases = vec![(t.raw.clone(), t.pos, t.branch.clone(), t.header, t.coinbase.clone(), t.coinbase_branch.clone()),
+                         (t.coinbase.clone(), 0, t.coinbase_branch.clone(), t.header, t.coinbase.clone(), t.coinbase_branch.clone())];
+    let (header, txs) = libzync::facts::parse_block(&block_170()).unwrap();
+    let ids: Vec<[u8; 32]> = txs.iter().map(libzync::facts::txid).collect();
+    for (i, x) in txs.iter().enumerate() {
+        cases.push((x.stripped.clone(), i as u32, libzync::facts::merkle_branch(&ids, i), header, txs[0].stripped.clone(),
+                    libzync::facts::merkle_branch(&ids, 0)));
+    }
+    let mut witness = 0;
+    for (raw, pos, branch, header, coinbase, coinbase_branch) in cases {
+        let mut o = 0;
+        let lz = libzync::facts::parse_tx(&raw, &mut o).filter(|_| o == raw.len()).expect("libzync parses it");
+        if lz.stripped != raw { witness += 1; }
+        let txid = libzync::facts::txid(&lz);
+        let hash = dsha(&header);
+        let inc = TxInclusion { header, txid, raw, pos, branch, coinbase, coinbase_branch };
+        assert!(zapp_headers::verify_tx_in_header(&hash, &inc).is_ok(), "the header parser derives another txid at position {pos}");
+    }
+    assert!(witness >= 1, "no witness-serialised case");
+}
