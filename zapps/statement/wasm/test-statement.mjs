@@ -38,6 +38,12 @@ for (const [name, args, want, why] of cases) {
 const fake = v.verifyStatement({ ...base, receipt: fs.readFileSync(dir + 'fake_block_2501.rcpt'), statement, purpose, nonce });
 bad += fake.verdict !== 'fail';
 console.log(`${fake.verdict === 'fail' ? 'PASS' : 'WRONG'}  ${'dev-mode FakeReceipt'.padEnd(34)} ${fake.verdict} (want fail)`);
+// review 11-18: the result names the image that verified the receipt (CoreCheck.image), not the one asked for: no image
+// id given, this receipt verifies as the earlier built-in 8888d59c, and the JSON says so
+const used = v.verifyStatement({ ...base, statement, purpose, nonce, imageHex: '' });
+const usedOk = used.image === base.imageHex;
+bad += !usedOk;
+console.log(`${usedOk ? 'PASS' : 'WRONG'}  ${'no image id: reports 8888d59c'.padEnd(34)} ${used.image}`);
 // The frame itself, by hand (the raw exports, not the glue): the glue's bytes pass, a byte past the end and a frame
 // cut short are refused before anything is verified.
 const ex = (await WebAssembly.instantiate(fs.readFileSync(wasm), {})).instance.exports;
@@ -65,5 +71,5 @@ for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo',
   bad += !ok; nraw++;
   console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(34)} ${r.verdict} (want ${want})`);
 }
-console.log(`${cases.length + 1 + nraw - bad}/${cases.length + 1 + nraw} as expected (zapp-statement.wasm)`);
+console.log(`${cases.length + 2 + nraw - bad}/${cases.length + 2 + nraw} as expected (zapp-statement.wasm)`);
 process.exit(bad ? 1 : 0);

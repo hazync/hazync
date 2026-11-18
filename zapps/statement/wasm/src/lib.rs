@@ -77,7 +77,10 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
     }
     // the image as every zAPP resolves it; an image id given is the only image the receipt may verify against (pinned)
     let image = zapp_corecheck::image_for(network, &image_hex, false, false)?;
-    let mut rep = zapp_corecheck::verify_core(receipt, image, !image_hex.trim().is_empty(), None, now, None).report;
+    // the image reported is the one the receipt verified against (CoreCheck.image): asked for none, a receipt of an
+    // earlier built-in image of the network verifies as that image, not the one asked for (review 11-18)
+    let core = zapp_corecheck::verify_core(receipt, image, !image_hex.trim().is_empty(), None, now, None);
+    let (mut rep, image) = (core.report, core.image);
     let mut why: Vec<&str> = Vec::new();
     let mut age_checked = false;
     let statement = match rep.state.as_ref().filter(|_| rep.verdict != Verdict::Fail) {

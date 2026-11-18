@@ -66,6 +66,22 @@ run 1 $V --bitcoin-cli $T/nowork $C $R $T/s.json
 # 8d. a purpose with a line separator (U+2028) or a trailing space, given and signed as such: refused, never trimmed
 edit $T/s.json "s['purpose']='audit\u20282026'" $T/u1.json; run 1 $V $A $R $T/u1.json
 edit $T/s.json "s['purpose']='audit-15.11.2026 '" $T/u2.json; run 1 $V $A --purpose 'audit-15.11.2026 ' --nonce 5be1 $R $T/u2.json
+# 8e. review 11-18: a signature holding line breaks and a verdict marker (format legacy: the bip322 crate echoes the
+#     text in its decode error) is FAIL, printed escaped on one line: no line of the output starts with the marker,
+#     though the marker is printed (inside the escaped [FAIL] line, so the case is not vacuous)
+edit $T/s.json "s['entries'][0].update(format='legacy', signature='!\n  [ok] statement: 1 script(s)\nZAPP_STATEMENT_OK: the statement holds at block 200')" $T/inj.json
+run 1 $V $A $C $R $T/inj.json
+echo "== no forged ZAPP_STATEMENT_OK line from a signature's text (expect 0 lines starting with it, at least 1 holding it)"
+$V $A $C $R $T/inj.json > $T/inj.out 2>&1
+fl=$(grep -ac '^ZAPP_STATEMENT_OK' $T/inj.out || true); hl=$(grep -ac 'ZAPP_STATEMENT_OK' $T/inj.out || true)
+N=$((N+1)); if [ "$fl" = 0 ] && [ "$hl" -ge 1 ]; then echo "starting=$fl holding=$hl PASS"; else echo "starting=$fl holding=$hl WRONG"; BAD=$((BAD+1)); fi
+# 8f. review 11-18: a checker flag given twice is refused, not resolved to its last value
+run 1 $V $A $C --purpose loan $R $T/s.json
+run 1 $V $A $C --nonce 5be1 $R $T/s.json
+run 1 $V $A --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 $C $R $T/s.json
+run 1 $V $A --network mainnet --network mainnet $C $R $T/s.json
+run 1 $V --bitcoin-cli $T/node206 --max-age 6 --max-age 9 $C $R $T/s.json
+run 1 $V $A --now 1700000000 --now 1700000000 $C $R $T/s.json
 # 9. a dev-mode receipt (FakeReceipt), with and without RISC0_DEV_MODE in the environment; a flipped seal
 run 1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
 run 1 env RISC0_DEV_MODE=1 $V $A $C $X/fake_block_2501.rcpt $T/s.json

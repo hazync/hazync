@@ -23,7 +23,10 @@ pub const MAX_ENTRIES: usize = 10_000;
 /// Longest purpose or nonce, in bytes.
 pub const MAX_FIELD: usize = 256;
 
+/// Unknown fields are refused, here, in [`Entry`] and in its fact: a field this crate does not read is in no signed
+/// message, so a statement carrying one would hold with text nobody signed beside the signed fields (review 11-18).
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Statement {
     /// [`STATEMENT_VERSION`].
     pub version: u32,
@@ -46,14 +49,42 @@ pub struct Statement {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Entry {
-    /// A counting-trie "balance" fact for the script at H, with its claimed answer (`expect`).
+    /// A counting-trie "balance" fact for the script at H, with its claimed answer (`expect`). Read through
+    /// [`StrictFact`]: `TrieFact` (the core verifier's, shared) accepts unknown fields.
+    #[serde(deserialize_with = "strict_fact")]
     pub fact: TrieFact,
     /// "simple" (BIP-322 simple: a witness), "full" (BIP-322 full: the to_sign transaction) or "legacy" (P2PKH only:
     /// the signmessage format of BIP-137 / Bitcoin Core `signmessage`).
     pub format: String,
     /// Base64, as wallets print it (a BIP-322 "smp" / "ful" prefix is accepted). Empty in a draft.
     pub signature: String,
+}
+
+/// A statement's fact as it is read: [`TrieFact`]'s fields, each with its serde attributes, and no other. `TrieFact`
+/// itself is left as it is (the core verifier and every crate that reads facts share it); a field added to it fails to
+/// compile here until this mirror is updated.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictFact {
+    kind: String,
+    at: u32,
+    script_pubkey: String,
+    #[serde(default)]
+    txid: Option<String>,
+    #[serde(default)]
+    vout: Option<u32>,
+    proof: String,
+    #[serde(default)]
+    expect: Option<String>,
+    #[serde(default)]
+    origin: Option<swiftsync_verify::TxFact>,
+}
+
+fn strict_fact<'de, D: serde::Deserializer<'de>>(d: D) -> Result<TrieFact, D::Error> {
+    let StrictFact { kind, at, script_pubkey, txid, vout, proof, expect, origin } = StrictFact::deserialize(d)?;
+    Ok(TrieFact { kind, at, script_pubkey, txid, vout, proof, expect, origin })
 }
 
 /// What the verifier asked for: the purpose and nonce it gave the holder. A statement checked without them proves the
@@ -124,6 +155,18 @@ fn field_ok(what: &str, s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `s` safe to print on one line: every character Rust's `escape_debug` would escape (line breaks and other control
+/// characters, Unicode line / paragraph separators, bidirectional and other format characters) written as its escape;
+/// quotes and backslashes as they are, so a line that already quotes a value with `{:?}` reads the same. Text that came
+/// from a statement (or from a library that echoes it) goes through this before it reaches a terminal or a log: a
+/// signature holding "\nZAPP_STATEMENT_OK: ..." printed raw put a forged verdict line on the CLI's stdout (review 11-18).
+pub fn printable(s: &str) -> String {
+    s.chars().map(|c| match c {
+        '"' | '\'' | '\\' => c.to_string(),
+        _ => c.escape_debug().to_string(),
+    }).collect()
+}
+
 /// 64 lower-case hex digits: how a statement writes the core image id and the block hash (checked before either is
 /// printed or compared).
 fn hex64_ok(what: &str, s: &str) -> Result<(), String> {
@@ -155,6 +198,10 @@ fn scripts_of(st: &Statement) -> Result<Vec<Vec<u8>>, String> {
 /// The exact text every script signs. Every field of the statement except the facts and signatures is in it; the
 /// scripts are in it through [`script_list_hash`].
 pub fn message(st: &Statement) -> Result<String, String> {
+    // the network is written into the message as it stands: one of the names, so no line of it can be another field
+    if !matches!(st.network.as_str(), "mainnet" | "signet" | "regtest") {
+        return Err(format!("network {:?}: want mainnet, signet or regtest", st.network));
+    }
     field_ok("purpose", &st.purpose)?;
     field_ok("nonce", &st.nonce)?;
     hex64_ok("core_id", &st.core_id)?;
@@ -227,9 +274,9 @@ pub fn check_signature(network: &str, script: &[u8], format: &str, sig: &str, ms
         bip322::Verification::Inconclusive => Err("BIP-322 inconclusive: the verifier cannot interpret this script".to_string()),
     };
     match format {
-        "simple" => unconditional(bip322::verify_simple_encoded(&addr, msg, sig).map_err(|e| format!("BIP-322 simple: {e}"))?),
-        "full" => unconditional(bip322::verify_full_encoded(&addr, msg, sig).map_err(|e| format!("BIP-322 full: {e}"))?),
-        "legacy" => bip322::verify_legacy_encoded(&addr, msg, sig).map_err(|e| format!("legacy (BIP-137): {e}")),
+        "simple" => unconditional(bip322::verify_simple_encoded(&addr, msg, sig).map_err(|e| format!("BIP-322 simple: {}", printable(&e.to_string())))?),
+        "full" => unconditional(bip322::verify_full_encoded(&addr, msg, sig).map_err(|e| format!("BIP-322 full: {}", printable(&e.to_string())))?),
+        "legacy" => bip322::verify_legacy_encoded(&addr, msg, sig).map_err(|e| format!("legacy (BIP-137): {}", printable(&e.to_string()))),
         f => Err(format!("format {f:?}: want simple, full or legacy")),
     }
 }
@@ -925,5 +972,54 @@ mod tests {
         for (push, n) in [(0x21, 32), (0x21, 34), (0x21, 65), (0x41, 64), (0x41, 66), (0x41, 33)] {
             assert_eq!(p2pk::p2pk_key(&s(push, n)), None, "push 0x{push:02x} of {n} bytes");
         }
+    }
+
+    /// Review 11-18 (M1): a library's error that echoes the signature text (the bip322 crate's decode errors) reaches
+    /// the caller with every line break escaped, on every format; `printable` escapes what `escape_debug` would, quotes
+    /// and backslashes aside.
+    #[test]
+    fn untrusted_text_in_an_error_stays_on_one_line() {
+        assert_eq!(printable("a\nb\r\t\u{2028}\u{202e}\"q\" \\ é"), "a\\nb\\r\\t\\u{2028}\\u{202e}\"q\" \\ é");
+        let k = key();
+        let msg = "m";
+        let forged = "!\n  [ok] statement: 1 script(s)\nZAPP_STATEMENT_OK: the statement holds at block 200\r\u{2028}";
+        for (spk, fmt) in [(script(&k, 0), "legacy"), (script(&k, 0), "full"), (script(&k, 2), "simple"), (script(&k, 3), "simple")] {
+            let e = check_signature("mainnet", &spk, fmt, forged, msg).unwrap_err();
+            assert!(!e.contains(['\n', '\r', '\u{2028}']), "{fmt}: {e:?}");
+        }
+        // the legacy path is the one that echoes the text (the crate's SignatureDecode): escaped, not dropped
+        let e = check_signature("mainnet", &script(&k, 0), "legacy", forged, msg).unwrap_err();
+        assert!(e.contains("\\nZAPP_STATEMENT_OK:"), "{e:?}");
+    }
+
+    /// Review 11-18 (L4): unknown fields are refused at every level of a statement (top, entry, fact); the statement as
+    /// `draft` and `sign` write it still reads, its fact's null txid / vout included.
+    #[test]
+    fn unknown_fields_are_refused() {
+        let (cs, uf) = real();
+        let k = key();
+        let st = signed(&cs, &real_trie(), &[script(&k, 2)], &[k]);
+        let v = serde_json::to_value(&st).unwrap();
+        assert!(v["entries"][0]["fact"].get("txid").is_some_and(|t| t.is_null()), "draft writes txid: null");
+        let back: Statement = serde_json::from_value(v.clone()).unwrap();
+        check_statement(&cs, uf, &back, &ASK).unwrap();
+        for path in [&[][..], &["entries", "0"][..], &["entries", "0", "fact"][..]] {
+            let mut t = v.clone();
+            let mut o = &mut t;
+            for p in path { o = if let Ok(i) = p.parse::<usize>() { &mut o[i] } else { &mut o[*p] }; }
+            o.as_object_mut().unwrap().insert("note".into(), "unsigned text".into());
+            let e = serde_json::from_value::<Statement>(t).unwrap_err().to_string();
+            assert!(e.contains("unknown field `note`"), "{path:?}: {e}");
+        }
+    }
+
+    /// Review 11-18: the network is written into the signed message as it stands, so only a network name is taken.
+    #[test]
+    fn message_takes_only_a_network_name() {
+        let (cs, _) = real();
+        let k = key();
+        let mut st = draft(&cs, &real_trie(), &[script(&k, 2)], "audit", "n1").unwrap();
+        st.network = "mainnet\npurpose: something else".into();
+        assert!(message(&st).unwrap_err().contains("want mainnet, signet or regtest"));
     }
 }

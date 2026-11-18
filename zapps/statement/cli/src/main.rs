@@ -42,13 +42,16 @@ use swiftsync_verify::{unhex, verify, Inputs, Verdict};
 use zapp_common::Identity;
 use zapp_statement::{self as statement, check_statement, Challenge, Statement};
 
+/// Every line this CLI prints goes through [`statement::printable`]: its text may hold a statement's fields, a library's
+/// error that echoes them, or a file name, and a line break in any of them would print a line of the attacker's choosing
+/// (a forged `ZAPP_STATEMENT_OK:`, review 11-18).
 fn fail(m: &str) -> ! {
-    println!("ZAPP_STATEMENT_FAIL: {m}");
+    println!("ZAPP_STATEMENT_FAIL: {}", statement::printable(m));
     exit(1)
 }
 
 fn die(m: &str) -> ! {
-    eprintln!("zapp-statement: {m}");
+    eprintln!("zapp-statement: {}", statement::printable(m));
     std::process::exit(1);
 }
 
@@ -82,7 +85,11 @@ fn main() {
 
 /// The producer (draft, message, sign, add-sig, test-key).
 fn produce(a: Vec<String>) {
-    let flag = |name: &str| a.iter().position(|x| x == name).and_then(|i| a.get(i + 1)).cloned();
+    // each flag once: a repeat is refused, not resolved to one of its values
+    let flag = |name: &str| {
+        if a.iter().filter(|x| *x == name).count() > 1 { die(&format!("{name}: give it once")) }
+        a.iter().position(|x| x == name).and_then(|i| a.get(i + 1)).cloned()
+    };
     match a.first().map(|s| s.as_str()) {
         Some("draft") => {
             let need = |n: &str| flag(n).unwrap_or_else(|| die(&format!("draft: {n} is required")));
@@ -187,7 +194,12 @@ fn check(a: Vec<String>) {
     let (mut purpose, mut nonce, mut now_arg, mut files) = (None, None, None, Vec::new());
     let mut max_age: Option<u32> = None;
     let need = |it: &mut dyn Iterator<Item = String>, f: &str| it.next().unwrap_or_else(|| fail(&format!("{f} needs a value")));
+    // each flag once, as zapp-common's identity flags: a repeat would silently keep whichever came last (a wrapper that
+    // appends its caller's arguments would have its --purpose / --nonce overridden; review 11-18)
+    let mut seen: Vec<String> = Vec::new();
+    let mut once = |f: &str| if seen.iter().any(|s| s == f) { fail(&format!("{f}: give it once")) } else { seen.push(f.to_string()) };
     while let Some(a) = it.next() {
+        if matches!(a.as_str(), "--network" | "--image" | "--purpose" | "--nonce" | "--now" | "--max-age") { once(&a); }
         match a.as_str() {
             "--network" => network = need(&mut it, &a),
             "--image" => image_hex = Some(need(&mut it, &a)),
@@ -247,7 +259,7 @@ fn check(a: Vec<String>) {
     }
     let failed = rep.checks.iter().filter(|c| !c.0).count();
     for (ok, what) in &rep.checks {
-        println!("  [{}] {what}", if *ok { "ok" } else { "FAIL" });
+        println!("  [{}] {}", if *ok { "ok" } else { "FAIL" }, statement::printable(what));
     }
     if failed > 0 || rep.verdict == Verdict::Fail {
         println!("ZAPP_STATEMENT_FAIL: {failed} check(s) failed");
@@ -259,12 +271,12 @@ fn check(a: Vec<String>) {
     if !challenged { why.push("the statement was not compared with your challenge (--purpose and --nonce): it may be an old one shown again"); }
     if why.is_empty() {
         match &age_line {
-            Some(l) => println!("ZAPP_STATEMENT_OK: the statement holds at block {}; {l}", st.height),
+            Some(l) => println!("ZAPP_STATEMENT_OK: the statement holds at block {}; {}", st.height, statement::printable(l)),
             None => println!("ZAPP_STATEMENT_OK: the statement holds at block {}; its age is NOT checked (the coins may have moved since; give --max-age)", st.height),
         }
         exit(0);
     }
-    println!("ZAPP_STATEMENT_DEMO: the statement holds, but {}{}", why.join("; "),
+    println!("ZAPP_STATEMENT_DEMO: the statement holds, but {}{}", statement::printable(&why.join("; ")),
              if age_line.is_none() { "; its age is NOT checked (give --max-age)" } else { "" });
     exit(2);
 }
