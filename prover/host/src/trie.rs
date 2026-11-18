@@ -99,6 +99,7 @@ pub(crate) fn trie_commit(marks: &Marks, ins: &Inserts, st: &ChainState) {
     assert_eq!(libzync::coinlog::h_of(&new), st.trie_root, "block {}: the trie store's new root != the chain state's", st.height);
     ts.height = st.height as u64;
     ts.hash = st.tip_hash;
+    ts.log_root(); // Z1: the block's root in trie/roots.log (a disk store; nothing in memory)
 }
 
 /// HAZYNC_TRIE_DIR: the trie kept on disk there (libzync::trie_store::DiskArena; mainnet's trie is hundreds of GB),
