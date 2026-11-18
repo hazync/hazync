@@ -529,7 +529,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // above it stay on disk, served by the board) for ANOTHER block: the node reorged inside the replay window, and
         // the fetcher, comparing only prep's tip, cannot see it (review of P4, HIGH-1). A fork at h-1, handled as any
         // other: the marker, then a stop for the rewind (which moves those files aside and tells the board).
-        crate::reorg::stale_state_fork(out, dir, h, &prev.tip_hash, &j);
+        crate::reorg::stale_state_fork(out, dir, h, &prev.tip_hash, &j, consume);
         let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
         let t = std::time::Instant::now();
         let inner0 = { let p = PHASES.lock().unwrap(); p[0] + p[1] + p[2] };

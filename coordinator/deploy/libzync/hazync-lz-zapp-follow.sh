@@ -100,6 +100,12 @@ if [ -n "$why" ]; then
 fi
 if [ "$H" -gt "$last" ]; then
     log "prep $((last + 1))..$H (history and trie for the spine at $H)"
+    # a run that died part-way leaves block files (perhaps of an orphaned branch: `range` keeps files already there), a
+    # marker prep wrote into blocks/, and state files above the save point it resumes from: prep would stop on them
+    # for ever (round 4, M1). None is needed: everything above `last` is fetched and prepped again.
+    find "$Z/blocks/" -mindepth 1 -maxdepth 1 -delete
+    find "$Z/out/" -maxdepth 1 -name 'state_*' -printf '%f\n' | sed -n 's/^state_\([0-9]*\)\..*$/\1/p' | sort -un |
+        while read -r h; do if [ "$h" -gt "$last" ]; then rm -f "$Z/out/state_$h".*; fi; done
     python3 "$FETCH" range $((last + 1)) "$H" "$Z/blocks" >/dev/null || die "fetching blocks $((last + 1))..$H failed"
     # from genesis: a rebuild that died before its first save point leaves a coin log a run from genesis refuses;
     # nothing in it is worth keeping (as libzync-prep-run.sh does, round 3 LOW)

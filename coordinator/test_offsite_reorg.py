@@ -141,10 +141,22 @@ check(rc == 0 and s3.objects.get(("b", f"{P}r2/proof_20.bin")) == b"Cnewer20" an
 
 # a restore reads the markers: per name, the newest r<E>/ copy, else the live key
 rc, log = run(s3, "restore-plan")
-plan = dict(l.split() for l in log.splitlines() if l.startswith("proof_"))
+plan = dict(l.split(None, 1) for l in log.splitlines() if l.startswith("proof_"))
 check(rc == 0 and plan.get("proof_20.bin") == f"{P}r2/proof_20.bin" and plan.get("proof_18.bin") == f"{P}r1/proof_18.bin"
       and plan.get("proof_5.bin") == f"{P}proof_5.bin",
       "restore-plan: 20 from r2/ (newest), 18 from r1/, 5 from its live name")
+# a covered name whose new-chain copy is not up yet: never the live key (round 4, L6)
+del s3.objects[("b", f"{P}r1/proof_18.bin")]
+rc, log = run(s3, "restore-plan")
+plan = dict(l.split(None, 1) for l in log.splitlines() if l.startswith("proof_"))
+check(plan.get("proof_18.bin", "").startswith("COVERED-NO-NEW-COPY"), f"restore-plan: covered 18 with no r1/ copy is flagged ({plan.get('proof_18.bin')})")
+s3.objects[("b", f"{P}r1/proof_18.bin")] = b"Bnew18"
+# a deferral that lasts: an epoch dir with no DONE for over an hour fails the copy (round 4, L5)
+od9 = os.path.join(PROOFS, "orphaned", "9"); os.makedirs(od9)
+proof("proof_1.bin", b"A1", od9); t9 = time.time() - 7200; os.utime(od9, (t9, t9))
+rc, log = run(s3, "copy")
+check(rc == 1 and "no DONE for over" in log, "a marker deferred over an hour (no DONE): the copy fails (alerts)")
+import shutil; shutil.rmtree(od9)
 
 # the spine: kept heads 30 and 40, live head 44; tip 45 -> the newest kept head <= 39 is 30
 def head(d, hi, body):

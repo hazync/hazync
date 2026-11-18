@@ -2114,6 +2114,8 @@ jobs:
         run: H=$PWD/hosts/host_m O=$PWD/out/rewind bash experimental/libzync-bench/prep/rewind_test.sh
       - name: Reorg rewind POSITIVE CONTROL (a corrupted coin log after the rewind must be caught)
         run: H=$PWD/hosts/host_m O=$PWD/out/rewindc bash experimental/libzync-bench/prep/rewind_test.sh --control
+      - name: Reorg in prep's replay window POSITIVE CONTROL (the stale-state check off: case L must FAIL)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewindl bash experimental/libzync-bench/prep/rewind_test.sh --control-stale
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }

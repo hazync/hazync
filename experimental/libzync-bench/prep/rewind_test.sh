@@ -85,6 +85,35 @@ CONTROL=0; [ "${1:-}" = --control ] && CONTROL=1
 check() { local l; if [ "$1" = 1 ]; then l="  ok   $2"; else l="  FAIL $2"; fails=$((fails+1)); fi; echo "$l"; echo "$l" >> $O/control.out; }
 [ $CONTROL = 1 ] && echo "CONTROL: a byte of each rewound coin log is changed before the comparison"
 
+# L. a reorg inside prep's replay window (review round 3, HIGH-1; CI): prep died after 199 (saved at 150, the states
+# 151..199 on disk), the node reorged at 190; the restarted prep, replaying from 150, must see that its old state_191 is
+# another chain's: its own marker, exit 5, the runner's rewind (stale states moved, the board's record), then the new
+# branch. --control-stale: the check off (HAZYNC_TEST_SKIP_STALE_CHECK): the case MUST fail.
+case_l() {
+    local fk=190 hi=196 br=$O/lbranch q=$O/lref r=$O/l rc env=""
+    [ "${1:-}" = off ] && env="HAZYNC_TEST_SKIP_STALE_CHECK=1"
+    python3 $HERE/reorg_branch.py $B $fk 6 l$fk $br > /dev/null
+    reference $q $fk $br $hi
+    root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
+    check "$([ -e $r/out/state_150.coinlog ] && [ -e $r/out/state_199.json ] && echo 1)" "L: prep died after 199, saved at 150, states up to 199 on disk"
+    for h in $(seq $((fk + 1)) 200); do rm -f $r/blocks/block_$h.json; done; cp $br/block_*.json $r/blocks/
+    run $r $hi $env; rc=$?
+    check "$([ $rc = 5 ] && grep -aq 'a reorg inside the replay window' $r/run.log && [ -e $r/blocks/REORG ] && echo 1)" \
+          "L: prep replaying from 150 sees its old state_191 is another chain's: its marker, exit 5 (exit $rc)"
+    run $r $hi $env; rc=$?
+    check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $fk" $r/run.log && [ -e $r/out/reorg/records/1.json ] && [ -e $r/out/orphaned/1/state_199.json ] && echo 1)" \
+          "L: the runner rewound to $fk: the stale states 191..199 moved, the board's record written (exit $rc)"
+    same_as_ref $r $q $hi $fk "L"
+}
+if [ "${1:-}" = --control-stale ]; then
+    echo "CONTROL --control-stale: the replay-window check off; case L MUST fail"
+    case_l off
+    [ $fails -gt 0 ] && { echo "CONTROL OK: $fails check(s) fail with the check off, as they must"; exit 0; }
+    echo "CONTROL BROKEN: case L passed with the check off"; exit 1
+fi
+echo "== L. a reorg inside prep's replay window"
+case_l
+
 # the old chain once: prep 1..200, stores saved at 200, kept as a template
 T=$O/template; root $T; cp $B/block_*.json $T/blocks/; run $T 200; rc=$?
 check "$([ $rc = 0 ] && [ -e $T/out/state_200.coinlog ] && echo 1)" "the old chain: prep 1..200 (exit $rc)"

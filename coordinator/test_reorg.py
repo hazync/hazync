@@ -293,6 +293,34 @@ row = q("SELECT v FROM meta WHERE k='reorg_alert'")
 check(al and "from block 19" in al and s._reorg_alert["v"] == al and row,
       f"M2 backstop: block 19 (below the top) not prep's: alert, and it stays latched once the state reads right again ({al})")
 
+# round 4: a REWIND older than REORG_REWIND_QUIET_S no longer quiets the backstop; the heartbeat; the check script;
+# --reorg-ack (later, against the subprocess); DONE for an applied epoch that lacks it
+os.remove(os.path.join(T, "p", "orphaned", "1", "DONE"))
+s.reorg_poll()
+check(os.path.exists(os.path.join(T, "p", "orphaned", "1", "DONE")), "L5: DONE written again for an applied epoch that lacked it")
+t19b = open(os.path.join(STATE, "state_19.json")).read()
+open(os.path.join(STATE, "state_19.json"), "w").write(json.dumps({"tip_hash": list(bytes.fromhex(bh("Y", 19)))}))
+open(os.path.join(STATE, "REWIND"), "w").write("{}")
+old_t = time.time() - 3 * 3600; os.utime(os.path.join(STATE, "REWIND"), (old_t, old_t))
+s.reorg_backstop()
+hb = q("SELECT v FROM meta WHERE k='reorg_backstop_at'")
+chk = subprocess.run([sys.executable, os.path.join(HERE, "deploy/libzync/hazync-lz-check-reorg.py")], env=dict(os.environ),
+                     capture_output=True, text=True)
+check(s._reorg_alert["v"] and hb and chk.returncode == 1 and "REORG ALERT" in chk.stdout,
+      f"L4: an out/REWIND 3 h old does not quiet the backstop; the heartbeat is written; hazync-lz-check-reorg pages ({chk.stdout.strip()[:60]})")
+os.remove(os.path.join(STATE, "REWIND"))
+open(os.path.join(STATE, "state_19.json"), "w").write(t19b)
+r_ack = subprocess.run([sys.executable, os.path.join(HERE, "server.py"), "--reorg-ack", "--yes"], env=dict(os.environ),
+                       capture_output=True, text=True)
+s.reorg_backstop()
+check(r_ack.returncode == 0 and "cleared" in r_ack.stdout and s._reorg_alert["v"] is None,
+      f"L4: server.py --reorg-ack --yes clears the latch, and the rows read right again ({r_ack.stdout.strip()[-40:]})")
+c = s.db(); c.execute("UPDATE meta SET v='1' WHERE k='reorg_backstop_at'"); c.commit(); c.close()
+chk = subprocess.run([sys.executable, os.path.join(HERE, "deploy/libzync/hazync-lz-check-reorg.py")], env=dict(os.environ),
+                     capture_output=True, text=True)
+check(chk.returncode == 1 and "STALE" in chk.stdout, f"M2: a backstop heartbeat that is stale pages ({chk.stdout.strip()[:50]})")
+s.reorg_backstop()
+
 # review of P4, M3: pruning keeps the newest head below the window
 sv = s.SPINE_HEADS
 s.SPINE_HEADS = os.path.join(T, "heads_m3")

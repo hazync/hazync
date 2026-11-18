@@ -281,9 +281,17 @@ fn disp(b: &[u8; 32]) -> String { let mut x = *b; x.reverse(); crate::hex(&x) }
 /// Before block h is applied: is there a state_<h>.json of an earlier run for another block? Then the states h.. on disk
 /// are another chain's (the node reorged while this run replays from its save point): write the fetcher's marker for
 /// a fork at h-1 (unless one is there) and stop as for any marker (exit 5 with automatic rewinds and a depth within W,
-/// else 4). Returns when there is no such state.
-pub(crate) fn stale_state_fork(out: &str, blocks_dir: &str, h: u32, prev_tip: &[u8; 32], j: &serde_json::Value) {
-    let Some(old) = state_tip(out, h) else { return };
+/// else 4). A state that is there but does not read is a stop too (its states are written by rename: damage, not a
+/// write in progress). Static block files (not fed by the fetcher, `consume` false): a stop with no marker written into
+/// a directory that is not the fetcher's. Returns when there is no such state.
+pub(crate) fn stale_state_fork(out: &str, blocks_dir: &str, h: u32, prev_tip: &[u8; 32], j: &serde_json::Value, consume: bool) {
+    // test only (RISC0_DEV_MODE): the check off, for rewind_test.sh's positive control
+    if crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_SKIP_STALE_CHECK").as_deref() == Ok("1") { return; }
+    let p = format!("{out}/state_{h}.json");
+    if !std::path::Path::new(&p).exists() { return; }
+    let Some(old) = state_tip(out, h) else {
+        stop(&format!("before block {h}: {p}, left by an earlier run above the save point, does not read: its chain cannot be compared"))
+    };
     let Some(new) = hash_of(j) else { return };
     if old == new { return; }
     let fork = h - 1;
@@ -295,6 +303,7 @@ pub(crate) fn stale_state_fork(out: &str, blocks_dir: &str, h: u32, prev_tip: &[
     let depth = top - fork;
     let why = format!("before block {h}: state_{h}.json of an earlier run is block {}, the block file {}: the states \
                        {h}..={top} on disk are another chain's (a reorg inside the replay window)", disp(&old), disp(&new));
+    if !consume { stop(&format!("{why}; static block files: nothing is written into {blocks_dir}")); }
     if marker(blocks_dir).is_none() {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let m = serde_json::json!({"fork": fork, "fork_hash": disp(prev_tip), "prep_tip": top, "depth": depth,
@@ -302,7 +311,12 @@ pub(crate) fn stale_state_fork(out: &str, blocks_dir: &str, h: u32, prev_tip: &[
             "source": "prep: stale state files above its save point", "at": now});
         crate::lz::write_atomic(&format!("{blocks_dir}/REORG"), m.to_string().as_bytes());
     }
-    stop_or_rewind(blocks_dir, &why)
+    if auto() && auto_fork(blocks_dir).is_some() { stop_or_rewind(blocks_dir, &why) }
+    // prep's OWN marker (round 4, L7): the recovery is the rewind, not "remove the marker"
+    println!("PREP_STOPPED_REORG {why}");
+    println!("  prep wrote {blocks_dir}/REORG (source: prep): the state files {h}..={top} are another chain's. A person rewinds: \
+              libzync-prep-rewind <out> <blocks> [--allow-deep] (docs/libzync/REORG.md §11 step 3), then starts the units");
+    std::process::exit(EXIT_REORG);
 }
 
 /// A block file's `prev` (display hex) as the state's tip_hash byte order.

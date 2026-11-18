@@ -77,6 +77,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
+MARKER_DEFER_MAX_S = float(os.environ.get("OFFSITE_MARKER_DEFER_MAX_S", "3600"))
 SPINE_READ_TRIES = 5
 SPINE_READ_PAUSE = 1.0
 
@@ -212,8 +213,13 @@ def mark_reorgs(s3, bucket, prefix, root, remote, markers, threads, bwlimit_mbit
             continue
         if not os.path.exists(os.path.join(d, "DONE")):
             # the coordinator writes DONE once the epoch's rewind is committed: before it, the directory may still be
-            # filling, and a write-once marker would be missing names (review round 3); the next run writes it
-            log(f"reorg {e}: the coordinator's rewind is not complete yet (no DONE): marker deferred")
+            # filling, and a write-once marker would be missing names (review round 3); the next run writes it. A
+            # deferral older than MARKER_DEFER_MAX_S (1 h) fails the run (round 4, L5): a rewind that never completed
+            age = time.time() - os.stat(d).st_mtime
+            log(f"reorg {e}: the coordinator's rewind is not complete yet (no DONE, {age:.0f} s): marker deferred")
+            if age > MARKER_DEFER_MAX_S:
+                log(f"reorg {e}: FAILED: no DONE for over {MARKER_DEFER_MAX_S:.0f} s: is the coordinator's rewind of epoch {e} stuck?")
+                failed += 1
             continue
         names = {n: os.path.getsize(os.path.join(d, n)) for n in os.listdir(d) if n.startswith("proof_")}
         todo = [n for n in names if f"orphaned/{e}/{n}" not in remote]
@@ -938,7 +944,14 @@ def main(argv=None, client=None):
         names = sorted({k.rsplit("/", 1)[-1] for k in remote if k.startswith("proof_") or re.fullmatch(r"r\d+/proof_[^/]+", k)})
         for n in names:
             k = target_key(n, markers)
-            print(f"{n} {prefix}{k if k in remote else n}")
+            if k in remote:
+                print(f"{n} {prefix}{k}")
+            elif k != n:
+                # a marker covers the live name (it holds an orphaned proof) and the new chain's copy is not up yet
+                # (round 4, L6): never restore the live key for it
+                print(f"{n} COVERED-NO-NEW-COPY (the live key holds an orphaned proof; the new chain's goes to {prefix}{k})")
+            else:
+                print(f"{n} {prefix}{n}")
         log(f"restore-plan: {len(names)} proof(s), {len(markers)} reorg marker(s) read")
         return 0
     if a.mode == "copy":

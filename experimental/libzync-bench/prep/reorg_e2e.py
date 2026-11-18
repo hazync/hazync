@@ -334,6 +334,8 @@ def offsite(tag, concurrent=False):
               f"{tag}: an offsite copy while the rewind is half done: no new live name of another chain ({sorted(off - _offchain_before[0])[:3]})")
         return
     _offchain_before[0] = off
+    if rc1 or rc2 or bad or shallow_cover or off:
+        print("    offsite output:\n" + "\n".join("      " + l for l in buf.getvalue().splitlines()[-25:]), flush=True)
     check(rc1 == 0 and rc2 == 0 and not bad and not shallow_cover and not off,
           f"{tag}: offsite copy and check (exit {rc1}, {rc2}); no live name holds another chain's proof uncovered ({bad[:3]}), "
           f"none off the node's chain ({sorted(off)[:3]}); no marker of a reorg within {OFF_DEPTH} covers a name ({shallow_cover}); "
@@ -598,6 +600,17 @@ if not CONTROL:
     rc, flog_ = follow(f"{tag}: after (the fall-back missed)")
     check(rc == 0 and "the node no longer has their block" in flog_ and follower_serves(len(chain)),
           f"{tag}: the zAPP follower, which never saw the fall-back, finds its block {T} gone, rebuilds and serves at {len(chain)} (exit {rc})")
+    # round 4, M1: a follower run that died part-way leaves a marker, a block file of another chain and a state file
+    # above its save point; the next run must not stop on them
+    last = len(chain)
+    (ZAPP / "blocks").mkdir(exist_ok=True)
+    (ZAPP / "blocks/REORG").write_text(json.dumps({"fork": last - 2, "class": "manual", "source": "prep"}))
+    shutil.copy(chain[1], ZAPP / f"blocks/block_{last + 1}.json")
+    (ZAPP / f"out/state_{last + 1}.json").write_text(json.dumps({"tip_hash": list(bytes(32))}))
+    grow(3); wait(at_node_tip, f"{tag}: prep at {len(chain)}"); prove_to(len(chain))
+    check(spine(len(chain))[0] == 200, f"{tag}: the spine at {len(chain)}")
+    rc, flog_ = follow(f"{tag}: after a run that died part-way")
+    check(rc == 0 and follower_serves(len(chain)), f"{tag}: the follower clears a died run's marker, block and state files and serves at {len(chain)} (exit {rc}: {flog_.strip()[-120:]})")
 
 check(not db1("SELECT id FROM ranges WHERE status='failed'"), f"nothing parked ({db1('SELECT id FROM ranges WHERE status=?', 'failed')})")
 check(len(db1("SELECT epoch FROM reorgs")) == (2 if CONTROL else 8) or CONTROL, f"reorgs applied: {len(db1('SELECT epoch FROM reorgs'))}")

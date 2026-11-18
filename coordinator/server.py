@@ -653,6 +653,7 @@ def init_db():
     _orphan_table(c, "vranges")
     _orphan_table(c, "ranges")
     c.execute("CREATE INDEX IF NOT EXISTS vranges_orphaned_span ON vranges_orphaned(lo, hi)")
+    c.execute("CREATE INDEX IF NOT EXISTS vranges_hi ON vranges(hi)")      # the rewind and the backstop select by hi
     c.commit(); c.close()
 
 def canonical_range_id(lo, hi):
@@ -2006,14 +2007,30 @@ def reorg_poll(startup=False):
         c.commit()
     finally:
         c.close()
-    if startup or time.time() - _backstop_at[0] >= REORG_BACKSTOP_S:
+    if startup:
         _backstop_at[0] = time.time()
         reorg_backstop()
+    _write_done_files()
     return done
+
+
+def _write_done_files():
+    """DONE in every applied epoch's proofs/orphaned/<E>/ that lacks it (round 4, L5: a rewind applied by a coordinator
+    from before DONE existed, or one whose DONE write was lost); the offsite copy writes its marker only after it."""
+    c = db()
+    try:
+        rows = c.execute("SELECT epoch, fork, at FROM reorgs").fetchall()
+    finally:
+        c.close()
+    for r in rows:
+        d = os.path.join(PROOFS_DIR, "orphaned", str(r["epoch"]))
+        if os.path.isdir(d) and not os.path.exists(os.path.join(d, "DONE")):
+            _write_atomic(os.path.join(d, "DONE"), json.dumps({"epoch": r["epoch"], "fork": r["fork"], "at": r["at"]}).encode())
 
 
 _backstop_at = [0.0]
 REORG_BACKSTOP_S = float(os.environ.get("REORG_BACKSTOP_S", "60"))
+REORG_REWIND_QUIET_S = float(os.environ.get("REORG_REWIND_QUIET_S", str(2 * 3600)))
 
 
 def reorg_backstop(now=None):
@@ -2035,7 +2052,14 @@ def reorg_backstop(now=None):
             c.commit()
             print(f"[reorg] alert cleared: a rewind below {min(latched['heights'])} was applied", flush=True)
             latched = None
-        if not os.path.exists(os.path.join(LZ_STATE_DIR, "REWIND")):
+        rw = os.path.join(LZ_STATE_DIR, "REWIND")
+        try:
+            rw_age = now - os.stat(rw).st_mtime
+        except OSError:
+            rw_age = None
+        # quiet while a rewind is in progress, but not for ever (round 4, L4): an intent older than REORG_REWIND_QUIET_S
+        # is a rewind that stopped, and the board's rows are checked again
+        if rw_age is None or rw_age > REORG_REWIND_QUIET_S:
             top = c.execute("SELECT MAX(hi) FROM vranges").fetchone()[0] or 0
             rows = c.execute("SELECT lo, hi, in_bhash, out_bhash FROM vranges WHERE hi > ? AND out_bhash != ''",
                              (top - REORG_AUTO_MAX_DEPTH,)).fetchall()
@@ -2052,6 +2076,8 @@ def reorg_backstop(now=None):
                 c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_alert',?)", (json.dumps(latched),))
                 c.commit()
                 print(f"[reorg] ALERT {latched['msg']}", flush=True)
+        c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_backstop_at',?)", (str(now),))
+        c.commit()
     finally:
         c.close()
     _reorg_alert["v"] = latched["msg"] if latched else None
@@ -2103,6 +2129,14 @@ def reorg_loop():
             reorg_poll()
         except Exception as e:                      # noqa: BLE001 -- never let this thread die
             print(f"[reorg] poll failed, will retry: {e!r}", flush=True)
+        # the backstop on its own (round 4, M2): a poll that keeps failing must not silence it, and its heartbeat
+        # (meta reorg_backstop_at) going stale is what hazync-lz-check-reorg pages on when it cannot run at all
+        if time.time() - _backstop_at[0] >= REORG_BACKSTOP_S:
+            _backstop_at[0] = time.time()
+            try:
+                reorg_backstop()
+            except Exception as e:                  # noqa: BLE001
+                print(f"[reorg] backstop failed, will retry: {e!r}", flush=True)
         time.sleep(REORG_POLL_S)
 
 
@@ -5421,9 +5455,38 @@ def reorg_to_cmd(argv):
     return 0
 
 
+def reorg_ack_cmd(argv):
+    """`server.py --reorg-ack [--yes]` (round 4, L4): clear a latched reorg alert by hand, once a person has looked:
+    e.g. prep restarted from genesis under a fresh LZ_ROOT (REORG.md §11 step 4), whose states above its position are
+    simply not there yet, so the backstop sees the board's rows as off prep's chain until it catches up. Without --yes it
+    only shows the alert. Run as for --reorg-to (the unit's environment, its user); the coordinator may be running."""
+    if not os.environ.get("COORD_DB"):
+        raise SystemExit("COORD_DB is not set: run with the coordinator unit's environment (REORG.md §11)")
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and "--allow-root" not in argv:
+        raise SystemExit("refusing to run as root: run as the service's user (sudo -u hazync ...), or --allow-root")
+    c = sqlite3.connect(DB, timeout=DB_BUSY_TIMEOUT)
+    try:
+        r = c.execute("SELECT v FROM meta WHERE k='reorg_alert'").fetchone()
+        if not r or not r[0]:
+            print("no reorg alert is latched"); return 0
+        print(f"latched: {r[0]}")
+        if "--yes" not in argv:
+            print("dry run: nothing changed. Add --yes to clear it (the backstop raises it again if the rows still mismatch).")
+            return 0
+        c.execute("DELETE FROM meta WHERE k='reorg_alert'")
+        c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_alert_acked',?)", (json.dumps({"at": time.time(), "was": r[0]}),))
+        c.commit()
+        print("cleared")
+        return 0
+    finally:
+        c.close()
+
+
 if __name__ == "__main__":
     if "--reorg-to" in sys.argv:
         sys.exit(reorg_to_cmd(sys.argv))
+    if "--reorg-ack" in sys.argv:
+        sys.exit(reorg_ack_cmd(sys.argv))
     install_stack_dump()
     print(f"[hazync-coordinator] open-file limit {raise_open_file_limit()}", flush=True)
     init_db()

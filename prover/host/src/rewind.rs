@@ -58,11 +58,7 @@ fn refuse(why: &str) -> ! {
 
 /// A block file's hash (the state's tip_hash order), as prep_block computes it.
 fn block_file_hash(p: &std::path::Path) -> Option<[u8; 32]> {
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    let merkle: [u8; 32] = crate::rev(crate::hx(j["merkle"].as_str()?)).try_into().ok()?;
-    let h = crate::build_header_v(j["version"].as_i64().unwrap_or(1) as i32, j["prev"].as_str()?, &merkle,
-                                  j["time"].as_u64()? as u32, j["bits"].as_u64()? as u32, j["nonce"].as_u64()? as u32);
-    Some(crate::header_hash(&h))
+    reorg::hash_of(&serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?)
 }
 
 fn move_into(from: &std::path::Path, dir: &std::path::Path) {
