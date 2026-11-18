@@ -745,3 +745,9 @@ blocks, and so does the fake now (`known`).
 - Harness: a reorg inside the replay window (prep restarted, held mid-replay, the node reorgs), the follower missing a
   fall-back, the coordinator killed between a rewind's file moves and its commit (restarted as systemd would) with an
   offsite copy run in that window, and the offsite invariant checked against the NODE's chain.
+- Results (host rebuilt from this branch merged with `main`, `46666b6f`): `reorg_e2e.py --w 12` PASS (78 checks), `--w
+  288` PASS (81), the control fails 15; with the pre-fix host the replay-window scenario fails (5 checks); the
+  reviewer's follower repro now rebuilds and serves the new branch; `rewind_test.sh` 57/57; `test_reorg.py` PASS and its
+  seven controls fail; `test_offsite_reorg.py` PASS (+ control); the coordinator tests pass. Building it found one more
+  bug, fixed: the L5 shortcut (prep already at the fork) also matched prep's own stop before F+1, and removed the
+  marker without moving the stale states; it now requires nothing above the fork.

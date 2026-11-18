@@ -583,6 +583,8 @@ if not CONTROL:
     os.kill(runner.prep_pid(), signal.SIGKILL)        # the hold off: prep replays on into the stale states
     epoch += 1
     ok = wait(lambda: (O / "acks" / f"{epoch}.ack").exists(), f"{tag}: the coordinator's ack of epoch {epoch}")
+    # the rewind prints its last line after the ack: wait for it, not just for the ack
+    wait(lambda: f"PREP_REWOUND to {F}" in (O / "run.log").read_text(errors="replace"), f"{tag}: the rewind's end")
     m = api("/api/meta")[1].get("reorg") or {}
     rlog = (O / "run.log").read_text(errors="replace")
     check(ok and m.get("fork") == F and "a reorg inside the replay window" in rlog and f"PREP_REWOUND to {F}" in rlog,
