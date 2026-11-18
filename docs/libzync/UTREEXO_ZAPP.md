@@ -511,8 +511,10 @@ prints the same `AssumeUtreexoValue` source as for a base.
 
 ### 10.8 Measured (18.11.2026, hazync-coord, CPU, risc0 3.1.0 executor, no dev mode)
 
-Image `ab6f7a26…` (the tip guest, a local build on hazync-coord; the same build gave the base `27bea7da…` and the
-headers `2db34e12…` again, so neither moved). Executed with the previous statement and the core state as unresolved
+Image `ab6f7a26…` (the tip guest, ELF sha256 `dd9d09bd…`, a local build on hazync-coord; a second clean build in
+another checkout and target directory on the same box gave the same ELF. ⚠ Both builds share the box's CARGO_HOME,
+which the id depends on: this is the base image's level of reproducibility (a local build), not a container pin. The
+same builds gave the base ELF `c7bbe197…` = `27bea7da…` and the headers `2db34e12…` again, so neither moved). Executed with the previous statement and the core state as unresolved
 assumptions (the published host's prep states at 10,000 and 100,000), `--prof 1000` (`env::cycle_count()` around the
 block rules and around `modify`). A chain: the base walk to 1,999, then steps to 10,000, 20,000, 50,000, 91,722,
 91,812, 91,842, 91,880 and 100,000, each step starting from the previous step's journal. Columns from the guest's own
@@ -561,6 +563,18 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
 - `zapps/utreexo` `tests/tip_verdict_paths.rs` (feature `tip`): OK reachable on both networks from a built statement;
   each of 14 checks fails alone; DEMO below minimum work, with T > H and no tip named, with block H not named, with the
   unpinned base image; the `AssumeUtreexoValue` source of a tip statement.
+- **A real CPU proof** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, hazync-coord under a load average
+  of ~37 from other work): the step 3 → 103 from the base receipt `vectors/mainnet-3.receipt` (H = 3), resting on the
+  core spine proof 1..3,836 (`46666b6f`, copied from hazync-proof on 18.11.2026, sha256 `96ab09fc…`), so 100 blocks plus
+  3,733 link headers: **4,945.9 s**, 226,138 bytes (`vectors/mainnet-tip-103.receipt`, sha256 `4e0c2bde…`). The
+  roots equal the native replay's; `zapp-utreexo verify` gives DEMO (below minimum work; both images unpinned) with
+  every check ok. That time is a loaded shared box, not a benchmark. The blocks 4..103 have no spends: deletions are
+  covered by the executions above, not by a proof (a proof of the step 103 → 180, with the first spends, was started
+  and stopped for time).
+- `zapps/utreexo/test.sh`: the 28 CLI cases of §8 plus 11 on the tip receipt (DEMO with block 103 and the core tip
+  named; FAIL for another block 103, another core tip, another tip image, another base image (the failed check is
+  the base's), signet, a trailing byte, `--base-image` on a base receipt; the `--json` fields `mode`, `steps`, `from`,
+  `base_height`, `n_live: null`; `--floresta`); the library's tests with `--features tip`; the WASM sha. All pass.
 - The WASM is unchanged (`d240082b…`, rebuilt in the pinned container and compared; the tip checks are behind the
   feature so it does not carry them).
 
