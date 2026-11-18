@@ -131,6 +131,7 @@ for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo',
     ['include: a key twice', inc170(`, "height": 170`), 'fail', 'duplicate field `height`'],
     ['include: tx with an unknown key', inc170(`, "txid": "${T170}", "tx": ${JSON.stringify({ ...TX, posn: 1 })}`), 'fail', 'unknown field `posn`'],
     ['include: tx with a key twice', inc170(`, "txid": "${T170}", "tx": ${txj.replace('{', '{"pos": 0, ')}`), 'fail', 'duplicate field `pos`'],
+    ['include: txid and tx null', inc170(', "txid": null, "tx": null'), 'fail', 'txid is null'],
     ['include: an array', `[170, "${H170}", ${JSON.stringify(P170)}]`, 'fail', 'include is not a JSON object'],
   ]) {
     const r = raw(frame(j));

@@ -279,7 +279,7 @@ struct TxAnswer {
 }
 
 /// The include JSON of the WASM module: `{"height", "hash", "path", "txid"?, "tx"?}`, those keys only, txid and tx
-/// both or neither (null is absent).
+/// both or neither (a null for either is refused in [`parse_include_json`]).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IncludeJson {
@@ -343,8 +343,15 @@ impl TxInclusion {
 pub fn parse_include_json(j: &[u8]) -> Result<Inclusion, String> {
     let v: serde_json::Value = serde_json::from_slice(j).map_err(|e| format!("include: not JSON ({e})"))?;
     need_object(&v, "include")?;
-    // both or neither, said before the answer's own fields are read (null is absent)
-    match (v.get("txid").is_some_and(|x| !x.is_null()), v.get("tx").filter(|t| !t.is_null())) {
+    // an explicit null is refused (review 11-18 round 2): `{"txid": null, "tx": null}` read as absent gave a block-only
+    // inclusion to a caller who meant to ask about a transaction. Absent is a block alone (JSON.stringify drops undefined).
+    for k in ["txid", "tx"] {
+        if v.get(k).is_some_and(|x| x.is_null()) {
+            return Err(format!("include: {k} is null: leave both txid and tx out to ask about the block alone"));
+        }
+    }
+    // both or neither, said before the answer's own fields are read
+    match (v.get("txid").is_some(), v.get("tx")) {
         (false, Some(_)) => return Err("include: tx needs txid, the transaction asked about (never taken from the answer)".into()),
         (true, None) => return Err("include: txid needs tx, the path service's /tx answer".into()),
         (_, Some(t)) => need_object(t, "include: tx")?,
@@ -885,7 +892,6 @@ mod tests {
         // the documented shapes: a block alone, a block and a transaction (the /tx answer with its other keys), null as absent
         assert!(parse_include_json(inc("").as_bytes()).unwrap().tx.is_none());
         assert!(parse_include_json(inc(&format!(r#", "txid": {t}, "tx": {tx}"#)).as_bytes()).unwrap().tx.is_some());
-        assert!(parse_include_json(inc(r#", "txid": null, "tx": null"#).as_bytes()).unwrap().tx.is_none());
         let bad_tx = tx.replacen("\"pos\"", "\"posn\": 1, \"pos\"", 1);
         let twice_tx = tx.replacen("\"pos\"", "\"raw\": \"00\", \"pos\"", 1);
         for (j, why) in [
@@ -896,6 +902,11 @@ mod tests {
             (inc(&format!(r#", "txid": {t}, "tx": {twice_tx}"#)), "duplicate field `raw`"),
             (inc(&format!(r#", "txid": {t}, "tx": [1]"#)), "tx is not a JSON object"),
             (inc(&format!(r#", "txid": {t}"#)), "txid needs tx"),
+            // an explicit null is not "absent": refused (review 11-18 round 2; it gave a block-only inclusion)
+            (inc(r#", "txid": null, "tx": null"#), "txid is null"),
+            (inc(r#", "txid": null"#), "txid is null"),
+            (inc(r#", "tx": null"#), "tx is null"),
+            (inc(&format!(r#", "txid": {t}, "tx": null"#)), "tx is null"),
             (inc(&format!(r#", "tx": {tx}"#)), "tx needs txid"),
             (format!("[170, {h}, [{p}]]"), "include is not a JSON object"),
             (r#"{"hash": "00", "path": []}"#.to_string(), "missing field `height`"),
