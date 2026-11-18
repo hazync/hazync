@@ -178,7 +178,7 @@ What the host supplies: the block bytes, the tracked positions, each coin's stat
    the leaf check either).
 
 **What the checker adds** (`zapps/utreexo`, `verify_utreexo_on`; the verdict on the decoded statement is the pure
-function `verify_statement`): the **caller names the network** (`--network`, default mainnet, as every zAPP; the
+function `judge_verified_statement`): the **caller names the network** (`--network`, default mainnet, as every zAPP; the
 WASM frame's network field), never the proof, and a proof of another network is FAIL (its network word and core
 profile must be that network's); not a FakeReceipt, `RISC0_DEV_MODE` unset, the receipt verifies under the trusted
 utreexo id, `done = 1` and `to = H`, `self_id` = that id, one root per set bit of `leaves`, zero lineage (one core
@@ -189,15 +189,17 @@ for block H), the core tip too when T > H (`--expect-tip`; a tip that is given i
 `--mempool` / `--bitcoin-cli` block T is asked as well, must agree with a given `--expect-tip`, and the node's
 chainwork at T is compared with the proven one), minimum work plus the checkpoint, and a **pinned utreexo image**:
 the built-in id `27bea7da…` is a local build, not reproducible, so a proof under it is at most DEMO until it is pinned
-in reproduce/LIBZYNC_IDS (`UTREEXO_IMAGE_PINNED`); otherwise DEMO. The receipt is decoded with a 16 MiB bincode
+in reproduce/LIBZYNC_IDS (`UTREEXO_IMAGE_PINNED`; an id the caller names with `--image` may reach OK, and the checks
+and the OK line say the checker does not know its code); otherwise DEMO. A FAIL report carries no statement. The receipt is decoded with a 16 MiB bincode
 limit and no trailing bytes (the core verifier's own decode, swiftsync-verify `src/lib.rs:463`, has no limit; core
 code, not changed here).
 
 **The CLI's output.** Check lines and the verdict line on stdout, exit 0 OK, 2 DEMO, 1 FAIL or a usage error (an
 unknown flag, a flag without its value, not exactly one receipt). With `--json` or `--floresta`, stdout carries only
 that output (the checks go to stderr; `---` between the two when both are asked), and only on OK, or on DEMO with
-`--allow-demo`; the JSON has `verdict`, `network` (the one checked), `identity_checked` and `image_pinned` (with
-`image_label` when false), and the `--floresta` source starts with a comment line naming the network. The built-in
+`--allow-demo`; the JSON has `verdict`, `network` (the one checked), `identity_checked` and `image_source`
+(`"builtin-unpinned"` with `image_label`, `"builtin-pinned"`, or `"caller"` for an id named with `--image`, whose code
+the checker does not know; the OK line says so too), and the `--floresta` source starts with a comment line naming the network. The built-in
 image id is printed with the label "local build, not reproducible, not published" until it is pinned.
 
 ## 5. Host and module layout
@@ -216,8 +218,8 @@ image id is printed with the label "local build, not reproducible, not published
   `zapp-utreexo verify <receipt> [--network mainnet|signet] [--expect H:hash] [--mempool | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
   swiftsync-verify as a library (no Utreexo code in the core verifier crates). `zapps/utreexo/wasm`: the same checks as
   WebAssembly (raw ABI, `zapp-utreexo.js` glue, `build.sh` byte-reproducible with Rust 1.99.0 at a fixed stage path,
-  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 27 CLI
-  cases, the WASM build and its 12 cases, and the built WASM's sha256 against the line in `wasm/README.md`.
+  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 28 CLI
+  cases, the WASM build and its 13 cases, and the built WASM's sha256 against the line in `wasm/README.md`.
 - `prover/zyncapps/utreexo-ref`: the reference (Floresta's code), test only.
 
 ## 6. Distribution (proposal)
@@ -305,8 +307,8 @@ in the hints zAPP).
   JSON marked `demo`, `--floresta` alone on stdout); the WASM build (`wasm/`, sha256 `a0279e99…` then; `515e020a…` since 16.11.2026, libzync's `utreexo` feature; reproduced by a second
   build) 7/7 in node. Since 18.11.2026 (the review's network, image-pin, chainwork and trailing-bytes findings, and
   the cargo-mutants pass): `tests/verdict_paths.rs` builds statements that reach OK and every FAIL and DEMO branch of
-  `verify_statement` on both networks; 27 CLI cases (`--network`, a mainnet proof checked as signet, a trailing byte,
-  the node's chainwork at T with `--expect-tip`); the WASM `106feaf9…`, 12/12.
+  `judge_verified_statement` on both networks; 28 CLI cases (`--network`, a mainnet proof checked as signet, a trailing byte,
+  the node's chainwork at T with `--expect-tip`); the WASM `d240082b…`, 13/13.
 
 ## 9. Questions for the Floresta developers
 

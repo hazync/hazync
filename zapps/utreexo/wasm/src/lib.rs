@@ -1,4 +1,4 @@
-//! `zapp-utreexo-wasm`: the Utreexo roots zyncAPP's checks in a browser, by the same `zapp_utreexo::verify_utreexo` the
+//! `zapp-utreexo-wasm`: the Utreexo roots zyncAPP's checks in a browser, by the same `zapp_utreexo::verify_utreexo_on` the
 //! CLI uses. Raw ABI, no wasm-bindgen (as swiftsync-verify-wasm): the .wasm is a plain cargo output anyone can rebuild.
 //!
 //! ```text
@@ -11,8 +11,8 @@
 //! `[u32 n][network: "mainnet" or "signet", n = 0 for mainnet]`. The network is the caller's: a proof of another
 //! network is FAIL. (Until 18.11.2026 the frame had no network and the proof's own profile picked it; such a frame is
 //! now refused as truncated.)
-//! The JSON's `network` is the one checked; `image_pinned` false (with `image_label`) is the unpinned built-in utreexo
-//! image, under which the verdict is at most `demo`.
+//! The JSON's `network` is the one checked; `image_source` is "builtin-unpinned" (with `image_label`: the verdict is at
+//! most `demo`), "builtin-pinned", or "caller" (an image id the page named: this checker does not know its code).
 //! The JSON's `roots` write an Empty root as the string "empty" (rustreexo's Display); the journal holds 32 zero bytes
 //! for it. Either way a consumer must build `BitcoinNodeHash::Empty`, never the hash 00…00.
 use swiftsync_verify::Verdict;
@@ -87,8 +87,8 @@ pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
     ret(serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
         "image": image.to_lowercase(),
-        "image_pinned": rep.image_pinned,
-        "image_label": (!rep.image_pinned).then_some(zapp_utreexo::UTREEXO_IMAGE_LABEL),
+        "image_source": rep.image_source,
+        "image_label": (rep.image_source == Some(zapp_utreexo::IMAGE_BUILTIN_UNPINNED)).then_some(zapp_utreexo::UTREEXO_IMAGE_LABEL),
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
         "height": z.map(|z| z.height),
         "block_hash": z.map(|z| z.block_hash_hex()),

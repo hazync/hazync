@@ -33,18 +33,21 @@ want 1 "an unknown flag (--expect-at, until 16.11.2026)" -- verify $V/mainnet-3.
 want 1 "a flag without its value" -- verify $V/mainnet-3.receipt --expect-at
 want 1 "two receipts" -- verify $V/mainnet-3.receipt $V/mainnet-2.receipt
 want 1 "a truncated receipt" -- verify <(head -c 1000 $V/mainnet-3.receipt)
+grep -q "FAIL.*the receipt" "$T/out" || { cat "$T/out"; echo "::error::the truncated receipt is not refused as a receipt"; exit 1; }
 want 1 "a receipt with a trailing byte" -- verify <(cat $V/mainnet-3.receipt; printf '\0') --expect 3:$H3
+grep -q "FAIL.*the receipt decodes" "$T/out" || { cat "$T/out"; echo "::error::the trailing byte is not refused by the decode"; exit 1; }
 # the caller names the network (default mainnet); a proof of another is FAIL
 want 2 "--network mainnet, named" -- verify $V/mainnet-3.receipt --network mainnet --expect 3:$H3
 want 1 "a mainnet proof checked as signet" -- verify $V/mainnet-3.receipt --network signet --expect 3:$H3
 grep -q "FAIL.*the proof is for signet" "$T/out" || { cat "$T/out"; echo "::error::the network mismatch is not the failed check"; exit 1; }
 want 1 "--network regtest (no image)" -- verify $V/mainnet-3.receipt --network regtest --expect 3:$H3
+want 1 "--image twice" -- verify $V/mainnet-3.receipt --image $(printf 'ab%.0s' $(seq 32)) --image $(printf 'ab%.0s' $(seq 32)) --expect 3:$H3
 want 1 "--network twice" -- verify $V/mainnet-3.receipt --network mainnet --network signet --expect 3:$H3
 # --json / --floresta: nothing on stdout on DEMO; with --allow-demo exactly the JSON, marked demo
 want 2 "--json on DEMO" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json
 [ ! -s "$T/out" ] || { cat "$T/out"; echo "::error::--json printed a DEMO value without --allow-demo"; exit 1; }
 want 2 "--json --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json --allow-demo
-python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['verdict']=='demo' and j['network']=='mainnet' and j['identity_checked'] and j['leaves']==3 and j['image_pinned'] is False and j['image_label'], j" "$T/out"
+python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['verdict']=='demo' and j['network']=='mainnet' and j['identity_checked'] and j['leaves']==3 and j['image_source']=='builtin-unpinned' and j['image_label'], j" "$T/out"
 want 2 "--floresta --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --floresta --allow-demo
 grep -q 'acchashes!\[' "$T/out" && grep -q 'leaves: 3,' "$T/out" && head -1 "$T/out" | grep -q '^// mainnet:' && ! grep -q ZAPP_UTREEXO "$T/out" || { cat "$T/out"; echo "::error::--floresta output"; exit 1; }
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags). A fake node answers by height

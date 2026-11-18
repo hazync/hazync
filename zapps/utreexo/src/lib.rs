@@ -16,7 +16,7 @@ pub const UTREEXO_IMAGE_ID: &str = "27bea7da7c9c2c528a0c9b6e6d22f5d06c5b2c87bcd9
 /// How [`UTREEXO_IMAGE_ID`] is labelled wherever it is printed, until it is pinned.
 pub const UTREEXO_IMAGE_LABEL: &str = "local build, not reproducible, not published";
 /// Whether [`UTREEXO_IMAGE_ID`] is a reproducible build pinned in reproduce/LIBZYNC_IDS. While it is not, nobody can
-/// check which code the id stands for, so a proof under it is at most DEMO ([`image_pinned`]), whether the id came by
+/// check which code the id stands for, so a proof under it is at most DEMO ([`image_source`]), whether the id came by
 /// default or was named with `--image`. Pinning it (a container build of the guest, the vectors re-proved under the new
 /// id) sets this to true.
 pub const UTREEXO_IMAGE_PINNED: bool = false;
@@ -24,10 +24,21 @@ pub const UTREEXO_IMAGE_PINNED: bool = false;
 /// The networks a caller can name (the core verifier's `Image` table has these two).
 pub const NETWORKS: [&str; 2] = ["mainnet", "signet"];
 
-/// Whether a proof under the utreexo image `id` may reach OK: every id but the unpinned built-in one (another id is
-/// the caller's own choice, e.g. one they rebuilt themselves).
-pub fn image_pinned(id: &[u8; 32]) -> bool {
-    UTREEXO_IMAGE_PINNED || hex32(UTREEXO_IMAGE_ID).as_ref() != Some(id)
+/// Where the utreexo image `id` comes from, as the report and the JSON say it.
+pub const IMAGE_BUILTIN_UNPINNED: &str = "builtin-unpinned";
+pub const IMAGE_BUILTIN_PINNED: &str = "builtin-pinned";
+/// An id the caller named (`--image`): this checker does not know its code; trusting it is the caller's choice (e.g.
+/// an image they rebuilt themselves).
+pub const IMAGE_CALLER: &str = "caller";
+
+/// [`IMAGE_BUILTIN_UNPINNED`], [`IMAGE_BUILTIN_PINNED`] or [`IMAGE_CALLER`] for the utreexo image `id`. Only the
+/// first caps the verdict at DEMO.
+pub fn image_source(id: &[u8; 32]) -> &'static str {
+    match (hex32(UTREEXO_IMAGE_ID).as_ref() == Some(id), UTREEXO_IMAGE_PINNED) {
+        (true, false) => IMAGE_BUILTIN_UNPINNED,
+        (true, true) => IMAGE_BUILTIN_PINNED,
+        (false, _) => IMAGE_CALLER,
+    }
 }
 
 /// The largest receipt this checker decodes. A succinct receipt here is about 225 kB; the limit bounds what a hostile
@@ -118,8 +129,9 @@ pub struct UtreexoReport {
     pub identity_checked: bool,
     /// The network the CALLER named (the one checked), never read from the proof.
     pub network: String,
-    /// [`image_pinned`] for the utreexo image checked against: false caps the verdict at DEMO.
-    pub image_pinned: bool,
+    /// [`image_source`] of the utreexo image checked against ([`IMAGE_BUILTIN_UNPINNED`] caps the verdict at DEMO);
+    /// None when the image id given is not 64 hex digits.
+    pub image_source: Option<&'static str>,
 }
 
 impl UtreexoReport {
@@ -141,11 +153,11 @@ pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&s
 /// ([`UTREEXO_IMAGE_ID`] by default); `core_image_hex`: a core image to trust instead of the network's built-in one;
 /// `now`: the checker's clock; `expect_at`: (H, hash at H as `getblockhash` prints it) from the node's own header
 /// chain; `expect_tip`: the same for the core tip when it is above H. The receipt checks are here; everything after
-/// the journal is decoded is [`verify_statement`].
+/// the journal is decoded is [`judge_verified_statement`]. A FAIL report carries no statement.
 pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_image_hex: Option<&str>, now: u64,
                          expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> UtreexoReport {
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
-                                  network: network.to_string(), image_pinned: false };
+                                  network: network.to_string(), image_source: hex32(image_hex).as_ref().map(image_source) };
     if !rep.check(!swiftsync_verify::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
         return rep;
     }
@@ -176,10 +188,15 @@ pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_im
         Err(e) => { rep.check(false, format!("the journal is a utreexo statement ({e})")); return rep; }
     };
     let receipt_ok = rep.checks.iter().all(|c| c.0);
-    let mut s = verify_statement(z, &id, img, now, expect_at, expect_tip);
+    let mut s = judge_verified_statement(z, &id, img, now, expect_at, expect_tip);
     s.checks.splice(0..0, rep.checks);
     if !receipt_ok {
+        // the journal is not proven: nothing of it may reach a caller
         s.verdict = Verdict::Fail;
+    }
+    if s.verdict == Verdict::Fail {
+        s.statement = None;
+        s.identity_checked = false;
     }
     s
 }
@@ -187,13 +204,14 @@ pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_im
 /// The verdict on a decoded statement, a pure function of it: `id` the utreexo image its receipt verified under, `img`
 /// the trusted core image of the caller's network (its `network` is the one checked), `now`, `expect_at`, `expect_tip`
 /// as in [`verify_utreexo_on`]. FAIL if any check fails; OK needs `expect_at` matched, the core tip matched (by
-/// `expect_tip`, or T = H), Core's minimum work and the checkpoint, and a pinned utreexo image ([`image_pinned`]);
-/// otherwise DEMO. A caller must have verified the receipt under `id` first: this sees only the journal.
-pub fn verify_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image, now: u64, expect_at: Option<(u32, &str)>,
+/// `expect_tip`, or T = H), Core's minimum work and the checkpoint, and a utreexo image that is not the unpinned
+/// built-in one ([`image_source`]); otherwise DEMO. ⚠ It sees only the journal: its OK means nothing unless the
+/// receipt was verified under `id` first, as [`verify_utreexo_on`] does (public so that tests can reach every branch).
+pub fn judge_verified_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image, now: u64, expect_at: Option<(u32, &str)>,
                         expect_tip: Option<(u32, &str)>) -> UtreexoReport {
     let net = img.network;
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
-                                  network: net.to_string(), image_pinned: image_pinned(id) };
+                                  network: net.to_string(), image_source: Some(image_source(id)) };
     rep.check(z.kind == KIND_UTREEXO, "a utreexo statement (kind 'ZU' 1)");
     rep.check(z.done == 1 && z.to == z.height, "the final run: it ended at H and checked the core receipt");
     // every earlier run was verified, inside the zkVM, under the id this statement commits: it must be this image
@@ -225,10 +243,13 @@ pub fn verify_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image, now: u6
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
     let enough = work_at_least(&z.cum_work, img.min_work_hex) && z.core_height >= img.checkpoint_height;
     rep.checks.push((true, (if enough { "the core chain reaches Core's minimum work and the checkpoint" } else { "the core chain is below Core's minimum work or the checkpoint" }).to_string()));
-    if !rep.image_pinned {
+    let src = image_source(id);
+    if src == IMAGE_BUILTIN_UNPINNED {
         rep.checks.push((true, format!("the utreexo image {} is the built-in one ({UTREEXO_IMAGE_LABEL}): at most DEMO", hex(id))));
+    } else if src == IMAGE_CALLER {
+        rep.checks.push((true, format!("the utreexo image {} is the one you named: this checker does not know its code (trust it only if you built it)", hex(id))));
     }
-    rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok && rep.image_pinned { Verdict::Ok } else { Verdict::Demo };
+    rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok && src != IMAGE_BUILTIN_UNPINNED { Verdict::Ok } else { Verdict::Demo };
     rep.statement = Some(z);
     rep
 }
@@ -289,11 +310,10 @@ mod tests {
         let Some(r2) = rd("mainnet-2.receipt") else { panic!("vectors/mainnet-2.receipt missing") };
         assert_eq!(verify_utreexo(&r2, UTREEXO_IMAGE_ID, None, now(), Some((2, H2)), Some((3, H3))).verdict, Verdict::Demo);
         assert_eq!(verify_utreexo(&r2, UTREEXO_IMAGE_ID, None, now(), Some((2, H2)), Some((3, H2))).verdict, Verdict::Fail);
-        if let Some(s) = rd("mainnet-3-split.receipt") {
-            let v = verify_utreexo(&s, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), None);
-            assert_eq!(v.verdict, Verdict::Demo, "{:?}", v.checks);
-            assert_eq!(v.statement.as_ref().unwrap().runs, 2);
-            assert_eq!(v.statement.unwrap().roots, ok.statement.unwrap().roots, "one run and two runs give the same roots");
-        }
+        let Some(s) = rd("mainnet-3-split.receipt") else { panic!("vectors/mainnet-3-split.receipt missing") };
+        let v = verify_utreexo(&s, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), None);
+        assert_eq!(v.verdict, Verdict::Demo, "{:?}", v.checks);
+        assert_eq!(v.statement.as_ref().unwrap().runs, 2);
+        assert_eq!(v.statement.unwrap().roots, ok.statement.unwrap().roots, "one run and two runs give the same roots");
     }
 }

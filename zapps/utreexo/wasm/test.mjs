@@ -17,11 +17,33 @@ t('H=3 two runs', u.verify({ receipt: rd('mainnet-3-split.receipt'), expectAt: `
 t('H=3 named mainnet', u.verify({ receipt: rd('mainnet-3.receipt'), network: 'mainnet', expectAt: `3:${H3}` }), 'demo');
 t('H=3 checked as signet', u.verify({ receipt: rd('mainnet-3.receipt'), network: 'signet', expectAt: `3:${H3}` }), 'fail');
 t('H=3 an unknown network', u.verify({ receipt: rd('mainnet-3.receipt'), network: 'regtest', expectAt: `3:${H3}` }), 'fail');
-t('H=3 a receipt with a trailing byte', u.verify({ receipt: new Uint8Array([...rd('mainnet-3.receipt'), 0]), expectAt: `3:${H3}` }), 'fail');
+{
+  const r = u.verify({ receipt: new Uint8Array([...rd('mainnet-3.receipt'), 0]), expectAt: `3:${H3}` });
+  t('H=3 a receipt with a trailing byte', r, 'fail');
+  if (!r.checks.some(c => !c.ok && c.what.startsWith('the receipt decodes'))) { fail++; console.log('FAIL the trailing byte is not refused by the decode', JSON.stringify(r.checks)); }
+}
+{
+  // the frame before 18.11.2026 (no network field): refused, not read as mainnet
+  const wasm = await WebAssembly.instantiate(readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_utreexo_wasm.wasm', import.meta.url)), {});
+  const { alloc, verify_utreexo, memory } = wasm.instance.exports;
+  const enc = new TextEncoder();
+  const parts = [rd('mainnet-3.receipt'), enc.encode(''), enc.encode(`3:${H3}`), enc.encode('')];
+  const bytes = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
+  const view = new DataView(bytes.buffer);
+  view.setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), true);
+  let o = 8;
+  for (const p of parts) { view.setUint32(o, p.length, true); bytes.set(p, o + 4); o += 4 + p.length; }
+  const ptr = alloc(bytes.length);
+  new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+  const p = verify_utreexo(ptr, bytes.length);
+  const len = new DataView(memory.buffer).getUint32(p, true);
+  const r = JSON.parse(new TextDecoder().decode(new Uint8Array(memory.buffer, p + 4, len)));
+  t('the old frame without a network field', r, 'fail');
+}
 {
   const r = u.verify({ receipt: rd('mainnet-3.receipt'), expectAt: `3:${H3}` });
-  if (r.network === 'mainnet' && r.image_pinned === false && typeof r.image_label === 'string') pass++;
-  else { fail++; console.log('FAIL network / image_pinned fields', r.network, r.image_pinned, r.image_label); }
+  if (r.network === 'mainnet' && r.image_source === 'builtin-unpinned' && typeof r.image_label === 'string') pass++;
+  else { fail++; console.log('FAIL network / image_source fields', r.network, r.image_source, r.image_label); }
 }
 console.log(`ZAPP_UTREEXO_WASM ${pass} passed, ${fail} failed; image ${u.imageId()}`);
 process.exit(fail ? 1 : 0);

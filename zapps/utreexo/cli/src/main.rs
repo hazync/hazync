@@ -9,7 +9,7 @@
 //! `--network`: the network the proof must be for (default mainnet, as every zAPP CLI); a proof of another network is
 //! FAIL, and the identity sources are asked about this network. `--expect`: block H from YOUR node's header chain (`bitcoin-cli getblockhash H`, or Floresta's own headers); the
 //! chain-identity flags every zAPP CLI takes (zapps/common: `--mempool`, `--mempool-url`, `--bitcoin-cli`) are asked for
-//! block H, and for the core tip T when it is above H and no `--expect-tip` is given (until 16.11.2026 `--expect` was
+//! block H, and for the core tip T when it is above H (until 16.11.2026 `--expect` was
 //! `--expect-at`). `--expect-tip`: the core tip T the same way (needed for OK when T > H; compared whenever given; with
 //! `--mempool` / `--bitcoin-cli` too, those sources are also asked for block T and must agree with it, and the node's
 //! chainwork there is compared with the proven one).
@@ -20,11 +20,12 @@
 //! Output: the check lines and the verdict line on stdout. With `--json` or `--floresta`, stdout holds ONLY that
 //! output (the checks and the verdict line go to stderr), and it is printed only on OK, or on DEMO with `--allow-demo`
 //! (the JSON's `verdict` says which): an unchecked value is never emitted where a script would take it as proven. The
-//! JSON names the `network` checked and whether the `image` is pinned (`image_pinned`, and `image_label` when not); the
+//! JSON names the `network` checked and where the `image` comes from (`image_source`: "builtin-unpinned", which caps
+//! the verdict at DEMO and adds `image_label`, "builtin-pinned", or "caller" for an id named with `--image`); the
 //! `--floresta` source starts with a comment line naming the network.
 use swiftsync_verify::Verdict;
 use zapp_common::Identity;
-use zapp_utreexo::{verify_utreexo_on, NETWORKS, UTREEXO_IMAGE_ID, UTREEXO_IMAGE_LABEL};
+use zapp_utreexo::{verify_utreexo_on, IMAGE_BUILTIN_UNPINNED, IMAGE_CALLER, NETWORKS, UTREEXO_IMAGE_ID, UTREEXO_IMAGE_LABEL};
 
 const USAGE: &str = "usage: zapp-utreexo verify <receipt> [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<cmd>\"] [--expect-tip T:hash] [--image hex] [--core-image hex] [--json] [--floresta] [--allow-demo] | id";
 
@@ -66,7 +67,9 @@ fn parse(a: &[String]) -> Opts {
             }
             "--expect-tip" if o.expect_tip.is_some() => usage("--expect-tip: give it once"),
             "--expect-tip" => o.expect_tip = Some(val(&mut it, x)),
+            "--image" if o.image.is_some() => usage("--image: give it once"),
             "--image" => o.image = Some(val(&mut it, x)),
+            "--core-image" if o.core_image.is_some() => usage("--core-image: give it once"),
             "--core-image" => o.core_image = Some(val(&mut it, x)),
             "--json" => o.json = true,
             "--floresta" => o.floresta = true,
@@ -142,8 +145,8 @@ fn main() {
                                                        "height": z.height, "block_hash": z.block_hash_hex(), "leaves": z.leaves,
                                                        "roots": z.roots_hex(), "empty_root_encoding": "\"empty\" (32 zero bytes in the journal)",
                                                        "n_live": z.n_live, "runs": z.runs, "core_height": z.core_height, "image": image.to_lowercase(),
-                                                       "image_pinned": rep.image_pinned,
-                                                       "image_label": (!rep.image_pinned).then_some(UTREEXO_IMAGE_LABEL)}));
+                                                       "image_source": rep.image_source,
+                                                       "image_label": (rep.image_source == Some(IMAGE_BUILTIN_UNPINNED)).then_some(UTREEXO_IMAGE_LABEL)}));
                 }
                 if o.floresta {
                     if o.json { println!("---"); }
@@ -155,10 +158,11 @@ fn main() {
             let line = format!("{} Utreexo accumulator (Floresta's) after block {} {} is leaves={} roots={} ({} live leaves; {} runs; core tip {})",
                                rep.network, z.height, z.block_hash_hex(), z.leaves, z.roots_hex().join(","), z.n_live, z.runs, z.core_height);
             if ok {
-                say(&format!("ZAPP_UTREEXO_OK: {line}"));
+                let caller = if rep.image_source == Some(IMAGE_CALLER) { " (under the utreexo image you named; this checker does not know its code)" } else { "" };
+                say(&format!("ZAPP_UTREEXO_OK: {line}{caller}"));
                 std::process::exit(0)
             }
-            say(&format!("ZAPP_UTREEXO_DEMO: {line} -- but {}", if rep.image_pinned { "the chain is not shown to be the network's (below minimum work or the checkpoint, or block H / the core tip not compared with your own header chain)" } else { "the utreexo image is the built-in one, not yet a pinned reproducible build (or the chain is not shown to be the network's)" }));
+            say(&format!("ZAPP_UTREEXO_DEMO: {line} -- but {}", if rep.image_source != Some(IMAGE_BUILTIN_UNPINNED) { "the chain is not shown to be the network's (below minimum work or the checkpoint, or block H / the core tip not compared with your own header chain)" } else { "the utreexo image is the built-in one, not yet a pinned reproducible build (or the chain is not shown to be the network's)" }));
             std::process::exit(2)
         }
         _ => usage("unknown command"),
