@@ -143,6 +143,39 @@
    "expect_exit": 1
   },
   {
+   "name": "mainnet_1_200_ctrl_unreduced",
+   "description": "The real 1..200 proof with word 3 of its first control-inclusion-proof digest set to 0xffffffff (not a BabyBear field element): refused as a malformed receipt. risc0 3.1.0 PANICS on it (Poseidon2 hash_pair asserts elem.is_reduced): an abort before the pre-check (fuzz round 11-17).",
+   "args": [
+    "--network",
+    "mainnet",
+    "--product",
+    "mainnet_1_200_8888d59c_ctrl_unreduced.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "mainnet_1_200_trailing_byte",
+   "description": "The real 1..200 proof with one zero byte appended: refused (a receipt file is exactly its bincode encoding; it verified DEMO before strict decoding, fuzz round 11-17).",
+   "args": [
+    "--network",
+    "mainnet",
+    "--product",
+    "mainnet_1_200_8888d59c_trailing_byte.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "mainnet_1_200_journal_not_words",
+   "description": "The real 1..200 proof with a byte appended to its journal (not whole words): refused. risc0 serde's from_slice PANICS on a word-aligned journal that is not whole words, and the journal is decoded even when the receipt does not verify.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--product",
+    "mainnet_1_200_8888d59c_journal_not_words.rcpt"
+   ],
+   "expect_exit": 1
+  },
+  {
    "name": "hints_arg_refused",
    "description": "A hints-file argument (the retired design B): the CLI refuses it rather than ignore it.",
    "args": [
