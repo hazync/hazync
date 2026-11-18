@@ -16,7 +16,10 @@ everything. The heavy rules are checked first, so a light pattern can never hide
 Everything the rules are DERIVED from is read from the BASE tree (`--base REV`, git; the filesystem only for the
 selftest), never from the tree under test, so a pull request cannot reshape the derivation that judges it (an empty
 Cargo.toml dropped into a crate to make it look like a separate package, a driver script that stops naming a file).
-Any added, changed or deleted Cargo.toml, build.rs or .cargo/ file anywhere is an image change outright.
+Any added, changed or deleted Cargo.toml, build.rs, .cargo/ file, .gitattributes, .gitmodules or .lfsconfig anywhere is
+an image change outright (the last three change what a checkout writes: line endings, encodings, LFS pointers).
+coordinator/ is sys.path[0] when the heavy jobs run `cd $C; python3 server.py`: a coordinator module the base does
+not have, a new directory there, or a module named like a stdlib module is a soundness change (coordinator_module()).
 
 The heavy set is worked out from the code, not listed by hand where it can be derived:
   * every crate the prover workspace reaches by a Cargo `path =` dependency, transitively (libzync, coinbase-smt,
@@ -54,7 +57,8 @@ IMAGE_PREFIXES = (
     "coreshim/",
 )
 IMAGE_FILES = {"provision-vps.sh", ".dockerignore", "scripts/libzync-base.sh"}
-IMAGE_BASENAMES = {"Cargo.toml", "build.rs"}     # anywhere: a package boundary or a build script moved
+IMAGE_BASENAMES = {"Cargo.toml", "build.rs",     # anywhere: a package boundary or a build script moved
+                   ".gitattributes", ".gitmodules", ".lfsconfig"}   # rewrite what a checkout holds (eol, encoding, lfs)
 
 # Soundness only (the hosts and the jobs that run them; not the image ids).
 SOUNDNESS_PREFIXES = (
@@ -193,20 +197,24 @@ TOKEN = re.compile(r'(?:\$\{?([A-Za-z_]\w*)\}?/|/hazync-zkvm/)?((?:\.\./|\./)*[A
 SCANNABLE = (".sh", ".py", ".bash", ".Dockerfile", ".yml", ".mjs", ".js")
 
 
-MESSAGE = re.compile(r"\b(?:echo|printf|fail|die|warn|note|pass|wrong|usage|step)\b[^;|&\n]*")
+# a message command, at command position only (line start, after ; & | ( { or then/else/do), up to ; | & or EOL
+MESSAGE = re.compile(r"(^\s*|[;&|({]\s*|\b(?:then|else|do)\s+)(?:echo|printf|fail|die|warn|note|pass|wrong|usage|step)\b[^;|&\n]*")
 
 
-def strip_prose(text):
-    """Comments, docstrings and messages: text that names a file without running or reading it ("run provision-vps.sh
-    first", "see docs/libzync/REORG.md"). What is left is code; a name in code counts."""
-    text = re.sub(r'(?s)("""|\'\'\').*?\1', "", text)            # python docstrings / long strings
+def strip_prose(text, py=False):
+    """Comments, messages and (python only) docstrings: text that names a file without running or reading it ("run
+    provision-vps.sh first", "see docs/libzync/REORG.md"). What is left is code; a name in code counts."""
+    if py:
+        text = re.sub(r'(?s)("""|\'\'\').*?\1', "", text)        # docstrings / long strings
     out = []
     for line in text.splitlines():
         s = line.lstrip()
-        if s.startswith(("#", "print(", "raise ", "sys.exit(", "log(", "logging.")):
+        if s.startswith("#") or (py and s.startswith(("print(", "raise ", "sys.exit(", "log(", "logging."))):
             continue
         line = re.sub(r'(^|\s)#(?![{!]).*$', "", line)             # trailing `# …` comments; keeps $#, ${#…}
-        out.append(MESSAGE.sub("", line))                            # echo/printf/fail/die … up to ; | & or EOL
+        if not py:
+            line = MESSAGE.sub(r"\1", line)                          # echo/printf/fail/die … at command position
+        out.append(line)
     return "\n".join(out)
 
 
@@ -224,9 +232,14 @@ def resolve(tree, token_var, rest, here, extra_bases):
     return found
 
 
-def scan(tree, text, here, extra_bases=()):
-    """Repo files a script/job text names (comments stripped), and python modules it imports from beside itself."""
-    text = strip_prose(text)
+LIGHT_AREAS = re.compile(r"^(?:\.\./|\./)*(coordinator|docs|tools|zapps|scripts)(/|$)")
+
+
+def scan(tree, text, here, extra_bases=(), py=False, unresolved=None):
+    """Repo files a script/job text names (comments stripped), and python modules it imports from beside itself.
+    A name of a light area (coordinator, docs, tools, zapps, scripts outside scripts/libzync, or under $C) that
+    resolves to no file is appended to `unresolved`: the selftest's tripwire for a dynamic form this scan misses."""
+    text = strip_prose(text, py)
     out = set()
     # `cd "$C"` / `cd ../x` / `cd prover`: bare names after it resolve there too (coord_test.sh: cd "$C"; python3 server.py)
     for var, rest in re.findall(r'\bcd\s+"?(?:\$\{?([A-Za-z_]\w*)\}?/?)?([A-Za-z0-9_./-]*)', text):
@@ -240,7 +253,14 @@ def scan(tree, text, here, extra_bases=()):
             var = "Z"
         if "/" not in rest and "." not in rest and var is None:
             continue                                   # a bare word, not a path
-        out |= resolve(tree, var, rest, here, extra_bases)
+        got = resolve(tree, var, rest, here, extra_bases)
+        out |= got
+        if not got and unresolved is not None and norm(rest.lstrip("./").rstrip("/")) != "coordinator":
+            # (the coordinator DIRECTORY itself, `$Z/coordinator` / `C=…/coordinator`, is covered by COORD_RUNTIME and
+            # coordinator_module(): what of it can run is named there)
+            if (var == "C" or (var in (None, "Z", "REPO", "ROOT", "R") and LIGHT_AREAS.match(rest))) \
+                    and "scripts/libzync" not in rest:
+                unresolved.append((here, m.group(0)))
     for m in re.finditer(r"^\s*(?:from\s+([A-Za-z_]\w*)\s+import|import\s+([A-Za-z_]\w*))", text, re.M):
         p = norm(os.path.join(here, (m.group(1) or m.group(2)) + ".py"))
         if p and p in tree.files:
@@ -263,7 +283,7 @@ def job_blocks(text, names):
     return {k: "\n".join(v) for k, v in blocks.items()}
 
 
-def references(tree):
+def references(tree, unresolved=None):
     """Every repo file the heavy jobs execute or read, transitively, seeded from their blocks in adversarial.yml."""
     wf = tree.read(WORKFLOW)
     if wf is None:
@@ -275,7 +295,7 @@ def references(tree):
     seen = set()
     for b in blocks.values():
         cds = {norm(x) for x in re.findall(r"\bcd\s+([A-Za-z0-9_./-]+)", b)} - {None}
-        seen |= scan(tree, b, "", cds)
+        seen |= scan(tree, b, "", cds, unresolved=unresolved)
     todo = list(seen)
     while todo:
         f = todo.pop()
@@ -284,7 +304,9 @@ def references(tree):
         text = tree.read(f)
         if text is None or len(text) > 2_000_000:
             continue
-        for p in scan(tree, text, os.path.dirname(f)):
+        py = f.endswith(".py") or "python" in text.split("\n", 1)[0]     # coordinator/hazync is python, no .py
+        for p in scan(tree, text, os.path.dirname(f), py=py,
+                      unresolved=unresolved):
             if p not in seen:
                 seen.add(p)
                 todo.append(p)
@@ -294,9 +316,12 @@ def references(tree):
 class Classifier:
     def __init__(self, tree, control=False):
         self.control = control
-        self.crates = {c for c in path_dep_closure(tree) if not c.startswith("prover")}
-        self.nested = nested_packages(tree, self.crates)
-        self.includes = include_targets(tree, self.crates)
+        self.closure = path_dep_closure(tree)       # prover's own crates included: their include targets count too
+        self.crates = {c for c in self.closure if c != "prover" and not c.startswith("prover/")}
+        self.nested = nested_packages(tree, self.closure)
+        self.includes = include_targets(tree, self.closure)
+        self.base_files = set(tree.files)
+        self.coord_dirs = {f.split("/")[1] for f in tree.files if f.startswith("coordinator/") and f.count("/") >= 2}
         self.refs = references(tree)
         self.coord = set(COORD_RUNTIME) | coordinator_imports(tree)
 
@@ -311,11 +336,33 @@ class Classifier:
         for c in self.crates:
             if p.startswith(c + "/") and not any(p.startswith(n + "/") for n in self.nested):
                 return "image"
-        if p.startswith(SOUNDNESS_PREFIXES) or p in self.coord or p in self.refs:
+        if p.startswith(SOUNDNESS_PREFIXES) or p in self.coord or p in self.refs or self.coordinator_module(p):
             return "soundness"
         if any(fnmatchcase(p, g) for g in LIGHT_PATTERNS):
             return "light"
         return "image"           # unnamed: run everything
+
+
+def _coordinator_module(self, p):
+    """coord_test.sh and board_rehearsal.sh run `cd $C; python3 server.py`: coordinator/ is sys.path[0], ahead of the
+    standard library. So a coordinator/*.py the base does not have (a planted bisect.py shadows the stdlib's), a new
+    directory there (a package), or any top-level module named like a stdlib module is a soundness change. A new
+    top-level test_*.py is not: nothing imports a test_ name implicitly, and the stdlib has none."""
+    if not p.startswith("coordinator/"):
+        return False
+    rel = p[len("coordinator/"):]
+    top = rel.split("/")[0]
+    if "/" not in rel:
+        if not rel.endswith(".py"):
+            return False
+        mod = rel[:-3]
+        if mod in getattr(sys, "stdlib_module_names", ()):
+            return True
+        return p not in self.base_files and not mod.startswith("test_")
+    return top not in self.coord_dirs                      # a new directory (a package) under coordinator/
+
+
+Classifier.coordinator_module = _coordinator_module
 
 
 def decide(classes):
@@ -354,6 +401,18 @@ SELFTEST = [  # (path, expected class) against this checkout
     ("coordinator/deploy/libzync/SWITCH.md", "light"),                 # a runbook: nothing runs it
     ("coordinator/deploy/libzync/hazync-lz-check-spine.timer", "light"),
     ("coordinator/test_claim_nonce.py", "light"),
+    ("coordinator/test_brand_new_check.py", "light"),           # a NEW test_*.py: nothing imports it implicitly
+    ("coordinator/tip_board.py", "light"),                       # an existing module server.py does not import
+    ("coordinator/bisect.py", "soundness"),                      # NEW, shadows the stdlib from sys.path[0] (round-2 HIGH-1)
+    ("coordinator/json.py", "soundness"),
+    ("coordinator/brand_new_module.py", "soundness"),            # NEW module: server.py could import it
+    ("coordinator/newpkg/__init__.py", "soundness"),             # NEW directory: a package
+    ("coordinator/deploy/brand-new-unit.service", "light"),      # a new file in an existing directory
+    (".gitattributes", "image"),                                 # round-2 HIGH-2: rewrites what checkout writes
+    ("prover/.gitattributes", "image"),
+    ("docs/.gitattributes", "image"),
+    ("tools/x/.gitmodules", "image"),
+    (".lfsconfig", "image"),
     ("coordinator/deploy/headers-api/hazync-headers-api", "light"),
     (".github/workflows/adversarial.yml", "image"),
     (".github/scripts/ci_changes.py", "image"),
@@ -393,6 +452,26 @@ def selftest(tree, control):
     # package's file. The rules come from the BASE tree (no such file there), and the Cargo.toml itself is image.
     if not control and (c.classify("zapps/headers/src/lib.rs"), c.classify("zapps/headers/src/Cargo.toml")) != ("image", "image"):
         bad.append("zapps/headers/src: lib.rs or a new Cargo.toml there is not an image change")
+    if not control:
+        # round-2 MEDIUM-1: include targets of the prover's OWN crates count (prover/host includes reproduce/METHOD_ID)
+        if "reproduce/METHOD_ID" not in c.includes:
+            bad.append("include targets of the prover's own crates are not scanned")
+        # round-2 MEDIUM-2a: every job that needs `changes` or libzync-hosts is one references() is seeded from
+        wf = tree.read(WORKFLOW) or ""
+        allj = job_blocks(wf, set(re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", wf, re.M)))
+        for j, b in allj.items():
+            m = re.search(r"^    needs:\s*(\[[^\]]*\]|\S+)", b, re.M)
+            needs = set(re.findall(r"[A-Za-z0-9_-]+", m.group(1))) if m else set()
+            if needs & {"changes", "libzync-hosts"} and j not in HEAVY_JOBS:
+                print(f"UNLISTED HEAVY JOB {j}: needs {sorted(needs)} but is not in HEAVY_JOBS")
+                bad.append(j)
+        # round-2 MEDIUM-2b: tripwire. A heavy file naming a light area (coordinator, docs, tools, zapps, scripts outside
+        # scripts/libzync) in code without the scan resolving it to a file: a dynamic form the scan misses.
+        unresolved = []
+        references(tree, unresolved)
+        for here, tok in sorted(set(unresolved)):
+            print(f"UNRESOLVED LIGHT-AREA NAME in {here or '(workflow)'}: {tok}")
+        bad += unresolved
     if bad:
         print(f"CI_CHANGES_SELFTEST_FAILED {len(bad)}")
         return 1

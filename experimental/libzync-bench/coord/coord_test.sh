@@ -15,7 +15,7 @@ echo "prep EXIT=$? bundles $(ls $O/bridge | grep -c '^leaf_')"
 GT=$($H libzync-genesis-tip); echo "genesis tip ${GT:0:16}"
 PORT=18931
 ( cd $C && COORD_ALLOW_MOCK=1 COORD_PORT=$PORT COORD_BIND=127.0.0.1 COORD_DB=$O/c.db COORD_SPINE=$O/spine COORD_PROOFS=$O/proofs \
-  COORD_WEB=$C HAZYNC_HOST=$H HAZYNC_LIBZYNC=1 HAZYNC_BRIDGE_OUT=$O/bridge GENESIS_TIP=$GT \
+  COORD_WEB=$C WITNESS_DIR=$O/witnesses HAZYNC_HOST=$H HAZYNC_LIBZYNC=1 HAZYNC_BRIDGE_OUT=$O/bridge GENESIS_TIP=$GT \
   exec python3 server.py > $O/server.log 2>&1 ) &
 SP=$!
 for i in $(seq 1 60); do curl -s http://127.0.0.1:$PORT/api/meta >/dev/null && break; sleep 1; done
