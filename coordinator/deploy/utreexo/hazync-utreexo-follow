@@ -42,6 +42,7 @@ MARGIN=${MARGIN:-6}
 MAX_STEP=${MAX_STEP:-2016}
 KEEP=${KEEP:-12}
 ALLOW_DEMO=${ALLOW_DEMO:-0}
+# DRY_RUN=1: stop after choosing H (and after any reorg fall-back), proving nothing
 NETWORK=${NETWORK:-mainnet}
 PUBLISH=${PUBLISH:-}
 PUBLISH_KEY=${PUBLISH_KEY:-/root/.ssh/hazync_utreexo_publish}
@@ -75,7 +76,7 @@ if [ "${1:-}" = "--set-base" ]; then
   R=${2:?receipt}; H=${3:?height}; X=${4:?hash}
   [ "$(cli getblockhash "$H")" = "$X" ] || die "the node's hash at $H is not $X"
   # its core tip T first (the receipt says it; only a verified one is used), then the verdict with the node's block T
-  out=$("$VERIFY" verify "$R" --network "$NETWORK" --expect "$H:$X" --json --allow-demo 2>/dev/null) || die "the base does not verify as block $H $X"
+  out=$("$VERIFY" verify "$R" --network "$NETWORK" --expect "$H:$X" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || die "the base does not verify as block $H $X"
   T=$(echo "$out" | python3 -c 'import json,sys; j=json.load(sys.stdin); assert "mode" not in j, "a tip receipt"; print(j["core_height"])') \
     || die "not a base receipt"
   B=$H
@@ -118,6 +119,8 @@ TX=$(echo "$CI" | sed -n 's/^CORE height=[0-9]* tip=\([0-9a-f]*\) .*/\1/p')
 [ "$(cli getblockhash "$T" 2>/dev/null)" = "$TX" ] || die "the core proof's tip $T $TX is not the node's block $T (a reorg below the core tip: wait for the next core proof)"
 H=$(( NT - MARGIN < T ? NT - MARGIN : T ))
 [ "$H" -gt $(( P + MAX_STEP )) ] && H=$(( P + MAX_STEP ))
+log "target H=$H (proven $P, node tip $NT - margin $MARGIN, core tip $T, at most $MAX_STEP blocks per step)"
+[ "${DRY_RUN:-0}" = 1 ] && exit 0
 if [ "$H" -le "$P" ]; then
   log "nothing to do: proven $P, node tip $NT (margin $MARGIN), core tip $T"
   # a fall-back above may have moved latest: publish it
@@ -159,7 +162,7 @@ va=(verify "$PUB/$NAME" --network "$NETWORK" --expect "$H:$HX" --json --allow-de
 [ "$T" -gt "$H" ] && va+=(--expect-tip "$T:$TX")
 [ -n "$TIP_IMAGE" ] && [ "$H" -gt "$B" ] && va+=(--image "$TIP_IMAGE")
 [ -n "$BASE_ID" ] && [ "$H" -gt "$B" ] && va+=(--base-image "$BASE_ID")
-VJ=$("$VERIFY" "${va[@]}" 2>/dev/null)
+VJ=$("$VERIFY" "${va[@]}" 2>/dev/null) || [ $? = 2 ] || die "the published receipt does not verify"
 python3 - "$PUB" "$NAME" "$SECS" "$NETWORK" "$V" <<PY
 import json, sys, time, os, hashlib
 p, name, secs, net, verdict = sys.argv[1:]
