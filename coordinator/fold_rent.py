@@ -45,25 +45,30 @@ POLL_S = 20
 BUDGET_MARGIN = 0.85
 
 
-def release_fold(api, name, pod_id):
-    """Terminate `pod_id` and every pod on the account named `name`. Loud when that cannot be confirmed. Returns the
-    ids still there (None: the account could not be listed)."""
-    ids = [pod_id] if pod_id else []
-    try:
-        ids += [x["id"] for x in api.pods() if x["name"] == name and x["id"] not in ids
-                and (x.get("status") or "") != "TERMINATED"]
-    except Exception as e:                                          # noqa: BLE001
-        print(f"  ⛔ could not list the account ({e}): a pod named {name} MAY STILL BE BILLING — check by hand")
-        if not ids:
-            return None
-    if not ids:
-        return []
-    print("terminating…", ids)
-    try:
-        _, left = sb.terminate_many(api, ids)
-    except Exception as e:                                          # noqa: BLE001
-        left = ids
-        print(f"  ⛔⛔ TERMINATE FAILED: {e}")
+def release_fold(api, name, pod_id, sleep=time.sleep):
+    """Terminate `pod_id` and every pod on the account named `name` (unique to this run). Lists twice, 5 s apart, so a
+    lost create that appears late is caught too. Loud when that cannot be confirmed. Returns the ids still there
+    (None: the account could not be listed)."""
+    ids, done, left = [pod_id] if pod_id else [], [], []
+    for r in range(2):
+        if r:
+            sleep(5)
+        try:
+            ids += [x["id"] for x in api.pods() if x["name"] == name and x["id"] not in ids
+                    and (x.get("status") or "") != "TERMINATED"]
+        except Exception as e:                                      # noqa: BLE001
+            print(f"  ⛔ could not list the account ({e}): a pod named {name} MAY STILL BE BILLING — check by hand")
+            if not ids:
+                return None
+        todo = [i for i in ids if i not in done]
+        if todo:
+            print("terminating…", todo)
+            try:
+                d_, left = sb.terminate_many(api, todo)
+                done += d_
+            except Exception as e:                                  # noqa: BLE001
+                left = todo
+                print(f"  ⛔⛔ TERMINATE FAILED: {e}")
     if left:
         # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
         print(f"  ⛔⛔ NOT CONFIRMED GONE: {left} — TERMINATE IT BY HAND")

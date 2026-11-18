@@ -60,7 +60,8 @@ if CONTROL:
     sb.RunPod.ssh_of = lambda self, pod_id: None      # only the listing is read for SSH
     sb.REQUEST_REFUSALS = ()                          # M1: a 401/402/422 hidden behind another type's 400
     sb.CAPACITY_LATCH_S = 0                           # H1(r2): a drought latches on the first miss
-    sb.Bot._sweep_strays = lambda self: None          # r4: a lost create's pod is never swept during the run
+    sb.Bot._sweep_strays = lambda self, c=None: None  # r4: a lost create's pod is never swept during the run
+    sb.Bot._landed = lambda self, p: False            # r5 H1: a working pod does not end the drought
     sb.Bot._settle = lambda self, c, p, ok, note: setattr(p, "terminated", 1.0)   # M3(r2): unconfirmed = gone
     sb.Bot._sweep_leftovers = lambda self, c: None    # M2(r2): an earlier run's pods are never swept
 
@@ -814,7 +815,7 @@ with tempfile.TemporaryDirectory() as d:
         bot._launch(c, bot.clock())                  # type 1's answer is lost (its pod exists); type 2 lands
         lost = [i for i in f.pods if i not in {p_.id for p_ in bot.pods}]
         for _ in range(4):                           # four looks: the lost pod appears on the third listing
-            bot._sweep_strays()
+            bot._sweep_strays(None)
     finally:
         sb.pending_work = real
         c.close()
@@ -989,7 +990,7 @@ with tempfile.TemporaryDirectory() as d:
     ra = RentAPI(ok=3, then="402")
     created, unreleased = [], []
     try:
-        tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased)
+        tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased, "hz-smoke-t-")
         raised = None
     except sb.RunPodError as e:
         raised = e
@@ -1003,12 +1004,139 @@ with tempfile.TemporaryDirectory() as d:
     rp_ = os.path.join(d, "rented.json")
     ra = RentAPI(ok=3, then="miss")
     created, unreleased = [], []
-    got = tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased)
+    got = tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased, "hz-smoke-t-")
     check(len(got) == 3, f"C1(r2): 3 rented then a 400 (a miss) returns the 3 -- no exception, nothing lost ({len(got)})")
     ra.listing_fails = True
     left = tip_smoke.release_recorded(ra, rp_, [], [], sleep=lambda x: None)
     check(left is None and os.path.exists(rp_),
           "C1(r2): when the account cannot be listed the record is KEPT (never 'account check: clean')")
+
+# ── r5 H1. a partial grant is not a drought: one working pod, 10 h of misses for the rest, never latches ────
+print("== r5: partial grant ==")
+
+
+class PartialAPI:
+    last_misses = []
+
+    def __init__(self):
+        self.n = 0
+
+    def deploy(self, name, pub):
+        self.n += 1
+        if self.n == 1:
+            return {"id": "p1", "name": name, "gpu_type": A40, "cost_per_hr": 0.59}
+        return None
+
+    def pods(self):
+        return [{"id": "p1", "name": "x", "status": "RUNNING", "cost_per_hr": 0.59}]
+
+    def terminate(self, pid):
+        pass
+
+
+clk = Clock()
+clk.t = 1_000_000.0
+with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
+    bot = sb.Bot(os.path.join(d, "bot.db"), PartialAPI(), RL(), max_pods=4, max_usd=500, max_usd_per_hour=10,
+                 capacity_backoff_s=0, log=lambda m: None, clock=clk)
+    bot.state_home = home
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    real = sb.pending_work
+    sb.pending_work = lambda *a, **k: [(1, h) for h in range(200)]
+    try:
+        for i in range(40):                       # 10 h, a look every 15 min
+            bot._launch(c, clk())
+            if i == 0:
+                bot.pods[0].state = "working"
+            if bot.stop_reason:
+                break
+            clk.t += 900
+    finally:
+        sb.pending_work = real
+        c.close()
+check(bot.stop_reason is None, f"r5 H1: one pod working, the other three never granted for 10 h: the bot keeps "
+      f"working, no drought stop ({bot.stop_reason})")
+
+# ── r5 M3. a pod at cost 0 whose listing shows it over the ceiling: terminated at once, the drought not cleared ──
+print("== r5: a price learnt from the listing ==")
+
+
+class ZeroThenDear:
+    last_misses = []
+
+    def __init__(self):
+        self.gone = set()
+
+    def deploy(self, name, pub):
+        self.name = name
+        return {"id": "z1", "name": name, "gpu_type": A40, "cost_per_hr": 0}
+
+    def pods(self):
+        return [{"id": "z1", "name": self.name, "status": "RUNNING", "cost_per_hr": 3.0}] if "z1" not in self.gone else []
+
+    def terminate(self, pid):
+        self.gone.add(pid)
+
+    def pod(self, pid):
+        return None
+
+
+with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
+    zd = ZeroThenDear()
+    bot = sb.Bot(os.path.join(d, "bot.db"), zd, RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
+                 capacity_backoff_s=0, log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0)
+    bot.state_home = home
+    t_ = bot.clock()
+    json.dump({"first": t_ - 3600, "last": t_ - 60}, open(os.path.join(home, sb.CAPACITY_STATE), "w"))
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    real = sb.pending_work
+    sb.pending_work = lambda *a, **k: [1]
+    try:
+        bot._launch(c, t_)
+        streak_after_deploy = os.path.exists(os.path.join(home, sb.CAPACITY_STATE))
+        bot._sweep_strays(c)
+    finally:
+        sb.pending_work = real
+        c.close()
+    st = json.load(open(os.path.join(home, sb.CAPACITY_STATE))) if os.path.exists(os.path.join(home, sb.CAPACITY_STATE)) else {}
+check(streak_after_deploy, "r5 M3: a pod that lands at cost 0 (price unknown) does not clear the drought streak")
+check("z1" in zd.gone and not bot.pods[0].live,
+      "r5 M3: once the listing shows it at $3.00/h over the $1.00 ceiling it is terminated -- without waiting for SSH")
+check(st.get("first") == t_ - 3600, f"r5 M3: and the streak goes on from where it was ({st})")
+
+# ── r5 H2. tip_smoke refuses to start over a rundir whose last run still has pods ─────────────────────────────
+print("== r5: tip_smoke rerun guard ==")
+if CONTROL:
+    tip_smoke.refuse_rerun = lambda api, rundir, rented_path: None
+with tempfile.TemporaryDirectory() as d:
+    f = FakeV2()
+    api = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+    old = tip_smoke.run_prefix(d)
+    f.pods["leak1"] = {"name": f"{old}3", "gpu": A40, "cost": 1}
+    try:
+        tip_smoke.refuse_rerun(api, d, os.path.join(d, "rented.json"))
+        r1 = None
+    except SystemExit as e:
+        r1 = str(e)
+    del f.pods["leak1"]
+    f.pods["leak2"] = {"name": "hz-smoke-adopted-1", "gpu": A40, "cost": 1}
+    json.dump([{"id": "leak2", "name": "hz-smoke-adopted-1"}], open(os.path.join(d, "rented.json"), "w"))
+    try:
+        tip_smoke.refuse_rerun(api, d, os.path.join(d, "rented.json"))
+        r2 = None
+    except SystemExit as e:
+        r2 = str(e)
+    del f.pods["leak2"]
+    try:
+        tip_smoke.refuse_rerun(api, d, os.path.join(d, "rented.json"))
+        r3 = None
+    except SystemExit as e:
+        r3 = str(e)
+check(r1 and "refusing" in r1, f"r5 H2: a pod with the last run's prefix still listed refuses a new run ({r1})")
+check(r2 and "refusing" in r2, f"r5 H2: so does a still-listed rented.json id ({r2})")
+check(r3 is None, f"r5 H2: and nothing listed lets the run start ({r3})")
 
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
@@ -1077,6 +1205,10 @@ EXPECTED_CONTROL = {
     "r4: --keep keeps the fleet, the teardown still releases the LATE lost create under the run's prefix, and never another run's pod",
     "r4: fold_rent's teardown releases a lost create by its unique name, with no pod id",
     "r4: the bot's per-look prefix sweep releases the lost create's pod once it appears, LATE, and keeps the one it tracks",
+    "r5 H1: one pod working, the other three never granted for 10 h: the bot keeps working, no drought stop",
+    "r5 H2: a pod with the last run's prefix still listed refuses a new run",
+    "r5 H2: so does a still-listed rented.json id",
+    "r5 M3: once the listing shows it at $3.00/h over the $1.00 ceiling it is terminated -- without waiting for SSH",
     "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",
     "two 429s are waited out for Retry-After and the create then lands",
     "with no runtime ports, RunPod's own ssh.direct is used",

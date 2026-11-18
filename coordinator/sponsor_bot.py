@@ -220,8 +220,10 @@ def transient_clear(home, state=TRANSIENT_STATE):
 # the unit latches and OnFailure= pages, the one alert path this unprivileged bot has. Six hours: an ordinary
 # afternoon of "Low" stock never stops it; a broken request costs a paid sponsorship one working day, not a week.
 # Judgement, not measurement: no drought has been timed end to end yet. The streak lives in
-# SPONSOR_BOT_HOME/capacity.json, so it spans timer runs and one long run alike; a pod that lands, or
-# CAPACITY_STALE_S without an attempt (nothing was waiting), ends it, and so does the latch itself.
+# SPONSOR_BOT_HOME/capacity.json, so it spans timer runs and one long run alike. A pod that LANDS (live, at a known
+# price within the ceiling), any landed pod still working (a partial grant is not a drought), CAPACITY_STALE_S
+# without an attempt (nothing was waiting), or the latch itself ends it. Only genuine refusals (401/402/403/422,
+# Cloudflare) count toward RUNPOD_REFUSALS_MAX; no answer and 5xx count toward the drought only.
 CAPACITY_LATCH_S = 6 * 3600
 CAPACITY_STALE_S = 2 * 3600
 CAPACITY_STATE = "capacity.json"
@@ -1525,7 +1527,22 @@ class Bot:
         return self.spend(now) + self.hourly() * self.budget_lead_s / 3600.0 >= self.max_usd
 
     # --- the loop ---
+    def release_leftovers(self):
+        """⛔ FIRST, before any other check: release what an earlier run left billing (_sweep_leftovers). It needs only
+        RunPod and the bot's own database, so a coordinator or GitHub that is down cannot keep it from running."""
+        c = connect(self.db_path)
+        ensure_tables(c)
+        try:
+            self._sweep_leftovers(c)
+        except RunPodError as e:
+            raise TransientError(f"sponsor_bot: could not check for an earlier run's pods before renting: {e}")
+        finally:
+            c.close()
+        self._leftovers_done = True
+
     def run(self):
+        if not getattr(self, "_leftovers_done", False):
+            self.release_leftovers()
         if not self.identity_home:
             raise BotRefused("no identity home (SPONSOR_BOT_HOME): the bot keeps one key per sponsorship there")
         if self.coord is None:
@@ -1541,14 +1558,6 @@ class Bot:
             raise BotRefused(f"the coordinator's sponsor bot API is not usable: {e}")
         c = connect(self.db_path)
         ensure_tables(c)
-        try:
-            self._sweep_leftovers(c)
-        except RunPodError as e:
-            c.close()
-            raise TransientError(f"sponsor_bot: could not check for an earlier run's pods before renting: {e}")
-        except BotRefused:
-            c.close()
-            raise
         try:
             fixed = reconcile_work(c, self.coord)
             if fixed:
@@ -1599,7 +1608,7 @@ class Bot:
                         for sid in reconcile(self.coord):
                             self.log(f"sponsorship #{sid} is proven")
                     self._retry_unconfirmed(c)
-                    self._sweep_strays()
+                    self._sweep_strays(c)
                     self._observe(c, now)
                     coord_ok = True
                 except CoordError as e:
@@ -1683,40 +1692,72 @@ class Bot:
             raise BotRefused(f"pod(s) from an earlier run will not terminate: {', '.join(left)} -- "
                              f"terminate them by hand in RunPod; nothing was rented")
 
+    def _landed(self, p):
+        """A pod of this run that is live, not stuck in an unconfirmed termination, at a KNOWN price within the
+        ceiling. A pod at cost 0 (price not known yet) or over the ceiling has not landed."""
+        return p.live and p.state != "unconfirmed" and 0 < p.cost_per_hr <= self.ceiling
+
     def _drought(self, why):
-        """A deploy attempt landed nothing (`why`). See CAPACITY_* for the rule."""
+        """A deploy attempt landed nothing (`why`). See CAPACITY_* for the rule. ⛔ While any pod of this run has
+        LANDED there is no drought -- a partial grant (one card of four) is the bot working, and stopping "runpod"
+        then would kill a pod mid-chunk -- so the streak is cleared instead."""
+        if any(self._landed(p) for p in self.pods):
+            capacity_clear(self.state_home, self._capacity_mem)
+            return
         if capacity_note(self.state_home, self.clock(), None if self.state_home else self._capacity_mem):
             capacity_clear(self.state_home, self._capacity_mem)
             self.stop_reason = "runpod"
             self.log(f"⛔ no pod has landed for {CAPACITY_LATCH_S // 3600} h of deploy attempts (last: {why}): stopping. "
                      f"A drought this long is rare; a request RunPod cannot place looks exactly like this -- check "
-                     f"the deploy request before clearing the latch.")
+                     f"the deploy request. Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before clearing the latch.")
 
     def _refused(self, why, what="RunPod refused the deploy request"):
         """One refusal toward RUNPOD_REFUSALS_MAX (reset when a deploy is answered with a pod)."""
         self._refusals += 1
         if self._refusals >= RUNPOD_REFUSALS_MAX:
             self.stop_reason = "runpod"
-            self.log(f"{what} {self._refusals} times in a row ({why}): stopping")
+            self.log(f"{what} {self._refusals} times in a row ({why}): stopping. Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before clearing the latch.")
         else:
             self.log(f"{what} ({why}); trying again later")
 
-    def _sweep_strays(self):
+    def _sweep_strays(self, c):
         """⛔ THE ONE RULE FOR LOST CREATES. Every pod this run creates is named self.prefix + n, so any pod on the
         account with this run's prefix that the bot does not track is one whose create answer was lost -- however
-        late it appeared. One listing per look; each such pod is terminated at once (confirmed on later looks if not
-        now). A listing that fails is simply tried again next look: terminate_all does the same sweep at the end,
-        and the next run's start sweeps every older prefix (it latches if RunPod stays unlistable)."""
-        tracked = {p.id for p in self.pods}
+        late it appeared. One listing per look; each such pod is terminated at once. One that will not go is TRACKED
+        from then on (state unconfirmed: it counts toward spend and --max-pods, and every look retries it). A listing
+        that fails is simply tried again next look; terminate_all sweeps the prefix at the end, and the next run's
+        start sweeps every older prefix (it latches if RunPod stays unlistable).
+        The same listing gives each tracked pod whose price was not known at deploy its price (M3): one over the
+        ceiling is terminated at once, without waiting for SSH."""
+        tracked = {p.id: p for p in self.pods}
         try:
-            strays = [x["id"] for x in self.api.pods() if x["name"].startswith(self.prefix) and x["id"] not in tracked]
+            rows = [x for x in self.api.pods() if x["name"].startswith(self.prefix)]
         except RunPodError as e:
             self.log(f"could not list pods for this run's strays (next look tries again): {e}")
             return
-        if strays:
-            self.log(f"⛔ {len(strays)} pod(s) carry this run's prefix but are not tracked (a create whose answer was "
-                     f"lost): terminating {', '.join(strays)}")
-            terminate_many(self.api, strays, self.sleep, tries=1, wait_s=0, budget_s=0)
+        for x in rows:
+            p = tracked.get(x["id"])
+            if p is not None and p.live and p.state != "unconfirmed" and p.cost_per_hr <= 0 and x.get("cost_per_hr"):
+                self._price_ok(c, p, x)
+        strays = [x for x in rows if x["id"] not in tracked]
+        if not strays:
+            return
+        self.log(f"⛔ {len(strays)} pod(s) carry this run's prefix but are not tracked (a create whose answer was "
+                 f"lost): terminating {', '.join(x['id'] for x in strays)}")
+        _, left = terminate_many(self.api, [x["id"] for x in strays], self.sleep, tries=1, wait_s=0, budget_s=0)
+        for x in strays:
+            if x["id"] in left:
+                p = Pod({"id": x["id"], "name": x["name"], "gpu_type": x.get("gpu_type") or "",
+                         "cost_per_hr": x.get("cost_per_hr") or 0}, self.clock())
+                p.state = "unconfirmed"
+                self.pods.append(p)
+                if x["id"] not in self.unconfirmed:
+                    self.unconfirmed.append(x["id"])
+                if c is not None:
+                    c.execute("INSERT OR REPLACE INTO sponsor_pods(pod_id, name, gpu_type, cost_per_hr, created_at, note)"
+                              " VALUES(?,?,?,?,?,?)", (p.id, p.name, p.gpu_type, p.cost_per_hr, p.created,
+                                                       "a lost create, found by the prefix sweep; TERMINATION NOT CONFIRMED"))
+                    c.commit()
 
     def _regen(self, c, now):
         """Advance the regeneration queue by AT MOST ONE replay. Never raises.
@@ -1847,6 +1888,8 @@ class Bot:
         if c is not None:
             c.execute("UPDATE sponsor_pods SET cost_per_hr=? WHERE pod_id=?", (p.cost_per_hr, p.id))
             c.commit()
+        if p.cost_per_hr <= self.ceiling:
+            capacity_clear(self.state_home, self._capacity_mem)     # the pod has landed at an acceptable price
         if p.cost_per_hr > self.ceiling:
             self._terminate(c, p, f"its price, ${p.cost_per_hr:.2f}/h, is over the ${self.ceiling:.2f}/h ceiling")
             # The same as a price over the ceiling at deploy: back off, and it counts toward the drought rule.
@@ -1966,7 +2009,11 @@ class Bot:
                     self.log(f"RunPod's request quota is exhausted ({e}); not a refusal, trying again later")
                     self._drought(e)
                     break
-                self._refused(e)
+                if e.status is None or e.status >= 500:
+                    # No answer is not a refusal (a DNS blip, a RunPod outage): it counts toward the drought only.
+                    self.log(f"RunPod did not answer the deploy request ({e}); trying again later")
+                else:
+                    self._refused(e)
                 self._drought(e)
                 break
             if not info:
@@ -1988,7 +2035,8 @@ class Bot:
                 self._capacity_at = now + self.capacity_backoff_s
                 self._drought(f"{p.name} came back at ${p.cost_per_hr:.2f}/h, over the ${self.ceiling:.2f}/h ceiling")
                 break
-            capacity_clear(self.state_home, self._capacity_mem)     # a pod landed: the drought is over
+            if self._landed(p):
+                capacity_clear(self.state_home, self._capacity_mem)     # a pod landed at a known price
             # ⚠ A price of 0 is UNKNOWN, not free (v2 can answer a PROVISIONING pod with cost 0). The spend
             # math already counts it as the ceiling (Pod.rate); the ceiling check runs again once it is
             # known (_observe, when the pod has SSH), and a pod over the ceiling is terminated then.
@@ -2054,21 +2102,26 @@ class Bot:
 
     def terminate_all(self, c, reason):
         """Every live pod and every stray of this run, released together inside TERMINATE_BUDGET_S of wall clock:
-        all the DELETEs go out first, then one confirmation loop (not one per pod). Fits the unit's TimeoutStopSec,
-        so systemd never kills the cleanup half way; what is still unconfirmed at the end keeps its row open for the
-        next run's start to sweep."""
+        the DELETEs go out FIRST (before the coordinator is asked which blocks landed -- a block that lands after
+        the DELETE has still landed), then one confirmation loop. The run's prefix is listed again a few seconds later,
+        so a lost create that appears late is caught too. Fits the unit's TimeoutStopSec; what is still unconfirmed
+        keeps its row open for the next run's start to sweep."""
         live = self._live()
+        done, left = [], []
+        ids = [p.id for p in live]
+        for r in range(2):
+            try:
+                ids += [x["id"] for x in self.api.pods() if x["name"].startswith(self.prefix) and x["id"] not in ids]
+            except Exception as e:
+                self.log(f"could not list pods to check for strays: {e}")
+            todo = [i for i in dict.fromkeys(ids) if i not in done]
+            if todo:
+                d_, left = terminate_many(self.api, todo, self.sleep, wait_s=self.confirm_wait_s)
+                done += d_
+            if r == 0:
+                self.sleep(5)
         for p in live:
             self._terminate_books(c, p)
-        # A deploy whose answer was lost still made a pod: sweep by this run's name prefix too.
-        try:
-            strays = [x["id"] for x in self.api.pods() if x["name"].startswith(self.prefix)]
-        except Exception as e:
-            self.log(f"could not list pods to check for strays: {e}")
-            strays = []
-        ids = list(dict.fromkeys([p.id for p in live] + strays))
-        done, left = terminate_many(self.api, ids, self.sleep, wait_s=self.confirm_wait_s) if ids else ([], [])
-        for p in live:
             self._settle(c, p, p.id in done, reason)
         for i in left:
             if i not in self.unconfirmed:
@@ -2076,7 +2129,7 @@ class Bot:
         if self.unconfirmed:
             self.log("TERMINATION NOT CONFIRMED for pod(s) " + ", ".join(self.unconfirmed)
                      + ": terminate them by hand in RunPod, they may still be charging (the next run's start will "
-                       "try again before it rents anything)")
+                       "try again before it rents anything). Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before clearing the latch.")
 
     @staticmethod
     def _ignore_signals():
@@ -2303,8 +2356,9 @@ def main(argv=None):
         print("sponsor_bot: another sponsor bot run holds the lock; skipped (nothing rented)", flush=True)
         return TRANSIENT_EXIT
     try:
-        bot.runner = SshRunner.from_env().prepare()
         bot.api = RunPod.from_env()
+        bot.release_leftovers()                 # first: needs only RunPod and the bot's own database
+        bot.runner = SshRunner.from_env().prepare()
         bot.identity_home = bot.runner.home
         install_signal_handlers()
         reason = bot.run()

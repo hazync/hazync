@@ -371,9 +371,10 @@ caught: look-alike letters from other scripts (Cyrillic `о`). Also refused: ord
   lists the pod, and sweeps pods with the run's name prefix. ⚠ An unconfirmed pod is printed loudly, exit
   `4`: **terminate it by hand**. `stop-all` terminates every `hz-sponsor-*` pod.
 - ⚠ RunPod's Cloudflare refuses Python's default `Python-urllib` User-Agent (`403`, `error code: 1010`); the
-  bot sends its own. After 3 refused deploys in a row it exits `5`. A 400 (no capacity) and a 429 are never
-  refusals; but 6 h of deploy attempts with nothing landing, whatever the reason (400, 429, 5xx, every pod over
-  the price ceiling), stops it with `5` (latch + page). Every pod a run creates is named with that run's unique
+  bot sends its own. After 3 refused deploys in a row (401/402/403/422, a Cloudflare page) it exits `5`. A 400
+  (no capacity), a 429 and no answer/5xx are not refusals; but 6 h of deploy attempts with nothing landing,
+  whatever the reason (400, 429, 5xx, no answer, every pod over the price ceiling), stops it with `5` (latch +
+  page) -- unless a pod of the run is working at an acceptable price, which ends the streak. Every pod a run creates is named with that run's unique
   prefix, and the bot lists and terminates any pod with its prefix it does not track, every look: a create whose
   answer was lost is released whenever it appears. A pod whose termination is not confirmed stays counted as live,
   and the next run's start terminates it before renting (under a run lock; `TimeoutStopSec=1500` fits the bounded

@@ -16,6 +16,7 @@ names are refused there by name as well.
 
 import argparse
 import json
+import secrets
 import os
 import re
 import sys
@@ -54,10 +55,32 @@ def run_prefix(rundir, now=None):
     while t:
         t, r = divmod(t, 36)
         n = "0123456789abcdefghijklmnopqrstuvwxyz"[r] + n
-    pre = f"{PREFIX}{n}-"
+    pre = f"{PREFIX}{n}{secrets.token_hex(2)}-"     # + random: two runs in the same second never share it
     with open(os.path.join(rundir, "run_prefix.txt"), "w") as fh:
         fh.write(pre + "\n")
     return pre
+
+
+def refuse_rerun(api, rundir, rented_path):
+    """⛔ A NEW RUN IN A RUNDIR WHOSE LAST RUN STILL HAS PODS IS REFUSED. run_prefix() and the rent overwrite
+    run_prefix.txt and rented.json, so starting over a leaked fleet would orphan it: nothing would know its prefix
+    or ids any more. Refused while any listed pod carries the last run's prefix or a still-listed rented.json id
+    (release it with --cleanup, or take it over with --adopt). An account that cannot be listed refuses too."""
+    old = read_run_prefix(rundir)
+    try:
+        ids = {str(p["id"]) for p in json.load(open(rented_path)) if p.get("id")}
+    except (OSError, ValueError, TypeError, AttributeError):
+        ids = set()
+    if not old and not ids:
+        return
+    try:
+        live = [x for x in api.pods() if (x.get("status") or "") != "TERMINATED"
+                and ((old and x["name"].startswith(old)) or str(x["id"]) in ids)]
+    except sponsor_bot.RunPodError as e:
+        raise SystemExit(f"refusing: cannot list RunPod to check {rundir}'s last run for live pods ({e})")
+    if live:
+        raise SystemExit(f"refusing: {rundir}'s last run still has {len(live)} pod(s) on RunPod "
+                         f"({', '.join(x['name'] for x in live[:5])}) -- run --cleanup --rundir {rundir}, or --adopt")
 
 
 def read_run_prefix(rundir):
@@ -129,7 +152,7 @@ class SmokeRunPod(sponsor_bot.RunPod):
         return {"id": p["id"], "name": name, "gpu_type": gt, "price": price, "dc": dc}
 
 
-def rent_uniform(api, gt, upto, pub, rented_path, created, unreleased, prefix=PREFIX):
+def rent_uniform(api, gt, upto, pub, rented_path, created, unreleased, prefix):
     """Rent up to `upto` pods of ONE type, recording each in rented.json the instant it exists. Stops at the
     first capacity miss. ⛔ WHATEVER STOPS IT (a 402, a refusal, a signal), what it rented joins `created` before
     the exception leaves: these pods lived only in this local list, the teardown released `created`, and a stub
@@ -1098,7 +1121,7 @@ def cleanup(api, rented_path):
 
     # ⛔ CHECK THE ACCOUNT, NOT OUR OWN LIST. A pod this command never heard of is exactly the
     # failure it exists to catch, and comparing only against `pods` can never see one.
-    live = {p["id"]: p.get("name") for p in api.pods()}
+    live = {p["id"]: p.get("name") for p in api.pods() if (p.get("status") or "") != "TERMINATED"}
     left = [pods[i].get("name") or i for i in pods if i in live]
     left += [n for i, n in live.items() if prefix and (n or "").startswith(prefix) and i not in pods]
     unknown = [n for i, n in live.items() if i not in pods and not tip_session.is_protected(i)]
@@ -1403,6 +1426,8 @@ def main():
 
     if a.cleanup:
         return cleanup(api, rented_path)
+    if not a.adopt:
+        refuse_rerun(api, a.rundir, rented_path)   # before run_prefix() overwrites the last run's record
     rpre = run_prefix(a.rundir)          # every pod this run creates is named rpre + n (the teardown sweeps it)
 
     # ⛔ SIGTERM MUST REACH THE finally. Python does not run finally blocks on a default SIGTERM --
@@ -1509,10 +1534,6 @@ def main():
             # belongs — which is what a real run reported: "only 2 of 410441528 rented cards".
             rented = a.cards + a.spares
             want = rented
-            for i in range(want):
-                name = f"{rpre}{i+1}"
-                if name in existing:
-                    raise SystemExit(f"refusing: {name} already exists")
 
             # ⭐ ONE TYPE FOR THE WHOLE FLEET IF ANY TYPE CAN SUPPLY IT (hazync#493).
             #
