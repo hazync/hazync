@@ -16,11 +16,15 @@ RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 -o ServerAliveInterval=30"
 log () { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/driver.log"; }
 rp (){ curl -s --max-time 20 -X "$1" -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" ${3:+-d "$3"} "https://api.runpod.io/v2$2"; }
-# rp_create <body> <name>: POST /v2/pods; prints the new pod's id. Exit 0 = a pod; 1 = no capacity (400) or no
-# pod found; 2 = FATAL for every type (401 key, 402 balance, 422 request, a Cloudflare 403); 3 = rate-limited (429,
-# wait and retry). RunPod's refusal goes to stderr. ⛔ With NO answer or a 5xx the pod may exist anyway: it is looked
-# up by NAME before anyone retries or tries another type -- otherwise a lost answer rents two pods.
-rp_create(){ local R ID
+RUNTOK=${RUNTOK:-$(date +%s)}; TRY=0   # every create attempt gets its own pod name (rp_create)
+# rp_create <body> <name>: POST /v2/pods; prints the new pod's id. Exit 0 = a pod; 1 = no capacity (400) or
+# RunPod's own 403 for this type; 2 = FATAL for every type (401 key, 402 balance, 422 request, a Cloudflare page);
+# 3 = rate-limited (429: wait, retry); 4 = THE ANSWER WAS LOST and no pod could be confirmed either way -- a pod
+# named <name> MAY BE BILLING: stop renting under that name and record it for the teardown. (Exit 4 with an id
+# printed: that pod is ours, but a duplicate of the same name would not release.)
+# ⛔ Give every ATTEMPT its own <name> (a run token and a try number): with no answer or a 5xx the pod may exist
+# anyway, and it is looked up by that exact name -- a reused name could find another run's pod.
+rp_create(){ local R ID t N="$2"
   R=$(rp POST /pods "$1")
   ID=$(printf '%s' "$R" | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)
@@ -29,34 +33,56 @@ s=d.get("status") if isinstance(d, dict) else None
 if isinstance(d, dict) and d.get("id") and not isinstance(s, int): print(d["id"])
 elif isinstance(s, int) and s < 500: print("E%d" % s)
 else: print("?")' 2>/dev/null)
+  case "$R" in *"error code: 10"*) echo "create REFUSED (fatal, Cloudflare): ${R:0:120}" >&2; return 2 ;; esac
   case "$ID" in
-    "?"|"") ID=$(rp GET '/pods?limit=1000' | python3 -c 'import json,sys; print(next((p["id"] for p in json.load(sys.stdin)["pods"] if p.get("name")==sys.argv[1]), ""))' "$2" 2>/dev/null)
-            if [ -n "$ID" ]; then echo "create answer lost (${R:0:120}); found $2 by name: $ID" >&2; printf '%s\n' "$ID"; return 0; fi
-            echo "create: no answer and no pod named $2 (${R:0:200})" >&2; return 1 ;;
+    "?"|"")
+      for t in 1 2 3; do
+        ID=$(rp GET '/pods?limit=1000' | python3 -c 'import json,sys
+hits=[p["id"] for p in json.load(sys.stdin)["pods"] if p.get("name")==sys.argv[1] and p.get("status")!="TERMINATED"]
+print(" ".join(hits) if hits else "-")' "$2" 2>/dev/null)
+        [ -n "$ID" ] && break; sleep 5
+      done
+      case "$ID" in
+        "") echo "⛔ create of $2: no answer (${R:0:120}) and RunPod could not be listed -- A POD NAMED $2 MAY BE BILLING" >&2; return 4 ;;
+        -) echo "create of $2: no answer (${R:0:120}); RunPod lists no pod of that name" >&2; return 1 ;;
+        *" "*) echo "⛔ create of $2: no answer, and SEVERAL pods carry that name: $ID -- keeping the first, releasing the rest" >&2
+               set -- $ID; ID=$1; shift
+               rp_term "$@" || { echo "⛔ a duplicate pod of $N could not be released" >&2; printf '%s\n' "$ID"; return 4; } ;;
+        *) echo "create of $2: answer lost (${R:0:120}); found it by name: $ID" >&2 ;;
+      esac
+      printf '%s\n' "$ID"; return 0 ;;
     E400) echo "create: no capacity: ${R:0:200}" >&2; return 1 ;;
     E401|E402|E422) echo "create REFUSED (fatal): ${R:0:300}" >&2; return 2 ;;
-    E403) case "$R" in *'"status"'*) echo "create: no access to this type: ${R:0:200}" >&2; return 1 ;;
-                       *) echo "create REFUSED (fatal): ${R:0:300}" >&2; return 2 ;; esac ;;
+    E403) echo "create: no access to this type: ${R:0:200}" >&2; return 1 ;;
     E429) echo "create: rate-limited: ${R:0:200}" >&2; return 3 ;;
     E*) echo "create refused: ${R:0:300}" >&2; return 1 ;;
   esac
   printf '%s\n' "$ID"; }
-# rp_term <id>: DELETE, then confirm (GET answers 404, or the pod reads TERMINATED); retried with growing waits for
-# ~10 min, a 429 included. ⛔ Loud when it cannot confirm: a pod that is not confirmed gone keeps billing.
-rp_term(){ local t
+# rp_term <id>...: EVERY DELETE first, then confirm each (GET answers 404, or the pod reads TERMINATED); the ones
+# still there are deleted and checked again, with growing waits, for ~10 min (a 429 included). ⛔ Loud for each pod
+# it cannot confirm gone (it may still be billing); exit 1 then, 2 when given no id at all.
+rp_term(){ local t id left="$*" still
+  left=$(echo $left); [ -n "$left" ] || { echo "rp_term: no pod id given" >&2; return 2; }
   for t in $(seq 1 20); do
-    rp DELETE "/pods/$1" > /dev/null
-    if rp GET "/pods/$1" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("status") in (404, "TERMINATED") else 1)' 2>/dev/null; then
-      echo "[$(date +%T)] terminated $1 (confirmed gone)" >&2; return 0; fi
+    for id in $left; do rp DELETE "/pods/$id" > /dev/null; done
+    still=""
+    for id in $left; do
+      if rp GET "/pods/$id" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("status") in (404, "TERMINATED") else 1)' 2>/dev/null; then
+        echo "[$(date +%T)] terminated $id (confirmed gone)" >&2
+      else still="$still $id"; fi
+    done
+    left=$(echo $still); [ -n "$left" ] || return 0
     sleep $([ "$t" -le 3 ] && echo 5 || echo 30)
   done
-  echo "[$(date +%T)] ⛔ $1 NOT CONFIRMED GONE after ~9 min -- TERMINATE IT BY HAND (it may still be billing)" >&2
+  for id in $left; do echo "[$(date +%T)] ⛔ $id NOT CONFIRMED GONE after ~9 min -- TERMINATE IT BY HAND (it may still be billing)" >&2; done
   return 1; }
 ID=""; HOST=""; PORT=""
 term () {
   [ -n "$ID" ] || return 0
-  log "terminating pod $ID"; rp_term "$ID" 2>&1 | tee -a "$OUT/driver.log"
-  ID=""
+  log "terminating pod $ID"; rp_term "$ID" 2>>"$OUT/driver.log"; local rc=$?
+  # ⛔ The pod is forgotten only once RunPod confirms it gone.
+  if [ $rc = 0 ]; then log "pod $ID confirmed gone"; ID=""; else log "⛔ pod $ID NOT CONFIRMED GONE -- TERMINATE IT BY HAND"; fi
+  return $rc
 }
 # one attempt at copying the run's outputs off the pod (tar of whatever exists, then scp, then unpack here)
 harvest_once () {
@@ -91,9 +117,11 @@ log "bundles.tgz $(du -h "$OUT/bundles.tgz" | cut -f1)"
 
 # 2. deploy: SECURE only (community hosts mostly never start)
 for G in "NVIDIA RTX PRO 6000 Blackwell Server Edition" "NVIDIA RTX PRO 6000 Blackwell Workstation Edition"; do
-  Q=$(python3 -c "import json,sys; print(json.dumps({'name': 'lz-paper', 'cloud': 'SECURE', 'gpu': {'id': sys.argv[2], 'count': 1}, 'image': 'runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04', 'disk': 120, 'ports': ['22/tcp'], 'env': {'PUBLIC_KEY': sys.argv[1]}}))" "$PUB" "$G")
-  ID=$(rp_create "$Q" lz-paper 2>>"$OUT/driver.log"); rc=$?
+  TRY=$((TRY+1)); NM="lz-paper-$RUNTOK-$TRY"
+  Q=$(python3 -c "import json,sys; print(json.dumps({'name': sys.argv[-1], 'cloud': 'SECURE', 'gpu': {'id': sys.argv[2], 'count': 1}, 'image': 'runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04', 'disk': 120, 'ports': ['22/tcp'], 'env': {'PUBLIC_KEY': sys.argv[1]}}))" "$PUB" "$G" "$NM")
+  ID=$(rp_create "$Q" "$NM" 2>>"$OUT/driver.log"); rc=$?
   [ $rc = 2 ] && { log "deploy REFUSED (fatal, see driver.log): nothing deployed"; exit 1; }
+  [ $rc = 4 ] && { log "⛔ the create of $NM got no answer and could not be confirmed: A POD NAMED $NM MAY BE BILLING (recorded in maybe_billing.txt)"; echo "$NM" >> maybe_billing.txt; exit 1; }
   [ -n "$ID" ] && { log "DEPLOYED $ID on $G"; echo "$ID" > "$OUT/pod_id"; break; }
 done
 [ -n "$ID" ] || { log "NO POD: nothing deployed"; exit 1; }

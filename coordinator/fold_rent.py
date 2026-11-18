@@ -284,7 +284,20 @@ def main(argv=None):
     rate = 0.0
     log = ""
     try:
-        info = api.deploy(f"hazync-fold-{int(time.time())}", runner.ssh_pubkey)
+        name = f"hazync-fold-{int(time.time())}"
+        try:
+            info = api.deploy(name, runner.ssh_pubkey)
+        except sb.LostCreate:
+            # ⛔ The create got no answer: the pod may exist. Its name is unique to this run, so release whatever
+            # carries it, and stop -- loudly if that cannot be confirmed.
+            try:
+                ids = [x["id"] for x in api.pods() if x["name"] == name]
+            except sb.RunPodError as e:
+                raise SystemExit(f"fold_rent: the create got no answer and RunPod could not be listed ({e}): "
+                                 f"⛔ A POD NAMED {name} MAY BE BILLING — check RunPod by hand")
+            left = sb.terminate_many(api, ids)[1] if ids else []
+            raise SystemExit(f"fold_rent: the create got no answer; {len(ids)} pod(s) named {name} found, "
+                             + (f"⛔ NOT CONFIRMED GONE: {left} — TERMINATE BY HAND" if left else "released"))
         if info is None:
             print("fold_rent: no GPU capacity in any configured type — nothing rented, nothing spent")
             return 0

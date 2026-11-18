@@ -66,6 +66,41 @@ class SmokeRunPod(sponsor_bot.RunPod):
     worker sits in its 600-second retry loop looking armed and contributing nothing.
     """
 
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._before = None        # pod ids on the account before the first create of this run
+        self._mine = set()         # ids this client handed back as rented
+        self.extra = []            # more pods found under one lost name: not the fleet, but billing -- teardown
+        self.maybe_names = set()   # lost creates nobody could find: the teardown looks again by name
+
+    def _find_lost(self, name, gpu_types):
+        """A create of `name` got no answer. ⛔ Only a pod NEW since this run started (not in _before), not handed back
+        already, not TERMINATED, with exactly this name, can be it -- names repeat across runs and across the types
+        rent_uniform tries. Two such pods: the first is returned, the rest go to `extra` for the teardown. The listing
+        failing three times: the name goes to `maybe_names` and LostCreate stops the rent."""
+        for attempt in range(3):
+            try:
+                hits = [x for x in self.pods() if x["name"] == name and x["id"] not in self._before
+                        and x["id"] not in self._mine and (x.get("status") or "") != "TERMINATED"]
+                break
+            except sponsor_bot.RunPodError:
+                time.sleep(5)
+        else:
+            self.maybe_names.add(name)
+            raise sponsor_bot.LostCreate(f"the create of {name} got no answer and RunPod could not be listed: "
+                                         f"a pod named {name} MAY BE BILLING", name=name)
+        if not hits:
+            log(f"  the create of {name} got no answer; RunPod lists no new pod of that name")
+            return None
+        for x in hits[1:]:
+            self._mine.add(x["id"])
+            self.extra.append({"id": x["id"], "name": name, "gpu_type": x.get("gpu_type") or "?", "price": 0.0})
+            log(f"  ⛔ a SECOND pod named {name} ({x['id']}) -- tracked for the teardown")
+        log(f"  the create of {name} got no answer; found it by name: {hits[0]['id']}")
+        raw = self.pod_raw(hits[0]["id"]) or {"id": hits[0]["id"], "cost": hits[0]["cost_per_hr"]}
+        return raw, ((hits[0].get("gpu_type") if hits[0].get("gpu_type") in tuple(gpu_types) else None)
+                     or gpu_types[0])
+
     def deploy_listening(self, name, ssh_pubkey, gpu_types=sponsor_bot.GPU_TYPES):
         # ⛔ SECURE, NOT COMMUNITY. Community hosts mostly never start at all -- RunPod never publishes a
         # port for them, so the run waits out its full SSH timeout and then gives up having paid for pods
@@ -77,10 +112,17 @@ class SmokeRunPod(sponsor_bot.RunPod):
         #     $0.74/hr  14 of 14 started  (100%)
         # A 4-card run died outright on it: three of five never started, so only two came up and
         # the run could not reach its minimum. The cheap listing is not cheaper, it is absent.
-        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp", "9110/tcp"), disk_gb=40)
+        if self._before is None:
+            # The account BEFORE this run rented anything: a lost create's pod is a NEW id with its name.
+            self._before = {x["id"] for x in self.pods()}
+        try:
+            got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp", "9110/tcp"), disk_gb=40)
+        except sponsor_bot.LostCreate:
+            got = self._find_lost(name, gpu_types)
         if not got:
             return None
         p, gt = got
+        self._mine.add(p["id"])
         # ⛔ RECORD WHERE THE CARD IS. Geography is the one term in a fleet's throughput that
         # has never been controlled for here, and it has already caused a published error
         # once: 142 s of spread was attributed to geography when it was CARD TYPE
@@ -150,7 +192,21 @@ def release_recorded(api, rented_path, created, unreleased):
             recorded = [str(p["id"]) for p in json.load(fh) if p.get("id")]
     except (OSError, ValueError, TypeError, AttributeError):
         pass
-    mine = list(dict.fromkeys([str(p["id"]) for p in created] + [str(p["id"]) for p in unreleased] + recorded))
+    keep = False
+    extra = [str(p["id"]) for p in getattr(api, "extra", [])]
+    maybe = sorted(getattr(api, "maybe_names", ()) or ())
+    if maybe:
+        # Lost creates nobody could find during the rent: look again now, by name, among pods new since the run began.
+        try:
+            before = getattr(api, "_before", None) or set()
+            extra += [str(x["id"]) for x in api.pods() if x["name"] in maybe and x["id"] not in before
+                      and (x.get("status") or "") != "TERMINATED"]
+        except Exception as e:                                     # noqa: BLE001
+            log(f"⛔ could not look for {maybe} ({str(e)[:80]}) — A POD MAY BE BILLING under those names; "
+                f"{rented_path} KEPT")
+            keep = True
+    mine = list(dict.fromkeys([str(p["id"]) for p in created] + [str(p["id"]) for p in unreleased] + recorded
+                              + extra))
     verdict = tip_session.terminable(mine, mine)
     log(f"terminating {verdict['terminate']}  (protected={verdict['protected']} not-ours={verdict['not_ours']})")
     done, _ = sponsor_bot.terminate_many(api, verdict["terminate"]) if verdict["terminate"] else ([], [])
@@ -163,6 +219,8 @@ def release_recorded(api, rented_path, created, unreleased):
         return None
     left = [i for i in verdict["terminate"] if i in listed]
     log(f"account check: {'clean' if not left else '⛔ STILL PRESENT: ' + str(left)}")
+    if keep:
+        return None
     if not left:
         try:
             os.unlink(rented_path)     # every recorded pod is gone; the record would only mislead

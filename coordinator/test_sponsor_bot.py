@@ -979,6 +979,36 @@ finally:
         else:
             os.environ[k] = v
 
+# ---------- the capacity streak, end to end through Bot.run() ----------
+# ⛔ A normal drought never stops the bot; the SAME 400 on every type for CAPACITY_LATCH_S does: run() stops as
+# "runpod" (exit 5: the unit latches and OnFailure= pages). Drives the real loop on the fast clock, against the fake
+# v2 server with no capacity anywhere.
+print("== the capacity streak, through Bot.run() ==")
+reset()
+api = FakeRunPod()
+api.capacity = {"NVIDIA GeForce RTX 4090": False, "NVIDIA A40": False}
+logs = []
+streak_bot = make_bot(api, FakeRunner(), trial=[9800], log=logs.append)
+streak_bot.state_home = tempfile.mkdtemp()
+if CONTROL:
+    sponsor_bot.CAPACITY_LATCH_S, _saved_latch = 10 ** 12, sponsor_bot.CAPACITY_LATCH_S
+t0 = streak_bot.clock()
+result = [None]
+th = threading.Thread(target=lambda: result.__setitem__(0, streak_bot.run()), daemon=True)
+th.start()
+th.join(60)
+outcome = result[0]
+span_h = (streak_bot.clock() - t0) / 3600
+if CONTROL:                                      # stop the loop the control left running
+    sponsor_bot.CAPACITY_LATCH_S = _saved_latch
+    streak_bot.stop_reason = "runpod"
+    th.join(30)
+check(outcome == "runpod" and not api.deploys and any("SAME 400" in m for m in logs),
+      f"a drought of one identical 400 runs on until CAPACITY_LATCH_S, then stops the run as 'runpod' "
+      f"(after ~{span_h:.1f} bot-hours: {outcome})")
+check(sponsor_bot.CAPACITY_LATCH_S / 3600 <= span_h,
+      f"and not before {sponsor_bot.CAPACITY_LATCH_S // 3600} h of misses ({span_h:.1f} h)")
+
 # ---------- stop-all ----------
 print("== stop-all ==")
 api = FakeRunPod()
