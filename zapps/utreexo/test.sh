@@ -86,6 +86,10 @@ grep -q "FAIL.*the chain starts from a walk of the trusted base image" "$T/out" 
 want 1 "tip 103 checked as signet" -- verify $R --network signet --expect 103:$H103
 want 1 "--base-image on a base receipt" -- verify $V/mainnet-3.receipt --expect 3:$H3 --base-image "$(printf 'ab%.0s' $(seq 32))"
 want 1 "tip 103 with a trailing byte" -- verify <(cat $R; printf '\0') --expect 103:$H103
+# review H1: a composite receipt nested 300,000 levels deep is refused before decoding (it overflowed the stack, exit 134)
+python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<I',0) + struct.pack('<QQI',0,1,0)*300000)" > "$T/nested.receipt"
+want 1 "a composite receipt nested 300,000 deep" -- verify "$T/nested.receipt" --expect 103:$H103
+grep -q "FAIL.*composite" "$T/out" || { cat "$T/out" "$T/err"; echo "::error::the nested composite is not refused as composite"; exit 1; }
 want 2 "tip 103 --json --allow-demo" -- verify $R --expect 103:$H103 --expect-tip 3836:$T3836 --json --allow-demo
 python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['mode']=='tip' and j['steps']==1 and j['from']==3 and j['base_height']==3 and j['height']==103 and j['leaves']==103 and j['n_live'] is None and j['core_height']==3836 and j['image_source']=='builtin-pinned', j" "$T/out"
 want 2 "tip 103 --floresta --allow-demo" -- verify $R --expect 103:$H103 --floresta --allow-demo

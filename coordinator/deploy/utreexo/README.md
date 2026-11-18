@@ -12,7 +12,7 @@ work). Published folder: `latest.json` (written last), `latest.rcpt` (the stable
 Proposed URL: `https://hazync.org/utreexo-live/` (an nginx alias outside the site root, as `/headers-live/`).
 
 Reorgs: below MARGIN nothing happens; a changed block at the published H makes the follower fall back to the newest kept
-receipt (`hist/`, the last `KEEP`) still on the node's chain and step forward; a core tip that is not the node's waits
+state (`state/`, the last `KEEP`) still on the node's chain, move what is above it to `orphaned/` and step forward; an RPC failure or a node below the proven height is an error, never a reorg; a core tip that is not the node's waits
 for the next core proof; a reorg below the base stops (install a new base).
 
 ⚠ The deletion proofs come from a native MemForest replay (cached in `forest.bin`): test scale only. At the tip the
@@ -26,6 +26,10 @@ witness needs a Utreexo bridge (utreexod's proof index) or a disk forest; neithe
 `ALLOW_DEMO` (0), `NETWORK` (mainnet), `PUBLISH` / `PUBLISH_KEY` (rsync target).
 
 ## Test
+
+`test/test_follow_logic.sh <block dir with block_1..300.json>`: the script's own logic with a stub prover and checker
+(seconds): RPC failures and a node below the proven height are errors, reorg fall-back and what moves aside, retention,
+the republish under a newer core proof, the state symlinks, headers-only links, block pruning.
 
 `test/test_follow.sh <zyncapp> <zapp-utreexo> <base receipt, mainnet H = 3> <core receipt 1..T> <block dir>` runs the
 script against a fake bitcoin-cli over real mainnet block files, with the real prover and checker (three CPU steps):

@@ -26,12 +26,28 @@ done
 "$Z" utreexo-prove "$B" 10000 "$S10" "$W/base10" --execute > "$W/base10.log" 2>&1; t "base walk to 10,000" 0 $?
 t "walk(10,000) == walk(1,999) + step(10,000)" "$(roots UTREEXO_JOURNAL "$W/base10.log")" "$(roots UTREEXO_TIP_JOURNAL "$W/step_10000.log")"
 
-# refusals: every case must be refused by the GUEST (exit 3, UTREEXO_TIP_GUEST_REFUSED)
+# refusals: every case must be refused by the GUEST (exit 3, UTREEXO_TIP_GUEST_REFUSED) for the reason named
 "$Z" utreexo-tip-prove "$B" "$J" 9000 "$S10" "$W/ctl" --execute > "$W/ctl.log" 2>&1; t "control: the same step untampered" 0 $?
-# (H = 9,000 under the core state at 10,000: the step has spends and 1,000 link headers)
-for c in spent_value spent_block spent_code spent_coinbase spent_drop spent_extra proof_hash proof_target proof_empty tx_swap link link_drop prev_roots prev_kind core_id; do
-  UTREEXO_TIP_TAMPER=$c "$Z" utreexo-tip-prove "$B" "$J" 9000 "$S10" "$W/neg" --execute > "$W/neg_$c.log" 2>&1; e=$?
-  t "refused: $c" "3 1" "$e $(grep -c UTREEXO_TIP_GUEST_REFUSED "$W/neg_$c.log")"
-  grep -h -m1 UTREEXO_TIP_GUEST_REFUSED "$W/neg_$c.log" | cut -c1-220
+OPEN="the deletions do not open in the accumulator"; NOREC="no receipt found to resolve assumption"
+refused () { # refused <case> <reason substring> <previous journal> <H> <core state>
+  UTREEXO_TIP_TAMPER=$1 "$Z" utreexo-tip-prove "$B" "$3" "$4" "$5" "$W/neg" --execute > "$W/neg_$1_$4.log" 2>&1; local e=$?
+  local line; line=$(grep -h -m1 UTREEXO_TIP_GUEST_REFUSED "$W/neg_$1_$4.log")
+  t "refused: $1 (H = $4): $2" "3 yes" "$e $(echo "$line" | grep -qF -- "$2" && echo yes)"
+  echo "$line" | cut -c1-220
+}
+# (H = 9,000 from the base at 1,999, under the core state at 10,000: spends and 1,000 link headers)
+for spec in "spent_value:$OPEN" "spent_block:$OPEN" "spent_code:$OPEN" "spent_coinbase:$OPEN" "spent_drop:truncated" \
+            "spent_extra:more records than deletions" "proof_hash:$OPEN" "proof_target:$OPEN" "proof_empty:$OPEN" \
+            "tx_swap:Merkle root" "first_prev:header does not follow the previous block" \
+            "link:does not reach the core tip" "link_last:the link from block H does not end at the core tip" \
+            "link_drop:link headers above H: want T - H" "prev_roots:$NOREC" "prev_kind:$NOREC" "core_id:$NOREC"; do
+  refused "${spec%%:*}" "${spec#*:}" "$J" 9000 "$S10"
 done
+# from a STEP (prev kind 2): the step 10,000 -> 15,000 under the core state at 100,000
+for spec in "spent_value:$OPEN" "first_prev:header does not follow the previous block" "prev_roots:$NOREC" "prev_kind:$NOREC"; do
+  refused "${spec%%:*}" "${spec#*:}" "$W/step_10000.journal" 15000 "$S100"
+done
+# a tamper case with nothing to tamper is a host error, never a pass: link_drop with H = T
+UTREEXO_TIP_TAMPER=link_drop "$Z" utreexo-tip-prove "$B" "$J" 10000 "$S10" "$W/neg" --execute > "$W/neg_nolink.log" 2>&1
+t "link_drop with H = T is a host error (nothing to drop), not a refusal" "1 1" "$? $(grep -c 'nothing to drop' "$W/neg_nolink.log")"
 [ "$fails" -eq 0 ] && echo UTREEXO_TIP_EXEC_TESTS_OK || { echo "UTREEXO_TIP_EXEC_TESTS_FAILED ($fails)"; exit 1; }

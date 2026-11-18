@@ -6,7 +6,7 @@
 //! ⚠ The source of deletion proofs here is a MemForest replayed from genesis (or a cache of one, `ForestCache`): fine for
 //! tests and low heights, NOT for mainnet's tip (the forest holds every live leaf in memory). At the tip a Utreexo
 //! bridge node (utreexod with its proof index, the source Floresta itself syncs from) gives the same per-block proofs
-//! and leaf data; that source is not built (§10.6).
+//! and leaf data; that source is designed, not built (UTREEXO_ZAPP.md §10.5.1).
 use crate::utreexo_tip_step as step;
 use crate::utreexo_host;
 use rustreexo::mem_forest::MemForest;
@@ -176,7 +176,7 @@ pub fn frame_words(fr: &[TipFrame]) -> Vec<u32> {
 }
 
 /// Execute-only negative tests (UTREEXO_TIP_TAMPER): each must be refused by the guest.
-pub fn tamper(case: &str, fr: &mut [TipFrame], link: &mut [[u8; 80]]) -> Result<String, String> {
+pub fn tamper(case: &str, fr: &mut [TipFrame], link: &mut Vec<[u8; 80]>) -> Result<String, String> {
     let first_del = fr.iter().position(|f| !f.spent.is_empty()).ok_or("no block with a deletion in this step")?;
     match case {
         "spent_value" => { fr[first_del].spent[36] ^= 1; Ok(format!("frame {first_del}: the first spent coin's value +-1")) }
@@ -204,7 +204,21 @@ pub fn tamper(case: &str, fr: &mut [TipFrame], link: &mut [[u8; 80]]) -> Result<
             l[0] ^= 1;
             Ok("the first link header's version".into())
         }
-        "link_drop" => Ok("the last link header dropped".into()),
+        "link_last" => {
+            // the LAST link header: the chain of prev fields still holds (no header follows it), so only the final
+            // check (the link ends at the core journal's tip_hash) can refuse it
+            let l = link.last_mut().ok_or("no link headers (H = T)")?;
+            l[76] ^= 1;
+            Ok("the last link header's nonce".into())
+        }
+        "link_drop" => {
+            link.pop().ok_or("no link headers (H = T): nothing to drop")?;
+            Ok("the last link header dropped".into())
+        }
+        "first_prev" => {
+            fr.first_mut().ok_or("no blocks")?.stripped[4] ^= 1;
+            Ok("the first block's prev-block field (it must follow the previous statement's block P)".into())
+        }
         "prev_roots" => Ok("one byte of the previous statement's journal (its receipt does not match it)".into()),
         "prev_kind" => Ok("the previous statement given as the other kind (base vs step)".into()),
         "core_id" => Ok("another core image id (the core receipt does not verify under it)".into()),
@@ -252,4 +266,81 @@ fn tx_len(b: &[u8]) -> Result<usize, String> {
     for _ in 0..vi(b, &mut o) { o += 36; let l = vi(b, &mut o) as usize; o += l + 4; }
     for _ in 0..vi(b, &mut o) { o += 8; let l = vi(b, &mut o) as usize; o += l; }
     Ok(o + 4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hx(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    fn put_tx(b: &mut Vec<u8>, inputs: &[(H, u32)], outputs: &[(u64, &[u8])]) -> H {
+        let s0 = b.len();
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.push(inputs.len() as u8);
+        for (t, v) in inputs {
+            b.extend_from_slice(t);
+            b.extend_from_slice(&v.to_le_bytes());
+            b.push(1);
+            b.push(0x51);
+            b.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+        b.push(outputs.len() as u8);
+        for (v, spk) in outputs {
+            b.extend_from_slice(&v.to_le_bytes());
+            b.push(spk.len() as u8);
+            b.extend_from_slice(spk);
+        }
+        b.extend_from_slice(&0u32.to_le_bytes());
+        step::dsha(&b[s0..])
+    }
+
+    /// A block whose second transaction spends `outpoint`, with a valid Merkle root, after `prev`.
+    fn block_spending(prev: &H, outpoint: (H, u32)) -> Vec<u8> {
+        let mut txs = Vec::new();
+        let cb = put_tx(&mut txs, &[([0; 32], u32::MAX)], &[(50_0000_0000, &[0x51])]);
+        let t1 = put_tx(&mut txs, &[outpoint], &[(1, &[0x51])]);
+        let mut cat = [0u8; 64];
+        cat[..32].copy_from_slice(&cb);
+        cat[32..].copy_from_slice(&t1);
+        let root = step::dsha(&cat);
+        let mut b = Vec::new();
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(prev);
+        b.extend_from_slice(&root);
+        b.extend_from_slice(&[0u8; 12]);
+        b.push(2);
+        b.extend_from_slice(&txs);
+        b
+    }
+
+    /// The BIP30 refusal (step.rs `block_changes`): a block spending output 0 of the coinbase of 91,722 / 91,812
+    /// (the same txids as 91,880's / 91,842's coinbases), given the OVERWRITTEN coin's data, rebuilds Floresta's
+    /// UNSPENDABLE_BIP30_UTXO_* leaf and is refused, as Floresta's `update_acc` refuses it. Control: the same spend with
+    /// the recreated coin's data (another creating block and height) is not refused by this check.
+    #[test]
+    fn a_deletion_of_a_bip30_leaf_is_refused() {
+        const CB: [&str; 2] = [
+            "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff060456720e1b00ffffffff0100f2052a01000000434104124b212f5416598a92ccec88819105179dcb2550d571842601492718273fe0f2179a9695096bff94cd99dcccdea7cd9bd943bfca8fea649cac963411979a33e9ac00000000",
+            "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff060456720e1b00ffffffff0100f2052a010000004341046896ecfc449cb8560594eb7f413f199deb9b4e5d947a142e7dc7d2de0b811b8e204833ea2a2fd9d4c7b153a8ca7661d0a0b7fc981df1f42f55d64b26b3da1e9cac00000000",
+        ];
+        let tag = crate::utreexo_roots::tag_state();
+        for (i, cb) in CB.iter().enumerate() {
+            let raw = hx(cb);
+            let txid = step::dsha(&raw);
+            let (height, bh) = crate::utreexo_roots::MAINNET_BIP30[i];
+            let spk = &raw[raw.len() - 4 - 67..raw.len() - 4]; // the one output's 67-byte P2PK script
+            let block = block_spending(&[7; 32], (txid, 0));
+            let mut c = step::Counts::default();
+            let mut spent = Vec::new();
+            step::put_spent(&mut spent, &bh, (height << 1) | 1, 50_0000_0000, spk);
+            let r = step::block_changes(&tag, &block, &[7; 32], 100_000, &spent, &mut c);
+            assert!(matches!(&r, Err(e) if e.contains("BIP30")), "{height}: the BIP30 leaf was not refused");
+            let mut other = Vec::new();
+            step::put_spent(&mut other, &[9; 32], (91_880 << 1) | 1, 50_0000_0000, spk);
+            assert!(step::block_changes(&tag, &block, &[7; 32], 100_000, &other, &mut c).is_ok(), "{height}: control refused");
+        }
+    }
 }

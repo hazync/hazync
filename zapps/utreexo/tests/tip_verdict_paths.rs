@@ -126,3 +126,25 @@ fn built_in_ids_are_the_published_ones() {
     assert_eq!(id("zyncapp-utreexo-tip").as_deref(), Some(UTREEXO_TIP_IMAGE_ID));
     assert!(UTREEXO_IMAGE_PINNED && UTREEXO_TIP_IMAGE_PINNED);
 }
+
+/// Review H1: a composite receipt nested 300,000 levels deep (each level: no segments, one assumption receipt that is
+/// again composite) must be refused before any decoding. Decoding it first overflowed the stack (abort, exit 134).
+pub fn nested_composite(levels: usize) -> Vec<u8> {
+    let mut b = 0u32.to_le_bytes().to_vec(); // InnerReceipt::Composite
+    for _ in 0..levels {
+        b.extend_from_slice(&0u64.to_le_bytes()); // segments: []
+        b.extend_from_slice(&1u64.to_le_bytes()); // assumption_receipts: [one]
+        b.extend_from_slice(&0u32.to_le_bytes()); // InnerAssumptionReceipt::Composite
+    }
+    b
+}
+
+#[test]
+fn a_deeply_nested_composite_receipt_is_refused_without_decoding() {
+    let r = nested_composite(300_000);
+    assert_eq!(journal_kind(&r), None);
+    let rep = verify_utreexo_tip_on("mainnet", &r, UTREEXO_TIP_IMAGE_ID, UTREEXO_IMAGE_ID, None, NOW, None, None);
+    assert_eq!(rep.report.verdict, Verdict::Fail);
+    assert!(rep.report.checks.iter().any(|c| !c.0 && c.1.contains("composite")), "{:?}", rep.report.checks);
+    assert_eq!(verify_utreexo(&r, UTREEXO_IMAGE_ID, None, NOW, None, None).verdict, Verdict::Fail);
+}

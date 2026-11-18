@@ -435,6 +435,12 @@ and the core receipt.
   otherwise). Outpoints are unique among live leaves except the two BIP30 coinbases, whose leaves are refused.
 - **The starting roots are Floresta's after P.** For the base, §4. For a step, by induction: the previous step was
   verified in the zkVM under this same image (`self_id`, which the checker pins).
+- **Earlier steps' core receipts need no check of their own** (review L7). Each step commits only its OWN `core_id`,
+  and the checker pins only the newest. That is enough: step k linked its blocks P_k+1..H_k to its core tip T_k, and
+  step k+1 starts at block H_k by hash and links on to the newest core tip, which the checker pins. So every block any
+  earlier step applied is a hash ancestor of a block on the pinned core chain, i.e. on that chain (a SHA-256d
+  collision otherwise), whatever image an earlier core receipt was under. An earlier core receipt contributes nothing
+  else to the roots: the deletions are checked against the accumulator, not against the core state.
 - **The base's trust carries.** `base_id` and `base_core_id` are committed by every step; the checker requires both to
   be trusted (the base's spent/unspent claims rest on its core receipt).
 - **Core handovers.** A step needs no undo commitment, so, unlike the base (§4: zero lineage), a step accepts the core
@@ -494,7 +500,8 @@ receipt itself (§10.7). Every value in the JSON is also in the receipt's journa
 
 **Replacing.** A step is published only after `zapp-utreexo verify` says OK with the node's own hashes at H and at T
 (DEMO is accepted only with `ALLOW_DEMO=1`, as long as every proof is DEMO: below minimum work).
-The previous receipt goes to `hist/` (the last `KEEP` = 12), the new one becomes `latest`; a failed step, a step that
+Each proven height is a state directory `state/<H>-<hash>/` (`rcpt`, `meta`); `latest` and `base` are symlinks to one,
+switched by a single rename (review L2). The last `KEEP` = 12 states below `latest` are kept for reorgs; a failed step, a step that
 does not verify, or a wrong ELF leaves the published folder untouched.
 
 **Reorgs** (REORG.md §8, §10; ZAPP_FOLLOWER.md §7):
@@ -502,7 +509,7 @@ does not verify, or a wrong ELF leaves the published folder untouched.
 | case | what happens |
 |---|---|
 | depth < MARGIN | nothing: H trails the node's tip by MARGIN, so no published height is touched. At the tip this covers every ordinary reorg (depth 1-2) |
-| the node's block at the published H changed | the follower falls back to the newest kept receipt (`hist/`, then the base) whose block is still the node's, drops the cache (the native forest is at the old branch) and steps forward on the node's branch. The published folder keeps the old receipt until the new one verifies |
+| the node's block at the published H changed | the follower falls back to the newest kept state (then the base) whose block is still the node's, moves the states, published receipts and cache above it to `orphaned/` (kept, not deleted) and steps forward on the node's branch. `latest.rcpt`/`latest.json` keep naming the old receipt until the new one verifies. A node RPC failure, or a node whose tip is below the proven height (still syncing), is an error, never a reorg (review M1) |
 | the core proof's tip T is not the node's block T | the follower stops for this run ("wait for the next core proof"): the core receipt names an orphaned tip, so no step can link to it. REORG P4 sets the spine back to a kept head on the new branch; the next run uses it |
 | below the base | stop with an error: a new base must be walked and installed (`--set-base`) |
 | receipts already served about orphaned blocks | nothing to retract: each is a true statement about a valid chain whose block H it names. A Floresta node that compares block H with its own header chain (§10.7) refuses it, as it must |
@@ -609,7 +616,7 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   the base and chose H = 53 (`DRY_RUN`). **Then end to end with the fix** (18.11.2026, `test_follow.sh` at `15d99d2`, three real CPU proofs on hazync-coord,
 ~80 min each): **31 of 31 checks passed** (`UTREEXO_FOLLOW_TESTS_OK`): the base install, the step 3 → 103 published
 and verified, no new height, the choice of H (margin, core tip, step cap), a step from a step 103 → 180 (the first
-spends, at 170) published with the old receipt kept in `hist/`, a lying prover and a wrong ELF refused with the folder
+spends, at 170) published with the old receipt kept, a lying prover and a wrong ELF refused with the folder
 untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a reorg below the base stopping.
 - **The WASM checks tip receipts** (`zapps/utreexo/wasm`, feature `tip`): the journal's kind word picks the check, an
   optional last frame field names another base image, `tip_image_id()`; the JSON adds `mode`, `steps`, `from`,
@@ -617,7 +624,24 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   block, core tip, tip image, base image, network, a base image on a base receipt). The .wasm is byte-reproduced on two
   machines: a laptop's local build of `reproduce/wasm.Dockerfile` and hazync-coord's build in the published image
   `ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…` (a clean clone); sha256 in `wasm/README.md`.
-- The follower, end to end with the fix: 31/31, see the follower bullet above.
+- The follower, end to end with the fix: 31/31, see the follower bullet above (at `15d99d2`, before the review fixes
+  of 18.11.2026 evening; those changed the follower's state layout and checks and are covered by the logic test below,
+  not by a second three-proof run).
+- **The follower's logic** (`coordinator/deploy/utreexo/test/test_follow_logic.sh`, stub prover and checker, seconds,
+  after the review of `b127747`): 30 checks: an RPC failure and a node below the proven height are errors with nothing
+  moved (M1); a reorg moves the orphaned state, published receipt and cache aside and steps on (M2); retention keeps
+  the most recently published receipts and never the current one (M2); a republish checks the receipt's own core tip
+  (L1); `latest` is a symlink to a state holding both files (L2); `latest.json` reaches the target, uploaded after the
+  receipts (L3); only the step's bodies are fetched and the link is headers (`--headers`), `PRUNE_BLOCKS` (L4).
+  Controls: the script with M1's check removed fails 4 checks, with M2's move removed 2. The run also found a real
+  bug, fixed: `missing=$(… | head -1)` died of SIGPIPE under `pipefail` (exit 141) whenever more than one block file
+  was missing.
+- **Review H1**: `journal_kind` decoded the receipt before `receipt_kind` refused composites; a composite nested
+  300,000 deep (6 MB) overflowed the CLI's stack (exit 134). Now refused first: a library test (it aborts with a stack
+  overflow without the fix), a CLI case in `test.sh` and a WASM case in `test.mjs`, each generating the file.
+- **BIP30**: `utreexo_tip_host::tests::a_deletion_of_a_bip30_leaf_is_refused` builds a block spending output 0 of the
+  coinbases of 91,722 and 91,812 (their real bytes) with the overwritten coins' data: the rebuilt leaves are exactly
+  Floresta's two UNSPENDABLE constants and both are refused; the recreated coins' data is not.
 
 ### 10.10 Layout (tip mode)
 

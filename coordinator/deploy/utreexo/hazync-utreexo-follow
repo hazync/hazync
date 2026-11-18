@@ -6,7 +6,10 @@
 # and a small JSON naming it. Each update is a STEP: it verifies the previous receipt inside the zkVM and applies blocks
 # P+1..H to the roots it proves (rustreexo Stump::modify, block by block), so the newest receipt alone proves the whole
 # chain from the base (a walk from genesis, proved once with `zyncapp utreexo-prove`, installed with --set-base). A new
-# receipt replaces the last; the last KEEP receipts stay in $D/hist for reorgs.
+# receipt replaces the last; the last KEEP proven states stay in $D/state for reorgs.
+#
+# State: each proven height is a directory $D/state/<H>-<hash>/ holding `rcpt` and `meta` ("H hash"); $D/latest and
+# $D/base are symlinks to one, switched by an atomic rename, so a receipt and its meta never disagree (review L2).
 #
 #   hazync-utreexo-follow                                   step to the new H, verify, publish (the timer runs this)
 #   hazync-utreexo-follow --set-base <receipt> <H> <hash>   install a base (a final run of the base image; verified first)
@@ -15,7 +18,9 @@
 # DEMO when ALLOW_DEMO=1: below Core's minimum work every proof is DEMO).
 #
 # Reorgs: the published block H must stay on the node's chain. When it does not, the follower falls back to the newest
-# kept receipt (hist/, then the base) whose block is still the node's and steps forward from there on the new branch;
+# kept state (then the base) whose block is still the node's and steps forward from there on the new branch (the states
+# and published receipts above it are moved to $D/orphaned/, not deleted); a node RPC failure or a node below the proven
+# height is an error, never a reorg (review M1);
 # below the base it stops with an error (a new base is needed). H trails the node's tip by MARGIN, so a reorg shallower
 # than MARGIN never touches a published height.
 set -euo pipefail
@@ -34,8 +39,12 @@ TIP_IMAGE=${TIP_IMAGE:-}
 # the core receipt the steps rest on: the newest genesis-anchored chain proof (the spine's copy)
 CORE=${CORE:-/var/lib/hazync-lz/spine/spine.bin}
 BLOCKS=${BLOCKS:-$D/blocks}
-# fetch block files lo..hi into $BLOCKS (prover/fetch_block_rpc.py range; the node needs txindex)
+# fetch block files lo..hi into $BLOCKS (prover/fetch_block_rpc.py range; the node needs txindex). Only the bodies of
+# the step's blocks are fetched; the link to the core tip is headers only (getblockheader), review L4
 FETCH=${FETCH:-python3 $BIN/fetch_block_rpc.py range}
+# PRUNE_BLOCKS=1: delete block files at or below the proven height once a forest cache is there (a fall-back then needs
+# them again from genesis, which this test-scale witness source replays; §10.5.1)
+PRUNE_BLOCKS=${PRUNE_BLOCKS:-0}
 BITCOIN_CLI=${BITCOIN_CLI:-bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf -datadir=/var/lib/bitcoind}
 MARGIN=${MARGIN:-6}
 # at most this many blocks per step (a catch-up takes several runs)
@@ -43,6 +52,8 @@ MAX_STEP=${MAX_STEP:-2016}
 KEEP=${KEEP:-12}
 ALLOW_DEMO=${ALLOW_DEMO:-0}
 # DRY_RUN=1: stop after choosing H (and after any reorg fall-back), proving nothing
+# PUBLISHED_KEEP: how many published receipts stay in pub/ (the most recently published; never the current one)
+PUBLISHED_KEEP=${PUBLISHED_KEEP:-3}
 NETWORK=${NETWORK:-mainnet}
 PUBLISH=${PUBLISH:-}
 PUBLISH_KEY=${PUBLISH_KEY:-/root/.ssh/hazync_utreexo_publish}
@@ -50,8 +61,14 @@ PUBLISH_KEY=${PUBLISH_KEY:-/root/.ssh/hazync_utreexo_publish}
 log () { echo "[$(date -u +%FT%TZ)] $*"; }
 die () { log "ERROR: $*"; exit 1; }
 cli () { $BITCOIN_CLI "$@"; }
+# the node's hash at h; an RPC failure (warm-up, timeout, h above its tip) is an ERROR, never "another hash" (review M1)
+node_hash () {
+  local x; x=$(cli getblockhash "$1" 2>/dev/null) || die "the node did not answer getblockhash $1 (not a reorg: an RPC failure or a node below $1)"
+  [[ "$x" =~ ^[0-9a-f]{64}$ ]] || die "the node's getblockhash $1 is not a hash: '$x'"
+  echo "$x"
+}
 
-mkdir -p "$D/work" "$D/pub" "$D/hist" "$BLOCKS"
+mkdir -p "$D/work" "$D/pub" "$D/state" "$D/orphaned" "$BLOCKS"
 exec 9>"$D/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
 
 if [ -n "$ELF" ] && [ -n "$WANT_ELF" ]; then
@@ -59,64 +76,88 @@ if [ -n "$ELF" ] && [ -n "$WANT_ELF" ]; then
 fi
 NETFLAG=(); [ "$NETWORK" = signet ] && NETFLAG=(--signet)
 
-# verify <receipt> <H> <hash at H> <T> <hash at T>: the checker's verdict on stdout (OK, DEMO); exit 1 otherwise
-verify () {
-  local h=$2 x=$3 t=$4 tx=$5 args=(verify "$1" --network "$NETWORK" --expect "$2:$3")
+# new_state <receipt> <H> <hash>: a state directory (written, then synced); prints its name
+new_state () {
+  local n="$2-$3" t="$D/state/.$2-$3.tmp"
+  rm -rf "$t" && mkdir "$t" && cp "$1" "$t/rcpt" && printf '%s %s\n' "$2" "$3" > "$t/meta" && sync "$t/rcpt" "$t/meta"
+  rm -rf "${D:?}/state/$n" && mv "$t" "$D/state/$n"
+  echo "$n"
+}
+# point <link> <state name>: switch $D/<link> to it in one rename
+point () { ln -sfn "state/$2" "$D/.$1.tmp" && mv -T "$D/.$1.tmp" "$D/$1"; }
+
+# checker <receipt> <H> <hash> [json]: verify with the node's hash at H and at the receipt's OWN core tip T (read from
+# the receipt itself and then checked against the node: review L1). Prints "OK|DEMO T TX" (or the JSON when asked).
+checker () {
+  local r=$1 h=$2 x=$3 base=() out t tx
+  [ "$h" -gt "${B:-0}" ] && { [ -n "$TIP_IMAGE" ] && base+=(--image "$TIP_IMAGE"); [ -n "$BASE_ID" ] && base+=(--base-image "$BASE_ID"); }
+  out=$("$VERIFY" verify "$r" --network "$NETWORK" --expect "$h:$x" "${base[@]}" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || return 1
+  t=$(echo "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["core_height"])') || return 1
+  tx=$(node_hash "$t")
+  local args=(verify "$r" --network "$NETWORK" --expect "$h:$x" "${base[@]}")
   [ "$t" -gt "$h" ] && args+=(--expect-tip "$t:$tx")
-  [ -n "$TIP_IMAGE" ] && [ "$h" -gt "$B" ] && args+=(--image "$TIP_IMAGE")
-  [ -n "$BASE_ID" ] && [ "$h" -gt "$B" ] && args+=(--base-image "$BASE_ID")   # a tip receipt (the base takes no --base-image)
-  local out; out=$("$VERIFY" "${args[@]}" 2>&1) || true
-  if echo "$out" | grep -q "^ZAPP_UTREEXO_OK: $NETWORK Utreexo accumulator (Floresta's) after block $h $x "; then echo OK; return 0; fi
-  if [ "$ALLOW_DEMO" = 1 ] && echo "$out" | grep -q "^ZAPP_UTREEXO_DEMO: $NETWORK Utreexo accumulator (Floresta's) after block $h $x "; then echo DEMO; return 0; fi
+  [ "${4:-}" = json ] && { "$VERIFY" "${args[@]}" --json --allow-demo 2>/dev/null || [ $? = 2 ]; return; }
+  out=$("$VERIFY" "${args[@]}" 2>&1) || true
+  if echo "$out" | grep -q "^ZAPP_UTREEXO_OK: $NETWORK Utreexo accumulator (Floresta's) after block $h $x "; then echo "OK $t $tx"; return 0; fi
+  if [ "$ALLOW_DEMO" = 1 ] && echo "$out" | grep -q "^ZAPP_UTREEXO_DEMO: $NETWORK Utreexo accumulator (Floresta's) after block $h $x "; then echo "DEMO $t $tx"; return 0; fi
   echo "$out" | grep -E 'FAIL|ZAPP_UTREEXO' | tail -3 >&2
   return 1
 }
 
 if [ "${1:-}" = "--set-base" ]; then
   R=${2:?receipt}; H=${3:?height}; X=${4:?hash}
-  [ "$(cli getblockhash "$H")" = "$X" ] || die "the node's hash at $H is not $X"
-  # its core tip T first (the receipt says it; only a verified one is used), then the verdict with the node's block T
-  out=$("$VERIFY" verify "$R" --network "$NETWORK" --expect "$H:$X" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || die "the base does not verify as block $H $X"
-  T=$(echo "$out" | python3 -c 'import json,sys; j=json.load(sys.stdin); assert "mode" not in j, "a tip receipt"; print(j["core_height"])') \
-    || die "not a base receipt"
+  NX=$(node_hash "$H"); [ "$NX" = "$X" ] || die "the node's hash at $H is not $X"
   B=$H
-  verify "$R" "$H" "$X" "$T" "$(cli getblockhash "$T")" >/dev/null || die "the base is not OK$([ "$ALLOW_DEMO" = 1 ] && echo ' or DEMO') for block $H $X with the node's block $T"
-  cp "$R" "$D/base.rcpt.new" && printf '%s %s\n' "$H" "$X" > "$D/base.meta.new"
-  mv "$D/base.rcpt.new" "$D/base.rcpt" && mv "$D/base.meta.new" "$D/base.meta"
-  cp "$D/base.rcpt" "$D/latest.rcpt.new" && cp "$D/base.meta" "$D/latest.meta.new"
-  mv "$D/latest.rcpt.new" "$D/latest.rcpt" && mv "$D/latest.meta.new" "$D/latest.meta"
-  rm -f "$D"/hist/* "$D/forest.bin" "$D/published"
-  log "base installed: block $H $X (its core proof reaches $T)"
+  out=$("$VERIFY" verify "$R" --network "$NETWORK" --expect "$H:$X" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || die "the base does not verify as block $H $X"
+  echo "$out" | python3 -c 'import json,sys; assert "mode" not in json.load(sys.stdin)' || die "not a base receipt (a tip receipt?)"
+  V=$(checker "$R" "$H" "$X") || die "the base is not OK$([ "$ALLOW_DEMO" = 1 ] && echo ' or DEMO') for block $H $X with the node's chain"
+  # the states of the previous base move aside (kept, not deleted)
+  O=$D/orphaned/base-$(date +%s); mkdir -p "$O"
+  for d in "$D"/state/[0-9]*-*; do [ -e "$d" ] && mv "$d" "$O/"; done
+  n=$(new_state "$R" "$H" "$X")
+  point base "$n"; point latest "$n"
+  rm -f "$D/forest.bin" "$D/published"
+  log "base installed: block $H $X ($V)"
   exit 0
 fi
 
-[ -s "$D/base.rcpt" ] && [ -s "$D/latest.rcpt" ] || die "no base: run --set-base first"
-read -r B BX < "$D/base.meta"
-[ "$(cli getblockhash "$B")" = "$BX" ] || die "the base block $B $BX is no longer on the node's chain: install a new base"
+[ -L "$D/base" ] && [ -L "$D/latest" ] || die "no base: run --set-base first"
+read -r B BX < "$D/base/meta"
+read -r P PX < "$D/latest/meta"
+NT=$(cli getblockcount) || die "the node did not answer getblockcount"
+[[ "$NT" =~ ^[0-9]+$ ]] || die "getblockcount: '$NT'"
+[ "$NT" -ge "$P" ] || die "the node's tip $NT is below the proven height $P (still syncing?): not a reorg, nothing done"
+NBX=$(node_hash "$B"); [ "$NBX" = "$BX" ] || die "the base block $B $BX is no longer on the node's chain: install a new base"
 
-# the newest kept proof whose block is still on the node's chain (normally latest; after a reorg an older one)
-read -r P PX < "$D/latest.meta"
-if [ "$(cli getblockhash "$P" 2>/dev/null)" != "$PX" ]; then
+# the newest kept state whose block is still on the node's chain (normally latest; after a reorg an older one). Every
+# node answer is an assignment, so an RPC failure stops the run (set -e) instead of reading as "another hash"
+NPX_=$(node_hash "$P")
+if [ "$NPX_" != "$PX" ]; then
   log "REORG: the proven block $P $PX is no longer the node's"
-  NP=$B; NPX=$BX; NR=$D/base.rcpt
-  for m in $(ls "$D/hist" | sed -n 's/^step_\([0-9]*\)\.meta$/\1/p' | sort -n); do
-    read -r h x < "$D/hist/step_$m.meta"
-    if [ "$h" -lt "$P" ] && [ "$(cli getblockhash "$h" 2>/dev/null)" = "$x" ]; then NP=$h; NPX=$x; NR=$D/hist/step_$m.rcpt; fi
+  NP=$B; NPX=$BX; NS=$(basename "$(readlink "$D/base")")
+  for d in $(cd "$D/state" && ls -d [0-9]*-* 2>/dev/null | sort -n); do
+    read -r h x < "$D/state/$d/meta"
+    if [ "$h" -lt "$P" ] && [ "$h" -gt "$NP" ]; then nx=$(node_hash "$h"); [ "$nx" = "$x" ] && { NP=$h; NPX=$x; NS=$d; }; fi
   done
-  cp "$NR" "$D/latest.rcpt.new" && printf '%s %s\n' "$NP" "$NPX" > "$D/latest.meta.new"
-  mv "$D/latest.rcpt.new" "$D/latest.rcpt" && mv "$D/latest.meta.new" "$D/latest.meta"
-  for m in $(ls "$D/hist" | sed -n 's/^step_\([0-9]*\)\.meta$/\1/p'); do [ "$m" -gt "$NP" ] && rm -f "$D/hist/step_$m".*; done
-  rm -f "$D/forest.bin"
-  log "fell back to the kept proof of block $NP $NPX; stepping forward on the node's branch"
+  O=$D/orphaned/reorg-$P-$(date +%s); mkdir -p "$O/pub"
+  for d in $(cd "$D/state" && ls -d [0-9]*-* 2>/dev/null); do
+    h=${d%%-*}; [ "$h" -gt "$NP" ] && mv "$D/state/$d" "$O/"
+  done
+  for f in $(cd "$D/pub" && ls utreexo-*.rcpt 2>/dev/null); do
+    h=${f#utreexo-}; h=${h%.rcpt}; [ "$h" -gt "$NP" ] && mv "$D/pub/$f" "$O/pub/"
+  done
+  point latest "$NS"
+  [ -f "$D/forest.bin" ] && mv "$D/forest.bin" "$O/"
+  log "fell back to the kept proof of block $NP $NPX (orphaned states and receipts moved to $O); stepping forward on the node's branch"
   P=$NP; PX=$NPX
 fi
 
-NT=$(cli getblockcount)
 CI=$("$ZYNCAPP" core-info "$CORE") || die "core-info $CORE"
 T=$(echo "$CI" | sed -n 's/^CORE height=\([0-9]*\) .*/\1/p')
 TX=$(echo "$CI" | sed -n 's/^CORE height=[0-9]* tip=\([0-9a-f]*\) .*/\1/p')
 [ -n "$T" ] && [ -n "$TX" ] || die "core-info: $CI"
-[ "$(cli getblockhash "$T" 2>/dev/null)" = "$TX" ] || die "the core proof's tip $T $TX is not the node's block $T (a reorg below the core tip: wait for the next core proof)"
+[ "$T" -le "$NT" ] || die "the core proof's tip $T is above the node's tip $NT (the node is behind)"
+NTX=$(node_hash "$T"); [ "$NTX" = "$TX" ] || die "the core proof's tip $T $TX is not the node's block $T (a reorg below the core tip: wait for the next core proof)"
 H=$(( NT - MARGIN < T ? NT - MARGIN : T ))
 [ "$H" -gt $(( P + MAX_STEP )) ] && H=$(( P + MAX_STEP ))
 log "target H=$H (proven $P, node tip $NT - margin $MARGIN, core tip $T, at most $MAX_STEP blocks per step)"
@@ -127,44 +168,51 @@ if [ "$H" -le "$P" ]; then
   [ "$(cat "$D/published" 2>/dev/null)" = "$P $PX" ] && exit 0
   H=$P
 fi
-HX=$(cli getblockhash "$H")
+HX=$(node_hash "$H")
 
 if [ "$H" -gt "$P" ]; then
-  # the block files P+1..T (T: the link headers to the core tip are read from them too)
-  missing=$(for h in $(seq $((P + 1)) "$T"); do [ -s "$BLOCKS/block_$h.json" ] || echo "$h"; done | head -1)
-  if [ -n "$missing" ]; then $FETCH "$missing" "$T" "$BLOCKS" > "$D/work/fetch.log" 2>&1 || { tail -3 "$D/work/fetch.log"; die "fetch $missing..$T"; }; fi
+  # the bodies P+1..H (or 1..H when the native replay must start from genesis: no forest cache at P), and the link
+  # H+1..T as headers only
+  lo=$((P + 1)); [ -f "$D/forest.bin" ] || lo=1
+  missing=; for h in $(seq "$lo" "$H"); do [ -s "$BLOCKS/block_$h.json" ] || { missing=$h; break; }; done   # no `| head` (SIGPIPE under pipefail)
+  if [ -n "$missing" ]; then $FETCH "$missing" "$H" "$BLOCKS" > "$D/work/fetch.log" 2>&1 || { tail -3 "$D/work/fetch.log"; die "fetch $missing..$H"; }; fi
+  HDRS=$D/work/link_$((H + 1))_$T.txt; : > "$HDRS"
+  for h in $(seq $((H + 1)) "$T"); do
+    hx=$(node_hash "$h"); hh=$(cli getblockheader "$hx" false) || die "getblockheader $hx"
+    printf '%s %s\n' "$h" "$hh" >> "$HDRS"
+  done
   OUT=$D/work/step_$H.rcpt
-  args=(utreexo-tip-prove "$BLOCKS" "$D/latest.rcpt" "$H" "$CORE" "$OUT" --cache "$D/forest.bin" "${NETFLAG[@]}")
+  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$D/forest.bin" --headers "$HDRS" "${NETFLAG[@]}")
   [ -n "$ELF" ] && args+=(--elf "$ELF")
   [ -n "$BASE_ID" ] && args+=(--base-id "$BASE_ID")
   log "step $P -> $H (node tip $NT, core tip $T)"
   S=$(date +%s)
   "$ZYNCAPP" "${args[@]}" > "$D/work/prove.log" 2>&1 || { tail -5 "$D/work/prove.log"; die "prove failed"; }
   SECS=$(( $(date +%s) - S ))
-  V=$(verify "$OUT" "$H" "$HX" "$T" "$TX") || die "the new step does not verify to the node's block $H $HX"
-  log "proved and verified $((P + 1))..$H in $SECS s ($V)"
-  # keep the previous one for reorgs, then make the new one the latest
-  if [ "$P" -gt "$B" ]; then cp "$D/latest.rcpt" "$D/hist/step_$P.rcpt" && cp "$D/latest.meta" "$D/hist/step_$P.meta"; fi
-  mv "$OUT" "$D/latest.rcpt.new" && printf '%s %s\n' "$H" "$HX" > "$D/latest.meta.new"
-  mv "$D/latest.rcpt.new" "$D/latest.rcpt" && mv "$D/latest.meta.new" "$D/latest.meta"
-  ls "$D/hist" | sed -n 's/^step_\([0-9]*\)\.meta$/\1/p' | sort -n | head -n -"$KEEP" | while read -r m; do rm -f "$D/hist/step_$m".*; done
+  V=$(checker "$OUT" "$H" "$HX") || die "the new step does not verify to the node's block $H $HX"
+  log "proved and verified $((P + 1))..$H in $SECS s (${V%% *})"
+  point latest "$(new_state "$OUT" "$H" "$HX")"
+  # keep the KEEP newest states below latest, the base and latest itself
+  keep_b=$(basename "$(readlink "$D/base")"); keep_l=$(basename "$(readlink "$D/latest")")
+  old=(); for d in $(cd "$D/state" && ls -d [0-9]*-* | sort -n); do [ "$d" != "$keep_b" ] && [ "$d" != "$keep_l" ] && old+=("$d"); done
+  while [ "${#old[@]}" -gt "$KEEP" ]; do rm -rf "${D:?}/state/${old[0]}"; old=("${old[@]:1}"); done
+  if [ "$PRUNE_BLOCKS" = 1 ] && [ -f "$D/forest.bin" ]; then
+    (cd "$BLOCKS" && for f in block_*.json; do h=${f#block_}; h=${h%.json}; [ "$h" -le "$H" ] && rm -f "$f"; done; true)
+  fi
+  rm -f "$HDRS"
 else
   SECS=0
-  V=$(verify "$D/latest.rcpt" "$H" "$HX" "$T" "$TX") || die "the kept proof of $H does not verify to the node's block $H $HX"
+  V=$(checker "$D/latest/rcpt" "$H" "$HX") || die "the kept proof of $H does not verify to the node's block $H $HX"
 fi
 
 # the published folder: utreexo-<H>.rcpt (immutable name), latest.rcpt (the stable name), latest.json (written last)
 PUB=$D/pub
 NAME=utreexo-$H.rcpt
-cp "$D/latest.rcpt" "$PUB/$NAME.new" && mv "$PUB/$NAME.new" "$PUB/$NAME"
-cp "$D/latest.rcpt" "$PUB/latest.rcpt.new" && mv "$PUB/latest.rcpt.new" "$PUB/latest.rcpt"
-va=(verify "$PUB/$NAME" --network "$NETWORK" --expect "$H:$HX" --json --allow-demo)
-[ "$T" -gt "$H" ] && va+=(--expect-tip "$T:$TX")
-[ -n "$TIP_IMAGE" ] && [ "$H" -gt "$B" ] && va+=(--image "$TIP_IMAGE")
-[ -n "$BASE_ID" ] && [ "$H" -gt "$B" ] && va+=(--base-image "$BASE_ID")
-VJ=$("$VERIFY" "${va[@]}" 2>/dev/null) || [ $? = 2 ] || die "the published receipt does not verify"
+cp "$D/latest/rcpt" "$PUB/$NAME.new" && mv "$PUB/$NAME.new" "$PUB/$NAME"
+cp "$D/latest/rcpt" "$PUB/latest.rcpt.new" && mv "$PUB/latest.rcpt.new" "$PUB/latest.rcpt"
+VJ=$(checker "$PUB/$NAME" "$H" "$HX" json) || die "the published receipt does not verify"
 # the checker's JSON goes in through the environment, never into the program text (it holds escaped quotes)
-VJ="$VJ" python3 - "$PUB" "$NAME" "$SECS" "$NETWORK" "$V" <<'PY'
+VJ="$VJ" python3 - "$PUB" "$NAME" "$SECS" "$NETWORK" "${V%% *}" <<'PY'
 import json, sys, time, os, hashlib
 p, name, secs, net, verdict = sys.argv[1:]
 v = json.loads(os.environ['VJ'])
@@ -176,11 +224,21 @@ doc = {'network': net, 'height': v['height'], 'block_hash': v['block_hash'], 'le
 open(os.path.join(p, 'latest.json.new'), 'w').write(json.dumps(doc) + '\n')
 os.replace(os.path.join(p, 'latest.json.new'), os.path.join(p, 'latest.json'))
 PY
-ls "$PUB" | sed -n 's/^utreexo-\([0-9]*\)\.rcpt$/\1/p' | sort -n | head -n -3 | while read -r m; do rm -f "$PUB/utreexo-$m.rcpt"; done
+# retention (review M2): the PUBLISHED_KEEP most recently published receipts (by publish time), never the current one;
+# receipts above H (an orphaned branch after a fall-back) were already moved aside above
+k=1
+for f in $(cd "$PUB" && ls -t utreexo-*.rcpt); do
+  [ "$f" = "$NAME" ] && continue
+  if [ "$k" -lt "$PUBLISHED_KEEP" ]; then k=$((k + 1)); else rm -f "$PUB/$f"; fi
+done
 rm -f "$D/work"/step_*.rcpt
 
 if [ -n "$PUBLISH" ]; then
-  rsync -rt --delay-updates --delete-after -e "ssh -i $PUBLISH_KEY -o BatchMode=yes" "$PUB/" "$PUBLISH" || die "publish to $PUBLISH failed"
+  # receipts first (latest.json excluded, so the receiver's copy is not touched), then latest.json alone: a reader of
+  # latest.json never finds a name that is not there yet (review L3)
+  ssh_=(-e "ssh -i $PUBLISH_KEY -o BatchMode=yes")
+  rsync -rt --delay-updates --delete-after --exclude latest.json "${ssh_[@]}" "$PUB/" "$PUBLISH" || die "publish to $PUBLISH failed"
+  rsync -t "${ssh_[@]}" "$PUB/latest.json" "$PUBLISH" || die "publish of latest.json to $PUBLISH failed"
 fi
 echo "$H $HX" > "$D/published"
-log "published block $H $HX ($V)"
+log "published block $H $HX (${V%% *})"

@@ -60,6 +60,14 @@ t('H=3 an unknown network', u.verify({ receipt: rd('mainnet-3.receipt'), network
   t('tip 103 other base image', u.verify({ receipt: R, baseImageHex: 'ab'.repeat(32), expectAt: `103:${H103}` }), 'fail');
   t('tip 103 checked as signet', u.verify({ receipt: R, network: 'signet', expectAt: `103:${H103}` }), 'fail');
   t('a base image id on a base receipt', u.verify({ receipt: rd('mainnet-3.receipt'), baseImageHex: 'ab'.repeat(32), expectAt: `3:${H3}` }), 'fail');
+  {
+    // review H1: a composite receipt nested 300,000 levels deep: refused before decoding (no trap, a 'fail' JSON)
+    const n = 300000, b = new Uint8Array(4 + 20 * n), v = new DataView(b.buffer);
+    for (let i = 0; i < n; i++) v.setUint32(4 + 20 * i + 8, 1, true); // segments 0, assumption_receipts 1, tag 0
+    const r = u.verify({ receipt: b, expectAt: `103:${H103}` });
+    t('a composite receipt nested 300,000 deep', r, 'fail');
+    if (!r.checks.some(c => !c.ok && c.what.includes('composite'))) { fail++; console.log('FAIL nested: not refused as composite', JSON.stringify(r.checks)); }
+  }
   if (/^[0-9a-f]{64}$/.test(u.tipImageId())) pass++; else { fail++; console.log('FAIL tipImageId', u.tipImageId()); }
 }
 console.log(`ZAPP_UTREEXO_WASM ${pass} passed, ${fail} failed; image ${u.imageId()}`);

@@ -46,7 +46,7 @@ t "the step cap: 103 + 50" 153 "$(DRY_RUN=1 MAX_STEP=50 h_of)"
 MAX_STEP=77 "$F" > "$W/3.log" 2>&1; t "moved tip publishes" 0 $?
 t "  latest.json height" 180 "$(js height)"
 t "  latest.json steps" 2 "$(js steps)"
-t "  the old receipt is kept for reorgs" yes "$([ -f "$W/d/hist/step_103.rcpt" ] && echo yes)"
+t "  the old state is kept for reorgs" yes "$(ls -d "$W"/d/state/103-* >/dev/null 2>&1 && echo yes)"
 X180=$(cli getblockhash 180)
 "$V" verify "$W/www/latest.rcpt" --expect "180:$X180" > "$W/v3.log" 2>&1; t "  the published receipt verifies to block 180 (DEMO)" 2 $?
 grep -q 'tip mode: 2 steps from the base at 3, the last from 103' "$W/v3.log"; t "  and names its chain of steps" 0 $?

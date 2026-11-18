@@ -69,8 +69,12 @@ pub fn tip_image_source(id: &[u8; 32]) -> &'static str {
     }
 }
 
-/// The kind word of a receipt's journal (unverified: only to pick which statement to check it as).
+/// The kind word of a receipt's journal (unverified: only to pick which statement to check it as). None for anything
+/// that is not a single succinct or Groth16 receipt: `receipt_kind` refuses composite receipts BEFORE any decoding,
+/// because they nest without bound and bincode's recursion overflows the stack on a deep one (review H1, 18.11.2026:
+/// 300,000 nested levels, 6 MB, killed the CLI with a stack overflow when this decoded first).
 pub fn journal_kind(receipt: &[u8]) -> Option<u32> {
+    receipt_kind(receipt).ok()?;
     let r = decode_receipt(receipt).ok()?;
     r.journal.bytes.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
 }

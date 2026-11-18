@@ -16,6 +16,7 @@
 //!       The receipts are checked by zapps/utreexo (`zapp-utreexo verify`), the zAPP's own module.
 //!   zyncapp utreexo-tip-prove <block json dir> <previous receipt | previous .journal> <H> <core receipt | state_<T>.json>
 //!       <out receipt> [--signet] [--execute] [--prof N] [--elf <tip guest>] [--base-id <hex>] [--cache <file>] [--ref <log>]
+//!       [--headers <file>]   (the link H+1..T as "<height> <header hex>" lines; default: from the block files)
 //!       One STEP of the tip mode (UTREEXO_ZAPP.md §10): from the roots the previous receipt proves (a base receipt of
 //!       utreexo-prove, or an earlier step) to the roots after H, block by block as Floresta does (rustreexo
 //!       Stump::modify with batch proofs from a native MemForest), linked by headers H+1..T to the core tip. A
@@ -777,7 +778,21 @@ fn utreexo_tip_prove(a: &[String]) {
         let b = utreexo_host::read_block(dir, h);
         fr.push(nat.block(&b.stripped).unwrap_or_else(|e| die(&format!("native step: {e}"))));
     }
-    let mut link: Vec<[u8; 80]> = (stop + 1..=cs.height).map(|h| utreexo_host::read_block(dir, h).header).collect();
+    // the link H+1..T: from a headers file ("<height> <80-byte header hex>" per line, as the follower writes it with
+    // getblockheader; only the headers are needed), else from the block files
+    let mut link: Vec<[u8; 80]> = match flag(a, "--headers") {
+        Some(f) => {
+            let txt = std::fs::read_to_string(f).unwrap_or_else(|e| die(&format!("--headers: {e}")));
+            let rows: Vec<(u32, [u8; 80])> = txt.lines().filter(|l| !l.trim().is_empty()).map(|l| {
+                let (h, x) = l.trim().split_once(' ').unwrap_or_else(|| die("--headers: want '<height> <hex>' lines"));
+                let b: [u8; 80] = utreexo_host::unhex(x.trim()).try_into().unwrap_or_else(|_| die("--headers: a header is not 80 bytes"));
+                (h.parse().unwrap_or_else(|_| die("--headers: height?")), b)
+            }).collect();
+            if rows.iter().map(|r| r.0).ne(stop + 1..=cs.height) { die(&format!("--headers: want heights {}..={} in order", stop + 1, cs.height)); }
+            rows.into_iter().map(|r| r.1).collect()
+        }
+        None => (stop + 1..=cs.height).map(|h| utreexo_host::read_block(dir, h).header).collect(),
+    };
     let mut tip = nat.last;
     for l in &link { tip = step::link_header(l, &tip).unwrap_or_else(|e| die(e)); }
     if tip != cs.tip_hash { die(&format!("the block files' block {} is {}, the core tip is {}", cs.height, utreexo_tip_host::disp(&tip), disp(&cs.tip_hash))); }
@@ -796,7 +811,6 @@ fn utreexo_tip_prove(a: &[String]) {
         println!("UTREEXO_REF_MATCH H={stop}: leaves and roots byte-identical to Floresta's update_acc");
     }
     if let Some(c) = &tc {
-        if c == "link_drop" { link.pop(); }
         println!("UTREEXO_TIP_TAMPER {c}: {}", utreexo_tip_host::tamper(c, &mut fr, &mut link).unwrap_or_else(|e| die(&e)));
     }
     // a journal-level tamper: the previous statement's roots (its receipt then does not match: no assumption resolves it)
