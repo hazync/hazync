@@ -92,11 +92,12 @@ def candidate_dirs():
     here = Path(__file__).resolve().parent
     out = [here, Path.cwd(), Path.home() / "Downloads", Path.home() / "Desktop", Path.home()]
     inst = install_dir()
-    if inst:   # the installed app's own prover first
-        out = [inst / "prover", inst] + out
+    if inst:   # the installed app's own provers first: the CUDA one in prover\, the CPU one in prover-cpu\ (v0.26.1)
+        out = [inst / "prover", inst / "prover-cpu", inst] + out
     # gh run download puts an artifact in a folder named after it
     for base in list(out):
         for sub in ("hazync-host-windows-x86_64-cuda", "hazync-host-windows-x86_64-cpu",
+                    "hazync-host-x86_64-windows-cuda", "hazync-host-x86_64-windows-cpu",
                     "cuda126", "cpu", "cuda", "gpu", "pascal", "hazync", "prover"):
             out.append(base / sub)
     # ⚠ ONE LEVEL DEEPER UNDER HOME AND Downloads, because that is where the artifacts actually
@@ -448,14 +449,16 @@ def setup_steps(cfg, python_exe=None):
     else:
         found = find_hosts()
         detail = ("not set. " + (f"Found one at {found[0]['path']}" if found
-                                 else "Download hazync-host-x86_64-windows-cuda.zip from the latest "
+                                 else "Download hazync-host-x86_64-windows-cuda.zip (NVIDIA card) or "
+                                      "hazync-host-x86_64-windows-cpu.zip (any PC, much slower) from the latest "
                                       "release, extract it and point at host.exe — see the Setup tab."))
     steps.append(Step(
         "host", "The prover (host.exe)",
         hgood, detail,
-        manual=("Download hazync-host-x86_64-windows-cuda.zip from "
+        manual=("Download hazync-host-x86_64-windows-cuda.zip (for an NVIDIA card) or "
+                "hazync-host-x86_64-windows-cpu.zip (any PC; much slower) from "
                 "https://github.com/hazync/hazync/releases/latest, extract it (keep "
-                "cudart64_12.dll beside host.exe) and select host.exe." if not hgood else None)))
+                "cudart64_12.dll beside the CUDA host.exe) and select host.exe." if not hgood else None)))
 
     # 4 — identity
     handle = pub = None
