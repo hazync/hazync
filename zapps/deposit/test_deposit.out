@@ -66,12 +66,21 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --max-tip-age 60 <tmp>/tip.json (expect exit 1)
-  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794822328
+  [FAIL] the tip's block time 1794298666 is within 60 s of this clock 1794987446
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == env RISC0_DEV_MODE=1 zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/core.json (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been dis
+SWIFTSYNC_VERIFY_FAIL: panicked at /home/defenwycke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.1.0/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been dis
 exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --allow-demo --no-require-identity --image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c <tmp>/core.json (expect exit 1)
+  [FAIL] core: the receipt is of image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet), not the image given, 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c: a given image is the only one it may verify against
+  [FAIL] core: the receipt file is a single succinct or Groth16 proof (not a receipt (too short))
+  [FAIL] the core chain proof verifies (see the core: checks)
+SWIFTSYNC_VERIFY_FAIL: deposit: 3 check(s) failed
+exit=1 PASS
+== zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --allow-demo --no-require-identity --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 <tmp>/core.json (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: NOT accepted (below Core's minimum chain work or the checkpoint, or the tip not compared): deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83
+exit=2 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --network signet <tmp>/core.json (expect exit 1)
   [FAIL] the bundle is for "mainnet", the network asked about "signet"
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
@@ -101,4 +110,4 @@ exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/junk.json (expect exit 1)
 SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 1 column 1)
 exit=1 PASS
-test_deposit.sh: 30/30 as expected
+test_deposit.sh: 32/32 as expected

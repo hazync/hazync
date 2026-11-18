@@ -51,11 +51,17 @@ impl<'a> Frame<'a> {
 const ASK_KEYS: &[&str] = &["txid", "vout", "amount", "script", "op_return", "min_depth", "min_validated_depth",
                             "allow_pow_only_block", "expect", "max_tip_age", "require_identity", "allow_demo", "network"];
 
-/// The caller's ask (a JSON object; see [`verify_deposit`]) and the network it names. A key that is null counts as absent.
+/// The caller's ask (a JSON object; see [`verify_deposit`]) and the network it names. A key that is present with null
+/// is refused, never read as absent (review 11-18): JSON.stringify writes NaN and Infinity as null, so
+/// `amount: parseInt('ten btc')` arrives as "amount": null, and reading that as absent would drop the amount check
+/// (`min_depth: parseInt('')` would fall back to the default). A key left out (undefined in JS) takes its default.
 fn parse_ask(v: &serde_json::Value) -> Result<(zapp_deposit::DepositAsk, String), String> {
     let o = v.as_object().ok_or("ask: not a JSON object")?;
     if let Some(k) = o.keys().find(|k| !ASK_KEYS.contains(&k.as_str())) {
         return Err(format!("ask: unknown key {k:?} (the keys are {})", ASK_KEYS.join(", ")));
+    }
+    if let Some(k) = o.iter().find(|(_, x)| x.is_null()).map(|(k, _)| k) {
+        return Err(format!("ask: {k} is null (NaN and Infinity become null in JSON): give a value, or leave the key out for its default"));
     }
     let hexv = |k: &str| -> Result<Option<Vec<u8>>, String> {
         match &v[k] { serde_json::Value::Null => Ok(None),
@@ -98,8 +104,8 @@ fn parse_ask(v: &serde_json::Value) -> Result<(zapp_deposit::DepositAsk, String)
 /// "amount"? (sat), "script"? (hex), "op_return"? (hex payload), "min_depth"?, "min_validated_depth"? (default 1: the
 /// deposit's own block fully validated), "allow_pow_only_block"? (needs "min_validated_depth": 0), "expect"? ("height:hash" from a source the page trusts), "max_tip_age"? (s),
 /// "require_identity"? (default true: without "expect" the verdict is at best "demo"), "allow_demo"? (default false),
-/// "network"?}`. Any other key is refused (a FAIL verdict naming it), as the CLI refuses an unknown flag; a key that is
-/// null counts as absent. The bundle is refused when it has a field its format does not name.
+/// "network"?}`. Any other key is refused (a FAIL verdict naming it), as the CLI refuses an unknown flag; so is a key
+/// given as null (NaN and Infinity become null in JSON): leave a key out for its default. The bundle is refused when it has a field its format does not name.
 ///
 /// `now` is the CALLER's clock (the glue passes the device's unless given one). Unlike the CLI, which refuses a `--now`
 /// later than its own clock, the module has no clock to compare it with (wasm32-unknown-unknown, no imports): a page
@@ -153,7 +159,7 @@ mod tests {
     #[test]
     fn ask_refuses_unknown_keys() {
         let ok = serde_json::json!({"txid": T, "vout": 0, "amount": 1000000000, "min_depth": 6, "expect": "1:00",
-                                    "network": "mainnet", "allow_demo": null});
+                                    "network": "mainnet", "allow_demo": false});
         let (a, n) = parse_ask(&ok).unwrap();
         assert_eq!((a.vout, a.amount, a.min_depth, a.allow_demo, n.as_str()), (Some(0), Some(1_000_000_000), 6, false, "mainnet"));
         for k in ["ammount", "min_dept", "op-return", "Amount", "expect_tip", ""] {
@@ -166,6 +172,13 @@ mod tests {
             assert_eq!(parse_ask(&v).err().as_deref(), Some("ask: not a JSON object"));
         }
         assert!(parse_ask(&serde_json::json!({"txid": T, "network": 1})).unwrap_err().contains("network is not a string"));
+        // review 11-18: an explicit null (JSON.stringify's NaN) is refused for every key, never read as absent
+        for k in ASK_KEYS {
+            let mut v = ok.clone();
+            v[*k] = serde_json::Value::Null;
+            let e = parse_ask(&v).err().unwrap_or_else(|| panic!("{k}: null accepted"));
+            assert!(e.contains(&format!("ask: {k} is null")), "{k}: {e}");
+        }
     }
     /// Review finding 7: `self.i + n` overflowed (a panic in a debug build) on a length near usize::MAX.
     #[test]

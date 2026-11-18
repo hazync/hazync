@@ -56,6 +56,11 @@ t('not a bundle', FAIL, v.verifyDeposit({ bundle: '{"kind":1}', ask: { txid: T }
 // review (11-18): a misspelt ask key is refused, not dropped with its check; so is a field the bundle format does not name
 t('misspelt ask key (ammount)', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, ammount: 1, expect: TIP } }));
 t('misspelt ask key (min_dept)', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, min_dept: 975110, expect: TIP } }));
+// review (11-18): JSON.stringify turns NaN into null; a null ask value is refused, not read as absent (its check dropped)
+for (const [k, x] of [['amount', parseInt('ten btc')], ['min_depth', parseInt('')], ['max_tip_age', Infinity], ['script', null], ['op_return', null]]) {
+  const r = t(`ask ${k}: ${x} (null in JSON)`, FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, [k]: x, expect: TIP } }));
+  if (!r.checks.some(c => !c.ok && c.what.startsWith(`ask: ${k} is null`))) { fails++; console.log(`FAIL no check names ${k}`, r.checks); }
+}
 const xf = structuredClone(tip); xf.block.extra = 1;
 t('bundle with an unknown field', FAIL, v.verifyDeposit({ bundle: xf, ask: { txid: T, expect: TIP } }));
 const xm = structuredClone(tip); xm.block.mmr_path = [];

@@ -26,7 +26,8 @@ export async function loadDeposit(source) {
      *  object); ask = { txid (the one YOU ask about), vout?, amount?, script?, op_return?, min_depth?,
      *  min_validated_depth? (default 1), allow_pow_only_block? (needs min_validated_depth 0), expect?, max_tip_age?, require_identity? (default true),
      *  allow_demo? (default false), network? }. Gate on `accepted` only. statement is null unless the verdict is 'ok',
-     *  or 'demo' with allow_demo (a DEMO chain is cheap to forge). `now` defaults to this device's clock. */
+     *  or 'demo' with allow_demo (a DEMO chain is cheap to forge). Leave an option out for its default: an unknown key,
+     *  or one that is null (as NaN and Infinity become in JSON), is refused. `now` defaults to this device's clock. */
     verifyDeposit({ bundle, ask, now }) {
       const enc = new TextEncoder();
       const parts = [enc.encode(typeof bundle === 'string' ? bundle : JSON.stringify(bundle)), enc.encode(JSON.stringify(ask))];

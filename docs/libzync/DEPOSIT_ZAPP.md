@@ -165,7 +165,9 @@ above it, never both (`zapp-deposit build` never wrote either form, so no bundle
 
 In WASM the ask is a JSON object with the keys of `zapp-deposit.js`'s doc comment; any other key is refused (a FAIL
 naming it), as the CLI refuses an unknown flag: a misspelt constraint (`ammount`, `min_dept`) would otherwise be
-dropped with its check. The WASM's `now` is the page's clock (the glue passes the device's unless given one): the
+dropped with its check. A key given as null is refused too, never read as absent: JSON.stringify writes NaN and
+Infinity as null, so `amount: parseInt('ten btc')` would otherwise drop the amount check. Leave a key out (undefined)
+for its default. The WASM's `now` is the page's clock (the glue passes the device's unless given one): the
 module has no clock of its own to clamp it to, as the CLI clamps `--now`, so a page that passes its own `now` is
 trusted for it (§4, the caller's clock).
 
@@ -211,11 +213,11 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | composed receipt, Groth16-wrapped | 88.5 s; 3,129 bytes (seal 256 bytes); verify 9 ms |
 | Groth16 wrap of the core receipt 0..200 (hazync-coord CPU + Docker) | 94.4 s; 227,362 -> 4,633 bytes (seal 256 bytes); verify 5 ms |
 | Groth16 wrap of the header receipt 0..975,278 | 97.0 s; 227,474 -> 4,745 bytes; verify 6 ms |
-| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `0484b509…`; its CLI is the crate `zapps/deposit/cli`, the only one linking zapps/common) | 1,196,718 bytes (342,603 gzipped) |
+| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `5f1e1fb1…`; its CLI is the crate `zapps/deposit/cli`, the only one linking zapps/common) | 1,197,088 bytes (342,787 gzipped) |
 
 Tests: 23 unit tests (`zapps/deposit/src/tests.rs`), `test_deposit.sh` 32/32 (5 chain-identity cases: an agreeing node, one
 naming another block, one giving no chainwork, one giving another chainwork, and the tip given), `wasm/test-deposit.mjs`
-19/19. Also covered since the review of 15.11.2026: `accepted` and the verdict under each of `require_identity` and
+24/24. Also covered since the review of 15.11.2026: `accepted` and the verdict under each of `require_identity` and
 `allow_demo`, a DEMO statement withheld, a transaction in its witness serialisation in a fully validated block, and a
 block of the v0.26.0 image (`46666b6f`, whose leaves commit the undo hash) on its real receipt of blocks 0..1. Refusals covered: the
 wrong txid (both ways), the wrong output, amount or script, insufficient depth or validated depth (the default 1 on a block above the core tip, 2 at h == Hc), a block not in
@@ -224,7 +226,7 @@ transaction trick on block 170 (whose merkle root IS dsha(coinbase txid || T): t
 reach the root), a block above the core tip (refused by default, flagged when allowed), a dev-mode receipt (in the
 bundle and in the environment), a flipped core receipt, a broken binding path, a header chain not from genesis or
 below the core tip, the wrong network, tip identity and freshness, and an OP_RETURN payload mismatch; since the review
-of 18.11.2026 an unknown bundle field, the other opening for the block's height, and (WASM) a misspelt ask key.
+of 18.11.2026 an unknown bundle field, the other opening for the block's height, and (WASM) a misspelt or null ask key.
 
 The real receipts used: core proof of mainnet 0..200 (`8888d59c`, `swiftsync-verify/vectors/`, with its run's
 `history.bin`), header proofs 0..100 + 101..200 and 0..975,278 (`de54b94f`), block 170 (the coinbase and Satoshi to
