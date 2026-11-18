@@ -67,7 +67,8 @@ form; §8 gives its measured cost.
                              "format": "simple" | "full" | "legacy", "signature": "<base64>" }, ... ] }
 ```
 
-Entries are in strictly increasing scriptPubKey byte order, so a script cannot appear twice. Purpose and nonce are 1
+No other field is read, at any level (statement, entry, fact): a field not listed here is refused, since it would be
+in no signed message. Entries are in strictly increasing scriptPubKey byte order, so a script cannot appear twice. Purpose and nonce are 1
 to 256 bytes of printable ASCII (0x20 to 0x7e), with no leading or trailing space: a line break, a Unicode line or
 paragraph separator or a bidirectional control would let a purpose show a wallet's user a line the message does not
 say. They are compared as given, never trimmed (CLI and WASM alike). `core_id` and `block_hash` are 64 lower-case hex
@@ -160,7 +161,9 @@ moved in any block after H.
 
 `zapp-statement` exits 0 `ZAPP_STATEMENT_OK`, 2 `ZAPP_STATEMENT_DEMO` (the statement holds, but the chain is below
 Core's minimum work, the tip was not compared with a source the checker trusts, or no purpose and nonce were given;
-the line says which), 1 `ZAPP_STATEMENT_FAIL`. The checker is its own binary rather than a `swiftsync-verify`
+the line says which), 1 `ZAPP_STATEMENT_FAIL`. Every line it prints is escaped (line breaks and other control or
+format characters as `\n`, `\u{2028}`, ...): text from the statement, or a library's error that echoes it, cannot print
+a line of its own, such as a forged verdict. Each flag is taken once; a repeat is refused. The checker is its own binary rather than a `swiftsync-verify`
 subcommand so that the core verifier carries no zAPP code; it verifies the receipt with the same library function.
 
 The checker chooses the purpose and nonce (an unpredictable nonce, a purpose naming both parties, §4), gives them to
