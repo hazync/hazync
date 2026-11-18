@@ -192,11 +192,26 @@ mid-rewind goes through `out/REWIND` (§5).
 | claims in flight (`ranges` claimed, `_fold_claims`) | voided. The worker's next beat gets the existing 409 "not your claim" | — |
 | `submissions` | untouched (append-only audit); one note row per epoch | yes |
 | `contributors.blocks` | **proposal:** keep the credit. The contributor proved a real block we asked for; the network orphaned it. Shown as "n orphaned" next to the count. The board's `proven` count excludes orphaned blocks. **Decided: kept** (§14) | — |
-| sponsorships marked `proven` over heights > F | back to `proving`, and their hold resumes | — |
+| sponsorships marked `proven` over heights > F | back to `proving`, and their hold resumes | — (⚠ below) |
 | `proofs/proof_<rid>.bin` | moved to `proofs/orphaned/E/` (it **must** move first, or the new chain's proof with the same id overwrites it) | yes, served at `/api/proof/orphaned/E/<rid>` |
 | spine | every accepted head is kept as `spine/heads/spine_<hi>.{bin,json}` for hi > tip − J (229 KB each: **66 MB for W, 0.46 GB for J**). If `spine.hi` > F, the newest kept head with hi ≤ F becomes `spine.bin`/`spine.json`, and the orphaned heads move to `spine/orphaned/E/` | yes |
 | caches | `_frontier_invalidate()`, every `_sf` entry, `_servable_high(force=True)` | — |
 | `meta` | `reorg_epoch = E` | — |
+
+⚠ **A reopened sponsorship holds the new branch's blocks for the sponsor bot ALONE** (review of P4, L8). Normal
+workers are kept off them (`SPONSOR_HOLD_SQL`), so at the tip the frontier waits for the bot's next timer run and a pod
+rental; the only signal is the hold alert after `SPONSOR_HOLD_ALERT` (6 h: `/api/state` `attention`, the board
+progress check). If the bot is down (its breaker latched, `hazync-check-breakers` reports it): start it again
+(`systemctl start hazync-sponsor-bot.service` after the cause is fixed); if it cannot run soon, release the hold by
+hand, so any worker proves the blocks, as the coordinator's user:
+
+```bash
+sudo -u hazync python3 -c "import sqlite3,time; c=sqlite3.connect('/var/lib/hazync-lz/coordinator.db'); \
+  c.execute(\"UPDATE sponsorships SET status='proven', proven_at=?, note=COALESCE(note,'')||' [hold released by hand after reorg]' \
+  WHERE id=? AND status='proving'\", (time.time(), <id>)); c.commit()"
+```
+
+(`proven` is what the sponsorship becomes anyway once its blocks are proven; it shows as proven a little early.)
 
 **Public API and website.** `/api/meta` gains
 `reorg: {epoch, fork, depth, orphaned: [[h, hash]…], state: "rewinding"|"done", at}`. The block page for an orphaned
@@ -627,6 +642,18 @@ thing (the coordinator reads no records). **Re-run after the fixes:** `reorg_e2e
 rewind exited 9 and was finished by the restart, applied once; the spine fell back from 116 to the kept head 103 and
 advanced on the new branch), `--w 288` PASS (51), the control fails 15; `rewind_test.sh` 57/57 (case K fails 3 with the
 pre-fix host); `test_reorg.py` PASS and its six controls fail; the other coordinator tests pass.
+
+**The cost of exit 4 on an ack timeout** (review of P4, L9). A coordinator that is down, or not applying records, for
+more than `HAZYNC_REORG_ACK_TIMEOUT_S` (600 s) during a reorg turns the automatic rewind into a manual restart: prep
+exits 4 with `out/REWIND` kept (the unit fails and alerts), and the fetcher, waiting for the marker to go, exits 4 after
+`HAZYNC_REWIND_WAIT_S` (3,600 s). Nothing is lost: the rewind is idempotent and resumes from the intent. Recovery, once
+the coordinator is serving again (`curl -s http://127.0.0.1:8899/api/meta`) and its journal shows no `[reorg] REFUSED`:
+
+```bash
+systemctl reset-failed libzync-board-prep libzync-board-fetch
+systemctl start libzync-board-prep      # the runner sees out/REWIND, reruns the rewind, waits for the ack again
+systemctl start libzync-board-fetch     # only if it has exited (after its 3,600 s); it resumes after the rewind
+```
 
 **Automatic handling stays OFF** (`HAZYNC_REORG_AUTO` unset in every unit), and **must not go on at the tip before P5**
 (review M4): offsite copies are append-only by name with no depth delay (§9), so an orphaned proof uploaded blocks the

@@ -419,6 +419,19 @@ sudo install -m 0644 coordinator/deploy/watchdog/hazync-watchdog.{service,timer}
 sudo systemctl daemon-reload && sudo systemctl enable --now hazync-watchdog.timer
 ```
 
+**After a reorg** (docs/libzync/REORG.md §7, §17). Two things can need a person even when the rewind ran by itself:
+
+- **An ack timeout** (prep `PREP_REWIND_NO_ACK`, exit 4): the coordinator was down or refused the record for more
+  than 10 min. Once it serves again and its journal has no `[reorg] REFUSED`: `systemctl reset-failed
+  libzync-board-prep libzync-board-fetch; systemctl start libzync-board-prep` (it reruns the rewind from
+  `out/REWIND`), and `systemctl start libzync-board-fetch` if the fetcher has also exited (after its 3,600 s wait).
+- **A sponsorship hold on the new branch**: a sponsorship that was `proven` above the fork goes back to `proving` and
+  keeps its blocks for the sponsor bot alone; the frontier waits for the bot (alert after 6 h). Bot down: fix and
+  `systemctl start hazync-sponsor-bot.service`; or release the hold by hand (REORG.md §7, the `UPDATE sponsorships`
+  command).
+- **`/api/meta.reorg_alert`** set: the board's highest verified block is not prep's block now, a reorg the board did
+  not follow. REORG.md §11.
+
 **Test the live path, not just the script** — a push that never reaches the phone is the failure:
 `hazync-alert.sh "Hazync: test" "hello"` on each box, and on the coordinator a throwaway unit with
 `ExecStart=/bin/false` + `OnFailure=hazync-alert@%n.service` proves the systemd wiring end to end.
