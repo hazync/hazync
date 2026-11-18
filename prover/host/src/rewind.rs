@@ -115,13 +115,28 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
             let m: serde_json::Value = std::fs::read_to_string(std::path::Path::new(blocks).join("REORG")).ok()
                 .and_then(|x| serde_json::from_str(&x).ok()).unwrap_or_else(|| refuse(&format!("nothing to rewind to: no {rw} (no rewind in progress) and no readable {blocks}/REORG (none asked for, or a rewind already finished and removed it)")));
             let fork = m["fork"].as_u64().unwrap_or_else(|| refuse("REORG has no fork")) as u32;
+            // a rewind that finished all but removing the marker (a crash after the intent went; review of P4, L5):
+            // prep is AT the fork's block already. Nothing to undo and no new epoch to open: the marker goes.
+            let tip = std::fs::read_to_string(format!("{out}/PREP_TIP.json")).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok());
+            if let (Some(t), Some(fh)) = (&tip, m["fork_hash"].as_str()) {
+                if t["height"].as_u64() == Some(fork as u64) && t["hash"].as_str() == Some(fh) {
+                    let _ = std::fs::remove_file(std::path::Path::new(blocks).join("REORG"));
+                    crate::lz::cl_sync_dir(std::path::Path::new(blocks));
+                    println!("PREP_REWOUND to {fork}: prep is already at the fork's block (a rewind that stopped before removing the marker); the marker removed");
+                    return;
+                }
+            }
             let depth = m["depth"].as_u64().unwrap_or(u64::MAX);
             if m["class"].as_str() != Some("auto") && !allow_deep {
                 refuse(&format!("the fork at {fork} is {depth} deep, beyond the automatic window (class {}): --allow-deep", m["class"]));
             }
             if depth > w as u64 && !allow_deep { refuse(&format!("depth {depth} > W = {w}: --allow-deep")); }
-            let epoch = std::fs::read_dir(format!("{out}/orphaned")).map(|it| it.flatten()
-                .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok()).max().unwrap_or(0)).unwrap_or(0) + 1;
+            // the next epoch is above every one used before: the orphaned directories AND the board's records (review of
+            // P4, H1: with out/orphaned/ cleared by hand, the epoch came round to a number whose record and ack were
+            // still there, so an old ack "acked" a new rewind the coordinator never saw)
+            let max_in = |d: String, suf: &str| std::fs::read_dir(d).map(|it| it.flatten()
+                .filter_map(|e| e.file_name().to_string_lossy().strip_suffix(suf)?.parse::<u32>().ok()).max().unwrap_or(0)).unwrap_or(0);
+            let epoch = max_in(format!("{out}/orphaned"), "").max(max_in(format!("{out}/reorg/records"), ".json")) + 1;
             (fork, epoch, Some(m))
         }
     };
@@ -313,14 +328,27 @@ fn record_and_ack(out: &str, epoch: u32, fork: u32, fork_hash: &[u8; 32], orphan
     let rd = std::path::PathBuf::from(format!("{out}/reorg/records"));
     std::fs::create_dir_all(&rd).unwrap_or_else(|e| panic!("{}: {e}", rd.display()));
     let rp = rd.join(format!("{epoch}.json"));
+    let fork_hash = display(&crate::hex(fork_hash));
+    let orph: Vec<serde_json::Value> = orphaned.iter().map(|(h, x)| serde_json::json!([h, display(x)])).collect();
     let bytes = match std::fs::read(&rp) {
-        Ok(b) if !b.is_empty() => b,
+        Ok(b) if !b.is_empty() => {
+            // a record already there must be THIS rewind's (a rerun keeps its bytes); another one's is a stop for a
+            // person, never an ack inherited from it (review of P4, H1)
+            let v: serde_json::Value = serde_json::from_slice(&b).unwrap_or(serde_json::Value::Null);
+            if v["fork"].as_u64() != Some(fork as u64) || v["fork_hash"].as_str() != Some(fork_hash.as_str())
+                || v["orphaned"].as_array() != Some(&orph) {
+                println!("PREP_REWIND_FAILED {} is another rewind's record (fork {}, not {fork}): exit 4; out/REWIND is kept \
+                          (docs/libzync/REORG.md §17)", rp.display(), v["fork"]);
+                std::process::exit(reorg::EXIT_REORG);
+            }
+            b
+        }
         _ => {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
             let rec = serde_json::json!({
-                "epoch": epoch, "fork": fork, "fork_hash": display(&crate::hex(fork_hash)),
+                "epoch": epoch, "fork": fork, "fork_hash": fork_hash,
                 "depth": orphaned.iter().map(|o| o.0).max().map_or(0, |t| t.saturating_sub(fork)),
-                "orphaned": orphaned.iter().map(|(h, x)| serde_json::json!([h, display(x)])).collect::<Vec<_>>(),
+                "orphaned": orph,
                 "new": if new.is_array() { new.clone() } else { serde_json::json!([]) },
                 "at": now, "source": "libzync-prep-rewind"});
             let b = rec.to_string().into_bytes();

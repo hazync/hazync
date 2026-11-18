@@ -285,6 +285,42 @@ run $r $hi; rc2=$?
 check "$([ $rc = 0 ] && [ $rc2 = 0 ] && echo 1)" "E: depth 13 with --allow-deep (the runbook's one command), then the runner (exit $rc, $rc2)"
 same_as_ref $r $q $hi $f "E depth 13 --allow-deep"
 
+echo "== K. the board's record and ack (P4 review): an epoch never reused (H1), another rewind's record refused, and a"
+echo "   rewind that stopped before removing the marker finished without a new epoch (L5)"
+rw() {  # rw <root> [env...]: the rewind as the runner runs it
+    local r=$1; shift
+    (cd $r && env HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie HAZYNC_PREP_LEAF_BUNDLES=$r/leaves "$@" \
+         $r/bin/host_lz libzync-prep-rewind $r/out $r/blocks >> $r/run.log 2>&1)
+}
+r=$O/k; copy_template $r; marker $r 198 2
+rw $r; rc=$?
+check "$([ $rc = 0 ] && [ -e $r/out/reorg/records/1.json ] && echo 1)" "K: a rewind to 198 (epoch 1; no coordinator: HAZYNC_REORG_ACK=0) (exit $rc)"
+# out/orphaned/ cleared by hand; epoch 1's ack still in the ack directory
+mkdir -p $r/acks; python3 -c "import hashlib,json,sys; print(json.dumps({'record_sha256': hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()}))" \
+    $r/out/reorg/records/1.json > $r/acks/1.ack
+rm -rf $r/out/orphaned; r1=$(sha256sum < $r/out/reorg/records/1.json)
+marker $r 196 2
+rw $r HAZYNC_REORG_ACK=1 HAZYNC_REORG_ACK_DIR=$r/acks HAZYNC_REORG_ACK_TIMEOUT_S=3; rc=$?
+check "$([ $rc = 4 ] && [ -e $r/out/reorg/records/2.json ] && [ "$(sha256sum < $r/out/reorg/records/1.json)" = "$r1" ] && [ -e $r/out/REWIND ] \
+         && grep -aq PREP_REWIND_NO_ACK $r/run.log && echo 1)" \
+      "K H1: the next rewind opens epoch 2 (not 1 again, whose old ack would pass), waits, no ack: exit 4 (exit $rc)"
+python3 - $r/out/reorg/records/2.json <<'PY2'
+import json, sys
+v = json.load(open(sys.argv[1])); v["fork"] = 100; open(sys.argv[1], "w").write(json.dumps(v))
+PY2
+rw $r HAZYNC_REORG_ACK=0; rc=$?
+check "$([ $rc = 4 ] && grep -aq "is another rewind's record" $r/run.log && [ -e $r/out/REWIND ] && echo 1)" \
+      "K H1: records/2.json of another rewind (fork 100) under the intent of epoch 2: exit 4, the intent kept (exit $rc)"
+r=$O/k5; copy_template $r; marker $r 198 2
+rw $r; rc=$?
+fh=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['hash'])" $r/out/PREP_TIP.json)
+printf '{"fork": 198, "depth": 2, "class": "auto", "prep_tip": 200, "fork_hash": "%s"}\n' $fh > $r/blocks/REORG
+n0=$(ls $r/out/orphaned | wc -l)
+rw $r; rc2=$?
+check "$([ $rc = 0 ] && [ $rc2 = 0 ] && [ ! -e $r/blocks/REORG ] && [ "$(ls $r/out/orphaned | wc -l)" = $n0 ] && [ ! -e $r/out/reorg/records/2.json ] \
+         && grep -aq 'already at the fork' $r/run.log && echo 1)" \
+      "K L5: the marker left after a finished rewind: removed, no new epoch, no new record (exit $rc, $rc2)"
+
 echo
 [ $fails = 0 ] && { echo "all rewind checks passed"; exit 0; }
 echo "$fails check(s) FAILED"; exit 1

@@ -13,7 +13,9 @@ Why not `bitcoind -regtest`: prep would need a regtest host, whose guest is buil
 the long build). The fake node is P3's (rewind_test.sh case F): mainnet 1..200 (prover/testdata) and synthetic
 branches (reorg_branch.py), served through the same RPC calls the fetcher makes.
 
-Scenarios, each on the chain the one before left: reorgs of depth 1, 2 and W, each once MID-PROVE (prep at rest at the
+Scenarios, each on the chain the one before left (depth 2 mid-prove with the rewind dying at its `rewind-after-record`
+hook and restarted as systemd would; depth W mid-prove with spine heads below and above the fork): reorgs of depth 1, 2
+and W, each once MID-PROVE (prep at rest at the
 tip; the worker holds a claim and an unsubmitted receipt of the tip) and once MID-PREP (blocks fetched and waiting,
 prep stopped between them by SIGSTOP when the node reorgs, continued once the fetcher has seen it); then depth W+1:
 the fetcher and prep stop with exit 4 (the units fail; their OnFailure alert is stubbed as a log line) and nothing
@@ -24,9 +26,9 @@ reaches the new tip, nothing is parked, and a held orphaned receipt is refused 4
 
   H=<host> python3 reorg_e2e.py [--w 12] [--out DIR]       # must PASS; ~5 min at W=12
   H=<host> python3 reorg_e2e.py --w 288                    # the doc's second run; longer
-  H=<host> python3 reorg_e2e.py --control                  # the coordinator ignores prep's records and prep does not
-                                                           # wait for an ack: the board keeps the orphaned branch;
-                                                           # MUST FAIL (runs the first two scenarios only)
+  H=<host> python3 reorg_e2e.py --control                  # ONE flip: the coordinator reads no records (prep waits
+                                                           # for an ack that never comes, the board keeps the orphaned
+                                                           # branch); MUST FAIL (the first two scenarios only)
 """
 import base64, json, os, pathlib, shutil, signal, socket, sqlite3, subprocess, sys, threading, time, urllib.error, urllib.request
 
@@ -88,7 +90,7 @@ for k in [k for k in ENV if k.startswith("HAZYNC_") and k not in (
         "HAZYNC_RPC_CLI")]:
     del ENV[k]
 if CONTROL:
-    ENV["HAZYNC_REORG_ACK"] = "0"
+    WAIT = min(WAIT, 240.0)          # timing only: the control flips ONE thing, the coordinator's records (below)
 
 procs = []
 def spawn(cmd, log, env=ENV):
@@ -107,20 +109,22 @@ def start_fetcher():
                   "--jobs", "2", "--after-saves", str(R / "out")], O / "fetch.log")
 
 class Runner:
-    """libzync-prep-run.sh as systemd runs it: started again 1 s after an exit 5 (not in RestartPreventExitStatus),
-    stopped on any other exit (exit 4 fails the unit, whose OnFailure alert is stubbed here as a line in runs.log)."""
+    """libzync-prep-run.sh as systemd runs it (Restart=on-failure, RestartPreventExitStatus=3 4): started again 1 s after
+    any exit but 0, 3 and 4 (5 = stopped for a rewind, 9 = a crash hook); stopped on those, and on 3 or 4 the unit
+    fails, whose OnFailure alert is stubbed here as a line in runs.log. `once_env`: added to the next start only."""
     def __init__(self):
-        self.rc, self.cur, self.exits = None, None, []
+        self.rc, self.cur, self.exits, self.once_env = None, None, [], {}
         self.t = threading.Thread(target=self.loop, daemon=True); self.t.start()
     def loop(self):
         while True:
+            extra, self.once_env = self.once_env, {}
             self.cur = spawn(["bash", str(R / "bin/libzync-prep-run.sh")], O / "run.log",
-                             dict(ENV, LZ_ROOT=str(R), LZ_HI="100000"))
+                             dict(ENV, LZ_ROOT=str(R), LZ_HI="100000", **extra))
             rc = self.cur.wait()
             self.exits.append(rc)
             with open(O / "runs.log", "a") as f:
-                f.write(f"runner exit {rc}\n" + (f"ALERT (stub): libzync-prep failed with exit {rc}\n" if rc not in (0, 5) else ""))
-            if rc != 5:
+                f.write(f"runner exit {rc}\n" + (f"ALERT (stub): libzync-prep failed with exit {rc}\n" if rc in (3, 4) else ""))
+            if rc in (0, 3, 4):
                 self.rc = rc; return
             time.sleep(1)
     def prep_pid(self):
@@ -249,7 +253,7 @@ def db1(sql, *a):
     finally: c.close()
 
 # ---- run -------------------------------------------------------------------------------------------------------------
-print(f"== reorg end to end: W={W}, J={J}, out {O}{' (CONTROL: the board ignores prep, prep waits for no ack)' if CONTROL else ''}", flush=True)
+print(f"== reorg end to end: W={W}, J={J}, out {O}{' (CONTROL: the coordinator reads no records)' if CONTROL else ''}", flush=True)
 set_world(chain[:60])
 coord = spawn([sys.executable, str(REPO / "coordinator/server.py")], O / "coord.log", CENV)
 fetcher = start_fetcher()
@@ -279,12 +283,26 @@ def settle(what):
     check(ok and not bad, f"{what}: every verified range is on prep's chain ({len(bad)} not: {bad[:4]})")
     return ok
 
-def reorg(d, mode):
-    """A reorg of depth d below prep's tip; mode 'prove' (prep at rest, the worker holding the tip) or 'prep'."""
+def spine(h):
+    """A spine head [1..h] on prep's chain now, submitted as the worker."""
+    r = json.dumps({"lo": 1, "hi": h, "in": GEN, "out": tip(h), "n": os.urandom(6).hex()}).encode()
+    return api("/api/spine", {"pubkey": PK, "sig": SK.sign(r).hex(), "handle": "e2e", "receipt": base64.b64encode(r).decode()})
+
+def spine_hi():
+    code, out = api("/api/spine")
+    return out.get("hi") if code == 200 else None
+
+def reorg(d, mode, crash=None, spine_case=False):
+    """A reorg of depth d below prep's tip; mode 'prove' (prep at rest, the worker holding the tip) or 'prep'. crash: a
+    crash hook the rewind dies at once (HAZYNC_CRASH_AT), as systemd then restarts it. spine_case: spine heads below
+    and above the fork first; the spine must fall back to the one below."""
     global chain, epoch
-    tag = f"depth {d} mid-{mode}"
+    tag = f"depth {d} mid-{mode}" + (f", the rewind crashing at {crash}" if crash else "") + (", with the spine" if spine_case else "")
     print(f"== {tag}", flush=True)
     held = None
+    exits0 = len(runner.exits)
+    if crash:
+        runner.once_env = {"HAZYNC_CRASH_AT": crash}
     if mode == "prove":
         # enough chain above the fork, prep at rest at the tip, the board proven to tip-1, the tip claimed and proven
         grow(3)
@@ -295,6 +313,10 @@ def reorg(d, mode):
         check(isinstance(held, bytes), f"{tag}: the worker holds a claim and a receipt of {T} (old branch)")
         P = prep_tip()[0]
         F = P - d
+        if spine_case:
+            below, above = F - 2, T - 1
+            check(spine(below)[0] == 200 and spine(above)[0] == 200 and spine_hi() == above,
+                  f"{tag}: spine heads at {below} (below the fork) and {above} (above it)")
         chain = chain[:F] + branch(chain, F, (len(chain) - F) + 2); set_world(chain)
         stopped_at = None
     else:
@@ -312,11 +334,8 @@ def reorg(d, mode):
         wait(lambda: (R / "blocks/REORG").exists(), f"{tag}: the fetcher's marker")
         if pid: os.kill(pid, signal.SIGCONT)
         stopped_at = (P, fetched)
-    exits0 = len(runner.exits)
     epoch += 1
-    ok = wait(lambda: (O / "acks" / f"{epoch}.ack").exists() or CONTROL, f"{tag}: the coordinator's ack of epoch {epoch}")
-    if CONTROL:
-        wait(lambda: not (R / "blocks/REORG").exists(), f"{tag}: prep rewound (control: no ack)")
+    ok = wait(lambda: (O / "acks" / f"{epoch}.ack").exists(), f"{tag}: the coordinator's ack of epoch {epoch}")
     m = api("/api/meta")[1].get("reorg") or {}
     check(ok and m.get("epoch") == epoch and m.get("fork") == F,
           f"{tag}: fork {F}, prep's tip {P}{f' (stopped at {stopped_at[0]} of {stopped_at[1]} fetched)' if stopped_at else ''}; "
@@ -344,20 +363,28 @@ def reorg(d, mode):
         check(code == 409 and out.get("reorged") and not (att and att[0][0]),
               f"{tag}: the held receipt of {T} once the new branch is served: {code} reorged={out.get('reorged')}, "
               f"not counted (attempts {att and att[0][0]})")
+    if crash:
+        check(9 in runner.exits[exits0:] and len(db1("SELECT 1 FROM reorgs WHERE prep_epoch=?", epoch)) == 1,
+              f"{tag}: the rewind died at {crash} (exits {runner.exits[exits0:]}), was finished by the restart, applied once")
+    if spine_case:
+        check(spine_hi() == below, f"{tag}: the spine fell back to the kept head {below} ({spine_hi()})")
     flog, rlog = (O / "fetch.log").read_text(errors="replace"), (O / "run.log").read_text(errors="replace")
     check(f"FETCH_REORG_AUTO prep's tip" in flog and f"fork at {F}, depth" in flog and 5 in runner.exits[exits0:]
           and f"PREP_REWOUND to {F} (epoch {epoch})" in rlog and runner.rc is None,
           f"{tag}: the fetcher saw it (auto), prep exited 5, the runner rewound to {F} with no person "
           f"(runner exits since: {runner.exits[exits0:]})")
     settle(tag)
+    if spine_case:
+        check(spine(len(chain))[0] == 200 and spine_hi() == len(chain), f"{tag}: the spine advances on the new branch to {len(chain)}")
 
 # 0. the board on mainnet 1..60
 settle("start")
 if W > 100:
     grow(W + 20); settle(f"grown to {len(chain)}")
-plan = [(1, "prove"), (1, "prep"), (2, "prove"), (2, "prep"), (W, "prove"), (W, "prep")]
-for d, mode in (plan[:2] if CONTROL else plan):
-    reorg(d, mode)
+plan = [(1, "prove", {}), (1, "prep", {}), (2, "prove", {"crash": "rewind-after-record"}), (2, "prep", {}),
+        (W, "prove", {"spine_case": True}), (W, "prep", {})]
+for d, mode, kw in (plan[:2] if CONTROL else plan):
+    reorg(d, mode, **kw)
 if not CONTROL:
     # W+1: beyond the automatic window: both stop with exit 4 (the units fail and alert), the board keeps what it has
     tag = f"depth {W + 1}"
