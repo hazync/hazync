@@ -103,10 +103,8 @@ pub fn image_used(receipt: &[u8], image: &'static Image) -> &'static Image {
     } else {
         receipt
     };
-    if swiftsync_verify::receipt_kind(r).is_err() {
-        return image;
-    }
-    bincode::deserialize::<risc0_zkvm::Receipt>(r).ok()
+    // the core's strict decoder (#758: the kind gate, no trailing bytes, no word risc0 asserts on), as verify() decodes
+    swiftsync_verify::decode_receipt(r).ok()
         .and_then(|rc| swiftsync_verify::earlier_image_named_by(&rc, image))
         .unwrap_or(image)
 }
