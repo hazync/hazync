@@ -537,11 +537,11 @@ mod tests {
                 assert!(e.contains("not exactly one base64 witness"), "entry {i} {tail:?}: {e}");
             }
         }
-        // the P2TR entry: its 64-byte signature with 0x00 appended as a hash type, then one byte after the witness
+        // the P2TR entry: its Schnorr signature with hash type byte 0x00 (65 bytes), then one byte after the witness.
+        // The guard refuses it before any signature check, so what the 64 bytes sign does not matter here.
         let i = st.entries.iter().position(|e| unhex(&e.fact.script_pubkey).unwrap()[0] == 0x51).unwrap();
         let w: bitcoin::Witness = bitcoin::consensus::deserialize(&b64.decode(&st.entries[i].signature).unwrap()).unwrap();
-        let mut s65 = w.nth(0).unwrap().to_vec();
-        assert_eq!(s65.len(), 64);
+        let mut s65 = w.nth(0).unwrap()[..64].to_vec();
         s65.push(0x00);
         let w65 = bitcoin::Witness::from_slice(&[s65]);
         let mut t = st.clone();
