@@ -7,7 +7,7 @@ receipt inside the zkVM and applies the new blocks with rustreexo's `Stump::modi
 everything from the base (a walk from genesis, `zyncapp utreexo-prove`, installed once with `--set-base`).
 
 Nothing is published unless `zapp-utreexo verify`, given the node's own hashes at H and at the core tip, says OK (or
-DEMO with `ALLOW_DEMO=1`: every proof is DEMO while the images are local builds and the core proof is below minimum
+DEMO with `ALLOW_DEMO=1`: every proof is DEMO while the core proof is below minimum
 work). Published folder: `latest.json` (written last), `latest.rcpt` (the stable name), `utreexo-<H>.rcpt` (the last 3).
 Proposed URL: `https://hazync.org/utreexo-live/` (an nginx alias outside the site root, as `/headers-live/`).
 

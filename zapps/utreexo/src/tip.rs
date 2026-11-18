@@ -16,11 +16,11 @@ use swiftsync_verify::{hex, hex32, identity_matches, receipt_kind, work_at_least
 /// The tip statement's kind word ('ZU', version 2; version 1 is the base).
 pub const KIND_UTREEXO_TIP: u32 = 0x5A55_0002;
 
-/// The utreexo TIP image id this checker trusts by default. ⚠ A local build (hazync-coord, 18.11.2026,
-/// feat/utreexo-tip), NOT a reproducible build in reproduce/LIBZYNC_IDS: a proof under it is at most DEMO.
+/// The utreexo TIP image id this checker trusts by default: the reproducible container's build, pinned in
+/// reproduce/LIBZYNC_IDS (`zyncapp-utreexo-tip`, 18.11.2026, two agreeing builds: hazync-coord and a laptop).
 pub const UTREEXO_TIP_IMAGE_ID: &str = "ab6f7a26fe4cb13446c3d0b3ee352e6bf3508a897e0363a0a2ef6a559d51353e";
 /// Whether [`UTREEXO_TIP_IMAGE_ID`] is pinned (a reproducible build). While it is not, a proof under it is at most DEMO.
-pub const UTREEXO_TIP_IMAGE_PINNED: bool = false;
+pub const UTREEXO_TIP_IMAGE_PINNED: bool = true;
 
 /// The tip guest's statement, field for field and in order (risc0 serde).
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -42,7 +42,7 @@ t('H=3 an unknown network', u.verify({ receipt: rd('mainnet-3.receipt'), network
 }
 {
   const r = u.verify({ receipt: rd('mainnet-3.receipt'), expectAt: `3:${H3}` });
-  if (r.network === 'mainnet' && r.image_source === 'builtin-unpinned' && typeof r.image_label === 'string') pass++;
+  if (r.network === 'mainnet' && r.image_source === 'builtin-pinned' && r.image_label === null) pass++;
   else { fail++; console.log('FAIL network / image_source fields', r.network, r.image_source, r.image_label); }
 }
 // tip mode: the real step 3 -> 103 on the core proof 1..3,836

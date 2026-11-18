@@ -47,7 +47,7 @@ want 1 "--network twice" -- verify $V/mainnet-3.receipt --network mainnet --netw
 want 2 "--json on DEMO" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json
 [ ! -s "$T/out" ] || { cat "$T/out"; echo "::error::--json printed a DEMO value without --allow-demo"; exit 1; }
 want 2 "--json --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json --allow-demo
-python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['verdict']=='demo' and j['network']=='mainnet' and j['identity_checked'] and j['leaves']==3 and j['image_source']=='builtin-unpinned' and j['image_label'], j" "$T/out"
+python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['verdict']=='demo' and j['network']=='mainnet' and j['identity_checked'] and j['leaves']==3 and j['image_source']=='builtin-pinned' and j['image_label'] is None, j" "$T/out"
 want 2 "--floresta --allow-demo" -- verify $V/mainnet-3.receipt --expect 3:$H3 --floresta --allow-demo
 grep -q 'acchashes!\[' "$T/out" && grep -q 'leaves: 3,' "$T/out" && head -1 "$T/out" | grep -q '^// mainnet:' && ! grep -q ZAPP_UTREEXO "$T/out" || { cat "$T/out"; echo "::error::--floresta output"; exit 1; }
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags). A fake node answers by height
@@ -87,7 +87,7 @@ want 1 "tip 103 checked as signet" -- verify $R --network signet --expect 103:$H
 want 1 "--base-image on a base receipt" -- verify $V/mainnet-3.receipt --expect 3:$H3 --base-image "$(printf 'ab%.0s' $(seq 32))"
 want 1 "tip 103 with a trailing byte" -- verify <(cat $R; printf '\0') --expect 103:$H103
 want 2 "tip 103 --json --allow-demo" -- verify $R --expect 103:$H103 --expect-tip 3836:$T3836 --json --allow-demo
-python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['mode']=='tip' and j['steps']==1 and j['from']==3 and j['base_height']==3 and j['height']==103 and j['leaves']==103 and j['n_live'] is None and j['core_height']==3836 and j['image_source']=='builtin-unpinned', j" "$T/out"
+python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['mode']=='tip' and j['steps']==1 and j['from']==3 and j['base_height']==3 and j['height']==103 and j['leaves']==103 and j['n_live'] is None and j['core_height']==3836 and j['image_source']=='builtin-pinned', j" "$T/out"
 want 2 "tip 103 --floresta --allow-demo" -- verify $R --expect 103:$H103 --floresta --allow-demo
 grep -q 'height: 103,' "$T/out" && head -1 "$T/out" | grep -q '^// mainnet:' || { cat "$T/out"; echo "::error::--floresta output (tip)"; exit 1; }
 echo "ZAPP_UTREEXO_CLI $n cases"

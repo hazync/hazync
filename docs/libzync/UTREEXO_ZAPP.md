@@ -188,8 +188,9 @@ additionally needs **block H from the node's own header chain** (`--expect`, or 
 for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H; with
 `--mempool` / `--bitcoin-cli` block T is asked as well, must agree with a given `--expect-tip`, and the node's
 chainwork at T is compared with the proven one), minimum work plus the checkpoint, and a **pinned utreexo image**:
-the built-in id `27bea7da…` is a local build, not reproducible, so a proof under it is at most DEMO until it is pinned
-in reproduce/LIBZYNC_IDS (`UTREEXO_IMAGE_PINNED`; an id the caller names with `--image` may reach OK, and the checks
+the built-in id `27bea7da…` is **pinned since 18.11.2026** in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, the
+reproducible container's build, §10.8; until then a local build, and a proof under an unpinned built-in id is at most
+DEMO) (`UTREEXO_IMAGE_PINNED`; an id the caller names with `--image` may reach OK, and the checks
 and the OK line say the checker does not know its code); otherwise DEMO. A FAIL report carries no statement. The receipt is decoded with a 16 MiB bincode
 limit and no trailing bytes (the core verifier's own decode, swiftsync-verify `src/lib.rs:463`, has no limit; core
 code, not changed here).
@@ -200,7 +201,7 @@ that output (the checks go to stderr; `---` between the two when both are asked)
 `--allow-demo`; the JSON has `verdict`, `network` (the one checked), `identity_checked` and `image_source`
 (`"builtin-unpinned"` with `image_label`, `"builtin-pinned"`, or `"caller"` for an id named with `--image`, whose code
 the checker does not know; the OK line says so too), and the `--floresta` source starts with a comment line naming the network. The built-in
-image id is printed with the label "local build, not reproducible, not published" until it is pinned.
+image id was printed with the label "local build, not reproducible, not published" until it was pinned (18.11.2026; now "pinned in reproduce/LIBZYNC_IDS, reproducible container build").
 
 ## 5. Host and module layout
 
@@ -489,7 +490,7 @@ Floresta polls `latest.json` (it is a hint, not trusted), downloads the receipt 
 receipt itself (§10.7). Every value in the JSON is also in the receipt's journal; a node must take them from there.
 
 **Replacing.** A step is published only after `zapp-utreexo verify` says OK with the node's own hashes at H and at T
-(DEMO is accepted only with `ALLOW_DEMO=1`, as long as every proof is DEMO: unpinned images, below minimum work).
+(DEMO is accepted only with `ALLOW_DEMO=1`, as long as every proof is DEMO: below minimum work).
 The previous receipt goes to `hist/` (the last `KEEP` = 12), the new one becomes `latest`; a failed step, a step that
 does not verify, or a wrong ELF leaves the published folder untouched.
 
@@ -520,16 +521,20 @@ journal's kind word):
 6. then load: `Stump { leaves, roots }` with every 32-zero-byte root as `BitcoinNodeHash::Empty` (§1), and
    `mark_chain_as_assumed(stump, block_hash)` as for a compiled-in `AssumeUtreexoValue` (§2).
 
-OK needs 1-4 and both images pinned; with a built-in image that is not yet a reproducible build (both, today) the
-verdict is at most DEMO. `--json` adds `mode: "tip"`, `steps`, `from`, `base_height`, `base_image`; `--floresta`
+OK needs 1-4 and both images pinned (both are, since 18.11.2026; an unpinned built-in id caps the verdict at DEMO). `--json` adds `mode: "tip"`, `steps`, `from`, `base_height`, `base_image`; `--floresta`
 prints the same `AssumeUtreexoValue` source as for a base.
 
 ### 10.8 Measured (18.11.2026, hazync-coord, CPU, risc0 3.1.0 executor, no dev mode)
 
-Image `ab6f7a26…` (the tip guest, ELF sha256 `dd9d09bd…`, a local build on hazync-coord; a second clean build in
-another checkout and target directory on the same box gave the same ELF. ⚠ Both builds share the box's CARGO_HOME,
-which the id depends on: this is the base image's level of reproducibility (a local build), not a container pin. The
-same builds gave the base ELF `c7bbe197…` = `27bea7da…` and the headers `2db34e12…` again, so neither moved). Executed with the previous statement and the core state as unresolved
+Images, **pinned in reproduce/LIBZYNC_IDS** (18.11.2026): `reproduce/libzync-ids.sh` now also prints the utreexo base
+and tip lines (`--zyncapps-only` skips the core images, whose build the zyncAPP build does not read). Two builds in the
+reproducible container agree byte for byte: hazync-coord (the deps stage of `reproduce/libzync.Dockerfile`, a clean
+copy of `ccedefe`) and hazync-proof (its `hazync-libzync-repro` image, toolchains 1.99.1 + risc0 v1.94.1, a clean
+clone of `ccedefe`, an empty target). Both print the published headers line `2db34e12…` / `5bd8011d…` as the control,
+`zyncapp-utreexo 27bea7da…` (ELF `c7bbe197…`) and `zyncapp-utreexo-tip ab6f7a26…` (ELF `dd9d09bd…`): the same ids
+as the local builds of 15.11 and 18.11, so **no id changed** and no vector or proof had to be redone. (A third build
+on a laptop was abandoned: the deps stage's toolchain download crawled at ~7 kB/s.) CI's `reproducible-image-id` job
+now compares every `zyncapp-*` line. Executed with the previous statement and the core state as unresolved
 assumptions (the published host's prep states at 10,000 and 100,000), `--prof 1000` (`env::cycle_count()` around the
 block rules and around `modify`). A chain: the base walk to 1,999, then steps to 10,000, 20,000, 50,000, 91,722,
 91,812, 91,842, 91,880 and 100,000, each step starting from the previous step's journal. Columns from the guest's own
@@ -582,7 +587,7 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   of ~37 from other work): the step 3 → 103 from the base receipt `vectors/mainnet-3.receipt` (H = 3), resting on the
   core spine proof 1..3,836 (`46666b6f`, copied from hazync-proof on 18.11.2026, sha256 `96ab09fc…`), so 100 blocks plus
   3,733 link headers: **4,945.9 s**, 226,138 bytes (`vectors/mainnet-tip-103.receipt`, sha256 `4e0c2bde…`). The
-  roots equal the native replay's; `zapp-utreexo verify` gives DEMO (below minimum work; both images unpinned) with
+  roots equal the native replay's; `zapp-utreexo verify` gives DEMO (below minimum work; both images were also unpinned then) with
   every check ok. That time is a loaded shared box, not a benchmark. The blocks 4..103 have no spends: deletions are
   covered by the executions above, not by a proof (a proof of the step 103 → 180, with the first spends, was started
   and stopped for time).
@@ -601,8 +606,13 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   the base and chose H = 53 (`DRY_RUN`). **Not run end to end yet with the fix:** the full script (its step from a
   step, 103 → 180, and the fall-back step 103 → 175 need two more CPU proofs, ~80 min each on the shared box); the
   step-from-a-step path is covered by the executed chain above, not by a proof.
-- The WASM is unchanged (`d240082b…`, rebuilt in the pinned container and compared; the tip checks are behind the
-  feature so it does not carry them).
+- **The WASM checks tip receipts** (`zapps/utreexo/wasm`, feature `tip`): the journal's kind word picks the check, an
+  optional last frame field names another base image, `tip_image_id()`; the JSON adds `mode`, `steps`, `from`,
+  `base_height`, `base_image`. `node test.mjs` 22/22 (9 new on the tip receipt: DEMO with its fields, FAIL for another
+  block, core tip, tip image, base image, network, a base image on a base receipt). The .wasm is byte-reproduced on two
+  machines: a laptop's local build of `reproduce/wasm.Dockerfile` and hazync-coord's build in the published image
+  `ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…` (a clean clone); sha256 in `wasm/README.md`.
+- The follower, end to end with the fix: see the follower bullet above (FOLLOWER_RESULT).
 
 ### 10.10 Layout (tip mode)
 
@@ -614,8 +624,7 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   state_T.json> <out> [--execute] [--prof N] [--cache <file>] [--ref <utreexo-ref log>] [--elf] [--base-id]`
   (`UTREEXO_TIP_TAMPER=<case>` negative tests), `core-info <core receipt | state JSON>`; `utreexo-prove --execute` now
   also writes the final run's journal (`<out>/<net>-<H>.journal`) so a step can start from an executed base.
-- `zapps/utreexo`: `src/tip.rs` behind the crate feature `tip` (the CLI enables it; the WASM does not yet, so its bytes
-  are unchanged, `d240082b…`); `tests/tip_verdict_paths.rs`; `tip-exec-tests.sh` (the executed chain and the guest's
+- `zapps/utreexo`: `src/tip.rs` behind the crate feature `tip` (the CLI and the WASM enable it); `tests/tip_verdict_paths.rs`; `tip-exec-tests.sh` (the executed chain and the guest's
   refusals, §10.9).
 - `coordinator/deploy/utreexo/hazync-utreexo-follow` and `test/test_follow.sh` (real CPU proofs against a fake
   bitcoin-cli over mainnet block files). No unit, timer, nginx alias or publish key yet: nothing is deployed.

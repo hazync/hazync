@@ -16,16 +16,16 @@ mod tip;
 #[cfg(feature = "tip")]
 pub use tip::*;
 
-/// The utreexo image id this checker trusts by default. ⚠ A local build (hazync-coord, 15.11.2026, the prototype on
-/// feat/zapp-utreexo), NOT a reproducible build in reproduce/LIBZYNC_IDS: nobody should rely on it yet.
+/// The utreexo (base walk) image id this checker trusts by default: the reproducible container's build
+/// (reproduce/libzync.Dockerfile, `libzync-ids.sh`), pinned in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, 18.11.2026,
+/// two agreeing builds: hazync-coord and a laptop). The same id as the first local build of 15.11.2026.
 pub const UTREEXO_IMAGE_ID: &str = "27bea7da7c9c2c528a0c9b6e6d22f5d06c5b2c87bcd9d58c360ffecaf5424fb9";
 /// How [`UTREEXO_IMAGE_ID`] is labelled wherever it is printed, until it is pinned.
-pub const UTREEXO_IMAGE_LABEL: &str = "local build, not reproducible, not published";
+pub const UTREEXO_IMAGE_LABEL: &str = "pinned in reproduce/LIBZYNC_IDS, reproducible container build";
 /// Whether [`UTREEXO_IMAGE_ID`] is a reproducible build pinned in reproduce/LIBZYNC_IDS. While it is not, nobody can
 /// check which code the id stands for, so a proof under it is at most DEMO ([`image_source`]), whether the id came by
-/// default or was named with `--image`. Pinning it (a container build of the guest, the vectors re-proved under the new
-/// id) sets this to true.
-pub const UTREEXO_IMAGE_PINNED: bool = false;
+/// default or was named with `--image`. Pinned 18.11.2026 (the container build gave the same id, so no vector moved).
+pub const UTREEXO_IMAGE_PINNED: bool = true;
 
 /// The networks a caller can name (the core verifier's `Image` table has these two).
 pub const NETWORKS: [&str; 2] = ["mainnet", "signet"];

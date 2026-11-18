@@ -12,7 +12,7 @@
 #   hazync-utreexo-follow --set-base <receipt> <H> <hash>   install a base (a final run of the base image; verified first)
 #
 # Nothing is published unless `zapp-utreexo verify`, with the node's own hashes at H and at the core tip, says OK (or
-# DEMO when ALLOW_DEMO=1: while the images are local builds, and below Core's minimum work, every proof is DEMO).
+# DEMO when ALLOW_DEMO=1: below Core's minimum work every proof is DEMO).
 #
 # Reorgs: the published block H must stay on the node's chain. When it does not, the follower falls back to the newest
 # kept receipt (hist/, then the base) whose block is still the node's and steps forward from there on the new branch;

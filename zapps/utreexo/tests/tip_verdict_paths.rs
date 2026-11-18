@@ -101,12 +101,13 @@ fn demo_paths() {
     let z = good("mainnet");
     let r = judge_tip_statement(z, &TIP, &BASE, i, NOW, None, None);
     assert_eq!(r.report.verdict, Verdict::Demo);
-    // the built-in (unpinned) base image caps at DEMO
+    // the built-in base image: OK once it is pinned, DEMO while it is not
     let base = hex32(UTREEXO_IMAGE_ID).unwrap();
     let mut z = good("mainnet");
     z.base_id = words(&risc0_zkvm::sha::Digest::from_bytes(base));
     let a = (z.height, disp(&z.block_hash));
-    assert_eq!(judge_tip_statement(z, &TIP, &base, i, NOW, Some((a.0, a.1.as_str())), None).report.verdict, Verdict::Demo);
+    let want = if UTREEXO_IMAGE_PINNED { Verdict::Ok } else { Verdict::Demo };
+    assert_eq!(judge_tip_statement(z, &TIP, &base, i, NOW, Some((a.0, a.1.as_str())), None).report.verdict, want);
 }
 
 #[test]
@@ -114,4 +115,14 @@ fn the_value_view_is_floresta_s() {
     let z = good("mainnet");
     let f = z.as_value().floresta_rust("mainnet");
     assert!(f.contains("BitcoinNodeHash::Empty,") && f.contains("leaves: 3,"), "{f}");
+}
+
+/// The built-in ids are the published ones (reproduce/LIBZYNC_IDS, the reproducible container's output), and pinned.
+#[test]
+fn built_in_ids_are_the_published_ones() {
+    let ids = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../reproduce/LIBZYNC_IDS")).unwrap();
+    let id = |name: &str| ids.lines().find(|l| l.starts_with(&format!("{name} mainnet METHOD_ID "))).map(|l| l.split_whitespace().nth(3).unwrap().to_string());
+    assert_eq!(id("zyncapp-utreexo").as_deref(), Some(UTREEXO_IMAGE_ID));
+    assert_eq!(id("zyncapp-utreexo-tip").as_deref(), Some(UTREEXO_TIP_IMAGE_ID));
+    assert!(UTREEXO_IMAGE_PINNED && UTREEXO_TIP_IMAGE_PINNED);
 }

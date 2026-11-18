@@ -2,7 +2,7 @@
 # hazync-utreexo-follow against a fake bitcoin-cli over REAL mainnet block files, with the real prover and checker.
 #   test_follow.sh <zyncapp> <zapp-utreexo> <base receipt: mainnet H = 3> <core receipt: mainnet 1..T> <block dir 1..T>
 # Real CPU proofs (three steps, minutes each). Every proof here is DEMO (3,836 blocks are far below minimum work, and
-# the images are local builds), so the follower runs with ALLOW_DEMO=1. Checks: base install (a wrong hash refused),
+# the images were local builds when it was written), so the follower runs with ALLOW_DEMO=1. Checks: base install (a wrong hash refused),
 # the first step published, an unchanged tip proves nothing, a moved tip replaces the receipt (a step from a step), a
 # reorg below the published height falls back to the kept receipt and steps forward again, a run that does not verify
 # and a wrong ELF leave the published folder untouched, a reorg below the base stops.
