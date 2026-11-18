@@ -163,10 +163,11 @@ va=(verify "$PUB/$NAME" --network "$NETWORK" --expect "$H:$HX" --json --allow-de
 [ -n "$TIP_IMAGE" ] && [ "$H" -gt "$B" ] && va+=(--image "$TIP_IMAGE")
 [ -n "$BASE_ID" ] && [ "$H" -gt "$B" ] && va+=(--base-image "$BASE_ID")
 VJ=$("$VERIFY" "${va[@]}" 2>/dev/null) || [ $? = 2 ] || die "the published receipt does not verify"
-python3 - "$PUB" "$NAME" "$SECS" "$NETWORK" "$V" <<PY
+# the checker's JSON goes in through the environment, never into the program text (it holds escaped quotes)
+VJ="$VJ" python3 - "$PUB" "$NAME" "$SECS" "$NETWORK" "$V" <<'PY'
 import json, sys, time, os, hashlib
 p, name, secs, net, verdict = sys.argv[1:]
-v = json.loads('''$VJ''')
+v = json.loads(os.environ['VJ'])
 b = open(os.path.join(p, name), 'rb').read()
 doc = {'network': net, 'height': v['height'], 'block_hash': v['block_hash'], 'leaves': v['leaves'], 'roots': v['roots'],
        'core_height': v['core_height'], 'mode': v.get('mode', 'base'), 'steps': v.get('steps', 0), 'base_height': v.get('base_height', v['height']),

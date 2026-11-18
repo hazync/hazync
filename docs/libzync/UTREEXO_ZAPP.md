@@ -575,6 +575,17 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   named; FAIL for another block 103, another core tip, another tip image, another base image (the failed check is
   the base's), signet, a trailing byte, `--base-image` on a base receipt; the `--json` fields `mode`, `steps`, `from`,
   `base_height`, `n_live: null`; `--floresta`); the library's tests with `--features tip`; the WASM sha. All pass.
+- **The follower** (`coordinator/deploy/utreexo/test/test_follow.sh`, hazync-coord, real prover and checker, a fake
+  bitcoin-cli over the mainnet block files): the base install (a wrong hash refused), the first step 3 → 103 PROVED
+  for real and verified (DEMO, accepted with `ALLOW_DEMO=1`), "nothing to do" when H does not move, and the choice of H
+  (`DRY_RUN`: node tip 3,840 → 3,834 by the margin; 4,000 → 3,836 by the core tip; the step cap). That run then
+  **failed to publish**: the checker's JSON was pasted into a Python string and its escaped quotes broke it (fixed:
+  it goes in through the environment). On a copy of that run's state the fixed script published `latest.json`,
+  `latest.rcpt` = `utreexo-103.rcpt` (re-verified, DEMO), and then refused, leaving the folder untouched, a "prover"
+  that returns another receipt and a wrong ELF; stopped on a reorg below the base; and on a reorg at 103 fell back to
+  the base and chose H = 53 (`DRY_RUN`). **Not run end to end yet with the fix:** the full script (its step from a
+  step, 103 → 180, and the fall-back step 103 → 175 need two more CPU proofs, ~80 min each on the shared box); the
+  step-from-a-step path is covered by the executed chain above, not by a proof.
 - The WASM is unchanged (`d240082b…`, rebuilt in the pinned container and compared; the tip checks are behind the
   feature so it does not carry them).
 
