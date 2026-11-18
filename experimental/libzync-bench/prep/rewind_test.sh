@@ -25,6 +25,8 @@ H=${H:?the host: H=<path to host>}; HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(
 B=${B:-$REPO/prover/testdata/libzync/mainnet}; O=${O:-/tmp/rewind-test}; RUN=$REPO/coordinator/deploy/libzync/libzync-prep-run.sh
 rm -rf $O; mkdir -p $O
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_PREP_SAVE_EVERY=50 HAZYNC_PREP_UNDO_KEEP=60 HAZYNC_REORG_AUTO_DEPTH=12 HAZYNC_PREP_WAIT_S=60
+# prep alone: no coordinator acks the rewinds here (P4, the board's side, is tested by prep/reorg_e2e.sh)
+export HAZYNC_REORG_ACK=0
 fails=0
 check() { if [ "$1" = 1 ]; then echo "  ok   $2"; else echo "  FAIL $2"; fails=$((fails+1)); fi; }
 root() {  # root <dir>: an LZ_ROOT with bin/
