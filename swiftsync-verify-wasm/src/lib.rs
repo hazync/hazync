@@ -193,6 +193,7 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
         }
         let r = run_base(base, lineage)?;
         let v: serde_json::Value = serde_json::from_slice(facts).map_err(|e| format!("facts JSON: {e}"))?;
+        swiftsync_verify::check_facts_wrapper(&v)?;
         let coins: Vec<swiftsync_verify::CoinFact> = serde_json::from_value(v.get("coins").cloned().unwrap_or_else(|| serde_json::json!([])))
             .map_err(|e| format!("facts JSON coins: {e}"))?;
         let journeys: Vec<swiftsync_verify::CoinJourney> = serde_json::from_value(v.get("journeys").cloned().unwrap_or_else(|| serde_json::json!([])))
