@@ -79,8 +79,7 @@ pub(crate) fn verify_any_cmd(path: &str, lo: Option<u32>, check_end: bool) {
 }
 
 fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&bytes).map_err(|e| format!("{path}: not a receipt: {e}"))?;
+    let r = crate::verify::read_receipt(path)?;
     // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in this process's environment: refuse both, as
     // libzync-verify does, so a stray dev-mode variable on the board can never let a hand-written state in.
     // The one exception is a test opt-in that takes TWO switches (RISC0_DEV_MODE and HAZYNC_TEST_FAKE_RECEIPTS=1); the
@@ -97,7 +96,7 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
     // Which image proved it (docs/HANDOVER.md §6): this one, for the blocks from its last handover up, or a predecessor
     // pinned in its lineage, for the blocks below where that predecessor handed over (its own RISC Zero's check, or the
     // vendored one for an older RISC Zero). Anything else stays MISMATCH: the worker reads that word as another build.
-    let st: ChainState = r.journal.decode().map_err(|e| format!("journal is not a ChainState: {e}"))?;
+    let st: ChainState = crate::verify::decode_journal(&r.journal).map_err(|e| format!("journal is not a ChainState: {e}"))?;
     let lineage = crate::pinned_lineage();
     let own = r.verify(METHOD_ID);
     let (image, want_lineage, era_lo, era_hi) = match own {
@@ -175,4 +174,52 @@ pub(crate) fn handover_cmd(pred: &str, bundle: &str, out: &str) {
     crate::lz::write_atomic(out, &r);
     let _ = std::fs::remove_dir_all(&dir);
     println!("HANDOVER-OK block {h}: receipt of blocks 1..={h} under image {} -> {out}", crate::method_id_hex());
+}
+
+#[cfg(test)]
+mod strict_decode_tests {
+    //! verify-any reads a contributor's upload: the fuzz round 11-17 receipts (swiftsync-verify/vectors) must be REFUSED
+    //! with an error, not verified (trailing byte) and not abort the process (unreduced word, ragged journal).
+    use super::verify_any;
+    const V: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/vectors/");
+
+    fn refused(file: &str) -> String {
+        verify_any(&format!("{V}{file}"), Some(1), false).expect_err(file)
+    }
+
+    #[test]
+    fn the_real_receipt_decodes_control() {
+        // The unmodified proof gets past the strict decoder: whatever this image's lineage makes of it, any refusal is
+        // a later check's, never the decoder's.
+        if let Err(e) = verify_any(&format!("{V}mainnet_1_200_8888d59c.rcpt"), Some(1), false) {
+            assert!(!e.contains("not a receipt") && !e.contains("malformed") && !e.contains("journal is not"), "{e}");
+        }
+        let raw = std::fs::read(format!("{V}mainnet_1_200_8888d59c.rcpt")).unwrap();
+        crate::verify::decode_receipt(&raw).expect("the real receipt decodes strictly");
+    }
+
+    #[test]
+    fn a_trailing_byte_is_refused() {
+        let e = refused("mainnet_1_200_8888d59c_trailing_byte.rcpt");
+        assert!(e.contains("not a receipt"), "{e}");
+    }
+
+    #[test]
+    fn an_unreduced_control_inclusion_word_is_refused_not_an_abort() {
+        let e = refused("mainnet_1_200_8888d59c_ctrl_unreduced.rcpt");
+        assert!(e.contains("malformed receipt: control inclusion proof digest"), "{e}");
+    }
+
+    #[test]
+    fn a_journal_of_partial_words_is_refused_not_an_abort() {
+        let e = refused("mainnet_1_200_8888d59c_journal_not_words.rcpt");
+        assert!(e.contains("not whole words"), "{e}");
+    }
+
+    #[test]
+    fn a_composite_receipt_is_refused_before_decoding() {
+        let mut deep = vec![0u8; 4];
+        deep.extend(std::iter::repeat(0u8).take(1 << 16));
+        assert!(crate::verify::decode_receipt(&deep).unwrap_err().contains("composite"));
+    }
 }
