@@ -94,14 +94,28 @@ fn differing(v: &serde_json::Value, w: &serde_json::Value) -> Vec<String> {
     out
 }
 
+/// The statement without each entry's `format` and `signature`. Neither is in the signed message, and a valid
+/// signature has more than one valid form that anyone can derive from it without the key: the BIP-322 "smp" / "ful"
+/// prefix is optional (accepted for wallets that print it), a simple witness can be rewritten as a full to_sign
+/// transaction, a P2SH-P2WPKH full proof may carry an empty or the redeem scriptSig, and a legacy (BIP-137) signature
+/// has a high-S twin (review 11-18). Everything else, the facts' encoding included, must be the signed statement's, byte
+/// for byte. (A trie proof pruned differently that proves the same fact also holds; mutation is unlikely to reach one,
+/// and if it does the finding is worth reading.)
+fn unsigned_evidence_dropped(mut v: serde_json::Value) -> serde_json::Value {
+    if let Some(es) = v.get_mut("entries").and_then(|e| e.as_array_mut()) {
+        for e in es.iter_mut().filter_map(|e| e.as_object_mut()) { e.remove("format"); e.remove("signature"); }
+    }
+    v
+}
+
 pub fn check(data: &[u8]) {
     let Ok(st) = serde_json::from_slice::<Statement>(data) else { return };
     let (cs, uf) = state();
     let (_, want) = reference();
     for ch in [ASK, Challenge::default()] {
         if zapp_statement::check_statement(cs, *uf, &st, &ch).is_ok() {
-            let got = serde_json::to_value(&st).unwrap();
-            assert!(got == *want, "WRONG-OK: a statement other than the signed one holds (challenge given: {}): {:?}",
+            let (got, want) = (unsigned_evidence_dropped(serde_json::to_value(&st).unwrap()), unsigned_evidence_dropped(want.clone()));
+            assert!(got == want, "WRONG-OK: a statement other than the signed one holds (challenge given: {}): {:?}",
                     ch.purpose.is_some(), differing(&got, &want));
         }
     }

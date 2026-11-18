@@ -201,20 +201,25 @@ pub fn check_signature(network: &str, script: &[u8], format: &str, sig: &str, ms
     let addr = Address::from_script(Script::from_bytes(script), net)
         .map_err(|_| "this script has no address form (bare multisig or non-standard): the bip322 crate cannot check a signature for it".to_string())?
         .to_string();
+    // The signature decoded STRICTLY first: exactly one witness ("simple") or one transaction ("full"), nothing after it.
+    // The bip322 crate decodes from a cursor and ignores trailing bytes, so a byte appended to a valid signature held,
+    // and it hid a 65-byte P2TR signature from the hash-type check below, which then passed it (review 11-18).
+    let decoded = |prefix: &str| base64::engine::general_purpose::STANDARD.decode(sig.strip_prefix(prefix).unwrap_or(sig));
+    let wit = match format {
+        "simple" => Some(decoded(bip322::SIMPLE_SIGNATURE_PREFIX).ok()
+            .and_then(|b| bitcoin::consensus::deserialize::<bitcoin::Witness>(&b).ok())
+            .ok_or("BIP-322 simple: the signature is not exactly one base64 witness")?),
+        "full" => Some(decoded(bip322::FULL_SIGNATURE_PREFIX).ok()
+            .and_then(|b| bitcoin::consensus::deserialize::<bitcoin::Transaction>(&b).ok())
+            .ok_or("BIP-322 full: the signature is not exactly one base64 transaction")?
+            .input.first().map(|i| i.witness.clone()).unwrap_or_default()),
+        _ => None,
+    };
     // BIP-341: a 65-byte key-path signature whose hash type byte is 0x00 is invalid (SIGHASH_DEFAULT is written only as a
     // 64-byte signature); the crate reads 0x00 as DEFAULT and accepts it, so refuse it here first
-    if Script::from_bytes(script).is_p2tr() {
-        let wit = match format {
-            "simple" => base64::engine::general_purpose::STANDARD.decode(sig.strip_prefix(bip322::SIMPLE_SIGNATURE_PREFIX).unwrap_or(sig)).ok()
-                .and_then(|b| bitcoin::consensus::deserialize::<bitcoin::Witness>(&b).ok()),
-            "full" => base64::engine::general_purpose::STANDARD.decode(sig.strip_prefix(bip322::FULL_SIGNATURE_PREFIX).unwrap_or(sig)).ok()
-                .and_then(|b| bitcoin::consensus::deserialize::<bitcoin::Transaction>(&b).ok())
-                .and_then(|t| t.input.first().map(|i| i.witness.clone())),
-            _ => None,
-        };
-        if wit.as_ref().and_then(|w| w.nth(0)).map_or(false, |s0| s0.len() == 65 && s0[64] == 0x00) {
-            return Err("P2TR: a 65-byte signature with hash type 0x00 (invalid under BIP-341: DEFAULT is 64 bytes)".into());
-        }
+    if Script::from_bytes(script).is_p2tr()
+        && wit.as_ref().and_then(|w| w.nth(0)).map_or(false, |s0| s0.len() == 65 && s0[64] == 0x00) {
+        return Err("P2TR: a 65-byte signature with hash type 0x00 (invalid under BIP-341: DEFAULT is 64 bytes)".into());
     }
     let unconditional = |v: bip322::Verification| match v {
         bip322::Verification::Valid { time, age } if time == LockTime::ZERO && age == Sequence(0) => Ok(()),
@@ -503,6 +508,49 @@ mod tests {
         let mut t = st.clone();
         t.entries[1].fact.vout = Some(0);
         assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("no txid, vout or origin"));
+        let mut t = st.clone();
+        // any value: on a balance fact the field must simply be absent
+        t.entries[1].fact.origin = Some(swiftsync_verify::TxFact { height: 0, header: String::new(), state: String::new(),
+            undo: None, block_path: vec![], tx: String::new(), index: 0, branch: vec![], coinbase: String::new(),
+            coinbase_branch: vec![] });
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("no txid, vout or origin"));
+    }
+
+    /// Review 11-18: bytes after the witness / transaction inside a signature's base64 are refused (the bip322 crate
+    /// ignores them), and they no longer hide a 65-byte P2TR signature with hash type 0x00 from its check.
+    #[test]
+    fn signature_bytes_after_the_witness_are_refused() {
+        use base64::Engine;
+        let (cs, uf) = real();
+        let (k1, k2) = (key(), key());
+        // P2WPKH (simple) and P2TR (simple)
+        let st = signed(&cs, &real_trie(), &[script(&k1, 2), script(&k2, 3)], &[k1, k2]);
+        check_statement(&cs, uf, &st, &ASK).unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD;
+        for i in 0..st.entries.len() {
+            for tail in [&[0u8][..], &[0, 0, 0], &[1, 2, 3, 4, 5, 6]] {
+                let mut t = st.clone();
+                let mut b = b64.decode(&t.entries[i].signature).unwrap();
+                b.extend_from_slice(tail);
+                t.entries[i].signature = b64.encode(&b);
+                let e = check_statement(&cs, uf, &t, &ASK).unwrap_err();
+                assert!(e.contains("not exactly one base64 witness"), "entry {i} {tail:?}: {e}");
+            }
+        }
+        // the P2TR entry: its 64-byte signature with 0x00 appended as a hash type, then one byte after the witness
+        let i = st.entries.iter().position(|e| unhex(&e.fact.script_pubkey).unwrap()[0] == 0x51).unwrap();
+        let w: bitcoin::Witness = bitcoin::consensus::deserialize(&b64.decode(&st.entries[i].signature).unwrap()).unwrap();
+        let mut s65 = w.nth(0).unwrap().to_vec();
+        assert_eq!(s65.len(), 64);
+        s65.push(0x00);
+        let w65 = bitcoin::Witness::from_slice(&[s65]);
+        let mut t = st.clone();
+        t.entries[i].signature = b64.encode(bitcoin::consensus::serialize(&w65));
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("hash type 0x00"));
+        let mut b = bitcoin::consensus::serialize(&w65);
+        b.push(0);
+        t.entries[i].signature = b64.encode(&b);
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("not exactly one base64 witness"));
     }
 
     #[test]
