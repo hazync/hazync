@@ -1248,6 +1248,12 @@ def verify_receipt(receipt: bytes, rng):
                 return False, ("receipt rejected: your prover's guest image id (METHOD_ID) does not match this "
                                "coordinator's — you built a different guest. Use the prebuilt release binary, or "
                                "the reproducible build (reproduce/Dockerfile); expected id is in reproduce/METHOD_ID."), None
+            # REORG §4: the verifier's words for a receipt made on a branch the board no longer has are kept at the
+            # FRONT of the note (the tail below cuts them off: they are followed by two 64-hex hashes), so a failure a
+            # recent reorg explains is recognised (reorg_failure_excused) and not counted against the new block
+            shaped = next((x for x in _REORG_SHAPED if x in both), None)
+            if shaped:
+                return False, f"receipt rejected — {shaped} (the board's chain may have moved under it: a reorg?): " + both[-160:], None
             return False, "receipt rejected — not a valid proof (forged/tampered/corrupt): " + both[-160:], None
         kv = dict(t.split("=", 1) for t in line[len("RANGE-OK"):].split() if "=" in t)
         if LIBZYNC and kv.get("end") != "board":

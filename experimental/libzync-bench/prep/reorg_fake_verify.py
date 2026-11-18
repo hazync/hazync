@@ -33,7 +33,8 @@ if lo > 1:
         print(f"no leaf bundle (nor a state_{lo - 1}.json in HAZYNC_LZ_STATE_DIR): the state before block {lo} is unknown here",
               file=sys.stderr); sys.exit(1)
     if t != r["in"]:
-        print(f"the receipt is not anchored on the state before block {lo}", file=sys.stderr); sys.exit(1)
+        print(f"the receipt is not anchored on the state before block {lo} (anchor_id {link(r['in'])}, that state's digest "
+              f"{link(t)})", file=sys.stderr); sys.exit(1)
 t = tip(hi)
 if t is None:
     print(f"the board has no state at block {hi} to check the receipt's end against", file=sys.stderr); sys.exit(1)

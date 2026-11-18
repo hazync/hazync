@@ -63,12 +63,16 @@ def tip(h):
 def link(x): return hashlib.sha256(bytes.fromhex(x)).hexdigest()
 lo, hi = r["lo"], r["hi"]
 if lo > 1 and tip(lo - 1) != r["in"]:
-    print(f"the receipt is not anchored on the state before block {lo}", file=sys.stderr); sys.exit(1)
+    print(f"the receipt is not anchored on the state before block {lo} (anchor_id {link(r['in'])}, that state's digest "
+          f"{link(tip(lo - 1) or '00')})", file=sys.stderr); sys.exit(1)
 t = tip(hi)
 if t is None:
     print(f"the board has no state at block {hi} to check the receipt's end against", file=sys.stderr); sys.exit(1)
 if t != r["out"]:
-    print(f"the receipt ends on a state at block {hi} that is not the board's", file=sys.stderr); sys.exit(1)
+    # lz_coord.rs's words, with its two hashes: the coordinator's note keeps only the tail, which they push the
+    # reorg-shaped words out of (found by reorg_e2e.py)
+    print(f"the receipt ends on a state at block {hi} that is not the board's (its tip {r['out']}, the board's {t}): "
+          f"not Bitcoin's chain", file=sys.stderr); sys.exit(1)
 time.sleep(r.get("delay", 0))
 it = os.environ.get("GENESIS_TIP") if lo == 1 else link(r["in"])
 print(f"RANGE-OK lo={lo} hi={hi} in_tip={it} out_tip={link(r['out'])} out_leaves=1 range_work=0 "
