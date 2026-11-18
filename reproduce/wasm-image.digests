@@ -4,3 +4,5 @@
 # pushes and prints these lines; they are committed here after the package is public. The build scripts pull the image
 # by this digest when its tag has a line, and build reproduce/wasm.Dockerfile locally (saying so) when it has none; a
 # release refuses a locally built image (package-release.sh). Empty until the first publish.
+27a0579f77c95178 sha256:d46e4164c774cc64ef1d030a0dd8e9df02fcf99027efbd74115d34259472d282
+153415c2bffbe737 sha256:283b8acbcf84ba0b7021c2481dc3a03e379198db1d738fe1ce9e64aaabf9190b

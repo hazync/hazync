@@ -43,6 +43,16 @@ sys.exit(int(open(rcf).read()) if os.path.exists(rcf) else 0)
 '''
 
 
+
+def _started(app, secs=30):
+    """Press Start and wait for its checks, which run off the window's thread (review of c881d582, M2)."""
+    import time as _t
+    app._start()
+    end = _t.time() + secs
+    while getattr(app, "_starting", False) and _t.time() < end:
+        app.update()
+        _t.sleep(0.02)
+
 def check(ok, what):
     global fails
     print(("  ok   " if ok else "  FAIL ") + what)
@@ -138,7 +148,7 @@ def main():
     set_window(time.time() + 1.5)                   # the proof takes 3 s; the window closes 1.5 s in
     app.block_times = {}
     hazync_gui.schedule.UNKNOWN_MIN_S = 1           # nothing measured yet: any time left will do, here
-    app._start()
+    _started(app)
     check(spin(5, lambda: len(lines("runs")) >= 1), f"Start inside the window takes a block ({lines('runs')})")
     spin(1.0, lambda: False)
     check(bool(app.workers), "the window has closed and the proof in hand is still running (drain, don't kill)")
@@ -156,7 +166,7 @@ def main():
     open(files["secs"], "w").write("0.2")
     set_window(time.time() + 60)                    # one minute left
     app.block_times = {"this-pc": [600, 620, 610]}  # and a block takes this card ten minutes
-    app._start()
+    _started(app)
     spin(2, lambda: False)
     check(not lines("runs"), f"no block is claimed ({len(lines('runs'))} runs)")
     check(app._armed, "the app waits for the next window instead")
@@ -169,7 +179,7 @@ def main():
     set_window(time.time() + 3600)
     app.block_times = {}
     hazync_gui.App.AGAIN_MS = {"done": 1500, "idle": 1500, "transient": 1500}
-    app._start()
+    _started(app)
     gap = spin(5, lambda: bool(app._respawns) and not app.workers)
     spin(0.4, lambda: False)                         # at least two schedule ticks inside the gap
     check(gap and app._awake, f"a restart is waiting and the keep-awake request stands (gap {gap}, awake {app._awake})")
@@ -181,7 +191,7 @@ def main():
     print("== a box that cannot prove is not started again by the schedule ==")
     clear()
     open(os.path.join(tmp, "rc"), "w").write("78")
-    app._start()
+    _started(app)
     spin(4, lambda: False)
     check(len(lines("runs")) == 1, f"exit 78 inside the window: no restart, from the schedule either ({len(lines('runs'))} runs)")
     check(not app._armed, "and the schedule switches itself off, saying why")
@@ -194,7 +204,7 @@ def main():
     open(files["secs"], "w").write("30")
     set_window(time.time() + 3600)
     app.block_times = {}
-    app._start()
+    _started(app)
     check(spin(5, lambda: len(lines("runs")) >= 1 and app.workers and app.workers[0].activity.holding),
           "a block is claimed and being proved")
     held = app.workers[0].activity.holding if app.workers else None
