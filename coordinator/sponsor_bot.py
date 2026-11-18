@@ -1080,6 +1080,7 @@ class RunPod:
 # together with everything else terminate_all does, or systemd SIGKILLs the cleanup with pods billing.
 TERMINATE_BUDGET_S = 6 * 60
 TERMINATE_429_WAIT_S = 30.0
+UNCONFIRMED_LATCH_S = 3600       # a pod unconfirmed this long stops the run (latch + page)
 _ACCEPT_UNACKED_ABSENCE = False   # test_runpod_v2.py --control only
 
 
@@ -1176,6 +1177,12 @@ def release_until_clean(api, ids, match=None, skip=None, sleep=time.sleep, clock
         if clock() + gap_s >= end:
             break
         sleep(gap_s)
+    extra = [i for i in left if i not in done]
+    if extra:                       # strays found on the last listing get one DELETE pass before giving up
+        d_, left = terminate_many(api, extra, sleep, tries=1, wait_s=0, budget_s=0, clock=clock)
+        done += d_
+        if on_done and d_:
+            on_done(d_)
     return done, left, False
 
 
@@ -1512,6 +1519,7 @@ class Pod:
         self.boot_result = None
         self.assigned = []                   # [{"sid", "height", "row"}] not yet proven
         self.segment_start = self.last_progress = self.finished_since = None
+        self.unconfirmed_since = None         # when RunPod first would not confirm its termination
 
     @property
     def live(self):
@@ -1727,8 +1735,15 @@ class Bot:
         ids = [i for i in rows if i in listed]
         ids += [i for i, p in listed.items() if p["name"].startswith(POD_PREFIX) and not
                 p["name"].startswith(self.prefix) and i not in ids]
-        gone_rows = [i for i in rows if i not in listed]
         now = self.clock()
+        gone_rows = []
+        for i in [i for i in rows if i not in listed]:
+            # ⛔ Not listed is not proof: the row closes only after a DELETE RunPod answered (204, or 404 = gone).
+            try:
+                self.api.terminate(i)
+                gone_rows.append(i)
+            except RunPodError as e:
+                self.log(f"could not confirm {i} gone ({e}); its row stays open for the next start")
         for i in gone_rows:
             c.execute("UPDATE sponsor_pods SET terminated_at=?, note=COALESCE(note,'') || ' (gone at the next start;"
                       " billed until some time before this)' WHERE pod_id=?", (now, i))
@@ -1800,6 +1815,7 @@ class Bot:
             if p is not None and not p.live:
                 self.log(f"⛔ {p.name} was taken for terminated but RunPod still lists it: tracking it again")
                 p.terminated, p.state = None, "unconfirmed"
+                p.unconfirmed_since = p.unconfirmed_since or self.clock()
                 if p.id not in self.unconfirmed:
                     self.unconfirmed.append(p.id)
                 if c is not None:
@@ -1821,6 +1837,7 @@ class Bot:
                 p = Pod({"id": x["id"], "name": x["name"], "gpu_type": x.get("gpu_type") or "",
                          "cost_per_hr": x.get("cost_per_hr") or 0}, self.clock())
                 p.state = "unconfirmed"
+                p.unconfirmed_since = self.clock()
                 self.pods.append(p)
                 if x["id"] not in self.unconfirmed:
                     self.unconfirmed.append(x["id"])
@@ -2150,6 +2167,7 @@ class Bot:
             if p.id not in self.unconfirmed:
                 self.unconfirmed.append(p.id)
             p.state = "unconfirmed"
+            p.unconfirmed_since = p.unconfirmed_since or self.clock()
             c.execute("UPDATE sponsor_pods SET note=? WHERE pod_id=?", (note + " (TERMINATION NOT CONFIRMED)", p.id))
             c.commit()
             self.log(f"⛔ {p.name}: TERMINATION NOT CONFIRMED ({note}) -- still counted as live and billing")
@@ -2166,6 +2184,14 @@ class Bot:
         stuck = [p for p in self._live() if p.state == "unconfirmed"]
         if not stuck:
             return
+        # ⛔ A pod RunPod will not let go of for an hour is not left to accrue silently up to --max-usd: stop (exit 5
+        # latches and pages); terminate_all tries once more.
+        old = [p for p in stuck if self.clock() - (p.unconfirmed_since or self.clock()) > UNCONFIRMED_LATCH_S]
+        if old:
+            self.stop_reason = "runpod"
+            self.log(f"⛔ {', '.join(p.name for p in old)} could not be confirmed terminated for over "
+                     f"{UNCONFIRMED_LATCH_S // 60} min: stopping. Check RunPod for hz-sponsor-* pods "
+                     f"(`sponsor_bot.py stop-all`) before clearing the latch.")
         done, _ = terminate_many(self.api, [p.id for p in stuck], self.sleep, tries=1, wait_s=0, budget_s=0)
         for p in stuck:
             if p.id in done:
@@ -2180,11 +2206,10 @@ class Bot:
         live = self._live()
         by_id = {p.id: p for p in live}
 
-        def settle(ids):
+        def settle(ids):            # the spend clock stops here; the coordinator bookkeeping waits for the end
             for i in ids:
                 p = by_id.get(i)
                 if p is not None and p.terminated is None:
-                    self._terminate_books(c, p)
                     self._settle(c, p, True, reason)
 
         try:
@@ -2195,8 +2220,8 @@ class Bot:
             self.log(f"could not release this run's pods: {e}")
             done, left = [], list(by_id)
         for p in live:
+            self._terminate_books(c, p)     # after the release: a slow coordinator cannot eat the release budget
             if p.terminated is None:
-                self._terminate_books(c, p)
                 self._settle(c, p, False, reason)
         for i in left:
             if i not in self.unconfirmed:

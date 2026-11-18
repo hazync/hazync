@@ -1371,6 +1371,99 @@ except sb.RunPodError:
 fold_rent.release_fold(api, "hazync-fold-late", None, sleep=(_c := Clock()).sleep, clock=_c)
 check(not f.pods, f"r6: fold_rent's release catches a lost create that only appears on the second listing ({list(f.pods)})")
 
+# ── r7 H1. --adopt never deletes the adopted fleet: gate drops, failed adoptions, someone else's rundir ─────────
+print("== r7: adopt ==")
+import argparse as _ap   # noqa: E402
+if CONTROL:
+    def _old_teardown(api, a, rented_path, created, unreleased, rpre, adopt_keep, sleep=None, clock=None):
+        keep = [p["id"] for p in created] if (a.keep or (a.adopt and not a.release_adopted)) else []
+        return tip_smoke.release_recorded(api, rented_path, created, unreleased, prefix=rpre, keep_ids=keep,
+                                          sleep=sleep, clock=clock)
+    tip_smoke.teardown_release = _old_teardown
+
+    def _old_guard(api, a):
+        if not a.cleanup and not a.adopt:
+            tip_smoke.refuse_rerun(api, a.rundir, os.path.join(a.rundir, "rented.json"))
+        return bool(a.adopt)
+    tip_smoke.rerun_guard = _old_guard
+for case in ("gate drop", "adoption failed"):
+    with tempfile.TemporaryDirectory() as d:
+        f = FakeV2()
+        api = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+        pre = tip_smoke.run_prefix(d)
+        rec = [{"id": f"a{i}", "name": f"{pre}{i}"} for i in (1, 2, 3)]
+        for r_ in rec:
+            f.pods[r_["id"]] = {"name": r_["name"], "gpu": A40, "cost": 1}
+        rp_ = os.path.join(d, "rented.json")
+        json.dump(rec, open(rp_, "w"))
+        a = _ap.Namespace(keep=False, adopt=rp_, release_adopted=False, cleanup=False, rundir=d)
+        keep = tip_smoke.adopted_ids(rp_)
+        created = [r_ for r_ in rec if r_["id"] != "a3"] if case == "gate drop" else []
+        if case == "gate drop":
+            json.dump(created, open(rp_, "w"))           # the gate drop rewrote rented.json without a3
+        tip_smoke.teardown_release(api, a, rp_, created, [], pre, keep, sleep=(_c := Clock()).sleep, clock=_c)
+        survivors = sorted(f.pods)
+    check(survivors == ["a1", "a2", "a3"],
+          f"r7 H1: --adopt ({case}): every pod of the adopted record survives the teardown ({survivors})")
+with tempfile.TemporaryDirectory() as other, tempfile.TemporaryDirectory() as R:
+    f = FakeV2()
+    api = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+    kept_pre = tip_smoke.run_prefix(R)                 # R holds a --keep fleet
+    f.pods["k1"] = {"name": f"{kept_pre}1", "gpu": A40, "cost": 1}
+    json.dump([{"id": "o1", "name": "x"}], open(os.path.join(other, "rented.json"), "w"))
+    a = _ap.Namespace(adopt=os.path.join(other, "rented.json"), cleanup=False, rundir=R)
+    try:
+        tip_smoke.rerun_guard(api, a)
+        refused = None
+    except SystemExit as e:
+        refused = str(e)
+check(refused and "refusing" in refused,
+      f"r7 H1: --adopt of another rundir's record into a rundir that holds a kept fleet is refused ({refused})")
+
+# ── r7 L5. a pod unconfirmed for over an hour stops the run (latch + page) ───────────────────────────────────
+if CONTROL:
+    sb.UNCONFIRMED_LATCH_S = 10 ** 9
+
+
+class Never:
+    def terminate(self, pid):
+        pass
+
+    def pods(self):
+        return [{"id": "u1", "name": "x", "status": "RUNNING"}]
+
+
+clk = Clock()
+with tempfile.TemporaryDirectory() as d:
+    bot = sb.Bot(os.path.join(d, "bot.db"), Never(), RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
+                 log=lambda m: None, clock=clk, sleep=clk.sleep, confirm_wait_s=0)
+    pu = sb.Pod({"id": "u1", "name": bot.prefix + "1", "gpu_type": A40, "cost_per_hr": 0.5}, clk())
+    pu.state, pu.unconfirmed_since = "unconfirmed", clk() - 3700
+    bot.pods.append(pu)
+    bot._retry_unconfirmed(None)
+check(bot.stop_reason == "runpod", f"r7 L5: a pod unconfirmed for over an hour stops the run as 'runpod' ({bot.stop_reason})")
+
+# ── r7 L4. the start sweep closes a row only after an answered DELETE ─────────────────────────────────────────
+class Unlisted:
+    def pods(self):
+        return []
+
+    def terminate(self, pid):
+        raise sb.RunPodError("HTTP 500", status=500)
+
+
+with tempfile.TemporaryDirectory() as d:
+    bot = sb.Bot(os.path.join(d, "bot.db"), Unlisted(), RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
+                 log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0)
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    c.execute("INSERT INTO sponsor_pods(pod_id, name, created_at) VALUES('q1','hz-sponsor-1-1',1)")
+    c.commit()
+    bot._sweep_leftovers(c)
+    row = c.execute("SELECT terminated_at FROM sponsor_pods WHERE pod_id='q1'").fetchone()
+    c.close()
+check(row[0] is None, "r7 L4: a pod the listing omits keeps its row open when its DELETE errors (not proof it is gone)")
+
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
 ROOT = pathlib.Path(HERE).parent
@@ -1448,6 +1541,9 @@ EXPECTED_CONTROL = {
     "r6: a stray that will not terminate is tracked",
     "r6: fold_rent's release catches a lost create that only appears on the second listing",
     "r6: terminate_all confirms a pod that RunPod still listed on the first pass",
+    "r7 H1: --adopt",
+    "r7 H1: --adopt of another rundir's record into a rundir that holds a kept fleet is refused",
+    "r7 L5: a pod unconfirmed for over an hour stops the run as 'runpod'",
     "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",
     "two 429s are waited out for Retry-After and the create then lands",
     "with no runtime ports, RunPod's own ssh.direct is used",

@@ -61,6 +61,26 @@ def run_prefix(rundir, now=None):
     return pre
 
 
+def rerun_guard(api, a):
+    """refuse_rerun for this run's rundir -- unless it is --cleanup, or --adopt of THIS rundir's own record (the one
+    case where its pods are meant to be taken over). Returns True for that adopt-home case."""
+    adopt_home = bool(a.adopt) and os.path.abspath(os.path.dirname(a.adopt)) == os.path.abspath(a.rundir)
+    if not a.cleanup and not adopt_home:
+        os.makedirs(a.rundir, exist_ok=True)
+        refuse_rerun(api, a.rundir, os.path.join(a.rundir, "rented.json"))
+    return adopt_home
+
+
+def teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep, sleep=time.sleep, clock=time.monotonic):
+    """The release at the end of a run. --keep keeps the fleet; --adopt (without --release-adopted) keeps every pod of
+    the adopted record AS RECORDED (`adopt_keep`) -- dropped at a gate or never adopted, still not ours to delete.
+    Everything else this run created or recorded, and every pod with its prefix, is released."""
+    keep = [p["id"] for p in created] + sorted(adopt_keep) if (a.keep or (a.adopt and not a.release_adopted)) \
+        else sorted(adopt_keep)
+    return release_recorded(api, rented_path, created, unreleased, prefix=rpre, keep_ids=keep, sleep=sleep,
+                            clock=clock)
+
+
 def refuse_rerun(api, rundir, rented_path):
     """⛔ A NEW RUN IN A RUNDIR WHOSE LAST RUN STILL HAS PODS IS REFUSED. run_prefix() and the rent overwrite
     run_prefix.txt and rented.json, so starting over a leaked fleet would orphan it: nothing would know its prefix
@@ -1012,6 +1032,15 @@ def dash_chain(a):
     return chain
 
 
+def adopted_ids(record_path):
+    """Every pod id in an adoption record (rented.json), as recorded: nothing dropped, nothing checked."""
+    try:
+        with open(record_path) as fh:
+            return {str(p["id"]) for p in json.load(fh) if isinstance(p, dict) and p.get("id")}
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
 def adopt_fleet(api, record_path, expect_names=None):
     """Pods from a previous run's rented.json that are STILL ALIVE on the account.
 
@@ -1090,8 +1119,9 @@ def cleanup(api, rented_path):
     ids = list(pods)
     v = tip_session.terminable(ids, ids)
     log(f"cleanup: releasing {v['terminate']} (protected={v['protected']} not-ours={v['not_ours']})")
+    done_, _ = sponsor_bot.terminate_many(api, v["terminate"]) if v["terminate"] else ([], [])
     for pid in v["terminate"]:
-        log(f"  {pid}: {'gone' if sponsor_bot.terminate_confirmed(api, pid) else '⛔ STILL LISTED'}")
+        log(f"  {pid}: {'gone' if pid in done_ else '⛔ STILL LISTED'}")
 
     # ⛔ CHECK THE ACCOUNT, NOT OUR OWN LIST. A pod this command never heard of is exactly the
     # failure it exists to catch, and comparing only against `pods` can never see one.
@@ -1318,9 +1348,13 @@ def main():
     with open(key_file) as fh:
         api = SmokeRunPod(fh.read().strip())
     # ⛔ BEFORE THE CLAIM: a rundir whose last run still has pods is refused before anything is claimed or fetched.
-    if not a.cleanup and not a.adopt:
-        os.makedirs(a.rundir, exist_ok=True)
-        refuse_rerun(api, a.rundir, os.path.join(a.rundir, "rented.json"))
+    # (With --adopt the guard still applies to a rundir that is NOT the adopted record's own: a --keep fleet there
+    # would otherwise be swept by this run's teardown.)
+    adopt_home = rerun_guard(api, a)
+    # ⛔ THE ADOPTED FLEET, AS RECORDED, BEFORE ANYTHING DROPS FROM IT. A pod dropped at a gate is "LEFT RUNNING:
+    # adopted" and leaves `created`; an adoption that fails half way never fills `created` at all. Without
+    # --release-adopted, every one of these ids is kept by the teardown, whatever happened in between (#547/#551).
+    adopt_keep = adopted_ids(a.adopt) if a.adopt and not a.release_adopted else set()
     # ── claim FIRST, before spending anything (#367) ──────────────────────────────────────────────
     # ⛔ THE ORDER MATTERS. Renting takes ~2 minutes and costs money; a claim costs a POST. If the
     # board has nothing free -- or this key is at its 4-unfinished cap -- the right answer is to exit
@@ -1406,7 +1440,7 @@ def main():
         return cleanup(api, rented_path)
     # Every pod this run creates is named rpre + n (the teardown sweeps it). --adopt keeps the adopted run's prefix:
     # rotating it would leave the adopted fleet's lost creates under a prefix nothing sweeps any more.
-    rpre = (a.adopt and read_run_prefix(a.rundir)) or run_prefix(a.rundir)
+    rpre = (adopt_home and read_run_prefix(a.rundir)) or run_prefix(a.rundir)
 
     # ⛔ SIGTERM MUST REACH THE finally. Python does not run finally blocks on a default SIGTERM --
     # the process simply dies, and the cards go on billing. Turning it into an exception is what
@@ -2956,9 +2990,9 @@ def main():
             orphans = [p for p in recruited if p["id"] not in admitted_ids]
             if orphans:
                 log(f"releasing {len(orphans)} recruit(s) that never joined the fleet")
+                done_, _ = sponsor_bot.terminate_many(api, [p_["id"] for p_ in orphans])
                 for p_ in orphans:
-                    ok_ = sponsor_bot.terminate_confirmed(api, p_["id"])
-                    log(f"  {p_.get('name')}: {'gone' if ok_ else '⛔ STILL LISTED — RELEASE BY HAND'}")
+                    log(f"  {p_.get('name')}: {'gone' if p_['id'] in done_ else '⛔ STILL LISTED — RELEASE BY HAND'}")
         except Exception as exc:       # noqa: BLE001 -- cleanup bookkeeping must not mask a failure
             log(f"⛔ could not finish releasing recruits: {type(exc).__name__}: {exc}")
 
@@ -2992,9 +3026,9 @@ def main():
             for p in created:
                 log(f"    {p['name']}  {p['id']}  ${float(p.get('price') or 0):.3f}/hr")
             # ⛔ KEPT IS ONLY THE FLEET. Whatever else carries this run's prefix (a lost create, a spare) is released.
-            release_recorded(api, rented_path, created, unreleased, prefix=rpre, keep_ids=[p["id"] for p in created])
+            teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep)
         else:
-            release_recorded(api, rented_path, created, unreleased, prefix=rpre)
+            teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep)
 
 
 if __name__ == "__main__":
