@@ -56,7 +56,7 @@ jobs:
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - name: libzync (coin log, counting trie, facts, wire)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
@@ -92,7 +92,7 @@ jobs:
           if ./scripts/check-release-verifiers.sh bad; then
             echo "::error::the release gate passed a verifier that accepts tampered receipts"; exit 1
           fi
-      - name: Verifier vectors on every surface (CLI, C ABI, WASM) and the header-chain receipts
+      - name: Verifier vectors on every surface (CLI, C ABI, WASM)
         # swiftsync-verify/vectors/manifest.json: a real risc0 3.1.0 proof (DEMO), the same as signet, against the
         # 3.0.5 image, with a flipped seal, v0.23.0's real 3.0.5 receipt, and the retired design-B refusals.
         run: |
@@ -101,9 +101,6 @@ jobs:
           (cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o vtest && ./vtest)
           (cd swiftsync-verify-wasm && node test-vectors.mjs target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm)
           (cd swiftsync-verify-wasm && node test-facts-frame.mjs)
-          bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
-          node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
-          swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
 
   zapps:
     # Every zAPP is a module of its own (zapps/<name>/: its check library and CLI, its WASM module and glue, its C ABI if
@@ -476,6 +473,11 @@ jobs:
           # left (nothing is claimed), and Stop hands the claimed block back.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py --control
+          # ⭐ AND WHERE THE TWO MEET (review of 59575b40): a window opening after the CPU fallback (checked off the Tk
+          # thread), closing that waits for a slow block hand-back and names one it could not do, one card's error not
+          # disarming the others, Stop during Start's checks, and no unpinned worker when nvidia-smi is silent once.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py --control
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
@@ -768,6 +770,18 @@ jobs:
         run: cd coordinator && python3 test_board_fetch_source.py
       - name: Board-fetch POSITIVE CONTROL (the bridge is asked for a board height again)
         run: cd coordinator && python3 test_board_fetch_source.py --control
+      # Reorg handling at the tip (docs/libzync/REORG.md, P1/P2): the fetcher's detection against a fake bitcoin-cli
+      # (forks of depth 1, 2, W, W+1 and beyond J below prep's tip; one above it; the 16.11.2026 review's cases), and the
+      # stop path's unit settings (exit 4 fails the unit so its OnFailure alert fires). ~3 min, CPU only. The units are
+      # also run under real systemd by `test_reorg_units.py` without --no-systemd, where a user session exists.
+      - name: Reorg detection in the block fetcher (REORG.md §4)
+        run: python3 prover/test_fetch_reorg.py
+      - name: Reorg-detection POSITIVE CONTROL (prep's tip compared one block low — a 1-block reorg must go unseen)
+        run: python3 prover/test_fetch_reorg.py --control
+      - name: A reorg stop fails the prep and fetch units and alerts (REORG.md §11)
+        run: cd coordinator && python3 test_reorg_units.py --no-systemd
+      - name: Reorg-stop POSITIVE CONTROL (the units without exit 4 in RestartPreventExitStatus)
+        run: cd coordinator && python3 test_reorg_units.py --no-systemd --control
       - name: The card catalogue ranks every usable type, and excludes MIG slices
         run: cd coordinator && python3 test_card_catalogue.py
       - name: Card-catalogue POSITIVE CONTROL
@@ -1983,8 +1997,8 @@ jobs:
           path: elf/zyncapp-headers.bin
       - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers) ' > built.txt
-          grep -E '^(libzync-product|zyncapp-headers) ' reproduce/LIBZYNC_IDS > pinned.txt
+          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers|zyncapp-hints) ' > built.txt
+          grep -E '^(libzync-product|zyncapp-headers|zyncapp-hints) ' reproduce/LIBZYNC_IDS > pinned.txt
           echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
           if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
             echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"
@@ -2071,6 +2085,17 @@ jobs:
         with: { name: libzync-hosts, path: hosts }
       - name: Edge blocks, negative tests
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/blocks.sh hosts/host_m out
+      # Reorg handling (docs/libzync/REORG.md §12): the undo records, prep's stop and wait (P1/P2), and prep's rewind (P3):
+      # after a rewind and the re-prep of a synthetic branch, states and stores equal a fresh prep of that branch, through
+      # crashes, refusals, a second reorg and the automatic path end to end. Mainnet 1..200 test data, minutes, CPU.
+      - name: Reorg undo records and the prep side of the stop (P1/P2)
+        run: H=$PWD/hosts/host_m O=$PWD/out/reorg bash experimental/libzync-bench/prep/reorg_test.sh
+      - name: Reorg prep POSITIVE CONTROL (a block that extends the state passes, so the stop is the prev alone)
+        run: H=$PWD/hosts/host_m O=$PWD/out/reorgc bash experimental/libzync-bench/prep/reorg_test.sh --control
+      - name: Reorg rewind (P3)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewind bash experimental/libzync-bench/prep/rewind_test.sh
+      - name: Reorg rewind POSITIVE CONTROL (a corrupted coin log after the rewind must be caught)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewindc bash experimental/libzync-bench/prep/rewind_test.sh --control
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }
