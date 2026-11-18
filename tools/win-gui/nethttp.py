@@ -157,6 +157,11 @@ def _certifi_context():
 
 def _pip_install_certifi(timeout=180):
     """Last resort before curl: let pip fetch certifi, since pip's own HTTPS works regardless."""
+    # ⛔ NOT IN THE FROZEN APP (review of c881d582): there sys.executable is Hazync.exe, which has no pip, and
+    # `Hazync.exe -m pip` is not an interpreter call frozenpy knows, so it could open a second window. The installed
+    # app ships certifi itself (hazync-gui.spec), so rung 3 already had a CA bundle.
+    if getattr(_sys, "frozen", False):
+        return None
     try:
         p = subprocess.run([_sys.executable, "-m", "pip", "install", "--upgrade", "certifi"],
                            capture_output=True, text=True, timeout=timeout)

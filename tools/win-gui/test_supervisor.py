@@ -91,6 +91,109 @@ def main():
     noid = supervisor.check_host_binary(fake_host(d, "noid", "hello"))
     check((not noid.ok) and noid.fatal, "output with no image id at all is fatal, not 'probably fine'")
 
+    print("── 1b. the BOARD's image decides, when the board answers (/api/meta) ──")
+    OTHER = "88" * 32
+    rbm = supervisor.check_host_binary(fake_host(d, "old", f"METHOD_ID {OTHER}"), board_id=OTHER)
+    check(rbm.ok and "matches the board" in rbm.detail and "built for" in rbm.detail,
+          f"a prover matching the board passes though the app's pin differs, and says so ({rbm.detail[:70]})")
+    rnew = supervisor.check_host_binary(good, board_id=OTHER)
+    check((not rnew.ok) and rnew.fatal and "install the latest Hazync" in rnew.detail,
+          "the app's own image is FATAL when the board has moved on, and the fix is to update Hazync")
+    rboth = supervisor.check_host_binary(fake_host(d, "third", "METHOD_ID " + "ab" * 32), board_id=OTHER)
+    check((not rboth.ok) and rboth.fatal and "prover from the latest release" in rboth.detail,
+          "a prover matching neither is fatal and points at the release's prover")
+    check(supervisor.check_host_binary(good, board_id=None).ok, "board unknown: the app's pin stands in (unchanged)")
+    ok_, v_ = supervisor.diagnostic_verdict("method-id", 0, f"METHOD_ID {OTHER}", board_id=OTHER)
+    check(ok_ and "board" in v_, f"the method-id check reads the board's image too ({v_})")
+    ok_, v_ = supervisor.diagnostic_verdict("method-id", 0, f"METHOD_ID {CANON}", board_id=OTHER)
+    check(not ok_, "and fails the app's image when the board's differs")
+    # ⭐ a REAL board on this machine: the same urllib path, deadline and size cap the window uses
+    import http.server as _hs
+    import threading as _th
+    import time as _time
+    reply = {"body": b"", "code": 200, "sleep": 0}
+
+    class _H(_hs.BaseHTTPRequestHandler):
+        def do_GET(self):
+            _time.sleep(reply["sleep"])
+            self.send_response(reply["code"])
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            try:
+                self.wfile.write(reply["body"])
+            except OSError:
+                pass
+
+        def log_message(self, *a):
+            pass
+    srv = _hs.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    srv.daemon_threads = True
+    _th.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        import json as _json
+        for body, code, want, says in (
+                (_json.dumps({"method_id": OTHER.upper()}).encode(), 200, OTHER, ""),
+                (b'{"method_id": "nope"}', 200, None, "without a valid method_id"),
+                (b"<html>busy</html>", 200, None, "not with JSON"),
+                (b"{}", 503, None, "HTTP 503"),
+                (b'{"pad": "' + b"x" * (supervisor.BOARD_BODY_CAP + 10) + b'"}', 200, None, "was not read")):
+            reply.update(body=body, code=code, sleep=0)
+            got, why = supervisor.board_image(url, deadline=5)
+            check(got == want and says in why, f"board {code} {body[:28]!r}… -> {got and got[:8]} / {why[:60]!r}")
+        reply.update(body=b"{}", code=200, sleep=4)
+        t0 = _time.monotonic()
+        got, why = supervisor.board_image(url, deadline=1)
+        took = _time.monotonic() - t0
+        check(got is None and took < 3.5 and ("within" in why or "timed out" in why),
+              f"⛔ a board that stalls is given up on at the deadline ({took:.1f} s: {why[:50]!r})")
+        reply.update(sleep=0)
+        check(supervisor.board_image("")[1] == "no board address set", "no coordinator: no question asked")
+        check("not an http(s) address" in supervisor.board_image("file:///etc/passwd")[1],
+              "⛔ only http(s) is ever asked (review L2)")
+        check("plain http" in (supervisor.board_address_problem("http://board.example") or "")
+              and supervisor.board_address_problem(url) is None
+              and supervisor.board_address_problem("https://api.hazync.org") is None,
+              "plain http to another machine is flagged; this machine and https are not")
+        reply.update(body=_json.dumps({"method_id": OTHER}).encode(), code=200)
+        hostb = fake_host(d, "pfb", f"METHOD_ID {CANON}")
+        checks_, fatal_ = supervisor.preflight(hostb, fake_worker(d, "pfwb"), identity_dir=d, coord=url)
+        check(any(c.name == "host binary" for c in fatal_) and str(hostb) in fatal_[0].detail,
+              "preflight with a coordinator asks the board, stops a prover the board would reject, and names its path")
+        reply.update(code=500)
+        checks_, fatal_ = supervisor.preflight(hostb, fake_worker(d, "pfwb"), identity_dir=d, coord=url)
+        hb = [c for c in checks_ if c.name == "host binary"][0]
+        bw = [c for c in checks_ if c.name == "board"]
+        check(hb.ok and "board's image is unknown" in hb.detail and "HTTP 500" in hb.detail,
+              f"⛔ board unreachable: the pin stands in, and the detail says WHY (review M3): {hb.detail[:90]!r}")
+        check(bw and not bw[0].ok and not bw[0].fatal, "and a non-fatal 'board' warning row says so")
+        ok_, v_ = supervisor.diagnostic_verdict("method-id", 0, f"METHOD_ID {CANON}", board_why="HTTP 500")
+        check(ok_ and "board's image unknown: HTTP 500" in v_, f"the method-id check carries the reason too ({v_})")
+    finally:
+        srv.shutdown()
+
+    print("── 1c. Stop names whatever of the worker's tree survived (review of a04038ce, M3) ──")
+    if not supervisor.IS_WINDOWS:
+        import subprocess as _sp
+        import time as _t2
+        p1 = _sp.Popen(["sleep", "30"])
+        surv, err = supervisor.stop_tree(p1, wait_s=5)
+        check(surv == [] and not err and p1.poll() is not None, f"a worker with no children: stopped, nothing left ({surv})")
+        # a "worker" whose child (the prover) outlives a stop that reaches only the parent — the orphan case
+        p2 = _sp.Popen(["bash", "-c", "sleep 30 & wait"])
+        _t2.sleep(0.5)
+        kids = supervisor.descendants(p2.pid, supervisor.process_table())
+        surv, err = supervisor.stop_tree(p2, wait_s=5)
+        check(kids and surv and surv[0][0] == kids[0][0] and "sleep" in surv[0][1],
+              f"⛔ the child that survived is named by PID and name ({surv}), not silently left holding the card")
+        for pid, _ in surv:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        check(supervisor.descendants(1, [(5, 1, "a"), (6, 5, "b"), (7, 6, "c"), (8, 2, "x")]) == [(5, "a"), (6, "b"), (7, "c")],
+              "descendants walks the whole tree, and only that tree")
+
     print("── 2. exit codes are three different things ──")
     for rc, kind in ((0, "done"), (supervisor.EX_CONFIG, "config"),
                      (supervisor.EX_TEMPFAIL, "idle"), (3, "transient")):
