@@ -124,11 +124,12 @@ More are planned. What a zAPP may rely on, and how to build one, is in [`libzync
 
 **Working:**
 
-- The v2 program, published as release v0.24.0, with its fingerprint reproducible from source.
+- The v2 program, first published as release v0.24.0, with its fingerprint reproducible from source. The board
+  proves under the image from release v0.26.0 (`46666b6f`, unchanged in v0.26.1), which adds each block's undo data.
 - Real proofs from it: Bitcoin's first 200 blocks from the very beginning, checked by the published checker.
 - The whole header chain in one proof, checkable in a browser.
 - The public board at [hazync.org](https://hazync.org/), which switched to v2 on 12 November 2026 and restarted
-  from the first block. Volunteers' graphics cards prove blocks one by one, and the proofs are joined together.
+  from the first block, then restarted from the first block again on 16.11.2026 under v0.26.0's image. Volunteers' graphics cards prove blocks one by one, and the proofs are joined together.
 - Proving on Windows graphics cards as well as Linux.
 
 **Not done yet:**
