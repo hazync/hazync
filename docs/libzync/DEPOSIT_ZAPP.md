@@ -34,6 +34,16 @@ verdicts:
 A caller that compares the tip by other means can turn the identity requirement off (`--no-require-identity`,
 `"require_identity": false`); then `OK` and `accepted` need only the checks and the work, and saying so is its choice.
 
+**Whose work counts.** "The tip proof" is the header-chain proof when header receipts are given (and bound, §2), else
+the core proof. With headers, `OK` does NOT also require the core proof's own verdict to be `OK`: a core proof that is
+`DEMO` on its own (its chain 0..Hc below the minimum chain work, or below its pinned checkpoint, as every core proof is
+while the board re-proves from genesis) gives `OK` when the bound header chain has the minimum chain work and its tip
+matched the caller's source. This is a choice, and I believe a sound one: the binding makes the core chain 0..Hc the
+header chain's own first Hc+1 blocks (§2), so it is a prefix of a chain with the network's work whose tip the caller
+recognised, and a cheap fork of it would have to be a fork of that chain below Hc, which the binding refuses. What the
+core proof adds is validation of 0..Hc, not work; its low work alone is no sign of a forgery once it is bound. Without
+headers the core proof is the tip proof, and its `DEMO` stays `DEMO`.
+
 ## 2. How the transaction is bound to a fully validated chain
 
 Two proofs exist:
@@ -149,7 +159,23 @@ refuses to write a bundle that does not verify. `zapp-deposit mmr-path <headers 
 The bundle (JSON, version 1): `core_receipt`, `header_receipts` (one or a chain of runs from genesis),
 `core_tip_mmr_path`, and `block`: `height`, `header`, `forest` (`state`, `undo`, `path`) for a block at or below Hc or
 `mmr_path` above it, `tx`, `index`, `branch`, `coinbase`, `coinbase_branch`. Hashes are hex in internal byte order,
-receipts hex of their bincode bytes.
+receipts hex of their bincode bytes. Since the review of 18.11.2026 the verifier refuses a field the format does not
+name (at any level), and a block carries exactly the opening its height takes: `forest` at or below Hc, `mmr_path`
+above it, never both (`zapp-deposit build` never wrote either form, so no bundle it made changes meaning).
+
+In WASM the ask is a JSON object with the keys of `zapp-deposit.js`'s doc comment; any other key is refused (a FAIL
+naming it), as the CLI refuses an unknown flag: a misspelt constraint (`ammount`, `min_dept`) would otherwise be
+dropped with its check. The WASM's `now` is the page's clock (the glue passes the device's unless given one): the
+module has no clock of its own to clamp it to, as the CLI clamps `--now`, so a page that passes its own `now` is
+trusted for it (§4, the caller's clock).
+
+Above Hc the transaction's inclusion is checked by the header zAPP's transaction parser (`verify_tx_in_header`) and
+its outputs are read by libzync's (the one the fully validated path uses). The outputs are bound to the txid by
+libzync's own stripped serialisation (a check of its own), so the binding does not rest on the two parsers agreeing;
+a unit test pins that they agree on every real transaction in the tests, in both serialisations.
+
+With `--mempool` or `--bitcoin-cli` the CLI verifies the bundle twice: once to learn the tip to ask the sources
+about, once with their answer. That is cost only (about 60 ms each with both receipts, §7).
 
 ## 6. A contract chain
 
@@ -185,11 +211,11 @@ Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24
 | composed receipt, Groth16-wrapped | 88.5 s; 3,129 bytes (seal 256 bytes); verify 9 ms |
 | Groth16 wrap of the core receipt 0..200 (hazync-coord CPU + Docker) | 94.4 s; 227,362 -> 4,633 bytes (seal 256 bytes); verify 5 ms |
 | Groth16 wrap of the header receipt 0..975,278 | 97.0 s; 227,474 -> 4,745 bytes; verify 6 ms |
-| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `5017298f…`; its CLI is the crate `zapps/deposit/cli`, the only one linking zapps/common) | 1,196,407 bytes (342,384 gzipped) |
+| the deposit zAPP's own WASM module (`zapps/deposit/wasm`, sha256 `0484b509…`; its CLI is the crate `zapps/deposit/cli`, the only one linking zapps/common) | 1,196,718 bytes (342,603 gzipped) |
 
-Tests: 19 unit tests (`zapps/deposit/src/tests.rs`), `test_deposit.sh` 30/30 (5 chain-identity cases: an agreeing node, one
+Tests: 23 unit tests (`zapps/deposit/src/tests.rs`), `test_deposit.sh` 32/32 (5 chain-identity cases: an agreeing node, one
 naming another block, one giving no chainwork, one giving another chainwork, and the tip given), `wasm/test-deposit.mjs`
-15/15. Also covered since the review of 15.11.2026: `accepted` and the verdict under each of `require_identity` and
+19/19. Also covered since the review of 15.11.2026: `accepted` and the verdict under each of `require_identity` and
 `allow_demo`, a DEMO statement withheld, a transaction in its witness serialisation in a fully validated block, and a
 block of the v0.26.0 image (`46666b6f`, whose leaves commit the undo hash) on its real receipt of blocks 0..1. Refusals covered: the
 wrong txid (both ways), the wrong output, amount or script, insufficient depth or validated depth (the default 1 on a block above the core tip, 2 at h == Hc), a block not in
@@ -197,7 +223,8 @@ the chain (other height, tampered coin state, path or header), a tampered merkle
 transaction trick on block 170 (whose merkle root IS dsha(coinbase txid || T): the 64 bytes with an empty branch
 reach the root), a block above the core tip (refused by default, flagged when allowed), a dev-mode receipt (in the
 bundle and in the environment), a flipped core receipt, a broken binding path, a header chain not from genesis or
-below the core tip, the wrong network, tip identity and freshness, and an OP_RETURN payload mismatch.
+below the core tip, the wrong network, tip identity and freshness, and an OP_RETURN payload mismatch; since the review
+of 18.11.2026 an unknown bundle field, the other opening for the block's height, and (WASM) a misspelt ask key.
 
 The real receipts used: core proof of mainnet 0..200 (`8888d59c`, `swiftsync-verify/vectors/`, with its run's
 `history.bin`), header proofs 0..100 + 101..200 and 0..975,278 (`de54b94f`), block 170 (the coinbase and Satoshi to
