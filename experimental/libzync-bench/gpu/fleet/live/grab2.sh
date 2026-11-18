@@ -5,21 +5,20 @@
 cd ~/libzync-gpu/live; RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 read -r _ AIP AP _ < fleet.txt
 K="-n -i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15"
-gql(){ curl -s -X POST -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" -d "$1" https://api.runpod.io/graphql; }
+rp(){ curl -s -X "$1" -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" ${3:+-d "$3"} "https://api.runpod.io/v2$2"; }
 for n in "$@"; do
   for att in $(seq 1 10); do
-    Q=$(python3 -c "import json,sys; print(json.dumps({'query': 'mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, volumeInGb: 0, containerDiskInGb: 80, gpuTypeId: \"NVIDIA RTX PRO 6000 Blackwell Server Edition\", name: \"%s\", imageName: \"runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04\", ports: \"22/tcp,9110/tcp\", env: [{key: \"PUBLIC_KEY\", value: \"%s\"}] }) { id } }' % (sys.argv[2], sys.argv[1])}))" "$PUB" "$n")
-    ID=$(gql "$Q" | python3 -c 'import json,sys; p=(json.load(sys.stdin).get("data") or {}).get("podFindAndDeployOnDemand"); print(p["id"] if p else "")' 2>/dev/null)
+    Q=$(python3 -c "import json,sys; print(json.dumps({'name': sys.argv[2], 'cloud': 'SECURE', 'gpu': {'id': 'NVIDIA RTX PRO 6000 Blackwell Server Edition', 'count': 1}, 'image': 'runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04', 'disk': 80, 'ports': ['22/tcp', '9110/tcp'], 'env': {'PUBLIC_KEY': sys.argv[1]}}))" "$PUB" "$n")
+    ID=$(rp POST /pods "$Q" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id") or "")' 2>/dev/null)
     [ -n "$ID" ] || { echo "[$(date +%T)] $n: no stock (attempt $att)"; sleep 20; continue; }
     L=""
     for i in $(seq 1 24); do
-      L=$(./pod.sh status | python3 -c '
-import json,sys
-for p in json.load(sys.stdin)["data"]["myself"]["pods"]:
-  if p["id"]!=sys.argv[1]: continue
-  r=p.get("runtime") or {}; ports={x["privatePort"]:(x["ip"],x["publicPort"]) for x in (r.get("ports") or []) if x["isIpPublic"]}
-  priv=[x["ip"] for x in (r.get("ports") or []) if not x["isIpPublic"]]
-  if 22 in ports and 9110 in ports: print(sys.argv[2], ports[22][0], ports[22][1], ports[9110][0], ports[9110][1], (priv or ["-"])[0])' "$ID" "$n")
+      L=$(./pod.sh get "$ID" | python3 -c '
+import ipaddress,json,sys
+p=json.load(sys.stdin); pub=lambda ip: bool(ip) and not ipaddress.ip_address(ip).is_private
+r=p.get("runtime") or {}; ports={x["private"]:(x["ip"],x["public"]) for x in (r.get("ports") or []) if x.get("public") and pub(x.get("ip"))}
+priv=[x["ip"] for x in (r.get("ports") or []) if x.get("ip") and not pub(x["ip"])]
+if 22 in ports and 9110 in ports: print(sys.argv[1], ports[22][0], ports[22][1], ports[9110][0], ports[9110][1], (priv or ["-"])[0])' "$n")
       [ -n "$L" ] && break; sleep 5
     done
     [ -n "$L" ] || { echo "[$(date +%T)] $n $ID: no ports, terminating"; ./pod.sh term $ID > /dev/null; continue; }

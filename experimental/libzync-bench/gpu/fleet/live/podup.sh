@@ -3,11 +3,12 @@
 cd ~/libzync-gpu/live; N=$1
 for i in $(seq 1 40); do
   L=$(./pod.sh status | python3 -c '
-import json,sys
-for p in json.load(sys.stdin)["data"]["myself"]["pods"]:
+import ipaddress,json,sys
+pub=lambda ip: bool(ip) and not ipaddress.ip_address(ip).is_private
+for p in json.load(sys.stdin)["pods"]:
   if p["name"]!=sys.argv[1]: continue
-  r=p.get("runtime") or {}; ports={x["privatePort"]:(x["ip"],x["publicPort"]) for x in (r.get("ports") or []) if x["isIpPublic"]}
-  priv=[x["ip"] for x in (r.get("ports") or []) if not x["isIpPublic"]]
+  r=p.get("runtime") or {}; ports={x["private"]:(x["ip"],x["public"]) for x in (r.get("ports") or []) if x.get("public") and pub(x.get("ip"))}
+  priv=[x["ip"] for x in (r.get("ports") or []) if x.get("ip") and not pub(x["ip"])]
   if 22 in ports and 9110 in ports: print(sys.argv[1], ports[22][0], ports[22][1], ports[9110][0], ports[9110][1], (priv or ["-"])[0])' "$N")
   [ -n "$L" ] && break; sleep 10; done
 [ -n "$L" ] || { echo "$N NO PORTS"; exit 1; }

@@ -253,6 +253,16 @@ jobs:
         run: |
           cd coordinator
           python3 test_pod_cloud_type.py --control
+      - name: The RunPod client speaks REST v2 and keeps its GraphQL-era behaviour
+        # ⛔ RunPod's GraphQL API retires early 2027. v2 answers a capacity miss with a bare 400 (a refusal
+        # if misread, and three latch the bot), has no isIpPublic, may list pods with no live port map,
+        # and marks no stock with a truthy "NONE". Also sweeps the repo: nothing still calls GraphQL
+        # except the one gap v2 has (account balance).
+        run: cd coordinator && python3 test_runpod_v2.py
+      - name: RunPod v2 POSITIVE CONTROL (each v2 difference put back wrong — must be caught)
+        run: |
+          cd coordinator
+          python3 test_runpod_v2.py --control
 
       - name: The donations record counts donations, and what arrived (hazync#524)
         # ⛔ Sponsor invoices are raised against the same BTCPay store, so the first real sponsorship

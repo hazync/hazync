@@ -17,11 +17,11 @@ DEADLINE=$(( $(date +%s) + ${DEADLINE_MIN:-150} * 60 ))
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 -o ServerAliveInterval=30"
 log () { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/driver.log"; }
-gql () { curl -s -X POST -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" -d "$1" https://api.runpod.io/graphql; }
+rp (){ curl -s -X "$1" -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" ${3:+-d "$3"} "https://api.runpod.io/v2$2"; }
 ID=""; HOST=""; PORT=""
 term () {
   [ -n "$ID" ] || return 0
-  log "terminating pod $ID"; gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$ID\\\"}) }\"}" >> "$OUT/driver.log"; echo >> "$OUT/driver.log"
+  log "terminating pod $ID"; rp DELETE "/pods/$ID" >> "$OUT/driver.log"; echo >> "$OUT/driver.log"
   ID=""
 }
 harvest () {
@@ -41,21 +41,20 @@ log "bundles.tgz $(du -h "$OUT/bundles.tgz" | cut -f1)"
 
 # 2. deploy: SECURE only (community hosts mostly never start)
 for G in "NVIDIA RTX PRO 6000 Blackwell Server Edition" "NVIDIA RTX PRO 6000 Blackwell Workstation Edition"; do
-  Q=$(python3 -c "import json,sys; print(json.dumps({'query': 'mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, volumeInGb: 0, containerDiskInGb: 120, gpuTypeId: \"%s\", name: \"lz-c14-bench\", imageName: \"runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04\", ports: \"22/tcp\", env: [{key: \"PUBLIC_KEY\", value: \"%s\"}] }) { id costPerHr } }' % (sys.argv[2], sys.argv[1])}))" "$PUB" "$G")
-  R=$(gql "$Q"); echo "$R" >> "$OUT/driver.log"
-  ID=$(echo "$R" | python3 -c 'import json,sys; p=(json.load(sys.stdin).get("data") or {}).get("podFindAndDeployOnDemand"); print(p["id"] if p else "")' 2>/dev/null)
+  Q=$(python3 -c "import json,sys; print(json.dumps({'name': 'lz-c14-bench', 'cloud': 'SECURE', 'gpu': {'id': sys.argv[2], 'count': 1}, 'image': 'runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04', 'disk': 120, 'ports': ['22/tcp'], 'env': {'PUBLIC_KEY': sys.argv[1]}}))" "$PUB" "$G")
+  R=$(rp POST /pods "$Q"); echo "$R" >> "$OUT/driver.log"
+  ID=$(echo "$R" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id") or "")' 2>/dev/null)
   [ -n "$ID" ] && { log "DEPLOYED $ID on $G"; echo "$ID" > "$OUT/pod_id"; break; }
 done
 [ -n "$ID" ] || { log "NO POD: nothing deployed"; exit 1; }
 
 # 3. ssh port (judge by runtime, not desiredStatus)
 for i in $(seq 1 60); do
-  read HOST PORT < <(gql '{"query":"query { myself { pods { id runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort } } } } }"}' | python3 -c '
-import json,sys
-for p in json.load(sys.stdin)["data"]["myself"]["pods"]:
-  if p["id"]!=sys.argv[1]: continue
-  for x in ((p.get("runtime") or {}).get("ports") or []):
-    if x["isIpPublic"] and x["privatePort"]==22: print(x["ip"], x["publicPort"])' "$ID")
+  read HOST PORT < <(rp GET "/pods/$ID" | python3 -c '
+import ipaddress,json,sys
+p=json.load(sys.stdin)
+for x in ((p.get("runtime") or {}).get("ports") or []):
+  if x.get("private")==22 and x.get("public") and x.get("ip") and not ipaddress.ip_address(x["ip"]).is_private: print(x["ip"], x["public"])')
   [ -n "${HOST:-}" ] && ssh $K -p "$PORT" root@"$HOST" true 2>/dev/null && break
   HOST=""; sleep 15
 done

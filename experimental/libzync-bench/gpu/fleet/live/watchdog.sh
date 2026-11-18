@@ -4,12 +4,12 @@
 cd ~/libzync-gpu/live; END=$((SECONDS + 85 * 60))
 while true; do
   S=$(./pod.sh status)
-  BAL=$(echo "$S" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["myself"]["clientBalance"])' 2>/dev/null || echo 99)
-  N=$(echo "$S" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["myself"]["pods"]))' 2>/dev/null || echo 1)
+  BAL=$(echo "$S" | python3 -c 'import json,sys; b=json.load(sys.stdin)["balance"]; print(99 if b is None else b)' 2>/dev/null || echo 99)
+  N=$(echo "$S" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["pods"]))' 2>/dev/null || echo 1)
   [ "$N" = 0 ] && grep -q LIVE_HOUR_DONE live_hour.out 2>/dev/null && { echo "[$(date +%T)] all pods gone, watchdog exits" >> watchdog.log; exit 0; }
   if [ $SECONDS -ge $END ] || python3 -c "import sys; sys.exit(0 if float('$BAL') < 3 else 1)"; then
     echo "[$(date +%T)] WATCHDOG FIRED (balance $BAL, elapsed ${SECONDS}s): terminating all pods" >> watchdog.log
-    echo "$S" | python3 -c 'import json,sys; [print(p["id"]) for p in json.load(sys.stdin)["data"]["myself"]["pods"]]' | while read id; do ./pod.sh term $id > /dev/null; done
+    echo "$S" | python3 -c 'import json,sys; [print(p["id"]) for p in json.load(sys.stdin)["pods"]]' | while read id; do ./pod.sh term $id > /dev/null; done
     exit 0
   fi
   sleep 120

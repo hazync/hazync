@@ -15,6 +15,6 @@ done < fleet.txt
 ls -la harvest >> live_hour.out
 for id in $(awk '{print $1}' fleet_ids.txt); do ./pod.sh term $id > /dev/null; done
 sleep 8
-echo "[$(date +%T)] pods left: $(./pod.sh status | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["myself"]["pods"]))')" >> live_hour.out
+echo "[$(date +%T)] pods left: $(./pod.sh status | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["pods"]))')" >> live_hour.out
 ssh hazync-coord 'shred -u /tmp/lz_eph 2>/dev/null; rm -f /tmp/lz_*.json'
 echo LIVE_HOUR_DONE >> live_hour.out

@@ -67,67 +67,39 @@ class SmokeRunPod(sponsor_bot.RunPod):
     """
 
     def deploy_listening(self, name, ssh_pubkey, gpu_types=sponsor_bot.GPU_TYPES):
-        refused, answered = None, False
-        for gt in gpu_types:
-            # ⛔ SECURE, NOT ALL. `cloudType: ALL` includes community hosts, and those mostly never
-            # start at all -- RunPod never publishes a port for them, so the run waits out its full
-            # SSH timeout and then gives up having paid for pods that never existed.
-            #
-            # Measured 2026-09-20 across two runs, and the split is by PRICE, which is the tell:
-            #     $0.34/hr   1 of 6 started   (17%)
-            #     $0.49/hr   1 of 1 started
-            #     $0.74/hr  14 of 14 started  (100%)
-            # A 4-card run died outright on it: three of five never started, so only two came up and
-            # the run could not reach its minimum. The cheap listing is not cheaper, it is absent.
-            q = ("mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, "
-                 "volumeInGb: 0, containerDiskInGb: 40, "
-                 f"gpuTypeId: {self._s(gt)}, name: {self._s(name)}, "
-                 f"imageName: {self._s(sponsor_bot.IMAGE)}, ports: \"22/tcp,9110/tcp\", "
-                 f"env: [{{key: \"PUBLIC_KEY\", value: {self._s(ssh_pubkey)}}}] }}) "
-                 "{ id costPerHr } }")
+        # ⛔ SECURE, NOT COMMUNITY. Community hosts mostly never start at all -- RunPod never publishes a
+        # port for them, so the run waits out its full SSH timeout and then gives up having paid for pods
+        # that never existed. create_pod (sponsor_bot) always asks for the SECURE cloud.
+        #
+        # Measured 2026-09-20 across two runs, and the split is by PRICE, which is the tell:
+        #     $0.34/hr   1 of 6 started   (17%)
+        #     $0.49/hr   1 of 1 started
+        #     $0.74/hr  14 of 14 started  (100%)
+        # A 4-card run died outright on it: three of five never started, so only two came up and
+        # the run could not reach its minimum. The cheap listing is not cheaper, it is absent.
+        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp", "9110/tcp"), disk_gb=40)
+        if not got:
+            return None
+        p, gt = got
+        # ⛔ RECORD WHERE THE CARD IS. Geography is the one term in a fleet's throughput that
+        # has never been controlled for here, and it has already caused a published error
+        # once: 142 s of spread was attributed to geography when it was CARD TYPE
+        # (hazync#448), and controlling for the card collapsed it to 9.0 s. The lesson taken
+        # was "state the card mix" -- but the site was then left unrecorded entirely, so the
+        # rival explanation can still never be tested. The milestone tooling recorded a
+        # `site` column per chunk; tip_smoke never did.
+        #
+        # In mode 6 the coordinator PUSHES segments over the network to every worker, so RTT
+        # plausibly reaches per-card throughput. Whether it does is unmeasured -- which is
+        # exactly why it must be written down before anyone compares two fleets again.
+        dc = p.get("dataCenterId")
+        if not dc:
             try:
-                p = self._gql(q).get("podFindAndDeployOnDemand")
-                answered = True
-            except sponsor_bot.RunPodError as e:
-                refused, p = e, None
-            if p and p.get("id"):
-                # ⛔ RECORD WHERE THE CARD IS. Geography is the one term in a fleet's throughput that
-                # has never been controlled for here, and it has already caused a published error
-                # once: 142 s of spread was attributed to geography when it was CARD TYPE
-                # (hazync#448), and controlling for the card collapsed it to 9.0 s. The lesson taken
-                # was "state the card mix" -- but the site was then left unrecorded entirely, so the
-                # rival explanation can still never be tested. The milestone tooling recorded a
-                # `site` column per chunk; tip_smoke never did.
-                #
-                # In mode 6 the coordinator PUSHES segments over the network to every worker, so RTT
-                # plausibly reaches per-card throughput. Whether it does is unmeasured -- which is
-                # exactly why it must be written down before anyone compares two fleets again.
-                dc = None
-                try:
-                    q2 = ('query { pod(input:{podId:%s}) { machine { dataCenterId } } }'
-                          % self._s(p["id"]))
-                    dc = ((self._gql(q2).get("pod") or {}).get("machine") or {}).get("dataCenterId")
-                except Exception:
-                    pass          # never fail a rental over a label
-                return {"id": p["id"], "name": name, "gpu_type": gt,
-                        "price": float(p.get("costPerHr") or 0), "dc": dc}
-        if refused is not None and not answered:
-            raise refused
-        return None
-
-    def ports_of(self, pod_id):
-        """{privatePort: (ip, publicPort)} for one pod, or {} while it is still starting."""
-        q = ("query { myself { pods { id name runtime { ports "
-             "{ ip isIpPublic privatePort publicPort } } } } }")
-        for p in ((self._gql(q).get("myself") or {}).get("pods") or []):
-            if p["id"] != pod_id:
-                continue
-            out = {}
-            for x in (((p.get("runtime") or {}).get("ports")) or []):
-                if x.get("isIpPublic"):
-                    out[int(x["privatePort"])] = (x["ip"], int(x["publicPort"]))
-            return out
-        return {}
+                dc = (self.pod_raw(p["id"]) or {}).get("dataCenterId")
+            except Exception:
+                pass          # never fail a rental over a label
+        return {"id": p["id"], "name": name, "gpu_type": gt,
+                "price": float(p.get("cost") or 0), "dc": dc}
 
 
 def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
@@ -429,10 +401,13 @@ def rank_card_types(api, vram_floor=VRAM_FLOOR_GB, economics=ECONOMICS):
 
     Returns [{id, display, vram, price, stock, usd_per_proof|None}], measured tier first.
     """
-    ids = [g["id"] for g in api._gql("query { gpuTypes { id } }")["gpuTypes"]]
+    # ONE call: GET /v2/catalog/gpus with SECURE pod availability for a single GPU -- what GraphQL needed a
+    # `gpuTypes { id }` plus one `lowestPrice(input:{gpuCount:1, secureCloud:true})` per type for.
+    catalog = api.gpu_catalog(stock=True)
     measured, measured_block = measured_cost_per_proof(economics)
     out = []
-    for gt in ids:
+    for g in catalog:
+        gt = g.get("id") or ""
         # ⛔ CUDA ONLY. The prover is a risc0 CUDA build; an AMD card cannot run it at all, so
         # offering one would rent a pod that is guaranteed to fail the GPU gate.
         if not gt.startswith("NVIDIA"):
@@ -452,22 +427,19 @@ def rank_card_types(api, vram_floor=VRAM_FLOOR_GB, economics=ECONOMICS):
         # only keeps them out of the AUTOMATIC ranking, where nobody chose them.
         if " MIG " in gt:
             continue
-        q = ('query { gpuTypes(input:{id:%s}) { id displayName memoryInGb '
-             'lowestPrice(input:{gpuCount:1, secureCloud:true}) '
-             '{ uninterruptablePrice stockStatus } } }' % json.dumps(gt))
-        try:
-            g = api._gql(q)["gpuTypes"][0]
-        except Exception:
-            continue
-        lp = g.get("lowestPrice") or {}
-        price, stock = lp.get("uninterruptablePrice"), lp.get("stockStatus")
-        vram = g.get("memoryInGb") or 0
+        # `availability` NONE (or absent) is GraphQL's null stockStatus; `price.secure` is its
+        # uninterruptablePrice (equal for every in-stock type, measured side by side 2026-11-18).
+        stock = g.get("availability")
+        if stock == "NONE" or not g.get("secure"):
+            stock = None
+        price = ((g.get("price") or {}).get("secure")) if stock else None
+        vram = g.get("memory") or 0
         # No secure price or no stock means RunPod cannot sell it right now, whatever it lists.
         if not price or not stock or vram < vram_floor:
             continue
-        out.append({"id": gt, "display": g.get("displayName") or gt, "vram": vram,
+        out.append({"id": gt, "display": g.get("name") or gt, "vram": vram,
                     "price": float(price), "stock": stock,
-                    "usd_per_proof": measured.get(g.get("displayName") or gt),
+                    "usd_per_proof": measured.get(g.get("name") or gt),
                     "measured_on": measured_block})
     # Measured tier (by the objective that matters) ahead of the unmeasured tier (by the objective
     # that does not, used only because nothing better exists for a card nobody has run).
@@ -1307,9 +1279,10 @@ def main():
         # ⛔ RENT SPARES. RunPod does not always start what it sells: on 2026-09-20 one of two pods
         # never published a port in 420 s while its twin answered in 30 s. Renting exactly N means one
         # bad pod ends the run after the full wait, having paid for both the whole time.
-        # ⛔ VALIDATE BEFORE RENTING. An unrecognised name is accepted by the GraphQL call and simply
-        # matches nothing, so the run would report "no capacity" for every pod and look like a RunPod
-        # outage rather than a typo. Fail here, having spent nothing.
+        # ⛔ VALIDATE BEFORE RENTING. An unrecognised name was accepted by the GraphQL call and simply
+        # matched nothing; RunPod v2 answers a failed placement with a bare 400, the same status as a
+        # capacity miss. Either way the run would report "no capacity" for every pod and look like a
+        # RunPod outage rather than a typo. Fail here, having spent nothing.
         if a.gpu_type.strip() == "auto":
             catalogue = rank_card_types(api)
             if not catalogue:
@@ -1332,7 +1305,7 @@ def main():
             gpu_types = tuple(t.strip() for t in a.gpu_type.split(",") if t.strip())
             if not gpu_types:
                 raise SystemExit("--gpu-type is empty")
-            offered = {g["id"] for g in api._gql("query { gpuTypes { id } }")["gpuTypes"]}
+            offered = api.gpu_type_ids()
             unknown = [t for t in gpu_types if t not in offered]
             if unknown:
                 raise SystemExit(f"unknown --gpu-type {unknown} — RunPod offers no such type")
@@ -2766,11 +2739,9 @@ def main():
         try:
             billed = []
             for p_ in created:
-                q = ('query { pod(input:{podId:%s}) { id name costPerHr '
-                     'runtime { uptimeInSeconds } } }' % api._s(p_["id"]))
                 try:
-                    pd = (api._gql(q) or {}).get("pod") or {}
-                    up = (pd.get("runtime") or {}).get("uptimeInSeconds")
+                    pd = api.pod(p_["id"]) or {}
+                    up = pd.get("uptime_s")
                     billed.append({"name": p_["name"], "id": p_["id"], "dc": p_.get("dc"),
                                    "gpu": p_["gpu_type"], "price_hr": p_["price"],
                                    "uptime_s": up,

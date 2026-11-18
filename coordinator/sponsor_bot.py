@@ -50,6 +50,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 def bot_db_path():
@@ -64,7 +65,6 @@ def bot_db_path():
 # and is decided there: /api/bot/queue lists exactly those, so an `underpaid` row, or a `paid` row below its
 # minimum, is never proven on the sponsorship budget.
 POD_PREFIX = "hz-sponsor-"
-GRAPHQL_URL = "https://api.runpod.io/graphql"
 # RunPod's API sits behind Cloudflare, which refuses Python's default "Python-urllib/3.x" User-Agent with
 # HTTP 403 "error code: 1010" (measured 2026-09-14). Without this header the bot could not deploy, list or
 # terminate a pod, and every refusal was logged as "no GPU capacity".
@@ -704,16 +704,79 @@ def trial_refusals(coord, heights):
 
 
 # ---------- RunPod ----------
+#
+# ⛔ REST API v2, NOT GraphQL. RunPod deprecated api.runpod.io/graphql (retiring "early 2027"); every call here
+# is the documented v2 equivalent (docs.runpod.io/api-reference-v2, schema at api.runpod.io/v2/openapi.json):
+#
+#     podFindAndDeployOnDemand      POST   /v2/pods             {name, image, cloud, gpu{id,count}, disk, ports[], env{}}
+#     myself { pods }               GET    /v2/pods             cursor-paginated; `cost` is the old costPerHr
+#     pod(input:{podId})            GET    /v2/pods/{id}        the LIVE port mapping (see ports_of)
+#     podTerminate                  DELETE /v2/pods/{id}        204; 404 once it is gone
+#     gpuTypes / lowestPrice        GET    /v2/catalog/gpus     ?include=AVAILABILITY&product=POD&cloud=SECURE&count=1
+#
+# ⚠ What changed underneath, and what the client does about it:
+#   * A capacity miss is HTTP 400 with only a human `detail` (no machine-readable code). GraphQL answered it
+#     with `data: {podFindAndDeployOnDemand: null}`. Both are "RunPod answered, this type had no capacity".
+#   * Every other refusal (401 key, 402 balance, 403 Cloudflare or pool access, 422 contract, 429, 5xx, no
+#     answer at all) is a REFUSAL, exactly as a GraphQL HTTP error was: the bot counts it toward
+#     RUNPOD_REFUSALS_MAX and never reports it as "no GPU capacity".
+#   * `cloud` takes only SECURE or COMMUNITY (`ALL` is gone). We always send SECURE (test_pod_cloud_type.py).
+#   * There is no `isIpPublic` on a port. A mapping is public when it has a `public` port and its `ip` is a
+#     global address -- the same entries GraphQL flagged isIpPublic.
+#   * GET /v2/pods may leave out the live mapping (RunPod documents `ssh.direct` as null in the listing and
+#     says to fetch the pod by id for it), so a caller that needs SSH asks ports_of(pod_id) for the pods it is
+#     waiting on, never every pod on every look.
+REST_URL = "https://api.runpod.io/v2"
+POD_CLOUD = "SECURE"
+# 400 is RunPod's "this GPU could not be placed" (and also a deterministic rule breach; if EVERY type answers
+# 400 the bot sees None, as it did when GraphQL answered null for every type).
+NO_CAPACITY_STATUS = 400
+# RunPod's v2 quota is per user (180/min on our key, read from RateLimit-Policy 2026-11-18). A 429 was never
+# processed, so even a create is safe to retry once the window says so.
+RATE_LIMIT_RETRIES = 2
+RATE_LIMIT_WAIT_MAX_S = 60.0
+
 
 class RunPodError(RuntimeError):
-    pass
+    """RunPod refused a request, or did not answer. `status` is the HTTP status (None: no answer at all)."""
+
+    def __init__(self, msg, status=None):
+        super().__init__(msg)
+        self.status = status
+
+
+def _public_ip(ip):
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(str(ip))
+    except ValueError:
+        return False
+    return not (a.is_private or a.is_loopback or a.is_link_local or a.is_unspecified or a.is_multicast)
+
+
+def pod_ports(pod):
+    """{private port: (public ip, public port)} from a v2 pod object: the mapping GraphQL flagged isIpPublic."""
+    out = {}
+    for x in (((pod or {}).get("runtime") or {}).get("ports")) or []:
+        try:
+            priv, pub, ip = int(x.get("private")), x.get("public"), x.get("ip")
+        except (TypeError, ValueError):
+            continue
+        if pub is None or not ip or not _public_ip(ip):
+            continue
+        out.setdefault(priv, (ip, int(pub)))
+    # `ssh.direct` is RunPod's own reading of the 22/tcp mapping; use it when the runtime list has none.
+    direct = ((pod or {}).get("ssh") or {}).get("direct") or {}
+    if 22 not in out and direct.get("host") and direct.get("port") and _public_ip(direct["host"]):
+        out[22] = (direct["host"], int(direct["port"]))
+    return out
 
 
 class RunPod:
-    """The RunPod GraphQL calls the board fleet already uses: deploy, list, terminate."""
+    """The RunPod calls the board fleet uses -- deploy, list, terminate, the GPU catalogue -- on REST API v2."""
 
-    def __init__(self, key, url=GRAPHQL_URL, timeout=60):
-        self.key, self.url, self.timeout = key, url, timeout
+    def __init__(self, key, url=REST_URL, timeout=60, sleep=time.sleep):
+        self.key, self.url, self.timeout, self._sleep = key, url.rstrip("/"), timeout, sleep
 
     @staticmethod
     def key_path():
@@ -737,81 +800,162 @@ class RunPod:
             raise SystemExit(f"sponsor_bot: the RunPod API key file {path} is empty")
         return cls(key)
 
-    @staticmethod
-    def _s(v):
-        return json.dumps(str(v))            # a JSON string literal is a valid GraphQL string literal
-
-    def _gql(self, query):
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"}
+    def _req(self, method, path, body=None, query=None):
+        """One v2 call. The parsed JSON body, or None for an empty one (204). RunPodError otherwise."""
+        url = self.url + path
+        if query:
+            url += "?" + urllib.parse.urlencode(query)
+        headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json"}
         if USER_AGENT:
             headers["User-Agent"] = USER_AGENT
-        req = urllib.request.Request(self.url, data=json.dumps({"query": query}).encode(), headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                d = json.load(r)
-        except urllib.error.HTTPError as e:
+        data = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode()
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
             try:
-                body = e.read()[:200].decode(errors="replace").strip()
-            except Exception:
-                body = ""
-            raise RunPodError(f"HTTP {e.code} {e.reason}: {body}") from e
-        except Exception as e:
-            raise RunPodError(f"{type(e).__name__}: {e}") from e
-        if d.get("errors") and not d.get("data"):
-            raise RunPodError(str(d["errors"])[:300])
-        return d.get("data") or {}
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    raw = r.read()
+                return json.loads(raw) if raw.strip() else None
+            except urllib.error.HTTPError as e:
+                try:
+                    text = e.read()[:400].decode(errors="replace").strip()
+                except Exception:
+                    text = ""
+                if e.code == 429 and attempt < RATE_LIMIT_RETRIES:
+                    try:
+                        wait = float(e.headers.get("Retry-After") or 5)
+                    except (TypeError, ValueError):
+                        wait = 5.0
+                    self._sleep(min(max(wait, 1.0), RATE_LIMIT_WAIT_MAX_S))
+                    continue
+                # RunPod answers application/problem+json {title, status, detail, errors[]}: say the detail.
+                try:
+                    prob = json.loads(text)
+                    text = "; ".join([str(prob.get("detail") or prob.get("title") or "")]
+                                     + [str(x) for x in (prob.get("errors") or [])][:3]).strip("; ")
+                except Exception:
+                    pass
+                raise RunPodError(f"HTTP {e.code} {e.reason}: {text[:200]}", status=e.code) from e
+            except Exception as e:
+                raise RunPodError(f"{type(e).__name__}: {e}") from e
 
-    def deploy(self, name, ssh_pubkey, gpu_types=GPU_TYPES):
-        """One on-demand 1-GPU pod, trying each GPU type in turn. None when RunPod answered and no type had
-        capacity. RunPodError when RunPod refused the request for every type: that is not a capacity miss,
-        and treating it as one hid a Cloudflare 403 behind "no GPU capacity" on the first trial."""
+    # -- pods --
+
+    def create_pod(self, name, gpu_type, ssh_pubkey, ports=("22/tcp",), disk_gb=40):
+        """POST /v2/pods: one on-demand 1-GPU pod of exactly this type. The v2 pod object (201)."""
+        # ⛔ SECURE CLOUD, NOT COMMUNITY. Community hosts mostly never start -- RunPod accepts the deploy and
+        # never publishes a port, so the caller waits out its full SSH timeout having paid for a pod that never
+        # existed. Measured 2026-09-20 in tip_smoke.deploy_listening, where the split is by PRICE:
+        #     $0.34/hr   1 of 6 started   (17%)
+        #     $0.74/hr  14 of 14 started  (100%)
+        # Every Python deploy path comes through here; test_pod_cloud_type.py checks every deploy path in the repo.
+        body = {"name": name, "cloud": "SECURE", "gpu": {"id": gpu_type, "count": 1},
+                "image": IMAGE, "disk": int(disk_gb), "ports": list(ports),
+                "env": {"PUBLIC_KEY": ssh_pubkey}}
+        return self._req("POST", "/pods", body)
+
+    def _deploy_first(self, name, ssh_pubkey, gpu_types, ports, disk_gb=40):
+        """Walk gpu_types in order: (v2 pod, type) for the first RunPod placed. None when RunPod answered and no
+        type had capacity. RunPodError when RunPod refused the request for every type: that is not a capacity
+        miss, and treating it as one hid a Cloudflare 403 behind "no GPU capacity" on the first trial."""
         refused = None
         answered = False
         for gt in gpu_types:
-            # ⛔ SECURE, NOT ALL. `cloudType: ALL` includes community hosts, and those mostly never
-            # start -- RunPod accepts the deploy and never publishes a port, so the caller waits out
-            # its full SSH timeout having paid for a pod that never existed. Measured 2026-09-20 in
-            # tip_smoke.deploy_listening, where the split is by PRICE, which is the tell:
-            #     $0.34/hr   1 of 6 started   (17%)
-            #     $0.74/hr  14 of 14 started  (100%)
-            #
-            # ⚠ That fix landed in tip_smoke.py and NOT here, although tip_smoke imports this
-            # module's IMAGE and GPU_TYPES -- the two deploy paths are siblings and drifted apart.
-            # For the bot the failure is worse than a slow run: a sponsor has already PAID, and the
-            # sponsorship stalls in `proving` while the refusal budget burns down.
-            # test_pod_cloud_type.py now checks every deploy path in the repo, not just this one.
-            q = ("mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, volumeInGb: 0, "
-                 f"containerDiskInGb: 40, gpuTypeId: {self._s(gt)}, name: {self._s(name)}, "
-                 f"imageName: {self._s(IMAGE)}, ports: \"22/tcp\", "
-                 f"env: [{{key: \"PUBLIC_KEY\", value: {self._s(ssh_pubkey)}}}] }}) {{ id costPerHr }} }}")
             try:
-                p = self._gql(q).get("podFindAndDeployOnDemand")
+                p = self.create_pod(name, gt, ssh_pubkey, ports=ports, disk_gb=disk_gb)
                 answered = True
             except RunPodError as e:
-                refused, p = e, None
+                if e.status == NO_CAPACITY_STATUS:
+                    answered, p = True, None
+                else:
+                    refused, p = e, None
             if p and p.get("id"):
-                return {"id": p["id"], "name": name, "gpu_type": gt, "cost_per_hr": float(p.get("costPerHr") or 0)}
+                return p, gt
         if refused is not None and not answered:
             raise refused
         return None
 
+    def deploy(self, name, ssh_pubkey, gpu_types=GPU_TYPES):
+        """One on-demand 1-GPU pod, trying each GPU type in turn. None when RunPod answered and no type had
+        capacity. RunPodError when RunPod refused the request for every type."""
+        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp",))
+        if not got:
+            return None
+        p, gt = got
+        return {"id": p["id"], "name": name, "gpu_type": gt, "cost_per_hr": float(p.get("cost") or 0)}
+
+    @staticmethod
+    def _row(p):
+        ports = pod_ports(p)
+        return {"id": p["id"], "name": p.get("name") or "", "cost_per_hr": float(p.get("cost") or 0),
+                "ssh": ports.get(22), "status": p.get("status"),
+                "gpu_type": (p.get("gpu") or {}).get("id"), "dc": p.get("dataCenterId"),
+                "uptime_s": (p.get("runtime") or {}).get("uptime")}
+
     def pods(self):
-        q = ("query { myself { pods { id name costPerHr machine { gpuDisplayName } "
-             "runtime { ports { ip isIpPublic privatePort publicPort } } } } }")
-        out = []
-        for p in ((self._gql(q).get("myself") or {}).get("pods") or []):
-            ports = ((p.get("runtime") or {}).get("ports")) or []
-            ssh = [x for x in ports if x.get("privatePort") == 22 and x.get("isIpPublic")]
-            out.append({"id": p["id"], "name": p.get("name") or "", "cost_per_hr": float(p.get("costPerHr") or 0),
-                        "ssh": (ssh[0]["ip"], int(ssh[0]["publicPort"])) if ssh else None})
-        return out
+        """Every pod on the account (all pages). `ssh` is None where the listing carries no live mapping."""
+        out, cursor = [], None
+        for _ in range(1000):                        # a cursor that never ends must not hang the caller
+            q = {"limit": 1000}
+            if cursor:
+                q["cursor"] = cursor
+            d = self._req("GET", "/pods", query=q) or {}
+            out += [self._row(p) for p in (d.get("pods") or []) if p.get("id")]
+            pg = d.get("pagination") or {}
+            cursor = pg.get("nextCursor")
+            if not pg.get("hasNextPage") or not cursor:
+                return out
+        raise RunPodError("GET /v2/pods: pagination did not end")
+
+    def pod_raw(self, pod_id):
+        """GET /v2/pods/{id}: the v2 pod object, or None when RunPod no longer has it."""
+        try:
+            return self._req("GET", "/pods/" + urllib.parse.quote(str(pod_id), safe=""))
+        except RunPodError as e:
+            if e.status == 404:
+                return None
+            raise
+
+    def pod(self, pod_id):
+        p = self.pod_raw(pod_id)
+        return self._row(p) if p and p.get("id") else None
+
+    def ports_of(self, pod_id):
+        """{privatePort: (ip, publicPort)} for one pod, or {} while it is still starting (or gone)."""
+        return pod_ports(self.pod_raw(pod_id))
+
+    def ssh_of(self, pod_id):
+        """(ip, port) of the pod's public SSH, or None while it has none."""
+        return self.ports_of(pod_id).get(22)
 
     def terminate(self, pod_id):
-        self._gql(f"mutation {{ podTerminate(input: {{podId: {self._s(pod_id)}}}) }}")
+        """DELETE /v2/pods/{id}. A pod RunPod no longer has (404) is already what we asked for."""
+        try:
+            self._req("DELETE", "/pods/" + urllib.parse.quote(str(pod_id), safe=""))
+        except RunPodError as e:
+            if e.status != 404:
+                raise
+
+    # -- the GPU catalogue --
+
+    def gpu_catalog(self, stock=False):
+        """GET /v2/catalog/gpus: [{id, name, memory, secure, community, price{secure,community}, ...}].
+        With stock=True each type also carries `availability` (NONE/LOW/MEDIUM/HIGH) for ONE GPU on a SECURE
+        pod -- what GraphQL's lowestPrice stockStatus answered for gpuCount 1 on the secure cloud."""
+        q = {"include": "AVAILABILITY", "product": "POD", "cloud": POD_CLOUD, "count": 1} if stock else None
+        return list((self._req("GET", "/catalog/gpus", query=q) or {}).get("gpus") or [])
+
+    def gpu_type_ids(self):
+        """Every GPU type id RunPod lists. ⛔ Check a requested type against this BEFORE renting. GraphQL
+        accepted an unknown gpuTypeId and matched nothing; v2's create may well answer it with the same 400 as
+        a capacity miss (400 is documented for both), so without this a typo reads as "no capacity"."""
+        return {g["id"] for g in self.gpu_catalog() if g.get("id")}
 
 
 def terminate_confirmed(api, pod_id, sleep=time.sleep, tries=6, wait_s=5.0):
-    """podTerminate until RunPod no longer lists the pod. False if it still does after every try."""
+    """terminate until RunPod no longer lists the pod. False if it still does after every try."""
     for _ in range(tries):
         try:
             api.terminate(pod_id)
@@ -1416,8 +1560,16 @@ class Bot:
                 seen = {}
             for p in waiting:
                 info = seen.get(p.id)
-                if info and info.get("ssh"):
-                    p.ssh, p.state = info["ssh"], "booting"
+                ssh = info.get("ssh") if info else None
+                if info and not ssh:
+                    # ⚠ RunPod v2's listing may carry no live port mapping; the pod's own record does.
+                    # Asked only for the pods we are waiting on (at most --max-pods), never every pod.
+                    try:
+                        ssh = self.api.ssh_of(p.id)
+                    except Exception as e:
+                        self.log(f"could not read {p.name}'s ports: {e}")
+                if ssh:
+                    p.ssh, p.state = ssh, "booting"
                     threading.Thread(target=self._boot, args=(p,), daemon=True).start()
                 elif now - p.created > self.ssh_timeout_s:
                     self._terminate(c, p, "no public SSH in time")

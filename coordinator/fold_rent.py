@@ -305,10 +305,8 @@ def main(argv=None):
         # pod that is already costing money.
         deadline = time.time() + 300
         while pod.ssh is None and time.time() < deadline:
-            for row in api.pods():
-                if row.get("id") == pod_id and row.get("ssh"):
-                    pod.ssh = row["ssh"]
-                    break
+            # RunPod v2's listing may carry no live port mapping; the pod's own record does (GET /v2/pods/{id}).
+            pod.ssh = api.ssh_of(pod_id)
             if pod.ssh is None:
                 time.sleep(10)
         if pod.ssh is None:
