@@ -26,7 +26,7 @@ pub mod mmr {
     include!("../../../prover/zyncapps/methods/headers/src/mmr.rs");
 }
 extern crate alloc;
-use swiftsync_verify::{receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
+use swiftsync_verify::{decode_journal, decode_receipt, dev_mode_env, receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
 use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -139,6 +139,8 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
     if !rep.check(!receipts.is_empty(), "at least one receipt") { return rep; }
     // a cap on the runs, checked before any is verified: each costs a STARK verification
     if !rep.check(receipts.len() <= MAX_RUNS, format!("at most {MAX_RUNS} chained runs ({} given)", receipts.len())) { return rep; }
+    // risc0 built with disable-dev-mode panics in Receipt::verify under RISC0_DEV_MODE (see swiftsync_verify::verify)
+    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") { return rep; }
     let mut want_in = HeaderState::empty().digest();
     let mut last: Option<HeaderState> = None;
     for (i, bytes) in receipts.iter().enumerate() {
@@ -147,7 +149,7 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
             rep.check(false, format!("receipt {n} is a single succinct or Groth16 proof ({e})"));
             return rep;
         }
-        let r: risc0_zkvm::Receipt = match bincode::deserialize(bytes) {
+        let r: risc0_zkvm::Receipt = match decode_receipt(bytes) {
             Ok(r) => r,
             Err(e) => { rep.check(false, format!("receipt {n} decodes ({e})")); return rep; }
         };
@@ -161,7 +163,7 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
                                          v.err().map(|e| format!(": {e}")).unwrap_or_default())) {
             return rep;
         }
-        let (din, out): ([u8; 32], HeaderState) = match r.journal.decode() {
+        let (din, out): ([u8; 32], HeaderState) = match decode_journal(&r.journal) {
             Ok(j) => j,
             Err(e) => { rep.check(false, format!("receipt {n}'s journal is (input digest, header state) ({e})")); return rep; }
         };
@@ -774,6 +776,32 @@ mod tests {
 
     const HDR_0_100: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_0_100.rcpt");
     const HDR_101_200: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_101_200.rcpt");
+
+    /// #758 (fuzz round 11-17) carried here when it met #724's move: the header-chain reader uses the core's strict
+    /// receipt decoder and journal guard, so it refuses the same inputs the core does, as a FAIL, never a panic.
+    #[test]
+    fn strict_receipt_and_journal_decoding() {
+        let mut trailing = HDR_0_100.to_vec();
+        trailing.push(0);
+        let mut r: risc0_zkvm::Receipt = bincode::deserialize(HDR_0_100).unwrap();
+        r.journal.bytes.push(0);
+        let journal = bincode::serialize(&r).unwrap();
+        let mut m: risc0_zkvm::Receipt = bincode::deserialize(HDR_0_100).unwrap();
+        let risc0_zkvm::InnerReceipt::Succinct(s) = &mut m.inner else { panic!("hdr_0_100 is a succinct receipt") };
+        let mut words: [u32; 8] = s.control_inclusion_proof.digests[0].as_words().try_into().unwrap();
+        words[0] = 0xffff_ffff;
+        s.control_inclusion_proof.digests[0] = words.into();
+        let ctrl = bincode::serialize(&m).unwrap();
+        for (b, want) in [(&ctrl, "malformed receipt"), (&trailing, "not a receipt")] {
+            let rep = verify_headers(&[b.as_slice()], HEADERS_IMAGE_ID, now(), None, None);
+            assert_eq!(rep.verdict, Verdict::Fail);
+            assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains(want)), "{want}: {:?}", rep.checks);
+        }
+        // A journal that is not whole words: this reader never decodes an unverified journal, so it is refused at the
+        // verify step (the claim no longer matches), before the guard — still a FAIL, never a panic.
+        let rep = verify_headers(&[journal.as_slice()], HEADERS_IMAGE_ID, now(), None, None);
+        assert_eq!(rep.verdict, Verdict::Fail);
+    }
     const T170: &str = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"; // block 170, Satoshi to Hal Finney
     fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
     fn lines(t: &str) -> Vec<&str> { t.lines().map(str::trim).filter(|l| !l.is_empty()).collect() }

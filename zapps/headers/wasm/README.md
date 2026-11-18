@@ -13,7 +13,7 @@ node test-headers.mjs    # the real chained receipts and MMR / transaction inclu
 
 | | |
 |---|---|
-| size | 1,139,873 bytes raw, 321,692 gzipped |
-| sha256 (this commit, `./build.sh`) | `46413ab21b3fc9fe1162ff026832e669f1e9cc0e14680f60f2c08f8dc4d3e248` (headers image `de54b94f`; Rust 1.99.0 in the published image ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…, HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1, fixed stage path; laptop and a fresh clone on hazync-coord, 18.11.2026; with the review fix of 18.11.2026 (the include JSON and its /tx answer take only their documented keys, each once; an explicit null txid or tx refused); before it `89544a8e…`, before 16.11.2026's `8eb3cfe9…`) |
+| size | 1,122,096 bytes raw, 315,137 gzipped |
+| sha256 (this commit, `./build.sh`) | `b5f89b8d811fa7436d83c4966aa78d738d0cae270765eea075b2023ed5ed54ed` (fix/receipt-hardening: the reader decodes receipts with the core's strict decoder and journal guard and refuses under RISC0_DEV_MODE; built in the published image, laptop and CI's zapps job equal, 18.11.2026). Before it `89544a8e3fc3482eab519f054eb439f6244ecb398b38bbc6bfd5b37474296372` (headers image `de54b94f`; Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, fixed stage path; laptop and hazync-coord, 16.11.2026; with the review fix of 16.11.2026 ("ok" and `included` need the tip compared with `expect`); before it `8eb3cfe9…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-headers.mjs` (WASM_HEADERS_OK), run by `../test.sh` in CI's zapps job |
