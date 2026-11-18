@@ -16,6 +16,9 @@ release hazync-host-x86_64-linux-gnu-cuda
 # The Windows CUDA host from windows-prove.yml's build-cuda job: host.exe + cudart64_12.dll, zipped
 # so the DLL keeps the name Windows looks for. Unzips to a folder the Windows GUI searches.
 release hazync-host-x86_64-windows-cuda.zip
+# The Windows CPU host from windows-prove.yml's prove job (which also ran it: method-id and a real prove of block 1),
+# host.exe alone: for a machine with no NVIDIA card the prover supports (owner, 16.11). Slower, and the app says so.
+release hazync-host-x86_64-windows-cpu.zip
 # The libzync verifier (swiftsync-verify), CLI, WebAssembly module and its JavaScript glue.
 release hazync-verify-x86_64-linux-gnu
 release hazync-verify.wasm

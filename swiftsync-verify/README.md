@@ -37,10 +37,9 @@ swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --m
 from a prover run's trie snapshot; `zync-serve` serves them at `/trie/coin/<spk>/<txid>/<vout>`, `/trie/balance/<spk>`
 and `/trie/history/<spk>`. Each is checked against the verified state's trie root (`libzync::trie_fact`).
 
-**The header-chain zyncAPP.** `swiftsync-verify headers [--image <hex>] [--expect <h>:<hash>] [--now <t>]
-<receipt>...` checks a header-chain proof (`src/headers.rs`) against the `zyncapp-headers` image of
-`reproduce/LIBZYNC_IDS` (`2db34e12…` in v0.24.0). Without `--expect` the chain identity is not checked and the output
-says so. The whole chain from genesis to 975,278 is one such proof (`docs/RELEASE_NOTES_v0.24.0.md`).
+**The header-chain zyncAPP** is its own module since 15.11.2026 (`../zapps/headers`: the CLI `zapp-headers`, the
+WASM module and `zapp-headers.js`; docs/libzync/ZYNCAPPS.md §9), on this crate as a library. This verifier checks core
+chain proofs only.
 
 **Proof bundles.** `swiftsync-verify [--network ...] bundle <receipt> <out.sspf>` writes one file holding the
 receipt and a header naming network, image, height, tip, work and trie root (`docs/libzync/PROOF_BUNDLE.md`, version

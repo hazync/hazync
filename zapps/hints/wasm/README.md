@@ -12,7 +12,7 @@ node test-hints.mjs ../vectors 0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742
 
 | | |
 |---|---|
-| size | 1,105,338 bytes raw, 307,929 gzipped |
-| sha256 (this commit, `./build.sh`) | `33cf56a435c8c09eaa22109da99aa9def17132ac5acd9d826aa6bb74d2db6eff` (hints image `1894f12e`; Rust 1.99.0 in the pinned container reproduce/wasm.Dockerfile, fixed stage path; laptop and hazync-coord, 16.11.2026; with the review fix of 16.11.2026 (a core tip given is compared also when T = H); before it `7c9c7107…`) |
+| size | 1,105,338 bytes raw, 307,927 gzipped |
+| sha256 (this commit, `./build.sh`) | `11d43ced5e63508d5138b82ba7123a191838b731aebb1607e79aa96977e2fc5a` (hints image `1894f12e`; Rust 1.99.0 in the published build image (reproduce/wasm-image.digests), fixed stage path; laptop, 17.11.2026; on swiftsync-verify without its `headers` module, moved to `zapps/headers` (#724). The same hints source on swiftsync-verify with that module gave `33cf56a4…` (16.11.2026, laptop and hazync-coord); before the review fix of 16.11.2026 (a core tip given is compared also when T = H) `7c9c7107…`) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-hints.mjs` 6/6, run by `../test.sh` in CI's zapps job |

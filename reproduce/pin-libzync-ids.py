@@ -40,12 +40,12 @@ def main(argv):
         ids[m.group(1)] = m.group(2)
     if set(ids) != {"mainnet", "signet"} or len(lines) != 2:
         sys.exit(f"want exactly one mainnet and one signet line, got {lines}")
-    # the header-chain zyncAPP's line (ROADMAP N3) is kept verbatim, and swiftsync-verify's HEADERS_IMAGE_ID set from it
+    # the header-chain zyncAPP's line (ROADMAP N3) is kept verbatim, and zapp-headers' HEADERS_IMAGE_ID set from it
     HLINE = re.compile(r"^zyncapp-headers mainnet METHOD_ID ([0-9a-f]{64}) GUEST_ELF_SHA256 ([0-9a-f]{64})$")
     headers = [l.strip() for l in Path(argv[1]).read_text().splitlines() if l.strip().startswith("zyncapp-headers ")]
     if len(headers) != 1 or not HLINE.match(headers[0]):
         sys.exit(f"want exactly one zyncapp-headers mainnet line, got {headers}")
-    hp = ROOT / "swiftsync-verify/src/headers.rs"
+    hp = ROOT / "zapps/headers/src/lib.rs"   # the header-chain zAPP module (docs/libzync/ZYNCAPPS.md §9)
     hs = hp.read_text()
     hs2 = re.sub(r'pub const HEADERS_IMAGE_ID: &str = "[0-9a-f]{64}";',
                  f'pub const HEADERS_IMAGE_ID: &str = "{HLINE.match(headers[0]).group(1)}";', hs)

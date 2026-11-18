@@ -92,7 +92,7 @@ jobs:
           if ./scripts/check-release-verifiers.sh bad; then
             echo "::error::the release gate passed a verifier that accepts tampered receipts"; exit 1
           fi
-      - name: Verifier vectors on every surface (CLI, C ABI, WASM) and the header-chain receipts
+      - name: Verifier vectors on every surface (CLI, C ABI, WASM)
         # swiftsync-verify/vectors/manifest.json: a real risc0 3.1.0 proof (DEMO), the same as signet, against the
         # 3.0.5 image, with a flipped seal, v0.23.0's real 3.0.5 receipt, and the retired design-B refusals.
         run: |
@@ -101,9 +101,6 @@ jobs:
           (cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o vtest && ./vtest)
           (cd swiftsync-verify-wasm && node test-vectors.mjs target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm)
           (cd swiftsync-verify-wasm && node test-facts-frame.mjs)
-          bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
-          node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
-          swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
 
   zapps:
     # Every zAPP is a module of its own (zapps/<name>/: its check library and CLI, its WASM module and glue, its C ABI if
@@ -476,6 +473,11 @@ jobs:
           # left (nothing is claimed), and Stop hands the claimed block back.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py --control
+          # ⭐ AND WHERE THE TWO MEET (review of 59575b40): a window opening after the CPU fallback (checked off the Tk
+          # thread), closing that waits for a slow block hand-back and names one it could not do, one card's error not
+          # disarming the others, Stop during Start's checks, and no unpinned worker when nvidia-smi is silent once.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py --control
 
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
