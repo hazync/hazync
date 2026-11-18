@@ -280,7 +280,7 @@ impl HeaderChain {
         for (i, hd) in bytes.chunks_exact(80).enumerate() {
             if i > 0 && hd[4..36] != hashes[i - 1] {
                 return Err(format!("headers: header {} (height {}) does not link to the one before it",
-                                   i, tip_height as usize + 1 - n + i));
+                                   i, tip_height as u64 + 1 - n as u64 + i as u64));
             }
             hashes.push(dsha(hd));
             times.push(u32::from_le_bytes(hd[68..72].try_into().unwrap()));
@@ -294,25 +294,39 @@ impl HeaderChain {
         Ok(HeaderChain { first_height, hashes, times })
     }
 
-    pub fn tip_height(&self) -> u32 {
-        self.first_height + self.hashes.len() as u32 - 1
+    /// The height of the last header, `first_height + (len - 1)`: in that order no intermediate leaves u32 (a run that
+    /// `bind` returns for a tip at u32::MAX starts at u32::MAX). The fields are public, so a run built by hand can be
+    /// one no chain has: no headers, not one time per header, or a last height above u32::MAX. That is an error (a
+    /// FAIL for every check that asks), never a wrapped height.
+    pub fn tip_height(&self) -> Result<u32, String> {
+        let bad = || format!("headers: no chain has {} header(s) with {} time(s) from height {}", self.hashes.len(),
+                             self.times.len(), self.first_height);
+        if self.times.len() != self.hashes.len() {
+            return Err(bad());
+        }
+        let last = self.hashes.len().checked_sub(1).and_then(|l| u32::try_from(l).ok()).ok_or_else(bad)?;
+        self.first_height.checked_add(last).ok_or_else(bad)
     }
 
-    /// The height of block `hash` (internal order) in this run.
+    /// The height of block `hash` (internal order) in this run; None also for a run no chain has (see `tip_height`).
     pub fn height_of(&self, hash: &[u8; 32]) -> Option<u32> {
+        self.tip_height().ok()?;
+        // i <= len - 1, and first_height + (len - 1) fits (tip_height above)
         self.hashes.iter().position(|h| h == hash).map(|i| self.first_height + i as u32)
     }
 
     /// The median-time-past before block `h`: the median of the timestamps of blocks max(0, h-11)..h-1 (Core's
     /// `GetMedianTimePast` of h's parent), the coin leaf's `creation_mtp`. Needs those headers in the run.
     pub fn mtp_before(&self, h: u32) -> Result<u32, String> {
-        if h == 0 || h > self.tip_height() {
-            return Err(format!("no MTP before height {h} (headers {}..{})", self.first_height, self.tip_height()));
+        let tip = self.tip_height()?;
+        if h == 0 || h > tip {
+            return Err(format!("no MTP before height {h} (headers {}..{tip})", self.first_height));
         }
         let lo = h.saturating_sub(11);
         if lo < self.first_height {
             return Err(format!("the MTP before height {h} needs the header at {lo}; the headers start at {}", self.first_height));
         }
+        // first_height <= lo < h <= tip, and times has one entry per header (tip_height above): in range
         let mut t: Vec<u32> = self.times[(lo - self.first_height) as usize..(h - self.first_height) as usize].to_vec();
         t.sort_unstable();
         Ok(t[t.len() / 2])
@@ -363,12 +377,13 @@ pub fn assume_valid(cs: &ChainState, headers: Option<&HeaderChain>, block: Optio
     let Some(hc) = headers else {
         return Err(format!("block {} is not the proven tip {}: give the headers from it to the tip", display(&x), display(&cs.tip_hash)));
     };
-    if hc.tip_height() != cs.height || hc.hashes.last() != Some(&cs.tip_hash) {
+    let tip = hc.tip_height()?;
+    if tip != cs.height || hc.hashes.last() != Some(&cs.tip_hash) {
         return Err("the headers do not end at the proven tip".into());
     }
     match hc.height_of(&x) {
         Some(h) => Ok(AssumeValid { block: x, height: h, proven_to: cs.height }),
-        None => Err(format!("block {} is not in the headers {}..{} that end at the proven tip", display(&x), hc.first_height, hc.tip_height())),
+        None => Err(format!("block {} is not in the headers {}..{tip} that end at the proven tip", display(&x), hc.first_height)),
     }
 }
 
@@ -679,14 +694,14 @@ fn hash_snapshot_with<R: Read>(snap: R, headers: &HeaderChain, tracked: &Tracked
     let (mut value, mut tracked_used) = (0u64, 0usize);
     let mut mtp_cache: Vec<Option<u32>> = Vec::new();
     let mut sum = PointSum::new();
+    let tip = headers.tip_height()?;
     let meta = read_snapshot_with(snap, on_meta, |c| {
         if c.height == 0 || c.height > base_height {
             return Err(format!("snapshot: coin {}:{} at height {}, outside 1..{base_height}", display(&c.txid), c.vout, c.height));
         }
         // before the cache grows: a coin's height must be one the headers cover (no allocation driven by the file)
-        if c.height > headers.tip_height() {
-            return Err(format!("snapshot: coin {}:{} at height {}, above the headers' tip {}", display(&c.txid), c.vout, c.height,
-                               headers.tip_height()));
+        if c.height > tip {
+            return Err(format!("snapshot: coin {}:{} at height {}, above the headers' tip {tip}", display(&c.txid), c.vout, c.height));
         }
         let i = c.height as usize;
         if mtp_cache.len() <= i {
@@ -821,9 +836,10 @@ pub fn check_snapshot<R: Read>(cs: &ChainState, snap: R, headers: &HeaderChain, 
     if cs.profile & PROFILE_UTXOHASH == 0 {
         return Err(format!("profile 0x{:x}: the proving image does not commit the live-coin hash (bit 6)", cs.profile));
     }
-    if headers.first_height != 0 || headers.tip_height() != cs.height || headers.hashes.last() != Some(&cs.tip_hash) {
-        return Err(format!("the headers must run from genesis to the proven tip at {} (given {}..{})", cs.height,
-                           headers.first_height, headers.tip_height()));
+    let tip = headers.tip_height()?;
+    if headers.first_height != 0 || tip != cs.height || headers.hashes.last() != Some(&cs.tip_hash) {
+        return Err(format!("the headers must run from genesis to the proven tip at {} (given {}..{tip})", cs.height,
+                           headers.first_height));
     }
     // the header first: a wrong network or base block is refused before the coins are read
     let r = hash_snapshot_with(snap, headers, tracked, cs.height, |m| {
@@ -879,7 +895,7 @@ pub fn run_assume<R: Read>(cs: &ChainState, req: AssumeRequest<R>) -> AssumeOutc
         None => None,
         Some(Ok(h)) => {
             o.checks.push((true, format!("headers: {} headers, heights {}..{}, linked, the last one the proven tip", h.hashes.len(),
-                                         h.first_height, h.tip_height())));
+                                         h.first_height, cs.height))); // bind ends the run at cs.height
             Some(h)
         }
         Some(Err(e)) => {
@@ -1245,7 +1261,20 @@ mod tests {
         assert!(hash_snapshot(SNAP_200, &part, &Tracked::new(), u32::MAX).unwrap_err().contains("above the headers' tip"));
         // a tip height at u32::MAX does not wrap
         let top = HeaderChain::bind(&HDRS[..80], &hc.hashes[0], u32::MAX).unwrap();
-        assert_eq!((top.first_height, top.tip_height()), (u32::MAX, u32::MAX));
+        assert_eq!((top.first_height, top.tip_height()), (u32::MAX, Ok(u32::MAX)));
+        assert_eq!(top.height_of(&hc.hashes[0]), Some(u32::MAX));
+        assert!(top.mtp_before(u32::MAX).unwrap_err().contains("needs the header"));
+        // runs no chain has (the fields are public): an error, never a wrapped height or a panic
+        let past = HeaderChain { first_height: u32::MAX, hashes: hc.hashes[..2].to_vec(), times: hc.times[..2].to_vec() };
+        assert!(past.tip_height().unwrap_err().contains("no chain has"));
+        assert_eq!(past.height_of(&hc.hashes[1]), None);
+        assert!(past.mtp_before(1).is_err());
+        assert!(hash_snapshot(SNAP_200, &past, &Tracked::new(), 200).unwrap_err().contains("no chain has"));
+        let empty = HeaderChain { first_height: 0, hashes: vec![], times: vec![] };
+        assert!(empty.tip_height().is_err() && assume_valid(&cs, Some(&empty), Some([1; 32])).unwrap_err().contains("no chain has"));
+        let short = HeaderChain { first_height: 0, hashes: hc.hashes.clone(), times: hc.times[..10].to_vec() };
+        assert!(short.mtp_before(150).unwrap_err().contains("no chain has"));
+        assert!(check_snapshot(&cs, SNAP_200, &short, &Tracked::new()).unwrap_err().contains("no chain has"));
     }
 
     #[test]
