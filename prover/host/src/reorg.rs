@@ -262,6 +262,49 @@ pub(crate) fn stop_or_rewind(blocks_dir: &str, why: &str) -> ! {
     stop(why)
 }
 
+/// A block file's hash (the state's tip_hash order), from its header fields, as prep_block computes it.
+pub(crate) fn hash_of(j: &serde_json::Value) -> Option<[u8; 32]> {
+    let merkle: [u8; 32] = crate::rev(crate::hx(j["merkle"].as_str()?)).try_into().ok()?;
+    let h = crate::build_header_v(j["version"].as_i64().unwrap_or(1) as i32, j["prev"].as_str()?, &merkle,
+                                  j["time"].as_u64()? as u32, j["bits"].as_u64()? as u32, j["nonce"].as_u64()? as u32);
+    Some(crate::header_hash(&h))
+}
+
+fn state_tip(out: &str, h: u32) -> Option<[u8; 32]> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{out}/state_{h}.json")).ok()?).ok()?;
+    let t: Vec<u8> = v["tip_hash"].as_array()?.iter().map(|x| x.as_u64().map(|b| b as u8)).collect::<Option<_>>()?;
+    t.try_into().ok()
+}
+
+fn disp(b: &[u8; 32]) -> String { let mut x = *b; x.reverse(); crate::hex(&x) }
+
+/// Before block h is applied: is there a state_<h>.json of an earlier run for another block? Then the states h.. on disk
+/// are another chain's (the node reorged while this run replays from its save point): write the fetcher's marker for
+/// a fork at h-1 (unless one is there) and stop as for any marker (exit 5 with automatic rewinds and a depth within W,
+/// else 4). Returns when there is no such state.
+pub(crate) fn stale_state_fork(out: &str, blocks_dir: &str, h: u32, prev_tip: &[u8; 32], j: &serde_json::Value) {
+    let Some(old) = state_tip(out, h) else { return };
+    let Some(new) = hash_of(j) else { return };
+    if old == new { return; }
+    let fork = h - 1;
+    let mut orphaned = Vec::new();
+    let mut k = h;
+    while let Some(x) = state_tip(out, k) { orphaned.push(serde_json::json!([k, disp(&x)])); k += 1; }
+    let top = k - 1;
+    let w: u32 = std::env::var("HAZYNC_REORG_AUTO_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(288);
+    let depth = top - fork;
+    let why = format!("before block {h}: state_{h}.json of an earlier run is block {}, the block file {}: the states \
+                       {h}..={top} on disk are another chain's (a reorg inside the replay window)", disp(&old), disp(&new));
+    if marker(blocks_dir).is_none() {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let m = serde_json::json!({"fork": fork, "fork_hash": disp(prev_tip), "prep_tip": top, "depth": depth,
+            "class": if depth <= w { "auto" } else { "manual" }, "W": w, "orphaned": orphaned, "new": [],
+            "source": "prep: stale state files above its save point", "at": now});
+        crate::lz::write_atomic(&format!("{blocks_dir}/REORG"), m.to_string().as_bytes());
+    }
+    stop_or_rewind(blocks_dir, &why)
+}
+
 /// A block file's `prev` (display hex) as the state's tip_hash byte order.
 pub(crate) fn prev_of(j: &serde_json::Value) -> Option<[u8; 32]> {
     let x = j["prev"].as_str()?;

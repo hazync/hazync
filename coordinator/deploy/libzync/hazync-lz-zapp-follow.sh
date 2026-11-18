@@ -42,7 +42,12 @@ mkdir -p "$Z/blocks" "$Z/cl" "$Z/out" "$Z/tmp"
 exec 9>"$Z/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
 
 # 1. the proof, and what it proves (asked of the host, from the copied bytes: the spine may move under us)
-[ -s "$SPINE/spine.bin" ] || { log "no spine yet"; exit 0; }
+if [ ! -s "$SPINE/spine.bin" ]; then
+    # no spine: none yet (nothing served either), or a reorg below every kept head took it away (REORG §7) while facts
+    # of the orphaned branch are still served: that is a failure for a person, not "nothing to do" (round 3, LOW)
+    [ -s "$SERVE/proof.rcpt" ] && die "no spine, but facts are served at the proof in $SERVE: a reorg below every kept spine head? REORG.md §11"
+    log "no spine yet"; exit 0
+fi
 cp "$SPINE/spine.bin" "$Z/tmp/spine.bin"
 OKLINE=$("$HOST" verify-any "$Z/tmp/spine.bin" 1 2>/dev/null | grep -m1 '^RANGE-OK lo=1 .* anchored=1$' || true)
 H=$(echo "$OKLINE" | tr ' ' '\n' | sed -n 's/^hi=//p')
@@ -57,21 +62,36 @@ done
 if [ "$H" -le "$last" ]; then
     [ -s "$SERVE/proof.rcpt" ] && cmp -s "$Z/tmp/spine.bin" "$SERVE/proof.rcpt" && { log "at $H, nothing new"; exit 0; }
 fi
-# REORG §10: the spine below the stores, or at a height whose block the stores have another of
-mine=$(python3 -c 'import json,sys;print(bytes(json.load(open(sys.argv[1]))["tip_hash"]).hex())' "$Z/out/state_$H.json" 2>/dev/null || true)
-if [ "$last" -gt 0 ] && { [ "$H" -lt "$last" ] || { [ -n "$mine" ] && [ "$mine" != "$BH" ]; }; }; then
-    # only for a spine the node agrees with: its block at H (hashed from the fetched header) is the spine's
-    python3 "$FETCH" "$H" "$Z/tmp/block_$H.json" >/dev/null 2>&1 || die "cannot fetch block $H from the node to compare with the spine"
-    NH=$(python3 -c '
+# REORG §10: the spine below the stores, at a height whose block the stores have another of, or above stores whose
+# own last block the node no longer has (the spine fell back and advanced again between two runs, round 3 M1)
+stip() { python3 -c 'import json,sys;print(bytes(json.load(open(sys.argv[1]))["tip_hash"]).hex())' "$Z/out/state_$1.json" 2>/dev/null || true; }
+node_hash() {  # node_hash <h>: the node's block at h, from its header (internal order, as out_bhash), or empty
+    python3 "$FETCH" "$1" "$Z/tmp/block_$1.json" >/dev/null 2>&1 || { echo; return; }
+    python3 -c '
 import hashlib, json, struct, sys
 j = json.load(open(sys.argv[1]))
 h = (struct.pack("<I", int(j["version"]) & 0xffffffff) + bytes.fromhex(j["prev"])[::-1] + bytes.fromhex(j["merkle"])[::-1]
      + struct.pack("<III", int(j["time"]), int(j["bits"]), int(j["nonce"])))
-print(hashlib.sha256(hashlib.sha256(h).digest()).digest().hex())' "$Z/tmp/block_$H.json")   # internal order, as out_bhash
-    rm -f "$Z/tmp/block_$H.json"
+print(hashlib.sha256(hashlib.sha256(h).digest()).digest().hex())' "$Z/tmp/block_$1.json"
+    rm -f "$Z/tmp/block_$1.json"
+}
+mine=$(stip "$H")
+why=""
+if [ "$last" -gt 0 ]; then
+    if [ "$H" -lt "$last" ]; then why="the spine is below them"
+    elif [ -n "$mine" ] && [ "$mine" != "$BH" ]; then why="they have another block at $H"
+    elif [ "$H" -gt "$last" ]; then
+        NL=$(node_hash "$last"); [ -n "$NL" ] || die "cannot fetch block $last from the node to check this follower's stores"
+        [ "$NL" = "$(stip "$last")" ] || why="the node no longer has their block $last"
+    fi
+fi
+if [ -n "$why" ]; then
+    # only for a spine the node agrees with: its block at H is the spine's (a node on another branch would rebuild the
+    # same wrong stores every run)
+    NH=$(node_hash "$H")
     [ "$NH" = "$BH" ] || die "the spine ($H, block $BH) is not the node's block at $H (${NH:-none}): this follower's stores are left as they are"
     ts=$(date -u +%Y%m%dT%H%M%SZ)
-    log "a reorg: the spine is at $H (block ${BH:0:16}), this follower's stores at $last${mine:+, with another block at $H}: moved to orphaned/$ts, prep again from genesis"
+    log "a reorg: the spine is at $H (block ${BH:0:16}), this follower's stores at $last ($why): moved to orphaned/$ts, prep again from genesis"
     mkdir -p "$Z/orphaned/$ts"
     for d in cl out blocks; do if [ -e "$Z/$d" ]; then mv "$Z/$d" "$Z/orphaned/$ts/"; fi; done
     find "$Z/orphaned/" -mindepth 1 -maxdepth 1 -type d ! -name "$ts" -exec rm -rf {} +    # only the newest kept
@@ -81,7 +101,9 @@ fi
 if [ "$H" -gt "$last" ]; then
     log "prep $((last + 1))..$H (history and trie for the spine at $H)"
     python3 "$FETCH" range $((last + 1)) "$H" "$Z/blocks" >/dev/null || die "fetching blocks $((last + 1))..$H failed"
-    if [ "$last" -eq 0 ]; then anchor=genesis; unset HAZYNC_PREP_CONTINUE; rm -f "$Z/out/history.bin"
+    # from genesis: a rebuild that died before its first save point leaves a coin log a run from genesis refuses;
+    # nothing in it is worth keeping (as libzync-prep-run.sh does, round 3 LOW)
+    if [ "$last" -eq 0 ]; then anchor=genesis; unset HAZYNC_PREP_CONTINUE; rm -f "$Z/out/history.bin"; rm -rf "${Z:?}/cl/"*
     else anchor="$Z/out/state_$last.json"; export HAZYNC_PREP_CONTINUE=1; fi
     # The trie stays in memory (no HAZYNC_TRIE_DIR): a disk trie saves only a one-line "HZTRIE-DISK" marker as
     # state_H.trie, which zync-serve cannot load. zync-serve holds the trie in memory anyway.

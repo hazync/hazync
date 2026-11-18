@@ -717,3 +717,31 @@ blocks, and so does the fake now (`known`).
   With the depth delay this happens only for a reorg deeper than 6 below the node's tip.
 - **The delay is counted from the node's tip, not prep's**: a reorg at depth 1 below prep's tip while prep is far
   behind the node is deep from the node's point of view, and so is covered by markers, not by the delay.
+
+**Review of 18.11.2026, round 3 (Fable, `05b4a26`), fixed** (after merging `main`, where P1-P3 landed as #754):
+
+- **(HIGH) A reorg inside prep's replay window was never rewound.** After a restart prep replays from its save point A
+  while the state files above A from before stay on disk (and served); the fetcher compares only prep's tip, so a fork
+  between A and those states read as "above prep's tip": no marker, no record, and the board kept the orphaned blocks.
+  Now prep, before applying block h, compares a `state_<h>.json` left by an earlier run with the block file: another
+  block is a fork at h-1, handled as any other (it writes the marker, class `auto` within W, and stops; the runner
+  rewinds, moves the stale files, writes the record, the board rewinds). `prover/host/src/reorg.rs`
+  `stale_state_fork`, host only.
+- **(M2) The backstop** checks every verified range in the window (`REORG_AUTO_MAX_DEPTH`) against prep's states, once a
+  minute, latches the alert in the database (`meta.reorg_alert`, survives a restart) until a rewind below it is applied,
+  is quiet while prep's `out/REWIND` is there, and pages: `hazync-lz-check-reorg.{service,timer}` (every 5 min, fails
+  its unit while the alert is latched).
+- **(M1) The zAPP follower missed a fall-back** when the spine had fallen back and advanced again past its stores
+  between two runs: before continuing from its last save point it now checks the node still has that block, and
+  rebuilds if not. The unit gets `OnFailure=` (pages), `HAZYNC_PREP_WAIT_S=120` and `TimeoutStartSec=4h`.
+- **Offsite markers wait for the coordinator's `proofs/orphaned/<E>/DONE`** (written after the rewind's commit), so a
+  marker is never written from a half-filled directory. `restore-plan` prints, per proof, the key to restore from
+  (the newest `r<E>/` copy, else the live name).
+- Low: a superseded rewind is marked `done` (A → B → A no longer leaves the first `rewinding`); a start refused by the
+  reorg handling (a record that does not read, peers) exits 3, which `hazync-lz-coordinator.service` no longer restarts,
+  so the unit fails and alerts; the follower fails when there is no spine but facts are still served; a follower
+  rebuild that died before its first save point clears its coin log; the banner is on `sponsors/` and `404.html` too
+  (`ooga/` is a pinned copy of `ooga-land` and stays as it is).
+- Harness: a reorg inside the replay window (prep restarted, held mid-replay, the node reorgs), the follower missing a
+  fall-back, the coordinator killed between a rewind's file moves and its commit (restarted as systemd would) with an
+  offsite copy run in that window, and the offsite invariant checked against the NODE's chain.

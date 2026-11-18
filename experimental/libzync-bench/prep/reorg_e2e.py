@@ -155,7 +155,7 @@ class Runner:
 PORT = (lambda s: (s.bind(("127.0.0.1", 0)), s.getsockname()[1], s.close())[1])(socket.socket())
 URL = f"http://127.0.0.1:{PORT}"
 CDB = O / "coord/c.db"
-CENV = dict(ENV, HAZYNC_LIBZYNC="1", VERIFY_MODE="real", COORD_ALLOW_MOCK="1", HAZYNC_HOST=str(HERE / "reorg_fake_verify.py"),
+CENV = dict(ENV, COORD_CRASH_FILE=str(O / "coord_crash"), HAZYNC_LIBZYNC="1", VERIFY_MODE="real", COORD_ALLOW_MOCK="1", HAZYNC_HOST=str(HERE / "reorg_fake_verify.py"),
             HAZYNC_BRIDGE_OUT=str(R / "leaves"), HAZYNC_LZ_STATE_DIR=str(R / "out"), HAZYNC_LZ_REORG_ACK_DIR=str(O / "acks"),
             COORD_PORT=str(PORT), COORD_BIND="127.0.0.1", COORD_DB=str(CDB), COORD_STATE=str(O / "coord/st"),
             COORD_PROOFS=str(O / "coord/proofs"), COORD_SPINE=str(O / "coord/spine"), WITNESS_DIR=str(O / "coord/w"),
@@ -287,9 +287,29 @@ STORE, OFF_DEPTH, OFFP = MemS3(), 6, "proofs-46666b6f/"
 (O / "keys").write_text("kid secret https://x.r2.cloudflarestorage.com b\n")
 PROOFS = O / "coord/proofs"
 
-def offsite(tag):
-    """copy then check, with the node's tip as the coordinator's tip file has it; then the invariant: every live name in
-    the store holds the board's proof of that name now, or a marker covers it."""
+_offchain_before = [set()]
+def offchain_live(markers):
+    """Live names in the store whose proof is NOT of the node's chain now (its end block is not the node's block at its
+    hi) and that no marker covers."""
+    out = set()
+    for k, v in STORE.objects.items():
+        n = k[len(OFFP):]
+        if not k.startswith(OFFP) or "/" in n or not n.startswith("proof_"):
+            continue
+        try:
+            r = json.loads(v)
+            on = int(r["hi"]) <= len(chain) and r["out"] == bytes.fromhex(node_hash(int(r["hi"])))[::-1].hex()
+        except (ValueError, KeyError):
+            on = False
+        if not on and not any(n in m.get("covered", {}) for m in markers.values()):
+            out.add(n)
+    return out
+
+def offsite(tag, concurrent=False):
+    """copy then check, with the node's tip as the coordinator's tip file has it; then the invariants: every live name in
+    the store holds the board's proof of that name now, or a marker covers it; and against the NODE's chain: no live name
+    holds a proof of a block off it unless a marker covers it. concurrent: a run while a rewind is half done (its files
+    moved, not committed): no marker for it yet, and no NEW off-chain live name."""
     (O / "node_tip").write_text(f"{len(chain)}\n")
     args = ["--keys", str(O / "keys"), "--bucket", "b", "--proofs", str(PROOFS), "--method-id", "46666b6f" + "0" * 56,
             "--depth", str(OFF_DEPTH), "--tip-file", str(O / "node_tip"), "--bwlimit-mbit", "0", "--threads", "2", "--min-age", "0"]
@@ -308,9 +328,16 @@ def offsite(tag):
         if (not p.exists() or p.read_bytes() != v) and not any(n in m.get("covered", {}) for m in markers.values()):
             bad.append(n)
     shallow_cover = {e: len(m["covered"]) for e, m in markers.items() if e in shallow_epochs and m["covered"]}
-    check(rc1 == 0 and rc2 == 0 and not bad and not shallow_cover,
-          f"{tag}: offsite copy and check (exit {rc1}, {rc2}); no live name holds another chain's proof uncovered ({bad[:3]}); "
-          f"no marker of a reorg within {OFF_DEPTH} covers a name ({shallow_cover}); {len(markers)} marker(s)")
+    off = offchain_live(markers)
+    if concurrent:
+        check(rc1 == 0 and not (off - _offchain_before[0]),
+              f"{tag}: an offsite copy while the rewind is half done: no new live name of another chain ({sorted(off - _offchain_before[0])[:3]})")
+        return
+    _offchain_before[0] = off
+    check(rc1 == 0 and rc2 == 0 and not bad and not shallow_cover and not off,
+          f"{tag}: offsite copy and check (exit {rc1}, {rc2}); no live name holds another chain's proof uncovered ({bad[:3]}), "
+          f"none off the node's chain ({sorted(off)[:3]}); no marker of a reorg within {OFF_DEPTH} covers a name ({shallow_cover}); "
+          f"{len(markers)} marker(s)")
 shallow_epochs = set()
 
 ZAPP = O / "zapp"; ZSERVE = O / "zserve"
@@ -382,7 +409,7 @@ def spine_hi():
     code, out = api("/api/spine")
     return out.get("hi") if code == 200 else None
 
-def reorg(d, mode, crash=None, spine_case=False):
+def reorg(d, mode, crash=None, spine_case=False, coord_crash=False):
     """A reorg of depth d below prep's tip; mode 'prove' (prep at rest, the worker holding the tip) or 'prep'. crash: a
     crash hook the rewind dies at once (HAZYNC_CRASH_AT), as systemd then restarts it. spine_case: spine heads below
     and above the fork first; the spine must fall back to the one below."""
@@ -426,10 +453,20 @@ def reorg(d, mode, crash=None, spine_case=False):
         F = P - d
         fetched = len(chain)
         chain = chain[:F] + branch(chain, F, (len(chain) - F) + 2); set_world(chain)
+        if coord_crash:
+            (O / "coord_crash").write_text("1")      # the coordinator dies between this rewind's moves and its commit
         wait(lambda: (R / "blocks/REORG").exists(), f"{tag}: the fetcher's marker")
         if pid: os.kill(pid, signal.SIGCONT)
         stopped_at = (P, fetched)
     epoch += 1
+    if coord_crash:
+        global coord
+        died = wait(lambda: coord.poll() is not None, f"{tag}: the coordinator dies mid-rewind (COORD_CRASH_FILE)")
+        offsite(f"{tag}: the coordinator down mid-rewind", concurrent=True)
+        check(died and not (O / "acks" / f"{epoch}.ack").exists() and f"{OFFP}reorgs/{epoch}.json" not in STORE.objects,
+              f"{tag}: the coordinator died between the moves and the commit (exit {coord.returncode}); no ack, no offsite marker yet")
+        coord = spawn([sys.executable, str(REPO / "coordinator/server.py")], O / "coord.log", CENV)     # systemd restarts it
+        wait(_up, f"{tag}: the coordinator back")
     ok = wait(lambda: (O / "acks" / f"{epoch}.ack").exists(), f"{tag}: the coordinator's ack of epoch {epoch}")
     m = api("/api/meta")[1].get("reorg") or {}
     check(ok and m.get("epoch") == epoch and m.get("fork") == F,
@@ -489,7 +526,7 @@ def reorg(d, mode, crash=None, spine_case=False):
 settle("start")
 if W > 100:
     grow(W + 20); settle(f"grown to {len(chain)}")
-plan = [(1, "prove", {}), (1, "prep", {}), (2, "prove", {"crash": "rewind-after-record"}), (2, "prep", {}),
+plan = [(1, "prove", {}), (1, "prep", {}), (2, "prove", {"crash": "rewind-after-record"}), (2, "prep", {"coord_crash": True}),
         (W, "prove", {"spine_case": True}), (W, "prep", {})]
 for d, mode, kw in (plan[:2] if CONTROL else plan):
     reorg(d, mode, **kw)
@@ -520,8 +557,48 @@ if not CONTROL:
           f"{tag}: libzync-prep-rewind --allow-deep (exit {rw.returncode}), acked: epoch {m.get('epoch')}, fork {m.get('fork')}")
     fetcher = start_fetcher(); runner = Runner()             # the units started again
     settle(tag)
+if not CONTROL:
+    # review round 3, HIGH-1: prep restarts (a deploy, a crash) and replays from its save point A; the states above A
+    # from before stay on disk, served; the node reorgs ABOVE prep's replaying position but below what the board has
+    # verified. The fetcher sees a fork above prep's tip; prep must see that its old state files are another chain's.
+    tag = "a reorg inside prep's replay window"
+    print(f"== {tag} (and the zAPP follower missing the spine's fall-back)", flush=True)
+    A = max(int(q.name[6:-4]) for q in (R / "out").glob("state_*.smt") if q.name[6:-4].isdigit())
+    need = (A + 12) - len(chain)
+    if need < 4:
+        need += 50                                    # past the next save point, 12 above it
+    grow(need); settle(f"{tag}: grown to {len(chain)}")
+    A = max(int(q.name[6:-4]) for q in (R / "out").glob("state_*.smt") if q.name[6:-4].isdigit())
+    T = len(chain)
+    check(spine(T)[0] == 200, f"{tag}: the spine at {T}")
+    rc, _ = follow(f"{tag}: before"); check(rc == 0 and follower_serves(T), f"{tag}: the zAPP follower serves at {T} (exit {rc})")
+    runner.once_env = {"HAZYNC_PREP_LEAF_WINDOW": "1"}    # the restarted prep is held at its first bundle, mid-replay
+    os.kill(runner.prep_pid(), signal.SIGKILL)
+    wait(lambda: prep_tip()[0] == A and runner.prep_pid(), f"{tag}: prep restarted from its save point {A}")
+    time.sleep(2)
+    F = T - 3
+    old = {h: tip(h) for h in range(F + 1, T + 1)}
+    chain = chain[:F] + branch(chain, F, 6); set_world(chain)
+    time.sleep(3)
+    os.kill(runner.prep_pid(), signal.SIGKILL)        # the hold off: prep replays on into the stale states
+    epoch += 1
+    ok = wait(lambda: (O / "acks" / f"{epoch}.ack").exists(), f"{tag}: the coordinator's ack of epoch {epoch}")
+    m = api("/api/meta")[1].get("reorg") or {}
+    rlog = (O / "run.log").read_text(errors="replace")
+    check(ok and m.get("fork") == F and "a reorg inside the replay window" in rlog and f"PREP_REWOUND to {F}" in rlog,
+          f"{tag}: prep saw its state files {F + 1}..{T} are another chain's, stopped, rewound to {F}; the board rewound (epoch {m.get('epoch')}, fork {m.get('fork')})")
+    settle(tag)
+    check(all(tip(h) != old[h] for h in range(F + 1, T + 1)) and frontier() == len(chain),
+          f"{tag}: the board proves the new {F + 1}..{len(chain)} (frontier {frontier()})")
+    # MEDIUM-1: the spine fell back (to a kept head <= F) and advances on the new branch past the follower's stores
+    # before the follower runs again
+    check(spine(len(chain))[0] == 200 and spine_hi() == len(chain), f"{tag}: the spine re-advanced to {len(chain)} on the new branch")
+    rc, flog_ = follow(f"{tag}: after (the fall-back missed)")
+    check(rc == 0 and "the node no longer has their block" in flog_ and follower_serves(len(chain)),
+          f"{tag}: the zAPP follower, which never saw the fall-back, finds its block {T} gone, rebuilds and serves at {len(chain)} (exit {rc})")
+
 check(not db1("SELECT id FROM ranges WHERE status='failed'"), f"nothing parked ({db1('SELECT id FROM ranges WHERE status=?', 'failed')})")
-check(len(db1("SELECT epoch FROM reorgs")) == (2 if CONTROL else 7) or CONTROL, f"reorgs applied: {len(db1('SELECT epoch FROM reorgs'))}")
+check(len(db1("SELECT epoch FROM reorgs")) == (2 if CONTROL else 8) or CONTROL, f"reorgs applied: {len(db1('SELECT epoch FROM reorgs'))}")
 
 for p in procs:
     stop(p)

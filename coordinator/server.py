@@ -1835,8 +1835,15 @@ def reorg_rewind(fork, src, record=None, record_sha=None, prep_epoch=None, now=N
                 if os.path.exists(p):
                     os.makedirs(pd, exist_ok=True)
                     os.replace(p, os.path.join(pd, f"proof_{rid}.bin"))
-            proofs = len(os.listdir(pd)) if os.path.isdir(pd) else 0     # (with those a crashed attempt moved)
+            proofs = len([n for n in os.listdir(pd) if n.startswith("proof_")]) if os.path.isdir(pd) else 0   # (a crashed attempt's too)
             spine_old, spine_new = _spine_rewind(fork, epoch)
+            # test hook (the end-to-end harness): die between the file moves and the commit, as a crash would; a file,
+            # so a running coordinator can be armed for one rewind
+            _cf = os.environ.get("COORD_CRASH_FILE")
+            if _cf and os.path.exists(_cf):
+                os.remove(_cf)
+                print(f"[reorg] COORD_CRASH_FILE: dying between the file moves and the commit of epoch {epoch}", flush=True)
+                os._exit(9)
             # 2. the ledger
             vc = ",".join(vcols)
             c.execute(f"INSERT INTO vranges_orphaned({vc},epoch) SELECT {vc},? FROM vranges WHERE hi > ?",
@@ -1867,6 +1874,9 @@ def reorg_rewind(fork, src, record=None, record_sha=None, prep_epoch=None, now=N
             c.commit()
         finally:
             c.close()
+        # the epoch's orphaned proofs are complete: the offsite copy writes its marker only after this (round 3)
+        if os.path.isdir(pd):
+            _write_atomic(os.path.join(pd, "DONE"), json.dumps({"epoch": epoch, "fork": fork, "at": now}).encode())
         with _fold_lock:
             for k in [k for k, v in _fold_claims.items() if int(v.get("hi", 0)) > fork]:
                 del _fold_claims[k]
@@ -1982,28 +1992,70 @@ def reorg_poll(startup=False):
             done.append(r["epoch"])
     c = db()
     try:
+        newest = reorg_epoch(c)
         for r in c.execute("SELECT epoch, fork, orphaned FROM reorgs WHERE state='rewinding'").fetchall():
             f = int(r["fork"])
             orph = dict((int(h), x) for h, x in json.loads(r["orphaned"] or "[]"))
             t = lz_state_tip(f + 1) if LZ_STATE_DIR else "none"
-            if t is not None and (not LZ_STATE_DIR or _display(t) != orph.get(f + 1)):
+            # done: the new branch's state at F+1 is there, or a newer rewind superseded this one (A -> B -> A would
+            # otherwise leave the first one `rewinding` for good: its F+1 is A's block again; review round 3, LOW)
+            if r["epoch"] < newest or (t is not None and (not LZ_STATE_DIR or _display(t) != orph.get(f + 1))):
                 c.execute("UPDATE reorgs SET state='done', done_at=? WHERE epoch=?", (time.time(), r["epoch"]))
                 with _sf_lock:
                     _sf.pop("reorg:meta", None)
         c.commit()
-        top = c.execute("SELECT hi, out_bhash FROM vranges ORDER BY hi DESC LIMIT 1").fetchone()
     finally:
         c.close()
-    alert = None
-    if top and LIBZYNC and LZ_STATE_DIR and VERIFY != "mock" and top["out_bhash"]:
-        t = lz_state_tip(int(top["hi"]))
-        if t != str(top["out_bhash"]).lower():
-            alert = (f"the board's highest verified block {top['hi']} is not prep's block {top['hi']} now "
-                     f"({'no state' if t is None else _display(t)[:16]}): a reorg the board did not follow? REORG.md §11")
-    if alert and alert != _reorg_alert["v"]:
-        print(f"[reorg] ALERT {alert}", flush=True)
-    _reorg_alert["v"] = alert
+    if startup or time.time() - _backstop_at[0] >= REORG_BACKSTOP_S:
+        _backstop_at[0] = time.time()
+        reorg_backstop()
     return done
+
+
+_backstop_at = [0.0]
+REORG_BACKSTOP_S = float(os.environ.get("REORG_BACKSTOP_S", "60"))
+
+
+def reorg_backstop(now=None):
+    """The board must hold only prep's chain (review of P4, H1 and round 3, M2): every verified range in the window (hi
+    within REORG_AUTO_MAX_DEPTH of the highest) must end on prep's state at its hi now, and start after prep's state at
+    lo-1. A mismatch LATCHES `meta.reorg_alert` (in the database: it survives a restart, and hazync-lz-check-reorg
+    pages on it) until a rewind whose fork is below every mismatched height is applied after it. Not checked while
+    prep's out/REWIND is there (a rewind in progress moves the states before the record is applied)."""
+    now = time.time() if now is None else now
+    if not (LIBZYNC and LZ_STATE_DIR and VERIFY != "mock"):
+        return None
+    c = db()
+    try:
+        row = c.execute("SELECT v FROM meta WHERE k='reorg_alert'").fetchone()
+        latched = json.loads(row[0]) if row and row[0] else None
+        if latched and c.execute("SELECT 1 FROM reorgs WHERE fork < ? AND at > ? LIMIT 1",
+                                 (min(latched["heights"]), latched["at"])).fetchone():
+            c.execute("DELETE FROM meta WHERE k='reorg_alert'")
+            c.commit()
+            print(f"[reorg] alert cleared: a rewind below {min(latched['heights'])} was applied", flush=True)
+            latched = None
+        if not os.path.exists(os.path.join(LZ_STATE_DIR, "REWIND")):
+            top = c.execute("SELECT MAX(hi) FROM vranges").fetchone()[0] or 0
+            rows = c.execute("SELECT lo, hi, in_bhash, out_bhash FROM vranges WHERE hi > ? AND out_bhash != ''",
+                             (top - REORG_AUTO_MAX_DEPTH,)).fetchall()
+            tips, bad = {}, []
+            tipof = lambda h: tips[h] if h in tips else tips.setdefault(h, lz_state_tip(h))
+            for r in rows:
+                if tipof(int(r["hi"])) != str(r["out_bhash"]).lower() or (
+                        int(r["lo"]) > 1 and r["in_bhash"] and tipof(int(r["lo"]) - 1) != str(r["in_bhash"]).lower()):
+                    bad.append(int(r["hi"]))
+            if bad and not latched:
+                latched = {"heights": sorted(set(bad))[:100], "count": len(bad), "at": now,
+                           "msg": f"{len(bad)} verified range(s) are not on prep's chain now (from block {min(bad)}): "
+                                  f"a reorg the board did not follow; REORG.md §11"}
+                c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_alert',?)", (json.dumps(latched),))
+                c.commit()
+                print(f"[reorg] ALERT {latched['msg']}", flush=True)
+    finally:
+        c.close()
+    _reorg_alert["v"] = latched["msg"] if latched else None
+    return latched
 
 
 def _reorg_row(r):
@@ -5382,12 +5434,15 @@ if __name__ == "__main__":
         # peer sync adopts other boards' verified ranges, which a rewind here does not touch on THEIR side: the two do
         # not go together until that is designed (review of P4, L6)
         if PEERS and REORG_DIR:
-            raise SystemExit("[hazync-coordinator] PEER_COORDINATORS is set on a libzync coordinator that follows prep's "
-                             "reorgs (REORG.md §17): peer sync could adopt rows of an orphaned branch back; unset one")
+            print("[hazync-coordinator] PEER_COORDINATORS is set on a libzync coordinator that follows prep's reorgs "
+                  "(REORG.md §17): peer sync could adopt rows of an orphaned branch back; unset one", flush=True)
+            sys.exit(3)
         try:
             _applied = reorg_poll(startup=True)
         except RuntimeError as e:
-            raise SystemExit(f"[reorg] {e}")
+            # exit 3: in the unit's RestartPreventExitStatus, so it FAILS (and alerts) instead of restarting for ever
+            print(f"[reorg] {e}", flush=True)
+            sys.exit(3)
         if _applied:
             print(f"[reorg] applied at start-up: epoch(s) {_applied}", flush=True)
         threading.Thread(target=reorg_loop, daemon=True, name="reorg").start()

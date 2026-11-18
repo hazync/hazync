@@ -25,6 +25,9 @@ Environment=SEED_RANGES=0
 Environment=HAZYNC_LZ_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks
 ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/server.py
 Restart=on-failure
+# exit 3: a start the reorg handling refuses (a record that does not read, PEER_COORDINATORS with reorgs; REORG.md §17):
+# the unit fails and alerts instead of restarting for ever
+RestartPreventExitStatus=3
 RestartSec=10
 
 [Install]

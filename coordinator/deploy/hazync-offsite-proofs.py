@@ -51,7 +51,8 @@ would hold its name off-box for good. Two defences:
   KEPT head (`spine/heads/`, REORG.md §7) that is that deep, not the live one. With no fresh tip (the file missing or
   older than `--tip-max-age`), nothing is uploaded and the run exits 1 (it alerts): never "deep enough" by default.
 - **Markers**, for a reorg deeper than N: for each epoch E the coordinator rewound (`proofs/orphaned/<E>/`), the
-  orphaned files go up under `orphaned/<E>/`, and `reorgs/<E>.json` (written once) lists the names whose LIVE key in the
+  orphaned files go up under `orphaned/<E>/` (once the coordinator has written the epoch's `DONE`), and
+  `reorgs/<E>.json` (written once) lists the names whose LIVE key in the
   store holds an orphaned proof (`covered`, with each orphaned file's sha256 and size). A name a marker covers is never
   uploaded under its live key again: the new chain's proof goes to `r<E>/<name>` (the newest such marker's E), and
   `check` compares that key. Nothing is deleted. A restore takes, per name, the newest `r<E>/` copy over the live one,
@@ -208,6 +209,11 @@ def mark_reorgs(s3, bucket, prefix, root, remote, markers, threads, bwlimit_mbit
     failed = 0
     for e, d in sorted(local_epochs(root).items()):
         if e in markers:
+            continue
+        if not os.path.exists(os.path.join(d, "DONE")):
+            # the coordinator writes DONE once the epoch's rewind is committed: before it, the directory may still be
+            # filling, and a write-once marker would be missing names (review round 3); the next run writes it
+            log(f"reorg {e}: the coordinator's rewind is not complete yet (no DONE): marker deferred")
             continue
         names = {n: os.path.getsize(os.path.join(d, n)) for n in os.listdir(d) if n.startswith("proof_")}
         todo = [n for n in names if f"orphaned/{e}/{n}" not in remote]
@@ -845,7 +851,7 @@ def checkpoints_copy(s3, bucket, prefix, root, min_age, threads, bwlimit_mbit, w
 
 def main(argv=None, client=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["copy", "check", "spine", "keys", "ledger", "checkpoints", "rescued"])
+    ap.add_argument("mode", choices=["copy", "check", "spine", "keys", "ledger", "checkpoints", "rescued", "restore-plan"])
     ap.add_argument("--keys", required=True)
     ap.add_argument("--bucket")
     ap.add_argument("--proofs", default=os.environ.get("COORD_PROOFS", "/var/lib/hazync/proofs"))
@@ -926,6 +932,15 @@ def main(argv=None, client=None):
             del local[n]
         log(f"depth delay: {len(shallow)} proof(s) above {tip - a.depth} (tip {tip} - {a.depth}) wait")
     markers = read_markers(s3, bucket, prefix, remote)
+    if a.mode == "restore-plan":
+        # REORG.md §9 / §18: which key to restore each proof from: the newest r<E>/ copy a marker points at, else the
+        # live name (a live name a marker covers holds an orphaned proof). One line per name: "<name> <key>".
+        names = sorted({k.rsplit("/", 1)[-1] for k in remote if k.startswith("proof_") or re.fullmatch(r"r\d+/proof_[^/]+", k)})
+        for n in names:
+            k = target_key(n, markers)
+            print(f"{n} {prefix}{k if k in remote else n}")
+        log(f"restore-plan: {len(names)} proof(s), {len(markers)} reorg marker(s) read")
+        return 0
     if a.mode == "copy":
         if mark_reorgs(s3, bucket, prefix, a.proofs, remote, markers, a.threads, a.bwlimit_mbit, where):
             return 1                           # never upload a live name a marker should have covered

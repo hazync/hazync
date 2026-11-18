@@ -100,9 +100,15 @@ for h in range(21, 41):
 tip(40); run(s3, "copy")
 check(f"{P}proof_34.bin" in s3.keys() and f"{P}proof_35.bin" not in s3.keys(), "the store holds A's proofs up to 34")
 od = os.path.join(PROOFS, "orphaned", "1")
-for h in range(18, 41):
+for h in range(18, 30):                                      # the coordinator's rewind, half way through its moves
     os.makedirs(od, exist_ok=True); os.replace(os.path.join(PROOFS, f"proof_{h}.bin"), os.path.join(od, f"proof_{h}.bin"))
+rc, log = run(s3, "copy")
+check(rc == 0 and f"{P}reorgs/1.json" not in s3.keys() and "marker deferred" in log,
+      "3: an epoch whose rewind is not complete (no DONE): no marker written yet (it would miss names)")
+for h in range(30, 41):
+    os.replace(os.path.join(PROOFS, f"proof_{h}.bin"), os.path.join(od, f"proof_{h}.bin"))
 os.replace(os.path.join(PROOFS, "proof_17-20.bin"), os.path.join(od, "proof_17-20.bin"))
+open(os.path.join(od, "DONE"), "w").write("{}")
 for h in range(18, 45):
     proof(f"proof_{h}.bin", b"Bnew%d" % h)                     # chain B, other bytes, other sizes
 tip(44)
@@ -124,6 +130,7 @@ check(rc == 0 and rc2 == 0 and len(s3.keys()) == n1, f"3: check clean ({rc}); a 
 od2 = os.path.join(PROOFS, "orphaned", "2")
 for h in range(20, 45):
     os.makedirs(od2, exist_ok=True); os.replace(os.path.join(PROOFS, f"proof_{h}.bin"), os.path.join(od2, f"proof_{h}.bin"))
+open(os.path.join(od2, "DONE"), "w").write("{}")
 for h in range(20, 46):
     proof(f"proof_{h}.bin", b"Cnewer%d" % h)
 tip(45)
@@ -131,6 +138,13 @@ rc, log = run(s3, "copy")
 check(rc == 0 and s3.objects.get(("b", f"{P}r2/proof_20.bin")) == b"Cnewer20" and s3.objects[("b", f"{P}r1/proof_20.bin")] == b"Bnew20"
       and s3.objects.get(("b", f"{P}r2/proof_35.bin")) == b"Cnewer35" and run(s3, "check")[0] == 0,
       "4: a second reorg: C's 20 under r2/ (r1/ keeps B's), C's 35 under r2/; check clean")
+
+# a restore reads the markers: per name, the newest r<E>/ copy, else the live key
+rc, log = run(s3, "restore-plan")
+plan = dict(l.split() for l in log.splitlines() if l.startswith("proof_"))
+check(rc == 0 and plan.get("proof_20.bin") == f"{P}r2/proof_20.bin" and plan.get("proof_18.bin") == f"{P}r1/proof_18.bin"
+      and plan.get("proof_5.bin") == f"{P}proof_5.bin",
+      "restore-plan: 20 from r2/ (newest), 18 from r1/, 5 from its live name")
 
 # the spine: kept heads 30 and 40, live head 44; tip 45 -> the newest kept head <= 39 is 30
 def head(d, hi, body):

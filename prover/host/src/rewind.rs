@@ -119,7 +119,10 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
             // prep is AT the fork's block already. Nothing to undo and no new epoch to open: the marker goes.
             let tip = std::fs::read_to_string(format!("{out}/PREP_TIP.json")).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok());
             if let (Some(t), Some(fh)) = (&tip, m["fork_hash"].as_str()) {
-                if t["height"].as_u64() == Some(fork as u64) && t["hash"].as_str() == Some(fh) {
+                // ...and nothing above it is left (round 3: prep writes its tip AT the fork too, when it stops before
+                // block F+1 because its old state files above are another chain's; those still have to move)
+                if t["height"].as_u64() == Some(fork as u64) && t["hash"].as_str() == Some(fh)
+                    && !std::path::Path::new(&format!("{out}/state_{}.json", fork + 1)).exists() {
                     let _ = std::fs::remove_file(std::path::Path::new(blocks).join("REORG"));
                     crate::lz::cl_sync_dir(std::path::Path::new(blocks));
                     println!("PREP_REWOUND to {fork}: prep is already at the fork's block (a rewind that stopped before removing the marker); the marker removed");

@@ -429,8 +429,12 @@ sudo systemctl daemon-reload && sudo systemctl enable --now hazync-watchdog.time
   keeps its blocks for the sponsor bot alone; the frontier waits for the bot (alert after 6 h). Bot down: fix and
   `systemctl start hazync-sponsor-bot.service`; or release the hold by hand (REORG.md §7, the `UPDATE sponsorships`
   command).
-- **`/api/meta.reorg_alert`** set: the board's highest verified block is not prep's block now, a reorg the board did
-  not follow. REORG.md §11.
+- **`/api/meta.reorg_alert`** set (`hazync-lz-check-reorg` pages): a verified range in the window is not on prep's
+  chain now, a reorg the board did not follow. It stays latched until a rewind below it is applied (REORG.md §11:
+  `server.py --reorg-to F`).
+- **Restoring proofs from the offsite copy after reorgs**: never by name alone. `hazync-offsite-proofs.py
+  restore-plan --keys ... --bucket ... --method-id ... --depth 0` prints, per proof, the key to fetch (the newest
+  `r<E>/` copy a `reorgs/<E>.json` marker points at, else the live name).
 
 **Test the live path, not just the script** — a push that never reaches the phone is the failure:
 `hazync-alert.sh "Hazync: test" "hello"` on each box, and on the coordinator a throwaway unit with

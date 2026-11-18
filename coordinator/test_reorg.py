@@ -27,7 +27,7 @@ sponsorship of 19..20 is proven; key Q claims block 21; Q's proof of 22 is verif
   python3 test_reorg.py                    # must PASS
   python3 test_reorg.py --control          # no check at commit: the straddling proof is credited; MUST FAIL
   python3 test_reorg.py --control-keep     # the orphaned rows stay in vranges: the frontier stays on A; MUST FAIL
-  python3 test_reorg.py --control-m1|--control-m2|--control-m3|--control-h1   # each review fix taken out; MUST FAIL
+  python3 test_reorg.py --control-m1|-m2|-m3|-h1|-latch   # each review fix taken out; MUST FAIL
 """
 import base64, hashlib, json, os, shutil, socket, stat, subprocess, sys, tempfile, threading, time, types, urllib.request
 
@@ -39,7 +39,8 @@ PATCHES = {
     "--control-m1": ('            if not _prep_waiting_on(rec["epoch"]):\n', "            if False:\n"),
     "--control-m2": ("    if head and old <= fork:\n        return old, old\n    keep", "    if old <= fork:\n        return old, old if head else None\n    keep"),
     "--control-m3": ("        for h in below[:-1]:\n", "        for h in below:\n"),
-    "--control-h1": ("    if alert and alert != _reorg_alert[\"v\"]:\n", "    alert = None\n    if alert:\n"),
+    "--control-h1": ("            if bad and not latched:\n", "            if False:\n"),
+    "--control-latch": ("        latched = json.loads(row[0]) if row and row[0] else None\n", "        latched = None\n"),
 }
 CONTROL = next((a for a in sys.argv[1:] if a in PATCHES), None)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -209,7 +210,7 @@ check(not q("SELECT 1 FROM ranges WHERE hi > 17") and q("SELECT 1 FROM ranges_or
 check(s.spine_head()["hi"] == 16 and s.spine_heads() == [10, 16]
       and os.path.exists(os.path.join(T, "sp", "orphaned", "1", "spine_20.bin")),
       f"the spine back at the kept head 16, head 20 in spine/orphaned/1 ({s.spine_head()['hi']}, {s.spine_heads()})")
-check(sorted(os.listdir(os.path.join(T, "p", "orphaned", "1"))) == ["proof_17-20.bin", "proof_18.bin", "proof_19.bin", "proof_20.bin"]
+check(sorted(os.listdir(os.path.join(T, "p", "orphaned", "1"))) == ["DONE", "proof_17-20.bin", "proof_18.bin", "proof_19.bin", "proof_20.bin"]
       and not os.path.exists(os.path.join(T, "p", "proof_18.bin")),
       f"proofs above 17 in proofs/orphaned/1 ({sorted(os.listdir(os.path.join(T, 'p', 'orphaned', '1')))})")
 check(q("SELECT status FROM sponsorships")[0][0] == "proving", "the sponsorship of 19..20 back to proving (held again)")
@@ -277,14 +278,20 @@ s.REORG_AUTO_MAX_DEPTH = 2016
 check(not os.path.exists(os.path.join(ACKS, "9.ack")) and frontier() == 21, "M1: a record of fork 0: refused (depth cap), not acked")
 os.remove(os.path.join(RECORDS, "9.json"))
 
-# review of P4, H1 backstop: the top verified range not on prep's state is alerted
-t21 = open(os.path.join(STATE, "state_21.json")).read()
-open(os.path.join(STATE, "state_21.json"), "w").write(json.dumps({"tip_hash": list(bytes.fromhex(bh("Z", 21)))}))
-s.reorg_poll()
+# the backstop (review of P4, H1; round 3, M2): ANY verified range in the window not on prep's states raises the alert,
+# which latches (in the database) until a rewind below it; not while prep's out/REWIND is there
+t19 = open(os.path.join(STATE, "state_19.json")).read()
+open(os.path.join(STATE, "state_19.json"), "w").write(json.dumps({"tip_hash": list(bytes.fromhex(bh("Z", 19)))}))
+open(os.path.join(STATE, "REWIND"), "w").write("{}")
+check(s.reorg_backstop() is None and s._reorg_alert["v"] is None, "M2 backstop: no alert while prep's out/REWIND is there")
+os.remove(os.path.join(STATE, "REWIND"))
+s.reorg_backstop()
 al = s._reorg_alert["v"]
-open(os.path.join(STATE, "state_21.json"), "w").write(t21)
-s.reorg_poll()
-check(al and "21" in al and s._reorg_alert["v"] is None, f"H1 backstop: the top verified block not prep's: alert ({al}), cleared after")
+open(os.path.join(STATE, "state_19.json"), "w").write(t19)
+s.reorg_backstop()
+row = q("SELECT v FROM meta WHERE k='reorg_alert'")
+check(al and "from block 19" in al and s._reorg_alert["v"] == al and row,
+      f"M2 backstop: block 19 (below the top) not prep's: alert, and it stays latched once the state reads right again ({al})")
 
 # review of P4, M3: pruning keeps the newest head below the window
 sv = s.SPINE_HEADS
@@ -334,6 +341,9 @@ check(r.returncode != 0 and "COORD_DB" in r.stderr, "--reorg-to without COORD_DB
 r = subprocess.run([sys.executable, srv, "--reorg-to", "15"], env=env, capture_output=True, text=True)
 check(r.returncode == 0 and "dry run" in r.stdout and s.reorg_epoch() == 3, f"--reorg-to 15 without --yes changes nothing ({r.stdout.strip()[-80:]})")
 r = subprocess.run([sys.executable, srv, "--reorg-to", "15", "--yes"], env=env, capture_output=True, text=True)
+s.reorg_backstop()
+check(s._reorg_alert["v"] is None and not q("SELECT v FROM meta WHERE k='reorg_alert'"),
+      "M2 backstop: the latched alert cleared by a rewind below it (--reorg-to 15)")
 m = s.reorg_meta() or {}
 check(r.returncode == 0 and m.get("epoch") == 4 and m.get("source") == "manual" and frontier() == 15,
       f"--reorg-to 15 --yes: epoch {m.get('epoch')} ({m.get('source')}), frontier {frontier()} ({(r.stdout + r.stderr).strip()[-120:]})")
