@@ -204,7 +204,10 @@ pub fn tamper(case: &str, fr: &mut [TipFrame], link: &mut [[u8; 80]]) -> Result<
             l[0] ^= 1;
             Ok("the first link header's version".into())
         }
-        "link_drop" => Ok("handled by the caller".into()),
+        "link_drop" => Ok("the last link header dropped".into()),
+        "prev_roots" => Ok("one byte of the previous statement's journal (its receipt does not match it)".into()),
+        "prev_kind" => Ok("the previous statement given as the other kind (base vs step)".into()),
+        "core_id" => Ok("another core image id (the core receipt does not verify under it)".into()),
         _ => Err(format!("unknown UTREEXO_TIP_TAMPER case {case}")),
     }
 }

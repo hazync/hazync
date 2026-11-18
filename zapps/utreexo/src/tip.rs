@@ -18,7 +18,7 @@ pub const KIND_UTREEXO_TIP: u32 = 0x5A55_0002;
 
 /// The utreexo TIP image id this checker trusts by default. ⚠ A local build (hazync-coord, 18.11.2026,
 /// feat/utreexo-tip), NOT a reproducible build in reproduce/LIBZYNC_IDS: a proof under it is at most DEMO.
-pub const UTREEXO_TIP_IMAGE_ID: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub const UTREEXO_TIP_IMAGE_ID: &str = "ab6f7a26fe4cb13446c3d0b3ee352e6bf3508a897e0363a0a2ef6a559d51353e";
 /// Whether [`UTREEXO_TIP_IMAGE_ID`] is pinned (a reproducible build). While it is not, a proof under it is at most DEMO.
 pub const UTREEXO_TIP_IMAGE_PINNED: bool = false;
 

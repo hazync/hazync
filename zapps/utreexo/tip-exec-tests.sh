@@ -26,9 +26,11 @@ done
 "$Z" utreexo-prove "$B" 10000 "$S10" "$W/base10" --execute > "$W/base10.log" 2>&1; t "base walk to 10,000" 0 $?
 t "walk(10,000) == walk(1,999) + step(10,000)" "$(roots UTREEXO_JOURNAL "$W/base10.log")" "$(roots UTREEXO_TIP_JOURNAL "$W/step_10000.log")"
 
-# refusals: every case must be refused by the GUEST (exit 3, UTREEXO_TIP_GUEST_REFUSED); the step 1,999 -> 10,000 has spends
-for c in spent_value spent_block spent_code spent_coinbase spent_drop spent_extra proof_hash proof_target proof_empty tx_swap link link_drop prev_roots prev_kind; do
-  UTREEXO_TIP_TAMPER=$c "$Z" utreexo-tip-prove "$B" "$J" 10000 "$S10" "$W/neg" --execute > "$W/neg_$c.log" 2>&1; e=$?
+# refusals: every case must be refused by the GUEST (exit 3, UTREEXO_TIP_GUEST_REFUSED)
+"$Z" utreexo-tip-prove "$B" "$J" 9000 "$S10" "$W/ctl" --execute > "$W/ctl.log" 2>&1; t "control: the same step untampered" 0 $?
+# (H = 9,000 under the core state at 10,000: the step has spends and 1,000 link headers)
+for c in spent_value spent_block spent_code spent_coinbase spent_drop spent_extra proof_hash proof_target proof_empty tx_swap link link_drop prev_roots prev_kind core_id; do
+  UTREEXO_TIP_TAMPER=$c "$Z" utreexo-tip-prove "$B" "$J" 9000 "$S10" "$W/neg" --execute > "$W/neg_$c.log" 2>&1; e=$?
   t "refused: $c" "3 1" "$e $(grep -c UTREEXO_TIP_GUEST_REFUSED "$W/neg_$c.log")"
   grep -h -m1 UTREEXO_TIP_GUEST_REFUSED "$W/neg_$c.log" | cut -c1-220
 done

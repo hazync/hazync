@@ -818,7 +818,8 @@ fn utreexo_tip_prove(a: &[String]) {
         Some(r) => { b.add_assumption(r.clone()); }
         None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(prev_id), pj.clone())); }
     }
-    b.write(&self_id).unwrap().write(&base_id).unwrap().write(&cs.self_id).unwrap().write(&journal).unwrap()
+    let core_id_in: [u32; 8] = if tc.as_deref() == Some("core_id") { let mut c = cs.self_id; c[0] ^= 1; c } else { cs.self_id };
+    b.write(&self_id).unwrap().write(&base_id).unwrap().write(&core_id_in).unwrap().write(&journal).unwrap()
         .write(&signet).unwrap().write(&prof).unwrap().write(&stop).unwrap().write(&prev_kind_in).unwrap().write(&pj_in).unwrap();
     b.write_slice(&words);
     b.write_slice(&[link.len() as u32]).write_slice(&link_w);

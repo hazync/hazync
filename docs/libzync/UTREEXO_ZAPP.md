@@ -512,3 +512,35 @@ prints the same `AssumeUtreexoValue` source as for a base.
 ### 10.8 Measured and tested
 
 See §10.9 (filled in with the runs of 18.11.2026).
+
+### 10.10 Layout (tip mode)
+
+- `prover/zyncapps/methods/utreexo-tip`: the step guest, its own image (rustreexo `=0.7.0`, `default-features = false`,
+  as a guest dependency; the base image `27bea7da` and the core image `46666b6f` do not move: the base guest's files are
+  untouched, and the new guest has its own Cargo.lock). `src/step.rs` holds the block rules and is #[path]-included by
+  the host.
+- `prover/zyncapps/host` (`zyncapp`): `utreexo-tip-prove <block dir> <previous receipt | .journal> <H> <core receipt |
+  state_T.json> <out> [--execute] [--prof N] [--cache <file>] [--ref <utreexo-ref log>] [--elf] [--base-id]`
+  (`UTREEXO_TIP_TAMPER=<case>` negative tests), `core-info <core receipt | state JSON>`; `utreexo-prove --execute` now
+  also writes the final run's journal (`<out>/<net>-<H>.journal`) so a step can start from an executed base.
+- `zapps/utreexo`: `src/tip.rs` behind the crate feature `tip` (the CLI enables it; the WASM does not yet, so its bytes
+  are unchanged, `d240082b…`); `tests/tip_verdict_paths.rs`; `tip-exec-tests.sh` (the executed chain and the guest's
+  refusals, §10.9).
+- `coordinator/deploy/utreexo/hazync-utreexo-follow` and `test/test_follow.sh` (real CPU proofs against a fake
+  bitcoin-cli over mainnet block files). No unit, timer, nginx alias or publish key yet: nothing is deployed.
+
+### 10.11 Questions for the Floresta developers (tip mode)
+
+- **Q-T1 Loading.** Your answer to Q6 was that a custom-roots option "already exists"; in `8399792e` florestad passes
+  `assumeutreexo_value: None` (bin/florestad `src/main.rs:90`), so I could only find it on the library side
+  (`assumeutreexo_value` in the node config). Is the intended path a library user (or a florestad flag you would add)
+  calling the check, then `mark_chain_as_assumed(Stump { leaves, roots }, block_hash)`?
+- **Q-T2 Witness source at the tip.** Each step needs, per block, the deleted leaves' data and a batch proof: exactly
+  the udata a utreexod bridge serves. Is utreexod's proof index (RPC or P2P) the source you would expect us to use, or
+  would you rather we keep our own forest? (The proof never trusts the source.)
+- **Q-T3 Margin and freshness.** I take H = tip − 6 (and never above our core proof). Is 6 right for you, and do you
+  want the receipt to carry anything else for a freshness rule (the core tip T and its hash are in it)?
+- **Q-T4 Trust anchors.** A node pins three ids: the core image, the base (walk) image and the tip (step) image. Is a
+  compiled-in triple (updated with your releases) acceptable, given that the roots themselves are not pinned?
+- **Q-T5 Format.** `latest.json` + one succinct receipt (225 kB at H = 3, §8; a Groth16 wrap is much smaller, not measured here, but needs
+  the Groth16 verifier): which do you prefer to ingest?
