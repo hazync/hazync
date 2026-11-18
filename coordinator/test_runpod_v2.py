@@ -52,6 +52,7 @@ import ipaddress   # noqa: E402
 
 OLD_PUBLIC_RULE = "(not ipaddress.ip_address(ip).is_private)"      # review H1: 100.65.x.x passes it
 
+_RUC = sb.release_until_clean     # the real one, for the r9 control
 _TM = sb.terminate_many           # the real one, for the tests that must reach it whatever the controls replace
 
 if CONTROL:
@@ -1574,6 +1575,45 @@ finally:
 check(events and events.index("books") > max(i for i, e in enumerate(events) if e == "DELETE"),
       f"r8 L2: terminate_all sends every DELETE before it asks the coordinator about landed blocks ({events})")
 
+# ── r9 M1. an empty or unreadable adopted record releases NOTHING ──────────────────────────────────────────
+print("== r9: bad adopted records ==")
+if CONTROL:
+    def _no_guard(api, a, rented_path, created, unreleased, rpre, adopt_keep, sleep=None, clock=None):
+        keep = [p["id"] for p in created] + sorted(adopt_keep) + sorted(tip_smoke.adopted_ids(rented_path))
+        patched, sb.release_until_clean = sb.release_until_clean, _RUC
+        try:
+            real_rr = globals().get("_real_release") or tip_smoke.release_recorded   # an earlier control wrapped it
+            return real_rr(api, rented_path, created, unreleased, prefix=rpre, keep_ids=keep, sleep=sleep, clock=clock)
+        finally:
+            sb.release_until_clean = patched
+    tip_smoke.teardown_release = _no_guard
+for shape, body in (("[]", "[]"), ("zero bytes", ""), ("half written", '[{"id": "a1", "na')):
+    with tempfile.TemporaryDirectory() as d:
+        f = FakeV2()
+        api = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+        pre = tip_smoke.run_prefix(d)
+        for i in (1, 2, 3, 4):
+            f.pods[f"a{i}"] = {"name": f"{pre}{i}", "gpu": A40, "cost": 1}
+        rp_ = os.path.join(d, "rented.json")
+        open(rp_, "w").write(body)
+        a = _ap.Namespace(keep=False, adopt=rp_, release_adopted=False, cleanup=False, rundir=d)
+        keep = tip_smoke.adopted_ids(rp_)
+        tip_smoke.teardown_release(api, a, rp_, [], [], pre, keep, sleep=(_c := Clock()).sleep, clock=_c)
+        survivors = sorted(f.pods)
+    check(survivors == ["a1", "a2", "a3", "a4"],
+          f"r9 M1: --adopt of a record that is {shape}: the teardown releases nothing ({survivors})")
+
+with tempfile.TemporaryDirectory() as d:
+    rp_ = os.path.join(d, "rented.json")
+    fr = tip_smoke.FleetRecord(rp_, [])
+    fr.write([{"id": "x1", "name": "n"}])
+    fr.leave_running({"id": "x2", "name": "m"})
+    fr.write([{"id": "x1", "name": "n"}])
+    left_files = sorted(os.listdir(d))
+    ids_now = tip_smoke.adopted_ids(rp_)
+check(left_files == ["rented.json"] and ids_now == {"x1", "x2"},
+      f"r9 L1: the record is written atomically (no temp file left) and keeps the left-running pod ({left_files})")
+
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
 ROOT = pathlib.Path(HERE).parent
@@ -1657,6 +1697,9 @@ EXPECTED_CONTROL = {
     "r8 H1",
     "r8 M1: a pod unconfirmed for over an hour is retried, not a stop, and said loudly ONCE per hour",
     "r8 M2: a stray first seen on the last listing gets exactly one DELETE before the budget gives up",
+    "r9 M1: --adopt of a record that is []: the teardown releases nothing",
+    "r9 M1: --adopt of a record that is half written: the teardown releases nothing",
+    "r9 M1: --adopt of a record that is zero bytes: the teardown releases nothing",
     "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",
     "two 429s are waited out for Retry-After and the create then lands",
     "with no runtime ports, RunPod's own ssh.direct is used",

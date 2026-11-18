@@ -2181,7 +2181,7 @@ class Bot:
             return
         if p.id in self.unconfirmed:
             self.unconfirmed.remove(p.id)
-        p.unconfirmed_since = None
+        p.unconfirmed_since, p._warned_hours = None, 0
         p.terminated, p.state = self.clock(), "terminated"
         c.execute("UPDATE sponsor_pods SET terminated_at=?, usd_estimate=?, note=? WHERE pod_id=?",
                   (p.terminated, p.spend(p.terminated, self.ceiling), note, p.id))

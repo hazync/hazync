@@ -75,6 +75,12 @@ def teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep,
     """The release at the end of a run. --keep keeps the fleet; --adopt (without --release-adopted) keeps every pod of
     the adopted record AS RECORDED (`adopt_keep`) -- dropped at a gate or never adopted, still not ours to delete.
     Everything else this run created or recorded, and every pod with its prefix, is released."""
+    if a.adopt and not a.release_adopted and not adopt_keep:
+        # ⛔ The adopted record was empty or unreadable at the start: nothing says which pods are the fleet, so the
+        # prefix sweep would take ALL of them. Release nothing.
+        log(f"⛔ the adopted record {a.adopt} was empty or unreadable at the start: NOTHING released (not even the "
+            f"run prefix). Use --cleanup, or --release-adopted, once you know what is billing.")
+        return None
     keep = [p["id"] for p in created] + sorted(adopt_keep) if (a.keep or (a.adopt and not a.release_adopted)) \
         else sorted(adopt_keep)
     if a.adopt and not a.release_adopted:
@@ -174,6 +180,17 @@ class SmokeRunPod(sponsor_bot.RunPod):
         return {"id": p["id"], "name": name, "gpu_type": gt, "price": price, "dc": dc}
 
 
+def write_record(path, rows):
+    """Write a rental record ATOMICALLY: a temp file in the same directory, then os.replace(). A reader -- the next
+    --adopt, --cleanup -- sees the old record or the new one, never a zero-byte or half-written file."""
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as fh:
+        json.dump(rows, fh, indent=1)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 def rent_uniform(api, gt, upto, pub, rented_path, created, unreleased, prefix):
     """Rent up to `upto` pods of ONE type, recording each in rented.json the instant it exists. Stops at the
     first capacity miss. ⛔ WHATEVER STOPS IT (a 402, a refusal, a signal), what it rented joins `created` before
@@ -186,8 +203,7 @@ def rent_uniform(api, gt, upto, pub, rented_path, created, unreleased, prefix):
             if not p:
                 break
             got.append(p)
-            with open(rented_path, "w") as fh:
-                json.dump(unreleased + got, fh, indent=1)
+            write_record(rented_path, unreleased + got)
     except BaseException:
         created.extend(got)
         raise
@@ -205,8 +221,7 @@ def release_short(api, gt, got, rented_path, unreleased):
     unreleased.extend(p for p in got if p["id"] in set(left))
     if left:
         log(f"  ⛔ {len(left)} {gt} pod(s) NOT confirmed released: {left} -- kept for the teardown")
-    with open(rented_path, "w") as fh:
-        json.dump(unreleased, fh, indent=1)
+    write_record(rented_path, unreleased)
 
 
 def release_recorded(api, rented_path, created, unreleased, prefix=None, keep_ids=(), sleep=time.sleep,
@@ -717,8 +732,7 @@ class FleetRecord:
             if p.get("id") and p["id"] not in seen:
                 seen.add(p["id"])
                 rows.append(p)
-        with open(self.path, "w") as fh:
-            json.dump(rows, fh, indent=1)
+        write_record(self.path, rows)
 
     def leave_running(self, p):
         self.left_running.append(dict(p, left_running=True))
@@ -1129,6 +1143,11 @@ def cleanup(api, rented_path):
     so it must assume its own bookkeeping is incomplete.
     """
     rec_path = os.path.join(os.path.dirname(rented_path), "recruited.json")
+    marker = os.path.join(os.path.dirname(rented_path), "adopted_by.txt")
+    if os.path.exists(marker):
+        by = open(marker).read().strip()
+        raise SystemExit(f"refusing --cleanup: this fleet was adopted by {by} (adopted_by.txt) -- clean up THAT "
+                         f"rundir, or delete {marker} if the adoption is over")
     pods, sources = {}, {}
     for path, what in ((rented_path, "rented.json"), (rec_path, "recruited.json")):
         try:
@@ -1392,6 +1411,13 @@ def main():
     # adopted" and leaves `created`; an adoption that fails half way never fills `created` at all. Without
     # --release-adopted, every one of these ids is kept by the teardown, whatever happened in between (#547/#551).
     adopt_keep = adopted_ids(a.adopt) if a.adopt and not a.release_adopted else set()
+    if a.adopt and not adopt_home:
+        # The adopted record's own rundir is now someone else's fleet: --cleanup there would release it.
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(a.adopt)), "adopted_by.txt"), "w") as fh:
+                fh.write(os.path.abspath(a.rundir) + "\n")
+        except OSError as e:
+            log(f"⚠ could not mark {a.adopt} as adopted by {a.rundir}: {e}")
     # ── claim FIRST, before spending anything (#367) ──────────────────────────────────────────────
     # ⛔ THE ORDER MATTERS. Renting takes ~2 minutes and costs money; a claim costs a POST. If the
     # board has nothing free -- or this key is at its 4-unfinished cap -- the right answer is to exit
@@ -1565,7 +1591,7 @@ def main():
                 raise SystemExit(f"--adopt {a.adopt}: only {len(adopted)} of the recorded pods are "
                                  f"still alive; at least {a.min_cards} are needed. Lower "
                                  f"--min-cards or rent fresh")
-            created = adopted
+            created = [{k: v for k, v in p.items() if k != "left_running"} for p in adopted]   # back in the fleet
             # ⛔ `rented` and `want` are read AFTER this branch (the ssh wait, the prover-fetch
             # gate and their messages), and both were only ever assigned on the renting path. An
             # adopted fleet therefore reached `waiting for N of {want}` with `want` unbound and died
@@ -2669,8 +2695,7 @@ def main():
                 pod = api.deploy_listening(f"{rpre}grow-{len(recruited) + 1}", pub, gpu_types=gpu_types)
                 if pod:
                     recruited.append(pod)
-                    with open(recruited_path, "w") as fh:
-                        json.dump(recruited, fh, indent=1)
+                    write_record(recruited_path, recruited)
                 return pod
 
             def _recruit_gate(pod):
@@ -3045,11 +3070,13 @@ def main():
         # so the cost and the exact release command go in the log where the run ends.
         if a.keep or (a.adopt and not a.release_adopted):
             why = "--keep" if a.keep else "--adopt (use --release-adopted to hand them back)"
-            rate = sum(float(p.get("price") or 0) for p in created)
-            log(f"{why}: {len(created)} pod(s) LEFT RUNNING and STILL BILLING at "
-                f"${rate:.2f}/hr (${rate * 24:.2f}/day)")
+            billing = list(created) + [p for p in rec.left_running if p["id"] not in {q["id"] for q in created}]
+            rate = sum(float(p.get("price") or 0) for p in billing)
+            log(f"{why}: {len(billing)} pod(s) LEFT RUNNING and STILL BILLING at "
+                f"${rate:.2f}/hr (${rate * 24:.2f}/day)"
+                + (f", {len(rec.left_running)} of them dropped at a gate" if rec.left_running else ""))
             log("  release them with:  python3 tip_smoke.py --cleanup --rundir " + a.rundir)
-            for p in created:
+            for p in billing:
                 log(f"    {p['name']}  {p['id']}  ${float(p.get('price') or 0):.3f}/hr")
             # ⛔ KEPT IS ONLY THE FLEET. Whatever else carries this run's prefix (a lost create, a spare) is released.
             teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep)
