@@ -645,6 +645,14 @@ def init_db():
     # replays are refused by receipt sha before any verification (review 11-12, board #6)
     c.execute("CREATE INDEX IF NOT EXISTS submissions_receipt_sha ON submissions(receipt_sha, verified)")
     c.execute("CREATE INDEX IF NOT EXISTS ranges_receipt_sha ON ranges(receipt_sha)")
+    # Reorgs (docs/libzync/REORG.md §7, P4): one row per rewind applied, and the rows it moved out of vranges and
+    # ranges, kept as a record with their epoch (reorg_rewind).
+    c.execute("CREATE TABLE IF NOT EXISTS reorgs(epoch INTEGER PRIMARY KEY, src TEXT NOT NULL, record_sha TEXT UNIQUE,"
+              " prep_epoch INTEGER, fork INTEGER NOT NULL, fork_hash TEXT, depth INTEGER, orphaned TEXT, new TEXT,"
+              " moved TEXT, state TEXT NOT NULL, at REAL NOT NULL, done_at REAL)")
+    _orphan_table(c, "vranges")
+    _orphan_table(c, "ranges")
+    c.execute("CREATE INDEX IF NOT EXISTS vranges_orphaned_span ON vranges_orphaned(lo, hi)")
     c.commit(); c.close()
 
 def canonical_range_id(lo, hi):
@@ -1470,6 +1478,7 @@ def submit_spine(body):
 def _submit_spine_verified(receipt, sha, seed, pk, sig, handle):
     """submit_spine past the replay pre-check: verify, then advance the head. `seed` is spine_seed_row's row when the
     receipt is a known genesis range's own proof (else None)."""
+    _ep0 = reorg_epoch()                      # REORG §4: a rewind applied while this verifies is caught at commit
     with _verify_sem:
         if seed is not None:
             # the slot may have been a long wait: if the head has reached this range meanwhile, it cannot advance it,
@@ -1499,10 +1508,21 @@ def _submit_spine_verified(receipt, sha, seed, pk, sig, handle):
         if cur and meta["hi"] <= int(cur.get("hi", 0)):
             return 409, {"error": f"spine already at [1..{cur['hi']}]; submitted [1..{meta['hi']}] does not advance it",
                          "head": cur}
+        # REORG §4: a head that ends on the orphaned branch (verified against prep's files as they were) is refused
+        c = db()
+        try:
+            _why = reorg_refusal(c, 1, int(meta["hi"]), meta, _ep0, check_in=False)
+        finally:
+            c.close()
+        if _why:
+            return 409, {"error": _why, "reorged": True}
         os.makedirs(SPINE_DIR, exist_ok=True)
         head = {"lo": 1, "hi": meta["hi"], "out_tip": meta["out_tip"], "out_leaves": meta["out_leaves"],
                 "range_work": meta["range_work"], "sha256": hashlib.sha256(receipt).hexdigest(),
-                "bytes": len(receipt), "handle": handle, "pubkey": pk, "ts": time.time()}
+                "bytes": len(receipt), "handle": handle, "pubkey": pk, "ts": time.time(),
+                # the block it ends on (internal-order hex, as verify-any prints it): a follower notices a reorg's
+                # fall-back by it (ZAPP_FOLLOWER.md §7)
+                "out_bhash": str(meta.get("out_bhash", ""))}
         # The handover (docs/HANDOVER.md §6): block H has no per-block range (it is never claimable), so the
         # spine that crosses it is recorded as vrange [1..H]. Without that row the frontier walk stops at H-1 for
         # good; with it, N's ranges from H+1 seam onto its out_tip. Only in N's era, and only a spine ending AT H:
@@ -1528,6 +1548,7 @@ def _submit_spine_verified(receipt, sha, seed, pk, sig, handle):
         tmp_js = os.path.join(SPINE_DIR, ".spine.json.tmp")
         with open(tmp_js, "w") as f: json.dump(head, f)
         os.replace(tmp_js, os.path.join(SPINE_DIR, "spine.json"))
+        spine_keep_head(receipt, head)        # REORG §7: kept, so a rewind can fall back to it
 
         # Record it as WORK, not just as an artifact (#114). Until now this path verified a
         # signature and then discarded the identity: `spine.json` kept the handle of whoever last
@@ -1558,6 +1579,395 @@ def _submit_spine_verified(receipt, sha, seed, pk, sig, handle):
             # submission. Losing a feed row is cosmetic, rejecting a valid spine is not.
             print(f"[spine] submitted ok but could not record the submission row: {e}")
     return 200, {"ok": True, "note": note, "head": head}
+
+# ── reorgs: the coordinator's side (docs/libzync/REORG.md §4, §5 steps 4-6, §7; phase P4) ─────────────────────────
+#
+# Prep (`libzync-prep-rewind`, P3) moves its files above the fork F aside, then writes a RECORD, `<E>.json`, in its
+# `out/reorg/records/`, and waits for this coordinator's ACK, `<E>.ack`, before it removes its intent and prep publishes
+# anything of the new branch. The coordinator applies a record in ONE transaction (reorg_rewind): every verified range
+# and every range row with hi > F is moved to `vranges_orphaned` / `ranges_orphaned` (a record, never deleted: removing
+# them from vranges is REQUIRED, because libzync prints range_work=0 and the frontier's most-work rule then falls back
+# to the highest hi, which an orphaned branch proven higher would win), live claims above F are voided, sponsorships
+# proven over orphaned heights go back to `proving`, the proofs move to `proofs/orphaned/<E>/` (FIRST: the new chain's
+# proof of the same id would overwrite them), the spine falls back to the newest kept head at or below F
+# (`spine/heads/`), and the caches are dropped. Contributors keep their credit (§14 decision 3).
+#
+# The ack goes to HAZYNC_LZ_REORG_ACK_DIR (default: the records' own directory). On hazync-proof prep runs as root and
+# this service as `hazync`, so prep's out/ is not writable here: point both sides (prep: HAZYNC_REORG_ACK_DIR) at a
+# directory this service owns.
+#
+# An epoch is this coordinator's own number (`reorgs.epoch`): max(the last one + 1, prep's epoch), so it equals prep's
+# while the two move in step, and stays unique when they do not (a manual --reorg-to, or prep restarted from genesis
+# under a fresh LZ_ROOT, whose epochs start at 1 again). A record is known by the sha256 of its bytes.
+LZ_STATE_DIR = os.environ.get("HAZYNC_LZ_STATE_DIR", "")
+REORG_DIR = os.environ.get("HAZYNC_LZ_REORG_DIR", os.path.join(LZ_STATE_DIR, "reorg", "records") if LZ_STATE_DIR else "")
+REORG_ACK_DIR = os.environ.get("HAZYNC_LZ_REORG_ACK_DIR", "") or REORG_DIR
+REORG_POLL_S = float(os.environ.get("REORG_POLL_S", "2"))
+# a failed verification of a block a reorg orphaned within this long is answered 409 `reorged` and NOT counted against
+# the block (it would otherwise park the new chain's block after MAX_ATTEMPTS workers finished their orphaned claims)
+REORG_FAILURE_GRACE = float(os.environ.get("REORG_FAILURE_GRACE", str(CLAIM_MAX)))
+# how many blocks of spine heads below the head are kept for a fall-back (REORG.md §7: J = 2,016, ~0.46 GB)
+SPINE_HEADS_KEEP = int(os.environ.get("SPINE_HEADS_KEEP", "2016"))
+SPINE_HEADS = os.path.join(SPINE_DIR, "heads")
+# what a failed verification says when the receipt was made on a branch the board no longer has (lz_coord.rs verify_any)
+_REORG_SHAPED = ("not anchored on the state before", "is not the board's", "has no state at block", "no leaf bundle")
+
+
+def lz_state_tip(h):
+    """The block hash of prep's state_<h>.json as verify-any prints it (in_bhash / out_bhash: the state's tip_hash bytes
+    in hex, internal order), or None (no state directory, no file, or one that does not read)."""
+    if not LZ_STATE_DIR or h < 0:
+        return None
+    try:
+        with open(os.path.join(LZ_STATE_DIR, f"state_{int(h)}.json")) as f:
+            t = json.load(f)["tip_hash"]
+        return bytes(t).hex() if len(t) == 32 else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _display(x):
+    """A hash in internal-order hex as Bitcoin displays it (byte-reversed), or the input if it is not 32 bytes of hex."""
+    try:
+        b = bytes.fromhex(x)
+        return b[::-1].hex() if len(b) == 32 else x
+    except (TypeError, ValueError):
+        return x
+
+
+def reorg_epoch(c=None):
+    """The newest applied epoch (0: none)."""
+    own = c is None
+    c = c or db()
+    try:
+        r = c.execute("SELECT MAX(epoch) FROM reorgs").fetchone()
+        return int(r[0] or 0)
+    finally:
+        if own:
+            c.close()
+
+
+def _reorgs_since(c, epoch):
+    """Forks of the epochs applied after `epoch`."""
+    return [int(r[0]) for r in c.execute("SELECT fork FROM reorgs WHERE epoch > ?", (epoch,))]
+
+
+def reorg_refusal(c, lo, hi, meta, epoch_at_start, check_in=True):
+    """§4: the check at COMMIT, under _lock, of a receipt verified OUTSIDE it. Returns the reason to refuse, or None.
+
+    1. A rewind applied while it was being verified, with its fork below hi: the files verify-any read may have been
+       the orphaned branch's.
+    2. The receipt's boundary hashes against prep's states AS THEY ARE NOW: in_bhash = state_<lo-1>.json's block,
+       out_bhash = state_<hi>.json's. A state that is missing (moved by a rewind) or does not read refuses too: fail
+       closed. Only where verify-any's own check means anything: a libzync coordinator with a state directory, and a
+       real verifier (the pure mock has no boundary hashes); lo = 1 starts on the genesis anchor, not on a state file."""
+    if any(f < hi for f in _reorgs_since(c, epoch_at_start)):
+        return f"reorged: a chain reorganisation below block {hi} was applied while this proof was being verified"
+    if LIBZYNC and LZ_STATE_DIR and VERIFY != "mock" and meta:
+        if check_in and lo > 1:
+            want = lz_state_tip(lo - 1)
+            if want is None or str(meta.get("in_bhash", "")).lower() != want:
+                return f"reorged: the proof starts on a block {lo - 1} that is not the board's block {lo - 1} now"
+        want = lz_state_tip(hi)
+        if want is None or str(meta.get("out_bhash", "")).lower() != want:
+            return f"reorged: the proof ends on a block {hi} that is not the board's block {hi} now"
+    return None
+
+
+def reorg_failure_excused(c, lo, hi, note, now=None):
+    """A verification failure that a recent reorg explains (the receipt was made on the orphaned branch): its range lies
+    above a fork applied within REORG_FAILURE_GRACE, and verify-any's message is one of the reorg-shaped ones."""
+    now = time.time() if now is None else now
+    if not any(s in (note or "") for s in _REORG_SHAPED):
+        return False
+    return c.execute("SELECT 1 FROM reorgs WHERE fork < ? AND at > ? LIMIT 1", (hi, now - REORG_FAILURE_GRACE)).fetchone() is not None
+
+
+# -- spine heads (§7): every accepted head is kept, so a rewind can fall back to the newest one at or below the fork --
+
+def _spine_head_files(hi):
+    return os.path.join(SPINE_HEADS, f"spine_{hi}.bin"), os.path.join(SPINE_HEADS, f"spine_{hi}.json")
+
+
+def _write_atomic(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def spine_keep_head(receipt, head):
+    """Keep an accepted head as spine/heads/spine_<hi>.{bin,json} (the receipt first: a json is never without its
+    bytes), and drop heads more than SPINE_HEADS_KEEP blocks below it. Never fails the submission that called it."""
+    try:
+        os.makedirs(SPINE_HEADS, exist_ok=True)
+        b, j = _spine_head_files(int(head["hi"]))
+        _write_atomic(b, receipt)
+        _write_atomic(j, json.dumps(head).encode())
+        for h in spine_heads():
+            if h < int(head["hi"]) - SPINE_HEADS_KEEP:
+                for p in _spine_head_files(h)[::-1]:
+                    try: os.remove(p)
+                    except OSError: pass
+    except Exception as e:
+        print(f"[spine] head [1..{head.get('hi')}] accepted, but not kept for a reorg fall-back: {e}", flush=True)
+
+
+def spine_heads():
+    """The heights of the kept heads that have both files, ascending."""
+    try:
+        names = os.listdir(SPINE_HEADS)
+    except OSError:
+        return []
+    hs = set()
+    for n in names:
+        if n.startswith("spine_") and n.endswith(".json") and n[6:-5].isdigit():
+            if os.path.exists(os.path.join(SPINE_HEADS, f"spine_{n[6:-5]}.bin")):
+                hs.add(int(n[6:-5]))
+    return sorted(hs)
+
+
+def spine_seed_heads():
+    """At start-up: the current head into heads/ if it is not there (a spine from before heads were kept)."""
+    head = spine_head()
+    if not head or not os.path.exists(os.path.join(SPINE_DIR, "spine.bin")):
+        return
+    try:
+        if int(head.get("hi", 0)) not in spine_heads():
+            with open(os.path.join(SPINE_DIR, "spine.bin"), "rb") as f:
+                spine_keep_head(f.read(), head)
+    except (OSError, TypeError, ValueError) as e:
+        print(f"[spine] could not keep the current head for a reorg fall-back: {e}", flush=True)
+
+
+def _spine_rewind(fork, epoch):
+    """The spine back to the newest kept head at or below `fork`; heads above it (and the current one, if it is above)
+    move to spine/orphaned/<epoch>/. With no kept head at or below the fork there is no spine afterwards (it is
+    rebuilt by `hazync spine` from the proofs). Idempotent. Returns (old hi, new hi or None)."""
+    head = spine_head()
+    old = _spine_hi(head)
+    od = os.path.join(SPINE_DIR, "orphaned", str(epoch))
+    above = [h for h in spine_heads() if h > fork]
+    if old <= fork and not above:
+        return old, old if head else None
+    os.makedirs(od, exist_ok=True)
+    # the current head, if it is above the fork and not among the kept ones: copied into the record first
+    if head and old > fork and old not in above:
+        for src, dst in ((os.path.join(SPINE_DIR, "spine.bin"), f"spine_{old}.bin"),
+                         (os.path.join(SPINE_DIR, "spine.json"), f"spine_{old}.json")):
+            if os.path.exists(src) and not os.path.exists(os.path.join(od, dst)):
+                with open(src, "rb") as f:
+                    _write_atomic(os.path.join(od, dst), f.read())
+    for h in above:
+        for p in _spine_head_files(h):
+            if os.path.exists(p):
+                os.replace(p, os.path.join(od, os.path.basename(p)))
+    if old <= fork:
+        return old, old if head else None
+    keep = [h for h in spine_heads() if h <= fork]
+    # the advertised head goes first (a crash here leaves "no spine", which a rerun of the rewind corrects), then the
+    # bytes, then the head that advertises them
+    try: os.remove(os.path.join(SPINE_DIR, "spine.json"))
+    except OSError: pass
+    if not keep:
+        try: os.remove(os.path.join(SPINE_DIR, "spine.bin"))
+        except OSError: pass
+        return old, None
+    b, j = _spine_head_files(keep[-1])
+    with open(b, "rb") as f:
+        _write_atomic(os.path.join(SPINE_DIR, "spine.bin"), f.read())
+    with open(j, "rb") as f:
+        _write_atomic(os.path.join(SPINE_DIR, "spine.json"), f.read())
+    return old, keep[-1]
+
+
+def _orphan_table(c, name):
+    """`<name>_orphaned`: the same columns as `name`, plus `epoch` (columns a later migration adds to `name` are added
+    here too)."""
+    cols = [r[1] for r in c.execute(f"PRAGMA table_info({name})")]
+    c.execute(f"CREATE TABLE IF NOT EXISTS {name}_orphaned AS SELECT *, 0 AS epoch FROM {name} WHERE 0")
+    have = {r[1] for r in c.execute(f"PRAGMA table_info({name}_orphaned)")}
+    for col in cols:
+        if col not in have:
+            c.execute(f"ALTER TABLE {name}_orphaned ADD COLUMN {col}")
+    return cols
+
+
+def reorg_rewind(fork, src, record=None, record_sha=None, prep_epoch=None, now=None):
+    """§7: rewind the ledger to `fork` in ONE transaction, under _lock (no submission commits meanwhile). Idempotent: a
+    record already applied (by its sha256) returns its epoch. Files move BEFORE the commit, so a crash in between is
+    finished by the rerun with the same epoch. Returns {epoch, fork, moved: {...}, applied: bool}."""
+    now = time.time() if now is None else now
+    fork = int(fork)
+    if fork < 0:
+        raise ValueError("fork must be >= 0")
+    with _lock:
+        c = db()
+        try:
+            if record_sha:
+                r = c.execute("SELECT epoch FROM reorgs WHERE record_sha=?", (record_sha,)).fetchone()
+                if r:
+                    return {"epoch": int(r[0]), "fork": fork, "applied": False}
+            epoch = max(reorg_epoch(c) + 1, int(prep_epoch or 0))
+            vcols, rcols = _orphan_table(c, "vranges"), _orphan_table(c, "ranges")
+            vids = [r[0] for r in c.execute("SELECT id FROM vranges WHERE hi > ?", (fork,))]
+            rids = [r[0] for r in c.execute("SELECT id FROM ranges WHERE hi > ?", (fork,))]
+            claims = c.execute(f"SELECT COUNT(*) FROM ranges WHERE hi > ? AND {LIVE_CLAIM_SQL}",
+                               (fork, *_live_claim_args(now))).fetchone()[0]
+            # 1. files: the proofs (must move before a new chain's proof of the same id can be written), the spine
+            pd = os.path.join(PROOFS_DIR, "orphaned", str(epoch))
+            for rid in sorted(set(vids) | set(rids)):
+                p = os.path.join(PROOFS_DIR, f"proof_{rid}.bin")
+                if os.path.exists(p):
+                    os.makedirs(pd, exist_ok=True)
+                    os.replace(p, os.path.join(pd, f"proof_{rid}.bin"))
+            proofs = len(os.listdir(pd)) if os.path.isdir(pd) else 0     # (with those a crashed attempt moved)
+            spine_old, spine_new = _spine_rewind(fork, epoch)
+            # 2. the ledger
+            vc = ",".join(vcols)
+            c.execute(f"INSERT INTO vranges_orphaned({vc},epoch) SELECT {vc},? FROM vranges WHERE hi > ?",
+                      (epoch, fork))
+            c.execute("DELETE FROM vranges WHERE hi > ?", (fork,))
+            rc = ",".join(rcols)
+            c.execute(f"INSERT INTO ranges_orphaned({rc},epoch) SELECT {rc},? FROM ranges WHERE hi > ?", (epoch, fork))
+            c.execute("DELETE FROM ranges WHERE hi > ?", (fork,))
+            sp = c.execute("UPDATE sponsorships SET status='proving', proven_at=NULL WHERE status='proven' AND hi > ?",
+                           (fork,)).rowcount
+            orphaned = (record or {}).get("orphaned") or []
+            depth = (record or {}).get("depth")
+            if depth is None:
+                depth = (max(int(h) for h, _ in orphaned) - fork) if orphaned else None
+            moved = {"vranges": len(vids), "ranges": len(rids), "claims_voided": claims, "proofs": proofs,
+                     "sponsorships_reopened": sp, "spine": [spine_old, spine_new]}
+            c.execute("INSERT INTO reorgs(epoch,src,record_sha,prep_epoch,fork,fork_hash,depth,orphaned,new,moved,state,at)"
+                      " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (epoch, src, record_sha, prep_epoch, fork, (record or {}).get("fork_hash"), depth,
+                       json.dumps(orphaned), json.dumps((record or {}).get("new") or []), json.dumps(moved),
+                       "rewinding", now))
+            # one row in the audit log (submissions stays append-only); spine walks restart from the head kept here
+            c.execute("INSERT INTO submissions(range_id,pubkey,handle,receipt_sha,sig,verified,note,ts)"
+                      " VALUES(?,?,?,?,?,?,?,?)",
+                      (f"reorg:{epoch}:spine-{spine_new or 0}", "", None, record_sha, "", 0,
+                       f"chain reorganisation at block {fork} ({src}): {len(vids)} proof(s) above it orphaned", now))
+            c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_epoch',?)", (str(epoch),))
+            c.commit()
+        finally:
+            c.close()
+        with _fold_lock:
+            for k in [k for k, v in _fold_claims.items() if int(v.get("hi", 0)) > fork]:
+                del _fold_claims[k]
+        _spine_seed_failed.clear()
+    # 3. caches: every single-flight entry (not a busy flag another thread waits on), the frontier, the served tip
+    with _sf_lock:
+        for k in [k for k in _sf if not k.endswith(":busy")]:
+            del _sf[k]
+    _servable_high(force=True)
+    print(f"[reorg] epoch {epoch}: the ledger is back at block {fork} ({src}): {json.dumps(moved)}", flush=True)
+    return {"epoch": epoch, "fork": fork, "moved": moved, "applied": True}
+
+
+def _read_record(path):
+    """(record dict, sha256 of its bytes), or (None, reason)."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        r = json.loads(raw)
+        if not isinstance(r, dict) or int(r["epoch"]) < 1 or int(r["fork"]) < 0:
+            return None, "epoch and fork must be numbers (epoch >= 1)"
+        r["orphaned"] = [[int(h), str(x)] for h, x in (r.get("orphaned") or [])]
+        return r, hashlib.sha256(raw).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return None, str(e)
+
+
+def _ack(name, record, sha, epoch):
+    os.makedirs(REORG_ACK_DIR, exist_ok=True)
+    _write_atomic(os.path.join(REORG_ACK_DIR, f"{name}.ack"),
+                  json.dumps({"epoch": int(record["epoch"]), "record_sha256": sha, "coord_epoch": epoch,
+                              "fork": int(record["fork"]), "at": time.time()}).encode())
+
+
+_reorg_noted = {}
+
+
+def reorg_poll():
+    """One pass over prep's records: each record not applied yet is applied and acked, in epoch order; an applied one
+    whose ack is missing is acked again. A record that does not read, or whose orphaned states are still in place (prep
+    has not moved its files yet, §5 step 3), waits: no ack, so prep waits too. Then rewinds whose new branch has
+    appeared (state_<F+1>.json of another block) are marked `done`. Returns the epochs applied."""
+    done = []
+    if REORG_DIR and os.path.isdir(REORG_DIR):
+        names = sorted((n[:-5] for n in os.listdir(REORG_DIR) if n.endswith(".json") and n[:-5].isdigit()), key=int)
+        for name in names:
+            rec, sha = _read_record(os.path.join(REORG_DIR, name + ".json"))
+            if rec is None:
+                if _reorg_noted.get(name) != sha:
+                    print(f"[reorg] record {name}.json does not read ({sha}): not applied, not acked", flush=True)
+                    _reorg_noted[name] = sha
+                continue
+            c = db()
+            try:
+                row = c.execute("SELECT epoch FROM reorgs WHERE record_sha=?", (sha,)).fetchone()
+            finally:
+                c.close()
+            if row:
+                a = os.path.join(REORG_ACK_DIR, name + ".ack")
+                try:
+                    ok = json.load(open(a)).get("record_sha256") == sha
+                except (OSError, ValueError):
+                    ok = False
+                if not ok:
+                    _ack(name, rec, sha, int(row[0]))
+                continue
+            f = int(rec["fork"])
+            first = next((x for h, x in rec["orphaned"] if h == f + 1), None)
+            if first is not None and lz_state_tip(f + 1) is not None and _display(lz_state_tip(f + 1)) == first:
+                if _reorg_noted.get(name) != "unmoved":
+                    print(f"[reorg] record {name}.json: prep's state {f + 1} is still the orphaned block; waiting "
+                          f"for its files to move (REORG.md §5 step 3)", flush=True)
+                    _reorg_noted[name] = "unmoved"
+                continue
+            r = reorg_rewind(f, "prep", record=rec, record_sha=sha, prep_epoch=int(rec["epoch"]))
+            _ack(name, rec, sha, r["epoch"])
+            done.append(r["epoch"])
+    c = db()
+    try:
+        for r in c.execute("SELECT epoch, fork, orphaned FROM reorgs WHERE state='rewinding'").fetchall():
+            f = int(r["fork"])
+            orph = dict((int(h), x) for h, x in json.loads(r["orphaned"] or "[]"))
+            t = lz_state_tip(f + 1) if LZ_STATE_DIR else "none"
+            if t is not None and (not LZ_STATE_DIR or _display(t) != orph.get(f + 1)):
+                c.execute("UPDATE reorgs SET state='done', done_at=? WHERE epoch=?", (time.time(), r["epoch"]))
+        c.commit()
+    finally:
+        c.close()
+    return done
+
+
+def reorg_meta():
+    """/api/meta's `reorg`: the newest rewind, or None."""
+    c = db()
+    try:
+        r = c.execute("SELECT * FROM reorgs ORDER BY epoch DESC LIMIT 1").fetchone()
+    finally:
+        c.close()
+    if not r:
+        return None
+    return {"epoch": r["epoch"], "fork": r["fork"], "depth": r["depth"],
+            "orphaned": json.loads(r["orphaned"] or "[]"), "state": r["state"], "at": r["at"],
+            "done_at": r["done_at"], "source": r["src"]}
+
+
+def reorg_loop():
+    while True:
+        try:
+            reorg_poll()
+        except Exception as e:                      # noqa: BLE001 -- never let this thread die
+            print(f"[reorg] poll failed, will retry: {e!r}", flush=True)
+        time.sleep(REORG_POLL_S)
+
 
 def _tree_node(lo, hi):
     """True if [lo..hi] is a node of the canonical fold tree.
@@ -2022,6 +2432,12 @@ def contributions_by_pubkey():
     # ts order, because "already verified when this arrived" is what separates a fold from a proof.
     vr = c.execute("SELECT pubkey,lo,hi FROM vranges ORDER BY ts ASC, rowid ASC").fetchall()
     spine = c.execute("SELECT pubkey FROM submissions WHERE range_id LIKE 'spine:1-%'").fetchall()
+    # REORG §7 / §14 decision 3: a block proved and then orphaned by a reorg keeps its credit (a real block the board
+    # asked for), counted apart as `orphaned`. One per (epoch, block): the new chain's block at that height is another.
+    try:
+        orph = c.execute("SELECT pubkey,lo,hi,epoch FROM vranges_orphaned").fetchall()
+    except sqlite3.OperationalError:
+        orph = []
     c.close()
 
     folded, anchored, by_start, ends_at, rows = {}, {}, {}, {}, []
@@ -2051,8 +2467,16 @@ def contributions_by_pubkey():
         else:
             cur_hi = max(cur_hi, hi)
     if cur_hi is not None: out[cur_pk] = out.get(cur_pk, 0) + (cur_hi - cur_lo + 1)
-    return {pk: {"proved": out.get(pk, 0), "folded": folded.get(pk, 0), "anchored": anchored.get(pk, 0)}
-            for pk in set(out) | set(folded) | set(anchored)}
+    orphaned, seen = {}, set()
+    for r in orph:
+        pk = resolve_pubkey(r["pubkey"], rmap)
+        if r["lo"] == r["hi"] and (pk, r["epoch"], r["lo"]) not in seen:   # a proof; a wide row is a fold
+            seen.add((pk, r["epoch"], r["lo"]))
+            orphaned[pk] = orphaned.get(pk, 0) + 1
+    # `proved` keeps the orphaned blocks (the credit is kept), `orphaned` says how many of them there are
+    return {pk: {"proved": out.get(pk, 0) + orphaned.get(pk, 0), "folded": folded.get(pk, 0),
+                 "anchored": anchored.get(pk, 0), "orphaned": orphaned.get(pk, 0)}
+            for pk in set(out) | set(folded) | set(anchored) | set(orphaned)}
 
 def frontier_proof():
     """The genesis-anchored frontier as a chain-state (the real committed proof output the hero panel
@@ -2130,11 +2554,17 @@ def spine_absorption(n):
     c = db()
     try:
         rows = c.execute("SELECT range_id,handle FROM submissions"
-                         " WHERE range_id LIKE 'spine:1-%' ORDER BY ts ASC, rowid ASC").fetchall()
+                         " WHERE range_id LIKE 'spine:1-%' OR range_id LIKE 'reorg:%' ORDER BY ts ASC, rowid ASC").fetchall()
     finally:
         c.close()
-    prev_hi = 0
+    prev_hi, found = 0, None
     for r in rows:
+        back = _reorg_spine_back(r["range_id"])
+        if back is not None:         # a reorg set the spine back (REORG §7): what it absorbed above is gone
+            prev_hi = min(prev_hi, back)
+            if found and found["hi"] > back:
+                found = None
+            continue
         try:
             hi = int(r["range_id"].split("-", 1)[1])
         except (IndexError, ValueError):
@@ -2144,10 +2574,21 @@ def spine_absorption(n):
         if prev_hi < n <= hi:
             # ⚠ `lo` is the first block THIS advance carried, which is one past the previous head —
             # not the `lo` of the spine receipt, which is always 1.
-            return {"lo": prev_hi + 1, "hi": hi, "width": hi - prev_hi,
-                    "handle": r["handle"], "folded_range": hi - prev_hi > 1}
+            found = {"lo": prev_hi + 1, "hi": hi, "width": hi - prev_hi,
+                     "handle": r["handle"], "folded_range": hi - prev_hi > 1}
         prev_hi = hi
-    return None
+    return found
+
+
+def _reorg_spine_back(range_id):
+    """The spine head a reorg's audit row (`reorg:<epoch>:spine-<hi>`) set the spine back to, or None for any other
+    row."""
+    if not range_id.startswith("reorg:"):
+        return None
+    try:
+        return int(range_id.rsplit("spine-", 1)[1])
+    except (IndexError, ValueError):
+        return 0
 
 
 def spine_segments():
@@ -2181,11 +2622,16 @@ def spine_segments():
     try:
         blk = blocked_pubkeys()      # the moderation list state() and recent apply, so handles agree
         rows = c.execute("SELECT range_id,pubkey,handle FROM submissions"
-                         " WHERE range_id LIKE 'spine:1-%' ORDER BY ts ASC, rowid ASC").fetchall()
+                         " WHERE range_id LIKE 'spine:1-%' OR range_id LIKE 'reorg:%' ORDER BY ts ASC, rowid ASC").fetchall()
     finally:
         c.close()
     segs, prev_hi, prev_pk, first_hi = [], 0, None, None
     for s in rows:
+        back = _reorg_spine_back(s["range_id"])
+        if back is not None:         # a reorg set the spine back (REORG §7): the segments above it are gone
+            segs = [dict(g, hi=min(g["hi"], back)) for g in segs if g["lo"] <= back]
+            prev_hi, prev_pk = min(prev_hi, back), (prev_pk if segs else None)
+            continue
         try:
             hi = int(s["range_id"].split("-", 1)[1])
         except (IndexError, ValueError):
@@ -2603,6 +3049,11 @@ def block_detail(n):
                           " WHERE status='claimed' AND lo<=? AND hi>=? ORDER BY lo LIMIT 1", (n, n)).fetchone()
         sponsor = _public_sponsor(c, n)
         hold = _sponsor_holds(c, n, n)
+        try:                                   # REORG §7: proofs of this height on a branch a reorg orphaned
+            orows = c.execute("SELECT id,lo,hi,handle,pubkey,ts,epoch,out_bhash FROM vranges_orphaned WHERE lo<=? AND hi>=?"
+                              " ORDER BY epoch DESC, (hi-lo) ASC", (n, n)).fetchall()
+        except sqlite3.OperationalError:
+            orows = []
     finally:
         c.close()
     proofs = [{"lo": r["lo"], "hi": r["hi"], "ts": r["ts"], "fold": r["id"] in folds,
@@ -2610,6 +3061,12 @@ def block_detail(n):
                "proof": f"/api/proof/{r['id']}"
                if os.path.exists(os.path.join(PROOFS_DIR, f"proof_{r['id']}.bin")) else None}
               for r in rows]
+    orphaned = [{"epoch": r["epoch"], "lo": r["lo"], "hi": r["hi"], "ts": r["ts"],
+                 "block_hash": _display(r["out_bhash"]) if r["lo"] <= n == r["hi"] and r["out_bhash"] else None,
+                 "handle": r["handle"] if (r["pubkey"] or "").lower() not in blk else "[removed]",
+                 "proof": f"/api/proof/orphaned/{r['epoch']}/{r['id']}"
+                 if os.path.exists(os.path.join(PROOFS_DIR, "orphaned", str(r["epoch"]), f"proof_{r['id']}.bin")) else None}
+                for r in orows]
     cl = None
     if claim:
         beat = int(now - (claim["last_beat"] or claim["claimed_at"] or now))
@@ -2646,7 +3103,7 @@ def block_detail(n):
                if v["lo"] <= n <= v["hi"]), None)
     return 200, {"block": n, "tip": tip, "frontier": fr, "spine_hi": spine_hi, "status": status,
                  "unbroken": 0 < n <= fr, "proofs": proofs, "claim": cl, "fold_claim": fc, "anchored_by": anchored_by,
-                 "absorbed": absorbed,
+                 "absorbed": absorbed, "orphaned": orphaned,
                  "sponsor": sponsor,
                  # A paid sponsorship keeps this block for the sponsor bot: normal workers are never offered it.
                  "held": ({"sponsorship": hold[0]["id"], "since": int(now - (hold[0]["paid_at"] or now))}
@@ -3330,7 +3787,7 @@ def prover_rows(c, blocked):
     rows = sorted(
         (dict(id=pk[:10], handle=handles.get(pk), blocks=v["proved"],
               proved=v["proved"], folded=v["folded"], anchored=v["anchored"],
-              version=versions.get(pk))
+              orphaned=v.get("orphaned", 0), version=versions.get(pk))
          for pk, v in dbp.items()
          if pk.lower() not in blk_resolved and (v["proved"] or v["folded"] or v["anchored"])),
         # Ranked on blocks proved, the headline number; folds and absorptions break ties beneath it
@@ -4368,6 +4825,7 @@ def submit(body):
         return 409, {"error": f"this receipt is already the verified proof of {_known}: a replay is not a new proof"}
     # 2. expensive verification OUTSIDE the lock (concurrent submits for different ranges run in parallel),
     #    but bounded by _verify_sem so a burst can't spawn unlimited STARK verifications and OOM the box.
+    _ep0 = reorg_epoch()                      # REORG §4: a rewind applied while this verifies is caught at commit
     with _verify_sem:
         sig_ok = verify_sig(pk, sig, receipt)
         rcpt_ok, note, meta = verify_receipt(receipt, r) if sig_ok else (False, "signature invalid", None)
@@ -4383,6 +4841,19 @@ def submit(body):
         if _held:
             c.close()
             return 403, _hold_message(_held)
+        # REORG §4: the verification ran outside the lock, against prep's files as they were then. A proof of the
+        # orphaned branch is refused here (409 `reorged`), and a failed verification that a recent reorg explains is
+        # answered the same way and not counted against the new chain's block (it would park it).
+        _why = None
+        if ok:
+            _why = reorg_refusal(c, int(meta.get("lo", r["lo"])), int(meta.get("hi", r["hi"])), meta, _ep0)
+        elif sig_ok and reorg_failure_excused(c, int(r["lo"]), int(r["hi"]), note):
+            _why = f"reorged: this proof is of a block a chain reorganisation orphaned ({note[:200]})"
+        if _why:
+            c.execute("INSERT INTO submissions(range_id,pubkey,handle,receipt_sha,sig,verified,note,ts)"
+                      " VALUES(?,?,?,?,?,0,?,?)", (rid, pk, handle, sha, sig, _why, time.time()))
+            c.commit(); c.close()
+            return 409, {"error": _why, "reorged": True, "range": rid}
         c.execute("INSERT INTO submissions(range_id,pubkey,handle,receipt_sha,sig,verified,note,ts)"
                   " VALUES(?,?,?,?,?,?,?,?)", (rid, pk, handle, sha, sig, int(ok), note, time.time()))
         if ok:
@@ -4537,7 +5008,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"method_id": expected_method_id(), "frontier": frontier_hi(),
                                     "libzync": LIBZYNC, "handover": handover_meta(),
                                     "reproduce": "reproduce/METHOD_ID",
-                                    "source_sha256": source_sha256()})
+                                    "source_sha256": source_sha256(),
+                                    # REORG §7: the newest chain reorganisation the board rewound for (None: never)
+                                    "reorg": reorg_meta()})
         if p == "/api/foldable":                           # adjacent pairs whose fold does not exist yet
             try: n = max(1, min(32, int(parse_qs(urlparse(self.path).query).get("limit", [str(FOLDABLE_DEFAULT)])[0])))
             except Exception: n = FOLDABLE_DEFAULT
@@ -4575,6 +5048,16 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/zync/"):                     # zyncAPP facts, relayed from a local zync-serve (untrusted)
             code, body = zync_relay(p[len("/api/zync"):])
             return self._send(code, raw=body) if code == 200 else self._send(code, {"error": body})
+        m = re.fullmatch(r"/api/proof/orphaned/([0-9]{1,9})/([^/]+)", p)
+        if m:                                              # a proof a reorg orphaned (REORG §7): kept, still verifiable
+            rng = parse_any_range(m.group(2))
+            f = os.path.join(PROOFS_DIR, "orphaned", str(int(m.group(1))), f"proof_{m.group(2)}.bin") if rng else None
+            if f and os.path.exists(f):
+                lo, hi = rng
+                name = f"hazync-orphaned-{int(m.group(1))}-{lo}.hzk" if lo == hi else f"hazync-orphaned-{int(m.group(1))}-{lo}-{hi}.hzk"
+                return self._send(200, raw=open(f, "rb").read(), ctype="application/octet-stream",
+                                  headers={"Content-Disposition": f'attachment; filename="{name}"'})
+            return self._send(404, {"error": "orphaned proof not available"})
         if p.startswith("/api/proof/"):                    # download a verified proof receipt (re-verify with `host verify-any`)
             rid = p.rsplit("/", 1)[-1]
             rng = parse_any_range(rid)
@@ -4740,10 +5223,60 @@ def install_stack_dump():
     import faulthandler, signal
     faulthandler.register(signal.SIGUSR1, all_threads=True)
 
+def reorg_to_cmd(argv):
+    """`server.py --reorg-to F [--yes]` (REORG.md §11 runbook step 4): rewind the ledger to F by hand, at any depth (it
+    only touches rows and files). Without --yes it only says what would move. With --yes it refuses while this
+    coordinator is serving (its port in use): its in-memory claims and caches would answer for rows that moved."""
+    try:
+        fork = int(argv[argv.index("--reorg-to") + 1])
+    except (IndexError, ValueError):
+        raise SystemExit("usage: server.py --reorg-to <fork height> [--yes]")
+    if fork < 0:
+        raise SystemExit("the fork height must be >= 0")
+    init_db()
+    c = db()
+    try:
+        v = c.execute("SELECT COUNT(*), MAX(hi) FROM vranges WHERE hi > ?", (fork,)).fetchone()
+        r = c.execute("SELECT COUNT(*) FROM ranges WHERE hi > ?", (fork,)).fetchone()[0]
+        sp = c.execute("SELECT COUNT(*) FROM sponsorships WHERE status='proven' AND hi > ?", (fork,)).fetchone()[0]
+    finally:
+        c.close()
+    head = spine_head()
+    keep = [h for h in spine_heads() if h <= fork]
+    print(f"rewind to block {fork}: {v[0]} verified range(s) above it (up to {v[1]}), {r} range row(s), {sp} proven "
+          f"sponsorship(s) reopened; spine {_spine_hi(head)} -> "
+          f"{_spine_hi(head) if _spine_hi(head) <= fork else (keep[-1] if keep else 'none (no kept head at or below the fork)')}")
+    if "--yes" not in argv:
+        print("dry run: nothing changed. Add --yes to rewind.")
+        return 0
+    import socket
+    s = socket.socket(socket.AF_INET6 if ":" in BIND else socket.AF_INET)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as the server binds: TIME_WAIT is not "serving"
+    try:
+        s.bind((BIND, PORT))
+    except OSError:
+        raise SystemExit(f"{BIND}:{PORT} is in use: stop the coordinator first (systemctl stop hazync-lz-coordinator)")
+    finally:
+        s.close()
+    print(json.dumps(reorg_rewind(fork, "manual")))
+    return 0
+
+
 if __name__ == "__main__":
+    if "--reorg-to" in sys.argv:
+        sys.exit(reorg_to_cmd(sys.argv))
     install_stack_dump()
     print(f"[hazync-coordinator] open-file limit {raise_open_file_limit()}", flush=True)
     init_db()
+    # REORG §4-§5 (P4): prep's reorg records are applied BEFORE the port is bound, so nothing is served from rows a
+    # rewind has orphaned; a failure here stops the start (systemd retries) rather than serving them
+    spine_seed_heads()
+    if LIBZYNC:
+        _applied = reorg_poll()
+        if _applied:
+            print(f"[reorg] applied at start-up: epoch(s) {_applied}", flush=True)
+        threading.Thread(target=reorg_loop, daemon=True, name="reorg").start()
+        print(f"  reorgs     records {REORG_DIR or '(none: HAZYNC_LZ_STATE_DIR unset)'}, acks {REORG_ACK_DIR or '-'}", flush=True)
     # Fail closed at startup: never serve on a public interface while the STARK check or signatures are
     # in a permissive/dev mode — a misconfigured redeploy would otherwise credit the public board for
     # unverified or unsigned receipts. Loopback (behind a trusted proxy) is always allowed.
