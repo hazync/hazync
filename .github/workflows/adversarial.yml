@@ -795,6 +795,10 @@ jobs:
           python3 test_reorg.py --control-m2
           python3 test_reorg.py --control-m3
           python3 test_reorg.py --control-h1
+      - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
+        run: cd coordinator && python3 test_offsite_reorg.py
+      - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)
+        run: cd coordinator && python3 test_offsite_reorg.py --control
       - name: The card catalogue ranks every usable type, and excludes MIG slices
         run: cd coordinator && python3 test_card_catalogue.py
       - name: Card-catalogue POSITIVE CONTROL
