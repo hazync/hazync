@@ -20,7 +20,7 @@ python3 run_vectors.py ../target/release/swiftsync-verify     # or any verifier 
 
 `run_vectors.out` is the result for `swiftsync-verify` at this commit: 16/16 (the WASM harness, which skips the 2 `cli_only` cases: 14/14, `../../swiftsync-verify-wasm/test-vectors.out`).
 
-The `mainnet_1_200_8888d59c_{ctrl_unreduced,trailing_byte,journal_5_bytes}.rcpt` receipts are that proof with one
+The `mainnet_1_200_8888d59c_{ctrl_unreduced,trailing_byte,journal_not_words}.rcpt` receipts are that proof with one
 change each (fuzz round 11-17): a control-inclusion-proof word that is not a BabyBear field element, one byte appended
 to the file, one byte appended to the journal. risc0 PANICS on the first and the third (an abort under panic = "abort");
 the second verified DEMO before decoding was strict. All three must FAIL, with no panic, in every harness.

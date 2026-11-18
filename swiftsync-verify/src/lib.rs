@@ -506,14 +506,12 @@ pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Ima
 }
 
 pub fn verify(inp: &Inputs) -> Report {
-    {
-        if let Ok(r) = decode_receipt(inp.receipt) {
-            if let Some(e) = earlier_image_named_by(&r, inp.image) {
-                let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
-                rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
-                                                     verified as that image", e.method_id_hex, e.network)));
-                return rep;
-            }
+    if let Ok(r) = decode_receipt(inp.receipt) {
+        if let Some(e) = earlier_image_named_by(&r, inp.image) {
+            let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
+            rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
+                                                 verified as that image", e.method_id_hex, e.network)));
+            return rep;
         }
     }
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
@@ -533,7 +531,12 @@ pub fn verify(inp: &Inputs) -> Report {
     };
     rep.check(!matches!(receipt.inner, risc0_zkvm::InnerReceipt::Fake(_)),
               "receipt is a real proof (not a dev-mode FakeReceipt)");
-    rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment");
+    // Not past this point under it: risc0 built with disable-dev-mode PANICS in Receipt::verify when RISC0_DEV_MODE is
+    // 1 / true / yes ("Inconsistent settings"; risc0-zkvm 3.1.0 lib.rs:213), an abort here. dev_mode_env() is true for
+    // every value risc0 reads as set (review 11-18).
+    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") {
+        return rep;
+    }
     let v = receipt.verify(m);
     rep.check(v.is_ok(), format!("receipt verifies against image {} ({}){}", inp.image.method_id_hex,
               inp.image.network, v.err().map(|e| format!(": {e}")).unwrap_or_default()));
@@ -732,8 +735,13 @@ pub fn hex32(s: &str) -> Option<[u8; 32]> {
 pub fn parse_expect(e: &str) -> Option<(u32, String)> {
     let (h, x) = e.split_once(':')?;
     let x = x.to_lowercase();
-    let canonical = !h.is_empty() && h.bytes().all(|b| b.is_ascii_digit()) && (h == "0" || !h.starts_with('0'));
-    (canonical && x.len() == 64 && x.bytes().all(|b| b.is_ascii_hexdigit())).then_some((h.parse().ok()?, x))
+    (canonical_decimal(h) && x.len() == 64 && x.bytes().all(|b| b.is_ascii_hexdigit())).then_some((h.parse().ok()?, x))
+}
+
+/// A height as a person writes it: digits only, no sign, no leading zero ("0" itself is fine). What every `expect`
+/// height is checked with before it is parsed (`u32::parse` / `i64::parse` alone take `+200` and `0200`).
+pub fn canonical_decimal(h: &str) -> bool {
+    !h.is_empty() && h.bytes().all(|b| b.is_ascii_digit()) && (h == "0" || !h.starts_with('0'))
 }
 
 /// Chain identity (SWIFTSYNC_PROOFS.md step 7): `claimed` (display order, as `getblockhash` prints it) is the block at
@@ -1867,7 +1875,8 @@ impl Bundle {
         let a32 = |o: usize| -> [u8; 32] { b[o..o + 32].try_into().unwrap() };
         let u32le = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let len = u32le(BUNDLE_HEADER - 4) as usize;
-        if b.len() != BUNDLE_HEADER + len {
+        // checked: on wasm32 a length near u32::MAX would wrap (review 11-18)
+        if BUNDLE_HEADER.checked_add(len) != Some(b.len()) {
             return Err(format!("bundle is {} bytes, header says {}", b.len(), BUNDLE_HEADER + len));
         }
         Ok(Bundle {
@@ -2008,8 +2017,9 @@ mod receipt_hardening_tests {
         assert!(first_fail(&r).contains("malformed receipt: control_id word 7"), "{}", first_fail(&r));
     }
 
-    /// F2's trigger: an unreduced digest word in the seal's Merkle top makes risc0-zkp's MerkleTreeVerifier::new return
-    /// an error after hashing part of the row, leaking those hashes. Refused before risc0 sees it.
+    /// Any seal word >= P is refused before risc0 reads the seal (a valid Poseidon2 seal holds none). That includes F2's
+    /// trigger, an unreduced digest in a Merkle top row, which makes risc0-zkp's MerkleTreeVerifier::new return an
+    /// error after hashing part of the row and leak those hashes; the indices here are arbitrary words of the seal.
     #[test]
     fn seal_word_not_reduced_is_a_fail_before_risc0() {
         for i in [0usize, 1000, 50_000] {
@@ -2066,6 +2076,24 @@ mod receipt_hardening_tests {
             let rep = headers::verify_headers(&[b], id, 1_800_000_000, None);
             assert_eq!(rep.verdict, Verdict::Fail);
             assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains(want)), "{want}: {:?}", rep.checks);
+        }
+    }
+
+    /// Review 11-18: a bundle's length field near u32::MAX is refused (it wrapped on wasm32), the header-chain reader
+    /// takes the image id through the checked hex32 (a '+' digit is not hex), and an `expect` height is canonical.
+    #[test]
+    fn review_edges() {
+        let b = Bundle { network: 0, image: [0; 32], stop_height: 0, tip_hash: [0; 32], cum_work: [0; 32],
+                         trie_root: [0; 32], receipt: vec![] };
+        let mut e = b.encode();
+        let at = e.len() - 4;
+        e[at..].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Bundle::decode(&e).is_err());
+        let plus = format!("+a{}", &headers::HEADERS_IMAGE_ID[2..]);
+        let rep = headers::verify_headers(&[RCPT], &plus, 1_800_000_000, None);
+        assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains("32 bytes of hex")), "{:?}", rep.checks);
+        for (h, ok) in [("0", true), ("200", true), ("+200", false), ("0200", false), ("", false), ("-1", false), ("2 0", false)] {
+            assert_eq!(canonical_decimal(h), ok, "{h:?}");
         }
     }
 

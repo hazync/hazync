@@ -9,7 +9,7 @@
 //! Verdict, as for the core proof: `Ok` when the chain's work reaches Core's minimum chain work for mainnet, `Demo`
 //! below it, `Fail` on any failed check. Chain identity (that this is the network's chain, not only a valid one) is
 //! the tip hash, compared with a source the verifier trusts (`expect`).
-use crate::{receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
+use crate::{dev_mode_env, hex32, receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
 use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -71,6 +71,8 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
     };
     let image = Digest::from_bytes(id);
     if !rep.check(!receipts.is_empty(), "at least one receipt") { return rep; }
+    // risc0 built with disable-dev-mode panics in Receipt::verify under RISC0_DEV_MODE (see crate::verify)
+    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") { return rep; }
     let mut want_in = HeaderState::empty().digest();
     let mut last: Option<HeaderState> = None;
     for (i, bytes) in receipts.iter().enumerate() {
@@ -97,7 +99,7 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
         } else {
             format!("run {n} starts where run {i} ended (height {from})")
         });
-        rep.check(out.height > from, format!("run {n} adds headers ({}..{})", from + 1, out.height));
+        rep.check(out.height > from, format!("run {n} adds headers ({}..{})", from.saturating_add(1), out.height));
         want_in = out.digest();
         last = Some(out);
     }
@@ -116,13 +118,6 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
     rep.verdict = if failed { Verdict::Fail } else if enough { Verdict::Ok } else { Verdict::Demo };
     rep.state = Some(s);
     rep
-}
-
-fn hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 { return None; }
-    let mut o = [0u8; 32];
-    for i in 0..32 { o[i] = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?; }
-    Some(o)
 }
 
 #[cfg(test)]

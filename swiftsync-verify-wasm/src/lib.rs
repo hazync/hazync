@@ -297,7 +297,8 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
     let (now, rs, image, expect) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
     let image = if image.is_empty() { swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string() } else { image };
     let exp = if expect.is_empty() { None } else {
-        match expect.split_once(':').and_then(|(h, x)| h.parse::<i64>().ok().map(|h| (h, x))) {
+        match expect.split_once(':').filter(|(h, _)| swiftsync_verify::canonical_decimal(h))
+            .and_then(|(h, x)| h.parse::<i64>().ok().map(|h| (h, x))) {
             Some(e) => Some(e),
             None => return fail(format!("expect {expect:?}: give height:hash")),
         }

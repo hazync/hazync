@@ -365,7 +365,8 @@ fn headers_main(a: Vec<String>) -> ! {
     let bytes: Vec<Vec<u8>> = files.iter().map(|f| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))))).collect();
     let exp = expect.as_deref().map(|e| {
         let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
-        (h.parse::<i64>().unwrap_or_else(|_| fail("--expect: bad height")), x)
+        let h = Some(h).filter(|h| swiftsync_verify::canonical_decimal(h)).and_then(|h| h.parse::<i64>().ok());
+        (h.unwrap_or_else(|| fail("--expect: bad height (digits only, no sign, no leading zero)")), x)
     });
     let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
     let rep = swiftsync_verify::headers::verify_headers(&refs, &image, now, exp);

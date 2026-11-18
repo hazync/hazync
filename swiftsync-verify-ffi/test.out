@@ -11,7 +11,7 @@ PASS  mainnet_1_200_flipped    verdict 1 (want 1)  receipt verifies against imag
 PASS  risc0_305_receipt        verdict 1 (want 1)  receipt verifies against image 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 (mainnet): receipt was produced for a version of the verifier with parameters digest ece5e9b8ae2cd6ea6b1827b464ff0348f9a7f4decd269c0087fdfd75098da013; expected
 PASS  mainnet_1_200_ctrl_unreduced verdict 1 (want 1)  the receipt file decodes (malformed receipt: control inclusion proof digest 0 word 3 is 0xffffffff, not a BabyBear field element)
 PASS  mainnet_1_200_trailing_byte verdict 1 (want 1)  the receipt file decodes (not a receipt: Slice had bytes remaining after deserialization)
-PASS  mainnet_1_200_journal_5_bytes verdict 1 (want 1)  receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): claim digest does not match the expected digest a0bc22807a0fa20458252751118bd549794899312a8d528eccb8af8a2d2f4fc2; expected bd52cc48578f04e229d9cbe45
+PASS  mainnet_1_200_journal_not_words verdict 1 (want 1)  receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): claim digest does not match the expected digest a0bc22807a0fa20458252751118bd549794899312a8d528eccb8af8a2d2f4fc2; expected bd52cc48578f04e229d9cbe45
 PASS  bad_image_hex            verdict 1 (want 1)  image id is not 64 hex digits
 PASS  unknown_network          verdict 1 (want 1)  unknown network
 all cases as expected

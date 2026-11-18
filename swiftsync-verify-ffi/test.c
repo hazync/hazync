@@ -47,7 +47,7 @@ int main(void) {
     /* fuzz round 11-17: risc0 panicked (an abort here) on the first and third before the core's pre-checks */
     run("mainnet_1_200_ctrl_unreduced", P(a, "mainnet_1_200_8888d59c_ctrl_unreduced.rcpt"), MP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
     run("mainnet_1_200_trailing_byte", P(a, "mainnet_1_200_8888d59c_trailing_byte.rcpt"), MP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
-    run("mainnet_1_200_journal_5_bytes", P(a, "mainnet_1_200_8888d59c_journal_5_bytes.rcpt"), MP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
+    run("mainnet_1_200_journal_not_words", P(a, "mainnet_1_200_8888d59c_journal_not_words.rcpt"), MP, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
     run("bad_image_hex", P(a, "r4_block_2600.rcpt"), SP, "xyz", NULL, SWIFTSYNC_VERIFY_FAIL);
     run("unknown_network", P(a, "r4_block_2600.rcpt"), 7, NULL, NULL, SWIFTSYNC_VERIFY_FAIL);
     printf("%s\n", bad ? "SOME CASES WRONG" : "all cases as expected");
