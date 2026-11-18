@@ -2109,6 +2109,10 @@ jobs:
             [ -s "hosts/$n" ] || { echo "::error::hosts/$n was not built"; exit 1; }
           done
           grep -q '^HOST_UNIT_OK .*, 0 failed$' hosts/ids.txt || { echo "::error::host unit tests (libzync mode) failed"; tail -40 hosts/host_unit.log; exit 1; }
+          # The strict decoding of untrusted receipts (verify-any, the worker wire): a positive count, so a renamed or
+          # filtered-out test fails here instead of passing by absence.
+          n=$(grep -ac '^test [a-z_:]*strict[a-z_:]* \.\.\. ok$' hosts/host_unit.log || true)
+          [ "${n:-0}" -ge 6 ] || { echo "::error::strict-decode host tests: $n of 6 ran and passed"; grep -a strict hosts/host_unit.log; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: libzync-hosts

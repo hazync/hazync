@@ -199,7 +199,7 @@ pub(crate) fn seg_distribute_cmd() {
         // OUT: coordinator -> worker.
         let bytes = bincode::serialize(&seg).expect("serialize segment");
         wire_out += bytes.len();
-        let seg_wire: Segment = bincode::deserialize(&bytes).expect("deserialize segment");
+        let seg_wire: Segment = crate::verify::decode_exact(&bytes).expect("deserialize segment");
 
         // The worker's entire job. Nothing here needs the session, the ELF, or the witness.
         let sr = prove_segment_resilient(&server, &ctx, &seg_wire, &format!("segment {i}"));
@@ -208,7 +208,7 @@ pub(crate) fn seg_distribute_cmd() {
         // is self-verifying, so a bad worker can only fail to produce one, never forge one.
         let rb = bincode::serialize(&sr).expect("serialize receipt");
         wire_back += rb.len();
-        let sr_wire: SegmentReceipt = bincode::deserialize(&rb).expect("deserialize receipt");
+        let sr_wire: SegmentReceipt = crate::verify::decode_exact(&rb).expect("deserialize receipt");
         sr_wire.verify_integrity_with_context(&ctx).expect("returned receipt failed verify");
 
         receipts.push(sr_wire);
@@ -288,7 +288,7 @@ pub(crate) fn seg_work_cmd() {
         if std::fs::OpenOptions::new().write(true).create_new(true).open(&claim).is_err() { continue; }
         let seg_path = dir.join(format!("seg_{i:04}.bin"));
         let bytes = match std::fs::read(&seg_path) { Ok(b) => b, Err(e) => { eprintln!("[{id}] seg {i} unreadable: {e}"); continue; } };
-        let seg: Segment = bincode::deserialize(&bytes).expect("deserialize segment");
+        let seg: Segment = crate::verify::decode_exact(&bytes).expect("deserialize segment");
         let t = Instant::now();
         let sr = prove_segment_resilient(&server, &ctx, &seg, &format!("segment {i}"));
 
@@ -387,7 +387,7 @@ pub(crate) fn seg_coordinate_cmd() {
     for i in 0..total {
         let bytes = std::fs::read(dir.join(format!("rcpt_{i:04}.bin"))).expect("read receipt");
         wire_back += bytes.len();
-        let sr: SegmentReceipt = bincode::deserialize(&bytes).expect("deserialize receipt");
+        let sr: SegmentReceipt = crate::verify::decode_exact(&bytes).expect("deserialize receipt");
         // Workers are untrusted. A receipt is self-verifying, so this is the entire defence.
         sr.verify_integrity_with_context(&ctx).expect("worker receipt failed verify");
         receipts.push(sr);
@@ -460,8 +460,8 @@ pub(crate) fn seg_join_cmd() {
                 (Ok(a), Ok(b)) => (a, b),
                 _ => { eprintln!("[{id}] level {level} pair {p}: inputs missing"); continue; }
             };
-            let a: SuccinctReceipt<ReceiptClaim> = bincode::deserialize(&ab).expect("deserialize a");
-            let b: SuccinctReceipt<ReceiptClaim> = bincode::deserialize(&bb).expect("deserialize b");
+            let a: SuccinctReceipt<ReceiptClaim> = crate::verify::decode_succinct(&ab).expect("deserialize a");
+            let b: SuccinctReceipt<ReceiptClaim> = crate::verify::decode_succinct(&bb).expect("deserialize b");
             let t = Instant::now();
             // join asserts a.post == b.pre. A worker that returns a join of the wrong two receipts
             // cannot produce something that survives this, which is why untrusted joins are safe.
@@ -533,7 +533,7 @@ pub(crate) fn seg_coordinate_tree_cmd() {
     let mut receipts: Vec<SegmentReceipt> = Vec::new();
     let first_rcpt = if worker_lifts { total - 1 } else { 0 };
     for i in first_rcpt..total {
-        let sr: SegmentReceipt = bincode::deserialize(&std::fs::read(dir.join(format!("rcpt_{i:04}.bin"))).expect("read")).expect("de");
+        let sr: SegmentReceipt = crate::verify::decode_exact(&std::fs::read(dir.join(format!("rcpt_{i:04}.bin"))).expect("read")).expect("de");
         sr.verify_integrity_with_context(&ctx).expect("worker receipt failed verify");
         receipts.push(sr);
     }
@@ -550,7 +550,7 @@ pub(crate) fn seg_coordinate_tree_cmd() {
         let mut v: Vec<SuccinctReceipt<ReceiptClaim>> = Vec::with_capacity(total);
         for i in 0..total - 1 {
             let r: SuccinctReceipt<ReceiptClaim> =
-                bincode::deserialize(&std::fs::read(dir.join(format!("lift_{i:04}.bin"))).expect("read lift")).expect("de lift");
+                crate::verify::decode_succinct(&std::fs::read(dir.join(format!("lift_{i:04}.bin"))).expect("read lift")).expect("de lift");
             r.verify_integrity_with_context(&ctx).expect("worker lift failed verify");
             v.push(r);
         }
@@ -584,7 +584,7 @@ pub(crate) fn seg_coordinate_tree_cmd() {
         }
         let mut next: Vec<SuccinctReceipt<ReceiptClaim>> = Vec::with_capacity(npairs + 1);
         for p in 0..npairs {
-            let r: SuccinctReceipt<ReceiptClaim> = bincode::deserialize(&std::fs::read(dir.join(format!("jout_{level}_{p:04}.bin"))).expect("read")).expect("de");
+            let r: SuccinctReceipt<ReceiptClaim> = crate::verify::decode_succinct(&std::fs::read(dir.join(format!("jout_{level}_{p:04}.bin"))).expect("read")).expect("de");
             r.verify_integrity_with_context(&ctx).expect("joined receipt failed verify");
             next.push(r);
         }
@@ -627,7 +627,7 @@ pub(crate) fn seg_prove_one_cmd() {
     let opts = ProverOpts::succinct();
     let server = risc0_zkvm::get_prover_server(&opts).expect("prover server");
     let ctx = VerifierContext::default();
-    let seg: Segment = bincode::deserialize(&std::fs::read(&inp).expect("read segment")).expect("deserialize segment");
+    let seg: Segment = crate::verify::decode_exact(&std::fs::read(&inp).expect("read segment")).expect("deserialize segment");
     let t = Instant::now();
     let sr = prove_segment_resilient(&server, &ctx, &seg, &inp);
     sr.verify_integrity_with_context(&ctx).expect("own receipt failed verify");
@@ -1321,7 +1321,7 @@ pub(crate) fn seg_connect_cmd(addr: &str) {
         // A lift job carries a single SegmentReceipt whose claim the coordinator has already merged
         // the session output into. Lifting needs no session, so it is ordinary work.
         if idx & LIFT_TAG != 0 {
-            let sr: SegmentReceipt = bincode::deserialize(&body).expect("deserialize segment receipt");
+            let sr: SegmentReceipt = crate::verify::decode_exact(&body).expect("deserialize segment receipt");
             let lifted = server.lift(&sr).expect("lift");
             let out = bincode::serialize(&lifted).expect("serialize lift");
             let compute_s = t.elapsed().as_secs_f64();
@@ -1348,8 +1348,8 @@ pub(crate) fn seg_connect_cmd(addr: &str) {
         // of something else produces a receipt that fails at the next step or at the final verify.
         if idx & RESOLVE_TAG != 0 {
             let (cb, ab) = unpack_pair(&body).expect("malformed resolve pair");
-            let cond: SuccinctReceipt<ReceiptClaim> = bincode::deserialize(cb).expect("deserialize conditional");
-            let assum: SuccinctReceipt<risc0_zkvm::Unknown> = bincode::deserialize(ab).expect("deserialize assumption");
+            let cond: SuccinctReceipt<ReceiptClaim> = crate::verify::decode_succinct(cb).expect("deserialize conditional");
+            let assum: SuccinctReceipt<risc0_zkvm::Unknown> = crate::verify::decode_succinct(ab).expect("deserialize assumption");
             let r = server.resolve(&cond, &assum).expect("resolve");
             let out = bincode::serialize(&r).expect("serialize resolve");
             let compute_s = t.elapsed().as_secs_f64();
@@ -1373,8 +1373,8 @@ pub(crate) fn seg_connect_cmd(addr: &str) {
         // untrusted proving is.
         if idx & JOIN_TAG != 0 {
             let (ab, bb) = unpack_pair(&body).expect("malformed join pair");
-            let a: SuccinctReceipt<ReceiptClaim> = bincode::deserialize(ab).expect("deserialize a");
-            let b: SuccinctReceipt<ReceiptClaim> = bincode::deserialize(bb).expect("deserialize b");
+            let a: SuccinctReceipt<ReceiptClaim> = crate::verify::decode_succinct(ab).expect("deserialize a");
+            let b: SuccinctReceipt<ReceiptClaim> = crate::verify::decode_succinct(bb).expect("deserialize b");
             let j = server.join(&a, &b).expect("join");
             let out = bincode::serialize(&j).expect("serialize join");
             let compute_s = t.elapsed().as_secs_f64();
@@ -1397,7 +1397,7 @@ pub(crate) fn seg_connect_cmd(addr: &str) {
             continue;
         }
 
-        let seg: Segment = bincode::deserialize(&body).expect("deserialize segment");
+        let seg: Segment = crate::verify::decode_exact(&body).expect("deserialize segment");
         let sr = prove_segment_resilient(&server, &ctx, &seg, &format!("segment {}", idx & !NOLIFT_TAG));
 
         // NOLIFT: prove and stop. This is the LAST segment, and lifting it needs the session journal
@@ -2046,7 +2046,7 @@ rtt_ms={:.1} bytes_out={} bytes_in={}",
                                                      at.elapsed().as_secs_f64() * 1000.0,
                                                      sent_body.len(), body.len());
                                         }
-                                        match bincode::deserialize::<SuccinctReceipt<ReceiptClaim>>(&body) {
+                                        match crate::verify::decode_succinct::<ReceiptClaim>(&body) {
                                             Ok(r) if r.verify_integrity_with_context(ctx).is_ok() => {
                                                 jout.lock().unwrap().insert(i, r);
                                             }
@@ -2076,7 +2076,7 @@ rtt_ms={:.1} bytes_out={} bytes_in={}",
                                         }
                                     }
                                     if i & NOLIFT_TAG != 0 {
-                                        match bincode::deserialize::<SegmentReceipt>(&body) {
+                                        match crate::verify::decode_exact::<SegmentReceipt>(&body) {
                                             Ok(sr) if sr.verify_integrity_with_context(ctx).is_ok() => {
                                                 *last_out.lock().unwrap() = Some(sr);
                                             }
@@ -2087,7 +2087,7 @@ rtt_ms={:.1} bytes_out={} bytes_in={}",
                                         }
                                         continue;
                                     }
-                                    match bincode::deserialize::<SuccinctReceipt<ReceiptClaim>>(&body) {
+                                    match crate::verify::decode_succinct::<ReceiptClaim>(&body) {
                                         Ok(r) if r.verify_integrity_with_context(ctx).is_ok() => {
                                             out.lock().unwrap()[plain] = Some(r);
                                         }
@@ -2936,4 +2936,31 @@ fn early_claim_of(f: &str) -> Option<risc0_zkvm::sha::Digest> {
     use risc0_zkvm::sha::Digestible;
     let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).ok()?).ok()?;
     Some(r.claim().ok()?.digest())
+}
+
+#[cfg(test)]
+mod worker_wire_strict_tests {
+    //! A worker's lift/join/resolve comes back as a bare SuccinctReceipt: it is decoded as strictly as verify-any's
+    //! receipts (no trailing bytes, BabyBear words), on the succinct proof inside swiftsync-verify/vectors' receipts.
+    use risc0_zkvm::{InnerReceipt, Receipt, ReceiptClaim};
+    use crate::verify::decode_succinct;
+    const V: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/vectors/");
+
+    fn wire(file: &str) -> Vec<u8> {
+        let r: Receipt = bincode::deserialize(&std::fs::read(format!("{V}{file}")).unwrap()).unwrap();
+        let InnerReceipt::Succinct(s) = r.inner else { panic!("{file}: not succinct") };
+        bincode::serialize(&s).unwrap()
+    }
+
+    #[test]
+    fn a_worker_succinct_receipt_is_decoded_strictly() {
+        let good = wire("mainnet_1_200_8888d59c.rcpt");
+        decode_succinct::<ReceiptClaim>(&good).expect("control: the real succinct receipt decodes");
+        let mut trailing = good.clone();
+        trailing.push(0);
+        let e = decode_succinct::<ReceiptClaim>(&trailing).unwrap_err();
+        assert!(e.contains("not a succinct receipt"), "{e}");
+        let e = decode_succinct::<ReceiptClaim>(&wire("mainnet_1_200_8888d59c_ctrl_unreduced.rcpt")).unwrap_err();
+        assert!(e.contains("malformed receipt: control inclusion proof digest"), "{e}");
+    }
 }
