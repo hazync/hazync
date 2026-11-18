@@ -2110,6 +2110,8 @@ class Bot:
         done, left = [], []
         ids = [p.id for p in live]
         for r in range(2):
+            if r:
+                self.sleep(5)          # the second listing: a lost create that appears late
             try:
                 ids += [x["id"] for x in self.api.pods() if x["name"].startswith(self.prefix) and x["id"] not in ids]
             except Exception as e:
@@ -2119,10 +2121,13 @@ class Bot:
                 d_, left = terminate_many(self.api, todo, self.sleep, wait_s=self.confirm_wait_s)
                 done += d_
             if r == 0:
-                self.sleep(5)
-        for p in live:
-            self._terminate_books(c, p)
-            self._settle(c, p, p.id in done, reason)
+                for p in live:         # settle at once: the spend clock stops when RunPod confirms, not later
+                    self._terminate_books(c, p)
+                    self._settle(c, p, p.id in done, reason)
+        for p in live:                 # confirmed only on the second pass
+            if p.state == "unconfirmed" and p.id in done:
+                self._settle(c, p, True, reason)
+        left = [i for i in left if i not in done]
         for i in left:
             if i not in self.unconfirmed:
                 self.unconfirmed.append(i)
