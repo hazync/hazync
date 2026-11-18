@@ -228,7 +228,7 @@ image id was printed with the label "local build, not reproducible, not publishe
 One file per (network, H): the final run's succinct receipt (225 kB at H = 3, §8), plus the
 `AssumeUtreexoValue` it proves, printed by `zapp-utreexo verify --floresta`. A node (or its packager) checks the receipt
 with the CLI, the WASM or a future Floresta-side verifier, and compares block H with its own headers. Heights: any H <= the
-core tip is valid, because each is proved; which ones to publish is the Floresta question Q2.
+core tip is valid, because each is proved; which ones to publish was §9's question 2; Floresta's answer (the latest, a few blocks below the tip) is §10.
 
 ## 7. Measured (15.11.2026, hazync-coord, CPU, risc0 3.1.0 executor, no dev mode)
 
@@ -312,6 +312,9 @@ in the hints zAPP).
   the node's chainwork at T with `--expect-tip`); the WASM `d240082b…`, 13/13.
 
 ## 9. Questions for the Floresta developers
+
+Asked in getfloresta/Floresta discussion #1472 (16.11.2026) and **answered** there the same day; the answers and how
+this design follows them are in §10.11. Kept here as asked.
 
 1. **Would you use proven roots?** Floresta now trusts a compiled-in `AssumeUtreexoValue` and backfills. Would a
    node, or your release process, check a receipt for that value (a Rust library call, a CLI before release, or
@@ -437,7 +440,7 @@ and the core receipt.
 - **Core handovers.** A step needs no undo commitment, so, unlike the base (§4: zero lineage), a step accepts the core
   verifier's own lineage rule (zero, or exactly the core image's pinned lineage). A chain of steps can continue across
   a core image upgrade; the base must still have been walked under a trusted core image (open: a base under the
-  previous image after a handover, Q-T4 below).
+  previous image after a handover: ours to decide, with the image table of the core verifier).
 - Everything else (which images to trust, minimum work, the clock, that block H is the node's) is the checker's (§10.7).
 
 ### 10.5 Which H, and where the witness comes from
@@ -457,7 +460,7 @@ last proven height (`--cache`, `HZUTIP01`). It runs every block through the same
 tests and low heights; it is **not** a mainnet-tip source (the forest of ~10^8 live leaves in memory: not measured
 here). The production source is either (a) a Utreexo bridge node: utreexod with its proof index serves exactly this
 per block (the same udata Floresta itself syncs from: leaf data + batch proof), or (b) a disk-backed forest kept by
-Hazync's tip prep run. Neither is built (open: Q-T2). Because the guest checks every proof, the source is never
+Hazync's tip prep run. Neither is built (§10.5.1; a note for a later follow-up in #1472, §10.11). Because the guest checks every proof, the source is never
 trusted, so (a) needs no trust in the bridge.
 
 #### 10.5.1 The production witness source (DESIGNED, NOT BUILT)
@@ -469,7 +472,7 @@ image changes.
 
 | option | how | cost and risk |
 |---|---|---|
-| **A. a Utreexo bridge node (preferred)** | utreexod run with its Utreexo proof index next to the proving host. Per block it holds the deleted leaves' data and the batch proof against the accumulator before that block, the same "udata" Floresta receives from its peers. The host converts it (leaf data + block hash by height from our own node → `put_spent`; targets + hashes → `encode_proof`) and, as now, runs `Stump::modify` natively before proving | an extra node to run and keep in sync (its disk for the index: not measured here). Nothing is trusted: a wrong proof fails natively and in the guest. Risk: a format or behaviour difference in the bridge's proofs (positions after deletions) is caught at once, natively. Open question Q-T2 |
+| **A. a Utreexo bridge node (preferred)** | utreexod run with its Utreexo proof index next to the proving host. Per block it holds the deleted leaves' data and the batch proof against the accumulator before that block, the same "udata" Floresta receives from its peers. The host converts it (leaf data + block hash by height from our own node → `put_spent`; targets + hashes → `encode_proof`) and, as now, runs `Stump::modify` natively before proving | an extra node to run and keep in sync (its disk for the index: not measured here). Nothing is trusted: a wrong proof fails natively and in the guest. Risk: a format or behaviour difference in the bridge's proofs (positions after deletions) is caught at once, natively. See §10.11 |
 | B. Hazync's own disk forest | a disk-backed rustreexo forest (or a position-indexed node store) updated by the tip prep run, with an outpoint → (position, coin data) index | no third-party node, but a new store of the order of the live UTXO set plus internal nodes (not measured), its own crash/reorg handling (REORG.md P3 style undo) and a second Utreexo implementation to keep equal to rustreexo |
 
 Either way the follower changes only in where `--cache`'s replay comes from; reorg handling stays as §10.6 (the
@@ -629,18 +632,29 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
 - `coordinator/deploy/utreexo/hazync-utreexo-follow` and `test/test_follow.sh` (real CPU proofs against a fake
   bitcoin-cli over mainnet block files). No unit, timer, nginx alias or publish key yet: nothing is deployed.
 
-### 10.11 Questions for the Floresta developers (tip mode)
+### 10.11 What Floresta answered, and what is left for a later follow-up
 
-- **Q-T1 Loading.** Your answer to Q6 was that a custom-roots option "already exists"; in `8399792e` florestad passes
-  `assumeutreexo_value: None` (bin/florestad `src/main.rs:90`), so I could only find it on the library side
-  (`assumeutreexo_value` in the node config). Is the intended path a library user (or a florestad flag you would add)
-  calling the check, then `mark_chain_as_assumed(Stump { leaves, roots }, block_hash)`?
-- **Q-T2 Witness source at the tip.** Each step needs, per block, the deleted leaves' data and a batch proof: exactly
-  the udata a utreexod bridge serves. Is utreexod's proof index (RPC or P2P) the source you would expect us to use, or
-  would you rather we keep our own forest? (The proof never trusts the source.)
-- **Q-T3 Margin and freshness.** I take H = tip − 6 (and never above our core proof). Is 6 right for you, and do you
-  want the receipt to carry anything else for a freshness rule (the core tip T and its hash are in it)?
-- **Q-T4 Trust anchors.** A node pins three ids: the core image, the base (walk) image and the tip (step) image. Is a
-  compiled-in triple (updated with your releases) acceptable, given that the roots themselves are not pinned?
-- **Q-T5 Format.** `latest.json` + one succinct receipt (225 kB at H = 3, §8; a Groth16 wrap is much smaller, not measured here, but needs
-  the Groth16 verifier): which do you prefer to ingest?
+The questions of §9 were asked in getfloresta/Floresta discussion #1472 and answered there by Davidson Souza on
+16.11.2026 (our reply the same day). This design follows the answers; nothing here is a new question to them.
+
+| §9 question | the answer in #1472 | where this design follows it |
+|---|---|---|
+| 1, 2: check a proof? which heights? | yes, it needs no change to their stack ("we already implemented it with things like ZKP in mind"); the **latest height, or a few blocks below the tip for a reorg margin**; no static commitment: "just download the latest proof and try ingesting them" | §10.5 (H = min(tip − 6, core height)), §10.6 (`latest.json` + `latest.rcpt`, the newest replaces the last), §10.7 (check, then ingest) |
+| 3: format pinning | no change planned to the leaf format or the root order | the step guest runs rustreexo 0.7.0 itself and the leaf of §2 (§10.3) |
+| 4: Empty roots as 32 zero bytes | they do not encode Empty roots (implicit data), and will parse ours into rustreexo after the check | unchanged (§1, §10.7 step 6) |
+| 5: the BIP30 coinbases | 91,722 and 91,812 stay unspendable forever; utreexod does the same | the step refuses deleting either leaf (§10.3) |
+| 6: custom roots | "IIUC this already exists" | §10.7 step 6 names `mark_chain_as_assumed`; how a florestad user sets it is theirs (§2 found only the library-side `assumeutreexo_value`) |
+| 7: roots or hints | both have uses, **roots preferred** ("it skips a lot of work") | tip mode proves roots; the hints zAPP is separate |
+
+**Not covered by the answers — for a later follow-up in #1472, if needed** (nobody contacts Floresta from this work;
+these are notes for whoever writes the next reply there):
+
+- **The witness source for deletions** (§10.5.1): we plan to read utreexod's proof index (the udata Floresta itself
+  syncs from), or keep our own disk forest. Their view on which is more dependable would help, but neither choice
+  changes what they check.
+- **The receipt they ingest**: one succinct receipt (226,138 bytes at H = 103, §10.9) plus `latest.json`, or a Groth16
+  wrap (much smaller, not measured here, needs the Groth16 verifier); and whether they want it over HTTP from
+  `/utreexo-live/` or another channel.
+- **The compiled-in ids**: a node pins three image ids (the core, the utreexo base, the utreexo tip;
+  reproduce/LIBZYNC_IDS). Whether they would carry that triple in their releases or take it as configuration.
+- **The margin**: 6 blocks is our reading of "a few blocks"; trivially changed (`MARGIN`).
