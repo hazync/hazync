@@ -27,7 +27,8 @@ The heavy set is worked out from the code, not listed by hand where it can be de
   * every repo file the heavy jobs EXECUTE OR READ, transitively (`references()`): the repo paths named in the heavy
     jobs' blocks of adversarial.yml, then in each script or file those name ($Z/…, $REPO/…, $HERE/../…, /hazync-zkvm/…,
     bare names beside a script, python modules imported from beside it), and so on. Each is a soundness input
-    (coordinator/deploy/libzync/libzync-prep-run.sh, run by prep/rewind_test.sh and prep/crash_test.sh, is one);
+    (coordinator/deploy/libzync/libzync-prep-run.sh, run by prep/rewind_test.sh and prep/crash_test.sh, is one; the
+    rest of coordinator/deploy/libzync/, runbooks and units nothing here runs, is light);
   * the coordinator files libzync-chain runs (server.py, the `hazync` CLI, web/), named explicitly as well.
 The reference scan over-approximates (a name that resolves to an existing file anywhere it could is counted); that
 costs a run, never a skipped test. Comments, docstrings and messages (echo/printf/fail/print/raise …) are not
@@ -59,7 +60,6 @@ IMAGE_BASENAMES = {"Cargo.toml", "build.rs"}     # anywhere: a package boundary 
 SOUNDNESS_PREFIXES = (
     "scripts/libzync/",               # ci/ drivers (build-hosts.sh runs inside the container), the *_ref.py oracles
     "experimental/libzync-bench/",    # lib.sh's $B: leaf/join/prep/coord/handover/core_rules/cost harnesses
-    "coordinator/deploy/libzync/",    # libzync-prep-run.sh (prep/rewind_test.sh, prep/crash_test.sh) and its units
     "coordinator/web/",
 )
 COORD_RUNTIME = ("coordinator/server.py", "coordinator/hazync", "coordinator/mod_block.txt")
@@ -351,6 +351,8 @@ SELFTEST = [  # (path, expected class) against this checkout
     ("coordinator/hazync", "soundness"),
     ("coordinator/web/index.html", "soundness"),
     ("coordinator/deploy/libzync/libzync-prep-run.sh", "soundness"),   # run by prep/rewind_test.sh, prep/crash_test.sh
+    ("coordinator/deploy/libzync/SWITCH.md", "light"),                 # a runbook: nothing runs it
+    ("coordinator/deploy/libzync/hazync-lz-check-spine.timer", "light"),
     ("coordinator/test_claim_nonce.py", "light"),
     ("coordinator/deploy/headers-api/hazync-headers-api", "light"),
     (".github/workflows/adversarial.yml", "image"),
