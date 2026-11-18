@@ -335,6 +335,10 @@ def reorg(d, mode):
     if held is not None:
         # again, now that the board serves the new branch's block T: verification fails on the orphaned end, and a
         # reorg explains it: 409 `reorged`, not counted against the new block (REORG_FAILURE_GRACE)
+        def served():
+            try: return urllib.request.urlopen(f"{URL}/api/witness/{T}", timeout=10).status == 200
+            except (OSError, urllib.error.HTTPError): return False
+        wait(served, f"{tag}: the board serves the new branch's block {T}")
         code, out = submit(T, held)
         att = db1("SELECT attempts FROM ranges WHERE id=?", str(T))
         check(code == 409 and out.get("reorged") and not (att and att[0][0]),
