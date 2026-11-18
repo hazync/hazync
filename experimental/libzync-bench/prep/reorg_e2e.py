@@ -312,7 +312,7 @@ def offsite(tag, concurrent=False):
     moved, not committed): no marker for it yet, and no NEW off-chain live name."""
     (O / "node_tip").write_text(f"{len(chain)}\n")
     args = ["--keys", str(O / "keys"), "--bucket", "b", "--proofs", str(PROOFS), "--method-id", "46666b6f" + "0" * 56,
-            "--depth", str(OFF_DEPTH), "--tip-file", str(O / "node_tip"), "--bwlimit-mbit", "0", "--threads", "2", "--min-age", "0"]
+            "--depth", str(OFF_DEPTH), "--tip-file", str(O / "node_tip"), "--bwlimit-mbit", "0", "--threads", "2", "--min-age=-30"]   # (a file written this second can carry an mtime a moment ahead of the clock)
     buf = _io.StringIO()
     import contextlib
     with contextlib.redirect_stdout(buf):
@@ -489,7 +489,11 @@ def reorg(d, mode, crash=None, spine_case=False, coord_crash=False):
         # again, now that the board serves the new branch's block T: verification fails on the orphaned end, and a
         # reorg explains it: 409 `reorged`, not counted against the new block (REORG_FAILURE_GRACE)
         def served():
-            try: return urllib.request.urlopen(f"{URL}/api/witness/{T}", timeout=10).status == 200
+            # its bundle is served AND the board's tip (which bounds the range ids it accepts, cached TIP_CACHE_TTL)
+            # covers it: /api/block/<T> answers 404 "not mined yet" above that tip
+            try:
+                return (urllib.request.urlopen(f"{URL}/api/witness/{T}", timeout=10).status == 200
+                        and api(f"/api/block/{T}")[0] == 200)
             except (OSError, urllib.error.HTTPError): return False
         wait(served, f"{tag}: the board serves the new branch's block {T}")
         code, out = submit(T, held)

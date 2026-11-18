@@ -102,7 +102,7 @@ reorg at or below prep's tip, however deep.
 | stage | how it learns | what it does |
 |---|---|---|
 | **fetcher** (`fetch_block_rpc.py follow`, the only stage with RPC) | each poll (every 5 s): `getbestblockhash`. When that changes, it walks back by `previousblockhash` from the node's tip until it meets a height ≤ prep's tip whose hash equals prep's `state_<h>.json` `tip_hash` (the **fork F**). It also checks each waiting `block_<h>.json` against `getblockhash(h)` | fork above prep's tip: it deletes and refetches the waiting files above F (nothing else changes). Fork below prep's tip: it writes `blocks/REORG` (F, old and new hashes F+1..) and stops fetching. No agreement within J: it writes `blocks/REORG_TOO_DEEP` (§11) |
-| **prep** (follow mode) | between blocks, it checks for `blocks/REORG` (it already polls that directory every 200 ms). It also replaces the `prep.rs:197` assert with a check: a block whose `prev` is not its tip means "reorg suspected", so it waits for the fetcher's verdict instead of panicking | runs the protocol in §5. Exits with code **4** when the fork is deeper than W |
+| **prep** (follow mode) | (since round 3) before each block, a `state_<h>.json` an earlier run left for ANOTHER block is a fork at h-1: prep writes `blocks/REORG` itself (`source: prep`, §17) and stops, as below. Between blocks, it checks for `blocks/REORG` (it already polls that directory every 200 ms). It also replaces the `prep.rs:197` assert with a check: a block whose `prev` is not its tip means "reorg suspected", so it waits for the fetcher's verdict instead of panicking | runs the protocol in §5. Exits with code **4** when the fork is deeper than W |
 | **coordinator** | a thread polls prep's `reorg/records/` every 2 s, and checks at start-up before binding its port. Records carry an increasing **epoch** | rewinds its ledger (§7), writes `<epoch>.ack` |
 | **in-flight submissions** | at **commit**, under `_lock`, it checks that `in_bhash` = `tip_hash` of `state_<lo-1>.json` and `out_bhash` = `tip_hash` of `state_<hi>.json` (the files as they are now) | refuses with **409 `reorged`**. This closes the race where the STARK check (up to 120 s, outside the lock) read the old files |
 | **spine submissions** | the same check at commit in `submit_spine` | 409 |
@@ -282,7 +282,9 @@ person acts.
    and compare against a public explorer. If our node is the odd one out, stop here: fix the node, then start the
    units again; nothing needs undoing.
 2. Find F: `fetch_block_rpc.py fork-point --deep <out>` walks back without the W limit and prints F and whether
-   F ≥ tip − J (the undo records still reach it).
+   F ≥ tip − J (the undo records still reach it), and any marker already in the block directory. A marker with
+   `source: prep` is prep's own: its state files above its save point were another chain's (a reorg inside its replay
+   window, §17); its `fork` is right, and step 3 applies.
 3. **F within J** (the expected case), as built in P3: with both units stopped and the fetcher's `blocks/REORG` naming
    F (edit `fork` if `fork-point --deep` found it),
 
@@ -751,3 +753,18 @@ blocks, and so does the fake now (`known`).
   seven controls fail; `test_offsite_reorg.py` PASS (+ control); the coordinator tests pass. Building it found one more
   bug, fixed: the L5 shortcut (prep already at the fork) also matched prep's own stop before F+1, and removed the
   marker without moving the stale states; it now requires nothing above the fork.
+
+**Review of 19.11.2026, round 4, fixed.** (M1) The zAPP follower clears its block files, any marker in them, and its
+state files above its save point before prepping (a run that died part-way left them, and prep stopped on them for
+ever). (M2) The backstop runs in its own `try` in the coordinator's reorg thread and writes a heartbeat
+(`meta.reorg_backstop_at`); `hazync-lz-check-reorg` also pages when it is older than 15 min (the coordinator down, or
+its thread stuck); the timer is in `scripts/check-deployment.sh` and the RUNBOOK. Low: a state above the save point that
+does not read is a stop, not "no stale state"; with static block files (not fed by the fetcher) prep's stale-state stop
+writes no marker; an index on `vranges(hi)`; `server.py --reorg-ack [--yes]` clears a latched alert by hand (e.g. prep
+restarted from genesis under a fresh `LZ_ROOT`, whose states are not there yet; RUNBOOK); an `out/REWIND` older than
+`REORG_REWIND_QUIET_S` (2 h) no longer quiets the backstop; DONE is written for every applied epoch that lacks it, and
+an offsite marker deferred over an hour fails the offsite unit; `restore-plan` prints `COVERED-NO-NEW-COPY` for a
+covered name whose new copy is not up yet; prep's own marker says the recovery is the rewind, and `fork-point` prints a
+marker; the fetcher's depth and orphaned list run to the OLD tip (state files above prep's tip), not prep's tip;
+`rewind_test.sh` case L (the replay-window reorg, in CI) with `--control-stale`; `rewind.rs` uses `reorg::hash_of`;
+`reorg_e2e.py` prints the offsite output when an offsite check fails.
