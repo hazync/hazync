@@ -81,12 +81,23 @@ SuccessExitStatus=75
 # Write the latch on any non-success exit. $SERVICE_RESULT is systemd's own verdict, so this catches
 # a signal or a timeout as well as a non-zero exit.
 # ⚠ `-` prefix: if the latch cannot be written, that must not itself fail the unit and page again.
-ExecStopPost=-/bin/sh -c 'test "$SERVICE_RESULT" = success || : > /var/lib/hazync/sponsor-bot/.failed'
+# ⚠ ONE exception: exit 7 (sponsor_bot.CAPACITY_ALERT_EXIT) is "page, but do NOT latch" -- RunPod has answered
+# every deploy with the same 400 for hours (see CAPACITY_* in sponsor_bot.py). OnFailure= pages on it; this line
+# leaves the latch alone, so the next timer run tries again. Only a clean exit-code 7 qualifies: a signal or a
+# timeout ($SERVICE_RESULT signal/timeout/...) still latches.
+ExecStopPost=-/bin/sh -c 'test "$SERVICE_RESULT" = success || { test "$SERVICE_RESULT" = exit-code && test "$EXIT_STATUS" = 7; } || : > /var/lib/hazync/sponsor-bot/.failed'
 
 # The bot terminates every pod it owns in its `finally`, and that must be allowed to finish: a killed
 # cleanup leaves rented GPUs running and billing with nothing tracking them.
+# ⛔ SIZED TO THE WORST CASE, not the usual one (300 s was shorter than it). terminate_all, at --max-pods 4:
+#   coordinator "which blocks landed" per pod   4 x ~90 s (30 s timeout, retried)       ~360 s
+#   one listing for this run's strays            60 s timeout + 2 x 60 s of 429 waits   ~180 s
+#   DELETE all + confirm, sponsor_bot.TERMINATE_BUDGET_S (wall clock)                    360 s
+#   the one call that may start just before that budget ends                            ~300 s
+#   = ~1,200 s. 1,500 s leaves margin. What is still unconfirmed keeps its sponsor_pods row open, and the next
+#   run's start terminates it before renting anything (Bot._sweep_leftovers).
 KillSignal=SIGINT
-TimeoutStopSec=300
+TimeoutStopSec=1500
 
 NoNewPrivileges=true
 PrivateTmp=true

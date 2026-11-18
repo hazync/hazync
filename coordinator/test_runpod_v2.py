@@ -57,7 +57,32 @@ if CONTROL:
     sb.RATE_LIMIT_RETRIES = 0                         # a 429 surfaces as a refusal
     sb.RunPod.ssh_of = lambda self, pod_id: None      # only the listing is read for SSH
     sb.REQUEST_REFUSALS = ()                          # M1: a 401/402/422 hidden behind another type's 400
-    sb.RunPod._stocked = lambda self, types: set()    # M1: an all-400 is always "no capacity"
+    sb.CAPACITY_LATCH_S = 0                           # H1(r2): a drought latches on the first miss
+    sb.RunPod._find_by_name = lambda self, name, cause: None   # L1(r2): a lost create answer is not looked up
+    sb.Bot._settle = lambda self, c, p, ok, note: setattr(p, "terminated", 1.0)   # M3(r2): unconfirmed = gone
+    sb.Bot._sweep_leftovers = lambda self, c: None    # M2(r2): an earlier run's pods are never swept
+
+    def _lenient_pods(self):                          # L3(r2): a 200 without a listing reads as "no pods" (r1)
+        out, cursor = [], None
+        while True:
+            d = self._req("GET", "/pods", query=dict({"limit": 1000}, **({"cursor": cursor} if cursor else {}))) or {}
+            out += [self._row(x) for x in (d.get("pods") or []) if x.get("id")]
+            pg = d.get("pagination") or {}
+            cursor = pg.get("nextCursor")
+            if not pg.get("hasNextPage") or not cursor:
+                return out
+    sb.RunPod.pods = _lenient_pods
+
+    def _serial(api, ids, sleep=None, tries=6, wait_s=5.0, budget_s=None, clock=None):   # M1(r2): one by one
+        done, left = [], []
+        for i in ids:
+            try:
+                api.terminate(i)
+                (done if i not in {x["id"] for x in api.pods()} else left).append(i)
+            except Exception:                         # noqa: BLE001
+                left.append(i)
+        return done, left
+    sb.terminate_many = _serial
     sb.RATE_LIMITED = -1                              # M2: a 429 counted as a refusal / ends the terminate tries
     sb.Bot._price_ok = lambda self, c, p, info: True  # L2: a price unknown at deploy is never checked again
 
@@ -76,6 +101,8 @@ class FakeV2:
         self.page_size = 1000
         self.rate_limit = 0                              # answer this many requests 429 first
         self.delete_status = {}                          # pod id -> forced status for DELETE
+        self.create_then_fail = 0                        # creates that make the pod but answer 500 (lost answer)
+        self.bad_listing = False                         # GET /v2/pods answers 200 without a listing
         self.create_cost = 0.74                          # what a new pod's `cost` reads at first
         self.cost_after = 0.74                           # ... and on every later GET
         self.catalog = [
@@ -150,7 +177,12 @@ class FakeV2:
                               "ports": [{"private": 22, "public": 40022, "type": "tcp", "ip": PUBLIC_IP}]}
             obj = self.pod_obj(pid)
             self.pods[pid]["cost"] = self.cost_after
+            if self.create_then_fail > 0:
+                self.create_then_fail -= 1
+                return self.problem(500, "upstream timeout")
             return 201, obj, ()
+        if method == "GET" and path == "/v2/pods" and self.bad_listing:
+            return 200, {"message": "ok"}, ()
         if method == "GET" and path == "/v2/pods":
             ids = sorted(self.pods)
             start = int(q.get("cursor") or 0)
@@ -258,25 +290,19 @@ for code in (401, 402, 422):
         check(raised is not None and raised.status == code,
               f"M1: HTTP {code} on the {order} type is a refusal even when another type answered 400 ({raised})")
 f = FakeV2()
-f.create_answers = [(400, {"status": 400, "detail": "env.PUBLIC_KEY: too long"})] * 2
-api = client(f)
+f.create_answers = [(400, {"status": 400, "detail": "There are no instances currently available"})] * 2
+api = client(f)          # f.catalog shows the 4090 at "LOW" -- the standing state (docs/OPERATIONS.md)
 try:
     got, raised = api.deploy("hz-sponsor-m1b", PUB, gpu_types=(R4090, A40)), None
 except sb.RunPodError as e:
     got, raised = None, e
-check(raised is not None and raised.status == 400 and "PUBLIC_KEY: too long" in str(raised) and "RTX 4090" in str(raised),
-      f"M1: 400 on every type while the catalogue shows stock for one is a REFUSAL naming the detail ({raised})")
-check(api.last_misses == [(R4090, "env.PUBLIC_KEY: too long"), (A40, "env.PUBLIC_KEY: too long")],
-      f"M1: every 400's detail is kept for the log ({api.last_misses})")
-f = FakeV2()
-f.create_answers = [(400, {"status": 400, "detail": "none"})] * 2
-f.catalog = None                                    # the catalogue cannot be read
-try:
-    got, raised = client(f).deploy("hz-sponsor-m1c", PUB, gpu_types=(R4090, A40)), None
-except sb.RunPodError as e:
-    got, raised = None, e
 check(raised is None and got is None,
-      "M1: when the catalogue cannot be read an all-400 stays a capacity miss -- a failed READ never latches")
+      f"H1(r2): 400 on every type is a CAPACITY MISS even though the catalogue shows LOW stock ({raised})")
+check(api.last_misses == [(R4090, "There are no instances currently available"),
+                          (A40, "There are no instances currently available")],
+      f"H1(r2): every 400's detail is kept for the log and the streak ({api.last_misses})")
+check(not any(r[1] == "/v2/catalog/gpus" for r in f.reqs), "H1(r2): and no catalogue read decides it")
+
 
 # ── 3. ⛔ 429 is retried after Retry-After ───────────────────────────────────────────────────────────
 print("== the per-user quota ==")
@@ -484,15 +510,68 @@ class QuotaAPI:
         return [] if self.gone else [{"id": "pX"}]
 
 
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+        self.sleeps = []
+
+    def sleep(self, x):
+        self.sleeps.append(x)
+        self.t += x
+
+    def __call__(self):
+        return self.t
+
+
+clk = Clock()
 qa = QuotaAPI(limited=20)
-waits = []
-ok = sb.terminate_confirmed(qa, "pX", sleep=waits.append, tries=6, wait_s=5)
+ok = sb.terminate_confirmed(qa, "pX", sleep=clk.sleep, tries=6, wait_s=5, budget_s=10 ** 6, clock=clk)
 check(ok and qa.terminated == 1,
       f"M2: twenty 429'd DELETEs do not use up terminate_confirmed's 6 tries -- the pod is still released "
-      f"({ok}, waited {sum(waits):.0f}s)")
+      f"({ok}, waited {clk.t:.0f}s)")
+clk = Clock()
 qa = QuotaAPI(limited=10 ** 6)
-ok = sb.terminate_confirmed(qa, "pX", sleep=lambda s: None, tries=6, wait_s=5)
-check(not ok, "M2: but a quota that NEVER clears ends in 'unconfirmed' (loud), not a hang")
+ok = sb.terminate_confirmed(qa, "pX", sleep=clk.sleep, tries=6, wait_s=5, clock=clk)
+check(not ok and clk.t <= sb.TERMINATE_BUDGET_S,
+      f"M1(r2): a quota that NEVER clears ends in 'unconfirmed' within the WALL-CLOCK budget "
+      f"({clk.t:.0f}s of {sb.TERMINATE_BUDGET_S}s)")
+
+
+class OrderAPI:
+    """Lists every pod until it has been DELETEd once; the first DELETE of `slow` answers 429 Retry-After 90."""
+    def __init__(self, ids, slow=None):
+        self.ids, self.calls, self.deleted, self.slow = set(ids), [], set(), slow
+
+    def terminate(self, pid):
+        self.calls.append(("DELETE", pid))
+        if pid == self.slow:
+            self.slow = None
+            raise sb.RunPodError("HTTP 429", status=429, retry_after=90)
+        self.deleted.add(pid)
+
+    def pods(self):
+        self.calls.append(("LIST", None))
+        return [{"id": i, "name": i, "status": "RUNNING"} for i in self.ids - self.deleted]
+
+
+oa = OrderAPI(["a", "b", "c"])
+clk = Clock()
+done, left = sb.terminate_many(oa, ["a", "b", "c"], sleep=clk.sleep, clock=clk)
+check(oa.calls[:4] == [("DELETE", "a"), ("DELETE", "b"), ("DELETE", "c"), ("LIST", None)] and not left,
+      f"M1(r2): every DELETE goes out FIRST, then one listing confirms them all ({oa.calls[:4]})")
+oa = OrderAPI(["a", "b"], slow="b")
+clk = Clock()
+done, left = sb.terminate_many(oa, ["a", "b"], sleep=clk.sleep, clock=clk)
+check(not left and 90 in clk.sleeps,
+      f"M1(r2): a 429's Retry-After (90 s) is honoured, inside the budget ({clk.sleeps})")
+f = FakeV2()
+f.rate_limit = 10
+try:
+    client(f).pods()
+    ra = None
+except sb.RunPodError as e:
+    ra = e.retry_after
+check(ra == 2.0, f"M1(r2): the client carries Retry-After on the RunPodError it raises ({ra})")
 
 
 class RL:
@@ -554,7 +633,10 @@ finally:
     tip_smoke.time.sleep = real_sleep
 check(raised is None and "c1" in ready,
       f"M2: wait_for_ssh survives 429s from ports_of and still brings the card up ({raised!r}, {sorted(ready)})")
-check(slept[:2] == [20, 40], f"M2: and it BACKS OFF while RunPod refuses (slept {slept[:3]})")
+backoffs = [x for x in slept if x != tip_smoke.PORTS_MIN_GAP_S]
+check(backoffs[:2] == [20, 40], f"M2: and it BACKS OFF while RunPod refuses (slept {backoffs[:3]})")
+check(slept.count(tip_smoke.PORTS_MIN_GAP_S) >= 3,
+      f"M3(r2): and every poll is PACED for the 120/min sustained quota ({slept.count(tip_smoke.PORTS_MIN_GAP_S)} gaps)")
 
 # ── L2. a price of 0 is unknown, not free ───────────────────────────────────────────────────────────
 print("== L2: cost 0 while PROVISIONING ==")
@@ -621,6 +703,240 @@ with tempfile.TemporaryDirectory() as home:
     check(r.returncode != 0 and not r.stdout.strip(),
           f"L1: a 429 listing makes pod.sh status FAIL, not print 'no pods' (rc {r.returncode}, {r.stdout[:60]!r})")
 
+# ── r2 H1. a drought never latches; one identical 400 for hours pages, then latches ──────────────────
+print("== H1(r2): the capacity streak ==")
+D1 = "There are no instances currently available"
+with tempfile.TemporaryDirectory() as home:
+    t0 = 1_000_000.0
+    seen = {h / 2: sb.capacity_note(home, D1, t0 + h * 1800) for h in range(0, 25)}    # every 30 min, 0..12 h
+    events = {h: v for h, v in seen.items() if v}
+    check({h: v for h, v in events.items() if v == "alert"} == {2.0: "alert", 8.0: "alert"},
+          f"H1(r2): one identical 400, seen every 30 min, pages at 2 h and again 6 h later, never in between ({events})")
+    check(events.get(12.0) == "latch" and all(h >= 12 for h, v in events.items() if v == "latch"),
+          f"H1(r2): and latches at 12 h of the same answer, not before ({events})")
+    check(sb.capacity_note(home, "a different detail", t0 + 12.1 * 3600) is None,
+          "H1(r2): a different detail starts a new streak")
+    sb.capacity_note(home, D1, t0)
+    check(sb.capacity_note(home, D1, t0 + 5 * 3600) is None,
+          "H1(r2): a gap of over 2 h without a miss ends the streak (the stock came back, or nothing waited)")
+
+
+class MissAPI:
+    """deploy() always misses, every type with the same detail."""
+    def __init__(self, details):
+        self.details, self.last_misses, self.deploys = details, [], 0
+
+    def deploy(self, name, pub):
+        self.deploys += 1
+        self.last_misses = [(f"T{i}", d) for i, d in enumerate(self.details)]
+        return None
+
+
+def looks(api, n, home=None, clock=None):
+    with tempfile.TemporaryDirectory() as d:
+        logs = []
+        bot = sb.Bot(os.path.join(d, "bot.db"), api, RL(), max_pods=2, max_usd=10, max_usd_per_hour=5,
+                     capacity_backoff_s=0, log=logs.append, clock=clock or time.time)
+        bot.state_home = home
+        real = sb.pending_work
+        sb.pending_work = lambda *a, **k: [1]
+        try:
+            for _ in range(n):
+                bot._launch(None, bot.clock())
+        finally:
+            sb.pending_work = real
+        return bot, logs
+
+
+import time   # noqa: E402
+bot, logs = looks(MissAPI([D1, D1]), 3)
+check(bot.stop_reason is None and bot._refusals == 0 and not bot.alert_exit,
+      f"H1(r2): three looks of a normal drought (LOW stock, all-400) neither latch nor page "
+      f"({bot.stop_reason}, {bot._refusals})")
+check(any(D1 in m for m in logs), "H1(r2): and the log says RunPod's own words for the miss")
+with tempfile.TemporaryDirectory() as home:
+    now = time.time()
+    json.dump({"detail": D1, "first": now - 2.5 * 3600, "last": now - 300, "alerted": None},
+              open(os.path.join(home, sb.CAPACITY_STATE), "w"))
+    bot, logs = looks(MissAPI([D1, D1]), 1, home=home)
+    check(bot.alert_exit and bot.stop_reason is None,
+          f"H1(r2): 2.5 h of the same 400 PAGES (exit {sb.CAPACITY_ALERT_EXIT}) without latching ({bot.stop_reason})")
+    json.dump({"detail": D1, "first": now - 13 * 3600, "last": now - 300, "alerted": now - 3600},
+              open(os.path.join(home, sb.CAPACITY_STATE), "w"))
+    bot, logs = looks(MissAPI([D1, D1]), 1, home=home)
+    check(bot.stop_reason == "runpod", f"H1(r2): 13 h of the same 400 latches ({bot.stop_reason})")
+    json.dump({"detail": D1, "first": now - 13 * 3600, "last": now - 300, "alerted": now - 3600},
+              open(os.path.join(home, sb.CAPACITY_STATE), "w"))
+    bot, logs = looks(MissAPI([D1, "another reason"]), 1, home=home)
+    check(bot.stop_reason is None and not os.path.exists(os.path.join(home, sb.CAPACITY_STATE)),
+          "H1(r2): misses whose details DIFFER between types end the streak (that is capacity, not a request)")
+
+# ── r2 M3. an unconfirmed termination is not a termination ────────────────────────────────────────────
+print("== M3(r2): unconfirmed pods stay live ==")
+
+
+class StuckAPI:
+    """Rents fine; DELETE is accepted and the pod never leaves the listing."""
+    def __init__(self):
+        self.n, self.last_misses = 0, []
+
+    def deploy(self, name, pub):
+        self.n += 1
+        return {"id": f"s{self.n}", "name": name, "gpu_type": A40, "cost_per_hr": 0.4}
+
+    def terminate(self, pid):
+        pass
+
+    def pods(self):
+        return [{"id": f"s{i}", "name": f"x{i}", "status": "RUNNING"} for i in range(1, self.n + 1)]
+
+    def pod(self, pid):
+        return None
+
+
+with tempfile.TemporaryDirectory() as d:
+    clk = Clock()
+    clk.t = 1000.0
+    sa = StuckAPI()
+    bot = sb.Bot(os.path.join(d, "bot.db"), sa, RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
+                 capacity_backoff_s=0, log=lambda m: None, clock=clk, sleep=clk.sleep, confirm_wait_s=0)
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    real = sb.pending_work
+    sb.pending_work = lambda *a, **k: [1, 2]
+    try:
+        bot._launch(c, clk())
+        p1 = bot.pods[0]
+        bot._terminate(c, p1, "test", budget_s=10)
+        s1 = bot.spend(clk() + 3600)
+        bot._launch(c, clk())
+    finally:
+        sb.pending_work = real
+    row = c.execute("SELECT terminated_at FROM sponsor_pods WHERE pod_id='s1'").fetchone()
+    c.close()
+check(p1.live and p1.state == "unconfirmed" and "s1" in bot.unconfirmed,
+      f"M3(r2): a pod RunPod still lists after terminate stays LIVE, state unconfirmed ({p1.live}, {p1.state})")
+check(s1 >= 0.39, f"M3(r2): its spend keeps counting (${s1:.2f} an hour later)")
+check(sa.n == 1, f"M3(r2): and no replacement is rented on top of it at --max-pods 1 ({sa.n} deploys)")
+check(row is not None and row[0] is None, "M3(r2): its row keeps terminated_at NULL, for the next start to sweep")
+
+with tempfile.TemporaryDirectory() as d:
+    sa = StuckAPI()
+    sa.n = 2                                             # s1, s2 left by an "earlier run"
+    bot = sb.Bot(os.path.join(d, "bot.db"), sa, RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
+                 log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0)
+    c = sb.connect(bot.db_path)
+    sb.ensure_tables(c)
+    c.execute("INSERT INTO sponsor_pods(pod_id, name, gpu_type, cost_per_hr, created_at) VALUES('s1','hz-sponsor-1-1','A40',0.4,1)")
+    c.commit()
+    try:
+        bot._sweep_leftovers(c)
+        refused = None
+    except sb.BotRefused as e:
+        refused = e
+    c.close()
+check(refused is not None and "s1" in str(refused),
+      f"M2(r2): the next start finds the earlier run's unconfirmed pod, cannot stop it, and REFUSES to rent ({refused})")
+
+# ── r2 L1. a lost create answer is looked up by name before anything else is rented ──────────────────
+print("== L1(r2): a create whose answer was lost ==")
+f = FakeV2()
+f.create_then_fail = 1
+got = client(f).deploy("hz-sponsor-l1", PUB, gpu_types=(R4090, A40))
+posts = [r for r in f.reqs if r[0] == "POST"]
+check(got is not None and got["gpu_type"] == R4090 and len(posts) == 1 and len(f.pods) == 1,
+      f"L1(r2): a 500 on a create that DID make the pod finds it by name, and rents no second type "
+      f"({got}, {len(posts)} creates, {len(f.pods)} pods)")
+
+# ── r2 L3. a 200 without a listing is not "no pods" ──────────────────────────────────────────────────
+print("== L3(r2): a listing that is not a listing ==")
+f = FakeV2()
+f.pods["z1"] = {"name": "z1", "gpu": A40, "cost": 1}
+f.bad_listing = True
+try:
+    client(f).pods()
+    raised = None
+except sb.RunPodError as e:
+    raised = e
+check(raised is not None, f"L3(r2): GET /v2/pods answering 200 without `pods`/`pagination` RAISES ({raised})")
+f.delete_status["z1"] = 500
+clk = Clock()
+check(not sb.terminate_confirmed(client(f), "z1", sleep=clk.sleep, clock=clk),
+      "L3(r2): so a termination is never 'confirmed' by a listing that was not one")
+
+# ── r2 C1. a rent that stops half way: every pod tracked, released, and the record kept until the account agrees
+print("== C1(r2): rent_uniform and the teardown ==")
+
+
+class RentAPI:
+    def __init__(self, ok, then, listing_fails=False):
+        self.ok, self.then, self.n, self.live, self.listing_fails = ok, then, 0, set(), listing_fails
+
+    def deploy_listening(self, name, pub, gpu_types):
+        if self.n >= self.ok:
+            if self.then == "miss":
+                return None
+            raise sb.RunPodError("HTTP 402 Payment Required: insufficient balance", status=402)
+        self.n += 1
+        self.live.add(f"r{self.n}")
+        return {"id": f"r{self.n}", "name": name, "gpu_type": gpu_types[0], "price": 0.5, "dc": None}
+
+    def terminate(self, pid):
+        self.live.discard(pid)
+
+    def pods(self):
+        if self.listing_fails:
+            raise sb.RunPodError("HTTP 503", status=503)
+        return [{"id": i, "name": i, "status": "RUNNING"} for i in self.live]
+
+
+if CONTROL:
+    def _old_rent(api, gt, upto, pub, rented_path, created, unreleased, prefix=tip_smoke.PREFIX):
+        got = []
+        for i in range(upto):
+            p_ = api.deploy_listening(f"{prefix}{i+1}", pub, gpu_types=(gt,))
+            if not p_:
+                break
+            got.append(p_)
+            with open(rented_path, "w") as fh:
+                json.dump(got, fh)
+        return got
+    tip_smoke.rent_uniform = _old_rent
+
+    def _old_release(api, rented_path, created, unreleased):      # C1(r2): release `created`, check `created`
+        for x in created:
+            api.terminate(x["id"])
+        left = [x["id"] for x in created if x["id"] in {y["id"] for y in api.pods()}]
+        if not left:
+            os.path.exists(rented_path) and os.unlink(rented_path)
+        return left
+    tip_smoke.release_recorded = _old_release
+with tempfile.TemporaryDirectory() as d:
+    rp_ = os.path.join(d, "rented.json")
+    ra = RentAPI(ok=3, then="402")
+    created, unreleased = [], []
+    try:
+        tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased)
+        raised = None
+    except sb.RunPodError as e:
+        raised = e
+    check(raised is not None and sorted(p["id"] for p in created) == ["r1", "r2", "r3"],
+          f"C1(r2): 3 rented then a 402: all 3 are handed to the tracked set ({[p['id'] for p in created]})")
+    left = tip_smoke.release_recorded(ra, rp_, [], [])
+    check(left == [] and not ra.live and not os.path.exists(rp_),
+          f"C1(r2): the teardown releases them FROM THE RECORD even when `created` is empty, then drops the record "
+          f"({left}, live {sorted(ra.live)})")
+with tempfile.TemporaryDirectory() as d:
+    rp_ = os.path.join(d, "rented.json")
+    ra = RentAPI(ok=3, then="miss")
+    created, unreleased = [], []
+    got = tip_smoke.rent_uniform(ra, A40, 5, PUB, rp_, created, unreleased)
+    check(len(got) == 3, f"C1(r2): 3 rented then a 400 (a miss) returns the 3 -- no exception, nothing lost ({len(got)})")
+    ra.listing_fails = True
+    left = tip_smoke.release_recorded(ra, rp_, [], [])
+    check(left is None and os.path.exists(rp_),
+          "C1(r2): when the account cannot be listed the record is KEPT (never 'account check: clean')")
+
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
 ROOT = pathlib.Path(HERE).parent
@@ -650,6 +966,17 @@ print()
 # ⚠ NAME EVERY ONE AND COUNT THEM: each is the consequence of one mutation above (some share a cause).
 EXPECTED_CONTROL = {
     "400 for every type is 'no capacity'",
+    "C1(r2): 3 rented then a 402: all 3 are handed to the tracked set",
+    "C1(r2): the teardown releases them FROM THE RECORD even when `created` is empty, then drops the record",
+    "C1(r2): when the account cannot be listed the record is KEPT",
+    "H1(r2): 2.5 h of the same 400 PAGES",
+    "H1(r2): 400 on every type is a CAPACITY MISS even though the catalogue shows LOW stock",
+    "H1(r2): a different detail starts a new streak",
+    "H1(r2): a gap of over 2 h without a miss ends the streak",
+    "H1(r2): and latches at 12 h of the same answer, not before",
+    "H1(r2): every 400's detail is kept for the log and the streak",
+    "H1(r2): one identical 400, seen every 30 min, pages at 2 h and again 6 h later, never in between",
+    "H1(r2): three looks of a normal drought",
     "H1: a pod with only a 100.65 address",
     "H1: and the same for 9110",
     "H1: experimental/libzync-bench/gpu/fleet/live/grab2.sh picks the first GLOBAL mapping, not 100.65 or a later one",
@@ -665,19 +992,25 @@ EXPECTED_CONTROL = {
     "H1: experimental/libzync-bench/signet/genesis/gpu_run.sh picks the first GLOBAL mapping, not 100.65 or a later one",
     "H1: experimental/libzync-bench/signet/gpu_r4/gpu_run2.sh picks the first GLOBAL mapping, not 100.65 or a later one",
     "H1: the GLOBAL 22 mapping wins whether the 100.65 entry comes first or last",
+    "L1(r2): a 500 on a create that DID make the pod finds it by name, and rents no second type",
     "L1: a 429 listing makes pod.sh status FAIL, not print 'no pods'",
     "L2: a pod deployed at cost 0 whose price turns out $0.3/h against a $0.50 ceiling is booting before it boots",
     "L2: a pod deployed at cost 0 whose price turns out $0.9/h against a $0.50 ceiling is terminated before it boots",
-    "M1: 400 on every type while the catalogue shows stock for one is a REFUSAL naming the detail",
+    "L3(r2): GET /v2/pods answering 200 without `pods`/`pagination` RAISES",
+    "M1(r2): a 429's Retry-After",
+    "M1(r2): every DELETE goes out FIRST, then one listing confirms them all",
     "M1: HTTP 401 on the first type is a refusal even when another type answered 400",
     "M1: HTTP 402 on the first type is a refusal even when another type answered 400",
     "M1: HTTP 422 on the first type is a refusal even when another type answered 400",
-    "M1: every 400's detail is kept for the log",
-    "M1: when the catalogue cannot be read an all-400 stays a capacity miss -- a failed READ never latches",
+    "M2(r2): the next start finds the earlier run's unconfirmed pod, cannot stop it, and REFUSES to rent",
     "M2: a 429 on deploy is NOT a refusal -- it never moves the latch",
     "M2: and it BACKS OFF while RunPod refuses",
     "M2: twenty 429'd DELETEs do not use up terminate_confirmed's 6 tries -- the pod is still released",
     "M2: wait_for_ssh survives 429s from ports_of and still brings the card up",
+    "M3(r2): a pod RunPod still lists after terminate stays LIVE, state unconfirmed",
+    "M3(r2): and every poll is PACED for the 120/min sustained quota",
+    "M3(r2): and no replacement is rented on top of it at --max-pods 1",
+    "M3(r2): its spend keeps counting",
     "M3: every rp/gqlbal curl has --max-time",
     "RunPod's own 403",
     "a pod whose listing has no runtime still gets its SSH and boots",

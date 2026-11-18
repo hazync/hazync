@@ -104,10 +104,80 @@ class SmokeRunPod(sponsor_bot.RunPod):
         return {"id": p["id"], "name": name, "gpu_type": gt, "price": price, "dc": dc}
 
 
-# ⛔ ONE GET PER POD PER ROUND, ON A QUOTA SHARED BY EVERY PROCESS ON THE KEY (180/min, read from
-# RateLimit-Policy 2026-11-18). A 40-card fleet polled every 10 s is 240/min on its own. A 429 (or any read
-# error) is NOT "no port yet" and must not end the wait: the round stops, the wait backs off, and it goes on.
+def rent_uniform(api, gt, upto, pub, rented_path, created, unreleased, prefix=PREFIX):
+    """Rent up to `upto` pods of ONE type, recording each in rented.json the instant it exists. Stops at the
+    first capacity miss. ⛔ WHATEVER STOPS IT (a 402, a refusal, a signal), what it rented joins `created` before
+    the exception leaves: these pods lived only in this local list, the teardown released `created`, and a stub
+    run left 17 pods billing behind "account check: clean"."""
+    got = []
+    try:
+        for i in range(upto):
+            p = api.deploy_listening(f"{prefix}{i+1}", pub, gpu_types=(gt,))
+            if not p:
+                break
+            got.append(p)
+            with open(rented_path, "w") as fh:
+                json.dump(unreleased + got, fh, indent=1)
+    except BaseException:
+        created.extend(got)
+        raise
+    return got
+
+
+def release_short(api, gt, got, rented_path, unreleased):
+    """Release a type that could not field the fleet. ⛔ CONFIRMED, NOT FIRE-AND-FORGET: what is not confirmed
+    gone stays in `unreleased` (and in rented.json) for the teardown, instead of the record being emptied."""
+    try:
+        _, left = sponsor_bot.terminate_many(api, [p["id"] for p in got])
+    except Exception as e:                                         # noqa: BLE001
+        log(f"  ⚠ could not release {gt} pods: {e}")
+        left = [p["id"] for p in got]
+    unreleased.extend(p for p in got if p["id"] in set(left))
+    if left:
+        log(f"  ⛔ {len(left)} {gt} pod(s) NOT confirmed released: {left} -- kept for the teardown")
+    with open(rented_path, "w") as fh:
+        json.dump(unreleased, fh, indent=1)
+
+
+def release_recorded(api, rented_path, created, unreleased):
+    """The teardown's release. ⛔ RELEASE WHAT WAS RECORDED, NOT ONLY WHAT IS IN `created`: a pod can be in
+    rented.json and not in `created` (a rent that raised half way, a short type left unconfirmed). The account is
+    checked against EVERY recorded id, and rented.json is removed only when that check COULD BE MADE and found
+    none of them. Returns the ids still listed (None: the check could not be made)."""
+    recorded = []
+    try:
+        with open(rented_path) as fh:
+            recorded = [str(p["id"]) for p in json.load(fh) if p.get("id")]
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    mine = list(dict.fromkeys([str(p["id"]) for p in created] + [str(p["id"]) for p in unreleased] + recorded))
+    verdict = tip_session.terminable(mine, mine)
+    log(f"terminating {verdict['terminate']}  (protected={verdict['protected']} not-ours={verdict['not_ours']})")
+    done, _ = sponsor_bot.terminate_many(api, verdict["terminate"]) if verdict["terminate"] else ([], [])
+    for pid in verdict["terminate"]:
+        log(f"  {pid}: {'gone' if pid in done else '⛔ STILL LISTED — TERMINATE BY HAND'}")
+    try:
+        listed = {str(p["id"]) for p in api.pods() if (p.get("status") or "") != "TERMINATED"}
+    except Exception as e:                                         # noqa: BLE001
+        log(f"⛔ account check FAILED ({str(e)[:90]}) — {rented_path} KEPT: run --cleanup when RunPod answers")
+        return None
+    left = [i for i in verdict["terminate"] if i in listed]
+    log(f"account check: {'clean' if not left else '⛔ STILL PRESENT: ' + str(left)}")
+    if not left:
+        try:
+            os.unlink(rented_path)     # every recorded pod is gone; the record would only mislead
+        except OSError:
+            pass
+    return left
+
+
+# ⛔ ONE GET PER POD PER ROUND, ON A QUOTA SHARED BY EVERY PROCESS ON THE KEY: 180/min, but 7,200/hour, so
+# 120/min SUSTAINED (RateLimit-Policy, read 2026-11-18). A 40-card fleet polled every 10 s is 240/min on its own.
+# So the polls are PACED (PORTS_MIN_GAP_S between two, <= 80/min, leaving room for the bot and the recruiter on
+# the same key), and a 429 (or any read error) is NOT "no port yet" and must not end the wait: the round stops,
+# the wait backs off, and it goes on.
 PORTS_BACKOFF_S = (10, 20, 40, 60)
+PORTS_MIN_GAP_S = 0.75
 
 
 def _ports_or_none(api, pod_id):
@@ -129,6 +199,7 @@ def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
         for p in pods:
             if p["name"] in ready:
                 continue
+            time.sleep(PORTS_MIN_GAP_S)
             ports = _ports_or_none(api, p["id"])
             if ports is None:
                 failed = True
@@ -1260,6 +1331,10 @@ def main():
 
     ssh = tip_driver.SSHRunner(a.key)
     created, helpers, t_start = [], [], time.time()
+    # Pods this run rented and could NOT confirm released before the fleet formed (a short uniform type). They
+    # are not the fleet, but they bill: the teardown releases them with everything else, and rented.json keeps
+    # them until it has.
+    unreleased = []
     rented_path = os.path.join(a.rundir, "rented.json")
     os.makedirs(a.rundir, exist_ok=True)
 
@@ -1363,7 +1438,7 @@ def main():
             # ⚠ The record is now THIS run's to maintain: a card dropped at a gate must leave the
             # file, or a later --cleanup would try to release a pod that is already gone.
             with open(rented_path, "w") as fh:
-                json.dump(created, fh, indent=1)
+                json.dump(unreleased + created, fh, indent=1)
         else:
             # ⚠ `rented` NOT `want` (hazync#492). `want` is reused at the prover-fetch gate for the
             # BINARY SIZE, so a message down there that reads `want` prints 410441528 where a card count
@@ -1386,19 +1461,8 @@ def main():
             # type down: a partial fleet held while we try the next type costs seconds of billing, and a
             # mixed fleet costs 40% of the run. Only when NO single type can field the minimum do we mix
             # — deliberately, and labelled.
-            def rent_uniform(gt, upto):
-                got = []
-                for i in range(upto):
-                    p = api.deploy_listening(f"{PREFIX}{i+1}", pub, gpu_types=(gt,))
-                    if not p:
-                        break
-                    got.append(p)
-                    with open(rented_path, "w") as fh:
-                        json.dump(got, fh, indent=1)
-                return got
-
             for gt in gpu_types:
-                got = rent_uniform(gt, want)
+                got = rent_uniform(api, gt, want, pub, rented_path, created, unreleased)
                 # ⛔ TARGET, NOT FLOOR: a type that can field only the floor should not stop us
                 # trying the next one, which might field the target. The final gate check is what
                 # accepts a short fleet, after the gates have had their say.
@@ -1409,15 +1473,7 @@ def main():
                 if got:
                     log(f"  {gt} could field only {len(got)} of the {a.cards} needed — releasing and "
                         f"trying the next type (a mixed fleet costs more than these seconds do)")
-                    for p in got:
-                        # ⛔ CONFIRMED, NOT FIRE-AND-FORGET. A terminate that silently failed here would
-                        # leave a pod billing for the whole run with nothing in `created` to release it.
-                        try:
-                            sponsor_bot.terminate_confirmed(api, p["id"])
-                        except Exception as e:
-                            log(f"  ⚠ could not release {p['name']}: {e}")
-                    with open(rented_path, "w") as fh:
-                        json.dump([], fh, indent=1)
+                    release_short(api, gt, got, rented_path, unreleased)
                 else:
                     log(f"  {gt}: no capacity")
 
@@ -1454,7 +1510,7 @@ def main():
                 # ssh, so the teardown did not run for minutes and the pods had to be killed by hand.
                 # `--cleanup` reads this file and releases whatever is in it, whatever happened.
                 with open(rented_path, "w") as fh:
-                    json.dump(created, fh, indent=1)
+                    json.dump(unreleased + created, fh, indent=1)
                 log(f"rented {name}  {p['gpu_type']}  ${p['price']:.3f}/hr  id={p['id']}"
                     f"  (recorded in {rented_path})")
 
@@ -1804,7 +1860,7 @@ def main():
                     _release_pod(p, "it could not reach the aggregate")
                 created = [x for x in created if x["name"] not in bad]
                 with open(rented_path, "w") as fh:
-                    json.dump(created, fh, indent=1)
+                    json.dump(unreleased + created, fh, indent=1)
                 if len(order) < 2:
                     raise SystemExit(
                         f"only {len(order)} card(s) can reach the aggregate — a distributed run "
@@ -1898,7 +1954,7 @@ def main():
                 _release_pod(p, "its GPU cannot prove")
             created = [x for x in created if x["name"] not in set(duds)]
             with open(rented_path, "w") as fh:
-                json.dump(created, fh, indent=1)
+                json.dump(unreleased + created, fh, indent=1)
             if len(order) < 2:
                 raise SystemExit(f"only {len(order)} card(s) have a working GPU")
             joined = tip_dashboard.feed_records(order, fleet)
@@ -2601,7 +2657,7 @@ def main():
                 # them.
                 try:
                     with open(rented_path, "w") as fh:
-                        json.dump(created, fh, indent=1)
+                        json.dump(unreleased + created, fh, indent=1)
                 except OSError as exc:
                     log(f"  ⛔ COULD NOT UPDATE {rented_path} ({exc}) — if this driver dies, "
                         f"`--cleanup` will not know about the {len(joined)} card(s) just added. "
@@ -2873,20 +2929,7 @@ def main():
             for p in created:
                 log(f"    {p['name']}  {p['id']}  ${float(p.get('price') or 0):.3f}/hr")
         else:
-            mine = [p["id"] for p in created]
-            verdict = tip_session.terminable(mine, mine)
-            log(f"terminating {verdict['terminate']}  "
-                f"(protected={verdict['protected']} not-ours={verdict['not_ours']})")
-            for pid in verdict["terminate"]:
-                ok = sponsor_bot.terminate_confirmed(api, pid)
-                log(f"  {pid}: {'gone' if ok else '⛔ STILL LISTED — TERMINATE BY HAND'}")
-            left = {p["name"] for p in api.pods()} & {p["name"] for p in created}
-            log(f"account check: {'clean' if not left else '⛔ STILL PRESENT: ' + str(left)}")
-            if not left:
-                try:
-                    os.unlink(rented_path)     # nothing outstanding; the record would only mislead
-                except OSError:
-                    pass
+            release_recorded(api, rented_path, created, unreleased)
 
 
 if __name__ == "__main__":

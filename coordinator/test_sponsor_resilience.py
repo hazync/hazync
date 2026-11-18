@@ -148,8 +148,12 @@ else:
     # ⛔ The latch must be written for ANY non-success, not just a non-zero exit: a SIGKILL or a
     # TimeoutStopSec kill must latch too, which is exactly what $SERVICE_RESULT covers and
     # $EXIT_STATUS does not.
-    check("$SERVICE_RESULT" in UNIT and "$EXIT_STATUS" not in UNIT,
-          "⚠ keyed on $SERVICE_RESULT, so a signal or a timeout latches as well as a bad exit")
+    # ⚠ $EXIT_STATUS appears ONLY inside the exit-code-7 exception (page, don't latch: sponsor_bot
+    # CAPACITY_ALERT_EXIT), which is itself gated on $SERVICE_RESULT = exit-code.
+    _post = [l for l in UNIT.splitlines() if l.startswith("ExecStopPost=")][0]
+    check("$SERVICE_RESULT" in UNIT and UNIT.count("$EXIT_STATUS") == 1 and
+          '{ test "$SERVICE_RESULT" = exit-code && test "$EXIT_STATUS" = 7; }' in _post,
+          "⚠ keyed on $SERVICE_RESULT, so a signal or a timeout latches as well as a bad exit (only a clean exit 7 does not)")
     # ⚠ The latch lives under the one path the sandbox can write.
     check("ReadWritePaths=/var/lib/hazync/sponsor-bot" in UNIT,
           "and the latch path is inside ReadWritePaths, or ExecStopPost could not write it")
