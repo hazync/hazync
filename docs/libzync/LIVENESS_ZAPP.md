@@ -126,8 +126,8 @@ and that run's `history.bin` (`zapps/liveness/vectors/`), 15.11.2026; all of it 
 | zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, a dev-mode and a tampered receipt, `created=` / `coinbase=`, a re-created outpoint, one spelling per question, the 0x05 undo leaf, regtest above block 200, every bit flipped, the facts JSON's keys (18.11.2026) | 13/13 (1 timing test ignored) |
 | `zapp-liveness serve` `/live` route | 1/1 |
 | CLI and producer, `vectors/run.sh` | 34/34 (16.11.2026: RISC0_DEV_MODE set on the real receipt, refused; `--image 46666b6f` refuses the receipt of superseded image 8888d59c; with none given it verifies as that superseded image) |
-| C ABI, `ffi/test_liveness.c` | 20/20 (18.11.2026: 7 cases on the facts JSON's keys: a misspelt key beside and alone, the key twice, `expect` inside, not an object, an unknown fact field) |
-| WASM, `wasm/test-liveness.mjs` | 31/31 since 18.11.2026 (the image id pinned exactly and the image that verified reported; the raw frame: the glue's bytes, a trailing byte, cut short; the facts JSON's keys, the C ABI's 7 cases) (and the frame unit test, 1/1) |
+| C ABI, `ffi/test_liveness.c` | 21/21 (18.11.2026: 8 cases on the facts JSON's keys: a misspelt key beside and alone, the key twice, `expect` inside (null too), not an object, an unknown fact field) |
+| WASM, `wasm/test-liveness.mjs` | 32/32 since 18.11.2026 (the image id pinned exactly and the image that verified reported; the raw frame: the glue's bytes, a trailing byte, cut short; the facts JSON's keys, the C ABI's 8 cases) (and the frame unit test, 1/1) |
 | C ABI beside the core's in one program, `ffi/test_with_core.c` | OK (16.11.2026) |
 | `zapps/common` | 8/8 and the zapp-checks.sh controls; `zapps/corecheck` 2/2 (16.11.2026) |
 

@@ -105,6 +105,7 @@ for (const [name, j, want, why] of [['facts JSON: documented key', `{"liveness":
                                     ['facts JSON: misspelt alone', `{"livenes": [${F}]}`, 'fail', 'unknown field `livenes`'],
                                     ['facts JSON: key twice', `{"liveness": [${F}], "liveness": [${F}]}`, 'fail', 'duplicate field `liveness`'],
                                     ['facts JSON: expect inside', `{"liveness": [${F}], "expect": "${TIP}"}`, 'fail', '"expect" inside'],
+                                    ['facts JSON: expect null', `{"liveness": [${F}], "expect": null}`, 'fail', '"expect" inside'],
                                     ['facts JSON: an array', `[[${F}]]`, 'fail', 'not an object'],
                                     ['facts JSON: fact extra key', `{"liveness": [{"x": 1, "proof": "00", "ask": "q"}]}`, 'fail', 'unknown field `x`']]) {
   const r = raw(frame(j));

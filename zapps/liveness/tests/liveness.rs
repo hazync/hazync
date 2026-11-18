@@ -438,6 +438,9 @@ fn the_facts_json_takes_only_its_documented_key() {
         (format!(r#"{{"livenes": [{f}]}}"#), "unknown field `livenes`"),
         (format!(r#"{{"liveness": [{f}], "extra": 1}}"#), "unknown field `extra`"),
         (format!(r#"{{"liveness": [{f}], "expect": "200:00"}}"#), "\"expect\" inside the facts JSON is refused"),
+        // in any form, null too (review 11-18 round 2): the old code refused any "expect" key
+        (format!(r#"{{"liveness": [{f}], "expect": null}}"#), "\"expect\" inside the facts JSON is refused"),
+        (format!(r#"{{"expect": null, "liveness": [{f}]}}"#), "\"expect\" inside the facts JSON is refused"),
         ("{}".to_string(), "has no \"liveness\""),
         (format!("[{f}]"), "not an object"),
         ("null".to_string(), "not an object"),
@@ -447,7 +450,7 @@ fn the_facts_json_takes_only_its_documented_key() {
         (r#"{"liveness": [{"proof": "00", "ask": "q", "extra": 1}]}"#.to_string(), "unknown field `extra`"),
         (r#"{"liveness": [{"proof": "00", "ask": "q"}], "liveness": []}"#.to_string(), "duplicate field `liveness`"),
         (r#"{"liveness": [{"proof": "00", "proof": "01", "ask": "q"}]}"#.to_string(), "duplicate field `proof`"),
-        (format!(r#"{{"expect": "200:00", "liveness": [{f}], "expect": "200:00"}}"#), "duplicate field `expect`"),
+        (format!(r#"{{"expect": "200:00", "liveness": [{f}], "expect": "200:00"}}"#), "\"expect\" inside the facts JSON is refused"),
     ] {
         let e = facts_from_json(j.as_bytes()).unwrap_err();
         assert!(e.contains(why), "{j}: {e}");

@@ -188,15 +188,16 @@ pub struct LivenessFact {
     pub ask: String,
 }
 
-/// The facts JSON of the C ABI and WASM: `{"liveness": [LivenessFact, ...]}`, that key and no other. `expect` is read
-/// only to refuse it with its own message. Parsed straight from the bytes (not from a `serde_json::Value`, which
+/// The facts JSON of the C ABI and WASM: `{"liveness": [LivenessFact, ...]}`, that key and no other (`expect`, in any
+/// form, is refused before this with its own message). Parsed straight from the bytes (not from a `serde_json::Value`, which
 /// keeps the last of two equal keys silently), so a key given twice is refused too.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FactsJson {
     liveness: Option<Vec<LivenessFact>>,
-    expect: Option<serde::de::IgnoredAny>,
 }
+
+const EXPECT_REFUSED: &str = "\"expect\" inside the facts JSON is refused: the expected tip comes from the caller's own trusted source, passed separately, never the fact server's word";
 
 /// The facts JSON of the C ABI and WASM (`{"liveness": [{"proof", "ask"}, ...]}`, docs/libzync/LIVENESS_ZAPP.md §6),
 /// the one parser both use. Review 11-18: they read `v.get("liveness")` and ignored every other key, so a misspelt
@@ -209,6 +210,10 @@ pub fn facts_from_json(s: &[u8]) -> Result<Vec<LivenessFact>, String> {
     if !v.is_object() {
         return Err("facts JSON is not an object: give {\"liveness\": [...]}".into());
     }
+    // "expect" in ANY form, null too (review 11-18 round 2: Option<IgnoredAny> read a null as absent)
+    if v.get("expect").is_some() {
+        return Err(EXPECT_REFUSED.into());
+    }
     if let Some(l) = v.get("liveness").and_then(|l| l.as_array()) {
         if l.iter().any(|f| !f.is_object()) {
             return Err("facts JSON: each liveness fact is an object {\"proof\", \"ask\"}".into());
@@ -216,9 +221,6 @@ pub fn facts_from_json(s: &[u8]) -> Result<Vec<LivenessFact>, String> {
     }
     let f: FactsJson = serde_json::from_slice(s)
         .map_err(|e| format!("facts JSON (only {{\"liveness\": [{{\"proof\", \"ask\"}}, ...]}}): {e}"))?;
-    if f.expect.is_some() {
-        return Err("\"expect\" inside the facts JSON is refused: the expected tip comes from the caller's own trusted source, passed separately, never the fact server's word".into());
-    }
     let l = f.liveness.ok_or("facts JSON has no \"liveness\": give {\"liveness\": [...]}")?;
     if l.is_empty() {
         return Err("no liveness facts".into());

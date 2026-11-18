@@ -84,6 +84,7 @@ int main(void) {
     facts("facts_misspelt_alone", "{\"livenes\": [%s]}", ZAPP_LIVENESS_FAIL, "unknown field `livenes`");
     facts("facts_key_twice", "{\"liveness\": [%s], \"liveness\": [%s]}", ZAPP_LIVENESS_FAIL, "duplicate field `liveness`");
     facts("facts_expect_inside", "{\"liveness\": [%s], \"expect\": \"200:00\"}", ZAPP_LIVENESS_FAIL, "\"expect\" inside");
+    facts("facts_expect_null", "{\"liveness\": [%s], \"expect\": null}", ZAPP_LIVENESS_FAIL, "\"expect\" inside");
     facts("facts_not_an_object", "[[%s]]", ZAPP_LIVENESS_FAIL, "not an object");
     facts("facts_fact_extra_key", "{\"liveness\": [{\"x\": 1, \"proof\": \"00\", \"ask\": \"q\"}]}", ZAPP_LIVENESS_FAIL, "unknown field `x`");
     printf("LIVENESS_C_ABI %d/%d %s\n", n - bad, n, bad ? "SOME CASES WRONG" : "all cases as expected");
