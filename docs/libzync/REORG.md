@@ -699,6 +699,13 @@ marker of a reorg within 6 covers anything, and the depth-W reorg's marker cover
 `r<E>/`. The follower runs before the depth-W reorg (serving at the spine), after the fall-back (rebuilt, serving at
 the kept head, the served proof the spine) and on the new branch.
 
+**Results, 18.11.2026** (this branch merged with `feat/reorg-p3`, host rebuilt, `46666b6f`): `reorg_e2e.py --w 12`
+PASS twice (64 checks each; the depth-12 marker covers 6 live names, their new proofs under `r5/`), `--w 288` PASS (67;
+the depth-288 marker covers 282), the control fails 15; `rewind_test.sh` 57/57; `test_offsite_reorg.py` PASS, its
+control fails; the coordinator tests pass. One W=12 run before failed in the harness, not the product: the fake node
+forgot a block once the test switched its chain, so a fetch worker mid-`getblock` died; a real node keeps stale
+blocks, and so does the fake now (`known`).
+
 **Where this differs from the design, and why.**
 
 - **Tip mode is not built** (ZAPP_FOLLOWER Z2-Z5: a read-only reader of the tip run's stores, `zync-serve --at`,
