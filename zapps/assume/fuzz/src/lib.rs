@@ -214,9 +214,9 @@ pub fn core_receipt(data: &[u8]) {
     let expect = format!("200:{TIP_200}");
     let c = zapp_corecheck::verify_core(data, image(), false, None, NOW, Some(&expect));
     if c.report.verdict != Verdict::Fail {
-        // Bytes after the receipt are accepted (swiftsync-verify decodes with bincode::deserialize, which allows them;
-        // reported from round 1, probe results/probe/rcpt_trailing0): what is compared is the receipt the bytes decode to.
-        let canon = bincode::deserialize::<risc0_zkvm::Receipt>(data).ok().map(|r| bincode::serialize(&r).unwrap());
+        // Bytes after the receipt were accepted until #758 (reported from round 1, probe results/probe/rcpt_trailing0);
+        // the core's strict decoder now refuses them. What is compared is the receipt the bytes decode to, with it.
+        let canon = swiftsync_verify::decode_receipt(data).ok().map(|r| bincode::serialize(&r).unwrap());
         assert!(canon.as_deref() == Some(RCPT) && data.starts_with(RCPT),
                 "WRONG-OK: a receipt other than the real one verifies ({:?}, {} bytes)", c.report.verdict, data.len());
     }
