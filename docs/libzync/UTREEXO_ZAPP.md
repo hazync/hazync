@@ -606,16 +606,18 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   it goes in through the environment). On a copy of that run's state the fixed script published `latest.json`,
   `latest.rcpt` = `utreexo-103.rcpt` (re-verified, DEMO), and then refused, leaving the folder untouched, a "prover"
   that returns another receipt and a wrong ELF; stopped on a reorg below the base; and on a reorg at 103 fell back to
-  the base and chose H = 53 (`DRY_RUN`). **Not run end to end yet with the fix:** the full script (its step from a
-  step, 103 → 180, and the fall-back step 103 → 175 need two more CPU proofs, ~80 min each on the shared box); the
-  step-from-a-step path is covered by the executed chain above, not by a proof.
+  the base and chose H = 53 (`DRY_RUN`). **Then end to end with the fix** (18.11.2026, `test_follow.sh` at `15d99d2`, three real CPU proofs on hazync-coord,
+~80 min each): **31 of 31 checks passed** (`UTREEXO_FOLLOW_TESTS_OK`): the base install, the step 3 → 103 published
+and verified, no new height, the choice of H (margin, core tip, step cap), a step from a step 103 → 180 (the first
+spends, at 170) published with the old receipt kept in `hist/`, a lying prover and a wrong ELF refused with the folder
+untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a reorg below the base stopping.
 - **The WASM checks tip receipts** (`zapps/utreexo/wasm`, feature `tip`): the journal's kind word picks the check, an
   optional last frame field names another base image, `tip_image_id()`; the JSON adds `mode`, `steps`, `from`,
   `base_height`, `base_image`. `node test.mjs` 22/22 (9 new on the tip receipt: DEMO with its fields, FAIL for another
   block, core tip, tip image, base image, network, a base image on a base receipt). The .wasm is byte-reproduced on two
   machines: a laptop's local build of `reproduce/wasm.Dockerfile` and hazync-coord's build in the published image
   `ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…` (a clean clone); sha256 in `wasm/README.md`.
-- The follower, end to end with the fix: see the follower bullet above (FOLLOWER_RESULT).
+- The follower, end to end with the fix: 31/31, see the follower bullet above.
 
 ### 10.10 Layout (tip mode)
 
