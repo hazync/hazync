@@ -75,8 +75,9 @@ echo "== no forged ZAPP_STATEMENT_OK line from a signature's text (expect 0 line
 $V $A $C $R $T/inj.json > $T/inj.out 2>&1
 fl=$(grep -ac '^ZAPP_STATEMENT_OK' $T/inj.out || true); hl=$(grep -ac 'ZAPP_STATEMENT_OK' $T/inj.out || true)
 N=$((N+1)); if [ "$fl" = 0 ] && [ "$hl" -ge 1 ]; then echo "starting=$fl holding=$hl PASS"; else echo "starting=$fl holding=$hl WRONG"; BAD=$((BAD+1)); fi
-# 8f. review 11-18: a checker flag given twice is refused, not resolved to its last value
-run 1 $V $A $C --purpose loan $R $T/s.json
+# 8f. review 11-18: a checker flag given twice is refused, not resolved to its last value. Each repeat gives the value
+#     that holds (or, for --max-age, another that holds), so the case fails only on the repeat: last-wins gave exit 2
+run 1 $V $A $C --purpose audit-15.11.2026 $R $T/s.json
 run 1 $V $A $C --nonce 5be1 $R $T/s.json
 run 1 $V $A --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 $C $R $T/s.json
 run 1 $V $A --network mainnet --network mainnet $C $R $T/s.json
@@ -97,6 +98,15 @@ S1=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][1]['s
 S0=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][0]['fact']['script_pubkey'])")
 F0=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][0]['format'])")
 cp $T/s.json $T/a.json; $Z add-sig $T/a.json $S0 $F0 "$S1" 2>&1 | sed "s#$T#<tmp>#g"; got=${PIPESTATUS[0]}
+N=$((N+1)); if [ "$got" = 1 ]; then echo "exit=$got PASS"; else echo "exit=$got WRONG"; BAD=$((BAD+1)); fi
+# 10b. the producer's flags, taken in order: a flag's value may look like a flag (the purpose "--nonce"), a repeat is
+#      refused
+echo "== zapp-statement draft --purpose --nonce --nonce 5be1 (expect exit 0, purpose \"--nonce\")"
+$Z draft --receipt $R --trie $TRIE --purpose --nonce --nonce 5be1 $W > $T/d.json 2>&1; got=$?
+pp=$(python3 -c "import json;print(json.load(open('$T/d.json'))['purpose'])" 2>/dev/null)
+N=$((N+1)); if [ "$got" = 0 ] && [ "$pp" = "--nonce" ]; then echo "exit=$got purpose=$pp PASS"; else echo "exit=$got purpose=$pp WRONG"; BAD=$((BAD+1)); fi
+echo "== zapp-statement draft $C --purpose audit-15.11.2026 (expect exit 1)"
+$Z draft --receipt $R --trie $TRIE $C --purpose audit-15.11.2026 $W 2>&1 | sed "s#$T#<tmp>#g"; got=${PIPESTATUS[0]}
 N=$((N+1)); if [ "$got" = 1 ]; then echo "exit=$got PASS"; else echo "exit=$got WRONG"; BAD=$((BAD+1)); fi
 # 11. the same statement through the zAPP's WASM module, when one is given: STATEMENT_WASM=<.wasm>
 if [ -n "${STATEMENT_WASM:-}" ]; then

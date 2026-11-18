@@ -83,26 +83,34 @@ fn main() {
     }
 }
 
+/// The producer's flags and positional arguments, `a[0]` being the subcommand: walked in order, a flag in `names` takes
+/// the next argument as its value whatever it looks like (`--purpose --nonce` is the purpose "--nonce"), and is given at
+/// most once (a repeat is refused, not resolved to one of its values); every other argument is positional.
+fn producer_flags(a: &[String], names: &[&str]) -> (std::collections::HashMap<String, String>, Vec<String>) {
+    let (mut f, mut pos) = (std::collections::HashMap::new(), Vec::new());
+    let mut it = a.iter().skip(1);
+    while let Some(x) = it.next() {
+        if names.contains(&x.as_str()) {
+            let v = it.next().unwrap_or_else(|| die(&format!("{x} needs a value")));
+            if f.insert(x.clone(), v.clone()).is_some() { die(&format!("{x}: give it once")) }
+        } else {
+            pos.push(x.clone());
+        }
+    }
+    (f, pos)
+}
+
 /// The producer (draft, message, sign, add-sig, test-key).
 fn produce(a: Vec<String>) {
-    // each flag once: a repeat is refused, not resolved to one of its values
-    let flag = |name: &str| {
-        if a.iter().filter(|x| *x == name).count() > 1 { die(&format!("{name}: give it once")) }
-        a.iter().position(|x| x == name).and_then(|i| a.get(i + 1)).cloned()
-    };
     match a.first().map(|s| s.as_str()) {
         Some("draft") => {
-            let need = |n: &str| flag(n).unwrap_or_else(|| die(&format!("draft: {n} is required")));
+            let (f, pos) = producer_flags(&a, &["--receipt", "--trie", "--purpose", "--nonce", "--network"]);
+            let need = |n: &str| f.get(n).cloned().unwrap_or_else(|| die(&format!("draft: {n} is required")));
             let (rp, tp, purpose, nonce) = (need("--receipt"), need("--trie"), need("--purpose"), need("--nonce"));
-            let network = flag("--network").unwrap_or_else(|| "mainnet".into());
-            let flags = ["--receipt", "--trie", "--purpose", "--nonce", "--network"];
-            let mut scripts = Vec::new();
-            let mut i = 1;
-            while i < a.len() {
-                if flags.contains(&a[i].as_str()) { i += 2; continue; }
-                scripts.push(unhex(&a[i]).unwrap_or_else(|| die(&format!("{:?}: not a scriptPubKey in hex", a[i]))));
-                i += 1;
-            }
+            let network = f.get("--network").cloned().unwrap_or_else(|| "mainnet".into());
+            let scripts: Vec<Vec<u8>> = pos.iter()
+                .map(|s| unhex(s).unwrap_or_else(|| die(&format!("{s:?}: not a scriptPubKey in hex"))))
+                .collect();
             if scripts.is_empty() { die("draft: give at least one scriptPubKey"); }
             // as every zAPP resolves it (zapp_corecheck::image_for; "regtest" only under the tests-only regtest-test feature)
             let image = zapp_corecheck::image_for(&network, "", false, false).unwrap_or_else(|e| die(&e));
@@ -124,8 +132,9 @@ fn produce(a: Vec<String>) {
             print!("{}", statement::message(&st).unwrap_or_else(|e| die(&e)));
         }
         Some("sign") => {
-            let p = a.get(1).unwrap_or_else(|| die("sign <statement.json> --keys <file>"));
-            let kp = flag("--keys").unwrap_or_else(|| die("sign: --keys <file> is required"));
+            let (f, pos) = producer_flags(&a, &["--keys"]);
+            let [p] = pos.as_slice() else { die("sign <statement.json> --keys <file>") };
+            let kp = f.get("--keys").cloned().unwrap_or_else(|| die("sign: --keys <file> is required"));
             let mut text = std::fs::read_to_string(&kp).unwrap_or_else(|e| die(&format!("{kp}: {e}")));
             let mut keys: Vec<bitcoin::PrivateKey> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .enumerate()
