@@ -459,6 +459,21 @@ per block (the same udata Floresta itself syncs from: leaf data + batch proof), 
 Hazync's tip prep run. Neither is built (open: Q-T2). Because the guest checks every proof, the source is never
 trusted, so (a) needs no trust in the bridge.
 
+#### 10.5.1 The production witness source (DESIGNED, NOT BUILT)
+
+⚠ Nothing in this subsection exists. The host's `Native` (MemForest + live-coin map) stays the test source; the
+production host would replace only the part that yields, per block, the spent coins' data and the batch proof. Its
+output format is the one the guest already reads (step.rs `put_spent`, `encode_proof`), so neither the guest nor the
+image changes.
+
+| option | how | cost and risk |
+|---|---|---|
+| **A. a Utreexo bridge node (preferred)** | utreexod run with its Utreexo proof index next to the proving host. Per block it holds the deleted leaves' data and the batch proof against the accumulator before that block, the same "udata" Floresta receives from its peers. The host converts it (leaf data + block hash by height from our own node → `put_spent`; targets + hashes → `encode_proof`) and, as now, runs `Stump::modify` natively before proving | an extra node to run and keep in sync (its disk for the index: not measured here). Nothing is trusted: a wrong proof fails natively and in the guest. Risk: a format or behaviour difference in the bridge's proofs (positions after deletions) is caught at once, natively. Open question Q-T2 |
+| B. Hazync's own disk forest | a disk-backed rustreexo forest (or a position-indexed node store) updated by the tip prep run, with an outpoint → (position, coin data) index | no third-party node, but a new store of the order of the live UTXO set plus internal nodes (not measured), its own crash/reorg handling (REORG.md P3 style undo) and a second Utreexo implementation to keep equal to rustreexo |
+
+Either way the follower changes only in where `--cache`'s replay comes from; reorg handling stays as §10.6 (the
+source must be rewound to the fall-back height: a bridge does that itself; a disk forest needs undo records).
+
 ### 10.6 What is served, where, and reorgs
 
 **Served** (proposal; not deployed): a folder like the headers zAPP's (`/headers-live/`), e.g.
