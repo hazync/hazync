@@ -662,3 +662,51 @@ new chain's proof of the same id for good; and the zAPP follower dies when the s
 not affected. Once P5 is in, turning it on is a deployment decision after the reviews: the board pass and its fetcher get
 `HAZYNC_REORG_AUTO=1`, the coordinator and the board pass the ack directory above (in the units now), the coordinator
 deployed first (a prep that rewinds before the coordinator knows records waits 10 min, then stops for a person).
+
+## 18. Built: P5, the followers (18.11.2026)
+
+Same branch. Host unchanged by P5 (scripts, units, website).
+
+**Offsite copies** (`coordinator/deploy/hazync-offsite-proofs.py`, §9). `--depth N` (the four `hazync-lz-offsite-*`
+units pass 6, with the coordinator's `/var/lib/hazync/node_tip`): `copy` uploads a proof only once its hi ≤ tip − 6,
+and `check` does not count a younger one missing; `spine` copies the newest KEPT head (`spine/heads/`) at least 6 deep,
+never the live one. No fresh tip file (missing, or older than `--tip-max-age`, 1 h): nothing is uploaded and the unit
+fails (alerts). For a reorg deeper than that, per coordinator epoch E (`proofs/orphaned/<E>/`): the orphaned proofs go
+up under `orphaned/<E>/`, then `reorgs/<E>.json`, written once, names the live keys an orphaned proof holds in the store
+(`covered`, each with the orphaned file's sha256 and size). A covered name is never uploaded under its live key again:
+the new chain's proof goes to `r<E>/<name>` (the newest covering marker), and `check` compares that key. The spine the
+same way (`r<E>/spine_1-<hi>.*` when the store holds that name with another head, explained by a local
+`spine/orphaned/<E>/`). **Nothing is deleted** (the mirror stays append-only). A restore takes, per name, the newest
+`r<E>/` copy over the live one, reading the markers; the receipts say which chain they are of anyway.
+
+**The zAPP follower** (`hazync-lz-zapp-follow.sh`, §10). Today's follower keeps its own stores with the trie in
+memory and the coin log changed in place, and writes no undo records, so it cannot rewind. On a spine below its stores
+(or at a height whose block its stores have another of) it checks that the NODE agrees with the spine there (the
+block's header hashed), moves its stores to `$ZAPP_ROOT/orphaned/<time>/` (only the newest kept), preps again from
+genesis to the spine and republishes; the previous set stays published until then. A node that disagrees with the spine
+leaves the stores as they are and fails the run (no rebuild loop). Cost: a prep from genesis, cheap while the spine is
+low; the in-memory follower stops scaling near ~140,000 anyway (ZAPP_FOLLOWER §1). New test knobs (`ZAPP_OWNER`,
+`ZAPP_RESTART`, `ZAPP_ACTIVE`, `ZAPP_SETTLE_S`) keep the defaults the unit uses.
+
+**The website** (`hazync/hazync-web`, branch `web/reorg-banner`, not deployed): a banner on every page from
+`/api/meta.reorg` while the board is `rewinding` and for an hour after `done`; the feed renders `kind: reorg` rows (not
+as folds); a block page lists its orphaned proofs, each checkable. `tools/reorg-banner-test.mjs` (+ control) and
+`explorer-recent-test.mjs`.
+
+**Harness.** `reorg_e2e.py` runs the offsite `copy --depth 6` and `check` (into an in-memory store) after every
+settle and just before each mid-prove reorg: no live name may hold another chain's proof unless a marker covers it, no
+marker of a reorg within 6 covers anything, and the depth-W reorg's marker covers names whose new proofs are under
+`r<E>/`. The follower runs before the depth-W reorg (serving at the spine), after the fall-back (rebuilt, serving at
+the kept head, the served proof the spine) and on the new branch.
+
+**Where this differs from the design, and why.**
+
+- **Tip mode is not built** (ZAPP_FOLLOWER Z2-Z5: a read-only reader of the tip run's stores, `zync-serve --at`,
+  `PIN`). §7's "repin to the kept head" is a property of tip mode; today's follower instead rebuilds and republishes at
+  the kept head. Z2-Z4 are a separate Rust and deployment piece (a reader beside the live service, compared before the
+  switch); with them, the rebuild goes away.
+- **Orphaned proofs already off-box keep their live names** (§9's markers), rather than being moved: the mirror is the
+  backup and stays append-only; the marker says which live keys hold orphaned proofs, and the new ones go to `r<E>/`.
+  With the depth delay this happens only for a reorg deeper than 6 below the node's tip.
+- **The delay is counted from the node's tip, not prep's**: a reorg at depth 1 below prep's tip while prep is far
+  behind the node is deep from the node's point of view, and so is covered by markers, not by the delay.

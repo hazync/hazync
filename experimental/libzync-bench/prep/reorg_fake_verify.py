@@ -10,10 +10,11 @@ and the board's state at hi (--check-end). The failure texts are lz_coord.rs's. 
 import hashlib, json, os, sys
 
 a = sys.argv[1:]
-if not a or a[0] != "verify-any" or "--check-end" not in a:
-    print(f"reorg_fake_verify: only `verify-any <rcpt> <lo> --check-end`, not {a}", file=sys.stderr); sys.exit(2)
+if not a or a[0] != "verify-any" or len(a) < 3:
+    print(f"reorg_fake_verify: only `verify-any <rcpt> <lo> [--check-end]`, not {a}", file=sys.stderr); sys.exit(2)
+check_end = "--check-end" in a          # the coordinator passes it; the zAPP follower does not
 r = json.load(open(a[1]))
-d = os.environ["HAZYNC_LZ_STATE_DIR"]
+d = os.environ.get("HAZYNC_LZ_STATE_DIR", "")
 GEN = os.environ.get("GENESIS_TIP", "")
 
 def tip(h):
@@ -35,7 +36,7 @@ if lo > 1:
     if t != r["in"]:
         print(f"the receipt is not anchored on the state before block {lo} (anchor_id {link(r['in'])}, that state's digest "
               f"{link(t)})", file=sys.stderr); sys.exit(1)
-t = tip(hi)
+t = tip(hi) if check_end else r["out"]
 if t is None:
     print(f"the board has no state at block {hi} to check the receipt's end against", file=sys.stderr); sys.exit(1)
 if t != r["out"]:
@@ -43,4 +44,4 @@ if t != r["out"]:
           f"not Bitcoin's chain", file=sys.stderr); sys.exit(1)
 it = GEN if lo == 1 else link(r["in"])
 print(f"RANGE-OK lo={lo} hi={hi} in_tip={it} out_tip={link(r['out'])} out_leaves=1 range_work=0 in_bhash={r['in']} "
-      f"out_bhash={r['out']} image=fake lineage=fake anchored={int(lo == 1)} end=board fake=1")
+      f"out_bhash={r['out']} image=fake lineage=fake fake=1 {'end=board ' if check_end else ''}anchored={int(lo == 1)}")

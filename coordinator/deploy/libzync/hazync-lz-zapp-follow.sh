@@ -11,15 +11,30 @@
 #      and restarts zync-serve, whose relay and /api/zync/proof the coordinator serves.
 # It proves nothing and is trusted for nothing: the page verifies the proof and checks every fact against it.
 #
+# A REORG (docs/libzync/REORG.md §10, ZAPP_FOLLOWER.md §7). The coordinator sets the spine back to a kept head H' at or
+# below the fork; this follower's stores may then be above H', or at H' on the orphaned block. Its trie is in memory and
+# its coin log is changed in place, with no undo records, so its stores cannot go back: they are moved aside
+# (`$ZAPP_ROOT/orphaned/<time>/`, only the newest kept) and prep runs again from genesis to H' (cheap while H' is low,
+# and today's in-memory follower stops scaling near ~140,000 anyway, ZAPP_FOLLOWER.md §1). The previous set stays
+# published until the new one is ready. Only when the node agrees with the spine at H' (its block hash): a node on
+# another branch would rebuild the same wrong stores every run. Tip mode (ZAPP_FOLLOWER Z2-Z5, a reader of the tip
+# run's stores with pinned roots) replaces this; it is not built.
+#
 #   hazync-lz-zapp-follow            (the timer runs this)
 # Env: ZAPP_ROOT (stores, blocks, states), ZAPP_SERVE_DIR (zync-serve's files), COORD_SPINE, ZAPP_HOST (a libzync host
 # with HAZYNC_PREP_HISTORY: v0.24.0's host predates it), ZAPP_FETCH (fetch_block_rpc.py), HAZYNC_RPC_COOKIE.
+# For tests only: ZAPP_OWNER (the served files' owner, default hazync; empty: as is), ZAPP_RESTART / ZAPP_ACTIVE (the
+# commands that restart zync-serve and ask whether it is up), ZAPP_SETTLE_S (5).
 set -euo pipefail
 Z=${ZAPP_ROOT:-/srv/bulk/libzync-zapp}
 SERVE=${ZAPP_SERVE_DIR:-/var/lib/hazync-lz/zapp}
 SPINE=${COORD_SPINE:-/var/lib/hazync-lz/spine}
 HOST=${ZAPP_HOST:-$Z/bin/host}
 FETCH=${ZAPP_FETCH:-/srv/bulk/libzync-board/bin/fetch_block_rpc.py}
+OWNER=${ZAPP_OWNER-hazync}
+RESTART=${ZAPP_RESTART:-systemctl restart hazync-lz-zync-serve}
+ACTIVE=${ZAPP_ACTIVE:-systemctl is-active --quiet hazync-lz-zync-serve}
+own() { if [ -n "$OWNER" ]; then echo "-o $OWNER -g $OWNER"; fi; }
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
 die() { log "ERROR: $*"; exit 1; }
 
@@ -41,7 +56,27 @@ for h in $(find "$Z/out/" -maxdepth 1 -name 'state_*.smt' -printf '%f\n' | sed -
 done
 if [ "$H" -le "$last" ]; then
     [ -s "$SERVE/proof.rcpt" ] && cmp -s "$Z/tmp/spine.bin" "$SERVE/proof.rcpt" && { log "at $H, nothing new"; exit 0; }
-    [ "$H" -lt "$last" ] && die "the spine ($H) is below this follower's stores ($last): a re-based board needs a fresh ZAPP_ROOT"
+fi
+# REORG §10: the spine below the stores, or at a height whose block the stores have another of
+mine=$(python3 -c 'import json,sys;print(bytes(json.load(open(sys.argv[1]))["tip_hash"]).hex())' "$Z/out/state_$H.json" 2>/dev/null || true)
+if [ "$last" -gt 0 ] && { [ "$H" -lt "$last" ] || { [ -n "$mine" ] && [ "$mine" != "$BH" ]; }; }; then
+    # only for a spine the node agrees with: its block at H (hashed from the fetched header) is the spine's
+    python3 "$FETCH" "$H" "$Z/tmp/block_$H.json" >/dev/null 2>&1 || die "cannot fetch block $H from the node to compare with the spine"
+    NH=$(python3 -c '
+import hashlib, json, struct, sys
+j = json.load(open(sys.argv[1]))
+h = (struct.pack("<I", int(j["version"]) & 0xffffffff) + bytes.fromhex(j["prev"])[::-1] + bytes.fromhex(j["merkle"])[::-1]
+     + struct.pack("<III", int(j["time"]), int(j["bits"]), int(j["nonce"])))
+print(hashlib.sha256(hashlib.sha256(h).digest()).digest().hex())' "$Z/tmp/block_$H.json")   # internal order, as out_bhash
+    rm -f "$Z/tmp/block_$H.json"
+    [ "$NH" = "$BH" ] || die "the spine ($H, block $BH) is not the node's block at $H (${NH:-none}): this follower's stores are left as they are"
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    log "a reorg: the spine is at $H (block ${BH:0:16}), this follower's stores at $last${mine:+, with another block at $H}: moved to orphaned/$ts, prep again from genesis"
+    mkdir -p "$Z/orphaned/$ts"
+    for d in cl out blocks; do if [ -e "$Z/$d" ]; then mv "$Z/$d" "$Z/orphaned/$ts/"; fi; done
+    find "$Z/orphaned/" -mindepth 1 -maxdepth 1 -type d ! -name "$ts" -exec rm -rf {} +    # only the newest kept
+    mkdir -p "$Z/blocks" "$Z/cl" "$Z/out"
+    last=0
 fi
 if [ "$H" -gt "$last" ]; then
     log "prep $((last + 1))..$H (history and trie for the spine at $H)"
@@ -75,18 +110,18 @@ PY
 [ "$n" -eq $((H + 1)) ] || die "history.bin holds $n records, not $((H + 1)) (genesis..$H)"
 
 # 3. publish the three files together, then restart zync-serve (it reads them at start)
-install -d -o hazync -g hazync "$SERVE"
+install -d $(own) "$SERVE"
 for f in history.bin:"$Z/out/history.bin" state.trie:"$Z/out/state_$H.trie" proof.rcpt:"$Z/tmp/spine.bin"; do
-    install -m 0644 -o hazync -g hazync "${f#*:}" "$SERVE/.${f%%:*}.new"
+    install -m 0644 $(own) "${f#*:}" "$SERVE/.${f%%:*}.new"
 done
 for f in history.bin state.trie proof.rcpt; do [ -e "$SERVE/$f" ] && cp -p "$SERVE/$f" "$SERVE/.$f.prev"; done
 for f in history.bin state.trie proof.rcpt; do mv -f "$SERVE/.$f.new" "$SERVE/$f"; done
-systemctl restart hazync-lz-zync-serve
+$RESTART
 # zync-serve refuses files it cannot load by exiting: if it is not still up, put the previous set back
-sleep 5
-if ! systemctl is-active --quiet hazync-lz-zync-serve; then
+sleep "${ZAPP_SETTLE_S:-5}"
+if ! $ACTIVE; then
     for f in history.bin state.trie proof.rcpt; do [ -e "$SERVE/.$f.prev" ] && mv -f "$SERVE/.$f.prev" "$SERVE/$f"; done
-    systemctl restart hazync-lz-zync-serve
+    $RESTART
     die "zync-serve did not stay up on the files for $H: the previous set is restored"
 fi
 # keep the newest two save points' stores; the per-block state files below them are not needed again

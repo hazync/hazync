@@ -13,6 +13,14 @@ Why not `bitcoind -regtest`: prep would need a regtest host, whose guest is buil
 the long build). The fake node is P3's (rewind_test.sh case F): mainnet 1..200 (prover/testdata) and synthetic
 branches (reorg_branch.py), served through the same RPC calls the fetcher makes.
 
+Also P5 (REORG.md §9, §10): after every settle and just before each mid-prove reorg, the offsite copy
+(coordinator/deploy/hazync-offsite-proofs.py `copy --depth 6`, into an in-memory store) and its `check` run; the store
+must never hold a proof of a block off the node's chain under a live name unless a marker covers it, and no marker of a
+reorg no deeper than 6 below the node's tip covers anything. And the zAPP follower (hazync-lz-zapp-follow.sh, its own
+stores, the real host's prep): it serves at the spine before the depth-W reorg, survives the spine dropping below its
+stores (rebuilds, republishes at the kept head, the proof it serves is the spine), and follows the spine on the new
+branch.
+
 Scenarios, each on the chain the one before left (depth 2 mid-prove with the rewind dying at its `rewind-after-record`
 hook and restarted as systemd would; depth W mid-prove with spine heads below and above the fork): reorgs of depth 1, 2
 and W, each once MID-PROVE (prep at rest at the
@@ -63,9 +71,13 @@ def check(cond, what):
 
 # ---- the node --------------------------------------------------------------------------------------------------------
 chain = [str(MAINNET / f"block_{h}.json") for h in range(1, 201)]
+_known = set()
 def set_world(c):
+    # every block the node ever had stays fetchable by hash (a real node keeps stale blocks)
+    old = json.loads(WORLD.read_text())["chain"] if WORLD.exists() else []
+    _known.update(p for p in old if p not in set(c))
     tmp = O / ".world.tmp"
-    tmp.write_text(json.dumps({"chain": c}))
+    tmp.write_text(json.dumps({"chain": c, "known": sorted(_known)}))
     os.replace(tmp, WORLD)
 _n = [0]
 def branch(c, fork, length):
@@ -252,6 +264,83 @@ def db1(sql, *a):
     try: return c.execute(sql, a).fetchall()
     finally: c.close()
 
+# ---- P5: the offsite copy (an in-memory store) and the zAPP follower ---------------------------------------------------
+import importlib.util, io as _io, hashlib
+_spec = importlib.util.spec_from_file_location("offsite", REPO / "coordinator/deploy/hazync-offsite-proofs.py")
+offmod = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(offmod)
+class MemS3:
+    def __init__(self): self.objects = {}
+    def get_paginator(self, name):
+        s3 = self
+        class Pg:
+            def paginate(self, Bucket, Prefix):
+                yield {"Contents": [{"Key": k, "Size": len(v)} for k, v in sorted(s3.objects.items()) if k.startswith(Prefix)]}
+        return Pg()
+    def put_object(self, Bucket, Key, Body, ContentType=None):
+        assert Key not in self.objects, f"the offsite copy overwrote {Key}"
+        self.objects[Key] = Body.read()
+    def upload_fileobj(self, Fileobj, Bucket, Key, ExtraArgs=None, Callback=None, Config=None):
+        assert Key not in self.objects, f"the offsite copy overwrote {Key}"
+        self.objects[Key] = Fileobj.read()
+    def get_object(self, Bucket, Key): return {"Body": _io.BytesIO(self.objects[Key])}
+STORE, OFF_DEPTH, OFFP = MemS3(), 6, "proofs-46666b6f/"
+(O / "keys").write_text("kid secret https://x.r2.cloudflarestorage.com b\n")
+PROOFS = O / "coord/proofs"
+
+def offsite(tag):
+    """copy then check, with the node's tip as the coordinator's tip file has it; then the invariant: every live name in
+    the store holds the board's proof of that name now, or a marker covers it."""
+    (O / "node_tip").write_text(f"{len(chain)}\n")
+    args = ["--keys", str(O / "keys"), "--bucket", "b", "--proofs", str(PROOFS), "--method-id", "46666b6f" + "0" * 56,
+            "--depth", str(OFF_DEPTH), "--tip-file", str(O / "node_tip"), "--bwlimit-mbit", "0", "--threads", "2", "--min-age", "0"]
+    buf = _io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc1 = offmod.main(["copy", *args], client=STORE)
+        rc2 = offmod.main(["check", *args], client=STORE)
+    markers = {int(k[len(OFFP) + 7:-5]): json.loads(v) for k, v in STORE.objects.items() if k.startswith(OFFP + "reorgs/")}
+    bad = []
+    for k, v in STORE.objects.items():
+        n = k[len(OFFP):]
+        if not k.startswith(OFFP) or "/" in n:
+            continue
+        p = PROOFS / n
+        if (not p.exists() or p.read_bytes() != v) and not any(n in m.get("covered", {}) for m in markers.values()):
+            bad.append(n)
+    shallow_cover = {e: len(m["covered"]) for e, m in markers.items() if e in shallow_epochs and m["covered"]}
+    check(rc1 == 0 and rc2 == 0 and not bad and not shallow_cover,
+          f"{tag}: offsite copy and check (exit {rc1}, {rc2}); no live name holds another chain's proof uncovered ({bad[:3]}); "
+          f"no marker of a reorg within {OFF_DEPTH} covers a name ({shallow_cover}); {len(markers)} marker(s)")
+shallow_epochs = set()
+
+ZAPP = O / "zapp"; ZSERVE = O / "zserve"
+(R / "bin/zapp-host").write_text(f"""#!/bin/sh
+if [ "$1" = verify-any ]; then exec {sys.executable} {HERE / 'reorg_fake_verify.py'} "$@"; fi
+exec {H} "$@"
+""")
+os.chmod(R / "bin/zapp-host", 0o755)
+def follow(tag):
+    """One run of the zAPP follower, as its timer runs it. Returns (exit code, log)."""
+    env = dict(ENV, ZAPP_ROOT=str(ZAPP), ZAPP_SERVE_DIR=str(ZSERVE), COORD_SPINE=str(O / "coord/spine"),
+               ZAPP_HOST=str(R / "bin/zapp-host"), ZAPP_FETCH=str(R / "bin/fetch_block_rpc.py"), ZAPP_OWNER="",
+               ZAPP_RESTART="true", ZAPP_ACTIVE="true", ZAPP_SETTLE_S="0", GENESIS_TIP=GEN)
+    for k in ("HAZYNC_REORG_AUTO", "HAZYNC_PREP_UNDO_KEEP"):
+        env.pop(k, None)
+    r = subprocess.run(["bash", str(REPO / "coordinator/deploy/libzync/hazync-lz-zapp-follow.sh")], env=env,
+                       capture_output=True, text=True, timeout=WAIT)
+    (O / "follow.log").open("a").write(f"== {tag}\n" + r.stdout + r.stderr)
+    return r.returncode, r.stdout + r.stderr
+
+def follower_serves(h):
+    """The follower publishes facts at h: the proof it serves is the coordinator's spine now, its stores' block at h is
+    prep's (the board's chain), and history.bin runs genesis..h."""
+    try:
+        rc = (ZSERVE / "proof.rcpt").read_bytes() == (O / "coord/spine/spine.bin").read_bytes()
+        mine = bytes(json.loads((ZAPP / f"out/state_{h}.json").read_text())["tip_hash"]).hex()
+        return rc and mine == tip(h) and (ZSERVE / "state.trie").read_bytes()[:8] == b"HZTRIE01"
+    except (OSError, ValueError, KeyError):
+        return False
+
 # ---- run -------------------------------------------------------------------------------------------------------------
 print(f"== reorg end to end: W={W}, J={J}, out {O}{' (CONTROL: the coordinator reads no records)' if CONTROL else ''}", flush=True)
 set_world(chain[:60])
@@ -276,11 +365,12 @@ chain = chain[:60]
 epoch = 0
 
 def settle(what):
-    """prep at the node's tip, the board proven to it, and the board's ranges all on prep's chain."""
+    """prep at the node's tip, the board proven to it, and the board's ranges all on prep's chain; then the offsite copy."""
     ok = wait(at_node_tip, f"{what}: prep at the node's tip {len(chain)}")
     ok = ok and check(prove_to(len(chain)) is True, f"{what}: the board proven to the tip {len(chain)} (frontier {frontier()})")
     bad = board_matches_prep()
     check(ok and not bad, f"{what}: every verified range is on prep's chain ({len(bad)} not: {bad[:4]})")
+    offsite(what)
     return ok
 
 def spine(h):
@@ -317,6 +407,11 @@ def reorg(d, mode, crash=None, spine_case=False):
             below, above = F - 2, T - 1
             check(spine(below)[0] == 200 and spine(above)[0] == 200 and spine_hi() == above,
                   f"{tag}: spine heads at {below} (below the fork) and {above} (above it)")
+            rc, flog_ = follow(f"{tag}: before")
+            check(rc == 0 and follower_serves(above), f"{tag}: the zAPP follower serves facts at the spine {above} (exit {rc})")
+        offsite(f"{tag}: just before the reorg")
+        if d <= OFF_DEPTH:
+            shallow_epochs.add(epoch + 1)
         chain = chain[:F] + branch(chain, F, (len(chain) - F) + 2); set_world(chain)
         stopped_at = None
     else:
@@ -368,14 +463,27 @@ def reorg(d, mode, crash=None, spine_case=False):
               f"{tag}: the rewind died at {crash} (exits {runner.exits[exits0:]}), was finished by the restart, applied once")
     if spine_case:
         check(spine_hi() == below, f"{tag}: the spine fell back to the kept head {below} ({spine_hi()})")
+        rc, flog_ = follow(f"{tag}: after the fall-back")
+        check(rc == 0 and "a reorg: the spine is at" in flog_ and follower_serves(below)
+              and len(list((ZAPP / "orphaned").iterdir())) == 1,
+              f"{tag}: the zAPP follower survives the spine dropping below its stores: rebuilt, serving at the kept head {below} (exit {rc})")
     flog, rlog = (O / "fetch.log").read_text(errors="replace"), (O / "run.log").read_text(errors="replace")
     check(f"FETCH_REORG_AUTO prep's tip" in flog and f"fork at {F}, depth" in flog and 5 in runner.exits[exits0:]
           and f"PREP_REWOUND to {F} (epoch {epoch})" in rlog and runner.rc is None,
           f"{tag}: the fetcher saw it (auto), prep exited 5, the runner rewound to {F} with no person "
           f"(runner exits since: {runner.exits[exits0:]})")
     settle(tag)
+    if mode == "prove" and d > OFF_DEPTH:
+        mk = json.loads(STORE.objects.get(f"{OFFP}reorgs/{epoch}.json", b"{}"))
+        rk = [k for k in STORE.objects if k.startswith(f"{OFFP}r{epoch}/")]
+        check(mk.get("covered") and rk and all(STORE.objects[k] == (PROOFS / k.rsplit("/", 1)[1]).read_bytes() for k in rk),
+              f"{tag}: deeper than the offsite delay: marker {epoch} covers {len(mk.get('covered') or {})} live name(s), "
+              f"the new chain's proofs of them are under r{epoch}/ ({len(rk)})")
     if spine_case:
         check(spine(len(chain))[0] == 200 and spine_hi() == len(chain), f"{tag}: the spine advances on the new branch to {len(chain)}")
+        rc, flog_ = follow(f"{tag}: on the new branch")
+        check(rc == 0 and follower_serves(len(chain)) and "a reorg" not in flog_,
+              f"{tag}: the zAPP follower follows the spine on the new branch to {len(chain)} (exit {rc})")
 
 # 0. the board on mainnet 1..60
 settle("start")
