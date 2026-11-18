@@ -591,7 +591,7 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   every check ok. That time is a loaded shared box, not a benchmark. The blocks 4..103 have no spends: deletions are
   covered by the executions above, not by a proof (a proof of the step 103 → 180, with the first spends, was started
   and stopped for time).
-- `zapps/utreexo/test.sh`: the 28 CLI cases of §8 plus 11 on the tip receipt (DEMO with block 103 and the core tip
+- `zapps/utreexo/test.sh`: 38 CLI cases, 11 of them on the tip receipt (DEMO with block 103 and the core tip
   named; FAIL for another block 103, another core tip, another tip image, another base image (the failed check is
   the base's), signet, a trailing byte, `--base-image` on a base receipt; the `--json` fields `mode`, `steps`, `from`,
   `base_height`, `n_live: null`; `--floresta`); the library's tests with `--features tip`; the WASM sha. All pass.
