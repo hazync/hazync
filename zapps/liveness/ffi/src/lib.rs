@@ -6,7 +6,6 @@
 
 use std::ffi::{c_char, CStr};
 use swiftsync_verify::{ChainState, Verdict};
-use zapp_liveness::LivenessFact;
 
 const OK: i32 = 0;
 const FAIL: i32 = 1;
@@ -54,19 +53,12 @@ pub unsafe extern "C" fn zapp_liveness_verify(receipt: *const u8, receipt_len: u
         Some(Ok(a)) => Some(a),
         Some(Err(e)) => return fail(&format!("anchor is not a ChainState: {e}")),
     };
-    // {"liveness": [{"proof": "<hex>", "ask": "<question>"}]}; an "expect" inside it is the fact server vouching for
-    // its own fork (cold review 11-06): refused, as in the core's facts JSON.
-    let v: serde_json::Value = match facts_json.map(serde_json::from_str) {
-        Some(Ok(v)) => v,
-        Some(Err(e)) => return fail(&format!("facts JSON: {e}")),
+    // {"liveness": [{"proof": "<hex>", "ask": "<question>"}]} and no other key (zapp_liveness::facts_from_json); an
+    // "expect" inside it is the fact server vouching for its own fork (cold review 11-06): refused, as in the core's.
+    let facts = match facts_json {
         None => return fail("no facts JSON: give {\"liveness\": [...]}"),
+        Some(j) => match zapp_liveness::facts_from_json(j.as_bytes()) { Ok(f) => f, Err(e) => return fail(&e) },
     };
-    if v.get("expect").is_some() { return fail("\"expect\" inside the facts JSON is refused: the expected tip is the integrator's own trusted source, passed separately"); }
-    let facts: Vec<LivenessFact> = match serde_json::from_value(v.get("liveness").cloned().unwrap_or_else(|| serde_json::json!([]))) {
-        Ok(l) => l,
-        Err(e) => return fail(&format!("facts JSON liveness: {e}")),
-    };
-    if facts.is_empty() { return fail("no liveness facts"); }
     // an image id given is the only image the receipt may verify against (pinned)
     let pinned = image_hex.is_some_and(|h| !h.trim().is_empty());
     let o = zapp_liveness::verify_liveness(slice(receipt, receipt_len), image, pinned, anchor, now, &facts, expect, true);

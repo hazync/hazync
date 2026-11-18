@@ -15,7 +15,6 @@
 //! inside the JSON is refused). Glue: zapp-liveness.js.
 
 use swiftsync_verify::{ChainState, Verdict};
-use zapp_liveness::LivenessFact;
 
 #[no_mangle]
 pub extern "C" fn alloc(len: usize) -> *mut u8 {
@@ -78,15 +77,8 @@ pub extern "C" fn verify_liveness(ptr: *mut u8, len: usize) -> *const u8 {
         let anchor: Option<ChainState> = if anchor_json.is_empty() { None } else {
             Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
         };
-        let v: serde_json::Value = serde_json::from_slice(facts).map_err(|e| format!("facts JSON: {e}"))?;
-        if v.get("expect").is_some() {
-            return Err("\"expect\" inside the facts JSON is refused: pass the expected tip separately, from a source the page trusts".to_string());
-        }
-        let lives: Vec<LivenessFact> = serde_json::from_value(v.get("liveness").cloned().unwrap_or_else(|| serde_json::json!([])))
-            .map_err(|e| format!("facts JSON liveness: {e}"))?;
-        if lives.is_empty() {
-            return Err("no liveness facts".to_string());
-        }
+        // {"liveness": [...]} and no other key; an "expect" inside it refused (zapp_liveness::facts_from_json)
+        let lives = zapp_liveness::facts_from_json(facts)?;
         let expect = std::str::from_utf8(expect).map_err(|_| "expect: not UTF-8".to_string())?.trim().to_string();
         Ok((receipt, image, !image_hex.trim().is_empty(), anchor, now, lives, expect))
     })();

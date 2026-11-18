@@ -34,6 +34,24 @@ static void live(const char* name, const char* rc, const char* proof, const char
     bad += got != want; n++; free(r); free(p); free(facts);
 }
 
+/* Review 11-18: the facts JSON is {"liveness": [...]} and nothing else. `fmt` holds %s where the one honest fact goes
+ * (up to 3 times); `why`: a word the refusal names. Before facts_from_json a key beside "liveness" was dropped unread. */
+static void facts(const char* name, const char* fmt, int want, const char* why) {
+    size_t rn, pn; char msg[512], path[512];
+    snprintf(path, sizeof path, "%smainnet_1_200_8888d59c.rcpt", CORE);
+    unsigned char* r = slurp(path, &rn);
+    unsigned char* p = slurp("../vectors/b170_0_at200.hex", &pn);
+    while (pn && (p[pn - 1] == '\n' || p[pn - 1] == '\r')) pn--;
+    char* f = malloc(pn + 256);
+    sprintf(f, "{\"proof\": \"%.*s\", \"ask\": \"f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0@200=unspent\"}", (int)pn, (const char*)p);
+    char* j = malloc(3 * strlen(f) + strlen(fmt) + 1);
+    sprintf(j, fmt, f, f, f);
+    int got = zapp_liveness_verify(r, rn, 0x20, (uint64_t)time(NULL), IMG, NULL, j, NULL, msg, sizeof msg);
+    int ok = got == want && (!why || strstr(msg, why));
+    printf("%s  %-24s verdict %d (want %d)  %.150s\n", ok ? "PASS" : "WRONG", name, got, want, msg);
+    bad += !ok; n++; free(r); free(p); free(f); free(j);
+}
+
 int main(void) {
     const char* H = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0@200";
     const char* R = "mainnet_1_200_8888d59c.rcpt";
@@ -61,6 +79,13 @@ int main(void) {
     live("regtest_receipt_refused", "../../scripts/zapp-regtest/receipts/a/block_112.rcpt", "regtest_x_spent_a112.hex",
          "e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f:1@112=spent:111:2:0", -1,
          "112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574", ZAPP_LIVENESS_FAIL);
+    facts("facts_documented_key", "{\"liveness\": [%s]}", ZAPP_LIVENESS_DEMO, NULL);
+    facts("facts_misspelt_beside", "{\"liveness\": [%s], \"livenes\": [%s]}", ZAPP_LIVENESS_FAIL, "unknown field `livenes`");
+    facts("facts_misspelt_alone", "{\"livenes\": [%s]}", ZAPP_LIVENESS_FAIL, "unknown field `livenes`");
+    facts("facts_key_twice", "{\"liveness\": [%s], \"liveness\": [%s]}", ZAPP_LIVENESS_FAIL, "duplicate field `liveness`");
+    facts("facts_expect_inside", "{\"liveness\": [%s], \"expect\": \"200:00\"}", ZAPP_LIVENESS_FAIL, "\"expect\" inside");
+    facts("facts_not_an_object", "[[%s]]", ZAPP_LIVENESS_FAIL, "not an object");
+    facts("facts_fact_extra_key", "{\"liveness\": [{\"x\": 1, \"proof\": \"00\", \"ask\": \"q\"}]}", ZAPP_LIVENESS_FAIL, "unknown field `x`");
     printf("LIVENESS_C_ABI %d/%d %s\n", n - bad, n, bad ? "SOME CASES WRONG" : "all cases as expected");
     return bad != 0;
 }

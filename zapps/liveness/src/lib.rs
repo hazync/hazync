@@ -188,6 +188,44 @@ pub struct LivenessFact {
     pub ask: String,
 }
 
+/// The facts JSON of the C ABI and WASM: `{"liveness": [LivenessFact, ...]}`, that key and no other. `expect` is read
+/// only to refuse it with its own message. Parsed straight from the bytes (not from a `serde_json::Value`, which
+/// keeps the last of two equal keys silently), so a key given twice is refused too.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FactsJson {
+    liveness: Option<Vec<LivenessFact>>,
+    expect: Option<serde::de::IgnoredAny>,
+}
+
+/// The facts JSON of the C ABI and WASM (`{"liveness": [{"proof", "ask"}, ...]}`, docs/libzync/LIVENESS_ZAPP.md §6),
+/// the one parser both use. Review 11-18: they read `v.get("liveness")` and ignored every other key, so a misspelt
+/// `"livenes"` beside the real key was dropped unread. Now any top-level key but `"liveness"` is refused (an
+/// `"expect"` with its own message: the expected tip is the caller's, never the fact server's), as are a key given
+/// twice, a missing `"liveness"`, a top level that is not an object, and an empty list.
+pub fn facts_from_json(s: &[u8]) -> Result<Vec<LivenessFact>, String> {
+    // an object first: serde's derived struct also takes a JSON ARRAY of its fields in order (`[[{...}]]`)
+    let v: serde_json::Value = serde_json::from_slice(s).map_err(|e| format!("facts JSON: {e}"))?;
+    if !v.is_object() {
+        return Err("facts JSON is not an object: give {\"liveness\": [...]}".into());
+    }
+    if let Some(l) = v.get("liveness").and_then(|l| l.as_array()) {
+        if l.iter().any(|f| !f.is_object()) {
+            return Err("facts JSON: each liveness fact is an object {\"proof\", \"ask\"}".into());
+        }
+    }
+    let f: FactsJson = serde_json::from_slice(s)
+        .map_err(|e| format!("facts JSON (only {{\"liveness\": [{{\"proof\", \"ask\"}}, ...]}}): {e}"))?;
+    if f.expect.is_some() {
+        return Err("\"expect\" inside the facts JSON is refused: the expected tip comes from the caller's own trusted source, passed separately, never the fact server's word".into());
+    }
+    let l = f.liveness.ok_or("facts JSON has no \"liveness\": give {\"liveness\": [...]}")?;
+    if l.is_empty() {
+        return Err("no liveness facts".into());
+    }
+    Ok(l)
+}
+
 /// [`check_liveness`] on a [`LivenessFact`]; `need_claim`: refuse a question that does not claim its answer.
 pub fn check_liveness_fact(cs: &ChainState, undo_from: u32, f: &LivenessFact, need_claim: bool) -> Result<String, String> {
     let ask = LivenessAsk::parse(&f.ask)?;

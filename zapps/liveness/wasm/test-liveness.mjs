@@ -76,14 +76,19 @@ const raw = (bytes) => {
   return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
 };
 const enc = new TextEncoder();
-const parts = [rd('mainnet_1_200_8888d59c.rcpt'), enc.encode(''), enc.encode('8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4'),
-  enc.encode(JSON.stringify({ liveness: [{ proof: hex('b170_0_at200.hex'), ask: `${T170}:0@200=unspent` }] })), enc.encode(TIP)];
-const fr = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
-fr[0] = 0x20;
-const dv = new DataView(fr.buffer);
-dv.setBigUint64(1, BigInt(Math.floor(Date.now() / 1000)), true);
-let o = 9;
-for (const p of parts) { dv.setUint32(o, p.length, true); fr.set(p, o + 4); o += 4 + p.length; }
+const frame = (factsJson) => {
+  const parts = [rd('mainnet_1_200_8888d59c.rcpt'), enc.encode(''), enc.encode('8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4'),
+    enc.encode(factsJson), enc.encode(TIP)];
+  const fr = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
+  fr[0] = 0x20;
+  const dv = new DataView(fr.buffer);
+  dv.setBigUint64(1, BigInt(Math.floor(Date.now() / 1000)), true);
+  let o = 9;
+  for (const p of parts) { dv.setUint32(o, p.length, true); fr.set(p, o + 4); o += 4 + p.length; }
+  return fr;
+};
+const F = JSON.stringify({ proof: hex('b170_0_at200.hex'), ask: `${T170}:0@200=unspent` });
+const fr = frame(`{"liveness": [${F}]}`);
 const trailing = new Uint8Array(fr.length + 1); trailing.set(fr);
 for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo', ''], ['frame: a byte past the end', trailing, 'fail', 'trailing'],
                                         ['frame: cut short', fr.slice(0, fr.length - 1), 'fail', 'truncated']]) {
@@ -92,6 +97,21 @@ for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo',
   bad += !ok;
   cases.push([name]);
   console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(22)} ${r.verdict} (want ${want})`);
+}
+// Review 11-18: the facts JSON is {"liveness": [...]} and nothing else (zapp_liveness::facts_from_json). Before it, a
+// key beside "liveness" was dropped unread: the misspelt and the twice-given key verified as "demo".
+for (const [name, j, want, why] of [['facts JSON: documented key', `{"liveness": [${F}]}`, 'demo', ''],
+                                    ['facts JSON: misspelt beside', `{"liveness": [${F}], "livenes": [${F}]}`, 'fail', 'unknown field `livenes`'],
+                                    ['facts JSON: misspelt alone', `{"livenes": [${F}]}`, 'fail', 'unknown field `livenes`'],
+                                    ['facts JSON: key twice', `{"liveness": [${F}], "liveness": [${F}]}`, 'fail', 'duplicate field `liveness`'],
+                                    ['facts JSON: expect inside', `{"liveness": [${F}], "expect": "${TIP}"}`, 'fail', '"expect" inside'],
+                                    ['facts JSON: an array', `[[${F}]]`, 'fail', 'not an object'],
+                                    ['facts JSON: fact extra key', `{"liveness": [{"x": 1, "proof": "00", "ask": "q"}]}`, 'fail', 'unknown field `x`']]) {
+  const r = raw(frame(j));
+  const ok = r.verdict === want && (!why || JSON.stringify(r).includes(JSON.stringify(why).slice(1, -1)));
+  bad += !ok;
+  cases.push([name]);
+  console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(22)} ${r.verdict} (want ${want})  ${JSON.stringify(r.checks || r).slice(0, 110)}`);
 }
 console.log(`LIVENESS_WASM ${cases.length - bad}/${cases.length} cases as expected`);
 process.exit(bad ? 1 : 0);

@@ -424,3 +424,32 @@ fn timing() {
         eprintln!("{f}: {} bytes, {:.1} us per check", b.len(), t.elapsed().as_secs_f64() * 1e6 / n as f64);
     }
 }
+
+/// Review 11-18: the facts JSON of the C ABI and WASM is `{"liveness": [...]}` and nothing else. Before
+/// `facts_from_json` they read `v.get("liveness")` and dropped every other key unread (a misspelt key beside the real
+/// one). The entry points' own cases: ffi/test_liveness.c and wasm/test-liveness.mjs (`facts JSON:`).
+#[test]
+fn the_facts_json_takes_only_its_documented_key() {
+    let f = r#"{"proof": "00", "ask": "q"}"#;
+    let ok = facts_from_json(format!(r#"{{"liveness": [{f}]}}"#).as_bytes()).unwrap();
+    assert_eq!((ok.len(), ok[0].proof.as_str(), ok[0].ask.as_str()), (1, "00", "q"));
+    for (j, why) in [
+        (format!(r#"{{"liveness": [{f}], "livenes": [{f}]}}"#), "unknown field `livenes`"),
+        (format!(r#"{{"livenes": [{f}]}}"#), "unknown field `livenes`"),
+        (format!(r#"{{"liveness": [{f}], "extra": 1}}"#), "unknown field `extra`"),
+        (format!(r#"{{"liveness": [{f}], "expect": "200:00"}}"#), "\"expect\" inside the facts JSON is refused"),
+        ("{}".to_string(), "has no \"liveness\""),
+        (format!("[{f}]"), "not an object"),
+        ("null".to_string(), "not an object"),
+        (format!("[[{f}]]"), "not an object"),
+        (r#"{"liveness": [["00", "q"]]}"#.to_string(), "each liveness fact is an object"),
+        (r#"{"liveness": []}"#.to_string(), "no liveness facts"),
+        (r#"{"liveness": [{"proof": "00", "ask": "q", "extra": 1}]}"#.to_string(), "unknown field `extra`"),
+        (r#"{"liveness": [{"proof": "00", "ask": "q"}], "liveness": []}"#.to_string(), "duplicate field `liveness`"),
+        (r#"{"liveness": [{"proof": "00", "proof": "01", "ask": "q"}]}"#.to_string(), "duplicate field `proof`"),
+        (format!(r#"{{"expect": "200:00", "liveness": [{f}], "expect": "200:00"}}"#), "duplicate field `expect`"),
+    ] {
+        let e = facts_from_json(j.as_bytes()).unwrap_err();
+        assert!(e.contains(why), "{j}: {e}");
+    }
+}
