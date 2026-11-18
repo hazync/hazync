@@ -623,7 +623,10 @@ finished rewind (prep already at the fork's block) is removed without opening an
 that does not read stops the start (L7). Tests: `test_reorg.py` gains a control per fix (`--control-m1`, `-m2`, `-m3`,
 `-h1`), each failing without it; `rewind_test.sh` case K (H1, another rewind's record, L5); `reorg_e2e.py` gains a
 rewind killed at `rewind-after-record` and restarted, a spine case, systemd's restart rule, and a control that flips one
-thing (the coordinator reads no records).
+thing (the coordinator reads no records). **Re-run after the fixes:** `reorg_e2e.py --w 12` PASS (49 checks: the killed
+rewind exited 9 and was finished by the restart, applied once; the spine fell back from 116 to the kept head 103 and
+advanced on the new branch), `--w 288` PASS (51), the control fails 15; `rewind_test.sh` 57/57 (case K fails 3 with the
+pre-fix host); `test_reorg.py` PASS and its six controls fail; the other coordinator tests pass.
 
 **Automatic handling stays OFF** (`HAZYNC_REORG_AUTO` unset in every unit), and **must not go on at the tip before P5**
 (review M4): offsite copies are append-only by name with no depth delay (§9), so an orphaned proof uploaded blocks the
