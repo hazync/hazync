@@ -1,0 +1,28 @@
+[package]
+name = "zapp-hints-cli"
+version = "0.1.0"
+edition = "2021"
+description = "zapp-hints: the SwiftSync hints zyncAPP's command line (zapps/hints)"
+license = "MIT"
+publish = false
+
+# The CLI, apart from the library (..): it alone takes the chain-identity flags every zAPP CLI shares (zapps/common:
+# --expect, --mempool, --bitcoin-cli), so the library, C ABI and WASM module carry none of that code.
+
+[[bin]]
+name = "zapp-hints"
+path = "src/main.rs"
+
+[dependencies]
+zapp-hints = { path = ".." }
+zapp-common = { path = "../../common" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

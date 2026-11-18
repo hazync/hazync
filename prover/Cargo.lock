@@ -5505,6 +5505,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zapp-hints"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "libzync",
+ "risc0-zkvm",
+ "serde",
+ "sha2",
+ "swiftsync-verify",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5616,6 +5628,7 @@ dependencies = [
  "sha2",
  "swiftsync-verify",
  "zapp-headers",
+ "zapp-hints",
  "zyncapp-methods",
 ]
 
