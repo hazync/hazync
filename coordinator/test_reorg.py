@@ -27,6 +27,7 @@ sponsorship of 19..20 is proven; key Q claims block 21; Q's proof of 22 is verif
   python3 test_reorg.py                    # must PASS
   python3 test_reorg.py --control          # no check at commit: the straddling proof is credited; MUST FAIL
   python3 test_reorg.py --control-keep     # the orphaned rows stay in vranges: the frontier stays on A; MUST FAIL
+  python3 test_reorg.py --control-m1|--control-m2|--control-m3|--control-h1   # each review fix taken out; MUST FAIL
 """
 import base64, hashlib, json, os, shutil, socket, stat, subprocess, sys, tempfile, threading, time, types, urllib.request
 
@@ -34,6 +35,11 @@ PATCHES = {
     "--control": ("            _why = reorg_refusal(c, int(meta.get(\"lo\", r[\"lo\"])), int(meta.get(\"hi\", r[\"hi\"])), meta, _ep0)\n",
                   "            _why = None\n"),
     "--control-keep": ('            c.execute("DELETE FROM vranges WHERE hi > ?", (fork,))\n', "            pass\n"),
+    # the review of P4's fixes, each taken out (M1, M2, M3, the H1 backstop)
+    "--control-m1": ('            if not _prep_waiting_on(rec["epoch"]):\n', "            if False:\n"),
+    "--control-m2": ("    if head and old <= fork:\n        return old, old\n    keep", "    if old <= fork:\n        return old, old if head else None\n    keep"),
+    "--control-m3": ("        for h in below[:-1]:\n", "        for h in below:\n"),
+    "--control-h1": ("    if alert and alert != _reorg_alert[\"v\"]:\n", "    alert = None\n    if alert:\n"),
 }
 CONTROL = next((a for a in sys.argv[1:] if a in PATCHES), None)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -112,8 +118,10 @@ def prep(tag, lo, hi):
         with open(os.path.join(STATE, f"state_{h}.json"), "w") as f:
             json.dump({"height": h, "tip_hash": list(bytes.fromhex(bh(tag, h)))}, f)
         open(os.path.join(LEAVES, f"leaf_{h}.bin"), "wb").write(tag.encode())
-def prep_rewind(fork, epoch, tag, top, move=True, name=None):
-    """§5 steps 3-4: the files above the fork aside, then the record."""
+def prep_rewind(fork, epoch, tag, top, move=True, name=None, intent=True):
+    """§5 steps 2-4: the intent (out/REWIND, kept until the ack), the files above the fork aside, then the record."""
+    if intent:
+        open(os.path.join(STATE, "REWIND"), "w").write(json.dumps({"fork": fork, "epoch": epoch}))
     if move:
         for d, pre, ext in ((STATE, "state_", ".json"), (LEAVES, "leaf_", ".bin")):
             od = os.path.join(d, "orphaned", str(epoch)); os.makedirs(od, exist_ok=True)
@@ -179,7 +187,14 @@ check(not os.path.exists(os.path.join(ACKS, "1.ack")) and frontier() == 20,
       "a record while prep's state 18 is still A's: not applied, not acked")
 # now the moves, then the same record
 sha1 = prep_rewind(17, 1, "A", 25)
+# review of P4, M1: a record prep is not waiting on (no out/REWIND of its epoch) is refused, not acked
+os.remove(os.path.join(STATE, "REWIND"))
+s.reorg_poll()
+check(not os.path.exists(os.path.join(ACKS, "1.ack")) and frontier() == 20,
+      "M1: the record without prep's intent for its epoch: not applied, not acked")
+sha1 = prep_rewind(17, 1, "A", 25)
 applied = s.reorg_poll()
+os.remove(os.path.join(STATE, "REWIND"))                   # prep, acked, carries on
 th.join()
 check(applied == [1], f"the record applied: epoch {applied}")
 try: ack = json.load(open(os.path.join(ACKS, "1.ack")))
@@ -203,7 +218,7 @@ check(cp.get("proved") == 20 and cp.get("orphaned") == 3, f"P keeps the credit: 
 check(s.proven_count() == 17, f"the board's proven count excludes them ({s.proven_count()})")
 m = s.reorg_meta() or {}
 check(m.get("epoch") == 1 and m.get("fork") == 17 and m.get("depth") == 8 and m.get("state") == "rewinding"
-      and m.get("orphaned", [[0]])[0][0] == 18, f"/api/meta reorg: {dict((k, m.get(k)) for k in ('epoch', 'fork', 'depth', 'state'))}")
+      and (m.get("orphaned") or {}).get("count") == 8 and m["orphaned"]["first"][0] == 18, f"/api/meta reorg: {dict((k, m.get(k)) for k in ('epoch', 'fork', 'depth', 'state'))}")
 code, bd = s.block_detail(18)
 check(code == 200 and bd.get("orphaned") and bd["orphaned"][0]["proof"] == "/api/proof/orphaned/1/18"
       and bd["orphaned"][0]["block_hash"] == disp(bh("A", 18)) and not bd["proofs"],
@@ -242,6 +257,7 @@ th = threading.Thread(target=lambda: sp.update(r=s.submit_spine(body(Q_SK, Q, re
 th.start(); time.sleep(1)
 prep_rewind(19, 2, "B", 22)
 applied = s.reorg_poll()
+os.remove(os.path.join(STATE, "REWIND"))
 th.join()
 code, out = sp.get("r", (None, None))
 check(applied == [2] and code == 409 and out.get("reorged") and s.spine_head()["hi"] == 16 and frontier() == 19,
@@ -252,6 +268,46 @@ for b in (20, 21):
 check(frontier() == 21, f"C proven to 21 ({frontier()})")
 
 # start-up: a third rewind (fork 20, C's 21..22 orphaned) applied before the port answers
+# review of P4, M1: a record far deeper than the window (fork 0) is refused, whatever prep says
+open(os.path.join(STATE, "REWIND"), "w").write(json.dumps({"fork": 0, "epoch": 9}))
+open(os.path.join(RECORDS, "9.json"), "w").write(json.dumps({"epoch": 9, "fork": 0, "orphaned": [], "new": []}))
+s.REORG_AUTO_MAX_DEPTH = 5
+s.reorg_poll()
+s.REORG_AUTO_MAX_DEPTH = 2016
+check(not os.path.exists(os.path.join(ACKS, "9.ack")) and frontier() == 21, "M1: a record of fork 0: refused (depth cap), not acked")
+os.remove(os.path.join(RECORDS, "9.json"))
+
+# review of P4, H1 backstop: the top verified range not on prep's state is alerted
+t21 = open(os.path.join(STATE, "state_21.json")).read()
+open(os.path.join(STATE, "state_21.json"), "w").write(json.dumps({"tip_hash": list(bytes.fromhex(bh("Z", 21)))}))
+s.reorg_poll()
+al = s._reorg_alert["v"]
+open(os.path.join(STATE, "state_21.json"), "w").write(t21)
+s.reorg_poll()
+check(al and "21" in al and s._reorg_alert["v"] is None, f"H1 backstop: the top verified block not prep's: alert ({al}), cleared after")
+
+# review of P4, M3: pruning keeps the newest head below the window
+sv = s.SPINE_HEADS
+s.SPINE_HEADS = os.path.join(T, "heads_m3")
+s.spine_keep_head(b"h10", {"hi": 10}); s.spine_keep_head(b"h3000", {"hi": 3000})
+check(s.spine_heads() == [10, 3000], f"M3: heads 10 and 3000 with a 2016 window: both kept ({s.spine_heads()})")
+s.spine_keep_head(b"h20", {"hi": 20}); s.spine_keep_head(b"h5000", {"hi": 5000})
+check(s.spine_heads() == [20, 3000, 5000], f"M3: then 20, 5000: the newest below the window (20) kept ({s.spine_heads()})")
+s.SPINE_HEADS = sv
+
+# review of P4, M2: a rewind that died after spine.json went, with spine.bin still the orphaned head: the rerun
+# restores the kept head (the state a crash left in the old code's order)
+spd = os.path.join(T, "sp")
+old_bin = open(os.path.join(spd, "spine.bin"), "rb").read()
+code, out = s.submit_spine(body(P_SK, P, receipt("C", 1, 21)))
+check(code == 200 and s.spine_head()["hi"] == 21, f"C: the spine to 21 ({code})")
+orphan21 = open(os.path.join(spd, "spine.bin"), "rb").read()
+os.remove(os.path.join(spd, "spine.json"))               # the crash: the advertised head gone, the bytes still 21's
+r = s._spine_rewind(20, 99)
+check(r == (0, 16) and s.spine_head()["hi"] == 16 and open(os.path.join(spd, "spine.bin"), "rb").read() == old_bin
+      and os.path.exists(os.path.join(spd, "orphaned", "99", "spine_21.bin")),
+      f"M2: rerun after a crash mid spine-rewind: spine.bin and spine.json are the kept head 16 again ({r})")
+
 sha3 = prep_rewind(20, 3, "C", 22)
 port = (lambda so: (so.bind(("127.0.0.1", 0)), so.getsockname()[1], so.close())[1])(socket.socket())
 srv = os.path.join(T, "server.py")
@@ -273,6 +329,8 @@ check(meta is not None and (meta.get("reorg") or {}).get("epoch") == 3 and meta.
       f"a record applied at START-UP, before serving: /api/meta reorg epoch {((meta or {}).get('reorg') or {}).get('epoch')}, frontier {(meta or {}).get('frontier')}")
 
 # the runbook's --reorg-to (REORG.md §11 step 4)
+r = subprocess.run([sys.executable, srv, "--reorg-to", "15", "--yes"], env=dict(env, COORD_DB=""), capture_output=True, text=True)
+check(r.returncode != 0 and "COORD_DB" in r.stderr, "--reorg-to without COORD_DB: refused")
 r = subprocess.run([sys.executable, srv, "--reorg-to", "15"], env=env, capture_output=True, text=True)
 check(r.returncode == 0 and "dry run" in r.stdout and s.reorg_epoch() == 3, f"--reorg-to 15 without --yes changes nothing ({r.stdout.strip()[-80:]})")
 r = subprocess.run([sys.executable, srv, "--reorg-to", "15", "--yes"], env=env, capture_output=True, text=True)

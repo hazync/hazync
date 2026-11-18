@@ -1712,11 +1712,13 @@ def spine_keep_head(receipt, head):
         b, j = _spine_head_files(int(head["hi"]))
         _write_atomic(b, receipt)
         _write_atomic(j, json.dumps(head).encode())
-        for h in spine_heads():
-            if h < int(head["hi"]) - SPINE_HEADS_KEEP:
-                for p in _spine_head_files(h)[::-1]:
-                    try: os.remove(p)
-                    except OSError: pass
+        # below the window, all but the newest go: a fall-back must always find a head below any fork in the window
+        # (review of P4, M3: heads 10 and 3000 with a 2,016 window kept 3000 alone, so a fork at 2000 had none)
+        below = [h for h in spine_heads() if h < int(head["hi"]) - SPINE_HEADS_KEEP]
+        for h in below[:-1]:
+            for p in _spine_head_files(h)[::-1]:
+                try: os.remove(p)
+                except OSError: pass
     except Exception as e:
         print(f"[spine] head [1..{head.get('hi')}] accepted, but not kept for a reorg fall-back: {e}", flush=True)
 
@@ -1751,18 +1753,22 @@ def spine_seed_heads():
 def _spine_rewind(fork, epoch):
     """The spine back to the newest kept head at or below `fork`; heads above it (and the current one, if it is above)
     move to spine/orphaned/<epoch>/. With no kept head at or below the fork there is no spine afterwards (it is
-    rebuilt by `hazync spine` from the proofs). Idempotent. Returns (old hi, new hi or None)."""
+    rebuilt by `hazync spine` from the proofs). Idempotent, and a rerun after a crash part-way finishes it (review of
+    P4, M2): the new bytes are written before the head that advertises them, and a spine.bin with no spine.json is set
+    from the kept heads too. Returns (old hi, new hi or None)."""
     head = spine_head()
     old = _spine_hi(head)
     od = os.path.join(SPINE_DIR, "orphaned", str(epoch))
     above = [h for h in spine_heads() if h > fork]
-    if old <= fork and not above:
-        return old, old if head else None
+    bin_ = os.path.join(SPINE_DIR, "spine.bin")
+    if head and old <= fork and not above:
+        return old, old
+    if not head and not above and not os.path.exists(bin_):
+        return 0, None
     os.makedirs(od, exist_ok=True)
     # the current head, if it is above the fork and not among the kept ones: copied into the record first
     if head and old > fork and old not in above:
-        for src, dst in ((os.path.join(SPINE_DIR, "spine.bin"), f"spine_{old}.bin"),
-                         (os.path.join(SPINE_DIR, "spine.json"), f"spine_{old}.json")):
+        for src, dst in ((bin_, f"spine_{old}.bin"), (os.path.join(SPINE_DIR, "spine.json"), f"spine_{old}.json")):
             if os.path.exists(src) and not os.path.exists(os.path.join(od, dst)):
                 with open(src, "rb") as f:
                     _write_atomic(os.path.join(od, dst), f.read())
@@ -1770,20 +1776,20 @@ def _spine_rewind(fork, epoch):
         for p in _spine_head_files(h):
             if os.path.exists(p):
                 os.replace(p, os.path.join(od, os.path.basename(p)))
-    if old <= fork:
-        return old, old if head else None
+    if head and old <= fork:
+        return old, old
     keep = [h for h in spine_heads() if h <= fork]
-    # the advertised head goes first (a crash here leaves "no spine", which a rerun of the rewind corrects), then the
-    # bytes, then the head that advertises them
-    try: os.remove(os.path.join(SPINE_DIR, "spine.json"))
-    except OSError: pass
     if not keep:
-        try: os.remove(os.path.join(SPINE_DIR, "spine.bin"))
-        except OSError: pass
+        # no head to fall back to: no spine (the advertised head first, then its bytes)
+        for p in (os.path.join(SPINE_DIR, "spine.json"), bin_):
+            try: os.remove(p)
+            except OSError: pass
         return old, None
+    # the bytes first, then the head that advertises them: a crash in between leaves spine.json above the fork,
+    # which a rerun (the record is not applied until the commit) sees and finishes
     b, j = _spine_head_files(keep[-1])
     with open(b, "rb") as f:
-        _write_atomic(os.path.join(SPINE_DIR, "spine.bin"), f.read())
+        _write_atomic(bin_, f.read())
     with open(j, "rb") as f:
         _write_atomic(os.path.join(SPINE_DIR, "spine.json"), f.read())
     return old, keep[-1]
@@ -1867,6 +1873,7 @@ def reorg_rewind(fork, src, record=None, record_sha=None, prep_epoch=None, now=N
         _spine_seed_failed.clear()
     # 3. caches: every single-flight entry (not a busy flag another thread waits on), the frontier, the served tip
     with _sf_lock:
+        _sf_gen[0] += 1
         for k in [k for k in _sf if not k.endswith(":busy")]:
             del _sf[k]
     _servable_high(force=True)
@@ -1896,26 +1903,53 @@ def _ack(name, record, sha, epoch):
 
 
 _reorg_noted = {}
+_reorg_alert = {"v": None}
+# a rewind deeper than this below the board's highest verified block is never applied from a record, only by a person
+# with --reorg-to (review of P4, M1: a record of fork 0 would orphan the whole ledger); J by default
+REORG_AUTO_MAX_DEPTH = int(os.environ.get("REORG_AUTO_MAX_DEPTH", "2016"))
 
 
-def reorg_poll():
-    """One pass over prep's records: each record not applied yet is applied and acked, in epoch order; an applied one
-    whose ack is missing is acked again. A record that does not read, or whose orphaned states are still in place (prep
-    has not moved its files yet, §5 step 3), waits: no ack, so prep waits too. Then rewinds whose new branch has
-    appeared (state_<F+1>.json of another block) are marked `done`. Returns the epochs applied."""
+def _note(name, key, msg):
+    """Print `msg` once per (record, reason)."""
+    if _reorg_noted.get(name) != key:
+        print(msg, flush=True)
+        _reorg_noted[name] = key
+
+
+def _prep_waiting_on(epoch):
+    """Is prep's rewind of `epoch` in progress: out/REWIND there and naming it? Prep keeps its intent until the ack
+    comes, so a record without it is one prep is no longer waiting for (review of P4, M1)."""
+    if not LZ_STATE_DIR:
+        return False
+    try:
+        with open(os.path.join(LZ_STATE_DIR, "REWIND")) as f:
+            return int(json.load(f)["epoch"]) == int(epoch)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def reorg_poll(startup=False):
+    """One pass over prep's records, in epoch order. An applied record whose ack is missing is acked again. A record
+    not applied yet is applied and acked only while prep is waiting on it (out/REWIND names its epoch), its fork is
+    within REORG_AUTO_MAX_DEPTH of the board's highest verified block, and prep's orphaned state at F+1 has moved
+    (§5 step 3); otherwise it is refused, loudly, and not acked. A record that does not read stops a start-up (§17)
+    and is refused while running. Then: rewinds whose new branch has appeared (state_<F+1>.json of another block) are
+    marked `done`; and the backstop (review of P4, H1): the board's highest verified range must end on prep's state at
+    its height, or /api/meta says so (`reorg_alert`) and the journal does once. Returns the epochs applied."""
     done = []
     if REORG_DIR and os.path.isdir(REORG_DIR):
         names = sorted((n[:-5] for n in os.listdir(REORG_DIR) if n.endswith(".json") and n[:-5].isdigit()), key=int)
         for name in names:
             rec, sha = _read_record(os.path.join(REORG_DIR, name + ".json"))
             if rec is None:
-                if _reorg_noted.get(name) != sha:
-                    print(f"[reorg] record {name}.json does not read ({sha}): not applied, not acked", flush=True)
-                    _reorg_noted[name] = sha
+                if startup:
+                    raise RuntimeError(f"reorg record {name}.json does not read ({sha}): fix or move it before starting")
+                _note(name, sha, f"[reorg] record {name}.json does not read ({sha}): not applied, not acked")
                 continue
             c = db()
             try:
                 row = c.execute("SELECT epoch FROM reorgs WHERE record_sha=?", (sha,)).fetchone()
+                top = c.execute("SELECT MAX(hi) FROM vranges").fetchone()[0] or 0
             finally:
                 c.close()
             if row:
@@ -1928,12 +1962,20 @@ def reorg_poll():
                     _ack(name, rec, sha, int(row[0]))
                 continue
             f = int(rec["fork"])
+            if not _prep_waiting_on(rec["epoch"]):
+                _note(name, "stale", f"[reorg] REFUSED record {name}.json (fork {f}): prep is not waiting on it (no "
+                      f"out/REWIND of epoch {rec['epoch']}): not applied, not acked. A rewind the board must follow by hand: "
+                      f"server.py --reorg-to {f} (REORG.md §11)")
+                continue
+            if top - f > REORG_AUTO_MAX_DEPTH:
+                _note(name, "deep", f"[reorg] REFUSED record {name}.json: fork {f} is {top - f} below the board's highest "
+                      f"verified block {top} (REORG_AUTO_MAX_DEPTH {REORG_AUTO_MAX_DEPTH}): only by hand, server.py "
+                      f"--reorg-to {f} (REORG.md §11); prep waits and then stops")
+                continue
             first = next((x for h, x in rec["orphaned"] if h == f + 1), None)
             if first is not None and lz_state_tip(f + 1) is not None and _display(lz_state_tip(f + 1)) == first:
-                if _reorg_noted.get(name) != "unmoved":
-                    print(f"[reorg] record {name}.json: prep's state {f + 1} is still the orphaned block; waiting "
-                          f"for its files to move (REORG.md §5 step 3)", flush=True)
-                    _reorg_noted[name] = "unmoved"
+                _note(name, "unmoved", f"[reorg] record {name}.json: prep's state {f + 1} is still the orphaned block; "
+                      f"waiting for its files to move (REORG.md §5 step 3)")
                 continue
             r = reorg_rewind(f, "prep", record=rec, record_sha=sha, prep_epoch=int(rec["epoch"]))
             _ack(name, rec, sha, r["epoch"])
@@ -1946,24 +1988,61 @@ def reorg_poll():
             t = lz_state_tip(f + 1) if LZ_STATE_DIR else "none"
             if t is not None and (not LZ_STATE_DIR or _display(t) != orph.get(f + 1)):
                 c.execute("UPDATE reorgs SET state='done', done_at=? WHERE epoch=?", (time.time(), r["epoch"]))
+                with _sf_lock:
+                    _sf.pop("reorg:meta", None)
         c.commit()
+        top = c.execute("SELECT hi, out_bhash FROM vranges ORDER BY hi DESC LIMIT 1").fetchone()
     finally:
         c.close()
+    alert = None
+    if top and LIBZYNC and LZ_STATE_DIR and VERIFY != "mock" and top["out_bhash"]:
+        t = lz_state_tip(int(top["hi"]))
+        if t != str(top["out_bhash"]).lower():
+            alert = (f"the board's highest verified block {top['hi']} is not prep's block {top['hi']} now "
+                     f"({'no state' if t is None else _display(t)[:16]}): a reorg the board did not follow? REORG.md §11")
+    if alert and alert != _reorg_alert["v"]:
+        print(f"[reorg] ALERT {alert}", flush=True)
+    _reorg_alert["v"] = alert
     return done
 
 
+def _reorg_row(r):
+    orph = json.loads(r["orphaned"] or "[]")
+    return {"epoch": r["epoch"], "fork": r["fork"], "depth": r["depth"], "state": r["state"], "at": r["at"],
+            "done_at": r["done_at"], "source": r["src"],
+            # capped (review of P4, L3): /api/meta is every worker's pre-flight; the whole list is /api/reorg/<epoch>
+            "orphaned": {"count": len(orph), "first": orph[0] if orph else None, "last": orph[-1] if orph else None},
+            "detail": f"/api/reorg/{r['epoch']}"}
+
+
 def reorg_meta():
-    """/api/meta's `reorg`: the newest rewind, or None."""
+    """/api/meta's `reorg`: the newest rewind, or None. Cached a few seconds (/api/meta is hit by every worker)."""
+    def build():
+        c = db()
+        try:
+            r = c.execute("SELECT * FROM reorgs ORDER BY epoch DESC LIMIT 1").fetchone()
+        finally:
+            c.close()
+        return _reorg_row(r) if r else None
+    return _single_flight("reorg:meta", REORG_META_TTL, build)
+
+
+REORG_META_TTL = float(os.environ.get("REORG_META_TTL", "5"))
+
+
+def reorg_detail(epoch):
+    """/api/reorg/<epoch>: one rewind in full (every orphaned block, the node's new ones, what moved)."""
     c = db()
     try:
-        r = c.execute("SELECT * FROM reorgs ORDER BY epoch DESC LIMIT 1").fetchone()
+        r = c.execute("SELECT * FROM reorgs WHERE epoch=?", (epoch,)).fetchone()
     finally:
         c.close()
     if not r:
-        return None
-    return {"epoch": r["epoch"], "fork": r["fork"], "depth": r["depth"],
-            "orphaned": json.loads(r["orphaned"] or "[]"), "state": r["state"], "at": r["at"],
-            "done_at": r["done_at"], "source": r["src"]}
+        return 404, {"error": "no such reorg"}
+    d = _reorg_row(r)
+    d.update(orphaned=json.loads(r["orphaned"] or "[]"), new=json.loads(r["new"] or "[]"),
+             moved=json.loads(r["moved"] or "{}"), fork_hash=r["fork_hash"])
+    return 200, d
 
 
 def reorg_loop():
@@ -2167,10 +2246,15 @@ _sf_lock = threading.Lock()
 _sf = {}            # key -> {"t": ts, "v": value} and key+":busy" -> threading.Event while recomputing
 
 
+_sf_gen = [0]       # bumped by a reorg rewind: a value computed before it is not stored after it (review of P4, L2)
+
+
 def _sf_store(key, fn):
+    g = _sf_gen[0]
     v = fn()
     with _sf_lock:
-        _sf[key] = {"t": time.time(), "v": v}
+        if g == _sf_gen[0]:
+            _sf[key] = {"t": time.time(), "v": v}
     return v
 
 
@@ -3845,7 +3929,10 @@ def state(slim=False):
     # this payload was once 5.8 MB. The full list is /api/provers, which one page fetches once.
     leaders = _all_provers[:8]
     recent = [dict(range=s["range_id"], handle=(s["handle"] if s["pubkey"].lower() not in blk else "[removed]"),
-                   verified=bool(s["verified"]), ts=s["ts"], note=s["note"])
+                   verified=bool(s["verified"]), ts=s["ts"], note=s["note"],
+                   # typed so a client need not parse the id: a reorg's audit row is not a proof (REORG §7)
+                   kind=("reorg" if str(s["range_id"]).startswith("reorg:") else
+                         "spine" if str(s["range_id"]).startswith("spine:") else "range"))
               # 40, not 8: the feed now carries three kinds of work (proved / folded / spine) and the
               # board filters them client-side. At 8 rows a single fast prover fills the window and
               # the other two kinds are invisible under every filter, which is the problem #114 was
@@ -5016,7 +5103,7 @@ class H(BaseHTTPRequestHandler):
                                     "reproduce": "reproduce/METHOD_ID",
                                     "source_sha256": source_sha256(),
                                     # REORG §7: the newest chain reorganisation the board rewound for (None: never)
-                                    "reorg": reorg_meta()})
+                                    "reorg": reorg_meta(), "reorg_alert": _reorg_alert["v"]})
         if p == "/api/foldable":                           # adjacent pairs whose fold does not exist yet
             try: n = max(1, min(32, int(parse_qs(urlparse(self.path).query).get("limit", [str(FOLDABLE_DEFAULT)])[0])))
             except Exception: n = FOLDABLE_DEFAULT
@@ -5054,6 +5141,9 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/zync/"):                     # zyncAPP facts, relayed from a local zync-serve (untrusted)
             code, body = zync_relay(p[len("/api/zync"):])
             return self._send(code, raw=body) if code == 200 else self._send(code, {"error": body})
+        m = re.fullmatch(r"/api/reorg/([0-9]{1,9})", p)
+        if m:                                              # one reorg in full (REORG §7)
+            return self._send(*reorg_detail(int(m.group(1))))
         m = re.fullmatch(r"/api/proof/orphaned/([0-9]{1,9})/([^/]+)", p)
         if m:                                              # a proof a reorg orphaned (REORG §7): kept, still verifiable
             rng = parse_any_range(m.group(2))
@@ -5232,15 +5322,25 @@ def install_stack_dump():
 def reorg_to_cmd(argv):
     """`server.py --reorg-to F [--yes]` (REORG.md §11 runbook step 4): rewind the ledger to F by hand, at any depth (it
     only touches rows and files). Without --yes it only says what would move. With --yes it refuses while this
-    coordinator is serving (its port in use): its in-memory claims and caches would answer for rows that moved."""
+    coordinator is serving (its port in use): its in-memory claims and caches would answer for rows that moved.
+
+    Run it with the unit's own environment, as its user (review of P4, L1): COORD_DB must be set (the default path,
+    relative to the working directory, is refused), the port checked is the unit's, and root is refused (files it
+    writes would not be the service's) unless --allow-root. REORG.md §11 step 4 gives the command."""
     try:
         fork = int(argv[argv.index("--reorg-to") + 1])
     except (IndexError, ValueError):
-        raise SystemExit("usage: server.py --reorg-to <fork height> [--yes]")
+        raise SystemExit("usage: server.py --reorg-to <fork height> [--yes] [--allow-root]")
     if fork < 0:
         raise SystemExit("the fork height must be >= 0")
-    init_db()
-    c = db()
+    if not os.environ.get("COORD_DB"):
+        raise SystemExit("COORD_DB is not set: run with the coordinator unit's environment (REORG.md §11 step 4)")
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and "--allow-root" not in argv:
+        raise SystemExit("refusing to run as root: run as the service's user (sudo -u hazync ...), or --allow-root")
+    if not os.path.exists(DB):
+        raise SystemExit(f"{DB}: no such database")
+    # the dry run reads only (no init_db: it would migrate the schema)
+    c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     try:
         v = c.execute("SELECT COUNT(*), MAX(hi) FROM vranges WHERE hi > ?", (fork,)).fetchone()
         r = c.execute("SELECT COUNT(*) FROM ranges WHERE hi > ?", (fork,)).fetchone()[0]
@@ -5255,6 +5355,7 @@ def reorg_to_cmd(argv):
     if "--yes" not in argv:
         print("dry run: nothing changed. Add --yes to rewind.")
         return 0
+    init_db()
     import socket
     s = socket.socket(socket.AF_INET6 if ":" in BIND else socket.AF_INET)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as the server binds: TIME_WAIT is not "serving"
@@ -5278,7 +5379,15 @@ if __name__ == "__main__":
     # rewind has orphaned; a failure here stops the start (systemd retries) rather than serving them
     spine_seed_heads()
     if LIBZYNC:
-        _applied = reorg_poll()
+        # peer sync adopts other boards' verified ranges, which a rewind here does not touch on THEIR side: the two do
+        # not go together until that is designed (review of P4, L6)
+        if PEERS and REORG_DIR:
+            raise SystemExit("[hazync-coordinator] PEER_COORDINATORS is set on a libzync coordinator that follows prep's "
+                             "reorgs (REORG.md §17): peer sync could adopt rows of an orphaned branch back; unset one")
+        try:
+            _applied = reorg_poll(startup=True)
+        except RuntimeError as e:
+            raise SystemExit(f"[reorg] {e}")
         if _applied:
             print(f"[reorg] applied at start-up: epoch(s) {_applied}", flush=True)
         threading.Thread(target=reorg_loop, daemon=True, name="reorg").start()
