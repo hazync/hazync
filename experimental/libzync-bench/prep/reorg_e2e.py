@@ -98,6 +98,9 @@ def spawn(cmd, log, env=ENV):
 def stop(p, sig=signal.SIGTERM):
     try: os.killpg(p.pid, sig)
     except ProcessLookupError: pass
+import atexit
+atexit.register(lambda: [stop(p) for p in procs])         # nothing left running when the test dies or is stopped
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 
 def start_fetcher():
     return spawn([sys.executable, str(R / "bin/fetch_block_rpc.py"), "follow", "1", str(R / "blocks"), "--window", "300",
@@ -321,11 +324,22 @@ def reorg(d, mode):
     if held is not None:
         code, out = submit(T, held)
         att = db1("SELECT attempts FROM ranges WHERE id=?", str(T))
-        check(code == 409 and out.get("reorged") and not (att and att[0][0]),
-              f"{tag}: the held receipt of {T} (orphaned): {code} reorged={out.get('reorged')}, not counted (attempts {att and att[0][0]})")
-        code, _ = beat(T)
-        check(code == 409, f"{tag}: the held claim's beat: {code}")
+        # 409 `reorged`; or, while T is above what the board serves again (its bundle moved), 400 "invalid range id":
+        # refused either way before anything is recorded against the block
+        refused = (code == 409 and out.get("reorged")) or (code == 400 and "invalid range id" in str(out))
+        check(refused and not (att and att[0][0]) and not db1("SELECT 1 FROM vranges WHERE id=?", str(T)),
+              f"{tag}: the held receipt of {T} (orphaned): {code} {str(out.get('error'))[:60]}; not credited, not counted (attempts {att and att[0][0]})")
+        code, out = beat(T)
+        check(code in (400, 409), f"{tag}: the held claim's beat: {code} {str(out.get('error'))[:50]}")
     wait(at_node_tip, f"{tag}: prep re-prepped the new branch")
+    if held is not None:
+        # again, now that the board serves the new branch's block T: verification fails on the orphaned end, and a
+        # reorg explains it: 409 `reorged`, not counted against the new block (REORG_FAILURE_GRACE)
+        code, out = submit(T, held)
+        att = db1("SELECT attempts FROM ranges WHERE id=?", str(T))
+        check(code == 409 and out.get("reorged") and not (att and att[0][0]),
+              f"{tag}: the held receipt of {T} once the new branch is served: {code} reorged={out.get('reorged')}, "
+              f"not counted (attempts {att and att[0][0]})")
     flog, rlog = (O / "fetch.log").read_text(errors="replace"), (O / "run.log").read_text(errors="replace")
     check(f"FETCH_REORG_AUTO prep's tip" in flog and f"fork at {F}, depth" in flog and 5 in runner.exits[exits0:]
           and f"PREP_REWOUND to {F} (epoch {epoch})" in rlog and runner.rc is None,

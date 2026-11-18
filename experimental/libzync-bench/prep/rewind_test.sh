@@ -49,7 +49,9 @@ same_as_ref() {  # same_as_ref <root> <ref root> <hi> <F> <tag> [noleaves]
     #  bundles above F must still have moved, and the states and stores are compared in full)
     if [ "${6:-}" = noleaves ]; then [ -z "$(ls $r/leaves/orphaned/1 2>/dev/null | sed -n 's/^leaf_\([0-9]*\)\.bin$/\1/p' | awk -v f=$f '$1<=f')" ] || { ok=0; why="$why leaves"; }
     else diff -rq --exclude=orphaned $r/leaves $q/leaves >/dev/null || { ok=0; why="$why leaves"; }; fi
-    diff -rq $r/out/reorg $q/out/reorg >/dev/null || { ok=0; why="$why records"; }
+    # (the rewind's own records for the board, reorg/records/<E>.json, P4, are there in the rewound run only)
+    diff -rq --exclude=records $r/out/reorg $q/out/reorg >/dev/null || { ok=0; why="$why records"; }
+    ls $r/out/reorg/records/*.json >/dev/null 2>&1 || { ok=0; why="$why no-board-record"; }
     cmp -s $r/out/PREP_TIP.json $q/out/PREP_TIP.json || { ok=0; why="$why tip"; }
     local dr dq; dr=$(digest $r $hi); dq=$(digest $q $hi)
     [ -n "$dr" ] && [ "$dr" = "$dq" ] || { ok=0; why="$why stores($(diff <(echo "$dr") <(echo "$dq") | sed -n 's/^< \([A-Z]*\) .*/\1/p' | tr '\n' ' '))"; }
