@@ -560,6 +560,22 @@ receipt refused 409 `reorged` and not counted. `--control` (the coordinator igno
 must fail. `reorg_branch.py` spends a branch's own coinbases once the shared ones run out, for branches longer than
 ~95 blocks (W = 288).
 
+**Results, 18.11.2026** (laptop, a fasthost build of this branch embedding the published guest: `host method-id` =
+`46666b6f…`; the guest ELF taken out of the v0.26.0 release host by its pinned sha256 `f7b87bf1…`):
+`reorg_e2e.py --w 12` **PASS** (45 checks: depth 1, 2, 12 mid-prove and mid-prep, prep stopped at 68 of 85, 96 of 112
+and 133 of 141 fetched blocks; 13 stopped with exit 4, then `--allow-deep`; 7 epochs; nothing parked); `--w 288` **PASS**
+(47 checks; the depth-288 mid-prep reorg forked at 429 with prep stopped at 717 of 725); `--control` fails 8 checks, as
+it must (the board stays on the orphaned block 63 and never reaches the new tip). `rewind_test.sh` (P3) passes all 53
+checks with this host (with `HAZYNC_REORG_ACK=0`). `coordinator/test_reorg.py` PASS and both controls fail; the 53
+other coordinator tests that load `server.py` pass.
+
+**Found by the harness, fixed:** a reorg-shaped verification failure was counted against the NEW chain's block when
+`verify-any`'s words fell outside the coordinator's 160-character note (lz_coord.rs puts two 64-hex hashes after
+them): depth 1 has the shared anchor, so only the end check fails, and its message is the long one. The words are now
+kept at the front of the note. **Seen and accepted:** a worker that submits an orphaned block above what the board
+serves again (its bundle moved) gets 400 "invalid range id" rather than 409 `reorged`: refused before anything is
+recorded; once the new branch serves that height, the same receipt gets 409 `reorged`, not counted.
+
 **Where this differs from the design.**
 
 - **Not `bitcoind -regtest`.** Prep under a mainnet host cannot prep regtest blocks, and a regtest host's guest is built
