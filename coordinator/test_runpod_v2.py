@@ -937,6 +937,81 @@ with tempfile.TemporaryDirectory() as d:
     check(left is None and os.path.exists(rp_),
           "C1(r2): when the account cannot be listed the record is KEPT (never 'account check: clean')")
 
+# ── r2 L1 / M4. the bench scripts' create and terminate helpers, against a stub `rp` ─────────────────
+print("== L1/M4(r2): rp_create and rp_term in the bench scripts ==")
+HELP = re.compile(r"(rp_create\(\)\{.*?\n  printf '%s\\n' \"\$ID\"; \}\n.*?rp_term\(\)\{.*?\n  return 1; \})", re.S)
+helper_texts = {}
+for sh in sorted(BENCH.rglob("*.sh")):
+    t = sh.read_text()
+    if "rp_create(){" in t or "rp_term(){" in t:
+        m = HELP.search(t)
+        helper_texts[str(sh.relative_to(ROOT))] = m.group(1) if m else None
+check(len(helper_texts) >= 11 and len(set(helper_texts.values())) == 1 and None not in helper_texts.values(),
+      f"M4(r2): every bench script carries the SAME rp_create/rp_term ({len(helper_texts)} scripts, "
+      f"{len(set(helper_texts.values()))} versions)")
+raw_calls = []
+for sh in sorted(BENCH.rglob("*.sh")):
+    for n, line in enumerate(sh.read_text().split("\n"), 1):
+        if re.search(r"\brp (POST /pods|DELETE )", line) and "rp_create(){" not in line:
+            raw_calls.append(f"{sh.relative_to(ROOT)}:{n}")
+inside = {k for k in raw_calls}
+check(len(raw_calls) == 2 * len(helper_texts),
+      f"M4(r2): no script creates or deletes a pod except through rp_create / rp_term ({len(raw_calls)} raw calls, "
+      f"expected {2 * len(helper_texts)}, the helpers' own)")
+helpers = next(iter(helper_texts.values()))
+if CONTROL:
+    helpers = helpers.replace('"?"|"") ID=$(rp GET', '"?"|"") ID=""; : $(rp GET')          # L1: no lookup by name
+    helpers = helpers.replace("for t in $(seq 1 20); do", "for t in 1; do")               # M4: single-shot
+
+
+def bash_with(stub, body, timeout=30):
+    script = "sleep(){ :; }\n" + stub + "\n" + helpers + "\n" + body
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=timeout)
+    return r.returncode, r.stdout.strip(), r.stderr
+
+
+STUB = r"""rp(){ case "$1 $2" in
+  "POST /pods") cat "$T/post" ;;
+  "GET /pods?limit=1000") cat "$T/list" ;;
+  "DELETE "*) echo "" ;;
+  "GET /pods/"*) n=$(cat "$T/n" 2>/dev/null || echo 0); echo $((n+1)) > "$T/n"
+                 if [ $n -ge $(cat "$T/gone_after") ]; then echo '{"title":"Not Found","status":404,"detail":"pod not found"}'
+                 else echo '{"id":"x","status":"RUNNING"}'; fi ;;
+esac; }"""
+with tempfile.TemporaryDirectory() as T:
+    os.environ["T"] = T
+
+    def setup(post, listing='{"pods":[],"pagination":{"hasNextPage":false,"nextCursor":null}}', gone_after=0):
+        open(os.path.join(T, "post"), "w").write(post)
+        open(os.path.join(T, "list"), "w").write(listing)
+        open(os.path.join(T, "gone_after"), "w").write(str(gone_after))
+        if os.path.exists(os.path.join(T, "n")):
+            os.unlink(os.path.join(T, "n"))
+
+    setup('{"id":"pod123","name":"lz-x","status":"PROVISIONING","cost":0.5}')
+    check(bash_with(STUB, 'rp_create "{}" lz-x')[:2] == (0, "pod123"), "L1(r2): rp_create prints a created pod's id")
+    setup('{"title":"Internal Server Error","status":500,"detail":"upstream timeout"}',
+          '{"pods":[{"id":"podLOST","name":"lz-x","status":"PROVISIONING"}],"pagination":{"hasNextPage":false}}')
+    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
+    check((rc, out) == (0, "podLOST"), f"L1(r2): a 500 on create looks the pod up BY NAME and returns it ({rc}, {out!r})")
+    setup("")
+    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
+    check(rc == 1 and out == "", f"L1(r2): no answer and no such pod is 'no pod' (rc 1) ({rc}, {out!r})")
+    for code, want in ((400, 1), (402, 2), (401, 2), (422, 2), (429, 3)):
+        setup('{"title":"x","status":%d,"detail":"d"}' % code)
+        rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
+        check(rc == want and out == "", f"L4(r2): HTTP {code} on create exits {want} ({rc})")
+    setup("error code: 1010")
+    rc, out, err = bash_with(STUB, 'rp_create "{}" lz-x')
+    check(rc in (1,) and out == "", f"L1(r2): a Cloudflare page is not a pod ({rc})")
+    setup("", gone_after=2)
+    rc, out, err = bash_with(STUB, 'rp_term pod9')
+    check(rc == 0 and "confirmed gone" in err, f"M4(r2): rp_term retries until RunPod answers 404 ({rc})")
+    setup("", gone_after=10 ** 6)
+    rc, out, err = bash_with(STUB, 'rp_term pod9')
+    check(rc == 1 and "NOT CONFIRMED" in err, f"M4(r2): and is LOUD (exit 1) when the pod never goes ({rc})")
+    del os.environ["T"]
+
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
 ROOT = pathlib.Path(HERE).parent
@@ -993,6 +1068,7 @@ EXPECTED_CONTROL = {
     "H1: experimental/libzync-bench/signet/gpu_r4/gpu_run2.sh picks the first GLOBAL mapping, not 100.65 or a later one",
     "H1: the GLOBAL 22 mapping wins whether the 100.65 entry comes first or last",
     "L1(r2): a 500 on a create that DID make the pod finds it by name, and rents no second type",
+    "L1(r2): a 500 on create looks the pod up BY NAME and returns it",
     "L1: a 429 listing makes pod.sh status FAIL, not print 'no pods'",
     "L2: a pod deployed at cost 0 whose price turns out $0.3/h against a $0.50 ceiling is booting before it boots",
     "L2: a pod deployed at cost 0 whose price turns out $0.9/h against a $0.50 ceiling is terminated before it boots",
@@ -1012,6 +1088,7 @@ EXPECTED_CONTROL = {
     "M3(r2): and no replacement is rented on top of it at --max-pods 1",
     "M3(r2): its spend keeps counting",
     "M3: every rp/gqlbal curl has --max-time",
+    "M4(r2): rp_term retries until RunPod answers 404",
     "RunPod's own 403",
     "a pod whose listing has no runtime still gets its SSH and boots",
     "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",

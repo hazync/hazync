@@ -64,7 +64,9 @@ WINDOW = 400          # characters after the call in which its cloudType must ap
 # cloud is read from the window BEFORE the call, nearest first.
 # ⛔ v2 defaults an absent `cloud` to SECURE today, but a default can change under us and an explicit value
 # cannot: a v2 create with no `cloud` in its body is reported UNSET and fails, exactly like GraphQL.
-CALL_V2 = re.compile(r"""(?:_req\(\s*["']POST["']\s*,\s*["']/pods["']|\brp\s+POST\s+["']?/pods\b)""")
+# ⚠ The bench scripts create through `rp_create "$Q" <name>`; the helper's own `rp POST /pods "$1"` is generic
+# (its body is the caller's) and is not a deploy path, so it is skipped -- each CALLER is checked instead.
+CALL_V2 = re.compile(r"""(?:_req\(\s*["']POST["']\s*,\s*["']/pods["']|\brp\s+POST\s+["']?/pods\b(?!["']?\s+"\$1")|\brp_create\s+")""")
 CLOUD_V2 = re.compile(r"""["']cloud["']\s*:\s*["']([A-Z_]+)["']""")
 WINDOW_V2 = 900       # characters BEFORE the call in which its body's cloud must appear
 

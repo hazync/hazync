@@ -14,8 +14,14 @@ while true; do
     echo "[$(date +%T)] WATCHDOG FIRED (balance $BAL, elapsed ${SECONDS}s): terminating all pods" >> watchdog.log
     # ⛔ The listing may be what failed: terminate what it shows AND every pod this run rented (fleet_ids.txt).
     { echo "$S" | python3 -c 'import json,sys; [print(p["id"]) for p in json.load(sys.stdin)["pods"]]' 2>/dev/null
-      awk '{print $1}' fleet_ids.txt 2>/dev/null; } | sort -u | while read -r id; do [ -n "$id" ] && ./pod.sh term "$id" > /dev/null; done
-    exit 0
+      awk '{print $1}' fleet_ids.txt 2>/dev/null; } | sort -u > watchdog_ids.txt
+    bad=0
+    while read -r id; do
+      [ -n "$id" ] || continue
+      if ./pod.sh term "$id" 2>> watchdog.log; then echo "[$(date +%T)] $id gone" >> watchdog.log
+      else echo "[$(date +%T)] ⛔ $id NOT CONFIRMED GONE -- TERMINATE IT BY HAND" >> watchdog.log; bad=1; fi
+    done < watchdog_ids.txt
+    exit $bad
   fi
   sleep 120
 done

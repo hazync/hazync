@@ -13,7 +13,7 @@ while read -r nm ip p _; do
   done
 done < fleet.txt
 ls -la harvest >> live_hour.out
-for id in $(awk '{print $1}' fleet_ids.txt); do ./pod.sh term $id > /dev/null; done
+for id in $(awk '{print $1}' fleet_ids.txt | sort -u); do ./pod.sh term $id 2>> live_hour.out || echo "[$(date +%T)] ⛔ $id NOT CONFIRMED GONE" >> live_hour.out; done
 sleep 8
 echo "[$(date +%T)] pods left: $(./pod.sh status | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["pods"]))')" >> live_hour.out
 ssh hazync-coord 'shred -u /tmp/lz_eph 2>/dev/null; rm -f /tmp/lz_*.json'
