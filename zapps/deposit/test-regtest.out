@@ -1,9 +1,9 @@
 Core: D in a 111 004be0242da1bd606f0beda81629572e837dc1ba6e38ffc3b7904db8ef6bec29 at 1; P in 102 142d3694e7c64f2467363426213fb995f97d7231b6dcbff41c593f91cc4a8e67 at 2; block 104's last tx at 16; the 64-byte tx in 105 at 1; the P2PK spend of 105 at 2
-zapp-deposit build: wrote /tmp/tmp.LirPPuJDHJ/d_a.json (455878 bytes): tx at position 1 of block 111, 2 confirmation(s) as of tip 112 (2 fully validated through 112)
-zapp-deposit build: wrote /tmp/tmp.LirPPuJDHJ/p_a.json (456078 bytes): tx at position 2 of block 102, 11 confirmation(s) as of tip 112 (11 fully validated through 112)
-zapp-deposit build: wrote /tmp/tmp.LirPPuJDHJ/p_b.json (456590 bytes): tx at position 2 of block 102, 12 confirmation(s) as of tip 113 (12 fully validated through 113)
-zapp-deposit build: wrote /tmp/tmp.LirPPuJDHJ/t104.json (456139 bytes): tx at position 16 of block 104, 9 confirmation(s) as of tip 112 (9 fully validated through 112)
-zapp-deposit build: wrote /tmp/tmp.LirPPuJDHJ/t105.json (455852 bytes): tx at position 2 of block 105, 8 confirmation(s) as of tip 112 (8 fully validated through 112)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/d_a.json (455878 bytes): tx at position 1 of block 111, 2 confirmation(s) as of tip 112 (2 fully validated through 112)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/p_a.json (456078 bytes): tx at position 2 of block 102, 11 confirmation(s) as of tip 112 (11 fully validated through 112)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/p_b.json (456590 bytes): tx at position 2 of block 102, 12 confirmation(s) as of tip 113 (12 fully validated through 113)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/t104.json (456139 bytes): tx at position 16 of block 104, 9 confirmation(s) as of tip 112 (9 fully validated through 112)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/t105.json (455852 bytes): tx at position 2 of block 105, 8 confirmation(s) as of tip 112 (8 fully validated through 112)
 bundles built: PASS
 == zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --amount 250000000 --script 0014ea075fee5e576adf920c4eea0300267dd4a4198f --min-depth 2 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 0)
   [ ok ] core: TEST IMAGE (regtest-test): never a release
