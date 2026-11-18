@@ -53,5 +53,12 @@ const bb = structuredClone(tip); bb.block.branch[0] = '11'.repeat(32);
 t('merkle branch tampered', FAIL, v.verifyDeposit({ bundle: bb, ask: { txid: T } }));
 t('no txid asked', FAIL, v.verifyDeposit({ bundle: tip, ask: {} }));
 t('not a bundle', FAIL, v.verifyDeposit({ bundle: '{"kind":1}', ask: { txid: T } }));
+// review (11-18): a misspelt ask key is refused, not dropped with its check; so is a field the bundle format does not name
+t('misspelt ask key (ammount)', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, vout: 0, ammount: 1, expect: TIP } }));
+t('misspelt ask key (min_dept)', FAIL, v.verifyDeposit({ bundle: tip, ask: { txid: T, min_dept: 975110, expect: TIP } }));
+const xf = structuredClone(tip); xf.block.extra = 1;
+t('bundle with an unknown field', FAIL, v.verifyDeposit({ bundle: xf, ask: { txid: T, expect: TIP } }));
+const xm = structuredClone(tip); xm.block.mmr_path = [];
+t('bundle with an mmr_path on a fully validated block', FAIL, v.verifyDeposit({ bundle: xm, ask: { txid: T, expect: TIP } }));
 console.log(fails ? `test_deposit_wasm: ${fails} FAILED` : 'test_deposit_wasm: all as expected');
 process.exit(fails ? 1 : 0);
