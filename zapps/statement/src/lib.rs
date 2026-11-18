@@ -133,10 +133,22 @@ fn hex64_ok(what: &str, s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Lower-case hex, decoded: how a statement writes every hex field. `unhex` reads either case (right for a hash a person
+/// types), so without this a statement with one digit upper-cased held as the signed one, though it does not re-encode
+/// to it (fuzz round 11-17, artifacts/statement_check/wrongok-uppercase-hex-in-fact-proof.json). A statement holds only
+/// in the one encoding [`draft`] and [`sign`] write.
+fn canonical_hex(what: &str, s: &str) -> Result<Vec<u8>, String> {
+    match unhex(s) {
+        Some(b) if hex(&b) == s => Ok(b),
+        Some(_) => Err(format!("{what}: hex must be lower-case")),
+        None => Err(format!("{what}: not hex")),
+    }
+}
+
 /// The scripts of a statement, decoded, in entry order.
 fn scripts_of(st: &Statement) -> Result<Vec<Vec<u8>>, String> {
     st.entries.iter().enumerate()
-        .map(|(i, e)| unhex(&e.fact.script_pubkey).ok_or_else(|| format!("entry {i}: script_pubkey is not hex")))
+        .map(|(i, e)| canonical_hex(&format!("entry {i}: script_pubkey"), &e.fact.script_pubkey))
         .collect()
 }
 
@@ -264,6 +276,11 @@ pub fn check_statement(cs: &ChainState, undo_from: u32, st: &Statement, ch: &Cha
             return Err(format!("entry {i}: a {:?} fact, want balance", f.kind));
         }
         let want = f.expect.as_deref().ok_or_else(|| format!("entry {i}: the fact carries no answer (expect)"))?;
+        // the fields a balance fact does not read must be absent, and its proof lower-case hex: one encoding only
+        if f.txid.is_some() || f.vout.is_some() || f.origin.is_some() {
+            return Err(format!("entry {i}: a balance fact has no txid, vout or origin"));
+        }
+        canonical_hex(&format!("entry {i}: proof"), &f.proof)?;
         check_trie_fact(cs, undo_from, f).map_err(|x| format!("entry {i}: {x}"))?;
         let (c, v) = balance_of(want).map_err(|x| format!("entry {i}: expect {want:?}: {x}"))?;
         sum = sum.checked_add(v).ok_or("the values overflow")?;
@@ -459,6 +476,33 @@ mod tests {
         let mut t = st.clone();
         t.total = 1;
         assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("sum to 0"));
+    }
+
+    /// Fuzz round 11-17 (artifacts/statement_check/wrongok-uppercase-hex-in-fact-proof.json): a statement holds only in
+    /// the encoding the signer wrote. One hex digit upper-cased in a fact's proof or script, or a txid / vout / origin
+    /// on a balance fact (fields it never reads), is refused, though each is the same fact to `unhex` and the trie.
+    #[test]
+    fn a_statement_holds_only_as_written() {
+        let (cs, uf) = real();
+        let (k1, k2) = (key(), key());
+        let st = signed(&cs, &real_trie(), &[script(&k1, 2), script(&k2, 3)], &[k1, k2]);
+        check_statement(&cs, uf, &st, &ASK).unwrap();
+        let upper_first_letter = |s: &str| {
+            let i = s.find(|c: char| c.is_ascii_lowercase()).expect("a hex letter");
+            format!("{}{}{}", &s[..i], s[i..i + 1].to_uppercase(), &s[i + 1..])
+        };
+        let mut t = st.clone();
+        t.entries[1].fact.proof = upper_first_letter(&t.entries[1].fact.proof);
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("entry 1: proof: hex must be lower-case"));
+        let mut t = st.clone();
+        t.entries[0].fact.script_pubkey = upper_first_letter(&t.entries[0].fact.script_pubkey);
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("entry 0: script_pubkey: hex must be lower-case"));
+        let mut t = st.clone();
+        t.entries[0].fact.txid = Some("00".repeat(32));
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("no txid, vout or origin"));
+        let mut t = st.clone();
+        t.entries[1].fact.vout = Some(0);
+        assert!(check_statement(&cs, uf, &t, &ASK).unwrap_err().contains("no txid, vout or origin"));
     }
 
     #[test]

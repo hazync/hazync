@@ -94,33 +94,14 @@ fn differing(v: &serde_json::Value, w: &serde_json::Value) -> Vec<String> {
     out
 }
 
-/// The facts' hex with its case folded: `unhex` reads either case, so an upper-case digit in a fact is the same fact
-/// (round 1 found exactly that; reported, artifacts/statement_check/). Signatures are base64 and keep their case.
-fn fold_fact_case(v: &mut serde_json::Value) {
-    fn lower(x: &mut serde_json::Value) {
-        match x {
-            serde_json::Value::String(s) => *s = s.to_lowercase(),
-            serde_json::Value::Array(a) => a.iter_mut().for_each(lower),
-            serde_json::Value::Object(o) => o.values_mut().for_each(lower),
-            _ => {}
-        }
-    }
-    if let Some(es) = v.get_mut("entries").and_then(|e| e.as_array_mut()) {
-        for e in es { if let Some(f) = e.get_mut("fact") { lower(f); } }
-    }
-}
-
 pub fn check(data: &[u8]) {
     let Ok(st) = serde_json::from_slice::<Statement>(data) else { return };
     let (cs, uf) = state();
     let (_, want) = reference();
     for ch in [ASK, Challenge::default()] {
         if zapp_statement::check_statement(cs, *uf, &st, &ch).is_ok() {
-            let mut got = serde_json::to_value(&st).unwrap();
-            fold_fact_case(&mut got);
-            let mut want = want.clone();
-            fold_fact_case(&mut want);
-            assert!(got == want, "WRONG-OK: a statement other than the signed one holds (challenge given: {}): {:?}",
+            let got = serde_json::to_value(&st).unwrap();
+            assert!(got == *want, "WRONG-OK: a statement other than the signed one holds (challenge given: {}): {:?}",
                     ch.purpose.is_some(), differing(&got, &want));
         }
     }
