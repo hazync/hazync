@@ -55,9 +55,13 @@ jobs:
   #   soundness=true  only what the soundness pass runs changed  -> the soundness pass (libzync-hosts and its needs)
   # FAIL-SAFE: a path the filter does not name as light runs everything, and so does every failure here (no merge
   # commit, a failed diff, no filter on the base branch, a filter that crashed or printed nothing): every exit below
-  # that is not the filter's own answer says "true". The gated jobs also run when this job did not succeed.
-  # The filter is the BASE branch's copy (git show HEAD^1:…), so a pull request cannot loosen the filter that judges
-  # it; a change to it is a change under .github/, which runs everything.
+  # that is not the filter's own answer says "true". reproducible-image-id and libzync-hosts also run when this job
+  # did not succeed, and the jobs that need libzync-hosts run whenever it succeeded (their `if:`), not only when
+  # every job they transitively need succeeded.
+  # The filter is the BASE branch's copy (git show HEAD^1:…), and it derives its rules from the BASE tree
+  # (--base HEAD^1), so a pull request cannot loosen the filter that judges it. That protects the SCRIPT only: on
+  # pull_request GitHub runs the PR's OWN copy of this workflow, so a PR could rewrite this job itself. That is why
+  # every change under .github/ runs everything, and why a workflow change is a reviewer's matter, not this filter's.
   # Required checks: a job skipped by its `if:` (or because a job it needs was skipped) reports "skipped", which branch
   # protection counts as passing. soundness-suite runs always and passes a skipped pass only when this job succeeded
   # and said soundness=false.
@@ -68,7 +72,7 @@ jobs:
       image: ${{ steps.filter.outputs.image }}
       soundness: ${{ steps.filter.outputs.soundness }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pinned as #757 pins the rest)
         with:
           fetch-depth: 2      # the PR's merge commit and its first parent, the base tip
       - name: Which heavy jobs this run needs (only a pull_request can skip any)
@@ -88,7 +92,7 @@ jobs:
           git diff --no-renames --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt" || everything "git diff failed"
           git show HEAD^1:.github/scripts/ci_changes.py > "$RUNNER_TEMP/ci_changes.py" 2>/dev/null \
             || everything "the base branch has no .github/scripts/ci_changes.py"
-          python3 -I "$RUNNER_TEMP/ci_changes.py" "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/changed.txt" \
+          python3 -I "$RUNNER_TEMP/ci_changes.py" --base HEAD^1 < "$RUNNER_TEMP/changed.txt" \
             > "$RUNNER_TEMP/decision.txt" 2> "$RUNNER_TEMP/classes.txt" || { cat "$RUNNER_TEMP/classes.txt"; everything "the filter failed"; }
           cat "$RUNNER_TEMP/classes.txt"
           image=$(sed -n 's/^image=\(true\|false\)$/\1/p' "$RUNNER_TEMP/decision.txt")
@@ -98,7 +102,8 @@ jobs:
           [ "$image" = false ] || soundness=true      # the image feeds the soundness pass: image implies soundness
           echo "image=$image soundness=$soundness ($(wc -l < "$RUNNER_TEMP/changed.txt") files)"
           printf 'image=%s\nsoundness=%s\n' "$image" "$soundness" >> "$GITHUB_OUTPUT"
-          { printf '### Heavy jobs: image=%s soundness=%s\n\n```\n' "$image" "$soundness"; cat "$RUNNER_TEMP/classes.txt"; printf '```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          # the file list as an indented block (the filter indents each line): a path cannot close a fence
+          { printf '### Heavy jobs: image=%s soundness=%s\n\n' "$image" "$soundness"; cat "$RUNNER_TEMP/classes.txt"; } >> "$GITHUB_STEP_SUMMARY"
 
   libzync-tests:
     # libzync, the new core (docs/libzync/LIBZYNC.md): the coin log, the counting trie (guest, model and store must
@@ -2083,7 +2088,7 @@ jobs:
   # or printed nothing fails).
   libzync-hosts:
     # Skipped on a pull request that changes nothing the soundness pass builds or runs (`changes`), and with it every
-    # job that needs it; runs when `changes` did not succeed.
+    # job that needs it (each runs exactly when this one succeeded); runs when `changes` did not succeed.
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.soundness != 'false') }}
     runs-on: ubuntu-latest
@@ -2134,6 +2139,7 @@ jobs:
     # board handover rehearsal and its control. On the mainnet TEST VARIANTS host_m0 (empty test lineage) and host_mN
     # (host_m0 pinned at 11): a published image may pin a predecessor and then never proves below it (v0.26.0's pins none).
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
@@ -2149,6 +2155,7 @@ jobs:
   libzync-blocks:
     # edge blocks; negatives on 962,000
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -2176,6 +2183,7 @@ jobs:
     # Core 28's script / tx vectors in 8 shards (each case once): libsecp and honest hints agree with Core on every
     # case; under four forged-hint variants nothing Core rejects passes. A shard must report exactly its case count.
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
     strategy:
@@ -2196,6 +2204,7 @@ jobs:
   libzync-rig:
     # the guest against a real Bitcoin Core 28.0 on regtest, rule by rule; then handover O -> N
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -2218,6 +2227,7 @@ jobs:
   libzync-signet:
     # signet 1..100 from genesis on the published signet image vs the reference implementations
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
