@@ -1420,9 +1420,9 @@ with tempfile.TemporaryDirectory() as other, tempfile.TemporaryDirectory() as R:
 check(refused and "refusing" in refused,
       f"r7 H1: --adopt of another rundir's record into a rundir that holds a kept fleet is refused ({refused})")
 
-# ── r7 L5. a pod unconfirmed for over an hour stops the run (latch + page) ───────────────────────────────────
+# ── r8 M1. a pod unconfirmed for over an hour does NOT stop the run: it is retried and said loudly ─────────────
 if CONTROL:
-    sb.UNCONFIRMED_LATCH_S = 10 ** 9
+    sb.UNCONFIRMED_WARN_S = 10 ** 9
 
 
 class Never:
@@ -1435,13 +1435,17 @@ class Never:
 
 clk = Clock()
 with tempfile.TemporaryDirectory() as d:
+    logs = []
     bot = sb.Bot(os.path.join(d, "bot.db"), Never(), RL(), max_pods=1, max_usd=100, max_usd_per_hour=5,
-                 log=lambda m: None, clock=clk, sleep=clk.sleep, confirm_wait_s=0)
+                 log=logs.append, clock=clk, sleep=clk.sleep, confirm_wait_s=0)
     pu = sb.Pod({"id": "u1", "name": bot.prefix + "1", "gpu_type": A40, "cost_per_hr": 0.5}, clk())
     pu.state, pu.unconfirmed_since = "unconfirmed", clk() - 3700
     bot.pods.append(pu)
     bot._retry_unconfirmed(None)
-check(bot.stop_reason == "runpod", f"r7 L5: a pod unconfirmed for over an hour stops the run as 'runpod' ({bot.stop_reason})")
+    bot._retry_unconfirmed(None)
+check(bot.stop_reason is None and pu.live and sum("not been confirmed terminated" in m for m in logs) == 1,
+      f"r8 M1: a pod unconfirmed for over an hour is retried, not a stop, and said loudly ONCE per hour "
+      f"({bot.stop_reason}, {sum('not been confirmed terminated' in m for m in logs)} warnings)")
 
 # ── r7 L4. the start sweep closes a row only after an answered DELETE ─────────────────────────────────────────
 class Unlisted:
@@ -1459,10 +1463,116 @@ with tempfile.TemporaryDirectory() as d:
     sb.ensure_tables(c)
     c.execute("INSERT INTO sponsor_pods(pod_id, name, created_at) VALUES('q1','hz-sponsor-1-1',1)")
     c.commit()
-    bot._sweep_leftovers(c)
+    if CONTROL:                                  # the old sweep: an unlisted row is closed without a DELETE
+        c.execute("UPDATE sponsor_pods SET terminated_at=1 WHERE pod_id='q1'")
+    else:
+        bot._sweep_leftovers(c)
     row = c.execute("SELECT terminated_at FROM sponsor_pods WHERE pod_id='q1'").fetchone()
     c.close()
 check(row[0] is None, "r7 L4: a pod the listing omits keeps its row open when its DELETE errors (not proof it is gone)")
+
+# ── r8 H1. two consecutive --adopt runs, through main()'s record wiring: a pod LEFT RUNNING is never deleted ──
+print("== r8: adopt twice ==")
+if CONTROL:
+    def _old_release(self, api, p, why, adopted):      # the record forgets a pod it left running
+        if not adopted:
+            sb.terminate_confirmed(api, p["id"])
+    tip_smoke.FleetRecord.release = _old_release
+
+
+class _Card:
+    def __init__(self, cid):
+        self.cid = cid
+
+
+def adopt_run(api, d, drop):
+    """One --adopt run of d's own record, wired as main() wires it: the snapshot at start, rerun_guard, the prefix,
+    FleetRecord + _drop_cards at a gate, teardown_release at the end. `drop`: card names a gate drops."""
+    rp_ = os.path.join(d, "rented.json")
+    a = _ap.Namespace(keep=False, adopt=rp_, release_adopted=False, cleanup=False, rundir=d)
+    keep = tip_smoke.adopted_ids(a.adopt)
+    home = tip_smoke.rerun_guard(api, a)
+    rpre = (home and tip_smoke.read_run_prefix(d)) or tip_smoke.run_prefix(d)
+    unreleased = []
+    rec = tip_smoke.FleetRecord(rp_, unreleased)
+    try:
+        created, missing = tip_smoke.adopt_fleet(api, a.adopt)
+        order = [_Card(p["name"]) for p in created]
+        order, created = tip_smoke._drop_cards(order, created, drop, "a wrong --repo failed the staging gate",
+                                               release=lambda p: rec.release(api, p, "gate", adopted=True),
+                                               record=rec.write)
+    except SystemExit:
+        created = []
+    finally:
+        tip_smoke.teardown_release(api, a, rp_, created, unreleased, rpre, keep, sleep=(_c := Clock()).sleep, clock=_c)
+
+
+for scenario, first_drop in (("A: one card dropped at a gate", "one"), ("B: every card dropped (#551)", "all")):
+    with tempfile.TemporaryDirectory() as d:
+        f = FakeV2()
+        api = tip_smoke.SmokeRunPod("k-test", url=f.url, timeout=10, sleep=lambda x: None)
+        pre = tip_smoke.run_prefix(d)
+        rec0 = [{"id": f"a{i}", "name": f"{pre}{i}"} for i in (1, 2, 3, 4)]
+        for r_ in rec0:
+            f.pods[r_["id"]] = {"name": r_["name"], "gpu": A40, "cost": 1}
+        json.dump(rec0, open(os.path.join(d, "rented.json"), "w"))
+        names = [r_["name"] for r_ in rec0]
+        adopt_run(api, d, names[3:] if first_drop == "one" else names)     # run 1
+        adopt_run(api, d, [])                                                # run 2: adopt the same record again
+        survivors = sorted(f.pods)
+    check(survivors == ["a1", "a2", "a3", "a4"],
+          f"r8 H1 ({scenario}): two consecutive --adopt runs never delete a pod that was LEFT RUNNING ({survivors})")
+
+# ── r8 M2. the final pass DELETEs a stray that was never tried, once ──────────────────────────────────────────
+class LastMinute:
+    def __init__(self):
+        self.deletes, self.live = [], {"late1"}
+
+    def pods(self):
+        return [{"id": i, "name": "pre-" + i, "status": "RUNNING"} for i in self.live]
+
+    def terminate(self, pid):
+        self.deletes.append(pid)
+        self.live.discard(pid)
+
+
+clk = Clock()
+lm = LastMinute()
+done, left, clean = sb.release_until_clean(lm, [], match=lambda n: n.startswith("pre-"), sleep=clk.sleep, clock=clk,
+                                           budget_s=4, gap_s=5)
+check(lm.deletes == ["late1"] and done == ["late1"] and left == [],
+      f"r8 M2: a stray first seen on the last listing gets exactly one DELETE before the budget gives up ({lm.deletes})")
+
+# ── r8. terminate_all: every DELETE before the coordinator is asked which blocks landed ─────────────────────────
+events = []
+
+
+class Recorder:
+    def terminate(self, pid):
+        events.append("DELETE")
+
+    def pods(self):
+        return []
+
+
+real_cov = sb.covered
+sb.covered = lambda coord, heights: events.append("books") or set()
+try:
+    with tempfile.TemporaryDirectory() as d:
+        bot = sb.Bot(os.path.join(d, "bot.db"), Recorder(), RL(), max_pods=2, max_usd=100, max_usd_per_hour=5,
+                     log=lambda m: None, sleep=lambda x: None, confirm_wait_s=0, coord=object())
+        c = sb.connect(bot.db_path)
+        sb.ensure_tables(c)
+        for i in (1, 2):
+            pp = sb.Pod({"id": f"b{i}", "name": bot.prefix + str(i), "gpu_type": A40, "cost_per_hr": 0.5}, bot.clock())
+            pp.assigned = [{"sid": 1, "height": i, "row": i}]
+            bot.pods.append(pp)
+        bot.terminate_all(c, "test")
+        c.close()
+finally:
+    sb.covered = real_cov
+check(events and events.index("books") > max(i for i, e in enumerate(events) if e == "DELETE"),
+      f"r8 L2: terminate_all sends every DELETE before it asks the coordinator about landed blocks ({events})")
 
 # ── 9. ⛔ nothing in the repo still calls GraphQL ─────────────────────────────────────────────────────
 print("== the repo no longer calls RunPod GraphQL ==")
@@ -1543,7 +1653,10 @@ EXPECTED_CONTROL = {
     "r6: terminate_all confirms a pod that RunPod still listed on the first pass",
     "r7 H1: --adopt",
     "r7 H1: --adopt of another rundir's record into a rundir that holds a kept fleet is refused",
-    "r7 L5: a pod unconfirmed for over an hour stops the run as 'runpod'",
+    "r7 L4: a pod the listing omits keeps its row open when its DELETE errors",
+    "r8 H1",
+    "r8 M1: a pod unconfirmed for over an hour is retried, not a stop, and said loudly ONCE per hour",
+    "r8 M2: a stray first seen on the last listing gets exactly one DELETE before the budget gives up",
     "ssh_of asks GET /v2/pods/{id} and takes the PUBLIC 22 mapping, not a 10.x one",
     "two 429s are waited out for Retry-After and the create then lands",
     "with no runtime ports, RunPod's own ssh.direct is used",

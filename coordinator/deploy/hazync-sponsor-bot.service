@@ -92,8 +92,10 @@ ExecStopPost=-/bin/sh -c 'test "$SERVICE_RESULT" = success || : > /var/lib/hazyn
 #   one listing for this run's strays            60 s timeout + 2 x 60 s of 429 waits   ~180 s
 #   DELETE all + confirm, sponsor_bot.TERMINATE_BUDGET_S (wall clock)                    360 s
 #   the one call that may start just before that budget ends                            ~300 s
-#   = ~1,200 s. 1,500 s leaves margin. What is still unconfirmed keeps its sponsor_pods row open, and the next
-#   run's start terminates it before renting anything (Bot._sweep_leftovers).
+#   after it: one DELETE per stray NEVER yet tried (a lost create seen on the last
+#   listing, normally none) and one listing, ~60 s each                                  ~120 s per stray
+#   = ~1,200 s with no late stray, ~1,320 s with one. 1,500 s leaves margin. What is still unconfirmed keeps its
+#   sponsor_pods row open, and the next run's start terminates it before renting anything (Bot._sweep_leftovers).
 # ⚠ This is also how long a host SHUTDOWN or reboot may wait on this unit while it releases pods. Intended: a
 #   reboot that kills the cleanup leaves GPUs billing.
 KillSignal=SIGINT

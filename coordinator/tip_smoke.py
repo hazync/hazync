@@ -77,6 +77,8 @@ def teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep,
     Everything else this run created or recorded, and every pod with its prefix, is released."""
     keep = [p["id"] for p in created] + sorted(adopt_keep) if (a.keep or (a.adopt and not a.release_adopted)) \
         else sorted(adopt_keep)
+    if a.adopt and not a.release_adopted:
+        keep += sorted(adopted_ids(rented_path))    # the record is the truth: every pod in it is still ours to keep
     return release_recorded(api, rented_path, created, unreleased, prefix=rpre, keep_ids=keep, sleep=sleep,
                             clock=clock)
 
@@ -698,6 +700,41 @@ def slow_worker_cut(order, per, *, need, floor=0.0):
         drop.add(c.cid)
     drop.discard(agg.cid)
     return drop, [(c.cid, per.get(c.cid)) for c in ranked]
+
+
+class FleetRecord:
+    """rented.json -- THE TRUTH ABOUT WHAT BILLS. Every write is: the pods not confirmed released (`unreleased`), the
+    fleet, and every pod LEFT RUNNING (an adopted card dropped at a gate or cut as surplus). ⛔ A pod that is still
+    running is never dropped from the record: the next --adopt snapshots this file, and a pod missing from it was
+    swept by that run's teardown -- the #547/#551 incident, reproduced twice before this class existed."""
+
+    def __init__(self, path, unreleased):
+        self.path, self.unreleased, self.left_running = path, unreleased, []
+
+    def write(self, fleet):
+        rows, seen = [], set()
+        for p in list(self.unreleased) + list(fleet) + self.left_running:
+            if p.get("id") and p["id"] not in seen:
+                seen.add(p["id"])
+                rows.append(p)
+        with open(self.path, "w") as fh:
+            json.dump(rows, fh, indent=1)
+
+    def leave_running(self, p):
+        self.left_running.append(dict(p, left_running=True))
+
+    def release(self, api, p, why, adopted):
+        """A pre-clock gate dropped `p`. Adopted (no --release-adopted): LEFT RUNNING and kept in the record. Rented:
+        terminated -- and kept in the record (as unreleased) if RunPod does not confirm it."""
+        if adopted:
+            log(f"  dropped {p['name']} from the run — {why} (LEFT RUNNING: adopted, kept in {self.path})")
+            self.leave_running(p)
+            return
+        if sponsor_bot.terminate_confirmed(api, p["id"]):
+            log(f"  released {p['name']} — {why}")
+        else:
+            self.unreleased.append(p)
+            log(f"  ⛔ {p['name']} NOT confirmed released — {why}; kept in {self.path} for the teardown")
 
 
 def _drop_cards(order, created, bad, why, *, release, record):
@@ -1434,6 +1471,7 @@ def main():
     # them until it has.
     unreleased = []
     rented_path = os.path.join(a.rundir, "rented.json")
+    rec = FleetRecord(rented_path, unreleased)          # every write of rented.json in this run goes through it
     os.makedirs(a.rundir, exist_ok=True)
 
     if a.cleanup:
@@ -1538,8 +1576,7 @@ def main():
             log(f"ADOPTED {len(created)} live pod(s) from {a.adopt} — nothing rented")
             # ⚠ The record is now THIS run's to maintain: a card dropped at a gate must leave the
             # file, or a later --cleanup would try to release a pod that is already gone.
-            with open(rented_path, "w") as fh:
-                json.dump(unreleased + created, fh, indent=1)
+            rec.write(created)
         else:
             # ⚠ `rented` NOT `want` (hazync#492). `want` is reused at the prover-fetch gate for the
             # BINARY SIZE, so a message down there that reads `want` prints 410441528 where a card count
@@ -1606,8 +1643,7 @@ def main():
                 # a probe fan-out did exactly that: ThreadPoolExecutor.__exit__ waits for every in-flight
                 # ssh, so the teardown did not run for minutes and the pods had to be killed by hand.
                 # `--cleanup` reads this file and releases whatever is in it, whatever happened.
-                with open(rented_path, "w") as fh:
-                    json.dump(unreleased + created, fh, indent=1)
+                rec.write(created)
                 log(f"rented {name}  {p['gpu_type']}  ${p['price']:.3f}/hr  id={p['id']}"
                     f"  (recorded in {rented_path})")
 
@@ -1681,26 +1717,19 @@ def main():
             ⚠ A RENTED pod is still terminated here, and must be: #479 exists because a card failing
             a gate used to end the whole run instead of being dropped from it.
             """
-            if a.adopt and not a.release_adopted:
-                log(f"  dropped {p['name']} from the run — {why} (LEFT RUNNING: adopted)")
-                return
-            sponsor_bot.terminate_confirmed(api, p["id"])
-            log(f"  released {p['name']} — {why}")
+            rec.release(api, p, why, adopted=bool(a.adopt and not a.release_adopted))
 
         if never_up:
             log(f"releasing {len(never_up)} pod(s) that never answered ssh: {sorted(never_up)}")
             order, created = _drop_cards(
                 order, created, never_up, "it never answered ssh",
                 release=lambda p: _release_pod(p, "it never answered ssh"),
-                record=lambda kept: json.dump(kept, open(rented_path, "w"), indent=1))
+                record=rec.write)
 
         def _drop(order_, created_, bad, why):
             def release(p):
                 _release_pod(p, why)
-            def record(kept):
-                with open(rented_path, "w") as fh:
-                    json.dump(kept, fh, indent=1)
-            return _drop_cards(order_, created_, bad, why, release=release, record=record)
+            return _drop_cards(order_, created_, bad, why, release=release, record=rec.write)
 
         # ⛔ THE AGGREGATE IS CHOSEN ON ITS LINK, NOT ON WHO ANSWERED SSH FIRST (hazync#517).
         # This was `order[0]`. Every segment is pushed FROM the aggregate and every join round-trips
@@ -1956,8 +1985,7 @@ def main():
                 for p in [x for x in created if x["name"] in bad]:
                     _release_pod(p, "it could not reach the aggregate")
                 created = [x for x in created if x["name"] not in bad]
-                with open(rented_path, "w") as fh:
-                    json.dump(unreleased + created, fh, indent=1)
+                rec.write(created)
                 if len(order) < 2:
                     raise SystemExit(
                         f"only {len(order)} card(s) can reach the aggregate — a distributed run "
@@ -2050,8 +2078,7 @@ def main():
             for p in [x for x in created if x["name"] in set(duds)]:
                 _release_pod(p, "its GPU cannot prove")
             created = [x for x in created if x["name"] not in set(duds)]
-            with open(rented_path, "w") as fh:
-                json.dump(unreleased + created, fh, indent=1)
+            rec.write(created)
             if len(order) < 2:
                 raise SystemExit(f"only {len(order)} card(s) have a working GPU")
             joined = tip_dashboard.feed_records(order, fleet)
@@ -2753,8 +2780,7 @@ def main():
                 # ~$18.81/hr. There is no budget cap by decision, so nothing else would have stopped
                 # them.
                 try:
-                    with open(rented_path, "w") as fh:
-                        json.dump(unreleased + created, fh, indent=1)
+                    rec.write(created)
                 except OSError as exc:
                     log(f"  ⛔ COULD NOT UPDATE {rented_path} ({exc}) — if this driver dies, "
                         f"`--cleanup` will not know about the {len(joined)} card(s) just added. "

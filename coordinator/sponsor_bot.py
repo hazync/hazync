@@ -1080,7 +1080,7 @@ class RunPod:
 # together with everything else terminate_all does, or systemd SIGKILLs the cleanup with pods billing.
 TERMINATE_BUDGET_S = 6 * 60
 TERMINATE_429_WAIT_S = 30.0
-UNCONFIRMED_LATCH_S = 3600       # a pod unconfirmed this long stops the run (latch + page)
+UNCONFIRMED_WARN_S = 3600        # a pod still unconfirmed is reported loudly once per this many seconds
 _ACCEPT_UNACKED_ABSENCE = False   # test_runpod_v2.py --control only
 
 
@@ -1146,9 +1146,10 @@ def release_until_clean(api, ids, match=None, skip=None, sleep=time.sleep, clock
     end = clock() + budget_s
     skip = skip or (lambda i: False)
     want = [str(i) for i in dict.fromkeys(ids) if not skip(str(i))]
-    done, left, clean = [], [], 0
+    done, left, clean, tried_ids = [], [], 0, set()
     while True:
         todo = [i for i in want if i not in done]
+        tried_ids |= set(todo)
         if todo:
             d_, left = terminate_many(api, todo, sleep, wait_s=wait_s, budget_s=max(0.0, end - clock()), clock=clock)
             done += d_
@@ -1177,10 +1178,12 @@ def release_until_clean(api, ids, match=None, skip=None, sleep=time.sleep, clock
         if clock() + gap_s >= end:
             break
         sleep(gap_s)
-    extra = [i for i in left if i not in done]
-    if extra:                       # strays found on the last listing get one DELETE pass before giving up
-        d_, left = terminate_many(api, extra, sleep, tries=1, wait_s=0, budget_s=0, clock=clock)
+    tried = set(done) | set(tried_ids)
+    extra = [i for i in left if i not in tried]
+    if extra:                       # strays NEVER yet DELETEd (found on the last listing) get one pass: one DELETE each
+        d_, _ = terminate_many(api, extra, sleep, tries=1, wait_s=0, budget_s=0, clock=clock)
         done += d_
+        left = [i for i in left if i not in d_]
         if on_done and d_:
             on_done(d_)
     return done, left, False
@@ -1676,7 +1679,7 @@ class Bot:
                 except CoordError as e:
                     coord_ok = False
                     self._coord_error(e)
-                if self.stop_reason == "coordinator":
+                if self.stop_reason:            # anything this look decided (coordinator, a drought, ...) ends it now
                     break
                 if self._over_budget(now):
                     self.stop_reason = "budget"
@@ -1685,9 +1688,13 @@ class Bot:
                 if coord_ok:
                     try:
                         self._regen(c, now)
+                        if self.stop_reason:
+                            break
                         self._assign(c, now)
+                        if self.stop_reason:
+                            break
                         self._launch(c, now)
-                        if self.stop_reason == "runpod":
+                        if self.stop_reason:
                             break
                         # ⛔ AN IN-FLIGHT REPLAY HOLDS THE LOOP OPEN. Without the last clause the bot sees no
                         # live pod and nothing provable (the block has no bundle yet — that is the whole
@@ -2174,6 +2181,7 @@ class Bot:
             return
         if p.id in self.unconfirmed:
             self.unconfirmed.remove(p.id)
+        p.unconfirmed_since = None
         p.terminated, p.state = self.clock(), "terminated"
         c.execute("UPDATE sponsor_pods SET terminated_at=?, usd_estimate=?, note=? WHERE pod_id=?",
                   (p.terminated, p.spend(p.terminated, self.ceiling), note, p.id))
@@ -2184,14 +2192,16 @@ class Bot:
         stuck = [p for p in self._live() if p.state == "unconfirmed"]
         if not stuck:
             return
-        # ⛔ A pod RunPod will not let go of for an hour is not left to accrue silently up to --max-usd: stop (exit 5
-        # latches and pages); terminate_all tries once more.
-        old = [p for p in stuck if self.clock() - (p.unconfirmed_since or self.clock()) > UNCONFIRMED_LATCH_S]
-        if old:
-            self.stop_reason = "runpod"
-            self.log(f"⛔ {', '.join(p.name for p in old)} could not be confirmed terminated for over "
-                     f"{UNCONFIRMED_LATCH_S // 60} min: stopping. Check RunPod for hz-sponsor-* pods "
-                     f"(`sponsor_bot.py stop-all`) before clearing the latch.")
+        # A pod RunPod will not let go of is retried every look, its spend counting toward --max-usd (the bound). It is
+        # NOT a reason to stop: during a RunPod DELETE outage that would kill healthy pods' work and latch with nobody
+        # retrying. It is said LOUDLY, once an hour per pod.
+        for p in stuck:
+            since = p.unconfirmed_since or self.clock()
+            hours = int((self.clock() - since) // UNCONFIRMED_WARN_S)
+            if hours >= 1 and hours > getattr(p, "_warned_hours", 0):
+                p._warned_hours = hours
+                self.log(f"⛔ {p.name} has not been confirmed terminated for {hours} h; still retrying every look and "
+                         f"counting its spend. Check RunPod (`sponsor_bot.py stop-all` releases hz-sponsor-* pods).")
         done, _ = terminate_many(self.api, [p.id for p in stuck], self.sleep, tries=1, wait_s=0, budget_s=0)
         for p in stuck:
             if p.id in done:
@@ -2220,7 +2230,10 @@ class Bot:
             self.log(f"could not release this run's pods: {e}")
             done, left = [], list(by_id)
         for p in live:
-            self._terminate_books(c, p)     # after the release: a slow coordinator cannot eat the release budget
+            try:
+                self._terminate_books(c, p)     # after the release: a slow coordinator cannot eat the release budget
+            except Exception as e:              # noqa: BLE001 -- one pod's books must not stop the rest settling
+                self.log(f"could not book {p.name}'s blocks: {e}")
             if p.terminated is None:
                 self._settle(c, p, False, reason)
         for i in left:
