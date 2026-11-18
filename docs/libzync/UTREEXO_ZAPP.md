@@ -585,11 +585,16 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
 
 - `zapps/utreexo/tip-exec-tests.sh` (executed on hazync-coord, the numbers above): the chain base → 8 steps, each
   equal to Floresta's `update_acc`; walk(10,000) == walk(1,999) + step(10,000); then a control (the untampered step
-  1,999 → 9,000 under the core state at 10,000 passes) and **15 refusals by the guest** on that step: a spent coin's
-  value, creating block hash, height, coinbase flag (each: "the deletions do not open in the accumulator"), the spent
-  coins of a block dropped or doubled, a proof hash, a proof target, an empty proof, two transactions swapped (Merkle
-  root), a link header changed or dropped, the previous journal changed (no receipt matches it), the previous statement
-  given as the other kind, another core image id.
+  1,999 → 9,000 under the core state at 10,000 passes) and **21 refusals by the guest, each asserted with its reason**
+  (re-run 18.11.2026 at `ea14217`, after the review): from the base, 17 on 1,999 → 9,000: a spent coin's value,
+  creating block hash, height, coinbase flag, a proof hash, a proof target, an empty proof ("the deletions do not open
+  in the accumulator"); the spent coins of a block dropped ("truncated") or doubled ("more records than deletions"); two
+  transactions swapped ("Merkle root"); the first block's prev field ("header does not follow the previous block"); a
+  middle link header ("does not reach the core tip"); the LAST link header ("the link from block H does not end at the
+  core tip"); a link header dropped ("want T - H"); the previous journal changed, the previous kind swapped, another
+  core id ("no receipt found to resolve assumption"); from a STEP (prev kind 2), 4 on 10,000 → 15,000 under the core
+  state at 100,000 (a spent value, the first prev field, the previous journal, the kind). A tamper with nothing to
+  tamper (dropping a link header when H = T) is a host error, never a pass.
 - `zapps/utreexo` `tests/tip_verdict_paths.rs` (feature `tip`): OK reachable on both networks from a built statement;
   each of 14 checks fails alone; DEMO below minimum work, with T > H and no tip named, with block H not named, with the
   unpinned base image; the `AssumeUtreexoValue` source of a tip statement.
