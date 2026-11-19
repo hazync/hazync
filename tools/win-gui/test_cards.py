@@ -137,7 +137,8 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
     check(seg(small, "", TABLE) == "18" and seg(big, "", TABLE) == "20",
           "⛔ Automatic (blank) gives each card its own size — it was blank, so a 4 GB card got the host's 21")
     tiny = dict(small, vram_mb=4096)
-    check(seg(tiny, "", TABLE) == "17", "a 4 GB card (the GTX 1050 Ti that ran out of memory, 19.11) gets 17")
+    check(seg(tiny, "", TABLE) == "18", "a 4 GB card gets 18, measured: a GTX 1050 Ti proved block 4401 at 18 (19.11)")
+    check(seg(dict(small, vram_mb=2048), "", TABLE) == "17", "a smaller card still gets 17")
 
     print("── 8. two identical cards can be told apart on screen ──")
     lab = cards.labels(cards.parse(TWINS))
