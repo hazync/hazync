@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # The header-chain zyncAPP (ROADMAP N3) proved on ONE RunPod secure-cloud RTX PRO 6000: the whole mainnet header chain
 # from genesis in one succinct receipt, with the PUBLISHED guest ELF (reproduce/LIBZYNC_IDS zyncapp-headers line).
 # From the laptop: deploy, set up, upload headers + ELF, prove, HARVEST, terminate by the captured id. DEADLINE_MIN
