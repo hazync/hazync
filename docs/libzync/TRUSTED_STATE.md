@@ -30,6 +30,7 @@ and BIP30 tree, built from the snapshot's coins, and its own `anchor_id`.
 | 3b. image id | **unchanged** (no guest source touched; laptop mainnet image rebuilt from clean: same id and ELF) | §7 |
 | 4. cost | ingest in a guest: §6; per block anchored vs main: §5.4 | executor, laptop |
 | 5. zAPP on the anchored state | balance statement: **identical answer** to the main lineage's; script history: **only from H** | §5.5 |
+| 6. merge the lineages, nothing above H re-proved (second step) | yes, by **split answers + a join receipt**; the anchor MUST be proved (a forged coin log joins and its fake coin is spent: measured); replay pass ≈ 54% of re-proving (assumevalid proxy, measured on block 962,000) | §11 |
 
 ## 3. Design
 
@@ -498,4 +499,77 @@ journal decodes, one serde encoding and one SHA-256d; the cost that matters is r
 recursion, of the order of the core's own join (mode 18, 6.4 s on one RTX PRO 6000, LIBZYNC.md §4): ESTIMATED, not
 measured.
 
-<!-- REPLAY -->
+### 11.4 The replay pass
+
+**Idea.** Re-derive the main lineage's state over H+1..T (coin log flips and appends, counting trie, BIP30 tree, ECMH,
+`utxo_value`, block forest with main's coin states and the undo hashes) from blocks the anchored lineage already
+proved valid, skipping script and signature checks, so the main lineage reaches T with its full history and carries
+on as the one lineage.
+
+**Soundness (reasoned).** Skipping is sound for exactly the checks whose verdict the anchored proof already carries,
+and only for the same blocks:
+- the replayed blocks must be the anchored lineage's: each replay step links its header to the previous main state's
+  `tip_hash`, and the replay's block at height h must open as leaf h of anchored@T's block forest (or the replay's tip
+  at T must equal J_T's `tip_hash`, the header chain then fixing every block in between); the merkle root binds the
+  transactions to the header;
+- the anchored proofs are valid for the main lineage only through the join receipt (§11.3), which needs the ingest
+  receipt (§11.1);
+- everything that COMPUTES state must still run: the coin log flips open the spent leaf against main's own log (so the
+  existence check is repeated, harmlessly), the trie update, the BIP30 transition (main's tree differs from the
+  anchored one, §3.3), the ECMH, the undo hash. What may be skipped decides only validity: `VerifyScript`, sighash,
+  signature parse and verify, the batch MSM, and (cheap) the block's weight, sigops, fee and subsidy sums.
+
+**Guest work.** A replay step is the aggregate with chunks that only parse transactions and derive txids and coin
+leaves, and an `env::verify` of the anchored proof (or one join receipt per range). Its receipt must be able to stand
+as main's previous state for the core image's next ordinary block, which today's guest accepts only from its own
+image (`is_base = 0`, `self_id`) or a pinned predecessor with the SAME profile (handover). So it is a **core image
+change**: a new mode or a new image with its own lineage rule, i.e. a release and a review of new consensus-adjacent
+code. The existing assumevalid build (`HAZYNC_LIBZYNC=assumevalid`, profile bit 1) is the nearest thing that exists,
+but its proofs say "scripts skipped" and cannot be handed over to the scripts-checked image (HANDOVER.md §4 step 3).
+
+**Measured basis for the saving.**
+
+1. *The assumevalid build as a proxy*, block 962,000, executor, laptop, this branch's host (`950a491`+), 16 chunks,
+   `agg-exec-fake` (modelled coin log around the real block, `cost/txcounts.txt`), mainnet laptop images
+   `420a7239…` (scripts checked) and `fd04b41d…` (assumevalid):
+
+   | | chunks (16) | aggregate | trie | **block** | padded (segments) |
+   |---|---|---|---|---|---|
+   | scripts checked | 385,230,206 | 66,539,127 | 47,599,783 | **499,369,116** | 609,239,040 (586) |
+   | assumevalid (scripts and signatures skipped) | 153,191,036 | 66,539,127 | 47,599,783 | **267,329,946** | 331,089,920 (324) |
+   | saved | −60.2% | 0 | 0 | **−46.5%** | −45.7% |
+
+   The chunks still parse every transaction, hash txids and wtxids and build the coin leaves; aggregate and trie
+   are unchanged. A purpose-built replay step would save at most about this much (it keeps the aggregate and the
+   trie, 114 M of the 267 M) and pays its own binding to the anchored proof.
+2. *The profiles* (`experimental/trusted-state/replay_share.py` on `~/libzync-gpu/e1/prof/*.pprof`, E1-era images, a
+   sample charged as skippable when ANY frame of its stack is script or signature verification): one chunk of block
+   962,000 48.1% skippable (74.8% if the guest crate's bare inlined frame, which core_share.py charges to the batch
+   finish, is counted too), of 750,000 53.9% (85.6%); the aggregate and the trie receipt 0.0%. The measured 60.2% of
+   (1) falls inside that range. These are larger than a self-time split of the same profiles (signatures ~21-30%,
+   script ~6-10% of a chunk) because the paging, memcpy and hashing done for the interpreter and the batch are
+   charged to them here.
+
+So a replay of H..T costs, by this proxy, **about 54% of proving H..T again** (ESTIMATED for real blocks from one
+measured block; 750,000's profile suggests a similar share). It removes no work from the trie, the BIP30 tree or the
+coin log, which are what the main lineage needs.
+
+### 11.5 Recommendation for v0.28
+
+**Split answers with a join receipt; the anchored lineage stays the tip lineage after the join; the ingest receipt
+is mandatory.** Reasons:
+
+- It needs **no core image change**: the anchored lineage is the core's own base step (§3.2), the join receipt and the
+  ingest receipt are separate small images, and split answers are verifier and zAPP-module work. A replay pass needs a
+  new core mode or image (a release window and a review of new state-transition code) and still costs about 54% of
+  re-proving H..T (§11.4); a full re-prove costs 100% (≈ 6,100 card-hours above 935,000, §9, ESTIMATED).
+- Validity and the live state carry over completely once the anchor is proved (§11.1); every live-state zAPP
+  (statement, balances, assumeutxo, liveness and coin facts for coins live at H or created above it) answers from
+  anchored@T alone, and the history zAPPs split cleanly with no position matching (§11.2; complete histories measured
+  equal to the main lineage's on 15/15 scripts).
+- The costs it leaves: two facts per history answer and a frozen main proof at H; the hints and utreexo walks need a
+  two-part walk (a zAPP image change); the verifiers need the joined-statement format; the ingest at mainnet scale
+  needs the chunked design and the BIP30 bulk-build lever (§6, §8.6). The ingest receipt is the critical path: without
+  it neither the label before the join nor the merge after it is sound.
+- Keep the replay pass as the later option if single-proof history at the tip becomes a requirement (one store for
+  `zync-serve`, unchanged hints and utreexo walks); it is then a release item of its own.
