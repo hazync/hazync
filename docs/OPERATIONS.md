@@ -351,7 +351,8 @@ a new chain from genesis; v0.24.0/v0.25.0 shipped `8888d59c`). v0.23.0 (`863c9ce
 **The canonical id** (`reproduce/METHOD_ID`) is libzync's published mainnet image
 `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` (v0.26.0), with the signet image in
 [`reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). `reproduce/libzync.Dockerfile` reproduces both bit for bit and the
-`reproducible-image-id` job rebuilds them on every push. Release v0.26.0 ships it; the board runs it from genesis
+`reproducible-image-id` job rebuilds them on every push to main, nightly, and on every pull request that changes an
+image input (`.github/scripts/ci_changes.py`). Release v0.26.0 ships it; the board runs it from genesis
 (`8888d59c`, v0.24.0, from 2026-11-12 until the v0.26.0 reset).
 
 A receipt verifies only against the guest that produced it. A mismatch prints `STARK verification FAILED.
