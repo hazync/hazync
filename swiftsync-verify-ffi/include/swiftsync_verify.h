@@ -43,7 +43,8 @@ int swiftsync_verify(const uint8_t* receipt, size_t receipt_len,
 /* As swiftsync_verify, plus zyncAPP facts (docs/libzync/ZYNCAPPS.md section 8). network: 0 mainnet, 1 signet, OR
  * 0x10 for a coin-log image, OR 0x20 for the product image (coin log + counting trie + live-coin hash). facts_json:
  * NUL-terminated JSON {"coins": [CoinFact], "journeys": [CoinJourney], "tries": [TrieFact] (counting-trie facts at the
- * tip: coin unspent / spent by / absent, a script's balance or complete history)}, or NULL. expect: NUL-terminated
+ * tip: coin unspent / spent by / absent, a script's balance or complete history)}, or NULL; any other key, a value
+ * that is not an object, or an unknown field inside a fact is FAIL (never read as "no facts"). expect: NUL-terminated
  * "<height>:<hash>", the network's block at the proof's height from a source YOU trust (your node, an explorer), or
  * NULL; never take it from the fact server (an "expect" key inside facts_json is FAIL). A TrieFact that finds a coin
  * must carry its creating transaction ("origin", a TxFact; ZYNCAPPS.md).

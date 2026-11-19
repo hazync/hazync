@@ -61,7 +61,7 @@ GT=$("$NH" libzync-genesis-tip); [ "$GT" = "$("$OH" libzync-genesis-tip)" ] && p
 PORT=${PORT:-18941}; U=http://127.0.0.1:$PORT
 start() {  # start <host> <log>
   ( cd "$C" && exec env "${NOSTAMP[@]}" COORD_ALLOW_MOCK=1 COORD_PORT=$PORT COORD_BIND=127.0.0.1 COORD_DB=$D/c.db COORD_SPINE=$D/spine \
-    COORD_PROOFS=$D/proofs COORD_WEB=$C HAZYNC_HOST=$1 HAZYNC_LIBZYNC=1 HAZYNC_BRIDGE_OUT=$D/bridge HAZYNC_LZ_STATE_DIR=$D/prep \
+    COORD_PROOFS=$D/proofs COORD_WEB=$C WITNESS_DIR=$D/witnesses HAZYNC_HOST=$1 HAZYNC_LIBZYNC=1 HAZYNC_BRIDGE_OUT=$D/bridge HAZYNC_LZ_STATE_DIR=$D/prep \
     GENESIS_TIP=$GT LZ_HANDOVER_AT=$H CLAIM_RETAKE_WAIT=0 python3 server.py > "$2" 2>&1 ) &
   SP=$!
   for i in $(seq 1 60); do curl -s $U/api/meta > /dev/null && break; sleep 1; done

@@ -752,8 +752,10 @@ pub fn identity_matches(claimed_height: u32, claimed: &str, height: u32, tip: &[
 }
 
 /// A coin fact (docs/libzync/ZYNCAPPS.md §8): what `zync-path coin` writes and `swiftsync-verify --coin` checks against
-/// a verified tip proof. Hashes are hex, internal byte order.
+/// a verified tip proof. Hashes are hex, internal byte order. Unknown fields are refused, as for every fact type
+/// ([`TrieFact`] says why and what it means for adding one).
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct CoinFact {
     /// The height whose coin state the fact is about: the proof's tip, or an earlier block opened through the forest.
     pub at: u32,
@@ -783,8 +785,9 @@ pub struct CoinFact {
     pub preimage: Option<CoinPreimage>,
 }
 
-/// The fields a coin leaf commits (UTREEXO_FORMAT.md §2; libzync::facts::coin_leaf).
+/// The fields a coin leaf commits (UTREEXO_FORMAT.md §2; libzync::facts::coin_leaf). Unknown fields are refused.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct CoinPreimage {
     /// as block explorers print it
     pub txid: String,
@@ -876,7 +879,15 @@ fn coin_fact_position(cs: &ChainState, undo_from: u32, f: &CoinFact) -> Result<S
 
 /// A counting-trie fact (E2): a question about the proof's TIP and the trie proof that answers it (libzync::trie_fact).
 /// `zync-path trie ...` writes one from a run's `state_<h>.trie`; `swiftsync-verify --trie` checks it.
+/// An unknown field is refused, not ignored, here and in every fact type it carries or sits beside ([`TxFact`],
+/// [`CoinFact`], [`CoinPreimage`], [`CoinJourney`]) and in the facts wrapper ([`check_facts_wrapper`]): a misspelled
+/// `expect` ("expected", "Expect") would otherwise turn a claim into a question that cannot fail, and a misspelled
+/// `origin` would read as no origin. Every producer (`zync-path`, zync-serve) serialises these structs, so it writes
+/// only these fields.
+/// ⛔ So a NEW field is a breaking change for old verifiers: they refuse a fact that carries it. Ship the verifiers
+/// (CLI, C ABI, the published WASM) that know the field before any producer writes it.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct TrieFact {
     /// "coin" (unspent / spent by / absent), "balance" (unspent count and value) or "history" (every coin ever paid)
     pub kind: String,
@@ -904,6 +915,18 @@ pub struct TrieFact {
     /// no coin with that outpoint (cold review 11-06).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<TxFact>,
+}
+
+/// The keys the facts JSON of the C ABI and the WASM may have (`{"coins": [...], "journeys": [...], "tries": [...]}`).
+/// Any other key, or a value that is not an object, is refused, not ignored: `{"trie": [...]}` would otherwise check
+/// ZERO facts and the verdict would stand on the proof alone. `expect` passes here so that the caller's own refusal of
+/// it (the trusted tip is never the fact server's word) is the message given.
+pub fn check_facts_wrapper(v: &serde_json::Value) -> Result<(), String> {
+    let o = v.as_object().ok_or("facts JSON: not an object ({\"coins\": [...], \"journeys\": [...], \"tries\": [...]})")?;
+    match o.keys().find(|k| !["coins", "journeys", "tries", "expect"].contains(&k.as_str())) {
+        Some(k) => Err(format!("facts JSON: unknown key {k:?} (the keys are coins, journeys and tries)")),
+        None => Ok(()),
+    }
 }
 
 /// The canonical answer token of a coin state (see [`TrieFact::expect`]).
@@ -1043,8 +1066,9 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
 }
 
 /// A transaction in a proven block (ZYNCAPPS.md §8): the block's header and coin state, its path in the proof's block
-/// forest, and the transaction's Merkle branch.
+/// forest, and the transaction's Merkle branch. Unknown fields are refused.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct TxFact {
     pub height: u32,
     /// The 80-byte header, hex.
@@ -1092,8 +1116,9 @@ pub fn check_tx_fact(cs: &ChainState, undo_from: u32, f: &TxFact) -> Result<([u8
 
 /// One hop of a coin's journey: the transaction that created it, the coin's state in the log, and (if spent) the
 /// transaction that spent it. `tracked` and `creation_mtp` complete the coin leaf (UTREEXO_FORMAT.md §2); a wrong
-/// value gives a leaf the log does not hold, so they are checked, not trusted.
+/// value gives a leaf the log does not hold, so they are checked, not trusted. Unknown fields are refused.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct CoinJourney {
     pub origin: TxFact,
     pub vout: u32,
@@ -1235,6 +1260,38 @@ mod tests {
         let mut j = serde_json::to_value(&q).unwrap();
         j.as_object_mut().unwrap().remove("expect");
         assert!(serde_json::from_value::<TrieFact>(j).unwrap().expect.is_none());
+    }
+
+    #[test]
+    fn trie_fact_json_refuses_unknown_fields() {
+        let a = b"\x00\x14aaaaaaaaaaaaaaaaaaaa".to_vec();
+        let txid_disp = "11".repeat(31) + "22";
+        let mut txid = hex32(&txid_disp).unwrap();
+        txid.reverse();
+        let mut st = libzync::trie_store::TrieStore::new(true);
+        st.apply(&[], &[(libzync::trie_fact::coin_key(&a, &txid, 0), None, 500)]).unwrap();
+        st.height = 1;
+        // what the producers write reads back: every kind, with and without the optional fields
+        for f in [make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(0)).unwrap(),
+                  make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(9)).unwrap(),
+                  make_trie_fact(&st, "balance", &a, None, None).unwrap(),
+                  make_trie_fact(&st, "history", &a, None, None).unwrap()] {
+            let s = serde_json::to_string(&f).unwrap();
+            let back: TrieFact = serde_json::from_str(&s).unwrap_or_else(|e| panic!("{s}: {e}"));
+            assert_eq!(serde_json::to_string(&back).unwrap(), s);
+            let mut q = f.clone();
+            q.expect = None;
+            serde_json::from_str::<TrieFact>(&serde_json::to_string(&q).unwrap()).unwrap();
+        }
+        // an unknown field, at the top level, is refused: a misspelled claim must not read as no claim
+        let f = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(9)).unwrap();
+        for (k, v) in [("expected", serde_json::json!("unspent:500")), ("Expect", serde_json::json!("absent")),
+                       ("origins", serde_json::json!({})), ("note", serde_json::json!("hi"))] {
+            let mut j = serde_json::to_value(&f).unwrap();
+            j.as_object_mut().unwrap().insert(k.into(), v);
+            let e = serde_json::from_value::<TrieFact>(j).unwrap_err().to_string();
+            assert!(e.contains("unknown field") && e.contains(k), "{k}: {e}");
+        }
     }
 
     #[test]
@@ -1442,6 +1499,9 @@ mod tests {
         assert!(check_trie_fact(&cs, pin::NO_UNDO, &tf).unwrap_err().contains("origin"), "no origin");
         tf.origin = Some(txf(1, &h1, &[id1], &cb1, 0, &cb1));
         assert!(check_trie_fact(&cs, pin::NO_UNDO, &tf).unwrap().contains("UNSPENT, 50 sat"), "with its origin");
+        // with its origin, the JSON a producer writes still reads under deny_unknown_fields
+        let rt: TrieFact = serde_json::from_str(&serde_json::to_string(&tf).unwrap()).unwrap();
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &rt).unwrap().contains("UNSPENT, 50 sat"), "round trip with origin");
         // the alias: same key, an outpoint that never existed; refused with or without the real coin's origin
         let mut alias = id1;
         alias[0] ^= 1;
@@ -1457,6 +1517,51 @@ mod tests {
         // ABSENT needs no origin
         let ab = make_trie_fact(&st, "coin", spk_a, Some(&disp(&id1)), Some(7)).unwrap();
         assert!(check_trie_fact(&cs, pin::NO_UNDO, &ab).unwrap().contains("ABSENT"));
+
+        // every fact type reads back what it writes and refuses an unknown field, at its top level and nested
+        fn strict<T: Serialize + serde::de::DeserializeOwned>(x: &T, what: &str) {
+            let v = serde_json::to_value(x).unwrap();
+            let back: T = serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(serde_json::to_value(&back).unwrap(), v, "{what}: round trip");
+            let mut w = v.clone();
+            w.as_object_mut().unwrap().insert("extra".into(), serde_json::json!(1));
+            let e = serde_json::from_value::<T>(w).map(|_| ()).unwrap_err().to_string();
+            assert!(e.contains("unknown field `extra`"), "{what}: {e}");
+        }
+        strict(&j, "CoinJourney");
+        strict(&j.origin, "TxFact");
+        strict(&j.fact, "CoinFact");
+        cf.preimage = Some(pre.clone());
+        strict(&cf, "CoinFact with a preimage");
+        strict(&pre, "CoinPreimage");
+        strict(&tf, "TrieFact with an origin");
+        let nested = |path: &[&str], v: &serde_json::Value| -> serde_json::Value {
+            let mut w = v.clone();
+            let mut o = &mut w;
+            for k in path { o = o.get_mut(*k).unwrap(); }
+            o.as_object_mut().unwrap().insert("extra".into(), serde_json::json!(1));
+            w
+        };
+        let jv = serde_json::to_value(&j).unwrap();
+        for p in [&["origin"][..], &["fact"][..], &["spend"][..]] {
+            assert!(serde_json::from_value::<CoinJourney>(nested(p, &jv)).is_err(), "CoinJourney.{p:?}");
+        }
+        assert!(serde_json::from_value::<CoinFact>(nested(&["preimage"], &serde_json::to_value(&cf).unwrap())).is_err(), "CoinFact.preimage");
+        assert!(serde_json::from_value::<TrieFact>(nested(&["origin"], &serde_json::to_value(&tf).unwrap())).is_err(), "TrieFact.origin");
+    }
+
+    #[test]
+    fn the_facts_wrapper_refuses_unknown_keys() {
+        use serde_json::json;
+        for ok in [json!({}), json!({"coins": [], "journeys": [], "tries": []}), json!({"tries": [], "expect": "1:00"})] {
+            assert!(check_facts_wrapper(&ok).is_ok(), "{ok}");
+        }
+        // `trie` for `tries` would check ZERO facts; a non-object has no keys to read at all
+        for (bad, why) in [(json!({"trie": []}), "unknown key \"trie\""), (json!({"tries": [], "coin": []}), "unknown key \"coin\""),
+                           (json!([]), "not an object"), (json!(null), "not an object"), (json!("tries"), "not an object")] {
+            let e = check_facts_wrapper(&bad).unwrap_err();
+            assert!(e.contains(why), "{bad}: {e}");
+        }
     }
 
     /// The built-in table is the published one (reproduce/LIBZYNC_IDS, written with the table by
