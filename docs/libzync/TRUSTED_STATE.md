@@ -622,3 +622,61 @@ BIP30-phase user cycles (the guest's `env::cycle_count()`), executor, one-shot i
 per entry, 6.7×.** In the combine guest (§12.2), where the tree is built in a fresh process, the same 101 regtest
 entries took 13,712,033 cycles (136 k per entry): the per-entry cost depends on paging, so the projection (§12.4) uses
 the higher, one-shot figure.
+
+### 12.2 Chunked ingest: design
+
+Three images in `experimental/trusted-state/ingest` (measurement only, none in the core): the one-shot `ts-ingest`
+(§6), and `ts-chunk` + `ts-combine`. The host side is `ts-anchor chunk-plan`; `ingest/tsi.rs` (the carried state, the
+SHA-256 stream, the bulk tree) is one file `#[path]`-included by all three, so they cannot disagree on an encoding.
+
+**Cut by file order, not key range.** `hash_serialized_3` is one SHA-256d over Core's file order, the coin log is
+appended in that order, and the BIP30 entries arrive sorted in it; a key-range split would have to reorder all three.
+So chunk i is a run of whole coins, in file order. A txid group may straddle two chunks.
+
+**The carried state** (`tsi::ChunkState`, one canonical byte encoding, read back only if re-encoding gives the same
+bytes): the file header (magic, base block, coin count), coins read, value; the open txid group (txid, coins still to
+come, coins read, coinbase / tracked flags, last encoded vout, for Core's key order); the `hash_serialized_3` inner
+SHA-256 **midstate** (8 state words, the < 64-byte unhashed tail, the length), which crosses a chunk boundary
+unfinished; the ECMH partial sum (affine; the next chunk adds it in with `swiftsync::start`, which checks it is a
+curve point); the coin log's append forest; the counting trie's root; a SHA-256 chain over the BIP30 entries emitted
+so far, and their count.
+
+**A chunk** (`methods/chunk`) reads S_in, the header times 0..H, its byte range, its hints (ECMH, P2PK y, tracked
+outpoints) and a trie witness against S_in's trie root (checked to be exactly that root), processes its coins exactly
+as the one-shot guest does, and commits **only** [SHA-256(S_in), SHA-256(S_out), SHA-256(header times), coins]. Chunk 0
+alone may read the file header, and only from the initial state. The host computes every S_in natively: untrusted.
+
+**The combine** (`methods/combine`) takes the chunk image id (an input, committed, as the zAPPs take the core id),
+`env::verify`s each chunk journal under it, and requires: chunk 0 starts at the initial state; chunk i+1 starts at
+chunk i's S_out digest; the last ends at the S_final it is given; every chunk used the times of the headers given here,
+which link and end at S_final's base block; all announced coins read, the last group complete, chunk coin counts adding
+up. It then finishes what no chunk can: pads and hashes the midstate (`hash_serialized_3`), closes the last group,
+checks the BIP30 entry list against the chain and builds the tree (`sys` bulk), and builds the block forest. It commits
+the one-shot guest's journal byte for byte, then the chunk id and N, so `ts-anchor join-receipt` rebuilds the same
+anchor and link digest from it.
+
+What this binding gives: no chunk can be dropped, repeated, reordered or overlapped (each breaks the digest chain), no
+chunk can use other headers, and the only free inputs left are the ones the one-shot guest has too (the tracked and
+REPEATABLE lists, §11.1). A dishonest host can only make the combine refuse.
+
+### 12.3 Chunked ingest: correctness and negative controls (MEASURED)
+
+- **Same anchor as the one-shot ingest.** The combine's journal equals the one-shot guest's journal byte for byte
+  (`COMBINE_MATCH`) on: regtest 104 (3 chunks), regtest 110 (4), mainnet 200 (5), and the synthetic 1 M set (§12.4) in
+  4, 8 and 16 chunks. The planner's own native expectation (`expected.journal`, the core's `Smt` for the BIP30 root)
+  equals the one-shot journal in all of them.
+- **Controls** (`experimental/trusted-state/chunk_controls.sh`, regtest 104, plan A = 3 chunks, plan B = 4, every
+  chunk executed honestly; `CONTROLS_OK`):
+
+| combine fed | result |
+|---|---|
+| A0 A1 A2 (honest) / B0..B3 (honest) | accepted / accepted |
+| A0 + B1 B2 B3 (B1 starts at coin 43, A0 ends at 57: overlap) | refused: chunk 1 does not start where chunk 0 ends |
+| A0 A2 (middle chunk dropped) | refused: chunk 1 does not start where chunk 0 ends |
+| A0 A1 (last chunk dropped) | refused: the last chunk does not end at the final state |
+| A1 A0 A2 (reordered) | refused: chunk 0 does not start from the initial state |
+| A0 A1 A1 A2 (repeated) | refused: chunk 2 does not start where chunk 1 ends |
+| A0 A1' A2, A1' = A1 with one header timestamp +1 (it executes fine on its own) | refused: chunk 1 used other header times |
+| A0 A1 A2 with a final state of one satoshi more | refused: the last chunk does not end at the final state |
+
+<!-- MEAS12 -->
