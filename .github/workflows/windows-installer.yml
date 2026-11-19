@@ -80,6 +80,10 @@ jobs:
           python test_appupdate.py --control
           python test_stale_prover.py
           python test_stale_prover.py --control
+          # the resource panel's maths, AND its Windows readers for real: GetSystemTimes and GlobalMemoryStatusEx
+          # through ctypes (the test's last two checks), which Linux CI cannot reach
+          python test_stats.py
+          python test_stats.py --control
 
       - name: The app's own behaviour, in real Tk windows on Windows (name prompt, GPU preparing, keeps going)
         working-directory: tools/win-gui

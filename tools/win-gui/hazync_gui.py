@@ -50,6 +50,7 @@ import gpuprep  # noqa: E402
 import hazync_api as api  # noqa: E402
 import nethttp  # noqa: E402
 import provewindow as schedule  # noqa: E402  (not "schedule": a PyPI package of that name exists)
+import stats  # noqa: E402
 import supervisor  # noqa: E402
 import theme  # noqa: E402
 import winpower  # noqa: E402
@@ -144,6 +145,15 @@ class App(tk.Tk):
         self._skip_until = None
         self._awake = False
         self._drain_said = False
+        # The live resource panel on Home (stats.py): its five-minute history and each prover's per-block GPU memory
+        # peak live HERE, not on the widgets, so a dark/light rebuild keeps them. Sampled on a background thread
+        # only while something is running (_stats_want); results come back through self.results like every other.
+        self._stats_hist = stats.History()
+        self._peaks = stats.BlockPeaks()
+        self._stats_last = None
+        self._stats_want = threading.Event()
+        self._stats_thread = None
+        self._stats_said = False         # "GPU stats unavailable" goes in the log once, not every poll
         self._build()
         self.after(1000, self._home_tick)
         self.after(SCHEDULE_TICK_MS, self._schedule_tick)
@@ -290,6 +300,17 @@ class App(tk.Tk):
                                    state="disabled")
         # The fix for the problem on the card, when there is one to offer (_problem_fix); off screen otherwise.
         self.fix_btn = ttk.Button(row, text="", style="Accent.TButton", command=self._apply_fix)
+
+        # ⭐ WHAT THE MACHINE IS DOING (owner, on a 4 GB GTX 1050 Ti: "would be good to see gpu memory and cpu
+        # memory or stats during proving as a visual"). On screen only while something runs; see _stats_tick.
+        self.stats_box = self._card(t, "THIS MACHINE")
+        sb_row = tk.Frame(self.stats_box, bg=p["mist"])
+        sb_row.pack(fill="x", padx=12, pady=(4, 8))
+        self.stats_rows = tk.Canvas(sb_row, height=66, bg=p["mist"], highlightthickness=0)
+        self.stats_rows.pack(side="left", fill="x", expand=True)
+        self.stats_chart = tk.Canvas(sb_row, width=self.CHART_W, height=66, bg=p["mist"], highlightthickness=0)
+        self.stats_chart.pack(side="right", padx=(10, 0))
+        self.stats_rows.bind("<Configure>", lambda _e: self._stats_render())
 
         # "Hazync vX is available": only on screen when a newer release was found (_update_tick).
         self.update_bar = tk.Frame(t, bg=p["mist"], highlightbackground=p["lamp"], highlightthickness=1)
@@ -543,7 +564,157 @@ class App(tk.Tk):
 
     def _home_tick(self):
         self._home_refresh()
+        # ⚠ guarded (review L3): one Tcl error in the panel must not end this once-a-second chain, which keeps Home
+        # itself current. Said once in the log, not every second.
+        try:
+            self._stats_tick()
+        except Exception as e:     # noqa: BLE001
+            if not getattr(self, "_stats_tick_said", False):
+                self._stats_tick_said = True
+                self._say(f"[stats] the resource panel failed to update: {e} — proving is not affected")
         self.after(1000, self._home_tick)
+
+    # ── the live resource panel (stats.py) ──────────────────────────────────────────────────────────────────────────
+    CHART_W = 240
+    ROW_H = 22
+
+    def _stats_tick(self):
+        """Show the panel and sample while something runs; hide it and stop sampling when nothing does."""
+        if not hasattr(self, "stats_box"):
+            return
+        # ⚠ and between two blocks: the worker exits after each one and the next starts AGAIN_MS later (_respawns),
+        # so hiding on "no workers" alone would make the panel blink out and back once per block
+        if self.workers or self._respawns:
+            if not self.stats_box.winfo_manager():
+                self.stats_box.pack(fill="x", padx=10, pady=(0, 6), before=self._pick)
+                self._stats_render()
+            self._stats_want.set()
+            if self._stats_thread is None:
+                self._stats_thread = threading.Thread(target=self._stats_loop, daemon=True)
+                self._stats_thread.start()
+        else:
+            self._stats_want.clear()
+            if self.stats_box.winfo_manager():
+                self.stats_box.pack_forget()
+
+    def _stats_loop(self):
+        """Background thread: one sample every stats.POLL_S while wanted. Touches no widget (Tk is main-thread only).
+
+        ⚠ nvidia-smi runs through supervisor._run: it never raises, has a timeout, and (winquiet) opens no console
+        window. A slow one only delays the next sample; it cannot block the window or the prover.
+        """
+        sampler = stats.Sampler(supervisor._run, supervisor.nvidia_smi)
+        while True:
+            self._stats_want.wait()
+            t0 = time.time()
+            try:
+                s = sampler.sample()
+            except Exception:          # noqa: BLE001 - a panel must never break proving
+                s = None
+            if s is not None:
+                self.results.put((self._stats_apply, s))
+            time.sleep(max(0.2, stats.POLL_S - (time.time() - t0)))
+
+    def _stats_key(self, w):
+        return (w.job, w.index)
+
+    def _stats_gpu(self):
+        """Is there a card to measure? On a machine without one (the CPU build), no block gets a "peak GPU memory"
+        note at all, rather than "not sampled" on every line. Read from the reader thread too: a plain attribute."""
+        return (self._stats_last or {}).get("gpu_state") == stats.GPU_OK
+
+    def _stats_apply(self, s):
+        """One sample, on the main thread: feed each prover's block peak, the history, and the panel."""
+        self._stats_last = s
+        gpus = s.get("gpus") or []
+        for w in self.workers:
+            if w.job == "run":
+                g = stats.gpu_for(w.card, gpus)
+                if g:
+                    self._peaks.observe(self._stats_key(w), g["used_mb"], g["total_mb"])
+        shown = stats.shown_gpus(gpus, [w.card for w in self.workers if w.card])
+        fr = [f for f in (stats.frac(g["used_mb"], g["total_mb"]) for g in shown) if f is not None]
+        self._stats_hist.add(max(fr) if fr else None, s.get("cpu"))
+        if s.get("gpu_state") == stats.GPU_UNAVAILABLE and not self._stats_said:
+            self._stats_said = True
+            why = " ".join((s.get("gpu_why") or "").split())        # one log line, whatever nvidia-smi printed
+            self._say(f"[stats] {stats.UNAVAILABLE_TEXT}" + (f" ({why})" if why else "")
+                      + " — proving is not affected; the panel shows processor and memory only")
+        self._stats_render()
+
+    def _gpu_name(self, g, n_shown):
+        found = getattr(self, "_found_cards", None) or getattr(self, "_last_cards", None) or []
+        names = cards.labels(found) if found else {}
+        for c in found:
+            if c.get("uuid") == g["uuid"]:
+                return names.get(c["index"], f"GPU {g['index']}")
+        return "Graphics card" if n_shown == 1 else f"GPU {g['index']}"
+
+    def _stats_bar(self, cv, x, y, w, fraction):
+        p = self.p
+        cv.create_rectangle(x, y, x + w, y + 9, fill=p["haze"], outline="")
+        if fraction is not None:
+            cv.create_rectangle(x, y, x + max(1, int(w * fraction)), y + 9, outline="",
+                                fill=p["bad"] if fraction >= 0.95 else p["lamp"])
+
+    def _stats_render(self):
+        if not hasattr(self, "stats_rows") or not self.stats_box.winfo_manager():
+            return
+        p, cv, s = self.p, self.stats_rows, self._stats_last
+        cv.delete("all")
+        rows = []                                       # (label, fraction or None, text); False = no bar at all
+        if s is None:
+            rows.append(("Graphics card", False, "reading…"))
+        elif s.get("gpu_state") == stats.GPU_OK and s.get("gpus"):
+            pinned = [w.card for w in self.workers if w.card]
+            shown = stats.shown_gpus(s["gpus"], pinned)
+            for g in shown:
+                text = stats.gpu_line(g)
+                # this block's peak, for the provers on this card (reset when a block starts: BlockPeaks.start)
+                peaks = [self._peaks.peak(self._stats_key(w))[0] for w in self.workers
+                         if w.job == "run" and stats.gpu_for(w.card, s["gpus"]) is g]
+                peaks = [x for x in peaks if x is not None]
+                if peaks:
+                    text += f" · peak this block {stats.gb(max(peaks))} GB"
+                rows.append((self._gpu_name(g, len(shown)), stats.frac(g["used_mb"], g["total_mb"]), text))
+        else:
+            rows.append(("Graphics card", False, stats.NO_GPU_TEXT if s.get("gpu_state") == stats.GPU_NONE
+                         else stats.UNAVAILABLE_TEXT))
+        if s is not None:
+            used, total = s.get("ram_used_mb"), s.get("ram_total_mb")
+            rows.append(("Memory", stats.frac(used, total),
+                         f"{stats.gb(used)} / {stats.gb(total)} GB" if used is not None and total else "unavailable"))
+            cpu = s.get("cpu")
+            rows.append(("Processor", None if cpu is None else cpu / 100.0,
+                         "measuring…" if cpu is None else f"{cpu:.0f}%"))
+        cv.configure(height=len(rows) * self.ROW_H + 4)
+        bar_x, bar_w = 120, 140
+        for i, (label, fraction, text) in enumerate(rows):
+            y = 4 + i * self.ROW_H
+            cv.create_text(0, y + 5, text=label, anchor="w", fill=p["slate"], font=("Segoe UI", 9))
+            if fraction is not False:
+                self._stats_bar(cv, bar_x, y + 1, bar_w, fraction)
+            cv.create_text(bar_x + bar_w + 10, y + 5, text=text, anchor="w", fill=p["ink"], font=("Segoe UI", 9))
+        self._stats_chart_render(max(66, len(rows) * self.ROW_H + 4))
+
+    def _stats_chart_render(self, height):
+        """The last five minutes: GPU memory (fullest card shown) and CPU, both as a share of the whole."""
+        p, cv, h = self.p, self.stats_chart, self._stats_hist
+        cv.delete("all")
+        cv.configure(height=height)
+        top, w = 14, self.CHART_W
+        ch = height - top
+        cv.create_rectangle(0, top, w - 1, height - 1, outline=p["haze"])
+        any_gpu = any(v is not None for v in h.gpu)
+        for vals, colour in ((h.cpu, p["slate"]), (h.gpu, p["lamp"])):
+            for seg in stats.spark(vals, w, ch):
+                cv.create_line(*[v + (top if i % 2 else 0) for i, v in enumerate(seg)], fill=colour, width=2)
+        x = 0
+        if any_gpu:
+            item = cv.create_text(x, 6, text="GPU memory", anchor="w", fill=p["lamp_text"], font=("Segoe UI", 8))
+            x = cv.bbox(item)[2] + 10
+        cv.create_text(x, 6, text="CPU", anchor="w", fill=p["slate"], font=("Segoe UI", 8))
+        cv.create_text(w - 1, 6, text="last 5 min", anchor="e", fill=p["slate"], font=("Segoe UI", 8))
 
     def _render_home_setup(self):
         """What is still needed before Start can work, with the button that deals with each."""
@@ -2270,6 +2441,7 @@ class App(tk.Tk):
         # ⛔ encoding="utf-8": the worker is told PYTHONIOENCODING=utf-8, and text=True alone decodes with the LOCALE's
         # (cp1252 on Windows), so its "✓" arrived as "âœ“" (Xesktop, 11-13). test_log_visible.py checks a ✓ survives.
         w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
+        self._peaks.drop(self._stats_key(w))         # (job, index) keys are reused: start from no block at all
         w.env = env
         if job == "run" and extra:
             w.activity.set_range(extra[0])
@@ -2322,8 +2494,15 @@ class App(tk.Tk):
                         w.saw_cuda_error = True
                     if "no cuda-capable device" in line.lower():
                         w.no_device = True      # see _reap: a UUID pin the driver did not resolve
+                    peak = ""
+                    if w.job == "run":
+                        # ⭐ each block's peak GPU memory (stats.BlockPeaks): reset as a block is claimed, and written
+                        # on the line where it finishes or first fails, so an out-of-memory case is measured data.
+                        # ⚠ The bookkeeping always runs; only showing the text waits for a card to have been read.
+                        peak = self._peaks.on_line(self._stats_key(w), kind, (w.env or {}).get("HAZYNC_SEG_PO2"),
+                                                   show=self._stats_gpu())
                     if kind:
-                        self.q.put((kind, f"[{w.job} {w.index}] {line.rstrip()}"))
+                        self.q.put((kind, f"[{w.job} {w.index}] {line.rstrip()}{peak}"))
                         # ⭐ A known failure gets its plain-language meaning right underneath,
                         # once — every one of these cost real time to diagnose the first time.
                         if kind in ("cuda-error", "abort", "oom") and kind not in self._explained:
@@ -2393,6 +2572,7 @@ class App(tk.Tk):
                     continue
             self.workers.remove(w)
             if w.stopping:
+                self._peaks.drop(self._stats_key(w))     # a block stopped mid-way is not the next one's peak
                 self._say(f"[{w.job} {w.index}] stopped")
                 self._feed("Stopped")
                 if w.activity.holding:
@@ -2415,7 +2595,9 @@ class App(tk.Tk):
             # window does not know what happened it must not invent a cause.
             tag = {"config": "cuda-error", "gpu": "cuda-error",
                    "idle": "sys", "done": "proved"}.get(kind, "sys")
-            self._say(f"[{w.job} {w.index}] {msg}", tag)
+            peak = (self._peaks.on_exit(self._stats_key(w), kind, (w.env or {}).get("HAZYNC_SEG_PO2"),
+                                        show=self._stats_gpu()) if w.job == "run" else "")
+            self._say(f"[{w.job} {w.index}] {msg}{peak}", tag)
             several = len(self._session_cards) > 1 and w.label
             self._feed(f"{w.label}: {msg}" if several else msg, {"cuda-error": "bad", "proved": "good"}.get(tag, "sys"))
             if kind in ("config", "gpu"):
