@@ -1,0 +1,185 @@
+zapp-statement: signed 4 entries; 0 still unsigned
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 2)
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint; its age is NOT checked (give --max-age)
+exit=2 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 2)
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (NOT compared with your challenge: give --purpose and --nonce)
+ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint; the tip was not compared with a source you trust (--expect, --mempool, --bitcoin-cli); the statement was not compared with your challenge (--purpose and --nonce): it may be an old one shown again; its age is NOT checked (give --max-age)
+exit=2 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose loan --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] statement: purpose "audit-15.11.2026" is not the one asked for ("loan")
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 0000 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] statement: nonce "5be1" is not the one asked for ("0000")
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t1.json (expect exit 1)
+  [FAIL] statement: the statement's total is 1 sat, its facts sum to 0 sat
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t2.json (expect exit 1)
+  [FAIL] statement: the statement is about block 199, the proof's tip is 200 (a statement is at the proof's tip)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t3.json (expect exit 1)
+  [FAIL] statement: the statement names block "0000000000000000000000000000000000000000000000000000000000000000" at 200, the proof's tip is 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t4.json (expect exit 1)
+  [FAIL] statement: entry 0 (script 001427d230828f754c669b28a4dead600a8c65c50a48): BIP-322 simple: the signature is not exactly one base64 witness
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t4b.json (expect exit 1)
+  [FAIL] statement: entry 1 (script 2102a91e892dc039583dcb4d342d0cae7a3b18c9c6fa989b1f56c3719ec539cda2a3ac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t5.json (expect exit 1)
+  [FAIL] statement: entry 1: the trie proof does not hold against the proof's trie root (NotCovered)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+zapp-statement: signed 1 entry; 1 still unsigned
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/p.json (expect exit 1)
+  [FAIL] statement: entry 1 (script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac): no signature
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/p2.json (expect exit 1)
+  [FAIL] statement: entry 1 (script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/t7.json (expect exit 1)
+  [FAIL] statement: the statement names core image "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c", the proof was made by 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] block 200 is 0000000000000000000000000000000000000000000000000000000000000000; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --bitcoin-cli <tmp>/node --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 2)
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint; its age is NOT checked (give --max-age)
+exit=2 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --bitcoin-cli <tmp>/badnode --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] your node's getblockheader 0000000000000000000000000000000000000000000000000000000000000001 has no chainwork: the proven chainwork is not compared
+  [FAIL] block 200 is 0000000000000000000000000000000000000000000000000000000000000001; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_FAIL: 2 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --bitcoin-cli <tmp>/node --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] your node says block 200 is 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320, --expect says 0000000000000000000000000000000000000000000000000000000000000000: the sources disagree
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --bitcoin-cli <tmp>/node206 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 2)
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint
+exit=2 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --bitcoin-cli <tmp>/node207 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] --max-age: block 200 is 7 blocks behind the network's tip 207, more than the 6 allowed (--max-age)
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] --max-age: a recency check needs the network's tip: give --mempool, --mempool-url or --bitcoin-cli
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --bitcoin-cli <tmp>/nowork --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] your node's getblockheader 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 has no chainwork: the proven chainwork is not compared
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 mainnet_1_200_8888d59c.rcpt <tmp>/u1.json (expect exit 1)
+  [FAIL] statement: purpose: printable ASCII only (no line breaks, tabs, or non-ASCII characters)
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026  --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/u2.json (expect exit 1)
+  [FAIL] statement: purpose: no leading or trailing spaces
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/inj.json (expect exit 1)
+  [FAIL] statement: entry 0 (script 001427d230828f754c669b28a4dead600a8c65c50a48): legacy (BIP-137): Decode error for signature `!\n  [ok] statement: 1 script(s)\nZAPP_STATEMENT_OK: the statement holds at block 200`
+ZAPP_STATEMENT_FAIL: 1 check(s) failed
+exit=1 PASS
+== no forged ZAPP_STATEMENT_OK line from a signature's text (expect 0 lines starting with it, at least 1 holding it)
+starting=0 holding=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --purpose audit-15.11.2026 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --purpose: give it once
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --nonce: give it once
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --image: give it once
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --network mainnet --network mainnet --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --network: give it once
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --bitcoin-cli <tmp>/node206 --max-age 6 --max-age 9 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --max-age: give it once
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --now 1700000000 --now 1700000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --now: give it once
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 fake_block_2501.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
+  [FAIL] statement NOT checked: the receipt did not verify
+ZAPP_STATEMENT_FAIL: 2 check(s) failed
+exit=1 PASS
+== env RISC0_DEV_MODE=1 /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 fake_block_2501.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
+  [FAIL] statement NOT checked: the receipt did not verify
+ZAPP_STATEMENT_FAIL: 2 check(s) failed
+exit=1 PASS
+== env RISC0_DEV_MODE=1 /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] RISC0_DEV_MODE is not set in this verifier's environment
+  [FAIL] statement NOT checked: the receipt did not verify
+ZAPP_STATEMENT_FAIL: 2 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] the receipt is of image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet), not the image given, 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c: a given image is the only one it may verify against
+  [FAIL] the receipt file is a single succinct or Groth16 proof (not a receipt (too short))
+  [FAIL] statement NOT checked: the receipt did not verify
+ZAPP_STATEMENT_FAIL: 3 check(s) failed
+exit=1 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 mainnet_1_200_8888d59c.rcpt <tmp>/s.json (expect exit 2)
+  [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
+ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint; its age is NOT checked (give --max-age)
+exit=2 PASS
+== /home/defenwycke/dev/hz-statement/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_8888d59c_flipped.rcpt <tmp>/s.json (expect exit 1)
+  [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): verification indicates proof is invalid
+  [FAIL] statement NOT checked: the receipt did not verify
+ZAPP_STATEMENT_FAIL: 2 check(s) failed
+exit=1 PASS
+== zapp-statement add-sig with entry 1's signature for entry 0 (expect exit 1)
+zapp-statement: BIP-322 simple: the signature is not exactly one base64 witness
+exit=1 PASS
+== zapp-statement draft --purpose --nonce --nonce 5be1 (expect exit 0, purpose "--nonce")
+exit=0 purpose=--nonce PASS
+== zapp-statement draft --purpose audit-15.11.2026 --nonce 5be1 --purpose audit-15.11.2026 (expect exit 1)
+zapp-statement: --purpose: give it once
+exit=1 PASS
+== node wasm/test-statement.mjs (expect exit 0)
+PASS  holds (demo: below minimum work)   demo (want demo): statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each
+PASS  another purpose                    fail (want fail): purpose "audit-15.11.2026" is not the one asked for ("other")
+PASS  another nonce                      fail (want fail): nonce "5be1" is not the one asked for ("other")
+PASS  tampered total                     fail (want fail): the statement's total is 1 sat, its facts sum to 0 sat
+PASS  wrong height                       fail (want fail): the statement is about block 199, the proof's tip is 200 (a statement is at the proof's tip)
+PASS  another tip expected               fail (want fail): expect "200:0000000000000000000000000000000000000000000000000000000000000000": not the proof's tip
+PASS  age checked (6 behind, 6 allowed)  demo (want demo): statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each
+PASS  too old (7 behind, 6 allowed)      fail (want fail): block 200 is 7 blocks behind the network's tip 207, more than the 6 allowed (--max-age)
+PASS  max age without a tip              fail (want fail): max age given without the network's tip height
+PASS  a purpose with a trailing space    fail (want fail): purpose: no leading or trailing spaces
+PASS  image pinned: the current id       fail (want fail): statement NOT checked: the receipt did not verify
+PASS  no image id: the image it names    demo (want demo): statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each
+PASS  swapped signatures                 fail (want fail): entry 0 (script 001427d230828f754c669b28a4dead600a8c65c50a48): BIP-322 simple: the signature is not exactly one base64 witness
+PASS  dev-mode FakeReceipt               fail (want fail)
+PASS  no image id: reports 8888d59c      8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4
+PASS  frame: the glue's bytes            demo (want demo)
+PASS  frame: a byte past the end         fail (want fail)
+PASS  frame: cut short                   fail (want fail)
+18/18 as expected (zapp-statement.wasm)
+exit=0 PASS
+zapps/statement test_statement.sh: 41/41 as expected

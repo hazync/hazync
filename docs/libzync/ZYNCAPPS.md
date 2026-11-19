@@ -110,7 +110,7 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 
 | zyncAPP | inputs | uses | answer |
 |---|---|---|---|
-| **zyncPOO** (proof of ownership) | coins with log paths; a challenge; a signature by each coin's key | `utxo_roots` | "these coins, worth X sat, are unspent at the tip (or at height h) and the holder signed the challenge". A private form commits only the total |
+| Balance statement (STATEMENT_ZAPP.md, `zapps/statement`; no guest) | each script's balance fact; a purpose and nonce; a BIP-322 signature by each script | `trie_root` | "these scripts held X sat at the tip H, and each signed this statement". A private form (a guest, prototype measured) commits only the total |
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
@@ -187,3 +187,4 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 | SwiftSync hints (HINTS_ZAPP.md) | `zapps/hints` | `zapp-hints` | `zapp-hints.js` (`verifyHints`) | `zapps/hints/ffi` (`swiftsync_verify_hints`, `zapp_hints.h`) |
 | assumevalid / assumeutxo (ASSUME_ZAPPS.md) | `zapps/assume` | `zapp-assume` (`assumevalid`, `assumeutxo`) | `zapp-assume.js` (`verifyAssume`) | `zapps/assume/ffi` (`swiftsync_verify_assume`, `zapp_assume.h`) |
 | Coin liveness (LIVENESS_ZAPP.md) | `zapps/liveness` | `zapp-liveness` (also `prove`, `serve`) | `zapp-liveness.js` (`verifyLiveness`) | `zapps/liveness/ffi` (`zapp_liveness_verify`, `zapp_liveness.h`) |
+| Balance statement (STATEMENT_ZAPP.md) | `zapps/statement` | `zapp-statement` (also `draft`, `message`, `sign`, `add-sig`, `test-key`) | `zapp-statement.js` (`verifyStatement`) | none |

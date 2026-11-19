@@ -1,0 +1,39 @@
+[package]
+name = "zapp-statement"
+version = "0.1.0"
+edition = "2021"
+description = "Balance statement zyncAPP: the scripts' balances at a proven block H and a BIP-322 signature by each script"
+license = "MIT"
+publish = false
+
+# A zyncAPP, not part of the core verifier: it uses swiftsync-verify as a library to verify the core receipt and its
+# trie facts, and adds the statement and its signatures (docs/libzync/STATEMENT_ZAPP.md). Own workspace, as the verifier.
+
+[lib]
+name = "zapp_statement"
+path = "src/lib.rs"
+
+# The library only: the CLI zapp-statement (the checker, and the producer as subcommands) is its own crate (cli/), so the
+# library and its WASM module never link the CLI's chain-identity lookups (zapps/common: curl, bitcoin-cli).
+
+[dependencies]
+swiftsync-verify = { path = "../../swiftsync-verify" }
+libzync = { path = "../../libzync", default-features = false }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+# BIP-322 by the rust-bitcoin project's crate (CC0-1.0; its tests run BIP-322's official vectors), not code of our own.
+# The one hand-written part is P2PK (src/p2pk.rs), which the crate does not cover.
+bip322 = "=0.0.12"
+bitcoin = "0.32"
+base64 = "0.23"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
