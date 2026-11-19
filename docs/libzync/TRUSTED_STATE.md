@@ -707,4 +707,45 @@ RSS from `/usr/bin/time`, laptop (WSL2, 16 threads, 8.9 GB).
   935,001 entries (the chunk executes the same coins): +20,310,690 cycles (read + SHA-256 + table; 1,276,668,880 vs 1,256,358,190), i.e. about 20 M
   cycles per chunk at H = 935,000, independent of the chunk's coins.
 
-<!-- MEAS10M -->
+**10 M coins** (no one-shot comparison: a 10 M one-shot guest would need about 10× the 1 M run's 1 GB and its native
+build about 10× its 3.3 GB, beyond this laptop; the combine is checked against the planner's own native journal, which
+matched the one-shot journal in every case above). The planner kept the trie on disk (`--trie-dir`): 2,562 s
+(42.7 min) on 8 threads, peak RSS 7.4 GB of which most is the memory-mapped trie arena (file-backed; anonymous memory
+was about 1.8 GB when sampled during the run).
+
+| split | chunk user cycles (each) | chunks total | per coin | peak RSS per chunk | wall per chunk | combine | combine BIP30 tree | **chunks + combine** | match |
+|---|---|---|---|---|---|---|---|---|---|
+| 16 × 625 k | 5,943,460,007 – 6,895,586,967 | 106,473,473,436 | 10,647 | 855 MB – 1.16 GB | 155 – 176 s | 6,510,757,943 (57 MB, 116 s) | 6,438,800,910 | **112,984,231,379** | COMBINE_MATCH |
+
+<!-- MEAS10M8 -->
+
+Where a chunk's cycles go (16 × 625 k at 10 M, the guest's own counts per coin): the snapshot phase (parse,
+`hash_serialized_3`, leaf, ECMH, coin log, trie key) is **flat at 7,216 – 7,229**; the trie insert grows with the
+trie it lands in: 2,267 (chunk 0, empty trie) → 2,704 (chunk 1, ~0.9 M) → 3,282 (chunk 8, ~5.3 M) → 3,455 (chunk 15,
+~9.7 M), about 200-230 cycles per doubling; reading the trie witness grows likewise, 15 → 116 → 280 → 338 (13.1 M
+witness words in chunk 15). The per-coin total over the whole 10 M build, 10,647, happens to equal the 1 M build's in
+16 chunks (10,646): the larger trie costs more per insert, the larger chunks fewer re-reads of shared witness paths.
+
+### 12.5 Mainnet projection (a PROJECTION from §12.1-12.4, not a measurement)
+
+**N, the live coins at 935,000, is not known offline.** Core gives it as `gettxoutsetinfo`'s `txouts` (and
+`dumptxoutset`'s `coins_written`, and the coin count in the snapshot's own header); chainparams'
+`m_chain_tx_count` is a transaction count, not N. Everything is per 10^8 coins; K, the BIP30 entries (live coinbase
+txids + tracked + REPEATABLE at 935,000), is not known either and is given per 10^5.
+
+| part | measured basis | projection |
+|---|---|---|
+| chunks, per coin | snapshot phase 7.2 k (synthetic P2WPKH; early mainnet's uncompressed P2PK coins cost 8.7 k, §6); trie 3.46 k + witness 0.34 k at a 9.7 M trie, ~+215 and ~+60 per doubling | at 10^8 coins the build's mean trie is ~3.5×10^7 (log2 ≈ 25.1): trie ≈ 3.9 k, witness ≈ 0.45 k, so **≈ 11.5 k cycles per coin, ≈ 1.15×10^12 per 10^8 coins** (≈ 1.3×10^12 if every coin cost the P2PK rate) |
+| chunks, fixed | header times at H = 935,000: 20.3 M per chunk (measured by padding, §12.4) | 160 chunks of 625 k per 10^8 coins: ≈ 3.2×10^9 |
+| chunk size and memory | 625 k coins: 1.16 GB peak RSS at a 10 M trie, input ≤ 126 MB (13.1 M witness words) | the witness grows ~log: ≈ 1.2-1.4 GB per 625 k chunk at 10^8 (projection); 160 chunks per 10^8, all independent |
+| combine, headers + forest | one-shot guest: ~2.2 k (headers) + ~2.5 k (block forest) per header | 935,001 headers ≈ 4.4×10^9 |
+| combine, BIP30 tree | 129 k (combine) – 218 k (one-shot) per entry | **1.3-2.2×10^10 per 10^5 entries** |
+| combine, per chunk | 6.5 k cycles to check a chunk journal (16 in 104,738) | negligible; resolving each chunk receipt as an assumption (recursion) NOT measured |
+| native planner | 10 M: 42.7 min, 8 threads, disk trie, laptop | ≈ 7 h per 10^8 coins on this laptop if linear (the disk trie may scale worse; NOT measured) |
+
+**In proving time**, at the header-chain zAPP's measured proving rate on one RTX PRO 6000 (≈ 0.66 M cycles/s,
+LIBZYNC.md §4): ≈ 1.2×10^12 cycles per 10^8 coins ≈ **500 card-hours ≈ $1,250 per 10^8 coins** at $2.49/hr, spread
+over 160 independent chunk proofs of ≈ 7.4×10^9 cycles (≈ 3 h each on one card); plus the combine, ≈ 2 h + 5.5-9.3 h
+per 10^5 BIP30 entries on one card (the BIP30 tree is one receipt here; it can be split by key prefix into
+independent subtree receipts, NOT built). Everything in this paragraph is a projection.
+
