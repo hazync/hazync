@@ -63,6 +63,12 @@ def fake_terminate(api, pid):
     return True
 
 
+def fake_terminate_many(api, ids, *a, **k):
+    for i in ids:
+        fake_terminate(api, i)
+    return list(ids), []
+
+
 def run_cleanup(write_recruited):
     d = tempfile.mkdtemp()
     with open(os.path.join(d, "rented.json"), "w") as fh:
@@ -72,10 +78,12 @@ def run_cleanup(write_recruited):
             json.dump(GROWN, fh)
     api = FakeAPI(RENTED + GROWN + [STRANGER])
     real, sponsor_bot.terminate_confirmed = sponsor_bot.terminate_confirmed, fake_terminate
+    real_many, sponsor_bot.terminate_many = sponsor_bot.terminate_many, fake_terminate_many
     try:
         rc = tip_smoke.cleanup(api, os.path.join(d, "rented.json"))
     finally:
         sponsor_bot.terminate_confirmed = real
+        sponsor_bot.terminate_many = real_many
     return rc, api, d
 
 

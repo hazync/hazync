@@ -246,28 +246,128 @@ pub struct TxInclusion {
     pub coinbase_branch: Vec<[u8; 32]>,
 }
 
+/// The path service's /tx answer, as the verifier takes it (`tx` of the include JSON, `zapp-headers --tx`): the six
+/// fields read, and the answer's other DOCUMENTED keys (coordinator/deploy/headers-api: `txid`, `height`, `hash`, `tip`,
+/// `tip_hash`, `leaves`, `path`, `mmr_root`; `ntx` in the node fixtures) taken and NOT read. Any other key, or a key given
+/// twice, is refused (review 11-18): a key spelt wrong is an error, never dropped unread.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TxAnswer {
+    pos: u64,
+    header: String,
+    raw: String,
+    branch: Vec<String>,
+    coinbase: String,
+    coinbase_branch: Vec<String>,
+    // not read: which transaction the raw bytes are is computed from them (verify_tx_in_header), never taken from here
+    #[serde(default, rename = "txid")]
+    _txid: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "height")]
+    _height: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "hash")]
+    _hash: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "tip")]
+    _tip: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "tip_hash")]
+    _tip_hash: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "leaves")]
+    _leaves: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "path")]
+    _path: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "mmr_root")]
+    _mmr_root: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "ntx")]
+    _ntx: Option<serde::de::IgnoredAny>,
+}
+
+/// The include JSON of the WASM module: `{"height", "hash", "path", "txid"?, "tx"?}`, those keys only, txid and tx
+/// both or neither (a null for either is refused in [`parse_include_json`]).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IncludeJson {
+    height: i64,
+    hash: String,
+    path: Vec<String>,
+    #[serde(default)]
+    txid: Option<String>,
+    #[serde(default)]
+    tx: Option<TxAnswer>,
+}
+
+/// serde's derived structs also take a JSON ARRAY of their fields in order: refuse anything but an object where one is
+/// meant.
+fn need_object(v: &serde_json::Value, what: &str) -> Result<(), String> {
+    if v.is_object() { Ok(()) } else { Err(format!("{what} is not a JSON object")) }
+}
+
 impl TxInclusion {
     /// `txid`: the transaction asked about, from the CALLER (as explorers print it). `v`: the JSON the path service's
-    /// /tx answers (and `swiftsync-verify headers --tx <txid>:<file>` reads): `{"pos", "header", "raw", "branch",
-    /// "coinbase", "coinbase_branch", ...}`. Branch entries are reversed hex (as explorers and Electrum's
-    /// blockchain.transaction.get_merkle print them); header, raw and coinbase are plain hex of the bytes
-    /// (getblockheader <hash> false, getrawtransaction <txid>). Other keys are ignored, the answer's own "txid"
-    /// among them: which transaction the raw bytes are is computed from them (verify_tx_in_header), never read.
+    /// /tx answers: `{"pos", "header", "raw", "branch", "coinbase", "coinbase_branch"}` and its documented other keys
+    /// ([`TxAnswer`]: taken, not read; any other key is refused). Branch entries are reversed hex (as explorers and
+    /// Electrum's blockchain.transaction.get_merkle print them); header, raw and coinbase are plain hex of the bytes
+    /// (getblockheader <hash> false, getrawtransaction <txid>). The answer's own "txid" is never read: which transaction
+    /// the raw bytes are is computed from them (verify_tx_in_header). A `serde_json::Value` has already kept the last of
+    /// two equal keys: from bytes, use [`TxInclusion::from_json_bytes`], which refuses them.
     pub fn from_json(txid: &str, v: &serde_json::Value) -> Result<TxInclusion, String> {
-        let s = |k: &str| v[k].as_str().ok_or(format!("tx: {k} is not a string"));
-        let list = |k: &str| -> Result<Vec<[u8; 32]>, String> {
-            v[k].as_array().ok_or(format!("tx: {k} is not a list"))?.iter()
-                .map(|x| x.as_str().and_then(hex32).map(|mut b| { b.reverse(); b }).ok_or(format!("tx: {k} holds a non-hash")))
-                .collect()
+        need_object(v, "tx")?;
+        let a: TxAnswer = serde_json::from_value(v.clone()).map_err(|e| format!("tx: {e}"))?;
+        Self::from_answer(txid, a)
+    }
+
+    /// [`TxInclusion::from_json`] from the answer's bytes: a key given twice is refused too.
+    pub fn from_json_bytes(txid: &str, b: &[u8]) -> Result<TxInclusion, String> {
+        let v: serde_json::Value = serde_json::from_slice(b).map_err(|e| format!("tx: not JSON ({e})"))?;
+        need_object(&v, "tx")?;
+        let a: TxAnswer = serde_json::from_slice(b).map_err(|e| format!("tx: {e}"))?;
+        Self::from_answer(txid, a)
+    }
+
+    fn from_answer(txid: &str, a: TxAnswer) -> Result<TxInclusion, String> {
+        let list = |k: &str, l: &[String]| -> Result<Vec<[u8; 32]>, String> {
+            l.iter().map(|x| hex32(x).map(|mut b| { b.reverse(); b }).ok_or(format!("tx: {k} holds a non-hash"))).collect()
         };
-        let header: [u8; 80] = unhex(s("header")?).filter(|h| h.len() == 80).and_then(|h| h.try_into().ok())
+        let header: [u8; 80] = unhex(&a.header).filter(|h| h.len() == 80).and_then(|h| h.try_into().ok())
             .ok_or("tx: header is not 80 bytes of hex")?;
         let mut txid = hex32(txid).ok_or(format!("tx: the txid asked about is not 32 bytes of hex ({txid})"))?;
         txid.reverse();
-        let pos = v["pos"].as_u64().filter(|p| *p <= u32::MAX as u64).ok_or("tx: pos is not a position")? as u32;
-        Ok(TxInclusion { header, txid, raw: unhex(s("raw")?).ok_or("tx: raw is not hex")?, pos, branch: list("branch")?,
-                         coinbase: unhex(s("coinbase")?).ok_or("tx: coinbase is not hex")?, coinbase_branch: list("coinbase_branch")? })
+        let pos = u32::try_from(a.pos).map_err(|_| "tx: pos is not a position")?;
+        Ok(TxInclusion { header, txid, raw: unhex(&a.raw).ok_or("tx: raw is not hex")?, pos, branch: list("branch", &a.branch)?,
+                         coinbase: unhex(&a.coinbase).ok_or("tx: coinbase is not hex")?,
+                         coinbase_branch: list("coinbase_branch", &a.coinbase_branch)? })
     }
+}
+
+/// The include JSON of the WASM module (zapps/headers/wasm: `{"height", "hash" (as explorers print it), "path" (MMR
+/// hashes as headers-mmr-path prints them), "txid"? and "tx"?, both or neither}`), parsed strictly (review 11-18): it was
+/// read key by key with every other key ignored, so `txid` and `tx` both spelt wrong gave a block-only inclusion. Now
+/// any other key, a key given twice, a top level or `tx` that is not an object, and txid without tx (or tx without
+/// txid) are refused.
+pub fn parse_include_json(j: &[u8]) -> Result<Inclusion, String> {
+    let v: serde_json::Value = serde_json::from_slice(j).map_err(|e| format!("include: not JSON ({e})"))?;
+    need_object(&v, "include")?;
+    // an explicit null is refused (review 11-18 round 2): `{"txid": null, "tx": null}` read as absent gave a block-only
+    // inclusion to a caller who meant to ask about a transaction. Absent is a block alone (JSON.stringify drops undefined).
+    for k in ["txid", "tx"] {
+        if v.get(k).is_some_and(|x| x.is_null()) {
+            return Err(format!("include: {k} is null: leave both txid and tx out to ask about the block alone"));
+        }
+    }
+    // both or neither, said before the answer's own fields are read
+    match (v.get("txid").is_some(), v.get("tx")) {
+        (false, Some(_)) => return Err("include: tx needs txid, the transaction asked about (never taken from the answer)".into()),
+        (true, None) => return Err("include: txid needs tx, the path service's /tx answer".into()),
+        (_, Some(t)) => need_object(t, "include: tx")?,
+        _ => {}
+    }
+    let i: IncludeJson = serde_json::from_slice(j)
+        .map_err(|e| format!("include (only height, hash, path, txid, tx; tx the /tx answer): {e}"))?;
+    let tx = match (i.txid, i.tx) {
+        (None, None) => None,
+        (Some(txid), Some(a)) => Some(TxInclusion::from_answer(&txid, a)?),
+        _ => return Err("include: txid and tx go together".into()),   // checked above; a key twice is refused before
+    };
+    let path: Vec<&str> = i.path.iter().map(|s| s.as_str()).collect();
+    Inclusion::parse(i.height, &i.hash, &path, tx)
 }
 
 /// Plain hex, even length, digits only: u8::from_str_radix alone would also take a sign ("+f").
@@ -804,5 +904,49 @@ mod tests {
         // the good chain still verifies both runs
         let rep = verify_headers(&[HDR_0_100, HDR_101_200], HEADERS_IMAGE_ID, now(), None, None);
         assert_eq!((rep.verdict, verified(&rep)), (Verdict::Demo, 2));
+    }
+
+    /// Review 11-18: the include JSON and the /tx answer take only their documented keys, each once. Before, every
+    /// other key was ignored: `txid` and `tx` both spelt wrong gave a block-only inclusion, and a key given twice kept
+    /// its last value (wasm/test-headers.mjs has the same cases through the module).
+    #[test]
+    fn include_and_tx_json_take_only_their_documented_keys() {
+        let tx = include_str!("../../../experimental/libzync-bench/headers/tx/tx_170_1.json").trim();
+        let path: Vec<String> = include_str!("../../../experimental/libzync-bench/headers/mmr_path_170_tip200.txt")
+            .lines().filter(|l| !l.trim().is_empty()).map(|l| format!("{:?}", l.trim())).collect();
+        let (h, p) = ("\"00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee\"", path.join(","));
+        let t = "\"f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16\"";
+        let inc = |rest: &str| format!(r#"{{"height": 170, "hash": {h}, "path": [{p}]{rest}}}"#);
+        // the documented shapes: a block alone, a block and a transaction (the /tx answer with its other keys), null as absent
+        assert!(parse_include_json(inc("").as_bytes()).unwrap().tx.is_none());
+        assert!(parse_include_json(inc(&format!(r#", "txid": {t}, "tx": {tx}"#)).as_bytes()).unwrap().tx.is_some());
+        let bad_tx = tx.replacen("\"pos\"", "\"posn\": 1, \"pos\"", 1);
+        let twice_tx = tx.replacen("\"pos\"", "\"raw\": \"00\", \"pos\"", 1);
+        for (j, why) in [
+            (inc(&format!(r#", "tixd": {t}, "txx": {tx}"#)), "unknown field `tixd`"),
+            (inc(&format!(r#", "txid": {t}, "tx": {tx}, "extra": 1"#)), "unknown field `extra`"),
+            (inc(&format!(r#", "hash": {h}"#)), "duplicate field `hash`"),
+            (inc(&format!(r#", "txid": {t}, "tx": {bad_tx}"#)), "unknown field `posn`"),
+            (inc(&format!(r#", "txid": {t}, "tx": {twice_tx}"#)), "duplicate field `raw`"),
+            (inc(&format!(r#", "txid": {t}, "tx": [1]"#)), "tx is not a JSON object"),
+            (inc(&format!(r#", "txid": {t}"#)), "txid needs tx"),
+            // an explicit null is not "absent": refused (review 11-18 round 2; it gave a block-only inclusion)
+            (inc(r#", "txid": null, "tx": null"#), "txid is null"),
+            (inc(r#", "txid": null"#), "txid is null"),
+            (inc(r#", "tx": null"#), "tx is null"),
+            (inc(&format!(r#", "txid": {t}, "tx": null"#)), "tx is null"),
+            (inc(&format!(r#", "tx": {tx}"#)), "tx needs txid"),
+            (format!("[170, {h}, [{p}]]"), "include is not a JSON object"),
+            (r#"{"hash": "00", "path": []}"#.to_string(), "missing field `height`"),
+        ] {
+            let e = parse_include_json(j.as_bytes()).unwrap_err();
+            assert!(e.contains(why), "{why}: {e}");
+        }
+        // the CLI's --tx file and from_json: the same answer rules
+        assert!(TxInclusion::from_json_bytes(&t[1..65], tx.as_bytes()).is_ok());
+        assert!(TxInclusion::from_json_bytes(&t[1..65], bad_tx.as_bytes()).unwrap_err().contains("unknown field `posn`"));
+        assert!(TxInclusion::from_json_bytes(&t[1..65], twice_tx.as_bytes()).unwrap_err().contains("duplicate field `raw`"));
+        let v: serde_json::Value = serde_json::from_str(&bad_tx).unwrap();
+        assert!(TxInclusion::from_json(&t[1..65], &v).unwrap_err().contains("unknown field `posn`"));
     }
 }
