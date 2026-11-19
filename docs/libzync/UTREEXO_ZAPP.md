@@ -636,9 +636,10 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   block, core tip, tip image, base image, network, a base image on a base receipt). The .wasm is byte-reproduced on two
   machines: a laptop's local build of `reproduce/wasm.Dockerfile` and hazync-coord's build in the published image
   `ghcr.io/hazync/hazync-wasm-build@sha256:d46e4164…` (a clean clone); sha256 in `wasm/README.md`.
-- The follower, end to end with the fix: 31/31, see the follower bullet above (at `15d99d2`, before the review fixes
-  of 18.11.2026 evening; those changed the follower's state layout and checks and are covered by the logic test below,
-  not by a second three-proof run).
+- The follower, end to end with the fix: 31/31, see the follower bullet above (at `15d99d2`). **Re-run after both
+  reviews** (19.11.2026, `f08896a`, the `zyncapp` and `zapp-utreexo` built from `2d7352d`, which differs only in shell
+  and docs; images unchanged, `27bea7da` / `ab6f7a26`): **31/31 again** with three real CPU proofs, the follower on its
+  own block directory, the shared one checked intact (100,000 files) afterwards.
 - **The follower's logic** (`coordinator/deploy/utreexo/test/test_follow_logic.sh`, stub prover and checker, seconds,
   after the review of `b127747`): 30 checks: an RPC failure and a node below the proven height are errors with nothing
   moved (M1); a reorg moves the orphaned state, published receipt and cache aside and steps on (M2); retention keeps
@@ -655,7 +656,11 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   `PRUNE_BLOCKS`; a fall-back moves the old branch's block files above the fork aside, so the new branch's bodies are
   fetched; a `getblockhash` failure is logged (log and die write to stderr, never into a captured value); `latest` is
   switched before anything is moved aside, and directories are synced; `--set-base` honours `BASE_ID`. Controls: the
-  script with the old `new_state` fails 4 checks, without the cache drop 2, without the block-file move 2.
+  script with the old `new_state` fails 4 checks, without the cache drop 2, without the block-file move 2. ⚠ The block-file move made the real-proof
+  test unsafe as it stood: it pointed the follower's `BLOCKS` at the shared mainnet block directory, so its reorg case
+  started moving another project's files. The run was stopped within two minutes, before any file moved (all 100,000
+  checked present); the test now gives the follower its own directory of hard links and a copying fetch, and the
+  script and README say `BLOCKS` must be private.
 - **Review H1**: `journal_kind` decoded the receipt before `receipt_kind` refused composites; a composite nested
   300,000 deep (6 MB) overflowed the CLI's stack (exit 134). Now refused first: a library test (it aborts with a stack
   overflow without the fix), a CLI case in `test.sh` and a WASM case in `test.mjs`, each generating the file.
