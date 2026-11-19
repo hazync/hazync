@@ -20,17 +20,19 @@ W=${3:?work dir}; H=${4:-104}; mkdir -p "$W"; W=$(readlink -f "$W")
 G=$Z/scripts/zapp-regtest; R=$G/receipts/a; IMG=$(awk '{print $2}' "$G/receipts/method_id.txt")
 export RISC0_DEV_MODE=1 HAZYNC_COINLOG_SAVE_EACH=1 HAZYNC_SEG_PO2=${HAZYNC_SEG_PO2:-21} HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1
 fails=0
+# ts-anchor's verifier crates disable dev mode at compile time and refuse to start with RISC0_DEV_MODE set
+tsa() { env -u RISC0_DEV_MODE "$TS" "$@"; }
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*"; fails=$((fails+1)); }
 expect_of() { python3 -c "import json,sys; j=json.load(open(sys.argv[1])); print(f\"{j['height']}:{j['hash']}:{j['gettxoutsetinfo_hash_serialized_3']['hash_serialized_3']}\")" "$G/oracle/snap_$1.json"; }
 "$HOST" method-id | head -1
 # 1-2. side inputs and the anchor
 python3 "$HERE/side_inputs.py" "$G/blocks/main" "$H" "$W/side_$H" || exit 1
-"$TS" build --network regtest --snapshot "$G/oracle/utxo_$H.dat" --side "$W/side_$H" --expect "$(expect_of "$H")" \
+tsa build --network regtest --snapshot "$G/oracle/utxo_$H.dat" --side "$W/side_$H" --expect "$(expect_of "$H")" \
       --out "$W/anchor_$H" --ingest "$W/anchor_$H.ingest" | tee "$W/anchor_$H.log" || { fail "anchor build"; exit 1; }
 AID=$(awk '/^ANCHOR_ID/{print $2}' "$W/anchor_$H.log")
 # 3. join check against the real main-lineage receipt at H
-if "$TS" join --anchor "$W/anchor_$H.json" --main "$R/block_$H.rcpt" --image "$IMG" > "$W/join_$H.log" 2>&1 && grep -q JOIN_OK "$W/join_$H.log"
+if tsa join --anchor "$W/anchor_$H.json" --main "$R/block_$H.rcpt" --image "$IMG" > "$W/join_$H.log" 2>&1 && grep -q JOIN_OK "$W/join_$H.log"
 then pass "join at $H: anchored state = the real receipt's in every JOIN field"; else fail "join at $H"; tail -3 "$W/join_$H.log"; fi
 # block dirs: the anchored lineage gets ONLY blocks H+1..112; the main lineage gets 1..112 (its BIP30 tree is replayed)
 rm -rf "$W/blk_anc" "$W/blk_main"; mkdir -p "$W/blk_anc" "$W/blk_main"
@@ -54,7 +56,7 @@ grep -aq "LZ_PROVE_RANGE_DONE $((H+1))..=112" "$W/main.log" && pass "main lineag
 # 6. states: anchored vs main vs the real receipts (whose states the GPU batch proved)
 for t in 105 110 112; do
   [ "$t" -le "$H" ] && continue
-  "$TS" compare "$W/out_anc/state_$t.json" "$W/out_main/state_$t.json" > "$W/cmp_$t.log"
+  tsa compare "$W/out_anc/state_$t.json" "$W/out_main/state_$t.json" > "$W/cmp_$t.log"
   for f in tip_hash utxo_value live_set live_hash cum_work recent_times max_time; do
     grep -q "^  $f  *equal" "$W/cmp_$t.log" || fail "state $t: $f differs between the lineages"; done
   for f in tip_hash utxo_value live_hash cum_work; do
@@ -74,19 +76,19 @@ done
 column -t "$W/cycles_$H.tsv"
 # 7. negative controls
 BAD=$(expect_of "$H" | python3 -c "import sys; s=sys.stdin.read().strip(); print(s[:-1] + ('1' if s[-1] == '0' else '0'))")
-"$TS" build --network regtest --snapshot "$G/oracle/utxo_$H.dat" --side "$W/side_$H" --expect "$BAD" \
+tsa build --network regtest --snapshot "$G/oracle/utxo_$H.dat" --side "$W/side_$H" --expect "$BAD" \
       --out "$W/neg_hash" > "$W/neg_hash.log" 2>&1 && fail "a wrong expected hash_serialized_3 was accepted" \
   || { grep -q "NOT the assumed snapshot" "$W/neg_hash.log" && pass "control: a wrong expected hash_serialized_3 is refused"; }
 python3 "$HERE/side_inputs.py" "$G/blocks/main" 105 "$W/side_105" > /dev/null
 cp "$W/side_105.headers" "$W/neg_trk.headers"; : > "$W/neg_trk.tracked"; cp "$W/side_105.repeatable" "$W/neg_trk.repeatable"
-"$TS" build --network regtest --snapshot "$G/oracle/utxo_105.dat" --side "$W/neg_trk" --expect "$(expect_of 105)" --out "$W/neg_trk" > /dev/null
-"$TS" join --anchor "$W/neg_trk.json" --main "$G/receipts/a/block_105.rcpt" --image "$IMG" > "$W/neg_trk_join.log" 2>&1 \
+tsa build --network regtest --snapshot "$G/oracle/utxo_105.dat" --side "$W/neg_trk" --expect "$(expect_of 105)" --out "$W/neg_trk" > /dev/null
+tsa join --anchor "$W/neg_trk.json" --main "$G/receipts/a/block_105.rcpt" --image "$IMG" > "$W/neg_trk_join.log" 2>&1 \
   && fail "control: an anchor with a coin's tracked bit dropped joined" \
   || { grep -q "live_hash  *JOIN *DIFFERS" "$W/neg_trk_join.log" && pass "control: a dropped tracked bit (same Core hash) is caught by the join (live_hash differs)"; }
 if [ "$H" = 104 ]; then
   cp "$W/side_104.headers" "$W/neg_rep.headers"; cp "$W/side_104.tracked" "$W/neg_rep.tracked"; : > "$W/neg_rep.repeatable"
-  "$TS" build --network regtest --snapshot "$G/oracle/utxo_104.dat" --side "$W/neg_rep" --expect "$(expect_of 104)" --out "$W/neg_rep" > /dev/null
-  "$TS" join --anchor "$W/neg_rep.json" --main "$R/block_104.rcpt" --image "$IMG" > "$W/neg_rep_join.log" 2>&1 \
+  tsa build --network regtest --snapshot "$G/oracle/utxo_104.dat" --side "$W/neg_rep" --expect "$(expect_of 104)" --out "$W/neg_rep" > /dev/null
+  tsa join --anchor "$W/neg_rep.json" --main "$R/block_104.rcpt" --image "$IMG" > "$W/neg_rep_join.log" 2>&1 \
     && echo "  (no REPEATABLE slot: the anchor still joins at 104 -- the slot is not in any JOIN field)"
   rm -rf "$W/blk_neg" "$W/out_neg"; mkdir -p "$W/blk_neg"; ln -s "$G/blocks/main/block_105.json" "$W/blk_neg/"
   HAZYNC_TS_SMT_SEED="$W/neg_rep.smt" nice -n 10 "$HOST" libzync-prove-range 105 105 "$W/blk_neg" "$W/neg_rep.json" "$W/out_neg" > "$W/neg_rep.log" 2>&1

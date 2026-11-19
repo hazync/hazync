@@ -28,10 +28,9 @@ mod coinlog;
 #[path = "../../../../../../libzync/src/ttree.rs"]
 #[allow(dead_code)]
 mod ttree;
+#[path = "../../../../../../coinbase-smt/src/roots.rs"]
 #[allow(dead_code)]
-mod smt {
-    include!("../../../../../../coinbase-smt/src/roots.rs");
-}
+mod smt;
 
 use coinlog::W;
 use risc0_crypto::curves::secp256k1::Fq;
