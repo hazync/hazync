@@ -156,6 +156,23 @@ hands out work and tracks claims, and `/api/blockstatus` deliberately excludes c
 change by the second". Letting someone choose an arbitrary open block would hand out work another
 prover already holds. `/api/pick` is the coordinator's own answer and the Dashboard shows it.
 
+## Updating
+
+The installed app asks GitHub for the latest release at startup and every 6 hours, and shows "Hazync vX is
+available" with an **Update** button on Home. Nothing is downloaded until that is pressed. Update fetches
+`hazync-setup-x86_64-windows.exe`, `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`; it runs the installer only if
+(1) the signature is good under the maintainer key pinned in `appupdate.py` (the one in SECURITY.md), (2) the
+manifest's signed first line names that release, (3) the installer's sha256 matches it, and (4) the release is newer
+than this app. The installer is not Authenticode-signed, so the PGP-signed manifest is the trust anchor. The app then
+closes so its files can be replaced. A copy run from source has no version and never updates itself.
+
+⚠ **Rotating the release key needs a manual reinstall** for every installed app: an app refuses a manifest signed by
+any key but the pinned one (it fails closed). The key expires 2028-04-25; plan the rotation before then.
+
+On the first start of a new version, a remembered prover that does not make the board's image (when the installed one
+does) and a remembered worker older than the installed one are replaced by the installed ones, and the feed says so.
+On any other start an old copy is named on the Home card with one button to use the installed one.
+
 ## Proving on a schedule
 
 Under **Advanced → Schedule** you can tell the app to prove only inside a window, say 23:00 to 07:00, on the days

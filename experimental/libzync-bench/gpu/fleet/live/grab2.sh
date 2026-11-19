@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # grab2.sh <name>...: like grab.sh, but a pod is KEPT only if it can reach pod A (first line of fleet.txt) on
 # A's public ssh port -- RunPod blocks hairpin traffic inside one network (81.27.69.x today), so a pod in
 # A's network cannot join. Rejected pods are terminated at once and the deploy is retried (max 10 per name).

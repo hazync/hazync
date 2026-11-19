@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # gpu_run.sh [HI]: signet 1..HI from genesis on one RTX PRO 6000, on the published image: provision, build, prove,
 # verify, fetch, TERMINATE. The newest receipt is copied to the laptop every 10 minutes (ckpt/); a rerun sends it to
 # the new pod and the prover resumes after it, so a dead pod loses at most those 10 minutes plus bring-up.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # The paper's same-card run (user 11-07), ONE RunPod secure-cloud RTX PRO 6000: gpu-paper.sh proves each block by
 # libzync (a leaf from prep's REAL-state leaf_<h>.bin) and by the original CORE guest (v0.22.1 release, bundle_<h>.json).
 # From the laptop: deploy, set up, upload, run, HARVEST, then terminate (by the captured id); DEADLINE_MIN bounds spend.

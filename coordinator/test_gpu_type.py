@@ -76,7 +76,8 @@ def check_parse_and_validate(control=False):
     # a good list parses, in order, with whitespace tolerated
     assert parse(" NVIDIA GeForce RTX 4090 , NVIDIA A40 ") == \
         ("NVIDIA GeForce RTX 4090", "NVIDIA A40"), "a valid list must parse in order"
-    # ⛔ a typo must be refused. GraphQL accepts an unknown gpuTypeId and simply matches nothing, so
+    # ⛔ a typo must be refused. GraphQL accepted an unknown gpuTypeId and matched nothing, and RunPod v2
+    # answers a failed placement with the same bare 400 as a capacity miss, so
     # without this the run reports "no capacity" for every pod and reads as a RunPod outage.
     try:
         parse("NVIDIA GeForce RTX 4090,NVIDIA A41")
