@@ -132,8 +132,12 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
     check(seg(small, "20", TABLE) == "18",
           "⛔ the 8 GB card is lowered to its own — the big card's size would run it out of memory")
     check(seg(small, "17", TABLE) == "17", "a size set LOWER on purpose is never raised")
-    check(seg(small, "", TABLE) is None and seg(None, "20", TABLE) == "20",
-          "blank stays blank, and an unpinned worker gets exactly what was set")
+    check(seg(None, "", TABLE) is None and seg(None, "20", TABLE) == "20",
+          "with no card known, blank stays blank (the host decides) and a set size is passed as it is")
+    check(seg(small, "", TABLE) == "18" and seg(big, "", TABLE) == "20",
+          "⛔ Automatic (blank) gives each card its own size — it was blank, so a 4 GB card got the host's 21")
+    tiny = dict(small, vram_mb=4096)
+    check(seg(tiny, "", TABLE) == "17", "a 4 GB card (the GTX 1050 Ti that ran out of memory, 19.11) gets 17")
 
     print("── 8. two identical cards can be told apart on screen ──")
     lab = cards.labels(cards.parse(TWINS))
