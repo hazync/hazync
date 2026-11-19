@@ -10,7 +10,7 @@
 # path the pod is LEFT RUNNING for a manual harvest (the deadline path terminates regardless: the cost cap wins).
 DEADLINE_MIN=${DEADLINE_MIN:-150}; HERE=$(cd "$(dirname "$0")" && pwd)
 W=$(readlink -f "${1:?bundle dir (the out dir of mkbundle.sh)}"); [ -f "$W/sb/sb.tgz" ] || { echo "run mkbundle.sh first"; exit 1; }
-cd "$W"; cp -r "$HERE/pod" .; LOG=gpu_run.log; exec >> $LOG 2>&1
+cd "$W" || exit 1; cp -r "$HERE/pod" .; LOG=gpu_run.log; exec >> $LOG 2>&1
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-n -i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
 KS="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
@@ -24,13 +24,13 @@ echo $ID > pod_id.txt; say "pod $ID deployed ($GPU): $R"
 term(){ say "terminating $ID"; gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$ID\\\"}) }\"}" > /dev/null; }
 # Everything the run wrote except the leaf bundles; bounded, exactly once (mkdir is atomic).
 harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; return 1; }
-  [ -f conn.txt ] || return 0; set -- $(cat conn.txt); say "harvesting from $1:$2"
+  [ -f conn.txt ] || return 0; read -r CIP CP < conn.txt; set -- "$CIP" "$CP"; say "harvesting from $1:$2"
   for t in 1 2 3 4 5 6; do
     timeout 300 ssh $K -p $2 root@$1 'cd /workspace && tar czf out.tgz --exclude="bundle_*.lzb" out prep.out build.log run.out setup.log toolchain.txt 2>/dev/null; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
     R=$(timeout 60 ssh $K -p $2 root@$1 'cat /workspace/out.tgz.sha256')
     timeout 900 scp -q $KS -P $2 root@$1:/workspace/out.tgz out.tgz && [ -n "$R" ] && [ "$(sha256sum out.tgz | cut -c1-64)" = "$R" ] \
       && rm -rf out2 && mkdir out2 && tar xzf out.tgz -C out2 && echo "$R  out.tgz" > out.tgz.sha256 \
-      && { say "fetched (try $t, sha $R): $(ls out2/out/a 2>/dev/null | grep -c rcpt) A receipts, $(ls out2/out/b 2>/dev/null | grep -c rcpt) B receipts"; return 0; }
+      && { say "fetched (try $t, sha $R): $(find out2/out/a -maxdepth 1 -name '*rcpt*' 2>/dev/null | wc -l) A receipts, $(find out2/out/b -maxdepth 1 -name '*rcpt*' 2>/dev/null | wc -l) B receipts"; return 0; }
     say "FETCH FAILED (try $t)"; sleep 20; done
   return 1; }
 rm -f conn.txt; rmdir harvest.lock 2>/dev/null
