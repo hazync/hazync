@@ -64,7 +64,7 @@ The anchored lineage's `anchor_id` is the guest's link digest of this state (SHA
 `anchor_id` zeroed), exactly as for any base step. That one value is the anchor's identity: a verifier pins it per
 network and anchor height, as it pins the genesis anchor today.
 
-The build is deterministic (the same inputs gave the same ANCHOR_ID on every run) and refuses: a `hash_serialized_3`
+The build is deterministic (the same inputs gave the same ANCHOR_ID on every repeated run) and refuses: a `hash_serialized_3`
 or block other than the expected, another network's magic, headers that do not link, tracked outpoints not in the
 snapshot, a REPEATABLE txid with live coins, and two coins with one trie key. Its single pass is cross-checked against
 zapp-assume's reviewed `hash_snapshot` (coins, value, `hash_serialized_3`, ECMH must all agree).
@@ -104,7 +104,8 @@ The main lineage's tree holds **every coinbase ever mined** (an untracked coinba
 
 > TRUSTED STATE: blocks H+1..T are valid under Bitcoin Core v28.0's rules (image M), **assuming** the UTXO set at
 > block H (`<hash>`) is the one Bitcoin Core pins in its chainparams (`hash_serialized_3` `<hash3>`), and the
-> anchor's side inputs (headers 0..H, BIP30-tracked coins). Not yet joined to a proof from genesis.
+> anchor's side inputs (headers 0..H, the BIP30-tracked coins and REPEATABLE transactions). Not yet joined to a proof
+> from genesis.
 
 Every anchored proof is today a DEMO verdict (its `anchor_id` is not the genesis anchor); the label needs a pinned
 table `(network, H, block, hash_serialized_3, anchor_id)` in the verifiers, as `genesis_anchor_hex` is now, and a
@@ -148,7 +149,8 @@ the container build). Dev mode: every guest executed and its claims checked, not
 
 The expected triple for regtest is Core's own `gettxoutsetinfo` of the harness node (`oracle/snap_<H>.json`), the
 stand-in for chainparams (Core's regtest `m_assumeutxo_data` is for its test framework's chain, not this one); for
-mainnet 200 it is the value ASSUME_ZAPPS.md §5 recorded from Core 31.1.0. Every build ran twice with the same ANCHOR_ID.
+mainnet 200 it is the value ASSUME_ZAPPS.md §5 recorded from Core 31.1.0. Repeated builds (101, 104, 110, mainnet 200,
+each two or more times) gave the same ANCHOR_ID.
 
 ### 5.2 Join check (question 2): anchored state vs a REAL from-genesis proof at the same H
 
@@ -216,7 +218,8 @@ From the host's `LZ_STATS` lines (chunk + trie + aggregate receipts per block), 
 
 Mainnet block 200 (coinbase only; trie + aggregate receipts): anchored 76,873 + 2,559,743 user cycles, main
 76,873 + 2,544,619 (+15,124, +0.6%); padded 3,407,872 both. The difference is the coin log's shape: appending the
-block's coinbase to the anchored log of 203 leaves merges two trees, to the main log of 208 leaves none.
+block's coinbase to the anchored log of 203 leaves merges two trees, to the main log of 208 leaves none (inferred
+from the leaf counts, not profiled).
 
 At this size the two lineages cost the same: the only structural differences are the coin log's depth (the anchored
 log holds the live coins only, the main one every coin ever: 169 vs 173 leaves here) and the trie's size; each
@@ -245,9 +248,10 @@ was live at H or created after H", and an absence-style answer ("never paid") wo
 all died before H. A Trusted State verifier must relabel history facts as "since H" (or refuse them) until the join;
 balance, coin (UNSPENT/SPENT after H) and statement answers need no relabel beyond the §4 label. What cannot be
 answered on the anchored lineage at all, joined or not: a coin's state at a height below H (the block forest commits
-UNKNOWN there, so no coin path opens), spends before H, coins created and spent before H, and a script's complete
-history. Transaction-in-block facts for blocks ≤ H do open (the leaf carries the real block hash), but they rest on
-the header chain bound to the pinned block hash, i.e. on the assumption.
+UNKNOWN there, so no coin path can open), spends before H, coins created and spent before H, and a script's complete
+history. Transaction-in-block facts for blocks ≤ H should open (the leaf carries the real block hash), resting on the
+header chain bound to the pinned block hash, i.e. on the assumption. These two follow from the anchor's construction;
+neither was exercised here (no coin-path or tx fact was run on the anchored lineage).
 
 ## 6. Cost of building the anchor inside the zkVM (question 4a)
 
@@ -278,8 +282,8 @@ laptop; `TSI` = the guest's own `env::cycle_count()` per phase:
 
 "synthetic" = `ts-anchor synth`: a Core-format snapshot of P2WPKH coins with random txids (2 per txid, none
 coinbase, so no BIP30 entries), on the regtest headers to 110. NOT chain data; it measures the per-coin slope. The
-BIP30 column at 0 entries is the empty-root setup plus reading the list (it grows with the snapshot's size here only
-through input reading).
+BIP30 column at 0 entries is the empty-root setup plus the guest's scan of the txid groups for coinbase or tracked
+ones (so it grows with the number of groups, 500,000 at 1 M coins).
 
 What the table says:
 
@@ -290,7 +294,8 @@ What the table says:
   code: `roots.rs` `apply` = two `compute_root` walks of 256 levels, each recomputing the 256 empty-subtree hashes.
   It dominates every real snapshot here. Lever (NOT built, NOT measured): a bulk build of the sorted entries with the
   empty hashes computed once.
-- **Per header: ~1.9 k (link + MTP) + ~2.8 k (block forest leaf + merges)** cycles.
+- **Per header: ~1.9 k (read, SHA-256d, link) + ~2.8 k (block forest leaf + merges)** cycles; the MTPs are in the
+  snapshot phase, once per coin height.
 - Native, for comparison (ts-anchor, one thread, laptop): 1 M coins 96 s wall, of which the ECMH hints for the guest
   (num-bigint) 78.8 s; 3.2 GB RSS (trie in memory).
 
