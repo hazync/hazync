@@ -122,8 +122,9 @@ verifies under a published image with the network's genesis `anchor_id`, and an 
    `trie_root` (history vs none), `smt_root` (§3.3), `block_roots` (UNKNOWN states below H), `self_id`, `lineage`,
    `anchor_id`.
 
-Why that suffices: the anchored log's leaves are exactly A's coins (A is a deterministic function of the snapshot; a
-verifier either recomputes it or takes the ingest proof of §6), and `live_hash` equality makes them, as a multiset of
+Why that suffices: the anchored log's leaves are exactly A's coins **only if A is shown to be the deterministic
+function of the snapshot** (the ingest receipt of §6, or the verifier's own rebuild; a forged A passes rules 1-2,
+§11.1), and `live_hash` equality makes them, as a multiset of
 leaves, the main lineage's live coins at H (ECMH collision resistance). Each leaf carries value, script, height,
 coinbase and tracked flags and creation MTP, so every later spend, maturity and BIP68 check sees the same coin on both
 lineages. After a successful join, R_T is as strong as a genesis proof of 0..T for **validity**; it still cannot answer
@@ -341,9 +342,12 @@ comparison is like for like.) The regtest image (`a4344798…`) was not rebuilt 
    once more (§9). After a join it can either stop or keep serving balance-type zAPPs.
 5. **A main proof at exactly H.** `live_hash` exists only at a proof's tip, so the join needs the main lineage's
    receipt AT H (the board's join tree must keep a root at H, or a linear proof through H). A board decision.
-6. **Mainnet ingest in the zkVM** needs the chunked design of §6 and the BIP30 bulk-build lever; both unbuilt. It is
-   optional: the anchor's identity can be reproduced natively from the public snapshot, as an image id is from the
-   source. A receipt only saves a light verifier that rerun.
+6. **Mainnet ingest in the zkVM** needs the chunked design of §6 and the BIP30 bulk-build lever; both unbuilt. ⛔
+   **Corrected (§11.1): it is NOT optional.** The join compares `live_hash`, not the anchor's coin log, trie or BIP30
+   tree, and the guest's base step does not tie them to `live_hash` either, so a natively built anchor with a forged
+   coin log joins and lets its fake coin be spent (measured). Only a proof that the anchor's log, trie, BIP30 tree and
+   `live_hash` come from one coin set (the ingest receipt), or a verifier that rebuilds the anchor itself from the
+   snapshot, closes that.
 7. **Host at mainnet scale.** The PoC keeps the anchor's coin log and trie in memory (1 M coins: 3.2 GB). A mainnet
    anchor needs the host's disk stores (`HAZYNC_COINLOG_DIR`, `HAZYNC_TRIE_DIR`) fed from the snapshot, and
    `HAZYNC_TS_SMT_SEED` refuses a resume (the PoC replays nothing): both small host changes, not made.
@@ -384,3 +388,114 @@ ts-anchor build --network mainnet --snapshot zapps/assume/vectors/utxo_200.dat -
                 --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320:a51f51ae…9d67 --out <a> --ingest <a>.ingest
 cd experimental/trusted-state/ingest && cargo build --release -p ts-ingest-host; ts-ingest-host <a> <snapshot> <side>    # §6
 ```
+
+
+## 11. Merging the two lineages: nothing above H re-proved (19.11.2026, second PoC step)
+
+The question: once the main (genesis) lineage is proved to H and joined, can the anchored lineage's proofs of H+1..T
+stand in for the main lineage's, so that nothing above H is proved twice? Validity and the live-coin state can carry
+over (§11.1, with one hard condition); history cannot, because the main lineage's coin log and counting trie for H..T
+are never built. The options are: answers split across the two proofs (§11.2, with a join receipt, §11.3), a cheaper
+"replay" of the main lineage's state over H..T (§11.4), or a full re-prove.
+
+### 11.1 The anchor must itself be proved (negative control, MEASURED)
+
+**Reasoning over the guest.** On `is_base = 1` the aggregate (`prover/methods/guest/src/main.rs` `aggregate`) checks
+of the input state only: `kind`/`version`, the carried ECMH point is a curve point (`swiftsync::start`),
+`block_leaves == height + 1`, the block's height and parent hash, `w.root_prev == prev.utxo_roots` (the witness's log
+is the state's), `w.in_smt_root == prev.smt_root`, and the trie receipt starts from `prev.trie_root`. Nothing relates
+`utxo_roots`, `trie_root` or `smt_root` to `live_hash`; spends are opened against `utxo_roots` alone, and the ECMH
+only subtracts. The join (§4) compares `live_hash` and never the log. So an anchor whose coin log holds a coin that is
+not in its `live_hash` joins, and the coin can be spent above H. **Confirmed.**
+
+**Control** (`ts-anchor build --forge-extra 5000000000:51:50`, `forge_block.py`): the honest regtest anchor at 104
+plus ONE extra OP_TRUE coin of 50 BTC (height 50, txid `aeab1f0a…`) appended to its coin log and trie, `live_hash`,
+`utxo_value` and `hash_serialized_3` left honest; and block 105 with one extra transaction spending it (merkle root
+and nonce redone, so the header is valid; Core would reject the block).
+
+| check | result |
+|---|---|
+| `ts-anchor join` of the forged anchor against the REAL receipt at 104 | **JOIN_OK** (all 15 fields equal; only `utxo_leaves` 170 vs 173 differs, a lineage field) |
+| the core image (regtest `a4344798`, executor) on the forged block 105, base step on the forged anchor | **accepted**: chunk 1,294,909 + trie 74,142 + aggregate 2,580,445 user cycles, `LZ_PROVE_RANGE_DONE` |
+| its state at 105 against the real receipt's | `live_hash` differs (the guest subtracted a point it never added), `utxo_value` equal |
+| the ingest guest on the true snapshot, compared with the forged anchor | **INGEST_MISMATCH** `coins, trie_root, utxo_roots, block_roots` |
+| the join-receipt prototype (§11.3) on the forged lineage's tip | **refused**: its `anchor_id` `5cf47301…` != the link digest rebuilt from the ingest journal `8fce9ea6…` |
+| a split history (§11.2) of `OP_1` with the forged lineage's trie at 105 | passes the matching rule, but gives 41 coins against the main lineage's 39 |
+
+So: the proven `live_hash` constrains a forged anchor's LIVE SET, not its coin log. After the join, the anchored
+proofs above H are as good as the main lineage's **only if** the anchor is the output of the ingest computation
+(receipt), or the verifier rebuilt it from the snapshot itself. §8.6 is corrected accordingly. (The same holds before
+the join: an anchor nobody reproduced is a trust assumption beyond Core's snapshot.)
+
+What the ingest receipt still takes on trust: the REPEATABLE list (§3.3). A wrong entry cannot make the anchored
+lineage accept a block Core refuses (BIP30 forbids repeating an outpoint that is live; live coinbases and tracked
+transactions come from the snapshot, and the ingest guest refuses a REPEATABLE txid with live coins), but it changes
+the tracked bit of a later repeat, so the leaf bytes and `live_hash` drift from the main lineage's (§5.3 control). On
+mainnet no repeat is possible below 1,983,702. A join receipt could check each listed entry against main@H's
+`smt_root` (a membership proof of value REPEATABLE); completeness cannot be shown that way. Open.
+
+### 11.2 Split answers, per zAPP
+
+After a proven join at H (the join receipt, §11.3): main@H has the full history 0..H (coin log, trie, block forest);
+anchored@T has the live set at H and the full history of H+1..T. A coin's identity across the two is its **leaf**
+(SHA-256 over outpoint, value, script, height, flags, creation MTP) or its **trie key** (script hash ‖ coin key), both
+computed from the coin's fields, so they are the same bytes on both lineages; positions in the two coin logs are each
+lineage's own and are never matched. The join's `live_hash` equality plus the ingest receipt make the anchored trie's
+and log's entries at H exactly main@H's live coins.
+
+| zAPP / fact | answer at T from | matching needed | verdict |
+|---|---|---|---|
+| balance fact, balance statement (`zapps/statement`) | anchored@T alone | none: live coins only | **clean** (§5.5: identical to main@112) |
+| assumeutxo (`zapps/assume`) | anchored@T `live_hash` alone | none | **clean** |
+| assumevalid (`zapps/assume`) | X ≤ H: main@H; X > H: anchored@T + join receipt | the join receipt (one chain) | **clean** |
+| headers (`zapps/headers`) | its own proof | none | **unaffected** |
+| deposit (`zapps/deposit`, on main since #743) | tx block h ≤ H: main@H's block forest; h > H: anchored@T's (leaves above H carry the anchored state and the same undo hash); header chain as today | which proof covers h; both bound to one chain by the join receipt | **clean** (verifier change: two core proofs + join receipt) |
+| trie coin fact (unspent / spent / absent) | main@H if SPENT by H (final); else anchored@T; ABSENT only if absent in both | the coin key, same bytes | **clean** |
+| trie history fact | main@H's coins SPENT by H ∪ anchored@T's coins; a key in both (a coin re-created over its own spent record) keeps the anchored one, as the main trie does | every coin UNSPENT at H on main must be in anchored@T's history with its value and spent, if at all, above H | **clean, MEASURED**: `ts-anchor split-history`, main@104 (real receipt's trie) + anchored@112 → **15/15 scripts equal to the main lineage's history at 112, coin for coin**, incl. the BIP30 re-creation at 105 and `OP_1` (39+21 → 40 coins, 21 spent) |
+| coin-log CoinFact (position) / liveness (`zapps/liveness`) | coin created ≤ H and spent ≤ H: main@H; otherwise anchored@T, the coin found by its leaf in the anchored log; `at` ≤ H from main@H's block forest, `at` > H from anchored@T's | the leaf, same bytes; positions never compared | **clean** (reasoned; not run) |
+| CoinJourney | each hop's block from the proof covering its height | as deposit | **clean** (reasoned) |
+| block forest: block h in chain, coin state at h | h ≤ H main@H (real states); h ≥ H anchored@T | none | **clean** |
+| hints (`zapps/hints`), utreexo (`feat/zapp-utreexo`): walks from genesis that rebuild the coin log and block forest and require them equal to ONE core journal | — | the walk's coin log at T is the main lineage's, which no proof commits above H | **needs machinery**: a two-part walk (runs ≤ H bound to main@H as today; runs above H opening blocks and undo hashes in anchored@T's forest; the final binding at T by `live_hash` or by the forest alone). A zAPP image change, not a core one. Not built |
+| "complete history" of anything below H on the anchored proof alone | — | — | **cannot**, without main@H |
+
+Nothing in the table needs the two lineages' coin-log positions matched; that is what makes the split cheap. The cost
+is that every history answer above H carries two facts and the join receipt, for as long as the main lineage stays
+at H.
+
+### 11.3 A join receipt
+
+**What it binds.** A small separate guest (a zAPP-like image; no core change) would take three receipts, each
+`env::verify`'d: main@H (a published core image, genesis-anchored), the ingest receipt of the anchor, and the anchored
+lineage's tip T (the core image). It then:
+
+1. rebuilds the anchor A: every coin-derived field from the ingest journal (`tip_hash`, `height`, `utxo_roots`,
+   `utxo_leaves`, `utxo_value`, `live_set`/`live_hash`, `trie_root`, `smt_root`, `block_roots`, `block_leaves`) and
+   every history-free header field **from main@H's journal** (`cum_work`, `prev_nbits`, `prev_time`, `epoch_start`,
+   `recent_times`, `max_time`, `profile`); `self_id`, `anchor_id`, `lineage` zero;
+2. requires the ingest's (H, tip, value, live set) = main@H's, main@H genesis-anchored, the same profile;
+3. requires J_T.`anchor_id` == `link_digest(A)`. Because A's header fields were taken from main@H, this one equality
+   also proves the anchor's time context and work were main@H's: rule 2 of §4 for those fields comes for free;
+4. commits the joined statement: both image ids, the genesis anchor, H and its block, T and its tip, chainwork and
+   `max_time` of T, and the digests of J_H and J_T, so a split answer (§11.2) checks its main@H facts against J_H's
+   roots and its anchored facts against J_T's.
+
+It needs no block forest or handover machinery: the block forest of the anchor is already inside A (ingest), and the
+link digest is the guest's own. HANDOVER.md's cross-lineage tools (`lineage`, `is_base = 2`) do not apply: a
+handover continues ONE lineage under a new image, while here two lineages of the same image meet.
+
+**Prototype, host side** (`ts-anchor join-receipt`; the checks of steps 1-3 natively, main@H's receipt really
+verified, the ingest journal from the ingest guest's executor run, the anchored tip from the dev-mode run of §5.3):
+
+| case | result |
+|---|---|
+| main@104 (real receipt `eb2cd424`) + ingest of `utxo_104.dat` + anchored tip at 112 | **JOINED**: the rebuilt anchor's link digest is `8fce9ea6…`, exactly the anchored lineage's `anchor_id`; commits J_H `4f2f807d…`, J_T `59e2e868…` |
+| the same, with the forged lineage's tip (§11.1) | refused: `anchor_id` `5cf47301…` != `8fce9ea6…` |
+| main@105 instead of 104 | refused: ingest (H, tip, value, live set) != main's, and the link digest moves (`fdfc8a7a…`) |
+
+The rebuild in step 1 reproducing the anchored `anchor_id` bit for bit is the measured point: the ingest journal plus
+main@H's header fields ARE the anchor. Not built as a guest; its cycles are not measured. Inside the guest it is three
+journal decodes, one serde encoding and one SHA-256d; the cost that matters is resolving three receipt assumptions in
+recursion, of the order of the core's own join (mode 18, 6.4 s on one RTX PRO 6000, LIBZYNC.md §4): ESTIMATED, not
+measured.
+
+<!-- REPLAY -->
