@@ -40,6 +40,7 @@ BASE_ID=${BASE_ID:-}
 TIP_IMAGE=${TIP_IMAGE:-}
 # the core receipt the steps rest on: the newest genesis-anchored chain proof (the spine's copy)
 CORE=${CORE:-/var/lib/hazync-lz/spine/spine.bin}
+# the follower's OWN block files: a reorg moves the old branch's files out of it (never point it at a shared directory)
 BLOCKS=${BLOCKS:-$D/blocks}
 # fetch block files lo..hi into $BLOCKS (prover/fetch_block_rpc.py range; the node needs txindex). Only the bodies of
 # the step's blocks are fetched; the link to the core tip is headers only (getblockheader), review L4

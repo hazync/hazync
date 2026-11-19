@@ -10,8 +10,14 @@ set -uo pipefail
 Z=$1; V=$2; BASE=$3; CORE=$4; export FAKE_BLOCKS=$5
 HERE=$(cd "$(dirname "$0")" && pwd); F=$HERE/../hazync-utreexo-follow
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
-export UTREEXO_DIR=$W/d ZYNCAPP=$Z VERIFY=$V CORE BLOCKS=$FAKE_BLOCKS BITCOIN_CLI=$HERE/fake-bitcoin-cli PUBLISH=$W/www/ \
-       ALLOW_DEMO=1 MARGIN=6 FETCH=false FAKE_TIP=4000
+# The follower's OWN block directory (it moves block files aside on a reorg): hard links to the shared files 1..4,000,
+# so a rename or delete inside $W never touches the source directory (which the fake node keeps reading)
+mkdir -p "$W/blocks"
+for h in $(seq 1 4000); do ln "$FAKE_BLOCKS/block_$h.json" "$W/blocks/" 2>/dev/null || cp "$FAKE_BLOCKS/block_$h.json" "$W/blocks/"; done
+# fetch = copy from the source directory (the node's chain); a reorg's fall-back makes the follower fetch again
+printf '#!/bin/bash\nfor h in $(seq "$1" "$2"); do cp "%s/block_$h.json" "$3/" || exit 1; done\n' "$FAKE_BLOCKS" > "$W/fetch"; chmod +x "$W/fetch"
+export UTREEXO_DIR=$W/d ZYNCAPP=$Z VERIFY=$V CORE BLOCKS=$W/blocks BITCOIN_CLI=$HERE/fake-bitcoin-cli PUBLISH=$W/www/ \
+       ALLOW_DEMO=1 MARGIN=6 FETCH=$W/fetch FAKE_TIP=4000
 unset RISC0_DEV_MODE
 mkdir -p "$W/www"
 fails=0
