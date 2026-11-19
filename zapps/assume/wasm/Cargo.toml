@@ -1,0 +1,27 @@
+[package]
+name = "zapp-assume-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "The assumevalid and assumeutxo zyncAPPs in WebAssembly: check them in a browser, on the device"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# The zAPP's own library (one implementation of the checks, as the CLI and the C ABI); raw ABI, no wasm-bindgen.
+[dependencies]
+zapp-assume = { path = ".." }
+# the core receipt check (zapps/corecheck: no CLI code)
+zapp-corecheck = { path = "../../corecheck" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
