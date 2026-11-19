@@ -586,3 +586,39 @@ is mandatory.** Reasons:
   it neither the label before the join nor the merge after it is sound.
 - Keep the replay pass as the later option if single-proof history at the tip becomes a requirement (one store for
   `zync-serve`, unchanged hints and utreexo walks); it is then a release item of its own.
+
+## 12. The ingest receipt at scale (third PoC step, 19.11.2026)
+
+§11.1 made the ingest receipt the critical path. Two things stood in the way at mainnet scale: the BIP30 tree cost
+1.46 M cycles per entry, and one guest run holds about 10^6 coins. Both are addressed here in the **ingest images only**
+(`experimental/trusted-state/ingest`); the core guest's sources are untouched (§12.5).
+
+### 12.1 The BIP30 tree: a bulk build
+
+**Cause.** The core's `roots.rs` `apply` (one proven insert per entry) runs `verify` and then a second `compute_root`,
+each a 256-level walk, and each `compute_root` first rebuilds the 256 empty-subtree hashes: about 3 × 256 SHA-256s of
+65 bytes per entry.
+
+**Fix, ingest only** (`ingest/tsi.rs`, `smt_bulk`): the root of all K entries at once, sorted by key: a subtree with no
+entry is the precomputed `empty[height]`, a subtree with one entry is that leaf folded up its remaining path against
+`empty`, otherwise hash the two halves split on the next key bit. About K·(256 − log2 K) node hashes in all, the empty
+table built once. The entries come sorted for free (Core's file order is txid order, which is the tree's key order);
+the guest merges the REPEATABLE list in and requires keys strictly increasing (no key twice, so no REPEATABLE txid with
+live coins). Three variants of the same tree, chosen by an input word: `bulk` (roots.rs's own `hash_leaf` /
+`hash_node`), `raw` (the same two hashes as hand-padded `sha2::compress256` calls), `sys` (the same blocks through
+risc0's SHA accelerator directly, as libzync `coinlog.rs` does).
+
+**Equality with the core's tree.** Every run below ends `INGEST_MATCH`: the guest's root equals `ts-anchor build`'s,
+which inserts the same entries into the core's own `hazync_coinbase_smt::Smt`.
+
+| set | entries | proofs (roots.rs apply, before) | bulk | raw | **sys** | sys per entry |
+|---|---|---|---|---|---|---|
+| regtest 104 (Core) | 101 | 147,283,772 | 35,061,309 | 29,240,366 | **22,733,379** | 225,083 |
+| regtest 110 (Core) | 102 | 148,737,758 | 35,337,573 | 29,462,100 | **22,893,210** | 224,443 |
+| mainnet 200 (Core 31.1.0) | 199 | 289,869,509 | 68,285,043 | 56,959,279 | **44,260,268** | 222,413 |
+| synthetic 20,000 coins, every 2nd txid a coinbase | 5,000 | 7,276,049,952 (1,455,210/entry) | 1,679,572,534 | 1,401,266,721 | **1,088,769,916** | **217,754** |
+
+BIP30-phase user cycles (the guest's `env::cycle_count()`), executor, one-shot ingest guest. **1.455 M → 218 k cycles
+per entry, 6.7×.** In the combine guest (§12.2), where the tree is built in a fresh process, the same 101 regtest
+entries took 13,712,033 cycles (136 k per entry): the per-entry cost depends on paging, so the projection (§12.4) uses
+the higher, one-shot figure.
