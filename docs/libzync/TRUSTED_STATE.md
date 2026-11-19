@@ -536,7 +536,7 @@ but its proofs say "scripts skipped" and cannot be handed over to the scripts-ch
    | | chunks (16) | aggregate | trie | **block** | padded (segments) |
    |---|---|---|---|---|---|
    | scripts checked | 385,230,206 | 66,539,127 | 47,599,783 | **499,369,116** | 609,239,040 (586) |
-   | assumevalid (scripts and signatures skipped) | 153,191,036 | 66,539,127 | 47,599,783 | **267,329,946** | 331,089,920 (324) |
+   | assumevalid (scripts and signatures skipped) | 153,191,036 | 66,539,127 | 47,599,783 | **267,329,946** | 330,989,568 (324) |
    | saved | −60.2% | 0 | 0 | **−46.5%** | −45.7% |
 
    The chunks still parse every transaction, hash txids and wtxids and build the coin leaves; aggregate and trie
