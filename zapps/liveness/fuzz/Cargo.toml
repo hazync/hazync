@@ -1,0 +1,46 @@
+# cargo-fuzz targets for the liveness zAPP (docs/libzync/ZAPP_TESTING.md §3.4, §4.5). Own workspace (the empty
+# [workspace] below), so it is never a member of zapps/liveness's and never touches its Cargo.lock; this crate's own
+# Cargo.lock started as a copy of the parent's, so it resolves the same versions (CI's cargo audit reads it too).
+# Run (nightly, cargo-fuzz): cargo fuzz run <target> fuzz/corpus/<target> -- -rss_limit_mb=1024
+# Replay the committed corpus on stable: cargo test --release --manifest-path fuzz/Cargo.toml
+[package]
+name = "zapp-liveness-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zapp-liveness = { path = ".." }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+libzync = { path = "../../../libzync", default-features = false, features = ["liveness"] }
+serde_json = "1"
+
+[[bin]]
+name = "liveness_proof"
+path = "fuzz_targets/liveness_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "liveness_fact"
+path = "fuzz_targets/liveness_fact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "liveness_ask"
+path = "fuzz_targets/liveness_ask.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
