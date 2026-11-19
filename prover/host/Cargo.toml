@@ -32,3 +32,6 @@ cuda = ["risc0-zkvm/cuda"]
 # Named only so the shared xver module's guest-side cfgs are known here: the host always carries every version.
 xver-v3_0_5 = []
 xver-v3_1_0 = []
+# EXPERIMENTAL Trusted State (docs/libzync/TRUSTED_STATE.md, src/trusted_state.rs): host only, the guest is unchanged.
+# Off in every release and CI host.
+trusted-state = []

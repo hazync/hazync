@@ -997,7 +997,20 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
-    let mut smt = if leaf.is_some() { Smt::new() } else if replay {
+    // EXPERIMENTAL Trusted State (feature `trusted-state`): the anchor's BIP30 tree from its own entry list, checked against
+    // its smt_root, so the anchor is used exactly as built (no replay, no demonstration seeding that rewrites smt_root).
+    #[cfg(feature = "trusted-state")]
+    let ts_seed: Option<Smt> = std::env::var("HAZYNC_TS_SMT_SEED").ok().map(|p| {
+        assert!(handover.is_none() && leaf.is_none() && anchor_path != "genesis", "HAZYNC_TS_SMT_SEED: a run from a Trusted State anchor only");
+        assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_TS_SMT_SEED: no resume (the PoC replays nothing)");
+        crate::trusted_state::smt_seed(&p, &prev)
+    });
+    #[cfg(not(feature = "trusted-state"))]
+    let ts_seed: Option<Smt> = {
+        assert!(std::env::var_os("HAZYNC_TS_SMT_SEED").is_none(), "HAZYNC_TS_SMT_SEED needs a host built with --features trusted-state");
+        None
+    };
+    let mut smt = if let Some(t) = ts_seed { t } else if leaf.is_some() { Smt::new() } else if replay {
         let (t, replay_max) = lz_smt_replay(dir, lo - 1);
         if prev.max_time == 0 { prev.max_time = replay_max.max(genesis_params().1); }
         assert_eq!(t.root(), prev.smt_root, "replayed BIP30 tree at {} != the anchor's smt_root", lo - 1);
