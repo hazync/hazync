@@ -26,7 +26,7 @@ and BIP30 tree, built from the snapshot's coins, and its own `anchor_id`.
 |---|---|---|
 | 1. anchored `ChainState` from a Core snapshot, `hash_serialized_3` checked, block bound to headers, coin log + trie + live_hash built | **yes** (`ts-anchor build`) | regtest 101/104/105/110 (Core 28.0 dumps of the zAPP harness), mainnet 200 (Core 31.1.0 dump) |
 | 2. anchored `live_hash` = main lineage's at H | **yes, every case**, against REAL receipts: regtest 104/105/110 (`eb2cd424`, GPU), mainnet 200 (`8888d59c`, GPU) | §5.2 |
-| 3. guest takes the anchored state as base and validates further blocks | **yes, with no guest change**: `is_base = 1` (the existing base step) | regtest anchored at 104, blocks 105..112 (incl. the BIP30 repeat at 105) in the executor (dev mode) |
+| 3. guest takes the anchored state as base and validates further blocks | **yes, with no guest change**: `is_base = 1` (the existing base step); one host hook for the BIP30 tree | regtest anchored at 104 (blocks 105..112, incl. the BIP30 repeat at 105) and at 101 (102..112); mainnet anchored at 199 (block 200); executor (dev mode); every resulting state = the real receipts' |
 | 3b. image id | **unchanged** (no guest source touched; laptop mainnet image rebuilt from clean: same id and ELF) | §7 |
 | 4. cost | ingest in a guest: §6; per block anchored vs main: §5.4 | executor, laptop |
 | 5. zAPP on the anchored state | balance statement: **identical answer** to the main lineage's; script history: **only from H** | §5.5 |
@@ -181,6 +181,14 @@ out), then decoded.
   lineage's: the divergence surfaces at the next join, never as a wrong acceptance. So the REPEATABLE list is a needed
   side input, and it is checked only by a later join (open item, §8).
 
+**Mainnet, anchored at 199, block 200** (mainnet host `420a7239…`, `trusted-state` feature, dev mode): the anchor from
+Core 31.1.0's `zapps/assume/vectors/utxo_199.dat` (203 coins; built with `--no-expect`: no Core-printed
+`hash_serialized_3` for 199 is recorded in the repo, so here the check is the outcome below), ANCHOR_ID
+`174e6b10…1c49`; block 200 accepted as a base step on it with only `block_200.json` in its directory. Its state at
+200 against the REAL proof `mainnet_1_200_8888d59c.rcpt` (verified first): **JOIN_OK**, all 15 fields equal
+(`live_hash`, `utxo_value`, `cum_work`, time context, tip), the lineage fields differ as expected. The main lineage's
+block 200 for comparison: `libzync-prep 1 199` (native, 0.3 s) then the same block as a base step on prep's state.
+
 ### 5.4 Per-block cycles, anchored vs main (question 4b), same blocks, same image, executor
 
 From the host's `LZ_STATS` lines (chunk + trie + aggregate receipts per block), `HAZYNC_SEG_PO2=21`, 1 chunk:
@@ -196,6 +204,10 @@ From the host's `LZ_STATS` lines (chunk + trie + aggregate receipts per block), 
 | 111 | 3,860,890 | 3,847,269 | +13,621 | 5,505,024 | 4 |
 | 112 | 3,621,261 | 3,627,834 | −6,573 | 5,505,024 | 4 |
 | **105..112** | **30,349,557** | **30,354,377** | **−4,820 (−0.02%)** | 44,040,192 | 32 |
+
+Mainnet block 200 (coinbase only; trie + aggregate receipts): anchored 76,873 + 2,559,743 user cycles, main
+76,873 + 2,544,619 (+15,124, +0.6%); padded 3,407,872 both. The difference is the coin log's shape: appending the
+block's coinbase to the anchored log of 203 leaves merges two trees, to the main log of 208 leaves none.
 
 At this size the two lineages cost the same: the only structural differences are the coin log's depth (the anchored
 log holds the live coins only, the main one every coin ever: 169 vs 173 leaves here) and the trie's size; each
@@ -284,7 +296,12 @@ No file the guest compiles is touched: `git diff origin/main...HEAD -- prover/me
 accumulator` is empty (the guest `#[path]`-includes from `libzync/src` and `coinbase-smt/src`). The host change is a
 cargo feature of the host crate, which the guest build never sees.
 
-<!-- IMAGEID -->
+Measured, mainnet image, laptop, same worktree path and base tree: the host built at `261f0a59` (origin/main, before
+any change) gave `METHOD_ID 420a72393c50d431d81231180d22dc5dd7f165f1c15e5b01b80fd2763bcde2d6`, guest ELF sha256
+`acbc59c1…5f57`. At `950a491` (all PoC code, host built `--features trusted-state`), after `rm -rf riscv-guest` and
+`cargo clean -p methods` so the guest is compiled again from source: **the same METHOD_ID and the same ELF sha256**.
+(Laptop ids differ from the published `46666b6f…` because ids depend on absolute build paths, LIBZYNC.md §8; the
+comparison is like for like.) The regtest image (`a4344798…`) was not rebuilt from clean; its source is the same.
 
 ## 8. Open questions and risks (assessed, not solved here)
 
