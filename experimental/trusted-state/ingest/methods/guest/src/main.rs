@@ -28,6 +28,9 @@ mod coinlog;
 #[path = "../../../../../../libzync/src/ttree.rs"]
 #[allow(dead_code)]
 mod ttree;
+#[path = "../../../tsi.rs"]
+#[allow(dead_code)]
+mod tsi;
 #[path = "../../../../../../coinbase-smt/src/roots.rs"]
 #[allow(dead_code)]
 mod smt;
@@ -250,9 +253,35 @@ fn main() {
     // ---- D: the BIP30 tree: live coinbases and tracked transactions with their live counts, then REPEATABLE slots
     let nr = read_u32() as usize;
     let rep = read_bytes(32 * nr);
+    // 0: one proven roots.rs `apply` per entry (the core's per-insert path); 1: tsi::smt_bulk over the sorted entries
+    let smt_mode = read_u32();
     let npw = read_u32() as usize;
     let pw = read_words(npw);
     let c3b = env::cycle_count();
+    if (1..=3).contains(&smt_mode) {
+        assert!(npw == 0, "bulk mode takes no proofs");
+        // the entries in key order: the coinbase / tracked groups (txids ascending, the snapshot's order) merged with the
+        // REPEATABLE txids (ascending); strictly increasing overall, so no key twice and no REPEATABLE txid with live coins
+        let mut e: Vec<([u8; 32], u32)> = groups.iter().filter(|g| g.2 || g.3).map(|g| (g.0, g.1)).collect();
+        e.extend(rep.chunks_exact(32).map(|r| (<[u8; 32]>::try_from(r).unwrap(), REPEATABLE)));
+        e.sort_unstable_by(|x, y| x.0.cmp(&y.0));
+        assert!(e.windows(2).all(|w| w[0].0 < w[1].0), "BIP30 entries: a key twice");
+        let root = if smt_mode == 1 {
+            let empty = smt::empty_hashes();
+            tsi::smt_bulk(&e, 0, &empty, &|k, v| smt::hash_leaf(k, v), &|l, r| smt::hash_node(l, r))
+        } else if smt_mode == 2 {
+            // 2: the same tree with the leaf and node hashes as hand-padded compressions (tsi::leaf_raw / node_raw)
+            let empty = tsi::empty_raw();
+            tsi::smt_bulk(&e, 0, &empty, &tsi::leaf_raw, &tsi::node_raw)
+        } else {
+            // 3: the same, each block one direct call of the SHA accelerator (tsi::leaf_sys / node_sys)
+            let empty = tsi::empty_sys();
+            tsi::smt_bulk(&e, 0, &empty, &tsi::leaf_sys, &tsi::node_sys)
+        };
+        let c4 = env::cycle_count();
+        finish(c0, c1, c1b, c2, c2b, c3, c3b, c4, h_tip, tip_hash, hash3, magic, seen, value, live_set, live_hash, troot, root, e.len() as u32, &log, &hashes, out);
+        return;
+    }
     let mut root = smt::empty_root();
     let mut pi = 0usize;
     let mut next_proof = || -> smt::Proof {
@@ -277,6 +306,13 @@ fn main() {
     assert!(pi == pw.len(), "unused BIP30 proofs");
     let c4 = env::cycle_count();
 
+    finish(c0, c1, c1b, c2, c2b, c3, c3b, c4, h_tip, tip_hash, hash3, magic, seen, value, live_set, live_hash, troot, root, n_smt, &log, &hashes, out);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish(c0: u64, c1: u64, c1b: u64, c2: u64, c2b: u64, c3: u64, c3b: u64, c4: u64, h_tip: u32, tip_hash: [u8; 32], hash3: [u8; 32],
+          magic: [u8; 4], seen: u64, value: u64, live_set: u32, live_hash: [u32; 16], troot: W, root: [u8; 32], n_smt: u32,
+          log: &[Option<W>], hashes: &[[u8; 32]], mut out: Vec<u32>) {
     // ---- E: the block forest (H+1 leaves) and the commit
     let mut roots: Vec<Option<[u8; 32]>> = log.iter().map(|r| r.map(|w| coinlog::h_of(&w))).collect();
     while roots.last() == Some(&None) { roots.pop(); }

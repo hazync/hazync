@@ -47,8 +47,13 @@ fn main() {
         b.write_slice(&perm);
         b.write(&((rep.len() / 32) as u32)).unwrap();
         b.write_slice(rep);
+        // TSI_SMT=bulk: the BIP30 root by tsi::smt_bulk (no proofs); default: one proven roots.rs apply per entry
+        let mode: u32 = match std::env::var("TSI_SMT").as_deref() { Ok("bulk") => 1, Ok("raw") => 2, Ok("sys") => 3, _ => 0 };
+        let bulk = mode != 0;
+        b.write(&mode).unwrap();
+        let pw: &[u32] = if bulk { &[] } else { &pw };
         b.write(&(pw.len() as u32)).unwrap();
-        b.write_slice(&pw);
+        b.write_slice(pw);
         let env = b.build().unwrap();
         default_executor().execute(env, GUEST_ELF).expect("ingest guest")
     };

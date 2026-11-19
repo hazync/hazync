@@ -579,6 +579,8 @@ fn synth(a: &[String]) {
     let base = from_display(&need(a, "--base"));
     let magic = net(&arg(a, "--network").unwrap_or("regtest".into())).magic;
     let out = need(a, "--out");
+    // --coinbase-every K: every K-th txid group's coins are coinbase outputs (so BIP30 entries; for the SMT cost curve)
+    let cb_every: u64 = arg(a, "--coinbase-every").map(|v| v.parse().unwrap()).unwrap_or(0);
     // 2 coins per txid; txids ascending (Core's key order); heights spread 1..=h; scripts P2WPKH, which Core's
     // ScriptCompression has no special type for: stored raw, as VARINT(size + 6) then the 22 bytes
     let mut txids: Vec<[u8; 32]> = (0..n.div_ceil(2)).map(|i| sha256(&[b"ts-synth".as_slice(), &i.to_le_bytes()].concat())).collect();
@@ -598,7 +600,7 @@ fn synth(a: &[String]) {
         for v in 0..k {
             f.push(v as u8);
             let height = 1 + (i as u32 * 7919) % h;
-            varint((height as u64) << 1, &mut f);
+            varint((height as u64) << 1 | (cb_every > 0 && i as u64 % cb_every == 0) as u64, &mut f);
             varint(compress_amount(10_000 + i as u64), &mut f);
             let mut spk = vec![0x00, 0x14];
             spk.extend_from_slice(&t[..20]);
