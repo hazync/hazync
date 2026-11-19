@@ -102,6 +102,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
             Ok(v) => v,
             Err(e) => return fail(&format!("facts JSON: {e}")),
         };
+        if let Err(e) = swiftsync_verify::check_facts_wrapper(&v) { return fail(&e); }
         let coins: Vec<swiftsync_verify::CoinFact> = match serde_json::from_value(v.get("coins").cloned().unwrap_or_else(|| serde_json::json!([]))) {
             Ok(c) => c,
             Err(e) => return fail(&format!("facts JSON coins: {e}")),
@@ -206,6 +207,43 @@ mod trie_tests {
         let m = unsafe { CStr::from_ptr(msg.as_ptr()) }.to_string_lossy().to_string();
         assert_eq!(rc, FAIL);
         assert!(m.contains("refused"), "{m}");
+    }
+
+    #[test]
+    fn an_unknown_key_in_the_facts_json_is_refused() {
+        // `{"trie": [...]}` was read as no facts at all: on a full-work proof with a matching expect, OK with nothing checked
+        for (facts, why) in [(r#"{"trie": []}"#, "unknown key \"trie\""), (r#"{"tries": [], "coins": [], "journey": []}"#, "unknown key \"journey\""),
+                             ("[]", "not an object"), ("null", "not an object")] {
+            let c = std::ffi::CString::new(facts).unwrap();
+            let mut out = std::mem::MaybeUninit::<SwiftsyncResult>::zeroed();
+            let mut msg = [0 as c_char; 256];
+            let rc = unsafe { swiftsync_verify_facts(b"junk".as_ptr(), 4, 1, 0, std::ptr::null(), std::ptr::null(),
+                                                     c.as_ptr(), std::ptr::null(), out.as_mut_ptr(), msg.as_mut_ptr(), msg.len()) };
+            let m = unsafe { CStr::from_ptr(msg.as_ptr()) }.to_string_lossy().to_string();
+            assert_eq!(rc, FAIL, "{facts}");
+            assert!(m.contains(why), "{facts}: {m}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_field_in_a_trie_fact_is_refused() {
+        // a misspelled "expect" must not turn a claim into a question; refused while the facts JSON is read
+        let fact = r#"{"kind": "balance", "at": 1, "script_pubkey": "00", "txid": null, "vout": null, "proof": "", "expected": "never"}"#;
+        let facts = std::ffi::CString::new(format!(r#"{{"tries": [{fact}]}}"#)).unwrap();
+        let mut out = std::mem::MaybeUninit::<SwiftsyncResult>::zeroed();
+        let mut msg = [0 as c_char; 256];
+        let rc = unsafe { swiftsync_verify_facts(b"junk".as_ptr(), 4, 1, 0, std::ptr::null(), std::ptr::null(),
+                                                 facts.as_ptr(), std::ptr::null(), out.as_mut_ptr(), msg.as_mut_ptr(), msg.len()) };
+        let m = unsafe { CStr::from_ptr(msg.as_ptr()) }.to_string_lossy().to_string();
+        assert_eq!(rc, FAIL);
+        assert!(m.contains("facts JSON tries") && m.contains("unknown field") && m.contains("expected"), "{m}");
+        // control: the same fact without the extra field gets past the facts JSON (it fails later, on the junk receipt)
+        let ok = fact.replace(r#", "expected": "never""#, r#", "expect": "never""#);
+        let facts = std::ffi::CString::new(format!(r#"{{"tries": [{ok}]}}"#)).unwrap();
+        let rc = unsafe { swiftsync_verify_facts(b"junk".as_ptr(), 4, 1, 0, std::ptr::null(), std::ptr::null(),
+                                                 facts.as_ptr(), std::ptr::null(), out.as_mut_ptr(), msg.as_mut_ptr(), msg.len()) };
+        let m = unsafe { CStr::from_ptr(msg.as_ptr()) }.to_string_lossy().to_string();
+        assert!(!m.contains("facts JSON"), "rc {rc}: {m}");
     }
 
     #[test]
