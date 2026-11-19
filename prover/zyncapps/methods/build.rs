@@ -5,5 +5,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../../libzync/src/ttree.rs");
     println!("cargo:rerun-if-changed=headers/src/mmr.rs");
     println!("cargo:rerun-if-changed=../../../libzync/src/hints.rs");
+    println!("cargo:rerun-if-changed=../../../libzync/src/utreexo_roots.rs");
+    println!("cargo:rerun-if-changed=utreexo-tip/src/step.rs");
     risc0_build::embed_methods();
 }

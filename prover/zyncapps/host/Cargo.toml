@@ -22,4 +22,6 @@ swiftsync-verify = { path = "../../../swiftsync-verify" }
 zapp-headers = { path = "../../../zapps/headers" }
 # The hints zAPP module (zapps/hints, docs/libzync/ZYNCAPPS.md §9): its verifier, the one the CLI, C ABI and WASM run.
 zapp-hints = { path = "../../../zapps/hints" }
-libzync = { path = "../../../libzync", default-features = false, features = ["hints"] }
+libzync = { path = "../../../libzync", default-features = false, features = ["hints", "utreexo"] }
+# the utreexo tip step runs natively before proving (#[path] methods/utreexo-tip/src/step.rs): Floresta's accumulator code
+rustreexo = "=0.7.0"

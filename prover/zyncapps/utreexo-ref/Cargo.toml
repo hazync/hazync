@@ -1,0 +1,19 @@
+# Test-only: Floresta's own Utreexo code (floresta-chain at a pinned commit, rustreexo 0.7.0) replaying mainnet blocks,
+# the reference the Utreexo roots zyncAPP is compared with byte for byte (docs/libzync/UTREEXO_ZAPP.md §7). Not part of
+# any image.
+[package]
+name = "utreexo-ref"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+floresta-chain = { git = "https://github.com/getfloresta/Floresta", rev = "8399792e5811f23930a5bd181d4ed20a199f6b36", default-features = false }
+rustreexo = "=0.7.0"
+bitcoin = { version = "=0.32.8", default-features = false, features = ["std"] }
+serde_json = "1"
+
+[profile.release]
+debug = false
+
+[workspace]
