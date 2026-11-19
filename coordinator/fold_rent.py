@@ -28,6 +28,7 @@ spent ten days blaming "nobody ran it". Evidence before teardown, always.
 import argparse
 import os
 import sys
+import secrets
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +44,25 @@ POLL_S = 20
 # ⚠ Margin on the wall-clock budget. Teardown itself takes time, and a pod billed past the cap
 # because the terminate call was still in flight is money spent on nothing.
 BUDGET_MARGIN = 0.85
+
+
+def release_fold(api, name, pod_id, sleep=time.sleep, clock=time.monotonic):
+    """Terminate `pod_id` and every pod on the account named `name` (unique to this run, so a lost create is found
+    too, however late), through sb.release_until_clean. Loud when that cannot be confirmed. Returns the ids still
+    there (None: never seen clean)."""
+    try:
+        done, left, clean = sb.release_until_clean(api, [pod_id] if pod_id else [], match=lambda n: n == name,
+                                                   sleep=sleep, clock=clock)
+    except Exception as e:                                          # noqa: BLE001
+        print(f"  ⛔⛔ could not release {name}: {e} — CHECK RUNPOD BY HAND")
+        return None
+    if done:
+        print(f"terminated {done}")
+    if left or not clean:
+        # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
+        print(f"  ⛔⛔ NOT CONFIRMED GONE: {left or name} — TERMINATE IT BY HAND")
+        return left or None
+    return []
 
 
 def seconds_for_budget(budget_usd, cost_per_hr):
@@ -278,19 +298,31 @@ def main(argv=None):
     # attempt terminated via the pod OBJECT, so when a later line raised (deploy returns a DICT, not
     # a Pod) the finally clause raised too and left a rented GPU billing at $0.74/hr. A teardown that
     # depends on anything built after the rental is not a teardown.
+    name = f"hazync-fold-{int(time.time())}-{secrets.token_hex(2)}"   # unique to this run: released by name
     pod_id = None
     pod = None
     started = None
     rate = 0.0
     log = ""
     try:
-        info = api.deploy(f"hazync-fold-{int(time.time())}", runner.ssh_pubkey)
+        info = api.deploy(name, runner.ssh_pubkey)
         if info is None:
             print("fold_rent: no GPU capacity in any configured type — nothing rented, nothing spent")
             return 0
         pod_id = info["id"]
         pod = sb.Pod(info, time.time())
         rate = pod.cost_per_hr
+        # ⚠ RunPod v2 can answer a PROVISIONING pod with cost 0. That is an UNKNOWN price, not a free one: ask
+        # the pod itself for a minute before refusing to run unbounded (the refusal below still stands).
+        for _ in range(6):
+            if rate > 0:
+                break
+            time.sleep(10)
+            try:
+                rate = float((api.pod(pod_id) or {}).get("cost_per_hr") or 0)
+            except Exception as e:
+                print(f"  could not read the pod's price: {e}")
+        pod.cost_per_hr = rate
         budget_s = seconds_for_budget(a.budget_usd, rate)
         capped_s = min(budget_s, a.minutes * 60) if budget_s else 0
         if budget_s and capped_s < budget_s:
@@ -305,10 +337,8 @@ def main(argv=None):
         # pod that is already costing money.
         deadline = time.time() + 300
         while pod.ssh is None and time.time() < deadline:
-            for row in api.pods():
-                if row.get("id") == pod_id and row.get("ssh"):
-                    pod.ssh = row["ssh"]
-                    break
+            # RunPod v2's listing may carry no live port mapping; the pod's own record does (GET /v2/pods/{id}).
+            pod.ssh = api.ssh_of(pod_id)
             if pod.ssh is None:
                 time.sleep(10)
         if pod.ssh is None:
@@ -345,13 +375,9 @@ def main(argv=None):
                 print(f"log saved: {out}")
             except OSError as e:
                 print(f"could not save the log: {e}")
-        if pod_id:
-            print("terminating…", pod_id)
-            try:
-                print("  ", sb.terminate_confirmed(api, pod_id))
-            except Exception as e:                                  # noqa: BLE001
-                # ⛔ SAY IT LOUDLY. A pod that outlived its run bills until someone notices.
-                print(f"  ⛔⛔ TERMINATE FAILED for {pod_id}: {e} — TERMINATE IT BY HAND")
+        # ⛔ RELEASE BY NAME AS WELL AS BY ID: the name is unique to this run, so a pod whose create answer was lost
+        # (no pod_id ever came back) is released too, however late it appeared.
+        release_fold(api, name, pod_id)
 
     if a.compare:
         print()

@@ -75,6 +75,11 @@ Source: "{#ProverCpuDir}\host.exe"; DestDir: "{app}\prover-cpu"; Flags: ignoreve
 Source: "{#ProverCpuDir}\*.dll"; DestDir: "{app}\prover-cpu"; Flags: ignoreversion skipifsourcedoesntexist
 #endif
 
+[INI]
+; the app's own version, read by appupdate.app_version() to tell whether a newer release exists, and to run the
+; after-an-upgrade prover check once per new version (hazync_gui._after_upgrade_check)
+Filename: "{app}\version.ini"; Section: "hazync"; Key: "version"; String: "{#AppVersion}"
+
 [Icons]
 Name: "{group}\Hazync"; Filename: "{app}\Hazync.exe"
 Name: "{group}\Uninstall Hazync"; Filename: "{uninstallexe}"
@@ -93,3 +98,4 @@ Type: files; Name: "{app}\prover\*.dll"
 [UninstallDelete]
 ; only what the app itself writes inside {app}; %USERPROFILE%\.hazync (the key) is never touched
 Type: filesandordirs; Name: "{app}\_internal\__pycache__"
+Type: files; Name: "{app}\version.ini"

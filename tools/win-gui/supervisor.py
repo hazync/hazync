@@ -521,6 +521,161 @@ def check_host_binary(host_path, board_id=None, board_why=""):
                        f"canonical METHOD_ID {got[:16]}…{unasked} — {host_kind_sentence(info)}")
 
 
+def prover_image(host_path, timeout=120):
+    """The image id `host method-id` prints, or None (not there, will not run, or printed none)."""
+    if not host_path or not Path(host_path).is_file():
+        return None
+    rc, out = _run([str(host_path), "method-id"], timeout=timeout)
+    m = HEX64.search(out or "") if rc == 0 else None
+    return m.group(0) if m else None
+
+
+def installed_worker():
+    """The hazync-worker installed WITH this app (beside Hazync.exe, firstrun.install_dir), or "" from source."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    p = Path(sys.executable).resolve().parent / "hazync-worker"
+    return str(p) if p.is_file() else ""
+
+
+_WORKER_VERSION_RE = re.compile(rb'^VERSION = "([^"\r\n]*)"', re.M)
+
+
+def worker_facts(worker_path):
+    """What the worker FILE says about itself, read without running it: {"version": stamped version ("dev" from a
+    checkout, "" when unreadable), "lzleaf": True when it reads the board's leaf bundles}.
+
+    ⭐ THE CHEAPEST RELIABLE SIGNAL (11-18). A worker from before libzync cannot read the board's LZLEAF input files,
+    falls back to replaying from block 1 and fails every claim with a 404 at block 2. Every worker that can read them
+    names the magic in its source (bundle_name, fetch_bundles), so its absence is decisive; package-release.sh stamps
+    VERSION, which says how old it is."""
+    try:
+        data = Path(worker_path).read_bytes()
+    except OSError:
+        return {"version": "", "lzleaf": False}
+    m = _WORKER_VERSION_RE.search(data)
+    return {"version": m.group(1).decode("ascii", "replace") if m else "", "lzleaf": b"LZLEAF" in data}
+
+
+def _version_tuple(v):
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", v or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def worker_is_older(facts, than):
+    """True when `facts` (worker_facts) is a worker that cannot read the board's files, or is stamped older than `than`."""
+    if not facts.get("lzleaf"):
+        return True
+    a, b = _version_tuple(facts.get("version")), _version_tuple(than.get("version")) if than else None
+    return bool(a and b and a < b)
+
+
+def stale_worker_advice(worker, installed=None, facts=worker_facts):
+    """What to say about a remembered worker that is an old copy, and the fix (as stale_prover_advice). None if fine.
+
+    `installed` defaults to installed_worker(). Stale = cannot read the board's LZLEAF files, or stamped older than the
+    installed one."""
+    installed = installed_worker() if installed is None else installed
+    if not worker or not Path(worker).is_file():
+        return None
+    f = facts(worker)
+    other = installed if installed and not _same_file(installed, worker) else ""
+    fi = facts(other) if other else None
+    if not worker_is_older(f, fi):
+        return None
+    ver = f" (version {f['version']})" if f.get("version") else ""
+    said = (f"The Hazync client Hazync is set to use, {worker}{ver}, is an old copy"
+            + (": it cannot read the board's input files, so every block it claimed would fail."
+               if not f.get("lzleaf") else ", older than the one installed with Hazync."))
+    if fi and fi.get("lzleaf"):
+        return {"head": "Stopped — the Hazync client in use is an old copy",
+                "text": said + f" The client installed with Hazync, {other}, can: use that one.",
+                "action": "switch", "kind": None, "path": "", "worker": other}
+    return {"head": "Stopped — this needs a look",
+            "text": said + " Install the latest Hazync, which carries a current client.",
+            "action": "update", "kind": None, "path": ""}
+
+
+def merge_advice(prover, worker):
+    """One fix for the card when both the prover and the worker are old copies (either may be None)."""
+    if not (prover and worker):
+        return prover or worker
+    both = prover.get("action") == "switch" and worker.get("action") == "switch"
+    return {"head": ("Stopped \u2014 the prover and the Hazync client in use are old copies" if both
+                     else prover["head"]),
+            "text": prover["text"] + " " + worker["text"],
+            "action": "switch" if both else "update",
+            "kind": prover.get("kind"), "path": prover.get("path", "") if both else "",
+            "worker": worker.get("worker", "") if both else ""}
+
+
+def check_worker_current(worker_path):
+    """Fatal when the worker cannot read the board's input files (worker_facts): it would fail every claim."""
+    f = worker_facts(worker_path)
+    if not f["lzleaf"]:
+        return CheckResult("worker version", False,
+                           f"{worker_path} is an old Hazync client{' (version ' + f['version'] + ')' if f['version'] else ''}"
+                           ": it cannot read the board's input files, so every block it claimed would fail. "
+                           "Use the client installed with the latest Hazync.", fatal=True)
+    return CheckResult("worker version", True,
+                       f"reads the board's input files (version {f['version'] or 'unknown'})")
+
+
+def _same_file(a, b):
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
+def stale_prover_advice(host, got, board_id, kind="cuda", installed=None, image_of=None):
+    """What to tell a person whose prover makes the wrong image, and the one fix to offer. None when it matches.
+
+    ⛔ (11-18, v0.26.1 on a real laptop) the startup check said "Download the prover again", which changes nothing: the
+    prover path is REMEMBERED across upgrades (installed_provers, review M4) and still pointed at an old host.exe making
+    the v1 image 37987b85. So this names the remembered path and its image, and offers what actually fixes it:
+      * "switch": an installed prover (prover\\ or prover-cpu\\ beside the app) that is a different file and makes the
+        board's image -- one click, the same switch as the Start flow's "Use the installed prover?";
+      * "update": the remembered prover IS the installed one (or none installed matches) -- install the latest Hazync.
+        When the board's image is not the one this app was built for, the board has moved on and the headline says
+        "Update Hazync to keep proving": that is not a fault on this PC.
+    Returns {"head", "text", "action" ("switch" | "update" | None), "kind", "path"}. `installed` defaults to
+    installed_provers(); `image_of` to prover_image (runs the installed prover, so call it off the Tk thread)."""
+    want = board_id or CANONICAL_METHOD_ID
+    if not got or got == want:
+        return None
+    installed = installed_provers() if installed is None else installed
+    image_of = image_of or prover_image
+    inst = installed.get(kind) or ""
+    others = [(k, p) for k, p in ([(kind, inst)] if inst else []) + [(k, p) for k, p in installed.items() if k != kind]
+              if p and not _same_file(p, host)]
+    said = (f"The prover Hazync is set to use, {host}, makes image {got[:8]}..., "
+            f"but the board only accepts proofs of image {want[:8]}..., so every proof it made would be rejected.")
+    for k, p in others:
+        if image_of(p) == want:
+            return {"head": "Stopped \u2014 the prover in use is an old copy",
+                    "text": said + f" The prover installed with Hazync, {p}, makes the board's image: use that one.",
+                    "action": "switch", "kind": k, "path": p}
+    moved = bool(board_id) and board_id != CANONICAL_METHOD_ID
+    if moved:
+        return {"head": "Update Hazync to keep proving",
+                "text": said + " The board has moved to a new image since this copy of Hazync was made; "
+                               "the latest Hazync carries the matching prover.",
+                "action": "update", "kind": kind, "path": ""}
+    if installed and any(_same_file(p, host) for p in installed.values()):
+        return {"head": "Stopped \u2014 this needs a look",
+                "text": said + " That is the prover installed with Hazync, so install the latest Hazync to replace it.",
+                "action": "update", "kind": kind, "path": ""}
+    if installed:
+        return {"head": "Stopped \u2014 this needs a look",
+                "text": said + " The prover installed with Hazync does not make it either: install the latest Hazync.",
+                "action": "update", "kind": kind, "path": ""}
+    return {"head": "Stopped \u2014 this needs a look",
+            "text": said + " Choose a prover from the latest release under Advanced > Options "
+                           "(https://github.com/hazync/hazync/releases/latest).",
+            "action": None, "kind": kind, "path": ""}
+
+
 # ⛔⛔ nvidia-smi IS NOT ALWAYS ON PATH, AND "NOT ON PATH" IS NOT "NO GPU". The driver normally
 # drops it in System32, but older and some OEM installs leave it only under
 # C:\Program Files\NVIDIA Corporation\NVSMI, which is not on PATH. Before this, that machine was
@@ -936,8 +1091,11 @@ _EXPLANATIONS = [
     ("could not find `protoc`",
      "A build-time dependency is missing. This should never appear in a released binary; it means "
      "the prover was built without protoc."),
-    ("method_id", "The prover's guest id does not match the coordinator's, so every proof it makes "
-                  "would be rejected. Download the prover again."),
+    # ⚠ not "download the prover again" (11-18): the prover path is remembered across upgrades, so a fresh download
+    # changes nothing while the remembered path still points at the old file. The Home card names it (stale_prover_advice).
+    ("method_id", "The prover in use makes a different image from the one the board accepts, so every proof it made "
+                  "would be rejected. Use the prover installed with the latest Hazync: Advanced > Options names the "
+                  "one in use."),
     ("0xc000007b",
      "Windows could not load the executable — usually a missing DLL. A CUDA build needs the NVIDIA "
      "driver and cudart64_*.dll beside it."),
@@ -1107,6 +1265,11 @@ def preflight(host_path, worker_path, identity_dir=None, python_exe=None, coord=
     checks = [
         check_host_binary(host_path, board_id=board_id, board_why=why),
         check_worker(worker_path, python_exe=python_exe),
+    ]
+    # only a worker that is there and starts is worth asking how old it is
+    if checks[-1].ok:
+        checks.append(check_worker_current(worker_path))
+    checks += [
         check_signing_library(python_exe=python_exe),
         check_gpu(),
     ]

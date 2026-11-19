@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # Safety net while the user sleeps: terminate EVERY RunPod pod if the balance drops below $3 or 85 minutes
 # pass, whichever comes first. Independent of live_hour.sh, so a hang there cannot keep billing.
 cd ~/libzync-gpu/live; END=$((SECONDS + 85 * 60))
