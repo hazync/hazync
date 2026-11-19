@@ -191,7 +191,9 @@ jobs:
     # timeout-minutes anywhere in this workflow, so the default was 360 minutes, and a stuck step
     # showed up as a cancelled job with no steps and no log. Measured at ~3 minutes before
     # 2026-10-05; 30 leaves room for a slow runner while still turning a stall into a verdict.
-    timeout-minutes: 30
+    # 2026-11-19: the job has grown to ~20 min (#761 19m42s, #763 19m54s, #740 20m05s) and up to 29m22s on a slow
+    # runner (#759); #767 on main after #759 and #761 was cancelled at 30. 45 keeps the stall verdict.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
