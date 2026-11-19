@@ -2063,12 +2063,27 @@ def reorg_backstop(now=None):
             top = c.execute("SELECT MAX(hi) FROM vranges").fetchone()[0] or 0
             rows = c.execute("SELECT lo, hi, in_bhash, out_bhash FROM vranges WHERE hi > ? AND out_bhash != ''",
                              (top - REORG_AUTO_MAX_DEPTH,)).fetchall()
-            tips, bad = {}, []
-            tipof = lambda h: tips[h] if h in tips else tips.setdefault(h, lz_state_tip(h))
+            tips, bad, empty = {}, [], set()
+
+            def tipof(h):
+                # a zero-length state is a torn write after a power loss (prep replays over it, round 5): not compared
+                if h not in tips:
+                    try:
+                        z = os.path.getsize(os.path.join(LZ_STATE_DIR, f"state_{h}.json")) == 0
+                    except OSError:
+                        z = False
+                    tips[h] = "EMPTY" if z else lz_state_tip(h)
+                if tips[h] == "EMPTY":
+                    empty.add(h)
+                return tips[h]
+
+            def off(h, want):
+                t = tipof(h)
+                return t != "EMPTY" and t != str(want).lower()
             for r in rows:
-                if tipof(int(r["hi"])) != str(r["out_bhash"]).lower() or (
-                        int(r["lo"]) > 1 and r["in_bhash"] and tipof(int(r["lo"]) - 1) != str(r["in_bhash"]).lower()):
+                if off(int(r["hi"]), r["out_bhash"]) or (int(r["lo"]) > 1 and r["in_bhash"] and off(int(r["lo"]) - 1, r["in_bhash"])):
                     bad.append(int(r["hi"]))
+            note = {"compared": len(rows), "empty_states": len(empty)}
             if bad and not latched:
                 latched = {"heights": sorted(set(bad))[:100], "count": len(bad), "at": now,
                            "msg": f"{len(bad)} verified range(s) are not on prep's chain now (from block {min(bad)}): "
@@ -2076,7 +2091,11 @@ def reorg_backstop(now=None):
                 c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_alert',?)", (json.dumps(latched),))
                 c.commit()
                 print(f"[reorg] ALERT {latched['msg']}", flush=True)
+        else:
+            note = {"compared": 0, "quiet": f"prep's out/REWIND is there ({rw_age:.0f} s): a rewind in progress"}
         c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_backstop_at',?)", (str(now),))
+        # what this run did (round 5, LOW 4): a quiet run compared nothing, and the check must not say otherwise
+        c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_backstop_note',?)", (json.dumps(note),))
         c.commit()
     finally:
         c.close()
@@ -5464,6 +5483,8 @@ def reorg_ack_cmd(argv):
         raise SystemExit("COORD_DB is not set: run with the coordinator unit's environment (REORG.md §11)")
     if hasattr(os, "geteuid") and os.geteuid() == 0 and "--allow-root" not in argv:
         raise SystemExit("refusing to run as root: run as the service's user (sudo -u hazync ...), or --allow-root")
+    if not os.path.exists(DB):
+        raise SystemExit(f"{DB}: no such database")          # never create a stray one (round 5, LOW 3)
     c = sqlite3.connect(DB, timeout=DB_BUSY_TIMEOUT)
     try:
         r = c.execute("SELECT v FROM meta WHERE k='reorg_alert'").fetchone()

@@ -286,11 +286,31 @@ fn disp(b: &[u8; 32]) -> String { let mut x = *b; x.reverse(); crate::hex(&x) }
 /// a directory that is not the fetcher's. Returns when there is no such state.
 pub(crate) fn stale_state_fork(out: &str, blocks_dir: &str, h: u32, prev_tip: &[u8; 32], j: &serde_json::Value, consume: bool) {
     // test only (RISC0_DEV_MODE): the check off, for rewind_test.sh's positive control
-    if crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_SKIP_STALE_CHECK").as_deref() == Ok("1") { return; }
+    // Refused in board mode (leaf bundles written), and loud when it fires (review round 5, LOW 1).
+    if crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_SKIP_STALE_CHECK").as_deref() == Ok("1") {
+        if std::env::var("HAZYNC_PREP_LEAF_BUNDLES").is_ok_and(|v| !v.is_empty()) {
+            eprintln!("HAZYNC_TEST_SKIP_STALE_CHECK refused: this prep writes leaf bundles (a board run); the check stays on");
+        } else {
+            eprintln!("WARNING: HAZYNC_TEST_SKIP_STALE_CHECK=1 under RISC0_DEV_MODE: the replay-window reorg check is OFF (testing only)");
+            return;
+        }
+    }
     let p = format!("{out}/state_{h}.json");
-    if !std::path::Path::new(&p).exists() { return; }
+    // Missing, or zero-length: the states between save points are written by rename without an fsync (synced only at
+    // the next save point), so a power loss can leave them empty. That is crash damage, not another chain: the replay
+    // overwrites it, as it did before this check (review round 5, MED). The board fails closed on it meanwhile: an
+    // empty state reads as none, so verify-any has no end state and the commit-time hash check refuses.
+    match std::fs::metadata(&p) {
+        Ok(m) if m.len() > 0 => {}
+        _ => return,
+    }
     let Some(old) = state_tip(out, h) else {
-        stop(&format!("before block {h}: {p}, left by an earlier run above the save point, does not read: its chain cannot be compared"))
+        // a non-empty file that does not parse: not a torn write (renamed whole), so damage worth a person's look
+        println!("PREP_STOPPED_REORG before block {h}: {p}, left by an earlier run above the save point, is not empty and does not read: \
+                  its chain cannot be compared");
+        println!("  a person: look at it; if the node's chain at {h} is the one prep is replaying (fetch_block_rpc.py fork-point <out>), \
+                  move {p} aside and start prep again (the replay writes it anew); if not, rewind (docs/libzync/REORG.md §11 step 3)");
+        std::process::exit(EXIT_REORG);
     };
     let Some(new) = hash_of(j) else { return };
     if old == new { return; }

@@ -89,6 +89,7 @@ check() { local l; if [ "$1" = 1 ]; then l="  ok   $2"; else l="  FAIL $2"; fail
 # 151..199 on disk), the node reorged at 190; the restarted prep, replaying from 150, must see that its old state_191 is
 # another chain's: its own marker, exit 5, the runner's rewind (stale states moved, the board's record), then the new
 # branch. --control-stale: the check off (HAZYNC_TEST_SKIP_STALE_CHECK): the case MUST fail.
+L_DETECT=0
 case_l() {
     local fk=190 hi=196 br=$O/lbranch q=$O/lref r=$O/l rc env=""
     [ "${1:-}" = off ] && env="HAZYNC_TEST_SKIP_STALE_CHECK=1"
@@ -97,19 +98,25 @@ case_l() {
     root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
     check "$([ -e $r/out/state_150.coinlog ] && [ -e $r/out/state_198.json ] && echo 1)" "L: prep died after 199, saved at 150, states above it on disk (to 198)"
     for h in $(seq $((fk + 1)) 200); do rm -f $r/blocks/block_$h.json; done; cp $br/block_*.json $r/blocks/
-    run $r $hi $env; rc=$?
-    check "$([ $rc = 5 ] && grep -aq 'a reorg inside the replay window' $r/run.log && [ -e $r/blocks/REORG ] && echo 1)" \
-          "L: prep replaying from 150 sees its old state_191 is another chain's: its marker, exit 5 (exit $rc)"
-    run $r $hi $env; rc=$?
+    # the replay itself is prep run directly, as the runner does but without leaf bundles: the test hook that turns the
+    # check off is refused in board mode (round 5, LOW 1), and the stale-state check does not depend on the bundles
+    (cd $r && env HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie HAZYNC_PREP_CONSUME=1 HAZYNC_PREP_CONTINUE=1 HAZYNC_REORG_AUTO=1 $env \
+         $r/bin/host_lz libzync-prep 151 $hi $r/blocks $r/out/state_150.json $r/out >> $r/run.log 2>&1); rc=$?
+    [ $rc = 5 ] && grep -aq 'a reorg inside the replay window' $r/run.log && [ -e $r/blocks/REORG ] && L_DETECT=1
+    check "$L_DETECT" "L: prep replaying from 150 sees its old state_191 is another chain's: its marker, exit 5 (exit $rc)"
+    run $r $hi; rc=$?
     check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $fk" $r/run.log && [ -e $r/out/reorg/records/1.json ] && [ -e $r/out/orphaned/1/state_198.json ] && echo 1)" \
           "L: the runner rewound to $fk: the stale states 191..198 moved, the board's record written (exit $rc)"
     same_as_ref $r $q $hi $fk "L"
 }
 if [ "${1:-}" = --control-stale ]; then
-    echo "CONTROL --control-stale: the replay-window check off; case L MUST fail"
+    echo "CONTROL --control-stale: the replay-window check off; case L's detection MUST fail"
     case_l off
-    [ $fails -gt 0 ] && { echo "CONTROL OK: $fails check(s) fail with the check off, as they must"; exit 0; }
-    echo "CONTROL BROKEN: case L passed with the check off"; exit 1
+    # the specific check (exit 5 and prep's marker) must be the one that failed (round 5, LOW 2)
+    if [ $L_DETECT = 0 ] && grep -aq 'HAZYNC_TEST_SKIP_STALE_CHECK=1 under RISC0_DEV_MODE' $O/l/run.log; then
+        echo "CONTROL OK: with the check off, prep did not see the replay-window reorg ($fails check(s) failed)"; exit 0
+    fi
+    echo "CONTROL BROKEN: the detection check passed, or the hook did not fire, with the check off"; exit 1
 fi
 echo "== L. a reorg inside prep's replay window"
 case_l
@@ -251,6 +258,19 @@ for fk in 145 150; do
     check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $fk" $r/run.log && echo 1)" "I fork $fk: rewound and re-prepped to $hi (exit $rc)"
     same_as_ref $r $q $hi $fk "I fork $fk"
 done
+
+echo "== M. a state file above the save point left EMPTY by a power loss (round 5, MED): the replay overwrites it; a"
+echo "   non-empty one that does not read is a stop for a person (exit 4, no marker)"
+r=$O/m; root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
+: > $r/out/state_170.json
+run $r 200; rc=$?
+check "$([ $rc = 0 ] && cmp -s $r/out/state_170.json $T/out/state_170.json && [ ! -e $r/blocks/REORG ] && echo 1)" \
+      "M: an empty state_170.json: prep replayed over it (exit $rc), byte-identical to a clean run's, no marker"
+r=$O/m2; root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
+printf 'x' > $r/out/state_170.json
+run $r 200; rc=$?
+check "$([ $rc = 4 ] && grep -aq 'is not empty and does not read' $r/run.log && grep -aq 'move .* aside and start prep again' $r/run.log && [ ! -e $r/blocks/REORG ] && echo 1)" \
+      "M: a non-empty state_170.json that does not read: exit 4, the recovery step printed, no marker (exit $rc)"
 
 echo "== J0. a run PINNED from the start (PIN 150: its trie holds every root from 150 on), rewound below nothing it pins"
 echo "   (fork 188) and run on: the root of 150 must still read as state_150's trie (review 16.11, N1)"

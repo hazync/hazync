@@ -773,3 +773,17 @@ control fails 15; `rewind_test.sh` 61/61 and `--control-stale` fails case L (3);
 controls fail; `test_offsite_reorg.py` PASS (+ control); `test_fetch_reorg.py` 43/43 (+ control); the coordinator tests
 pass. Two harness races found and fixed on the way (a proof file's mtime a moment ahead of the clock read as "younger"
 by `--min-age 0`; the board's tip cache behind its served bundles).
+
+**Review of 19.11.2026, round 5, fixed.** (MED) The round-4 stop on a state file above the save point that does not
+read also caught the EMPTY files a power loss leaves (the states between save points are renamed into place without an
+fsync): prep stopped with exit 4 where it used to replay over them. A missing or zero-length state is crash damage again
+and is replayed over; only a non-empty file that does not parse stops, and the message gives the real recovery (compare
+with `fork-point`, move it aside and start prep, or rewind), with no marker. The coordinator stays closed on such a
+state (an empty state reads as none: the commit-time check refuses, verify-any has no end state), and the backstop does
+not count an empty state as a mismatch (it says how many it skipped). (Low) The `HAZYNC_TEST_SKIP_STALE_CHECK` hook is
+refused when prep writes leaf bundles (a board run) and says so on stderr when it fires; `--control-stale` requires the
+detection check itself to fail; `--reorg-ack` refuses a `COORD_DB` that does not exist; the backstop records what it
+compared (`meta.reorg_backstop_note`), so the check no longer says "on prep's chain" after a quiet run; the RUNBOOK
+installs the check timer only after the new coordinator runs. Tests: `rewind_test.sh` case M (an empty state replayed
+over, a non-empty unreadable one stopped), `test_reorg.py` (the quiet note, the empty state, the commit still refusing,
+`--reorg-ack` with a stray `COORD_DB`).

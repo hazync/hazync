@@ -315,6 +315,30 @@ r_ack = subprocess.run([sys.executable, os.path.join(HERE, "server.py"), "--reor
 s.reorg_backstop()
 check(r_ack.returncode == 0 and "cleared" in r_ack.stdout and s._reorg_alert["v"] is None,
       f"L4: server.py --reorg-ack --yes clears the latch, and the rows read right again ({r_ack.stdout.strip()[-40:]})")
+# round 5: a quiet run (out/REWIND fresh) compared nothing, and the check says so; an EMPTY state (a torn write after a
+# power loss) is not a mismatch; --reorg-ack with a wrong COORD_DB creates nothing
+open(os.path.join(STATE, "REWIND"), "w").write("{}")
+s.reorg_backstop()
+chk = subprocess.run([sys.executable, os.path.join(HERE, "deploy/libzync/hazync-lz-check-reorg.py")], env=dict(os.environ),
+                     capture_output=True, text=True)
+check(chk.returncode == 0 and "compared nothing" in chk.stdout, f"LOW 4: a quiet backstop run is reported as such ({chk.stdout.strip()[:70]})")
+os.remove(os.path.join(STATE, "REWIND"))
+t19c = open(os.path.join(STATE, "state_19.json")).read()
+open(os.path.join(STATE, "state_19.json"), "w").write("")
+s.reorg_backstop()
+chk = subprocess.run([sys.executable, os.path.join(HERE, "deploy/libzync/hazync-lz-check-reorg.py")], env=dict(os.environ),
+                     capture_output=True, text=True)
+check(s._reorg_alert["v"] is None and chk.returncode == 0 and "1 empty state" in chk.stdout,
+      f"MED: an empty state_19.json (a torn write) raises no alert, and the check says it was not compared ({chk.stdout.strip()[-70:]})")
+c = s.db()
+why = s.reorg_refusal(c, 19, 19, {"in_bhash": bh("C", 18), "out_bhash": bh("C", 19)}, s.reorg_epoch(c))
+c.close()
+check(why and "not the board's" in why, f"MED: the board still fails closed on an empty state: a proof ending at 19 is refused at commit ({why})")
+open(os.path.join(STATE, "state_19.json"), "w").write(t19c)
+bogus = os.path.join(T, "stray.db")
+r_ack = subprocess.run([sys.executable, os.path.join(HERE, "server.py"), "--reorg-ack"], env=dict(os.environ, COORD_DB=bogus),
+                       capture_output=True, text=True)
+check(r_ack.returncode != 0 and not os.path.exists(bogus), "LOW 3: --reorg-ack with a COORD_DB that does not exist: refused, nothing created")
 c = s.db(); c.execute("UPDATE meta SET v='1' WHERE k='reorg_backstop_at'"); c.commit(); c.close()
 chk = subprocess.run([sys.executable, os.path.join(HERE, "deploy/libzync/hazync-lz-check-reorg.py")], env=dict(os.environ),
                      capture_output=True, text=True)

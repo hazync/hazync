@@ -437,7 +437,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now hazync-watchdog.time
   `install -m 644 coordinator/deploy/libzync/hazync-lz-check-reorg.{service,timer} /etc/systemd/system/ && systemctl
   daemon-reload && systemctl start hazync-lz-check-reorg.service && systemctl enable --now hazync-lz-check-reorg.timer`
   (it runs `/opt/hazync-lz/coordinator/deploy/libzync/hazync-lz-check-reorg.py`; `scripts/check-deployment.sh` checks the
-  timer is enabled).
+  timer is enabled). ⚠ Install it only AFTER the coordinator with the reorg handling is running: it pages while there
+  is no backstop heartbeat row yet (`meta.reorg_backstop_at`), which a coordinator from before never writes. Its "ok"
+  line says how many ranges were compared, or that the last run compared nothing (prep's `out/REWIND` was there).
 - **A latched alert a person has checked** (e.g. prep restarted from genesis under a fresh `LZ_ROOT`, REORG.md §11 step
   4: its states above its position are not there yet, so the board's rows read as off prep's chain until it catches
   up; rewind the board first with `--reorg-to F`): `sudo -u hazync env $(systemctl show -p Environment --value
