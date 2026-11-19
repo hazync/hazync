@@ -768,3 +768,8 @@ covered name whose new copy is not up yet; prep's own marker says the recovery i
 marker; the fetcher's depth and orphaned list run to the OLD tip (state files above prep's tip), not prep's tip;
 `rewind_test.sh` case L (the replay-window reorg, in CI) with `--control-stale`; `rewind.rs` uses `reorg::hash_of`;
 `reorg_e2e.py` prints the offsite output when an offsite check fails.
+Results (host from this branch, `46666b6f`): `reorg_e2e.py --w 12` PASS (80 checks), `--w 288` PASS (83), the
+control fails 15; `rewind_test.sh` 61/61 and `--control-stale` fails case L (3); `test_reorg.py` PASS and its seven
+controls fail; `test_offsite_reorg.py` PASS (+ control); `test_fetch_reorg.py` 43/43 (+ control); the coordinator tests
+pass. Two harness races found and fixed on the way (a proof file's mtime a moment ahead of the clock read as "younger"
+by `--min-age 0`; the board's tip cache behind its served bundles).
