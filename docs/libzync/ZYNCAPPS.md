@@ -114,7 +114,8 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
-| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). No checker exists yet; design B's `utxo_snapshot_check.py` checked the retired survivor forest (`history/experimental/libzync-bench/retired-scripts/`) |
+| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). A verifier check, not a guest: `zapp-assume assumeutxo` (`zapps/assume`), [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) (branch `feat/zapp-assume`, 15.11.2026) |
+| assumevalid | a block hash, the headers from it to the tip | `tip_hash`, `profile` bit 1 clear | "scripts of this block and all its ancestors passed Core's rules": `zapp-assume assumevalid`, [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) |
 
 ## 7. Open
 
@@ -184,4 +185,5 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 |---|---|---|---|---|
 | Header chain (ROADMAP K1, N3; `coordinator/deploy/headers`) | `zapps/headers` | `zapp-headers` | `zapp-headers.js` (`verifyHeaders`, `headersImageId`) | none |
 | SwiftSync hints (HINTS_ZAPP.md) | `zapps/hints` | `zapp-hints` | `zapp-hints.js` (`verifyHints`) | `zapps/hints/ffi` (`swiftsync_verify_hints`, `zapp_hints.h`) |
+| assumevalid / assumeutxo (ASSUME_ZAPPS.md) | `zapps/assume` | `zapp-assume` (`assumevalid`, `assumeutxo`) | `zapp-assume.js` (`verifyAssume`) | `zapps/assume/ffi` (`swiftsync_verify_assume`, `zapp_assume.h`) |
 | Coin liveness (LIVENESS_ZAPP.md) | `zapps/liveness` | `zapp-liveness` (also `prove`, `serve`) | `zapp-liveness.js` (`verifyLiveness`) | `zapps/liveness/ffi` (`zapp_liveness_verify`, `zapp_liveness.h`) |

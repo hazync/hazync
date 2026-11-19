@@ -108,13 +108,17 @@ ROUTES = {
     "GET /api/proof/<id>":
         "A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The "
         "id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with "
-        "`host verify-any`.",
+        "`host verify-any <file> <lo>`, which needs the state before `lo`: the leaf bundle from "
+        "`/api/witness/<lo>` saved as `leaf_<lo>.bin` in `$HAZYNC_BRIDGE_OUT` (the host defaults to `/root/bridge_bundles`); none is needed for `lo` = 1.",
     "GET /api/witnesses":
         "Bulk bundle sync (#69): a streamed tar of `MANIFEST.json` (`served`, `missing`) then the bundles "
         "for `?from=&count=`, `count` at most `BULK_MAX`. `400` on a malformed request.",
     "GET /api/witness/<height>":
-        "One witness: the bridge bundle `bundle_<n>.json` if present, else the legacy `block_<n>.json`. "
-        "Accepts a height or a range id (its `lo`). `404` if neither exists.",
+        "One block's prepared input, served raw from `bundle_path()`: on a v2 (`HAZYNC_LIBZYNC=1`) board the "
+        "binary leaf bundle `leaf_<n>.bin` (`LZLEAF` magic) from the bridge directory; on a v1 board the bridge "
+        "bundle `bundle_<n>.json`; else the legacy `block_<n>.json`. Accepts a height or a range id (its `lo`). "
+        "`404` if none exists: the public board prunes a leaf once its block is proved below the frontier, so it "
+        "serves block 1 and blocks near the frontier.",
     "GET /<path>":
         "Static files under `COORD_WEB`, contained to that directory; `/` serves `index.html`. Not rate "
         "limited.",
@@ -907,7 +911,7 @@ def build(root):
     w("")
     w("## Launcher (`coordinator/run-workers.sh`, shipped as `hazync-run-workers.sh`)")
     w("")
-    w(f"`run-workers.sh [N] [--stop]`: N defaults to `{n_default}`. It checks the host's guest id against "
+    w(f"`run-workers.sh [N] [--drain|--stop]`: N defaults to `{n_default}`. `--drain` stops the loops and waits for the blocks in flight to be submitted; `--stop` stops at once and abandons them. Starting, it checks the host's guest id against "
       "`/api/meta` and runs a GPU smoke prove before starting any loop, then restarts each loop's command "
       "until it exits `78` (`EX_CONFIG`). Exit `75` (`EX_TEMPFAIL`, nothing to claim right now) waits 30 s and is not "
       "a failure. With alerts set up (`hazync notify`), a loop pushes after `NOTIFY_FAIL_STREAK` failures in a row, on "

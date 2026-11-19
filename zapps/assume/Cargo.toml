@@ -1,0 +1,44 @@
+[package]
+name = "zapp-assume"
+version = "0.1.0"
+edition = "2021"
+description = "The assumevalid and assumeutxo zyncAPPs: the -assumevalid block and a dumptxoutset snapshot, checked against a verified core proof"
+license = "MIT"
+publish = false
+
+# A zAPP module (docs/libzync/ZYNCAPPS.md §9), NOT part of the core verifier: it uses swiftsync-verify as a library
+# (receipt verification, chain state) and adds the assume checks. The core never changes when a zAPP is added.
+# The library only: the CLI is its own crate (cli/), so the library, its C ABI and its WASM module never link the CLI's
+# chain-identity lookups (zapps/common: curl, bitcoin-cli). Own workspace, as the core verifier's crates.
+
+[lib]
+name = "zapp_assume"
+path = "src/lib.rs"
+
+[dependencies]
+swiftsync-verify = { path = "../../swiftsync-verify" }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+bincode = "1"
+serde_json = "1"
+sha2 = "0.10"
+# The assumeutxo checker's ECMH: secp256k1's base field. Already in the tree through risc0-groth16, so no new crate;
+# pure Rust, so it builds for WASM.
+ark-ff = { version = "=0.5.0", default-features = false }
+
+[dev-dependencies]
+# the ECMH map and sum against a num-bigint reference, as libzync/src/host.rs ecmh_hint computes it
+num-bigint = "0.4"
+
+[features]
+# TESTS ONLY (zapps/corecheck's regtest-test, scripts/zapp-regtest): Core's regtest message start for a regtest proof's
+# snapshot. Never in a release or WASM build (compile_error! below, scripts/wasm-build.sh).
+regtest-test = []
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

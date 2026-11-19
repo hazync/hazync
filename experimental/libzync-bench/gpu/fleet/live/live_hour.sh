@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # One hour of live tip following, then harvest, then terminate EVERY pod. Unattended (user asleep).
 cd ~/libzync-gpu/live
 ./tiplive.sh 3600 > live_hour.out 2>&1

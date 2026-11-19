@@ -58,11 +58,11 @@ jobs:
           else
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.src.outputs.ref }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12.7'
 
@@ -76,6 +76,10 @@ jobs:
         run: |
           python test_frozenpy.py
           python test_frozenpy.py --control
+          python test_appupdate.py
+          python test_appupdate.py --control
+          python test_stale_prover.py
+          python test_stale_prover.py --control
 
       - name: The app's own behaviour, in real Tk windows on Windows (name prompt, GPU preparing, keeps going)
         working-directory: tools/win-gui
@@ -202,6 +206,9 @@ jobs:
           APP="$LOCALAPPDATA/Programs/Hazync"
           for f in Hazync.exe hazync-worker prover/host.exe; do [ -f "$APP/$f" ] || { echo "::error::$f not installed"; exit 1; }; done
           ls "$APP/prover"
+          # the app's version, which its update check reads (appupdate.app_version)
+          grep -qx "version=$VERSION" <(tr -d '\r' < "$APP/version.ini") || { echo "::error::version.ini does not say $VERSION"; cat "$APP/version.ini"; exit 1; }
+          "$APP/Hazync.exe" -c "import sys,appupdate;v=appupdate.app_version(sys.argv[1]);print('app_version',v);sys.exit(0 if v==sys.argv[2] else 1)" "$(cygpath -w "$APP/Hazync.exe")" "$VERSION" || { echo "::error::the installed app does not read its own version"; exit 1; }
           # every DLL each installed prover needs is part of Windows, the NVIDIA driver's, or installed beside it
           # (the runner has the VC++ runtime system-wide, so RUNNING cannot show this; the import table can)
           python scripts/pe_imports.py "$APP/prover/host.exe" --beside
@@ -239,7 +246,7 @@ jobs:
           [ -f "$KEYDIR/sentinel-do-not-delete" ] || { echo "::error::uninstall touched ~/.hazync"; exit 1; }
           echo "installed, used, uninstalled; ~/.hazync untouched"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hazync-setup-x86_64-windows
           path: |

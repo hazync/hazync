@@ -4,7 +4,7 @@ The sponsor proving bot (sponsor_bot.py): money safety first, then the queue and
 
 WHY THIS EXISTS. The bot rents GPUs. A bug that leaves a pod running, launches past a cap or proves an
 unpaid sponsorship spends real money and nothing on the board would show it. So the tests put the bot's
-REAL RunPod client against a fake GraphQL server over HTTP, and a fake pod runner that "proves" blocks by
+REAL RunPod client against a fake RunPod REST v2 server over HTTP, and a fake pod runner that "proves" blocks by
 writing verified proofs into a real coordinator database, and check what was deployed and terminated.
 
 #351: the bot has no access to the coordinator's database. It talks to the REAL coordinator request handler,
@@ -87,16 +87,31 @@ def check(cond, what):
 # ---------- fakes ----------
 
 class FakeRunPod:
-    """api.runpod.io/graphql over real HTTP, so the bot's own RunPod client is what gets tested."""
+    """RunPod's REST API v2 (api.runpod.io/v2) over real HTTP, so the bot's own RunPod client is what gets tested.
+
+    The shapes follow api.runpod.io/v2/openapi.json: POST /v2/pods takes {name, image, cloud, gpu{id,count}, disk,
+    ports[], env{}} and answers 201 with a pod (`cost` is the hourly rate); a type that cannot be placed is a 400
+    problem+json; GET /v2/pods is cursor-paginated; DELETE /v2/pods/{id} is 204, or 404 once the pod is gone.
+    ⚠ The listing leaves out `runtime` by default (`list_runtime`): RunPod documents the live SSH mapping as
+    absent from GET /v2/pods, so the client must ask GET /v2/pods/{id} for it, and this keeps that path tested."""
+
+    PUBLIC_IP = "45.23.12.1"                # RunPod's own documentation example; never dialled (FakeRunner)
 
     def __init__(self):
         self.pods = {}
         self.prices = {"NVIDIA GeForce RTX 4090": 0.34, "NVIDIA A40": 0.49}
         self.capacity = {"NVIDIA GeForce RTX 4090": True, "NVIDIA A40": True}
         self.deploys, self.terminations = [], []
+        self.lost = []                      # pods whose create answer was lost
+        self.bodies = []                    # every create body, as sent
         self.agents = []                    # the User-Agent of every request
-        self.refuse_deploy = False          # answer deploys with an API error instead of a pod
+        self.refuse_deploy = False          # answer deploys with an API error (403) instead of a pod
         self.delay = 0.0                    # seconds every answer takes, to stand in for a slow machine
+        self.list_runtime = False           # include the live port mapping in GET /v2/pods
+        self.page_size = None               # paginate GET /v2/pods this many to a page
+        self.rate_limit_next = 0            # answer this many requests 429 first
+        self.lose_next = 0                  # creates that make the pod but answer 500 (a lost answer)
+        self.late = 0                       # ... whose pod is missing from this many listings
         self.max_live, self.n = 0, 0
         self.lock = threading.Lock()
         fake = self
@@ -105,30 +120,42 @@ class FakeRunPod:
             def log_message(self, *a):
                 pass
 
-            def do_POST(self):
+            def _send(self, code, obj=None, ctype="application/json", headers=()):
+                out = b"" if obj is None else (obj if isinstance(obj, bytes) else json.dumps(obj).encode())
+                self.send_response(code)
+                for k, v in headers:
+                    self.send_header(k, v)
+                if out:
+                    self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                if out:
+                    self.wfile.write(out)
+
+            def _any(self, method):
                 time.sleep(fake.delay)
                 agent = self.headers.get("User-Agent") or ""
                 fake.agents.append(agent)
                 if not agent or agent.startswith("Python-urllib"):
                     # What api.runpod.io's Cloudflare does to Python's default User-Agent (measured 2026-09-14).
-                    out = b"error code: 1010\n"
-                    self.send_response(403)
-                    self.send_header("Content-Type", "text/plain")
-                    self.send_header("Content-Length", str(len(out)))
-                    self.end_headers()
-                    self.wfile.write(out)
-                    return
-                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                out = json.dumps(fake.handle(body["query"], self.headers.get("Authorization"))).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(out)))
-                self.end_headers()
-                self.wfile.write(out)
+                    return self._send(403, b"error code: 1010\n", "text/plain")
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n)) if n else None
+                code, obj, hdrs = fake.handle(method, self.path, body, self.headers.get("Authorization"))
+                self._send(code, obj, "application/problem+json" if code >= 400 else "application/json", hdrs)
+
+            def do_GET(self):
+                self._any("GET")
+
+            def do_POST(self):
+                self._any("POST")
+
+            def do_DELETE(self):
+                self._any("DELETE")
 
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/graphql"
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/v2"
 
     def live(self):
         return [i for i, p in self.pods.items() if p["alive"]]
@@ -136,35 +163,94 @@ class FakeRunPod:
     def deployed(self):
         return {d[0] for d in self.deploys}
 
-    def handle(self, q, auth):
+    @staticmethod
+    def problem(code, detail, errors=None):
+        d = {"title": {400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
+                       422: "Unprocessable Entity", 429: "Too Many Requests"}.get(code, "Error"),
+             "status": code, "detail": detail}
+        if errors:
+            d["errors"] = errors
+        return code, d, ()
+
+    def pod_obj(self, pid, runtime=True):
+        p = self.pods[pid]
+        return {"id": pid, "name": p["name"], "status": "RUNNING", "cost": p["cost"], "cloud": p.get("cloud") or "SECURE",
+                "gpu": {"id": p["gpu"], "count": 1, "vcpuCount": 8, "memory": 31}, "image": p.get("image"),
+                "ports": p.get("ports") or ["22/tcp"], "env": {"PUBLIC_KEY": "<set>"}, "dataCenterId": "EU-RO-1",
+                "ssh": {"proxy": None, "direct": None},
+                "runtime": ({"uptime": 60, "ports": [
+                    {"private": 22, "public": 22022, "type": "tcp", "ip": self.PUBLIC_IP},
+                    {"private": 22, "public": None, "type": "tcp", "ip": "10.0.0.5"}]} if runtime else None)}
+
+    def handle(self, method, path, body, auth):
+        import urllib.parse
+        u = urllib.parse.urlsplit(path)
+        q = dict(urllib.parse.parse_qsl(u.query))
         with self.lock:
+            if self.rate_limit_next > 0:
+                self.rate_limit_next -= 1
+                code, d, _ = self.problem(429, "minute window exceeded")
+                return code, d, (("Retry-After", "1"),)
             if auth != "Bearer test-key":
-                return {"errors": [{"message": "unauthorized"}], "data": None}
-            if "podFindAndDeployOnDemand" in q and self.refuse_deploy:
-                return {"errors": [{"message": "simulated refusal"}], "data": None}
-            if "podFindAndDeployOnDemand" in q:
-                gt = re.search(r'gpuTypeId: "([^"]+)"', q).group(1)
-                name = re.search(r'name: "([^"]+)"', q).group(1)
+                return self.problem(401, "unauthorized")
+            if method == "POST" and u.path == "/v2/pods":
+                self.bodies.append(body)
+                if self.refuse_deploy:
+                    return self.problem(403, "simulated refusal")
+                errs = [f"$: missing property '{k}'" for k in ("name", "image") if not (body or {}).get(k)]
+                if (body or {}).get("cloud", "SECURE") not in ("SECURE", "COMMUNITY"):
+                    errs.append("$.cloud: value must be one of 'SECURE', 'COMMUNITY'")
+                if not isinstance((body or {}).get("env", {}), dict):
+                    errs.append("$.env: expected object")
+                if not isinstance((body or {}).get("ports", []), list):
+                    errs.append("$.ports: expected array")
+                gt = ((body or {}).get("gpu") or {}).get("id")
+                if not gt:
+                    errs.append("$.gpu.id: missing")
+                if errs:
+                    return self.problem(422, "Request validation failed.", errs)
                 if not self.capacity.get(gt):
-                    return {"data": {"podFindAndDeployOnDemand": None}}
+                    return self.problem(400, "There are no instances currently available")
                 self.n += 1
                 pid = f"pod{self.n}"
-                self.pods[pid] = {"name": name, "gpu": gt, "cost": self.prices[gt], "alive": True}
-                self.deploys.append((pid, name, gt))
+                self.pods[pid] = {"name": body["name"], "gpu": gt, "cost": self.prices[gt], "alive": True,
+                                  "cloud": body.get("cloud"), "image": body["image"], "ports": body.get("ports")}
+                self.deploys.append((pid, body["name"], gt))
                 self.max_live = max(self.max_live, len(self.live()))
-                return {"data": {"podFindAndDeployOnDemand": {"id": pid, "costPerHr": self.prices[gt]}}}
-            if "podTerminate" in q:
-                pid = re.search(r'podId: "([^"]+)"', q).group(1)
-                self.terminations.append(pid)
-                if pid in self.pods:
+                # RunPod's real create answer: PROVISIONING, no runtime yet.
+                if self.lose_next > 0:
+                    self.lose_next -= 1
+                    self.pods[pid]["hidden"] = self.late
+                    self.lost.append(pid)
+                    return self.problem(500, "upstream timeout")
+                return 201, dict(self.pod_obj(pid, runtime=False), status="PROVISIONING"), ()
+            if method == "GET" and u.path == "/v2/pods":
+                ids = []
+                for i, p in self.pods.items():
+                    if p["alive"] and p.get("hidden", 0) > 0:
+                        p["hidden"] -= 1            # not listed yet (eventual consistency)
+                    elif p["alive"]:
+                        ids.append(i)
+                start = int(q.get("cursor") or 0)
+                size = self.page_size or int(q.get("limit") or 1000)
+                page = ids[start:start + size]
+                more = start + size < len(ids)
+                return 200, {"pods": [self.pod_obj(i, runtime=self.list_runtime) for i in page],
+                             "pagination": {"hasNextPage": more, "nextCursor": str(start + size) if more else None}}, ()
+            m = re.fullmatch(r"/v2/pods/([^/]+)", u.path)
+            if m:
+                pid = urllib.parse.unquote(m.group(1))
+                if pid not in self.pods or not self.pods[pid]["alive"]:
+                    if method == "DELETE":
+                        self.terminations.append(pid)
+                    return self.problem(404, "pod not found")
+                if method == "GET":
+                    return 200, self.pod_obj(pid), ()
+                if method == "DELETE":
+                    self.terminations.append(pid)
                     self.pods[pid]["alive"] = False
-                return {"data": {"podTerminate": None}}
-            if "myself" in q:
-                return {"data": {"myself": {"pods": [
-                    {"id": i, "name": p["name"], "costPerHr": p["cost"], "machine": {"gpuDisplayName": p["gpu"]},
-                     "runtime": {"ports": [{"ip": "127.0.0.1", "isIpPublic": True, "privatePort": 22, "publicPort": 22022}]}}
-                    for i, p in self.pods.items() if p["alive"]]}}}
-            return {"errors": [{"message": "unknown query"}], "data": None}
+                    return 204, None, ()
+            return self.problem(404, "no such route")
 
 
 RUNNERS = []    # every FakeRunner, so reset() can wait for their proving threads (#341)
@@ -906,6 +992,51 @@ finally:
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+# ---------- the capacity streak, end to end through Bot.run() ----------
+# ⛔ A short drought never stops the bot; CAPACITY_LATCH_S of deploy attempts with nothing landing does: run() stops
+# as "runpod" (exit 5: the unit latches and OnFailure= pages). Drives the real loop on the fast clock, against the
+# fake v2 server with no capacity anywhere.
+print("== the capacity streak, through Bot.run() ==")
+reset()
+api = FakeRunPod()
+api.capacity = {"NVIDIA GeForce RTX 4090": False, "NVIDIA A40": False}
+logs = []
+streak_bot = make_bot(api, FakeRunner(), trial=[9800], log=logs.append)
+streak_bot.state_home = tempfile.mkdtemp()
+if CONTROL:
+    sponsor_bot.CAPACITY_LATCH_S, _saved_latch = 10 ** 12, sponsor_bot.CAPACITY_LATCH_S
+t0 = streak_bot.clock()
+result = [None]
+th = threading.Thread(target=lambda: result.__setitem__(0, streak_bot.run()), daemon=True)
+th.start()
+th.join(60)
+outcome = result[0]
+span_h = (streak_bot.clock() - t0) / 3600
+if CONTROL:                                      # stop the loop the control left running
+    sponsor_bot.CAPACITY_LATCH_S = _saved_latch
+    streak_bot.stop_reason = "runpod"
+    th.join(30)
+check(outcome == "runpod" and not api.deploys and any("no pod has landed" in m for m in logs),
+      f"a drought runs on until CAPACITY_LATCH_S, then stops the run as 'runpod' "
+      f"(after ~{span_h:.1f} bot-hours: {outcome})")
+check(sponsor_bot.CAPACITY_LATCH_S / 3600 <= span_h,
+      f"and not before {sponsor_bot.CAPACITY_LATCH_S // 3600} h of misses ({span_h:.1f} h)")
+
+# ---------- a lost create, through Bot.run(): the per-look sweep and _observe together ----------
+print("== a lost create, through Bot.run() ==")
+reset()
+api = FakeRunPod()
+api.lose_next, api.late = 1, 2              # the first create's answer is lost; its pod is missing from two listings
+logs = []
+lost_bot = make_bot(api, FakeRunner(), trial=[9810], log=logs.append)
+if CONTROL:
+    lost_bot._sweep_strays = lambda c: None
+res = lost_bot.run()
+check(api.lost and api.lost[0] in api.terminations and res == "done" and not api.live()
+      and any("not tracked" in m for m in logs),
+      f"a pod whose create answer was lost is released by the run's own prefix sweep while another pod proves the "
+      f"block, and nothing is left on RunPod (lost {api.lost}, {res}, live {api.live()})")
 
 # ---------- stop-all ----------
 print("== stop-all ==")
