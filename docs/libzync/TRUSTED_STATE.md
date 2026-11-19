@@ -388,6 +388,19 @@ python3 experimental/trusted-state/side_inputs.py prover/testdata/libzync/mainne
 ts-anchor build --network mainnet --snapshot zapps/assume/vectors/utxo_200.dat --side <side> \
                 --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320:a51f51ae…9d67 --out <a> --ingest <a>.ingest
 cd experimental/trusted-state/ingest && cargo build --release -p ts-ingest-host; ts-ingest-host <a> <snapshot> <side>    # §6
+# §11.1 forged anchor: build with --forge-extra 5000000000:51:50, then
+python3 experimental/trusted-state/forge_block.py scripts/zapp-regtest/blocks/main/block_105.json <FORGED txid> 5000000000 50 <mtp> <dir>/block_105.json
+HAZYNC_TS_SMT_SEED=<forged>.smt RISC0_DEV_MODE=1 host libzync-prove-range 105 105 <dir> <forged>.json <out>             # accepted
+# §11.2 / §11.3
+ts-anchor split-history --main-h scripts/zapp-regtest/receipts/a/state_104 --anchored-t <work>/out_anc/state_112 \
+                        --main-t scripts/zapp-regtest/receipts/a/state_112 --scenarios scripts/zapp-regtest/chain/scenarios.json
+ts-anchor join-receipt --main scripts/zapp-regtest/receipts/a/block_104.rcpt --main-image eb2cd424… \
+                       --ingest-journal <a>.ingest.journal --anchored-tip <work>/out_anc/state_112.json
+# §11.4: a mainnet host built with HAZYNC_LIBZYNC=assumevalid, block 962,000, both images:
+HAZYNC_CHUNKS=16 HAZYNC_BLOCK=prover/block_962000.json host libzync-hints b.lzb
+HAZYNC_CHUNKS=16 HAZYNC_BLOCK=prover/block_962000.json HAZYNC_LZ_HINTS=b.lzb \
+  HAZYNC_COINLOG_TXCOUNTS=experimental/libzync-bench/cost/txcounts.txt host agg-exec-fake
+python3 experimental/trusted-state/replay_share.py ~/libzync-gpu/e1/prof/*.pprof
 ```
 
 
