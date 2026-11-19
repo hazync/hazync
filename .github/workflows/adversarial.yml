@@ -516,6 +516,13 @@ jobs:
         run: cd tools/win-gui && python3 test_cards.py
       - name: per-card POSITIVE CONTROL (one shared lock, no card chosen — must fail)
         run: cd tools/win-gui && python3 test_cards.py --control
+      - name: the live resource panel's numbers (GPU memory, CPU, RAM, per-block peak)
+        # Pure: nvidia-smi's CSV with several cards and "[N/A]" fields, CPU % from two samples (Windows' kernel time
+        # includes idle), the peak GPU memory of each block reset when the next is claimed, and the no-GPU path.
+        run: |
+          cd tools/win-gui
+          python3 test_stats.py
+          python3 test_stats.py --control
 
       - name: dark mode is actually dark
         # ⛔ 24 ttk widgets rendered in the OS theme because ttk.Style was never used, so dark mode
