@@ -95,6 +95,7 @@ fn main() {
         Some("compare") => { let (x, y) = (read_state(&a[2]), read_state(&a[3])); compare(&x, &y); }
         Some("facts") => facts(&a[2..]),
         Some("synth") => synth(&a[2..]),
+        Some("split-history") => split_history(&a[2..]),
         _ => die("usage: ts-anchor build|join|compare|facts|synth (see src/main.rs)"),
     }
 }
@@ -418,6 +419,83 @@ fn facts(a: &[String]) {
             println!("  {kind:<8} {s}: claims {} -> {}", f.expect.as_deref().unwrap_or("?"), match r { Ok(l) => format!("OK {l}"), Err(e) => format!("FAIL {e}") });
         }
     }
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// split-history (TRUSTED_STATE.md §11.2): a script's complete history at T from TWO proofs joined at H
+
+/// A trie snapshot and its state, the snapshot checked against the state's trie root.
+fn load_trie(state: &str) -> (ChainState, TrieStore) {
+    let cs = read_state(&format!("{state}.json"));
+    let tp = format!("{state}.trie");
+    let t = TrieStore::from_bytes(&std::fs::read(&tp).unwrap_or_else(|e| die(format!("{tp}: {e}")))).unwrap_or_else(|e| die(format!("{tp}: {e:?}")));
+    if libzync::coinlog::h_of(&t.root()) != cs.trie_root { die(format!("{tp}: not the trie of {state}.json")); }
+    (cs, t)
+}
+
+/// The history fact of `spk`, checked against the state's trie root as a verifier would (the proof from the store, the
+/// answer read back out of the proof only): None = never paid.
+fn hist(cs: &ChainState, t: &TrieStore, spk: &[u8]) -> Option<Vec<libzync::trie_fact::HistCoin>> {
+    use libzync::trie_fact as tf;
+    let sh = tf::script_hash(spk);
+    let p = t.prove_history(&sh);
+    tf::history(&p, &libzync::coinlog::w_of(&cs.trie_root), &sh).unwrap_or_else(|e| die(format!("history proof: {e:?}"))).map(|(_, v)| v)
+}
+
+fn split_history(a: &[String]) {
+    use libzync::trie_fact::CoinState::*;
+    let (mh, tmh) = load_trie(&need(a, "--main-h"));     // main lineage at H (from genesis)
+    let (at, tat) = load_trie(&need(a, "--anchored-t"));  // anchored lineage at T
+    let reference = arg(a, "--main-t").map(|p| load_trie(&p)); // main lineage at T, only to compare against
+    if mh.height > at.height { die("--main-h must be at or below --anchored-t"); }
+    let sc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(need(a, "--scenarios")).unwrap()).unwrap();
+    // every scriptPubKey the harness names (each key's scripts, ANYONE's OP_1), wherever it sits in scenarios.json
+    fn collect(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => for (k, x) in m { if k == "spk" { if let Some(s) = x.as_str() { out.push(s.into()) } } else { collect(x, out) } },
+            serde_json::Value::Array(a) => for x in a { collect(x, out) },
+            _ => {}
+        }
+    }
+    let mut spks: Vec<String> = Vec::new();
+    collect(&sc["keys"], &mut spks);
+    spks.sort(); spks.dedup();
+    let (mut ok, mut bad) = (0, 0);
+    for s in &spks {
+        let spk = unhex(s);
+        let hm = hist(&mh, &tmh, &spk).unwrap_or_default();
+        let ha = hist(&at, &tat, &spk).unwrap_or_default();
+        // the matching rule: every coin UNSPENT at H on the main lineage is in the anchored history (the snapshot's
+        // entries) with the same value, and spent, if at all, above H; the rest of the anchored history was created after H
+        let mut err = None;
+        for c in hm.iter().filter(|c| matches!(c.state, Unspent { .. })) {
+            let v = if let Unspent { value } = c.state { value } else { 0 };
+            match ha.iter().find(|x| x.okey == c.okey).map(|x| x.state) {
+                Some(Unspent { value }) if value == v => {}
+                Some(Spent { value, by }) if value == v && by.height > mh.height => {}
+                x => err = Some(format!("coin {} unspent at H on main is {x:?} on the anchored lineage", hex(&c.okey))),
+            }
+        }
+        // merged: the main lineage's coins SPENT by H, then the anchored lineage's coins; a key in both (a coin re-created
+        // over its own spent record, BIP30) keeps the later coin, as the main trie itself does (ZYNCAPPS.md §2)
+        let mut merged: Vec<libzync::trie_fact::HistCoin> = hm.iter().filter(|c| matches!(c.state, Spent { .. }))
+            .filter(|c| !ha.iter().any(|x| x.okey == c.okey)).cloned().chain(ha.iter().cloned()).collect();
+        merged.sort_by(|x, y| x.okey.cmp(&y.okey));
+        let spent = merged.iter().filter(|c| matches!(c.state, Spent { .. })).count();
+        let verdict = match (&err, &reference) {
+            (Some(e), _) => { bad += 1; format!("MATCH FAIL {e}") }
+            (None, Some((rs, rt))) => {
+                let mut r = hist(rs, rt, &spk).unwrap_or_default();
+                r.sort_by(|x, y| x.okey.cmp(&y.okey));
+                if r == merged { ok += 1; "= main lineage at T, coin for coin".into() } else { bad += 1; format!("!= main lineage at T ({} coins)", r.len()) }
+            }
+            (None, None) => { ok += 1; "matched".into() }
+        };
+        println!("  {s:<70} main@H {:>3} ({} spent) + anchored@T {:>3} -> {:>3} coins ever, {spent} spent: {verdict}",
+                 hm.len(), hm.iter().filter(|c| matches!(c.state, Spent { .. })).count(), ha.len(), merged.len());
+    }
+    println!("{} scripts: {ok} merged histories {}, {bad} not", spks.len(), if reference.is_some() { "equal to the main lineage's at T" } else { "matched" });
+    if bad > 0 { std::process::exit(1); }
 }
 
 // ------------------------------------------------------------------------------------------------------------------
