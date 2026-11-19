@@ -496,7 +496,14 @@ def reorg(d, mode, crash=None, spine_case=False, coord_crash=False):
                         and api(f"/api/block/{T}")[0] == 200)
             except (OSError, urllib.error.HTTPError): return False
         wait(served, f"{tag}: the board serves the new branch's block {T}")
-        code, out = submit(T, held)
+        # the range-id bound (chain_tip, exclusive) can still trail the served bundle for TIP_CACHE_TTL; /api/block/<n>
+        # bounds with `n > tip` and so answers for the tip itself one block early: retry while the id is out of range
+        res = {}
+        def accepted_range():
+            res["r"] = submit(T, held)
+            return not (res["r"][0] == 400 and "invalid range id" in str(res["r"][1]))
+        wait(accepted_range, f"{tag}: the board's range-id bound reaches {T}")
+        code, out = res["r"]
         att = db1("SELECT attempts FROM ranges WHERE id=?", str(T))
         check(code == 409 and out.get("reorged") and not (att and att[0][0]),
               f"{tag}: the held receipt of {T} once the new branch is served: {code} reorged={out.get('reorged')}, "
