@@ -25,6 +25,8 @@ H=${H:?the host: H=<path to host>}; HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(
 B=${B:-$REPO/prover/testdata/libzync/mainnet}; O=${O:-/tmp/rewind-test}; RUN=$REPO/coordinator/deploy/libzync/libzync-prep-run.sh
 rm -rf $O; mkdir -p $O
 export RISC0_DEV_MODE=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_PREP_SAVE_EVERY=50 HAZYNC_PREP_UNDO_KEEP=60 HAZYNC_REORG_AUTO_DEPTH=12 HAZYNC_PREP_WAIT_S=60
+# prep alone: no coordinator acks the rewinds here (P4, the board's side, is tested by prep/reorg_e2e.sh)
+export HAZYNC_REORG_ACK=0
 fails=0
 check() { if [ "$1" = 1 ]; then echo "  ok   $2"; else echo "  FAIL $2"; fails=$((fails+1)); fi; }
 root() {  # root <dir>: an LZ_ROOT with bin/
@@ -47,7 +49,9 @@ same_as_ref() {  # same_as_ref <root> <ref root> <hi> <F> <tag> [noleaves]
     #  bundles above F must still have moved, and the states and stores are compared in full)
     if [ "${6:-}" = noleaves ]; then [ -z "$(ls $r/leaves/orphaned/1 2>/dev/null | sed -n 's/^leaf_\([0-9]*\)\.bin$/\1/p' | awk -v f=$f '$1<=f')" ] || { ok=0; why="$why leaves"; }
     else diff -rq --exclude=orphaned $r/leaves $q/leaves >/dev/null || { ok=0; why="$why leaves"; }; fi
-    diff -rq $r/out/reorg $q/out/reorg >/dev/null || { ok=0; why="$why records"; }
+    # (the rewind's own records for the board, reorg/records/<E>.json, P4, are there in the rewound run only)
+    diff -rq --exclude=records $r/out/reorg $q/out/reorg >/dev/null || { ok=0; why="$why records"; }
+    ls $r/out/reorg/records/*.json >/dev/null 2>&1 || { ok=0; why="$why no-board-record"; }
     cmp -s $r/out/PREP_TIP.json $q/out/PREP_TIP.json || { ok=0; why="$why tip"; }
     local dr dq; dr=$(digest $r $hi); dq=$(digest $q $hi)
     [ -n "$dr" ] && [ "$dr" = "$dq" ] || { ok=0; why="$why stores($(diff <(echo "$dr") <(echo "$dq") | sed -n 's/^< \([A-Z]*\) .*/\1/p' | tr '\n' ' '))"; }
@@ -80,6 +84,42 @@ CONTROL=0; [ "${1:-}" = --control ] && CONTROL=1
 # every check's line also into $O/control.out (the control counts what failed)
 check() { local l; if [ "$1" = 1 ]; then l="  ok   $2"; else l="  FAIL $2"; fails=$((fails+1)); fi; echo "$l"; echo "$l" >> $O/control.out; }
 [ $CONTROL = 1 ] && echo "CONTROL: a byte of each rewound coin log is changed before the comparison"
+
+# L. a reorg inside prep's replay window (review round 3, HIGH-1; CI): prep died after 199 (saved at 150, the states
+# 151..199 on disk), the node reorged at 190; the restarted prep, replaying from 150, must see that its old state_191 is
+# another chain's: its own marker, exit 5, the runner's rewind (stale states moved, the board's record), then the new
+# branch. --control-stale: the check off (HAZYNC_TEST_SKIP_STALE_CHECK): the case MUST fail.
+L_DETECT=0
+case_l() {
+    local fk=190 hi=196 br=$O/lbranch q=$O/lref r=$O/l rc env=""
+    [ "${1:-}" = off ] && env="HAZYNC_TEST_SKIP_STALE_CHECK=1"
+    python3 $HERE/reorg_branch.py $B $fk 6 l$fk $br > /dev/null
+    reference $q $fk $br $hi
+    root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
+    check "$([ -e $r/out/state_150.coinlog ] && [ -e $r/out/state_198.json ] && echo 1)" "L: prep died after 199, saved at 150, states above it on disk (to 198)"
+    for h in $(seq $((fk + 1)) 200); do rm -f $r/blocks/block_$h.json; done; cp $br/block_*.json $r/blocks/
+    # the replay itself is prep run directly, as the runner does but without leaf bundles: the test hook that turns the
+    # check off is refused in board mode (round 5, LOW 1), and the stale-state check does not depend on the bundles
+    (cd $r && env HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie HAZYNC_PREP_CONSUME=1 HAZYNC_PREP_CONTINUE=1 HAZYNC_REORG_AUTO=1 $env \
+         $r/bin/host_lz libzync-prep 151 $hi $r/blocks $r/out/state_150.json $r/out >> $r/run.log 2>&1); rc=$?
+    [ $rc = 5 ] && grep -aq 'a reorg inside the replay window' $r/run.log && [ -e $r/blocks/REORG ] && L_DETECT=1
+    check "$L_DETECT" "L: prep replaying from 150 sees its old state_191 is another chain's: its marker, exit 5 (exit $rc)"
+    run $r $hi; rc=$?
+    check "$([ $rc = 0 ] && grep -aq "PREP_REWOUND to $fk" $r/run.log && [ -e $r/out/reorg/records/1.json ] && [ -e $r/out/orphaned/1/state_198.json ] && echo 1)" \
+          "L: the runner rewound to $fk: the stale states 191..198 moved, the board's record written (exit $rc)"
+    same_as_ref $r $q $hi $fk "L"
+}
+if [ "${1:-}" = --control-stale ]; then
+    echo "CONTROL --control-stale: the replay-window check off; case L's detection MUST fail"
+    case_l off
+    # the specific check (exit 5 and prep's marker) must be the one that failed (round 5, LOW 2)
+    if [ $L_DETECT = 0 ] && grep -aq 'HAZYNC_TEST_SKIP_STALE_CHECK=1 under RISC0_DEV_MODE' $O/l/run.log; then
+        echo "CONTROL OK: with the check off, prep did not see the replay-window reorg ($fails check(s) failed)"; exit 0
+    fi
+    echo "CONTROL BROKEN: the detection check passed, or the hook did not fire, with the check off"; exit 1
+fi
+echo "== L. a reorg inside prep's replay window"
+case_l
 
 # the old chain once: prep 1..200, stores saved at 200, kept as a template
 T=$O/template; root $T; cp $B/block_*.json $T/blocks/; run $T 200; rc=$?
@@ -219,6 +259,19 @@ for fk in 145 150; do
     same_as_ref $r $q $hi $fk "I fork $fk"
 done
 
+echo "== M. a state file above the save point left EMPTY by a power loss (round 5, MED): the replay overwrites it; a"
+echo "   non-empty one that does not read is a stop for a person (exit 4, no marker)"
+r=$O/m; root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
+: > $r/out/state_170.json
+run $r 200; rc=$?
+check "$([ $rc = 0 ] && cmp -s $r/out/state_170.json $T/out/state_170.json && [ ! -e $r/blocks/REORG ] && echo 1)" \
+      "M: an empty state_170.json: prep replayed over it (exit $rc), byte-identical to a clean run's, no marker"
+r=$O/m2; root $r; cp $B/block_*.json $r/blocks/; run $r 200 HAZYNC_CRASH_AT=prep-after:199
+printf 'x' > $r/out/state_170.json
+run $r 200; rc=$?
+check "$([ $rc = 4 ] && grep -aq 'is not empty and does not read' $r/run.log && grep -aq 'move .* aside and start prep again' $r/run.log && [ ! -e $r/blocks/REORG ] && echo 1)" \
+      "M: a non-empty state_170.json that does not read: exit 4, the recovery step printed, no marker (exit $rc)"
+
 echo "== J0. a run PINNED from the start (PIN 150: its trie holds every root from 150 on), rewound below nothing it pins"
 echo "   (fork 188) and run on: the root of 150 must still read as state_150's trie (review 16.11, N1)"
 d=12; f=$((200 - d)); hi=$((f + d + 2)); br=$O/branch$d; q=$O/ref$d
@@ -280,6 +333,42 @@ r=$O/e2; copy_template $r; cp $br/block_*.json $r/blocks/; marker $r $f $d manua
 run $r $hi; rc2=$?
 check "$([ $rc = 0 ] && [ $rc2 = 0 ] && echo 1)" "E: depth 13 with --allow-deep (the runbook's one command), then the runner (exit $rc, $rc2)"
 same_as_ref $r $q $hi $f "E depth 13 --allow-deep"
+
+echo "== K. the board's record and ack (P4 review): an epoch never reused (H1), another rewind's record refused, and a"
+echo "   rewind that stopped before removing the marker finished without a new epoch (L5)"
+rw() {  # rw <root> [env...]: the rewind as the runner runs it
+    local r=$1; shift
+    (cd $r && env HAZYNC_COINLOG_DIR=$r/cl HAZYNC_TRIE_DIR=$r/trie HAZYNC_PREP_LEAF_BUNDLES=$r/leaves "$@" \
+         $r/bin/host_lz libzync-prep-rewind $r/out $r/blocks >> $r/run.log 2>&1)
+}
+r=$O/k; copy_template $r; marker $r 198 2
+rw $r; rc=$?
+check "$([ $rc = 0 ] && [ -e $r/out/reorg/records/1.json ] && echo 1)" "K: a rewind to 198 (epoch 1; no coordinator: HAZYNC_REORG_ACK=0) (exit $rc)"
+# out/orphaned/ cleared by hand; epoch 1's ack still in the ack directory
+mkdir -p $r/acks; python3 -c "import hashlib,json,sys; print(json.dumps({'record_sha256': hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()}))" \
+    $r/out/reorg/records/1.json > $r/acks/1.ack
+rm -rf $r/out/orphaned; r1=$(sha256sum < $r/out/reorg/records/1.json)
+marker $r 196 2
+rw $r HAZYNC_REORG_ACK=1 HAZYNC_REORG_ACK_DIR=$r/acks HAZYNC_REORG_ACK_TIMEOUT_S=3; rc=$?
+check "$([ $rc = 4 ] && [ -e $r/out/reorg/records/2.json ] && [ "$(sha256sum < $r/out/reorg/records/1.json)" = "$r1" ] && [ -e $r/out/REWIND ] \
+         && grep -aq PREP_REWIND_NO_ACK $r/run.log && echo 1)" \
+      "K H1: the next rewind opens epoch 2 (not 1 again, whose old ack would pass), waits, no ack: exit 4 (exit $rc)"
+python3 - $r/out/reorg/records/2.json <<'PY2'
+import json, sys
+v = json.load(open(sys.argv[1])); v["fork"] = 100; open(sys.argv[1], "w").write(json.dumps(v))
+PY2
+rw $r HAZYNC_REORG_ACK=0; rc=$?
+check "$([ $rc = 4 ] && grep -aq "is another rewind's record" $r/run.log && [ -e $r/out/REWIND ] && echo 1)" \
+      "K H1: records/2.json of another rewind (fork 100) under the intent of epoch 2: exit 4, the intent kept (exit $rc)"
+r=$O/k5; copy_template $r; marker $r 198 2
+rw $r; rc=$?
+fh=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['hash'])" $r/out/PREP_TIP.json)
+printf '{"fork": 198, "depth": 2, "class": "auto", "prep_tip": 200, "fork_hash": "%s"}\n' $fh > $r/blocks/REORG
+n0=$(ls $r/out/orphaned | wc -l)
+rw $r; rc2=$?
+check "$([ $rc = 0 ] && [ $rc2 = 0 ] && [ ! -e $r/blocks/REORG ] && [ "$(ls $r/out/orphaned | wc -l)" = $n0 ] && [ ! -e $r/out/reorg/records/2.json ] \
+         && grep -aq 'already at the fork' $r/run.log && echo 1)" \
+      "K L5: the marker left after a finished rewind: removed, no new epoch, no new record (exit $rc, $rc2)"
 
 echo
 [ $fails = 0 ] && { echo "all rewind checks passed"; exit 0; }

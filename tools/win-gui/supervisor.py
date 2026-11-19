@@ -754,7 +754,9 @@ def gpu_facts():
 #
 # ⚠ A CARD BELOW 8 GB HAS NEVER PROVED ANYTHING ON THIS PROJECT. The smallest that has is 24 GB.
 # So for small cards this returns a STARTING POINT and says so; it does not promise it will work.
-_SEG_PO2_FOR_VRAM = [(40000, 21), (20000, 20), (10000, 19), (6000, 18), (0, 17)]
+# 📏 19.11.2026: block 4401 PROVED at 18 on a 4 GB GTX 1050 Ti (the board's MSI prover; 21 ran out of memory). So 18
+# starts at 4,000 MB (a "4 GB" card reports 4,096 MiB); 17 stays for anything smaller, unmeasured.
+_SEG_PO2_FOR_VRAM = [(40000, 21), (20000, 20), (10000, 19), (4000, 18), (0, 17)]
 
 
 def recommend(gpu=None):

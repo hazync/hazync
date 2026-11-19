@@ -1,0 +1,36 @@
+[package]
+name = "zapp-liveness-cli"
+version = "0.1.0"
+edition = "2021"
+description = "zapp-liveness: the coin-liveness zyncAPP's command line (zapps/liveness): check, prove, serve"
+license = "MIT"
+publish = false
+
+# The CLI, apart from the library (..): it alone takes the chain-identity flags every zAPP CLI shares (zapps/common:
+# --expect, --mempool, --bitcoin-cli), so the library, C ABI and WASM module carry none of that code.
+
+[[bin]]
+name = "zapp-liveness"
+path = "src/main.rs"
+
+[dependencies]
+zapp-liveness = { path = ".." }
+zapp-common = { path = "../../common" }
+zapp-corecheck = { path = "../../corecheck" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+libzync = { path = "../../../libzync", default-features = false, features = ["liveness"] }
+serde_json = "1"
+
+[features]
+# TESTS ONLY: `--network regtest`, the zAPP regtest harness's image (zapps/corecheck), for test.sh's OK-verdict tests on
+# real regtest proofs (test-regtest.sh). Dev profile only: a release build with it does not compile.
+regtest-test = ["zapp-liveness/regtest-test", "zapp-common/regtest-test", "zapp-corecheck/regtest-test"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

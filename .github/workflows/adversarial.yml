@@ -115,8 +115,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
-      - name: libzync (coin log, counting trie, facts, wire; the hints and utreexo zyncAPPs' derivations, features hints, utreexo)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,utreexo
+      - name: libzync (coin log, counting trie, facts, wire; the hints, liveness and utreexo zyncAPPs' derivations, features hints, liveness, utreexo)
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness,utreexo
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
@@ -191,7 +191,9 @@ jobs:
     # timeout-minutes anywhere in this workflow, so the default was 360 minutes, and a stuck step
     # showed up as a cancelled job with no steps and no log. Measured at ~3 minutes before
     # 2026-10-05; 30 leaves room for a slow runner while still turning a stall into a verdict.
-    timeout-minutes: 30
+    # 2026-11-19: the job has grown to ~20 min (#761 19m42s, #763 19m54s, #740 20m05s) and up to 29m22s on a slow
+    # runner (#759); #767 on main after #759 and #761 was cancelled at 30. 45 keeps the stall verdict.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -514,6 +516,13 @@ jobs:
         run: cd tools/win-gui && python3 test_cards.py
       - name: per-card POSITIVE CONTROL (one shared lock, no card chosen — must fail)
         run: cd tools/win-gui && python3 test_cards.py --control
+      - name: the live resource panel's numbers (GPU memory, CPU, RAM, per-block peak)
+        # Pure: nvidia-smi's CSV with several cards and "[N/A]" fields, CPU % from two samples (Windows' kernel time
+        # includes idle), the peak GPU memory of each block reset when the next is claimed, and the no-GPU path.
+        run: |
+          cd tools/win-gui
+          python3 test_stats.py
+          python3 test_stats.py --control
 
       - name: dark mode is actually dark
         # ⛔ 24 ttk widgets rendered in the OS theme because ttk.Style was never used, so dark mode
@@ -873,6 +882,24 @@ jobs:
         run: cd coordinator && python3 test_reorg_units.py --no-systemd
       - name: Reorg-stop POSITIVE CONTROL (the units without exit 4 in RestartPreventExitStatus)
         run: cd coordinator && python3 test_reorg_units.py --no-systemd --control
+      # REORG.md §7 (P4): the coordinator applies prep's reorg records (rows and proofs aside, the spine back to a kept
+      # head, claims voided, the ack), refuses a proof verified across a rewind (§4), and applies a record at start-up.
+      - name: The coordinator rewinds its ledger for a reorg (REORG.md §5, §7)
+        run: cd coordinator && python3 test_reorg.py
+      - name: Coordinator-rewind POSITIVE CONTROLS (no check at commit; orphaned rows left in vranges — each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_reorg.py --control
+          python3 test_reorg.py --control-keep
+          python3 test_reorg.py --control-m1
+          python3 test_reorg.py --control-m2
+          python3 test_reorg.py --control-m3
+          python3 test_reorg.py --control-h1
+          python3 test_reorg.py --control-latch
+      - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
+        run: cd coordinator && python3 test_offsite_reorg.py
+      - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)
+        run: cd coordinator && python3 test_offsite_reorg.py --control
       - name: The card catalogue ranks every usable type, and excludes MIG slices
         run: cd coordinator && python3 test_card_catalogue.py
       - name: Card-catalogue POSITIVE CONTROL
@@ -1965,7 +1992,7 @@ jobs:
         # editing one re-baselines the board with nothing in the guest directory changed. That has
         # already happened once (coinbase-smt's empty_root: 4ea6567b -> 35cfbbed).
         run: ./scripts/check-guest-inputs.sh
-      - name: Workflow YAML valid (a bad step name can silently break the whole run)
+      - name: Workflow YAML valid, no duplicate keys (GitHub refuses the whole workflow, zero jobs, seen only after the push), no << merge keys, with controls
         run: ./scripts/check-workflows.sh
       - name: No workflow splices an expression into a shell block (arbitrary code where the signing key lives)
         # GitHub splices ${{ }} into the script before bash parses it, so a value with shell
@@ -2137,6 +2164,21 @@ jobs:
             [ -s "hosts/$n" ] || { echo "::error::hosts/$n was not built"; exit 1; }
           done
           grep -q '^HOST_UNIT_OK .*, 0 failed$' hosts/ids.txt || { echo "::error::host unit tests (libzync mode) failed"; tail -40 hosts/host_unit.log; exit 1; }
+          # The strict decoding of untrusted receipts (verify-any, the worker wire): each test BY NAME, so a renamed or
+          # filtered-out test fails here instead of passing by absence. A new strict test is added to this list.
+          for t in \
+            lz_coord::strict_decode_tests::the_real_receipt_decodes_control \
+            lz_coord::strict_decode_tests::a_trailing_byte_is_refused \
+            lz_coord::strict_decode_tests::an_unreduced_control_inclusion_word_is_refused_not_an_abort \
+            lz_coord::strict_decode_tests::an_unreduced_control_id_word_is_refused \
+            lz_coord::strict_decode_tests::an_unreduced_seal_word_is_refused \
+            lz_coord::strict_decode_tests::a_journal_of_partial_words_is_refused_not_an_abort \
+            lz_coord::strict_decode_tests::a_composite_receipt_is_refused_before_decoding \
+            lz_coord::strict_decode_tests::the_risc0_3_0_5_receipt_still_decodes_for_the_handover \
+            lz_coord::strict_decode_tests::a_job_pair_with_bytes_after_it_is_refused \
+            seg::worker_wire_strict_tests::a_worker_succinct_receipt_is_decoded_strictly; do
+            grep -aqxF "test $t ... ok" hosts/host_unit.log || { echo "::error::host test $t did not run and pass"; grep -a strict hosts/host_unit.log; exit 1; }
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libzync-hosts
@@ -2203,6 +2245,8 @@ jobs:
         run: H=$PWD/hosts/host_m O=$PWD/out/rewind bash experimental/libzync-bench/prep/rewind_test.sh
       - name: Reorg rewind POSITIVE CONTROL (a corrupted coin log after the rewind must be caught)
         run: H=$PWD/hosts/host_m O=$PWD/out/rewindc bash experimental/libzync-bench/prep/rewind_test.sh --control
+      - name: Reorg in prep's replay window POSITIVE CONTROL (the stale-state check off, case L must FAIL)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewindl bash experimental/libzync-bench/prep/rewind_test.sh --control-stale
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }

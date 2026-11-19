@@ -5,7 +5,7 @@ hazync — Proof Party contributor CLI.
   hazync id                 # create/show your signing identity (ed25519)
   hazync rotate <key.hex>   # move an older key's blocks onto this box's identity (both keys sign; off unless the coordinator sets ROTATE_ENABLED=1, #311)
   hazync pick               # show the board frontier (does not claim anything)
-  hazync prove <id>         # prove that range on your GPU  -> a receipt .bin
+  hazync prove <id>         # prove that range on this box -> ~/.hazync/receipts/<id>.bin (submits nothing)
   hazync submit <id>        # sign the receipt with your key and submit it for verification
   hazync run [id]           # claim + prove + submit (id optional: takes the earliest free block)
                             # stopped with SIGTERM or Ctrl-C, it hands its claimed block back first (#725)
@@ -19,7 +19,7 @@ hazync — Proof Party contributor CLI.
                             # never competes with board workers already running on this box.
                             # ⛔ Remote cards need HAZYNC_BIND=0.0.0.0 (the wire is unauthenticated:
                             # only on a network you trust, or forward the port over SSH).
-  hazync selftest           # pre-flight: prover present, guest id matches, can verify a real proof
+  hazync selftest           # pre-flight: prover present, guest id matches, verifies a real proof, PROVES block 1 (slow on CPU)
   hazync fold [n]           # fold n adjacent proven ranges into wider ones (default 1) — helps everyone
   hazync spine [n]          # advance the genesis-anchored spine n steps, each absorbing the widest chunk available (default: all)
   hazync notify new         # push to your phone (ntfy) when this worker stops or cannot work; also: test | off | <topic or URL>
@@ -149,8 +149,11 @@ def _ed():
         from cryptography.hazmat.primitives import serialization
     except ImportError:
         sys.exit("missing the signing library `cryptography`. Install it:\n"
-                 "  sudo apt install python3-cryptography      # Debian/Ubuntu\n"
-                 "  or:  pip install cryptography")
+                 "  sudo apt install python3-cryptography      # Debian/Ubuntu (as root: drop the sudo)\n"
+                 "  or:  pip install --user cryptography\n"
+                 "  Debian 12 / Ubuntu 24.04 and newer refuse pip on the system Python (PEP 668); use a venv:\n"
+                 "        python3 -m venv ~/.hazync-venv && ~/.hazync-venv/bin/pip install cryptography\n"
+                 "        then run the worker as  ~/.hazync-venv/bin/python3 ./hazync ...")
     return Ed25519PrivateKey, serialization
 
 def identity():
@@ -878,7 +881,8 @@ def _prove_watched_inner(argv, env, work, label, _beat_range, _beat_pk, _beat_sk
         beaten_at = 0
         while not done.wait(tick_s):
             mins = int(time.time() - t0) // 60
-            where = f" -- last: {st['line']}" if st["line"] else " -- no segment finished yet"
+            where = (f" -- last: {st['line']}" if st["line"] else
+                     " -- no segment finished yet (normal: a segment can take many minutes, on a CPU longer)")
             print(f"  … {label}: still proving, {mins}m elapsed{where}", flush=True)
             # Beat the claim while we work -- but ONLY if a segment finished since the last beat. Without
             # beats a prove longer than CLAIM_TTL has its block handed to someone else mid-flight (block
@@ -1354,7 +1358,8 @@ def cmd_selftest(args):
         (wd / bundle_name(wit, 1)).write_bytes(wit)
         work = RCPTDIR / ".selftest"; work.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, HAZYNC_BRIDGE_OUT=str(wd))
-        print("… proving block 1 as a real pre-flight (this is the step that actually exercises the prover)")
+        print("… proving block 1 as a real pre-flight (this is the step that actually exercises the prover;\n"
+              "  minutes on a GPU, longer on a CPU: 16m42s measured on 12 cores, ~5.4 GB peak RAM)")
         r = subprocess.run([HOSTBIN, "prove-range-bridge", "1"], cwd=str(work), env=env,
                            capture_output=True, text=True, timeout=1800)
         proved = _prover_out(work, "range_1")

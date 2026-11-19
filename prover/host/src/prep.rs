@@ -122,7 +122,8 @@ pub(crate) fn leaf_read(path: &str) -> LeafBundle {
     assert!(v.len() >= 40 && &v[..8] == LEAF_MAGIC, "{path}: not a leaf bundle ({})", String::from_utf8_lossy(&LEAF_MAGIC[..]));
     let (body, d) = v.split_at(v.len() - 32);
     assert!(Sha256::digest(body)[..] == d[..], "{path}: checksum mismatch (torn or damaged)");
-    let mut b: LeafBundle = bincode::deserialize(&body[8..]).unwrap_or_else(|e| panic!("{path}: {e}"));
+    // exactly leaf_write's bincode: trailing bytes refused (the bundle is network-served; the checksum covers them too)
+    let mut b: LeafBundle = crate::verify::decode_exact(&body[8..]).unwrap_or_else(|e| panic!("{path}: {e}"));
     // stamped on read (docs/HANDOVER.md §5): a bundle an older image's prep wrote still carries S(h-1) as the image
     // proving block h-1 commits it. Identity with an empty lineage.
     crate::stamp(&mut b.prev);
@@ -525,6 +526,11 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 if t.elapsed().as_secs() >= wait_s { crate::reorg::stop(&format!("{why} after {wait_s} s (HAZYNC_PREP_WAIT_S), and the fetcher wrote no marker")); }
             }
         }
+        // A state file at h left by an EARLIER run (prep replays from its save point after a restart, and the states
+        // above it stay on disk, served by the board) for ANOTHER block: the node reorged inside the replay window, and
+        // the fetcher, comparing only prep's tip, cannot see it (review of P4, HIGH-1). A fork at h-1, handled as any
+        // other: the marker, then a stop for the rewind (which moves those files aside and tells the board).
+        crate::reorg::stale_state_fork(out, dir, h, &prev.tip_hash, &j, consume);
         let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
         let t = std::time::Instant::now();
         let inner0 = { let p = PHASES.lock().unwrap(); p[0] + p[1] + p[2] };

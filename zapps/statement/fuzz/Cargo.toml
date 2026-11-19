@@ -1,0 +1,48 @@
+# cargo-fuzz targets for the balance statement zAPP (docs/libzync/ZAPP_TESTING.md §3.4, §4.6). Own workspace (the empty
+# [workspace] below), so it is never a member of zapps/statement's and never touches its Cargo.lock; this crate's own
+# Cargo.lock started as a copy of the parent's, so it resolves the same versions (CI's cargo audit reads it too).
+# Run (nightly, cargo-fuzz): cargo fuzz run <target> fuzz/corpus/<target> -- -rss_limit_mb=1024
+# Replay the committed corpus on stable: cargo test --release --manifest-path fuzz/Cargo.toml
+[package]
+name = "zapp-statement-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zapp-statement = { path = ".." }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+libzync = { path = "../../../libzync", default-features = false }
+bitcoin = "0.32"
+base64 = "0.23"
+serde_json = "1"
+
+[[bin]]
+name = "statement_check"
+path = "fuzz_targets/statement_check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "statement_fields"
+path = "fuzz_targets/statement_fields.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "statement_p2pk"
+path = "fuzz_targets/statement_p2pk.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

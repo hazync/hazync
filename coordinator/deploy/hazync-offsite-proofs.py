@@ -43,6 +43,22 @@ PUT succeeds; the HEAD it sends afterwards is refused), and with that worked aro
 queued a transfer against the flat ~97,000-file proofs directory (measured 2026-09-15).
 
 Keys file: one line, "<access key id> <secret> <endpoint> [bucket]", readable by root only.
+
+REORGS (docs/libzync/REORG.md §9, P5). The copy is append-only BY NAME, so a proof of a block a reorg later orphans
+would hold its name off-box for good. Two defences:
+- **Depth delay** (`--depth N`, the libzync units pass 6, with `--tip-file`, the node's height): `copy` uploads a proof
+  only once its hi <= tip - N, and `check` does not count a proof that is not that deep yet. `spine` copies the newest
+  KEPT head (`spine/heads/`, REORG.md §7) that is that deep, not the live one. With no fresh tip (the file missing or
+  older than `--tip-max-age`), nothing is uploaded and the run exits 1 (it alerts): never "deep enough" by default.
+- **Markers**, for a reorg deeper than N: for each epoch E the coordinator rewound (`proofs/orphaned/<E>/`), the
+  orphaned files go up under `orphaned/<E>/` (once the coordinator has written the epoch's `DONE`), and
+  `reorgs/<E>.json` (written once) lists the names whose LIVE key in the
+  store holds an orphaned proof (`covered`, with each orphaned file's sha256 and size). A name a marker covers is never
+  uploaded under its live key again: the new chain's proof goes to `r<E>/<name>` (the newest such marker's E), and
+  `check` compares that key. Nothing is deleted. A restore takes, per name, the newest `r<E>/` copy over the live one,
+  reading the markers (the receipts say which chain they are of anyway: their journal commits the tip hash). The spine
+  likewise: a kept head whose name the store holds with other bytes, where a local `spine/orphaned/<E>/` has that head,
+  goes to `r<E>/`; local orphaned heads go up under `orphaned/<E>/`.
 """
 import argparse
 import gzip
@@ -61,6 +77,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
+MARKER_DEFER_MAX_S = float(os.environ.get("OFFSITE_MARKER_DEFER_MAX_S", "3600"))
 SPINE_READ_TRIES = 5
 SPINE_READ_PAUSE = 1.0
 
@@ -141,6 +158,95 @@ def list_local(root, min_age, now, prefix="proof_", suffix=""):
             continue
         local[e.name] = st.st_size
     return local, young
+
+
+def proof_hi(name):
+    """hi of proof_<lo>.bin or proof_<lo>-<hi>.bin, or None."""
+    m = re.fullmatch(r"proof_(\d+)(?:-(\d+))?\.bin", name)
+    return None if not m else int(m.group(2) or m.group(1))
+
+
+def read_tip(path, max_age, now=None):
+    """The node's height from the coordinator's tip file, or None when missing, unreadable or older than max_age."""
+    now = time.time() if now is None else now
+    try:
+        if now - os.stat(path).st_mtime > max_age:
+            return None
+        v = int(open(path).read().strip())
+        return v if v > 0 else None
+    except (OSError, ValueError):
+        return None
+
+
+def local_epochs(root):
+    """{epoch: directory} of root/orphaned/<epoch>/ (the coordinator's reorg rewinds, REORG.md §7)."""
+    d = os.path.join(root, "orphaned")
+    try:
+        return {int(n): os.path.join(d, n) for n in os.listdir(d) if n.isdigit() and os.path.isdir(os.path.join(d, n))}
+    except OSError:
+        return {}
+
+
+def read_markers(s3, bucket, prefix, remote):
+    """{epoch: marker} for every reorgs/<epoch>.json in the store."""
+    out = {}
+    for k in remote:
+        m = re.fullmatch(r"reorgs/(\d+)\.json", k)
+        if m:
+            out[int(m.group(1))] = json.loads(s3.get_object(Bucket=bucket, Key=prefix + k)["Body"].read())
+    return out
+
+
+def target_key(name, markers, below=None):
+    """Where `name` goes in the store: r<E>/<name> for the newest marker E (below `below`, when given) that covers it,
+    else the live name."""
+    es = [e for e, m in markers.items() if name in m.get("covered", {}) and (below is None or e < below)]
+    return f"r{max(es)}/{name}" if es else name
+
+
+def mark_reorgs(s3, bucket, prefix, root, remote, markers, threads, bwlimit_mbit, where="R2"):
+    """For each local epoch with no marker in the store yet: its orphaned files up under orphaned/<E>/, then the marker
+    reorgs/<E>.json naming the live keys an orphaned proof holds. Returns the number of failures."""
+    failed = 0
+    for e, d in sorted(local_epochs(root).items()):
+        if e in markers:
+            continue
+        if not os.path.exists(os.path.join(d, "DONE")):
+            # the coordinator writes DONE once the epoch's rewind is committed: before it, the directory may still be
+            # filling, and a write-once marker would be missing names (review round 3); the next run writes it. A
+            # deferral older than MARKER_DEFER_MAX_S (1 h) fails the run (round 4, L5): a rewind that never completed
+            age = time.time() - os.stat(d).st_mtime
+            log(f"reorg {e}: the coordinator's rewind is not complete yet (no DONE, {age:.0f} s): marker deferred")
+            if age > MARKER_DEFER_MAX_S:
+                log(f"reorg {e}: FAILED: no DONE for over {MARKER_DEFER_MAX_S:.0f} s: is the coordinator's rewind of epoch {e} stuck?")
+                failed += 1
+            continue
+        names = {n: os.path.getsize(os.path.join(d, n)) for n in os.listdir(d) if n.startswith("proof_")}
+        todo = [n for n in names if f"orphaned/{e}/{n}" not in remote]
+        if todo:
+            _, f, _ = upload_all(s3, bucket, prefix + f"orphaned/{e}/", d, todo, names, threads, bwlimit_mbit)
+            failed += f
+            if f:
+                continue                       # the marker waits for its record copies
+        covered = {}
+        for n in sorted(names):
+            k = target_key(n, markers, below=e)
+            if k in remote:
+                covered[n] = {"key": k, "size": names[n],
+                              "sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest()}
+        mk = {"epoch": e, "covered": covered, "orphaned": sorted(names), "at": time.time(),
+              "note": "these names' keys in the store hold proofs of a branch reorg <epoch> orphaned; the new chain's "
+                      "proof of each is under r<epoch>/ (docs/libzync/REORG.md §9)"}
+        try:
+            s3.put_object(Bucket=bucket, Key=prefix + f"reorgs/{e}.json", Body=io.BytesIO(json.dumps(mk).encode()),
+                          ContentType="application/json")
+            markers[e] = mk
+            log(f"reorg {e}: {len(names)} orphaned proof(s) copied under orphaned/{e}/, {len(covered)} live name(s) "
+                f"covered (their new proofs go under r{e}/) in {where}")
+        except Exception as ex:
+            log(f"reorg {e}: FAILED to write the marker: {ex!r}")
+            failed += 1
+    return failed
 
 
 def list_remote(s3, bucket, prefix):
@@ -260,8 +366,8 @@ def put_file(s3, bucket, key, fileobj, content_type, on_bytes=None):
                       Config=_transfer_config())
 
 
-def upload_all(s3, bucket, prefix, root, names, sizes, threads, bwlimit_mbit):
-    """Upload root/<name> to prefix+name for each name. (done, failed, bytes sent)."""
+def upload_all(s3, bucket, prefix, root, names, sizes, threads, bwlimit_mbit, keys=None):
+    """Upload root/<name> to prefix+name (or prefix+keys[name]) for each name. (done, failed, bytes sent)."""
     rl = RateLimit(bwlimit_mbit * 1e6 / 8)
     done = failed = sent = 0
     last = t1 = time.monotonic()
@@ -279,7 +385,7 @@ def upload_all(s3, bucket, prefix, root, names, sizes, threads, bwlimit_mbit):
 
     def up(name):
         with open(os.path.join(root, name), "rb") as f:
-            put_file(s3, bucket, prefix + name, f, "application/octet-stream", on_bytes=on_bytes)
+            put_file(s3, bucket, prefix + (keys or {}).get(name, name), f, "application/octet-stream", on_bytes=on_bytes)
         return sizes[name]
 
     total = sum(sizes[n] for n in names)
@@ -316,12 +422,64 @@ def upload_all(s3, bucket, prefix, root, names, sizes, threads, bwlimit_mbit):
     return done, failed, sent
 
 
-def spine_copy(s3, bucket, prefix, spine_dir, verify, where="R2"):
-    data, js, meta, why = read_spine(spine_dir)
+def read_kept_head(spine_dir, tip, depth):
+    """The newest kept head (spine/heads/spine_<hi>.{bin,json}) at least `depth` below `tip`, as read_spine returns it."""
+    hd = os.path.join(spine_dir, "heads")
+    try:
+        his = sorted((int(n[6:-5]) for n in os.listdir(hd) if n.startswith("spine_") and n.endswith(".json")
+                      and n[6:-5].isdigit()), reverse=True)
+    except OSError:
+        his = []
+    for hi in his:
+        if hi > tip - depth:
+            continue
+        try:
+            js = open(os.path.join(hd, f"spine_{hi}.json"), "rb").read()
+            data = open(os.path.join(hd, f"spine_{hi}.bin"), "rb").read()
+            meta = json.loads(js)
+            if hashlib.sha256(data).hexdigest() == meta.get("sha256") and len(data) == meta.get("bytes"):
+                return data, js, meta, None
+        except (OSError, ValueError):
+            continue
+    return None, None, None, f"no kept head at least {depth} blocks below the tip {tip}"
+
+
+def spine_copy(s3, bucket, prefix, spine_dir, verify, where="R2", depth=0, tip=None):
+    if depth:
+        if tip is None:
+            log("spine: NOT uploaded, the node's tip is unknown (no fresh tip file): the depth delay cannot be kept")
+            return 1
+        data, js, meta, why = read_kept_head(spine_dir, tip, depth)
+        if data is None:
+            log(f"spine: nothing to upload yet, {why}")
+            return 0
+    else:
+        data, js, meta, why = read_spine(spine_dir)
     if data is None:
         log(f"spine: NOT uploaded, {why}")
         return 1
     name = spine_name(meta)
+    remote0 = list_remote(s3, bucket, prefix)
+    # local orphaned heads (REORG §7) up under orphaned/<E>/, and a name the store holds with OTHER bytes that an
+    # orphaned head of epoch E explains: this head goes to r<E>/ (REORG §9)
+    od = os.path.join(spine_dir, "orphaned")
+    eps = sorted((int(n) for n in os.listdir(od) if n.isdigit()), reverse=True) if os.path.isdir(od) else []
+    for e in eps:
+        for n in sorted(os.listdir(os.path.join(od, str(e)))):
+            k = f"orphaned/{e}/{n}"
+            if k not in remote0:
+                try:
+                    with open(os.path.join(od, str(e), n), "rb") as f:
+                        s3.put_object(Bucket=bucket, Key=prefix + k, Body=io.BytesIO(f.read()),
+                                      ContentType="application/json" if n.endswith(".json") else "application/octet-stream")
+                except Exception as ex:
+                    log(f"spine: FAILED {prefix}{k}: {ex!r}")
+                    return 1
+    if remote0.get(name + ".bin", len(data)) != len(data) or remote0.get(name + ".json", len(js)) != len(js):
+        e = next((e for e in eps if os.path.exists(os.path.join(od, str(e), f"spine_{int(meta['hi'])}.bin"))), None)
+        if e is not None:
+            log(f"spine: {name} is held in {where} by a head reorg {e} orphaned: this one goes to r{e}/")
+            name = f"r{e}/{name}"
     if verify:
         ok, detail = verify_spine(verify, data)
         if not ok:
@@ -699,7 +857,7 @@ def checkpoints_copy(s3, bucket, prefix, root, min_age, threads, bwlimit_mbit, w
 
 def main(argv=None, client=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["copy", "check", "spine", "keys", "ledger", "checkpoints", "rescued"])
+    ap.add_argument("mode", choices=["copy", "check", "spine", "keys", "ledger", "checkpoints", "rescued", "restore-plan"])
     ap.add_argument("--keys", required=True)
     ap.add_argument("--bucket")
     ap.add_argument("--proofs", default=os.environ.get("COORD_PROOFS", "/var/lib/hazync/proofs"))
@@ -722,6 +880,11 @@ def main(argv=None, client=None):
     ap.add_argument("--threads", type=int, default=16)
     ap.add_argument("--bwlimit-mbit", type=float, default=64)
     ap.add_argument("--limit", type=int, default=0, help="upload at most N files (testing)")
+    ap.add_argument("--depth", type=int, default=0,
+                    help="proofs, spine: only what is at least N blocks below the node's tip (REORG.md §9; libzync: 6)")
+    ap.add_argument("--tip-file", default=os.environ.get("TIP_FILE", "/var/lib/hazync/node_tip"),
+                    help="the node's height, as the coordinator reads it (with --depth)")
+    ap.add_argument("--tip-max-age", type=float, default=3600, help="a tip file older than this is not trusted")
     a = ap.parse_args(argv)
 
     parts = open(a.keys).read().split()
@@ -734,8 +897,9 @@ def main(argv=None, client=None):
     s3 = client if client is not None else make_client(kid, secret, endpoint, a.threads)
     where = store_name(endpoint)
 
+    tip = read_tip(a.tip_file, a.tip_max_age) if a.depth else None
     if a.mode == "spine":
-        return spine_copy(s3, bucket, f"spine-{id_prefix(a)}/", a.spine, a.verify, where)
+        return spine_copy(s3, bucket, f"spine-{id_prefix(a)}/", a.spine, a.verify, where, a.depth, tip)
 
     if a.mode == "checkpoints":
         # ⛔ NOT namespaced by guest id, unlike proofs and the spine. A rung is bridge state — the UTXO
@@ -763,7 +927,39 @@ def main(argv=None, client=None):
     local, young = list_local(a.proofs, a.min_age, time.time())
     log(f"{bucket}/{prefix}: {len(remote)} remote, {len(local)} local older than {a.min_age:.0f} s "
         f"({young} younger skipped), listed in {time.monotonic() - t0:.1f} s")
-    missing, differ = plan(local, remote)
+    if a.depth:
+        # REORG §9: only proofs at least --depth below the node's tip; with no fresh tip, none (and the run fails)
+        if tip is None:
+            log(f"NOT copied: the node's tip is unknown ({a.tip_file} missing or older than {a.tip_max_age:.0f} s): "
+                f"the depth delay of {a.depth} cannot be kept")
+            return 1
+        shallow = [n for n in local if (proof_hi(n) or 0) > tip - a.depth]
+        for n in shallow:
+            del local[n]
+        log(f"depth delay: {len(shallow)} proof(s) above {tip - a.depth} (tip {tip} - {a.depth}) wait")
+    markers = read_markers(s3, bucket, prefix, remote)
+    if a.mode == "restore-plan":
+        # REORG.md §9 / §18: which key to restore each proof from: the newest r<E>/ copy a marker points at, else the
+        # live name (a live name a marker covers holds an orphaned proof). One line per name: "<name> <key>".
+        names = sorted({k.rsplit("/", 1)[-1] for k in remote if k.startswith("proof_") or re.fullmatch(r"r\d+/proof_[^/]+", k)})
+        for n in names:
+            k = target_key(n, markers)
+            if k in remote:
+                print(f"{n} {prefix}{k}")
+            elif k != n:
+                # a marker covers the live name (it holds an orphaned proof) and the new chain's copy is not up yet
+                # (round 4, L6): never restore the live key for it
+                print(f"{n} COVERED-NO-NEW-COPY (the live key holds an orphaned proof; the new chain's goes to {prefix}{k})")
+            else:
+                print(f"{n} {prefix}{n}")
+        log(f"restore-plan: {len(names)} proof(s), {len(markers)} reorg marker(s) read")
+        return 0
+    if a.mode == "copy":
+        if mark_reorgs(s3, bucket, prefix, a.proofs, remote, markers, a.threads, a.bwlimit_mbit, where):
+            return 1                           # never upload a live name a marker should have covered
+    keys = {n: target_key(n, markers) for n in local}
+    rkeyed = {n: remote[keys[n]] for n in local if keys[n] in remote}
+    missing, differ = plan(local, rkeyed)
 
     if a.mode == "check":
         extra = len([n for n in remote if n not in local])
@@ -778,7 +974,8 @@ def main(argv=None, client=None):
     todo = missing[: a.limit] if a.limit else missing
     total = sum(local[n] for n in todo)
     log(f"copy: {len(todo)} to upload ({total / 1e9:.2f} GB), {a.threads} threads, cap {a.bwlimit_mbit:g} Mbit/s")
-    _, failed, _ = upload_all(s3, bucket, prefix, a.proofs, todo, local, a.threads, a.bwlimit_mbit)
+    _, failed, _ = upload_all(s3, bucket, prefix, a.proofs, todo, local, a.threads, a.bwlimit_mbit,
+                              keys={n: keys[n] for n in todo})
     return 1 if failed else 0
 
 
