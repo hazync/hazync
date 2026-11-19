@@ -1,0 +1,106 @@
+Core: D in a 111 004be0242da1bd606f0beda81629572e837dc1ba6e38ffc3b7904db8ef6bec29 at 1; P in 102 142d3694e7c64f2467363426213fb995f97d7231b6dcbff41c593f91cc4a8e67 at 2; block 104's last tx at 16; the 64-byte tx in 105 at 1; the P2PK spend of 105 at 2
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/d_a.json (455878 bytes): tx at position 1 of block 111, 2 confirmation(s) as of tip 112 (2 fully validated through 112)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/p_a.json (456078 bytes): tx at position 2 of block 102, 11 confirmation(s) as of tip 112 (11 fully validated through 112)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/p_b.json (456590 bytes): tx at position 2 of block 102, 12 confirmation(s) as of tip 113 (12 fully validated through 113)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/t104.json (456139 bytes): tx at position 16 of block 104, 9 confirmation(s) as of tip 112 (9 fully validated through 112)
+zapp-deposit build: wrote /tmp/tmp.9smeu9Tnhx/t105.json (455852 bytes): tx at position 2 of block 105, 8 confirmation(s) as of tip 112 (8 fully validated through 112)
+bundles built: PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --amount 250000000 --script 0014ea075fee5e576adf920c4eea0300267dd4a4198f --min-depth 2 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a, output 0 = 250000000 sat to 0014ea075fee5e576adf920c4eea0300267dd4a4198f is in block 111 004be0242da1bd606f0beda81629572e837dc1ba6e38ffc3b7904db8ef6bec29, 2 confirmation(s) as of tip 112 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 (chainwork 00000000000000000000000000000000000000000000000000000000000000e2); FULLY VALIDATED from genesis through block 112 (2 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 1 --op-return 68617a796e632d6465706f7369742d41313131 --min-depth 2 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a, output 1 = 0 sat to 6a1368617a796e632d6465706f7369742d41313131 is in block 111 004be0242da1bd606f0beda81629572e837dc1ba6e38ffc3b7904db8ef6bec29, 2 confirmation(s) as of tip 112 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 (chainwork 00000000000000000000000000000000000000000000000000000000000000e2); FULLY VALIDATED from genesis through block 112 (2 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --op-return 68617a796e632d6465706f7369742d41313131 --min-depth 2 --bitcoin-cli python3 scripts/zapp-regtest/oracle_node.py a -regtest <tmp>/d_a.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a, output 1 = 0 sat to 6a1368617a796e632d6465706f7369742d41313131 is in block 111 004be0242da1bd606f0beda81629572e837dc1ba6e38ffc3b7904db8ef6bec29, 2 confirmation(s) as of tip 112 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 (chainwork 00000000000000000000000000000000000000000000000000000000000000e2); FULLY VALIDATED from genesis through block 112 (2 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] --network regtest --txid e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9 --vout 0 --amount 123456789 --script 0014ea075fee5e576adf920c4eea0300267dd4a4198f --min-depth 11 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/p_a.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9, output 0 = 123456789 sat to 0014ea075fee5e576adf920c4eea0300267dd4a4198f is in block 102 142d3694e7c64f2467363426213fb995f97d7231b6dcbff41c593f91cc4a8e67, 11 confirmation(s) as of tip 112 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 (chainwork 00000000000000000000000000000000000000000000000000000000000000e2); FULLY VALIDATED from genesis through block 112 (11 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] --network regtest --txid e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9 --vout 1 --op-return 68617a796e632d6465706f7369742d30313032 --min-depth 12 --expect 113:1b5db3dac39b651ab1186418ddefa6746d524e9601666ad9826ab969476bf3d7 <tmp>/p_b.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9, output 1 = 0 sat to 6a1368617a796e632d6465706f7369742d30313032 is in block 102 142d3694e7c64f2467363426213fb995f97d7231b6dcbff41c593f91cc4a8e67, 12 confirmation(s) as of tip 113 1b5db3dac39b651ab1186418ddefa6746d524e9601666ad9826ab969476bf3d7 (chainwork 00000000000000000000000000000000000000000000000000000000000000e4); FULLY VALIDATED from genesis through block 113 (12 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] --network regtest --txid e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9 --vout 0 --amount 123456789 --script 0014ea075fee5e576adf920c4eea0300267dd4a4198f --min-depth 12 --bitcoin-cli python3 scripts/zapp-regtest/oracle_node.py b -regtest <tmp>/p_b.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9, output 0 = 123456789 sat to 0014ea075fee5e576adf920c4eea0300267dd4a4198f is in block 102 142d3694e7c64f2467363426213fb995f97d7231b6dcbff41c593f91cc4a8e67, 12 confirmation(s) as of tip 113 1b5db3dac39b651ab1186418ddefa6746d524e9601666ad9826ab969476bf3d7 (chainwork 00000000000000000000000000000000000000000000000000000000000000e4); FULLY VALIDATED from genesis through block 113 (12 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 2185368796a46ab780be117ea7c922b810045466a6a9faf6b3b6c02949bb46a4 --min-depth 9 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/t104.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction 2185368796a46ab780be117ea7c922b810045466a6a9faf6b3b6c02949bb46a4 is in block 104 6abf594e169df9042a5484b6703707acfda03eee3ab2d63fe8ebe22767242fb8, 9 confirmation(s) as of tip 112 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 (chainwork 00000000000000000000000000000000000000000000000000000000000000e2); FULLY VALIDATED from genesis through block 112 (9 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] --network regtest --txid aa970d975d882c16a9bf7bd8d552f345242cfad2bf54b899370eb3083cc4e125 --min-depth 8 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/t105.json (expect exit 0)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction aa970d975d882c16a9bf7bd8d552f345242cfad2bf54b899370eb3083cc4e125 is in block 105 7063cb3d44128fcb3fd617fec3226b6b9eaccb65861207d2f7f25882b359b294, 8 confirmation(s) as of tip 112 67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 (chainwork 00000000000000000000000000000000000000000000000000000000000000e2); FULLY VALIDATED from genesis through block 112 (8 of those confirmations)
+exit=0 PASS
+== zapp-deposit[regtest-test] build --network regtest --core scripts/zapp-regtest/receipts/a/block_112.rcpt --history scripts/zapp-regtest/receipts/a/history.bin --txid 5c692392a29e41b7cfcea1d705dca6aff47ecbbf7fe1ea9c559a792a88ac18fc --height 105 --bitcoin-cli python3 scripts/zapp-regtest/oracle_node.py a -regtest -o <tmp>/t64.json (expect exit 1)
+  [FAIL] the transaction as given is not exactly 64 bytes (64 bytes)
+zapp-deposit: the bundle does not verify: not written
+exit=1 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 3 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 1)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+  [FAIL] depth: 2 confirmation(s) as of tip 112 >= 3 asked (2 fully validated, 0 proof of work only)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --amount 250000001 --min-depth 2 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 1)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+  [FAIL] output 0 holds 250000001 sat (it holds 250000000)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit[regtest-test] --network regtest --txid e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9 --min-depth 1 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 1)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+  [FAIL] the raw transaction is 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a, the one asked about e9e18cfb45ef2e27ed8a64f04083435ade02eda887d30c1687587626e0c545e9
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 2 --expect 113:1b5db3dac39b651ab1186418ddefa6746d524e9601666ad9826ab969476bf3d7 <tmp>/d_a.json (expect exit 1)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+  [FAIL] chain identity: the tip is block 113 1b5db3dac39b651ab1186418ddefa6746d524e9601666ad9826ab969476bf3d7 (from a source the caller trusts)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 2 --expect 112:4395baa44c0364ae2f6f415e439b4ce82a5d9e77cb9ad80bdf51eebb2406ce16 <tmp>/d_a.json (expect exit 1)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+  [FAIL] chain identity: the tip is block 112 4395baa44c0364ae2f6f415e439b4ce82a5d9e77cb9ad80bdf51eebb2406ce16 (from a source the caller trusts)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 2 --bitcoin-cli python3 scripts/zapp-regtest/oracle_node.py b -regtest <tmp>/d_a.json (expect exit 1)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+  [FAIL] chain identity: the tip is block 112 4395baa44c0364ae2f6f415e439b4ce82a5d9e77cb9ad80bdf51eebb2406ce16 (from a source the caller trusts)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit[regtest-test] build --network regtest --core scripts/zapp-regtest/receipts/b/block_113.rcpt --history scripts/zapp-regtest/receipts/b/history.bin --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --height 111 --bitcoin-cli python3 scripts/zapp-regtest/oracle_node.py a -regtest -o <tmp>/x.json (expect exit 1)
+zapp-deposit: the block is not the proven chain's at that height (history hash differs)
+exit=1 PASS
+== zapp-deposit[regtest-test] build --network regtest --core scripts/zapp-regtest/receipts/b/block_113.rcpt --history scripts/zapp-regtest/receipts/b/history.bin --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --height 111 --bitcoin-cli python3 scripts/zapp-regtest/oracle_node.py b -regtest -o <tmp>/x.json (expect exit 1)
+zapp-deposit: the transaction is not in that block
+exit=1 PASS
+== zapp-deposit[regtest-test] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 2 <tmp>/d_a.json (expect exit 2)
+  [ ok ] core: TEST IMAGE (regtest-test): never a release
+SWIFTSYNC_VERIFY_DEMO: deposit NOT accepted: valid checks, but the tip was not compared with a source you trust; the statement is withheld (--allow-demo shows it)
+exit=2 PASS
+== zapp-deposit[shipped] --network regtest --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 2 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: --image: unknown network "regtest"
+exit=1 PASS
+== zapp-deposit[shipped] --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 2 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_a.json (expect exit 1)
+  [FAIL] the bundle is for "regtest", the network asked about "mainnet"
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit[shipped] --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --vout 0 --min-depth 2 --expect 112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574 <tmp>/d_m.json (expect exit 1)
+  [FAIL] core: receipt verifies against image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c (mainnet): claim digest does not match the expected digest e0e5576e5b3b0e05374b41c9a235ba8fe3833c5f8fc70ae453ca9ed9cd8c7652; expected 7211efbee8ad61209de6c126489f78da3bfab0d037702cd0a464ca0a31ff809c
+  [FAIL] core: journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [FAIL] core: profile 0x79 == 0x71 (libzync, scripts checked, regtest, coin log, counting trie, live-coin hash)
+  [FAIL] core: anchor_id is genesis
+  [FAIL] the core chain proof verifies (see the core: checks)
+SWIFTSYNC_VERIFY_FAIL: deposit: 5 check(s) failed
+exit=1 PASS
+== zapp-deposit[shipped] build --network regtest --core scripts/zapp-regtest/receipts/a/block_112.rcpt --history scripts/zapp-regtest/receipts/a/history.bin --txid 29d336e4c7f7d37e2cc1ee38ed7de9296e5ceb9334e72d6ca8db044d7f1cb92a --height 111 --bitcoin-cli python3 scripts/zapp-regtest/oracle_node.py a -regtest -o <tmp>/x.json (expect exit 1)
+zapp-deposit: unknown network "regtest"
+exit=1 PASS
+  wasm, regtest bundle: fail accepted=false (want fail)
+  wasm, regtest bundle as mainnet: fail accepted=false (want fail)
+  wasm, relabelled mainnet: fail accepted=false (want fail)
+the shipped WASM module refuses the regtest bundles: PASS
+zapp-deposit test-regtest.sh: 24/24 as expected

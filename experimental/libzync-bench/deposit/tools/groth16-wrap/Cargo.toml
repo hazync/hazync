@@ -1,0 +1,11 @@
+[package]
+name = "groth16-wrap"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Measurement tool: wrap a succinct receipt in RISC Zero's Groth16 (r0vm + its Docker prover), time it, verify it"
+
+
+[dependencies]
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["client"] }
+bincode = "1"

@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "zAPP glue and tests are ES modules (Node before 20.19 does not detect them without this)"
+}
