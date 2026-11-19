@@ -1,6 +1,8 @@
 [Unit]
 Description=Hazync libzync board: keep the zyncAPP fact service on the newest genesis-anchored proof (Coin check)
 After=network.target bitcoind.service hazync-lz-coordinator.service
+# a run that fails (a reorg it cannot follow, a node on another branch, prep stuck) pages (REORG.md §18, round 3 M1)
+OnFailure=hazync-alert@%n.service
 
 [Service]
 Type=oneshot
@@ -10,6 +12,10 @@ Environment=ZAPP_SERVE_DIR=/var/lib/hazync-lz/zapp
 Environment=COORD_SPINE=/var/lib/hazync-lz/spine
 Environment=ZAPP_FETCH=/srv/bulk/libzync-board/bin/fetch_block_rpc.py
 Environment=HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie
+# a block that does not extend the follower's state is a reorg it missed: fail in 2 min, not after prep's default hour
+Environment=HAZYNC_PREP_WAIT_S=120
 ExecStart=/usr/local/sbin/hazync-lz-zapp-follow
+# a rebuild from genesis is the long case (REORG.md §18); a run past this fails the unit instead of hanging
+TimeoutStartSec=4h
 Nice=10
 IOSchedulingClass=idle

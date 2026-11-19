@@ -98,13 +98,17 @@ const raw = (bytes) => {
   return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
 };
 const enc = new TextEncoder();
-const parts = [a, b, enc.encode(process.env.HEADERS_IMAGE || ''), enc.encode(`200:${H}`), enc.encode('')];
-const fr = new Uint8Array(12 + parts.reduce((n, p) => n + 4 + p.length, 0));
-const dv = new DataView(fr.buffer);
-dv.setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), true);
-dv.setUint32(8, 2, true);
-let o = 12;
-for (const p of parts) { dv.setUint32(o, p.length, true); fr.set(p, o + 4); o += 4 + p.length; }
+const frame = (include) => {
+  const parts = [a, b, enc.encode(process.env.HEADERS_IMAGE || ''), enc.encode(`200:${H}`), enc.encode(include)];
+  const fr = new Uint8Array(12 + parts.reduce((n, p) => n + 4 + p.length, 0));
+  const dv = new DataView(fr.buffer);
+  dv.setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), true);
+  dv.setUint32(8, 2, true);
+  let o = 12;
+  for (const p of parts) { dv.setUint32(o, p.length, true); fr.set(p, o + 4); o += 4 + p.length; }
+  return fr;
+};
+const fr = frame('');
 const trailing = new Uint8Array(fr.length + 1); trailing.set(fr);
 for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo', ''],
                                         ['frame: a byte past the end', trailing, 'fail', 'trailing'],
@@ -113,6 +117,28 @@ for (const [name, bytes, want, why] of [['frame: the glue\'s bytes', fr, 'demo',
   const ok = r.verdict === want && (!why || r.checks.some((c) => !c.ok && c.what.includes(why)));
   if (!ok) fails++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${r.verdict}`);
+}
+// Review 11-18: the include JSON takes only height, hash, path, txid, tx (and tx only the /tx answer's documented keys),
+// each once. Before, every other key was ignored: txid and tx both spelt wrong verified as a block-only inclusion
+// (included_demo true), and a key given twice kept its last value.
+{
+  const inc170 = (rest) => `{"height": 170, "hash": "${H170}", "path": ${JSON.stringify(P170)}${rest}}`;
+  const txj = JSON.stringify(TX);
+  for (const [name, j, want, why] of [
+    ['include: the documented keys', inc170(`, "txid": "${T170}", "tx": ${txj}`), 'demo', ''],
+    ['include: txid and tx both misspelt', inc170(`, "tixd": "${T170}", "txx": ${txj}`), 'fail', 'unknown field `tixd`'],
+    ['include: an extra key', inc170(`, "txid": "${T170}", "tx": ${txj}, "extra": 1`), 'fail', 'unknown field `extra`'],
+    ['include: a key twice', inc170(`, "height": 170`), 'fail', 'duplicate field `height`'],
+    ['include: tx with an unknown key', inc170(`, "txid": "${T170}", "tx": ${JSON.stringify({ ...TX, posn: 1 })}`), 'fail', 'unknown field `posn`'],
+    ['include: tx with a key twice', inc170(`, "txid": "${T170}", "tx": ${txj.replace('{', '{"pos": 0, ')}`), 'fail', 'duplicate field `pos`'],
+    ['include: txid and tx null', inc170(', "txid": null, "tx": null'), 'fail', 'txid is null'],
+    ['include: an array', `[170, "${H170}", ${JSON.stringify(P170)}]`, 'fail', 'include is not a JSON object'],
+  ]) {
+    const r = raw(frame(j));
+    const ok = r.verdict === want && (!why || r.checks.some((c) => !c.ok && c.what.includes(why)));
+    if (!ok) fails++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${r.verdict}${ok ? '' : ' ' + JSON.stringify(r.checks).slice(0, 160)}`);
+  }
 }
 console.log(fails ? `WASM_HEADERS: ${fails} FAILED` : 'WASM_HEADERS_OK');
 process.exit(fails ? 1 : 0);

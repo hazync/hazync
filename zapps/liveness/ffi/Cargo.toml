@@ -1,0 +1,25 @@
+[package]
+name = "zapp-liveness-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI for the coin-liveness zyncAPP (zapps/liveness): check liveness proofs from C or C++"
+license = "MIT"
+publish = false
+
+[lib]
+name = "zapp_liveness_ffi"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+zapp-liveness = { path = ".." }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

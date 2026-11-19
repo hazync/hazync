@@ -51,11 +51,10 @@ pub(crate) fn hex_id(id: &[u32; 8]) -> String { hex(&id.iter().flat_map(|w| w.to
 /// proving box, not a laptop. Verify the result with `swiftsync-verify`, which accepts either receipt kind.
 pub(crate) fn libzync_snark_wrap_cmd(bin: &str, out: &str) {
     use std::time::Instant;
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(bin).unwrap_or_else(|e| panic!("{bin}: {e}")))
-        .unwrap_or_else(|e| panic!("{bin}: not a receipt: {e}"));
+    let r = crate::verify::read_receipt(bin).unwrap_or_else(|e| panic!("{e}"));
     assert!(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "refusing to wrap a dev-mode FakeReceipt");
     r.verify(METHOD_ID).expect("the receipt does not verify against this image");
-    let cs: ChainState = r.journal.decode().expect("the journal is not a ChainState");
+    let cs: ChainState = crate::verify::decode_journal(&r.journal).expect("the journal is not a ChainState");
     assert!(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "not a ChainState committed by this image");
     let before = bincode::serialize(&r).map(|v| v.len()).unwrap_or(0);
     println!("=== libzync Groth16 wrap: height {} (STARK -> Groth16), input {before} bytes ===", cs.height);
@@ -159,8 +158,11 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         Some(3) => {} // a FakeReceipt: decoded, then refused below with its own message
         k => { println!("  [FAIL] the receipt file is a single succinct or Groth16 proof (kind tag {k:?})"); println!("LIBZYNC_VERIFY_FAIL"); std::process::exit(1); }
     }
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&raw)
-        .unwrap_or_else(|e| panic!("{receipt:?}: not a receipt: {e}"));
+    let r = match crate::verify::decode_receipt(&raw) { Ok(r) => r, Err(e) => {
+        println!("  [FAIL] the receipt file decodes as one receipt: {}", e.escape_debug());
+        println!("LIBZYNC_VERIFY_FAIL: {}", e.escape_debug());
+        std::process::exit(1)
+    } };
     let mut fails = 0;
     let mut check = |ok: bool, what: &str| {
         println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
@@ -176,7 +178,7 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
     check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {}, {})", hex_id(&METHOD_ID),
         "libzync", methods::NETWORK,
         if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
-    let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => {
+    let cs: ChainState = match crate::verify::decode_journal(&r.journal) { Ok(c) => c, Err(e) => {
         println!("  [FAIL] journal is not a ChainState: {}", format!("{e}").escape_debug());
         println!("LIBZYNC_VERIFY_FAIL: the journal does not decode as a ChainState");
         std::process::exit(1)
@@ -844,13 +846,13 @@ pub(crate) fn journal_sha(r: &risc0_zkvm::Receipt) -> String {
 pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
     use risc0_zkvm::Receipt;
     let rd = |p: &str| -> Receipt {
-        let r: Receipt = bincode::deserialize(&std::fs::read(p).unwrap_or_else(|e| panic!("{p}: {e}")))
-            .unwrap_or_else(|e| panic!("{p}: {e}"));
+        let r: Receipt = crate::verify::read_receipt(p).unwrap_or_else(|e| panic!("{e}"));
         r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{p} does not verify against this image: {e}"));
         r
     };
     let (l, r) = (rd(left), rd(right));
-    let (ls, rs): (ChainState, ChainState) = (l.journal.decode().expect("left ChainState"), r.journal.decode().expect("right ChainState"));
+    let (ls, rs): (ChainState, ChainState) = (crate::verify::decode_journal(&l.journal).expect("left ChainState"),
+                                             crate::verify::decode_journal(&r.journal).expect("right ChainState"));
     let mut b = ExecutorEnv::builder();
     b.segment_limit_po2(seg_po2());
     b.add_assumption(l.clone());
@@ -900,10 +902,10 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     // anchor argument is unused (pass the word `handover`): the chain state comes from the verified receipt.
     let handover: Option<(Receipt, ChainState)> = std::env::var("HAZYNC_HANDOVER_RECEIPT").ok().map(|p| {
         let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
-        let r: Receipt = bincode::deserialize(&std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
+        let r: Receipt = crate::verify::read_receipt(&p).unwrap_or_else(|e| panic!("{e}"));
         // the same RISC Zero: Receipt::verify; an older one: its vendored circuit (src/xver), as the guest will
         crate::verify_pred_receipt(&r, last).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
-        let st: ChainState = r.journal.decode().expect("ChainState");
+        let st: ChainState = crate::verify::decode_journal(&r.journal).expect("ChainState");
         let tamper = std::env::var("HAZYNC_TEST_HANDOVER").ok();
         if tamper.is_some() { assert!(dev_mode_env(), "HAZYNC_TEST_HANDOVER is a dev-mode test hook"); }
         else {
@@ -1045,9 +1047,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         if let Some(k) = (lo..=hi).rev().find(done) {
             assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
             let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
-            let r: Receipt = bincode::deserialize(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
+            let r: Receipt = crate::verify::decode_receipt(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
             r.verify(METHOD_ID).unwrap_or_else(|e| panic!("block_{k}.rcpt does not verify against this image: {e}"));
-            let st: ChainState = r.journal.decode().expect("ChainState");
+            let st: ChainState = crate::verify::decode_journal(&r.journal).expect("ChainState");
             assert!(st.height == k && st.kind == KIND_CHAIN && st.self_id == METHOD_ID, "block_{k}.rcpt is not this chain's state at {k}");
             // The same chain as this run's anchor: an output directory reused with another anchor must not be resumed.
             // From an anchor, the chain's anchor_id is the anchor's digest; after a handover, the predecessor's anchor_id.

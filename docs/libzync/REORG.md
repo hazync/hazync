@@ -1,7 +1,7 @@
 # Reorg handling for the libzync board (design)
 
-> **Design, 16.11.2026; P1 and P2 built the same day** (branch `feat/reorg-p1-p2`, §15). The rest (P3 to P6) is not
-> built. I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
+> **Design, 16.11.2026; P1 and P2 built the same day** (branch `feat/reorg-p1-p2`, §15), P3 too (§16), P4 and P6 on
+> 18.11.2026 (§17); P5 (followers) is not built. I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
 > **MEASURED** numbers come from that survey or the files named next to them. **ESTIMATE** numbers are labelled. The
 > user's decisions on the open questions are in §14; what building P1 and P2 corrected in this page is in §15.
 
@@ -102,7 +102,7 @@ reorg at or below prep's tip, however deep.
 | stage | how it learns | what it does |
 |---|---|---|
 | **fetcher** (`fetch_block_rpc.py follow`, the only stage with RPC) | each poll (every 5 s): `getbestblockhash`. When that changes, it walks back by `previousblockhash` from the node's tip until it meets a height ≤ prep's tip whose hash equals prep's `state_<h>.json` `tip_hash` (the **fork F**). It also checks each waiting `block_<h>.json` against `getblockhash(h)` | fork above prep's tip: it deletes and refetches the waiting files above F (nothing else changes). Fork below prep's tip: it writes `blocks/REORG` (F, old and new hashes F+1..) and stops fetching. No agreement within J: it writes `blocks/REORG_TOO_DEEP` (§11) |
-| **prep** (follow mode) | between blocks, it checks for `blocks/REORG` (it already polls that directory every 200 ms). It also replaces the `prep.rs:197` assert with a check: a block whose `prev` is not its tip means "reorg suspected", so it waits for the fetcher's verdict instead of panicking | runs the protocol in §5. Exits with code **4** when the fork is deeper than W |
+| **prep** (follow mode) | (since round 3) before each block, a `state_<h>.json` an earlier run left for ANOTHER block is a fork at h-1: prep writes `blocks/REORG` itself (`source: prep`, §17) and stops, as below. Between blocks, it checks for `blocks/REORG` (it already polls that directory every 200 ms). It also replaces the `prep.rs:197` assert with a check: a block whose `prev` is not its tip means "reorg suspected", so it waits for the fetcher's verdict instead of panicking | runs the protocol in §5. Exits with code **4** when the fork is deeper than W |
 | **coordinator** | a thread polls prep's `reorg/records/` every 2 s, and checks at start-up before binding its port. Records carry an increasing **epoch** | rewinds its ledger (§7), writes `<epoch>.ack` |
 | **in-flight submissions** | at **commit**, under `_lock`, it checks that `in_bhash` = `tip_hash` of `state_<lo-1>.json` and `out_bhash` = `tip_hash` of `state_<hi>.json` (the files as they are now) | refuses with **409 `reorged`**. This closes the race where the STARK check (up to 120 s, outside the lock) read the old files |
 | **spine submissions** | the same check at commit in `submit_spine` | 409 |
@@ -192,11 +192,26 @@ mid-rewind goes through `out/REWIND` (§5).
 | claims in flight (`ranges` claimed, `_fold_claims`) | voided. The worker's next beat gets the existing 409 "not your claim" | — |
 | `submissions` | untouched (append-only audit); one note row per epoch | yes |
 | `contributors.blocks` | **proposal:** keep the credit. The contributor proved a real block we asked for; the network orphaned it. Shown as "n orphaned" next to the count. The board's `proven` count excludes orphaned blocks. **Decided: kept** (§14) | — |
-| sponsorships marked `proven` over heights > F | back to `proving`, and their hold resumes | — |
+| sponsorships marked `proven` over heights > F | back to `proving`, and their hold resumes | — (⚠ below) |
 | `proofs/proof_<rid>.bin` | moved to `proofs/orphaned/E/` (it **must** move first, or the new chain's proof with the same id overwrites it) | yes, served at `/api/proof/orphaned/E/<rid>` |
 | spine | every accepted head is kept as `spine/heads/spine_<hi>.{bin,json}` for hi > tip − J (229 KB each: **66 MB for W, 0.46 GB for J**). If `spine.hi` > F, the newest kept head with hi ≤ F becomes `spine.bin`/`spine.json`, and the orphaned heads move to `spine/orphaned/E/` | yes |
 | caches | `_frontier_invalidate()`, every `_sf` entry, `_servable_high(force=True)` | — |
 | `meta` | `reorg_epoch = E` | — |
+
+⚠ **A reopened sponsorship holds the new branch's blocks for the sponsor bot ALONE** (review of P4, L8). Normal
+workers are kept off them (`SPONSOR_HOLD_SQL`), so at the tip the frontier waits for the bot's next timer run and a pod
+rental; the only signal is the hold alert after `SPONSOR_HOLD_ALERT` (6 h: `/api/state` `attention`, the board
+progress check). If the bot is down (its breaker latched, `hazync-check-breakers` reports it): start it again
+(`systemctl start hazync-sponsor-bot.service` after the cause is fixed); if it cannot run soon, release the hold by
+hand, so any worker proves the blocks, as the coordinator's user:
+
+```bash
+sudo -u hazync python3 -c "import sqlite3,time; c=sqlite3.connect('/var/lib/hazync-lz/coordinator.db'); \
+  c.execute(\"UPDATE sponsorships SET status='proven', proven_at=?, note=COALESCE(note,'')||' [hold released by hand after reorg]' \
+  WHERE id=? AND status='proving'\", (time.time(), <id>)); c.commit()"
+```
+
+(`proven` is what the sponsorship becomes anyway once its blocks are proven; it shows as proven a little early.)
 
 **Public API and website.** `/api/meta` gains
 `reorg: {epoch, fork, depth, orphaned: [[h, hash]…], state: "rewinding"|"done", at}`. The block page for an orphaned
@@ -267,21 +282,35 @@ person acts.
    and compare against a public explorer. If our node is the odd one out, stop here: fix the node, then start the
    units again; nothing needs undoing.
 2. Find F: `fetch_block_rpc.py fork-point --deep <out>` walks back without the W limit and prints F and whether
-   F ≥ tip − J (the undo records still reach it).
+   F ≥ tip − J (the undo records still reach it), and any marker already in the block directory. A marker with
+   `source: prep` is prep's own: its state files above its save point were another chain's (a reorg inside its replay
+   window, §17); its `fork` is right, and step 3 applies.
 3. **F within J** (the expected case), as built in P3: with both units stopped and the fetcher's `blocks/REORG` naming
    F (edit `fork` if `fork-point --deep` found it),
 
    ```bash
    cd "$LZ_ROOT" && HAZYNC_COINLOG_DIR=$LZ_ROOT/cl HAZYNC_TRIE_DIR=$LZ_ROOT/trie HAZYNC_PREP_LEAF_BUNDLES=$LZ_ROOT/leaves \
-     HAZYNC_PREP_UNDO_KEEP=<J of the run> bin/host_lz libzync-prep-rewind $LZ_ROOT/out $LZ_ROOT/blocks --allow-deep
+     HAZYNC_PREP_UNDO_KEEP=<J of the run> HAZYNC_REORG_ACK_DIR=<the unit's, e.g. /var/lib/hazync-lz/reorg-acks> \
+     bin/host_lz libzync-prep-rewind $LZ_ROOT/out $LZ_ROOT/blocks --allow-deep
    ```
 
    It refuses (exit 4, nothing changed) without the three directories (`--no-leaf-bundles` for a run that writes no
    bundles), or when the records do not reach F. It undoes the stores to F, writes a save point there, moves everything
    above F to `out/orphaned/<epoch>/` (the bundles to `leaves/orphaned/<epoch>/`) and removes the marker. Then start
-   the units. The coordinator's ack (§5) comes with P4.
+   the units. Since P4 (§17) it also writes the record and waits for the board coordinator's ack (the coordinator must
+   be running); a run no coordinator follows takes `HAZYNC_REORG_ACK=0`.
 4. **F below J:** the stores cannot be undone. Rewind the coordinator to F with `server.py --reorg-to F` (works at any
-   depth: it only touches rows and files). Then restart prep from genesis under a fresh `LZ_ROOT`, moving the old one
+   depth: it only touches rows and files). With the coordinator stopped, as its user and with its unit's environment
+   (it refuses without `COORD_DB`, as root, or while the port is in use; without `--yes` it only says what would move):
+
+   ```bash
+   systemctl stop hazync-lz-coordinator
+   sudo -u hazync env $(systemctl show -p Environment --value hazync-lz-coordinator) \
+     python3 /opt/hazync-lz/coordinator/server.py --reorg-to F          # then again with --yes
+   systemctl start hazync-lz-coordinator
+   ```
+
+   (`systemctl show -p Environment` joins every drop-in's settings; none of the unit's values contain spaces.) Then restart prep from genesis under a fresh `LZ_ROOT`, moving the old one
    aside, as the v0.26 reset does. ESTIMATE about 8 days to 611,000 (MEASURED on the old run, `RESET_v026.md`), then
    the remainder.
 5. **F below the checkpoint (970,000):** no proof exists for that chain under this image. A new image with another
@@ -309,7 +338,7 @@ asking.
 | **P1 undo records (write only)** | `reorg/u_<h>.bin` per block, cut to J; BIP30 priors kept; nothing reads them yet | ~200 lines Rust + unit tests | **first, and before any run comes within J of the tip**: records exist only from when the host runs. Writes only, so low risk |
 | **P2 detect + stop** | fetcher `follow` with the hash check; prep turns the `prep.rs:197` assert into exit 4; the coordinator's hash check at commit; unit `RestartPreventExitStatus` + `alert.conf` | ~180 lines | with P1. With P1 and P2 alone, any reorg **stops safely** and the manual recovery is P3's command, not genesis |
 | **P3 prep rewind** | `undo_recorded`, `libzync-prep-rewind`, `out/REWIND`, follow mode, crash hooks | ~400 lines Rust + ~150 test script | after P1 |
-| **P4 coordinator rewind** | records and ack, orphan tables, spine heads, file moves, `/api/meta.reorg`, `--reorg-to` | ~350 lines Python + ~300 test | with P3; automatic handling starts when both are in |
+| **P4 coordinator rewind** | records and ack, orphan tables, spine heads, file moves, `/api/meta.reorg`, `--reorg-to` | ~350 lines Python + ~300 test | with P3; automatic handling at the tip needs P5 too (§17, review M4) |
 | **P5 followers** | offsite depth delay + markers; zAPP follower rewind; website banner (web repo) | ~200 lines | after P4 |
 | **P6 regtest harness** | §12 end to end | ~300 lines | alongside P3/P4; it gates turning on automatic handling |
 
@@ -485,3 +514,276 @@ the new generation. Prep started with an `auto` marker exits 5 (for the runner) 
 
 **Merging P3.** `feat/reorg-p3` holds one commit that does not build (`fbb6e8f6`, a merge committed with conflict
 markers, repaired by the next commit `69a5d934`): squash-merge the branch, and say so in the PR text.
+
+## 17. Built: P4, the coordinator's rewind, and P6, the end-to-end harness (18.11.2026)
+
+Branch `feat/reorg-p4` (on top of `feat/reorg-p3`). Host only on the prep side: no guest input changed.
+
+**Prep's side** (`prover/host/src/rewind.rs`, `record_and_ack`). Once everything above F has moved (§16 step 5), the
+rewind writes `out/reorg/records/<E>.json` once, durably: `epoch`, `fork`, `fork_hash`, `depth`, `orphaned` and `new`
+as `[height, hash]` (display hex), `at`. Then it waits for `<E>.ack` carrying the record's sha256, and only then moves
+prep's position to F and removes `out/REWIND` and the fetcher's marker, so nothing of the new branch is published while
+the board still holds the orphaned rows (§5 step 6). The ack is read from `HAZYNC_REORG_ACK_DIR` (default: the records'
+directory). On `hazync-proof` prep runs as root and the coordinator as `hazync`, so the coordinator cannot write prep's
+`out/`: both units now name `/var/lib/hazync-lz/reorg-acks` (`libzync-board-prep.service` `HAZYNC_REORG_ACK_DIR`,
+`hazync-lz-coordinator.service` `HAZYNC_LZ_REORG_ACK_DIR`). No ack within `HAZYNC_REORG_ACK_TIMEOUT_S` (600, the
+`REORG_ACK_TIMEOUT` of §5): exit 4, the unit fails and alerts, the intent stays and a rerun waits again (§5 said "alerts
+and keeps waiting"; a process that waits never fails its unit, so `OnFailure=` would never fire). `HAZYNC_REORG_ACK=0`:
+no coordinator follows the run, nothing is waited for (the record is still written). Crash hook `rewind-after-record`.
+
+**The coordinator** (`coordinator/server.py`, the "reorgs" section). A thread polls the records (`$HAZYNC_LZ_STATE_DIR/
+reorg/records`, or `HAZYNC_LZ_REORG_DIR`) every `REORG_POLL_S` (2 s), and once at start-up **before the port is bound**
+(a failure there stops the start). A record is applied (`reorg_rewind`) in one transaction under `_lock`:
+
+| what | done |
+|---|---|
+| `vranges`, `ranges` with hi > F | copied to `vranges_orphaned` / `ranges_orphaned` (same columns + `epoch`), then deleted. Claims above F are voided with them (a beat gets the existing 409 "not your claim"); in-memory fold claims above F dropped |
+| proofs | `proofs/proof_<rid>.bin` of every moved row to `proofs/orphaned/<E>/`, BEFORE the commit; served at `/api/proof/orphaned/<E>/<rid>` |
+| spine | every accepted head is kept as `spine/heads/spine_<hi>.{bin,json}` (`SPINE_HEADS_KEEP` = 2,016 blocks below the head; the current one is seeded at start-up). A head above F falls back to the newest kept head at or below F; the heads above F (and the current one) move to `spine/orphaned/<E>/`. No kept head at or below F: no spine until `hazync spine` rebuilds one. The head's json now carries `out_bhash` (ZAPP_FOLLOWER §7) |
+| sponsorships | `proven` with hi > F back to `proving` (their hold resumes) |
+| audit | `submissions` untouched but for one row `reorg:<E>:spine-<hi>`; the spine walks (`spine_segments`, `spine_absorption`) restart from that head |
+| `contributors` | credit kept (§14 decision 3): `proved` still counts the orphaned blocks, `orphaned` says how many (per contributor, `/api/provers`); the board's `proven` excludes them |
+| caches, meta | every single-flight entry, `_servable_high(force=True)`; `reorgs` table row, `meta.reorg_epoch` |
+
+Then `<E>.ack` = `{epoch, record_sha256, coord_epoch, fork, at}`. A record is known by its sha256: applied once,
+acked again if its ack goes missing. **The coordinator's epoch** is `max(last + 1, prep's epoch)`: equal to prep's
+while they move in step, unique when they do not (a manual `--reorg-to`, or prep restarted under a fresh `LZ_ROOT`).
+**A record whose orphaned state F+1 is still in place is not applied** (prep has not moved its files; §5 step 3), so
+the ledger never drops rows while the files that would re-verify them are still served.
+
+**The check at commit (§4)** in `submit` and `submit_spine`, under `_lock`, after the verification that ran outside
+it: 409 `reorged` (`{"reorged": true}`) when a rewind with its fork below hi was applied during the verification, or
+when the receipt's `in_bhash` / `out_bhash` are not prep's `state_<lo-1>` / `state_<hi>` block NOW (a missing state
+refuses: fail closed). Only with a state directory and a real verifier (the pure mock has no boundary hashes). **A
+failed verification that a reorg explains** (verify-any's anchor / end / no-state messages, on a range above a fork
+applied within `REORG_FAILURE_GRACE`, default `CLAIM_MAX` = 24 h) is answered 409 `reorged` and **not counted**
+against the block: otherwise the workers finishing their orphaned claims would park the new chain's block after
+`MAX_ATTEMPTS`.
+
+**API.** `/api/meta.reorg` = `{epoch, fork, depth, orphaned: {count, first, last}, state: "rewinding"|"done", at,
+done_at, source, detail: "/api/reorg/<E>"}` (null: never; cached 5 s, the list capped: /api/meta is every worker's
+pre-flight), and `/api/meta.reorg_alert` (below). `/api/reorg/<E>` has the whole record: every orphaned block, the
+node's new ones, what moved; `state` turns `done` once prep's state F+1 is a block of the new branch. `/api/block/<n>.orphaned`
+lists the orphaned proofs of that height (epoch, prover, the orphaned block's hash, the proof's link).
+
+**`server.py --reorg-to F [--yes]`** (§11 step 4): the same rewind by hand, at any depth. Without `--yes` it only says
+what would move; with it, it refuses while the coordinator's port is in use (stop the unit first: its in-memory claims
+and caches would answer for rows that moved).
+
+**Tests.** `coordinator/test_reorg.py` (CI, seconds), with a fake `verify-any` that checks a receipt's chain against
+the state files as `lz_coord.rs` does: rows, proofs, spine heads, sponsorship, credit, ack, a record not applied while
+its states are unmoved, a submission and a spine head verified across a rewind (409 `reorged`, not credited), a voided
+claim's beat (409), an orphaned proof after the rewind (409, not counted), the range id reused by the new branch, a
+record applied at start-up before the port answers (a real server process), and `--reorg-to` (dry run, then `--yes`).
+`--control` (no check at commit) and `--control-keep` (rows left in vranges) must fail, and do.
+
+**P6, the harness** (`experimental/libzync-bench/prep/reorg_e2e.py`, `H=<host>`): the fetcher (`follow`, AUTO), prep
+through the deployed runner restarted on exit 5 as systemd does, and the coordinator in its own process, with a fake
+node (P3's `reorg_fake_node.py`: real block files, switched the way `invalidateblock` + `generatetoaddress` would), a
+worker over HTTP (claim, beat, submit) and a stand-in verifier (`reorg_fake_verify.py`). Depth 1, 2 and W, each mid-prove
+(the worker holding a claim and a receipt of the tip) and mid-prep (blocks fetched and waiting, prep stopped by SIGSTOP
+between them, continued once the fetcher's marker is there), then W+1: both stop with exit 4 and nothing moves on the
+board, then the runbook's `--allow-deep` with the coordinator's ack. After each: prep at the node's tip, the record
+applied and acked, every verified range on prep's chain, the frontier at the new tip, nothing parked, the held
+receipt refused 409 `reorged` and not counted. `--control` (the coordinator ignores the records, prep waits for no ack)
+must fail. `reorg_branch.py` spends a branch's own coinbases once the shared ones run out, for branches longer than
+~95 blocks (W = 288).
+
+**Results, 18.11.2026** (laptop, a fasthost build of this branch embedding the published guest: `host method-id` =
+`46666b6f…`; the guest ELF taken out of the v0.26.0 release host by its pinned sha256 `f7b87bf1…`):
+`reorg_e2e.py --w 12` **PASS** (45 checks: depth 1, 2, 12 mid-prove and mid-prep, prep stopped at 68 of 85, 96 of 112
+and 133 of 141 fetched blocks; 13 stopped with exit 4, then `--allow-deep`; 7 epochs; nothing parked); `--w 288` **PASS**
+(47 checks; the depth-288 mid-prep reorg forked at 429 with prep stopped at 717 of 725); `--control` fails 8 checks, as
+it must (the board stays on the orphaned block 63 and never reaches the new tip). `rewind_test.sh` (P3) passes all 53
+checks with this host (with `HAZYNC_REORG_ACK=0`). `coordinator/test_reorg.py` PASS and both controls fail; the 53
+other coordinator tests that load `server.py` pass.
+
+**Found by the harness, fixed:** a reorg-shaped verification failure was counted against the NEW chain's block when
+`verify-any`'s words fell outside the coordinator's 160-character note (lz_coord.rs puts two 64-hex hashes after
+them): depth 1 has the shared anchor, so only the end check fails, and its message is the long one. The words are now
+kept at the front of the note. **Seen and accepted:** a worker that submits an orphaned block above what the board
+serves again (its bundle moved) gets 400 "invalid range id" rather than 409 `reorged`: refused before anything is
+recorded; once the new branch serves that height, the same receipt gets 409 `reorged`, not counted.
+
+**Where this differs from the design.**
+
+- **Not `bitcoind -regtest`.** Prep under a mainnet host cannot prep regtest blocks, and a regtest host's guest is built
+  from source (the long build). The fake node serves the same RPC calls from real files (as P3's case F). The guest is
+  not exercised at all: the synthetic branches have no valid scripts or merkle roots, so no receipt of them can exist,
+  not even a dev-mode one; `reorg_fake_verify.py` stands in for `verify-any --check-end`.
+- **Order of §5.** P3's rewind undoes the stores BEFORE it moves the files (§16 (a)); the record and the ack come after
+  the moves, before the position, the intent and the marker. Nothing of the new branch can be published before the
+  ack, which is what §5's order protects.
+- **Ack timeout** exits 4 instead of "alerts and keeps waiting" (above).
+- **The ack directory** is configurable on both sides (prep's `out/` is root's).
+- **The tip run.** The coordinator follows ONE prep run, through `HAZYNC_LZ_STATE_DIR`: today the board pass. §14 D1
+  (the paper prep follows the tip; a second bridge and state directory above some height) is not built.
+  `libzync-prep.service` (the paper prep) is unchanged: with no coordinator following it, a rewind there needs
+  `HAZYNC_REORG_ACK=0` (the default, waiting, fails closed with exit 4 after 10 min).
+
+**Review of 18.11.2026 (Fable, `552b443`), fixed.** (H1) Prep's epoch was the highest `out/orphaned/<E>` + 1, and an
+existing `records/<E>.json` was kept unchecked: with `out/orphaned/` cleared by hand, the next rewind reused epoch 1,
+whose old ack named the old record, so prep went on while the coordinator never rewound. The epoch is now above every
+orphaned directory AND every record, and a record already there that is not this rewind's (fork, its block, the
+orphaned list) is exit 4. Backstop: each poll compares the board's highest verified range with prep's state at its
+height; a mismatch is `/api/meta.reorg_alert` and one journal line. (M1) A record is applied only while prep's
+`out/REWIND` names its epoch (prep keeps its intent until the ack), and only within `REORG_AUTO_MAX_DEPTH` (2,016) of
+the highest verified block; otherwise it is refused loudly and not acked (a record a run with `HAZYNC_REORG_ACK=0`
+left behind, the paper prep today, can no longer be applied at the first start after D1; deeper is `--reorg-to` only).
+(M2) The spine fall-back writes the kept head's bytes before its json, and a rerun with no `spine.json` restores the
+kept head (a crash between them used to leave the orphaned bytes served). (M3) Pruning kept heads always keeps the
+newest one below the window (heads 10 and 3,000 kept 3,000 alone). Low: `--reorg-to` (L1, above); a cache value
+computed before a rewind is not stored after it (L2: a generation counter); `/api/meta.reorg` capped (L3); feed rows
+carry `kind` (`range`, `spine`, `reorg`; L4: the site still has to render `reorg`, P5/web); a marker left after a
+finished rewind (prep already at the fork's block) is removed without opening an empty epoch (L5); a coordinator with
+`PEER_COORDINATORS` set refuses to start with reorg handling (L6: peer sync could adopt orphaned rows back); a record
+that does not read stops the start (L7). Tests: `test_reorg.py` gains a control per fix (`--control-m1`, `-m2`, `-m3`,
+`-h1`), each failing without it; `rewind_test.sh` case K (H1, another rewind's record, L5); `reorg_e2e.py` gains a
+rewind killed at `rewind-after-record` and restarted, a spine case, systemd's restart rule, and a control that flips one
+thing (the coordinator reads no records). **Re-run after the fixes:** `reorg_e2e.py --w 12` PASS (49 checks: the killed
+rewind exited 9 and was finished by the restart, applied once; the spine fell back from 116 to the kept head 103 and
+advanced on the new branch), `--w 288` PASS (51), the control fails 15; `rewind_test.sh` 57/57 (case K fails 3 with the
+pre-fix host); `test_reorg.py` PASS and its six controls fail; the other coordinator tests pass.
+
+**The cost of exit 4 on an ack timeout** (review of P4, L9). A coordinator that is down, or not applying records, for
+more than `HAZYNC_REORG_ACK_TIMEOUT_S` (600 s) during a reorg turns the automatic rewind into a manual restart: prep
+exits 4 with `out/REWIND` kept (the unit fails and alerts), and the fetcher, waiting for the marker to go, exits 4 after
+`HAZYNC_REWIND_WAIT_S` (3,600 s). Nothing is lost: the rewind is idempotent and resumes from the intent. Recovery, once
+the coordinator is serving again (`curl -s http://127.0.0.1:8899/api/meta`) and its journal shows no `[reorg] REFUSED`:
+
+```bash
+systemctl reset-failed libzync-board-prep libzync-board-fetch
+systemctl start libzync-board-prep      # the runner sees out/REWIND, reruns the rewind, waits for the ack again
+systemctl start libzync-board-fetch     # only if it has exited (after its 3,600 s); it resumes after the rewind
+```
+
+**Automatic handling stays OFF** (`HAZYNC_REORG_AUTO` unset in every unit), and **must not go on at the tip before P5**
+(review M4): offsite copies are append-only by name with no depth delay (§9), so an orphaned proof uploaded blocks the
+new chain's proof of the same id for good; and the zAPP follower dies when the spine drops below its stores (§10). §13's
+"P3 and P4 in, gated by P6" is not enough at the tip; a pass far below the tip (the board pass today, J below it) is
+not affected. Once P5 is in, turning it on is a deployment decision after the reviews: the board pass and its fetcher get
+`HAZYNC_REORG_AUTO=1`, the coordinator and the board pass the ack directory above (in the units now), the coordinator
+deployed first (a prep that rewinds before the coordinator knows records waits 10 min, then stops for a person).
+
+## 18. Built: P5, the followers (18.11.2026)
+
+Same branch. Host unchanged by P5 (scripts, units, website).
+
+**Offsite copies** (`coordinator/deploy/hazync-offsite-proofs.py`, §9). `--depth N` (the four `hazync-lz-offsite-*`
+units pass 6, with the coordinator's `/var/lib/hazync/node_tip`): `copy` uploads a proof only once its hi ≤ tip − 6,
+and `check` does not count a younger one missing; `spine` copies the newest KEPT head (`spine/heads/`) at least 6 deep,
+never the live one. No fresh tip file (missing, or older than `--tip-max-age`, 1 h): nothing is uploaded and the unit
+fails (alerts). For a reorg deeper than that, per coordinator epoch E (`proofs/orphaned/<E>/`): the orphaned proofs go
+up under `orphaned/<E>/`, then `reorgs/<E>.json`, written once, names the live keys an orphaned proof holds in the store
+(`covered`, each with the orphaned file's sha256 and size). A covered name is never uploaded under its live key again:
+the new chain's proof goes to `r<E>/<name>` (the newest covering marker), and `check` compares that key. The spine the
+same way (`r<E>/spine_1-<hi>.*` when the store holds that name with another head, explained by a local
+`spine/orphaned/<E>/`). **Nothing is deleted** (the mirror stays append-only). A restore takes, per name, the newest
+`r<E>/` copy over the live one, reading the markers; the receipts say which chain they are of anyway.
+
+**The zAPP follower** (`hazync-lz-zapp-follow.sh`, §10). Today's follower keeps its own stores with the trie in
+memory and the coin log changed in place, and writes no undo records, so it cannot rewind. On a spine below its stores
+(or at a height whose block its stores have another of) it checks that the NODE agrees with the spine there (the
+block's header hashed), moves its stores to `$ZAPP_ROOT/orphaned/<time>/` (only the newest kept), preps again from
+genesis to the spine and republishes; the previous set stays published until then. A node that disagrees with the spine
+leaves the stores as they are and fails the run (no rebuild loop). Cost: a prep from genesis, cheap while the spine is
+low; the in-memory follower stops scaling near ~140,000 anyway (ZAPP_FOLLOWER §1). New test knobs (`ZAPP_OWNER`,
+`ZAPP_RESTART`, `ZAPP_ACTIVE`, `ZAPP_SETTLE_S`) keep the defaults the unit uses.
+
+**The website** (`hazync/hazync-web`, branch `web/reorg-banner`, not deployed): a banner on every page from
+`/api/meta.reorg` while the board is `rewinding` and for an hour after `done`; the feed renders `kind: reorg` rows (not
+as folds); a block page lists its orphaned proofs, each checkable. `tools/reorg-banner-test.mjs` (+ control) and
+`explorer-recent-test.mjs`.
+
+**Harness.** `reorg_e2e.py` runs the offsite `copy --depth 6` and `check` (into an in-memory store) after every
+settle and just before each mid-prove reorg: no live name may hold another chain's proof unless a marker covers it, no
+marker of a reorg within 6 covers anything, and the depth-W reorg's marker covers names whose new proofs are under
+`r<E>/`. The follower runs before the depth-W reorg (serving at the spine), after the fall-back (rebuilt, serving at
+the kept head, the served proof the spine) and on the new branch.
+
+**Results, 18.11.2026** (this branch merged with `feat/reorg-p3`, host rebuilt, `46666b6f`): `reorg_e2e.py --w 12`
+PASS twice (64 checks each; the depth-12 marker covers 6 live names, their new proofs under `r5/`), `--w 288` PASS (67;
+the depth-288 marker covers 282), the control fails 15; `rewind_test.sh` 57/57; `test_offsite_reorg.py` PASS, its
+control fails; the coordinator tests pass. One W=12 run before failed in the harness, not the product: the fake node
+forgot a block once the test switched its chain, so a fetch worker mid-`getblock` died; a real node keeps stale
+blocks, and so does the fake now (`known`).
+
+**Where this differs from the design, and why.**
+
+- **Tip mode is not built** (ZAPP_FOLLOWER Z2-Z5: a read-only reader of the tip run's stores, `zync-serve --at`,
+  `PIN`). §7's "repin to the kept head" is a property of tip mode; today's follower instead rebuilds and republishes at
+  the kept head. Z2-Z4 are a separate Rust and deployment piece (a reader beside the live service, compared before the
+  switch); with them, the rebuild goes away.
+- **Orphaned proofs already off-box keep their live names** (§9's markers), rather than being moved: the mirror is the
+  backup and stays append-only; the marker says which live keys hold orphaned proofs, and the new ones go to `r<E>/`.
+  With the depth delay this happens only for a reorg deeper than 6 below the node's tip.
+- **The delay is counted from the node's tip, not prep's**: a reorg at depth 1 below prep's tip while prep is far
+  behind the node is deep from the node's point of view, and so is covered by markers, not by the delay.
+
+**Review of 18.11.2026, round 3 (Fable, `05b4a26`), fixed** (after merging `main`, where P1-P3 landed as #754):
+
+- **(HIGH) A reorg inside prep's replay window was never rewound.** After a restart prep replays from its save point A
+  while the state files above A from before stay on disk (and served); the fetcher compares only prep's tip, so a fork
+  between A and those states read as "above prep's tip": no marker, no record, and the board kept the orphaned blocks.
+  Now prep, before applying block h, compares a `state_<h>.json` left by an earlier run with the block file: another
+  block is a fork at h-1, handled as any other (it writes the marker, class `auto` within W, and stops; the runner
+  rewinds, moves the stale files, writes the record, the board rewinds). `prover/host/src/reorg.rs`
+  `stale_state_fork`, host only.
+- **(M2) The backstop** checks every verified range in the window (`REORG_AUTO_MAX_DEPTH`) against prep's states, once a
+  minute, latches the alert in the database (`meta.reorg_alert`, survives a restart) until a rewind below it is applied,
+  is quiet while prep's `out/REWIND` is there, and pages: `hazync-lz-check-reorg.{service,timer}` (every 5 min, fails
+  its unit while the alert is latched).
+- **(M1) The zAPP follower missed a fall-back** when the spine had fallen back and advanced again past its stores
+  between two runs: before continuing from its last save point it now checks the node still has that block, and
+  rebuilds if not. The unit gets `OnFailure=` (pages), `HAZYNC_PREP_WAIT_S=120` and `TimeoutStartSec=4h`.
+- **Offsite markers wait for the coordinator's `proofs/orphaned/<E>/DONE`** (written after the rewind's commit), so a
+  marker is never written from a half-filled directory. `restore-plan` prints, per proof, the key to restore from
+  (the newest `r<E>/` copy, else the live name).
+- Low: a superseded rewind is marked `done` (A → B → A no longer leaves the first `rewinding`); a start refused by the
+  reorg handling (a record that does not read, peers) exits 3, which `hazync-lz-coordinator.service` no longer restarts,
+  so the unit fails and alerts; the follower fails when there is no spine but facts are still served; a follower
+  rebuild that died before its first save point clears its coin log; the banner is on `sponsors/` and `404.html` too
+  (`ooga/` is a pinned copy of `ooga-land` and stays as it is).
+- Harness: a reorg inside the replay window (prep restarted, held mid-replay, the node reorgs), the follower missing a
+  fall-back, the coordinator killed between a rewind's file moves and its commit (restarted as systemd would) with an
+  offsite copy run in that window, and the offsite invariant checked against the NODE's chain.
+- Results (host rebuilt from this branch merged with `main`, `46666b6f`): `reorg_e2e.py --w 12` PASS (78 checks), `--w
+  288` PASS (81), the control fails 15; with the pre-fix host the replay-window scenario fails (5 checks); the
+  reviewer's follower repro now rebuilds and serves the new branch; `rewind_test.sh` 57/57; `test_reorg.py` PASS and its
+  seven controls fail; `test_offsite_reorg.py` PASS (+ control); the coordinator tests pass. Building it found one more
+  bug, fixed: the L5 shortcut (prep already at the fork) also matched prep's own stop before F+1, and removed the
+  marker without moving the stale states; it now requires nothing above the fork.
+
+**Review of 19.11.2026, round 4, fixed.** (M1) The zAPP follower clears its block files, any marker in them, and its
+state files above its save point before prepping (a run that died part-way left them, and prep stopped on them for
+ever). (M2) The backstop runs in its own `try` in the coordinator's reorg thread and writes a heartbeat
+(`meta.reorg_backstop_at`); `hazync-lz-check-reorg` also pages when it is older than 15 min (the coordinator down, or
+its thread stuck); the timer is in `scripts/check-deployment.sh` and the RUNBOOK. Low: a state above the save point that
+does not read is a stop, not "no stale state"; with static block files (not fed by the fetcher) prep's stale-state stop
+writes no marker; an index on `vranges(hi)`; `server.py --reorg-ack [--yes]` clears a latched alert by hand (e.g. prep
+restarted from genesis under a fresh `LZ_ROOT`, whose states are not there yet; RUNBOOK); an `out/REWIND` older than
+`REORG_REWIND_QUIET_S` (2 h) no longer quiets the backstop; DONE is written for every applied epoch that lacks it, and
+an offsite marker deferred over an hour fails the offsite unit; `restore-plan` prints `COVERED-NO-NEW-COPY` for a
+covered name whose new copy is not up yet; prep's own marker says the recovery is the rewind, and `fork-point` prints a
+marker; the fetcher's depth and orphaned list run to the OLD tip (state files above prep's tip), not prep's tip;
+`rewind_test.sh` case L (the replay-window reorg, in CI) with `--control-stale`; `rewind.rs` uses `reorg::hash_of`;
+`reorg_e2e.py` prints the offsite output when an offsite check fails.
+Results (host from this branch, `46666b6f`): `reorg_e2e.py --w 12` PASS (80 checks), `--w 288` PASS (83), the
+control fails 15; `rewind_test.sh` 61/61 and `--control-stale` fails case L (3); `test_reorg.py` PASS and its seven
+controls fail; `test_offsite_reorg.py` PASS (+ control); `test_fetch_reorg.py` 43/43 (+ control); the coordinator tests
+pass. Two harness races found and fixed on the way (a proof file's mtime a moment ahead of the clock read as "younger"
+by `--min-age 0`; the board's tip cache behind its served bundles).
+
+**Review of 19.11.2026, round 5, fixed.** (MED) The round-4 stop on a state file above the save point that does not
+read also caught the EMPTY files a power loss leaves (the states between save points are renamed into place without an
+fsync): prep stopped with exit 4 where it used to replay over them. A missing or zero-length state is crash damage again
+and is replayed over; only a non-empty file that does not parse stops, and the message gives the real recovery (compare
+with `fork-point`, move it aside and start prep, or rewind), with no marker. The coordinator stays closed on such a
+state (an empty state reads as none: the commit-time check refuses, verify-any has no end state), and the backstop does
+not count an empty state as a mismatch (it says how many it skipped). (Low) The `HAZYNC_TEST_SKIP_STALE_CHECK` hook is
+refused when prep writes leaf bundles (a board run) and says so on stderr when it fires; `--control-stale` requires the
+detection check itself to fail; `--reorg-ack` refuses a `COORD_DB` that does not exist; the backstop records what it
+compared (`meta.reorg_backstop_note`), so the check no longer says "on prep's chain" after a quiet run; the RUNBOOK
+installs the check timer only after the new coordinator runs. Tests: `rewind_test.sh` case M (an empty state replayed
+over, a non-empty unreadable one stopped), `test_reorg.py` (the quiet note, the empty state, the commit still refusing,
+`--reorg-ack` with a stray `COORD_DB`).

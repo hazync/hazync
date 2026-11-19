@@ -2,8 +2,9 @@
 
 > **The board runs Hazync v2** (the libzync engine, on RISC Zero 3.1.0) since 12 November 2026, and proves the chain
 > again from genesis under image `46666b6f` (release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0),
-> whose block leaves commit each block's undo data, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)); `8888d59c`
-> (v0.24.0, v0.25.0) ran it before. What it proves and how: [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md).
+> whose block leaves commit each block's undo data, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md); v0.26.1 carries
+> the same image, and the [latest release](https://github.com/hazync/hazync/releases/latest) is the one to take).
+> `8888d59c` (v0.24.0, v0.25.0) ran it before. What it proves and how: [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md).
 > Hazync v1 (the original CORE guest `37987b85`) is no longer proved; its last release is v0.22.1, which still
 > verifies v1 proofs, and its documents are in [`docs/history/`](docs/history/README.md). Release v0.23.0 is
 > **withdrawn**: do not use it (see [`CHANGELOG.md`](CHANGELOG.md)).
@@ -86,15 +87,20 @@ is RAM-tight it will crawl rather than fall back — set `HAZYNC_SEG_PO2=20` (or
 Download the prebuilt prover from the **latest release** — it embeds the published image, so the coordinator accepts your proofs.
 
 ⛔ **Take the latest release, and restart anything started on an older one.** Since v0.26.0 the
-board accepts only proofs by image `46666b6f` (v0.26.0); before it, only `8888d59c` (v0.24.0, v0.25.0). A v0.23.0 host proves under `863c9ce3`, which RISC Zero 3.1.0 verifiers refuse, and
+board accepts only proofs by image `46666b6f` (v0.26.0, v0.26.1); before it, only `8888d59c` (v0.24.0, v0.25.0). A v0.23.0 host proves under `863c9ce3`, which RISC Zero 3.1.0 verifiers refuse, and
 a v0.22.x host proves Hazync v1. `run-workers.sh` checks the image id **only when it starts**, so a worker loop
 started on an older release keeps producing proofs the board refuses until you restart it.
 
 ```
+# which prover: the GPU (CUDA) build, or the CPU build if you have no NVIDIA card. Keep ONE of these two lines.
+HOSTBIN=hazync-host-x86_64-linux-gnu-cuda    # GPU: about 390 MB
+# HOSTBIN=hazync-host-x86_64-linux-gnu       # no GPU: the CPU build, about 223 MB
+
 # the checksum list first — everything below is verified against it before it runs
 curl -LO https://github.com/hazync/hazync/releases/latest/download/SHA256SUMS.txt
-# the prover binary (GPU): about 390 MB, and GitHub can be slow (26 minutes on one cloud box on 2026-11-12)
-curl -LO https://github.com/hazync/hazync/releases/latest/download/hazync-host-x86_64-linux-gnu-cuda
+# the prover binary. GitHub can be slow: 26 minutes for the GPU build on one cloud box (12.11.2026),
+# about 13 minutes for the CPU build plus the rest at ~290 KB/s (18.11.2026)
+curl -LO "https://github.com/hazync/hazync/releases/latest/download/$HOSTBIN"
 # the contributor CLI and the fleet launcher, both covered by SHA256SUMS.txt.asc
 curl -fLO https://github.com/hazync/hazync/releases/latest/download/hazync-worker
 curl -fLO https://github.com/hazync/hazync/releases/latest/download/hazync-run-workers.sh
@@ -102,10 +108,10 @@ ln -sf hazync-run-workers.sh run-workers.sh   # shorter to type; the real file k
                                               # which is what SHA256SUMS.txt lists
 
 # ⛔ CHECK WHAT ARRIVED BEFORE RUNNING IT. Three OK lines, or stop.
-grep -E ' (hazync-host-x86_64-linux-gnu-cuda|hazync-worker|hazync-run-workers.sh)$' SHA256SUMS.txt \
+grep -E " ($HOSTBIN|hazync-worker|hazync-run-workers.sh)\$" SHA256SUMS.txt \
   | sha256sum -c -
 
-chmod +x hazync-host-x86_64-linux-gnu-cuda hazync-worker hazync-run-workers.sh
+chmod +x "$HOSTBIN" hazync-worker hazync-run-workers.sh
 ln -sf hazync-worker hazync      # a shorter name to type; the real file keeps the asset name
 sudo apt install -y python3-cryptography   # Debian/Ubuntu — other systems below
 ```
@@ -122,8 +128,15 @@ CLI; it finds `hazync-worker` or `hazync` beside itself. `MODE=fold` runs folder
 provers, `MODE=mixed` runs both plus one spine worker, and `MODE=spine` runs only the spine, which
 only ever needs one.)
 
-**No GPU?** Use the CPU binary instead (`hazync-host-x86_64-linux-gnu`) — it proves too, just slower.
-Both binaries prove in-process; there is nothing else to install.
+**No GPU?** Use the CPU binary instead (`hazync-host-x86_64-linux-gnu`, the commented `HOSTBIN=` line above) — it
+proves too, just slower. Both binaries prove in-process; there is nothing else to install. `HOSTBIN` lives only in
+the shell you set it in: in a new shell, set it again before the commands below that use it.
+
+What a CPU prove costs, as measured: mainnet block 1 in 862 s (about 14 min) and about 6.0 GB peak RAM, in a 12-CPU
+container on a laptop (v0.26.1, 18.11.2026); 1,433 s (about 24 min) on a 4-vCPU Windows runner
+([`docs/RELEASE_NOTES_v0.26.1.md`](docs/RELEASE_NOTES_v0.26.1.md)). Bigger blocks take longer. Block 1 is three
+segments, and while the first is running the worker prints `still proving, Nm elapsed -- no segment finished yet`
+once a minute: on a CPU that repeats for many minutes, and it is not a hang.
 
 **Keep the asset filenames.** `SHA256SUMS.txt` lists them, so downloading with `-LO` lets the check
 above match them. Renaming on download (`-o host`) makes it report *"no file was verified"* — which
@@ -137,8 +150,8 @@ downloaded. `--ignore-missing` cannot catch the absent case by definition.
 check: see [`SECURITY.md`](SECURITY.md#verifying-releases). Take the CLI from the **release**, not from a raw source
 URL: it holds your ed25519 signing key and decides what gets submitted under your name.
 
-Stronger still: run `./hazync-host-x86_64-linux-gnu-cuda method-id` (or the CPU binary) and confirm it prints
-`46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` (v0.26.0; `8888d59c…` for v0.24.0 and v0.25.0), the id in
+Stronger still: run `./$HOSTBIN method-id` and confirm it prints
+`46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` (v0.26.0, v0.26.1; `8888d59c…` for v0.24.0 and v0.25.0), the id in
 [`reproduce/METHOD_ID`](reproduce/METHOD_ID) and [`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS).
 
 > **Building from source instead?** You *must* embed the **published image**, or the coordinator rejects every
@@ -153,7 +166,7 @@ Stronger still: run `./hazync-host-x86_64-linux-gnu-cuda method-id` (or the CPU 
 # Both of these are OPTIONAL — the CLI defaults to the public party and finds the prover
 # beside itself. Set them only if you are pointing somewhere else.
 export COORD_URL=https://api.hazync.org
-export HAZYNC_HOST=$PWD/hazync-host-x86_64-linux-gnu-cuda
+export HAZYNC_HOST="$PWD/$HOSTBIN"
 ./hazync id yourname
 ```
 
@@ -181,9 +194,28 @@ prove from several boxes at once, and your blocks stay with that key — but rea
 ./hazync selftest
 ```
 
-It confirms your prover is present, its image id matches the coordinator (the common trap — a different build has every proof rejected), and it can verify a real board proof end to end. Better to catch a setup problem now than after a long prove.
+It confirms your prover is present, its image id matches the coordinator (the common trap — a different build has every proof rejected), and it can verify a real board proof end to end. Then it **proves block 1 for real**, which is the step that takes time: 197.7 s on a GTX 1050 Ti ([`docs/RELEASE_NOTES_v0.26.1.md`](docs/RELEASE_NOTES_v0.26.1.md); a Blackwell card adds its first-prove kernel compile, above), and 16 min 42 s with about 5.4 GB peak RAM on a 12-CPU container (CPU build, v0.26.1, 18.11.2026). It prints `… proving block 1 as a real pre-flight` and then nothing until the prove ends. Better to catch a setup problem now than after a long prove.
+
+⚠ selftest gives that prove 30 minutes. A CPU box much slower than the ones above (2-4 cores, not measured) may run
+out of time and report `✗ PROVING FAILED` from a setup that works; `./hazync prove 1` (below) has no such limit and
+tells the two apart.
 
 ## Step 3: prove
+
+**Try it first, without submitting.** `hazync prove <block>` proves on your machine and stops: it writes the receipt
+to `~/.hazync/receipts/<block>.bin` and sends nothing to the board. Block 1 is the one to try, because its proof starts
+at genesis, so the standalone verifier (download it as in [Just want to check a proof](#just-want-to-check-a-proof-not-make-one))
+checks it on its own:
+
+```
+./hazync prove 1                                   # receipt: ~/.hazync/receipts/1.bin; nothing submitted
+./hazync-verify-x86_64-linux-gnu --network mainnet --product --mempool ~/.hazync/receipts/1.bin
+                                                   # → SWIFTSYNC_VERIFY_DEMO (exit 2), tip = mempool.space's block 1
+./$HOSTBIN verify-any ~/.hazync/receipts/1.bin 1   # → RANGE-OK … anchored=1
+```
+
+(`hazync submit <block>` would sign and send such a receipt; you do not need it for this check.) When you are ready
+to put your name on the board:
 
 ```
 ./hazync run              # takes the coordinator's suggestion
@@ -218,7 +250,7 @@ supplied loop — it keeps N workers going and refuses to start if your image id
 if the GPU cannot prove block 1 (a 600 s smoke test; `SKIP_GPU_SMOKE=1` skips it):
 
 ```
-HAZYNC_HOST=$PWD/hazync-host-x86_64-linux-gnu-cuda ./run-workers.sh 4      # 4 workers, logs in ~/hazync-workers
+HAZYNC_HOST="$PWD/$HOSTBIN" ./run-workers.sh 4      # 4 workers, logs in ~/hazync-workers
 ./run-workers.sh 4 --drain     # stop: each worker finishes the block it is on, then exits
 ```
 
@@ -335,9 +367,22 @@ work. **`SWIFTSYNC_VERIFY_DEMO` (exit 2): every check passed, but the chain prov
 (`hazync-verify.wasm`) and on hazync.org.
 
 The `.hzk` is a **binary receipt** (a RISC Zero proof, a few hundred KB), not text. A single block's proof from
-`/api/proof/<block>` is not anchored at genesis on its own (it starts from the state before its block); the prover
-host checks one with `host verify-any <file> <block>`, which needs that block's leaf bundle, so the spine is the one
-to check by hand.
+`/api/proof/<block>` is not anchored at genesis on its own (it starts from the state before its block), so the
+standalone verifier checks it only for block 1. For any other block, the prover host (Step 1) checks it with
+`verify-any`, given that block's **leaf bundle** (the state before the block), which the board serves at
+`/api/witness/<block>`. `verify-any` looks for it as `leaf_<block>.bin` in `$HAZYNC_BRIDGE_OUT`:
+
+```
+N=4400                                             # the block to check: one near the frontier (see below)
+curl -fLOJ https://api.hazync.org/api/proof/$N     # lands as hazync-$N.hzk
+mkdir -p leaves && curl -fo leaves/leaf_$N.bin https://api.hazync.org/api/witness/$N
+HAZYNC_BRIDGE_OUT="$PWD/leaves" ./$HOSTBIN verify-any hazync-$N.hzk $N    # → RANGE-OK
+```
+
+⚠ **The board keeps leaf bundles only near the frontier** (and block 1's): once a block is proved below the frontier
+its bundle is pruned, and `/api/witness/<block>` answers `404 {"error": "witness not available"}` (blocks 100 and
+3,000 on 18.11.2026). For those blocks, check the spine above, or a fold that contains them: both start at genesis or
+are joined into what does, so they are the check by hand.
 
 ## If something breaks
 
@@ -356,9 +401,10 @@ to check by hand.
 - `this coordinator accepts only signed claims: update your worker` — your worker is older than v0.21.5 and does
   not sign its claims. Download the current `hazync-worker` from the latest release; your identity in
   `~/.hazync` is unchanged.
-- The coordinator rejects your proof with an image id (`METHOD_ID`) mismatch — your host is not v0.24.0's (a v0.23.0
-  or v0.22.x host, or one built from source). Use the latest release, and restart any `run-workers.sh` loop
-  started on an older one.
+- The coordinator rejects your proof with an image id (`METHOD_ID`) mismatch — your host is not the latest release's.
+  The board's id is in https://api.hazync.org/api/meta and `./$HOSTBIN method-id` prints yours: since v0.26.0 the
+  board accepts `46666b6f`, so a v0.24.0 or v0.25.0 host (`8888d59c`), a v0.23.0 or v0.22.x host, or one built from
+  source is refused. Use the latest release, and restart any `run-workers.sh` loop started on an older one.
 - Claims refused because the key already holds 4 — see [Several workers on one key](#several-workers-on-one-key).
 - Anything else: open an issue with the **Board or prover problem** template.
 

@@ -80,16 +80,19 @@ class FakeAPI:
          "PRO 6000 MIG 24GB", 24, 0.59, "Low"),
     ]
 
-    def _gql(self, q):
-        if "gpuTypes { id }" in q:
-            return {"gpuTypes": [{"id": c[0]} for c in self.CARDS]}
-        for gt, disp, vram, price, stock in self.CARDS:
-            if f'"{gt}"' in q:
-                lp = None if stock is None else {"uninterruptablePrice": price,
-                                                 "stockStatus": stock}
-                return {"gpuTypes": [{"id": gt, "displayName": disp, "memoryInGb": vram,
-                                      "lowestPrice": lp}]}
-        raise KeyError("no such type")
+    def gpu_catalog(self, stock=False):
+        """GET /v2/catalog/gpus in RunPod's v2 shape. ⛔ v2 lists EVERY type with its list price; a type
+        with no SECURE stock says so only in `availability` ("NONE"), not by a missing price as GraphQL's
+        lowestPrice did -- so the out-of-stock card here still carries a price, and must still be refused."""
+        out = []
+        for gt, disp, vram, price, st in self.CARDS:
+            g = {"id": gt, "name": disp, "memory": vram, "secure": True, "community": True,
+                 "manufacturer": "AMD" if gt.startswith("AMD") else "NVIDIA",
+                 "price": {"secure": price, "community": round(price * 0.6, 2)}}
+            if stock:
+                g["availability"] = (st or "NONE").upper()
+            out.append(g)
+        return out
 
 
 # ⛔ THE CONTROLS MUTATE THE SHIPPED FUNCTIONS, not copies of them.

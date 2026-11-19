@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # Retry deploying PRO 6000 pods for the names given, every 30 s for 12 min; podup each one that lands.
 cd ~/libzync-gpu/live; RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 want=("$@"); end=$((SECONDS+720))

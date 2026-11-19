@@ -1,0 +1,30 @@
+# cargo-fuzz targets for the zAPP CLIs' shared chain-identity flags (zapps/common) (docs/libzync/ZAPP_TESTING.md §3.4, §5). Own workspace (the empty
+# [workspace] below), so it is never a member of zapps/common's and never touches its Cargo.lock; this crate's own
+# Cargo.lock started as a copy of the parent's, so it resolves the same versions (CI's cargo audit reads it too).
+# Run (nightly, cargo-fuzz): cargo fuzz run <target> fuzz/corpus/<target> -- -rss_limit_mb=1024
+# Replay the committed corpus on stable: cargo test --release --manifest-path fuzz/Cargo.toml
+[package]
+name = "zapp-common-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zapp-common = { path = ".." }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+
+[[bin]]
+name = "common_identity"
+path = "fuzz_targets/common_identity.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

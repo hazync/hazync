@@ -1,0 +1,21 @@
+[package]
+name = "liveanon-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "liveanon"
+path = "src/main.rs"
+
+[dependencies]
+liveanon-methods = { path = "../methods" }
+# execute only, through r0vm (no local prover is compiled)
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["client", "std"] }
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+sha2 = "0.10"
+k256 = { version = "0.13", features = ["arithmetic"] }
+libzync = { path = "../../../../libzync", default-features = false, features = ["liveness"] }
+
+[workspace]

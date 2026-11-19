@@ -121,7 +121,9 @@ def files_hashes(d):
     import importlib.util
     spec = importlib.util.spec_from_file_location("fbr", FETCH)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-    return {int(q.name[6:-5]): m.file_block(q)[1] for q in d.glob("block_*.json")}
+    # file_block is None for a file the fetcher is replacing or has just removed (a glob races its rename/unlink):
+    # kept as None, so the comparison is unequal and wait_until reads again (CI on #767, 19.11.2026: a TypeError here)
+    return {int(q.name[6:-5]): (fb[1] if (fb := m.file_block(q)) else None) for q in d.glob("block_*.json")}
 
 def case_below_tip(depth, W, J, n, tipfile=True):
     """prep at the node's tip n; the top `depth` blocks are replaced. Expect a marker and exit 4. tipfile=False: prep

@@ -366,11 +366,15 @@ def check_prep(d, od, tip):
                                                "at": now, "next": "fetch_block_rpc.py fork-point <prep out> --deep; REORG.md §11"})
         print(f"FETCH_STOPPED_REORG {why}: {p}", flush=True)
         sys.exit(EXIT_REORG)
-    depth = P - fork
-    orphaned = [[h, state_hash(od, h) if h < P else hp] for h in range(fork + 1, P + 1)]
+    # the OLD tip: prep's tip, or above it the state files an earlier run left (prep replays from its save point after a
+    # restart, and those are served too): the depth and the orphaned blocks run to it (review round 4, L10)
+    top = P
+    while state_hash(od, top + 1): top += 1
+    depth = top - fork
+    orphaned = [[h, state_hash(od, h) if h != P else hp] for h in range(fork + 1, top + 1)]
     new = [[h, rpc("getblockhash", [h])] for h in range(fork + 1, min(P, node_h) + 1)]
     cls = "auto" if depth <= W_AUTO else "manual"
-    p = write_marker(d, "REORG", {"fork": fork, "fork_hash": rpc("getblockhash", [fork]) if fork else None, "prep_tip": P,
+    p = write_marker(d, "REORG", {"fork": fork, "fork_hash": rpc("getblockhash", [fork]) if fork else None, "prep_tip": P, "old_tip": top,
                                   "depth": depth, "class": cls, "W": W_AUTO, "J": J, "undo_from": reach, "node_tip": node_h,
                                   "node_best": best, "prep_tip_from": tip.source, "orphaned": orphaned, "new": new, "at": now})
     if AUTO and cls == "auto":
@@ -504,7 +508,11 @@ def main():
         J = tip.keep if tip.keep is not None else J_KEEP
         depth = None if fork is None else P - fork
         reach = fork is not None and (tip.undo_from is None or fork + 1 >= tip.undo_from)
-        print(json.dumps({"prep_tip": P, "prep_tip_from": tip.source, "node_tip": node_h, "fork": fork, "depth": depth,
+        # a marker already in the block directory (the fetcher's, or prep's own: source "prep", REORG.md §4), for the person
+        mk = None
+        try: mk = json.loads((od.parent / "blocks" / "REORG").read_text())
+        except (OSError, ValueError): pass
+        print(json.dumps({"marker": mk, "prep_tip": P, "prep_tip_from": tip.source, "node_tip": node_h, "fork": fork, "depth": depth,
                           "deepest_compared": deepest, "undo_from": tip.undo_from, "within_W": depth is not None and depth <= W_AUTO,
                           "within_J": depth is not None and depth <= J and reach}))
         return

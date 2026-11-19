@@ -262,6 +262,83 @@ pub(crate) fn stop_or_rewind(blocks_dir: &str, why: &str) -> ! {
     stop(why)
 }
 
+/// A block file's hash (the state's tip_hash order), from its header fields, as prep_block computes it.
+pub(crate) fn hash_of(j: &serde_json::Value) -> Option<[u8; 32]> {
+    let merkle: [u8; 32] = crate::rev(crate::hx(j["merkle"].as_str()?)).try_into().ok()?;
+    let h = crate::build_header_v(j["version"].as_i64().unwrap_or(1) as i32, j["prev"].as_str()?, &merkle,
+                                  j["time"].as_u64()? as u32, j["bits"].as_u64()? as u32, j["nonce"].as_u64()? as u32);
+    Some(crate::header_hash(&h))
+}
+
+fn state_tip(out: &str, h: u32) -> Option<[u8; 32]> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{out}/state_{h}.json")).ok()?).ok()?;
+    let t: Vec<u8> = v["tip_hash"].as_array()?.iter().map(|x| x.as_u64().map(|b| b as u8)).collect::<Option<_>>()?;
+    t.try_into().ok()
+}
+
+fn disp(b: &[u8; 32]) -> String { let mut x = *b; x.reverse(); crate::hex(&x) }
+
+/// Before block h is applied: is there a state_<h>.json of an earlier run for another block? Then the states h.. on disk
+/// are another chain's (the node reorged while this run replays from its save point): write the fetcher's marker for
+/// a fork at h-1 (unless one is there) and stop as for any marker (exit 5 with automatic rewinds and a depth within W,
+/// else 4). A state that is there but does not read is a stop too (its states are written by rename: damage, not a
+/// write in progress). Static block files (not fed by the fetcher, `consume` false): a stop with no marker written into
+/// a directory that is not the fetcher's. Returns when there is no such state.
+pub(crate) fn stale_state_fork(out: &str, blocks_dir: &str, h: u32, prev_tip: &[u8; 32], j: &serde_json::Value, consume: bool) {
+    // test only (RISC0_DEV_MODE): the check off, for rewind_test.sh's positive control
+    // Refused in board mode (leaf bundles written), and loud when it fires (review round 5, LOW 1).
+    if crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_SKIP_STALE_CHECK").as_deref() == Ok("1") {
+        if std::env::var("HAZYNC_PREP_LEAF_BUNDLES").is_ok_and(|v| !v.is_empty()) {
+            eprintln!("HAZYNC_TEST_SKIP_STALE_CHECK refused: this prep writes leaf bundles (a board run); the check stays on");
+        } else {
+            eprintln!("WARNING: HAZYNC_TEST_SKIP_STALE_CHECK=1 under RISC0_DEV_MODE: the replay-window reorg check is OFF (testing only)");
+            return;
+        }
+    }
+    let p = format!("{out}/state_{h}.json");
+    // Missing, or zero-length: the states between save points are written by rename without an fsync (synced only at
+    // the next save point), so a power loss can leave them empty. That is crash damage, not another chain: the replay
+    // overwrites it, as it did before this check (review round 5, MED). The board fails closed on it meanwhile: an
+    // empty state reads as none, so verify-any has no end state and the commit-time hash check refuses.
+    match std::fs::metadata(&p) {
+        Ok(m) if m.len() > 0 => {}
+        _ => return,
+    }
+    let Some(old) = state_tip(out, h) else {
+        // a non-empty file that does not parse: not a torn write (renamed whole), so damage worth a person's look
+        println!("PREP_STOPPED_REORG before block {h}: {p}, left by an earlier run above the save point, is not empty and does not read: \
+                  its chain cannot be compared");
+        println!("  a person: look at it; if the node's chain at {h} is the one prep is replaying (fetch_block_rpc.py fork-point <out>), \
+                  move {p} aside and start prep again (the replay writes it anew); if not, rewind (docs/libzync/REORG.md §11 step 3)");
+        std::process::exit(EXIT_REORG);
+    };
+    let Some(new) = hash_of(j) else { return };
+    if old == new { return; }
+    let fork = h - 1;
+    let mut orphaned = Vec::new();
+    let mut k = h;
+    while let Some(x) = state_tip(out, k) { orphaned.push(serde_json::json!([k, disp(&x)])); k += 1; }
+    let top = k - 1;
+    let w: u32 = std::env::var("HAZYNC_REORG_AUTO_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(288);
+    let depth = top - fork;
+    let why = format!("before block {h}: state_{h}.json of an earlier run is block {}, the block file {}: the states \
+                       {h}..={top} on disk are another chain's (a reorg inside the replay window)", disp(&old), disp(&new));
+    if !consume { stop(&format!("{why}; static block files: nothing is written into {blocks_dir}")); }
+    if marker(blocks_dir).is_none() {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let m = serde_json::json!({"fork": fork, "fork_hash": disp(prev_tip), "prep_tip": top, "depth": depth,
+            "class": if depth <= w { "auto" } else { "manual" }, "W": w, "orphaned": orphaned, "new": [],
+            "source": "prep: stale state files above its save point", "at": now});
+        crate::lz::write_atomic(&format!("{blocks_dir}/REORG"), m.to_string().as_bytes());
+    }
+    if auto() && auto_fork(blocks_dir).is_some() { stop_or_rewind(blocks_dir, &why) }
+    // prep's OWN marker (round 4, L7): the recovery is the rewind, not "remove the marker"
+    println!("PREP_STOPPED_REORG {why}");
+    println!("  prep wrote {blocks_dir}/REORG (source: prep): the state files {h}..={top} are another chain's. A person rewinds: \
+              libzync-prep-rewind <out> <blocks> [--allow-deep] (docs/libzync/REORG.md §11 step 3), then starts the units");
+    std::process::exit(EXIT_REORG);
+}
+
 /// A block file's `prev` (display hex) as the state's tip_hash byte order.
 pub(crate) fn prev_of(j: &serde_json::Value) -> Option<[u8; 32]> {
     let x = j["prev"].as_str()?;

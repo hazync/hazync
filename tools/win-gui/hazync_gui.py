@@ -42,12 +42,15 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import activity  # noqa: E402
+import appupdate  # noqa: E402
 import brand  # noqa: E402
 import cards  # noqa: E402
 import firstrun  # noqa: E402
 import gpuprep  # noqa: E402
 import hazync_api as api  # noqa: E402
+import nethttp  # noqa: E402
 import provewindow as schedule  # noqa: E402  (not "schedule": a PyPI package of that name exists)
+import stats  # noqa: E402
 import supervisor  # noqa: E402
 import theme  # noqa: E402
 import winpower  # noqa: E402
@@ -63,7 +66,7 @@ SEG_CHOICES = [
     ("21", "21 — about 22 GB; 24 GB cards and up"),
     ("20", "20 — about 11 GB; 12–16 GB cards"),
     ("19", "19 — about 6 GB; 8 GB cards"),
-    ("18", "18 — about 3 GB; 6 GB cards"),
+    ("18", "18 — about 3 GB; 4–6 GB cards (proved on a 4 GB GTX 1050 Ti)"),
     ("17", "17 — about 1.5 GB; smaller cards"),
 ]
 REFRESH_S = 60          # the website refreshes the map every minute; match it rather than hammer
@@ -121,6 +124,15 @@ class App(tk.Tk):
         self._setup_ok = False           # until the first scan says otherwise
         self._steps = []
         self._problem = ""               # the last thing that stopped work, in plain words
+        # The one-click fix offered for THAT problem (supervisor.stale_prover_advice): shown only while _problem is still
+        # the text it was offered for, so any later problem (set in many places) hides a fix that no longer applies.
+        self._problem_fix = None
+        # Keeping the installed app current (appupdate): this app's version ("" from source), the newer release found
+        # (if any), and whether the after-an-upgrade prover check is still running (diagnostics wait for it).
+        self._app_version = appupdate.app_version()
+        self._update_tag = ""
+        self._update_busy = False
+        self._upgrade_pending = bool(self._app_version) and self._app_version != (self.cfg.get("app_version_seen") or "")
         self._events = []                # (clock time, sentence, tag) for the Home feed
         self._landed = {j: 0 for j in activity.JOBS}     # what has landed since the window opened
         self._diag_running = None
@@ -133,12 +145,23 @@ class App(tk.Tk):
         self._skip_until = None
         self._awake = False
         self._drain_said = False
+        # The live resource panel on Home (stats.py): its five-minute history and each prover's per-block GPU memory
+        # peak live HERE, not on the widgets, so a dark/light rebuild keeps them. Sampled on a background thread
+        # only while something is running (_stats_want); results come back through self.results like every other.
+        self._stats_hist = stats.History()
+        self._peaks = stats.BlockPeaks()
+        self._stats_last = None
+        self._stats_want = threading.Event()
+        self._stats_thread = None
+        self._stats_said = False         # "GPU stats unavailable" goes in the log once, not every poll
         self._build()
         self.after(1000, self._home_tick)
         self.after(SCHEDULE_TICK_MS, self._schedule_tick)
         self.after(POLL_MS, self._drain)
         self.after(400, self.refresh)
         self.after(700, self.rescan)
+        self.after(1500, self._after_upgrade_check)
+        self.after(5000, self._update_tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── chrome ──────────────────────────────────────────────────────────────────────────────────
@@ -275,6 +298,27 @@ class App(tk.Tk):
         # a greyed-out button next to a live one and leaves a person to work out which is which.
         self.stop_btn = ttk.Button(row, text="Stop", style="Hero.TButton", command=self._stop,
                                    state="disabled")
+        # The fix for the problem on the card, when there is one to offer (_problem_fix); off screen otherwise.
+        self.fix_btn = ttk.Button(row, text="", style="Accent.TButton", command=self._apply_fix)
+
+        # ⭐ WHAT THE MACHINE IS DOING (owner, on a 4 GB GTX 1050 Ti: "would be good to see gpu memory and cpu
+        # memory or stats during proving as a visual"). On screen only while something runs; see _stats_tick.
+        self.stats_box = self._card(t, "THIS MACHINE")
+        sb_row = tk.Frame(self.stats_box, bg=p["mist"])
+        sb_row.pack(fill="x", padx=12, pady=(4, 8))
+        self.stats_rows = tk.Canvas(sb_row, height=66, bg=p["mist"], highlightthickness=0)
+        self.stats_rows.pack(side="left", fill="x", expand=True)
+        self.stats_chart = tk.Canvas(sb_row, width=self.CHART_W, height=66, bg=p["mist"], highlightthickness=0)
+        self.stats_chart.pack(side="right", padx=(10, 0))
+        self.stats_rows.bind("<Configure>", lambda _e: self._stats_render())
+
+        # "Hazync vX is available": only on screen when a newer release was found (_update_tick).
+        self.update_bar = tk.Frame(t, bg=p["mist"], highlightbackground=p["lamp"], highlightthickness=1)
+        self.v_update = tk.StringVar(value="")
+        tk.Label(self.update_bar, textvariable=self.v_update, bg=p["mist"], fg=p["ink"], anchor="w",
+                 font=("Segoe UI", 11)).pack(side="left", fill="x", expand=True, padx=14, pady=8)
+        self.update_btn = ttk.Button(self.update_bar, text="Update", style="Accent.TButton", command=self._update_now)
+        self.update_btn.pack(side="right", padx=14, pady=8)
 
         # Only on screen while something is still needed; see _render_home_setup.
         self.home_setup = tk.Frame(t, bg=p["fog"])
@@ -415,6 +459,7 @@ class App(tk.Tk):
         """Say what is true right now. Called on every worker line and once a second."""
         if not hasattr(self, "v_head"):
             return
+        self._sync_fix()
         now = time.time()
         if self.workers:
             # the prover leads Home when a folder runs beside it (also_fold), whatever order restarts left them in
@@ -494,7 +539,8 @@ class App(tk.Tk):
             self.v_sub.set(self._fixing)
             self._set_bar(None, busy=True)
         elif self._problem:
-            self.v_head.set("Stopped — this needs a look")
+            fix = self._current_fix()
+            self.v_head.set((fix or {}).get("head") or "Stopped — this needs a look")
             # review L6: with several cards, keep a line per card under the reason, so which card stopped and why
             # does not vanish when the last one stops
             self.v_sub.set(self._problem + ("\n" + "\n".join(cards.status_lines(self._session_cards, {}, self._card_notes))
@@ -518,7 +564,157 @@ class App(tk.Tk):
 
     def _home_tick(self):
         self._home_refresh()
+        # ⚠ guarded (review L3): one Tcl error in the panel must not end this once-a-second chain, which keeps Home
+        # itself current. Said once in the log, not every second.
+        try:
+            self._stats_tick()
+        except Exception as e:     # noqa: BLE001
+            if not getattr(self, "_stats_tick_said", False):
+                self._stats_tick_said = True
+                self._say(f"[stats] the resource panel failed to update: {e} — proving is not affected")
         self.after(1000, self._home_tick)
+
+    # ── the live resource panel (stats.py) ──────────────────────────────────────────────────────────────────────────
+    CHART_W = 240
+    ROW_H = 22
+
+    def _stats_tick(self):
+        """Show the panel and sample while something runs; hide it and stop sampling when nothing does."""
+        if not hasattr(self, "stats_box"):
+            return
+        # ⚠ and between two blocks: the worker exits after each one and the next starts AGAIN_MS later (_respawns),
+        # so hiding on "no workers" alone would make the panel blink out and back once per block
+        if self.workers or self._respawns:
+            if not self.stats_box.winfo_manager():
+                self.stats_box.pack(fill="x", padx=10, pady=(0, 6), before=self._pick)
+                self._stats_render()
+            self._stats_want.set()
+            if self._stats_thread is None:
+                self._stats_thread = threading.Thread(target=self._stats_loop, daemon=True)
+                self._stats_thread.start()
+        else:
+            self._stats_want.clear()
+            if self.stats_box.winfo_manager():
+                self.stats_box.pack_forget()
+
+    def _stats_loop(self):
+        """Background thread: one sample every stats.POLL_S while wanted. Touches no widget (Tk is main-thread only).
+
+        ⚠ nvidia-smi runs through supervisor._run: it never raises, has a timeout, and (winquiet) opens no console
+        window. A slow one only delays the next sample; it cannot block the window or the prover.
+        """
+        sampler = stats.Sampler(supervisor._run, supervisor.nvidia_smi)
+        while True:
+            self._stats_want.wait()
+            t0 = time.time()
+            try:
+                s = sampler.sample()
+            except Exception:          # noqa: BLE001 - a panel must never break proving
+                s = None
+            if s is not None:
+                self.results.put((self._stats_apply, s))
+            time.sleep(max(0.2, stats.POLL_S - (time.time() - t0)))
+
+    def _stats_key(self, w):
+        return (w.job, w.index)
+
+    def _stats_gpu(self):
+        """Is there a card to measure? On a machine without one (the CPU build), no block gets a "peak GPU memory"
+        note at all, rather than "not sampled" on every line. Read from the reader thread too: a plain attribute."""
+        return (self._stats_last or {}).get("gpu_state") == stats.GPU_OK
+
+    def _stats_apply(self, s):
+        """One sample, on the main thread: feed each prover's block peak, the history, and the panel."""
+        self._stats_last = s
+        gpus = s.get("gpus") or []
+        for w in self.workers:
+            if w.job == "run":
+                g = stats.gpu_for(w.card, gpus)
+                if g:
+                    self._peaks.observe(self._stats_key(w), g["used_mb"], g["total_mb"])
+        shown = stats.shown_gpus(gpus, [w.card for w in self.workers if w.card])
+        fr = [f for f in (stats.frac(g["used_mb"], g["total_mb"]) for g in shown) if f is not None]
+        self._stats_hist.add(max(fr) if fr else None, s.get("cpu"))
+        if s.get("gpu_state") == stats.GPU_UNAVAILABLE and not self._stats_said:
+            self._stats_said = True
+            why = " ".join((s.get("gpu_why") or "").split())        # one log line, whatever nvidia-smi printed
+            self._say(f"[stats] {stats.UNAVAILABLE_TEXT}" + (f" ({why})" if why else "")
+                      + " — proving is not affected; the panel shows processor and memory only")
+        self._stats_render()
+
+    def _gpu_name(self, g, n_shown):
+        found = getattr(self, "_found_cards", None) or getattr(self, "_last_cards", None) or []
+        names = cards.labels(found) if found else {}
+        for c in found:
+            if c.get("uuid") == g["uuid"]:
+                return names.get(c["index"], f"GPU {g['index']}")
+        return "Graphics card" if n_shown == 1 else f"GPU {g['index']}"
+
+    def _stats_bar(self, cv, x, y, w, fraction):
+        p = self.p
+        cv.create_rectangle(x, y, x + w, y + 9, fill=p["haze"], outline="")
+        if fraction is not None:
+            cv.create_rectangle(x, y, x + max(1, int(w * fraction)), y + 9, outline="",
+                                fill=p["bad"] if fraction >= 0.95 else p["lamp"])
+
+    def _stats_render(self):
+        if not hasattr(self, "stats_rows") or not self.stats_box.winfo_manager():
+            return
+        p, cv, s = self.p, self.stats_rows, self._stats_last
+        cv.delete("all")
+        rows = []                                       # (label, fraction or None, text); False = no bar at all
+        if s is None:
+            rows.append(("Graphics card", False, "reading…"))
+        elif s.get("gpu_state") == stats.GPU_OK and s.get("gpus"):
+            pinned = [w.card for w in self.workers if w.card]
+            shown = stats.shown_gpus(s["gpus"], pinned)
+            for g in shown:
+                text = stats.gpu_line(g)
+                # this block's peak, for the provers on this card (reset when a block starts: BlockPeaks.start)
+                peaks = [self._peaks.peak(self._stats_key(w))[0] for w in self.workers
+                         if w.job == "run" and stats.gpu_for(w.card, s["gpus"]) is g]
+                peaks = [x for x in peaks if x is not None]
+                if peaks:
+                    text += f" · peak this block {stats.gb(max(peaks))} GB"
+                rows.append((self._gpu_name(g, len(shown)), stats.frac(g["used_mb"], g["total_mb"]), text))
+        else:
+            rows.append(("Graphics card", False, stats.NO_GPU_TEXT if s.get("gpu_state") == stats.GPU_NONE
+                         else stats.UNAVAILABLE_TEXT))
+        if s is not None:
+            used, total = s.get("ram_used_mb"), s.get("ram_total_mb")
+            rows.append(("Memory", stats.frac(used, total),
+                         f"{stats.gb(used)} / {stats.gb(total)} GB" if used is not None and total else "unavailable"))
+            cpu = s.get("cpu")
+            rows.append(("Processor", None if cpu is None else cpu / 100.0,
+                         "measuring…" if cpu is None else f"{cpu:.0f}%"))
+        cv.configure(height=len(rows) * self.ROW_H + 4)
+        bar_x, bar_w = 120, 140
+        for i, (label, fraction, text) in enumerate(rows):
+            y = 4 + i * self.ROW_H
+            cv.create_text(0, y + 5, text=label, anchor="w", fill=p["slate"], font=("Segoe UI", 9))
+            if fraction is not False:
+                self._stats_bar(cv, bar_x, y + 1, bar_w, fraction)
+            cv.create_text(bar_x + bar_w + 10, y + 5, text=text, anchor="w", fill=p["ink"], font=("Segoe UI", 9))
+        self._stats_chart_render(max(66, len(rows) * self.ROW_H + 4))
+
+    def _stats_chart_render(self, height):
+        """The last five minutes: GPU memory (fullest card shown) and CPU, both as a share of the whole."""
+        p, cv, h = self.p, self.stats_chart, self._stats_hist
+        cv.delete("all")
+        cv.configure(height=height)
+        top, w = 14, self.CHART_W
+        ch = height - top
+        cv.create_rectangle(0, top, w - 1, height - 1, outline=p["haze"])
+        any_gpu = any(v is not None for v in h.gpu)
+        for vals, colour in ((h.cpu, p["slate"]), (h.gpu, p["lamp"])):
+            for seg in stats.spark(vals, w, ch):
+                cv.create_line(*[v + (top if i % 2 else 0) for i, v in enumerate(seg)], fill=colour, width=2)
+        x = 0
+        if any_gpu:
+            item = cv.create_text(x, 6, text="GPU memory", anchor="w", fill=p["lamp_text"], font=("Segoe UI", 8))
+            x = cv.bbox(item)[2] + 10
+        cv.create_text(x, 6, text="CPU", anchor="w", fill=p["slate"], font=("Segoe UI", 8))
+        cv.create_text(w - 1, 6, text="last 5 min", anchor="e", fill=p["slate"], font=("Segoe UI", 8))
 
     def _render_home_setup(self):
         """What is still needed before Start can work, with the button that deals with each."""
@@ -814,7 +1010,9 @@ class App(tk.Tk):
                 "also_fold": bool(self.also_fold.get()),
                 "gpu_prepared": sorted(set(self.cfg.get("gpu_prepared") or [])),
                 "schedule": dict(self.sched),
-                "block_times": {k: list(v) for k, v in self.block_times.items()}}
+                "block_times": {k: list(v) for k, v in self.block_times.items()},
+                # the app version whose after-an-upgrade prover check has run (_after_upgrade_check)
+                "app_version_seen": self.cfg.get("app_version_seen") or ""}
 
     def _persist(self):
         self.cfg = self._snapshot()
@@ -1172,13 +1370,13 @@ class App(tk.Tk):
         self._tick_diag()
 
         coord = self.coord_var.get().strip() or api.DEFAULT_COORD   # read here: a Tk variable is not read off-thread
+        worker, ident, coord_set = self.worker_var.get().strip(), self.ident_var.get() or None, self.coord_var.get().strip()
 
         def go():
             env = dict(os.environ)
             if name == "selftest":
                 # the client's own selftest: the same environment a worker runs with (host, identity, board)
-                env = supervisor.worker_env(host, self.worker_var.get().strip(), self.ident_var.get() or None, None,
-                                            coord_url=self.coord_var.get().strip() or None)
+                env = supervisor.worker_env(host, worker, ident, None, coord_url=coord_set or None)
             if po2:
                 env["HAZYNC_SEG_PO2"] = po2
             # ⚠ The prover forces RISC0_PROVER=local when unset; leave it alone rather than
@@ -1187,12 +1385,20 @@ class App(tk.Tk):
             # 2,875 s prove is forty minutes of a window saying "running…" and nothing else —
             # reported from a real machine as "there isn't any form of progress being shown".
             rc, out = supervisor.run_stream(
-                supervisor.diagnostic_command(host, name, self.worker_var.get().strip(), sys.executable),
+                supervisor.diagnostic_command(host, name, worker, sys.executable),
                 env=env, timeout=timeout,
                 on_line=lambda l: self.results.put((self._diag_line, l)))
             # method-id is judged against the board's image when the board answers (supervisor.board_method_id)
             board = (supervisor.board_image(coord) if name == "method-id" else (None, ""))
-            self.results.put((self._after_diag, (name, title, rc, out, then, board)))
+            # a wrong image: say which prover, which image, and the fix that works (stale_prover_advice; it runs the
+            # installed prover, so here, off the Tk thread)
+            advice = None
+            if name == "method-id":
+                m = supervisor.HEX64.search(out or "")
+                if m:
+                    kind = "cpu" if supervisor.classify_host(host).get("kind") == "cpu" else "cuda"
+                    advice = supervisor.stale_prover_advice(host, m.group(0), board[0], kind=kind)
+            self.results.put((self._after_diag, (name, title, rc, out, then, board, advice)))
         threading.Thread(target=go, daemon=True).start()
 
     def _diag_line(self, line):
@@ -1214,7 +1420,7 @@ class App(tk.Tk):
         self.after(1000, self._tick_diag)
 
     def _after_diag(self, args):
-        name, title, rc, out, then, board = args
+        name, title, rc, out, then, board, advice = args
         elapsed = int(time.time() - self._diag_running[1]) if getattr(self, "_diag_running", None) else 0
         self._diag_running = None
         ok, verdict = supervisor.diagnostic_verdict(name, rc, out, board_id=board[0], board_why=board[1])
@@ -1225,13 +1431,27 @@ class App(tk.Tk):
                   "proved" if ok else "cuda-error")
         self._feed(f"Check {'passed' if ok else 'FAILED'}: {title}"
                    + ("" if ok else f" — {verdict}"), "good" if ok else "bad")
-        if not ok:
-            self._problem = supervisor.explain(out) or f"{title} — {verdict}"
+        # the worker is checked with it (a file read, no process): an old one cannot read the board's input files
+        wadv = supervisor.stale_worker_advice(self.worker_var.get().strip()) if name == "method-id" else None
+        if wadv:
+            self._feed(f"Check FAILED: is the Hazync client current? - {wadv['text']}", "bad")
+        if not ok or wadv:
+            if wadv and (ok or advice):
+                advice = supervisor.merge_advice(advice, wadv)     # one card, one fix for both
+                self._problem = advice["text"]
+            elif wadv:
+                # the prover failed in a way with no advice (it would not run, ...): say both, offer the worker's fix
+                self._problem = (supervisor.explain(out) or f"{title} — {verdict}") + " " + wadv["text"]
+                advice = wadv
+            else:
+                self._problem = (advice["text"] if advice else None) or supervisor.explain(out) or f"{title} — {verdict}"
+            if advice:
+                self._set_fix(advice)
         self._home_refresh()
         # ⚠ The output was already streamed into the log line by line, so repeating the tail here
         # would print everything twice. Only the explanation is added below.
         if not ok:
-            why = supervisor.explain(out)
+            why = advice["text"] if advice else supervisor.explain(out)
             if why:
                 self._say(f"  ⇒ {why}", "oom")
         for b_ in self.diag_btns.values():
@@ -1247,7 +1467,8 @@ class App(tk.Tk):
     # takes 2,875 s on four CPU cores, and starting that uninvited would pin the machine for the
     # better part of an hour.
     def _auto_diagnostics(self):
-        if self._auto_diag_done or not self.host_var.get().strip():
+        # after an upgrade, the remembered prover may be about to be replaced (_after_upgrade_check): check that one
+        if self._auto_diag_done or not self.host_var.get().strip() or self._upgrade_pending:
             return
         self._auto_diag_done = True
         queue_ = list(supervisor.AUTO_DIAGNOSTICS)
@@ -1625,6 +1846,18 @@ class App(tk.Tk):
                 # offer in its place depends on them)
                 out["found"] = supervisor.gpu_cards() if (out["cuda"] or not Path(host).is_file()) else []
                 out["checks"], out["fatal"] = supervisor.preflight(host, worker, identity_dir=ident, coord=coord)
+                # a prover making the wrong image: what to say and offer (stale_prover_advice), worked out here, off
+                # the Tk thread, because it runs the provers and asks the board
+                names = {c.name for c in out["fatal"]}
+                p_adv = None
+                if "host binary" in names and Path(host).is_file():
+                    got = supervisor.prover_image(host)
+                    if got:
+                        kind = "cpu" if out["info"].get("kind") == "cpu" else "cuda"
+                        p_adv = supervisor.stale_prover_advice(host, got, supervisor.board_image(coord)[0], kind=kind)
+                w_adv = supervisor.stale_worker_advice(worker) if "worker version" in names else None
+                if out["fatal"] and out["fatal"][0].name in ("host binary", "worker version"):
+                    out["advice"] = supervisor.merge_advice(p_adv, w_adv)
             except Exception as e:     # noqa: BLE001 - a crash here must still give Start back
                 out["error"] = f"{type(e).__name__}: {e}"
             self.results.put((self._start_checked, out))
@@ -1642,6 +1875,218 @@ class App(tk.Tk):
         (self.host_cpu_var if kind == "cpu" else self.host_cuda_var).set(path)
         self.build_kind.set(kind)
         self._use_build()
+
+    # ── the fix offered on the Home card (a wrong-image prover: supervisor.stale_prover_advice) ──────────────────
+    FIX_LABELS = {"switch": "Use the prover installed with Hazync", "update": "Update Hazync"}
+
+    def _set_fix(self, advice):
+        """Offer `advice`'s action for the problem now on the card (self._problem must already be its text)."""
+        self._problem_fix = dict(advice, problem=self._problem) if advice and advice.get("action") else None
+
+    def _current_fix(self):
+        """The fix offered for the problem on the card, or None once that problem is gone or replaced."""
+        f = self._problem_fix
+        return f if f and self._problem and f.get("problem") == self._problem else None
+
+    def _sync_fix(self):
+        if not hasattr(self, "fix_btn"):
+            return
+        busy = bool(self.workers) or bool(self._respawns) or self._armed or bool(getattr(self, "_starting", False))
+        fix = None if busy else self._current_fix()
+        if fix:
+            label = self._fix_label(fix)
+            self.fix_btn.configure(text=label, state="disabled" if self._update_busy else "normal")
+            if not self.fix_btn.winfo_manager():
+                self.fix_btn.pack(side="left", padx=(10, 0))
+        elif self.fix_btn.winfo_manager():
+            self.fix_btn.pack_forget()
+
+    def _fix_label(self, fix):
+        if fix["action"] == "switch":
+            if fix.get("path") and fix.get("worker"):
+                return "Use the prover and client installed with Hazync"
+            return "Use the client installed with Hazync" if fix.get("worker") else self.FIX_LABELS["switch"]
+        return self.FIX_LABELS["update"] if self._update_tag else "Install the latest Hazync"
+
+    def _do_switch(self, fix):
+        """Use the installed prover and/or worker that `fix` names, and check again (the same switch as Start's)."""
+        if fix.get("worker"):
+            self.worker_var.set(fix["worker"])
+            self._feed(f"Now using the Hazync client installed with Hazync: {fix['worker']}", "good")
+        if fix.get("path"):
+            self._feed(f"Now using the prover installed with Hazync: {fix['path']}", "good")
+            self._switch_to(fix["kind"], fix["path"])     # persists, re-runs the startup checks on it (_use_build)
+        else:
+            self._auto_diag_done = False
+            self._persist()
+            self.rescan()
+
+    def _apply_fix(self):
+        fix = self._current_fix()
+        if not fix:
+            return
+        if fix["action"] == "switch":
+            self._problem, self._problem_fix = "", None
+            self._do_switch(fix)
+            self._home_refresh()
+        elif fix["action"] == "update":
+            self._update_now()
+
+    # ── keeping the installed app current (appupdate) ─────────────────────────────────────────────────────────────
+    # ⭐ ASKED, NEVER SILENT. The app looks for a newer release at startup and every few hours and says so on Home;
+    # nothing is downloaded or installed until the person presses Update. A copy run from source has no version and
+    # updates with "Pull the newest version" instead.
+    def _update_tick(self):
+        if getattr(self, "_closing", False) or not self._app_version:
+            return
+        self.after(appupdate.CHECK_EVERY_S * 1000, self._update_tick)
+
+        def go():
+            try:
+                tag = appupdate.latest_tag(nethttp.get_json)
+            except Exception as e:     # noqa: BLE001 - offline is normal; say it in the log only
+                self._say(f"[update] could not ask GitHub for the latest release: {e}", "sys")
+                return
+            self.results.put((self._update_found, tag))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _update_found(self, tag):
+        if not appupdate.is_newer(tag, self._app_version):
+            self._say(f"[update] this is the latest Hazync ({self._app_version}; latest release {tag})", "sys")
+            return
+        if tag != self._update_tag:
+            self._update_tag = tag
+            self._feed(f"Hazync {tag} is available (this is v{self._app_version}). Press Update on Home to install it.")
+        self._render_update_bar()
+        self._home_refresh()
+
+    def _render_update_bar(self):
+        if not hasattr(self, "update_bar"):
+            return
+        if self._update_tag:
+            self.v_update.set(f"Hazync {self._update_tag} is available (this is v{self._app_version}).")
+            self.update_btn.configure(state="disabled" if self._update_busy else "normal",
+                                      text="Downloading..." if self._update_busy else "Update")
+            if not self.update_bar.winfo_manager():
+                self.update_bar.pack(fill="x", padx=10, pady=(0, 6), after=self._hero)
+        elif self.update_bar.winfo_manager():
+            self.update_bar.pack_forget()
+
+    def _update_now(self):
+        """Download the latest installer, verify it (appupdate.download_verified), run it and close. Asked first."""
+        if self._update_busy:
+            return
+        if not self._app_version:
+            messagebox.showinfo("Update Hazync",
+                                "This copy of Hazync runs from source. Update it with \"Pull the newest version\" "
+                                "under Advanced, or install Hazync from https://github.com/hazync/hazync/releases/latest")
+            return
+        if self.workers or self._respawns or self._armed or getattr(self, "_starting", False):
+            messagebox.showinfo("Update Hazync", "Press Stop first: Hazync closes while the installer runs.")
+            return
+        tag = self._update_tag
+        if not messagebox.askyesno(
+                "Update Hazync",
+                f"Download Hazync {tag or '(the latest release)'}, check it is the release signed by the Hazync "
+                "maintainer key, and install it?\n\nHazync closes while the installer runs; the installer offers "
+                "to open it again at the end. Your name on the board and your settings are kept."):
+            return
+        self._update_busy = True
+        self._render_update_bar()
+        self._home_refresh()
+        self._feed(f"Downloading Hazync {tag or '(latest)'} and checking its signature...")
+        current = self._app_version
+
+        def go():
+            t = tag
+            try:
+                t = t or appupdate.latest_tag(nethttp.get_json)
+                # refused unless strictly newer than this app (review M1), so "latest" can never downgrade it
+                ok, detail, sha = appupdate.download_verified(t, current, nethttp.get)
+            except Exception as e:     # noqa: BLE001
+                ok, detail, sha = False, f"{type(e).__name__}: {e}", ""
+            self.results.put((self._update_downloaded, (ok, detail, t, sha)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _update_downloaded(self, args):
+        ok, detail, tag, sha = args
+        self._update_busy = False
+        self._render_update_bar()
+        self._home_refresh()
+        if not ok:
+            self._feed(f"The update was not installed: {detail}", "bad")
+            self._say(f"[update] NOT installed: {detail}", "cuda-error")
+            messagebox.showerror("Update Hazync", f"The update was not installed:\n\n{detail}")
+            return
+        # review L7: work may have started while it downloaded (a proving window opening); never close on top of it
+        if self.workers or self._respawns or self._armed or getattr(self, "_starting", False):
+            self._feed(f"Hazync {tag} is downloaded and verified, but work started meanwhile: press Stop, then Update.")
+            messagebox.showinfo("Update Hazync", "Work started while the update downloaded. Press Stop, then Update.")
+            return
+        self._say(f"[update] {tag}: signature and sha256 verified; running {detail}", "sys")
+        try:
+            appupdate.launch_installer(detail, sha)
+        except OSError as e:
+            messagebox.showerror("Update Hazync", f"Verified, but the installer could not be started:\n{detail}\n\n{e}")
+            return
+        self._feed(f"Installing Hazync {tag}: closing so its files can be replaced.", "good")
+        self._on_close()
+
+    # ── after an upgrade: a remembered prover must not outlive it ─────────────────────────────────────────────────
+    # ⛔ (11-18, v0.26.1) the prover path is remembered across upgrades and an upgrade replaces only prover\ and
+    # prover-cpu\ beside the app, so a machine kept proving with an OLD host.exe (image 37987b85) after installing the
+    # new release. On the first start of a new app version, a remembered prover that is not the installed one, does not
+    # make the board's image, while the installed one does, is replaced -- automatically, because the person has just
+    # chosen to install this version, and said in the feed. On any other start it is only OFFERED (one click on the
+    # card, _apply_fix): a person who picked a prover by hand keeps it until they agree.
+    def _after_upgrade_check(self):
+        if not self._upgrade_pending:
+            return
+        remembered = {"cuda": self.host_cuda_var.get().strip(), "cpu": self.host_cpu_var.get().strip()}
+        kind = self.build_kind.get() or "cuda"
+        if not remembered.get(kind) and self.host_var.get().strip():
+            remembered[kind] = self.host_var.get().strip()     # a config from before the two prover slots
+        coord = self.coord_var.get().strip() or api.DEFAULT_COORD
+        rem_worker = self.worker_var.get().strip()
+
+        def go():
+            try:
+                new_worker = appupdate.worker_reset(rem_worker, supervisor.installed_worker(), supervisor.worker_facts)
+            except Exception:          # noqa: BLE001
+                new_worker = ""
+            try:
+                installed = supervisor.installed_provers()
+                board_id, why = supervisor.board_image(coord) if installed else (None, "")
+                ref = board_id or supervisor.CANONICAL_METHOD_ID
+                resets = appupdate.upgrade_resets(remembered, installed, supervisor.prover_image, ref)
+            except Exception as e:     # noqa: BLE001 - the check must never keep the diagnostics waiting
+                resets, why = {}, f"{type(e).__name__}: {e}"
+            self.results.put((self._upgrade_checked, (remembered, resets, why, rem_worker, new_worker)))
+        threading.Thread(target=go, daemon=True).start()
+
+    def _upgrade_checked(self, args):
+        remembered, resets, why, rem_worker, new_worker = args
+        self._upgrade_pending = False
+        if new_worker:
+            self.worker_var.set(new_worker)
+            self._feed(f"Hazync is now v{self._app_version}: the Hazync client it remembered ({rem_worker}) is an old "
+                       f"copy, so it now uses the one installed with it: {new_worker}", "good")
+        self.cfg["app_version_seen"] = self._app_version
+        if why:
+            self._say(f"[update] after the upgrade, the board's image could not be read ({why}); "
+                      "checked against the image this app was built for", "sys")
+        for kind, path in resets.items():
+            (self.host_cpu_var if kind == "cpu" else self.host_cuda_var).set(path)
+            self._feed(f"Hazync is now v{self._app_version}: the {kind.upper()} prover it remembered "
+                       f"({remembered.get(kind)}) makes an old image, so it now uses the one installed with it: {path}",
+                       "good")
+        self._persist()
+        if resets:
+            self._use_build()      # the active slot from the reset paths; re-runs the startup checks via rescan
+        elif new_worker:
+            self.rescan()          # the setup scan reads the worker; diagnostics follow once it is ready
+        elif self._setup_ok:
+            self._auto_diagnostics()
 
     def _offer_cpu(self, why, no_driver=False):
         """Offer the processor for this session, in plain words (review of a04038ce, M2). True if accepted and
@@ -1729,6 +2174,25 @@ class App(tk.Tk):
         if fatal:
             # ⚠ (review M4) a remembered prover that the board rejects, with a different one installed beside the app:
             # offer the installed one, or "install the latest Hazync" loops on the old path.
+            advice = out.get("advice")
+            if advice and advice.get("action") == "switch":
+                # the same switch as before, now naming the image each makes; declined, the card keeps the offer
+                if messagebox.askyesno("Use the installed copy?",
+                                       advice["text"] + f"\n\n{self._fix_label(advice)} now?"):
+                    self._do_switch(advice)
+                    self._start()
+                else:
+                    self._problem = advice["text"]
+                    self._set_fix(advice)
+                    self._home_refresh()
+                return
+            if advice and advice.get("action") == "update":
+                # not an error on this PC: the card says so, with the Update button (no dialog to dismiss)
+                self._problem = advice["text"]
+                self._set_fix(advice)
+                self._feed(advice["head"] + ": " + advice["text"], "bad")
+                self._home_refresh()
+                return
             if fatal[0].name == "host binary":
                 kind = "cpu" if info.get("kind") == "cpu" else "cuda"
                 inst = supervisor.installed_provers().get(kind, "")
@@ -1977,6 +2441,7 @@ class App(tk.Tk):
         # ⛔ encoding="utf-8": the worker is told PYTHONIOENCODING=utf-8, and text=True alone decodes with the LOCALE's
         # (cp1252 on Windows), so its "✓" arrived as "âœ“" (Xesktop, 11-13). test_log_visible.py checks a ✓ survives.
         w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
+        self._peaks.drop(self._stats_key(w))         # (job, index) keys are reused: start from no block at all
         w.env = env
         if job == "run" and extra:
             w.activity.set_range(extra[0])
@@ -2029,8 +2494,15 @@ class App(tk.Tk):
                         w.saw_cuda_error = True
                     if "no cuda-capable device" in line.lower():
                         w.no_device = True      # see _reap: a UUID pin the driver did not resolve
+                    peak = ""
+                    if w.job == "run":
+                        # ⭐ each block's peak GPU memory (stats.BlockPeaks): reset as a block is claimed, and written
+                        # on the line where it finishes or first fails, so an out-of-memory case is measured data.
+                        # ⚠ The bookkeeping always runs; only showing the text waits for a card to have been read.
+                        peak = self._peaks.on_line(self._stats_key(w), kind, (w.env or {}).get("HAZYNC_SEG_PO2"),
+                                                   show=self._stats_gpu())
                     if kind:
-                        self.q.put((kind, f"[{w.job} {w.index}] {line.rstrip()}"))
+                        self.q.put((kind, f"[{w.job} {w.index}] {line.rstrip()}{peak}"))
                         # ⭐ A known failure gets its plain-language meaning right underneath,
                         # once — every one of these cost real time to diagnose the first time.
                         if kind in ("cuda-error", "abort", "oom") and kind not in self._explained:
@@ -2100,6 +2572,7 @@ class App(tk.Tk):
                     continue
             self.workers.remove(w)
             if w.stopping:
+                self._peaks.drop(self._stats_key(w))     # a block stopped mid-way is not the next one's peak
                 self._say(f"[{w.job} {w.index}] stopped")
                 self._feed("Stopped")
                 if w.activity.holding:
@@ -2122,7 +2595,9 @@ class App(tk.Tk):
             # window does not know what happened it must not invent a cause.
             tag = {"config": "cuda-error", "gpu": "cuda-error",
                    "idle": "sys", "done": "proved"}.get(kind, "sys")
-            self._say(f"[{w.job} {w.index}] {msg}", tag)
+            peak = (self._peaks.on_exit(self._stats_key(w), kind, (w.env or {}).get("HAZYNC_SEG_PO2"),
+                                        show=self._stats_gpu()) if w.job == "run" else "")
+            self._say(f"[{w.job} {w.index}] {msg}{peak}", tag)
             several = len(self._session_cards) > 1 and w.label
             self._feed(f"{w.label}: {msg}" if several else msg, {"cuda-error": "bad", "proved": "good"}.get(tag, "sys"))
             if kind in ("config", "gpu"):

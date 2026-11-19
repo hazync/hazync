@@ -5,7 +5,8 @@ and reorg_branch.py's) as a node would, so prover/fetch_block_rpc.py builds them
   HAZYNC_RPC_CLI="python3 reorg_fake_node.py <world.json>"      (fetch_block_rpc.py appends the method and params)
 
 <world.json>: {"chain": [path of block_1.json, path of block_2.json, ...]}, the node's active chain from height 1; the
-test rewrites it (atomically) to make the node reorg. Only what fetch_block_rpc.py asks: getblockchaininfo,
+test rewrites it (atomically) to make the node reorg. Optional "known": block files of earlier chains, still served by
+hash (as a real node keeps a stale block: a fetch that read getblockhash just before the reorg still gets its block). Only what fetch_block_rpc.py asks: getblockchaininfo,
 getblockhash, getblock <hash> 1|3, getblockheader <hash>.
 """
 import hashlib, json, struct, sys
@@ -34,6 +35,16 @@ def main():
         h = int(a[0])
         out(hashes[h]) if 0 <= h < len(hashes) else die("error code: -8\nBlock height out of range")
     h = by_hash.get(a[0])
+    if h is None:
+        # a stale block (an earlier chain's): served as itself, at its own height, on that chain's times
+        for p in world.get("known", []):
+            j = json.load(open(p))
+            if header_hash(j) == a[0]:
+                blocks = blocks[:j["height"] - 1] + [j]
+                hashes = hashes[:j["height"]] + [a[0]]
+                times = times[:j["height"]] + [j["time"]]
+                h = j["height"]
+                break
     if h is None: die("error code: -5\nBlock not found")
     mtp = sorted(times[max(0, h - 10):h + 1])[len(times[max(0, h - 10):h + 1]) // 2]
     if h == 0:

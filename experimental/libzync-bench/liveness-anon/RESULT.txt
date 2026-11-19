@@ -1,0 +1,27 @@
+# liveness-anon after the 15.11.2026 review (tagged set leaves + committed depth, even-Y nullifier, pinned anchor): execute mode, r0vm 3.1.0, hazync-coord, 15.11.2026; real core receipt mainnet 1..200 (8888d59c), Hal coin f4184fc5...:0 (unspent at 200)
+# commands: liveanon set <rcpt> <b170_0_at200.hex> <depth> ; liveanon key ; liveanon wrong <rcpt> <hex>
+R0VM[292533] STAGE read 291188
+R0VM[332181] STAGE core 39674
+R0VM[340391] STAGE coin 8233
+R0VM[342843] STAGE set 2580
+LIVEANON set depth 0: 368708 user cycles, 1 segment(s), 524288 total cycles (padded to 2^po2), log path 6 hashes, core journal 2068 bytes
+R0VM[338858] STAGE read 337513
+R0VM[378506] STAGE core 39674
+R0VM[386716] STAGE coin 8233
+R0VM[401961] STAGE set 15224
+LIVEANON set depth 10: 427826 user cycles, 1 segment(s), 524288 total cycles (padded to 2^po2), log path 6 hashes, core journal 2068 bytes
+R0VM[385168] STAGE read 383823
+R0VM[424816] STAGE core 39674
+R0VM[433026] STAGE coin 8233
+R0VM[460886] STAGE set 27839
+LIVEANON set depth 20: 486751 user cycles, 1 segment(s), 1048576 total cycles (padded to 2^po2), log path 6 hashes, core journal 2068 bytes
+R0VM[23383] STAGE read 22074
+R0VM[135707] STAGE key 112303
+LIVEANON key work alone: 143935 user cycles, 1 segment(s), 262144 total cycles
+R0VM[23383] STAGE read 22074
+R0VM[172257] STAGE key 148853
+LIVEANON key: sk and n-sk give the same x-only key and the same nullifier
+LIVEANON wrong: refused (Guest panicked: the coin is worth less than min_value)
+LIVEANON not-in-set: refused (Guest panicked: the script is not in the set)
+LIVEANON short-path: refused (Guest panicked: the set path is not the committed depth)
+LIVEANON as-signet: refused (Guest panicked: core statement: wrong network)

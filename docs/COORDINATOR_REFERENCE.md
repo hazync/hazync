@@ -39,16 +39,16 @@ Applies to every route, from `H` in `server.py`:
 | `/api/donations` | — | `donations_public()` | 200 | Public donations record for hazync.org/donations/: every settled BTCPay invoice reduced to date and amount, newest first, cached for `DONATIONS_TTL`. Publishes no txid, address or invoice id — that would make the whole donations wallet public. Amounts are `paidAmount` (what arrived), not `amount` (what the invoice asked for). Returns `{error}` rather than an empty list when BTCPay cannot be read, so a failure never renders as 'nobody has ever donated'. |
 | `/api/provers` | — | `provers_public()` | 200 | Every contributor with work, best first, for hazync.org/provers/. Same rows as `/api/state`'s `leaderboard` and built by the same `prover_rows()`, but NOT truncated — state ships eight because the block map polls it every ten seconds. Moderated keys are hidden here as there; `progress.contributors` counts them, so the tile and this list differ on purpose. Cached `PROVERS_TTL`. |
 | `/api/pick` | — | `pick()` | 200, 404 | Advice only, claims nothing: the first block after the frontier that is not proven here or at a peer, not held, not (on the first pass) being proven at a peer, and has a witness. `404` if none. |
-| `/api/meta` | — | `expected_method_id()`, `frontier_hi()`, `handover_meta()`, `source_sha256()` | 200 | Pre-flight: `method_id` (the `method-id` output of `HAZYNC_HOST`), `frontier`, `reproduce` (`reproduce/METHOD_ID`) and `source_sha256` of the running `server.py`. |
+| `/api/meta` | — | `expected_method_id()`, `frontier_hi()`, `handover_meta()`, `source_sha256()`, `reorg_meta()` | 200 | Pre-flight: `method_id` (the `method-id` output of `HAZYNC_HOST`), `frontier`, `reproduce` (`reproduce/METHOD_ID`) and `source_sha256` of the running `server.py`. |
 | `/api/foldable` | `limit` | `foldable()` | 200 | Sibling pairs of the canonical fold tree whose parent is not yet verified. `?limit=` clamped to 1-32, default 32 (`FOLDABLE_DEFAULT`; 8 before #333). A pair under a live fold claim is left out. |
 | `/api/spine` | — | `spine_head()` | 200, 404 | Spine head metadata (`lo`, `hi`, `out_tip`, `out_leaves`, `range_work`, `sha256`, `bytes`, `handle`, `pubkey`, `ts`); `404` before the first spine. |
 | `/api/spine/segments` | — | `spine_segments()`, `spine_head()` | 200 | Who absorbed each block into the spine, as runs keyed on pubkey (#244). Cached for `VRANGES_CACHE_TTL`. |
 | `/api/spine/proof` | — | `spine_head()` | 200, 404 | The spine receipt bytes, served as `hazync-spine-1-<hi>.hzk`. Check with `hazync-verify`. |
 | `/api/zync/proof` | — | — | 200, 404 | The receipt the zyncAPP facts are at (`ZYNC_PROOF`, kept beside the facts by `hazync-lz-zapp-follow`), served as `hazync-zapp.hzk`; `404` when unset or missing. Untrusted: the page verifies it, then checks each fact against it. |
 | `/api/zync/<rest>` | — | `zync_relay()` | 200, 400, 404, 502 | zyncAPP facts (hazync.org/zapp/), relayed from the box's own `zync-serve` when `ZYNC_SERVE_URL` is set: only `/tip`, `/trie/balance/<spk>`, `/trie/history/<spk>` and `/trie/coin/<spk>/<txid>/<vout>`; anything else is `400` before it reaches the service, a query string is dropped, `404` when no service is set, `502` when it is down. Untrusted: the page checks every fact against a proof it verifies itself. |
-| `/api/proof/<id>` | — | `parse_any_range()` | 200, 404 | A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with `host verify-any`. |
+| `/api/proof/<id>` | — | `parse_any_range()` | 200, 404 | A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with `host verify-any <file> <lo>`, which needs the state before `lo`: the leaf bundle from `/api/witness/<lo>` saved as `leaf_<lo>.bin` in `$HAZYNC_BRIDGE_OUT` (the host defaults to `/root/bridge_bundles`); none is needed for `lo` = 1. |
 | `/api/witnesses` | `from`, `count` | `bulk_plan()`, `bundle_path()` | 200, 400 | Bulk bundle sync (#69): a streamed tar of `MANIFEST.json` (`served`, `missing`) then the bundles for `?from=&count=`, `count` at most `BULK_MAX`. `400` on a malformed request. |
-| `/api/witness/<height>` | — | `parse_range()`, `bundle_path()` | 200, 404 | One witness: the bridge bundle `bundle_<n>.json` if present, else the legacy `block_<n>.json`. Accepts a height or a range id (its `lo`). `404` if neither exists. |
+| `/api/witness/<height>` | — | `parse_range()`, `bundle_path()` | 200, 404 | One block's prepared input, served raw from `bundle_path()`: on a v2 (`HAZYNC_LIBZYNC=1`) board the binary leaf bundle `leaf_<n>.bin` (`LZLEAF` magic) from the bridge directory; on a v1 board the bridge bundle `bundle_<n>.json`; else the legacy `block_<n>.json`. Accepts a height or a range id (its `lo`). `404` if none exists: the public board prunes a leaf once its block is proved below the frontier, so it serves block 1 and blocks near the frontier. |
 | `/<path>` | — | — | 200, 404 | Static files under `COORD_WEB`, contained to that directory; `/` serves `index.html`. Not rate limited. |
 
 ### POST
@@ -79,7 +79,7 @@ In the order the file reads them. "—" means no default in the call: the variab
 |---|---|---|---|
 | `COORD_PORT` | `'8899'` | constant `PORT` | Listen port. |
 | `COORD_BIND` | `'0.0.0.0'` | constant `BIND` | Listen address. Use `127.0.0.1` behind a reverse proxy; a non-loopback bind in an insecure mode refuses to start (see `COORD_ALLOW_PUBLIC_INSECURE`). |
-| `COORD_DB` | `'coordinator.db'` | constant `DB` | SQLite database path. |
+| `COORD_DB` | `'coordinator.db'` / — | constant `DB`, `reorg_to_cmd()`, `reorg_ack_cmd()` | SQLite database path. |
 | `COORD_WEB` | `os.path.join(os.path.dirname(__file__), 'web')` | constant `WEB` | Directory served as static files. |
 | `TIP_HEIGHT` | `'958301'` | constant `TIP_FLOOR` | Floor for `chain_tip()`, which bounds acceptable range ids and the progress denominator. |
 | `TIP_CACHE_TTL` | `'300'` | constant `TIP_TTL` | Seconds `_servable_high()` caches the highest block with a bundle on disk. |
@@ -133,6 +133,17 @@ In the order the file reads them. "—" means no default in the call: the variab
 | `ROTATE_MAX_SKEW` | `'300'` | constant `ROTATE_MAX_SKEW` | Allowed distance in seconds between a rotation's `ts` and server time. |
 | `ROTATE_ENABLED` | `'0'` | constant `ROTATE_ENABLED` | `1` turns on `POST /api/rotate`. Default `0`: rotation answers `410`, because a stolen `key.hex` can sign both halves of a rotation (#311). |
 | `COORD_ALLOW_MOCK` | — | `__main__`, `verify_receipt()`, `verify_spine()` | Required for `VERIFY_MODE=mock` to accept anything. |
+| `HAZYNC_LZ_STATE_DIR` | `''` | constant `LZ_STATE_DIR` | prep's state directory (its `out/`). The backstop compares every verified range with the block hashes in its `state_<h>.json`; it also gives the default record directory. Unset: no reorg handling. |
+| `HAZYNC_LZ_REORG_DIR` | `os.path.join(LZ_STATE_DIR, 'reorg', 'records') if LZ_STATE_DIR else ''` | constant `REORG_DIR` | Where prep writes reorg records. Default `$HAZYNC_LZ_STATE_DIR/reorg/records`. |
+| `HAZYNC_LZ_REORG_ACK_DIR` | `''` | constant `REORG_ACK_DIR` | Where the coordinator writes its ack of an applied record. Default: the record directory. On hazync-proof prep runs as root, so point both sides at a directory this service owns. |
+| `REORG_POLL_S` | `'2'` | constant `REORG_POLL_S` | Seconds between scans of the record directory. |
+| `REORG_FAILURE_GRACE` | `str(CLAIM_MAX)` | constant `REORG_FAILURE_GRACE` | Seconds after a rewind during which a failed verification of an orphaned block answers `409 reorged` and is not counted against the block. Default `CLAIM_MAX`. |
+| `SPINE_HEADS_KEEP` | `'2016'` | constant `SPINE_HEADS_KEEP` | Blocks of spine heads kept below the head (`spine/heads/`) so a rewind can fall back to a kept head. |
+| `COORD_CRASH_FILE` | — | `reorg_rewind()` | Test hook for the end-to-end harness: if this file exists, a rewind dies between its file moves and its commit, as a crash would. Never set in production. |
+| `REORG_AUTO_MAX_DEPTH` | `'2016'` | constant `REORG_AUTO_MAX_DEPTH` | A rewind deeper than this below the highest verified block is never applied from a record, only by a person with `--reorg-to`. |
+| `REORG_BACKSTOP_S` | `'60'` | constant `REORG_BACKSTOP_S` | Seconds between backstop runs (verified ranges against prep's chain; writes `meta.reorg_backstop_at`). |
+| `REORG_REWIND_QUIET_S` | `str(2 * 3600)` | constant `REORG_REWIND_QUIET_S` | Seconds prep's `out/REWIND` keeps the backstop quiet; an older one no longer does. |
+| `REORG_META_TTL` | `'5'` | constant `REORG_META_TTL` | Seconds `/api/meta`'s `reorg` block is cached. |
 | `FRONTIER_CACHE_TTL` | `'2'` | constant `FRONTIER_TTL` | Seconds the frontier chain is cached (single-flight). |
 | `FRONTIER_SETTLE` | `'30'` | constant `FRONTIER_SETTLE` | Seconds a verified cover of frontier+1 must predate the frontier snapshot before `claim()` re-offers it and `/api/state` calls it unseamable (#339). |
 | `CACHE_MAX_STALE` | `'60'` | constant `CACHE_MAX_STALE` | Seconds past its TTL that `/api/state` and `/api/blockstatus` may still be served while they rebuild in the background; beyond it the caller rebuilds. |
@@ -181,8 +192,8 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 |---|---|---|---|
 | `id` | `cmd_id()` | `hazync id` | create/show your signing identity (ed25519) |
 | `pick` | `cmd_pick()` | `hazync pick` | show the board frontier (does not claim anything) |
-| `prove` | `cmd_prove()` | `hazync prove <id>` | prove that range on your GPU  -> a receipt .bin |
-| `selftest` | `cmd_selftest()` | `hazync selftest` | pre-flight: prover present, guest id matches, can verify a real proof |
+| `prove` | `cmd_prove()` | `hazync prove <id>` | prove that range on this box -> ~/.hazync/receipts/<id>.bin (submits nothing) |
+| `selftest` | `cmd_selftest()` | `hazync selftest` | pre-flight: prover present, guest id matches, verifies a real proof, PROVES block 1 (slow on CPU) |
 | `submit` | `cmd_submit()` | `hazync submit <id>` | sign the receipt with your key and submit it for verification |
 | `run` | `cmd_run()` | `hazync run [id]` | claim + prove + submit (id optional: takes the earliest free block) |
 | `spine` | `cmd_spine()` | `hazync spine [n]` | advance the genesis-anchored spine n steps, each absorbing the widest chunk available (default: all) |
@@ -228,7 +239,7 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 
 ## Launcher (`coordinator/run-workers.sh`, shipped as `hazync-run-workers.sh`)
 
-`run-workers.sh [N] [--stop]`: N defaults to `4`. It checks the host's guest id against `/api/meta` and runs a GPU smoke prove before starting any loop, then restarts each loop's command until it exits `78` (`EX_CONFIG`). Exit `75` (`EX_TEMPFAIL`, nothing to claim right now) waits 30 s and is not a failure. With alerts set up (`hazync notify`), a loop pushes after `NOTIFY_FAIL_STREAK` failures in a row, on recovery and when it stops, and the launcher pushes when it refuses to start.
+`run-workers.sh [N] [--drain|--stop]`: N defaults to `4`. `--drain` stops the loops and waits for the blocks in flight to be submitted; `--stop` stops at once and abandons them. Starting, it checks the host's guest id against `/api/meta` and runs a GPU smoke prove before starting any loop, then restarts each loop's command until it exits `78` (`EX_CONFIG`). Exit `75` (`EX_TEMPFAIL`, nothing to claim right now) waits 30 s and is not a failure. With alerts set up (`hazync notify`), a loop pushes after `NOTIFY_FAIL_STREAK` failures in a row, on recovery and when it stops, and the launcher pushes when it refuses to start.
 
 ### Environment
 

@@ -1,0 +1,1 @@
+72bc572abb45e04482e60c682fe3b812b9b4c7479d1b1d58d7ca34375a28d88c:0@220=unspent,created=210,coinbase=1

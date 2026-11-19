@@ -110,11 +110,12 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 
 | zyncAPP | inputs | uses | answer |
 |---|---|---|---|
-| **zyncPOO** (proof of ownership) | coins with log paths; a challenge; a signature by each coin's key | `utxo_roots` | "these coins, worth X sat, are unspent at the tip (or at height h) and the holder signed the challenge". A private form commits only the total |
+| Balance statement (STATEMENT_ZAPP.md, `zapps/statement`; no guest) | each script's balance fact; a purpose and nonce; a BIP-322 signature by each script | `trie_root` | "these scripts held X sat at the tip H, and each signed this statement". A private form (a guest, prototype measured) commits only the total |
 | coin history | a coin's log path, the spender record, block-forest paths | `utxo_roots`, `block_roots` | "coin C was created at h1 and spent by tx T at h2"; chained hop by hop, a coin's path back to its coinbase or forward to today |
 | proof of payment | block header, the coin-state digest after that block (a block leaf commits it), the block-forest path, a Merkle branch to the transaction | `block_roots` | "transaction T is in this chain at height h" |
 | supply | none | `utxo_value`, closed at H | "the UTXO set at H holds X sat" (compare with the issuance schedule) |
-| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). No checker exists yet; design B's `utxo_snapshot_check.py` checked the retired survivor forest (`history/experimental/libzync-bench/retired-scripts/`) |
+| snapshot check | a Core `dumptxoutset` | `live_set`, `live_hash` (profile bit 6), `utxo_value` | "this snapshot is the live coin set at the tip" (instant IBD, ROADMAP E2b). A verifier check, not a guest: `zapp-assume assumeutxo` (`zapps/assume`), [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) (branch `feat/zapp-assume`, 15.11.2026) |
+| assumevalid | a block hash, the headers from it to the tip | `tip_hash`, `profile` bit 1 clear | "scripts of this block and all its ancestors passed Core's rules": `zapp-assume assumevalid`, [`ASSUME_ZAPPS.md`](ASSUME_ZAPPS.md) |
 
 ## 7. Open
 
@@ -134,6 +135,7 @@ spends as (position, tx, vin) and the appended leaves. From it `zync-path` (swif
 |---|---|
 | `CoinFact` (`zync-path coin <history> <tip> <at> <pos>`) | coin C at log position p was spent by (height, tx, vin), or is unspent, in the coin state after height `at`; below the tip, `at`'s block leaf is opened in the tip's block forest. ⚠ An UNSPENT answer needs `preimage`, the coin's fields (yours or the server's), so C is shown to be a coin's leaf: the position check alone also passes a spent coin's flipped leaf (round 11). A journey binds the coin without it |
 | `CoinJourney` (`zync-path journey <history> <tip> <pos> --bitcoin-cli "<cmd>"`) | the transaction that created C is at its position in a proven block (header + Merkle branch + block leaf), C's leaf is that output's (value, scriptPubKey, height, coinbase, tracked, creation MTP), C's state at the tip, and, if spent, the spending transaction is the one the log names and its input spends C |
+| liveness proof (`zapp-liveness prove <history> <tip> <at> <txid>:<vout> --blocks <dir>`, `zapp-liveness --liveness`; `zapps/liveness`) | one OUTPOINT's state after height `at` (unspent, or spent by height, tx, vin), the coin named by all its fields, in one strict encoding; the caller states the question. LIVENESS_ZAPP.md |
 
 Walking a journey backwards (a creating transaction's inputs) and forwards (the spender's outputs) is a chain of
 these files. Limits:
@@ -183,4 +185,7 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 |---|---|---|---|---|
 | Header chain (ROADMAP K1, N3; `coordinator/deploy/headers`) | `zapps/headers` | `zapp-headers` | `zapp-headers.js` (`verifyHeaders`, `headersImageId`) | none |
 | SwiftSync hints (HINTS_ZAPP.md) | `zapps/hints` | `zapp-hints` | `zapp-hints.js` (`verifyHints`) | `zapps/hints/ffi` (`swiftsync_verify_hints`, `zapp_hints.h`) |
+| assumevalid / assumeutxo (ASSUME_ZAPPS.md) | `zapps/assume` | `zapp-assume` (`assumevalid`, `assumeutxo`) | `zapp-assume.js` (`verifyAssume`) | `zapps/assume/ffi` (`swiftsync_verify_assume`, `zapp_assume.h`) |
+| Coin liveness (LIVENESS_ZAPP.md) | `zapps/liveness` | `zapp-liveness` (also `prove`, `serve`) | `zapp-liveness.js` (`verifyLiveness`) | `zapps/liveness/ffi` (`zapp_liveness_verify`, `zapp_liveness.h`) |
+| Balance statement (STATEMENT_ZAPP.md) | `zapps/statement` | `zapp-statement` (also `draft`, `message`, `sign`, `add-sig`, `test-key`) | `zapp-statement.js` (`verifyStatement`) | none |
 | Deposit proof (DEPOSIT_ZAPP.md) | `zapps/deposit` (on `zapps/headers`) | `zapp-deposit` (also `build`, `mmr-path`) | `zapp-deposit.js` (`verifyDeposit`) | none |
