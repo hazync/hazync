@@ -1,0 +1,30 @@
+[package]
+name = "ts-anchor"
+version = "0.0.0"
+edition = "2021"
+description = "EXPERIMENTAL Trusted State proof of concept (docs/libzync/TRUSTED_STATE.md): an anchored ChainState from a Core snapshot, the join check, and zAPPs on the anchored lineage"
+license = "MIT"
+publish = false
+
+# Experimental and outside every workspace: nothing in the core, the verifiers or the zAPP modules depends on it.
+# It reuses the reviewed code it needs as libraries (zapp-assume's snapshot reader, ECMH and hash_serialized_3; the
+# core verifier's ChainState, block-leaf and trie-fact code; libzync's coin log and trie store; the BIP30 tree).
+
+[dependencies]
+zapp-assume = { path = "../../../zapps/assume" }
+zapp-statement = { path = "../../../zapps/statement" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+libzync = { path = "../../../libzync" }
+hazync-coinbase-smt = { path = "../../../coinbase-smt" }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+bitcoin = "0.32"
+num-bigint = "0.4"
+serde_json = "1"
+sha2 = "0.10"
+
+[profile.release]
+debug = 0
+lto = false
+codegen-units = 16
+
+[workspace]

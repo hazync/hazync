@@ -1,0 +1,20 @@
+# EXPERIMENTAL (docs/libzync/TRUSTED_STATE.md §6): a snapshot-ingest guest, to MEASURE in the risc0 executor what
+# building a Trusted State anchor inside the zkVM costs. Its own workspace and image: nothing here is in the core image.
+[workspace]
+resolver = "2"
+members = ["host", "methods"]
+
+[profile.release]
+debug = 0
+lto = false
+codegen-units = 16
+
+# the prover workspace's own patches, so the executor is the core host's (same vendored risc0-zkvm)
+[patch.crates-io]
+risc0-zkvm = { path = "../../../vendor/risc0-zkvm" }
+risc0-circuit-rv32im-sys = { path = "../../../vendor/risc0-circuit-rv32im-sys" }
+risc0-circuit-keccak = { path = "../../../vendor/risc0-circuit-keccak" }
+risc0-build-kernel = { path = "../../../vendor/risc0-build-kernel" }
+risc0-groth16-sys = { path = "../../../vendor/risc0-groth16-sys" }
+sppark = { path = "../../../vendor/sppark" }
+risc0-circuit-keccak-sys = { path = "../../../vendor/risc0-circuit-keccak-sys" }

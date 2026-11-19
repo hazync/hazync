@@ -1,0 +1,21 @@
+[package]
+name = "ts-ingest"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+# the core guest's versions (prover/methods/guest/Cargo.toml), so the shared files compile and cost the same
+[dependencies]
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ['std', 'unstable'] }
+sha2 = { version = "0.10", default-features = false, features = ["compress"] }
+risc0-crypto = { version = "=0.1.0-rc.1" }
+risc0-bigint2 = { version = "=1.4.14" }
+
+[patch.crates-io]
+sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.10.8-risczero.0" }
