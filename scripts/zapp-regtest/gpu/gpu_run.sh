@@ -14,14 +14,15 @@ cd "$W" || exit 1; cp -r "$HERE/pod" .; LOG=gpu_run.log; exec >> $LOG 2>&1
 RP=$(cat ~/.hazync/runpod.key); PUB=$(cat ~/.ssh/ghost_signet_ed25519.pub)
 K="-n -i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
 KS="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
-gql(){ curl -s -X POST -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" -d "$1" https://api.runpod.io/graphql; }
+# Pods through REST v2 (rp.py, the board's own client); only the balance is GraphQL, which v2 does not offer.
+export RP; rp(){ python3 "$HERE/rp.py" "$@"; }
+gqlbal(){ curl -s -X POST -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" -d '{"query":"query { myself { clientBalance } }"}' https://api.runpod.io/graphql; }
 say(){ echo "[$(date +%T)] $*"; }
 GPU="${GPU:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"; PORT_TRIES=${PORT_TRIES:-60}
-Q=$(python3 -c "import json,sys; print(json.dumps({'query': 'mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, volumeInGb: 0, containerDiskInGb: 80, gpuTypeId: \"%s\", name: \"lz-zapp-regtest\", imageName: \"runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04\", ports: \"22/tcp\", env: [{key: \"PUBLIC_KEY\", value: \"%s\"}] }) { id costPerHr } }' % (sys.argv[2], sys.argv[1])}))" "$PUB" "$GPU")
-R=$(gql "$Q"); ID=$(echo "$R" | python3 -c 'import json,sys; p=(json.load(sys.stdin).get("data") or {}).get("podFindAndDeployOnDemand"); print(p["id"] if p else "")')
-[ -n "$ID" ] || { say "deploy failed: $R"; exit 1; }
-echo $ID > pod_id.txt; say "pod $ID deployed ($GPU): $R"
-term(){ say "terminating $ID"; gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$ID\\\"}) }\"}" > /dev/null; }
+ID=$(rp deploy lz-zapp-regtest "$GPU" "$PUB") || { say "deploy failed"; exit 1; }
+[ -n "$ID" ] || { say "deploy failed: no pod id"; exit 1; }
+echo "$ID" > pod_id.txt; say "pod $ID deployed ($GPU)"
+term(){ say "terminating $ID"; rp terminate "$ID" || say "TERMINATE FAILED for $ID: check the RunPod console"; }
 # Everything the run wrote except the leaf bundles; bounded, exactly once (mkdir is atomic).
 harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; return 1; }
   [ -f conn.txt ] || return 0; read -r CIP CP < conn.txt; set -- "$CIP" "$CP"; say "harvesting from $1:$2"
@@ -35,16 +36,11 @@ harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; re
   return 1; }
 rm -f conn.txt; rmdir harvest.lock 2>/dev/null
 ( END=$((SECONDS+DEADLINE_MIN*60)); while [ -f pod_id.txt ]; do
-    B=$(gql '{"query":"query { myself { clientBalance } }"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["myself"]["clientBalance"])' 2>/dev/null || echo 99)
+    B=$(gqlbal | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["myself"]["clientBalance"])' 2>/dev/null || echo 99)
     if [ $SECONDS -ge $END ] || python3 -c "import sys; sys.exit(0 if float('$B') < 1 else 1)"; then say "DEADLINE (balance $B)"; rm -f pod_id.txt; harvest; term; exit; fi
     sleep 60; done ) &
 for i in $(seq 1 $PORT_TRIES); do
-  L=$(gql '{"query":"query { myself { pods { id runtime { ports { ip isIpPublic privatePort publicPort } } } } }"}' | python3 -c '
-import json,sys
-for p in json.load(sys.stdin)["data"]["myself"]["pods"]:
-  if p["id"]!=sys.argv[1]: continue
-  for x in ((p.get("runtime") or {}).get("ports") or []):
-    if x["isIpPublic"] and x["privatePort"]==22: print(x["ip"], x["publicPort"])' $ID)
+  L=$(rp ssh "$ID")
   [ -n "$L" ] && break; sleep 10; done
 [ -n "$L" ] || { say "no ports"; term; rm -f pod_id.txt; exit 1; }
 set -- $L; IP=$1; P=$2; say "ssh $IP:$P"; echo "$IP $P" > conn.txt
