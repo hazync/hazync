@@ -31,7 +31,7 @@ for x in a:104 a:105 a:110 a:112 b:113; do
   b=${x%:*} h=${x#*:}; lab=$h; [ "$h" -ge 112 ] && lab=$b$h
   head -c $(( (h + 1) * 80 )) $T/h$b.bin > $T/h_$lab.bin
   run 0 "is the proven UTXO set at height $h; Core's hash_serialized_3 of it: $(h3 $lab)" \
-      $U --headers $T/h_$lab.bin --expect $h:$(hash_at $b $h) $G/receipts/$b/block_$h.rcpt $G/oracle/utxo_$lab.dat
+      $U --headers $T/h_$lab.bin --expect "$h:$(hash_at $b $h)" $G/receipts/$b/block_$h.rcpt $G/oracle/utxo_$lab.dat
 done
 # the chain identity from a node (oracle_node.py, Core's answers): on branch a (after invalidateblock b 111) OK; on the
 # active chain after the reorg (b) block 112 is b's: FAIL
