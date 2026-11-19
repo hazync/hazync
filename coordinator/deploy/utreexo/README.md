@@ -20,7 +20,12 @@ witness needs a Utreexo bridge (utreexod's proof index) or a disk forest; neithe
 
 ## Settings (environment)
 
-⚠ `BLOCKS` must be the follower's own directory: on a reorg it moves the old branch's block files out of it.
+⚠ `BLOCKS` must be the follower's own directory: it moves block files out of it (reorgs, stale files) and deletes them
+(`PRUNE_BLOCKS`). Create it with `hazync-utreexo-follow --init`, which writes the marker `.hazync-utreexo-blocks`
+naming `UTREEXO_DIR`; the follower refuses to run on a directory without it, and `--init` refuses a non-empty unmarked
+directory.
+
+⚠ `PUBLISH` must be a DEDICATED target: the upload runs `rsync --delete-after`, which deletes everything else there.
 
 `UTREEXO_DIR`, `UTREEXO_BIN`, `ZYNCAPP`, `VERIFY` (zapp-utreexo), `ELF` / `WANT_ELF` (the tip guest and its sha256),
 `BASE_ID` / `TIP_IMAGE` (image ids, default the built-in ones), `CORE` (the core receipt, default the spine copy),

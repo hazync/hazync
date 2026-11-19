@@ -12,6 +12,7 @@
 # $D/base are symlinks to one, switched by an atomic rename, so a receipt and its meta never disagree (review L2).
 #
 #   hazync-utreexo-follow                                   step to the new H, verify, publish (the timer runs this)
+#   hazync-utreexo-follow --init                            create $D and $BLOCKS and mark $BLOCKS as this follower's own
 #   hazync-utreexo-follow --set-base <receipt> <H> <hash>   install a base (a final run of the base image; verified first)
 #
 # Nothing is published unless `zapp-utreexo verify`, with the node's own hashes at H and at the core tip, says OK (or
@@ -72,7 +73,21 @@ node_hash () {
   echo "$x"
 }
 
-mkdir -p "$D/work" "$D/pub" "$D/state" "$D/orphaned" "$BLOCKS"
+# $BLOCKS is this follower's own: it moves and deletes files there (reorgs, stale blocks, PRUNE_BLOCKS). It must hold
+# the marker that --init writes; a directory without it (shared, mistyped, a symlink to another tree) is refused
+# before anything is touched (review of 0d9683a LOW 3)
+MARK=.hazync-utreexo-blocks
+if [ "${1:-}" = "--init" ]; then
+  mkdir -p "$D" "$BLOCKS" || die "mkdir"
+  [ -z "$(ls -A "$BLOCKS")" ] || [ -f "$BLOCKS/$MARK" ] || die "$BLOCKS is not empty and has no $MARK: not initialising a directory that may be shared"
+  printf 'owned by the hazync-utreexo-follow of %s\n' "$(cd "$D" && pwd -P)" > "$BLOCKS/$MARK" || die "cannot write $BLOCKS/$MARK"
+  log "initialised: $D, block files in $BLOCKS"
+  exit 0
+fi
+[ -d "$BLOCKS" ] && [ -f "$BLOCKS/$MARK" ] || die "$BLOCKS has no $MARK: run --init first (it must be this follower's own directory)"
+[ "$(cat "$BLOCKS/$MARK")" = "owned by the hazync-utreexo-follow of $(cd "$D" 2>/dev/null && pwd -P)" ] \
+  || die "$BLOCKS/$MARK names another follower ('$(cat "$BLOCKS/$MARK")')"
+mkdir -p "$D/work" "$D/pub" "$D/state" "$D/orphaned"
 exec 9>"$D/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
 
 if [ -n "$ELF" ] && [ -n "$WANT_ELF" ]; then
@@ -114,9 +129,13 @@ checker () {
   fi
   out=$("$VERIFY" verify "$r" --network "$NETWORK" --expect "$h:$x" "${base[@]}" --json --allow-demo 2>/dev/null) || [ $? = 2 ] || return 1
   t=$(echo "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["core_height"])') || return 1
-  tx=$(node_hash "$t")
+  # errexit does not apply here (callers run `V=$(checker …) || die`), so every substitution is checked explicitly
+  # (review of 0d9683a LOW 1)
+  [[ "$t" =~ ^[0-9]+$ ]] || return 1
+  tx=$(node_hash "$t") || return 1
+  [[ "$tx" =~ ^[0-9a-f]{64}$ ]] || return 1
   local args=(verify "$r" --network "$NETWORK" --expect "$h:$x" "${base[@]}")
-  [ "$t" -gt "$h" ] && args+=(--expect-tip "$t:$tx")
+  if [ "$t" -gt "$h" ]; then args+=(--expect-tip "$t:$tx"); fi
   [ "${4:-}" = json ] && { "$VERIFY" "${args[@]}" --json --allow-demo 2>/dev/null || [ $? = 2 ]; return; }
   out=$("$VERIFY" "${args[@]}" 2>&1) || true
   if echo "$out" | grep -q "^ZAPP_UTREEXO_OK: $NETWORK Utreexo accumulator (Floresta's) after block $h $x "; then echo "OK $t $tx"; return 0; fi
@@ -124,6 +143,78 @@ checker () {
   echo "$out" | grep -E 'FAIL|ZAPP_UTREEXO' | tail -3 >&2
   return 1
 }
+
+# check_blocks <lo> <hi> <why>: every CACHED block file in lo..hi must be the node's block at its height (header hash
+# == getblockhash); a file that is not (an old branch's, left by an interrupted fall-back, a failed step before a
+# reorg, or a reorg below the base) moves to orphaned/ and is fetched again. A file above the node's tip moves too.
+# Block files are never trusted because they exist (review of 0d9683a MED)
+check_blocks () {
+  local lo=$1 hi=$2 why=$3 moved=0 h x nx O=
+  [ "$lo" -le "$hi" ] || return 0
+  while read -r h x; do
+    if [ "$h" -le "$NT" ]; then nx=$(node_hash "$h") || return 1; else nx=; fi
+    if [ "$nx" != "$x" ]; then
+      [ -n "$O" ] || { O=$D/orphaned/stale-$why-$(date +%s)/blocks; mkdir -p "$O" || return 1; }
+      mv "$BLOCKS/block_$h.json" "$O/" || return 1
+      moved=$((moved + 1))
+    fi
+  done < <(python3 - "$BLOCKS" "$lo" "$hi" <<'PY'
+import sys, os, json, struct, hashlib
+d, lo, hi = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+for h in range(lo, hi + 1):
+    p = f'{d}/block_{h}.json'
+    if not os.path.exists(p): continue
+    try:
+        v = json.load(open(p)); assert v['height'] == h
+        hdr = struct.pack('<i', v['version']) + bytes.fromhex(v['prev'])[::-1] + bytes.fromhex(v['merkle'])[::-1] + struct.pack('<III', v['time'], v['bits'], v['nonce'])
+        print(h, hashlib.sha256(hashlib.sha256(hdr).digest()).digest()[::-1].hex())
+    except Exception:
+        print(h, 'unreadable')
+PY
+)
+  [ "$moved" = 0 ] || log "moved $moved cached block file(s) in $lo..$hi that are not the node's chain to $O ($why)"
+}
+
+# publish_latest <H> <hash> <verdict line> <seconds>: copy latest to pub/ (utreexo-<H>.rcpt, latest.rcpt), write
+# latest.json last, retention, upload, record. Used after a step, for a republish, and straight after a fall-back
+publish_latest () {
+  local h=$1 hx=$2 v=$3 secs=$4 name="utreexo-$1.rcpt" vj k f
+  cp "$D/latest/rcpt" "$PUB/$name.new" || die "cp $name"
+  mv "$PUB/$name.new" "$PUB/$name" || die "mv $name"
+  cp "$D/latest/rcpt" "$PUB/latest.rcpt.new" || die "cp latest.rcpt"
+  mv "$PUB/latest.rcpt.new" "$PUB/latest.rcpt" || die "mv latest.rcpt"
+  vj=$(checker "$PUB/$name" "$h" "$hx" json) || die "the published receipt does not verify"
+  # the checker's JSON goes in through the environment, never into the program text (it holds escaped quotes)
+  VJ="$vj" python3 - "$PUB" "$name" "$secs" "$NETWORK" "${v%% *}" <<'PY' || die "latest.json"
+import json, sys, time, os, hashlib
+p, name, secs, net, verdict = sys.argv[1:]
+v = json.loads(os.environ['VJ'])
+b = open(os.path.join(p, name), 'rb').read()
+doc = {'network': net, 'height': v['height'], 'block_hash': v['block_hash'], 'leaves': v['leaves'], 'roots': v['roots'],
+       'core_height': v['core_height'], 'mode': v.get('mode', 'base'), 'steps': v.get('steps', 0), 'base_height': v.get('base_height', v['height']),
+       'receipt': name, 'sha256': hashlib.sha256(b).hexdigest(), 'bytes': len(b), 'verdict_here': verdict.lower(),
+       'proved_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'prove_seconds': int(secs)}
+open(os.path.join(p, 'latest.json.new'), 'w').write(json.dumps(doc) + '\n')
+os.replace(os.path.join(p, 'latest.json.new'), os.path.join(p, 'latest.json'))
+PY
+  # retention (review M2): the PUBLISHED_KEEP most recently published receipts (by publish time), never the current one;
+  # receipts above H (an orphaned branch after a fall-back) were already moved aside
+  k=1
+  for f in $(cd "$PUB" && ls -t utreexo-*.rcpt); do
+    [ "$f" = "$name" ] && continue
+    if [ "$k" -lt "$PUBLISHED_KEEP" ]; then k=$((k + 1)); else rm -f "$PUB/$f"; fi
+  done
+  if [ -n "$PUBLISH" ]; then
+    # receipts first (latest.json excluded, so the receiver's copy is not touched), then latest.json alone: a reader of
+    # latest.json never finds a name that is not there yet (review L3). The target must be dedicated (--delete-after)
+    local ssh_=(-e "ssh -i $PUBLISH_KEY -o BatchMode=yes")
+    rsync -rt --delay-updates --delete-after --exclude latest.json "${ssh_[@]}" "$PUB/" "$PUBLISH" || die "publish to $PUBLISH failed"
+    rsync -t "${ssh_[@]}" "$PUB/latest.json" "$PUBLISH" || die "publish of latest.json to $PUBLISH failed"
+  fi
+  echo "$h $hx" > "$D/published"
+  log "published block $h $hx (${v%% *})"
+}
+PUB=$D/pub
 
 if [ "${1:-}" = "--set-base" ]; then
   R=${2:?receipt}; H=${3:?height}; X=${4:?hash}
@@ -138,7 +229,11 @@ if [ "${1:-}" = "--set-base" ]; then
   point base "$n"; point latest "$n"
   O=$D/orphaned/base-$(date +%s); mkdir -p "$O"
   for d in "$D"/state/[0-9]*-*; do [ -e "$d" ] && [ "$(basename "$d")" != "$n" ] && { mv "$d" "$O/" || die "mv $d"; }; done
-  rm -f "$D/forest.bin" "$D/published"
+  rm -f "$D/forest.bin" "$D/work/forest.next" "$D/published"
+  # block files above the new base may be another branch's (a reorg below the old base): checked the same way
+  NT=$(cli getblockcount) || die "the node did not answer getblockcount"
+  top=$(find "$BLOCKS" -maxdepth 1 -name 'block_*.json' | sed 's/.*block_\([0-9]*\)\.json$/\1/' | sort -n | tail -1)   # find: no files is not an error (ls would exit 2 under pipefail)
+  check_blocks $((H + 1)) "${top:-0}" set-base || die "checking the cached block files"
   log "base installed: block $H $X ($V)"
   exit 0
 fi
@@ -151,8 +246,9 @@ NT=$(cli getblockcount) || die "the node did not answer getblockcount"
 [ "$NT" -ge "$P" ] || die "the node's tip $NT is below the proven height $P (still syncing?): not a reorg, nothing done"
 NBX=$(node_hash "$B"); [ "$NBX" = "$BX" ] || die "the base block $B $BX is no longer on the node's chain: install a new base"
 
-# the newest kept state whose block is still on the node's chain (normally latest; after a reorg an older one). Every
-# node answer is an assignment, so an RPC failure stops the run (set -e) instead of reading as "another hash"
+# the newest kept state whose block is still on the node's chain (normally latest; after a reorg an older one). At the top
+# level every node answer is an assignment, so with set -e an RPC failure stops the run instead of reading as "another
+# hash"; inside functions called as `x=$(f …) || die` errexit does not apply, and they check each answer themselves
 NPX_=$(node_hash "$P")
 if [ "$NPX_" != "$PX" ]; then
   log "REORG: the proven block $P $PX is no longer the node's"
@@ -177,6 +273,13 @@ if [ "$NPX_" != "$PX" ]; then
   if [ -f "$D/forest.bin" ]; then mv "$D/forest.bin" "$O/" || die "mv forest.bin"; fi
   log "fell back to the kept proof of block $NP $NPX (orphaned states and receipts moved to $O); stepping forward on the node's branch"
   P=$NP; PX=$NPX
+  # publish the fall-back state at once: pub/latest.json must not name the orphaned receipt while the new branch is
+  # proved (review of 0d9683a LOW 4)
+  FB=fallback
+fi
+if [ "${FB:-}" = fallback ] && [ "${DRY_RUN:-0}" != 1 ]; then
+  V=$(checker "$D/latest/rcpt" "$P" "$PX") || die "the fall-back proof of $P does not verify to the node's block $P $PX"
+  publish_latest "$P" "$PX" "$V" 0
 fi
 
 CI=$("$ZYNCAPP" core-info "$CORE") || die "core-info $CORE"
@@ -201,6 +304,7 @@ if [ "$H" -gt "$P" ]; then
   # the bodies P+1..H (or 1..H when the native replay must start from genesis: no forest cache at P), and the link
   # H+1..T as headers only
   lo=$((P + 1)); [ -f "$D/forest.bin" ] || lo=1
+  check_blocks "$lo" "$H" step || die "checking the cached block files"
   missing=; for h in $(seq "$lo" "$H"); do [ -s "$BLOCKS/block_$h.json" ] || { missing=$h; break; }; done   # no `| head` (SIGPIPE under pipefail)
   if [ -n "$missing" ]; then $FETCH "$missing" "$H" "$BLOCKS" > "$D/work/fetch.log" 2>&1 || { tail -3 "$D/work/fetch.log"; die "fetch $missing..$H"; }; fi
   HDRS=$D/work/link_$((H + 1))_$T.txt; : > "$HDRS"
@@ -209,21 +313,21 @@ if [ "$H" -gt "$P" ]; then
     printf '%s %s\n' "$h" "$hh" >> "$HDRS"
   done
   OUT=$D/work/step_$H.rcpt
-  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$D/forest.bin" --headers "$HDRS" "${NETFLAG[@]}")
+  # the host reads the cache at P from forest.bin and writes the one at H to work/forest.next, which replaces forest.bin
+  # only once latest points at H: a failed or killed run leaves forest.bin valid for P (review of 0d9683a LOW 2)
+  rm -f "$D/work/forest.next"
+  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$D/forest.bin" --cache-out "$D/work/forest.next" --headers "$HDRS" "${NETFLAG[@]}")
   [ -n "$ELF" ] && args+=(--elf "$ELF")
   [ -n "$BASE_ID" ] && args+=(--base-id "$BASE_ID")
   log "step $P -> $H (node tip $NT, core tip $T)"
   S=$(date +%s)
-  # the host saves its forest cache at H as it finishes; until latest points at H, a failure must drop that cache, or the
-  # next run (latest still at P) would take it for P and fetch only P+1..H (review M2)
-  trap 'rm -f "$D/forest.bin"' EXIT
   "$ZYNCAPP" "${args[@]}" > "$D/work/prove.log" 2>&1 || { tail -5 "$D/work/prove.log" >&2; die "prove failed"; }
   SECS=$(( $(date +%s) - S ))
   V=$(checker "$OUT" "$H" "$HX") || die "the new step does not verify to the node's block $H $HX"
   log "proved and verified $((P + 1))..$H in $SECS s (${V%% *})"
   n=$(new_state "$OUT" "$H" "$HX") || die "cannot write the state of $H (disk full?): latest stays at $P"
   point latest "$n"
-  trap - EXIT
+  if [ -f "$D/work/forest.next" ]; then mv "$D/work/forest.next" "$D/forest.bin" || die "mv forest.next"; fi
   # keep the KEEP newest states below latest, the base and latest itself
   keep_b=$(basename "$(readlink "$D/base")"); keep_l=$(basename "$(readlink "$D/latest")")
   old=(); for d in $(cd "$D/state" && ls -d [0-9]*-* | sort -n); do [ "$d" != "$keep_b" ] && [ "$d" != "$keep_l" ] && old+=("$d"); done
@@ -237,42 +341,5 @@ else
   V=$(checker "$D/latest/rcpt" "$H" "$HX") || die "the kept proof of $H does not verify to the node's block $H $HX"
 fi
 
-# the published folder: utreexo-<H>.rcpt (immutable name), latest.rcpt (the stable name), latest.json (written last)
-PUB=$D/pub
-NAME=utreexo-$H.rcpt
-cp "$D/latest/rcpt" "$PUB/$NAME.new" || die "cp $NAME"
-mv "$PUB/$NAME.new" "$PUB/$NAME" || die "mv $NAME"
-cp "$D/latest/rcpt" "$PUB/latest.rcpt.new" || die "cp latest.rcpt"
-mv "$PUB/latest.rcpt.new" "$PUB/latest.rcpt" || die "mv latest.rcpt"
-VJ=$(checker "$PUB/$NAME" "$H" "$HX" json) || die "the published receipt does not verify"
-# the checker's JSON goes in through the environment, never into the program text (it holds escaped quotes)
-VJ="$VJ" python3 - "$PUB" "$NAME" "$SECS" "$NETWORK" "${V%% *}" <<'PY'
-import json, sys, time, os, hashlib
-p, name, secs, net, verdict = sys.argv[1:]
-v = json.loads(os.environ['VJ'])
-b = open(os.path.join(p, name), 'rb').read()
-doc = {'network': net, 'height': v['height'], 'block_hash': v['block_hash'], 'leaves': v['leaves'], 'roots': v['roots'],
-       'core_height': v['core_height'], 'mode': v.get('mode', 'base'), 'steps': v.get('steps', 0), 'base_height': v.get('base_height', v['height']),
-       'receipt': name, 'sha256': hashlib.sha256(b).hexdigest(), 'bytes': len(b), 'verdict_here': verdict.lower(),
-       'proved_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'prove_seconds': int(secs)}
-open(os.path.join(p, 'latest.json.new'), 'w').write(json.dumps(doc) + '\n')
-os.replace(os.path.join(p, 'latest.json.new'), os.path.join(p, 'latest.json'))
-PY
-# retention (review M2): the PUBLISHED_KEEP most recently published receipts (by publish time), never the current one;
-# receipts above H (an orphaned branch after a fall-back) were already moved aside above
-k=1
-for f in $(cd "$PUB" && ls -t utreexo-*.rcpt); do
-  [ "$f" = "$NAME" ] && continue
-  if [ "$k" -lt "$PUBLISHED_KEEP" ]; then k=$((k + 1)); else rm -f "$PUB/$f"; fi
-done
 rm -f "$D/work"/step_*.rcpt
-
-if [ -n "$PUBLISH" ]; then
-  # receipts first (latest.json excluded, so the receiver's copy is not touched), then latest.json alone: a reader of
-  # latest.json never finds a name that is not there yet (review L3)
-  ssh_=(-e "ssh -i $PUBLISH_KEY -o BatchMode=yes")
-  rsync -rt --delay-updates --delete-after --exclude latest.json "${ssh_[@]}" "$PUB/" "$PUBLISH" || die "publish to $PUBLISH failed"
-  rsync -t "${ssh_[@]}" "$PUB/latest.json" "$PUBLISH" || die "publish of latest.json to $PUBLISH failed"
-fi
-echo "$H $HX" > "$D/published"
-log "published block $H $HX (${V%% *})"
+publish_latest "$H" "$HX" "$V" "$SECS"

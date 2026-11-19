@@ -41,7 +41,7 @@ want 2 "--network mainnet, named" -- verify $V/mainnet-3.receipt --network mainn
 want 1 "a mainnet proof checked as signet" -- verify $V/mainnet-3.receipt --network signet --expect 3:$H3
 grep -q "FAIL.*the proof is for signet" "$T/out" || { cat "$T/out"; echo "::error::the network mismatch is not the failed check"; exit 1; }
 want 1 "--network regtest (no image)" -- verify $V/mainnet-3.receipt --network regtest --expect 3:$H3
-want 1 "--image twice" -- verify $V/mainnet-3.receipt --image $(printf 'ab%.0s' $(seq 32)) --image $(printf 'ab%.0s' $(seq 32)) --expect 3:$H3
+want 1 "--image twice" -- verify $V/mainnet-3.receipt --image "$(printf 'ab%.0s' $(seq 32))" --image "$(printf 'ab%.0s' $(seq 32))" --expect 3:$H3
 want 1 "--network twice" -- verify $V/mainnet-3.receipt --network mainnet --network signet --expect 3:$H3
 # --json / --floresta: nothing on stdout on DEMO; with --allow-demo exactly the JSON, marked demo
 want 2 "--json on DEMO" -- verify $V/mainnet-3.receipt --expect 3:$H3 --json

@@ -12,7 +12,7 @@ HERE=$(cd "$(dirname "$0")" && pwd); F=$HERE/../hazync-utreexo-follow
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 # The follower's OWN block directory (it moves block files aside on a reorg): hard links to the shared files 1..4,000,
 # so a rename or delete inside $W never touches the source directory (which the fake node keeps reading)
-mkdir -p "$W/blocks"
+UTREEXO_DIR=$W/d BLOCKS=$W/blocks "$F" --init >/dev/null 2>&1 || { echo "FAIL --init"; exit 1; }   # the ownership marker
 for h in $(seq 1 4000); do ln "$FAKE_BLOCKS/block_$h.json" "$W/blocks/" 2>/dev/null || cp "$FAKE_BLOCKS/block_$h.json" "$W/blocks/"; done
 # fetch = copy from the source directory (the node's chain); a reorg's fall-back makes the follower fetch again
 printf '#!/bin/bash\nfor h in $(seq "$1" "$2"); do cp "%s/block_$h.json" "$3/" || exit 1; done\n' "$FAKE_BLOCKS" > "$W/fetch"; chmod +x "$W/fetch"

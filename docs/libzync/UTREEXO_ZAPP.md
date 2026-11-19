@@ -516,7 +516,7 @@ does not verify, or a wrong ELF leaves the published folder untouched.
 
 **Known limits of the follower (documented, not fixed):** the two-pass upload (receipts, then `latest.json`) is
 ordered but not atomic across files: a reader can briefly see a new receipt next to the previous `latest.json`, which
-still names a receipt that is there. A fall-back, or a failed step after the prove, drops the forest cache, so the
+still names a receipt that is there. A fall-back drops the forest cache (a failed step keeps the one for P), so the
 test-scale witness source replays from genesis (and, with `PRUNE_BLOCKS=1`, fetches every body again); the production
 source (§10.5.1) would not. One run at a time (`flock`); a crash between a state's rename and the `latest` switch
 leaves an unused state directory, which the retention removes.
@@ -661,6 +661,17 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   started moving another project's files. The run was stopped within two minutes, before any file moved (all 100,000
   checked present); the test now gives the follower its own directory of hard links and a copying fetch, and the
   script and README say `BLOCKS` must be private.
+  After the review of `0d9683a` (shell logic only, no proof rerun needed): cached block files are never trusted because
+  they exist: before each prove, every cached file in the step's range is compared with the node's hash at its height,
+  and a mismatch (an old branch's file left by an interrupted fall-back, a failed step before a reorg, or a reorg below
+  the base) moves to `orphaned/` and is fetched again; `--set-base` checks the files above the new base the same way.
+  The host writes the cache at H to `work/forest.next` (`--cache-out`), which replaces `forest.bin` only after `latest`
+  points at H, so a failed or killed run keeps a cache that is still valid for P (the earlier trap dropped it on any
+  failure). `checker` checks every substitution itself (errexit does not apply in `x=$(f) || die`). `BLOCKS` must
+  carry the marker `--init` writes (the follower refuses to run without it; `--init` refuses a non-empty unmarked
+  directory); `PUBLISH` must be a dedicated target (README). A fall-back publishes the fall-back state at once, so
+  `latest.json` never names the orphaned receipt while the new branch is proved. The logic test has a case and a
+  control for each.
 - **Review H1**: `journal_kind` decoded the receipt before `receipt_kind` refused composites; a composite nested
   300,000 deep (6 MB) overflowed the CLI's stack (exit 134). Now refused first: a library test (it aborts with a stack
   overflow without the fix), a CLI case in `test.sh` and a WASM case in `test.mjs`, each generating the file.

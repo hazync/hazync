@@ -17,6 +17,7 @@
 //!   zyncapp utreexo-tip-prove <block json dir> <previous receipt | previous .journal> <H> <core receipt | state_<T>.json>
 //!       <out receipt> [--signet] [--execute] [--prof N] [--elf <tip guest>] [--base-id <hex>] [--cache <file>] [--ref <log>]
 //!       [--headers <file>]   (the link H+1..T as "<height> <header hex>" lines; default: from the block files)
+//!       [--cache-out <file>] (where the replay's state at H is saved; default: over --cache)
 //!       One STEP of the tip mode (UTREEXO_ZAPP.md §10): from the roots the previous receipt proves (a base receipt of
 //!       utreexo-prove, or an earlier step) to the roots after H, block by block as Floresta does (rustreexo
 //!       Stump::modify with batch proofs from a native MemForest), linked by headers H+1..T to the core tip. A
@@ -865,7 +866,9 @@ fn utreexo_tip_prove(a: &[String]) {
     if z.roots != nat.roots() || z.leaves != nat.stump.leaves || z.block_hash != nat.last || z.height != stop || z.from != p_height {
         die("the guest's statement is not the native replay's");
     }
-    if let Some(c) = cache { nat.save(c).unwrap_or_else(|e| die(&format!("--cache: {e}"))); }
+    // --cache-out: where the state at H is written (default: over --cache). A follower writes it aside and renames it
+    // over its cache only once the step is accepted, so a failed run never leaves a cache for the wrong height
+    if let Some(c) = flag(a, "--cache-out").or(cache) { nat.save(c).unwrap_or_else(|e| die(&format!("--cache-out: {e}"))); }
     println!("UTREEXO_TIP_JOURNAL height={} block={} leaves={} steps={} base_height={} from={} roots={} core={} core_height={}{}", z.height, disp(&z.block_hash),
              z.leaves, z.steps, z.base_height, z.from, roots_str(&z.roots), id_hex(&z.core_id), z.core_height,
              if core_receipt.is_none() || prev_receipt.is_none() { " [unresolved assumptions: execute only]" } else { "" });
