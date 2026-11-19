@@ -2146,6 +2146,21 @@ jobs:
             [ -s "hosts/$n" ] || { echo "::error::hosts/$n was not built"; exit 1; }
           done
           grep -q '^HOST_UNIT_OK .*, 0 failed$' hosts/ids.txt || { echo "::error::host unit tests (libzync mode) failed"; tail -40 hosts/host_unit.log; exit 1; }
+          # The strict decoding of untrusted receipts (verify-any, the worker wire): each test BY NAME, so a renamed or
+          # filtered-out test fails here instead of passing by absence. A new strict test is added to this list.
+          for t in \
+            lz_coord::strict_decode_tests::the_real_receipt_decodes_control \
+            lz_coord::strict_decode_tests::a_trailing_byte_is_refused \
+            lz_coord::strict_decode_tests::an_unreduced_control_inclusion_word_is_refused_not_an_abort \
+            lz_coord::strict_decode_tests::an_unreduced_control_id_word_is_refused \
+            lz_coord::strict_decode_tests::an_unreduced_seal_word_is_refused \
+            lz_coord::strict_decode_tests::a_journal_of_partial_words_is_refused_not_an_abort \
+            lz_coord::strict_decode_tests::a_composite_receipt_is_refused_before_decoding \
+            lz_coord::strict_decode_tests::the_risc0_3_0_5_receipt_still_decodes_for_the_handover \
+            lz_coord::strict_decode_tests::a_job_pair_with_bytes_after_it_is_refused \
+            seg::worker_wire_strict_tests::a_worker_succinct_receipt_is_decoded_strictly; do
+            grep -aqxF "test $t ... ok" hosts/host_unit.log || { echo "::error::host test $t did not run and pass"; grep -a strict hosts/host_unit.log; exit 1; }
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libzync-hosts

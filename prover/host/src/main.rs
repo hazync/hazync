@@ -359,8 +359,7 @@ fn xver_selftest_cmd(path: &str, image: Option<&str>) {
         println!("XVER {} params {} computed {} {}", v.name, hex(&v.params), p, if ok { "OK" } else { "MISMATCH" });
         assert!(ok, "{}: the declared verifier-parameter digest is not the vendored circuit's", v.name);
     }
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}")))
-        .unwrap_or_else(|e| panic!("{path}: not a receipt: {e}"));
+    let r = verify::read_receipt(path).unwrap_or_else(|e| panic!("{e}"));
     let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else { panic!("{path}: not a succinct receipt") };
     let params: [u8; 32] = s.verifier_parameters.as_bytes().try_into().unwrap();
     let v = xver::version(&params).unwrap_or_else(|| panic!("{path}: verifier parameters {} are not a vendored version", s.verifier_parameters));
@@ -1319,7 +1318,7 @@ fn main() {
     }
     if let Some(p) = args.iter().position(|a| a == "journal-sha") {
         let f = args.get(p + 1).expect("journal-sha <rcpt>");
-        let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).unwrap_or_else(|e| panic!("{f}: {e}"))).expect("receipt");
+        let r = verify::read_receipt(f).unwrap_or_else(|e| panic!("{e}"));
         r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{f} does not verify against this image: {e}"));
         println!("JOURNAL_SHA256 {}", lz::journal_sha(&r));
         return;
@@ -1535,7 +1534,7 @@ fn main() {
     if let Some(p) = args.iter().position(|a| a == "xver-encode") {
         // the words a cross-version handover feeds the guest (for the in-guest test, experimental/libzync-bench/xver)
         let (i, o) = (args.get(p + 1).expect("xver-encode <receipt> <out>"), args.get(p + 2).expect("xver-encode <receipt> <out>"));
-        let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(i).unwrap()).expect("receipt");
+        let r = verify::read_receipt(i).unwrap_or_else(|e| panic!("{e}"));
         let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else { panic!("not succinct") };
         let w: Vec<u8> = xver::encode(s).iter().flat_map(|x| x.to_le_bytes()).collect();
         std::fs::write(o, w).unwrap();
