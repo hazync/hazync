@@ -672,6 +672,14 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   directory); `PUBLISH` must be a dedicated target (README). A fall-back publishes the fall-back state at once, so
   `latest.json` never names the orphaned receipt while the new branch is proved. The logic test has a case and a
   control for each.
+  After the delta review of `7806f4b`: a fall-back whose kept receipt's own core tip was orphaned too (a reorg deeper
+  than that receipt's link) cannot be checked against the node, so it is logged and not published and the run steps
+  on, instead of dying before the step; `--init` never overwrites a marker naming another follower; the forest cache
+  is named by the height and hash it is for (`forest-<H>-<hash>.bin`), so only the cache of exactly (P, hash) lets a
+  step start at P+1 (a kill between the `latest` switch and the cache's rename now means a replay from block 1, not a
+  wedge under `PRUNE_BLOCKS`); `check_blocks` lists the files first and checks that listing's status, the node call
+  never reads the loop's stdin (`</dev/null`, for an ssh or docker `BITCOIN_CLI`), and `--set-base` validates
+  `getblockcount`. The logic test is at 71 checks, with a control for each.
 - **Review H1**: `journal_kind` decoded the receipt before `receipt_kind` refused composites; a composite nested
   300,000 deep (6 MB) overflowed the CLI's stack (exit 134). Now refused first: a library test (it aborts with a stack
   overflow without the fix), a CLI case in `test.sh` and a WASM case in `test.mjs`, each generating the file.

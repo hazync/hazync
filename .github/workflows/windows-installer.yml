@@ -58,22 +58,28 @@ jobs:
           else
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.src.outputs.ref }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12.7'
 
       - name: Build tools, pinned
-        run: python -m pip install --disable-pip-version-check pyinstaller==6.11.1 cryptography==44.0.0
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller==6.11.1 cryptography==44.0.0
+          python -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r tools/win-gui/installer/requirements-certifi.txt
 
       - name: The frozen-interpreter dispatch (unit test)
         working-directory: tools/win-gui
         run: |
           python test_frozenpy.py
           python test_frozenpy.py --control
+          python test_appupdate.py
+          python test_appupdate.py --control
+          python test_stale_prover.py
+          python test_stale_prover.py --control
 
       - name: The app's own behaviour, in real Tk windows on Windows (name prompt, GPU preparing, keeps going)
         working-directory: tools/win-gui
@@ -113,8 +119,19 @@ jobs:
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: '$tag'"; exit 1; }
           mkdir -p rel && cd rel
           gh release download "$tag" -R hazync/hazync -p 'hazync-host-x86_64-windows-cuda.zip' -p 'hazync-worker'
+          # The CPU prover (from v0.26.1): REQUIRED when the source being built lists it as a release asset and this is
+          # the release itself; otherwise packed when the release has it (a PR builds around the latest release, which
+          # may predate it).
+          CPU=hazync-host-x86_64-windows-cpu.zip; files="hazync-host-x86_64-windows-cuda.zip hazync-worker"
+          if gh release download "$tag" -R hazync/hazync -p "$CPU" 2>/dev/null; then
+            files="$files $CPU"
+          elif [ "$IN_RELEASE" = true ] && grep -q "^release $CPU\$" ../scripts/release-assets.txt; then
+            echo "::error::$tag lists $CPU in scripts/release-assets.txt but the release does not carry it"; exit 1
+          else
+            echo "::warning::$tag has no $CPU: this installer carries the CUDA prover only"
+          fi
           if gh release download "$tag" -R hazync/hazync -p 'SHA256SUMS.txt' 2>/dev/null; then
-            for f in hazync-host-x86_64-windows-cuda.zip hazync-worker; do
+            for f in $files; do
               want=$(awk -v f="$f" '$2==f || $2=="*"f {print $1}' SHA256SUMS.txt)
               got=$(sha256sum "$f" | cut -d' ' -f1)
               [ -n "$want" ] && [ "$want" = "$got" ] || { echo "::error::$f does not match $tag's SHA256SUMS.txt"; exit 1; }
@@ -129,9 +146,34 @@ jobs:
           fi
           python -c "import zipfile; zipfile.ZipFile('hazync-host-x86_64-windows-cuda.zip').extractall('prover')"
           ls -la prover
+          if [ -f "$CPU" ]; then
+            python -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('prover-cpu')" "$CPU"
+            ls -la prover-cpu; echo "CPU_PROVER=1" >> "$GITHUB_ENV"
+          fi
           v="$IN_VERSION"; [ -n "$v" ] || v="${tag#v}-dev.$RUN_NUMBER"
           [ "$IN_RELEASE" != true ] || v="${tag#v}"
           echo "VERSION=$v" >> "$GITHUB_ENV"; echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: The Visual C++ runtime beside any prover that imports it (app-local, no admin)
+        # ⛔ review of a04038ce, M1: the CUDA host.exe imports VCRUNTIME140.dll, VCRUNTIME140_1.dll and MSVCP140.dll
+        # (measured, run 43835465944); a runner has them system-wide, an ordinary PC may not, and the installer runs
+        # without admin so it cannot install the VC++ redistributable. Microsoft supports app-local deployment of these
+        # files: copied from this runner's Visual Studio redist folder into the prover's own folder, where Windows
+        # looks first. The CPU host is built +crt-static and should import none; if it does, it gets them too.
+        run: |
+          VS=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath | tr -d '\r')
+          CRT=$(ls -d "$(cygpath -u "$VS")"/VC/Redist/MSVC/*/x64/Microsoft.VC14*.CRT 2>/dev/null | sort -V | tail -1)
+          [ -d "$CRT" ] || { echo "::error::no Visual C++ redist folder under $VS"; exit 1; }
+          echo "VC runtime from: $CRT"; ls "$CRT"
+          for d in rel/prover rel/prover-cpu; do
+            [ -f "$d/host.exe" ] || continue
+            for dll in $(python scripts/pe_imports.py "$d/host.exe" --vc-runtime | tr -d '\r'); do
+              src=$(ls "$CRT" | grep -ix "$dll" || true)
+              [ -n "$src" ] || { echo "::error::$d/host.exe imports $dll and $CRT has no such file"; exit 1; }
+              cp "$CRT/$src" "$d/" && echo "$d: + $src"
+            done
+            python scripts/pe_imports.py "$d/host.exe" --beside
+          done
 
       - name: Build the app (PyInstaller, one folder)
         working-directory: tools/win-gui
@@ -142,7 +184,7 @@ jobs:
       - name: The frozen app is the worker's interpreter (before packing)
         working-directory: tools/win-gui
         run: |
-          out=$(./dist/Hazync/Hazync.exe -c "import cryptography, concurrent.futures, secrets, socket, urllib.request; print('frozen-ok', cryptography.__version__)")
+          out=$(./dist/Hazync/Hazync.exe -c "import cryptography, concurrent.futures, secrets, socket, urllib.request, os, certifi; assert os.path.isfile(certifi.where()); print('frozen-ok', cryptography.__version__)")
           echo "$out"; [[ "$out" == frozen-ok* ]] || { echo "::error::Hazync.exe -c did not run as an interpreter"; exit 1; }
 
       - name: Pack Hazync-Setup.exe (Inno Setup)
@@ -150,8 +192,9 @@ jobs:
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
           # -D/-O, not /D//O: Git bash rewrites an argument starting with "/" into a Windows path
           [ -x "$ISCC" ] || { choco install innosetup -y --no-progress --version=6.4.3 >/dev/null && ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"; }
+          cpu=(); [ "${CPU_PROVER:-}" != 1 ] || cpu=("-DProverCpuDir=$(cygpath -w "$PWD/rel/prover-cpu")")
           "$ISCC" -Q "-DAppVersion=$VERSION" "-DAppDir=$(cygpath -w "$PWD/tools/win-gui/dist/Hazync")" \
-                  "-DProverDir=$(cygpath -w "$PWD/rel/prover")" "-DWorker=$(cygpath -w "$PWD/rel/hazync-worker")" \
+                  "-DProverDir=$(cygpath -w "$PWD/rel/prover")" "-DWorker=$(cygpath -w "$PWD/rel/hazync-worker")" "${cpu[@]}" \
                   "-O$(cygpath -w "$PWD/out")" tools/win-gui/installer/hazync.iss
           ls -la out
           (cd out && sha256sum hazync-setup-x86_64-windows.exe | tee hazync-setup-x86_64-windows.exe.sha256)
@@ -163,6 +206,13 @@ jobs:
           APP="$LOCALAPPDATA/Programs/Hazync"
           for f in Hazync.exe hazync-worker prover/host.exe; do [ -f "$APP/$f" ] || { echo "::error::$f not installed"; exit 1; }; done
           ls "$APP/prover"
+          # the app's version, which its update check reads (appupdate.app_version)
+          grep -qx "version=$VERSION" <(tr -d '\r' < "$APP/version.ini") || { echo "::error::version.ini does not say $VERSION"; cat "$APP/version.ini"; exit 1; }
+          "$APP/Hazync.exe" -c "import sys,appupdate;v=appupdate.app_version(sys.argv[1]);print('app_version',v);sys.exit(0 if v==sys.argv[2] else 1)" "$(cygpath -w "$APP/Hazync.exe")" "$VERSION" || { echo "::error::the installed app does not read its own version"; exit 1; }
+          # every DLL each installed prover needs is part of Windows, the NVIDIA driver's, or installed beside it
+          # (the runner has the VC++ runtime system-wide, so RUNNING cannot show this; the import table can)
+          python scripts/pe_imports.py "$APP/prover/host.exe" --beside
+          [ "${CPU_PROVER:-}" != 1 ] || python scripts/pe_imports.py "$APP/prover-cpu/host.exe" --beside
           # the installed prover is the release's: it carries the published mainnet image (a GPU-less runner cannot RUN it)
           # The image of the RELEASE whose prover is packaged ($TAG), read at that tag: on a PR the checkout may already
           # pin the next image (v0.26.0's re-baseline) while the packaged prover is still the last release's.
@@ -177,6 +227,15 @@ jobs:
           a=$(sha "$APP/prover/host.exe"); b=$(sha rel/prover/host.exe)
           [ "$a" = "$b" ] || { echo "::error::the installed host.exe ($a) is not the release zip's ($b)"; exit 1; }
           echo "installed host.exe = the release zip's ($a)"
+          if [ "${CPU_PROVER:-}" = 1 ]; then
+            # the CPU prover: installed, the release zip's byte for byte, carrying the image, and it RUNS here (a
+            # GPU-less runner is exactly the machine it is for): method-id must print the release's image
+            a=$(sha "$APP/prover-cpu/host.exe"); b=$(sha rel/prover-cpu/host.exe)
+            [ "$a" = "$b" ] || { echo "::error::the installed CPU host.exe ($a) is not the release zip's ($b)"; exit 1; }
+            got=$("$APP/prover-cpu/host.exe" method-id | grep -oE '[0-9a-f]{64}' | head -1)
+            [ "$got" = "$ID" ] || { echo "::error::the installed CPU host.exe says ${got:-nothing}, want $ID"; exit 1; }
+            echo "installed CPU host.exe = the release zip's ($a), method-id $got"
+          fi
           # the installed app runs the installed worker: make a key in a scratch HAZYNC_HOME and read it back
           export HAZYNC_HOME="$RUNNER_TEMP/hz-home" PYTHONPATH="$(cygpath -w "$APP/_internal/winshim")"
           out=$("$APP/Hazync.exe" "$(cygpath -w "$APP/hazync-worker")" id 2>&1); echo "$out"
@@ -187,7 +246,7 @@ jobs:
           [ -f "$KEYDIR/sentinel-do-not-delete" ] || { echo "::error::uninstall touched ~/.hazync"; exit 1; }
           echo "installed, used, uninstalled; ~/.hazync untouched"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hazync-setup-x86_64-windows
           path: |

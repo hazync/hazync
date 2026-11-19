@@ -65,7 +65,8 @@ PUBLISH_KEY=${PUBLISH_KEY:-/root/.ssh/hazync_utreexo_publish}
 # log and die write to STDERR: a message from inside $(…) must never become the captured value (review L1)
 log () { echo "[$(date -u +%FT%TZ)] $*" >&2; }
 die () { log "ERROR: $*"; exit 1; }
-cli () { $BITCOIN_CLI "$@"; }
+# stdin from /dev/null: an ssh or docker BITCOIN_CLI must never swallow a loop's input (review of 7806f4b, 4)
+cli () { $BITCOIN_CLI "$@" </dev/null; }
 # the node's hash at h; an RPC failure (warm-up, timeout, h above its tip) is an ERROR, never "another hash" (review M1)
 node_hash () {
   local x; x=$(cli getblockhash "$1" 2>/dev/null) || die "the node did not answer getblockhash $1 (not a reorg: an RPC failure or a node below $1)"
@@ -79,8 +80,15 @@ node_hash () {
 MARK=.hazync-utreexo-blocks
 if [ "${1:-}" = "--init" ]; then
   mkdir -p "$D" "$BLOCKS" || die "mkdir"
-  [ -z "$(ls -A "$BLOCKS")" ] || [ -f "$BLOCKS/$MARK" ] || die "$BLOCKS is not empty and has no $MARK: not initialising a directory that may be shared"
-  printf 'owned by the hazync-utreexo-follow of %s\n' "$(cd "$D" && pwd -P)" > "$BLOCKS/$MARK" || die "cannot write $BLOCKS/$MARK"
+  ours="owned by the hazync-utreexo-follow of $(cd "$D" && pwd -P)"
+  if [ -f "$BLOCKS/$MARK" ]; then
+    # an existing marker is never overwritten: a mistyped BLOCKS must not claim another follower's directory (review of
+    # 7806f4b, 2)
+    [ "$(cat "$BLOCKS/$MARK")" = "$ours" ] || die "$BLOCKS/$MARK names another follower ('$(cat "$BLOCKS/$MARK")'), not $D"
+  else
+    [ -z "$(ls -A "$BLOCKS")" ] || die "$BLOCKS is not empty and has no $MARK: not initialising a directory that may be shared"
+    printf '%s\n' "$ours" > "$BLOCKS/$MARK" || die "cannot write $BLOCKS/$MARK"
+  fi
   log "initialised: $D, block files in $BLOCKS"
   exit 0
 fi
@@ -149,16 +157,10 @@ checker () {
 # reorg, or a reorg below the base) moves to orphaned/ and is fetched again. A file above the node's tip moves too.
 # Block files are never trusted because they exist (review of 0d9683a MED)
 check_blocks () {
-  local lo=$1 hi=$2 why=$3 moved=0 h x nx O=
+  local lo=$1 hi=$2 why=$3 moved=0 h x nx O='' list=$D/work/check_blocks.list
   [ "$lo" -le "$hi" ] || return 0
-  while read -r h x; do
-    if [ "$h" -le "$NT" ]; then nx=$(node_hash "$h") || return 1; else nx=; fi
-    if [ "$nx" != "$x" ]; then
-      [ -n "$O" ] || { O=$D/orphaned/stale-$why-$(date +%s)/blocks; mkdir -p "$O" || return 1; }
-      mv "$BLOCKS/block_$h.json" "$O/" || return 1
-      moved=$((moved + 1))
-    fi
-  done < <(python3 - "$BLOCKS" "$lo" "$hi" <<'PY'
+  # the list first, its status checked: a python failure is an error, never "nothing to check" (review of 7806f4b, 4)
+  python3 - "$BLOCKS" "$lo" "$hi" > "$list" <<'PY' || { log "listing the cached block files failed"; return 1; }
 import sys, os, json, struct, hashlib
 d, lo, hi = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 for h in range(lo, hi + 1):
@@ -171,7 +173,14 @@ for h in range(lo, hi + 1):
     except Exception:
         print(h, 'unreadable')
 PY
-)
+  while read -r h x; do
+    if [ "$h" -le "$NT" ]; then nx=$(node_hash "$h") || return 1; else nx=; fi
+    if [ "$nx" != "$x" ]; then
+      [ -n "$O" ] || { O=$D/orphaned/stale-$why-$(date +%s)/blocks; mkdir -p "$O" || return 1; }
+      mv "$BLOCKS/block_$h.json" "$O/" || return 1
+      moved=$((moved + 1))
+    fi
+  done < "$list"
   [ "$moved" = 0 ] || log "moved $moved cached block file(s) in $lo..$hi that are not the node's chain to $O ($why)"
 }
 
@@ -229,9 +238,10 @@ if [ "${1:-}" = "--set-base" ]; then
   point base "$n"; point latest "$n"
   O=$D/orphaned/base-$(date +%s); mkdir -p "$O"
   for d in "$D"/state/[0-9]*-*; do [ -e "$d" ] && [ "$(basename "$d")" != "$n" ] && { mv "$d" "$O/" || die "mv $d"; }; done
-  rm -f "$D/forest.bin" "$D/work/forest.next" "$D/published"
+  rm -f "$D"/forest-*.bin "$D/forest.bin" "$D/work/forest.next" "$D/published"
   # block files above the new base may be another branch's (a reorg below the old base): checked the same way
   NT=$(cli getblockcount) || die "the node did not answer getblockcount"
+  [[ "$NT" =~ ^[0-9]+$ ]] || die "getblockcount: '$NT'"   # a garbage answer must not make every file "above the tip"
   top=$(find "$BLOCKS" -maxdepth 1 -name 'block_*.json' | sed 's/.*block_\([0-9]*\)\.json$/\1/' | sort -n | tail -1)   # find: no files is not an error (ls would exit 2 under pipefail)
   check_blocks $((H + 1)) "${top:-0}" set-base || die "checking the cached block files"
   log "base installed: block $H $X ($V)"
@@ -270,7 +280,7 @@ if [ "$NPX_" != "$PX" ]; then
   for f in $(cd "$BLOCKS" && ls block_*.json 2>/dev/null); do
     h=${f#block_}; h=${h%.json}; if [ "$h" -gt "$NP" ]; then mv "$BLOCKS/$f" "$O/blocks/" || die "mv $f"; fi
   done
-  if [ -f "$D/forest.bin" ]; then mv "$D/forest.bin" "$O/" || die "mv forest.bin"; fi
+  for f in "$D"/forest-*.bin "$D/forest.bin"; do if [ -f "$f" ]; then mv "$f" "$O/" || die "mv $f"; fi; done
   log "fell back to the kept proof of block $NP $NPX (orphaned states and receipts moved to $O); stepping forward on the node's branch"
   P=$NP; PX=$NPX
   # publish the fall-back state at once: pub/latest.json must not name the orphaned receipt while the new branch is
@@ -278,8 +288,14 @@ if [ "$NPX_" != "$PX" ]; then
   FB=fallback
 fi
 if [ "${FB:-}" = fallback ] && [ "${DRY_RUN:-0}" != 1 ]; then
-  V=$(checker "$D/latest/rcpt" "$P" "$PX") || die "the fall-back proof of $P does not verify to the node's block $P $PX"
-  publish_latest "$P" "$PX" "$V" 0
+  # the kept receipt's own core tip may itself be on the orphaned branch (a reorg deeper than its link): then it cannot
+  # be checked against this node, so it is not published, and the run carries on to the step, whose receipt (on the
+  # node's branch) is published instead (review of 7806f4b, 1)
+  if V=$(checker "$D/latest/rcpt" "$P" "$PX"); then
+    publish_latest "$P" "$PX" "$V" 0
+  else
+    log "the fall-back proof of $P does not verify with this node's chain (its core tip was orphaned too?): not published; stepping on"
+  fi
 fi
 
 CI=$("$ZYNCAPP" core-info "$CORE") || die "core-info $CORE"
@@ -303,7 +319,11 @@ HX=$(node_hash "$H")
 if [ "$H" -gt "$P" ]; then
   # the bodies P+1..H (or 1..H when the native replay must start from genesis: no forest cache at P), and the link
   # H+1..T as headers only
-  lo=$((P + 1)); [ -f "$D/forest.bin" ] || lo=1
+  # the forest cache is named by the height AND hash it is for: only the cache of exactly (P, PX) lets the step start at
+  # P+1; any other (a kill between `point latest` and its rename, a fall-back) means a replay from genesis, so every
+  # body from 1 is checked and fetched (review of 7806f4b, 3)
+  FC=$D/forest-$P-$PX.bin
+  lo=$((P + 1)); [ -f "$FC" ] || lo=1
   check_blocks "$lo" "$H" step || die "checking the cached block files"
   missing=; for h in $(seq "$lo" "$H"); do [ -s "$BLOCKS/block_$h.json" ] || { missing=$h; break; }; done   # no `| head` (SIGPIPE under pipefail)
   if [ -n "$missing" ]; then $FETCH "$missing" "$H" "$BLOCKS" > "$D/work/fetch.log" 2>&1 || { tail -3 "$D/work/fetch.log"; die "fetch $missing..$H"; }; fi
@@ -313,10 +333,10 @@ if [ "$H" -gt "$P" ]; then
     printf '%s %s\n' "$h" "$hh" >> "$HDRS"
   done
   OUT=$D/work/step_$H.rcpt
-  # the host reads the cache at P from forest.bin and writes the one at H to work/forest.next, which replaces forest.bin
-  # only once latest points at H: a failed or killed run leaves forest.bin valid for P (review of 0d9683a LOW 2)
+  # the host reads the cache for (P, PX) and writes the one for H to work/forest.next, renamed to forest-<H>-<hash>.bin
+  # only once latest points at H: a failed or killed run leaves the cache for P in place (review of 0d9683a LOW 2)
   rm -f "$D/work/forest.next"
-  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$D/forest.bin" --cache-out "$D/work/forest.next" --headers "$HDRS" "${NETFLAG[@]}")
+  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$FC" --cache-out "$D/work/forest.next" --headers "$HDRS" "${NETFLAG[@]}")
   [ -n "$ELF" ] && args+=(--elf "$ELF")
   [ -n "$BASE_ID" ] && args+=(--base-id "$BASE_ID")
   log "step $P -> $H (node tip $NT, core tip $T)"
@@ -327,12 +347,15 @@ if [ "$H" -gt "$P" ]; then
   log "proved and verified $((P + 1))..$H in $SECS s (${V%% *})"
   n=$(new_state "$OUT" "$H" "$HX") || die "cannot write the state of $H (disk full?): latest stays at $P"
   point latest "$n"
-  if [ -f "$D/work/forest.next" ]; then mv "$D/work/forest.next" "$D/forest.bin" || die "mv forest.next"; fi
+  if [ -f "$D/work/forest.next" ]; then
+    mv "$D/work/forest.next" "$D/forest-$H-$HX.bin" || die "mv forest.next"
+    for f in "$D"/forest-*.bin "$D/forest.bin"; do [ "$f" = "$D/forest-$H-$HX.bin" ] || rm -f "$f"; done
+  fi
   # keep the KEEP newest states below latest, the base and latest itself
   keep_b=$(basename "$(readlink "$D/base")"); keep_l=$(basename "$(readlink "$D/latest")")
   old=(); for d in $(cd "$D/state" && ls -d [0-9]*-* | sort -n); do [ "$d" != "$keep_b" ] && [ "$d" != "$keep_l" ] && old+=("$d"); done
   while [ "${#old[@]}" -gt "$KEEP" ]; do rm -rf "${D:?}/state/${old[0]}"; old=("${old[@]:1}"); done
-  if [ "$PRUNE_BLOCKS" = 1 ] && [ -f "$D/forest.bin" ]; then
+  if [ "$PRUNE_BLOCKS" = 1 ] && [ -f "$D/forest-$H-$HX.bin" ]; then
     (cd "$BLOCKS" && for f in block_*.json; do h=${f#block_}; h=${h%.json}; [ "$h" -le "$H" ] && rm -f "$f"; done; true)
   fi
   rm -f "$HDRS"

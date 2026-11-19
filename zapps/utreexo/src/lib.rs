@@ -47,25 +47,21 @@ pub fn image_source(id: &[u8; 32]) -> &'static str {
     }
 }
 
-/// The largest receipt this checker decodes. A succinct receipt here is about 225 kB; the limit bounds what a hostile
-/// file can make bincode reserve (bincode 1 reads a Vec length from the input and reserves before reading the items).
-/// ⚠ The core verifier's own decode (swiftsync-verify `verify`, `bincode::deserialize` at src/lib.rs:463) has no such
-/// bound; not changed here (core code).
+/// The largest receipt this checker decodes. A succinct receipt here is about 225 kB; anything far larger is refused
+/// before any decoding.
 pub const MAX_RECEIPT_BYTES: usize = 16 << 20;
 
-/// `bincode::deserialize`'s encoding (fixed-width integers) with a byte limit, and NO trailing bytes: a receipt file is
-/// exactly one receipt, so one proof has one byte string (bytes appended to a genuine receipt would otherwise pass as a
-/// different file with the same verdict).
+/// The receipt, decoded by the CORE verifier's strict decoder (`swiftsync_verify::decode_receipt`, #758: the kind gate,
+/// bincode with trailing bytes refused, and `receipt_well_formed`, which refuses the words risc0 would assert on: the
+/// fuzz round's unreduced control-inclusion word, fuzz/artifacts/utreexo_verify), after this checker's own size bound
+/// and its composite check (a composite, fake or unknown receipt is refused BEFORE bincode reads it: composites nest
+/// without bound and the recursive decode overflows the stack on a deep one; reviews of b127747 H1 / f99c301 L6).
 pub fn decode_receipt(receipt: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
-    use bincode::Options;
     if receipt.len() > MAX_RECEIPT_BYTES {
         return Err(format!("{} bytes, over the {MAX_RECEIPT_BYTES}-byte limit", receipt.len()));
     }
-    // a composite (or fake, or unknown) receipt is refused BEFORE bincode reads it: composites nest without bound and the
-    // recursive decode overflows the stack on a deep one (reviews of b127747 H1 / f99c301 L6: every caller is covered)
     receipt_kind(receipt)?;
-    bincode::DefaultOptions::new().with_fixint_encoding().reject_trailing_bytes().with_limit(MAX_RECEIPT_BYTES as u64)
-        .deserialize(receipt).map_err(|e| e.to_string())
+    swiftsync_verify::decode_receipt(receipt)
 }
 
 /// The statement's kind word ('ZU', version 1), as libzync::utreexo_roots::KIND_UTREEXO.

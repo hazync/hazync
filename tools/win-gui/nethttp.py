@@ -157,6 +157,11 @@ def _certifi_context():
 
 def _pip_install_certifi(timeout=180):
     """Last resort before curl: let pip fetch certifi, since pip's own HTTPS works regardless."""
+    # ⛔ NOT IN THE FROZEN APP (review of c881d582): there sys.executable is Hazync.exe, which has no pip, and
+    # `Hazync.exe -m pip` is not an interpreter call frozenpy knows, so it could open a second window. The installed
+    # app ships certifi itself (hazync-gui.spec), so rung 3 already had a CA bundle.
+    if getattr(_sys, "frozen", False):
+        return None
     try:
         p = subprocess.run([_sys.executable, "-m", "pip", "install", "--upgrade", "certifi"],
                            capture_output=True, text=True, timeout=timeout)
@@ -173,7 +178,7 @@ def _pip_install_certifi(timeout=180):
     return _certifi_context()
 
 
-def _curl(url, timeout):
+def _curl(url, timeout, max_bytes=None):
     """Fetch through curl.exe, which verifies via Schannel rather than OpenSSL.
 
     ⚠ -f so an HTTP error is a non-zero exit instead of a saved error page: a 404 body written to
@@ -183,18 +188,25 @@ def _curl(url, timeout):
     if not exe:
         return None
     try:
-        p = subprocess.run([exe, "-fsSL", "--max-time", str(int(timeout)),
+        cap = ["--max-filesize", str(int(max_bytes))] if max_bytes else []
+        p = subprocess.run([exe, "-fsSL", "--max-time", str(int(timeout)), *cap,
                             "-A", UA, "-o", "-", url],
                            capture_output=True, timeout=timeout + 15)
     except (subprocess.TimeoutExpired, OSError):
         return None
-    if p.returncode != 0:
+    if p.returncode != 0 or (max_bytes and len(p.stdout) > max_bytes):
         return None
     return p.stdout
 
 
-def get(url, timeout=60, headers=None):
-    """Fetch `url` and return its bytes, or raise NetError saying what to do about it."""
+class TooLarge(NetError):
+    """The answer was over the caller's size cap; it was not read to the end."""
+
+
+def get(url, timeout=60, headers=None, max_bytes=None):
+    """Fetch `url` and return its bytes, or raise NetError saying what to do about it.
+
+    `max_bytes`: read at most this much, streaming, and raise TooLarge past it (the app's self-update, review L6)."""
     hdrs = {"User-Agent": UA}
     hdrs.update(headers or {})
     attempts = []
@@ -202,7 +214,16 @@ def get(url, timeout=60, headers=None):
     def _try(ctx, label):
         req = urllib.request.Request(url, headers=hdrs)
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-            return r.read()
+            if not max_bytes:
+                return r.read()
+            buf = bytearray()
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    return bytes(buf)
+                buf += chunk
+                if len(buf) > max_bytes:
+                    raise TooLarge(f"{url} is over {max_bytes:,} bytes, so it was not downloaded")
 
     # 1 — the default trust store
     try:
@@ -243,7 +264,7 @@ def get(url, timeout=60, headers=None):
         attempts.append("pip install certifi: did not help")
 
     # 5 — curl, verifying through the OS
-    data = _curl(url, timeout)
+    data = _curl(url, timeout, max_bytes)
     if data is not None:
         return data
     attempts.append("curl (Schannel): not available, or it failed too")

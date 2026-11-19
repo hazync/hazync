@@ -53,7 +53,8 @@ the machine tests, the technical log, paths, the CPU/GPU choice and your key.
 | `host.exe method-id` prints the then-canonical CORE id `37987b85…` (since superseded) on real hardware | ✅ measured 2026-10-04, GTX 1050 Ti |
 | `host.exe regress` — full consensus path (the CORE host; gone from the libzync host) | ✅ measured, same machine |
 | **libzync CUDA** host proves mainnet leaves on a real GPU under WDDM (blocks 170 and 400,000), verified on Windows and Linux | ✅ **measured 2026-11-09, RTX PRO 6000** (`experimental/libzync-bench/windows/`) |
-| The libzync Windows CUDA host is a **release asset** (`hazync-host-x86_64-windows-cuda.zip`: `host.exe` + `cudart64_12.dll`), built by `windows-prove.yml` and checked by `scripts/release.sh` | ✅ since v0.23.0; v0.24.0 is the current one |
+| The libzync Windows CUDA host is a **release asset** (`hazync-host-x86_64-windows-cuda.zip`: `host.exe` + `cudart64_12.dll`), built by `windows-prove.yml` and checked by `scripts/release.sh` | ✅ since v0.23.0 |
+| The Windows **CPU** host is a release asset too (`hazync-host-x86_64-windows-cpu.zip`: `host.exe` alone), from `windows-prove.yml`'s `prove` job, which ran it on Windows (`method-id`, then mainnet block 1 proved and verified), and the installer ships it in `prover-cpu\` | ⏳ from v0.26.1 (needs a RELEASE BUILD run of windows-prove without `skip_cpu_prove`) |
 | **CPU** build proves a block on Windows | ✅ measured (v1 host) |
 | This GUI opens and works on Windows | ✅ **tested on Windows Python 3.13** |
 | This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05 with the v1 host: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`**; not yet re-run with the libzync host |
@@ -155,6 +156,23 @@ hands out work and tracks claims, and `/api/blockstatus` deliberately excludes c
 change by the second". Letting someone choose an arbitrary open block would hand out work another
 prover already holds. `/api/pick` is the coordinator's own answer and the Dashboard shows it.
 
+## Updating
+
+The installed app asks GitHub for the latest release at startup and every 6 hours, and shows "Hazync vX is
+available" with an **Update** button on Home. Nothing is downloaded until that is pressed. Update fetches
+`hazync-setup-x86_64-windows.exe`, `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`; it runs the installer only if
+(1) the signature is good under the maintainer key pinned in `appupdate.py` (the one in SECURITY.md), (2) the
+manifest's signed first line names that release, (3) the installer's sha256 matches it, and (4) the release is newer
+than this app. The installer is not Authenticode-signed, so the PGP-signed manifest is the trust anchor. The app then
+closes so its files can be replaced. A copy run from source has no version and never updates itself.
+
+⚠ **Rotating the release key needs a manual reinstall** for every installed app: an app refuses a manifest signed by
+any key but the pinned one (it fails closed). The key expires 2028-04-25; plan the rotation before then.
+
+On the first start of a new version, a remembered prover that does not make the board's image (when the installed one
+does) and a remembered worker older than the installed one are replaced by the installed ones, and the feed says so.
+On any other start an old copy is named on the Home card with one button to use the installed one.
+
 ## Proving on a schedule
 
 Under **Advanced → Schedule** you can tell the app to prove only inside a window, say 23:00 to 07:00, on the days
@@ -195,7 +213,7 @@ The **Prove** tab has two buttons that run what you would otherwise type:
 
 | | |
 |---|---|
-| Is this prover genuine? | `method-id` — must print the canonical libzync id (`46666b6f…`) or proofs are rejected; runs at startup. ⚠ Where `method-id` cannot run (a CUDA `host.exe` on a machine with no NVIDIA driver), the fallback reads the embedded guest from the file, pinned by `GUEST_SHA256` and `GUEST_SIZE` in `supervisor.py` to the published mainnet guest of `reproduce/LIBZYNC_IDS` (`ded6f884…`, 70,191,408 bytes; it was the v1 guest until 2026-11-12 — checked against the v0.24.0 `host.exe`, which it now matches). A new image means updating both |
+| Will the board accept this prover's proofs? | `method-id` — must print the image the **board** checks proofs against (its `/api/meta` `method_id`, asked at Start, in Checks and here), or proofs are rejected; only when the board cannot be reached does the image this app was built for (`CANONICAL_METHOD_ID`, `46666b6f…`) stand in. A prover the board accepts passes even if this app is older or newer than it; the app's own image fails once the board has moved, with "install the latest Hazync". Runs at startup. ⚠ Where `method-id` cannot run (a CUDA `host.exe` on a machine with no NVIDIA driver), the fallback reads the embedded guest from the file, pinned by `GUEST_SHA256` and `GUEST_SIZE` in `supervisor.py` to the published mainnet guest of `reproduce/LIBZYNC_IDS` (the `GUEST_ELF_SHA256` on its mainnet line, 70,199,652 bytes: v0.26.0's guest, the one behind `46666b6f…`; the same file as windows-prove run 43835465944's guest artifact). This fallback can say only that the file carries the image this app was built for, not that the board accepts it. A new image means updating both |
 | Can it actually prove? | the client's `selftest` — checks the prover against the board, verifies a real board proof, then proves mainnet block 1 for real from the board's leaf bundle |
 
 ⭐ **No block is claimed and nothing is submitted.** The selftest fetches block 1's bundle and a board proof
@@ -263,6 +281,25 @@ workers are safe. But if the shim is ever absent, the worker's own fallback is t
 N workers would then share one GPU unserialised. Default 1; raise it once a run has shown the lock
 working.
 
+## No graphics card the prover can use: the CPU prover
+
+The installer carries a second prover, `prover-cpu\host.exe`, which needs no NVIDIA card or driver (from v0.26.1).
+Start asks before it launches anything whether a graphics-card prover can run here: no NVIDIA driver, or no card at
+compute 7.0 or newer (6.x with "Try my GPU…" ticked). If none can, it offers the CPU prover instead and says what that
+costs, measured: mainnet block 1, the smallest block there is, took **1,433 s (about 24 minutes)** on a 4-core Windows
+runner (windows-prove run 42540389071, 2026-11-09); most blocks are bigger and take longer. Nothing bigger has been
+measured on a CPU, so nothing bigger is promised. The choice can be changed under Advanced → Options ("CPU build" /
+"GPU build"). A machine where `nvidia-smi` cannot be asked is not refused: unknown is not "no card".
+
+The processor is offered **for that session only**: the saved choice stays the graphics card, so installing the
+NVIDIA driver later needs no setting changed (Advanced → Options → CPU build makes it permanent). The same offer comes
+when the graphics card fails while proving and nothing else is running, and when the remembered prover file is gone.
+
+**No Visual C++ runtime needed.** The CPU `host.exe` is built with a static C runtime and imports only DLLs Windows
+ships (checked at release by `scripts/pe_imports.py --cpu`). The CUDA `host.exe` still imports `VCRUNTIME140.dll`,
+`VCRUNTIME140_1.dll` and `MSVCP140.dll`; the installer copies them beside it, so a PC without the Visual C++
+Redistributable runs it. Someone unzipping the CUDA release asset by hand needs that redistributable.
+
 ## More than one graphics card
 
 A machine with two or more cards that can prove gets **one worker on each**, started seeing only its
@@ -280,6 +317,13 @@ shared one lock and none was told which card to use, so a second card sat idle. 
 - Advanced → Options lists the cards with a tick box each, all ticked to begin with. An unticked
   card is left alone; the choice is remembered by the card's UUID, so it follows the card if the
   cards are moved between slots. The last card cannot be unticked.
+- Home shows **one line per card of the session**, including a card whose worker stopped on an error
+  (`RTX 3060 Ti:  stopped — …`, and the headline counts it: "Proving on 1 graphics card · 1 stopped") or is
+  between two blocks. Only that card stops; the others keep going. Before, a stopped card simply vanished.
+- ⚠ The opt-in proves on Pascal only with a prover that has hazync#727 (PR #739). Until a release carries it
+  (v0.26.1 is planned), ticking it on a compute 6.x card gets "operation not supported" from the GPU.
+- "Try my GPU even if it is below the supported floor" never reaches below compute 6: the builds carry no
+  GPU code under sm_61 (hazync#727), so a compute 5.x card gets no worker even when forced.
 
 ⛔ **Not yet run on a real two-card machine.** What is tested: the decision; that each real child
 process receives its own card and lock; and (2026-10-09, one A40 on Linux) that the real prover

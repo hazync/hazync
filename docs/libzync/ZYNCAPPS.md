@@ -181,4 +181,6 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 
 | zAPP | module | CLI | WASM glue | C ABI |
 |---|---|---|---|---|
-| Utreexo roots (UTREEXO_ZAPP.md) | `zapps/utreexo` | `zapp-utreexo` (`verify`, `id`) | `zapp-utreexo.js` (`verify`) | none |
+| Header chain (ROADMAP K1, N3; `coordinator/deploy/headers`) | `zapps/headers` | `zapp-headers` | `zapp-headers.js` (`verifyHeaders`, `headersImageId`) | none |
+| SwiftSync hints (HINTS_ZAPP.md) | `zapps/hints` | `zapp-hints` | `zapp-hints.js` (`verifyHints`) | `zapps/hints/ffi` (`swiftsync_verify_hints`, `zapp_hints.h`) |
+| Utreexo roots (UTREEXO_ZAPP.md) | `zapps/utreexo` | `zapp-utreexo` (`verify`, `id`; base and tip receipts) | `zapp-utreexo.js` (`verify`, `imageId`, `tipImageId`) | none |

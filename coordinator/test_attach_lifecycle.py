@@ -155,7 +155,9 @@ for t in ast.walk(tree):
     if not isinstance(t, ast.Try) or not t.finalbody:
         continue
     stops = [i for i, st in enumerate(t.finalbody) if "stop_auto_attach" in names_called(st)]
-    rels = [i for i, st in enumerate(t.finalbody) if "terminate_confirmed" in names_called(st)]
+    # the release: terminate_many (the recruit orphans) or teardown_release (the fleet) -- whichever comes first
+    rels = [i for i, st in enumerate(t.finalbody)
+            if {"terminate_confirmed", "terminate_many", "teardown_release"} & set(names_called(st))]
     if stops:
         in_finally = True
         if rels and min(stops) < min(rels):

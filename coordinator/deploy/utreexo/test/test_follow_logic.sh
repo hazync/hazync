@@ -25,7 +25,7 @@ case "$1" in
   utreexo-tip-prove)
     read -r _ _ _ steps _ < "$3"; h=$4; out=$6
     shift 6; while [ $# -gt 0 ]; do case "$1" in --cache) shift;; --cache-out) echo "$h" > "$2"; shift;; --headers) wc -l < "$2" > "$W/headers.count"; shift;; esac; shift; done
-    echo "STUB $h $STUB_T $((steps + 1)) $("$CLI" getblockhash "$h")" > "$out";;
+    echo "STUB $h $STUB_T $((steps + 1)) $("$CLI" getblockhash "$h") $("$CLI" getblockhash "$STUB_T")" > "$out";;
   *) exit 1;;
 esac
 EOF
@@ -40,7 +40,7 @@ opt = lambda k: a[a.index(k) + 1] if k in a else None
 eh, ex = opt('--expect').split(':')
 ok = int(eh) == h and ex == x
 tip = opt('--expect-tip')
-if tip: ok = ok and int(tip.split(':')[0]) == t
+if tip: ok = ok and int(tip.split(':')[0]) == t and (len(f) < 6 or tip.split(':')[1] == f[5])
 import os
 if os.path.exists(os.environ['W'] + '/vfail') and str(h) == open(os.environ['W'] + '/vfail').read().strip(): ok = False
 if not ok: print('ZAPP_UTREEXO_FAIL: stub'); sys.exit(1)
@@ -67,6 +67,11 @@ BLOCKS=$W/shared "$F" --set-base "$W/base.rcpt" 3 "$X3" > "$W/m1.log" 2>&1; t "a
 BLOCKS=$W/shared "$F" --init > "$W/m2.log" 2>&1; t "  --init refuses a non-empty unmarked directory" 1 $?
 t "  and its files are untouched" "keep" "$(cat "$W/shared/block_5.json")"
 "$F" --init > "$W/m3.log" 2>&1; t "--init marks the follower's own block directory" "0 yes" "$? $([ -f "$W/blocks/.hazync-utreexo-blocks" ] && echo yes)"
+# (review of 7806f4b, 2) --init never overwrites a marker naming another follower
+mkdir -p "$W/other"; echo "owned by the hazync-utreexo-follow of /somewhere/else" > "$W/other/.hazync-utreexo-blocks"
+BLOCKS=$W/other "$F" --init > "$W/m4.log" 2>&1; t "--init refuses a directory another follower marked" 1 $?
+t "  and leaves its marker alone" "owned by the hazync-utreexo-follow of /somewhere/else" "$(cat "$W/other/.hazync-utreexo-blocks")"
+"$F" --init > "$W/m5.log" 2>&1; t "  --init again on our own directory is fine" 0 $?
 "$F" --set-base "$W/base.rcpt" 3 "$X3" > "$W/0.log" 2>&1; t "the base installs" 0 $?
 [ -n "${DEBUG:-}" ] && cat "$W/0.log"
 [ -n "${DEBUG:-}" ] && cat "$W/0.log"
@@ -82,7 +87,7 @@ t "  latest is 100, its receipt and meta agree (L2)" "100 100" "$(cut -d' ' -f1 
 t "  published: 50, 80, 100" "utreexo-100.rcpt utreexo-50.rcpt utreexo-80.rcpt" "$(cd "$W/d/pub" && ls utreexo-*.rcpt | sort | tr '\n' ' ' | sed 's/ $//')"
 t "  latest.json reached the publish target (L3)" 100 "$(python3 -c "import json;print(json.load(open('$W/www/latest.json'))['height'])")"
 
-snap () { (cd "$W/d" && find state pub -type f | sort | xargs sha256sum; ls -l forest.bin; readlink latest) 2>&1 | sha256sum; }
+snap () { (cd "$W/d" && find state pub -type f | sort | xargs sha256sum; ls -l forest-*.bin; readlink latest) 2>&1 | sha256sum; }
 before=$(snap)
 FAKE_RPC_FAIL=1 MAX_STEP=20 "$F" > "$W/4.log" 2>&1; t "an RPC failure is an error (M1)" 1 $?
 t "  not read as a reorg" 0 "$(grep -c REORG "$W/4.log")"
@@ -103,7 +108,7 @@ t "  fell back to 80" 1 "$(grep -c 'fell back to the kept proof of block 80' "$W
 t "  latest is 90" 90 "$(cut -d' ' -f1 "$W/d/latest/meta")"
 t "  the orphaned receipt 100 is no longer published" "utreexo-50.rcpt utreexo-80.rcpt utreexo-90.rcpt" "$(cd "$W/d/pub" && ls utreexo-*.rcpt | sort | tr '\n' ' ' | sed 's/ $//')"
 t "  and is kept aside, with its state" "2" "$(find "$W/d/orphaned" \( -name 'utreexo-100.rcpt' -o -name '100-*' \) | wc -l)"
-t "  the cache moved aside too (the replay restarts from genesis)" 1 "$(find "$W/d/orphaned" -name forest.bin | wc -l)"
+t "  the cache moved aside too (the replay restarts from genesis)" 1 "$(find "$W/d/orphaned" -name 'forest-*.bin' | wc -l)"
 t "  the old branch's block files above 80 moved aside (M3)" 20 "$(find "$W/d/orphaned" -path '*/blocks/block_*.json' | wc -l)"
 t "  so the new branch's 81..90 are fetched (M3)" "81 90" "$(tail -1 "$W/fetch.log")"
 
@@ -121,14 +126,14 @@ PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/10.log" 2>&1; t "step 95 -> 100 with PRUNE_
 t "  no body at or below 100 is left" 0 "$(find "$W/blocks" -name 'block_*.json' | sed 's/.*block_\([0-9]*\)\.json/\1/' | awk '$1 <= 100' | wc -l)"
 
 # review of f99c301 M2 / 0d9683a LOW 2: a step that fails after the prove (here: its receipt does not verify) with
-# PRUNE_BLOCKS=1: the host wrote the cache at H to work/forest.next, never over forest.bin, which stays valid for P
+# PRUNE_BLOCKS=1: the host wrote the cache at H to work/forest.next, never over the cache for P, which stays valid
 echo 105 > "$W/vfail"
 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/11.log" 2>&1; t "a step that fails after the prove (M2)" 1 $?
-t "  keeps the forest cache of 100 (the one at 105 is not promoted), latest stays 100 (LOW 2)" "100 100" "$(cat "$W/d/forest.bin") $(cut -d' ' -f1 "$W/d/latest/meta")"
+t "  keeps the forest cache of 100 (the one at 105 is not promoted), latest stays 100 (LOW 2)" "100 100" "$(cat "$W"/d/forest-100-*.bin) $(cut -d' ' -f1 "$W/d/latest/meta")"
 rm -f "$W/vfail"
 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/12.log" 2>&1; t "  the next run recovers" 0 $?
 t "  from the cache: bodies 101..105 only" "101 105" "$(tail -1 "$W/fetch.log")"
-t "  the cache now names 105" 105 "$(cat "$W/d/forest.bin")"
+t "  the cache now is forest-105-<hash>.bin, alone" "105 1" "$(cat "$W"/d/forest-105-*.bin) $(find "$W/d" -maxdepth 1 -name 'forest-*.bin' | wc -l)"
 
 # M1: a state that cannot be written (disk full) is never installed; latest stays complete; the next run recovers
 mkdir -p "$W/shim"; printf '#!/bin/bash\ncase "$*" in *"/state/."*) echo "cp: write error: No space left on device" >&2; exit 1;; esac\nexec /usr/bin/cp "$@"\n' > "$W/shim/cp"; chmod +x "$W/shim/cp"
@@ -168,5 +173,42 @@ v = json.load(open(sys.argv[1])); v['nonce'] ^= 1; json.dump(v, open(sys.argv[2]
 PY
 "$F" --set-base "$W/base.rcpt" 3 "$X3" > "$W/18.log" 2>&1; t "--set-base again" 0 $?
 t "  moves a stale block file above the base aside (MED)" 1 "$(find "$W/d/orphaned" -path '*stale-set-base-*/blocks/block_150.json' | wc -l)"
+
+# (review of 7806f4b, 4) the node's stdin must not be the loop's: a BITCOIN_CLI that reads stdin (as ssh does) must not
+# swallow the rest of check_blocks' list. A stale file at the END of the range must still be found
+printf '#!/bin/bash\ncat > /dev/null\nexec %q "$@"\n' "$HERE/fake-bitcoin-cli" > "$W/bin/cli_stdin"; chmod +x "$W/bin/cli_stdin"
+python3 - "$SRC/block_6.json" "$W/blocks/block_6.json" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1])); v['nonce'] ^= 1; json.dump(v, open(sys.argv[2], 'w'))
+PY
+BITCOIN_CLI=$W/bin/cli_stdin MAX_STEP=3 "$F" > "$W/19.log" 2>&1; t "a stdin-reading BITCOIN_CLI (step 3 -> 6)" 0 $?
+t "  check_blocks still sees the whole range: the stale block 6 is moved aside" 1 "$(find "$W/d/orphaned" -path '*stale-step-*/blocks/block_6.json' | wc -l)"
+
+# (4) a failing listing (python) is an error, not "nothing to check"
+mkdir -p "$W/pyshim"; printf '#!/bin/bash\n[ "$2" = %q ] && exit 1\nexec /usr/bin/python3 "$@"\n' "$W/blocks" > "$W/pyshim/python3"; chmod +x "$W/pyshim/python3"
+PATH=$W/pyshim:$PATH MAX_STEP=3 "$F" > "$W/20.log" 2>&1; t "a block listing that fails" "1 1" "$? $(grep -c 'listing the cached block files failed' "$W/20.log")"
+
+# (3) the cache is tied to (P, hash): a cache left for an older height (a kill between `point latest` and its rename)
+# means a replay from genesis, so the bodies from 1 are checked and fetched, under PRUNE_BLOCKS too
+PRUNE_BLOCKS=1 MAX_STEP=3 "$F" > "$W/21.log" 2>&1; t "step 6 -> 9 with PRUNE_BLOCKS=1" 0 $?
+f9=$(ls "$W"/d/forest-9-*.bin); mv "$f9" "$W/d/forest-6-$(cli getblockhash 6).bin"   # as if the rename never happened
+PRUNE_BLOCKS=1 MAX_STEP=3 "$F" > "$W/22.log" 2>&1; t "a cache for the wrong height (review of 7806f4b, 3)" 0 $?
+t "  bodies fetched from 1, not 10" "1 12" "$(tail -1 "$W/fetch.log")"
+
+# (4) --set-base with a garbage getblockcount: refused, no file moved
+printf '#!/bin/bash\n[ "$1" = getblockcount ] && { echo garbage; exit 0; }\nexec %q "$@"\n' "$HERE/fake-bitcoin-cli" > "$W/bin/cli_garbage"; chmod +x "$W/bin/cli_garbage"
+nb=$(find "$W/blocks" -name 'block_*.json' | wc -l)
+BITCOIN_CLI=$W/bin/cli_garbage "$F" --set-base "$W/base.rcpt" 3 "$X3" > "$W/23.log" 2>&1; t "--set-base with a garbage getblockcount is refused" 1 $?
+t "  no block file moved" "$nb" "$(find "$W/blocks" -name 'block_*.json' | wc -l)"
+
+# (1) a deep reorg that orphans the kept receipt's OWN core tip too: the fall-back state cannot be checked against this
+# node, so it is not published, and the run steps on (it used to die before the step)
+"$F" --set-base "$W/base.rcpt" 3 "$X3" > "$W/24.log" 2>&1
+MAX_STEP=47 "$F" > "$W/25.log" 2>&1; MAX_STEP=30 "$F" > "$W/26.log" 2>&1     # 3 -> 50 -> 80, both on core tip 290
+t "  (setup: latest 80)" 80 "$(cut -d' ' -f1 "$W/d/latest/meta")"
+STUB_T=296 FAKE_HASH_AT=80:$(printf 'e%.0s' $(seq 64)),290:$(printf 'd%.0s' $(seq 64)) MAX_STEP=10 "$F" > "$W/27.log" 2>&1
+t "a reorg that orphans the kept receipt's core tip too: the run steps on (review of 7806f4b, 1)" 0 $?
+t "  the fall-back is not published, and says so" 1 "$(grep -c 'not published; stepping on' "$W/27.log")"
+t "  the new step is published" 60 "$(python3 -c "import json;print(json.load(open('$W/d/pub/latest.json'))['height'])")"
 
 [ "$fails" -eq 0 ] && echo UTREEXO_FOLLOW_LOGIC_OK || { echo "UTREEXO_FOLLOW_LOGIC_FAILED ($fails)"; exit 1; }

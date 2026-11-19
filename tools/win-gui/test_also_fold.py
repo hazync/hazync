@@ -29,6 +29,16 @@ sys.exit(0)
 '''
 
 
+
+def _started(app, secs=30):
+    """Press Start and wait for its checks, which run off the window's thread (review of c881d582, M2)."""
+    import time as _t
+    app._start()
+    end = _t.time() + secs
+    while getattr(app, "_starting", False) and _t.time() < end:
+        app.update()
+        _t.sleep(0.02)
+
 def check(ok, what):
     global fails
     print(("  ok   " if ok else "  FAIL ") + what)
@@ -89,7 +99,7 @@ def main():
     app.also_fold.set(not CONTROL)
     app._persist()
     check(firstrun.load_config().get("also_fold") is (not CONTROL), "the tick is saved")
-    app._start()
+    _started(app)
     spin(1.0)
     started = jobs()
     check("run" in started and "fold" in started, f"ticked: Start runs a prover AND a folder ({started})")
@@ -125,7 +135,7 @@ def main():
 
     os.remove(runs)
     app.also_fold.set(False)
-    app._start()
+    _started(app)
     spin(1.0)
     check(jobs() and set(jobs()) == {"run"}, f"unticked: only the prover ({jobs()})")
     app._stop()

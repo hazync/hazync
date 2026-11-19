@@ -18,6 +18,10 @@ serde_json = "1"
 sha2 = "0.10"
 bincode = "1"
 swiftsync-verify = { path = "../../../swiftsync-verify" }
-libzync = { path = "../../../libzync", default-features = false, features = ["utreexo"] }
+# The header-chain zAPP module (zapps/headers, docs/libzync/ZYNCAPPS.md §9): its state, MMR and verifier.
+zapp-headers = { path = "../../../zapps/headers" }
+# The hints zAPP module (zapps/hints, docs/libzync/ZYNCAPPS.md §9): its verifier, the one the CLI, C ABI and WASM run.
+zapp-hints = { path = "../../../zapps/hints" }
+libzync = { path = "../../../libzync", default-features = false, features = ["hints", "utreexo"] }
 # the utreexo tip step runs natively before proving (#[path] methods/utreexo-tip/src/step.rs): Floresta's accumulator code
 rustreexo = "=0.7.0"
