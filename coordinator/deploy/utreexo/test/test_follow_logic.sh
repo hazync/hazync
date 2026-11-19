@@ -177,6 +177,7 @@ t "  moves a stale block file above the base aside (MED)" 1 "$(find "$W/d/orphan
 # (review of 7806f4b, 4) the node's stdin must not be the loop's: a BITCOIN_CLI that reads stdin (as ssh does) must not
 # swallow the rest of check_blocks' list. A stale file at the END of the range must still be found
 printf '#!/bin/bash\ncat > /dev/null\nexec %q "$@"\n' "$HERE/fake-bitcoin-cli" > "$W/bin/cli_stdin"; chmod +x "$W/bin/cli_stdin"
+for h in 1 2 3 4 5; do cp "$SRC/block_$h.json" "$W/blocks/"; done   # earlier lines in the list for a reader to swallow
 python3 - "$SRC/block_6.json" "$W/blocks/block_6.json" <<'PY'
 import json, sys
 v = json.load(open(sys.argv[1])); v['nonce'] ^= 1; json.dump(v, open(sys.argv[2], 'w'))

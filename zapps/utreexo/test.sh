@@ -11,6 +11,8 @@ H3=0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449
 H2=000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd
 unset RISC0_DEV_MODE
 cargo test --release --manifest-path ./Cargo.toml --features tip
+# the tip step's block rules natively (the BIP30 refusal on the real coinbases of 91,722 / 91,812): the guest's step.rs
+cargo test --release --manifest-path ./tip-step/Cargo.toml
 cargo test --release --manifest-path ./wasm/Cargo.toml
 cargo test --release --manifest-path ./cli/Cargo.toml
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-utreexo
