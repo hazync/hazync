@@ -150,6 +150,25 @@ def main():
         # ⚠ The identity import must exist, or work gets credited to the wrong handle — which has
         # already happened once on a real run.
         check("Import a key" in blob, "importing an identity is reachable from the window")
+
+        # ⭐ THE LIVE RESOURCE PANEL (stats.py): off screen while nothing runs, and when given a sample it draws the
+        # card, memory and processor rows -- the no-GPU path in words, not an empty bar.
+        check(hasattr(app, "stats_box") and not app.stats_box.winfo_manager(),
+              "the resource panel exists and is hidden while nothing runs")
+        app.stats_box.pack(fill="x", before=app._pick)
+        app._stats_apply({"gpu_state": "none", "gpus": [], "cpu": 12.0, "ram_used_mb": 6000, "ram_total_mb": 16000})
+        drawn = [app.stats_rows.itemcget(i, "text") for i in app.stats_rows.find_all()
+                 if app.stats_rows.type(i) == "text"]
+        check("CPU build — no GPU" in drawn and "12%" in drawn and "5.9 / 15.6 GB" in drawn,
+              f"the panel draws the no-GPU line, the processor and the memory ({drawn})")
+        app._stats_apply({"gpu_state": "ok", "cpu": 50.0, "ram_used_mb": 6000, "ram_total_mb": 16000,
+                          "gpus": [{"index": 0, "uuid": "GPU-x", "used_mb": 3482, "total_mb": 4096,
+                                    "util": 97, "temp": 71}]})
+        drawn = [app.stats_rows.itemcget(i, "text") for i in app.stats_rows.find_all()
+                 if app.stats_rows.type(i) == "text"]
+        check("3.4 / 4.0 GB · 97% busy · 71 °C" in drawn, f"...and a card's memory, load and temperature ({drawn})")
+        check(len(app.stats_chart.find_all()) > 3, "...and the five-minute chart")
+        app.stats_box.pack_forget()
     finally:
         try:
             app.destroy()
