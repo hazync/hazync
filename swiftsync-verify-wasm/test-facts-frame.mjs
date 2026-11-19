@@ -29,5 +29,14 @@ const bent = { ...fact, script_pubkey: fact.script_pubkey.replace(/.$/, (c) => (
 r = v.verifyFacts({ ...base, facts: { tries: [bent] } });
 // on a DEMO chain a fact that HOLDS also reports ok:false, so assert it does not hold
 check('a fact for another script is refused', r.facts?.length === 1 && r.facts[0].ok === false && !holds(r), `${JSON.stringify(r.facts ?? r.error)}`);
+// an unknown field in a trie fact is refused (TrieFact is deny_unknown_fields): a misspelled claim must not read as no claim
+const { expect: claim, ...rest } = fact;
+r = v.verifyFacts({ ...base, facts: { tries: [{ ...rest, expected: claim }] } });
+check('a trie fact with an unknown field is refused', r.verdict === 'fail' && (r.checks ?? []).some((c) => !c.ok && /unknown field `expected`/.test(c.what)),
+  `${r.verdict} ${JSON.stringify(r.checks ?? r.facts)}`);
+// an unknown key in the facts wrapper is refused: `trie` for `tries` used to check ZERO facts
+r = v.verifyFacts({ ...base, facts: { trie: [fact] } });
+check('a facts wrapper with an unknown key is refused', r.verdict === 'fail' && (r.checks ?? []).some((c) => !c.ok && /unknown key "trie"/.test(c.what)),
+  `${r.verdict} ${JSON.stringify(r.checks ?? r.facts)}`);
 console.log(bad ? `${bad} FAILED` : 'FACTS_FRAME_OK');
 process.exit(bad ? 1 : 0);
