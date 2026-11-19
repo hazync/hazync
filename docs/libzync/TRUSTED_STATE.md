@@ -181,6 +181,15 @@ out), then decoded.
   lineage's: the divergence surfaces at the next join, never as a wrong acceptance. So the REPEATABLE list is a needed
   side input, and it is checked only by a later join (open item, §8).
 
+**Regtest, anchored at 101, blocks 102..112** (a separate run: `HAZYNC_TS_SMT_SEED=anchor_101.smt host
+libzync-prove-range 102 112 <blocks 102..112 only> anchor_101.json <out>`, 233 s): all accepted. Here the tracked coin
+is LIVE in the anchor (block 2's coinbase, leaf bit 1 from the side list), and block 102 spends it in the deposit
+transaction (the BIP30 slot goes to REPEATABLE on the anchored lineage itself), so block 105's repeat is decided by
+state the anchored lineage built. States at 104, 105, 110 and 112 equal the real receipts' in `tip_hash`,
+`utxo_value`, `live_set`/`live_hash`, `cum_work`, `recent_times`, `max_time`, `prev_nbits`, `epoch_start`,
+`profile`, `block_leaves`; the tip's `anchor_id` is the anchor's `6e500817…`. (The main lineage's per-block cycles
+for this range are not measured: the repo has no main-lineage state at 101.)
+
 **Mainnet, anchored at 199, block 200** (mainnet host `420a7239…`, `trusted-state` feature, dev mode): the anchor from
 Core 31.1.0's `zapps/assume/vectors/utxo_199.dat` (203 coins; built with `--no-expect`: no Core-printed
 `hash_serialized_3` for 199 is recorded in the repo, so here the check is the outcome below), ANCHOR_ID
