@@ -53,6 +53,7 @@ C="--purpose regtest-audit --nonce 7e57"
 RA=$G/receipts/a/block_112.rcpt; RB=$G/receipts/b/block_113.rcpt
 for x in a:112:a112 b:113:b113; do
   b=${x%%:*}; r=${x#*:}; h=${r%%:*}; lab=${r#*:}
+  # shellcheck disable=SC2046  # the scripts file holds one argument per word, split on purpose
   $V draft --network regtest --receipt $G/receipts/$b/block_$h.rcpt --trie $G/receipts/$b/state_$h.trie $C $(cat $T/scripts) > $T/s_$lab.json 2>$T/err \
     && $V sign $T/s_$lab.json --keys $T/keys 2>>$T/err || { cat $T/err; echo "draft/sign $lab: WRONG"; BAD=$((BAD+1)); }
   N=$((N+1)); if oracle $lab $T/s_$lab.json; then echo "statement $lab = Core's scantxoutset: PASS"; else echo "statement $lab != Core's scantxoutset: WRONG"; BAD=$((BAD+1)); fi
@@ -78,6 +79,7 @@ run 2 "ZAPP_STATEMENT_DEMO" $V --network regtest $RA $T/s_a112.json
 run 1 "unknown network" $S --network regtest --expect 112:$A112 $C $RA $T/s_a112.json
 run 1 "receipt verifies against image" $S --expect 112:$A112 $C $RA $T/s_a112.json
 run 1 "receipt verifies against image" $S --network signet --expect 112:$A112 $C $RA $T/s_a112.json
+# shellcheck disable=SC2046  # the scripts file holds one argument per word, split on purpose
 run 1 "unknown network" $S draft --network regtest --receipt $RA --trie $G/receipts/a/state_112.trie $C $(cat $T/scripts)
 # ---- and the shipped WASM module (its built .wasm, through its glue)
 if [ -n "$WASM" ]; then
