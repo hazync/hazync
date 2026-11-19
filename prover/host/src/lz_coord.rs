@@ -216,6 +216,51 @@ mod strict_decode_tests {
         assert!(e.contains("not whole words"), "{e}");
     }
 
+    /// The real receipt with one word of its succinct proof changed by `edit`, re-encoded: decode_receipt's verdict.
+    fn with_edit(edit: impl Fn(&mut risc0_zkvm::SuccinctReceipt<risc0_zkvm::ReceiptClaim>)) -> Result<risc0_zkvm::Receipt, String> {
+        let mut r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(format!("{V}mainnet_1_200_8888d59c.rcpt")).unwrap()).unwrap();
+        let risc0_zkvm::InnerReceipt::Succinct(s) = &mut r.inner else { panic!("not succinct") };
+        edit(s);
+        crate::verify::decode_receipt(&bincode::serialize(&r).unwrap())
+    }
+
+    #[test]
+    fn an_unreduced_control_id_word_is_refused() {
+        let e = with_edit(|s| s.control_id.as_mut_words()[3] = crate::verify::BABYBEAR_P).unwrap_err();
+        assert!(e.contains("malformed receipt: control_id word 3"), "{e}");
+        // control: the largest field element is accepted
+        with_edit(|s| s.control_id.as_mut_words()[3] = crate::verify::BABYBEAR_P - 1).expect("P - 1 is a field element");
+    }
+
+    #[test]
+    fn an_unreduced_seal_word_is_refused() {
+        let e = with_edit(|s| { let n = s.seal.len(); s.seal[n - 1] = u32::MAX }).unwrap_err();
+        assert!(e.contains("malformed receipt: seal word"), "{e}");
+    }
+
+    #[test]
+    fn the_risc0_3_0_5_receipt_still_decodes_for_the_handover() {
+        // A predecessor proved on risc0 3.0.5 (verified by the vendored xver circuit): the strict decoder must not
+        // refuse it, or a cross-version handover could not read its predecessor's receipt.
+        let raw = std::fs::read(format!("{V}mainnet_1_200_863c9ce3_risc0_305.rcpt")).unwrap();
+        let r = crate::verify::decode_receipt(&raw).expect("the 3.0.5 receipt decodes strictly");
+        assert!(matches!(r.inner, risc0_zkvm::InnerReceipt::Succinct(_)));
+    }
+
+    #[test]
+    fn a_job_pair_with_bytes_after_it_is_refused() {
+        let p = crate::seg::pack_pair(b"left", b"right!");
+        assert_eq!(crate::seg::unpack_pair(&p), Some((&b"left"[..], &b"right!"[..])));
+        let mut t = p.clone();
+        t.push(0);
+        assert_eq!(crate::seg::unpack_pair(&t), None);
+        assert_eq!(crate::seg::unpack_pair(&p[..p.len() - 1]), None);
+    }
+
+    // Segment (seg.rs's worker wire) goes through the same decode_exact as the succinct receipts tested here and in
+    // seg.rs; risc0's Segment has crate-private fields and the test build has no guest ELF to execute, so no Segment
+    // value can be built in a host unit test.
+
     #[test]
     fn a_composite_receipt_is_refused_before_decoding() {
         let mut deep = vec![0u8; 4];

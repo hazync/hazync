@@ -798,7 +798,8 @@ pub(crate) fn unpack_pair(body: &[u8]) -> Option<(&[u8], &[u8])> {
     let la = u32::from_le_bytes(body[0..4].try_into().ok()?) as usize;
     if body.len() < 4 + la + 4 { return None; }
     let lb = u32::from_le_bytes(body[4 + la..8 + la].try_into().ok()?) as usize;
-    if body.len() < 8 + la + lb { return None; }
+    // exactly pack_pair's bytes: anything after the second element is refused, as decode_exact refuses trailing bytes
+    if body.len() != 8 + la + lb { return None; }
     Some((&body[4..4 + la], &body[8 + la..8 + la + lb]))
 }
 
@@ -2934,7 +2935,8 @@ mod join_tree_tests {
 /// AGG_EARLY: the claim digest of the chunk receipt in `f`, or None if it is not (yet) a whole receipt.
 fn early_claim_of(f: &str) -> Option<risc0_zkvm::sha::Digest> {
     use risc0_zkvm::sha::Digestible;
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(f).ok()?).ok()?;
+    // A partial file mid-copy fails to decode (short, or the strict reader's error): None, and the caller retries.
+    let r = crate::verify::decode_chunk_receipt(&std::fs::read(f).ok()?).ok()?;
     Some(r.claim().ok()?.digest())
 }
 

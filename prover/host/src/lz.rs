@@ -1047,9 +1047,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         if let Some(k) = (lo..=hi).rev().find(done) {
             assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
             let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
-            let r: Receipt = bincode::deserialize(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
+            let r: Receipt = crate::verify::decode_receipt(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
             r.verify(METHOD_ID).unwrap_or_else(|e| panic!("block_{k}.rcpt does not verify against this image: {e}"));
-            let st: ChainState = r.journal.decode().expect("ChainState");
+            let st: ChainState = crate::verify::decode_journal(&r.journal).expect("ChainState");
             assert!(st.height == k && st.kind == KIND_CHAIN && st.self_id == METHOD_ID, "block_{k}.rcpt is not this chain's state at {k}");
             // The same chain as this run's anchor: an output directory reused with another anchor must not be resumed.
             // From an anchor, the chain's anchor_id is the anchor's digest; after a handover, the predecessor's anchor_id.

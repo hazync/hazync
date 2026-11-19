@@ -122,7 +122,8 @@ pub(crate) fn leaf_read(path: &str) -> LeafBundle {
     assert!(v.len() >= 40 && &v[..8] == LEAF_MAGIC, "{path}: not a leaf bundle ({})", String::from_utf8_lossy(&LEAF_MAGIC[..]));
     let (body, d) = v.split_at(v.len() - 32);
     assert!(Sha256::digest(body)[..] == d[..], "{path}: checksum mismatch (torn or damaged)");
-    let mut b: LeafBundle = bincode::deserialize(&body[8..]).unwrap_or_else(|e| panic!("{path}: {e}"));
+    // exactly leaf_write's bincode: trailing bytes refused (the bundle is network-served; the checksum covers them too)
+    let mut b: LeafBundle = crate::verify::decode_exact(&body[8..]).unwrap_or_else(|e| panic!("{path}: {e}"));
     // stamped on read (docs/HANDOVER.md §5): a bundle an older image's prep wrote still carries S(h-1) as the image
     // proving block h-1 commits it. Identity with an empty lineage.
     crate::stamp(&mut b.prev);

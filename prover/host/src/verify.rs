@@ -17,10 +17,22 @@ use crate::hex;
 ///   element: risc0 `assert!`s that in `hash_pair` (an ABORT, not an error) before checking anything else, so a hostile
 ///   word must be refused here. A word refused here is one no valid receipt holds.
 pub(crate) fn decode_receipt(bytes: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
+    decode_receipt_with(bytes, false)
+}
+
+/// A chunk receipt copied from another machine (HAZYNC_RECEIPTS / AGG_EARLY): `decode_receipt`'s rules, except that a
+/// COMPOSITE receipt is decoded, not refused. The aggregate still converts one (`composite_to_succinct`) so that a set
+/// staged by an older host, which proved chunks composite, still aggregates; these files come from the operator's own
+/// fleet, not from a contributor.
+pub(crate) fn decode_chunk_receipt(bytes: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
+    decode_receipt_with(bytes, true)
+}
+
+fn decode_receipt_with(bytes: &[u8], allow_composite: bool) -> Result<risc0_zkvm::Receipt, String> {
     // A composite receipt nests without bound (a hostile one overflows the stack while decoding: cold review 11-06),
     // and every receipt this prover writes is succinct or Groth16, so it is refused before decoding, as libzync-verify
     // and swiftsync-verify do. bincode's first u32 is the InnerReceipt variant: 0 Composite, 1 Succinct, 2 Groth16, 3 Fake.
-    if bytes.get(..4) == Some(&[0, 0, 0, 0]) {
+    if !allow_composite && bytes.get(..4) == Some(&[0, 0, 0, 0]) {
         return Err("a composite receipt: refused before decoding (a chain proof is succinct or Groth16)".into());
     }
     let r: risc0_zkvm::Receipt = decode_exact(bytes).map_err(|e| format!("not a receipt: {e}"))?;
@@ -38,13 +50,15 @@ pub(crate) fn decode_exact<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Resu
     bincode::DefaultOptions::new().with_fixint_encoding().reject_trailing_bytes().deserialize(bytes).map_err(|e| e.to_string())
 }
 
+/// The BabyBear prime, 15 * 2^27 + 1: every word of a Poseidon2 digest and of a Poseidon2 STARK seal is below it.
+pub(crate) const BABYBEAR_P: u32 = 15 * (1 << 27) + 1;
+
 /// The BabyBear check above for one Poseidon2 succinct receipt: risc0 `assert!`s these words are field elements in
 /// `hash_pair` while checking the control inclusion proof, before anything else.
 pub(crate) fn succinct_well_formed<C>(s: &risc0_zkvm::SuccinctReceipt<C>) -> Result<(), String> {
     if s.hashfn != "poseidon2" {
         return Ok(()); // SHA-256 and Blake2b accept any digest word
     }
-    const BABYBEAR_P: u32 = 15 * (1 << 27) + 1;
     let bad = |what: &str, w: &[u32]| match w.iter().position(|&x| x >= BABYBEAR_P) {
         Some(i) => Err(format!("malformed receipt: {what} word {i} is 0x{:08x}, not a BabyBear field element", w[i])),
         None => Ok(()),
