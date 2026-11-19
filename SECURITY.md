@@ -79,6 +79,12 @@ Whichever you use, the fingerprint must be:
 **The key expires 2028-04-25.** After that, signatures on releases made before then still verify but
 `gpg` reports the key as expired — that is the key's lifetime ending, not evidence of tampering.
 
+**The Windows app's Update button pins this key.** It checks `SHA256SUMS.txt.asc` against the key above, compiled
+into the app (`tools/win-gui/appupdate.py`), and refuses any other signer, any signature made after 2028-04-25, and
+any release not newer than the installed one. So rotating or replacing the release key means every installed app
+fails closed: it will not update itself until the person installs a release carrying the new key by hand. Plan the
+rotation before 2028-04-25, and say so in the release notes of the last release signed by this key.
+
 **`gpg` will also warn that the key "is not certified with a trusted signature".** That is expected and
 is not a problem with the signature: it means *you* have not personally signed this key, which nobody
 has on a fresh keyring. What matters is the `Good signature` line and that the fingerprint matches the
