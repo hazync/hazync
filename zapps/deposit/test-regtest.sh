@@ -29,7 +29,7 @@ for src in ('main', '$1'):
         if '$2' in b['txids']: print(h, b['hash'], b['txids'].index('$2'))"; }
 build() { local br=$1 h=$2 tx=$3 out=$4; shift 4
           $V build --network regtest --core $G/receipts/$br/block_$h.rcpt --history $G/receipts/$br/history.bin --txid $tx "$@" -o $T/$out.json; }
-read DH DHASH DI <<< "$(where a $D)"; read PH PHASH PI <<< "$(where a $P)"; read H104 X104 I104 <<< "$(where a $T104)"; read H64 X64 I64 <<< "$(where a $T64)"; read H105 X105 I105 <<< "$(where a $T105)"
+read DH DHASH DI <<< "$(where a $D)"; read PH PHASH PI <<< "$(where a $P)"; read H104 X104 I104 <<< "$(where a $T104)"; read H64 _ I64 <<< "$(where a $T64)"; read H105 X105 I105 <<< "$(where a $T105)"
 echo "Core: D in a $DH $DHASH at $DI; P in $PH $PHASH at $PI; block 104's last tx at $I104; the 64-byte tx in $H64 at $I64; the P2PK spend of 105 at $I105"
 N=$((N+1))
 if build a 112 $D d_a --height $DH --bitcoin-cli "$O a -regtest" && build a 112 $P p_a --height $PH --bitcoin-cli "$O a -regtest" \
@@ -48,12 +48,15 @@ run() { local want=$1; local grepfor=$2; shift 2
 R="$V --network regtest"
 # ---- OK: D in a 111 under 2 blocks; its output and its OP_RETURN; the 102 deposit on both branches; block 104's last
 # of 17 transactions (odd count); a transaction of block 105, beside its real 64-byte one
+# shellcheck disable=SC2046  # core prints several flags, split on purpose
 run 0 "ACCEPTED: deposit: transaction $D, output 0 = .* is in block $DH $DHASH, 2 confirmation(s) as of tip 112 $A112" \
     $R --txid $D --vout 0 $(core a112 $D 0) --min-depth 2 --expect 112:$A112 $T/d_a.json
 run 0 "ACCEPTED" $R --txid $D --vout 1 --op-return $DOP --min-depth 2 --expect 112:$A112 $T/d_a.json
 run 0 "ACCEPTED" $R --txid $D --op-return $DOP --min-depth 2 --bitcoin-cli "$O a -regtest" $T/d_a.json
+# shellcheck disable=SC2046  # core prints several flags, split on purpose
 run 0 "is in block $PH $PHASH, 11 confirmation(s) as of tip 112 $A112" $R --txid $P --vout 0 $(core a112 $P 0) --min-depth 11 --expect 112:$A112 $T/p_a.json
 run 0 "is in block $PH $PHASH, 12 confirmation(s) as of tip 113 $B113" $R --txid $P --vout 1 --op-return $POP --min-depth 12 --expect 113:$B113 $T/p_b.json
+# shellcheck disable=SC2046  # core prints several flags, split on purpose
 run 0 "is in block $PH $PHASH, 12 confirmation(s) as of tip 113 $B113" $R --txid $P --vout 0 $(core b113 $P 0) --min-depth 12 --bitcoin-cli "$O b -regtest" $T/p_b.json
 run 0 "ACCEPTED: deposit: transaction $T104 is in block $H104 $X104" $R --txid $T104 --min-depth 9 --expect 112:$A112 $T/t104.json
 run 0 "ACCEPTED: deposit: transaction $T105 is in block $H105 $X105" $R --txid $T105 --min-depth 8 --expect 112:$A112 $T/t105.json
