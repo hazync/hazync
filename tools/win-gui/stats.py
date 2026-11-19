@@ -194,7 +194,8 @@ class Sampler:
             state, gpus = classify_smi(rc, text)
             self.gpu_state = out["gpu_state"] = state
             out["gpus"] = gpus
-            out["gpu_why"] = "" if state == GPU_OK else (text or "").strip()[:200]
+            # ⚠ one line: nvidia-smi's failure text is often several, and it is quoted on ONE log line (review L4)
+            out["gpu_why"] = "" if state == GPU_OK else " ".join((text or "").split())[:200]
             self._skip = {GPU_NONE: RETRY_NONE_POLLS, GPU_UNAVAILABLE: RETRY_UNAVAILABLE_POLLS}.get(state, 0)
         now = self.cpu()
         out["cpu"] = cpu_percent(self._cpu_prev, now)
@@ -240,6 +241,11 @@ class BlockPeaks:
         start(key)              a new block: the peak goes back to nothing
         observe(key, used, tot) one sample of that worker's card, while a block is held
         note(key, po2)          the log text for where the block finishes or fails — ONCE per block, then None
+        drop(key)               forget the worker's block (stopped mid-way, or a new worker on the same key)
+
+    ⚠ THE BOOKKEEPING NEVER DEPENDS ON WHETHER A CARD WAS READ (review of e6ac8ef, L2). A claim made before the first
+    sample, or while nvidia-smi is backing off, must still start a block, and its end must still close it; otherwise
+    the next block inherits the wrong peak. Whether the text is SHOWN is the caller's `show`, decided separately.
     """
 
     def __init__(self):
@@ -262,6 +268,27 @@ class BlockPeaks:
             if total_mb:
                 b["total"] = total_mb
 
+    def drop(self, key):
+        with self._lock:
+            self._b.pop(key, None)
+
+    def on_line(self, key, kind, po2=None, show=True):
+        """One classified worker line (supervisor.interesting_line). -> the suffix for its log line, or ""."""
+        if kind == "claimed":
+            self.start(key)
+            return ""
+        if kind in END_KINDS:
+            note = self.note(key, po2)
+            return f"  [{note}]" if (note and show) else ""
+        return ""
+
+    def on_exit(self, key, exit_kind, po2=None, show=True):
+        """The worker exited (supervisor.classify_exit's kind). A block still open is noted (a crash with no failure
+        line); an idle exit (nothing was claimed) never is. Either way the block is forgotten. -> suffix or ""."""
+        note = None if exit_kind == "idle" else self.note(key, po2)
+        self.drop(key)
+        return f"  [{note}]" if (note and show) else ""
+
     def peak(self, key):
         """(peak_mb, total_mb) of the block in hand, or (None, None)."""
         with self._lock:
@@ -275,6 +302,11 @@ class BlockPeaks:
                 return None
             b["noted"] = True
             return peak_text(b["peak"], b["total"], po2)
+
+
+# The classified lines on which a block ends: finished (the prover's own line, or the board's "✓ … re-verified" /
+# "already proved by someone else", which is the one that reliably reaches the log) or first failed.
+END_KINDS = ("proved", "accepted", "cuda-error", "abort", "oom")
 
 
 def gb(mb):

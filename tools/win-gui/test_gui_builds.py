@@ -169,6 +169,26 @@ def main():
         check("3.4 / 4.0 GB · 97% busy · 71 °C" in drawn, f"...and a card's memory, load and temperature ({drawn})")
         check(len(app.stats_chart.find_all()) > 3, "...and the five-minute chart")
         app.stats_box.pack_forget()
+
+        # ⚠ review of e6ac8ef, L3: a panel that raises must not end Home's once-a-second refresh, nor fill the log
+        def broken():
+            raise RuntimeError("invalid command name .!canvas")
+        real_tick = app._stats_tick
+        app._stats_tick = broken
+        before = len(app.tk.call("after", "info"))
+        survived = True
+        try:
+            app._home_tick()
+            app._home_tick()
+        except Exception:                # noqa: BLE001
+            survived = False
+        app._stats_tick = real_tick
+        said = []
+        while not app.q.empty():
+            said.append(app.q.get_nowait()[1])
+        check(survived and len(app.tk.call("after", "info")) == before + 2,
+              "a panel error does not stop Home's refresh: the next tick is still scheduled")
+        check(sum("resource panel failed" in x for x in said) == 1, "...and it is said in the log once, not every second")
     finally:
         try:
             app.destroy()

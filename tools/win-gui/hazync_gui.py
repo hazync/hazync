@@ -564,7 +564,14 @@ class App(tk.Tk):
 
     def _home_tick(self):
         self._home_refresh()
-        self._stats_tick()
+        # ⚠ guarded (review L3): one Tcl error in the panel must not end this once-a-second chain, which keeps Home
+        # itself current. Said once in the log, not every second.
+        try:
+            self._stats_tick()
+        except Exception as e:     # noqa: BLE001
+            if not getattr(self, "_stats_tick_said", False):
+                self._stats_tick_said = True
+                self._say(f"[stats] the resource panel failed to update: {e} — proving is not affected")
         self.after(1000, self._home_tick)
 
     # ── the live resource panel (stats.py) ──────────────────────────────────────────────────────────────────────────
@@ -630,7 +637,7 @@ class App(tk.Tk):
         self._stats_hist.add(max(fr) if fr else None, s.get("cpu"))
         if s.get("gpu_state") == stats.GPU_UNAVAILABLE and not self._stats_said:
             self._stats_said = True
-            why = s.get("gpu_why") or ""
+            why = " ".join((s.get("gpu_why") or "").split())        # one log line, whatever nvidia-smi printed
             self._say(f"[stats] {stats.UNAVAILABLE_TEXT}" + (f" ({why})" if why else "")
                       + " — proving is not affected; the panel shows processor and memory only")
         self._stats_render()
@@ -2434,6 +2441,7 @@ class App(tk.Tk):
         # ⛔ encoding="utf-8": the worker is told PYTHONIOENCODING=utf-8, and text=True alone decodes with the LOCALE's
         # (cp1252 on Windows), so its "✓" arrived as "âœ“" (Xesktop, 11-13). test_log_visible.py checks a ✓ survives.
         w = Worker(i, p, log_path, job, card=card, label=label, base=base, extra=extra)
+        self._peaks.drop(self._stats_key(w))         # (job, index) keys are reused: start from no block at all
         w.env = env
         if job == "run" and extra:
             w.activity.set_range(extra[0])
@@ -2487,17 +2495,12 @@ class App(tk.Tk):
                     if "no cuda-capable device" in line.lower():
                         w.no_device = True      # see _reap: a UUID pin the driver did not resolve
                     peak = ""
-                    if w.job == "run" and self._stats_gpu():
+                    if w.job == "run":
                         # ⭐ each block's peak GPU memory (stats.BlockPeaks): reset as a block is claimed, and written
                         # on the line where it finishes or first fails, so an out-of-memory case is measured data.
-                        # ⚠ "accepted" too: the board's "✓ range N: the coordinator re-verified" (or "already proved by
-                        # someone else") is the finishing line that reliably reaches this log; the prover's own
-                        # "proved range" line is classified only when it says "verified". Whichever comes first.
-                        if kind == "claimed":
-                            self._peaks.start(self._stats_key(w))
-                        elif kind in ("proved", "accepted", "cuda-error", "abort", "oom"):
-                            note = self._peaks.note(self._stats_key(w), (w.env or {}).get("HAZYNC_SEG_PO2"))
-                            peak = f"  [{note}]" if note else ""
+                        # ⚠ The bookkeeping always runs; only showing the text waits for a card to have been read.
+                        peak = self._peaks.on_line(self._stats_key(w), kind, (w.env or {}).get("HAZYNC_SEG_PO2"),
+                                                   show=self._stats_gpu())
                     if kind:
                         self.q.put((kind, f"[{w.job} {w.index}] {line.rstrip()}{peak}"))
                         # ⭐ A known failure gets its plain-language meaning right underneath,
@@ -2569,6 +2572,7 @@ class App(tk.Tk):
                     continue
             self.workers.remove(w)
             if w.stopping:
+                self._peaks.drop(self._stats_key(w))     # a block stopped mid-way is not the next one's peak
                 self._say(f"[{w.job} {w.index}] stopped")
                 self._feed("Stopped")
                 if w.activity.holding:
@@ -2591,9 +2595,9 @@ class App(tk.Tk):
             # window does not know what happened it must not invent a cause.
             tag = {"config": "cuda-error", "gpu": "cuda-error",
                    "idle": "sys", "done": "proved"}.get(kind, "sys")
-            note = (self._peaks.note(self._stats_key(w), (w.env or {}).get("HAZYNC_SEG_PO2"))
-                    if w.job == "run" and self._stats_gpu() else None)
-            self._say(f"[{w.job} {w.index}] {msg}" + (f"  [{note}]" if note else ""), tag)
+            peak = (self._peaks.on_exit(self._stats_key(w), kind, (w.env or {}).get("HAZYNC_SEG_PO2"),
+                                        show=self._stats_gpu()) if w.job == "run" else "")
+            self._say(f"[{w.job} {w.index}] {msg}{peak}", tag)
             several = len(self._session_cards) > 1 and w.label
             self._feed(f"{w.label}: {msg}" if several else msg, {"cuda-error": "bad", "proved": "good"}.get(tag, "sys"))
             if kind in ("config", "gpu"):

@@ -28,6 +28,15 @@ if CONTROL:
                                                 self._b[key].__setitem__("noted", False))
     stats.classify_smi = lambda rc, out: ((stats.GPU_OK, stats.parse_gpus(out)) if rc == 0
                                           else (stats.GPU_UNAVAILABLE, []))
+    # review of e6ac8ef: drop() forgetting nothing, the bookkeeping gated on a card having been read, and an idle
+    # exit noted like a crash
+    stats.BlockPeaks.drop = lambda self, key: None
+    _on_line = stats.BlockPeaks.on_line
+    stats.BlockPeaks.on_line = lambda self, key, kind, po2=None, show=True: (_on_line(self, key, kind, po2, show)
+                                                                            if show else "")
+    _note = stats.BlockPeaks.note
+    stats.BlockPeaks.on_exit = lambda self, key, exit_kind, po2=None, show=True: (
+        (lambda n: f"  [{n}]" if (n and show) else "")(_note(self, key, po2)))
 
 fails = 0
 
@@ -103,6 +112,11 @@ s4 = smp2.sample()
 check(s4["gpu_state"] == stats.GPU_UNAVAILABLE and "timed out" in s4["gpu_why"],
       "a slow nvidia-smi: unavailable, with its own words kept for the one log line")
 check(s4["cpu"] is None and s4["ram_used_mb"] is None, "readers that return nothing give None, not a crash")
+smp3 = stats.Sampler(FakeRun([(9, "NVIDIA-SMI has failed because it couldn't\ncommunicate with the\r\n  driver.\n")]),
+                     cpu=lambda: None, mem=lambda: None)
+why = smp3.sample()["gpu_why"]
+check("\n" not in why and "\r" not in why and why == "NVIDIA-SMI has failed because it couldn't communicate with the driver.",
+      f"a multi-line nvidia-smi failure is flattened to one log line ({why!r})")
 
 # ── CPU % from two samples ──────────────────────────────────────────────────────────────────────────────────────────
 check(stats.cpu_percent((100, 1000), (150, 1100)) == 50.0, "50 idle of 100 ticks: 50% busy")
@@ -154,6 +168,37 @@ check(pk.note("w2", "17") == "peak GPU memory not sampled at HAZYNC_SEG_PO2=17",
       "a block that ended before any sample says so rather than inventing a number")
 check(pk.note("never") is None, "no block in hand: no note")
 
+# ── the bookkeeping around the log lines (review of e6ac8ef) ───────────────────────────────────────────────────────
+bk = stats.BlockPeaks()
+K = ("run", 0)
+check(bk.on_line(K, "claimed", "18", show=False) == "", "a claim adds nothing to its own line")
+bk.observe(K, 3900, 4096)
+check(bk.on_line(K, "accepted", "18", show=False) == "", "no card read (yet): nothing shown on the finishing line")
+bk.on_line(K, "claimed", "18", show=False)  # claimed while nvidia-smi was backing off...
+bk.observe(K, 1000, 4096)
+sfx = bk.on_line(K, "accepted", "18", show=True)   # ...and finished once it answered again
+check("1.0 of 4.0 GB" in sfx,
+      f"⛔ a claim made while no card was read still STARTS its block: its peak is its own, not the last one's ({sfx!r})")
+check(bk.on_line(K, "cuda-error", "18") == "", "the end is noted once; a later failure line adds nothing")
+check(bk.on_line(K, "sys", "18") == "" and bk.on_line(K, None, "18") == "", "an ordinary line adds nothing")
+bk.on_line(K, "claimed", "18")
+bk.observe(K, 3700, 4096)
+bk.drop(K)                                  # Stop pressed mid-block (_reap's stopping branch), or _spawn
+check(bk.peak(K) == (None, None), "⛔ a block stopped mid-way is forgotten (drop)")
+check(bk.on_exit(K, "idle", "18") == "", "...so the next worker's idle exit carries no stale peak")
+bk.on_line(K, "claimed", "18")
+bk.observe(K, 3000, 4096)
+check(bk.on_exit(K, "idle", "18") == "", "⛔ an idle exit is never noted")
+check(bk.peak(K) == (None, None), "...and forgets the block either way")
+bk.on_line(K, "claimed", "18")
+bk.observe(K, 3300, 4096)
+sfx = bk.on_exit(K, "transient", "18")
+check("3.2 of 4.0 GB" in sfx, f"a crash mid-block with no failure line is noted on the exit line ({sfx!r})")
+bk.on_line(K, "claimed", "18")
+bk.observe(K, 2000, 4096)
+check(bk.on_line(K, "accepted", "18") != "" and bk.on_exit(K, "done", "18") == "",
+      "a block already noted at its finishing line is not noted again on the exit")
+
 # ── which card is a worker's ────────────────────────────────────────────────────────────────────────────────────────
 gs = stats.parse_gpus(TWO)
 check(stats.gpu_for({"index": 1, "uuid": "GPU-bbbb"}, gs)["index"] == 1, "a pinned worker: its card, by uuid")
@@ -190,8 +235,8 @@ if not CONTROL and (sys.platform == "win32" or _os.path.exists("/proc/stat")):
 
 print()
 if CONTROL:
-    # four separate faults were planted, so at least one check per fault must catch it
-    if fails >= 4:
+    # seven separate faults were planted, so at least one check per fault must catch it
+    if fails >= 7:
         print(f"CONTROL OK: {fails} checks fail with the careless maths, as they must")
         sys.exit(0)
     print(f"CONTROL BROKEN: only {fails} failed")
