@@ -138,8 +138,10 @@ PY
 [ "$n" -eq $((H + 1)) ] || die "history.bin holds $n records, not $((H + 1)) (genesis..$H)"
 
 # 3. publish the three files together, then restart zync-serve (it reads them at start)
+# shellcheck disable=SC2046  # own prints "-o U -g U" or nothing: split on purpose
 install -d $(own) "$SERVE"
 for f in history.bin:"$Z/out/history.bin" state.trie:"$Z/out/state_$H.trie" proof.rcpt:"$Z/tmp/spine.bin"; do
+    # shellcheck disable=SC2046  # as above
     install -m 0644 $(own) "${f#*:}" "$SERVE/.${f%%:*}.new"
 done
 for f in history.bin state.trie proof.rcpt; do [ -e "$SERVE/$f" ] && cp -p "$SERVE/$f" "$SERVE/.$f.prev"; done
