@@ -20,6 +20,8 @@
 //   'ok' needs BOTH Core's minimum work and expect matched (h.identity_checked): without an expect, even the whole
 //   mainnet header chain is 'demo' (since 16.11.2026; give the tip from a source you trust, e.g. an explorer)
 //   h.inclusion      { height, hash, txid } of what was shown, or null (non-null for 'ok' and 'demo' alike)
+//   ASKING ABOUT A TRANSACTION, also check h.inclusion.txid === the txid you asked about (and height / hash): included
+//   says something was shown, inclusion says WHAT. Leave txid and tx out (not null: refused) to ask about the block alone.
 
 function readString(memory, ptr) {
   const view = new DataView(memory.buffer);
@@ -39,7 +41,8 @@ export async function loadHeaders(source) {
      *  expect ('<height>:<hash>') is the tip from a source you trust. `now` defaults to this device's clock.
      *  include ({ height, hash, path, txid?, tx? }): also check that this block (and transaction txid, the one asked
      *  about, by the /tx answer tx) is on the proven chain. included is true only for verdict 'ok'; included_demo
-     *  for 'demo'; inclusion names what was shown. */
+     *  for 'demo'; inclusion names what was shown: asking about a transaction, check inclusion.txid is the txid asked
+     *  about. txid / tx null are refused (leave both out for the block alone). */
     verifyHeaders({ receipts, now, imageHex, expect, include }) {
       const enc = new TextEncoder();
       const parts = [...receipts, enc.encode(imageHex || ''), enc.encode(expect || ''),
