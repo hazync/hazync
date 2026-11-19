@@ -2,7 +2,7 @@
 //! ingest guest in the risc0 executor (no proof) on a snapshot and the inputs `ts-anchor build --ingest` wrote, checks
 //! every committed value against that anchor's `.json`, and prints the cycles, total and per phase.
 use risc0_zkvm::{default_executor, ExecutorEnv};
-use ts_ingest_methods::{GUEST_ELF, GUEST_ID};
+use ts_ingest_methods::{TS_INGEST_ELF as GUEST_ELF, TS_INGEST_ID as GUEST_ID};
 
 fn sections(b: &[u8]) -> Vec<Vec<u8>> {
     let mut v = Vec::new();
