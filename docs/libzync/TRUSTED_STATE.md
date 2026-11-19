@@ -228,4 +228,128 @@ UNKNOWN there, so no coin path opens), spends before H, coins created and spent 
 history. Transaction-in-block facts for blocks ≤ H do open (the leaf carries the real block hash), but they rest on
 the header chain bound to the pinned block hash, i.e. on the assumption.
 
-<!-- INGEST -->
+## 6. Cost of building the anchor inside the zkVM (question 4a)
+
+`experimental/trusted-state/ingest`: a separate measurement guest (its own image, laptop id `4e1ef3b6…`, built with
+the host's stable Rust; nothing of it is in any core image). It reads the headers, Core's snapshot bytes and the hints
+`ts-anchor build --ingest` writes, and computes in the zkVM: the header links and MTPs, Core's `hash_serialized_3`,
+every coin's leaf, the ECMH (the core guest's own `swiftsync.rs` / `batch_ecdsa.rs`, `#[path]`-included, host-hinted
+square roots), the coin log's roots (libzync `coinlog.rs`), the counting trie's root (libzync `ttree.rs`, every coin
+inserted into the empty trie; the update order host-given and checked), the BIP30 tree's root (`coinbase-smt`
+`roots.rs`, one proven insert per entry) and the block forest. Uncompressed P2PK keys (Core's special types 4/5, x
+only) take y from the host, checked on the curve and of the stored parity. Not done in the guest: `cum_work` (one
+256-bit division per header; the header-chain zAPP already proves chainwork).
+
+**Every run's journal equals ts-anchor's native anchor field for field** (`INGEST_MATCH`: tip, value, coins,
+`live_set`/`live_hash`, coin log roots, trie root, BIP30 root, block forest). Executor, default segment size (2^20),
+laptop; `TSI` = the guest's own `env::cycle_count()` per phase:
+
+| snapshot | coins | BIP30 entries | headers | snapshot phase (parse, hash3, leaf, ECMH, log, trie key) | trie | BIP30 tree | headers + forest | total user cycles | per coin, all phases | executor wall |
+|---|---|---|---|---|---|---|---|---|---|---|
+| regtest 101 (Core) | 101 | 101 | 102 | 729,098 (7,219/coin) | 108,371 (1,073/coin) | 147,267,013 | 479,264 | 148,601,458 | 1,471,302 | 2.9 s |
+| regtest 104 (Core) | 169 | 101 | 105 | 1,193,217 (7,061/coin) | 181,069 (1,071/coin) | 147,266,995 | 493,409 | 149,153,100 | 882,563 | 3.0 s |
+| regtest 110 (Core) | 177 | 102 | 111 | 1,255,805 (7,095/coin) | 190,281 (1,075/coin) | 148,720,820 | 518,947 | 150,704,786 | 851,439 | 3.0 s |
+| mainnet 200 (Core 31.1.0) | 204 | 199 | 201 | 1,772,106 (8,687/coin) | 335,808 (1,646/coin) | 289,836,469 | 944,320 | 292,909,848 | 1,435,833 | 6.0 s |
+| synthetic 1,000 | 1,000 | 0 | 111 | 6,423,875 (6,424/coin) | 2,266,449 (2,266/coin) | 353,747 | 519,452 | 9,589,398 | 9,589 | 0.2 s |
+| synthetic 10,000 | 10,000 | 0 | 111 | 64,893,592 (6,489/coin) | 22,684,193 (2,268/coin) | 389,747 | 519,573 | 88,609,361 | 8,861 | 2.0 s |
+| synthetic 100,000 | 100,000 | 0 | 111 | 649,717,864 (6,497/coin) | 226,812,714 (2,268/coin) | 749,747 | 519,991 | 878,888,034 | 8,789 | 21.2 s |
+| synthetic 1,000,000 | 1,000,000 | 0 | 111 | 6,512,348,620 (6,512/coin) | 2,267,928,082 (2,268/coin) | 4,349,747 | 520,375 | 8,795,940,862 | 8,796 | 234.5 s (983 MB RSS) |
+
+"synthetic" = `ts-anchor synth`: a Core-format snapshot of P2WPKH coins with random txids (2 per txid, none
+coinbase, so no BIP30 entries), on the regtest headers to 110. NOT chain data; it measures the per-coin slope. The
+BIP30 column at 0 entries is the empty-root setup plus reading the list (it grows with the snapshot's size here only
+through input reading).
+
+What the table says:
+
+- **Per coin: ~8.8 k cycles, linear from 1 k to 1 M coins** (6.5 k for the snapshot phase incl. the ECMH, 2.3 k for
+  the trie insert). Real coins cost a little more in the snapshot phase where they are uncompressed P2PK (mainnet 200:
+  8.7 k, y checked on the curve).
+- **Per BIP30 entry: ~1.46 M cycles** (regtest 147.3 M / 101, mainnet 289.8 M / 199). That is the core's own SMT
+  code: `roots.rs` `apply` = two `compute_root` walks of 256 levels, each recomputing the 256 empty-subtree hashes.
+  It dominates every real snapshot here. Lever (NOT built, NOT measured): a bulk build of the sorted entries with the
+  empty hashes computed once.
+- **Per header: ~1.9 k (link + MTP) + ~2.8 k (block forest leaf + merges)** cycles.
+- Native, for comparison (ts-anchor, one thread, laptop): 1 M coins 96 s wall, of which the ECMH hints for the guest
+  (num-bigint) 78.8 s; 3.2 GB RSS (trie in memory).
+
+**Scale limit.** One guest run held 1 M coins (983 MB host RSS in the executor). Mainnet's set is two orders of
+magnitude larger, so a mainnet ingest must be a chain of chunk receipts carrying (hash3 SHA-256 midstate, ECMH
+point, coin log roots, trie root, BIP30 root, count, value) from chunk to chunk, the trie part being exactly the
+core's mode-17 trie update from an old root. Designed here, not built (§8).
+
+## 7. The core image id does not move (question 3b)
+
+No file the guest compiles is touched: `git diff origin/main...HEAD -- prover/methods libzync/src coinbase-smt
+accumulator` is empty (the guest `#[path]`-includes from `libzync/src` and `coinbase-smt/src`). The host change is a
+cargo feature of the host crate, which the guest build never sees.
+
+<!-- IMAGEID -->
+
+## 8. Open questions and risks (assessed, not solved here)
+
+1. **Verifier support.** Every shipped verifier reports an anchored proof as DEMO (its `anchor_id` is not the genesis
+   anchor). Trusted State needs, in `swiftsync-verify` and each zAPP's corecheck: a pinned table of anchors
+   `(network, H, block, hash_serialized_3, anchor_id)` (built into the verifier like `genesis_anchor_hex`, so the
+   anchor's identity is reproducible: anyone with Core's snapshot reruns `ts-anchor build` and must get the pinned
+   `anchor_id`); a verdict between OK and DEMO with the §4 wording; the block forest read with 0x02 leaves for heights
+   ≤ H (`undo_from` = H+1 for an anchored chain); and history facts relabelled "since H" (§5.5).
+2. **The side inputs are not covered by Core's hash.** `hash_serialized_3` covers outpoint, height, coinbase flag and
+   output, not the tracked bit, the REPEATABLE slots or the creation MTP. The headers are bound by hashing; the
+   tracked and REPEATABLE lists are checked only by a later join (a wrong one moves `live_hash`: §5.3 controls). On
+   mainnet no tracked coinbase can repeat below 1,983,702, so before the join a wrong list changes leaf bytes, never a
+   verdict; still, an anchor should not be pinned until the lists are reproduced independently (e.g.
+   `assume_inputs.py`'s rule over the blocks by a second party), or until the join. Mainnet has 22 live tracked
+   outputs at 974,111 (ASSUME_ZAPPS.md §3.2); the REPEATABLE count at 935,000 is not known here.
+3. **The BIP30 tree argument (§3.3)** is reasoning over `bip30.rs`, `tracked.rs` and BIP34, checked on one regtest
+   repeat (block 105) only. It needs a review of its own before an anchor below BIP34 is used anywhere, and a rig
+   case: an anchored lineage below BIP34 fed a repeat of a fully spent untracked coinbase (Core and the anchored
+   lineage accept, main refuses).
+4. **Two lineages prove H+1..T twice.** The main lineage needs its own coin log and trie through those blocks for
+   history zAPPs, so the anchored proofs are not reused by it after the join; the anchored lineage costs its blocks
+   once more (§9). After a join it can either stop or keep serving balance-type zAPPs.
+5. **A main proof at exactly H.** `live_hash` exists only at a proof's tip, so the join needs the main lineage's
+   receipt AT H (the board's join tree must keep a root at H, or a linear proof through H). A board decision.
+6. **Mainnet ingest in the zkVM** needs the chunked design of §6 and the BIP30 bulk-build lever; both unbuilt. It is
+   optional: the anchor's identity can be reproduced natively from the public snapshot, as an image id is from the
+   source. A receipt only saves a light verifier that rerun.
+7. **Host at mainnet scale.** The PoC keeps the anchor's coin log and trie in memory (1 M coins: 3.2 GB). A mainnet
+   anchor needs the host's disk stores (`HAZYNC_COINLOG_DIR`, `HAZYNC_TRIE_DIR`) fed from the snapshot, and
+   `HAZYNC_TS_SMT_SEED` refuses a resume (the PoC replays nothing): both small host changes, not made.
+
+## 9. Mainnet: the anchor height and an estimate path
+
+**Anchor height.** Core's newest mainnet `m_assumeutxo_data` found offline: **height 935,000**, block
+`0000000000000000000147034958af1652b2b91bba607beacc5e72a56f0fb5ee`, `hash_serialized_3`
+`e4b90ef9eae834f56c4b64d2d50143cee10ad87994c614d7d04125e2a6025050`, `m_chain_tx_count` 1,305,397,408 (a local
+checkout of Core master at `2586ed68`, 30.03.2026, version 31.99; earlier entries 840,000, 880,000, 910,000). The
+v28.0 tree the guest is built from pins only 840,000. A newer Core release may pin a later height; not checked.
+
+**What is ESTIMATED below** chains measured unit costs; nothing here was run at mainnet scale.
+
+| step | unit cost (MEASURED) | mainnet quantity | estimate |
+|---|---|---|---|
+| native anchor build (`ts-anchor`, one thread, in memory) | 96 s and 3.2 GB per 10^6 coins (§6) | N live coins at 935,000: **not known here** (Core's `gettxoutsetinfo` gives it) | ~96 s × N/10^6 one thread before the disk stores; the ECMH part is parallel (ASSUME_ZAPPS.md §5: 1.9 µs/coin on 16 threads) |
+| ingest receipt (optional, §8.6) | 8.8 k cycles/coin, 1.46 M cycles per BIP30 entry, 4.7 k cycles per header (§6) | N coins, K entries, 935,001 headers | 8.8×10^11 cycles per 10^8 coins + 1.46×10^11 per 10^5 entries + 4.4×10^9; at the header-chain zAPP's proven rate (2.35×10^9 cycles in 59.4 min on one RTX PRO 6000, LIBZYNC.md §4, ≈ 0.66 M cycles/s) ≈ 370 card-hours per 10^8 coins + 61 per 10^5 entries |
+| anchored lineage 935,001 → tip | per block = main's (§5.4); block 962,000 proved in 537 s on one RTX PRO 6000 (LIBZYNC.md §4) | 40,954 blocks to 975,954 (hazync-coord's tip, 15.11.2026) | ≈ 6,100 card-hours, ≈ $15 k at $2.49/hr, from that one block's time; real blocks vary |
+| for scale: the main lineage from genesis | — | 975 k blocks | $278-295 k on PRO 6000 (WHOLE_CHAIN_COST.md, itself ESTIMATED, ±50%) |
+
+So the anchored lineage is roughly 5% of a from-genesis proof's cost (ESTIMATED), paid a second time for the blocks
+above H (§8.4), and it brings balance-type zAPPs to the tip once those ~41 k blocks are proved, under the §4 label,
+until the main lineage reaches 935,000 and the join discharges the label.
+
+## 10. Reproduce
+
+```sh
+scripts/libzync-base.sh <base>                                   # Core v28.0 + libsecp 0.5.1 + patches
+cd prover && HAZYNC_BASE=<base> HAZYNC_LIBZYNC=1 HAZYNC_NETWORK=regtest cargo build --profile fasthost -p host --features trusted-state
+cd experimental/trusted-state/anchor && cargo build --release      # ts-anchor (own workspace)
+experimental/trusted-state/run_regtest.sh <host> <ts-anchor> <work dir> 104                     # §5.3, §5.4: TS_REGTEST_OK
+ts-anchor join --anchor <work>/anchor_104.json --main scripts/zapp-regtest/receipts/a/block_104.rcpt --image eb2cd424…   # §5.2
+ts-anchor facts --state <work>/out_anc/state_112.json --trie <work>/out_anc/state_112.trie \
+                --scenarios scripts/zapp-regtest/chain/scenarios.json --who ALICE [--history <spk>]…                   # §5.5
+python3 experimental/trusted-state/side_inputs.py prover/testdata/libzync/mainnet 200 <side>                          # mainnet 200
+ts-anchor build --network mainnet --snapshot zapps/assume/vectors/utxo_200.dat --side <side> \
+                --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320:a51f51ae…9d67 --out <a> --ingest <a>.ingest
+cd experimental/trusted-state/ingest && cargo build --release -p ts-ingest-host; ts-ingest-host <a> <snapshot> <side>    # §6
+```
