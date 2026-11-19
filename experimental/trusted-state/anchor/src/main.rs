@@ -192,6 +192,22 @@ fn build(a: &[String]) {
     assert!(chk.coins == coins && chk.value == value && chk.hash_serialized_3 == hash3 && (chk.live_set, chk.live_hash) == (live_set, live_hash),
             "the build pass and zapp-assume's hash_snapshot disagree");
 
+    // ---- NEGATIVE CONTROL ONLY (TRUSTED_STATE.md §11.1): `--forge-extra <value>:<spk hex>:<height>` appends one coin
+    // that is NOT in the snapshot to the coin log and the trie, leaving live_hash, utxo_value and hash_serialized_3 (the
+    // fields a join compares) as the honest snapshot gives them. A natively built anchor cannot be told from this by
+    // the join; only an ingest receipt (one pass committing the log, the trie AND live_hash) can.
+    if let Some(f) = arg(a, "--forge-extra") {
+        let p: Vec<&str> = f.split(':').collect();
+        let (v, spk, h): (u64, Vec<u8>, u32) = (p[0].parse().unwrap(), unhex(p[1]), p[2].parse().unwrap());
+        let c = za::SnapCoin { txid: sha256(b"hazync trusted-state FORGED coin"), vout: 0, height: h, coinbase: false, value: v, script_pubkey: spk };
+        let m = hc.mtp_before(h).unwrap_or_else(|e| die(e));
+        let leaf = za::coin_leaf(&c, false, m);
+        log.push(leaf);
+        ins.push((libzync::trie_fact::coin_key(&c.script_pubkey, &c.txid, 0), None, v));
+        println!("FORGED extra coin {}:0 value={v} height={h} mtp={m} leaf={} at log position {} (NOT in the snapshot, NOT in live_hash)",
+                 display(&c.txid), hex(&leaf), log.len() - 1);
+    }
+
     // ---- the counting trie: every live coin inserted, nothing spent (no history before H)
     let t1 = Instant::now();
     let mut trie = TrieStore::new(true);
