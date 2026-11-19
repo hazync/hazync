@@ -92,6 +92,9 @@ fn main() {
     println!("  cycles: user {user} total(padded) {total} segments {} (executor, {:.1} s wall)", session.segments.len(), secs);
     println!("  {tsi}");
     println!("  per coin: {:.0} user cycles (all phases / coins)", user as f64 / coins.max(1) as f64);
+    // the journal and the claim's image, for ts-anchor join-receipt (a prototype of the join receipt's checks)
+    std::fs::write(format!("{anchor}.ingest.journal"), &session.journal.bytes).unwrap();
+    std::fs::write(format!("{anchor}.ingest.image"), hex_id(&GUEST_ID)).unwrap();
     if bad.is_empty() { println!("INGEST_MATCH: every committed value = ts-anchor's native anchor"); }
     else { println!("INGEST_MISMATCH {bad:?}"); std::process::exit(1); }
 }

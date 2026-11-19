@@ -96,6 +96,7 @@ fn main() {
         Some("facts") => facts(&a[2..]),
         Some("synth") => synth(&a[2..]),
         Some("split-history") => split_history(&a[2..]),
+        Some("join-receipt") => join_receipt(&a[2..]),
         _ => die("usage: ts-anchor build|join|compare|facts|synth (see src/main.rs)"),
     }
 }
@@ -418,6 +419,77 @@ fn facts(a: &[String]) {
             let r = swiftsync_verify::check_trie_fact(&cs, undo_from, &f);
             println!("  {kind:<8} {s}: claims {} -> {}", f.expect.as_deref().unwrap_or("?"), match r { Ok(l) => format!("OK {l}"), Err(e) => format!("FAIL {e}") });
         }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// join-receipt (TRUSTED_STATE.md §11.4): the checks a join receipt's guest would make, natively. A PROTOTYPE of the
+// logic, not a proof: in the guest each input below would be an env::verify'd receipt journal.
+
+fn receipt_state(p: &str, img: &str) -> ChainState {
+    let bytes = std::fs::read(p).unwrap_or_else(|e| die(format!("{p}: {e}")));
+    let r = swiftsync_verify::decode_receipt(&bytes).unwrap_or_else(|e| die(e));
+    let d: [u8; 32] = unhex(img).try_into().unwrap_or_else(|_| die("image: 64 hex digits"));
+    r.verify(risc0_zkvm::sha::Digest::from(d)).unwrap_or_else(|e| die(format!("{p}: does not verify against {img}: {e}")));
+    swiftsync_verify::decode_journal::<ChainState>(&r.journal).unwrap_or_else(|e| die(e))
+}
+
+fn join_receipt(a: &[String]) {
+    // 1. the main lineage at H: a receipt of a published core image, genesis-anchored
+    let main = receipt_state(&need(a, "--main"), &need(a, "--main-image"));
+    let nw = if main.profile & 8 != 0 { net("regtest") } else { net("mainnet") };
+    let mut fails: Vec<String> = Vec::new();
+    if hex(&main.anchor_id) != nw.genesis_anchor { fails.push("main@H is not genesis-anchored".into()); }
+    // 2. the ingest journal (in the guest: env::verify(INGEST_ID, journal)); its layout is the ingest guest's commit
+    let jb = std::fs::read(need(a, "--ingest-journal")).unwrap();
+    let j: Vec<u32> = jb.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let mut i = 0usize;
+    let mut take = |n: usize| { let s = j[i..i + n].to_vec(); i += n; s };
+    let b32 = |w: Vec<u32>| -> [u8; 32] { w.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>().try_into().unwrap() };
+    let h = take(1)[0];
+    let tip = b32(take(8));
+    let _hash3 = take(8);
+    let _magic = take(1);
+    let nv = take(5);
+    let (coins, value, live_set) = (nv[0] as u64 | (nv[1] as u64) << 32, nv[2] as u64 | (nv[3] as u64) << 32, nv[4]);
+    let live_hash: [u32; 16] = take(16).try_into().unwrap();
+    let trie_root = b32(take(8));
+    let smt_root = b32(take(8));
+    let _n_smt = take(1);
+    let roots = |t: &mut dyn FnMut(usize) -> Vec<u32>| -> Vec<Option<[u8; 32]>> {
+        let n = t(1)[0] as usize;
+        (0..n).map(|_| if t(1)[0] == 1 { Some(b32(t(8))) } else { None }).collect()
+    };
+    let utxo_roots = roots(&mut take);
+    let block_roots = roots(&mut take);
+    // 3. the anchor A, rebuilt: every coin-derived field from the ingest journal, every history-free header-derived
+    //    field FROM main@H (so the join's time-context comparison is implied by the link digest matching)
+    let anchor = ChainState {
+        kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, tip_hash: tip, utxo_roots, utxo_leaves: coins, utxo_value: value,
+        cum_work: main.cum_work, height: h, prev_nbits: main.prev_nbits, prev_time: main.prev_time, epoch_start: main.epoch_start,
+        recent_times: main.recent_times.clone(), anchor_id: [0; 32], self_id: [0; 8], live_set, live_hash, trie_root, smt_root,
+        max_time: main.max_time, profile: main.profile, block_roots, block_leaves: h as u64 + 1, lineage: [0; 32],
+    };
+    let link = link_digest(&anchor);
+    // 4. the coin-derived join fields: the ingest's snapshot coins ARE main's live coins at H
+    if (h, tip, value, live_set, live_hash) != (main.height, main.tip_hash, main.utxo_value, main.live_set, main.live_hash) {
+        fails.push("ingest (H, tip, value, live set) != main@H's".into());
+    }
+    // 5. the anchored lineage's tip (in the guest: env::verify(core image, J_T)) rests on exactly this anchor
+    let tipst = read_state(&need(a, "--anchored-tip"));
+    if tipst.anchor_id != link { fails.push(format!("anchored tip's anchor_id {} != the rebuilt anchor's link digest {}", hex(&tipst.anchor_id), hex(&link))); }
+    if tipst.profile != main.profile { fails.push("profiles differ".into()); }
+    let dg = |s: &ChainState| { let w = risc0_zkvm::serde::to_vec(s).unwrap(); sha256(&w.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()) };
+    println!("rebuilt anchor at H={h}: link digest {}", hex(&link));
+    if fails.is_empty() {
+        // the joined statement: what the receipt would commit, and what split answers check facts against
+        println!("JOINED: blocks 0..{} valid from genesis (main image, anchor {}), blocks {}..{} valid on the anchor (core image, \
+                  anchor_id {}), joined at {h} {}", main.height, &nw.genesis_anchor[..8], h + 1, tipst.height, &hex(&link)[..8], display(&tip));
+        println!("  commits: J_H digest {}  J_T digest {}  T={} tip {}", hex(&dg(&main)), hex(&dg(&tipst)), tipst.height, display(&tipst.tip_hash));
+    } else {
+        for f in &fails { println!("  FAIL {f}"); }
+        println!("JOIN_RECEIPT_REFUSED");
+        std::process::exit(1);
     }
 }
 
