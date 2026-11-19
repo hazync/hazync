@@ -12,7 +12,12 @@
 //! snapshot's `hash_serialized_3` and base block are the expected (chainparams) values, and it prints the anchor's
 //! link digest: the `anchor_id` every proof on the anchored lineage commits.
 
+extern crate alloc;
 use std::collections::HashSet;
+
+#[path = "../../ingest/tsi.rs"]
+#[allow(dead_code)]
+mod tsi;
 use std::time::Instant;
 
 use hazync_coinbase_smt::bip30::REPEATABLE;
@@ -97,6 +102,7 @@ fn main() {
         Some("synth") => synth(&a[2..]),
         Some("split-history") => split_history(&a[2..]),
         Some("join-receipt") => join_receipt(&a[2..]),
+        Some("chunk-plan") => chunk_plan(&a[2..]),
         _ => die("usage: ts-anchor build|join|compare|facts|synth (see src/main.rs)"),
     }
 }
@@ -420,6 +426,220 @@ fn facts(a: &[String]) {
             println!("  {kind:<8} {s}: claims {} -> {}", f.expect.as_deref().unwrap_or("?"), match r { Ok(l) => format!("OK {l}"), Err(e) => format!("FAIL {e}") });
         }
     }
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// chunk-plan (TRUSTED_STATE.md §12): the host side of the chunked ingest. Reads the snapshot once, in file order, cuts it
+// into N runs of whole coins, and for each writes everything its chunk receipt needs, with the carried state S_in
+// computed natively exactly as the chunk guest computes S_out (tsi.rs is shared). Then the combine's input and the
+// journal the combine must reproduce (the one-shot ingest's layout), computed natively with the core's own BIP30 tree.
+
+fn sec(o: &mut Vec<u8>, b: &[u8]) { o.extend_from_slice(&(b.len() as u32).to_le_bytes()); o.extend_from_slice(b); }
+fn wbytes(w: &[u32]) -> Vec<u8> { w.iter().flat_map(|x| x.to_le_bytes()).collect() }
+
+struct P<'a> { b: &'a [u8], i: usize }
+impl<'a> P<'a> {
+    fn take(&mut self, n: usize) -> &'a [u8] { let s = &self.b[self.i..self.i + n]; self.i += n; s }
+    fn compact(&mut self) -> u64 {
+        match self.take(1)[0] {
+            c @ 0..=252 => c as u64,
+            253 => u16::from_le_bytes(self.take(2).try_into().unwrap()) as u64,
+            254 => u32::from_le_bytes(self.take(4).try_into().unwrap()) as u64,
+            _ => u64::from_le_bytes(self.take(8).try_into().unwrap()),
+        }
+    }
+    fn varint(&mut self) -> u64 {
+        let mut n: u64 = 0;
+        loop {
+            let ch = self.take(1)[0];
+            n = (n << 7) | (ch & 0x7f) as u64;
+            if ch & 0x80 != 0 { n += 1; } else { return n; }
+        }
+    }
+}
+
+/// One chunk's native work: hints and the ECMH partial sum, on `threads` threads.
+fn hints_and_sum(leaves: &[[u8; 32]], threads: usize) -> (Vec<u8>, za::Ecmh) {
+    let per = leaves.len().div_ceil(threads.max(1)).max(1);
+    let parts: Vec<(Vec<u8>, za::Ecmh)> = std::thread::scope(|sc| {
+        let hs: Vec<_> = leaves.chunks(per).map(|part| sc.spawn(move || {
+            let mut h = Vec::with_capacity(part.len() * 72);
+            let mut e = za::Ecmh::default();
+            for l in part { h.extend_from_slice(&libzync::host::ecmh_hint(l)); e.add_leaf(l).unwrap(); }
+            (h, e)
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut hints = Vec::new();
+    let mut sum = za::Ecmh::default();
+    for (h, e) in parts { hints.extend_from_slice(&h); sum.add_sum(&e); }
+    (hints, sum)
+}
+
+fn chunk_plan(a: &[String]) {
+    let t_all = Instant::now();
+    let nw = net(&need(a, "--network"));
+    let snap = std::fs::read(need(a, "--snapshot")).unwrap();
+    let side = need(a, "--side");
+    let n_chunks: u64 = need(a, "--chunks").parse().unwrap();
+    let out = need(a, "--out");
+    let threads: usize = arg(a, "--threads").map(|v| v.parse().unwrap()).unwrap_or(8);
+    std::fs::create_dir_all(&out).unwrap();
+    let hdr = std::fs::read(format!("{side}.headers")).unwrap();
+    let tracked = za::parse_tracked(&std::fs::read_to_string(format!("{side}.tracked")).unwrap_or_default()).unwrap_or_else(|e| die(e));
+    let repeatable: Vec<[u8; 32]> = std::fs::read_to_string(format!("{side}.repeatable")).unwrap_or_default().lines()
+        .map(|l| l.split('#').next().unwrap().trim()).filter(|l| !l.is_empty()).map(from_display).collect();
+    let h_tip = (hdr.len() / 80 - 1) as u32;
+    let tip_hash = dsha(&hdr[hdr.len() - 80..]);
+    let hc = za::HeaderChain::bind(&hdr, &tip_hash, h_tip).unwrap_or_else(|e| die(e));
+    let times_b: Vec<u8> = hc.times.iter().flat_map(|t| t.to_le_bytes()).collect();
+    // the trie: in memory, or on disk (--trie-dir, a fresh directory) for sets the laptop cannot hold
+    let mut trie = match arg(a, "--trie-dir") {
+        Some(d) => { std::fs::create_dir_all(&d).unwrap(); TrieStore::open_dir(std::path::Path::new(&d), true).unwrap() }
+        None => TrieStore::new(true),
+    };
+    let mut p = P { b: &snap, i: 0 };
+    assert!(p.take(5) == b"utxo\xff" && u16::from_le_bytes(p.take(2).try_into().unwrap()) == 2, "not a v2 snapshot");
+    let magic: [u8; 4] = p.take(4).try_into().unwrap();
+    if magic != nw.magic { die("network magic"); }
+    let base: [u8; 32] = p.take(32).try_into().unwrap();
+    if base != tip_hash { die("base block is not the headers' tip"); }
+    let total = u64::from_le_bytes(p.take(8).try_into().unwrap());
+    let per = total.div_ceil(n_chunks);
+    let mut s = tsi::ChunkState::initial();
+    let mut ecmh = za::Ecmh::default();
+    let mut entries: Vec<([u8; 32], u32)> = Vec::new();
+    let mut mtp: Vec<Option<u32>> = vec![None; h_tip as usize + 1];
+    let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+    let (mut start, mut k) = (0usize, 0u64);
+    let mut header_done = false;
+    let mut sizes: Vec<(u64, usize, usize)> = Vec::new();
+    while k < n_chunks && (s.idx < total || k == 0) {
+        let s_in = s.clone();
+        if !header_done { s.magic = magic; s.base = base; s.coins_total = total; s.started = 1; header_done = true; }
+        let target = (s.idx + per).min(total);
+        let (mut leaves, mut ys, mut trk, mut ins) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut ser: Vec<u8> = Vec::with_capacity(128);
+        while s.idx < target {
+            if s.g_left == 0 {
+                let (nb, gt, gn) = (s.smt_n, s.g_txid, s.g_n);
+                s.close_group();
+                if s.smt_n > nb { entries.push((gt, gn)); }
+                s.g_txid = p.take(32).try_into().unwrap();
+                s.g_left = p.compact();
+                s.last_vout.clear();
+            }
+            let txid = s.g_txid;
+            let vout64 = p.compact();
+            s.last_vout = za::varint_bytes(vout64);
+            let vout = vout64 as u32;
+            let code = p.varint();
+            let (height, coinbase) = ((code >> 1) as u32, code & 1 == 1);
+            let v = za::decompress_amount(p.varint());
+            let sz = p.varint();
+            let spk: Vec<u8> = match sz {
+                0 => [&[0x76u8, 0xa9, 20][..], p.take(20), &[0x88, 0xac]].concat(),
+                1 => [&[0xa9u8, 20][..], p.take(20), &[0x87]].concat(),
+                2 | 3 => [&[33u8, sz as u8][..], p.take(32), &[0xac]].concat(),
+                4 | 5 => {
+                    let mut c = [0u8; 33];
+                    c[0] = sz as u8 - 2;
+                    c[1..].copy_from_slice(p.take(32));
+                    let u = bitcoin::secp256k1::PublicKey::from_slice(&c).unwrap_or_else(|_| die("type 4/5 key off the curve")).serialize_uncompressed();
+                    ys.extend_from_slice(&u[33..65]);
+                    [&[0x41u8][..], &u[..], &[0xac]].concat()
+                }
+                _ => p.take((sz - 6) as usize).to_vec(),
+            };
+            let _ = &secp;
+            let t = tracked.contains(&(txid, vout));
+            if t { trk.extend_from_slice(&txid); trk.extend_from_slice(&vout.to_le_bytes()); }
+            ser.clear();
+            ser.extend_from_slice(&txid);
+            ser.extend_from_slice(&vout.to_le_bytes());
+            ser.extend_from_slice(&((height << 1) | coinbase as u32).to_le_bytes());
+            ser.extend_from_slice(&v.to_le_bytes());
+            if spk.len() < 253 { ser.push(spk.len() as u8); } else { ser.push(253); ser.extend_from_slice(&(spk.len() as u16).to_le_bytes()); }
+            ser.extend_from_slice(&spk);
+            s.h3.update(&ser);
+            let m = match mtp[height as usize] { Some(m) => m, None => { let m = hc.mtp_before(height).unwrap(); mtp[height as usize] = Some(m); m } };
+            let c = za::SnapCoin { txid, vout, height, coinbase, value: v, script_pubkey: spk };
+            let leaf = za::coin_leaf(&c, t, m);
+            leaves.push(leaf);
+            let mut node = libzync::coinlog::w_of(&leaf);
+            let mut l = 0usize;
+            while l < s.log_roots.len() && s.log_roots[l].is_some() {
+                let mut o = [0u32; 8];
+                libzync::coinlog::parent_w(l as u32 + 1, &s.log_roots[l].take().unwrap(), &node, &mut o);
+                node = o;
+                l += 1;
+            }
+            if l == s.log_roots.len() { s.log_roots.push(None); }
+            s.log_roots[l] = Some(node);
+            ins.push((libzync::trie_fact::coin_key(&c.script_pubkey, &txid, vout), None, v));
+            s.value += v;
+            s.idx += 1;
+            s.log_n += 1;
+            s.g_left -= 1;
+            s.g_n += 1;
+            s.g_flags |= coinbase as u32 | (t as u32) << 1;
+        }
+        let (hints, part) = hints_and_sum(&leaves, threads);
+        ecmh.add_sum(&part);
+        (s.live_set, s.live_hash) = ecmh.committed();
+        let wit = trie.witness(&Vec::new(), &ins);
+        let ks: Vec<(W, W)> = ins.iter().map(|x| libzync::ttree::split(&x.0)).collect();
+        let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
+        perm.sort_by(|&x, &y| ks[x as usize].cmp(&ks[y as usize]));
+        s.trie_root = trie.apply(&Vec::new(), &ins).unwrap_or_else(|e| die(format!("trie: {e:?}")));
+        let mut f = Vec::new();
+        for b in [s_in.to_bytes(), times_b.clone(), snap[start..p.i].to_vec(), hints, ys, trk, wbytes(&wit), wbytes(&perm)] { sec(&mut f, &b); }
+        std::fs::write(format!("{out}/chunk_{k}.in"), &f).unwrap();
+        sizes.push((leaves.len() as u64, f.len(), wit.len()));
+        start = p.i;
+        k += 1;
+    }
+    if p.i != snap.len() { die("bytes after the last coin"); }
+    // the final state, the combine's input, and the journal it must produce
+    let mut fin = s.clone();
+    let (nb, gt, gn) = (fin.smt_n, fin.g_txid, fin.g_n);
+    fin.close_group();
+    if fin.smt_n > nb { entries.push((gt, gn)); }
+    let ent: Vec<u8> = entries.iter().flat_map(|(t, n)| [&t[..], &n.to_le_bytes()].concat()).collect();
+    let mut f = Vec::new();
+    for b in [s.to_bytes(), hdr.clone(), ent, repeatable.concat()] { sec(&mut f, &b); }
+    std::fs::write(format!("{out}/final.in"), &f).unwrap();
+    let hash3 = tsi::sha(&fin.h3.clone().finalize());
+    let mut smt = Smt::new();
+    for (t, n) in &entries { smt.insert(*t, *n); }
+    for r in &repeatable { smt.insert(*r, REPEATABLE); }
+    let roots: Vec<Option<[u8; 32]>> = normalize(fin.log_roots.iter().map(|x| x.map(|w| libzync::coinlog::h_of(&w))).collect());
+    let st_h = utxo_state(fin.idx, fin.value, &roots);
+    let unknown = sha256(UNKNOWN_STATE_TAG);
+    let mut bf: Vec<Option<[u8; 32]>> = Vec::new();
+    for (i, h) in hc.hashes.iter().enumerate() {
+        stump_add(&mut bf, sha256(&pin::block_leaf_preimage(h, i as u32, if i as u32 == h_tip { &st_h } else { &unknown })));
+    }
+    let bf = normalize(bf);
+    let mut j: Vec<u32> = vec![h_tip];
+    let w8 = |o: &mut Vec<u32>, b: &[u8; 32]| for c in b.chunks_exact(4) { o.push(u32::from_le_bytes(c.try_into().unwrap())); };
+    w8(&mut j, &tip_hash);
+    w8(&mut j, &hash3);
+    j.push(u32::from_le_bytes(magic));
+    j.extend_from_slice(&[fin.idx as u32, (fin.idx >> 32) as u32, fin.value as u32, (fin.value >> 32) as u32, fin.live_set]);
+    j.extend_from_slice(&fin.live_hash);
+    w8(&mut j, &libzync::coinlog::h_of(&fin.trie_root));
+    w8(&mut j, &smt.root());
+    j.push((entries.len() + repeatable.len()) as u32);
+    for rs in [&roots, &bf] {
+        j.push(rs.len() as u32);
+        for r in rs.iter() { match r { Some(h) => { j.push(1); w8(&mut j, h); } None => j.push(0) } }
+    }
+    std::fs::write(format!("{out}/expected.journal"), wbytes(&j)).unwrap();
+    let mut h3d = hash3; h3d.reverse();
+    println!("CHUNK_PLAN {} coins in {k} chunks (target {per}), H={h_tip}, hash_serialized_3={}, BIP30 entries {} + {} repeatable, {:.1} s",
+             total, hex(&h3d), entries.len(), repeatable.len(), t_all.elapsed().as_secs_f64());
+    for (i, (c, b, w)) in sizes.iter().enumerate() { println!("  chunk {i}: {c} coins, input {b} bytes, trie witness {w} words"); }
 }
 
 // ------------------------------------------------------------------------------------------------------------------
