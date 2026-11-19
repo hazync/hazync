@@ -21,7 +21,7 @@ W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 BITCOIND=$BD python3 "$HERE/export.py" "$HERE/chain" "$W" | tail -1
 chmod 644 "$W"/oracle/*.dat
 if diff -r "$HERE/blocks" "$W/blocks" > "$W/d" && diff -r "$HERE/oracle" "$W/oracle" >> "$W/d"; then
-  echo "ZAPP_REGTEST_CHECK_OK $(ls "$HERE"/blocks/*/ | grep -c '^block_') block files and $(ls "$HERE"/oracle | grep -c .) oracle files reproduced by Core"
+  echo "ZAPP_REGTEST_CHECK_OK $(find "$HERE"/blocks -mindepth 2 -maxdepth 2 -name 'block_*' | wc -l) block files and $(find "$HERE"/oracle -mindepth 1 -maxdepth 1 ! -name '.*' | wc -l) oracle files reproduced by Core"
 else
   echo "ZAPP_REGTEST_CHECK_FAIL: the replay differs from the committed fixtures"; head -20 "$W/d"; exit 1
 fi

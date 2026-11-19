@@ -17,7 +17,7 @@ H=$(readlink -f "${1:?regtest host}"); W=${2:?work dir}; mkdir -p "$W"; W=$(read
 export RISC0_DEV_MODE=1 HAZYNC_COINLOG_SAVE_EACH=1 HAZYNC_SEG_PO2=${HAZYNC_SEG_PO2:-21}
 export HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=${HAZYNC_CHUNKS:-1}
 "$H" method-id | head -1
-for b in ma mb; do rm -rf "$W/$b"; mkdir -p "$W/$b"; for h in $(seq 1 110); do ln -s "$HERE/blocks/main/block_$h.json" "$W/$b/"; done; done
+for b in ma mb; do rm -rf "${W:?}/$b"; mkdir -p "$W/$b"; for h in $(seq 1 110); do ln -s "$HERE/blocks/main/block_$h.json" "$W/$b/"; done; done
 for h in 111 112; do ln -s "$HERE/blocks/a/block_$h.json" "$W/ma/"; done
 for h in 111 112 113; do ln -s "$HERE/blocks/b/block_$h.json" "$W/mb/"; done
 fails=0
