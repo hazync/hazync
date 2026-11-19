@@ -54,6 +54,7 @@ defenwycke <defenwycke@icloud.com>
 From a release's assets, download the binary **keeping its asset filename** (`hazync-host-x86_64-linux-gnu`) plus `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`, then:
 
 ```bash
+command -v gpg || sudo apt install -y gnupg   # a minimal Ubuntu (container, cloud image) has no gpg; as root, drop sudo
 curl -LO https://github.com/hazync/hazync/releases/latest/download/hazync-host-x86_64-linux-gnu
 curl -LO https://github.com/hazync/hazync/releases/latest/download/SHA256SUMS.txt
 curl -LO https://github.com/hazync/hazync/releases/latest/download/SHA256SUMS.txt.asc

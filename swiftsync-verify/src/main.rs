@@ -41,7 +41,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--expect <height>:<block hash>] [--mempool | --mempool-url <url>] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
     eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
