@@ -679,4 +679,32 @@ REPEATABLE lists, §11.1). A dishonest host can only make the combine refuse.
 | A0 A1' A2, A1' = A1 with one header timestamp +1 (it executes fine on its own) | refused: chunk 1 used other header times |
 | A0 A1 A2 with a final state of one satoshi more | refused: the last chunk does not end at the final state |
 
-<!-- MEAS12 -->
+### 12.4 Chunked ingest: measured at 1 M and 10 M coins
+
+Synthetic snapshots (`ts-anchor synth`, Core's format, regtest headers to 110, P2WPKH coins, 2 per txid), with every
+10th (1 M) or 100th (10 M) txid group a coinbase, so the BIP30 tree has 50,000 entries in both. NOT chain data.
+`experimental/trusted-state/run_chunked.sh`: executor in dev mode (every guest executed, a fake receipt carrying its
+claim so the combine can resolve it; nothing proved), default segment size 2^20, one process per chunk with its peak
+RSS from `/usr/bin/time`, laptop (WSL2, 16 threads, 8.9 GB).
+
+**1 M coins** (one-shot for comparison: the §6 guest with the `sys` BIP30 build, 19,507,304,084 user cycles,
+20,534 segments, 440 s, 1.02 GB RSS; of it coins 6.47 G, trie 2.27 G, BIP30 tree 10.75 G = 215 k per entry):
+
+| split | chunk user cycles (each) | chunks total | per coin (chunks) | peak RSS per chunk | combine | combine BIP30 tree | combine RSS / wall | **chunks + combine** | match |
+|---|---|---|---|---|---|---|---|---|---|
+| 4 × 250 k | 2,378,295,967 – 2,613,443,110 | 10,077,859,959 | 10,078 | 336 – 404 MB | 6,509,983,711 | 6,438,081,591 (128.8 k/entry) | 57 MB / 114 s | **16,587,843,670** | COMBINE_MATCH |
+| 8 × 125 k | 1,188,944,753 – 1,345,932,848 | 10,366,936,536 | 10,367 | 193 – 237 MB | 6,510,011,615 | same | 57 MB / 114 s | **16,876,948,151** | COMBINE_MATCH |
+| 16 × 62.5 k | 594,880,642 – 690,192,916 | 10,646,424,052 | 10,646 | 132 – 151 MB | 6,510,067,415 | same | 57 MB / 115 s | **17,156,491,467** | COMBINE_MATCH |
+
+- A chunk costs more per coin than the one-shot's 8.74 k (coins + trie phases), +15% at 4 chunks to +22% at 16: every
+  chunk after the first inserts into a non-empty trie through a witness (816,075 words for 125 k inserts into a
+  trie of 125-250 k coins), and later chunks pay more (chunk 0 594.9 M, chunk 15 690.2 M at 16 × 62.5 k).
+- Peak memory falls with the chunk size; the combine is small (57 MB).
+- In the combine, the 16 journal checks cost 104,738 cycles (6.5 k per chunk); the resolution of the chunk receipts as
+  assumptions (recursion, outside these counts) is NOT measured.
+- The planner (`ts-anchor chunk-plan`, native, 8 threads): 28-31 s and 0.76-1.31 GB per 1 M plan.
+- **Header times at mainnet height**, measured by re-running one 125 k chunk with its times array padded from 111 to
+  935,001 entries (the chunk executes the same coins): +20,310,690 cycles (read + SHA-256 + table; 1,276,668,880 vs 1,256,358,190), i.e. about 20 M
+  cycles per chunk at H = 935,000, independent of the chunk's coins.
+
+<!-- MEAS10M -->
