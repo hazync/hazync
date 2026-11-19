@@ -15,8 +15,10 @@
 //!   - the BIP30 tree is rebuilt from `state_A.smt` each time;
 //!   - files above F are moved only after the save point at F is complete, and A stops being a complete save point as
 //!     soon as one of its files has moved, so a rerun then finds F as the newest and goes straight to the moves.
-//! The coordinator's side (records and ack, REORG.md §5 steps 4-6) is P4; until it is in, automatic rewinds stay off
-//! (HAZYNC_REORG_AUTO unset): the orphaned files are moved to `out/orphaned/<epoch>/` and nothing tells the board.
+//! The coordinator's side (REORG.md §5 steps 4-6, P4): once everything above F has moved, a RECORD `out/reorg/records/
+//! <E>.json` is written (once; its bytes are what the ack names), and the rewind waits for the coordinator's ACK
+//! `<E>.ack` before prep's position moves to F and the intent goes, so prep publishes nothing of the new branch while
+//! the board still holds rows of the orphaned one (record_and_ack).
 
 use crate::reorg::{self, UndoRecord};
 use crate::ChainState;
@@ -56,11 +58,7 @@ fn refuse(why: &str) -> ! {
 
 /// A block file's hash (the state's tip_hash order), as prep_block computes it.
 fn block_file_hash(p: &std::path::Path) -> Option<[u8; 32]> {
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    let merkle: [u8; 32] = crate::rev(crate::hx(j["merkle"].as_str()?)).try_into().ok()?;
-    let h = crate::build_header_v(j["version"].as_i64().unwrap_or(1) as i32, j["prev"].as_str()?, &merkle,
-                                  j["time"].as_u64()? as u32, j["bits"].as_u64()? as u32, j["nonce"].as_u64()? as u32);
-    Some(crate::header_hash(&h))
+    reorg::hash_of(&serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?)
 }
 
 fn move_into(from: &std::path::Path, dir: &std::path::Path) {
@@ -113,13 +111,31 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
             let m: serde_json::Value = std::fs::read_to_string(std::path::Path::new(blocks).join("REORG")).ok()
                 .and_then(|x| serde_json::from_str(&x).ok()).unwrap_or_else(|| refuse(&format!("nothing to rewind to: no {rw} (no rewind in progress) and no readable {blocks}/REORG (none asked for, or a rewind already finished and removed it)")));
             let fork = m["fork"].as_u64().unwrap_or_else(|| refuse("REORG has no fork")) as u32;
+            // a rewind that finished all but removing the marker (a crash after the intent went; review of P4, L5):
+            // prep is AT the fork's block already. Nothing to undo and no new epoch to open: the marker goes.
+            let tip = std::fs::read_to_string(format!("{out}/PREP_TIP.json")).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok());
+            if let (Some(t), Some(fh)) = (&tip, m["fork_hash"].as_str()) {
+                // ...and nothing above it is left (round 3: prep writes its tip AT the fork too, when it stops before
+                // block F+1 because its old state files above are another chain's; those still have to move)
+                if t["height"].as_u64() == Some(fork as u64) && t["hash"].as_str() == Some(fh)
+                    && !std::path::Path::new(&format!("{out}/state_{}.json", fork + 1)).exists() {
+                    let _ = std::fs::remove_file(std::path::Path::new(blocks).join("REORG"));
+                    crate::lz::cl_sync_dir(std::path::Path::new(blocks));
+                    println!("PREP_REWOUND to {fork}: prep is already at the fork's block (a rewind that stopped before removing the marker); the marker removed");
+                    return;
+                }
+            }
             let depth = m["depth"].as_u64().unwrap_or(u64::MAX);
             if m["class"].as_str() != Some("auto") && !allow_deep {
                 refuse(&format!("the fork at {fork} is {depth} deep, beyond the automatic window (class {}): --allow-deep", m["class"]));
             }
             if depth > w as u64 && !allow_deep { refuse(&format!("depth {depth} > W = {w}: --allow-deep")); }
-            let epoch = std::fs::read_dir(format!("{out}/orphaned")).map(|it| it.flatten()
-                .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok()).max().unwrap_or(0)).unwrap_or(0) + 1;
+            // the next epoch is above every one used before: the orphaned directories AND the board's records (review of
+            // P4, H1: with out/orphaned/ cleared by hand, the epoch came round to a number whose record and ack were
+            // still there, so an old ack "acked" a new rewind the coordinator never saw)
+            let max_in = |d: String, suf: &str| std::fs::read_dir(d).map(|it| it.flatten()
+                .filter_map(|e| e.file_name().to_string_lossy().strip_suffix(suf)?.parse::<u32>().ok()).max().unwrap_or(0)).unwrap_or(0);
+            let epoch = max_in(format!("{out}/orphaned"), "").max(max_in(format!("{out}/reorg/records"), ".json")) + 1;
             (fork, epoch, Some(m))
         }
     };
@@ -278,6 +294,9 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
         }
     }
     for d in [std::path::PathBuf::from(out), odir.clone(), udir.clone(), std::path::PathBuf::from(blocks)] { crate::lz::cl_sync_dir(&d); }
+    // 3b. the board's side (P4): the record, then the coordinator's ack, before anything of the new branch can appear
+    let new = marker.as_ref().or(prior.as_ref().map(|v| &v["marker"])).map(|m| m["new"].clone()).unwrap_or(serde_json::Value::Null);
+    record_and_ack(out, epoch, fork, &st_f.tip_hash, &orphaned, &new);
     // 4. prep's position is the fork; the intent and the fetcher's marker go, last
     reorg::write_tip(out, fork, &st_f.tip_hash, undo_keep, if undo_keep > 0 { reorg::undo_from(&udir, fork, undo_keep) } else { fork + 1 }, true);
     let _ = std::fs::remove_file(&rw);
@@ -287,6 +306,78 @@ pub(crate) fn rewind_cmd(out: &str, blocks: &str, allow_deep: bool, no_leaves: b
     crate::lz::cl_sync_dir(std::path::Path::new(blocks));
     println!("PREP_REWOUND to {fork} (epoch {epoch}): states {}..={moved_to} moved to {}, {gone} orphaned block file(s) removed",
              fork + 1, odir.display());
+}
+
+/// A hash in internal-order hex as Bitcoin displays it (byte-reversed); the coordinator shows these.
+fn display(x: &str) -> String {
+    let mut b = crate::hx(x);
+    b.reverse();
+    crate::hex(&b)
+}
+
+/// REORG.md §5 steps 4-6 (P4). `out/reorg/records/<E>.json`: the fork, its block, the orphaned blocks and the node's new
+/// ones (display hex), written ONCE (a rerun keeps the bytes, so an ack already given still names them), durably. Then
+/// the coordinator's `<E>.ack` is waited for: in `HAZYNC_REORG_ACK_DIR` (default the records' directory; on the box the
+/// coordinator cannot write prep's out/), and it must carry the record's sha256. `HAZYNC_REORG_ACK=0`: no coordinator
+/// follows this run (a prep nobody serves, the tests of prep alone), nothing is waited for. No ack within
+/// `HAZYNC_REORG_ACK_TIMEOUT_S` (600, REORG_ACK_TIMEOUT): exit 4, so the unit fails and alerts; the intent stays, and a
+/// rerun waits again.
+fn record_and_ack(out: &str, epoch: u32, fork: u32, fork_hash: &[u8; 32], orphaned: &[(u32, String)], new: &serde_json::Value) {
+    use sha2::{Digest, Sha256};
+    let rd = std::path::PathBuf::from(format!("{out}/reorg/records"));
+    std::fs::create_dir_all(&rd).unwrap_or_else(|e| panic!("{}: {e}", rd.display()));
+    let rp = rd.join(format!("{epoch}.json"));
+    let fork_hash = display(&crate::hex(fork_hash));
+    let orph: Vec<serde_json::Value> = orphaned.iter().map(|(h, x)| serde_json::json!([h, display(x)])).collect();
+    let bytes = match std::fs::read(&rp) {
+        Ok(b) if !b.is_empty() => {
+            // a record already there must be THIS rewind's (a rerun keeps its bytes); another one's is a stop for a
+            // person, never an ack inherited from it (review of P4, H1)
+            let v: serde_json::Value = serde_json::from_slice(&b).unwrap_or(serde_json::Value::Null);
+            if v["fork"].as_u64() != Some(fork as u64) || v["fork_hash"].as_str() != Some(fork_hash.as_str())
+                || v["orphaned"].as_array() != Some(&orph) {
+                println!("PREP_REWIND_FAILED {} is another rewind's record (fork {}, not {fork}): exit 4; out/REWIND is kept \
+                          (docs/libzync/REORG.md §17)", rp.display(), v["fork"]);
+                std::process::exit(reorg::EXIT_REORG);
+            }
+            b
+        }
+        _ => {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let rec = serde_json::json!({
+                "epoch": epoch, "fork": fork, "fork_hash": fork_hash,
+                "depth": orphaned.iter().map(|o| o.0).max().map_or(0, |t| t.saturating_sub(fork)),
+                "orphaned": orph,
+                "new": if new.is_array() { new.clone() } else { serde_json::json!([]) },
+                "at": now, "source": "libzync-prep-rewind"});
+            let b = rec.to_string().into_bytes();
+            crate::lz::write_atomic(&rp.to_string_lossy(), &b);
+            crate::lz::cl_sync_dir(&rd);
+            b
+        }
+    };
+    hook("rewind-after-record");
+    if std::env::var("HAZYNC_REORG_ACK").as_deref() == Ok("0") {
+        println!("  rewind: record {} written; HAZYNC_REORG_ACK=0: no coordinator to wait for", rp.display());
+        return;
+    }
+    let sha = crate::hex(&Sha256::digest(&bytes));
+    let ad = std::env::var("HAZYNC_REORG_ACK_DIR").ok().filter(|v| !v.is_empty()).map(std::path::PathBuf::from).unwrap_or(rd);
+    let ap = ad.join(format!("{epoch}.ack"));
+    let limit: u64 = std::env::var("HAZYNC_REORG_ACK_TIMEOUT_S").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
+    println!("  rewind: record {} written; waiting for the coordinator's ack {} (at most {limit} s)", rp.display(), ap.display());
+    let t0 = std::time::Instant::now();
+    loop {
+        let acked = std::fs::read_to_string(&ap).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok())
+            .is_some_and(|v| v["record_sha256"].as_str() == Some(sha.as_str()));
+        if acked { println!("  rewind: the coordinator acked epoch {epoch}"); return; }
+        if t0.elapsed().as_secs() >= limit {
+            println!("PREP_REWIND_NO_ACK the coordinator did not ack {} within {limit} s (HAZYNC_REORG_ACK_TIMEOUT_S): exit 4; \
+                      out/REWIND is kept, a rerun waits again (docs/libzync/REORG.md §5 step 6)", rp.display());
+            std::process::exit(reorg::EXIT_REORG);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 /// `libzync-store-digest <out> <h>`: the CONTENT of prep's on-disk stores at the save point h, for comparing two runs

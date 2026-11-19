@@ -882,6 +882,24 @@ jobs:
         run: cd coordinator && python3 test_reorg_units.py --no-systemd
       - name: Reorg-stop POSITIVE CONTROL (the units without exit 4 in RestartPreventExitStatus)
         run: cd coordinator && python3 test_reorg_units.py --no-systemd --control
+      # REORG.md §7 (P4): the coordinator applies prep's reorg records (rows and proofs aside, the spine back to a kept
+      # head, claims voided, the ack), refuses a proof verified across a rewind (§4), and applies a record at start-up.
+      - name: The coordinator rewinds its ledger for a reorg (REORG.md §5, §7)
+        run: cd coordinator && python3 test_reorg.py
+      - name: Coordinator-rewind POSITIVE CONTROLS (no check at commit; orphaned rows left in vranges — each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_reorg.py --control
+          python3 test_reorg.py --control-keep
+          python3 test_reorg.py --control-m1
+          python3 test_reorg.py --control-m2
+          python3 test_reorg.py --control-m3
+          python3 test_reorg.py --control-h1
+          python3 test_reorg.py --control-latch
+      - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
+        run: cd coordinator && python3 test_offsite_reorg.py
+      - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)
+        run: cd coordinator && python3 test_offsite_reorg.py --control
       - name: The card catalogue ranks every usable type, and excludes MIG slices
         run: cd coordinator && python3 test_card_catalogue.py
       - name: Card-catalogue POSITIVE CONTROL
@@ -2227,6 +2245,8 @@ jobs:
         run: H=$PWD/hosts/host_m O=$PWD/out/rewind bash experimental/libzync-bench/prep/rewind_test.sh
       - name: Reorg rewind POSITIVE CONTROL (a corrupted coin log after the rewind must be caught)
         run: H=$PWD/hosts/host_m O=$PWD/out/rewindc bash experimental/libzync-bench/prep/rewind_test.sh --control
+      - name: Reorg in prep's replay window POSITIVE CONTROL (the stale-state check off, case L must FAIL)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewindl bash experimental/libzync-bench/prep/rewind_test.sh --control-stale
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }

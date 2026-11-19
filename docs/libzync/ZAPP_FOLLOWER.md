@@ -164,6 +164,10 @@ goes away: in tip mode the follower has no stores. P5's follower part becomes "r
 two lines (bump `gen`, cut `roots.log`). `roots.log` also gives P3 a free cross-check: after `undo_recorded` to F, the
 trie root must equal the root hash logged at `(F, hash)`.
 
+**Until tip mode (Z2-Z5) is built** (REORG §18): today's follower, with its own stores, rebuilds them from genesis to
+the kept head when the spine drops below them (or to another block at the same height), after checking that the node
+agrees with the spine there, and republishes; the previous set stays published meanwhile.
+
 ## 8. Costs
 
 **Replaced slots per block (MEASURED, derived).** The paper trie's meta at the 635,000 flush lists 367.5 M free slots.

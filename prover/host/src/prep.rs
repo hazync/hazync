@@ -526,6 +526,11 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
                 if t.elapsed().as_secs() >= wait_s { crate::reorg::stop(&format!("{why} after {wait_s} s (HAZYNC_PREP_WAIT_S), and the fetcher wrote no marker")); }
             }
         }
+        // A state file at h left by an EARLIER run (prep replays from its save point after a restart, and the states
+        // above it stay on disk, served by the board) for ANOTHER block: the node reorged inside the replay window, and
+        // the fetcher, comparing only prep's tip, cannot see it (review of P4, HIGH-1). A fork at h-1, handled as any
+        // other: the marker, then a stop for the rewind (which moves those files aside and tells the board).
+        crate::reorg::stale_state_fork(out, dir, h, &prev.tip_hash, &j, consume);
         let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
         let t = std::time::Instant::now();
         let inner0 = { let p = PHASES.lock().unwrap(); p[0] + p[1] + p[2] };

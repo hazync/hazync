@@ -190,6 +190,27 @@ ENV = {
     "server:ZYNC_SERVE_URL": "The local `zync-serve` behind `/api/zync/*` (e.g. `http://127.0.0.1:8601`). Unset: no relay.",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
+    # reorg handling (docs/libzync/REORG.md §5–§7)
+    "server:HAZYNC_LZ_STATE_DIR": "prep's state directory (its `out/`). The backstop compares every verified range "
+                                  "with the block hashes in its `state_<h>.json`; it also gives the default record "
+                                  "directory. Unset: no reorg handling.",
+    "server:HAZYNC_LZ_REORG_DIR": "Where prep writes reorg records. Default `$HAZYNC_LZ_STATE_DIR/reorg/records`.",
+    "server:HAZYNC_LZ_REORG_ACK_DIR": "Where the coordinator writes its ack of an applied record. Default: the record "
+                                      "directory. On hazync-proof prep runs as root, so point both sides at a "
+                                      "directory this service owns.",
+    "server:REORG_POLL_S": "Seconds between scans of the record directory.",
+    "server:REORG_FAILURE_GRACE": "Seconds after a rewind during which a failed verification of an orphaned block "
+                                  "answers `409 reorged` and is not counted against the block. Default `CLAIM_MAX`.",
+    "server:SPINE_HEADS_KEEP": "Blocks of spine heads kept below the head (`spine/heads/`) so a rewind can fall back "
+                               "to a kept head.",
+    "server:COORD_CRASH_FILE": "Test hook for the end-to-end harness: if this file exists, a rewind dies between its "
+                               "file moves and its commit, as a crash would. Never set in production.",
+    "server:REORG_AUTO_MAX_DEPTH": "A rewind deeper than this below the highest verified block is never applied from "
+                                   "a record, only by a person with `--reorg-to`.",
+    "server:REORG_BACKSTOP_S": "Seconds between backstop runs (verified ranges against prep's chain; writes "
+                               "`meta.reorg_backstop_at`).",
+    "server:REORG_REWIND_QUIET_S": "Seconds prep's `out/REWIND` keeps the backstop quiet; an older one no longer does.",
+    "server:REORG_META_TTL": "Seconds `/api/meta`'s `reorg` block is cached.",
     "server:LZ_HANDOVER_AT": "Handover height H: the first block the new image proves (docs/HANDOVER.md). With the old "
                              "image's host the board is in the `pre` era (nothing reaches H); with a host whose lineage "
                              "pins a handover at H it is `post` (claims start at H+1; block H arrives as the [1..H] spine). "

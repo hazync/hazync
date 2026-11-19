@@ -22,6 +22,7 @@ leaf bundle per block, paced by proving. Following the tip with libzync is **not
 | `libzync-board-fetch`, `libzync-board-prep` | the board pass: bitcoind blocks in, one `leaf_<n>.bin` (LZLEAF02) per block out, at most `HAZYNC_PREP_LEAF_WINDOW` (5,000) waiting to be proved |
 | `hazync-lz-prune-leaves.timer` | deletes proven leaves below the frontier so the pass can continue; keeps `leaf_1.bin` (selftest and the pods' GPU smoke use it). Points at `COORD=http://127.0.0.1:8899` (the repo unit since 2026-11-12; the box also carries it as a `zz-libzync.conf` drop-in) |
 | `hazync-lz-check-proofs.timer`, `hazync-lz-check-spine.timer` | the integrity checks, retargeted at v2 (they replace the CORE `hazync-check-proofs` / `hazync-check-spine`) |
+| `hazync-lz-check-reorg.timer` | every 5 min: pages while the coordinator's reorg backstop is latched (a verified range off prep's chain) or has not run for 15 min (REORG.md §17-§18) |
 | `libzync-xcheck.timer` | the board pass and the paper prep run (`libzync-prep`, kept until it reaches the tip) agree on the chain state |
 | `hazync-lz-offsite-proofs{,-b2}.timer`, `hazync-lz-offsite-spine{,-b2}.timer` | receipts and the spine to R2 (`hazync-proofs`) and B2 (`hazync-backup`) under `proofs-46666b6f/` and `spine-46666b6f/` (the `8888d59c` board's copies stay under `proofs-8888d59c/`, `spine-8888d59c/` as its record). The spine copies fail while the spine is empty |
 | `hazync-headers-follow.timer` | the header-chain zyncAPP at the tip ([`headers/README.md`](headers/README.md)) |
@@ -418,6 +419,35 @@ sudo install -m 0755 coordinator/deploy/hazync-alert.sh coordinator/deploy/watch
 sudo install -m 0644 coordinator/deploy/watchdog/hazync-watchdog.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now hazync-watchdog.timer
 ```
+
+**After a reorg** (docs/libzync/REORG.md §7, §17). Two things can need a person even when the rewind ran by itself:
+
+- **An ack timeout** (prep `PREP_REWIND_NO_ACK`, exit 4): the coordinator was down or refused the record for more
+  than 10 min. Once it serves again and its journal has no `[reorg] REFUSED`: `systemctl reset-failed
+  libzync-board-prep libzync-board-fetch; systemctl start libzync-board-prep` (it reruns the rewind from
+  `out/REWIND`), and `systemctl start libzync-board-fetch` if the fetcher has also exited (after its 3,600 s wait).
+- **A sponsorship hold on the new branch**: a sponsorship that was `proven` above the fork goes back to `proving` and
+  keeps its blocks for the sponsor bot alone; the frontier waits for the bot (alert after 6 h). Bot down: fix and
+  `systemctl start hazync-sponsor-bot.service`; or release the hold by hand (REORG.md §7, the `UPDATE sponsorships`
+  command).
+- **`/api/meta.reorg_alert`** set (`hazync-lz-check-reorg` pages): a verified range in the window is not on prep's
+  chain now, a reorg the board did not follow. It stays latched until a rewind below it is applied (REORG.md §11:
+  `server.py --reorg-to F`).
+- **Install the reorg pager** (once, on the board box, root):
+  `install -m 644 coordinator/deploy/libzync/hazync-lz-check-reorg.{service,timer} /etc/systemd/system/ && systemctl
+  daemon-reload && systemctl start hazync-lz-check-reorg.service && systemctl enable --now hazync-lz-check-reorg.timer`
+  (it runs `/opt/hazync-lz/coordinator/deploy/libzync/hazync-lz-check-reorg.py`; `scripts/check-deployment.sh` checks the
+  timer is enabled). ⚠ Install it only AFTER the coordinator with the reorg handling is running: it pages while there
+  is no backstop heartbeat row yet (`meta.reorg_backstop_at`), which a coordinator from before never writes. Its "ok"
+  line says how many ranges were compared, or that the last run compared nothing (prep's `out/REWIND` was there).
+- **A latched alert a person has checked** (e.g. prep restarted from genesis under a fresh `LZ_ROOT`, REORG.md §11 step
+  4: its states above its position are not there yet, so the board's rows read as off prep's chain until it catches
+  up; rewind the board first with `--reorg-to F`): `sudo -u hazync env $(systemctl show -p Environment --value
+  hazync-lz-coordinator) python3 /opt/hazync-lz/coordinator/server.py --reorg-ack` (then `--yes`). The backstop raises
+  it again if the rows still mismatch.
+- **Restoring proofs from the offsite copy after reorgs**: never by name alone. `hazync-offsite-proofs.py
+  restore-plan --keys ... --bucket ... --method-id ... --depth 0` prints, per proof, the key to fetch (the newest
+  `r<E>/` copy a `reorgs/<E>.json` marker points at, else the live name).
 
 **Test the live path, not just the script** — a push that never reaches the phone is the failure:
 `hazync-alert.sh "Hazync: test" "hello"` on each box, and on the coordinator a throwaway unit with
