@@ -46,9 +46,9 @@ Applies to every route, from `H` in `server.py`:
 | `/api/spine/proof` | — | `spine_head()` | 200, 404 | The spine receipt bytes, served as `hazync-spine-1-<hi>.hzk`. Check with `hazync-verify`. |
 | `/api/zync/proof` | — | — | 200, 404 | The receipt the zyncAPP facts are at (`ZYNC_PROOF`, kept beside the facts by `hazync-lz-zapp-follow`), served as `hazync-zapp.hzk`; `404` when unset or missing. Untrusted: the page verifies it, then checks each fact against it. |
 | `/api/zync/<rest>` | — | `zync_relay()` | 200, 400, 404, 502 | zyncAPP facts (hazync.org/zapp/), relayed from the box's own `zync-serve` when `ZYNC_SERVE_URL` is set: only `/tip`, `/trie/balance/<spk>`, `/trie/history/<spk>` and `/trie/coin/<spk>/<txid>/<vout>`; anything else is `400` before it reaches the service, a query string is dropped, `404` when no service is set, `502` when it is down. Untrusted: the page checks every fact against a proof it verifies itself. |
-| `/api/proof/<id>` | — | `parse_any_range()` | 200, 404 | A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with `host verify-any`. |
+| `/api/proof/<id>` | — | `parse_any_range()` | 200, 404 | A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with `host verify-any <file> <lo>`, which needs the state before `lo`: the leaf bundle from `/api/witness/<lo>` saved as `leaf_<lo>.bin` in `$HAZYNC_BRIDGE_OUT` (the host defaults to `/root/bridge_bundles`); none is needed for `lo` = 1. |
 | `/api/witnesses` | `from`, `count` | `bulk_plan()`, `bundle_path()` | 200, 400 | Bulk bundle sync (#69): a streamed tar of `MANIFEST.json` (`served`, `missing`) then the bundles for `?from=&count=`, `count` at most `BULK_MAX`. `400` on a malformed request. |
-| `/api/witness/<height>` | — | `parse_range()`, `bundle_path()` | 200, 404 | One witness: the bridge bundle `bundle_<n>.json` if present, else the legacy `block_<n>.json`. Accepts a height or a range id (its `lo`). `404` if neither exists. |
+| `/api/witness/<height>` | — | `parse_range()`, `bundle_path()` | 200, 404 | One block's prepared input, served raw from `bundle_path()`: on a v2 (`HAZYNC_LIBZYNC=1`) board the binary leaf bundle `leaf_<n>.bin` (`LZLEAF` magic) from the bridge directory; on a v1 board the bridge bundle `bundle_<n>.json`; else the legacy `block_<n>.json`. Accepts a height or a range id (its `lo`). `404` if none exists: the public board prunes a leaf once its block is proved below the frontier, so it serves block 1 and blocks near the frontier. |
 | `/<path>` | — | — | 200, 404 | Static files under `COORD_WEB`, contained to that directory; `/` serves `index.html`. Not rate limited. |
 
 ### POST
@@ -181,8 +181,8 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 |---|---|---|---|
 | `id` | `cmd_id()` | `hazync id` | create/show your signing identity (ed25519) |
 | `pick` | `cmd_pick()` | `hazync pick` | show the board frontier (does not claim anything) |
-| `prove` | `cmd_prove()` | `hazync prove <id>` | prove that range on your GPU  -> a receipt .bin |
-| `selftest` | `cmd_selftest()` | `hazync selftest` | pre-flight: prover present, guest id matches, can verify a real proof |
+| `prove` | `cmd_prove()` | `hazync prove <id>` | prove that range on this box -> ~/.hazync/receipts/<id>.bin (submits nothing) |
+| `selftest` | `cmd_selftest()` | `hazync selftest` | pre-flight: prover present, guest id matches, verifies a real proof, PROVES block 1 (slow on CPU) |
 | `submit` | `cmd_submit()` | `hazync submit <id>` | sign the receipt with your key and submit it for verification |
 | `run` | `cmd_run()` | `hazync run [id]` | claim + prove + submit (id optional: takes the earliest free block) |
 | `spine` | `cmd_spine()` | `hazync spine [n]` | advance the genesis-anchored spine n steps, each absorbing the widest chunk available (default: all) |
@@ -228,7 +228,7 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 
 ## Launcher (`coordinator/run-workers.sh`, shipped as `hazync-run-workers.sh`)
 
-`run-workers.sh [N] [--stop]`: N defaults to `4`. It checks the host's guest id against `/api/meta` and runs a GPU smoke prove before starting any loop, then restarts each loop's command until it exits `78` (`EX_CONFIG`). Exit `75` (`EX_TEMPFAIL`, nothing to claim right now) waits 30 s and is not a failure. With alerts set up (`hazync notify`), a loop pushes after `NOTIFY_FAIL_STREAK` failures in a row, on recovery and when it stops, and the launcher pushes when it refuses to start.
+`run-workers.sh [N] [--drain|--stop]`: N defaults to `4`. `--drain` stops the loops and waits for the blocks in flight to be submitted; `--stop` stops at once and abandons them. Starting, it checks the host's guest id against `/api/meta` and runs a GPU smoke prove before starting any loop, then restarts each loop's command until it exits `78` (`EX_CONFIG`). Exit `75` (`EX_TEMPFAIL`, nothing to claim right now) waits 30 s and is not a failure. With alerts set up (`hazync notify`), a loop pushes after `NOTIFY_FAIL_STREAK` failures in a row, on recovery and when it stops, and the launcher pushes when it refuses to start.
 
 ### Environment
 

@@ -145,12 +145,19 @@ def seg_po2_for(card, configured, table):
     big card's size would run the small one out of memory on its first piece. So a smaller card gets
     its own smaller size. It is only ever LOWERED: a size somebody set low on purpose stays.
 
-    ⚠ Blank stays blank. Nothing was chosen, so nothing is chosen on their behalf here either.
+    ⚠ BLANK IS "AUTOMATIC", AND AUTOMATIC MEANS THIS CARD'S SIZE (19.11.2026). Blank used to stay blank: the worker
+    got no HAZYNC_SEG_PO2, the host's own default (21, peak ~22 GB) was tried first, and a 4 GB GTX 1050 Ti ran out
+    of memory twice before its owner set 18 by hand. Now a known card gets the table's size for it; with no card
+    known, blank still lets the host decide.
     """
     s = str(configured or "").strip()
-    if not s.isdigit() or card is None:
+    if card is None:
         return s or None
     own = next(po2 for least, po2 in table if card["vram_mb"] >= least)
+    if not s:
+        return str(own)
+    if not s.isdigit():
+        return s
     # ⚠ The table tops out at 21 (what Automatic picks), so 22, chosen by hand, was clamped back to 21
     # on every card. 22 peaks near 40.6 GB: a card with room for it keeps it.
     if card["vram_mb"] >= FITS_22_MB:

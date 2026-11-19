@@ -75,9 +75,9 @@ fn run(a: Vec<String>) -> ! {
             let pr: Vec<&str> = pl.iter().map(|s| s.as_str()).collect();
             let t = tx.as_ref().map(|a: &String| {
                 let (txid, f) = a.split_once(':').unwrap_or_else(|| fail("--tx <txid>:<tx.json> (the txid you ask about, then the answer's file)"));
-                let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f)))))
-                    .unwrap_or_else(|e| fail(&format!("--tx {}: not JSON ({e})", esc(f))));
-                zapp_headers::TxInclusion::from_json(txid, &j).unwrap_or_else(|e| fail(&format!("--tx: {e}")))
+                let j = std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))));
+                // strict: the /tx answer's documented keys only, each once (review 11-18)
+                zapp_headers::TxInclusion::from_json_bytes(txid, &j).unwrap_or_else(|e| fail(&format!("--tx {}: {e}", esc(f))))
             });
             Some(zapp_headers::Inclusion::parse(h, x, &pr, t).unwrap_or_else(|e| fail(&format!("--include: {e}"))))
         }

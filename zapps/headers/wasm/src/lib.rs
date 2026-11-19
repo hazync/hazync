@@ -54,7 +54,8 @@ impl<'a> Frame<'a> {
 /// (MMR hashes as zyncapp headers-mmr-path prints them), "txid"? and "tx"?, both or neither: the transaction asked
 /// about (as explorers print it; the CALLER's, never the service's) and the path service's /tx answer (pos, header,
 /// raw, branch, coinbase, coinbase_branch; zapp_headers::TxInclusion::from_json, which does not read the
-/// answer's own txid: the raw transaction must hash to the asked one)}`.
+/// answer's own txid: the raw transaction must hash to the asked one)}`. Those keys only, each once; in `tx` the /tx
+/// answer's documented keys only (zapp_headers::parse_include_json, review 11-18).
 ///
 /// Output beside verdict, checks, height, hash, chainwork, max_time, mmr_root, identity_checked:
 ///   `included`: null when nothing was asked; true ONLY when the verdict is "ok" and the block (and transaction) is on
@@ -117,23 +118,8 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
 }
 
 fn parse_include(j: &[u8]) -> Result<zapp_headers::Inclusion, String> {
-    let v: serde_json::Value = serde_json::from_slice(j).map_err(|e| format!("include: not JSON ({e})"))?;
-    let strs = |x: &serde_json::Value, what: &str| -> Result<Vec<String>, String> {
-        x.as_array().ok_or(format!("include: {what} is not a list"))?.iter()
-            .map(|y| y.as_str().map(str::to_string).ok_or(format!("include: {what} holds a non-string"))).collect()
-    };
-    let height = v["height"].as_i64().ok_or("include: height is not an integer")?;
-    let hash = v["hash"].as_str().ok_or("include: hash is not a string")?;
-    let path = strs(&v["path"], "path")?;
-    let path: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
-    let tx = match (&v["txid"], &v["tx"]) {
-        (serde_json::Value::Null, serde_json::Value::Null) => None,
-        (serde_json::Value::String(txid), tx) if tx.is_object() => Some(zapp_headers::TxInclusion::from_json(txid, tx)?),
-        (serde_json::Value::Null, _) => return Err("include: tx needs txid, the transaction asked about (never taken from the answer)".into()),
-        (_, serde_json::Value::Null) => return Err("include: txid needs tx, the path service's /tx answer".into()),
-        _ => return Err("include: txid is a string and tx an object".into()),
-    };
-    zapp_headers::Inclusion::parse(height, hash, &path, tx)
+    // strict: only the documented keys, each once (zapp_headers::parse_include_json, review 11-18)
+    zapp_headers::parse_include_json(j)
 }
 
 /// The built-in header-chain image id, for the page to display.
