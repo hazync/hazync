@@ -65,7 +65,7 @@ SEG_CHOICES = [
     ("21", "21 — about 22 GB; 24 GB cards and up"),
     ("20", "20 — about 11 GB; 12–16 GB cards"),
     ("19", "19 — about 6 GB; 8 GB cards"),
-    ("18", "18 — about 3 GB; 6 GB cards"),
+    ("18", "18 — about 3 GB; 4–6 GB cards (proved on a 4 GB GTX 1050 Ti)"),
     ("17", "17 — about 1.5 GB; smaller cards"),
 ]
 REFRESH_S = 60          # the website refreshes the map every minute; match it rather than hammer
