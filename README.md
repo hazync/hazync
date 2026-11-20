@@ -39,26 +39,20 @@ Core's rules one by one.
 ## The program
 
 A proof names the exact program that produced it. The published Hazync v2 images, built on RISC Zero 3.1.0
-(first in release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0), unchanged in v0.26.1; the
-newest release is always [releases/latest](https://github.com/hazync/hazync/releases/latest)), are
+(the core unchanged since release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0); the newest release
+is always [releases/latest](https://github.com/hazync/hazync/releases/latest), v0.27.0 on 20.11.2026), are
 
 ```
 mainnet  46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
 signet   01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7
-headers  2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632   (the header-chain zyncAPP, as released)
+headers  de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07   (the header-chain zyncAPP, with the MMR)
 ```
-
-`2db34e12` is the header-chain zyncAPP that v0.24.0 to v0.26.x ship, and the one hazync.org's live header proof is
-made by. `main` already carries the next one, `de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07`,
-whose state adds an MMR of every block hash. It is **not in a release yet**; `reproduce/LIBZYNC_IDS` pins it because
-that file pins main's build, and it ships with the next release.
 
 v0.26.0's images commit each block's undo data in its block-forest leaf ([`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)),
 and the board proves the chain again from genesis under them; the verifier keeps v0.24.0's `8888d59c…` so its receipts
-still verify.
-
+still verify. The other zyncAPPs' images are in [`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS) too,
 and the build is reproducible: [`reproduce/libzync.Dockerfile`](reproduce/libzync.Dockerfile) gives
-the same ids bit for bit ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), and CI rebuilds them on
+the same ids bit for bit, and CI rebuilds them on
 every change. A proof made by any other program is a proof of something else — that is what stops
 "trust us" from creeping back in.
 
@@ -71,29 +65,34 @@ the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench
 **Works today**
 
 - **The public board proves Hazync v2.** [hazync.org](https://hazync.org/) switched to it on 12 November 2026 and
-  restarted from genesis under `8888d59c`, and restarts from genesis again under v0.26.0's `46666b6f` (the undo-data
-  commitment, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)): anyone with an NVIDIA card claims a block, proves it and submits it,
+  restarted from genesis under `8888d59c`, and from genesis again under v0.26.0's `46666b6f` on 16.11.2026 (the undo-data
+  commitment, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)): anyone with an NVIDIA card, or slowly with a CPU, claims a block, proves it and submits it,
   and proved blocks are joined into one genesis-anchored proof ([`CONTRIBUTING.md`](CONTRIBUTING.md)). Its first
   proving run, on 4× RTX PRO 6000, proved 1,287 blocks in 2 h 32 min of proving (about 510 an hour), $27.13 in all,
   about $0.021 a block on these early, nearly empty blocks
   ([`RESULT_board_run_2026-11-12.txt`](experimental/libzync-bench/RESULT_board_run_2026-11-12.txt))
-- **The whole header chain in one proof:** genesis to block 975,278 under the headers zyncAPP `de54b94f` (on main,
-  not yet released; with the MMR of every block hash), 99.5 min on one RTX PRO 6000, a 227 KB receipt (the released `2db34e12`, without the MMR: 59.4 min, about
-  $2.50, a 224 KB receipt the WebAssembly verifier checked in 39 ms on a laptop under Node). A follower on the board's
-  server keeps `2db34e12`'s at the tip
+- **The whole header chain in one proof:** genesis to block 975,278 under the headers zyncAPP `de54b94f`, with a
+  Merkle Mountain Range of every block hash, 99.5 min on one RTX PRO 6000, a 227 KB receipt. A follower on the board's
+  server keeps it at the tip, and [hazync.org/headers](https://hazync.org/headers/) checks on your device that a block,
+  or a transaction in it, is on that chain
 - A real proof of mainnet from **genesis to block 200** by the published image: 3,074 s on one RTX PRO 6000 (RISC
   Zero 3.1.0), one 227 KB receipt that verifies in a browser
-- **zyncAPPs**, separate programs that answer one question from a core proof ([`docs/libzync/ZYNCAPPS.md`](docs/libzync/ZYNCAPPS.md)),
-  and a **coin check** page that verifies that proof on your own device and checks a server's answers
-  about any script against it; a server that alters one word of an answer is refused
-  ([`swiftsync-verify-wasm/zapp/`](swiftsync-verify-wasm/zapp/))
+- **zyncAPPs**, separate programs that answer one question from a core proof
+  ([`docs/libzync/ZYNCAPPS.md`](docs/libzync/ZYNCAPPS.md)): a **coin check** that verifies the proof on your own device
+  and refuses a server that alters one word of an answer; **assumevalid / assumeutxo** checkers for a Core node;
+  **coin liveness** (an outpoint is unspent, e.g. a Lightning funding output); a **balance statement** signed with
+  BIP-322; **deposit proofs** (a transaction buried N deep on a fully validated chain, which SPV cannot give); proven
+  **SwiftSync hints** files; and proven **Utreexo roots** for Floresta. The last two are early: real proofs so far
+  only at low heights
 - On real mainnet state, eight blocks from 200,000 to 300,000 on one card: **9.5x fewer proven cycles** and
   **7.0x less card time** than Hazync v1, the original per-signature design; up to 19.9x fewer cycles and 15.1x
   less card time on block 200,000
   ([`results/CYCLES_REAL_STATE.md`](experimental/libzync-bench/results/CYCLES_REAL_STATE.md))
-- Proving on **Linux and on native Windows** with an NVIDIA card: the Windows CUDA host
-  (`hazync-host-x86_64-windows-cuda.zip`) proved mainnet blocks 170 and 400,000 on an RTX PRO 6000, verified again on
-  Linux ([`experimental/libzync-bench/windows/`](experimental/libzync-bench/windows/), measured on the v0.23.0 build)
+- Proving on **Linux and on Windows**. The Windows app installs in one step (`hazync-setup-x86_64-windows.exe`), with
+  the GPU prover and a CPU prover for machines without an NVIDIA card, and updates itself from PGP-signed releases.
+  The Windows CUDA host proved mainnet blocks 170 and 400,000 on an RTX PRO 6000, verified again on Linux
+  ([`experimental/libzync-bench/windows/`](experimental/libzync-bench/windows/), measured on the v0.23.0 build), and a
+  GTX 1050 Ti (Pascal, 4 GB) proves too
 - Blocks proved independently and **joined**: the joined proof equals the linear one exactly
 - Reproducible builds, confirmed by an independent CI runner
 
@@ -103,13 +102,25 @@ the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench
   signature check, the aggregate) are where review matters most
 - **No proof of the whole chain's blocks yet** (the header chain is proved, above). The board is proving them
   from genesis; a prep pass on our server writes the state before each block, a little ahead of the provers
-- Following the chain's tip with Hazync v2 is not running yet
+- Following the chain's tip with Hazync v2 is not running yet. Reorg handling for it is built and deployed, with
+  automatic rewinds off until the board follows the tip ([`docs/libzync/REORG.md`](docs/libzync/REORG.md))
 
-## Help
+## How you can help
 
-The most valuable contribution is **trying to break it** — specifically, finding a case where
-Hazync says a block is valid and Bitcoin Core would not. [`SECURITY.md`](SECURITY.md) says how to
-report one.
+1. **Prove blocks.** Every proved block moves the board towards a proof of the whole chain.
+   - **Windows:** download [`hazync-setup-x86_64-windows.exe`](https://github.com/hazync/hazync/releases/latest)
+     from the latest release (its sha256 is in the PGP-signed `SHA256SUMS.txt`), install, press Start. No admin
+     rights, Python or git needed, and the app updates itself.
+   - **Linux, or Windows through WSL2:** [`CONTRIBUTING.md`](CONTRIBUTING.md), step 1.
+   - An NVIDIA card is best; without one the CPU prover still proves, slowly (mainnet block 1 in about 24 min on 4 vCPUs).
+2. **Try to break it.** The most valuable finding is a block Hazync calls valid and Bitcoin Core would not.
+   [`SECURITY.md`](SECURITY.md) says how to report one.
+3. **Review the parts that are not Core's code**: the coin log, the trie, the batch signature check, the aggregate.
+   [`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md) is a guide for an outside reviewer.
+4. **Use a zyncAPP and say what you need.** If you build a wallet, a bridge, a Lightning node or a light client, tell us
+   which question you would want proved, on [Delving Bitcoin](https://delvingbitcoin.org/t/running-cores-real-consensus-code-inside-a-zkvm/2811)
+   or in an issue.
+5. **Help pay for GPU time.** Proving costs real money: [what it costs and how to help](https://hazync.org/donate/).
 
 | | |
 |---|---|
@@ -118,12 +129,9 @@ report one.
 | **The proof statement, and what a verifier checks** | [`docs/libzync/SWIFTSYNC_PROOFS.md`](docs/libzync/SWIFTSYNC_PROOFS.md) |
 | **What is built and what is open** | [`docs/libzync/ROADMAP.md`](docs/libzync/ROADMAP.md) |
 | **Prove blocks on your GPU** | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| **The current release** | [releases/latest](https://github.com/hazync/hazync/releases/latest) (v0.26.1 on 18.11.2026: [`docs/RELEASE_NOTES_v0.26.1.md`](docs/RELEASE_NOTES_v0.26.1.md)), and every release in [`CHANGELOG.md`](CHANGELOG.md) |
+| **The current release** | [releases/latest](https://github.com/hazync/hazync/releases/latest) (v0.27.0 on 20.11.2026: [`docs/RELEASE_NOTES_v0.27.0.md`](docs/RELEASE_NOTES_v0.27.0.md)), and every release in [`CHANGELOG.md`](CHANGELOG.md) |
 | **Every document** | [`docs/README.md`](docs/README.md) |
 | **Discussion** | [Delving Bitcoin](https://delvingbitcoin.org/t/running-cores-real-consensus-code-inside-a-zkvm/2811) |
-
-Running it costs real money in GPU time. [What it costs and how to help pay for
-it](https://hazync.org/donate/).
 
 **Hazync v1**, the original design, which proved each signature with Core's code directly (image `37987b85`), is
 superseded by Hazync v2. Its last release is [v0.22.1](https://github.com/hazync/hazync/releases/tag/v0.22.1), which

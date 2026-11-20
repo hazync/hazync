@@ -1,8 +1,9 @@
 # zyncAPP: proven Utreexo roots for assumeutreexo (design and prototype, #723)
 
-Status (15.11.2026): **prototype** on `feat/zapp-utreexo`, CPU only. Executed (no dev mode) from genesis to H = 1,999,
+Status: released in v0.27.0 (#744, 20.11.2026) as an **early** zAPP, CPU only. Executed (no dev mode) from genesis to H = 1,999,
 10,000 and 100,000; the roots are byte-identical to Floresta's own code at every H tested; real CPU proofs at H = 2 and 3
-(§8). Not reviewed, not reproducible-built, no published id. Utreexo stays out of the Hazync core; this zAPP sits on
+(§8). Reviewed 15.11.2026 (no soundness break found); images pinned in `reproduce/LIBZYNC_IDS` from the reproducible
+container build: base `27bea7da`, tip mode (§10) `ab6f7a26`. Nothing deployed. Utreexo stays out of the Hazync core; this zAPP sits on
 top of it, like every zAPP.
 
 Utreexo is Tadge Dryja's accumulator; Floresta (getfloresta/Floresta, formerly vinteumorg) is Davidson Souza's node
@@ -341,8 +342,8 @@ latest height, or a few blocks below the tip for a reorg margin, is what they wa
 ("proofs are easy to check and not trusted. If someone is serving them, just download the latest proof and try
 ingesting them"); no change planned to the leaf format or the root order in rustreexo 0.7; Empty roots are implicit for
 them and they parse ours after the check; the BIP30 leaves stay permanent (utreexod the same); proven **roots** over a
-hints file. This section is the design and the built prototype for that: branch `feat/utreexo-tip` (from
-`feat/zapp-utreexo`). Status: CPU only, low heights, nothing deployed, not reviewed.
+hints file. This section is the design and the built prototype for that, released in v0.27.0 with the base. Status: CPU only, low
+heights, nothing deployed; reviewed before the merge (§10.9).
 
 ### 10.1 Why the walk of §3 cannot follow the tip, and what does
 

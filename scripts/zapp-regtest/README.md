@@ -1,9 +1,9 @@
 # zAPP regtest harness
 
-The shared regtest chain of `docs/libzync/ZAPP_TESTING.md` §3.2 (branch `docs/zapp-testing`): what mainnet cannot give
+The shared regtest chain of `docs/libzync/ZAPP_TESTING.md` §3.2 : what mainnet cannot give
 soon (spends under a real proof, same-block spends, a BIP30 repeat, a real 64-byte transaction, coins under keys we
-hold, the OK verdict, reorgs). It is on the merge gate of #726 (block check), #740 (assume), #741 (liveness), #742
-(statement) and #743 (deposit). This directory holds the chain, the block files the libzync host reads, Core's oracle
+hold, the OK verdict, reorgs). It was the merge gate of #726 (block check), #740 (assume), #741 (liveness), #742
+(statement) and #743 (deposit), all released in v0.27.0. This directory holds the chain, the block files the libzync host reads, Core's oracle
 values, the dev-mode execution and the prepared (not run) GPU batch. The zAPP runner (`run.sh`, plan §3.2 "The run")
 is a later step: it needs the `regtest-test` image in `zapps/corecheck` (below).
 

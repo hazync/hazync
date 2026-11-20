@@ -1,6 +1,6 @@
 # Hazync: the exact security claim
 
-> This page describes **Hazync v2** (the libzync engine), the images published in release v0.24.0. The statement
+> This page describes **Hazync v2** (the libzync engine), the images published since release v0.24.0 (the current ones in §1). The statement
 > for Hazync v1 (the CORE guest, image `37987b85…`, last released as v0.22.1) is kept in
 > [`history/SOUNDNESS.md`](history/SOUNDNESS.md); v1 proofs still verify with v0.22.1's verifier.
 
@@ -21,12 +21,12 @@ The images are pinned in [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS):
 
 | image | id |
 |---|---|
-| mainnet product (v0.26.0; from genesis, undo-data commitment) | `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` |
+| mainnet product (v0.26.0 to v0.27.0; from genesis, undo-data commitment) | `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` |
 | mainnet product (v0.24.0, v0.25.0; blocks 1..1999 of the board) | `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4` |
-| signet product (v0.26.0) | `01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7` |
+| signet product (v0.26.0 to v0.27.0) | `01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7` |
 | signet product (v0.24.0, v0.25.0) | `d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387` |
-| header-chain zyncAPP (mainnet, with the MMR; pinned after v0.26.0) | `de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07` |
-| header-chain zyncAPP (mainnet, v0.24.0 to v0.26.0) | `2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632` |
+| header-chain zyncAPP (mainnet, with the MMR; v0.27.0) | `de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07` |
+| header-chain zyncAPP (mainnet, v0.24.0 to v0.26.1) | `2db34e12cc993dd1edb003f00f85c93d02e0e61208589b57fc5c969d39b3e632` |
 
 How faithful "Core's rules as compiled into the image" is, rule by rule, is
 [`libzync/CONSENSUS_RULES.md`](libzync/CONSENSUS_RULES.md): **59 rows SAME, 3 STRICTER, 0 WEAKER, 0 NOT ENFORCED,

@@ -2,8 +2,8 @@
 
 > **Since 2026-11-12 the public board is Hazync v2** (the libzync engine; image `8888d59c` from release v0.24.0, and
 > `46666b6f` from release v0.26.0, whose board restarts from genesis: [`libzync/RESET_v026.md`](libzync/RESET_v026.md)).
-> The repo's units name `46666b6f`; until that reset is done on the box, the box still runs `8888d59c`. The
-> next section is how that board runs. **Everything after it describes the Hazync v1 (CORE) board** — the archive
+> The repo's units name `46666b6f`, and the box has run it from genesis since that reset (16.11.2026); v0.27.0 keeps
+> the same image, and its board side runs on the box since 20.11.2026. The next section is how that board runs. **Everything after it describes the Hazync v1 (CORE) board** — the archive
 > bridge, `hazync-coordinator`, the `/var/lib/hazync` paths — and is kept because several of its units still run
 > (retargeted at the v2 board) and because it is the record of how the v1 board was built. The switch itself, and
 > what it found, is [`libzync/SWITCH.md`](libzync/SWITCH.md).
@@ -67,8 +67,8 @@ systemctl --failed
 scripts/check-deployment.sh --local    # read the libzync section; its CORE section FAILs by design after the switch (open item)
 ```
 
-`method_id` is the host's image (`46666b6f…` for v0.26.0). A board handing over to a new image (`LZ_HANDOVER_AT`, the
-`pre` and `post` eras) is [`../../docs/HANDOVER.md`](../../docs/HANDOVER.md) §5; v0.26.0 does not hand over.
+`method_id` is the host's image (`46666b6f…` since v0.26.0). A board handing over to a new image (`LZ_HANDOVER_AT`, the
+`pre` and `post` eras) is [`../../docs/HANDOVER.md`](../../docs/HANDOVER.md) §5; no release so far hands over.
 
 The checks alert through `hazync-alert@` exactly as in [Alerts](#alerts) below. A stalled frontier with healthy units is
 usually a claim, not a fault: see the proving-fleet notes in [`docs/OPERATIONS.md`](../../docs/OPERATIONS.md#0-the-live-board-hazync-v2).

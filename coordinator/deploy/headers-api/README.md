@@ -53,7 +53,7 @@ the sync, at most one talks to the node at a time (others wait up to 10 s, then 
 without this unit (`PartOf=` normally restarts it too), every call is answered 401; after `AUTH_FAILS` (3) syncs in a
 row the service exits 3 and `Restart=on-failure` starts it again with a fresh copy.
 
-## Install (hazync-proof; not done)
+## Install (hazync-proof; done 20.11.2026, v0.27.0)
 
 Network, as decided: the same pattern as the coordinator's `:8899`. The service listens on hazync-proof's own address
 (`BIND=159.195.207.224`, port 8902, set in the unit), nginx on the web box (152.53.86.216) proxies
@@ -77,7 +77,7 @@ restarts with bitcoind, which writes a new cookie) and `/var/lib/hazync-headers/
 stay world-readable, as the follower's default umask makes it). It needs nothing else. The first sync of the whole
 chain fetches 975k hashes and their 80-byte headers (for the linkage) in batches of 2,000 and hashes ~2M MMR nodes in Python; later syncs fetch only new blocks.
 
-## Behind nginx (proposed, not applied)
+## Behind nginx (applied on the web box, 20.11.2026)
 
 The page's CSP is `connect-src 'self'`, so the service must be same-origin: **`https://hazync.org/headers-api/`**
 (not api.hazync.org, which would need a CSP change). In `deploy/nginx-hazync.org.conf` of hazync-web, next to
