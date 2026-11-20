@@ -13,11 +13,14 @@ HERE=$(cd "$(dirname "$0")" && pwd); F=${FOLLOW:-$HERE/../hazync-utreexo-follow}
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/www" "$W/blocks"
 fails=0
-t () { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (got '$3', want '$2')"; fails=$((fails + 1)); fi; }
-export FAKE_BLOCKS=$SRC FAKE_TIP=300 STUB_T=290 W
+# FAIL_FAST=1 (run_ci.sh's controls): stop at the first failing check; its label says which guard was missed
+t () { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (got '$3', want '$2')"; fails=$((fails + 1)); [ "${FAIL_FAST:-0}" = 1 ] && exit 1; fi; }
+# STUB_T: the core proof's height. 160 (above every H the cases reach) keeps each step's link of headers short: the
+# fake node is a process per call, and the link was most of the run's cost (review round 2 #1)
+export FAKE_BLOCKS=$SRC FAKE_TIP=300 STUB_T=160 W
 # fwrite <file> <h>: a saved source's header for block h (as zyncapp writes it); fhh <file>: the height in one
 cat > "$W/bin/fhelp" <<'EOF'
-fwrite () { python3 - "$1" "$2" "$("$CLI" getblockhash "$2")" <<'PY'
+fwrite () { python3 - "$1" "$2" "${3:-$("$CLI" getblockhash "$2")}" <<'PY'
 import sys, struct
 open(sys.argv[1], 'wb').write(b'HZUFOR01' + struct.pack('<I', int(sys.argv[2])) + bytes.fromhex(sys.argv[3])[::-1] + b'stub')
 PY
@@ -37,8 +40,12 @@ case "$1" in
     read -r _ _ _ steps _ < "$3"; h=$4; out=$6
     # a saved source's header as zyncapp writes it (magic, height u32 LE, block hash in internal order), the forest
     # source's heap line, and the --cache it was given (its own header's height: "hit <h>", or "miss")
-    shift 6; while [ $# -gt 0 ]; do case "$1" in --cache) if [ -f "$2" ]; then echo "hit $(fhh "$2")"; else echo miss; fi > "$W/cache.state"; shift;;
+    req=; c=
+    shift 6; while [ $# -gt 0 ]; do case "$1" in --cache) c=$2; if [ -f "$2" ]; then echo "hit $(fhh "$2")"; else echo miss; fi > "$W/cache.state"; shift;;
+      --cache-required) req=1;;
       --source) echo "$2" > "$W/source.arg"; shift;; --cache-out) fwrite "$2" "$h"; shift;; --headers) wc -l < "$2" > "$W/headers.count"; shift;; esac; shift; done
+    # zyncapp's --cache-required: a cache it cannot load is exit 4 (here: a file without the forest's magic)
+    if [ -n "$req" ] && [ "$(head -c 8 "$c" 2>/dev/null)" != HZUFOR01 ]; then echo "UTREEXO_TIP_CACHE_REFUSED unusable (stub)"; echo refused > "$W/cache.state"; exit 4; fi
     echo "UTREEXO_TIP_WITNESS source=forest blocks=1 dels=0 forest_nodes=1 forest_leaves=1 forest_heap_bytes=${STUB_HEAP:-1000}"
     echo "STUB $h $STUB_T $((steps + 1)) $("$CLI" getblockhash "$h") $("$CLI" getblockhash "$STUB_T")" > "$out";;
   *) exit 1;;
@@ -94,7 +101,7 @@ t "  latest is a symlink to a state directory (L2)" "yes 3 $X3" "$([ -L "$W/d/la
 
 MAX_STEP=47 "$F" > "$W/1.log" 2>&1; t "step 3 -> 50" 0 $?
 t "  no forest cache yet: bodies 1..50 fetched (L4)" "1 50" "$(tail -1 "$W/fetch.log")"
-t "  the link 51..290 as headers only" 240 "$(cat "$W/headers.count")"
+t "  the link 51..160 as headers only" 110 "$(cat "$W/headers.count")"
 MAX_STEP=30 "$F" > "$W/2.log" 2>&1; t "step 50 -> 80" 0 $?
 t "  with the cache: bodies 51..80 only (L4)" "51 80" "$(tail -1 "$W/fetch.log")"
 MAX_STEP=20 "$F" > "$W/3.log" 2>&1; t "step 80 -> 100" 0 $?
@@ -136,8 +143,8 @@ t "  keeps the current and the one published before it" "utreexo-90.rcpt utreexo
 sleep 1; rm -f "$W/d/published"; MAX_STEP=0 PUBLISHED_KEEP=1 "$F" > "$W/8.log" 2>&1; t "a republish with PUBLISHED_KEEP=1" 0 $?
 t "  keeps only the current receipt" "utreexo-95.rcpt" "$(cd "$W/d/pub" && ls utreexo-*.rcpt | tr '\n' ' ' | sed 's/ $//')"
 
-# L1: the core proof moved to 296, the kept receipt rests on 290: a republish names the receipt's own tip
-rm -f "$W/d/published"; STUB_T=296 MAX_STEP=0 "$F" > "$W/9.log" 2>&1; t "a republish under a newer core proof checks the receipt's own core tip (L1)" 0 $?
+# L1: the core proof moved to 166, the kept receipt rests on 160: a republish names the receipt's own tip
+rm -f "$W/d/published"; STUB_T=166 MAX_STEP=0 "$F" > "$W/9.log" 2>&1; t "a republish under a newer core proof checks the receipt's own core tip (L1)" 0 $?
 
 # PRUNE_BLOCKS: the bodies at or below H go once the cache is there
 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/10.log" 2>&1; t "step 95 -> 100 with PRUNE_BLOCKS=1" 0 $?
@@ -176,11 +183,11 @@ MAX_STEP=3 "$F" > "$W/16.log" 2>&1; t "a stale cached block in the step's range 
 t "  moved aside" 1 "$(find "$W/d/orphaned" -path '*stale-step-*/blocks/block_111.json' | wc -l)"
 t "  and fetched again from the node's chain" yes "$(cmp -s "$SRC/block_111.json" "$W/blocks/block_111.json" && echo yes)"
 
-# LOW 1: the checker must not run on when the node does not answer for the receipt's own core tip (290, while the
-# current core proof is at 296): an empty hash once went on into --expect-tip
-printf '#!/bin/bash\n[ "$1 $2" = "getblockhash 290" ] && { echo "error code: -1" >&2; exit 1; }\nexec %q "$@"\n' "$HERE/fake-bitcoin-cli" > "$W/bin/cli290"; chmod +x "$W/bin/cli290"
+# LOW 1: the checker must not run on when the node does not answer for the receipt's own core tip (160, while the
+# current core proof is at 166): an empty hash once went on into --expect-tip
+printf '#!/bin/bash\n[ "$1 $2" = "getblockhash 160" ] && { echo "error code: -1" >&2; exit 1; }\nexec %q "$@"\n' "$HERE/fake-bitcoin-cli" > "$W/bin/cli290"; chmod +x "$W/bin/cli290"
 P0=$(cat "$W/d/published"); rm -f "$W/d/published"
-BITCOIN_CLI=$W/bin/cli290 STUB_T=296 MAX_STEP=0 "$F" > "$W/17.log" 2>&1; t "a node that does not answer for the receipt's core tip (LOW 1)" 1 $?
+BITCOIN_CLI=$W/bin/cli290 STUB_T=166 MAX_STEP=0 "$F" > "$W/17.log" 2>&1; t "a node that does not answer for the receipt's core tip (LOW 1)" 1 $?
 t "  nothing published" no "$([ -e "$W/d/published" ] && echo yes || echo no)"
 echo "$P0" > "$W/d/published"
 
@@ -227,9 +234,9 @@ t "  no block file moved" "$nb" "$(find "$W/blocks" -name 'block_*.json' | wc -l
 # (1) a deep reorg that orphans the kept receipt's OWN core tip too: the fall-back state cannot be checked against this
 # node, so it is not published, and the run steps on (it used to die before the step)
 "$F" --set-base "$W/base.rcpt" 3 "$X3" > "$W/24.log" 2>&1
-MAX_STEP=47 "$F" > "$W/25.log" 2>&1; MAX_STEP=30 "$F" > "$W/26.log" 2>&1     # 3 -> 50 -> 80, both on core tip 290
+MAX_STEP=47 "$F" > "$W/25.log" 2>&1; MAX_STEP=30 "$F" > "$W/26.log" 2>&1     # 3 -> 50 -> 80, both on core tip 160
 t "  (setup: latest 80)" 80 "$(cut -d' ' -f1 "$W/d/latest/meta")"
-STUB_T=296 FAKE_HASH_AT=80:$(printf 'e%.0s' $(seq 64)),290:$(printf 'd%.0s' $(seq 64)) MAX_STEP=10 "$F" > "$W/27.log" 2>&1
+STUB_T=166 FAKE_HASH_AT=80:$(printf 'e%.0s' $(seq 64)),160:$(printf 'd%.0s' $(seq 64)) MAX_STEP=10 "$F" > "$W/27.log" 2>&1
 t "a reorg that orphans the kept receipt's core tip too: the run steps on (review of 7806f4b, 1)" 0 $?
 t "  the fall-back is not published, and says so" 1 "$(grep -c 'not published; stepping on' "$W/27.log")"
 t "  the new step is published" 60 "$(python3 -c "import json;print(json.load(open('$W/d/pub/latest.json'))['height'])")"
@@ -261,6 +268,44 @@ MAX_STEP=5 "$F" > "$W/36.log" 2>&1; t "  (default: orphaned forests kept)" "0 ye
 sleep 1; ORPHANED_FOREST_MIN=0 MAX_STEP=5 "$F" > "$W/37.log" 2>&1
 t "orphaned forests pruned after ORPHANED_FOREST_MIN (F7)" "0 0" "$? $(find "$W/d/orphaned" -name 'forest*' | wc -l)"
 t "  the rest of orphaned/ untouched" "$n_or" "$(find "$W/d/orphaned" -type f ! -name 'forest*' | wc -l)"
+
+# review round 2 #5: a forest ABOVE the new H (left by a kill mid-fall-back or mid---set-base) goes to orphaned/ and does
+# not take a retention slot
+lat () { cut -d' ' -f1 "$W/d/latest/meta"; }
+hts () { (cd "$W/d" && ls forest-*.bin 2>/dev/null | sed 's/forest-\([0-9]*\)-.*/\1/' | sort -n | tr '\n' ' ' | sed 's/ $//'); }
+L=$(lat)
+fwrite "$W/d/forest-150-$(cli getblockhash 150).bin" 150
+FOREST_KEEP=2 MAX_STEP=5 "$F" > "$W/40.log" 2>&1; t "a step with a forest above H left behind (round 2 #5)" 0 $?
+t "  the forest above H moved aside, the two newest at or below H kept" "$L $((L + 5)) 1" "$(hts) $(find "$W/d/orphaned" -path '*above-*' -name 'forest-150-*' | wc -l)"
+# review round 2 #2: a forest the host cannot use (corrupt) is exit 4 under --cache-required; the follower moves it to
+# orphaned/ and starts from the next older one, never a silent replay from genesis
+P2=$(lat)
+printf 'CORRUPT' > "$W/d/forest-$P2-$(cli getblockhash "$P2").bin"
+MAX_STEP=5 "$F" > "$W/41.log" 2>&1; t "an unusable forest at P (round 2 #2)" 0 $?
+t "  moved to orphaned/unusable-*, and the step started from the next older forest" "1 hit $L" "$(find "$W/d/orphaned" -path '*unusable-*' -name "forest-$P2-*" | wc -l) $(cat "$W/cache.state")"
+# every kept forest unusable: they all move aside, and the genesis arm still obeys GENESIS_REPLAY_MAX
+for f in "$W"/d/forest-*.bin; do printf 'CORRUPT' > "$f"; done
+GENESIS_REPLAY_MAX=50 MAX_STEP=5 "$F" > "$W/42.log" 2>&1
+t "  every forest unusable: refused at the genesis limit, not replayed" "1 1 0" "$? $(grep -c 'needs ALLOW_GENESIS_REPLAY=1' "$W/42.log") $(grep -c 'replays from genesis' "$W/42.log")"
+ALLOW_GENESIS_REPLAY=1 MAX_STEP=5 "$F" > "$W/43.log" 2>&1; t "  (recovered with ALLOW_GENESIS_REPLAY=1)" 0 $?
+# review round 2 #7: a work/forest.next with latest's height but another block hash is not adopted
+P3=$(lat)
+fwrite "$W/d/work/forest.next" "$P3" "$(printf 'ab%.0s' $(seq 32))"
+MAX_STEP=0 "$F" > "$W/44.log" 2>&1
+t "a forest.next with latest's height and another hash is not adopted" "0 0 yes" "$? $(grep -c adopted "$W/44.log") $([ -f "$W/d/work/forest.next" ] && echo yes)"
+# review round 2 #8: DRY_RUN changes nothing: no adoption, no pruning of orphaned forests
+mv "$W/d/forest-$P3-"*.bin "$W/d/work/forest.next"
+mkdir -p "$W/d/orphaned/manual"; echo x > "$W/d/orphaned/manual/forest-1-x.bin"; sleep 1
+DRY_RUN=1 ORPHANED_FOREST_MIN=0 "$F" > "$W/45.log" 2>&1
+t "DRY_RUN=1 adopts nothing and prunes nothing (round 2 #8)" "0 yes yes" "$? $([ -f "$W/d/work/forest.next" ] && echo yes) $([ -f "$W/d/orphaned/manual/forest-1-x.bin" ] && echo yes)"
+MAX_STEP=0 "$F" > "$W/46.log" 2>&1; t "  the next real run adopts it" "0 1" "$? $(grep -c "adopted work/forest.next as the forest of latest ($P3 " "$W/46.log")"
+# review round 2 #4: an RPC failure while choosing the forest stops the run; it is not "another branch" (which fell
+# through to a replay from genesis)
+MAX_STEP=5 "$F" > "$W/47.log" 2>&1; P4=$(lat)
+mv "$W/d/forest-$P4-"*.bin "$W/lost-$P4.bin"
+printf '#!/bin/bash\n[ "$1 $2" = "getblockhash %s" ] && { echo "error code: -28" >&2; exit 28; }\nexec %q "$@"\n' "$P3" "$HERE/fake-bitcoin-cli" > "$W/bin/cli_sel"; chmod +x "$W/bin/cli_sel"
+BITCOIN_CLI=$W/bin/cli_sel MAX_STEP=5 "$F" > "$W/48.log" 2>&1
+t "an RPC failure while choosing the forest is an error (round 2 #4)" "1 0" "$? $(grep -c 'replays from genesis' "$W/48.log")"
 
 # settings: a bad FOREST_KEEP or WITNESS_SOURCE is refused before anything runs
 FOREST_KEEP=0 "$F" > "$W/28.log" 2>&1; t "FOREST_KEEP=0 is refused" "1 1" "$? $(grep -c 'FOREST_KEEP must be' "$W/28.log")"

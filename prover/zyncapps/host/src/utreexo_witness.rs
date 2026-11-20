@@ -229,7 +229,8 @@ impl ForestSource {
         if (n as u64).saturating_mul(32) > len {
             return Err("forest source: the hash table is longer than the file".into());
         }
-        if n != height + 1 {
+        // checked arithmetic: a stored height of 2^32 - 1 must be a refusal, not an overflow (review round 2 #6)
+        if Some(n) != height.checked_add(1) {
             return Err("forest source: the hash table is not one per height".into());
         }
         let mut hashes = Vec::with_capacity(n as usize);
@@ -238,7 +239,7 @@ impl ForestSource {
             r.read_exact(&mut x).map_err(|e| e.to_string())?;
             hashes.push(x);
         }
-        if *hashes.last().unwrap() != last {
+        if hashes.last() != Some(&last) {
             return Err("forest source: the hash table does not end at the stored block".into());
         }
         let mut b8 = [0u8; 8];

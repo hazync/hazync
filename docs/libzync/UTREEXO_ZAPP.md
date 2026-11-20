@@ -539,7 +539,8 @@ second, independent source to compare against; nothing here prevents it.
   the proof; the follower records the forest's heap after each step (`forest-heap`) and warns above
   `FOREST_HEAP_WARN_BYTES` (half the unit's `MemoryMax`). F5: the counts in a saved file are bounded by its length before
   anything is allocated. F7: `hazync-check-utreexo-follow` (through `hazync-run-check`) fails when the published block
-  is below min(node tip − 6, core height) and `latest.json` is older than 6 h, or the forest heap passes the warning
+  is below min(node tip − 6, core height) and nothing was published for 6 h since the later of the last publish and
+  the core receipt's last change (so the first advance after an idle spine does not page), or the forest heap passes the warning
   line. Units `hazync-utreexo-follow.service` / `.timer`, `hazync-check-utreexo-follow.service` / `.timer` and the exact
   install procedure: coordinator/deploy/utreexo/README.md (NOT EXECUTED; nothing is deployed; install only from `main`,
   the box's drift check compares with `origin/main`).
@@ -837,6 +838,22 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   moving only the orphaned forest (100) aside, the step from the fall-back at 80 starting from the KEPT forest of 80,
   a bad `FOREST_KEEP` or `WITNESS_SOURCE` refused. Controls: the script with the old fall-back (every forest moved
   aside) and with the old retention (only the newest kept) each fail 2 checks.
+- **Review round 2** (20.11.2026, at `99d40fa`): `zyncapp --cache-required` (the follower always passes it with a kept
+  forest) makes an unusable cache, or one above P, exit 4 instead of a silent replay from genesis; the follower then
+  moves that forest to `orphaned/unusable-*` and tries the next older one, the genesis arm still under
+  `GENESIS_REPLAY_MAX`. Executed on hazync-coord with the rebuilt `zyncapp` (ids unchanged): the corrupt copy and the
+  forest above P each exit 4 with `UTREEXO_TIP_CACHE_REFUSED` and nothing replayed; the good forest of 91,880 runs
+  (3/3, the new block of `tip-source-tests.sh` run alone against the last full run's work directory). The follower: an
+  RPC failure while choosing the forest stops the run; forests above the new H go to `orphaned/` and take no retention
+  slot; `DRY_RUN=1` adopts and prunes nothing; `.pending.tmp` is cleaned and moved with the rest. `read_from` refuses
+  more live leaves than nodes; `ForestSource::load` refuses a height of 2^32 − 1 (checked arithmetic, no `unwrap`).
+  Tests: tip-step **16** (a forest of chain A refusing chain B's next block, "does not follow the previous block"; the
+  two refusals above, each mutation killed); the logic test **102 of 102** (an unusable forest at P retried from the
+  next older one; every forest unusable stops at the genesis limit; a forest above H moved aside; forest.next with
+  latest's height and another hash not adopted; DRY_RUN; an RPC failure during the choice), its core tip lowered from
+  290 to 160 to shorten the header links; `run_ci.sh` runs ten controls with `FAIL_FAST=1`, each required to fail
+  FIRST at the check written for its guard (all ten do), and `test_check.sh` has a second control (age from the last
+  publish alone pages after an idle spine). `run_ci.sh`: 3m59 wall, 30 CPU-minutes (was 8m36, 56).
 - `zapps/utreexo/tip-source-tests.sh` again after the review: **60 of 60** (`UTREEXO_TIP_SOURCE_TESTS_OK`, hazync-coord, `zyncapp`
   from `62bc131`'s source, ids still `ab6f7a26` / `27bea7da`): the 54 above, and two restarts of 91,880 → 100,000 more,
   each with the same witness bytes: from the forest saved at 50,000 ("cache below at 50000 … replaying 50001..91880",

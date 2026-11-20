@@ -400,7 +400,7 @@ impl ArenaForest {
         r.read_exact(&mut b8).map_err(|e| e.to_string())?;
         let want_live = u64::from_le_bytes(b8);
         // a node takes at least 33 bytes in the file (tag and hash)
-        if want_live > f.leaves || want_nodes > 2 * want_live || want_nodes >= (NIL - 1) as u64 || want_nodes.saturating_mul(33) > max_bytes {
+        if want_live > f.leaves || want_live > want_nodes || want_nodes > 2 * want_live || want_nodes >= (NIL - 1) as u64 || want_nodes.saturating_mul(33) > max_bytes {
             return Err("forest: impossible node or leaf counts".into());
         }
         // the arena sized once, with an eighth to grow into (a run's adds), not by doubling

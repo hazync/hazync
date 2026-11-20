@@ -29,11 +29,15 @@ kept for comparison.
 
 **Losing a forest** (review F1). A step starts from the newest kept forest AT OR BELOW its previous height whose block is
 the node's, and replays forward from there over the block files (only those are fetched); `zyncapp` checks the result
-is the previous receipt's block, leaf count and roots. The forests of the `FOREST_KEEP` newest states are kept
+is the previous receipt's block, leaf count and roots. Forests above the new H (left by a kill during a fall-back or a
+`--set-base`) move to `orphaned/` and take no retention slot. `DRY_RUN=1` adopts and prunes nothing. The forests of the `FOREST_KEEP` newest states are kept
 (default `KEEP + 1`: one per kept state, so any fall-back finds one at or below it). A run killed between switching
 `latest` and renaming its forest leaves it in `work/forest.next`: the next run adopts it when its header names `latest`.
 `--set-base` and a fall-back move forests to `orphaned/`, never delete them; forests there go after
-`ORPHANED_FOREST_MIN` (2 days). Only with NO kept forest at or below the previous height does the source replay from
+`ORPHANED_FOREST_MIN` (2 days). The follower passes the chosen forest with `--cache-required`: one `zyncapp` cannot use
+(corrupt, the other source's format after a `WITNESS_SOURCE` switch, not at or below P) is exit 4, and the follower
+moves it to `orphaned/unusable-*` and tries the next older one, instead of `zyncapp` silently replaying from genesis
+(whose bodies a pruned follower does not have). Only with NO usable kept forest at or below the previous height does the source replay from
 genesis, and above `GENESIS_REPLAY_MAX` (100,000) blocks that is refused unless `ALLOW_GENESIS_REPLAY=1` (at the tip
 it fetches ~970,000 bodies with prevouts onto this disk).
 
@@ -107,7 +111,8 @@ env $E /opt/hazync-utreexo/bin/hazync-utreexo-follow --set-base mainnet-3.receip
 env $E DRY_RUN=1 /opt/hazync-utreexo/bin/hazync-utreexo-follow     # logs the H it would prove; proves nothing
 systemctl start hazync-utreexo-follow.service && journalctl -u hazync-utreexo-follow -n 30   # one real step, by hand
 systemctl enable --now hazync-utreexo-follow.timer
-# the check (stall and forest memory), through the box's hazync-run-check
+# the check (stall and forest memory), through the box's hazync-run-check: enable it only AFTER the first manual step
+# above has published (until then there is nothing to measure and it would page "nothing published")
 install -m755 hazync-check-utreexo-follow.sh /usr/local/sbin/hazync-check-utreexo-follow
 cp hazync-check-utreexo-follow.service hazync-check-utreexo-follow.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now hazync-check-utreexo-follow.timer

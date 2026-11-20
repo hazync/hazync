@@ -563,3 +563,45 @@ fn source_never_saves_a_diverged_forest() {
     assert_eq!(std::fs::read(&p).unwrap(), good, "the earlier file must be untouched");
     let _ = std::fs::remove_file(&p);
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review round 2 (#6, #7)
+
+#[test]
+fn forest_read_from_refuses_more_live_leaves_than_nodes() {
+    // leaves 5, 2 nodes, 3 live leaves: within every other bound, impossible (a live leaf is a node); refused before the
+    // leaf index is sized
+    let f = forest_file(5, 2, 3, &[]);
+    let e = ArenaForest::read_from(&mut &f[..], u64::MAX).err().expect("more live leaves than nodes was accepted");
+    assert!(e.contains("impossible"), "{e}");
+}
+
+#[test]
+fn source_load_refuses_a_height_of_u32_max() {
+    // height 2^32 - 1 and an empty hash table: `height + 1` wraps to 0 in a release build and `last()` is None; both are
+    // refusals now (the old code panicked on `last().unwrap()`)
+    let mut b = b"HZUFOR01".to_vec();
+    b.extend_from_slice(&u32::MAX.to_le_bytes());
+    b.extend_from_slice(&[7u8; 32]);
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&[0u8; 64]);
+    let p = tmp("u32max.bin");
+    std::fs::write(&p, &b).unwrap();
+    let e = ForestSource::load(&p).err().expect("a height of u32::MAX was accepted");
+    assert!(e.contains("not one per height"), "{e}");
+    let _ = std::fs::remove_file(&p);
+}
+
+#[test]
+fn source_refuses_another_chains_next_block() {
+    // a forest of chain A after block 50, fed chain B's block 51: refused by the hash link, the source untouched;
+    // control: A's own block 51 is accepted
+    let (a, b) = (chain(21, 60), chain(22, 60));
+    assert_ne!(a.blocks[50].0[4..36], b.blocks[50].0[4..36], "the two chains must differ below 51");
+    let mut src = ForestSource::genesis(a.genesis);
+    run(&mut src, &a, 0, 50);
+    let e = src.block(&b.blocks[50].0, &b.blocks[50].1).err().expect("another chain's block was accepted");
+    assert!(e.contains("does not follow the previous block"), "{e}");
+    assert_eq!(src.height, 50);
+    src.block(&a.blocks[50].0, &a.blocks[50].1).unwrap();
+}

@@ -41,7 +41,12 @@ if [ ! -s "$J" ]; then
 fi
 h=$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["height"]))' "$J" 2>/dev/null) \
     || { say "cannot check: $J does not parse"; exit 2; }
-age=$(( $(date +%s) - $(stat -c %Y "$J") ))
+# the age is measured from the LATER of the last publish and the core receipt's last change: while the core proof does
+# not move, H = T does not either, so after an idle spine the first advance must not read as hours of stall (review
+# round 2 #3)
+since=$(stat -c %Y "$J")
+cm=$(stat -c %Y "$CORE" 2>/dev/null) && [ "$cm" -gt "$since" ] && since=$cm
+age=$(( $(date +%s) - since ))
 nt=$($BITCOIN_CLI getblockcount </dev/null 2>/dev/null) || { say "cannot check: the node did not answer getblockcount"; exit 2; }
 [[ "$nt" =~ ^[0-9]+$ ]] || { say "cannot check: getblockcount gave '$nt'"; exit 2; }
 t=$("$ZYNCAPP" core-info "$CORE" 2>/dev/null | sed -n 's/^CORE height=\([0-9]*\) .*/\1/p')
@@ -49,7 +54,7 @@ t=$("$ZYNCAPP" core-info "$CORE" 2>/dev/null | sed -n 's/^CORE height=\([0-9]*\)
 target=$(( nt - MARGIN < t ? nt - MARGIN : t ))
 
 if [ "$h" -lt "$target" ] && [ "$age" -gt "$STALL_SECS" ]; then
-    say "STALLED: published block $h, the follower should be at $target (node tip $nt - $MARGIN, core proof $t); latest.json last written ${age} s ago (> $STALL_SECS)"
+    say "STALLED: published block $h, the follower should be at $target (node tip $nt - $MARGIN, core proof $t); nothing published for ${age} s since the later of the last publish and the core proof's last move (> $STALL_SECS)"
     exit 1
 fi
 say "ok: published block $h, target $target (node tip $nt, core proof $t), latest.json ${age} s old"

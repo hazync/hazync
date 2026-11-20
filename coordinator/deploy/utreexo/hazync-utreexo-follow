@@ -262,7 +262,7 @@ if [ "${1:-}" = "--set-base" ]; then
   O=$D/orphaned/base-$(date +%s); mkdir -p "$O"
   for d in "$D"/state/[0-9]*-*; do [ -e "$d" ] && [ "$(basename "$d")" != "$n" ] && { mv "$d" "$O/" || die "mv $d"; }; done
   # the old base's forests move aside with its states (review F1: never deleted here; orphaned/ is pruned by age)
-  for f in "$D"/forest-*.bin "$D/forest.bin" "$D/work/forest.next" "$D/work/forest.next.pending"; do
+  for f in "$D"/forest-*.bin "$D/forest.bin" "$D/work/forest.next" "$D/work/forest.next.pending" "$D/work/forest.next.pending.tmp"; do
     if [ -f "$f" ]; then mv "$f" "$O/" || die "mv $f"; fi
   done
   rm -f "$D/published"
@@ -291,7 +291,7 @@ PY
 }
 # review F1 (a): a run killed between `point latest` and the forest's rename leaves the forest of the new latest in
 # work/forest.next. It is adopted here (its own header must name latest's height and block), never deleted
-if [ -f "$D/work/forest.next" ]; then
+if [ "${DRY_RUN:-0}" != 1 ] && [ -f "$D/work/forest.next" ]; then
   if [ "$(forest_head "$D/work/forest.next")" = "$P $PX" ] && [ ! -f "$D/forest-$P-$PX.bin" ]; then
     mv "$D/work/forest.next" "$D/forest-$P-$PX.bin" || die "mv forest.next"
     sync "$D/forest-$P-$PX.bin" "$D" || die "sync $D"
@@ -300,7 +300,8 @@ if [ -f "$D/work/forest.next" ]; then
 fi
 # review F7: forests moved to orphaned/ more than ORPHANED_FOREST_MIN minutes ago go (~11 GB each at the tip), on every
 # run; the rest of orphaned/ (receipts, states, block files) is small and stays
-find "$D/orphaned" -name 'forest*' -type f -cmin +"$ORPHANED_FOREST_MIN" -print -delete 2>/dev/null | sed 's/^/pruned orphaned forest /' >&2 || true
+# (neither this nor the adoption above runs under DRY_RUN=1, which changes nothing)
+[ "${DRY_RUN:-0}" = 1 ] || find "$D/orphaned" -name 'forest*' -type f -cmin +"$ORPHANED_FOREST_MIN" -print -delete 2>/dev/null | sed 's/^/pruned orphaned forest /' >&2 || true
 NT=$(cli getblockcount) || die "the node did not answer getblockcount"
 [[ "$NT" =~ ^[0-9]+$ ]] || die "getblockcount: '$NT'"
 [ "$NT" -ge "$P" ] || die "the node's tip $NT is below the proven height $P (still syncing?): not a reorg, nothing done"
@@ -373,48 +374,63 @@ fi
 HX=$(node_hash "$H")
 
 if [ "$H" -gt "$P" ]; then
-  # the bodies P+1..H (or 1..H when the source must replay from genesis: no forest cache at P), and the link
-  # H+1..T as headers only
-  # a forest is named by the height AND hash it is for, and only one whose block is the node's is used; the bodies from
-  # its height + 1 (from 1 with none) are checked and fetched (review of 7806f4b, 3; review F1)
-  # the newest kept forest at or below P whose block is the node's: the source replays forward from it (review F1 b)
-  FC=; FH=0
-  for f in $(cd "$D" && ls forest-*.bin 2>/dev/null | sort -t- -k2,2nr); do
-    fh=${f#forest-}; fh=${fh%%-*}; fx=${f#forest-*-}; fx=${fx%.bin}
-    [[ "$fh" =~ ^[0-9]+$ ]] && [ "$fh" -le "$P" ] || continue
-    if [ "$fh" = "$P" ] && [ "$fx" = "$PX" ]; then FC=$D/$f; FH=$fh; break; fi
-    if [ "$fh" -lt "$P" ] && [ "$(node_hash "$fh")" = "$fx" ]; then FC=$D/$f; FH=$fh; break; fi
-  done
-  if [ -z "$FC" ]; then
-    # no kept forest: a replay from genesis, refused above GENESIS_REPLAY_MAX blocks unless allowed
-    if [ "$P" -gt "$GENESIS_REPLAY_MAX" ] && [ "$ALLOW_GENESIS_REPLAY" != 1 ]; then
-      die "no kept forest at or below $P: a replay from genesis of $P blocks (above GENESIS_REPLAY_MAX $GENESIS_REPLAY_MAX) needs ALLOW_GENESIS_REPLAY=1"
-    fi
-    log "no kept forest at or below $P: the source replays from genesis"
-    FC=$D/forest-$P-$PX.bin
-  elif [ "$FH" -lt "$P" ]; then
-    log "the newest kept forest at or below $P is at $FH: the source replays $((FH + 1))..$P first"
-  fi
-  lo=$((FH + 1))
-  check_blocks "$lo" "$H" step || die "checking the cached block files"
-  missing=; for h in $(seq "$lo" "$H"); do [ -s "$BLOCKS/block_$h.json" ] || { missing=$h; break; }; done   # no `| head` (SIGPIPE under pipefail)
-  if [ -n "$missing" ]; then $FETCH "$missing" "$H" "$BLOCKS" > "$D/work/fetch.log" 2>&1 || { tail -3 "$D/work/fetch.log"; die "fetch $missing..$H"; }; fi
+  # the link H+1..T as headers only (once: it does not depend on the forest the step starts from)
   HDRS=$D/work/link_$((H + 1))_$T.txt; : > "$HDRS"
   for h in $(seq $((H + 1)) "$T"); do
     hx=$(node_hash "$h"); hh=$(cli getblockheader "$hx" false) || die "getblockheader $hx"
     printf '%s %s\n' "$h" "$hh" >> "$HDRS"
   done
   OUT=$D/work/step_$H.rcpt
-  # the host reads the cache for (P, PX) and writes the one for H to work/forest.next, renamed to forest-<H>-<hash>.bin
-  # only once latest points at H: a failed or killed run leaves the cache for P in place (review of 0d9683a LOW 2)
-  rm -f "$D/work/forest.next" "$D/work/forest.next.pending"
-  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$FC" --cache-out "$D/work/forest.next" --headers "$HDRS"
-        --source "$WITNESS_SOURCE" "${NETFLAG[@]}")
-  [ -n "$ELF" ] && args+=(--elf "$ELF")
-  [ -n "$BASE_ID" ] && args+=(--base-id "$BASE_ID")
-  log "step $P -> $H (node tip $NT, core tip $T)"
+  # The forest the step starts from: the newest kept one at or below P whose block is the node's; the source replays
+  # forward from it and only the bodies above it are fetched (review F1). It goes with --cache-required: a forest the
+  # host cannot use (corrupt, another source's format, not at or below P) is exit 4, never a silent replay from genesis
+  # (whose bodies a pruned follower does not have), so it is moved to orphaned/ and the next older one is tried (review
+  # round 2 #2). With none left, a replay from genesis, refused above GENESIS_REPLAY_MAX unless ALLOW_GENESIS_REPLAY=1.
+  # The host writes the forest for H to work/forest.next, renamed to forest-<H>-<hash>.bin only once latest points at H
+  # (review of 0d9683a LOW 2; a kill in between is adopted at the next start)
   S=$(date +%s)
-  "$ZYNCAPP" "${args[@]}" > "$D/work/prove.log" 2>&1 || { tail -5 "$D/work/prove.log" >&2; die "prove failed"; }
+  while :; do
+    FC=; FH=0; req=()
+    for f in $(cd "$D" && ls forest-*.bin 2>/dev/null | sort -t- -k2,2nr); do
+      fh=${f#forest-}; fh=${fh%%-*}; fx=${f#forest-*-}; fx=${fx%.bin}
+      [[ "$fh" =~ ^[0-9]+$ ]] && [ "$fh" -le "$P" ] || continue
+      if [ "$fh" = "$P" ] && [ "$fx" = "$PX" ]; then FC=$D/$f; FH=$fh; break; fi
+      if [ "$fh" -lt "$P" ]; then
+        # an RPC failure must stop the run, not read as "another branch" (review round 2 #4)
+        nx=$(node_hash "$fh") || die "the node did not answer getblockhash $fh"
+        if [ "$nx" = "$fx" ]; then FC=$D/$f; FH=$fh; break; fi
+      fi
+    done
+    if [ -z "$FC" ]; then
+      if [ "$P" -gt "$GENESIS_REPLAY_MAX" ] && [ "$ALLOW_GENESIS_REPLAY" != 1 ]; then
+        die "no kept forest at or below $P: a replay from genesis of $P blocks (above GENESIS_REPLAY_MAX $GENESIS_REPLAY_MAX) needs ALLOW_GENESIS_REPLAY=1"
+      fi
+      log "no kept forest at or below $P: the source replays from genesis"
+      FC=$D/work/no-forest.bin; rm -f "$FC"
+    else
+      req=(--cache-required)
+      [ "$FH" -lt "$P" ] && log "the newest kept forest at or below $P is at $FH: the source replays $((FH + 1))..$P first"
+    fi
+    lo=$((FH + 1))
+    check_blocks "$lo" "$H" step || die "checking the cached block files"
+    missing=; for h in $(seq "$lo" "$H"); do [ -s "$BLOCKS/block_$h.json" ] || { missing=$h; break; }; done   # no `| head` (SIGPIPE under pipefail)
+    if [ -n "$missing" ]; then $FETCH "$missing" "$H" "$BLOCKS" > "$D/work/fetch.log" 2>&1 || { tail -3 "$D/work/fetch.log"; die "fetch $missing..$H"; }; fi
+    rm -f "$D/work/forest.next" "$D/work/forest.next.pending" "$D/work/forest.next.pending.tmp"
+    args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$FC" "${req[@]}" --cache-out "$D/work/forest.next"
+          --headers "$HDRS" --source "$WITNESS_SOURCE" "${NETFLAG[@]}")
+    [ -n "$ELF" ] && args+=(--elf "$ELF")
+    [ -n "$BASE_ID" ] && args+=(--base-id "$BASE_ID")
+    log "step $P -> $H (node tip $NT, core tip $T)"
+    rc=0; "$ZYNCAPP" "${args[@]}" > "$D/work/prove.log" 2>&1 || rc=$?
+    if [ "$rc" = 4 ] && [ "${#req[@]}" -gt 0 ]; then
+      O=$D/orphaned/unusable-$(date +%s); mkdir -p "$O" || die "mkdir $O"
+      mv "$FC" "$O/" || die "mv $FC"
+      log "the forest $(basename "$FC") is unusable ($(grep -m1 UTREEXO_TIP_CACHE_REFUSED "$D/work/prove.log" | cut -c1-200)): moved to $O; trying the next older one"
+      continue
+    fi
+    [ "$rc" = 0 ] || { tail -5 "$D/work/prove.log" >&2; die "prove failed"; }
+    break
+  done
   SECS=$(( $(date +%s) - S ))
   V=$(checker "$OUT" "$H" "$HX") || die "the new step does not verify to the node's block $H $HX"
   log "proved and verified $((P + 1))..$H in $SECS s (${V%% *})"
@@ -429,10 +445,17 @@ if [ "$H" -gt "$P" ]; then
   if [ -f "$D/work/forest.next" ]; then
     mv "$D/work/forest.next" "$D/forest-$H-$HX.bin" || die "mv forest.next"
     sync "$D/forest-$H-$HX.bin" "$D" || die "sync $D"   # the rename is durable before anything older is removed (F1 a)
-    # the FOREST_KEEP newest caches by height (the new one first); a legacy forest.bin goes
+    # forests ABOVE H (left by a kill mid-fall-back or mid---set-base) belong to no kept state: they go to orphaned/
+    # and do not take a slot (review round 2 #5); then the FOREST_KEEP newest at or below H stay. A legacy forest.bin goes
     rm -f "$D/forest.bin"
     k=0
     for f in $(cd "$D" && ls forest-*.bin 2>/dev/null | sort -t- -k2,2nr); do
+      fh=${f#forest-}; fh=${fh%%-*}
+      if ! [[ "$fh" =~ ^[0-9]+$ ]] || [ "$fh" -gt "$H" ]; then
+        mkdir -p "$D/orphaned/above-$H" && mv "$D/$f" "$D/orphaned/above-$H/" || die "mv $f"
+        log "a forest above $H ($f) moved to orphaned/above-$H"
+        continue
+      fi
       k=$((k + 1)); [ "$k" -le "$FOREST_KEEP" ] || rm -f "${D:?}/$f"
     done
   fi

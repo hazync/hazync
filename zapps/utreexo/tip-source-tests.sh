@@ -59,6 +59,17 @@ for c in copy corrupt other below above; do
   grep -h -E 'UTREEXO_TIP_(CACHE|REPLAY)' "$W/r_$c.log"
 done
 
+# --cache-required (the follower's flag, review round 2 #2): the corrupt copy and the forest above P are EXIT 4, before
+# anything is replayed or executed (the same files without the flag replay from genesis, above)
+for c in corrupt above; do
+  "$Z" utreexo-tip-prove "$B" "$W/f_91880.journal" 100000 "$S100" "$W/q_$c" --execute --source forest --cache "$W/r_$c.bin" \
+    --cache-required --cache-out "$W/q_$c.out" > "$W/q_$c.log" 2>&1
+  t "--cache-required with the $c forest: exit 4, refused, nothing replayed" "4 1 0" "$? $(grep -c UTREEXO_TIP_CACHE_REFUSED "$W/q_$c.log") $(grep -c UTREEXO_TIP_REPLAY "$W/q_$c.log")"
+done
+"$Z" utreexo-tip-prove "$B" "$W/f_91880.journal" 100000 "$S100" "$W/q_ok" --execute --source forest --cache "$W/r_copy.bin" \
+  --cache-required --cache-out "$W/q_ok.out" > "$W/q_ok.log" 2>&1
+t "  control: --cache-required with the good forest of 91,880 runs" "0 1" "$? $(grep -c 'UTREEXO_TIP_CACHE hit at 91880' "$W/q_ok.log")"
+
 # a node that LIES about a prevout: the block files 1..9,000 as links, one block's first prevout value changed. The
 # source refuses it before anything is executed (exit 1, the leaf is not in the forest); control: the honest files
 L=$W/lying-blocks; rm -rf "$L"; mkdir -p "$L"

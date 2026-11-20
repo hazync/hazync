@@ -24,6 +24,8 @@
 //!       [--headers <file>]   (the link H+1..T as "<height> <header hex>" lines; default: from the block files)
 //!       [--cache-out <file>] (where the replay's state at H is saved; default: over --cache)
 //!       [--source forest|native] (the witness source, default forest: the production source, UTREEXO_ZAPP.md §10.5.1)
+//!       [--cache-required] (a --cache that is unusable, or not at or below the previous height, exits 4 instead of a
+//!       replay from genesis)
 //!       One STEP of the tip mode (UTREEXO_ZAPP.md §10): from the roots the previous receipt proves (a base receipt of
 //!       utreexo-prove, or an earlier step) to the roots after H, block by block as Floresta does (rustreexo
 //!       Stump::modify with batch proofs from a native MemForest), linked by headers H+1..T to the core tip. A
@@ -988,12 +990,18 @@ fn utreexo_tip_prove(a: &[String]) {
     // the native replay to the previous height (or the cache of one), then the step's blocks
     let t0 = std::time::Instant::now();
     let cache = flag(a, "--cache");
+    let cache_required = a.iter().any(|x| x == "--cache-required");
+    if cache_required && cache.is_none() { die("--cache-required needs --cache"); }
     let mut nat = match cache.map(|c| Source::load(forest, c)) {
         // the cache of exactly P, or of a height BELOW P from which the source replays forward over the block files: each
         // replayed block must follow the cache's block by hash (parse_block), and the result must be the previous
         // statement's block, leaf count and roots (checked below), so a cache of another branch cannot get through
         Some(Ok(n)) if n.height() == p_height && n.last() == p_hash => { println!("UTREEXO_TIP_CACHE hit at {p_height} ({}, {:.1} s)", n.name(), t0.elapsed().as_secs_f64()); n }
         Some(Ok(n)) if n.height() < p_height => { println!("UTREEXO_TIP_CACHE below at {} {} ({}): replaying {}..{p_height}", n.height(), utreexo_tip_host::disp(&n.last()), n.name(), n.height() + 1); n }
+        // --cache-required (the follower, review round 2 #2): a cache that cannot be used is EXIT 4, never a silent replay
+        // from genesis (whose bodies a pruned follower does not have); the follower moves it aside and tries an older one
+        Some(Ok(n)) if cache_required => { println!("UTREEXO_TIP_CACHE_REFUSED at {} {}: not at or below the previous step's {p_height} (or another block at it)", n.height(), utreexo_tip_host::disp(&n.last())); std::process::exit(4) }
+        Some(Err(e)) if cache_required => { println!("UTREEXO_TIP_CACHE_REFUSED unusable ({e})"); std::process::exit(4) }
         Some(Ok(n)) => { println!("UTREEXO_TIP_CACHE at {} {}, not at or below the previous step's {p_height}: replaying from genesis", n.height(), utreexo_tip_host::disp(&n.last())); Source::genesis(forest, signet) }
         Some(Err(e)) => { println!("UTREEXO_TIP_CACHE unusable ({e}): replaying from genesis"); Source::genesis(forest, signet) }
         None => Source::genesis(forest, signet),
