@@ -64,7 +64,6 @@ pub const ROOTS_REC: usize = 80;
 
 #[cfg(any(feature = "std", feature = "reader"))]
 impl Node {
-    /// The node's 64-byte arena record (the disk arena's format; Z2's reader decodes it with `decode`).
     pub fn enc(&self) -> [u8; RECORD] {
         let mut b = [0u8; RECORD];
         let w = |b: &mut [u8], x: &W| for (i, v) in x.iter().enumerate() { b[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes()); };
@@ -92,8 +91,7 @@ impl Node {
         }
         b
     }
-    #[cfg_attr(not(feature = "std"), allow(dead_code))]
-    fn dec(b: &[u8]) -> Node {
+    #[cfg_attr(not(feature = "std"), allow(dead_code))] fn dec(b: &[u8]) -> Node {
         let u64at = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
         let wat = |i: usize| -> W { core::array::from_fn(|k| u32::from_le_bytes(b[i + 4 * k..i + 4 * k + 4].try_into().unwrap())) };
         match b[0] {
@@ -1379,251 +1377,6 @@ impl TrieStore {
         (st.height, st.hash) = (height, hash);
         Ok(st)
     }
-}
-
-// ── Z2: a read-only reader at a logged root (docs/libzync/ZAPP_FOLLOWER.md §4, §10) ─────────────────────────────────
-//
-// zync-serve's tip mode reads the counting trie a prep run is still writing: `nodes.bin` opened READ-ONLY (no lock, no
-// GEN bump, no recovery, no write: positioned reads, so a reference past the file's end is an error, not a SIGBUS), at
-// the root prep logged for (height, block hash) in `roots.log`. It is sound while nothing reachable from that root is
-// overwritten: prep frees a slot only at a flush, and with `trie/PIN` at or below the height it keeps such slots back
-// (Z1). Every walk is bracketed: before it, the store's generation (`GEN`, bumped at every open and rewind) and what
-// was released (`INTACT`: the root of every height >= intact_from is intact); after it, the same two again. A walk
-// that saw either move, read a record past the file, a record that does not decode, or more than `cap` records (the
-// history-fact cap, §12 decision 4) is refused. A walk that read garbage can only produce a fact the client refuses
-// anyway (it checks every fact against the proof it holds).
-
-/// One `roots.log` entry's size (the same as ROOTS_REC, which is `std`-only).
-#[cfg(feature = "reader")]
-const ROOTS_REC_R: usize = 80;
-
-#[cfg(feature = "reader")]
-impl Node {
-    /// One 64-byte arena record, or None for a tag that is not a node (a torn or reused slot).
-    pub fn decode(b: &[u8]) -> Option<Node> {
-        if b.len() < RECORD || !matches!(b[0], 1..=4) { return None; }
-        let u64at = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
-        let wat = |i: usize| -> W { core::array::from_fn(|k| u32::from_le_bytes(b[i + 4 * k..i + 4 * k + 4].try_into().unwrap())) };
-        Some(match b[0] {
-            1 => Node::SubInner { l: u64at(8), r: u64at(16), h: wat(24) },
-            3 => Node::TopInner { l: u64at(8), r: u64at(16), h: wat(24) },
-            2 => {
-                let sp = (b[1] == 1).then(|| {
-                    let mut s = ZERO;
-                    for (i, v) in s[..5].iter_mut().enumerate() { *v = u32::from_le_bytes(b[36 + 4 * i..40 + 4 * i].try_into().unwrap()); }
-                    s
-                });
-                Node::Coin { o: wat(4), sp, value: u64at(56) }
-            }
-            _ => Node::Addr { s: wat(8), count: u64at(40), value: u64at(48), sub: u64at(56) },
-        })
-    }
-}
-
-/// Why a reader's walk was refused.
-#[cfg(feature = "reader")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WalkErr {
-    /// The store moved under the walk (a new generation, or the root's slots released): ask again, or repin.
-    Moved(alloc::string::String),
-    /// The walk read more than the cap's records (a history fact of a script with very many coins).
-    TooLarge(u64),
-    /// A record past the file, a record that does not decode, or a panic inside the walk.
-    Damaged(alloc::string::String),
-}
-
-/// The walk state a reader arena shares with its Reader: the file's length at the walk's start, records read, and
-/// the first thing that went wrong.
-#[cfg(feature = "reader")]
-#[derive(Default)]
-struct WalkState { len: core::sync::atomic::AtomicU64, reads: core::sync::atomic::AtomicU64, cap: u64, bad: std::sync::Mutex<Option<WalkErr>> }
-
-#[cfg(feature = "reader")]
-struct ReadArena { file: std::fs::File, w: std::sync::Arc<WalkState> }
-
-#[cfg(feature = "reader")]
-impl ReadArena {
-    fn fail(&self, e: WalkErr) -> ! {
-        let mut b = self.w.bad.lock().unwrap_or_else(|x| x.into_inner());
-        if b.is_none() { *b = Some(e.clone()); }
-        drop(b);
-        // unwinds out of the walk (zync-serve is built with panic = "unwind" and catches it in Reader::walk)
-        panic!("trie reader: {e:?}")
-    }
-    #[cfg(unix)]
-    fn read_at(&self, buf: &mut [u8], at: u64) -> std::io::Result<()> { std::os::unix::fs::FileExt::read_exact_at(&self.file, buf, at) }
-    #[cfg(windows)]
-    fn read_at(&self, buf: &mut [u8], at: u64) -> std::io::Result<()> {
-        let n = std::os::windows::fs::FileExt::seek_read(&self.file, buf, at)?;
-        if n == buf.len() { Ok(()) } else { Err(std::io::ErrorKind::UnexpectedEof.into()) }
-    }
-}
-
-#[cfg(feature = "reader")]
-impl Arena for ReadArena {
-    fn get(&self, r: R) -> Node {
-        use core::sync::atomic::Ordering::Relaxed;
-        let n = self.w.reads.fetch_add(1, Relaxed) + 1;
-        if n > self.w.cap { self.fail(WalkErr::TooLarge(self.w.cap)); }
-        let len = self.w.len.load(Relaxed);
-        if r == EMPTY || r.checked_mul(RECORD as u64).map_or(true, |e| e > len) {
-            self.fail(WalkErr::Damaged(alloc::format!("node {r} past the file ({len} bytes)")));
-        }
-        let mut b = [0u8; RECORD];
-        if let Err(e) = self.read_at(&mut b, (r - 1) * RECORD as u64) { self.fail(WalkErr::Damaged(alloc::format!("node {r}: {e}"))); }
-        Node::decode(&b).unwrap_or_else(|| self.fail(WalkErr::Damaged(alloc::format!("node {r}: record tag {}", b[0]))))
-    }
-    fn put(&mut self, _n: Node) -> R { panic!("trie reader: a reader cannot write") }
-    fn free(&mut self, _r: R) { panic!("trie reader: a reader cannot write") }
-    fn live(&self) -> u64 { 0 }
-}
-
-/// A read-only view of a disk trie at one logged root (Z2).
-#[cfg(feature = "reader")]
-pub struct Reader {
-    dir: std::path::PathBuf,
-    /// the store at the root (height, block hash); read it only through `walk`
-    store: TrieStore,
-    pub root_ref: u64,
-    pub root_hash: [u8; 32],
-    gen: core::sync::atomic::AtomicU32,
-    w: std::sync::Arc<WalkState>,
-}
-
-#[cfg(feature = "reader")]
-impl core::fmt::Debug for Reader {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Reader({} at {}, root {})", self.dir.display(), self.store.height, self.root_ref)
-    }
-}
-
-#[cfg(feature = "reader")]
-impl Reader {
-    /// Open the trie in `dir` read-only at the root `roots.log` holds for block `hash` at `height` (the newest entry: a
-    /// rewind logs a height again). Refused when there is none, when the root is no longer intact (`INTACT`), when the
-    /// store's root hash there is not the logged one, or, given `want_root` (the trie_root of the proof's state), not
-    /// that. `cap`: the records one walk may read.
-    pub fn open(dir: &std::path::Path, height: u64, hash: &[u8; 32], want_root: Option<&[u8; 32]>, cap: u64) -> Result<Reader, alloc::string::String> {
-        use alloc::format;
-        let meta = std::fs::read(dir.join("meta")).map_err(|e| format!("{}/meta: {e}", dir.display()))?;
-        if meta.len() < 73 || &meta[..8] != b"HZTRIED1" || meta[16] > 1 { return Err(format!("{}/meta: not a disk trie", dir.display())); }
-        let counts = meta[16] == 1;
-        let gen = read_gen(dir);
-        let (root_ref, root_hash) = find_root(dir, height, hash)?
-            .ok_or_else(|| format!("{}/roots.log has no root for block {} at {height}", dir.display(),
-                                    hash.iter().map(|x| format!("{x:02x}")).collect::<alloc::string::String>()))?;
-        let intact = read_intact(dir);
-        if height < intact { return Err(format!("the root of {height} is no longer intact (INTACT: intact_from {intact}): it was released")); }
-        if let Some(w) = want_root { if w != &root_hash { return Err(format!("roots.log's root hash at {height} is not the proof's trie_root")); } }
-        let file = std::fs::File::open(dir.join("nodes.bin")).map_err(|e| format!("{}/nodes.bin: {e}", dir.display()))?;
-        let w = std::sync::Arc::new(WalkState { cap, ..Default::default() });
-        let a = ReadArena { file, w: w.clone() };
-        let mut store = TrieStore::with_arena(counts, Box::new(a));
-        (store.root, store.height, store.hash) = (root_ref, height, *hash);
-        let r = Reader { dir: dir.to_path_buf(), store, root_ref, root_hash, gen: core::sync::atomic::AtomicU32::new(gen), w };
-        // the root itself: its hash read from the arena must be the logged one
-        let got = r.walk(|s| crate::coinlog::h_of(&s.root())).map_err(|e| format!("reading the root of {height}: {e:?}"))?;
-        if got != root_hash { return Err(format!("the arena's root at {height} does not hash to roots.log's root hash")); }
-        Ok(r)
-    }
-
-    pub fn height(&self) -> u64 { self.store.height }
-    pub fn hash(&self) -> [u8; 32] { self.store.hash }
-
-    /// Run `f` on the store at this root, bracketed as above. With a new generation since the last walk, the root is
-    /// looked up again first (an entry at or below the flushed height survives a restart; one above it is cut).
-    pub fn walk<T>(&self, f: impl FnOnce(&TrieStore) -> T) -> Result<T, WalkErr> {
-        use core::sync::atomic::Ordering::Relaxed;
-        let (g0, i0) = (read_gen(&self.dir), read_intact(&self.dir));
-        let h = self.store.height;
-        if h < i0 { return Err(WalkErr::Moved(alloc::format!("the root of {h} was released (intact_from {i0})"))); }
-        if g0 != self.gen.load(Relaxed) {
-            match find_root(&self.dir, h, &self.store.hash) {
-                Ok(Some((r, rh))) if r == self.root_ref && rh == self.root_hash => self.gen.store(g0, Relaxed),
-                _ => return Err(WalkErr::Moved(alloc::format!("the trie's generation moved to {g0} and the root of {h} is no longer logged"))),
-            }
-        }
-        let len = std::fs::metadata(self.dir.join("nodes.bin")).map(|m| m.len()).unwrap_or(0);
-        self.w.len.store(len, Relaxed);
-        self.w.reads.store(0, Relaxed);
-        *self.w.bad.lock().unwrap_or_else(|x| x.into_inner()) = None;
-        let out = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| f(&self.store)));
-        let bad = self.w.bad.lock().unwrap_or_else(|x| x.into_inner()).take();
-        let (g1, i1) = (read_gen(&self.dir), read_intact(&self.dir));
-        if g1 != g0 { return Err(WalkErr::Moved(alloc::format!("the trie's generation moved during the walk ({g0} -> {g1})"))); }
-        if h < i1 { return Err(WalkErr::Moved(alloc::format!("the root of {h} was released during the walk (intact_from {i1})"))); }
-        match (out, bad) {
-            (_, Some(e)) => Err(e),
-            (Err(_), None) => Err(WalkErr::Damaged("the walk panicked".into())),
-            (Ok(v), None) => Ok(v),
-        }
-    }
-}
-
-#[cfg(feature = "reader")]
-impl TrieStore {
-    /// A FIXTURE for tests of readers (zync-serve's tip mode): this store written as a disk trie in `dir` (`nodes.bin`,
-    /// `meta`, one `roots.log` entry for its height and hash, `GEN`), as prep's disk arena would hold it after a flush.
-    #[doc(hidden)]
-    pub fn write_disk_fixture(&self, dir: &std::path::Path, gen: u32) -> std::io::Result<()> {
-        fn copy(st: &TrieStore, r: R, out: &mut Vec<u8>) -> R {
-            if r == EMPTY { return EMPTY; }
-            let n = match st.get(r) {
-                Node::SubInner { l, r, h } => { let (l, r) = (copy(st, l, out), copy(st, r, out)); Node::SubInner { l, r, h } }
-                Node::TopInner { l, r, h } => { let (l, r) = (copy(st, l, out), copy(st, r, out)); Node::TopInner { l, r, h } }
-                Node::Addr { s, count, value, sub } => Node::Addr { s, count, value, sub: copy(st, sub, out) },
-                c => c,
-            };
-            out.extend_from_slice(&n.enc());
-            (out.len() / RECORD) as R
-        }
-        std::fs::create_dir_all(dir)?;
-        let mut nodes = Vec::new();
-        let root = copy(self, self.root, &mut nodes);
-        std::fs::write(dir.join("nodes.bin"), &nodes)?;
-        let mut m = b"HZTRIED1".to_vec();
-        m.extend_from_slice(&root.to_le_bytes());
-        m.push(self.counts as u8);
-        m.extend_from_slice(&self.height.to_le_bytes());
-        m.extend_from_slice(&self.hash);
-        m.extend_from_slice(&((nodes.len() / RECORD) as u64).to_le_bytes());
-        m.extend_from_slice(&0u64.to_le_bytes());
-        std::fs::write(dir.join("meta"), &m)?;
-        let mut e = (self.height as u32).to_le_bytes().to_vec();
-        e.extend_from_slice(&self.hash);
-        e.extend_from_slice(&root.to_le_bytes());
-        e.extend_from_slice(&crate::coinlog::h_of(&self.root()));
-        e.extend_from_slice(&gen.to_le_bytes());
-        use std::io::Write as _;
-        std::fs::OpenOptions::new().create(true).append(true).open(dir.join("roots.log"))?.write_all(&e)?;
-        std::fs::write(dir.join("GEN"), gen.to_le_bytes())
-    }
-}
-
-/// `GEN` (u32 LE), 0 when missing.
-#[cfg(feature = "reader")]
-fn read_gen(dir: &std::path::Path) -> u32 {
-    std::fs::read(dir.join("GEN")).ok().filter(|b| b.len() == 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
-}
-
-/// `INTACT`'s intact_from (the root of every height at or above it is intact); 0 when missing: a store opened by a Z1
-/// host has released nothing it logged until its first flush, which writes the file.
-#[cfg(feature = "reader")]
-fn read_intact(dir: &std::path::Path) -> u64 {
-    std::fs::read_to_string(dir.join("INTACT")).ok().and_then(|x| x.split_whitespace().nth(1)?.parse().ok()).unwrap_or(0)
-}
-
-/// The newest `roots.log` entry for (height, block hash): (root reference, root hash).
-#[cfg(feature = "reader")]
-fn find_root(dir: &std::path::Path, height: u64, hash: &[u8; 32]) -> Result<Option<(u64, [u8; 32])>, alloc::string::String> {
-    let b = match std::fs::read(dir.join("roots.log")) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(alloc::format!("{}/roots.log: {e}", dir.display())),
-    };
-    Ok(b.chunks_exact(ROOTS_REC_R).rev()
-        .find(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) as u64 == height && &e[4..36] == hash)
-        .map(|e| (u64::from_le_bytes(e[36..44].try_into().unwrap()), e[44..76].try_into().unwrap())))
 }
 
 fn words_be(b: &[u8; 32]) -> W { core::array::from_fn(|i| u32::from_be_bytes(b[4 * i..4 * i + 4].try_into().unwrap())) }
@@ -3029,4 +2782,251 @@ mod adv2 {
         s.fwd(&c, 3); s.check("on").unwrap();
         s.leak().unwrap();
     }
+}
+
+// ⚠ Kept at the END of the file (after the tests): the core verifier compiles this file into its .wasm, whose bytes
+// carry the line numbers of its panic locations; code inserted above them would move the pinned wasm.
+// ── Z2: a read-only reader at a logged root (docs/libzync/ZAPP_FOLLOWER.md §4, §10) ─────────────────────────────────
+//
+// zync-serve's tip mode reads the counting trie a prep run is still writing: `nodes.bin` opened READ-ONLY (no lock, no
+// GEN bump, no recovery, no write: positioned reads, so a reference past the file's end is an error, not a SIGBUS), at
+// the root prep logged for (height, block hash) in `roots.log`. It is sound while nothing reachable from that root is
+// overwritten: prep frees a slot only at a flush, and with `trie/PIN` at or below the height it keeps such slots back
+// (Z1). Every walk is bracketed: before it, the store's generation (`GEN`, bumped at every open and rewind) and what
+// was released (`INTACT`: the root of every height >= intact_from is intact); after it, the same two again. A walk
+// that saw either move, read a record past the file, a record that does not decode, or more than `cap` records (the
+// history-fact cap, §12 decision 4) is refused. A walk that read garbage can only produce a fact the client refuses
+// anyway (it checks every fact against the proof it holds).
+
+/// One `roots.log` entry's size (the same as ROOTS_REC, which is `std`-only).
+#[cfg(feature = "reader")]
+const ROOTS_REC_R: usize = 80;
+
+#[cfg(feature = "reader")]
+impl Node {
+    /// One 64-byte arena record, or None for a tag that is not a node (a torn or reused slot).
+    pub fn decode(b: &[u8]) -> Option<Node> {
+        if b.len() < RECORD || !matches!(b[0], 1..=4) { return None; }
+        let u64at = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
+        let wat = |i: usize| -> W { core::array::from_fn(|k| u32::from_le_bytes(b[i + 4 * k..i + 4 * k + 4].try_into().unwrap())) };
+        Some(match b[0] {
+            1 => Node::SubInner { l: u64at(8), r: u64at(16), h: wat(24) },
+            3 => Node::TopInner { l: u64at(8), r: u64at(16), h: wat(24) },
+            2 => {
+                let sp = (b[1] == 1).then(|| {
+                    let mut s = ZERO;
+                    for (i, v) in s[..5].iter_mut().enumerate() { *v = u32::from_le_bytes(b[36 + 4 * i..40 + 4 * i].try_into().unwrap()); }
+                    s
+                });
+                Node::Coin { o: wat(4), sp, value: u64at(56) }
+            }
+            _ => Node::Addr { s: wat(8), count: u64at(40), value: u64at(48), sub: u64at(56) },
+        })
+    }
+}
+
+/// Why a reader's walk was refused.
+#[cfg(feature = "reader")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WalkErr {
+    /// The store moved under the walk (a new generation, or the root's slots released): ask again, or repin.
+    Moved(alloc::string::String),
+    /// The walk read more than the cap's records (a history fact of a script with very many coins).
+    TooLarge(u64),
+    /// A record past the file, a record that does not decode, or a panic inside the walk.
+    Damaged(alloc::string::String),
+}
+
+/// The walk state a reader arena shares with its Reader: the file's length at the walk's start, records read, and
+/// the first thing that went wrong.
+#[cfg(feature = "reader")]
+#[derive(Default)]
+struct WalkState { len: core::sync::atomic::AtomicU64, reads: core::sync::atomic::AtomicU64, cap: u64, bad: std::sync::Mutex<Option<WalkErr>> }
+
+#[cfg(feature = "reader")]
+struct ReadArena { file: std::fs::File, w: std::sync::Arc<WalkState> }
+
+#[cfg(feature = "reader")]
+impl ReadArena {
+    fn fail(&self, e: WalkErr) -> ! {
+        let mut b = self.w.bad.lock().unwrap_or_else(|x| x.into_inner());
+        if b.is_none() { *b = Some(e.clone()); }
+        drop(b);
+        // unwinds out of the walk (zync-serve is built with panic = "unwind" and catches it in Reader::walk)
+        panic!("trie reader: {e:?}")
+    }
+    #[cfg(unix)]
+    fn read_at(&self, buf: &mut [u8], at: u64) -> std::io::Result<()> { std::os::unix::fs::FileExt::read_exact_at(&self.file, buf, at) }
+    #[cfg(windows)]
+    fn read_at(&self, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+        let n = std::os::windows::fs::FileExt::seek_read(&self.file, buf, at)?;
+        if n == buf.len() { Ok(()) } else { Err(std::io::ErrorKind::UnexpectedEof.into()) }
+    }
+}
+
+#[cfg(feature = "reader")]
+impl Arena for ReadArena {
+    fn get(&self, r: R) -> Node {
+        use core::sync::atomic::Ordering::Relaxed;
+        let n = self.w.reads.fetch_add(1, Relaxed) + 1;
+        if n > self.w.cap { self.fail(WalkErr::TooLarge(self.w.cap)); }
+        let len = self.w.len.load(Relaxed);
+        if r == EMPTY || r.checked_mul(RECORD as u64).map_or(true, |e| e > len) {
+            self.fail(WalkErr::Damaged(alloc::format!("node {r} past the file ({len} bytes)")));
+        }
+        let mut b = [0u8; RECORD];
+        if let Err(e) = self.read_at(&mut b, (r - 1) * RECORD as u64) { self.fail(WalkErr::Damaged(alloc::format!("node {r}: {e}"))); }
+        Node::decode(&b).unwrap_or_else(|| self.fail(WalkErr::Damaged(alloc::format!("node {r}: record tag {}", b[0]))))
+    }
+    fn put(&mut self, _n: Node) -> R { panic!("trie reader: a reader cannot write") }
+    fn free(&mut self, _r: R) { panic!("trie reader: a reader cannot write") }
+    fn live(&self) -> u64 { 0 }
+}
+
+/// A read-only view of a disk trie at one logged root (Z2).
+#[cfg(feature = "reader")]
+pub struct Reader {
+    dir: std::path::PathBuf,
+    /// the store at the root (height, block hash); read it only through `walk`
+    store: TrieStore,
+    pub root_ref: u64,
+    pub root_hash: [u8; 32],
+    gen: core::sync::atomic::AtomicU32,
+    w: std::sync::Arc<WalkState>,
+}
+
+#[cfg(feature = "reader")]
+impl core::fmt::Debug for Reader {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Reader({} at {}, root {})", self.dir.display(), self.store.height, self.root_ref)
+    }
+}
+
+#[cfg(feature = "reader")]
+impl Reader {
+    /// Open the trie in `dir` read-only at the root `roots.log` holds for block `hash` at `height` (the newest entry: a
+    /// rewind logs a height again). Refused when there is none, when the root is no longer intact (`INTACT`), when the
+    /// store's root hash there is not the logged one, or, given `want_root` (the trie_root of the proof's state), not
+    /// that. `cap`: the records one walk may read.
+    pub fn open(dir: &std::path::Path, height: u64, hash: &[u8; 32], want_root: Option<&[u8; 32]>, cap: u64) -> Result<Reader, alloc::string::String> {
+        use alloc::format;
+        let meta = std::fs::read(dir.join("meta")).map_err(|e| format!("{}/meta: {e}", dir.display()))?;
+        if meta.len() < 73 || &meta[..8] != b"HZTRIED1" || meta[16] > 1 { return Err(format!("{}/meta: not a disk trie", dir.display())); }
+        let counts = meta[16] == 1;
+        let gen = read_gen(dir);
+        let (root_ref, root_hash) = find_root(dir, height, hash)?
+            .ok_or_else(|| format!("{}/roots.log has no root for block {} at {height}", dir.display(),
+                                    hash.iter().map(|x| format!("{x:02x}")).collect::<alloc::string::String>()))?;
+        let intact = read_intact(dir);
+        if height < intact { return Err(format!("the root of {height} is no longer intact (INTACT: intact_from {intact}): it was released")); }
+        if let Some(w) = want_root { if w != &root_hash { return Err(format!("roots.log's root hash at {height} is not the proof's trie_root")); } }
+        let file = std::fs::File::open(dir.join("nodes.bin")).map_err(|e| format!("{}/nodes.bin: {e}", dir.display()))?;
+        let w = std::sync::Arc::new(WalkState { cap, ..Default::default() });
+        let a = ReadArena { file, w: w.clone() };
+        let mut store = TrieStore::with_arena(counts, Box::new(a));
+        (store.root, store.height, store.hash) = (root_ref, height, *hash);
+        let r = Reader { dir: dir.to_path_buf(), store, root_ref, root_hash, gen: core::sync::atomic::AtomicU32::new(gen), w };
+        // the root itself: its hash read from the arena must be the logged one
+        let got = r.walk(|s| crate::coinlog::h_of(&s.root())).map_err(|e| format!("reading the root of {height}: {e:?}"))?;
+        if got != root_hash { return Err(format!("the arena's root at {height} does not hash to roots.log's root hash")); }
+        Ok(r)
+    }
+
+    pub fn height(&self) -> u64 { self.store.height }
+    pub fn hash(&self) -> [u8; 32] { self.store.hash }
+
+    /// Run `f` on the store at this root, bracketed as above. With a new generation since the last walk, the root is
+    /// looked up again first (an entry at or below the flushed height survives a restart; one above it is cut).
+    pub fn walk<T>(&self, f: impl FnOnce(&TrieStore) -> T) -> Result<T, WalkErr> {
+        use core::sync::atomic::Ordering::Relaxed;
+        let (g0, i0) = (read_gen(&self.dir), read_intact(&self.dir));
+        let h = self.store.height;
+        if h < i0 { return Err(WalkErr::Moved(alloc::format!("the root of {h} was released (intact_from {i0})"))); }
+        if g0 != self.gen.load(Relaxed) {
+            match find_root(&self.dir, h, &self.store.hash) {
+                Ok(Some((r, rh))) if r == self.root_ref && rh == self.root_hash => self.gen.store(g0, Relaxed),
+                _ => return Err(WalkErr::Moved(alloc::format!("the trie's generation moved to {g0} and the root of {h} is no longer logged"))),
+            }
+        }
+        let len = std::fs::metadata(self.dir.join("nodes.bin")).map(|m| m.len()).unwrap_or(0);
+        self.w.len.store(len, Relaxed);
+        self.w.reads.store(0, Relaxed);
+        *self.w.bad.lock().unwrap_or_else(|x| x.into_inner()) = None;
+        let out = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| f(&self.store)));
+        let bad = self.w.bad.lock().unwrap_or_else(|x| x.into_inner()).take();
+        let (g1, i1) = (read_gen(&self.dir), read_intact(&self.dir));
+        if g1 != g0 { return Err(WalkErr::Moved(alloc::format!("the trie's generation moved during the walk ({g0} -> {g1})"))); }
+        if h < i1 { return Err(WalkErr::Moved(alloc::format!("the root of {h} was released during the walk (intact_from {i1})"))); }
+        match (out, bad) {
+            (_, Some(e)) => Err(e),
+            (Err(_), None) => Err(WalkErr::Damaged("the walk panicked".into())),
+            (Ok(v), None) => Ok(v),
+        }
+    }
+}
+
+#[cfg(feature = "reader")]
+impl TrieStore {
+    /// A FIXTURE for tests of readers (zync-serve's tip mode): this store written as a disk trie in `dir` (`nodes.bin`,
+    /// `meta`, one `roots.log` entry for its height and hash, `GEN`), as prep's disk arena would hold it after a flush.
+    #[doc(hidden)]
+    pub fn write_disk_fixture(&self, dir: &std::path::Path, gen: u32) -> std::io::Result<()> {
+        fn copy(st: &TrieStore, r: R, out: &mut Vec<u8>) -> R {
+            if r == EMPTY { return EMPTY; }
+            let n = match st.get(r) {
+                Node::SubInner { l, r, h } => { let (l, r) = (copy(st, l, out), copy(st, r, out)); Node::SubInner { l, r, h } }
+                Node::TopInner { l, r, h } => { let (l, r) = (copy(st, l, out), copy(st, r, out)); Node::TopInner { l, r, h } }
+                Node::Addr { s, count, value, sub } => Node::Addr { s, count, value, sub: copy(st, sub, out) },
+                c => c,
+            };
+            out.extend_from_slice(&n.enc());
+            (out.len() / RECORD) as R
+        }
+        std::fs::create_dir_all(dir)?;
+        let mut nodes = Vec::new();
+        let root = copy(self, self.root, &mut nodes);
+        std::fs::write(dir.join("nodes.bin"), &nodes)?;
+        let mut m = b"HZTRIED1".to_vec();
+        m.extend_from_slice(&root.to_le_bytes());
+        m.push(self.counts as u8);
+        m.extend_from_slice(&self.height.to_le_bytes());
+        m.extend_from_slice(&self.hash);
+        m.extend_from_slice(&((nodes.len() / RECORD) as u64).to_le_bytes());
+        m.extend_from_slice(&0u64.to_le_bytes());
+        std::fs::write(dir.join("meta"), &m)?;
+        let mut e = (self.height as u32).to_le_bytes().to_vec();
+        e.extend_from_slice(&self.hash);
+        e.extend_from_slice(&root.to_le_bytes());
+        e.extend_from_slice(&crate::coinlog::h_of(&self.root()));
+        e.extend_from_slice(&gen.to_le_bytes());
+        use std::io::Write as _;
+        std::fs::OpenOptions::new().create(true).append(true).open(dir.join("roots.log"))?.write_all(&e)?;
+        std::fs::write(dir.join("GEN"), gen.to_le_bytes())
+    }
+}
+
+/// `GEN` (u32 LE), 0 when missing.
+#[cfg(feature = "reader")]
+fn read_gen(dir: &std::path::Path) -> u32 {
+    std::fs::read(dir.join("GEN")).ok().filter(|b| b.len() == 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
+}
+
+/// `INTACT`'s intact_from (the root of every height at or above it is intact); 0 when missing: a store opened by a Z1
+/// host has released nothing it logged until its first flush, which writes the file.
+#[cfg(feature = "reader")]
+fn read_intact(dir: &std::path::Path) -> u64 {
+    std::fs::read_to_string(dir.join("INTACT")).ok().and_then(|x| x.split_whitespace().nth(1)?.parse().ok()).unwrap_or(0)
+}
+
+/// The newest `roots.log` entry for (height, block hash): (root reference, root hash).
+#[cfg(feature = "reader")]
+fn find_root(dir: &std::path::Path, height: u64, hash: &[u8; 32]) -> Result<Option<(u64, [u8; 32])>, alloc::string::String> {
+    let b = match std::fs::read(dir.join("roots.log")) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(alloc::format!("{}/roots.log: {e}", dir.display())),
+    };
+    Ok(b.chunks_exact(ROOTS_REC_R).rev()
+        .find(|e| u32::from_le_bytes(e[..4].try_into().unwrap()) as u64 == height && &e[4..36] == hash)
+        .map(|e| (u64::from_le_bytes(e[36..44].try_into().unwrap()), e[44..76].try_into().unwrap())))
 }
