@@ -1,6 +1,6 @@
 #!/bin/bash
 # hazync-headers-follow against a fake bitcoin-cli serving REAL mainnet headers, with the real prover and verifier.
-#   test_follow.sh <zyncapp> <swiftsync-verify> <zyncapp-headers.bin> <base 0..975278 receipt> <headers file(s), colon-separated>
+#   test_follow.sh <zyncapp> <zapp-headers> <zyncapp-headers.bin> <base 0..975278 receipt> <headers file(s), colon-separated>
 # Two real CPU proofs (~1 min each). Checks: base install (wrong hash refused), publish, unchanged tip, a moved tip
 # replaces the run, a reorg below the base and a wrong ELF are refused with the published folder untouched.
 set -uo pipefail
@@ -21,7 +21,7 @@ t "the base installs" 0 $?
 FAKE_TIP=975300 "$F" > "$W/1.log" 2>&1; t "first run publishes" 0 $?
 t "published runs" '["base_0_975278.rcpt", "run_975279_975300.rcpt"]' "$(python3 -c "import json;print(json.dumps(json.load(open('$W/www/runs.json'))['runs']))")"
 X300=$("$HERE/fake-bitcoin-cli" getblockhash 975300)
-"$V" headers --expect 975300:$X300 "$W/www/base_0_975278.rcpt" "$W/www/run_975279_975300.rcpt" | grep -q '^SWIFTSYNC_VERIFY_OK'
+"$V" --expect 975300:$X300 "$W/www/base_0_975278.rcpt" "$W/www/run_975279_975300.rcpt" | grep -q '^SWIFTSYNC_VERIFY_OK'
 t "the published pair verifies to the tip 975300" 0 $?
 
 FAKE_TIP=975300 "$F" > "$W/2.log" 2>&1; t "same tip: exit 0" 0 $?

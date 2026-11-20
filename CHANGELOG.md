@@ -13,6 +13,16 @@ Hazync v2's release notes are in [`docs/`](docs/README.md).
 Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
 v0.23.0 onwards are **Hazync v2** (the libzync engine).
 
+## v0.26.1 — 2026-11-17 — host, app and coordinator release; image unchanged (`46666b6f`)
+The Windows app proves on more machines: a **CPU prover** ships in the installer (`hazync-host-x86_64-windows-cpu.zip`,
+14 release assets; mainnet block 1 in 1,433 s on a 4-vCPU Windows runner), and **Pascal cards** (GTX 1050 Ti: block 1 in
+197.7 s, verified) prove behind an opt-in, after the GPU code's system-scope atomics became device scope (#739, #727). The
+installer ships the Visual C++ runtime beside the GPU prover; one worker per card, pinned by UUID; scheduled proving
+(#725, #737); a stopped worker hands its block back (#753). Coordinator: release by claim (#753), the genesis spine
+bootstraps on a fresh board (#752), the per-IP key cap applies (#738), the sponsor bot rides out a read-only hiccup
+(#746). The WASM verifier refuses a frame length that would wrap (#735; wasm `996f1ed6`), built reproducibly in a
+published, digest-pinned image (#751, #755). Notes: [`docs/RELEASE_NOTES_v0.26.1.md`](docs/RELEASE_NOTES_v0.26.1.md).
+
 ## v0.26.0 — 2026-11-14 — re-baseline `8888d59c` → `46666b6f` (the board proves again from genesis)
 A new image whose block leaves commit each block's **undo data** (#729): per input of every non-coinbase transaction,
 SHA-256 of the spent coin's (height, coinbase flag, amount, script), and per block SHA-256 of those, in a new `0x05`
@@ -25,7 +35,8 @@ version's spine with a vendored copy of its recursion circuit (its fast form can
 3.1.0 Poseidon2 bug, risc0#3427; with software hashing a cross-version handover was proved on a GPU in 280 s). Only
 upgrades that are not soundness fixes may be handed over ([`docs/HANDOVER.md`](docs/HANDOVER.md)). The verifier keeps
 `8888d59c` and checks a receipt by it as that image. The sponsor bot skips a release still being signed instead of
-latching off (#728). The verifier's minimum chain work is Bitcoin Core v32.1's.
+latching off (#728). The verifier's minimum chain work is Bitcoin Core v32.1's. The host derives the BIP30-tracked
+coin flag as the guest does (#736): the previous host left it unset from block 147,396, so prep restarts from genesis.
 Notes: [`docs/RELEASE_NOTES_v0.26.0.md`](docs/RELEASE_NOTES_v0.26.0.md).
 <https://github.com/hazync/hazync/releases/tag/v0.26.0>
 

@@ -62,8 +62,10 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
     check(len(p) == 2, f"asked for ONE worker on a two-card machine, it starts two (got {len(p)})")
     check(ix(p) == [0, 1], "one on each card, not two on the first")
     envs = [pin_env(c) for c in p]
-    check([e.get("CUDA_VISIBLE_DEVICES") for e in envs] == ["0", "1"],
-          "each worker is shown exactly its own card")
+    check([e.get("CUDA_VISIBLE_DEVICES") for e in envs] == ["GPU-aaaa", "GPU-bbbb"],
+          "each worker is shown exactly its own card, by UUID (the same card whatever order anything counts in)")
+    check(pin_env({"index": 3, "uuid": "", "name": "x"}).get("CUDA_VISIBLE_DEVICES") == "3",
+          "a card with no UUID is pinned by its index (PCI order)")
     check(len({lock_name(c) for c in p}) == 2,
           "⛔ and each card has its OWN lock — one shared lock is what left a card idle")
     check(all(e.get("CUDA_DEVICE_ORDER") == "PCI_BUS_ID" for e in envs),
@@ -90,7 +92,7 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
     p = plan(three, "run", 1, skip={"GPU-sml"})
     check(ix(p) == [0, 2], f"three cards, one switched off: workers on the other two ({ix(p)})")
     p = plan(three, "run", 1, skip={"GPU-big", "GPU-third"})
-    check(ix(p) == [1] and pin_env(p[0]).get("CUDA_VISIBLE_DEVICES") == "1",
+    check(ix(p) == [1] and pin_env(p[0]).get("CUDA_VISIBLE_DEVICES") == "GPU-sml",
           "⛔ ONE card left on: the worker is PINNED to it — unpinned, the prover would pick for "
           "itself and could take the card that was meant to be left alone")
     p = plan(three, "run", 3, skip={"GPU-sml"})
@@ -130,8 +132,13 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
     check(seg(small, "20", TABLE) == "18",
           "⛔ the 8 GB card is lowered to its own — the big card's size would run it out of memory")
     check(seg(small, "17", TABLE) == "17", "a size set LOWER on purpose is never raised")
-    check(seg(small, "", TABLE) is None and seg(None, "20", TABLE) == "20",
-          "blank stays blank, and an unpinned worker gets exactly what was set")
+    check(seg(None, "", TABLE) is None and seg(None, "20", TABLE) == "20",
+          "with no card known, blank stays blank (the host decides) and a set size is passed as it is")
+    check(seg(small, "", TABLE) == "18" and seg(big, "", TABLE) == "20",
+          "⛔ Automatic (blank) gives each card its own size — it was blank, so a 4 GB card got the host's 21")
+    tiny = dict(small, vram_mb=4096)
+    check(seg(tiny, "", TABLE) == "18", "a 4 GB card gets 18, measured: a GTX 1050 Ti proved block 4401 at 18 (19.11)")
+    check(seg(dict(small, vram_mb=2048), "", TABLE) == "17", "a smaller card still gets 17")
 
     print("── 8. two identical cards can be told apart on screen ──")
     lab = cards.labels(cards.parse(TWINS))
@@ -142,7 +149,7 @@ def checks(plan=cards.plan, pin_env=cards.pin_env, lock_name=cards.lock_name,
     print("── 9. the environment a pinned worker is started with ──")
     c = cards.parse(TWINS)[1]
     env = supervisor.worker_env("h", "w", None, None, base_env={}, force_shim=False, card=c)
-    check(env.get("CUDA_VISIBLE_DEVICES") == "1" and env["HAZYNC_GPU_LOCK"].endswith("hazync-gpu-1.lock"),
+    check(env.get("CUDA_VISIBLE_DEVICES") == "GPU-bbbb" and env["HAZYNC_GPU_LOCK"].endswith("hazync-gpu-1.lock"),
           "worker_env carries the card and its lock")
     env = supervisor.worker_env("h", "w", None, None, force_shim=False,
                                 base_env={"CUDA_VISIBLE_DEVICES": "3"})
@@ -176,8 +183,52 @@ def control():
     return 0
 
 
+def status_checks():
+    """Home's per-card lines: every card of the session, including one with nothing running."""
+    print("── Home: one line per card of the session, even a stopped one ──")
+    two = cards.parse(BIG_SMALL)
+    names = cards.labels(two)
+    plan = cards.plan(two, "run", 1)
+    order = cards.session_labels(plan + plan, names)
+    check(order == ["RTX 4090", "RTX 3060 Ti"], f"each card once, in plan order ({order})")
+    check(cards.session_labels([None], names) == [], "a one-card (unpinned) session lists no cards")
+    live = {"RTX 4090": ["Proving block 1,000  ·  Piece 3 of 9"]}
+    notes = {"RTX 3060 Ti": f"{cards.STOPPED} — exit 78: misconfigured"}
+    lines = cards.status_lines(order, live, notes)
+    check(lines == ["RTX 4090:  Proving block 1,000  ·  Piece 3 of 9",
+                    "RTX 3060 Ti:  stopped — exit 78: misconfigured"],
+          f"⛔ the stopped card keeps its line and says why ({lines})")
+    check(cards.stopped(order, notes, live) == ["RTX 3060 Ti"], "and counts as stopped")
+    idle = cards.status_lines(order, live, {"RTX 3060 Ti": "nothing free; asking again in a minute"})
+    check(idle[1].endswith("asking again in a minute") and
+          cards.stopped(order, {"RTX 3060 Ti": "nothing free"}, live) == [],
+          "between blocks is shown, and is NOT stopped")
+    both = cards.status_lines(["RTX 4090"], {"RTX 4090": ["Folding"]}, {"RTX 4090": f"{cards.STOPPED} — gpu"})
+    check(len(both) == 2 and cards.stopped(["RTX 4090"], {"RTX 4090": "stopped — gpu"}, {"RTX 4090": ["x"]}) == [],
+          "a prover stopped beside a folder still running: both lines, and the card is not 'stopped'")
+    check(cards.status_lines(["A"], {}, {}) == ["A:  waiting to start"], "a card with neither says it is waiting")
+    check(cards.OPT_IN_FLOOR == 6, "the opt-in never reaches below compute 6 (no sm code below sm_61, #727)")
+
+    print("── a CUDA prover with no card it can use is refused BEFORE Start (review M1) ──")
+    maxwell = cards.parse("0, GPU-m, NVIDIA GeForce GTX 970, 4096 MiB, 566.14, 5.2\n")
+    pascal = cards.parse("0, GPU-p, NVIDIA GeForce GTX 1050 Ti, 4096 MiB, 566.14, 6.1\n")
+    w = cards.cuda_unusable(maxwell, cards.OPT_IN_FLOOR)
+    check(bool(w) and "GTX 970" in w and "older than the prover supports" in w and "#" not in w,
+          f"⛔ one compute 5.x card, opt-in ticked: refused, in plain words, no issue numbers ({w})")
+    w = cards.cuda_unusable(pascal, cards.FLOOR)
+    check(bool(w) and "Try my GPU" in w, f"one Pascal card, not opted in: refused, and the opt-in is named ({w[:60]}…)")
+    check(cards.cuda_unusable(pascal, cards.OPT_IN_FLOOR) is None, "one Pascal card, opted in: allowed (#727)")
+    check(cards.cuda_unusable(cards.parse(ONE), cards.FLOOR) is None, "a supported card: allowed")
+    check(cards.cuda_unusable([], cards.FLOOR) is None, "nvidia-smi could not be asked: not refused (unknown is not 'no card')")
+    w = cards.cuda_unusable(cards.parse(ONE), cards.FLOOR, driver_present=False)
+    check(bool(w) and "driver" in w, "no NVIDIA driver: refused, whatever the list says")
+    pinned = cards.pin_env(dict(cards.parse(TWINS)[1], by_index=True))
+    check(pinned.get("CUDA_VISIBLE_DEVICES") == "1", "a card marked by_index is pinned by its number (the UUID fallback, L4)")
+
+
 def main():
     checks()
+    status_checks()
     print()
     if fails:
         print(f"FAIL {fails}")

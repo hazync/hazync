@@ -15,7 +15,7 @@ open: the status below, the round-by-round record in [`docs/libzync/LIBZYNC.md`]
 finding that matters most.
 
 This page covers **Hazync v2** (the libzync engine): published images mainnet `46666b6f`, signet `01a80f17` and the
-header-chain zyncAPP `2db34e12` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), release v0.26.0, RISC Zero 3.1.0.
+header-chain zyncAPP `de54b94f` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS); v0.26.0 shipped `2db34e12`), release v0.26.0, RISC Zero 3.1.0.
 Both start their chains at genesis; the verifier keeps v0.24.0-v0.25.0's `8888d59c` so its receipts still verify.
 What a proof rests on is set out in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md), and how to review it in
 [`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md).
@@ -54,6 +54,7 @@ defenwycke <defenwycke@icloud.com>
 From a release's assets, download the binary **keeping its asset filename** (`hazync-host-x86_64-linux-gnu`) plus `SHA256SUMS.txt` and `SHA256SUMS.txt.asc`, then:
 
 ```bash
+command -v gpg || sudo apt install -y gnupg   # a minimal Ubuntu (container, cloud image) has no gpg; as root, drop sudo
 curl -LO https://github.com/hazync/hazync/releases/latest/download/hazync-host-x86_64-linux-gnu
 curl -LO https://github.com/hazync/hazync/releases/latest/download/SHA256SUMS.txt
 curl -LO https://github.com/hazync/hazync/releases/latest/download/SHA256SUMS.txt.asc
@@ -78,6 +79,12 @@ Whichever you use, the fingerprint must be:
 
 **The key expires 2028-04-25.** After that, signatures on releases made before then still verify but
 `gpg` reports the key as expired — that is the key's lifetime ending, not evidence of tampering.
+
+**The Windows app's Update button pins this key.** It checks `SHA256SUMS.txt.asc` against the key above, compiled
+into the app (`tools/win-gui/appupdate.py`), and refuses any other signer, any signature made after 2028-04-25, and
+any release not newer than the installed one. So rotating or replacing the release key means every installed app
+fails closed: it will not update itself until the person installs a release carrying the new key by hand. Plan the
+rotation before 2028-04-25, and say so in the release notes of the last release signed by this key.
 
 **`gpg` will also warn that the key "is not certified with a trusted signature".** That is expected and
 is not a problem with the signature: it means *you* have not personally signed this key, which nobody

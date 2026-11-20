@@ -47,6 +47,7 @@ DIST="${DIST:-dist}"
 BINS=$(awk '$1=="release" {print $2}' scripts/release-assets.txt | xargs)
 SIGNED_EXTRA=$(awk '$1=="sign" {print $2}' scripts/release-assets.txt | xargs)
 WIN=hazync-host-x86_64-windows-cuda.zip
+WIN_CPU=hazync-host-x86_64-windows-cpu.zip
 # The published mainnet guest ELF, staged by prover/build-release.sh. The Windows host is checked
 # against it (scripts/windows-host.sh), and it is where a host build finds it again on a resumed run.
 LZ_ELF=dist/.libzync-guest/mainnet.bin
@@ -58,7 +59,7 @@ run()  { [ "$DRY" = 1 ] && { echo "  (dry-run, would run) $*"; return 0; }; "$@"
 
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] \
     || die "usage: $0 vMAJOR.MINOR.PATCH [--dry-run|--verify-only]   (release-sign.yml refuses anything else)"
-[ "$(echo $BINS | wc -w)" -ge 9 ] || die "scripts/release-assets.txt lists only $(echo $BINS | wc -w) release asset(s)"
+[ "$(echo $BINS | wc -w)" -ge 10 ] || die "scripts/release-assets.txt lists only $(echo $BINS | wc -w) release asset(s)"
 
 # The id this release ships: the PUBLISHED libzync mainnet image, from its record. reproduce/METHOD_ID
 # names the same id since #676; if they disagree the repo contradicts itself, and nothing is shipped.
@@ -177,7 +178,7 @@ for mode in cpu cuda; do
     fi
 done
 
-step "2b. the Windows CUDA host (built by windows-prove.yml on GitHub's Windows runners)"
+step "2b. the Windows hosts, CUDA and CPU (built by windows-prove.yml on GitHub's Windows runners)"
 # Not built here: it needs MSVC and the Windows CUDA toolkit. scripts/windows-host.sh takes the
 # `hazync-host-windows-x86_64-cuda` artifact of a windows-prove run OF THIS COMMIT whose build-cuda job
 # passed, checks host.exe embeds the published guest and id, and zips it with cudart64_12.dll.
@@ -187,12 +188,15 @@ if [ ! -f "$LZ_ELF" ] && [ -n "${HAZYNC_GUEST_ELF:-}" ]; then
 fi
 [ "$(sha256sum "$LZ_ELF" 2>/dev/null | cut -c1-64)" = "$CANON_SHA" ] || [ "$DRY" = 1 ] \
     || die "$LZ_ELF is not the published mainnet ELF (prover/build-release.sh stages it; or set HAZYNC_GUEST_ELF)"
-if [ "$(cut -d' ' -f2 "$DIST/.$WIN.run" 2>/dev/null)" = "$SRC_REV" ] \
-   && ./scripts/windows-host.sh check "$DIST/$WIN" "$LZ_ELF" >/dev/null 2>&1; then
-    ok "$WIN already fetched for this commit (windows-prove run $(cut -d' ' -f1 "$DIST/.$WIN.run"))"
-else
-    run ./scripts/windows-host.sh fetch "$SRC_REV" "$DIST/$WIN" "$LZ_ELF" || die "could not obtain the Windows host"
-fi
+# The CPU host (WIN_CPU) comes from the same RELEASE BUILD run's `prove` job, so that run must not skip it.
+for w in "$WIN" "$WIN_CPU"; do
+    if [ "$(cut -d' ' -f2 "$DIST/.$w.run" 2>/dev/null)" = "$SRC_REV" ] \
+       && ./scripts/windows-host.sh check "$DIST/$w" "$LZ_ELF" >/dev/null 2>&1; then
+        ok "$w already fetched for this commit (windows-prove run $(cut -d' ' -f1 "$DIST/.$w.run"))"
+    else
+        run ./scripts/windows-host.sh fetch "$SRC_REV" "$DIST/$w" "$LZ_ELF" || die "could not obtain $w"
+    fi
+done
 
 step "3. package worker, wasm + glue and the x86_64 verifier"
 # #247: package-release.sh SKIPS the wasm (stderr warning, exit 0) when this box has no wasm32
@@ -205,8 +209,8 @@ if printf '%s' "$PKG_ERR" | grep -q "skipping hazync-verify.wasm"; then
     if [ -f "$DIST/hazync-verify.wasm" ]; then
         echo "  !    wasm NOT built here -- the staged $DIST/hazync-verify.wasm ($(sha256sum "$DIST/hazync-verify.wasm" | cut -c1-16)) is from elsewhere; step 4 checks its guest"
     else
-        echo "  !    wasm NOT built here and none is staged -- build it where wasm32 exists (./swiftsync-verify-wasm/build.sh)"
-        echo "       and copy it to $DIST/hazync-verify.wasm, or: rustup target add wasm32-unknown-unknown"
+        echo "  !    wasm NOT built here and none is staged -- build it on a machine with docker, cargo, python3 and git"
+        echo "       (./swiftsync-verify-wasm/build.sh, the pinned container) and copy it to $DIST/hazync-verify.wasm"
     fi
 else
     ok "worker + wasm packaged"

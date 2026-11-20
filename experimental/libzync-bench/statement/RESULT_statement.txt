@@ -1,0 +1,25 @@
+# statement zyncAPP, design-B prototype, execute mode on CPU (laptop, WSL2), 15.11.2026. User cycles (no paging / po2 padding).
+# risc0-zkvm 3.1.0 executor; scripts alternate P2WPKH / P2TR; fresh keys per run (signature cycles vary slightly with the keys).
+$ statement-bench selftest
+SELFTEST_OK 40 bip322-crate signatures verified by bip322_lite (P2WPKH, P2TR) and their changes refused; official P2WPKH + P2TR vectors OK
+$ statement-bench real 1
+PHASES read 264240 verify+decode 37618 facts 11975 message 53071 signatures 318236 commit 25765
+REAL n=1 total=0 sat, trie proof words 85: 716836 user cycles (716836 per script), 1 segments, executed in 0.1 s; image 74698c8641fc07c7fb9a0a87851bf9521d661a4c3c99fbfce6cc1470859f0dff
+$ statement-bench real 10
+PHASES read 478441 verify+decode 37618 facts 113589 message 53223 signatures 2985856 commit 25765
+REAL n=10 total=0 sat, trie proof words 916: 3700501 user cycles (370050 per script), 4 segments, executed in 0.3 s; image 74698c8641fc07c7fb9a0a87851bf9521d661a4c3c99fbfce6cc1470859f0dff
+$ statement-bench real 100
+PHASES read 2624973 verify+decode 37618 facts 1107530 message 53120 signatures 29877041 commit 25765
+REAL n=100 total=0 sat, trie proof words 9111: 33732103 user cycles (337321 per script), 35 segments, executed in 2.6 s; image 74698c8641fc07c7fb9a0a87851bf9521d661a4c3c99fbfce6cc1470859f0dff
+$ statement-bench synth 1 262144
+PHASES read 277459 verify+decode 29208 facts 23897 message 53242 signatures 314328 commit 25765
+SYNTH(fillers=262144) n=1 total=100001 sat, trie proof words 202: 729830 user cycles (729830 per script), 1 segments, executed in 0.1 s; image 74698c8641fc07c7fb9a0a87851bf9521d661a4c3c99fbfce6cc1470859f0dff
+$ statement-bench synth 10 262144
+PHASES read 596268 verify+decode 29208 facts 221200 message 53145 signatures 2994883 commit 25765
+SYNTH(fillers=262144) n=10 total=1000010 sat, trie proof words 1967: 3926478 user cycles (392648 per script), 5 segments, executed in 0.4 s; image 74698c8641fc07c7fb9a0a87851bf9521d661a4c3c99fbfce6cc1470859f0dff
+$ statement-bench synth 100 262144
+PHASES read 3832556 verify+decode 29208 facts 2254968 message 53345 signatures 29911816 commit 25765
+SYNTH(fillers=262144) n=100 total=10000100 sat, trie proof words 19896: 36113714 user cycles (361137 per script), 38 segments, executed in 2.1 s; image 74698c8641fc07c7fb9a0a87851bf9521d661a4c3c99fbfce6cc1470859f0dff
+$ statement-bench synth 100 1048576
+PHASES read 4040657 verify+decode 29208 facts 2433866 message 53345 signatures 29901017 commit 25765
+SYNTH(fillers=1048576) n=100 total=10000100 sat, trie proof words 21749: 36489914 user cycles (364899 per script), 38 segments, executed in 1.8 s; image 74698c8641fc07c7fb9a0a87851bf9521d661a4c3c99fbfce6cc1470859f0dff

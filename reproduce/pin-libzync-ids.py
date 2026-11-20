@@ -40,18 +40,30 @@ def main(argv):
         ids[m.group(1)] = m.group(2)
     if set(ids) != {"mainnet", "signet"} or len(lines) != 2:
         sys.exit(f"want exactly one mainnet and one signet line, got {lines}")
-    # the header-chain zyncAPP's line (ROADMAP N3) is kept verbatim, and swiftsync-verify's HEADERS_IMAGE_ID set from it
+    # the header-chain zyncAPP's line (ROADMAP N3) is kept verbatim, and zapp-headers' HEADERS_IMAGE_ID set from it
     HLINE = re.compile(r"^zyncapp-headers mainnet METHOD_ID ([0-9a-f]{64}) GUEST_ELF_SHA256 ([0-9a-f]{64})$")
     headers = [l.strip() for l in Path(argv[1]).read_text().splitlines() if l.strip().startswith("zyncapp-headers ")]
     if len(headers) != 1 or not HLINE.match(headers[0]):
         sys.exit(f"want exactly one zyncapp-headers mainnet line, got {headers}")
-    hp = ROOT / "swiftsync-verify/src/headers.rs"
+    hp = ROOT / "zapps/headers/src/lib.rs"   # the header-chain zAPP module (docs/libzync/ZYNCAPPS.md §9)
     hs = hp.read_text()
     hs2 = re.sub(r'pub const HEADERS_IMAGE_ID: &str = "[0-9a-f]{64}";',
                  f'pub const HEADERS_IMAGE_ID: &str = "{HLINE.match(headers[0]).group(1)}";', hs)
     if hs2.count("pub const HEADERS_IMAGE_ID") != 1:
         sys.exit(f"{hp}: HEADERS_IMAGE_ID not found")
     hp.write_text(hs2)
+    # the SwiftSync hints zyncAPP's line (#722) likewise: zapp-hints' HINTS_IMAGE_ID set from it
+    ZLINE = re.compile(r"^zyncapp-hints mainnet METHOD_ID ([0-9a-f]{64}) GUEST_ELF_SHA256 ([0-9a-f]{64})$")
+    hints = [l.strip() for l in Path(argv[1]).read_text().splitlines() if l.strip().startswith("zyncapp-hints ")]
+    if len(hints) != 1 or not ZLINE.match(hints[0]):
+        sys.exit(f"want exactly one zyncapp-hints mainnet line, got {hints}")
+    zp = ROOT / "zapps/hints/src/lib.rs"   # the hints zAPP module (docs/libzync/ZYNCAPPS.md §9)
+    zs = zp.read_text()
+    zs2, n = re.subn(r'pub const HINTS_IMAGE_ID: &str = "[0-9a-f]{64}";',
+                     f'pub const HINTS_IMAGE_ID: &str = "{ZLINE.match(hints[0]).group(1)}";', zs)
+    if n != 1:
+        sys.exit(f"{zp}: HINTS_IMAGE_ID not found")
+    zp.write_text(zs2)
     commit = argv[2]
     if not re.fullmatch(r"[0-9a-f]{7,40}", commit):
         sys.exit("source commit: a git sha")
@@ -59,7 +71,10 @@ def main(argv):
     (ROOT / "reproduce/LIBZYNC_IDS").write_text(
         f"# Published libzync image ids (frozen core c14, commit {commit} source): reproduce/libzync.Dockerfile output,\n"
         f"# verbatim below, reproduced by two builds. Product profile: coin log, counting trie, live-coin hash.\n"
-        + "\n".join(lines) + "\n" + "".join(l + "\n" for l in headers))
+        + "\n".join(lines) + "\n" + "".join(l + "\n" for l in headers + hints)
+        # the utreexo zyncAPP's images (the base walk and the tip step), verbatim
+        + "".join(l.strip() + "\n" for l in Path(argv[1]).read_text().splitlines()
+                  if re.match(r"^zyncapp-utreexo(-tip)? mainnet METHOD_ID [0-9a-f]{64} GUEST_ELF_SHA256 [0-9a-f]{64}$", l.strip())))
 
     p = ROOT / "swiftsync-verify/src/lib.rs"
     s = p.read_text()

@@ -219,8 +219,6 @@ pub struct ChainState {
 }
 
 /// The guest's own definitions of a handover, a block leaf and a lineage step.
-pub mod headers;
-
 pub mod pin {
     include!("../../prover/methods/guest/src/handover_pin.rs");
 }
@@ -424,6 +422,70 @@ pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
     }
 }
 
+/// The BabyBear prime, 15 * 2^27 + 1: every word of a Poseidon2 digest and of a Poseidon2 STARK seal is a field element below it.
+pub const BABYBEAR_P: u32 = 15 * (1 << 27) + 1;
+
+/// A receipt file decoded for verification, or why it is not one. One decoder for every entry point (CLI, WASM, C ABI,
+/// the zAPPs through [`verify`]), so all of them refuse the same inputs:
+/// - the kind gate first ([`receipt_kind`]): a succinct or Groth16 receipt only;
+/// - bincode as `bincode::deserialize` reads it (fixed-width integers, little-endian, no size limit), but with
+///   trailing bytes REFUSED: a receipt file is exactly `bincode::serialize(&receipt)`, which is what every producer
+///   writes (prover/host lz.rs, seg.rs) and what a .sspf bundle carries (its length field is exact). Fuzz round 11-17:
+///   a receipt with bytes appended verified;
+/// - [`receipt_well_formed`]: no word risc0 would assert on.
+pub fn decode_receipt(bytes: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
+    use bincode::Options as _;
+    receipt_kind(bytes)?;
+    let r: risc0_zkvm::Receipt = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize(bytes)
+        .map_err(|e| format!("not a receipt: {e}"))?;
+    receipt_well_formed(&r)?;
+    Ok(r)
+}
+
+/// A malformed receipt that risc0-zkvm 3.1.0 / risc0-zkp 3.0.6 would PANIC on instead of refusing (an abort here:
+/// panic = "abort"; the C ABI's host process dies, WASM traps). From their sources (fuzz round 11-17):
+/// - `SuccinctReceipt::verify_integrity_with_context` checks the control inclusion proof with
+///   `MerkleProof::verify` -> `root` -> `Poseidon2HashFn::hash_pair`, which `assert!`s every word of both digests is
+///   below P. The leaf is `control_id`, the siblings are `control_inclusion_proof.digests`: neither is checked first.
+/// - The seal (risc0-zkp `verify::verify`) is read through `ReadIOP`: field elements are checked (an error), digests are
+///   checked with `is_digest_valid` before any `hash_pair` (an error), so no panic; but `MerkleTreeVerifier::new`
+///   returning that error leaks the digests it already hashed (~32 bytes each). Every word a Poseidon2 seal holds is a
+///   field element or a Poseidon2 digest, so all are below P: refusing any other word here stops that path too.
+/// Only the Poseidon2 suite asserts: SHA-256 and Blake2b accept any digest word. A Groth16 receipt has no BabyBear
+/// words (its seal is BN254 points, parsed with errors by risc0-groth16). Composite and Fake receipts never get here
+/// ([`receipt_kind`]). A word refused here is one no valid receipt holds, so no valid receipt is refused.
+pub fn receipt_well_formed(r: &risc0_zkvm::Receipt) -> Result<(), String> {
+    let s = match &r.inner {
+        risc0_zkvm::InnerReceipt::Succinct(s) => s,
+        _ => return Ok(()),
+    };
+    if s.hashfn != "poseidon2" {
+        return Ok(());
+    }
+    let bad = |what: &str, w: &[u32]| match w.iter().position(|&x| x >= BABYBEAR_P) {
+        Some(i) => Err(format!("malformed receipt: {what} word {i} is 0x{:08x}, not a BabyBear field element", w[i])),
+        None => Ok(()),
+    };
+    bad("control_id", s.control_id.as_words())?;
+    for (j, d) in s.control_inclusion_proof.digests.iter().enumerate() {
+        bad(&format!("control inclusion proof digest {j}"), d.as_words())?;
+    }
+    bad("seal", &s.seal)
+}
+
+/// The journal decoded as `T` (risc0 serde, words). risc0's `from_slice` PANICS on a byte length that is not a whole
+/// number of words when the bytes are word-aligned ("failed to cast or read slice as [u32]"), and the journal is
+/// decoded whether or not the receipt verified, so the length is checked first.
+pub fn decode_journal<T: serde::de::DeserializeOwned>(j: &risc0_zkvm::Journal) -> Result<T, String> {
+    if j.bytes.len() % 4 != 0 {
+        return Err(format!("the journal is {} bytes, not whole words", j.bytes.len()));
+    }
+    j.decode().map_err(|e| e.to_string())
+}
+
 /// The earlier built-in image a receipt names, when the caller asked for its network's CURRENT built-in image (by id): after a
 /// handover or a re-baseline the table keeps the earlier image (v0.26.0 keeps 8888d59c, the board before the reset), and that
 /// image's proofs (the chain below the handover) must keep verifying with no `--image`. Only images in the built-in
@@ -442,14 +504,12 @@ pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Ima
 }
 
 pub fn verify(inp: &Inputs) -> Report {
-    if receipt_kind(inp.receipt).is_ok() {
-        if let Ok(r) = bincode::deserialize::<risc0_zkvm::Receipt>(inp.receipt) {
-            if let Some(e) = earlier_image_named_by(&r, inp.image) {
-                let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
-                rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
-                                                     verified as that image", e.method_id_hex, e.network)));
-                return rep;
-            }
+    if let Ok(r) = decode_receipt(inp.receipt) {
+        if let Some(e) = earlier_image_named_by(&r, inp.image) {
+            let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
+            rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
+                                                 verified as that image", e.method_id_hex, e.network)));
+            return rep;
         }
     }
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
@@ -460,7 +520,7 @@ pub fn verify(inp: &Inputs) -> Report {
     }
 
     // Steps 1 and 8: a real proof of this image.
-    let receipt: risc0_zkvm::Receipt = match bincode::deserialize(inp.receipt) {
+    let receipt: risc0_zkvm::Receipt = match decode_receipt(inp.receipt) {
         Ok(r) => r,
         Err(e) => {
             rep.check(false, format!("the receipt file decodes ({e})"));
@@ -469,13 +529,18 @@ pub fn verify(inp: &Inputs) -> Report {
     };
     rep.check(!matches!(receipt.inner, risc0_zkvm::InnerReceipt::Fake(_)),
               "receipt is a real proof (not a dev-mode FakeReceipt)");
-    rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment");
+    // Not past this point under it: risc0 built with disable-dev-mode PANICS in Receipt::verify when RISC0_DEV_MODE is
+    // 1 / true / yes ("Inconsistent settings"; risc0-zkvm 3.1.0 lib.rs:213), an abort here. dev_mode_env() is true for
+    // every value risc0 reads as set (review 11-18).
+    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") {
+        return rep;
+    }
     let v = receipt.verify(m);
     rep.check(v.is_ok(), format!("receipt verifies against image {} ({}){}", inp.image.method_id_hex,
               inp.image.network, v.err().map(|e| format!(": {e}")).unwrap_or_default()));
 
     // Step 2: the journal is this image's ChainState.
-    let cs: ChainState = match receipt.journal.decode() {
+    let cs: ChainState = match decode_journal(&receipt.journal) {
         Ok(c) => c,
         Err(e) => {
             rep.check(false, format!("journal is a ChainState ({e})"));
@@ -662,11 +727,19 @@ pub fn hex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// `--expect <height>:<hash>`: the height and the hash, lowercased. None unless the hash is exactly 64 hex digits.
+/// `--expect <height>:<hash>`: the height and the hash, lowercased. None unless the height is canonical decimal (digits
+/// only, no sign, no leading zero: `+200` and `0200` are refused, as `u32::parse` alone would read them as 200) and the
+/// hash is exactly 64 hex digits (either case: a hash a person copied).
 pub fn parse_expect(e: &str) -> Option<(u32, String)> {
     let (h, x) = e.split_once(':')?;
     let x = x.to_lowercase();
-    (x.len() == 64 && x.bytes().all(|b| b.is_ascii_hexdigit())).then_some((h.parse().ok()?, x))
+    (canonical_decimal(h) && x.len() == 64 && x.bytes().all(|b| b.is_ascii_hexdigit())).then_some((h.parse().ok()?, x))
+}
+
+/// A height as a person writes it: digits only, no sign, no leading zero ("0" itself is fine). What every `expect`
+/// height is checked with before it is parsed (`u32::parse` / `i64::parse` alone take `+200` and `0200`).
+pub fn canonical_decimal(h: &str) -> bool {
+    !h.is_empty() && h.bytes().all(|b| b.is_ascii_digit()) && (h == "0" || !h.starts_with('0'))
 }
 
 /// Chain identity (SWIFTSYNC_PROOFS.md step 7): `claimed` (display order, as `getblockhash` prints it) is the block at
@@ -679,8 +752,10 @@ pub fn identity_matches(claimed_height: u32, claimed: &str, height: u32, tip: &[
 }
 
 /// A coin fact (docs/libzync/ZYNCAPPS.md §8): what `zync-path coin` writes and `swiftsync-verify --coin` checks against
-/// a verified tip proof. Hashes are hex, internal byte order.
+/// a verified tip proof. Hashes are hex, internal byte order. Unknown fields are refused, as for every fact type
+/// ([`TrieFact`] says why and what it means for adding one).
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct CoinFact {
     /// The height whose coin state the fact is about: the proof's tip, or an earlier block opened through the forest.
     pub at: u32,
@@ -710,8 +785,9 @@ pub struct CoinFact {
     pub preimage: Option<CoinPreimage>,
 }
 
-/// The fields a coin leaf commits (UTREEXO_FORMAT.md §2; libzync::facts::coin_leaf).
+/// The fields a coin leaf commits (UTREEXO_FORMAT.md §2; libzync::facts::coin_leaf). Unknown fields are refused.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct CoinPreimage {
     /// as block explorers print it
     pub txid: String,
@@ -803,7 +879,15 @@ fn coin_fact_position(cs: &ChainState, undo_from: u32, f: &CoinFact) -> Result<S
 
 /// A counting-trie fact (E2): a question about the proof's TIP and the trie proof that answers it (libzync::trie_fact).
 /// `zync-path trie ...` writes one from a run's `state_<h>.trie`; `swiftsync-verify --trie` checks it.
+/// An unknown field is refused, not ignored, here and in every fact type it carries or sits beside ([`TxFact`],
+/// [`CoinFact`], [`CoinPreimage`], [`CoinJourney`]) and in the facts wrapper ([`check_facts_wrapper`]): a misspelled
+/// `expect` ("expected", "Expect") would otherwise turn a claim into a question that cannot fail, and a misspelled
+/// `origin` would read as no origin. Every producer (`zync-path`, zync-serve) serialises these structs, so it writes
+/// only these fields.
+/// ⛔ So a NEW field is a breaking change for old verifiers: they refuse a fact that carries it. Ship the verifiers
+/// (CLI, C ABI, the published WASM) that know the field before any producer writes it.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct TrieFact {
     /// "coin" (unspent / spent by / absent), "balance" (unspent count and value) or "history" (every coin ever paid)
     pub kind: String,
@@ -831,6 +915,18 @@ pub struct TrieFact {
     /// no coin with that outpoint (cold review 11-06).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<TxFact>,
+}
+
+/// The keys the facts JSON of the C ABI and the WASM may have (`{"coins": [...], "journeys": [...], "tries": [...]}`).
+/// Any other key, or a value that is not an object, is refused, not ignored: `{"trie": [...]}` would otherwise check
+/// ZERO facts and the verdict would stand on the proof alone. `expect` passes here so that the caller's own refusal of
+/// it (the trusted tip is never the fact server's word) is the message given.
+pub fn check_facts_wrapper(v: &serde_json::Value) -> Result<(), String> {
+    let o = v.as_object().ok_or("facts JSON: not an object ({\"coins\": [...], \"journeys\": [...], \"tries\": [...]})")?;
+    match o.keys().find(|k| !["coins", "journeys", "tries", "expect"].contains(&k.as_str())) {
+        Some(k) => Err(format!("facts JSON: unknown key {k:?} (the keys are coins, journeys and tries)")),
+        None => Ok(()),
+    }
 }
 
 /// The canonical answer token of a coin state (see [`TrieFact::expect`]).
@@ -970,8 +1066,9 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
 }
 
 /// A transaction in a proven block (ZYNCAPPS.md §8): the block's header and coin state, its path in the proof's block
-/// forest, and the transaction's Merkle branch.
+/// forest, and the transaction's Merkle branch. Unknown fields are refused.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct TxFact {
     pub height: u32,
     /// The 80-byte header, hex.
@@ -1019,8 +1116,9 @@ pub fn check_tx_fact(cs: &ChainState, undo_from: u32, f: &TxFact) -> Result<([u8
 
 /// One hop of a coin's journey: the transaction that created it, the coin's state in the log, and (if spent) the
 /// transaction that spent it. `tracked` and `creation_mtp` complete the coin leaf (UTREEXO_FORMAT.md §2); a wrong
-/// value gives a leaf the log does not hold, so they are checked, not trusted.
+/// value gives a leaf the log does not hold, so they are checked, not trusted. Unknown fields are refused.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct CoinJourney {
     pub origin: TxFact,
     pub vout: u32,
@@ -1162,6 +1260,38 @@ mod tests {
         let mut j = serde_json::to_value(&q).unwrap();
         j.as_object_mut().unwrap().remove("expect");
         assert!(serde_json::from_value::<TrieFact>(j).unwrap().expect.is_none());
+    }
+
+    #[test]
+    fn trie_fact_json_refuses_unknown_fields() {
+        let a = b"\x00\x14aaaaaaaaaaaaaaaaaaaa".to_vec();
+        let txid_disp = "11".repeat(31) + "22";
+        let mut txid = hex32(&txid_disp).unwrap();
+        txid.reverse();
+        let mut st = libzync::trie_store::TrieStore::new(true);
+        st.apply(&[], &[(libzync::trie_fact::coin_key(&a, &txid, 0), None, 500)]).unwrap();
+        st.height = 1;
+        // what the producers write reads back: every kind, with and without the optional fields
+        for f in [make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(0)).unwrap(),
+                  make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(9)).unwrap(),
+                  make_trie_fact(&st, "balance", &a, None, None).unwrap(),
+                  make_trie_fact(&st, "history", &a, None, None).unwrap()] {
+            let s = serde_json::to_string(&f).unwrap();
+            let back: TrieFact = serde_json::from_str(&s).unwrap_or_else(|e| panic!("{s}: {e}"));
+            assert_eq!(serde_json::to_string(&back).unwrap(), s);
+            let mut q = f.clone();
+            q.expect = None;
+            serde_json::from_str::<TrieFact>(&serde_json::to_string(&q).unwrap()).unwrap();
+        }
+        // an unknown field, at the top level, is refused: a misspelled claim must not read as no claim
+        let f = make_trie_fact(&st, "coin", &a, Some(&txid_disp), Some(9)).unwrap();
+        for (k, v) in [("expected", serde_json::json!("unspent:500")), ("Expect", serde_json::json!("absent")),
+                       ("origins", serde_json::json!({})), ("note", serde_json::json!("hi"))] {
+            let mut j = serde_json::to_value(&f).unwrap();
+            j.as_object_mut().unwrap().insert(k.into(), v);
+            let e = serde_json::from_value::<TrieFact>(j).unwrap_err().to_string();
+            assert!(e.contains("unknown field") && e.contains(k), "{k}: {e}");
+        }
     }
 
     #[test]
@@ -1369,6 +1499,9 @@ mod tests {
         assert!(check_trie_fact(&cs, pin::NO_UNDO, &tf).unwrap_err().contains("origin"), "no origin");
         tf.origin = Some(txf(1, &h1, &[id1], &cb1, 0, &cb1));
         assert!(check_trie_fact(&cs, pin::NO_UNDO, &tf).unwrap().contains("UNSPENT, 50 sat"), "with its origin");
+        // with its origin, the JSON a producer writes still reads under deny_unknown_fields
+        let rt: TrieFact = serde_json::from_str(&serde_json::to_string(&tf).unwrap()).unwrap();
+        assert!(check_trie_fact(&cs, pin::NO_UNDO, &rt).unwrap().contains("UNSPENT, 50 sat"), "round trip with origin");
         // the alias: same key, an outpoint that never existed; refused with or without the real coin's origin
         let mut alias = id1;
         alias[0] ^= 1;
@@ -1384,6 +1517,51 @@ mod tests {
         // ABSENT needs no origin
         let ab = make_trie_fact(&st, "coin", spk_a, Some(&disp(&id1)), Some(7)).unwrap();
         assert!(check_trie_fact(&cs, pin::NO_UNDO, &ab).unwrap().contains("ABSENT"));
+
+        // every fact type reads back what it writes and refuses an unknown field, at its top level and nested
+        fn strict<T: Serialize + serde::de::DeserializeOwned>(x: &T, what: &str) {
+            let v = serde_json::to_value(x).unwrap();
+            let back: T = serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(serde_json::to_value(&back).unwrap(), v, "{what}: round trip");
+            let mut w = v.clone();
+            w.as_object_mut().unwrap().insert("extra".into(), serde_json::json!(1));
+            let e = serde_json::from_value::<T>(w).map(|_| ()).unwrap_err().to_string();
+            assert!(e.contains("unknown field `extra`"), "{what}: {e}");
+        }
+        strict(&j, "CoinJourney");
+        strict(&j.origin, "TxFact");
+        strict(&j.fact, "CoinFact");
+        cf.preimage = Some(pre.clone());
+        strict(&cf, "CoinFact with a preimage");
+        strict(&pre, "CoinPreimage");
+        strict(&tf, "TrieFact with an origin");
+        let nested = |path: &[&str], v: &serde_json::Value| -> serde_json::Value {
+            let mut w = v.clone();
+            let mut o = &mut w;
+            for k in path { o = o.get_mut(*k).unwrap(); }
+            o.as_object_mut().unwrap().insert("extra".into(), serde_json::json!(1));
+            w
+        };
+        let jv = serde_json::to_value(&j).unwrap();
+        for p in [&["origin"][..], &["fact"][..], &["spend"][..]] {
+            assert!(serde_json::from_value::<CoinJourney>(nested(p, &jv)).is_err(), "CoinJourney.{p:?}");
+        }
+        assert!(serde_json::from_value::<CoinFact>(nested(&["preimage"], &serde_json::to_value(&cf).unwrap())).is_err(), "CoinFact.preimage");
+        assert!(serde_json::from_value::<TrieFact>(nested(&["origin"], &serde_json::to_value(&tf).unwrap())).is_err(), "TrieFact.origin");
+    }
+
+    #[test]
+    fn the_facts_wrapper_refuses_unknown_keys() {
+        use serde_json::json;
+        for ok in [json!({}), json!({"coins": [], "journeys": [], "tries": []}), json!({"tries": [], "expect": "1:00"})] {
+            assert!(check_facts_wrapper(&ok).is_ok(), "{ok}");
+        }
+        // `trie` for `tries` would check ZERO facts; a non-object has no keys to read at all
+        for (bad, why) in [(json!({"trie": []}), "unknown key \"trie\""), (json!({"tries": [], "coin": []}), "unknown key \"coin\""),
+                           (json!([]), "not an object"), (json!(null), "not an object"), (json!("tries"), "not an object")] {
+            let e = check_facts_wrapper(&bad).unwrap_err();
+            assert!(e.contains(why), "{bad}: {e}");
+        }
     }
 
     /// The built-in table is the published one (reproduce/LIBZYNC_IDS, written with the table by
@@ -1409,15 +1587,6 @@ mod tests {
             assert_eq!(IMAGES.iter().filter(|i| i.network == net && i.method_id_hex == id).count(), 1,
                        "{net}: the published id is listed more than once");
         }
-    }
-
-    /// The header-chain zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-headers` line).
-    #[test]
-    fn headers_image_matches_the_published_id() {
-        let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        let line = f.lines().find(|l| l.starts_with("zyncapp-headers mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-headers line");
-        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-        assert_eq!(id, crate::headers::HEADERS_IMAGE_ID, "headers::HEADERS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
     }
 
     #[test]
@@ -1448,9 +1617,13 @@ mod tests {
         for bad in ["", "<html>", &shown[..63], &format!("0x{shown}")] {
             assert!(!identity_matches(0, bad, 0, &tip), "{bad:?}");
         }
-        for bad in [format!("{shown}"), format!("x:{shown}"), format!("0: {shown}"), format!("0:{}", &shown[..63]), format!("0:{shown}0")] {
+        for bad in [format!("{shown}"), format!("x:{shown}"), format!("0: {shown}"), format!("0:{}", &shown[..63]), format!("0:{shown}0"),
+                    format!("+0:{shown}"), format!("00:{shown}"), format!("+200:{shown}"), format!("0200:{shown}"),
+                    format!(" 200:{shown}"), format!("4294967296:{shown}")] {
             assert!(parse_expect(&bad).is_none(), "{bad:?}");
         }
+        assert_eq!(parse_expect(&format!("200:{shown}")).map(|p| p.0), Some(200));
+        assert_eq!(parse_expect(&format!("4294967295:{shown}")).map(|p| p.0), Some(u32::MAX));
     }
 
     #[test]
@@ -1796,7 +1969,8 @@ impl Bundle {
         let a32 = |o: usize| -> [u8; 32] { b[o..o + 32].try_into().unwrap() };
         let u32le = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let len = u32le(BUNDLE_HEADER - 4) as usize;
-        if b.len() != BUNDLE_HEADER + len {
+        // checked: on wasm32 a length near u32::MAX would wrap (review 11-18)
+        if BUNDLE_HEADER.checked_add(len) != Some(b.len()) {
             return Err(format!("bundle is {} bytes, header says {}", b.len(), BUNDLE_HEADER + len));
         }
         Ok(Bundle {
@@ -1865,5 +2039,159 @@ mod bundle_tests {
         let mut v = e.clone();
         v[4] = 1; // a version-1 bundle (with a hints-file hash) is refused
         assert!(Bundle::decode(&v).is_err());
+    }
+}
+
+#[cfg(test)]
+mod receipt_hardening_tests {
+    //! Fuzz round 11-17 (hazync-coord, cargo-fuzz on the zAPPs): malformed receipts risc0 PANICS on, and a receipt
+    //! with bytes appended that verified. Each case is the real mainnet 1..200 proof with one change; each must be a
+    //! FAIL from `verify`, never a panic (a panic here is an abort in the CLI, the C ABI and WASM: panic = "abort").
+    use super::*;
+    use risc0_zkvm::{InnerReceipt, Receipt};
+
+    const RCPT: &[u8] = include_bytes!("../vectors/mainnet_1_200_8888d59c.rcpt");
+
+    fn image() -> &'static Image {
+        Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap()
+    }
+    fn run(receipt: &[u8]) -> Report {
+        verify(&Inputs { receipt, image: image(), anchor: None, now: 1_800_000_000 })
+    }
+    fn first_fail(r: &Report) -> String {
+        r.checks.iter().find(|(ok, _)| !ok).map(|(_, w)| w.clone()).unwrap_or_default()
+    }
+    /// The vector with `f` applied to its succinct receipt, re-encoded as every producer encodes it.
+    fn mutated(f: impl FnOnce(&mut risc0_zkvm::SuccinctReceipt<risc0_zkvm::ReceiptClaim>)) -> Vec<u8> {
+        let mut r: Receipt = bincode::deserialize(RCPT).unwrap();
+        match &mut r.inner { InnerReceipt::Succinct(s) => f(s), _ => panic!("the vector is succinct") }
+        bincode::serialize(&r).unwrap()
+    }
+
+    #[test]
+    fn the_untouched_vector_still_verifies() {
+        assert_eq!(bincode::serialize(&decode_receipt(RCPT).unwrap()).unwrap(), RCPT, "strict decoding re-encodes to the file");
+        assert_eq!(run(RCPT).verdict, Verdict::Demo, "{:?}", run(RCPT).checks);
+    }
+
+    /// F1: one control-inclusion-proof digest word 0xffffffff. risc0 panicked: `assertion failed: elem.is_reduced()`
+    /// (risc0-zkp poseidon2/mod.rs:57 from MerkleProof::verify).
+    #[test]
+    fn control_inclusion_proof_word_not_reduced_is_a_fail() {
+        for w in [BABYBEAR_P, 0xffff_ffff] {
+            let b = mutated(|s| {
+                let mut words: [u32; 8] = s.control_inclusion_proof.digests[0].as_words().try_into().unwrap();
+                words[3] = w;
+                s.control_inclusion_proof.digests[0] = words.into();
+            });
+            let r = run(&b);
+            assert_eq!(r.verdict, Verdict::Fail);
+            assert!(first_fail(&r).contains("malformed receipt: control inclusion proof digest 0 word 3"), "{}", first_fail(&r));
+        }
+        // the largest reduced word is not refused as malformed (it fails the proof instead)
+        let b = mutated(|s| {
+            let mut words: [u32; 8] = s.control_inclusion_proof.digests[0].as_words().try_into().unwrap();
+            words[3] = BABYBEAR_P - 1;
+            s.control_inclusion_proof.digests[0] = words.into();
+        });
+        let r = run(&b);
+        assert_eq!(r.verdict, Verdict::Fail);
+        assert!(!first_fail(&r).contains("malformed"), "{}", first_fail(&r));
+    }
+
+    #[test]
+    fn control_id_word_not_reduced_is_a_fail() {
+        let b = mutated(|s| {
+            let mut words: [u32; 8] = s.control_id.as_words().try_into().unwrap();
+            words[7] = 0xffff_ffff;
+            s.control_id = words.into();
+        });
+        let r = run(&b);
+        assert_eq!(r.verdict, Verdict::Fail);
+        assert!(first_fail(&r).contains("malformed receipt: control_id word 7"), "{}", first_fail(&r));
+    }
+
+    /// Any seal word >= P is refused before risc0 reads the seal (a valid Poseidon2 seal holds none). That includes F2's
+    /// trigger, an unreduced digest in a Merkle top row, which makes risc0-zkp's MerkleTreeVerifier::new return an
+    /// error after hashing part of the row and leak those hashes; the indices here are arbitrary words of the seal.
+    #[test]
+    fn seal_word_not_reduced_is_a_fail_before_risc0() {
+        for i in [0usize, 1000, 50_000] {
+            let b = mutated(|s| { let i = i.min(s.seal.len() - 1); s.seal[i] = 0xffff_ffff; });
+            let r = run(&b);
+            assert_eq!(r.verdict, Verdict::Fail);
+            assert!(first_fail(&r).contains("malformed receipt: seal word"), "{}", first_fail(&r));
+        }
+    }
+
+    /// F4: bytes after the receipt (probe rcpt_trailing0 verified DEMO). Refused, whatever they are.
+    #[test]
+    fn trailing_bytes_are_a_fail() {
+        for tail in [&[0u8][..], &[0, 0, 0, 0], b"junk"] {
+            let mut b = RCPT.to_vec();
+            b.extend_from_slice(tail);
+            let r = run(&b);
+            assert_eq!(r.verdict, Verdict::Fail, "{tail:?}");
+            assert!(first_fail(&r).contains("the receipt file decodes"), "{}", first_fail(&r));
+            assert!(decode_receipt(&b).is_err());
+        }
+        assert!(decode_receipt(&RCPT[..RCPT.len() - 1]).is_err(), "a truncated receipt");
+    }
+
+    /// A journal that is not whole words: risc0 serde's from_slice panicked on it ("failed to cast or read slice as
+    /// [u32]") when the bytes were word-aligned, and the journal is decoded even when the receipt does not verify.
+    #[test]
+    fn journal_not_whole_words_is_a_fail() {
+        for extra in 1..4 {
+            let mut r: Receipt = bincode::deserialize(RCPT).unwrap();
+            r.journal.bytes.extend(std::iter::repeat(0).take(extra));
+            let b = bincode::serialize(&r).unwrap();
+            let rep = run(&b);
+            assert_eq!(rep.verdict, Verdict::Fail);
+            assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains("not whole words")), "{:?}", rep.checks);
+        }
+    }
+
+
+    /// Review 11-18: a bundle's length field near u32::MAX is refused (it wrapped on wasm32), and an `expect` height is
+    /// canonical. (The header-chain reader's checked hex32 is tested in zapps/headers.)
+    #[test]
+    fn review_edges() {
+        let b = Bundle { network: 0, image: [0; 32], stop_height: 0, tip_hash: [0; 32], cum_work: [0; 32],
+                         trie_root: [0; 32], receipt: vec![] };
+        let mut e = b.encode();
+        let at = e.len() - 4;
+        e[at..].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Bundle::decode(&e).is_err());
+        for (h, ok) in [("0", true), ("200", true), ("+200", false), ("0200", false), ("", false), ("-1", false), ("2 0", false)] {
+            assert_eq!(canonical_decimal(h), ok, "{h:?}");
+        }
+    }
+
+    /// No legitimate producer appends anything: every receipt vector, and the receipt inside every bundle vector that
+    /// decodes, is read by the strict decoder and re-encodes to its own bytes.
+    #[test]
+    fn every_vector_decodes_strictly() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/vectors");
+        let mut n = 0;
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            let b = std::fs::read(&p).unwrap();
+            let inner = if b.starts_with(BUNDLE_MAGIC) { match Bundle::decode(&b) { Ok(x) => x.receipt, Err(_) => continue } } else { b };
+            if receipt_kind(&inner).is_err() { continue; }
+            let name = p.display().to_string();
+            // malformed on purpose: one bit flipped in the seal; an unreduced word; a byte appended
+            if ["_flipped.rcpt", "_ctrl_unreduced.rcpt", "_trailing_byte.rcpt"].iter().any(|s| name.ends_with(s)) { continue; }
+            let r = decode_receipt(&inner).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(bincode::serialize(&r).unwrap(), inner, "{name}");
+            n += 1;
+        }
+        assert!(n >= 4, "{n} receipt vectors");
+        // and the ones malformed on purpose are refused by the decoder, not by risc0
+        for (f, want) in [("mainnet_1_200_8888d59c_ctrl_unreduced.rcpt", "malformed receipt: control inclusion proof"),
+                          ("mainnet_1_200_8888d59c_trailing_byte.rcpt", "bytes remaining")] {
+            let e = decode_receipt(&std::fs::read(format!("{dir}/{f}")).unwrap()).unwrap_err();
+            assert!(e.contains(want), "{f}: {e}");
+        }
     }
 }

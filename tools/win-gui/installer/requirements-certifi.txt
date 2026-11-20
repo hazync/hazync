@@ -1,0 +1,3 @@
+# The CA bundle the frozen app ships (hazync-gui.spec), hash-pinned: pip install --require-hashes -r this file.
+# Wheel only (py3-none-any); the hash is PyPI's for certifi-2026.10.23-py3-none-any.whl, checked 2026-11-16.
+certifi==2026.10.23 --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1

@@ -54,6 +54,8 @@ Group=hazync-sponsor
 # the 200,001-400,000 band, ~983 s / $0.2020. So $50 is roughly 250-700 blocks, not 50.
 # ⚠ outcomes were `cancelled 8, proven 12` — a third of attempts were cancelled, and the all-in figure
 # already carries that waste.
+# ⛔ ONE SPONSOR_BOT_HOME PER RUNPOD KEY: the start sweep releases every unconfirmed hz-sponsor-* pod on the key, which
+# is safe only while one bot (one run lock) uses it.
 Environment=SPONSOR_BOT_HOME=/var/lib/hazync/sponsor-bot
 # Everything else defaults correctly on this box: the bot API key, the RunPod key and the pod ssh key all
 # live under SPONSOR_BOT_HOME, and both coordinator URLs default to http://127.0.0.1:8899.
@@ -68,6 +70,16 @@ ExecStart=/usr/bin/python3 /opt/hazync/coordinator/sponsor_bot.py run --live \
 # timer restarts it anyway. The ConditionPathExists latch above is what makes the sentence true.
 Restart=no
 
+# Exit 75 (EX_TEMPFAIL) = "a read-only check BEFORE anything was rented or started hit a transient error
+# (timeout, refused connection, 5xx): skipped, the next timer run retries". Counted as success, so it neither
+# latches nor pages. The bot itself turns a streak (6 runs over >= 25 min, sponsor_bot.TRANSIENT_LATCH_*) into
+# a real failure, so a coordinator or GitHub that stays down still latches and alerts. Anything after a pod
+# is rented never exits 75 (main() refuses 75 if the run rented anything). The streak is
+# /var/lib/hazync/sponsor-bot/transient.json; a clean run, a latch, or 15 min without a failure reset it,
+# so after clearing .failed there is nothing else to clear. 12 in a row latch regardless of the clock.
+# ⚠ A drop-in that sets SuccessExitStatus= resets this: check `systemctl show -p SuccessExitStatus`.
+SuccessExitStatus=75
+
 # Write the latch on any non-success exit. $SERVICE_RESULT is systemd's own verdict, so this catches
 # a signal or a timeout as well as a non-zero exit.
 # ⚠ `-` prefix: if the latch cannot be written, that must not itself fail the unit and page again.
@@ -75,8 +87,19 @@ ExecStopPost=-/bin/sh -c 'test "$SERVICE_RESULT" = success || : > /var/lib/hazyn
 
 # The bot terminates every pod it owns in its `finally`, and that must be allowed to finish: a killed
 # cleanup leaves rented GPUs running and billing with nothing tracking them.
+# ⛔ SIZED TO THE WORST CASE, not the usual one (300 s was shorter than it). terminate_all, at --max-pods 4:
+#   coordinator "which blocks landed" per pod   4 x ~90 s (30 s timeout, retried)       ~360 s
+#   one listing for this run's strays            60 s timeout + 2 x 60 s of 429 waits   ~180 s
+#   DELETE all + confirm, sponsor_bot.TERMINATE_BUDGET_S (wall clock)                    360 s
+#   the one call that may start just before that budget ends                            ~300 s
+#   after it: one DELETE per stray NEVER yet tried (a lost create seen on the last
+#   listing, normally none) and one listing, ~60 s each                                  ~120 s per stray
+#   = ~1,200 s with no late stray, ~1,320 s with one. 1,500 s leaves margin. What is still unconfirmed keeps its
+#   sponsor_pods row open, and the next run's start terminates it before renting anything (Bot._sweep_leftovers).
+# ⚠ This is also how long a host SHUTDOWN or reboot may wait on this unit while it releases pods. Intended: a
+#   reboot that kills the cleanup leaves GPUs billing.
 KillSignal=SIGINT
-TimeoutStopSec=300
+TimeoutStopSec=1500
 
 NoNewPrivileges=true
 PrivateTmp=true

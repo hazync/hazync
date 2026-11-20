@@ -108,13 +108,17 @@ ROUTES = {
     "GET /api/proof/<id>":
         "A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The "
         "id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with "
-        "`host verify-any`.",
+        "`host verify-any <file> <lo>`, which needs the state before `lo`: the leaf bundle from "
+        "`/api/witness/<lo>` saved as `leaf_<lo>.bin` in `$HAZYNC_BRIDGE_OUT` (the host defaults to `/root/bridge_bundles`); none is needed for `lo` = 1.",
     "GET /api/witnesses":
         "Bulk bundle sync (#69): a streamed tar of `MANIFEST.json` (`served`, `missing`) then the bundles "
         "for `?from=&count=`, `count` at most `BULK_MAX`. `400` on a malformed request.",
     "GET /api/witness/<height>":
-        "One witness: the bridge bundle `bundle_<n>.json` if present, else the legacy `block_<n>.json`. "
-        "Accepts a height or a range id (its `lo`). `404` if neither exists.",
+        "One block's prepared input, served raw from `bundle_path()`: on a v2 (`HAZYNC_LIBZYNC=1`) board the "
+        "binary leaf bundle `leaf_<n>.bin` (`LZLEAF` magic) from the bridge directory; on a v1 board the bridge "
+        "bundle `bundle_<n>.json`; else the legacy `block_<n>.json`. Accepts a height or a range id (its `lo`). "
+        "`404` if none exists: the public board prunes a leaf once its block is proved below the frontier, so it "
+        "serves block 1 and blocks near the frontier.",
     "GET /<path>":
         "Static files under `COORD_WEB`, contained to that directory; `/` serves `index.html`. Not rate "
         "limited.",
@@ -130,7 +134,7 @@ ROUTES = {
         "a cover of it cannot seam (#281). A claim signed by its key over `claim:<nonce>:<ts>` (within "
         "`BEAT_SKEW`) speaks for that key: the per-key cap and the re-take wait count signed and unsigned claims "
         "apart, and a signature that does not verify is refused, not treated as unsigned (#310). Unsigned claims "
-        "are accepted unless `CLAIM_REQUIRE_SIG=1`. A `nonce` makes a retried claim return the same block (#268). "
+        "are accepted unless `CLAIM_REQUIRE_SIG=1`. A `nonce` makes a retried claim return the same block (#268); a signed claim's nonce must be 16-64 hex, since it is also the claim's id that `/api/release` names. "
         "Advisory: `submit` never requires it.",
     "POST /api/spine":
         "Submit a new spine head, signed over the receipt. `host verify-range` must pass (full genesis "
@@ -147,6 +151,9 @@ ROUTES = {
         "Keep the caller's own claim alive. Signed over `<range>:<ts>` with `ts` as integer seconds within "
         "`BEAT_SKEW`. Only the assignee of a live claim may beat it, and not past `CLAIM_MAX`. Rejected "
         "beats are logged (`log_beat_rejection`).",
+    "POST /api/release":
+        "Hand a claimed block back before its claim lapses (#725). A release gives back ONE claim: the key's LIVE claim on `range`, and only if it is the claim named by `claim` (the `nonce` that claim was made with; 16-64 hex, which a signed claim's nonce must be). The row goes back to `open` and `claim()` offers it to anyone at once. Signed over `release:<range>:<claim>:<nonce>:<ts>`; `ts` integer seconds within `BEAT_SKEW`; `nonce` 16-64 hex, fresh per release. The same signed release sent again gets the first answer and changes nothing (nonces kept in memory for 2 x `BEAT_SKEW`); a nonce reused for another block is `409`. `409` with a `status`: `verified` (already proven), `lapsed`, `unreleasable` (an unsigned claim, which has no id to name), `reclaimed` (the key holds the block under a later claim than the one named: that claim stays); someone else's claim is `409` too, a block with no row `404`. Used by `hazync run` on SIGTERM/Ctrl-C and by `hazync release <n> <claim>`. Deploy the coordinator before the worker and the app.",
+
     "POST /api/rotate":
         "Off by default: `410` unless `ROTATE_ENABLED=1` (#311). Key rotation (#113): both `old_pubkey` and "
         "`new_pubkey` sign `hazync-rotate-v1:<old>:<new>:<ts>` "
@@ -183,6 +190,27 @@ ENV = {
     "server:ZYNC_SERVE_URL": "The local `zync-serve` behind `/api/zync/*` (e.g. `http://127.0.0.1:8601`). Unset: no relay.",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
+    # reorg handling (docs/libzync/REORG.md §5–§7)
+    "server:HAZYNC_LZ_STATE_DIR": "prep's state directory (its `out/`). The backstop compares every verified range "
+                                  "with the block hashes in its `state_<h>.json`; it also gives the default record "
+                                  "directory. Unset: no reorg handling.",
+    "server:HAZYNC_LZ_REORG_DIR": "Where prep writes reorg records. Default `$HAZYNC_LZ_STATE_DIR/reorg/records`.",
+    "server:HAZYNC_LZ_REORG_ACK_DIR": "Where the coordinator writes its ack of an applied record. Default: the record "
+                                      "directory. On hazync-proof prep runs as root, so point both sides at a "
+                                      "directory this service owns.",
+    "server:REORG_POLL_S": "Seconds between scans of the record directory.",
+    "server:REORG_FAILURE_GRACE": "Seconds after a rewind during which a failed verification of an orphaned block "
+                                  "answers `409 reorged` and is not counted against the block. Default `CLAIM_MAX`.",
+    "server:SPINE_HEADS_KEEP": "Blocks of spine heads kept below the head (`spine/heads/`) so a rewind can fall back "
+                               "to a kept head.",
+    "server:COORD_CRASH_FILE": "Test hook for the end-to-end harness: if this file exists, a rewind dies between its "
+                               "file moves and its commit, as a crash would. Never set in production.",
+    "server:REORG_AUTO_MAX_DEPTH": "A rewind deeper than this below the highest verified block is never applied from "
+                                   "a record, only by a person with `--reorg-to`.",
+    "server:REORG_BACKSTOP_S": "Seconds between backstop runs (verified ranges against prep's chain; writes "
+                               "`meta.reorg_backstop_at`).",
+    "server:REORG_REWIND_QUIET_S": "Seconds prep's `out/REWIND` keeps the backstop quiet; an older one no longer does.",
+    "server:REORG_META_TTL": "Seconds `/api/meta`'s `reorg` block is cached.",
     "server:LZ_HANDOVER_AT": "Handover height H: the first block the new image proves (docs/HANDOVER.md). With the old "
                              "image's host the board is in the `pre` era (nothing reaches H); with a host whose lineage "
                              "pins a handover at H it is `post` (claims start at H+1; block H arrives as the [1..H] spine). "
@@ -496,17 +524,42 @@ def _comments(path):
     return out
 
 
-def _returned_codes(fn):
-    codes = set()
+def _int_choices(node):
+    """The int literals an expression can be: a constant, or either arm of a conditional."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+        return {node.value}
+    if isinstance(node, ast.IfExp):
+        return _int_choices(node.body) | _int_choices(node.orelse)
+    return set()
+
+
+def _returned_codes(fn, funcs=None, _seen=None):
+    """Status codes a handler can return: `return 409, {...}` directly, `code, out = 404, {...}` followed by
+    `return code, out`, and — when `funcs` is given — the same inside the module-level helpers it returns
+    the result of (`return _release_row(...)` / `code, out = _helper(...)`), followed transitively."""
+    _seen = set() if _seen is None else _seen
+    if fn.name in _seen:
+        return set()
+    _seen.add(fn.name)
+    codes, returned_names = set(), set()
     for n in ast.walk(fn):
         if isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple) and n.value.elts:
             first = n.value.elts[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, int):
-                codes.add(first.value)
-            elif isinstance(first, ast.IfExp):
-                for b in (first.body, first.orelse):
-                    if isinstance(b, ast.Constant) and isinstance(b.value, int):
-                        codes.add(b.value)
+            codes |= _int_choices(first)
+            if isinstance(first, ast.Name):
+                returned_names.add(first.id)
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Tuple) \
+                and n.targets[0].elts and isinstance(n.targets[0].elts[0], ast.Name) \
+                and n.targets[0].elts[0].id in returned_names:
+            if isinstance(n.value, ast.Tuple) and n.value.elts:
+                codes |= _int_choices(n.value.elts[0])
+            elif funcs and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) \
+                    and n.value.func.id in funcs:
+                codes |= _returned_codes(funcs[n.value.func.id], funcs, _seen)
+        if funcs and isinstance(n, ast.Return) and isinstance(n.value, ast.Call) \
+                and isinstance(n.value.func, ast.Name) and n.value.func.id in funcs:
+            codes |= _returned_codes(funcs[n.value.func.id], funcs, _seen)
     return codes
 
 
@@ -537,7 +590,7 @@ def server_routes(path):
                     if n.func.id in funcs:
                         if not n.func.id.startswith("_") and n.func.id not in names:
                             names.append(n.func.id)
-                        codes |= _returned_codes(funcs[n.func.id])
+                        codes |= _returned_codes(funcs[n.func.id], funcs)
                     if n.func.id == "_int" and n.args and isinstance(n.args[0], ast.Constant):
                         if n.args[0].value not in params:
                             params.append(n.args[0].value)
@@ -600,7 +653,7 @@ def server_routes(path):
         problems.append(f"do_POST allow-list {sorted(allowed)} and dispatch table {sorted(dispatch)} disagree")
     for p in allowed:
         fn = funcs.get(dispatch.get(p, ""))
-        codes = _returned_codes(fn) if fn else set()
+        codes = _returned_codes(fn, funcs) if fn else set()
         routes.append({"method": "POST", "path": p, "prefix": None,
                        "handlers": [dispatch[p]] if p in dispatch else [], "codes": codes, "params": [],
                        "auth": _sig_checks(fn) if fn else [],
@@ -879,7 +932,7 @@ def build(root):
     w("")
     w("## Launcher (`coordinator/run-workers.sh`, shipped as `hazync-run-workers.sh`)")
     w("")
-    w(f"`run-workers.sh [N] [--stop]`: N defaults to `{n_default}`. It checks the host's guest id against "
+    w(f"`run-workers.sh [N] [--drain|--stop]`: N defaults to `{n_default}`. `--drain` stops the loops and waits for the blocks in flight to be submitted; `--stop` stops at once and abandons them. Starting, it checks the host's guest id against "
       "`/api/meta` and runs a GPU smoke prove before starting any loop, then restarts each loop's command "
       "until it exits `78` (`EX_CONFIG`). Exit `75` (`EX_TEMPFAIL`, nothing to claim right now) waits 30 s and is not "
       "a failure. With alerts set up (`hazync notify`), a loop pushes after `NOTIFY_FAIL_STREAK` failures in a row, on "

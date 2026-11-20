@@ -5,9 +5,12 @@ Wants=network-online.target
 OnFailure=hazync-alert@%n.service
 
 [Service]
+# REORG.md §9 (P5): --depth 6 uploads only what is 6 blocks below the node's tip (/var/lib/hazync/node_tip, the coordinator's
+# own); a proof or head of a branch a deeper reorg orphans is covered by a marker (reorgs/<E>.json), its successor goes
+# to r<E>/. A stale tip file uploads nothing and fails the unit.
 Type=oneshot
 # Root only for reading the root-only key file. The copy is verified with the libzync host (genesis-anchored) first.
-ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py spine --keys /etc/hazync/backup/r2.keys --bucket hazync-proofs --spine /var/lib/hazync-lz/spine --method-id 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c --verify /usr/local/sbin/hazync-lz-verify-spine
+ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/hazync-offsite-proofs.py spine --keys /etc/hazync/backup/r2.keys --bucket hazync-proofs --spine /var/lib/hazync-lz/spine --method-id 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c --depth 6 --tip-file /var/lib/hazync/node_tip --verify /usr/local/sbin/hazync-lz-verify-spine
 TimeoutStartSec=5min
 Nice=10
 NoNewPrivileges=true

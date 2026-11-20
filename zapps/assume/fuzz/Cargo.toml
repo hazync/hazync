@@ -1,0 +1,55 @@
+# cargo-fuzz targets for the assume zAPPs (docs/libzync/ZAPP_TESTING.md §3.4, §4.4). Own workspace (the empty
+# [workspace] below), so it is never a member of zapps/assume's and never touches its Cargo.lock; this crate's own
+# Cargo.lock started as a copy of the parent's, so it resolves the same versions (CI's cargo audit reads it too).
+# Run (nightly, cargo-fuzz): cargo fuzz run <target> fuzz/corpus/<target> -- -rss_limit_mb=1024
+# Replay the committed corpus on stable: cargo test --release --manifest-path fuzz/Cargo.toml
+[package]
+name = "zapp-assume-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zapp-assume = { path = ".." }
+zapp-corecheck = { path = "../../corecheck" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+bincode = "1"
+num-bigint = "0.4"
+
+[[bin]]
+name = "assume_snapshot_decode"
+path = "fuzz_targets/assume_snapshot_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "assume_snapshot_check"
+path = "fuzz_targets/assume_snapshot_check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "assume_side_inputs"
+path = "fuzz_targets/assume_side_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "assume_core_receipt"
+path = "fuzz_targets/assume_core_receipt.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

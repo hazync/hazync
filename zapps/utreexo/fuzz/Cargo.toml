@@ -1,0 +1,39 @@
+# cargo-fuzz targets for the Utreexo roots zAPP (docs/libzync/ZAPP_TESTING.md §3.4, §4.8). Own workspace (the empty
+# [workspace] below), so it is never a member of zapps/utreexo's and never touches its Cargo.lock; this crate's own
+# Cargo.lock started as a copy of the parent's, so it resolves the same versions (CI's cargo audit reads it too).
+# Run (nightly, cargo-fuzz): cargo fuzz run <target> fuzz/corpus/<target> -- -rss_limit_mb=1024
+# Replay the committed corpus on stable: cargo test --release --manifest-path fuzz/Cargo.toml
+[package]
+name = "zapp-utreexo-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zapp-utreexo = { path = ".." }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+bincode = "1"
+
+[[bin]]
+name = "utreexo_decode"
+path = "fuzz_targets/utreexo_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "utreexo_verify"
+path = "fuzz_targets/utreexo_verify.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

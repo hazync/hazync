@@ -202,6 +202,13 @@ else
         elif [ "$pins" = "$LZ" ]; then ok "$unit pins the published image (${LZ:0:8}…)"
         else bad "$unit pins $pins — NOT the published libzync image (${LZ:0:8}…): reinstall it from coordinator/deploy/libzync/"; fi
     done
+    # The reorg backstop's pager (REORG.md §17-§18): without it a reorg the board did not follow is silent
+    t=hazync-lz-check-reorg.timer
+    if ! systemctl list-unit-files "$t" --no-legend 2>/dev/null | grep -q .; then
+        bad "$t is not installed — a reorg the board did not follow would never page (coordinator/deploy/libzync/, RUNBOOK 'After a reorg')"
+    elif [ "$(systemctl is-enabled "$t" 2>/dev/null)" = enabled ] && [ "$(systemctl is-active "$t" 2>/dev/null)" = active ]; then
+        ok "$t is enabled and active"
+    else bad "$t is installed but not enabled and active"; fi
     # The zyncAPP follower preps the facts zync-serve publishes with its OWN host (ZAPP_HOST, else $ZAPP_ROOT/bin/host).
     # A host of another image writes history for another block forest (from v0.26.0 the leaves commit undo hashes), so
     # the page would refuse the facts against the board's proof.

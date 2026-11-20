@@ -16,6 +16,7 @@ names are refused there by name as well.
 
 import argparse
 import json
+import secrets
 import os
 import re
 import sys
@@ -44,6 +45,79 @@ import tip_session                      # noqa: E402
 
 PREFIX = "hz-smoke-"
 
+
+def run_prefix(rundir, now=None):
+    """⛔ THE ONE RULE FOR LOST CREATES: every pod a run creates is named <run prefix><n>, and the run's teardown (or
+    --cleanup) terminates EVERY pod on the account whose name starts with it, found by LISTING -- so a pod whose create
+    answer was lost is released however late it appears, with no lookup and no bookkeeping. The prefix is unique per
+    run (hz-smoke-<base36 seconds>-) and written to <rundir>/run_prefix.txt for --cleanup."""
+    t, n = int(now if now is not None else time.time()), ""
+    while t:
+        t, r = divmod(t, 36)
+        n = "0123456789abcdefghijklmnopqrstuvwxyz"[r] + n
+    pre = f"{PREFIX}{n}{secrets.token_hex(2)}-"     # + random: two runs in the same second never share it
+    with open(os.path.join(rundir, "run_prefix.txt"), "w") as fh:
+        fh.write(pre + "\n")
+    return pre
+
+
+def rerun_guard(api, a):
+    """refuse_rerun for this run's rundir -- unless it is --cleanup, or --adopt of THIS rundir's own record (the one
+    case where its pods are meant to be taken over). Returns True for that adopt-home case."""
+    adopt_home = bool(a.adopt) and os.path.abspath(os.path.dirname(a.adopt)) == os.path.abspath(a.rundir)
+    if not a.cleanup and not adopt_home:
+        os.makedirs(a.rundir, exist_ok=True)
+        refuse_rerun(api, a.rundir, os.path.join(a.rundir, "rented.json"))
+    return adopt_home
+
+
+def teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep, sleep=time.sleep, clock=time.monotonic):
+    """The release at the end of a run. --keep keeps the fleet; --adopt (without --release-adopted) keeps every pod of
+    the adopted record AS RECORDED (`adopt_keep`) -- dropped at a gate or never adopted, still not ours to delete.
+    Everything else this run created or recorded, and every pod with its prefix, is released."""
+    if a.adopt and not a.release_adopted and not adopt_keep:
+        # ⛔ The adopted record was empty or unreadable at the start: nothing says which pods are the fleet, so the
+        # prefix sweep would take ALL of them. Release nothing.
+        log(f"⛔ the adopted record {a.adopt} was empty or unreadable at the start: NOTHING released (not even the "
+            f"run prefix). Use --cleanup, or --release-adopted, once you know what is billing.")
+        return None
+    keep = [p["id"] for p in created] + sorted(adopt_keep) if (a.keep or (a.adopt and not a.release_adopted)) \
+        else sorted(adopt_keep)
+    if a.adopt and not a.release_adopted:
+        keep += sorted(adopted_ids(rented_path))    # the record is the truth: every pod in it is still ours to keep
+    return release_recorded(api, rented_path, created, unreleased, prefix=rpre, keep_ids=keep, sleep=sleep,
+                            clock=clock)
+
+
+def refuse_rerun(api, rundir, rented_path):
+    """⛔ A NEW RUN IN A RUNDIR WHOSE LAST RUN STILL HAS PODS IS REFUSED. run_prefix() and the rent overwrite
+    run_prefix.txt and rented.json, so starting over a leaked fleet would orphan it: nothing would know its prefix
+    or ids any more. Refused while any listed pod carries the last run's prefix or a still-listed rented.json id
+    (release it with --cleanup, or take it over with --adopt). An account that cannot be listed refuses too."""
+    old = read_run_prefix(rundir)
+    try:
+        ids = {str(p["id"]) for p in json.load(open(rented_path)) if p.get("id")}
+    except (OSError, ValueError, TypeError, AttributeError):
+        ids = set()
+    if not old and not ids:
+        return
+    try:
+        live = [x for x in api.pods() if (x.get("status") or "") != "TERMINATED"
+                and ((old and x["name"].startswith(old)) or str(x["id"]) in ids)]
+    except sponsor_bot.RunPodError as e:
+        raise SystemExit(f"refusing: cannot list RunPod to check {rundir}'s last run for live pods ({e})")
+    if live:
+        raise SystemExit(f"refusing: {rundir}'s last run still has {len(live)} pod(s) on RunPod "
+                         f"({', '.join(x['name'] for x in live[:5])}) -- run --cleanup --rundir {rundir}, or --adopt")
+
+
+def read_run_prefix(rundir):
+    try:
+        pre = open(os.path.join(rundir, "run_prefix.txt")).read().strip()
+    except OSError:
+        return None
+    return pre if pre.startswith(PREFIX) and len(pre) > len(PREFIX) + 1 else None
+
 # Heights at or above this come from the TIP bridge; below it, from the coordinator's bundle set.
 # Mirrors HAZYNC_BRIDGE_EMIT_FROM on the bridge host — if that moves, this moves with it.
 TIP_FROM = int(os.environ.get("HAZYNC_TIP_FROM", "967500"))
@@ -67,78 +141,158 @@ class SmokeRunPod(sponsor_bot.RunPod):
     """
 
     def deploy_listening(self, name, ssh_pubkey, gpu_types=sponsor_bot.GPU_TYPES):
-        refused, answered = None, False
-        for gt in gpu_types:
-            # ⛔ SECURE, NOT ALL. `cloudType: ALL` includes community hosts, and those mostly never
-            # start at all -- RunPod never publishes a port for them, so the run waits out its full
-            # SSH timeout and then gives up having paid for pods that never existed.
-            #
-            # Measured 2026-09-20 across two runs, and the split is by PRICE, which is the tell:
-            #     $0.34/hr   1 of 6 started   (17%)
-            #     $0.49/hr   1 of 1 started
-            #     $0.74/hr  14 of 14 started  (100%)
-            # A 4-card run died outright on it: three of five never started, so only two came up and
-            # the run could not reach its minimum. The cheap listing is not cheaper, it is absent.
-            q = ("mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, "
-                 "volumeInGb: 0, containerDiskInGb: 40, "
-                 f"gpuTypeId: {self._s(gt)}, name: {self._s(name)}, "
-                 f"imageName: {self._s(sponsor_bot.IMAGE)}, ports: \"22/tcp,9110/tcp\", "
-                 f"env: [{{key: \"PUBLIC_KEY\", value: {self._s(ssh_pubkey)}}}] }}) "
-                 "{ id costPerHr } }")
+        # ⛔ SECURE, NOT COMMUNITY. Community hosts mostly never start at all -- RunPod never publishes a
+        # port for them, so the run waits out its full SSH timeout and then gives up having paid for pods
+        # that never existed. create_pod (sponsor_bot) always asks for the SECURE cloud.
+        #
+        # Measured 2026-09-20 across two runs, and the split is by PRICE, which is the tell:
+        #     $0.34/hr   1 of 6 started   (17%)
+        #     $0.49/hr   1 of 1 started
+        #     $0.74/hr  14 of 14 started  (100%)
+        # A 4-card run died outright on it: three of five never started, so only two came up and
+        # the run could not reach its minimum. The cheap listing is not cheaper, it is absent.
+        # ⚠ A create whose answer is lost is not looked for here: `name` carries the run's prefix, and the
+        # teardown terminates every pod with that prefix by LISTING (release_recorded / cleanup).
+        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp", "9110/tcp"), disk_gb=40)
+        if not got:
+            return None
+        p, gt = got
+        # ⛔ RECORD WHERE THE CARD IS. Geography is the one term in a fleet's throughput that
+        # has never been controlled for here, and it has already caused a published error
+        # once: 142 s of spread was attributed to geography when it was CARD TYPE
+        # (hazync#448), and controlling for the card collapsed it to 9.0 s. The lesson taken
+        # was "state the card mix" -- but the site was then left unrecorded entirely, so the
+        # rival explanation can still never be tested. The milestone tooling recorded a
+        # `site` column per chunk; tip_smoke never did.
+        #
+        # In mode 6 the coordinator PUSHES segments over the network to every worker, so RTT
+        # plausibly reaches per-card throughput. Whether it does is unmeasured -- which is
+        # exactly why it must be written down before anyone compares two fleets again.
+        dc, price = p.get("dataCenterId"), float(p.get("cost") or 0)
+        # ⚠ v2 can answer a PROVISIONING pod with no data centre and cost 0 (unknown, not free): ask the pod.
+        if not dc or price <= 0:
             try:
-                p = self._gql(q).get("podFindAndDeployOnDemand")
-                answered = True
-            except sponsor_bot.RunPodError as e:
-                refused, p = e, None
-            if p and p.get("id"):
-                # ⛔ RECORD WHERE THE CARD IS. Geography is the one term in a fleet's throughput that
-                # has never been controlled for here, and it has already caused a published error
-                # once: 142 s of spread was attributed to geography when it was CARD TYPE
-                # (hazync#448), and controlling for the card collapsed it to 9.0 s. The lesson taken
-                # was "state the card mix" -- but the site was then left unrecorded entirely, so the
-                # rival explanation can still never be tested. The milestone tooling recorded a
-                # `site` column per chunk; tip_smoke never did.
-                #
-                # In mode 6 the coordinator PUSHES segments over the network to every worker, so RTT
-                # plausibly reaches per-card throughput. Whether it does is unmeasured -- which is
-                # exactly why it must be written down before anyone compares two fleets again.
-                dc = None
-                try:
-                    q2 = ('query { pod(input:{podId:%s}) { machine { dataCenterId } } }'
-                          % self._s(p["id"]))
-                    dc = ((self._gql(q2).get("pod") or {}).get("machine") or {}).get("dataCenterId")
-                except Exception:
-                    pass          # never fail a rental over a label
-                return {"id": p["id"], "name": name, "gpu_type": gt,
-                        "price": float(p.get("costPerHr") or 0), "dc": dc}
-        if refused is not None and not answered:
-            raise refused
-        return None
+                again = self.pod_raw(p["id"]) or {}
+                dc = dc or again.get("dataCenterId")
+                price = price if price > 0 else float(again.get("cost") or 0)
+            except Exception:
+                pass          # never fail a rental over a label
+        return {"id": p["id"], "name": name, "gpu_type": gt, "price": price, "dc": dc}
 
-    def ports_of(self, pod_id):
-        """{privatePort: (ip, publicPort)} for one pod, or {} while it is still starting."""
-        q = ("query { myself { pods { id name runtime { ports "
-             "{ ip isIpPublic privatePort publicPort } } } } }")
-        for p in ((self._gql(q).get("myself") or {}).get("pods") or []):
-            if p["id"] != pod_id:
-                continue
-            out = {}
-            for x in (((p.get("runtime") or {}).get("ports")) or []):
-                if x.get("isIpPublic"):
-                    out[int(x["privatePort"])] = (x["ip"], int(x["publicPort"]))
-            return out
-        return {}
+
+def write_record(path, rows):
+    """Write a rental record ATOMICALLY: a temp file in the same directory, then os.replace(). A reader -- the next
+    --adopt, --cleanup -- sees the old record or the new one, never a zero-byte or half-written file."""
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as fh:
+        json.dump(rows, fh, indent=1)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def rent_uniform(api, gt, upto, pub, rented_path, created, unreleased, prefix):
+    """Rent up to `upto` pods of ONE type, recording each in rented.json the instant it exists. Stops at the
+    first capacity miss. ⛔ WHATEVER STOPS IT (a 402, a refusal, a signal), what it rented joins `created` before
+    the exception leaves: these pods lived only in this local list, the teardown released `created`, and a stub
+    run left 17 pods billing behind "account check: clean"."""
+    got = []
+    try:
+        for i in range(upto):
+            p = api.deploy_listening(f"{prefix}{i+1}", pub, gpu_types=(gt,))
+            if not p:
+                break
+            got.append(p)
+            write_record(rented_path, unreleased + got)
+    except BaseException:
+        created.extend(got)
+        raise
+    return got
+
+
+def release_short(api, gt, got, rented_path, unreleased):
+    """Release a type that could not field the fleet. ⛔ CONFIRMED, NOT FIRE-AND-FORGET: what is not confirmed
+    gone stays in `unreleased` (and in rented.json) for the teardown, instead of the record being emptied."""
+    try:
+        _, left = sponsor_bot.terminate_many(api, [p["id"] for p in got])
+    except Exception as e:                                         # noqa: BLE001
+        log(f"  ⚠ could not release {gt} pods: {e}")
+        left = [p["id"] for p in got]
+    unreleased.extend(p for p in got if p["id"] in set(left))
+    if left:
+        log(f"  ⛔ {len(left)} {gt} pod(s) NOT confirmed released: {left} -- kept for the teardown")
+    write_record(rented_path, unreleased)
+
+
+def release_recorded(api, rented_path, created, unreleased, prefix=None, keep_ids=(), sleep=time.sleep,
+                     clock=time.monotonic, budget_s=None):
+    """The teardown's release, through sponsor_bot.release_until_clean: every id in rented.json, `created` and
+    `unreleased` (an ADOPTED fleet carries another run's prefix) is DELETEd first, then the account is listed until
+    two listings show no pod with this run's `prefix` -- a lost create, however late it appears. `keep_ids` (--keep /
+    --adopt) and protected pods are never touched. rented.json is removed only when nothing is kept and the account
+    was seen clean. Returns the ids still listed (None: the account was never seen clean)."""
+    recorded = []
+    try:
+        with open(rented_path) as fh:
+            recorded = [str(p["id"]) for p in json.load(fh) if p.get("id")]
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    keep = {str(i) for i in keep_ids}
+    named = [str(p["id"]) for p in created] + [str(p["id"]) for p in unreleased] + recorded
+    done, left, clean = sponsor_bot.release_until_clean(
+        api, named, match=(lambda n: n.startswith(prefix)) if prefix else None,
+        skip=lambda i: i in keep or tip_session.is_protected(i), sleep=sleep, clock=clock, budget_s=budget_s)
+    for pid in done:
+        log(f"  {pid}: gone")
+    if left:
+        log(f"⛔ STILL PRESENT: {left} — run --cleanup, or terminate by hand")
+        return None if not clean else left
+    if not clean:
+        log(f"⚠ the account was never seen clean twice; {rented_path} KEPT — run --cleanup")
+        return None
+    else:
+        log("account check: clean" + (f" (kept {sorted(keep)})" if keep else ""))
+        if not keep:
+            try:
+                os.unlink(rented_path)     # every pod of this run is gone; the record would only mislead
+            except OSError:
+                pass
+    return left
+
+
+# ⛔ ONE GET PER POD PER ROUND, ON A QUOTA SHARED BY EVERY PROCESS ON THE KEY: 180/min, but 7,200/hour, so
+# 120/min SUSTAINED (RateLimit-Policy, read 2026-11-18). A 40-card fleet polled every 10 s is 240/min on its own.
+# So the polls are PACED (PORTS_MIN_GAP_S between two, <= 80/min, leaving room for the bot and the recruiter on
+# the same key), and a 429 (or any read error) is NOT "no port yet" and must not end the wait: the round stops,
+# the wait backs off, and it goes on.
+PORTS_BACKOFF_S = (10, 20, 40, 60)
+PORTS_MIN_GAP_S = 0.75
+
+
+def _ports_or_none(api, pod_id):
+    """api.ports_of, or None when RunPod did not answer (429, 5xx, no answer) -- never {} for an error."""
+    try:
+        return api.ports_of(pod_id)
+    except Exception as e:                                         # noqa: BLE001
+        log(f"  ⚠ could not read ports of {pod_id}: {str(e)[:90]}")
+        return None
 
 
 def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
     """Poll RunPod for the mapped ports, then prove the card answers. Returns {name: Card}."""
     t0, ready, portmap = time.time(), {}, {}
     target = need or len(pods)
+    errors = 0
     while time.time() - t0 < timeout_s and len(ready) < target:
+        failed = False
         for p in pods:
             if p["name"] in ready:
                 continue
-            ports = api.ports_of(p["id"])
+            time.sleep(PORTS_MIN_GAP_S)
+            ports = _ports_or_none(api, p["id"])
+            if ports is None:
+                failed = True
+                break                       # stop this round: the quota is shared, do not spend the rest of it
             if 22 not in ports:
                 continue
             ip, port = ports[22]
@@ -156,7 +310,8 @@ def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
                 log(f"  {p['name']} up at {ip}:{port}"
                     + (f"  (9110 -> {ports[9110][1]})" if 9110 in ports else "  ⛔ NO 9110 MAPPING"))
         if len(ready) < target:
-            time.sleep(10)
+            errors = errors + 1 if failed else 0
+            time.sleep(PORTS_BACKOFF_S[min(errors, len(PORTS_BACKOFF_S) - 1)])
     # ⚠ "only 1/2 came up" is not actionable. Say how far each one got: no mapping at all is a pod
     # RunPod never started, a mapping with no ssh is a pod that is booting or broken.
     # ⚠ REPORT THE TIME ACTUALLY WAITED, NOT THE BUDGET. Once `need` cards are up the loop exits
@@ -166,8 +321,9 @@ def wait_for_ssh(api, pods, ssh, timeout_s=420, need=None):
     waited = time.time() - t0
     for p in pods:
         if p["name"] not in ready:
-            got = api.ports_of(p["id"])
-            why = ("RunPod never published a port for it (the pod did not start)" if not got
+            got = _ports_or_none(api, p["id"])
+            why = ("RunPod did not answer for its ports (quota or fault) -- state unknown" if got is None
+                   else "RunPod never published a port for it (the pod did not start)" if not got
                    else f"ports {sorted(got)} were published but ssh never answered")
             enough = "" if waited >= timeout_s - 1 else " (the run had enough cards and stopped waiting)"
             log(f"  ⚠ {p['name']} had not answered after {waited:.0f}s{enough} — {why}")
@@ -429,10 +585,13 @@ def rank_card_types(api, vram_floor=VRAM_FLOOR_GB, economics=ECONOMICS):
 
     Returns [{id, display, vram, price, stock, usd_per_proof|None}], measured tier first.
     """
-    ids = [g["id"] for g in api._gql("query { gpuTypes { id } }")["gpuTypes"]]
+    # ONE call: GET /v2/catalog/gpus with SECURE pod availability for a single GPU -- what GraphQL needed a
+    # `gpuTypes { id }` plus one `lowestPrice(input:{gpuCount:1, secureCloud:true})` per type for.
+    catalog = api.gpu_catalog(stock=True)
     measured, measured_block = measured_cost_per_proof(economics)
     out = []
-    for gt in ids:
+    for g in catalog:
+        gt = g.get("id") or ""
         # ⛔ CUDA ONLY. The prover is a risc0 CUDA build; an AMD card cannot run it at all, so
         # offering one would rent a pod that is guaranteed to fail the GPU gate.
         if not gt.startswith("NVIDIA"):
@@ -452,22 +611,19 @@ def rank_card_types(api, vram_floor=VRAM_FLOOR_GB, economics=ECONOMICS):
         # only keeps them out of the AUTOMATIC ranking, where nobody chose them.
         if " MIG " in gt:
             continue
-        q = ('query { gpuTypes(input:{id:%s}) { id displayName memoryInGb '
-             'lowestPrice(input:{gpuCount:1, secureCloud:true}) '
-             '{ uninterruptablePrice stockStatus } } }' % json.dumps(gt))
-        try:
-            g = api._gql(q)["gpuTypes"][0]
-        except Exception:
-            continue
-        lp = g.get("lowestPrice") or {}
-        price, stock = lp.get("uninterruptablePrice"), lp.get("stockStatus")
-        vram = g.get("memoryInGb") or 0
+        # `availability` NONE (or absent) is GraphQL's null stockStatus; `price.secure` is its
+        # uninterruptablePrice (equal for every in-stock type, measured side by side 2026-11-18).
+        stock = g.get("availability")
+        if stock == "NONE" or not g.get("secure"):
+            stock = None
+        price = ((g.get("price") or {}).get("secure")) if stock else None
+        vram = g.get("memory") or 0
         # No secure price or no stock means RunPod cannot sell it right now, whatever it lists.
         if not price or not stock or vram < vram_floor:
             continue
-        out.append({"id": gt, "display": g.get("displayName") or gt, "vram": vram,
+        out.append({"id": gt, "display": g.get("name") or gt, "vram": vram,
                     "price": float(price), "stock": stock,
-                    "usd_per_proof": measured.get(g.get("displayName") or gt),
+                    "usd_per_proof": measured.get(g.get("name") or gt),
                     "measured_on": measured_block})
     # Measured tier (by the objective that matters) ahead of the unmeasured tier (by the objective
     # that does not, used only because nothing better exists for a card nobody has run).
@@ -559,6 +715,40 @@ def slow_worker_cut(order, per, *, need, floor=0.0):
         drop.add(c.cid)
     drop.discard(agg.cid)
     return drop, [(c.cid, per.get(c.cid)) for c in ranked]
+
+
+class FleetRecord:
+    """rented.json -- THE TRUTH ABOUT WHAT BILLS. Every write is: the pods not confirmed released (`unreleased`), the
+    fleet, and every pod LEFT RUNNING (an adopted card dropped at a gate or cut as surplus). ⛔ A pod that is still
+    running is never dropped from the record: the next --adopt snapshots this file, and a pod missing from it was
+    swept by that run's teardown -- the #547/#551 incident, reproduced twice before this class existed."""
+
+    def __init__(self, path, unreleased):
+        self.path, self.unreleased, self.left_running = path, unreleased, []
+
+    def write(self, fleet):
+        rows, seen = [], set()
+        for p in list(self.unreleased) + list(fleet) + self.left_running:
+            if p.get("id") and p["id"] not in seen:
+                seen.add(p["id"])
+                rows.append(p)
+        write_record(self.path, rows)
+
+    def leave_running(self, p):
+        self.left_running.append(dict(p, left_running=True))
+
+    def release(self, api, p, why, adopted):
+        """A pre-clock gate dropped `p`. Adopted (no --release-adopted): LEFT RUNNING and kept in the record. Rented:
+        terminated -- and kept in the record (as unreleased) if RunPod does not confirm it."""
+        if adopted:
+            log(f"  dropped {p['name']} from the run — {why} (LEFT RUNNING: adopted, kept in {self.path})")
+            self.leave_running(p)
+            return
+        if sponsor_bot.terminate_confirmed(api, p["id"]):
+            log(f"  released {p['name']} — {why}")
+        else:
+            self.unreleased.append(p)
+            log(f"  ⛔ {p['name']} NOT confirmed released — {why}; kept in {self.path} for the teardown")
 
 
 def _drop_cards(order, created, bad, why, *, release, record):
@@ -893,6 +1083,15 @@ def dash_chain(a):
     return chain
 
 
+def adopted_ids(record_path):
+    """Every pod id in an adoption record (rented.json), as recorded: nothing dropped, nothing checked."""
+    try:
+        with open(record_path) as fh:
+            return {str(p["id"]) for p in json.load(fh) if isinstance(p, dict) and p.get("id")}
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
 def adopt_fleet(api, record_path, expect_names=None):
     """Pods from a previous run's rented.json that are STILL ALIVE on the account.
 
@@ -944,6 +1143,11 @@ def cleanup(api, rented_path):
     so it must assume its own bookkeeping is incomplete.
     """
     rec_path = os.path.join(os.path.dirname(rented_path), "recruited.json")
+    marker = os.path.join(os.path.dirname(rented_path), "adopted_by.txt")
+    if os.path.exists(marker):
+        by = open(marker).read().strip()
+        raise SystemExit(f"refusing --cleanup: this fleet was adopted by {by} (adopted_by.txt) -- clean up THAT "
+                         f"rundir, or delete {marker} if the adoption is over")
     pods, sources = {}, {}
     for path, what in ((rented_path, "rented.json"), (rec_path, "recruited.json")):
         try:
@@ -954,8 +1158,15 @@ def cleanup(api, rented_path):
                         sources.setdefault(p["id"], what)
         except (OSError, ValueError):
             log(f"  (no usable {what})")
+    # ⛔ AND THE RUN'S PREFIX, BY LISTING: a pod whose create answer was lost is in no record, but carries the prefix.
+    prefix = read_run_prefix(os.path.dirname(rented_path))
+    if prefix:
+        for x in api.pods():           # an unlistable account raises: nothing can be shown clean then
+            if x["name"].startswith(prefix) and (x.get("status") or "") != "TERMINATED":
+                pods.setdefault(x["id"], {"id": x["id"], "name": x["name"]})
+                sources.setdefault(x["id"], f"the run prefix {prefix}")
     if not pods:
-        log(f"no rental record at {rented_path} or {rec_path} — nothing to clean up")
+        log(f"no rental record at {rented_path} or {rec_path}, and no pod with the run's prefix — nothing to clean up")
         return 0
     only_rec = [i for i, s in sources.items() if s == "recruited.json"]
     log(f"cleanup: {len(pods)} pod(s) across both records"
@@ -964,13 +1175,15 @@ def cleanup(api, rented_path):
     ids = list(pods)
     v = tip_session.terminable(ids, ids)
     log(f"cleanup: releasing {v['terminate']} (protected={v['protected']} not-ours={v['not_ours']})")
+    done_, _ = sponsor_bot.terminate_many(api, v["terminate"]) if v["terminate"] else ([], [])
     for pid in v["terminate"]:
-        log(f"  {pid}: {'gone' if sponsor_bot.terminate_confirmed(api, pid) else '⛔ STILL LISTED'}")
+        log(f"  {pid}: {'gone' if pid in done_ else '⛔ STILL LISTED'}")
 
     # ⛔ CHECK THE ACCOUNT, NOT OUR OWN LIST. A pod this command never heard of is exactly the
     # failure it exists to catch, and comparing only against `pods` can never see one.
-    live = {p["id"]: p.get("name") for p in api.pods()}
+    live = {p["id"]: p.get("name") for p in api.pods() if (p.get("status") or "") != "TERMINATED"}
     left = [pods[i].get("name") or i for i in pods if i in live]
+    left += [n for i, n in live.items() if prefix and (n or "").startswith(prefix) and i not in pods]
     unknown = [n for i, n in live.items() if i not in pods and not tip_session.is_protected(i)]
     log(f"account check: {'clean' if not left else '⛔ STILL PRESENT: ' + str(left)}")
     if unknown:
@@ -1187,6 +1400,24 @@ def main():
     # says so clearly in its own run.log -- but the run itself only sees cards that produce no
     # receipt, restarts them, and burns the fleet doing it. Measured: two RTX 4090s idle at 0% GPU
     # for five minutes while the tick planner dutifully relaunched them.
+    key_file = os.environ.get("RUNPOD_API_KEY_FILE", "/root/.hazync/runpod.key")
+    with open(key_file) as fh:
+        api = SmokeRunPod(fh.read().strip())
+    # ⛔ BEFORE THE CLAIM: a rundir whose last run still has pods is refused before anything is claimed or fetched.
+    # (With --adopt the guard still applies to a rundir that is NOT the adopted record's own: a --keep fleet there
+    # would otherwise be swept by this run's teardown.)
+    adopt_home = rerun_guard(api, a)
+    # ⛔ THE ADOPTED FLEET, AS RECORDED, BEFORE ANYTHING DROPS FROM IT. A pod dropped at a gate is "LEFT RUNNING:
+    # adopted" and leaves `created`; an adoption that fails half way never fills `created` at all. Without
+    # --release-adopted, every one of these ids is kept by the teardown, whatever happened in between (#547/#551).
+    adopt_keep = adopted_ids(a.adopt) if a.adopt and not a.release_adopted else set()
+    if a.adopt and not adopt_home:
+        # The adopted record's own rundir is now someone else's fleet: --cleanup there would release it.
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(a.adopt)), "adopted_by.txt"), "w") as fh:
+                fh.write(os.path.abspath(a.rundir) + "\n")
+        except OSError as e:
+            log(f"⚠ could not mark {a.adopt} as adopted by {a.rundir}: {e}")
     # ── claim FIRST, before spending anything (#367) ──────────────────────────────────────────────
     # ⛔ THE ORDER MATTERS. Renting takes ~2 minutes and costs money; a claim costs a POST. If the
     # board has nothing free -- or this key is at its 4-unfinished cap -- the right answer is to exit
@@ -1257,18 +1488,23 @@ def main():
                              f"The claim reopens by itself; nothing was rented.")
         log(f"bundle for {a.block}: {os.path.getsize(bundle_path)} bytes -> {bundle_path}")
 
-    key_file = os.environ.get("RUNPOD_API_KEY_FILE", "/root/.hazync/runpod.key")
-    with open(key_file) as fh:
-        api = SmokeRunPod(fh.read().strip())
     pub = open(a.key + ".pub").read().strip()
 
     ssh = tip_driver.SSHRunner(a.key)
     created, helpers, t_start = [], [], time.time()
+    # Pods this run rented and could NOT confirm released before the fleet formed (a short uniform type). They
+    # are not the fleet, but they bill: the teardown releases them with everything else, and rented.json keeps
+    # them until it has.
+    unreleased = []
     rented_path = os.path.join(a.rundir, "rented.json")
+    rec = FleetRecord(rented_path, unreleased)          # every write of rented.json in this run goes through it
     os.makedirs(a.rundir, exist_ok=True)
 
     if a.cleanup:
         return cleanup(api, rented_path)
+    # Every pod this run creates is named rpre + n (the teardown sweeps it). --adopt keeps the adopted run's prefix:
+    # rotating it would leave the adopted fleet's lost creates under a prefix nothing sweeps any more.
+    rpre = (adopt_home and read_run_prefix(a.rundir)) or run_prefix(a.rundir)
 
     # ⛔ SIGTERM MUST REACH THE finally. Python does not run finally blocks on a default SIGTERM --
     # the process simply dies, and the cards go on billing. Turning it into an exception is what
@@ -1307,9 +1543,10 @@ def main():
         # ⛔ RENT SPARES. RunPod does not always start what it sells: on 2026-09-20 one of two pods
         # never published a port in 420 s while its twin answered in 30 s. Renting exactly N means one
         # bad pod ends the run after the full wait, having paid for both the whole time.
-        # ⛔ VALIDATE BEFORE RENTING. An unrecognised name is accepted by the GraphQL call and simply
-        # matches nothing, so the run would report "no capacity" for every pod and look like a RunPod
-        # outage rather than a typo. Fail here, having spent nothing.
+        # ⛔ VALIDATE BEFORE RENTING. An unrecognised name was accepted by the GraphQL call and simply
+        # matched nothing; RunPod v2 answers a failed placement with a bare 400, the same status as a
+        # capacity miss. Either way the run would report "no capacity" for every pod and look like a
+        # RunPod outage rather than a typo. Fail here, having spent nothing.
         if a.gpu_type.strip() == "auto":
             catalogue = rank_card_types(api)
             if not catalogue:
@@ -1332,7 +1569,7 @@ def main():
             gpu_types = tuple(t.strip() for t in a.gpu_type.split(",") if t.strip())
             if not gpu_types:
                 raise SystemExit("--gpu-type is empty")
-            offered = {g["id"] for g in api._gql("query { gpuTypes { id } }")["gpuTypes"]}
+            offered = api.gpu_type_ids()
             unknown = [t for t in gpu_types if t not in offered]
             if unknown:
                 raise SystemExit(f"unknown --gpu-type {unknown} — RunPod offers no such type")
@@ -1354,7 +1591,7 @@ def main():
                 raise SystemExit(f"--adopt {a.adopt}: only {len(adopted)} of the recorded pods are "
                                  f"still alive; at least {a.min_cards} are needed. Lower "
                                  f"--min-cards or rent fresh")
-            created = adopted
+            created = [{k: v for k, v in p.items() if k != "left_running"} for p in adopted]   # back in the fleet
             # ⛔ `rented` and `want` are read AFTER this branch (the ssh wait, the prover-fetch
             # gate and their messages), and both were only ever assigned on the renting path. An
             # adopted fleet therefore reached `waiting for N of {want}` with `want` unbound and died
@@ -1365,18 +1602,13 @@ def main():
             log(f"ADOPTED {len(created)} live pod(s) from {a.adopt} — nothing rented")
             # ⚠ The record is now THIS run's to maintain: a card dropped at a gate must leave the
             # file, or a later --cleanup would try to release a pod that is already gone.
-            with open(rented_path, "w") as fh:
-                json.dump(created, fh, indent=1)
+            rec.write(created)
         else:
             # ⚠ `rented` NOT `want` (hazync#492). `want` is reused at the prover-fetch gate for the
             # BINARY SIZE, so a message down there that reads `want` prints 410441528 where a card count
             # belongs — which is what a real run reported: "only 2 of 410441528 rented cards".
             rented = a.cards + a.spares
             want = rented
-            for i in range(want):
-                name = f"{PREFIX}{i+1}"
-                if name in existing:
-                    raise SystemExit(f"refusing: {name} already exists")
 
             # ⭐ ONE TYPE FOR THE WHOLE FLEET IF ANY TYPE CAN SUPPLY IT (hazync#493).
             #
@@ -1389,19 +1621,8 @@ def main():
             # type down: a partial fleet held while we try the next type costs seconds of billing, and a
             # mixed fleet costs 40% of the run. Only when NO single type can field the minimum do we mix
             # — deliberately, and labelled.
-            def rent_uniform(gt, upto):
-                got = []
-                for i in range(upto):
-                    p = api.deploy_listening(f"{PREFIX}{i+1}", pub, gpu_types=(gt,))
-                    if not p:
-                        break
-                    got.append(p)
-                    with open(rented_path, "w") as fh:
-                        json.dump(got, fh, indent=1)
-                return got
-
             for gt in gpu_types:
-                got = rent_uniform(gt, want)
+                got = rent_uniform(api, gt, want, pub, rented_path, created, unreleased, prefix=rpre)
                 # ⛔ TARGET, NOT FLOOR: a type that can field only the floor should not stop us
                 # trying the next one, which might field the target. The final gate check is what
                 # accepts a short fleet, after the gates have had their say.
@@ -1412,15 +1633,7 @@ def main():
                 if got:
                     log(f"  {gt} could field only {len(got)} of the {a.cards} needed — releasing and "
                         f"trying the next type (a mixed fleet costs more than these seconds do)")
-                    for p in got:
-                        # ⛔ CONFIRMED, NOT FIRE-AND-FORGET. A terminate that silently failed here would
-                        # leave a pod billing for the whole run with nothing in `created` to release it.
-                        try:
-                            sponsor_bot.terminate_confirmed(api, p["id"])
-                        except Exception as e:
-                            log(f"  ⚠ could not release {p['name']}: {e}")
-                    with open(rented_path, "w") as fh:
-                        json.dump([], fh, indent=1)
+                    release_short(api, gt, got, rented_path, unreleased)
                 else:
                     log(f"  {gt}: no capacity")
 
@@ -1436,7 +1649,7 @@ def main():
                 log(f"⚠ NO SINGLE TYPE can field {a.cards} cards — falling back to a MIXED fleet across "
                     f"{len(gpu_types)} types. Its wall-clock is NOT comparable with a uniform run.")
             for i in range(len(created), want if mixed_fallback else len(created)):
-                name = f"{PREFIX}{i+1}"
+                name = f"{rpre}{i+1}"
                 p = api.deploy_listening(name, pub, gpu_types=gpu_types)
                 if not p:
                     # ⛔ SPARES ARE OPTIONAL BY DEFINITION — THAT IS WHAT MAKES THEM SPARES. This used to
@@ -1456,8 +1669,7 @@ def main():
                 # a probe fan-out did exactly that: ThreadPoolExecutor.__exit__ waits for every in-flight
                 # ssh, so the teardown did not run for minutes and the pods had to be killed by hand.
                 # `--cleanup` reads this file and releases whatever is in it, whatever happened.
-                with open(rented_path, "w") as fh:
-                    json.dump(created, fh, indent=1)
+                rec.write(created)
                 log(f"rented {name}  {p['gpu_type']}  ${p['price']:.3f}/hr  id={p['id']}"
                     f"  (recorded in {rented_path})")
 
@@ -1531,26 +1743,19 @@ def main():
             ⚠ A RENTED pod is still terminated here, and must be: #479 exists because a card failing
             a gate used to end the whole run instead of being dropped from it.
             """
-            if a.adopt and not a.release_adopted:
-                log(f"  dropped {p['name']} from the run — {why} (LEFT RUNNING: adopted)")
-                return
-            sponsor_bot.terminate_confirmed(api, p["id"])
-            log(f"  released {p['name']} — {why}")
+            rec.release(api, p, why, adopted=bool(a.adopt and not a.release_adopted))
 
         if never_up:
             log(f"releasing {len(never_up)} pod(s) that never answered ssh: {sorted(never_up)}")
             order, created = _drop_cards(
                 order, created, never_up, "it never answered ssh",
                 release=lambda p: _release_pod(p, "it never answered ssh"),
-                record=lambda kept: json.dump(kept, open(rented_path, "w"), indent=1))
+                record=rec.write)
 
         def _drop(order_, created_, bad, why):
             def release(p):
                 _release_pod(p, why)
-            def record(kept):
-                with open(rented_path, "w") as fh:
-                    json.dump(kept, fh, indent=1)
-            return _drop_cards(order_, created_, bad, why, release=release, record=record)
+            return _drop_cards(order_, created_, bad, why, release=release, record=rec.write)
 
         # ⛔ THE AGGREGATE IS CHOSEN ON ITS LINK, NOT ON WHO ANSWERED SSH FIRST (hazync#517).
         # This was `order[0]`. Every segment is pushed FROM the aggregate and every join round-trips
@@ -1806,8 +2011,7 @@ def main():
                 for p in [x for x in created if x["name"] in bad]:
                     _release_pod(p, "it could not reach the aggregate")
                 created = [x for x in created if x["name"] not in bad]
-                with open(rented_path, "w") as fh:
-                    json.dump(created, fh, indent=1)
+                rec.write(created)
                 if len(order) < 2:
                     raise SystemExit(
                         f"only {len(order)} card(s) can reach the aggregate — a distributed run "
@@ -1900,8 +2104,7 @@ def main():
             for p in [x for x in created if x["name"] in set(duds)]:
                 _release_pod(p, "its GPU cannot prove")
             created = [x for x in created if x["name"] not in set(duds)]
-            with open(rented_path, "w") as fh:
-                json.dump(created, fh, indent=1)
+            rec.write(created)
             if len(order) < 2:
                 raise SystemExit(f"only {len(order)} card(s) have a working GPU")
             joined = tip_dashboard.feed_records(order, fleet)
@@ -2489,11 +2692,10 @@ def main():
                 by the main thread; a second writer would race it and the loser is a pod nobody can
                 release. There is no budget cap by decision, so an unrecorded pod bills until an
                 invoice says so."""
-                pod = api.deploy_listening(f"hz-grow-{len(recruited) + 1}", pub, gpu_types=gpu_types)
+                pod = api.deploy_listening(f"{rpre}grow-{len(recruited) + 1}", pub, gpu_types=gpu_types)
                 if pod:
                     recruited.append(pod)
-                    with open(recruited_path, "w") as fh:
-                        json.dump(recruited, fh, indent=1)
+                    write_record(recruited_path, recruited)
                 return pod
 
             def _recruit_gate(pod):
@@ -2603,8 +2805,7 @@ def main():
                 # ~$18.81/hr. There is no budget cap by decision, so nothing else would have stopped
                 # them.
                 try:
-                    with open(rented_path, "w") as fh:
-                        json.dump(created, fh, indent=1)
+                    rec.write(created)
                 except OSError as exc:
                     log(f"  ⛔ COULD NOT UPDATE {rented_path} ({exc}) — if this driver dies, "
                         f"`--cleanup` will not know about the {len(joined)} card(s) just added. "
@@ -2766,11 +2967,9 @@ def main():
         try:
             billed = []
             for p_ in created:
-                q = ('query { pod(input:{podId:%s}) { id name costPerHr '
-                     'runtime { uptimeInSeconds } } }' % api._s(p_["id"]))
                 try:
-                    pd = (api._gql(q) or {}).get("pod") or {}
-                    up = (pd.get("runtime") or {}).get("uptimeInSeconds")
+                    pd = api.pod(p_["id"]) or {}
+                    up = pd.get("uptime_s")
                     billed.append({"name": p_["name"], "id": p_["id"], "dc": p_.get("dc"),
                                    "gpu": p_["gpu_type"], "price_hr": p_["price"],
                                    "uptime_s": up,
@@ -2842,9 +3041,9 @@ def main():
             orphans = [p for p in recruited if p["id"] not in admitted_ids]
             if orphans:
                 log(f"releasing {len(orphans)} recruit(s) that never joined the fleet")
+                done_, _ = sponsor_bot.terminate_many(api, [p_["id"] for p_ in orphans])
                 for p_ in orphans:
-                    ok_ = sponsor_bot.terminate_confirmed(api, p_["id"])
-                    log(f"  {p_.get('name')}: {'gone' if ok_ else '⛔ STILL LISTED — RELEASE BY HAND'}")
+                    log(f"  {p_.get('name')}: {'gone' if p_['id'] in done_ else '⛔ STILL LISTED — RELEASE BY HAND'}")
         except Exception as exc:       # noqa: BLE001 -- cleanup bookkeeping must not mask a failure
             log(f"⛔ could not finish releasing recruits: {type(exc).__name__}: {exc}")
 
@@ -2871,27 +3070,18 @@ def main():
         # so the cost and the exact release command go in the log where the run ends.
         if a.keep or (a.adopt and not a.release_adopted):
             why = "--keep" if a.keep else "--adopt (use --release-adopted to hand them back)"
-            rate = sum(float(p.get("price") or 0) for p in created)
-            log(f"{why}: {len(created)} pod(s) LEFT RUNNING and STILL BILLING at "
-                f"${rate:.2f}/hr (${rate * 24:.2f}/day)")
+            billing = list(created) + [p for p in rec.left_running if p["id"] not in {q["id"] for q in created}]
+            rate = sum(float(p.get("price") or 0) for p in billing)
+            log(f"{why}: {len(billing)} pod(s) LEFT RUNNING and STILL BILLING at "
+                f"${rate:.2f}/hr (${rate * 24:.2f}/day)"
+                + (f", {len(rec.left_running)} of them dropped at a gate" if rec.left_running else ""))
             log("  release them with:  python3 tip_smoke.py --cleanup --rundir " + a.rundir)
-            for p in created:
+            for p in billing:
                 log(f"    {p['name']}  {p['id']}  ${float(p.get('price') or 0):.3f}/hr")
+            # ⛔ KEPT IS ONLY THE FLEET. Whatever else carries this run's prefix (a lost create, a spare) is released.
+            teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep)
         else:
-            mine = [p["id"] for p in created]
-            verdict = tip_session.terminable(mine, mine)
-            log(f"terminating {verdict['terminate']}  "
-                f"(protected={verdict['protected']} not-ours={verdict['not_ours']})")
-            for pid in verdict["terminate"]:
-                ok = sponsor_bot.terminate_confirmed(api, pid)
-                log(f"  {pid}: {'gone' if ok else '⛔ STILL LISTED — TERMINATE BY HAND'}")
-            left = {p["name"] for p in api.pods()} & {p["name"] for p in created}
-            log(f"account check: {'clean' if not left else '⛔ STILL PRESENT: ' + str(left)}")
-            if not left:
-                try:
-                    os.unlink(rented_path)     # nothing outstanding; the record would only mislead
-                except OSError:
-                    pass
+            teardown_release(api, a, rented_path, created, unreleased, rpre, adopt_keep)
 
 
 if __name__ == "__main__":

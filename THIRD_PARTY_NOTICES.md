@@ -72,6 +72,12 @@ and the verifier are unchanged.
 Nothing here overrides the terms of the components' own licences; consult each upstream project for
 the authoritative text.
 
+## Fonts (the Ooga Booga Land page)
+
+- **Schibsted Grotesk** and **Spline Sans Mono** — SIL Open Font License 1.1, not MIT. Copied as `.woff2` into
+  `ooga-land/public/fonts/` so the page loads nothing from another origin; the licence text and the copyright
+  lines travel with them in `ooga-land/public/fonts/OFL.txt`.
+
 ## Prior art
 
 Not a dependency, and nothing of theirs is compiled in — recorded because the idea is theirs before

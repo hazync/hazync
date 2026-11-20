@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+# A stand-in for bitcoin-cli over a directory of block_<h>.json files (prover/fetch_block_rpc.py's): getblockcount,
+# getblockhash <h>, getblockheader <hash> false. FAKE_BLOCKS = the directory; FAKE_TIP caps the tip;
+# FAKE_HASH_AT=<h>:<hash>[,<h>:<hash>...] makes getblockhash answer another hash at those heights (the node is on another
+# branch there: a reorg); FAKE_RPC_FAIL=1 makes every call fail as an RPC error does (exit 28, "Loading block index").
+import sys, os, json, hashlib, struct
+d, tip = os.environ['FAKE_BLOCKS'], int(os.environ['FAKE_TIP'])
+lie = dict(x.split(':') for x in os.environ.get('FAKE_HASH_AT', '').split(',') if x)
+if os.environ.get('FAKE_RPC_FAIL') == '1':
+    print('error code: -28\nerror message:\nLoading block index...', file=sys.stderr); sys.exit(28)
+def header(h):
+    v = json.load(open(f'{d}/block_{h}.json'))
+    return struct.pack('<i', v['version']) + bytes.fromhex(v['prev'])[::-1] + bytes.fromhex(v['merkle'])[::-1] + struct.pack('<III', v['time'], v['bits'], v['nonce'])
+def bhash(h):
+    return hashlib.sha256(hashlib.sha256(header(h)).digest()).digest()[::-1].hex()
+a = sys.argv[1:]
+if a[0] == 'getblockcount': print(tip)
+elif a[0] == 'getblockhash':
+    h = int(a[1])
+    if h > tip: sys.exit('Block height out of range')
+    print(lie.get(str(h)) or bhash(h))
+elif a[0] == 'getblockheader':
+    # hash -> height, indexed once per (directory, tip) in the temp directory
+    import tempfile
+    ix = os.path.join(tempfile.gettempdir(), 'fake-bitcoin-cli-%s-%d.json' % (hashlib.sha256(os.path.abspath(d).encode()).hexdigest()[:16], tip))
+    if not os.path.exists(ix):
+        m = {bhash(h): h for h in range(0, tip + 1) if os.path.exists(f'{d}/block_{h}.json')}
+        json.dump(m, open(ix + '.tmp', 'w')); os.replace(ix + '.tmp', ix)
+    # a lied hash answers with the real header of its height (only the stub tests read headers past a lie)
+    h = {x: int(k) for k, x in lie.items()}.get(a[1], json.load(open(ix)).get(a[1]))
+    if h is None: sys.exit('Block not found')
+    print(header(h).hex())
+else: sys.exit('unsupported ' + a[0])

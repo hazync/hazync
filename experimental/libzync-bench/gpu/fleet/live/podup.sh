@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # podup.sh <name>: wait for the pod's ports, record them in fleet.txt, push files, start prep, upload bundle.
 cd ~/libzync-gpu/live; N=$1
 for i in $(seq 1 40); do

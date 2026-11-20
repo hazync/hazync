@@ -7,8 +7,13 @@
 Release v0.26.0 commits each block's undo data in the block forest ([`docs/libzync/UNDO.md`](../../../docs/libzync/UNDO.md)).
 Its mainnet image `46666b6f…` has an **empty lineage**, so the public board **restarts from genesis** and every block
 is proved again. The handover machinery (`LZ_HANDOVER_AT`, [`docs/HANDOVER.md`](../../../docs/HANDOVER.md)) stays in the code
-for later upgrades and is switched **off** here. The paper prep run (`libzync-prep`) is **not** restarted: it is
-re-forested and continues (UNDO.md §8).
+for later upgrades and is switched **off** here. The paper prep run (`libzync-prep`) **also restarts from genesis**,
+under the v0.26.0 host: the host before it never set the coin leaves' BIP30-tracked flag (bit 1) that the guest sets,
+so every prep state from block 147,396 (the first tracked coinbase, `cec2a159…`) on disagrees with the proofs, and the
+stores cannot go back to the 147,000 save point (the coin log is advanced in place, trie slots are reused, only the
+two newest `.smt` are kept). Re-forest (UNDO.md §8) cannot repair it, because the coin leaves themselves change, so
+it is not used. MEASURED on the old run: genesis to 147,000 in 10.5 min, then about 8 days to 611,000; the board
+proves far slower than that, so prep stays ahead of it. The old run's files are moved aside, not deleted.
 
 The previous reset, v1 to v2 under `8888d59c` on 2026-11-12, is [`SWITCH.md`](SWITCH.md) (step 0 and section 4c).
 This page follows it wherever nothing has changed and says so.
@@ -21,7 +26,7 @@ This page follows it wherever nothing has changed and says so.
 | board pass | `libzync-board-prep` at 5,998, 5,000 leaf bundles (the window) |
 | paper prep | `libzync-prep` at save point 607,000; 1,000 blocks in 3,842 s there (0.26 blocks/s, of which 403 s is the save); `out` = `/var/lib/libzync-fast/out`, 609,064 files, 2.4 GB; host image `863c9ce3` |
 | zyncAPP | follower at 1,999 (`/srv/bulk/libzync-zapp`, host image `8888d59c`) |
-| undo cache | `hazync-coord:/root/undocommit/precompute/reforest/undo.tsv`: heights 1..620,000, 94 MB, sha256 `81f2532f6ee1557c6879e7bf4d2d3bcd54b042e83722b7453fca18217f6891fd` |
+| undo cache (NOT USED: re-forest dropped, see the top) | `hazync-coord:/root/undocommit/precompute/reforest/undo.tsv`: heights 1..620,000, 94 MB, sha256 `81f2532f6ee1557c6879e7bf4d2d3bcd54b042e83722b7453fca18217f6891fd` |
 | disks | `/` (`/dev/vda4`, holds `/var/lib/libzync-fast`, `/var/lib/libzync-board`, `/var/lib/hazync-lz`): 1.5 TB free. `/srv/bulk` (`/dev/vdb`): 3.4 TB free |
 
 **Found only on the box** (not in the repo, or different from it):
@@ -45,17 +50,17 @@ This page follows it wherever nothing has changed and says so.
   #733's unit changes change values only (`HAZYNC_METHOD_ID`, `--method-id`), which the drift check reports as a
   note, not drift, so installing them shows no false drift.
 
-## Decisions (defaults; the owner can override any of them)
+## Decisions (defaults; any of them can change)
 
 | | 11-12 precedent (SWITCH.md) | here |
 |---|---|---|
 | coordinator data | `VACUUM INTO /root/lz-863c9ce3.db`, `mv /var/lib/hazync-lz /var/lib/hazync-lz.863c9ce3`, a fresh directory with its subdirectories | the same, named after `8888d59c`. The old directory stays read-only as the record |
 | contributors | carried (`carry-contributors.py`): handle, key, first seen, last version; not block counts | **only contributors carry over**, from the `8888d59c` ledger |
-| sponsorships, payments | stayed in the old ledger | the same. Donations come from BTCPay, not the ledger, so `/api/donations` is unaffected. Any `paid`, `proving` or `invoiced` row counted in step 0.2 is the owner's call before step 6 |
+| sponsorships, payments | stayed in the old ledger | the same. Donations come from BTCPay, not the ledger, so `/api/donations` is unaffected. Any `paid`, `proving` or `invoiced` row counted in step 0.2 must be settled before step 6 |
 | offsite copies | new prefixes from the new id; the old ones kept, nothing deleted | `proofs-46666b6f/`, `spine-46666b6f/` (the units' `--method-id`); **the `8888d59c` prefixes, ledger and replica are kept as the record** |
 | Litestream | v2 ledger added as `coordinator-lz-server1` | the fresh ledger under a NEW replica path `coordinator-lz-46666b6f-server1`, so it never meets the `8888d59c` replica, which stays |
 | board pass | emptied (`rm`) and restarted from genesis | restarted from genesis; the old directories are **moved aside** (same filesystem, instant) **before the fresh coordinator first starts** (SWITCH.md step 0.4 before 0.6), so it never serves an old leaf or state. Re-foresting the pass is not possible: its leaves 2..998 are already pruned |
-| paper prep | kept running | re-forested and continued (UNDO.md §8), not restarted |
+| paper prep | kept running | restarted from genesis under the v0.26.0 host (the BIP30-tracked flag bug made every state from 147,396 wrong; re-forest cannot repair it); the old run moved aside as `*.pre-v026` |
 | zyncAPP facts | the 1..200 demo, then the follower at the spine | a FRESH `ZAPP_ROOT`; **it waits for the board's first spine** (no `46666b6f` proof of 1..200 exists; #732's block-1 receipt is the optional seed) |
 | start at boot | n/a | **the five disabled units stay disabled**, as they are |
 | website wasm pin | n/a | **the release asset's sha** (step 0.4) |
@@ -101,11 +106,11 @@ key names only.
    test ! -e /var/lib/hazync/sponsor-bot/.failed && echo no-latch
    sqlite3 "file:/var/lib/hazync-lz/coordinator.db?mode=ro" "SELECT status, count(*) FROM sponsorships GROUP BY status"
    ```
-   Check: both inactive; `stop-all` names no pod (one it names was left running: it is now terminated, say so to the
-   owner); `no-latch` (a latch written by this stop is the owner's to clear, after the pod check); the sponsorship
+   Check: both inactive; `stop-all` names no pod (one it names was left running: it is now terminated; note it in the
+   record); `no-latch` (a latch written by this stop is cleared by hand, after the pod check); the sponsorship
    counts written into the record table at the end. ⛔ A `paid` or `proving` row would be stranded in the old ledger
    (the fresh one has no sponsorships, so the bot's `/api/bot/queue` is empty), and an `invoiced` one could still be
-   paid into it: **stop and take it to the owner** before step 6. Rollback: `systemctl start hazync-sponsor-bot.timer`.
+   paid into it: **stop and settle it** before step 6. Rollback: `systemctl start hazync-sponsor-bot.timer`.
 3. **Release v0.26.0 is published** with the 13 assets of `scripts/release-assets.txt` and signed. Check on the laptop:
    `gh release view v0.26.0 -R hazync/hazync --json assets -q '.assets|length'` = 13. ⛔ `release.sh --from tag` can
    publish an EMPTY release and call it verified: count the assets.
@@ -129,7 +134,7 @@ key names only.
    Check: one `Good signature`; three `OK`; `new-host-ok`; `HANDOVER none`; the genesis tip; the three retiring ids
    are the survey's (board and zyncAPP the board's image, the paper prep its own) and all differ from `$N`. The wasm
    sha is what the site pins; `swiftsync-verify-wasm/README.md` says `12bbc9ae…` (#730) and #732 reports a local
-   `build.sh` gave `486ae6ed…`: a release asset that is neither is a question for the owner before step 11.
+   `build.sh` gave `486ae6ed…`: a release asset that is neither must be explained before step 11.
 5. **zync-serve from the release commit**, built where cargo is (hazync-coord), copied through the laptop with
    literal paths (the laptop's shell has no `$R`):
    ```bash
@@ -140,69 +145,16 @@ key names only.
    scp -3 hazync-coord:/root/hazync-v026/swiftsync-verify/target/release/zync-serve hazync-proof:/root/v026/zync-serve
    ```
    Check: `sha256sum` equal at both ends.
-6. **The coord-built undo cache, staged** (not yet in the run's directory; step 0.7 checks it against this box's node):
-   ```bash
-   # on the laptop (the boxes do not trust each other)
-   scp -3 hazync-coord:/root/undocommit/precompute/reforest/undo.tsv hazync-proof:/root/undo-cache-620000.tsv
-   ```
-   Check on hazync-proof: `sha256sum /root/undo-cache-620000.tsv` = `81f2532f…91fd`, `wc -l` = 620,000,
-   `tail -n1 | cut -f1` = 620000. ESTIMATE: a few minutes for 94 MB through the laptop (not measured for this file).
-7. **Rehearse the re-forest on a copy, with phase 1 from THIS box's node and no cache, while prep runs.** Re-forest is
-   the one step that rewrites the paper run in place. Given a cache, it re-fetches only 32 heights of it and checks
-   the ~11 leaf bundles at or below S; a wrong line anywhere else would show only after step 4's point of no return.
-   So the rehearsal builds its own undo hashes 1..S0 from the box's node, and the two caches, built on two nodes, must
-   agree byte for byte. It also checks the whole forest walk over the run's states (written by several hosts; the walk
-   refuses a state whose forest is not the pre-commitment one) and measures phase 2 on this box (measured elsewhere
-   only for 2,000 states: under a second on hazync-coord, UNDO.md §8). It reads the run's files and writes only the
-   copy:
-   ```bash
-   . /root/reset-v026.env; df -h /var/lib/libzync-fast        # the copy needs ~2.5 GB; keep well clear of prep's 200 GB floor
-   S0=$(cd $P/out && for h in $(ls state_*.smt | sed 's/state_\([0-9]*\)\.smt/\1/' | sort -rn); do
-          [ -s state_$h.json ] && [ -e state_$h.coinlog ] && [ -s state_$h.trie ] && { echo $h; break; }; done); echo S0=$S0
-   W=/var/lib/libzync-fast/rehearse-reforest; mkdir -p $W/out $W/leaves; echo "S0=$S0 W=$W" >> /root/reset-v026.env
-   ionice -c3 rsync -a --include="state_*.json" --exclude="*" $P/out/ $W/out/
-   cp $P/out/state_$S0.coinlog $W/out/ && cp $P/leaves/leaf_*.bin $W/leaves/
-   ls $W/out | sed -n 's/^state_\([0-9]*\)\.json$/\1/p' | awk -v s=$S0 '$1 > s {print "state_" $1 ".json"}' | (cd $W/out && xargs -r rm)
-   systemd-run --unit=libzync-reforest-rehearse --property=Nice=10 --property=IOSchedulingClass=idle --setenv=HOME=/root \
-     $R/hazync-host-x86_64-linux-gnu libzync-reforest $W/out $S0 --bitcoin-cli "$CLI" --all --jobs 4 --bundles $W/leaves
-   journalctl -u libzync-reforest-rehearse -f -o cat           # REFOREST_FETCH h=… blocks_per_s=…, then the walk
-   ```
-   ESTIMATE: phase 1 from the prep box's own node is the "5-6 h" UNDO.md §8 names (from the hazync-coord rates
-   there, not measured on this box). When it ends:
-   ```bash
-   grep -a 'LZ_REFOREST_DONE' <(journalctl -u libzync-reforest-rehearse -o cat) ; cat $W/out/state_$S0.forest   # ... 1..=S0 ...; U0
-   head -n $S0 /root/undo-cache-620000.tsv | cmp - $W/out/reforest/undo.tsv && echo caches-agree
-   cp $W/out/reforest/undo.tsv /root/undo-own-$S0.tsv
-   ```
-   Optional, a fresh prep 1..2,000 by the new host against the re-forested states (as `accept.sh` did on hazync-coord):
-   ```bash
-   mkdir -p $W/blocks && HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie python3 $B/bin/fetch_block_rpc.py range 1 2000 $W/blocks --jobs 2
-   nice -n 10 $R/hazync-host-x86_64-linux-gnu libzync-prep 1 2000 $W/blocks genesis $W/fresh > $W/fresh.log 2>&1
-   d=0; for h in $(seq 1 2000); do cmp -s $W/out/state_$h.json $W/fresh/state_$h.json || d=$((d+1)); done; echo "$d of 2000 differ"   # 0
-   ```
-   Check: `LZ_REFOREST_DONE 1..=S0`, `U0`, the bundle cross-check line, `caches-agree` (and `0 of 2000 differ` if
-   run); write phase 1 and phase 2 times into the record table. Then `rm -rf $W`. A failure here costs nothing: the
-   run is untouched. Read the stop message and bring it to the owner before going on.
-
 ## 1. Stop the writers, and copy the old board's record off the box
 
-1. **The paper prep, at a save point.** It saves every 1,000 blocks; a save is complete when its `PREP_PROGRESS` line
-   is printed (on 2026-11-15 the `.trie` marker came last, 09:16, and the line at 09:16:34). Stop it right after one,
-   so nothing is redone, and never during a save:
+1. **The paper prep and its block source.** Prep restarts from genesis (step 2), so it can stop at any moment; still,
+   stop it between saves so the record left behind is a complete save point:
    ```bash
-   journalctl -u libzync-prep -f -n0 -o cat | grep -m1 PREP_PROGRESS; systemctl stop libzync-prep
+   journalctl -u libzync-prep -f -n0 -o cat | grep -m1 PREP_PROGRESS; systemctl stop libzync-prep libzync-fetch
    ```
-   ESTIMATE: the wait is at most one save interval, about 64 min at 607,000 (3,842 s per 1,000 blocks, measured).
-   `libzync-fetch` (its block source) keeps running: it writes only `$P/blocks`, which re-forest never opens.
-   Check: `systemctl is-active libzync-prep` = `inactive`; S, the newest complete save point:
-   ```bash
-   . /root/reset-v026.env
-   S=$(cd $P/out && for h in $(ls state_*.smt | sed 's/state_\([0-9]*\)\.smt/\1/' | sort -rn); do
-         [ -s state_$h.json ] && [ -e state_$h.coinlog ] && [ -s state_$h.trie ] && { echo $h; break; }; done)
-   echo "S=$S"; echo "S=$S" >> /root/reset-v026.env
-   ```
-   S is a multiple of 1,000, equals the height of the last `PREP_PROGRESS` line, and is at least S0. Rollback:
-   `systemctl start libzync-prep`.
+   ESTIMATE: the wait is at most one save interval, about 64 min near 607,000 (3,842 s per 1,000 blocks, measured).
+   Check: `systemctl is-active libzync-prep libzync-fetch` = `inactive inactive`. Rollback: `systemctl start
+   libzync-fetch libzync-prep` (the old run carries on, still wrong from 147,396).
 2. **The board's writers and the timers that would act on a half-reset board:**
    ```bash
    systemctl stop libzync-board-prep libzync-board-fetch
@@ -230,78 +182,75 @@ key names only.
    Check: each `Result=success`; the spine copies name `spine-<the old image's 8>/… [1..1,999]` (R2 and B2). A failure
    here is not a reason to go on without the record: fix it first. Rollback: none needed (append-only copies).
 
-## 2. The undo cache into the run
+## 2. The paper prep from genesis, under the v0.26.0 host
 
-The cache the real run starts from is **this box's own** from the rehearsal (`/root/undo-own-$S0.tsv`, heights
-1..S0, which agreed with hazync-coord's): re-forest then fetches S0+1..S from the node. ESTIMATE: S - S0 is at most a
-few thousand blocks; UNDO.md measured 8.1 to 14.3 blocks/s around 500,000 to 590,000 (8 jobs, hazync-coord), so
-minutes. Only if the rehearsal was skipped, use the staged one (`/root/undo-cache-620000.tsv`), knowing it is checked
-by a 32-height sample and the bundles only.
-```bash
-. /root/reset-v026.env; df -h /var/lib/libzync-fast
-mkdir -p $P/out/reforest && cp /root/undo-own-$S0.tsv $P/out/reforest/undo.tsv
-```
-Check: `cmp /root/undo-own-$S0.tsv $P/out/reforest/undo.tsv`. Rollback: `rm -r $P/out/reforest`.
-
-## 3. Re-forest the paper run (UNDO.md §8 step 3)
-
-1. **Back up what re-forest rewrites** (every `state_<h>.json` 1..S and the leaf bundles; the stores are never opened),
-   and prove the copy is whole:
+1. **Move the old run aside** (same filesystems, so each `mv` is instant; nothing is deleted until step 13):
    ```bash
-   df -h /var/lib/libzync-fast                                   # the two tars need ~2.5 GB
-   tar -C /var/lib/libzync-fast --exclude=out/reforest -cf /var/lib/libzync-fast/out-pre-reforest-$S.tar out   # not step 2's cache
-   tar -C $P -cf /var/lib/libzync-fast/leaves-pre-reforest-$S.tar leaves
-   tar -C /var/lib/libzync-fast -df /var/lib/libzync-fast/out-pre-reforest-$S.tar && tar -C $P -df /var/lib/libzync-fast/leaves-pre-reforest-$S.tar && echo tars-match
+   . /root/reset-v026.env; df -h / /srv/bulk
+   O=$(readlink -f $P/out)                                     # /var/lib/libzync-fast/out
+   mv $O $O.pre-v026 && mkdir $O
+   for d in cl trie leaves blocks; do mv $P/$d $P/$d.pre-v026; done
+   ls -A $O $P/cl $P/trie $P/leaves $P/blocks 2>&1 | grep -v '^ls:' | wc -l      # 0: nothing left in the run's dirs
    ```
-   Check: `tars-match` (`tar -d` compares every member with the disk and prints any difference).
-2. **Run it** as a transient unit, so a dropped ssh session does not kill it:
+   (`libzync-prep-run.sh` recreates `blocks cl trie out leaves`, finds no save point, and starts from genesis.)
+2. **The v0.26.0 host**, keeping the old one by its image:
    ```bash
-   systemctl reset-failed libzync-reforest 2>/dev/null       # a failed earlier run keeps the name
-   systemd-run --unit=libzync-reforest --property=Nice=10 --property=IOSchedulingClass=idle \
-     --setenv=HOME=/root $R/hazync-host-x86_64-linux-gnu libzync-reforest $P/out $S \
-     --bitcoin-cli "$CLI" --all --jobs 4 --bundles $P/leaves
-   journalctl -u libzync-reforest -f -o cat
+   cp -a $P/bin/host_lz $P/bin/host_lz.$po8
+   install -m 755 $R/hazync-host-x86_64-linux-gnu $P/bin/host_lz
+   [ "$(id_of $P/bin/host_lz)" = "$N" ] && echo prep-host-ok
    ```
-   (`systemd-run` starts a clean environment: `HAZYNC_COINLOG_DIR`, `HAZYNC_TRIE_DIR` and `HAZYNC_PREP_LEAF_BUNDLES`
-   are unset, as re-forest requires. `--jobs 4` = the node's default `rpcthreads`; the box's bitcoin.conf sets none.)
-   - Phase 1 finds the cache (S0 heights), re-fetches a sample of 32 of them, which must agree, and then fetches
-     S0+1..S from the node.
-   - Phase 1b: `N leaf bundle(s) cross-checked` with N = the `HAZYNC_PREP_LEAF_AT` heights at or below S (11 for any
-     S from 550,000 to 649,999: 170, 1,000, 100,000 … 550,000).
-   - Phase 2 walks 1..S. ESTIMATE: the rehearsal's time.
-   Check — the markers, not the unit's state (a transient unit that succeeded is gone at once, so
-   `systemctl show -p Result` of it says nothing): the journal's `LZ_REFOREST_DONE 1..=S`, `cat $P/out/state_$S.forest`
-   = `U0`, and `$P/out/reforest/DONE_$S` exists. A run that stopped can be run again with the same commands (it
-   accepts states of both formats and resumes the cache), once the cause is understood.
-   **Rollback (before step 4's prep has started only):** empty the directories, then restore them, so nothing re-forest
-   wrote survives (`state_$S.forest` would otherwise let the new prep continue from an old-format state, and
-   `*.reforest.tmp` files would be left over):
+   The v0.26.0 host derives the tracked flags itself (`prover/host/src/tracked.rs`) and refuses to continue from (or
+   take a base step on) a saved state at or above mainnet 147,396, the first tracked coin, that lacks its
+   `state_<h>.flags` marker, which only this host writes; so the old run cannot be picked up there by mistake. Below
+   147,396 an older host's states are the same and are accepted. A leaf bundle at or above 147,396 whose block JSON has
+   no `coinbase_flags` (cut by an older host) is refused too.
+2b. **The prep memory settings** (docs/libzync/PREP_MEMORY.md on `docs/prep-memory`; agreed 16.11.2026), before the
+   fresh run's first block. From the checkout this reset installs (`/opt/hazync-lz`, or the
+   `deploy/prep-memory-settings` branch if it is not merged yet):
    ```bash
-   find /var/lib/libzync-fast/out -mindepth 1 -delete && tar -C /var/lib/libzync-fast -xpf /var/lib/libzync-fast/out-pre-reforest-$S.tar
-   find $P/leaves -mindepth 1 -delete && tar -C $P -xpf /var/lib/libzync-fast/leaves-pre-reforest-$S.tar
-   ls $P/out | grep -cE '\.forest$|\.reforest\.tmp$|^reforest$'     # 0
-   systemctl start libzync-prep                                   # the old host is still in place
+   D=/opt/hazync-lz/coordinator/deploy/dropins
+   install -d /etc/systemd/system/libzync-prep.service.d /etc/systemd/system/libzync-fetch.service.d
+   for f in run cache; do cp -p /etc/systemd/system/libzync-prep.service.d/$f.conf /root/libzync-prep-$f.conf.pre-v026; done
+   install -m 644 $D/libzync-prep-run.conf    /etc/systemd/system/libzync-prep.service.d/run.conf      # SAVE_EVERY 250
+   install -m 644 $D/libzync-prep-cache.conf  /etc/systemd/system/libzync-prep.service.d/cache.conf    # 12288 MB
+   install -m 644 $D/libzync-prep-memory.conf /etc/systemd/system/libzync-prep.service.d/memory.conf   # no cap, OOMScoreAdjust 500
+   install -m 644 $D/libzync-fetch-run.conf   /etc/systemd/system/libzync-fetch.service.d/run.conf     # unchanged
+   install -m 644 /opt/hazync-lz/coordinator/deploy/libzync/sysctl/90-libzync-prep.conf /etc/sysctl.d/   # unchanged
+   systemctl daemon-reload
+   systemctl show libzync-prep -p Environment --value | tr ' ' '\n' | grep -E 'SAVE_EVERY|TRIE_CACHE'   # 250, 12288
+   systemctl show libzync-prep -p OOMScoreAdjust -p MemoryMax --value                                   # 500, infinity
    ```
+   The board pass's own unit (`libzync-board-prep.service`, SAVE_EVERY 250, OOMScoreAdjust 500) comes with step 5's
+   unit install. Rollback: the two `.pre-v026` copies back, `rm` memory.conf, `daemon-reload`.
 
-## 4. The new host for the paper prep, and continue
+2c. **The reference check needs a proof by the NEW image.** `HAZYNC_PREP_CHECK=$P/ref` compares prep's first states with a
+   proved run's `state_<h>.json`, byte for byte, and skips heights it has no file for (`prep.rs`, `want_path`). The
+   `ref` on the box was proved by the retiring image, so the new prep stops at once with `PREP_MISMATCH at 1: fields
+   ["block_roots", "self_id"]` and restarts every 30 s (found on 16.11.2026). Before step 3, prove block 1 under the
+   new image and use its state as the reference (529 s on hazync-proof's CPU, measured 16.11.2026):
+   ```bash
+   W=/root/v026/ref-proof; mkdir -p $W/json && cp $P/blocks/block_1.json $W/json/   # or fetch block 1 first
+   (unset RISC0_DEV_MODE; $R/hazync-host-x86_64-linux-gnu libzync-prove-range 1 1 $W/json genesis $W/out)
+   $R/hazync-verify-x86_64-linux-gnu $W/out/block_1.rcpt          # SWIFTSYNC_VERIFY_DEMO for block 1 is expected
+   mv $P/ref $P/ref.$po8 && install -d -o 1000 -g 1000 $P/ref && cp -p $W/out/state_1.json $W/out/block_1.rcpt $P/ref/
+   ```
+   Cross-check: once the board pass has written `/var/lib/libzync-board/out/state_1.json`, it is byte-identical to
+   `$W/out/state_1.json` (both are the new image's state at 1; it was on 16.11.2026).
 
-```bash
-. /root/reset-v026.env
-cp -a $P/bin/host_lz $P/bin/host_lz.$po8
-install -m 755 $R/hazync-host-x86_64-linux-gnu $P/bin/host_lz
-[ "$(id_of $P/bin/host_lz)" = "$N" ] && echo prep-host-ok
-systemctl start libzync-prep
-journalctl -u libzync-prep -n 20 -o cat --no-pager        # "libzync-prep: S+1..974936 from state_S.json", re-stamped
-```
-Check: `prep-host-ok`; the runner names `state_$S.json`, prep prints the re-stamp line (image `46666b6f…`) and no
-refusal about a forest marker; the next `PREP_PROGRESS` line (one save interval later) gives the new host's rate, to
-compare with 0.26 blocks/s. The `state_<h>.json` files above S left by the old host are rewritten as prep reaches
-them. `HAZYNC_PREP_CHECK` (`$P/ref`, states 1..200) does not apply above S.
-⛔ **Point of no return for the paper run: the first save after S.** A save rewrites the stores' snapshot (the disk
-trie can never go back, `libzync-prep-run.sh`). Rollback is possible only while that save has not begun, that is
-while `ls $P/out/state_$((S + 1000)).json` finds nothing (about 64 min, estimate from the measured rate); never stop
-prep during a save. Rollback then: `systemctl stop libzync-prep`, `install -m 755 $P/bin/host_lz.$po8 $P/bin/host_lz`,
-and step 3's rollback.
+3. **Start the block source, then prep:**
+   ```bash
+   systemctl start libzync-fetch; sleep 60; ls $P/blocks | head -3            # block_1.json …
+   systemctl start libzync-prep
+   journalctl -u libzync-prep -n 20 -o cat --no-pager                          # "libzync-prep: 1..974936 from genesis"
+   ```
+   Check: `prep-host-ok`; prep starts from genesis; `HAZYNC_PREP_CHECK` (`$P/ref`, states 1..200) passes (any
+   mismatch stops prep); the first `PREP_PROGRESS` lines come at the measured early rate (about 50 blocks/s near
+   147,000 on the old run); after 147,396 the prep log names the tracked coins it flags. Rollback: `systemctl stop
+   libzync-prep libzync-fetch`, `install -m 755 $P/bin/host_lz.$po8 $P/bin/host_lz`, empty the five dirs and `mv` each
+   `*.pre-v026` back.
+
+(Steps 3 and 4 were the re-forest of the paper run; they are gone, and the step numbers after them are kept so the
+cross-references below stay right.)
 
 ## 5. `/opt/hazync-lz` at REF, and everything installed from it
 
@@ -353,7 +302,7 @@ the checkout's. Rollback: the same deploy command with `e5ad283` and the same in
    sqlite3 "file:/root/lz-$o8.db?mode=ro" 'PRAGMA integrity_check; SELECT count(*) FROM contributors; SELECT count(*) FROM ranges; SELECT status, count(*) FROM sponsorships GROUP BY status'
    mv /var/lib/hazync-lz /var/lib/hazync-lz.$o8
    ```
-   Check: `ok`; the sponsorship counts are step 0.2's (if not, a payment landed meanwhile: owner); write the counts
+   Check: `ok`; the sponsorship counts are step 0.2's (if not, a payment landed meanwhile: settle it first); write the counts
    into the record table.
 3. **A fresh directory, with every subdirectory** (SWITCH.md 4c, a), and the zyncAPP directory **empty**: the old
    board's facts are about an old-image proof and are not copied back (step 8):
@@ -440,7 +389,7 @@ spine. **The default is to wait** for the board's first genesis spine: the follo
 and starts zync-serve itself. Until then `/api/zync/*` answers 502 and Coin check says the fact service is
 unreachable. On 11-12 the first spine reached block 344 in about 2.5 h with 4 pods (`RESULT_board_run_2026-11-12.txt`).
 
-Optional, if the owner wants Coin check up from the start: seed from #732's real receipt of mainnet block 1
+Optional, to have Coin check up from the start: seed from #732's real receipt of mainnet block 1
 (`experimental/libzync-bench/zapp/mainnet_1_1_46666b6f.rcpt`, sha256 `35f527be…e5fd`; in the checkout when #732 is in
 REF) by running the follower once on it. The follower's own test of a proof, `verify-any <it> 1` with the v0.26.0
 mainnet host, gives `RANGE-OK lo=1 hi=1 … anchored=1` on it (hazync-coord's build, 2026-11-15); the rest of this path
@@ -516,13 +465,13 @@ first receipts to land: `ls /var/lib/hazync-lz/proofs | head`, and after the fir
 - **Provers:** the v0.26.0 worker and host; older hosts are refused by `/api/meta`'s `method_id` pre-flight.
 - **Pods:** the sponsor bot (step 9) boots them from the release, once there is a sponsorship.
 
-## 13. Clean-up (after the new board has run for a while; the owner says when)
+## 13. Clean-up (after the new board has run for a while)
 
 Everything kept for a rollback, with where it lives (`du -sh` each first):
 
 | what | where | filesystem |
 |---|---|---|
-| the paper run's pre-re-forest tars | `/var/lib/libzync-fast/{out,leaves}-pre-reforest-$S.tar` (~2.5 GB) | `/` |
+| the old paper run | `/var/lib/libzync-fast/out.pre-v026`, `$P/{cl,trie,leaves,blocks}.pre-v026` (the coin log and trie are hundreds of GB) | `/` and `/srv/bulk` |
 | the old hosts | `$P/bin/host_lz.$po8`, `/opt/hazync-lz/bin/{host,hazync-verify}.$o8`, `zync-serve.pre-v026`, `$B/bin/host_lz.$o8` | `/srv/bulk`, `/` |
 | the old board pass | `/var/lib/libzync-board/{out,cl,trie}.$o8`, `$B/leaves.$o8` | `/`, `/srv/bulk` |
 | the old zyncAPP follower | `/srv/bulk/libzync-zapp.$zo8` | `/srv/bulk` |
@@ -533,20 +482,24 @@ Everything kept for a rollback, with where it lives (`du -sh` each first):
 The board pass stops at its free-space floor `HAZYNC_PREP_MIN_FREE_GB=250` (the paper run's is 200) on the coin log's
 filesystem, `/` for both: check `df -h /` against those before and after.
 
-## Record of the reset (fill in on the day)
+## Record of the reset (16.11.2026)
 
 | | |
 |---|---|
-| sponsorships by status in the old ledger (step 0.2 / 6.2) | |
-| S0 (rehearsal), phase 1 and phase 2 times; caches agree? | |
-| S (paper prep re-forested at), real re-forest time | |
-| the old board at the reset: frontier, receipts, ranges rows, contributors carried | |
-| new prep rate after the swap | |
-| first `46666b6f` spine | |
+| release | v0.26.0 published 17:12 UTC, signed 17:39 (13 assets, PGP good), `release.sh --verify-only` passed; `/opt/hazync-lz` deployed at `11d406a9` (the merge commit after the tag: #745 notes, #747 prep settings), `server.py` unchanged, no coordinator restart |
+| sponsorships by status in the old ledger (step 0.2 / 6.2) | none (0 rows) |
+| the old board at the reset: frontier, receipts, ranges rows, contributors carried | frontier 1,999; 3,206 ranges rows; 16 contributors carried; old ledger `/root/lz-8888d59c.db` (integrity ok); spine `spine-8888d59c/spine_1-1999` copied to R2 and B2 (its first offsite copy) |
+| paper prep: the old run | stopped at its 641,000 save point; moved aside as `*.pre-v026` |
+| paper prep restart: time from genesis to 147,396, and the tracked coins it flagged (vs `reproduce/libzync-tracked.json`) | started 20:42 UTC; 147,396 (`cec2a159…`, the first tracked coinbase) after 18.2 min; 30 tracked txs to 163,698, `tracked_diff.py` MATCH |
+| reference check (step 2c, new) | block 1 proved under `46666b6f` in 529 s (CPU); receipt `2c2edb64…`; its `state_1.json` byte-identical to the board pass's |
+| prep settings (step 2b) | SAVE_EVERY 250, trie cache 12288 MB, OOMScoreAdjust 500, no memory cap; ~350 blocks/s early (MEASURED, PREP_PROGRESS) |
+| board after the reset | `/api/meta`: `46666b6f`, frontier 0, handover null; board pass `state_1` stamped `46666b6f`, `LZLEAF02`, 5,000 leaf bundles waiting for provers |
+| website | hazync-web #57 (with #56, #58) deployed; live wasm `f16b5b98` |
+| first `46666b6f` spine | (pending: needs provers) |
 
-## Defaults and open questions for the owner
+## Defaults and open questions
 
-**Defaults** (the reset follows these unless the owner says otherwise):
+**Defaults** (the reset follows these unless decided otherwise):
 
 1. Only contributors carry over (11-12 precedent); sponsorships and payments stay in the old ledger.
 2. The old offsite prefixes, the old ledger (directory and `VACUUM INTO` copy) and its Litestream replica are kept as

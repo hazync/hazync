@@ -45,6 +45,14 @@ while read -r manifest; do
     vendor/*) ok "$d skipped — vendored upstream, not our test surface (our edits are gated by receipt equality)"; continue ;;
     # history/ is the record of the retired CORE design (history/README.md): kept, not built or run.
     history/*) ok "$d skipped — history/, the retired CORE design's record, not built"; continue ;;
+    # A zAPP is a module of its own (zapps/<name>/, docs/libzync/ZYNCAPPS.md §9) and runs its tests from its own
+    # directory: the zapps job runs every zapps/<name>/test.sh, which must test this crate by its manifest.
+    zapps/*)
+      z=zapps/$(cut -d/ -f2 <<<"$d"); m=".${d#"$z"}/Cargo.toml"
+      if grep -qsF -- "cargo test --release --manifest-path $m" "$z/test.sh" && grep -rqsF 'zapps/*/test.sh' "$WF"; then
+        ok "$d has tests and CI runs them ($z/test.sh, the zapps job)"
+      else bad "$d contains #[test] but $z/test.sh does not run them (cargo test --release --manifest-path $m), or no workflow runs zapps/*/test.sh"; fi
+      continue ;;
   esac
   if grep -rqs -- "--manifest-path $d/Cargo.toml" "$WF"; then ok "$d has tests and CI runs them"
   # prover/host's tests need a libzync guest, so they run inside the reproducible container, from
@@ -111,6 +119,16 @@ for t in d.get("txs",[]):
 if missing: print(f"FAIL {f} missing {sorted(set(missing))} — regenerate with prover/fetch_block_rpc.py"); sys.exit(1)
 print(f"  ok   {f} carries coin_height/coin_mtp/recent_times")
 PY
+done
+
+echo "== 6. every zAPP module has its own tests, run by CI and able to fail =="
+# zapps/<name>/test.sh is the one place a zAPP's tests are run from (ZYNCAPPS.md §9); a zAPP without one is untested.
+for z in $(git ls-files 'zapps/*' | cut -d/ -f2 | sort -u); do
+  t=zapps/$z/test.sh
+  if [ ! -f "$t" ]; then bad "zapps/$z has no test.sh — a zAPP module whose tests nothing runs"
+  elif ! grep -qE 'set -e|exit 1' "$t"; then bad "$t contains no way to exit non-zero — it cannot fail"
+  elif ! grep -rqsF 'zapps/*/test.sh' "$WF"; then bad "$t exists but no workflow runs zapps/*/test.sh"
+  else ok "$t runs in CI (the zapps job) and has a failure path"; fi
 done
 
 echo

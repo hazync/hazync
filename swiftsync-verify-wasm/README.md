@@ -1,8 +1,9 @@
 # `swiftsync-verify-wasm`: the libzync chain-proof verifier in a browser
 
 The same checks as `swiftsync-verify` (one library), compiled to WebAssembly, with a one-page front end. Released as
-`hazync-verify.wasm` with this directory's `swiftsync-verify.js` as `hazync-verify.js` (serve the two together); it
-also checks the header-chain zyncAPP (`verifyHeaders`). The proof and its facts are verified on the device; nothing
+`hazync-verify.wasm` with this directory's `swiftsync-verify.js` as `hazync-verify.js` (serve the two together). It
+checks core chain proofs only: the header-chain zyncAPP's `verifyHeaders` is its own module since 15.11.2026
+(`../zapps/headers/wasm`, `zapp-headers.js`; docs/libzync/ZYNCAPPS.md §9). The proof and its facts are verified on the device; nothing
 is uploaded. No wasm-bindgen: a raw ABI and ~60 lines of
 hand-written glue (`swiftsync-verify.js`), so the `.wasm` is a plain cargo output anyone can rebuild and compare.
 
@@ -14,10 +15,11 @@ cp target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm . && python3
 
 | | |
 |---|---|
-| size | 1,248,921 bytes raw, 362,580 gzipped |
-| sha256 (this commit, `./build.sh`) | `f16b5b98a9a972277792ae58594d23eae92337f1fef7bf87102a0d7031cb0c7b` (v0.26.0: the undo-data commitment, the 11-14 review's trie-fact check, and the verify_facts frame fix of 15.11.2026; risc0 3.1.0; mainnet `46666b6f`, signet `01a80f17`, headers `2db34e12`, and `8888d59c` / `d4210dae` by id; one build, Rust 1.99.0, 2026-11-15; 2026-11-14's `12bbc9ae…` had the frame bug). v0.24.0's release asset was `446fdaeb…` |
-| reproduces | **only with the same host Rust**: 1.99.0 gave v0.24.0's `446fdaeb…`, 1.97.1 `a3a85b7f…`. The checkout path does not matter (the sources are staged), so use `RUSTUP_TOOLCHAIN=1.99.0`; the repo does not pin it yet. Also only at the default stage path: a `SWIFTSYNC_WASM_STAGE` override gave other bytes (`2ea330c0…`, +235 bytes) with no path in the strings |
-| vectors | 11/11 (`test-vectors.out`; the 2 CLI-only cases of the manifest are skipped) |
+| size | 1,239,218 bytes raw, 360,028 gzipped |
+| sha256 (this commit, `./build.sh`) | `0c8cf026bd088d049d0c6becdfefdc4b21cfec75a66c48c391e1d115325e1917` (main's core with fix/receipt-hardening and fix/triefact-strict: unknown fields refused in every fact type and unknown keys in the facts JSON; built in the published image from reproduce/wasm-image.digests, HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1, fixed stage path; laptop and hazync-coord (a fresh clone), 18.11.2026). Before it `3f699baec899b705fe07637e75b950c32e8db74eff08b18a6e4aca5e4d9781aa` (main's core with fix/receipt-hardening: the strict receipt decoder and journal guard of fuzz round 11-17 and their review fixes, the header-chain reader's share of them now in `../zapps/headers`; built in the published image, 18.11.2026); before that `aa33d1a945e382962066a63de4b5701e07143d9a8a51b620b69ff75fa6083617` (v0.26.0's verifier with the verify_facts frame fix of 15.11.2026 and main's Frame::take checked_add (6d459c15, 16.11.2026), WITHOUT the header-chain zyncAPP, now `../zapps/headers`; risc0 3.1.0; mainnet `46666b6f`, signet `01a80f17`, and `8888d59c` / `d4210dae` by id; Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, laptop and hazync-coord). Before the checked_add `622ce430…`; with the zyncAPP still in it, the source before the checked_add was `f16b5b98…`; 2026-11-14's `12bbc9ae…` had the frame bug; v0.24.0's release asset was `446fdaeb…` |
+| released asset (v0.26.1) | `996f1ed661c2b68d4e5bcc6b56f53a5fbfdf910ef59e7ba57bd9a436f19081a9`, 1,249,260 bytes raw: the `hazync-verify.wasm` of release v0.26.1 (commit `3b9a90a2`), listed in its signed `SHA256SUMS.txt`, and the file hazync.org serves at `/verify/hazync-verify.wasm` (both checked 18.11.2026). **The row above is main's source, the row here is the release**: main has changed since v0.26.1, so they differ and both are right. To reproduce the released file, run `./build.sh` on a checkout of the tag `v0.26.1` (whose copy of this README pins the same hash); on main, compare with the row above. The newest release's hash is always in its `SHA256SUMS.txt` |
+| reproduces | on any x86_64 machine with docker, cargo >= 1.78 (it reads the v4 Cargo.lock), python3 and the network (no wasm32 Rust needed): `./build.sh` builds in the pinned container `reproduce/wasm.Dockerfile` (Rust 1.99.0, base image by digest, an Ubuntu archive snapshot) at the fixed stage path `/tmp/swiftsync-wasm-build`, so neither the host's toolchain nor its paths reach the bytes (16.11.2026: this branch's core, without the header-chain zyncAPP, the same `aa33d1a9…` on a laptop and on hazync-coord). Before that the stage path DID reach the bytes, through cargo's `-C metadata` hash of the path dependencies (`swiftsync-verify`, `libzync`: outside the building workspace, so hashed by absolute path): another stage gave `7d79f68c…` (a laptop) and `05754e5f…` (hazync-web #57), so `SWIFTSYNC_WASM_STAGE` is refused now. The Rust version still matters: 1.99.0 gave v0.24.0's `446fdaeb…`, 1.97.1 `a3a85b7f…` |
+| vectors | 14/14 (`test-vectors.out`; the 2 CLI-only cases of the manifest are skipped) |
 | browser | the page loads the module and shows the built-in image id in headless Chrome |
 
 **What a browser cannot do:** step 7 of the proposal's §5 (the tip is on your own most-work chain) needs your

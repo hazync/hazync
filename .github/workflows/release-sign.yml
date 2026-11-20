@@ -72,7 +72,7 @@ jobs:
       # be a WRONG artifact carrying a good signature and a matching checksum, on a release whose every
       # proof it rejects. The id assertion below reads the checked-out tree, so pinning the ref is also
       # what makes that assertion mean "matches THIS tag" rather than "matches main".
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: refs/tags/${{ steps.tag.outputs.tag }}
       - name: Install the aarch64 cross toolchain (and qemu, to RUN what it builds)
@@ -151,7 +151,7 @@ jobs:
     needs: build-installer
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: hazync-setup-x86_64-windows
       - name: Attach to the release
@@ -220,7 +220,7 @@ jobs:
 
       # The asset list, from THE TAG being signed (the same pinning reason as the checkout above). Only
       # this one file is checked out: nothing from the tree runs in the job that holds the signing key.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: refs/tags/${{ steps.tag.outputs.tag }}
           sparse-checkout: |
@@ -333,9 +333,18 @@ jobs:
           for name, (needle, lo, hi) in want.items():
               n = open(name, "rb").read().count(needle)
               print(f"{name}: image {idh[:8]} {n}x"); bad += [] if lo <= n <= hi else [f"{name} carries it {n}x"]
-          with zipfile.ZipFile("hazync-host-x86_64-windows-cuda.zip") as z:
-              n = z.read("host.exe").count(raw)
-          print(f"hazync-host-x86_64-windows-cuda.zip host.exe: image {idh[:8]} {n}x"); bad += [] if n >= 1 else ["host.exe does not carry it"]
+          # Both Windows hosts (CUDA, and CPU since v0.26.1) as the list names them: the list check above already made
+          # the release carry exactly the listed set.
+          for zn in ("hazync-host-x86_64-windows-cuda.zip", "hazync-host-x86_64-windows-cpu.zip"):
+              try:
+                  zf = zipfile.ZipFile(zn)
+              except FileNotFoundError:
+                  if zn.endswith("-cpu.zip"):
+                      continue      # a tag from before the CPU host: its list does not name it
+                  raise
+              with zf as z:
+                  n = z.read("host.exe").count(raw)
+              print(f"{zn} host.exe: image {idh[:8]} {n}x"); bad += [] if n >= 1 else [f"{zn} host.exe does not carry it"]
           # The installer is compressed, so the id cannot be seen in it. windows-installer.yml (build-installer above)
           # installed it and checked the installed host.exe is the zip's byte for byte; here, only that it is one.
           b = open("hazync-setup-x86_64-windows.exe", "rb").read()

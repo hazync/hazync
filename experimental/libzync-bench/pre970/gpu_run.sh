@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # Signet GPU proof, unattended: one RTX PRO 6000 -> provision -> build -> prove 2501..2600 recursively ->
 # verify -> fetch -> TERMINATE. A separate deadline kills the pod at 150 min or a balance under $3.
 cd ~/libzync-gpu/pre970; LOG=gpu_run.log; exec >> $LOG 2>&1

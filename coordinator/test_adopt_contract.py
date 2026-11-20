@@ -67,9 +67,13 @@ body = g.group(0) if g else ""
 if not CONTROL:
     check("a.adopt and not a.release_adopted" in body,
           "the guard checks --adopt and --release-adopted")
-    check("return" in body.split("a.adopt")[1].split("terminate_confirmed")[0],
+    # The guard hands the decision to FleetRecord.release (the record keeps a pod LEFT RUNNING): read that body.
+    r = re.search(r"    def release\(self, api, p, why, adopted\):.*?\n(\s{4}\S|\n\S|\Z)", SRC, re.S)
+    rbody = r.group(0) if r else ""
+    check("rec.release(" in body and "adopted=" in body, "the guard releases through FleetRecord.release")
+    check("return" in rbody.split("if adopted:")[1].split("terminate_confirmed")[0] if "if adopted:" in rbody else False,
           "an adopted pod returns WITHOUT terminating")
-    check("terminate_confirmed" in body, "a rented pod is still terminated (#479)")
+    check("terminate_confirmed" in rbody, "a rented pod is still terminated (#479)")
 
 # ── 2. the recruiter is stopped before the harvest ───────────────────────────────────────────────
 i_stop = SRC.find("recruiter.stop()")

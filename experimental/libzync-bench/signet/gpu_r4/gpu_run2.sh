@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # Signet GPU proof, unattended: one RTX PRO 6000 -> provision -> build -> prove 2501..2600 recursively ->
 # verify -> fetch -> TERMINATE. A separate deadline kills the pod at 75 min or a balance under $1, and
 # HARVESTS /workspace/out first (review 5: a deadline must never destroy the run's evidence).

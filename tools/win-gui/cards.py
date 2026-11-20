@@ -30,6 +30,12 @@ QUERY = "index,uuid,name,memory.total,driver_version,compute_cap"
 # sppark keeps cards at compute capability 7.0 and newer; see supervisor.check_gpu.
 FLOOR = 7
 
+# ⛔ THE LOWEST THE OPT-IN ("try my GPU even if it is below the supported floor") MAY GO. The builds carry no GPU code
+# below sm_61 and sppark refuses a floor under 6 (hazync#727), so a compute 5.x card given a worker could only fail.
+# Before this the opt-in lowered the floor to the OLDEST card present, and a Maxwell card beside a Pascal one got a
+# worker of its own.
+OPT_IN_FLOOR = 6
+
 # One measured prove at segment size 21 peaked near 22 GB; each step down roughly halves it. The
 # same table as supervisor._SEG_PO2_FOR_VRAM, kept there as the source and passed in by the caller.
 
@@ -139,12 +145,19 @@ def seg_po2_for(card, configured, table):
     big card's size would run the small one out of memory on its first piece. So a smaller card gets
     its own smaller size. It is only ever LOWERED: a size somebody set low on purpose stays.
 
-    ⚠ Blank stays blank. Nothing was chosen, so nothing is chosen on their behalf here either.
+    ⚠ BLANK IS "AUTOMATIC", AND AUTOMATIC MEANS THIS CARD'S SIZE (19.11.2026). Blank used to stay blank: the worker
+    got no HAZYNC_SEG_PO2, the host's own default (21, peak ~22 GB) was tried first, and a 4 GB GTX 1050 Ti ran out
+    of memory twice before its owner set 18 by hand. Now a known card gets the table's size for it; with no card
+    known, blank still lets the host decide.
     """
     s = str(configured or "").strip()
-    if not s.isdigit() or card is None:
+    if card is None:
         return s or None
     own = next(po2 for least, po2 in table if card["vram_mb"] >= least)
+    if not s:
+        return str(own)
+    if not s.isdigit():
+        return s
     # ⚠ The table tops out at 21 (what Automatic picks), so 22, chosen by hand, was clamped back to 21
     # on every card. 22 peaks near 40.6 GB: a card with room for it keeps it.
     if card["vram_mb"] >= FITS_22_MB:
@@ -163,9 +176,82 @@ def pin_env(card):
     """
     if card is None:
         return {}
-    return {"CUDA_DEVICE_ORDER": "PCI_BUS_ID", "CUDA_VISIBLE_DEVICES": str(card["index"])}
+    # ⭐ BY UUID WHEN THE CARD HAS ONE (review L6). CUDA accepts nvidia-smi's "GPU-…" UUID in CUDA_VISIBLE_DEVICES, and
+    # a UUID names the same card whatever order anything counts in; a worker started again later in the session keeps
+    # its card even if the numbering changed. The index stays the fallback, with the PCI order made explicit.
+    uuid = "" if card.get("by_index") else str(card.get("uuid") or "")
+    return {"CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "CUDA_VISIBLE_DEVICES": uuid if uuid.startswith("GPU-") else str(card["index"])}
 
 
 def lock_name(card):
     """The lock file's name for a worker on `card`. One lock per card, shared by nothing else."""
     return "hazync-gpu.lock" if card is None else f"hazync-gpu-{card['index']}.lock"
+
+
+def session_labels(plan, names):
+    """The cards this session started on, in plan order, once each: what Home lists, one line a card.
+
+    ⚠ FROM THE PLAN, NOT FROM THE WORKERS RUNNING NOW. A card whose worker stopped on an error, or is
+    between two blocks, has no running worker; listing only running workers made that card vanish from
+    Home, and with one card left the page fell back to the one-card view, so a dead card read as
+    "nothing happened" — the opposite of "always show what is happening".
+    """
+    out = []
+    for c in plan:
+        lab = names.get(c["index"], "") if c else ""
+        if lab and lab not in out:
+            out.append(lab)
+    return out
+
+
+def status_lines(order, live, notes):
+    """One or more lines per card for Home. `order` is session_labels; `live` maps a label to the
+    lines of its running workers (a prover and a folder can share a card); `notes` maps a label with
+    no running worker to why not ("stopped — …", "nothing free; asking again in a minute")."""
+    out = []
+    for lab in order:
+        note = notes.get(lab) or ""
+        if live.get(lab):
+            out += [f"{lab}:  {line}" for line in live[lab]]
+            # a prover that stopped beside a folder that still runs on the same card: both are true
+            if note.startswith(STOPPED):
+                out.append(f"{lab}:  {note}")
+        else:
+            out.append(f"{lab}:  {note or 'waiting to start'}")
+    return out
+
+
+def stopped(order, notes, live=None):
+    """The cards with nothing left running for the session: stopped, and no worker still on them."""
+    live = live or {}
+    return [lab for lab in order if (notes.get(lab) or "").startswith(STOPPED) and not live.get(lab)]
+
+
+STOPPED = "stopped"
+
+
+def cuda_unusable(found, floor, driver_present=True):
+    """Why a CUDA prover cannot prove on this machine, or None when it can (or when that cannot be told).
+
+    ⛔ Asked BEFORE Start launches anything (review of c881d582, M1): a machine whose only cards are below the floor
+    used to get an unpinned worker that failed on the GPU — or, with the opt-in ticked on a compute 5.x card, one
+    told to lower sppark's floor to a value sppark refuses (#727). ⚠ An EMPTY list is "could not ask" (nvidia-smi
+    missing or failing), not "no card": then this says nothing and the prover is allowed to try.
+    """
+    if not driver_present:
+        return "no NVIDIA graphics driver was found"
+    if not found:
+        return None
+    if usable(found, floor):
+        return None
+    names = labels(found)
+    parts = [names[c["index"]] for c in found]
+    # ⚠ plain words (review of a04038ce, M2/L12): "compute capability" and issue numbers mean nothing to the people
+    # this is for; the card's name and its generation do
+    why = (f"{', '.join(parts)} {'is' if len(parts) == 1 else 'are'} older than the prover supports "
+           f"(it needs a GTX 16-series, RTX 20-series or newer NVIDIA card)")
+    if floor > OPT_IN_FLOOR and any(c["cc_major"] == OPT_IN_FLOOR for c in found):
+        why += (". A GTX 10-series card can be tried with \"Try my GPU even if it is below the supported floor\" "
+                "under Advanced, with a recent Hazync")
+    return why

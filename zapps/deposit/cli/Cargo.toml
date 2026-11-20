@@ -1,0 +1,41 @@
+[package]
+name = "zapp-deposit-cli"
+version = "0.1.0"
+edition = "2021"
+description = "zapp-deposit: the deposit-proof zyncAPP's command line (zapps/deposit)"
+license = "MIT"
+publish = false
+
+# The CLI, apart from the library (..): it alone takes the chain-identity flags every zAPP CLI shares (zapps/common:
+# --expect, --mempool, --bitcoin-cli), so the library and WASM module carry none of that code.
+
+[[bin]]
+name = "zapp-deposit"
+path = "src/main.rs"
+
+[dependencies]
+zapp-deposit = { path = ".." }
+zapp-headers = { path = "../../headers" }
+zapp-common = { path = "../../common" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+# the core receipt check and image resolution every zAPP shares (zapps/corecheck: no CLI code)
+zapp-corecheck = { path = "../../corecheck" }
+libzync = { path = "../../../libzync", default-features = false }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+serde_json = "1"
+bincode = "1"
+
+[features]
+# TESTS ONLY: `--network regtest`, the zAPP regtest harness's image (zapps/corecheck), for test.sh's OK-verdict tests on
+# real regtest proofs (test-regtest.sh; core-only: the header-chain guest is mainnet only). Dev profile only: a release
+# build with it does not compile.
+regtest-test = ["zapp-common/regtest-test", "zapp-corecheck/regtest-test"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
