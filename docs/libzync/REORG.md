@@ -1,7 +1,8 @@
 # Reorg handling for the libzync board (design)
 
 > **Design, 16.11.2026; P1 and P2 built the same day** (branch `feat/reorg-p1-p2`, §15), P3 too (§16), P4 and P6 on
-> 18.11.2026 (§17); P5 (followers) is not built. I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
+> 18.11.2026 (§17), P5 (followers) the same day (§18). All six are released in v0.27.0 (20.11.2026), with automatic
+> rewinds off (`HAZYNC_REORG_AUTO` unset; §17 says what turning them on requires). I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
 > **MEASURED** numbers come from that survey or the files named next to them. **ESTIMATE** numbers are labelled. The
 > user's decisions on the open questions are in §14; what building P1 and P2 corrected in this page is in §15.
 

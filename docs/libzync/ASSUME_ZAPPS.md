@@ -1,6 +1,7 @@
 # zyncAPP checkers: assumevalid and assumeutxo from the chain proof (#721)
 
-Status: built on `feat/zapp-assume` (15.11.2026), not merged, not reviewed. No new guest and no change to any image:
+Status: built 15.11.2026, independently reviewed the same day (no soundness break found) and released in v0.27.0
+(#740, 20.11.2026). No new guest and no change to any image:
 both are checks a verifier makes on a core chain proof it has already verified. Normative source:
 `zapps/assume/src/lib.rs`, the zAPPs' own module (`zapps/assume`, ZYNCAPPS.md §9), on the core verifier as a library. `scripts/libzync/assume_ref.py` is an independent implementation of §3 written
 from this document and Core's snapshot format.

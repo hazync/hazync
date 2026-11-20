@@ -1,6 +1,7 @@
 # The deposit-proof zyncAPP
 
-Status (15.11.2026): built on branch `feat/zapp-deposit`, tested on real receipts, not released. No new image id: it
+Status: built 15.11.2026, tested on real receipts, independently reviewed the same day (no soundness break found) and
+released in v0.27.0 (#743, 20.11.2026). No new image id: it
 checks two proofs that already exist. Code: the zAPP's own module `zapps/deposit` (ZYNCAPPS.md §9), on the core verifier
 and the header-chain zAPP (`zapps/headers`) as libraries: `src/lib.rs` (verifier), `zapp-deposit` (CLI), `wasm/`
 (`verify_deposit` / `verifyDeposit` in `zapp-deposit.js`), `zapp-deposit build` (bundle builder). Tests: `src/tests.rs`,
@@ -113,7 +114,7 @@ It does **not** add:
 
 - **that the output is still unspent.** The bundle shows the deposit was made (the output was created in block h); it
   says nothing about whether it was spent later, at or before tip X. A bridge that needs "still unspent" uses the coin
-  liveness zAPP (`zapps/liveness`, branch `feat/zapp-liveness`), which answers it against the core proof's coin log.
+  liveness zAPP (`zapps/liveness`, [LIVENESS_ZAPP.md](LIVENESS_ZAPP.md)), which answers it against the core proof's coin log.
 - **anything, at DEMO.** A DEMO statement can be shown by a cheap fork (§1); only `accepted` means something.
 
 - **finality or recency.** The statement is "as of tip X with work W". A reorg deeper than the burial after X makes

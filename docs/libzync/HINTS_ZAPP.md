@@ -1,7 +1,7 @@
 # zyncAPP: a proven SwiftSync hints file (design, #722)
 
-Status: design APPROVED 2026-11-14; built on `feat/hints-zapp` (§10: what exists, measured, tested). Base: `feat/undo-commit`
-(the U0 undo commitment, UNDO.md).
+Status: design APPROVED 2026-11-14; built (§10: what exists, measured, tested) on the U0 undo commitment (UNDO.md), and
+released in v0.27.0 (20.11.2026), image `1894f12e`. Real proofs only at H = 2 and 3 so far: treat it as early.
 
 SwiftSync is Ruben Somsen's protocol; the hints file and block-undo formats are Robert Netzke's
 (`2140-dev/swiftsync-bips`: `swiftsync.md`, `hintsfile.md`, `block-undo.md`, `test_vectors/`; the `hintsfile` crate).
