@@ -1,6 +1,6 @@
 # Balance statement zyncAPP
 
-Status (15.11.2026): shape A is built and tested on branch `feat/zapp-statement` as its own zAPP module,
+Status: shape A, built and tested 15.11.2026 and released in v0.27.0 (#742, 20.11.2026), is its own zAPP module,
 `zapps/statement` (ZYNCAPPS.md §9): a library on top of the core verifier, one CLI `zapp-statement` (the checker, and
 the producer as subcommands `draft`, `message`, `sign`, `add-sig`, `test-key`), and its own WASM module (`zapps/statement/wasm`). The core verifier (`swiftsync-verify`,
 `swiftsync-verify-wasm`) carries no statement code. Shape B is a measured prototype in

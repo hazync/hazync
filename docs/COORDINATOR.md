@@ -23,7 +23,8 @@ up another and provers can point at it. Duplicate work between coordinators is w
 
 **Hazync v2.** Since 2026-11-12 the public board (`api.hazync.org`) runs Hazync v2 (the libzync engine): the
 same `coordinator/server.py` with `HAZYNC_LIBZYNC=1`, restarted from genesis under image `8888d59c`
-([`coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md)). Claims, per-block proofs,
+([`coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md)), and from genesis again under
+`46666b6f` at the v0.26.0 reset. Claims, per-block proofs,
 folds, the genesis-anchored spine, the leaderboard, sponsorships and the sponsor bot all carry over; what differs
 is in §1a. Hazync v1's board (frontier 144,769) is kept read-only as the record. Much of §3 (the archive node,
 the bridge, its bundles) describes v1's board and is marked so.
@@ -49,6 +50,11 @@ What changes when `HAZYNC_LIBZYNC=1` (`coordinator/server.py`; the unit is
 - **The spine.** A libzync host has no `extend-spine`. When `/api/meta` says `libzync`, `hazync spine` advances
   `[1..N] + [N+1..M]` with `fold-range` (whose guest enforces the seam), and on `POST /api/spine` the coordinator
   checks the result with `verify-any <receipt> 1`, its genesis gate, and requires it to start at block 1.
+- **Reorgs** (v0.27.0, [`libzync/REORG.md`](libzync/REORG.md) §17). With `HAZYNC_LZ_STATE_DIR` set, the coordinator
+  follows prep's reorg records: it moves orphaned rows and proofs aside (never deletes them), drops the spine to a kept
+  head, voids claims above the fork and acks; `/api/meta` reports `reorg`, and `server.py --reorg-to F` is the manual
+  path. Unset, there is no reorg handling. Automatic rewinds stay off until `HAZYNC_REORG_AUTO=1` is set on the
+  board pass and its fetcher.
 
 **Claims, as measured on the v2 board on 2026-11-12:**
 

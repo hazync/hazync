@@ -108,15 +108,25 @@ can take a Hazync proof and answer one question with it.
 ## What zAPPs are
 
 A zAPP is a small program that starts from a Hazync proof and proves one specific answer, so you can check the
-answer without trusting whoever gave it to you. Two exist today:
+answer without trusting whoever gave it to you. Eight are released (v0.27.0). The two with pages on hazync.org:
 
 - **Header chain.** Every Bitcoin block has a short header, and the headers link together into a chain carrying all
   of Bitcoin's proof of work. Hazync has proved the whole header chain, from the first block to block 975,278, in
-  one proof: about an hour on one graphics card, a 224 KB file that a web browser checks in a fraction of a second
-  (39 ms, measured on a laptop). See [hazync.org/headers](https://hazync.org/headers/).
+  one proof: about an hour and a half on one graphics card, a 227 KB file that your web browser checks. The proof also
+  keeps a compact list of every block, so you can check that a block, or a payment in it, is on that chain. See
+  [hazync.org/headers](https://hazync.org/headers/).
 - **Coin check.** Give it an output script and it tells you the balance there and its history: every coin it
   received, and the block each spent one was spent in. Each answer is checked against the chain proof in your browser. Today the demo runs against a proof of Bitcoin's first 200 blocks. See
   [hazync.org/zapp](https://hazync.org/zapp/).
+
+The other six, each with a command-line tool and a module a web page can use:
+
+- **For people who run a node:** checks that a Bitcoin Core `assumevalid` setting, or a UTXO snapshot made by Core,
+  matches the proven chain; a proven SwiftSync hints file; and proven Utreexo roots for the Floresta node. The last two
+  are early: real proofs so far only for the first few blocks.
+- **For wallets, bridges and Lightning:** that a coin is still unspent (coin liveness); a balance statement signed by
+  whoever holds the coins; and that a deposit is buried a given number of blocks deep on a chain where every block was
+  fully checked, which a light wallet cannot show.
 
 More are planned. What a zAPP may rely on, and how to build one, is in [`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md).
 
@@ -125,12 +135,13 @@ More are planned. What a zAPP may rely on, and how to build one, is in [`libzync
 **Working:**
 
 - The v2 program, first published as release v0.24.0, with its fingerprint reproducible from source. The board
-  proves under the image from release v0.26.0 (`46666b6f`, unchanged in v0.26.1), which adds each block's undo data.
+  proves under the image from release v0.26.0 (`46666b6f`, unchanged in v0.26.1 and v0.27.0), which adds each block's undo data.
 - Real proofs from it: Bitcoin's first 200 blocks from the very beginning, checked by the published checker.
 - The whole header chain in one proof, checkable in a browser.
 - The public board at [hazync.org](https://hazync.org/), which switched to v2 on 12 November 2026 and restarted
   from the first block, then restarted from the first block again on 16.11.2026 under v0.26.0's image. Volunteers' graphics cards prove blocks one by one, and the proofs are joined together.
-- Proving on Windows graphics cards as well as Linux.
+- Proving on Windows graphics cards as well as Linux. On Windows the app installs in one step, updates itself, and
+  proves on the processor, slowly, when there is no NVIDIA card.
 
 **Not done yet:**
 

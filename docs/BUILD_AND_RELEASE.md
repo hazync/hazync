@@ -24,9 +24,11 @@ refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
   `hazync-run-workers.sh`; the Windows installer `hazync-setup-x86_64-windows.exe` (built by `release-sign.yml`);
   `SHA256SUMS.txt` and `.asc`. Ten are uploaded by `release.sh`, four added by `release-sign.yml`: the release must
   carry **exactly those 14** (13 up to v0.26.0, which had no Windows CPU host; 12 up to v0.24.0, which had no installer).
-- **Images** (v0.24.0): mainnet `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, signet
-  `d4210dae…`, headers zyncAPP `2db34e12…`. `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the
-  ids and ELF hashes); `reproduce/LIBZYNC_IDS` pins them.
+- **Images** (v0.27.0): mainnet `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` and signet
+  `01a80f17…` (unchanged since v0.26.0), and the zyncAPPs' headers `de54b94f…`, hints `1894f12e…`, utreexo
+  `27bea7da…` and utreexo-tip `ab6f7a26…` (v0.24.0 shipped mainnet `8888d59c…`, signet `d4210dae…`, headers
+  `2db34e12…`). `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the ids and ELF hashes);
+  `reproduce/LIBZYNC_IDS` pins them.
 - **Hosts:** `prover/build-release.sh` embeds the published mainnet ELF (built by `reproduce/libzync.Dockerfile`, or
   passed as `HAZYNC_GUEST_ELF` and checked against its pinned sha256). The Windows host is built by `windows-prove.yml`
   on GitHub's `windows-2022` runners: dispatch it on the release commit first (`gh workflow run windows-prove.yml
@@ -433,7 +435,10 @@ exports as a correct one, so it is caught only by calling it. Deploy after every
 it), and on an id change in the **same cutover** as the coordinator binary swap and board reset (earlier rejects the
 live old board; later rejects the new one). Since v0.23.0 the module is the libzync verifier
 (`swiftsync-verify-wasm`), and its glue `hazync-verify.js` has the libzync API (`loadVerifier`, `verify({network,
-image, receipt})`, `imageId(network)`), not v1's: serve the release's `.wasm` and `.js` **together**.
+image, receipt})`, `imageId(network)`), not v1's: serve the release's `.wasm` and `.js` **together**. From v0.27.0 the
+core module has no `verifyHeaders`: the header checks are the header-chain zyncAPP's own module
+([`../zapps/headers/wasm/`](../zapps/headers/wasm/README.md), `zapp-headers.js`), and a page that loads the new core
+module and still calls `verifyHeaders` on it finds no such function, so deploy the two **in the same change**.
 
 Note: the source says "both sites"; bitcoinghost.org/hazync was retired 2026-09-16, so hazync.org is the only
 site serving the verifier.
