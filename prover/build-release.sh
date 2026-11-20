@@ -60,6 +60,30 @@
 #
 # Needs, for cuda, a working `--gpus all`. The CUDA kernel compile is the slow
 # part (tens of minutes); the CPU build is much quicker.
+#
+# ⛔ A RELEASE BUILD COMPILES EVERY C/C++/CUDA OBJECT FROM SOURCE (20.11.2026). v0.26.1 and v0.27.0 shipped a
+# Linux CUDA host that segfaulted on its first GPU step on an RTX PRO 6000 (gdb: cuStreamSynchronize <-
+# stream_t::Dmalloc <- NTTParameters <- sppark_init) while v0.26.0 proved the same block on the same pod. #727
+# had changed vendor/sppark's gpu_t.cuh (stream_t gained members) and all_gpus.cpp, and this script reused
+# prover/target between releases. sppark's build script, vendored, watched NOTHING (scripts/test-build-rerun.sh
+# reproduces it with real cargo), so libsppark_cuda.a -- which constructs every stream_t -- was never rebuilt,
+# while risc0-sys, whose builder watches its include dirs, recompiled against the new header. One binary, two
+# stream_t layouts. The release box has no GPU, so every check here and in scripts/release.sh passed.
+#
+# Two fixes, either of which would have caught it:
+#   * the vendored build scripts now watch every header directory they compile against (vendor/*/build.rs,
+#     HAZYNC_RERUN_ON_HEADERS), so even a warm target rebuilds when a header moves;
+#   * and this script no longer TRUSTS a warm target for a release: the build runs in its own target directory,
+#     prover/target/clean-<mode>, which is deleted BEFORE the build (nothing compiled by an earlier release can
+#     be linked in) and AFTER it (~18 GB for cuda; the next release starts from nothing anyway). The cost is a
+#     full dependency rebuild every release -- minutes next to the CUDA kernels, which were always rebuilt by
+#     any change that touched them. The CPU build gets the same treatment: its C++ kernels are covered by the
+#     same watches today, but "covered today" is the assumption that just failed.
+#   HAZYNC_REUSE_TARGET=1 keeps and reuses prover/target/clean-<mode> for iterating on a build. Such a binary
+#   is NOT a release artifact: no .clean-build-<asset> stamp is written, and scripts/release.sh rebuilds any
+#   host without one (it also passes HAZYNC_REUSE_TARGET=0 explicitly).
+#   The real proof that a CUDA host works is a prove on real cards: scripts/release-gpu-gate.sh, which
+#   scripts/release.sh requires before it publishes.
 set -euo pipefail
 
 MODE="${1:-}"
@@ -107,6 +131,14 @@ if [ -n "${HAZYNC_DEPS_IMAGE:-}" ]; then
     fi
 fi
 mkdir -p "$OUT"
+# One build per mode per checkout at a time: two would share prover/target/clean-<mode> and dist/.host-<mode>.out.
+mkdir -p "$REPO/dist"
+exec 9>"$REPO/dist/.build-release-$MODE.lock"
+flock -n 9 || { echo "another $MODE release build is running in $REPO (dist/.build-release-$MODE.lock)" >&2; exit 1; }
+REUSE_TARGET="${HAZYNC_REUSE_TARGET:-0}"
+case "$REUSE_TARGET" in 0|1) ;; *) echo "HAZYNC_REUSE_TARGET must be 0 or 1, got '$REUSE_TARGET'" >&2; exit 2 ;; esac
+# In-container path of this mode's own target directory (see "A RELEASE BUILD COMPILES EVERY ... OBJECT" above).
+CLEAN_TARGET="/hazync-zkvm/prover/target/clean-$MODE"
 
 [ -x "$REPO/provision-vps.sh" ] || { echo "no provision-vps.sh under REPO=$REPO" >&2; exit 1; }
 
@@ -128,7 +160,7 @@ SMOKE_RCPT="experimental/libzync-bench/zapp/mainnet_1_1_${WANT_ID:0:8}.rcpt"
 
 # Staged inside the MOUNTED repo so the container can read it, under dist/ (git-ignored, so the tree
 # stays clean) in a dot-directory (so check-dist.sh and the release upload never see it). NOT under
-# prover/target: the glibc preflight below may delete that whole directory.
+# prover/target: the clean build (and the glibc preflight) below delete its build directory.
 LZ_STAGE="$REPO/dist/.libzync-guest"
 mkdir -p "$LZ_STAGE/pins"
 sha_of() { sha256sum "$1" 2>/dev/null | cut -c1-64; }
@@ -224,8 +256,8 @@ fi
 echo "== building $MODE release from $REPO (HOME=/root inside $IMAGE) =="
 echo "   NOTE: $REPO is mounted live — do not switch branches in it until this finishes."
 echo "   HEAD: $(git -C "$REPO" describe --tags --always 2>/dev/null || echo unknown) ($(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown))"
-# The repo is mounted, so prover/target persists on the host between runs: re-running after a host-only
-# source change recompiles just the host crate instead of the whole guest + CUDA kernels.
+# The repo is mounted, so the target directory would persist on the host between runs -- which is exactly
+# why a release build deletes it first (see the top of this file); only HAZYNC_REUSE_TARGET=1 keeps it.
 # SKIP_GROTH16 must be forwarded EXPLICITLY: the build runs in a container, so a variable exported in
 # the caller's shell reaches provision-vps.sh only if named here. Setting it and assuming it applied
 # cost a release build 30 minutes — two bounded-but-real stalls fetching a component that is only
@@ -261,12 +293,21 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
     -e HAZYNC_GUEST_PIN_DIR=/hazync-zkvm/dist/.libzync-guest/pins \
     -e "WANT_ID=$WANT_ID" \
     -e "SMOKE_RCPT=$SMOKE_RCPT" \
+    -e "CARGO_TARGET_DIR=$CLEAN_TARGET" -e "HAZYNC_REUSE_TARGET=$REUSE_TARGET" -e "BUILD_MODE=$MODE" \
     ${CARGO_BUILD_JOBS:+-e "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"} \
     "${docker_args[@]}" "$IMAGE" bash -lc '
     set -e
     apt-get update -qq && apt-get install -y -qq binutils >/dev/null 2>&1
     cd /hazync-zkvm
-    # PREFLIGHT: prover/target is reused between runs (see above) — but that is only valid if it was
+    # A release build starts from an EMPTY target directory, so no object compiled by an earlier release
+    # (against an earlier vendored header) can be linked into this one. Deleted in here: it is root-owned.
+    if [ "$HAZYNC_REUSE_TARGET" != 1 ]; then
+      echo "== CLEAN BUILD: removing $CARGO_TARGET_DIR; every C/C++/CUDA object is compiled from source =="
+      rm -rf "$CARGO_TARGET_DIR"
+    else
+      echo "== HAZYNC_REUSE_TARGET=1: reusing $CARGO_TARGET_DIR -- NOT a release artifact (no .clean-build stamp) =="
+    fi
+    # PREFLIGHT: with HAZYNC_REUSE_TARGET=1 the target is reused between runs (see above) — but that is only valid if it was
     # produced by an image with the SAME glibc. Build once in this tree on the HOST (24.04, glibc 2.39)
     # and the proc-macro .so files left behind cannot be loaded by this container (22.04, glibc 2.34).
     # Cargo then dies with:
@@ -286,18 +327,18 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
     # past the cutoff slips through to fail hours later with a misleading error (audit #6, F-5) — the
     # precise failure this check exists to pre-empt. Costs a second on a warm cache; it never ships a
     # wrong artifact either way, only wasted hours.
-    NEED_GLIBC=$(find prover/target -name "*.so" -type f 2>/dev/null | xargs -r objdump -T 2>/dev/null | grep -oE "GLIBC_[0-9]+[.][0-9]+" | sort -V | tail -1)
+    NEED_GLIBC=$(find "$CARGO_TARGET_DIR" -name "*.so" -type f 2>/dev/null | xargs -r objdump -T 2>/dev/null | grep -oE "GLIBC_[0-9]+[.][0-9]+" | sort -V | tail -1)
     if [ -n "$HAVE_GLIBC" ] && [ -n "$NEED_GLIBC" ] && [ "$HAVE_GLIBC" != "$NEED_GLIBC" ] &&
        [ "$(printf "%s\n%s\n" "$HAVE_GLIBC" "$NEED_GLIBC" | sort -V | tail -1)" = "$NEED_GLIBC" ]; then
-      echo "== DISCARDING prover/target: its artifacts need $NEED_GLIBC, this image has $HAVE_GLIBC =="
+      echo "== DISCARDING $CARGO_TARGET_DIR: its artifacts need $NEED_GLIBC, this image has $HAVE_GLIBC =="
       echo "   Something built in this tree outside the container. Reusing those objects would fail"
       echo "   inside risc0_build::embed_methods() with a misleading GLIBC error naming a proc-macro."
       echo "   The target is a regenerable cache; rebuilding it from scratch is the correct state for"
       echo "   a release build anyway. To keep the reuse optimisation, build only via this script."
-      rm -rf prover/target
+      rm -rf "$CARGO_TARGET_DIR"
     fi
     REPO_DIR=/hazync-zkvm ./provision-vps.sh
-    H=/hazync-zkvm/prover/target/release/host
+    H="$CARGO_TARGET_DIR/release/host"
     # Checks that never need to RUN the binary come first, and always run.
     echo "=== GLIBC ==="; objdump -T $H | grep -oE "GLIBC_[0-9]+[.][0-9]+" | sort -V | tail -1
     if [ "${GPU:-0}" = 1 ]; then
@@ -349,6 +390,10 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
         echo "=== WARNING: no r0vm found in the container; snark-wrap will not work on this host ===" >&2
         find /root/.risc0 -maxdepth 3 -type d 2>/dev/null | head -10 >&2
     fi
+    # Copy the binary out of the target, then drop the target (unless reusing): the next release starts
+    # from nothing either way, and a CUDA target is ~18 GB on a box that needs 25 GB free to build at all.
+    install -m 0755 "$H" "/hazync-zkvm/dist/.host-$BUILD_MODE.out"
+    if [ "$HAZYNC_REUSE_TARGET" != 1 ]; then rm -rf "$CARGO_TARGET_DIR"; fi
 '
 
 # Install atomically. `cp` writes THROUGH an existing file, and on this project the destination is
@@ -358,8 +403,16 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
 # Observed on 2026-07-31: a release rebuild replaced the binary two active workers were running.
 # They survived; that was luck. rename(2) onto the same filesystem swaps the directory entry and
 # leaves the old inode alone until its last user exits.
-install -m 0755 "$REPO/prover/target/release/host" "$OUT/.$asset.tmp.$$"
+# The stamp scripts/release.sh requires of a release host, "<commit> <sha256>": built from THIS commit in an EMPTY
+# target. Removed BEFORE the binary moves (a crash between the two leaves no stamp, never a stale one vouching for a
+# new file) and written after, for a clean build only.
+rm -f "$OUT/.clean-build-$asset"
+install -m 0755 "$REPO/dist/.host-$MODE.out" "$OUT/.$asset.tmp.$$"
 mv -f "$OUT/.$asset.tmp.$$" "$OUT/$asset"
+rm -f "$REPO/dist/.host-$MODE.out"
+if [ "$REUSE_TARGET" != 1 ]; then
+    echo "$(git -C "$REPO" rev-parse HEAD) $(sha256sum "$OUT/$asset" | cut -c1-64)" > "$OUT/.clean-build-$asset"
+fi
 
 # Leave the HOST able to SNARK-wrap, not just to prove.
 #
