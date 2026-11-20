@@ -84,3 +84,30 @@ copied unchanged; `prof_split.py` reads `../cost/core_share.py`.
 | `repro/` | the 962,000 setup check |
 | `blockstats.tsv`, `chainsample_1k.tsv`, `txcounts_5k.txt`, `inputs.sha256` | block content, chain samples, transaction counts, input hashes |
 | `runA.out`, `runB.out`, `chain.out`, `prof.out` | the drivers' console output |
+
+## GPU proving run (RESULT.md §5-§6)
+
+11 blocks proved for real (no dev mode) on one RunPod RTX PRO 6000 (SECURE cloud, pod `hz-measure-*`, 2026-11-20,
+$2.22, terminated, 0 pods after). **Build provenance:** the published v0.27.0 Linux CUDA asset
+(`hazync-host-x86_64-linux-gnu-cuda`, `b42cf87dca3528e190d6b7953da0c13f4e6cb3c8dee7dbfb7d3ccf0406c6f5a3`) is broken:
+it segfaults on the first GPU step because the release was built from stale objects. The run therefore used a
+**clean build of the unchanged v0.27.0 source** (image `46666b6f`, host sha256
+`df57ca2d14b062636a1c4437dad016550438f3a03e55625432db8a6dc264a187`, built on hazync-coord `/root/fix739/dist`, the
+binary v0.27.1 is to ship), pushed to the pod and sha-checked there. The coordinator ran it, because the permission
+system blocked my own pod create.
+
+| file | what |
+|---|---|
+| `gpu/rpm.py` | RunPod control from the laptop through `coordinator/sponsor_bot.py` (`RUNPOD_API_KEY_FILE`; key never printed): balance, list, deploy, ssh, terminate_confirmed |
+| `gpu/control.sh` | the laptop driver: deploy (15 min boot cap, one retry), send inputs, harvest every 5 min (sha-checked), caps 110 min / $9.50, terminate, balance and listing before and after |
+| `gpu/pod_run.sh` | on the pod: warm-up leaf 170; the 9 leaves (`libzync-prove-range h h unused leaf o<h>`, `HAZYNC_LEAF_BUNDLE`); 700,000 and 976,000 as `libzync-hints`, `prove-chunk` per chunk, `agg-chunks` (trie and aggregate on the MODELLED state); `steps.tsv` |
+| `gpu/verify_all.sh` | every block receipt through the v0.27.0 release verifier (glibc 2.39 box: hazync-coord), plus the anchor and committed-state comparison with prep's states |
+| `gpu_fit.py` | per-block and per-part table, fits of wall time against cycles (`raw/gpu_fit.out`) |
+| `raw/gpu/` | harvested outputs: `steps.tsv`, `o<h>/times.tsv`, block receipts (`receipts.sha256`), logs, `smi.log`, `pod.txt`, `control.log`, `verify_*.log`. Chunk receipts (.hzk, 1.3-3.1 MB each), hint bundles and block files are not committed |
+
+```bash
+# on hazync-coord, after the harvest was copied to /root/cost-curve/gpu_out
+src/cost-curve/gpu/verify_all.sh gpu_out inputs bin/hazync-verify-x86_64-linux-gnu bin/hazync-host-x86_64-linux-gnu
+python3 gpu_fit.py raw/gpu raw/table_a.tsv raw/table_b.tsv > raw/gpu_fit.out
+python3 project.py raw/table_a.tsv raw/table_b.tsv raw/txcounts_5k.txt 976724 raw/chainsample_1k.tsv > raw/projection.out
+```

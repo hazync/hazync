@@ -24,6 +24,9 @@ Card time per block on ONE RTX PRO 6000, from MEASURED rates already in the repo
   R3  1.604 s per user Mcycle all-in: run2, 5 full 2026 blocks 969,118-122, 4,194 s for 2,615 user Mcycles (modelled
       state, 1 chunk, one PRO 6000).
   R2/R3 are applied per era as max(R1's 23.49 s floor, rate x mean user cycles per block of the era).
+  R4  23.77 s + 0.9940 s per padded Mcycle: MEASURED on image 46666b6f (clean v0.27.0 build), one RTX PRO 6000,
+      11 blocks proved for real 170..976,000, 2 chunks, po2 21 (gpu_fit.py, raw/gpu_fit.out; residuals -6.6..+9.0 s).
+      THE HEADLINE RATE; R1-R3 are kept for comparison.
 Price: $2.49 per card-hour (RunPod PRO 6000, the board run's and run1's measured price)."""
 import sys
 TA, TB, TXC, TIP = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
@@ -125,17 +128,18 @@ for variant in ("as measured", "B adj"):
         r1 = N * F + S1 * P / 1e6
         r2 = sum(max(F * e[3], 1.100 * e[4] / 1e6) for e in eu)
         r3 = sum(max(F * e[3], 1.604 * e[4] / 1e6) for e in eu)
+        r4 = N * 23.77 + 0.9940 * P / 1e6
         res[(variant, meth)] = (U, P, N, r1, r2, r3, eu, ep)
         print(f"[{variant}, {meth}] blocks 1..{TIP:,} = {N:,}: {U/1e12:.1f} T user cycles, {P/1e12:.1f} T padded")
-        for lab, s in (("R1", r1), ("R2", r2), ("R3", r3)):
+        for lab, s in (("R4 (measured, 46666b6f)", r4), ("R1", r1), ("R2", r2), ("R3", r3)):
             print(f"    {lab}: {s/3600:>9,.0f} PRO 6000 card-hours  ${s/3600*2.49:>9,.0f}")
 v, m = "as measured", "per-input"
 U, P, N, r1, r2, r3, eu, ep = res[(v, m)]
-print(f"\nPer era [{v}, {m}] (user / padded cycles; R1 card-hours):")
-print(f"  {'sample':>8} {'src':>3} {'era':>17} {'blocks':>8} {'era txs':>12} {'T user':>8} {'T padded':>9} {'R1 card-h':>10} {'share':>6}")
+print(f"\nPer era [{v}, {m}] (user / padded cycles; R4 card-hours):")
+print(f"  {'sample':>8} {'src':>3} {'era':>17} {'blocks':>8} {'era txs':>12} {'T user':>8} {'T padded':>9} {'R4 card-h':>10} {'share':>6}")
 pts = curve(v)
 for (h, lo, hi, n, cu), (_, _, _, _, cp) in zip(eu, ep):
-    t = cum(hi - 1) - cum(lo - 1); r = (n * F + S1 * cp / 1e6) / 3600
+    t = cum(hi - 1) - cum(lo - 1); r = (n * 23.77 + 0.9940 * cp / 1e6) / 3600
     print(f"  {h:>8,} {pts[h][2]:>3} {lo:>8,}-{hi-1:<8,} {n:>8,} {t:>12,.0f} {cu/1e12:>8.2f} {cp/1e12:>9.2f} {r:>10,.0f} {100*cu/U:5.1f}%")
 
 # dispersion: how well the 800,000 sample's per-tx cost predicts its next five blocks (an era is one sample)

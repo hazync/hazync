@@ -1,8 +1,10 @@
-# Result: the v2 cost curve, block 170 to 976,000 (v0.27.0 host, image 46666b6f), execute only
+# Result: the v2 cost curve, block 170 to 976,000 (image 46666b6f): execute-mode cycles + real GPU proving times
 
-hazync-coord, 2026-11-20, CPU only, no proof made. Commands, hashes and settings: [`README.md`](README.md). Every
-number in §1-§4 is **MEASURED** (an execution's own count); §5-§6 are **PROJECTIONS** built only from measured rates
-already in the repo, arithmetic shown. "A" = real mainnet state (prep's leaf bundle); "B" = the block is real, the
+2026-11-20. §1-§4: execute-only cycle counts on hazync-coord's CPU with the published v0.27.0 host (no proof made).
+§5-§6: 11 of those blocks PROVED for real on one RTX PRO 6000 with a clean build of the same v0.27.0 source (the
+published CUDA asset is broken, §5), and the cycles -> card-time rate fitted from them. §7: the whole-chain
+PROJECTION, arithmetic shown. Commands, hashes and settings: [`README.md`](README.md). Everything in §1-§6 is
+**MEASURED**; §7 is a projection. "A" = real mainnet state (prep's leaf bundle); "B" = the block is real, the
 trie update and the aggregate run against a MODELLED state. Cycles: **user** = executed; **padded** = sum of 2^po2
 over segments at po2 21, what a GPU prover pays for. Shipped chunking (2 chunks, cost-packed) throughout.
 
@@ -25,8 +27,8 @@ over segments at po2 21, what a GPU prover pays for. Shipped chunking (2 chunks,
 ## 2. The curve (MEASURED; B rows: trie and aggregate MODELLED)
 
 Block content from `getblockstats` (weight and outputs exclude the coinbase; inputs exclude the coinbase input).
-Segments = chunks + trie + aggregate at po2 21. "trie+agg" = share of user cycles. Card s (R1) is the §5
-projection per block, shown here for reading only. CPU wall = this box (load 25-34), whole leaf run (A) or
+Segments = chunks + trie + aggregate at po2 21. "trie+agg" = share of user cycles. Card s (R1) is the pre-GPU
+projection per block (R1, §6); the measured rate R4 gives 2-7% more. CPU wall = this box (load 25-34), whole leaf run (A) or
 hints + agg-exec-fake (B).
 
 | height | | txs | inputs | outputs | weight WU | chunks M | trie M | aggregate M | **total user M** | padded M | segments | trie+agg | k cycles/input | card s (R1, projection) | CPU wall s |
@@ -95,25 +97,112 @@ Per category, % of non-paging cycles (`raw/decoded.txt`; 962,000 from `../profil
 its CPU: the signature-hint collect runs execute the chunks once more with full libsecp verification (A400000: 407.0
 + 390.0 M vs 276.4 M proved) and the aggregate collect run 619.4 M at 400,000 (`raw/prof/A400000.{0,1,4}.pb`).
 
-## 5. Card time and cost (PROJECTION from measured rates; nothing proved here)
+## 5. GPU proving, MEASURED (2026-11-20, one RTX PRO 6000, real proofs)
 
-Rates, all MEASURED earlier on one RTX PRO 6000 and already in the repo (none on image 46666b6f itself):
+**Build provenance.** The published v0.27.0 Linux CUDA asset (`hazync-host-x86_64-linux-gnu-cuda`, sha256 `b42cf87d…`)
+is **broken**: it segfaults on its first GPU step because the release was built from stale objects. These times are
+therefore from a **clean build of the unchanged v0.27.0 source**: same image `46666b6f…`, host sha256
+`df57ca2d14b062636a1c4437dad016550438f3a03e55625432db8a6dc264a187`, built on hazync-coord `/root/fix739/dist`, the
+binary v0.27.1 is to ship. The coordinator ran it (my pod create was blocked by the permission system).
 
-- **R1** = 23.49 s + 0.9326 s per padded Mcycle: least-squares line through `../results/run1` (8 real-state leaf
-  blocks 200k-300k, c14 `bbf82800`, 1 chunk, po2 21; wall includes CPU hints; residuals ≤ 1.1 s over 29-174 padded
-  Mcycles). It predicts 543 s for 962,000 (556.8 padded M, 2 chunks), against **537 s measured** (LIBZYNC.md §4, c14,
-  16 chunks, quiet host), outside its fitting range.
-- **R2** = 1.100 s per user Mcycle, all-in: 537 s / (375.7 + 64.9 + 47.6) M (962,000, c14).
-- **R3** = 1.604 s per user Mcycle, all-in: 4,194 s / 2,615 M (`../results` run2, 5 full blocks 969,118-122,
-  modelled state, 1 chunk, a busier host).
-- R2 and R3 are applied per era as max(23.49 s, rate x cycles). Price $2.49 per card-hour (the board run's and
-  run1's RunPod PRO 6000 rate).
+Run setup:
+- RunPod, SECURE cloud, one NVIDIA RTX PRO 6000 Blackwell Server Edition (driver 595.112.07, 97,887 MiB); host CPU
+  AMD EPYC 9555, 256 threads.
+- `gpu/pod_run.sh`, with its download step replaced by a sha-checked push of that host. Not dev mode.
+- A warm-up prove of leaf 170 first, then every block in its own process. Shipped 2 chunks, po2 21.
+- All 18 steps exited 0 on the first try. Pod 16:48:22-17:38:28 UTC; **spent $2.22** ($25.86 -> $23.64 balance);
+  terminated, 0 pods listed after (`raw/gpu/control.log`).
 
-Per block: a 2009-2012 block costs ~27-31 s of card time, almost all fixed (aggregate ~2.6 M cycles, process and
-recursion overhead; the board run measured 22-27 s per early block). A full modern block (370-690 M user cycles)
-projects to 430-810 s (R1), 410-760 s (R2) or 590-1,110 s (R3), i.e. $0.28-0.77 per block.
+**Verification** (hazync-coord, Ubuntu 24.04 / glibc 2.39, the v0.27.0 release verifier
+`hazync-verify-x86_64-linux-gnu`, sha256 `62bf0c7d…`, `--network mainnet --product`, `--expect <h>:<hash from the
+archive node>`; `gpu/verify_all.sh`, `raw/gpu/verify_*.log`, `raw/gpu/verify_summary.txt`):
 
-## 6. Whole chain, blocks 1..976,724 (PROJECTION)
+- **9/9 A leaves: `SWIFTSYNC_VERIFY_DEMO`** with `--anchor` = the leaf's own S(h-1). DEMO is the expected verdict
+  from a given anchor: below the minimum chainwork, and before the pinned checkpoint at 970,000. In every case:
+  - the receipt is a real proof (not a FakeReceipt), verified against image 46666b6f;
+  - the block hash matches the node's (`--expect ok`);
+  - the anchor equals prep's `state_<h-1>.json`, and the committed state equals prep's `state_<h>.json`
+    (`STATE_MATCH`, all fields but `anchor_id`).
+- **700,000 and 976,000 (B): `SWIFTSYNC_VERIFY_FAIL` on exactly one check, "anchor_id is genesis".** That fails by
+  construction: `agg-chunks` proves on a synthesised anchor, which was not saved. Every other check passes: real
+  proof, image, profile 0x71, one forest leaf per block, and `--expect` matches the block hash. `agg-chunks` itself
+  verified both receipts on the pod (`succinct receipt VERIFIED`). The chunk receipts are its assumptions.
+- Receipt sizes: leaves 227,618-231,698 B, B blocks 231,226 / 231,234 B. Chunk receipts (.hzk, not committed):
+  2,095,298 + 1,342,698 B at 700,000 and 3,082,626 + 2,329,970 B at 976,000. Block receipt hashes are in
+  `raw/gpu/receipts.sha256`.
+- The proofs ran the cycles the execute runs counted: every leaf's `LZ_STATS` user total equals §2's to the cycle,
+  and the B segment counts equal §2's (asserted in `gpu_fit.py`).
+
+Per block and part (`gpu_fit.py`, `raw/gpu_fit.out`; seconds wall, segments at po2 21). A parts come from the host's
+`times.tsv`: "CPU hints" is the signature-hint collect, "trie" includes the aggregate's collect run, and aggregate =
+the rest. B rows are separate processes (`libzync-hints`, `prove-chunk` x2, `agg-chunks`, whose log gives the trie's
+own seconds):
+
+| block | | total s | CPU hints | chunks s (seg) | trie s (seg) | aggregate s (seg) | user M | padded M | s / padded Mcycle |
+|---|---|---|---|---|---|---|---|---|---|
+| 170 | A | 29.0 | 5.9 | 7.8 (1) | 6.3 (1) | 9.0 (2) | 3.8 | 5.5 | 5.27 |
+| 1,000 | A | 20.7 | 0.0 | 0.0 (0) | 12.1 (1) | 8.6 (2) | 2.6 | 3.4 | 6.07 |
+| 100,000 | A | 36.7 | 5.9 | 15.0 (2) | 6.4 (1) | 9.4 (2) | 5.3 | 7.9 | 4.67 |
+| 200,000 | A | 129.4 | 8.8 | 77.4 (35) | 21.3 (8) | 21.9 (9) | 91.0 | 104.3 | 1.24 |
+| 270,000 | A | 139.3 | 8.5 | 76.8 (35) | 27.1 (10) | 26.9 (11) | 99.1 | 117.4 | 1.19 |
+| 280,000 | A | 95.2 | 7.6 | 48.5 (20) | 18.6 (6) | 20.5 (8) | 58.8 | 69.2 | 1.38 |
+| 290,000 | A | 203.7 | 9.1 | 106.7 (50) | 51.1 (21) | 36.8 (16) | 154.4 | 182.5 | 1.12 |
+| 300,000 | A | 89.8 | 7.2 | 47.1 (20) | 18.1 (6) | 17.4 (6) | 56.3 | 65.1 | 1.38 |
+| 400,000 | A | 496.6 | 17.7 | 316.2 (158) | 86.7 (38) | 76.0 (37) | 406.0 | 482.3 | 1.03 |
+| 700,000 | B | 738.4 | 33.1 | 451.7 (225) | 134.4 (65) | 119.2 (50) | 591.3 | 709.9 | 1.04 |
+| 976,000 | B | 847.5 | 39.5 | 454.7 (233) | 183.5 (90) | 169.8 (74) | 691.2 | 832.6 | 1.02 |
+
+The warm-up (leaf 170) took 29.1 s, the same as the measured 170, so there was no kernel JIT on this build. The 11
+blocks together took 2,826 s = 0.785 card-hours. 700,000 and 976,000 prove their trie and aggregate against a
+MODELLED state; their trie and aggregate seconds are a modelled state's.
+
+## 6. The cycles -> card-time rate on 46666b6f (MEASURED fit)
+
+Least-squares fits of block wall time against padded cycles (`gpu_fit.py`):
+
+| fit | fixed s per block | s per padded Mcycle | residuals |
+|---|---|---|---|
+| **R4: all 11 blocks (the new headline rate)** | **23.77** | **0.9940** | -6.6..+9.0 s |
+| small (A, up to 300,000) | 24.05 | 0.9929 | -6.7..+4.8 s |
+| big (400k, 700k, 976k) | 12.77 | 1.0096 | -5.8..+8.9 s |
+| per user Mcycle, all 11 | 22.27 | 1.1951 | -10.9..+9.4 s |
+
+Per part, seconds per 2^21-cycle segment (blocks with ≥ 5 segments in the part):
+
+| part | fixed s | s per segment | s per padded Mcycle |
+|---|---|---|---|
+| chunks | 9.34 | 1.939 | 0.924 |
+| trie | 7.57 | 1.968 | 0.939 |
+| aggregate | 1.46 | 2.260 | 1.078 |
+
+The aggregate's segments are dearer because they resolve the chunk and trie receipts as assumptions.
+
+- **Small and big blocks are on one line.** The slope is 0.993 vs 1.010 s per padded Mcycle; the cost is linear in
+  padded cycles from 3.4 M to 833 M with ~24 s fixed per block. The fixed term (2 chunks, 4 proof processes) is the
+  same as R1's 23.49 s (c14, 1 chunk).
+- **The earlier rates**, all measured on c14 images before this run and none on 46666b6f:
+  - **R1** = 23.49 s + 0.9326 s per padded Mcycle: a fit to `../results` run1 (8 real-state leaf blocks
+    200k-300k, c14 `bbf82800`, 1 chunk, po2 21).
+  - **R2** = 1.100 s per user Mcycle all-in (962,000 proved in 537 s, LIBZYNC.md §4).
+  - **R3** = 1.604 s per user Mcycle all-in (`../results` run2, 5 full blocks 969,118-122, modelled state, a
+    busier host).
+  - R2 and R3 are applied per era as max(23.49 s, rate x cycles).
+- **Against those rates**, on the measured 976,000 (832.6 padded / 691.2 user M):
+
+| rate | 976,000 projected | vs measured 847.5 s |
+|---|---|---|
+| R1 (0.9326) | 800 s | -6% |
+| R2 (1.100 s per user Mcycle) | 760 s | -10% |
+| R3 (1.604 s per user Mcycle) | 1,109 s | +31% |
+| **R4** | **851 s** | +0.4% |
+
+  R1 was close, about 6% low; R3, from the busier run2 host, overstated big blocks by about 30%. The all-in user rate
+  on big blocks here is 1.22-1.25 s per user Mcycle.
+- Per block, at $2.49/h: a 2009-2012 block costs ~21-37 s ($0.014-0.025); a full modern block (370-690 M user
+  cycles, 434-844 M padded) costs ~455-862 s, $0.31-0.60. The pod's effective rate in this run was $2.22 / 0.835 h = $2.66/h
+  (deploy to terminate, idle minutes included): +7% on every dollar figure if that is the price.
+
+## 7. Whole chain, blocks 1..976,724 (PROJECTION)
 
 Interpolation (`project.py`, output `raw/projection.out`). Each sample stands for its era (boundaries at the
 midpoints between sample heights). The curve uses A where it exists, B elsewhere. Three methods:
@@ -128,44 +217,47 @@ midpoints between sample heights). The curve uses A where it exists, B elsewhere
 - per-tx (`../cost/estimate.py`'s method) is shown in `raw/projection.out` but not used. It misses the 800,000
   neighbours by -18% to +50% and inflates the 650,000 era (a consolidation block: 1,089 txs, 8,823 inputs).
 
-| method | T user cycles | T padded | R1 card-h / $ | R2 card-h / $ | R3 card-h / $ |
-|---|---|---|---|---|---|
-| **per-input, as measured** | **331.8** | **396.3** | **109,048 / $271,530** | 101,879 / $253,679 | 148,185 / $368,980 |
-| per-input, B adj (+4.1% trie+agg) | 336.1 | 400.7 | 110,177 / $274,342 | 103,189 / $256,940 | 150,094 / $373,735 |
-| pooled | 313.8 | 375.6 | 103,679 / $258,161 | 96,445 / $240,148 | 140,261 / $349,249 |
-| height | 322.2 | 385.0 | 106,105 / $264,202 | 99,156 / $246,899 | 144,120 / $358,860 |
+| method | T user | T padded | **R4 (measured) card-h / $** | R1 card-h / $ | R2 card-h / $ | R3 card-h / $ |
+|---|---|---|---|---|---|---|
+| **per-input, as measured** | **331.8** | **396.3** | **115,884 / $288,551** | 109,048 / $271,530 | 101,879 / $253,679 | 148,185 / $368,980 |
+| per-input, B adj (+4.1% trie+agg) | 336.1 | 400.7 | 117,088 / $291,548 | 110,177 / $274,342 | 103,189 / $256,940 | 150,094 / $373,735 |
+| pooled | 313.8 | 375.6 | 110,161 / $274,302 | 103,679 / $258,161 | 96,445 / $240,148 | 140,261 / $349,249 |
+| height | 322.2 | 385.0 | 112,747 / $280,740 | 106,105 / $264,202 | 99,156 / $246,899 | 144,120 / $358,860 |
 
-Example of the arithmetic (headline, R1): 976,724 blocks x 23.49 s = 22.94 M s; plus 0.9326 x 396.3 M padded Mcycles
-= 369.6 M s; total 392.6 M s = 109,048 card-hours; x $2.49 = $271,530.
+Arithmetic (headline): 976,724 blocks x 23.77 s = 23.22 M s; plus 0.9940 x 396.3 M padded Mcycles = 393.9 M s; total
+417.2 M s = 115,884 card-hours; x $2.49 = $288,551.
 
 Where the cost sits (per-input, as measured, `raw/projection.out`). Blocks up to 175,000 come to 0.7% of the cycles,
-but at ~23-30 s each they take ~2,000 card-hours of fixed cost. 175k-425k is 9.2%; 425k-625k is 26.6%; 625k-976k is
-63.5%. The single largest eras are 775k-875k (21.7% together).
+but at ~24 s each their fixed cost is ~1,150 card-hours of the total. 175k-425k is 9.2% of the cycles, 425k-625k
+26.6%, 625k-976k 63.5%. The single largest eras are 775k-875k (21.7% together).
 
 **Uncertainty.**
-- **Interpolation method:** the three methods span 313.8-336.1 T user cycles, -5% to +1% around the headline.
+- **Rate:** now measured on 46666b6f. The 11 residuals are within ±9 s (±2% on big blocks), and the slope is the same
+  for small and big blocks. Untested: other card instances or hosts (one pod, one EPYC host), and how much proving
+  several blocks at once on one card changes per-block time.
+- **Interpolation method:** the three methods span 313.8-336.1 T user cycles, i.e. 110.2-117.1 k card-hours
+  (-5% to +1%).
 - **One sample per era:** on the 800,000 dispersion test, the per-input model of 800,000 overpredicts its five
   neighbours by +5.5% to +21.3% (800,000 is a costly-per-input block: 109 k cycles/input against 90-104 k for the
-  neighbours), and the pooled fit misses by -8.9% to +0.9%. Read the era level as about ±20%.
+  neighbours), and the pooled fit misses by -8.9% to +0.9%. Read the era level as about ±20%. This is now the
+  dominant uncertainty.
 - **Modelled state:** about +1-2% on a block from the A/B comparison. It is unmeasured above 400,000, where B is all
   there is.
-- **Rate:** R2 to R3 is -7% / +36% around R1, from three measured regimes (an R3 host was busier). The rates come
-  from c14 images on risc0 3.0.5/3.1.0, not from 46666b6f. The cycles of c14 and 46666b6f differ by ~1-2% here: at
-  200,000 run1's c14 padded total was 102.0 M on one chunk, against 104.3 M now on two chunks.
-- Combined (a judgement from the items above, not a statistical interval): **~330 T user cycles (±25%)**. On one PRO 6000 that is **~100-150 k card-hours, ~$240k-$375k, headline
-  ~109 k card-hours / ~$272k**. Joins for a backfill are extra: ~1,700 card-hours, ~$4.3k, ESTIMATED in LIBZYNC.md §4.
-  This agrees with the earlier c14 estimate of 335 T to 970,000 (`../cost/WHOLE_CHAIN_COST.md`, modelled state, per-tx).
+- Combined (a judgement, not a statistical interval): **~330 T user / ~396 T padded cycles, ~116 k RTX PRO 6000
+  card-hours, ~$289k at $2.49/h; range ~$230k-$350k** (±20%). The earlier projection's band was $240k-$375k, headline
+  $272k on R1. The measured rate moves the headline up 6% and removes R3's +36% tail; the remaining spread comes from
+  sampling, not from the rate.
+- Not included: joins for a backfill, ~1,700 card-hours / ~$4.3k (ESTIMATED, LIBZYNC.md §4), and the price
+  (+7% at this run's effective $2.66/h).
+- This agrees with the earlier c14 estimate of 335 T to 970,000 (`../cost/WHOLE_CHAIN_COST.md`, modelled state, per-tx).
 
-## 7. What a GPU run still has to confirm
+## 8. Still open
 
-1. The **rate on image 46666b6f** (risc0 3.1.0) at the shipped 2-chunk layout. R1 was fitted on c14 with one chunk.
-   Proving the A leaves 200k-400k and two full B blocks (e.g. 700,000 and 976,000) on one PRO 6000 would pin the
-   line, especially the big-block slope (R1 vs R3 differ by up to 40% there).
-2. The **fixed per-block cost** on 46666b6f with 2 chunks: four proof processes per block instead of three. Blocks
-   up to ~300k are fixed-cost dominated.
-3. **Real-state trie cycles above 400,000:** run the same `run_a.sh` on prep's leaves at 481,824, 550,000, 650,000,
-   709,632, 800,000, 900,000, 962,000 and 967,600-974,000 as prep reaches them. Execute-only on a CPU is enough for
-   the cycles; only the card time needs a GPU.
-4. The **CPU side of a prover**: hint collection and the aggregate collect run cost more than the proved cycles
-   (§4). On a GPU pod they run on the host CPU, and GPU_RESULTS records 42% GPU busy. Card time therefore also
-   depends on the pod's CPU, which per-cycle rates do not capture.
+1. **Real-state trie cycles above 400,000:** run the same `run_a.sh` on prep's leaves at 481,824, 550,000, 650,000,
+   709,632, 800,000, 900,000, 962,000 and 967,600-974,000 as prep reaches them. Execute-only on a CPU is enough; the
+   cycles convert with R4.
+2. **More samples per era** for the ±20% term: CPU-only, about 3 min per block on hazync-coord.
+3. **The published v0.27.0 CUDA asset is broken** (see §5). The rate here is for the clean build; v0.27.1 should be
+   checked to have the same host hash, or re-timed.
+4. **The CPU side of a prover:** hint collection and the aggregate collect run (§4) are inside these wall times on a
+   256-thread EPYC host. A pod with a weaker CPU may be slower per block.
