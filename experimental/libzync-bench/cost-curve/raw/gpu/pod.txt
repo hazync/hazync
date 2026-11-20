@@ -1,0 +1,3 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.112.07, 97887 MiB
+256
+model name	: AMD EPYC 9555 64-Core Processor

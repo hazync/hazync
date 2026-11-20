@@ -1,0 +1,52 @@
+LZ_STATS chunk h=170 segments=1 total_cycles=2097152 user_cycles=1153727
+LZ_STATS trie h=170 segments=1 total_cycles=262144 user_cycles=86895
+LZ_STATS aggregate h=170 segments=2 total_cycles=3145728 user_cycles=2581740
+TIMED wall_s=43.9 user_s=43.0 sys_s=0.9 maxrss_kb=977228 rc=0 load1=29.9 load1_end=25.9
+STATE_MATCH (fields 23; differing: anchor_id; height 170 utxo_leaves 172)
+LZ_STATS trie h=1000 segments=1 total_cycles=262144 user_cycles=78715
+LZ_STATS aggregate h=1000 segments=2 total_cycles=3145728 user_cycles=2556724
+TIMED wall_s=33.6 user_s=33.1 sys_s=0.5 maxrss_kb=614992 rc=0 load1=25.9 load1_end=28.8
+STATE_MATCH (fields 23; differing: anchor_id; height 1000 utxo_leaves 1026)
+LZ_STATS chunk h=100000 segments=1 total_cycles=2097152 user_cycles=1130111
+LZ_STATS chunk h=100000 segments=1 total_cycles=2097152 user_cycles=1317695
+LZ_STATS trie h=100000 segments=1 total_cycles=524288 user_cycles=150975
+LZ_STATS aggregate h=100000 segments=2 total_cycles=3145728 user_cycles=2741948
+TIMED wall_s=57.2 user_s=56.4 sys_s=0.9 maxrss_kb=1093860 rc=0 load1=28.8 load1_end=31.4
+STATE_MATCH (fields 23; differing: anchor_id; height 100000 utxo_leaves 197454)
+LZ_STATS chunk h=200000 segments=19 total_cycles=38797312 user_cycles=33951234
+LZ_STATS chunk h=200000 segments=16 total_cycles=33554432 user_cycles=29681076
+LZ_STATS trie h=200000 segments=8 total_cycles=14942208 user_cycles=12683806
+LZ_STATS aggregate h=200000 segments=9 total_cycles=17039360 user_cycles=14638704
+TIMED wall_s=71.4 user_s=80.1 sys_s=1.1 maxrss_kb=1108484 rc=0 load1=31.4 load1_end=32.9
+STATE_MATCH (fields 23; differing: anchor_id; height 200000 utxo_leaves 13540350)
+LZ_STATS chunk h=270000 segments=19 total_cycles=39845888 user_cycles=34031948
+LZ_STATS chunk h=270000 segments=16 total_cycles=33554432 user_cycles=28466852
+LZ_STATS trie h=270000 segments=10 total_cycles=20971520 user_cycles=17393172
+LZ_STATS aggregate h=270000 segments=11 total_cycles=23068672 user_cycles=19193739
+TIMED wall_s=65.4 user_s=73.4 sys_s=0.9 maxrss_kb=1111740 rc=0 load1=32.9 load1_end=27.8
+STATE_MATCH (fields 23; differing: anchor_id; height 270000 utxo_leaves 55129682)
+LZ_STATS chunk h=280000 segments=11 total_cycles=23068672 user_cycles=19330147
+LZ_STATS chunk h=280000 segments=9 total_cycles=17825792 user_cycles=15353680
+LZ_STATS trie h=280000 segments=6 total_cycles=12582912 user_cycles=10709579
+LZ_STATS aggregate h=280000 segments=8 total_cycles=15728640 user_cycles=13394367
+TIMED wall_s=59.6 user_s=63.7 sys_s=0.9 maxrss_kb=1104340 rc=0 load1=27.8 load1_end=30.5
+STATE_MATCH (fields 23; differing: anchor_id; height 280000 utxo_leaves 64026425)
+LZ_STATS chunk h=290000 segments=24 total_cycles=50331648 user_cycles=42771825
+LZ_STATS chunk h=290000 segments=26 total_cycles=54525952 user_cycles=46667377
+LZ_STATS trie h=290000 segments=21 total_cycles=44040192 user_cycles=36818893
+LZ_STATS aggregate h=290000 segments=16 total_cycles=33554432 user_cycles=28118858
+TIMED wall_s=73.6 user_s=84.1 sys_s=1.0 maxrss_kb=1123968 rc=0 load1=30.5 load1_end=27.0
+STATE_MATCH (fields 23; differing: anchor_id; height 290000 utxo_leaves 74110678)
+LZ_STATS chunk h=300000 segments=10 total_cycles=20971520 user_cycles=18319599
+LZ_STATS chunk h=300000 segments=10 total_cycles=19005440 user_cycles=16559098
+LZ_STATS trie h=300000 segments=6 total_cycles=12582912 user_cycles=10633030
+LZ_STATS aggregate h=300000 segments=6 total_cycles=12582912 user_cycles=10778621
+TIMED wall_s=59.4 user_s=63.1 sys_s=0.9 maxrss_kb=1103724 rc=0 load1=27.0 load1_end=30.0
+STATE_MATCH (fields 23; differing: anchor_id; height 300000 utxo_leaves 84569228)
+LZ_STATS chunk h=400000 segments=88 total_cycles=182714368 user_cycles=153617592
+LZ_STATS chunk h=400000 segments=70 total_cycles=144965632 user_cycles=122757753
+LZ_STATS trie h=400000 segments=38 total_cycles=78118912 user_cycles=65506600
+LZ_STATS aggregate h=400000 segments=37 total_cycles=76546048 user_cycles=64132129
+TIMED wall_s=113.4 user_s=153.2 sys_s=1.4 maxrss_kb=1148932 rc=0 load1=30.0 load1_end=34.5
+STATE_MATCH (fields 23; differing: anchor_id; height 400000 utxo_leaves 286746407)
+RUN_A_DONE
