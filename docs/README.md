@@ -63,6 +63,7 @@ of the past and are not kept current.
 | [`OPERATIONS.md`](OPERATIONS.md) | the operator's manual: §0 the live Hazync v2 board, §3 board workers (both boards); the rest is the Hazync v1 fleet's reference (topology, multi-card fleets, tip runs) |
 | [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) | builds, image ids and reproducibility, cutting a release |
 | [`../coordinator/deploy/RUNBOOK.md`](../coordinator/deploy/RUNBOOK.md) | the public board's own box, day to day |
+| [`libzync/PREP_MEMORY.md`](libzync/PREP_MEMORY.md) | where prep's memory goes on the board box, and the settings that keep a from-genesis run inside it |
 | [`../coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md) | how the board moved from Hazync v1 to v2 on 2026-11-12 |
 | [`../coordinator/deploy/headers/README.md`](../coordinator/deploy/headers/README.md) | the header-chain follower that keeps the header proof at the tip |
 | [`../coordinator/deploy/headers-api/README.md`](../coordinator/deploy/headers-api/README.md) | the untrusted path service behind the website's block and transaction check |

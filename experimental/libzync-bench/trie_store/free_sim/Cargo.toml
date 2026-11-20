@@ -1,0 +1,9 @@
+[package]
+name = "free_sim"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+libzync = { path = "../../../../libzync" }
+[profile.release]
+debug = false
+[workspace]
