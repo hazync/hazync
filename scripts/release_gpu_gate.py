@@ -79,7 +79,7 @@ DEADMAN_MARGIN_S = 1500      # the pod-side dead-man fires this long after the t
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)   # all handled like Ctrl-C: release the pods first
 HISTORY = ".gpu-gate-history.txt"   # on the release box's dist/: every receipt sha256 a marker ever recorded
 LOCAL_HISTORY = os.path.expanduser("~/.hazync/gpu-gate-receipts.txt")
-GRAPHQL = "https://api.runpod.io/graphql"
+GRAPHQL = "https://api.runpod.io/graphql"   # gqlbal: the account balance, the one allowed GraphQL call (v2 has none)
 UA = "hazync-release-gpu-gate/1 (+https://github.com/hazync/hazync)"
 SSH_OPTS = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
             "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "BatchMode=yes"]
