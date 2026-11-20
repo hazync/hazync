@@ -1743,6 +1743,42 @@ mod tests {
         std::env::remove_var("HAZYNC_TRIE_RETAIN_MAX");
     }
 
+    /// Z2, review LOW 10: the source re-logs the same root at another reference in a new generation (prep restarted above
+    /// its flush and applied the block again): the reader reads it there, and keeps serving; a re-logged entry with
+    /// another root hash is refused (Moved).
+    #[cfg(feature = "reader")]
+    #[test]
+    fn z2_a_relogged_root_is_followed() {
+        let mut m = TrieStore::new(true);
+        for (mk, i) in &z1_blocks_any(20, 11) { m.apply(mk, i).unwrap(); }
+        (m.height, m.hash) = (20, [6; 32]);
+        let dir = std::env::temp_dir().join(alloc::format!("hztrie-test-{}-z2-relog", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        m.write_disk_fixture(&dir, 3).unwrap();
+        let r = Reader::open(&dir, 20, &[6; 32], None, 1 << 20).unwrap();
+        let want = m.to_bytes();
+        // the root record copied to a new slot at the end of the file, logged again under GEN 4
+        let mut nodes = std::fs::read(dir.join("nodes.bin")).unwrap();
+        let old = r.root_ref();
+        let rec = nodes[(old as usize - 1) * RECORD..old as usize * RECORD].to_vec();
+        nodes.extend_from_slice(&rec);
+        let new = (nodes.len() / RECORD) as u64;
+        std::fs::write(dir.join("nodes.bin"), &nodes).unwrap();
+        let mut e = 20u32.to_le_bytes().to_vec();
+        e.extend_from_slice(&[6; 32]); e.extend_from_slice(&new.to_le_bytes()); e.extend_from_slice(&r.root_hash); e.extend_from_slice(&4u32.to_le_bytes());
+        std::fs::write(dir.join("roots.log"), &e).unwrap();
+        std::fs::write(dir.join("GEN"), 4u32.to_le_bytes()).unwrap();
+        assert_eq!(r.walk(|s| s.to_bytes()).unwrap(), want, "the re-logged root is followed");
+        assert_eq!(r.root_ref(), new);
+        // another root hash for (20, block): not this trie
+        let mut e2 = e.clone();
+        e2[44..76].copy_from_slice(&[9; 32]);
+        std::fs::write(dir.join("roots.log"), &e2).unwrap();
+        std::fs::write(dir.join("GEN"), 5u32.to_le_bytes()).unwrap();
+        assert!(matches!(r.walk(|s| s.to_bytes()), Err(WalkErr::Moved(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Z2: the fixture writer (zync-serve's tests) writes a disk trie a Reader opens at its root, byte for byte the store.
     #[cfg(feature = "reader")]
     #[test]
@@ -2887,9 +2923,11 @@ impl Arena for ReadArena {
 #[cfg(feature = "reader")]
 pub struct Reader {
     dir: std::path::PathBuf,
-    /// the store at the root (height, block hash); read it only through `walk`
-    store: TrieStore,
-    pub root_ref: u64,
+    /// the store at the root (height, block hash); read it only through `walk` (behind a lock: a re-logged root moves it)
+    store: std::sync::Mutex<TrieStore>,
+    height: u64,
+    hash: [u8; 32],
+    root_ref: core::sync::atomic::AtomicU64,
     pub root_hash: [u8; 32],
     gen: core::sync::atomic::AtomicU32,
     w: std::sync::Arc<WalkState>,
@@ -2898,7 +2936,7 @@ pub struct Reader {
 #[cfg(feature = "reader")]
 impl core::fmt::Debug for Reader {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Reader({} at {}, root {})", self.dir.display(), self.store.height, self.root_ref)
+        write!(f, "Reader({} at {}, root {})", self.dir.display(), self.height, self.root_ref.load(core::sync::atomic::Ordering::Relaxed))
     }
 }
 
@@ -2925,26 +2963,36 @@ impl Reader {
         let a = ReadArena { file, w: w.clone() };
         let mut store = TrieStore::with_arena(counts, Box::new(a));
         (store.root, store.height, store.hash) = (root_ref, height, *hash);
-        let r = Reader { dir: dir.to_path_buf(), store, root_ref, root_hash, gen: core::sync::atomic::AtomicU32::new(gen), w };
+        let r = Reader { dir: dir.to_path_buf(), store: std::sync::Mutex::new(store), height, hash: *hash,
+                         root_ref: core::sync::atomic::AtomicU64::new(root_ref), root_hash, gen: core::sync::atomic::AtomicU32::new(gen), w };
         // the root itself: its hash read from the arena must be the logged one
         let got = r.walk(|s| crate::coinlog::h_of(&s.root())).map_err(|e| format!("reading the root of {height}: {e:?}"))?;
         if got != root_hash { return Err(format!("the arena's root at {height} does not hash to roots.log's root hash")); }
         Ok(r)
     }
 
-    pub fn height(&self) -> u64 { self.store.height }
-    pub fn hash(&self) -> [u8; 32] { self.store.hash }
+    pub fn height(&self) -> u64 { self.height }
+    pub fn hash(&self) -> [u8; 32] { self.hash }
+    /// The arena reference of the root being read (it moves when the source re-logs the same root elsewhere).
+    pub fn root_ref(&self) -> u64 { self.root_ref.load(core::sync::atomic::Ordering::Relaxed) }
 
     /// Run `f` on the store at this root, bracketed as above. With a new generation since the last walk, the root is
     /// looked up again first (an entry at or below the flushed height survives a restart; one above it is cut).
     pub fn walk<T>(&self, f: impl FnOnce(&TrieStore) -> T) -> Result<T, WalkErr> {
         use core::sync::atomic::Ordering::Relaxed;
         let (g0, i0) = (read_gen(&self.dir), read_intact(&self.dir));
-        let h = self.store.height;
+        let h = self.height;
         if h < i0 { return Err(WalkErr::Moved(alloc::format!("the root of {h} was released (intact_from {i0})"))); }
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         if g0 != self.gen.load(Relaxed) {
-            match find_root(&self.dir, h, &self.store.hash) {
-                Ok(Some((r, rh))) if r == self.root_ref && rh == self.root_hash => self.gen.store(g0, Relaxed),
+            // a new generation: the root looked up again. The same root hash logged at another reference (prep restarted
+            // above its flush and applied the block again: review, LOW 10) is the same trie, so it is read there
+            match find_root(&self.dir, h, &self.hash) {
+                Ok(Some((r, rh))) if rh == self.root_hash => {
+                    store.root = r;
+                    self.root_ref.store(r, Relaxed);
+                    self.gen.store(g0, Relaxed);
+                }
                 _ => return Err(WalkErr::Moved(alloc::format!("the trie's generation moved to {g0} and the root of {h} is no longer logged"))),
             }
         }
@@ -2952,7 +3000,8 @@ impl Reader {
         self.w.len.store(len, Relaxed);
         self.w.reads.store(0, Relaxed);
         *self.w.bad.lock().unwrap_or_else(|x| x.into_inner()) = None;
-        let out = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| f(&self.store)));
+        let out = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| f(&store)));
+        drop(store);
         let bad = self.w.bad.lock().unwrap_or_else(|x| x.into_inner()).take();
         let (g1, i1) = (read_gen(&self.dir), read_intact(&self.dir));
         if g1 != g0 { return Err(WalkErr::Moved(alloc::format!("the trie's generation moved during the walk ({g0} -> {g1})"))); }

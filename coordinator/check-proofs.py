@@ -25,6 +25,8 @@ board HAZYNC_LIBZYNC=1 (verify-any is given each range's start height), HAZYNC_B
 the host finds the state before that height once its leaf bundle is pruned). With a tip run (docs/libzync/REORG.md
 §19, D1) also HAZYNC_LZ_TIP_FROM and HAZYNC_LZ_TIP_STATE_DIR, as the coordinator's: each proof is then checked against a
 view of exactly the two states it reads, each from the run that holds its height (the coordinator's _lz_verify_env).
+CHECK_PROOFS_COORD (the coordinator's URL): its /api/meta `tip_run.from` must be HAZYNC_LZ_TIP_FROM, or nothing is
+checked (exit 2): one X in four places (REORG.md §19).
 """
 import argparse
 import concurrent.futures
@@ -116,6 +118,18 @@ def main(argv=None):
     ap.add_argument("--limit", type=int, default=0, help="check at most N files (0: all)")
     a = ap.parse_args(argv)
 
+    coord = os.environ.get("CHECK_PROOFS_COORD", "")
+    if coord:
+        import json, urllib.request
+        try:
+            x = (json.load(urllib.request.urlopen(coord.rstrip("/") + "/api/meta", timeout=30)).get("tip_run") or {}).get("from") or 0
+        except (OSError, ValueError) as e:
+            print(f"COULD NOT CHECK: {coord}/api/meta: {e}")
+            return 2
+        if int(x) != TIP_FROM:
+            print(f"COULD NOT CHECK: HAZYNC_LZ_TIP_FROM={TIP_FROM} but the coordinator's tip run starts at {x or 'none'} "
+                  f"(one X in four places, REORG.md §19)")
+            return 2
     if not os.path.isdir(a.proofs):
         print(f"COULD NOT CHECK: proof directory {a.proofs} does not exist")
         return 2

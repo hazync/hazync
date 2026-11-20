@@ -27,7 +27,9 @@
 #   hazync-lz-zapp-follow-tip            (hazync-lz-zapp-follow-tip.timer runs it)
 # Env: ZAPP_SERVE_DIR (at.json, proof.rcpt), COORD_SPINE, ZAPP_HOST (a libzync host: verify-any), ZAPP_WORK (scratch),
 #   BOARD_OUT, BOARD_TRIE (the board pass), TIP_FROM (X; empty: no tip run), TIP_OUT, TIP_TRIE (the tip run),
-#   ZAPP_PIN_W (288, REORG.md's W), ZAPP_KEEP (2 heights served).
+#   ZAPP_PIN_W (288, REORG.md's W), ZAPP_KEEP (2 heights served), ZAPP_ZS_URL (zync-serve tip mode, for the probe of the
+#   served heights; default http://127.0.0.1:8602), ZAPP_COORD (the coordinator: its /api/meta tip_run.from must be
+#   TIP_FROM; default http://127.0.0.1:8899; empty: not checked).
 # For tests: ZAPP_OWNER (the served files' owner, default hazync; empty: as is), ZAPP_RESTART / ZAPP_ACTIVE (restart
 # zync-serve, ask whether it is up), ZAPP_SETTLE_S (5).
 set -euo pipefail
@@ -43,6 +45,8 @@ TIP_TRIE=${TIP_TRIE:-/srv/bulk/libzync-prep/trie}
 W=${ZAPP_PIN_W:-288}
 KEEP=${ZAPP_KEEP:-2}
 OWNER=${ZAPP_OWNER-hazync}
+ZS_URL=${ZAPP_ZS_URL-http://127.0.0.1:8602}
+COORD=${ZAPP_COORD-http://127.0.0.1:8899}
 RESTART=${ZAPP_RESTART:-systemctl restart hazync-lz-zync-serve-tip}
 ACTIVE=${ZAPP_ACTIVE:-systemctl is-active --quiet hazync-lz-zync-serve-tip}
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
@@ -51,6 +55,12 @@ case "$TIP_FROM" in ''|*[!0-9]*) [ -z "$TIP_FROM" ] || die "TIP_FROM=$TIP_FROM: 
 
 mkdir -p "$WORK"
 exec 9>"$WORK/.lock"; flock -n 9 || { log "another run holds the lock"; exit 0; }
+# the handover height must be the coordinator's (one X in four places, REORG.md §19; review, LOW 11)
+if [ -n "$COORD" ]; then
+    CX=$(curl -sf --max-time 20 "$COORD/api/meta" | python3 -c 'import json,sys; t=json.load(sys.stdin).get("tip_run") or {}; print(t.get("from") or "")' 2>/dev/null) ||
+        die "cannot read the coordinator's /api/meta at $COORD (ZAPP_COORD)"
+    [ "${CX:-}" = "${TIP_FROM:-}" ] || die "TIP_FROM=${TIP_FROM:-none} but the coordinator's tip run starts at ${CX:-none}: one X, in all four places (REORG.md §19)"
+fi
 # the source of height h: "<out> <trie>" (the run whose state_<h>.json the coordinator checks h against)
 src_of() { if [ -n "$TIP_FROM" ] && [ "$1" -ge $((TIP_FROM - 1)) ]; then echo "$TIP_OUT $TIP_TRIE"; else echo "$BOARD_OUT $BOARD_TRIE"; fi; }
 
@@ -162,8 +172,29 @@ if [ "$(field '["servable"]')" != true ]; then
     fi
     log "the root of $H is released in $STRIE (intact from $(field '["intact_from"]')); pinned now, served once the spine reaches a held height"; exit 0
 fi
+# every served height must answer (review, LOW 10: a reader zync-serve opened before its source re-logged the root, e.g.
+# after a prep restart, keeps answering 503): a fact at each, and on a 503 zync-serve is restarted on the same set
+probe() {
+    [ -n "$ZS_URL" ] || return 0
+    python3 - "$ZS_URL" "$SERVE/at.json" <<'PY'
+import json, sys, urllib.error, urllib.request
+url, atf = sys.argv[1:3]
+for a in json.load(open(atf)):
+    try:
+        urllib.request.urlopen(f"{url}/trie/balance/51?at={a['height']}", timeout=20).read()
+    except urllib.error.HTTPError as e:
+        if e.code == 503: print(a["height"]); sys.exit(1)
+    except OSError:
+        print("down"); sys.exit(1)
+PY
+}
 if [ "$(field '["same"]')" = true ] && [ -s "$SERVE/proof.rcpt" ] && cmp -s "$WORK/spine.bin" "$SERVE/proof.rcpt"; then
-    log "at $H, nothing new"; exit 0
+    if bad=$(probe); then log "at $H, nothing new"; exit 0; fi
+    log "zync-serve answers 503 (or nothing) at ${bad}: restarted on the same heights"
+    $RESTART 9>&-; sleep "${ZAPP_SETTLE_S:-5}"
+    $ACTIVE || die "zync-serve did not stay up on the same heights after the restart"
+    bad=$(probe) || die "zync-serve still answers 503 at ${bad} after a restart: its root there is gone (REORG.md §11)"
+    exit 0
 fi
 
 # 4. at.json (H and the kept earlier heights), zync-serve restarted on it
@@ -174,7 +205,7 @@ try_set() {  # try_set <json>: zync-serve on that set; 0 if it stays up
     # shellcheck disable=SC2046  # as above
     install -m 0644 $(own) "$SERVE/.at.json.new" "$SERVE/.at.json.inst" && rm -f "$SERVE/.at.json.new"
     mv -f "$SERVE/.at.json.inst" "$SERVE/at.json"
-    $RESTART
+    $RESTART 9>&-             # the run's lock is not handed to what the restart starts
     sleep "${ZAPP_SETTLE_S:-5}"
     $ACTIVE
 }
@@ -182,7 +213,7 @@ try_set() {  # try_set <json>: zync-serve on that set; 0 if it stays up
 if ! try_set "$(field '["plan"]')"; then
     log "zync-serve did not stay up on $(field '["plan"]' | python3 -c 'import json,sys; print([a["height"] for a in json.load(sys.stdin)])'): trying $H alone"
     if ! try_set "$(field '["plan"][:1]')"; then
-        if [ -e "$SERVE/.at.json.prev" ]; then mv -f "$SERVE/.at.json.prev" "$SERVE/at.json"; $RESTART; fi
+        if [ -e "$SERVE/.at.json.prev" ]; then mv -f "$SERVE/.at.json.prev" "$SERVE/at.json"; $RESTART 9>&-; fi
         die "zync-serve did not stay up on the root of $H in $STRIE: the previous set is restored"
     fi
 fi

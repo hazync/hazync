@@ -18,6 +18,7 @@ Environment=HAZYNC_LZ_STATE_DIR=/var/lib/libzync-board/out
 # (hazync-lz-coordinator.service.d/tip-run.conf: the same X and directory)
 Environment=HAZYNC_LZ_TIP_FROM=974937
 Environment=HAZYNC_LZ_TIP_STATE_DIR=/var/lib/libzync-fast/out
+Environment=CHECK_PROOFS_COORD=http://127.0.0.1:8899
 Environment=CHECK_PROOFS_WORKERS=4
 ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/check-proofs.py
 Nice=19

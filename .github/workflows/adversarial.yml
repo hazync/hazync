@@ -910,6 +910,16 @@ jobs:
           python3 test_reorg_tip.py --control-gap
           python3 test_reorg_tip.py --control-handover
           python3 test_reorg_tip.py --control-belowx
+          python3 test_reorg_tip.py --control-fence
+          python3 test_reorg_tip.py --control-torn
+          python3 test_reorg_tip.py --control-handover-clear
+          python3 test_reorg_tip.py --control-spine-view
+          python3 test_reorg_tip.py --control-orphaned
+          python3 test_reorg_tip.py --control-window
+      - name: The prep runner never clears stores that a save point it cannot see may belong to (REORG.md §19, review HIGH 1)
+        run: cd coordinator && python3 test_prep_runner.py
+      - name: Prep-runner POSITIVE CONTROL (the refusal taken out - must FAIL)
+        run: cd coordinator && python3 test_prep_runner.py --control
       - name: The leaf pruner frees the tip run's proven bundles (REORG.md §19)
         run: cd coordinator && python3 test_prune_leaves_tip.py
       - name: Tip-pruner POSITIVE CONTROL (the pruner before D1 - must FAIL)

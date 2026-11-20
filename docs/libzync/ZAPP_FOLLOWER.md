@@ -401,3 +401,10 @@ readable (past the window) fails the run (alerts), and facts resume at the board
 - The follower writes `PIN` into root-owned trie directories as root. A PIN never removed (the follower stopped) holds
   slots up to `HAZYNC_TRIE_RETAIN_MAX` blocks (the cap releases it and says so, Z1).
 - zync-serve restarts on every new height (as today); with nothing to load it is up in milliseconds.
+
+**Review of 20.11.2026, fixed** (REORG.md §19 has the table): a reader follows a root its source re-logged at another
+reference with the same root hash (a prep restart above its flush); the follower probes every served height and
+restarts zync-serve on a 503, refuses a `TIP_FROM` that is not the coordinator's, and no longer hands its lock to the
+zync-serve it starts (found by `reorg_e2e_tip.py`: in the harness's restart the lock was inherited and every later run
+said "another run holds the lock"; systemd's restart does not inherit it, the fix is general). The history cap stays at
+the decided 100,000 records (§12.4): `ZYNC_WALK_CAP` lowers it.

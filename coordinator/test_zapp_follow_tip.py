@@ -102,7 +102,7 @@ def proof():
 ENV = dict(os.environ, ZAPP_SERVE_DIR=D["serve"], COORD_SPINE=D["spine"], ZAPP_HOST=HOST, ZAPP_WORK=D["work"],
            BOARD_OUT=D["board_out"], BOARD_TRIE=D["board_trie"], TIP_FROM=str(X), TIP_OUT=D["tip_out"], TIP_TRIE=D["tip_trie"],
            ZAPP_PIN_W=str(W), ZAPP_OWNER="", ZAPP_RESTART=f"{ZS} {D['serve']}/at.json {STATUS}", ZAPP_ACTIVE=f"grep -q up {STATUS}",
-           ZAPP_SETTLE_S="0")
+           ZAPP_SETTLE_S="0", ZAPP_ZS_URL="", ZAPP_COORD="")
 def run():
     return subprocess.run(["bash", SCRIPT], env=ENV, capture_output=True, text=True, timeout=120)
 fails = 0
@@ -157,6 +157,37 @@ spine(112, tag="Z")
 open(os.path.join(D["spine"], "spine.bin"), "w").write(json.dumps({"hi": 112, "bh": bh("Z", 112)}))
 r = run()
 check(r.returncode == 1 and served() == before and "does not end on the source" in r.stdout, f"9. a spine not on the source's chain: fails, nothing changes ({r.returncode})")
+
+# review of D1: (LOW 11) the follower's X must be the coordinator's; (LOW 10) a served height answering 503 (zync-serve
+# opened before its source re-logged the root) is probed and zync-serve restarted on the same set
+import http.server, threading
+ZS = {"503": True, "meta_from": X}
+class FakeZS(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/api/meta":
+            b = json.dumps({"tip_run": {"from": ZS["meta_from"]}}).encode(); code = 200
+        else:
+            code = 503 if ZS["503"] and self.path.startswith("/trie/") else 200; b = b"{}"
+        self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self, *a): pass
+zsv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeZS)
+threading.Thread(target=zsv.serve_forever, daemon=True).start()
+ZURL = f"http://127.0.0.1:{zsv.server_address[1]}"
+spine(112, tag="B")
+RESTARTS = os.path.join(T, "restarts")
+RS = os.path.join(T, "count-restart")
+open(RS, "w").write(f"#!/bin/sh\necho x >> {RESTARTS}\n"); os.chmod(RS, 0o755)
+r = subprocess.run(["bash", SCRIPT], env=dict(ENV, ZAPP_COORD=ZURL, TIP_FROM="90"), capture_output=True, text=True, timeout=60)
+check(r.returncode == 1 and "coordinator's tip run starts at 100" in r.stdout, f"11. TIP_FROM=90 against the coordinator's 100: the run fails ({r.returncode})")
+r = subprocess.run(["bash", SCRIPT], env=dict(ENV, ZAPP_COORD=ZURL, ZAPP_ZS_URL=ZURL, ZAPP_RESTART=RS),
+                   capture_output=True, text=True, timeout=60)
+check(r.returncode == 1 and os.path.exists(RESTARTS) and "still answers 503" in r.stdout,
+      f"10. a served height answering 503: zync-serve restarted, and when it still does, the run fails ({r.returncode}: {r.stdout.strip()[-90:]})")
+if os.path.exists(RESTARTS): os.remove(RESTARTS)
+ZS["503"] = False
+r = subprocess.run(["bash", SCRIPT], env=dict(ENV, ZAPP_COORD=ZURL, ZAPP_ZS_URL=ZURL), capture_output=True, text=True, timeout=60)
+check(r.returncode == 0 and "nothing new" in r.stdout and not os.path.exists(RESTARTS), f"10. every served height answers: nothing restarted ({r.returncode})")
+zsv.shutdown()
 
 # the side-by-side check before the switch (hazync-lz-zapp-compare.py): equal answers at the common height pass, one
 # different answer fails

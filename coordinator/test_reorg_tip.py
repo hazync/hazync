@@ -39,6 +39,13 @@ PATCHES = {
     "--control-gap": ("        if b is None or h > b:\n            return TIP_FROM\n", "        if False:\n            return TIP_FROM\n"),
     "--control-handover": ("            hv = _handover_check()\n", "            hv = None\n"),
     "--control-belowx": ('            if src == "prep-tip" and f < TIP_FROM - 1 and', '            if False and'),
+    # review of D1, each fix taken out
+    "--control-fence": ("    if not (BOARD_BLOCKS_DIR or TIP_BLOCKS_DIR):\n        return None\n    run =", "    if True:\n        return None\n    run ="),
+    "--control-torn": ("    if not (LIBZYNC and TIP_FROM):\n        return None\n    for h in ([lo - 1]", "    if True:\n        return None\n    for h in ([lo - 1]"),
+    "--control-handover-clear": ("            elif had:\n                c.execute(\"DELETE FROM meta WHERE k='handover_alert'\")", "            elif False:\n                c.execute(\"DELETE FROM meta WHERE k='handover_alert'\")"),
+    "--control-spine-view": ("        if LIBZYNC and TIP_FROM:\n            # with a tip run (D1, review LOW 8)", "        if False:\n            # with a tip run (D1, review LOW 8)"),
+    "--control-orphaned": ("and _b is not None and _display(_b) == first:", "and _b is not None:"),
+    "--control-window": ("            if TIP_FROM:\n                btop = _verified_top(c, \"prep\")", "            if False:\n                btop = _verified_top(c, \"prep\")"),
 }
 CONTROL = next((a for a in sys.argv[1:] if a in PATCHES), None)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -48,12 +55,13 @@ X = 20
 SB, LB, AB = os.path.join(T, "board", "out"), os.path.join(T, "board", "leaves"), os.path.join(T, "acks")
 ST, LT, AT = os.path.join(T, "tip", "out"), os.path.join(T, "tip", "leaves"), os.path.join(T, "acks-tip")
 RB, RT = os.path.join(SB, "reorg", "records"), os.path.join(ST, "reorg", "records")
-for d in (SB, LB, ST, LT, RB, RT):
+for d in (SB, LB, ST, LT, RB, RT, os.path.join(T, "tip", "blocks"), os.path.join(T, "board", "blocks")):
     os.makedirs(d)
 GEN = "aa" * 32
 ENV = dict(HAZYNC_LIBZYNC="1", VERIFY_MODE="real", HAZYNC_HOST=HOST, HAZYNC_BRIDGE_OUT=LB, HAZYNC_LZ_STATE_DIR=SB,
            HAZYNC_LZ_REORG_ACK_DIR=AB, HAZYNC_LZ_TIP_FROM=str(X), HAZYNC_LZ_TIP_STATE_DIR=ST, HAZYNC_LZ_TIP_BRIDGE_OUT=LT,
-           HAZYNC_LZ_TIP_REORG_ACK_DIR=AT, WITNESS_DIR=os.path.join(T, "w"), COORD_DB=os.path.join(T, "c.db"),
+           HAZYNC_LZ_TIP_REORG_ACK_DIR=AT, HAZYNC_LZ_TIP_BLOCKS_DIR=os.path.join(T, "tip", "blocks"),
+           HAZYNC_LZ_BLOCKS_DIR=os.path.join(T, "board", "blocks"), WITNESS_DIR=os.path.join(T, "w"), COORD_DB=os.path.join(T, "c.db"),
            COORD_STATE=os.path.join(T, "st"), COORD_PROOFS=os.path.join(T, "p"), COORD_SPINE=os.path.join(T, "sp"),
            SEED_RANGES="0", RATE_EXEMPT="", TIP_HEIGHT="31", VERIFY_CONCURRENCY="8", GENESIS_TIP=GEN,
            TIP_FILE=os.path.join(T, "no_tip"))
@@ -62,7 +70,8 @@ with open(HOST, "w") as f:
     f.write(r'''#!/usr/bin/env python3
 import hashlib, json, os, sys
 a = sys.argv[1:]
-assert a[0] == "verify-any" and "--check-end" in a, a
+assert a[0] == "verify-any", a
+ce = "--check-end" in a
 r = json.load(open(a[1]))
 d = os.environ["HAZYNC_LZ_STATE_DIR"]
 def tip(h):
@@ -72,14 +81,14 @@ def link(x): return hashlib.sha256(bytes.fromhex(x)).hexdigest()
 lo, hi = r["lo"], r["hi"]
 if lo > 1 and tip(lo - 1) != r["in"]:
     print(f"the receipt is not anchored on the state before block {lo}", file=sys.stderr); sys.exit(1)
-t = tip(hi)
+t = tip(hi) if ce else r["out"]
 if t is None:
     print(f"the board has no state at block {hi} to check the receipt's end against", file=sys.stderr); sys.exit(1)
 if t != r["out"]:
     print(f"the receipt ends on a state at block {hi} that is not the board's (its tip {r['out']}, the board's {t})", file=sys.stderr); sys.exit(1)
 it = os.environ.get("GENESIS_TIP") if lo == 1 else link(r["in"])
 print(f"RANGE-OK lo={lo} hi={hi} in_tip={it} out_tip={link(r['out'])} out_leaves=1 range_work=0 "
-      f"in_bhash={r['in']} out_bhash={r['out']} image=x lineage=y anchored={int(lo == 1)} end=board")
+      f"in_bhash={r['in']} out_bhash={r['out']} image=x lineage=y anchored={int(lo == 1)}{' end=board' if ce else ''}")
 ''')
 os.chmod(HOST, os.stat(HOST).st_mode | stat.S_IEXEC)
 
@@ -231,14 +240,14 @@ with open(os.path.join(ST, f"state_{top}.json"), "w") as f:
     json.dump({"height": top, "tip_hash": list(bytes.fromhex(bh("Z", top)))}, f)
 fresh()
 s.reorg_backstop()
-al = q("SELECT v FROM meta WHERE k='reorg_alert'")
-check(bool(al) and f"disagree on state_{top}.json" in al[0][0], f"a tip-run state_{top} of another chain latches the alert ({al and al[0][0][:90]})")
+al = q("SELECT v FROM meta WHERE k='handover_alert'")
+check(bool(al) and f"disagree on state_{top}.json" in al[0][0], f"a tip-run state_{top} of another chain sets the handover alert ({al and al[0][0][:90]})")
 open(os.path.join(ST, f"state_{top}.json"), "w").write(good)
 good = open(os.path.join(ST, "state_12.json")).read()
 c = s.db(); c.execute("DELETE FROM meta WHERE k='reorg_alert'"); c.commit(); c.close()
 fresh()
 s.reorg_backstop()
-check(not q("SELECT v FROM meta WHERE k='reorg_alert'"), "agreeing again (and cleared by hand): no alert")
+check(not q("SELECT v FROM meta WHERE k='reorg_alert'") and not q("SELECT v FROM meta WHERE k='handover_alert'"), "agreeing again: no alert")
 
 # ---- reorgs ----
 for b in range(22, 28):
@@ -265,6 +274,16 @@ r = subprocess.run(ck, env=dict(os.environ), capture_output=True, text=True, tim
 check(r.returncode == 0 and "with problems        : 0" in r.stdout, f"check-proofs with the tip run: every proof holds ({r.returncode}, {r.stdout.strip().splitlines()[-1][:80]})")
 r = subprocess.run(ck, env=dict(os.environ, HAZYNC_LZ_TIP_FROM=""), capture_output=True, text=True, timeout=120)
 check(r.returncode == 1 and "proof_24.bin" in r.stdout, f"check-proofs without the tip run's variables: the tip run's proofs fail (control; {r.returncode})")
+# its X must be the coordinator's (review, LOW 11): a stand-in /api/meta saying 21
+import http.server, threading
+class Meta(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        b = json.dumps({"tip_run": {"from": X + 1}}).encode(); self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self, *a): pass
+msv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Meta); threading.Thread(target=msv.serve_forever, daemon=True).start()
+r = subprocess.run(ck, env=dict(os.environ, CHECK_PROOFS_COORD=f"http://127.0.0.1:{msv.server_address[1]}"), capture_output=True, text=True, timeout=120)
+check(r.returncode == 2 and "starts at 21" in r.stdout, f"check-proofs with an X other than the coordinator's: exit 2, nothing checked ({r.returncode})")
+msv.shutdown()
 # the board pass's own record, epoch 1 in ITS numbering
 sha_b = prep_rewind(SB, LB, RB, 11, 1, "A", 12)
 applied = s.reorg_poll()
@@ -303,19 +322,139 @@ check(tm.get("from") == X and tm.get("servable_high") == 30 and tm.get("board_se
 
 # ---- the stall check (hazync-lz-check-reorg.py with CHECK_TIP_RUN_PREP_TIP) ----
 ck = os.path.join(HERE, "deploy/libzync/hazync-lz-check-reorg.py")
-c = s.db(); c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_backstop_at',?)", (str(time.time()),)); c.execute("DELETE FROM meta WHERE k='reorg_alert'"); c.commit(); c.close()
+c = s.db(); c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_backstop_at',?)", (str(time.time()),)); c.execute("DELETE FROM meta WHERE k IN ('reorg_alert','handover_alert')"); c.commit(); c.close()
 nt = os.path.join(T, "node_tip"); open(nt, "w").write("40\n")
-pt = os.path.join(ST, "PREP_TIP.json")
-cenv = dict(os.environ, CHECK_TIP_RUN_PREP_TIP=pt, NODE_TIP_FILE=nt)
+pt, sf = os.path.join(ST, "PREP_TIP.json"), os.path.join(T, "check-tip-run.json")
+cenv = dict(os.environ, CHECK_TIP_RUN_PREP_TIP=pt, NODE_TIP_FILE=nt, CHECK_TIP_RUN_STATE=sf, CHECK_TIP_RUN_STALE_S="2")
+def stall_check(**kw): return subprocess.run([sys.executable, ck], env=dict(cenv, **kw), capture_output=True, text=True, timeout=60)
 os.utime(pt, (time.time() - 7200, time.time() - 7200))
-r = subprocess.run([sys.executable, ck], env=cenv, capture_output=True, text=True, timeout=60)
-check(r.returncode == 1 and "TIP RUN STALLED" in r.stdout, f"the tip run standing still for 2 h at 30, the node at 40: pages ({r.returncode})")
+r = stall_check()
+check(r.returncode == 0, f"the node gets ahead after a quiet 2 h (PREP_TIP.json old): no page yet ({r.returncode}: {r.stdout.strip()[-60:]})")
+time.sleep(2.5)
+r = stall_check()
+check(r.returncode == 1 and "TIP RUN STALLED" in r.stdout, f"the node ahead for longer than the limit, the tip run at 30: pages ({r.returncode})")
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT, CHECK_TIP_RUN_LEAF_WINDOW="3")
+check(r.returncode == 1 and "paused by its leaf window" in r.stdout, f"... and says when its leaf window paused it ({r.stdout.strip()[-80:]})")
 open(nt, "w").write("30\n")
-r = subprocess.run([sys.executable, ck], env=cenv, capture_output=True, text=True, timeout=60)
-check(r.returncode == 0, f"at the node's tip and waiting for a block: no page ({r.returncode}, {r.stdout.strip()[-60:]})")
-open(nt, "w").write("40\n"); os.utime(pt, None)
-r = subprocess.run([sys.executable, ck], env=cenv, capture_output=True, text=True, timeout=60)
-check(r.returncode == 0, f"below the node's tip but moving: no page ({r.returncode})")
+r = stall_check()
+check(r.returncode == 0, f"at the node's tip and waiting for a block: no page ({r.returncode})")
+os.rename(pt, pt + ".away")
+r = stall_check()
+check(r.returncode == 0 and "not checked" in r.stdout, f"no PREP_TIP.json yet (before the restart): said, not paged ({r.returncode})")
+os.rename(pt + ".away", pt)
+
+# ---- review of D1 ----
+q_sk, qk = key()
+def qbody(rcpt, rid): return dict(pubkey=qk, sig=q_sk.sign(rcpt).hex(), receipt=base64.b64encode(rcpt).decode(), handle="Q", _client_ip="10.9.9.9", range=rid)
+def att(rid):
+    a = q("SELECT attempts FROM ranges WHERE id=?", rid)
+    return a[0][0] if a else 0
+# 2. a REORG marker in the tip run's block directory (automatic rewinds off: prep stopped, nothing moved yet)
+open(os.path.join(T, "tip", "blocks", "REORG"), "w").write(json.dumps({"fork": 27, "class": "auto"}))
+s._fence_cache["t"] = 0.0
+code, out = s.submit(qbody(receipt("B", 28, 28), "28"))
+check(code == 409 and out.get("reorged") and not att("28") and not q("SELECT 1 FROM vranges WHERE id='28'"),
+      f"2. a tip-run REORG marker at 27: a proof of 28 is refused 409 reorged, not counted ({code})")
+check(s.bundle_path(28) is None and s.bundle_path(27) == os.path.join(LT, "leaf_27.bin") and s.lz_state_tip(28) is None,
+      "2. the bundle of 28 is no longer served, 27's is; state 28 reads as none (the commit check refuses it)")
+code, out = s.submit(qbody(receipt("B", 25, 25), "25"))
+check(code == 200, f"2. below the fence, 25: verified as before ({code}, {str(out)[:60]})")
+os.remove(os.path.join(T, "tip", "blocks", "REORG"))
+open(os.path.join(T, "tip", "blocks", "REORG_TOO_DEEP"), "w").write(json.dumps({"fork": None}))
+s._fence_cache["t"] = 0.0
+check(s.bundle_path(X) is None and s.bundle_path(X - 1) is not None, "2. REORG_TOO_DEEP with no fork fences the whole tip run (from X - 1)")
+os.remove(os.path.join(T, "tip", "blocks", "REORG_TOO_DEEP"))
+s._fence_cache["t"] = 0.0
+code, out = s.submit(qbody(receipt("B", 28, 28), "28"))
+check(code == 200, f"2. the marker gone: 28 verified ({code})")
+# 7. a missing, empty or torn state at lo-1 or hi: 503, not counted, the verifier not run
+for kind, data in (("empty", b""), ("torn", b'{"height": 2')):
+    path = os.path.join(ST, "state_29.json"); good29 = open(path, "rb").read()
+    open(path, "wb").write(data)
+    code, out = s.submit(qbody(receipt("B", 30, 30), "30"))
+    check(code == 503 and not att("30") and not q("SELECT 1 FROM vranges WHERE id='30'"), f"7. state 29 {kind}: a proof of 30 is answered 503, not counted ({code})")
+    open(path, "wb").write(good29)
+code, out = s.submit(qbody(receipt("B", 30, 30), "30"))
+check(code == 200, f"7. state 29 back: 30 verified ({code})")
+# a leaf of X - 1: the board pass's bundle, its start state X - 2 the board pass's, its end state X - 1 the tip run's
+c = s.db(); c.execute("DELETE FROM vranges WHERE id=?", (str(X - 1),)); c.execute("DELETE FROM ranges WHERE id=?", (str(X - 1),)); c.commit(); c.close()
+code, out = s.submit(qbody(receipt("A", X - 1, X - 1), str(X - 1)))
+check(code == 200, f"a leaf of X - 1 = {X - 1} verifies (state {X - 2} the board pass's, {X - 1} the tip run's) ({code}, {str(out)[:60]})")
+# 6. the handover alert clears itself, and does not block the other latch
+top = s._board_state_top() if (s._board_top_cache.update(t=0.0) or True) else None
+gtop = open(os.path.join(ST, f"state_{top}.json")).read()
+json.dump({"height": top, "tip_hash": list(bytes.fromhex(bh("Z", top)))}, open(os.path.join(ST, f"state_{top}.json"), "w"))
+s._board_top_cache["t"] = 0.0
+s.reorg_backstop()
+check(bool(q("SELECT 1 FROM meta WHERE k='handover_alert'")), "6. the runs disagree: handover_alert set")
+r = stall_check(CHECK_TIP_RUN_PREP_TIP="")
+check(r.returncode == 1 and "HANDOVER ALERT" in r.stdout, f"6. hazync-lz-check-reorg pages on it ({r.returncode})")
+open(os.path.join(ST, f"state_{top}.json"), "w").write(gtop)
+s._board_top_cache["t"] = 0.0
+s.reorg_backstop()
+check(not q("SELECT 1 FROM meta WHERE k='handover_alert'") and not q("SELECT 1 FROM meta WHERE k='reorg_alert'"),
+      "6. agreeing again: the handover alert cleared by itself, no reorg alert latched")
+# 11. the backstop's window per run: a backfill range off the board pass's chain is caught although tip blocks are
+# verified far above it (REORG_AUTO_MAX_DEPTH counted from the tip would leave the backfill out)
+for b in range(12, X - 1):
+    s.submit(qbody(receipt("A", b, b), str(b)))
+s.REORG_AUTO_MAX_DEPTH = 5
+g5 = open(os.path.join(SB, "state_5.json")).read()
+json.dump({"height": 5, "tip_hash": list(bytes.fromhex(bh("Z", 5)))}, open(os.path.join(SB, "state_5.json"), "w"))
+s.reorg_backstop()
+al = q("SELECT v FROM meta WHERE k='reorg_alert'")
+check(not al, "11. a backfill state off the chain BELOW the board pass's window (5 < 19 - 5): not compared")
+open(os.path.join(SB, "state_5.json"), "w").write(g5)
+g16 = open(os.path.join(SB, "state_16.json")).read()
+json.dump({"height": 16, "tip_hash": list(bytes.fromhex(bh("Z", 16)))}, open(os.path.join(SB, "state_16.json"), "w"))
+s.reorg_backstop()
+al = q("SELECT v FROM meta WHERE k='reorg_alert'")
+check(bool(al) and "16" in al[0][0], f"11. a backfill range within the board pass's own window (16), tip blocks verified up to {s._verified_top(s.db(), None)}: latched ({al and al[0][0][:70]})")
+open(os.path.join(SB, "state_16.json"), "w").write(g16)
+c = s.db(); c.execute("DELETE FROM meta WHERE k='reorg_alert'"); c.commit(); c.close()
+s.REORG_AUTO_MAX_DEPTH = 2016
+# 8. the spine is checked against the run that holds its end: a board-pass state that differs from the tip run's at 10
+g12t = open(os.path.join(ST, "state_12.json")).read()
+json.dump({"height": 12, "tip_hash": list(bytes.fromhex(bh("Z", 12)))}, open(os.path.join(ST, "state_12.json"), "w"))
+open(os.path.join(LT, "leaf_13.bin"), "wb").write(b"a tip-run sample bundle the host would prefer")
+code, out = s.submit_spine(body(receipt("A", 1, 12)))
+check(code == 200, f"8. a spine [1..12] on the board pass's chain verifies against the board pass's state 12 (not the tip run's) ({code}, {str(out)[:70]})")
+open(os.path.join(ST, "state_12.json"), "w").write(g12t); os.remove(os.path.join(LT, "leaf_13.bin"))
+# sweep: a view a crash left behind goes at start-up
+os.makedirs(os.path.join(T, "st", "in_x.bin.view"), exist_ok=True)
+s.sweep_views()
+check(not os.path.exists(os.path.join(T, "st", "in_x.bin.view")), "11. a verification view a crash left is swept at start-up")
+# 11. the board pass's directory unreadable for a moment: the gap jump keeps its last board high
+hb = s._board_servable_high()
+s.BRIDGE_DIR, keep = os.path.join(T, "nowhere"), s.BRIDGE_DIR
+s._servable_high(force=True)
+check(s._board_servable_high() == hb and s._skip_gap(5) == 5, f"11. the board pass's bundles unreadable: its high stays {hb}, 5 is not jumped")
+s.BRIDGE_DIR = keep; s._servable_high(force=True)
+# 9. a tip-run fork below X - 1 is refused only when the board pass holds the ORPHANED block above it
+open(os.path.join(ST, "REWIND"), "w").write(json.dumps({"fork": 10, "epoch": 3}))
+aside = os.path.join(T, "aside9"); os.makedirs(aside)
+for h in range(11, 31):
+    if os.path.exists(os.path.join(ST, f"state_{h}.json")): os.replace(os.path.join(ST, f"state_{h}.json"), os.path.join(aside, f"state_{h}.json"))
+rec = {"epoch": 3, "fork": 10, "fork_hash": disp(bh("A", 10)), "depth": 20, "orphaned": [[h, disp(bh("Y", h))] for h in range(11, 31)], "new": [], "at": time.time()}
+open(os.path.join(RT, "3.json"), "w").write(json.dumps(rec))
+applied = s.reorg_poll()
+check(applied and os.path.exists(os.path.join(AT, "3.ack")), f"9. a tip-run fork below X - 1 whose orphaned block 11 the board pass does NOT hold (it holds another): applied ({applied})")
+os.remove(os.path.join(ST, "REWIND"))
+for h in range(11, 31):
+    if os.path.exists(os.path.join(aside, f"state_{h}.json")): os.replace(os.path.join(aside, f"state_{h}.json"), os.path.join(ST, f"state_{h}.json"))
+# 5. rolling back (one run again) after tip blocks were verified: without the documented --reorg-to X - 1 first, the
+# backstop latches (the tip run's states are no longer read); with it, nothing is left above X - 1
+for b in range(X, X + 4): s.submit(qbody(receipt("A" if b <= 23 else "B", b, b), str(b)))
+saved = (s.TIP_FROM, s.TIP_STATE_DIR)
+s.TIP_FROM, s.TIP_STATE_DIR = 0, ""
+s.reorg_backstop()
+check(bool(q("SELECT 1 FROM meta WHERE k='reorg_alert'")), "5. the tip-run drop-in deleted with tip blocks verified: the backstop latches (why the RUNBOOK says --reorg-to first)")
+c = s.db(); c.execute("DELETE FROM meta WHERE k='reorg_alert'"); c.commit(); c.close()
+s.reorg_rewind(X - 1, "manual")
+s.reorg_backstop()
+check(not q("SELECT 1 FROM meta WHERE k='reorg_alert'") and not q("SELECT 1 FROM vranges WHERE hi >= ?", X),
+      "5. rolled back by the RUNBOOK's order (--reorg-to X - 1, then the drop-in): no range above X - 1, no alert")
+s.TIP_FROM, s.TIP_STATE_DIR = saved
 
 shutil.rmtree(T, ignore_errors=True)
 if CONTROL:

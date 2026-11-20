@@ -104,6 +104,22 @@ df -h / /srv/bulk
 If the paper prep is at or past 974,937, X must move above it, in all four places (REORG.md §19), before anything
 else: its bundles below the new X are never cut.
 
+The save point the restart will take (read-only, with the NEW runner from the checkout; it changes nothing). It must
+name a save point near the paper prep's position; **"NO complete save point" means stop here** (a start would refuse,
+exit 3; it used to clear the stores and restart from genesis). MEASURED 20.11.2026: `would continue from
+state_449750.json (449751..follow); trie meta at 449750`.
+
+```bash
+LZ_ROOT=/srv/bulk/libzync-prep LZ_HI=follow LZ_RUN_DRYRUN=1 bash $R/coordinator/deploy/libzync/libzync-prep-run.sh
+```
+
+The coordinator (user `hazync`) must read the tip run's files (MEASURED 20.11.2026: it does):
+
+```bash
+for d in /var/lib/libzync-fast/out /srv/bulk/libzync-prep/leaves /srv/bulk/libzync-prep/trie /srv/bulk/libzync-prep/blocks; do
+  sudo -u hazync test -r $d -a -x $d && echo "ok $d" || echo "CANNOT READ $d"; done
+```
+
 **1. Binaries** (built the release way; never a laptop build: memory `gotcha_host_rustc_moves_libzync_image_ids`):
 
 - `host_lz` from this commit (`libzync-prep <lo> follow`, `HAZYNC_PREP_LEAF_FROM`): `host_lz method-id` must print
@@ -120,6 +136,8 @@ UNIT=hazync-lz-coordinator /opt/hazync-lz/coordinator/deploy/deploy-coordinator.
 curl -s 127.0.0.1:8899/api/meta | grep -o '"tip_run": null'        # the new code, one run
 install -m 0755 $R/coordinator/deploy/libzync/libzync-prep-run.sh /srv/bulk/libzync-prep/bin/
 install -m 0755 $R/coordinator/deploy/libzync/libzync-prep-run.sh /srv/bulk/libzync-board/bin/   # same behaviour for a height
+install -m 0755 $R/prover/fetch_block_rpc.py /srv/bulk/libzync-prep/bin/        # `range 1 follow` (an old one dies on int("follow"))
+grep -q '"follow"' /srv/bulk/libzync-prep/bin/fetch_block_rpc.py && echo FETCH_FOLLOW_OK
 install -m 0755 $R/coordinator/deploy/libzync/hazync-lz-prune-leaves.sh /usr/local/sbin/hazync-lz-prune-leaves
 install -m 0755 $R/coordinator/deploy/libzync/hazync-lz-zapp-follow-tip.sh /usr/local/sbin/hazync-lz-zapp-follow-tip
 ```
@@ -137,7 +155,8 @@ curl -s 127.0.0.1:8899/api/meta | python3 -c 'import json,sys; m=json.load(sys.s
 `tip_run.from` 974937, `reorg_alert` null. The unit failing with exit 3 names the configuration it refuses. Rollback:
 delete `tip-run.conf`, daemon-reload, restart.
 
-**4. The paper prep's units, then its ONE restart** (REORG.md §19: up to 250 blocks replayed, ~13 min at 0.32
+**4. The paper prep's units, then its ONE restart** (install step 5's checks first, so the stall check watches the
+restart) (REORG.md §19: up to 250 blocks replayed, ~13 min at 0.32
 blocks/s, then a slower hour while the trie cache refills, ESTIMATE):
 
 ```bash
@@ -152,7 +171,8 @@ systemctl start libzync-fetch libzync-prep
 journalctl -u libzync-prep -f        # "libzync-prep: <A+1>..follow from state_<A>.json", "CONTINUING its chain"
 ```
 
-Checks within minutes: `/srv/bulk/libzync-prep/out/PREP_TIP.json` exists and moves (`"undo_keep": 2016`);
+Checks within minutes: `systemctl is-active libzync-fetch libzync-prep` (both), the fetcher writing files
+(`ls -t /srv/bulk/libzync-prep/blocks | head -3` changes); `/srv/bulk/libzync-prep/out/PREP_TIP.json` exists and moves (`"undo_keep": 2016`);
 `/srv/bulk/libzync-prep/trie/GEN` and `roots.log` exist; `/srv/bulk/libzync-prep/out/reorg/u_*.bin` appear; no
 `PREP_MISMATCH` (its `HAZYNC_PREP_CHECK` still runs). Within the hour: `PREP_PROGRESS` back near 0.3 blocks/s.
 `systemctl is-active libzync-prep` must stay active: an `inactive` with exit 0 means an old runner read `LZ_HI=follow`
@@ -160,7 +180,8 @@ Checks within minutes: `/srv/bulk/libzync-prep/out/PREP_TIP.json` exists and mov
 marker", the tracked-flags marker) is a host/run mismatch: put `host_lz.v026` and the old `run.conf` back and look
 (the save points carry both markers, MEASURED 20.11.2026, so this is not expected).
 
-**5. The checks that follow the tip run:**
+**5. The checks that follow the tip run** (they read only, and say "not checked" until the tip run's `PREP_TIP.json`
+exists):
 
 ```bash
 install -m 0644 $R/coordinator/deploy/libzync/hazync-lz-check-proofs.service $R/coordinator/deploy/libzync/hazync-lz-prune-leaves.service \
@@ -200,6 +221,27 @@ systemctl disable --now hazync-lz-zapp-follow.timer hazync-lz-zync-serve
 
 Then the web change (`hazync-web` branch `web/zapp-at`, Coin check asks at its proof's height) in any order. Rollback:
 the old `zync-serve.conf`, `systemctl enable --now hazync-lz-zync-serve hazync-lz-zapp-follow.timer`.
+
+**Rolling back the tip run** (the full set; deleting `tip-run.conf` alone is NOT a rollback once a tip block is
+verified: the board would look for those blocks' states in the board pass, find none, and latch its reorg alert, and
+`check-proofs` would fail them):
+
+```bash
+systemctl stop hazync-lz-coordinator
+sudo -u hazync env $(systemctl show -p Environment --value hazync-lz-coordinator) \
+  python3 /opt/hazync-lz/coordinator/server.py --reorg-to 974936 --yes      # tip rows aside as records (dry run first, without --yes)
+rm /etc/systemd/system/hazync-lz-coordinator.service.d/tip-run.conf
+# the paper prep: no coordinator acks its rewinds any more
+#   libzync-prep.service: HAZYNC_REORG_ACK=0 back (instead of HAZYNC_REORG_ACK_DIR); run.conf: LZ_HI=974936, no
+#   HAZYNC_PREP_LEAF_FROM / HAZYNC_PREP_LEAF_WINDOW; libzync-fetch run.conf: LZ_HI=974936
+# the checks: hazync-lz-check-proofs without HAZYNC_LZ_TIP_FROM / HAZYNC_LZ_TIP_STATE_DIR / CHECK_PROOFS_COORD;
+#   hazync-lz-prune-leaves without TIP_LEAVES; hazync-lz-check-reorg without the CHECK_TIP_RUN_* lines
+systemctl daemon-reload && systemctl start hazync-lz-coordinator && systemctl restart libzync-prep libzync-fetch
+```
+
+Rolling back Coin check's tip mode alone: the old `zync-serve.conf` (without `ZYNC_RELAY_AT`), `systemctl enable --now
+hazync-lz-zync-serve hazync-lz-zapp-follow.timer`, `systemctl disable --now hazync-lz-zapp-follow-tip.timer
+hazync-lz-zync-serve-tip`, and remove `trie/PIN` from both prep tries (the cap releases it anyway).
 
 **8. Afterwards:** `scripts/check-unit-drift.sh` (the new `tip-run.conf` and units are in the repo) and
 `scripts/check-deployment.sh --local`. `TIP_CLAIM_FIRST` (tip blocks claimed before the backfill) is a separate

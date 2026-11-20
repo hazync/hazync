@@ -197,6 +197,8 @@ ENV = {
     "server:HAZYNC_LZ_TIP_BRIDGE_OUT": "The tip run's leaf bundles (blocks from X).",
     "server:HAZYNC_LZ_TIP_REORG_DIR": "The tip run's reorg records. Default: `<HAZYNC_LZ_TIP_STATE_DIR>/reorg/records`.",
     "server:HAZYNC_LZ_TIP_REORG_ACK_DIR": "Where its records are acked (the tip run's prep `HAZYNC_REORG_ACK_DIR`); must differ from the board pass's (start-up refuses one directory for both, exit 3).",
+    "server:HAZYNC_LZ_BLOCKS_DIR": "The board pass's block directory (its fetcher's): a reorg stop marker there (blocks/REORG, REORG_TOO_DEEP) fences the run above its fork. Unset: no fence.",
+    "server:HAZYNC_LZ_TIP_BLOCKS_DIR": "The tip run's block directory: the same fence for the tip run (REORG.md §19, review MEDIUM 2).",
     "server:TIP_CLAIM_FIRST": "`1`: claims hand out the tip run's blocks before the backfill's. Default off (REORG.md §19, decision 3).",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
