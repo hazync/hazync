@@ -28,12 +28,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 HOST="${1:-}"
 [ -n "$HOST" ] || { echo "usage: $0 <ssh-host>   e.g. $0 hazync-proof   (or localhost, on the box)" >&2; exit 2; }
 DROPINS_DIR=coordinator/deploy/dropins
-# Unit files live in three places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
-# coordinator/deploy/libzync/, the header-chain follower's in coordinator/deploy/headers/. Reading only the first made
-# every setting of a v2 unit "appear NOWHERE in the repo" (2026-11-12: the switch's units failed this check).
+# Unit files live in four places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
+# coordinator/deploy/libzync/, the header-chain follower's in coordinator/deploy/headers/, the utreexo follower's in
+# coordinator/deploy/utreexo/. Reading only the first made every setting of a v2 unit "appear NOWHERE in the repo"
+# (2026-11-12: the switch's units failed this check).
 repo_unit() {
     local d
-    for d in coordinator/deploy coordinator/deploy/libzync coordinator/deploy/headers; do
+    for d in coordinator/deploy coordinator/deploy/libzync coordinator/deploy/headers coordinator/deploy/utreexo; do
         [ -f "$d/$1.service" ] && { cat "$d/$1.service"; return 0; }
     done
     return 0

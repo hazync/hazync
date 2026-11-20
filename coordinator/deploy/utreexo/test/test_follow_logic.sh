@@ -24,7 +24,8 @@ case "$1" in
   core-info) echo "CORE height=$STUB_T tip=$("$CLI" getblockhash "$STUB_T") image=$(printf '0%.0s' $(seq 64))";;
   utreexo-tip-prove)
     read -r _ _ _ steps _ < "$3"; h=$4; out=$6
-    shift 6; while [ $# -gt 0 ]; do case "$1" in --cache) shift;; --cache-out) echo "$h" > "$2"; shift;; --headers) wc -l < "$2" > "$W/headers.count"; shift;; esac; shift; done
+    shift 6; while [ $# -gt 0 ]; do case "$1" in --cache) if [ -f "$2" ]; then echo "hit $(cat "$2")"; else echo miss; fi > "$W/cache.state"; shift;;
+      --source) echo "$2" > "$W/source.arg"; shift;; --cache-out) echo "$h" > "$2"; shift;; --headers) wc -l < "$2" > "$W/headers.count"; shift;; esac; shift; done
     echo "STUB $h $STUB_T $((steps + 1)) $("$CLI" getblockhash "$h") $("$CLI" getblockhash "$STUB_T")" > "$out";;
   *) exit 1;;
 esac
@@ -83,6 +84,8 @@ t "  the link 51..290 as headers only" 240 "$(cat "$W/headers.count")"
 MAX_STEP=30 "$F" > "$W/2.log" 2>&1; t "step 50 -> 80" 0 $?
 t "  with the cache: bodies 51..80 only (L4)" "51 80" "$(tail -1 "$W/fetch.log")"
 MAX_STEP=20 "$F" > "$W/3.log" 2>&1; t "step 80 -> 100" 0 $?
+t "  the forest source is asked for" forest "$(cat "$W/source.arg")"
+t "  the FOREST_KEEP (3) newest forest caches are kept: 50, 80, 100" "50 80 100" "$(cd "$W/d" && ls forest-*.bin | sed 's/forest-\([0-9]*\)-.*/\1/' | sort -n | tr '\n' ' ' | sed 's/ $//')"
 t "  latest is 100, its receipt and meta agree (L2)" "100 100" "$(cut -d' ' -f1 "$W/d/latest/meta") $(cut -d' ' -f2 "$W/d/latest/rcpt")"
 t "  published: 50, 80, 100" "utreexo-100.rcpt utreexo-50.rcpt utreexo-80.rcpt" "$(cd "$W/d/pub" && ls utreexo-*.rcpt | sort | tr '\n' ' ' | sed 's/ $//')"
 t "  latest.json reached the publish target (L3)" 100 "$(python3 -c "import json;print(json.load(open('$W/www/latest.json'))['height'])")"
@@ -108,7 +111,8 @@ t "  fell back to 80" 1 "$(grep -c 'fell back to the kept proof of block 80' "$W
 t "  latest is 90" 90 "$(cut -d' ' -f1 "$W/d/latest/meta")"
 t "  the orphaned receipt 100 is no longer published" "utreexo-50.rcpt utreexo-80.rcpt utreexo-90.rcpt" "$(cd "$W/d/pub" && ls utreexo-*.rcpt | sort | tr '\n' ' ' | sed 's/ $//')"
 t "  and is kept aside, with its state" "2" "$(find "$W/d/orphaned" \( -name 'utreexo-100.rcpt' -o -name '100-*' \) | wc -l)"
-t "  the cache moved aside too (the replay restarts from genesis)" 1 "$(find "$W/d/orphaned" -name 'forest-*.bin' | wc -l)"
+t "  the orphaned branch's forest cache (100) moved aside" "1 1" "$(find "$W/d/orphaned" -name 'forest-*.bin' | wc -l) $(find "$W/d/orphaned" -name 'forest-100-*.bin' | wc -l)"
+t "  the step from 80 started from the KEPT forest cache of 80 (no replay from genesis)" "hit 80" "$(cat "$W/cache.state")"
 t "  the old branch's block files above 80 moved aside (M3)" 20 "$(find "$W/d/orphaned" -path '*/blocks/block_*.json' | wc -l)"
 t "  so the new branch's 81..90 are fetched (M3)" "81 90" "$(tail -1 "$W/fetch.log")"
 
@@ -131,7 +135,7 @@ echo 105 > "$W/vfail"
 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/11.log" 2>&1; t "a step that fails after the prove (M2)" 1 $?
 t "  keeps the forest cache of 100 (the one at 105 is not promoted), latest stays 100 (LOW 2)" "100 100" "$(cat "$W"/d/forest-100-*.bin) $(cut -d' ' -f1 "$W/d/latest/meta")"
 rm -f "$W/vfail"
-PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/12.log" 2>&1; t "  the next run recovers" 0 $?
+FOREST_KEEP=1 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/12.log" 2>&1; t "  the next run recovers (FOREST_KEEP=1)" 0 $?
 t "  from the cache: bodies 101..105 only" "101 105" "$(tail -1 "$W/fetch.log")"
 t "  the cache now is forest-105-<hash>.bin, alone" "105 1" "$(cat "$W"/d/forest-105-*.bin) $(find "$W/d" -maxdepth 1 -name 'forest-*.bin' | wc -l)"
 
@@ -211,5 +215,9 @@ STUB_T=296 FAKE_HASH_AT=80:$(printf 'e%.0s' $(seq 64)),290:$(printf 'd%.0s' $(se
 t "a reorg that orphans the kept receipt's core tip too: the run steps on (review of 7806f4b, 1)" 0 $?
 t "  the fall-back is not published, and says so" 1 "$(grep -c 'not published; stepping on' "$W/27.log")"
 t "  the new step is published" 60 "$(python3 -c "import json;print(json.load(open('$W/d/pub/latest.json'))['height'])")"
+
+# settings: a bad FOREST_KEEP or WITNESS_SOURCE is refused before anything runs
+FOREST_KEEP=0 "$F" > "$W/28.log" 2>&1; t "FOREST_KEEP=0 is refused" "1 1" "$? $(grep -c 'FOREST_KEEP must be' "$W/28.log")"
+WITNESS_SOURCE=bridge "$F" > "$W/29.log" 2>&1; t "an unknown WITNESS_SOURCE is refused" "1 1" "$? $(grep -c 'WITNESS_SOURCE: forest or native' "$W/29.log")"
 
 [ "$fails" -eq 0 ] && echo UTREEXO_FOLLOW_LOGIC_OK || { echo "UTREEXO_FOLLOW_LOGIC_FAILED ($fails)"; exit 1; }
