@@ -1,5 +1,5 @@
 diff --git a/prover/host/src/main.rs b/prover/host/src/main.rs
-index 040ebbc..fa99a2c 100644
+index 040ebbc..34ed6c1 100644
 --- a/prover/host/src/main.rs
 +++ b/prover/host/src/main.rs
 @@ -1278,6 +1278,14 @@ fn main() {
@@ -17,7 +17,7 @@ index 040ebbc..fa99a2c 100644
      if args.iter().any(|a| a == "agg-exec-fake") {
          agg_exec_fake();
          return;
-@@ -1871,3 +1879,54 @@ struct Report119OnExit;
+@@ -1871,3 +1879,62 @@ struct Report119OnExit;
  impl Drop for Report119OnExit {
      fn drop(&mut self) { report_119_retries(); }
  }
@@ -59,8 +59,16 @@ index 040ebbc..fa99a2c 100644
 +            b.write(&19u32).unwrap(); b.write(&METHOD_ID).unwrap(); b.write(&(k as u32)).unwrap();
 +            for j in &journals { b.write(j).unwrap(); }
 +        }
++        21 => {
++            for j in &journals { b.add_assumption(ReceiptClaim::ok(METHOD_ID, j.clone())); }
++            b.write(&21u32).unwrap(); b.write(&METHOD_ID).unwrap(); b.write(&(k as u32)).unwrap();
++            for j in &journals {
++                let w: Vec<u32> = j.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
++                b.write(&(w.len() as u32)).unwrap(); b.write_slice(&w);
++            }
++        }
 +        20 => { b.write(&20u32).unwrap(); b.write(&0u32).unwrap(); }
-+        _ => panic!("mt-join: mode 18, 19 or 20"),
++        _ => panic!("mt-join: mode 18, 19, 20 or 21"),
 +    }
 +    let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("mt-join execute");
 +    if mode != 20 {
@@ -73,7 +81,7 @@ index 040ebbc..fa99a2c 100644
 +             journals.first().map_or(0, |j| j.len()), s.segments.len(), s.segments.iter().map(|g| g.po2).collect::<Vec<_>>());
 +}
 diff --git a/prover/methods/guest/src/main.rs b/prover/methods/guest/src/main.rs
-index a0df45b..6b8e027 100644
+index a0df45b..72105fc 100644
 --- a/prover/methods/guest/src/main.rs
 +++ b/prover/methods/guest/src/main.rs
 @@ -2402,7 +2402,7 @@ fn main() {
@@ -81,22 +89,24 @@ index a0df45b..6b8e027 100644
      // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag.
      #[cfg(feature = "libzync")]
 -    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
-+    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18 | 19 | 20), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
++    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18 | 19 | 20 | 21), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
      match mode {
          1 => block_proof(),
          2 => chain_step(),
-@@ -2416,6 +2416,10 @@ fn main() {
+@@ -2416,6 +2416,12 @@ fn main() {
          10 => test_core_vectors(),
          #[cfg(feature = "libzync")]
          18 => join(),
 +        // EXPERIMENT (experimental/merge-tree, never shipped): a k-ary join, and an empty session (startup only).
 +        #[cfg(feature = "libzync")]
 +        19 => join_k(),
++        #[cfg(feature = "libzync")]
++        21 => join_k_slice(),
 +        20 => { let x: u32 = env::read(); env::commit(&x); }
          12 => validate_block_stages(),
          #[cfg(feature = "trie")]
          17 => trie_update(),
-@@ -2503,6 +2507,41 @@ fn join() {
+@@ -2503,6 +2509,73 @@ fn join() {
      env::commit(&r);
  }
  
@@ -127,6 +137,38 @@ index a0df45b..6b8e027 100644
 +        let next: Vec<u8> = env::read();
 +        env::verify(self_id, &next).expect("join: part invalid");
 +        let r = decode(&next);
++        assert!(l.lineage == r.lineage, "join: lineage mismatch");
++        assert!(link_digest(&l) == r.anchor_id, "join: a part does not start where the previous one ends");
++        l = r;
++    }
++    l.anchor_id = anchor;
++    env::commit(&l);
++}
++
++/// EXPERIMENT (experimental/merge-tree): mode 21, join_k with each journal read as words by read_slice (as agg-lite
++/// reads chunk journals) instead of serde's byte-per-word Vec<u8>. Same checks as join_k.
++#[cfg(feature = "libzync")]
++fn join_k_slice() {
++    let self_id: [u32; 8] = env::read();
++    let k: u32 = env::read();
++    assert!(k >= 2, "join_k: k >= 2");
++    let read_part = || -> ChainState {
++        let n: u32 = env::read();
++        let mut w = vec![0u32; n as usize];
++        env::read_slice(&mut w);
++        env::verify(self_id, &w).expect("join: part invalid");
++        let st: ChainState = risc0_zkvm::serde::from_slice(&w).expect("join: decode");
++        assert!(st.kind == KIND_CHAIN, "join: journal is not a ChainState (domain tag)");
++        assert!(st.version == CHAIN_STATE_VERSION, "join: ChainState version {}", st.version);
++        assert!(st.self_id == self_id, "join: proof recursed against another image");
++        assert!(st.profile == chain_profile(), "join: profile mismatch");
++        st
++    };
++    let f = read_part();
++    let anchor = f.anchor_id;
++    let mut l = f;
++    for _ in 1..k {
++        let r = read_part();
 +        assert!(l.lineage == r.lineage, "join: lineage mismatch");
 +        assert!(link_digest(&l) == r.anchor_id, "join: a part does not start where the previous one ends");
 +        l = r;

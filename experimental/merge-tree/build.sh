@@ -6,6 +6,8 @@ set -euo pipefail
 export PATH=/root/.cargo/bin:$PATH
 M=/root/merge-tree; S=$M/src
 [ -d $M/base/bitcoin-core ] || bash $S/scripts/libzync-base.sh $M/base > $M/base.log 2>&1
+# the patch: applied to a fresh copy of origin/main in $S (idempotent: skipped when already applied)
+git -C $S apply --check $S/experimental/merge-tree/merge-tree.patch 2>/dev/null && git -C $S apply $S/experimental/merge-tree/merge-tree.patch || grep -q "fn join_k" $S/prover/methods/guest/src/main.rs
 cd $S/prover
 RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml); export RUSTUP_TOOLCHAIN
 for v in $(compgen -e | grep '^HAZYNC_'); do unset "$v"; done
