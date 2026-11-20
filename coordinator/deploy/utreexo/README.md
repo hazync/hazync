@@ -28,8 +28,8 @@ then replays from genesis. The `FOREST_KEEP` newest forests are kept, so a fall-
 there instead of replaying from genesis. `WITNESS_SOURCE=native` is the old test-scale replay (every live coin and
 the forest as `Rc` nodes in memory), kept for comparison.
 
-Sizes (UTREEXO_ZAPP.md §10.5.1): MEASURED on a synthetic forest of 8M live leaves: ~123 bytes of heap per live leaf
-(MemForest: ~3x), the saved file 66 bytes per live leaf. ESTIMATED at the tip's ~165M live coins: ~20 GB of memory and
+Sizes (UTREEXO_ZAPP.md §10.5.1): MEASURED on a synthetic forest of 8M live leaves: ~130 bytes of heap per live leaf after a load
+(MemForest: ~3x), the saved file 66 bytes per live leaf. ESTIMATED at the tip's ~165M live coins: ~21 GB of memory and
 an ~11 GB file per kept forest.
 
 ## Settings (environment)
@@ -88,7 +88,7 @@ is then saved and later runs start from it. Nothing is uploaded until `PUBLISH` 
 `Environment=PUBLISH=root@<web box>:./`), after the web box has the target: a key pinned with
 `command="/usr/bin/rrsync -wo /var/www/hazync-utreexo",restrict` and an nginx alias `/utreexo-live/` outside the site
 root, as for `/headers-live/` (coordinator/deploy/headers/README.md). Before the core proof nears the tip, raise
-`MemoryMax` (the forest's ESTIMATED ~20 GB at the tip, plus the prover) and check the root disk for `FOREST_KEEP` forest
+`MemoryMax` (the forest's ESTIMATED ~21 GB at the tip, plus the prover) and check the root disk for `FOREST_KEEP` forest
 files (~11 GB each, ESTIMATED).
 
 Undo: `systemctl disable --now hazync-utreexo-follow.timer`, remove the two units, `/opt/hazync-utreexo` and
