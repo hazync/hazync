@@ -259,7 +259,8 @@ def follow(tag):
     env = dict(ENV, ZAPP_SERVE_DIR=str(O / "zserve"), ZAPP_WORK=str(O / "zwork"), COORD_SPINE=str(O / "coord/spine"),
                ZAPP_HOST=str(HERE / "reorg_fake_verify.py"), BOARD_OUT=str(B / "out"), BOARD_TRIE=str(B / "trie"),
                TIP_FROM=str(X), TIP_OUT=str(T_ / "out"), TIP_TRIE=str(T_ / "trie"), ZAPP_PIN_W=str(W), ZAPP_OWNER="",
-               ZAPP_RESTART=str(O / "zrestart"), ZAPP_ACTIVE=str(O / "zactive"), ZAPP_SETTLE_S="1", GENESIS_TIP=GEN)
+               ZAPP_RESTART=str(O / "zrestart"), ZAPP_ACTIVE=str(O / "zactive"), ZAPP_SETTLE_S="1", GENESIS_TIP=GEN,
+               ZAPP_COORD=URL, ZAPP_ZS_URL=ZURL)
     r = subprocess.run(["bash", str(REPO / "coordinator/deploy/libzync/hazync-lz-zapp-follow-tip.sh")], env=env,
                        capture_output=True, text=True, timeout=WAIT)
     (O / "follow.log").open("a").write(f"== {tag}\n" + r.stdout + r.stderr)
