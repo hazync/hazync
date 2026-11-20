@@ -4547,6 +4547,9 @@ _ZYNC_PATH = re.compile(r"^/(tip|trie/balance/[0-9a-f]{2,20000}|trie/history/[0-
                         r"|trie/coin/[0-9a-f]{2,20000}/[0-9a-f]{64}/[0-9]{1,10})$")
 
 
+ZYNC_RELAY_AT = os.environ.get("ZYNC_RELAY_AT", "0") == "1"
+
+
 def zync_relay(path, at=None):
     """(status, body) for a zyncAPP fact request. Only the read-only paths above, only when ZYNC_SERVE_URL is set. `at`
     (ZAPP_FOLLOWER §5, Z4: the height of the proof the page holds; zync-serve's tip mode serves the two newest pinned
@@ -4555,7 +4558,9 @@ def zync_relay(path, at=None):
         return 404, "no zyncAPP fact service on this coordinator"
     if not _ZYNC_PATH.match(path):
         return 400, "not a zyncAPP fact path (/tip, /trie/balance/<spk>, /trie/history/<spk>, /trie/coin/<spk>/<txid>/<vout>)"
-    if at is not None:
+    # passed on only to a fact service that takes it (ZYNC_RELAY_AT=1: zync-serve's tip mode, set at the Z3 switch); an
+    # older zync-serve reads `?at=` as part of the script and refuses the request
+    if at is not None and ZYNC_RELAY_AT:
         if not re.fullmatch(r"[0-9]{1,9}", at):
             return 400, "at: a block height"
         path += f"?at={int(at)}"

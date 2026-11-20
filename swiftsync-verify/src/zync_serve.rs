@@ -210,7 +210,15 @@ fn main() {
         t
     });
     eprintln!("zync-serve: tip {tip}, {} coins, listening on {}", coins.len(), a[1]);
-    serve(&a[1], |path| answer(&recs, tip, &coins, trie.as_ref(), path));
+    // `?at=<h>` (ZAPP_FOLLOWER Z4, for tip mode): this mode serves its tip alone; any other height is not served here
+    serve(&a[1], |full| match full.split_once('?') {
+        None => answer(&recs, tip, &coins, trie.as_ref(), full),
+        Some((path, q)) => match q.strip_prefix("at=").map(|h| h.parse::<u32>()) {
+            Some(Ok(h)) if h == tip => answer(&recs, tip, &coins, trie.as_ref(), path),
+            Some(Ok(h)) => (404, serde_json::json!({ "error": format!("facts are served at {tip}, not at {h}") }).to_string()),
+            _ => (400, serde_json::json!({ "error": "only at=<height>" }).to_string()),
+        },
+    });
 }
 
 #[cfg(all(test, feature = "tip"))]

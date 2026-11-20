@@ -64,7 +64,12 @@ for p in ("/tip", f"/trie/balance/{SPK}", f"/trie/history/{SPK}", f"/trie/coin/{
 seen.clear()
 code, _ = get(f"/api/zync/trie/balance/{SPK}?x=1&y=/admin")
 check(code == 200 and seen == [f"/trie/balance/{SPK}"], f"a query string never reaches zync-serve (it saw {seen})")
-# Z4 (ZAPP_FOLLOWER §5): the proof's height the page holds, `?at=<h>`, is passed on, and only as a height
+# Z4 (ZAPP_FOLLOWER §5): the proof's height the page holds, `?at=<h>`, is passed on (ZYNC_RELAY_AT=1, zync-serve's tip
+# mode), and only as a height; without ZYNC_RELAY_AT (an older zync-serve) it is dropped like any query
+seen.clear()
+code, _ = get(f"/api/zync/trie/balance/{SPK}?at=976500")
+check(code == 200 and seen == [f"/trie/balance/{SPK}"], f"ZYNC_RELAY_AT unset: at dropped (it saw {seen})")
+server.ZYNC_RELAY_AT = True
 seen.clear()
 code, _ = get(f"/api/zync/trie/balance/{SPK}?at=976500&x=1")
 check(code == 200 and seen == [f"/trie/balance/{SPK}?at=976500"], f"at=<h> passed on, nothing else (it saw {seen})")
@@ -73,6 +78,7 @@ for bad in ("97x", "-1", "1/../../admin", "1%26y%3D2", "1234567890"):
     code, _ = get(f"/api/zync/trie/balance/{SPK}?at={bad}")
     check(code == 400 and not seen, f"at={bad}: refused before zync-serve ({code})")
     seen.clear()
+server.ZYNC_RELAY_AT = False
 seen.clear()
 for p in ("/coin/tip/5", "/trie/balance/xyz", "/trie/../tip", "/trie/history/",
           f"/trie/coin/{SPK}/{TX}/0/extra", "/find/" + "ab" * 32, "/admin"):
