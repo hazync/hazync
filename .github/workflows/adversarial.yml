@@ -914,6 +914,10 @@ jobs:
         run: cd coordinator && python3 test_prune_leaves_tip.py
       - name: Tip-pruner POSITIVE CONTROL (the pruner before D1 - must FAIL)
         run: cd coordinator && python3 test_prune_leaves_tip.py --control
+      - name: The zAPP follower in tip mode (ZAPP_FOLLOWER Z3-Z5 - the source run by height, pins, two heights, the reorg fall-back)
+        run: cd coordinator && python3 test_zapp_follow_tip.py
+      - name: Tip-follower POSITIVE CONTROL (never switches to the tip run - must FAIL)
+        run: cd coordinator && python3 test_zapp_follow_tip.py --control
       - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
         run: cd coordinator && python3 test_offsite_reorg.py
       - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)

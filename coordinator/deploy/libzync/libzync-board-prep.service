@@ -12,6 +12,12 @@ Environment=HAZYNC_PREP_LEAF_WINDOW=5000
 # a rewind (REORG.md §5, P4) waits for the board coordinator's ack, which it writes here (it runs as hazync and cannot
 # write this run's out/); the same directory as the coordinator's HAZYNC_LZ_REORG_ACK_DIR
 Environment=HAZYNC_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks
+# Z3 (ZAPP_FOLLOWER §6, §8): zync-serve's tip mode reads this pass's trie at the spine's height while the pass runs up to
+# HAZYNC_PREP_LEAF_WINDOW blocks ahead of the frontier; the follower pins that height (trie/PIN) and prep keeps the slots
+# its root needs, up to this many blocks below the pass (default 288 would release the spine's root at once). Inert
+# without a PIN. Disk (ESTIMATE, §8): ~1 MB per block held at 200,000, ~23.5 MB at 600,000, so the window costs ~8 GB at
+# 200,000 and ~190 GB at 600,000 on vda; lower it with the leaf window if the pass gets there before the board does.
+Environment=HAZYNC_TRIE_RETAIN_MAX=8000
 ExecStart=/bin/sh -c 'exec "$LZ_ROOT/bin/libzync-prep-run.sh"'
 # exit 3 = the free-space floor, exit 4 = a reorg (docs/libzync/REORG.md §11): no restart, the unit fails and alerts
 Restart=on-failure
