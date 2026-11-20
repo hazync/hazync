@@ -9,7 +9,7 @@ exec >> control.log 2>&1
 MAX_MIN=${MAX_MIN:-110}; MAX_USD=${MAX_USD:-9.5}
 rp(){ python3 "$HERE/rpm.py" "$@"; }
 say(){ echo "[$(date +%T)] $*"; }
-KEY=$HOME/.ssh/ghost_signet_ed25519; PUB=$(cat $KEY.pub)
+KEY=${HZ_POD_SSH_KEY:-$HOME/.ssh/id_ed25519}; PUB=$(cat $KEY.pub)   # an ssh key the pod will accept (HZ_POD_SSH_KEY)
 K="-i $KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20 -o ServerAliveInterval=30"
 B0=$(rp balance); say "balance before $B0"; say "pods before: $(rp list | tr '\n' ';')"
 ID=""; for attempt in 1 2; do
