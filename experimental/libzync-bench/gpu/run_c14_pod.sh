@@ -1,4 +1,5 @@
 #!/bin/bash
+# historical run script; uses RunPod GraphQL, retired early 2027 — port before reuse
 # GPU benchmarks on the freeze candidate (c14, bbf82800), ONE RunPod secure-cloud RTX PRO 6000:
 #   run B   gpu-libzync-multi.sh: block 962,000, chunks + aggregate (EXPECT_CYCLES from the laptop cost table)
 #   join    gpu-join.sh: blocks 1..8 as independent leaves on prep states, a real join tree, root == linear block 8

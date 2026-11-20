@@ -1,0 +1,24 @@
+[package]
+name = "zapp-hints-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI for the SwiftSync hints zyncAPP (zapps/hints): check a hints proof from C or C++ (e.g. Bitcoin Core)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "zapp_hints_ffi"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+zapp-hints = { path = ".." }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

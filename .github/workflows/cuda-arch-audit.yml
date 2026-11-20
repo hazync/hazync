@@ -134,7 +134,7 @@ jobs:
             echo "  ⇒ every module has sm_61; the theory is dead and the fault is elsewhere"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: cuda-arch-audit

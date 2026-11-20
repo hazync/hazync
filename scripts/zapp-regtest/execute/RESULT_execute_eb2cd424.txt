@@ -1,0 +1,23 @@
+# execute.sh on hazync-coord, 16.11.2026: CI's host_reg (eb2cd424, run 43835411815, main 797b777e), DEV MODE (RISC0_DEV_MODE=1:
+# every guest executed and its claims checked, nothing proved), HAZYNC_SEG_PO2=21 HAZYNC_CHUNKS=1 HAZYNC_PROFILE_LAYOUT=cost,
+# chain = this directory at 3c5799dc. base 1..101 taken (BASE_RUN) from a full run 1..112 from genesis with HAZYNC_CHUNKS=2:
+#   LZ_PROVE_RANGE_DONE 1..=112 in 2491 s, every block accepted (19-21 s per coinbase-only block, 42-44 s per block with transactions on 2 chunks)
+METHOD_ID eb2cd424b94a4aa74f3458efc0d5edb1d3c35d46615eab8363696f1fa4b47ccd
+PASS: base 1..101 accepted
+PASS: A 102..112 accepted
+PASS: control: resuming B on A's 112 refused
+PASS: B 111..113 accepted (resumed after 110)
+PASS: anchor_id == the spec's regtest genesis anchor
+base 1..101: 101 blocks, 202 proofs, 303 segments, 330432512 total cycles, 253282838 user cycles
+A 102..112: 11 blocks, 33 proofs, 46 segments, 63438848 total cycles, 45063481 user cycles
+B 111..113: 3 blocks, 8 proofs, 11 segments, 14155776 total cycles, 9868083 user cycles
+EXECUTE_OK
+
+# A: LZ_PROVE_RANGE_DONE 1..=112 in 364 s after resuming at 101 (31-44 s per block); B: LZ_PROVE_RANGE_DONE 1..=113 in 95 s after resuming at 110
+# control (c.log): panicked at host/src/lz.rs:1058:13: replayed BIP30 tree at 112 != the receipt's smt_root
+# per block: stats_base.tsv, stats_a.tsv, stats_b.tsv (proofs = chunk + trie + aggregate receipts; segments at po2 21)
+# gpu/estimate.py on them:
+empty block: 2 proofs, 3 segments; 115 block proofs (base 1..101, A 102..112, B 111..113)
+segments 360, total cycles 408,027,136, user cycles 308,214,402
+ESTIMATE x1.0: proving 30 min + bring-up 25 min = 55 min, $2.29 at $2.49/h
+ESTIMATE x1.5: proving 45 min + bring-up 25 min = 70 min, $2.92 at $2.49/h

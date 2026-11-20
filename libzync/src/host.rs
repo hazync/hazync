@@ -664,6 +664,14 @@ impl DiskIndex {
     pub fn sync(&self) -> std::io::Result<()> {
         self.f.sync_data()
     }
+    /// Every live (leaf, position), sorted: the index's CONTENT, whatever its slot layout and tombstones (two indexes
+    /// reached by different histories, e.g. a reorg undone and a fresh run, hold the same entries in different slots).
+    pub fn entries(&self) -> std::vec::Vec<([u8; 32], u64)> {
+        let mut v: std::vec::Vec<([u8; 32], u64)> = (0..self.cap).map(|i| self.slot(i)).filter(|(_, x)| *x != 0 && *x != u64::MAX)
+            .map(|(k, x)| (k, x - 1)).collect();
+        v.sort_unstable();
+        v
+    }
     pub fn insert(&mut self, leaf: [u8; 32], pos: u64) {
         if let Some(i) = self.find(&leaf) {
             self.put_slot(i, &leaf, pos + 1);

@@ -45,6 +45,66 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # ── which heavy jobs a pull request needs (2026-11-18) ───────────────────────────────────────────────────────────
+  # The libzync soundness pass (libzync-hosts and everything that needs it) and reproducible-image-id are ~3 hours of
+  # wall clock on the critical path (hosts 40 min, then libzync-chain 144). A pull request that changes nothing they
+  # build or run (docs, the Windows app, tools/live, coordinator tests and deploy files, zAPP CLIs and WASM, …) skips
+  # them; push to main, the nightly schedule and workflow_dispatch always run everything.
+  #   .github/scripts/ci_changes.py decides, from the files the PR's merge commit changes against the base tip:
+  #   image=true      the container or its ids could change      -> reproducible-image-id AND the soundness pass
+  #   soundness=true  only what the soundness pass runs changed  -> the soundness pass (libzync-hosts and its needs)
+  # FAIL-SAFE: a path the filter does not name as light runs everything, and so does every failure here (no merge
+  # commit, a failed diff, no filter on the base branch, a filter that crashed or printed nothing): every exit below
+  # that is not the filter's own answer says "true". reproducible-image-id and libzync-hosts also run when this job
+  # did not succeed, and the jobs that need libzync-hosts run whenever it succeeded (their `if:`), not only when
+  # every job they transitively need succeeded.
+  # The filter is the BASE branch's copy (git show HEAD^1:…), and it derives its rules from the BASE tree
+  # (--base HEAD^1), so a pull request cannot loosen the filter that judges it. That protects the SCRIPT only: on
+  # pull_request GitHub runs the PR's OWN copy of this workflow, so a PR could rewrite this job itself. That is why
+  # every change under .github/ runs everything, and why a workflow change is a reviewer's matter, not this filter's.
+  # Required checks: a job skipped by its `if:` (or because a job it needs was skipped) reports "skipped", which branch
+  # protection counts as passing. soundness-suite runs always and passes a skipped pass only when this job succeeded
+  # and said soundness=false.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      image: ${{ steps.filter.outputs.image }}
+      soundness: ${{ steps.filter.outputs.soundness }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pinned as #757 pins the rest)
+        with:
+          fetch-depth: 2      # the PR's merge commit and its first parent, the base tip
+      - name: Which heavy jobs this run needs (only a pull_request can skip any)
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          everything() {
+            echo "running everything: $1"
+            printf 'image=true\nsoundness=true\n' >> "$GITHUB_OUTPUT"
+            printf '### Heavy jobs: all\n\n%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          [ "$EVENT" = pull_request ] || everything "event $EVENT"
+          # actions/checkout's pull_request ref is the merge commit: parent 1 = the base tip, parent 2 = the PR head
+          [ "$(git rev-list --parents -n1 HEAD | wc -w)" = 3 ] || everything "HEAD is not a two-parent merge commit"
+          git diff --no-renames --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt" || everything "git diff failed"
+          git show HEAD^1:.github/scripts/ci_changes.py > "$RUNNER_TEMP/ci_changes.py" 2>/dev/null \
+            || everything "the base branch has no .github/scripts/ci_changes.py"
+          python3 -I "$RUNNER_TEMP/ci_changes.py" --base HEAD^1 < "$RUNNER_TEMP/changed.txt" \
+            > "$RUNNER_TEMP/decision.txt" 2> "$RUNNER_TEMP/classes.txt" || { cat "$RUNNER_TEMP/classes.txt"; everything "the filter failed"; }
+          cat "$RUNNER_TEMP/classes.txt"
+          image=$(sed -n 's/^image=\(true\|false\)$/\1/p' "$RUNNER_TEMP/decision.txt")
+          soundness=$(sed -n 's/^soundness=\(true\|false\)$/\1/p' "$RUNNER_TEMP/decision.txt")
+          { [ "$image" = true ] || [ "$image" = false ]; } && { [ "$soundness" = true ] || [ "$soundness" = false ]; } \
+            || everything "the filter printed no decision"
+          [ "$image" = false ] || soundness=true      # the image feeds the soundness pass: image implies soundness
+          echo "image=$image soundness=$soundness ($(wc -l < "$RUNNER_TEMP/changed.txt") files)"
+          printf 'image=%s\nsoundness=%s\n' "$image" "$soundness" >> "$GITHUB_OUTPUT"
+          # the file list as an indented block (the filter indents each line): a path cannot close a fence
+          { printf '### Heavy jobs: image=%s soundness=%s\n\n' "$image" "$soundness"; cat "$RUNNER_TEMP/classes.txt"; } >> "$GITHUB_STEP_SUMMARY"
+
   libzync-tests:
     # libzync, the new core (docs/libzync/LIBZYNC.md): the coin log, the counting trie (guest, model and store must
     # agree), facts, wire formats; and the verifiers built on it. Until 2026-11-06 no workflow ran these, so
@@ -52,21 +112,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
-      - name: libzync (coin log, counting trie, facts, wire)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std
+      - name: libzync (coin log, counting trie, facts, wire; the hints, liveness and utreexo zyncAPPs' derivations, features hints, liveness, utreexo)
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness,utreexo
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
+      - name: The WASM build scripts locate their checkout from any cwd (scripts/test-wasm-build-cwd.sh, and its control)
+        run: ./scripts/test-wasm-build-cwd.sh && ./scripts/test-wasm-build-cwd.sh --control
+      - name: The WASM build scripts take the published build image by digest, else build it locally and say so (mock docker)
+        run: ./scripts/test-wasm-image-pull.sh
+      - name: swiftsync-verify-wasm (its unit tests, run natively)
+        run: cargo test --manifest-path swiftsync-verify-wasm/Cargo.toml --release
       - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
         # scripts/release.sh runs this on the staged assets before publishing (CLI, the wasm through its
         # JavaScript glue); run here on every push so the gate is known to pass before a release needs it.
         run: |
           cargo build --release --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify
           ./swiftsync-verify-wasm/build.sh
+          # the built core wasm is the one its README pins (a pin went stale after #735's Frame::take fix, 16.11.2026)
+          want=$(grep -o 'sha256 (this commit, `./build.sh`) | `[0-9a-f]\{64\}`' swiftsync-verify-wasm/README.md | grep -o '[0-9a-f]\{64\}' || true)
+          got=$(sha256sum swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm | cut -c1-64)
+          [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::the core wasm built is $got, swiftsync-verify-wasm/README.md pins ${want:-nothing}"; exit 1; }
           mkdir -p rel
           cp swiftsync-verify/target/release/swiftsync-verify rel/hazync-verify-x86_64-linux-gnu
           cp swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm rel/hazync-verify.wasm
@@ -82,7 +152,7 @@ jobs:
           if ./scripts/check-release-verifiers.sh bad; then
             echo "::error::the release gate passed a verifier that accepts tampered receipts"; exit 1
           fi
-      - name: Verifier vectors on every surface (CLI, C ABI, WASM) and the header-chain receipts
+      - name: Verifier vectors on every surface (CLI, C ABI, WASM)
         # swiftsync-verify/vectors/manifest.json: a real risc0 3.1.0 proof (DEMO), the same as signet, against the
         # 3.0.5 image, with a flipped seal, v0.23.0's real 3.0.5 receipt, and the retired design-B refusals.
         run: |
@@ -91,9 +161,28 @@ jobs:
           (cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o vtest && ./vtest)
           (cd swiftsync-verify-wasm && node test-vectors.mjs target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm)
           (cd swiftsync-verify-wasm && node test-facts-frame.mjs)
-          bash experimental/libzync-bench/headers/test_headers_verify.sh "$PWD/swiftsync-verify/target/release/swiftsync-verify"
-          node experimental/libzync-bench/headers/test_headers_wasm.mjs swiftsync-verify-wasm/swiftsync-verify.js swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm
-          swiftsync-verify/target/release/swiftsync-verify headers --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 experimental/libzync-bench/headers/headers_0_tip.rcpt
+
+  zapps:
+    # Every zAPP is a module of its own (zapps/<name>/: its check library and CLI, its WASM module and glue, its C ABI if
+    # it has one; docs/libzync/ZYNCAPPS.md §9), on the core verifier as a library and never part of it: adding one does
+    # not change the core verifier (its .wasm stays byte-identical). Each runs its own tests from its own directory.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - name: Every zAPP's tests, each from its own directory (zapps/*/test.sh)
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/zapps-target"   # one native target dir: the zAPPs share the core's dependencies
+          n=0
+          for t in zapps/*/test.sh; do
+            echo "::group::$t"
+            (cd "$(dirname "$t")" && bash test.sh) || { echo "::error::$t failed"; exit 1; }
+            echo "::endgroup::"; n=$((n+1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::no zapps/*/test.sh: the zapps job ran nothing"; exit 1; }
+          echo "$n zAPP test suites passed"
 
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
@@ -102,15 +191,26 @@ jobs:
     # timeout-minutes anywhere in this workflow, so the default was 360 minutes, and a stuck step
     # showed up as a cancelled job with no steps and no log. Measured at ~3 minutes before
     # 2026-10-05; 30 leaves room for a slow runner while still turning a stall into a verdict.
-    timeout-minutes: 30
+    # 2026-11-19: the job has grown to ~20 min (#761 19m42s, #763 19m54s, #740 20m05s) and up to 29m22s on a slow
+    # runner (#759); #767 on main after #759 and #761 was cancelled at 30. 45 keeps the stall verdict.
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Tags are needed by check-versions.sh to compare the documented "current release" against the
           # newest tag. The default shallow checkout has none, and the check would silently skip.
           fetch-depth: 0
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
+      - name: The pull-request path filter (.github/scripts/ci_changes.py) classifies known paths as the code needs
+        # `changes` runs the BASE branch's copy; this tests the copy in the tree under test, so a change to the filter
+        # is checked here before it ever judges a pull request.
+        run: python3 -I .github/scripts/ci_changes.py --selftest
+      - name: Path-filter POSITIVE CONTROL (every heavy rule removed, all light — must FAIL)
+        run: |
+          if python3 -I .github/scripts/ci_changes.py --selftest --control; then
+            echo "::error::the path filter's selftest passed a filter that skips everything"; exit 1
+          fi
       - name: Utreexo accumulator tests
         run: cargo test --manifest-path accumulator/Cargo.toml --release
       - name: Guest pure-Rust tests (activation heights, add256, median_time_past, utreexo SEC-2 pinning)
@@ -224,6 +324,16 @@ jobs:
         run: |
           cd coordinator
           python3 test_pod_cloud_type.py --control
+      - name: The RunPod client speaks REST v2 and keeps its GraphQL-era behaviour
+        # ⛔ RunPod's GraphQL API retires early 2027. v2 answers a capacity miss with a bare 400 (a refusal
+        # if misread, and three latch the bot), has no isIpPublic, may list pods with no live port map,
+        # and marks no stock with a truthy "NONE". Also sweeps the repo: nothing still calls GraphQL
+        # except the one gap v2 has (account balance).
+        run: cd coordinator && python3 test_runpod_v2.py
+      - name: RunPod v2 POSITIVE CONTROL (each v2 difference put back wrong — must be caught)
+        run: |
+          cd coordinator
+          python3 test_runpod_v2.py --control
 
       - name: The donations record counts donations, and what arrived (hazync#524)
         # ⛔ Sponsor invoices are raised against the same BTCPay store, so the first real sponsorship
@@ -318,7 +428,9 @@ jobs:
         # runs only on its own card generation, and a build FLAG is not evidence about a binary.
         # This is the reader windows-prove.yml runs on its own output; here it must catch a
         # Pascal-only build, one module missing one generation, and an image that exists only in a
-        # relocatable part.
+        # relocatable part. ⛔ hazync#727: and it must REFUSE system-scope atomics in real nvcc output
+        # (scripts/testdata/atom-scope/: compressed image, raw image, PTX alone), pass the same
+        # kernel at device scope, and call an undecodable entry UNREADABLE rather than clean.
         run: |
           python3 scripts/gpu_code_archs.py --control
           # ⛔ AND AS A WINDOWS RUNNER SEES IT. Its stdout is cp1252, which cannot encode the marks
@@ -382,6 +494,13 @@ jobs:
       - name: Auto-setup POSITIVE CONTROL (capability floor ignored — must send 6.1 to CUDA)
         run: cd tools/win-gui && python3 test_setup_auto.py --control
 
+      - name: the proving window and the can-it-finish rule (#725)
+        # Pure: midnight-crossing windows, the night-of-the-start rule for days, real Europe/London daylight-saving
+        # nights, the median block-time estimate, the wake-timer XML and powercfg reading.
+        run: |
+          cd tools/win-gui
+          python3 test_schedule.py
+          python3 test_schedule.py --control
       - name: the Home page reads the worker's real output
         # ⛔ A prove runs for minutes to most of an hour, and a window that only says "running"
         # reads as broken. This is the reader that turns the worker's own lines into which block,
@@ -397,6 +516,13 @@ jobs:
         run: cd tools/win-gui && python3 test_cards.py
       - name: per-card POSITIVE CONTROL (one shared lock, no card chosen — must fail)
         run: cd tools/win-gui && python3 test_cards.py --control
+      - name: the live resource panel's numbers (GPU memory, CPU, RAM, per-block peak)
+        # Pure: nvidia-smi's CSV with several cards and "[N/A]" fields, CPU % from two samples (Windows' kernel time
+        # includes idle), the peak GPU memory of each block reset when the next is claimed, and the no-GPU path.
+        run: |
+          cd tools/win-gui
+          python3 test_stats.py
+          python3 test_stats.py --control
 
       - name: dark mode is actually dark
         # ⛔ 24 ttk widgets rendered in the OS theme because ttk.Style was never used, so dark mode
@@ -431,7 +557,28 @@ jobs:
           # really given: a card chosen but never handed to the process would pass every check on
           # the decision while both workers piled onto one card.
           cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_cards_flow.py
+          # ⭐ AND THE PROVING WINDOW (#725): it closes mid-proof (the block finishes, no other is taken), too little is
+          # left (nothing is claimed), and Stop hands the claimed block back.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_schedule_flow.py --control
+          # ⭐ AND WHERE THE TWO MEET (review of 59575b40): a window opening after the CPU fallback (checked off the Tk
+          # thread), closing that waits for a slow block hand-back and names one it could not do, one card's error not
+          # disarming the others, Stop during Start's checks, and no unpinned worker when nvidia-smi is silent once.
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_seams.py --control
+          # ⭐ AND THE CARD FOR AN OLD PROVER OR WORKER, THE UPDATE BANNER AND THE AFTER-AN-UPGRADE RESET (11-18)
+          cd "$GITHUB_WORKSPACE/tools/win-gui" && timeout 180 xvfb-run -a python3 test_stale_flow.py
 
+      - name: the Windows app updates itself only from a verified release, and an old prover or worker is named (11-18)
+        # A laptop on v0.26.1 kept an old remembered prover (image 37987b85) and worker through the upgrade and was told
+        # "Download the prover again", which changed nothing. The card now names the path and image and offers the
+        # installed copy; Update installs only a release whose SHA256SUMS.txt is signed by the pinned maintainer key.
+        run: |
+          cd tools/win-gui
+          python3 test_appupdate.py
+          python3 test_appupdate.py --control
+          python3 test_stale_prover.py
+          python3 test_stale_prover.py --control
       - name: the Windows fcntl shim states its own contract
         # ⛔ On POSIX it must REFUSE rather than pretend: a silent no-op would mean the fleet's GPU
         # serialisation quietly stopped happening.
@@ -723,6 +870,36 @@ jobs:
         run: cd coordinator && python3 test_board_fetch_source.py
       - name: Board-fetch POSITIVE CONTROL (the bridge is asked for a board height again)
         run: cd coordinator && python3 test_board_fetch_source.py --control
+      # Reorg handling at the tip (docs/libzync/REORG.md, P1/P2): the fetcher's detection against a fake bitcoin-cli
+      # (forks of depth 1, 2, W, W+1 and beyond J below prep's tip; one above it; the 16.11.2026 review's cases), and the
+      # stop path's unit settings (exit 4 fails the unit so its OnFailure alert fires). ~3 min, CPU only. The units are
+      # also run under real systemd by `test_reorg_units.py` without --no-systemd, where a user session exists.
+      - name: Reorg detection in the block fetcher (REORG.md §4)
+        run: python3 prover/test_fetch_reorg.py
+      - name: Reorg-detection POSITIVE CONTROL (prep's tip compared one block low — a 1-block reorg must go unseen)
+        run: python3 prover/test_fetch_reorg.py --control
+      - name: A reorg stop fails the prep and fetch units and alerts (REORG.md §11)
+        run: cd coordinator && python3 test_reorg_units.py --no-systemd
+      - name: Reorg-stop POSITIVE CONTROL (the units without exit 4 in RestartPreventExitStatus)
+        run: cd coordinator && python3 test_reorg_units.py --no-systemd --control
+      # REORG.md §7 (P4): the coordinator applies prep's reorg records (rows and proofs aside, the spine back to a kept
+      # head, claims voided, the ack), refuses a proof verified across a rewind (§4), and applies a record at start-up.
+      - name: The coordinator rewinds its ledger for a reorg (REORG.md §5, §7)
+        run: cd coordinator && python3 test_reorg.py
+      - name: Coordinator-rewind POSITIVE CONTROLS (no check at commit; orphaned rows left in vranges — each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_reorg.py --control
+          python3 test_reorg.py --control-keep
+          python3 test_reorg.py --control-m1
+          python3 test_reorg.py --control-m2
+          python3 test_reorg.py --control-m3
+          python3 test_reorg.py --control-h1
+          python3 test_reorg.py --control-latch
+      - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
+        run: cd coordinator && python3 test_offsite_reorg.py
+      - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)
+        run: cd coordinator && python3 test_offsite_reorg.py --control
       - name: The card catalogue ranks every usable type, and excludes MIG slices
         run: cd coordinator && python3 test_card_catalogue.py
       - name: Card-catalogue POSITIVE CONTROL
@@ -845,6 +1022,26 @@ jobs:
         run: |
           cd coordinator
           python3 test_claim_nonce.py --control
+      - name: A stopped worker hands its claimed block back (#725)
+        # POST /api/release: only the holder of a live claim, signed, once; the block is open to anyone at once. Then
+        # the real worker against the real handler: SIGTERM mid-prove releases the block and kills the prover child.
+        run: |
+          cd coordinator
+          python3 test_claim_release.py
+          python3 test_worker_release.py
+      - name: "Claim release POSITIVE CONTROL (ownership unchecked; worker never releases — must FAIL)"
+        run: |
+          cd coordinator
+          python3 test_claim_release.py --control
+          python3 test_worker_release.py --control
+      - name: A release frees only the claim it names, never the same key's re-claim (release by claim)
+        # #725 released by key + block, so a release in flight for an OLD claim freed a block the same key had just
+        # claimed again. The release now names its claim (signed); a different claim is 409 "not this claim".
+        run: cd coordinator && python3 test_release_by_claim.py
+      - name: Release by claim POSITIVE CONTROL (claim named not checked — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_release_by_claim.py --control
       - name: Heartbeat rejection log (bip-448, 2026-09-11)
         # Drives the real HTTP handler: every rejected /api/beat must be logged with the caller, the
         # reason, and -- for a 409 -- what the DB really holds for that range.
@@ -1296,6 +1493,12 @@ jobs:
         run: |
           cd coordinator
           python3 test_client_version.py --control
+      - name: A libzync board has no replay path (11-18)
+        # A worker that could not get a block's input file fell back to replaying from block 1, and a laptop saw
+        # "could not fetch witness for block 2: HTTP 404" on every claim. On a libzync board it now says what is wrong.
+        run: cd coordinator && python3 test_no_replay_libzync.py
+      - name: No-replay POSITIVE CONTROL (guard removed — must FAIL)
+        run: cd coordinator && python3 test_no_replay_libzync.py --control
       - name: A claim nobody is working on is released in minutes (#296)
         # 237 blocks were held by two contributors who were not proving them, while the most
         # productive prover on the board held TWO claims. Liveness could not tell "working" from
@@ -1332,6 +1535,16 @@ jobs:
         run: |
           cd coordinator
           python3 test_claim_sybil.py --control
+      - name: The coordinator sets _client_ip itself on every POST (a client cannot choose it)
+        # 15.11.2026: only /api/sponsor got it server-side, so claim()'s CLAIM_NEW_IP_MAX read a client-sent value
+        # (real workers send none: the cap never applied). Drives the real HTTP handler.
+        run: cd coordinator && python3 test_client_ip.py
+      - name: _client_ip POSITIVE CONTROL (do_POST as before the fix — must FAIL)
+        run: |
+          cd coordinator
+          if python3 test_client_ip.py --control; then
+            echo "::error::test_client_ip.py passed with the pre-fix do_POST: it cannot detect the bug"; exit 1
+          fi
       - name: A replayed public proof is refused before any verification (review 11-12, board #6)
         # A signed replay of a served proof (another range id, or the spine) used to cost a full STARK verification
         # and hold a verify slot. Now a lookup by receipt sha refuses it first.
@@ -1340,6 +1553,19 @@ jobs:
         run: |
           cd coordinator
           python3 test_replay_precheck.py --control
+      - name: A fresh board's spine is seeded with block 1's own proof (16.11.2026, v0.26.0 board)
+        # The replay pre-check refused /api/proof/1 as the spine seed ("already the verified proof of 1"), so an empty
+        # spine never started. A verified genesis range's proof may seed or advance the spine; true replays still 409.
+        # Bounded: racing copies cost one verification, a failed one is not retried at the same head, and the
+        # spine is credited to the range's prover, not the re-submitter (review of #752: M1, M2, L1).
+        run: cd coordinator && python3 test_spine_seed.py
+      - name: Spine seed POSITIVE CONTROLS (seed exception out; no in-flight guard; no failure memory; submitter credited — each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_spine_seed.py --control
+          python3 test_spine_seed.py --control-race
+          python3 test_spine_seed.py --control-failed
+          python3 test_spine_seed.py --control-credit
       - name: G1 retention gate still detects a missing receipt (positive control)
         # check-retention.py is what separates "the board says this block is proven" from "we can
         # hand you the proof for it" — G1's actual content. It runs unattended on the coordinator, so
@@ -1766,7 +1992,7 @@ jobs:
         # editing one re-baselines the board with nothing in the guest directory changed. That has
         # already happened once (coinbase-smt's empty_root: 4ea6567b -> 35cfbbed).
         run: ./scripts/check-guest-inputs.sh
-      - name: Workflow YAML valid (a bad step name can silently break the whole run)
+      - name: Workflow YAML valid, no duplicate keys (GitHub refuses the whole workflow, zero jobs, seen only after the push), no << merge keys, with controls
         run: ./scripts/check-workflows.sh
       - name: No workflow splices an expression into a shell block (arbitrary code where the signing key lives)
         # GitHub splices ${{ }} into the script before bash parses it, so a value with shell
@@ -1796,6 +2022,12 @@ jobs:
         run: ./scripts/test-lineage.sh --control
       - name: Test surfaces are connected (no test that reports green while measuring nothing)
         run: ./scripts/check-test-surfaces.sh
+      - name: Ooga Booga Land page keeps its connection contract (literal return link, no referrer, no scripts, nothing from another origin)
+        # ooga-land/ is served at https://hazync.org/ooga/ and listed in Ooga Booga Land's directory on the strength of
+        # these properties (ooga-land/README.md). Python only, a second or two.
+        run: ./scripts/check-ooga-land.sh
+      - name: Ooga land check POSITIVE CONTROL (broken copies of the page — every one must be caught)
+        run: ./scripts/check-ooga-land.sh --control
       - name: Drop-in attribution when one unit name extends another
         # `dropins/$u-*.conf` also matched a LONGER unit's files, so hazync-coordinator was credited
         # with hazync-coordinator-backup's BACKUP_DIR. A wider declared set can only HIDE drift, so it
@@ -1849,7 +2081,7 @@ jobs:
     #                      archive. Accepted for the same reason as 0367-0369.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit every lockfile
@@ -1860,7 +2092,8 @@ jobs:
           # of the libzync verifier), and they are not part of the prover workspace. The CORE verifiers' lockfiles went
           # to history/ with them.
           for f in accumulator coinbase-smt libzync prover prover/methods/guest guest-pure-fuzz \
-                   swiftsync-verify swiftsync-verify-ffi swiftsync-verify-wasm; do
+                   swiftsync-verify swiftsync-verify-ffi swiftsync-verify-wasm \
+                   $(git ls-files 'zapps/*Cargo.lock' | xargs -rn1 dirname); do
             echo "== $f =="
             cargo audit --file "$f/Cargo.lock" $IGNORE || rc=1
           done
@@ -1870,10 +2103,14 @@ jobs:
     # libzync replaced the CORE guest in the build (ROADMAP R1a, user 11-07): the CORE image 37987b85 cannot be
     # rebuilt from this tree and stays usable as its published release binary (v0.22.1). This job now rebuilds the
     # libzync product images at fixed paths and requires the published ids (reproduce/LIBZYNC_IDS, H7).
+    # Skipped on a pull request that changes no image input (`changes`); runs when `changes` did not succeed. Never
+    # cached: it is the from-scratch rebuild the published ids are checked against.
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.image != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the libzync reproducible container (guest at fixed paths)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1882,14 +2119,14 @@ jobs:
         run: |
           mkdir -p elf && docker run --rm -v "$PWD/elf:/out" hazync-libzync-repro cp /root/libzync-elf/zyncapp-headers.bin /out/
           sudo chown -R "$(id -u):$(id -g)" elf && sha256sum elf/zyncapp-headers.bin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: zyncapp-headers-elf
           path: elf/zyncapp-headers.bin
       - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers) ' > built.txt
-          grep -E '^(libzync-product|zyncapp-headers) ' reproduce/LIBZYNC_IDS > pinned.txt
+          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-[a-z-]+) ' > built.txt
+          grep -E '^(libzync-product|zyncapp-[a-z-]+) ' reproduce/LIBZYNC_IDS > pinned.txt
           echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
           if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
             echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"
@@ -1905,10 +2142,14 @@ jobs:
   # (the required check) gates on all of them. Drivers: scripts/libzync/ci/ (each step greps a positive marker: a step that crashed
   # or printed nothing fails).
   libzync-hosts:
+    # Skipped on a pull request that changes nothing the soundness pass builds or runs (`changes`), and with it every
+    # job that needs it (each runs exactly when this one succeeded); runs when `changes` did not succeed.
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.soundness != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the libzync reproducible container
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1923,7 +2164,22 @@ jobs:
             [ -s "hosts/$n" ] || { echo "::error::hosts/$n was not built"; exit 1; }
           done
           grep -q '^HOST_UNIT_OK .*, 0 failed$' hosts/ids.txt || { echo "::error::host unit tests (libzync mode) failed"; tail -40 hosts/host_unit.log; exit 1; }
-      - uses: actions/upload-artifact@v4
+          # The strict decoding of untrusted receipts (verify-any, the worker wire): each test BY NAME, so a renamed or
+          # filtered-out test fails here instead of passing by absence. A new strict test is added to this list.
+          for t in \
+            lz_coord::strict_decode_tests::the_real_receipt_decodes_control \
+            lz_coord::strict_decode_tests::a_trailing_byte_is_refused \
+            lz_coord::strict_decode_tests::an_unreduced_control_inclusion_word_is_refused_not_an_abort \
+            lz_coord::strict_decode_tests::an_unreduced_control_id_word_is_refused \
+            lz_coord::strict_decode_tests::an_unreduced_seal_word_is_refused \
+            lz_coord::strict_decode_tests::a_journal_of_partial_words_is_refused_not_an_abort \
+            lz_coord::strict_decode_tests::a_composite_receipt_is_refused_before_decoding \
+            lz_coord::strict_decode_tests::the_risc0_3_0_5_receipt_still_decodes_for_the_handover \
+            lz_coord::strict_decode_tests::a_job_pair_with_bytes_after_it_is_refused \
+            seg::worker_wire_strict_tests::a_worker_succinct_receipt_is_decoded_strictly; do
+            grep -aqxF "test $t ... ok" hosts/host_unit.log || { echo "::error::host test $t did not run and pass"; grep -a strict hosts/host_unit.log; exit 1; }
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libzync-hosts
           path: |
@@ -1938,7 +2194,7 @@ jobs:
       # The mainnet TEST VARIANTS (lineage/test.rs instead of the published lineage; ids in no pin table, the host prints
       # TEST_VARIANT), a separate artifact so no job takes one for the published host by accident. Only libzync-chain
       # uses them: the published image pins its predecessor below its handover height and never proves from genesis.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libzync-hosts-test-variant
           path: |
@@ -1953,37 +2209,53 @@ jobs:
     # board handover rehearsal and its control. On the mainnet TEST VARIANTS host_m0 (empty test lineage) and host_mN
     # (host_m0 pinned at 11): a published image may pin a predecessor and then never proves below it (v0.26.0's pins none).
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts-test-variant, path: hosts }
       - name: Chain from genesis and everything built on it, board handover rehearsal
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 P=4 bash scripts/libzync/ci/chain.sh hosts/host_m0 hosts/host_mN out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-chain-logs, path: "out/**/*.log", retention-days: 7 }
 
   libzync-blocks:
     # edge blocks; negatives on 962,000
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Edge blocks, negative tests
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/blocks.sh hosts/host_m out
+      # Reorg handling (docs/libzync/REORG.md §12): the undo records, prep's stop and wait (P1/P2), and prep's rewind (P3):
+      # after a rewind and the re-prep of a synthetic branch, states and stores equal a fresh prep of that branch, through
+      # crashes, refusals, a second reorg and the automatic path end to end. Mainnet 1..200 test data, minutes, CPU.
+      - name: Reorg undo records and the prep side of the stop (P1/P2)
+        run: H=$PWD/hosts/host_m O=$PWD/out/reorg bash experimental/libzync-bench/prep/reorg_test.sh
+      - name: Reorg prep POSITIVE CONTROL (a block that extends the state passes, so the stop is the prev alone)
+        run: H=$PWD/hosts/host_m O=$PWD/out/reorgc bash experimental/libzync-bench/prep/reorg_test.sh --control
+      - name: Reorg rewind (P3)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewind bash experimental/libzync-bench/prep/rewind_test.sh
+      - name: Reorg rewind POSITIVE CONTROL (a corrupted coin log after the rewind must be caught)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewindc bash experimental/libzync-bench/prep/rewind_test.sh --control
+      - name: Reorg in prep's replay window POSITIVE CONTROL (the stale-state check off, case L must FAIL)
+        run: H=$PWD/hosts/host_m O=$PWD/out/rewindl bash experimental/libzync-bench/prep/rewind_test.sh --control-stale
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-blocks-logs, path: "out/**/*.log", retention-days: 7 }
 
   libzync-vectors:
     # Core 28's script / tx vectors in 8 shards (each case once): libsecp and honest hints agree with Core on every
     # case; under four forged-hint variants nothing Core rejects passes. A shard must report exactly its case count.
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
     strategy:
@@ -1991,24 +2263,25 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Core's vectors, one shard of 8
         env: { SHARD: "${{ matrix.shard }}" }
         run: chmod +x hosts/host_*; bash scripts/libzync/ci/vectors.sh hosts/host_m hosts/core_vectors.json hosts/core_vectors_base.json out "$SHARD" 8
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: "libzync-vectors-logs-${{ matrix.shard }}", path: "out/**/*.log", retention-days: 7 }
 
   libzync-rig:
     # the guest against a real Bitcoin Core 28.0 on regtest, rule by rule; then handover O -> N
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Bitcoin Core 28.0 (release binary, sha256 pinned) and its source (test_framework, pinned commit)
         run: |
@@ -2020,22 +2293,23 @@ jobs:
       - name: Rig vs Core, handover
         run: chmod +x hosts/host_*; bash scripts/libzync/ci/rig.sh hosts/host_reg hosts/host_regN bitcoin-28.0/bin/bitcoind core-src out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-rig-logs, path: "out/**/*.log", retention-days: 7 }
 
   libzync-signet:
     # signet 1..100 from genesis on the published signet image vs the reference implementations
     needs: libzync-hosts
+    if: ${{ !cancelled() && needs.libzync-hosts.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: libzync-hosts, path: hosts }
       - name: Signet from genesis
         run: chmod +x hosts/host_*; HAZYNC_HINT_THREADS=4 bash scripts/libzync/ci/signet.sh hosts/host_sig out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: libzync-signet-logs, path: "out/**/*.log", retention-days: 7 }
 
   soundness-suite:
@@ -2044,12 +2318,17 @@ jobs:
     # hence `if: always()` and a positive test of each result. Then the checks that need Core's source tree and not a
     # guest: Core's compiled consensus constants against the canonical mainnet values, Core's retarget code against
     # the on-chain nBits at every mainnet retarget, and BIP68 relative locks (guest mode 8) on the published host.
-    needs: [libzync-hosts, libzync-chain, libzync-blocks, libzync-vectors, libzync-rig, libzync-signet]
+    #
+    # On a pull request that `changes` cleared (it SUCCEEDED and said soundness=false) the pass is not needed: then every
+    # job above must be "skipped" -- not one of them ran, failed or was cancelled -- and the steps after the gate are
+    # skipped. In every other case (any other event, `changes` failed or said true) every job must have succeeded.
+    needs: [changes, libzync-hosts, libzync-chain, libzync-blocks, libzync-vectors, libzync-rig, libzync-signet]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Every libzync soundness job succeeded
+      - name: Every libzync soundness job succeeded (or, on a cleared pull request, every one was skipped)
+        id: gate
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
@@ -2057,24 +2336,44 @@ jobs:
           import json, os, sys
           needs = json.loads(os.environ["NEEDS"])
           want = ["libzync-hosts", "libzync-chain", "libzync-blocks", "libzync-vectors", "libzync-rig", "libzync-signet"]
-          bad = [(j, needs.get(j, {}).get("result", "absent")) for j in want if needs.get(j, {}).get("result") != "success"]
+          ch = needs.get("changes", {})
+          print(f"changes: {ch.get('result', 'absent')} {ch.get('outputs', {})}")
           for j in want:
               print(f"{j}: {needs.get(j, {}).get('result', 'absent')}")
+          if ch.get("result") == "success" and ch.get("outputs", {}).get("soundness") == "false":
+              ran = [(j, needs.get(j, {}).get("result", "absent")) for j in want if needs.get(j, {}).get("result") != "skipped"]
+              if ran:
+                  print("::error::changes said soundness=false but these did not skip: " + ", ".join(f"{j}={r}" for j, r in ran))
+                  sys.exit(1)
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("run=false\n")
+              print("LIBZYNC_SOUNDNESS_NOT_NEEDED: this pull request changes nothing the soundness pass builds or runs")
+              sys.exit(0)
+          bad = [(j, needs.get(j, {}).get("result", "absent")) for j in want if needs.get(j, {}).get("result") != "success"]
           if bad:
               print("::error::libzync soundness jobs did not all succeed: " + ", ".join(f"{j}={r}" for j, r in bad))
               sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("run=true\n")
           print("ALL_LIBZYNC_JOBS_OK")
           PY
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.gate.outputs.run == 'true'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.gate.outputs.run == 'true'
         with: { name: libzync-hosts, path: hosts }
       - name: Core's source tree, as the libzync guest compiles it (pinned upstream + this repo's patches)
+        if: steps.gate.outputs.run == 'true'
         run: bash scripts/libzync-base.sh "$HOME/lzbase"
       - name: Chainparams anchor (Core's compiled consensus constants == canonical mainnet values)
+        if: steps.gate.outputs.run == 'true'
         run: cd prover && HAZYNC_BASE="$HOME/lzbase" ./chainparams_check.sh
       - name: Retarget differential (Core's pow.cpp vs the on-chain nBits at every mainnet retarget)
+        if: steps.gate.outputs.run == 'true'
         run: cd prover && HAZYNC_BASE="$HOME/lzbase" ./retarget_diff_test.sh
       - name: BIP68 relative-lock matrix (real mainnet MTP, height and time based), published mainnet host
+        if: steps.gate.outputs.run == 'true'
         run: chmod +x hosts/host_m && cd prover && HAZYNC_HOST=../hosts/host_m ./test_bip68_locks.sh
       - name: BIP68 time lock on a real mainnet transaction (and the pre-CSV non-enforcement control)
+        if: steps.gate.outputs.run == 'true'
         run: cd prover && HAZYNC_HOST=../hosts/host_m ./test_bip68_real.sh

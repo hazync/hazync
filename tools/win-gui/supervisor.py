@@ -68,6 +68,15 @@ GUEST_MAGIC = b"R0BF"
 GUEST_SIZE = 70_199_652
 GUEST_SHA256 = "f7b87bf118050f60c45d605e2cc953668221dff95ed43072d4fd717380c08a27"   # reproduce/LIBZYNC_IDS, mainnet GUEST_ELF_SHA256
 
+# ⭐ WHAT THE CPU PROVER COSTS, MEASURED, said to anyone who uses it (owner, 16.11: "slower — the app must say so
+# honestly"). windows-prove run 42540389071 (2026-11-09, a 4-vCPU windows-latest runner, the libzync CPU host.exe):
+# mainnet block 1 — the smallest block there is, one coinbase — `LZ_PROVE_RANGE_DONE 1..=1 in 1433 s`. Nothing
+# bigger has been measured on a CPU, so nothing bigger is claimed.
+CPU_BLOCK1_S = 1433
+CPU_SENTENCE = ("Proving on the processor works on any PC, but it is much slower than on a graphics card. Measured: "
+                "the smallest block there is (mainnet block 1) took about 24 minutes on a 4-core Windows machine; "
+                "most blocks are bigger and take longer. A supported NVIDIA card (compute 7.0 or newer) is far faster.")
+
 EX_CONFIG = 78      # the worker established it can never land anything — STOP, do not retry
 EX_TEMPFAIL = 75    # nothing to claim right now — a busy board, not a fault
 
@@ -222,6 +231,32 @@ def imported_dlls(path):
         return []
 
 
+# ⛔ DLLs every supported Windows (10 1809+/11) has, so a prover importing only these starts on a fresh office PC
+# (review of a04038ce, M1). The Universal CRT ships with Windows 10 (`api-ms-win-crt-*` resolve to ucrtbase.dll); the
+# Visual C++ runtime (VCRUNTIME140*.dll, MSVCP140.dll, VCOMP140.dll) does NOT, and is what a dynamically linked MSVC
+# build needs — present on CI runners, absent on plenty of real machines.
+SYSTEM_DLLS = frozenset(d.lower() for d in (
+    "kernel32.dll", "ntdll.dll", "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "ws2_32.dll", "mswsock.dll",
+    "user32.dll", "gdi32.dll", "shell32.dll", "shlwapi.dll", "ole32.dll", "oleaut32.dll", "combase.dll", "rpcrt4.dll",
+    "userenv.dll", "secur32.dll", "crypt32.dll", "ncrypt.dll", "dbghelp.dll", "psapi.dll", "iphlpapi.dll",
+    "powrprof.dll", "version.dll", "setupapi.dll", "cfgmgr32.dll", "winmm.dll", "ucrtbase.dll", "synchronization.dll"))
+# The CUDA host may also import the driver's DLL (it comes with the NVIDIA driver) and the CUDA runtime shipped beside it.
+CUDA_DLLS = ("nvcuda.dll", "cudart64_")
+
+
+def foreign_imports(dlls, cuda=False):
+    """The imported DLLs that are NOT part of Windows (nor, for the CUDA host, the driver's and the shipped cudart)."""
+    out = []
+    for d in dlls:
+        low = d.lower()
+        if low in SYSTEM_DLLS or low.startswith("api-ms-win-") or low.startswith("ext-ms-win-"):
+            continue
+        if cuda and (low == CUDA_DLLS[0] or low.startswith(CUDA_DLLS[1])):
+            continue
+        out.append(d)
+    return sorted(set(out), key=str.lower)
+
+
 def classify_host(path):
     """What kind of prover is this, and can it start here? A dict, never an exception.
 
@@ -295,8 +330,122 @@ def verify_embedded_guest(path):
                    f"({hits} R0BF marker(s) checked)")
 
 
-def check_host_binary(host_path):
-    """⛔ THE CHECK THAT MATTERS: does this binary carry the canonical METHOD_ID?
+# ⛔ A HARD WALL-CLOCK DEADLINE and a size cap for the one board question asked before Start (review of c881d582, M2):
+# nethttp's timeout is per socket operation, its body read is unbounded, and its certificate ladder ends in a pip
+# install (up to 180 s; in the frozen app `Hazync.exe -m pip` is not pip at all). None of that belongs in front of Start.
+BOARD_DEADLINE_S = 8
+BOARD_BODY_CAP = 64 * 1024
+
+
+def board_address_problem(coord):
+    """None if `coord` is an address the app may ask, else why not (review L2): http(s) only, and plain http
+    only to this machine itself."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(coord or "")
+    except ValueError:
+        return "not a web address"
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return f"{coord!r} is not an http(s) address"
+    if u.scheme == "http" and u.hostname not in ("localhost", "127.0.0.1", "::1"):
+        return f"{coord} is plain http, not HTTPS: anyone on the way can change what it says"
+    return None
+
+
+def board_image(coord, deadline=BOARD_DEADLINE_S):
+    """(image id, why) — the image the board checks proofs against right now (its /api/meta `method_id`).
+
+    ⭐ THE BOARD, NOT THIS FILE, DECIDES WHICH PROOFS LAND. CANONICAL_METHOD_ID is the image this app was built for,
+    and a re-baseline moves the board without moving any installed app: the window then said "canonical" about a
+    prover whose every proof the board would reject (the worker finds out only on its first SUBMIT, an hour of GPU
+    later), or refused a prover that matched the board because the app was older than it. So Start asks the board
+    first, and the pin is only the answer when the board cannot be asked.
+    ⚠ (None, why) on ANY failure, `why` saying which (review M3): an unreachable board must not stop a box that is
+    otherwise fine, but "could not ask" and "asked, and it said nothing usable" are different facts.
+    ⚠ The answer is only ever COMPARED: nothing is downloaded or run because of it.
+    """
+    if not coord:
+        return None, "no board address set"
+    bad = board_address_problem(coord)
+    if bad and "plain http" not in bad:
+        return None, bad
+    import ssl
+    import urllib.error
+    import urllib.request
+    url = coord.rstrip("/") + "/api/meta"
+    box = {}
+
+    def ask():
+        try:
+            import nethttp   # noqa: E402 - for its shipped intermediates and CA-bundle context; no pip, no curl
+            ctxs = [None, nethttp._with_extra(ssl.create_default_context())]
+            alt = nethttp._certifi_context()
+            if alt is not None:
+                ctxs.append(alt)
+        except Exception:    # noqa: BLE001
+            ctxs = [None]
+        last = None
+        for ctx in ctxs:
+            try:
+                req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                                           "User-Agent": "hazync-win-gui"})
+                with urllib.request.urlopen(req, timeout=deadline, context=ctx) as r:
+                    box["raw"] = r.read(BOARD_BODY_CAP + 1)
+                return
+            except urllib.error.HTTPError as e:
+                box["err"] = f"the board answered HTTP {e.code}"
+                return
+            except Exception as e:   # noqa: BLE001
+                last = e
+                if not ("CERTIFICATE" in str(e).upper() or isinstance(getattr(e, "reason", None), ssl.SSLError)):
+                    break
+        box["err"] = f"could not reach {url}: {last}"
+
+    t = threading.Thread(target=ask, daemon=True)
+    t.start()
+    t.join(deadline + 1)
+    if t.is_alive():
+        return None, f"the board did not answer within {deadline} s"
+    if "err" in box:
+        return None, box["err"]
+    raw = box.get("raw") or b""
+    if len(raw) > BOARD_BODY_CAP:
+        return None, f"the board's answer was over {BOARD_BODY_CAP // 1024} KB, so it was not read"
+    try:
+        t_id = json.loads(raw.decode("utf-8", "replace")).get("method_id")
+    except (ValueError, AttributeError):
+        return None, "the board answered, but not with JSON"
+    t_id = t_id.lower() if isinstance(t_id, str) else ""
+    if not HEX64.fullmatch(t_id):
+        return None, "the board answered without a valid method_id"
+    return t_id, ""
+
+
+def board_method_id(coord, timeout=BOARD_DEADLINE_S):
+    """The board's image id, or None (board_image without the reason)."""
+    return board_image(coord, timeout)[0]
+
+
+def installed_provers():
+    """{kind: path} of the provers installed WITH this app (the installer's prover\ and prover-cpu\), {} from
+    source. Named in a mismatch, because a chosen path is sticky and an upgrade replaces only these (review M4)."""
+    if not getattr(sys, "frozen", False):
+        return {}
+    base = Path(sys.executable).resolve().parent
+    out = {}
+    for kind, sub in (("cuda", "prover"), ("cpu", "prover-cpu")):
+        p = base / sub / "host.exe"
+        if p.is_file():
+            out[kind] = str(p)
+    return out
+
+
+def check_host_binary(host_path, board_id=None, board_why=""):
+    """⛔ THE CHECK THAT MATTERS: does this binary carry the METHOD_ID the board accepts?
+
+    `board_id` is the board's own answer (board_image). When it is known it is the one compared
+    against; when it is None (board unreachable, or no coordinator given) the image this app was
+    built for (CANONICAL_METHOD_ID) stands in for it, as it always did, and `board_why` says why.
 
     ⚠ Parsed as "the first 64-hex token in the output", because `host method-id` prints the digest
     AND a `u32x8` decomposition, and a looser match would pick up the words. Measured output:
@@ -315,16 +464,20 @@ def check_host_binary(host_path):
         # NVIDIA driver; with no driver, Windows cannot load the image at all.
         # ⇒ Fall back to reading the guest out of the FILE, and report the two facts separately.
         ok, detail = verify_embedded_guest(host)
+        # ⚠ (review L4) "genuine" here means "carries the image THIS APP was built for"; whether the BOARD accepts it
+        # needs the prover to run, so the sentence says which of the two it knows.
+        known = ("it carries the image this app was built for (" + detail + ")"
+                 + (", which is not the board's current one" if board_id and board_id != CANONICAL_METHOD_ID else ""))
         if info["kind"] == "cuda" and not info["driver_present"]:
-            msg = ("this is the CUDA build and no NVIDIA driver was found, so Windows cannot load "
-                   "it here. " + ("The file itself is genuine — " + detail + ". Use the CPU build "
+            msg = (f"{host} is the CUDA build and no NVIDIA driver was found, so Windows cannot load "
+                   "it here. " + ("The file itself is intact: " + known + ". Use the CPU build "
                                   "on this machine, or install the NVIDIA driver."
                                   if ok else "And " + detail + "."))
             return CheckResult("host binary", False, msg, fatal=True)
         if ok:
             return CheckResult("host binary", False,
-                               f"`method-id` exited {rc} so the id could not be read, but the file "
-                               f"is genuine ({detail}). Output: {out.strip()[:120]}", fatal=True)
+                               f"`method-id` exited {rc} so the id could not be read, but {known}. "
+                               f"Output: {out.strip()[:120]}", fatal=True)
         return CheckResult("host binary", False,
                            f"`method-id` exited {rc} and {detail}. Output: {out.strip()[:140]}",
                            fatal=True)
@@ -333,13 +486,194 @@ def check_host_binary(host_path):
         return CheckResult("host binary", False, f"no image id in output: {out.strip()[:160]}",
                            fatal=True)
     got = m.group(0)
+    if board_id:
+        if got != board_id:
+            # ⚠ Which side moved decides what the person should do, so say which.
+            if got == CANONICAL_METHOD_ID:
+                fix = ("The board has moved to a new image since this copy of Hazync was made: "
+                       "install the latest Hazync from https://github.com/hazync/hazync/releases/latest "
+                       "(it carries the matching prover).")
+            else:
+                fix = ("Use the prover from the latest release "
+                       "(https://github.com/hazync/hazync/releases/latest), or install the latest Hazync.")
+            # ⚠ (review M4) the prover in use is a remembered path; an upgrade replaces only the installed ones. Name
+            # both, or "install the latest Hazync" loops: installed, and the old path is checked again.
+            other = [p for p in installed_provers().values()
+                     if Path(p).resolve() != host.resolve()]
+            if other:
+                fix += f" The prover installed with Hazync is {other[0]}: choose it under Advanced → Options."
+            return CheckResult("host binary", False,
+                               f"the prover {host} makes image {got[:16]}…, but the board checks proofs "
+                               f"against {board_id[:16]}…, so every proof would be rejected "
+                               f"(exit {EX_CONFIG}). {fix}", fatal=True)
+        note = ("" if got == CANONICAL_METHOD_ID else
+                f" (not the {CANONICAL_METHOD_ID[:8]}… this app was built for: the board's is the one that counts)")
+        return CheckResult("host binary", True,
+                           f"METHOD_ID {got[:16]}… matches the board{note} — {host_kind_sentence(info)}")
+    unasked = f" (the board's image is unknown: {board_why}; checked against the image this app was built for)" \
+        if board_why else ""
     if got != CANONICAL_METHOD_ID:
         return CheckResult("host binary", False,
-                           f"METHOD_ID is {got}, NOT the canonical {CANONICAL_METHOD_ID}. "
-                           f"Proofs from this binary would be rejected (exit {EX_CONFIG}).",
+                           f"the prover {host}: METHOD_ID is {got}, NOT the canonical {CANONICAL_METHOD_ID}. "
+                           f"Proofs from this binary would be rejected (exit {EX_CONFIG}).{unasked}",
                            fatal=True)
     return CheckResult("host binary", True,
-                       f"canonical METHOD_ID {got[:16]}… — {host_kind_sentence(info)}")
+                       f"canonical METHOD_ID {got[:16]}…{unasked} — {host_kind_sentence(info)}")
+
+
+def prover_image(host_path, timeout=120):
+    """The image id `host method-id` prints, or None (not there, will not run, or printed none)."""
+    if not host_path or not Path(host_path).is_file():
+        return None
+    rc, out = _run([str(host_path), "method-id"], timeout=timeout)
+    m = HEX64.search(out or "") if rc == 0 else None
+    return m.group(0) if m else None
+
+
+def installed_worker():
+    """The hazync-worker installed WITH this app (beside Hazync.exe, firstrun.install_dir), or "" from source."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    p = Path(sys.executable).resolve().parent / "hazync-worker"
+    return str(p) if p.is_file() else ""
+
+
+_WORKER_VERSION_RE = re.compile(rb'^VERSION = "([^"\r\n]*)"', re.M)
+
+
+def worker_facts(worker_path):
+    """What the worker FILE says about itself, read without running it: {"version": stamped version ("dev" from a
+    checkout, "" when unreadable), "lzleaf": True when it reads the board's leaf bundles}.
+
+    ⭐ THE CHEAPEST RELIABLE SIGNAL (11-18). A worker from before libzync cannot read the board's LZLEAF input files,
+    falls back to replaying from block 1 and fails every claim with a 404 at block 2. Every worker that can read them
+    names the magic in its source (bundle_name, fetch_bundles), so its absence is decisive; package-release.sh stamps
+    VERSION, which says how old it is."""
+    try:
+        data = Path(worker_path).read_bytes()
+    except OSError:
+        return {"version": "", "lzleaf": False}
+    m = _WORKER_VERSION_RE.search(data)
+    return {"version": m.group(1).decode("ascii", "replace") if m else "", "lzleaf": b"LZLEAF" in data}
+
+
+def _version_tuple(v):
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", v or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def worker_is_older(facts, than):
+    """True when `facts` (worker_facts) is a worker that cannot read the board's files, or is stamped older than `than`."""
+    if not facts.get("lzleaf"):
+        return True
+    a, b = _version_tuple(facts.get("version")), _version_tuple(than.get("version")) if than else None
+    return bool(a and b and a < b)
+
+
+def stale_worker_advice(worker, installed=None, facts=worker_facts):
+    """What to say about a remembered worker that is an old copy, and the fix (as stale_prover_advice). None if fine.
+
+    `installed` defaults to installed_worker(). Stale = cannot read the board's LZLEAF files, or stamped older than the
+    installed one."""
+    installed = installed_worker() if installed is None else installed
+    if not worker or not Path(worker).is_file():
+        return None
+    f = facts(worker)
+    other = installed if installed and not _same_file(installed, worker) else ""
+    fi = facts(other) if other else None
+    if not worker_is_older(f, fi):
+        return None
+    ver = f" (version {f['version']})" if f.get("version") else ""
+    said = (f"The Hazync client Hazync is set to use, {worker}{ver}, is an old copy"
+            + (": it cannot read the board's input files, so every block it claimed would fail."
+               if not f.get("lzleaf") else ", older than the one installed with Hazync."))
+    if fi and fi.get("lzleaf"):
+        return {"head": "Stopped — the Hazync client in use is an old copy",
+                "text": said + f" The client installed with Hazync, {other}, can: use that one.",
+                "action": "switch", "kind": None, "path": "", "worker": other}
+    return {"head": "Stopped — this needs a look",
+            "text": said + " Install the latest Hazync, which carries a current client.",
+            "action": "update", "kind": None, "path": ""}
+
+
+def merge_advice(prover, worker):
+    """One fix for the card when both the prover and the worker are old copies (either may be None)."""
+    if not (prover and worker):
+        return prover or worker
+    both = prover.get("action") == "switch" and worker.get("action") == "switch"
+    return {"head": ("Stopped \u2014 the prover and the Hazync client in use are old copies" if both
+                     else prover["head"]),
+            "text": prover["text"] + " " + worker["text"],
+            "action": "switch" if both else "update",
+            "kind": prover.get("kind"), "path": prover.get("path", "") if both else "",
+            "worker": worker.get("worker", "") if both else ""}
+
+
+def check_worker_current(worker_path):
+    """Fatal when the worker cannot read the board's input files (worker_facts): it would fail every claim."""
+    f = worker_facts(worker_path)
+    if not f["lzleaf"]:
+        return CheckResult("worker version", False,
+                           f"{worker_path} is an old Hazync client{' (version ' + f['version'] + ')' if f['version'] else ''}"
+                           ": it cannot read the board's input files, so every block it claimed would fail. "
+                           "Use the client installed with the latest Hazync.", fatal=True)
+    return CheckResult("worker version", True,
+                       f"reads the board's input files (version {f['version'] or 'unknown'})")
+
+
+def _same_file(a, b):
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
+def stale_prover_advice(host, got, board_id, kind="cuda", installed=None, image_of=None):
+    """What to tell a person whose prover makes the wrong image, and the one fix to offer. None when it matches.
+
+    ⛔ (11-18, v0.26.1 on a real laptop) the startup check said "Download the prover again", which changes nothing: the
+    prover path is REMEMBERED across upgrades (installed_provers, review M4) and still pointed at an old host.exe making
+    the v1 image 37987b85. So this names the remembered path and its image, and offers what actually fixes it:
+      * "switch": an installed prover (prover\\ or prover-cpu\\ beside the app) that is a different file and makes the
+        board's image -- one click, the same switch as the Start flow's "Use the installed prover?";
+      * "update": the remembered prover IS the installed one (or none installed matches) -- install the latest Hazync.
+        When the board's image is not the one this app was built for, the board has moved on and the headline says
+        "Update Hazync to keep proving": that is not a fault on this PC.
+    Returns {"head", "text", "action" ("switch" | "update" | None), "kind", "path"}. `installed` defaults to
+    installed_provers(); `image_of` to prover_image (runs the installed prover, so call it off the Tk thread)."""
+    want = board_id or CANONICAL_METHOD_ID
+    if not got or got == want:
+        return None
+    installed = installed_provers() if installed is None else installed
+    image_of = image_of or prover_image
+    inst = installed.get(kind) or ""
+    others = [(k, p) for k, p in ([(kind, inst)] if inst else []) + [(k, p) for k, p in installed.items() if k != kind]
+              if p and not _same_file(p, host)]
+    said = (f"The prover Hazync is set to use, {host}, makes image {got[:8]}..., "
+            f"but the board only accepts proofs of image {want[:8]}..., so every proof it made would be rejected.")
+    for k, p in others:
+        if image_of(p) == want:
+            return {"head": "Stopped \u2014 the prover in use is an old copy",
+                    "text": said + f" The prover installed with Hazync, {p}, makes the board's image: use that one.",
+                    "action": "switch", "kind": k, "path": p}
+    moved = bool(board_id) and board_id != CANONICAL_METHOD_ID
+    if moved:
+        return {"head": "Update Hazync to keep proving",
+                "text": said + " The board has moved to a new image since this copy of Hazync was made; "
+                               "the latest Hazync carries the matching prover.",
+                "action": "update", "kind": kind, "path": ""}
+    if installed and any(_same_file(p, host) for p in installed.values()):
+        return {"head": "Stopped \u2014 this needs a look",
+                "text": said + " That is the prover installed with Hazync, so install the latest Hazync to replace it.",
+                "action": "update", "kind": kind, "path": ""}
+    if installed:
+        return {"head": "Stopped \u2014 this needs a look",
+                "text": said + " The prover installed with Hazync does not make it either: install the latest Hazync.",
+                "action": "update", "kind": kind, "path": ""}
+    return {"head": "Stopped \u2014 this needs a look",
+            "text": said + " Choose a prover from the latest release under Advanced > Options "
+                           "(https://github.com/hazync/hazync/releases/latest).",
+            "action": None, "kind": kind, "path": ""}
 
 
 # ⛔⛔ nvidia-smi IS NOT ALWAYS ON PATH, AND "NOT ON PATH" IS NOT "NO GPU". The driver normally
@@ -420,7 +754,9 @@ def gpu_facts():
 #
 # ⚠ A CARD BELOW 8 GB HAS NEVER PROVED ANYTHING ON THIS PROJECT. The smallest that has is 24 GB.
 # So for small cards this returns a STARTING POINT and says so; it does not promise it will work.
-_SEG_PO2_FOR_VRAM = [(40000, 21), (20000, 20), (10000, 19), (6000, 18), (0, 17)]
+# 📏 19.11.2026: block 4401 PROVED at 18 on a 4 GB GTX 1050 Ti (the board's MSI prover; 21 ran out of memory). So 18
+# starts at 4,000 MB (a "4 GB" card reports 4,096 MiB); 17 stays for anything smaller, unmeasured.
+_SEG_PO2_FOR_VRAM = [(40000, 21), (20000, 20), (10000, 19), (4000, 18), (0, 17)]
 
 
 def recommend(gpu=None):
@@ -446,15 +782,16 @@ def recommend(gpu=None):
                            "in the meantime, so you can start contributing now either way."}
         return {"build": "cpu", "seg_po2": None, "gpu": None,
                 "why": "nvidia-smi ran but reported no usable NVIDIA GPU, so a CUDA build could "
-                       "not even start. The CPU build works anywhere."}
+                       "not even start. The CPU build works anywhere, much more slowly: " + CPU_SENTENCE}
     seg = next(po2 for floor, po2 in _SEG_PO2_FOR_VRAM if g["vram_mb"] >= floor)
     if g["cc_major"] < 7:
         return {"build": "cpu", "seg_po2": None, "gpu": g,
                 "why": f"{g['name']} is compute {g['cc_major']}.{g['cc_minor']}, and sppark keeps "
                        f"only cards at 7.0 or newer, so CUDA proving fails with \"no CUDA-capable "
-                       f"device is detected\". The CPU build is the one that works here. "
-                       f"(HAZYNC_SPPARK_MIN_MAJOR={g['cc_major']} lifts that floor on a build from "
-                       f"2026-10-05 or later — unproven, see hazync#631.)"}
+                       f"device is detected\". The CPU build is the one that works here (much slower). "
+                       f"(For compute 6.x, the Setup tab's \"Try my GPU even if it is below the "
+                       f"supported floor\" lifts that floor — proved on one GTX 1050 Ti; other "
+                       f"older cards unproven, hazync#727.)"}
     note = ""
     if g["vram_mb"] < 8000:
         note = (f" ⚠ {g['vram_mb']:,} MiB is below anything this project has proved with — the "
@@ -503,12 +840,12 @@ def check_gpu():
     # Windows added was only that the error was destroyed on its way out (#631's foreign-exception
     # abort), so a card-support question looked like a platform question for weeks.
     # ⚠ THE FLOOR CAN BE LOWERED, so this must not keep declaring failure once someone has done it.
-    # A build from 2026-10-05 or later honours HAZYNC_SPPARK_MIN_MAJOR; reporting "use the CPU
+    # A build with hazync#727 honours HAZYNC_SPPARK_MIN_MAJOR (6..99); reporting "use the CPU
     # build" to a person who has already overridden it would be telling them to undo the thing they
     # just did, which is how a check gets ignored.
     floor = 7
     override = os.environ.get("HAZYNC_SPPARK_MIN_MAJOR", "").strip()
-    if override.isdigit() and 1 <= int(override) <= 99:
+    if override.isdigit() and 6 <= int(override) <= 99:   # sppark refuses below 6 (hazync#727)
         floor = int(override)
 
     cc = re.search(r"(\d+)\.(\d+)\s*$", line)
@@ -516,17 +853,18 @@ def check_gpu():
         return CheckResult(
             "GPU", True,
             line + f"  ⚠ accepted only because HAZYNC_SPPARK_MIN_MAJOR={floor} lowers sppark's "
-                   "floor from 7. The kernels are built for sm_61, but whether Pascal computes "
-                   "these proofs CORRECTLY is unverified — the receipt is checked before anything "
-                   "is submitted, so a wrong result fails rather than reaching the board.")
+                   "floor from 7. Proved on one GTX 1050 Ti (hazync#727); other older cards are "
+                   "unproven — the receipt is checked before anything is submitted, so a wrong "
+                   "result fails rather than reaching the board.")
     if cc and int(cc.group(1)) < 7:
         return CheckResult(
             "GPU", False,
             line + f"  ⛔ compute capability {cc.group(1)}.{cc.group(2)} — sppark keeps only "
                    "cards with major >= 7 (Volta or newer), so this one is filtered out and CUDA "
                    "proving fails with 'no CUDA-capable device is detected' however much VRAM it "
-                   "has. Use the CPU build on this machine — or try a build from 2026-10-05 or "
-                   "later with HAZYNC_SPPARK_MIN_MAJOR=6, which lowers sppark's floor (hazync#631).",
+                   "has. Use the CPU build on this machine — or, for compute 6.x, tick \"Try my GPU "
+                   "even if it is below the supported floor\" on the Setup tab, which lowers "
+                   "sppark's floor (proved on one GTX 1050 Ti; hazync#727).",
             fatal=False)
 
     mb = re.search(r"(\d+)\s*MiB", line)
@@ -755,8 +1093,11 @@ _EXPLANATIONS = [
     ("could not find `protoc`",
      "A build-time dependency is missing. This should never appear in a released binary; it means "
      "the prover was built without protoc."),
-    ("method_id", "The prover's guest id does not match the coordinator's, so every proof it makes "
-                  "would be rejected. Download the prover again."),
+    # ⚠ not "download the prover again" (11-18): the prover path is remembered across upgrades, so a fresh download
+    # changes nothing while the remembered path still points at the old file. The Home card names it (stale_prover_advice).
+    ("method_id", "The prover in use makes a different image from the one the board accepts, so every proof it made "
+                  "would be rejected. Use the prover installed with the latest Hazync: Advanced > Options names the "
+                  "one in use."),
     ("0xc000007b",
      "Windows could not load the executable — usually a missing DLL. A CUDA build needs the NVIDIA "
      "driver and cudart64_*.dll beside it."),
@@ -829,17 +1170,17 @@ def explain(text):
                       "folding on CPU runs about 13x slower than a modern GPU, which is slower but "
                       "still a real contribution. (hazync#631)")
         elif "operation not supported" in low_err:
-            # ⛔ THE ERROR A PASCAL CARD ACTUALLY GETS ONCE THE FLOOR IS LOWERED, and the one that
-            # used to fall through to "that is the cause" -- true, and useless to act on.
-            # Measured 2026-10-07 on a GTX 1050 Ti: the card passes sppark's filter, and every
-            # capability it needs tests FINE in isolation (plain and cooperative launches, grid
-            # sync, memory pools, 1024-thread blocks, this very stream call) -- yet the prover
-            # cannot drive it. Unresolved; tracked as hazync#631.
-            advice = ("Your card was accepted but the prover could not drive it — hazync#631, seen "
-                      "on Pascal (compute 6.x). This is not your setup and not your driver: the "
-                      "same card passes every capability test on its own. Switch to the CPU build "
-                      "on the Setup tab; it works, and folding measures about 13x slower than a "
-                      "modern GPU — which still contributes.")
+            # ⛔ THE ERROR A PASCAL CARD GOT ONCE THE FLOOR WAS LOWERED. Cause found (hazync#727):
+            # rv32im used SYSTEM-scope atomics, and the Windows driver refuses to load such a
+            # module (801, "operation not supported") on a card without host-native atomics. Fixed
+            # in the build; a GTX 1050 Ti then proved. Seeing it now means an older build, or a card
+            # or driver nobody has measured.
+            advice = ("Your card was accepted but the prover could not drive it. On Pascal "
+                      "(compute 6.x) this was hazync#727, fixed in builds that include it — a GTX "
+                      "1050 Ti proves with one. If your host is older, update it; if it is current, "
+                      "your card or driver has not been measured: please report it on hazync#727. "
+                      "The CPU build works meanwhile — folding measures about 13x slower than a "
+                      "modern GPU, which still contributes.")
         elif "no kernel image" in low_err:
             advice = ("The binary has no code this GPU can run. Built for sm_61 plus forward PTX, "
                       "so this usually means the driver cannot compile the PTX.")
@@ -867,7 +1208,7 @@ def explain(text):
 # ⚠ So "should this be automatic" is answered per check, by what it costs, and the window says which
 # is which rather than leaving someone to guess which button is safe to press.
 DIAGNOSTICS = [
-    ("method-id", "Is this prover genuine?",
+    ("method-id", "Will the board accept this prover's proofs?",
      "Prints the guest id. Must be the canonical one or every proof is rejected.", 120, True),
     # ⚠ libzync: the CORE host's offline `regress` and `prove-block` (block 170 from built-in fixtures) do not
     # exist in a libzync host. The worker's own `selftest` is the libzync check: it asks the board for its image id,
@@ -888,16 +1229,22 @@ def diagnostic_command(host, name, worker=None, python_exe=None):
     return [str(host), name]
 
 
-def diagnostic_verdict(name, rc, out):
-    """(ok, sentence) for a finished diagnostic. Reads the OUTPUT, not just the exit code."""
+def diagnostic_verdict(name, rc, out, board_id=None, board_why=""):
+    """(ok, sentence) for a finished diagnostic. Reads the OUTPUT, not just the exit code.
+    `board_id`: the board's image when known (board_image), which then decides method-id; else `board_why`
+    says why the app's own image stood in."""
     low = (out or "").lower()
     why = explain(out)
     if name == "method-id":
         m = HEX64.search(out or "")
-        if m and m.group(0) == CANONICAL_METHOD_ID:
-            return True, f"canonical: {m.group(0)[:16]}…"
+        want = board_id or CANONICAL_METHOD_ID
+        if m and m.group(0) == want:
+            return True, (f"matches the board: {want[:16]}…" if board_id else
+                          f"canonical: {want[:16]}…" + (f" (board's image unknown: {board_why})" if board_why else ""))
         if m:
-            return False, f"NOT canonical: {m.group(0)[:16]}… — proofs would be rejected"
+            return False, (f"{m.group(0)[:16]}… is NOT the board's {want[:16]}… — proofs would be rejected"
+                           if board_id else f"NOT canonical: {m.group(0)[:16]}… — proofs would be rejected"
+                           + (f" (board's image unknown: {board_why})" if board_why else ""))
         return False, (why or f"no id printed (exit {rc})")
     if name == "selftest":
         # ⛔ Both lines, not the exit code: "ALL GOOD" is printed only after every step, and the prove line only
@@ -909,14 +1256,31 @@ def diagnostic_verdict(name, rc, out):
     return False, (why or f"no verdict for an unknown check {name!r} (exit {rc})")
 
 
-def preflight(host_path, worker_path, identity_dir=None, python_exe=None):
-    """Every check, in the order a person should read them. Fatal ones block starting."""
+def preflight(host_path, worker_path, identity_dir=None, python_exe=None, coord=None, board_id=None):
+    """Every check, in the order a person should read them. Fatal ones block starting.
+
+    `coord`: ask that board which image it accepts (board_method_id) and check the prover against it;
+    `board_id` gives the answer directly (tests, or a caller that already asked)."""
+    why = ""
+    if board_id is None and coord:
+        board_id, why = board_image(coord)
     checks = [
-        check_host_binary(host_path),
+        check_host_binary(host_path, board_id=board_id, board_why=why),
         check_worker(worker_path, python_exe=python_exe),
+    ]
+    # only a worker that is there and starts is worth asking how old it is
+    if checks[-1].ok:
+        checks.append(check_worker_current(worker_path))
+    checks += [
         check_signing_library(python_exe=python_exe),
         check_gpu(),
     ]
+    # ⚠ never silent (review M3, L2): the board could not be asked, or its address is not HTTPS — a warning row, not fatal
+    if coord and (why or board_address_problem(coord)):
+        checks.append(CheckResult("board", False,
+                                  "; ".join(x for x in (board_address_problem(coord), why) if x)
+                                  + ". The prover was checked against the image this app was built for."
+                                  if why else board_address_problem(coord)))
     return checks, [c for c in checks if c.fatal and not c.ok]
 
 
@@ -937,6 +1301,101 @@ def stop_command(pid):
     return ["kill", "-TERM", str(pid)]
 
 
+# ── stopping a worker AND everything under it, and saying what survived (review of a04038ce, M3) ───────────────
+def process_table():
+    """[(pid, ppid, name)] for every live process, or [] when it cannot be read. Zombies are left out."""
+    if IS_WINDOWS:
+        rc, out = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId),$($_.ParentProcessId),$($_.Name)\" }"],
+                       timeout=30)
+        rows = []
+        for line in (out or "").splitlines() if rc == 0 else []:
+            parts = line.strip().split(",", 2)
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        return rows
+    rc, out = _run(["ps", "-eo", "pid=,ppid=,stat=,comm="], timeout=30)
+    rows = []
+    for line in (out or "").splitlines() if rc == 0 else []:
+        parts = line.split(None, 3)
+        if len(parts) == 4 and parts[0].isdigit() and parts[1].isdigit() and not parts[2].startswith("Z"):
+            rows.append((int(parts[0]), int(parts[1]), parts[3]))
+    return rows
+
+
+def descendants(pid, table):
+    """[(pid, name)] of everything `pid` started, at any depth, from a process_table()."""
+    kids = {}
+    for p, pp, name in table:
+        kids.setdefault(pp, []).append((p, name))
+    out, todo, seen = [], [pid], {pid}
+    while todo:
+        for p, name in kids.get(todo.pop(), []):
+            if p not in seen:
+                seen.add(p)
+                out.append((p, name))
+                todo.append(p)
+    return out
+
+
+def stop_tree(popen, wait_s=10):
+    """Stop a worker and its children (the prover); return (survivors [(pid, name)], error text or "").
+
+    ⛔ The prover is the worker's CHILD, and a stop that only reaches the worker leaves host.exe holding the card behind
+    a closed window. So the tree is listed BEFORE stopping, and whatever of it is still alive afterwards is returned by
+    PID and name, for the window to name — whether or not taskkill said it succeeded."""
+    pid = popen.pid
+    before = descendants(pid, process_table())
+    err = ""
+    try:
+        r = subprocess.run(stop_command(pid), capture_output=True, text=True, timeout=30)
+        if r.returncode != 0 and popen.poll() is None:
+            err = f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[:200]}"
+    except Exception as e:     # noqa: BLE001
+        err = str(e)
+    if popen.poll() is None and err:
+        try:
+            popen.kill()
+        except Exception:      # noqa: BLE001
+            pass
+    try:
+        popen.wait(timeout=wait_s)
+    except Exception:          # noqa: BLE001
+        pass
+    if not before and popen.poll() is not None:
+        return [], err
+    live = {p for p, _, _ in process_table()}
+    survivors = [(p, n) for p, n in before if p in live]
+    if popen.poll() is None:
+        survivors.insert(0, (pid, "worker"))
+    return survivors, err
+
+
+def release_command(python_exe, worker_path, block, claim):
+    """How to hand a claimed block back after its worker was stopped (#725), or None when it cannot be done safely.
+
+    ⚠ On Windows the worker is ended with `taskkill /F`, which no signal handler sees, so the worker cannot release
+    its own claim the way it does on SIGTERM. The app knows the block and the claim's id from the worker's
+    "claimed block N (claim <id>; ...)" line and asks the worker CLI to release THAT claim, signed with the same key.
+    Naming the claim is what keeps a release that lands late from freeing a block the same key has claimed again
+    since. A worker too old to print the id gets no release (None): its block reopens by itself, as before #725."""
+    if not claim:
+        return None
+    return worker_command(python_exe, worker_path, "release", (str(block), str(claim)))
+
+
+def release_verdict(rc, out):
+    """(released, sentence for the feed) from `hazync-worker release`'s exit code and output."""
+    text = (out or "").strip()
+    if rc == 0:
+        return True, text.splitlines()[-1] if text else "handed the block back"
+    if "unknown command" in text:
+        return False, ("this worker is too old to hand a block back; the block reopens by itself within the hour "
+                       "(update Hazync to fix this)")
+    last = text.splitlines()[-1] if text else f"exit code {rc}"
+    return False, last[:240]
+
+
 def summarise(checks):
     """A one-line verdict, for a status bar or a CLI run."""
     bad = [c for c in checks if not c.ok]
@@ -952,13 +1411,18 @@ def main(argv=None):
     """Headless preflight, so the checks can be run without a display or a GUI at all."""
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: python supervisor.py <host-binary> <hazync-worker> [identity-dir]")
+        print("usage: python supervisor.py <host-binary> <hazync-worker> [identity-dir] [--coord <board url>]")
         print("  Runs the same preflight the GUI runs, and prints it. No window needed.")
         return 0 if argv else 2
+    coord = None
+    if "--coord" in argv:
+        k = argv.index("--coord")
+        coord = argv[k + 1] if k + 1 < len(argv) else None
+        del argv[k:k + 2]
     host = argv[0]
     worker = argv[1] if len(argv) > 1 else ""
     ident = argv[2] if len(argv) > 2 else None
-    checks, fatal = preflight(host, worker, identity_dir=ident)
+    checks, fatal = preflight(host, worker, identity_dir=ident, coord=coord)
     for c in checks:
         print(f"  {'ok  ' if c.ok else 'FAIL'} {c.name}: {c.detail}")
     print()

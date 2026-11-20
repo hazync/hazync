@@ -367,15 +367,24 @@ caught: look-alike letters from other scripts (Cyrillic `о`). Also refused: ord
   terminated, exit `3`.
 - **Every pod is terminated** on exit, exception, SIGINT/SIGTERM, stall (no new proven block for
   `--stall-min`, default 45), failed boot, no public SSH in 15 min, worker finishing without its blocks,
-  sponsorship no longer held, or nothing left. Termination repeats `podTerminate` until RunPod no longer
+  sponsorship no longer held, or nothing left. Termination repeats `DELETE /v2/pods/{id}` until RunPod no longer
   lists the pod, and sweeps pods with the run's name prefix. ⚠ An unconfirmed pod is printed loudly, exit
   `4`: **terminate it by hand**. `stop-all` terminates every `hz-sponsor-*` pod.
 - ⚠ RunPod's Cloudflare refuses Python's default `Python-urllib` User-Agent (`403`, `error code: 1010`); the
-  bot sends its own. After 3 refused deploys in a row it exits `5`.
+  bot sends its own. After 3 refused deploys in a row (401/402/403/422, a Cloudflare page) it exits `5`. A 400
+  (no capacity), a 429 and no answer/5xx are not refusals; but 6 h of deploy attempts with nothing landing,
+  whatever the reason (400, 429, 5xx, no answer, every pod over the price ceiling), stops it with `5` (latch +
+  page) -- unless a pod of the run is working at an acceptable price, which ends the streak. Every pod a run creates is named with that run's unique
+  prefix, and the bot lists and terminates any pod with its prefix it does not track, every look: a create whose
+  answer was lost is released whenever it appears. A pod whose termination is not confirmed stays counted as live,
+  and the next run's start terminates it before renting (under a run lock; `TimeoutStopSec=1500` fits the bounded
+  cleanup). ⚠ A LATCHED bot does not start, so nothing sweeps until a human clears the latch: check RunPod for
+  `hz-sponsor-*` pods first (`sponsor_bot.py stop-all`). `--live` needs `SPONSOR_BOT_HOME` (the run lock).
 - Work starts with `setsid -f bash sponsor-run.sh >> sponsor-run.log 2>&1 < /dev/null` so ssh returns; a
   timed-out ssh/scp fails the pod (blocks logged `failed`, handed to the next pod).
 
-**Pods** (same recipe as `hazync-board-fleet/fleet.sh`): `podFindAndDeployOnDemand`, 1 GPU, RTX 4090
+**Pods** (same recipe as `hazync-board-fleet/fleet.sh`), on RunPod's REST API v2 (`api.runpod.io/v2`; GraphQL
+retires early 2027): `POST /v2/pods`, `cloud: SECURE`, 1 GPU, RTX 4090
 falling back to A40 (4090 community hosts often never expose public SSH), image
 `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`, port 22, 40 GB disk, named
 `hz-sponsor-<run>-<n>`. Boot: download the Latest release's worker, run script and CUDA host; check against
@@ -447,7 +456,7 @@ blocks already proven, without a bundle, claimed within the last hour, or held, 
 
 ### 5.6 Tests
 
-`coordinator/test_sponsor_bot.py` runs the real RunPod client against a fake GraphQL server, the real
+`coordinator/test_sponsor_bot.py` runs the real RunPod client against a fake RunPod REST v2 server, the real
 coordinator handler for the bot API, and a fake pod writing verified proofs into a real coordinator DB at
 3,600x time. It covers caps, GPU fallback, price ceiling, every termination path, queue order, `proving`/
 `proven`, trial refusals, cost log and report, no-bundle blocks, late-landing blocks and row correction,

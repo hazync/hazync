@@ -61,7 +61,7 @@ docker run --rm hazync-libzync-repro      # prints the ids and ELF hashes
 ```
 
 Compare with [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS) (mainnet `46666b6f…`; signet
-`01a80f17…`; headers zyncAPP `2db34e12…`) and with the ids built into the verifier (`IMAGES` in `swiftsync-verify/src/lib.rs`; a
+`01a80f17…`; headers zyncAPP `de54b94f…`, `2db34e12…` up to v0.26.0) and with the ids built into the verifier (`IMAGES` in `swiftsync-verify/src/lib.rs`; a
 unit test checks the two agree). The id depends on absolute build paths, so a laptop build differs by design: only
 the container's output counts. Also worth a look: what the container pins (base image digest, `provision-vps.sh`,
 `scripts/libzync-base.sh`, the patches) and what it does not.

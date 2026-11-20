@@ -96,7 +96,7 @@ jobs:
     outputs:
       pin: ${{ steps.pin.outputs.id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0 }
 
       - name: The pin this run must reproduce
@@ -120,7 +120,7 @@ jobs:
       # wrong or corrupted ELF fails there, which is the same gate a fresh build passes through.
       - name: Restore the guest ELF if this exact guest was built before
         id: elfcache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: hazync-guest.elf
           key: libzync-guest-elf-${{ hashFiles('prover/methods/guest/**', 'libzync/src/**', 'coinbase-smt/src/**', 'patches/**', 'coreshim/**', 'reproduce/LIBZYNC_IDS', 'reproduce/libzync.Dockerfile', 'scripts/libzync-base.sh') }}
@@ -190,7 +190,7 @@ jobs:
           echo "$WANT" > lz-pins/GUEST_ELF_SHA256
           echo "libzync=1 assumevalid=0 network=mainnet coinlog=1 trie=1 utxohash=1" > lz-pins/PROFILE
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hazync-guest-elf
           path: |
@@ -202,23 +202,26 @@ jobs:
   # ── ⛔ THE QUESTION: does a native Windows host build and PROVE? ────────────────────────────────
   prove:
     needs: [guest]
-    runs-on: windows-latest
+    # ⛔ PINNED since its host.exe SHIPS (v0.26.1, hazync-host-x86_64-windows-cpu.zip): windows-latest moves under a
+    # release. windows-2022, the image build-cuda is pinned to (review of a04038ce, L11). It ran on windows-latest until
+    # then (run 36933650193, `PROVED in 2875.1s`); the prove below is what proves it here too.
+    runs-on: windows-2022
     # ⚠ The CPU prove takes ~48 min and is ALREADY ANSWERED (run 36933650193). When iterating on
     # the CUDA build there is no reason to pay for it again, so it can be skipped deliberately.
     # ⛔ Default is to RUN it: a regression test you have to remember to switch on is not one.
     if: inputs.skip_cpu_prove != 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0 }
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: hazync-guest-elf
           # ⛔ Into the CRATE directory. A cargo build script's cwd is its own package root, not the
           # step's working-directory -- measured the hard way in run 36819000458.
           path: prover/methods
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
       - name: The guest arrived intact
         shell: bash
@@ -275,9 +278,20 @@ jobs:
           # cause. ⛔ RUST_MIN_STACK CANNOT FIX THE MAIN THREAD -- its stack is RESERVED IN THE PE
           # HEADER at link time, so it takes a linker flag and nothing else will do.
           # ⚠ A link flag is host-side and cannot move METHOD_ID; the id check downstream says so.
-          RUSTFLAGS: -C link-arg=/STACK:33554432
+          # ⛔⛔ +crt-static (review of a04038ce, M1): without it host.exe imports VCRUNTIME140.dll, VCRUNTIME140_1.dll and
+          # MSVCP140.dll (measured: the CPU artifact of run 42540389071), which a runner has and an ordinary office PC
+          # may not — exactly the machine the CPU prover exists for. Static CRT: Rust links libcmt, and the cc crate
+          # compiles the C++ kernels with /MT because it follows the crt-static target feature. Host-side only: the
+          # guest (and so the image id) is built in the container job and embedded as a file; the id check and the
+          # prove below run on this very binary. The import check after the build refuses anything non-system.
+          RUSTFLAGS: -C link-arg=/STACK:33554432 -C target-feature=+crt-static
         run: |
           set -o pipefail
+          # the toolchain is prover/rust-toolchain.toml's (the dtolnay step only installs rustup's default)
+          want=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          got=$(rustc -V | awk '{print $2}')
+          echo "rustc $got (prover/rust-toolchain.toml: $want)"
+          [ "$got" = "$want" ] || { echo "::error::rustc $got is not prover/rust-toolchain.toml's $want"; exit 1; }
           # ⛔ NO `--features cuda`. That is what keeps build_cuda_kernels() -- and every GCC-style
           # nvcc flag with it -- out of this build entirely.
           #
@@ -303,6 +317,10 @@ jobs:
               exit "$rc"
           fi
           tail -5 build.log
+
+      - name: ⛔ the CPU host.exe imports only DLLs every Windows has (no VC++ runtime, no CUDA)
+        shell: bash
+        run: python3 scripts/pe_imports.py prover/target/release/host.exe --cpu
 
       - name: ⛔ the binary must carry the CANONICAL id, or a proof from it is worthless
         shell: bash
@@ -387,7 +405,7 @@ jobs:
 
       # ⛔⛔ THE ARTIFACT IS THE DELIVERABLE. A Windows desktop with an NVIDIA GPU needs neither Rust
       # nor a CUDA toolkit to try this -- download and run.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: hazync-host-windows-x86_64-cpu
@@ -396,7 +414,7 @@ jobs:
 
       # ⛔ The build log, ALWAYS. Two runs were spent discovering that the diagnostic had scrolled
       # out of a tail window; the next failure should be readable without a third.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: windows-build-log
@@ -456,15 +474,15 @@ jobs:
     # `PROVED in 2875.1s — receipt VERIFIED`) and nothing about it touches nvcc.
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0 }
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: hazync-guest-elf
           path: prover/methods        # ⛔ the crate dir; a build script's cwd is its own package root
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
       - name: The guest arrived intact
         shell: bash
@@ -755,7 +773,7 @@ jobs:
       - name: Restore the cargo registry
         if: inputs.release_build != 'true'
         id: cache-reg
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -766,7 +784,7 @@ jobs:
       - name: Restore the CUDA build tree
         if: inputs.release_build != 'true'
         id: cache-target
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: prover/target
           # ⛔ THE GENERATION LIST IS IN THE KEY, AND IN THE PREFIX. sppark's build script does not
@@ -988,7 +1006,7 @@ jobs:
       - name: Bank the CUDA build tree even if a later step fails
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: prover/target
           key: cuda-target-${{ runner.os }}-a61-70-80-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
@@ -996,7 +1014,7 @@ jobs:
       - name: Bank the cargo registry even if a later step fails
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -1034,7 +1052,7 @@ jobs:
           # the import table — the exe does not load it at startup. The import that matters is
           # nvcuda.dll, the DRIVER api, which no redist supplies. See scripts/embedded_guest_sha.py.
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: hazync-host-windows-x86_64-cuda
@@ -1043,7 +1061,7 @@ jobs:
             prover/target/release/*.dll
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: windows-cuda-build-log
@@ -1080,7 +1098,43 @@ jobs:
               exit 1
           fi
 
-      - name: ⛔ the CUDA binary must hold code for every card generation it was built for
+      - name: ⛔ the atomics check must see THIS nvcc's output (live control, hazync#727)
+        shell: bash
+        working-directory: prover
+        env:
+          # Paths below are given in Windows form, so Git Bash must not rewrite any argument.
+          MSYS_NO_PATHCONV: '1'
+          MSYS2_ARG_CONV_EXCL: '*'
+        run: |
+          set -euo pipefail
+          # ⛔⛔ THE NEXT STEP'S "no system-scope atomics" IS ONLY AS GOOD AS ITS READER. The record
+          # it looks for (EIATTR_ATOM_SYS_INSTR_OFFSETS, 0x27) was measured on nvcc 12.9.86 and
+          # 12.6.85 on Linux; this job may use either, on Windows. So compile the same kernel at
+          # SYSTEM and at DEVICE scope with THIS job's nvcc and host compiler, and require the
+          # checker to REFUSE the first and PASS the second before its verdict on host.exe counts.
+          # A toolkit that renumbered the record would fail here, not wave host.exe through.
+          T="$RUNNER_TEMP\\atom-scope-live"
+          mkdir -p "$(cygpath -u "$T")"
+          SRC="$(cygpath -w "$(pwd)/../scripts/testdata/atom-scope/atom_scope.cu")"
+          X=""
+          [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ] || X="-allow-unsupported-compiler"
+          nvcc --version | tail -2
+          for sc in SYSTEM DEVICE; do
+              nvcc -fatbin $X -Wno-deprecated-gpu-targets -O2 -std=c++17 \
+                   -gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 \
+                   -DHZ_SCOPE_$sc -o "$T\\$sc.fatbin" "$SRC"
+          done
+          rc=0; out=$(python3 ../scripts/gpu_code_archs.py "$T\\SYSTEM.fatbin" --require 61) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" != 1 ] || ! printf '%s\n' "$out" | grep -q 'SYSTEM-SCOPE ATOMICS'; then
+              echo "⛔ the checker did NOT refuse a system-scope kernel built by this nvcc (exit $rc) -- it is blind here"
+              exit 1
+          fi
+          python3 ../scripts/gpu_code_archs.py "$T\\DEVICE.fatbin" --require 61 \
+              || { echo "⛔ the checker refused a DEVICE-scope kernel built by this nvcc"; exit 1; }
+          echo "✅ live control: this nvcc's system-scope kernel is refused and its device-scope one passes"
+
+      - name: ⛔ the CUDA binary must hold code for every card generation it was built for, and no system-scope atomics
         shell: bash
         working-directory: prover
         run: |
@@ -1089,6 +1143,12 @@ jobs:
           # exe held Pascal code only -- a cached library is not rebuilt when a flag changes. This
           # reads the fat binaries inside host.exe and fails unless EVERY finished GPU module
           # carries an image for each generation the build step said it was building.
+          #
+          # ⛔⛔ hazync#727: the same read also refuses SYSTEM-SCOPE ATOMICS. One `::cuda::atomic<T>`
+          # (default scope: system) in rv32im's lookup tables put EIATTR_ATOM_SYS_INSTR_OFFSETS in
+          # the sm_61 image, and the Windows driver then refused to LOAD the whole module on a GTX
+          # 1050 Ti (error 801, every kernel in it). sm_61 is in the --require list, and that image
+          # is the one that carries the marker -- sm_70+ images do not -- so it is checked here.
           [ -n "${GPU_ARCHS_BUILT:-}" ] || { echo "⛔ the build step recorded no generation list"; exit 1; }
           python3 ../scripts/gpu_code_archs.py target/release/host.exe --require "$GPU_ARCHS_BUILT"
 
@@ -1131,7 +1191,9 @@ jobs:
               echo "  only thing that would settle it. Treat a compile alone as the weaker claim."
           fi
           echo "⛔ THIS RUNNER HAS NO GPU, so nothing here shows that it PROVES. That needs hardware."
-          echo "⚠ Supported cards: compute capability 7.0+ (RTX 20-series and newer); Pascal is refused by name (#631)."
+          echo "⚠ Supported cards: compute capability 7.0+ (RTX 20-series and newer) by default. Pascal (6.x)"
+          echo "  is used only when HAZYNC_SPPARK_MIN_MAJOR lowers sppark's floor -- the Windows app's opt-in --"
+          echo "  measured once: a GTX 1050 Ti proved mainnet block 1 with the #727 fixes."
 
       # ⛔⛔ host.exe ALONE WOULD NOT START ON THE TEST MACHINE. The NVIDIA driver supplies
       # `nvcuda.dll` (the driver API) but NOT `cudart64_*.dll` (the CUDA runtime) — that ships with

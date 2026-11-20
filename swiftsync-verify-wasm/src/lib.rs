@@ -46,8 +46,11 @@ struct Frame<'a> {
 
 impl<'a> Frame<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let out = self.b.get(self.i..self.i + n).ok_or("input frame truncated")?;
-        self.i += n;
+        // checked: on wasm32 a crafted chunk length near u32::MAX would wrap `i + n` (the wrapped range was refused by
+        // `get` only by accident, and a debug build panicked); review of #724, finding 7
+        let end = self.i.checked_add(n).ok_or("input frame truncated")?;
+        let out = self.b.get(self.i..end).ok_or("input frame truncated")?;
+        self.i = end;
         Ok(out)
     }
     fn chunk(&mut self) -> Result<&'a [u8], String> {
@@ -190,6 +193,7 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
         }
         let r = run_base(base, lineage)?;
         let v: serde_json::Value = serde_json::from_slice(facts).map_err(|e| format!("facts JSON: {e}"))?;
+        swiftsync_verify::check_facts_wrapper(&v)?;
         let coins: Vec<swiftsync_verify::CoinFact> = serde_json::from_value(v.get("coins").cloned().unwrap_or_else(|| serde_json::json!([])))
             .map_err(|e| format!("facts JSON coins: {e}"))?;
         let journeys: Vec<swiftsync_verify::CoinJourney> = serde_json::from_value(v.get("journeys").cloned().unwrap_or_else(|| serde_json::json!([])))
@@ -272,50 +276,19 @@ pub extern "C" fn image_id(network: u32) -> *const u8 {
     .unwrap_or_default())
 }
 
-/// The header-chain zyncAPP (ROADMAP K1, N3), by the same `swiftsync_verify::headers::verify_headers` the CLI's
-/// `swiftsync-verify headers` uses. Input frame (little-endian): `[u64 now][u32 count]` then count times
-/// `[u32 n][receipt]` (the first from genesis, each next one starting where the one before ended), then
-/// `[u32 n][image id hex, n = 0 for the built-in id][u32 n]["height:hash" from a source the page trusts, n = 0 for none]`.
-#[no_mangle]
-pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
-    let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let parsed = (|| -> Result<(u64, Vec<&[u8]>, String, String), String> {
-        let mut f = Frame { b: input, i: 0 };
-        let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
-        let n = u32::from_le_bytes(f.take(4)?.try_into().unwrap()) as usize;
-        if n == 0 || n > 4096 { return Err(format!("{n} receipts: give 1 to 4096")); }
-        let mut rs = Vec::with_capacity(n);
-        for _ in 0..n { rs.push(f.chunk()?); }
-        let image = std::str::from_utf8(f.chunk()?).map_err(|_| "image id: not UTF-8")?.to_string();
-        let expect = std::str::from_utf8(f.chunk()?).map_err(|_| "expect: not UTF-8")?.to_string();
-        if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
-        Ok((now, rs, image, expect))
-    })();
-    let (now, rs, image, expect) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
-    let image = if image.is_empty() { swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string() } else { image };
-    let exp = if expect.is_empty() { None } else {
-        match expect.split_once(':').and_then(|(h, x)| h.parse::<i64>().ok().map(|h| (h, x))) {
-            Some(e) => Some(e),
-            None => return fail(format!("expect {expect:?}: give height:hash")),
-        }
-    };
-    let rep = swiftsync_verify::headers::verify_headers(&rs, &image, now, exp);
-    let ok = rep.verdict != Verdict::Fail;
-    let s = rep.state.as_ref().filter(|_| ok);
-    ret(serde_json::json!({
-        "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
-        "image": image,
-        "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
-        "height": s.map(|s| s.height),
-        "hash": s.map(|s| s.hash_hex()),
-        "chainwork": s.map(|s| s.work_hex()),
-        "max_time": s.map(|s| s.max_time),
-        "identity_checked": ok && exp.is_some(),
-    }).to_string())
-}
+#[cfg(test)]
+mod frame_tests {
+    use super::Frame;
 
-/// The built-in header-chain image id, for the page to display.
-#[no_mangle]
-pub extern "C" fn headers_image_id() -> *const u8 {
-    ret(swiftsync_verify::headers::HEADERS_IMAGE_ID.to_string())
+    #[test]
+    fn take_refuses_a_length_that_would_wrap() {
+        let b = [0u8; 8];
+        let mut f = Frame { b: &b, i: usize::MAX - 2 };
+        assert!(f.take(4).is_err());
+        let mut f = Frame { b: &b, i: 4 };
+        assert!(f.take(usize::MAX).is_err());
+        let mut f = Frame { b: &b, i: 0 };
+        assert_eq!(f.take(8).unwrap().len(), 8);
+        assert!(f.take(1).is_err());
+    }
 }

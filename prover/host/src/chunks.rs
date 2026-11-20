@@ -827,8 +827,8 @@ pub(crate) fn read_chunk_receipts(nchunks: usize) -> Vec<risc0_zkvm::Receipt> {
         // missing chunk still panics by name rather than aggregating a short set.
         let hzk = format!("{dir}/chunk_{i}.hzk");
         let f = if std::path::Path::new(&hzk).exists() { hzk } else { format!("{dir}/chunk_{i}.bin") };
-        let r: risc0_zkvm::Receipt =
-            bincode::deserialize(&std::fs::read(&f).unwrap_or_else(|e| panic!("chunk receipt {f}: {e}"))).unwrap();
+        let r = crate::verify::decode_chunk_receipt(&std::fs::read(&f).unwrap_or_else(|e| panic!("chunk receipt {f}: {e}")))
+            .unwrap_or_else(|e| panic!("chunk receipt {f}: {e}"));
         r.verify(METHOD_ID).unwrap_or_else(|e| panic!("chunk receipt {f} does not verify: {e}"));
         receipts.push(r);
     }

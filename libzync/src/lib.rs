@@ -12,10 +12,23 @@ pub mod coinlog_forest;
 pub mod facts;
 pub mod history;
 pub mod undo;
+/// The SwiftSync hints zyncAPP's derivation (docs/libzync/HINTS_ZAPP.md): behind the `hints` feature, so the core
+/// verifier, which never enables it, does not build it (its WASM is byte-identical without the zAPP). The hints guest
+/// #[path]-includes the file itself.
+#[cfg(feature = "hints")]
+pub mod hints;
+// the Utreexo roots zyncAPP's derivation: its host and its checker only (feature `utreexo`), never the core verifier
+// (compiled in, it moved the core .wasm: 996f1ed6 to db8310b3, 16.11.2026)
+#[cfg(feature = "utreexo")]
+pub mod utreexo_roots;
 pub mod ttree;
 pub mod trie_model;
 pub mod trie_store;
 pub mod trie_fact;
+/// The coin-liveness zyncAPP's proof format (docs/libzync/LIVENESS_ZAPP.md): behind the `liveness` feature, so the core
+/// verifier, which never enables it, does not build it (its WASM is byte-identical without the zAPP).
+#[cfg(feature = "liveness")]
+pub mod liveness;
 #[cfg(feature = "std")]
 pub mod host;
 

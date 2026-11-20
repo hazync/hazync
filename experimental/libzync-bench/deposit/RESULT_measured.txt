@@ -1,0 +1,14 @@
+# Deposit zyncAPP measurements, 15.11.2026. hazync-coord: x86, 16 cores, 62 GB, SHARED (load average 11-24 from other
+# jobs during these runs, so times are upper bounds for an idle box). r0vm 3.1.0 on the CPU (no GPU), Docker prover
+# risczero/risc0-groth16-prover:v2026-10-20.1. Tools: tools/groth16-wrap, tools/compose-host (deposit-compose).
+# Inputs: swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt (core 0..200), headers/headers_0_tip.rcpt (0..975,278),
+# a bundle from zync-deposit for block 170's Satoshi-to-Hal transaction (core + headers, binding path 19 hashes).
+GROTH16_WRAP in 94.4 s: succinct 227362 bytes -> Groth16 receipt 4633 bytes (seal 256 bytes, journal 2068 bytes); verified in 0.005 s
+GROTH16_WRAP in 97.0 s: succinct 227474 bytes -> Groth16 receipt 4745 bytes (seal 256 bytes, journal 2124 bytes); verified in 0.006 s
+COMPOSE_EXEC image 184e81af374f1a46545685a34cebdcbc1c1f0eec88f159889c6770ac67f4bb3d: 816427 cycles (user 816427), 1 segment(s), journal 1316 bytes, executed in 0.13 s
+COMPOSE_PROVE succinct receipt 225858 bytes (journal 1316 bytes) in 293.4 s; verifies against 184e81af374f1a46545685a34cebdcbc1c1f0eec88f159889c6770ac67f4bb3d
+# the composed receipt wrapped (compose_block170_184e81af_groth16.rcpt):
+GROTH16_WRAP in 88.5 s: succinct 225858 bytes -> Groth16 receipt 3129 bytes (seal 256 bytes, journal 1316 bytes); verified in 0.009 s
+# negative: the same bundle with branch[0] replaced, executed:
+execute: Guest panicked: the transaction is in the block
+# zync-deposit --bitcoin-cli against hazync-coord's node (block 170): same 456,550-byte bundle, verifies DEMO.

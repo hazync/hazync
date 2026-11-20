@@ -51,11 +51,10 @@ pub(crate) fn hex_id(id: &[u32; 8]) -> String { hex(&id.iter().flat_map(|w| w.to
 /// proving box, not a laptop. Verify the result with `swiftsync-verify`, which accepts either receipt kind.
 pub(crate) fn libzync_snark_wrap_cmd(bin: &str, out: &str) {
     use std::time::Instant;
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(bin).unwrap_or_else(|e| panic!("{bin}: {e}")))
-        .unwrap_or_else(|e| panic!("{bin}: not a receipt: {e}"));
+    let r = crate::verify::read_receipt(bin).unwrap_or_else(|e| panic!("{e}"));
     assert!(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "refusing to wrap a dev-mode FakeReceipt");
     r.verify(METHOD_ID).expect("the receipt does not verify against this image");
-    let cs: ChainState = r.journal.decode().expect("the journal is not a ChainState");
+    let cs: ChainState = crate::verify::decode_journal(&r.journal).expect("the journal is not a ChainState");
     assert!(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "not a ChainState committed by this image");
     let before = bincode::serialize(&r).map(|v| v.len()).unwrap_or(0);
     println!("=== libzync Groth16 wrap: height {} (STARK -> Groth16), input {before} bytes ===", cs.height);
@@ -159,8 +158,11 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         Some(3) => {} // a FakeReceipt: decoded, then refused below with its own message
         k => { println!("  [FAIL] the receipt file is a single succinct or Groth16 proof (kind tag {k:?})"); println!("LIBZYNC_VERIFY_FAIL"); std::process::exit(1); }
     }
-    let r: risc0_zkvm::Receipt = bincode::deserialize(&raw)
-        .unwrap_or_else(|e| panic!("{receipt:?}: not a receipt: {e}"));
+    let r = match crate::verify::decode_receipt(&raw) { Ok(r) => r, Err(e) => {
+        println!("  [FAIL] the receipt file decodes as one receipt: {}", e.escape_debug());
+        println!("LIBZYNC_VERIFY_FAIL: {}", e.escape_debug());
+        std::process::exit(1)
+    } };
     let mut fails = 0;
     let mut check = |ok: bool, what: &str| {
         println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
@@ -176,7 +178,7 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
     check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {}, {})", hex_id(&METHOD_ID),
         "libzync", methods::NETWORK,
         if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
-    let cs: ChainState = match r.journal.decode() { Ok(c) => c, Err(e) => {
+    let cs: ChainState = match crate::verify::decode_journal(&r.journal) { Ok(c) => c, Err(e) => {
         println!("  [FAIL] journal is not a ChainState: {}", format!("{e}").escape_debug());
         println!("LIBZYNC_VERIFY_FAIL: the journal does not decode as a ChainState");
         std::process::exit(1)
@@ -844,13 +846,13 @@ pub(crate) fn journal_sha(r: &risc0_zkvm::Receipt) -> String {
 pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
     use risc0_zkvm::Receipt;
     let rd = |p: &str| -> Receipt {
-        let r: Receipt = bincode::deserialize(&std::fs::read(p).unwrap_or_else(|e| panic!("{p}: {e}")))
-            .unwrap_or_else(|e| panic!("{p}: {e}"));
+        let r: Receipt = crate::verify::read_receipt(p).unwrap_or_else(|e| panic!("{e}"));
         r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{p} does not verify against this image: {e}"));
         r
     };
     let (l, r) = (rd(left), rd(right));
-    let (ls, rs): (ChainState, ChainState) = (l.journal.decode().expect("left ChainState"), r.journal.decode().expect("right ChainState"));
+    let (ls, rs): (ChainState, ChainState) = (crate::verify::decode_journal(&l.journal).expect("left ChainState"),
+                                             crate::verify::decode_journal(&r.journal).expect("right ChainState"));
     let mut b = ExecutorEnv::builder();
     b.segment_limit_po2(seg_po2());
     b.add_assumption(l.clone());
@@ -900,10 +902,10 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     // anchor argument is unused (pass the word `handover`): the chain state comes from the verified receipt.
     let handover: Option<(Receipt, ChainState)> = std::env::var("HAZYNC_HANDOVER_RECEIPT").ok().map(|p| {
         let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
-        let r: Receipt = bincode::deserialize(&std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap_or_else(|e| panic!("{p}: {e}"));
+        let r: Receipt = crate::verify::read_receipt(&p).unwrap_or_else(|e| panic!("{e}"));
         // the same RISC Zero: Receipt::verify; an older one: its vendored circuit (src/xver), as the guest will
         crate::verify_pred_receipt(&r, last).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
-        let st: ChainState = r.journal.decode().expect("ChainState");
+        let st: ChainState = crate::verify::decode_journal(&r.journal).expect("ChainState");
         let tamper = std::env::var("HAZYNC_TEST_HANDOVER").ok();
         if tamper.is_some() { assert!(dev_mode_env(), "HAZYNC_TEST_HANDOVER is a dev-mode test hook"); }
         else {
@@ -1045,9 +1047,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         if let Some(k) = (lo..=hi).rev().find(done) {
             assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
             let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
-            let r: Receipt = bincode::deserialize(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
+            let r: Receipt = crate::verify::decode_receipt(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
             r.verify(METHOD_ID).unwrap_or_else(|e| panic!("block_{k}.rcpt does not verify against this image: {e}"));
-            let st: ChainState = r.journal.decode().expect("ChainState");
+            let st: ChainState = crate::verify::decode_journal(&r.journal).expect("ChainState");
             assert!(st.height == k && st.kind == KIND_CHAIN && st.self_id == METHOD_ID, "block_{k}.rcpt is not this chain's state at {k}");
             // The same chain as this run's anchor: an output directory reused with another anchor must not be resumed.
             // From an anchor, the chain's anchor_id is the anchor's digest; after a handover, the predecessor's anchor_id.
@@ -1426,17 +1428,29 @@ fn cl_record_span(body: &[u8]) -> (u64, u64) {
     (rd(0), rd(0) + rd(16 + 40 * k))
 }
 
-/// Disk mode: append this block's undo record to pending.bin and sync it, BEFORE the block changes the store.
-fn cl_journal_append(d: &std::path::Path, height: u32, store_len: u64, spends: &[(u64, [u8; 32])], appends: &[[u8; 32]]) {
-    use std::io::Write as _;
-    let mut b = Vec::new();
-    b.extend_from_slice(CL_PEND_MAGIC);
-    b.extend_from_slice(&(height as u64).to_le_bytes());
+/// A block's undo body, as cl_undo_to reads it: the leaf count before the block, the spends' (position, unspent leaf),
+/// the appends. pending.bin's records carry it (cl_journal_append), and so do prep's reorg undo records (reorg.rs).
+pub(crate) fn cl_undo_body(store_len: u64, spends: &[(u64, [u8; 32])], appends: &[[u8; 32]]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(24 + 40 * spends.len() + 32 * appends.len());
     b.extend_from_slice(&store_len.to_le_bytes());
     b.extend_from_slice(&(spends.len() as u64).to_le_bytes());
     for (p, l) in spends { b.extend_from_slice(&p.to_le_bytes()); b.extend_from_slice(l); }
     b.extend_from_slice(&(appends.len() as u64).to_le_bytes());
     for l in appends { b.extend_from_slice(l); }
+    b
+}
+
+/// Disk mode: append this block's undo record to pending.bin and sync it, BEFORE the block changes the store.
+fn cl_journal_append(d: &std::path::Path, height: u32, store_len: u64, spends: &[(u64, [u8; 32])], appends: &[[u8; 32]]) {
+    cl_journal_append_body(d, height, &cl_undo_body(store_len, spends, appends));
+}
+
+fn cl_journal_append_body(d: &std::path::Path, height: u32, body: &[u8]) {
+    use std::io::Write as _;
+    let mut b = Vec::with_capacity(16 + body.len() + 32);
+    b.extend_from_slice(CL_PEND_MAGIC);
+    b.extend_from_slice(&(height as u64).to_le_bytes());
+    b.extend_from_slice(body);
     { use sha2::Digest as _; let sum = sha2::Sha256::digest(&b); b.extend_from_slice(&sum); }
     let p = d.join("pending.bin");
     std::fs::OpenOptions::new().create(true).append(true).open(&p).and_then(|mut f| { f.write_all(&b)?; f.sync_data() })
@@ -1474,6 +1488,58 @@ fn cl_undo_to(store: &mut libzync::coinlog_forest::NodeStore<libzync::host::AnyN
             pos.insert(l, p);
         }
     }
+}
+
+/// REORG.md §6 (P3): the on-disk coin log undone IN PLACE to the state `st` (the fork F), from the journal pending.bin
+/// (blocks after the last save point, if prep stopped between save points) and then `bodies`, the undo records' coin
+/// log bodies of the blocks F+1..A newest first (A = the last save point). Every step is cl_undo_to with F's leaf
+/// count, which is idempotent and independent of how much of any block, or of an earlier interrupted rewind, reached
+/// the disk: a rewind that died part-way is simply run again. Checked against `st` at the end; pending.bin is left
+/// for the save point at F to commit (cl_journal_commit).
+pub(crate) fn cl_rewind(fork: u32, bodies: &[Vec<u8>], st: &ChainState) {
+    let d = cl_dir().expect("a rewind needs the on-disk coin log (HAZYNC_COINLOG_DIR)");
+    let mut store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(
+        libzync::host::DiskNodes::open(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()))));
+    let mut pos = cl_index();
+    let n = st.utxo_leaves;
+    let pend = d.join("pending.bin");
+    // only the journal's blocks ABOVE the fork, as cl_load takes only those above its state (review 16.11, H1): a crash
+    // between the trie's flush at a save point and the journal's commit leaves the records of the blocks the save point
+    // already holds, and undoing those to F's leaf count would unspend coins F's state spent. A record without its
+    // height (the version-1 format) cannot be placed: refused.
+    let journal: Vec<Vec<u8>> = match std::fs::read(&pend) {
+        Ok(u) => cl_journal_records(&u).unwrap_or_else(|e| panic!("{}: {e}: the journal cannot be trusted; nothing undone", pend.display()))
+                     .into_iter().filter_map(|(h, b)| match h {
+                         Some(h) => (h > fork as u64).then(|| b.to_vec()),
+                         None => panic!("{}: a journal record without its height (version 1): a rewind cannot place it", pend.display()),
+                     }).collect(),
+        Err(_) => Vec::new(),
+    };
+    for (i, b) in journal.iter().rev().chain(bodies.iter()).enumerate() {
+        cl_undo_to(&mut store, &mut pos, b, n);
+        // test hook: die part-way through the undo, its first block's changes synced (rewind_test.sh case G)
+        if i == 0 && std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok("rewind-mid-coinlog") {
+            if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { let _ = dn.sync(); }
+            if let libzync::host::AnyIndex::Disk(ix) = &pos { let _ = ix.sync(); }
+            std::process::exit(9);
+        }
+    }
+    if let libzync::host::AnyNodes::Disk(dn) = &store.nodes { dn.sync().unwrap_or_else(|e| panic!("coin log store sync: {e}")); }
+    if let libzync::host::AnyIndex::Disk(ix) = &pos { ix.sync().unwrap_or_else(|e| panic!("index sync: {e}")); }
+    assert!(store.len() == n && normalize_host(store.roots()) == normalize_host(st.utxo_roots.clone()),
+            "rewind: the coin log undone to {} leaves does not have the fork state's roots (records not of this store?)", n);
+    eprintln!("  coin log store: rewound to {n} leaves ({} journaled and {} recorded block(s) undone)", journal.len(), bodies.len());
+    *CL.lock().unwrap() = Some(ClHost { store, pos });
+}
+
+/// The coin log's journal (pending.bin), checked as a rewind will read it: every record intact and with its height.
+/// Returns the number of records. For the rewind to refuse BEFORE it changes anything (review 16.11).
+pub(crate) fn cl_journal_check() -> Result<usize, String> {
+    let Some(d) = cl_dir() else { return Ok(0) };
+    let Ok(u) = std::fs::read(d.join("pending.bin")) else { return Ok(0) };
+    let r = cl_journal_records(&u)?;
+    if r.iter().any(|(h, _)| h.is_none()) { return Err("a record without its height (version 1): a rewind cannot place it".into()); }
+    Ok(r.len())
 }
 
 /// The position index: on disk in HAZYNC_COINLOG_DIR (index.bin), else in memory.
@@ -1711,14 +1777,17 @@ pub(crate) fn cl_commit(spends: &[ClSpend], appends: &[[u8; 32]], st: &ChainStat
 /// count instead of checking them against a committed state. In memory (a disk store's undo journal is cl_commit's).
 /// Also returns the block's flips (position, tx, vin) in spend order, as cl_commit does: a history.bin record
 /// (HAZYNC_PREP_HISTORY) is the same bytes whichever of prep or a proving run wrote it.
-pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) -> (Vec<Option<[u8; 32]>>, u64, Vec<(u64, u32, u32)>) {
+/// Also returns the block's undo body (cl_undo_body), the same bytes its pending.bin record carries, for prep's reorg
+/// undo record.
+pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) -> (Vec<Option<[u8; 32]>>, u64, Vec<(u64, u32, u32)>, Vec<u8>) {
     let mut g = CL.lock().unwrap();
     let h = g.as_mut().expect("coin log not initialised");
+    let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
+    let body = cl_undo_body(h.store.len(), &sp, appends);
     // Disk mode: journal the block first, as cl_commit (prep advances the store in place and saves only at its save
     // points, so a crash mid-range is undone back to the last one).
     if let (Some(d), libzync::host::AnyNodes::Disk(_)) = (cl_dir(), &h.store.nodes) {
-        let sp: Vec<(u64, [u8; 32])> = spends.iter().map(|(l, _, _)| (h.pos.get(l).unwrap_or(u64::MAX), *l)).collect();
-        cl_journal_append(&d, height, h.store.len(), &sp, appends);
+        cl_journal_append_body(&d, height, &body);
     }
     let mut flips = Vec::with_capacity(spends.len());
     for (l, t, v) in spends {
@@ -1730,7 +1799,7 @@ pub(crate) fn cl_apply(spends: &[ClSpend], appends: &[[u8; 32]], height: u32) ->
         h.pos.insert(*l, h.store.len());
         h.store.push(*l);
     }
-    (h.store.roots(), h.store.len(), flips)
+    (h.store.roots(), h.store.len(), flips, body)
 }
 
 /// The guest's `undo: block <h> inputs <n> hash <hex>` line (agg_lite.rs) for block `h`: (inputs, hash).
@@ -1914,6 +1983,56 @@ mod journal_tests {
         let mut old = u.clone();
         old[..8].copy_from_slice(b"LZPEND02");
         assert!(cl_journal_records(&old).is_err());
+        // the record body is cl_undo_body's bytes: the reorg undo records (reorg.rs) carry the same ones
+        assert_eq!(r[0].1, &cl_undo_body(10, &[(3, [7; 32])], &[[1; 32], [2; 32]])[..]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// REORG.md §6 (P1): the coin log body an undo record carries undoes its blocks on a DISK store, newest first, back
+    /// to any earlier block, after a save point (no pending.bin involved), as P3's rewind will use it.
+    #[test]
+    fn undo_record_bodies_undo_blocks_on_a_disk_store() {
+        use libzync::coinlog::{spender, spent};
+        let d = std::env::temp_dir().join(format!("lz-undo-body-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut store = libzync::coinlog_forest::NodeStore::with_nodes(libzync::host::AnyNodes::Disk(libzync::host::DiskNodes::open(&d).unwrap()));
+        let mut pos = libzync::host::AnyIndex::Mem(std::collections::HashMap::new());
+        let leaf = |i: u32| -> [u8; 32] { let mut l = [0u8; 32]; l[..4].copy_from_slice(&i.to_le_bytes()); l[31] = 1; l };
+        let mut next = 0u32;
+        let mut states = Vec::new();   // (leaf count, roots) after each block
+        let mut bodies = Vec::new();   // each block's undo body, through an undo record's encode/decode
+        let mut x = 7u64;
+        let mut rnd = || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        for blk in 0..40u32 {
+            // spend up to 3 live coins, append up to 4
+            let live: Vec<([u8; 32], u64)> = (0..store.len()).filter_map(|p| { let l = store.leaf(p); (pos.get(&l) == Some(p)).then_some((l, p)) }).collect();
+            let mut sp: Vec<(u64, [u8; 32])> = Vec::new();
+            for _ in 0..(rnd() % 4) {
+                if live.is_empty() { break; }
+                let (l, p) = live[(rnd() % live.len() as u64) as usize];
+                if !sp.iter().any(|s| s.0 == p) { sp.push((p, l)); }
+            }
+            let ap: Vec<[u8; 32]> = (0..(rnd() % 5)).map(|_| { next += 1; leaf(next) }).collect();
+            let body = cl_undo_body(store.len(), &sp, &ap);
+            let rec = crate::reorg::UndoRecord { height: blk + 1, hash: [0; 32], prev: [0; 32], cl: body, trie_replaced: false,
+                                                 trie_marks: vec![], trie_inserts: vec![], smt_prior: vec![] };
+            bodies.push(crate::reorg::UndoRecord::decode(&rec.encode()).unwrap().cl);
+            for (p, l) in &sp {
+                pos.remove(l);
+                store.set(*p, spent(l, &spender(blk + 1, 1, 0)));
+            }
+            for l in &ap { pos.insert(*l, store.len()); store.push(*l); }
+            states.push((store.len(), store.roots()));
+        }
+        // undo 40..=26 back to the state after block 25, then 25..=11 back to the one after block 10
+        for (from, to) in [(40usize, 25usize), (25, 10)] {
+            let n = states[to - 1].0;
+            for b in bodies[to..from].iter().rev() { cl_undo_to(&mut store, &mut pos, b, n); }
+            assert_eq!((store.len(), store.roots()), states[to - 1].clone(), "undone back to block {to}");
+            // the index is the state's too: every live coin found at its position
+            for p in 0..store.len() { let l = store.leaf(p); if let Some(q) = pos.get(&l) { assert_eq!(q, p); } }
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 }

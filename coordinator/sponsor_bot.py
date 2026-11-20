@@ -34,6 +34,7 @@ it stalls, when its boot fails and when there is nothing left for it. See docs/C
 import argparse
 import datetime
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -49,6 +50,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 def bot_db_path():
@@ -63,7 +65,6 @@ def bot_db_path():
 # and is decided there: /api/bot/queue lists exactly those, so an `underpaid` row, or a `paid` row below its
 # minimum, is never proven on the sponsorship budget.
 POD_PREFIX = "hz-sponsor-"
-GRAPHQL_URL = "https://api.runpod.io/graphql"
 # RunPod's API sits behind Cloudflare, which refuses Python's default "Python-urllib/3.x" User-Agent with
 # HTTP 403 "error code: 1010" (measured 2026-09-14). Without this header the bot could not deploy, list or
 # terminate a pod, and every refusal was logged as "no GPU capacity".
@@ -101,7 +102,172 @@ _CONTROL_IGNORE_BUNDLES = False
 # ---------- the coordinator's bot API ----------
 
 class CoordError(RuntimeError):
-    """The coordinator's bot API could not be reached, or refused a request."""
+    """The coordinator's bot API could not be reached, or refused a request.
+
+    `transient` is True only for "no answer" (timeout, refused connection) and 5xx: a busy or restarting
+    coordinator. A 4xx (key refused, bad request) or an unreadable body is an ANSWER and is never transient."""
+
+    def __init__(self, msg, transient=False):
+        super().__init__(msg)
+        self.transient = transient
+
+
+class TransientError(SystemExit):
+    """A read-only step BEFORE anything was rented or started failed on a transient cause (timeout, refused
+    connection, 5xx). main() ends such a run as "skipped, will retry" (TRANSIENT_EXIT) instead of latching, until
+    the streak is long enough to mean "down", not "busy" (see transient_exit).
+
+    ⛔ A SystemExit subclass on purpose: anything that does not handle it explicitly still exits 1 and LATCHES,
+    which is the safe default. Raise it ONLY where provably nothing has been rented, started or spent."""
+
+
+# 📏 11-16 05:46: the coordinator answered /api/meta late four times in ~30 s while the box was under memory
+# pressure, and that one run latched the bot off ("nothing was started and nothing was spent"); 10-12 a GitHub 504
+# did the same. A transient pre-rental failure now exits TRANSIENT_EXIT (SuccessExitStatus= in the unit: no latch,
+# no page). The latch still fires once the streak is TRANSIENT_LATCH_RUNS runs in a row AND spans at least
+# TRANSIENT_LATCH_S, so a coordinator or GitHub that is really down still pages within about half an hour.
+TRANSIENT_EXIT = 75            # EX_TEMPFAIL
+TRANSIENT_LATCH_RUNS = 6
+TRANSIENT_LATCH_S = 25 * 60     # 6 runs on a 5-min timer span 5 gaps, ~26-28 min measured from first to last
+TRANSIENT_STATE = "transient.json"
+
+
+TRANSIENT_LATCH_HARD = 12      # this many in a row latch whatever the clock says
+TRANSIENT_STALE_S = 15 * 60    # a streak whose last failure is older than this is over (a run in between was clean,
+                               # or a human cleared .failed after a latch): start counting afresh
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def transient_exit(msg, home, now=None, state=TRANSIENT_STATE):
+    """Record one transient pre-rental failure and return the exit code: TRANSIENT_EXIT (skip, retry next timer)
+    or, once the streak is long enough, raise SystemExit(msg) so the run fails and the unit latches + alerts.
+
+    The streak lives in $SPONSOR_BOT_HOME/transient.json ({first, runs, last, error}); it is removed by a clean run
+    and when it latches, so after a human clears .failed the next blip starts a NEW streak instead of re-latching.
+    Latches at TRANSIENT_LATCH_RUNS runs spanning TRANSIENT_LATCH_S, or at once if the clock went backwards inside
+    the streak, or at TRANSIENT_LATCH_HARD runs regardless.
+    ⛔ Fails CLOSED: no state directory, or a state file that cannot be written, latches as before."""
+    now = time.time() if now is None else now
+    if not home or not os.path.isdir(home):
+        raise SystemExit(f"{msg} (no SPONSOR_BOT_HOME to count transient failures in, so this latches)")
+    path = os.path.join(home, state)
+    try:
+        with open(path) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        st = {}
+    if not isinstance(st, dict):
+        st = {}
+    first, last, runs = st.get("first"), st.get("last"), st.get("runs")
+    if not (_num(first) and _num(last) and isinstance(runs, int) and not isinstance(runs, bool) and runs >= 0) \
+            or (now >= last and now - last > TRANSIENT_STALE_S):
+        first, last, runs = now, now, 0            # no streak, a malformed one, or a stale one: start afresh
+    runs += 1
+    span = now - first
+    backwards = now < last or span < 0
+    if runs >= TRANSIENT_LATCH_HARD or (runs >= TRANSIENT_LATCH_RUNS and (span >= TRANSIENT_LATCH_S or backwards)):
+        transient_clear(home, state)
+        raise SystemExit(f"{msg} — {runs} transient failures in a row over {span / 60:.0f} min"
+                         f"{' (the clock went backwards)' if backwards else ''}: this is down, not busy. Latching. "
+                         f"Nothing was started and nothing was spent")
+    try:
+        tmp = path + ".tmp"
+        _write_private(tmp, json.dumps({"first": first, "runs": runs, "last": now, "error": str(msg)[:300]}))
+        os.replace(tmp, path)
+    except OSError as e:
+        raise SystemExit(f"{msg} (could not record the transient streak: {e}, so this latches)")
+    print(f"{msg}. Transient ({runs} in a row over {span / 60:.0f} min; latches at {TRANSIENT_LATCH_RUNS} runs over "
+          f"{TRANSIENT_LATCH_S // 60} min): skipped, the next timer run retries.", flush=True)
+    return TRANSIENT_EXIT
+
+
+def acquire_run_lock(home):
+    """An exclusive lock on `home`/run.lock for the life of this process. None without a home (nothing to share),
+    False when another run holds it, else the open file (keep it referenced).
+    ⛔ Fails CLOSED: a lock that cannot be opened stops the run (SystemExit, so the unit latches and pages). The start
+    sweep releases every unconfirmed hz-sponsor-* pod it finds, which is only safe with exactly one bot per
+    SPONSOR_BOT_HOME -- and one SPONSOR_BOT_HOME per RunPod key (two homes on one key would sweep each other)."""
+    if not home:
+        return None
+    import fcntl
+    try:
+        f = open(os.path.join(home, "run.lock"), "a+")
+    except OSError as e:
+        raise SystemExit(f"sponsor_bot: cannot open the run lock in {home} ({e}): refusing to run unlocked")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return False
+    return f
+
+
+def transient_clear(home, state=TRANSIENT_STATE):
+    """A run got past every pre-rental check (or the streak latched): the streak is over."""
+    if home:
+        try:
+            os.remove(os.path.join(home, state))
+        except OSError:
+            pass
+
+
+# ⛔ ONE DROUGHT RULE. A single miss, refusal or quota answer never latches on its own -- but a bot that has tried to
+# deploy for CAPACITY_LATCH_S and landed NOTHING, whatever the reason (no capacity, a 429, a 5xx, every pod over the
+# price ceiling, or a request RunPod cannot place -- which also answers 400, for ever), stops with "runpod" (exit 5):
+# the unit latches and OnFailure= pages, the one alert path this unprivileged bot has. Six hours: an ordinary
+# afternoon of "Low" stock never stops it; a broken request costs a paid sponsorship one working day, not a week.
+# Judgement, not measurement: no drought has been timed end to end yet. The streak lives in
+# SPONSOR_BOT_HOME/capacity.json, so it spans timer runs and one long run alike. A pod that LANDS (live, at a known
+# price within the ceiling), any landed pod still working (a partial grant is not a drought), CAPACITY_STALE_S
+# without an attempt (nothing was waiting), or the latch itself ends it. Only genuine refusals (401/402/403/422,
+# Cloudflare) count toward RUNPOD_REFUSALS_MAX; no answer and 5xx count toward the drought only.
+CAPACITY_LATCH_S = 6 * 3600
+CAPACITY_STALE_S = 2 * 3600
+CAPACITY_STATE = "capacity.json"
+
+
+def capacity_note(home, now, mem=None):
+    """Record one deploy attempt that landed nothing. True once the streak is CAPACITY_LATCH_S long. State in
+    `home`/capacity.json (`mem` without a home). A missing, malformed or unwritable state file starts afresh and never
+    latches by itself."""
+    path = os.path.join(home, CAPACITY_STATE) if home else None
+    st = {}
+    try:
+        if path:
+            with open(path) as f:
+                st = json.load(f)
+        elif mem is not None:
+            st = dict(mem)
+        first, last = float(st["first"]), float(st["last"])
+        if not (first <= last <= now and now - last <= CAPACITY_STALE_S):
+            raise ValueError("stale")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        first = now
+    st = {"first": first, "last": now}
+    if path:
+        try:
+            with open(path + ".tmp", "w") as f:
+                json.dump(st, f)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            return False
+    elif mem is not None:
+        mem.clear()
+        mem.update(st)
+    return now - first >= CAPACITY_LATCH_S
+
+
+def capacity_clear(home, mem=None):
+    if mem is not None:
+        mem.clear()
+    if home:
+        try:
+            os.remove(os.path.join(home, CAPACITY_STATE))
+        except OSError:
+            pass
 
 
 COORD_ERRORS_MAX = 10     # ticks in a row the coordinator may fail before the run stops (every pod terminated)
@@ -154,9 +320,13 @@ class Coord:
                 detail = json.loads(e.read() or b"{}").get("error") or ""
             except ValueError:
                 detail = ""
-            raise CoordError(f"the coordinator answered {e.code} to {method} {path.split('?')[0]}: {detail}") from None
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise CoordError(f"the coordinator could not be reached for {method} {path.split('?')[0]}: {e}") from None
+            raise CoordError(f"the coordinator answered {e.code} to {method} {path.split('?')[0]}: {detail}",
+                             transient=e.code >= 500) from None
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+            raise CoordError(f"the coordinator could not be reached for {method} {path.split('?')[0]}: {e}",
+                             transient=True) from None
+        except ValueError as e:
+            raise CoordError(f"the coordinator sent an unreadable answer to {method} {path.split('?')[0]}: {e}") from None
 
     def queue(self):
         return self._call("GET", "/api/bot/queue")["sponsorships"]
@@ -611,16 +781,97 @@ def trial_refusals(coord, heights):
 
 
 # ---------- RunPod ----------
+#
+# ⛔ REST API v2, NOT GraphQL. RunPod deprecated api.runpod.io/graphql (retiring "early 2027"); every call here
+# is the documented v2 equivalent (docs.runpod.io/api-reference-v2, schema at api.runpod.io/v2/openapi.json):
+#
+#     podFindAndDeployOnDemand      POST   /v2/pods             {name, image, cloud, gpu{id,count}, disk, ports[], env{}}
+#     myself { pods }               GET    /v2/pods             cursor-paginated; `cost` is the old costPerHr
+#     pod(input:{podId})            GET    /v2/pods/{id}        the LIVE port mapping (see ports_of)
+#     podTerminate                  DELETE /v2/pods/{id}        204; 404 once it is gone
+#     gpuTypes / lowestPrice        GET    /v2/catalog/gpus     ?include=AVAILABILITY&product=POD&cloud=SECURE&count=1
+#
+# ⚠ What changed underneath, and what the client does about it:
+#   * A capacity miss is HTTP 400 with only a human `detail` (no machine-readable code). GraphQL answered it
+#     with `data: {podFindAndDeployOnDemand: null}`. Both are "RunPod answered, this type had no capacity".
+#   * A refusal (401 key, 402 balance, 403 Cloudflare or pool access, 422 contract) is never reported as "no GPU
+#     capacity": it counts toward RUNPOD_REFUSALS_MAX. A 429, a 5xx or no answer is neither -- it counts toward
+#     the drought rule only (CAPACITY_*).
+#   * `cloud` takes only SECURE or COMMUNITY (`ALL` is gone). We always send SECURE (test_pod_cloud_type.py).
+#   * There is no `isIpPublic` on a port. A mapping is public when it has a `public` port and its `ip` is a
+#     GLOBAL address. ⛔ Not "not private": RunPod's internal addresses are 100.65.x.x, carrier-grade NAT
+#     space (100.64.0.0/10), which Python does not call private -- exactly the entries GraphQL flagged
+#     isIpPublic:false (~/libzync-gpu/live/fleet.txt recorded them). `is_global` excludes both.
+#   * GET /v2/pods may leave out the live mapping (RunPod documents `ssh.direct` as null in the listing and
+#     says to fetch the pod by id for it), so a caller that needs SSH asks ports_of(pod_id) for the pods it is
+#     waiting on, never every pod on every look.
+REST_URL = "https://api.runpod.io/v2"
+POD_CLOUD = "SECURE"
+# 400 is RunPod's "this GPU could not be placed" -- and ALSO a deterministic rule breach (RunPod's create docs: if
+# EVERY candidate answers 400, suspect the request). ⛔ A 400 is a CAPACITY MISS here, always: the catalogue's
+# "LOW" is the standing state of the cards we rent (docs/OPERATIONS.md: 45 requested, 17 granted, every type
+# "Low"), so "the catalogue shows stock" cannot tell a rule breach from a drought. A request RunPod can never place
+# is caught by TIME instead: the drought rule (CAPACITY_* below).
+NO_CAPACITY_STATUS = 400
+# Statuses that say nothing about ONE type: the key (401), the balance (402), the request contract (422). Each is
+# a refusal however the other types answered -- trying the next type cannot fix it, and a 400 on that next type
+# must not hide it.
+REQUEST_REFUSALS = (401, 402, 422)
+# The per-user quota answered 429 through every retry: neither a refusal nor a capacity miss. The bot backs off.
+RATE_LIMITED = 429
+# RunPod's v2 quota is per user and shared by EVERY process on the key: 180/min, 7,200/hour (= 120/min
+# sustained) and 86,400/day (RateLimit-Policy, read 2026-11-18). Retry-After can be up to 3,600 s when the hour
+# window is spent. A 429 was never processed, so even a create is safe to retry once the window says so; this
+# client waits at most RATE_LIMIT_WAIT_MAX_S per retry and then hands the caller `retry_after`.
+RATE_LIMIT_RETRIES = 2
+RATE_LIMIT_WAIT_MAX_S = 60.0
+# Poll budgets that stay well under the SUSTAINED rate: a 5-min bot tick and one GET per waiting pod.
+
 
 class RunPodError(RuntimeError):
-    pass
+    """RunPod refused a request, or did not answer. `status` is the HTTP status (None: no answer at all);
+    `detail` is RunPod's problem+json detail; `problem` is False for a body that was not RunPod's own (a
+    Cloudflare `error code: 1010` page, which refuses EVERY request, whatever the type)."""
+
+    def __init__(self, msg, status=None, detail="", problem=False, retry_after=None):
+        super().__init__(msg)
+        self.status, self.detail, self.problem, self.retry_after = status, detail, problem, retry_after
+
+
+def _public_ip(ip):
+    import ipaddress
+    try:
+        return ipaddress.ip_address(str(ip)).is_global       # ⛔ not `not is_private`: 100.65.x.x is RunPod-internal
+    except ValueError:
+        return False
+
+
+def pod_ports(pod):
+    """{private port: (public ip, public port)} from a v2 pod object: the mapping GraphQL flagged isIpPublic.
+    Only GLOBAL addresses qualify, so an internal entry can never win whatever its order; among several global
+    entries for one port the FIRST is kept (deterministic, and the same rule the shell scripts use)."""
+    out = {}
+    for x in (((pod or {}).get("runtime") or {}).get("ports")) or []:
+        try:
+            priv, pub, ip = int(x.get("private")), x.get("public"), x.get("ip")
+        except (TypeError, ValueError):
+            continue
+        if pub is None or not ip or not _public_ip(ip):
+            continue
+        out.setdefault(priv, (ip, int(pub)))
+    # `ssh.direct` is RunPod's own reading of the 22/tcp mapping; use it when the runtime list has none.
+    direct = ((pod or {}).get("ssh") or {}).get("direct") or {}
+    if 22 not in out and direct.get("host") and direct.get("port") and _public_ip(direct["host"]):
+        out[22] = (direct["host"], int(direct["port"]))
+    return out
 
 
 class RunPod:
-    """The RunPod GraphQL calls the board fleet already uses: deploy, list, terminate."""
+    """The RunPod calls the board fleet uses -- deploy, list, terminate, the GPU catalogue -- on REST API v2."""
 
-    def __init__(self, key, url=GRAPHQL_URL, timeout=60):
-        self.key, self.url, self.timeout = key, url, timeout
+    def __init__(self, key, url=REST_URL, timeout=60, sleep=time.sleep):
+        self.key, self.url, self.timeout, self._sleep = key, url.rstrip("/"), timeout, sleep
+        self.last_misses = []                # [(type, 400 detail)] from the last deploy
 
     @staticmethod
     def key_path():
@@ -644,102 +895,311 @@ class RunPod:
             raise SystemExit(f"sponsor_bot: the RunPod API key file {path} is empty")
         return cls(key)
 
-    @staticmethod
-    def _s(v):
-        return json.dumps(str(v))            # a JSON string literal is a valid GraphQL string literal
-
-    def _gql(self, query):
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"}
+    def _req(self, method, path, body=None, query=None):
+        """One v2 call. The parsed JSON body, or None for an empty one (204). RunPodError otherwise."""
+        url = self.url + path
+        if query:
+            url += "?" + urllib.parse.urlencode(query)
+        headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json"}
         if USER_AGENT:
             headers["User-Agent"] = USER_AGENT
-        req = urllib.request.Request(self.url, data=json.dumps({"query": query}).encode(), headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                d = json.load(r)
-        except urllib.error.HTTPError as e:
+        data = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode()
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
             try:
-                body = e.read()[:200].decode(errors="replace").strip()
-            except Exception:
-                body = ""
-            raise RunPodError(f"HTTP {e.code} {e.reason}: {body}") from e
-        except Exception as e:
-            raise RunPodError(f"{type(e).__name__}: {e}") from e
-        if d.get("errors") and not d.get("data"):
-            raise RunPodError(str(d["errors"])[:300])
-        return d.get("data") or {}
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    raw = r.read()
+                return json.loads(raw) if raw.strip() else None
+            except urllib.error.HTTPError as e:
+                try:
+                    text = e.read()[:400].decode(errors="replace").strip()
+                except Exception:
+                    text = ""
+                retry_after = None
+                if e.code == 429:
+                    try:
+                        retry_after = float(e.headers.get("Retry-After") or 5)
+                    except (TypeError, ValueError):
+                        retry_after = 5.0
+                if e.code == 429 and attempt < RATE_LIMIT_RETRIES:
+                    self._sleep(min(max(retry_after, 1.0), RATE_LIMIT_WAIT_MAX_S))
+                    continue
+                # RunPod answers application/problem+json {title, status, detail, errors[]}: say the detail.
+                problem = False
+                try:
+                    prob = json.loads(text)
+                    problem = isinstance(prob, dict)
+                    text = "; ".join([str(prob.get("detail") or prob.get("title") or "")]
+                                     + [str(x) for x in (prob.get("errors") or [])][:3]).strip("; ")
+                except Exception:
+                    pass
+                raise RunPodError(f"HTTP {e.code} {e.reason}: {text[:200]}", status=e.code, detail=text[:200],
+                                  problem=problem, retry_after=retry_after) from e
+            except Exception as e:
+                raise RunPodError(f"{type(e).__name__}: {e}") from e
 
-    def deploy(self, name, ssh_pubkey, gpu_types=GPU_TYPES):
-        """One on-demand 1-GPU pod, trying each GPU type in turn. None when RunPod answered and no type had
-        capacity. RunPodError when RunPod refused the request for every type: that is not a capacity miss,
-        and treating it as one hid a Cloudflare 403 behind "no GPU capacity" on the first trial."""
+    # -- pods --
+
+    def create_pod(self, name, gpu_type, ssh_pubkey, ports=("22/tcp",), disk_gb=40):
+        """POST /v2/pods: one on-demand 1-GPU pod of exactly this type. The v2 pod object (201)."""
+        # ⛔ SECURE CLOUD, NOT COMMUNITY. Community hosts mostly never start -- RunPod accepts the deploy and
+        # never publishes a port, so the caller waits out its full SSH timeout having paid for a pod that never
+        # existed. Measured 2026-09-20 in tip_smoke.deploy_listening, where the split is by PRICE:
+        #     $0.34/hr   1 of 6 started   (17%)
+        #     $0.74/hr  14 of 14 started  (100%)
+        # Every Python deploy path comes through here; test_pod_cloud_type.py checks every deploy path in the repo.
+        body = {"name": name, "cloud": "SECURE", "gpu": {"id": gpu_type, "count": 1},
+                "image": IMAGE, "disk": int(disk_gb), "ports": list(ports),
+                "env": {"PUBLIC_KEY": ssh_pubkey}}
+        return self._req("POST", "/pods", body)
+
+    def _deploy_first(self, name, ssh_pubkey, gpu_types, ports, disk_gb=40):
+        """Walk gpu_types in order: (v2 pod, type) for the first RunPod placed. None when RunPod answered and no
+        type had capacity. RunPodError when RunPod refused the request: that is not a capacity miss, and
+        treating it as one hid a Cloudflare 403 behind "no GPU capacity" on the first trial.
+
+        * 401/402/422, or a 403 that is not RunPod's own answer (Cloudflare): raised at once -- no other type
+          can fix the key, the balance, the request or the client.
+        * 400: a capacity miss, on every type (see NO_CAPACITY_STATUS); `self.last_misses` [(type, detail)] keeps
+          RunPod's words for the caller's log.
+        * NO ANSWER, 5xx, or RunPod's own 403 ("no access to this pool"): that type is skipped; raised only if no
+          type answered at all. ⚠ With no answer the pod may exist anyway -- nothing here looks for it. Every pod a
+          run creates carries that run's unique name prefix, and the run's own sweep (by LISTING that prefix)
+          releases whatever it does not track, however late the pod appears."""
         refused = None
         answered = False
+        misses = []
+        self.last_misses = misses
         for gt in gpu_types:
-            # ⛔ SECURE, NOT ALL. `cloudType: ALL` includes community hosts, and those mostly never
-            # start -- RunPod accepts the deploy and never publishes a port, so the caller waits out
-            # its full SSH timeout having paid for a pod that never existed. Measured 2026-09-20 in
-            # tip_smoke.deploy_listening, where the split is by PRICE, which is the tell:
-            #     $0.34/hr   1 of 6 started   (17%)
-            #     $0.74/hr  14 of 14 started  (100%)
-            #
-            # ⚠ That fix landed in tip_smoke.py and NOT here, although tip_smoke imports this
-            # module's IMAGE and GPU_TYPES -- the two deploy paths are siblings and drifted apart.
-            # For the bot the failure is worse than a slow run: a sponsor has already PAID, and the
-            # sponsorship stalls in `proving` while the refusal budget burns down.
-            # test_pod_cloud_type.py now checks every deploy path in the repo, not just this one.
-            q = ("mutation { podFindAndDeployOnDemand(input: { cloudType: SECURE, gpuCount: 1, volumeInGb: 0, "
-                 f"containerDiskInGb: 40, gpuTypeId: {self._s(gt)}, name: {self._s(name)}, "
-                 f"imageName: {self._s(IMAGE)}, ports: \"22/tcp\", "
-                 f"env: [{{key: \"PUBLIC_KEY\", value: {self._s(ssh_pubkey)}}}] }}) {{ id costPerHr }} }}")
             try:
-                p = self._gql(q).get("podFindAndDeployOnDemand")
+                p = self.create_pod(name, gt, ssh_pubkey, ports=ports, disk_gb=disk_gb)
                 answered = True
             except RunPodError as e:
-                refused, p = e, None
+                if e.status in REQUEST_REFUSALS or (e.status == 403 and not e.problem):
+                    raise
+                if e.status == NO_CAPACITY_STATUS:
+                    answered, p = True, None
+                    misses.append((gt, e.detail))
+                else:
+                    refused, p = e, None
             if p and p.get("id"):
-                return {"id": p["id"], "name": name, "gpu_type": gt, "cost_per_hr": float(p.get("costPerHr") or 0)}
+                return p, gt
         if refused is not None and not answered:
             raise refused
         return None
 
+    def deploy(self, name, ssh_pubkey, gpu_types=GPU_TYPES):
+        """One on-demand 1-GPU pod, trying each GPU type in turn. None when RunPod answered and no type had
+        capacity. RunPodError when RunPod refused the request for every type."""
+        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp",))
+        if not got:
+            return None
+        p, gt = got
+        return {"id": p["id"], "name": name, "gpu_type": gt, "cost_per_hr": float(p.get("cost") or 0)}
+
+    @staticmethod
+    def _row(p):
+        ports = pod_ports(p)
+        return {"id": p["id"], "name": p.get("name") or "", "cost_per_hr": float(p.get("cost") or 0),
+                "ssh": ports.get(22), "status": p.get("status"),
+                "gpu_type": (p.get("gpu") or {}).get("id"), "dc": p.get("dataCenterId"),
+                "uptime_s": (p.get("runtime") or {}).get("uptime")}
+
     def pods(self):
-        q = ("query { myself { pods { id name costPerHr machine { gpuDisplayName } "
-             "runtime { ports { ip isIpPublic privatePort publicPort } } } } }")
-        out = []
-        for p in ((self._gql(q).get("myself") or {}).get("pods") or []):
-            ports = ((p.get("runtime") or {}).get("ports")) or []
-            ssh = [x for x in ports if x.get("privatePort") == 22 and x.get("isIpPublic")]
-            out.append({"id": p["id"], "name": p.get("name") or "", "cost_per_hr": float(p.get("costPerHr") or 0),
-                        "ssh": (ssh[0]["ip"], int(ssh[0]["publicPort"])) if ssh else None})
-        return out
+        """Every pod on the account (all pages). `ssh` is None where the listing carries no live mapping."""
+        out, cursor = [], None
+        for _ in range(1000):                        # a cursor that never ends must not hang the caller
+            q = {"limit": 1000}
+            if cursor:
+                q["cursor"] = cursor
+            d = self._req("GET", "/pods", query=q)
+            # ⛔ A 200 that is not a listing is NOT "no pods": every caller that confirms a termination by absence
+            # would read it as "gone" while the pod bills.
+            if not isinstance(d, dict) or not isinstance(d.get("pods"), list) \
+                    or not isinstance(d.get("pagination"), dict):
+                raise RunPodError(f"GET /v2/pods answered without a listing: {str(d)[:120]}")
+            out += [self._row(p) for p in d["pods"] if p.get("id")]
+            pg = d["pagination"]
+            cursor = pg.get("nextCursor")
+            if not pg.get("hasNextPage") or not cursor:
+                return out
+        raise RunPodError("GET /v2/pods: pagination did not end")
+
+    def pod_raw(self, pod_id):
+        """GET /v2/pods/{id}: the v2 pod object, or None when RunPod no longer has it."""
+        try:
+            return self._req("GET", "/pods/" + urllib.parse.quote(str(pod_id), safe=""))
+        except RunPodError as e:
+            if e.status == 404:
+                return None
+            raise
+
+    def pod(self, pod_id):
+        p = self.pod_raw(pod_id)
+        return self._row(p) if p and p.get("id") else None
+
+    def ports_of(self, pod_id):
+        """{privatePort: (ip, publicPort)} for one pod, or {} while it is still starting (or gone)."""
+        return pod_ports(self.pod_raw(pod_id))
+
+    def ssh_of(self, pod_id):
+        """(ip, port) of the pod's public SSH, or None while it has none."""
+        return self.ports_of(pod_id).get(22)
 
     def terminate(self, pod_id):
-        self._gql(f"mutation {{ podTerminate(input: {{podId: {self._s(pod_id)}}}) }}")
+        """DELETE /v2/pods/{id}. A pod RunPod no longer has (404) is already what we asked for."""
+        try:
+            self._req("DELETE", "/pods/" + urllib.parse.quote(str(pod_id), safe=""))
+        except RunPodError as e:
+            if e.status != 404:
+                raise
+
+    # -- the GPU catalogue --
+
+    def gpu_catalog(self, stock=False):
+        """GET /v2/catalog/gpus: [{id, name, memory, secure, community, price{secure,community}, ...}].
+        With stock=True each type also carries `availability` (NONE/LOW/MEDIUM/HIGH) for ONE GPU on a SECURE
+        pod -- what GraphQL's lowestPrice stockStatus answered for gpuCount 1 on the secure cloud."""
+        q = {"include": "AVAILABILITY", "product": "POD", "cloud": POD_CLOUD, "count": 1} if stock else None
+        return list((self._req("GET", "/catalog/gpus", query=q) or {}).get("gpus") or [])
+
+    def gpu_type_ids(self):
+        """Every GPU type id RunPod lists. ⛔ Check a requested type against this BEFORE renting. GraphQL
+        accepted an unknown gpuTypeId and matched nothing; v2's create may well answer it with the same 400 as
+        a capacity miss (400 is documented for both), so without this a typo reads as "no capacity"."""
+        return {g["id"] for g in self.gpu_catalog() if g.get("id")}
 
 
-def terminate_confirmed(api, pod_id, sleep=time.sleep, tries=6, wait_s=5.0):
-    """podTerminate until RunPod no longer lists the pod. False if it still does after every try."""
-    for _ in range(tries):
+# ⛔ A pod that is not confirmed gone keeps BILLING. The budget is WALL CLOCK -- every wait counts, including the
+# client's own 429 retries inside each call (the first version counted only its own sleeps, so "15 min" was ~88).
+# A 429 (the shared quota) is never an answer about a pod: it does not use up a try, it is waited out within the
+# budget, honouring Retry-After. The budget must fit the unit's TimeoutStopSec (deploy/hazync-sponsor-bot.service)
+# together with everything else terminate_all does, or systemd SIGKILLs the cleanup with pods billing.
+TERMINATE_BUDGET_S = 6 * 60
+TERMINATE_429_WAIT_S = 30.0
+UNCONFIRMED_WARN_S = 3600        # a pod still unconfirmed is reported loudly once per this many seconds
+_ACCEPT_UNACKED_ABSENCE = False   # test_runpod_v2.py --control only
+
+
+def _wait_hint(e):
+    """Seconds a failed call asks us to wait: Retry-After on a 429, else 0."""
+    if getattr(e, "status", None) != RATE_LIMITED:
+        return 0.0
+    ra = getattr(e, "retry_after", None)
+    return float(ra) if ra else TERMINATE_429_WAIT_S
+
+
+def terminate_many(api, pod_ids, sleep=time.sleep, tries=6, wait_s=5.0, budget_s=None, clock=time.monotonic):
+    """Send EVERY DELETE first, then confirm by listing, until no id is listed (a TERMINATED pod counts as gone),
+    `tries` answered rounds are spent, or `budget_s` of wall clock is. Returns (confirmed ids, unconfirmed ids).
+    One pod's slow confirmation never holds up the DELETE of the next, so N pods cost one wait, not N."""
+    budget_s = TERMINATE_BUDGET_S if budget_s is None else budget_s
+    end = clock() + budget_s
+    pending = list(dict.fromkeys(str(i) for i in pod_ids))
+    done, used, acked = [], 0, set()
+    while pending:
+        hint = 0.0
+        for pid in pending:
+            if used and clock() >= end:
+                break                  # past the budget: no new call can start (each one can take minutes)
+            try:
+                api.terminate(pid)     # returns on 204, and on 404 (already gone): an ANSWERED delete
+                acked.add(pid)
+            except Exception as e:
+                hint = max(hint, _wait_hint(e))
         try:
-            api.terminate(pod_id)
-        except Exception:
-            pass
+            rows = api.pods()
+            listed = {str(p["id"]) for p in rows if (p.get("status") or "") != "TERMINATED"}
+            # ⛔ ABSENCE IS ONLY BELIEVED AFTER AN ANSWERED DELETE. A listing can lag; a pod whose DELETE errored and
+            # that one listing happens to omit is NOT gone -- the next round deletes it again.
+            gone = [i for i in pending if i not in listed and (i in acked or _ACCEPT_UNACKED_ABSENCE)]
+            done += gone
+            pending = [i for i in pending if i not in gone]
+        except Exception as e:
+            hint = max(hint, _wait_hint(e))
+            if not hint:
+                used += 1              # an unreadable listing is an answered round, not a quota wait
+        else:
+            if not hint:
+                used += 1
+        if not pending or used >= tries:
+            break
+        left = end - clock()
+        if left <= 0:
+            break
+        sleep(min(max(wait_s, hint), left))
+    return done, pending
+
+
+def release_until_clean(api, ids, match=None, skip=None, sleep=time.sleep, clock=time.monotonic, budget_s=None,
+                        wait_s=5.0, gap_s=5.0, on_done=None):
+    """THE one way a run releases its pods. DELETE every known id at once (before any listing), then LIST: every
+    listed pod whose name `match`es (the run's prefix) -- a lost create, however late it appears -- joins, and is
+    released too; repeat until TWO listings `gap_s` apart show nothing of ours. All of it inside ONE wall-clock
+    budget. `skip(id)` keeps a pod out (kept, protected). `on_done(ids)` is called as soon as ids are confirmed gone
+    (so a caller can stop their spend clock without waiting for the second listing).
+    Returns (confirmed ids, still-listed ids, clean): clean is False when two clean listings were never seen."""
+    budget_s = TERMINATE_BUDGET_S if budget_s is None else budget_s
+    end = clock() + budget_s
+    skip = skip or (lambda i: False)
+    want = [str(i) for i in dict.fromkeys(ids) if not skip(str(i))]
+    done, left, clean, tried_ids = [], [], 0, set()
+    while True:
+        todo = [i for i in want if i not in done]
+        tried_ids |= set(todo)
+        if todo:
+            d_, left = terminate_many(api, todo, sleep, wait_s=wait_s, budget_s=max(0.0, end - clock()), clock=clock)
+            done += d_
+            if on_done and d_:
+                on_done(d_)
+        if clock() >= end:
+            break
         try:
-            if pod_id not in {p["id"] for p in api.pods()}:
-                return True
+            listed = {str(x["id"]): x for x in api.pods() if (x.get("status") or "") != "TERMINATED"}
         except Exception:
-            pass
-        sleep(wait_s)
-    return False
+            listed = None
+        if listed is not None:
+            ours = [i for i, x in listed.items() if not skip(i) and (i in want or (match and match(x.get("name") or "")))]
+            done = [i for i in done if i not in ours]              # still listed: not gone after all
+            new = [i for i in ours if i not in want]
+            want += new
+            left = ours
+            if not ours:
+                clean += 1
+                if clean >= 2:
+                    return done, [], True
+            else:
+                clean = 0
+        else:
+            clean = 0
+        if clock() + gap_s >= end:
+            break
+        sleep(gap_s)
+    tried = set(done) | set(tried_ids)
+    extra = [i for i in left if i not in tried]
+    if extra:                       # strays NEVER yet DELETEd (found on the last listing) get one pass: one DELETE each
+        d_, _ = terminate_many(api, extra, sleep, tries=1, wait_s=0, budget_s=0, clock=clock)
+        done += d_
+        left = [i for i in left if i not in d_]
+        if on_done and d_:
+            on_done(d_)
+    return done, left, False
+
+
+def terminate_confirmed(api, pod_id, sleep=time.sleep, tries=6, wait_s=5.0, budget_s=None, clock=time.monotonic):
+    """terminate until RunPod no longer lists the pod. False if it still does when the tries or the budget end."""
+    _, left = terminate_many(api, [pod_id], sleep, tries, wait_s, budget_s, clock)
+    return not left
+
 
 
 def stop_all(api, prefix=POD_PREFIX, sleep=time.sleep, wait_s=5.0):
     """Terminate every pod whose name starts with `prefix`. Returns (terminated ids, unconfirmed ids)."""
-    done, unconfirmed = [], []
-    for p in api.pods():
-        if p["name"].startswith(prefix):
-            (done if terminate_confirmed(api, p["id"], sleep, wait_s=wait_s) else unconfirmed).append(p["id"])
-    return done, unconfirmed
+    ids = [p["id"] for p in api.pods() if p["name"].startswith(prefix)]
+    return terminate_many(api, ids, sleep, wait_s=wait_s) if ids else ([], [])
 
 
 # ---------- a pod over SSH ----------
@@ -831,14 +1291,16 @@ def http_retry(fn, what):
             if e.code < 500:
                 raise
             last = e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as e:
+            # ⛔ NOT bare OSError: a local ENOSPC/EACCES writing the download is our fault, not the network's, and
+            # must latch rather than be retried and skipped as transient.
             last = e
         if attempt < HTTP_TRIES - 1:
             wait = HTTP_BACKOFF[min(attempt, len(HTTP_BACKOFF) - 1)]
             print(f"sponsor_bot: {what} failed ({type(last).__name__}: {last}); "
                   f"retry {attempt + 2}/{HTTP_TRIES} in {wait}s", flush=True)
             time.sleep(wait)
-    raise SystemExit(f"sponsor_bot: {what} failed {HTTP_TRIES} times, last was {last} — "
+    raise TransientError(f"sponsor_bot: {what} failed {HTTP_TRIES} times, last was {last} — "
                      f"nothing was started and nothing was spent")
 
 
@@ -1060,6 +1522,7 @@ class Pod:
         self.boot_result = None
         self.assigned = []                   # [{"sid", "height", "row"}] not yet proven
         self.segment_start = self.last_progress = self.finished_since = None
+        self.unconfirmed_since = None         # when RunPod first would not confirm its termination
 
     @property
     def live(self):
@@ -1109,6 +1572,9 @@ class Bot:
         # "waiting" line would print every tick or, far worse, never, leaving the queue silently stalled
         # with nothing on the record to say why.
         self._regen_waits = 0
+        self.state_home = None             # SPONSOR_BOT_HOME in main(): the capacity streak, the run lock
+        self._capacity_mem = {}            # the streak when there is no state_home (tests)
+        self._leftovers_done = False       # release_leftovers() ran (main() runs it first)
 
     # --- money ---
     def _live(self):
@@ -1125,7 +1591,22 @@ class Bot:
         return self.spend(now) + self.hourly() * self.budget_lead_s / 3600.0 >= self.max_usd
 
     # --- the loop ---
+    def release_leftovers(self):
+        """⛔ FIRST, before any other check: release what an earlier run left billing (_sweep_leftovers). It needs only
+        RunPod and the bot's own database, so a coordinator or GitHub that is down cannot keep it from running."""
+        c = connect(self.db_path)
+        ensure_tables(c)
+        try:
+            self._sweep_leftovers(c)
+        except RunPodError as e:
+            raise TransientError(f"sponsor_bot: could not check for an earlier run's pods before renting: {e}")
+        finally:
+            c.close()
+        self._leftovers_done = True
+
     def run(self):
+        if not self._leftovers_done:
+            self.release_leftovers()
         if not self.identity_home:
             raise BotRefused("no identity home (SPONSOR_BOT_HOME): the bot keeps one key per sponsorship there")
         if self.coord is None:
@@ -1135,6 +1616,9 @@ class Bot:
         try:
             self.coord.queue()
         except CoordError as e:
+            if e.transient:
+                raise TransientError(f"sponsor_bot: the coordinator's sponsor bot API did not answer before anything "
+                                     f"was rented: {e}")
             raise BotRefused(f"the coordinator's sponsor bot API is not usable: {e}")
         c = connect(self.db_path)
         ensure_tables(c)
@@ -1170,6 +1654,9 @@ class Bot:
                     raise BotRefused("; ".join(bad[:10]) + more)
         except CoordError as e:
             c.close()
+            if e.transient:
+                raise TransientError(f"sponsor_bot: the coordinator's sponsor bot API did not answer before "
+                                     f"anything was rented: {e}")
             raise BotRefused(f"the coordinator's sponsor bot API failed before anything was rented: {e}")
         except BotRefused:
             c.close()
@@ -1180,6 +1667,9 @@ class Bot:
                 now = self.clock()
                 # The coordinator going away for a moment (a restart) is not a reason to throw away every pod; one
                 # that stays away is. Money is checked every look regardless, from the bot's own figures.
+                # RunPod first: these need no coordinator, so a coordinator outage cannot stop pods being released.
+                self._retry_unconfirmed(c)
+                self._sweep_strays(c)
                 try:
                     if self.trial is None:
                         for sid in reconcile(self.coord):
@@ -1189,7 +1679,7 @@ class Bot:
                 except CoordError as e:
                     coord_ok = False
                     self._coord_error(e)
-                if self.stop_reason == "coordinator":
+                if self.stop_reason:            # anything this look decided (coordinator, a drought, ...) ends it now
                     break
                 if self._over_budget(now):
                     self.stop_reason = "budget"
@@ -1198,15 +1688,22 @@ class Bot:
                 if coord_ok:
                     try:
                         self._regen(c, now)
+                        if self.stop_reason:
+                            break
                         self._assign(c, now)
+                        if self.stop_reason:
+                            break
                         self._launch(c, now)
-                        if self.stop_reason == "runpod":
+                        if self.stop_reason:
                             break
                         # ⛔ AN IN-FLIGHT REPLAY HOLDS THE LOOP OPEN. Without the last clause the bot sees no
                         # live pod and nothing provable (the block has no bundle yet — that is the whole
                         # point) and declares itself done, exiting and orphaning a ~2 h walk it started and
                         # paid for. The bundle would land with nobody left to prove it.
-                        if (not self._live() and not pending_work(self.coord, (), self.trial)
+                        # A pod whose termination is unconfirmed does not hold the run open: terminate_all tries
+                        # again with its whole budget, and the next run's start sweeps it before renting.
+                        if (not [p for p in self._live() if p.state != "unconfirmed"]
+                                and not pending_work(self.coord, (), self.trial)
                                 and self._regen_proc is None and regen_inflight(c) is None):
                             # The last blocks can land after this pass's reconcile, just before their pod is stopped.
                             if self.trial is None:
@@ -1231,6 +1728,131 @@ class Bot:
                     self._restore_signals(saved)
             c.close()
         return self.stop_reason
+
+    def _sweep_leftovers(self, c):
+        """⛔ BEFORE RENTING: release what an earlier run left billing. Every pod this bot rents has a sponsor_pods row
+        the moment it exists; a row with no terminated_at is a pod an earlier run never confirmed gone (its cleanup
+        was SIGKILLed, or RunPod would not confirm). Those still listed are terminated now; a lost create answer is
+        caught by the name prefix of earlier runs. Only one bot runs at a time (main() holds the run lock), so
+        nothing here can belong to a live run. A pod that will not go refuses the run: renting more on top of pods
+        we cannot stop is how a cap is spent twice. ⚠ After a LATCH no run starts, so this sweep waits for a human to
+        clear the latch -- who should check RunPod for hz-sponsor-* pods first (`sponsor_bot.py stop-all`)."""
+        rows = {r[0]: r[1] for r in c.execute("SELECT pod_id, name FROM sponsor_pods WHERE terminated_at IS NULL")}
+        listed = {p["id"]: p for p in self.api.pods() if (p.get("status") or "") != "TERMINATED"}
+        ids = [i for i in rows if i in listed]
+        ids += [i for i, p in listed.items() if p["name"].startswith(POD_PREFIX) and not
+                p["name"].startswith(self.prefix) and i not in ids]
+        now = self.clock()
+        gone_rows = []
+        for i in [i for i in rows if i not in listed]:
+            # ⛔ Not listed is not proof: the row closes only after a DELETE RunPod answered (204, or 404 = gone).
+            try:
+                self.api.terminate(i)
+                gone_rows.append(i)
+            except RunPodError as e:
+                self.log(f"could not confirm {i} gone ({e}); its row stays open for the next start")
+        for i in gone_rows:
+            c.execute("UPDATE sponsor_pods SET terminated_at=?, note=COALESCE(note,'') || ' (gone at the next start;"
+                      " billed until some time before this)' WHERE pod_id=?", (now, i))
+        c.commit()
+        if not ids:
+            return
+        self.log(f"an earlier run left {len(ids)} pod(s) on RunPod: {', '.join(ids)} -- terminating before renting")
+        done, left = terminate_many(self.api, ids, self.sleep, wait_s=self.confirm_wait_s)
+        for i in done:
+            c.execute("UPDATE sponsor_pods SET terminated_at=?, note=COALESCE(note,'') || ' (released at the next start)',"
+                      " usd_estimate=COALESCE(cost_per_hr, 0) * MAX(0, ? - created_at) / 3600.0 WHERE pod_id=?",
+                      (now, now, i))
+        c.commit()
+        if left:
+            self.unconfirmed += [i for i in left if i not in self.unconfirmed]
+            raise BotRefused(f"pod(s) from an earlier run will not terminate: {', '.join(left)} -- "
+                             f"terminate them by hand in RunPod; nothing was rented")
+
+    def _landed(self, p):
+        """A pod of this run that is live, not stuck in an unconfirmed termination, at a KNOWN price within the
+        ceiling. A pod at cost 0 (price not known yet) or over the ceiling has not landed."""
+        return p.live and p.state != "unconfirmed" and 0 < p.cost_per_hr <= self.ceiling
+
+    def _drought(self, why):
+        """A deploy attempt landed nothing (`why`). See CAPACITY_* for the rule. ⛔ While any pod of this run has
+        LANDED there is no drought -- a partial grant (one card of four) is the bot working, and stopping "runpod"
+        then would kill a pod mid-chunk -- so the streak is cleared instead."""
+        if any(self._landed(p) for p in self.pods):
+            capacity_clear(self.state_home, self._capacity_mem)
+            return
+        if capacity_note(self.state_home, self.clock(), None if self.state_home else self._capacity_mem):
+            capacity_clear(self.state_home, self._capacity_mem)
+            self.stop_reason = "runpod"
+            self.log(f"⛔ no pod has landed for {CAPACITY_LATCH_S // 3600} h of deploy attempts (last: {why}): stopping. "
+                     f"A drought this long is rare; a request RunPod cannot place looks exactly like this -- check "
+                     f"the deploy request. Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before clearing the latch.")
+
+    def _refused(self, why):
+        """One refusal toward RUNPOD_REFUSALS_MAX: that many refusals without a pod landing in between stop the run."""
+        self._refusals += 1
+        if self._refusals >= RUNPOD_REFUSALS_MAX:
+            self.stop_reason = "runpod"
+            self.log(f"RunPod refused the deploy request {self._refusals} times without a pod landing ({why}): "
+                     f"stopping. Check RunPod for hz-sponsor-* pods (`sponsor_bot.py stop-all` releases them) before "
+                     f"clearing the latch.")
+        else:
+            self.log(f"RunPod refused the deploy request ({why}); trying again later")
+
+    def _sweep_strays(self, c):
+        """⛔ THE ONE RULE FOR LOST CREATES. Every pod this run creates is named self.prefix + n, so any pod on the
+        account with this run's prefix that the bot does not track is one whose create answer was lost -- however
+        late it appeared. One listing per look; each such pod is terminated at once. One that will not go is TRACKED
+        from then on (state unconfirmed: it counts toward spend and --max-pods, and every look retries it). A listing
+        that fails is simply tried again next look; terminate_all sweeps the prefix at the end, and the next run's
+        start sweeps every older prefix (it latches if RunPod stays unlistable).
+        The same listing gives each tracked pod whose price was not known at deploy its price (M3): one over the
+        ceiling is terminated at once, without waiting for SSH."""
+        tracked = {p.id: p for p in self.pods}
+        try:
+            rows = [x for x in self.api.pods() if x["name"].startswith(self.prefix)
+                    and (x.get("status") or "") != "TERMINATED"]
+        except RunPodError as e:
+            self.log(f"could not list pods for this run's strays (next look tries again): {e}")
+            return
+        # ⛔ A pod we wrote off as terminated but RunPod still lists is BILLING: it is revived as unconfirmed (spend counts
+        # again, every look retries it, its row is reopened for the next start).
+        for x in rows:
+            p = tracked.get(x["id"])
+            if p is not None and not p.live:
+                self.log(f"⛔ {p.name} was taken for terminated but RunPod still lists it: tracking it again")
+                p.terminated, p.state = None, "unconfirmed"
+                p.unconfirmed_since = p.unconfirmed_since or self.clock()
+                if p.id not in self.unconfirmed:
+                    self.unconfirmed.append(p.id)
+                if c is not None:
+                    c.execute("UPDATE sponsor_pods SET terminated_at=NULL, note=COALESCE(note,'') || ' (still listed: "
+                              "revived)' WHERE pod_id=?", (p.id,))
+                    c.commit()
+        for x in rows:                      # prices learnt from the listing (after the revive above)
+            p = tracked.get(x["id"])
+            if p is not None and p.live and p.state != "unconfirmed" and p.cost_per_hr <= 0 and x.get("cost_per_hr"):
+                self._price_ok(c, p, x)
+        strays = [x for x in rows if x["id"] not in tracked]
+        if not strays:
+            return
+        self.log(f"⛔ {len(strays)} pod(s) carry this run's prefix but are not tracked (a create whose answer was "
+                 f"lost): terminating {', '.join(x['id'] for x in strays)}")
+        _, left = terminate_many(self.api, [x["id"] for x in strays], self.sleep, tries=1, wait_s=0, budget_s=0)
+        for x in strays:
+            if x["id"] in left:
+                p = Pod({"id": x["id"], "name": x["name"], "gpu_type": x.get("gpu_type") or "",
+                         "cost_per_hr": x.get("cost_per_hr") or 0}, self.clock())
+                p.state = "unconfirmed"
+                p.unconfirmed_since = self.clock()
+                self.pods.append(p)
+                if x["id"] not in self.unconfirmed:
+                    self.unconfirmed.append(x["id"])
+                if c is not None:
+                    c.execute("INSERT OR REPLACE INTO sponsor_pods(pod_id, name, gpu_type, cost_per_hr, created_at, note)"
+                              " VALUES(?,?,?,?,?,?)", (p.id, p.name, p.gpu_type, p.cost_per_hr, p.created,
+                                                       "a lost create, found by the prefix sweep; TERMINATION NOT CONFIRMED"))
+                    c.commit()
 
     def _regen(self, c, now):
         """Advance the regeneration queue by AT MOST ONE replay. Never raises.
@@ -1315,8 +1937,18 @@ class Bot:
                 seen = {}
             for p in waiting:
                 info = seen.get(p.id)
-                if info and info.get("ssh"):
-                    p.ssh, p.state = info["ssh"], "booting"
+                ssh = info.get("ssh") if info else None
+                if info and not ssh:
+                    # ⚠ RunPod v2's listing may carry no live port mapping; the pod's own record does.
+                    # Asked only for the pods we are waiting on (at most --max-pods), never every pod.
+                    try:
+                        ssh = self.api.ssh_of(p.id)
+                    except Exception as e:
+                        self.log(f"could not read {p.name}'s ports: {e}")
+                if ssh and not self._price_ok(c, p, info):
+                    continue
+                if ssh:
+                    p.ssh, p.state = ssh, "booting"
                     threading.Thread(target=self._boot, args=(p,), daemon=True).start()
                 elif now - p.created > self.ssh_timeout_s:
                     self._terminate(c, p, "no public SSH in time")
@@ -1332,6 +1964,34 @@ class Bot:
                 self._terminate(c, p, "boot timed out")
         for p in [p for p in live if p.live and p.state == "working"]:
             self._progress(c, p, now)
+
+    def _price_ok(self, c, p, info):
+        """A pod whose price was unknown at deploy (cost 0, as v2 can answer while PROVISIONING) gets it read
+        now, before it boots; one over the ceiling is terminated here. False when it was terminated. A price
+        that is still unknown boots as before and keeps counting as the ceiling in the spend math (Pod.rate)."""
+        if p.cost_per_hr > 0:
+            return True
+        cost = (info or {}).get("cost_per_hr") or 0
+        if cost <= 0:
+            try:
+                cost = (self.api.pod(p.id) or {}).get("cost_per_hr") or 0
+            except Exception as e:
+                self.log(f"could not read {p.name}'s price: {e}")
+        if cost <= 0:
+            return True
+        p.cost_per_hr = float(cost)
+        if c is not None:
+            c.execute("UPDATE sponsor_pods SET cost_per_hr=? WHERE pod_id=?", (p.cost_per_hr, p.id))
+            c.commit()
+        if p.cost_per_hr <= self.ceiling:
+            capacity_clear(self.state_home, self._capacity_mem)     # the pod has landed at an acceptable price
+        if p.cost_per_hr > self.ceiling:
+            self._terminate(c, p, f"its price, ${p.cost_per_hr:.2f}/h, is over the ${self.ceiling:.2f}/h ceiling")
+            # The same as a price over the ceiling at deploy: back off, and it counts toward the drought rule.
+            self._capacity_at = self.clock() + self.capacity_backoff_s
+            self._drought(f"{p.name} came back at ${p.cost_per_hr:.2f}/h, over the ${self.ceiling:.2f}/h ceiling")
+            return False
+        return True
 
     def _boot(self, pod):
         try:
@@ -1437,19 +2097,28 @@ class Bot:
             try:
                 info = self.api.deploy(f"{self.prefix}{self._n}", self.runner.ssh_pubkey)
             except RunPodError as e:
-                self._refusals += 1
                 self._capacity_at = now + self.capacity_backoff_s
-                if self._refusals >= RUNPOD_REFUSALS_MAX:
-                    self.stop_reason = "runpod"
-                    self.log(f"RunPod refused the deploy request {self._refusals} times in a row ({e}): stopping")
+                if e.status == RATE_LIMITED:
+                    # The shared quota, not a refusal: it says nothing about the request, so it never counts
+                    # toward the latch. Back off like a capacity miss.
+                    self.log(f"RunPod's request quota is exhausted ({e}); not a refusal, trying again later")
+                    self._drought(e)
+                    break
+                if e.status is None or e.status >= 500:
+                    # No answer is not a refusal (a DNS blip, a RunPod outage): it counts toward the drought only.
+                    self.log(f"RunPod did not answer the deploy request ({e}); trying again later")
                 else:
-                    self.log(f"RunPod refused the deploy request ({e}); trying again later")
+                    self._refused(e)
+                self._drought(e)
                 break
-            self._refusals = 0
             if not info:
                 self._capacity_at = now + self.capacity_backoff_s
-                self.log("no GPU capacity on RunPod; trying again later")
+                misses = getattr(self.api, "last_misses", None) or []
+                why = "; ".join(f"{gt}: {d}" for gt, d in misses if d)
+                self.log("no GPU capacity on RunPod; trying again later" + (f" ({why})" if why else ""))
+                self._drought(why or "no capacity")
                 break
+            self._refusals = 0
             p = Pod(info, self.clock())
             self.pods.append(p)
             c.execute("INSERT OR REPLACE INTO sponsor_pods(pod_id, name, gpu_type, cost_per_hr, created_at)"
@@ -1459,13 +2128,25 @@ class Bot:
             if p.cost_per_hr > self.ceiling:
                 self._terminate(c, p, f"its price, ${p.cost_per_hr:.2f}/h, is over the ${self.ceiling:.2f}/h ceiling")
                 self._capacity_at = now + self.capacity_backoff_s
+                self._drought(f"{p.name} came back at ${p.cost_per_hr:.2f}/h, over the ${self.ceiling:.2f}/h ceiling")
                 break
+            if self._landed(p):
+                capacity_clear(self.state_home, self._capacity_mem)     # a pod landed at a known price
+            # ⚠ A price of 0 is UNKNOWN, not free (v2 can answer a PROVISIONING pod with cost 0). The spend
+            # math already counts it as the ceiling (Pod.rate); the ceiling check runs again once it is
+            # known (_observe, when the pod has SSH), and a pod over the ceiling is terminated then.
             want -= 1
 
     # --- stopping pods ---
     def _terminate(self, c, p, note, outcome="cancelled"):
         if not p.live:
             return
+        self._terminate_books(c, p, outcome)
+        confirmed = terminate_confirmed(self.api, p.id, self.sleep, wait_s=self.confirm_wait_s)
+        self._settle(c, p, confirmed, note)
+
+    def _terminate_books(self, c, p, outcome="cancelled"):
+        """The block bookkeeping of stopping a pod: what landed is proven, the rest gets `outcome`."""
         # A block can land after the last look: count it as proven, not as `outcome`. Asking the coordinator must
         # never stop a pod being terminated: if it cannot answer, the blocks are logged as `outcome` and
         # reconcile_work corrects them on a later run.
@@ -1483,32 +2164,86 @@ class Bot:
                 c.execute("UPDATE sponsor_work SET outcome=? WHERE id=? AND outcome IS NULL", (outcome, a["row"]))
             c.commit()
             p.assigned = []
-        confirmed = terminate_confirmed(self.api, p.id, self.sleep, wait_s=self.confirm_wait_s)
-        p.terminated, p.state = self.clock(), "terminated"
+
+    def _settle(self, c, p, confirmed, note):
+        """⛔ A pod RunPod still lists is NOT terminated: it stays live (its spend keeps counting, it holds its
+        --max-pods slot so no replacement is rented on top of it) in state `unconfirmed`, which no work goes to,
+        and each look tries again (_retry_unconfirmed). Its row keeps terminated_at NULL, so the next run's start
+        sweeps it if this one never manages to."""
         if not confirmed:
-            self.unconfirmed.append(p.id)
-            note += " (TERMINATION NOT CONFIRMED)"
+            if p.id not in self.unconfirmed:
+                self.unconfirmed.append(p.id)
+            p.state = "unconfirmed"
+            p.unconfirmed_since = p.unconfirmed_since or self.clock()
+            c.execute("UPDATE sponsor_pods SET note=? WHERE pod_id=?", (note + " (TERMINATION NOT CONFIRMED)", p.id))
+            c.commit()
+            self.log(f"⛔ {p.name}: TERMINATION NOT CONFIRMED ({note}) -- still counted as live and billing")
+            return
+        if p.id in self.unconfirmed:
+            self.unconfirmed.remove(p.id)
+        p.unconfirmed_since, p._warned_hours = None, 0
+        p.terminated, p.state = self.clock(), "terminated"
         c.execute("UPDATE sponsor_pods SET terminated_at=?, usd_estimate=?, note=? WHERE pod_id=?",
                   (p.terminated, p.spend(p.terminated, self.ceiling), note, p.id))
         c.commit()
         self.log(f"terminated {p.name}: {note}")
 
+    def _retry_unconfirmed(self, c):
+        stuck = [p for p in self._live() if p.state == "unconfirmed"]
+        if not stuck:
+            return
+        # A pod RunPod will not let go of is retried every look, its spend counting toward --max-usd (the bound). It is
+        # NOT a reason to stop: during a RunPod DELETE outage that would kill healthy pods' work and latch with nobody
+        # retrying. It is said LOUDLY, once an hour per pod.
+        for p in stuck:
+            since = p.unconfirmed_since or self.clock()
+            hours = int((self.clock() - since) // UNCONFIRMED_WARN_S)
+            if hours >= 1 and hours > getattr(p, "_warned_hours", 0):
+                p._warned_hours = hours
+                self.log(f"⛔ {p.name} has not been confirmed terminated for {hours} h; still retrying every look and "
+                         f"counting its spend. Check RunPod (`sponsor_bot.py stop-all` releases hz-sponsor-* pods).")
+        done, _ = terminate_many(self.api, [p.id for p in stuck], self.sleep, tries=1, wait_s=0, budget_s=0)
+        for p in stuck:
+            if p.id in done:
+                self._settle(c, p, True, "terminated (confirmed on a later look)")
+
     def terminate_all(self, c, reason):
-        for p in self._live():
-            self._terminate(c, p, reason)
-        # A deploy whose answer was lost still made a pod: sweep by this run's name prefix too.
+        """Every live pod and every pod with this run's prefix (a lost create), released by release_until_clean inside
+        TERMINATE_BUDGET_S: the DELETEs for the live pods go out before any listing or coordinator question, each pod
+        is settled the moment RunPod confirms it (the spend clock stops then), and the prefix is listed until clean.
+        What is still unconfirmed keeps its row open for the next run's start to sweep -- if the run did not latch:
+        a LATCHED bot does not start again until a human clears it, and then sweeps."""
+        live = self._live()
+        by_id = {p.id: p for p in live}
+
+        def settle(ids):            # the spend clock stops here; the coordinator bookkeeping waits for the end
+            for i in ids:
+                p = by_id.get(i)
+                if p is not None and p.terminated is None:
+                    self._settle(c, p, True, reason)
+
         try:
-            strays = [p for p in self.api.pods() if p["name"].startswith(self.prefix)]
-        except Exception as e:
-            self.log(f"could not list pods to check for strays: {e}")
-            strays = []
-        for s in strays:
-            if not terminate_confirmed(self.api, s["id"], self.sleep, wait_s=self.confirm_wait_s):
-                if s["id"] not in self.unconfirmed:
-                    self.unconfirmed.append(s["id"])
+            done, left, clean = release_until_clean(
+                self.api, list(by_id), match=lambda n: n.startswith(self.prefix), sleep=self.sleep,
+                wait_s=self.confirm_wait_s, on_done=settle)
+        except Exception as e:                                     # noqa: BLE001
+            self.log(f"could not release this run's pods: {e}")
+            done, left = [], list(by_id)
+        for p in live:
+            try:
+                self._terminate_books(c, p)     # after the release: a slow coordinator cannot eat the release budget
+            except Exception as e:              # noqa: BLE001 -- one pod's books must not stop the rest settling
+                self.log(f"could not book {p.name}'s blocks: {e}")
+            if p.terminated is None:
+                self._settle(c, p, False, reason)
+        for i in left:
+            if i not in self.unconfirmed:
+                self.unconfirmed.append(i)
         if self.unconfirmed:
             self.log("TERMINATION NOT CONFIRMED for pod(s) " + ", ".join(self.unconfirmed)
-                     + ": terminate them by hand in RunPod, they may still be charging")
+                     + ": terminate them by hand in RunPod, they may still be charging (`sponsor_bot.py stop-all` "
+                       "releases every hz-sponsor-* pod). The next run's start tries again before renting -- but a "
+                       "latched bot does not start until a human clears the latch.")
 
     @staticmethod
     def _ignore_signals():
@@ -1725,14 +2460,35 @@ def main(argv=None):
                   sleep_s=a.tick, trial=trial)
     except BotRefused as e:
         raise SystemExit(f"sponsor_bot: {e}")
-    bot.runner = SshRunner.from_env().prepare()
-    bot.api = RunPod.from_env()
-    bot.identity_home = bot.runner.home
-    install_signal_handlers()
+    home = os.environ.get("SPONSOR_BOT_HOME")
+    state = TRANSIENT_STATE if trial is None else "transient-trial.json"   # a manual trial never feeds the timer's streak
+    bot.state_home = home
+    # ⛔ ONE BOT AT A TIME. The start sweep releases every unconfirmed hz-sponsor-* pod it finds; a second bot (a
+    # manual `trial` while the timer runs) would have its pods swept. The lock is held until the process exits.
+    lock = acquire_run_lock(home)
+    if lock is None:
+        # ⛔ Before anything touches RunPod: the start sweep releases every unconfirmed hz-sponsor-* pod on the key,
+        # which is only safe under the run lock -- and there is no lock without SPONSOR_BOT_HOME.
+        raise SystemExit("sponsor_bot: --live needs SPONSOR_BOT_HOME (the run lock that makes the start sweep safe)")
+    if lock is False:
+        print("sponsor_bot: another sponsor bot run holds the lock; skipped (nothing rented)", flush=True)
+        return TRANSIENT_EXIT
     try:
+        bot.api = RunPod.from_env()
+        bot.release_leftovers()                 # first: needs only RunPod and the bot's own database
+        bot.runner = SshRunner.from_env().prepare()
+        bot.identity_home = bot.runner.home
+        install_signal_handlers()
         reason = bot.run()
+    except TransientError as e:
+        # ⛔ STRUCTURAL, not by convention: 75 ("skipped, nothing spent") only when this run provably rented nothing.
+        # Should a TransientError ever escape from after a deploy, it latches like any other failure.
+        if bot._n or bot.pods or bot.unconfirmed:
+            raise SystemExit(f"{e.code} — but this run had rented {bot._n} pod(s), so it is NOT transient: latching")
+        return transient_exit(str(e.code), home, state=state)
     except BotRefused as e:
         raise SystemExit(f"sponsor_bot: {e}")
+    transient_clear(home, state)
     c = connect(bot.db_path, readonly=True)
     try:
         print(format_report(report(c)))

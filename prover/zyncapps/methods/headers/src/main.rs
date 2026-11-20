@@ -3,10 +3,13 @@
 //! the previous one's or, every 2,016 blocks, Core's retarget (CalculateNextWorkRequired, no min-difficulty rule on
 //! mainnet), its time is above the median of the previous 11 (time-too-old), its version meets BIP34 / BIP66 / BIP65
 //! (bad-version). Chainwork is summed (GetBlockProof). SPV-level: no transactions, coins or scripts.
+//! Every checked header's hash is appended to a Merkle Mountain Range (src/mmr.rs, shared with the verifier), whose
+//! peaks are part of the state, so a verifier can check that block X at height h is on the proven chain.
 //!
 //! Input: the state before the run (height of the last header, its hash, chainwork LE, its nBits and time, the first
-//!        time of its retarget epoch, the last <= 11 times; a run from genesis starts from the empty state and its
-//!        first header must be Core's genesis header), then the headers (80 bytes each, as words).
+//!        time of its retarget epoch, the last <= 11 times, the largest time, the MMR peaks of blocks 0..=height; a
+//!        run from genesis starts from the empty state and its first header must be Core's genesis header), then the
+//!        headers (80 bytes each, as words).
 //! Commits: sha256 of the input state (a run joins the one that ends there; from genesis it is the empty state's), and
 //!          the state after the run, in the same form. The time-too-new rule is the verifier's (max_time).
 #![no_main]
@@ -17,6 +20,8 @@ use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 risc0_zkvm::guest::entry!(main);
+#[allow(dead_code)] // the native path builder (peaks_of, path) is the host's
+mod mmr;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct HState {
@@ -28,6 +33,7 @@ struct HState {
     epoch_first_time: u32,
     recent_times: Vec<u32>,
     max_time: u32,
+    mmr_peaks: Vec<[u8; 32]>, // MMR of the block hashes 0..=height, left to right, largest first (src/mmr.rs)
 }
 
 const GENESIS: [u8; 32] = {
@@ -82,8 +88,11 @@ fn main() {
     assert!(st.height >= -1, "headers: start height {}", st.height);
     if st.height == -1 {
         assert!(st.hash == [0; 32] && st.work == [0; 32] && st.bits == 0 && st.time == 0 && st.epoch_first_time == 0
-                && st.recent_times.is_empty() && st.max_time == 0, "headers: a run from genesis must start from the empty state");
+                && st.recent_times.is_empty() && st.max_time == 0 && st.mmr_peaks.is_empty(), "headers: a run from genesis must start from the empty state");
     }
+    // one peak per set bit of the leaf count (height + 1): any other list is not an MMR of height + 1 leaves
+    assert!(st.mmr_peaks.len() == ((st.height + 1) as u64).count_ones() as usize, "headers: {} MMR peaks for height {}",
+            st.mmr_peaks.len(), st.height);
     let pow_limit = set_compact(POW_LIMIT_BITS).0;
     let mut s = st;
     // nBits changes only at a retarget: its target and work are computed once per value, not once per header.
@@ -127,6 +136,7 @@ fn main() {
         assert!(U256::from_le_slice(&hash) <= target, "headers: {h} high-hash");
         let work = U256::from_le_slice(&s.work).wrapping_add(&w);
         if h % INTERVAL == 0 { s.epoch_first_time = time; }
+        mmr::append(&mut s.mmr_peaks, h as u64, &hash);
         s.recent_times.push(time);
         if s.recent_times.len() > 11 { s.recent_times.remove(0); }
         s.height = h;

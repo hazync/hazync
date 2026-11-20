@@ -16,7 +16,12 @@ echo "host toolchain: $RUSTUP_TOOLCHAIN ($(rustc --version)); guest toolchain: $
 # line printed still names the plain one (review 11-03).
 for v in $(compgen -e | grep '^HAZYNC_'); do unset "$v"; done
 kind=libzync-product
-for net in mainnet signet; do
+# --zyncapps-only: skip the two core images (they need the patched Core tree, scripts/libzync-base.sh) and print only the
+# zyncAPP lines. The zyncAPP build below does not read that tree, so its ids are the same either way; the full run is
+# what CI checks.
+nets=(mainnet signet); [ "${1:-}" = --zyncapps-only ] && nets=()
+mkdir -p /root/libzync-elf
+for net in "${nets[@]}"; do
   rm -rf target/riscv-guest   # never reuse a guest across networks (LIBZYNC.md round 8: a stale ELF)
   netenv=(); [ "$net" = signet ] && netenv=(HAZYNC_NETWORK=signet)
   env HAZYNC_BASE=/root/hazync-libzync-base HAZYNC_LIBZYNC=1 "${netenv[@]}" \
@@ -34,3 +39,16 @@ hid=$(target/fasthost/zyncapp id | awk '/^ZYNCAPP_HEADERS_ID /{print $2}')
 helf=target/riscv-guest/zyncapp-methods/zyncapp-headers/riscv32im-risc0-zkvm-elf/release/zyncapp-headers.bin
 cp "$helf" /root/libzync-elf/zyncapp-headers.bin
 echo "zyncapp-headers mainnet METHOD_ID $hid GUEST_ELF_SHA256 $(sha256sum "$helf" | cut -c1-64)"
+# The SwiftSync hints zyncAPP (#722, docs/libzync/HINTS_ZAPP.md): built by the same zyncapp-host build above.
+zid=$(target/fasthost/zyncapp id | awk '/^ZYNCAPP_HINTS_ID /{print $2}')
+zelf=target/riscv-guest/zyncapp-methods/zyncapp-hints/riscv32im-risc0-zkvm-elf/release/zyncapp-hints.bin
+cp "$zelf" /root/libzync-elf/zyncapp-hints.bin
+echo "zyncapp-hints mainnet METHOD_ID $zid GUEST_ELF_SHA256 $(sha256sum "$zelf" | cut -c1-64)"
+# The utreexo zyncAPP (docs/libzync/UTREEXO_ZAPP.md): the base walk and the tip step, separate images, same build.
+for g in utreexo:ZYNCAPP_UTREEXO_ID utreexo-tip:ZYNCAPP_UTREEXO_TIP_ID; do
+  name=zyncapp-${g%%:*}
+  gid=$(target/fasthost/zyncapp id | awk -v k="${g#*:}" '$1 == k {print $2}')
+  gelf=target/riscv-guest/zyncapp-methods/$name/riscv32im-risc0-zkvm-elf/release/$name.bin
+  cp "$gelf" "/root/libzync-elf/$name.bin"
+  echo "$name mainnet METHOD_ID $gid GUEST_ELF_SHA256 $(sha256sum "$gelf" | cut -c1-64)"
+done

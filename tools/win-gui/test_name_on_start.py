@@ -14,6 +14,16 @@ CONTROL = "--control" in sys.argv
 fails = 0
 
 
+
+def _started(app, secs=30):
+    """Press Start and wait for its checks, which run off the window's thread (review of c881d582, M2)."""
+    import time as _t
+    app._start()
+    end = _t.time() + secs
+    while getattr(app, "_starting", False) and _t.time() < end:
+        app.update()
+        _t.sleep(0.02)
+
 def check(ok, what):
     global fails
     print(("  ok   " if ok else "  FAIL ") + what)
@@ -61,20 +71,20 @@ def main():
 
     app._steps = unnamed()
     answer["v"] = None
-    app._start()
+    _started(app)
     check(asked and not started, f"no name set: Start asks, and Cancel starts nothing (asked {len(asked)}, started {len(started)})")
 
     asked.clear(); started.clear(); named.clear()
     app._steps = unnamed()
     answer["v"] = "  xesktop-test "
-    app._start()
+    _started(app)
     check(asked and named == ["xesktop-test"] and started,
           f"a name given is set, then the work starts (set {named}, started {len(started)})")
     check("xesktop-test" in app.v_who.get(), f"the window says who it proves as ({app.v_who.get()!r})")
 
     asked.clear(); started.clear()
     app._steps = [firstrun.Step("identity", "Your name on the board", True, "alice  (key key.hex)")]
-    app._start()
+    _started(app)
     check(not asked and started, "a name already set: no question, it starts")
 
     app.destroy()

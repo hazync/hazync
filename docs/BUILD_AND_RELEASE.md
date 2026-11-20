@@ -17,20 +17,22 @@ refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
 
 - **Assets** are listed once, in `scripts/release-assets.txt` (read by `scripts/release.sh` and `release-sign.yml`):
   the libzync host for the published mainnet image (`reproduce/LIBZYNC_IDS`) as `hazync-host-x86_64-linux-gnu`,
-  `-cuda` and `hazync-host-x86_64-windows-cuda.zip` (`host.exe` + `cudart64_12.dll`); the libzync verifier
+  `-cuda`, `hazync-host-x86_64-windows-cuda.zip` (`host.exe` + `cudart64_12.dll`) and, from v0.26.1,
+  `hazync-host-x86_64-windows-cpu.zip` (`host.exe` alone, for a machine with no supported NVIDIA card); the libzync verifier
   (`swiftsync-verify`) as `hazync-verify-x86_64-linux-gnu`, `hazync-verify-aarch64` (built by `release-sign.yml`),
   `hazync-verify.wasm` and its glue `hazync-verify.js`; `hazync-worker`, `hazync-coordinator.py`,
   `hazync-run-workers.sh`; the Windows installer `hazync-setup-x86_64-windows.exe` (built by `release-sign.yml`);
-  `SHA256SUMS.txt` and `.asc`. Nine are uploaded by `release.sh`, four added by `release-sign.yml`: the release must
-  carry **exactly those 13** (12 up to v0.24.0, which had no installer).
+  `SHA256SUMS.txt` and `.asc`. Ten are uploaded by `release.sh`, four added by `release-sign.yml`: the release must
+  carry **exactly those 14** (13 up to v0.26.0, which had no Windows CPU host; 12 up to v0.24.0, which had no installer).
 - **Images** (v0.24.0): mainnet `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, signet
   `d4210dae…`, headers zyncAPP `2db34e12…`. `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the
   ids and ELF hashes); `reproduce/LIBZYNC_IDS` pins them.
 - **Hosts:** `prover/build-release.sh` embeds the published mainnet ELF (built by `reproduce/libzync.Dockerfile`, or
   passed as `HAZYNC_GUEST_ELF` and checked against its pinned sha256). The Windows host is built by `windows-prove.yml`
   on GitHub's `windows-2022` runners: dispatch it on the release commit first (`gh workflow run windows-prove.yml
-  --ref main -f skip_cpu_prove=true -f release_build=true`, a clean build with no restored caches); `scripts/windows-host.sh` fetches the artifact of that run and checks it from
-  its bytes.
+  --ref main -f release_build=true`, a clean build with no restored caches, and **not** `skip_cpu_prove`: its `prove`
+  job builds the CPU host and runs it, `method-id` plus a real prove of block 1); `scripts/windows-host.sh` fetches
+  both artifacts of that run and checks them from their bytes.
 - **Gates before publishing:** every host that runs on the release box answers `method-id` with the published id;
   one that cannot (CUDA without a driver, Windows) is checked from its bytes, or, stronger, by
   `HAZYNC_ATTEST_<asset>=<id>` from an operator who ran it. `scripts/check-release-verifiers.sh` runs the staged
@@ -221,10 +223,14 @@ those bytes: `prover/methods/build.rs` refuses an ELF whose sha256 or image id i
 own build location does not move the id. v0.24.0 moved every id with no guest source change, because the image id
 depends on the RISC Zero toolchain (3.0.5 → 3.1.0).
 
-The browser verifier is reproducible only with the same **host** Rust: `swiftsync-verify-wasm/build.sh` under Rust
+The browser verifier is reproducible only with the same Rust (now pinned, in the container below): `swiftsync-verify-wasm/build.sh` under Rust
 **1.99.0** gives the published `hazync-verify.wasm` (`446fdaeb…`); 1.97.1 gives other bytes. Build it with
 `swiftsync-verify-wasm/build.sh`, which pins Rust 1.99.0 itself since 2026-11-12 (installing it if missing), so the
-machine's default Rust no longer matters.
+machine's default Rust no longer matters. Since 16.11.2026 it builds inside the pinned container `reproduce/wasm.Dockerfile`; the host needs docker, cargo >= 1.78
+(to read the v4 Cargo.lock), python3 and the network, x86_64 only, and no wasm32 Rust of its own. The stage
+path had reached the bytes through cargo's `-C metadata` hash of the path dependencies (other stages gave `7d79f68c…`
+and `05754e5f…`), and a host C compiler reaches a zAPP module whose graph compiles C. In the container the stage path,
+the Rust toolchain and (where needed) clang are the same on every machine; `SWIFTSYNC_WASM_STAGE` is refused.
 
 **Hazync v1 (record).** The rest of this section describes the CORE images `reproduce/Dockerfile` built;
 the CORE id it names, `37987b85`, is superseded (v0.22.1 is the last v1 release, and v1 proofs still verify with
@@ -315,7 +321,7 @@ of this is merged first:
 ### 3.2 Cutting it: `scripts/release.sh` (as run for v0.24.0)
 
 ```bash
-gh workflow run windows-prove.yml --ref main -f skip_cpu_prove=true -f release_build=true   # FIRST, on the release commit (Windows host)
+gh workflow run windows-prove.yml --ref main -f release_build=true   # FIRST, on the release commit (Windows host)
 RUSTUP_TOOLCHAIN=1.99.0 ./scripts/release.sh vX.Y.Z --dry-run         # preflight + build + gate; publishes nothing
 RUSTUP_TOOLCHAIN=1.99.0 NOTES=docs/RELEASE_NOTES_vX.Y.Z.md ./scripts/release.sh vX.Y.Z   # the release
 ./scripts/release.sh vX.Y.Z --verify-only                              # resume at signing for a published, unsigned release
@@ -335,10 +341,15 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    (`scripts/embeds-method-id.sh`) where it cannot (the CUDA host on a box with no driver).
    `build-release.sh` stages the published mainnet ELF at `dist/.libzync-guest/mainnet.bin` (or set
    `HAZYNC_GUEST_ELF`).
-3. **The Windows host** (step 2b): never built here. `scripts/windows-host.sh fetch <HEAD> …` takes the
-   `hazync-host-windows-x86_64-cuda` artifact of a `windows-prove.yml` run **of this commit** whose `build-cuda`
-   job passed, checks that the zip holds only `host.exe` + `cudart64_*.dll`, that `host.exe` embeds the published
-   guest byte for byte and carries the image id, and zips it as `hazync-host-x86_64-windows-cuda.zip`.
+3. **The Windows hosts** (step 2b): never built here. `scripts/windows-host.sh fetch <HEAD> …` takes the
+   `hazync-host-windows-x86_64-cuda` artifact of a `windows-prove.yml` RELEASE BUILD run **of this commit** whose
+   `build-cuda` job passed, checks that the zip holds only `host.exe` + `cudart64_*.dll`, that `host.exe` embeds the
+   published guest byte for byte and carries the image id, and zips it as `hazync-host-x86_64-windows-cuda.zip`. The
+   same for the CPU host: the `hazync-host-windows-x86_64-cpu` artifact of a run whose `prove` job passed, `host.exe`
+   alone, importing only DLLs Windows ships (`scripts/pe_imports.py --cpu`: no `nvcuda.dll`, no Visual C++ runtime; the
+   job builds it with `-C target-feature=+crt-static`), zipped as `hazync-host-x86_64-windows-cpu.zip`. The CUDA host
+   still imports the Visual C++ runtime; the installer puts it beside `host.exe` (app-local), and a hand download
+   needs the Microsoft Visual C++ Redistributable (x64).
    Artifacts expire after 14 days, so dispatch the workflow close to the release.
 4. **Package** (`scripts/package-release.sh` with `TAG`): `hazync-worker` (`VERSION` stamped from the tag and
    asserted), `hazync-coordinator.py`, `hazync-run-workers.sh`, `hazync-verify.js` (from
@@ -360,8 +371,8 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    checks it (under qemu) with `check-release-verifiers.sh --cli`, builds and tests the Windows installer (about
    5 minutes), and adds `SHA256SUMS.txt` and `.asc`. On
    failure or timeout the script prints how to re-run it and keep `latest` on the last signed release.
-8. **Manifest**: `SHA256SUMS.txt` must list the nine assets plus every `sign` binary (`hazync-verify-aarch64`, the
-   installer), with the staged files' hashes; the release must carry exactly the **13** assets of `scripts/release-assets.txt`;
+8. **Manifest**: `SHA256SUMS.txt` must list the ten assets plus every `sign` binary (`hazync-verify-aarch64`, the
+   installer), with the staged files' hashes; the release must carry exactly the **14** assets of `scripts/release-assets.txt`;
    `SHA256SUMS.txt.asc` should verify (reported, not fatal, if the key is not imported locally).
 9. **`latest`**: set `make_latest`, read `/releases/latest` back, then download
    `/releases/latest/download/hazync-verify-x86_64-linux-gnu` until it contains the canonical id.

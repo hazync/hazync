@@ -21,8 +21,24 @@ install raise it (a drop-in or an edit) to well above 6G, or the first long run 
 Do not let the run grow unbounded: prove a fresh base on a GPU (`run_headers_pod.sh`) and install it with
 `--set-base` as the run grows. How far a run can grow before 24G is not enough has not been measured.
 
-A run is published only after `swiftsync-verify headers --expect <tip>:<the node's hash>` prints
+A run is published only after `zapp-headers --expect <tip>:<the node's hash>` (the header-chain zAPP's CLI, zapps/headers) prints
 `SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`5bd8011d`, image `2db34e12`).
+
+## Block inclusion (the MMR)
+
+Since the MMR image (feat/headers-mmr) the state also carries the peaks of a Merkle Mountain Range of every block
+hash (`prover/zyncapps/methods/headers/src/mmr.rs`), so the published pair answers "is block X at height h on this
+chain": `zyncapp headers-mmr-path <headers file from 0> <h> --tip <tip> > path.txt`, then
+`zapp-headers --include <h>:<hash> --path path.txt <base> <run>`. For a transaction in that block, add
+`--tx <txid>:<answer.json>`: `<txid>` is the transaction YOU ask about (as explorers print it) and `answer.json` is
+the path service's `/tx` answer (`../headers-api/`: the block's 80-byte header, the raw transaction and its merkle
+branch, the raw coinbase and its branch). The verifier checks that the header hashes to the included block, that the
+raw transaction parses, is not 64 bytes, and hashes to `<txid>` (the answer's own `txid` is not read, so an answer
+about another transaction is refused), that the coinbase is a coinbase whose branch reaches the header's merkle root
+and pins the tree's depth, and that the transaction's branch, as deep, reaches the same root. The verdict line names
+what was shown (`INCLUDED: block <h> <hash> ..., with transaction <txid> in it`); exit 0 only when the chain also has
+Core's minimum work (exit 2, DEMO, below it). The follower needs no change: `--after` reads the base's peaks
+from its journal. A base from an older image has no peaks: the first MMR base is re-proved from genesis.
 
 ## Where it runs
 
@@ -37,8 +53,8 @@ A run is published only after `swiftsync-verify headers --expect <tip>:<the node
 ```sh
 install -d /opt/hazync-headers/bin /var/lib/hazync-headers
 install -m755 hazync-headers-follow /opt/hazync-headers/bin/
-# zyncapp + swiftsync-verify from this commit (release builds), and the container-built ELF:
-install -m755 zyncapp swiftsync-verify /opt/hazync-headers/bin/
+# zyncapp + zapp-headers (zapps/headers) from this commit (release builds), and the container-built ELF:
+install -m755 zyncapp zapp-headers /opt/hazync-headers/bin/
 install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 5bd8011d…
 ssh-keygen -t ed25519 -N '' -C hazync-headers-publish -f /root/.ssh/hazync_headers_publish
 #   web box, /root/.ssh/authorized_keys:
@@ -54,7 +70,7 @@ systemctl daemon-reload && systemctl enable --now hazync-headers-follow.timer
 The headers image moved from `4d04d6bf` to `2db34e12`. The installed base (proved by `4d04d6bf`) no longer
 verifies, so every timer run fails until a base of the new image is installed. Re-run the four `install`
 lines above with this release's files: `hazync-headers-follow` (its `WANT_ELF` is now `5bd8011d…`, so the old
-script refuses the new ELF), `zyncapp`, `swiftsync-verify` and `zyncapp-headers.bin`. Then re-run the `--set-base` line with the 3.1.0 `headers_0_tip.rcpt` (`experimental/libzync-bench/headers/`,
+script refuses the new ELF), `zyncapp`, `zapp-headers` and `zyncapp-headers.bin`. Then re-run the `--set-base` line with the 3.1.0 `headers_0_tip.rcpt` (`experimental/libzync-bench/headers/`,
 sha256 `a2931d89…`).
 
 As done on hazync-proof on 2026-11-12: `zyncapp` was built from the release commit with `RISC0_SKIP_BUILD=1` (the guest
@@ -65,7 +81,7 @@ build is skipped; the ELF is supplied separately), the ELF installed was the con
 
 ## Test
 
-`test/test_follow.sh <zyncapp> <swiftsync-verify> <elf> <base receipt> <headers files>` runs the script against a fake
+`test/test_follow.sh <zyncapp> <zapp-headers> <elf> <base receipt> <headers files>` runs the script against a fake
 bitcoin-cli serving real mainnet headers, with the real prover and verifier (two CPU proofs, ~1.5 min): base install
 (a wrong hash refused), publish, unchanged tip, a moved tip replacing the run, and three refusals that leave the
 published folder untouched (a reorg below the base, a run that does not verify, a wrong ELF). Control: with the
