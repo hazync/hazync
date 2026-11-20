@@ -1,0 +1,11 @@
+  libzync: inputs 0..8006: 2170 pubkey hints, signatures COLLECT (no bundle entry)
+  libzync: ECMH COLLECT (no bundle)
+libzync-hints: block 962000 1 chunks on 1 threads -> $OUT/v2_block962000_c1.lzb
+  batch: 7031 verifies, 7021 valid, 10 left to libsecp
+  ecmh: 4324 operations, 296368 bytes
+  time: chunks 47.5 s, batch hints 0.4 s, aggregate + ecmh 12.7 s, total 60.7 s
+	Command being timed: "env HAZYNC_BLOCK=$REPO/prover/block_962000.json HAZYNC_CHUNKS=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_HINT_THREADS=1 HAZYNC_COINLOG_TXCOUNTS=$REPO/experimental/libzync-bench/cost/txcounts.txt $OUT/v0.27.0/hazync-host-x86_64-linux-gnu libzync-hints $OUT/v2_block962000_c1.lzb"
+	User time (seconds): 71.09
+	System time (seconds): 0.75
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:00.71
+	Maximum resident set size (kbytes): 649856
