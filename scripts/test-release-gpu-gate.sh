@@ -107,6 +107,8 @@ clear; mk linux 'm["fixtures_sha256"] = "0" * 64'; mk windows; refused "a Linux 
 clear; mk linux; mk windows 'm["host_exe_sha256"] = "0" * 64'; refused "a Windows run of another host.exe than the staged zip's"
 clear; mk linux; mk windows 'm["result"] = "PASS"';         refused "a Windows marker that claims more than ATTESTED"
 clear; mk linux; mk windows 'm["repo_commit"] = "0" * 40';  refused "a Windows marker recorded from another commit"
+clear; mk linux 'del m["repo_commit"]'; mk windows;          refused "a Linux marker with no commit recorded"
+clear; mk linux; mk windows 'm["repo_commit"] = ""';        refused "a Windows marker with an empty commit"
 clear; mk linux 'm["repo_dirty"] = True'; mk windows;        refused "a Linux marker from a checkout with uncommitted changes"
 clear; mk linux; mk windows 'm["repo_dirty"] = True';        refused "a Windows marker from a checkout with uncommitted changes"
 clear; mk linux; mk windows 'm["blocks"][0]["receipt_sha256"] = "ab" * 32'; refused "a Windows marker whose receipt is the Linux gate's"
@@ -141,6 +143,17 @@ check "$(awk '/rm -f "\$OUT\/.clean-build-\$asset"/{r=NR} /mv -f "\$OUT\/.\$asse
       "build-release.sh removes the stamp BEFORE moving the binary in and writes it after"
 check "$(grep -q 'flock -n 9' prover/build-release.sh && echo 1)" "build-release.sh refuses a second same-mode build in one checkout"
 
+POD=scripts/release-gpu-gate-pod.sh
+if [ "$CONTROL" = 1 ]; then         # the old last resort: the process GROUP, which `timeout` escapes
+    POD="$T/pod-control.sh"
+    python3 - scripts/release-gpu-gate-pod.sh "$POD" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+o = 'pkill -TERM -s "$pid"; sleep "${DEADMAN_KILL_WAIT:-5}"; pkill -KILL -s "$pid"'
+assert o in s
+open(sys.argv[2], "w").write(s.replace(o, 'kill -TERM -- "-$pid"'))
+PY
+fi
 # ---- the pod-side dead-man (scripts/release-gpu-gate-pod.sh --deadman <s> <pod id>), stub runpodctl/curl ----------
 mkdir -p "$T/bin" "$T/wd"
 printf '#!/bin/sh\necho "runpodctl $*" >> "%s"\nexit "${STUB_RC:-0}"\n' "$T/calls" > "$T/bin/runpodctl"
@@ -151,7 +164,7 @@ printf 'PATH=/usr/bin\0HOME=/root\0' > "$T/environ-nopod"
 dm() {   # dm <environ> <expected id> [STUB_RC]: one dead-man run; calls and log are fresh each time
     rm -f "$T/calls" "$T/deadman.log"
     PATH="$T/bin:$PATH" STUB_RC="${3:-0}" DEADMAN_ENVIRON="$1" DEADMAN_WAIT=0 DEADMAN_LOG="$T/deadman.log" \
-        DEADMAN_WORKDIR="$T/wd" bash scripts/release-gpu-gate-pod.sh --deadman 0 "$2"
+        DEADMAN_WORKDIR="$T/wd" bash "$POD" --deadman 0 "$2"
 }
 dm "$T/environ" abc123xyz
 check "$(grep -q '^runpodctl pod delete abc123xyz$' "$T/calls" && grep -q 'runpodctl pod delete answered OK' "$T/deadman.log" && echo 1)" \
@@ -162,13 +175,19 @@ dm "$T/environ" otherpod
 check "$([ ! -s "$T/calls" ] && grep -q REFUSING "$T/deadman.log" && echo 1)" "dead-man: armed for another pod id: refuses, calls nothing"
 dm "$T/environ-nopod" abc123xyz
 check "$([ ! -s "$T/calls" ] && grep -q REFUSING "$T/deadman.log" && echo 1)" "dead-man: no RUNPOD_POD_ID (not on a pod): refuses, calls nothing"
-setsid sleep 300 & spid=$!
-sleep 0.2; echo "$spid" > "$T/wd/script.pid"
-dm "$T/environ" abc123xyz 1
-sleep 0.2
-check "$(grep -q 'COULD NOT REMOVE THIS POD' "$T/deadman.log" && ! kill -0 "$spid" 2>/dev/null && echo 1)" \
-      "dead-man: when nothing removes the pod it says so and kills the gate's workload (not PID 1)"
-kill "$spid" 2>/dev/null
+# A stand-in workload shaped like the real one: the pod script, started with setsid, running the prover under GNU
+# timeout -- which puts it in a process group of its own, so only a SESSION kill reaches it.
+printf '#!/bin/bash\ntimeout 300 sleep 299 &\nwait\n' > "$T/wd/release-gpu-gate-pod.sh"
+setsid bash "$T/wd/release-gpu-gate-pod.sh" & spid=$!
+sleep 0.5; echo "$spid" > "$T/wd/script.pid"
+kid=$(pgrep -s "$spid" -x sleep | head -1)
+DEADMAN_KILL_WAIT=1 dm "$T/environ" abc123xyz 1
+sleep 0.5
+check "$(grep -q 'COULD NOT REMOVE THIS POD' "$T/deadman.log" && [ -n "$kid" ] && ! kill -0 "$kid" 2>/dev/null && ! kill -0 "$spid" 2>/dev/null && echo 1)" \
+      "dead-man: when nothing removes the pod it says so and kills the gate's workload, the prover under timeout too"
+pkill -KILL -s "$spid" 2>/dev/null
+echo 1 > "$T/wd/script.pid"; dm "$T/environ" abc123xyz 1
+check "$(grep -q "no live gate workload to kill (script.pid '1')" "$T/deadman.log" && echo 1)" "dead-man: never signals PID 1 (or a pid that is not the pod script)"
 
 if [ "$CONTROL" = 1 ]; then echo "CONTROL: $fails failure(s)"; else echo "$fails failure(s)"; fi
 if [ "$CONTROL" = 1 ]; then [ "$fails" != 0 ]; else [ "$fails" = 0 ]; fi

@@ -21,9 +21,10 @@ fails=0
 check() { if [ "$1" = 1 ]; then echo "  ok   $2"; else echo "  FAIL $2"; fails=$((fails+1)); fi; }
 C=scripts/check-glibc-floor.sh
 if [ "$CONTROL" = 1 ]; then
-    sed 's/if top and ver(top) > ver(floor):/if False:/' "$C" > "$T/checker.sh"; chmod +x "$T/checker.sh"
+    sed -e 's/if top and ver(top) > ver(floor):/if False:/' -e 's/^    if odd:$/    if False:/' \
+        -e 's/    except Exception as ex:  # noqa: BLE001.*/    except (OSError,) as ex:/' "$C" > "$T/checker.sh"; chmod +x "$T/checker.sh"
     grep -q 'if False:' "$T/checker.sh" || { echo "FAIL could not cut the comparison out"; exit 1; }
-    C="$T/checker.sh"; echo "CONTROL: the version comparison is gone -- the refusal checks below MUST fail"
+    C="$T/checker.sh"; echo "CONTROL: the version comparison, the non-numeric refusal and the per-file catch are gone -- MUST fail"
 fi
 
 printf '#include <stdio.h>\nint main(void){puts("hi");return 0;}\n' > "$T/h.c"
@@ -36,18 +37,22 @@ d = bytearray(open(src, "rb").read())
 shoff, = struct.unpack_from("<Q", d, 0x28); shentsize, shnum = struct.unpack_from("<HH", d, 0x3A)
 secs = [struct.unpack_from("<IIQQQQIIQQ", d, shoff + i * shentsize) for i in range(shnum)]
 hit = 0
-if new == "nover":                                  # drop DT_VERNEED from the dynamic segment (what the loader reads)
+if new in ("nover", "hugenum"):                     # drop DT_VERNEED / make DT_VERNEEDNUM absurd (what the loader reads)
+    want_tag, put = (0x6FFFFFFE, None) if new == "nover" else (0x6FFFFFFF, 10 ** 9)
     phoff, = struct.unpack_from("<Q", d, 0x20); phentsize, phnum = struct.unpack_from("<HH", d, 0x36)
     for i in range(phnum):
         ph = struct.unpack_from("<IIQQQQQQ", d, phoff + i * phentsize)
         if ph[0] == 2:
             for k in range(ph[5] // 16):
                 t, = struct.unpack_from("<q", d, ph[2] + 16 * k)
-                if t == 0x6FFFFFFE:
-                    struct.pack_into("<q", d, ph[2] + 16 * k, 0x60000123)     # an unknown OS tag: ignored
+                if t == want_tag:
+                    if put is None:
+                        struct.pack_into("<q", d, ph[2] + 16 * k, 0x60000123)     # an unknown OS tag: ignored
+                    else:
+                        struct.pack_into("<Q", d, ph[2] + 16 * k + 8, put)
                     hit += 1
     open(out, "wb").write(bytes(d))
-    sys.exit(0 if hit else "no DT_VERNEED to remove")
+    sys.exit(0 if hit else "no dynamic tag to change")
 for s in secs:
     if s[1] != 0x6FFFFFFE:
         continue
@@ -82,7 +87,7 @@ PY
 }
 mk "$T/v234" - || exit 1
 mk "$T/v239" 2.39; mk "$T/v239w" 2.39 weak; mk "$T/v310" 3.10; mk "$T/v24" 2.4
-mk "$T/nover" nover
+mk "$T/nover" nover; mk "$T/hugenum" hugenum; mk "$T/vxyz" XYZ
 mk "$T/v234s" - strip; mk "$T/v239s" 2.39 strip
 printf '#!/bin/sh\necho not an elf\n' > "$T/script"
 head -c 100 "$T/base" > "$T/trunc"
@@ -106,6 +111,15 @@ if gcc -static-pie -O1 -o "$T/spie" "$T/h.c" 2>/dev/null; then
 else
     echo "  --   (no static-pie here: that case is not exercised)"
 fi
+run "$T/vxyz";   check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'needs GLIBC_XYZ: a non-numeric glibc need' && echo 1)" "a non-numeric GLIBC_* need is refused, not dropped"
+if gcc -O1 -Wl,-z,pack-relative-relocs -o "$T/relr" "$T/h.c" 2>/dev/null && grep -aq GLIBC_ABI_DT_RELR "$T/relr"; then
+    run "$T/relr"; check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'GLIBC_ABI_DT_RELR' && echo 1)" \
+        "gcc -Wl,-z,pack-relative-relocs (needs GLIBC_ABI_DT_RELR, glibc >= 2.36) is refused"
+else
+    echo "  --   (this toolchain does not emit GLIBC_ABI_DT_RELR: the pack-relative-relocs case is not exercised)"
+fi
+run "$T/hugenum" "$T/v234"; check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'hugenum: cannot read' && printf '%s' "$out" | grep -q 'v234: needs GLIBC_2.34' && echo 1)" \
+    "a malformed ELF (absurd DT_VERNEEDNUM) is refused, and the next file is still reported"
 run "$T/script"; check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'not an ELF' && echo 1)" "a non-ELF file is skipped, and says so"
 run "$T/nope";   check "$([ $rc = 1 ] && echo 1)" "a missing file is refused (not a pass by absence)"
 run "$T/trunc";  check "$([ $rc = 1 ] && echo 1)" "an ELF it cannot parse is refused"

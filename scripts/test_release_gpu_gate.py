@@ -37,6 +37,7 @@ import sponsor_bot  # noqa: E402
 
 CONTROL = "--control" in sys.argv
 CLEAN = ("c0ffee" * 7)[:40]
+g._repo_commit_real = g.repo_commit
 g.repo_commit = lambda: (CLEAN, False)        # the tree under test may be dirty; the gate's own dirty check is tested below
 BROKEN = {"on": False}
 
@@ -211,7 +212,7 @@ def mkdist(lax=False):
     return t, dist
 
 
-def scenario(api_kw=None, plan=None, lax=False, source_sha=None, max_usd=2.0, sweep_first=False, broken=False):
+def scenario(api_kw=None, plan=None, lax=False, source_sha=None, max_usd=4.0, sweep_first=False, broken=False, work=None):
     """Run the gate once against a fresh fake; returns (rc, api, dist, transport, report)."""
     t, dist = mkdist(lax)
     host_sha = g.sha256_file(os.path.join(dist, g.CUDA_ASSET))
@@ -219,7 +220,7 @@ def scenario(api_kw=None, plan=None, lax=False, source_sha=None, max_usd=2.0, sw
     tr = FakeTransport(api, host_sha, plan)
     clock = Clock()
     a = argparse.Namespace(source=dist, host_sha256=source_sha or host_sha, max_usd=max_usd, max_min=60.0,
-                           work=os.path.join(t, "work"), dry_run=False, sweep_first=sweep_first)
+                           work=work or os.path.join(t, "work"), dry_run=False, sweep_first=sweep_first)
     BROKEN["on"] = False
     with redirect_stdout(BrokenOut() if broken else io.StringIO()):
         try:
@@ -310,10 +311,28 @@ check(rc == 130 and len(tr.harvested) == 2 and not billing(api),
 rc, api, dist, tr, rep = scenario(api_kw=dict(cost=0.0))
 check(rc == 0 and rep.get("spent_usd_estimate", 0) > 0 and all(r.get("cost_per_hr", 0) > 0 for r in rep.get("runs", [])),
       f"a pod RunPod prices at $0/hr is counted at its type's ceiling, never free (estimate ${rep.get('spent_usd_estimate')})")
-g.repo_commit = lambda: (CLEAN, True)
+g.repo_commit = lambda: (CLEAN, [" M scripts/oops.py"])
 rc, api, dist, tr, rep = scenario()
 g.repo_commit = lambda: (CLEAN, False)
-check(str(rc).startswith("SystemExit") and api.n == 0, "a checkout with uncommitted changes: refused before renting")
+check(str(rc).startswith("SystemExit") and api.n == 0 and "scripts/oops.py" in str(rc) and not os.path.isdir(rep.get("_w", "/nonexistent")),
+      "a checkout with uncommitted changes: refused before renting, naming the changed files")
+rc, api, dist, tr, rep = scenario(work=os.path.join(g.REPO, "relgate-work-test"))
+check(str(rc).startswith("SystemExit") and api.n == 0 and "inside the checkout" in str(rc)
+      and not os.path.exists(os.path.join(g.REPO, "relgate-work-test")), "--work inside the checkout: refused, nothing created")
+rc, api, dist, tr, rep = scenario(max_usd=1.0)
+check(str(rc).startswith("SystemExit") and api.n == 0 and "could never hold" in str(rc),
+      "a cap below what harvest + terminate can cost at ceiling prices: refused before renting")
+_real, _repo = g.__dict__["_repo_commit_real"], g.REPO
+g.REPO = tempfile.mkdtemp(prefix="hz-relgate-test-nogit-")
+TEMPS.append(g.REPO)
+try:
+    _real()
+    _nogit = "returned"
+except SystemExit as e:
+    _nogit = f"SystemExit({e})"
+g.REPO = _repo
+check(_nogit.startswith("SystemExit") and "cannot read this checkout's git state" in _nogit,
+      "repo_commit: a git failure is a refusal, never 'clean at commit empty'")
 # the reaper must not take a pod whose create call is still in flight
 _t, _d = mkdist()
 _api = FakeAPI()
@@ -442,6 +461,10 @@ g.repo_commit = lambda: (CLEAN, True)
 rc, dist, out = win_case()
 g.repo_commit = lambda: (CLEAN, False)
 check(rc == 1 and "uncommitted changes" in out, "record-windows from a checkout with uncommitted changes: REFUSED")
+g.repo_commit = lambda: (CLEAN, [" M prover/x.rs"])
+rc, dist, out = win_case()
+g.repo_commit = lambda: (CLEAN, False)
+check(rc == 1 and "prover/x.rs" in out, "  ...and the refusal names the changed files")
 
 for t in TEMPS:
     shutil.rmtree(t, ignore_errors=True)

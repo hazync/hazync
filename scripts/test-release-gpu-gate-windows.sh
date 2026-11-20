@@ -25,7 +25,7 @@ if [ "$CONTROL" = 1 ]; then
     python3 - "$S" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-o = '$report.exit_code = Run $hostPath @("libzync-prove-range", "170", "170", "unused", "leaf", $Out) "prove.log"'
+o = '$report.exit_code = Run $hostPath @("libzync-prove-range", "170", "170", "unused", "leaf", $Out) "prove.log" $ProveTimeoutS'
 assert o in s
 s = s.replace(o, '& $hostPath libzync-prove-range 170 170 unused leaf $Out *> prove.log\n$report.exit_code = $LASTEXITCODE')
 open(p, "w").write(s)
@@ -33,16 +33,19 @@ PY
     echo "CONTROL: the old '& host.exe ... *> prove.log' is back -- the checks below MUST fail"
 fi
 
-# ---- shape (everywhere) ----
+PS=$(command -v powershell.exe || true)
+# ---- shape (everywhere; in a control run WITH PowerShell it is skipped, so the failures below are the 5.1 run's own)
 code=$(grep -vE '^[[:space:]]*#' "$S")
+if [ "$CONTROL" = 0 ] || [ -z "$PS" ]; then
 check "$(printf '%s' "$code" | grep -qE '&[[:space:]]+\$hostPath|\*>' || echo 1)" \
       "no native call runs as '& exe' or with a '*>' redirect"
 check "$(printf '%s' "$code" | grep -q 'Start-Process -FilePath \$exe' && echo 1)" "native calls go through Start-Process"
 check "$(printf '%s' "$code" | grep -qE 'Run \$hostPath @\("libzync-prove-range"' && echo 1)" "the prove itself goes through Run"
 check "$(printf '%s' "$code" | grep -qE '\[Parameter\(Mandatory = \$true\)\]\[string\]\$Zip' && echo 1)" "-Zip is required"
+check "$(printf '%s' "$code" | grep -q 'WaitForExit(\$timeoutS \* 1000)' && echo 1)" "every native call has a timeout"
+fi
 
 # ---- a real run under Windows PowerShell 5.1, where there is one ----
-PS=$(command -v powershell.exe || true)
 if [ -n "$PS" ] && command -v wslpath >/dev/null; then
     WT=$(cmd.exe /c 'echo %TEMP%' 2>/dev/null | tr -d '\r')
     W="$(wslpath -u "$WT")/hz-gate-ps-$$"
@@ -55,6 +58,7 @@ public static class P { public static int Main(string[] a) {
   if (a.Length > 0 && a[0] == "method-id") { Console.WriteLine("METHOD_ID 46666b6f"); return 0; }
   if (a.Length > 5 && a[0] == "libzync-prove-range") {
     Console.Error.WriteLine("progress: segment 1 of 4 (stderr)");
+    if (Environment.GetEnvironmentVariable("FAKE_HANG") == "1") System.Threading.Thread.Sleep(120000);
     if (Environment.GetEnvironmentVariable("FAKE_PROVE_RC") == "3") return 3;
     Directory.CreateDirectory(a[5]);
     File.WriteAllText(Path.Combine(a[5], "block_170.rcpt"), "RCPT " + Guid.NewGuid());
@@ -64,12 +68,13 @@ CS
     (cd "$W" && "$PS" -NoProfile -Command "Add-Type -TypeDefinition (Get-Content -Raw fake.cs) -OutputAssembly host.exe -OutputType ConsoleApplication" ) >/dev/null 2>&1
     printf 'leaf' > "$W/leaf_170.bin"; printf 'zip' > "$W/h.zip"
     if [ -f "$W/host.exe" ]; then
+        echo STALE-LINE-FROM-AN-EARLIER-RUN > "$W/prove.log"
         (cd "$W" && "$PS" -NoProfile -ExecutionPolicy Bypass -File gate.ps1 -Leaf leaf_170.bin -Zip h.zip) > "$T/run.txt" 2>&1
         rc=$?
         j() { python3 -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8-sig')).get(sys.argv[2]))" "$W/gate-windows.json" "$1" 2>/dev/null; }
         check "$([ $rc = 0 ] && [ "$(j exit_code)" = 0 ] && echo 1)" "PS 5.1: a prove that writes to stderr finishes, exit 0 recorded (script rc $rc, exit_code $(j exit_code))"
-        check "$(grep -q 'progress: segment 1 of 4' "$W/prove.log" 2>/dev/null && grep -q LZ_PROVE_RANGE_DONE "$W/prove.log" && echo 1)" \
-              "  ...prove.log holds both its stdout and its stderr"
+        check "$(grep -q 'progress: segment 1 of 4' "$W/prove.log" 2>/dev/null && grep -q LZ_PROVE_RANGE_DONE "$W/prove.log" && ! grep -q STALE-LINE "$W/prove.log" && echo 1)" \
+              "  ...prove.log holds both its stdout and its stderr, and nothing from an earlier run"
         check "$([ "$(j receipt_sha256)" = "$(sha256sum "$W/out/block_170.rcpt" 2>/dev/null | cut -c1-64)" ] && [ "$(j log_sha256)" = "$(sha256sum "$W/prove.log" | cut -c1-64)" ] && echo 1)" \
               "  ...the report names the receipt and the log by sha256"
         check "$([ "$(j host_exe_sha256)" = "$(sha256sum "$W/host.exe" | cut -c1-64)" ] && grep -q 46666b6f <<<"$(j method_id)" && echo 1)" \
@@ -77,6 +82,11 @@ CS
         (cd "$W" && FAKE_PROVE_RC=3 WSLENV=FAKE_PROVE_RC "$PS" -NoProfile -ExecutionPolicy Bypass -File gate.ps1 -Leaf leaf_170.bin -Zip h.zip) > "$T/run3.txt" 2>&1
         rc=$?
         check "$([ $rc = 1 ] && [ "$(j exit_code)" = 3 ] && echo 1)" "PS 5.1: a prove that exits 3 is recorded as 3, and the script fails (rc $rc, exit_code $(j exit_code))"
+        t0=$SECONDS
+        (cd "$W" && FAKE_HANG=1 WSLENV=FAKE_HANG "$PS" -NoProfile -ExecutionPolicy Bypass -File gate.ps1 -Leaf leaf_170.bin -Zip h.zip -ProveTimeoutS 5) > "$T/runh.txt" 2>&1
+        rc=$?
+        check "$([ $rc = 1 ] && [ "$(j exit_code)" = -2 ] && grep -q 'KILLED: no exit within 5 s' "$W/prove.log" && [ $((SECONDS - t0)) -lt 60 ] && echo 1)" \
+              "PS 5.1: a prove that hangs is killed at -ProveTimeoutS, recorded as -2 (rc $rc, exit_code $(j exit_code), $((SECONDS - t0)) s)"
     else
         echo "  --   could not compile a fake host.exe with Add-Type: the PowerShell run is not exercised"
     fi

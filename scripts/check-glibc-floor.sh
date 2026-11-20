@@ -19,7 +19,7 @@ set -uo pipefail
 FLOOR="${HAZYNC_GLIBC_FLOOR:-2.34}"
 [ "$#" -gt 0 ] || { echo "usage: $0 <file>..." >&2; exit 2; }
 python3 - "$FLOOR" "$@" <<'PY'
-import struct, sys
+import re, struct, sys
 
 def ver(s):
     return tuple(int(x) for x in s.split("."))
@@ -69,14 +69,20 @@ def glibc_needs(path):
 
     def cstr(o):
         return d[stroff + o: d.index(b"\0", stroff + o)].decode()
+    if 5 not in tv:
+        raise ValueError("DT_VERNEED without DT_STRTAB")
     p = off(tv[0x6FFFFFFE])
+    if not 0 < tv.get(0x6FFFFFFF, 0) <= 64:
+        raise ValueError(f"DT_VERNEEDNUM {tv.get(0x6FFFFFFF, 0)} is not a believable count")
     for _ in range(tv.get(0x6FFFFFFF, 0)):          # DT_VERNEEDNUM x Elf64_Verneed
         _v, cnt, _file, aux, nxt = struct.unpack_from(e + "HHIII", d, p)
+        if cnt > 256:
+            raise ValueError(f"a Verneed entry claims {cnt} versions")
         a = p + aux
         for _ in range(cnt):                        # Elf64_Vernaux: vna_hash, vna_flags, vna_other, vna_name, vna_next
             _h, flags, _o, name, anxt = struct.unpack_from(e + "IHHII", d, a)
             n = cstr(name)
-            if n.startswith("GLIBC_") and n[6:].replace(".", "").isdigit():
+            if n.startswith("GLIBC_"):                  # numeric or not: GLIBC_ABI_DT_RELR, GLIBC_PRIVATE are kept
                 out[n[6:]] = out.get(n[6:], False) or not (flags & 0x2)   # VER_FLG_WEAK = 0x2; hard if any is not weak
             a += anxt
             if not anxt:
@@ -92,8 +98,8 @@ bad = 0
 for f in files:
     try:
         need = glibc_needs(f)
-    except (OSError, ValueError, IndexError, struct.error) as ex:
-        print(f"  FAIL {f}: cannot read its glibc needs ({ex})"); bad += 1; continue
+    except Exception as ex:  # noqa: BLE001 -- every file is reported; one malformed file must not hide the rest
+        print(f"  FAIL {f}: cannot read its glibc needs ({type(ex).__name__}: {ex})"); bad += 1; continue
     if need is None:
         print(f"  --   {f}: not an ELF (no glibc floor)"); continue
     if need == "static":
@@ -102,6 +108,14 @@ for f in files:
         # A dynamic ELF that names no GLIBC version at all: stripped of its version table, or linked against another
         # libc. Its floor cannot be read from it, so it is not passed.
         print(f"  FAIL {f}: a dynamic ELF with no GLIBC version needs (.gnu.version_r missing or empty): floor unknown")
+        bad += 1; continue
+    odd = sorted(v for v in need if not re.fullmatch(r"[0-9]+(\.[0-9]+)*", v))
+    if odd:
+        # Not a version number, so not comparable with the floor -- and not harmless: GLIBC_ABI_DT_RELR (packed
+        # relative relocations, gcc -Wl,-z,pack-relative-relocs) exists only from glibc 2.36, GLIBC_PRIVATE is
+        # glibc-internal ABI that changes between builds. A release binary has no business needing either.
+        print(f"  FAIL {f} needs {', '.join('GLIBC_' + v for v in odd)}: a non-numeric glibc need, refused "
+              f"(GLIBC_ABI_DT_RELR needs glibc >= 2.36; build without -z pack-relative-relocs, in ubuntu:22.04)")
         bad += 1; continue
     top = max(need, key=ver)
     if top and ver(top) > ver(floor):

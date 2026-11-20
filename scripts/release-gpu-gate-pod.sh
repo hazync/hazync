@@ -60,8 +60,16 @@ if [ "${1:-}" = "--deadman" ]; then
     fi
     sleep "${DEADMAN_WAIT:-60}"
     log "COULD NOT REMOVE THIS POD ($RUNPOD_POD_ID): it keeps billing until 'release-gpu-gate.sh sweep --terminate'; killing the gate workload"
+    # The workload is the pod script's whole SESSION (it was started with setsid, so its pid is the session id):
+    # a process group is not enough, because `timeout … host` puts the prover in a group of its own. Only a pid that
+    # is still the pod script is touched (> 1, and its cmdline names this script), never PID 1 or a reused pid.
     pid=$(cat "${DEADMAN_WORKDIR:-/workspace}/script.pid" 2>/dev/null)
-    [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM -- "-$pid" 2>/dev/null && log "killed the workload (process group $pid)"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'release-gpu-gate-pod\.sh'; then
+        pkill -TERM -s "$pid"; sleep "${DEADMAN_KILL_WAIT:-5}"; pkill -KILL -s "$pid"
+        log "killed the workload (session $pid)"
+    else
+        log "no live gate workload to kill (script.pid '$pid')"
+    fi
     exit 1
 fi
 W=/workspace; O=$W/out

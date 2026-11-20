@@ -21,21 +21,37 @@ param(
     [Parameter(Mandatory = $true)][string]$Leaf,
     [Parameter(Mandatory = $true)][string]$Zip,
     [string]$Out = "out",
-    [switch]$Pascal
+    [switch]$Pascal,
+    [int]$ToolTimeoutS = 60,        # nvidia-smi and method-id
+    [int]$ProveTimeoutS = 2400      # the prove: 40 minutes (a GTX 1050 Ti took 197.7 s for block 1)
 )
 $ErrorActionPreference = "Stop"
 function Sha([string]$p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLower() }
-function Run([string]$exe, [string[]]$argv, [string]$log) {
-    # stdout and stderr to files, then one log; returns the exit code. Never throws on the program's stderr.
+if ($Out -match "\s") { throw "-Out must not contain whitespace (it is passed to host.exe as one argument)" }
+function Run([string]$exe, [string[]]$argv, [string]$log, [int]$timeoutS) {
+    # stdout and stderr to files, then one log; returns the exit code (-2 when killed at the timeout). Never throws
+    # on the program's stderr. Any argument with a space is quoted (Start-Process joins them with spaces).
     $o = "$log.out"; $e = "$log.err"
-    $p = Start-Process -FilePath $exe -ArgumentList $argv -NoNewWindow -PassThru `
+    Remove-Item -Force -ErrorAction SilentlyContinue $log, $o, $e     # never report a stale log from an earlier run
+    $q = @($argv | ForEach-Object { if ($_ -match "\s") { '"' + $_ + '"' } else { $_ } })
+    $p = Start-Process -FilePath $exe -ArgumentList $q -NoNewWindow -PassThru `
         -RedirectStandardOutput $o -RedirectStandardError $e
     $null = $p.Handle          # without this, ExitCode can read $null after the wait
-    $p.WaitForExit()
+    if (-not $p.WaitForExit($timeoutS * 1000)) {
+        try { $p.Kill() } catch { }
+        $p.WaitForExit()
+        "KILLED: no exit within $timeoutS s" | Set-Content -Encoding ascii -LiteralPath "$log.timeout"
+    }
     $text = @()
     if (Test-Path -LiteralPath $o) { $text += Get-Content -LiteralPath $o }
     if (Test-Path -LiteralPath $e) { $text += Get-Content -LiteralPath $e }
     $text | Set-Content -Encoding ascii -LiteralPath $log
+    if (Test-Path -LiteralPath "$log.timeout") {
+        Get-Content -LiteralPath "$log.timeout" | Add-Content -Encoding ascii -LiteralPath $log
+        Remove-Item -Force "$log.timeout"
+        Remove-Item -Force -ErrorAction SilentlyContinue $o, $e
+        return -2
+    }
     Remove-Item -Force -ErrorAction SilentlyContinue $o, $e
     return $p.ExitCode
 }
@@ -53,7 +69,7 @@ $report = [ordered]@{
 }
 $report.gpu_name = ""; $report.compute_cap = ""; $report.driver = ""
 try {
-    $null = Run "nvidia-smi" @("--query-gpu=name,compute_cap,driver_version", "--format=csv,noheader") "nvidia-smi.log"
+    $null = Run "nvidia-smi" @("--query-gpu=name,compute_cap,driver_version", "--format=csv,noheader") "nvidia-smi.log" $ToolTimeoutS
     $line = "$(Get-Content -LiteralPath nvidia-smi.log -TotalCount 1)"
     if ($line -and $line -notmatch "(?i)error|failed|not found") {
         $parts = @($line.Split(",") | ForEach-Object { $_.Trim() })
@@ -62,7 +78,7 @@ try {
         if ($parts.Count -gt 2) { $report.driver = $parts[2] }
     }
 } catch { }                     # no nvidia-smi: gpu_name stays empty, and record-windows refuses the report
-$null = Run $hostPath @("method-id") "method-id.log"
+$null = Run $hostPath @("method-id") "method-id.log" $ToolTimeoutS
 $report.method_id = ((Get-Content -LiteralPath method-id.log) -join "`n").Trim()
 
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Out
@@ -70,7 +86,7 @@ Remove-Item Env:RISC0_DEV_MODE -ErrorAction SilentlyContinue
 if ($Pascal) { $env:HAZYNC_SPPARK_MIN_MAJOR = "6" }
 $env:HAZYNC_LEAF_BUNDLE = $leafPath
 $t0 = Get-Date
-$report.exit_code = Run $hostPath @("libzync-prove-range", "170", "170", "unused", "leaf", $Out) "prove.log"
+$report.exit_code = Run $hostPath @("libzync-prove-range", "170", "170", "unused", "leaf", $Out) "prove.log" $ProveTimeoutS
 $report.prove_s = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
 $report.finished = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 $report.log_sha256 = Sha (Resolve-Path -LiteralPath "prove.log").Path

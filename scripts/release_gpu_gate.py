@@ -73,7 +73,9 @@ PRICE_CEILING = {"NVIDIA A40": 0.60, "NVIDIA RTX A5000": 0.60, "NVIDIA RTX A6000
 UNKNOWN_PRICE = 3.00
 TERMINATE_BUDGET_S = 360     # sponsor_bot.TERMINATE_BUDGET_S: what one terminate may take after the cap fires
 SPEND_MARGIN = 1.15          # on the run's own $/hr x time estimate (billing granularity, a pod's last seconds)
-DEADMAN_MARGIN_S = 600       # the pod-side dead-man fires this long after the time cap
+HARVEST_OK_S = 900           # the harvest deadline of a card that PROVED (a failed one gets harvest_abort_s)
+DEADMAN_MARGIN_S = 1500      # the pod-side dead-man fires this long after the time cap: more than a harvest (900 s)
+                             # plus a terminate (360 s), so it never races the laptop's own release of the pod
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)   # all handled like Ctrl-C: release the pods first
 HISTORY = ".gpu-gate-history.txt"   # on the release box's dist/: every receipt sha256 a marker ever recorded
 LOCAL_HISTORY = os.path.expanduser("~/.hazync/gpu-gate-receipts.txt")
@@ -413,6 +415,13 @@ def price(cph, gpu_type):
     return v if v > 0 else PRICE_CEILING.get(gpu_type or "", UNKNOWN_PRICE)
 
 
+def worst_overshoot(cards):
+    """The most the run can spend AFTER its cap fires: each role's dearest in-stock type at its ceiling price, for a
+    full harvest plus a terminate, x SPEND_MARGIN."""
+    cph = sum(max(PRICE_CEILING.get(t, UNKNOWN_PRICE) for t in types) for _r, types in cards)
+    return cph * (HARVEST_OK_S + TERMINATE_BUDGET_S) / 3600.0 * SPEND_MARGIN
+
+
 def live_pods(api):
     return [p for p in api.pods() if (p.get("status") or "") != "TERMINATED"]
 
@@ -448,7 +457,7 @@ class Gate:
     x SPEND_MARGIN: the account balance also moves with every other pod on the key (the sponsor bot, a fleet), so its
     delta is reported, never acted on."""
 
-    def __init__(self, api, transport, host_sha, workdir, blocks, cards=CARDS, max_usd=2.0, max_min=60.0,
+    def __init__(self, api, transport, host_sha, workdir, blocks, cards=CARDS, max_usd=4.0, max_min=60.0,
                  boot_s=900, deploy_tries=3, poll_s=30.0, balance=runpod_balance, sleep=time.sleep,
                  clock=time.monotonic, log=say, harvest_abort_s=300, reap_every_s=120):
         self.api, self.t, self.host_sha, self.workdir, self.blocks = api, transport, host_sha, workdir, blocks
@@ -500,7 +509,7 @@ class Gate:
         fires this much early, so the run's total stays under --max-usd."""
         with self.lock:
             cph = sum(c for _t0, c in self.live.values())
-        return cph * (self.harvest_abort_s + TERMINATE_BUDGET_S) / 3600.0 * SPEND_MARGIN
+        return cph * (max(HARVEST_OK_S, self.harvest_abort_s) + TERMINATE_BUDGET_S) / 3600.0 * SPEND_MARGIN
 
     def deadman_s(self):
         """What the pod's own dead-man waits: the rest of the time cap plus a margin for the harvest."""
@@ -599,7 +608,7 @@ class Gate:
                 if ip_port:         # HARVEST FIRST: a terminated pod's evidence is gone for good -- but bounded
                     try:
                         run["harvested"] = bool(self.t.harvest(*ip_port, os.path.join(self.workdir, role),
-                                                               900 if run["result"] == "PROVED" else self.harvest_abort_s))
+                                                               HARVEST_OK_S if run["result"] == "PROVED" else self.harvest_abort_s))
                     except Exception as e:  # noqa: BLE001
                         run["error"] += f"; harvest: {e}"
                 if not _CONTROL_NO_TERMINATE:
@@ -800,7 +809,9 @@ def marker_ok_linux(m, host_sha, verifier_sha, image, heights, commit=None, fixt
         why.append(f"receipts were verified by {str(m.get('verifier_sha256'))[:16]}..., the staged verifier is {str(verifier_sha)[:16]}...")
     if m.get("image") != image:
         why.append(f"image {str(m.get('image'))[:8]}, the release ships {image[:8]}")
-    if commit and m.get("repo_commit") != commit:
+    if not re.fullmatch(r"[0-9a-f]{40}", str(m.get("repo_commit") or "")):
+        why.append(f"no commit recorded (repo_commit {m.get('repo_commit')!r})")
+    elif commit and m.get("repo_commit") != commit:
         why.append(f"the gate ran from commit {str(m.get('repo_commit'))[:8]}, the release is {commit[:8]}")
     if m.get("repo_dirty") is not False:
         why.append("the gate ran from a checkout with uncommitted changes")
@@ -859,7 +870,9 @@ def marker_ok_windows(m, zip_sha, verifier_sha, image, host_exe_sha=None, commit
         why.append("the receipt was verified by a different verifier than the staged one")
     if m.get("image") != image:
         why.append(f"image {str(m.get('image'))[:8]}, the release ships {image[:8]}")
-    if commit and m.get("repo_commit") != commit:
+    if not re.fullmatch(r"[0-9a-f]{40}", str(m.get("repo_commit") or "")):
+        why.append(f"no commit recorded (repo_commit {m.get('repo_commit')!r})")
+    elif commit and m.get("repo_commit") != commit:
         why.append(f"recorded from commit {str(m.get('repo_commit'))[:8]}, the release is {commit[:8]}")
     if m.get("repo_dirty") is not False:
         why.append("recorded from a checkout with uncommitted changes")
@@ -936,13 +949,25 @@ def who():
 
 
 def repo_commit():
-    """(HEAD of this checkout, dirty?). The marker carries it; release.sh requires it to be the release commit."""
+    """(HEAD of this checkout, [porcelain lines of uncommitted changes]). The marker carries the commit; release.sh
+    requires it to be the release commit. ANY git failure is a refusal (SystemExit): an unreadable state must never
+    pass as "clean at commit ''"."""
     try:
-        c = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        d = bool(subprocess.run(["git", "-C", REPO, "status", "--porcelain"], capture_output=True, text=True).stdout.strip())
-    except OSError:
-        c, d = "", True
-    return c, d
+        h = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=60)
+        st = subprocess.run(["git", "-C", REPO, "status", "--porcelain"], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise SystemExit(f"cannot read this checkout's git state ({e}): refused")
+    c = h.stdout.strip()
+    if h.returncode != 0 or st.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", c):
+        raise SystemExit(f"cannot read this checkout's git state (rev-parse rc {h.returncode} {c[:12]!r}, "
+                         f"status rc {st.returncode}): refused")
+    return c, [ln for ln in st.stdout.splitlines() if ln.strip()]
+
+
+def dirty_msg(dirty, what):
+    lines = dirty if isinstance(dirty, list) else []
+    return (f"this checkout has uncommitted changes: {what} from a clean checkout of the release commit"
+            + ("".join(f"\n      {ln}" for ln in lines[:20]) + (f"\n      ... {len(lines) - 20} more" if len(lines) > 20 else "")))
 
 
 def reuse_of(src, rsha, host_exe_sha):
@@ -1023,7 +1048,13 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
         raise SystemExit("--host-sha256 must be 64 hex digits (release.sh prints the staged files' sha256s in step 4)")
     image = canon_image()
     blocks = gate_blocks()
+    commit, dirty = repo_commit()
+    if dirty and not a.dry_run:
+        raise SystemExit(dirty_msg(dirty, "run the gate") + "\n   (the marker names the commit it ran): nothing rented")
     work = os.path.abspath(a.work or tempfile.mkdtemp(prefix="hz-relgate-"))
+    if os.path.commonpath([work, REPO]) == REPO:
+        raise SystemExit(f"--work {work} is inside the checkout: keep evidence outside it (it would make the tree "
+                         "dirty for the next run): nothing rented")
     os.makedirs(work, exist_ok=True)
     src = Source(a.source)
     got = src.sha256(CUDA_ASSET)
@@ -1036,21 +1067,21 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
     if sha256_file(vpath) != vsha:
         raise SystemExit("the fetched verifier is not the staged one: nothing rented")
     verifier = LocalVerifier(vpath)
-    commit, dirty = repo_commit()
     say(f"gate: host {host_sha[:16]}..., verifier {vsha[:16]}..., image {image[:8]}, blocks {[b[0] for b in blocks]}, "
           f"caps ${a.max_usd:.2f} / {a.max_min:.0f} min, commit {commit[:8]}{' (DIRTY)' if dirty else ''}, work {work}")
     if a.dry_run:
         say("DRY RUN: nothing rented")
         return 0
-    if dirty:
-        raise SystemExit("this checkout has uncommitted changes: run the gate from a clean checkout of the release "
-                         "commit (the marker names the commit it ran): nothing rented")
     if api is None:
         os.environ.setdefault("RUNPOD_API_KEY_FILE", os.path.expanduser("~/.hazync/runpod.key"))
         api = sponsor_bot.RunPod.from_env()
     others = preflight_pods(api, a.sweep_first)
     cards = in_stock(api, CARDS)
     say("cards: " + "; ".join(f"{r}: {', '.join(t)}" for r, t in cards))
+    worst = worst_overshoot(cards)
+    if worst >= a.max_usd:
+        raise SystemExit(f"--max-usd ${a.max_usd:.2f} is not above what the in-stock cards can cost after the cap fires "
+                         f"(${worst:.2f}: harvest + terminate at ceiling prices): the cap could never hold. Nothing rented")
     if transport is None:
         key = os.path.join(work, "podkey")
         if not os.path.exists(key):
@@ -1093,7 +1124,7 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
     report = {"schema": SCHEMA, "kind": "linux-cuda", "result": "PASS" if ok else "FAIL", "asset": CUDA_ASSET,
               "host_sha256": host_sha, "verifier_sha256": vsha, "image": image,
               "fixtures_sha256": sha256_file(os.path.join(FIXTURES, "SHA256SUMS")),
-              "repo_commit": commit, "repo_dirty": dirty,
+              "repo_commit": commit, "repo_dirty": bool(dirty),
               "started": started, "finished": now_utc(), "spent_usd_estimate": round(gate.est_spend(), 2),
               "balance_delta_usd": spent, "other_pods_at_start": len(others), "stop_reason": gate.stop_reason,
               "signed_off_by": who(), "runs": runs}
@@ -1145,7 +1176,7 @@ def cmd_record_windows(a):
     rsha, lsha = sha256_file(a.receipt), sha256_file(a.log)
     why = []
     if dirty:
-        why.append("this checkout has uncommitted changes: record from a clean checkout of the release commit")
+        why.append(dirty_msg(dirty, "record"))
     if field("host_exe_sha256") != hx:
         why.append(f"the run hashed host.exe {field('host_exe_sha256')[:16] or '(none)'}..., the staged zip's is {hx[:16]}...")
     if field("zip_sha256") != zsha:
@@ -1196,7 +1227,7 @@ def _record_windows(a, src, image, h, bh, anchor, zsha, hx, rep, rsha, lsha, vsh
          "compute_cap": rep.get("compute_cap"), "driver": rep.get("driver"), "prove_s": rep.get("prove_s"),
          "blocks": [{"height": 170, "block_hash": bh, "receipt_sha256": rsha, "verified": True,
                      "verdict": verdict, "tamper_control": "refused: " + tv}],
-         "prove_log_sha256": lsha, "report": rep, "repo_commit": commit, "repo_dirty": dirty,
+         "prove_log_sha256": lsha, "report": rep, "repo_commit": commit, "repo_dirty": bool(dirty),
          "recorded_by": who(), "recorded_at": now_utc(),
          "attestation": "the maintainer ran scripts/release-gpu-gate-windows.ps1 with the staged zip's host.exe on "
                         "this GPU; the receipt verifies and was never used before, the run is the maintainer's word"}
@@ -1214,7 +1245,10 @@ def main(argv=None):
     r = sub.add_parser("run")
     r.add_argument("--source", required=True, help="BOX:DIST (the release box's dist/) or a local dist directory")
     r.add_argument("--host-sha256", required=True)
-    r.add_argument("--max-usd", type=float, default=2.0)
+    # The default: a normal run at CEILING prices must finish under it (docs/BUILD_AND_RELEASE.md, "Cost"):
+    # pre-Blackwell (worst L40S $1.20) 28 min + Blackwell (worst PRO 6000 $2.60) 22 min = $1.51 x 1.15 = $1.74
+    # spent, plus the $1.53 the cap holds back for harvest + terminate = $3.27, so $4.
+    r.add_argument("--max-usd", type=float, default=4.0)
     r.add_argument("--max-min", type=float, default=60.0)
     r.add_argument("--work", help="local work directory (default: a new temp dir); evidence is kept there")
     r.add_argument("--dry-run", action="store_true", help="check the inputs and print the plan; rent nothing")

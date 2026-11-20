@@ -452,7 +452,8 @@ then fails at the verifier, never passes on a stale fixture.
    (sm_86, $0.49/hr), else an **RTX A5000 / A6000** (sm_86) or an **L40S** (sm_89); and a **Blackwell** card, the
    **RTX PRO 4500** ($0.72/hr), else the **RTX PRO 6000** ($2.09/hr). Each pod's only SSH key is a throwaway.
 3. As soon as SSH answers, the pod's **dead-man** is armed (`release-gpu-gate-pod.sh --deadman <s> <pod id>`):
-   after the rest of the time cap plus 10 minutes the pod removes **itself**, with the pod-scoped key RunPod injects
+   after the rest of the time cap plus 25 minutes (more than a 15-minute harvest plus a 6-minute terminate, so it
+   never races the laptop's own release) the pod removes **itself**, with the pod-scoped key RunPod injects
    (`RUNPOD_POD_ID`, `RUNPOD_API_KEY`, "Pod-scoped API key" in RunPod's environment-variable reference):
    `runpodctl pod delete`, the REST `DELETE`, then `runpodctl pod stop`; if none of them took, it logs **COULD NOT
    REMOVE THIS POD** and kills the gate's workload, and the pod bills until `sweep`. It refuses to act unless
@@ -472,12 +473,16 @@ then fails at the verifier, never passes on a stale fixture.
    harvest deadline on a failure (15 on success); every 2 minutes a listing by the run's prefix releases a pod RunPod
    made although the call failed (and counts it in the spend); at the end a sweep (`release_until_clean`) during
    which further Ctrl-Cs are ignored. Ctrl-C, SIGTERM, SIGHUP and SIGQUIT all take this path.
-7. Caps: `--max-usd` (default **$2.00**) on **this run's own** spend, estimated from its pods' $/hr × time alive
-   (lost creates included) × 1.15, checked every second. It fires early by what the live pods can still cost after
-   it (the 5-minute harvest plus the 6-minute terminate budget, each), so the total stays under the cap. A pod RunPod
+7. Caps: `--max-usd` (default **$4.00**, derived under **Cost**) on **this run's own** spend, estimated from its
+   pods' $/hr × time alive (lost creates included) × 1.15, checked every second. It fires early by what the live
+   pods can still cost after it (a full 15-minute harvest plus the 6-minute terminate budget, each), so the total
+   stays under the cap; and before renting, a cap that could not even cover that for the dearest in-stock types at
+   ceiling prices is refused. A pod RunPod
    prices at $0 (or not at all) is counted at its type's ceiling, never as free, and a pod whose termination was not
    confirmed keeps counting. The balance is read every 5 min only to **warn** when other pods on the key are
-   spending. `--max-min` (default **60**). The gate refuses to run from a checkout with uncommitted changes.
+   spending. `--max-min` (default **60**). The gate refuses to run from a checkout with uncommitted changes (it
+   names them) or whose git state it cannot read, and a `--work` inside the checkout: **keep `--work` and every
+   piece of evidence outside the checkout**, or the next run finds the tree dirty.
 8. The **staged verifier**, fetched to the laptop and checked by sha256 (it needs glibc 2.34 at most since it is
    built in ubuntu:22.04, below), checks every harvested receipt: `hazync-verify --anchor state_<h-1>.json --expect
    <h>:<hash> block_<h>.rcpt` must say `SWIFTSYNC_VERIFY_DEMO` (a valid proof from the given anchor; exit 2) with
@@ -506,7 +511,15 @@ the key, including one a concurrent gate run elsewhere is using: run one gate at
 
 **Cost** (an estimate, not yet measured end to end): per pod ~5 min boot + ~2 min push + the proves (block 200,000
 is ~2 min on a PRO 6000 by the cost curve's R1 line; an A40 is slower, assume ~3x); ~15 min x ($0.49 + $0.72)/hr
-≈ **$0.30**, or ≈ **$0.65** if the PRO 6000 stands in for the PRO 4500. The $2 cap stops a stuck run.
+≈ **$0.30**, or ≈ **$0.65** if the PRO 6000 stands in for the PRO 4500.
+
+**The default cap, $4.00**, is set so a normal run that meets every worst case still finishes: both boots take the
+full 15 minutes, the pre-Blackwell card is the slowest (proves at ~3x a PRO 6000: leaf 170 ~3 min, block 200,000
+~6 min) and both are charged at the ceiling prices of the dearest fallback types. Pre-Blackwell: 15 + 2 push + 3 + 6
++ 2 harvest = 28 min at $1.20/hr (L40S ceiling) = $0.56. Blackwell: 15 + 2 + 1 + 2 + 2 = 22 min at $2.60/hr (PRO
+6000 ceiling) = $0.95. Spent: $1.51 x 1.15 = **$1.74**. The cap also holds back what the two live pods can cost after
+it fires, ($1.20 + $2.60)/hr x (900 + 360) s x 1.15 = **$1.53**, so it fires at $1.74 + $1.53 = $3.27 in that case:
+under $4.00. The cap is in the code beside `--max-usd` (`scripts/release_gpu_gate.py`).
 
 ```bash
 export RUNPOD_API_KEY_FILE=~/.hazync/runpod.key     # the default
@@ -574,8 +587,10 @@ from v0.23.0 to v0.27.0 shipped verifiers needing `GLIBC_2.39`. Measured 20.11.2
 | v0.26.1, v0.27.0 | 2.34 | 2.39: **does not start** on 22.04 | 2.39 (v0.27.0) |
 
 Now `scripts/build-linux-verifier.sh {x86_64|aarch64}` builds both in the hosts' pinned image and refuses its own
-output above 2.34, and `check-dist.sh` refuses any staged Linux ELF above 2.34, weak or not
-(`scripts/test-glibc-floor.sh`, with a control). The published v0.26.1 and v0.27.0 verifiers stay broken on 22.04
+output above 2.34, and `check-dist.sh` refuses any staged Linux ELF above 2.34, weak or not, and any non-numeric
+`GLIBC_*` need (`GLIBC_ABI_DT_RELR` from `-Wl,-z,pack-relative-relocs` needs glibc 2.36; `GLIBC_PRIVATE` is internal),
+reading the needs from the program headers, not the strippable section headers (`scripts/test-glibc-floor.sh`,
+with a control). The published v0.26.1 and v0.27.0 verifiers stay broken on 22.04
 until the next release replaces them.
 
 #### Why a release build is clean (`prover/build-release.sh`)
