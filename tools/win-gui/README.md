@@ -14,8 +14,8 @@ Needs Python 3.8+ with `tkinter` (bundled with the python.org installer) and `cr
 
 **Most people: the installer.** `hazync-setup-x86_64-windows.exe` (built by `.github/workflows/windows-installer.yml`
 from `installer/hazync.iss`) installs Hazync for the current user, with no admin prompt, Start-menu and desktop
-shortcuts and an uninstaller. Everything is inside: the app, the worker and the GPU prover. Python and git are not
-needed. It is not Authenticode-signed yet, so Windows SmartScreen says "Windows protected your PC": choose More info,
+shortcuts and an uninstaller. Everything is inside: the app, the worker, the GPU prover and (from v0.26.1) the CPU
+prover. Python and git are not needed. From v0.27.0 the installed app updates itself (§ Updating). It is not Authenticode-signed yet, so Windows SmartScreen says "Windows protected your PC": choose More info,
 then Run anyway. Its sha256 is in the release's PGP-signed `SHA256SUMS.txt`. Uninstalling never touches
 `%USERPROFILE%\.hazync`, where the signing key lives.
 
@@ -45,6 +45,11 @@ one or two things it needs from you: the prover program, and the name the board 
 newcomer should never need: the setup checklist, a specific range, worker count and segment size,
 the machine tests, the technical log, paths, the CPU/GPU choice and your key.
 
+While it proves, Home shows the card's memory, load and temperature, RAM and CPU, with a 5-minute chart, and the
+technical log records each block's peak card memory (`stats.py`, from v0.27.0). The **Automatic** segment size is the
+detected card's (`supervisor.py`, `_SEG_PO2_FOR_VRAM`): a 4 GB GTX 1050 Ti given the host's default 21 ran out of
+memory, and proved block 4401 at 18 (19.11.2026).
+
 ## ⛔ Read this first: what is proven and what is not
 
 | | state |
@@ -54,7 +59,7 @@ the machine tests, the technical log, paths, the CPU/GPU choice and your key.
 | `host.exe regress` — full consensus path (the CORE host; gone from the libzync host) | ✅ measured, same machine |
 | **libzync CUDA** host proves mainnet leaves on a real GPU under WDDM (blocks 170 and 400,000), verified on Windows and Linux | ✅ **measured 2026-11-09, RTX PRO 6000** (`experimental/libzync-bench/windows/`) |
 | The libzync Windows CUDA host is a **release asset** (`hazync-host-x86_64-windows-cuda.zip`: `host.exe` + `cudart64_12.dll`), built by `windows-prove.yml` and checked by `scripts/release.sh` | ✅ since v0.23.0 |
-| The Windows **CPU** host is a release asset too (`hazync-host-x86_64-windows-cpu.zip`: `host.exe` alone), from `windows-prove.yml`'s `prove` job, which ran it on Windows (`method-id`, then mainnet block 1 proved and verified), and the installer ships it in `prover-cpu\` | ⏳ from v0.26.1 (needs a RELEASE BUILD run of windows-prove without `skip_cpu_prove`) |
+| The Windows **CPU** host is a release asset too (`hazync-host-x86_64-windows-cpu.zip`: `host.exe` alone), from `windows-prove.yml`'s `prove` job, which ran it on Windows (`method-id`, then mainnet block 1 proved and verified), and the installer ships it in `prover-cpu\` | ✅ since v0.26.1 |
 | **CPU** build proves a block on Windows | ✅ measured (v1 host) |
 | This GUI opens and works on Windows | ✅ **tested on Windows Python 3.13** |
 | This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05 with the v1 host: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`**; not yet re-run with the libzync host |
@@ -320,8 +325,8 @@ shared one lock and none was told which card to use, so a second card sat idle. 
 - Home shows **one line per card of the session**, including a card whose worker stopped on an error
   (`RTX 3060 Ti:  stopped — …`, and the headline counts it: "Proving on 1 graphics card · 1 stopped") or is
   between two blocks. Only that card stops; the others keep going. Before, a stopped card simply vanished.
-- ⚠ The opt-in proves on Pascal only with a prover that has hazync#727 (PR #739). Until a release carries it
-  (v0.26.1 is planned), ticking it on a compute 6.x card gets "operation not supported" from the GPU.
+- ⚠ The opt-in proves on Pascal only with a prover that has hazync#727 (PR #739), which releases carry from v0.26.1.
+  An older prover, ticked on a compute 6.x card, gets "operation not supported" from the GPU.
 - "Try my GPU even if it is below the supported floor" never reaches below compute 6: the builds carry no
   GPU code under sm_61 (hazync#727), so a compute 5.x card gets no worker even when forced.
 
@@ -370,10 +375,11 @@ variable before they start and post results back through a queue drained on the 
 ## Getting the prover
 
 `hazync-worker` is a public release asset and downloads with no login (measured: HTTP 200
-unauthenticated), so the Setup tab just gets it. Since v0.23.0 the Windows **prover** is one too:
-download `hazync-host-x86_64-windows-cuda.zip` from the latest release (v0.24.0) and "Extract All" in Downloads or
-your home folder; the GUI searches one folder level under both for `host.exe`. ⚠ The GUI does not fetch it itself
-yet: its Setup step names the release zip and asks you to extract it and point at `host.exe`.
+unauthenticated), so the Setup tab just gets it. Since v0.23.0 the Windows **prover** is one too, and the installer
+carries both provers (`prover\` and `prover-cpu\`), which the app finds first. Run from source, download
+`hazync-host-x86_64-windows-cuda.zip` (or `-cpu.zip`) from the latest release and "Extract All" in Downloads or your
+home folder; the GUI searches one folder level under both for `host.exe`. ⚠ From source the GUI does not fetch it
+itself: its Setup step names the release zip and asks you to extract it and point at `host.exe`.
 
 `./publish_host_asset.sh` is now only for a build **between** releases: it finds the newest successful
 `windows-prove` run, **verifies the embedded guest** (the published mainnet guest of `reproduce/LIBZYNC_IDS`, so it
@@ -394,8 +400,7 @@ pyinstaller --clean --noconfirm hazync-gui.spec
 
 ## Not done yet
 
-- Fetching the Windows prover from the release (above), and updating the embedded-guest pin in `supervisor.py`
-  to v0.24.0's guest.
+- Fetching the Windows prover from the release when run from source (the installer carries it; above).
 - A full prove under this window with the libzync host and a GPU.
 - No identity/key onboarding. Claims are signed, so a newcomer needs a key — `hazync-worker id`
   and `rotate` exist, and the GUI only displays what they report.
