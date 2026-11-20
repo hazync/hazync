@@ -141,7 +141,7 @@ In the order the file reads them. "—" means no default in the call: the variab
 | `HAZYNC_LZ_TIP_BRIDGE_OUT` | `''` | constant `TIP_BRIDGE_DIR` | The tip run's leaf bundles (blocks from X). |
 | `HAZYNC_LZ_TIP_REORG_DIR` | `''` | constant `TIP_REORG_DIR` | The tip run's reorg records. Default: `<HAZYNC_LZ_TIP_STATE_DIR>/reorg/records`. |
 | `HAZYNC_LZ_TIP_REORG_ACK_DIR` | `''` | constant `TIP_REORG_ACK_DIR` | Where its records are acked (the tip run's prep `HAZYNC_REORG_ACK_DIR`); must differ from the board pass's (start-up refuses one directory for both, exit 3). |
-| `TIP_CLAIM_FIRST` | `'0'` | constant `TIP_CLAIM_FIRST` | `1`: claims hand out the tip run's blocks before the backfill's. Default off (REORG.md §19, decision 3). |
+| `TIP_CLAIM_FIRST` | `'0'` | constant `TIP_CLAIM_FIRST` | `1`: claims hand out the tip run's blocks before the backfill's, to workers able to prove them (`tip: true` in the claim, or earned: TIP_CLAIM_EARNED_S). Off by default; the shipped tip-run.conf sets it (REORG.md §19, decision 3). |
 | `HAZYNC_LZ_BLOCKS_DIR` | `''` | constant `BOARD_BLOCKS_DIR` | The board pass's block directory (its fetcher's): a reorg stop marker there (blocks/REORG, REORG_TOO_DEEP) fences the run above its fork. Unset: no fence. |
 | `HAZYNC_LZ_TIP_BLOCKS_DIR` | `''` | constant `TIP_BLOCKS_DIR` | The tip run's block directory: the same fence for the tip run (REORG.md §19, review MEDIUM 2). |
 | `REORG_POLL_S` | `'2'` | constant `REORG_POLL_S` | Seconds between scans of the record directory. |
@@ -183,6 +183,7 @@ In the order the file reads them. "—" means no default in the call: the variab
 | `ZYNC_RELAY_AT` | `'0'` | constant `ZYNC_RELAY_AT` | `1`: the relay passes `?at=<height>` on (zync-serve's tip mode serves two heights, ZAPP_FOLLOWER Z4). Unset: dropped (an older zync-serve refuses it). |
 | `LZ_HANDOVER_AT` | `'0'` | constant `LZ_HANDOVER_AT` | Handover height H: the first block the new image proves (docs/HANDOVER.md). With the old image's host the board is in the `pre` era (nothing reaches H); with a host whose lineage pins a handover at H it is `post` (claims start at H+1; block H arrives as the [1..H] spine). `0`: no handover. |
 | `LZ_HANDOVER_ERA` | — | `handover_era()` | `pre` or `post`: stands in for the host's lineage in mock mode (tests). Unset in production. |
+| `TIP_CLAIM_EARNED_S` | `'3600'` | constant `TIP_CLAIM_EARNED_S` | Seconds: a worker whose single tip block was verified within this of its claim gets tip blocks first without saying `tip: true`. |
 | `BEAT_LOG_WINDOW` | `'600'` | constant `BEAT_LOG_WINDOW` | Seconds identical beat rejections are collapsed into one log line. |
 | `COORD_ALLOW_PUBLIC_INSECURE` | — | `__main__` | Allows a non-loopback bind in an insecure mode. Not for production. |
 | `PEER_SYNC_INTERVAL` | `'300'` | `__main__` | Seconds between peer sync passes (only when `PEER_COORDINATORS` is set). |
@@ -231,6 +232,8 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 | `HAZYNC_TICK` | `'60'` | `_prove_watched_inner()`, `_prove_distributed()` | Seconds between progress lines; a beat is sent on a tick only if a segment finished since the last one. |
 | `HAZYNC_PORT` | `'9110'` | `cmd_prove()` | Port `seg-serve` listens on for a distributed run (`--distributed`); workers dial it. Default 9110, the same default the host itself uses. |
 | `HAZYNC_FOLD_CONCURRENCY` | `'1'` | `_fold_conc()` | Folds run concurrently within one tree level. |
+| `HAZYNC_SUBMIT_RETRIES` | `'5'` | `_post_receipt()` | How often a submission answered 503 `retry` (the board could not read a state just then) is sent again. Default 5. |
+| `HAZYNC_TIP` | — | `cmd_run()` | `1`: this box can prove a mainnet tip block in reasonable time; claims say `tip: true` and a board with TIP_CLAIM_FIRST offers tip blocks first. |
 | `HAZYNC_SPINE_VRANGES_TTL` | `'300'` | constant `SPINE_VRANGES_TTL` | Seconds `hazync spine` reuses its copy of `/api/vranges`. |
 
 ### Set for the host binary

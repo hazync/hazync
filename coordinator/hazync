@@ -1200,15 +1200,29 @@ def _post_receipt(rng, receipt, sk, pub, handle):
     an `ok` now, including "already proven": another prover landing a block first is a benign race and
     was never a failure.
     """
-    res = post("/api/submit", {"range": rng, "pubkey": pub, "handle": handle,
-                               "sig": sk.sign(receipt).hex(),
-                               "receipt": base64.b64encode(receipt).decode()})
+    body = {"range": rng, "pubkey": pub, "handle": handle, "sig": sk.sign(receipt).hex(),
+            "receipt": base64.b64encode(receipt).decode()}
+    # 503 {"retry": true}: the board could not read the state this proof is checked against just then (prep writing it,
+    # or a reorg moving it; REORG.md §19): nothing was counted, so it is sent again a few times (HAZYNC_SUBMIT_RETRIES)
+    tries = int(os.environ.get("HAZYNC_SUBMIT_RETRIES", "5") or 0)
+    for k in range(tries + 1):
+        res = post("/api/submit", body)
+        if not res.get("retry") or k == tries:
+            break
+        wait = min(30 * (k + 1), 120)
+        print(f"  the coordinator could not check range {rng} just now ({str(res.get('error'))[:100]}): again in {wait} s", flush=True)
+        time.sleep(wait)
     if res.get("ok"):
         print(f"\u2713 range {rng}: the coordinator re-verified your proof and put it on the board as '{handle}'.")
         return True, ""
     err = str(res.get("error") or res)
     if "already proven" in err:
         print(f"\u2713 range {rng} was already proved by someone else \u2014 nothing to do.")
+        return True, ""
+    if res.get("reorged"):
+        # the chain moved under this block (a reorg): the proof is of a block the board no longer proves. Not this
+        # worker's fault, and nothing was counted against it: the next claim is the new chain's block
+        print(f"\u2713 range {rng}: the chain reorganised under it, so the board no longer needs this proof \u2014 nothing to do.")
         return True, ""
     return False, err
 
@@ -1804,6 +1818,10 @@ def cmd_run(args):
         nonce, ts = os.urandom(16).hex(), int(time.time())
         body = {"pubkey": pub, "handle": handle, "nonce": nonce, "ts": ts,
                 "sig": sk.sign(f"claim:{nonce}:{ts}".encode()).hex()}
+        # HAZYNC_TIP=1: this box can prove a mainnet tip block in reasonable time (the board then offers tip blocks first,
+        # when it does that at all: TIP_CLAIM_FIRST, REORG.md §19). Unset: the backfill first, as always
+        if os.environ.get("HAZYNC_TIP") == "1":
+            body["tip"] = True
         try:
             for k in range(3):
                 try:

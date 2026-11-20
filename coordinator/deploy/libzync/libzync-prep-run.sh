@@ -9,10 +9,13 @@
 #   LZ_RUN_DRYRUN=1        print the save point a start would continue from (or that there is none) and change NOTHING
 #                          (no directory made, no rewind, no store cleared, prep not started); exit 0, or 3 when a start
 #                          would refuse (below). The RUNBOOK runs it before a restart.
-#   LZ_PREP_CLEAR_STORES=1 the one way to let a start with NO complete save point clear stores that out/ has states for
-#                          (or a `follow` run's): without it that start refuses with exit 3 (review of D1, HIGH 1). A run
-#                          that died before its first save point is the legitimate case; a save point this runner cannot
-#                          see (an older host's files, a moved out/) is the dangerous one, weeks of prep.
+#   LZ_PREP_CLEAR_STORES=1 the one way to let a start with NO complete save point clear stores that out/ has states for,
+#                          a `follow` run's, or a trie that was ever flushed (its meta has a height: a save point existed):
+#                          without it that start refuses with exit 3 (review of D1, HIGH 1; round 2: the board pass too).
+#                          A run that died before its first save point is the legitimate case; a save point this runner
+#                          cannot see (an older host's files, a moved out/) is the dangerous one, weeks of prep.
+# At every start it writes out/RUN.json (LZ_HI and the leaf settings it runs with): the checks compare the handover
+# height and the leaf window with the coordinator's from there (review round 2, MEDIUM 1 and 2).
 set -euo pipefail
 R="${LZ_ROOT:-/var/lib/libzync-prep}"
 HI="${LZ_HI:?set LZ_HI}"
@@ -29,9 +32,10 @@ pick_save_point() {
         if [ -s "$R/out/state_$h.json" ] && [ -e "$R/out/state_$h.coinlog" ] && { [ -s "$R/out/state_$h.trie" ] || [ "$trie_h" = "$h" ]; }; then last=$h; break; fi
     done
 }
-# stores to clear (anything in cl/ or trie/), and whether out/ says a run was here (any state_<h>.json)
+# stores to clear (anything in cl/ or trie/), and whether anything says a longer run was here: a state_<h>.json in out/,
+# or a trie flushed at a height (it is flushed only at save points)
 stores_used() { [ -n "$(find "$R/cl" "$R/trie" -mindepth 1 -print -quit 2>/dev/null)" ]; }
-out_has_states() { [ -n "$(find "$R/out/" -maxdepth 1 -name 'state_*.json' -print -quit 2>/dev/null)" ]; }
+out_has_states() { [ -n "$(find "$R/out/" -maxdepth 1 -name 'state_*.json' -print -quit 2>/dev/null)" ] || [ "${trie_h:-0}" -gt 0 ] 2>/dev/null; }
 if [ "$DRY" = 1 ]; then
     if [ -e "$R/out/REWIND" ] || { [ "${HAZYNC_REORG_AUTO:-0}" = 1 ] && [ -e "$R/blocks/REORG" ]; }; then
         echo "DRYRUN libzync-prep: a start would first run the rewind (out/REWIND or an auto marker), which moves the save point"
@@ -59,7 +63,7 @@ if [ -z "$last" ]; then
     # (review of D1, HIGH 1): refuse (exit 3: the unit fails and alerts) unless a person says LZ_PREP_CLEAR_STORES=1.
     if stores_used; then
         if { out_has_states || [ "$HI" = follow ]; } && [ "${LZ_PREP_CLEAR_STORES:-0}" != 1 ]; then
-            echo "libzync-prep: REFUSED: no complete save point in $R/out/, but cl/ or trie/ hold stores and $( [ "$HI" = follow ] && echo "this is a follow run" || echo "out/ holds state files"): not clearing them. Look (LZ_RUN_DRYRUN=1 shows what a start sees); LZ_PREP_CLEAR_STORES=1 clears them and starts at genesis" >&2
+            echo "libzync-prep: REFUSED: no complete save point in $R/out/, but cl/ or trie/ hold stores and $( [ "$HI" = follow ] && echo "this is a follow run" || echo "out/ holds state files or the trie was flushed at ${trie_h:-?}"): not clearing them. Look (LZ_RUN_DRYRUN=1 shows what a start sees); LZ_PREP_CLEAR_STORES=1 clears them and starts at genesis" >&2
             exit 3
         fi
         echo "libzync-prep: no save point, so the stores left by a run that died before its first one are cleared"
@@ -70,6 +74,11 @@ else
     lo=$((last + 1)); anchor="$R/out/state_$last.json"; export HAZYNC_PREP_CONTINUE=1
 fi
 if [ "$HI" != follow ] && [ "$lo" -gt "$HI" ]; then echo "libzync-prep: already at $last >= LZ_HI=$HI"; exit 0; fi
+python3 -c 'import json,os,sys,time
+p = os.path.join(sys.argv[1], "RUN.json")
+json.dump({"lz_hi": sys.argv[2], "leaf_from": int(sys.argv[3]) if sys.argv[3] else None,
+           "leaf_window": int(sys.argv[4]) if sys.argv[4] else None, "at": int(time.time())}, open(p + ".tmp", "w"))
+os.replace(p + ".tmp", p)' "$R/out" "$HI" "${HAZYNC_PREP_LEAF_FROM:-}" "${HAZYNC_PREP_LEAF_WINDOW:-}"
 echo "libzync-prep: $lo..$HI from ${anchor##*/}"
 # only the two newest BIP30 snapshots are kept (a restart needs the newest; each is the whole tree, tens of MB on mainnet)
 ( while sleep 60; do

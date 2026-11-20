@@ -32,8 +32,10 @@ meta=$(curl -sf --max-time 20 "$COORD/api/meta") || { echo "[prune-leaves] canno
 F=$(printf '%s' "$meta" | python3 -c 'import json,sys; f=json.load(sys.stdin).get("frontier"); print(f if isinstance(f,int) else "")')
 [ -n "$F" ] || { echo "[prune-leaves] no integer frontier in $COORD/api/meta" >&2; exit 2; }
 CUT=$((F - MARGIN))
-if [ "$CUT" -lt 1 ]; then echo "[prune-leaves] frontier $F, margin $MARGIN: nothing below the cut"; exit 0; fi
 n=0; bytes=0
+# nothing below the cut: the board pass's part has nothing to do, the tip run's part below still runs (it used to exit
+# here, so with the frontier under MARGIN no proven tip bundle was ever freed; found by test_prune_leaves_tip.py)
+if [ "$CUT" -lt 1 ]; then echo "[prune-leaves] frontier $F, margin $MARGIN: nothing below the cut"; CUT=0; fi
 while IFS= read -r f; do
     h=${f#leaf_}; h=${h%.bin}
     case "$h" in ''|*[!0-9]*) continue;; esac

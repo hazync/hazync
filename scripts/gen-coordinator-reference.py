@@ -199,7 +199,8 @@ ENV = {
     "server:HAZYNC_LZ_TIP_REORG_ACK_DIR": "Where its records are acked (the tip run's prep `HAZYNC_REORG_ACK_DIR`); must differ from the board pass's (start-up refuses one directory for both, exit 3).",
     "server:HAZYNC_LZ_BLOCKS_DIR": "The board pass's block directory (its fetcher's): a reorg stop marker there (blocks/REORG, REORG_TOO_DEEP) fences the run above its fork. Unset: no fence.",
     "server:HAZYNC_LZ_TIP_BLOCKS_DIR": "The tip run's block directory: the same fence for the tip run (REORG.md §19, review MEDIUM 2).",
-    "server:TIP_CLAIM_FIRST": "`1`: claims hand out the tip run's blocks before the backfill's. Default off (REORG.md §19, decision 3).",
+    "server:TIP_CLAIM_FIRST": "`1`: claims hand out the tip run's blocks before the backfill's, to workers able to prove them (`tip: true` in the claim, or earned: TIP_CLAIM_EARNED_S). Off by default; the shipped tip-run.conf sets it (REORG.md §19, decision 3).",
+    "server:TIP_CLAIM_EARNED_S": "Seconds: a worker whose single tip block was verified within this of its claim gets tip blocks first without saying `tip: true`.",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
     # reorg handling (docs/libzync/REORG.md §5–§7)
@@ -339,6 +340,8 @@ ENV = {
                                           "production.",
     "server:PEER_SYNC_INTERVAL": "Seconds between peer sync passes (only when `PEER_COORDINATORS` is set).",
     # coordinator/hazync (shipped as hazync-worker)
+    "cli:HAZYNC_TIP": "`1`: this box can prove a mainnet tip block in reasonable time; claims say `tip: true` and a board with TIP_CLAIM_FIRST offers tip blocks first.",
+    "cli:HAZYNC_SUBMIT_RETRIES": "How often a submission answered 503 `retry` (the board could not read a state just then) is sent again. Default 5.",
     "cli:HAZYNC_HOME": "Identity (`key.hex`, `handle`) and receipts. A different directory is a different "
                        "contributor.",
     "cli:COORD_URL": "Coordinator base URL.",

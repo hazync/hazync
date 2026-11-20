@@ -916,6 +916,14 @@ jobs:
           python3 test_reorg_tip.py --control-spine-view
           python3 test_reorg_tip.py --control-orphaned
           python3 test_reorg_tip.py --control-window
+          python3 test_reorg_tip.py --control-capable
+          python3 test_reorg_tip.py --control-fresh
+          python3 test_reorg_tip.py --control-boardfence
+          python3 test_reorg_tip.py --control-unknown
+      - name: The worker retries a 503 retry and takes 409 reorged as nothing to do (REORG.md §19, round 2)
+        run: cd coordinator && python3 test_worker_reorged.py
+      - name: Worker-reorged POSITIVE CONTROL (no retry, reorged a failure - must FAIL)
+        run: cd coordinator && python3 test_worker_reorged.py --control
       - name: The prep runner never clears stores that a save point it cannot see may belong to (REORG.md §19, review HIGH 1)
         run: cd coordinator && python3 test_prep_runner.py
       - name: Prep-runner POSITIVE CONTROL (the refusal taken out - must FAIL)

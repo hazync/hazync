@@ -45,6 +45,10 @@ PATCHES = {
     "--control-handover-clear": ("            elif had:\n                c.execute(\"DELETE FROM meta WHERE k='handover_alert'\")", "            elif False:\n                c.execute(\"DELETE FROM meta WHERE k='handover_alert'\")"),
     "--control-spine-view": ("        if LIBZYNC and TIP_FROM:\n            # with a tip run (D1, review LOW 8)", "        if False:\n            # with a tip run (D1, review LOW 8)"),
     "--control-orphaned": ("and _b is not None and _display(_b) == first:", "and _b is not None:"),
+    "--control-capable": ("    if (body or {}).get(\"tip\") is True:\n        return True\n", "    if True:\n        return True\n"),
+    "--control-fresh": ("    _fe = reorg_fence(hi, fresh=True) if LIBZYNC else None\n", "    _fe = None\n"),
+    "--control-boardfence": ("    if TIP_FROM and out.get(\"tip\") is not None and out[\"tip\"] < TIP_FROM - 1:\n", "    if False:\n"),
+    "--control-unknown": ("        return _UNKNOWN          # the tip run behind", "        return None              # the tip run behind"),
     "--control-window": ("            if TIP_FROM:\n                btop = _verified_top(c, \"prep\")", "            if False:\n                btop = _verified_top(c, \"prep\")"),
 }
 CONTROL = next((a for a in sys.argv[1:] if a in PATCHES), None)
@@ -204,11 +208,11 @@ os.remove(os.path.join(LB, "leaf_12.bin")); os.remove(os.path.join(SB, "state_12
 prep(SB, LB, "A", 12, 12)
 c = s.db(); c.execute("DELETE FROM vranges WHERE id='2'"); c.execute("DELETE FROM ranges WHERE id='2'"); c.commit(); c.close()
 s.TIP_CLAIM_FIRST = True
-code, out = s.claim({"pubkey": qk, "handle": "Q", "_client_ip": "10.2.2.2"})
-check(code == 200 and out.get("range") == str(X + 1), f"TIP_CLAIM_FIRST=1: a tip block ({X + 1}) before the backfill's open 2 ({code}, {out.get('range')})")
-s.TIP_CLAIM_FIRST = False
 code, out = s.claim({"pubkey": key()[1], "handle": "R", "_client_ip": "10.3.3.3"})
-check(code == 200 and out.get("range") == "2", f"TIP_CLAIM_FIRST off: the backfill's 2 first ({code}, {out.get('range')})")
+check(code == 200 and out.get("range") == "2", f"TIP_CLAIM_FIRST=1, a worker that has not said or shown it can prove a tip block: the backfill's 2 first ({code}, {out.get('range')})")
+code, out = s.claim({"pubkey": qk, "handle": "Q", "_client_ip": "10.2.2.2", "tip": True})
+check(code == 200 and out.get("range") == str(X + 1), f"TIP_CLAIM_FIRST=1, a worker with HAZYNC_TIP=1: a tip block ({X + 1}) first ({code}, {out.get('range')})")
+s.TIP_CLAIM_FIRST = False
 code, out = submit("A", 2, 2)
 
 # ---- verification ----
@@ -333,8 +337,26 @@ check(r.returncode == 0, f"the node gets ahead after a quiet 2 h (PREP_TIP.json 
 time.sleep(2.5)
 r = stall_check()
 check(r.returncode == 1 and "TIP RUN STALLED" in r.stdout, f"the node ahead for longer than the limit, the tip run at 30: pages ({r.returncode})")
-r = stall_check(CHECK_TIP_RUN_LEAVES=LT, CHECK_TIP_RUN_LEAF_WINDOW="3")
-check(r.returncode == 1 and "paused by its leaf window" in r.stdout, f"... and says when its leaf window paused it ({r.stdout.strip()[-80:]})")
+json.dump({"lz_hi": "follow", "leaf_from": X, "leaf_window": 3}, open(os.path.join(ST, "RUN.json"), "w"))
+c = s.db(); c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('tip_from',?)", (str(X),)); c.commit(); c.close()
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(r.returncode == 1 and "paused by its leaf window" in r.stdout, f"... and says when its leaf window (from the tip run's RUN.json) paused it ({r.stdout.strip()[-80:]})")
+# round 2, MEDIUM 2: the tip run's LEAF_FROM must be the coordinator's X, and once past X, block X must be served or proven
+json.dump({"lz_hi": "follow", "leaf_from": X + 5, "leaf_window": 3}, open(os.path.join(ST, "RUN.json"), "w"))
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(r.returncode == 1 and "TIP RUN MISCONFIGURED" in r.stdout, f"2. the tip run cutting bundles from X + 5: pages ({r.returncode})")
+json.dump({"lz_hi": "follow", "leaf_from": X, "leaf_window": 3}, open(os.path.join(ST, "RUN.json"), "w"))
+aside2 = os.path.join(T, f"leaf_{X}.aside"); os.rename(os.path.join(LT, f"leaf_{X}.bin"), aside2)
+vx = q("SELECT id, lo, hi FROM vranges WHERE lo <= ? AND hi >= ?", X, X)
+c = s.db(); c.execute("CREATE TABLE IF NOT EXISTS vr_aside AS SELECT * FROM vranges WHERE 0"); c.execute("INSERT INTO vr_aside SELECT * FROM vranges WHERE lo <= ? AND hi >= ?", (X, X)); c.execute("DELETE FROM vranges WHERE lo <= ? AND hi >= ?", (X, X)); c.commit(); c.close()
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(r.returncode == 1 and "TIP RUN NOT ENGAGED" in r.stdout, f"2. past X with no bundle of X and X not proven: pages ({r.returncode}: {r.stdout.strip()[-60:]})")
+c = s.db(); c.execute("INSERT INTO vranges SELECT * FROM vr_aside"); c.execute("DROP TABLE vr_aside"); c.commit(); c.close()
+os.rename(aside2, os.path.join(LT, f"leaf_{X}.bin"))
+os.utime(nt, (time.time() - 7200, time.time() - 7200))
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(r.returncode == 2 and "old" in r.stdout, f"7. a node tip two hours old: cannot check (exit 2), no page on it ({r.returncode})")
+os.utime(nt, None)
 open(nt, "w").write("30\n")
 r = stall_check()
 check(r.returncode == 0, f"at the node's tip and waiting for a block: no page ({r.returncode})")
@@ -442,6 +464,81 @@ check(applied and os.path.exists(os.path.join(AT, "3.ack")), f"9. a tip-run fork
 os.remove(os.path.join(ST, "REWIND"))
 for h in range(11, 31):
     if os.path.exists(os.path.join(aside, f"state_{h}.json")): os.replace(os.path.join(aside, f"state_{h}.json"), os.path.join(ST, f"state_{h}.json"))
+# ---- round 2 ----
+TB = os.path.join(T, "tip", "blocks"); BBK = os.path.join(T, "board", "blocks")
+def marker(d, fork, name="REORG"):
+    open(os.path.join(d, name), "w").write(json.dumps({"fork": fork})); s._fence_cache["t"] = 0.0
+def unmark(d, name="REORG"):
+    os.remove(os.path.join(d, name)); s._fence_cache["t"] = 0.0
+# 10a. a marker appearing while a proof verifies: the commit check reads the markers afresh (round 2, LOW 5)
+_vr = s.verify_receipt
+def slow_verify(receipt, rng):
+    out = _vr(receipt, rng)
+    open(os.path.join(TB, "REORG"), "w").write(json.dumps({"fork": 29}))      # cache NOT reset: within its second
+    return out
+s._fence_cache.update(t=time.time(), v={})
+s.verify_receipt = slow_verify
+c = s.db(); c.execute("DELETE FROM vranges WHERE id='30'"); c.execute("DELETE FROM ranges WHERE id='30'"); c.commit(); c.close()
+code, out = s.submit(qbody(receipt("B", 30, 30), "30"))
+s.verify_receipt = _vr
+check(code == 409 and out.get("reorged") and not q("SELECT 1 FROM vranges WHERE id='30'"), f"10. a marker appearing during the verification: 409 reorged at commit ({code})")
+unmark(TB)
+# 10b. a spine ending above a fence: refused at commit
+marker(TB, 27)
+code, out = s.submit_spine(body(receipt("B", 1, 28)))
+check(code == 409, f"10. a spine ending above the fence (28 > 27): refused ({code}, {str(out)[:60]})")
+# 10c. pick and claim under a fence never hand out a fenced block
+c = s.db(); c.execute("DELETE FROM vranges WHERE lo >= 28"); c.execute("DELETE FROM ranges WHERE lo >= 28"); c.commit(); c.close()
+s._frontier_invalidate()
+got = [s.claim({"pubkey": key()[1], "handle": f"K{i}", "_client_ip": f"10.7.7.{i}", "tip": True})[1].get("range") for i in range(3)]
+check(not any(g and g.isdigit() and int(g) > 27 for g in got), f"10. claims under a fence at 27: none above it ({got})")
+code, out = s.pick(None)
+check(code == 404 or out.get("lo", 0) <= 27, f"10. pick under the fence: nothing above 27 ({code}, {out.get('lo')})")
+# 10d. a fold across the fence
+code, out = s.submit(qbody(receipt("B", 27, 28), "27-28"))
+check(code in (409, 400) and not q("SELECT 1 FROM vranges WHERE id='27-28'"), f"10. a fold across the fence (27-28): refused ({code})")
+unmark(TB)
+# 10e. a board-pass marker fences the board pass
+marker(BBK, 15)
+check(s.bundle_path(16) is None and s.bundle_path(15) is not None and s.bundle_path(25) is not None,
+      "10. a board-pass marker at 15: its 16 fenced, its 15 and the tip run's 25 served")
+unmark(BBK)
+# 6. a tip-run marker below X - 1 fences the board pass above it too
+marker(TB, 10)
+check(s.bundle_path(11) is None and s.bundle_path(10) is not None, "6. a tip-run fork at 10 (< X - 1) fences the board pass's 11 too")
+unmark(TB)
+# 9. a missing state does not clear the handover alert (only a comparison that agrees does)
+c = s.db(); c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('handover_alert',?)", (json.dumps({"msg": "x"}),)); c.commit(); c.close()
+s._board_top_cache["t"] = 0.0
+top9 = s._board_state_top()
+os.rename(os.path.join(ST, f"state_{top9}.json"), os.path.join(ST, f"state_{top9}.json.away"))
+s.reorg_backstop()
+check(bool(q("SELECT 1 FROM meta WHERE k='handover_alert'")), "9. the tip run's state missing: the handover alert is NOT cleared")
+os.rename(os.path.join(ST, f"state_{top9}.json.away"), os.path.join(ST, f"state_{top9}.json"))
+s.reorg_backstop()
+check(not q("SELECT 1 FROM meta WHERE k='handover_alert'"), "9. back and agreeing: cleared")
+# 4. a tip run without a readable block directory is refused at start
+saved4 = s.TIP_BLOCKS_DIR
+s.TIP_BLOCKS_DIR = os.path.join(T, "nowhere")
+check("HAZYNC_LZ_TIP_BLOCKS_DIR" in (s._tip_config_problem() or ""), f"4. the tip run's block directory missing: refused ({s._tip_config_problem()})")
+s.TIP_BLOCKS_DIR = ""
+check("HAZYNC_LZ_TIP_BLOCKS_DIR" in (s._tip_config_problem() or ""), "4. unset: refused")
+s.TIP_BLOCKS_DIR = saved4
+# NEW. tip capability earned: a worker whose tip block was verified within TIP_CLAIM_EARNED_S of its claim gets tip-first
+e_sk, ek = key()
+s.TIP_CLAIM_FIRST = True
+code, out = s.claim({"pubkey": ek, "handle": "E", "_client_ip": "10.8.8.8", "tip": True})
+hE = int(out["range"]) if code == 200 else None
+rc = json.dumps({"lo": hE, "hi": hE, "in": bh("B", hE - 1), "out": bh("B", hE), "n": "e"}).encode()
+s.submit(dict(pubkey=ek, sig=e_sk.sign(rc).hex(), receipt=base64.b64encode(rc).decode(), handle="E", _client_ip="10.8.8.8", range=str(hE)))
+c = s.db()
+check(s.tip_capable(c, ek, {}) and not s.tip_capable(c, key()[1], {}), f"NEW. a worker that proved tip block {hE} within an hour of its claim has earned tip-first; a new one has not")
+s.TIP_CLAIM_EARNED_S = 0.0
+check(not s.tip_capable(c, ek, {}), "NEW. the same proof slower than TIP_CLAIM_EARNED_S: not earned")
+c.close()
+s.TIP_CLAIM_EARNED_S = 3600.0
+s.TIP_CLAIM_FIRST = False
+
 # 5. rolling back (one run again) after tip blocks were verified: without the documented --reorg-to X - 1 first, the
 # backstop latches (the tip run's states are no longer read); with it, nothing is left above X - 1
 for b in range(X, X + 4): s.submit(qbody(receipt("A" if b <= 23 else "B", b, b), str(b)))

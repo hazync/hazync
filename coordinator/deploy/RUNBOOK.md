@@ -113,6 +113,23 @@ state_449750.json (449751..follow); trie meta at 449750`.
 LZ_ROOT=/srv/bulk/libzync-prep LZ_HI=follow LZ_RUN_DRYRUN=1 bash $R/coordinator/deploy/libzync/libzync-prep-run.sh
 ```
 
+The paper prep's paths, memory and units as the repo expects them, and the board pass running the binary it has
+installed (MEASURED 20.11.2026, read-only: all as shown):
+
+```bash
+realpath /srv/bulk/libzync-prep/out                                   # /var/lib/libzync-fast/out
+ls -l /var/lib/libzync-fast/out/state_$(LZ_ROOT=/srv/bulk/libzync-prep LZ_HI=follow LZ_RUN_DRYRUN=1 \
+  bash $R/coordinator/deploy/libzync/libzync-prep-run.sh | sed -n 's/.*state_\([0-9]*\)\.json.*/\1/p').json   # non-empty
+systemctl show libzync-prep -p MemoryMax -p MemoryHigh                # infinity, infinity: memory.conf (and system.control) lift
+                                                                      # the unit's 14G; a restart under 14G would OOM-loop at ~42 GB
+for u in libzync-prep.service libzync-board-prep.service libzync-prep.service.d/run.conf libzync-prep.service.d/memory.conf \
+         libzync-prep.service.d/cache.conf libzync-fetch.service.d/run.conf; do      # what steps 4 and 6 overwrite
+  r=$(case $u in *.service) echo coordinator/deploy/libzync/$u;; libzync-prep.service.d/*) echo coordinator/deploy/dropins/libzync-prep-$(basename $u);;
+      *) echo coordinator/deploy/dropins/libzync-fetch-run.conf;; esac)
+  git -C $R show origin/main:$r | diff -q - /etc/systemd/system/$u >/dev/null && echo "same as main: $u" || echo "DIFFERS: $u"; done
+p=$(pgrep -f 'libzync-board/bin/host_lz libzync-prep'); cmp /proc/$p/exe /srv/bulk/libzync-board/bin/host_lz && echo "board pass runs its installed host"
+```
+
 The coordinator (user `hazync`) must read the tip run's files (MEASURED 20.11.2026: it does):
 
 ```bash
@@ -123,8 +140,10 @@ for d in /var/lib/libzync-fast/out /srv/bulk/libzync-prep/leaves /srv/bulk/libzy
 **1. Binaries** (built the release way; never a laptop build: memory `gotcha_host_rustc_moves_libzync_image_ids`):
 
 - `host_lz` from this commit (`libzync-prep <lo> follow`, `HAZYNC_PREP_LEAF_FROM`): `host_lz method-id` must print
-  `46666b6f…`. Install as `/srv/bulk/libzync-prep/bin/host_lz` (keep the old one as `host_lz.v026`). The board pass's
-  host and the coordinator's host stay as they are.
+  `46666b6f…`. Install as `/srv/bulk/libzync-prep/bin/host_lz`. The board pass's host and the coordinator's host stay as
+  they are. ⚠ `bin/host_lz` there today is ALREADY v0.27.0 (`4c79a0f1…`); the RUNNING paper prep is v0.26.1, a deleted
+  inode (MEASURED 20.11.2026: `/proc/<pid>/exe` = `a051ccf5…` = `bin/host_lz.v0261`). The fallback is THAT binary (step
+  4 copies it from the process).
 - `zync-serve-tip`: `cd swiftsync-verify && cargo build --locked --profile zync-serve --features tip --bin zync-serve`,
   installed as `/opt/hazync-lz/bin/zync-serve-tip`; `zync-serve-tip --tip` without arguments prints the usage (a build
   without the feature or with `panic = "abort"` refuses `--tip`).
@@ -152,8 +171,11 @@ journalctl -u hazync-lz-coordinator -n 50 --no-pager | grep -E 'tip run +blocks 
 curl -s 127.0.0.1:8899/api/meta | python3 -c 'import json,sys; m=json.load(sys.stdin); print(m["tip_run"], m["reorg_alert"])'
 ```
 
-`tip_run.from` 974937, `reorg_alert` null. The unit failing with exit 3 names the configuration it refuses. Rollback:
-delete `tip-run.conf`, daemon-reload, restart.
+`tip_run.from` 974937, `fences` `{}` (no reorg stop marker), `claim_first` true, `reorg_alert` null. The unit failing
+with exit 3 names the configuration it refuses (a missing or unreadable block directory among them). Rollback before
+any tip block is verified: delete `tip-run.conf`, daemon-reload, restart; after: "Rolling back the tip run" below.
+Tip blocks are claimed first only by workers that say they can prove them (`HAZYNC_TIP=1` on the box: big cards, the
+sponsor bot's pods) or have shown it (a tip block verified within an hour of its claim); tell such contributors.
 
 **4. The paper prep's units, then its ONE restart** (install step 5's checks first, so the stall check watches the
 restart) (REORG.md §19: up to 250 blocks replayed, ~13 min at 0.32
@@ -166,7 +188,17 @@ install -m 0644 $R/coordinator/deploy/dropins/libzync-fetch-run.conf /etc/system
 systemctl daemon-reload
 systemctl show libzync-prep -p Environment --value | tr ' ' '\n' | grep -E '^(LZ_HI|HAZYNC_PREP_LEAF_FROM|HAZYNC_REORG_ACK)'
 #   LZ_HI=follow  HAZYNC_PREP_LEAF_FROM=974937  HAZYNC_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks-tip  (no HAZYNC_REORG_ACK=0)
+# a way back, BEFORE the stop: the running binary (a deleted file, kept open by the process), the save point a start will
+# take, the trie's meta; after the stop, the stores themselves if /srv/bulk has the room (cl 21 GB + trie ~95 GB at
+# 448,000, MEASURED; 3.3 TB free)
+P=$(pgrep -f 'libzync-prep/bin/host_lz libzync-prep'); B=/srv/bulk/libzync-prep/fallback-$(date -u +%Y%m%d); mkdir -p $B
+cp /proc/$P/exe $B/host_lz.running && sha256sum $B/host_lz.running         # a051ccf5… (v0.26.1) on 20.11.2026
+A=$(LZ_ROOT=/srv/bulk/libzync-prep LZ_HI=follow LZ_RUN_DRYRUN=1 bash $R/coordinator/deploy/libzync/libzync-prep-run.sh | sed -n 's/.*state_\([0-9]*\)\.json.*/\1/p')
+cp -a /var/lib/libzync-fast/out/state_$A.* $B/ && cp -a /srv/bulk/libzync-prep/trie/meta $B/trie.meta
 systemctl stop libzync-prep libzync-fetch
+A2=$(LZ_ROOT=/srv/bulk/libzync-prep LZ_HI=follow LZ_RUN_DRYRUN=1 bash $R/coordinator/deploy/libzync/libzync-prep-run.sh)
+echo "$A2"                         # the save point after the stop (it may have saved one more): stop here if "NO complete"
+cp -a /srv/bulk/libzync-prep/cl $B/cl && cp -a /srv/bulk/libzync-prep/trie $B/trie       # optional, ~115 GB, ~1 h
 systemctl start libzync-fetch libzync-prep
 journalctl -u libzync-prep -f        # "libzync-prep: <A+1>..follow from state_<A>.json", "CONTINUING its chain"
 ```
@@ -242,6 +274,17 @@ systemctl daemon-reload && systemctl start hazync-lz-coordinator && systemctl re
 Rolling back Coin check's tip mode alone: the old `zync-serve.conf` (without `ZYNC_RELAY_AT`), `systemctl enable --now
 hazync-lz-zync-serve hazync-lz-zapp-follow.timer`, `systemctl disable --now hazync-lz-zapp-follow-tip.timer
 hazync-lz-zync-serve-tip`, and remove `trie/PIN` from both prep tries (the cap releases it anyway).
+
+**After the paper prep passes X = 974,937** (ESTIMATE ~19 days after the restart: it was at ~450,000 on 20.11.2026 at
+~0.3 blocks/s; dated: check from about 9 December 2026). `hazync-lz-check-reorg` pages if this goes wrong ("TIP RUN NOT
+ENGAGED", "TIP RUN MISCONFIGURED"); by hand:
+
+```bash
+ls /srv/bulk/libzync-prep/leaves/leaf_974937.bin                   # its first tip bundle (or block 974,937 already proven)
+cat /var/lib/libzync-fast/out/RUN.json                             # leaf_from 974937, leaf_window 12000
+curl -s 127.0.0.1:8899/api/meta | python3 -c 'import json,sys; print(json.load(sys.stdin)["tip_run"])'   # servable_high >= 974937
+journalctl -u hazync-lz-coordinator --since -1h | grep -c '"range": "9749'   # tip claims being handed out
+```
 
 **8. Afterwards:** `scripts/check-unit-drift.sh` (the new `tip-run.conf` and units are in the repo) and
 `scripts/check-deployment.sh --local`. `TIP_CLAIM_FIRST` (tip blocks claimed before the backfill) is a separate

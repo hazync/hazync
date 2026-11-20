@@ -10,7 +10,7 @@ STALE = float(os.environ.get("CHECK_REORG_STALE_S", "900"))
 try:
     c = sqlite3.connect(f"file:{os.environ.get('COORD_DB', '/var/lib/hazync-lz/coordinator.db')}?mode=ro", uri=True)
     rows = dict(c.execute("SELECT k, v FROM meta WHERE k IN ('reorg_alert', 'reorg_backstop_at', 'reorg_backstop_note', "
-                          "'handover_alert')").fetchall())
+                          "'handover_alert', 'tip_from')").fetchall())
 except sqlite3.Error as e:
     print(f"cannot check: {e}"); sys.exit(2)
 a = json.loads(rows["reorg_alert"]) if rows.get("reorg_alert") else None
@@ -43,11 +43,32 @@ if tp:
     if not os.path.exists(tp):
         print(f"ok (tip run): no {tp} yet: not checked"); tp = None
 if tp:
+    ntf = os.environ.get("NODE_TIP_FILE", "/var/lib/hazync/node_tip")
     try:
         h_tp = int(json.load(open(tp))["height"])
-        nt = int(open(os.environ.get("NODE_TIP_FILE", "/var/lib/hazync/node_tip")).read().strip())
+        nt = int(open(ntf).read().strip())
+        nt_age = time.time() - os.stat(ntf).st_mtime
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"cannot check the tip run: {e}"); sys.exit(2)
+    if nt_age > 3600:
+        # a node tip nobody refreshes says nothing about the tip run (review round 2, LOW 7)
+        print(f"cannot check the tip run: {ntf} is {nt_age:.0f} s old (hazync-node-tip stopped?)"); sys.exit(2)
+    # the moment D1 engages (review round 2, MEDIUM 2): the tip run's own settings (out/RUN.json, written by the runner
+    # at every start) must name the coordinator's handover height X, and once it is past X, block X must have its
+    # bundle or be proven, or the board serves nothing from X on
+    X = int(rows.get("tip_from") or 0)
+    run = {}
+    try: run = json.load(open(os.path.join(os.path.dirname(tp), "RUN.json")))
+    except (OSError, ValueError): pass
+    if X and run and run.get("leaf_from") != X:
+        print(f"TIP RUN MISCONFIGURED: it cuts bundles from {run.get('leaf_from')} (HAZYNC_PREP_LEAF_FROM), the coordinator's "
+              f"tip run starts at {X} (HAZYNC_LZ_TIP_FROM): one X, in every place (REORG.md §19)"); sys.exit(1)
+    w = os.environ.get("CHECK_TIP_RUN_LEAVES")
+    if X and h_tp >= X and w:
+        proven = c.execute("SELECT 1 FROM vranges WHERE lo <= ? AND hi >= ? LIMIT 1", (X, X)).fetchone()
+        if not proven and not os.path.exists(os.path.join(w, f"leaf_{X}.bin")):
+            print(f"TIP RUN NOT ENGAGED: it is at {h_tp}, past X = {X}, but block {X} has no bundle in {w} and is not "
+                  f"proven: the board serves nothing from {X} on (REORG.md §19)"); sys.exit(1)
     try: seen = json.load(open(sf))
     except (OSError, ValueError): seen = {}
     if h_tp >= nt:
@@ -60,9 +81,8 @@ if tp:
     except OSError as e:
         print(f"cannot check the tip run: {sf}: {e}"); sys.exit(2)
     behind = time.time() - seen["behind_since"] if seen else 0
-    w = os.environ.get("CHECK_TIP_RUN_LEAVES")
     held = sum(1 for n in os.listdir(w) if n.startswith("leaf_") and n.endswith(".bin")) if w and os.path.isdir(w) else None
-    win = int(os.environ.get("CHECK_TIP_RUN_LEAF_WINDOW", "0") or 0)
+    win = int(run.get("leaf_window") or 0)      # the window the tip run runs with (out/RUN.json), not a copy here
     if behind > stale:
         why = (f"paused by its leaf window ({held} bundles waiting to be proved, HAZYNC_PREP_LEAF_WINDOW {win}): tip blocks "
                f"are not being proved (TIP_CLAIM_FIRST, the sponsor bot)") if win and held is not None and held >= win else \

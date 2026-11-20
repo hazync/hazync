@@ -1702,11 +1702,13 @@ TIP_BLOCKS_DIR = os.environ.get("HAZYNC_LZ_TIP_BLOCKS_DIR", "") if TIP_FROM else
 _fence_cache = {"t": 0.0, "v": {}}
 
 
-def _marker_fences():
+def _marker_fences(fresh=False):
     """{run: fence height} for each run whose block directory holds a reorg marker: the marker's fork, or, when it
-    names none (REORG_TOO_DEEP beyond J), the run's first height minus one (all of it). Cached for a second."""
+    names none (REORG_TOO_DEEP beyond J), the run's first height minus one (all of it). A tip-run fork below X - 1
+    fences the board pass too (its blocks above the fork are the orphaned ones as well; review round 2, LOW 6).
+    Cached for a second; `fresh` reads the markers now (the commit check, review round 2, LOW 5)."""
     now = time.time()
-    if now - _fence_cache["t"] < 1.0:
+    if not fresh and now - _fence_cache["t"] < 1.0:
         return _fence_cache["v"]
     out = {}
     for run, d, floor in (("board", BOARD_BLOCKS_DIR, 0), ("tip", TIP_BLOCKS_DIR, max(TIP_FROM - 1, 0))):
@@ -1723,17 +1725,19 @@ def _marker_fences():
             except (OSError, ValueError, TypeError, AttributeError):
                 fence = floor                # a marker that does not read fences the whole run: fail closed
             out[run] = min(out.get(run, fence), fence)
+    if TIP_FROM and out.get("tip") is not None and out["tip"] < TIP_FROM - 1:
+        out["board"] = min(out.get("board", out["tip"]), out["tip"])
     _fence_cache.update(t=now, v=out)
     return out
 
 
-def reorg_fence(h, state=True):
+def reorg_fence(h, state=True, fresh=False):
     """The fence over height h (a state when `state`, else a block's bundle): the run that holds h stopped for a reorg
     whose fork is below h. Returns the fork, or None (no fence)."""
     if not (BOARD_BLOCKS_DIR or TIP_BLOCKS_DIR):
         return None
     run = "tip" if TIP_FROM and h >= (TIP_FROM - 1 if state else TIP_FROM) else "board"
-    f = _marker_fences().get(run)
+    f = _marker_fences(fresh).get(run)
     return f if f is not None and h > f else None
 
 
@@ -1770,6 +1774,11 @@ def _tip_config_problem():
     if miss:
         return f"HAZYNC_LZ_TIP_FROM={TIP_FROM} needs {', '.join(miss)}"
     rp = lambda x: os.path.realpath(x)
+    # the reorg fence needs both runs' block directories: without them a stop marker is never seen and the fence fails
+    # OPEN (review round 2, LOW-MEDIUM 4)
+    for k, v in (("HAZYNC_LZ_TIP_BLOCKS_DIR", TIP_BLOCKS_DIR), ("HAZYNC_LZ_BLOCKS_DIR", BOARD_BLOCKS_DIR)):
+        if not v or not os.path.isdir(v) or not os.access(v, os.R_OK | os.X_OK):
+            return f"{k}={v or '(unset)'} is not a readable directory: the reorg fence would never see a stop marker"
     if rp(TIP_STATE_DIR) == rp(LZ_STATE_DIR) or rp(TIP_BRIDGE_DIR) == rp(BRIDGE_DIR):
         return "the tip run's state or bundle directory is the board pass's: two runs need two directories"
     # the two runs number their epochs independently: one ack directory would let one run's ack <E>.ack answer the
@@ -1798,14 +1807,18 @@ def _handover_check():
         return None
     top = _board_state_top()
     if top is None:
-        return None
+        return _UNKNOWN
     a, b = _state_bytes(LZ_STATE_DIR, top), _state_bytes(TIP_STATE_DIR, top)
     if a is None or b is None:
-        return None              # the tip run behind the board pass there (restarted from genesis), or a torn file
+        return _UNKNOWN          # the tip run behind the board pass there (restarted from genesis), or a torn file
     if a != b:
         diff = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
         return f"the board pass and the tip run disagree on state_{top}.json (fields {diff[:6]}): REORG.md §19"
     return None
+
+
+# _handover_check's "nothing compared" (a missing or torn state): neither raises nor clears the alert (round 2, LOW 9)
+_UNKNOWN = "unknown"
 
 
 _board_top_cache = {"t": 0.0, "v": None}
@@ -1938,6 +1951,10 @@ def reorg_refusal(c, lo, hi, meta, epoch_at_start, check_in=True):
        real verifier (the pure mock has no boundary hashes); lo = 1 starts on the genesis anchor, not on a state file."""
     if any(f < hi for f in _reorgs_since(c, epoch_at_start)):
         return f"reorged: a chain reorganisation below block {hi} was applied while this proof was being verified"
+    # a reorg STOP (the fetcher's marker) that appeared while it was being verified: read now, not from the cache
+    _fe = reorg_fence(hi, fresh=True) if LIBZYNC else None
+    if _fe is not None:
+        return f"reorged: the prep run holding block {hi} stopped for a chain reorganisation at block {_fe}"
     if LIBZYNC and LZ_STATE_DIR and VERIFY != "mock" and meta:
         if check_in and lo > 1:
             want = lz_state_tip(lo - 1)
@@ -2404,7 +2421,9 @@ def reorg_backstop(now=None):
             # neither latches for ever nor blocks the latch of a verified range off prep's chain (review, LOW-MEDIUM 6)
             hv = _handover_check()
             had = c.execute("SELECT v FROM meta WHERE k='handover_alert'").fetchone()
-            if hv:
+            if hv is _UNKNOWN:
+                note["handover"] = "not compared (a state missing or torn)"
+            elif hv:
                 note["handover"] = hv
                 if not had:
                     c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('handover_alert',?)",
@@ -4947,7 +4966,7 @@ def claim(body):
             if handover_era() == "post":
                 h = LZ_HANDOVER_AT + 1
             # D1 (REORG.md §19): TIP_CLAIM_FIRST=1 hands out the tip run's blocks (from TIP_FROM) before the backfill's
-            h = _claim_scan(h, _ceiling, proven, held)
+            h = _claim_scan(h, _ceiling, proven, held, tip_first=TIP_CLAIM_FIRST and tip_capable(c, pk, body))
             if h is None:
                 c.close()
                 return 409, {"error": "nothing available to claim"}
@@ -4967,7 +4986,26 @@ def claim(body):
                          % int(CLAIM_TTL / 60)}
 
 
-def _claim_scan(start, ceiling, proven, held):
+# TIP_CLAIM_FIRST hands tip blocks first only to a worker that can prove one in reasonable time (review round 2, NEW):
+# a mainnet tip block on a 4 GB card would hold the block for hours or fail. The board knows nothing about a card, so
+# the worker says it (`"tip": true` in its claim, HAZYNC_TIP=1: the operator's statement for that box), or it has EARNED
+# it: one of its single tip blocks (>= TIP_FROM) verified within TIP_CLAIM_EARNED_S of its claim. Everyone else gets
+# the backfill first, and tip blocks only once nothing below X is open, as without TIP_CLAIM_FIRST.
+TIP_CLAIM_EARNED_S = float(os.environ.get("TIP_CLAIM_EARNED_S", "3600"))
+
+
+def tip_capable(c, pk, body):
+    """Does this claim get tip blocks first? (TIP_CLAIM_FIRST)"""
+    if (body or {}).get("tip") is True:
+        return True
+    if not pk or not TIP_FROM:
+        return False
+    return c.execute("SELECT 1 FROM vranges v JOIN ranges r ON r.id = v.id WHERE v.pubkey=? AND v.lo = v.hi AND v.lo >= ? "
+                     "AND r.claimed_at IS NOT NULL AND r.verified_at IS NOT NULL AND r.assignee=? "
+                     "AND r.verified_at - r.claimed_at <= ? LIMIT 1", (pk, TIP_FROM, pk, TIP_CLAIM_EARNED_S)).fetchone() is not None
+
+
+def _claim_scan(start, ceiling, proven, held, tip_first=None):
     """The first block claim() may hand out at or above `start` and below `ceiling`, or None: open (not proven, not
     held), in the open era, with a witness. The gap no run serves (_skip_gap) is jumped. With a tip run and
     TIP_CLAIM_FIRST=1, the tip run's blocks [TIP_FROM, ceiling) are scanned before [start, TIP_FROM)."""
@@ -4982,7 +5020,7 @@ def _claim_scan(start, ceiling, proven, held):
                 return h
             h += 1
         return None
-    if TIP_FROM and TIP_CLAIM_FIRST and start < TIP_FROM:
+    if TIP_FROM and (TIP_CLAIM_FIRST if tip_first is None else tip_first) and start < TIP_FROM:
         got = scan(TIP_FROM, ceiling)
         return got if got is not None else scan(start, min(ceiling, TIP_FROM))
     return scan(start, ceiling)
@@ -5415,7 +5453,8 @@ def submit(body):
         _miss = lz_states_unreadable(max(_lo, 1), _hi)
         if _miss is not None:
             return 503, {"error": f"the board's state at block {_miss} cannot be read right now (prep is writing it, or "
-                                  f"moving it for a reorg): submit again in a minute; nothing was counted", "range": rid}
+                                  f"moving it for a reorg): submit again in a minute; nothing was counted", "range": rid,
+                         "retry": True}
     _ep0 = reorg_epoch()                      # REORG §4: a rewind applied while this verifies is caught at commit
     with _verify_sem:
         sig_ok = verify_sig(pk, sig, receipt)
@@ -5922,6 +5961,10 @@ if __name__ == "__main__":
         if _tp:
             print(f"[hazync-coordinator] the tip run (REORG.md §19): {_tp}", flush=True)
             sys.exit(3)
+        try:
+            _c = db(); _c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('tip_from',?)", (str(TIP_FROM),)); _c.commit(); _c.close()
+        except sqlite3.Error:
+            pass
         if TIP_FROM:
             print(f"  tip run    blocks from {TIP_FROM}: bundles {TIP_BRIDGE_DIR}, states {TIP_STATE_DIR}, records "
                   f"{TIP_REORG_DIR}, acks {TIP_REORG_ACK_DIR}{'; claimed first' if TIP_CLAIM_FIRST else ''}", flush=True)

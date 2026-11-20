@@ -106,6 +106,15 @@ check(r.returncode == 0 and "would continue from state_250.json" in r.stdout and
 r = run(R)
 check(r.returncode == 0 and started(R).startswith("libzync-prep 251 follow ") and "state_250.json" in started(R)
       and started(R).endswith("CONTINUE=1"), f"   a start continues from it ({started(R)[-60:]})")
+# round 2: a numeric run (the board pass) whose out/ holds nothing but whose trie was flushed at 250 (a save point existed)
+R = root("boardlost")
+for d in ("cl", "trie", "out"):
+    os.makedirs(os.path.join(R, d))
+open(os.path.join(R, "cl/L0.bin"), "wb").write(b"c")
+open(os.path.join(R, "trie/meta"), "wb").write(meta)
+r = run(R, hi="974936")
+check(r.returncode == 3 and os.path.exists(os.path.join(R, "cl/L0.bin")) and not started(R),
+      f"7. a numeric run with an empty out/ but a trie flushed at 250: refused, nothing cleared ({r.returncode})")
 r = run(root("bad"), hi="12x")
 check(r.returncode == 2, f"6. LZ_HI=12x: exit 2 ({r.returncode})")
 
