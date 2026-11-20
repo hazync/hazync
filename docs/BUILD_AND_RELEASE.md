@@ -363,10 +363,13 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    asserted), `hazync-coordinator.py`, `hazync-run-workers.sh`, `hazync-verify.js` (from
    `swiftsync-verify-wasm/swiftsync-verify.js`) and `hazync-verify.wasm` via `swiftsync-verify-wasm/build.sh`, only
    if a `wasm32-unknown-unknown` target is installed (otherwise it warns; stage a wasm built elsewhere in `dist/`).
-   The x86_64 verifier (`swiftsync-verify`) is built every time.
+   The x86_64 verifier (`swiftsync-verify`) is built every time, by `scripts/build-linux-verifier.sh x86_64` in
+   the hosts' pinned `ubuntu:22.04` image with Rust 1.99.0 (docker only; the toolchain is cached in docker volumes),
+   **not** with the release box's cargo. `release-sign.yml` builds `hazync-verify-aarch64` the same way.
 5. **Gate.** `dist/` must hold **exactly** the nine `release` assets of `scripts/release-assets.txt`, nothing
    else: it is not cleaned between releases, so move stray files out first. Then `scripts/check-dist.sh dist`:
-   every staged artifact must belong to the canonical guest. The CUDA host, if it cannot run here, is **checked
+   every staged artifact must belong to the canonical guest, and every Linux ELF must need **glibc 2.34 at most**
+   (`scripts/check-glibc-floor.sh`; see "The glibc floor" below). The CUDA host, if it cannot run here, is **checked
    from its bytes** unless an operator passes `HAZYNC_ATTEST_hazync_host_x86_64_linux_gnu_cuda=<id measured on a
    GPU>` (preferred; the bytes must still agree). The Windows zip is checked from its bytes;
    `HAZYNC_ATTEST_hazync_host_x86_64_windows_cuda_zip=<id>` may be passed by an operator who ran it. Then
@@ -454,8 +457,8 @@ then fails at the verifier, never passes on a stale fixture.
    prefix (`release_until_clean`) catches a pod RunPod created although the call failed. SIGTERM and Ctrl-C take
    the same path. Caps: `--max-usd` (default **$2.00**; an estimate from each pod's $/hr, checked every second,
    plus the balance every 5 min) and `--max-min` (default **60**).
-6. The **staged verifier**, in place on the release box (it is built there and needs that box's glibc: v0.27.0's
-   needs `GLIBC_2.39` and does not start on a 22.04 laptop or pod), checks every harvested receipt: `hazync-verify --anchor state_<h-1>.json --expect
+6. The **staged verifier**, fetched to the laptop and checked by sha256 (it needs glibc 2.34 at most since it is
+   built in ubuntu:22.04, below), checks every harvested receipt: `hazync-verify --anchor state_<h-1>.json --expect
    <h>:<hash> block_<h>.rcpt` must say `SWIFTSYNC_VERIFY_DEMO` (a valid proof from the given anchor; exit 2) with
    the `--expect` check passed and no failed check, and the pod's `state_<h>.json` must equal prep's in every field
    but `anchor_id` (a leaf is a base step on S(h-1)). One receipt with a byte flipped must be **refused**, or the
@@ -506,6 +509,24 @@ there; copy it to the release box's `dist/`).
 lifecycle against a fake RunPod and pod: every pod terminated on every path, no marker unless everything passed),
 `scripts/test-release-gpu-gate.sh` (release.sh's own step 4b against a fake `dist/`: refused without a marker, with a
 wrong-sha marker, after a rebuild, without a Blackwell card, ...; proceeds with the right ones; the clean-build stamp).
+
+#### The glibc floor (every Linux binary runs on Ubuntu 22.04 / Debian 12)
+
+The hosts were always built in `ubuntu:22.04` and need `GLIBC_2.34`. The verifiers were not: the x86_64 one was
+built with the release box's own cargo (24.04) and the aarch64 one on an `ubuntu-latest` runner, so every release
+from v0.23.0 to v0.27.0 shipped verifiers needing `GLIBC_2.39`. Measured 20.11.2026 from the published assets
+(`.gnu.version_r`):
+
+| release | hosts (CPU, CUDA) | `hazync-verify-x86_64-linux-gnu` | `hazync-verify-aarch64` |
+|---|---|---|---|
+| v0.23.0 | — | 2.39 | 2.39 |
+| v0.24.0, v0.25.0, v0.26.0 | 2.34 (v0.26.0) | 2.39 **weak**: runs on 22.04, warns on every run | 2.39 |
+| v0.26.1, v0.27.0 | 2.34 | 2.39: **does not start** on 22.04 | 2.39 (v0.27.0) |
+
+Now `scripts/build-linux-verifier.sh {x86_64|aarch64}` builds both in the hosts' pinned image and refuses its own
+output above 2.34, and `check-dist.sh` refuses any staged Linux ELF above 2.34, weak or not
+(`scripts/test-glibc-floor.sh`, with a control). The published v0.26.1 and v0.27.0 verifiers stay broken on 22.04
+until the next release replaces them.
 
 #### Why a release build is clean (`prover/build-release.sh`)
 

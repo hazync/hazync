@@ -1471,6 +1471,10 @@ jobs:
         run: ./scripts/test-build-rerun.sh
       - name: Header-watch POSITIVE CONTROL (both fixes cut out — must FAIL)
         run: ./scripts/test-build-rerun.sh --control
+      - name: Every Linux release binary runs on glibc 2.34, the hosts' floor (v0.23.0-v0.27.0 verifiers needed 2.39)
+        run: ./scripts/test-glibc-floor.sh
+      - name: glibc floor POSITIVE CONTROL (version comparison cut out — must FAIL)
+        run: ./scripts/test-glibc-floor.sh --control
       - name: The release signature is bound to the tag and cannot be laundered (review 11-12, release #2)
         run: ./scripts/test-release-sign.sh
       - name: Signing POSITIVE CONTROL (image check, binding and re-sign guard cut out — must FAIL)

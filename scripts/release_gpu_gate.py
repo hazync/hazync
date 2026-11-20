@@ -13,8 +13,8 @@ Commands (scripts/release-gpu-gate.sh is the wrapper; docs/BUILD_AND_RELEASE.md 
         in parallel; the release box pushes the staged CUDA host to each pod; each pod proves every block of
         prover/testdata/libzync/gpu-gate/GATE (block 170 and full block 200,000) from its real-state leaf bundle;
         the laptop harvests, ALWAYS terminates (confirmed by listing, then a sweep by the run's name prefix), and
-        verifies each receipt with the staged verifier, in place on the release box (it needs that box's glibc):
-        --anchor S(h-1) --expect h:<hash> must give DEMO, exit 2; one tampered receipt must be REFUSED. All PASS => DIST/.gpu-gate-linux-cuda.json on the release box.
+        verifies each receipt with the staged verifier, fetched by sha256 (--anchor S(h-1) --expect h:<hash> must
+        give DEMO, exit 2), plus one tampered receipt that must be REFUSED. All PASS => DIST/.gpu-gate-linux-cuda.json on the release box.
         Caps: --max-usd (default 2.00; estimated from each pod's $/hr, and the balance) and --max-min (60).
         --source may also be a local dist directory (the laptop then uploads the host itself: slow).
   record-windows --source BOX:DIST --receipt block_170.rcpt --gpu "<name>" [--zip <local copy>] [--log <file>]
@@ -126,15 +126,14 @@ def is_blackwell(gpu_name, compute_cap=""):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# verification: the STAGED verifier, run where it can run
+# verification: the STAGED verifier (fetched by sha256), on the maintainer's machine
 #
-# ⚠ The staged hazync-verify-x86_64-linux-gnu is built on the release box (release.sh step 3, the host's own cargo),
-# so it needs that box's glibc: v0.27.0's needs GLIBC_2.39 and does not start on a 22.04 laptop or the pods' 22.04
-# image. So with a BOX:DIST source the receipts are verified ON THE RELEASE BOX, by the staged file in place
-# (BoxVerifier); with a local dist, here (LocalVerifier). Measured 20.11.2026 with the v0.27.0 verifier on a real CPU
-# proof of leaf 170 (image 46666b6f): exit 2, SWIFTSYNC_VERIFY_DEMO "FROM THE GIVEN ANCHOR ONLY", `[ok] --expect`;
-# the same receipt with its middle byte flipped: exit 1, SWIFTSYNC_VERIFY_FAIL; prove-range's state_170.json equals
-# prep's in every field but anchor_id.
+# Since the verifier is built in the hosts' ubuntu:22.04 image (scripts/build-linux-verifier.sh) and check-dist.sh
+# refuses any Linux asset needing more than glibc 2.34, the staged verifier runs on a 22.04+ laptop. (Before, it was
+# built by the release box's own cargo and needed GLIBC_2.39: v0.27.0's does not start on 22.04.) Measured 20.11.2026
+# with the v0.27.0 verifier (in an ubuntu:24.04 container) on a real CPU proof of leaf 170 (image 46666b6f): exit 2,
+# SWIFTSYNC_VERIFY_DEMO "FROM THE GIVEN ANCHOR ONLY", `[ok] --expect`; the same receipt with its middle byte flipped,
+# a wrong --expect hash or a wrong anchor: exit 1; prove-range's state_170.json equals prep's but for anchor_id.
 
 class LocalVerifier:
     def __init__(self, path):
@@ -144,37 +143,6 @@ class LocalVerifier:
         r = subprocess.run([self.path, "--anchor", anchor, "--expect", expect, receipt],
                            capture_output=True, text=True, timeout=600)
         return r.returncode, r.stdout, r.stderr
-
-    def close(self):
-        pass
-
-
-class BoxVerifier:
-    """The staged verifier, in place on the release box: anchor and receipt are copied to a private temp dir there."""
-    def __init__(self, source):
-        self.source, self.dir, self.n = source, None, 0
-
-    def _box(self, cmd, timeout=600):
-        return subprocess.run(["ssh", *BOX_OPTS, self.source.box, cmd], capture_output=True, text=True, timeout=timeout)
-
-    def run(self, anchor, expect, receipt):
-        if not self.dir:
-            r = self._box("mktemp -d /tmp/hz-relgate-verify.XXXXXX")
-            if r.returncode or not r.stdout.strip().startswith("/tmp/hz-relgate-verify."):
-                raise RuntimeError(f"could not make a temp dir on {self.source.box}: {r.stderr.strip()[:200]}")
-            self.dir = r.stdout.strip()
-        self.n += 1
-        ra, rr = f"{self.dir}/a{self.n}.json", f"{self.dir}/r{self.n}.rcpt"
-        subprocess.run(["scp", "-q", *BOX_OPTS, anchor, f"{self.source.box}:{ra}"], check=True, timeout=300)
-        subprocess.run(["scp", "-q", *BOX_OPTS, receipt, f"{self.source.box}:{rr}"], check=True, timeout=600)
-        cmd = " ".join(shlex.quote(x) for x in (self.source.path(VERIFIER_ASSET), "--anchor", ra, "--expect", expect, rr))
-        r = self._box(cmd)
-        return r.returncode, r.stdout, r.stderr
-
-    def close(self):
-        if self.dir:
-            self._box(f"rm -rf {shlex.quote(self.dir)}", timeout=120)
-            self.dir = None
 
 
 def verify_receipt(verifier, receipt, anchor, height, block_hash):
@@ -189,7 +157,7 @@ def verify_receipt(verifier, receipt, anchor, height, block_hash):
     lines = out.splitlines()
     verdict = next((x for x in reversed(lines) if x.startswith("SWIFTSYNC_VERIFY_")), "(no verdict)")
     if "GLIBC_" in (err or ""):
-        verdict += " -- the staged verifier cannot run here (glibc); use a BOX:DIST source"
+        verdict += " -- the staged verifier cannot run on this machine's glibc (it must need <= 2.34: check-dist.sh)"
     ok = (rc == 2 and verdict.startswith("SWIFTSYNC_VERIFY_DEMO:")
           and not any(x.lstrip().startswith("[FAIL]") for x in lines)
           and any(x.lstrip().startswith("[ok] --expect") for x in lines))
@@ -238,6 +206,14 @@ class Source:
                            capture_output=True, text=True, timeout=300)
         m = re.match(r"([0-9a-f]{64})\s", r.stdout)
         return m.group(1) if (r.returncode == 0 and m) else None
+
+    def fetch(self, name, dest):
+        if not self.remote:
+            shutil.copyfile(self.path(name), dest)
+        else:
+            subprocess.run(["scp", "-q", *BOX_OPTS, f"{self.box}:{self.path(name)}", dest], check=True, timeout=1800)
+        os.chmod(dest, 0o755)
+        return dest
 
     def put_marker(self, local, name):
         if not self.remote:
@@ -730,7 +706,10 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
     vsha = src.sha256(VERIFIER_ASSET)
     if not vsha:
         raise SystemExit(f"no staged {VERIFIER_ASSET} at {a.source}: nothing rented")
-    verifier = BoxVerifier(src) if src.remote else LocalVerifier(src.path(VERIFIER_ASSET))
+    vpath = src.fetch(VERIFIER_ASSET, os.path.join(work, VERIFIER_ASSET))
+    if sha256_file(vpath) != vsha:
+        raise SystemExit("the fetched verifier is not the staged one: nothing rented")
+    verifier = LocalVerifier(vpath)
     print(f"gate: host {host_sha[:16]}..., verifier {vsha[:16]}..., image {image[:8]}, blocks {[b[0] for b in blocks]}, "
           f"cards {[c[1][0] for c in CARDS]}, caps ${a.max_usd:.2f} / {a.max_min:.0f} min, work {work}")
     if a.dry_run:
@@ -776,10 +755,7 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
             spent = round(gate.b0 - balance(api), 2)
         except Exception:  # noqa: BLE001
             spent = None
-    try:
-        ok = (not rc_interrupt) and gate.sweep_clean and judge(gate, runs, verifier, blocks, image, work)
-    finally:
-        verifier.close()
+    ok = (not rc_interrupt) and gate.sweep_clean and judge(gate, runs, verifier, blocks, image, work)
     if ok and src.sha256(VERIFIER_ASSET) != vsha:
         print("the staged verifier changed during the gate")
         ok = False
@@ -818,13 +794,13 @@ def cmd_record_windows(a):
     if not vsha:
         raise SystemExit(f"no staged {VERIFIER_ASSET} at {a.source}")
     work = tempfile.mkdtemp(prefix="hz-relgate-win-")
-    verifier = BoxVerifier(src) if src.remote else LocalVerifier(src.path(VERIFIER_ASSET))
+    vpath = src.fetch(VERIFIER_ASSET, os.path.join(work, VERIFIER_ASSET))
+    if sha256_file(vpath) != vsha:
+        raise SystemExit("the fetched verifier is not the staged one")
+    verifier = LocalVerifier(vpath)
     a_path = os.path.join(FIXTURES, anchor)
-    try:
-        ok, verdict = verify_receipt(verifier, a.receipt, a_path, h, bh)
-        refused, tv = tamper_refused(verifier, a.receipt, a_path, h, bh, work) if ok else (False, "")
-    finally:
-        verifier.close()
+    ok, verdict = verify_receipt(verifier, a.receipt, a_path, h, bh)
+    refused, tv = tamper_refused(verifier, a.receipt, a_path, h, bh, work) if ok else (False, "")
     print(f"block 170 receipt: {verdict}" + (f"; tampered copy: {tv}" if ok else ""))
     if not (ok and refused):
         print("NOT RECORDED: the receipt did not verify (or the verifier accepted a tampered copy).")

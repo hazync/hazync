@@ -39,7 +39,7 @@ KNOWN=$(grep -oE '\b[0-9a-f]{8}\b' reproduce/METHOD_ID | sort -u)
 fail=0; n=0
 # Counted separately because "wrong guest" and "could not check here" are different findings, and the
 # script runs under `set -u`, so these must exist before any branch increments them.
-wrong_guest=0; unverified=0
+wrong_guest=0; unverified=0; glibc_bad=0
 
 [ -d "$DIST" ] || { echo "FAIL $DIST does not exist — nothing staged"; exit 1; }
 echo "canonical: $CANON8…"
@@ -47,6 +47,12 @@ echo "canonical: $CANON8…"
 for f in "$DIST"/*; do
     [ -f "$f" ] || continue
     b=$(basename "$f"); n=$((n + 1))
+    # Every Linux binary on the hosts' glibc floor (2.34, ubuntu:22.04): v0.23.0-v0.27.0's verifier needed 2.39
+    # and, from v0.26.1, did not start on 22.04 at all. Non-ELF files (a stand-in script, the worker) are skipped.
+    case "$b" in
+      *-linux-gnu*|*aarch64*)
+        "${HAZYNC_GLIBC_CHECKER:-./scripts/check-glibc-floor.sh}" "$f" | sed 's/^/  /' ; [ "${PIPESTATUS[0]}" = 0 ] || { glibc_bad=$((glibc_bad + 1)); fail=1; } ;;
+    esac
     case "$b" in
       *.js)
         # The WASM verifier's JavaScript glue: frames input and reads verdicts, carries no id. It is
@@ -156,7 +162,9 @@ done
 # artifact is wrong". A reader believes the summary, so the summary said the release was broken when
 # the truth was that one binary cannot execute here. That is this repo's recurring failure — telling a
 # correct setup it is wrong — and it is worse in a script a reviewer runs to decide whether to trust us.
-if [ "${wrong_guest:-0}" -gt 0 ]; then
+if [ "${glibc_bad:-0}" -gt 0 ]; then
+    echo; echo "${glibc_bad} Linux binary(ies) need a newer glibc than 2.34 (Ubuntu 22.04). Do NOT publish: rebuild in ubuntu:22.04."; exit 1
+elif [ "${wrong_guest:-0}" -gt 0 ]; then
     echo; echo "A staged artifact belongs to a DIFFERENT GUEST. Do NOT publish."; exit 1
 elif [ "${unverified:-0}" -gt 0 ]; then
     echo

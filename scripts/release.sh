@@ -223,9 +223,10 @@ fi
 # shipped). Built EVERY time rather than when the staged copy lacks the id: an id check cannot see a
 # verifier change that leaves the image alone, which is the host staleness trap of v0.18.0 (step 2)
 # in another binary. An unchanged tree makes this a no-op.
-run cargo build -q --release --locked --manifest-path swiftsync-verify/Cargo.toml --bin swiftsync-verify || die "verifier build failed"
-run install -m 0755 swiftsync-verify/target/release/swiftsync-verify "$DIST/hazync-verify-x86_64-linux-gnu"
-ok "x86_64 verifier staged"
+# Built in the hosts' ubuntu:22.04 image, NOT with this box's cargo: v0.23.0-v0.27.0 shipped a verifier needing
+# GLIBC_2.39 (this box is 24.04), which on 22.04 warned on every run or, from v0.26.1, did not start at all.
+run ./scripts/build-linux-verifier.sh x86_64 "$DIST/hazync-verify-x86_64-linux-gnu" || die "verifier build failed"
+ok "x86_64 verifier staged (glibc <= 2.34)"
 
 # ---- 4. gate -----------------------------------------------------------------------------------
 # The last point at which a wrong artifact is free to fix. After this it is public and signed.
