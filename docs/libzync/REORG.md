@@ -872,7 +872,14 @@ prep's current stores.
   (1).
 - `coordinator/test_prune_leaves_tip.py` (+ `--control`, the pruner without its tip section: 2 fail).
 - `prover/host` `prep::tests::leaf_bundles_from_the_handover_height`.
-- `experimental/libzync-bench/prep/reorg_e2e_tip.py` (P6 for the tip run; results below).
+- `experimental/libzync-bench/prep/reorg_e2e_tip.py` (P6 for the tip run). **Results, 20.11.2026** (hazync-coord, a
+  fasthost build of this branch embedding the published guest, `host method-id` `46666b6f…`; zync-serve built with
+  `--features tip --profile zync-serve`): **PASS, 29 checks** (A-E: the board pass stops at 149, the tip run follows with
+  no restart, the frontier crosses X, zync-serve serves the tip run's trie at the spine, a depth-2 and a depth-12 reorg
+  of the tip run rewound with no person and acked in `acks-tip/` only, the follower repinning to the kept head and
+  serving two heights after it). `--control` (the coordinator without the tip run's variables): 3 checks fail (the
+  frontier stops at 149), as they must. The first run found the follower handing its lock to the zync-serve it
+  started (fixed, review table below).
 - Unchanged and passing: `test_reorg.py` (+ its seven controls), `test_reorg_units.py`, `test_libzync_coord_files.py`,
   `test_check_end.py`, `test_spine_seed.py`, `test_claim_sybil.py`, `test_zync_relay.py`.
 
