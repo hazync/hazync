@@ -131,6 +131,10 @@ if [ -n "${HAZYNC_DEPS_IMAGE:-}" ]; then
     fi
 fi
 mkdir -p "$OUT"
+# One build per mode per checkout at a time: two would share prover/target/clean-<mode> and dist/.host-<mode>.out.
+mkdir -p "$REPO/dist"
+exec 9>"$REPO/dist/.build-release-$MODE.lock"
+flock -n 9 || { echo "another $MODE release build is running in $REPO (dist/.build-release-$MODE.lock)" >&2; exit 1; }
 REUSE_TARGET="${HAZYNC_REUSE_TARGET:-0}"
 case "$REUSE_TARGET" in 0|1) ;; *) echo "HAZYNC_REUSE_TARGET must be 0 or 1, got '$REUSE_TARGET'" >&2; exit 2 ;; esac
 # In-container path of this mode's own target directory (see "A RELEASE BUILD COMPILES EVERY ... OBJECT" above).
@@ -399,15 +403,15 @@ docker run --rm -v "$REPO:/hazync-zkvm" -e HOME=/root -e DEBIAN_FRONTEND=noninte
 # Observed on 2026-07-31: a release rebuild replaced the binary two active workers were running.
 # They survived; that was luck. rename(2) onto the same filesystem swaps the directory entry and
 # leaves the old inode alone until its last user exits.
+# The stamp scripts/release.sh requires of a release host, "<commit> <sha256>": built from THIS commit in an EMPTY
+# target. Removed BEFORE the binary moves (a crash between the two leaves no stamp, never a stale one vouching for a
+# new file) and written after, for a clean build only.
+rm -f "$OUT/.clean-build-$asset"
 install -m 0755 "$REPO/dist/.host-$MODE.out" "$OUT/.$asset.tmp.$$"
 mv -f "$OUT/.$asset.tmp.$$" "$OUT/$asset"
 rm -f "$REPO/dist/.host-$MODE.out"
-# The stamp scripts/release.sh requires of a release host: built from THIS commit in an EMPTY target. Removed
-# for a reused-target build, so a stale stamp can never vouch for one.
-if [ "$REUSE_TARGET" = 1 ]; then
-    rm -f "$OUT/.clean-build-$asset"
-else
-    git -C "$REPO" rev-parse HEAD > "$OUT/.clean-build-$asset"
+if [ "$REUSE_TARGET" != 1 ]; then
+    echo "$(git -C "$REPO" rev-parse HEAD) $(sha256sum "$OUT/$asset" | cut -c1-64)" > "$OUT/.clean-build-$asset"
 fi
 
 # Leave the HOST able to SNARK-wrap, not just to prove.

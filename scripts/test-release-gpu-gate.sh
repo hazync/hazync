@@ -48,32 +48,35 @@ BLOCK=$(sed -n "/^step \"4b\./,/DRY RUN COMPLETE/p" "$R" | sed '$d')
 D="$T/dist"; mkdir -p "$D"
 head -c 8192 /dev/urandom > "$D/hazync-host-x86_64-linux-gnu-cuda"
 head -c 4096 /dev/urandom > "$D/hazync-verify-x86_64-linux-gnu"
-head -c 4096 /dev/urandom > "$D/hazync-host-x86_64-windows-cuda.zip"
+python3 -c "import zipfile,os,sys; z=zipfile.ZipFile(sys.argv[1],'w'); z.writestr('host.exe', os.urandom(2048)); z.writestr('cudart64_12.dll', b'd'); z.close()" "$D/hazync-host-x86_64-windows-cuda.zip"
+HEAD_SHA=$(printf '%040d' 7)
 run4b() {   # run4b <dry 0|1> -> output; REACHED_PUBLISH printed only if 4b let it through
     {   echo 'die() { echo "FAIL  $*" >&2; exit 1; }; ok() { echo "  ok   $*"; }; step() { echo "=== $* ==="; }'
-        echo "DIST='$D'; CANON='$CANON'; DRY=$1; TAG=v0.0.0-test; CU=\"\$DIST/hazync-host-x86_64-linux-gnu-cuda\""
+        echo "DIST='$D'; CANON='$CANON'; DRY=$1; TAG=v0.0.0-test; HEAD_SHA='$HEAD_SHA'; CU=\"\$DIST/hazync-host-x86_64-linux-gnu-cuda\""
         printf '%s\n' "$BLOCK"
         echo 'echo REACHED_PUBLISH'
     } > "$T/step4b.sh"
     bash "$T/step4b.sh" 2>&1
 }
 mk() {   # mk <linux|windows> <python dict edits...>: write a marker that is right for the fake dist, then edit it
-    python3 - "$D" "$CANON" "$@" <<'PY'
+    python3 - "$D" "$CANON" "$HEAD_SHA" "$@" <<'PY'
 import hashlib, json, os, sys
 sys.path.insert(0, "scripts")
 import release_gpu_gate as g
-d, canon, kind, *edits = sys.argv[1:]
+d, canon, commit, kind, *edits = sys.argv[1:]
 sha = lambda n: hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest()
 blocks = [{"height": b[0], "verified": True, "receipt_sha256": "ab" * 32} for b in g.gate_blocks()]
 run = lambda name, cc: {"gpu_name": name, "compute_cap": cc, "host_sha256_on_pod": sha(g.CUDA_ASSET),
                         "terminated": True, "blocks": blocks}
 if kind == "linux":
     m = {"schema": 1, "kind": "linux-cuda", "result": "PASS", "asset": g.CUDA_ASSET, "host_sha256": sha(g.CUDA_ASSET),
-         "verifier_sha256": sha(g.VERIFIER_ASSET), "image": canon, "finished": "test",
+         "verifier_sha256": sha(g.VERIFIER_ASSET), "image": canon, "finished": "test", "repo_commit": commit,
+         "fixtures_sha256": g.sha256_file(os.path.join(g.FIXTURES, "SHA256SUMS")),
          "runs": [run("NVIDIA A40", "8.6"), run("NVIDIA RTX PRO 4500 Blackwell Server Edition", "12.0")]}
     path = os.path.join(d, g.MARKER_LINUX)
 else:
-    m = {"schema": 1, "kind": "windows-cuda", "result": "PASS", "asset": g.WIN_ASSET, "zip_sha256": sha(g.WIN_ASSET),
+    m = {"schema": 1, "kind": "windows-cuda", "result": "ATTESTED", "asset": g.WIN_ASSET, "zip_sha256": sha(g.WIN_ASSET),
+         "host_exe_sha256": g.zip_host_exe_sha(os.path.join(d, g.WIN_ASSET)), "repo_commit": commit, "recorded_by": "test",
          "verifier_sha256": sha(g.VERIFIER_ASSET), "image": canon, "gpu_name": "NVIDIA GeForce GTX 1050 Ti",
          "recorded_at": "test", "blocks": [{"height": 170, "verified": True, "receipt_sha256": "cd" * 32}]}
     path = os.path.join(d, g.MARKER_WIN)
@@ -99,11 +102,17 @@ clear; mk linux 'm["runs"] = m["runs"][:1]'; mk windows;    refused "no Blackwel
 clear; mk linux 'm["runs"] = m["runs"][1:]'; mk windows;    refused "no pre-Blackwell card in the marker"
 clear; mk linux 'm["runs"][1]["blocks"] = m["runs"][1]["blocks"][:1]'; mk windows; refused "a card that did not verify every gate block"
 clear; mk linux 'm["runs"][0]["terminated"] = False'; mk windows; refused "a run whose pod was not confirmed terminated"
+clear; mk linux 'm["repo_commit"] = "0" * 40'; mk windows;  refused "a Linux marker made from another commit than the release's"
+clear; mk linux 'm["fixtures_sha256"] = "0" * 64'; mk windows; refused "a Linux marker that proved other fixtures"
+clear; mk linux; mk windows 'm["host_exe_sha256"] = "0" * 64'; refused "a Windows run of another host.exe than the staged zip's"
+clear; mk linux; mk windows 'm["result"] = "PASS"';         refused "a Windows marker that claims more than ATTESTED"
 clear; mk linux; mk windows 'm["zip_sha256"] = "0" * 64';   refused "a Windows marker for a different zip"
 clear; mk linux; mk windows 'm["blocks"] = []';             refused "a Windows marker with no verified block 170"
 clear; mk linux; mk windows
 out=$(run4b 0)
 check "$(printf '%s' "$out" | grep -q REACHED_PUBLISH && echo 1)" "proceeds: both markers name exactly the staged files"
+check "$(printf '%s' "$out" | grep -q 'Linux CUDA host .* PROVED' && printf '%s' "$out" | grep -q 'Windows CUDA host .* is ATTESTED' && echo 1)" \
+      "  ...and says PROVED for Linux, ATTESTED (not proved) for Windows"
 head -c 8192 /dev/urandom > "$D/hazync-host-x86_64-linux-gnu-cuda"   # the CUDA host rebuilt after the gate ran
 refused "the CUDA host was rebuilt after the gate (its marker names the old sha256)"
 clear
@@ -119,11 +128,28 @@ echo deadbeef > "$H/.built-from-hazync-host-x86_64-linux-gnu-cuda"
 # shellcheck disable=SC2034  # DIST and SRC_REV are read by the eval'd host_is_current
 hic() { ( DIST="$H"; SRC_REV=deadbeef; eval "$FN"; host_is_current "$H/hazync-host-x86_64-linux-gnu-cuda" hazync-host-x86_64-linux-gnu-cuda ); }
 hic; check "$([ $? = 1 ] && echo 1)" "a host with no .clean-build stamp is stale (rebuilt from an empty target)"
-echo deadbeef > "$H/.clean-build-hazync-host-x86_64-linux-gnu-cuda"
-hic; check "$([ $? = 0 ] && echo 1)" "  ...and with the stamp for this commit it is current"
+echo "deadbeef $(sha256sum "$H/hazync-host-x86_64-linux-gnu-cuda" | cut -c1-64)" > "$H/.clean-build-hazync-host-x86_64-linux-gnu-cuda"
+hic; check "$([ $? = 0 ] && echo 1)" "  ...with the stamp for this commit AND this binary's sha256 it is current"
+echo "deadbeef $(printf '%064d' 0)" > "$H/.clean-build-hazync-host-x86_64-linux-gnu-cuda"
+hic; check "$([ $? = 1 ] && echo 1)" "  ...a stamp for another binary (swapped after the clean build) is stale"
 check "$(grep -q 'HAZYNC_REUSE_TARGET=0 ./prover/build-release.sh' "$R" && echo 1)" "release.sh builds with HAZYNC_REUSE_TARGET=0"
-check "$(grep -q 'rm -f "$OUT/.clean-build-$asset"' prover/build-release.sh && echo 1)" \
-      "build-release.sh removes the stamp for a reused-target build"
+check "$(awk '/rm -f "\$OUT\/.clean-build-\$asset"/{r=NR} /mv -f "\$OUT\/.\$asset.tmp/{m=NR} /> "\$OUT\/.clean-build-\$asset"/{w=NR} END{exit !(r && m && w && r<m && m<w)}' prover/build-release.sh && echo 1)" \
+      "build-release.sh removes the stamp BEFORE moving the binary in and writes it after"
+check "$(grep -q 'flock -n 9' prover/build-release.sh && echo 1)" "build-release.sh refuses a second same-mode build in one checkout"
+
+# ---- the pod-side dead-man (scripts/release-gpu-gate-pod.sh --deadman), with stub runpodctl/curl ----------------
+mkdir -p "$T/bin"
+printf '#!/bin/sh\necho "runpodctl $*" >> "%s"\n' "$T/calls" > "$T/bin/runpodctl"
+printf '#!/bin/sh\necho "curl $*" >> "%s"\nexit 22\n' "$T/calls" > "$T/bin/curl"
+chmod +x "$T/bin/runpodctl" "$T/bin/curl"
+printf 'PATH=/usr/bin\0RUNPOD_POD_ID=abc123xyz\0RUNPOD_API_KEY=podscopedkey\0HOME=/root\0' > "$T/environ"
+PATH="$T/bin:$PATH" DEADMAN_ENVIRON="$T/environ" DEADMAN_WAIT=0 DEADMAN_NO_KILL=1 DEADMAN_LOG="$T/deadman.log" \
+    bash scripts/release-gpu-gate-pod.sh --deadman 0
+check "$(grep -q '^runpodctl pod delete abc123xyz$' "$T/calls" && echo 1)" \
+      "dead-man: deletes its OWN pod with runpodctl, the id read from PID 1's environment"
+check "$(grep -q 'curl .*-X DELETE .*Bearer podscopedkey.*/pods/abc123xyz' "$T/calls" && echo 1)" \
+      "dead-man: and through the REST API with the pod-scoped key"
+check "$(grep -q '^runpodctl pod stop abc123xyz$' "$T/calls" && echo 1)" "dead-man: then stops it if it is still there"
 
 if [ "$CONTROL" = 1 ]; then echo "CONTROL: $fails failure(s)"; else echo "$fails failure(s)"; fi
 if [ "$CONTROL" = 1 ]; then [ "$fails" != 0 ]; else [ "$fails" = 0 ]; fi

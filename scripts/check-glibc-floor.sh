@@ -36,6 +36,8 @@ def glibc_needs(path):
     shentsize, shnum = struct.unpack_from(e + "HH", d, 0x3A)
     secs = [struct.unpack_from(e + "IIQQQQIIQQ", d, shoff + i * shentsize) for i in range(shnum)]
     out = {}                                        # version -> True if some need of it is NOT weak
+    if not any(sec[1] == 6 for sec in secs):        # no SHT_DYNAMIC: a static ELF loads no libc at all
+        return "static"
     for (_name, typ, _fl, _addr, off, _size, link, info, _al, _es) in secs:
         if typ != 0x6FFFFFFE:                       # SHT_GNU_verneed
             continue
@@ -68,7 +70,14 @@ for f in files:
         print(f"  FAIL {f}: cannot read its glibc needs ({ex})"); bad += 1; continue
     if need is None:
         print(f"  --   {f}: not an ELF (no glibc floor)"); continue
-    top = max(need, key=ver) if need else None
+    if need == "static":
+        print(f"  ok   {f}: a static ELF (loads no glibc)"); continue
+    if not need:
+        # A dynamic ELF that names no GLIBC version at all: stripped of its version table, or linked against another
+        # libc. Its floor cannot be read from it, so it is not passed.
+        print(f"  FAIL {f}: a dynamic ELF with no GLIBC version needs (.gnu.version_r missing or empty): floor unknown")
+        bad += 1; continue
+    top = max(need, key=ver)
     if top and ver(top) > ver(floor):
         # A WEAK need still loads on an older glibc, with a "weak version not found" warning printed on every
         # run (v0.24.0-v0.26.0's verifier); a hard one does not load at all (v0.26.1, v0.27.0). Both are refused.
@@ -76,6 +85,6 @@ for f in files:
         print(f"  FAIL {f} needs GLIBC_{top}{kind}; a release binary must run on glibc {floor} (build it in ubuntu:22.04)")
         bad += 1
     else:
-        print(f"  ok   {f}: needs GLIBC_{top or '(none)'} <= {floor}")
+        print(f"  ok   {f}: needs GLIBC_{top} <= {floor}")
 sys.exit(1 if bad else 0)
 PY

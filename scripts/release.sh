@@ -119,6 +119,12 @@ FREE_GB=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
        It does NOT report as a disk error — nvcc segfaults (exit status: 139) and reads as a
        toolchain bug. Reclaim first: docker system prune -af"
 ok "disk ${FREE_GB}GB free (>=25 needed for cuda)"
+# ONE-TIME (since the clean builds of 20.11.2026): release builds no longer use prover/target/release, so a copy left
+# by an earlier release is dead weight on a box that needs 25 GB free. It is root-owned (built in the container).
+if [ -d prover/target/release ]; then
+    echo "  !    prover/target/release is left from a pre-clean-build release ($(du -sh prover/target/release 2>/dev/null | cut -f1)) and is"
+    echo "       no longer used. Delete it once:  docker run --rm -v \"\$PWD/prover:/p\" ubuntu:22.04 rm -rf /p/target/release"
+fi
 
 # ---- 2. build ----------------------------------------------------------------------------------
 # Skipped per-artifact when the staged file already carries the canonical id, so a resumed run after
@@ -148,7 +154,9 @@ host_is_current() {  # $1 = path; $2 = asset name; hosts store the id as [u32;8]
     [ "$(cat "$DIST/.built-from-$2" 2>/dev/null)" = "$SRC_REV" ] || return 1
     # ...and it was built in an EMPTY target directory (prover/build-release.sh writes this stamp only then). A host
     # linked from a warm target shipped two layouts of sppark's stream_t in v0.26.1 and v0.27.0 (20.11.2026).
-    [ "$(cat "$DIST/.clean-build-$2" 2>/dev/null)" = "$SRC_REV" ] || return 1
+    # The stamp is "<commit> <sha256 of the binary>": a binary swapped or rebuilt (by hand, by a reused-target build)
+    # after the clean build no longer matches its own stamp.
+    [ "$(cat "$DIST/.clean-build-$2" 2>/dev/null)" = "$SRC_REV $(sha256sum "$1" | cut -c1-64)" ] || return 1
 
     local id
     id="$("$1" method-id 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)"
@@ -316,14 +324,15 @@ echo "  staged assets (sha256):"
 # command; the build, fetch and package steps find their work done.
 step "4b. real-GPU gate: the staged CUDA hosts proved real blocks on real cards"
 _cu_sha=$(sha256sum "$CU" | cut -c1-64)
-if python3 scripts/release_gpu_gate.py check --dist "$DIST" --image "$CANON"; then
+if python3 scripts/release_gpu_gate.py check --dist "$DIST" --image "$CANON" --commit "$HEAD_SHA"; then
     :
 elif [ "$DRY" = 1 ]; then
     echo "  !    (dry run) the publish step would REFUSE here until the gate has run for these exact files"
 else
     die "no real-GPU evidence for the staged CUDA hosts -- do NOT publish. From the maintainer's laptop:
          scripts/release-gpu-gate.sh run --source <this box>:$(realpath -m "$DIST") --host-sha256 $_cu_sha
-       and for Windows, the documented block-170 prove, then scripts/release-gpu-gate.sh record-windows ...
+       (from a checkout of THIS commit), and for Windows scripts/release-gpu-gate-windows.ps1 with the staged zip's
+       host.exe on a real card, then scripts/release-gpu-gate.sh record-windows ...
        (docs/BUILD_AND_RELEASE.md, \"The real-GPU gate\"). Then re-run: ./scripts/release.sh $TAG"
 fi
 

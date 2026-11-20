@@ -47,12 +47,10 @@ echo "canonical: $CANON8…"
 for f in "$DIST"/*; do
     [ -f "$f" ] || continue
     b=$(basename "$f"); n=$((n + 1))
-    # Every Linux binary on the hosts' glibc floor (2.34, ubuntu:22.04): v0.23.0-v0.27.0's verifier needed 2.39
-    # and, from v0.26.1, did not start on 22.04 at all. Non-ELF files (a stand-in script, the worker) are skipped.
-    case "$b" in
-      *-linux-gnu*|*aarch64*)
-        "${HAZYNC_GLIBC_CHECKER:-./scripts/check-glibc-floor.sh}" "$f" | sed 's/^/  /' ; [ "${PIPESTATUS[0]}" = 0 ] || { glibc_bad=$((glibc_bad + 1)); fail=1; } ;;
-    esac
+    # Every staged file on the hosts' glibc floor (2.34, ubuntu:22.04), whatever its name: v0.23.0-v0.27.0's
+    # verifier needed 2.39 and, from v0.26.1, did not start on 22.04 at all. Non-ELF files (zips, wasm, scripts,
+    # the worker) are reported and skipped by the checker itself.
+    "${HAZYNC_GLIBC_CHECKER:-./scripts/check-glibc-floor.sh}" "$f" | sed 's/^/  /' ; [ "${PIPESTATUS[0]}" = 0 ] || { glibc_bad=$((glibc_bad + 1)); fail=1; }
     case "$b" in
       *.js)
         # The WASM verifier's JavaScript glue: frames input and reads verdicts, carries no id. It is

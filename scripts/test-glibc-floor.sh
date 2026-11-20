@@ -36,6 +36,13 @@ d = bytearray(open(src, "rb").read())
 shoff, = struct.unpack_from("<Q", d, 0x28); shentsize, shnum = struct.unpack_from("<HH", d, 0x3A)
 secs = [struct.unpack_from("<IIQQQQIIQQ", d, shoff + i * shentsize) for i in range(shnum)]
 hit = 0
+if new == "nover":                                  # turn the version-needs section into plain data
+    for i, s in enumerate(secs):
+        if s[1] == 0x6FFFFFFE:
+            struct.pack_into("<I", d, shoff + i * shentsize + 4, 1)
+            hit += 1
+    open(out, "wb").write(bytes(d))
+    sys.exit(0 if hit else "no .gnu.version_r to remove")
 for s in secs:
     if s[1] != 0x6FFFFFFE:
         continue
@@ -66,6 +73,7 @@ PY
 }
 mk "$T/v234" - || exit 1
 mk "$T/v239" 2.39; mk "$T/v239w" 2.39 weak; mk "$T/v310" 3.10; mk "$T/v24" 2.4
+mk "$T/nover" nover
 printf '#!/bin/sh\necho not an elf\n' > "$T/script"
 head -c 100 "$T/base" > "$T/trunc"
 
@@ -75,16 +83,22 @@ run "$T/v239";   check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'needs GLI
 run "$T/v239w";  check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'GLIBC_2.39 (weak' && echo 1)" "a WEAK GLIBC_2.39 need is refused too, and called weak (the v0.24.0-v0.26.0 verifier)"
 run "$T/v310";   check "$([ $rc = 1 ] && echo 1)" "GLIBC_3.10 is refused"
 run "$T/v24";    check "$([ $rc = 0 ] && echo 1)" "GLIBC_2.4 passes: versions compare as numbers, not text"
+run "$T/nover";  check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'floor unknown' && echo 1)" "a dynamic ELF with no GLIBC version needs is refused (floor unknown), not passed"
+if gcc -static -O1 -o "$T/static" "$T/h.c" 2>/dev/null; then
+    run "$T/static"; check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'static ELF' && echo 1)" "a static ELF passes (it loads no glibc)"
+else
+    echo "  --   (no static libc here: the static-ELF case is not exercised)"
+fi
 run "$T/script"; check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'not an ELF' && echo 1)" "a non-ELF file is skipped, and says so"
 run "$T/nope";   check "$([ $rc = 1 ] && echo 1)" "a missing file is refused (not a pass by absence)"
 run "$T/trunc";  check "$([ $rc = 1 ] && echo 1)" "an ELF it cannot parse is refused"
 run "$T/v234" "$T/v239"; check "$([ $rc = 1 ] && echo 1)" "one bad file among good ones fails the run"
 
-# check-dist.sh runs it on the staged Linux assets.
-mkdir -p "$T/dist"; cp "$T/v239" "$T/dist/hazync-verify-x86_64-linux-gnu"
+# check-dist.sh runs it on EVERY staged file, whatever its name (no name pattern to fall out of).
+mkdir -p "$T/dist"; cp "$T/v239" "$T/dist/some-new-linux-asset"
 out=$(HAZYNC_GLIBC_CHECKER="$C" ./scripts/check-dist.sh "$T/dist" 2>&1); rc=$?
 check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'need a newer glibc than 2.34' && echo 1)" \
-      "check-dist.sh refuses a dist whose verifier needs GLIBC_2.39, and says why"
+      "check-dist.sh checks every staged file whatever its name: a 2.39 ELF is refused, and it says why"
 
 # ...and every Linux verifier is BUILT on the floor: release.sh and release-sign.yml use build-linux-verifier.sh.
 check "$(grep -q '^run ./scripts/build-linux-verifier.sh x86_64 ' scripts/release.sh && ! grep -qE '^run cargo build .*swiftsync-verify' scripts/release.sh && echo 1)" \

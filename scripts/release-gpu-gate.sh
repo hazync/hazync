@@ -6,7 +6,8 @@
 #
 #   scripts/release-gpu-gate.sh run --source hazync-coord:/root/<release checkout>/dist --host-sha256 <sha256>
 #   scripts/release-gpu-gate.sh record-windows --source hazync-coord:/root/<release checkout>/dist \
-#       --receipt block_170.rcpt --gpu "NVIDIA GeForce GTX 1050 Ti" --zip hazync-host-x86_64-windows-cuda.zip
-#   scripts/release-gpu-gate.sh check --dist dist          # what release.sh runs; no network
+#       --report gate-windows.json --receipt block_170.rcpt --log prove.log --zip hazync-host-x86_64-windows-cuda.zip
+#   scripts/release-gpu-gate.sh sweep [--terminate]   # ⛔ after ANY abnormal exit: leftover hz-relgate-* pods
+#   scripts/release-gpu-gate.sh check --dist dist --commit <sha>   # what release.sh runs; no network
 set -euo pipefail
 exec python3 "$(dirname "${BASH_SOURCE[0]}")/release_gpu_gate.py" "$@"
