@@ -70,13 +70,13 @@ run = lambda name, cc: {"gpu_name": name, "compute_cap": cc, "host_sha256_on_pod
                         "terminated": True, "blocks": blocks}
 if kind == "linux":
     m = {"schema": 1, "kind": "linux-cuda", "result": "PASS", "asset": g.CUDA_ASSET, "host_sha256": sha(g.CUDA_ASSET),
-         "verifier_sha256": sha(g.VERIFIER_ASSET), "image": canon, "finished": "test", "repo_commit": commit,
+         "verifier_sha256": sha(g.VERIFIER_ASSET), "image": canon, "finished": "test", "repo_commit": commit, "repo_dirty": False,
          "fixtures_sha256": g.sha256_file(os.path.join(g.FIXTURES, "SHA256SUMS")),
          "runs": [run("NVIDIA A40", "8.6"), run("NVIDIA RTX PRO 4500 Blackwell Server Edition", "12.0")]}
     path = os.path.join(d, g.MARKER_LINUX)
 else:
     m = {"schema": 1, "kind": "windows-cuda", "result": "ATTESTED", "asset": g.WIN_ASSET, "zip_sha256": sha(g.WIN_ASSET),
-         "host_exe_sha256": g.zip_host_exe_sha(os.path.join(d, g.WIN_ASSET)), "repo_commit": commit, "recorded_by": "test",
+         "host_exe_sha256": g.zip_host_exe_sha(os.path.join(d, g.WIN_ASSET)), "repo_commit": commit, "repo_dirty": False, "recorded_by": "test",
          "verifier_sha256": sha(g.VERIFIER_ASSET), "image": canon, "gpu_name": "NVIDIA GeForce GTX 1050 Ti",
          "recorded_at": "test", "blocks": [{"height": 170, "verified": True, "receipt_sha256": "cd" * 32}]}
     path = os.path.join(d, g.MARKER_WIN)
@@ -106,6 +106,10 @@ clear; mk linux 'm["repo_commit"] = "0" * 40'; mk windows;  refused "a Linux mar
 clear; mk linux 'm["fixtures_sha256"] = "0" * 64'; mk windows; refused "a Linux marker that proved other fixtures"
 clear; mk linux; mk windows 'm["host_exe_sha256"] = "0" * 64'; refused "a Windows run of another host.exe than the staged zip's"
 clear; mk linux; mk windows 'm["result"] = "PASS"';         refused "a Windows marker that claims more than ATTESTED"
+clear; mk linux; mk windows 'm["repo_commit"] = "0" * 40';  refused "a Windows marker recorded from another commit"
+clear; mk linux 'm["repo_dirty"] = True'; mk windows;        refused "a Linux marker from a checkout with uncommitted changes"
+clear; mk linux; mk windows 'm["repo_dirty"] = True';        refused "a Windows marker from a checkout with uncommitted changes"
+clear; mk linux; mk windows 'm["blocks"][0]["receipt_sha256"] = "ab" * 32'; refused "a Windows marker whose receipt is the Linux gate's"
 clear; mk linux; mk windows 'm["zip_sha256"] = "0" * 64';   refused "a Windows marker for a different zip"
 clear; mk linux; mk windows 'm["blocks"] = []';             refused "a Windows marker with no verified block 170"
 clear; mk linux; mk windows
@@ -137,19 +141,34 @@ check "$(awk '/rm -f "\$OUT\/.clean-build-\$asset"/{r=NR} /mv -f "\$OUT\/.\$asse
       "build-release.sh removes the stamp BEFORE moving the binary in and writes it after"
 check "$(grep -q 'flock -n 9' prover/build-release.sh && echo 1)" "build-release.sh refuses a second same-mode build in one checkout"
 
-# ---- the pod-side dead-man (scripts/release-gpu-gate-pod.sh --deadman), with stub runpodctl/curl ----------------
-mkdir -p "$T/bin"
-printf '#!/bin/sh\necho "runpodctl $*" >> "%s"\n' "$T/calls" > "$T/bin/runpodctl"
+# ---- the pod-side dead-man (scripts/release-gpu-gate-pod.sh --deadman <s> <pod id>), stub runpodctl/curl ----------
+mkdir -p "$T/bin" "$T/wd"
+printf '#!/bin/sh\necho "runpodctl $*" >> "%s"\nexit "${STUB_RC:-0}"\n' "$T/calls" > "$T/bin/runpodctl"
 printf '#!/bin/sh\necho "curl $*" >> "%s"\nexit 22\n' "$T/calls" > "$T/bin/curl"
 chmod +x "$T/bin/runpodctl" "$T/bin/curl"
 printf 'PATH=/usr/bin\0RUNPOD_POD_ID=abc123xyz\0RUNPOD_API_KEY=podscopedkey\0HOME=/root\0' > "$T/environ"
-PATH="$T/bin:$PATH" DEADMAN_ENVIRON="$T/environ" DEADMAN_WAIT=0 DEADMAN_NO_KILL=1 DEADMAN_LOG="$T/deadman.log" \
-    bash scripts/release-gpu-gate-pod.sh --deadman 0
-check "$(grep -q '^runpodctl pod delete abc123xyz$' "$T/calls" && echo 1)" \
-      "dead-man: deletes its OWN pod with runpodctl, the id read from PID 1's environment"
+printf 'PATH=/usr/bin\0HOME=/root\0' > "$T/environ-nopod"
+dm() {   # dm <environ> <expected id> [STUB_RC]: one dead-man run; calls and log are fresh each time
+    rm -f "$T/calls" "$T/deadman.log"
+    PATH="$T/bin:$PATH" STUB_RC="${3:-0}" DEADMAN_ENVIRON="$1" DEADMAN_WAIT=0 DEADMAN_LOG="$T/deadman.log" \
+        DEADMAN_WORKDIR="$T/wd" bash scripts/release-gpu-gate-pod.sh --deadman 0 "$2"
+}
+dm "$T/environ" abc123xyz
+check "$(grep -q '^runpodctl pod delete abc123xyz$' "$T/calls" && grep -q 'runpodctl pod delete answered OK' "$T/deadman.log" && echo 1)" \
+      "dead-man: deletes its OWN pod with runpodctl (id from PID 1's environment) and logs which step answered"
 check "$(grep -q 'curl .*-X DELETE .*Bearer podscopedkey.*/pods/abc123xyz' "$T/calls" && echo 1)" \
       "dead-man: and through the REST API with the pod-scoped key"
-check "$(grep -q '^runpodctl pod stop abc123xyz$' "$T/calls" && echo 1)" "dead-man: then stops it if it is still there"
+dm "$T/environ" otherpod
+check "$([ ! -s "$T/calls" ] && grep -q REFUSING "$T/deadman.log" && echo 1)" "dead-man: armed for another pod id: refuses, calls nothing"
+dm "$T/environ-nopod" abc123xyz
+check "$([ ! -s "$T/calls" ] && grep -q REFUSING "$T/deadman.log" && echo 1)" "dead-man: no RUNPOD_POD_ID (not on a pod): refuses, calls nothing"
+setsid sleep 300 & spid=$!
+sleep 0.2; echo "$spid" > "$T/wd/script.pid"
+dm "$T/environ" abc123xyz 1
+sleep 0.2
+check "$(grep -q 'COULD NOT REMOVE THIS POD' "$T/deadman.log" && ! kill -0 "$spid" 2>/dev/null && echo 1)" \
+      "dead-man: when nothing removes the pod it says so and kills the gate's workload (not PID 1)"
+kill "$spid" 2>/dev/null
 
 if [ "$CONTROL" = 1 ]; then echo "CONTROL: $fails failure(s)"; else echo "$fails failure(s)"; fi
 if [ "$CONTROL" = 1 ]; then [ "$fails" != 0 ]; else [ "$fails" = 0 ]; fi

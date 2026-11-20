@@ -13,40 +13,56 @@
 #   PROVED | NO_GPU | HOST_SHA_BAD | FIXTURE_BAD | METHOD_ID_BAD | PROVE_FAILED <h> rc=<n>
 # No retry: a release gate that retries hides the fault it is there to see (#119-class faults included).
 #
-# --deadman <seconds>: the POD-SIDE cap (scripts/release_gpu_gate.py arms it first, right after SSH comes up). After
-# <seconds> the pod removes ITSELF, so a laptop that crashed, lost power or was SIGKILLed cannot leave it billing:
+# --deadman <seconds> <expected pod id>: the POD-SIDE cap (scripts/release_gpu_gate.py arms it right after SSH
+# comes up; between the create and that moment -- up to the gate's boot wait -- there is NO dead-man, only the
+# laptop and `sweep`). After <seconds> the pod removes ITSELF, so a laptop that crashed, lost power or was SIGKILLed
+# cannot leave it billing:
 #   1. delete through RunPod's API with the pod-scoped key RunPod injects (RUNPOD_POD_ID, RUNPOD_API_KEY: "Pod-scoped
-#      API key", docs.runpod.io/pods/references/environment-variables): runpodctl if the image has it, else REST;
+#      API key", docs.runpod.io/pods/references/environment-variables): runpodctl if the image has it, then REST;
 #   2. else STOP it (RunPod: stopping "releases the GPU"; a stopped pod still bills its volume disk until deleted);
-#   3. else end the container (kill PID 1). ⚠ What RunPod bills for a pod whose container exited is not documented
-#      as such; assume the GPU may still be held until `scripts/release-gpu-gate.sh sweep --terminate` runs.
-# The variables are read from PID 1's environment: an SSH session does not inherit the container's.
+#   3. else kill the gate's own workload and log "COULD NOT REMOVE THIS POD": the pod then idles (and BILLS) until
+#      `scripts/release-gpu-gate.sh sweep --terminate`. (Signalling PID 1 from inside its own namespace does nothing,
+#      so the container cannot end itself; that is not attempted.)
+# It refuses unless RUNPOD_POD_ID is set AND equals the expected id: never act anywhere but on the pod it was armed
+# on. The variables are read from PID 1's environment (an SSH session does not inherit the container's). Each step
+# that answered is logged to deadman.log, which the gate harvests.
 # (Test hooks, scripts/test-release-gpu-gate.sh: DEADMAN_ENVIRON = another environ file, DEADMAN_WAIT = the waits
-# between attempts, DEADMAN_NO_KILL=1 = stop before killing PID 1.)
+# between attempts, DEADMAN_LOG, DEADMAN_WORKDIR = where script.pid is.)
 set -u
 if [ "${1:-}" = "--deadman" ]; then
+    want="${3:-}"
     sleep "${2:?seconds}"
     exec >> "${DEADMAN_LOG:-/workspace/deadman.log}" 2>&1
-    echo "$(date -u +%FT%TZ) dead-man: the gate's time is up; removing this pod"
+    log() { echo "$(date -u +%FT%TZ) dead-man: $*"; }
+    log "the gate's time is up; removing pod ${want:-?}"
     eval "$(tr '\0' '\n' < "${DEADMAN_ENVIRON:-/proc/1/environ}" 2>/dev/null | grep -E '^RUNPOD_(POD_ID|API_KEY)=[A-Za-z0-9_.-]+$' | sed 's/^/export /')"
-    if [ -n "${RUNPOD_POD_ID:-}" ]; then
-        if command -v runpodctl >/dev/null; then
-            runpodctl pod delete "$RUNPOD_POD_ID" || runpodctl remove pod "$RUNPOD_POD_ID"
-        fi
-        if [ -n "${RUNPOD_API_KEY:-}" ]; then
-            curl -fsS -m 60 -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" \
-                -H "User-Agent: hazync-release-gpu-gate-deadman/1" "https://api.runpod.io/v2/pods/$RUNPOD_POD_ID" \
-                || curl -fsS -m 60 -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" \
-                    -H "User-Agent: hazync-release-gpu-gate-deadman/1" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"
-        fi
-        sleep "${DEADMAN_WAIT:-60}"   # still here: the delete did not take
-        command -v runpodctl >/dev/null && { runpodctl pod stop "$RUNPOD_POD_ID" || runpodctl stop pod "$RUNPOD_POD_ID"; }
-        sleep "${DEADMAN_WAIT:-60}"
+    if [ -z "$want" ] || [ -z "${RUNPOD_POD_ID:-}" ] || [ "${RUNPOD_POD_ID}" != "$want" ]; then
+        log "REFUSING: RUNPOD_POD_ID='${RUNPOD_POD_ID:-}' is not the pod this was armed on ('$want'); doing nothing"
+        exit 1
     fi
-    echo "$(date -u +%FT%TZ) dead-man: still running; ending the container"
-    [ "${DEADMAN_NO_KILL:-0}" = 1 ] && exit 0
-    kill -TERM 1; sleep 30; kill -KILL 1
-    exit 0
+    UA="User-Agent: hazync-release-gpu-gate-deadman/1"
+    if command -v runpodctl >/dev/null; then
+        if runpodctl pod delete "$RUNPOD_POD_ID"; then log "runpodctl pod delete answered OK"
+        elif runpodctl remove pod "$RUNPOD_POD_ID"; then log "runpodctl remove pod answered OK"
+        else log "runpodctl could not delete"; fi
+    fi
+    if [ -n "${RUNPOD_API_KEY:-}" ]; then
+        if curl -fsS -m 60 -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" -H "$UA" \
+               "https://api.runpod.io/v2/pods/$RUNPOD_POD_ID"; then log "REST DELETE (api.runpod.io/v2) answered OK"
+        elif curl -fsS -m 60 -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" -H "$UA" \
+               "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; then log "REST DELETE (rest.runpod.io/v1) answered OK"
+        else log "REST DELETE refused"; fi
+    fi
+    sleep "${DEADMAN_WAIT:-60}"   # still here: no delete took
+    if command -v runpodctl >/dev/null; then
+        if runpodctl pod stop "$RUNPOD_POD_ID" || runpodctl stop pod "$RUNPOD_POD_ID"; then log "runpodctl stop answered OK"
+        else log "runpodctl could not stop"; fi
+    fi
+    sleep "${DEADMAN_WAIT:-60}"
+    log "COULD NOT REMOVE THIS POD ($RUNPOD_POD_ID): it keeps billing until 'release-gpu-gate.sh sweep --terminate'; killing the gate workload"
+    pid=$(cat "${DEADMAN_WORKDIR:-/workspace}/script.pid" 2>/dev/null)
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM -- "-$pid" 2>/dev/null && log "killed the workload (process group $pid)"
+    exit 1
 fi
 W=/workspace; O=$W/out
 mkdir -p "$O"; cd "$W" || exit 1

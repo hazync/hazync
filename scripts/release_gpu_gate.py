@@ -65,6 +65,13 @@ POD_PREFIX = "hz-relgate-"
 CARDS = (("pre-blackwell", ("NVIDIA A40", "NVIDIA RTX A5000", "NVIDIA RTX A6000", "NVIDIA L40S")),
          ("blackwell", ("NVIDIA RTX PRO 4500 Blackwell Server Edition",
                         "NVIDIA RTX PRO 6000 Blackwell Server Edition")))
+# What a pod is assumed to cost when RunPod's answer carries no (or a zero) $/hr: the cap must never count a pod as
+# free. Above the measured prices (docs/OPERATIONS.md 4.1); UNKNOWN_PRICE for a type not listed.
+PRICE_CEILING = {"NVIDIA A40": 0.60, "NVIDIA RTX A5000": 0.60, "NVIDIA RTX A6000": 0.90, "NVIDIA L40S": 1.20,
+                 "NVIDIA RTX PRO 4500 Blackwell Server Edition": 1.00,
+                 "NVIDIA RTX PRO 6000 Blackwell Server Edition": 2.60}
+UNKNOWN_PRICE = 3.00
+TERMINATE_BUDGET_S = 360     # sponsor_bot.TERMINATE_BUDGET_S: what one terminate may take after the cap fires
 SPEND_MARGIN = 1.15          # on the run's own $/hr x time estimate (billing granularity, a pod's last seconds)
 DEADMAN_MARGIN_S = 600       # the pod-side dead-man fires this long after the time cap
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)   # all handled like Ctrl-C: release the pods first
@@ -79,6 +86,15 @@ BOX_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20"]     # the release 
 # terminate; the sweep + lost-create reaper), so the tests can show each works alone and that both off fails.
 _CONTROL_NO_TERMINATE = False
 _CONTROL_NO_SWEEP = False
+
+
+def say(*a, **k):
+    """print that cannot raise: after SIGHUP the terminal is gone and a bare print raises OSError (EIO), which used
+    to kill the very thread that was about to harvest and terminate a pod."""
+    try:
+        print(*a, **k)
+    except (OSError, ValueError):
+        pass
 
 
 def now_utc():
@@ -224,13 +240,19 @@ class Source:
         return dest
 
     def read_text(self, name):
-        """A small file from the dist, or None when it is not there."""
+        """A small file from the dist; None ONLY when it is not there. Any other failure (ssh down, unreadable)
+        raises: "could not look" must never read as "nothing there" to a check that refuses on what it finds."""
         if not self.remote:
             p = self.path(name)
-            return open(p).read() if os.path.isfile(p) else None
-        r = subprocess.run(["ssh", *BOX_OPTS, self.box, "cat " + shlex.quote(self.path(name))],
+            return open(p).read() if os.path.exists(p) else None
+        q = shlex.quote(self.path(name))
+        r = subprocess.run(["ssh", *BOX_OPTS, self.box, f"test -e {q} || exit 3; cat {q}"],
                            capture_output=True, text=True, timeout=300)
-        return r.stdout if r.returncode == 0 else None
+        if r.returncode == 3:
+            return None
+        if r.returncode != 0:
+            raise RuntimeError(f"could not read {name} on {self.box} (ssh rc {r.returncode}): {r.stderr.strip()[:200]}")
+        return r.stdout
 
     def append_text(self, name, text):
         if not self.remote:
@@ -304,12 +326,13 @@ class SshTransport:
             subprocess.run(["ssh", *BOX_OPTS, self.source.box, f"rm -rf {self.box_dir}"], timeout=120)
             self.box_dir = None
 
-    def arm(self, ip, port, seconds):
+    def arm(self, ip, port, seconds, pod_id):
         """The POD-SIDE dead-man, first thing after SSH: the pod deletes (else stops, else powers off) itself after
         `seconds`, whatever happens to the laptop. scripts/release-gpu-gate-pod.sh --deadman."""
         self._scp(ip, port, [POD_SCRIPT], "/workspace/", timeout=300)
         rc, _o, err = self._pod(ip, port, f"cd /workspace && (setsid nohup bash release-gpu-gate-pod.sh --deadman "
-                                          f"{int(seconds)} > deadman.out 2>&1 < /dev/null &)", timeout=120)
+                                          f"{int(seconds)} {shlex.quote(str(pod_id))} > deadman.out 2>&1 < /dev/null &)",
+                                timeout=120)
         if rc:
             raise RuntimeError(f"could not arm the pod's dead-man: {err.strip()[:200]}")
 
@@ -342,9 +365,10 @@ class SshTransport:
 
     def result(self, ip, port):
         """RESULT's word; POD_SCRIPT_DIED when the script is gone without writing one; "" while it runs."""
+        # RESULT is read AGAIN after the liveness check: the script may write it and exit between the two.
         rc, out, _e = self._pod(ip, port, "cd /workspace && { cat out/RESULT 2>/dev/null || "
-                                          "{ kill -0 \"$(cat script.pid 2>/dev/null)\" 2>/dev/null || echo POD_SCRIPT_DIED; }; }",
-                                timeout=120)
+                                          "{ kill -0 \"$(cat script.pid 2>/dev/null)\" 2>/dev/null || "
+                                          "cat out/RESULT 2>/dev/null || echo POD_SCRIPT_DIED; }; }", timeout=120)
         return out.strip() if rc == 0 else ""
 
     def harvest(self, ip, port, dest, deadline_s=900):
@@ -355,7 +379,7 @@ class SshTransport:
         while time.monotonic() < end:
             t += 1
             left = max(10, int(end - time.monotonic()))
-            rc, out, _e = self._pod(ip, port, "cd /workspace && tar czf out.tgz out run.out deadman.out 2>/dev/null; "
+            rc, out, _e = self._pod(ip, port, "cd /workspace && tar czf out.tgz out run.out deadman.log deadman.out 2>/dev/null; "
                                               "sha256sum out.tgz | cut -c1-64", timeout=min(300, left), stop=False)
             want = out.strip()
             tgz = os.path.join(self.workdir, f"out-{port}.tgz")
@@ -378,6 +402,15 @@ def runpod_balance(api):
                                           "Authorization": f"Bearer {api.key}"})
     with urllib.request.urlopen(req, timeout=60) as r:
         return float(json.load(r)["data"]["myself"]["clientBalance"])
+
+
+def price(cph, gpu_type):
+    """$/hr to count for a pod: RunPod's figure, else (absent or zero) the type's ceiling."""
+    try:
+        v = float(cph or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    return v if v > 0 else PRICE_CEILING.get(gpu_type or "", UNKNOWN_PRICE)
 
 
 def live_pods(api):
@@ -417,7 +450,7 @@ class Gate:
 
     def __init__(self, api, transport, host_sha, workdir, blocks, cards=CARDS, max_usd=2.0, max_min=60.0,
                  boot_s=900, deploy_tries=3, poll_s=30.0, balance=runpod_balance, sleep=time.sleep,
-                 clock=time.monotonic, log=print, harvest_abort_s=300, reap_every_s=120):
+                 clock=time.monotonic, log=say, harvest_abort_s=300, reap_every_s=120):
         self.api, self.t, self.host_sha, self.workdir, self.blocks = api, transport, host_sha, workdir, blocks
         self.cards, self.max_usd, self.max_s = cards, max_usd, max_min * 60
         self.boot_s, self.deploy_tries, self.poll_s = boot_s, deploy_tries, poll_s
@@ -429,6 +462,7 @@ class Gate:
         self.stop_reason = ""
         self.lock = threading.Lock()
         self.created = []           # every pod id we were given, for the final sweep
+        self.inflight = set()       # pod NAMES whose create call has not returned: the reaper must not touch them
         self.live = {}              # pod id -> (t_deploy, $/hr) while it may bill (lost creates too)
         self.spent_est = 0.0        # $ of pods already terminated
         self.runs = []
@@ -437,19 +471,36 @@ class Gate:
         self.t_start = self.clock()
 
     def log(self, msg):
-        self._log(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
+        """Never raises: to the terminal if there still is one, and always to <work>/gate.log."""
+        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+        try:
+            self._log(line)
+        except Exception:  # noqa: BLE001 -- a hung-up terminal must not stop a pod being released
+            pass
+        try:
+            with open(os.path.join(self.workdir, "gate.log"), "a") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
 
     def halt(self, why):
         if not self.stop.is_set():
             self.stop_reason = why
+            self.stop.set()             # FIRST: nothing below may keep the caps from taking effect
             self.log(f"STOPPING: {why}")
-            self.stop.set()
 
     def est_spend(self):
         with self.lock:
             t = self.clock()
             raw = self.spent_est + sum((t - t0) * cph / 3600.0 for t0, cph in self.live.values())
         return raw * SPEND_MARGIN
+
+    def overshoot(self):
+        """What the live pods can still cost AFTER the cap fires (harvest deadline + terminate budget each): the cap
+        fires this much early, so the run's total stays under --max-usd."""
+        with self.lock:
+            cph = sum(c for _t0, c in self.live.values())
+        return cph * (self.harvest_abort_s + TERMINATE_BUDGET_S) / 3600.0 * SPEND_MARGIN
 
     def deadman_s(self):
         """What the pod's own dead-man waits: the rest of the time cap plus a margin for the harvest."""
@@ -481,11 +532,20 @@ class Gate:
             for attempt in range(self.deploy_tries):
                 if self.stop.is_set():
                     raise Abort(self.stop_reason)
+                name = f"{self.prefix}{role}"
+                with self.lock:
+                    self.inflight.add(name)
                 try:
-                    pod = self.api.deploy(f"{self.prefix}{role}", self.t.pubkey, gpu_types=tuple(gpu_types))
+                    pod = self.api.deploy(name, self.t.pubkey, gpu_types=tuple(gpu_types))
                 except sponsor_bot.RunPodError as e:
                     self.log(f"{role}: deploy refused: {e}")
                     pod = None
+                finally:
+                    with self.lock:     # created and no longer in flight in ONE step: the reaper never sees a gap
+                        if pod and pod.get("id"):
+                            self.created.append(str(pod["id"]))
+                            self.live[str(pod["id"])] = (self.clock(), price(pod.get("cost_per_hr"), pod.get("gpu_type")))
+                        self.inflight.discard(name)
                 if pod and pod.get("id"):
                     break
                 self.log(f"{role}: no capacity for {list(gpu_types)} (try {attempt + 1}/{self.deploy_tries})")
@@ -495,10 +555,7 @@ class Gate:
             if not pod:
                 raise RuntimeError(f"no {role} card could be rented")
             pid = str(pod["id"])
-            with self.lock:
-                self.created.append(pid)
-                self.live[pid] = (self.clock(), float(pod.get("cost_per_hr") or 0.0))
-            run.update(pod_id=pid, gpu_type=pod.get("gpu_type"), cost_per_hr=float(pod.get("cost_per_hr") or 0.0))
+            run.update(pod_id=pid, gpu_type=pod.get("gpu_type"), cost_per_hr=price(pod.get("cost_per_hr"), pod.get("gpu_type")))
             self.log(f"{role}: pod {pid} {pod.get('gpu_type')} ${run['cost_per_hr']:.2f}/hr")
             t0 = self.clock()
             while self.clock() - t0 < self.boot_s:
@@ -515,7 +572,7 @@ class Gate:
                 raise RuntimeError(f"{role}: no SSH within {self.boot_s} s")
             run["boot_s"] = round(self.clock() - t0, 1)
             run["deadman_s"] = self.deadman_s()
-            self.t.arm(*ip_port, run["deadman_s"])       # before anything long: the laptop may die from here on
+            self.t.arm(*ip_port, run["deadman_s"], pid)  # before anything long: the laptop may die from here on
             self.log(f"{role}: ssh {ip_port[0]}:{ip_port[1]} after {run['boot_s']} s; dead-man {run['deadman_s']} s; pushing")
             self.t.push(*ip_port, self.host_sha)
             self.t.start(*ip_port)
@@ -551,7 +608,8 @@ class Gate:
                     except Exception as e:  # noqa: BLE001 -- the sweep in run() tries again
                         run["terminated"] = False
                         run["error"] += f"; terminate: {e}"
-                self._forget(pid)
+                if run["terminated"]:   # an unconfirmed pod keeps counting until the sweep confirms it
+                    self._forget(pid)
                 self.log(f"{role}: pod {pid} terminated={run['terminated']}")
         return run
 
@@ -566,11 +624,12 @@ class Gate:
             self.log(f"listing for lost creates failed: {e}")
             return
         with self.lock:
-            lost = [p for p in rows if (p.get("name") or "").startswith(self.prefix) and str(p["id"]) not in self.created]
+            lost = [p for p in rows if (p.get("name") or "").startswith(self.prefix) and str(p["id"]) not in self.created
+                    and (p.get("name") or "") not in self.inflight]
             for p in lost:
                 pid = str(p["id"])
                 self.created.append(pid)
-                self.live.setdefault(pid, (self.clock(), float(p.get("cost_per_hr") or 0.0)))
+                self.live.setdefault(pid, (self.clock(), price(p.get("cost_per_hr"), p.get("gpu_type"))))
         for p in lost:
             self.log(f"lost create {p['id']} ({p.get('name')}): releasing it")
             try:
@@ -597,8 +656,9 @@ class Gate:
             while any(th.is_alive() for th in threads):
                 for th in threads:
                     th.join(timeout=1.0)
-                if self.est_spend() >= self.max_usd:
-                    self.halt(f"spend cap: this run's estimated ${self.est_spend():.2f} >= ${self.max_usd:.2f}")
+                if self.est_spend() + self.overshoot() >= self.max_usd:
+                    self.halt(f"spend cap: this run's estimated ${self.est_spend():.2f} + ${self.overshoot():.2f} still to "
+                              f"come (harvest + terminate) >= ${self.max_usd:.2f}")
                 if self.clock() - self.t_start >= self.max_s:
                     self.halt(f"time cap: {self.max_s / 60:.0f} min")
                 if self.clock() - last_reap >= self.reap_every_s:
@@ -623,13 +683,15 @@ class Gate:
                     except KeyboardInterrupt:
                         self.log("still releasing pods -- wait")
         finally:
-            for th in threads:
-                while th.is_alive():
-                    try:
-                        th.join()
-                    except KeyboardInterrupt:
-                        self.log("still releasing pods -- wait")
-            self.sweep()
+            while True:     # a Ctrl-C between the joins and the sweep must not skip the sweep
+                try:
+                    for th in threads:
+                        while th.is_alive():
+                            th.join(timeout=1.0)
+                    self.sweep()
+                    break
+                except KeyboardInterrupt:
+                    self.log("still releasing pods -- wait")
         if interrupted:
             raise KeyboardInterrupt
         return self.runs
@@ -740,6 +802,8 @@ def marker_ok_linux(m, host_sha, verifier_sha, image, heights, commit=None, fixt
         why.append(f"image {str(m.get('image'))[:8]}, the release ships {image[:8]}")
     if commit and m.get("repo_commit") != commit:
         why.append(f"the gate ran from commit {str(m.get('repo_commit'))[:8]}, the release is {commit[:8]}")
+    if m.get("repo_dirty") is not False:
+        why.append("the gate ran from a checkout with uncommitted changes")
     if fixtures_sha and m.get("fixtures_sha256") != fixtures_sha:
         why.append("the gate proved other fixtures than this tree's prover/testdata/libzync/gpu-gate")
     runs = m.get("runs") if isinstance(m.get("runs"), list) else []
@@ -797,6 +861,8 @@ def marker_ok_windows(m, zip_sha, verifier_sha, image, host_exe_sha=None, commit
         why.append(f"image {str(m.get('image'))[:8]}, the release ships {image[:8]}")
     if commit and m.get("repo_commit") != commit:
         why.append(f"recorded from commit {str(m.get('repo_commit'))[:8]}, the release is {commit[:8]}")
+    if m.get("repo_dirty") is not False:
+        why.append("recorded from a checkout with uncommitted changes")
     if not str(m.get("gpu_name") or "").strip():
         why.append("no GPU named")
     blocks = m.get("blocks") if isinstance(m.get("blocks"), list) else []
@@ -845,13 +911,18 @@ def cmd_check(a):
         if not hx:
             fails.append(f"Windows CUDA host: {WIN_ASSET} does not hold exactly one host.exe")
         fails += [f"Windows CUDA host: {x}" for x in marker_ok_windows(w, z, ver, image, hx, a.commit)]
+        if isinstance(m, dict) and isinstance(w, dict):
+            lin = {b.get("receipt_sha256") for r in m.get("runs") or [] if isinstance(r, dict)
+                   for b in r.get("blocks") or [] if isinstance(b, dict)}
+            if any(isinstance(b, dict) and b.get("receipt_sha256") in lin for b in w.get("blocks") or []):
+                fails.append("Windows CUDA host: its receipt is one of the Linux gate's: not a Windows run")
     if fails:
         for f in fails:
-            print(f"  REFUSED  {f}")
+            say(f"  REFUSED  {f}")
         return 1
-    print(f"  ok   real-GPU gate: the staged Linux CUDA host {host[:16]}... PROVED {heights} on "
+    say(f"  ok   real-GPU gate: the staged Linux CUDA host {host[:16]}... PROVED {heights} on "
           + ", ".join(f"{r.get('gpu_name')}" for r in m["runs"]) + f" ({m.get('finished')})")
-    print(f"  ok   the staged Windows CUDA host {z[:16]}... is ATTESTED by {w.get('recorded_by')} to have proved block "
+    say(f"  ok   the staged Windows CUDA host {z[:16]}... is ATTESTED by {w.get('recorded_by')} to have proved block "
           f"170 on {w.get('gpu_name')} ({w.get('recorded_at')}): the maintainer's word, bound to host.exe's sha256")
     return 0
 
@@ -874,15 +945,20 @@ def repo_commit():
     return c, d
 
 
-def seen_receipts(src):
-    """Every receipt sha256 already used as evidence: the Linux marker in the dist, the dist's history, and this
-    machine's own history. A proof is randomised, so the same receipt bytes twice means one was REUSED."""
-    seen = set()
-    for text in (src.read_text(MARKER_LINUX), src.read_text(HISTORY),
-                 open(LOCAL_HISTORY).read() if os.path.isfile(LOCAL_HISTORY) else None):
-        if text:
-            seen |= set(re.findall(r"\b[0-9a-f]{64}\b", text))
-    return seen
+def reuse_of(src, rsha, host_exe_sha):
+    """Where receipt `rsha` was already used as evidence, other than a Windows record of THIS host.exe (re-recording
+    the same run is allowed). [] = never. A proof is randomised, so the same receipt bytes elsewhere means REUSE."""
+    hits = []
+    lm = src.read_text(MARKER_LINUX)
+    if lm and rsha in lm:
+        hits.append("the Linux gate's marker")
+    for where, text in (("dist/" + HISTORY, src.read_text(HISTORY)),
+                        (LOCAL_HISTORY, open(LOCAL_HISTORY).read() if os.path.isfile(LOCAL_HISTORY) else None)):
+        for line in (text or "").splitlines():
+            p = line.split()
+            if p and p[0] == rsha and not (len(p) >= 3 and p[1] == "windows-cuda" and p[2] == host_exe_sha):
+                hits.append(f"{where}: {line.strip()[:120]}")
+    return hits
 
 
 def remember(src, shas, what):
@@ -893,7 +969,7 @@ def remember(src, shas, what):
     try:
         src.append_text(HISTORY, line)
     except (subprocess.SubprocessError, OSError) as e:
-        print(f"could not append to {HISTORY} at the source: {e}")
+        say(f"could not append to {HISTORY} at the source: {e}")
 
 
 def gate_pods(api, prefix=POD_PREFIX):
@@ -928,16 +1004,16 @@ def cmd_sweep(a, api=None):
         api = sponsor_bot.RunPod.from_env()
     pods = gate_pods(api)
     for p in pods:
-        print(f"  {p['id']}  {p.get('name')}  {p.get('status')}  ${float(p.get('cost_per_hr') or 0):.2f}/hr")
+        say(f"  {p['id']}  {p.get('name')}  {p.get('status')}  ${float(p.get('cost_per_hr') or 0):.2f}/hr")
     if not pods:
-        print("no hz-relgate-* pods")
+        say("no hz-relgate-* pods")
         return 0
     if not a.terminate:
-        print(f"{len(pods)} gate pod(s) listed; --terminate releases them")
+        say(f"{len(pods)} gate pod(s) listed; --terminate releases them")
         return 3
     done, left, clean = sponsor_bot.release_until_clean(api, [p["id"] for p in pods],
                                                         match=lambda n: n.startswith(POD_PREFIX))
-    print(f"released {done}; still listed {left}; clean={clean}")
+    say(f"released {done}; still listed {left}; clean={clean}")
     return 0 if (clean and not left) else 1
 
 
@@ -961,17 +1037,20 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
         raise SystemExit("the fetched verifier is not the staged one: nothing rented")
     verifier = LocalVerifier(vpath)
     commit, dirty = repo_commit()
-    print(f"gate: host {host_sha[:16]}..., verifier {vsha[:16]}..., image {image[:8]}, blocks {[b[0] for b in blocks]}, "
+    say(f"gate: host {host_sha[:16]}..., verifier {vsha[:16]}..., image {image[:8]}, blocks {[b[0] for b in blocks]}, "
           f"caps ${a.max_usd:.2f} / {a.max_min:.0f} min, commit {commit[:8]}{' (DIRTY)' if dirty else ''}, work {work}")
     if a.dry_run:
-        print("DRY RUN: nothing rented")
+        say("DRY RUN: nothing rented")
         return 0
+    if dirty:
+        raise SystemExit("this checkout has uncommitted changes: run the gate from a clean checkout of the release "
+                         "commit (the marker names the commit it ran): nothing rented")
     if api is None:
         os.environ.setdefault("RUNPOD_API_KEY_FILE", os.path.expanduser("~/.hazync/runpod.key"))
         api = sponsor_bot.RunPod.from_env()
     others = preflight_pods(api, a.sweep_first)
     cards = in_stock(api, CARDS)
-    print("cards: " + "; ".join(f"{r}: {', '.join(t)}" for r, t in cards))
+    say("cards: " + "; ".join(f"{r}: {', '.join(t)}" for r, t in cards))
     if transport is None:
         key = os.path.join(work, "podkey")
         if not os.path.exists(key):
@@ -1000,7 +1079,7 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
             try:
                 transport.teardown()
             except Exception as e:  # noqa: BLE001
-                print(f"could not remove the pod key from the release box: {e}")
+                say(f"could not remove the pod key from the release box: {e}")
     spent = None
     if balance and gate.b0 is not None:
         try:
@@ -1009,7 +1088,7 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
             spent = None
     ok = (not rc_interrupt) and gate.sweep_clean and judge(gate, runs, verifier, blocks, image, work)
     if ok and src.sha256(VERIFIER_ASSET) != vsha:
-        print("the staged verifier changed during the gate")
+        say("the staged verifier changed during the gate")
         ok = False
     report = {"schema": SCHEMA, "kind": "linux-cuda", "result": "PASS" if ok else "FAIL", "asset": CUDA_ASSET,
               "host_sha256": host_sha, "verifier_sha256": vsha, "image": image,
@@ -1020,18 +1099,18 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
               "signed_off_by": who(), "runs": runs}
     rp = os.path.join(work, "gate-report.json")
     json.dump(report, open(rp, "w"), indent=1)
-    print(f"report: {rp}")
+    say(f"report: {rp}")
     if not ok:
-        print("GATE FAIL: no marker written. Do NOT publish this CUDA host." + (" (interrupted)" if rc_interrupt else ""))
+        say("GATE FAIL: no marker written. Do NOT publish this CUDA host." + (" (interrupted)" if rc_interrupt else ""))
         if not gate.sweep_clean:
-            print("⛔ some pods may still bill: scripts/release-gpu-gate.sh sweep --terminate")
+            say("⛔ some pods may still bill: scripts/release-gpu-gate.sh sweep --terminate")
         return 130 if rc_interrupt else 1
     mp = os.path.join(work, MARKER_LINUX)
     json.dump(report, open(mp, "w"), indent=1)
     src.put_marker(mp, MARKER_LINUX)
     remember(src, [b["receipt_sha256"] for r in runs for b in r.get("blocks", []) if b.get("receipt_sha256")],
              f"linux-cuda {host_sha[:16]}")
-    print(f"GATE PASS: {MARKER_LINUX} written to {a.source}; scripts/release.sh can publish this exact host.")
+    say(f"GATE PASS: {MARKER_LINUX} written to {a.source}; scripts/release.sh can publish this exact host.")
     return 0
 
 
@@ -1055,28 +1134,42 @@ def cmd_record_windows(a):
         rep = json.load(open(a.report))
     except (OSError, ValueError) as e:
         raise SystemExit(f"{a.report}: {e}")
+    if not isinstance(rep, dict):
+        say(f"  REFUSED  {a.report} is not a JSON object")
+        return 1
+
+    def field(k):       # a report field as lower-case text; anything that is not a string reads as absent
+        v = rep.get(k)
+        return v.strip().lower() if isinstance(v, str) else ""
+    commit, dirty = repo_commit()
     rsha, lsha = sha256_file(a.receipt), sha256_file(a.log)
     why = []
-    if rep.get("host_exe_sha256", "").lower() != hx:
-        why.append(f"the run hashed host.exe {str(rep.get('host_exe_sha256'))[:16]}..., the staged zip's is {hx[:16]}...")
-    if rep.get("zip_sha256") and rep["zip_sha256"].lower() != zsha:
-        why.append("the run names another zip")
-    if rep.get("receipt_sha256", "").lower() != rsha:
+    if dirty:
+        why.append("this checkout has uncommitted changes: record from a clean checkout of the release commit")
+    if field("host_exe_sha256") != hx:
+        why.append(f"the run hashed host.exe {field('host_exe_sha256')[:16] or '(none)'}..., the staged zip's is {hx[:16]}...")
+    if field("zip_sha256") != zsha:
+        why.append(f"the run names zip {field('zip_sha256')[:16] or '(none)'}..., the staged zip is {zsha[:16]}...")
+    if field("receipt_sha256") != rsha:
         why.append(f"{a.receipt} is not the receipt the run wrote")
-    if rep.get("log_sha256", "").lower() != lsha:
+    if field("log_sha256") != lsha:
         why.append(f"{a.log} is not the log the run wrote")
-    if rep.get("exit_code") != 0:
-        why.append(f"the prove exited {rep.get('exit_code')}")
-    if not str(rep.get("gpu_name") or "").strip():
+    if rep.get("exit_code") != 0 or isinstance(rep.get("exit_code"), bool):
+        why.append(f"the prove exited {rep.get('exit_code')!r}")
+    if not field("gpu_name"):
         why.append("the run names no GPU (nvidia-smi)")
-    if image not in str(rep.get("method_id") or ""):
+    if image not in field("method_id"):
         why.append(f"host.exe method-id is not {image[:8]}")
-    if rsha in seen_receipts(src):
-        why.append("this receipt was already used as evidence (the Linux gate's marker or an earlier record): "
-                   "a proof is randomised, so a fresh run never repeats one")
+    try:
+        used = reuse_of(src, rsha, hx)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        used = [f"could not read the evidence history: {e}"]
+    if used:
+        why.append("this receipt was already used as evidence (" + "; ".join(used) + "): a proof is randomised, so a "
+                   "fresh run never repeats one")
     if why:
         for w in why:
-            print(f"  REFUSED  {w}")
+            say(f"  REFUSED  {w}")
         return 1
     vsha = src.sha256(VERIFIER_ASSET)
     if not vsha:
@@ -1093,9 +1186,9 @@ def _record_windows(a, src, image, h, bh, anchor, zsha, hx, rep, rsha, lsha, vsh
     a_path = os.path.join(FIXTURES, anchor)
     ok, verdict = verify_receipt(verifier, a.receipt, a_path, h, bh)
     refused, tv = tamper_refused(verifier, a.receipt, a_path, h, bh, work) if ok else (False, "")
-    print(f"block 170 receipt: {verdict}" + (f"; tampered copy: {tv}" if ok else ""))
+    say(f"block 170 receipt: {verdict}" + (f"; tampered copy: {tv}" if ok else ""))
     if not (ok and refused):
-        print("NOT RECORDED: the receipt did not verify (or the verifier accepted a tampered copy).")
+        say("NOT RECORDED: the receipt did not verify (or the verifier accepted a tampered copy).")
         return 1
     commit, dirty = repo_commit()
     m = {"schema": SCHEMA, "kind": "windows-cuda", "result": "ATTESTED", "asset": WIN_ASSET, "zip_sha256": zsha,
@@ -1110,8 +1203,8 @@ def _record_windows(a, src, image, h, bh, anchor, zsha, hx, rep, rsha, lsha, vsh
     mp = os.path.join(work, MARKER_WIN)
     json.dump(m, open(mp, "w"), indent=1)
     src.put_marker(mp, MARKER_WIN)
-    remember(src, [rsha], f"windows-cuda {hx[:16]}")
-    print(f"RECORDED (ATTESTED): {MARKER_WIN} written to {a.source}")
+    remember(src, [rsha], f"windows-cuda {hx}")
+    say(f"RECORDED (ATTESTED): {MARKER_WIN} written to {a.source}")
     return 0
 
 
@@ -1148,7 +1241,7 @@ def main(argv=None):
             return cmd_sweep(a)
         return cmd_run(a)
     except sponsor_bot.RunPodError as e:
-        print(f"RunPodError: {e}", file=sys.stderr)
+        say(f"RunPodError: {e}", file=sys.stderr)
         return 1
 
 

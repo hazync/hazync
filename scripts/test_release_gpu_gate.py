@@ -36,6 +36,17 @@ import release_gpu_gate as g  # noqa: E402
 import sponsor_bot  # noqa: E402
 
 CONTROL = "--control" in sys.argv
+CLEAN = ("c0ffee" * 7)[:40]
+g.repo_commit = lambda: (CLEAN, False)        # the tree under test may be dirty; the gate's own dirty check is tested below
+BROKEN = {"on": False}
+
+
+class BrokenOut(io.StringIO):
+    """A terminal that hung up: once BROKEN, every write raises EIO, as a print to a closed pty does after SIGHUP."""
+    def write(self, x):
+        if BROKEN["on"]:
+            raise OSError(5, "Input/output error")
+        return super().write(x)
 IMAGE = g.canon_image()
 BLOCKS = g.gate_blocks()
 fails = 0
@@ -131,14 +142,16 @@ class FakeTransport:
         if p.get("raise") == name:
             raise RuntimeError(f"injected failure in {name}")
         if p.get("signal_at") == name:
+            if p.get("break_stdout"):
+                BROKEN["on"] = True
             os.kill(os.getpid(), p["signal"])
         return p
 
     def ready(self, ip, port):
         return True
 
-    def arm(self, ip, port, seconds):
-        self.armed[port] = seconds
+    def arm(self, ip, port, seconds, pod_id):
+        self.armed[port] = (seconds, pod_id)
 
     def push(self, ip, port, sha):
         self.step(port, "push")
@@ -198,7 +211,7 @@ def mkdist(lax=False):
     return t, dist
 
 
-def scenario(api_kw=None, plan=None, lax=False, source_sha=None, max_usd=2.0, sweep_first=False):
+def scenario(api_kw=None, plan=None, lax=False, source_sha=None, max_usd=2.0, sweep_first=False, broken=False):
     """Run the gate once against a fresh fake; returns (rc, api, dist, transport, report)."""
     t, dist = mkdist(lax)
     host_sha = g.sha256_file(os.path.join(dist, g.CUDA_ASSET))
@@ -207,11 +220,14 @@ def scenario(api_kw=None, plan=None, lax=False, source_sha=None, max_usd=2.0, sw
     clock = Clock()
     a = argparse.Namespace(source=dist, host_sha256=source_sha or host_sha, max_usd=max_usd, max_min=60.0,
                            work=os.path.join(t, "work"), dry_run=False, sweep_first=sweep_first)
-    with redirect_stdout(io.StringIO()):
+    BROKEN["on"] = False
+    with redirect_stdout(BrokenOut() if broken else io.StringIO()):
         try:
             rc = g.cmd_run(a, api=api, transport=tr, balance=lambda _api: 100.0, sleep=clock.sleep, clock=clock)
         except SystemExit as e:
             rc = f"SystemExit({e})"
+        finally:
+            BROKEN["on"] = False
     rp = os.path.join(t, "work", "gate-report.json")
     return rc, api, dist, tr, (json.load(open(rp)) if os.path.isfile(rp) else {})
 
@@ -238,6 +254,9 @@ FAILING = [
                                                                    "result": None}, "Blackwell": {"result": None}})),
     ("SIGHUP (the terminal closed) while both pods run", dict(plan={"A40": {"signal_at": "result", "signal": signal.SIGHUP,
                                                                             "result": None}, "Blackwell": {"result": None}})),
+    ("SIGHUP AND the terminal gone (every print raises EIO)", dict(broken=True, plan={
+        "A40": {"signal_at": "result", "signal": signal.SIGHUP, "break_stdout": True, "result": None},
+        "Blackwell": {"result": None}})),
     ("a lost create: RunPod made the Blackwell pod but never answered", dict(api_kw=dict(lost=("Blackwell",)))),
     ("no Blackwell capacity at all", dict(api_kw=dict(capacity=("A40", "A5000")))),
     ("the pod ran a DIFFERENT host than the staged one", dict(plan={"A40": {"pod_sha": "0" * 64}})),
@@ -281,13 +300,38 @@ if CONTROL:
 # ---- 2. gate decisions --------------------------------------------------------------------------------------------
 print("== decisions")
 rc, api, dist, tr, rep = scenario()
-check(len(tr.armed) == 2 and all(s >= g.DEADMAN_MARGIN_S for s in tr.armed.values()),
-      f"the pod-side dead-man is armed on every pod, cap + margin ({sorted(tr.armed.values())} s)")
+check(len(tr.armed) == 2 and all(sec >= g.DEADMAN_MARGIN_S and pid in api.deployed for sec, pid in tr.armed.values()),
+      f"the pod-side dead-man is armed on every pod with ITS id, cap + margin ({sorted(tr.armed.values())})")
+rc, api, dist, tr, rep_ = scenario(broken=True, plan={
+    "A40": {"signal_at": "result", "signal": signal.SIGHUP, "break_stdout": True, "result": None},
+    "Blackwell": {"result": None}})
+check(rc == 130 and len(tr.harvested) == 2 and not billing(api),
+      f"SIGHUP with a dead terminal: both pods still harvested and released (rc {rc}, harvested {len(tr.harvested)})")
+rc, api, dist, tr, rep = scenario(api_kw=dict(cost=0.0))
+check(rc == 0 and rep.get("spent_usd_estimate", 0) > 0 and all(r.get("cost_per_hr", 0) > 0 for r in rep.get("runs", [])),
+      f"a pod RunPod prices at $0/hr is counted at its type's ceiling, never free (estimate ${rep.get('spent_usd_estimate')})")
+g.repo_commit = lambda: (CLEAN, True)
+rc, api, dist, tr, rep = scenario()
+g.repo_commit = lambda: (CLEAN, False)
+check(str(rc).startswith("SystemExit") and api.n == 0, "a checkout with uncommitted changes: refused before renting")
+# the reaper must not take a pod whose create call is still in flight
+_t, _d = mkdist()
+_api = FakeAPI()
+_gate = g.Gate(_api, FakeTransport(_api, "0" * 64), "0" * 64, _t, BLOCKS, balance=None, log=lambda m: None)
+_name = _gate.prefix + "blackwell"
+_api.live["podX"] = {"id": "podX", "name": _name, "status": "RUNNING", "gpu": "Blackwell"}
+_gate.inflight.add(_name)
+_gate.reap_lost()
+check("podX" in _api.live, "the lost-create reaper leaves a pod whose create is still in flight")
+_gate.inflight.discard(_name)
+_gate.reap_lost()
+check("podX" not in _api.live, "  ...and releases it once no call is in flight for its name (a real lost create)")
 rc, api, dist, tr, rep = scenario(plan={"A40": {"result": "PROVE_FAILED 170 rc=139"}, "Blackwell": {"result": None}})
 check("pre-blackwell card ended without PROVED" in rep.get("stop_reason", ""),
       f"fail-fast: the A40's failure stops the Blackwell card at once (stop_reason: {rep.get('stop_reason')!r})")
 rc, api, dist, tr, rep = scenario(api_kw=dict(cost=1000.0), plan={"A40": {"result": None}, "Blackwell": {"result": None}})
-check("spend cap: this run's estimated" in rep.get("stop_reason", ""), f"the spend cap is the run's OWN estimate ({rep.get('stop_reason')!r})")
+check("spend cap: this run's estimated" in rep.get("stop_reason", "") and "still to come" in rep.get("stop_reason", ""),
+      f"the spend cap is the run's OWN estimate, minus what harvest + terminate can still cost ({rep.get('stop_reason')!r})")
 rc, api, dist, tr, rep = scenario(api_kw=dict(pre=("hz-sponsor-board-1",)))
 check(rc == 0 and "pod1" in api.live and rep.get("other_pods_at_start") == 1,
       "another pod on the key is named, left running, and does not stop the gate")
@@ -314,9 +358,9 @@ check(rc_k == -9 and time.monotonic() - t0 < 5, "a transport step (run_cmd) is k
 print("== record-windows")
 
 
-def win_case(edit_report=None, reuse=None, zip_other=False, args_drop=None):
+def win_case(edit_report=None, reuse=None, zip_other=False, args_drop=None, exe=None, again=False):
     t, dist = mkdist()
-    exe = os.urandom(2048)
+    exe = exe or os.urandom(2048)
     zp = os.path.join(dist, g.WIN_ASSET)
     with zipfile.ZipFile(zp, "w") as z:
         z.writestr("host.exe", exe)
@@ -336,12 +380,15 @@ def win_case(edit_report=None, reuse=None, zip_other=False, args_drop=None):
     if edit_report:
         edit_report(rep)
     rp = os.path.join(t, "gate-windows.json")
-    json.dump(rep, open(rp, "w"))
+    json.dump([rep] if rep.get("_list") else rep, open(rp, "w"))
     if reuse == "linux":
         json.dump({"runs": [{"blocks": [{"receipt_sha256": g.sha256_file(rc_path)}]}]},
                   open(os.path.join(dist, g.MARKER_LINUX), "w"))
     if reuse == "history":
-        open(os.path.join(dist, g.HISTORY), "w").write(f"{g.sha256_file(rc_path)} windows-cuda old\n")
+        open(os.path.join(dist, g.HISTORY), "w").write(f"{g.sha256_file(rc_path)} windows-cuda {'9' * 64} old\n")
+    if reuse == "same-exe":
+        open(os.path.join(dist, g.HISTORY), "w").write(
+            f"{g.sha256_file(rc_path)} windows-cuda {g.hashlib.sha256(exe).hexdigest()} old\n")
     argv = ["record-windows", "--source", dist, "--report", rp, "--receipt", rc_path, "--log", log, "--zip", local_zip]
     if args_drop:
         i = argv.index(args_drop)
@@ -367,7 +414,10 @@ check(rc == 0 and mw.get("result") == "ATTESTED" and g.marker_ok_windows(
 check(mw and g.marker_ok_windows(mw, g.sha256_file(zp), g.sha256_file(os.path.join(dist, g.VERIFIER_ASSET)), IMAGE,
                                  "0" * 64) != [], "  ...and check refuses it against a zip whose host.exe differs")
 for title, kw in [
-    ("the same receipt recorded again (history)", dict(reuse="history")),
+    ("the same receipt, already recorded for ANOTHER host.exe", dict(reuse="history")),
+    ("report fields that are not strings", dict(edit_report=lambda r: r.update(host_exe_sha256=7, receipt_sha256=None,
+                                                                            gpu_name=["x"], method_id={"a": 1}))),
+    ("a report that is not a JSON object", dict(edit_report=lambda r: (r.clear(), r.update(_list=True)))),
     ("the Linux gate's own receipt", dict(reuse="linux")),
     ("a report for another host.exe", dict(edit_report=lambda r: r.update(host_exe_sha256="0" * 64))),
     ("a report naming another receipt", dict(edit_report=lambda r: r.update(receipt_sha256="0" * 64))),
@@ -380,6 +430,18 @@ for title, kw in [
 ]:
     rc, dist, out = win_case(**kw)
     check(rc != 0 and not os.path.isfile(os.path.join(dist, g.MARKER_WIN)), f"refused: {title} (rc {str(rc)[:40]})")
+
+rc, dist, out = win_case(reuse="same-exe")
+check(rc == 0, f"re-recording the same run of the SAME host.exe is allowed (rc {rc})")
+_orig = g.Source.read_text
+g.Source.read_text = lambda self, name: (_ for _ in ()).throw(RuntimeError("ssh: connection refused"))
+rc, dist, out = win_case()
+g.Source.read_text = _orig
+check(rc == 1 and "could not read the evidence history" in out, "the history cannot be read (ssh down): REFUSED, not taken as empty")
+g.repo_commit = lambda: (CLEAN, True)
+rc, dist, out = win_case()
+g.repo_commit = lambda: (CLEAN, False)
+check(rc == 1 and "uncommitted changes" in out, "record-windows from a checkout with uncommitted changes: REFUSED")
 
 for t in TEMPS:
     shutil.rmtree(t, ignore_errors=True)

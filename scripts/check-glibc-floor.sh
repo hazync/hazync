@@ -12,8 +12,8 @@
 #
 #   scripts/check-glibc-floor.sh <file>...          # exit 0 iff every ELF needs <= HAZYNC_GLIBC_FLOOR (2.34)
 #
-# Reads the ELF's version-needs table (.gnu.version_r) itself, so it needs neither binutils nor a machine of the
-# binary's architecture (it checks the aarch64 verifier on x86_64). A file that is not an ELF is reported and
+# Reads the ELF's version needs itself, from the program headers and the dynamic segment (what the loader reads;
+# section headers can be stripped), so it needs neither binutils nor a machine of the binary's architecture (it checks the aarch64 verifier on x86_64). A file that is not an ELF is reported and
 # skipped (scripts and wasm have no glibc floor); a missing file, or an ELF it cannot parse, fails.
 set -uo pipefail
 FLOOR="${HAZYNC_GLIBC_FLOOR:-2.34}"
@@ -25,41 +25,67 @@ def ver(s):
     return tuple(int(x) for x in s.split("."))
 
 def glibc_needs(path):
-    """The GLIBC_x.y versions an ELF's .gnu.version_r asks the loader for; None for a file that is not an ELF."""
+    """The GLIBC_x.y versions an ELF asks the loader for ({version: hard?}); None for a file that is not an ELF;
+    "static" for one that loads no libc.
+
+    Read from the PROGRAM headers (what the loader reads), never the section headers (`strip` can remove those
+    and the binary still runs): dynamic = a PT_INTERP, or DT_NEEDED entries in PT_DYNAMIC; the needs come from
+    DT_VERNEED / DT_VERNEEDNUM, located through the PT_LOAD mappings. No interpreter and no DT_NEEDED (static,
+    static-pie) = static: it loads no glibc, so it has no floor."""
     d = open(path, "rb").read()
     if d[:4] != b"\x7fELF":
         return None
     if d[4] != 2:
         raise ValueError("not a 64-bit ELF")
     e = "<" if d[5] == 1 else ">"
-    shoff, = struct.unpack_from(e + "Q", d, 0x28)
-    shentsize, shnum = struct.unpack_from(e + "HH", d, 0x3A)
-    secs = [struct.unpack_from(e + "IIQQQQIIQQ", d, shoff + i * shentsize) for i in range(shnum)]
-    out = {}                                        # version -> True if some need of it is NOT weak
-    if not any(sec[1] == 6 for sec in secs):        # no SHT_DYNAMIC: a static ELF loads no libc at all
-        return "static"
-    for (_name, typ, _fl, _addr, off, _size, link, info, _al, _es) in secs:
-        if typ != 0x6FFFFFFE:                       # SHT_GNU_verneed
-            continue
-        stroff = secs[link][4]
-        def cstr(o):
-            return d[stroff + o: d.index(b"\0", stroff + o)].decode()
-        p = off
-        for _ in range(info):                       # Elf64_Verneed: vn_version, vn_cnt, vn_file, vn_aux, vn_next
-            _v, cnt, _file, aux, nxt = struct.unpack_from(e + "HHIII", d, p)
-            a = p + aux
-            for _ in range(cnt):                    # Elf64_Vernaux: vna_hash, vna_flags, vna_other, vna_name, vna_next
-                _h, flags, _o, name, anxt = struct.unpack_from(e + "IHHII", d, a)
-                n = cstr(name)
-                if n.startswith("GLIBC_") and n[6:].replace(".", "").isdigit():
-                    out[n[6:]] = out.get(n[6:], False) or not (flags & 0x2)   # VER_FLG_WEAK = 0x2; hard if any entry is not weak
-                a += anxt
-                if not anxt:
-                    break
-            p += nxt
-            if not nxt:
+    phoff, = struct.unpack_from(e + "Q", d, 0x20)
+    phentsize, phnum = struct.unpack_from(e + "HH", d, 0x36)
+    phs = [struct.unpack_from(e + "IIQQQQQQ", d, phoff + i * phentsize) for i in range(phnum)]
+    loads = [(ph[3], ph[2], ph[5]) for ph in phs if ph[0] == 1]          # PT_LOAD: (vaddr, offset, filesz)
+
+    def off(vaddr):
+        for va, fo, sz in loads:
+            if va <= vaddr < va + sz:
+                return fo + (vaddr - va)
+        raise ValueError(f"address {vaddr:#x} is in no PT_LOAD segment")
+    interp = any(ph[0] == 3 for ph in phs)                               # PT_INTERP
+    dyn = [ph for ph in phs if ph[0] == 2]                               # PT_DYNAMIC
+    tags = []
+    if dyn:
+        o, sz = dyn[0][2], dyn[0][5]
+        for i in range(sz // 16):
+            t, v = struct.unpack_from(e + "qQ", d, o + 16 * i)
+            if t == 0:
                 break
+            tags.append((t, v))
+    needed = any(t == 1 for t, _ in tags)                                # DT_NEEDED
+    if not interp and not needed:
+        return "static"
+    tv = dict((t, v) for t, v in tags)
+    out = {}                                        # version -> True if some need of it is NOT weak
+    if 0x6FFFFFFE not in tv:                        # no DT_VERNEED
+        return out
+    stroff = off(tv[5])                             # DT_STRTAB
+
+    def cstr(o):
+        return d[stroff + o: d.index(b"\0", stroff + o)].decode()
+    p = off(tv[0x6FFFFFFE])
+    for _ in range(tv.get(0x6FFFFFFF, 0)):          # DT_VERNEEDNUM x Elf64_Verneed
+        _v, cnt, _file, aux, nxt = struct.unpack_from(e + "HHIII", d, p)
+        a = p + aux
+        for _ in range(cnt):                        # Elf64_Vernaux: vna_hash, vna_flags, vna_other, vna_name, vna_next
+            _h, flags, _o, name, anxt = struct.unpack_from(e + "IHHII", d, a)
+            n = cstr(name)
+            if n.startswith("GLIBC_") and n[6:].replace(".", "").isdigit():
+                out[n[6:]] = out.get(n[6:], False) or not (flags & 0x2)   # VER_FLG_WEAK = 0x2; hard if any is not weak
+            a += anxt
+            if not anxt:
+                break
+        p += nxt
+        if not nxt:
+            break
     return out
+
 
 floor, files = sys.argv[1], sys.argv[2:]
 bad = 0
@@ -71,7 +97,7 @@ for f in files:
     if need is None:
         print(f"  --   {f}: not an ELF (no glibc floor)"); continue
     if need == "static":
-        print(f"  ok   {f}: a static ELF (loads no glibc)"); continue
+        print(f"  ok   {f}: static (no interpreter, no DT_NEEDED: loads no glibc)"); continue
     if not need:
         # A dynamic ELF that names no GLIBC version at all: stripped of its version table, or linked against another
         # libc. Its floor cannot be read from it, so it is not passed.

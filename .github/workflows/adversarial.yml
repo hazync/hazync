@@ -1475,6 +1475,11 @@ jobs:
         run: ./scripts/test-glibc-floor.sh
       - name: glibc floor POSITIVE CONTROL (version comparison cut out — must FAIL)
         run: ./scripts/test-glibc-floor.sh --control
+      - name: The Windows GPU-gate script survives a prover that writes to stderr (PowerShell 5.1 NativeCommandError)
+        # On Linux CI only the script's shape is checked; under WSL the test also runs it in Windows PowerShell 5.1.
+        run: ./scripts/test-release-gpu-gate-windows.sh
+      - name: Windows gate script POSITIVE CONTROL (the old redirect put back — must FAIL)
+        run: ./scripts/test-release-gpu-gate-windows.sh --control
       - name: The release signature is bound to the tag and cannot be laundered (review 11-12, release #2)
         run: ./scripts/test-release-sign.sh
       - name: Signing POSITIVE CONTROL (image check, binding and re-sign guard cut out — must FAIL)

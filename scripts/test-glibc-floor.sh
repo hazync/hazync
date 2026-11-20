@@ -36,13 +36,18 @@ d = bytearray(open(src, "rb").read())
 shoff, = struct.unpack_from("<Q", d, 0x28); shentsize, shnum = struct.unpack_from("<HH", d, 0x3A)
 secs = [struct.unpack_from("<IIQQQQIIQQ", d, shoff + i * shentsize) for i in range(shnum)]
 hit = 0
-if new == "nover":                                  # turn the version-needs section into plain data
-    for i, s in enumerate(secs):
-        if s[1] == 0x6FFFFFFE:
-            struct.pack_into("<I", d, shoff + i * shentsize + 4, 1)
-            hit += 1
+if new == "nover":                                  # drop DT_VERNEED from the dynamic segment (what the loader reads)
+    phoff, = struct.unpack_from("<Q", d, 0x20); phentsize, phnum = struct.unpack_from("<HH", d, 0x36)
+    for i in range(phnum):
+        ph = struct.unpack_from("<IIQQQQQQ", d, phoff + i * phentsize)
+        if ph[0] == 2:
+            for k in range(ph[5] // 16):
+                t, = struct.unpack_from("<q", d, ph[2] + 16 * k)
+                if t == 0x6FFFFFFE:
+                    struct.pack_into("<q", d, ph[2] + 16 * k, 0x60000123)     # an unknown OS tag: ignored
+                    hit += 1
     open(out, "wb").write(bytes(d))
-    sys.exit(0 if hit else "no .gnu.version_r to remove")
+    sys.exit(0 if hit else "no DT_VERNEED to remove")
 for s in secs:
     if s[1] != 0x6FFFFFFE:
         continue
@@ -58,7 +63,7 @@ for s in secs:
                     nb = ("GLIBC_" + new).encode()
                     assert len(nb) <= 10
                     d[o:o + 10] = nb + b"\0" * (10 - len(nb))
-                if weak:
+                if weak == "weak":
                     struct.pack_into("<H", d, a + 4, fl | 0x2)
             a += anxt
             if not anxt:
@@ -68,12 +73,17 @@ for s in secs:
             break
 if not hit:
     sys.exit("the fixture does not need GLIBC_2.34 (gcc on a glibc older than 2.34?)")
+if weak == "strip":                                 # remove the section headers entirely: the binary still runs
+    struct.pack_into("<Q", d, 0x28, 0); struct.pack_into("<HHH", d, 0x3A, 0, 0, 0)
+elif weak:
+    pass
 open(out, "wb").write(bytes(d))
 PY
 }
 mk "$T/v234" - || exit 1
 mk "$T/v239" 2.39; mk "$T/v239w" 2.39 weak; mk "$T/v310" 3.10; mk "$T/v24" 2.4
 mk "$T/nover" nover
+mk "$T/v234s" - strip; mk "$T/v239s" 2.39 strip
 printf '#!/bin/sh\necho not an elf\n' > "$T/script"
 head -c 100 "$T/base" > "$T/trunc"
 
@@ -84,10 +94,17 @@ run "$T/v239w";  check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'GLIBC_2.3
 run "$T/v310";   check "$([ $rc = 1 ] && echo 1)" "GLIBC_3.10 is refused"
 run "$T/v24";    check "$([ $rc = 0 ] && echo 1)" "GLIBC_2.4 passes: versions compare as numbers, not text"
 run "$T/nover";  check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'floor unknown' && echo 1)" "a dynamic ELF with no GLIBC version needs is refused (floor unknown), not passed"
+run "$T/v234s";  check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'needs GLIBC_2.34' && echo 1)" "section headers stripped: still read from the program headers (2.34, not 'static')"
+run "$T/v239s";  check "$([ $rc = 1 ] && printf '%s' "$out" | grep -q 'needs GLIBC_2.39' && echo 1)" "section headers stripped, needing 2.39: refused"
 if gcc -static -O1 -o "$T/static" "$T/h.c" 2>/dev/null; then
-    run "$T/static"; check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'static ELF' && echo 1)" "a static ELF passes (it loads no glibc)"
+    run "$T/static"; check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'static (no interpreter' && echo 1)" "a static ELF passes (it loads no glibc)"
 else
     echo "  --   (no static libc here: the static-ELF case is not exercised)"
+fi
+if gcc -static-pie -O1 -o "$T/spie" "$T/h.c" 2>/dev/null; then
+    run "$T/spie"; check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'static (no interpreter' && echo 1)" "a static-pie (PT_DYNAMIC, no interpreter, no DT_NEEDED) passes as static"
+else
+    echo "  --   (no static-pie here: that case is not exercised)"
 fi
 run "$T/script"; check "$([ $rc = 0 ] && printf '%s' "$out" | grep -q 'not an ELF' && echo 1)" "a non-ELF file is skipped, and says so"
 run "$T/nope";   check "$([ $rc = 1 ] && echo 1)" "a missing file is refused (not a pass by absence)"

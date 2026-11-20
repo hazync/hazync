@@ -451,13 +451,16 @@ then fails at the verifier, never passes on a stale fixture.
 2. Rents **in parallel**, SECURE cloud, pods named `hz-relgate-<sha8>-…`: a **pre-Blackwell** card, the **A40**
    (sm_86, $0.49/hr), else an **RTX A5000 / A6000** (sm_86) or an **L40S** (sm_89); and a **Blackwell** card, the
    **RTX PRO 4500** ($0.72/hr), else the **RTX PRO 6000** ($2.09/hr). Each pod's only SSH key is a throwaway.
-3. As soon as SSH answers, the pod's **dead-man** is armed (`release-gpu-gate-pod.sh --deadman`): after the rest of
-   the time cap plus 10 minutes the pod removes **itself**, with the pod-scoped key RunPod injects (`RUNPOD_POD_ID`,
-   `RUNPOD_API_KEY`, "Pod-scoped API key" in RunPod's environment-variable reference): `runpodctl pod delete`, the
-   REST `DELETE`, then `runpodctl pod stop`, then it ends the container. ⚠ Not yet seen working on a real pod:
-   whether the pod-scoped key may delete its own pod is not documented. A stopped pod releases its GPU and still
-   bills its volume disk (RunPod's "Manage Pods"); what an exited container still bills is not documented. So the
-   dead-man narrows a laptop crash's bill, and `sweep` (below) ends it.
+3. As soon as SSH answers, the pod's **dead-man** is armed (`release-gpu-gate-pod.sh --deadman <s> <pod id>`):
+   after the rest of the time cap plus 10 minutes the pod removes **itself**, with the pod-scoped key RunPod injects
+   (`RUNPOD_POD_ID`, `RUNPOD_API_KEY`, "Pod-scoped API key" in RunPod's environment-variable reference):
+   `runpodctl pod delete`, the REST `DELETE`, then `runpodctl pod stop`; if none of them took, it logs **COULD NOT
+   REMOVE THIS POD** and kills the gate's workload, and the pod bills until `sweep`. It refuses to act unless
+   `RUNPOD_POD_ID` is the id it was armed with. Each step that answered is in `deadman.log`, harvested with the rest.
+   ⚠ Not yet seen working on a real pod: whether the pod-scoped key may delete its own pod is not documented. A
+   stopped pod releases its GPU and still bills its volume disk (RunPod's "Manage Pods"). ⚠ **Between the create
+   and SSH answering (up to the 15-minute boot wait) there is no dead-man**: a laptop lost in that window leaves
+   the pod to `sweep`.
 4. The **release box pushes the staged host straight to each pod** (the run's key is copied to a private temp dir
    there and removed after): 425 MB through a domestic uplink would be most of the bill. Fixtures and
    `scripts/release-gpu-gate-pod.sh` go from the laptop.
@@ -470,8 +473,11 @@ then fails at the verifier, never passes on a stale fixture.
    made although the call failed (and counts it in the spend); at the end a sweep (`release_until_clean`) during
    which further Ctrl-Cs are ignored. Ctrl-C, SIGTERM, SIGHUP and SIGQUIT all take this path.
 7. Caps: `--max-usd` (default **$2.00**) on **this run's own** spend, estimated from its pods' $/hr × time alive
-   (lost creates included) × 1.15, checked every second; the balance is read every 5 min only to **warn** when other
-   pods on the key are spending. `--max-min` (default **60**).
+   (lost creates included) × 1.15, checked every second. It fires early by what the live pods can still cost after
+   it (the 5-minute harvest plus the 6-minute terminate budget, each), so the total stays under the cap. A pod RunPod
+   prices at $0 (or not at all) is counted at its type's ceiling, never as free, and a pod whose termination was not
+   confirmed keeps counting. The balance is read every 5 min only to **warn** when other pods on the key are
+   spending. `--max-min` (default **60**). The gate refuses to run from a checkout with uncommitted changes.
 8. The **staged verifier**, fetched to the laptop and checked by sha256 (it needs glibc 2.34 at most since it is
    built in ubuntu:22.04, below), checks every harvested receipt: `hazync-verify --anchor state_<h-1>.json --expect
    <h>:<hash> block_<h>.rcpt` must say `SWIFTSYNC_VERIFY_DEMO` (a valid proof from the given anchor; exit 2) with
@@ -495,7 +501,8 @@ scripts/release-gpu-gate.sh sweep               # lists every hz-relgate-* pod o
 scripts/release-gpu-gate.sh sweep --terminate   # and releases them
 ```
 
-The next `run` refuses to start while one is listed.
+The next `run` refuses to start while one is listed. ⚠ `sweep --terminate` releases **every** `hz-relgate-*` pod on
+the key, including one a concurrent gate run elsewhere is using: run one gate at a time per RunPod key.
 
 **Cost** (an estimate, not yet measured end to end): per pod ~5 min boot + ~2 min push + the proves (block 200,000
 is ~2 min on a PRO 6000 by the cost curve's R1 line; an A40 is slower, assume ~3x); ~15 min x ($0.49 + $0.72)/hr
@@ -521,8 +528,12 @@ that it was the staged zip's `host.exe` on that card is the maintainer's word, m
    ```powershell
    powershell -ExecutionPolicy Bypass -File release-gpu-gate-windows.ps1 -Leaf leaf_170.bin -Zip ..\hazync-host-x86_64-windows-cuda.zip [-Pascal]
    ```
-   It hashes the `host.exe` it runs (and the zip), asks `nvidia-smi` for the card, runs `method-id`, proves block 170
-   and writes `gate-windows.json` (every sha256, the GPU, the timing).
+   It hashes the `host.exe` it runs and the zip (`-Zip` is required: the zip also carries `cudart64_12.dll`), asks
+   `nvidia-smi` for the card, runs `method-id`, proves block 170 and writes `gate-windows.json` (every sha256, the GPU,
+   the timing). Every native program runs through `Start-Process` with its output redirected to files: under Windows
+   PowerShell 5.1, `& host.exe … *> log` with `$ErrorActionPreference = "Stop"` dies at the prover's first stderr
+   line (empty log, `$LASTEXITCODE` -1). `scripts/test-release-gpu-gate-windows.sh` runs the script under 5.1 where
+   one exists (WSL) with a fake `host.exe` that writes to stderr, and checks its shape everywhere.
 3. Bring `gate-windows.json`, `out\block_170.rcpt`, `prove.log` and the zip back and record it:
    ```bash
    scripts/release-gpu-gate.sh record-windows --source hazync-coord:/root/<release checkout>/dist \
@@ -531,8 +542,10 @@ that it was the staged zip's `host.exe` on that card is the maintainer's word, m
    It refuses unless the zip is the staged one, the report's `host.exe` sha256 is the staged zip's `host.exe`, the
    receipt and log are the ones the report names, the prove exited 0 on a named GPU with this image, and the receipt
    was **never used as evidence before** (not in the Linux marker, `dist/.gpu-gate-history.txt` or
-   `~/.hazync/gpu-gate-receipts.txt`: a proof is randomised, so a fresh run never repeats one); then the staged
-   verifier must accept it and refuse a tampered copy.
+   `~/.hazync/gpu-gate-receipts.txt`, except as a Windows record of this same `host.exe`, so a re-record is allowed:
+   a proof is randomised, so a fresh run never repeats one; history that cannot be read is a refusal, not "none");
+   then the staged verifier must accept it and refuse a tampered copy. Step 4b also refuses a Windows receipt that
+   is one of the Linux gate's.
 
 ⚠ **The markers catch mistakes; they are not tamper-proof.** Anyone who can write the release box's `dist/` can
 write a marker that passes step 4b. They stop a rebuilt, swapped, stale or untested binary from being published
