@@ -1,0 +1,140 @@
+diff --git a/prover/host/src/main.rs b/prover/host/src/main.rs
+index 040ebbc..fa99a2c 100644
+--- a/prover/host/src/main.rs
++++ b/prover/host/src/main.rs
+@@ -1278,6 +1278,14 @@ fn main() {
+     }));
+ 
+     let args: Vec<String> = std::env::args().collect();
++    if let Some(p) = args.iter().position(|a| a == "mt-join") {
++        // EXPERIMENT (experimental/merge-tree): mt-join <mode 18|19|20> <k> <utxo roots> <block roots> -- execute (no
++        // proof) one join session over k synthetic, correctly chained ChainStates of the given vector sizes; the
++        // assumptions are unresolved claims, as in any execute-only run. Prints user and padded cycles.
++        let a = |i: usize| -> usize { args[p + i].parse().expect("mt-join <mode> <k> <utxo roots> <block roots>") };
++        mt_join(a(1) as u32, a(2), a(3), a(4));
++        return;
++    }
+     if args.iter().any(|a| a == "agg-exec-fake") {
+         agg_exec_fake();
+         return;
+@@ -1871,3 +1879,54 @@ struct Report119OnExit;
+ impl Drop for Report119OnExit {
+     fn drop(&mut self) { report_119_retries(); }
+ }
++
++
++/// EXPERIMENT (experimental/merge-tree): see `mt-join` in main().
++fn mt_join(mode: u32, k: usize, n_utxo: usize, n_block: usize) {
++    use risc0_zkvm::{default_executor, ReceiptClaim};
++    let mut seed = 0x9e3779b97f4a7c15u64;
++    let mut rnd32 = || -> [u8; 32] { let mut o = [0u8; 32]; for b in o.iter_mut() { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; *b = seed as u8; } o };
++    // profile: bit0 libzync, bit4 coinlog, bit5 trie, bit6 utxohash (mainnet product image)
++    let profile = 1 | 1 << 4 | 1 << 5 | 1 << 6;
++    let mut states: Vec<ChainState> = Vec::new();
++    for i in 0..k.max(1) {
++        let anchor_id = if i == 0 { rnd32() } else { link_digest(&states[i - 1]) };
++        states.push(ChainState {
++            kind: KIND_CHAIN, version: CHAIN_STATE_VERSION, tip_hash: rnd32(),
++            utxo_roots: (0..n_utxo).map(|_| Some(rnd32())).collect(), utxo_leaves: 2_500_000_000 + i as u64,
++            utxo_value: 1_990_000_000_000_000, cum_work: rnd32(), height: 900_000 + i as u32,
++            prev_nbits: 0x17030ecd, prev_time: 1_750_000_000, epoch_start: 1_749_000_000,
++            recent_times: (0..11).map(|t| 1_750_000_000 + t).collect(), anchor_id, self_id: METHOD_ID,
++            live_set: 1, live_hash: [7; 16], trie_root: rnd32(), smt_root: rnd32(), max_time: 1_750_000_000,
++            profile, block_roots: (0..n_block).map(|_| Some(rnd32())).collect(), block_leaves: 900_001 + i as u64,
++            lineage: [0; 32],
++        });
++    }
++    let journals: Vec<Vec<u8>> = states.iter().map(state_journal_bytes).collect();
++    let mut b = ExecutorEnv::builder();
++    b.segment_limit_po2(seg_po2());
++    match mode {
++        18 => {
++            assert!(k == 2, "mode 18 joins exactly two");
++            for j in &journals { b.add_assumption(ReceiptClaim::ok(METHOD_ID, j.clone())); }
++            b.write(&18u32).unwrap(); b.write(&METHOD_ID).unwrap();
++            b.write(&journals[0]).unwrap(); b.write(&journals[1]).unwrap();
++        }
++        19 => {
++            for j in &journals { b.add_assumption(ReceiptClaim::ok(METHOD_ID, j.clone())); }
++            b.write(&19u32).unwrap(); b.write(&METHOD_ID).unwrap(); b.write(&(k as u32)).unwrap();
++            for j in &journals { b.write(j).unwrap(); }
++        }
++        20 => { b.write(&20u32).unwrap(); b.write(&0u32).unwrap(); }
++        _ => panic!("mt-join: mode 18, 19 or 20"),
++    }
++    let s = default_executor().execute(b.build().unwrap(), METHOD_ELF).expect("mt-join execute");
++    if mode != 20 {
++        let st: ChainState = s.journal.decode().expect("joined state");
++        assert!(st.anchor_id == states[0].anchor_id && st.height == states[k - 1].height, "mt-join: unexpected output");
++    }
++    let user: u64 = s.segments.iter().map(|g| g.cycles as u64).sum();
++    let padded: u64 = s.segments.iter().map(|g| 1u64 << g.po2).sum();
++    println!("MT_JOIN mode={mode} k={k} utxo_roots={n_utxo} block_roots={n_block} journal_bytes={} segments={} user_cycles={user} padded_cycles={padded} po2s={:?}",
++             journals.first().map_or(0, |j| j.len()), s.segments.len(), s.segments.iter().map(|g| g.po2).collect::<Vec<_>>());
++}
+diff --git a/prover/methods/guest/src/main.rs b/prover/methods/guest/src/main.rs
+index a0df45b..6b8e027 100644
+--- a/prover/methods/guest/src/main.rs
++++ b/prover/methods/guest/src/main.rs
+@@ -2402,7 +2402,7 @@ fn main() {
+     // proofs of this image (ROADMAP H-B). 17 is the trie update (E2),
+     // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag.
+     #[cfg(feature = "libzync")]
+-    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
++    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18 | 19 | 20), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
+     match mode {
+         1 => block_proof(),
+         2 => chain_step(),
+@@ -2416,6 +2416,10 @@ fn main() {
+         10 => test_core_vectors(),
+         #[cfg(feature = "libzync")]
+         18 => join(),
++        // EXPERIMENT (experimental/merge-tree, never shipped): a k-ary join, and an empty session (startup only).
++        #[cfg(feature = "libzync")]
++        19 => join_k(),
++        20 => { let x: u32 = env::read(); env::commit(&x); }
+         12 => validate_block_stages(),
+         #[cfg(feature = "trie")]
+         17 => trie_update(),
+@@ -2503,6 +2507,41 @@ fn join() {
+     env::commit(&r);
+ }
+ 
++/// EXPERIMENT (experimental/merge-tree): mode 19, a k-ary join. Exactly the checks of k-1 chained mode-18 joins, done in
++/// one session: every part verified (one env::verify each), decoded and checked as join() does, each part required to
++/// start where the previous one ends; commits the LAST state with the FIRST's anchor_id.
++#[cfg(feature = "libzync")]
++fn join_k() {
++    let self_id: [u32; 8] = env::read();
++    let k: u32 = env::read();
++    assert!(k >= 2, "join_k: k >= 2");
++    let decode = |b: &[u8]| -> ChainState {
++        assert!(b.len() % 4 == 0, "join: journal is not whole words");
++        let w: Vec<u32> = b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
++        let st: ChainState = risc0_zkvm::serde::from_slice(&w).expect("join: decode");
++        assert!(st.kind == KIND_CHAIN, "join: journal is not a ChainState (domain tag)");
++        assert!(st.version == CHAIN_STATE_VERSION, "join: ChainState version {}", st.version);
++        assert!(st.self_id == self_id, "join: proof recursed against another image");
++        assert!(st.profile == chain_profile(), "join: profile mismatch");
++        st
++    };
++    let first: Vec<u8> = env::read();
++    env::verify(self_id, &first).expect("join: part 0 invalid");
++    let f = decode(&first);
++    let anchor = f.anchor_id;
++    let mut l = f;
++    for _ in 1..k {
++        let next: Vec<u8> = env::read();
++        env::verify(self_id, &next).expect("join: part invalid");
++        let r = decode(&next);
++        assert!(l.lineage == r.lineage, "join: lineage mismatch");
++        assert!(link_digest(&l) == r.anchor_id, "join: a part does not start where the previous one ends");
++        l = r;
++    }
++    l.anchor_id = anchor;
++    env::commit(&l);
++}
++
+ /// Mode 10 (self-test, I1): Core's own script and transaction test vectors through the guest's consensus code, with
+ /// explicit flags and no hints installed (libsecp verifies every signature itself, as Core). Each case: kind (0: one
+ /// input's VerifyScript, script_tests.json; 1: CheckTransaction + every input, tx_valid / tx_invalid), the transaction,
