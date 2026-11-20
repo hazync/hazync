@@ -1,0 +1,9 @@
+[Unit]
+Description=Check the utreexo follower every 30 minutes
+
+[Timer]
+OnCalendar=*:07/30
+AccuracySec=60s
+
+[Install]
+WantedBy=timers.target

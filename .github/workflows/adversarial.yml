@@ -184,6 +184,24 @@ jobs:
           [ "$n" -gt 0 ] || { echo "::error::no zapps/*/test.sh: the zapps job ran nothing"; exit 1; }
           echo "$n zAPP test suites passed"
 
+  utreexo-follower:
+    # The utreexo zyncAPP's tip follower (coordinator/deploy/utreexo, docs/libzync/UTREEXO_ZAPP.md §10.6): its own logic
+    # with a stub prover and checker on header-only block files from a committed fixture (no proofs, no mainnet block
+    # files), its stall and memory check, and ten controls, each the follower with one guard taken out, which must fail
+    # first at the check written for that guard. MEASURED 20.11.2026 on a laptop: 3m59 wall, 30 CPU-minutes over 11
+    # parallel runs (a process per fake-node call is the cost; review round 2 cut it from 56 CPU-minutes). ESTIMATE on a
+    # 4-vCPU hosted runner: ~8-10 min, so 30 is ~3x margin. It runs on every event, as the other light jobs do: its
+    # inputs (coordinator/deploy/utreexo/, python3, bash) are no heavy-job class of .github/scripts/ci_changes.py, whose
+    # two answers are run from the BASE copy and are fail-safe only toward running more. The witness source's own tests
+    # run in the zapps job (zapps/utreexo/test.sh -> tip-step); its executed mainnet tests (tip-source-tests.sh) need
+    # 100,000 block files and ~45 min on 16 cores, so they run by hand on a proving box.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The utreexo follower's logic, its check and a control per guard (coordinator/deploy/utreexo/test/run_ci.sh)
+        run: ./coordinator/deploy/utreexo/test/run_ci.sh
+
   accumulator-tests:
     # Fast, always-green: the pure-Rust Utreexo accumulator (single-delete vs a full-forest oracle).
     runs-on: ubuntu-latest

@@ -459,31 +459,130 @@ by default, T the core receipt's height (`zyncapp core-info`), MAX_STEP = 2,016 
 until the core proof is. Nothing here needs the core proof to be at the tip; the same code serves "T − 0" while the
 spine climbs and "tip − 6" once it is there.
 
-**The witness** (spent coins and batch proofs per block) is the hard part at the tip, not the proof. The prototype's
-host (`zyncapp utreexo-tip-prove`, `prover/zyncapps/host/src/utreexo_tip_host.rs`) replays Floresta's rules natively
-from genesis with rustreexo's `MemForest` (every live leaf in memory) and a map of live coins, and caches both at the
-last proven height (`--cache`, `HZUTIP01`). It runs every block through the same `step.rs` and the same
-`Stump::modify` the guest runs, and compares the result with the previous statement, before proving. That is fine for
-tests and low heights; it is **not** a mainnet-tip source (the forest of ~10^8 live leaves in memory: not measured
-here). The production source is either (a) a Utreexo bridge node: utreexod with its proof index serves exactly this
-per block (the same udata Floresta itself syncs from: leaf data + batch proof), or (b) a disk-backed forest kept by
-Hazync's tip prep run. Neither is built (§10.5.1; a note for a later follow-up in #1472, §10.11). Because the guest checks every proof, the source is never
-trusted, so (a) needs no trust in the bridge.
+**The witness** (spent coins and batch proofs per block) is the hard part at the tip, not the proof. Two sources exist
+(`zyncapp utreexo-tip-prove --source`), both running every block through the same `step.rs` and the same
+`Stump::modify` the guest runs, and comparing the result with the previous statement, before proving:
 
-#### 10.5.1 The production witness source (DESIGNED, NOT BUILT)
+- **`forest` (the production source, the default; §10.5.1, built 20.11.2026):** Hazync's own full forest, compact and
+  saved after every step, with the spent coins' data from the block files' prevouts. No UTXO set.
+- `native` (the prototype, kept as a cross-check): rustreexo's `MemForest` (every live leaf as an `Rc` node) and a map
+  of every live coin, cached as `HZUTIP01`. Fine for tests and low heights, not for the tip (~3x the forest's memory,
+  plus the UTXO set).
 
-⚠ Nothing in this subsection exists. The host's `Native` (MemForest + live-coin map) stays the test source; the
-production host would replace only the part that yields, per block, the spent coins' data and the batch proof. Its
-output format is the one the guest already reads (step.rs `put_spent`, `encode_proof`), so neither the guest nor the
-image changes.
+Because the guest checks every proof, the source is never trusted.
 
-| option | how | cost and risk |
+#### 10.5.1 The production witness source (BUILT 20.11.2026: option B, Hazync's own forest)
+
+The production host replaces only the part that yields, per block, the spent coins' data and the batch proof. Its
+output is the format the guest already reads (step.rs `put_spent`, `encode_proof`), so **neither the guest nor any
+image changed** (core `46666b6f`, utreexo base `27bea7da`, tip `ab6f7a26`).
+
+**Untrusted, as the guest code shows.** The guest (`utreexo-tip/src/main.rs`, `step.rs`) takes the blocks only as
+bytes bound to the previous statement's block by hash, to their Merkle roots and through the link headers to the core
+receipt's tip (§10.4); it derives the adds and the set of deletions from the block itself (`add_outputs`,
+`deletion_outpoints`), rebuilds every deleted leaf from the input's outpoint and the source's coin data
+(`block_changes`), and accepts the deletions only if rustreexo's `Stump::modify` opens them against the roots the
+previous receipt proves. A wrong coin record or proof hash fails there (21 refusals in §10.9, plus the two lying
+sources below). So a source can stop the follower, never change a published root.
+
+**A against B, for running on hazync-proof** (16 cores, 62 GB RAM, 1.4 T free on the root disk, 3.3 T on
+`/srv/bulk` whose writes are capped at ~40 MB/s; bitcoind v31.1 with txindex; all MEASURED 20.11.2026):
+
+| | A. utreexod with its proof index | B. Hazync's own forest (chosen) |
 |---|---|---|
-| **A. a Utreexo bridge node (preferred)** | utreexod run with its Utreexo proof index next to the proving host. Per block it holds the deleted leaves' data and the batch proof against the accumulator before that block, the same "udata" Floresta receives from its peers. The host converts it (leaf data + block hash by height from our own node → `put_spent`; targets + hashes → `encode_proof`) and, as now, runs `Stump::modify` natively before proving | an extra node to run and keep in sync (its disk for the index: not measured here). Nothing is trusted: a wrong proof fails natively and in the guest. Risk: a format or behaviour difference in the bridge's proofs (positions after deletions) is caught at once, natively. See §10.11 |
-| B. Hazync's own disk forest | a disk-backed rustreexo forest (or a position-indexed node store) updated by the tip prep run, with an outpoint → (position, coin data) index | no third-party node, but a new store of the order of the live UTXO set plus internal nodes (not measured), its own crash/reorg handling (REORG.md P3 style undo) and a second Utreexo implementation to keep equal to rustreexo |
+| new dependencies | a second full node: utreexod (btcd fork, Go ≥ 1.25, Rust for its wallet), "beta" in its own README, its own P2P and upgrades | none: rustreexo 0.7.0 is already the guest's and the host's; the block files come from the follower's existing fetch (`getblock` verbosity 3 of the local bitcoind) |
+| serving proofs needs | an UNPRUNED node: a pruned utreexod deletes its proof files and `FetchUtreexoProof` errors when pruned (read in `blockchain/indexers/flatutreexoproofindex.go`, 20.11.2026) | nothing beyond the forest |
+| disk | btcd's own copy of every block (Core's blocks + undo on hazync-proof: **833 GB MEASURED**; btcd's: of that order, ESTIMATE) plus a proof for EVERY historical block (targets, hashes and leaf data per height; no published figure; ESTIMATE ~1-2 TB: ~3×10^9 deletions × ~20 hashes of 32 bytes): more than the root disk's 1.4 T, so `/srv/bulk` and its write cap | `FOREST_KEEP` saved forests: **66 bytes per live leaf MEASURED** (8M leaves), ~11 GB each at the tip's ~165M coins (ESTIMATE) |
+| time to first proof | its own IBD from genesis with full validation plus proofs for all history ("slow", its README; no figure published; ESTIMATE days to weeks), and it must reach Bitcoin's tip before serving anything | none: the forest grows with the follower, which follows the core proof (the spine was at **4,822** on 20.11.2026, MEASURED). A replay from genesis happens only if every kept forest is lost |
+| memory | small (500 MiB proof-index cache, 250 MiB UTXO cache: its defaults) | the forest during a run: **126-130 bytes of heap per live leaf MEASURED** (8M leaves), ~21 GB at ~165M coins (ESTIMATE) |
+| trust | none (the guest checks) | none (the guest checks) |
+| main risk | a behaviour difference in its proofs (caught natively), and running a beta node beside the board | a bug in our own forest (caught natively by `Stump::modify` before proving, and by the guest); differential tests against MemForest |
 
-Either way the follower changes only in where `--cache`'s replay comes from; reorg handling stays as §10.6 (the
-source must be rewound to the fall-back height: a bridge does that itself; a disk forest needs undo records).
+**Decision: B.** A does not fit hazync-proof's fast disk and cannot serve the first proof until a from-genesis sync of
+a second, beta node finishes; B needs nothing new, is ready at the spine's height today, and costs memory that grows
+with the proven height (in reach of the box at the tip: ESTIMATE ~21 GB of 62). Trust is the same (none). It is also
+the design Floresta's own new bridge uses (getfloresta/castor's README, read 20.11.2026: a position-addressed forest
+file and an outpoint index, fed by Bitcoin Core's `getblock` verbosity 3). A utreexod could still be added later as a
+second, independent source to compare against; nothing here prevents it.
+
+**What is built:**
+
+- `prover/zyncapps/host/src/utreexo_forest.rs`, `ArenaForest`: rustreexo 0.7.0's `MemForest` ported line for line
+  (`add_single`, `del` / `del_single`, `recompute_hashes`, `get_pos`, `grab_node`, `prove`) onto one arena of 44-byte
+  nodes (hash, parent, left, right as u32 indices) with a leaf index keyed by 8 bytes of the leaf hash (a second leaf
+  with the same 8 bytes goes to an overflow map: an attacker can grind such pairs); the position arithmetic is
+  rustreexo's own, copied verbatim (`pub(crate)` there; MIT OR Apache-2.0). A repeated live leaf is refused (MemForest
+  would silently re-map it). Saved as a preorder of the trees; `read_from` recomputes **every** inner hash and refuses a
+  mismatch, so a store that lies about an inner node is refused at load even with a valid checksum.
+- `prover/zyncapps/host/src/utreexo_witness.rs`, `ForestSource`: the forest, the Stump, one block hash per height
+  (32 bytes each) and nothing else. Per block: parse it (`step::parse_block`), pair every input with the block file's
+  prevout (height, coinbase flag, value, script: the node's undo data), take the creating block's hash from its own
+  table, build `put_spent` records, rebuild the deletions with `step::block_changes`, prove them from the forest
+  (a leaf that is not there means the node's prevout or the forest is wrong: an error), check with `Stump::modify`,
+  then move the forest. Saved as `HZUFOR01` (written to `.tmp`, synced, renamed, a sha256 at the end); loading
+  checks the checksum, the inner hashes, the hash table and that the forest's roots are the stored Stump's.
+- `zyncapp utreexo-tip-prove --source forest|native` (default forest), `--cache` reads the file of the chosen kind
+  (another kind or a refused file: a replay from genesis), and two measurement lines: `UTREEXO_TIP_WITNESS` (the
+  step's blocks, deletions, spent and proof bytes, proof hashes, the sha256 of the frames, the source's own seconds,
+  the forest's nodes, leaves and heap bytes) and `UTREEXO_TIP_CACHE_SAVED` (bytes, seconds).
+  `UTREEXO_TIP_SOURCE_LIE=node|store` (execute only, never with a prover) makes the source lie and skip its own checks.
+- The follower: `WITNESS_SOURCE` (forest) and the forests it keeps, in place of undo records (each step's forest is its
+  own undo). After the review of 20.11.2026 (F1): a step starts from the newest kept forest AT OR BELOW its previous
+  height whose block is the node's (`zyncapp --cache` accepts a forest below P and replays forward over the block
+  files; the hash chain from the forest's block and the previous statement's block, leaf count and roots are checked
+  as before), so only P − (that height) bodies are fetched; `FOREST_KEEP` defaults to `KEEP` + 1, one forest per kept
+  state; a run killed between switching `latest` and renaming its forest leaves it in `work/forest.next`, which the
+  next run adopts when its header names `latest` (the rename is synced); `--set-base` and a fall-back move forests to
+  `orphaned/` (pruned after `ORPHANED_FOREST_MIN`, 2 days), never delete them; and a replay from genesis (no kept
+  forest at all) above `GENESIS_REPLAY_MAX` (100,000) blocks is refused unless `ALLOW_GENESIS_REPLAY=1`. F2: the
+  host refuses to prove from, or save, a forest whose roots are not its Stump's. F3: the source is saved at H before
+  proving (as `.pending`, renamed after the guest's statement is checked) and dropped, so the forest is not held through
+  the proof; the follower records the forest's heap after each step (`forest-heap`) and warns above
+  `FOREST_HEAP_WARN_BYTES` (half the unit's `MemoryMax`). F5: the counts in a saved file are bounded by its length before
+  anything is allocated. F7: `hazync-check-utreexo-follow` (through `hazync-run-check`) fails when the published block
+  is below min(node tip − 6, core height) and nothing was published for 6 h since the later of the last publish and
+  the core receipt's last change (so the first advance after an idle spine does not page), or the forest heap passes the warning
+  line. Units `hazync-utreexo-follow.service` / `.timer`, `hazync-check-utreexo-follow.service` / `.timer` and the exact
+  install procedure: coordinator/deploy/utreexo/README.md (NOT EXECUTED; nothing is deployed; install only from `main`,
+  the box's drift check compares with `origin/main`).
+
+**Measured** (synthetic forests, `zapps/utreexo/tip-step/examples/forest_bench.rs`, hazync-coord at a load average of
+~50 from other work, so the times are upper bounds; uniform random deletions, which share fewer proof paths than real
+blocks):
+
+| forest | built in | memory | per block of 3,000 deletions + 3,000 adds | saved file |
+|---|---|---|---|---|
+| ArenaForest, 8M live of 16M added (24 rows) | 190.7 s | heap 126.3 bytes per live leaf (130.2 after a load); RSS 1,196 MiB | proof 112 ms, `Stump::modify` check 33 ms, forest modify 76 ms; 10.61 proof hashes per deletion, 1.04 MB of proof | 528 MB (66.0 bytes per live leaf), written in 2.0 s, read back with every inner hash recomputed in 11.3 s |
+| rustreexo MemForest, the same | 214.2 s | RSS 2,745 MiB | proof 121 ms, check 35 ms, modify 85 ms; the same proofs | (not compared) |
+
+(RSS includes the bench's own list of live hashes, the same in both rows: per live leaf 156.8 bytes for the arena,
+359.8 for MemForest. A run of 32M live leaves was stopped at 2.5 GB: the shared box had 6 GB free.)
+
+On mainnet blocks (executed, `tip-source-tests.sh`, hazync-coord, 20.11.2026): the witness per step, from the forest
+source (`UTREEXO_TIP_WITNESS`; the source's own time, the block files' reading excluded):
+
+| step | blocks | deletions | spent bytes | proof bytes (hashes) | source time | forest after it |
+|---|---|---|---|---|---|---|
+| 1,999 → 10,000 | 8,001 | 500 | 57,416 | 143,240 (2,351) | 0.046 s | 9,494 live leaves, 1.2 MB heap |
+| 20,000 → 50,000 | 30,000 | 8,244 | 936,846 | 1,415,648 (34,678) | 0.308 s | 41,531, 4.7 MB |
+| 50,000 → 91,722 | 41,722 | 77,506 | 7,068,004 | 13,084,672 (379,089) | 1.742 s (native: 2.094 s) | 63,395, 8.0 MB |
+| 91,880 → 100,000 | 8,120 | 38,151 | 3,063,441 | 4,882,072 (140,997) | 0.686 s (native: 0.888 s) | 71,890, 9.1 MB (126.6 bytes per live leaf) |
+
+At 91,880 → 100,000 that is ~80 spent bytes and ~128 proof bytes per deletion, 18 µs of source time per deletion.
+The saved source at 100,000 is 7,944,890 bytes (the forest and 100,001 block hashes; the native cache: 15,945,407),
+written in ≤ 0.1 s; a replay of 1..91,880 from the block files (after a refused file) took 3.1 s.
+
+**ESTIMATE at the tip (not measured).** The live coins: **165,192,074** on 27.09.2026 (MEASURED by the tip bridge,
+docs/history/BRIDGE_MEMORY_VS_UTXO_2026-09.md). At the measured ~130 bytes of heap (after a load) and 66 file bytes per live leaf:
+**~21 GB of memory and an ~11 GB file** per kept forest (×`FOREST_KEEP` on disk). A run loads the file with every inner
+hash recomputed and saves it again: scaled linearly from 8M leaves, **~4 min to load and ~40 s to save per run** (a
+larger arena misses the cache more, so likely slower). The forest work per block of ~3,000 deletions (proof, check,
+modify) was 0.22 s at 24 rows, so **under a second** at the tip's 32 rows (ESTIMATE). The proof of the step, not the
+witness, sets the pace (§10.8: ~10^9 cycles per modern block, ESTIMATE): a long-running source that keeps the forest in
+memory between runs would save the load, and is not built. The forest is dropped before the proof (F3), so the unit's
+`MemoryMax` has to hold the larger of the two, not their sum. ⚠ The leaf index is a hash table whose bucket count is a
+power of two: at ~165M live coins it has 2^28 buckets (~4.6 GB); past ~235M (7/8 of 2^28) it doubles to 2^29 (~9.1
+GB) in one step, holding both tables while it rehashes (ESTIMATE ~14 GB for the index alone at that moment).
 
 ### 10.6 What is served, where, and reorgs
 
@@ -517,9 +616,9 @@ does not verify, or a wrong ELF leaves the published folder untouched.
 
 **Known limits of the follower (documented, not fixed):** the two-pass upload (receipts, then `latest.json`) is
 ordered but not atomic across files: a reader can briefly see a new receipt next to the previous `latest.json`, which
-still names a receipt that is there. A fall-back drops the forest cache (a failed step keeps the one for P), so the
-test-scale witness source replays from genesis (and, with `PRUNE_BLOCKS=1`, fetches every body again); the production
-source (§10.5.1) would not. One run at a time (`flock`); a crash between a state's rename and the `latest` switch
+still names a receipt that is there. A fall-back keeps the saved forests at or below its height (one per kept state by
+default, §10.5.1) and starts from the newest of them, replaying forward from it; only with no kept forest at all does
+the source replay from genesis, refused above `GENESIS_REPLAY_MAX` blocks unless `ALLOW_GENESIS_REPLAY=1`. One run at a time (`flock`); a crash between a state's rename and the `latest` switch
 leaves an unused state directory, which the retention removes.
 
 ### 10.7 What a Floresta node checks
@@ -688,6 +787,89 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   coinbases of 91,722 and 91,812 (their real bytes) with the overwritten coins' data: the rebuilt leaves are exactly
   Floresta's two UNSPENDABLE constants and both are refused; the recreated coins' data is not.
 
+### 10.9.1 Tested: the production witness source (20.11.2026, §10.5.1)
+
+- `zapps/utreexo/tip-step` `src/forest_tests.rs` (CI's zapps job, `zapps/utreexo/test.sh`; 13 tests since the review, under a second):
+  ArenaForest against rustreexo's own MemForest over 160 random histories (adds, single deletions, large and complete
+  deletions in random order, Empty roots, deleted roots, 40 of them with every third leaf sharing its 8-byte index key):
+  every batch proof equal byte for byte (targets and hashes) and accepted by `Stump::modify`, the roots equal after
+  every batch, the arena checked from the leaves up and written and read back mid-run; a repeated live leaf refused.
+  ForestSource over synthetic chains (coinbases, spends across blocks and inside one block, OP_RETURN): its witnesses
+  equal a MemForest replay's; a lying node (a prevout's value, height, coinbase flag or script) refused ("not a live leaf
+  of the forest"), the source untouched and the honest block then accepted; a prevout at or above the block refused; a
+  corrupted store refused by `Stump::modify`; a restart from the saved file gives the same witnesses; a flipped byte
+  anywhere, a truncation, a trailing byte, another magic, and a lying store whose checksum was made to match ("not the
+  hash of its children") all refused at load; the two test-only lies get past the source and are refused by the guest's
+  check (`block_changes` + `Stump::modify` on the emitted bytes), the honest frames pass it. **Controls**: a corrupted
+  inner node makes the proof differ, `Stump::modify` refuse, `check` fail and `read_from` refuse; the forest with the
+  left/right bit of `get_pos` inverted fails 8 of the 10 tests, without `recompute_hashes` 6 (two of four mutations
+  tried; the other two, no sort of the deletions and no promotion from the overflow map, change no result: deletion order
+  does not change the forest, and the overflow map is searched anyway; the promotion step was then deleted).
+  **After the review (F2, F4, F5)**: `read_from` refuses a wrong node count, a header claiming 2^31 nodes in a file of a
+  few bytes (before allocating), and a tree deeper than its root's row (a control of the same bytes in a legal shape
+  reads); `ForestSource::load` refuses a hash table longer than the file; a forest that diverged from its Stump is not
+  saved and the earlier file stays. Mutations, each killed: the depth check (1 test fails), the count check (1), the
+  byte bound (the process aborts: "memory allocation of 106300485632 bytes failed"), the load's hash-table bound
+  (abort), the save's agreement check (1), `get_pos`'s root-row lookup with `root_idx` never stepped (8) or every row
+  taken as populated (7), `add_single` keeping an Empty root instead of skipping it (8).
+- `zapps/utreexo/tip-source-tests.sh` (executed on hazync-coord, mainnet blocks 1..100,000): **54 of 54** (`UTREEXO_TIP_SOURCE_TESTS_OK`, 20.11.2026, `zyncapp` built from
+  `3fccfe3` on hazync-coord, whose tip and base ids are the pinned `ab6f7a26` / `27bea7da`): the chain base(1,999) →
+  10,000 → 20,000 → 50,000 → 91,722 → 91,812 → 91,842 → 91,880 → 100,000 executed twice, from the forest source and
+  from the native replay: at every step **the same witness bytes** (`frames_sha256`, across the BIP30 heights) and the
+  same roots, each forest step a new process starting from the previous step's saved file ("cache hit", no replay).
+  Restarts of 91,880 → 100,000: from a kept copy (a hit, the same bytes), from a copy with one byte flipped (refused:
+  "a branch hash … is not the hash of its children", replayed from genesis, the same bytes), from the native source's
+  file (refused as the other kind, replayed, the same bytes). A node that lies (block 2,277's first prevout value + 1,
+  in a copy of the block files): refused by the source before anything ran ("not a live leaf of the forest", exit 1);
+  control: the honest step 1,999 → 9,000 passes. Two lying sources that skip their own checks: **refused by the guest**
+  at block 2,277 ("the deletions do not open in the accumulator", exit 3), the node's lie and the store's; and
+  `UTREEXO_TIP_SOURCE_LIE` refused outright when proving.
+- `coordinator/deploy/utreexo/test/test_follow_logic.sh`: **92 of 92** after the review (76 before; laptop, mainnet
+  blocks 1..500, and the same in `run_ci.sh` on header-only files from `test/headers_1_500.txt`): the crash window
+  (latest switched, forest left in `work/forest.next`: adopted, the next step fetches 10..12, not from 1; a forest.next
+  naming another height not adopted), a fall-back to a state whose forest was lost starting from the forest below it
+  (80, fetching 81..110), a genesis replay above `GENESIS_REPLAY_MAX` refused with nothing moved and allowed with the
+  switch, `--set-base` moving forests aside, the forest heap recorded and warned, orphaned forests pruned after
+  `ORPHANED_FOREST_MIN` and nothing else in `orphaned/`. Controls (`run_ci.sh`, each the follower with one guard taken
+  out): the old fall-back fails 4 checks, the old retention 5, no adoption 2, no forest below P 2, no genesis limit 4,
+  `--set-base` deleting forests 1. `test_check.sh`: 13 of 13 on the check's paths; its control (no stall comparison)
+  misses the stall. CI job `utreexo-follower` runs `run_ci.sh` (~8 min on a laptop).
+- Before the review the logic test was: besides the
+  earlier cases, the forest source asked for, the `FOREST_KEEP` (3) newest forests kept (50, 80, 100), a reorg at 100
+  moving only the orphaned forest (100) aside, the step from the fall-back at 80 starting from the KEPT forest of 80,
+  a bad `FOREST_KEEP` or `WITNESS_SOURCE` refused. Controls: the script with the old fall-back (every forest moved
+  aside) and with the old retention (only the newest kept) each fail 2 checks.
+- **Review round 2** (20.11.2026, at `99d40fa`): `zyncapp --cache-required` (the follower always passes it with a kept
+  forest) makes an unusable cache, or one above P, exit 4 instead of a silent replay from genesis; the follower then
+  moves that forest to `orphaned/unusable-*` and tries the next older one, the genesis arm still under
+  `GENESIS_REPLAY_MAX`. Executed on hazync-coord with the rebuilt `zyncapp` (ids unchanged): the corrupt copy and the
+  forest above P each exit 4 with `UTREEXO_TIP_CACHE_REFUSED` and nothing replayed; the good forest of 91,880 runs
+  (3/3, the new block of `tip-source-tests.sh` run alone against the last full run's work directory). The follower: an
+  RPC failure while choosing the forest stops the run; forests above the new H go to `orphaned/` and take no retention
+  slot; `DRY_RUN=1` adopts and prunes nothing; `.pending.tmp` is cleaned and moved with the rest. `read_from` refuses
+  more live leaves than nodes; `ForestSource::load` refuses a height of 2^32 − 1 (checked arithmetic, no `unwrap`).
+  Tests: tip-step **16** (a forest of chain A refusing chain B's next block, "does not follow the previous block"; the
+  two refusals above, each mutation killed); the logic test **102 of 102** (an unusable forest at P retried from the
+  next older one; every forest unusable stops at the genesis limit; a forest above H moved aside; forest.next with
+  latest's height and another hash not adopted; DRY_RUN; an RPC failure during the choice), its core tip lowered from
+  290 to 160 to shorten the header links; `run_ci.sh` runs ten controls with `FAIL_FAST=1`, each required to fail
+  FIRST at the check written for its guard (all ten do), and `test_check.sh` has a second control (age from the last
+  publish alone pages after an idle spine). `run_ci.sh`: 3m59 wall, 30 CPU-minutes (was 8m36, 56).
+- `zapps/utreexo/tip-source-tests.sh` again after the review: **60 of 60** (`UTREEXO_TIP_SOURCE_TESTS_OK`, hazync-coord, `zyncapp`
+  from `62bc131`'s source, ids still `ab6f7a26` / `27bea7da`): the 54 above, and two restarts of 91,880 → 100,000 more,
+  each with the same witness bytes: from the forest saved at 50,000 ("cache below at 50000 … replaying 50001..91880",
+  2.2 s) and from the forest at 100,000, above the previous height (not used: replayed from genesis, 3.4 s). The cache
+  is now saved before the proof ("pending until the statement is checked") and renamed after it.
+- `test/test_follow.sh` with real CPU proofs (hazync-coord, the follower and `zyncapp` after the review, the spine's
+  core receipt 1..4,856 copied read-only from hazync-proof, sha256 `95ae169a…`): **34 of 34** (`UTREEXO_FOLLOW_TESTS_OK`, three real
+  CPU proofs of ~60-90 min each, 20.11.2026; `test_follow.sh` now takes the core height T from the receipt and a node
+  tip T + 164): the base install (a wrong hash refused), the step 3 → 103 published and verified (DEMO), no new height,
+  the choice of H (margin, core tip, step cap), the step 103 → 180 **started from the saved forest of 103** (no
+  replay) with the forests of 103 and 180 both kept, a lying prover and a wrong ELF refused with the folder untouched, a
+  reorg at 180 falling back to 103 and stepping to 175 **from the kept forest of 103**, a reorg below the base stopping.
+  (A first run that afternoon used the test file from before its T parametrisation against the newer spine and failed
+  23 checks at the first step, the node tip 4,000 being below T = 4,856; it is not counted.)
+
 ### 10.10 Layout (tip mode)
 
 - `prover/zyncapps/methods/utreexo-tip`: the step guest, its own image (rustreexo `=0.7.0`, `default-features = false`,
@@ -695,13 +877,18 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   untouched, and the new guest has its own Cargo.lock). `src/step.rs` holds the block rules and is #[path]-included by
   the host.
 - `prover/zyncapps/host` (`zyncapp`): `utreexo-tip-prove <block dir> <previous receipt | .journal> <H> <core receipt |
-  state_T.json> <out> [--execute] [--prof N] [--cache <file>] [--ref <utreexo-ref log>] [--elf] [--base-id]`
-  (`UTREEXO_TIP_TAMPER=<case>` negative tests), `core-info <core receipt | state JSON>`; `utreexo-prove --execute` now
+  state_T.json> <out> [--execute] [--prof N] [--cache <file>] [--cache-out <file>] [--headers <file>] [--source
+  forest|native] [--ref <utreexo-ref log>] [--elf] [--base-id]` (`UTREEXO_TIP_TAMPER=<case>` and
+  `UTREEXO_TIP_SOURCE_LIE=node|store` negative tests), `core-info <core receipt | state JSON>`; `utreexo-prove --execute` now
   also writes the final run's journal (`<out>/<net>-<H>.journal`) so a step can start from an executed base.
 - `zapps/utreexo`: `src/tip.rs` behind the crate feature `tip` (the CLI and the WASM enable it); `tests/tip_verdict_paths.rs`; `tip-exec-tests.sh` (the executed chain and the guest's
   refusals, §10.9).
 - `coordinator/deploy/utreexo/hazync-utreexo-follow` and `test/test_follow.sh` (real CPU proofs against a fake
-  bitcoin-cli over mainnet block files). No unit, timer, nginx alias or publish key yet: nothing is deployed.
+  bitcoin-cli over mainnet block files); `hazync-utreexo-follow.service` / `.timer` and the install procedure in its
+  README (not executed: no unit installed, no nginx alias or publish key yet; nothing is deployed).
+- The production witness source (§10.5.1): `prover/zyncapps/host/src/utreexo_forest.rs` (`ArenaForest`) and
+  `utreexo_witness.rs` (`ForestSource`), #[path]-included by `zapps/utreexo/tip-step` for their tests
+  (`src/forest_tests.rs`) and its bench (`examples/forest_bench.rs`); `zapps/utreexo/tip-source-tests.sh` (executed).
 
 ### 10.11 What Floresta answered, and what is left for a later follow-up
 
@@ -720,9 +907,9 @@ The questions of §9 were asked in getfloresta/Floresta discussion #1472 and ans
 **Not covered by the answers — for a later follow-up in #1472, if needed** (nobody contacts Floresta from this work;
 these are notes for whoever writes the next reply there):
 
-- **The witness source for deletions** (§10.5.1): we plan to read utreexod's proof index (the udata Floresta itself
-  syncs from), or keep our own disk forest. Their view on which is more dependable would help, but neither choice
-  changes what they check.
+- **The witness source for deletions** (§10.5.1): decided 20.11.2026, our own forest (option B, the design of their own
+  castor bridge), not utreexod's proof index. Nothing to ask unless they see a reason to prefer a bridge's proofs;
+  neither choice changes what they check.
 - **The receipt they ingest**: one succinct receipt (226,138 bytes at H = 103, §10.9) plus `latest.json`, or a Groth16
   wrap (much smaller, not measured here, needs the Groth16 verifier); and whether they want it over HTTP from
   `/utreexo-live/` or another channel.

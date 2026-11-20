@@ -28,6 +28,10 @@ pub struct Block {
     pub stripped: Vec<u8>,
     pub txs: Vec<facts::TxView>,
     pub txids: Vec<H>,
+    /// per transaction after the coinbase, its inputs' prevouts in input order (the block file's `prevouts`, from the
+    /// node's undo data): what the tip mode's forest source (utreexo_witness.rs) rebuilds each spent leaf from. Empty
+    /// when the file has none.
+    pub prevouts: Vec<Vec<crate::utreexo_witness::PrevCoin>>,
 }
 
 fn rev_hex32(s: &str) -> [u8; 32] {
@@ -49,8 +53,20 @@ pub fn read_block(dir: &str, h: u32) -> Block {
     header[72..76].copy_from_slice(&(v["bits"].as_u64().unwrap() as u32).to_le_bytes());
     header[76..80].copy_from_slice(&(v["nonce"].as_u64().unwrap() as u32).to_le_bytes());
     let mut raws = vec![unhex(v["coinbase_hex"].as_str().unwrap())];
+    let mut prevouts = Vec::new();
     for t in v["txs"].as_array().unwrap() {
         raws.push(unhex(t["raw"].as_str().unwrap()));
+        if let Some(ps) = t["prevouts"].as_array() {
+            prevouts.push(ps.iter().map(|x| crate::utreexo_witness::PrevCoin {
+                height: x["coin_height"].as_u64().unwrap_or_else(|| panic!("{p}: a prevout without coin_height")) as u32,
+                coinbase: x["coin_is_coinbase"].as_u64().unwrap_or_else(|| panic!("{p}: a prevout without coin_is_coinbase")) == 1,
+                value: x["value"].as_u64().unwrap_or_else(|| panic!("{p}: a prevout without value")),
+                spk: unhex(x["spk"].as_str().unwrap_or_else(|| panic!("{p}: a prevout without spk"))),
+            }).collect());
+        }
+    }
+    if !prevouts.is_empty() && prevouts.len() + 1 != raws.len() {
+        panic!("{p}: prevouts for some transactions only");
     }
     let mut txs = Vec::new();
     for r in &raws {
@@ -65,7 +81,7 @@ pub fn read_block(dir: &str, h: u32) -> Block {
         stripped.extend_from_slice(&t.stripped);
     }
     let txids = txs.iter().map(facts::txid).collect();
-    Block { height: h, hash: facts::header_hash(&header), header, stripped, txs, txids }
+    Block { height: h, hash: facts::header_hash(&header), header, stripped, txs, txids, prevouts }
 }
 
 fn put_varint(v: &mut Vec<u8>, n: u64) {
