@@ -146,6 +146,9 @@ host_is_current() {  # $1 = path; $2 = asset name; hosts store the id as [u32;8]
     [ -n "$SRC_REV" ] || return 1
     # The load-bearing staleness check. Everything below only asks WHICH GUEST the binary carries.
     [ "$(cat "$DIST/.built-from-$2" 2>/dev/null)" = "$SRC_REV" ] || return 1
+    # ...and it was built in an EMPTY target directory (prover/build-release.sh writes this stamp only then). A host
+    # linked from a warm target shipped two layouts of sppark's stream_t in v0.26.1 and v0.27.0 (20.11.2026).
+    [ "$(cat "$DIST/.clean-build-$2" 2>/dev/null)" = "$SRC_REV" ] || return 1
 
     local id
     id="$("$1" method-id 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)"
@@ -170,8 +173,9 @@ for mode in cpu cuda; do
         # RZUP_TIMEOUT: the default is far too short for the 488MB toolchain on a domestic link.
         # OUT: into $DIST. Without it both scripts wrote to ./dist whatever DIST said, so DIST=elsewhere
         # gated and uploaded a directory nothing had built into.
+        # HAZYNC_REUSE_TARGET=0: every C/C++/CUDA object from source, whatever the operator's shell exports.
         run env SKIP_GROTH16=1 RZUP_TIMEOUT="${RZUP_TIMEOUT:-7200}" ${IMAGE:+IMAGE="$IMAGE"} OUT="$(realpath -m "$DIST")" \
-            ./prover/build-release.sh "$mode" || die "$mode build failed"
+            HAZYNC_REUSE_TARGET=0 ./prover/build-release.sh "$mode" || die "$mode build failed"
         # Record what it was built from, so the next release can tell a fresh artifact from a stale
         # one that merely embeds the right guest. Written only after the build succeeds.
         [ "$DRY" = 1 ] || echo "$SRC_REV" > "$DIST/.built-from-$asset"
@@ -274,8 +278,7 @@ elif [ -n "${!_att:-}" ]; then
        the attestation is for a different binary than the one about to ship"
 elif ./scripts/embeds-method-id.sh "$CU" "$CANON"; then
     ok "cuda host: cannot execute here, but embeds ${CANON:0:8} in its bytes"
-    echo "  !    that is a BYTE check, not a run. Nothing here has proved this binary works on a GPU —"
-    echo "       smoke it on a real card and pass $_att=<measured id> to gate on that instead."
+    echo "  !    that is a BYTE check, not a run. Step 4b requires the real-GPU gate's marker for this exact binary."
     export "$_att=$CANON"
     # ⛔ Mark the PROVENANCE so check-dist.sh does not report this as an operator attestation
     # (hazync#579). Without it the log reads "attested canonical from a capable host" on a box with
@@ -298,6 +301,30 @@ export HAZYNC_GUEST_ELF_STAGED="$LZ_ELF"
 
 echo "  staged assets (sha256):"
 ( cd "$DIST" && sha256sum $BINS ) | sed 's/^/    /'
+
+# ---- 4b. the real-GPU gate ---------------------------------------------------------------------
+# ⛔ v0.26.1 AND v0.27.0 PUBLISHED A LINUX CUDA HOST THAT SEGFAULTED ON ITS FIRST GPU STEP (20.11.2026), with every
+# check above green: this box has no GPU, so they all read BYTES. Nothing here ever ran a kernel. So publishing now
+# needs evidence from real cards, for the EXACT staged binaries (by sha256), in $DIST:
+#   .gpu-gate-linux-cuda.json    scripts/release-gpu-gate.sh run, from the maintainer's laptop (the RunPod key is
+#                                there, not here): an A40 and a Blackwell card prove the gate blocks with THIS host,
+#                                THIS verifier accepts every receipt and refuses a tampered one.
+#   .gpu-gate-windows-cuda.json  scripts/release-gpu-gate.sh record-windows, after the documented block-170 prove
+#                                with THIS zip's host.exe on a real card (CI has no GPU).
+# Rebuilding either host changes its sha256 and voids its marker. Resumable: run the gate, then re-run this
+# command; the build, fetch and package steps find their work done.
+step "4b. real-GPU gate: the staged CUDA hosts proved real blocks on real cards"
+_cu_sha=$(sha256sum "$CU" | cut -c1-64)
+if python3 scripts/release_gpu_gate.py check --dist "$DIST" --image "$CANON"; then
+    :
+elif [ "$DRY" = 1 ]; then
+    echo "  !    (dry run) the publish step would REFUSE here until the gate has run for these exact files"
+else
+    die "no real-GPU evidence for the staged CUDA hosts -- do NOT publish. From the maintainer's laptop:
+         scripts/release-gpu-gate.sh run --source <this box>:$(realpath -m "$DIST") --host-sha256 $_cu_sha
+       and for Windows, the documented block-170 prove, then scripts/release-gpu-gate.sh record-windows ...
+       (docs/BUILD_AND_RELEASE.md, \"The real-GPU gate\"). Then re-run: ./scripts/release.sh $TAG"
+fi
 
 
 if [ "$DRY" = 1 ]; then echo; echo "DRY RUN COMPLETE — preflight and artifacts are good for $TAG."; exit 0; fi
@@ -459,8 +486,7 @@ echo; echo "DONE — $TAG is published, signed, verified, and latest."
 echo "https://github.com/$REPO_SLUG/releases/tag/$TAG"
 echo
 echo "NOT done automatically, because it needs a machine with the hardware:"
-echo "  * prove on the CUDA hosts where a real GPU exists (method-id was attested before publishing):"
-echo "        host libzync-prove-range 1 1 testdata/libzync/mainnet genesis out && host libzync-verify out/block_1.rcpt"
+echo "  * (the CUDA hosts were proved on real cards before publishing: step 4b, scripts/release-gpu-gate.sh)"
 echo "  * repoint any running provers at this guest — run-workers.sh only checks its id at STARTUP,"
 echo "    so loops started before a re-baseline keep proving into rejections forever (#99)"
 echo "  * ⛔ CUT OVER THE BROWSER VERIFIER if hazync-verify.wasm changed: serve this release's"

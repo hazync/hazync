@@ -31,7 +31,7 @@ fn build_cpu_kernels() {
     rerun_if_changed("kernels/cxx");
     KernelBuild::new(KernelType::Cpp)
         .files(glob_paths("kernels/cxx/*.cpp"))
-        .include(env::var("DEP_RISC0_SYS_CXX_ROOT").unwrap())
+        .include(watch_dep("DEP_RISC0_SYS_CXX_ROOT"))
         .compile("risc0_keccak_cpu");
 }
 
@@ -67,8 +67,8 @@ fn build_cuda_kernels() {
         .flag("-diag-suppress=550")
         .flag("-diag-suppress=2922")
         .flag("-std=c++17")
-        .include(env::var("DEP_RISC0_SYS_CUDA_ROOT").unwrap())
-        .include(env::var("DEP_SPPARK_ROOT").unwrap());
+        .include(watch_dep("DEP_RISC0_SYS_CUDA_ROOT"))
+        .include(watch_dep("DEP_SPPARK_ROOT"));
 
     // HAZYNC_631_MSVC_FLAGS — hazync#631. The SAME shape #632 fixed in risc0-circuit-rv32im-sys,
     // and that I then fixed in the SHARED risc0-build-kernel — but this crate has its OWN flag
@@ -108,4 +108,16 @@ fn rerun_if_changed<P: AsRef<Path>>(path: P) {
 
 fn glob_paths(pattern: &str) -> Vec<PathBuf> {
     glob::glob(pattern).unwrap().map(|x| x.unwrap()).collect()
+}
+
+// HAZYNC_RERUN_ON_HEADERS — every include directory a `links` dependency hands this script (DEP_*_ROOT) is
+// watched, so a header change there re-runs this script and recompiles its kernels even on a warm target.
+// ⛔ Without it this script watched only its own kernels/, and the v0.26.1/v0.27.0 Linux CUDA host linked
+// objects compiled against two layouts of sppark's stream_t (gpu_t.cuh, #727) and segfaulted on its first
+// GPU step. cargo scans a watched directory recursively by mtime; an absolute path outside the package is
+// allowed. scripts/test-build-rerun.sh checks no build.rs here reads a DEP_* path any other way.
+fn watch_dep(var: &str) -> String {
+    let p = env::var(var).unwrap();
+    println!("cargo:rerun-if-changed={p}");
+    p
 }

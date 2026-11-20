@@ -1455,6 +1455,22 @@ jobs:
         run: ./scripts/test-release-ci-gate.sh
       - name: CI gate POSITIVE CONTROL (reduced to one green job — must FAIL)
         run: ./scripts/test-release-ci-gate.sh --control
+      - name: release.sh will not publish a CUDA host that has not proved real blocks on real GPUs (v0.26.1, v0.27.0)
+        # Both published a Linux CUDA host that segfaulted on its first GPU step; every check on the GPU-less release
+        # box read bytes. Step 4b requires the real-GPU gate's markers for exactly the staged files.
+        run: ./scripts/test-release-gpu-gate.sh
+      - name: GPU gate POSITIVE CONTROL (step 4b's refusal made non-fatal — must FAIL)
+        run: ./scripts/test-release-gpu-gate.sh --control
+      - name: The GPU gate terminates every pod it rents, on every path, and marks nothing it did not verify
+        run: python3 scripts/test_release_gpu_gate.py
+      - name: GPU gate lifecycle POSITIVE CONTROL (pods no longer terminated — must FAIL)
+        run: python3 scripts/test_release_gpu_gate.py --control
+      - name: A vendored header change rebuilds every -sys crate compiled against it, even on a warm target
+        # The root cause of the v0.26.1 crash: vendored sppark's build.rs watched nothing, so a warm target linked
+        # two layouts of stream_t. Real cargo, no nvcc.
+        run: ./scripts/test-build-rerun.sh
+      - name: Header-watch POSITIVE CONTROL (both fixes cut out — must FAIL)
+        run: ./scripts/test-build-rerun.sh --control
       - name: The release signature is bound to the tag and cannot be laundered (review 11-12, release #2)
         run: ./scripts/test-release-sign.sh
       - name: Signing POSITIVE CONTROL (image check, binding and re-sign guard cut out — must FAIL)
