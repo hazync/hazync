@@ -49,15 +49,21 @@ below; (c) is bounded from the wall-time records above.
 `sweep_agg.sh`: the same block, `HAZYNC_CHUNKS` = 1..32, `agg-exec-fake` (coin log and trie around the block MODELLED,
 as in the cost survey), segments 2^21. Data: `data/agg_sweep.out`.
 
-AGG_TABLE
+| block | chunks merged | aggregate user cycles | aggregate padded | chunks' user cycles (all chunks) |
+|---|---|---|---|---|
+| 100,000 (4 txs) | 1 / 2 / 4 (capped at 4) | 2,690,452 / 2,697,256 / 2,704,029 | 3,145,728 | 1.41 M / 2.45 M / 3.37 M |
+| 300,000 | 1 / 2 / 4 / 8 / 16 / 32 | 10,665,012 / 10,672,488 / 10,685,977 / 10,714,113 / 10,773,406 / 10,889,193 | 12,582,912 (all) | 33.1 M → 55.6 M (16) → 77.6 M (32) |
+| 962,000 | 1 / 2 / 4 / 8 / 16 / 32 | 66,468,085 / 66,474,826 / 66,489,170 / 66,517,168 / 66,573,040 / 66,685,904 | 82.3 M (1), 81.8 M (2-32) | 352.2 M → 385.4 M (16) → 412.8 M (32) |
+
+Per extra merged chunk receipt: **7.2 k** (300,000) and **7.0 k** (962,000) aggregate cycles; 16 chunks against 1
+costs 104,955 cycles on 962,000, **0.16%** of its aggregate. (750,000 was planned and not run: the three blocks agree.)
 
 **The aggregate's cost does not depend on how many receipts it merges**: each extra chunk receipt adds ~7 k cycles
-(the claim hash and bookkeeping). Merging 16 chunks against 1 costs AGG16 cycles more on 962,000, AGG16PCT of the
-aggregate. The aggregate's 15.6% is block validation, not merging.
+(not profiled further). The aggregate's 15.6% is block validation, not merging.
 
 The **chunks** do get dearer per receipt (the `chunk_user` column): splitting a block into more chunks repeats some
-work per chunk (CHUNK_PER on 300,000 and 962,000 per extra chunk). That is a leaf-side cost of parallelism, not of
-merging; it was not profiled here. It is not in the 67.5% either: the survey ran one chunk per block.
+work per chunk (1.43 M cycles per extra chunk on 300,000, 1.95 M on 962,000; 16 chunks cost 9.4% more chunk cycles
+than 1 on 962,000). That is a leaf-side cost of parallelism, not of merging; it was not profiled here. It is not in the 67.5% either: the survey ran one chunk per block.
 
 ### 2b. The join: per merged receipt and per session
 
@@ -174,6 +180,7 @@ mainnet height (journal ~4.4 KB):
 - `merge-tree.patch` — the experimental guest modes 19 (k-ary join), 20 (empty session), 21 (k-ary join reading
   journals with `read_slice`) and the host's `mt-join`. Applied by `build.sh` to a copy of origin/main.
 - `build.sh` — builds the patched host on hazync-coord (TEST_LINEAGE mainnet variant; prints the image id).
-- `sweep_join.sh` — join width × journal size; `sweep_agg.sh` — aggregate cycles × chunk count.
+- `sweep_join.sh` — join width × journal size (modes 18/19/20; the mode-21 rows ran the same loop with `host_mt2`, the
+  rebuild with mode 21, sizes 2/2, 16/10, 32/20); `sweep_agg.sh` — aggregate cycles × chunk count.
 - `pprof_sum.py` — self/inclusive cycles from a risc0 pprof.
 - `data/` — raw outputs.
