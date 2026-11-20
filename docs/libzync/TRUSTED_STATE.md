@@ -710,14 +710,18 @@ RSS from `/usr/bin/time`, laptop (WSL2, 16 threads, 8.9 GB).
 **10 M coins** (no one-shot comparison: a 10 M one-shot guest would need about 10× the 1 M run's 1 GB and its native
 build about 10× its 3.3 GB, beyond this laptop; the combine is checked against the planner's own native journal, which
 matched the one-shot journal in every case above). The planner kept the trie on disk (`--trie-dir`): 2,562 s
-(42.7 min) on 8 threads, peak RSS 7.4 GB of which most is the memory-mapped trie arena (file-backed; anonymous memory
+(42.7 min) on 8 threads for the 16-chunk plan, peak RSS 7.4 GB of which most is the memory-mapped trie arena (file-backed; anonymous memory
 was about 1.8 GB when sampled during the run).
 
 | split | chunk user cycles (each) | chunks total | per coin | peak RSS per chunk | wall per chunk | combine | combine BIP30 tree | **chunks + combine** | match |
 |---|---|---|---|---|---|---|---|---|---|
 | 16 × 625 k | 5,943,460,007 – 6,895,586,967 | 106,473,473,436 | 10,647 | 855 MB – 1.16 GB | 155 – 176 s | 6,510,757,943 (57 MB, 116 s) | 6,438,800,910 | **112,984,231,379** | COMBINE_MATCH |
 
-<!-- MEAS10M8 -->
+| 8 × 1.25 M | 11,894,737,656 – 13,446,575,699 | 103,682,208,791 | 10,368 | 1.68 – 2.15 GB | 314 – 377 s | 6,510,702,143 (57 MB, 115 s) | 6,438,800,910 | **110,192,910,934** | COMBINE_MATCH |
+
+The 8- and 16-chunk combines of the 10 M set commit the same journal (byte for byte, apart from the chunk count), and
+both planners wrote the same expected journal. The 8-chunk plan took 2,610 s (43.5 min), peak RSS 7.3 GB (again mostly
+the mapped trie).
 
 Where a chunk's cycles go (16 × 625 k at 10 M, the guest's own counts per coin): the snapshot phase (parse,
 `hash_serialized_3`, leaf, ECMH, coin log, trie key) is **flat at 7,216 – 7,229**; the trie insert grows with the
@@ -749,3 +753,14 @@ over 160 independent chunk proofs of ≈ 7.4×10^9 cycles (≈ 3 h each on one c
 per 10^5 BIP30 entries on one card (the BIP30 tree is one receipt here; it can be split by key prefix into
 independent subtree receipts, NOT built). Everything in this paragraph is a projection.
 
+
+### 12.6 Status, and what is not done
+
+- Built and measured: the bulk BIP30 build (§12.1), the chunk and combine images and the planner (§12.2), the
+  anchor equality and the controls (§12.3), 1 M and 10 M runs (§12.4). Executor only, dev mode; no receipt was proved.
+- Not built: splitting the BIP30 tree by key prefix (it is one receipt in the combine); a streaming planner (it reads
+  the whole snapshot into memory: 458 MB at 10 M, several GB at mainnet); the combine verifying chunk receipts
+  recursively in a real prover run (its recursion cost); real mainnet data above height 200.
+- The free inputs are unchanged from the one-shot ingest (§11.1): the tracked and REPEATABLE lists.
+- No core guest file changed (§7 still holds: `git diff origin/main...HEAD -- prover/methods libzync coinbase-smt
+  accumulator` is empty).
