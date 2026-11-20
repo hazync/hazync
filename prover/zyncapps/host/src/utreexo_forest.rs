@@ -96,6 +96,10 @@ impl ArenaForest {
         if self.nodes.len() >= (NIL - 1) as usize {
             return Err("forest arena: more than 2^32 - 2 nodes".into());
         }
+        if self.nodes.len() == self.nodes.capacity() {
+            // grow by an eighth, not by doubling: at the tip the arena is ~15 GB (UTREEXO_ZAPP.md §10.5.1)
+            self.nodes.reserve_exact(self.nodes.len() / 8 + 1024);
+        }
         self.nodes.push(n);
         Ok((self.nodes.len() - 1) as u32)
     }
@@ -347,11 +351,15 @@ impl ArenaForest {
         Ok(Proof::new_with_hash(targets, hashes))
     }
 
-    // ---- persistence: preorder per root (0 = Empty root, 1 = leaf ‖ hash, 2 = branch ‖ hash, then its children)
+    // ---- persistence: leaves u64 ‖ roots u64 ‖ live nodes u64 ‖ live leaves u64 ‖ preorder per root (0 = Empty root,
+    // 1 = leaf ‖ hash, 2 = branch ‖ hash, then its children)
 
     pub fn write_to<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
+        let (nodes, live) = self.counts();
         w.write_all(&self.leaves.to_le_bytes())?;
         w.write_all(&(self.roots.len() as u64).to_le_bytes())?;
+        w.write_all(&(nodes as u64).to_le_bytes())?;
+        w.write_all(&(live as u64).to_le_bytes())?;
         let mut stack = Vec::new();
         for &r in &self.roots {
             if r == NIL {
@@ -388,6 +396,16 @@ impl ArenaForest {
         if nroots != f.leaves.count_ones() as u64 {
             return Err("forest: not one root per set bit of the leaf count".into());
         }
+        r.read_exact(&mut b8).map_err(|e| e.to_string())?;
+        let want_nodes = u64::from_le_bytes(b8);
+        r.read_exact(&mut b8).map_err(|e| e.to_string())?;
+        let want_live = u64::from_le_bytes(b8);
+        if want_live > f.leaves || want_nodes > 2 * want_live || want_nodes >= (NIL - 1) as u64 {
+            return Err("forest: impossible node or leaf counts".into());
+        }
+        // the arena sized once, with an eighth to grow into (a run's adds), not by doubling
+        f.nodes.reserve_exact(want_nodes as usize + want_nodes as usize / 8 + 1024);
+        f.map.reserve(want_live as usize);
         // root k (from the left) is the tree of the k-th highest set bit
         let rows: Vec<u8> = (0..64u8).rev().filter(|b| f.leaves >> b & 1 == 1).collect();
         for &want_rows in &rows {
@@ -432,6 +450,9 @@ impl ArenaForest {
                 return Err("forest: a tree deeper than its root's row".into());
             }
             f.roots.push(root);
+        }
+        if f.counts() != (want_nodes as usize, want_live as usize) {
+            return Err("forest: the node or leaf count is not the stored one".into());
         }
         Ok(f)
     }

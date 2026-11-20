@@ -98,9 +98,10 @@ fn main() {
         let bytes = std::fs::metadata(path).unwrap().len();
         let t = Instant::now();
         let y = ArenaForest::read_from(&mut std::io::BufReader::with_capacity(1 << 22, std::fs::File::open(path).unwrap())).unwrap();
+        let rs = t.elapsed().as_secs_f64();
         assert_eq!(y.get_roots(), x.get_roots());
-        println!("FOREST_BENCH snapshot bytes={bytes} bytes_per_live_leaf={:.1} write_s={ws:.1} read_and_check_s={:.1}",
-                 bytes as f64 / leaves as f64, t.elapsed().as_secs_f64());
+        println!("FOREST_BENCH snapshot bytes={bytes} bytes_per_live_leaf={:.1} write_s={ws:.1} read_and_check_s={rs:.1} \
+                  heap_after_load_per_live_leaf={:.1}", bytes as f64 / leaves as f64, y.heap_bytes() as f64 / leaves as f64);
         let _ = std::fs::remove_file(path);
     }
 }
