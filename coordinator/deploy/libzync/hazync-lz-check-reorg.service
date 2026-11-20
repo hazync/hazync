@@ -9,6 +9,8 @@ OnFailure=hazync-alert@%n.service
 Type=oneshot
 User=hazync
 Environment=COORD_DB=/var/lib/hazync-lz/coordinator.db
+# D1 (REORG.md §19): the tip run (the paper prep, LZ_HI=follow) standing still below the node's tip for an hour pages
+Environment=CHECK_TIP_RUN_PREP_TIP=/var/lib/libzync-fast/out/PREP_TIP.json
 ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/libzync/hazync-lz-check-reorg.py
 Nice=10
 NoNewPrivileges=true

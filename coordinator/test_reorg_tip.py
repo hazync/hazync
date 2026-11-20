@@ -301,6 +301,22 @@ tm = s.tip_run_meta() or {}
 check(tm.get("from") == X and tm.get("servable_high") == 30 and tm.get("board_servable_high") == X - 1
       and (tm.get("prep_tip") or {}).get("height") == 30, f"/api/meta tip_run: {tm}")
 
+# ---- the stall check (hazync-lz-check-reorg.py with CHECK_TIP_RUN_PREP_TIP) ----
+ck = os.path.join(HERE, "deploy/libzync/hazync-lz-check-reorg.py")
+c = s.db(); c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('reorg_backstop_at',?)", (str(time.time()),)); c.execute("DELETE FROM meta WHERE k='reorg_alert'"); c.commit(); c.close()
+nt = os.path.join(T, "node_tip"); open(nt, "w").write("40\n")
+pt = os.path.join(ST, "PREP_TIP.json")
+cenv = dict(os.environ, CHECK_TIP_RUN_PREP_TIP=pt, NODE_TIP_FILE=nt)
+os.utime(pt, (time.time() - 7200, time.time() - 7200))
+r = subprocess.run([sys.executable, ck], env=cenv, capture_output=True, text=True, timeout=60)
+check(r.returncode == 1 and "TIP RUN STALLED" in r.stdout, f"the tip run standing still for 2 h at 30, the node at 40: pages ({r.returncode})")
+open(nt, "w").write("30\n")
+r = subprocess.run([sys.executable, ck], env=cenv, capture_output=True, text=True, timeout=60)
+check(r.returncode == 0, f"at the node's tip and waiting for a block: no page ({r.returncode}, {r.stdout.strip()[-60:]})")
+open(nt, "w").write("40\n"); os.utime(pt, None)
+r = subprocess.run([sys.executable, ck], env=cenv, capture_output=True, text=True, timeout=60)
+check(r.returncode == 0, f"below the node's tip but moving: no page ({r.returncode})")
+
 shutil.rmtree(T, ignore_errors=True)
 if CONTROL:
     if fails:

@@ -811,6 +811,7 @@ places: the coordinator's `tip-run.conf` (`HAZYNC_LZ_TIP_FROM`), the paper prep'
 | coordinator: a fork below X - 1 | a tip-run record whose fork is below X - 1 while the board pass holds the block above it is **refused, not acked** (loud): the board pass's states and bundles above the fork would still serve and re-verify the orphaned blocks. Practically impossible (the board pass reaches X - 1 months after it is deep), handled by a person (stop both, rewind the board pass with §11 step 3 under its own `LZ_ROOT`, then the tip run) |
 | coordinator: the handover check | the backstop (every minute) compares the two runs' `state_<h>.json` at the board pass's newest height ≤ X - 1 (its `PREP_TIP.json`); a difference latches `reorg_alert` ("disagree on state_<h>.json"), which `hazync-lz-check-reorg` pages on. Both runs prep the same chain from genesis with the same host, so their states are byte-identical where both exist (MEASURED on hazync-proof 20.11.2026 at 1, 5,000, 8,000 and 8,700) — the joins across X depend on it (`link_digest`) |
 | `/api/meta.tip_run` | `{from, servable_high, board_servable_high, prep_tip: {height, age_s}, claim_first}`; null with one run |
+| the stall check | `hazync-lz-check-reorg` with `CHECK_TIP_RUN_PREP_TIP`: the tip run's `PREP_TIP.json` unchanged for an hour (`CHECK_TIP_RUN_STALE_S`) while the node's tip is above it pages (prep in `follow` has no timeout of its own) |
 | leaf pruner | the tip run's bundles sit above the frontier until the backfill reaches X, so the frontier rule never frees them: `TIP_LEAVES` deletes a tip bundle once its block is proven (`/api/blockstatus`) and at least `TIP_DEPTH` (6) below the node's tip (`/var/lib/hazync/node_tip`, fresh within an hour, else nothing goes and the unit fails) |
 | units | `libzync-prep.service`: `HAZYNC_REORG_ACK=0` removed, `HAZYNC_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks-tip`; `libzync-prep` and `libzync-fetch` `run.conf`: `LZ_HI=follow`, `HAZYNC_PREP_LEAF_FROM=974937`; the coordinator's `tip-run.conf` drop-in (new); `hazync-lz-check-proofs` and `hazync-lz-prune-leaves` get the tip run's variables |
 
@@ -883,7 +884,8 @@ prep's current stores.
   branch exits 0): the unit stops quietly. Install the runner and the host BEFORE the `run.conf`; an old host refuses
   `follow` with a panic (exit 101), which systemd restarts every 30 s for ever (no alert). The procedure orders it.
 - At the tip, prep in `follow` never exits for a stalled fetcher: a hung fetcher shows only as the tip run's
-  `PREP_TIP.json` not moving (`/api/meta.tip_run.prep_tip.age_s`); nothing pages on it yet.
+  `PREP_TIP.json` not moving. `hazync-lz-check-reorg` (`CHECK_TIP_RUN_PREP_TIP`) pages when it has not moved for an
+  hour while the node's tip is above it (tested in `test_reorg_tip.py`); `/api/meta.tip_run.prep_tip.age_s` shows it.
 - `verify-any`'s view adds a directory and two symlinks per verification (under `COORD_STATE`), removed after it; a crash
   in between leaves `*.view` directories there (harmless, not cleaned up).
 - A spine whose end the tip run does not hold is verified twice (tip run, then board pass): only after a restart of

@@ -163,8 +163,10 @@ marker", the tracked-flags marker) is a host/run mismatch: put `host_lz.v026` an
 **5. The checks that follow the tip run:**
 
 ```bash
-install -m 0644 $R/coordinator/deploy/libzync/hazync-lz-check-proofs.service $R/coordinator/deploy/libzync/hazync-lz-prune-leaves.service /etc/systemd/system/
+install -m 0644 $R/coordinator/deploy/libzync/hazync-lz-check-proofs.service $R/coordinator/deploy/libzync/hazync-lz-prune-leaves.service \
+  $R/coordinator/deploy/libzync/hazync-lz-check-reorg.service /etc/systemd/system/
 systemctl daemon-reload
+systemctl start hazync-lz-check-reorg && journalctl -u hazync-lz-check-reorg -n 3 --no-pager     # "ok: …" (not "TIP RUN STALLED")
 systemctl start hazync-lz-prune-leaves && journalctl -u hazync-lz-prune-leaves -n 5 --no-pager   # "tip run from 974937, node tip …: deleted 0"
 ```
 
