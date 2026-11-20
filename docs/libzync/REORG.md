@@ -691,7 +691,7 @@ leaves the stores as they are and fails the run (no rebuild loop). Cost: a prep 
 low; the in-memory follower stops scaling near ~140,000 anyway (ZAPP_FOLLOWER §1). New test knobs (`ZAPP_OWNER`,
 `ZAPP_RESTART`, `ZAPP_ACTIVE`, `ZAPP_SETTLE_S`) keep the defaults the unit uses.
 
-**The website** (`hazync/hazync-web`, branch `web/reorg-banner`, not deployed): a banner on every page from
+**The website** (`hazync/hazync-web`, hazync-web #61, deployed 20.11.2026): a banner on every page from
 `/api/meta.reorg` while the board is `rewinding` and for an hour after `done`; the feed renders `kind: reorg` rows (not
 as folds); a block page lists its orphaned proofs, each checkable. `tools/reorg-banner-test.mjs` (+ control) and
 `explorer-recent-test.mjs`.

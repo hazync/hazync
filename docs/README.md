@@ -37,6 +37,7 @@ of the past and are not kept current.
 | [`libzync/UTREEXO_FORMAT.md`](libzync/UTREEXO_FORMAT.md) | the byte-exact coin leaf and the forest hashing (the name is historical) |
 | [`libzync/HANDOVER.md`](libzync/HANDOVER.md) | the block forest, and how a new image continues a chain |
 | [`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md) | zyncAPPs: separate guests that answer one question from a core proof |
+| [`libzync/ZAPP_TESTING.md`](libzync/ZAPP_TESTING.md) | how the zyncAPPs were tested before v0.27.0: fuzzing, mutants, the regtest chain |
 | [`libzync/HINTS_ZAPP.md`](libzync/HINTS_ZAPP.md), [`libzync/ASSUME_ZAPPS.md`](libzync/ASSUME_ZAPPS.md), [`libzync/LIVENESS_ZAPP.md`](libzync/LIVENESS_ZAPP.md), [`libzync/STATEMENT_ZAPP.md`](libzync/STATEMENT_ZAPP.md), [`libzync/DEPOSIT_ZAPP.md`](libzync/DEPOSIT_ZAPP.md), [`libzync/UTREEXO_ZAPP.md`](libzync/UTREEXO_ZAPP.md) | the zyncAPPs released in v0.27.0: SwiftSync hints, assumevalid / assumeutxo, coin liveness, balance statement, deposit proof, Utreexo roots |
 | [`libzync/UNDO.md`](libzync/UNDO.md) | the per-block undo-data commitment (v0.26.0 images) |
 | [`libzync/REORG.md`](libzync/REORG.md), [`libzync/ZAPP_FOLLOWER.md`](libzync/ZAPP_FOLLOWER.md) | reorg handling for the board (P1–P6, released in v0.27.0, automatic rewinds off) and the zAPP follower |

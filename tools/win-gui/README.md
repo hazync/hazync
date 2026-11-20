@@ -62,7 +62,7 @@ memory, and proved block 4401 at 18 (19.11.2026).
 | The Windows **CPU** host is a release asset too (`hazync-host-x86_64-windows-cpu.zip`: `host.exe` alone), from `windows-prove.yml`'s `prove` job, which ran it on Windows (`method-id`, then mainnet block 1 proved and verified), and the installer ships it in `prover-cpu\` | ✅ since v0.26.1 |
 | **CPU** build proves a block on Windows | ✅ measured (v1 host) |
 | This GUI opens and works on Windows | ✅ **tested on Windows Python 3.13** |
-| This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05 with the v1 host: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`**; not yet re-run with the libzync host |
+| This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05 with the v1 host: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`**; re-run 19.11.2026 with the libzync host through the app on a GTX 1050 Ti (4 GB): mainnet block 4,401 proved at `HAZYNC_SEG_PO2=18` (21 ran out of memory; `supervisor.py`, `_SEG_PO2_FOR_VRAM`) |
 | v1 (CORE) **CUDA** build proves a block on a GTX 1050 Ti | ⛔ never completed: the card is below the prover's floor (below) |
 
 The CUDA host needs a card of **compute capability 7.0 or newer**. Release CUDA hosts carry native code for sm_80
