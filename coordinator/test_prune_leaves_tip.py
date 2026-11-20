@@ -11,13 +11,21 @@ proven, 106 folded) and a node tip of 112.
 
   python3 test_prune_leaves_tip.py              # must PASS
   python3 test_prune_leaves_tip.py --control    # the pruner without its tip-run section: the tip bundles stay; MUST FAIL
+  python3 test_prune_leaves_tip.py --control-samples   # without its X guard: the cost-curve samples go; MUST FAIL
 """
 import http.server, json, os, shutil, subprocess, sys, tempfile, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "deploy/libzync/hazync-lz-prune-leaves.sh")
 T = tempfile.mkdtemp(prefix="prune_tip_")
-if "--control" in sys.argv[1:]:
+if "--control-samples" in sys.argv[1:]:
+    # the sample guard taken out of the tip section (bundles below X considered too): the samples MUST then be lost
+    src = open(SCRIPT).read()
+    assert src.count("    if x <= h <= cut and") == 1
+    SCRIPT = os.path.join(T, "nosamples.sh")
+    open(SCRIPT, "w").write(src.replace("    if x <= h <= cut and", "    if h <= cut and"))
+    print("CONTROL: the pruner without its X guard; the checks below MUST fail")
+elif "--control" in sys.argv[1:]:
     # the pruner as it was before D1: everything from the tip-run section on taken out
     old = open(SCRIPT).read().split("# the tip run's bundles (D1)")[0]
     SCRIPT = os.path.join(T, "old.sh")
@@ -107,7 +115,7 @@ r = subprocess.run(["bash", SCRIPT, "--apply"], env=env, capture_output=True, te
 check(left("tip") == sorted(samples), f"every sample bundle survives the pruner; the proven tip bundles {xs}, {xs + 1} go ({len(left('tip'))} left; {r.stdout.strip()[-80:]})")
 srv.shutdown()
 shutil.rmtree(T, ignore_errors=True)
-if "--control" in sys.argv[1:]:
+if "--control" in sys.argv[1:] or "--control-samples" in sys.argv[1:]:
     if fails:
         print(f"CONTROL OK: {fails} check(s) fail, as they must"); sys.exit(0)
     print("CONTROL BROKEN: nothing failed -- this test proves nothing"); sys.exit(1)

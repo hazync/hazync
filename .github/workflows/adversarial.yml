@@ -922,16 +922,22 @@ jobs:
           python3 test_reorg_tip.py --control-unknown
       - name: The worker retries a 503 retry and takes 409 reorged as nothing to do (REORG.md §19, round 2)
         run: cd coordinator && python3 test_worker_reorged.py
-      - name: Worker-reorged POSITIVE CONTROL (no retry, reorged a failure - must FAIL)
-        run: cd coordinator && python3 test_worker_reorged.py --control
+      - name: Worker-reorged POSITIVE CONTROLS (no retry; reorged a failure - each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_worker_reorged.py --control-retry
+          python3 test_worker_reorged.py --control-reorged
       - name: The prep runner never clears stores that a save point it cannot see may belong to (REORG.md §19, review HIGH 1)
         run: cd coordinator && python3 test_prep_runner.py
       - name: Prep-runner POSITIVE CONTROL (the refusal taken out - must FAIL)
         run: cd coordinator && python3 test_prep_runner.py --control
       - name: The leaf pruner frees the tip run's proven bundles (REORG.md §19)
         run: cd coordinator && python3 test_prune_leaves_tip.py
-      - name: Tip-pruner POSITIVE CONTROL (the pruner before D1 - must FAIL)
-        run: cd coordinator && python3 test_prune_leaves_tip.py --control
+      - name: Tip-pruner POSITIVE CONTROLS (the pruner before D1; without its X guard, the samples lost - each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_prune_leaves_tip.py --control
+          python3 test_prune_leaves_tip.py --control-samples
       - name: The zAPP follower in tip mode (ZAPP_FOLLOWER Z3-Z5 - the source run by height, pins, two heights, the reorg fall-back)
         run: cd coordinator && python3 test_zapp_follow_tip.py
       - name: Tip-follower POSITIVE CONTROL (never switches to the tip run - must FAIL)

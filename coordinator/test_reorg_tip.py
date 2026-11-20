@@ -182,6 +182,9 @@ srv = os.path.join(HERE, "server.py")
 r = subprocess.run([sys.executable, srv], env=dict(os.environ, HAZYNC_LZ_TIP_REORG_ACK_DIR=AB, COORD_PORT="1", COORD_BIND="127.0.0.1"),
                    capture_output=True, text=True, timeout=60)
 check(r.returncode == 3 and "tip run" in r.stdout, f"a real start-up with one ack directory for both runs: exit 3 ({r.returncode}, {r.stdout.strip()[-90:]})")
+r = subprocess.run([sys.executable, srv], env=dict(os.environ, HAZYNC_LZ_BLOCKS_DIR=os.path.join(T, "no-board-blocks"), COORD_PORT="1", COORD_BIND="127.0.0.1"),
+                   capture_output=True, text=True, timeout=60)
+check(r.returncode == 3 and "HAZYNC_LZ_BLOCKS_DIR" in r.stdout, f"round 3, 2: a real start-up without the board pass's block directory: exit 3 ({r.returncode})")
 
 # ---- bundles ----
 check(s.bundle_path(5) == os.path.join(LB, "leaf_5.bin"), f"block 5: the board pass's bundle, not the tip run's sample ({s.bundle_path(5)})")
@@ -356,7 +359,30 @@ os.rename(aside2, os.path.join(LT, f"leaf_{X}.bin"))
 os.utime(nt, (time.time() - 7200, time.time() - 7200))
 r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
 check(r.returncode == 2 and "old" in r.stdout, f"7. a node tip two hours old: cannot check (exit 2), no page on it ({r.returncode})")
+# round 3, LOW 6: the X checks run before the node tip is looked at, and a missing RUN.json near X pages
+json.dump({"lz_hi": "follow", "leaf_from": X + 5, "leaf_window": 3}, open(os.path.join(ST, "RUN.json"), "w"))
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(r.returncode == 1 and "MISCONFIGURED" in r.stdout, f"6. with a stale node tip the X checks still run: MISCONFIGURED pages ({r.returncode})")
+os.remove(os.path.join(ST, "RUN.json"))
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(r.returncode == 1 and "TIP RUN UNCHECKED" in r.stdout, f"6. no RUN.json within 1,000 of X: pages ({r.returncode})")
+json.dump({"lz_hi": "follow", "leaf_from": X, "leaf_window": 3}, open(os.path.join(ST, "RUN.json"), "w"))
 os.utime(nt, None)
+open(nt, "w").write("30\n")                                 # the tip run at the node's tip: no stall in what follows
+c = s.db(); c.execute("DELETE FROM meta WHERE k='tip_from'"); c.commit(); c.close()
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check("no handover height" in r.stdout, f"6. no meta.tip_from: said, not skipped silently ({r.stdout.strip()[-90:]})")
+c = s.db(); c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('tip_from',?)", (str(X),)); c.commit(); c.close()
+# round 3, MEDIUM 1: tip bundles waiting a day and no tip block verified in a day pages
+tipleaves = [os.path.join(LT, n) for n in os.listdir(LT) if n.startswith("leaf_") and int(n[5:-4]) >= X]
+for f in tipleaves: os.utime(f, (time.time() - 30 * 3600, time.time() - 30 * 3600))
+c = s.db(); c.execute("UPDATE vranges SET ts = ? WHERE lo >= ?", (time.time() - 30 * 3600, X)); c.commit(); c.close()   # (none, here)
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(r.returncode == 1 and "TIP BLOCKS NOT PROVED" in r.stdout, f"1. tip bundles waiting 30 h, no tip block verified in 24 h: pages ({r.returncode}: {r.stdout.strip()[-80:]})")
+code24, _ = submit("B", 24, 24)                              # a tip block verified now
+r = stall_check(CHECK_TIP_RUN_LEAVES=LT)
+check(code24 == 200 and "NOT PROVED" not in r.stdout, f"1. a tip block verified now: no page ({code24}, {r.returncode}: {r.stdout.strip()[-80:]})")
+for f in tipleaves: os.utime(f, None)
 open(nt, "w").write("30\n")
 r = stall_check()
 check(r.returncode == 0, f"at the node's tip and waiting for a block: no page ({r.returncode})")
@@ -490,8 +516,10 @@ check(code == 409, f"10. a spine ending above the fence (28 > 27): refused ({cod
 # 10c. pick and claim under a fence never hand out a fenced block
 c = s.db(); c.execute("DELETE FROM vranges WHERE lo >= 28"); c.execute("DELETE FROM ranges WHERE lo >= 28"); c.commit(); c.close()
 s._frontier_invalidate()
+c = s.db(); c.execute("DELETE FROM vranges WHERE id IN ('3','4','5')"); c.execute("DELETE FROM ranges WHERE id IN ('3','4','5')"); c.commit(); c.close()
+s._frontier_invalidate()
 got = [s.claim({"pubkey": key()[1], "handle": f"K{i}", "_client_ip": f"10.7.7.{i}", "tip": True})[1].get("range") for i in range(3)]
-check(not any(g and g.isdigit() and int(g) > 27 for g in got), f"10. claims under a fence at 27: none above it ({got})")
+check(all(g and g.isdigit() and int(g) <= 27 for g in got), f"10. claims under a fence at 27 (tip-first, the tip blocks above it fenced): all granted, none above it ({got})")
 code, out = s.pick(None)
 check(code == 404 or out.get("lo", 0) <= 27, f"10. pick under the fence: nothing above 27 ({code}, {out.get('lo')})")
 # 10d. a fold across the fence
@@ -524,6 +552,28 @@ check("HAZYNC_LZ_TIP_BLOCKS_DIR" in (s._tip_config_problem() or ""), f"4. the ti
 s.TIP_BLOCKS_DIR = ""
 check("HAZYNC_LZ_TIP_BLOCKS_DIR" in (s._tip_config_problem() or ""), "4. unset: refused")
 s.TIP_BLOCKS_DIR = saved4
+# NEW, end to end (round 3, LOW 7): an UNFLAGGED key that earned tip-first gets a tip block; a key whose only tip proof
+# was unclaimed, or of a block another key claimed, has not earned it
+c = s.db(); c.execute("DELETE FROM vranges WHERE id IN ('6','7','8','27','28','29','30')"); c.execute("DELETE FROM ranges WHERE id IN ('6','7','8','27','28','29','30')"); c.commit(); c.close()
+s._frontier_invalidate(); s.TIP_CLAIM_FIRST = True
+def kclaim(sk_pk, **kw): return s.claim(dict({"pubkey": sk_pk[1], "handle": "x", "_client_ip": "10.6.6." + sk_pk[1][:2]}, **kw))
+def ksubmit(sk_pk, h): 
+    rc = json.dumps({"lo": h, "hi": h, "in": bh("B", h - 1), "out": bh("B", h), "n": os.urandom(4).hex()}).encode()
+    return s.submit(dict(pubkey=sk_pk[1], sig=sk_pk[0].sign(rc).hex(), receipt=base64.b64encode(rc).decode(), handle="x", _client_ip="10.6.6.6", range=str(h)))
+E1, U1, V1, W1 = key(), key(), key(), key()
+code, out = kclaim(E1, tip=True); h1 = int(out["range"]); ksubmit(E1, h1)
+code, out = kclaim(E1)
+check(code == 200 and int(out["range"]) >= X, f"NEW. an unflagged key that earned it (its tip block {h1} claimed and verified at once): a tip block first ({out.get('range')})")
+code, out = kclaim(W1, tip=True); hw = int(out["range"])
+ksubmit(V1, hw)                                             # V proves the block W claimed
+code, out = kclaim(V1)
+check(code == 200 and int(out["range"]) < X, f"NEW. a key whose tip proof was of a block another key claimed: the backfill first ({out.get('range')})")
+free = next(h for h in range(27, 31) if not q("SELECT 1 FROM ranges WHERE id=?", str(h)))
+ksubmit(U1, free)                                           # U proves an unclaimed tip block
+code, out = kclaim(U1)
+check(code == 200 and int(out["range"]) < X, f"NEW. a key whose tip proof was never claimed ({free}): the backfill first ({out.get('range')})")
+s.TIP_CLAIM_FIRST = False
+
 # NEW. tip capability earned: a worker whose tip block was verified within TIP_CLAIM_EARNED_S of its claim gets tip-first
 e_sk, ek = key()
 s.TIP_CLAIM_FIRST = True

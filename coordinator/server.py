@@ -5961,10 +5961,12 @@ if __name__ == "__main__":
         if _tp:
             print(f"[hazync-coordinator] the tip run (REORG.md §19): {_tp}", flush=True)
             sys.exit(3)
+        # the handover height hazync-lz-check-reorg compares the tip run's settings with (round 3, LOW 6: said when lost)
         try:
             _c = db(); _c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('tip_from',?)", (str(TIP_FROM),)); _c.commit(); _c.close()
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as e:
+            print(f"[hazync-coordinator] could not record tip_from in meta ({e}): hazync-lz-check-reorg will say its X "
+                  f"checks did not run", flush=True)
         if TIP_FROM:
             print(f"  tip run    blocks from {TIP_FROM}: bundles {TIP_BRIDGE_DIR}, states {TIP_STATE_DIR}, records "
                   f"{TIP_REORG_DIR}, acks {TIP_REORG_ACK_DIR}{'; claimed first' if TIP_CLAIM_FIRST else ''}", flush=True)

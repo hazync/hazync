@@ -232,8 +232,8 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 | `HAZYNC_TICK` | `'60'` | `_prove_watched_inner()`, `_prove_distributed()` | Seconds between progress lines; a beat is sent on a tick only if a segment finished since the last one. |
 | `HAZYNC_PORT` | `'9110'` | `cmd_prove()` | Port `seg-serve` listens on for a distributed run (`--distributed`); workers dial it. Default 9110, the same default the host itself uses. |
 | `HAZYNC_FOLD_CONCURRENCY` | `'1'` | `_fold_conc()` | Folds run concurrently within one tree level. |
-| `HAZYNC_SUBMIT_RETRIES` | `'5'` | `_post_receipt()` | How often a submission answered 503 `retry` (the board could not read a state just then) is sent again. Default 5. |
-| `HAZYNC_TIP` | — | `cmd_run()` | `1`: this box can prove a mainnet tip block in reasonable time; claims say `tip: true` and a board with TIP_CLAIM_FIRST offers tip blocks first. |
+| `HAZYNC_SUBMIT_RETRIES` | `'5'` | `_submit_retries()` | How often a submission answered 503 `retry` (the board could not read a state just then) is sent again. Default 5. |
+| `HAZYNC_TIP` | — | `claim_body()` | `1`: this box can prove a mainnet tip block in reasonable time; claims say `tip: true` and a board with TIP_CLAIM_FIRST offers tip blocks first. |
 | `HAZYNC_SPINE_VRANGES_TTL` | `'300'` | constant `SPINE_VRANGES_TTL` | Seconds `hazync spine` reuses its copy of `/api/vranges`. |
 
 ### Set for the host binary
