@@ -1,0 +1,252 @@
+== 100000
+  chunk   0 [0..1) executed: 1130111 cycles
+  chunk   0 padded 2097152 (1 segments)
+  chunk   1 [1..3) executed: 1317695 cycles
+  chunk   1 padded 2097152 (1 segments)
+  trie: 3 marks, 6 inserts, witness 1537 words; trie update executed: 154114 cycles, padded 524288 (1 segments)
+  block validation cycles  2694883
+  block validation padded  3145728 (2 segments)
+  journal sha256           a89d5d48b6ff591d507f34f0385e63c8938103314f397eb5229d69d8547e7f4d
+TIMED wall_s=45.4 user_s=44.9 sys_s=0.5 maxrss_kb=613716 rc=0 load1=33.4 load1_end=32.4
+== 150000
+  chunk   0 [0..8) executed: 1705669 cycles
+  chunk   0 padded 2097152 (1 segments)
+  chunk   1 [8..16) executed: 1787117 cycles
+  chunk   1 padded 2097152 (1 segments)
+  trie: 16 marks, 18 inserts, witness 6278 words; trie update executed: 415108 cycles, padded 1048576 (1 segments)
+  block validation cycles  2921239
+  block validation padded  4194304 (2 segments)
+  journal sha256           72c1f9a54f5c44a7e34c83395808002ac5e3fd172d199afd8f5a2fc9c39a4bb4
+TIMED wall_s=44.1 user_s=43.5 sys_s=0.5 maxrss_kb=613680 rc=0 load1=30.3 load1_end=30.1
+== 200000
+  chunk   0 [0..705) executed: 33951234 cycles
+  chunk   0 padded 38797312 (19 segments)
+  chunk   1 [705..1231) executed: 29681076 cycles
+  chunk   1 padded 33554432 (16 segments)
+  trie: 945 marks, 822 inserts, witness 158281 words; trie update executed: 10460745 cycles, padded 12582912 (6 segments)
+  block validation cycles  14756024
+  block validation padded  17301504 (9 segments)
+  journal sha256           529ce4dfb3cd4dc882e6c162d426b2dc73c4a609388731a224b393c7282ebb41
+TIMED wall_s=47.9 user_s=49.6 sys_s=0.5 maxrss_kb=684916 rc=0 load1=31.3 load1_end=31.3
+== 250000
+  chunk   0 [0..246) executed: 13040022 cycles
+  chunk   0 padded 14942208 (8 segments)
+  chunk   1 [246..493) executed: 12112164 cycles
+  chunk   1 padded 14680064 (7 segments)
+  trie: 452 marks, 307 inserts, witness 80830 words; trie update executed: 5024755 cycles, padded 6291456 (3 segments)
+  block validation cycles  7947683
+  block validation padded  9437184 (5 segments)
+  journal sha256           0e7cb17637e7dedf5bf0889a5dd7bf2372a1fc01ebc2ef7f42d9d8e9691ba240
+TIMED wall_s=48.7 user_s=49.1 sys_s=0.5 maxrss_kb=683088 rc=0 load1=30.4 load1_end=30.6
+== 300000
+  chunk   0 [0..316) executed: 18319599 cycles
+  chunk   0 padded 20971520 (10 segments)
+  chunk   1 [316..628) executed: 16559098 cycles
+  chunk   1 padded 19005440 (10 segments)
+  trie: 547 marks, 673 inserts, witness 177452 words; trie update executed: 10317061 cycles, padded 12582912 (6 segments)
+  block validation cycles  10665724
+  block validation padded  12582912 (6 segments)
+  journal sha256           4b646b8b3cf17e267d7f06e693cd82b56e27c7575986f9d690f5644741fb09d8
+TIMED wall_s=46.2 user_s=47.2 sys_s=0.5 maxrss_kb=615488 rc=0 load1=31.4 load1_end=31.7
+== 350000
+  chunk   0 [0..2776) executed: 140591438 cycles
+  chunk   0 padded 169869312 (81 segments)
+  chunk   1 [2776..5210) executed: 118174514 cycles
+  chunk   1 padded 138412032 (66 segments)
+  trie: 4268 marks, 4494 inserts, witness 994256 words; trie update executed: 60980748 cycles, padded 73400320 (35 segments)
+  block validation cycles  61038252
+  block validation padded  73400320 (35 segments)
+  journal sha256           184ed2b8ec5b5c9e6b5958e5fb4395a6d5a05997d1b5bcb462256a7a738b0201
+TIMED wall_s=73.1 user_s=83.0 sys_s=0.6 maxrss_kb=696036 rc=0 load1=32.9 load1_end=31.1
+== 400000
+  chunk   0 [0..2303) executed: 153617592 cycles
+  chunk   0 padded 182714368 (88 segments)
+  chunk   1 [2303..4806) executed: 122757753 cycles
+  chunk   1 padded 144965632 (70 segments)
+  trie: 4313 marks, 3866 inserts, witness 1037020 words; trie update executed: 61663579 cycles, padded 73924608 (36 segments)
+  block validation cycles  62826104
+  block validation padded  75497472 (36 segments)
+  journal sha256           b1163a3f08fb5afe4dcf75af8f09f0a40405f013f46c668a735def3352807a35
+TIMED wall_s=70.7 user_s=80.1 sys_s=0.6 maxrss_kb=695452 rc=0 load1=29.5 load1_end=29.1
+== 450000
+  chunk   0 [0..2481) executed: 158848489 cycles
+  chunk   0 padded 189267968 (91 segments)
+  chunk   1 [2481..5085) executed: 162909015 cycles
+  chunk   1 padded 192937984 (92 segments)
+  trie: 4740 marks, 4325 inserts, witness 1308301 words; trie update executed: 75504527 cycles, padded 90177536 (43 segments)
+  block validation cycles  70674349
+  block validation padded  84148224 (41 segments)
+  journal sha256           05f2fa3a1ee3990db41a27ce7970bd23faf7072d1ff59396028eba94fe28df4a
+TIMED wall_s=75.9 user_s=86.8 sys_s=0.5 maxrss_kb=698484 rc=0 load1=32.1 load1_end=32.7
+== 500000
+  chunk   0 [0..1865) executed: 182215227 cycles
+  chunk   0 padded 212860928 (102 segments)
+  chunk   1 [1865..4370) executed: 165982541 cycles
+  chunk   1 padded 199229440 (95 segments)
+  trie: 3437 marks, 6055 inserts, witness 1366567 words; trie update executed: 78601703 cycles, padded 94371840 (45 segments)
+  block validation cycles  70932977
+  block validation padded  84410368 (41 segments)
+  journal sha256           c4589ff69d2bd24e08ac2c279d5c9282ec280ec09a505f8119be80b791559fdf
+TIMED wall_s=81.0 user_s=92.6 sys_s=0.6 maxrss_kb=699192 rc=0 load1=33.6 load1_end=30.6
+== 550000
+  chunk   0 [0..2732) executed: 168503381 cycles
+  chunk   0 padded 201326592 (96 segments)
+  chunk   1 [2732..5053) executed: 175337264 cycles
+  chunk   1 padded 203423744 (97 segments)
+  trie: 3539 marks, 5117 inserts, witness 1159730 words; trie update executed: 67528694 cycles, padded 80740352 (39 segments)
+  block validation cycles  61192268
+  block validation padded  73400320 (35 segments)
+  journal sha256           ef51e176846bb03a454af8a2608d0c5f60760ee014cebca591887d6da0103ef0
+TIMED wall_s=71.6 user_s=81.9 sys_s=0.5 maxrss_kb=696096 rc=0 load1=32.7 load1_end=29.9
+== 600000
+  chunk   0 [0..1484) executed: 147292746 cycles
+  chunk   0 padded 169869312 (81 segments)
+  chunk   1 [1484..3761) executed: 127985500 cycles
+  chunk   1 padded 150994944 (72 segments)
+  trie: 2736 marks, 3093 inserts, witness 848649 words; trie update executed: 48459362 cycles, padded 57671680 (28 segments)
+  block validation cycles  46871776
+  block validation padded  55574528 (27 segments)
+  journal sha256           1da8ee2e72b46008f9fe5bc62576f1eea2fd1500f363883e98e60aa84e478e54
+TIMED wall_s=65.3 user_s=72.9 sys_s=0.6 maxrss_kb=692872 rc=0 load1=30.3 load1_end=34.0
+== 650000
+  chunk   0 [0..4427) executed: 247535903 cycles
+  chunk   0 padded 306315264 (147 segments)
+  chunk   1 [4427..8823) executed: 224267385 cycles
+  chunk   1 padded 278921216 (133 segments)
+  trie: 8725 marks, 2975 inserts, witness 2129980 words; trie update executed: 117704428 cycles, padded 138936320 (67 segments)
+  block validation cycles  98994950
+  block validation padded  119537664 (57 segments)
+  journal sha256           1e8e6add5970577750c105750863af4a67454afdf456694f2298a55b9df9e39f
+TIMED wall_s=88.7 user_s=105.7 sys_s=0.5 maxrss_kb=704724 rc=0 load1=33.2 load1_end=31.8
+== 700000
+  chunk   0 [0..2906) executed: 205173649 cycles
+  chunk   0 padded 246415360 (118 segments)
+  chunk   1 [2906..6342) executed: 184232243 cycles
+  chunk   1 padded 223346688 (107 segments)
+  trie: 6206 marks, 6113 inserts, witness 2036136 words; trie update executed: 113785814 cycles, padded 135266304 (65 segments)
+  block validation cycles  88139416
+  block validation padded  104857600 (50 segments)
+  journal sha256           ca2a72e1238642c44505f8e8edefb6eecbf8e9cf01d4a778486ec0872cf4eea6
+TIMED wall_s=89.3 user_s=104.1 sys_s=0.6 maxrss_kb=700152 rc=0 load1=32.2 load1_end=32.2
+== 750000
+  chunk   0 [0..3210) executed: 185160749 cycles
+  chunk   0 padded 222822400 (107 segments)
+  chunk   1 [3210..6423) executed: 184678812 cycles
+  chunk   1 padded 222822400 (107 segments)
+  trie: 6113 marks, 8226 inserts, witness 2213443 words; trie update executed: 124963200 cycles, padded 149422080 (72 segments)
+  block validation cycles  97395659
+  block validation padded  116391936 (56 segments)
+  journal sha256           6863c874c6759f2cc473164dff092563bf0cede7e455107e45927edcb9930e66
+TIMED wall_s=88.6 user_s=103.9 sys_s=0.5 maxrss_kb=705768 rc=0 load1=29.4 load1_end=31.7
+== 800000
+  chunk   0 [0..2283) executed: 157658191 cycles
+  chunk   0 padded 186646528 (89 segments)
+  chunk   1 [2283..4911) executed: 185255686 cycles
+  chunk   1 padded 218103808 (104 segments)
+  trie: 3521 marks, 12082 inserts, witness 1588663 words; trie update executed: 97631308 cycles, padded 118489088 (57 segments)
+  block validation cycles  96081261
+  block validation padded  115343360 (55 segments)
+  journal sha256           5943c9fd92e8ed62662ebcd3455bb9a67817d27d74f4b80d7a398ad1261b4c02
+TIMED wall_s=87.4 user_s=101.7 sys_s=0.5 maxrss_kb=635464 rc=0 load1=30.9 load1_end=33.2
+== 850000
+  chunk   0 [0..3122) executed: 183313269 cycles
+  chunk   0 padded 222298112 (106 segments)
+  chunk   1 [3122..6086) executed: 168163059 cycles
+  chunk   1 padded 200278016 (96 segments)
+  trie: 4987 marks, 9641 inserts, witness 2072831 words; trie update executed: 118796302 cycles, padded 142606336 (68 segments)
+  block validation cycles  102972373
+  block validation padded  122683392 (59 segments)
+  journal sha256           f3c8351d68977141fc804a8b5b63e03a10fe24d804b7a6b4833a69b7eef57e70
+TIMED wall_s=90.2 user_s=104.9 sys_s=0.5 maxrss_kb=707060 rc=0 load1=30.1 load1_end=30.4
+== 900000
+  chunk   0 [0..2056) executed: 133825671 cycles
+  chunk   0 padded 161480704 (77 segments)
+  chunk   1 [2056..4386) executed: 94631619 cycles
+  chunk   1 padded 111149056 (53 segments)
+  trie: 3694 marks, 3263 inserts, witness 870337 words; trie update executed: 50737768 cycles, padded 60817408 (29 segments)
+  block validation cycles  53231406
+  block validation padded  63045632 (31 segments)
+  journal sha256           95b9a649240d3b42501f3b506a75fedebe5fddba149e36f208cdc621e24bb37f
+TIMED wall_s=61.1 user_s=69.1 sys_s=0.5 maxrss_kb=694932 rc=0 load1=30.6 load1_end=32.3
+== 950000
+  chunk   0 [0..505) executed: 35124011 cycles
+  chunk   0 padded 42467328 (21 segments)
+  chunk   1 [505..1002) executed: 28266504 cycles
+  chunk   1 padded 32505856 (16 segments)
+  trie: 835 marks, 1380 inserts, witness 359066 words; trie update executed: 19746235 cycles, padded 23068672 (11 segments)
+  block validation cycles  19089031
+  block validation padded  23068672 (11 segments)
+  journal sha256           0bb8849df218821a0ee57481aa851cd21515330c45a3a31c1554b1e63f20d918
+TIMED wall_s=47.1 user_s=49.5 sys_s=0.5 maxrss_kb=617836 rc=0 load1=32.7 load1_end=27.8
+== 962000
+  chunk   0 [0..4307) executed: 184823122 cycles
+  chunk   0 padded 221249536 (106 segments)
+  chunk   1 [4307..8006) executed: 170696854 cycles
+  chunk   1 padded 195035136 (93 segments)
+  trie: 2542 marks, 7246 inserts, witness 689496 words; trie update executed: 47599783 cycles, padded 58720256 (28 segments)
+  block validation cycles  66438941
+  block validation padded  81788928 (39 segments)
+  journal sha256           b55776abe7aa2ed5468cb57e2ca99037731f44bf62d3b0a4b832e113f6adba73
+TIMED wall_s=69.4 user_s=80.1 sys_s=0.5 maxrss_kb=701904 rc=0 load1=30.8 load1_end=29.7
+== 976000
+  chunk   0 [0..3526) executed: 209003481 cycles
+  chunk   0 padded 251658240 (120 segments)
+  chunk   1 [3526..6838) executed: 196169782 cycles
+  chunk   1 padded 236978176 (113 segments)
+  trie: 5996 marks, 12791 inserts, witness 2767231 words; trie update executed: 156745397 cycles, padded 188743680 (90 segments)
+  block validation cycles  129277828
+  block validation padded  155189248 (74 segments)
+  journal sha256           a220c2f0897da6a16b3d7ba24bf367978f5708602e7a18951ffce361f4c26c01
+TIMED wall_s=101.4 user_s=119.6 sys_s=0.6 maxrss_kb=703664 rc=0 load1=33.1 load1_end=28.6
+RUN_B_DONE
+== 800001
+  chunk   0 [0..2991) executed: 211481841 cycles
+  chunk   0 padded 249561088 (119 segments)
+  chunk   1 [2991..6353) executed: 214048225 cycles
+  chunk   1 padded 250609664 (120 segments)
+  trie: 6146 marks, 8926 inserts, witness 1073587 words; trie update executed: 73078355 cycles, padded 90177536 (43 segments)
+  block validation cycles  98885073
+  block validation padded  118489088 (57 segments)
+  journal sha256           85702c467a592b6c9ba438f9f7dbf27a30b84f164f2aaa5701ffb096fb2e64a3
+TIMED wall_s=88.2 user_s=103.2 sys_s=0.6 maxrss_kb=703160 rc=0 load1=30.3 load1_end=31.4
+== 800002
+  chunk   0 [0..2684) executed: 160243843 cycles
+  chunk   0 padded 190840832 (91 segments)
+  chunk   1 [2684..5476) executed: 200356944 cycles
+  chunk   1 padded 237502464 (114 segments)
+  trie: 4525 marks, 11800 inserts, witness 1668810 words; trie update executed: 102980051 cycles, padded 124780544 (60 segments)
+  block validation cycles  103207892
+  block validation padded  123731968 (59 segments)
+  journal sha256           c2d5f22ae1d9d62a6a93ca5b75f3cdf9a6656a7a01de35504c9010e7efb6fa63
+TIMED wall_s=90.1 user_s=104.8 sys_s=0.6 maxrss_kb=707040 rc=0 load1=32.0 load1_end=30.0
+== 800003
+  chunk   0 [0..3317) executed: 231516916 cycles
+  chunk   0 padded 279445504 (134 segments)
+  chunk   1 [3317..6637) executed: 215121624 cycles
+  chunk   1 padded 254279680 (122 segments)
+  trie: 6592 marks, 8164 inserts, witness 1267802 words; trie update executed: 82067679 cycles, padded 99614720 (48 segments)
+  block validation cycles  98406746
+  block validation padded  117964800 (57 segments)
+  journal sha256           0ebad1981aac7e41a3149b1c3abfe58c3845127cb075821b10ff6db186084a94
+TIMED wall_s=97.0 user_s=113.4 sys_s=0.7 maxrss_kb=704352 rc=0 load1=30.3 load1_end=32.5
+== 800004
+  chunk   0 [0..3022) executed: 181169835 cycles
+  chunk   0 padded 218103808 (104 segments)
+  chunk   1 [3022..6315) executed: 191226161 cycles
+  chunk   1 padded 228851712 (110 segments)
+  trie: 4800 marks, 10494 inserts, witness 1962966 words; trie update executed: 114989919 cycles, padded 138412032 (66 segments)
+  block validation cycles  103488245
+  block validation padded  123731968 (59 segments)
+  journal sha256           ad24bef1accd08e8608058ab841ec279f5acc8ba8fdeaed3e49a5c1a08815374
+TIMED wall_s=90.3 user_s=105.3 sys_s=0.6 maxrss_kb=706884 rc=0 load1=27.1 load1_end=27.2
+== 800005
+  chunk   0 [0..3268) executed: 204818417 cycles
+  chunk   0 padded 244318208 (117 segments)
+  chunk   1 [3268..6236) executed: 141713362 cycles
+  chunk   1 padded 167772160 (80 segments)
+  trie: 4759 marks, 10854 inserts, witness 1846060 words; trie update executed: 109709090 cycles, padded 132382720 (64 segments)
+  block validation cycles  104701722
+  block validation padded  124780544 (60 segments)
+  journal sha256           05ace1388ab2bee5a0eb5d8ca5f991cfc30daedb6a91fa448c1ef226d4e6b5b3
+TIMED wall_s=88.4 user_s=102.8 sys_s=0.7 maxrss_kb=704144 rc=0 load1=30.0 load1_end=32.8
+RUN_B_DONE
