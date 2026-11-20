@@ -13,6 +13,20 @@ Hazync v2's release notes are in [`docs/`](docs/README.md).
 Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
 v0.23.0 onwards are **Hazync v2** (the libzync engine).
 
+## v0.27.0 — 2026-11-20 — zyncAPPs and reorg handling; image unchanged (`46666b6f`)
+The core images are unchanged (mainnet `46666b6f`, signet `01a80f17`). The header-chain zyncAPP moves to `de54b94f`: an
+MMR of every block hash, so a block or a transaction in it can be checked against the proven chain; the whole chain to
+975,278 proved again in one receipt; a verdict is OK only with a trusted tip; strict include JSON. An untrusted path
+service (`hazync-headers-api`) backs the Block check. New zyncAPPs: SwiftSync hints (`1894f12e`), utreexo roots
+(`27bea7da`) with a tip mode (`ab6f7a26`), and, with no guest of their own, assume, liveness, statement and deposit.
+Reorg handling P1 to P6: undo records, detection at any depth, prep's and the coordinator's rewinds, offsite depth delay
+and markers, the zAPP follower's rebuild, a website banner and an end-to-end harness; automatic rewinds stay off. The
+verifier refuses trailing bytes, unknown fact fields and keys, and no longer aborts on malformed receipts. The Windows
+app names a stale prover or client and fixes it, and updates itself from a PGP-verified release. RunPod callers move to
+REST v2. The host decodes outside receipts strictly too; the Windows app picks the segment size from the card and shows
+live GPU, CPU and RAM. PR CI skips the soundness pass when a PR cannot affect it; Actions are pinned to shas. Each
+zyncAPP has its own WASM module; the website must ship the core and `zapp-headers` together. Notes: [`docs/RELEASE_NOTES_v0.27.0.md`](docs/RELEASE_NOTES_v0.27.0.md).
+
 ## v0.26.1 — 2026-11-17 — host, app and coordinator release; image unchanged (`46666b6f`)
 The Windows app proves on more machines: a **CPU prover** ships in the installer (`hazync-host-x86_64-windows-cpu.zip`,
 14 release assets; mainnet block 1 in 1,433 s on a 4-vCPU Windows runner), and **Pascal cards** (GTX 1050 Ti: block 1 in
