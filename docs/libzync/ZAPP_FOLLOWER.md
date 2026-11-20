@@ -1,6 +1,7 @@
 # Following the tip with zAPP facts (design)
 
-> **Design, 16.11.2026; Z1 built the same day** (branch `feat/reorg-p1-p2`, with REORG P1; §13). The rest is not built. I wrote it from the repo at `797b777e` (main), the reorg design on
+> **Design, 16.11.2026; Z1 built the same day** (branch `feat/reorg-p1-p2`, with REORG P1; §13); **Z2-Z5 built on
+> 20.11.2026** (branch `feat/tip-follow`, with REORG D1; §14). I wrote it from the repo at `797b777e` (main), the reorg design on
 > `design/reorg-handling` (`docs/libzync/REORG.md`, cited as REORG §n) and a read-only survey of `hazync-proof` the
 > same day. **MEASURED** numbers come from that survey or the files named next to them; **ESTIMATE** numbers are
 > labelled. The user's decisions on the open questions are in §12.
@@ -164,7 +165,7 @@ goes away: in tip mode the follower has no stores. P5's follower part becomes "r
 two lines (bump `gen`, cut `roots.log`). `roots.log` also gives P3 a free cross-check: after `undo_recorded` to F, the
 trie root must equal the root hash logged at `(F, hash)`.
 
-**Until tip mode (Z2-Z5) is built** (REORG §18): today's follower, with its own stores, rebuilds them from genesis to
+**Until tip mode (Z2-Z5) is deployed** (built: §14; REORG §18): today's follower, with its own stores, rebuilds them from genesis to
 the kept head when the spine drops below them (or to another block at the same height), after checking that the node
 agrees with the spine there, and republishes; the previous set stays published meanwhile.
 
@@ -302,3 +303,101 @@ positive control) reuses its slots and the root of 20 no longer reads as that tr
 slot at the next flush; a cap of 2 releases a pin at 82 at the flush of 90 and writes `PIN.released`; the live trie
 stays exact throughout. `GEN` counts opens and bumps, entries carry their generation, and after a crash past the flush
 at 10 the entries of 11..15 and a lost block's `retain/` list are gone at the reopen.
+
+## 14. Built: Z2-Z5 (20.11.2026)
+
+Branch `feat/tip-follow`, with REORG D1 (REORG.md §19). No guest input and no on-disk format changes: the reader only
+reads Z1's files.
+
+**Z2, the reader** (`libzync/src/trie_store.rs`, feature `reader`, no dependencies; the core verifier and its `.wasm`
+never enable it). `trie_store::Reader::open(dir, height, hash, trie_root, cap)`: the newest `roots.log` entry for
+(height, block hash), refused when there is none, when `INTACT` says the root was released, or when the arena's root
+does not hash to the logged root hash and the proof's `trie_root`. Every walk (`Reader::walk`) is bracketed by `GEN`
+and `INTACT` before and after: a new generation looks the root up again (an entry at or below the flushed height
+survives a restart), one during the walk or a release refuses it (`Moved`); a record past the file or one that does not
+decode is `Damaged`, more than `cap` records `TooLarge`. Where it differs from §4:
+
+- **Positioned reads, not a memory map** (`File::read_at`): a reference past the file's end is an error by construction
+  (no SIGBUS), and the reader needs no mmap dependency (`memmap2` would have entered `swiftsync-verify`'s lock file).
+- **"Caught panics"** need unwinding, and `swiftsync-verify`'s release profile aborts on panic (it also builds the
+  released verifier). zync-serve is built with its own profile, `zync-serve` (`inherits = "release"`, `panic =
+  "unwind"`), and the tip mode refuses to start when built otherwise. The released `swiftsync-verify` binary is unchanged.
+- `PIN.released` is not read: `INTACT` records what was really released, a superset of what the cap reports.
+
+**zync-serve tip mode** (`swiftsync-verify/src/zync_serve.rs`, feature `tip`):
+`zync-serve --tip --at-file <at.json> <addr:port>`, built with `cargo build --profile zync-serve --features tip --bin
+zync-serve`. `at.json` (written by the follower) lists {height, hash, trie_root, trie_dir} per served height; every one
+must open, or the process exits 1 (the follower then puts the previous set back). Instead of §10's `--at
+<h>:<hash>:<root>` arguments: the served heights can come from two tries (the board pass's and the tip run's, across
+X), and the unit's command line stays fixed. `GET /tip` = `{"tip": newest, "at": [heights]}`; `/trie/*?at=<h>` (default
+the newest; a height not served: 404); a walk refused because the store moved: 503; past `ZYNC_WALK_CAP` (100,000
+records, §12 decision 4): 400; `/coin`, `/find`: 404 (§3). The history mode (today's service) answers `?at=<its tip>`
+and 404s other heights, so it tolerates the new query too.
+
+**Z3, the follower** (`hazync-lz-zapp-follow-tip.sh`, a new script beside today's, which it replaces at the switch):
+no stores and no prep. Each run: the spine's height H (`verify-any <spine> 1`), bound by `--check-end` against the
+**source** run's `state_<H>.json` (a view of that one file, as the coordinator verifies); (H, the spine's block) looked
+up in the source's `roots.log`; `trie/PIN` written FIRST in the source (below); `at.json` = H and the newest earlier
+served height still on its source's chain (its state's block and its logged root unchanged); zync-serve restarted, H
+alone tried if the pair does not stay up, the previous set restored otherwise; `proof.rcpt` published once H is served.
+Not logged yet: serves on as before. Logged but released: pinned, served once the spine reaches a held height.
+
+- **The source** of H is the run whose states the coordinator checks H against (§6, REORG §19): the tip run from X - 1
+  on, else the board pass.
+- **The pin** per source trie: the lowest served height there, and in the tip run the fall-back head (Z5, below).
+  §8's catch-up retention on the board pass needs `HAZYNC_TRIE_RETAIN_MAX` above the board pass's lead over the spine
+  (its leaf window is 5,000): `libzync-board-prep.service` gets **8,000** (inert without a PIN; disk ESTIMATE §8: ~8 GB
+  at 200,000, ~190 GB at 600,000 on vda). The board pass's PIN goes once no served height and no fall-back head is in
+  it (the spine past X).
+- **Bootstrap.** Today the board pass's roots start at its v0.27.0 restart (8,751, MEASURED: `roots.log` holds the
+  blocks since) and nothing is pinned, so every flush releases every root below it. The first runs pin the spine's
+  height although its root is already gone; prep then holds everything from its next flush (every 250 blocks), and the
+  follower serves once the spine reaches a held height (ESTIMATE: the next board-pass save point above the pin).
+- Units: `hazync-lz-zync-serve-tip.service` (port **8602**, beside today's 8601; read-only paths for both tries,
+  `MemoryMax=1G`, the binary installed as `/opt/hazync-lz/bin/zync-serve-tip`), `hazync-lz-zapp-follow-tip.{service,
+  timer}` (every 10 min; root: it writes `PIN` in root's trie directories). `hazync-lz-zapp-compare.py` is the
+  side-by-side check before the switch: every fact kind for a few scripts from both services at the height both
+  serve, byte for byte.
+
+**Z4, at-height serving.** Two heights served (`ZAPP_KEEP=2`); the relay passes `?at=<h>` on (a height only) **only with
+`ZYNC_RELAY_AT=1`** — set at the switch: today's zync-serve would read `?at=` as part of the script. `zapp.js` (web,
+branch `web/zapp-at` in `hazync/hazync-web`, not deployed) asks every fact at its verified proof's height
+(`factUrl`, `tools/zapp-at-test.mjs` + control). Each can be deployed in any order.
+
+**Z5, tip source and reorgs.** Prep's side was built in REORG P3 (the rewind opens the trie, which bumps `GEN`, cuts
+`roots.log` above the fork, journaled, and logs F again). The follower's side: the fall-back pin in the tip run is the
+newest kept spine head (`spine/heads/`) at or below the tip run's position (`PREP_TIP.json`) - W, else the oldest kept
+head (§7: so the head a W-deep reorg falls back to stays readable), and only in the tip run (a reorg cannot reach the
+board pass, millions of blocks below the tip in practice). On a fall-back the spine names a kept head H' below the served
+heights: H' is served (repinned), every served height whose block the source no longer has is dropped; H' no longer
+readable (past the window) fails the run (alerts), and facts resume at the board's next head.
+
+**Tests.**
+
+- `libzync` `trie_store::tests::z2_a_reader_serves_a_pinned_root_while_prep_runs_on`: a reader at the pinned root of 20
+  reads the trie of 20 byte for byte while the writer applies 60 more blocks with flushes and is reopened (a new GEN);
+  GEN moving during a walk, the cap, a record past the file, a wrong trie_root or block hash: refused; the pin removed
+  and a flush: the open reader refuses. **Control in the test:** the same run unpinned refuses to open at 20 (released).
+  `z2_the_disk_fixture_reads_back`.
+- `zync-serve` `tip_tests` (feature `tip`, profile `zync-serve`): two heights in two tries; every fact kind at each
+  height equals an in-memory store of that height's `make_trie_fact`, byte for byte, the newest by default, the two
+  heights differ; 404 / 400 / the cap / 503 after a GEN move with the root gone / a wrong trie_root refused at start.
+- `coordinator/test_zapp_follow_tip.py`: the source by height across X, the bootstrap pin, two heights, the board pass
+  unpinned past X, the fall-back pin, a reorg fall-back (repin, the orphaned height dropped), a fall-back past the
+  window (fails, nothing changes), a spine not on the source's chain, and the compare tool. `--control` (the follower
+  never switches to the tip run): 5 checks fail.
+- `coordinator/test_zync_relay.py`: `?at=` passed on only with `ZYNC_RELAY_AT=1`, only as a height.
+- `experimental/libzync-bench/prep/reorg_e2e_tip.py` (REORG §19): the real zync-serve tip mode on the tip run's real
+  trie, through a depth-W reorg.
+
+**Risks.**
+
+- **The paper prep's trie is on `/srv/bulk` (vdb), not vda** (MEASURED 20.11.2026: `/srv/bulk/libzync-prep/trie`, 94 GB at
+  448,000; §8 assumed `/var/lib/libzync-fast/trie`). Each fact is ~37 random 4 KiB reads (ESTIMATE §8), and prep there is
+  read-bound on the same device: a burst of website traffic slows prep a little, and a history fact up to the cap
+  (100,000 records) is ~100,000 random reads (ESTIMATE ~20 s at the ~5 K serial reads/s of §8).
+- The board pass's retention (`HAZYNC_TRIE_RETAIN_MAX=8000`) grows with height (§8); revisit before the board pass nears
+  ~300,000 (ESTIMATE ~40 GB of held slots there).
+- The follower writes `PIN` into root-owned trie directories as root. A PIN never removed (the follower stopped) holds
+  slots up to `HAZYNC_TRIE_RETAIN_MAX` blocks (the cap releases it and says so, Z1).
+- zync-serve restarts on every new height (as today); with nothing to load it is up in milliseconds.
