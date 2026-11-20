@@ -116,9 +116,11 @@ jobs:
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - name: libzync (coin log, counting trie, facts, wire; the hints, liveness and utreexo zyncAPPs' derivations, features hints, liveness, utreexo)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness,utreexo
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness,utreexo,reader
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
+      - name: zync-serve tip mode (ZAPP_FOLLOWER Z2-Z4 - facts from a disk trie at pinned heights, the at parameter, 503 when the store moves)
+        run: cargo test --manifest-path swiftsync-verify/Cargo.toml --profile zync-serve --features tip --bin zync-serve
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
       - name: The WASM build scripts locate their checkout from any cwd (scripts/test-wasm-build-cwd.sh, and its control)

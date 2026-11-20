@@ -4547,12 +4547,18 @@ _ZYNC_PATH = re.compile(r"^/(tip|trie/balance/[0-9a-f]{2,20000}|trie/history/[0-
                         r"|trie/coin/[0-9a-f]{2,20000}/[0-9a-f]{64}/[0-9]{1,10})$")
 
 
-def zync_relay(path):
-    """(status, body) for a zyncAPP fact request. Only the read-only paths above, only when ZYNC_SERVE_URL is set."""
+def zync_relay(path, at=None):
+    """(status, body) for a zyncAPP fact request. Only the read-only paths above, only when ZYNC_SERVE_URL is set. `at`
+    (ZAPP_FOLLOWER §5, Z4: the height of the proof the page holds; zync-serve's tip mode serves the two newest pinned
+    heights) is passed on as `?at=<h>`, a height and nothing else."""
     if not ZYNC_SERVE:
         return 404, "no zyncAPP fact service on this coordinator"
     if not _ZYNC_PATH.match(path):
         return 400, "not a zyncAPP fact path (/tip, /trie/balance/<spk>, /trie/history/<spk>, /trie/coin/<spk>/<txid>/<vout>)"
+    if at is not None:
+        if not re.fullmatch(r"[0-9]{1,9}", at):
+            return 400, "at: a block height"
+        path += f"?at={int(at)}"
     try:
         with urllib.request.urlopen(ZYNC_SERVE.rstrip("/") + path, timeout=20) as r:
             body = r.read(8 * 1024 * 1024 + 1)
@@ -5515,7 +5521,8 @@ class H(BaseHTTPRequestHandler):
                                   headers={"Content-Disposition": 'attachment; filename="hazync-zapp.hzk"'})
             return self._send(404, {"error": "no zyncAPP proof on this coordinator"})
         if p.startswith("/api/zync/"):                     # zyncAPP facts, relayed from a local zync-serve (untrusted)
-            code, body = zync_relay(p[len("/api/zync"):])
+            _at = parse_qs(urlparse(self.path).query).get("at")
+            code, body = zync_relay(p[len("/api/zync"):], _at[0] if _at else None)
             return self._send(code, raw=body) if code == 200 else self._send(code, {"error": body})
         m = re.fullmatch(r"/api/reorg/([0-9]{1,9})", p)
         if m:                                              # one reorg in full (REORG §7)

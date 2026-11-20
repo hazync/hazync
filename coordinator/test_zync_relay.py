@@ -3,7 +3,8 @@
 
   1. with no ZYNC_SERVE_URL the endpoint is 404 and nothing is contacted;
   2. a fact path (/tip, /trie/balance|history/<spk>, /trie/coin/<spk>/<txid>/<vout>) is relayed, body unchanged;
-  3. anything else (other paths, traversal, non-hex) is 400 and never reaches zync-serve; a query string is dropped;
+  3. anything else (other paths, traversal, non-hex) is 400 and never reaches zync-serve; a query string is dropped,
+     but for `at=<height>` (ZAPP_FOLLOWER Z4), passed on as a height and nothing else;
   4. the fact service's 404 stays a 404; it being down is a 502, not a hang or a 500;
   5. /api/zync/proof serves ZYNC_PROOF's bytes from the coordinator (404 unset or missing), never relayed.
 
@@ -63,6 +64,15 @@ for p in ("/tip", f"/trie/balance/{SPK}", f"/trie/history/{SPK}", f"/trie/coin/{
 seen.clear()
 code, _ = get(f"/api/zync/trie/balance/{SPK}?x=1&y=/admin")
 check(code == 200 and seen == [f"/trie/balance/{SPK}"], f"a query string never reaches zync-serve (it saw {seen})")
+# Z4 (ZAPP_FOLLOWER §5): the proof's height the page holds, `?at=<h>`, is passed on, and only as a height
+seen.clear()
+code, _ = get(f"/api/zync/trie/balance/{SPK}?at=976500&x=1")
+check(code == 200 and seen == [f"/trie/balance/{SPK}?at=976500"], f"at=<h> passed on, nothing else (it saw {seen})")
+seen.clear()
+for bad in ("97x", "-1", "1/../../admin", "1%26y%3D2", "1234567890"):
+    code, _ = get(f"/api/zync/trie/balance/{SPK}?at={bad}")
+    check(code == 400 and not seen, f"at={bad}: refused before zync-serve ({code})")
+    seen.clear()
 seen.clear()
 for p in ("/coin/tip/5", "/trie/balance/xyz", "/trie/../tip", "/trie/history/",
           f"/trie/coin/{SPK}/{TX}/0/extra", "/find/" + "ab" * 32, "/admin"):
